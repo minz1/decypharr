@@ -14,7 +14,7 @@
         let pkgs = nixpkgs.legacyPackages.${system}; in {
           default = pkgs.buildGoModule {
             pname = "decypharr";
-            version = "2.3";
+            version = "2.3-minz";
             src = ./.;
             vendorHash = "sha256-Pl21UNO5Oe2rILB2SDS99pyR5Q6gi0BplTTnCVKkWZM=";
             subPackages = [ "." ];
