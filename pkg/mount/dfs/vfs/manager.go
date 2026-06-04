@@ -69,18 +69,23 @@ func (m *Manager) GetManager() *manager.Manager {
 func (m *Manager) GetFile(info *manager.FileInfo) (File, error) {
 	key := buildFileKey(info.Parent(), info.Name())
 
-	// Fast path: already cached — reuse the existing item regardless of budget.
-	if entry, ok := m.files.Load(key); ok {
-		entry.refCount.Add(1)
-		if !entry.deleted.Load() {
-			return NewStreamingFile(entry.item), nil
+	overBudget := m.cache.config.DisableCache || m.cache.IsOverBudget()
+
+	// Fast path: already cached — reuse the existing item only when under budget.
+	// When over budget, fall through so this handle goes to direct streaming;
+	// the existing CacheItem stays alive until its last handle is released.
+	if !overBudget {
+		if entry, ok := m.files.Load(key); ok {
+			entry.refCount.Add(1)
+			if !entry.deleted.Load() {
+				return NewStreamingFile(entry.item), nil
+			}
+			entry.refCount.Add(-1)
 		}
-		entry.refCount.Add(-1)
 	}
 
-	// If the cache is over its eviction threshold, bypass disk caching entirely
-	// for this new open so we don't push the partition further over limit.
-	if m.cache.IsOverBudget() {
+	// Cache disabled or over eviction threshold: bypass disk caching entirely.
+	if overBudget {
 		entry, err := m.manager.GetEntryByName(info.Parent(), info.Name())
 		if err != nil {
 			return nil, fmt.Errorf("cache full, direct stream unavailable: %w", err)
@@ -88,6 +93,7 @@ func (m *Manager) GetFile(info *manager.FileInfo) (File, error) {
 		m.logger.Debug().
 			Str("entry", info.Parent()).
 			Str("file", info.Name()).
+			Bool("disabled", m.cache.config.DisableCache).
 			Msg("cache over budget, serving direct")
 		return newDirectStreamFile(m.manager, entry, info.Name(), info.Size(), m.cache.config.Retries), nil
 	}

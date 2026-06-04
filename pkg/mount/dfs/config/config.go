@@ -10,8 +10,9 @@ import (
 
 // FuseConfig holds the simplified configuration for the FUSE filesystem
 type FuseConfig struct {
-	MountPath string
-	CacheDir  string
+	MountPath    string
+	CacheDir     string
+	DisableCache bool
 
 	// Cache
 	CacheDiskSize        int64 // in bytes
@@ -27,9 +28,9 @@ type FuseConfig struct {
 	Retries int
 
 	// File system settings
-	UID                uint32
-	GID                uint32
-	Umask              uint32
+	UID   uint32
+	GID   uint32
+	Umask uint32
 }
 
 // DefaultFuseConfig returns a streaming-optimized default configuration
@@ -59,6 +60,7 @@ func ParseFuseConfig() *FuseConfig {
 
 	fuseConfig.CacheDir = cfg.CacheDir
 	fuseConfig.MountPath = mainCfg.Mount.MountPath
+	fuseConfig.DisableCache = cfg.DisableCache
 
 	if cfg.DaemonTimeout != "" {
 		timeout, err := utils.ParseDuration(cfg.DaemonTimeout)

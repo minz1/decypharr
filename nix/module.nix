@@ -241,6 +241,11 @@ in
             default = "5m";
             description = "How often the eviction loop runs. Maps to DECYPHARR_MOUNT__DFS__CACHE_CLEANUP_INTERVAL.";
           };
+          disableCache = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "Stream all reads directly from debrid without writing to disk. Eliminates disk-full risk at the cost of no local cache hits. Maps to DECYPHARR_MOUNT__DFS__DISABLE_CACHE.";
+          };
           chunkSize = lib.mkOption {
             type = lib.types.str;
             default = "8MB";
@@ -428,6 +433,7 @@ in
         DECYPHARR_MAX_FILE_SIZE                      = cfg.maxFileSize;
         DECYPHARR_REMOVE_STALLED_AFTER               = cfg.removeStalledAfter;
         DECYPHARR_NZB_USER_AGENT                     = cfg.nzbUserAgent;
+        DECYPHARR_MOUNT__DFS__DISABLE_CACHE          = if cfg.dfs.disableCache then "true" else "false";
         DECYPHARR_MOUNT__DFS__CACHE_DIR              = cfg.dfs.cacheDir;
         DECYPHARR_MOUNT__DFS__DISK_CACHE_SIZE        = cfg.dfs.diskCacheSize;
         DECYPHARR_MOUNT__DFS__CACHE_EXPIRY           = cfg.dfs.cacheExpiry;

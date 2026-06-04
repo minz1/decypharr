@@ -54,6 +54,7 @@ type DFS struct {
 	CacheDir             string `json:"cache_dir,omitempty"`              // /tmp/decypharr-cache
 	DiskCacheSize        string `json:"disk_cache_size,omitempty"`        // 10GB, 50GB etc
 	CacheCleanupInterval string `json:"cache_cleanup_interval,omitempty"` // 10m, 1h etc
+	DisableCache         bool   `json:"disable_cache,omitempty"`          // stream everything direct, no disk writes
 
 	// Performance settings
 	ChunkSize     string `json:"chunk_size,omitempty"`      // Initial chunk size, e.g 10MB
@@ -62,9 +63,9 @@ type DFS struct {
 	DaemonTimeout string `json:"daemon_timeout,omitempty"` // Time after which the FUSE daemon will exit if idle
 
 	// File system settings
-	UID                uint32 `json:"uid,omitempty"`                 // User ID for mounted files
-	GID                uint32 `json:"gid,omitempty"`                 // Group ID for mounted files
-	Umask              string `json:"umask,omitempty"`               // File permissions mask
+	UID   uint32 `json:"uid,omitempty"`   // User ID for mounted files
+	GID   uint32 `json:"gid,omitempty"`   // Group ID for mounted files
+	Umask string `json:"umask,omitempty"` // File permissions mask
 }
 
 type ExternalRclone struct {
@@ -98,6 +99,9 @@ func (c *Config) applyMountEnvVars() {
 	}
 	if val := getEnv("MOUNT__DFS__DISK_CACHE_SIZE"); val != "" {
 		c.Mount.DFS.DiskCacheSize = val
+	}
+	if val := getEnv("MOUNT__DFS__DISABLE_CACHE"); val != "" {
+		c.Mount.DFS.DisableCache = parseBool(val)
 	}
 	if val := getEnv("MOUNT__DFS__CACHE_CLEANUP_INTERVAL"); val != "" {
 		c.Mount.DFS.CacheCleanupInterval = val

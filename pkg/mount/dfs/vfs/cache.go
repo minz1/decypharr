@@ -36,6 +36,11 @@ const (
 	// cacheEvictThreshold is the percentage of max cache size at which eviction starts.
 	cacheEvictThreshold = 0.90
 
+	// minCacheFreeBytes is the minimum free space on the cache filesystem before
+	// IsOverBudget is forced true regardless of the tracked totalSize. Acts as a
+	// safety net against external writes or tracking drift filling the partition.
+	minCacheFreeBytes = 512 * 1024 * 1024 // 512MB
+
 	// speedSampleInterval is how often the background goroutine updates downloadSpeed.
 	speedSampleInterval = 1 * time.Second
 )
@@ -449,6 +454,22 @@ func (c *Cache) evict() {
 	c.cleanupItems(now, false)
 
 	candidates, totalSize := c.scanDiskCandidates()
+
+	// Safety net: if the filesystem itself is critically low on free space,
+	// force totalSize above threshold so IsOverBudget() returns true regardless
+	// of what our byte-counting says. Catches external writes or tracking drift.
+	if c.threshold > 0 {
+		var stat syscall.Statfs_t
+		if err := syscall.Statfs(c.config.CacheDir, &stat); err == nil {
+			free := int64(stat.Bavail) * int64(stat.Bsize)
+			if free < minCacheFreeBytes && totalSize < c.threshold {
+				c.logger.Warn().
+					Int64("free_bytes", free).
+					Msg("cache filesystem critically low, forcing over-budget")
+				totalSize = c.threshold + 1
+			}
+		}
+	}
 
 	// When over budget, force-close zero-open items immediately so they become
 	// evictable on this pass rather than waiting out the idle timeout.
