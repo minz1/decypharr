@@ -100,8 +100,8 @@ func (d *Dir) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.
 	// Set attributes
 	d.setEntryOut(info, out)
 
-	// Create/get inode - NewInode handles deduplication
-	return d.NewInode(ctx, node, fs.StableAttr{Mode: out.Attr.Mode}), 0
+	// Create/get inode - stable Ino derived from path so it survives restarts
+	return d.NewInode(ctx, node, fs.StableAttr{Mode: out.Attr.Mode, Ino: hashPath(d.name + "/" + name)}), 0
 }
 
 // lookupChild looks up a child by name using O(1) lookups where possible
