@@ -1323,6 +1323,13 @@ func (w *cacheWriter) Write(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
+	// Stop writing to disk once the cache is over budget. Returning ENOSPC
+	// fast-trips the circuit breaker so the downloader stops immediately and
+	// the waiter is unblocked — the next GetFile call will create a
+	// DirectStreamFile instead of reusing this item.
+	if w.item.cache.IsOverBudget() {
+		return 0, syscall.ENOSPC
+	}
 	n, skipped, err := w.item.WriteAtNoOverwrite(p, w.offset)
 	if err != nil {
 		return n, err
