@@ -109,9 +109,9 @@ Array of Debrid services:
     "read_ahead": "16MB",
     "processing_timeout": "10m",
     "availability_sample_percent": 10,
+    "import_availability_sample_percent": 1,
     "max_concurrent_nzb": 2,
-    "disk_buffer_path": "/cache/usenet/streams",
-    "skip_repair": false
+    "disk_buffer_path": "/cache/usenet/streams"
   }
 }
 ```
@@ -124,10 +124,10 @@ Array of Debrid services:
 | `max_connections`             | int    | Max connections per file/stream | `15`                         |
 | `read_ahead`                  | string | Prefetch buffer size            | `16MB`                       |
 | `processing_timeout`          | string | Max time for NZB processing     | `10m`                        |
-| `availability_sample_percent` | int    | % of segments to check (1-100)  | `10`                         |
+| `availability_sample_percent` | int    | % of segments to check during repairs (1-100) | `10`             |
+| `import_availability_sample_percent` | int | % of segments to check when adding an NZB (1-100) | `1`         |
 | `max_concurrent_nzb`          | int    | Parallel NZB processing limit   | `2`                          |
 | `disk_buffer_path`            | string | Disk buffer location            | `{main_path}/usenet/streams` |
-| `skip_repair`                 | bool   | Disable NZB repair operations   | `false`                      |
 
 ### Provider Fields
 
@@ -263,6 +263,7 @@ Connect to an existing Rclone instance's RC API.
     "strategy": "per_entry",
     "recheck_interval": "168h",
     "auto_repair": true,
+    "skip_nzb_repair": false,
     "nntp_connection_percent": 20
   }
 }
@@ -278,6 +279,7 @@ Connect to an existing Rclone instance's RC API.
 | `recheck_interval`        | How long a healthy entry stays fresh before becoming a candidate again     | `168h`      |
 | `arrs`                    | Optional Arr filter when `source=arr`. Empty = all eligible                | `[]`        |
 | `auto_repair`             | When `true`, brokens are repaired in-sweep. When `false`, detect-only      | `false`     |
+| `skip_nzb_repair`         | Skip NZB / Usenet entries during scheduled repair sweeps                   | `false`     |
 | `notify_on_complete`      | Send a notification when a sweep finishes                                  | `false`     |
 | `nntp_connection_percent` | Share of NNTP connections probes may use, to avoid starving downloads      | `20`        |
 

@@ -290,7 +290,7 @@ func (tb *Torbox) getTorboxStatus(status string, finished bool) types.TorrentSta
 func (tb *Torbox) GetTorrent(torrentId string) (*types.Torrent, error) {
 	var res InfoResponse
 
-	resp, err := tb.doGet("/api/torrents/mylist/", map[string]string{"id": torrentId}, &res)
+	resp, err := tb.doGet("/api/torrents/mylist", map[string]string{"id": torrentId}, &res)
 	if err != nil {
 		return nil, err
 	}
@@ -379,7 +379,7 @@ func (tb *Torbox) loadDownloadPresent() error {
 func (tb *Torbox) UpdateTorrent(t *types.Torrent) error {
 	var res InfoResponse
 
-	resp, err := tb.doGet("/api/torrents/mylist/", map[string]string{"id": t.Id}, &res)
+	resp, err := tb.doGet("/api/torrents/mylist", map[string]string{"id": t.Id}, &res)
 	if err != nil {
 		return err
 	}

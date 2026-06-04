@@ -421,14 +421,25 @@
                                             </div>
                                             <div>
                                                 <label class="label" for="usenet.availability_sample_percent">
-                                                    <span class="font-medium">Availability Sample %</span>
+                                                    <span class="font-medium">Repair Availability Sample %</span>
                                                 </label>
                                                 <input type="number" class="input w-full"
                                                        name="usenet.availability_sample_percent"
                                                        id="usenet.availability_sample_percent" min="1" max="100"
                                                        placeholder="10">
-                                                <span class="text-sm opacity-70">Percentage of segments to check for
-                                                    availability (1-100, default: 10)</span>
+                                                <span class="text-sm opacity-70">Percentage of segments to check during
+                                                    repairs (1-100, default: 10)</span>
+                                            </div>
+                                            <div>
+                                                <label class="label" for="usenet.import_availability_sample_percent">
+                                                    <span class="font-medium">NZB Import Availability Sample %</span>
+                                                </label>
+                                                <input type="number" class="input w-full"
+                                                       name="usenet.import_availability_sample_percent"
+                                                       id="usenet.import_availability_sample_percent" min="1" max="100"
+                                                       placeholder="1">
+                                                <span class="text-sm opacity-70">Percentage of segments to check when
+                                                    adding an NZB (1-100, default: 1)</span>
                                             </div>
                                             <div>
                                                 <label class="label" for="usenet.max_concurrent_nzb">
@@ -448,17 +459,6 @@
                                                        name="usenet.disk_buffer_path" id="usenet.disk_buffer_path"
                                                        placeholder="/cache">
                                                 <span class="text-sm opacity-70">Path for disk buffering during streaming</span>
-                                            </div>
-                                            <div>
-                                                <label class="label cursor-pointer justify-start gap-3">
-                                                    <input type="checkbox" class="checkbox checkbox-primary"
-                                                           name="usenet.skip_repair" id="usenet.skip_repair">
-                                                    <div>
-                                                        <span class="label-text font-medium">Skip NZB Repair</span>
-                                                        <div class="label-text-alt">Skip NZBs when repairing entries
-                                                        </div>
-                                                    </div>
-                                                </label>
                                             </div>
                                         </div>
                                     </div>
@@ -1368,11 +1368,16 @@
                             </div>
                         </div>
 
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                             <label class="label cursor-pointer justify-start gap-3">
                                 <input type="checkbox" class="checkbox checkbox-primary checkbox-sm"
                                        id="repair.auto_repair" name="repair.auto_repair">
                                 <span class="label-text font-medium">Auto-repair when broken</span>
+                            </label>
+                            <label class="label cursor-pointer justify-start gap-3">
+                                <input type="checkbox" class="checkbox checkbox-primary checkbox-sm"
+                                       id="repair.skip_nzb_repair" name="repair.skip_nzb_repair">
+                                <span class="label-text font-medium">Skip NZB repair</span>
                             </label>
                             <label class="label cursor-pointer justify-start gap-3">
                                 <input type="checkbox" class="checkbox checkbox-primary checkbox-sm"

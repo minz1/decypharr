@@ -16,6 +16,15 @@ type UsenetProvider struct {
 	MaxConnections int    `json:"max_connections,omitempty"` // Max connections for this provider (default: 10)
 	SSL            bool   `json:"ssl,omitempty"`             // Use SSL/TLS for the connection
 	Priority       int    `json:"priority,omitempty"`        // Priority for this provider (lower = higher priority)
+	// Backup marks this provider as a fallback tier. Backups are only
+	// consulted when every non-backup ("primary") provider is excluded
+	// — e.g. all primaries returned article-not-found or had connection
+	// errors. They are NOT used just because a primary's pool is busy;
+	// the request waits for a primary slot instead. This matches the
+	// "unlimited primary + block backup for completion" model that most
+	// other Usenet clients implement, and prevents block providers from
+	// being billed for articles the unlimited could have served.
+	Backup bool `json:"backup,omitempty"`
 }
 
 // Usenet configuration for usenet streaming and downloading
@@ -25,16 +34,24 @@ type Usenet struct {
 	MaxConnections int `json:"max_connections,omitempty"` // Maximum concurrent connections per file for parsing and streaming (default: 10)
 	// Read-ahead configuration
 	ReadAhead string `json:"read_ahead,omitempty"` // Bytes to prefetch ahead of reads e.g. "16MB", "32MB" (default: 128MB)
+	// SocketReadBuffer / SocketWriteBuffer set the per-connection TCP
+	// SO_RCVBUF / SO_SNDBUF (e.g. "4MB"). At high RTT a single connection's
+	// throughput is capped at roughly buffer ÷ RTT, so the receive buffer must
+	// cover the bandwidth-delay product (BDP = link_speed × RTT). "0" leaves
+	// OS autotuning in charge. Note: the OS still caps these
+	// (Linux net.core.rmem_max/wmem_max, macOS kern.ipc.maxsockbuf) — raise
+	// those sysctls too to actually get large windows. Defaults: 4MB / 1MB.
+	SocketReadBuffer  string `json:"socket_read_buffer,omitempty"`
+	SocketWriteBuffer string `json:"socket_write_buffer,omitempty"`
 	// Processing timeout
 	ProcessingTimeout string `json:"processing_timeout,omitempty"` // Timeout for NZB processing e.g. "5m", "10m" (default: 10m). Mark as bad if exceeded.
 	// Availability check sampling
-	AvailabilitySamplePercent int `json:"availability_sample_percent,omitempty"` // Percentage of segments to check for availability (1-100, default: 100 = check all)
+	AvailabilitySamplePercent       int `json:"availability_sample_percent,omitempty"`        // Percentage of segments to check during repair (1-100, default: 10)
+	ImportAvailabilitySamplePercent int `json:"import_availability_sample_percent,omitempty"` // Percentage of segments to check when adding an NZB (1-100, default: 1)
 	// Max concurrent NZB processing
 	MaxConcurrentNZB int `json:"max_concurrent_nzb,omitempty"` // Maximum NZBs to process in parallel (default: 2)
 
 	DiskBufferPath string `json:"disk_buffer_path,omitempty"` // Path for disk buffer storage (empty = main_path/usenet/streams)
-
-	SkipRepair bool `json:"skip_repair,omitempty"` // Skip repairing nzb/usenet files
 }
 
 func (u Usenet) IsZero() bool {
@@ -52,6 +69,15 @@ func (c *Config) updateUsenetConfig() {
 		c.Usenet.ReadAhead = "16MB" // Default: 16MB read-ahead buffer
 	}
 
+	// TCP socket buffer defaults sized for high-RTT BDP. "0" (explicit) opts
+	// into OS autotuning, so only fill when unset.
+	if c.Usenet.SocketReadBuffer == "" {
+		c.Usenet.SocketReadBuffer = "4MB"
+	}
+	if c.Usenet.SocketWriteBuffer == "" {
+		c.Usenet.SocketWriteBuffer = "1MB"
+	}
+
 	// Processing timeout default
 	if c.Usenet.ProcessingTimeout == "" {
 		c.Usenet.ProcessingTimeout = "10m" // Default: 10 minutes for NZB processing
@@ -64,6 +90,11 @@ func (c *Config) updateUsenetConfig() {
 		c.Usenet.AvailabilitySamplePercent = 10
 	} else if c.Usenet.AvailabilitySamplePercent > 100 {
 		c.Usenet.AvailabilitySamplePercent = 100
+	}
+	if c.Usenet.ImportAvailabilitySamplePercent <= 0 {
+		c.Usenet.ImportAvailabilitySamplePercent = 1
+	} else if c.Usenet.ImportAvailabilitySamplePercent > 100 {
+		c.Usenet.ImportAvailabilitySamplePercent = 100
 	}
 
 	// Max concurrent NZB processing default
@@ -125,6 +156,14 @@ func (c *Config) applyUsenetEnvVars() {
 		c.Usenet.ReadAhead = readAhead
 	}
 
+	if v := getEnv("USENET__SOCKET_READ_BUFFER"); v != "" {
+		c.Usenet.SocketReadBuffer = v
+	}
+
+	if v := getEnv("USENET__SOCKET_WRITE_BUFFER"); v != "" {
+		c.Usenet.SocketWriteBuffer = v
+	}
+
 	if processingTimeout := getEnv("USENET__PROCESSING_TIMEOUT"); processingTimeout != "" {
 		c.Usenet.ProcessingTimeout = processingTimeout
 	}
@@ -134,15 +173,16 @@ func (c *Config) applyUsenetEnvVars() {
 			c.Usenet.AvailabilitySamplePercent = v
 		}
 	}
+	if availabilitySample := getEnv("USENET__IMPORT_AVAILABILITY_SAMPLE_PERCENT"); availabilitySample != "" {
+		if v, err := strconv.Atoi(availabilitySample); err == nil {
+			c.Usenet.ImportAvailabilitySamplePercent = v
+		}
+	}
 
 	if maxConcurrentNZB := getEnv("USENET__MAX_CONCURRENT_NZB"); maxConcurrentNZB != "" {
 		if v, err := strconv.Atoi(maxConcurrentNZB); err == nil {
 			c.Usenet.MaxConcurrentNZB = v
 		}
-	}
-
-	if skipRepair := getEnv("USENET__SKIP_REPAIR"); skipRepair != "" {
-		c.Usenet.SkipRepair = parseBool(skipRepair)
 	}
 
 	// Usenet providers array
@@ -182,6 +222,10 @@ func (c *Config) applyUsenetEnvVars() {
 				if v, err := strconv.Atoi(priority); err == nil {
 					c.Usenet.Providers[i].Priority = v
 				}
+			}
+
+			if backup := getEnv(prefix + "BACKUP"); backup != "" {
+				c.Usenet.Providers[i].Backup = parseBool(backup)
 			}
 		}
 	}
