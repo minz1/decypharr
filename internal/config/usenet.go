@@ -188,45 +188,49 @@ func (c *Config) applyUsenetEnvVars() {
 	// Usenet providers array
 	for i := 0; i < 10; i++ { // Support up to 10 usenet providers
 		prefix := fmt.Sprintf("USENET__PROVIDERS__%d__", i)
+
+		// HOST creates a new entry; credentials apply to existing entries by index
+		// so users can set only secrets in environmentFiles without repeating host.
 		if val := getEnv(prefix + "HOST"); val != "" {
-			// Ensure array is large enough
 			if i >= len(c.Usenet.Providers) {
 				c.Usenet.Providers = append(c.Usenet.Providers, make([]UsenetProvider, i-len(c.Usenet.Providers)+1)...)
 			}
 			c.Usenet.Providers[i].Host = val
+		}
 
-			if port := getEnv(prefix + "PORT"); port != "" {
-				if v, err := strconv.Atoi(port); err == nil {
-					c.Usenet.Providers[i].Port = v
-				}
-			}
-			if username := getEnv(prefix + "USERNAME"); username != "" {
-				c.Usenet.Providers[i].Username = username
-			}
-			if password := getEnv(prefix + "PASSWORD"); password != "" {
-				c.Usenet.Providers[i].Password = password
-			}
-			if backbone := getEnv(prefix + "BACKBONE"); backbone != "" {
-				c.Usenet.Providers[i].Backbone = backbone
-			}
-			if maxConnections := getEnv(prefix + "MAX_CONNECTIONS"); maxConnections != "" {
-				if v, err := strconv.Atoi(maxConnections); err == nil {
-					c.Usenet.Providers[i].MaxConnections = v
-				}
-			}
-			if ssl := getEnv(prefix + "SSL"); ssl != "" {
-				c.Usenet.Providers[i].SSL = parseBool(ssl)
-			}
+		if i >= len(c.Usenet.Providers) {
+			continue
+		}
 
-			if priority := getEnv(prefix + "PRIORITY"); priority != "" {
-				if v, err := strconv.Atoi(priority); err == nil {
-					c.Usenet.Providers[i].Priority = v
-				}
+		if port := getEnv(prefix + "PORT"); port != "" {
+			if v, err := strconv.Atoi(port); err == nil {
+				c.Usenet.Providers[i].Port = v
 			}
-
-			if backup := getEnv(prefix + "BACKUP"); backup != "" {
-				c.Usenet.Providers[i].Backup = parseBool(backup)
+		}
+		if username := getEnv(prefix + "USERNAME"); username != "" {
+			c.Usenet.Providers[i].Username = username
+		}
+		if password := getEnv(prefix + "PASSWORD"); password != "" {
+			c.Usenet.Providers[i].Password = password
+		}
+		if backbone := getEnv(prefix + "BACKBONE"); backbone != "" {
+			c.Usenet.Providers[i].Backbone = backbone
+		}
+		if maxConnections := getEnv(prefix + "MAX_CONNECTIONS"); maxConnections != "" {
+			if v, err := strconv.Atoi(maxConnections); err == nil {
+				c.Usenet.Providers[i].MaxConnections = v
 			}
+		}
+		if ssl := getEnv(prefix + "SSL"); ssl != "" {
+			c.Usenet.Providers[i].SSL = parseBool(ssl)
+		}
+		if priority := getEnv(prefix + "PRIORITY"); priority != "" {
+			if v, err := strconv.Atoi(priority); err == nil {
+				c.Usenet.Providers[i].Priority = v
+			}
+		}
+		if backup := getEnv(prefix + "BACKUP"); backup != "" {
+			c.Usenet.Providers[i].Backup = parseBool(backup)
 		}
 	}
 }
