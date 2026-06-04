@@ -302,6 +302,21 @@ in
             default = false;
             description = "Skip par2 repair for usenet files. Maps to DECYPHARR_USENET__SKIP_REPAIR.";
           };
+          socketReadBuffer = lib.mkOption {
+            type = lib.types.str;
+            default = "";
+            description = "TCP receive buffer per NNTP connection (e.g. '8MB'). Default 4MB. Maps to DECYPHARR_USENET__SOCKET_READ_BUFFER.";
+          };
+          socketWriteBuffer = lib.mkOption {
+            type = lib.types.str;
+            default = "";
+            description = "TCP send buffer per NNTP connection (e.g. '2MB'). Default 1MB. Maps to DECYPHARR_USENET__SOCKET_WRITE_BUFFER.";
+          };
+          importAvailabilitySamplePercent = lib.mkOption {
+            type = lib.types.int;
+            default = 0;
+            description = "Segment check % when adding an NZB (0 = default 1%). Maps to DECYPHARR_USENET__IMPORT_AVAILABILITY_SAMPLE_PERCENT.";
+          };
         };
       };
     };
@@ -419,9 +434,13 @@ in
         DECYPHARR_USENET__AVAILABILITY_SAMPLE_PERCENT = toString cfg.usenet.availabilitySamplePercent;
       } // lib.optionalAttrs (cfg.usenet.skipRepair) {
         DECYPHARR_USENET__SKIP_REPAIR                = "true";
+      } // lib.optionalAttrs (cfg.usenet.importAvailabilitySamplePercent != 0) {
+        DECYPHARR_USENET__IMPORT_AVAILABILITY_SAMPLE_PERCENT = toString cfg.usenet.importAvailabilitySamplePercent;
       } // lib.filterAttrs (_: v: v != "") {
         DECYPHARR_USENET__READ_AHEAD                 = cfg.usenet.readAhead;
         DECYPHARR_USENET__PROCESSING_TIMEOUT         = cfg.usenet.processingTimeout;
+        DECYPHARR_USENET__SOCKET_READ_BUFFER         = cfg.usenet.socketReadBuffer;
+        DECYPHARR_USENET__SOCKET_WRITE_BUFFER        = cfg.usenet.socketWriteBuffer;
         # No DECYPHARR_ prefix — these are read directly via os.Getenv in the binary.
         UMASK                                        = cfg.umask;
         DFS_FUSE_BACKEND                             = cfg.fuseBackend;
