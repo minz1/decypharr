@@ -213,16 +213,16 @@ func (f *FS) OpenEx(path string, fi *fuse.FileInfo_t) int {
 		return -fuse.EISDIR
 	}
 
-	var reader *vfs.StreamingFile
+	var reader vfs.File
 
 	// get reader/stream for remote files
 	if info.IsRemote() {
-		stream, err := f.vfs.GetFile(info)
+		var err error
+		reader, err = f.vfs.GetFile(info)
 		if err != nil {
 			f.logger.Error().Err(err).Str("path", path).Msg("Failed to get DFS stream file")
 			return -fuse.EIO
 		}
-		reader = stream
 	}
 
 	// Enable DirectIO to bypass the Windows kernel cache manager.
@@ -482,7 +482,7 @@ type HandleManager struct {
 // FileHandle represents an open file
 type FileHandle struct {
 	info   *manager.FileInfo
-	reader *vfs.StreamingFile
+	reader vfs.File
 }
 
 // NewHandleManager creates a new handle manager
@@ -495,7 +495,7 @@ func NewHandleManager() *HandleManager {
 }
 
 // Create creates a new handle
-func (h *HandleManager) Create(info *manager.FileInfo, reader *vfs.StreamingFile) uint64 {
+func (h *HandleManager) Create(info *manager.FileInfo, reader vfs.File) uint64 {
 	fh := h.nextFH.Load()
 	h.nextFH.Add(1)
 	h.handles.Store(fh, &FileHandle{

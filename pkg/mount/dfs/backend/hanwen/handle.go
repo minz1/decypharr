@@ -26,7 +26,7 @@ var (
 // Handle implements file operations using the new DFS implementation
 type Handle struct {
 	file       *File
-	streamFile *vfs.StreamingFile
+	streamFile vfs.File
 	closed     atomic.Bool
 	logger     *logger.RateLimitedEvent
 	lastAccess atomic.Int64

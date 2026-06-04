@@ -7,6 +7,14 @@ import (
 	"sync/atomic"
 )
 
+// File is the read interface exposed to FUSE backends. Both the disk-cached
+// path (StreamingFile) and the direct-network path (DirectStreamFile) satisfy it.
+type File interface {
+	ReadAtContext(ctx context.Context, p []byte, off int64) (int, error)
+	Size() int64
+	Close() error
+}
+
 // StreamingFile is the FUSE file interface for VFS
 type StreamingFile struct {
 	item     *CacheItem

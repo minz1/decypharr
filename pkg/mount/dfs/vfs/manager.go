@@ -63,14 +63,13 @@ func (m *Manager) GetManager() *manager.Manager {
 	return m.manager
 }
 
-// GetFile returns a streaming file handle
-func (m *Manager) GetFile(info *manager.FileInfo) (*StreamingFile, error) {
+// GetFile returns a file handle for reading. When the cache is at capacity,
+// it returns a DirectStreamFile that fetches directly from the network without
+// writing to disk, so reads degrade gracefully rather than failing with EIO.
+func (m *Manager) GetFile(info *manager.FileInfo) (File, error) {
 	key := buildFileKey(info.Parent(), info.Name())
 
-	// Fast path: existing file.
-	// Increment refCount first, then verify the entry wasn't concurrently deleted
-	// by ReleaseFile between our Load and the Add. If it was, undo the increment
-	// and fall through to the slow path which will create a fresh entry.
+	// Fast path: already cached — reuse the existing item regardless of budget.
 	if entry, ok := m.files.Load(key); ok {
 		entry.refCount.Add(1)
 		if !entry.deleted.Load() {
@@ -79,7 +78,21 @@ func (m *Manager) GetFile(info *manager.FileInfo) (*StreamingFile, error) {
 		entry.refCount.Add(-1)
 	}
 
-	// Get or create cache item
+	// If the cache is over its eviction threshold, bypass disk caching entirely
+	// for this new open so we don't push the partition further over limit.
+	if m.cache.IsOverBudget() {
+		entry, err := m.manager.GetEntryByName(info.Parent(), info.Name())
+		if err != nil {
+			return nil, fmt.Errorf("cache full, direct stream unavailable: %w", err)
+		}
+		m.logger.Debug().
+			Str("entry", info.Parent()).
+			Str("file", info.Name()).
+			Msg("cache over budget, serving direct")
+		return newDirectStreamFile(m.manager, entry, info.Name(), info.Size(), m.cache.config.Retries), nil
+	}
+
+	// Normal path: get or create a cache item.
 	item, err := m.cache.GetItem(info.Parent(), info.Name(), info.Size())
 	if err != nil {
 		return nil, fmt.Errorf("failed to get cache item: %w", err)
@@ -88,10 +101,8 @@ func (m *Manager) GetFile(info *manager.FileInfo) (*StreamingFile, error) {
 	entry := &fileEntry{item: item}
 	entry.refCount.Store(1)
 
-	// Store or return existing
 	actual, loaded := m.files.LoadOrStore(key, entry)
 	if loaded {
-		// Another goroutine created it first
 		actual.refCount.Add(1)
 		return NewStreamingFile(actual.item), nil
 	}

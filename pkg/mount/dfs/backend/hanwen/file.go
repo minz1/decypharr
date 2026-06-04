@@ -71,7 +71,7 @@ func (f *File) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut)
 // Reader is created eagerly here instead of lazily in Read() to surface errors early
 func (f *File) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
 
-	var reader *vfs.StreamingFile
+	var reader vfs.File
 	if f.info.IsRemote() && len(f.content) == 0 {
 		var err error
 		reader, err = f.vfs.GetFile(f.info)

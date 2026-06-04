@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -440,10 +439,9 @@ func (c *Cache) evict() {
 
 	candidates, totalSize := c.scanDiskCandidates()
 
-	// WinFsp clients tend to speculatively open files. If we're already over
-	// budget, close zero-open cache items immediately so they become evictable
-	// on the same pass instead of waiting for the idle timeout.
-	if runtime.GOOS == "windows" && c.threshold > 0 && totalSize > c.threshold {
+	// When over budget, force-close zero-open items immediately so they become
+	// evictable on this pass rather than waiting out the idle timeout.
+	if c.threshold > 0 && totalSize > c.threshold {
 		if c.cleanupItems(now, true) > 0 {
 			candidates, totalSize = c.scanDiskCandidates()
 		}
@@ -566,6 +564,13 @@ func (c *Cache) GetStats() map[string]interface{} {
 		"download_speed":   c.downloadSpeed.Load(),
 		"circuit_breakers": c.circuitBreakers.Load(),
 	}
+}
+
+// IsOverBudget returns true when the cache has crossed its eviction threshold,
+// meaning new files should bypass the disk cache rather than push usage higher.
+// Returns false when no size limit is configured.
+func (c *Cache) IsOverBudget() bool {
+	return c.threshold > 0 && c.totalSize.Load() >= c.threshold
 }
 
 // CacheItem represents a single cached file
