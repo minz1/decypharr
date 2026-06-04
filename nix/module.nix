@@ -31,6 +31,18 @@ in
       example = [ "media" ];
     };
 
+    mediaGroup = lib.mkOption {
+      type = lib.types.str;
+      default = "";
+      description = ''
+        If set, the download folder is created as group-writable (0775) owned by
+        this group rather than 0750 decypharr:decypharr. Use when the download
+        directory is shared with other services (e.g. sonarr, radarr) via a
+        common media group.
+      '';
+      example = "media";
+    };
+
     configDir = lib.mkOption {
       type = lib.types.str;
       default = "/var/lib/decypharr";
@@ -375,13 +387,16 @@ in
     users.users.${cfg.user} = {
       isSystemUser = true;
       group = cfg.group;
-      extraGroups = cfg.extraGroups;
+      extraGroups = cfg.extraGroups
+        ++ lib.optional (cfg.mediaGroup != "") cfg.mediaGroup;
     };
     users.groups.${cfg.group} = { };
 
     systemd.tmpfiles.rules = [
       "d ${cfg.dfs.cacheDir} 0750 ${cfg.user} ${cfg.group} -"
-      "d ${cfg.downloadFolder} 0750 ${cfg.user} ${cfg.group} -"
+      (if cfg.mediaGroup != ""
+       then "d ${cfg.downloadFolder} 0775 ${cfg.user} ${cfg.mediaGroup} -"
+       else "d ${cfg.downloadFolder} 0750 ${cfg.user} ${cfg.group} -")
     ];
 
     systemd.services.decypharr = {
