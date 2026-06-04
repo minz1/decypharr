@@ -835,6 +835,7 @@ func (item *CacheItem) WriteAtNoOverwrite(p []byte, off int64) (n, skipped int, 
 		if _, werr := item.buf.WriteAt(p[localOff:localOff+fr.R.Size], fr.R.Pos); werr != nil {
 			return n, skipped, werr
 		}
+		item.cache.totalSize.Add(fr.R.Size)
 	}
 
 	item.metaMu.Lock()
