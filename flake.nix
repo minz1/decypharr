@@ -19,8 +19,12 @@
             vendorHash = "sha256-rv2LBdkyrsIyGvxoxXNrY8uSrKdAWXwGWbuElrISbKA=";
             subPackages = [ "." ];
             ldflags = [ "-s" "-w" ];
-            nativeBuildInputs = [ pkgs.pkg-config ];
+            nativeBuildInputs = [ pkgs.pkg-config pkgs.makeBinaryWrapper ];
             buildInputs = [ pkgs.fuse ];
+            postInstall = ''
+              wrapProgram $out/bin/decypharr \
+                --prefix PATH : /run/wrappers/bin
+            '';
             meta = with lib; {
               description = "Debrid mock qBittorrent with stable FUSE inodes";
               homepage = "https://github.com/minz1/decypharr";

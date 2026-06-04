@@ -388,7 +388,6 @@ in
       description = "Decypharr — debrid mock qBittorrent";
       after = [ "network.target" ];
       wantedBy = [ "multi-user.target" ];
-
       # Write settings to config.json before start (runs as root to reach StateDirectory).
       serviceConfig.ExecStartPre = [
         "+${pkgs.coreutils}/bin/install -m 600 -o ${cfg.user} -g ${cfg.group} ${configFile} ${cfg.configDir}/config.json"

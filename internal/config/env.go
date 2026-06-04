@@ -117,23 +117,28 @@ func (c *Config) applyEnvOverrides() {
 	// Arr applications array
 	for i := 0; i < 20; i++ { // Support up to 20 arr applications
 		prefix := fmt.Sprintf("ARRS__%d__", i)
+
+		// NAME creates a new entry; TOKEN and other fields apply to existing
+		// entries by index so users can set only secrets in environmentFiles.
 		if val := getEnv(prefix + "NAME"); val != "" {
-			// Ensure array is large enough
 			if i >= len(c.Arrs) {
 				c.Arrs = append(c.Arrs, make([]Arr, i-len(c.Arrs)+1)...)
 			}
 			c.Arrs[i].Name = val
+		}
 
-			// Set other arr fields
-			if host := getEnv(prefix + "HOST"); host != "" {
-				c.Arrs[i].Host = host
-			}
-			if token := getEnv(prefix + "TOKEN"); token != "" {
-				c.Arrs[i].Token = token
-			}
-			if cleanup := getEnv(prefix + "CLEANUP"); cleanup != "" {
-				c.Arrs[i].Cleanup = parseBool(cleanup)
-			}
+		if i >= len(c.Arrs) {
+			continue
+		}
+
+		if host := getEnv(prefix + "HOST"); host != "" {
+			c.Arrs[i].Host = host
+		}
+		if token := getEnv(prefix + "TOKEN"); token != "" {
+			c.Arrs[i].Token = token
+		}
+		if cleanup := getEnv(prefix + "CLEANUP"); cleanup != "" {
+			c.Arrs[i].Cleanup = parseBool(cleanup)
 		}
 	}
 

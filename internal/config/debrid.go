@@ -91,26 +91,42 @@ func (c *Config) applyDebridEnvVars() {
 	// Debrid providers array
 	for i := 0; i < 10; i++ { // Support up to 10 debrid providers
 		prefix := fmt.Sprintf("DEBRIDS__%d__", i)
+
+		// NAME creates a new entry; secret fields apply to existing entries by index
+		// so users can set only secrets in environmentFiles without repeating names.
 		if val := getEnv(prefix + "NAME"); val != "" {
-			// Ensure array is large enough
 			if i >= len(c.Debrids) {
 				c.Debrids = append(c.Debrids, make([]Debrid, i-len(c.Debrids)+1)...)
 			}
 			c.Debrids[i].Name = val
+		}
 
-			// Set other debrid fields
-			if apiKey := getEnv(prefix + "API_KEY"); apiKey != "" {
-				c.Debrids[i].APIKey = apiKey
+		if i >= len(c.Debrids) {
+			continue
+		}
+
+		if apiKey := getEnv(prefix + "API_KEY"); apiKey != "" {
+			c.Debrids[i].APIKey = apiKey
+		}
+		if folder := getEnv(prefix + "FOLDER"); folder != "" {
+			c.Debrids[i].Folder = folder
+		}
+		if provider := getEnv(prefix + "PROVIDER"); provider != "" {
+			c.Debrids[i].Provider = provider
+		}
+		if proxy := getEnv(prefix + "PROXY"); proxy != "" {
+			c.Debrids[i].Proxy = proxy
+		}
+		for j := 0; j < 20; j++ {
+			dkey := getEnv(fmt.Sprintf("DEBRIDS__%d__DOWNLOAD_API_KEYS__%d", i, j))
+			if dkey == "" {
+				break
 			}
-			if folder := getEnv(prefix + "FOLDER"); folder != "" {
-				c.Debrids[i].Folder = folder
+			if j >= len(c.Debrids[i].DownloadAPIKeys) {
+				c.Debrids[i].DownloadAPIKeys = append(c.Debrids[i].DownloadAPIKeys,
+					make([]string, j-len(c.Debrids[i].DownloadAPIKeys)+1)...)
 			}
-			if provider := getEnv(prefix + "PROVIDER"); provider != "" {
-				c.Debrids[i].Provider = provider
-			}
-			if proxy := getEnv(prefix + "PROXY"); proxy != "" {
-				c.Debrids[i].Proxy = proxy
-			}
+			c.Debrids[i].DownloadAPIKeys[j] = dkey
 		}
 	}
 }
