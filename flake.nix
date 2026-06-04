@@ -40,7 +40,7 @@
       # wires them to env vars. The package is auto-set to this flake's build.
       nixosModules.default = { pkgs, lib, ... }: {
         imports = [ ./nix/module.nix ];
-        services.decypharr.package = lib.mkDefault self.packages.${pkgs.system}.default;
+        services.decypharr.package = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.default;
       };
 
       nixosModules.decypharr = self.nixosModules.default;
