@@ -7,6 +7,7 @@ import (
 	"io"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"
@@ -584,7 +585,7 @@ func (dls *Downloaders) countErrors(n int64, err error) {
 		// produced no data", "exhausted retries") only increment, so the
 		// breaker requires SUSTAINED failure. This is what stops one bad
 		// moment under load from locking a file out of every ffprobe.
-		if nntp.IsArticleNotFoundError(err) || customerror.IsPermanentError(err) {
+		if nntp.IsArticleNotFoundError(err) || customerror.IsPermanentError(err) || errors.Is(err, syscall.ENOSPC) {
 			dls.errorCount = maxErrorCount
 		}
 		// Trip circuit breaker when max errors reached

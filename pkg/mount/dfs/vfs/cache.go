@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/puzpuzpuz/xsync/v4"
@@ -833,6 +834,9 @@ func (item *CacheItem) WriteAtNoOverwrite(p []byte, off int64) (n, skipped int, 
 		}
 		localOff := fr.R.Pos - off
 		if _, werr := item.buf.WriteAt(p[localOff:localOff+fr.R.Size], fr.R.Pos); werr != nil {
+			if errors.Is(werr, syscall.ENOSPC) && item.cache.threshold > 0 {
+				item.cache.totalSize.Store(item.cache.threshold + 1)
+			}
 			return n, skipped, werr
 		}
 		item.cache.totalSize.Add(fr.R.Size)

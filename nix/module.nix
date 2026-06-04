@@ -474,6 +474,7 @@ in
         WorkingDirectory = cfg.configDir;
         Restart = "on-failure";
         RestartSec = 5;
+        TimeoutStopSec = 30;
         StateDirectory = "decypharr";
         EnvironmentFile = cfg.environmentFiles;
 
