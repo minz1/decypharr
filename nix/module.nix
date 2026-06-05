@@ -339,6 +339,146 @@ in
     };
 
     # -------------------------------------------------------------------------
+    # Rclone mount settings
+    # Decypharr starts rclone as a subprocess and controls it via RC API.
+    # These map to settings.mount.rclone in config.json.
+    # -------------------------------------------------------------------------
+
+    rclone = lib.mkOption {
+      default = { };
+      description = "Rclone mount settings. Only relevant when settings.mount.type = \"rclone\".";
+      type = lib.types.submodule {
+        options = {
+          cacheDir = lib.mkOption {
+            type = lib.types.str;
+            default = "";
+            description = "Directory for rclone VFS cache files.";
+          };
+          vfsCacheMode = lib.mkOption {
+            type = lib.types.enum [ "" "off" "minimal" "writes" "full" ];
+            default = "off";
+            description = "VFS cache mode. 'off' = direct streaming, no local cache.";
+          };
+          vfsCacheMaxAge = lib.mkOption {
+            type = lib.types.str;
+            default = "";
+            description = "Max age of objects in VFS cache (e.g. '1h'). Only used when vfsCacheMode != off.";
+          };
+          vfsCacheMaxSize = lib.mkOption {
+            type = lib.types.str;
+            default = "";
+            description = "Max size of VFS cache (e.g. '50G'). Only used when vfsCacheMode != off.";
+          };
+          vfsCachePollInterval = lib.mkOption {
+            type = lib.types.str;
+            default = "";
+            description = "How often to poll VFS cache for stale objects (e.g. '1m').";
+          };
+          vfsCacheMinFreeSpace = lib.mkOption {
+            type = lib.types.str;
+            default = "";
+            description = "Minimum free space on the cache disk before evicting (e.g. '1G').";
+          };
+          vfsDiskSpaceTotal = lib.mkOption {
+            type = lib.types.str;
+            default = "";
+            description = "Total disk space available for VFS cache (e.g. '100G').";
+          };
+          vfsReadChunkSize = lib.mkOption {
+            type = lib.types.str;
+            default = "";
+            description = "Initial chunk size for VFS reads (e.g. '128M').";
+          };
+          vfsReadChunkSizeLimit = lib.mkOption {
+            type = lib.types.str;
+            default = "";
+            description = "Max chunk size for VFS reads (e.g. '1G'). Empty = no limit.";
+          };
+          vfsReadChunkStreams = lib.mkOption {
+            type = lib.types.int;
+            default = 0;
+            description = "Number of parallel streams for chunk reads (0 = rclone default).";
+          };
+          vfsReadAhead = lib.mkOption {
+            type = lib.types.str;
+            default = "";
+            description = "Amount of data to read ahead (e.g. '128M').";
+          };
+          vfsFastFingerprint = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "Use fast (but less accurate) fingerprinting for VFS cache.";
+          };
+          noModTime = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "Don't read or write modification times.";
+          };
+          noChecksum = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "Don't validate checksums on transfer.";
+          };
+          bufferSize = lib.mkOption {
+            type = lib.types.str;
+            default = "";
+            description = "In-memory buffer size per open file (e.g. '16M'). 0 = disabled.";
+          };
+          bwLimit = lib.mkOption {
+            type = lib.types.str;
+            default = "";
+            description = "Bandwidth limit (e.g. '10M' or '10M:100M' for up:down).";
+          };
+          transfers = lib.mkOption {
+            type = lib.types.int;
+            default = 0;
+            description = "Number of parallel file transfers (0 = rclone default of 4).";
+          };
+          asyncRead = lib.mkOption {
+            type = lib.types.nullOr lib.types.bool;
+            default = null;
+            description = "Use asynchronous reads. null = rclone default.";
+          };
+          useMmap = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "Use mmap allocator for buffers.";
+          };
+          attrTimeout = lib.mkOption {
+            type = lib.types.str;
+            default = "";
+            description = "Attribute cache timeout for the FUSE mount (e.g. '1s').";
+          };
+          dirCacheTime = lib.mkOption {
+            type = lib.types.str;
+            default = "5m";
+            description = "How long to cache directory listings (e.g. '5m').";
+          };
+          uid = lib.mkOption {
+            type = lib.types.int;
+            default = 0;
+            description = "UID for files in the rclone mount (0 = inherit from service user).";
+          };
+          gid = lib.mkOption {
+            type = lib.types.int;
+            default = 0;
+            description = "GID for files in the rclone mount (0 = inherit from service group).";
+          };
+          umask = lib.mkOption {
+            type = lib.types.str;
+            default = "";
+            description = "Umask for files in the rclone mount (e.g. '0022').";
+          };
+          logLevel = lib.mkOption {
+            type = lib.types.enum [ "" "DEBUG" "INFO" "NOTICE" "ERROR" ];
+            default = "";
+            description = "Rclone log verbosity. Empty = rclone default (NOTICE).";
+          };
+        };
+      };
+    };
+
+    # -------------------------------------------------------------------------
     # Full structured config (written to config.json)
     # Use this for debrids, arrs, usenet, mount type/path, and anything
     # not covered by the scalar options above.
@@ -386,6 +526,41 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    # Merge rclone submodule options into settings.mount.rclone so they land
+    # in config.json without requiring the user to duplicate them in settings.
+    services.decypharr.settings = lib.mkMerge [
+      (let
+        r = cfg.rclone;
+        base = lib.filterAttrs (_: v: v != "" && v != false) {
+          vfs_cache_mode       = r.vfsCacheMode;
+          dir_cache_time       = r.dirCacheTime;
+          cache_dir            = r.cacheDir;
+          vfs_cache_max_age    = r.vfsCacheMaxAge;
+          vfs_cache_max_size   = r.vfsCacheMaxSize;
+          vfs_cache_poll_interval = r.vfsCachePollInterval;
+          vfs_cache_min_free_space = r.vfsCacheMinFreeSpace;
+          vfs_disk_space_total = r.vfsDiskSpaceTotal;
+          vfs_read_chunk_size  = r.vfsReadChunkSize;
+          vfs_read_chunk_size_limit = r.vfsReadChunkSizeLimit;
+          vfs_read_ahead       = r.vfsReadAhead;
+          buffer_size          = r.bufferSize;
+          bw_limit             = r.bwLimit;
+          attr_timeout         = r.attrTimeout;
+          umask                = r.umask;
+          log_level            = r.logLevel;
+        }
+        // lib.optionalAttrs (r.vfsReadChunkStreams != 0) { vfs_read_chunk_streams = r.vfsReadChunkStreams; }
+        // lib.optionalAttrs (r.transfers != 0)          { transfers = r.transfers; }
+        // lib.optionalAttrs (r.uid != 0)                { uid = r.uid; }
+        // lib.optionalAttrs (r.gid != 0)                { gid = r.gid; }
+        // lib.optionalAttrs r.vfsFastFingerprint        { vfs_fast_fingerprint = true; }
+        // lib.optionalAttrs r.noModTime                 { no_modtime = true; }
+        // lib.optionalAttrs r.noChecksum                { no_checksum = true; }
+        // lib.optionalAttrs r.useMmap                   { use_mmap = true; }
+        // lib.optionalAttrs (r.asyncRead != null)       { async_read = r.asyncRead; };
+      in lib.optionalAttrs (base != { }) { mount.rclone = base; })
+    ];
+
     boot.kernelModules = [ "fuse" ];
     programs.fuse.userAllowOther = true;
 
