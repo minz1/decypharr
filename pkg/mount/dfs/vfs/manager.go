@@ -90,7 +90,7 @@ func (m *Manager) GetFile(info *manager.FileInfo) (File, error) {
 		if err != nil {
 			return nil, fmt.Errorf("cache full, direct stream unavailable: %w", err)
 		}
-		m.logger.Debug().
+		m.logger.Info().
 			Str("entry", info.Parent()).
 			Str("file", info.Name()).
 			Bool("disabled", m.cache.config.DisableCache).
