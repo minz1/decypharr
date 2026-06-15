@@ -68,6 +68,18 @@ in
       example = [ "/run/secrets/decypharr.env" ];
     };
 
+    authFile = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      description = ''
+        Path to a pre-built auth.json file (e.g. a sops-nix or agenix secret).
+        Must contain: {"username":"...","password":"<bcrypt hash>","api_token":"..."}
+        The module installs it to configDir/auth.json before startup.
+        If null, auth.json must already exist in configDir (written by the setup wizard).
+      '';
+      example = "config.sops.templates.decypharr-auth.path";
+    };
+
     # -------------------------------------------------------------------------
     # Server
     # -------------------------------------------------------------------------
@@ -584,9 +596,11 @@ in
       after = [ "network.target" ];
       wantedBy = [ "multi-user.target" ];
       # Write settings to config.json before start (runs as root to reach StateDirectory).
-      serviceConfig.ExecStartPre = [
-        "+${pkgs.coreutils}/bin/install -m 600 -o ${cfg.user} -g ${cfg.group} ${configFile} ${cfg.configDir}/config.json"
-      ];
+      serviceConfig.ExecStartPre =
+        [ "+${pkgs.coreutils}/bin/install -m 600 -o ${cfg.user} -g ${cfg.group} ${configFile} ${cfg.configDir}/config.json" ]
+        ++ lib.optionals (cfg.authFile != null) [
+          "+${pkgs.coreutils}/bin/install -m 600 -o ${cfg.user} -g ${cfg.group} ${cfg.authFile} ${cfg.configDir}/auth.json"
+        ];
 
       # Scalar options override anything in settings via env vars.
       # filterAttrs drops empty strings so unset options don't clobber config.json defaults.
