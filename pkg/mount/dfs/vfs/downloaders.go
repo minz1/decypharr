@@ -1227,7 +1227,7 @@ func (dl *downloader) setMaxOffset(max int64) {
 	}
 }
 
-func (dl *downloader) adjustChunkSize(chunkLen, written int64, success bool) {
+func (dl *downloader) adjustChunkSize(chunkLen, _ int64, success bool) {
 	dl.mu.Lock()
 	defer dl.mu.Unlock()
 
@@ -1275,7 +1275,7 @@ func (dl *downloader) stop() {
 }
 
 // close marks the downloader as closed
-func (dl *downloader) close(err error) {
+func (dl *downloader) close(_ error) {
 	dl.mu.Lock()
 	dl.closed = true
 	dl.mu.Unlock()

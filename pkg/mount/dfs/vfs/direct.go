@@ -10,11 +10,17 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
+// streamSource is the narrow interface DirectStreamFile needs from manager.Manager.
+// Keeping it minimal lets tests inject a fake without wiring the full manager stack.
+type streamSource interface {
+	Stream(ctx context.Context, entry *storage.Entry, filename string, start, end int64, writer io.Writer, onReady manager.StreamReadyFunc, client string) error
+}
+
 // DirectStreamFile serves reads straight from the debrid network without
 // writing to disk. Used when the cache is at capacity so new file opens
 // degrade gracefully instead of returning EIO once the partition fills.
 type DirectStreamFile struct {
-	mgr      *manager.Manager
+	src      streamSource
 	entry    *storage.Entry
 	filename string
 	size     int64
@@ -24,7 +30,7 @@ type DirectStreamFile struct {
 
 func newDirectStreamFile(mgr *manager.Manager, entry *storage.Entry, filename string, size int64, retries int) *DirectStreamFile {
 	return &DirectStreamFile{
-		mgr:      mgr,
+		src:      mgr,
 		entry:    entry,
 		filename: filename,
 		size:     size,
@@ -70,7 +76,7 @@ func (f *DirectStreamFile) ReadAtContext(ctx context.Context, p []byte, off int6
 		}
 
 		w := &fixedWriter{dst: p}
-		err := f.mgr.Stream(ctx, f.entry, f.filename, off, end, w, nil, "DFS-direct")
+		err := f.src.Stream(ctx, f.entry, f.filename, off, end, w, nil, "DFS-direct")
 		if err == nil {
 			return w.n, nil
 		}

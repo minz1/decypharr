@@ -546,3 +546,13 @@ func (m *Manager) getCustomFolderChildren(folder string) []FileInfo {
 	}
 	return infos
 }
+
+// NewFileInfo constructs a FileInfo for use in tests and external callers that
+// need to synthesize a file descriptor without going through the storage layer.
+func NewFileInfo(parent, name string, size int64) *FileInfo {
+	return &FileInfo{
+		parent: parent,
+		name:   name,
+		size:   size,
+	}
+}

@@ -717,7 +717,7 @@ func (c *Cache) evict() cleanupRunSummary {
 	if c.threshold > 0 {
 		var stat syscall.Statfs_t
 		if err := syscall.Statfs(c.config.CacheDir, &stat); err == nil {
-			free := int64(stat.Bavail) * int64(stat.Bsize)
+			free := int64(stat.Bavail) * stat.Bsize
 			if free < minCacheFreeBytes && totalSize < c.threshold {
 				c.logger.Warn().
 					Int64("free_bytes", free).
@@ -1244,6 +1244,20 @@ func (item *CacheItem) onBufferEvict(off, length int64) {
 	item.info.Rs.Remove(ranges.Range{Pos: off, Size: length})
 	item.metaMu.Unlock()
 	item.markMetadataDirty()
+	// Keep the in-memory totalSize counter in sync so IsOverBudget() stays
+	// accurate between evict() cleanup cycles (which re-derive it from disk).
+	if length > 0 {
+		for {
+			old := item.cache.totalSize.Load()
+			next := old - length
+			if next < 0 {
+				next = 0
+			}
+			if item.cache.totalSize.CompareAndSwap(old, next) {
+				break
+			}
+		}
+	}
 }
 
 // HasRange returns true if entire range is on disk

@@ -308,6 +308,12 @@ func (c *Config) loadConfig() error {
 	// Apply environment variable overrides
 	c.applyEnvOverrides()
 
+	// Hard-fail on invalid DFS size/duration strings. A wrong value silently
+	// sets CacheDiskSize=0 and disables all cache enforcement; fail loudly instead.
+	if err := c.Mount.DFS.Validate(); err != nil {
+		return fmt.Errorf("configuration error: %w", err)
+	}
+
 	return nil
 }
 

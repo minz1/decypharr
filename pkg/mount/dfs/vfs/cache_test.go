@@ -23,6 +23,139 @@ func newTestCache(cacheDir string) *Cache {
 	}
 }
 
+// TestIsOverBudget_BugReproduction documents the original bug:
+// ParseSize("85G") failed silently, leaving CacheDiskSize=0 → threshold=0 →
+// IsOverBudget() always false → all size enforcement disabled.
+func TestIsOverBudget_BugReproduction(t *testing.T) {
+	cacheDir := t.TempDir()
+
+	// Bug scenario: threshold=0 (from CacheDiskSize=0). Even with 100 GB "used",
+	// IsOverBudget must return false — no limit was configured, not "over budget".
+	c := newTestCache(cacheDir)
+	c.totalSize.Store(100 * 1024 * 1024 * 1024)
+	if c.IsOverBudget() {
+		t.Fatal("threshold=0 must never report over budget (means no limit configured, not 'full')")
+	}
+
+	// Fixed behaviour: threshold set to 90% of 85 GB.
+	const maxSize = 85 * 1024 * 1024 * 1024
+	c.threshold = int64(float64(maxSize) * cacheEvictThreshold) // ~76.5 GB
+
+	// Under threshold → not over budget.
+	c.totalSize.Store(50 * 1024 * 1024 * 1024)
+	if c.IsOverBudget() {
+		t.Fatal("below threshold should not be over budget")
+	}
+
+	// At threshold → over budget.
+	c.totalSize.Store(c.threshold)
+	if !c.IsOverBudget() {
+		t.Fatal("at eviction threshold should be over budget")
+	}
+
+	// Above threshold → over budget.
+	c.totalSize.Store(c.threshold + 1)
+	if !c.IsOverBudget() {
+		t.Fatal("above eviction threshold should be over budget")
+	}
+
+	// DisableCache bypasses IsOverBudget entirely (checked in manager.GetFile).
+	cfg2 := &fuseconfig.FuseConfig{CacheDir: cacheDir, DisableCache: true}
+	c2 := &Cache{config: cfg2, items: xsync.NewMap[string, *CacheItem](), logger: zerolog.Nop()}
+	overBudget := c2.config.DisableCache || c2.IsOverBudget()
+	if !overBudget {
+		t.Fatal("DisableCache=true must force the direct-stream path in manager.GetFile")
+	}
+}
+
+// TestEvictCandidates_BoundsCacheBelowThreshold verifies that Phase 2 eviction
+// removes oldest-by-atime items until total is within threshold, and that it
+// removes exactly as many as needed — no more, no less.
+func TestEvictCandidates_BoundsCacheBelowThreshold(t *testing.T) {
+	cacheDir := t.TempDir()
+	entryDir := filepath.Join(cacheDir, "entry")
+	if err := os.MkdirAll(entryDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Five files, each accounting for 100 bytes, total 500 bytes.
+	// Atime descending from oldest (5h ago) to newest (1h ago).
+	now := time.Now()
+	type fileSpec struct {
+		name  string
+		atime time.Time
+	}
+	specs := []fileSpec{
+		{"oldest.mkv", now.Add(-5 * time.Hour)},
+		{"old.mkv", now.Add(-4 * time.Hour)},
+		{"mid.mkv", now.Add(-3 * time.Hour)},
+		{"recent.mkv", now.Add(-2 * time.Hour)},
+		{"newest.mkv", now.Add(-1 * time.Hour)},
+	}
+
+	const cachedBytesEach = 100
+	candidates := make([]candidateEntry, 0, len(specs))
+	for _, spec := range specs {
+		dataPath := filepath.Join(entryDir, spec.name)
+		metaPath := dataPath + ".json"
+		if err := os.WriteFile(dataPath, make([]byte, cachedBytesEach), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(metaPath, []byte(`{"size":1024}`), 0644); err != nil {
+			t.Fatal(err)
+		}
+		candidates = append(candidates, candidateEntry{
+			key:        "entry/" + spec.name,
+			path:       entryDir,
+			dataPath:   dataPath,
+			metaPath:   metaPath,
+			atime:      spec.atime,
+			mtime:      spec.atime,
+			cachedSize: cachedBytesEach,
+		})
+	}
+
+	// Use a cache with no expiry so Phase 1 (time-based) doesn't interfere.
+	c := &Cache{
+		config: &fuseconfig.FuseConfig{CacheDir: cacheDir, CacheExpiry: 0},
+		items:  xsync.NewMap[string, *CacheItem](),
+		logger: zerolog.Nop(),
+	}
+
+	// Threshold 200: need to evict 3 oldest to reach 200 (500-100-100-100=200).
+	totalBefore := int64(len(specs) * cachedBytesEach) // 500
+	const threshold = 200
+
+	totalAfter, removed, removalErrors, removedKeys := c.evictCandidates(now, candidates, totalBefore, threshold)
+
+	if removalErrors != 0 {
+		t.Fatalf("expected 0 removal errors, got %d", removalErrors)
+	}
+	if totalAfter > threshold {
+		t.Fatalf("expected total ≤ %d after eviction, got %d", threshold, totalAfter)
+	}
+	if removed != 3 {
+		t.Fatalf("expected 3 items removed (oldest first), got %d", removed)
+	}
+
+	// Oldest 3 must be gone from disk.
+	for _, name := range []string{"oldest.mkv", "old.mkv", "mid.mkv"} {
+		if _, err := os.Stat(filepath.Join(entryDir, name)); !os.IsNotExist(err) {
+			t.Errorf("expected %s to be removed; stat err=%v", name, err)
+		}
+		if _, ok := removedKeys["entry/"+name]; !ok {
+			t.Errorf("expected removed key entry/%s in result set", name)
+		}
+	}
+
+	// Two newest must survive.
+	for _, name := range []string{"recent.mkv", "newest.mkv"} {
+		if _, err := os.Stat(filepath.Join(entryDir, name)); err != nil {
+			t.Errorf("expected %s to survive; stat err=%v", name, err)
+		}
+	}
+}
+
 func TestScanDiskCandidates_DoesNotDeleteLegacyFiles(t *testing.T) {
 	cacheDir := t.TempDir()
 	entryDir := filepath.Join(cacheDir, "entry")

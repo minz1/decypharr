@@ -138,5 +138,4 @@ func (c *Config) applyEnvOverrides() {
 			c.Arrs[i].Token = token
 		}
 	}
-
 }

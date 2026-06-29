@@ -105,8 +105,8 @@ func ParseSize(sizeStr string) (int64, error) {
 	sizeStr = strings.ToUpper(strings.TrimSpace(sizeStr))
 
 	// Absolute size-based cache. Order matters: two-letter units must be
-	// checked before the bare "B" suffix. ParseFloat below means decimal
-	// values (e.g. "2.2TB", "1.5GB") are supported for every unit.
+	// checked before single-letter units, and single-letter before bare "B".
+	// ParseFloat below means decimal values (e.g. "2.2T", "1.5G") work too.
 	multiplier := 1.0
 	switch {
 	case strings.HasSuffix(sizeStr, "PB"):
@@ -124,6 +124,21 @@ func ParseSize(sizeStr string) (int64, error) {
 	case strings.HasSuffix(sizeStr, "KB"):
 		multiplier = 1024
 		sizeStr = strings.TrimSuffix(sizeStr, "KB")
+	case strings.HasSuffix(sizeStr, "P"):
+		multiplier = 1024 * 1024 * 1024 * 1024 * 1024
+		sizeStr = strings.TrimSuffix(sizeStr, "P")
+	case strings.HasSuffix(sizeStr, "T"):
+		multiplier = 1024 * 1024 * 1024 * 1024
+		sizeStr = strings.TrimSuffix(sizeStr, "T")
+	case strings.HasSuffix(sizeStr, "G"):
+		multiplier = 1024 * 1024 * 1024
+		sizeStr = strings.TrimSuffix(sizeStr, "G")
+	case strings.HasSuffix(sizeStr, "M"):
+		multiplier = 1024 * 1024
+		sizeStr = strings.TrimSuffix(sizeStr, "M")
+	case strings.HasSuffix(sizeStr, "K"):
+		multiplier = 1024
+		sizeStr = strings.TrimSuffix(sizeStr, "K")
 	case strings.HasSuffix(sizeStr, "B"):
 		sizeStr = strings.TrimSuffix(sizeStr, "B")
 	}

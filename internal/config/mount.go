@@ -1,6 +1,10 @@
 package config
 
-import "strconv"
+import (
+	"fmt"
+	"strconv"
+	"time"
+)
 
 type Rclone struct {
 	// Global mount folder where all providers will be mounted as subfolders
@@ -77,6 +81,45 @@ type DFS struct {
 	UID   uint32 `json:"uid,omitempty"`   // User ID for mounted files
 	GID   uint32 `json:"gid,omitempty"`   // Group ID for mounted files
 	Umask string `json:"umask,omitempty"` // File permissions mask
+}
+
+// Validate checks that every non-empty size/duration string can be parsed.
+// Called from loadConfig after env overrides so that a bad value fails loudly
+// at startup rather than silently disabling cache enforcement.
+func (d DFS) Validate() error {
+	sizes := []struct {
+		field, value string
+	}{
+		{"mount.dfs.disk_cache_size", d.DiskCacheSize},
+		{"mount.dfs.chunk_size", d.ChunkSize},
+		{"mount.dfs.read_ahead_size", d.ReadAheadSize},
+		{"mount.dfs.drop_behind_margin", d.DropBehindMargin},
+		{"mount.dfs.buffer_memory", d.BufferMemory},
+	}
+	for _, s := range sizes {
+		if s.value == "" {
+			continue
+		}
+		if _, err := ParseSize(s.value); err != nil {
+			return fmt.Errorf("invalid %s %q: %w", s.field, s.value, err)
+		}
+	}
+	durations := []struct {
+		field, value string
+	}{
+		{"mount.dfs.cache_expiry", d.CacheExpiry},
+		{"mount.dfs.cache_cleanup_interval", d.CacheCleanupInterval},
+		{"mount.dfs.daemon_timeout", d.DaemonTimeout},
+	}
+	for _, dur := range durations {
+		if dur.value == "" {
+			continue
+		}
+		if _, err := time.ParseDuration(dur.value); err != nil {
+			return fmt.Errorf("invalid %s %q: %w", dur.field, dur.value, err)
+		}
+	}
+	return nil
 }
 
 // DiskCacheSizeBytes resolves the DFS on-disk cache budget in bytes. Empty or

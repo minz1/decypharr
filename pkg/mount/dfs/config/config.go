@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"
@@ -90,6 +91,11 @@ func ParseFuseConfig() *FuseConfig {
 		size, err := config.ParseSize(cfg.DiskCacheSize)
 		if err == nil {
 			fuseConfig.CacheDiskSize = size
+		} else {
+			// Should not happen: loadConfig validates all size strings before
+			// ParseFuseConfig is called. Log and leave CacheDiskSize=0 so the
+			// caller can still detect the misconfiguration via IsOverBudget==false.
+			_, _ = fmt.Fprintf(os.Stderr, "[DFS] ERROR: invalid mount.dfs.disk_cache_size %q: %v — cache enforcement DISABLED\n", cfg.DiskCacheSize, err)
 		}
 	}
 
@@ -97,6 +103,8 @@ func ParseFuseConfig() *FuseConfig {
 		interval, err := utils.ParseDuration(cfg.CacheCleanupInterval)
 		if err == nil {
 			fuseConfig.CacheCleanupInterval = interval
+		} else {
+			_, _ = fmt.Fprintf(os.Stderr, "[DFS] ERROR: invalid mount.dfs.cache_cleanup_interval %q: %v — using default\n", cfg.CacheCleanupInterval, err)
 		}
 	}
 
@@ -104,6 +112,8 @@ func ParseFuseConfig() *FuseConfig {
 		size, err := config.ParseSize(cfg.ChunkSize)
 		if err == nil {
 			fuseConfig.ChunkSize = size
+		} else {
+			_, _ = fmt.Fprintf(os.Stderr, "[DFS] ERROR: invalid mount.dfs.chunk_size %q: %v — using default\n", cfg.ChunkSize, err)
 		}
 	}
 
@@ -111,6 +121,8 @@ func ParseFuseConfig() *FuseConfig {
 		ttl, err := utils.ParseDuration(cfg.CacheExpiry)
 		if err == nil {
 			fuseConfig.CacheExpiry = ttl
+		} else {
+			_, _ = fmt.Fprintf(os.Stderr, "[DFS] ERROR: invalid mount.dfs.cache_expiry %q: %v — using default\n", cfg.CacheExpiry, err)
 		}
 	}
 
@@ -118,12 +130,16 @@ func ParseFuseConfig() *FuseConfig {
 		size, err := config.ParseSize(cfg.ReadAheadSize)
 		if err == nil {
 			fuseConfig.ReadAheadSize = size
+		} else {
+			_, _ = fmt.Fprintf(os.Stderr, "[DFS] ERROR: invalid mount.dfs.read_ahead_size %q: %v — using default\n", cfg.ReadAheadSize, err)
 		}
 	}
 	if cfg.DropBehindMargin != "" {
 		size, err := config.ParseSize(cfg.DropBehindMargin)
 		if err == nil {
 			fuseConfig.DropBehindMargin = size
+		} else {
+			_, _ = fmt.Fprintf(os.Stderr, "[DFS] ERROR: invalid mount.dfs.drop_behind_margin %q: %v — using default\n", cfg.DropBehindMargin, err)
 		}
 	}
 	// Otherwise keep the default (4) from DefaultFuseConfig()
