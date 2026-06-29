@@ -22,7 +22,7 @@
 //   - Discard releases bytes from RAM AND from disk via fallocate(PUNCH_HOLE)
 //     on Linux. On tmpfs this directly returns RAM to the kernel.
 //
-// Range tracker
+// # Range tracker
 //
 // A rangeSet maintains the set of byte ranges that are present anywhere
 // (RAM or disk). ReadAt consults this first: any byte in the requested
@@ -836,26 +836,6 @@ func (b *Buffer) SetReadHead(off int64) {
 	b.readHead.Store(off)
 }
 
-// tryEvictCleanLocked drops the LRU-tail clean block, respecting the
-// caller-supplied eviction-min-offset hint when set. Returns true if a
-// block was evicted. Caller holds b.mu.
-func (b *Buffer) tryEvictCleanLocked() bool {
-	minOff := b.readHead.Load()
-	for blk := b.lruTail; blk != nil; blk = blk.prev {
-		if !blk.isClean() {
-			continue
-		}
-		if minOff > 0 && blk.off >= minOff {
-			continue // block is in the protected active window
-		}
-		b.dropBlockLocked(blk)
-		b.statsEvictions.Add(1)
-		return true
-	}
-	return false
-}
-
-
 // Stats returns the current observability counters.
 func (b *Buffer) Stats() Stats {
 	b.mu.RLock()
@@ -1091,4 +1071,3 @@ func (b *Buffer) markStateForBlockLocked(blockOff int64) {
 		slot.Store(stateSlow)
 	}
 }
-

@@ -434,6 +434,67 @@ func TestPurgeCacheRemovesIdleDiskItemsAndSkipsActiveItems(t *testing.T) {
 	}
 }
 
+// TestOnBufferEvict_TotalSizeDrift verifies the CAS loop we added to
+// onBufferEvict keeps c.totalSize accurate when the pool punches holes.
+// Before the fix, onBufferEvict updated metadata ranges but never touched
+// totalSize, so IsOverBudget() could stay false even as disk filled up.
+func TestOnBufferEvict_TotalSizeDrift(t *testing.T) {
+	cacheDir := t.TempDir()
+	c := newTestCache(cacheDir)
+
+	makeItem := func() *CacheItem {
+		return &CacheItem{cache: c}
+	}
+
+	t.Run("normal decrement", func(t *testing.T) {
+		c.totalSize.Store(500)
+		item := makeItem()
+		item.onBufferEvict(0, 200)
+		if got := c.totalSize.Load(); got != 300 {
+			t.Fatalf("totalSize: got %d, want 300", got)
+		}
+	})
+
+	t.Run("floor at zero", func(t *testing.T) {
+		c.totalSize.Store(100)
+		item := makeItem()
+		item.onBufferEvict(0, 300) // evict more than totalSize
+		if got := c.totalSize.Load(); got != 0 {
+			t.Fatalf("totalSize: got %d, want 0 (no negative)", got)
+		}
+	})
+
+	t.Run("zero-length no-op", func(t *testing.T) {
+		c.totalSize.Store(250)
+		item := makeItem()
+		item.onBufferEvict(0, 0)
+		if got := c.totalSize.Load(); got != 250 {
+			t.Fatalf("totalSize: got %d, want 250 (zero-length must be no-op)", got)
+		}
+	})
+
+	t.Run("concurrent decrements sum correctly", func(t *testing.T) {
+		const goroutines = 50
+		const evictEach = 10
+		c.totalSize.Store(int64(goroutines * evictEach))
+		item := makeItem()
+
+		done := make(chan struct{})
+		for range goroutines {
+			go func() {
+				item.onBufferEvict(0, evictEach)
+				done <- struct{}{}
+			}()
+		}
+		for range goroutines {
+			<-done
+		}
+		if got := c.totalSize.Load(); got != 0 {
+			t.Fatalf("totalSize after concurrent evicts: got %d, want 0", got)
+		}
+	})
+}
+
 func TestCleanupItems_ForceZeroOpenClosesRecentItems(t *testing.T) {
 	cacheDir := t.TempDir()
 	entryDir := filepath.Join(cacheDir, "entry")

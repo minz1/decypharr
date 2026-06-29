@@ -177,7 +177,7 @@ func (p *Pool) wouldExceedMemory() bool {
 	return b > 0 && p.memInUse.Load()+int64(blockSize) > b
 }
 
-func (p *Pool) addBlock()         { p.memInUse.Add(int64(blockSize)) }
+func (p *Pool) addBlock() { p.memInUse.Add(int64(blockSize)) }
 func (p *Pool) dropBytes(n int64) {
 	if n > 0 {
 		p.memInUse.Add(-n)

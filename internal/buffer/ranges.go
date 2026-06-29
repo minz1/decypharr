@@ -64,7 +64,7 @@ func (r *rangeSet) insert(off, length int64) (added int64) {
 	i := sort.Search(len(r.rs), func(i int) bool { return r.rs[i].end >= off })
 	if i == len(r.rs) {
 		r.rs = append(r.rs, extent{off, end})
-		return
+		return added
 	}
 	// If the new range ends before the next extent starts, there is a real
 	// gap and the range must be inserted before it. Adjacent ranges merge.
@@ -73,7 +73,7 @@ func (r *rangeSet) insert(off, length int64) (added int64) {
 		r.rs = append(r.rs, extent{})
 		copy(r.rs[i+1:], r.rs[i:])
 		r.rs[i] = extent{off, end}
-		return
+		return added
 	}
 	// Overlap or adjacency: expand r.rs[i] to cover the new range.
 	if off < r.rs[i].off {
@@ -109,7 +109,7 @@ func (r *rangeSet) remove(off, length int64) (removed int64) {
 	// Skip past ranges entirely below the removal.
 	i := sort.Search(len(r.rs), func(i int) bool { return r.rs[i].end > off })
 	if i == len(r.rs) {
-		return
+		return removed
 	}
 	// Walk forward dropping or splitting until we pass `end`.
 	for i < len(r.rs) && r.rs[i].off < end {
@@ -127,7 +127,7 @@ func (r *rangeSet) remove(off, length int64) (removed int64) {
 			r.rs = append(r.rs, extent{})
 			copy(r.rs[i+2:], r.rs[i+1:])
 			r.rs[i+1] = tail
-			return
+			return removed
 		case ext.off < off:
 			// Trim trailing portion.
 			r.rs[i].end = off
