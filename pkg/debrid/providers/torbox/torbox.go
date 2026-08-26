@@ -62,11 +62,20 @@ func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter) (*Torbox, er
 	}
 	_log := logger.New(dc.Name)
 
+	// TorBox enforces a hard cap of 300 req/min per API key, applied
+	// synchronously across all servers since v8.4 (Feb 2026, GAP-002).
+	// Default to that limit if the user has not configured one explicitly.
+	mainRL := ratelimits["main"]
+	if mainRL == nil {
+		mainRL = ratelimit.New(300, ratelimit.Per(time.Minute), ratelimit.WithSlack(30))
+	}
+
 	opts := []request.ClientOption{
 		request.WithHeaders(headers),
-		request.WithRateLimiter(ratelimits["main"]),
+		request.WithRateLimiter(mainRL),
 		request.WithMaxRetries(cfg.Retries),
 		request.WithRetryableStatus(http.StatusTooManyRequests, http.StatusBadGateway),
+		request.WithLogger(_log),
 	}
 	if dc.Proxy != "" {
 		opts = append(opts, request.WithProxy(dc.Proxy))
@@ -98,7 +107,7 @@ func (tb *Torbox) Logger() zerolog.Logger {
 }
 
 // doGet performs a GET request and unmarshals the response
-func (tb *Torbox) doGet(endpoint string, queryParams map[string]string, result interface{}) (*http.Response, error) {
+func (tb *Torbox) doGet(endpoint string, queryParams map[string]string, result any) (*http.Response, error) {
 	u, err := url.Parse(tb.Host + endpoint)
 	if err != nil {
 		return nil, err
@@ -121,7 +130,7 @@ func (tb *Torbox) doGet(endpoint string, queryParams map[string]string, result i
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer request.DrainAndClose(resp.Body)
 
 	if result != nil && resp.StatusCode >= 200 && resp.StatusCode < 300 && resp.ContentLength != 0 {
 		if err := json.ConfigDefault.NewDecoder(resp.Body).Decode(result); err != nil {
@@ -133,7 +142,7 @@ func (tb *Torbox) doGet(endpoint string, queryParams map[string]string, result i
 }
 
 // doPostForm performs a POST request with form data
-func (tb *Torbox) doPostForm(endpoint string, formData map[string]string, result interface{}) (*http.Response, error) {
+func (tb *Torbox) doPostForm(endpoint string, formData map[string]string, result any) (*http.Response, error) {
 	form := url.Values{}
 	for k, v := range formData {
 		form.Set(k, v)
@@ -149,7 +158,7 @@ func (tb *Torbox) doPostForm(endpoint string, formData map[string]string, result
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer request.DrainAndClose(resp.Body)
 
 	if result != nil && resp.StatusCode >= 200 && resp.StatusCode < 300 && resp.ContentLength != 0 {
 		if err := json.ConfigDefault.NewDecoder(resp.Body).Decode(result); err != nil {
@@ -181,7 +190,7 @@ func (tb *Torbox) doPostJSON(endpoint string, payload interface{}, result interf
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer request.DrainAndClose(resp.Body)
 
 	if result != nil && resp.StatusCode >= 200 && resp.StatusCode < 300 && resp.ContentLength != 0 {
 		if err := json.ConfigDefault.NewDecoder(resp.Body).Decode(result); err != nil {
@@ -196,10 +205,7 @@ func (tb *Torbox) IsAvailable(hashes []string) map[string]bool {
 	result := make(map[string]bool)
 
 	for i := 0; i < len(hashes); i += 100 {
-		end := i + 100
-		if end > len(hashes) {
-			end = len(hashes)
-		}
+		end := min(i+100, len(hashes))
 
 		validHashes := make([]string, 0, end-i)
 		for _, hash := range hashes[i:end] {
@@ -541,7 +547,7 @@ func (tb *Torbox) GetTorrents() ([]*types.Torrent, error) {
 	for {
 		torrents, err := tb.getTorrents(offset)
 		if err != nil {
-			break
+			return nil, fmt.Errorf("get TorBox torrents at offset %d: %w", offset, err)
 		}
 		if len(torrents) == 0 {
 			break
@@ -555,7 +561,10 @@ func (tb *Torbox) GetTorrents() ([]*types.Torrent, error) {
 func (tb *Torbox) getTorrents(offset int) ([]*types.Torrent, error) {
 	var res TorrentsListResponse
 
-	resp, err := tb.doGet("/api/torrents/mylist", map[string]string{"offset": fmt.Sprintf("%d", offset)}, &res)
+	resp, err := tb.doGet("/api/torrents/mylist", map[string]string{
+		"bypass_cache": "true",
+		"offset":       strconv.Itoa(offset),
+	}, &res)
 	if err != nil {
 		return nil, err
 	}
@@ -642,8 +651,8 @@ func (tb *Torbox) CheckFile(ctx context.Context, infohash, link string) error {
 	tb.downloadPresentMu.Unlock()
 
 	torrentID := link
-	if strings.HasPrefix(link, "torbox://") {
-		parts := strings.SplitN(strings.TrimPrefix(link, "torbox://"), "/", 2)
+	if after, ok := strings.CutPrefix(link, "torbox://"); ok {
+		parts := strings.SplitN(after, "/", 2)
 		if len(parts) > 0 {
 			torrentID = parts[0]
 		}

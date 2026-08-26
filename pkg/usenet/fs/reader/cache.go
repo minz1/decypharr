@@ -57,11 +57,19 @@ type SegmentCache struct {
 	maxDisk     int64
 	curDisk     atomic.Int64
 	evictSignal chan struct{}
+	evictMu     sync.Mutex // serializes hard-budget scans and hole punching
+	evictCursor int        // findEvictableBatch wrap-once scan position; under evictMu
 	evictWg     sync.WaitGroup
 
-	// Sliding-window state. See sweepWindow for the policy.
-	maxConsumedOff atomic.Int64
-	sweepWg        sync.WaitGroup
+	// Sliding-window state: the slowest active consumer's delivered offset
+	// (see SetConsumedFloor and sweepWindow).
+	consumedFloor atomic.Int64
+	sweepWg       sync.WaitGroup
+	// sweepCursor skips the already-evicted prefix; reset when the cutoff
+	// regresses (a seek-back may re-fetch behind it). Only touched by the
+	// sweepLoop goroutine.
+	sweepCursor     int
+	sweepLastCutoff int64
 
 	// Sharded waiters: readers blocking on WaitForSegment park on one of
 	// numShards condition variables to avoid global wakeup storms.
@@ -166,6 +174,11 @@ func NewSegmentCache(
 		MemorySize: bufferMemorySize,
 		DiskPath:   filepath.Join(diskPath, "segments.bin"),
 		TotalSize:  totalSize,
+		// Segments are decoded into the buffer exactly once and transition
+		// to OnDisk before any read, so write-through keeps decoded writes
+		// off the exclusive buffer lock and completed segments on the
+		// lock-free pread path.
+		WritePolicy: buffer.WriteThrough,
 		// Only fires if the usenet pool is given a disk limit (off by default —
 		// usenet bounds disk via its own sliding-window sweep). If a pool-driven
 		// punch ever does happen, mark the covered segments Empty so they
@@ -202,7 +215,7 @@ func NewSegmentCache(
 		stats:       stats,
 	}
 
-	for i := 0; i < numShards; i++ {
+	for i := range numShards {
 		sc.shardCond[i] = sync.NewCond(&sc.shardMu[i])
 	}
 
@@ -222,7 +235,7 @@ func NewSegmentCache(
 // computeOffsets calculates cumulative byte offsets for segment lookup.
 func computeOffsets(segments []SegmentMeta) []int64 {
 	offsets := make([]int64, len(segments)+1)
-	if len(segments) > 0 && segments[0].EndOffset > 0 {
+	if len(segments) > 0 && segments[0].EndOffset > 0 && offsetsAscend(segments) {
 		for i, seg := range segments {
 			offsets[i] = seg.StartOffset
 		}
@@ -244,58 +257,21 @@ func computeOffsets(segments []SegmentMeta) []int64 {
 	return offsets
 }
 
-// Get returns segment data, loading via the buffer.
-// Returns nil, false if the segment isn't cached. Pin before calling.
-func (sc *SegmentCache) Get(segIdx int) ([]byte, bool) {
-	if segIdx < 0 || segIdx >= sc.segCount {
-		return nil, false
-	}
-	if SegmentState(sc.states[segIdx].Load()) != StateOnDisk {
-		sc.stats.CacheMisses.Add(1)
-		return nil, false
-	}
-
-	off := sc.segOffsets[segIdx]
-	size := sc.SegmentDataSize(segIdx)
-	data := make([]byte, size)
-	if _, err := sc.buf.ReadAt(data, off); err != nil {
-		if !errors.Is(err, buffer.ErrNotPresent) {
-			sc.logger.Warn().Err(err).Int("segment", segIdx).Msg("buffer read failed")
+// offsetsAscend reports whether the stored segment offsets cover disjoint,
+// ascending byte ranges. binarySearchSegment and readFromCache both depend on
+// that; a table that breaks it makes reads double-count bytes and report more
+// than the caller's buffer holds. Parsing rejects such files now, but .meta
+// written by older versions can still carry zero-filled or out-of-order slots,
+// so offsets from metadata are only used when they hold up. The cumulative
+// fallback stays self-consistent: every read and write goes through
+// segOffsets.
+func offsetsAscend(segments []SegmentMeta) bool {
+	for i := 1; i < len(segments); i++ {
+		if segments[i].StartOffset <= segments[i-1].EndOffset {
+			return false
 		}
-		sc.stats.CacheMisses.Add(1)
-		return nil, false
 	}
-	sc.stats.CacheHits.Add(1)
-	return data, true
-}
-
-// ReadInto reads the full segment into buf. buf must be at least
-// SegmentDataSize(segIdx) bytes.
-func (sc *SegmentCache) ReadInto(segIdx int, dst []byte) (int, bool) {
-	if segIdx < 0 || segIdx >= sc.segCount {
-		return 0, false
-	}
-	if SegmentState(sc.states[segIdx].Load()) != StateOnDisk {
-		sc.stats.CacheMisses.Add(1)
-		return 0, false
-	}
-
-	off := sc.segOffsets[segIdx]
-	size := sc.SegmentDataSize(segIdx)
-	if int64(len(dst)) < size {
-		sc.stats.CacheMisses.Add(1)
-		return 0, false
-	}
-	n, err := sc.buf.ReadAt(dst[:size], off)
-	if err != nil {
-		if !errors.Is(err, buffer.ErrNotPresent) {
-			sc.logger.Warn().Err(err).Int("segment", segIdx).Msg("buffer read failed")
-		}
-		sc.stats.CacheMisses.Add(1)
-		return 0, false
-	}
-	sc.stats.CacheHits.Add(1)
-	return n, true
+	return segments[len(segments)-1].EndOffset >= segments[len(segments)-1].StartOffset-1
 }
 
 // ReadRangeInto is the zero-amplification read path: copies only the
@@ -447,10 +423,7 @@ func (w *bufferStreamWriter) Write(p []byte) (int, error) {
 	}
 
 	remaining := w.maxBytes - w.written
-	writeLen := int64(len(p))
-	if writeLen > remaining {
-		writeLen = remaining
-	}
+	writeLen := min(int64(len(p)), remaining)
 
 	n, err := w.buf.WriteAt(p[:writeLen], w.offset+w.written)
 	if err != nil {
@@ -547,13 +520,28 @@ func (sc *SegmentCache) GetError(segIdx int) error {
 	return nil
 }
 
-// ResetState resets a segment to Empty for retry.
-func (sc *SegmentCache) ResetState(segIdx int) {
+// ResetFailed transitions Failed → Empty so a retry can re-fetch the segment.
+// It is a CAS, not a blind store: a concurrent reader may have successfully
+// fetched the segment between attempts, and flipping OnDisk → Empty would both
+// force a spurious re-download and leak the segment's bytes out of the curDisk
+// accounting (inflating it for the life of the reader, making the budget
+// backstop over-evict). It must also never clobber another fetcher's Fetching.
+func (sc *SegmentCache) ResetFailed(segIdx int) {
 	if segIdx < 0 || segIdx >= sc.segCount {
 		return
 	}
-	sc.states[segIdx].Store(uint32(StateEmpty))
-	sc.errors[segIdx].Store(nil)
+	if sc.states[segIdx].CompareAndSwap(uint32(StateFailed), uint32(StateEmpty)) {
+		sc.errors[segIdx].Store(nil)
+	}
+}
+
+// ReleaseFetching transitions Fetching → Empty. Only the fetcher that owns the
+// Fetching state (won MarkFetching) may call it, on its cancellation paths.
+func (sc *SegmentCache) ReleaseFetching(segIdx int) {
+	if segIdx < 0 || segIdx >= sc.segCount {
+		return
+	}
+	sc.states[segIdx].CompareAndSwap(uint32(StateFetching), uint32(StateEmpty))
 }
 
 // WaitForSegment blocks until the segment is OnDisk, fails, or the context
@@ -561,6 +549,9 @@ func (sc *SegmentCache) ResetState(segIdx int) {
 func (sc *SegmentCache) WaitForSegment(ctx context.Context, segIdx int) error {
 	if segIdx < 0 || segIdx >= sc.segCount {
 		return fmt.Errorf("segment index out of range: %d", segIdx)
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 
 	state := SegmentState(sc.states[segIdx].Load())
@@ -625,6 +616,69 @@ func (sc *SegmentCache) WaitForSegment(ctx context.Context, segIdx int) error {
 	}
 }
 
+// WaitForEvictionRelease blocks while the segment is in StateEvicting, returning
+// once the evictor has finished punching its range and dropped it to Empty (or
+// the context/cache is canceled). Callers in the fetch path use this so a
+// re-fetch never starts writing into a range mid-Discard.
+func (sc *SegmentCache) WaitForEvictionRelease(ctx context.Context, segIdx int) error {
+	if segIdx < 0 || segIdx >= sc.segCount {
+		return fmt.Errorf("segment index out of range: %d", segIdx)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if SegmentState(sc.states[segIdx].Load()) != StateEvicting {
+		return nil
+	}
+
+	shardIdx := segIdx & shardMask
+	cond := sc.shardCond[shardIdx]
+	mu := &sc.shardMu[shardIdx]
+
+	wakeShard := func() {
+		mu.Lock()
+		cond.Broadcast()
+		mu.Unlock()
+	}
+	ctxStopper := context.AfterFunc(ctx, wakeShard)
+	cacheStopper := context.AfterFunc(sc.ctx, wakeShard)
+	defer ctxStopper()
+	defer cacheStopper()
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	for SegmentState(sc.states[segIdx].Load()) == StateEvicting {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-sc.ctx.Done():
+			return sc.ctx.Err()
+		default:
+		}
+		cond.Wait()
+	}
+	return nil
+}
+
+// invalidateForRefetch forces a segment that is marked OnDisk but whose backing
+// bytes are unreadable back to Empty so the next Fetch actually re-downloads it
+// instead of trusting the stale OnDisk state and short-circuiting. The CAS
+// guarantees the disk accounting is rolled back exactly once even if two readers
+// hit the same wedged segment concurrently. Safe to call on a pinned segment —
+// the subsequent re-fetch overwrites the slot in place.
+func (sc *SegmentCache) invalidateForRefetch(segIdx int) {
+	if segIdx < 0 || segIdx >= sc.segCount {
+		return
+	}
+	if sc.states[segIdx].CompareAndSwap(uint32(StateOnDisk), uint32(StateEmpty)) {
+		if size := sc.segLengths[segIdx].Load(); size > 0 {
+			sc.curDisk.Add(-size)
+		}
+	}
+	sc.errors[segIdx].Store(nil)
+}
+
 // wakeWaiters wakes any WaitForSegment callers parked on this segment's shard.
 func (sc *SegmentCache) wakeWaiters(segIdx int) {
 	shardIdx := segIdx & shardMask
@@ -666,6 +720,15 @@ func (sc *SegmentCache) drainOverBudget() {
 	if sc.maxDisk <= 0 {
 		return
 	}
+
+	// StreamWriter, Put, and the background evictor can all notice the same
+	// overshoot concurrently. Let one caller do the scan and punching while
+	// the others wait; once they acquire the lock the budget is normally
+	// already satisfied. Without this guard, N concurrent segment completions
+	// can each scan the full segment table and race to evict the same batch.
+	sc.evictMu.Lock()
+	defer sc.evictMu.Unlock()
+
 	for sc.curDisk.Load() > sc.maxDisk {
 		batch := sc.findEvictableBatch(segmentSweepBatch)
 		if len(batch) == 0 {
@@ -675,66 +738,45 @@ func (sc *SegmentCache) drainOverBudget() {
 	}
 }
 
-// findEvictableBatch returns up to maxN unpinned OnDisk segments, sorted
-// oldest-first by access time. Used by drainOverBudget only.
+// findEvictableBatch returns up to maxN unpinned OnDisk segments, scanning
+// at most one lap from a persistent cursor. For streaming, index order ≈ age
+// order, which is close enough for this hard-budget backstop; the precise
+// window policy lives in sweepWindow. Used by drainOverBudget only, with
+// evictMu held (which also guards evictCursor).
 func (sc *SegmentCache) findEvictableBatch(maxN int) []int {
-	type cand struct {
-		idx int
-		t   int64
-	}
-	cands := make([]cand, 0, maxN*2)
-	for i := 0; i < sc.segCount; i++ {
-		if sc.pinCounts[i].Load() > 0 {
-			continue
-		}
-		if SegmentState(sc.states[i].Load()) != StateOnDisk {
-			continue
-		}
-		cands = append(cands, cand{i, sc.accessTime[i].Load()})
-	}
-	if len(cands) == 0 {
+	if maxN <= 0 || sc.segCount == 0 {
 		return nil
 	}
-	sort.Slice(cands, func(a, b int) bool { return cands[a].t < cands[b].t })
-	if len(cands) > maxN {
-		cands = cands[:maxN]
+
+	var out []int
+	for scanned := 0; scanned < sc.segCount && len(out) < maxN; scanned++ {
+		idx := (sc.evictCursor + scanned) % sc.segCount
+		if sc.pinCounts[idx].Load() > 0 {
+			continue
+		}
+		if SegmentState(sc.states[idx].Load()) != StateOnDisk {
+			continue
+		}
+		out = append(out, idx)
 	}
-	out := make([]int, len(cands))
-	for i, c := range cands {
-		out[i] = c.idx
+	if len(out) > 0 {
+		sc.evictCursor = (out[len(out)-1] + 1) % sc.segCount
 	}
 	return out
 }
 
-// MarkConsumed records that bytes in [off, off+length) have been delivered
-// to a client. Monotonic high-water mark used by the sliding-window
-// evictor; backward seeks don't lower it because the back-window already
-// absorbs them.
-func (sc *SegmentCache) MarkConsumed(off, length int64) {
-	if length <= 0 {
+// SetConsumedFloor publishes the delivered-offset of the slowest active
+// consumer (the minimum across the reader's cursors). It drives the
+// sliding-window sweeper's cutoff and the buffer's read head, so eviction
+// never runs ahead of a consumer that is still behind. Not monotonic: a
+// seek-back pulls the floor (and the protected window) back.
+func (sc *SegmentCache) SetConsumedFloor(off int64) {
+	if off < 0 {
 		return
 	}
-	end := off + length
-	for {
-		cur := sc.maxConsumedOff.Load()
-		if end <= cur {
-			return
-		}
-		if sc.maxConsumedOff.CompareAndSwap(cur, end) {
-			// Plumb the cursor into the buffer's eviction policy: blocks
-			// behind the consumed offset are safe to evict (we're done
-			// with them), blocks ahead are the active window the reader
-			// will still hit. Cheap atomic store, no buffer lock.
-			//
-			// Skip the back-window margin (we keep some history pinned at
-			// the SegmentCache level for scrub-back); the buffer can be
-			// stricter — anything we've explicitly consumed past is fair
-			// game for promotion to evict.
-			if sc.buf != nil {
-				sc.buf.SetReadHead(end)
-			}
-			return
-		}
+	sc.consumedFloor.Store(off)
+	if sc.buf != nil {
+		sc.buf.SetReadHead(off)
 	}
 }
 
@@ -755,13 +797,13 @@ func (sc *SegmentCache) sweepLoop() {
 
 // sweepWindow picks segments that are both:
 //
-//  1. Behind the back-window (segEnd < maxConsumedOff - backWindowBytes), and
+//  1. Behind the back-window (segEnd < consumedFloor - backWindowBytes), and
 //  2. Untouched for at least segmentMinRetentionAge.
 //
 // Both conditions must hold — see the package comment in cache.go for the
 // rationale behind each.
 func (sc *SegmentCache) sweepWindow() {
-	consumedHi := sc.maxConsumedOff.Load()
+	consumedHi := sc.consumedFloor.Load()
 	if consumedHi <= 0 {
 		return
 	}
@@ -769,18 +811,31 @@ func (sc *SegmentCache) sweepWindow() {
 	if cutoffOff <= 0 {
 		return
 	}
+	// A cutoff regression means a seek-back may have re-fetched segments
+	// behind the cursor; rescan from the start.
+	if cutoffOff < sc.sweepLastCutoff {
+		sc.sweepCursor = 0
+	}
+	sc.sweepLastCutoff = cutoffOff
 	cutoffAccessNs := time.Now().Add(-segmentMinRetentionAge).UnixNano()
 
 	indices := make([]int, 0, segmentSweepBatch)
-	for i := 0; i < sc.segCount && len(indices) < segmentSweepBatch; i++ {
+	advanceCursor := true
+	for i := sc.sweepCursor; i < sc.segCount && len(indices) < segmentSweepBatch; i++ {
+		// Offsets are monotonic: past the cutoff nothing further qualifies.
+		if sc.segOffsets[i+1] > cutoffOff {
+			break
+		}
 		if SegmentState(sc.states[i].Load()) != StateOnDisk {
+			// A contiguous evicted prefix never needs revisiting (barring a
+			// cutoff regression, handled above).
+			if advanceCursor {
+				sc.sweepCursor = i + 1
+			}
 			continue
 		}
+		advanceCursor = false // OnDisk (possibly pinned/young): must revisit
 		if sc.pinCounts[i].Load() > 0 {
-			continue
-		}
-		segEnd := sc.segOffsets[i+1]
-		if segEnd > cutoffOff {
 			continue
 		}
 		if sc.accessTime[i].Load() > cutoffAccessNs {
@@ -799,20 +854,32 @@ func (sc *SegmentCache) sweepWindow() {
 // fewer Discard calls — for sequential playback eviction, ~dozen segments
 // merge into one buffer.Discard (and thus one fallocate(PUNCH_HOLE)).
 //
-// State changes happen first so concurrent readers see the segments as
-// gone before their disk regions are released.
+// Each segment moves OnDisk -> Evicting -> (Discard) -> Empty. The Evicting
+// hold is what makes eviction safe against a concurrent re-fetch: MarkFetching
+// only transitions Empty -> Fetching, so no fetcher can begin writing into a
+// segment's range while we are punching it. Only after the Discard completes do
+// we drop the slot to Empty and wake any reader/fetcher that parked on it; that
+// re-fetch then writes into a freshly-punched, no-longer-contended range.
+//
+// Previously the slot went straight to Empty before the (deferred, coalesced)
+// Discard, so a reader could re-download the segment in the gap and have its
+// bytes punched right back out — leaving the slot OnDisk but unreadable and the
+// "segment N still missing after re-fetch" wedge.
 func (sc *SegmentCache) evictBatch(indices []int) {
 	type rng struct {
 		off  int64
 		size int64
 	}
 	pieces := make([]rng, 0, len(indices))
+	evicted := make([]int, 0, len(indices))
 
 	for _, idx := range indices {
 		if sc.pinCounts[idx].Load() > 0 {
 			continue
 		}
-		if !sc.states[idx].CompareAndSwap(uint32(StateOnDisk), uint32(StateEmpty)) {
+		// Reserve the segment for eviction. The CAS from OnDisk fences out both
+		// a concurrent re-fetch (MarkFetching needs Empty) and another evictor.
+		if !sc.states[idx].CompareAndSwap(uint32(StateOnDisk), uint32(StateEvicting)) {
 			continue
 		}
 		size := sc.segLengths[idx].Load()
@@ -825,6 +892,7 @@ func (sc *SegmentCache) evictBatch(indices []int) {
 		sc.curDisk.Add(-size)
 		sc.stats.Evictions.Add(1)
 		pieces = append(pieces, rng{sc.segOffsets[idx], size})
+		evicted = append(evicted, idx)
 	}
 	if len(pieces) == 0 {
 		return
@@ -850,6 +918,13 @@ func (sc *SegmentCache) evictBatch(indices []int) {
 				Int64("size", r.size).
 				Msg("buffer discard failed; slot will be overwritten on next fetch")
 		}
+	}
+
+	// The disk ranges are gone; release the slots and wake anyone waiting so
+	// they re-fetch into the now-punched (and no-longer-contended) range.
+	for _, idx := range evicted {
+		sc.states[idx].Store(uint32(StateEmpty))
+		sc.wakeWaiters(idx)
 	}
 }
 
@@ -944,7 +1019,7 @@ func (sc *SegmentCache) Close() error {
 	}
 	sc.cancel()
 
-	for i := 0; i < numShards; i++ {
+	for i := range numShards {
 		sc.shardMu[i].Lock()
 		sc.shardCond[i].Broadcast()
 		sc.shardMu[i].Unlock()

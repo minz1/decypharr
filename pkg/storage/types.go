@@ -190,6 +190,10 @@ func (e *EntryItem) GetActiveFiles() []*File {
 }
 
 type File struct {
+	// ID is a stable per-file identifier assigned when the file first enters
+	// storage. It never changes afterward — repairs may rename a file, but the
+	// ID must not follow the name. It keys identity-based STRM URLs.
+	ID        string    `msgpack:"id,omitempty" json:"id,omitempty"`
 	Name      string    `msgpack:"name" json:"name"`
 	Path      string    `msgpack:"path,omitempty" json:"path,omitempty"`
 	AddedOn   time.Time `msgpack:"added_on" json:"added_on"`
@@ -435,6 +439,19 @@ func (e *Entry) GetFile(filename string) (*File, error) {
 	return f, nil
 }
 
+// GetFileByID resolves a file by its stable ID. Entries hold few files, so a
+// scan is fine.
+func (e *Entry) GetFileByID(id string) (*File, error) {
+	if id != "" {
+		for _, f := range e.Files {
+			if f.ID == id && !f.Deleted {
+				return f, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("no file with id %s in entry %s", id, e.Name)
+}
+
 // RunChecks performs integrity checks on the Entry
 // Returns whether to refresh and any error encountered
 func (e *Entry) RunChecks() (bool, error) {
@@ -548,7 +565,7 @@ type CachedTorrent struct {
 	OriginalFilename string                       `json:"original_filename"` // Original filename
 	Size             int64                        `json:"size"`              // Size (legacy)
 	Bytes            int64                        `json:"bytes"`             // Actual bytes
-	Magnet           interface{}                  `json:"magnet"`            // Magnet (can be nil)
+	Magnet           any                          `json:"magnet"`            // Magnet (can be nil)
 	Files            map[string]*debridTypes.File `json:"files"`             // Files map
 	Status           string                       `json:"status"`            // Status from debrid
 	Added            string                       `json:"added"`             // Added timestamp

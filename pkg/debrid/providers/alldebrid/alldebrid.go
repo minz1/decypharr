@@ -92,7 +92,7 @@ func (ad *AllDebrid) Logger() zerolog.Logger {
 	return ad.logger
 }
 
-func (ad *AllDebrid) doAccountRequest(account *account.Account, endpoint string, queryParams map[string]string, result interface{}) (*http.Response, error) {
+func (ad *AllDebrid) doAccountRequest(account *account.Account, endpoint string, queryParams map[string]string, result any) (*http.Response, error) {
 	u, err := url.Parse(ad.Host + endpoint)
 	if err != nil {
 		return nil, err
@@ -115,7 +115,7 @@ func (ad *AllDebrid) doAccountRequest(account *account.Account, endpoint string,
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer request.DrainAndClose(resp.Body)
 
 	if result != nil && resp.StatusCode >= 200 && resp.StatusCode < 300 && resp.ContentLength != 0 {
 		if err := json.ConfigDefault.NewDecoder(resp.Body).Decode(result); err != nil {
@@ -127,7 +127,7 @@ func (ad *AllDebrid) doAccountRequest(account *account.Account, endpoint string,
 }
 
 // doRequest performs a GET request and unmarshals the response
-func (ad *AllDebrid) doRequest(endpoint string, queryParams map[string]string, result interface{}) (*http.Response, error) {
+func (ad *AllDebrid) doRequest(endpoint string, queryParams map[string]string, result any) (*http.Response, error) {
 	u, err := url.Parse(ad.Host + endpoint)
 	if err != nil {
 		return nil, err
@@ -150,7 +150,7 @@ func (ad *AllDebrid) doRequest(endpoint string, queryParams map[string]string, r
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer request.DrainAndClose(resp.Body)
 
 	if result != nil && resp.StatusCode >= 200 && resp.StatusCode < 300 && resp.ContentLength != 0 {
 		if err := json.ConfigDefault.NewDecoder(resp.Body).Decode(result); err != nil {
@@ -167,7 +167,7 @@ func (ad *AllDebrid) IsAvailable(hashes []string) map[string]bool {
 	return result
 }
 
-func (ad *AllDebrid) doPostFile(endpoint string, fileData []byte, result interface{}) (*http.Response, error) {
+func (ad *AllDebrid) doPostFile(endpoint string, fileData []byte, result any) (*http.Response, error) {
 	u, err := url.Parse(ad.Host + endpoint)
 	if err != nil {
 		return nil, err
@@ -194,7 +194,7 @@ func (ad *AllDebrid) doPostFile(endpoint string, fileData []byte, result interfa
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer request.DrainAndClose(resp.Body)
 
 	if result != nil && resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		if err := json.ConfigDefault.NewDecoder(resp.Body).Decode(result); err != nil {
@@ -324,7 +324,10 @@ func (ad *AllDebrid) GetTorrent(torrentId string) (*types.Torrent, error) {
 		return nil, fmt.Errorf("alldebrid API error: Status: %d", resp.StatusCode)
 	}
 
-	data := res.Data.Magnets
+	data, err := findMagnet(res.Data.Magnets, torrentId)
+	if err != nil {
+		return nil, err
+	}
 	status := getAlldebridStatus(data.StatusCode)
 	name := data.Filename
 	t := &types.Torrent{
@@ -366,7 +369,10 @@ func (ad *AllDebrid) UpdateTorrent(t *types.Torrent) error {
 		return fmt.Errorf("alldebrid API error: Status: %d", resp.StatusCode)
 	}
 
-	data := res.Data.Magnets
+	data, err := findMagnet(res.Data.Magnets, t.Id)
+	if err != nil {
+		return err
+	}
 	status := getAlldebridStatus(data.StatusCode)
 	name := data.Filename
 	t.Name = name
@@ -392,6 +398,16 @@ func (ad *AllDebrid) UpdateTorrent(t *types.Torrent) error {
 		t.Speed = data.DownloadSpeed
 	}
 	return nil
+}
+
+func findMagnet(magnets Magnets, torrentId string) (magnetInfo, error) {
+	for _, magnet := range magnets {
+		if strconv.Itoa(magnet.Id) == torrentId {
+			return magnet, nil
+		}
+	}
+
+	return magnetInfo{}, customerror.TorrentNotFoundError
 }
 
 func (ad *AllDebrid) CheckStatus(torrent *types.Torrent) (*types.Torrent, error) {
@@ -540,7 +556,7 @@ func (ad *AllDebrid) CheckFile(ctx context.Context, _, link string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer request.DrainAndClose(resp.Body)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("alldebrid API error: Status: %d", resp.StatusCode)

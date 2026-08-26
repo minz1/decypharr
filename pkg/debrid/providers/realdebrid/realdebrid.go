@@ -109,7 +109,7 @@ func (r *RealDebrid) Logger() zerolog.Logger {
 }
 
 // doGet performs a GET request using the main client
-func (r *RealDebrid) doGet(endpoint string, result interface{}) (*http.Response, error) {
+func (r *RealDebrid) doGet(endpoint string, result any) (*http.Response, error) {
 	u, err := url.Parse(r.Host + endpoint)
 	if err != nil {
 		return nil, err
@@ -124,7 +124,7 @@ func (r *RealDebrid) doGet(endpoint string, result interface{}) (*http.Response,
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer request.DrainAndClose(resp.Body)
 
 	if result != nil && resp.StatusCode >= 200 && resp.StatusCode < 300 && resp.ContentLength != 0 {
 		if err := json.ConfigDefault.NewDecoder(resp.Body).Decode(result); err != nil {
@@ -136,7 +136,7 @@ func (r *RealDebrid) doGet(endpoint string, result interface{}) (*http.Response,
 }
 
 // doPost performs a POST request with form data
-func (r *RealDebrid) doPostForm(endpoint string, formData map[string]string, result interface{}) (*http.Response, error) {
+func (r *RealDebrid) doPostForm(endpoint string, formData map[string]string, result any) (*http.Response, error) {
 	form := url.Values{}
 	for k, v := range formData {
 		form.Set(k, v)
@@ -152,7 +152,7 @@ func (r *RealDebrid) doPostForm(endpoint string, formData map[string]string, res
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer request.DrainAndClose(resp.Body)
 
 	if result != nil && resp.StatusCode >= 200 && resp.StatusCode < 300 && resp.ContentLength != 0 {
 		if err := json.ConfigDefault.NewDecoder(resp.Body).Decode(result); err != nil {
@@ -164,7 +164,7 @@ func (r *RealDebrid) doPostForm(endpoint string, formData map[string]string, res
 }
 
 // doPut performs a PUT request with body
-func (r *RealDebrid) doPut(endpoint string, body []byte, contentType string, result interface{}) (*http.Response, error) {
+func (r *RealDebrid) doPut(endpoint string, body []byte, contentType string, result any) (*http.Response, error) {
 	var bodyReader io.Reader
 	if body != nil {
 		bodyReader = bytes.NewReader(body)
@@ -182,7 +182,7 @@ func (r *RealDebrid) doPut(endpoint string, body []byte, contentType string, res
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer request.DrainAndClose(resp.Body)
 
 	if result != nil && resp.StatusCode >= 200 && resp.StatusCode < 300 && resp.ContentLength != 0 {
 		if err := json.ConfigDefault.NewDecoder(resp.Body).Decode(result); err != nil {
@@ -194,7 +194,7 @@ func (r *RealDebrid) doPut(endpoint string, body []byte, contentType string, res
 }
 
 // doGetWithClient performs a GET using a specific client
-func (r *RealDebrid) doGetWithClient(client *request.Client, fullURL string, queryParams map[string]string, result interface{}) (*http.Response, error) {
+func (r *RealDebrid) doGetWithClient(client *request.Client, fullURL string, queryParams map[string]string, result any) (*http.Response, error) {
 	u, err := url.Parse(fullURL)
 	if err != nil {
 		return nil, err
@@ -217,7 +217,7 @@ func (r *RealDebrid) doGetWithClient(client *request.Client, fullURL string, que
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer request.DrainAndClose(resp.Body)
 
 	if result != nil && resp.StatusCode >= 200 && resp.StatusCode < 300 && resp.ContentLength != 0 {
 		if err := json.ConfigDefault.NewDecoder(resp.Body).Decode(result); err != nil {
@@ -229,7 +229,7 @@ func (r *RealDebrid) doGetWithClient(client *request.Client, fullURL string, que
 }
 
 // doPostFormWithClient performs a POST with form data using a specific client
-func (r *RealDebrid) doPostFormWithClient(client *request.Client, fullURL string, formData map[string]string, result interface{}, errorResult interface{}) (*http.Response, error) {
+func (r *RealDebrid) doPostFormWithClient(client *request.Client, fullURL string, formData map[string]string, result any, errorResult any) (*http.Response, error) {
 	form := url.Values{}
 	for k, v := range formData {
 		form.Set(k, v)
@@ -245,7 +245,7 @@ func (r *RealDebrid) doPostFormWithClient(client *request.Client, fullURL string
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer request.DrainAndClose(resp.Body)
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		if result != nil && resp.ContentLength != 0 {
@@ -417,10 +417,7 @@ func (r *RealDebrid) IsAvailable(hashes []string) map[string]bool {
 	result := make(map[string]bool)
 
 	for i := 0; i < len(hashes); i += 200 {
-		end := i + 200
-		if end > len(hashes) {
-			end = len(hashes)
-		}
+		end := min(i+200, len(hashes))
 
 		validHashes := make([]string, 0, end-i)
 		for _, hash := range hashes[i:end] {
@@ -685,6 +682,8 @@ func (r *RealDebrid) DeleteTorrent(torrentId string) error {
 	if err != nil {
 		return err
 	}
+	defer request.DrainAndClose(resp.Body)
+
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("realdebrid API error: Status: %d", resp.StatusCode)
 	}
@@ -760,7 +759,7 @@ func (r *RealDebrid) CheckFile(ctx context.Context, infohash, link string) error
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer request.DrainAndClose(resp.Body)
 
 	if resp.StatusCode == http.StatusNotFound {
 		return customerror.HosterUnavailableError
@@ -846,7 +845,7 @@ func (r *RealDebrid) getTorrents(offset int, limit int) (int, []*types.Torrent, 
 	if err != nil {
 		return 0, torrents, err
 	}
-	defer resp.Body.Close()
+	defer request.DrainAndClose(resp.Body)
 
 	if resp.StatusCode == http.StatusNoContent {
 		return 0, torrents, nil
@@ -1080,9 +1079,11 @@ func (r *RealDebrid) deleteDownloadLink(account *account.Account, downloadLink t
 		return err
 	}
 
-	if _, err = account.Client().Do(req); err != nil {
+	resp, err := account.Client().Do(req)
+	if err != nil {
 		return err
 	}
+	request.DrainAndClose(resp.Body)
 	return nil
 }
 

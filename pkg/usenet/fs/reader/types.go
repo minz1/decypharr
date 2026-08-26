@@ -67,6 +67,17 @@ const (
 
 	// StateFailed indicates the segment download failed permanently.
 	StateFailed
+
+	// StateEvicting indicates the evictor has reserved the segment and is
+	// punching its disk range. It is a transient state held only across the
+	// buffer Discard: the slot was OnDisk, will become Empty once the punch
+	// completes. Crucially, MarkFetching only transitions Empty->Fetching, so
+	// while a segment is Evicting no re-fetch can begin writing into the range
+	// being punched. This closes the race where a reader re-downloaded a
+	// segment in the gap between the evictor's state flip and its deferred
+	// Discard, only for the Discard to punch the freshly-written bytes back
+	// out — leaving the slot OnDisk but unreadable.
+	StateEvicting
 )
 
 func (s SegmentState) String() string {
@@ -79,6 +90,8 @@ func (s SegmentState) String() string {
 		return "Fetching"
 	case StateFailed:
 		return "Failed"
+	case StateEvicting:
+		return "Evicting"
 	default:
 		return "Unknown"
 	}
@@ -139,10 +152,7 @@ func PrefetchAheadSegments(readAheadBytes int64, segments []SegmentMeta) int {
 	if len(segments) > 0 && segments[0].Bytes > 0 {
 		segBytes = segments[0].Bytes
 	}
-	ahead := int(readAheadBytes / segBytes)
-	if ahead < minAhead {
-		ahead = minAhead
-	}
+	ahead := max(int(readAheadBytes/segBytes), minAhead)
 	if ahead > maxAhead {
 		ahead = maxAhead
 	}
@@ -218,25 +228,27 @@ type ReaderStats struct {
 	DownloadErrors  atomic.Int64
 
 	// Prefetch
-	PrefetchHits   atomic.Int64
-	PrefetchMisses atomic.Int64
+	PrefetchHits      atomic.Int64
+	PrefetchMisses    atomic.Int64
+	PrefetchCancelled atomic.Int64 // hints dropped because a seek abandoned their window
 }
 
 // Snapshot returns a copy of the current stats.
 func (s *ReaderStats) Snapshot() map[string]int64 {
 	return map[string]int64{
-		"reads":            s.Reads.Load(),
-		"bytes_read":       s.BytesRead.Load(),
-		"read_errors":      s.ReadErrors.Load(),
-		"cache_hits":       s.CacheHits.Load(),
-		"cache_misses":     s.CacheMisses.Load(),
-		"evictions":        s.Evictions.Load(),
-		"downloads":        s.Downloads.Load(),
-		"download_bytes":   s.DownloadBytes.Load(),
-		"download_retries": s.DownloadRetries.Load(),
-		"download_errors":  s.DownloadErrors.Load(),
-		"prefetch_hits":    s.PrefetchHits.Load(),
-		"prefetch_misses":  s.PrefetchMisses.Load(),
+		"reads":              s.Reads.Load(),
+		"bytes_read":         s.BytesRead.Load(),
+		"read_errors":        s.ReadErrors.Load(),
+		"cache_hits":         s.CacheHits.Load(),
+		"cache_misses":       s.CacheMisses.Load(),
+		"evictions":          s.Evictions.Load(),
+		"downloads":          s.Downloads.Load(),
+		"download_bytes":     s.DownloadBytes.Load(),
+		"download_retries":   s.DownloadRetries.Load(),
+		"download_errors":    s.DownloadErrors.Load(),
+		"prefetch_hits":      s.PrefetchHits.Load(),
+		"prefetch_misses":    s.PrefetchMisses.Load(),
+		"prefetch_cancelled": s.PrefetchCancelled.Load(),
 	}
 }
 

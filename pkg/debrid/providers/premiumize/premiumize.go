@@ -110,7 +110,7 @@ func (pm *Premiumize) do(req *http.Request, out any) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer request.DrainAndClose(resp.Body)
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -281,10 +281,7 @@ func (pm *Premiumize) IsAvailable(infohashes []string) map[string]bool {
 	result := make(map[string]bool, len(infohashes))
 	const batchSize = 100
 	for i := 0; i < len(infohashes); i += batchSize {
-		end := i + batchSize
-		if end > len(infohashes) {
-			end = len(infohashes)
-		}
+		end := min(i+batchSize, len(infohashes))
 		values := url.Values{}
 		hashByItem := make(map[string]string, end-i)
 		for _, hash := range infohashes[i:end] {
@@ -529,7 +526,7 @@ func (pm *Premiumize) CheckFile(ctx context.Context, infohash, fileID string) er
 		if err != nil {
 			return err
 		}
-		defer resp.Body.Close()
+		defer request.DrainAndClose(resp.Body)
 		if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
 			return customerror.HosterUnavailableError
 		}
@@ -570,7 +567,7 @@ func (pm *Premiumize) getClientProfile(client *request.Client) (*types.Profile, 
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer request.DrainAndClose(resp.Body)
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err

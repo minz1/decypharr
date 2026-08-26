@@ -2,6 +2,7 @@ package vfs
 
 import (
 	"context"
+	"errors"
 	"io"
 	"sync/atomic"
 	"time"
@@ -13,7 +14,7 @@ import (
 // streamSource is the narrow interface DirectStreamFile needs from manager.Manager.
 // Keeping it minimal lets tests inject a fake without wiring the full manager stack.
 type streamSource interface {
-	Stream(ctx context.Context, entry *storage.Entry, filename string, start, end int64, writer io.Writer, onReady manager.StreamReadyFunc, client string) error
+	OpenStream(ctx context.Context, entry *storage.Entry, filename string, offset int64, client string) (manager.StreamReader, error)
 }
 
 // DirectStreamFile serves reads straight from the debrid network without
@@ -55,10 +56,7 @@ func (f *DirectStreamFile) ReadAtContext(ctx context.Context, p []byte, off int6
 	if off >= f.size {
 		return 0, io.EOF
 	}
-
-	end := off + int64(len(p)) - 1
-	if end >= f.size {
-		end = f.size - 1
+	if end := off + int64(len(p)); end > f.size {
 		p = p[:f.size-off]
 	}
 
@@ -75,26 +73,17 @@ func (f *DirectStreamFile) ReadAtContext(ctx context.Context, p []byte, off int6
 			}
 		}
 
-		w := &fixedWriter{dst: p}
-		err := f.src.Stream(ctx, f.entry, f.filename, off, end, w, nil, "DFS-direct")
-		if err == nil {
-			return w.n, nil
+		reader, err := f.src.OpenStream(ctx, f.entry, f.filename, off, "DFS-direct")
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		n, err := io.ReadFull(reader, p)
+		_ = reader.Close()
+		if err == nil || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return n, nil
 		}
 		lastErr = err
 	}
 	return 0, lastErr
-}
-
-// fixedWriter writes into a caller-owned slice, stopping when full.
-// manager.Stream requests exactly the byte range we need, so overflow
-// should not occur in practice.
-type fixedWriter struct {
-	dst []byte
-	n   int
-}
-
-func (w *fixedWriter) Write(data []byte) (int, error) {
-	written := copy(w.dst[w.n:], data)
-	w.n += written
-	return written, nil
 }

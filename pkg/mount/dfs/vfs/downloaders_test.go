@@ -2,7 +2,6 @@ package vfs
 
 import (
 	"context"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -186,7 +185,11 @@ func TestStopAllClearsWaiters(t *testing.T) {
 	}
 }
 
-func TestDownloadDoesNotCreateWorkWhileStopping(t *testing.T) {
+// TestDownloadWaitsOutStoppingThenFailsClosed verifies that Download does not
+// create waiters/downloaders while a StopAll is in flight — it parks on
+// stopCond instead — and that once the teardown resolves to closed, it
+// returns an error without ever having created any work.
+func TestDownloadWaitsOutStoppingThenFailsClosed(t *testing.T) {
 	parentCtx := context.Background()
 	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
@@ -201,10 +204,20 @@ func TestDownloadDoesNotCreateWorkWhileStopping(t *testing.T) {
 		},
 	}
 
-	err := dls.Download(context.Background(), ranges.Range{Pos: 0, Size: 1})
-	if err == nil {
-		t.Fatal("expected Download to fail while StopAll is active")
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- dls.Download(context.Background(), ranges.Range{Pos: 0, Size: 1})
+	}()
+
+	// Download should be parked in the stopping-wait loop, not yet failed or
+	// having created any work.
+	select {
+	case err := <-errCh:
+		t.Fatalf("Download returned %v before StopAll resolved", err)
+	case <-time.After(50 * time.Millisecond):
 	}
+
+	dls.mu.Lock()
 	if got := len(dls.waiters); got != 0 {
 		t.Fatalf("Download created waiters while stopping: got %d, want 0", got)
 	}
@@ -213,6 +226,27 @@ func TestDownloadDoesNotCreateWorkWhileStopping(t *testing.T) {
 	}
 	if dls.streamID != "" {
 		t.Fatal("Download registered a stream while stopping")
+	}
+	// Resolve the in-flight stop to closed and wake the waiter, mirroring
+	// StopAll()'s handoff to Close().
+	dls.closed = true
+	dls.stopCondLocked().Broadcast()
+	dls.mu.Unlock()
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("expected Download to fail once downloaders closed")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Download did not return after stop resolved to closed")
+	}
+
+	if got := len(dls.waiters); got != 0 {
+		t.Fatalf("Download created waiters: got %d, want 0", got)
+	}
+	if got := len(dls.dls); got != 0 {
+		t.Fatalf("Download created downloaders: got %d, want 0", got)
 	}
 }
 
@@ -226,9 +260,8 @@ func TestCacheItemReleaseStopsDownloadersOnZeroOpens(t *testing.T) {
 		cancel:    cancel,
 	}
 
-	item := &CacheItem{
-		downloaders: dls,
-	}
+	item := &CacheItem{}
+	item.downloaders.Store(dls)
 	item.opens.Store(1)
 
 	item.Release()
@@ -244,67 +277,6 @@ func TestCacheItemReleaseStopsDownloadersOnZeroOpens(t *testing.T) {
 	}
 }
 
-func TestNoProgressWatchdogCancelsStalledAttempt(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	var lastProgressNanos atomic.Int64
-	lastProgressNanos.Store(time.Now().Add(-300 * time.Millisecond).UnixNano())
-
-	var timedOut atomic.Bool
-	stop := startNoProgressWatchdog(
-		ctx,
-		120*time.Millisecond,
-		10*time.Millisecond,
-		&lastProgressNanos,
-		cancel,
-		&timedOut,
-	)
-	defer stop()
-
-	select {
-	case <-ctx.Done():
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("expected context cancellation from no-progress watchdog")
-	}
-
-	if !timedOut.Load() {
-		t.Fatal("expected watchdog timeout flag to be set")
-	}
-}
-
-func TestNoProgressWatchdogKeepsAliveWithProgress(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	var lastProgressNanos atomic.Int64
-	lastProgressNanos.Store(time.Now().UnixNano())
-
-	var timedOut atomic.Bool
-	stop := startNoProgressWatchdog(
-		ctx,
-		160*time.Millisecond,
-		20*time.Millisecond,
-		&lastProgressNanos,
-		cancel,
-		&timedOut,
-	)
-	defer stop()
-
-	deadline := time.Now().Add(300 * time.Millisecond)
-	ticker := time.NewTicker(30 * time.Millisecond)
-	defer ticker.Stop()
-
-	for time.Now().Before(deadline) {
-		select {
-		case <-ticker.C:
-			lastProgressNanos.Store(time.Now().UnixNano())
-		case <-ctx.Done():
-			t.Fatal("unexpected watchdog cancellation while progress was advancing")
-		}
-	}
-
-	if timedOut.Load() {
-		t.Fatal("watchdog timed out despite ongoing progress")
-	}
-}
+// Stall detection now lives in the manager stream session (see
+// TestSessionStallWatchdogRecovers); the downloader no longer runs its own
+// no-progress watchdog.

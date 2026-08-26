@@ -5,6 +5,9 @@ description: Access files via WebDAV protocol.
 
 Decypharr includes a WebDAV server for browsing and streaming files without mounting.
 
+The library tree, virtual folders, and folder naming are the same for every share. See
+[Shares Overview](../overview/).
+
 ## Access WebDAV
 
 **URL**: `http://decypharr:8282/webdav/`
@@ -43,19 +46,6 @@ sudo mount -t davfs -o username=USER,password=PASS \
   http://decypharr:8282/webdav /mnt/decypharr
 ```
 
-## File Structure
-
-```
-/webdav/
-├── __all__/          # All torrents
-├── __bad__/          # Failed/problematic torrents
-├── torrents/         # torrents
-├── nzbs/             # nzbs
-└── {custom}/         # Custom categories
-```
-
-Each category contains torrent folders with files.
-
 ## Authentication
 
 WebDAV auth is controlled by:
@@ -69,27 +59,6 @@ WebDAV auth is controlled by:
 
 - `enable_webdav_auth: true`: Require Basic Auth
 - `enable_webdav_auth: false`: Public access (not recommended)
-
-## Folder Naming
-
-Control how download folders are named:
-
-```json
-{
-  "folder_naming": "filename"
-}
-```
-
-| UI option | Config value | Example folder |
-|-----------|--------------|----------------|
-| File name | `filename` | `Movie.2024.1080p.mkv` |
-| Original name | `original` | `Original Torrent Name` |
-| File name (No Extension) | `filename_no_ext` | `Movie.2024.1080p` |
-| Original name (No Extension) | `original_no_ext` | `Original Torrent Name` |
-| ARR submitted name | `arr_submitted_name` | `Example Show Season 01 S01 1080p WEB-DL x265` |
-| Infohash | `infohash` | `abc123def456...` |
-
-**ARR submitted name** uses the release name sent by Sonarr, Radarr, or another client, such as the `dn` value in a magnet link or the uploaded torrent/NZB filename. Decypharr sanitizes this value before creating the folder.
 
 ## Streaming
 
@@ -118,13 +87,14 @@ When Plex/Jellyfin plays the STRM, it streams from WebDAV.
 
 ## Performance
 
-WebDAV streams directly from Debrid/Usenet (no local caching). Performance depends on:
+WebDAV streams directly from Debrid/Usenet. It does not use the [share cache](../overview/#share-cache)
+— that cache serves NFS and SMB only. Performance depends on:
 
 - Debrid provider speed
 - Network bandwidth
 - Client buffer settings
 
-For best performance, use [DFS mounting](../dfs/) instead of WebDAV.
+For best performance, use [DFS mounting](../../mounting/dfs/) instead of WebDAV.
 
 ## Troubleshooting
 

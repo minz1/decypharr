@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 )
 
 func getEnv(key string) string {
@@ -80,7 +81,7 @@ func (c *Config) applyEnvOverrides() {
 		c.SkipAutoMove = parseBool(val)
 	}
 	// Manager categories array
-	for i := 0; i < 100; i++ { // Support up to 100 categories
+	for i := range 100 { // Support up to 100 categories
 		key := fmt.Sprintf("CATEGORIES__%d", i)
 		if val := getEnv(key); val != "" {
 			if i >= len(c.Categories) {
@@ -92,7 +93,7 @@ func (c *Config) applyEnvOverrides() {
 		}
 	}
 	// Manager allowed extensions array
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		key := fmt.Sprintf("ALLOWED_FILE_TYPES__%d", i)
 		if val := getEnv(key); val != "" {
 			if i >= len(c.AllowedExt) {
@@ -110,12 +111,18 @@ func (c *Config) applyEnvOverrides() {
 
 	c.applyMountEnvVars()
 
+	c.applyNFSEnvVars()
+
+	c.applySMBEnvVars()
+
+	c.applyShareCacheEnvVars()
+
 	c.applyDebridEnvVars()
 
 	c.applyUsenetEnvVars()
 
 	// Arr applications array
-	for i := 0; i < 20; i++ { // Support up to 20 arr applications
+	for i := range 20 { // Support up to 20 arr applications
 		prefix := fmt.Sprintf("ARRS__%d__", i)
 
 		// NAME creates a new entry; TOKEN and other fields apply to existing
@@ -138,4 +145,79 @@ func (c *Config) applyEnvOverrides() {
 			c.Arrs[i].Token = token
 		}
 	}
+}
+
+func (c *Config) applyNFSEnvVars() {
+	if val := getEnv("NFS__ENABLED"); val != "" {
+		c.NFS.Enabled = parseBool(val)
+	}
+	if val := getEnv("NFS__BIND_ADDRESS"); val != "" {
+		c.NFS.BindAddress = val
+	}
+	if val := getEnv("NFS__PORT"); val != "" {
+		if v, err := strconv.ParseUint(val, 10, 16); err == nil {
+			c.NFS.Port = uint16(v)
+		}
+	}
+	if val := getEnv("NFS__ALLOWED_NETWORKS"); val != "" {
+		c.NFS.AllowedNetworks = strings.FieldsFunc(val, func(r rune) bool {
+			return r == ',' || r == ' ' || r == '\n'
+		})
+	}
+	c.setNFSDefaults()
+}
+
+func (c *Config) applySMBEnvVars() {
+	if val := getEnv("SMB__ENABLED"); val != "" {
+		c.SMB.Enabled = parseBool(val)
+	}
+	if val := getEnv("SMB__BIND_ADDRESS"); val != "" {
+		c.SMB.BindAddress = val
+	}
+	if val := getEnv("SMB__PORT"); val != "" {
+		if v, err := strconv.ParseUint(val, 10, 16); err == nil {
+			c.SMB.Port = uint16(v)
+		}
+	}
+	if val := getEnv("SMB__SHARE_NAME"); val != "" {
+		c.SMB.ShareName = val
+	}
+	if val := getEnv("SMB__USERNAME"); val != "" {
+		c.SMB.Username = val
+	}
+	if val := getEnv("SMB__PASSWORD"); val != "" {
+		c.SMB.Password = val
+	}
+	if val := getEnv("SMB__REQUIRE_SIGNING"); val != "" {
+		c.SMB.RequireSigning = parseBool(val)
+	}
+	if val := getEnv("SMB__ALLOWED_NETWORKS"); val != "" {
+		c.SMB.AllowedNetworks = strings.FieldsFunc(val, func(r rune) bool {
+			return r == ',' || r == ' ' || r == '\n'
+		})
+	}
+	c.setSMBDefaults()
+}
+
+func (c *Config) applyShareCacheEnvVars() {
+	if val := getEnv("SHARE_CACHE__ENABLED"); val != "" {
+		enabled := parseBool(val)
+		c.ShareCache.Enabled = &enabled
+	}
+	if val := getEnv("SHARE_CACHE__DIR"); val != "" {
+		c.ShareCache.Dir = val
+	}
+	if val := getEnv("SHARE_CACHE__MAX_SIZE"); val != "" {
+		c.ShareCache.MaxSize = val
+	}
+	if val := getEnv("SHARE_CACHE__MAX_AGE"); val != "" {
+		c.ShareCache.MaxAge = val
+	}
+	if val := getEnv("SHARE_CACHE__CHUNK_SIZE"); val != "" {
+		c.ShareCache.ChunkSize = val
+	}
+	if val := getEnv("SHARE_CACHE__READ_AHEAD"); val != "" {
+		c.ShareCache.ReadAhead = val
+	}
+	c.setShareCacheDefaults()
 }

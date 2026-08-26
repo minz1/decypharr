@@ -2,6 +2,7 @@ package vfs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -46,22 +47,38 @@ func newFakeStreamSource(t *testing.T, content []byte) *fakeStreamSource {
 	return src
 }
 
-func (s *fakeStreamSource) Stream(ctx context.Context, entry *storage.Entry, filename string, start, end int64, w io.Writer, onReady manager.StreamReadyFunc, client string) error {
+func (s *fakeStreamSource) OpenStream(ctx context.Context, entry *storage.Entry, filename string, offset int64, client string) (manager.StreamReader, error) {
+	end := int64(len(s.content)) - 1
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.srv.URL, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", offset, end))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusPartialContent {
-		return fmt.Errorf("unexpected status %d", resp.StatusCode)
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("unexpected status %d", resp.StatusCode)
 	}
-	_, err = io.Copy(w, resp.Body)
-	return err
+	return &fakeStreamReader{body: resp.Body, size: int64(len(s.content)) - offset}, nil
+}
+
+// fakeStreamReader adapts an http.Response body to manager.StreamReader.
+// Seek is unused by DirectStreamFile (each read opens a fresh stream at the
+// requested offset) so it is left unimplemented.
+type fakeStreamReader struct {
+	body io.ReadCloser
+	size int64
+}
+
+func (r *fakeStreamReader) Read(p []byte) (int, error) { return r.body.Read(p) }
+func (r *fakeStreamReader) Close() error               { return r.body.Close() }
+func (r *fakeStreamReader) Size() int64                { return r.size }
+func (r *fakeStreamReader) Prime() error               { return nil }
+func (r *fakeStreamReader) Seek(int64, int) (int64, error) {
+	return 0, errors.New("seek not supported by fakeStreamReader")
 }
 
 func TestDirectStreamFile_ReadAtContext(t *testing.T) {

@@ -81,7 +81,7 @@ func New(name, host, token string, skipRepair bool, downloadUncached *bool, sele
 // RequestCtx issues an HTTP request bound to ctx. Cancellation of ctx
 // cancels the in-flight HTTP call — this is what lets the repair pipeline
 // abort long Sonarr enumerations when a user presses Stop.
-func (a *Arr) RequestCtx(ctx context.Context, method, endpoint string, payload interface{}, res any) (*http.Response, error) {
+func (a *Arr) RequestCtx(ctx context.Context, method, endpoint string, payload any, res any) (*http.Response, error) {
 	if a.Token == "" || a.Host == "" {
 		return nil, fmt.Errorf("arr not configured")
 	}
@@ -115,11 +115,15 @@ func (a *Arr) RequestCtx(ctx context.Context, method, endpoint string, payload i
 		return nil, err
 	}
 
+	// The body is fully consumed here. Callers only read status and headers,
+	// which stay valid after close, so owning the lifecycle in one place keeps
+	// the nil-res and non-2xx paths from leaking the connection.
+	defer request.DrainAndCloseResponse(resp)
+
 	// Parse success result if provided. Stream-decode directly from the
 	// response body so large payloads (e.g. full Sonarr series lists) don't
 	// sit on the heap as raw bytes alongside the decoded object graph.
 	if res != nil && resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		defer resp.Body.Close()
 		dec := json.ConfigDefault.NewDecoder(resp.Body)
 		if err := dec.Decode(res); err != nil && err != io.EOF {
 			return resp, fmt.Errorf("failed to decode response: %w", err)
@@ -131,7 +135,7 @@ func (a *Arr) RequestCtx(ctx context.Context, method, endpoint string, payload i
 
 // Request is the no-context shim for legacy callers. Prefer RequestCtx for
 // any code path that should be cancellable (repair, etc.).
-func (a *Arr) Request(method, endpoint string, payload interface{}, res any) (*http.Response, error) {
+func (a *Arr) Request(method, endpoint string, payload any, res any) (*http.Response, error) {
 	return a.RequestCtx(context.Background(), method, endpoint, payload, res)
 }
 
@@ -146,9 +150,6 @@ func (a *Arr) Validate() error {
 	resp, err := a.Request("GET", "/api/v3/health", nil, nil)
 	if err != nil {
 		return err
-	}
-	if resp.Body != nil {
-		defer resp.Body.Close()
 	}
 	// If response is not 200 or 404(this is the case for Lidarr, etc), return an error
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotFound {
@@ -299,7 +300,7 @@ func (s *Storage) Monitor() {
 	wg := sync.WaitGroup{}
 	wg.Add(s.arrs.Size())
 	s.arrs.Range(func(name string, arr *Arr) bool {
-		_, _, _ = s.sg.Do(fmt.Sprintf("cleanup_%s", arr.Name), func() (interface{}, error) {
+		_, _, _ = s.sg.Do(fmt.Sprintf("cleanup_%s", arr.Name), func() (any, error) {
 			go func() {
 				defer wg.Done()
 				if err := arr.CleanupQueue(); err != nil {
@@ -323,9 +324,6 @@ func (a *Arr) Refresh() error {
 	resp, err := a.Request(http.MethodPost, "api/v3/command", payload, nil)
 	if err != nil {
 		return err
-	}
-	if resp.Body != nil {
-		defer resp.Body.Close()
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return fmt.Errorf("failed to refresh monitored downloads: %s", resp.Status)

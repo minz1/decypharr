@@ -5,6 +5,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,11 +24,11 @@ import (
 )
 
 type mountCacheCleaner interface {
-	CleanupCache() (map[string]interface{}, error)
+	CleanupCache() (map[string]any, error)
 }
 
 type mountCachePurger interface {
-	PurgeCache() (map[string]interface{}, error)
+	PurgeCache() (map[string]any, error)
 }
 
 func (s *Server) handleGetArrs(w http.ResponseWriter, r *http.Request) {
@@ -83,7 +84,7 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 
 	// Collect torrent URLs
 	if urls := r.FormValue("urls"); urls != "" {
-		for _, u := range strings.Split(urls, "\n") {
+		for u := range strings.SplitSeq(urls, "\n") {
 			if trimmed := strings.TrimSpace(u); trimmed != "" {
 				magnet, err := utils.GetMagnetFromUrl(trimmed, rmTrackerUrls)
 				if err != nil {
@@ -124,7 +125,7 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 
 	// Collect NZB URLs
 	if nzbURLs := r.FormValue("nzbURLs"); nzbURLs != "" {
-		for _, u := range strings.Split(nzbURLs, "\n") {
+		for u := range strings.SplitSeq(nzbURLs, "\n") {
 			if trimmed := strings.TrimSpace(u); trimmed != "" {
 				filename, content, err := utils.DownloadFile(trimmed, utils.WithHeader("User-Agent", s.nzbUserAgent))
 				if err != nil {
@@ -248,7 +249,7 @@ func (s *Server) handleRunMountCacheCleanup(w http.ResponseWriter, r *http.Reque
 		s.stats.Refresh()
 	}
 
-	utils.JSONResponse(w, map[string]interface{}{
+	utils.JSONResponse(w, map[string]any{
 		"status": "success",
 		"cache":  cleanupStats,
 	}, http.StatusOK)
@@ -278,7 +279,7 @@ func (s *Server) handlePurgeMountCache(w http.ResponseWriter, r *http.Request) {
 		s.stats.Refresh()
 	}
 
-	utils.JSONResponse(w, map[string]interface{}{
+	utils.JSONResponse(w, map[string]any{
 		"status": "success",
 		"cache":  purgeStats,
 	}, http.StatusOK)
@@ -350,10 +351,7 @@ func (s *Server) handleGetTorrents(w http.ResponseWriter, r *http.Request) {
 	// Apply pagination
 	var paginatedTorrents []*storage.Entry
 	if offset < total {
-		end := offset + limit
-		if end > total {
-			end = total
-		}
+		end := min(offset+limit, total)
 		paginatedTorrents = filteredTorrents[offset:end]
 	} else {
 		paginatedTorrents = []*storage.Entry{}
@@ -372,7 +370,7 @@ func (s *Server) handleGetTorrents(w http.ResponseWriter, r *http.Request) {
 		categories = append(categories, c)
 	}
 
-	utils.JSONResponse(w, map[string]interface{}{
+	utils.JSONResponse(w, map[string]any{
 		"torrents":    paginatedTorrents,
 		"total":       total,
 		"page":        page,
@@ -519,10 +517,25 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	if newConfig.Port == "" {
 		newConfig.Port = "8282"
 	}
+	newConfig.MigrateVirtualFolders()
+	if err := newConfig.ValidateVirtualFolders(); err != nil {
+		http.Error(w, "Invalid virtual folders: "+err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	// Preserve fields that shouldn't be overwritten by frontend
 	currentConfig := config.Get()
 	newConfig.Auth = currentConfig.GetAuth()
+	// The frontend config form doesn't include use_auth or enable_webdav_auth,
+	// so they would be zero-valued (false) in the decoded payload. Preserve
+	// them from the live config so auth isn't silently disabled on every save.
+	newConfig.UseAuth = currentConfig.UseAuth
+	newConfig.EnableWebdavAuth = currentConfig.EnableWebdavAuth
+	// The frontend never sends the STRM signing secret; a save must not
+	// rotate it (rotation would invalidate every written .strm file).
+	if newConfig.Strm.Secret == "" {
+		newConfig.Strm.Secret = currentConfig.Strm.Secret
+	}
 
 	// Filter out empty or incomplete arrs
 	validArrs := make([]config.Arr, 0, len(newConfig.Arrs))
@@ -544,6 +557,12 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A base-URL or STRM settings change moves the desired content of every
+	// .strm file; resweep after the new config is live. Save has already
+	// normalized newConfig, so the comparison sees defaults on both sides.
+	strmChanged := currentConfig.AppURL != newConfig.AppURL ||
+		!reflect.DeepEqual(currentConfig.Strm, newConfig.Strm)
+
 	// Only restart when a field that needs it actually changed (HTTP bind,
 	// debrid/usenet clients, or the mount). For everything else, apply the new
 	// config live so users aren't disrupted by a full restart on every save.
@@ -552,6 +571,14 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		go s.Restart()
 	} else {
 		config.Get().ApplyRuntime(&newConfig)
+		if strmChanged {
+			s.manager.Strm().SweepAsync("config_change")
+		}
+		if err := s.manager.ApplyVirtualFolders(newConfig.VirtualFolders); err != nil {
+			s.logger.Error().Err(err).Msg("Failed to apply virtual folders after live config update")
+			http.Error(w, "Configuration was saved, but virtual folders could not be applied: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 		// Reschedule/reapply the repair sweep if its settings changed.
 		if svc := s.manager.Repair(); svc != nil {
 			if err := svc.ApplyConfig(); err != nil {
@@ -561,6 +588,42 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	utils.JSONResponse(w, map[string]any{"status": "success", "restarted": restarted}, http.StatusOK)
+}
+
+func (s *Server) handlePreviewVirtualFolder(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Folder config.VirtualFolder `json:"folder"`
+		Limit  int                  `json:"limit"`
+	}
+	if err := json.ConfigDefault.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	config.NormalizeVirtualFolder(&req.Folder)
+	if err := config.ValidateVirtualFolder(req.Folder, nil); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	total, samples, err := s.manager.PreviewVirtualFolder(req.Folder, req.Limit)
+	if err != nil {
+		s.logger.Error().Err(err).Msg("Failed to preview virtual folder")
+		http.Error(w, "Failed to preview virtual folder: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	utils.JSONResponse(w, map[string]any{
+		"total":   total,
+		"samples": samples,
+	}, http.StatusOK)
+}
+
+func (s *Server) handleStrmRegenerate(w http.ResponseWriter, r *http.Request) {
+	if !config.Get().Strm.Active() {
+		http.Error(w, "STRM is disabled or has no path configured", http.StatusBadRequest)
+		return
+	}
+	s.manager.Strm().SweepAsync("regenerate")
+	utils.JSONResponse(w, map[string]string{"status": "started"}, http.StatusAccepted)
 }
 
 func (s *Server) handleGetRepairConfig(w http.ResponseWriter, r *http.Request) {
@@ -633,6 +696,7 @@ func (s *Server) handleRunRepair(w http.ResponseWriter, r *http.Request) {
 		Force             bool   `json:"force,omitempty"`
 		AutoRepair        *bool  `json:"auto_repair,omitempty"`
 		UnrestrictLink    bool   `json:"unrestrict_link,omitempty"`
+		VerifyContent     *bool  `json:"verify_content,omitempty"`
 		Protocol          string `json:"protocol,omitempty"`
 	}
 	if r.Body != nil && r.ContentLength != 0 {
@@ -666,6 +730,15 @@ func (s *Server) handleRunRepair(w http.ResponseWriter, r *http.Request) {
 	case "0", "false", "no", "off":
 		unrestrictLink = false
 	}
+	verifyContent := req.VerifyContent
+	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get("verify_content"))) {
+	case "1", "true", "yes", "on":
+		v := true
+		verifyContent = &v
+	case "0", "false", "no", "off":
+		v := false
+		verifyContent = &v
+	}
 	protocolScope := strings.ToLower(strings.TrimSpace(req.Protocol))
 	if queryProtocol := strings.TrimSpace(r.URL.Query().Get("protocol")); queryProtocol != "" {
 		protocolScope = strings.ToLower(queryProtocol)
@@ -689,6 +762,7 @@ func (s *Server) handleRunRepair(w http.ResponseWriter, r *http.Request) {
 		IgnoreLastChecked: ignoreLastChecked,
 		AutoRepair:        autoRepair,
 		UnrestrictLink:    unrestrictLink,
+		VerifyContent:     verifyContent,
 		ProtocolScope:     protocolScope,
 	})
 	if err != nil {
@@ -800,7 +874,7 @@ func (s *Server) handleRecheckMedia(w http.ResponseWriter, r *http.Request) {
 		// Returning the run record (when present) gives the caller the
 		// failure detail captured in storage as well as the message.
 		if run != nil {
-			utils.JSONResponse(w, map[string]interface{}{
+			utils.JSONResponse(w, map[string]any{
 				"error": err.Error(),
 				"run":   run,
 			}, status)
@@ -960,7 +1034,7 @@ func (s *Server) handleRefreshAPIToken(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 
-	utils.JSONResponse(w, map[string]interface{}{
+	utils.JSONResponse(w, map[string]any{
 		"token":   token,
 		"message": "API token refreshed successfully",
 	}, http.StatusOK)
