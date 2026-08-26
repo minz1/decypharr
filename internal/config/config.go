@@ -302,11 +302,13 @@ func (c *Config) loadConfig() error {
 		return fmt.Errorf("error parsing config JSON: %w", err)
 	}
 
+	// Apply environment variable overrides first so setDefaults() (which,
+	// e.g., decides whether to eagerly load Auth based on UseAuth) sees the
+	// final values rather than whatever was persisted to disk.
+	c.applyEnvOverrides()
+
 	// Set defaults for any missing values
 	c.setDefaults()
-
-	// Apply environment variable overrides
-	c.applyEnvOverrides()
 
 	// Hard-fail on invalid DFS size/duration strings. A wrong value silently
 	// sets CacheDiskSize=0 and disables all cache enforcement; fail loudly instead.
