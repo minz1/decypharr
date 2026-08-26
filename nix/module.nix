@@ -351,6 +351,141 @@ in
     };
 
     # -------------------------------------------------------------------------
+    # Shares — read-only NFS/SMB exports of the catalog, and the on-disk
+    # cache they can share in front of the debrid backend.
+    # -------------------------------------------------------------------------
+
+    nfs = lib.mkOption {
+      default = { };
+      description = "Read-only NFSv4 export of the catalog. All fields map to DECYPHARR_NFS__* env vars.";
+      type = lib.types.submodule {
+        options = {
+          enabled = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "Enable the NFSv4 server. A single listener — no mount service or portmapper. Maps to DECYPHARR_NFS__ENABLED.";
+          };
+          bindAddress = lib.mkOption {
+            type = lib.types.str;
+            default = "";
+            description = "Bind address for the NFS listener (empty = decypharr's bindAddress, else all interfaces). Maps to DECYPHARR_NFS__BIND_ADDRESS.";
+          };
+          port = lib.mkOption {
+            type = lib.types.port;
+            default = 20490;
+            description = "NFSv4 listen port. Maps to DECYPHARR_NFS__PORT.";
+          };
+          allowedNetworks = lib.mkOption {
+            type = lib.types.listOf lib.types.str;
+            default = [ ];
+            description = ''
+              CIDR networks allowed to connect (empty = decypharr's private-range +
+              loopback defaults). Maps to DECYPHARR_NFS__ALLOWED_NETWORKS (comma-separated).
+            '';
+            example = [ "10.0.0.0/8" "192.168.1.0/24" ];
+          };
+        };
+      };
+    };
+
+    smb = lib.mkOption {
+      default = { };
+      description = "Read-only SMB2/SMB3 export of the catalog (experimental — no encryption, signed sessions only; trusted networks only). All fields map to DECYPHARR_SMB__* env vars.";
+      type = lib.types.submodule {
+        options = {
+          enabled = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "Enable the SMB server. Maps to DECYPHARR_SMB__ENABLED.";
+          };
+          bindAddress = lib.mkOption {
+            type = lib.types.str;
+            default = "";
+            description = "Bind address for the SMB listener (empty = decypharr's bindAddress, else all interfaces). Maps to DECYPHARR_SMB__BIND_ADDRESS.";
+          };
+          port = lib.mkOption {
+            type = lib.types.port;
+            default = 1445;
+            description = "SMB listen port. Unprivileged default; map host 445 onto this in a container if needed. Maps to DECYPHARR_SMB__PORT.";
+          };
+          shareName = lib.mkOption {
+            type = lib.types.str;
+            default = "decypharr";
+            description = "SMB share name clients see. Maps to DECYPHARR_SMB__SHARE_NAME.";
+          };
+          username = lib.mkOption {
+            type = lib.types.str;
+            default = "";
+            description = "SMB username. The server grants no anonymous access. Maps to DECYPHARR_SMB__USERNAME. Prefer environmentFiles.";
+          };
+          password = lib.mkOption {
+            type = lib.types.str;
+            default = "";
+            description = "SMB password. Maps to DECYPHARR_SMB__PASSWORD — set via environmentFiles instead of here to keep it out of the Nix store.";
+          };
+          requireSigning = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "Refuse clients that will not sign. Off by default: mandatory signing costs real CPU at streaming bitrates. Maps to DECYPHARR_SMB__REQUIRE_SIGNING.";
+          };
+          allowedNetworks = lib.mkOption {
+            type = lib.types.listOf lib.types.str;
+            default = [ ];
+            description = ''
+              CIDR networks allowed to connect (empty = decypharr's private-range +
+              loopback defaults). Maps to DECYPHARR_SMB__ALLOWED_NETWORKS (comma-separated).
+            '';
+            example = [ "10.0.0.0/8" ];
+          };
+        };
+      };
+    };
+
+    shareCache = lib.mkOption {
+      default = { };
+      description = ''
+        Optional on-disk read cache shared by the NFS and SMB servers (WebDAV
+        streams straight through and never uses it). Off by default — it claims
+        disk the operator did not ask for. All fields map to
+        DECYPHARR_SHARE_CACHE__* env vars.
+      '';
+      type = lib.types.submodule {
+        options = {
+          enabled = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "Turn the share cache on. Maps to DECYPHARR_SHARE_CACHE__ENABLED.";
+          };
+          dir = lib.mkOption {
+            type = lib.types.str;
+            default = "";
+            description = "Cache directory (empty = configDir/share-cache). Maps to DECYPHARR_SHARE_CACHE__DIR.";
+          };
+          maxSize = lib.mkOption {
+            type = lib.types.str;
+            default = "";
+            description = "Max cached content on disk, e.g. '20GB' (empty = 10GB). Maps to DECYPHARR_SHARE_CACHE__MAX_SIZE.";
+          };
+          maxAge = lib.mkOption {
+            type = lib.types.str;
+            default = "";
+            description = "Drop content nothing has read for this long, e.g. '24h' (empty = 24h). Maps to DECYPHARR_SHARE_CACHE__MAX_AGE.";
+          };
+          chunkSize = lib.mkOption {
+            type = lib.types.str;
+            default = "";
+            description = "Base backend fetch size, e.g. '4MB' (empty = 4MB). Maps to DECYPHARR_SHARE_CACHE__CHUNK_SIZE.";
+          };
+          readAhead = lib.mkOption {
+            type = lib.types.str;
+            default = "";
+            description = "Fetched beyond each read, e.g. '16MB' (empty = 16MB). Maps to DECYPHARR_SHARE_CACHE__READ_AHEAD.";
+          };
+        };
+      };
+    };
+
+    # -------------------------------------------------------------------------
     # Rclone mount settings
     # Decypharr starts rclone as a subprocess and controls it via RC API.
     # These map to settings.mount.rclone in config.json.
@@ -653,6 +788,27 @@ in
         # No DECYPHARR_ prefix — these are read directly via os.Getenv in the binary.
         UMASK                                        = cfg.umask;
         DFS_FUSE_BACKEND                             = cfg.fuseBackend;
+      } // {
+        DECYPHARR_NFS__ENABLED                       = if cfg.nfs.enabled then "true" else "false";
+        DECYPHARR_NFS__PORT                          = toString cfg.nfs.port;
+        DECYPHARR_SMB__ENABLED                       = if cfg.smb.enabled then "true" else "false";
+        DECYPHARR_SMB__PORT                          = toString cfg.smb.port;
+        DECYPHARR_SHARE_CACHE__ENABLED               = if cfg.shareCache.enabled then "true" else "false";
+      } // lib.filterAttrs (_: v: v != "") {
+        DECYPHARR_NFS__BIND_ADDRESS                  = cfg.nfs.bindAddress;
+        DECYPHARR_NFS__ALLOWED_NETWORKS              = lib.concatStringsSep "," cfg.nfs.allowedNetworks;
+        DECYPHARR_SMB__BIND_ADDRESS                  = cfg.smb.bindAddress;
+        DECYPHARR_SMB__SHARE_NAME                    = cfg.smb.shareName;
+        DECYPHARR_SMB__USERNAME                      = cfg.smb.username;
+        DECYPHARR_SMB__PASSWORD                      = cfg.smb.password;
+        DECYPHARR_SMB__ALLOWED_NETWORKS              = lib.concatStringsSep "," cfg.smb.allowedNetworks;
+        DECYPHARR_SHARE_CACHE__DIR                   = cfg.shareCache.dir;
+        DECYPHARR_SHARE_CACHE__MAX_SIZE              = cfg.shareCache.maxSize;
+        DECYPHARR_SHARE_CACHE__MAX_AGE               = cfg.shareCache.maxAge;
+        DECYPHARR_SHARE_CACHE__CHUNK_SIZE             = cfg.shareCache.chunkSize;
+        DECYPHARR_SHARE_CACHE__READ_AHEAD            = cfg.shareCache.readAhead;
+      } // lib.optionalAttrs cfg.smb.requireSigning {
+        DECYPHARR_SMB__REQUIRE_SIGNING               = "true";
       } // lib.optionalAttrs cfg.enablePprof {
         ENABLE_PPROF                                 = "1";
       } // lib.optionalAttrs cfg.yencPureGo {
@@ -688,6 +844,10 @@ in
       };
     };
 
-    networking.firewall.allowedTCPPorts = lib.mkIf cfg.openFirewall [ cfg.port ];
+    networking.firewall.allowedTCPPorts = lib.mkIf cfg.openFirewall (
+      [ cfg.port ]
+      ++ lib.optional cfg.nfs.enabled cfg.nfs.port
+      ++ lib.optional cfg.smb.enabled cfg.smb.port
+    );
   };
 }
