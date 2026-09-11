@@ -171,22 +171,21 @@ grabs a replacement release. The check reads one article per video file.
 ```json
 {
   "usenet": {
-    "disk_buffer_path": "/cache/usenet/streams"
+    "disk_path": "/cache/usenet/streams"
   }
 }
 ```
 
-Streams use disk buffer for assembly. Ensure sufficient disk space.
+The default empty `disk_path` keeps the bounded streaming window in memory. Set a path to enable disk-backed rewind buffering, and ensure that location has sufficient free space.
 
-## Repair
+## Health Checks and Replacement
 
-```json
-{
-  "usenet": {
-    "skip_repair": false
-  }
-}
-```
+The health checker samples NZB article availability and can optionally validate
+each media file's container signature. If a file is definitively broken and is
+linked to an Arr item, `auto_repair` deletes it through Arr and triggers a
+replacement search. Connection and provider errors remain inconclusive and do
+not trigger replacement. See the [Health Checker & Repair guide](../repair/) for
+configuration and API details.
 
 ## Arr Integration
 
@@ -216,7 +215,6 @@ See [Sabnzbd Integration](./sabnzbd/) for details.
 
 ### Incomplete Downloads
 
-- Enable `skip_repair: false` for PAR2 repair
 - Check provider retention (old files may be incomplete)
 - Try backup provider if available
 
@@ -244,8 +242,7 @@ Full Usenet config with optimal settings:
     "read_ahead": "32MB",
     "processing_timeout": "15m",
     "availability_sample_percent": 5,
-    "disk_buffer_path": "/cache/usenet",
-    "skip_repair": false
+    "disk_path": "/cache/usenet"
   }
 }
 ```

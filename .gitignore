@@ -24,3 +24,7 @@ node_modules/
 .stfolder/**
 result
 result-*
+
+# profiling artifacts
+*.pprof
+*.prof

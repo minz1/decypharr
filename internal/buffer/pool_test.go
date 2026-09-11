@@ -6,27 +6,26 @@ import (
 	"testing"
 )
 
-// TestDiskBackstop_ReclaimsOverLimit verifies that reclaimDisk punches holes
+// TestDiskBackstop_ReclaimsOverLimit verifies that reclaimDiskTo punches holes
 // behind the read head and brings diskInUse back under DiskLimit. This is the
 // pool-level bound that keeps a single open stream from exhausting the cache
 // partition even when whole-file eviction can't help (the item is still open).
 func TestDiskBackstop_ReclaimsOverLimit(t *testing.T) {
 	dir := t.TempDir()
 
-	const diskLimit = 512
+	// Start unlimited so the write below isn't rejected by the reservation
+	// gate (reserveDisk has nothing to reclaim from yet, since nothing has
+	// hit disk). The limit is dropped below after the data is safely on disk
+	// to simulate the pool budget shrinking out from under an open stream.
 	pool := NewPool(PoolConfig{
 		Name:       "test",
-		DiskLimit:  diskLimit,
 		BackWindow: 0, // punch everything behind the read head
 	})
 	defer pool.Close()
 
-	// MemorySize: 0 forces write-through so data hits disk (and the range
-	// tracker) immediately, without waiting for a block flush.
 	buf, err := pool.NewBuffer(Config{
-		DiskPath:   filepath.Join(dir, "stream.buf"),
-		TotalSize:  1024,
-		MemorySize: 0,
+		DiskPath:  filepath.Join(dir, "stream.buf"),
+		TotalSize: 1024,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -35,6 +34,11 @@ func TestDiskBackstop_ReclaimsOverLimit(t *testing.T) {
 	data := make([]byte, 1024)
 	if _, err := buf.WriteAt(data, 0); err != nil {
 		t.Fatalf("WriteAt: %v", err)
+	}
+	// Force the write out of the RAM window and onto disk (and the range
+	// tracker) immediately, rather than waiting for a block flush.
+	if err := buf.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
 	}
 
 	if got := pool.diskInUse.Load(); got == 0 {
@@ -45,7 +49,9 @@ func TestDiskBackstop_ReclaimsOverLimit(t *testing.T) {
 	// window (backWindow=0 means ceiling = readHead, so all data is eligible).
 	buf.SetReadHead(1024)
 
-	pool.reclaimDisk()
+	const diskLimit = 512
+	pool.diskLimit.Store(diskLimit)
+	pool.reclaimDiskTo(diskLimit)
 
 	stats := pool.Stats()
 	if stats.DiskInUse > diskLimit {
@@ -65,7 +71,6 @@ func TestDiskBackstop_FiresOnEvictCallback(t *testing.T) {
 
 	pool := NewPool(PoolConfig{
 		Name:       "test",
-		DiskLimit:  512,
 		BackWindow: 0,
 	})
 	defer pool.Close()
@@ -74,9 +79,8 @@ func TestDiskBackstop_FiresOnEvictCallback(t *testing.T) {
 	var evictedBytes atomic.Int64
 
 	buf, err := pool.NewBuffer(Config{
-		DiskPath:   filepath.Join(dir, "stream.buf"),
-		TotalSize:  1024,
-		MemorySize: 0,
+		DiskPath:  filepath.Join(dir, "stream.buf"),
+		TotalSize: 1024,
 		OnEvict: func(off, length int64) {
 			evictCalls.Add(1)
 			evictedBytes.Add(length)
@@ -90,9 +94,15 @@ func TestDiskBackstop_FiresOnEvictCallback(t *testing.T) {
 	if _, err := buf.WriteAt(data, 0); err != nil {
 		t.Fatalf("WriteAt: %v", err)
 	}
+	if err := buf.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
 
 	buf.SetReadHead(1024)
-	pool.reclaimDisk()
+
+	const diskLimit = 512
+	pool.diskLimit.Store(diskLimit)
+	pool.reclaimDiskTo(diskLimit)
 
 	if evictCalls.Load() == 0 {
 		t.Fatal("OnEvict callback was never called")
@@ -110,15 +120,13 @@ func TestDiskBackstop_NoOpWithoutReadHead(t *testing.T) {
 
 	pool := NewPool(PoolConfig{
 		Name:       "test",
-		DiskLimit:  1, // so tiny that any data would trigger eviction
 		BackWindow: 0,
 	})
 	defer pool.Close()
 
 	buf, err := pool.NewBuffer(Config{
-		DiskPath:   filepath.Join(dir, "stream.buf"),
-		TotalSize:  1024,
-		MemorySize: 0,
+		DiskPath:  filepath.Join(dir, "stream.buf"),
+		TotalSize: 1024,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -128,11 +136,22 @@ func TestDiskBackstop_NoOpWithoutReadHead(t *testing.T) {
 	if _, err := buf.WriteAt(data, 0); err != nil {
 		t.Fatalf("WriteAt: %v", err)
 	}
+	if err := buf.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
 
 	diskBefore := pool.diskInUse.Load()
+	if diskBefore == 0 {
+		t.Fatal("diskInUse should be > 0 after write, to make the no-op assertion below meaningful")
+	}
+
+	// So tiny that any data would trigger eviction if the missing read head
+	// didn't suppress it.
+	const diskLimit = 1
+	pool.diskLimit.Store(diskLimit)
 
 	// No SetReadHead call — backstop must be a no-op.
-	pool.reclaimDisk()
+	pool.reclaimDiskTo(diskLimit)
 
 	if got := pool.diskInUse.Load(); got != diskBefore {
 		t.Fatalf("diskInUse changed without a read head: before=%d after=%d", diskBefore, got)

@@ -250,7 +250,7 @@ Set `auto_repair: true` if:
 
 - You have stable providers.
 - You want fully automated operation.
-- You're comfortable with the sweep deleting broken Arr file records and triggering a search.
+- You want broken Arr-managed files automatically deleted and searched again through Arr.
 
 Set `auto_repair: false` if:
 

@@ -38,6 +38,37 @@ Configuration is stored in `config.json`. Most settings can be managed via the W
 
 Password is bcrypt-hashed. API token is auto-generated.
 
+### Token-only authentication
+
+Set `token_only` in `auth.json` to use the API token as the only credential:
+
+```json
+{
+  "api_token": "...",
+  "token_only": true
+}
+```
+
+In this mode there is no username and no password. Use these rules:
+
+- Send the token in the `Authorization` header for API requests.
+- Type the token in the password box to log in to the web interface.
+- Give the token to Sonarr or Radarr as the download client password.
+- Keep WebDAV authentication off. WebDAV accepts only a username and a
+  password. It always rejects the API token.
+
+Registration stays closed in this mode. If you lose the token, edit
+`auth.json` to set a new one.
+
+To start in this mode without the web interface, set these environment
+variables:
+
+| Variable          | Description                       |
+|-------------------|-----------------------------------|
+| `USE_AUTH`        | Set to `true` to enable auth.     |
+| `AUTH_TOKEN_ONLY` | Set to `true` for token-only auth.|
+| `API_TOKEN`       | Set the token to a known value.   |
+
 ## Downloads
 
 ```json
@@ -121,7 +152,7 @@ Array of Debrid services:
     "processing_timeout": "10m",
     "availability_sample_percent": 10,
     "import_availability_sample_percent": 1,
-    "disk_buffer_path": "/cache/usenet/streams"
+    "disk_path": ""
   }
 }
 ```
@@ -137,7 +168,7 @@ Array of Debrid services:
 | `processing_timeout`          | string | Max time for NZB processing     | `10m`                        |
 | `availability_sample_percent` | int    | % of segments to check during repairs (1-100) | `10`             |
 | `import_availability_sample_percent` | int | % of segments to check when adding an NZB (1-100) | `1`         |
-| `disk_buffer_path`            | string | Disk buffer location            | `{main_path}/usenet/streams` |
+| `disk_path`                   | string | Disk-backed rewind location; empty buffers in memory | `""` (memory) |
 
 ### Provider Fields
 
@@ -367,7 +398,6 @@ move the cache to another filesystem.
     "strategy": "per_entry",
     "recheck_interval": "168h",
     "auto_repair": true,
-    "skip_nzb_repair": false,
     "nntp_connection_percent": 20
   }
 }
@@ -382,8 +412,7 @@ move the cache to another filesystem.
 | `strategy`                | `per_entry` (stop at first broken file) or `per_file` (probe every file)   | `per_entry` |
 | `recheck_interval`        | How long a healthy entry stays fresh before becoming a candidate again     | `168h`      |
 | `arrs`                    | Optional Arr filter when `source=arr`. Empty = all eligible                | `[]`        |
-| `auto_repair`             | When `true`, brokens are repaired in-sweep. When `false`, detect-only      | `false`     |
-| `skip_nzb_repair`         | Skip NZB / Usenet entries during scheduled repair sweeps                   | `false`     |
+| `auto_repair`             | When `true`, broken Arr-managed files are deleted and searched again through Arr | `false` |
 | `nntp_connection_percent` | Share of NNTP connections probes may use, to avoid starving downloads      | `20`        |
 
 See the [Health Checker & Repair guide](/guides/repair/) for the full model, API, and Browse-page integration.
