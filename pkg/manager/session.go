@@ -656,27 +656,6 @@ func (m *Manager) OpenStreamWithRewindOwner(
 	return s, nil
 }
 
-// SupportsDirectRead reports whether an entry has a protocol-native
-// random-access reader. It does not imply that a downstream persistent cache
-// should be bypassed; cache owners should use OpenStreamUntrackedForCache.
-func SupportsDirectRead(entry *storage.Entry) bool {
-	return entry != nil && entry.Protocol == config.ProtocolNZB
-}
-
-// OpenDirect opens an application-owned protocol reader without active-stream
-// tracking. It is retained for non-cache consumers that explicitly need native
-// random access. Persistent cache layers should use
-// OpenStreamUntrackedForCache so cache ownership and observability stay intact.
-func (m *Manager) OpenDirect(ctx context.Context, entry *storage.Entry, filename string) (DirectReader, error) {
-	if !SupportsDirectRead(entry) {
-		return nil, nil
-	}
-	if m.usenet == nil {
-		return nil, fmt.Errorf("usenet client not configured")
-	}
-	return m.usenet.OpenFileWithRetention(ctx, entry.InfoHash, filename, usenet.RetentionRewind)
-}
-
 // OpenStreamUntracked opens a session without registering it in the
 // active-streams view. It is for consumers that do their own stream tracking —
 // for example a background sidecar download.
