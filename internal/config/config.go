@@ -338,21 +338,20 @@ func (c *Config) loadConfig() error {
 	configFile := c.JsonFile()
 	fmt.Printf("Loading config from %s\n", configFile)
 	data, err := os.ReadFile(configFile)
-	if err != nil {
-		if os.IsNotExist(err) {
-			fmt.Printf("Config file not found, creating a new one at %s\n", configFile)
-			// Create a default config file if it doesn't exist
-			if createConfigErr := c.createConfig(); createConfigErr != nil {
-				return fmt.Errorf("failed to create config file: %w", createConfigErr)
-			}
-			return c.Save()
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		// First run: start from the built-in defaults, then fall through so
+		// the environment overrides apply before the file is first written.
+		fmt.Printf("Config file not found, creating a new one at %s\n", configFile)
+		if createConfigErr := c.createConfig(); createConfigErr != nil {
+			return fmt.Errorf("failed to create config file: %w", createConfigErr)
 		}
+	case err != nil:
 		return fmt.Errorf("error reading config file: %w", err)
-	}
-
-	// Parse JSON
-	if unmarshalErr := json.Unmarshal(data, &c); unmarshalErr != nil {
-		return fmt.Errorf("error parsing config JSON: %w", unmarshalErr)
+	default:
+		if unmarshalErr := json.Unmarshal(data, c); unmarshalErr != nil {
+			return fmt.Errorf("error parsing config JSON: %w", unmarshalErr)
+		}
 	}
 	hadStrmSecret := c.Strm.Secret != ""
 	hadSessionSecret := c.SessionSecret != ""
@@ -647,7 +646,9 @@ func (c *Config) setDefaults() {
 
 	// Rclone defaults
 	if c.Mount.Type == MountTypeRclone {
-		c.Mount.Rclone.Port = cmp.Or(c.Rclone.Port, DefaultRclonePort)
+		// mount.rclone (and its RCLONE__* env vars) wins; the deprecated
+		// top-level rclone section only fills gaps, then the defaults.
+		c.Mount.Rclone.Port = cmp.Or(c.Mount.Rclone.Port, c.Rclone.Port, DefaultRclonePort)
 		if c.Mount.Rclone.AsyncRead == nil {
 			_asyncTrue := true
 			c.Mount.Rclone.AsyncRead = &_asyncTrue
@@ -669,12 +670,17 @@ func (c *Config) setDefaults() {
 		}
 		if c.Mount.Rclone.VfsCacheMode != "off" {
 			c.Mount.Rclone.VfsCachePollInterval = cmp.Or(
+				c.Mount.Rclone.VfsCachePollInterval,
 				c.Rclone.VfsCachePollInterval,
 				"1m",
 			) // Clean cache every minute
 		}
-		c.Mount.Rclone.DirCacheTime = cmp.Or(c.Rclone.DirCacheTime, "5m")
-		c.Mount.Rclone.LogLevel = cmp.Or(c.Rclone.LogLevel, strings.ToUpper(DefaultLogLevel))
+		c.Mount.Rclone.DirCacheTime = cmp.Or(c.Mount.Rclone.DirCacheTime, c.Rclone.DirCacheTime, "5m")
+		c.Mount.Rclone.LogLevel = cmp.Or(
+			c.Mount.Rclone.LogLevel,
+			c.Rclone.LogLevel,
+			strings.ToUpper(DefaultLogLevel),
+		)
 	}
 
 	// DFS defaults
