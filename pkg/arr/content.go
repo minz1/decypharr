@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"slices"
 
@@ -70,7 +71,7 @@ func (s *Service) Media(ctx context.Context, name, mediaID string) ([]Content, e
 		Title string `json:"title"`
 		Id    int    `json:"id"`
 	}
-	resp, err := s.get(ctx, instance, fmt.Sprintf("api/v3/series?tvdbId=%s", mediaID), &series)
+	resp, err := s.get(ctx, instance, "api/v3/series?"+url.Values{"tvdbId": {mediaID}}.Encode(), &series)
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +116,7 @@ func (s *Service) Media(ctx context.Context, name, mediaID string) ([]Content, e
 
 func (s *Service) movies(ctx context.Context, instance Arr, mediaID string) ([]Content, error) {
 	var movies []Movie
-	resp, err := s.get(ctx, instance, fmt.Sprintf("api/v3/movie?tmdbId=%s", mediaID), &movies)
+	resp, err := s.get(ctx, instance, "api/v3/movie?"+url.Values{"tmdbId": {mediaID}}.Encode(), &movies)
 	if err != nil {
 		return nil, err
 	}
