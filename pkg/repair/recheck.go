@@ -9,8 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/google/uuid"
+	"uuid"
 
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/storage"
@@ -86,7 +85,7 @@ func (r *Service) RecheckMedia(ctx context.Context, arrName, mediaID string, fix
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	run := &storage.RepairRun{
-		ID:        uuid.NewString(),
+		ID:        uuid.New().String(),
 		Trigger:   storage.RepairTriggerManual,
 		Status:    storage.RepairRunRunning,
 		Stage:     storage.RepairStageSelecting,

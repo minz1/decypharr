@@ -117,7 +117,7 @@ func (c *Config) applyDebridEnvVars() {
 		if proxy := getEnv(prefix + "PROXY"); proxy != "" {
 			c.Debrids[i].Proxy = proxy
 		}
-		for j := 0; j < 20; j++ {
+		for j := range 20 {
 			dkey := getEnv(fmt.Sprintf("DEBRIDS__%d__DOWNLOAD_API_KEYS__%d", i, j))
 			if dkey == "" {
 				break

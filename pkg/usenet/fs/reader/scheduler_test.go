@@ -78,15 +78,13 @@ func TestFetchSchedulerCloseSettlesAcceptedTasks(t *testing.T) {
 	start := make(chan struct{})
 	var submitters sync.WaitGroup
 	for range 256 {
-		submitters.Add(1)
-		go func() {
-			defer submitters.Done()
+		submitters.Go(func() {
 			<-start
 			if scheduler.submit(context.Background(), priorityPrefetch,
 				func() { settled.Add(1) }, func() { settled.Add(1) }) {
 				accepted.Add(1)
 			}
-		}()
+		})
 	}
 	close(start)
 	done := make(chan struct{})

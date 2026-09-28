@@ -270,7 +270,7 @@ func (c *Client) handoffSlot(pp *ProviderPool) bool {
 	}
 	c.waitMu.Lock()
 	defer c.waitMu.Unlock()
-	for workload := WorkloadStreamDemand; workload < workloadCount; workload++ {
+	for workload := range workloadCount {
 		for w := c.waiters[workload].head; w != nil; w = w.next {
 			if !slices.Contains(w.pools, pp) {
 				continue
@@ -290,7 +290,7 @@ func (c *Client) queueSnapshot() ([workloadCount]int, [workloadCount]uint64) {
 	now := nanotimeNow()
 	var waiting [workloadCount]int
 	var oldestWaitNS [workloadCount]uint64
-	for workload := WorkloadStreamDemand; workload < workloadCount; workload++ {
+	for workload := range workloadCount {
 		waiting[workload] = c.waiters[workload].len
 		for w := c.waiters[workload].head; w != nil; w = w.next {
 			if w.started <= 0 {

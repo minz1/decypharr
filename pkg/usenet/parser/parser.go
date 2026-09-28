@@ -5,12 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+	"uuid"
 
-	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
@@ -412,9 +413,7 @@ func (p *NZBParser) mergeObfuscatedRarGroups(groups map[string]*FileGroup) map[s
 		for _, group := range singleFileRarGroups {
 			mergedGroup.articleObserved = mergedGroup.articleObserved || group.articleObserved
 			mergedGroup.Files = append(mergedGroup.Files, group.Files...)
-			for key, meta := range group.fileMeta {
-				mergedGroup.fileMeta[key] = meta
-			}
+			maps.Copy(mergedGroup.fileMeta, group.fileMeta)
 			for g := range group.Groups {
 				mergedGroup.Groups[g] = struct{}{}
 			}

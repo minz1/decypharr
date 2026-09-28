@@ -166,10 +166,7 @@ func PrefetchAheadSegments(readAheadBytes int64, segments []SegmentMeta) int {
 	if len(segments) > 0 && segments[0].Bytes > 0 {
 		segBytes = segments[0].Bytes
 	}
-	ahead := max(int(readAheadBytes/segBytes), minAhead)
-	if ahead > maxAhead {
-		ahead = maxAhead
-	}
+	ahead := min(max(int(readAheadBytes/segBytes), minAhead), maxAhead)
 	return ahead
 }
 

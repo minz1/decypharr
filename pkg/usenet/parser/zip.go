@@ -293,7 +293,7 @@ func (p *ZIPParser) parseCentralDirectoryEntries(data []byte, totalEntries int64
 
 func (p *ZIPParser) parseCentralDirectoryReader(reader io.Reader, totalEntries int64) ([]*ZIPFileEntry, error) {
 	files := make([]*ZIPFileEntry, 0, min(totalEntries, int64(1024)))
-	for i := int64(0); i < totalEntries; i++ {
+	for i := range totalEntries {
 		file, err := p.parseCentralDirEntry(reader)
 		if err != nil {
 			return nil, fmt.Errorf("parse central directory entry %d of %d: %w", i+1, totalEntries, err)

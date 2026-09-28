@@ -108,9 +108,7 @@ func TestPlaybackUnderPoolPressure(t *testing.T) {
 			worst := make([]time.Duration, tc.streams)
 			start := time.Now()
 			for s := range tc.streams {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
+				wg.Go(func() {
 					p := make([]byte, 128*1024)
 					pace := time.Duration(float64(len(p)) / playbackBytesPerSec * float64(time.Second))
 					next := time.Now()
@@ -128,7 +126,7 @@ func TestPlaybackUnderPoolPressure(t *testing.T) {
 							worst[s] = d
 						}
 					}
-				}()
+				})
 			}
 			wg.Wait()
 			elapsed := time.Since(start)

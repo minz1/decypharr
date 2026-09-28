@@ -377,11 +377,9 @@ func New() (*Usenet, error) {
 	}
 
 	// Start background cleanup for idle sessions
-	u.cleanupWg.Add(1)
-	go func() {
-		defer u.cleanupWg.Done()
+	u.cleanupWg.Go(func() {
 		u.cleanupIdleFS()
-	}()
+	})
 
 	return u, nil
 }
@@ -781,11 +779,9 @@ func (u *Usenet) Close() error {
 		u.fs.Clear()
 		var cleanup sync.WaitGroup
 		for _, entry := range entries {
-			cleanup.Add(1)
-			go func() {
-				defer cleanup.Done()
+			cleanup.Go(func() {
 				entry.cleanup()
-			}()
+			})
 		}
 		cleanup.Wait()
 		if u.fetchScheduler != nil {

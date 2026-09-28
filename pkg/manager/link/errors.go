@@ -226,8 +226,7 @@ func ClassifyTransportError(err error) *Error {
 		errors.Is(err, syscall.ECONNREFUSED):
 		return NewRetryableError(err, "connection")
 	}
-	var netErr net.Error
-	if errors.As(err, &netErr) {
+	if _, ok := errors.AsType[net.Error](err); ok {
 		return NewRetryableError(err, "network")
 	}
 	return NewRetryableError(err, "transport")
@@ -257,8 +256,7 @@ func IsLinkError(err error) bool {
 
 // GetLinkError extracts a LinkError from an error chain
 func GetLinkError(err error) *Error {
-	var linkErr *Error
-	if errors.As(err, &linkErr) {
+	if linkErr, ok := errors.AsType[*Error](err); ok {
 		return linkErr
 	}
 	return nil

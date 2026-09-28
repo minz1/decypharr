@@ -415,7 +415,7 @@ func TestDiscardSubBlockFreesFullyTrimmedBlocks(t *testing.T) {
 
 	// Trim block 0 in quarters; it stays resident until the last quarter.
 	const q = 256 << 10
-	for i := int64(0); i < 3; i++ {
+	for i := range int64(3) {
 		if err := b.Discard(i*q, q); err != nil {
 			t.Fatal(err)
 		}
@@ -517,7 +517,7 @@ func TestConcurrentStreamWorkload(t *testing.T) {
 		b := newTestBuffer(t, p, cfg)
 
 		work := make(chan int64, regions)
-		for i := 0; i < regions; i++ {
+		for i := range regions {
 			work <- int64(i) * regionSize
 		}
 		close(work)
@@ -525,10 +525,8 @@ func TestConcurrentStreamWorkload(t *testing.T) {
 		done := make(chan int64, regions)
 
 		var wg sync.WaitGroup
-		for w := 0; w < writers; w++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+		for range writers {
+			wg.Go(func() {
 				buf := make([]byte, regionSize)
 				for off := range work {
 					fillPattern(buf, off)
@@ -546,14 +544,12 @@ func TestConcurrentStreamWorkload(t *testing.T) {
 					}
 					written <- off
 				}
-			}()
+			})
 		}
 		// Readers verify each completed region exactly once.
 		var rg sync.WaitGroup
-		for r := 0; r < 4; r++ {
-			rg.Add(1)
-			go func() {
-				defer rg.Done()
+		for range 4 {
+			rg.Go(func() {
 				buf := make([]byte, regionSize)
 				for off := range written {
 					if _, err := b.ReadAt(buf, off); err != nil {
@@ -566,20 +562,18 @@ func TestConcurrentStreamWorkload(t *testing.T) {
 					}
 					done <- off
 				}
-			}()
+			})
 		}
 		// Discarder reclaims fully-consumed regions concurrently with the rest.
 		var dg sync.WaitGroup
-		dg.Add(1)
-		go func() {
-			defer dg.Done()
+		dg.Go(func() {
 			for off := range done {
 				if err := b.Discard(off, regionSize); err != nil && !errors.Is(err, ErrClosed) {
 					t.Errorf("Discard(%d): %v", off, err)
 					return
 				}
 			}
-		}()
+		})
 
 		wg.Wait()
 		close(written)

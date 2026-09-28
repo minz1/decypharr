@@ -2,6 +2,7 @@ package manifest
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -298,9 +299,7 @@ func decodeLegacy(t *testing.T, source string) *Manifest {
 			Bytes:             legacy.Bytes,
 		},
 	}
-	for key, value := range legacy.Meta {
-		result.Metadata[key] = value
-	}
+	maps.Copy(result.Metadata, legacy.Meta)
 	for fileIndex, legacyFile := range legacy.Files {
 		segments := make([]Segment, len(legacyFile.Segments))
 		for segmentIndex, legacySegment := range legacyFile.Segments {

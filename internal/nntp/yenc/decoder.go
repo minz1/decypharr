@@ -3,6 +3,7 @@
 package yenc
 
 import (
+	"fmt"
 	"io"
 
 	"github.com/mnightingale/rapidyenc"
@@ -92,6 +93,11 @@ func (d *BodyDecoder) Next() (BodyResult, error) {
 		return BodyResult{}, err
 	}
 	m := resp.Metadata
+	// rapidyenc accepts multiline text (HELP, LIST) without a payload, so an
+	// article body carrying neither yEnc nor UU data is flagged here.
+	if err == nil && m.Format == rapidyenc.FormatUnknown && (m.StatusCode == 220 || m.StatusCode == 222) {
+		err = fmt.Errorf("article body has no yEnc data: %w", ErrDataMissing)
+	}
 	return BodyResult{
 		Data:       resp.Data,
 		StatusCode: m.StatusCode,

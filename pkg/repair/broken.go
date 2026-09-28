@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"uuid"
 
-	"github.com/google/uuid"
 	"github.com/puzpuzpuz/xsync/v4"
 
 	"github.com/sirrobot01/decypharr/pkg/storage"
@@ -103,7 +103,7 @@ func (r *Service) FixBroken(ctx context.Context, names []string) (*storage.Repai
 		source = fmt.Sprintf("fix-broken:%d", wantedCount)
 	}
 	run := &storage.RepairRun{
-		ID:        uuid.NewString(),
+		ID:        uuid.New().String(),
 		Trigger:   storage.RepairTriggerManual,
 		Status:    storage.RepairRunRunning,
 		Stage:     storage.RepairStageRepairing,
@@ -173,7 +173,7 @@ func (r *Service) ClearBroken(ctx context.Context, names []string) (*storage.Rep
 		source = fmt.Sprintf("clear-broken:%d", wantedCount)
 	}
 	run := &storage.RepairRun{
-		ID:        uuid.NewString(),
+		ID:        uuid.New().String(),
 		Trigger:   storage.RepairTriggerManual,
 		Status:    storage.RepairRunRunning,
 		Stage:     storage.RepairStageRepairing,

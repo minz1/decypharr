@@ -456,7 +456,7 @@ func (ad *AllDebrid) restartTorrent(torrentID string) error {
 	if err != nil {
 		return err
 	}
-	defer request.DrainAndClose(resp.Body)
+	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("alldebrid API error: Status: %d", resp.StatusCode)
@@ -600,7 +600,7 @@ func (ad *AllDebrid) CheckFile(ctx context.Context, _, link string) error {
 	if err != nil {
 		return err
 	}
-	defer request.DrainAndClose(resp.Body)
+	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("alldebrid API error: Status: %d", resp.StatusCode)

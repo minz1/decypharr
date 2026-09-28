@@ -1264,7 +1264,7 @@ func (c *Client) Stats() map[string]any {
 
 	waiting, oldestWaitNS := c.queueSnapshot()
 	admissionStats := make(map[string]any, workloadCount)
-	for workload := WorkloadStreamDemand; workload < workloadCount; workload++ {
+	for workload := range workloadCount {
 		admissionStats[workload.String()] = c.admission[workload].snapshot().stats(waiting[workload], oldestWaitNS[workload])
 	}
 	poolStats := map[string]any{

@@ -81,10 +81,7 @@ func (fh *Handle) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadRe
 // readFromStaticContent handles static content
 func (fh *Handle) readFromStaticContent(offset, size int64) []byte {
 	content := fh.content
-	end := offset + size
-	if end > int64(len(content)) {
-		end = int64(len(content))
-	}
+	end := min(offset+size, int64(len(content)))
 	if offset >= int64(len(content)) {
 		return []byte{}
 	}

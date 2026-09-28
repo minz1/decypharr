@@ -25,10 +25,7 @@ func (r *chunkReader) Read(p []byte) (int, error) {
 	if r.served >= r.total {
 		return 0, io.EOF
 	}
-	n := r.readSize
-	if n > len(p) {
-		n = len(p)
-	}
+	n := min(r.readSize, len(p))
 	if n > r.total-r.served {
 		n = r.total - r.served
 	}

@@ -8,8 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
-
-	"github.com/google/uuid"
+	"uuid"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/notifications"
@@ -57,7 +56,7 @@ func (r *Service) runSweep(trigger storage.RepairRunTrigger, opts RunOptions) (s
 		sourceParts = append(sourceParts, "protocol-"+scope)
 	}
 	run := &storage.RepairRun{
-		ID:        uuid.NewString(),
+		ID:        uuid.New().String(),
 		Trigger:   trigger,
 		Status:    storage.RepairRunRunning,
 		Stage:     storage.RepairStageSelecting,

@@ -856,10 +856,7 @@ func sampleIndices(total, percent int) []int {
 		return out
 	}
 
-	targetCount := max((total*percent)/100, 2)
-	if targetCount > total {
-		targetCount = total
-	}
+	targetCount := min(max((total*percent)/100, 2), total)
 
 	out := make([]int, 0, targetCount)
 	out = append(out, 0)

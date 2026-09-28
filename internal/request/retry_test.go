@@ -36,7 +36,7 @@ func TestRetryPolicyPreservesUnlistedProviderStatus(t *testing.T) {
 			}
 			if explicit {
 				if err == nil {
-					DrainAndClose(resp.Body)
+					_ = resp.Body.Close()
 					t.Fatal("configured retry did not reach its limit")
 				}
 				return
@@ -44,7 +44,7 @@ func TestRetryPolicyPreservesUnlistedProviderStatus(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer DrainAndClose(resp.Body)
+			defer resp.Body.Close()
 			body, err := io.ReadAll(resp.Body)
 			if err != nil || resp.StatusCode != 509 || string(body) != `{"error":"active_downloads_limit"}` {
 				t.Fatalf("response = %d %q, error = %v", resp.StatusCode, body, err)

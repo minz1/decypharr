@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"net"
+	"slices"
 	"testing"
 	"time"
 
@@ -180,8 +181,8 @@ func TestHandoffOrdersEveryWorkloadClass(t *testing.T) {
 	}
 	// Register in reverse priority order to prove arrival time cannot override
 	// the workload ordering.
-	for i := len(ordered) - 1; i >= 0; i-- {
-		c.register(ordered[i])
+	for _, o := range slices.Backward(ordered) {
+		c.register(o)
 	}
 	for i, want := range ordered {
 		if i == 0 {
@@ -205,7 +206,7 @@ func TestHandoffOrdersEveryWorkloadClass(t *testing.T) {
 	if held := len(pp.slots); held != 0 {
 		t.Fatalf("slot leaked after handoffs: %d held", held)
 	}
-	for workload := WorkloadStreamDemand; workload < workloadCount; workload++ {
+	for workload := range workloadCount {
 		if waiting := pp.waiting[workload]; waiting != 0 {
 			t.Fatalf("%s waiting count = %d, want 0", workload, waiting)
 		}

@@ -12,11 +12,11 @@
     {
       packages = forAllSystems (system:
         let pkgs = nixpkgs.legacyPackages.${system}; in {
-          default = pkgs.buildGoModule {
+          default = pkgs.buildGo127Module {
             pname = "decypharr";
             version = "2.3-minz";
             src = ./.;
-            vendorHash = "sha256-CqgOMvczJ8zgGUhv/KrU4owRnSk6b/5OB+EKo9U4hqI=";
+            vendorHash = "sha256-KWGb7FEhU8Bdi6AtqkKaGo9T6XGbHpRokWV9g/olw0g=";
             subPackages = [ "." ];
             ldflags = [ "-s" "-w" ];
             nativeBuildInputs = [ pkgs.pkg-config pkgs.makeBinaryWrapper ];
