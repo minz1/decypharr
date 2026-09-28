@@ -40,28 +40,7 @@ func (c *Config) applyEnvOverrides() {
 	if val := getEnv("USE_AUTH"); val != "" {
 		c.UseAuth = parseBool(val)
 	}
-	// Token-only auth, for headless deployments that never open the web UI.
-	// Both apply to the in-memory auth only; they must run after USE_AUTH
-	// because GetAuth returns nil while auth is disabled.
-	if val := getEnv("AUTH_TOKEN_ONLY"); val != "" {
-		if auth := c.GetAuth(); auth != nil {
-			auth.TokenOnly = parseBool(val)
-		}
-	}
-	if val := getEnv("API_TOKEN"); val != "" {
-		if auth := c.GetAuth(); auth != nil {
-			auth.APIToken = val
-		}
-	}
-	// setDefaults mints the token, but it ran before these overrides. Mint one
-	// here when the environment turned on token-only auth, or the mode would
-	// have no credential and would fall back to open registration.
-	if auth := c.GetAuth(); auth != nil && auth.TokenOnly && auth.APIToken == "" {
-		if token, err := GenerateAPIToken(); err == nil {
-			auth.APIToken = token
-			_ = c.SaveAuth(auth)
-		}
-	}
+	c.applyAuthEnvVars()
 
 	// Manager settings
 	if val := getEnv("DOWNLOAD_FOLDER"); val != "" {
@@ -69,6 +48,13 @@ func (c *Config) applyEnvOverrides() {
 	}
 	if val := getEnv("REFRESH_INTERVAL"); val != "" {
 		c.RefreshInterval = val
+	}
+	// nix/module.nix exports MAX_DOWNLOADS (always, "0" when unset), so it is
+	// honored as an alias but only a positive value overrides the config.
+	if val := getEnv("MAX_DOWNLOADS"); val != "" {
+		if v, err := strconv.Atoi(val); err == nil && v > 0 {
+			c.MaxActiveDownloads = v
+		}
 	}
 	if val := getEnv("MAX_ACTIVE_DOWNLOADS"); val != "" {
 		if v, err := strconv.Atoi(val); err == nil {
@@ -167,6 +153,39 @@ func (c *Config) applyEnvOverrides() {
 		}
 		if token := getEnv(prefix + "TOKEN"); token != "" {
 			c.Arrs[i].Token = token
+		}
+	}
+}
+
+// applyAuthEnvVars applies token-only auth, for headless deployments that
+// never open the web UI. The overrides live in the in-memory c.Auth only; they
+// must run after USE_AUTH because GetAuth returns nil while auth is disabled.
+//
+// GetAuth returns a copy, so the overrides are applied to c.Auth itself —
+// editing the copy silently dropped them and left a token-only install with
+// open registration.
+func (c *Config) applyAuthEnvVars() {
+	tokenOnly, apiToken := getEnv("AUTH_TOKEN_ONLY"), getEnv("API_TOKEN")
+	if tokenOnly == "" && apiToken == "" {
+		return
+	}
+	c.Auth = c.GetAuth() // loads auth.json while c.Auth is still unset
+	if c.Auth == nil {
+		return
+	}
+	if tokenOnly != "" {
+		c.Auth.TokenOnly = parseBool(tokenOnly)
+	}
+	if apiToken != "" {
+		c.Auth.APIToken = apiToken
+	}
+	// setDefaults mints the token, but it ran before these overrides. Mint one
+	// here when the environment turned on token-only auth, or the mode would
+	// have no credential and would fall back to open registration.
+	if c.Auth.TokenOnly && c.Auth.APIToken == "" {
+		if token, err := GenerateAPIToken(); err == nil {
+			c.Auth.APIToken = token
+			_ = c.SaveAuth(c.Auth)
 		}
 	}
 }
