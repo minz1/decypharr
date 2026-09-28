@@ -76,17 +76,7 @@ func (p *SevenZParser) Process(ctx context.Context, group *FileGroup, password s
 		return nil, fmt.Errorf("failed to list files with offsets: %w", err)
 	}
 
-	// Separate RAR files from non-RAR files
-	var rarFiles []sevenzip.FileInfo
-	var nonRARFiles []sevenzip.FileInfo
-
-	for _, file := range fileList {
-		if isRARFile(file.Name) {
-			rarFiles = append(rarFiles, file)
-		} else {
-			nonRARFiles = append(nonRARFiles, file)
-		}
-	}
+	rarFiles, nonRARFiles := splitStreamable7zEntries(fileList)
 
 	var files []*storage.NZBFile
 
@@ -138,7 +128,7 @@ func (p *SevenZParser) Process(ctx context.Context, group *FileGroup, password s
 			Name:         name,
 			InternalPath: internal,
 			Size:         int64(file.Size),
-			IsStored:     !file.Compressed,
+			IsStored:     true,
 			Groups:       getGroupsList(group.Groups),
 			Segments:     segments,
 			Password:     password,
@@ -364,6 +354,25 @@ func (p *SevenZParser) buildSegmentsForRARFile(
 	}
 
 	return fileSegments, nil
+}
+
+// splitStreamable7zEntries keeps only entries whose bytes sit verbatim in the
+// archive (copy coder, no AES) and separates embedded RAR volumes from plain
+// files. Compressed or encrypted entries would otherwise be served as raw
+// packed/cipher bytes.
+func splitStreamable7zEntries(files []sevenzip.FileInfo) ([]sevenzip.FileInfo, []sevenzip.FileInfo) {
+	var rarFiles, plainFiles []sevenzip.FileInfo
+	for _, file := range files {
+		if file.Compressed || file.Encrypted {
+			continue
+		}
+		if isRARFile(file.Name) {
+			rarFiles = append(rarFiles, file)
+		} else {
+			plainFiles = append(plainFiles, file)
+		}
+	}
+	return rarFiles, plainFiles
 }
 
 // isRARFile checks if a filename is a RAR file.
