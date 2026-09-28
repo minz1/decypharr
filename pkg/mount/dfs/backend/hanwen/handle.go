@@ -96,10 +96,7 @@ func (fh *Handle) Release(ctx context.Context) syscall.Errno {
 	}
 
 	if fh.streamFile != nil {
-		fh.streamFile.Close()
-		if fh.file != nil && fh.file.vfs != nil {
-			fh.file.vfs.ReleaseFile(fh.info)
-		}
+		_ = fh.streamFile.Close() // releases the cache item's open reference; never fails
 	}
 
 	return 0

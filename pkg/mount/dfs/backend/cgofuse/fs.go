@@ -304,12 +304,12 @@ func (f *FS) Read(path string, buff []byte, off int64, fh uint64) int {
 }
 
 // Release closes a file handle.
-func (f *FS) Release(path string, fh uint64) int {
-	handle := f.handles.Get(fh)
-	if handle != nil {
+func (f *FS) Release(_ string, fh uint64) int {
+	// Take makes the release exactly-once even when the kernel's Release
+	// races Destroy's CloseAll.
+	if handle, ok := f.handles.Take(fh); ok {
 		f.releaseHandleResources(handle)
 	}
-	f.handles.Delete(fh)
 	return 0
 }
 
@@ -464,12 +464,12 @@ func (f *FS) releaseHandleResources(handle *FileHandle) {
 		return
 	}
 
-	if handle.reader != nil && handle.info != nil {
+	// The reader stays set: a Read racing this release sees a closed file
+	// and fails cleanly instead of racing a nil write.
+	if handle.reader != nil {
 		if err := handle.reader.Close(); err != nil && !customerror.IsSilentError(err) {
 			f.logger.Debug().Err(err).Msg("Failed to close VFS reader")
 		}
-		f.vfs.ReleaseFile(handle.info)
-		handle.reader = nil
 	}
 }
 
@@ -496,8 +496,9 @@ func NewHandleManager() *HandleManager {
 
 // Create creates a new handle.
 func (h *HandleManager) Create(info *manager.FileInfo, reader vfs.File) uint64 {
-	fh := h.nextFH.Load()
-	h.nextFH.Add(1)
+	// One atomic step: a Load-then-Add pair hands concurrent opens the same
+	// ID, and the second Store silently orphans the first handle's reader.
+	fh := h.nextFH.Add(1) - 1
 	h.handles.Store(fh, &FileHandle{
 		info:   info,
 		reader: reader,
@@ -514,18 +515,18 @@ func (h *HandleManager) Get(fh uint64) *FileHandle {
 	return fhi
 }
 
-// Delete removes a handle.
-func (h *HandleManager) Delete(fh uint64) {
-	h.handles.Delete(fh)
+// Take removes a handle and returns it. Only one caller ever gets a given
+// handle back, so its resources are released exactly once.
+func (h *HandleManager) Take(fh uint64) (*FileHandle, bool) {
+	return h.handles.LoadAndDelete(fh)
 }
 
 // CloseAll closes all handles.
 func (h *HandleManager) CloseAll(cleanup func(*FileHandle)) {
-	h.handles.Range(func(key uint64, handle *FileHandle) bool {
-		if cleanup != nil {
+	h.handles.Range(func(key uint64, _ *FileHandle) bool {
+		if handle, ok := h.Take(key); ok && cleanup != nil {
 			cleanup(handle)
 		}
-		h.handles.Delete(key)
 		return true
 	})
 }

@@ -14,7 +14,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/puzpuzpuz/xsync/v4"
@@ -84,6 +83,8 @@ type Cache struct {
 	lastSpeedBytes  atomic.Int64 // bytes at last speed sample
 	lastSpeedTime   atomic.Int64 // unix nano at last speed sample
 	circuitBreakers atomic.Int32 // count of items with open circuit breakers
+	totalFiles      atomic.Int32 // items that went from zero to one open handle
+	activeFiles     atomic.Int32 // items with at least one open handle
 }
 
 type candidateEntry struct {
@@ -816,16 +817,12 @@ func (c *Cache) evict() cleanupRunSummary {
 	// Safety net: if the filesystem itself is critically low on free space,
 	// force totalSize above threshold so IsOverBudget() returns true regardless
 	// of what our byte-counting says. Catches external writes or tracking drift.
-	if c.threshold > 0 {
-		var stat syscall.Statfs_t
-		if err := syscall.Statfs(c.config.CacheDir, &stat); err == nil {
-			free := int64(stat.Bavail) * stat.Bsize
-			if free < minCacheFreeBytes && totalSize < c.threshold {
-				c.logger.Warn().
-					Int64("free_bytes", free).
-					Msg("cache filesystem critically low, forcing over-budget")
-				totalSize = c.threshold + 1
-			}
+	if c.threshold > 0 && totalSize < c.threshold {
+		if free, err := freeDiskBytes(c.config.CacheDir); err == nil && free < minCacheFreeBytes {
+			c.logger.Warn().
+				Uint64("free_bytes", free).
+				Msg("cache filesystem critically low, forcing over-budget")
+			totalSize = c.threshold + 1
 		}
 	}
 
@@ -1243,6 +1240,10 @@ func (item *CacheItem) Open() bool {
 			return false
 		}
 		if item.opens.CompareAndSwap(n, n+1) {
+			if n == 0 && item.cache != nil {
+				item.cache.totalFiles.Add(1)
+				item.cache.activeFiles.Add(1)
+			}
 			item.touch()
 			return true
 		}
@@ -1272,6 +1273,9 @@ func (item *CacheItem) Release() {
 		// janitor claim, resurrecting an item that is being closed.
 		item.opens.Add(1)
 		return
+	}
+	if item.cache != nil {
+		item.cache.activeFiles.Add(-1)
 	}
 	// Last handle closed: stop in-flight downloads so we don't keep stale
 	// downloader goroutines active after the file is no longer in use.
