@@ -333,13 +333,16 @@ func buildPools(providers []config.UsenetProvider) (map[string]*ProviderPool, []
 
 // NewClient creates a new connection manager.
 func NewClient(cfg *config.Config) (*Client, error) {
-	providers := cfg.Usenet.Providers
+	// Clone: sorting and normalizing below must not mutate the shared config,
+	// which other goroutines read concurrently.
+	providers := slices.Clone(cfg.Usenet.Providers)
 	if len(providers) == 0 {
 		return nil, errors.New("no NNTP providers configured")
 	}
 
-	// Sort providers by priority (lower number = higher priority)
-	slices.SortFunc(providers, func(a, b config.UsenetProvider) int {
+	// Sort providers by priority (lower number = higher priority); stable so
+	// equal priorities keep their configured order.
+	slices.SortStableFunc(providers, func(a, b config.UsenetProvider) int {
 		return cmp.Compare(a.Priority, b.Priority)
 	})
 
