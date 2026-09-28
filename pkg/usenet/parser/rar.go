@@ -580,7 +580,10 @@ func (p *RARParser) readRAR5Header(r *bytes.Reader) (*rar5HeaderData, int, int64
 		if readVIntErr != nil {
 			return nil, 0, 0, readVIntErr
 		}
-		dataAreaSize = int64(dataSize)
+		var sizeErr error
+		if dataAreaSize, sizeErr = rar5Size(dataSize); sizeErr != nil {
+			return nil, 0, 0, sizeErr
+		}
 	}
 
 	// Calculate remaining header data size based on actual bytes consumed
@@ -731,6 +734,13 @@ func (p *RARParser) parseRAR5FileHeader(
 	compressionMethod := (compressionInfo & 0x0380) >> 7
 	isStored := compressionMethod == 0 // Method 0 = no compression
 
+	// An out-of-range (or "unknown") unpacked size is left at 0; Process
+	// then advertises the streamable size instead.
+	uncompressedSize, sizeErr := rar5Size(unpackedSize)
+	if sizeErr != nil {
+		uncompressedSize = 0
+	}
+
 	encryption, err := parseRAR5Extra(data[baseEnd:], password)
 	if err != nil {
 		return nil
@@ -738,7 +748,7 @@ func (p *RARParser) parseRAR5FileHeader(
 
 	return &RARFileEntry{
 		Name:             filename,
-		UncompressedSize: int64(unpackedSize),
+		UncompressedSize: uncompressedSize,
 		PackedSize:       packedSize,
 		DataOffset:       dataOffset,
 		IsStored:         isStored,
