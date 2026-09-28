@@ -33,7 +33,7 @@ func (m *Manager) syncTorrents(ctx context.Context) {
 		Msg("Initial sync of torrents from debrid clients completed")
 }
 
-// Refresh configuration constants
+// Refresh configuration constants.
 const (
 	refreshBatchSize       = 500
 	refreshWriteBatchSize  = 50
@@ -62,7 +62,7 @@ func (m *Manager) refreshTorrents(ctx context.Context, provider string, debridCl
 	return err
 }
 
-// doRefreshTorrents performs the actual refresh logic
+// doRefreshTorrents performs the actual refresh logic.
 func (m *Manager) doRefreshTorrents(_ context.Context, provider string, debridClient debrid.Client) error {
 	remote, err := debridClient.GetTorrents()
 	if err != nil {
@@ -121,7 +121,7 @@ func (m *Manager) doRefreshTorrents(_ context.Context, provider string, debridCl
 	return nil
 }
 
-// detectTorrentChanges streams through cached entries and detects what changed
+// detectTorrentChanges streams through cached entries and detects what changed.
 func (m *Manager) detectTorrentChanges(provider string, remoteTorrentsByHash map[string]*types.Torrent) (
 	newTorrents []*types.Torrent,
 	torrentsToUpdate []*storage.Entry,
@@ -177,7 +177,7 @@ func (m *Manager) detectTorrentChanges(provider string, remoteTorrentsByHash map
 	return newTorrents, torrentsToUpdate, torrentsToDelete, nil
 }
 
-// handleTorrentDeletions processes torrent deletions concurrently
+// handleTorrentDeletions processes torrent deletions concurrently.
 func (m *Manager) handleTorrentDeletions(torrentsToDelete []string) {
 	if len(torrentsToDelete) == 0 {
 		return
@@ -204,7 +204,7 @@ func (m *Manager) handleTorrentDeletions(torrentsToDelete []string) {
 	deleteWg.Wait()
 }
 
-// processNewTorrents processes new torrents with worker pool and batch writing
+// processNewTorrents processes new torrents with worker pool and batch writing.
 func (m *Manager) processNewTorrents(provider string, newTorrents []*types.Torrent) error {
 	workChan := make(chan *types.Torrent, min(refreshWorkChanBuffer, len(newTorrents)))
 	batchChan := make(chan *storage.Entry, refreshBatchChanBuffer)
@@ -260,7 +260,7 @@ func (m *Manager) processNewTorrents(provider string, newTorrents []*types.Torre
 	}
 }
 
-// runBatchWriter collects entries and writes them in batches
+// runBatchWriter collects entries and writes them in batches.
 func (m *Manager) runBatchWriter(batchChan <-chan *storage.Entry, errChan chan<- error) {
 	batch := make([]*storage.Entry, 0, refreshWriteBatchSize)
 	ticker := time.NewTicker(refreshFlushInterval)
@@ -304,7 +304,7 @@ func (m *Manager) runBatchWriter(batchChan <-chan *storage.Entry, errChan chan<-
 	}
 }
 
-// processSyncTorrent processes a single torrent and returns it for batched writing
+// processSyncTorrent processes a single torrent and returns it for batched writing.
 func (m *Manager) processSyncTorrent(t *types.Torrent) (*storage.Entry, error) {
 	// GetReader the debrid client
 	client := m.ProviderClient(t.Debrid)
@@ -412,7 +412,7 @@ func (m *Manager) processSyncTorrent(t *types.Torrent) (*storage.Entry, error) {
 	return mt, nil
 }
 
-// refreshTorrent refreshes a single torrent from its active debrid
+// refreshTorrent refreshes a single torrent from its active debrid.
 func (m *Manager) refreshTorrent(infohash string) (*storage.Entry, error) {
 	torrent, err := m.storage.Get(infohash)
 	if err != nil {
@@ -452,7 +452,7 @@ func (m *Manager) refreshTorrent(infohash string) (*storage.Entry, error) {
 	return entry, nil
 }
 
-// refreshDebridDownloadLinks refreshes download links for a specific debrid service
+// refreshDebridDownloadLinks refreshes download links for a specific debrid service.
 func (m *Manager) refreshDebridDownloadLinks(ctx context.Context, debridName string, client debrid.Client) {
 	select {
 	case <-ctx.Done():
@@ -470,7 +470,7 @@ func (m *Manager) refreshDebridDownloadLinks(ctx context.Context, debridName str
 	}
 }
 
-// isComplete checks if all files in a torrent have download links
+// isComplete checks if all files in a torrent have download links.
 func isComplete(files map[string]types.File) bool {
 	if len(files) == 0 {
 		return false

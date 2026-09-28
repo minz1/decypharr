@@ -127,7 +127,7 @@ func WithHeader(key, value string) DownloadOptions {
 }
 
 func DownloadFile(url string, options ...DownloadOptions) (string, []byte, error) {
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -194,7 +194,7 @@ func getFilenameFromResponse(resp *http.Response, originalURL string) string {
 }
 
 // extractFilenameManual handles non-compliant Content-Disposition headers
-// where filename is not properly quoted (e.g., filename=[Erai-raws]...nzb)
+// where filename is not properly quoted (e.g., filename=[Erai-raws]...nzb).
 func extractFilenameManual(cd string) string {
 	// Try filename*= first (RFC 5987)
 	if _, after, ok := strings.Cut(cd, "filename*="); ok {

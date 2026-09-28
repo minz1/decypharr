@@ -25,10 +25,7 @@ func (r *chunkReader) Read(p []byte) (int, error) {
 	if r.served >= r.total {
 		return 0, io.EOF
 	}
-	n := min(r.readSize, len(p))
-	if n > r.total-r.served {
-		n = r.total - r.served
-	}
+	n := min(min(r.readSize, len(p)), r.total-r.served)
 	r.served += n
 	return n, nil
 }
@@ -167,7 +164,7 @@ func TestCopyBatchedFlushesTailOnEOF(t *testing.T) {
 	buf := make([]byte, downloadBatchSize)
 
 	err := copyBatched(dst, src, 4<<20, buf, nil)
-	if err != io.EOF {
+	if !errors.Is(err, io.EOF) {
 		t.Fatalf("expected io.EOF, got %v", err)
 	}
 	var got int
@@ -203,7 +200,7 @@ func TestCopyBatchedStopsOnWriteError(t *testing.T) {
 	dst := &recordingWriter{err: io.EOF} // skip-stop signal from cacheWriter
 	buf := make([]byte, downloadBatchSize)
 
-	if err := copyBatched(dst, src, 4<<20, buf, func() int64 { return 32 << 10 }); err != io.EOF {
+	if err := copyBatched(dst, src, 4<<20, buf, func() int64 { return 32 << 10 }); !errors.Is(err, io.EOF) {
 		t.Fatalf("expected the writer's io.EOF, got %v", err)
 	}
 }

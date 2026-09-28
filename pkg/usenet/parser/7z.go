@@ -17,14 +17,14 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
-// SevenZParser parses 7z archives from NNTP segments
+// SevenZParser parses 7z archives from NNTP segments.
 type SevenZParser struct {
 	source    ArticleSource
 	logger    zerolog.Logger
 	rarParser *RARParser
 }
 
-// NewSevenZParser creates a new 7z parser
+// NewSevenZParser creates a new 7z parser.
 func NewSevenZParser(source ArticleSource, maxConcurrent int, logger zerolog.Logger) *SevenZParser {
 	return &SevenZParser{
 		source:    source,
@@ -151,7 +151,7 @@ func (p *SevenZParser) Process(ctx context.Context, group *FileGroup, password s
 }
 
 // processRARFilesFromPositions creates volume descriptors for RAR files based on their positions
-// within the 7z archive and passes them to the RAR parser
+// within the 7z archive and passes them to the RAR parser.
 func (p *SevenZParser) processRARFilesFromPositions(
 	ctx context.Context,
 	rarFiles []sevenzip.FileInfo,
@@ -307,7 +307,7 @@ func (p *SevenZParser) processRARFilesFromPositions(
 	return files, nil
 }
 
-// buildSegmentsForRARFile builds the segment list for a file across all RAR volume parts
+// buildSegmentsForRARFile builds the segment list for a file across all RAR volume parts.
 func (p *SevenZParser) buildSegmentsForRARFile(
 	rarEntry *RARFileEntry,
 	rarFileOffsets map[string]int64,
@@ -359,7 +359,7 @@ func (p *SevenZParser) buildSegmentsForRARFile(
 	return fileSegments, nil
 }
 
-// isRARFile checks if a filename is a RAR file
+// isRARFile checks if a filename is a RAR file.
 func isRARFile(filename string) bool {
 	lower := strings.ToLower(filename)
 	return rarMainPattern.MatchString(lower) ||

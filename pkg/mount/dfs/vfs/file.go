@@ -15,7 +15,7 @@ type File interface {
 	Close() error
 }
 
-// StreamingFile is the FUSE file interface for VFS
+// StreamingFile is the FUSE file interface for VFS.
 type StreamingFile struct {
 	item     *CacheItem
 	fileSize int64
@@ -72,12 +72,12 @@ func (f *StreamingFile) ReadAtContext(ctx context.Context, p []byte, off int64) 
 	return n, err
 }
 
-// Size returns the file size
+// Size returns the file size.
 func (f *StreamingFile) Size() int64 {
 	return f.fileSize
 }
 
-// Close closes the file handle
+// Close closes the file handle.
 func (f *StreamingFile) Close() error {
 	if f.closed.Swap(true) {
 		return nil

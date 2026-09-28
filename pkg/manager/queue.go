@@ -63,7 +63,6 @@ func NewTorrentRequest(
 	importType ImportType,
 	skipMultiSeason bool,
 ) *ImportRequest {
-
 	return &ImportRequest{
 		Id:               uuid.New().String(),
 		Status:           "started",

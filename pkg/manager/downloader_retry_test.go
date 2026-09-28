@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync/atomic"
 	"testing"
 
@@ -19,7 +20,7 @@ func TestLocalDownloaderRetriesServiceUnavailable(t *testing.T) {
 	var gets atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Accept-Ranges", "bytes")
-		w.Header().Set("Content-Length", fmt.Sprint(len(payload)))
+		w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 		if r.Method == http.MethodHead {
 			return
 		}

@@ -50,7 +50,7 @@ const (
 	speedSampleInterval = 1 * time.Second
 )
 
-// Cache manages sparse cache files for streaming
+// Cache manages sparse cache files for streaming.
 type Cache struct {
 	config *dfsconfig.FuseConfig
 	logger zerolog.Logger
@@ -132,7 +132,7 @@ type purgeRunSummary struct {
 	result           string
 }
 
-// NewCache creates a new sparse file cache
+// NewCache creates a new sparse file cache.
 func NewCache(ctx context.Context, mgr Backend, config *dfsconfig.FuseConfig) (*Cache, error) {
 	if err := os.MkdirAll(config.CacheDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create cache dir: %w", err)
@@ -191,7 +191,7 @@ func NewCache(ctx context.Context, mgr Backend, config *dfsconfig.FuseConfig) (*
 	return c, nil
 }
 
-// GetItem returns or creates a cache item for the given file
+// GetItem returns or creates a cache item for the given file.
 func (c *Cache) GetItem(entryName, filename string, fileSize int64) (*CacheItem, error) {
 	key := buildCacheKey(entryName, filename)
 
@@ -626,7 +626,7 @@ func (c *Cache) newItem(key, entryName, filename string, fileSize int64) (*Cache
 	return item, nil
 }
 
-// evictLoop runs periodic evict
+// evictLoop runs periodic evict.
 func (c *Cache) evictLoop() {
 	ticker := time.NewTicker(c.config.CacheCleanupInterval)
 	defer ticker.Stop()
@@ -792,7 +792,7 @@ func cleanupResultStats(summary cleanupRunSummary) map[string]any {
 	}
 }
 
-// evict removes old and excess cache items
+// evict removes old and excess cache items.
 func (c *Cache) evict() cleanupRunSummary {
 	c.cleanupMu.Lock()
 	defer c.cleanupMu.Unlock()
@@ -934,7 +934,7 @@ func (c *Cache) PurgeCache() map[string]any {
 	}
 }
 
-// Close shuts down the cache
+// Close shuts down the cache.
 func (c *Cache) Close() error {
 	c.cancel()
 
@@ -1008,7 +1008,7 @@ func (c *Cache) speedSampleLoop() {
 	}
 }
 
-// GetStats returns cache statistics
+// GetStats returns cache statistics.
 func (c *Cache) GetStats() map[string]any {
 	maxSize := c.config.CacheDiskSize
 	totalSize := c.totalSize.Load()
@@ -1200,7 +1200,7 @@ func (item *CacheItem) flushMetadata(force bool) {
 	}
 }
 
-// ItemInfo is persisted to disk
+// ItemInfo is persisted to disk.
 type ItemInfo struct {
 	Size    int64         `json:"size"`
 	Rs      ranges.Ranges `json:"ranges"` // Downloaded regions
@@ -1208,7 +1208,7 @@ type ItemInfo struct {
 	ATime   time.Time     `json:"atime"`
 }
 
-// touch updates access time
+// touch updates access time.
 func (item *CacheItem) touch() {
 	item.metaMu.Lock()
 	item.info.ATime = time.Now()
@@ -1250,7 +1250,7 @@ func (item *CacheItem) isClaimed() bool {
 	return item.opens.Load() < 0
 }
 
-// Release decrements the open count
+// Release decrements the open count.
 func (item *CacheItem) Release() {
 	newCount := item.opens.Add(-1)
 	if newCount > 0 {

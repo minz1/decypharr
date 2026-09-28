@@ -20,7 +20,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/vfs"
 )
 
-// File implements a FUSE file with RFS streaming
+// File implements a FUSE file with RFS streaming.
 type File struct {
 	fs.Inode
 	config    *config.FuseConfig
@@ -35,7 +35,7 @@ var (
 	_ = (fs.NodeGetattrer)((*File)(nil))
 )
 
-// NewFile creates a new file
+// NewFile creates a new file.
 func NewFile(
 	vfsManager *vfs.Manager,
 	config *config.FuseConfig,
@@ -77,7 +77,7 @@ func (f *File) infoForHandle(fh fs.FileHandle) *manager.FileInfo {
 	return f.info.Load()
 }
 
-// Getattr returns file attributes
+// Getattr returns file attributes.
 func (f *File) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	info := f.infoForHandle(fh)
 	if info == nil {
@@ -100,7 +100,7 @@ func (f *File) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut)
 }
 
 // Open creates file handle with VFS or DFS based on configuration
-// Reader is created eagerly here instead of lazily in Read() to surface errors early
+// Reader is created eagerly here instead of lazily in Read() to surface errors early.
 func (f *File) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
 	info := f.info.Load()
 	if info == nil {

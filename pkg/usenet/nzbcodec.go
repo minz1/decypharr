@@ -572,34 +572,34 @@ func decodeSegments(nzb *storage.NZB, counts []int, segMeta, msgIDs []byte) erro
 
 	segs := make([]storage.NZBSegment, total)
 
-	for i := 0; i < total; i++ {
+	for i := range total {
 		v, err := r.varint()
 		if err != nil {
 			return err
 		}
 		segs[i].Number = int(v)
 	}
-	for i := 0; i < total; i++ {
+	for i := range total {
 		if segs[i].Bytes, err = r.varint(); err != nil {
 			return err
 		}
 	}
-	for i := 0; i < total; i++ {
+	for i := range total {
 		if segs[i].StartOffset, err = r.varint(); err != nil {
 			return err
 		}
 	}
-	for i := 0; i < total; i++ {
+	for i := range total {
 		if segs[i].EndOffset, err = r.varint(); err != nil {
 			return err
 		}
 	}
-	for i := 0; i < total; i++ {
+	for i := range total {
 		if segs[i].SegmentDataStart, err = r.varint(); err != nil {
 			return err
 		}
 	}
-	for i := 0; i < total; i++ {
+	for i := range total {
 		idx, err := r.uvarint()
 		if err != nil {
 			return err
@@ -612,7 +612,7 @@ func decodeSegments(nzb *storage.NZB, counts []int, segMeta, msgIDs []byte) erro
 
 	// Message ids alias the msgIDs buffer (no per-id allocation).
 	mr := &byteReader{buf: msgIDs}
-	for i := 0; i < total; i++ {
+	for i := range total {
 		if segs[i].MessageID, err = mr.strAlias(); err != nil {
 			return err
 		}
@@ -818,7 +818,7 @@ func decodeFileMessageIDsSampled(data []byte, filename string, percent int) (ids
 	mr := &byteReader{buf: msgIDs}
 
 	// Skip earlier files' ids without allocating.
-	for i := 0; i < before; i++ {
+	for range before {
 		if err := mr.skip(); err != nil {
 			return nil, 0, err
 		}

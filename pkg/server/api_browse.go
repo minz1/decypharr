@@ -18,7 +18,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
-// BrowseEntry represents a file or folder in the browse view
+// BrowseEntry represents a file or folder in the browse view.
 type BrowseEntry struct {
 	Infohash     string `json:"infohash,omitempty"`
 	Name         string `json:"name"`
@@ -32,7 +32,7 @@ type BrowseEntry struct {
 	Kind         string `json:"kind,omitempty"`
 }
 
-// BrowseResponse is the response for browse requests
+// BrowseResponse is the response for browse requests.
 type BrowseResponse struct {
 	Entries     []BrowseEntry `json:"entries"`
 	Total       int           `json:"total"`
@@ -235,7 +235,7 @@ func (s *Server) handleBrowseGroup(w http.ResponseWriter, r *http.Request) {
 	}, http.StatusOK)
 }
 
-// handleBrowseTorrentFiles returns files in a torrent folder
+// handleBrowseTorrentFiles returns files in a torrent folder.
 func (s *Server) handleBrowseTorrentFiles(w http.ResponseWriter, r *http.Request) {
 	group := utils.PathUnescape(chi.URLParam(r, "group"))
 	torrent := utils.PathUnescape(chi.URLParam(r, "torrent"))
@@ -314,7 +314,7 @@ func (s *Server) handleBrowseTorrentFiles(w http.ResponseWriter, r *http.Request
 	utils.JSONResponse(w, response, http.StatusOK)
 }
 
-// handleDeleteBrowseTorrent deletes a torrent by info hash
+// handleDeleteBrowseTorrent deletes a torrent by info hash.
 func (s *Server) handleDeleteBrowseTorrent(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if id == "" {
@@ -334,7 +334,7 @@ func (s *Server) handleDeleteBrowseTorrent(w http.ResponseWriter, r *http.Reques
 	}, http.StatusOK)
 }
 
-// handleBatchDeleteBrowseTorrents deletes multiple torrents
+// handleBatchDeleteBrowseTorrents deletes multiple torrents.
 func (s *Server) handleBatchDeleteBrowseTorrents(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		IDs []string `json:"ids"`
@@ -363,7 +363,7 @@ func (s *Server) handleBatchDeleteBrowseTorrents(w http.ResponseWriter, r *http.
 	}, http.StatusOK)
 }
 
-// handleDownloadFile proxies file download for both torrents and NZBs
+// handleDownloadFile proxies file download for both torrents and NZBs.
 func (s *Server) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 	torrentName := utils.PathUnescape(chi.URLParam(r, "torrent"))
 	fileName := utils.PathUnescape(chi.URLParam(r, "file"))

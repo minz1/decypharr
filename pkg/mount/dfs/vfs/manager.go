@@ -13,7 +13,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/config"
 )
 
-// Manager manages VFS lifecycle
+// Manager manages VFS lifecycle.
 type Manager struct {
 	manager *manager.Manager
 	cache   *Cache
@@ -28,7 +28,7 @@ type Manager struct {
 	activeFiles atomic.Int32
 }
 
-// fileEntry tracks file metadata
+// fileEntry tracks file metadata.
 type fileEntry struct {
 	item     *CacheItem
 	refCount atomic.Int32
@@ -38,7 +38,7 @@ type fileEntry struct {
 	deleted atomic.Bool
 }
 
-// NewManager creates a new VFS manager
+// NewManager creates a new VFS manager.
 func NewManager(ctx context.Context, mgr *manager.Manager, config *config.FuseConfig) (*Manager, error) {
 	ctx, cancel := context.WithCancel(ctx)
 
@@ -158,7 +158,7 @@ func (m *Manager) retireEntry(key string, entry *fileEntry) {
 	})
 }
 
-// ReleaseFile decrements the reference count
+// ReleaseFile decrements the reference count.
 func (m *Manager) ReleaseFile(info *manager.FileInfo) {
 	key := buildFileKey(info.Parent(), info.Name())
 
@@ -175,7 +175,7 @@ func (m *Manager) ReleaseFile(info *manager.FileInfo) {
 	}
 }
 
-// Close shuts down the manager
+// Close shuts down the manager.
 func (m *Manager) Close() error {
 	m.cancel()
 
@@ -196,7 +196,7 @@ func (m *Manager) Close() error {
 	return nil
 }
 
-// GetStats returns manager statistics
+// GetStats returns manager statistics.
 func (m *Manager) GetStats() map[string]any {
 	stats := map[string]any{
 		"type":         "dfs",

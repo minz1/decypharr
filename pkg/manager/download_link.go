@@ -19,7 +19,7 @@ func (m *Manager) GetDownloadLink(
 	return m.linkService.GetLink(ctx, entry, filename)
 }
 
-// GetDownloadByteRange gets the byte range for a file
+// GetDownloadByteRange gets the byte range for a file.
 func (m *Manager) GetDownloadByteRange(torrentName, filename string) (*[2]int64, error) {
 	entry, err := m.storage.GetEntryItem(torrentName)
 	if err != nil {
@@ -34,7 +34,7 @@ func (m *Manager) GetDownloadByteRange(torrentName, filename string) (*[2]int64,
 	return file.ByteRange, nil
 }
 
-// GetTotalActiveDownloadLinks returns the total number of active download links across all debrids
+// GetTotalActiveDownloadLinks returns the total number of active download links across all debrids.
 func (m *Manager) GetTotalActiveDownloadLinks() int {
 	total := 0
 

@@ -27,7 +27,7 @@ const (
 	ConfigName = "decypharr"
 )
 
-// Manager handles the rclone RC server and provides mount operations
+// Manager handles the rclone RC server and provides mount operations.
 type Manager struct {
 	cmd           *exec.Cmd
 	configDir     string
@@ -62,9 +62,8 @@ type RCResponse struct {
 	Error  string `json:"error,omitempty"`
 }
 
-// NewManager creates a new rclone RC manager
+// NewManager creates a new rclone RC manager.
 func NewManager(manager *manager.Manager) *Manager {
-
 	mainCfg := config.Get()
 	cfg := mainCfg.Mount
 	configDir := filepath.Join(config.GetMainPath(), "rclone")
@@ -112,7 +111,7 @@ func NewManager(manager *manager.Manager) *Manager {
 	return m
 }
 
-// Start starts the rclone RC server
+// Start starts the rclone RC server.
 func (m *Manager) Start(ctx context.Context) error {
 	cfg := config.Get().Mount
 	if m.serverStarted.Load() {
@@ -202,7 +201,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop stops the rclone RC server and unmounts all mounts
+// Stop stops the rclone RC server and unmounts all mounts.
 func (m *Manager) Stop() error {
 	if !m.serverStarted.Load() {
 		return nil
@@ -260,7 +259,7 @@ func (m *Manager) IsMounted() bool {
 	return info != nil && info.Mounted
 }
 
-// Start creates the mount using rclone RC
+// Start creates the mount using rclone RC.
 func (m *Manager) startMount(ctx context.Context) error {
 	// Check if already mounted
 	if m.IsMounted() {
@@ -293,7 +292,7 @@ func (m *Manager) stopMount() {
 	m.logger.Info().Msgf("Successfully unmounted %s", m.getMountInfo().LocalPath)
 }
 
-// IsReady returns true if the RC server is ready
+// IsReady returns true if the RC server is ready.
 func (m *Manager) IsReady() bool {
 	select {
 	case <-m.serverReady:
@@ -303,7 +302,7 @@ func (m *Manager) IsReady() bool {
 	}
 }
 
-// Refresh refreshes directories in the VFS cache
+// Refresh refreshes directories in the VFS cache.
 func (m *Manager) Refresh(dirs []string) error {
 	mountInfo := m.getMountInfo()
 	if mountInfo == nil || !mountInfo.Mounted {
@@ -326,7 +325,7 @@ func (m *Manager) Type() string {
 	return "rclone"
 }
 
-// waitForServer waits for the RC server to become available
+// waitForServer waits for the RC server to become available.
 func (m *Manager) waitForServer() {
 	maxAttempts := 30
 	for range maxAttempts {
@@ -344,7 +343,7 @@ func (m *Manager) waitForServer() {
 	m.logger.Error().Msg("Client RC server not responding - mount operations will be disabled")
 }
 
-// waitForReady waits for the RC server to be ready
+// waitForReady waits for the RC server to be ready.
 func (m *Manager) waitForReady(timeout time.Duration) error {
 	select {
 	case <-m.serverReady:

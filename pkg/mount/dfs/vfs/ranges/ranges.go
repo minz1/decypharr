@@ -7,18 +7,18 @@ import (
 	"sort"
 )
 
-// Range describes a single byte range
+// Range describes a single byte range.
 type Range struct {
 	Pos  int64
 	Size int64
 }
 
-// End returns the end of the Range (exclusive)
+// End returns the end of the Range (exclusive).
 func (r Range) End() int64 {
 	return r.Pos + r.Size
 }
 
-// IsEmpty returns true if the range has no size
+// IsEmpty returns true if the range has no size.
 func (r Range) IsEmpty() bool {
 	return r.Size <= 0
 }
@@ -67,7 +67,7 @@ func merge(new, dst *Range) bool {
 	return true
 }
 
-// coalesce ranges assuming an element has been inserted at i
+// coalesce ranges assuming an element has been inserted at i.
 func (rs *Ranges) coalesce(i int) {
 	ranges := *rs
 	var j int
@@ -167,7 +167,7 @@ func (rs Ranges) Find(r Range) (curr, next Range, present bool) {
 	return intersection, r, true
 }
 
-// FoundRange is returned from FindAll
+// FoundRange is returned from FindAll.
 type FoundRange struct {
 	R       Range
 	Present bool
@@ -191,7 +191,7 @@ func (rs Ranges) FindAllInto(r Range, frs []FoundRange) []FoundRange {
 	return frs
 }
 
-// Present returns whether r can be satisfied by rs
+// Present returns whether r can be satisfied by rs.
 func (rs Ranges) Present(r Range) bool {
 	if r.IsEmpty() {
 		return true
@@ -207,7 +207,7 @@ func (rs Ranges) Present(r Range) bool {
 }
 
 // Intersection works out which ranges out of rs are entirely
-// contained within r and returns a new Ranges
+// contained within r and returns a new Ranges.
 func (rs Ranges) Intersection(r Range) (newRs Ranges) {
 	if len(rs) == 0 {
 		return rs
@@ -223,7 +223,7 @@ func (rs Ranges) Intersection(r Range) (newRs Ranges) {
 	return newRs
 }
 
-// Equal returns true if rs == bs
+// Equal returns true if rs == bs.
 func (rs Ranges) Equal(bs Ranges) bool {
 	if len(rs) != len(bs) {
 		return false
@@ -239,7 +239,7 @@ func (rs Ranges) Equal(bs Ranges) bool {
 	return true
 }
 
-// Size returns the total size of all the segments
+// Size returns the total size of all the segments.
 func (rs Ranges) Size() (size int64) {
 	for _, r := range rs {
 		size += r.Size
@@ -249,7 +249,7 @@ func (rs Ranges) Size() (size int64) {
 
 // FindMissing finds the initial part of r that is not in rs.
 // If r is entirely present in rs then an empty Range will be returned.
-// For all returns rout.End() == r.End()
+// For all returns rout.End() == r.End().
 func (rs Ranges) FindMissing(r Range) (rout Range) {
 	rout = r
 	if r.IsEmpty() {
@@ -331,7 +331,7 @@ func (rs *Ranges) Remove(r Range) {
 	*rs = s
 }
 
-// Clear removes all ranges
+// Clear removes all ranges.
 func (rs *Ranges) Clear() {
 	*rs = (*rs)[:0]
 }

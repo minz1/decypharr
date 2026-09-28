@@ -75,7 +75,7 @@ func benchStreamSequential(b *testing.B, cfg Config) {
 	b.ReportAllocs()
 	b.SetBytes(benchChunk)
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		off := int64(i) * benchChunk
 		if _, err := buf.WriteAt(chunk, off); err != nil {
 			b.Fatal(err)
@@ -138,7 +138,7 @@ func benchStreamContendedReads(b *testing.B, cfg Config) {
 	const readers = 4
 	lats := make([][]time.Duration, readers)
 	for r := range readers {
-		r := r
+
 		wg.Go(func() {
 			rbuf := make([]byte, benchChunk)
 			seed := uint64(r)*2654435761 + 12345
@@ -170,7 +170,7 @@ func benchStreamContendedReads(b *testing.B, cfg Config) {
 	b.ReportAllocs()
 	b.SetBytes(benchChunk)
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		off := frontier.Load()
 		if _, err := buf.WriteAt(chunk, off); err != nil {
 			b.Fatal(err)

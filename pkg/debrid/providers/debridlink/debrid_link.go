@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -94,7 +95,7 @@ func (dl *DebridLink) Logger() zerolog.Logger {
 	return dl.logger
 }
 
-// doGet performs a GET request and unmarshals the response
+// doGet performs a GET request and unmarshals the response.
 func (dl *DebridLink) doGet(endpoint string, queryParams map[string]string, result any) (*http.Response, error) {
 	u, err := url.Parse(dl.Host + endpoint)
 	if err != nil {
@@ -539,8 +540,8 @@ func (dl *DebridLink) getTorrents(page, perPage int) ([]*types.Torrent, error) {
 	var res torrentInfo
 
 	params := map[string]string{
-		"page":    fmt.Sprintf("%d", page),
-		"perPage": fmt.Sprintf("%d", perPage),
+		"page":    strconv.Itoa(page),
+		"perPage": strconv.Itoa(perPage),
 	}
 
 	resp, err := dl.doGet("/seedbox/list", params, &res)
@@ -715,7 +716,7 @@ func (dl *DebridLink) DeleteLink(downloadLink types.DownloadLink) error {
 	return dl.accountsManager.DeleteDownloadLink(downloadLink, dl.deleteDownloadLink)
 }
 
-// SpeedTest measures API latency and download speed using cached links
+// SpeedTest measures API latency and download speed using cached links.
 func (dl *DebridLink) SpeedTest(ctx context.Context) types.SpeedTestResult {
 	result := types.SpeedTestResult{
 		Provider: dl.config.Name,

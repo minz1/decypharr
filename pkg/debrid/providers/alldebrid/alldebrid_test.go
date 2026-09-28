@@ -246,7 +246,7 @@ func testAllDebrid(host string) *AllDebrid {
 
 func TestAvailabilityReportsUnsupported(t *testing.T) {
 	result, err := (&AllDebrid{}).IsAvailable([]string{"hash"})
-	if err != debridTypes.ErrAvailabilityUnsupported || result != nil {
+	if !errors.Is(err, debridTypes.ErrAvailabilityUnsupported) || result != nil {
 		t.Fatalf("IsAvailable = %v, %v", result, err)
 	}
 }

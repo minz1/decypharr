@@ -198,7 +198,7 @@ func (c *Connection) readResponseCodeWithDeadline(timeout time.Duration) (int, [
 	return c.readResponseCode()
 }
 
-// Connection represents an NNTP connection
+// Connection represents an NNTP connection.
 type Connection struct {
 	username, password, address string
 	// pool is the ProviderPool this connection belongs to, set at checkout
@@ -320,7 +320,7 @@ func (c *Connection) ping(timeout time.Duration) error {
 	return nil
 }
 
-// sendCommand sends a command to the NNTP server
+// sendCommand sends a command to the NNTP server.
 func (c *Connection) sendCommand(command string) error {
 	return c.sendCommandArg(command, "")
 }
@@ -356,7 +356,7 @@ func (c *Connection) writeCommandArg(command, arg string) error {
 	return nil
 }
 
-// readResponse reads a response from the NNTP server
+// readResponse reads a response from the NNTP server.
 func (c *Connection) readResponse() (Response, error) {
 	code, message, err := c.readResponseCode()
 	if err != nil {
@@ -394,7 +394,7 @@ func (c *Connection) readResponseCode() (int, []byte, error) {
 	return code, line[4:], nil
 }
 
-// readMultilineResponse reads a multiline response
+// readMultilineResponse reads a multiline response.
 func (c *Connection) readMultilineResponse() (*Response, error) {
 	resp, err := c.readResponse()
 	if err != nil {
@@ -415,7 +415,7 @@ func (c *Connection) readMultilineResponse() (*Response, error) {
 	return &resp, nil
 }
 
-// GetArticle retrieves an article by message ID with proper error classification
+// GetArticle retrieves an article by message ID with proper error classification.
 func (c *Connection) GetArticle(messageID string) (*Article, error) {
 	messageID = FormatMessageID(messageID)
 	if err := c.sendCommandArg("ARTICLE", messageID); err != nil {
@@ -549,7 +549,7 @@ func (c *Connection) GetHeaderPrefix(messageID string, maxSnippet int) (*YencMet
 	return metadataFromResult(res.Meta, snippet), nil
 }
 
-// GetBody retrieves article body by message ID as raw bytes (used by GetHeader)
+// GetBody retrieves article body by message ID as raw bytes (used by GetHeader).
 func (c *Connection) GetBody(messageID string) ([]byte, error) {
 	messageID = FormatMessageID(messageID)
 	if err := c.sendCommandArg("BODY", messageID); err != nil {
@@ -760,7 +760,7 @@ func (c *Connection) DecodeBodyWithBuffer(messageID string, source BodyBuffer) (
 }
 
 // readDotBytes reads dot-terminated NNTP data using textproto.DotReader
-// This matches Python nntplib's efficient buffered approach
+// This matches Python nntplib's efficient buffered approach.
 func (c *Connection) readDotBytes() ([]byte, error) {
 	// Use textproto's DotReader which efficiently handles dot-stuffing
 	// and terminator detection with optimized buffered reading
@@ -779,7 +779,7 @@ func (c *Connection) readDotBytes() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// GetHead retrieves article headers by message ID
+// GetHead retrieves article headers by message ID.
 func (c *Connection) GetHead(messageID string) ([]byte, error) {
 	messageID = FormatMessageID(messageID)
 	if err := c.sendCommandArg("HEAD", messageID); err != nil {
@@ -887,7 +887,7 @@ func (c *Connection) Post(messageID, filename string, body []byte) error {
 	return nil
 }
 
-// Stat retrieves article statistics by message ID with proper error classification
+// Stat retrieves article statistics by message ID with proper error classification.
 func (c *Connection) Stat(messageID string) (articleNumber int, echoedID string, err error) {
 	messageID = FormatMessageID(messageID)
 
@@ -977,7 +977,7 @@ func markStatSuffixError(results []StatResult, start int, err error) {
 	}
 }
 
-// SelectGroup selects a newsgroup and returns group information
+// SelectGroup selects a newsgroup and returns group information.
 func (c *Connection) SelectGroup(groupName string) (*GroupInfo, error) {
 	if err := c.sendCommandArg("GROUP", groupName); err != nil {
 		return nil, NewConnectionError(fmt.Errorf("failed to send GROUP command: %w", err))
@@ -1015,7 +1015,7 @@ func (c *Connection) SelectGroup(groupName string) (*GroupInfo, error) {
 	return groupInfo, nil
 }
 
-// parseArticle parses article data from response lines
+// parseArticle parses article data from response lines.
 func (c *Connection) parseArticle(messageID string, lines []string) (*Article, error) {
 	article := &Article{
 		MessageID: messageID,
@@ -1055,7 +1055,7 @@ func (c *Connection) parseArticle(messageID string, lines []string) (*Article, e
 	return article, nil
 }
 
-// FormatMessageID ensures message ID has proper format
+// FormatMessageID ensures message ID has proper format.
 func FormatMessageID(messageID string) string {
 	messageID = strings.TrimSpace(messageID)
 	if !strings.HasPrefix(messageID, "<") {

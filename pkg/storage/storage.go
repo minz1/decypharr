@@ -158,7 +158,7 @@ func (s *Storage) DiskSize() int64 {
 	return size
 }
 
-// SaveMigrationStatus saves the system migration status
+// SaveMigrationStatus saves the system migration status.
 func (s *Storage) SaveMigrationStatus(status *SystemMigrationStatus) error {
 	pb := SystemMigrationStatusToProto(status)
 	data, err := proto.Marshal(pb)
@@ -168,7 +168,7 @@ func (s *Storage) SaveMigrationStatus(status *SystemMigrationStatus) error {
 	return s.entries.Put("__migration_status__", data, nil)
 }
 
-// GetMigrationStatus retrieves the system migration status
+// GetMigrationStatus retrieves the system migration status.
 func (s *Storage) GetMigrationStatus() (*SystemMigrationStatus, error) {
 	data, err := s.entries.Get("__migration_status__")
 	if err != nil {

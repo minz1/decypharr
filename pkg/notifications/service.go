@@ -8,7 +8,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/config"
 )
 
-// Service manages and dispatches notifications to all configured notifiers
+// Service manages and dispatches notifications to all configured notifiers.
 type Service struct {
 	config    *config.Notifications
 	notifiers []Notifier
@@ -16,7 +16,7 @@ type Service struct {
 	mu        sync.RWMutex
 }
 
-// New creates a new notification service based on the provided configuration
+// New creates a new notification service based on the provided configuration.
 func New(cfg *config.Notifications, logger zerolog.Logger) *Service {
 	s := &Service{
 		config: cfg,
@@ -47,7 +47,7 @@ func (s *Service) initNotifiers() {
 	}
 }
 
-// Notify sends an event to all enabled notifiers asynchronously
+// Notify sends an event to all enabled notifiers asynchronously.
 func (s *Service) Notify(event Event) {
 	if !s.IsEventEnabled(event.Type) {
 		return
@@ -75,17 +75,17 @@ func (s *Service) Notify(event Event) {
 	}
 }
 
-// IsEventEnabled checks if a specific event type is enabled for notifications
+// IsEventEnabled checks if a specific event type is enabled for notifications.
 func (s *Service) IsEventEnabled(eventType config.NotificationEvent) bool {
 	return s.config.IsEventEnabled(eventType)
 }
 
-// IsEnabled returns whether notifications are globally enabled
+// IsEnabled returns whether notifications are globally enabled.
 func (s *Service) IsEnabled() bool {
 	return s.config.Enabled && len(s.notifiers) > 0
 }
 
-// Reload reinitialized notifiers based on current config
+// Reload reinitialized notifiers based on current config.
 func (s *Service) Reload(cfg *config.Notifications) {
 	s.config = cfg
 	s.initNotifiers()

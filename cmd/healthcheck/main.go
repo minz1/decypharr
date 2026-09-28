@@ -16,7 +16,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/config"
 )
 
-// HealthStatus represents the status of various components
+// HealthStatus represents the status of various components.
 type HealthStatus struct {
 	QbitAPI       bool `json:"qbit_api"`
 	WebUI         bool `json:"web_ui"`
@@ -86,7 +86,7 @@ func checkQbitAPI(
 	authMayBeRequired bool,
 ) bool {
 	url := localURL(port, baseUrl, "api/v2/app/version")
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return false
 	}
@@ -108,7 +108,7 @@ func checkWebUI(
 	auth *config.Auth,
 	authMayBeRequired bool,
 ) bool {
-	req, err := http.NewRequestWithContext(ctx, "GET", localURL(port, baseUrl, "version"), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, localURL(port, baseUrl, "version"), nil)
 	if err != nil {
 		return false
 	}

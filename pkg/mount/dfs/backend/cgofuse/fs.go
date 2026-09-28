@@ -20,7 +20,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/vfs"
 )
 
-// FS implements the cgofuse FileSystemInterface
+// FS implements the cgofuse FileSystemInterface.
 type FS struct {
 	fuse.FileSystemBase // Embed base for default implementations
 
@@ -32,7 +32,7 @@ type FS struct {
 	handles *HandleManager
 }
 
-// NewFS creates a new cgofuse filesystem
+// NewFS creates a new cgofuse filesystem.
 func NewFS(vfsManager *vfs.Manager, config *config.FuseConfig, logger zerolog.Logger) *FS {
 	return &FS{
 		vfs:     vfsManager,
@@ -42,18 +42,18 @@ func NewFS(vfsManager *vfs.Manager, config *config.FuseConfig, logger zerolog.Lo
 	}
 }
 
-// Init is called when the filesystem is mounted
+// Init is called when the filesystem is mounted.
 func (f *FS) Init() {
 }
 
-// Destroy is called when the filesystem is unmounted
+// Destroy is called when the filesystem is unmounted.
 func (f *FS) Destroy() {
 	f.handles.CloseAll(func(handle *FileHandle) {
 		f.releaseHandleResources(handle)
 	})
 }
 
-// Statfs returns filesystem statistics
+// Statfs returns filesystem statistics.
 func (f *FS) Statfs(path string, stat *fuse.Statfs_t) int {
 	stat.Bsize = 4096
 	stat.Frsize = 4096
@@ -66,7 +66,7 @@ func (f *FS) Statfs(path string, stat *fuse.Statfs_t) int {
 	return 0
 }
 
-// Getattr returns file/directory attributes
+// Getattr returns file/directory attributes.
 func (f *FS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 	// Root directory
 	if path == "/" {
@@ -112,7 +112,7 @@ func (f *FS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 	return 0
 }
 
-// Readdir reads directory contents
+// Readdir reads directory contents.
 func (f *FS) Readdir(
 	path string,
 	fill func(name string, stat *fuse.Stat_t, ofst int64) bool,
@@ -167,7 +167,7 @@ func (f *FS) Readdir(
 }
 
 // entryStat creates a fuse.Stat_t for a FileInfo entry
-// This is used by Readdir to provide file type information to clients like Samba
+// This is used by Readdir to provide file type information to clients like Samba.
 func (f *FS) entryStat(info *manager.FileInfo) *fuse.Stat_t {
 	stat := &fuse.Stat_t{
 		Uid:     f.config.UID,
@@ -195,13 +195,13 @@ func (f *FS) entryStat(info *manager.FileInfo) *fuse.Stat_t {
 	return stat
 }
 
-// CreateEx is required by fuse.FileSystemOpenEx but this is a read-only filesystem
+// CreateEx is required by fuse.FileSystemOpenEx but this is a read-only filesystem.
 func (f *FS) CreateEx(path string, mode uint32, fi *fuse.FileInfo_t) int {
 	return -fuse.EACCES
 }
 
 // OpenEx opens a file with extended info (implements fuse.FileSystemOpenEx)
-// This allows setting DirectIO which is critical for media playback on Windows
+// This allows setting DirectIO which is critical for media playback on Windows.
 func (f *FS) OpenEx(path string, fi *fuse.FileInfo_t) int {
 	fi.Fh = ^uint64(0)
 
@@ -241,16 +241,15 @@ func (f *FS) OpenEx(path string, fi *fuse.FileInfo_t) int {
 	return 0
 }
 
-// Open opens a file (fallback for non-OpenEx path)
+// Open opens a file (fallback for non-OpenEx path).
 func (f *FS) Open(path string, flags int) (int, uint64) {
 	fi := fuse.FileInfo_t{Flags: flags}
 	errc := f.OpenEx(path, &fi)
 	return errc, fi.Fh
 }
 
-// Read reads from a file
+// Read reads from a file.
 func (f *FS) Read(path string, buff []byte, off int64, fh uint64) int {
-
 	handle := f.handles.Get(fh)
 	if handle == nil {
 		return -fuse.EBADF
@@ -304,9 +303,8 @@ func (f *FS) Read(path string, buff []byte, off int64, fh uint64) int {
 	return n
 }
 
-// Release closes a file handle
+// Release closes a file handle.
 func (f *FS) Release(path string, fh uint64) int {
-
 	handle := f.handles.Get(fh)
 	if handle != nil {
 		f.releaseHandleResources(handle)
@@ -315,9 +313,8 @@ func (f *FS) Release(path string, fh uint64) int {
 	return 0
 }
 
-// Opendir opens a directory
+// Opendir opens a directory.
 func (f *FS) Opendir(path string) (int, uint64) {
-
 	if path == "/" {
 		return 0, 0
 	}
@@ -334,22 +331,22 @@ func (f *FS) Opendir(path string) (int, uint64) {
 	return 0, 0
 }
 
-// Releasedir closes a directory
+// Releasedir closes a directory.
 func (f *FS) Releasedir(path string, fh uint64) int {
 	return 0
 }
 
-// Flush is called when a file descriptor is closed
+// Flush is called when a file descriptor is closed.
 func (f *FS) Flush(path string, fh uint64) int {
 	return 0
 }
 
-// Fsync synchronizes file contents
+// Fsync synchronizes file contents.
 func (f *FS) Fsync(path string, datasync bool, fh uint64) int {
 	return 0
 }
 
-// Unlink removes a file
+// Unlink removes a file.
 func (f *FS) Unlink(path string) int {
 	parts := splitPath(path)
 	if len(parts) < 2 {
@@ -373,7 +370,7 @@ func (f *FS) Unlink(path string) int {
 	return 0
 }
 
-// Rmdir removes a directory
+// Rmdir removes a directory.
 func (f *FS) Rmdir(path string) int {
 	parts := splitPath(path)
 	if len(parts) < 1 {
@@ -399,12 +396,12 @@ func (f *FS) Rmdir(path string) int {
 
 // Access checks file access permissions
 // This is a no-op - returning EACCES for write checks causes Windows media
-// players to refuse to open files even for reading
+// players to refuse to open files even for reading.
 func (f *FS) Access(path string, mask uint32) int {
 	return 0
 }
 
-// getFileInfo resolves a path to FileInfo
+// getFileInfo resolves a path to FileInfo.
 func (f *FS) getFileInfo(path string) (*manager.FileInfo, error) {
 	parts := splitPath(path)
 	if len(parts) == 0 {
@@ -453,7 +450,7 @@ func (f *FS) getFileInfo(path string) (*manager.FileInfo, error) {
 	return f.vfs.GetManager().GetTorrentFile(torrentName, filename)
 }
 
-// splitPath splits a path into components
+// splitPath splits a path into components.
 func splitPath(path string) []string {
 	path = strings.Trim(path, "/")
 	if path == "" {
@@ -476,19 +473,19 @@ func (f *FS) releaseHandleResources(handle *FileHandle) {
 	}
 }
 
-// HandleManager manages file handles
+// HandleManager manages file handles.
 type HandleManager struct {
 	handles *xsync.Map[uint64, *FileHandle]
 	nextFH  atomic.Uint64
 }
 
-// FileHandle represents an open file
+// FileHandle represents an open file.
 type FileHandle struct {
 	info   *manager.FileInfo
 	reader vfs.File
 }
 
-// NewHandleManager creates a new handle manager
+// NewHandleManager creates a new handle manager.
 func NewHandleManager() *HandleManager {
 	hm := &HandleManager{
 		handles: xsync.NewMap[uint64, *FileHandle](),
@@ -497,7 +494,7 @@ func NewHandleManager() *HandleManager {
 	return hm
 }
 
-// Create creates a new handle
+// Create creates a new handle.
 func (h *HandleManager) Create(info *manager.FileInfo, reader vfs.File) uint64 {
 	fh := h.nextFH.Load()
 	h.nextFH.Add(1)
@@ -508,7 +505,7 @@ func (h *HandleManager) Create(info *manager.FileInfo, reader vfs.File) uint64 {
 	return fh
 }
 
-// Get returns a handle by ID
+// Get returns a handle by ID.
 func (h *HandleManager) Get(fh uint64) *FileHandle {
 	fhi, ok := h.handles.Load(fh)
 	if !ok {
@@ -517,12 +514,12 @@ func (h *HandleManager) Get(fh uint64) *FileHandle {
 	return fhi
 }
 
-// Delete removes a handle
+// Delete removes a handle.
 func (h *HandleManager) Delete(fh uint64) {
 	h.handles.Delete(fh)
 }
 
-// CloseAll closes all handles
+// CloseAll closes all handles.
 func (h *HandleManager) CloseAll(cleanup func(*FileHandle)) {
 	h.handles.Range(func(key uint64, handle *FileHandle) bool {
 		if cleanup != nil {
@@ -533,7 +530,7 @@ func (h *HandleManager) CloseAll(cleanup func(*FileHandle)) {
 	})
 }
 
-// Interface assertions
+// Interface assertions.
 var (
 	_ fuse.FileSystemInterface = (*FS)(nil)
 	_ fuse.FileSystemOpenEx    = (*FS)(nil)

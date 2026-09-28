@@ -1,6 +1,6 @@
 package types
 
-// TorrentStatus represents the current state of a managed torrent
+// TorrentStatus represents the current state of a managed torrent.
 type TorrentStatus string
 
 const (

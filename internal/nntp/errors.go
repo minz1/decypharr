@@ -11,7 +11,7 @@ import (
 	"syscall"
 )
 
-// Error types for NNTP operations
+// Error types for NNTP operations.
 type ErrorType int
 
 const (
@@ -29,7 +29,7 @@ const (
 	ErrorTypeNoAvailableConnection
 )
 
-// Error represents an NNTP-specific error
+// Error represents an NNTP-specific error.
 type Error struct {
 	Type    ErrorType
 	Code    int    // NNTP response code
@@ -55,7 +55,7 @@ func (e *Error) Is(target error) bool {
 	return false
 }
 
-// IsRetryable returns true if the error might be resolved by retrying
+// IsRetryable returns true if the error might be resolved by retrying.
 func (e *Error) IsRetryable() bool {
 	switch e.Type {
 	case ErrorTypeConnection, ErrorTypeTimeout, ErrorTypeServerBusy:
@@ -67,7 +67,7 @@ func (e *Error) IsRetryable() bool {
 	}
 }
 
-// ShouldStopParsing returns true if this error should stop the entire parsing process
+// ShouldStopParsing returns true if this error should stop the entire parsing process.
 func (e *Error) ShouldStopParsing() bool {
 	switch e.Type {
 	case ErrorTypeAuthentication, ErrorTypePermissionDenied:
@@ -110,7 +110,7 @@ func (et ErrorType) String() string {
 	}
 }
 
-// Helper functions to create specific errors
+// Helper functions to create specific errors.
 func NewConnectionError(err error) *Error {
 	return &Error{
 		Type:    ErrorTypeConnection,
@@ -186,7 +186,7 @@ func isConnectionLike(err error) bool {
 		strings.Contains(msg, "unexpected eof")
 }
 
-// classifyNNTPError classifies an NNTP response code into an error type
+// classifyNNTPError classifies an NNTP response code into an error type.
 func classifyNNTPError(code int, message string) *Error {
 	switch {
 	case code == 430 || code == 423:

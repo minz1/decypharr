@@ -404,7 +404,7 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// GenerateAPIToken creates a new random API token
+// GenerateAPIToken creates a new random API token.
 func GenerateAPIToken() (string, error) {
 	bytes := make([]byte, 32) // 256-bit token
 	if _, err := rand.Read(bytes); err != nil {
@@ -492,7 +492,7 @@ func (c *Config) NeedsAuth() bool {
 }
 
 // migrateQBitTorrentToManager migrates deprecated QBitTorrent config to Manager
-// This ensures backward compatibility with existing configs
+// This ensures backward compatibility with existing configs.
 func (c *Config) migrateQBitTorrentToManager() {
 	// If Manager fields are not set but QBitTorrent fields are, migrate them
 	if c.DownloadFolder == "" && c.QBitTorrent.DownloadFolder != "" {
@@ -532,7 +532,7 @@ func (c *Config) migrateQBitTorrentToManager() {
 }
 
 // migrateNotifications migrates deprecated DiscordWebhook and CallbackURL to Notifications
-// This ensures backward compatibility with existing configs
+// This ensures backward compatibility with existing configs.
 func (c *Config) migrateNotifications() {
 	// Migrate deprecated webhook URL to Notifications
 	if c.Notifications.WebhookURL == "" && c.DiscordWebhook != "" {

@@ -372,7 +372,7 @@ func (m *Manager) processAction(entry *storage.Entry) {
 	}
 }
 
-// processTorrent handles the complete torrent lifecycle
+// processTorrent handles the complete torrent lifecycle.
 func (m *Manager) processNewTorrent(torrent *storage.Entry, debridTorrent *debridTypes.Torrent) {
 	// Update status to submitting
 	torrent.UpdatedAt = time.Now()
@@ -422,7 +422,7 @@ func applyDebridTorrentToEntry(torrent *storage.Entry, debridTorrent *debridType
 	}
 }
 
-// SendToDebrid submits a magnet to debrid service(s) - replaces debrid.Parse
+// SendToDebrid submits a magnet to debrid service(s) - replaces debrid.Parse.
 func (m *Manager) SendToDebrid(ctx context.Context, importRequest *ImportRequest) (*debridTypes.Torrent, error) {
 	debridTorrent := &debridTypes.Torrent{
 		InfoHash: importRequest.Magnet.InfoHash,

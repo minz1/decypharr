@@ -38,7 +38,7 @@ func (m *Manager) Scheduler() gocron.Scheduler {
 	return m.scheduler
 }
 
-// Migrator returns the migrator instance
+// Migrator returns the migrator instance.
 func (m *Manager) Migrator() *migration.Migrator {
 	return m.migrator
 }
@@ -49,7 +49,7 @@ func (m *Manager) Strm() *strm.Reconciler {
 	return m.strm
 }
 
-// Arr returns the Arr storage instance
+// Arr returns the Arr storage instance.
 func (m *Manager) Arr() *arr.Service {
 	return m.arr
 }
@@ -94,7 +94,7 @@ func (m *Manager) Usenet() *usenet.Usenet {
 	return m.usenet
 }
 
-// GetDebridSpeedTestResult returns stored speed test result for a specific debrid provider
+// GetDebridSpeedTestResult returns stored speed test result for a specific debrid provider.
 func (m *Manager) GetDebridSpeedTestResult(provider string) (debridTypes.SpeedTestResult, bool) {
 	return m.debridSpeedTestResults.Load(provider)
 }

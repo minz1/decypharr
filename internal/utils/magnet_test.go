@@ -11,7 +11,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/testutil"
 )
 
-// checkMagnet is a helper function that verifies magnet properties
+// checkMagnet is a helper function that verifies magnet properties.
 func checkMagnet(
 	t *testing.T,
 	magnet *Magnet,
@@ -44,7 +44,7 @@ func checkMagnet(
 	}
 }
 
-// testMagnetFromFile is a helper function for tests that use GetMagnetFromFile with file operations
+// testMagnetFromFile is a helper function for tests that use GetMagnetFromFile with file operations.
 func testMagnetFromFile(
 	t *testing.T,
 	filePath string,
@@ -231,7 +231,7 @@ func TestGetMagnetFromUrl_MagnetLink_StripFalse(t *testing.T) {
 	t.Logf("Generated magnet link with trackers: %s", magnet.Link)
 }
 
-// testMagnetFromHttpTorrent is a helper function for tests that use GetMagnetFromUrl with HTTP torrent links
+// testMagnetFromHttpTorrent is a helper function for tests that use GetMagnetFromUrl with HTTP torrent links.
 func testMagnetFromHttpTorrent(
 	t *testing.T,
 	torrentPath string,

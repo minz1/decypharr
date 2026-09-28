@@ -12,7 +12,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// AddOrUpdate adds or updates an entry
+// AddOrUpdate adds or updates an entry.
 func (s *Storage) AddOrUpdate(entry *Entry) error {
 	entry.UpdatedAt = time.Now()
 
@@ -33,7 +33,7 @@ func (s *Storage) AddOrUpdate(entry *Entry) error {
 	return s.updateEntryItem(entry)
 }
 
-// BatchAddOrUpdate adds or updates multiple entries
+// BatchAddOrUpdate adds or updates multiple entries.
 func (s *Storage) BatchAddOrUpdate(entries []*Entry) error {
 	for _, entry := range entries {
 		if err := s.AddOrUpdate(entry); err != nil {
@@ -86,12 +86,12 @@ func NewFileID() string {
 	return hex.EncodeToString(b)
 }
 
-// Exists checks if an entry exists
+// Exists checks if an entry exists.
 func (s *Storage) Exists(infohash string) (bool, error) {
 	return s.entries.Exists(infohash), nil
 }
 
-// Get retrieves an entry by InfoHash
+// Get retrieves an entry by InfoHash.
 func (s *Storage) Get(infohash string) (*Entry, error) {
 	data, err := s.entries.Get(infohash)
 	if err != nil {
@@ -106,7 +106,7 @@ func (s *Storage) Get(infohash string) (*Entry, error) {
 	return ProtoToEntry(&pb), nil
 }
 
-// List retrieves all cached entries with optional filtering
+// List retrieves all cached entries with optional filtering.
 func (s *Storage) List(filter func(*Entry) bool) ([]*Entry, error) {
 	var entries []*Entry
 
@@ -125,7 +125,7 @@ func (s *Storage) List(filter func(*Entry) bool) ([]*Entry, error) {
 	return entries, err
 }
 
-// ForEach iterates over entries
+// ForEach iterates over entries.
 func (s *Storage) ForEach(fn func(*Entry) error) error {
 	return s.entries.ForEach(func(key string, value []byte) error {
 		var pb EntryProto
@@ -136,7 +136,7 @@ func (s *Storage) ForEach(fn func(*Entry) error) error {
 	})
 }
 
-// ForEachBatch iterates over entries in batches
+// ForEachBatch iterates over entries in batches.
 func (s *Storage) ForEachBatch(batchSize int, fn func([]*Entry) error) error {
 	batch := make([]*Entry, 0, batchSize)
 
@@ -169,7 +169,7 @@ func (s *Storage) ForEachBatch(batchSize int, fn func([]*Entry) error) error {
 	return err
 }
 
-// EntryMetaInfo is a lightweight struct for folder listings (no disk reads)
+// EntryMetaInfo is a lightweight struct for folder listings (no disk reads).
 type EntryMetaInfo struct {
 	InfoHash string
 	Name     string
@@ -255,7 +255,7 @@ func (s *Storage) Delete(infohash string) error {
 	return nil
 }
 
-// Count returns the number of entries
+// Count returns the number of entries.
 func (s *Storage) Count() (int, error) {
 	return s.entries.Len(), nil
 }

@@ -37,7 +37,7 @@ func (s *Server) handleIngestsByDebrid(w http.ResponseWriter, r *http.Request) {
 	utils.JSONResponse(w, ingests, 200)
 }
 
-// handleSpeedTest runs a speed test for a specific provider
+// handleSpeedTest runs a speed test for a specific provider.
 func (s *Server) handleSpeedTest(w http.ResponseWriter, r *http.Request) {
 	var req manager.SpeedTestRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

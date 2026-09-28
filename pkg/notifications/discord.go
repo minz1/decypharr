@@ -12,25 +12,25 @@ import (
 	"github.com/sirrobot01/decypharr/internal/config"
 )
 
-// DiscordEmbed represents a Discord embed object
+// DiscordEmbed represents a Discord embed object.
 type DiscordEmbed struct {
 	Title       string `json:"title"`
 	Description string `json:"description"`
 	Color       int    `json:"color"`
 }
 
-// DiscordWebhook represents the Discord webhook payload
+// DiscordWebhook represents the Discord webhook payload.
 type DiscordWebhook struct {
 	Embeds []DiscordEmbed `json:"embeds"`
 }
 
-// DiscordNotifier sends notifications to Discord webhooks
+// DiscordNotifier sends notifications to Discord webhooks.
 type DiscordNotifier struct {
 	webhookURL string
 	client     *http.Client
 }
 
-// NewDiscord creates a new Discord notifier with the specified webhook URL
+// NewDiscord creates a new Discord notifier with the specified webhook URL.
 func NewDiscord(webhookURL string) *DiscordNotifier {
 	return &DiscordNotifier{
 		webhookURL: webhookURL,
@@ -40,12 +40,12 @@ func NewDiscord(webhookURL string) *DiscordNotifier {
 	}
 }
 
-// Name returns the name of this notifier
+// Name returns the name of this notifier.
 func (d *DiscordNotifier) Name() string {
 	return "discord"
 }
 
-// Send dispatches the notification to Discord
+// Send dispatches the notification to Discord.
 func (d *DiscordNotifier) Send(event Event) error {
 	if d.webhookURL == "" {
 		return nil
@@ -87,7 +87,7 @@ func (d *DiscordNotifier) Send(event Event) error {
 	return nil
 }
 
-// getColor returns the appropriate Discord embed color based on status
+// getColor returns the appropriate Discord embed color based on status.
 func (d *DiscordNotifier) getColor(status string) int {
 	switch status {
 	case "success":
@@ -103,7 +103,7 @@ func (d *DiscordNotifier) getColor(status string) int {
 	}
 }
 
-// getHeader returns the notification title based on event type
+// getHeader returns the notification title based on event type.
 func (d *DiscordNotifier) getHeader(event config.NotificationEvent) string {
 	switch event {
 	case config.EventDownloadComplete:

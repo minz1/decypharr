@@ -148,7 +148,7 @@ func (p *NZBParser) FilterUnobserved(messageIDs []string) []string {
 }
 
 var (
-	// RAR file patterns - simplified and more accurate
+	// RAR file patterns - simplified and more accurate.
 	rarMainPattern       = regexp.MustCompile(`\.rar$`)
 	rarPartPattern       = regexp.MustCompile(`(?:\.r\d{2,3}|\.[s-y]\d{2})$`) // .r00..r999, then .s00 etc.; .zNN is ZIP
 	rarVolumePattern     = regexp.MustCompile(`\.part\d+\.rar$`)
@@ -315,7 +315,7 @@ func (p *NZBParser) Process(
 	}
 	if len(nzb.Files) == 0 {
 		if skippedFiles > 0 {
-			return nil, fmt.Errorf("all files were skipped due to size or extension restrictions(error %v)", skippedErr)
+			return nil, fmt.Errorf("all files were skipped due to size or extension restrictions(error %w)", skippedErr)
 		}
 		return nil, fmt.Errorf("no valid files found in NZB after processing")
 	}
@@ -510,7 +510,7 @@ func likelyObfuscatedBase(name string) bool {
 	return letters+digits == len(name) && (digits > 0 || (upper > 0 && lower > 0))
 }
 
-// Batch process unknown files in parallel
+// Batch process unknown files in parallel.
 func (p *NZBParser) batchDetectContentTypes(ctx context.Context, unknownFiles []manifest.File) []contentResult {
 	if len(unknownFiles) == 0 {
 		return nil
@@ -538,7 +538,7 @@ func (p *NZBParser) batchDetectContentTypes(ctx context.Context, unknownFiles []
 	return mapped
 }
 
-// Group already processed files (fast)
+// Group already processed files (fast).
 func (p *NZBParser) groupProcessedFiles(allFiles []contentResult) map[string]*FileGroup {
 	groups := make(map[string]*FileGroup)
 
@@ -648,7 +648,7 @@ func (p *NZBParser) getBaseFilename(filename string) string {
 	return cleaned
 }
 
-// Simplified file type detection
+// Simplified file type detection.
 func (p *NZBParser) detectFileType(filename string) storage.NZBFileType {
 	lower := strings.ToLower(filename)
 
@@ -685,7 +685,7 @@ func (p *NZBParser) detectFileType(filename string) storage.NZBFileType {
 	return storage.NZBFileTypeUnknown
 }
 
-// Simplified RAR detection
+// Simplified RAR detection.
 func (p *NZBParser) isRarFile(filename string) bool {
 	return rarMainPattern.MatchString(filename) ||
 		rarPartPattern.MatchString(filename) ||
@@ -800,7 +800,7 @@ func fileGroupOrder(group *FileGroup) int {
 	return order
 }
 
-// Simplified individual group processing
+// Simplified individual group processing.
 func (p *NZBParser) processFileGroup(
 	ctx context.Context,
 	group *FileGroup,
@@ -963,7 +963,7 @@ func (p *NZBParser) recordFileMetadata(group *FileGroup, file manifest.File, dat
 	}
 }
 
-// Process regular media files
+// Process regular media files.
 func (p *NZBParser) processMediaFile(group *FileGroup, password string) *storage.NZBFile {
 	if len(group.Files) == 0 {
 		return nil

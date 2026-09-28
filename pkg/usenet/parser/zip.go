@@ -17,7 +17,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
-// ZIP format constants
+// ZIP format constants.
 const (
 	ZIPLocalFileHeaderSig             = 0x04034b50
 	ZIPCentralDirectoryHeaderSig      = 0x02014b50
@@ -30,12 +30,12 @@ const (
 	ZIPBzip2Method   = 12 // BZIP2 compression
 	ZIPLzmaMethod    = 14 // LZMA compression
 
-	// Default snippet sizes
+	// Default snippet sizes.
 	defaultZIPEndSnippetSize   = 256 * 1024 // 256KB from end for central directory
 	defaultZIPStartSnippetSize = 64 * 1024  // 64KB from start (optional)
 )
 
-// ZIPFileEntry represents a file in a ZIP archive
+// ZIPFileEntry represents a file in a ZIP archive.
 type ZIPFileEntry struct {
 	Name              string
 	UncompressedSize  int64
@@ -48,7 +48,7 @@ type ZIPFileEntry struct {
 	CRC32             uint32
 }
 
-// ZIPArchiveInfo contains ZIP archive metadata
+// ZIPArchiveInfo contains ZIP archive metadata.
 type ZIPArchiveInfo struct {
 	Files       []*ZIPFileEntry
 	TotalFiles  int
@@ -56,13 +56,13 @@ type ZIPArchiveInfo struct {
 	IsMultiPart bool
 }
 
-// ZIPParser parses ZIP archives from NNTP segments
+// ZIPParser parses ZIP archives from NNTP segments.
 type ZIPParser struct {
 	source ArticleSource
 	logger zerolog.Logger
 }
 
-// NewZIPParser creates a new ZIP parser
+// NewZIPParser creates a new ZIP parser.
 func NewZIPParser(source ArticleSource, _ int, logger zerolog.Logger) *ZIPParser {
 	return &ZIPParser{
 		source: source,
@@ -228,7 +228,7 @@ func (p *ZIPParser) parseArchiveReader(
 	return archiveInfo, nil
 }
 
-// endOfCentralDirRecord represents the End of Central Directory record
+// endOfCentralDirRecord represents the End of Central Directory record.
 type endOfCentralDirRecord struct {
 	diskNumber       uint16
 	centralDirDisk   uint16
@@ -343,7 +343,7 @@ func findZIP64EndOfCentralDirectory(data []byte, eocdPos int) (int64, int64, int
 	return 0, 0, 0, false
 }
 
-// parseCentralDirEntry parses a single central directory entry
+// parseCentralDirEntry parses a single central directory entry.
 func (p *ZIPParser) parseCentralDirEntry(r io.Reader) (*ZIPFileEntry, error) {
 	// Read signature
 	var sig uint32

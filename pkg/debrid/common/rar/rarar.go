@@ -16,28 +16,28 @@ import (
 	"github.com/sirrobot01/decypharr/internal/retry"
 )
 
-// Constants from the Python code
+// Constants from the Python code.
 var (
-	// DefaultChunkSize Chunk sizes
+	// DefaultChunkSize Chunk sizes.
 	DefaultChunkSize = 4096
 	HttpChunkSize    = 32768
 	MaxSearchSize    = 1 << 20 // 1MB
 
-	// Rar3Marker RAR marker and block types
+	// Rar3Marker RAR marker and block types.
 	Rar3Marker  = []byte{0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x00}
 	BlockFile   = byte(0x74)
 	BlockHeader = byte(0x73)
 	BlockMarker = byte(0x72)
 	BlockEnd    = byte(0x7B)
 
-	// FlagDirectory Header flags
+	// FlagDirectory Header flags.
 	FlagDirectory      = 0xE0
 	FlagHasHighSize    = 0x100
 	FlagHasUnicodeName = 0x200
 	FlagHasData        = 0x8000
 )
 
-// Error definitions
+// Error definitions.
 var (
 	ErrMarkerNotFound               = errors.New("RAR marker not found within search limit")
 	ErrInvalidFormat                = errors.New("invalid RAR format")
@@ -47,7 +47,7 @@ var (
 	ErrDirectoryExtractNotSupported = errors.New("directory extract not supported")
 )
 
-// Name returns the base filename of the file
+// Name returns the base filename of the file.
 func (f *File) Name() string {
 	if i := strings.LastIndexAny(f.Path, "\\/"); i >= 0 {
 		return f.Path[i+1:]
@@ -59,7 +59,7 @@ func (f *File) ByteRange() *[2]int64 {
 	return &[2]int64{f.DataOffset, f.DataOffset + f.CompressedSize - 1}
 }
 
-// NewReader creates a new RAR3 reader
+// NewReader creates a new RAR3 reader.
 func NewReader(url string) (*Reader, error) {
 	file, err := NewHttpFile(url)
 	if err != nil {
@@ -102,7 +102,7 @@ func NewReader(url string) (*Reader, error) {
 	return reader, nil
 }
 
-// readBytes reads a range of bytes from the file
+// readBytes reads a range of bytes from the file.
 func (r *Reader) readBytes(start int64, length int) ([]byte, error) {
 	if length <= 0 {
 		return []byte{}, nil
@@ -110,7 +110,7 @@ func (r *Reader) readBytes(start int64, length int) ([]byte, error) {
 
 	data := make([]byte, length)
 	n, err := r.File.ReadAt(data, start)
-	if err != nil && err != io.EOF {
+	if err != nil && !errors.Is(err, io.EOF) {
 		return nil, err
 	}
 
@@ -122,7 +122,7 @@ func (r *Reader) readBytes(start int64, length int) ([]byte, error) {
 	return data, nil
 }
 
-// findMarker finds the RAR marker in the file
+// findMarker finds the RAR marker in the file.
 func (r *Reader) findMarker() (int64, error) {
 	// First try to find marker in the first chunk
 	firstChunkSize := 8192 // 8KB
@@ -159,7 +159,7 @@ func (r *Reader) findMarker() (int64, error) {
 	return 0, ErrMarkerNotFound
 }
 
-// decodeUnicode decodes RAR3 Unicode encoding
+// decodeUnicode decodes RAR3 Unicode encoding.
 func decodeUnicode(asciiStr string, unicodeData []byte) string {
 	if len(unicodeData) == 0 {
 		return asciiStr
@@ -196,7 +196,7 @@ func decodeUnicode(asciiStr string, unicodeData []byte) string {
 		}
 
 		// Parse each 2-bit flag
-		for i := 0; i < flagCount; i++ {
+		for i := range flagCount {
 			if asciiPos >= len(asciiStr) && dataPos >= len(unicodeData) {
 				break
 			}
@@ -242,7 +242,7 @@ func decodeUnicode(asciiStr string, unicodeData []byte) string {
 	return string(result)
 }
 
-// readFiles reads all file entries in the archive
+// readFiles reads all file entries in the archive.
 func (r *Reader) readFiles() error {
 	// NewReader already validated the archive header and stored where it ends.
 	pos := r.HeaderEndPos
@@ -349,7 +349,7 @@ func (r *Reader) readFiles() error {
 	return nil
 }
 
-// parseFileHeader parses a file header and returns file info
+// parseFileHeader parses a file header and returns file info.
 func (r *Reader) parseFileHeader(headerData []byte, position int64) (*File, error) {
 	if len(headerData) < 7 {
 		return nil, fmt.Errorf("header data too short")
@@ -458,7 +458,7 @@ func (r *Reader) parseFileHeader(headerData []byte, position int64) (*File, erro
 	}, nil
 }
 
-// GetFiles returns all files in the archive
+// GetFiles returns all files in the archive.
 func (r *Reader) GetFiles() ([]*File, error) {
 	if len(r.Files) == 0 {
 		err := r.readFiles()

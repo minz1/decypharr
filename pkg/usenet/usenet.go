@@ -164,7 +164,7 @@ func (fe *fsEntry) getOrCreateReader() (fs.PrefetchableReaderAt, int64, error) {
 	return fe.reader, fe.readerSize, nil
 }
 
-// noPrefetchReader wraps io.ReaderAt for cases where prefetch isn't available
+// noPrefetchReader wraps io.ReaderAt for cases where prefetch isn't available.
 type noPrefetchReader struct {
 	io.ReaderAt
 }
@@ -238,7 +238,7 @@ func (r *contextSectionReader) Read(p []byte) (int, error) {
 	}
 	n, err := r.r.ReadAtContext(r.ctx, p, r.base+r.off)
 	r.off += int64(n)
-	if err == io.EOF && r.off < r.limit {
+	if errors.Is(err, io.EOF) && r.off < r.limit {
 		return n, io.ErrUnexpectedEOF
 	}
 	if err == nil && r.off >= r.limit {
@@ -291,7 +291,7 @@ func configuredRetention() Retention {
 	return RetentionWindow
 }
 
-// New creates a new usenet instance
+// New creates a new usenet instance.
 func New() (*Usenet, error) {
 	cfg := config.Get()
 	usenetConfig := cfg.Usenet
@@ -500,7 +500,7 @@ func (u *Usenet) releaseFS(key string) {
 	entry.release()
 }
 
-// cleanupIdleFS removes sessions with refCount=0 that haven't been used recently
+// cleanupIdleFS removes sessions with refCount=0 that haven't been used recently.
 func (u *Usenet) cleanupIdleFS() {
 	// Keep a warm reader through short pauses, then tear it down. Usenet segment
 	// buffering is only for active latency hiding; stale buffers should disappear
@@ -537,7 +537,7 @@ func (u *Usenet) cleanupIdleFS() {
 	}
 }
 
-// Parse processes an NZB for download/streaming (quick parse, defers archive extraction)
+// Parse processes an NZB for download/streaming (quick parse, defers archive extraction).
 func (u *Usenet) Parse(
 	ctx context.Context,
 	name string,
@@ -606,7 +606,7 @@ func (u *Usenet) ParseWithID(
 	return nzb, groups, nil
 }
 
-// Process processes archive files in an NZB (full parse)
+// Process processes archive files in an NZB (full parse).
 func (u *Usenet) Process(
 	ctx context.Context,
 	nzb *storage.NZB,
@@ -786,7 +786,7 @@ func (u *Usenet) Stop() {
 	u.logger.Info().Msg("Stopping Usenet")
 }
 
-// Close closes all usenet resources including NNTP connections
+// Close closes all usenet resources including NNTP connections.
 func (u *Usenet) Close() error {
 	var closeErr error
 	u.closeOnce.Do(func() {
@@ -953,7 +953,7 @@ func (h *FileHandle) Close() error {
 	return nil
 }
 
-// Stream streams a file using the new streaming system with caching and worker limiting
+// Stream streams a file using the new streaming system with caching and worker limiting.
 func (u *Usenet) Stream(ctx context.Context, nzoID, filename string, start, end int64, writer io.Writer) error {
 	if start < 0 {
 		start = 0
@@ -1094,7 +1094,7 @@ func safeCopyBuffer(ctx context.Context, dst io.Writer, src io.Reader, buf []byt
 	return written, err
 }
 
-// Touch validates that the first segment of a file is available via NNTP STAT
+// Touch validates that the first segment of a file is available via NNTP STAT.
 func (u *Usenet) Touch(ctx context.Context, nzoID, filename string) error {
 	file, err := u.getFile(nzoID, filename)
 	if err != nil {
@@ -1163,7 +1163,7 @@ func (u *Usenet) PreCache(ctx context.Context, nzoID, filename string) error {
 	return nil
 }
 
-// Stats returns nntp statistics
+// Stats returns nntp statistics.
 func (u *Usenet) Stats() map[string]any {
 	stats := u.nntp.Stats()
 	stats["readers"] = u.fs.Size()
@@ -1173,7 +1173,7 @@ func (u *Usenet) Stats() map[string]any {
 	return stats
 }
 
-// GetNZB returns NZB metadata by ID
+// GetNZB returns NZB metadata by ID.
 func (u *Usenet) GetNZB(id string) (*storage.NZB, error) {
 	return u.nzbStorage.GetNZB(id)
 }
@@ -1185,26 +1185,26 @@ func (u *Usenet) GetNZBHeader(id string) (*storage.NZB, error) {
 	return u.nzbStorage.GetNZBHeader(id)
 }
 
-// ForEachNZB iterates over all NZBs
+// ForEachNZB iterates over all NZBs.
 func (u *Usenet) ForEachNZB(fn func(*storage.NZB) error) error {
 	return u.nzbStorage.ForEachNZB(fn)
 }
 
-// NZBStorage returns the underlying NZB storage
+// NZBStorage returns the underlying NZB storage.
 func (u *Usenet) NZBStorage() *NZBStorage {
 	return u.nzbStorage
 }
 
 // SpeedTest runs a speed test for a specific NNTP provider, identified by
 // its canonical ID (host:port/username); a bare host works when unambiguous.
-// It finds a segment from a processed NZB to download for real speed measurement
+// It finds a segment from a processed NZB to download for real speed measurement.
 func (u *Usenet) SpeedTest(ctx context.Context, providerID string) nntp.SpeedTestResult {
 	// Try to find a segment from any processed NZB for the speed test
 	messageID := u.findTestSegment()
 	return u.nntp.SpeedTest(ctx, providerID, messageID)
 }
 
-// findTestSegment looks for a segment from any processed NZB to use for speed testing
+// findTestSegment looks for a segment from any processed NZB to use for speed testing.
 func (u *Usenet) findTestSegment() string {
 	var messageID string
 
@@ -1225,7 +1225,7 @@ func (u *Usenet) findTestSegment() string {
 	return messageID
 }
 
-// GetSpeedTestResults returns all stored speed test results
+// GetSpeedTestResults returns all stored speed test results.
 func (u *Usenet) GetSpeedTestResults() map[string]nntp.SpeedTestResult {
 	return u.nntp.GetSpeedTestResults()
 }

@@ -12,7 +12,7 @@ type Volume struct {
 	EncryptionIV  []byte // AES IV for decryption (16 bytes)
 }
 
-// RARVolumePart describes each archive part across volumes (internal parser use only)
+// RARVolumePart describes each archive part across volumes (internal parser use only).
 type RARVolumePart struct {
 	Name              string
 	DataOffset        int64

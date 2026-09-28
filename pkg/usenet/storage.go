@@ -1,6 +1,7 @@
 package usenet
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -36,7 +37,7 @@ const (
 	NZBStatusFailed      = "failed"
 )
 
-// NZBStorage handles file-based persistence of NZB metadata using protobuf
+// NZBStorage handles file-based persistence of NZB metadata using protobuf.
 type NZBStorage struct {
 	metaDir string
 	logger  zerolog.Logger
@@ -47,7 +48,7 @@ type NZBStorage struct {
 	metaTotalBytes int64
 }
 
-// NewNZBStorage creates a new file-based NZB storage
+// NewNZBStorage creates a new file-based NZB storage.
 func NewNZBStorage() (*NZBStorage, error) {
 	metaDir := filepath.Join(config.GetMainPath(), "usenet", metaDirName)
 	if err := os.MkdirAll(metaDir, 0755); err != nil {
@@ -68,7 +69,7 @@ func NewNZBStorage() (*NZBStorage, error) {
 	return s, nil
 }
 
-// metaFilePath returns the path for a given NZB ID
+// metaFilePath returns the path for a given NZB ID.
 func (s *NZBStorage) metaFilePath(id string) string {
 	return filepath.Join(s.metaDir, id+metaFileExtension)
 }
@@ -100,7 +101,7 @@ func (s *NZBStorage) recalculateStatsLocked() error {
 	return nil
 }
 
-// AddNZB saves an NZB to file storage
+// AddNZB saves an NZB to file storage.
 func (s *NZBStorage) AddNZB(nzb *storage.NZB) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -151,7 +152,7 @@ func (s *NZBStorage) writeNZBLocked(nzb *storage.NZB) error {
 	return nil
 }
 
-// GetNZB retrieves an NZB from file storage
+// GetNZB retrieves an NZB from file storage.
 func (s *NZBStorage) GetNZB(id string) (*storage.NZB, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -281,7 +282,7 @@ func decodeNZB(data []byte) (*storage.NZB, error) {
 	return protoToNZB(&pb), nil
 }
 
-// DeleteNZB removes an NZB from file storage
+// DeleteNZB removes an NZB from file storage.
 func (s *NZBStorage) DeleteNZB(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -313,7 +314,7 @@ func (s *NZBStorage) DeleteNZB(id string) error {
 	return nil
 }
 
-// ForEachNZB iterates over all NZBs in storage
+// ForEachNZB iterates over all NZBs in storage.
 func (s *NZBStorage) ForEachNZB(fn func(*storage.NZB) error) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -349,7 +350,7 @@ func (s *NZBStorage) ForEachNZB(fn func(*storage.NZB) error) error {
 	return nil
 }
 
-// GetAllNZBIDs returns all NZB IDs in storage
+// GetAllNZBIDs returns all NZB IDs in storage.
 func (s *NZBStorage) GetAllNZBIDs() ([]string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -372,21 +373,21 @@ func (s *NZBStorage) GetAllNZBIDs() ([]string, error) {
 	return ids, nil
 }
 
-// Exists checks if an NZB exists in storage
+// Exists checks if an NZB exists in storage.
 func (s *NZBStorage) Exists(id string) bool {
 	path := s.metaFilePath(id)
 	_, err := os.Stat(path)
 	return err == nil
 }
 
-// Count returns the number of NZBs in storage
+// Count returns the number of NZBs in storage.
 func (s *NZBStorage) Count() (int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.metaCount, nil
 }
 
-// Stats returns storage statistics
+// Stats returns storage statistics.
 func (s *NZBStorage) Stats() map[string]any {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -550,7 +551,7 @@ func fileIsCodecV2(path string) (bool, error) {
 
 	var b [1]byte
 	n, err := f.Read(b[:])
-	if err != nil && err != io.EOF {
+	if err != nil && !errors.Is(err, io.EOF) {
 		return false, err
 	}
 	return n == 1 && b[0] == codecMagicV2, nil
@@ -558,32 +559,32 @@ func fileIsCodecV2(path string) (bool, error) {
 
 func protoToNZB(pb *NZBProto) *storage.NZB {
 	nzb := &storage.NZB{
-		ID:             pb.Id,
-		Name:           pb.Name,
-		Title:          pb.Title,
-		Path:           pb.Path,
-		TotalSize:      pb.TotalSize,
-		DatePosted:     time.Unix(pb.DatePostedUnix, 0),
-		Category:       pb.Category,
-		Groups:         pb.Groups,
-		Downloaded:     pb.Downloaded,
-		AddedOn:        time.Unix(pb.AddedOnUnix, 0),
-		LastActivity:   time.Unix(pb.LastActivityUnix, 0),
-		Status:         pb.Status,
-		Progress:       pb.Progress,
-		Percentage:     pb.Percentage,
-		SizeDownloaded: pb.SizeDownloaded,
-		ETA:            pb.Eta,
-		Speed:          pb.Speed,
-		CompletedOn:    time.Unix(pb.CompletedOnUnix, 0),
-		IsBad:          pb.IsBad,
-		Storage:        pb.Storage,
-		FailMessage:    pb.FailMessage,
-		Password:       pb.Password,
+		ID:             pb.GetId(),
+		Name:           pb.GetName(),
+		Title:          pb.GetTitle(),
+		Path:           pb.GetPath(),
+		TotalSize:      pb.GetTotalSize(),
+		DatePosted:     time.Unix(pb.GetDatePostedUnix(), 0),
+		Category:       pb.GetCategory(),
+		Groups:         pb.GetGroups(),
+		Downloaded:     pb.GetDownloaded(),
+		AddedOn:        time.Unix(pb.GetAddedOnUnix(), 0),
+		LastActivity:   time.Unix(pb.GetLastActivityUnix(), 0),
+		Status:         pb.GetStatus(),
+		Progress:       pb.GetProgress(),
+		Percentage:     pb.GetPercentage(),
+		SizeDownloaded: pb.GetSizeDownloaded(),
+		ETA:            pb.GetEta(),
+		Speed:          pb.GetSpeed(),
+		CompletedOn:    time.Unix(pb.GetCompletedOnUnix(), 0),
+		IsBad:          pb.GetIsBad(),
+		Storage:        pb.GetStorage(),
+		FailMessage:    pb.GetFailMessage(),
+		Password:       pb.GetPassword(),
 	}
 
-	nzb.Files = make([]storage.NZBFile, len(pb.Files))
-	for i, f := range pb.Files {
+	nzb.Files = make([]storage.NZBFile, len(pb.GetFiles()))
+	for i, f := range pb.GetFiles() {
 		nzb.Files[i] = protoToNZBFile(f)
 	}
 
@@ -592,32 +593,32 @@ func protoToNZB(pb *NZBProto) *storage.NZB {
 
 func protoToNZBFile(pb *NZBFileProto) storage.NZBFile {
 	f := storage.NZBFile{
-		NzbID:         pb.NzbId,
-		Name:          pb.Name,
-		InternalPath:  pb.InternalPath,
-		Size:          pb.Size,
-		StartOffset:   pb.StartOffset,
-		Groups:        pb.Groups,
-		FileType:      storage.NZBFileType(pb.FileType),
-		Password:      pb.Password,
-		IsDeleted:     pb.IsDeleted,
-		IsStored:      pb.IsStored,
-		SegmentSize:   pb.SegmentSize,
-		EncryptionKey: pb.EncryptionKey,
-		EncryptionIV:  pb.EncryptionIv,
-		IsEncrypted:   pb.IsEncrypted,
+		NzbID:         pb.GetNzbId(),
+		Name:          pb.GetName(),
+		InternalPath:  pb.GetInternalPath(),
+		Size:          pb.GetSize(),
+		StartOffset:   pb.GetStartOffset(),
+		Groups:        pb.GetGroups(),
+		FileType:      storage.NZBFileType(pb.GetFileType()),
+		Password:      pb.GetPassword(),
+		IsDeleted:     pb.GetIsDeleted(),
+		IsStored:      pb.GetIsStored(),
+		SegmentSize:   pb.GetSegmentSize(),
+		EncryptionKey: pb.GetEncryptionKey(),
+		EncryptionIV:  pb.GetEncryptionIv(),
+		IsEncrypted:   pb.GetIsEncrypted(),
 	}
 
-	f.Segments = make([]storage.NZBSegment, len(pb.Segments))
-	for i, s := range pb.Segments {
+	f.Segments = make([]storage.NZBSegment, len(pb.GetSegments()))
+	for i, s := range pb.GetSegments() {
 		f.Segments[i] = storage.NZBSegment{
-			Number:           int(s.Number),
-			MessageID:        s.MessageId,
-			Bytes:            s.Bytes,
-			StartOffset:      s.StartOffset,
-			EndOffset:        s.EndOffset,
-			Group:            s.Group,
-			SegmentDataStart: s.SegmentDataStart,
+			Number:           int(s.GetNumber()),
+			MessageID:        s.GetMessageId(),
+			Bytes:            s.GetBytes(),
+			StartOffset:      s.GetStartOffset(),
+			EndOffset:        s.GetEndOffset(),
+			Group:            s.GetGroup(),
+			SegmentDataStart: s.GetSegmentDataStart(),
 		}
 	}
 

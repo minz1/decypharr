@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 
@@ -12,7 +13,7 @@ import (
 )
 
 // rarReader provides a continuous stream across RAR volumes
-// It can efficiently skip large data sections without downloading them
+// It can efficiently skip large data sections without downloading them.
 type rarReader struct {
 	ctx      context.Context
 	source   ArticleSource
@@ -36,7 +37,7 @@ func newRarReader(ctx context.Context, source ArticleSource, volumes []*types.Vo
 	}
 }
 
-// Read implements io.Reader
+// Read implements io.Reader.
 func (r *rarReader) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
@@ -65,7 +66,7 @@ func (r *rarReader) Read(p []byte) (int, error) {
 	return totalRead, nil
 }
 
-// Skip efficiently skips n bytes without downloading unnecessary data
+// Skip efficiently skips n bytes without downloading unnecessary data.
 func (r *rarReader) Skip(n int64) error {
 	if n <= 0 {
 		return nil
@@ -121,7 +122,7 @@ func (r *rarReader) Skip(n int64) error {
 	return nil
 }
 
-// loadNextSegment loads the next segment's data
+// loadNextSegment loads the next segment's data.
 func (r *rarReader) loadNextSegment() error {
 	for {
 		if r.currentVolumeIndex >= len(r.volumes) {
@@ -150,12 +151,12 @@ func (r *rarReader) loadNextSegment() error {
 	}
 }
 
-// Position returns the current position in the stream
+// Position returns the current position in the stream.
 func (r *rarReader) Position() int64 {
 	return r.position
 }
 
-// AbsoluteToVolumeOffset converts an absolute position in the stream to (volumeIndex, offsetWithinVolume)
+// AbsoluteToVolumeOffset converts an absolute position in the stream to (volumeIndex, offsetWithinVolume).
 func (r *rarReader) AbsoluteToVolumeOffset(absolutePos int64) (volumeIndex int, offsetInVolume int64) {
 	currentPos := int64(0)
 
@@ -184,7 +185,7 @@ func (r *rarReader) AbsoluteToVolumeOffset(absolutePos int64) (volumeIndex int, 
 	return 0, absolutePos
 }
 
-// parseRAR5StreamResult contains the result of parsing a RAR5 stream
+// parseRAR5StreamResult contains the result of parsing a RAR5 stream.
 type parseRAR5StreamResult struct {
 	Files             []*RARFileEntry
 	IsHeaderEncrypted bool
@@ -194,7 +195,7 @@ type parseRAR5StreamResult struct {
 
 // parseRAR5Stream parses RAR 5.0 headers from a stream reader
 // This properly tracks offsets by reading headers sequentially and skipping data
-// If password is provided and headers are encrypted, it will decrypt them
+// If password is provided and headers are encrypted, it will decrypt them.
 func (p *RARParser) parseRAR5Stream(
 	stream *rarReader,
 	volumeIndex int,
@@ -215,7 +216,7 @@ func (p *RARParser) parseRAR5Stream(
 		// Read header
 		header, headerSize, dataSize, err := p.readRAR5HeaderFromStream(stream)
 		if err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			break
@@ -267,7 +268,7 @@ func (p *RARParser) parseRAR5Stream(
 				// Read encrypted header
 				encHeader, encHeaderSize, encDataSize, err := p.readAndDecryptRAR5Header(stream, encryptionKey, iv)
 				if err != nil {
-					if err == io.EOF {
+					if errors.Is(err, io.EOF) {
 						break
 					}
 					break
@@ -299,7 +300,7 @@ func (p *RARParser) parseRAR5Stream(
 					// Data is also encrypted, need to account for padding
 					paddedSize := ((encDataSize + crypto.BlockSize - 1) / crypto.BlockSize) * crypto.BlockSize
 					if err := stream.Skip(paddedSize); err != nil {
-						if err == io.EOF {
+						if errors.Is(err, io.EOF) {
 							break
 						}
 						break
@@ -339,7 +340,7 @@ func (p *RARParser) parseRAR5Stream(
 		// Skip the data section to get to the next header
 		if dataSize > 0 {
 			if err := stream.Skip(dataSize); err != nil {
-				if err == io.EOF {
+				if errors.Is(err, io.EOF) {
 					break
 				}
 				return nil, fmt.Errorf("failed to skip data section: %w", err)
@@ -355,7 +356,7 @@ func (p *RARParser) parseRAR5Stream(
 	return result, nil
 }
 
-// readAndDecryptRAR5Header reads an encrypted RAR5 header from stream
+// readAndDecryptRAR5Header reads an encrypted RAR5 header from stream.
 func (p *RARParser) readAndDecryptRAR5Header(stream *rarReader, key, iv []byte) (*rar5HeaderData, int, int64, error) {
 	// For encrypted headers, we need to read enough data and decrypt
 	// The header starts with encrypted CRC+size+type+flags...
@@ -478,7 +479,7 @@ func (p *RARParser) readAndDecryptRAR5Header(stream *rarReader, key, iv []byte) 
 }
 
 // readRAR5HeaderFromStream reads a RAR5 header from the stream
-// Optimized: reads header content in one call after getting header size
+// Optimized: reads header content in one call after getting header size.
 func (p *RARParser) readRAR5HeaderFromStream(stream *rarReader) (*rar5HeaderData, int, int64, error) {
 	// Read header CRC (4 bytes) + first few bytes that contain the header size vint
 	// We read a small initial buffer to get the CRC and header size
@@ -585,7 +586,7 @@ func (p *RARParser) readRAR5HeaderFromStream(stream *rarReader) (*rar5HeaderData
 }
 
 // parseVIntFromBuffer parses a vint from a byte slice without any Read calls
-// Returns (value, bytesConsumed) - bytesConsumed is 0 if buffer doesn't contain complete vint
+// Returns (value, bytesConsumed) - bytesConsumed is 0 if buffer doesn't contain complete vint.
 func parseVIntFromBuffer(buf []byte) (uint64, int) {
 	var result uint64
 	for i := 0; i < len(buf) && i < 10; i++ {
@@ -600,7 +601,7 @@ func parseVIntFromBuffer(buf []byte) (uint64, int) {
 
 // readVIntFromReaderWithBytes reads a variable-length integer from a reader
 // Returns the value, number of bytes read, the actual bytes read, and any error
-// Optimized: uses stack-allocated array to minimize allocations
+// Optimized: uses stack-allocated array to minimize allocations.
 func readVIntFromReaderWithBytes(r io.Reader) (uint64, int, []byte, error) {
 	// A vint can be at most 10 bytes for a 64-bit value (7 bits per byte)
 	// Use stack-allocated array to avoid heap allocation
@@ -639,20 +640,20 @@ func readVIntFromReaderWithBytes(r io.Reader) (uint64, int, []byte, error) {
 }
 
 // readVIntFromReader reads a variable-length integer from a reader
-// Returns the value, number of bytes read, and any error
+// Returns the value, number of bytes read, and any error.
 func readVIntFromReader(r io.Reader) (uint64, int, error) {
 	val, n, _, err := readVIntFromReaderWithBytes(r)
 	return val, n, err
 }
 
-// readVInt reads a variable-length integer from bytes.Reader (keep for compatibility)
+// readVInt reads a variable-length integer from bytes.Reader (keep for compatibility).
 func readVInt(r *bytes.Reader) (uint64, error) {
 	val, _, err := readVIntFromReader(r)
 	return val, err
 }
 
 // parseRAR4Stream parses RAR 4.x headers from a stream reader
-// This properly tracks offsets by reading headers sequentially and skipping data
+// This properly tracks offsets by reading headers sequentially and skipping data.
 func (p *RARParser) parseRAR4Stream(
 	stream *rarReader,
 	volumeIndex int,
@@ -668,7 +669,7 @@ func (p *RARParser) parseRAR4Stream(
 		// Read RAR4 header
 		header, err := p.readRAR4HeaderFromStream(stream)
 		if err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			break
@@ -712,7 +713,7 @@ func (p *RARParser) parseRAR4Stream(
 
 		if skipTotal > 0 {
 			if err := stream.Skip(skipTotal); err != nil {
-				if err == io.EOF {
+				if errors.Is(err, io.EOF) {
 					break
 				}
 				return nil, fmt.Errorf("failed to skip RAR4 data section: %w", err)
@@ -728,7 +729,7 @@ func (p *RARParser) parseRAR4Stream(
 	return files, nil
 }
 
-// readRAR4HeaderFromStream reads a single RAR 4.x header from stream
+// readRAR4HeaderFromStream reads a single RAR 4.x header from stream.
 func (p *RARParser) readRAR4HeaderFromStream(stream *rarReader) (*rar4Header, error) {
 	var header rar4Header
 

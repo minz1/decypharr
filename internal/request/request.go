@@ -23,7 +23,7 @@ import (
 
 type ClientOption func(*Client)
 
-// Client represents an HTTP client with additional capabilities
+// Client represents an HTTP client with additional capabilities.
 type Client struct {
 	client          *retryablehttp.Client
 	httpClient      *http.Client // underlying http client
@@ -38,28 +38,28 @@ type Client struct {
 	proxy           string
 }
 
-// WithMaxRetries sets the maximum number of retry attempts
+// WithMaxRetries sets the maximum number of retry attempts.
 func WithMaxRetries(maxRetries int) ClientOption {
 	return func(c *Client) {
 		c.maxRetries = maxRetries
 	}
 }
 
-// WithTimeout sets the request timeout
+// WithTimeout sets the request timeout.
 func WithTimeout(timeout time.Duration) ClientOption {
 	return func(c *Client) {
 		c.timeout = timeout
 	}
 }
 
-// WithRateLimiter sets a rate limiter
+// WithRateLimiter sets a rate limiter.
 func WithRateLimiter(rl ratelimit.Limiter) ClientOption {
 	return func(c *Client) {
 		c.rateLimiter = rl
 	}
 }
 
-// WithHeaders sets default headers
+// WithHeaders sets default headers.
 func WithHeaders(headers map[string]string) ClientOption {
 	return func(c *Client) {
 		c.headersMu.Lock()
@@ -80,7 +80,7 @@ func WithLogger(logger zerolog.Logger) ClientOption {
 	}
 }
 
-// WithRetryableStatus adds status codes that should trigger a retry
+// WithRetryableStatus adds status codes that should trigger a retry.
 func WithRetryableStatus(statusCodes ...int) ClientOption {
 	return func(c *Client) {
 		c.retryableStatus = make(map[int]struct{}) // reset the map
@@ -96,7 +96,7 @@ func WithProxy(proxyURL string) ClientOption {
 	}
 }
 
-// Do performs an HTTP request with retries for certain status codes
+// Do performs an HTTP request with retries for certain status codes.
 func (c *Client) Do(req *http.Request) (*http.Response, error) {
 	// Apply headers
 	c.headersMu.RLock()
@@ -126,7 +126,7 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 	return c.client.Do(retryReq)
 }
 
-// MakeRequest performs an HTTP request and returns the response body as bytes
+// MakeRequest performs an HTTP request and returns the response body as bytes.
 func (c *Client) MakeRequest(req *http.Request) ([]byte, error) {
 	res, err := c.Do(req)
 	if err != nil {
@@ -186,7 +186,7 @@ func retryAfterBackoff(min, max time.Duration, attemptNum int, resp *http.Respon
 	return retryablehttp.DefaultBackoff(min, max, attemptNum, resp)
 }
 
-// New creates a new HTTP client with the specified options
+// New creates a new HTTP client with the specified options.
 func New(options ...ClientOption) *Client {
 	client := &Client{
 		maxRetries:    5,

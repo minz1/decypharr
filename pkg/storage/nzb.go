@@ -2,6 +2,7 @@ package storage
 
 import (
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -16,7 +17,7 @@ const (
 	NZBFileTypeUnknown  NZBFileType = "unknown" // Unknown file type
 )
 
-// NZB represents a torrent-like structure for NZB files
+// NZB represents a torrent-like structure for NZB files.
 type NZB struct {
 	ID             string    `json:"id"                     msgpack:"id"`
 	Name           string    `json:"name"                   msgpack:"name"`
@@ -43,7 +44,7 @@ type NZB struct {
 	Password       string    `json:"password,omitempty"     msgpack:"password,omitempty"`
 }
 
-// NZBFile represents a grouped file with its Segments
+// NZBFile represents a grouped file with its Segments.
 type NZBFile struct {
 	NzbID         string       `json:"nzo_id"                   msgpack:"nzo_id"`
 	Name          string       `json:"name"                     msgpack:"name"`
@@ -97,10 +98,10 @@ func (nzb *NZB) GetFiles() []NZBFile {
 			files = append(files, file)
 		}
 	}
-	return files[:len(files):len(files)] // Return a slice to avoid aliasing
+	return slices.Clip(files) // Return a slice to avoid aliasing
 }
 
-// NZBSegment represents a segment with all necessary download info
+// NZBSegment represents a segment with all necessary download info.
 type NZBSegment struct {
 	Number           int    `json:"number"             msgpack:"number"`
 	MessageID        string `json:"message_id"         msgpack:"message_id"`
@@ -111,7 +112,7 @@ type NZBSegment struct {
 	SegmentDataStart int64  `json:"segment_data_start" msgpack:"segment_data_start"` // Offset within the decoded NNTP segment where reading should begin (for sliced reads)
 }
 
-// ArchiveVolumeInfo holds metadata about archive volumes (internal parser use only)
+// ArchiveVolumeInfo holds metadata about archive volumes (internal parser use only).
 type ArchiveVolumeInfo struct {
 	Name         string
 	Size         int64
@@ -119,7 +120,7 @@ type ArchiveVolumeInfo struct {
 	SegmentEnd   int
 }
 
-// ExtractedFileInfo contains metadata for an extracted file from an archive
+// ExtractedFileInfo contains metadata for an extracted file from an archive.
 type ExtractedFileInfo struct {
 	FileName     string
 	InternalPath string

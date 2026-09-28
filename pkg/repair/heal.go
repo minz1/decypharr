@@ -57,8 +57,8 @@ func (r *Service) healBrokenEntry(
 			continue
 		}
 		job, err := r.reacquireBrokenFile(ctx, broken)
-		switch {
-		case err == nil:
+		switch err {
+		case nil:
 			initiated++
 			r.logger.Info().
 				Str("arr", broken.ArrName).

@@ -43,7 +43,7 @@ func (m *Manager) initDebridClients() {
 	}
 }
 
-// createClient creates a debrid client based on configuration
+// createClient creates a debrid client based on configuration.
 func (m *Manager) createClient(dc config.Debrid) (debrid.Client, error) {
 	var client debrid.Client
 	var err error
@@ -80,7 +80,7 @@ func (m *Manager) createClient(dc config.Debrid) (debrid.Client, error) {
 	return client, nil
 }
 
-// FilterDebrid returns clients that match the filter function
+// FilterDebrid returns clients that match the filter function.
 func (m *Manager) FilterDebrid(filter func(debrid.Client) bool) []debrid.Client {
 	type prioritizedClient struct {
 		name   string

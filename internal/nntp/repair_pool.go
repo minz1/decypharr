@@ -76,7 +76,7 @@ func (c *Client) newRepairPool(percent int) *RepairPool {
 		quit:    make(chan struct{}),
 	}
 	p.wg.Add(capacity)
-	for i := 0; i < capacity; i++ {
+	for range capacity {
 		go p.worker(c)
 	}
 	return p

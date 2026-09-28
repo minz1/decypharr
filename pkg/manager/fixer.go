@@ -15,7 +15,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
-// Fixer handles torrent repair with cascading re-insertion across debrids
+// Fixer handles torrent repair with cascading re-insertion across debrids.
 type Fixer struct {
 	manager *Manager
 
@@ -26,7 +26,7 @@ type Fixer struct {
 	maxReinsertRetries int
 }
 
-// FixerRequest tracks an ongoing repair operation
+// FixerRequest tracks an ongoing repair operation.
 type FixerRequest struct {
 	InfoHash         string
 	CurrentDebrid    string
@@ -36,7 +36,7 @@ type FixerRequest struct {
 	result           chan *FixResult
 }
 
-// FixResult is the result of a fix operation
+// FixResult is the result of a fix operation.
 type FixResult struct {
 	Success       bool
 	NewDebrid     string
@@ -44,7 +44,7 @@ type FixResult struct {
 	AttemptsCount int
 }
 
-// NewFixer creates a new Fixer instance
+// NewFixer creates a new Fixer instance.
 func NewFixer(manager *Manager) *Fixer {
 	// GetReader debrid order from config
 	cfg := config.Get()
@@ -82,7 +82,7 @@ func (m *Manager) ReinsertEntry(ctx context.Context, entry *storage.Entry) error
 // 1. Try to re-insert on current active debrid, except if skipCurrent is true
 // 2. If fails, cascade through other debrids in config order
 // 3. Skip debrids where torrent already exists (unless they're also broken)
-// 4. Mark as completely failed if all debrids fail
+// 4. Mark as completely failed if all debrids fail.
 func (f *Fixer) FixTorrent(ctx context.Context, entry *storage.Entry, skipCurrent bool) (*FixResult, error) {
 	if entry == nil {
 		return nil, fmt.Errorf("entry is nil")
@@ -208,7 +208,7 @@ func (f *Fixer) FixTorrent(ctx context.Context, entry *storage.Entry, skipCurren
 	return result, result.Error
 }
 
-// MoveTorrent attempts to re-insert a torrent on a specific debrid
+// MoveTorrent attempts to re-insert a torrent on a specific debrid.
 func (f *Fixer) MoveTorrent(entry *storage.Entry, debridName string, reinsert bool) (bool, error) {
 	// Check if entry can be moved
 	if entry == nil {
@@ -363,7 +363,7 @@ func (f *Fixer) MoveTorrent(entry *storage.Entry, debridName string, reinsert bo
 
 // buildAttemptOrder creates the order of debrids to attempt re-insertion
 // Priority: current active debrid first, then others in config order
-// If skipCurrent is true, current active debrid is skipped
+// If skipCurrent is true, current active debrid is skipped.
 func (f *Fixer) buildAttemptOrder(torrent *storage.Entry, skipCurrent bool) []string {
 	order := make([]string, 0, len(f.providerOrder))
 
@@ -378,13 +378,13 @@ func (f *Fixer) buildAttemptOrder(torrent *storage.Entry, skipCurrent bool) []st
 	return order
 }
 
-// IsFailedToReinsert checks if a torrent has been marked as failed to re-insert
+// IsFailedToReinsert checks if a torrent has been marked as failed to re-insert.
 func (f *Fixer) IsFailedToReinsert(infohash, debrid string) bool {
 	_, failed := f.failedToReinsert.Load(fmt.Sprintf("%s:%s", infohash, debrid))
 	return failed
 }
 
-// ResetFailureState manually resets the failure state for a torrent
+// ResetFailureState manually resets the failure state for a torrent.
 func (f *Fixer) ResetFailureState(infohash string) {
 	f.failedToReinsert.Delete(infohash)
 }

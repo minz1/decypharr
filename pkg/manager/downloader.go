@@ -56,7 +56,7 @@ type downloadLogMeta struct {
 	parts           int
 }
 
-// NewDownloadManager creates a new download manager
+// NewDownloadManager creates a new download manager.
 func NewDownloadManager(manager *Manager) *Downloader {
 	return &Downloader{
 		manager: manager,
@@ -181,7 +181,7 @@ func (d *Downloader) markAsError(entry *storage.Entry, err error) {
 	})
 }
 
-// processSymlink creates symlinks for torrent files
+// processSymlink creates symlinks for torrent files.
 func (d *Downloader) processSymlink(entry *storage.Entry, mountPath string) error {
 	files := entry.GetActiveFiles()
 	torrentSymlinkPath := entry.DownloadPath()
@@ -192,7 +192,7 @@ func (d *Downloader) processSymlink(entry *storage.Entry, mountPath string) erro
 	// Create symlink directory
 	err := os.MkdirAll(torrentSymlinkPath, os.ModePerm)
 	if err != nil {
-		return fmt.Errorf("failed to create directory: %s: %v", torrentSymlinkPath, err)
+		return fmt.Errorf("failed to create directory: %s: %w", torrentSymlinkPath, err)
 	}
 
 	filePaths, err := d.createSymlinksWhenMountFilesAppear(entry, files, mountPath, torrentSymlinkPath)
@@ -485,7 +485,7 @@ func limitedStringSample(values []string, limit int) []string {
 
 // processDownload downloads all files for an entry with progress tracking
 // For torrents: uses HTTP download from debrid
-// For NZBs: uses parallel NNTP segment download
+// For NZBs: uses parallel NNTP segment download.
 func (d *Downloader) processDownload(entry *storage.Entry) error {
 	// Check if this is a usenet entry
 	if entry.IsNZB() {
@@ -494,7 +494,7 @@ func (d *Downloader) processDownload(entry *storage.Entry) error {
 	return d.processTorrentDownload(entry)
 }
 
-// processTorrentDownload downloads files from debrid via HTTP
+// processTorrentDownload downloads files from debrid via HTTP.
 func (d *Downloader) processTorrentDownload(entry *storage.Entry) error {
 	files := entry.GetActiveFiles()
 	d.logger.Info().Msgf("Downloading %d files...", len(files))
@@ -505,7 +505,7 @@ func (d *Downloader) processTorrentDownload(entry *storage.Entry) error {
 	}
 	downloadedFolder := entry.DownloadPath()
 	if err := os.MkdirAll(downloadedFolder, os.ModePerm); err != nil {
-		return fmt.Errorf("failed to create download directory: %s: %v", downloadedFolder, err)
+		return fmt.Errorf("failed to create download directory: %s: %w", downloadedFolder, err)
 	}
 	entry.SizeDownloaded = 0
 	entry.IsDownloading = true
@@ -615,7 +615,7 @@ func (d *Downloader) resolveLinkWithRetry(
 	return types.DownloadLink{}, fmt.Errorf("link unresolved after %d attempts: %w", maxAttempts, lastErr)
 }
 
-// processUsenetDownload downloads NZB files via parallel NNTP segment fetching
+// processUsenetDownload downloads NZB files via parallel NNTP segment fetching.
 func (d *Downloader) processUsenetDownload(entry *storage.Entry) error {
 	if d.manager.usenet == nil {
 		return fmt.Errorf("usenet client not configured")
@@ -626,7 +626,7 @@ func (d *Downloader) processUsenetDownload(entry *storage.Entry) error {
 
 	downloadedFolder := entry.DownloadPath()
 	if err := os.MkdirAll(downloadedFolder, os.ModePerm); err != nil {
-		return fmt.Errorf("failed to create download directory: %s: %v", downloadedFolder, err)
+		return fmt.Errorf("failed to create download directory: %s: %w", downloadedFolder, err)
 	}
 
 	totalSize := int64(0)

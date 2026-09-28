@@ -176,7 +176,7 @@ func (dl *DownloadLink) String() string {
 	return dl.DownloadLink
 }
 
-// SpeedTestResult holds the result of a debrid provider speed test
+// SpeedTestResult holds the result of a debrid provider speed test.
 type SpeedTestResult struct {
 	Provider  string    `json:"provider"`
 	SpeedMBps float64   `json:"speed_mbps"`

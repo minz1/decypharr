@@ -34,7 +34,7 @@ func (m *Magnet) IsTorrent() bool {
 	return m.File != nil
 }
 
-// stripTrackersFromMagnet removes trackers from a magnet and returns a modified copy
+// stripTrackersFromMagnet removes trackers from a magnet and returns a modified copy.
 func stripTrackersFromMagnet(mi metainfo.Magnet, fileType string) metainfo.Magnet {
 	originalTrackerCount := len(mi.Trackers)
 	if len(mi.Trackers) > 0 {
@@ -135,7 +135,7 @@ func ReadMagnetFile(file io.Reader) string {
 func OpenMagnetHttpURL(magnetLink string, rmTrackerUrls bool) (*Magnet, error) {
 	resp, err := http.Get(magnetLink)
 	if err != nil {
-		return nil, fmt.Errorf("error making GET request: %v", err)
+		return nil, fmt.Errorf("error making GET request: %w", err)
 	}
 	defer func(resp *http.Response) {
 		err := resp.Body.Close()
@@ -145,7 +145,7 @@ func OpenMagnetHttpURL(magnetLink string, rmTrackerUrls bool) (*Magnet, error) {
 	}(resp) // Ensure the response is closed after the function ends
 	torrentData, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("error reading response body: %v", err)
+		return nil, fmt.Errorf("error reading response body: %w", err)
 	}
 	return GetMagnetFromBytes(torrentData, rmTrackerUrls)
 }

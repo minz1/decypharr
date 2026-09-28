@@ -194,7 +194,7 @@ func (r *Client) GetCoreStats(ctx context.Context) (*CoreStatsResponse, error) {
 	return &coreStats, nil
 }
 
-// GetMemoryUsage returns memory usage statistics
+// GetMemoryUsage returns memory usage statistics.
 func (r *Client) GetMemoryUsage(ctx context.Context) (*MemoryStats, error) {
 	req := Request{
 		Command: "core/memstats",
@@ -208,7 +208,7 @@ func (r *Client) GetMemoryUsage(ctx context.Context) (*MemoryStats, error) {
 	return &memStats, nil
 }
 
-// GetBandwidthStats returns bandwidth usage for all transfers
+// GetBandwidthStats returns bandwidth usage for all transfers.
 func (r *Client) GetBandwidthStats(ctx context.Context) (*BandwidthStats, error) {
 	req := Request{
 		Command: "core/bwlimit",
@@ -222,7 +222,7 @@ func (r *Client) GetBandwidthStats(ctx context.Context) (*BandwidthStats, error)
 	return &bwStats, nil
 }
 
-// GetVersion returns rclone version information
+// GetVersion returns rclone version information.
 func (r *Client) GetVersion(ctx context.Context) (*VersionResponse, error) {
 	req := Request{
 		Command: "core/version",

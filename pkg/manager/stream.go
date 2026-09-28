@@ -11,7 +11,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
-// ActiveStream represents a currently active streaming file
+// ActiveStream represents a currently active streaming file.
 type ActiveStream struct {
 	ID             string   `json:"id"`
 	EntryID        string   `json:"entry_id"`

@@ -5,7 +5,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
-// Event represents a notification event to be dispatched
+// Event represents a notification event to be dispatched.
 type Event struct {
 	// Type is the event type (e.g., download_complete, repair_failed)
 	Type config.NotificationEvent
@@ -23,7 +23,7 @@ type Event struct {
 	Error error
 }
 
-// Notifier is the interface for sending notifications
+// Notifier is the interface for sending notifications.
 type Notifier interface {
 	// Send dispatches the notification event
 	Send(event Event) error

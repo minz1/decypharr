@@ -79,7 +79,7 @@ func TestStreamReaderSequentialReuseOneSession(t *testing.T) {
 		n, err := r.ReadAt(buf, off)
 		got = append(got, buf[:n]...)
 		off += int64(n)
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -104,7 +104,7 @@ func TestStreamReaderEOFBoundaries(t *testing.T) {
 	// A read that ends exactly at EOF reports it along with the bytes.
 	buf := make([]byte, 4)
 	n, err := r.ReadAt(buf, 6)
-	if n != 4 || err != io.EOF {
+	if n != 4 || !errors.Is(err, io.EOF) {
 		t.Fatalf("tail read: n=%d err=%v, want 4, io.EOF", n, err)
 	}
 	if !bytes.Equal(buf, data[6:]) {
@@ -112,13 +112,13 @@ func TestStreamReaderEOFBoundaries(t *testing.T) {
 	}
 
 	// A read starting at or past EOF returns nothing.
-	if n, err := r.ReadAt(buf, int64(len(data))); n != 0 || err != io.EOF {
+	if n, err := r.ReadAt(buf, int64(len(data))); n != 0 || !errors.Is(err, io.EOF) {
 		t.Fatalf("read at EOF: n=%d err=%v, want 0, io.EOF", n, err)
 	}
 
 	// An oversized request is clamped to what the file holds.
 	big := make([]byte, 64)
-	if n, err := r.ReadAt(big, 8); n != 2 || err != io.EOF {
+	if n, err := r.ReadAt(big, 8); n != 2 || !errors.Is(err, io.EOF) {
 		t.Fatalf("oversized read: n=%d err=%v, want 2, io.EOF", n, err)
 	}
 }
@@ -129,7 +129,7 @@ func TestStreamReaderBackwardSeek(t *testing.T) {
 	defer r.close()
 
 	buf := make([]byte, 4)
-	if _, err := r.ReadAt(buf, 6); err != io.EOF {
+	if _, err := r.ReadAt(buf, 6); !errors.Is(err, io.EOF) {
 		t.Fatalf("forward read: %v", err)
 	}
 	// Seeking back reuses the session; the manager session handles the
@@ -201,14 +201,14 @@ func TestStreamReaderShortReadDropsSession(t *testing.T) {
 	defer r.close()
 	buf := make([]byte, 4)
 	n, err := r.ReadAt(buf, 0)
-	if n != 2 || err != io.ErrUnexpectedEOF || string(buf[:n]) != "ab" {
+	if n != 2 || !errors.Is(err, io.ErrUnexpectedEOF) || string(buf[:n]) != "ab" {
 		t.Fatalf("short read = %q, %v", buf[:n], err)
 	}
 	if !first.closed {
 		t.Fatal("failed session remains open")
 	}
 	n, err = r.ReadAt(buf, 2)
-	if n != 4 || err != io.EOF || string(buf[:n]) != "cdef" {
+	if n != 4 || !errors.Is(err, io.EOF) || string(buf[:n]) != "cdef" {
 		t.Fatalf("retry = %q, %v", buf[:n], err)
 	}
 	if opens.Load() != 2 {

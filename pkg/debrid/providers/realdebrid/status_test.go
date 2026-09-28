@@ -41,7 +41,7 @@ func TestCheckStatusSelectsAllowedFilesAndMapsLinks(t *testing.T) {
 				selected = 1
 			}
 			if gets.Load() > 2 {
-				http.Error(w, "unexpected poll", 500)
+				http.Error(w, "unexpected poll", http.StatusInternalServerError)
 				return
 			}
 			fmt.Fprintf(
@@ -137,7 +137,7 @@ func TestCheckStatusFailureAndUncachedContracts(t *testing.T) {
 				switch r.Method + " " + r.URL.Path {
 				case "GET /torrents/info/id":
 					if gets.Add(1) > 1 {
-						http.Error(w, "unexpected poll", 500)
+						http.Error(w, "unexpected poll", http.StatusInternalServerError)
 						return
 					}
 					fmt.Fprintf(

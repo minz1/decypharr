@@ -21,7 +21,7 @@ func (r *AvailabilityResponse) UnmarshalJSON(data []byte) error {
 	var arrayData []map[string]Hoster
 	err = json.Unmarshal(data, &arrayData)
 	if err != nil {
-		return fmt.Errorf("failed to unmarshal as both object and array: %v", err)
+		return fmt.Errorf("failed to unmarshal as both object and array: %w", err)
 	}
 
 	// If it's an array, use the first element

@@ -12,23 +12,23 @@ import (
 	"time"
 )
 
-// ErrorCategory defines the type of link error and its retry behavior
+// ErrorCategory defines the type of link error and its retry behavior.
 type ErrorCategory int
 
 const (
-	// CategoryPermanent - Don't retry (file deleted, unauthorized)
+	// CategoryPermanent - Don't retry (file deleted, unauthorized).
 	CategoryPermanent ErrorCategory = iota
-	// CategoryRetryable - retry same link (timeout, 503)
+	// CategoryRetryable - retry same link (timeout, 503).
 	CategoryRetryable
-	// CategoryRefetchable - Get new link (expired, invalid code)
+	// CategoryRefetchable - Get new link (expired, invalid code).
 	CategoryRefetchable
-	// CategoryAccountIssue - Disable account (bandwidth exceeded)
+	// CategoryAccountIssue - Disable account (bandwidth exceeded).
 	CategoryAccountIssue
-	// CategoryThrottled - Back off, honoring RetryAfter; the link itself is fine (429)
+	// CategoryThrottled - Back off, honoring RetryAfter; the link itself is fine (429).
 	CategoryThrottled
 )
 
-// String returns a human-readable name for the error category
+// String returns a human-readable name for the error category.
 func (c ErrorCategory) String() string {
 	switch c {
 	case CategoryPermanent:
@@ -46,7 +46,7 @@ func (c ErrorCategory) String() string {
 	}
 }
 
-// Error represents a structured error with retry semantics
+// Error represents a structured error with retry semantics.
 type Error struct {
 	Err        error
 	Category   ErrorCategory
@@ -54,7 +54,7 @@ type Error struct {
 	RetryAfter time.Duration // For CategoryThrottled: server-requested wait, 0 if unspecified
 }
 
-// Error implements the error interface
+// Error implements the error interface.
 func (e *Error) Error() string {
 	if e.Code != "" {
 		return fmt.Sprintf("%s: %s", e.Code, e.Err.Error())
@@ -62,32 +62,32 @@ func (e *Error) Error() string {
 	return e.Err.Error()
 }
 
-// Unwrap returns the underlying error
+// Unwrap returns the underlying error.
 func (e *Error) Unwrap() error {
 	return e.Err
 }
 
-// ShouldRetry returns true if the same link should be retried
+// ShouldRetry returns true if the same link should be retried.
 func (e *Error) ShouldRetry() bool {
 	return e.Category == CategoryRetryable
 }
 
-// ShouldRefetch returns true if a new link should be fetched
+// ShouldRefetch returns true if a new link should be fetched.
 func (e *Error) ShouldRefetch() bool {
 	return e.Category == CategoryRefetchable
 }
 
-// ShouldDisableAccount returns true if the account should be disabled
+// ShouldDisableAccount returns true if the account should be disabled.
 func (e *Error) ShouldDisableAccount() bool {
 	return e.Category == CategoryAccountIssue
 }
 
-// IsPermanent returns true if the error is permanent and no retry should happen
+// IsPermanent returns true if the error is permanent and no retry should happen.
 func (e *Error) IsPermanent() bool {
 	return e.Category == CategoryPermanent
 }
 
-// Sentinel errors
+// Sentinel errors.
 var (
 	ErrUnauthorized        = errors.New("unauthorized access to download link")
 	ErrLinkNotFound        = errors.New("download link not found")
@@ -102,14 +102,14 @@ var (
 	ErrEmptyLink           = errors.New("download link is empty")
 )
 
-// HTTP error sentinels
+// HTTP error sentinels.
 var (
 	Err404 = errors.New("HTTP 404 Not Found")
 	Err429 = errors.New("HTTP 429 Too Many Requests")
 	Err503 = errors.New("HTTP 503 Service Unavailable")
 )
 
-// NewLinkError creates a new LinkError with the given error and category
+// NewLinkError creates a new LinkError with the given error and category.
 func NewLinkError(err error, category ErrorCategory, code string) *Error {
 	return &Error{
 		Err:      err,
@@ -118,27 +118,27 @@ func NewLinkError(err error, category ErrorCategory, code string) *Error {
 	}
 }
 
-// NewPermanentError creates a permanent error
+// NewPermanentError creates a permanent error.
 func NewPermanentError(err error, code string) *Error {
 	return NewLinkError(err, CategoryPermanent, code)
 }
 
-// NewRetryableError creates a retryable error
+// NewRetryableError creates a retryable error.
 func NewRetryableError(err error, code string) *Error {
 	return NewLinkError(err, CategoryRetryable, code)
 }
 
-// NewRefetchableError creates an error that requires refetching the link
+// NewRefetchableError creates an error that requires refetching the link.
 func NewRefetchableError(err error, code string) *Error {
 	return NewLinkError(err, CategoryRefetchable, code)
 }
 
-// NewAccountError creates an error that requires disabling the account
+// NewAccountError creates an error that requires disabling the account.
 func NewAccountError(err error, code string) *Error {
 	return NewLinkError(err, CategoryAccountIssue, code)
 }
 
-// ErrorCodeToLinkError converts an error code string to a LinkError with appropriate category
+// ErrorCodeToLinkError converts an error code string to a LinkError with appropriate category.
 func ErrorCodeToLinkError(code string) *Error {
 	switch code {
 	case "link_not_found":
@@ -248,7 +248,7 @@ func parseRetryAfter(value string) time.Duration {
 	return 0
 }
 
-// GetLinkError extracts a LinkError from an error chain
+// GetLinkError extracts a LinkError from an error chain.
 func GetLinkError(err error) *Error {
 	if linkErr, ok := errors.AsType[*Error](err); ok {
 		return linkErr

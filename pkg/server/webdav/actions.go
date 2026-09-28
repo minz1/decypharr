@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"path"
 	"path/filepath"
+	"strconv"
 
 	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/internal/utils"
@@ -48,7 +49,7 @@ func (h *Handler) handleDelete(current *manager.FileInfo, w http.ResponseWriter,
 
 func (h *Handler) handleHead(entry *manager.FileInfo, w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", utils.GetContentType(entry.Name()))
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", entry.Size()))
+	w.Header().Set("Content-Length", strconv.FormatInt(entry.Size(), 10))
 	w.Header().Set("Last-Modified", entry.ModTime().UTC().Format(http.TimeFormat))
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.WriteHeader(http.StatusOK)

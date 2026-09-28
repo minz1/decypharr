@@ -25,7 +25,7 @@ const (
 	EntryKindFile     string = "file"
 )
 
-// FileInfo implements os.FileInfo
+// FileInfo implements os.FileInfo.
 type FileInfo struct {
 	name         string
 	size         int64
@@ -59,7 +59,7 @@ func (f *FileInfo) InfoHash() string     { return f.infohash }
 func (f *FileInfo) Kind() string         { return f.kind }
 
 // GetTorrentMountPath returns the full mount path for a torrent
-// Returns the path based on the new unified mount structure
+// Returns the path based on the new unified mount structure.
 func (m *Manager) GetTorrentMountPath(torrent *storage.Entry) string {
 	return filepath.Join(m.config.Mount.MountPath, EntryAllFolder, torrent.GetFolder())
 }
@@ -158,7 +158,7 @@ func (m *Manager) GetTorrentEntry(torrentName string) (*FileInfo, error) {
 	return current, nil
 }
 
-// GetEntryInfo returns a FileInfo for a torrent/entry by name - O(1) lookup
+// GetEntryInfo returns a FileInfo for a torrent/entry by name - O(1) lookup.
 func (m *Manager) GetEntryInfo(name string) (*FileInfo, error) {
 	entry, err := m.storage.GetEntryItem(name)
 	if err != nil {
@@ -209,7 +209,7 @@ func (m *Manager) GetTorrentFile(torrentName, fileName string) (*FileInfo, error
 
 // getEntryChildren
 // Groups are built-in, provider, or virtual folders.
-// Uses metadata-only iteration (no disk reads, no protobuf deserialization)
+// Uses metadata-only iteration (no disk reads, no protobuf deserialization).
 func (m *Manager) getEntryChildren(group string) (*FileInfo, []FileInfo) {
 	currentDir := &FileInfo{
 		name:    group,

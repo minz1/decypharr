@@ -44,7 +44,6 @@ func (q *QBit) Routes() http.Handler {
 			r.Post("/recheck", q.handleTorrentRecheck)
 			r.Post("/properties", q.handleTorrentProperties)
 			r.Post("/files", q.handleTorrentFiles)
-
 		})
 
 		r.Route("/app", func(r chi.Router) {

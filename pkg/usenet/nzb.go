@@ -8,7 +8,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/usenet/types"
 )
 
-// ValidateNZB performs basic validation on NZB content
+// ValidateNZB performs basic validation on NZB content.
 func validateNZB(content []byte) error {
 	if len(content) == 0 {
 		return fmt.Errorf("empty NZB content")

@@ -17,7 +17,7 @@ func (s *Server) LoginHandler(w http.ResponseWriter, r *http.Request) {
 	auth := cfg.GetAuth()
 	tokenOnly := auth != nil && auth.TokenOnly
 
-	if r.Method == "GET" {
+	if r.Method == http.MethodGet {
 		data := map[string]any{
 			"URLBase":   cfg.URLBase,
 			"Page":      "login",
@@ -85,7 +85,7 @@ func (s *Server) RegisterHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if r.Method == "GET" {
+	if r.Method == http.MethodGet {
 		data := map[string]any{
 			"URLBase": cfg.URLBase,
 			"Page":    "register",

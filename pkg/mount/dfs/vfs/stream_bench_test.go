@@ -112,7 +112,7 @@ func BenchmarkReadAtContextWarm(b *testing.B) {
 
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		off := (int64(i) * readSize) % (fileSize - readSize)
 		if _, err := item.ReadAtContext(ctx, p, off); err != nil {
 			b.Fatal(err)
@@ -134,7 +134,7 @@ func BenchmarkReadAtContextFromDisk(b *testing.B) {
 
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		off := (int64(i) * readSize) % (fileSize - readSize)
 		if _, err := item.ReadAtContext(ctx, p, off); err != nil {
 			b.Fatal(err)
@@ -188,7 +188,7 @@ func BenchmarkCacheWriterWrite(b *testing.B) {
 
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		if _, err := w.Write(chunk); err != nil {
 			b.Fatal(err)
 		}
@@ -253,7 +253,7 @@ func BenchmarkColdReadWakeLatency(b *testing.B) {
 
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		off := int64(i) * readSize
 		offs <- off
 		if _, err := item.ReadAtContext(ctx, p, off); err != nil {
@@ -312,7 +312,7 @@ func BenchmarkKickWaiters(b *testing.B) {
 
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		dls.kickWaiters()
 	}
 }
