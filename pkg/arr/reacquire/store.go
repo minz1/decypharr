@@ -285,7 +285,7 @@ func (r *BindingRepository) ReplaceArrGeneration(arrName string, generation uint
 
 	// The generation is committed from here on, so the rows it replaces are
 	// dropped. A crash in between leaves rows the loader ignores.
-	r.dropSupersededRowsLocked(state, arrName, prepared)
+	r.dropSupersededRowsLocked(state, arrName, prepared, written)
 	state.stored[arrName] = written
 	state.generations[arrName] = generation
 	return nil
@@ -521,10 +521,13 @@ func (r *BindingRepository) dropSupersededRowsLocked(
 	state *bindingRepositoryState,
 	arrName string,
 	bindings []Binding,
+	written []storedPage,
 ) {
+	// A replace that reuses the committed generation overwrites the same page
+	// keys; deleting those would drop the pages the new manifest names.
 	for _, page := range state.stored[arrName] {
-		if err := r.store.Delete(page.key); err != nil {
-			continue
+		if !slices.Contains(written, page) {
+			_ = r.store.Delete(page.key)
 		}
 	}
 	delete(state.stored, arrName)

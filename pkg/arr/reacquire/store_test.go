@@ -297,6 +297,29 @@ func TestBindingRepositoryCachesStateAcrossTargetedSaves(t *testing.T) {
 	}
 }
 
+// Replacing with the committed generation reuses its page keys; the replace
+// must not delete the pages it just wrote.
+func TestBindingRepositoryReplaceWithSameGenerationKeepsPages(t *testing.T) {
+	t.Parallel()
+	path := t.TempDir() + "/bindings.db"
+	repository := openTestBindingRepository(t, path)
+	first := repositoryTestBinding("radarr", "entry-1", "file-1", 5)
+	if err := repository.ReplaceArrGeneration("radarr", 5, []Binding{first}); err != nil {
+		t.Fatal(err)
+	}
+	second := repositoryTestBinding("radarr", "entry-2", "file-2", 5)
+	if err := repository.ReplaceArrGeneration("radarr", 5, []Binding{second}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	repository = openTestBindingRepository(t, path)
+	t.Cleanup(func() { _ = repository.Close() })
+	assertSingleRepositoryBinding(t, repository, second)
+}
+
 func openTestBindingRepository(t *testing.T, path string) *BindingRepository {
 	t.Helper()
 	repository, err := OpenBindingRepository(path)
