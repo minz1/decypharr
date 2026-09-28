@@ -70,8 +70,8 @@ func TestMetadataFlushDebounce(t *testing.T) {
 		t.Fatal(err)
 	}
 	var info ItemInfo
-	if err := json.Unmarshal(data, &info); err != nil {
-		t.Fatal(err)
+	if unmarshalErr := json.Unmarshal(data, &info); unmarshalErr != nil {
+		t.Fatal(unmarshalErr)
 	}
 	if len(info.Rs) != want {
 		t.Fatalf("final flush lost state: %d ranges on disk, want %d", len(info.Rs), want)
@@ -158,12 +158,12 @@ func TestDiskPersistenceChangeMarksMetadataDirty(t *testing.T) {
 	t.Cleanup(func() { _ = buf.Close() })
 	item = &CacheItem{buf: buf, info: ItemInfo{Size: fileSize}}
 
-	if _, _, err := item.WriteAtNoOverwrite(make([]byte, 128<<10), 0); err != nil {
-		t.Fatal(err)
+	if _, _, writeAtNoOverwriteErr := item.WriteAtNoOverwrite(make([]byte, 128<<10), 0); writeAtNoOverwriteErr != nil {
+		t.Fatal(writeAtNoOverwriteErr)
 	}
 	item.metaDirty.Store(false)
-	if err := item.buf.Flush(); err != nil {
-		t.Fatal(err)
+	if flushErr := item.buf.Flush(); flushErr != nil {
+		t.Fatal(flushErr)
 	}
 	if !item.metaDirty.Load() {
 		t.Fatal("disk persistence change did not dirty metadata")
@@ -265,8 +265,11 @@ func TestDownloadWithPriorityReportsHit(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if _, _, err := item.WriteAtNoOverwrite(make([]byte, missing.Size), missing.Pos); err != nil {
-		t.Fatal(err)
+	if _, _, writeAtNoOverwriteErr := item.WriteAtNoOverwrite(
+		make([]byte, missing.Size),
+		missing.Pos,
+	); writeAtNoOverwriteErr != nil {
+		t.Fatal(writeAtNoOverwriteErr)
 	}
 	dls.kickWaiters()
 

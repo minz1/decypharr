@@ -103,11 +103,11 @@ func TestPipelineBodiesSkipPositions(t *testing.T) {
 					t.Errorf("pending result %d = (%d bytes, %v)", i, len(result.Body), result.Error)
 				}
 			}
-			if _, _, err := c.Stat("<after@skip>"); err != nil {
-				t.Fatalf("connection reuse: %v", err)
+			if _, _, statErr := c.Stat("<after@skip>"); statErr != nil {
+				t.Fatalf("connection reuse: %v", statErr)
 			}
-			if err := <-done; err != nil {
-				t.Fatal(err)
+			if doneErr := <-done; doneErr != nil {
+				t.Fatal(doneErr)
 			}
 		})
 	}
@@ -176,12 +176,12 @@ func TestPipelineBodiesSkipPreservesErrorIndices(t *testing.T) {
 				if results[3].Error != nil || !bytes.Equal(results[3].Body, payload) {
 					t.Fatal("later response was not drained and decoded")
 				}
-				if _, _, err := c.Stat("<after@skip>"); err != nil {
-					t.Fatalf("connection reuse: %v", err)
+				if _, _, statErr := c.Stat("<after@skip>"); statErr != nil {
+					t.Fatalf("connection reuse: %v", statErr)
 				}
 			}
-			if err := <-done; err != nil {
-				t.Fatal(err)
+			if doneErr := <-done; doneErr != nil {
+				t.Fatal(doneErr)
 			}
 		})
 	}

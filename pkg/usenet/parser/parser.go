@@ -297,9 +297,9 @@ func (p *NZBParser) Process(
 				file.Name = nzb.Name
 			}
 		}
-		if err := cfg.ValidateFileAllowed(file.Name, file.Size); err != nil {
+		if validateFileAllowedErr := cfg.ValidateFileAllowed(file.Name, file.Size); validateFileAllowedErr != nil {
 			skippedFiles++
-			skippedErr = err
+			skippedErr = validateFileAllowedErr
 			continue
 		}
 		nzb.TotalSize += file.Size

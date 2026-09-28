@@ -489,8 +489,8 @@ func TestUsenetTransportResumesMidStream(t *testing.T) {
 	if !handles[0].closed.Load() {
 		t.Fatal("failed handle was not closed on resume")
 	}
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
+	if closeErr := s.Close(); closeErr != nil {
+		t.Fatal(closeErr)
 	}
 	if !handles[1].closed.Load() {
 		t.Fatal("live handle was not closed with the session")

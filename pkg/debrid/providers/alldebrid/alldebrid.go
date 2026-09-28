@@ -495,8 +495,8 @@ func (ad *AllDebrid) restartTorrent(torrentID string) error {
 	}
 
 	var result restartMagnetResponse
-	if err := request.DecodeJSON(resp, &result); err != nil {
-		return fmt.Errorf("decode AllDebrid restart response: %w", err)
+	if decodeJSONErr := request.DecodeJSON(resp, &result); decodeJSONErr != nil {
+		return fmt.Errorf("decode AllDebrid restart response: %w", decodeJSONErr)
 	}
 	if result.Error != nil {
 		if result.Error.Code == "MAGNET_PROCESSING" {
@@ -608,7 +608,7 @@ func (ad *AllDebrid) GetTorrents() ([]*types.Torrent, error) {
 			Added:            time.Unix(magnet.CompletionDate, 0),
 		}
 		for _, f := range magnet.Files {
-			if err := cfg.ValidateFileAllowed(f.Name, f.Size); err != nil {
+			if validateFileAllowedErr := cfg.ValidateFileAllowed(f.Name, f.Size); validateFileAllowedErr != nil {
 				continue
 			}
 			file := types.File{
@@ -661,8 +661,8 @@ func (ad *AllDebrid) CheckFile(ctx context.Context, _, link string) error {
 	}
 
 	var data LinkInfosResponse
-	if err := request.DecodeJSON(resp, &data); err != nil {
-		return err
+	if decodeJSONErr := request.DecodeJSON(resp, &data); decodeJSONErr != nil {
+		return decodeJSONErr
 	}
 	if data.Status != "success" {
 		message := "unknown error"

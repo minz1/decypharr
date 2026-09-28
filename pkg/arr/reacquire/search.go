@@ -32,18 +32,24 @@ func (handler *arrHandler) searchBindings(
 		return StatusWaitingForGrab, nil
 	}
 	if mutation.Attempts > 0 {
-		command, found, err := handler.reconcileCommandMutation(ctx, instance, mutation)
-		if err != nil {
-			return "", unavailableMutationReconciliation(mutation, err)
+		command, found, reconcileCommandMutationErr := handler.reconcileCommandMutation(ctx, instance, mutation)
+		if reconcileCommandMutationErr != nil {
+			return "", unavailableMutationReconciliation(mutation, reconcileCommandMutationErr)
 		}
 		if found {
-			if err := confirmMutation(job, progress, StatusSearching, mutation, command.ID); err != nil {
-				return "", err
+			if confirmMutationErr := confirmMutation(
+				job,
+				progress,
+				StatusSearching,
+				mutation,
+				command.ID,
+			); confirmMutationErr != nil {
+				return "", confirmMutationErr
 			}
 			return StatusWaitingForGrab, nil
 		}
-		if err := mutationRedispatchError(mutation); err != nil {
-			return "", err
+		if mutationRedispatchErr := mutationRedispatchError(mutation); mutationRedispatchErr != nil {
+			return "", mutationRedispatchErr
 		}
 	}
 	mutation, err = recordMutationAttempt(job, progress, StatusSearching, mutation)
@@ -57,15 +63,27 @@ func (handler *arrHandler) searchBindings(
 		}
 		receipt, found, reconcileErr := handler.reconcileCommandMutation(ctx, instance, mutation)
 		if reconcileErr == nil && found {
-			if err := confirmMutation(job, progress, StatusSearching, mutation, receipt.ID); err != nil {
-				return "", err
+			if confirmMutationErr := confirmMutation(
+				job,
+				progress,
+				StatusSearching,
+				mutation,
+				receipt.ID,
+			); confirmMutationErr != nil {
+				return "", confirmMutationErr
 			}
 			return StatusWaitingForGrab, nil
 		}
 		return "", unresolvedMutation(mutation, err, reconcileErr)
 	}
-	if err := confirmMutation(job, progress, StatusSearching, mutation, command.ID); err != nil {
-		return "", err
+	if confirmMutationErr := confirmMutation(
+		job,
+		progress,
+		StatusSearching,
+		mutation,
+		command.ID,
+	); confirmMutationErr != nil {
+		return "", confirmMutationErr
 	}
 	return StatusWaitingForGrab, nil
 }

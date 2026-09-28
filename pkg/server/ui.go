@@ -123,7 +123,7 @@ func (s *Server) RegisterHandler(w http.ResponseWriter, r *http.Request) {
 	session.Values["authenticated"] = true
 	session.Values["username"] = username
 	session.Values["auth_version"] = updated.GetAuth().SessionVersion
-	if err := session.Save(r, w); err != nil {
+	if saveErr := session.Save(r, w); saveErr != nil {
 		http.Error(w, "Error saving session", http.StatusInternalServerError)
 		return
 	}

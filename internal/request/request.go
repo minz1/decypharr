@@ -134,8 +134,8 @@ func (c *Client) MakeRequest(req *http.Request) ([]byte, error) {
 	}
 
 	defer func() {
-		if err := res.Body.Close(); err != nil {
-			c.logger.Printf("Failed to close response body: %v", err)
+		if closeErr := res.Body.Close(); closeErr != nil {
+			c.logger.Printf("Failed to close response body: %v", closeErr)
 		}
 	}()
 
@@ -291,8 +291,8 @@ func SetProxy(transport *http.Transport, proxyURL string) {
 					auth.Password = password
 				}
 
-				dialer, err := proxy.SOCKS5("tcp", socksURL.Host, auth, proxy.Direct)
-				if err == nil {
+				dialer, socks5Err := proxy.SOCKS5("tcp", socksURL.Host, auth, proxy.Direct)
+				if socks5Err == nil {
 					transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 						return dialer.Dial(network, addr)
 					}

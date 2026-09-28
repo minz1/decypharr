@@ -65,8 +65,8 @@ func dropLegacyStores(baseDir string, log zerolog.Logger) {
 	for _, name := range legacyStoreNames {
 		path := filepath.Join(baseDir, name+".db")
 		if _, err := os.Stat(path); err == nil {
-			if err := os.RemoveAll(path); err != nil {
-				log.Warn().Err(err).Str("path", path).Msg("Failed to remove legacy repair bucket")
+			if removeAllErr := os.RemoveAll(path); removeAllErr != nil {
+				log.Warn().Err(removeAllErr).Str("path", path).Msg("Failed to remove legacy repair bucket")
 			} else {
 				log.Info().Str("path", path).Msg("Removed legacy repair bucket")
 			}
@@ -121,8 +121,8 @@ func NewStorage(dbPath string) (*Storage, error) {
 		logger:      log,
 	}
 
-	if count, err := s.MigrateMetadata(); err != nil {
-		log.Warn().Err(err).Msg("Metadata migration failed")
+	if count, migrateMetadataErr := s.MigrateMetadata(); migrateMetadataErr != nil {
+		log.Warn().Err(migrateMetadataErr).Msg("Metadata migration failed")
 	} else if count > 0 {
 		log.Info().Int("count", count).Msg("Migrated entry metadata to new format")
 	}
@@ -175,8 +175,8 @@ func (s *Storage) GetMigrationStatus() (*SystemMigrationStatus, error) {
 		return nil, err
 	}
 	var pb SystemMigrationStatusProto
-	if err := proto.Unmarshal(data, &pb); err != nil {
-		return nil, err
+	if unmarshalErr := proto.Unmarshal(data, &pb); unmarshalErr != nil {
+		return nil, unmarshalErr
 	}
 	return ProtoToSystemMigrationStatus(&pb), nil
 }

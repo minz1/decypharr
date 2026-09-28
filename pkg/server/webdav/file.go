@@ -66,8 +66,8 @@ func (h *Handler) StreamResponse(
 
 	// Fast-fail before headers: an unreachable link becomes a proper error
 	// status instead of a dead 200.
-	if err := stream.Prime(); err != nil {
-		return customerror.FromError(err)
+	if primeErr := stream.Prime(); primeErr != nil {
+		return customerror.FromError(primeErr)
 	}
 
 	length := end - start + 1

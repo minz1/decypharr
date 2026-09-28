@@ -175,8 +175,8 @@ func startServices(
 			return err
 		}
 		defer func() {
-			if err := export.Close(); err != nil {
-				_log.Error().Err(err).Msg("Failed to close share export")
+			if closeErr := export.Close(); closeErr != nil {
+				_log.Error().Err(closeErr).Msg("Failed to close share export")
 			}
 		}()
 	}

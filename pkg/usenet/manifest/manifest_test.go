@@ -146,13 +146,13 @@ func TestDecodeMatchesLegacyCommittedCorpus(t *testing.T) {
 	}
 	for _, path := range paths {
 		t.Run(filepath.Base(path), func(t *testing.T) {
-			source, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatal(err)
+			source, readFileErr := os.ReadFile(path)
+			if readFileErr != nil {
+				t.Fatal(readFileErr)
 			}
-			got, err := Decode(strings.NewReader(string(source)))
-			if err != nil {
-				t.Fatal(err)
+			got, readFileErr := Decode(strings.NewReader(string(source)))
+			if readFileErr != nil {
+				t.Fatal(readFileErr)
 			}
 			if want := decodeLegacy(t, string(source)); !reflect.DeepEqual(got, want) {
 				t.Fatalf("streaming manifest differs from the compatibility parser\ngot:  %#v\nwant: %#v", got, want)
@@ -277,13 +277,13 @@ func TestDecodeMatchesLegacyLocalCorpus(t *testing.T) {
 	}
 	for _, path := range paths {
 		t.Run(filepath.Base(path), func(t *testing.T) {
-			source, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatal(err)
+			source, readFileErr := os.ReadFile(path)
+			if readFileErr != nil {
+				t.Fatal(readFileErr)
 			}
-			got, err := Decode(strings.NewReader(string(source)))
-			if err != nil {
-				t.Fatal(err)
+			got, readFileErr := Decode(strings.NewReader(string(source)))
+			if readFileErr != nil {
+				t.Fatal(readFileErr)
 			}
 			want := decodeLegacy(t, string(source))
 			if !reflect.DeepEqual(got, want) {

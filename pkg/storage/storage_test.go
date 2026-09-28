@@ -69,8 +69,8 @@ func TestStartupWithoutMigrationLeavesNoBackups(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
+	if closeErr := s.Close(); closeErr != nil {
+		t.Fatal(closeErr)
 	}
 
 	// Reopening a fresh database must not migrate anything.

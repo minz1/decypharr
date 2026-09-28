@@ -169,8 +169,8 @@ func (p *RARParser) Process(ctx context.Context, group *FileGroup, password stri
 	if err != nil {
 		return nil, fmt.Errorf("index RAR source segments: %w", err)
 	}
-	if err := segmentIndex.validateVolumes(volumeInfos); err != nil {
-		return nil, fmt.Errorf("validate RAR volume layout: %w", err)
+	if validateVolumesErr := segmentIndex.validateVolumes(volumeInfos); validateVolumesErr != nil {
+		return nil, fmt.Errorf("validate RAR volume layout: %w", validateVolumesErr)
 	}
 
 	// Parse RAR archive to get file entries with volume parts
@@ -207,9 +207,9 @@ func (p *RARParser) Process(ctx context.Context, group *FileGroup, password stri
 		}
 
 		// Build segments for this file across all its volume parts
-		fileSegments, err := p.buildSegmentsForFile(rarFile, segmentIndex, volumeOffsetMap)
-		if err != nil {
-			return nil, fmt.Errorf("map stored RAR file %q: %w", rarFile.Name, err)
+		fileSegments, buildSegmentsForFileErr := p.buildSegmentsForFile(rarFile, segmentIndex, volumeOffsetMap)
+		if buildSegmentsForFileErr != nil {
+			return nil, fmt.Errorf("map stored RAR file %q: %w", rarFile.Name, buildSegmentsForFileErr)
 		}
 
 		if len(fileSegments) == 0 {
@@ -494,7 +494,7 @@ func (p *RARParser) parseRAR5Headers(
 		// Try to skip the data area in the reader (if it fits in our snippet)
 		if dataSize > 0 && r.Len() >= int(dataSize) {
 			// Data is in our snippet, skip it
-			if _, err := r.Seek(dataSize, io.SeekCurrent); err != nil {
+			if _, seekErr := r.Seek(dataSize, io.SeekCurrent); seekErr != nil {
 				break
 			}
 		} else if dataSize > 0 {
@@ -566,9 +566,9 @@ func (p *RARParser) readRAR5Header(r *bytes.Reader) (*rar5HeaderData, int, int64
 	// Read data area size if present
 	var dataAreaSize int64
 	if headerFlags&RAR5HeaderFlagDataArea != 0 {
-		dataSize, err := readVInt(r)
-		if err != nil {
-			return nil, 0, 0, err
+		dataSize, readVIntErr := readVInt(r)
+		if readVIntErr != nil {
+			return nil, 0, 0, readVIntErr
 		}
 		dataAreaSize = int64(dataSize)
 	}
@@ -588,8 +588,8 @@ func (p *RARParser) readRAR5Header(r *bytes.Reader) (*rar5HeaderData, int, int64
 	var headerData []byte
 	if remainingHeaderSize > 0 {
 		headerData = make([]byte, remainingHeaderSize)
-		if _, err := io.ReadFull(r, headerData); err != nil {
-			return nil, 0, 0, err
+		if _, readFullErr := io.ReadFull(r, headerData); readFullErr != nil {
+			return nil, 0, 0, readFullErr
 		}
 	}
 
@@ -642,7 +642,7 @@ func (p *RARParser) parseRAR5FileHeader(
 	}
 
 	// Read file attributes (vint)
-	if _, err := readVInt(r); err != nil {
+	if _, readVIntErr := readVInt(r); readVIntErr != nil {
 		return nil
 	}
 
@@ -654,7 +654,7 @@ func (p *RARParser) parseRAR5FileHeader(
 	// Read CRC32 if present
 	var crc32 uint32
 	if fileFlags&RAR5FileFlagHasCRC32 != 0 {
-		if err := binary.Read(r, binary.LittleEndian, &crc32); err != nil {
+		if readErr := binary.Read(r, binary.LittleEndian, &crc32); readErr != nil {
 			return nil
 		}
 	}
@@ -666,7 +666,7 @@ func (p *RARParser) parseRAR5FileHeader(
 	}
 
 	// Read host OS (vint)
-	if _, err := readVInt(r); err != nil {
+	if _, readVIntErr := readVInt(r); readVIntErr != nil {
 		return nil
 	}
 
@@ -683,7 +683,7 @@ func (p *RARParser) parseRAR5FileHeader(
 
 	// Read filename
 	nameBytes := make([]byte, nameLength)
-	if _, err := io.ReadFull(r, nameBytes); err != nil {
+	if _, readFullErr := io.ReadFull(r, nameBytes); readFullErr != nil {
 		return nil
 	}
 
@@ -794,7 +794,7 @@ func (p *RARParser) parseRAR4Headers(data []byte, volumeIndex int, volumeName st
 
 		currentOffset = nextOffset
 
-		if _, err := r.Seek(currentOffset, io.SeekStart); err != nil {
+		if _, seekErr := r.Seek(currentOffset, io.SeekStart); seekErr != nil {
 			break
 		}
 

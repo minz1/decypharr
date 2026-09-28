@@ -114,10 +114,10 @@ func TestStrmSweepGoldenTree(t *testing.T) {
 	if rep.Written != 1 || rep.Deleted != 1 {
 		t.Errorf("written = %d, deleted = %d, want 1, 1", rep.Written, rep.Deleted)
 	}
-	if _, err := os.Stat(orphanPath); !os.IsNotExist(err) {
+	if _, statErr := os.Stat(orphanPath); !os.IsNotExist(statErr) {
 		t.Error("orphan not deleted")
 	}
-	if _, err := os.Stat(filepath.Dir(orphanPath)); !os.IsNotExist(err) {
+	if _, statErr := os.Stat(filepath.Dir(orphanPath)); !os.IsNotExist(statErr) {
 		t.Error("empty orphan folder not pruned")
 	}
 	if got := mustRead(t, foreignPath); got != "plex://movie/12345" {
@@ -231,11 +231,11 @@ func TestSidecarStreamIsCompleteBeforePublication(t *testing.T) {
 				if err == nil {
 					t.Fatal("short sidecar was accepted")
 				}
-				if _, err := os.Stat(dest); !os.IsNotExist(err) {
-					t.Fatalf("partial sidecar was published: %v", err)
+				if _, statErr := os.Stat(dest); !os.IsNotExist(statErr) {
+					t.Fatalf("partial sidecar was published: %v", statErr)
 				}
-				if _, err := os.Stat(dest + ".part"); !os.IsNotExist(err) {
-					t.Fatalf("partial temporary file remains: %v", err)
+				if _, statErr := os.Stat(dest + ".part"); !os.IsNotExist(statErr) {
+					t.Fatalf("partial temporary file remains: %v", statErr)
 				}
 			}
 		})

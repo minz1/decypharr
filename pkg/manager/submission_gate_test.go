@@ -58,11 +58,11 @@ func TestTorrentSubmissionGateDoesNotCacheFailures(t *testing.T) {
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("first submission error = %v, want %v", err, wantErr)
 	}
-	if err := gate.Do(t.Context(), "torbox:hash", func() error {
+	if doErr := gate.Do(t.Context(), "torbox:hash", func() error {
 		calls++
 		return nil
-	}); err != nil {
-		t.Fatal(err)
+	}); doErr != nil {
+		t.Fatal(doErr)
 	}
 	if calls != 2 {
 		t.Fatalf("submit calls = %d, want failed submission to remain retryable", calls)

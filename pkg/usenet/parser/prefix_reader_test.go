@@ -38,8 +38,8 @@ func TestReadFilePrefixReusesObservedBodies(t *testing.T) {
 	if got := backend.fetches.Load(); got != 2 {
 		t.Fatalf("network bodies = %d, want 2", got)
 	}
-	if _, err := p.ReadFilePrefix(t.Context(), file, 12); err != nil {
-		t.Fatal(err)
+	if _, readFilePrefixErr := p.ReadFilePrefix(t.Context(), file, 12); readFilePrefixErr != nil {
+		t.Fatal(readFilePrefixErr)
 	}
 	if got := backend.fetches.Load(); got != 2 {
 		t.Fatalf("cached prefix caused another fetch: %d", got)

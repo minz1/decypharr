@@ -25,8 +25,8 @@ func TestStatBatchPipelinesCommandsAndMapsResponses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
+	if srvErr := <-serverErr; srvErr != nil {
+		t.Fatal(srvErr)
 	}
 	if len(results) != len(messageIDs) {
 		t.Fatalf("got %d results, want %d", len(results), len(messageIDs))
@@ -169,8 +169,8 @@ func TestStatBatchMarksUnreadSuffixAfterDisconnect(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected pipeline read failure")
 	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
+	if srvErr := <-serverErr; srvErr != nil {
+		t.Fatal(srvErr)
 	}
 	if !results[0].Available {
 		t.Fatalf("first result = %+v, want available", results[0])
@@ -309,8 +309,8 @@ func TestBatchStatPreservesMappingAcrossBackboneExclusions(t *testing.T) {
 		}
 	}
 	for _, done := range completed {
-		if err := <-done; err != nil {
-			t.Fatal(err)
+		if doneErr := <-done; doneErr != nil {
+			t.Fatal(doneErr)
 		}
 	}
 }

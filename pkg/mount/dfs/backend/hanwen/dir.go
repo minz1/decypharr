@@ -373,8 +373,8 @@ func (d *Dir) Unlink(ctx context.Context, name string) syscall.Errno {
 		return syscall.ENOENT
 	}
 
-	if err := d.vfs.GetManager().RemoveEntry(info); err != nil {
-		d.logger.Error().Err(err).Str("file", info.Name()).Msg("Failed to remove file from source")
+	if removeEntryErr := d.vfs.GetManager().RemoveEntry(info); removeEntryErr != nil {
+		d.logger.Error().Err(removeEntryErr).Str("file", info.Name()).Msg("Failed to remove file from source")
 		return syscall.EIO
 	}
 
@@ -392,8 +392,8 @@ func (d *Dir) Rmdir(ctx context.Context, name string) syscall.Errno {
 		return syscall.ENOENT
 	}
 
-	if err := d.vfs.GetManager().RemoveEntry(info); err != nil {
-		d.logger.Error().Err(err).Str("torrent", name).Msg("Failed to remove torrent from source")
+	if removeEntryErr := d.vfs.GetManager().RemoveEntry(info); removeEntryErr != nil {
+		d.logger.Error().Err(removeEntryErr).Str("torrent", name).Msg("Failed to remove torrent from source")
 		return syscall.EIO
 	}
 

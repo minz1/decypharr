@@ -38,8 +38,8 @@ func newPipelineIntegrityReader(
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := errors.Join(sr.Close(), client.Close()); err != nil {
-			t.Error(err)
+		if joinErr := errors.Join(sr.Close(), client.Close()); joinErr != nil {
+			t.Error(joinErr)
 		}
 		if pool := sr.cache.extentPool.stats(); pool.MemoryInUse != 0 || pool.Caches != 0 ||
 			sr.cache.residentN.Load() != 0 {
@@ -162,8 +162,8 @@ func TestPipelineRetryPreservesAcceptedBuffers(t *testing.T) {
 					)
 				}
 			}
-			if err := sr.Close(); err != nil {
-				t.Fatal(err)
+			if closeErr := sr.Close(); closeErr != nil {
+				t.Fatal(closeErr)
 			}
 			primary.Close()
 			backup.Close()
@@ -207,24 +207,24 @@ func TestPipelineAcceptedBufferRemainsPrivateDuringRecovery(t *testing.T) {
 			var servers sync.WaitGroup
 			servers.Go(func() {
 				serverDone <- func() error {
-					conn, err := listener.Accept()
-					if err != nil {
-						return err
+					conn, acceptErr := listener.Accept()
+					if acceptErr != nil {
+						return acceptErr
 					}
 					defer conn.Close()
 					_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
-					if _, err := io.WriteString(conn, "200 pipeline recovery test\r\n"); err != nil {
-						return err
+					if _, writeStringErr := io.WriteString(conn, "200 pipeline recovery test\r\n"); writeStringErr != nil {
+						return writeStringErr
 					}
 					reader := bufio.NewReader(conn)
 					for {
-						line, err := reader.ReadString('\n')
-						if err != nil {
-							return err
+						line, readStringErr := reader.ReadString('\n')
+						if readStringErr != nil {
+							return readStringErr
 						}
 						if line == "DATE\r\n" {
-							if _, err := io.WriteString(conn, "111 20260905220000\r\n"); err != nil {
-								return err
+							if _, writeStringErr := io.WriteString(conn, "111 20260905220000\r\n"); writeStringErr != nil {
+								return writeStringErr
 							}
 							continue
 						}
@@ -234,11 +234,11 @@ func TestPipelineAcceptedBufferRemainsPrivateDuringRecovery(t *testing.T) {
 							return nil
 						}
 						if action == "idle" {
-							_, err := fmt.Fprintf(conn, "222 0 %s body\r\n%s.\r\n", segments[1].MessageID, nntpd.Encode(second, "retry.bin", 2, 2*size, size))
-							return err
+							_, fprintfErr := fmt.Fprintf(conn, "222 0 %s body\r\n%s.\r\n", segments[1].MessageID, nntpd.Encode(second, "retry.bin", 2, 2*size, size))
+							return fprintfErr
 						}
-						_, err = reader.ReadByte()
-						if err == nil {
+						_, readStringErr = reader.ReadByte()
+						if readStringErr == nil {
 							return errors.New("canceled client sent an unexpected byte")
 						}
 						return nil
@@ -274,8 +274,8 @@ func TestPipelineAcceptedBufferRemainsPrivateDuringRecovery(t *testing.T) {
 				if line != "BODY "+segments[1].MessageID+"\r\n" {
 					t.Fatalf("backup command = %q", line)
 				}
-			case err := <-finished:
-				t.Fatalf("fetch ended before recovery gate: %v", err)
+			case finishedErr := <-finished:
+				t.Fatalf("fetch ended before recovery gate: %v", finishedErr)
 			case <-ctx.Done():
 				t.Fatal(ctx.Err())
 			}
@@ -298,8 +298,8 @@ func TestPipelineAcceptedBufferRemainsPrivateDuringRecovery(t *testing.T) {
 			case "cancel":
 				cancel()
 			case "reader-close":
-				if err := sr.Close(); err != nil {
-					t.Fatal(err)
+				if closeErr := sr.Close(); closeErr != nil {
+					t.Fatal(closeErr)
 				}
 			case "idle":
 				sr.cache.ReleaseIdleDelivery()
@@ -340,8 +340,8 @@ func TestPipelineAcceptedBufferRemainsPrivateDuringRecovery(t *testing.T) {
 					t.Fatalf("accepted peer lost after cancellation: n=%d, present=%t", n, present)
 				}
 			}
-			if err := <-serverDone; err != nil {
-				t.Fatal(err)
+			if serverDoneErr := <-serverDone; serverDoneErr != nil {
+				t.Fatal(serverDoneErr)
 			}
 		})
 	}

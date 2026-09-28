@@ -103,20 +103,20 @@ func (s *Service) Start(ctx context.Context) error {
 		return fmt.Errorf("load arr bindings: %w", err)
 	}
 	bindings = newestBindingRows(bindings)
-	if err := s.index.replaceAll(bindings); err != nil {
-		return err
+	if replaceAllErr := s.index.replaceAll(bindings); replaceAllErr != nil {
+		return replaceAllErr
 	}
 	jobs, err := s.jobRepository.LoadAll()
 	if err != nil {
 		return fmt.Errorf("load reacquire jobs: %w", err)
 	}
-	if err := s.loadJobs(jobs); err != nil {
-		return err
+	if loadJobsErr := s.loadJobs(jobs); loadJobsErr != nil {
+		return loadJobsErr
 	}
 	for _, job := range s.Jobs() {
 		if job.Status.waiting() {
-			if err := s.completeJobFromIndex(job); err != nil {
-				return fmt.Errorf("reconcile persisted reacquire job %q: %w", job.ID, err)
+			if completeJobFromIndexErr := s.completeJobFromIndex(job); completeJobFromIndexErr != nil {
+				return fmt.Errorf("reconcile persisted reacquire job %q: %w", job.ID, completeJobFromIndexErr)
 			}
 		}
 	}
@@ -183,23 +183,23 @@ func (s *Service) UpsertBinding(binding Binding) error {
 	}
 	defer release()
 	binding.UpdatedAt = s.now()
-	if err := binding.validate(); err != nil {
-		return fmt.Errorf("upsert arr binding: %w", err)
+	if validateErr := binding.validate(); validateErr != nil {
+		return fmt.Errorf("upsert arr binding: %w", validateErr)
 	}
 	previous, collision := s.index.ByArrFile(binding.ArrName, binding.ArrFileID)
 	if previous.EntryID == binding.EntryID && previous.EntryFileID == binding.EntryFileID {
 		collision = false
 	}
-	if err := s.bindingRepository.Save(binding); err != nil {
-		return err
+	if saveErr := s.bindingRepository.Save(binding); saveErr != nil {
+		return saveErr
 	}
 	if collision {
-		if err := s.bindingRepository.Delete(previous.EntryID, previous.EntryFileID); err != nil {
-			return err
+		if deleteErr := s.bindingRepository.Delete(previous.EntryID, previous.EntryFileID); deleteErr != nil {
+			return deleteErr
 		}
 	}
-	if err := s.index.Upsert(binding); err != nil {
-		return err
+	if upsertErr := s.index.Upsert(binding); upsertErr != nil {
+		return upsertErr
 	}
 	return s.completeWaitingJobs(binding)
 }
@@ -242,14 +242,22 @@ func (s *Service) ReplaceArrGeneration(arrName string, generation uint64, bindin
 		binding.UpdatedAt = now
 		prepared[i] = binding
 	}
-	if err := validateUniqueArrFiles(prepared); err != nil {
-		return err
+	if validateUniqueArrFilesErr := validateUniqueArrFiles(prepared); validateUniqueArrFilesErr != nil {
+		return validateUniqueArrFilesErr
 	}
-	if err := s.bindingRepository.ReplaceArrGeneration(arrName, generation, prepared); err != nil {
-		return err
+	if replaceArrGenerationErr := s.bindingRepository.ReplaceArrGeneration(
+		arrName,
+		generation,
+		prepared,
+	); replaceArrGenerationErr != nil {
+		return replaceArrGenerationErr
 	}
-	if err := s.index.ReplaceArrGeneration(arrName, generation, prepared); err != nil {
-		return err
+	if replaceArrGenerationErr := s.index.ReplaceArrGeneration(
+		arrName,
+		generation,
+		prepared,
+	); replaceArrGenerationErr != nil {
+		return replaceArrGenerationErr
 	}
 	return s.completeWaitingJobs(prepared...)
 }
@@ -260,8 +268,8 @@ func (s *Service) DeleteBinding(entryID, fileID string) error {
 		return err
 	}
 	defer release()
-	if err := s.bindingRepository.Delete(entryID, fileID); err != nil {
-		return err
+	if deleteErr := s.bindingRepository.Delete(entryID, fileID); deleteErr != nil {
+		return deleteErr
 	}
 	s.index.DeleteEntryFile(entryID, fileID)
 	return nil

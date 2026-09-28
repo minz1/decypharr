@@ -185,9 +185,9 @@ func newBuffer(p *Pool, cfg Config) (*Buffer, error) {
 	// cluster of a multi-GB file. It also gates punching (see punch.go).
 	b.punchable.Store(prepareSparse(file) == nil)
 	if cfg.TotalSize > 0 {
-		if err := file.Truncate(cfg.TotalSize); err != nil {
+		if truncateErr := file.Truncate(cfg.TotalSize); truncateErr != nil {
 			_ = file.Close()
-			return nil, fmt.Errorf("buffer: truncate disk file: %w", err)
+			return nil, fmt.Errorf("buffer: truncate disk file: %w", truncateErr)
 		}
 	}
 	b.file = file

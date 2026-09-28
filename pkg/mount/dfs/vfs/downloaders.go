@@ -428,9 +428,9 @@ func (dls *Downloaders) DownloadWithPriority(ctx context.Context, r ranges.Range
 		return false, errors.New("downloaders closed")
 	}
 	if dls.ctx.Err() != nil {
-		err := dls.ctx.Err()
+		ctxErr := dls.ctx.Err()
 		dls.mu.Unlock()
-		return false, err
+		return false, ctxErr
 	}
 
 	// Lazy restart: if we went idle, restart the kicker goroutine.
@@ -442,9 +442,9 @@ func (dls *Downloaders) DownloadWithPriority(ctx context.Context, r ranges.Range
 
 	// Fast path: already have it
 	if dls.item.HasRange(r) {
-		if err := dls.ensureDownloaderLocked(r, priority); err != nil {
+		if ensureDownloaderLockedErr := dls.ensureDownloaderLocked(r, priority); ensureDownloaderLockedErr != nil {
 			dls.mu.Unlock()
-			return true, err
+			return true, ensureDownloaderLockedErr
 		}
 		dls.mu.Unlock()
 		return true, nil
@@ -458,11 +458,11 @@ func (dls *Downloaders) DownloadWithPriority(ctx context.Context, r ranges.Range
 	}
 
 	// Ensure downloader running
-	if err := dls.ensureDownloaderLocked(r, priority); err != nil {
+	if ensureDownloaderLockedErr := dls.ensureDownloaderLocked(r, priority); ensureDownloaderLockedErr != nil {
 		// Remove our waiter on error
 		dls.removeWaiterLocked(errChan)
 		dls.mu.Unlock()
-		return false, err
+		return false, ensureDownloaderLockedErr
 	}
 
 	dls.mu.Unlock()
@@ -471,8 +471,8 @@ func (dls *Downloaders) DownloadWithPriority(ctx context.Context, r ranges.Range
 	// Selecting on ctx.Done() prevents goroutine leaks when the FUSE read
 	// is interrupted (client disconnect, read timeout, unmount).
 	select {
-	case err := <-errChan:
-		return false, err
+	case recvErr := <-errChan:
+		return false, recvErr
 	case <-ctx.Done():
 		dls.mu.Lock()
 		dls.removeWaiterLocked(errChan)
@@ -1395,11 +1395,11 @@ func (dl *downloader) streamChunk(start, end int64) (int64, error) {
 			writer.acknowledge = acknowledger.AcknowledgeCachedRange
 		}
 	}
-	if _, err := stream.Seek(missingRange.Pos, io.SeekStart); err != nil {
+	if _, seekErr := stream.Seek(missingRange.Pos, io.SeekStart); seekErr != nil {
 		if dl.ctx.Err() != nil {
 			return writer.written, dl.ctx.Err()
 		}
-		return writer.written, err
+		return writer.written, seekErr
 	}
 
 	// Batch to one DFS block in the background. While a reader is parked, cap

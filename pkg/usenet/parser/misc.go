@@ -320,8 +320,8 @@ func buildExtractedArchiveFiles(
 	if err != nil {
 		return nil, fmt.Errorf("index archive source segments: %w", err)
 	}
-	if err := segmentIndex.validateVolumes(volumeInfos); err != nil {
-		return nil, fmt.Errorf("validate archive volume layout: %w", err)
+	if validateVolumesErr := segmentIndex.validateVolumes(volumeInfos); validateVolumesErr != nil {
+		return nil, fmt.Errorf("validate archive volume layout: %w", validateVolumesErr)
 	}
 	files := make([]*storage.NZBFile, 0, len(infos))
 
@@ -345,12 +345,12 @@ func buildExtractedArchiveFiles(
 			segments = info.Segments
 		} else if info.DataOffset > 0 || info.FileSize > 0 {
 			// Slice segments for this file's byte range
-			sliced, err := segmentIndex.slice(info.DataOffset, info.FileSize, true)
-			if err != nil || len(sliced) == 0 {
-				if err == nil {
-					err = fmt.Errorf("no source segments overlap the file range")
+			sliced, sliceErr := segmentIndex.slice(info.DataOffset, info.FileSize, true)
+			if sliceErr != nil || len(sliced) == 0 {
+				if sliceErr == nil {
+					sliceErr = fmt.Errorf("no source segments overlap the file range")
 				}
-				return nil, fmt.Errorf("map archived file %q to raw source: %w", info.InternalPath, err)
+				return nil, fmt.Errorf("map archived file %q to raw source: %w", info.InternalPath, sliceErr)
 			} else {
 				segments = sliced
 			}

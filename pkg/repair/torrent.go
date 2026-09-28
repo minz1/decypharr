@@ -119,7 +119,7 @@ func (r *Service) autoHealResults(ctx context.Context, results []fileResult, hea
 		if err != nil || entry == nil {
 			continue
 		}
-		if err := heal.do(infoHash, func() error { return r.backend.ReinsertEntry(ctx, entry) }); err != nil {
+		if doErr := heal.do(infoHash, func() error { return r.backend.ReinsertEntry(ctx, entry) }); doErr != nil {
 			continue
 		}
 		for _, i := range indices {

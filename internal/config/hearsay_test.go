@@ -25,8 +25,8 @@ func TestHearsaySeededTorrentLimitRoundTrip(t *testing.T) {
 			t.Fatal(err)
 		}
 		var decoded Config
-		if err := json.Unmarshal(raw, &decoded); err != nil {
-			t.Fatal(err)
+		if unmarshalErr := json.Unmarshal(raw, &decoded); unmarshalErr != nil {
+			t.Fatal(unmarshalErr)
 		}
 		if decoded.Hearsay.MaxSeededTorrents != limit {
 			t.Fatalf("seeded torrent limit = %d, want %d: %s", decoded.Hearsay.MaxSeededTorrents, limit, raw)
@@ -64,8 +64,8 @@ func TestHearsayExplicitOptOutRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	var decoded Config
-	if err := json.Unmarshal(raw, &decoded); err != nil {
-		t.Fatal(err)
+	if unmarshalErr := json.Unmarshal(raw, &decoded); unmarshalErr != nil {
+		t.Fatal(unmarshalErr)
 	}
 	if decoded.Hearsay.Participate == nil || decoded.Hearsay.Publish == nil ||
 		decoded.Hearsay.Participates() || decoded.Hearsay.Publishes() {

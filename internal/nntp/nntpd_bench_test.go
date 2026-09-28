@@ -111,14 +111,14 @@ func BenchmarkStatBatchE2E(b *testing.B) {
 
 				for b.Loop() {
 					if pipelined {
-						if _, err := conn.StatBatch(messageIDs); err != nil {
-							b.Fatal(err)
+						if _, statBatchErr := conn.StatBatch(messageIDs); statBatchErr != nil {
+							b.Fatal(statBatchErr)
 						}
 						continue
 					}
 					for _, messageID := range messageIDs {
-						if _, _, err := conn.Stat(messageID); err != nil {
-							b.Fatal(err)
+						if _, _, statErr := conn.Stat(messageID); statErr != nil {
+							b.Fatal(statErr)
 						}
 					}
 				}
@@ -183,9 +183,9 @@ func BenchmarkStreamBodyPriorityUnderDownloadPressure(b *testing.B) {
 				wait := time.Since(started)
 				totalWait += wait
 				maxWait = max(maxWait, wait)
-				if _, err := conn.StreamBody("<priority@nntpd>", io.Discard); err != nil {
+				if _, streamBodyErr := conn.StreamBody("<priority@nntpd>", io.Discard); streamBodyErr != nil {
 					client.release(conn)
-					b.Fatal(err)
+					b.Fatal(streamBodyErr)
 				}
 				client.put(conn, provider)
 				totalSegment += time.Since(started)
@@ -240,8 +240,11 @@ func BenchmarkBodyPipelineDepthE2E(b *testing.B) {
 				for b.Loop() {
 					for start := 0; start < len(messageIDs); start += depth {
 						end := min(start+depth, len(messageIDs))
-						if _, err := conn.PipelineBodies(messageIDs[start:end], destinations[start:end]); err != nil {
-							b.Fatal(err)
+						if _, pipelineBodiesErr := conn.PipelineBodies(
+							messageIDs[start:end],
+							destinations[start:end],
+						); pipelineBodiesErr != nil {
+							b.Fatal(pipelineBodiesErr)
 						}
 					}
 				}

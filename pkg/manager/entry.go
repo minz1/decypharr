@@ -466,8 +466,8 @@ func (m *Manager) RemoveTorrentFile(torrentName, filename string) error {
 	item.Files[filename] = file
 
 	// Update item in storage
-	if err := m.storage.UpdateItem(item); err != nil {
-		return fmt.Errorf("failed to update entry %s: %w", torrentName, err)
+	if updateItemErr := m.storage.UpdateItem(item); updateItemErr != nil {
+		return fmt.Errorf("failed to update entry %s: %w", torrentName, updateItemErr)
 	}
 
 	// If the torrent has no more files, delete the entire entry

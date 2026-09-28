@@ -156,9 +156,9 @@ func (s *Service) fetchAndValidate(
 		// Handle link error categories
 		if linkErr := GetLinkError(validationErr); linkErr != nil {
 			if linkErr.ShouldDisableAccount() {
-				if err := s.disableLinkAccount(link, linkErr); err != nil {
+				if disableLinkAccountErr := s.disableLinkAccount(link, linkErr); disableLinkAccountErr != nil {
 					s.logger.Error().
-						Err(err).
+						Err(disableLinkAccountErr).
 						Str("debrid", link.Debrid).
 						Str("token", utils.Mask(link.Token)).
 						Str("reason", linkErr.Code).
@@ -209,8 +209,8 @@ func (s *Service) handleBadLink(
 				attempt,
 			)
 		}
-		if err := s.repairer(ctx, entry); err != nil {
-			return emptyDownloadLink, err
+		if repairerErr := s.repairer(ctx, entry); repairerErr != nil {
+			return emptyDownloadLink, repairerErr
 		}
 
 		if entry.Bad {
@@ -323,8 +323,8 @@ func (s *Service) fetchLink(
 				attempt,
 			)
 		}
-		if err := s.repairer(ctx, entry); err != nil {
-			return emptyDownloadLink, err
+		if repairerErr := s.repairer(ctx, entry); repairerErr != nil {
+			return emptyDownloadLink, repairerErr
 		}
 
 		if entry.Bad {

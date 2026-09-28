@@ -153,8 +153,8 @@ func (r *BindingRepository) Save(binding Binding) error {
 		Generation:  binding.Generation,
 		Binding:     &stored,
 	}
-	if err := r.persistDeltaLocked(delta); err != nil {
-		return err
+	if persistDeltaLockedErr := r.persistDeltaLocked(delta); persistDeltaLockedErr != nil {
+		return persistDeltaLockedErr
 	}
 	state.owners[key] = binding.ArrName
 	state.deltas[key] = struct{}{}
@@ -186,8 +186,8 @@ func (r *BindingRepository) Delete(entryID, fileID string) error {
 		Generation:  state.generations[owner],
 		Deleted:     true,
 	}
-	if err := r.persistDeltaLocked(delta); err != nil {
-		return err
+	if persistDeltaLockedErr := r.persistDeltaLocked(delta); persistDeltaLockedErr != nil {
+		return persistDeltaLockedErr
 	}
 	delete(state.owners, key)
 	state.deltas[key] = struct{}{}
@@ -246,22 +246,22 @@ func (r *BindingRepository) ReplaceArrGeneration(arrName string, generation uint
 			Page:       index,
 			Bindings:   chunk,
 		}
-		data, err := json.Marshal(page)
-		if err != nil {
-			return fmt.Errorf("encode arr binding page: %w", err)
+		data, marshalErr := json.Marshal(page)
+		if marshalErr != nil {
+			return fmt.Errorf("encode arr binding page: %w", marshalErr)
 		}
 		key := bindingPageStoreKey(arrName, generation, index)
-		if err := r.store.Put(key, data, options); err != nil {
-			return fmt.Errorf("persist arr binding page: %w", err)
+		if putErr := r.store.Put(key, data, options); putErr != nil {
+			return fmt.Errorf("persist arr binding page: %w", putErr)
 		}
 		written = append(written, storedPage{key: key, generation: generation})
 		index++
 	}
 	// The pages must be durable before the manifest names them, or a crash
 	// could leave a manifest pointing at a page that is not there.
-	if err := r.store.Sync(); err != nil {
+	if syncErr := r.store.Sync(); syncErr != nil {
 		r.invalidateLocked()
-		return fmt.Errorf("sync arr binding pages: %w", err)
+		return fmt.Errorf("sync arr binding pages: %w", syncErr)
 	}
 
 	manifest := bindingManifest{
@@ -275,12 +275,12 @@ func (r *BindingRepository) ReplaceArrGeneration(arrName string, generation uint
 	if err != nil {
 		return fmt.Errorf("encode arr binding manifest: %w", err)
 	}
-	if err := r.store.Put(bindingManifestStoreKey(arrName), data, options); err != nil {
-		return fmt.Errorf("persist arr binding manifest: %w", err)
+	if putErr := r.store.Put(bindingManifestStoreKey(arrName), data, options); putErr != nil {
+		return fmt.Errorf("persist arr binding manifest: %w", putErr)
 	}
-	if err := r.store.Sync(); err != nil {
+	if syncErr := r.store.Sync(); syncErr != nil {
 		r.invalidateLocked()
-		return fmt.Errorf("sync arr binding manifest: %w", err)
+		return fmt.Errorf("sync arr binding manifest: %w", syncErr)
 	}
 
 	// The generation is committed from here on, so the rows it replaces are
@@ -505,12 +505,12 @@ func (r *BindingRepository) persistDeltaLocked(delta bindingDelta) error {
 	options := &appendstore.PutOptions{Attributes: map[string]string{
 		bindingAttributeArrName: delta.ArrName,
 	}}
-	if err := r.store.Put(key, data, options); err != nil {
-		return fmt.Errorf("persist arr binding delta: %w", err)
+	if putErr := r.store.Put(key, data, options); putErr != nil {
+		return fmt.Errorf("persist arr binding delta: %w", putErr)
 	}
-	if err := r.store.Sync(); err != nil {
+	if syncErr := r.store.Sync(); syncErr != nil {
 		r.invalidateLocked()
-		return fmt.Errorf("sync arr binding delta: %w", err)
+		return fmt.Errorf("sync arr binding delta: %w", syncErr)
 	}
 	return nil
 }

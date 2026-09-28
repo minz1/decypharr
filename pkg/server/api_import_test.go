@@ -31,14 +31,14 @@ func TestImportPreservesPreparationErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := io.WriteString(file, "not a torrent"); err != nil {
-		t.Fatal(err)
+	if _, writeStringErr := io.WriteString(file, "not a torrent"); writeStringErr != nil {
+		t.Fatal(writeStringErr)
 	}
-	if err := form.WriteField("nzbURLs", unavailable.URL+"/missing.nzb"); err != nil {
-		t.Fatal(err)
+	if writeFieldErr := form.WriteField("nzbURLs", unavailable.URL+"/missing.nzb"); writeFieldErr != nil {
+		t.Fatal(writeFieldErr)
 	}
-	if err := form.Close(); err != nil {
-		t.Fatal(err)
+	if closeErr := form.Close(); closeErr != nil {
+		t.Fatal(closeErr)
 	}
 	req := httptest.NewRequest(http.MethodPost, "/api/add", &body)
 	req.Header.Set("Content-Type", form.FormDataContentType())
@@ -48,8 +48,8 @@ func TestImportPreservesPreparationErrors(t *testing.T) {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 	var results []manager.ImportRequest
-	if err := json.Unmarshal(response.Body.Bytes(), &results); err != nil {
-		t.Fatal(err)
+	if unmarshalErr := json.Unmarshal(response.Body.Bytes(), &results); unmarshalErr != nil {
+		t.Fatal(unmarshalErr)
 	}
 	sources := []string{"invalid://torrent", "broken.torrent", "/missing.nzb"}
 	if len(results) != len(sources) {

@@ -142,12 +142,12 @@ func (p *ZIPParser) Process(ctx context.Context, group *FileGroup, password stri
 		// directory's. Read the local header to get the exact data offset;
 		// without this the stream is shifted by the header length (garbage
 		// prefix + truncated tail) and the file won't play.
-		headerOffset, err := absoluteZIPHeaderOffset(file, volumeStarts)
-		if err != nil {
-			return nil, fmt.Errorf("resolve local header for %q: %w", internal, err)
+		headerOffset, absoluteZIPHeaderOffsetErr := absoluteZIPHeaderOffset(file, volumeStarts)
+		if absoluteZIPHeaderOffsetErr != nil {
+			return nil, fmt.Errorf("resolve local header for %q: %w", internal, absoluteZIPHeaderOffsetErr)
 		}
-		dataOffset, err := p.calculateZIPDataOffset(readerAt, headerOffset)
-		if err != nil {
+		dataOffset, absoluteZIPHeaderOffsetErr := p.calculateZIPDataOffset(readerAt, headerOffset)
+		if absoluteZIPHeaderOffsetErr != nil {
 			// Best effort: assume no local extra field (common for archives
 			// that only store extra data in the central directory).
 			dataOffset = headerOffset + 30 + int64(len(file.Name))

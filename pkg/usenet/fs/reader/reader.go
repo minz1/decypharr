@@ -420,8 +420,8 @@ func (sr *StreamingReader) ensureSegmentReady(ctx context.Context, segIdx int) e
 		if attempt >= segmentReadyAttempts {
 			return fmt.Errorf("segment %d evicted %d times before it could be read", segIdx, attempt)
 		}
-		if err := sr.fetcher.Fetch(ctx, segIdx); err != nil {
-			return err
+		if fetchErr := sr.fetcher.Fetch(ctx, segIdx); fetchErr != nil {
+			return fetchErr
 		}
 	}
 }

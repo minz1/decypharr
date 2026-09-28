@@ -252,17 +252,17 @@ func TestDiskAdmissionReclaimsClosedCacheFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = b.Close() })
-	if _, err := b.WriteAt(make([]byte, 30), 0); err != nil {
-		t.Fatalf("write after cold-cache reclaim: %v", err)
+	if _, writeAtErr := b.WriteAt(make([]byte, 30), 0); writeAtErr != nil {
+		t.Fatalf("write after cold-cache reclaim: %v", writeAtErr)
 	}
 	if got := p.Stats().DiskInUse; got != 30 {
 		t.Fatalf("disk usage after admission = %d, want 30", got)
 	}
-	if _, err := os.Stat(oldData); !os.IsNotExist(err) {
-		t.Fatalf("cold data file should be removed, stat err=%v", err)
+	if _, statErr := os.Stat(oldData); !os.IsNotExist(statErr) {
+		t.Fatalf("cold data file should be removed, stat err=%v", statErr)
 	}
-	if _, err := os.Stat(oldMeta); !os.IsNotExist(err) {
-		t.Fatalf("cold metadata file should be removed, stat err=%v", err)
+	if _, statErr := os.Stat(oldMeta); !os.IsNotExist(statErr) {
+		t.Fatalf("cold metadata file should be removed, stat err=%v", statErr)
 	}
 }
 
@@ -630,7 +630,7 @@ func TestCleanupItems_ForceZeroOpenClosesRecentItems(t *testing.T) {
 	}
 	// buf is deliberately left non-nil by Close (nilling it raced concurrent
 	// readers); assert actual closure via the buffer's own sentinel instead.
-	if _, err := item.buf.WriteAt([]byte{1}, 0); !errors.Is(err, buffer.ErrClosed) {
-		t.Fatalf("expected cache buffer to be closed after forced cleanup, got %v", err)
+	if _, writeAtErr := item.buf.WriteAt([]byte{1}, 0); !errors.Is(writeAtErr, buffer.ErrClosed) {
+		t.Fatalf("expected cache buffer to be closed after forced cleanup, got %v", writeAtErr)
 	}
 }

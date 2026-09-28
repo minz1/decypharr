@@ -398,25 +398,25 @@ func (s *SABnzbd) handleAddFile(w http.ResponseWriter, r *http.Request) {
 		}
 
 		for _, fileHeader := range files {
-			file, err := fileHeader.Open()
-			if err != nil {
-				errors = append(errors, fmt.Sprintf("Failed to open %s: %v", fileHeader.Filename, err))
+			file, openErr := fileHeader.Open()
+			if openErr != nil {
+				errors = append(errors, fmt.Sprintf("Failed to open %s: %v", fileHeader.Filename, openErr))
 				continue
 			}
 
 			// Read file content
-			content, err := io.ReadAll(file)
+			content, openErr := io.ReadAll(file)
 			file.Close()
-			if err != nil {
-				errors = append(errors, fmt.Sprintf("Failed to read %s: %v", fileHeader.Filename, err))
+			if openErr != nil {
+				errors = append(errors, fmt.Sprintf("Failed to read %s: %v", fileHeader.Filename, openErr))
 				continue
 			}
 
 			// Parse NZB file
-			nzbID, err := s.addNZBFile(ctx, content, fileHeader.Filename, _arr, action)
-			if err != nil {
-				s.logger.Error().Err(err).Str("filename", fileHeader.Filename).Msg("Failed to add NZB file")
-				errors = append(errors, fmt.Sprintf("Failed to add %s: %v", fileHeader.Filename, err))
+			nzbID, openErr := s.addNZBFile(ctx, content, fileHeader.Filename, _arr, action)
+			if openErr != nil {
+				s.logger.Error().Err(openErr).Str("filename", fileHeader.Filename).Msg("Failed to add NZB file")
+				errors = append(errors, fmt.Sprintf("Failed to add %s: %v", fileHeader.Filename, openErr))
 				continue
 			}
 			if nzbID != "" {
@@ -425,24 +425,28 @@ func (s *SABnzbd) handleAddFile(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		// Fallback to single file handling
-		file, header, err := r.FormFile("name")
-		if err != nil {
+		file, header, formFileErr := r.FormFile("name")
+		if formFileErr != nil {
 			s.writeError(w, "No file uploaded", http.StatusBadRequest)
 			return
 		}
 		defer file.Close()
 
 		// Read file content
-		content, err := io.ReadAll(file)
-		if err != nil {
+		content, formFileErr := io.ReadAll(file)
+		if formFileErr != nil {
 			s.writeError(w, "Failed to read file", http.StatusInternalServerError)
 			return
 		}
 
 		// Parse NZB file
-		nzbID, err := s.addNZBFile(ctx, content, header.Filename, _arr, action)
-		if err != nil {
-			s.writeError(w, fmt.Sprintf("Failed to add NZB file: %s", err.Error()), http.StatusInternalServerError)
+		nzbID, formFileErr := s.addNZBFile(ctx, content, header.Filename, _arr, action)
+		if formFileErr != nil {
+			s.writeError(
+				w,
+				fmt.Sprintf("Failed to add NZB file: %s", formFileErr.Error()),
+				http.StatusInternalServerError,
+			)
 			return
 		}
 		if nzbID != "" {

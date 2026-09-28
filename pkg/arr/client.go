@@ -82,9 +82,9 @@ func (s *Service) do(
 
 	var body io.Reader
 	if payload != nil {
-		data, err := json.Marshal(payload)
-		if err != nil {
-			return nil, fmt.Errorf("encode request: %w", err)
+		data, marshalErr := json.Marshal(payload)
+		if marshalErr != nil {
+			return nil, fmt.Errorf("encode request: %w", marshalErr)
 		}
 		body = bytes.NewReader(data)
 	}
@@ -107,8 +107,8 @@ func (s *Service) do(
 	defer resp.Body.Close()
 
 	if decode != nil && resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
-		if err := decode(resp); err != nil && !errors.Is(err, io.EOF) {
-			return resp, fmt.Errorf("decode response: %w", err)
+		if decodeErr := decode(resp); decodeErr != nil && !errors.Is(decodeErr, io.EOF) {
+			return resp, fmt.Errorf("decode response: %w", decodeErr)
 		}
 	}
 	return resp, nil

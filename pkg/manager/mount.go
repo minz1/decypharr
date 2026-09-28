@@ -107,14 +107,19 @@ func (m *Manager) warmOneFile(ctx context.Context, path string) error {
 	}
 
 	head := min(int64(cacheWarmHeadSize), size)
-	if err := drainRange(ctx, f, 0, head); err != nil {
-		return err
+	if drainRangeErr := drainRange(ctx, f, 0, head); drainRangeErr != nil {
+		return drainRangeErr
 	}
 
 	// Only warm the tail when it doesn't overlap the head we just read.
 	if size > int64(cacheWarmHeadSize)+int64(cacheWarmTailSize) {
-		if err := drainRange(ctx, f, size-int64(cacheWarmTailSize), int64(cacheWarmTailSize)); err != nil {
-			return err
+		if drainRangeErr := drainRange(
+			ctx,
+			f,
+			size-int64(cacheWarmTailSize),
+			int64(cacheWarmTailSize),
+		); drainRangeErr != nil {
+			return drainRangeErr
 		}
 	}
 	return nil

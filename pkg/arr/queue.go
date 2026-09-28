@@ -94,12 +94,12 @@ func (s *Service) Queue(ctx context.Context, name string) ([]QueueSchema, error)
 	for page := 1; ; page++ {
 		query := url.Values{"page": {strconv.Itoa(page)}, "pageSize": {"200"}}
 		var response QueueResponseScheme
-		resp, err := s.get(ctx, instance, "api/v3/queue?"+query.Encode(), &response)
-		if err != nil {
-			return items, err
+		resp, getErr := s.get(ctx, instance, "api/v3/queue?"+query.Encode(), &response)
+		if getErr != nil {
+			return items, getErr
 		}
-		if err := expectStatus(resp, http.StatusOK); err != nil {
-			return items, err
+		if expectStatusErr := expectStatus(resp, http.StatusOK); expectStatusErr != nil {
+			return items, expectStatusErr
 		}
 
 		items = append(items, response.Records...)
@@ -131,18 +131,21 @@ func (s *Service) CleanupQueue(ctx context.Context, name string) error {
 	}
 
 	if len(blocklistResearch) > 0 {
-		if err := s.removeQueueItems(ctx, name, blocklistResearch, false); err != nil {
-			s.logger.Error().Err(err).Str("arr", name).Msg("Queue cleanup: blocklist and research failed")
+		if removeQueueItemsErr := s.removeQueueItems(ctx, name, blocklistResearch, false); removeQueueItemsErr != nil {
+			s.logger.Error().
+				Err(removeQueueItemsErr).
+				Str("arr", name).
+				Msg("Queue cleanup: blocklist and research failed")
 		}
 	}
 	if len(blocklist) > 0 {
-		if err := s.removeQueueItems(ctx, name, blocklist, true); err != nil {
-			s.logger.Error().Err(err).Str("arr", name).Msg("Queue cleanup: blocklist failed")
+		if removeQueueItemsErr := s.removeQueueItems(ctx, name, blocklist, true); removeQueueItemsErr != nil {
+			s.logger.Error().Err(removeQueueItemsErr).Str("arr", name).Msg("Queue cleanup: blocklist failed")
 		}
 	}
 	for _, downloadID := range manualImports {
-		if err := s.ManualImport(ctx, name, downloadID); err != nil {
-			s.logger.Error().Err(err).Str("arr", name).Msg("Queue cleanup: manual import failed")
+		if manualImportErr := s.ManualImport(ctx, name, downloadID); manualImportErr != nil {
+			s.logger.Error().Err(manualImportErr).Str("arr", name).Msg("Queue cleanup: manual import failed")
 		}
 	}
 	return nil
@@ -209,8 +212,8 @@ func (s *Service) removeQueueItems(ctx context.Context, name string, ids []int, 
 	if err != nil {
 		return fmt.Errorf("remove queue items: %w", err)
 	}
-	if err := expectSuccess(resp); err != nil {
-		return fmt.Errorf("remove queue items: %w", err)
+	if expectSuccessErr := expectSuccess(resp); expectSuccessErr != nil {
+		return fmt.Errorf("remove queue items: %w", expectSuccessErr)
 	}
 	return nil
 }

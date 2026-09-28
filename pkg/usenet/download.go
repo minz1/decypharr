@@ -84,11 +84,11 @@ func (u *Usenet) Download(
 				pendingMu.Unlock()
 
 				// Write to output
-				n, err := writer.Write(data)
-				if err != nil {
+				n, writeErr2 := writer.Write(data)
+				if writeErr2 != nil {
 					writeErrMu.Lock()
 					if writeErr == nil {
-						writeErr = fmt.Errorf("write failed at segment %d: %w", nextToWrite, err)
+						writeErr = fmt.Errorf("write failed at segment %d: %w", nextToWrite, writeErr2)
 					}
 					writeErrMu.Unlock()
 					pendingMu.Lock()
@@ -136,13 +136,17 @@ func (u *Usenet) Download(
 
 			// Fetch segment using manager with failover
 			var data []byte
-			err := u.nntp.ExecuteWithFailover(ctx, nntp.WorkloadDownload, func(conn *nntp.Connection) error {
-				d, e := conn.GetDecodedBody(seg.MessageID)
-				data = d
-				return e
-			})
-			if err != nil {
-				resultChan <- segmentResult{index: segIdx, err: fmt.Errorf("segment %d: %w", segIdx, err)}
+			executeWithFailoverErr := u.nntp.ExecuteWithFailover(
+				ctx,
+				nntp.WorkloadDownload,
+				func(conn *nntp.Connection) error {
+					d, e := conn.GetDecodedBody(seg.MessageID)
+					data = d
+					return e
+				},
+			)
+			if executeWithFailoverErr != nil {
+				resultChan <- segmentResult{index: segIdx, err: fmt.Errorf("segment %d: %w", segIdx, executeWithFailoverErr)}
 				return nil // Don't stop other workers
 			}
 

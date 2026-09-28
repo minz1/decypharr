@@ -100,8 +100,8 @@ func (r *Service) collectArrMediaCandidates(
 		stats.add(contentStats)
 		for entryPath, files := range grouped {
 			name := filepath.Clean(filepath.Base(entryPath))
-			item, err := r.storage.GetEntryItem(name)
-			if err != nil || item == nil {
+			item, getEntryItemErr := r.storage.GetEntryItem(name)
+			if getEntryItemErr != nil || item == nil {
 				continue
 			}
 			found := candidates[name]

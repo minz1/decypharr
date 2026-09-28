@@ -26,8 +26,8 @@ func (m *Manager) fixNZBFileSizes(ctx context.Context) {
 		default:
 		}
 
-		nzb, err := m.usenet.GetNZB(id)
-		if err != nil || nzb == nil {
+		nzb, getNZBErr := m.usenet.GetNZB(id)
+		if getNZBErr != nil || nzb == nil {
 			continue
 		}
 
@@ -36,12 +36,18 @@ func (m *Manager) fixNZBFileSizes(ctx context.Context) {
 			continue
 		}
 
-		if err := m.usenet.NZBStorage().AddNZB(nzb); err != nil {
-			m.logger.Warn().Err(err).Str("nzb_id", nzb.ID).Msg("Failed to update NZB metadata during size correction")
+		if addNZBErr := m.usenet.NZBStorage().AddNZB(nzb); addNZBErr != nil {
+			m.logger.Warn().
+				Err(addNZBErr).
+				Str("nzb_id", nzb.ID).
+				Msg("Failed to update NZB metadata during size correction")
 			continue
 		}
 
-		if entry, err := m.storage.Get(nzb.ID); err == nil && entry != nil && entry.Protocol == config.ProtocolNZB {
+		if entry, getErr := m.storage.Get(
+			nzb.ID,
+		); getErr == nil && entry != nil &&
+			entry.Protocol == config.ProtocolNZB {
 			entryChanged := entry.Size != total || entry.Bytes != total
 			entry.Size = total
 			entry.Bytes = total
@@ -59,9 +65,9 @@ func (m *Manager) fixNZBFileSizes(ctx context.Context) {
 			if changedEntry || entryChanged {
 				// Add usenet placement to update it
 				_ = entry.AddUsenetProvider(nzb)
-				if err := m.storage.AddOrUpdate(entry); err != nil {
+				if addOrUpdateErr := m.storage.AddOrUpdate(entry); addOrUpdateErr != nil {
 					m.logger.Warn().
-						Err(err).
+						Err(addOrUpdateErr).
 						Str("nzb_id", nzb.ID).
 						Msg("Failed to update entry during NZB size correction")
 				}

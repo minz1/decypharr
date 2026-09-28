@@ -274,8 +274,8 @@ func (c *Connection) authenticate() error {
 	}
 
 	// Send AUTHINFO PASS command
-	if err := c.sendCommandArg("AUTHINFO PASS", c.password); err != nil {
-		return NewConnectionError(fmt.Errorf("failed to send password: %w", err))
+	if sendCommandArgErr := c.sendCommandArg("AUTHINFO PASS", c.password); sendCommandArgErr != nil {
+		return NewConnectionError(fmt.Errorf("failed to send password: %w", sendCommandArgErr))
 	}
 
 	resp, err = c.readResponse()
@@ -867,11 +867,11 @@ func (c *Connection) Post(messageID, filename string, body []byte) error {
 	buf.WriteString(".\r\n")
 
 	// 5. Send article data
-	if _, err := c.writer.Write(buf.Bytes()); err != nil {
-		return NewConnectionError(fmt.Errorf("failed to send article data: %w", err))
+	if _, writeErr := c.writer.Write(buf.Bytes()); writeErr != nil {
+		return NewConnectionError(fmt.Errorf("failed to send article data: %w", writeErr))
 	}
-	if err := c.writer.Flush(); err != nil {
-		return NewConnectionError(fmt.Errorf("failed to flush article data: %w", err))
+	if flushErr := c.writer.Flush(); flushErr != nil {
+		return NewConnectionError(fmt.Errorf("failed to flush article data: %w", flushErr))
 	}
 
 	// 6. Final response
@@ -1002,13 +1002,13 @@ func (c *Connection) SelectGroup(groupName string) (*GroupInfo, error) {
 		Name: groupName,
 	}
 
-	if count, err := strconv.Atoi(fields[0]); err == nil {
+	if count, atoiErr := strconv.Atoi(fields[0]); atoiErr == nil {
 		groupInfo.Count = count
 	}
-	if low, err := strconv.Atoi(fields[1]); err == nil {
+	if low, atoiErr := strconv.Atoi(fields[1]); atoiErr == nil {
 		groupInfo.Low = low
 	}
-	if high, err := strconv.Atoi(fields[2]); err == nil {
+	if high, atoiErr := strconv.Atoi(fields[2]); atoiErr == nil {
 		groupInfo.High = high
 	}
 

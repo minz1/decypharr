@@ -45,11 +45,11 @@ func TestRestartAppliesUsenetMemoryBudget(t *testing.T) {
 		} else if firstPools == service.bufferPools || depth >= firstDepth {
 			t.Fatalf("restart retained its old pool budget: prefetch %d -> %d", firstDepth, depth)
 		}
-		if err := cache.Close(); err != nil {
-			t.Fatal(err)
+		if closeErr := cache.Close(); closeErr != nil {
+			t.Fatal(closeErr)
 		}
-		if err := service.Close(); err != nil {
-			t.Fatal(err)
+		if closeErr := service.Close(); closeErr != nil {
+			t.Fatal(closeErr)
 		}
 	}
 }

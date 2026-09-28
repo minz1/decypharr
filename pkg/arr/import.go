@@ -99,8 +99,8 @@ func (s *Service) ManualImport(ctx context.Context, name, downloadID string) err
 	if err != nil {
 		return fmt.Errorf("manual import lookup: %w", err)
 	}
-	if err := expectStatus(resp, http.StatusOK); err != nil {
-		return fmt.Errorf("manual import lookup: %w", err)
+	if expectStatusErr := expectStatus(resp, http.StatusOK); expectStatusErr != nil {
+		return fmt.Errorf("manual import lookup: %w", expectStatusErr)
 	}
 
 	files := make([]ManualImportFile, 0, len(candidates))

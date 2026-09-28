@@ -62,8 +62,8 @@ func TestSubmissionRequestsUseDedicatedClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitMagnet() error = %v", err)
 	}
-	if _, err := tb.CheckStatus(added); err != nil {
-		t.Fatalf("CheckStatus() error = %v", err)
+	if _, checkStatusErr := tb.CheckStatus(added); checkStatusErr != nil {
+		t.Fatalf("CheckStatus() error = %v", checkStatusErr)
 	}
 
 	mu.Lock()

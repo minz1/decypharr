@@ -74,16 +74,21 @@ func (h *Handler) handleStream(w http.ResponseWriter, r *http.Request) {
 	// entirely. Usenet entries have no upstream URL and always proxy; a link
 	// failure falls back to proxying this request.
 	if cfg.Strm.DeliveryMode == config.StrmDeliveryRedirect && entry.IsTorrent() {
-		if dl, err := h.manager.GetDownloadLink(r.Context(), entry, file.Name); err == nil && dl.DownloadLink != "" {
+		if dl, getDownloadLinkErr := h.manager.GetDownloadLink(
+			r.Context(),
+			entry,
+			file.Name,
+		); getDownloadLinkErr == nil &&
+			dl.DownloadLink != "" {
 			http.Redirect(w, r, dl.DownloadLink, http.StatusFound)
 			return
-		} else if err != nil {
-			h.logger.Rate(infohash+"/"+fileID).Warn().Err(err).
+		} else if getDownloadLinkErr != nil {
+			h.logger.Rate(infohash+"/"+fileID).Warn().Err(getDownloadLinkErr).
 				Msgf("stream redirect link failed, proxying: %s", file.Name)
 		}
 	}
 
-	if err := h.StreamResponse(entry, file.Name, file.Size, w, r); err != nil {
-		h.writeStreamError(fmt.Sprintf("%s/%s", infohash, file.Name), err, w)
+	if streamResponseErr := h.StreamResponse(entry, file.Name, file.Size, w, r); streamResponseErr != nil {
+		h.writeStreamError(fmt.Sprintf("%s/%s", infohash, file.Name), streamResponseErr, w)
 	}
 }

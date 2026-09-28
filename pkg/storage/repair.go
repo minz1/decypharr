@@ -97,8 +97,8 @@ func (s *Storage) GetRepairRun(id string) (*RepairRun, error) {
 		return nil, err
 	}
 	var run RepairRun
-	if err := json.Unmarshal(data, &run); err != nil {
-		return nil, err
+	if unmarshalErr := json.Unmarshal(data, &run); unmarshalErr != nil {
+		return nil, unmarshalErr
 	}
 	if run.ID == "" {
 		run.ID = id
@@ -295,8 +295,8 @@ func (s *Storage) GetEntryHealth(entryName string) (*EntryHealth, error) {
 		return nil, err
 	}
 	var state EntryHealth
-	if err := json.Unmarshal(data, &state); err != nil {
-		return nil, err
+	if unmarshalErr := json.Unmarshal(data, &state); unmarshalErr != nil {
+		return nil, unmarshalErr
 	}
 	if state.EntryName == "" {
 		state.EntryName = entryName
@@ -384,8 +384,8 @@ func (s *Storage) MarkEntryDirty(entryName string, protocol config.Protocol, rea
 	state.Dirty = true
 	state.DirtyReason = reason
 	state.NextCheckDueAt = time.Time{}
-	if err := s.SaveEntryHealth(state); err != nil {
-		return fmt.Errorf("mark %q dirty: %w", entryName, err)
+	if saveEntryHealthErr := s.SaveEntryHealth(state); saveEntryHealthErr != nil {
+		return fmt.Errorf("mark %q dirty: %w", entryName, saveEntryHealthErr)
 	}
 	return nil
 }

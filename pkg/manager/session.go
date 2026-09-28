@@ -444,9 +444,9 @@ func (t *httpTransport) open(ctx context.Context, pos int64) (io.ReadCloser, err
 	case resp.StatusCode == http.StatusOK && t.limit <= 0 && absStart > 0 && absStart <= sessionSeekDiscardMax:
 		// Server ignored the Range header but the offset is small enough to
 		// discard our way to it.
-		if _, err := io.CopyN(io.Discard, resp.Body, absStart); err != nil {
+		if _, copyNErr := io.CopyN(io.Discard, resp.Body, absStart); copyNErr != nil {
 			resp.Body.Close()
-			return nil, link.ClassifyTransportError(err)
+			return nil, link.ClassifyTransportError(copyNErr)
 		}
 		return resp.Body, nil
 	case resp.StatusCode == http.StatusOK:

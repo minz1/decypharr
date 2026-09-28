@@ -175,8 +175,8 @@ func TestMemoryWriterAdoptsDecodedExtent(t *testing.T) {
 		decoded[i] = byte(i)
 	}
 	want := &decoded[0]
-	if _, err := w.Adopt(decoded); err != nil {
-		t.Fatal(err)
+	if _, adoptErr := w.Adopt(decoded); adoptErr != nil {
+		t.Fatal(adoptErr)
 	}
 	w.Finalize()
 	resident := cache.resident[0].Load()
@@ -323,9 +323,9 @@ func TestRetentionStorageTiers(t *testing.T) {
 
 			if memory {
 				// Memory mode owns no file: the DiskPath dir stays empty.
-				entries, err := os.ReadDir(cfg.DiskPath)
-				if err != nil {
-					t.Fatal(err)
+				entries, readDirErr := os.ReadDir(cfg.DiskPath)
+				if readDirErr != nil {
+					t.Fatal(readDirErr)
 				}
 				if len(entries) != 0 {
 					t.Fatalf("memory mode created cache files: %v", entries)
@@ -379,8 +379,8 @@ func TestWaitForSegmentReportsEvicted(t *testing.T) {
 	t.Cleanup(func() { _ = cache.Close() })
 
 	putSegment(t, cache, 1, make([]byte, segSize))
-	if err := cache.WaitForSegment(context.Background(), 1); err != nil {
-		t.Fatalf("cached segment should be ready: %v", err)
+	if waitForSegmentErr := cache.WaitForSegment(context.Background(), 1); waitForSegmentErr != nil {
+		t.Fatalf("cached segment should be ready: %v", waitForSegmentErr)
 	}
 
 	cache.trimResidentTo(1)
@@ -388,9 +388,9 @@ func TestWaitForSegmentReportsEvicted(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- cache.WaitForSegment(context.Background(), 1) }()
 	select {
-	case err := <-done:
-		if !errors.Is(err, ErrSegmentEvicted) {
-			t.Fatalf("want ErrSegmentEvicted, got %v", err)
+	case doneErr := <-done:
+		if !errors.Is(doneErr, ErrSegmentEvicted) {
+			t.Fatalf("want ErrSegmentEvicted, got %v", doneErr)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("WaitForSegment parked on an evicted segment: the playback deadlock is back")
@@ -464,9 +464,9 @@ func TestMaxPrefetchSegmentsTracksFairShare(t *testing.T) {
 
 	// Seven more streams open against the same pool.
 	for range 7 {
-		sc, err := NewSegmentCache(context.Background(), segs, cfg, &ReaderStats{}, zerolog.Nop())
-		if err != nil {
-			t.Fatalf("NewSegmentCache: %v", err)
+		sc, newSegmentCacheErr := NewSegmentCache(context.Background(), segs, cfg, &ReaderStats{}, zerolog.Nop())
+		if newSegmentCacheErr != nil {
+			t.Fatalf("NewSegmentCache: %v", newSegmentCacheErr)
 		}
 		t.Cleanup(func() { _ = sc.Close() })
 	}

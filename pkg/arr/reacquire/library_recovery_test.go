@@ -51,12 +51,18 @@ func TestLibraryRecoveryUsesDurableJobsAndWaitsForReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = service.Close() })
-	if err := service.Start(t.Context()); err != nil {
-		t.Fatal(err)
+	if startErr := service.Start(t.Context()); startErr != nil {
+		t.Fatal(startErr)
 	}
 	request := LibraryRequest{ArrName: "movies", ArrFileID: 42, LibraryPath: "/library/wrong.mkv", Cause: CauseRepair}
-	if _, err := service.ReacquireLibraryFile(t.Context(), request); !errors.Is(err, ErrBindingUnsafe) {
-		t.Fatalf("wrong path: %v", err)
+	if _, reacquireLibraryFileErr := service.ReacquireLibraryFile(
+		t.Context(),
+		request,
+	); !errors.Is(
+		reacquireLibraryFileErr,
+		ErrBindingUnsafe,
+	) {
+		t.Fatalf("wrong path: %v", reacquireLibraryFileErr)
 	}
 	if len(service.Jobs()) != 0 || deleted.Load() {
 		t.Fatal("unverified request caused work")
@@ -81,16 +87,16 @@ func TestLibraryRecoveryUsesDurableJobsAndWaitsForReplacement(t *testing.T) {
 	if !waiting.Status.waiting() {
 		t.Fatal("missing replacement completed job")
 	}
-	if err := service.Close(); err != nil {
-		t.Fatal(err)
+	if closeErr := service.Close(); closeErr != nil {
+		t.Fatal(closeErr)
 	}
 	reopened, err := NewService(ServiceOptions{Directory: directory, Arrs: registry})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
-	if err := reopened.Start(t.Context()); err != nil {
-		t.Fatal(err)
+	if startErr := reopened.Start(t.Context()); startErr != nil {
+		t.Fatal(startErr)
 	}
 	duplicate, err := reopened.ReacquireLibraryFile(t.Context(), request)
 	if err != nil || duplicate.ID != job.ID {
@@ -100,8 +106,8 @@ func TestLibraryRecoveryUsesDurableJobsAndWaitsForReplacement(t *testing.T) {
 	binding.EntryID, binding.EntryFileID, binding.DownloadID = "managed-entry", "managed-file", "download"
 	binding.Confidence = ConfidenceExactPath
 	// Indexing the original file cannot create a second mutation owner.
-	if err := reopened.UpsertBinding(binding); err != nil {
-		t.Fatal(err)
+	if upsertBindingErr := reopened.UpsertBinding(binding); upsertBindingErr != nil {
+		t.Fatal(upsertBindingErr)
 	}
 	duplicate, err = reopened.Reacquire(
 		Request{EntryID: binding.EntryID, FileID: binding.EntryFileID, Cause: CauseStream},
@@ -222,17 +228,17 @@ func TestReconcileImportedManagedJobs(t *testing.T) {
 				UpdatedAt:  now.Add(-waitingTimeout - time.Minute),
 			}
 			service.now = func() time.Time { return now }
-			if err := service.jobRepository.Save(job); err != nil {
-				t.Fatal(err)
+			if saveErr := service.jobRepository.Save(job); saveErr != nil {
+				t.Fatal(saveErr)
 			}
-			if err := service.Start(t.Context()); err != nil {
-				t.Fatal(err)
+			if startErr := service.Start(t.Context()); startErr != nil {
+				t.Fatal(startErr)
 			}
 			if tc.sameDownload {
 				replacement := binding
 				replacement.EntryID, replacement.EntryFileID, replacement.ArrFileID = "new-entry", "new-file", 44
-				if err := service.UpsertBinding(replacement); err != nil {
-					t.Fatal(err)
+				if upsertBindingErr := service.UpsertBinding(replacement); upsertBindingErr != nil {
+					t.Fatal(upsertBindingErr)
 				}
 			}
 			before, _ := service.Job(job.ID)
@@ -266,16 +272,16 @@ func TestReconcileImportedManagedJobs(t *testing.T) {
 			if tc.ready && updated.LastError != "" {
 				t.Fatalf("completed job error = %q", updated.LastError)
 			}
-			if err := service.Close(); err != nil {
-				t.Fatal(err)
+			if closeErr := service.Close(); closeErr != nil {
+				t.Fatal(closeErr)
 			}
 			reopened, err := NewService(ServiceOptions{Directory: directory, Arrs: registry})
 			if err != nil {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = reopened.Close() })
-			if err := reopened.Start(t.Context()); err != nil {
-				t.Fatal(err)
+			if startErr := reopened.Start(t.Context()); startErr != nil {
+				t.Fatal(startErr)
 			}
 			saved, _ := reopened.Job(job.ID)
 			if saved.Status != want {

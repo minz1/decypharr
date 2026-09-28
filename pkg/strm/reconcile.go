@@ -136,8 +136,8 @@ func (s *Reconciler) syncEntry(ctx context.Context, entry *storage.Entry, rep *R
 			rep.Verified++
 			continue
 		}
-		if err := writeStrm(t.path, t.content); err != nil {
-			rep.addError(err)
+		if writeStrmErr := writeStrm(t.path, t.content); writeStrmErr != nil {
+			rep.addError(writeStrmErr)
 			continue
 		}
 		rep.Written++
@@ -175,8 +175,8 @@ func (s *Reconciler) removeStale(entry *storage.Entry, targets []strmTarget, rep
 		if infohash, _, ok := ParseURL(content); !ok || infohash != entry.InfoHash {
 			return nil
 		}
-		if err := os.Remove(path); err != nil {
-			rep.addError(err)
+		if removeErr := os.Remove(path); removeErr != nil {
+			rep.addError(removeErr)
 			return nil
 		}
 		rep.Deleted++
@@ -203,8 +203,8 @@ func (s *Reconciler) downloadSidecar(ctx context.Context, entry *storage.Entry, 
 	}
 	defer stream.Close()
 
-	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
-		return err
+	if mkdirAllErr := os.MkdirAll(filepath.Dir(dest), 0755); mkdirAllErr != nil {
+		return mkdirAllErr
 	}
 	tmp := dest + ".part"
 	f, err := os.Create(tmp)
@@ -246,8 +246,8 @@ func (s *Reconciler) Sweep(ctx context.Context) (*Report, error) {
 
 	owned := make(map[string]struct{})
 	for _, e := range entries {
-		if err := ctx.Err(); err != nil {
-			return rep, err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return rep, ctxErr
 		}
 		for _, t := range s.syncEntry(ctx, e, rep) {
 			owned[t.path] = struct{}{}
@@ -272,8 +272,8 @@ func (s *Reconciler) Sweep(ctx context.Context) (*Report, error) {
 		return ctx.Err()
 	})
 	for _, path := range stale {
-		if err := os.Remove(path); err != nil {
-			rep.addError(err)
+		if removeErr := os.Remove(path); removeErr != nil {
+			rep.addError(removeErr)
 			continue
 		}
 		rep.Deleted++

@@ -30,20 +30,20 @@ func (m *Manager) restoreActiveDownloadJobs() {
 		}
 		if entry.IsDownloading {
 			entry.IsDownloading = false
-			if err := m.queue.Update(entry); err != nil {
-				m.logger.Error().Err(err).Str("entry_id", entry.InfoHash).Msg("Failed to reset restored download")
+			if updateErr := m.queue.Update(entry); updateErr != nil {
+				m.logger.Error().Err(updateErr).Str("entry_id", entry.InfoHash).Msg("Failed to reset restored download")
 				continue
 			}
 		}
 		if entry.Status != debridTypes.TorrentStatusQueued && !m.nzbNeedsReprocessing(entry) {
 			continue
 		}
-		job, err := m.rebuildQueuedJob(entry)
-		if err != nil {
+		job, rebuildQueuedJobErr := m.rebuildQueuedJob(entry)
+		if rebuildQueuedJobErr != nil {
 			if m.ctx.Err() != nil {
 				return
 			}
-			entry.MarkAsError(err)
+			entry.MarkAsError(rebuildQueuedJobErr)
 			_ = m.queue.Update(entry)
 			continue
 		}
@@ -51,11 +51,11 @@ func (m *Manager) restoreActiveDownloadJobs() {
 			entry.Status = debridTypes.TorrentStatusQueued
 		}
 		_ = m.queue.Update(entry)
-		if err := m.SubmitJob(job); err != nil {
+		if submitJobErr := m.SubmitJob(job); submitJobErr != nil {
 			if m.ctx.Err() != nil {
 				return
 			}
-			entry.MarkAsError(err)
+			entry.MarkAsError(submitJobErr)
 			_ = m.queue.Update(entry)
 		}
 	}

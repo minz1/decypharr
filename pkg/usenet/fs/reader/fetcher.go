@@ -118,8 +118,8 @@ func (sf *SegmentFetcher) schedule(ctx context.Context, priority fetchPriority, 
 	if !sf.submit(ctx, priority, func() { done <- run() }, func() { done <- ErrCacheClosed }) {
 		if err := ctx.Err(); err != nil {
 			done <- err
-		} else if err := sf.ctx.Err(); err != nil {
-			done <- err
+		} else if ctxErr := sf.ctx.Err(); ctxErr != nil {
+			done <- ctxErr
 		} else {
 			done <- ErrCacheClosed
 		}

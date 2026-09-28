@@ -41,8 +41,8 @@ func newQueueDeleteTest(t *testing.T) (*Queue, *storage.Entry, string) {
 		t.Fatalf("create storage: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := store.Close(); err != nil {
-			t.Errorf("close storage: %v", err)
+		if closeErr := store.Close(); closeErr != nil {
+			t.Errorf("close storage: %v", closeErr)
 		}
 	})
 
@@ -53,16 +53,20 @@ func newQueueDeleteTest(t *testing.T) (*Queue, *storage.Entry, string) {
 		SavePath: savePath,
 	}
 	downloadedPath := entry.DownloadPath()
-	if err := os.MkdirAll(downloadedPath, 0o755); err != nil {
-		t.Fatalf("create downloaded path: %v", err)
+	if mkdirAllErr := os.MkdirAll(downloadedPath, 0o755); mkdirAllErr != nil {
+		t.Fatalf("create downloaded path: %v", mkdirAllErr)
 	}
-	if err := os.WriteFile(filepath.Join(downloadedPath, "video.mkv"), []byte("test"), 0o644); err != nil {
-		t.Fatalf("create downloaded file: %v", err)
+	if writeFileErr := os.WriteFile(
+		filepath.Join(downloadedPath, "video.mkv"),
+		[]byte("test"),
+		0o644,
+	); writeFileErr != nil {
+		t.Fatalf("create downloaded file: %v", writeFileErr)
 	}
 
 	queue := newQueue(store, "")
-	if err := queue.Add(entry); err != nil {
-		t.Fatalf("add queued entry: %v", err)
+	if addErr := queue.Add(entry); addErr != nil {
+		t.Fatalf("add queued entry: %v", addErr)
 	}
 	return queue, entry, downloadedPath
 }

@@ -63,9 +63,9 @@ func TestDecodeFileV2MatchesFullDecode(t *testing.T) {
 
 	for i := range full.Files {
 		want := full.Files[i]
-		got, err := decodeFileV2(data, want.Name)
-		if err != nil {
-			t.Fatalf("decodeFileV2(%q): %v", want.Name, err)
+		got, decodeFileV2Err := decodeFileV2(data, want.Name)
+		if decodeFileV2Err != nil {
+			t.Fatalf("decodeFileV2(%q): %v", want.Name, decodeFileV2Err)
 		}
 		if want.IsDeleted {
 			if got != nil {

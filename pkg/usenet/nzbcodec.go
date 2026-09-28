@@ -417,8 +417,8 @@ func decodeNZBV2(data []byte) (*storage.NZB, error) {
 		return nil, fmt.Errorf("nzbcodec: decompress msg ids: %w", err)
 	}
 
-	if err := decodeSegments(nzb, counts, segMeta, msgIDs); err != nil {
-		return nil, err
+	if decodeSegmentsErr := decodeSegments(nzb, counts, segMeta, msgIDs); decodeSegmentsErr != nil {
+		return nil, decodeSegmentsErr
 	}
 	return nzb, nil
 }
@@ -544,9 +544,9 @@ func decodeHeader(buf []byte) (*storage.NZB, []int, error) {
 		if f.IsEncrypted, err = r.boolean(); err != nil {
 			return nil, nil, err
 		}
-		c, err := r.uvarint()
-		if err != nil {
-			return nil, nil, err
+		c, uvarintErr := r.uvarint()
+		if uvarintErr != nil {
+			return nil, nil, uvarintErr
 		}
 		counts[i] = int(c)
 	}
@@ -573,9 +573,9 @@ func decodeSegments(nzb *storage.NZB, counts []int, segMeta, msgIDs []byte) erro
 	segs := make([]storage.NZBSegment, total)
 
 	for i := range total {
-		v, err := r.varint()
-		if err != nil {
-			return err
+		v, varintErr := r.varint()
+		if varintErr != nil {
+			return varintErr
 		}
 		segs[i].Number = int(v)
 	}
@@ -600,9 +600,9 @@ func decodeSegments(nzb *storage.NZB, counts []int, segMeta, msgIDs []byte) erro
 		}
 	}
 	for i := range total {
-		idx, err := r.uvarint()
-		if err != nil {
-			return err
+		idx, uvarintErr := r.uvarint()
+		if uvarintErr != nil {
+			return uvarintErr
 		}
 		if int(idx) >= len(groups) {
 			return fmt.Errorf("nzbcodec: group index %d out of range", idx)
@@ -693,51 +693,51 @@ func decodeFileV2(data []byte, filename string) (*storage.NZBFile, error) {
 	// reaching this file's window means reading past the files before it.
 	column := func(assign func(seg *storage.NZBSegment, v int64)) error {
 		for range before {
-			if _, err := r.varint(); err != nil {
-				return err
+			if _, varintErr := r.varint(); varintErr != nil {
+				return varintErr
 			}
 		}
 		for i := range segs {
-			v, err := r.varint()
-			if err != nil {
-				return err
+			v, varintErr := r.varint()
+			if varintErr != nil {
+				return varintErr
 			}
 			assign(&segs[i], v)
 		}
 		for range after {
-			if _, err := r.varint(); err != nil {
-				return err
+			if _, varintErr := r.varint(); varintErr != nil {
+				return varintErr
 			}
 		}
 		return nil
 	}
 
-	if err := column(func(seg *storage.NZBSegment, v int64) { seg.Number = int(v) }); err != nil {
-		return nil, err
+	if columnErr := column(func(seg *storage.NZBSegment, v int64) { seg.Number = int(v) }); columnErr != nil {
+		return nil, columnErr
 	}
-	if err := column(func(seg *storage.NZBSegment, v int64) { seg.Bytes = v }); err != nil {
-		return nil, err
+	if columnErr := column(func(seg *storage.NZBSegment, v int64) { seg.Bytes = v }); columnErr != nil {
+		return nil, columnErr
 	}
-	if err := column(func(seg *storage.NZBSegment, v int64) { seg.StartOffset = v }); err != nil {
-		return nil, err
+	if columnErr := column(func(seg *storage.NZBSegment, v int64) { seg.StartOffset = v }); columnErr != nil {
+		return nil, columnErr
 	}
-	if err := column(func(seg *storage.NZBSegment, v int64) { seg.EndOffset = v }); err != nil {
-		return nil, err
+	if columnErr := column(func(seg *storage.NZBSegment, v int64) { seg.EndOffset = v }); columnErr != nil {
+		return nil, columnErr
 	}
-	if err := column(func(seg *storage.NZBSegment, v int64) { seg.SegmentDataStart = v }); err != nil {
-		return nil, err
+	if columnErr := column(func(seg *storage.NZBSegment, v int64) { seg.SegmentDataStart = v }); columnErr != nil {
+		return nil, columnErr
 	}
 
 	// Group column is last, so the trailing entries need no skip.
 	for range before {
-		if _, err := r.uvarint(); err != nil {
-			return nil, err
+		if _, uvarintErr := r.uvarint(); uvarintErr != nil {
+			return nil, uvarintErr
 		}
 	}
 	for i := range segs {
-		idx, err := r.uvarint()
-		if err != nil {
-			return nil, err
+		idx, uvarintErr := r.uvarint()
+		if uvarintErr != nil {
+			return nil, uvarintErr
 		}
 		if int(idx) >= len(groups) {
 			return nil, fmt.Errorf("nzbcodec: group index %d out of range", idx)
@@ -751,8 +751,8 @@ func decodeFileV2(data []byte, filename string) (*storage.NZBFile, error) {
 	}
 	mr := &byteReader{buf: msgIDs}
 	for range before {
-		if err := mr.skip(); err != nil {
-			return nil, err
+		if skipErr := mr.skip(); skipErr != nil {
+			return nil, skipErr
 		}
 	}
 	for i := range segs {
@@ -819,8 +819,8 @@ func decodeFileMessageIDsSampled(data []byte, filename string, percent int) (ids
 
 	// Skip earlier files' ids without allocating.
 	for range before {
-		if err := mr.skip(); err != nil {
-			return nil, 0, err
+		if skipErr := mr.skip(); skipErr != nil {
+			return nil, 0, skipErr
 		}
 	}
 
@@ -828,15 +828,15 @@ func decodeFileMessageIDsSampled(data []byte, filename string, percent int) (ids
 	for j := range c {
 		if _, ok := wantSet[j]; ok {
 			// Owned copy: lets the decompressed buffer be collected.
-			s, err := mr.strCopy()
-			if err != nil {
-				return nil, 0, err
+			s, strCopyErr := mr.strCopy()
+			if strCopyErr != nil {
+				return nil, 0, strCopyErr
 			}
 			out = append(out, s)
 			continue
 		}
-		if err := mr.skip(); err != nil {
-			return nil, 0, err
+		if skipErr := mr.skip(); skipErr != nil {
+			return nil, 0, skipErr
 		}
 	}
 	return out, c, nil

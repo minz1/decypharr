@@ -27,8 +27,8 @@ func (s *Storage) AddOrUpdate(entry *Entry) error {
 		return fmt.Errorf("failed to marshal entry: %w", err)
 	}
 
-	if err := s.entries.Put(entry.InfoHash, data, entryPutOptions(entry)); err != nil {
-		return fmt.Errorf("save entry %q: %w", entry.InfoHash, err)
+	if putErr := s.entries.Put(entry.InfoHash, data, entryPutOptions(entry)); putErr != nil {
+		return fmt.Errorf("save entry %q: %w", entry.InfoHash, putErr)
 	}
 	return s.updateEntryItem(entry)
 }
@@ -99,8 +99,8 @@ func (s *Storage) Get(infohash string) (*Entry, error) {
 	}
 
 	var pb EntryProto
-	if err := proto.Unmarshal(data, &pb); err != nil {
-		return nil, err
+	if unmarshalErr := proto.Unmarshal(data, &pb); unmarshalErr != nil {
+		return nil, unmarshalErr
 	}
 
 	return ProtoToEntry(&pb), nil
@@ -231,7 +231,7 @@ func (s *Storage) MigrateMetadata() (int, error) {
 		}
 
 		// Re-save to update metadata
-		if err := s.AddOrUpdate(entry); err != nil {
+		if addOrUpdateErr := s.AddOrUpdate(entry); addOrUpdateErr != nil {
 			continue
 		}
 		migrated++
@@ -246,11 +246,11 @@ func (s *Storage) Delete(infohash string) error {
 	if err != nil {
 		return fmt.Errorf("read entry %q before deletion: %w", infohash, err)
 	}
-	if err := s.removeFromEntryItem(entry); err != nil {
-		return err
+	if removeFromEntryItemErr := s.removeFromEntryItem(entry); removeFromEntryItemErr != nil {
+		return removeFromEntryItemErr
 	}
-	if err := s.entries.Delete(infohash); err != nil {
-		return fmt.Errorf("delete entry %q: %w", infohash, err)
+	if deleteErr := s.entries.Delete(infohash); deleteErr != nil {
+		return fmt.Errorf("delete entry %q: %w", infohash, deleteErr)
 	}
 	return nil
 }

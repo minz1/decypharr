@@ -66,8 +66,11 @@ func (s *Service) ReacquireLibraryFile(ctx context.Context, request LibraryReque
 	if !binding.AuthorizesMutation() {
 		return nil, ErrBindingUnsafe
 	}
-	if err := validateSearchBindings(instance, []Binding{binding}); err != nil {
-		return nil, err
+	if validateSearchBindingsErr := validateSearchBindings(
+		instance,
+		[]Binding{binding},
+	); validateSearchBindingsErr != nil {
+		return nil, validateSearchBindingsErr
 	}
 	return s.enqueue(
 		Request{EntryID: entryID, FileID: fileID, Cause: request.Cause, Strategy: StrategyCommandSearch},

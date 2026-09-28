@@ -28,24 +28,29 @@ func TestReconciliationStopsAndRetainsDuplicateProtection(t *testing.T) {
 			base := time.Now().UTC()
 			var elapsed atomic.Int64
 			service.now = func() time.Time { return base.Add(time.Duration(elapsed.Load())) }
-			if err := service.Start(t.Context()); err != nil {
-				t.Fatal(err)
+			if startErr := service.Start(t.Context()); startErr != nil {
+				t.Fatal(startErr)
 			}
 			binding := Binding{
 				ArrName: "radarr", ArrType: arr.Radarr, ArrInstanceFingerprint: testArrInstanceFingerprint,
 				EntryID: "entry", EntryFileID: "file", DownloadID: "download", ArrFileID: 7,
 				LibraryPath: "/library/movie.mkv", MovieID: 7, Confidence: ConfidenceExactPath,
 			}
-			if err := service.UpsertBinding(binding); err != nil {
-				t.Fatal(err)
+			if upsertBindingErr := service.UpsertBinding(binding); upsertBindingErr != nil {
+				t.Fatal(upsertBindingErr)
 			}
 			request := Request{EntryID: binding.EntryID, FileID: binding.EntryFileID, Cause: CauseStream}
 			created, err := service.Reacquire(request)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := service.AcknowledgeJob(created.ID); !errors.Is(err, ErrJobNotBlocked) {
-				t.Fatalf("acknowledge queued job: %v", err)
+			if _, acknowledgeJobErr := service.AcknowledgeJob(
+				created.ID,
+			); !errors.Is(
+				acknowledgeJobErr,
+				ErrJobNotBlocked,
+			) {
+				t.Fatalf("acknowledge queued job: %v", acknowledgeJobErr)
 			}
 			job, err := service.updateJobDurable(created.ID, StatusQueued, func(job *Job) {
 				job.Mutations = []Mutation{{Key: "movie_search:7", Kind: MutationMovieSearch, State: MutationIntent,
@@ -92,19 +97,19 @@ func TestReconciliationStopsAndRetainsDuplicateProtection(t *testing.T) {
 			if err != nil || duplicate.ID != job.ID {
 				t.Fatalf("duplicate = %v, %v", duplicate, err)
 			}
-			if _, err := service.DeleteJobs([]string{job.ID}); !errors.Is(err, ErrJobNotTerminal) {
-				t.Fatalf("delete stopped job: %v", err)
+			if _, deleteJobsErr := service.DeleteJobs([]string{job.ID}); !errors.Is(deleteJobsErr, ErrJobNotTerminal) {
+				t.Fatalf("delete stopped job: %v", deleteJobsErr)
 			}
-			if err := service.Close(); err != nil {
-				t.Fatal(err)
+			if closeErr := service.Close(); closeErr != nil {
+				t.Fatal(closeErr)
 			}
 			reopened, err := NewService(ServiceOptions{Directory: directory})
 			if err != nil {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = reopened.Close() })
-			if err := reopened.Start(t.Context()); err != nil {
-				t.Fatal(err)
+			if startErr := reopened.Start(t.Context()); startErr != nil {
+				t.Fatal(startErr)
 			}
 			duplicate, err = reopened.Reacquire(request)
 			if err != nil || duplicate.ID != job.ID || duplicate.Status != StatusNeedsAttention {

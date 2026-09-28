@@ -33,8 +33,8 @@ func TestPoolBudgetsBelongToEachRun(t *testing.T) {
 			if cache.pools != pools || cache.ownsPools {
 				t.Fatal("cache did not use shared service pools")
 			}
-			if err := cache.Close(); err != nil {
-				t.Fatal(err)
+			if closeErr := cache.Close(); closeErr != nil {
+				t.Fatal(closeErr)
 			}
 		}
 		if err := pools.Close(); err != nil {
@@ -67,8 +67,8 @@ func TestStandaloneCacheClosesItsPrivatePools(t *testing.T) {
 	if !cache.ownsPools {
 		t.Fatal("standalone cache has no pool owner")
 	}
-	if err := cache.Close(); err != nil {
-		t.Fatal(err)
+	if closeErr := cache.Close(); closeErr != nil {
+		t.Fatal(closeErr)
 	}
 	if !cache.pools.closed {
 		t.Fatal("private pools were not closed")

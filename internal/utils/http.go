@@ -182,7 +182,7 @@ func getFilenameFromResponse(resp *http.Response, originalURL string) string {
 	if parsedURL, err := url.Parse(originalURL); err == nil {
 		if filename := filepath.Base(parsedURL.Path); filename != "." && filename != "/" {
 			// URL decode the filename
-			if decoded, err := url.QueryUnescape(filename); err == nil {
+			if decoded, queryUnescapeErr := url.QueryUnescape(filename); queryUnescapeErr == nil {
 				return decoded
 			}
 			return filename

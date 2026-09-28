@@ -287,8 +287,8 @@ func (m *Manager) init() {
 	m.Notifications = notifications.New(&m.config.Notifications, m.logger)
 
 	// Initialize Hearsay state and its default network participation.
-	if hs, err := hearsay.New(m.config, m.logger); err != nil {
-		m.logger.Warn().Err(err).Msg("Hearsay disabled: failed to initialize")
+	if hs, newErr := hearsay.New(m.config, m.logger); newErr != nil {
+		m.logger.Warn().Err(newErr).Msg("Hearsay disabled: failed to initialize")
 	} else {
 		m.hearsay = hs
 	}
@@ -454,8 +454,8 @@ func (m *Manager) migrate() {
 		Msg("Found cache files, starting automatic migration...")
 
 	// Start migration with backup
-	if err := m.migrator.Start(); err != nil {
-		m.logger.Error().Err(err).Msg("Failed to start automatic migration")
+	if startErr := m.migrator.Start(); startErr != nil {
+		m.logger.Error().Err(startErr).Msg("Failed to start automatic migration")
 		return
 	}
 
@@ -740,15 +740,15 @@ func (m *Manager) DeleteEntry(infohash string, removePlacements bool) error {
 		go m.RemoveTorrentPlacements(torr)
 	}
 
-	if err := m.storage.Delete(infohash); err != nil {
-		return err
+	if deleteErr := m.storage.Delete(infohash); deleteErr != nil {
+		return deleteErr
 	}
 	m.strm.RemoveEntryAsync(torr)
 	// Refresh entry cache
 	m.InvalidateEntryCache()
 	go func() {
-		if err := m.RefreshMount(); err != nil {
-			m.logger.Error().Err(err).Msg("Mount refresh after entry deletion failed")
+		if refreshMountErr := m.RefreshMount(); refreshMountErr != nil {
+			m.logger.Error().Err(refreshMountErr).Msg("Mount refresh after entry deletion failed")
 		}
 	}()
 	return nil

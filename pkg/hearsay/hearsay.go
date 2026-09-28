@@ -126,9 +126,9 @@ func New(cfg *config.Config, log zerolog.Logger) (*Service, error) {
 		return nil, nil
 	}
 	if cfg.Hearsay.Interval != "" {
-		interval, err := time.ParseDuration(cfg.Hearsay.Interval)
-		if err != nil {
-			return nil, fmt.Errorf("hearsay interval: %w", err)
+		interval, parseDurationErr := time.ParseDuration(cfg.Hearsay.Interval)
+		if parseDurationErr != nil {
+			return nil, fmt.Errorf("hearsay interval: %w", parseDurationErr)
 		}
 		s.interval = interval
 	}
@@ -143,16 +143,16 @@ func New(cfg *config.Config, log zerolog.Logger) (*Service, error) {
 	}
 	s.engine = engine
 	for vendor := range maps.Keys(s.debrids) {
-		advisor, err := hsdebrid.NewAdvisorWithPolicy(
+		advisor, newAdvisorWithPolicyErr := hsdebrid.NewAdvisorWithPolicy(
 			engine,
 			vendor,
 			mode,
 			policy,
 			filepath.Join(dir, "advice", vendor+".json"),
 		)
-		if err != nil {
+		if newAdvisorWithPolicyErr != nil {
 			engine.Close()
-			return nil, err
+			return nil, newAdvisorWithPolicyErr
 		}
 		s.advisors[vendor] = advisor
 	}
@@ -168,9 +168,9 @@ func New(cfg *config.Config, log zerolog.Logger) (*Service, error) {
 				if feed == self || slices.Contains(s.follow, feed) {
 					continue
 				}
-				if err := engine.Forget(ns, feed); err != nil {
+				if forgetErr := engine.Forget(ns, feed); forgetErr != nil {
 					engine.Close()
-					return nil, fmt.Errorf("hearsay: dropping feed outside the follow list: %w", err)
+					return nil, fmt.Errorf("hearsay: dropping feed outside the follow list: %w", forgetErr)
 				}
 				s.log.Debug().Str("ns", ns).Str("feed", feed[:8]).Msg("dropped feed outside the follow list")
 			}

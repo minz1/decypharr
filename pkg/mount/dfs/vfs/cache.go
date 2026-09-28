@@ -254,17 +254,17 @@ func (c *Cache) scanDiskCandidates() diskScanResult {
 		entryName := topEntry.Name()
 		entryDir := filepath.Join(c.config.CacheDir, entryName)
 
-		subEntries, err := os.ReadDir(entryDir)
-		if err != nil {
-			c.logger.Warn().Err(err).Str("path", entryDir).Msg("failed to read cache entry directory")
+		subEntries, readDirErr := os.ReadDir(entryDir)
+		if readDirErr != nil {
+			c.logger.Warn().Err(readDirErr).Str("path", entryDir).Msg("failed to read cache entry directory")
 			result.errors++
 			continue
 		}
 
 		// Remove empty directories
 		if len(subEntries) == 0 {
-			if err := os.RemoveAll(entryDir); err != nil && !os.IsNotExist(err) {
-				c.logger.Warn().Err(err).Str("path", entryDir).Msg("failed to remove empty cache directory")
+			if removeAllErr := os.RemoveAll(entryDir); removeAllErr != nil && !os.IsNotExist(removeAllErr) {
+				c.logger.Warn().Err(removeAllErr).Str("path", entryDir).Msg("failed to remove empty cache directory")
 				result.errors++
 			} else {
 				result.emptyDirsRemoved++
@@ -293,16 +293,19 @@ func (c *Cache) scanDiskCandidates() diskScanResult {
 
 			// Read and parse metadata
 			var info ItemInfo
-			if err := decodeJSONFile(metaPath, &info); err != nil {
-				c.logger.Warn().Err(err).Str("path", metaPath).Msg("failed to read or parse cache metadata")
+			if decodeJSONFileErr := decodeJSONFile(metaPath, &info); decodeJSONFileErr != nil {
+				c.logger.Warn().
+					Err(decodeJSONFileErr).
+					Str("path", metaPath).
+					Msg("failed to read or parse cache metadata")
 				result.errors++
 				continue
 			}
 
 			// Verify data file exists
-			dataStat, err := os.Stat(dataPath)
-			if err != nil {
-				if os.IsNotExist(err) && !inMap && opens == 0 && info.Rs.Size() > 0 {
+			dataStat, statErr := os.Stat(dataPath)
+			if statErr != nil {
+				if os.IsNotExist(statErr) && !inMap && opens == 0 && info.Rs.Size() > 0 {
 					if rmErr := os.Remove(metaPath); rmErr != nil && !os.IsNotExist(rmErr) {
 						c.logger.Warn().
 							Err(rmErr).
@@ -311,14 +314,14 @@ func (c *Cache) scanDiskCandidates() diskScanResult {
 						result.errors++
 					} else {
 						c.logger.Warn().
-							Err(err).
+							Err(statErr).
 							Str("path", dataPath).
 							Str("metadata", metaPath).
 							Msg("removed orphan cache metadata for missing data file")
 						result.orphanMetadataRemoved++
 					}
 				} else {
-					c.logger.Warn().Err(err).Str("path", dataPath).Msg("cache data file missing")
+					c.logger.Warn().Err(statErr).Str("path", dataPath).Msg("cache data file missing")
 					result.errors++
 				}
 				continue
@@ -545,8 +548,8 @@ func (c *Cache) newItem(key, entryName, filename string, fileSize int64) (*Cache
 	log := logger.NewRateLimitedLogger(logger.WithLogger(_logger))
 
 	itemDir := filepath.Join(c.config.CacheDir, entryName)
-	if err := os.MkdirAll(itemDir, 0o755); err != nil {
-		return nil, fmt.Errorf("failed to create item dir: %w", err)
+	if mkdirAllErr := os.MkdirAll(itemDir, 0o755); mkdirAllErr != nil {
+		return nil, fmt.Errorf("failed to create item dir: %w", mkdirAllErr)
 	}
 
 	cachePath := filepath.Join(itemDir, filename)
@@ -555,16 +558,20 @@ func (c *Cache) newItem(key, entryName, filename string, fileSize int64) (*Cache
 	// Load existing metadata before constructing the buffer so its range
 	// tracker is seeded with anything the prior session persisted.
 	var info ItemInfo
-	if err := decodeJSONFile(metaPath, &info); err != nil && !os.IsNotExist(err) {
-		c.logger.Warn().Err(err).Str("key", key).Msg("corrupt metadata, resetting")
+	if decodeJSONFileErr := decodeJSONFile(
+		metaPath,
+		&info,
+	); decodeJSONFileErr != nil &&
+		!os.IsNotExist(decodeJSONFileErr) {
+		c.logger.Warn().Err(decodeJSONFileErr).Str("key", key).Msg("corrupt metadata, resetting")
 		info = ItemInfo{}
 	}
 
 	// Defend against a directory accidentally sitting at cachePath
 	// (interrupted prior run, leftover state).
-	if stat, err := os.Stat(cachePath); err == nil && stat.IsDir() {
-		if err := os.RemoveAll(cachePath); err != nil {
-			return nil, fmt.Errorf("failed to remove directory at cache path: %w", err)
+	if stat, statErr := os.Stat(cachePath); statErr == nil && stat.IsDir() {
+		if removeAllErr := os.RemoveAll(cachePath); removeAllErr != nil {
+			return nil, fmt.Errorf("failed to remove directory at cache path: %w", removeAllErr)
 		}
 	}
 
@@ -1179,21 +1186,24 @@ func (item *CacheItem) flushMetadata(force bool) {
 		return
 	}
 	// Confirm directory exists before writing metadata (in case it was deleted by cleanup)
-	if err := os.MkdirAll(filepath.Dir(item.metaPath), 0755); err != nil {
-		item.cache.logger.Warn().Err(err).Str("key", item.key).Msg("failed to create cache directory for metadata")
+	if mkdirAllErr := os.MkdirAll(filepath.Dir(item.metaPath), 0755); mkdirAllErr != nil {
+		item.cache.logger.Warn().
+			Err(mkdirAllErr).
+			Str("key", item.key).
+			Msg("failed to create cache directory for metadata")
 		item.metaDirty.Store(true) // retry on the next tick
 		return
 	}
 	// Atomic write: write to temp file then rename to avoid corrupt reads
 	// from scanDiskCandidates racing with this write.
 	tmpPath := item.metaPath + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		item.cache.logger.Warn().Err(err).Str("key", item.key).Msg("failed to write cache metadata")
+	if writeFileErr := os.WriteFile(tmpPath, data, 0644); writeFileErr != nil {
+		item.cache.logger.Warn().Err(writeFileErr).Str("key", item.key).Msg("failed to write cache metadata")
 		item.metaDirty.Store(true) // retry on the next tick
 		return
 	}
-	if err := os.Rename(tmpPath, item.metaPath); err != nil {
-		item.cache.logger.Warn().Err(err).Str("key", item.key).Msg("failed to rename cache metadata")
+	if renameErr := os.Rename(tmpPath, item.metaPath); renameErr != nil {
+		item.cache.logger.Warn().Err(renameErr).Str("key", item.key).Msg("failed to rename cache metadata")
 		_ = os.Remove(tmpPath)
 		item.metaDirty.Store(true) // retry on the next tick
 		return
@@ -1427,8 +1437,8 @@ func decodeJSONFile(path string, v any) error {
 		return err
 	}
 	defer f.Close()
-	if err := json.NewDecoder(f).Decode(v); err != nil && err != io.EOF {
-		return err
+	if decodeErr := json.NewDecoder(f).Decode(v); decodeErr != nil && decodeErr != io.EOF {
+		return decodeErr
 	}
 	return nil
 }

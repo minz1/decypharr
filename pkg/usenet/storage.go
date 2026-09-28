@@ -89,9 +89,9 @@ func (s *NZBStorage) recalculateStatsLocked() error {
 			continue
 		}
 		count++
-		info, err := entry.Info()
-		if err != nil {
-			return fmt.Errorf("failed to stat meta file %s: %w", entry.Name(), err)
+		info, infoErr := entry.Info()
+		if infoErr != nil {
+			return fmt.Errorf("failed to stat meta file %s: %w", entry.Name(), infoErr)
 		}
 		totalSize += info.Size()
 	}
@@ -132,13 +132,13 @@ func (s *NZBStorage) writeNZBLocked(nzb *storage.NZB) error {
 
 	// Write atomically using temp file
 	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		return fmt.Errorf("failed to write NZB meta file: %w", err)
+	if writeFileErr := os.WriteFile(tmpPath, data, 0644); writeFileErr != nil {
+		return fmt.Errorf("failed to write NZB meta file: %w", writeFileErr)
 	}
 
-	if err := os.Rename(tmpPath, path); err != nil {
+	if renameErr := os.Rename(tmpPath, path); renameErr != nil {
 		_ = os.Remove(tmpPath)
-		return fmt.Errorf("failed to rename NZB meta file: %w", err)
+		return fmt.Errorf("failed to rename NZB meta file: %w", renameErr)
 	}
 
 	newSize := int64(len(data))
@@ -247,8 +247,8 @@ func (s *NZBStorage) SampleFileMessageIDs(id, filename string, percent int) ([]s
 	}
 
 	if isCodecV2(data) {
-		ids, _, err := decodeFileMessageIDsSampled(data, filename, percent)
-		return ids, err
+		ids, _, decodeFileMessageIDsSampledErr := decodeFileMessageIDsSampled(data, filename, percent)
+		return ids, decodeFileMessageIDsSampledErr
 	}
 
 	// Legacy proto: full decode then sample in memory.
@@ -330,20 +330,20 @@ func (s *NZBStorage) ForEachNZB(fn func(*storage.NZB) error) error {
 		}
 
 		path := filepath.Join(s.metaDir, entry.Name())
-		data, err := os.ReadFile(path)
-		if err != nil {
-			s.logger.Warn().Err(err).Str("file", entry.Name()).Msg("Failed to read NZB meta file")
+		data, readFileErr := os.ReadFile(path)
+		if readFileErr != nil {
+			s.logger.Warn().Err(readFileErr).Str("file", entry.Name()).Msg("Failed to read NZB meta file")
 			continue
 		}
 
-		nzb, err := decodeNZB(data)
-		if err != nil {
-			s.logger.Warn().Err(err).Str("file", entry.Name()).Msg("Failed to decode NZB")
+		nzb, readFileErr := decodeNZB(data)
+		if readFileErr != nil {
+			s.logger.Warn().Err(readFileErr).Str("file", entry.Name()).Msg("Failed to decode NZB")
 			continue
 		}
 
-		if err := fn(nzb); err != nil {
-			return err
+		if fnErr := fn(nzb); fnErr != nil {
+			return fnErr
 		}
 	}
 
@@ -429,9 +429,9 @@ func (s *NZBStorage) MigrateLegacy() (int, error) {
 			continue
 		}
 		path := filepath.Join(s.metaDir, entry.Name())
-		v2, err := fileIsCodecV2(path)
-		if err != nil {
-			s.logger.Warn().Err(err).Str("file", entry.Name()).Msg("Migration: failed to probe file")
+		v2, fileIsCodecV2Err := fileIsCodecV2(path)
+		if fileIsCodecV2Err != nil {
+			s.logger.Warn().Err(fileIsCodecV2Err).Str("file", entry.Name()).Msg("Migration: failed to probe file")
 			continue
 		}
 		if !v2 {
@@ -451,9 +451,12 @@ func (s *NZBStorage) MigrateLegacy() (int, error) {
 
 	for _, path := range legacy {
 		pl.Go(func() {
-			ok, err := s.migrateFile(path)
-			if err != nil {
-				s.logger.Warn().Err(err).Str("file", filepath.Base(path)).Msg("Migration: failed to migrate file")
+			ok, migrateFileErr := s.migrateFile(path)
+			if migrateFileErr != nil {
+				s.logger.Warn().
+					Err(migrateFileErr).
+					Str("file", filepath.Base(path)).
+					Msg("Migration: failed to migrate file")
 				failed.Add(1)
 				return
 			}
@@ -506,8 +509,8 @@ func (s *NZBStorage) migrateFile(path string) (bool, error) {
 
 	// Unique temp name so it can't collide with AddNZB's "<path>.tmp".
 	tmpPath := path + ".v2tmp"
-	if err := os.WriteFile(tmpPath, out, 0644); err != nil {
-		return false, fmt.Errorf("write temp: %w", err)
+	if writeFileErr := os.WriteFile(tmpPath, out, 0644); writeFileErr != nil {
+		return false, fmt.Errorf("write temp: %w", writeFileErr)
 	}
 
 	s.mu.Lock()
@@ -518,9 +521,9 @@ func (s *NZBStorage) migrateFile(path string) (bool, error) {
 		_ = os.Remove(tmpPath)
 		return false, nil
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
+	if renameErr := os.Rename(tmpPath, path); renameErr != nil {
 		_ = os.Remove(tmpPath)
-		return false, fmt.Errorf("rename: %w", err)
+		return false, fmt.Errorf("rename: %w", renameErr)
 	}
 	return true, nil
 }

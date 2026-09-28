@@ -83,8 +83,8 @@ func (s *Service) sonarrLibraryFiles(ctx context.Context, instance Arr) ([]Libra
 	if err != nil {
 		return nil, fmt.Errorf("list sonarr series: %w", err)
 	}
-	if err := expectStatus(resp, http.StatusOK); err != nil {
-		return nil, fmt.Errorf("list sonarr series: %w", err)
+	if expectStatusErr := expectStatus(resp, http.StatusOK); expectStatusErr != nil {
+		return nil, fmt.Errorf("list sonarr series: %w", expectStatusErr)
 	}
 	if len(series) == 0 {
 		return nil, nil
@@ -95,16 +95,16 @@ func (s *Service) sonarrLibraryFiles(ctx context.Context, instance Arr) ([]Libra
 	group.SetLimit(sonarrLibraryConcurrency)
 	for i, item := range series {
 		group.Go(func() error {
-			files, err := s.sonarrSeriesFiles(groupCtx, instance, item.ID)
-			if err != nil {
-				return err
+			files, sonarrSeriesFilesErr := s.sonarrSeriesFiles(groupCtx, instance, item.ID)
+			if sonarrSeriesFilesErr != nil {
+				return sonarrSeriesFilesErr
 			}
 			bySeries[i] = files
 			return nil
 		})
 	}
-	if err := group.Wait(); err != nil {
-		return nil, err
+	if waitErr := group.Wait(); waitErr != nil {
+		return nil, waitErr
 	}
 	return slices.Concat(bySeries...), nil
 }
@@ -119,8 +119,8 @@ func (s *Service) sonarrSeriesFiles(ctx context.Context, instance Arr, seriesID 
 	if err != nil {
 		return nil, fmt.Errorf("list episode files for series %d: %w", seriesID, err)
 	}
-	if err := expectStatus(resp, http.StatusOK); err != nil {
-		return nil, fmt.Errorf("list episode files for series %d: %w", seriesID, err)
+	if expectStatusErr := expectStatus(resp, http.StatusOK); expectStatusErr != nil {
+		return nil, fmt.Errorf("list episode files for series %d: %w", seriesID, expectStatusErr)
 	}
 
 	episodesByFile, err := s.sonarrEpisodeIDs(ctx, instance, seriesID)
@@ -157,8 +157,8 @@ func (s *Service) sonarrEpisodeIDs(ctx context.Context, instance Arr, seriesID i
 	if err != nil {
 		return nil, fmt.Errorf("list episodes for series %d: %w", seriesID, err)
 	}
-	if err := expectStatus(resp, http.StatusOK); err != nil {
-		return nil, fmt.Errorf("list episodes for series %d: %w", seriesID, err)
+	if expectStatusErr := expectStatus(resp, http.StatusOK); expectStatusErr != nil {
+		return nil, fmt.Errorf("list episodes for series %d: %w", seriesID, expectStatusErr)
 	}
 
 	for fileID, ids := range byFile {
@@ -179,8 +179,8 @@ func (s *Service) radarrLibraryFiles(ctx context.Context, instance Arr) ([]Libra
 	if err != nil {
 		return nil, fmt.Errorf("list radarr movies: %w", err)
 	}
-	if err := expectStatus(resp, http.StatusOK); err != nil {
-		return nil, fmt.Errorf("list radarr movies: %w", err)
+	if expectStatusErr := expectStatus(resp, http.StatusOK); expectStatusErr != nil {
+		return nil, fmt.Errorf("list radarr movies: %w", expectStatusErr)
 	}
 
 	return files, nil
@@ -212,8 +212,8 @@ func (s *Service) radarrMovieFiles(ctx context.Context, instance Arr, movieID in
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, nil
 	}
-	if err := expectStatus(resp, http.StatusOK); err != nil {
-		return nil, fmt.Errorf("get radarr movie %d: %w", movieID, err)
+	if expectStatusErr := expectStatus(resp, http.StatusOK); expectStatusErr != nil {
+		return nil, fmt.Errorf("get radarr movie %d: %w", movieID, expectStatusErr)
 	}
 	if file, ok := movieLibraryFile(movie); ok {
 		return []LibraryFile{file}, nil
@@ -257,16 +257,16 @@ func (s *Service) LibraryFilesForMedia(ctx context.Context, name string, mediaID
 	group.SetLimit(sonarrLibraryConcurrency)
 	for i, id := range ids {
 		group.Go(func() error {
-			files, err := read(groupCtx, id)
-			if err != nil {
-				return err
+			files, readErr := read(groupCtx, id)
+			if readErr != nil {
+				return readErr
 			}
 			byMedia[i] = files
 			return nil
 		})
 	}
-	if err := group.Wait(); err != nil {
-		return nil, err
+	if waitErr := group.Wait(); waitErr != nil {
+		return nil, waitErr
 	}
 	return slices.Concat(byMedia...), nil
 }

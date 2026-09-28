@@ -1014,9 +1014,9 @@ func (c *Client) createConnection(ctx context.Context, provider config.UsenetPro
 
 	// Authenticate
 	if provider.Username != "" {
-		if err := conn.authenticate(); err != nil {
+		if authenticateErr := conn.authenticate(); authenticateErr != nil {
 			_ = netConn.Close()
-			return nil, fmt.Errorf("auth: %w", err)
+			return nil, fmt.Errorf("auth: %w", authenticateErr)
 		}
 	}
 
@@ -1761,9 +1761,9 @@ func (c *Client) SpeedTest(ctx context.Context, providerID string, messageID str
 
 	// Measure the ping round-trip time with the monotonic clock.
 	pingStart := time.Now()
-	if err := conn.ping(c.pingTimeout); err != nil {
+	if pingErr := conn.ping(c.pingTimeout); pingErr != nil {
 		c.release(conn)
-		result.Error = fmt.Sprintf("ping failed: %v", err)
+		result.Error = fmt.Sprintf("ping failed: %v", pingErr)
 		c.speedTestResults.Store(providerID, result)
 		return result
 	}

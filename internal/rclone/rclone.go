@@ -84,8 +84,8 @@ func (r *Client) Do(ctx context.Context, req Request, res any) error {
 	}
 
 	if res != nil {
-		if err := json.NewDecoder(response.Body).Decode(res); err != nil && err != io.EOF {
-			return err
+		if decodeErr := json.NewDecoder(response.Body).Decode(res); decodeErr != nil && decodeErr != io.EOF {
+			return decodeErr
 		}
 	}
 

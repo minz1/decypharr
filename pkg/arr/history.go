@@ -72,9 +72,9 @@ func (s *Service) DownloadHistory(ctx context.Context, name, downloadID, eventTy
 			"sortDirection": {"descending"},
 			"downloadId":    {downloadID},
 		}
-		history, err := s.history(ctx, instance, query)
-		if err != nil {
-			return nil, fmt.Errorf("history for download %q: %w", downloadID, err)
+		history, historyErr := s.history(ctx, instance, query)
+		if historyErr != nil {
+			return nil, fmt.Errorf("history for download %q: %w", downloadID, historyErr)
 		}
 
 		fetched += len(history.Records)
@@ -167,9 +167,9 @@ func (s *Service) GrabHistorySince(ctx context.Context, name string, since time.
 			"sortDirection": {"descending"},
 			"eventType":     {strconv.Itoa(eventTypeGrabbed)},
 		}
-		history, err := s.history(ctx, instance, query)
-		if err != nil {
-			return nil, fmt.Errorf("grab history: %w", err)
+		history, historyErr := s.history(ctx, instance, query)
+		if historyErr != nil {
+			return nil, fmt.Errorf("grab history: %w", historyErr)
 		}
 
 		fetched += len(history.Records)
@@ -209,8 +209,8 @@ func (s *Service) FailHistory(ctx context.Context, name string, historyID int) e
 		}
 		return fmt.Errorf("fail history %d: %w", historyID, err)
 	}
-	if err := expectSuccess(resp); err != nil {
-		return fmt.Errorf("fail history %d: %w", historyID, err)
+	if expectSuccessErr := expectSuccess(resp); expectSuccessErr != nil {
+		return fmt.Errorf("fail history %d: %w", historyID, expectSuccessErr)
 	}
 	return nil
 }
@@ -221,8 +221,8 @@ func (s *Service) history(ctx context.Context, instance Arr, query url.Values) (
 	if err != nil {
 		return HistorySchema{}, err
 	}
-	if err := expectStatus(resp, http.StatusOK); err != nil {
-		return HistorySchema{}, err
+	if expectStatusErr := expectStatus(resp, http.StatusOK); expectStatusErr != nil {
+		return HistorySchema{}, expectStatusErr
 	}
 	return history, nil
 }

@@ -102,8 +102,8 @@ func (f *HttpFile) ReadAt(p []byte, off int64) (int, error) {
 			return err
 		case http.StatusOK:
 			// Skip the prefix when the server ignores the Range header.
-			if _, err := io.CopyN(io.Discard, resp.Body, off); err != nil {
-				return err
+			if _, copyNErr := io.CopyN(io.Discard, resp.Body, off); copyNErr != nil {
+				return copyNErr
 			}
 			n, err = io.ReadFull(resp.Body, p)
 			return err

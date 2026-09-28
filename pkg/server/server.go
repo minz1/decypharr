@@ -211,9 +211,9 @@ func (s *Server) getLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func(file *os.File) {
-		err := file.Close()
-		if err != nil {
-			s.logger.Error().Err(err).Msg("Error closing log file")
+		closeErr := file.Close()
+		if closeErr != nil {
+			s.logger.Error().Err(closeErr).Msg("Error closing log file")
 		}
 	}(file)
 
@@ -225,7 +225,7 @@ func (s *Server) getLogs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Expires", "0")
 
 	// Stream the file
-	if _, err := io.Copy(w, file); err != nil {
+	if _, copyErr := io.Copy(w, file); copyErr != nil {
 		http.Error(w, "Error streaming log file", http.StatusInternalServerError)
 		return
 	}
@@ -241,8 +241,8 @@ func (s *Server) getRcloneLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func(file *os.File) {
-		err := file.Close()
-		if err != nil {
+		closeErr := file.Close()
+		if closeErr != nil {
 			return
 		}
 	}(file)
@@ -255,8 +255,8 @@ func (s *Server) getRcloneLogs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Expires", "0")
 
 	// Stream the file
-	if _, err := io.Copy(w, file); err != nil {
-		http.Error(w, fmt.Sprintf("error stremaing file %s", err), http.StatusInternalServerError)
+	if _, copyErr := io.Copy(w, file); copyErr != nil {
+		http.Error(w, fmt.Sprintf("error stremaing file %s", copyErr), http.StatusInternalServerError)
 		return
 	}
 }

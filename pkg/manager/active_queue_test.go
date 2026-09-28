@@ -30,12 +30,12 @@ func TestRestoreLeavesActiveDownloadsOutsideSubmissionWorkers(t *testing.T) {
 		if i == 3 {
 			status = debridTypes.TorrentStatusQueued
 		}
-		if err := m.queue.Add(&storage.Entry{
+		if addErr := m.queue.Add(&storage.Entry{
 			InfoHash: fmt.Sprintf("%040d", i), Name: fmt.Sprintf("entry-%d", i),
 			Protocol: config.ProtocolTorrent, State: storage.EntryStateDownloading,
 			Status: status, IsDownloading: i != 3, AddedOn: time.Now().Add(time.Duration(i) * time.Second),
-		}); err != nil {
-			t.Fatal(err)
+		}); addErr != nil {
+			t.Fatal(addErr)
 		}
 	}
 	received := make(chan *Job, 4)
@@ -56,9 +56,9 @@ func TestRestoreLeavesActiveDownloadsOutsideSubmissionWorkers(t *testing.T) {
 		t.Fatal("active downloads blocked the queued import")
 	}
 	for i := range 3 {
-		entry, err := m.queue.GetTorrent(fmt.Sprintf("%040d", i))
-		if err != nil {
-			t.Fatal(err)
+		entry, getTorrentErr := m.queue.GetTorrent(fmt.Sprintf("%040d", i))
+		if getTorrentErr != nil {
+			t.Fatal(getTorrentErr)
 		}
 		if entry.Status != debridTypes.TorrentStatusDownloading || entry.IsDownloading {
 			t.Fatalf("active entry = %#v", entry)

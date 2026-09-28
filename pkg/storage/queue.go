@@ -22,8 +22,8 @@ func (s *Storage) UpdateQueue(entry *Entry) error {
 	if err != nil {
 		return fmt.Errorf("encode queued entry %q: %w", entry.InfoHash, err)
 	}
-	if err := s.queue.Put(strings.ToLower(entry.InfoHash), data, entryPutOptions(entry)); err != nil {
-		return fmt.Errorf("save queued entry %q: %w", entry.InfoHash, err)
+	if putErr := s.queue.Put(strings.ToLower(entry.InfoHash), data, entryPutOptions(entry)); putErr != nil {
+		return fmt.Errorf("save queued entry %q: %w", entry.InfoHash, putErr)
 	}
 	return nil
 }
@@ -36,8 +36,8 @@ func (s *Storage) GetQueued(infohash string) (*Entry, error) {
 		return nil, fmt.Errorf("read queued entry %q: %w", key, err)
 	}
 	var pb EntryProto
-	if err := proto.Unmarshal(data, &pb); err != nil {
-		return nil, fmt.Errorf("decode queued entry %q: %w", key, err)
+	if unmarshalErr := proto.Unmarshal(data, &pb); unmarshalErr != nil {
+		return nil, fmt.Errorf("decode queued entry %q: %w", key, unmarshalErr)
 	}
 	return ProtoToEntry(&pb), nil
 }
@@ -50,8 +50,8 @@ func (s *Storage) DeleteQueued(infohash string, cleanup func(*Entry) error) erro
 		if err != nil {
 			return err
 		}
-		if err := cleanup(entry); err != nil {
-			return fmt.Errorf("clean up queued entry %q: %w", key, err)
+		if cleanupErr := cleanup(entry); cleanupErr != nil {
+			return fmt.Errorf("clean up queued entry %q: %w", key, cleanupErr)
 		}
 	}
 	if err := s.queue.Delete(key); err != nil {
@@ -102,8 +102,8 @@ func (s *Storage) DeleteWhereQueued(predicate func(*Entry) bool, cleanup func(*E
 	}
 	var errs []error
 	for _, entry := range entries {
-		if err := s.DeleteQueued(entry.InfoHash, cleanup); err != nil {
-			errs = append(errs, err)
+		if deleteQueuedErr := s.DeleteQueued(entry.InfoHash, cleanup); deleteQueuedErr != nil {
+			errs = append(errs, deleteQueuedErr)
 		}
 	}
 	return errors.Join(errs...)
@@ -118,8 +118,8 @@ func (s *Storage) UpdateWhereQueued(filter func(*Entry) bool, update func(*Entry
 	var errs []error
 	for _, entry := range entries {
 		if update != nil && update(entry) {
-			if err := s.UpdateQueue(entry); err != nil {
-				errs = append(errs, err)
+			if updateQueueErr := s.UpdateQueue(entry); updateQueueErr != nil {
+				errs = append(errs, updateQueueErr)
 			}
 		}
 	}

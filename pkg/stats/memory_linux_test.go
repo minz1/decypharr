@@ -19,8 +19,8 @@ func TestProcessRSSIncludesMappedPages(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := syscall.Munmap(data); err != nil {
-			t.Error(err)
+		if munmapErr := syscall.Munmap(data); munmapErr != nil {
+			t.Error(munmapErr)
 		}
 	})
 	for i := 0; i < len(data); i += os.Getpagesize() {

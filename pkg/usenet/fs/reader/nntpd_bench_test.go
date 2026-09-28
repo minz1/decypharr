@@ -188,14 +188,14 @@ func BenchmarkConfiguredBodyPipelineDepth(b *testing.B) {
 				b.StartTimer()
 
 				for off := int64(0); off < fileSize; off += int64(len(buf)) {
-					if _, err := sr.ReadAt(buf[:min(int64(len(buf)), fileSize-off)], off); err != nil {
-						b.Fatal(err)
+					if _, readAtErr := sr.ReadAt(buf[:min(int64(len(buf)), fileSize-off)], off); readAtErr != nil {
+						b.Fatal(readAtErr)
 					}
 				}
 
 				b.StopTimer()
-				if err := sr.Close(); err != nil {
-					b.Fatal(err)
+				if closeErr := sr.Close(); closeErr != nil {
+					b.Fatal(closeErr)
 				}
 				b.StartTimer()
 			}

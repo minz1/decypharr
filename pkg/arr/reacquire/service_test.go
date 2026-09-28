@@ -111,8 +111,8 @@ func TestServiceDeduplicatesAndPersistsReacquireJobs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.Start(t.Context()); err != nil {
-		t.Fatal(err)
+	if startErr := service.Start(t.Context()); startErr != nil {
+		t.Fatal(startErr)
 	}
 
 	broken := Binding{
@@ -127,8 +127,8 @@ func TestServiceDeduplicatesAndPersistsReacquireJobs(t *testing.T) {
 		MovieID:                7,
 		Confidence:             ConfidenceExactPath,
 	}
-	if err := service.UpsertBinding(broken); err != nil {
-		t.Fatal(err)
+	if upsertBindingErr := service.UpsertBinding(broken); upsertBindingErr != nil {
+		t.Fatal(upsertBindingErr)
 	}
 	request := Request{EntryID: broken.EntryID, FileID: broken.EntryFileID, Cause: CauseStream}
 	first, err := service.Reacquire(request)
@@ -161,15 +161,15 @@ func TestServiceDeduplicatesAndPersistsReacquireJobs(t *testing.T) {
 	replacement.EntryFileID = "replacement-file"
 	replacement.DownloadID = "replacement-download"
 	replacement.ArrFileID = 41
-	if err := service.UpsertBinding(replacement); err != nil {
-		t.Fatal(err)
+	if upsertBindingErr := service.UpsertBinding(replacement); upsertBindingErr != nil {
+		t.Fatal(upsertBindingErr)
 	}
 	job = waitForJobStatus(t, service, first.ID, StatusReady)
 	if job.ReplacementDownloadID != replacement.DownloadID {
 		t.Fatalf("replacement download ID = %q", job.ReplacementDownloadID)
 	}
-	if err := service.Close(); err != nil {
-		t.Fatal(err)
+	if closeErr := service.Close(); closeErr != nil {
+		t.Fatal(closeErr)
 	}
 
 	reopened, err := NewService(ServiceOptions{Directory: directory})
@@ -177,8 +177,8 @@ func TestServiceDeduplicatesAndPersistsReacquireJobs(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
-	if err := reopened.Start(t.Context()); err != nil {
-		t.Fatal(err)
+	if startErr := reopened.Start(t.Context()); startErr != nil {
+		t.Fatal(startErr)
 	}
 	if persisted, ok := reopened.Job(first.ID); !ok || persisted.Status != StatusReady {
 		t.Fatalf("persisted job = %#v, found = %v", persisted, ok)
@@ -220,14 +220,14 @@ func TestServiceDeletesOnlyTerminalJobsAndPersistsDeletion(t *testing.T) {
 	completed := job("completed", StatusReady)
 	active := job("active", StatusQueued)
 	active.CompletedAt = time.Time{}
-	if err := service.jobRepository.Save(completed); err != nil {
-		t.Fatal(err)
+	if saveErr := service.jobRepository.Save(completed); saveErr != nil {
+		t.Fatal(saveErr)
 	}
-	if err := service.jobRepository.Save(active); err != nil {
-		t.Fatal(err)
+	if saveErr := service.jobRepository.Save(active); saveErr != nil {
+		t.Fatal(saveErr)
 	}
-	if err := service.Start(t.Context()); err != nil {
-		t.Fatal(err)
+	if startErr := service.Start(t.Context()); startErr != nil {
+		t.Fatal(startErr)
 	}
 
 	deleted, err := service.DeleteJobs([]string{completed.ID, active.ID})
@@ -255,16 +255,16 @@ func TestServiceDeletesOnlyTerminalJobsAndPersistsDeletion(t *testing.T) {
 		t.Fatal("deleting completed history removed an active job")
 	}
 
-	if err := service.Close(); err != nil {
-		t.Fatal(err)
+	if closeErr := service.Close(); closeErr != nil {
+		t.Fatal(closeErr)
 	}
 	reopened, err := NewService(ServiceOptions{Directory: directory})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
-	if err := reopened.Start(t.Context()); err != nil {
-		t.Fatal(err)
+	if startErr := reopened.Start(t.Context()); startErr != nil {
+		t.Fatal(startErr)
 	}
 	if _, ok := reopened.Job(completed.ID); ok {
 		t.Fatal("deleted job was restored after reopening the service")
@@ -280,8 +280,8 @@ func TestServicePersistsUnknownMutationForRestartReconciliation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.Start(t.Context()); err != nil {
-		t.Fatal(err)
+	if startErr := service.Start(t.Context()); startErr != nil {
+		t.Fatal(startErr)
 	}
 	binding := Binding{
 		ArrName:                "radarr",
@@ -295,8 +295,8 @@ func TestServicePersistsUnknownMutationForRestartReconciliation(t *testing.T) {
 		MovieID:                7,
 		Confidence:             ConfidenceExactPath,
 	}
-	if err := service.UpsertBinding(binding); err != nil {
-		t.Fatal(err)
+	if upsertBindingErr := service.UpsertBinding(binding); upsertBindingErr != nil {
+		t.Fatal(upsertBindingErr)
 	}
 	created, err := service.Reacquire(Request{
 		EntryID: binding.EntryID,
@@ -319,8 +319,8 @@ func TestServicePersistsUnknownMutationForRestartReconciliation(t *testing.T) {
 	if queued.Status != StatusQueued || queued.RetryAt.IsZero() || len(queued.Mutations) != 1 {
 		t.Fatalf("queued job = %#v", queued)
 	}
-	if err := service.Close(); err != nil {
-		t.Fatal(err)
+	if closeErr := service.Close(); closeErr != nil {
+		t.Fatal(closeErr)
 	}
 
 	reopened, err := NewService(ServiceOptions{Directory: directory})
@@ -328,8 +328,8 @@ func TestServicePersistsUnknownMutationForRestartReconciliation(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
-	if err := reopened.Start(t.Context()); err != nil {
-		t.Fatal(err)
+	if startErr := reopened.Start(t.Context()); startErr != nil {
+		t.Fatal(startErr)
 	}
 	persisted, ok := reopened.Job(created.ID)
 	if !ok || persisted.Status != StatusQueued || persisted.RetryAt.IsZero() || len(persisted.Mutations) != 1 {
@@ -344,8 +344,8 @@ func TestWaitingTransitionFindsExistingCompleteEpisodeReplacement(t *testing.T) 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = service.Close() })
-	if err := service.Start(t.Context()); err != nil {
-		t.Fatal(err)
+	if startErr := service.Start(t.Context()); startErr != nil {
+		t.Fatal(startErr)
 	}
 
 	broken := Binding{
@@ -361,16 +361,16 @@ func TestWaitingTransitionFindsExistingCompleteEpisodeReplacement(t *testing.T) 
 		EpisodeIDs:             []int{101, 102},
 		Confidence:             ConfidenceExactPath,
 	}
-	if err := service.UpsertBinding(broken); err != nil {
-		t.Fatal(err)
+	if upsertBindingErr := service.UpsertBinding(broken); upsertBindingErr != nil {
+		t.Fatal(upsertBindingErr)
 	}
 	sibling := broken
 	sibling.EntryID = "broken-entry-2"
 	sibling.EntryFileID = "broken-file-2"
 	sibling.ArrFileID = 43
 	sibling.EpisodeIDs = []int{103}
-	if err := service.UpsertBinding(sibling); err != nil {
-		t.Fatal(err)
+	if upsertBindingErr := service.UpsertBinding(sibling); upsertBindingErr != nil {
+		t.Fatal(upsertBindingErr)
 	}
 	job, err := service.Reacquire(Request{
 		EntryID: broken.EntryID,
@@ -392,8 +392,8 @@ func TestWaitingTransitionFindsExistingCompleteEpisodeReplacement(t *testing.T) 
 	first.DownloadID = "replacement-download"
 	first.ArrFileID = 41
 	first.EpisodeIDs = []int{101}
-	if err := service.UpsertBinding(first); err != nil {
-		t.Fatal(err)
+	if upsertBindingErr := service.UpsertBinding(first); upsertBindingErr != nil {
+		t.Fatal(upsertBindingErr)
 	}
 	close(handler.release)
 	waitForJobStatus(t, service, job.ID, StatusWaitingForImport)
@@ -403,8 +403,8 @@ func TestWaitingTransitionFindsExistingCompleteEpisodeReplacement(t *testing.T) 
 	second.EntryFileID = "replacement-file-2"
 	second.ArrFileID = 42
 	second.EpisodeIDs = []int{102}
-	if err := service.UpsertBinding(second); err != nil {
-		t.Fatal(err)
+	if upsertBindingErr := service.UpsertBinding(second); upsertBindingErr != nil {
+		t.Fatal(upsertBindingErr)
 	}
 	waitForJobStatus(t, service, job.ID, StatusWaitingForImport)
 
@@ -413,8 +413,8 @@ func TestWaitingTransitionFindsExistingCompleteEpisodeReplacement(t *testing.T) 
 	third.EntryFileID = "replacement-file-3"
 	third.ArrFileID = 44
 	third.EpisodeIDs = []int{103}
-	if err := service.UpsertBinding(third); err != nil {
-		t.Fatal(err)
+	if upsertBindingErr := service.UpsertBinding(third); upsertBindingErr != nil {
+		t.Fatal(upsertBindingErr)
 	}
 	ready := waitForJobStatus(t, service, job.ID, StatusReady)
 	if ready.ReplacementDownloadID != "replacement-download" {
@@ -431,8 +431,8 @@ func TestWaitingJobExpiresAndReleasesDeduplicationKey(t *testing.T) {
 	t.Cleanup(func() { _ = service.Close() })
 	base := time.Date(2026, time.August, 30, 12, 0, 0, 0, time.UTC)
 	service.now = func() time.Time { return base }
-	if err := service.Start(t.Context()); err != nil {
-		t.Fatal(err)
+	if startErr := service.Start(t.Context()); startErr != nil {
+		t.Fatal(startErr)
 	}
 	binding := Binding{
 		ArrName:                "radarr",
@@ -446,8 +446,8 @@ func TestWaitingJobExpiresAndReleasesDeduplicationKey(t *testing.T) {
 		MovieID:                8,
 		Confidence:             ConfidenceExactPath,
 	}
-	if err := service.UpsertBinding(binding); err != nil {
-		t.Fatal(err)
+	if upsertBindingErr := service.UpsertBinding(binding); upsertBindingErr != nil {
+		t.Fatal(upsertBindingErr)
 	}
 	first, err := service.Reacquire(Request{EntryID: "entry", FileID: "file", Cause: CauseRepair})
 	if err != nil {

@@ -20,15 +20,15 @@ func TestExportServesThroughCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := export.Close(); err != nil {
-			t.Error(err)
+		if closeErr := export.Close(); closeErr != nil {
+			t.Error(closeErr)
 		}
 	})
 
 	// The cache owns its directory and lays out data and metadata separately.
 	for _, sub := range []string{"data", "meta"} {
-		if _, err := os.Stat(filepath.Join(dir, sub)); err != nil {
-			t.Fatalf("cache did not create %s: %v", sub, err)
+		if _, statErr := os.Stat(filepath.Join(dir, sub)); statErr != nil {
+			t.Fatalf("cache did not create %s: %v", sub, statErr)
 		}
 	}
 
@@ -58,11 +58,11 @@ func TestExportWithoutCache(t *testing.T) {
 	}
 	defer export.Close()
 
-	if _, err := os.Stat(dir); !os.IsNotExist(err) {
-		t.Fatalf("disabled cache touched %s: %v", dir, err)
+	if _, statErr := os.Stat(dir); !os.IsNotExist(statErr) {
+		t.Fatalf("disabled cache touched %s: %v", dir, statErr)
 	}
-	if _, err := export.FileSystem().Stat(context.Background(), "/__all__/Example Show/a.mkv"); err != nil {
-		t.Fatal(err)
+	if _, statErr := export.FileSystem().Stat(context.Background(), "/__all__/Example Show/a.mkv"); statErr != nil {
+		t.Fatal(statErr)
 	}
 	if got := export.cache; got != nil {
 		t.Fatal("disabled cache was created")

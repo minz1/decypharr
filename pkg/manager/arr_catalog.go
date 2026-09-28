@@ -77,12 +77,12 @@ func (c managedArrCatalog) ListManagedFiles(ctx context.Context, entryID string)
 	// File IDs are assigned by a write, which cannot run inside the scan.
 	backfilled := len(missingIDs)
 	for _, entry := range missingIDs {
-		if err := ctx.Err(); err != nil {
-			return nil, err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
 		}
-		entryFiles, err := c.entryFiles(entry, &skips)
-		if err != nil {
-			return nil, err
+		entryFiles, entryFilesErr := c.entryFiles(entry, &skips)
+		if entryFilesErr != nil {
+			return nil, entryFilesErr
 		}
 		files = append(files, entryFiles...)
 	}

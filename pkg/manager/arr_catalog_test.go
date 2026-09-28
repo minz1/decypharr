@@ -37,8 +37,8 @@ func TestListManagedFilesIgnoresEntryCategory(t *testing.T) {
 		},
 	}
 	for _, entry := range entries {
-		if err := store.AddOrUpdate(entry); err != nil {
-			t.Fatal(err)
+		if addOrUpdateErr := store.AddOrUpdate(entry); addOrUpdateErr != nil {
+			t.Fatal(addOrUpdateErr)
 		}
 	}
 

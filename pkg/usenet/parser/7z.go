@@ -57,8 +57,8 @@ func (p *SevenZParser) Process(ctx context.Context, group *FileGroup, password s
 	if err != nil {
 		return nil, fmt.Errorf("index 7z source segments: %w", err)
 	}
-	if err := segmentIndex.validateVolumes(volumeInfos); err != nil {
-		return nil, fmt.Errorf("validate 7z volume layout: %w", err)
+	if validateVolumesErr := segmentIndex.validateVolumes(volumeInfos); validateVolumesErr != nil {
+		return nil, fmt.Errorf("validate 7z volume layout: %w", validateVolumesErr)
 	}
 
 	readerAt, size, err := newArticleReaderAt(ctx, p.source, volumes)
@@ -92,9 +92,16 @@ func (p *SevenZParser) Process(ctx context.Context, group *FileGroup, password s
 
 	// Parse RAR files by reading their headers directly from readerAt
 	if len(rarFiles) > 0 {
-		rarNZBFiles, err := p.processRARFilesFromPositions(ctx, rarFiles, group, readerAt, segmentIndex, password)
-		if err != nil {
-			return nil, fmt.Errorf("process RAR files embedded in 7z: %w", err)
+		rarNZBFiles, processRARFilesFromPositionsErr := p.processRARFilesFromPositions(
+			ctx,
+			rarFiles,
+			group,
+			readerAt,
+			segmentIndex,
+			password,
+		)
+		if processRARFilesFromPositionsErr != nil {
+			return nil, fmt.Errorf("process RAR files embedded in 7z: %w", processRARFilesFromPositionsErr)
 		}
 		files = append(files, rarNZBFiles...)
 	}
@@ -114,12 +121,12 @@ func (p *SevenZParser) Process(ctx context.Context, group *FileGroup, password s
 		// Slice segments for this file's byte range using offset from sevenzip
 		var segments []storage.NZBSegment
 		if file.Offset >= 0 && file.Size > 0 {
-			sliced, err := segmentIndex.slice(file.Offset, int64(file.Size), true)
-			if err != nil || len(sliced) == 0 {
-				if err == nil {
-					err = fmt.Errorf("no source segments overlap the file range")
+			sliced, sliceErr := segmentIndex.slice(file.Offset, int64(file.Size), true)
+			if sliceErr != nil || len(sliced) == 0 {
+				if sliceErr == nil {
+					sliceErr = fmt.Errorf("no source segments overlap the file range")
 				}
-				return nil, fmt.Errorf("map 7z file %q to raw source: %w", internal, err)
+				return nil, fmt.Errorf("map 7z file %q to raw source: %w", internal, sliceErr)
 			} else {
 				segments = sliced
 			}

@@ -39,8 +39,8 @@ func TestAddNewNZBQueuesBeforeNetworkParsing(t *testing.T) {
 		t.Fatalf("create usenet client: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := usenetClient.Close(); err != nil {
-			t.Errorf("close usenet client: %v", err)
+		if closeErr := usenetClient.Close(); closeErr != nil {
+			t.Errorf("close usenet client: %v", closeErr)
 		}
 	})
 
@@ -49,8 +49,8 @@ func TestAddNewNZBQueuesBeforeNetworkParsing(t *testing.T) {
 		t.Fatalf("create storage: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := store.Close(); err != nil {
-			t.Errorf("close storage: %v", err)
+		if closeErr := store.Close(); closeErr != nil {
+			t.Errorf("close storage: %v", closeErr)
 		}
 	})
 
@@ -105,8 +105,8 @@ func TestAddNewNZBQueuesBeforeNetworkParsing(t *testing.T) {
 	if entry.Status != debridTypes.TorrentStatusQueued || entry.Magnet == "" {
 		t.Fatalf("queued NZB status/path = %q/%q", entry.Status, entry.Magnet)
 	}
-	if _, err := os.Stat(entry.Magnet); err != nil {
-		t.Fatalf("staged NZB source: %v", err)
+	if _, statErr := os.Stat(entry.Magnet); statErr != nil {
+		t.Fatalf("staged NZB source: %v", statErr)
 	}
 
 	select {
