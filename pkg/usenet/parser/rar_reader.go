@@ -681,7 +681,13 @@ func (p *RARParser) parseRAR4Stream(
 
 		// Data offset is immediately after the header
 		dataOffsetAbsolute := stream.Position()
-		var dataSkipSize int64
+		// Every LONG_BLOCK header (file, service/comment, recovery record)
+		// is followed by a data area that must be skipped to reach the next
+		// header.
+		dataSkipSize, ok := rar4DataSize(header)
+		if !ok {
+			break
+		}
 
 		// Parse file headers
 		if header.Type == RAR4HeaderTypeFile {
@@ -709,14 +715,10 @@ func (p *RARParser) parseRAR4Stream(
 			}
 		}
 
-		// Skip the file data section (PackedSize) to get to the next header
-		// CRITICAL FIX: Do NOT manually skip AddSize.
-		// AddSize (if present) is part of the header structure we just read, NOT part of the file data body.
-		// dataSkipSize already contains the PackedSize which is the file data body.
-		skipTotal := dataSkipSize
-
-		if skipTotal > 0 {
-			if skipErr := stream.Skip(skipTotal); skipErr != nil {
+		// Skip the data area (ADD_SIZE/PACK_SIZE, which the header itself
+		// carries in Data) to get to the next header.
+		if dataSkipSize > 0 {
+			if skipErr := stream.Skip(dataSkipSize); skipErr != nil {
 				if errors.Is(skipErr, io.EOF) {
 					break
 				}
@@ -734,7 +736,7 @@ func (p *RARParser) parseRAR4Stream(
 }
 
 // readRAR4HeaderFromStream reads a single RAR 4.x header from stream.
-func (p *RARParser) readRAR4HeaderFromStream(stream *rarReader) (*rar4Header, error) {
+func (p *RARParser) readRAR4HeaderFromStream(stream io.Reader) (*rar4Header, error) {
 	var header rar4Header
 
 	// Read header CRC (2 bytes)

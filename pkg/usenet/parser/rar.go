@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"path"
 	"sort"
 	"strings"
@@ -71,6 +72,15 @@ const (
 	RAR4ArchiveFlagPassword = 0x0080 // Archive headers are encrypted
 
 	RAR4CompressionMethodStore = 0x30
+
+	rar4SignatureSize  = 7 // "Rar!\x1A\x07\x00"
+	rar4BaseHeaderSize = 7 // CRC(2) + Type(1) + Flags(2) + HeadSize(2)
+	rar4SizeFieldLen   = 4
+	// rar4MinFileHeaderData is the fixed FILE_HEAD part after the base header:
+	// PACK_SIZE, UNP_SIZE, HOST_OS, FILE_CRC, FTIME, UNP_VER, METHOD, NAME_SIZE, ATTR.
+	rar4MinFileHeaderData = 25
+	// rar4HighPackSizeOffset locates HIGH_PACK_SIZE within header data.
+	rar4HighPackSizeOffset = rar4MinFileHeaderData
 )
 
 // RARVersion represents the RAR format version.
@@ -754,21 +764,21 @@ func (p *RARParser) parseRAR4Headers(data []byte, volumeIndex int, volumeName st
 	r := bytes.NewReader(data)
 
 	// Skip marker block (7 bytes signature + marker header)
-	if _, err := r.Seek(7, io.SeekStart); err != nil {
+	if _, err := r.Seek(rar4SignatureSize, io.SeekStart); err != nil {
 		return nil, err
 	}
 
 	var files []*RARFileEntry
-	currentOffset := int64(7)
+	currentOffset := int64(rar4SignatureSize)
 
-	// 7 = minimum RAR4 block size (CRC2 + Type1 + Flags2 + HeadSize2).
 	// Continue while at least one minimal header may remain.
-	for r.Len() >= 7 {
-		header, err := p.readRAR4Header(r)
+	for r.Len() >= rar4BaseHeaderSize {
+		header, err := p.readRAR4HeaderFromStream(r)
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
+			break
+		}
+		dataSize, ok := rar4DataSize(header)
+		if !ok {
 			break
 		}
 
@@ -780,7 +790,7 @@ func (p *RARParser) parseRAR4Headers(data []byte, volumeIndex int, volumeName st
 		}
 
 		// Move to next header
-		nextOffset := currentOffset + int64(header.HeadSize) + int64(header.AddSize)
+		nextOffset := currentOffset + int64(header.HeadSize) + dataSize
 		if nextOffset <= currentOffset {
 			break
 		}
@@ -806,73 +816,41 @@ func (p *RARParser) parseRAR4Headers(data []byte, volumeIndex int, volumeName st
 	return files, nil
 }
 
-// rar4Header represents a RAR 4.x header.
+// rar4Header represents a RAR 4.x block header. Data holds every header byte
+// after the 7-byte base header, including the ADD_SIZE field of LONG_BLOCK
+// headers (for file headers ADD_SIZE is PACK_SIZE).
 type rar4Header struct {
 	CRC      uint16
 	Type     uint8
 	Flags    uint16
 	HeadSize uint16
-	AddSize  uint32
 	Data     []byte
 }
 
-// readRAR4Header reads a single RAR 4.x header.
-func (p *RARParser) readRAR4Header(r *bytes.Reader) (*rar4Header, error) {
-	var header rar4Header
-
-	// Read header CRC (2 bytes)
-	if err := binary.Read(r, binary.LittleEndian, &header.CRC); err != nil {
-		return nil, err
+// rar4DataSize returns the size of the data area that follows a RAR4 block.
+// Only LONG_BLOCK headers carry one; for file and service headers it is
+// PACK_SIZE, whose high half follows the fixed fields when HIGH_SIZE is set.
+// ok is false when the header is too short to hold the declared size.
+func rar4DataSize(header *rar4Header) (int64, bool) {
+	if header.Flags&RAR4HeaderFlagLongBlock == 0 {
+		return 0, true
 	}
-
-	// Read header type (1 byte)
-	if err := binary.Read(r, binary.LittleEndian, &header.Type); err != nil {
-		return nil, err
+	if len(header.Data) < rar4SizeFieldLen {
+		return 0, false
 	}
-
-	// Read header flags (2 bytes)
-	if err := binary.Read(r, binary.LittleEndian, &header.Flags); err != nil {
-		return nil, err
+	size := int64(binary.LittleEndian.Uint32(header.Data))
+	isFileLike := header.Type == RAR4HeaderTypeFile || header.Type == RAR4HeaderTypeService
+	if !isFileLike || header.Flags&RAR4FileFlagHighSize == 0 {
+		return size, true
 	}
-
-	// Read header size (2 bytes)
-	if err := binary.Read(r, binary.LittleEndian, &header.HeadSize); err != nil {
-		return nil, err
+	if len(header.Data) < rar4HighPackSizeOffset+rar4SizeFieldLen {
+		return 0, false
 	}
-
-	// Read additional size (4 bytes) if LONG_BLOCK flag is set
-	if header.Flags&RAR4HeaderFlagLongBlock != 0 {
-		if err := binary.Read(r, binary.LittleEndian, &header.AddSize); err != nil {
-			return nil, err
-		}
-	} else {
-		// For non-long blocks, AddSize is 16-bit
-		var addSize16 uint16
-		if header.HeadSize > 7 {
-			if err := binary.Read(r, binary.LittleEndian, &addSize16); err != nil {
-				return nil, err
-			}
-		}
-		header.AddSize = uint32(addSize16)
+	high := binary.LittleEndian.Uint32(header.Data[rar4HighPackSizeOffset:])
+	if high > math.MaxInt32 {
+		return 0, false
 	}
-
-	// Read remaining header data
-	baseHeaderSize := 7 // CRC(2) + Type(1) + Flags(2) + HeadSize(2)
-	if header.Flags&RAR4HeaderFlagLongBlock != 0 {
-		baseHeaderSize += 4
-	} else if header.HeadSize > 7 {
-		baseHeaderSize += 2
-	}
-
-	remainingSize := int(header.HeadSize) - baseHeaderSize
-	if remainingSize > 0 {
-		header.Data = make([]byte, remainingSize)
-		if _, err := io.ReadFull(r, header.Data); err != nil {
-			return nil, err
-		}
-	}
-
-	return &header, nil
+	return int64(high)<<32 | size, true
 }
 
 // parseRAR4FileHeader parses RAR 4.x file header.
@@ -882,7 +860,7 @@ func (p *RARParser) parseRAR4FileHeader(
 	volumeName string,
 	dataOffset int64,
 ) *RARFileEntry {
-	if len(header.Data) < 21 { // Minimum file header data size
+	if len(header.Data) < rar4MinFileHeaderData {
 		return nil
 	}
 
@@ -929,6 +907,9 @@ func (p *RARParser) parseRAR4FileHeader(
 		// Read high 4 bytes of unpacked size
 		var unpackedSizeHigh uint32
 		_ = binary.Read(r, binary.LittleEndian, &unpackedSizeHigh)
+		if packedSizeHigh > math.MaxInt32 || unpackedSizeHigh > math.MaxInt32 {
+			return nil // sizes beyond int64 are corrupt
+		}
 
 		packedSize = int64(packedSizeHigh)<<32 | int64(packedSizeLow)
 		unpackedSize = int64(unpackedSizeHigh)<<32 | int64(unpackedSizeLow)
@@ -938,31 +919,12 @@ func (p *RARParser) parseRAR4FileHeader(
 	}
 
 	// Read filename
-	var nameBytes []byte
-	if nameLength > 0 {
-		nameBytes = make([]byte, nameLength)
-		if _, err := io.ReadFull(r, nameBytes); err != nil {
-			return nil
-		}
-	} else {
-		// Fallback: nameLength=0 but there might be a filename at different offset
-		// This handles 7z-embedded RAR files where header parsing offsets differ
-		// Try to find ASCII filename by backing up bytes and scanning
-		pos, _ := r.Seek(0, io.SeekCurrent)
-		if pos >= 4 {
-			// Check if filename is 4 bytes earlier (before attrs field)
-			checkPos := pos - 4
-			if checkPos < int64(len(header.Data)) && header.Data[checkPos] >= 0x20 && header.Data[checkPos] < 0x7F {
-				// Found ASCII at -4, scan for filename
-				end := checkPos
-				for end < int64(len(header.Data)) && header.Data[end] >= 0x20 && header.Data[end] < 0x7F {
-					end++
-				}
-				if end > checkPos {
-					nameBytes = header.Data[checkPos:end]
-				}
-			}
-		}
+	if nameLength == 0 {
+		return nil
+	}
+	nameBytes := make([]byte, nameLength)
+	if _, err := io.ReadFull(r, nameBytes); err != nil {
+		return nil
 	}
 
 	// Check if directory
