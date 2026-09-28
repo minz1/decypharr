@@ -458,7 +458,10 @@ func (p *RARParser) readAndDecryptRAR5Header(stream *rarReader, key, iv []byte) 
 			return nil, 0, 0, err
 		}
 		bytesConsumed += n
-		dataAreaSize = int64(dataSize)
+		var sizeErr error
+		if dataAreaSize, sizeErr = rar5Size(dataSize); sizeErr != nil {
+			return nil, 0, 0, sizeErr
+		}
 	}
 
 	// Read remaining header data
@@ -565,7 +568,10 @@ func (p *RARParser) readRAR5HeaderFromStream(stream *rarReader) (*rar5HeaderData
 		if readVIntErr != nil {
 			return nil, 0, 0, readVIntErr
 		}
-		dataAreaSize = int64(dataSize)
+		var sizeErr error
+		if dataAreaSize, sizeErr = rar5Size(dataSize); sizeErr != nil {
+			return nil, 0, 0, sizeErr
+		}
 	}
 
 	remainingHeaderSize := reader.Len()
@@ -587,6 +593,18 @@ func (p *RARParser) readRAR5HeaderFromStream(stream *rarReader) (*rar5HeaderData
 		Flags:     headerFlags,
 		Data:      headerData,
 	}, totalHeaderSize, dataAreaSize, nil
+}
+
+// maxRAR5Size bounds data-area and unpacked sizes so offset arithmetic and
+// AES block padding on them cannot overflow int64.
+const maxRAR5Size = 1 << 62
+
+// rar5Size converts an untrusted RAR5 size vint to int64.
+func rar5Size(v uint64) (int64, error) {
+	if v > maxRAR5Size {
+		return 0, fmt.Errorf("RAR5 size %d out of range", v)
+	}
+	return int64(v), nil
 }
 
 // parseVIntFromBuffer parses a vint from a byte slice without any Read calls

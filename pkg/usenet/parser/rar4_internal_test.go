@@ -77,6 +77,24 @@ func TestRAR4StreamSkipsServiceHeaderData(t *testing.T) {
 	}
 }
 
+func TestRAR5HeaderRejectsDataSizeBeyondInt64(t *testing.T) {
+	t.Parallel()
+	var content []byte
+	for _, value := range []uint64{RAR5HeaderTypeFile, RAR5HeaderFlagDataArea, 1 << 63} {
+		content = binary.AppendUvarint(content, value)
+	}
+	raw := binary.AppendUvarint(make([]byte, 4), uint64(len(content)))
+	raw = append(raw, content...)
+	parser := &RARParser{}
+	if _, _, size, err := parser.readRAR5Header(bytes.NewReader(raw)); err == nil {
+		t.Fatalf("data size %d accepted", size)
+	}
+	stream := &rarReader{ctx: t.Context(), currentSegmentData: raw}
+	if _, _, size, err := parser.readRAR5HeaderFromStream(stream); err == nil {
+		t.Fatalf("stream data size %d accepted", size)
+	}
+}
+
 func TestRAR4DataSizeRejectsOverflow(t *testing.T) {
 	t.Parallel()
 	body := rar4FileBody("x", 1, 1, RAR4CompressionMethodStore)
