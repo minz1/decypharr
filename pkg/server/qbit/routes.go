@@ -31,17 +31,17 @@ func (q *QBit) Routes() http.Handler {
 			r.Post("/createTags", q.handleCreateTags)
 
 			r.Get("/tags", q.handleGetTags)
-			r.Get("/pause", q.handleTorrentsPause)
-			r.Get("/resume", q.handleTorrentsResume)
-			r.Get("/recheck", q.handleTorrentRecheck)
+			r.Get("/pause", q.handleTorrentsNoop)
+			r.Get("/resume", q.handleTorrentsNoop)
+			r.Get("/recheck", q.handleTorrentsNoop)
 			r.Get("/properties", q.handleTorrentProperties)
 			r.Get("/files", q.handleTorrentFiles)
 
 			// Create POST equivalents for pause, resume, recheck
 			r.Post("/tags", q.handleGetTags)
-			r.Post("/pause", q.handleTorrentsPause)
-			r.Post("/resume", q.handleTorrentsResume)
-			r.Post("/recheck", q.handleTorrentRecheck)
+			r.Post("/pause", q.handleTorrentsNoop)
+			r.Post("/resume", q.handleTorrentsNoop)
+			r.Post("/recheck", q.handleTorrentsNoop)
 			r.Post("/properties", q.handleTorrentProperties)
 			r.Post("/files", q.handleTorrentFiles)
 		})
