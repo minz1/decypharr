@@ -290,7 +290,8 @@ func validateVirtualFolderCondition(condition VirtualFolderCondition) error {
 		if !slices.Contains(textOperators, condition.Operator) {
 			return fmt.Errorf("operator %q is not valid for %s", condition.Operator, condition.Field)
 		}
-		if condition.Operator == VirtualFolderOperatorMatchesRegex || condition.Operator == VirtualFolderOperatorNotMatchesRegex {
+		if condition.Operator == VirtualFolderOperatorMatchesRegex ||
+			condition.Operator == VirtualFolderOperatorNotMatchesRegex {
 			if _, err := regexp.Compile(value); err != nil {
 				return fmt.Errorf("invalid regular expression: %w", err)
 			}

@@ -43,7 +43,10 @@ func TestReacquireHandlerFailsExactDownloadAndWaitsForArr(t *testing.T) {
 			if call == 1 {
 				_, _ = fmt.Fprint(w, `{"page":1,"totalRecords":0,"records":[]}`)
 			} else {
-				_, _ = fmt.Fprint(w, `{"page":1,"totalRecords":1,"records":[{"id":7,"downloadId":"download-1","eventType":"grabbed"}]}`)
+				_, _ = fmt.Fprint(
+					w,
+					`{"page":1,"totalRecords":1,"records":[{"id":7,"downloadId":"download-1","eventType":"grabbed"}]}`,
+				)
 			}
 		case request.Method == http.MethodPost && request.URL.Path == "/api/v3/history/failed/7":
 			failed.Store(true)
@@ -190,7 +193,9 @@ func TestAutoRedownloadsFailureHonorsInteractiveSourceConfig(t *testing.T) {
 		{name: "interactive enabled", config: arr.DownloadClientConfig{AutoRedownloadFailed: true, AutoRedownloadFailedFromInteractiveSearch: true}, source: "InteractiveSearch", want: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			failure := exactDownloadFailure{grabRecord: arr.HistoryRecord{Data: map[string]string{"releaseSource": test.source}}}
+			failure := exactDownloadFailure{
+				grabRecord: arr.HistoryRecord{Data: map[string]string{"releaseSource": test.source}},
+			}
 			if got := autoRedownloadsFailure(test.config, failure); got != test.want {
 				t.Fatalf("autoRedownloadsFailure() = %v, want %v", got, test.want)
 			}
@@ -204,7 +209,11 @@ func TestSearchBindingsReconcilesPersistedCommandWithoutRedispatch(t *testing.T)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		switch request.Method {
 		case http.MethodGet:
-			_, _ = fmt.Fprintf(w, `[{"id":71,"name":"MoviesSearch","queued":%q,"body":{"name":"MoviesSearch","movieIds":[9]}}]`, queued.Format(time.RFC3339Nano))
+			_, _ = fmt.Fprintf(
+				w,
+				`[{"id":71,"name":"MoviesSearch","queued":%q,"body":{"name":"MoviesSearch","movieIds":[9]}}]`,
+				queued.Format(time.RFC3339Nano),
+			)
 		case http.MethodPost:
 			dispatched.Add(1)
 			w.WriteHeader(http.StatusCreated)

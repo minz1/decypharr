@@ -26,7 +26,11 @@ type articleReaderAt struct {
 	size   int64
 }
 
-func newArticleReaderAt(ctx context.Context, source ArticleSource, volumes []*types.Volume) (*articleReaderAt, int64, error) {
+func newArticleReaderAt(
+	ctx context.Context,
+	source ArticleSource,
+	volumes []*types.Volume,
+) (*articleReaderAt, int64, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -60,7 +64,11 @@ func newArticleReaderAt(ctx context.Context, source ArticleSource, volumes []*ty
 				return nil, 0, fmt.Errorf("archive volume %q has a segment without a message ID", volume.Name)
 			}
 			if segment.Bytes <= 0 {
-				return nil, 0, fmt.Errorf("archive volume %q has non-positive segment size %d", volume.Name, segment.Bytes)
+				return nil, 0, fmt.Errorf(
+					"archive volume %q has non-positive segment size %d",
+					volume.Name,
+					segment.Bytes,
+				)
 			}
 			end := position + segment.Bytes
 			if end < position {
@@ -70,7 +78,12 @@ func newArticleReaderAt(ctx context.Context, source ArticleSource, volumes []*ty
 			position = end
 		}
 		if got := position - volumeStart; got != volume.Size {
-			return nil, 0, fmt.Errorf("archive volume %q segment size %d does not match declared size %d", volume.Name, got, volume.Size)
+			return nil, 0, fmt.Errorf(
+				"archive volume %q segment size %d does not match declared size %d",
+				volume.Name,
+				got,
+				volume.Size,
+			)
 		}
 	}
 
@@ -110,7 +123,12 @@ func (r *articleReaderAt) ReadAt(buffer []byte, offset int64) (int, error) {
 		}
 		within := position - span.start
 		if within < 0 || within >= int64(len(data)) {
-			return read, fmt.Errorf("archive segment %s offset %d exceeds %d decoded bytes", span.segment.MessageID, within, len(data))
+			return read, fmt.Errorf(
+				"archive segment %s offset %d exceeds %d decoded bytes",
+				span.segment.MessageID,
+				within,
+				len(data),
+			)
 		}
 		available := min(int64(len(data))-within, span.end-position)
 		count := min(int64(len(buffer)-read), available)

@@ -46,8 +46,13 @@ func createItemStores(baseDir string, baseOptions appendstore.Options) (map[stri
 				_ = it.Close()
 			}
 			if errors.Is(err, appendstore.ErrUnsupportedVersion) {
-				return nil, fmt.Errorf("the %s database was written by a newer version of Decypharr and this build cannot read it. "+
-					"Upgrade Decypharr, or restore the copy saved before the upgrade (a .bak file beside %s): %w", name, path, err)
+				return nil, fmt.Errorf(
+					"the %s database was written by a newer version of Decypharr and this build cannot read it. "+
+						"Upgrade Decypharr, or restore the copy saved before the upgrade (a .bak file beside %s): %w",
+					name,
+					path,
+					err,
+				)
 			}
 			return nil, fmt.Errorf("failed to create %s store: %w", name, err)
 		}

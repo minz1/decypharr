@@ -72,13 +72,25 @@ func TestRegisterRedirects(t *testing.T) {
 
 	// The wizard comes first: even though NeedsAuth is true, the setup
 	// middleware runs ahead of the auth middleware and wins.
-	if w := serve(s, http.MethodGet, "/", true); w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/setup" {
+	if w := serve(
+		s,
+		http.MethodGet,
+		"/",
+		true,
+	); w.Code != http.StatusSeeOther ||
+		w.Header().Get("Location") != "/setup" {
 		t.Errorf("fresh install: GET / = %d %q, want 303 /setup", w.Code, w.Header().Get("Location"))
 	}
 
 	// Setup incomplete: the global middleware sends /register to /setup. It is a
 	// single hop — /setup is on the skip list, so nothing bounces back.
-	if w := serve(s, http.MethodGet, "/register", false); w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/setup" {
+	if w := serve(
+		s,
+		http.MethodGet,
+		"/register",
+		false,
+	); w.Code != http.StatusSeeOther ||
+		w.Header().Get("Location") != "/setup" {
 		t.Errorf("setup incomplete: GET /register = %d %q, want 303 /setup", w.Code, w.Header().Get("Location"))
 	}
 
@@ -89,7 +101,13 @@ func TestRegisterRedirects(t *testing.T) {
 	if err := cfg.SetupComplete(); err != nil {
 		t.Fatalf("setup should be complete: %v", err)
 	}
-	if w := serve(s, http.MethodGet, "/", true); w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/register" {
+	if w := serve(
+		s,
+		http.MethodGet,
+		"/",
+		true,
+	); w.Code != http.StatusSeeOther ||
+		w.Header().Get("Location") != "/register" {
 		t.Errorf("GET / = %d %q, want 303 /register", w.Code, w.Header().Get("Location"))
 	}
 	if w := serve(s, http.MethodGet, "/register", false); w.Code != http.StatusOK {
@@ -101,7 +119,13 @@ func TestRegisterRedirects(t *testing.T) {
 	if err := cfg.SaveAuth(&config.Auth{Username: "admin", Password: "hash", APIToken: "tok"}); err != nil {
 		t.Fatal(err)
 	}
-	if w := serve(s, http.MethodGet, "/register", false); w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/" {
+	if w := serve(
+		s,
+		http.MethodGet,
+		"/register",
+		false,
+	); w.Code != http.StatusSeeOther ||
+		w.Header().Get("Location") != "/" {
 		t.Errorf("configured: GET /register = %d %q, want 303 /", w.Code, w.Header().Get("Location"))
 	}
 	if w := serve(s, http.MethodPost, "/register", false); w.Code != http.StatusForbidden {

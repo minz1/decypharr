@@ -89,7 +89,11 @@ func (s *Service) GetLink(ctx context.Context, entry *storage.Entry, filename st
 // It shares GetLink's singleflight key, so a concurrent GetLink may win the
 // race and hand back the stale link once more; callers operate on bounded
 // retry budgets, so the follow-up attempt lands after the refresh completes.
-func (s *Service) Refresh(ctx context.Context, entry *storage.Entry, bad types.DownloadLink) (types.DownloadLink, error) {
+func (s *Service) Refresh(
+	ctx context.Context,
+	entry *storage.Entry,
+	bad types.DownloadLink,
+) (types.DownloadLink, error) {
 	if bad.Filename == "" {
 		return emptyDownloadLink, NewPermanentError(ErrEmptyLink, "empty_link")
 	}
@@ -115,7 +119,12 @@ func (s *Service) getClient(provider string) (debrid.Client, error) {
 // attempt tracks how many re-insertion cycles we've already paid for during
 // this GetLink call so we can bail out instead of looping forever when the
 // underlying file never resolves (see fetchLink/handleBadLink).
-func (s *Service) fetchAndValidate(ctx context.Context, entry *storage.Entry, filename string, attempt int) (types.DownloadLink, error) {
+func (s *Service) fetchAndValidate(
+	ctx context.Context,
+	entry *storage.Entry,
+	filename string,
+	attempt int,
+) (types.DownloadLink, error) {
 	if err := ctx.Err(); err != nil {
 		return emptyDownloadLink, err
 	}
@@ -180,14 +189,25 @@ func (s *Service) fetchAndValidate(ctx context.Context, entry *storage.Entry, fi
 	return emptyDownloadLink, validationErr
 }
 
-func (s *Service) handleBadLink(ctx context.Context, err error, entry *storage.Entry, dl types.DownloadLink, attempt int) (types.DownloadLink, error) {
+func (s *Service) handleBadLink(
+	ctx context.Context,
+	err error,
+	entry *storage.Entry,
+	dl types.DownloadLink,
+	attempt int,
+) (types.DownloadLink, error) {
 	if errors.Is(err, customerror.HosterUnavailableError) {
 		if entry.Bad {
 			return emptyDownloadLink, fmt.Errorf("can't repair %s since it's been marked as bad", entry.GetFolder())
 		}
 		if attempt >= MaxReinsertionAttempt {
 			s.markEntryBad(entry, dl.Filename, attempt, "hoster_unavailable")
-			return emptyDownloadLink, fmt.Errorf("entry %s file %s still unresolvable after %d re-insertion attempts", entry.GetFolder(), dl.Filename, attempt)
+			return emptyDownloadLink, fmt.Errorf(
+				"entry %s file %s still unresolvable after %d re-insertion attempts",
+				entry.GetFolder(),
+				dl.Filename,
+				attempt,
+			)
 		}
 		if err := s.repairer(ctx, entry); err != nil {
 			return emptyDownloadLink, err
@@ -195,7 +215,11 @@ func (s *Service) handleBadLink(ctx context.Context, err error, entry *storage.E
 
 		if entry.Bad {
 			// Entry is still bad
-			return emptyDownloadLink, fmt.Errorf("entry %s(%s) still bad after repair, un-repairable", entry.GetFolder(), dl.Link)
+			return emptyDownloadLink, fmt.Errorf(
+				"entry %s(%s) still bad after repair, un-repairable",
+				entry.GetFolder(),
+				dl.Link,
+			)
 		}
 		// Bypass singleflight re-entry to avoid deadlock
 		return s.fetchAndValidate(ctx, entry, dl.Filename, attempt+1)
@@ -227,7 +251,12 @@ func (s *Service) markEntryBad(entry *storage.Entry, filename string, attempt in
 }
 
 // fetchLink fetches a download link from the debrid provider (via account cache)
-func (s *Service) fetchLink(ctx context.Context, entry *storage.Entry, filename string, attempt int) (types.DownloadLink, error) {
+func (s *Service) fetchLink(
+	ctx context.Context,
+	entry *storage.Entry,
+	filename string,
+	attempt int,
+) (types.DownloadLink, error) {
 	file, err := entry.GetFile(filename)
 	if err != nil {
 		return emptyDownloadLink, NewPermanentError(
@@ -287,7 +316,12 @@ func (s *Service) fetchLink(ctx context.Context, entry *storage.Entry, filename 
 		}
 		if attempt >= MaxReinsertionAttempt {
 			s.markEntryBad(entry, filename, attempt, "empty_link")
-			return emptyDownloadLink, fmt.Errorf("entry %s file %s still resolves to an empty link after %d re-insertion attempts", entry.GetFolder(), filename, attempt)
+			return emptyDownloadLink, fmt.Errorf(
+				"entry %s file %s still resolves to an empty link after %d re-insertion attempts",
+				entry.GetFolder(),
+				filename,
+				attempt,
+			)
 		}
 		if err := s.repairer(ctx, entry); err != nil {
 			return emptyDownloadLink, err
@@ -295,7 +329,11 @@ func (s *Service) fetchLink(ctx context.Context, entry *storage.Entry, filename 
 
 		if entry.Bad {
 			// Entry is still bad
-			return emptyDownloadLink, fmt.Errorf("entry %s(%s) still bad after repair, un-repairable", entry.GetFolder(), downloadLink.Link)
+			return emptyDownloadLink, fmt.Errorf(
+				"entry %s(%s) still bad after repair, un-repairable",
+				entry.GetFolder(),
+				downloadLink.Link,
+			)
 		}
 		// Bypass singleflight re-entry to avoid deadlock
 		return s.fetchAndValidate(ctx, entry, filename, attempt+1)
@@ -438,7 +476,12 @@ func (s *Service) disableLinkAccount(link types.DownloadLink, linkErr *Error) er
 }
 
 // invalidateAndRefetch removes a link from both validation tracking and account cache
-func (s *Service) invalidateAndRefetch(ctx context.Context, entry *storage.Entry, link types.DownloadLink, attempt int) (types.DownloadLink, error) {
+func (s *Service) invalidateAndRefetch(
+	ctx context.Context,
+	entry *storage.Entry,
+	link types.DownloadLink,
+	attempt int,
+) (types.DownloadLink, error) {
 	// Remove from validation tracking
 	s.validated.Delete(link.DownloadLink)
 

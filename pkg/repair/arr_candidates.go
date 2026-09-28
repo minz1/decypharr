@@ -77,7 +77,11 @@ func (r *Service) enumerateArrCandidates(ctx context.Context, cfg config.RepairC
 	return candidates, nil
 }
 
-func (r *Service) collectArrMediaCandidates(ctx context.Context, instance arr.Arr, mediaID string) (map[string]*candidate, error) {
+func (r *Service) collectArrMediaCandidates(
+	ctx context.Context,
+	instance arr.Arr,
+	mediaID string,
+) (map[string]*candidate, error) {
 	candidates := make(map[string]*candidate)
 	kind := r.arrs.ResolveType(ctx, instance.Name)
 	media, err := r.arrs.Media(ctx, instance.Name, mediaID)
@@ -120,7 +124,11 @@ func (r *Service) collectArrMediaCandidates(ctx context.Context, instance arr.Ar
 	if len(candidates) == 0 && stats.total > 0 {
 		return nil, fmt.Errorf(
 			"arr returned %d media files but none mapped to managed entries (local symlinks=%d unique size matches=%d unmapped=%d ambiguous=%d); mount the Arr library paths in Decypharr or align the Arr/Decypharr category",
-			stats.total, stats.resolved, stats.fallback, stats.unmapped, stats.ambiguous,
+			stats.total,
+			stats.resolved,
+			stats.fallback,
+			stats.unmapped,
+			stats.ambiguous,
 		)
 	}
 	return candidates, nil
@@ -225,7 +233,10 @@ func (r *Service) attachArrContext(ctx context.Context, candidate *candidate) {
 }
 
 // collectArrFiles uses a readable symlink first, then a unique category/size match.
-func collectArrFiles(media arr.Content, managedFiles map[int64][]managedArrFile) (map[string][]arr.ContentFile, arrFileCollectionStats) {
+func collectArrFiles(
+	media arr.Content,
+	managedFiles map[int64][]managedArrFile,
+) (map[string][]arr.ContentFile, arrFileCollectionStats) {
 	grouped := make(map[string][]arr.ContentFile)
 	var stats arrFileCollectionStats
 	for _, file := range media.Files {

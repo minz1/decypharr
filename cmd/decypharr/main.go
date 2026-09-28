@@ -133,7 +133,12 @@ func createMountManager(mgr *manager.Manager, cfg *config.Config) manager.MountM
 	}
 }
 
-func startServices(ctx context.Context, manager *manager.Manager, cancelSvc context.CancelFunc, srv *server.Server) error {
+func startServices(
+	ctx context.Context,
+	manager *manager.Manager,
+	cancelSvc context.CancelFunc,
+	srv *server.Server,
+) error {
 	var wg sync.WaitGroup
 	errChan := make(chan error, 3)
 

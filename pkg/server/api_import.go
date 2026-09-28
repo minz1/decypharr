@@ -66,10 +66,26 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 			if trimmed := strings.TrimSpace(u); trimmed != "" {
 				magnet, err := utils.GetMagnetFromUrl(trimmed, rmTrackerUrls)
 				if err != nil {
-					results = append(results, &manager.ImportRequest{Status: "error", Error: fmt.Sprintf("Failed to parse URL %s: %v", trimmed, err)})
+					results = append(
+						results,
+						&manager.ImportRequest{
+							Status: "error",
+							Error:  fmt.Sprintf("Failed to parse URL %s: %v", trimmed, err),
+						},
+					)
 					continue
 				}
-				req := manager.NewTorrentRequest(debridName, downloadFolder, magnet, instance, config.DownloadAction(action), downloadUncached, callbackUrl, manager.ImportTypeAPI, skipMultiSeason)
+				req := manager.NewTorrentRequest(
+					debridName,
+					downloadFolder,
+					magnet,
+					instance,
+					config.DownloadAction(action),
+					downloadUncached,
+					callbackUrl,
+					manager.ImportTypeAPI,
+					skipMultiSeason,
+				)
 				results = append(results, req)
 				tasks = append(tasks, addTask{request: req, source: trimmed})
 			}
@@ -81,17 +97,39 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 		for _, fileHeader := range files {
 			file, err := fileHeader.Open()
 			if err != nil {
-				results = append(results, &manager.ImportRequest{Status: "error", Error: fmt.Sprintf("Failed to open file %s: %v", fileHeader.Filename, err)})
+				results = append(
+					results,
+					&manager.ImportRequest{
+						Status: "error",
+						Error:  fmt.Sprintf("Failed to open file %s: %v", fileHeader.Filename, err),
+					},
+				)
 				continue
 			}
 
 			magnet, err := utils.GetMagnetFromFile(file, fileHeader.Filename, rmTrackerUrls)
 			_ = file.Close()
 			if err != nil {
-				results = append(results, &manager.ImportRequest{Status: "error", Error: fmt.Sprintf("Failed to parse torrent file %s: %v", fileHeader.Filename, err)})
+				results = append(
+					results,
+					&manager.ImportRequest{
+						Status: "error",
+						Error:  fmt.Sprintf("Failed to parse torrent file %s: %v", fileHeader.Filename, err),
+					},
+				)
 				continue
 			}
-			req := manager.NewTorrentRequest(debridName, downloadFolder, magnet, instance, config.DownloadAction(action), downloadUncached, callbackUrl, manager.ImportTypeAPI, skipMultiSeason)
+			req := manager.NewTorrentRequest(
+				debridName,
+				downloadFolder,
+				magnet,
+				instance,
+				config.DownloadAction(action),
+				downloadUncached,
+				callbackUrl,
+				manager.ImportTypeAPI,
+				skipMultiSeason,
+			)
 			results = append(results, req)
 			tasks = append(tasks, addTask{request: req, source: fileHeader.Filename})
 		}
@@ -103,10 +141,25 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 			if trimmed := strings.TrimSpace(u); trimmed != "" {
 				filename, content, err := utils.DownloadFile(trimmed, utils.WithHeader("User-Agent", s.nzbUserAgent))
 				if err != nil {
-					results = append(results, &manager.ImportRequest{Status: "error", Error: fmt.Sprintf("Failed to fetch NZB from URL %s: %v", trimmed, err)})
+					results = append(
+						results,
+						&manager.ImportRequest{
+							Status: "error",
+							Error:  fmt.Sprintf("Failed to fetch NZB from URL %s: %v", trimmed, err),
+						},
+					)
 					continue
 				}
-				req := manager.NewNZBRequest(filename, downloadFolder, content, instance, config.DownloadAction(action), callbackUrl, manager.ImportTypeAPI, skipMultiSeason)
+				req := manager.NewNZBRequest(
+					filename,
+					downloadFolder,
+					content,
+					instance,
+					config.DownloadAction(action),
+					callbackUrl,
+					manager.ImportTypeAPI,
+					skipMultiSeason,
+				)
 				results = append(results, req)
 				tasks = append(tasks, addTask{request: req, source: trimmed})
 			}
@@ -118,10 +171,25 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 		for _, fileHeader := range nzbFiles {
 			content, err := getNZBContentFromFile(fileHeader)
 			if err != nil {
-				results = append(results, &manager.ImportRequest{Status: "error", Error: fmt.Sprintf("Failed to read NZB file %s: %v", fileHeader.Filename, err)})
+				results = append(
+					results,
+					&manager.ImportRequest{
+						Status: "error",
+						Error:  fmt.Sprintf("Failed to read NZB file %s: %v", fileHeader.Filename, err),
+					},
+				)
 				continue
 			}
-			req := manager.NewNZBRequest(fileHeader.Filename, downloadFolder, content, instance, config.DownloadAction(action), callbackUrl, manager.ImportTypeAPI, skipMultiSeason)
+			req := manager.NewNZBRequest(
+				fileHeader.Filename,
+				downloadFolder,
+				content,
+				instance,
+				config.DownloadAction(action),
+				callbackUrl,
+				manager.ImportTypeAPI,
+				skipMultiSeason,
+			)
 			results = append(results, req)
 			tasks = append(tasks, addTask{request: req, source: fileHeader.Filename})
 		}

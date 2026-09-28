@@ -366,7 +366,11 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := s.manager.ApplyVirtualFolders(updated.VirtualFolders); err != nil {
 			s.logger.Error().Err(err).Msg("Failed to apply virtual folders")
-			http.Error(w, "Configuration was saved, but virtual folders could not be applied: "+err.Error(), http.StatusInternalServerError)
+			http.Error(
+				w,
+				"Configuration was saved, but virtual folders could not be applied: "+err.Error(),
+				http.StatusInternalServerError,
+			)
 			return
 		}
 		if svc := s.manager.Repair(); svc != nil {
@@ -663,7 +667,12 @@ func (s *Server) handleRecheckMedia(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Repair service not available", http.StatusServiceUnavailable)
 		return
 	}
-	run, err := svc.RecheckMedia(s.manager.Context(), strings.TrimSpace(req.Arr), strings.TrimSpace(req.MediaID), req.Fix)
+	run, err := svc.RecheckMedia(
+		s.manager.Context(),
+		strings.TrimSpace(req.Arr),
+		strings.TrimSpace(req.MediaID),
+		req.Fix,
+	)
 	if err != nil {
 		status := http.StatusBadRequest
 		if strings.Contains(err.Error(), "already running") {

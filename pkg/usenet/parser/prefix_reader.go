@@ -83,7 +83,12 @@ func (p *NZBParser) ReadFilePrefix(ctx context.Context, file *storage.NZBFile, m
 		within := position - segment.StartOffset
 		count := min(wanted-position, int64(len(data))-within)
 		if count <= 0 {
-			return nil, fmt.Errorf("file %q segment %s does not cover offset %d", file.Name, segment.MessageID, position)
+			return nil, fmt.Errorf(
+				"file %q segment %s does not cover offset %d",
+				file.Name,
+				segment.MessageID,
+				position,
+			)
 		}
 		copy(result[position:position+count], data[within:within+count])
 		position += count

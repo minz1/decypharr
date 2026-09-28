@@ -182,7 +182,12 @@ func TestReconcileBuildsIndexFromSymlinks(t *testing.T) {
 			http.NotFound(w, request)
 			return
 		}
-		_, _ = fmt.Fprintf(w, `[{"id":9,"movieFile":{"id":42,"path":%q}},{"id":10,"movieFile":{"id":43,"path":%q}}]`, libraryPath, regularPath)
+		_, _ = fmt.Fprintf(
+			w,
+			`[{"id":9,"movieFile":{"id":42,"path":%q}},{"id":10,"movieFile":{"id":43,"path":%q}}]`,
+			libraryPath,
+			regularPath,
+		)
 	}))
 	defer server.Close()
 
@@ -255,7 +260,9 @@ func TestMatchLibraryFilesMatchesRenamedFolderBySize(t *testing.T) {
 
 	matches, stats := matchLibraryFiles(
 		[]arr.LibraryFile{{ArrFileID: 42, Path: libraryPath, Size: 1024}},
-		[]ManagedFile{{EntryID: "entry", EntryFolder: "Show.S01", FileID: "file", FileName: "episode.mkv", FileSize: 1024}},
+		[]ManagedFile{
+			{EntryID: "entry", EntryFolder: "Show.S01", FileID: "file", FileName: "episode.mkv", FileSize: 1024},
+		},
 		filepath.Join(dir, "managed"),
 	)
 	if len(matches) != 1 {
@@ -284,7 +291,13 @@ func TestMatchLibraryFilesSizeMatchNeedsUniqueName(t *testing.T) {
 		[]arr.LibraryFile{{ArrFileID: 42, Path: libraryPath, Size: 1024}},
 		[]ManagedFile{
 			{EntryID: "entry-1", EntryFolder: "Show.S01", FileID: "file-1", FileName: "episode.mkv", FileSize: 1024},
-			{EntryID: "entry-2", EntryFolder: "Show.S01.Repack", FileID: "file-2", FileName: "episode.mkv", FileSize: 1024},
+			{
+				EntryID:     "entry-2",
+				EntryFolder: "Show.S01.Repack",
+				FileID:      "file-2",
+				FileName:    "episode.mkv",
+				FileSize:    1024,
+			},
 		},
 		filepath.Join(dir, "managed"),
 	)
@@ -309,7 +322,9 @@ func TestMatchLibraryFilesSkipsTargetsOutsideMount(t *testing.T) {
 
 	matches, stats := matchLibraryFiles(
 		[]arr.LibraryFile{{ArrFileID: 42, Path: libraryPath, Size: 1024}},
-		[]ManagedFile{{EntryID: "entry", EntryFolder: "Movie.Release", FileID: "file", FileName: "movie.mkv", FileSize: 1024}},
+		[]ManagedFile{
+			{EntryID: "entry", EntryFolder: "Movie.Release", FileID: "file", FileName: "movie.mkv", FileSize: 1024},
+		},
 		filepath.Join(dir, "managed"),
 	)
 	if len(matches) != 0 {
@@ -341,7 +356,9 @@ func TestMatchLibraryFilesFolderMatchWinsOverSizeMatch(t *testing.T) {
 			{ArrFileID: 42, Path: exactPath, Size: 1024},
 			{ArrFileID: 43, Path: driftedPath, Size: 1024},
 		},
-		[]ManagedFile{{EntryID: "entry", EntryFolder: "Show.S01", FileID: "file", FileName: "episode.mkv", FileSize: 1024}},
+		[]ManagedFile{
+			{EntryID: "entry", EntryFolder: "Show.S01", FileID: "file", FileName: "episode.mkv", FileSize: 1024},
+		},
 		root,
 	)
 	if len(matches) != 1 {
@@ -425,7 +442,10 @@ func TestReconcileTargetedReadsOnlyTheEntrysMovie(t *testing.T) {
 		paths = append(paths, request.URL.Path)
 		switch request.URL.Path {
 		case "/api/v3/history":
-			_, _ = fmt.Fprint(w, `{"page":1,"pageSize":100,"totalRecords":1,"records":[{"id":1,"downloadId":"download","eventType":"grabbed","movieId":9}]}`)
+			_, _ = fmt.Fprint(
+				w,
+				`{"page":1,"pageSize":100,"totalRecords":1,"records":[{"id":1,"downloadId":"download","eventType":"grabbed","movieId":9}]}`,
+			)
 		case "/api/v3/movie/9":
 			_, _ = fmt.Fprintf(w, `{"id":9,"movieFile":{"id":42,"movieId":9,"path":%q}}`, libraryPath)
 		default:

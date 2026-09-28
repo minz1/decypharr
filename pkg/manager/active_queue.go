@@ -66,7 +66,8 @@ func (m *Manager) nzbNeedsReprocessing(entry *storage.Entry) bool {
 		return false
 	}
 	meta, err := m.usenet.GetNZBHeader(entry.InfoHash)
-	return err == nil && meta != nil && (meta.Status == usenet.NZBStatusParsing || meta.Status == usenet.NZBStatusDownloading)
+	return err == nil && meta != nil &&
+		(meta.Status == usenet.NZBStatusParsing || meta.Status == usenet.NZBStatusDownloading)
 }
 
 func (m *Manager) rebuildQueuedJob(entry *storage.Entry) (*Job, error) {

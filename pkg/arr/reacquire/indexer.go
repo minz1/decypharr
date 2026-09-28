@@ -244,7 +244,11 @@ func (i *Indexer) handle(ctx context.Context, request indexRequest) {
 			return
 		}
 	}
-	i.logger.Debug().Err(err).Str("arr", request.arrName).Str("entry_id", request.entryID).Msg("Targeted Arr index attempt failed")
+	i.logger.Debug().
+		Err(err).
+		Str("arr", request.arrName).
+		Str("entry_id", request.entryID).
+		Msg("Targeted Arr index attempt failed")
 	i.retryTargeted(ctx, request)
 }
 
@@ -358,7 +362,12 @@ func (i *Indexer) markCovered(arrName string, version uint64) {
 // A targeted request never widens itself to the whole library. If history does
 // not name the media or targeted reads keep failing, the retry is eventually
 // promoted to a coalesced authoritative refresh for that Arr.
-func (i *Indexer) libraryFor(ctx context.Context, instance arr.Arr, request indexRequest, managed []ManagedFile) ([]arr.LibraryFile, error) {
+func (i *Indexer) libraryFor(
+	ctx context.Context,
+	instance arr.Arr,
+	request indexRequest,
+	managed []ManagedFile,
+) ([]arr.LibraryFile, error) {
 	if request.entryID == "" {
 		return i.arrs.LibraryFiles(ctx, instance.Name)
 	}
@@ -416,7 +425,12 @@ func (i *Indexer) retryTargeted(ctx context.Context, request indexRequest) {
 	i.enqueue(indexRequest{arrName: request.arrName})
 }
 
-func (i *Indexer) reconcile(ctx context.Context, instance arr.Arr, request indexRequest, managed []ManagedFile) (matchStats, error) {
+func (i *Indexer) reconcile(
+	ctx context.Context,
+	instance arr.Arr,
+	request indexRequest,
+	managed []ManagedFile,
+) (matchStats, error) {
 	entryID := request.entryID
 	library, err := i.libraryFor(ctx, instance, request, managed)
 	if err != nil {

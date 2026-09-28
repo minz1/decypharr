@@ -45,7 +45,10 @@ func TestGetDownloadClientConfig(t *testing.T) {
 		if r.Method != http.MethodGet || r.URL.Path != "/api/v3/config/downloadclient" {
 			t.Errorf("request = %s %s", r.Method, r.URL.Path)
 		}
-		_, _ = fmt.Fprint(w, `{"id":1,"enableCompletedDownloadHandling":true,"autoRedownloadFailed":false,"autoRedownloadFailedFromInteractiveSearch":true}`)
+		_, _ = fmt.Fprint(
+			w,
+			`{"id":1,"enableCompletedDownloadHandling":true,"autoRedownloadFailed":false,"autoRedownloadFailedFromInteractiveSearch":true}`,
+		)
 	}))
 	defer server.Close()
 
@@ -54,7 +57,8 @@ func TestGetDownloadClientConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.AutoRedownloadFailed || !config.AutoRedownloadFailedFromInteractiveSearch || !config.EnableCompletedDownloadHandling {
+	if config.AutoRedownloadFailed || !config.AutoRedownloadFailedFromInteractiveSearch ||
+		!config.EnableCompletedDownloadHandling {
 		t.Fatalf("config = %#v", config)
 	}
 }

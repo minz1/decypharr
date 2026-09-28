@@ -59,7 +59,9 @@ func TestRAR5ExtraRecordBoundaries(t *testing.T) {
 				if !bytes.Equal(result.IV, iv) {
 					t.Fatalf("IV = %x", result.IV)
 				}
-				if hex.EncodeToString(result.Key) != "9e41dea5935137cf748669cbf242b3ea049d20e0add3db231dabc9840bc58a6a" {
+				if hex.EncodeToString(
+					result.Key,
+				) != "9e41dea5935137cf748669cbf242b3ea049d20e0add3db231dabc9840bc58a6a" {
 					t.Fatalf("key = %x", result.Key)
 				}
 			}
@@ -96,7 +98,9 @@ func TestRAR5HeaderSizesAndCompression(t *testing.T) {
 				t.Fatalf("stream header size=%d error=%v", streamSize, err)
 			}
 			entry := parser.parseRAR5FileHeader(header.Data, header.ExtraSize, 0, "part.rar", int64(size), packed, "")
-			if entry == nil || entry.Name != name || entry.IsStored != (method == 0) || !entry.IsEncrypted || len(entry.EncryptionIV) != 16 || entry.EncryptionKey != nil {
+			if entry == nil || entry.Name != name || entry.IsStored != (method == 0) || !entry.IsEncrypted ||
+				len(entry.EncryptionIV) != 16 ||
+				entry.EncryptionKey != nil {
 				t.Fatalf("method=%d entry=%#v", method, entry)
 			}
 			// Exercise encrypted headers at both one-byte and two-byte size fields.
@@ -109,7 +113,8 @@ func TestRAR5HeaderSizesAndCompression(t *testing.T) {
 			cipher.NewCBCEncrypter(block, iv).CryptBlocks(padded, padded)
 			stream = &rarReader{ctx: t.Context(), currentSegmentData: padded}
 			decrypted, encryptedSize, _, err := parser.readAndDecryptRAR5Header(stream, key, iv)
-			if err != nil || encryptedSize != len(padded) || !bytes.Equal(decrypted.Data, header.Data) || decrypted.ExtraSize != header.ExtraSize {
+			if err != nil || encryptedSize != len(padded) || !bytes.Equal(decrypted.Data, header.Data) ||
+				decrypted.ExtraSize != header.ExtraSize {
 				t.Fatalf("encrypted header size=%d error=%v", encryptedSize, err)
 			}
 		}

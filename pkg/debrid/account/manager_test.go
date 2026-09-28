@@ -85,20 +85,25 @@ func TestDownloadLinkPropagatesFailuresAndCancellation(t *testing.T) {
 			}
 			firstErr, secondErr := errors.New("first failed"), errors.New("second failed")
 			calls := 0
-			_, err := m.GetDownloadLink(ctx, "id", &types.File{Link: "file"}, func(got context.Context, acc *Account, _ string, _ *types.File) (types.DownloadLink, error) {
-				calls++
-				if got != ctx {
-					t.Error("caller context was replaced")
-				}
-				if scenario == "cancel during" {
-					cancel()
-					return types.DownloadLink{}, ctx.Err()
-				}
-				if acc == first {
-					return types.DownloadLink{}, firstErr
-				}
-				return types.DownloadLink{}, secondErr
-			})
+			_, err := m.GetDownloadLink(
+				ctx,
+				"id",
+				&types.File{Link: "file"},
+				func(got context.Context, acc *Account, _ string, _ *types.File) (types.DownloadLink, error) {
+					calls++
+					if got != ctx {
+						t.Error("caller context was replaced")
+					}
+					if scenario == "cancel during" {
+						cancel()
+						return types.DownloadLink{}, ctx.Err()
+					}
+					if acc == first {
+						return types.DownloadLink{}, firstErr
+					}
+					return types.DownloadLink{}, secondErr
+				},
+			)
 			if scenario == "all fail" {
 				if calls != 2 || !errors.Is(err, firstErr) || !errors.Is(err, secondErr) {
 					t.Fatalf("calls=%d error=%v, want both failures", calls, err)

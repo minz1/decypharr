@@ -157,7 +157,13 @@ func putSegment(t *testing.T, sc *SegmentCache, segIdx int, data []byte) {
 }
 
 func TestMemoryWriterAdoptsDecodedExtent(t *testing.T) {
-	cache, err := NewSegmentCache(context.Background(), mkSegs(1, 64<<10), DefaultConfig(), &ReaderStats{}, zerolog.Nop())
+	cache, err := NewSegmentCache(
+		context.Background(),
+		mkSegs(1, 64<<10),
+		DefaultConfig(),
+		&ReaderStats{},
+		zerolog.Nop(),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

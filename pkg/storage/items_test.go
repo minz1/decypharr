@@ -18,7 +18,11 @@ func TestEntryMutationsReportIndexFailures(t *testing.T) {
 					t.Fatal(err)
 				}
 				t.Cleanup(func() { _ = s.Close() })
-				entry := &Entry{InfoHash: "hash", Name: "folder", Files: map[string]*File{"file": {Name: "file", InfoHash: "hash", Size: 10}}}
+				entry := &Entry{
+					InfoHash: "hash",
+					Name:     "folder",
+					Files:    map[string]*File{"file": {Name: "file", InfoHash: "hash", Size: 10}},
+				}
 				if err := s.AddOrUpdate(entry); err != nil {
 					t.Fatal(err)
 				}
@@ -63,7 +67,11 @@ func TestEntryWriteFailureLeavesIndexUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	entry := &Entry{InfoHash: "hash", Name: "folder", Files: map[string]*File{"file": {Name: "file", InfoHash: "hash", Size: 10}}}
+	entry := &Entry{
+		InfoHash: "hash",
+		Name:     "folder",
+		Files:    map[string]*File{"file": {Name: "file", InfoHash: "hash", Size: 10}},
+	}
 	if err := s.AddOrUpdate(entry); err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +100,11 @@ func TestEntryMutationReportsHealthFailure(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = s.Close() })
-			entry := &Entry{InfoHash: "hash", Name: "folder", Files: map[string]*File{"file": {Name: "file", InfoHash: "hash", Size: 10}}}
+			entry := &Entry{
+				InfoHash: "hash",
+				Name:     "folder",
+				Files:    map[string]*File{"file": {Name: "file", InfoHash: "hash", Size: 10}},
+			}
 			if err := s.AddOrUpdate(entry); err != nil {
 				t.Fatal(err)
 			}

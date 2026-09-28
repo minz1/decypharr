@@ -12,7 +12,13 @@ import (
 )
 
 // checkMagnet is a helper function that verifies magnet properties
-func checkMagnet(t *testing.T, magnet *Magnet, expectedInfoHash, expectedName, expectedLink string, expectedTrackerCount int, shouldBeTorrent bool) {
+func checkMagnet(
+	t *testing.T,
+	magnet *Magnet,
+	expectedInfoHash, expectedName, expectedLink string,
+	expectedTrackerCount int,
+	shouldBeTorrent bool,
+) {
 	t.Helper() // This marks the function as a test helper
 
 	// Verify basic properties
@@ -39,7 +45,13 @@ func checkMagnet(t *testing.T, magnet *Magnet, expectedInfoHash, expectedName, e
 }
 
 // testMagnetFromFile is a helper function for tests that use GetMagnetFromFile with file operations
-func testMagnetFromFile(t *testing.T, filePath string, rmTrackerUrls bool, expectedInfoHash, expectedName, expectedLink string, expectedTrackerCount int) {
+func testMagnetFromFile(
+	t *testing.T,
+	filePath string,
+	rmTrackerUrls bool,
+	expectedInfoHash, expectedName, expectedLink string,
+	expectedTrackerCount int,
+) {
 	t.Helper()
 
 	file, err := os.Open(filePath)
@@ -220,7 +232,13 @@ func TestGetMagnetFromUrl_MagnetLink_StripFalse(t *testing.T) {
 }
 
 // testMagnetFromHttpTorrent is a helper function for tests that use GetMagnetFromUrl with HTTP torrent links
-func testMagnetFromHttpTorrent(t *testing.T, torrentPath string, rmTrackerUrls bool, expectedInfoHash, expectedName, expectedLink string, expectedTrackerCount int) {
+func testMagnetFromHttpTorrent(
+	t *testing.T,
+	torrentPath string,
+	rmTrackerUrls bool,
+	expectedInfoHash, expectedName, expectedLink string,
+	expectedTrackerCount int,
+) {
 	t.Helper()
 
 	// Read the torrent file content
@@ -258,7 +276,15 @@ func TestGetMagnetFromUrl_TorrentLink_StripTrue(t *testing.T) {
 	expectedLink := "magnet:?xt=urn:btih:8a19577fb5f690970ca43a57ff1011ae202244b8&dn=ubuntu-25.04-desktop-amd64.iso"
 	expectedTrackerCount := 0
 
-	testMagnetFromHttpTorrent(t, "ubuntu-25.04-desktop-amd64.iso.torrent", true, expectedInfoHash, expectedName, expectedLink, expectedTrackerCount)
+	testMagnetFromHttpTorrent(
+		t,
+		"ubuntu-25.04-desktop-amd64.iso.torrent",
+		true,
+		expectedInfoHash,
+		expectedName,
+		expectedLink,
+		expectedTrackerCount,
+	)
 }
 
 func TestGetMagnetFromUrl_TorrentLink_StripFalse(t *testing.T) {
@@ -267,5 +293,13 @@ func TestGetMagnetFromUrl_TorrentLink_StripFalse(t *testing.T) {
 	expectedLink := "magnet:?xt=urn:btih:8a19577fb5f690970ca43a57ff1011ae202244b8&dn=ubuntu-25.04-desktop-amd64.iso&tr=https%3A%2F%2Ftorrent.ubuntu.com%2Fannounce&tr=https%3A%2F%2Fipv6.torrent.ubuntu.com%2Fannounce"
 	expectedTrackerCount := 2
 
-	testMagnetFromHttpTorrent(t, "ubuntu-25.04-desktop-amd64.iso.torrent", false, expectedInfoHash, expectedName, expectedLink, expectedTrackerCount)
+	testMagnetFromHttpTorrent(
+		t,
+		"ubuntu-25.04-desktop-amd64.iso.torrent",
+		false,
+		expectedInfoHash,
+		expectedName,
+		expectedLink,
+		expectedTrackerCount,
+	)
 }

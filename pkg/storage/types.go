@@ -41,57 +41,57 @@ var (
 
 // Entry is the unified model across debrids and nzbs
 type Entry struct {
-	Protocol         config.Protocol `msgpack:"protocol" json:"protocol"`                   // torrent or nzb
-	InfoHash         string          `msgpack:"info_hash" json:"info_hash"`                 // Primary key - torrent hash
-	Name             string          `msgpack:"name" json:"name"`                           // Entry name
+	Protocol         config.Protocol `msgpack:"protocol"          json:"protocol"`          // torrent or nzb
+	InfoHash         string          `msgpack:"info_hash"         json:"info_hash"`         // Primary key - torrent hash
+	Name             string          `msgpack:"name"              json:"name"`              // Entry name
 	OriginalFilename string          `msgpack:"original_filename" json:"original_filename"` // Original filename from debrid
-	Size             int64           `msgpack:"size" json:"size"`                           // Total size in bytes (for QBit compat)
-	Bytes            int64           `msgpack:"bytes" json:"bytes"`                         // Actual bytes (debrid uses this)
-	Magnet           string          `msgpack:"magnet,omitempty" json:"magnet,omitempty"`   // Magnet link
+	Size             int64           `msgpack:"size"              json:"size"`              // Total size in bytes (for QBit compat)
+	Bytes            int64           `msgpack:"bytes"             json:"bytes"`             // Actual bytes (debrid uses this)
+	Magnet           string          `msgpack:"magnet,omitempty"  json:"magnet,omitempty"`  // Magnet link
 
-	IsDownloading  bool  `msgpack:"is_downloading,omitempty" json:"is_downloading,omitempty"`   // Whether currently downloading(this is for local download)
+	IsDownloading  bool  `msgpack:"is_downloading,omitempty"  json:"is_downloading,omitempty"`  // Whether currently downloading(this is for local download)
 	SizeDownloaded int64 `msgpack:"size_downloaded,omitempty" json:"size_downloaded,omitempty"` // Actual downloaded bytes
 
 	// Multi-Provider ProviderEntry Strategy
 	ActiveProvider string                    `msgpack:"active_provider" json:"active_provider"` // Current active debrid
-	Providers      map[string]*ProviderEntry `msgpack:"providers" json:"providers"`             // debrid -> ProviderEntry details
+	Providers      map[string]*ProviderEntry `msgpack:"providers"       json:"providers"`       // debrid -> ProviderEntry details
 
 	// Files (from debrid cache)
 	Files map[string]*File `msgpack:"files" json:"files"` // filename -> File details
 
 	State TorrentState `msgpack:"state" json:"state"` // This is for QBitTorrent compatibility
 	// Provider State (from active providerEntry)
-	Status   debridTypes.TorrentStatus `msgpack:"status" json:"status"`     // downloaded, downloading, queued, error
+	Status   debridTypes.TorrentStatus `msgpack:"status"   json:"status"`   // downloaded, downloading, queued, error
 	Progress float64                   `msgpack:"progress" json:"progress"` // Download progress (0-100)
-	Speed    int64                     `msgpack:"speed" json:"speed"`       // Download speed
-	Seeders  int                       `msgpack:"seeders" json:"seeders"`   // Number of seeders
+	Speed    int64                     `msgpack:"speed"    json:"speed"`    // Download speed
+	Seeders  int                       `msgpack:"seeders"  json:"seeders"`  // Number of seeders
 
 	IsComplete bool `msgpack:"is_complete" json:"is_complete"` // Ready for use
-	Bad        bool `msgpack:"bad" json:"bad"`                 // Marked as bad/corrupted
+	Bad        bool `msgpack:"bad"         json:"bad"`         // Marked as bad/corrupted
 
 	// Metadata
-	Category    string   `msgpack:"category,omitempty" json:"category,omitempty"`         // Category (e.g., sonarr, radarr)
-	Tags        []string `msgpack:"tags,omitempty" json:"tags,omitempty"`                 // User-defined tags
-	MountPath   string   `msgpack:"mount_path" json:"mount_path"`                         // Mount path for this torrent
-	SavePath    string   `msgpack:"save_path,omitempty" json:"save_path,omitempty"`       // Download/symlink folder
+	Category    string   `msgpack:"category,omitempty"     json:"category,omitempty"`     // Category (e.g., sonarr, radarr)
+	Tags        []string `msgpack:"tags,omitempty"         json:"tags,omitempty"`         // User-defined tags
+	MountPath   string   `msgpack:"mount_path"             json:"mount_path"`             // Mount path for this torrent
+	SavePath    string   `msgpack:"save_path,omitempty"    json:"save_path,omitempty"`    // Download/symlink folder
 	ContentPath string   `msgpack:"content_path,omitempty" json:"content_path,omitempty"` // Final content path
 
 	// Timestamps
-	AddedOn     time.Time  `msgpack:"added_on" json:"added_on"`                             // When first added (from debrid)
-	CreatedAt   time.Time  `msgpack:"created_at" json:"created_at"`                         // When created in manager
-	UpdatedAt   time.Time  `msgpack:"updated_at" json:"updated_at"`                         // Last update time
+	AddedOn     time.Time  `msgpack:"added_on"               json:"added_on"`               // When first added (from debrid)
+	CreatedAt   time.Time  `msgpack:"created_at"             json:"created_at"`             // When created in manager
+	UpdatedAt   time.Time  `msgpack:"updated_at"             json:"updated_at"`             // Last update time
 	CompletedAt *time.Time `msgpack:"completed_at,omitempty" json:"completed_at,omitempty"` // When completed
-	ImportedAt  *time.Time `msgpack:"imported_at,omitempty" json:"imported_at,omitempty"`   // When imported by Arr
+	ImportedAt  *time.Time `msgpack:"imported_at,omitempty"  json:"imported_at,omitempty"`  // When imported by Arr
 
 	// Import Request Data (for processing)
-	Action           config.DownloadAction `msgpack:"action,omitempty" json:"action,omitempty"`                       // symlink, download, strm none
+	Action           config.DownloadAction `msgpack:"action,omitempty"            json:"action,omitempty"`            // symlink, download, strm none
 	DownloadUncached bool                  `msgpack:"download_uncached,omitempty" json:"download_uncached,omitempty"` // Force uncached download
-	CallbackURL      string                `msgpack:"callback_url,omitempty" json:"callback_url,omitempty"`           // Callback URL for completion
+	CallbackURL      string                `msgpack:"callback_url,omitempty"      json:"callback_url,omitempty"`      // Callback URL for completion
 	SkipMultiSeason  bool                  `msgpack:"skip_multi_season,omitempty" json:"skip_multi_season,omitempty"` // Skip multi-season detection
 
 	// Error tracking
-	LastError     string     `msgpack:"last_error,omitempty" json:"last_error,omitempty"`           // Last error message
-	ErrorCount    int        `msgpack:"error_count,omitempty" json:"error_count,omitempty"`         // Number of errors
+	LastError     string     `msgpack:"last_error,omitempty"      json:"last_error,omitempty"`      // Last error message
+	ErrorCount    int        `msgpack:"error_count,omitempty"     json:"error_count,omitempty"`     // Number of errors
 	LastErrorTime *time.Time `msgpack:"last_error_time,omitempty" json:"last_error_time,omitempty"` // Last error time
 }
 
@@ -143,9 +143,9 @@ func (e *Entry) CanBeMoved() bool {
 // This keeps track of multiple torrents with the same folder name
 // Comprises only files(which has their respective infohashes) and placements
 type EntryItem struct {
-	Name  string           `msgpack:"name" json:"name"`   // Folder name
+	Name  string           `msgpack:"name"  json:"name"`  // Folder name
 	Files map[string]*File `msgpack:"files" json:"files"` // filename -> File details
-	Size  int64            `msgpack:"size" json:"size"`   // Total size of all files
+	Size  int64            `msgpack:"size"  json:"size"`  // Total size of all files
 }
 
 func (e *EntryItem) GetFile(filename string) (*File, error) {
@@ -196,31 +196,31 @@ type File struct {
 	// ID is a stable per-file identifier assigned when the file first enters
 	// storage. It never changes afterward — repairs may rename a file, but the
 	// ID must not follow the name. It keys identity-based STRM URLs.
-	ID        string    `msgpack:"id,omitempty" json:"id,omitempty"`
-	Name      string    `msgpack:"name" json:"name"`
-	Path      string    `msgpack:"path,omitempty" json:"path,omitempty"`
-	AddedOn   time.Time `msgpack:"added_on" json:"added_on"`
-	Size      int64     `msgpack:"size" json:"size"`
+	ID        string    `msgpack:"id,omitempty"         json:"id,omitempty"`
+	Name      string    `msgpack:"name"                 json:"name"`
+	Path      string    `msgpack:"path,omitempty"       json:"path,omitempty"`
+	AddedOn   time.Time `msgpack:"added_on"             json:"added_on"`
+	Size      int64     `msgpack:"size"                 json:"size"`
 	ByteRange *[2]int64 `msgpack:"byte_range,omitempty" json:"byte_range,omitempty"`
-	Deleted   bool      `msgpack:"deleted" json:"deleted"`
-	InfoHash  string    `msgpack:"infohash,omitempty" json:"infohash,omitempty"` // Parent infohash(might be an nzb or torrent)
+	Deleted   bool      `msgpack:"deleted"              json:"deleted"`
+	InfoHash  string    `msgpack:"infohash,omitempty"   json:"infohash,omitempty"` // Parent infohash(might be an nzb or torrent)
 }
 
 // ProviderFile represents debrid-specific file information
 type ProviderFile struct {
-	Id   string `msgpack:"id,omitempty" json:"id,omitempty"`     // For TorBox-style providers (file_id)
+	Id   string `msgpack:"id,omitempty"   json:"id,omitempty"`   // For TorBox-style providers (file_id)
 	Link string `msgpack:"link,omitempty" json:"link,omitempty"` // For RealDebrid/AllDebrid-style providers (restricted URL)
 	Path string `msgpack:"path,omitempty" json:"path,omitempty"` // Path within the debrid's filesystem
 }
 
 // ProviderEntry represents a torrent's providerEntry on a specific debrid service
 type ProviderEntry struct {
-	Provider  string                    `msgpack:"provider,omitempty" json:"provider,omitempty"`
-	ID        string                    `msgpack:"debrid_id" json:"id"`                              // ID in that debrid service (e.g., L3734BKKKSBA6)
-	AddedAt   time.Time                 `msgpack:"added_at" json:"added_at"`                         // When added to this debrid
+	Provider  string                    `msgpack:"provider,omitempty"   json:"provider,omitempty"`
+	ID        string                    `msgpack:"debrid_id"            json:"id"`                   // ID in that debrid service (e.g., L3734BKKKSBA6)
+	AddedAt   time.Time                 `msgpack:"added_at"             json:"added_at"`             // When added to this debrid
 	RemovedAt *time.Time                `msgpack:"removed_at,omitempty" json:"removed_at,omitempty"` // When removed (if archived)
-	Status    debridTypes.TorrentStatus `msgpack:"status" json:"status"`                             // ProviderEntry status
-	Progress  float64                   `msgpack:"progress" json:"progress"`                         // Download progress on this debrid (0-100)
+	Status    debridTypes.TorrentStatus `msgpack:"status"               json:"status"`               // ProviderEntry status
+	Progress  float64                   `msgpack:"progress"             json:"progress"`             // Download progress on this debrid (0-100)
 
 	// Provider-specific file information
 	Files map[string]*ProviderFile `msgpack:"files" json:"files"` // filename -> debrid-specific file info
@@ -534,27 +534,27 @@ func (e *Entry) DownloadPath() string {
 
 // SwitcherJob tracks the progress of a migration operation
 type SwitcherJob struct {
-	ID             string         `msgpack:"id" json:"id"`
-	InfoHash       string         `msgpack:"infohash" json:"info_hash"`                            // Entry being migrated
-	SourceProvider string         `msgpack:"source_provider" json:"source_provider"`               // Source provider
-	TargetProvider string         `msgpack:"target_provider" json:"target_provider"`               // Target provider
-	Status         SwitcherStatus `msgpack:"status" json:"status"`                                 // Job status
-	Progress       float64        `msgpack:"progress" json:"progress"`                             // Progress (0-100)
-	Error          string         `msgpack:"error,omitempty" json:"error,omitempty"`               // Error message if failed
-	CreatedAt      time.Time      `msgpack:"created_at" json:"created_at"`                         // When job started
+	ID             string         `msgpack:"id"                     json:"id"`
+	InfoHash       string         `msgpack:"infohash"               json:"info_hash"`              // Entry being migrated
+	SourceProvider string         `msgpack:"source_provider"        json:"source_provider"`        // Source provider
+	TargetProvider string         `msgpack:"target_provider"        json:"target_provider"`        // Target provider
+	Status         SwitcherStatus `msgpack:"status"                 json:"status"`                 // Job status
+	Progress       float64        `msgpack:"progress"               json:"progress"`               // Progress (0-100)
+	Error          string         `msgpack:"error,omitempty"        json:"error,omitempty"`        // Error message if failed
+	CreatedAt      time.Time      `msgpack:"created_at"             json:"created_at"`             // When job started
 	CompletedAt    *time.Time     `msgpack:"completed_at,omitempty" json:"completed_at,omitempty"` // When completed
-	KeepOld        bool           `msgpack:"keep_old" json:"keep_old"`                             // Whether to keep old providerEntry(or remove it)
-	WaitComplete   bool           `msgpack:"wait_complete" json:"wait_complete"`                   // Whether to wait for download
+	KeepOld        bool           `msgpack:"keep_old"               json:"keep_old"`               // Whether to keep old providerEntry(or remove it)
+	WaitComplete   bool           `msgpack:"wait_complete"          json:"wait_complete"`          // Whether to wait for download
 }
 
 // SystemMigrationStatus tracks overall system migration from legacy to unified
 type SystemMigrationStatus struct {
-	Running   bool      `msgpack:"running" json:"running"`                           // Whether migration is running
-	Total     int       `msgpack:"total" json:"total"`                               // Total torrents to migrate
-	Completed int       `msgpack:"completed" json:"completed"`                       // Completed migrations
-	Errors    int       `msgpack:"errors" json:"errors"`                             // Number of errors
-	StartedAt time.Time `msgpack:"started_at" json:"started_at"`                     // When migration started
-	UpdatedAt time.Time `msgpack:"updated_at" json:"updated_at"`                     // Last update
+	Running   bool      `msgpack:"running"              json:"running"`              // Whether migration is running
+	Total     int       `msgpack:"total"                json:"total"`                // Total torrents to migrate
+	Completed int       `msgpack:"completed"            json:"completed"`            // Completed migrations
+	Errors    int       `msgpack:"errors"               json:"errors"`               // Number of errors
+	StartedAt time.Time `msgpack:"started_at"           json:"started_at"`           // When migration started
+	UpdatedAt time.Time `msgpack:"updated_at"           json:"updated_at"`           // Last update
 	ErrorList []string  `msgpack:"error_list,omitempty" json:"error_list,omitempty"` // List of errors
 }
 

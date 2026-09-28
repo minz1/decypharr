@@ -21,7 +21,12 @@ type fileResult struct {
 	reason   string
 }
 
-func (r *Service) executeSweep(ctx context.Context, run *storage.RepairRun, opts RunOptions, stopState *repairStopState) {
+func (r *Service) executeSweep(
+	ctx context.Context,
+	run *storage.RepairRun,
+	opts RunOptions,
+	stopState *repairStopState,
+) {
 	cfg := r.cfg()
 	log := r.logger.With().Str("run_id", run.ID).Logger()
 
@@ -57,7 +62,12 @@ func (r *Service) executeSweep(ctx context.Context, run *storage.RepairRun, opts
 
 	run.Stage = storage.RepairStageProbing
 	r.saveRun(run)
-	log.Info().Int("due", len(due)).Int("skipped_fresh", skipped).Str("protocol", protocolScope).Bool("auto_repair", autoRepair).Msg("Sweep: probing")
+	log.Info().
+		Int("due", len(due)).
+		Int("skipped_fresh", skipped).
+		Str("protocol", protocolScope).
+		Bool("auto_repair", autoRepair).
+		Msg("Sweep: probing")
 
 	heal := newErrorCache()
 	err = r.probeAndHealCandidates(ctx, run, due, names, heal, opts, autoRepair)
@@ -86,7 +96,14 @@ func (r *Service) executeSweep(ctx context.Context, run *storage.RepairRun, opts
 		Msg("Sweep: completed")
 }
 
-func (r *Service) finishCancelledRepairSweep(ctx context.Context, run *storage.RepairRun, stopState *repairStopState, autoRepair bool, reason string, names []string) {
+func (r *Service) finishCancelledRepairSweep(
+	ctx context.Context,
+	run *storage.RepairRun,
+	stopState *repairStopState,
+	autoRepair bool,
+	reason string,
+	names []string,
+) {
 	stopped := stopState != nil && stopState.get()
 	if !stopped {
 		r.finalizeRun(run, storage.RepairRunCancelled, "", reason)
@@ -122,7 +139,15 @@ func detachedRepairContext(runCtx, parentCtx context.Context) context.Context {
 	return context.Background()
 }
 
-func (r *Service) probeAndHealCandidates(ctx context.Context, run *storage.RepairRun, candidates map[string]*candidate, names []string, heal *errorCache, opts RunOptions, autoRepair bool) error {
+func (r *Service) probeAndHealCandidates(
+	ctx context.Context,
+	run *storage.RepairRun,
+	candidates map[string]*candidate,
+	names []string,
+	heal *errorCache,
+	opts RunOptions,
+	autoRepair bool,
+) error {
 	var runMu sync.Mutex
 
 	g, gctx := errgroup.WithContext(ctx)

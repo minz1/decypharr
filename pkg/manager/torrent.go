@@ -233,7 +233,9 @@ func (m *Manager) processNewTorrents(provider string, newTorrents []*types.Torre
 				}
 				count := processed.Add(1)
 				if count%50 == 0 {
-					m.logger.Debug().Str("debrid", provider).Msgf("Processed %d / %d new torrents", count, totalTorrents)
+					m.logger.Debug().
+						Str("debrid", provider).
+						Msgf("Processed %d / %d new torrents", count, totalTorrents)
 				}
 			}
 		})
@@ -400,7 +402,11 @@ func (m *Manager) processSyncTorrent(t *types.Torrent) (*storage.Entry, error) {
 
 	// confirm everything is complete
 	if err := mt.Validate(); err != nil {
-		m.logger.Warn().Err(err).Str("infohash", t.InfoHash).Str("name", mt.Name).Msg("Validation failed for torrent, marking as bad")
+		m.logger.Warn().
+			Err(err).
+			Str("infohash", t.InfoHash).
+			Str("name", mt.Name).
+			Msg("Validation failed for torrent, marking as bad")
 	}
 
 	return mt, nil

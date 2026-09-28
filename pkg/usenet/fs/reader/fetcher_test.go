@@ -141,7 +141,11 @@ func TestStreamBodyPipelinePlanPreservesParallelism(t *testing.T) {
 	}
 }
 
-func newPipelineTestFetcher(t *testing.T, depth int, present func(int) bool) (*nntpd.Server, *SegmentCache, *SegmentFetcher, *ReaderStats) {
+func newPipelineTestFetcher(
+	t *testing.T,
+	depth int,
+	present func(int) bool,
+) (*nntpd.Server, *SegmentCache, *SegmentFetcher, *ReaderStats) {
 	t.Helper()
 	srv, err := nntpd.New(nntpd.Config{RTT: 10 * time.Millisecond})
 	if err != nil {
@@ -155,7 +159,10 @@ func newPipelineTestFetcher(t *testing.T, depth int, present func(int) bool) (*n
 		messageID := fmt.Sprintf("<pipeline-%d@nntpd>", i)
 		offset := int64(i * segmentSize)
 		if present(i) {
-			srv.AddArticle(messageID, nntpd.Encode(nntpd.Pattern(offset, segmentSize), "pipeline.bin", i+1, int64(depth)*segmentSize, offset))
+			srv.AddArticle(
+				messageID,
+				nntpd.Encode(nntpd.Pattern(offset, segmentSize), "pipeline.bin", i+1, int64(depth)*segmentSize, offset),
+			)
 		}
 		segments[i] = SegmentMeta{
 			MessageID:   messageID,

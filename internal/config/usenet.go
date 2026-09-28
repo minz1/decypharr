@@ -111,7 +111,11 @@ func (u Usenet) UsesDiskBuffer() bool {
 }
 
 func (u Usenet) IsZero() bool {
-	return len(u.Providers) == 0 && u.MaxConnections == 0 && u.ProcessingMaxConnections == 0 && u.ReadAhead == "" && u.BodyPipelineDepth == 0 && u.StreamBackupWait == "" && u.ProcessingTimeout == "" && !u.UsesDiskBuffer()
+	return len(u.Providers) == 0 && u.MaxConnections == 0 && u.ProcessingMaxConnections == 0 && u.ReadAhead == "" &&
+		u.BodyPipelineDepth == 0 &&
+		u.StreamBackupWait == "" &&
+		u.ProcessingTimeout == "" &&
+		!u.UsesDiskBuffer()
 }
 
 func (c *Config) updateUsenetConfig() {

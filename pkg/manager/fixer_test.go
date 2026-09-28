@@ -61,7 +61,11 @@ func TestFixTorrentWithRemovedProvider(t *testing.T) {
 					},
 				}
 				if existing {
-					entry.Providers["remaining"] = &storage.ProviderEntry{Provider: "remaining", ID: "new", Status: types.TorrentStatusDownloaded}
+					entry.Providers["remaining"] = &storage.ProviderEntry{
+						Provider: "remaining",
+						ID:       "new",
+						Status:   types.TorrentStatusDownloaded,
+					}
 				}
 				result, err := fixer.FixTorrent(t.Context(), entry, false)
 				if err != nil || !result.Success {

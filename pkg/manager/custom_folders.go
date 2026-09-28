@@ -82,7 +82,10 @@ func (m *Manager) virtualFolderFileNames(meta *storage.EntryMetaInfo) func() []s
 	}
 }
 
-func (m *Manager) PreviewVirtualFolder(definition config.VirtualFolder, limit int) (int, []VirtualFolderPreviewItem, error) {
+func (m *Manager) PreviewVirtualFolder(
+	definition config.VirtualFolder,
+	limit int,
+) (int, []VirtualFolderPreviewItem, error) {
 	compiled, err := virtualfolders.Compile([]config.VirtualFolder{definition})
 	if err != nil {
 		return 0, nil, err

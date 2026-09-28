@@ -444,7 +444,12 @@ func (c *Connection) requestBody(messageID string) (nntpyenc.BodyResult, error) 
 	return c.requestBodyBuffered(messageID, nil, nil, true)
 }
 
-func (c *Connection) requestBodyBuffered(messageID string, dst []byte, source BodyBuffer, pooled bool) (nntpyenc.BodyResult, error) {
+func (c *Connection) requestBodyBuffered(
+	messageID string,
+	dst []byte,
+	source BodyBuffer,
+	pooled bool,
+) (nntpyenc.BodyResult, error) {
 	messageID = FormatMessageID(messageID)
 	if err := c.sendCommandArg("BODY", messageID); err != nil {
 		return nntpyenc.BodyResult{}, NewConnectionError(fmt.Errorf("failed to send BODY command: %w", err))
@@ -613,7 +618,11 @@ type DecodedBodyResult struct {
 // The connection must not be used concurrently.
 func (c *Connection) PipelineBodies(messageIDs []string, destinations []BodyDestination) ([]DecodedBodyResult, error) {
 	if len(messageIDs) != len(destinations) {
-		return nil, fmt.Errorf("BODY pipeline has %d message IDs and %d destinations", len(messageIDs), len(destinations))
+		return nil, fmt.Errorf(
+			"BODY pipeline has %d message IDs and %d destinations",
+			len(messageIDs),
+			len(destinations),
+		)
 	}
 	results := make([]DecodedBodyResult, len(messageIDs))
 	if len(messageIDs) == 0 {
@@ -641,7 +650,9 @@ func (c *Connection) PipelineBodies(messageIDs []string, destinations []BodyDest
 		}
 		if err := c.writeCommandArg("BODY", FormatMessageID(messageID)); err != nil {
 			_ = c.conn.SetWriteDeadline(time.Time{})
-			return results, NewConnectionError(fmt.Errorf("write BODY pipeline at %d/%d: %w", i+1, len(messageIDs), err))
+			return results, NewConnectionError(
+				fmt.Errorf("write BODY pipeline at %d/%d: %w", i+1, len(messageIDs), err),
+			)
 		}
 	}
 	if err := c.writer.Flush(); err != nil {

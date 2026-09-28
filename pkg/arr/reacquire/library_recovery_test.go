@@ -103,7 +103,9 @@ func TestLibraryRecoveryUsesDurableJobsAndWaitsForReplacement(t *testing.T) {
 	if err := reopened.UpsertBinding(binding); err != nil {
 		t.Fatal(err)
 	}
-	duplicate, err = reopened.Reacquire(Request{EntryID: binding.EntryID, FileID: binding.EntryFileID, Cause: CauseStream})
+	duplicate, err = reopened.Reacquire(
+		Request{EntryID: binding.EntryID, FileID: binding.EntryFileID, Cause: CauseStream},
+	)
 	if err != nil || duplicate.ID != job.ID {
 		t.Fatalf("indexed duplicate = %v, %v", duplicate, err)
 	}
@@ -206,10 +208,18 @@ func TestReconcileImportedManagedJobs(t *testing.T) {
 			}
 			now := time.Now()
 			job := Job{
-				ID: "waiting-job", ArrName: instance.Name, ArrType: instance.Type,
-				EntryID: binding.EntryID, FileID: binding.EntryFileID, DownloadID: binding.DownloadID, Bindings: bindings,
-				Cause: CauseRepair, Strategy: StrategyHistoryFailed, Status: StatusWaitingForImport,
-				CreatedAt: now.Add(-waitingTimeout - time.Minute), UpdatedAt: now.Add(-waitingTimeout - time.Minute),
+				ID:         "waiting-job",
+				ArrName:    instance.Name,
+				ArrType:    instance.Type,
+				EntryID:    binding.EntryID,
+				FileID:     binding.EntryFileID,
+				DownloadID: binding.DownloadID,
+				Bindings:   bindings,
+				Cause:      CauseRepair,
+				Strategy:   StrategyHistoryFailed,
+				Status:     StatusWaitingForImport,
+				CreatedAt:  now.Add(-waitingTimeout - time.Minute),
+				UpdatedAt:  now.Add(-waitingTimeout - time.Minute),
 			}
 			service.now = func() time.Time { return now }
 			if err := service.jobRepository.Save(job); err != nil {

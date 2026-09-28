@@ -35,7 +35,10 @@ func TestSubmissionRequestsUseDedicatedClient(t *testing.T) {
 		case r.Method == http.MethodPost && r.URL.Path == "/api/torrents/createtorrent":
 			_, _ = fmt.Fprint(w, `{"success":true,"data":{"torrent_id":17,"hash":"ABC"}}`)
 		case r.Method == http.MethodGet && r.URL.Path == "/api/torrents/mylist":
-			_, _ = fmt.Fprint(w, `{"success":true,"data":{"id":17,"name":"Release.mkv","size":100,"progress":1,"download_state":"completed","download_finished":true,"created_at":"2026-01-02T03:04:05Z","hash":"ABC","files":[{"id":1,"name":"Release.mkv","absolute_path":"Release.mkv","size":100}]}}`)
+			_, _ = fmt.Fprint(
+				w,
+				`{"success":true,"data":{"id":17,"name":"Release.mkv","size":100,"progress":1,"download_state":"completed","download_finished":true,"created_at":"2026-01-02T03:04:05Z","hash":"ABC","files":[{"id":1,"name":"Release.mkv","absolute_path":"Release.mkv","size":100}]}}`,
+			)
 		default:
 			http.NotFound(w, r)
 		}
@@ -89,7 +92,10 @@ func TestGetTorrentsBypassesTorboxCache(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		if offset == "0" {
-			_, _ = fmt.Fprint(w, `{"success":true,"data":[{"id":17,"name":"Release.mkv","size":100,"progress":1,"download_state":"completed","download_finished":true,"created_at":"2026-01-02T03:04:05Z","hash":"ABC","files":[{"id":1,"name":"Release.mkv","absolute_path":"Release.mkv","size":100}]}]}`)
+			_, _ = fmt.Fprint(
+				w,
+				`{"success":true,"data":[{"id":17,"name":"Release.mkv","size":100,"progress":1,"download_state":"completed","download_finished":true,"created_at":"2026-01-02T03:04:05Z","hash":"ABC","files":[{"id":1,"name":"Release.mkv","absolute_path":"Release.mkv","size":100}]}]}`,
+			)
 			return
 		}
 		_, _ = fmt.Fprint(w, `{"success":true,"data":[]}`)
@@ -116,7 +122,10 @@ func TestGetTorrentsReturnsPaginationErrors(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("offset") == "0" {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = fmt.Fprint(w, `{"success":true,"data":[{"id":17,"name":"Release.mkv","created_at":"2026-01-02T03:04:05Z"}]}`)
+			_, _ = fmt.Fprint(
+				w,
+				`{"success":true,"data":[{"id":17,"name":"Release.mkv","created_at":"2026-01-02T03:04:05Z"}]}`,
+			)
 			return
 		}
 		http.Error(w, "temporary failure", http.StatusInternalServerError)

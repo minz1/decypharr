@@ -25,7 +25,13 @@ var streamCopyBufPool = sync.Pool{
 	},
 }
 
-func (h *Handler) StreamResponse(entry *storage.Entry, name string, size int64, w http.ResponseWriter, r *http.Request) error {
+func (h *Handler) StreamResponse(
+	entry *storage.Entry,
+	name string,
+	size int64,
+	w http.ResponseWriter,
+	r *http.Request,
+) error {
 	start, end := resolveRange(r.Header.Get("Range"), size)
 	if start < 0 {
 		start = 0

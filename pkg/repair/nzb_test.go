@@ -52,7 +52,9 @@ func TestNZBProberVerifiesContentWhenRequested(t *testing.T) {
 			return customerror.UsenetCorruptContentError
 		},
 	}
-	result := newNZBProber(client).probe(t.Context(), nzbProbeRequest{nzbID: "nzb", fileName: "movie.mkv", verifyContent: true})
+	result := newNZBProber(
+		client,
+	).probe(t.Context(), nzbProbeRequest{nzbID: "nzb", fileName: "movie.mkv", verifyContent: true})
 	if !verified || !result.broken || result.reason != "usenet_corrupt_content" {
 		t.Fatalf("result = %+v, verified = %t", result, verified)
 	}

@@ -13,7 +13,11 @@ func TestSessionSecretPersistsAcrossLoads(t *testing.T) {
 	directory := t.TempDir()
 	SetConfigPath(directory)
 	t.Cleanup(Reset)
-	if err := os.WriteFile(filepath.Join(directory, "config.json"), []byte(`{"strm":{"secret":"existing-stream-key"}}`), 0644); err != nil {
+	if err := os.WriteFile(
+		filepath.Join(directory, "config.json"),
+		[]byte(`{"strm":{"secret":"existing-stream-key"}}`),
+		0644,
+	); err != nil {
 		t.Fatal(err)
 	}
 	first := Get().SecretKey()

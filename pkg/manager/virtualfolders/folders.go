@@ -177,7 +177,8 @@ func checkSingleFilter(filter directoryFilter, meta *storage.EntryMetaInfo, getF
 
 func matchText(candidate string, condition config.VirtualFolderCondition, compiledRegex *regexp.Regexp) bool {
 	wanted := condition.Value
-	if !condition.CaseSensitive && condition.Operator != config.VirtualFolderOperatorMatchesRegex && condition.Operator != config.VirtualFolderOperatorNotMatchesRegex {
+	if !condition.CaseSensitive && condition.Operator != config.VirtualFolderOperatorMatchesRegex &&
+		condition.Operator != config.VirtualFolderOperatorNotMatchesRegex {
 		candidate = strings.ToLower(candidate)
 		wanted = strings.ToLower(wanted)
 	}

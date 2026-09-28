@@ -63,14 +63,23 @@ func TestFailoverHonorsSingleProviderRetryBudget(t *testing.T) {
 	}
 	defer server.Close()
 	host, port := server.Addr()
-	client, err := NewClient(&config.Config{Retries: 1, Usenet: config.Usenet{Providers: []config.UsenetProvider{{Host: host, Port: port, MaxConnections: 1}}}})
+	client, err := NewClient(
+		&config.Config{
+			Retries: 1,
+			Usenet:  config.Usenet{Providers: []config.UsenetProvider{{Host: host, Port: port, MaxConnections: 1}}},
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer client.Close()
 	calls := 0
 	failure := NewTimeoutError(errors.New("timeout"))
-	err = client.ExecuteWithFailover(t.Context(), WorkloadStreamDemand, func(*Connection) error { calls++; return failure })
+	err = client.ExecuteWithFailover(
+		t.Context(),
+		WorkloadStreamDemand,
+		func(*Connection) error { calls++; return failure },
+	)
 	if calls != 2 || !errors.Is(err, ErrAllProvidersFailed) || !errors.Is(err, failure) {
 		t.Fatalf("calls=%d, error=%v", calls, err)
 	}

@@ -7,13 +7,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/puzpuzpuz/xsync/v4"
 	"uuid"
+
+	"github.com/puzpuzpuz/xsync/v4"
 
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
-func (r *Service) collectBrokenHealths(names []string, requireArrFile bool) (*xsync.Map[string, *storage.EntryHealth], int) {
+func (r *Service) collectBrokenHealths(
+	names []string,
+	requireArrFile bool,
+) (*xsync.Map[string, *storage.EntryHealth], int) {
 	wanted := make(map[string]struct{}, len(names))
 	for _, n := range names {
 		if n = strings.TrimSpace(n); n != "" {
@@ -220,7 +224,11 @@ func (r *Service) ClearBroken(ctx context.Context, names []string) (*storage.Rep
 	return run, nil
 }
 
-func (r *Service) clearBroken(ctx context.Context, run *storage.RepairRun, healths *xsync.Map[string, *storage.EntryHealth]) {
+func (r *Service) clearBroken(
+	ctx context.Context,
+	run *storage.RepairRun,
+	healths *xsync.Map[string, *storage.EntryHealth],
+) {
 	now := time.Now()
 	healths.Range(func(name string, h *storage.EntryHealth) bool {
 		if ctx != nil && ctx.Err() != nil {
@@ -244,7 +252,11 @@ func (r *Service) clearBroken(ctx context.Context, run *storage.RepairRun, healt
 					r.saveRun(run)
 					continue
 				}
-				r.logger.Warn().Err(err).Str("entry", bf.EntryName).Str("file", bf.FileName).Msg("ClearBroken: failed to remove broken file from mount")
+				r.logger.Warn().
+					Err(err).
+					Str("entry", bf.EntryName).
+					Str("file", bf.FileName).
+					Msg("ClearBroken: failed to remove broken file from mount")
 				run.Stats.RepairFailed++
 				remaining = append(remaining, bf)
 				continue

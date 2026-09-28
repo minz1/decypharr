@@ -22,7 +22,11 @@ var (
 	errUnmappedBrokenFile = errors.New("broken file has no managed identity")
 )
 
-func (r *Service) repairBroken(ctx context.Context, run *storage.RepairRun, healths *xsync.Map[string, *storage.EntryHealth]) {
+func (r *Service) repairBroken(
+	ctx context.Context,
+	run *storage.RepairRun,
+	healths *xsync.Map[string, *storage.EntryHealth],
+) {
 	var statsMu sync.Mutex
 	healths.Range(func(_ string, health *storage.EntryHealth) bool {
 		if ctx != nil && ctx.Err() != nil {
@@ -33,7 +37,12 @@ func (r *Service) repairBroken(ctx context.Context, run *storage.RepairRun, heal
 	})
 }
 
-func (r *Service) healBrokenEntry(ctx context.Context, run *storage.RepairRun, statsMu *sync.Mutex, health *storage.EntryHealth) {
+func (r *Service) healBrokenEntry(
+	ctx context.Context,
+	run *storage.RepairRun,
+	statsMu *sync.Mutex,
+	health *storage.EntryHealth,
+) {
 	if health == nil || health.Status != storage.HealthBroken {
 		return
 	}
@@ -145,16 +154,37 @@ func (r *Service) resolveBrokenFile(broken storage.BrokenFile) (string, string, 
 	}
 	file, ok := entry.Files[broken.FileName]
 	if !ok || file == nil {
-		return "", "", fmt.Errorf("%w: file %q is not in entry %q", errUnmappedBrokenFile, broken.FileName, broken.InfoHash)
+		return "", "", fmt.Errorf(
+			"%w: file %q is not in entry %q",
+			errUnmappedBrokenFile,
+			broken.FileName,
+			broken.InfoHash,
+		)
 	}
 	if file.Deleted {
-		return "", "", fmt.Errorf("%w: file %q in entry %q is deleted", reacquire.ErrBindingUnsafe, broken.FileName, broken.InfoHash)
+		return "", "", fmt.Errorf(
+			"%w: file %q in entry %q is deleted",
+			reacquire.ErrBindingUnsafe,
+			broken.FileName,
+			broken.InfoHash,
+		)
 	}
 	if file.InfoHash != "" && file.InfoHash != entry.InfoHash {
-		return "", "", fmt.Errorf("%w: file %q belongs to entry %q, not %q", reacquire.ErrBindingUnsafe, broken.FileName, file.InfoHash, entry.InfoHash)
+		return "", "", fmt.Errorf(
+			"%w: file %q belongs to entry %q, not %q",
+			reacquire.ErrBindingUnsafe,
+			broken.FileName,
+			file.InfoHash,
+			entry.InfoHash,
+		)
 	}
 	if file.ID == "" {
-		return "", "", fmt.Errorf("%w: file %q in entry %q has no stable ID", errUnmappedBrokenFile, broken.FileName, broken.InfoHash)
+		return "", "", fmt.Errorf(
+			"%w: file %q in entry %q has no stable ID",
+			errUnmappedBrokenFile,
+			broken.FileName,
+			broken.InfoHash,
+		)
 	}
 	return entry.InfoHash, file.ID, nil
 }

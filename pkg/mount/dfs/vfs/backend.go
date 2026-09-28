@@ -14,7 +14,12 @@ type Backend interface {
 	GetEntryByName(entryName, filename string) (*storage.Entry, error)
 	TrackStream(entry *storage.Entry, filename, client string) string
 	UntrackStream(streamID string)
-	OpenStreamUntrackedForCache(ctx context.Context, entry *storage.Entry, filename string, offset int64) (manager.StreamReader, error)
+	OpenStreamUntrackedForCache(
+		ctx context.Context,
+		entry *storage.Entry,
+		filename string,
+		offset int64,
+	) (manager.StreamReader, error)
 }
 
 var _ Backend = (*manager.Manager)(nil)

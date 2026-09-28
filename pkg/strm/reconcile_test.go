@@ -94,7 +94,11 @@ func TestStrmSweepGoldenTree(t *testing.T) {
 	// entry, and a foreign file we must never touch.
 	stale := "http://old-host:9999/stream/" + infohash + "/" + fileID + "/Movie.2023.1080p.mkv?s=deadbeef"
 	mustWrite(t, strmPath, stale)
-	mustWrite(t, orphanPath, FileURL("http://media.local:8282", cfg.Strm.Secret, unknown, "0123456789abcdef", "Gone.mkv"))
+	mustWrite(
+		t,
+		orphanPath,
+		FileURL("http://media.local:8282", cfg.Strm.Secret, unknown, "0123456789abcdef", "Gone.mkv"),
+	)
 	mustWrite(t, foreignPath, "plex://movie/12345")
 
 	rep, err := m.Sweep(context.Background())

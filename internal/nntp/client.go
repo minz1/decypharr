@@ -532,7 +532,11 @@ func (c *Client) returnOrReleaseConn(conn *Connection, provider config.UsenetPro
 // are ignored (allowDial=true): targeted callers — the repair BatchStat
 // sweep — need this provider's answer specifically, and a prompt connection
 // error is more accurate for them than a silent reroute.
-func (c *Client) getConnectionFromProvider(ctx context.Context, workload Workload, provider config.UsenetProvider) (*Connection, config.UsenetProvider, error) {
+func (c *Client) getConnectionFromProvider(
+	ctx context.Context,
+	workload Workload,
+	provider config.UsenetProvider,
+) (*Connection, config.UsenetProvider, error) {
 	if !workload.valid() {
 		return nil, provider, fmt.Errorf("invalid NNTP workload: %s", workload)
 	}
@@ -611,7 +615,11 @@ func (c *Client) safeExecute(conn *Connection, fn func(conn *Connection) error) 
 //
 // Within a tier, providers are still consumed opportunistically across
 // hosts — so two unlimited primaries split load the way they do today.
-func (c *Client) getAnyAvailableConnection(ctx context.Context, workload Workload, exclusions providerExclusions) (*Connection, config.UsenetProvider, error) {
+func (c *Client) getAnyAvailableConnection(
+	ctx context.Context,
+	workload Workload,
+	exclusions providerExclusions,
+) (*Connection, config.UsenetProvider, error) {
 	if !workload.valid() {
 		return nil, config.UsenetProvider{}, fmt.Errorf("invalid NNTP workload: %s", workload)
 	}
@@ -628,7 +636,12 @@ func (c *Client) hasEligibleProviderInTier(exclusions providerExclusions, backup
 	return false
 }
 
-func (c *Client) getAnyAvailableConnectionInTier(ctx context.Context, workload Workload, exclusions providerExclusions, useBackups bool) (*Connection, config.UsenetProvider, error) {
+func (c *Client) getAnyAvailableConnectionInTier(
+	ctx context.Context,
+	workload Workload,
+	exclusions providerExclusions,
+	useBackups bool,
+) (*Connection, config.UsenetProvider, error) {
 
 	// Cooldowns are advisory reroutes, never a denial of service: skip a
 	// cooling-down provider only when some other eligible provider is warm
@@ -684,7 +697,8 @@ func (c *Client) getAnyAvailableConnectionInTier(ctx context.Context, workload W
 		}
 	}
 
-	if !useBackups && workload == WorkloadStreamDemand && c.streamBackupWait > 0 && c.hasEligibleProviderInTier(exclusions, true) {
+	if !useBackups && workload == WorkloadStreamDemand && c.streamBackupWait > 0 &&
+		c.hasEligibleProviderInTier(exclusions, true) {
 		waitCtx, cancel := context.WithTimeoutCause(ctx, c.streamBackupWait, errStreamBackupWaitElapsed)
 		conn, provider, err := c.waitForConnection(waitCtx, workload, eligible)
 		spillToBackup := errors.Is(context.Cause(waitCtx), errStreamBackupWaitElapsed) && ctx.Err() == nil
@@ -704,7 +718,11 @@ var errStreamBackupWaitElapsed = errors.New("stream primary-tier wait elapsed")
 // provider. The waiter registers in its priority queue before each scan so a
 // release between scan and park cannot be missed. Handoffs are strict across
 // workload classes and approximately FIFO within each class.
-func (c *Client) waitForConnection(ctx context.Context, workload Workload, eligible []*ProviderPool) (*Connection, config.UsenetProvider, error) {
+func (c *Client) waitForConnection(
+	ctx context.Context,
+	workload Workload,
+	eligible []*ProviderPool,
+) (*Connection, config.UsenetProvider, error) {
 	w := c.newQueuedWaiter(workload, eligible)
 
 	// The fallback tick guards against a slot release that bypasses
@@ -797,7 +815,12 @@ var errDialCooldown = errors.New("provider dials cooling down after failures")
 // Caller must have already acquired a slot from pp.slots. allowDial=false
 // makes an active dial cooldown return errDialCooldown instead of dialing;
 // pooled connections are always eligible regardless.
-func (c *Client) getOrCreateFromPool(ctx context.Context, pp *ProviderPool, provider config.UsenetProvider, allowDial bool) (*Connection, error) {
+func (c *Client) getOrCreateFromPool(
+	ctx context.Context,
+	pp *ProviderPool,
+	provider config.UsenetProvider,
+	allowDial bool,
+) (*Connection, error) {
 	// Try to get existing connection from pool (quick lock)
 	for {
 		pp.mu.Lock()
@@ -1266,7 +1289,8 @@ func (c *Client) Stats() map[string]any {
 	waiting, oldestWaitNS := c.queueSnapshot()
 	admissionStats := make(map[string]any, workloadCount)
 	for workload := range workloadCount {
-		admissionStats[workload.String()] = c.admission[workload].snapshot().stats(waiting[workload], oldestWaitNS[workload])
+		admissionStats[workload.String()] = c.admission[workload].snapshot().
+			stats(waiting[workload], oldestWaitNS[workload])
 	}
 	poolStats := map[string]any{
 		"max_connections": totalMax,
@@ -1537,7 +1561,9 @@ func (c *Client) batchStatAcrossProviders(ctx context.Context, messageIDs []stri
 				if err != nil {
 					states[idx].lastErr = err
 				} else {
-					states[idx].lastErr = NewConnectionError(fmt.Errorf("provider %s returned incomplete batch results", provider.Host))
+					states[idx].lastErr = NewConnectionError(
+						fmt.Errorf("provider %s returned incomplete batch results", provider.Host),
+					)
 				}
 				continue
 			}
@@ -1548,7 +1574,10 @@ func (c *Client) batchStatAcrossProviders(ctx context.Context, messageIDs []stri
 				continue
 			}
 
-			if nntpErr, ok := errors.AsType[*Error](res.Error); res.Error != nil && ok && nntpErr.Type == ErrorTypeArticleNotFound {
+			if nntpErr, ok := errors.AsType[*Error](
+				res.Error,
+			); res.Error != nil && ok &&
+				nntpErr.Type == ErrorTypeArticleNotFound {
 				states[idx].sawNotFound = true
 				excludeForArticleNotFound(&states[idx].exclusions, provider)
 			} else {
@@ -1558,7 +1587,9 @@ func (c *Client) batchStatAcrossProviders(ctx context.Context, messageIDs []stri
 				} else if err != nil {
 					states[idx].lastErr = err
 				} else {
-					states[idx].lastErr = NewConnectionError(fmt.Errorf("provider %s returned an empty STAT result for %s", provider.Host, res.MessageID))
+					states[idx].lastErr = NewConnectionError(
+						fmt.Errorf("provider %s returned an empty STAT result for %s", provider.Host, res.MessageID),
+					)
 				}
 			}
 		}
@@ -1569,16 +1600,26 @@ func (c *Client) batchStatAcrossProviders(ctx context.Context, messageIDs []stri
 		switch {
 		case states[idx].sawNotFound && !states[idx].sawOtherErr:
 			results[idx].Available = false
-			results[idx].Error = classifyNNTPError(430, fmt.Sprintf("segment %s not found on any provider", results[idx].MessageID))
+			results[idx].Error = classifyNNTPError(
+				430,
+				fmt.Sprintf("segment %s not found on any provider", results[idx].MessageID),
+			)
 		case states[idx].lastErr != nil:
 			results[idx].Available = false
 			results[idx].Error = states[idx].lastErr
 		case states[idx].sawNotFound:
 			results[idx].Available = false
-			results[idx].Error = NewConnectionError(fmt.Errorf("segment %s not found on some providers but could not be verified on others", results[idx].MessageID))
+			results[idx].Error = NewConnectionError(
+				fmt.Errorf(
+					"segment %s not found on some providers but could not be verified on others",
+					results[idx].MessageID,
+				),
+			)
 		default:
 			results[idx].Available = false
-			results[idx].Error = NewConnectionError(fmt.Errorf("segment %s could not be verified on any provider", results[idx].MessageID))
+			results[idx].Error = NewConnectionError(
+				fmt.Errorf("segment %s could not be verified on any provider", results[idx].MessageID),
+			)
 		}
 	}
 
@@ -1587,7 +1628,11 @@ func (c *Client) batchStatAcrossProviders(ctx context.Context, messageIDs []stri
 
 const statPipelineDepth = 16
 
-func (c *Client) batchStatOnProvider(ctx context.Context, provider config.UsenetProvider, messageIDs []string) ([]StatResult, error) {
+func (c *Client) batchStatOnProvider(
+	ctx context.Context,
+	provider config.UsenetProvider,
+	messageIDs []string,
+) ([]StatResult, error) {
 	// A background worker returns its connection after every shallow pipeline.
 	// This bounds the delay seen by a stream that arrives while all provider
 	// slots are busy without reintroducing one RTT per STAT.

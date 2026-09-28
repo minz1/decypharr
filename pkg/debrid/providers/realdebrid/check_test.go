@@ -35,7 +35,11 @@ func TestCheckFileHonorsCancellation(t *testing.T) {
 				}))
 				defer server.Close()
 				provider := &RealDebrid{Host: server.URL, repairClient: request.New(request.WithMaxRetries(0))}
-				provider.accountsManager = account.NewManager(config.Debrid{Name: "realdebrid", DownloadAPIKeys: []string{"token"}}, nil, zerolog.Nop())
+				provider.accountsManager = account.NewManager(
+					config.Debrid{Name: "realdebrid", DownloadAPIKeys: []string{"token"}},
+					nil,
+					zerolog.Nop(),
+				)
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
 				if cancelBefore {

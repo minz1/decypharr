@@ -9,7 +9,15 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
-func (r *Service) probeEntry(ctx context.Context, runID string, c *candidate, heal *errorCache, nzb *nzbProber, opts RunOptions, autoRepair bool) *storage.EntryHealth {
+func (r *Service) probeEntry(
+	ctx context.Context,
+	runID string,
+	c *candidate,
+	heal *errorCache,
+	nzb *nzbProber,
+	opts RunOptions,
+	autoRepair bool,
+) *storage.EntryHealth {
 	s := r.storage
 	if c.item == nil {
 		item, err := s.GetEntryItem(c.name)
@@ -77,7 +85,13 @@ func firstDeferredReason(results []fileResult) string {
 	return ""
 }
 
-func (r *Service) probeFiles(ctx context.Context, c *candidate, names []string, nzb *nzbProber, opts RunOptions) []fileResult {
+func (r *Service) probeFiles(
+	ctx context.Context,
+	c *candidate,
+	names []string,
+	nzb *nzbProber,
+	opts RunOptions,
+) []fileResult {
 	results := make([]fileResult, len(names))
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(repairFilesPerEntry)
@@ -95,7 +109,13 @@ func (r *Service) probeFiles(ctx context.Context, c *candidate, names []string, 
 	return results
 }
 
-func (r *Service) probeFile(ctx context.Context, c *candidate, name string, nzb *nzbProber, opts RunOptions) fileResult {
+func (r *Service) probeFile(
+	ctx context.Context,
+	c *candidate,
+	name string,
+	nzb *nzbProber,
+	opts RunOptions,
+) fileResult {
 	res := fileResult{name: name}
 	if c == nil || c.item == nil {
 		res.reason = "entry_not_found"

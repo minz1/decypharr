@@ -43,7 +43,12 @@ func (b *persistedNZBBackend) UntrackStream(string) {
 	b.active.Add(-1)
 }
 
-func (b *persistedNZBBackend) OpenStreamUntrackedForCache(context.Context, *storage.Entry, string, int64) (manager.StreamReader, error) {
+func (b *persistedNZBBackend) OpenStreamUntrackedForCache(
+	context.Context,
+	*storage.Entry,
+	string,
+	int64,
+) (manager.StreamReader, error) {
 	b.opens.Add(1)
 	return nil, errors.New("persisted DFS cache unexpectedly opened an upstream stream")
 }
@@ -139,6 +144,10 @@ func TestPersistedNZBUsesDFSCacheAndTracksStream(t *testing.T) {
 		t.Fatal(err)
 	}
 	if backend.untracks.Load() != 1 || backend.active.Load() != 0 {
-		t.Fatalf("tracking after close: untracks=%d active=%d, want 1/0", backend.untracks.Load(), backend.active.Load())
+		t.Fatalf(
+			"tracking after close: untracks=%d active=%d, want 1/0",
+			backend.untracks.Load(),
+			backend.active.Load(),
+		)
 	}
 }

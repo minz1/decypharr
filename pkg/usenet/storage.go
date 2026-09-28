@@ -474,7 +474,10 @@ func (s *NZBStorage) MigrateLegacy() (int, error) {
 	if failed.Load() == 0 {
 		s.writeMigrationMarker()
 	}
-	s.logger.Info().Int64("migrated", migrated.Load()).Int64("failed", failed.Load()).Msg("Migration: completed legacy NZB meta upgrade")
+	s.logger.Info().
+		Int64("migrated", migrated.Load()).
+		Int64("failed", failed.Load()).
+		Msg("Migration: completed legacy NZB meta upgrade")
 	return int(migrated.Load()), nil
 }
 

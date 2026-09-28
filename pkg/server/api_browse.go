@@ -401,7 +401,12 @@ func (s *Server) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) handleTorrentDownload(w http.ResponseWriter, r *http.Request, entry *storage.Entry, file *storage.File) {
+func (s *Server) handleTorrentDownload(
+	w http.ResponseWriter,
+	r *http.Request,
+	entry *storage.Entry,
+	file *storage.File,
+) {
 	// For torrents, get debrid download link and redirect
 	link, err := s.manager.GetDownloadLink(r.Context(), entry, file.Name)
 	if err != nil || link.Empty() {

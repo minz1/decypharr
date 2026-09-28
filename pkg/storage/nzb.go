@@ -18,48 +18,48 @@ const (
 
 // NZB represents a torrent-like structure for NZB files
 type NZB struct {
-	ID             string    `json:"id" msgpack:"id"`
-	Name           string    `json:"name" msgpack:"name"`
-	Title          string    `json:"title,omitempty" msgpack:"title,omitempty"`
-	Path           string    `json:"path,omitempty" msgpack:"path,omitempty"`
-	TotalSize      int64     `json:"total_size" msgpack:"total_size"`
-	DatePosted     time.Time `json:"date_posted" msgpack:"date_posted"`
-	Category       string    `json:"category" msgpack:"category"`
-	Groups         []string  `json:"groups" msgpack:"groups"`
-	Files          []NZBFile `json:"logical_files" msgpack:"logical_files"`
-	Downloaded     bool      `json:"downloaded" msgpack:"downloaded"`
-	AddedOn        time.Time `json:"added_on" msgpack:"added_on"`
-	LastActivity   time.Time `json:"last_activity" msgpack:"last_activity"`
-	Status         string    `json:"status" msgpack:"status"`
-	Progress       float64   `json:"progress" msgpack:"progress"`
-	Percentage     float64   `json:"percentage" msgpack:"percentage"`
-	SizeDownloaded int64     `json:"size_downloaded" msgpack:"size_downloaded"`
-	ETA            int64     `json:"eta" msgpack:"eta"`
-	Speed          int64     `json:"speed" msgpack:"speed"`
-	CompletedOn    time.Time `json:"completed_on" msgpack:"completed_on"`
-	IsBad          bool      `json:"is_bad" msgpack:"is_bad"`
-	Storage        string    `json:"storage" msgpack:"storage"`
+	ID             string    `json:"id"                     msgpack:"id"`
+	Name           string    `json:"name"                   msgpack:"name"`
+	Title          string    `json:"title,omitempty"        msgpack:"title,omitempty"`
+	Path           string    `json:"path,omitempty"         msgpack:"path,omitempty"`
+	TotalSize      int64     `json:"total_size"             msgpack:"total_size"`
+	DatePosted     time.Time `json:"date_posted"            msgpack:"date_posted"`
+	Category       string    `json:"category"               msgpack:"category"`
+	Groups         []string  `json:"groups"                 msgpack:"groups"`
+	Files          []NZBFile `json:"logical_files"          msgpack:"logical_files"`
+	Downloaded     bool      `json:"downloaded"             msgpack:"downloaded"`
+	AddedOn        time.Time `json:"added_on"               msgpack:"added_on"`
+	LastActivity   time.Time `json:"last_activity"          msgpack:"last_activity"`
+	Status         string    `json:"status"                 msgpack:"status"`
+	Progress       float64   `json:"progress"               msgpack:"progress"`
+	Percentage     float64   `json:"percentage"             msgpack:"percentage"`
+	SizeDownloaded int64     `json:"size_downloaded"        msgpack:"size_downloaded"`
+	ETA            int64     `json:"eta"                    msgpack:"eta"`
+	Speed          int64     `json:"speed"                  msgpack:"speed"`
+	CompletedOn    time.Time `json:"completed_on"           msgpack:"completed_on"`
+	IsBad          bool      `json:"is_bad"                 msgpack:"is_bad"`
+	Storage        string    `json:"storage"                msgpack:"storage"`
 	FailMessage    string    `json:"fail_message,omitempty" msgpack:"fail_message,omitempty"`
-	Password       string    `json:"password,omitempty" msgpack:"password,omitempty"`
+	Password       string    `json:"password,omitempty"     msgpack:"password,omitempty"`
 }
 
 // NZBFile represents a grouped file with its Segments
 type NZBFile struct {
-	NzbID         string       `json:"nzo_id" msgpack:"nzo_id"`
-	Name          string       `json:"name" msgpack:"name"`
-	InternalPath  string       `json:"internal_path,omitempty" msgpack:"internal_path,omitempty"` // Path within archive (for archived files)
-	Size          int64        `json:"size" msgpack:"size"`
-	StartOffset   int64        `json:"start_offset" msgpack:"start_offset"`
-	Segments      []NZBSegment `json:"segments" msgpack:"segments"`
-	Groups        []string     `json:"groups" msgpack:"groups"`
-	FileType      NZBFileType  `json:"archive_type,omitempty" msgpack:"archive_type,omitempty"` // Type of the file (media, rar, 7z, zip, ignore, unknown)
-	Password      string       `json:"password,omitempty" msgpack:"password,omitempty"`
-	IsDeleted     bool         `json:"is_deleted" msgpack:"is_deleted"`
-	IsStored      bool         `json:"is_stored,omitempty" msgpack:"is_stored,omitempty"`           // True if stored without compression (seekable)
-	SegmentSize   int64        `json:"segment_size,omitempty" msgpack:"segment_size,omitempty"`     // Size of each segment in bytes, if applicable
+	NzbID         string       `json:"nzo_id"                   msgpack:"nzo_id"`
+	Name          string       `json:"name"                     msgpack:"name"`
+	InternalPath  string       `json:"internal_path,omitempty"  msgpack:"internal_path,omitempty"` // Path within archive (for archived files)
+	Size          int64        `json:"size"                     msgpack:"size"`
+	StartOffset   int64        `json:"start_offset"             msgpack:"start_offset"`
+	Segments      []NZBSegment `json:"segments"                 msgpack:"segments"`
+	Groups        []string     `json:"groups"                   msgpack:"groups"`
+	FileType      NZBFileType  `json:"archive_type,omitempty"   msgpack:"archive_type,omitempty"` // Type of the file (media, rar, 7z, zip, ignore, unknown)
+	Password      string       `json:"password,omitempty"       msgpack:"password,omitempty"`
+	IsDeleted     bool         `json:"is_deleted"               msgpack:"is_deleted"`
+	IsStored      bool         `json:"is_stored,omitempty"      msgpack:"is_stored,omitempty"`      // True if stored without compression (seekable)
+	SegmentSize   int64        `json:"segment_size,omitempty"   msgpack:"segment_size,omitempty"`   // Size of each segment in bytes, if applicable
 	EncryptionKey []byte       `json:"encryption_key,omitempty" msgpack:"encryption_key,omitempty"` // AES-256 key for encrypted files (32 bytes)
-	EncryptionIV  []byte       `json:"encryption_iv,omitempty" msgpack:"encryption_iv,omitempty"`   // AES IV for encrypted files (16 bytes, from file extra area)
-	IsEncrypted   bool         `json:"is_encrypted,omitempty" msgpack:"is_encrypted,omitempty"`     // True if file data is encrypted
+	EncryptionIV  []byte       `json:"encryption_iv,omitempty"  msgpack:"encryption_iv,omitempty"`  // AES IV for encrypted files (16 bytes, from file extra area)
+	IsEncrypted   bool         `json:"is_encrypted,omitempty"   msgpack:"is_encrypted,omitempty"`   // True if file data is encrypted
 }
 
 func (nzb *NZB) GetFileByName(name string) *NZBFile {
@@ -102,11 +102,11 @@ func (nzb *NZB) GetFiles() []NZBFile {
 
 // NZBSegment represents a segment with all necessary download info
 type NZBSegment struct {
-	Number           int    `json:"number" msgpack:"number"`
-	MessageID        string `json:"message_id" msgpack:"message_id"`
-	Bytes            int64  `json:"bytes" msgpack:"bytes"`                           // Size of data to read from this segment
-	StartOffset      int64  `json:"start_offset" msgpack:"start_offset"`             // Position in the OUTPUT file where this segment's data goes
-	EndOffset        int64  `json:"end_offset" msgpack:"end_offset"`                 // End position in the OUTPUT file
+	Number           int    `json:"number"             msgpack:"number"`
+	MessageID        string `json:"message_id"         msgpack:"message_id"`
+	Bytes            int64  `json:"bytes"              msgpack:"bytes"`              // Size of data to read from this segment
+	StartOffset      int64  `json:"start_offset"       msgpack:"start_offset"`       // Position in the OUTPUT file where this segment's data goes
+	EndOffset        int64  `json:"end_offset"         msgpack:"end_offset"`         // End position in the OUTPUT file
 	Group            string `json:"group"`                                           // Newsgroup
 	SegmentDataStart int64  `json:"segment_data_start" msgpack:"segment_data_start"` // Offset within the decoded NNTP segment where reading should begin (for sliced reads)
 }

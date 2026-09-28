@@ -102,7 +102,11 @@ func searchMutation(instance arr.Arr, bindings []Binding) (Mutation, error) {
 	}
 }
 
-func (handler *arrHandler) dispatchSearchCommand(ctx context.Context, instance arr.Arr, mutation Mutation) (arr.Command, error) {
+func (handler *arrHandler) dispatchSearchCommand(
+	ctx context.Context,
+	instance arr.Arr,
+	mutation Mutation,
+) (arr.Command, error) {
 	switch mutation.Kind {
 	case MutationEpisodeSearch:
 		return handler.arrs.SearchEpisodes(ctx, instance.Name, mutation.EpisodeIDs)
@@ -115,7 +119,11 @@ func (handler *arrHandler) dispatchSearchCommand(ctx context.Context, instance a
 	}
 }
 
-func (handler *arrHandler) reconcileCommandMutation(ctx context.Context, instance arr.Arr, mutation Mutation) (arr.Command, bool, error) {
+func (handler *arrHandler) reconcileCommandMutation(
+	ctx context.Context,
+	instance arr.Arr,
+	mutation Mutation,
+) (arr.Command, bool, error) {
 	commands, err := handler.arrs.Commands(ctx, instance.Name)
 	if err != nil {
 		return arr.Command{}, false, fmt.Errorf("reconcile Arr command: %w", err)

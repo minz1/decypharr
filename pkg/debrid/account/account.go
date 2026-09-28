@@ -48,7 +48,12 @@ func (a *Account) sliceFileLink(fileLink string) string {
 	return fileLink[0:39]
 }
 
-func (a *Account) GetDownloadLink(ctx context.Context, id string, file *types.File, fetcher LinkFetcher) (types.DownloadLink, error) {
+func (a *Account) GetDownloadLink(
+	ctx context.Context,
+	id string,
+	file *types.File,
+	fetcher LinkFetcher,
+) (types.DownloadLink, error) {
 	if err := ctx.Err(); err != nil {
 		return types.DownloadLink{}, err
 	}

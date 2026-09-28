@@ -26,7 +26,12 @@ type ProgressCallback func(downloaded int64, speed int64)
 // Download downloads a file by fetching segments in parallel and streaming to writer in order.
 // Bytes flow to the writer progressively as in-order segments complete - no waiting for all segments.
 // If progressCallback is provided, it will be called after each segment write with current progress.
-func (u *Usenet) Download(ctx context.Context, nzoID, filename string, writer io.Writer, progressCallback ProgressCallback) error {
+func (u *Usenet) Download(
+	ctx context.Context,
+	nzoID, filename string,
+	writer io.Writer,
+	progressCallback ProgressCallback,
+) error {
 	// get file metadata
 	file, err := u.getFile(nzoID, filename)
 	if err != nil {

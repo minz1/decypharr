@@ -94,7 +94,8 @@ func TestConfigHandlersUseSnapshots(t *testing.T) {
 	before := config.Get()
 	mgr := manager.New()
 	t.Cleanup(func() { _ = mgr.Stop() })
-	mgr.Arr().AddOrUpdate(arr.Arr{Name: "manual", Host: "http://example.test", Token: "token", Source: arr.SourceManual})
+	mgr.Arr().
+		AddOrUpdate(arr.Arr{Name: "manual", Host: "http://example.test", Token: "token", Source: arr.SourceManual})
 	server := &Server{manager: mgr}
 	response := httptest.NewRecorder()
 	server.handleGetConfig(response, httptest.NewRequest(http.MethodGet, "/api/config", nil))
@@ -105,7 +106,14 @@ func TestConfigHandlersUseSnapshots(t *testing.T) {
 		t.Fatal("GET changed the current snapshot")
 	}
 	response = httptest.NewRecorder()
-	server.handleUpdateConfig(response, httptest.NewRequest(http.MethodPost, "/api/config", strings.NewReader(`{"app_url":"https://new.example.test"}`)))
+	server.handleUpdateConfig(
+		response,
+		httptest.NewRequest(
+			http.MethodPost,
+			"/api/config",
+			strings.NewReader(`{"app_url":"https://new.example.test"}`),
+		),
+	)
 	if response.Code != http.StatusOK {
 		t.Fatalf("POST status=%d body=%s", response.Code, response.Body.String())
 	}

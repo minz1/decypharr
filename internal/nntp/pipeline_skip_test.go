@@ -75,7 +75,12 @@ func TestPipelineBodiesSkipPositions(t *testing.T) {
 				}
 				for i, id := range ids {
 					if !destinations[i].Skip {
-						if _, err := fmt.Fprintf(server, "222 0 %s body\r\n%s.\r\n", id, encodeBody(payloads[i])); err != nil {
+						if _, err := fmt.Fprintf(
+							server,
+							"222 0 %s body\r\n%s.\r\n",
+							id,
+							encodeBody(payloads[i]),
+						); err != nil {
 							return err
 						}
 					}
@@ -110,8 +115,12 @@ func TestPipelineBodiesSkipPositions(t *testing.T) {
 
 func TestPipelineBodiesAllSkippedNeedsNoConnection(t *testing.T) {
 	var writer bytes.Buffer
-	results, err := (&Connection{}).PipelineBodies([]string{"<skip@all>"}, []BodyDestination{{Writer: &writer, Skip: true}})
-	if err != nil || len(results) != 1 || results[0].Body != nil || results[0].Bytes != 0 || results[0].Error != nil || writer.Len() != 0 {
+	results, err := (&Connection{}).PipelineBodies(
+		[]string{"<skip@all>"},
+		[]BodyDestination{{Writer: &writer, Skip: true}},
+	)
+	if err != nil || len(results) != 1 || results[0].Body != nil || results[0].Bytes != 0 || results[0].Error != nil ||
+		writer.Len() != 0 {
 		t.Fatalf("all skipped result=%+v, error=%v, writer bytes=%d", results, err, writer.Len())
 	}
 }
@@ -130,7 +139,12 @@ func TestPipelineBodiesSkipPreservesErrorIndices(t *testing.T) {
 				if disconnect {
 					return server.Close()
 				}
-				if _, err := fmt.Fprintf(server, "430 missing\r\n222 0 %s body\r\n%s.\r\n", ids[3], encodeBody(payload)); err != nil {
+				if _, err := fmt.Fprintf(
+					server,
+					"430 missing\r\n222 0 %s body\r\n%s.\r\n",
+					ids[3],
+					encodeBody(payload),
+				); err != nil {
 					return err
 				}
 				return finishPipelineSkipStat(reader, server)

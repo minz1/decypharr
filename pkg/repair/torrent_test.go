@@ -62,7 +62,15 @@ func TestProbeEntryWithRemovedProvider(t *testing.T) {
 			}}
 			service := New(Dependencies{Storage: store, Backend: backend})
 			candidate := &candidate{name: entry.Name, item: &storage.EntryItem{Name: entry.Name, Files: entry.Files}}
-			health := service.probeEntry(t.Context(), "run", candidate, newErrorCache(), nil, RunOptions{UnrestrictLink: tc.unrestrict}, tc.autoRepair)
+			health := service.probeEntry(
+				t.Context(),
+				"run",
+				candidate,
+				newErrorCache(),
+				nil,
+				RunOptions{UnrestrictLink: tc.unrestrict},
+				tc.autoRepair,
+			)
 			want := storage.HealthBroken
 			if tc.replacement {
 				want = storage.HealthHealthy
@@ -70,7 +78,8 @@ func TestProbeEntryWithRemovedProvider(t *testing.T) {
 			if health.Status != want {
 				t.Fatalf("health = %s, want %s", health.Status, want)
 			}
-			if want == storage.HealthBroken && (health.FailureReason != "provider_client_not_found" || health.BrokenCount != 1) {
+			if want == storage.HealthBroken &&
+				(health.FailureReason != "provider_client_not_found" || health.BrokenCount != 1) {
 				t.Fatalf("broken health = %#v", health)
 			}
 			if tc.autoRepair && calls != 1 || !tc.autoRepair && calls != 0 {

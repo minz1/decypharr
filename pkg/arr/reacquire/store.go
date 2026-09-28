@@ -361,7 +361,10 @@ func (r *BindingRepository) scanLocked() ([]Binding, bindingRepositoryState, err
 				Generation: snapshot.Generation,
 				Bindings:   snapshot.Bindings,
 			})
-			stored[snapshot.ArrName] = append(stored[snapshot.ArrName], storedPage{key: key, generation: snapshot.Generation})
+			stored[snapshot.ArrName] = append(
+				stored[snapshot.ArrName],
+				storedPage{key: key, generation: snapshot.Generation},
+			)
 		case strings.HasPrefix(key, bindingDeltaKeyPrefix):
 			var delta bindingDelta
 			if err := json.Unmarshal(value, &delta); err != nil {
@@ -447,7 +450,11 @@ func (r *BindingRepository) scanLocked() ([]Binding, bindingRepositoryState, err
 	bindings := make([]Binding, 0, len(merged))
 	for key, binding := range merged {
 		if owner, exists := state.owners[key]; exists {
-			return nil, bindingRepositoryState{}, fmt.Errorf("managed file belongs to both arr %q and %q", owner, binding.ArrName)
+			return nil, bindingRepositoryState{}, fmt.Errorf(
+				"managed file belongs to both arr %q and %q",
+				owner,
+				binding.ArrName,
+			)
 		}
 		state.owners[key] = binding.ArrName
 		bindings = append(bindings, cloneBinding(binding))
@@ -510,7 +517,11 @@ func (r *BindingRepository) persistDeltaLocked(delta bindingDelta) error {
 
 // dropSupersededRowsLocked removes the pages, deltas, and legacy rows a fresh
 // generation replaces. Failures are not fatal: the loader ignores stale rows.
-func (r *BindingRepository) dropSupersededRowsLocked(state *bindingRepositoryState, arrName string, bindings []Binding) {
+func (r *BindingRepository) dropSupersededRowsLocked(
+	state *bindingRepositoryState,
+	arrName string,
+	bindings []Binding,
+) {
 	for _, page := range state.stored[arrName] {
 		if err := r.store.Delete(page.key); err != nil {
 			continue

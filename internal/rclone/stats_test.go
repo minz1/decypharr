@@ -44,7 +44,8 @@ func TestStatsPreservesCountersAndPartialResults(t *testing.T) {
 	if memory, ok := stats["memory"].(MemoryStats); !ok || memory != (MemoryStats{}) {
 		t.Fatalf("failed memory section = %#v", stats["memory"])
 	}
-	if stats["bandwidth"].(BandwidthStats).BytesPerSecond != 123 || stats["version"].(VersionResponse).Version != "test" {
+	if stats["bandwidth"].(BandwidthStats).BytesPerSecond != 123 ||
+		stats["version"].(VersionResponse).Version != "test" {
 		t.Fatal("successful sections were lost")
 	}
 	mu.Lock()

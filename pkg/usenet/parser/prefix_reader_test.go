@@ -49,7 +49,12 @@ func TestReadFilePrefixReusesObservedBodies(t *testing.T) {
 func TestReadFilePrefixDefersTransformsAndRejectsGaps(t *testing.T) {
 	backend := &fakeArticleBackend{bodySize: 8}
 	p := NewParserWithSource(newArticleBroker(backend, 1, 1<<20), 1, zerolog.Nop())
-	encrypted := &storage.NZBFile{Name: "encrypted.mkv", FileType: storage.NZBFileTypeRar, IsStored: true, IsEncrypted: true}
+	encrypted := &storage.NZBFile{
+		Name:        "encrypted.mkv",
+		FileType:    storage.NZBFileTypeRar,
+		IsStored:    true,
+		IsEncrypted: true,
+	}
 	if _, err := p.ReadFilePrefix(t.Context(), encrypted, 8); !errors.Is(err, ErrPrefixReadUnsupported) {
 		t.Fatalf("encrypted prefix error = %v", err)
 	}

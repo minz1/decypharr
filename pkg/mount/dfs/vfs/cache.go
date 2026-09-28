@@ -356,7 +356,12 @@ func (c *Cache) scanDiskCandidates() diskScanResult {
 	return result
 }
 
-func (c *Cache) evictCandidates(now time.Time, candidates []candidateEntry, totalSize int64, thresholdOverride int64) (int64, int, int, map[string]struct{}) {
+func (c *Cache) evictCandidates(
+	now time.Time,
+	candidates []candidateEntry,
+	totalSize int64,
+	thresholdOverride int64,
+) (int64, int, int, map[string]struct{}) {
 	threshold := c.threshold
 	if thresholdOverride > 0 {
 		threshold = thresholdOverride
@@ -466,7 +471,10 @@ func (c *Cache) reclaimClosedDisk(needed int64) int64 {
 	return freed
 }
 
-func (c *Cache) purgeCandidates(candidates []candidateEntry, totalSize int64) (int64, int, int, int, map[string]struct{}) {
+func (c *Cache) purgeCandidates(
+	candidates []candidateEntry,
+	totalSize int64,
+) (int64, int, int, int, map[string]struct{}) {
 	removed := make(map[string]struct{})
 	removalErrors := 0
 	skippedBusy := 0
@@ -693,8 +701,11 @@ func cacheUsageText(size, maxSize int64) string {
 	return fmt.Sprintf("%s / %s (%.1f%%)", utils.FormatSize(size), utils.FormatSize(maxSize), utilization)
 }
 
-func cleanupActionText(closedIdleItems, forcedClosedItems, removedDiskItems, removedEmptyDirs, removedOrphanMetadata int) string {
-	if closedIdleItems == 0 && forcedClosedItems == 0 && removedDiskItems == 0 && removedEmptyDirs == 0 && removedOrphanMetadata == 0 {
+func cleanupActionText(
+	closedIdleItems, forcedClosedItems, removedDiskItems, removedEmptyDirs, removedOrphanMetadata int,
+) string {
+	if closedIdleItems == 0 && forcedClosedItems == 0 && removedDiskItems == 0 && removedEmptyDirs == 0 &&
+		removedOrphanMetadata == 0 {
 		return "no cleanup needed"
 	}
 	return fmt.Sprintf(
@@ -727,7 +738,13 @@ func (c *Cache) logCleanupSummary(summary cleanupRunSummary) {
 		len(summary.scan.candidates),
 		countBusyCandidates(summary.scan.candidates),
 		summary.scanPasses,
-		cleanupActionText(summary.closedIdleItems, summary.forcedClosedItems, summary.removedDiskItems, summary.scan.emptyDirsRemoved, summary.scan.orphanMetadataRemoved),
+		cleanupActionText(
+			summary.closedIdleItems,
+			summary.forcedClosedItems,
+			summary.removedDiskItems,
+			summary.scan.emptyDirsRemoved,
+			summary.scan.orphanMetadataRemoved,
+		),
 		utils.FormatSize(summary.freedBytes),
 		summary.result,
 	)
@@ -869,7 +886,10 @@ func (c *Cache) PurgeCache() map[string]any {
 	scan := c.scanDiskCandidates()
 	sizeBefore := scan.totalSize
 
-	totalSize, removedCount, removalErrors, skippedBusy, removedKeys := c.purgeCandidates(scan.candidates, scan.totalSize)
+	totalSize, removedCount, removalErrors, skippedBusy, removedKeys := c.purgeCandidates(
+		scan.candidates,
+		scan.totalSize,
+	)
 	scan.errors += removalErrors
 
 	c.totalSize.Store(totalSize)

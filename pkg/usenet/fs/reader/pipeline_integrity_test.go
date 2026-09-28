@@ -20,7 +20,11 @@ import (
 	"github.com/sirrobot01/decypharr/internal/testutil/nntpd"
 )
 
-func newPipelineIntegrityReader(t *testing.T, providers []config.UsenetProvider, segments []SegmentMeta) *StreamingReader {
+func newPipelineIntegrityReader(
+	t *testing.T,
+	providers []config.UsenetProvider,
+	segments []SegmentMeta,
+) *StreamingReader {
 	t.Helper()
 	client, err := nntp.NewClient(&config.Config{Usenet: config.Usenet{Providers: providers}})
 	if err != nil {
@@ -37,7 +41,8 @@ func newPipelineIntegrityReader(t *testing.T, providers []config.UsenetProvider,
 		if err := errors.Join(sr.Close(), client.Close()); err != nil {
 			t.Error(err)
 		}
-		if pool := sr.cache.extentPool.stats(); pool.MemoryInUse != 0 || pool.Caches != 0 || sr.cache.residentN.Load() != 0 {
+		if pool := sr.cache.extentPool.stats(); pool.MemoryInUse != 0 || pool.Caches != 0 ||
+			sr.cache.residentN.Load() != 0 {
 			t.Errorf("cache ownership after close: %+v, resident=%d", pool, sr.cache.residentN.Load())
 		}
 	})
@@ -46,8 +51,21 @@ func newPipelineIntegrityReader(t *testing.T, providers []config.UsenetProvider,
 
 func pipelineIntegritySegments(size, dataStart int) []SegmentMeta {
 	return []SegmentMeta{
-		{MessageID: "<zero@integrity>", Number: 1, Bytes: int64(size), StartOffset: 0, EndOffset: int64(size - 1), SegmentDataStart: int64(dataStart)},
-		{MessageID: "<one@integrity>", Number: 2, Bytes: int64(size), StartOffset: int64(size), EndOffset: int64(2*size - 1)},
+		{
+			MessageID:        "<zero@integrity>",
+			Number:           1,
+			Bytes:            int64(size),
+			StartOffset:      0,
+			EndOffset:        int64(size - 1),
+			SegmentDataStart: int64(dataStart),
+		},
+		{
+			MessageID:   "<one@integrity>",
+			Number:      2,
+			Bytes:       int64(size),
+			StartOffset: int64(size),
+			EndOffset:   int64(2*size - 1),
+		},
 	}
 }
 
@@ -106,13 +124,21 @@ func TestPipelineRetryPreservesAcceptedBuffers(t *testing.T) {
 			backupHost, backupPort := backup.Addr()
 			sr := newPipelineIntegrityReader(t, []config.UsenetProvider{
 				{Host: primaryHost, Port: primaryPort, Backbone: "integrity-primary", Priority: 1, MaxConnections: 1},
-				{Host: backupHost, Port: backupPort, Backbone: "integrity-backup", Priority: 2, Backup: true, MaxConnections: 1},
+				{
+					Host:           backupHost,
+					Port:           backupPort,
+					Backbone:       "integrity-backup",
+					Priority:       2,
+					Backup:         true,
+					MaxConnections: 1,
+				},
 			}, segments)
 			ctx, cancel := context.WithTimeout(sr.ctx, 5*time.Second)
 			defer cancel()
 			fetchErr := sr.fetcher.fetchPrefetchBatch(ctx, []int{0, 1})
 			if mode == "pending-crc-error" {
-				if !errors.Is(fetchErr, nntpyenc.ErrCrcMismatch) || !errors.Is(fetchErr, nntp.ErrAllProvidersFailed) || !strings.Contains(fetchErr.Error(), "article 2/2:") {
+				if !errors.Is(fetchErr, nntpyenc.ErrCrcMismatch) || !errors.Is(fetchErr, nntp.ErrAllProvidersFailed) ||
+					!strings.Contains(fetchErr.Error(), "article 2/2:") {
 					t.Fatalf("pending error lost identity or index: %v", fetchErr)
 				}
 			} else if fetchErr != nil {
@@ -126,7 +152,14 @@ func TestPipelineRetryPreservesAcceptedBuffers(t *testing.T) {
 						t.Errorf("failed slot published: state=%s, n=%d, present=%t", sr.cache.GetState(i), n, present)
 					}
 				} else if !present || n != size || !bytes.Equal(dst, want) {
-					t.Errorf("slot %d: state=%s, n=%d, present=%t, exact=%t", i, sr.cache.GetState(i), n, present, bytes.Equal(dst, want))
+					t.Errorf(
+						"slot %d: state=%s, n=%d, present=%t, exact=%t",
+						i,
+						sr.cache.GetState(i),
+						n,
+						present,
+						bytes.Equal(dst, want),
+					)
 				}
 			}
 			if err := sr.Close(); err != nil {
@@ -139,7 +172,12 @@ func TestPipelineRetryPreservesAcceptedBuffers(t *testing.T) {
 				wantBackup = 2
 			}
 			if primary.CompletedBodies.Load() != 1 || backup.CompletedBodies.Load() != wantBackup {
-				t.Errorf("completed BODYs: primary=%d, backup=%d, want 1/%d", primary.CompletedBodies.Load(), backup.CompletedBodies.Load(), wantBackup)
+				t.Errorf(
+					"completed BODYs: primary=%d, backup=%d, want 1/%d",
+					primary.CompletedBodies.Load(),
+					backup.CompletedBodies.Load(),
+					wantBackup,
+				)
 			}
 		})
 	}
@@ -211,12 +249,24 @@ func TestPipelineAcceptedBufferRemainsPrivateDuringRecovery(t *testing.T) {
 			primaryHost, primaryPort := primary.Addr()
 			sr := newPipelineIntegrityReader(t, []config.UsenetProvider{
 				{Host: primaryHost, Port: primaryPort, Backbone: "staging-primary", Priority: 1, MaxConnections: 1},
-				{Host: "127.0.0.1", Port: listener.Addr().(*net.TCPAddr).Port, Backbone: "staging-backup", Priority: 2, Backup: true, MaxConnections: 1},
+				{
+					Host:           "127.0.0.1",
+					Port:           listener.Addr().(*net.TCPAddr).Port,
+					Backbone:       "staging-backup",
+					Priority:       2,
+					Backup:         true,
+					MaxConnections: 1,
+				},
 			}, segments)
 			ctx, cancel := context.WithTimeout(sr.ctx, 5*time.Second)
 			defer cancel()
 			finished := make(chan error, 1)
-			if !sr.fetcher.submit(ctx, priorityPrefetch, func() { finished <- sr.fetcher.fetchPrefetchBatch(ctx, []int{0, 1}) }, nil) {
+			if !sr.fetcher.submit(
+				ctx,
+				priorityPrefetch,
+				func() { finished <- sr.fetcher.fetchPrefetchBatch(ctx, []int{0, 1}) },
+				nil,
+			) {
 				t.Fatal("submission failed")
 			}
 			select {
@@ -230,8 +280,19 @@ func TestPipelineAcceptedBufferRemainsPrivateDuringRecovery(t *testing.T) {
 				t.Fatal(ctx.Err())
 			}
 			dst := make([]byte, size)
-			if n, present := sr.cache.ReadRangeInto(0, 0, size, dst); n != 0 || present || sr.cache.GetState(0) != StateFetching || sr.cache.residentN.Load() != 0 || sr.cache.extentPool.inUse.Load() != 0 {
-				t.Fatalf("accepted bytes published before batch end: n=%d, present=%t, state=%s", n, present, sr.cache.GetState(0))
+			if n, present := sr.cache.ReadRangeInto(
+				0,
+				0,
+				size,
+				dst,
+			); n != 0 || present || sr.cache.GetState(0) != StateFetching || sr.cache.residentN.Load() != 0 ||
+				sr.cache.extentPool.inUse.Load() != 0 {
+				t.Fatalf(
+					"accepted bytes published before batch end: n=%d, present=%t, state=%s",
+					n,
+					present,
+					sr.cache.GetState(0),
+				)
 			}
 			switch action {
 			case "cancel":
@@ -252,17 +313,30 @@ func TestPipelineAcceptedBufferRemainsPrivateDuringRecovery(t *testing.T) {
 			}
 			if action == "idle" {
 				if fetchErr != nil || sr.cache.residentN.Load() != 0 || sr.cache.extentPool.inUse.Load() != 0 {
-					t.Fatalf("idle staging retained ownership: error=%v, resident=%d", fetchErr, sr.cache.residentN.Load())
+					t.Fatalf(
+						"idle staging retained ownership: error=%v, resident=%d",
+						fetchErr,
+						sr.cache.residentN.Load(),
+					)
 				}
 			} else if action == "disconnect" {
-				if typed, ok := errors.AsType[*nntp.Error](fetchErr); !ok || typed.Type != nntp.ErrorTypeConnection || !errors.Is(fetchErr, nntp.ErrAllProvidersFailed) || !strings.Contains(fetchErr.Error(), "article 2/2:") {
+				if typed, ok := errors.AsType[*nntp.Error](
+					fetchErr,
+				); !ok || typed.Type != nntp.ErrorTypeConnection || !errors.Is(fetchErr, nntp.ErrAllProvidersFailed) ||
+					!strings.Contains(fetchErr.Error(), "article 2/2:") {
 					t.Fatalf("pending connection failure lost identity or index: %v", fetchErr)
 				}
 			} else if !errors.Is(fetchErr, context.Canceled) {
 				t.Fatalf("cancellation identity = %v", fetchErr)
 			}
 			if action == "cancel" || action == "disconnect" {
-				if n, present := sr.cache.ReadRangeInto(0, 0, size, dst); !present || n != size || !bytes.Equal(dst, first) {
+				if n, present := sr.cache.ReadRangeInto(
+					0,
+					0,
+					size,
+					dst,
+				); !present || n != size ||
+					!bytes.Equal(dst, first) {
 					t.Fatalf("accepted peer lost after cancellation: n=%d, present=%t", n, present)
 				}
 			}

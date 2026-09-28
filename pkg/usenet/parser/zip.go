@@ -169,7 +169,11 @@ func (p *ZIPParser) Process(ctx context.Context, group *FileGroup, password stri
 	return buildExtractedArchiveFiles(group, password, storage.NZBFileTypeZip, baseSegments, volumeInfos, extracted)
 }
 
-func (p *ZIPParser) parseArchiveReader(readerAt io.ReaderAt, archiveSize int64, multiPart bool) (*ZIPArchiveInfo, error) {
+func (p *ZIPParser) parseArchiveReader(
+	readerAt io.ReaderAt,
+	archiveSize int64,
+	multiPart bool,
+) (*ZIPArchiveInfo, error) {
 	if archiveSize < 22 {
 		return nil, fmt.Errorf("ZIP archive is too small: %d bytes", archiveSize)
 	}
@@ -193,7 +197,12 @@ func (p *ZIPParser) parseArchiveReader(readerAt io.ReaderAt, archiveSize int64, 
 	dirEnd += tailStart
 	dirStart := dirEnd - centralDirSize
 	if centralDirSize < 0 || dirStart < 0 || dirEnd > archiveSize {
-		return nil, fmt.Errorf("invalid central directory range [%d, %d) for %d-byte archive", dirStart, dirEnd, archiveSize)
+		return nil, fmt.Errorf(
+			"invalid central directory range [%d, %d) for %d-byte archive",
+			dirStart,
+			dirEnd,
+			archiveSize,
+		)
 	}
 	section := io.NewSectionReader(readerAt, dirStart, centralDirSize)
 	files, err := p.parseCentralDirectoryReader(bufio.NewReaderSize(section, 64<<10), totalEntries)
@@ -396,7 +405,12 @@ func (p *ZIPParser) parseCentralDirEntry(r io.Reader) (*ZIPFileEntry, error) {
 			size := int(binary.LittleEndian.Uint16(extra[2:]))
 			extra = extra[4:]
 			if size > len(extra) {
-				return nil, fmt.Errorf("ZIP extra field 0x%04x declares %d bytes with only %d remaining", id, size, len(extra))
+				return nil, fmt.Errorf(
+					"ZIP extra field 0x%04x declares %d bytes with only %d remaining",
+					id,
+					size,
+					len(extra),
+				)
 			}
 			if id == 0x0001 {
 				f := extra[:size]

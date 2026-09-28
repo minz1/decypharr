@@ -13,7 +13,12 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/manager"
 )
 
-func (h *Handler) handlePropfind(current *manager.FileInfo, children []manager.FileInfo, w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handlePropfind(
+	current *manager.FileInfo,
+	children []manager.FileInfo,
+	w http.ResponseWriter,
+	r *http.Request,
+) {
 	cleanPath := path.Clean(r.URL.Path)
 	body := convertToXML(cleanPath, current, children)
 	// Set headers
@@ -84,7 +89,8 @@ func (h *Handler) handleDownload(info *manager.FileInfo, w http.ResponseWriter, 
 
 	if !info.IsRemote() {
 		// Write .Content disposition for local files
-		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename*=UTF-8''%s", utils.PathUnescape(info.Name())))
+		w.Header().
+			Set("Content-Disposition", fmt.Sprintf("attachment; filename*=UTF-8''%s", utils.PathUnescape(info.Name())))
 		_, _ = w.Write(info.Content())
 		return
 	}

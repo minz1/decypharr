@@ -77,7 +77,12 @@ func (h *Handler) IsDisabled() bool {
 	return cfg.DisableWebDav
 }
 
-func (h *Handler) handler(current *manager.FileInfo, children []manager.FileInfo, w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handler(
+	current *manager.FileInfo,
+	children []manager.FileInfo,
+	w http.ResponseWriter,
+	r *http.Request,
+) {
 	switch r.Method {
 	case "HEAD":
 		h.handleHead(current, w, r)
@@ -141,9 +146,11 @@ func (h *Handler) handleTorrentFile(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) commonMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("DAV", "1, 2")
-		w.Header().Set("Allow", "OPTIONS, PROPFIND GET, HEAD, POST, PUT, DELETE, MKCOL, PROPPATCH, COPY, MOVE, LOCK, UNLOCK")
+		w.Header().
+			Set("Allow", "OPTIONS, PROPFIND GET, HEAD, POST, PUT, DELETE, MKCOL, PROPPATCH, COPY, MOVE, LOCK, UNLOCK")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "OPTIONS, GET, PROPFIND, HEAD, POST, PUT, DELETE, MKCOL, PROPPATCH, COPY, MOVE, LOCK, UNLOCK")
+		w.Header().
+			Set("Access-Control-Allow-Methods", "OPTIONS, GET, PROPFIND, HEAD, POST, PUT, DELETE, MKCOL, PROPPATCH, COPY, MOVE, LOCK, UNLOCK")
 		w.Header().Set("Access-Control-Allow-Headers", "Depth, Content-Type, Authorization")
 
 		next.ServeHTTP(w, r)

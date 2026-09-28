@@ -73,7 +73,8 @@ func (q *QBit) handleTorrentsInfo(w http.ResponseWriter, r *http.Request) {
 	hashes := getHashes(ctx)
 
 	// Convert hashes to filter function
-	torrents, err := q.manager.Queue().ListFilter(category, config.ProtocolTorrent, storage.TorrentState(state), hashes, "added_on", false)
+	torrents, err := q.manager.Queue().
+		ListFilter(category, config.ProtocolTorrent, storage.TorrentState(state), hashes, "added_on", false)
 	if err != nil {
 		http.Error(w, "Failed to read the download queue", http.StatusInternalServerError)
 		return
@@ -136,7 +137,16 @@ func (q *QBit) handleTorrentsAdd(w http.ResponseWriter, r *http.Request) {
 			urlList = append(urlList, strings.TrimSpace(u))
 		}
 		for _, url := range urlList {
-			if err := q.addMagnet(ctx, url, _arr, debridName, action, cfg.Notifications.CallbackURL, rmTrackerUrls, cfg.SkipMultiSeason); err != nil {
+			if err := q.addMagnet(
+				ctx,
+				url,
+				_arr,
+				debridName,
+				action,
+				cfg.Notifications.CallbackURL,
+				rmTrackerUrls,
+				cfg.SkipMultiSeason,
+			); err != nil {
 				q.logger.Debug().Msgf("Error adding magnet: %s", err.Error())
 				writeTorrentAddError(w, err)
 				return
@@ -149,7 +159,16 @@ func (q *QBit) handleTorrentsAdd(w http.ResponseWriter, r *http.Request) {
 	if r.MultipartForm != nil && r.MultipartForm.File != nil {
 		if files := r.MultipartForm.File["torrents"]; len(files) > 0 {
 			for _, fileHeader := range files {
-				if err := q.addTorrent(ctx, fileHeader, _arr, debridName, action, cfg.Notifications.CallbackURL, rmTrackerUrls, cfg.SkipMultiSeason); err != nil {
+				if err := q.addTorrent(
+					ctx,
+					fileHeader,
+					_arr,
+					debridName,
+					action,
+					cfg.Notifications.CallbackURL,
+					rmTrackerUrls,
+					cfg.SkipMultiSeason,
+				); err != nil {
 					q.logger.Debug().Err(err).Str("torrent", fileHeader.Filename).Msgf("Error adding torrent")
 					writeTorrentAddError(w, err)
 					return

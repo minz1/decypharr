@@ -115,7 +115,12 @@ func (c *fakeCDN) handler(w http.ResponseWriter, r *http.Request) {
 
 // testTransport builds an httpTransport against the fake CDN with counting
 // getLink/refresh hooks. linkURL is read atomically so refresh can rotate it.
-func testTransport(client *http.Client, linkURL *atomic.Value, refreshes *atomic.Int64, onRefresh func()) *httpTransport {
+func testTransport(
+	client *http.Client,
+	linkURL *atomic.Value,
+	refreshes *atomic.Int64,
+	onRefresh func(),
+) *httpTransport {
 	return &httpTransport{
 		client: client,
 		getLink: func(context.Context) (types.DownloadLink, error) {

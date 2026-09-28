@@ -11,9 +11,10 @@ import (
 	"sort"
 	"strings"
 
+	"uuid"
+
 	"github.com/rs/zerolog"
 	"github.com/sourcegraph/conc/iter"
-	"uuid"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
@@ -160,7 +161,11 @@ var (
 	regularExtPattern    = regexp.MustCompile(`\.[^ "\.]*$`)
 )
 
-func (p *NZBParser) Parse(ctx context.Context, filename string, content []byte) (nzb *storage.NZB, groups map[string]*FileGroup, err error) {
+func (p *NZBParser) Parse(
+	ctx context.Context,
+	filename string,
+	content []byte,
+) (nzb *storage.NZB, groups map[string]*FileGroup, err error) {
 	// Recover from panics to prevent crashes
 	defer func() {
 		if r := recover(); r != nil {
@@ -244,10 +249,18 @@ func (p *NZBParser) probeContentAvailability(
 	if probed == 0 {
 		return fmt.Errorf("no segments available to stat in NZB")
 	}
-	return fmt.Errorf("%w: no sampled content article is available: %w", customerror.UsenetSegmentMissingError, errors.Join(missing...))
+	return fmt.Errorf(
+		"%w: no sampled content article is available: %w",
+		customerror.UsenetSegmentMissingError,
+		errors.Join(missing...),
+	)
 }
 
-func (p *NZBParser) Process(ctx context.Context, nzb *storage.NZB, groups map[string]*FileGroup) (result *storage.NZB, err error) {
+func (p *NZBParser) Process(
+	ctx context.Context,
+	nzb *storage.NZB,
+	groups map[string]*FileGroup,
+) (result *storage.NZB, err error) {
 	// Recover from panics to prevent crashes
 	defer func() {
 		if r := recover(); r != nil {
@@ -294,7 +307,11 @@ func (p *NZBParser) Process(ctx context.Context, nzb *storage.NZB, groups map[st
 		nzb.Files = append(nzb.Files, file)
 	}
 	if skippedFiles > 0 {
-		p.logger.Info().Err(skippedErr).Int("skipped_files", skippedFiles).Str("nzb", nzb.Name).Msg("Some files were skipped due to size or extension restrictions")
+		p.logger.Info().
+			Err(skippedErr).
+			Int("skipped_files", skippedFiles).
+			Str("nzb", nzb.Name).
+			Msg("Some files were skipped due to size or extension restrictions")
 	}
 	if len(nzb.Files) == 0 {
 		if skippedFiles > 0 {
@@ -675,7 +692,11 @@ func (p *NZBParser) isRarFile(filename string) bool {
 		rarVolumePattern.MatchString(filename)
 }
 
-func (p *NZBParser) processFileGroups(ctx context.Context, groups map[string]*FileGroup, password string) ([]storage.NZBFile, error) {
+func (p *NZBParser) processFileGroups(
+	ctx context.Context,
+	groups map[string]*FileGroup,
+	password string,
+) ([]storage.NZBFile, error) {
 	if len(groups) == 0 {
 		return nil, nil
 	}
@@ -780,7 +801,11 @@ func fileGroupOrder(group *FileGroup) int {
 }
 
 // Simplified individual group processing
-func (p *NZBParser) processFileGroup(ctx context.Context, group *FileGroup, password string) ([]*storage.NZBFile, error) {
+func (p *NZBParser) processFileGroup(
+	ctx context.Context,
+	group *FileGroup,
+	password string,
+) ([]*storage.NZBFile, error) {
 	if err := p.enrichGroupWithFileInfo(ctx, group); err != nil {
 		return nil, err
 	}

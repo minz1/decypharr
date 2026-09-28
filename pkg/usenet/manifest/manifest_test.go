@@ -183,7 +183,13 @@ func TestDecodeOrdersUnparsedSubjectsDeterministically(t *testing.T) {
 			subject = fmt.Sprintf("opaque-subject-%03d-without-any-parseable-part", index)
 			opaque = append(opaque, id)
 		}
-		_, _ = fmt.Fprintf(&builder, `<file poster="p" date="%d" subject="%s"><groups><group>g</group></groups><segments><segment bytes="1" number="1">%s</segment></segments></file>`, index+1, subject, id)
+		_, _ = fmt.Fprintf(
+			&builder,
+			`<file poster="p" date="%d" subject="%s"><groups><group>g</group></groups><segments><segment bytes="1" number="1">%s</segment></segments></file>`,
+			index+1,
+			subject,
+			id,
+		)
 	}
 	builder.WriteString(`</nzb>`)
 	source := builder.String()
@@ -206,7 +212,12 @@ func TestDecodeOrdersUnparsedSubjectsDeterministically(t *testing.T) {
 			t.Fatalf("attempt %d: found %d unreadable subjects, want %d", attempt, len(got), len(opaque))
 		}
 		if !reflect.DeepEqual(got, opaque) {
-			t.Fatalf("attempt %d: document order not preserved among tied files:\ngot:  %v\nwant: %v", attempt, got, opaque)
+			t.Fatalf(
+				"attempt %d: document order not preserved among tied files:\ngot:  %v\nwant: %v",
+				attempt,
+				got,
+				opaque,
+			)
 		}
 	}
 }
@@ -364,11 +375,26 @@ func BenchmarkLegacyDecode(b *testing.B) {
 func generatedNZB(fileCount, segmentsPerFile int) string {
 	var builder strings.Builder
 	builder.Grow(fileCount * segmentsPerFile * 80)
-	builder.WriteString(`<?xml version="1.0" encoding="UTF-8"?><nzb xmlns="http://www.newzbin.com/DTD/2003/nzb"><head><meta type="title">Benchmark</meta></head>`)
+	builder.WriteString(
+		`<?xml version="1.0" encoding="UTF-8"?><nzb xmlns="http://www.newzbin.com/DTD/2003/nzb"><head><meta type="title">Benchmark</meta></head>`,
+	)
 	for fileIndex := range fileCount {
-		_, _ = fmt.Fprintf(&builder, `<file poster="benchmark" date="1" subject="&quot;file-%03d.mkv&quot; [%d/%d] yEnc (1/%d)"><groups><group>alt.binaries.test</group></groups><segments>`, fileIndex, fileIndex+1, fileCount, segmentsPerFile)
+		_, _ = fmt.Fprintf(
+			&builder,
+			`<file poster="benchmark" date="1" subject="&quot;file-%03d.mkv&quot; [%d/%d] yEnc (1/%d)"><groups><group>alt.binaries.test</group></groups><segments>`,
+			fileIndex,
+			fileIndex+1,
+			fileCount,
+			segmentsPerFile,
+		)
 		for segmentIndex := range segmentsPerFile {
-			_, _ = fmt.Fprintf(&builder, `<segment bytes="768000" number="%d">file-%03d-part-%05d@example</segment>`, segmentIndex+1, fileIndex, segmentIndex+1)
+			_, _ = fmt.Fprintf(
+				&builder,
+				`<segment bytes="768000" number="%d">file-%03d-part-%05d@example</segment>`,
+				segmentIndex+1,
+				fileIndex,
+				segmentIndex+1,
+			)
 		}
 		builder.WriteString(`</segments></file>`)
 	}

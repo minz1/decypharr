@@ -22,7 +22,9 @@ func TestCheckStatusSelectsAllowedFilesAndMapsLinks(t *testing.T) {
 	config.Reset()
 	config.SetConfigPath(t.TempDir())
 	t.Cleanup(config.Reset)
-	if _, err := config.Update(func(c *config.Config) error { c.AllowedExt = []string{"mkv"}; return nil }); err != nil {
+	if _, err := config.Update(
+		func(c *config.Config) error { c.AllowedExt = []string{"mkv"}; return nil },
+	); err != nil {
 		t.Fatal(err)
 	}
 	var gets, selections atomic.Int32
@@ -42,7 +44,13 @@ func TestCheckStatusSelectsAllowedFilesAndMapsLinks(t *testing.T) {
 				http.Error(w, "unexpected poll", 500)
 				return
 			}
-			fmt.Fprintf(w, `{"id":"torrent-id","filename":"Release","original_filename":"Original","hash":"hash","bytes":3000,"progress":100,"status":%q,"files":[{"id":7,"path":"/Release/first.mkv","bytes":1000,"selected":%d},{"id":8,"path":"/Release/readme.txt","bytes":10,"selected":0},{"id":9,"path":"/Release/second.mkv","bytes":2000,"selected":%d}],"links":["https://example.test/first","https://example.test/second"]}`, status, selected, selected)
+			fmt.Fprintf(
+				w,
+				`{"id":"torrent-id","filename":"Release","original_filename":"Original","hash":"hash","bytes":3000,"progress":100,"status":%q,"files":[{"id":7,"path":"/Release/first.mkv","bytes":1000,"selected":%d},{"id":8,"path":"/Release/readme.txt","bytes":10,"selected":0},{"id":9,"path":"/Release/second.mkv","bytes":2000,"selected":%d}],"links":["https://example.test/first","https://example.test/second"]}`,
+				status,
+				selected,
+				selected,
+			)
 		case "POST /torrents/selectFiles/torrent-id":
 			selections.Add(1)
 			if err := r.ParseForm(); err != nil {
@@ -60,7 +68,15 @@ func TestCheckStatusSelectsAllowedFilesAndMapsLinks(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	provider := &RealDebrid{Host: server.URL, client: request.New(request.WithMaxRetries(0), request.WithHeaders(map[string]string{"Authorization": "Bearer test-key"})), config: config.Debrid{Name: "realdebrid"}, logger: zerolog.Nop()}
+	provider := &RealDebrid{
+		Host: server.URL,
+		client: request.New(
+			request.WithMaxRetries(0),
+			request.WithHeaders(map[string]string{"Authorization": "Bearer test-key"}),
+		),
+		config: config.Debrid{Name: "realdebrid"},
+		logger: zerolog.Nop(),
+	}
 	torrent, err := provider.CheckStatus(&types.Torrent{Id: "torrent-id"})
 	if err != nil {
 		t.Fatal(err)
@@ -68,7 +84,12 @@ func TestCheckStatusSelectsAllowedFilesAndMapsLinks(t *testing.T) {
 	if gets.Load() != 2 || selections.Load() != 1 {
 		t.Fatalf("GETs = %d, selections = %d", gets.Load(), selections.Load())
 	}
-	if torrent.Status != types.TorrentStatusDownloaded || torrent.InfoHash != "hash" || torrent.Debrid != "realdebrid" || torrent.Name != "Release" || torrent.OriginalFilename != "Original" || torrent.Bytes != 3000 || len(torrent.Files) != 2 {
+	if torrent.Status != types.TorrentStatusDownloaded || torrent.InfoHash != "hash" ||
+		torrent.Debrid != "realdebrid" ||
+		torrent.Name != "Release" ||
+		torrent.OriginalFilename != "Original" ||
+		torrent.Bytes != 3000 ||
+		len(torrent.Files) != 2 {
 		t.Fatalf("torrent = %#v", torrent)
 	}
 	for _, want := range []struct {
@@ -76,7 +97,8 @@ func TestCheckStatusSelectsAllowedFilesAndMapsLinks(t *testing.T) {
 		size           int64
 	}{{"first.mkv", "7", "https://example.test/first", 1000}, {"second.mkv", "9", "https://example.test/second", 2000}} {
 		file := torrent.Files[want.name]
-		if file.Id != want.id || file.Name != want.name || file.Link != want.link || file.Size != want.size || file.TorrentId != "torrent-id" {
+		if file.Id != want.id || file.Name != want.name || file.Link != want.link || file.Size != want.size ||
+			file.TorrentId != "torrent-id" {
 			t.Errorf("file = %#v, want %#v", file, want)
 		}
 	}
@@ -86,7 +108,9 @@ func TestCheckStatusFailureAndUncachedContracts(t *testing.T) {
 	config.Reset()
 	config.SetConfigPath(t.TempDir())
 	t.Cleanup(config.Reset)
-	if _, err := config.Update(func(c *config.Config) error { c.AllowedExt = []string{"mkv"}; return nil }); err != nil {
+	if _, err := config.Update(
+		func(c *config.Config) error { c.AllowedExt = []string{"mkv"}; return nil },
+	); err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
@@ -116,7 +140,11 @@ func TestCheckStatusFailureAndUncachedContracts(t *testing.T) {
 						http.Error(w, "unexpected poll", 500)
 						return
 					}
-					fmt.Fprintf(w, `{"status":%q,"filename":"movie","files":[{"id":1,"path":"/movie.mkv","bytes":1000}]}`, tc.state)
+					fmt.Fprintf(
+						w,
+						`{"status":%q,"filename":"movie","files":[{"id":1,"path":"/movie.mkv","bytes":1000}]}`,
+						tc.state,
+					)
 				case "POST /torrents/selectFiles/id":
 					selects.Add(1)
 					if r.FormValue("files") != "1" {
@@ -129,7 +157,11 @@ func TestCheckStatusFailureAndUncachedContracts(t *testing.T) {
 				}
 			}))
 			defer server.Close()
-			provider := &RealDebrid{Host: server.URL, client: request.New(request.WithMaxRetries(0)), logger: zerolog.Nop()}
+			provider := &RealDebrid{
+				Host:   server.URL,
+				client: request.New(request.WithMaxRetries(0)),
+				logger: zerolog.Nop(),
+			}
 			result, err := provider.CheckStatus(&types.Torrent{Id: "id", DownloadUncached: tc.allowUncached})
 			switch {
 			case tc.wantErr != nil:

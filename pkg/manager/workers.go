@@ -114,7 +114,10 @@ func (m *Manager) StartWorker(ctx context.Context) error {
 
 		// Schedule download link refresh job for this debrid
 		if jd, err := utils.ConvertToJobDef(debridConfig.DownloadLinksRefreshInterval); err != nil {
-			m.logger.Error().Err(err).Str("debrid", debridName).Msg("Failed to convert download link refresh interval to job definition")
+			m.logger.Error().
+				Err(err).
+				Str("debrid", debridName).
+				Msg("Failed to convert download link refresh interval to job definition")
 		} else {
 			jobName := debridName + "-download-links"
 			if _, err := m.scheduler.NewJob(jd, gocron.NewTask(func() {
@@ -122,13 +125,18 @@ func (m *Manager) StartWorker(ctx context.Context) error {
 			}), gocron.WithContext(ctx), gocron.WithName(jobName)); err != nil {
 				m.logger.Error().Err(err).Str("debrid", debridName).Msg("Failed to create download link refresh job")
 			} else {
-				m.logger.Debug().Str("debrid", debridName).Msgf("Download link refresh job scheduled for every %s", debridConfig.DownloadLinksRefreshInterval)
+				m.logger.Debug().
+					Str("debrid", debridName).
+					Msgf("Download link refresh job scheduled for every %s", debridConfig.DownloadLinksRefreshInterval)
 			}
 		}
 
 		// Schedule torrent refresh job for this debrid
 		if jd, err := utils.ConvertToJobDef(debridConfig.TorrentsRefreshInterval); err != nil {
-			m.logger.Error().Err(err).Str("debrid", debridName).Msg("Failed to convert torrent refresh interval to job definition")
+			m.logger.Error().
+				Err(err).
+				Str("debrid", debridName).
+				Msg("Failed to convert torrent refresh interval to job definition")
 		} else {
 			jobName := debridName + "-torrents"
 			if _, err := m.scheduler.NewJob(jd, gocron.NewTask(func() {
@@ -142,13 +150,18 @@ func (m *Manager) StartWorker(ctx context.Context) error {
 			}), gocron.WithContext(ctx), gocron.WithName(jobName)); err != nil {
 				m.logger.Error().Err(err).Str("debrid", debridName).Msg("Failed to create torrent refresh job")
 			} else {
-				m.logger.Debug().Str("debrid", debridName).Msgf("Torrent refresh job scheduled for every %s", debridConfig.TorrentsRefreshInterval)
+				m.logger.Debug().
+					Str("debrid", debridName).
+					Msgf("Torrent refresh job scheduled for every %s", debridConfig.TorrentsRefreshInterval)
 			}
 		}
 
 		// Schedule account syncTorrents job for this debrid
 		if jd, err := utils.ConvertToJobDef(config.DefaultAccountSyncInterval); err != nil {
-			m.logger.Error().Err(err).Str("debrid", debridName).Msg("Failed to convert account syncTorrents interval to job definition")
+			m.logger.Error().
+				Err(err).
+				Str("debrid", debridName).
+				Msg("Failed to convert account syncTorrents interval to job definition")
 		} else {
 			jobName := debridName + "-account-syncTorrents"
 			if _, err := m.scheduler.NewJob(jd, gocron.NewTask(func() {
@@ -156,7 +169,9 @@ func (m *Manager) StartWorker(ctx context.Context) error {
 			}), gocron.WithContext(ctx), gocron.WithName(jobName)); err != nil {
 				m.logger.Error().Err(err).Str("debrid", debridName).Msg("Failed to create account syncTorrents job")
 			} else {
-				m.logger.Debug().Str("debrid", debridName).Msgf("Account syncTorrents job scheduled for every %s", config.DefaultAccountSyncInterval)
+				m.logger.Debug().
+					Str("debrid", debridName).
+					Msgf("Account syncTorrents job scheduled for every %s", config.DefaultAccountSyncInterval)
 			}
 		}
 

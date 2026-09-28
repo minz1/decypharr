@@ -37,11 +37,23 @@ func TestAuthenticateDoesNotOverwriteArrWithClientCredentials(t *testing.T) {
 		t.Fatalf("authenticate: %v", err)
 	}
 	if got.Host != existing.Host || got.Token != existing.Token {
-		t.Fatalf("authenticated Arr = host %q token %q, want host %q token %q", got.Host, got.Token, existing.Host, existing.Token)
+		t.Fatalf(
+			"authenticated Arr = host %q token %q, want host %q token %q",
+			got.Host,
+			got.Token,
+			existing.Host,
+			existing.Token,
+		)
 	}
 	stored, _ := q.manager.Arr().Get("whisparr")
 	if stored.Host != existing.Host || stored.Token != existing.Token {
-		t.Fatalf("stored Arr = host %q token %q, want host %q token %q", stored.Host, stored.Token, existing.Host, existing.Token)
+		t.Fatalf(
+			"stored Arr = host %q token %q, want host %q token %q",
+			stored.Host,
+			stored.Token,
+			existing.Host,
+			existing.Token,
+		)
 	}
 }
 
@@ -168,7 +180,11 @@ func TestDecodeAuthHeader(t *testing.T) {
 			defer func() {
 				if r := recover(); r != nil {
 					if tt.mustNotPanic {
-						t.Fatalf("decodeAuthHeader panicked on %q: %v (regression — function must return an error, not panic)", tt.header, r)
+						t.Fatalf(
+							"decodeAuthHeader panicked on %q: %v (regression — function must return an error, not panic)",
+							tt.header,
+							r,
+						)
 					}
 					panic(r)
 				}
