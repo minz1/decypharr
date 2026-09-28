@@ -62,7 +62,7 @@ func TestWindowRetentionDropsWhenOverBudget(t *testing.T) {
 	t.Cleanup(func() { _ = cache.Close() })
 
 	data := make([]byte, segSize)
-	for i := 0; i < segCount; i++ {
+	for i := range segCount {
 		for j := range data {
 			data[j] = byte(i + j)
 		}
@@ -78,7 +78,7 @@ func TestWindowRetentionDropsWhenOverBudget(t *testing.T) {
 		t.Fatalf("newest segment unreadable: n=%d ok=%v", n, ok)
 	}
 	dropped := 0
-	for i := 0; i < segCount; i++ {
+	for i := range segCount {
 		if cache.GetState(i) == StateEmpty {
 			dropped++
 		}
@@ -122,7 +122,7 @@ func TestMemoryEvictionFollowsPlayback(t *testing.T) {
 	t.Cleanup(func() { _ = cache.Close() })
 
 	data := make([]byte, segSize)
-	for i := 0; i < segCount; i++ {
+	for i := range segCount {
 		for j := range data {
 			data[j] = byte(i + j)
 		}

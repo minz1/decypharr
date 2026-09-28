@@ -94,7 +94,7 @@ func (s *Service) do(
 	}
 	// Callers only read status and headers, which stay valid after close, so
 	// the body lifecycle is owned here.
-	defer request.DrainAndCloseResponse(resp)
+	defer resp.Body.Close()
 
 	if decode != nil && resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
 		if err := decode(resp); err != nil && !errors.Is(err, io.EOF) {

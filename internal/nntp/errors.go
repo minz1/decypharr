@@ -49,8 +49,7 @@ func (e *Error) Unwrap() error {
 }
 
 func (e *Error) Is(target error) bool {
-	var t *Error
-	if errors.As(target, &t) {
+	if t, ok := errors.AsType[*Error](target); ok {
 		return e.Type == t.Type
 	}
 	return false
@@ -213,8 +212,7 @@ func classifyNNTPError(code int, message string) *Error {
 }
 
 func IsArticleNotFoundError(err error) bool {
-	var nntpErr *Error
-	if errors.As(err, &nntpErr) {
+	if nntpErr, ok := errors.AsType[*Error](err); ok {
 		return nntpErr.Type == ErrorTypeArticleNotFound
 	}
 	return false
@@ -229,16 +227,14 @@ func IsYencDecodeError(err error) bool {
 }
 
 func IsAuthenticationError(err error) bool {
-	var nntpErr *Error
-	if errors.As(err, &nntpErr) {
+	if nntpErr, ok := errors.AsType[*Error](err); ok {
 		return nntpErr.Type == ErrorTypeAuthentication
 	}
 	return false
 }
 
 func IsRetryableError(err error) bool {
-	var nntpErr *Error
-	if errors.As(err, &nntpErr) {
+	if nntpErr, ok := errors.AsType[*Error](err); ok {
 		return nntpErr.IsRetryable()
 	}
 	return false

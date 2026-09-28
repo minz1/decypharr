@@ -84,7 +84,7 @@ func (c *Client) DoJSON(req *http.Request, out any) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer DrainAndClose(resp.Body)
+	defer resp.Body.Close()
 	if out != nil && resp.StatusCode >= 200 && resp.StatusCode < 300 && resp.ContentLength != 0 {
 		if err := DecodeJSON(resp, out); err != nil && !errors.Is(err, io.EOF) {
 			return resp, err

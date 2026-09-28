@@ -194,7 +194,7 @@ func TestSetMaxOffsetKickOnlyOnAdvance(t *testing.T) {
 	dl.setMaxOffset(1 << 20)
 	drain()
 	kicks := 0
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		dl.setMaxOffset(1 << 20)
 		if drain() {
 			kicks++

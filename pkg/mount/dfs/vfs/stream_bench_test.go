@@ -4,7 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"runtime"
-	"sort"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -265,7 +265,7 @@ func BenchmarkColdReadWakeLatency(b *testing.B) {
 	b.StopTimer()
 	close(offs)
 
-	sort.Slice(wakes, func(i, j int) bool { return wakes[i] < wakes[j] })
+	slices.Sort(wakes)
 	if len(wakes) > 0 {
 		b.ReportMetric(float64(wakes[len(wakes)/2].Nanoseconds()), "wake-p50-ns")
 		b.ReportMetric(float64(wakes[len(wakes)*99/100].Nanoseconds()), "wake-p99-ns")
@@ -286,7 +286,7 @@ func BenchmarkKickWaiters(b *testing.B) {
 
 	errCh := make(chan error, 16)
 	dls.mu.Lock()
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		r := ranges.Range{Pos: 16<<20 + int64(i)*(128<<10), Size: 128 << 10}
 		dls.waiters = append(dls.waiters, waiter{r: r, errChan: errCh})
 	}

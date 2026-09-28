@@ -2,7 +2,7 @@ package buffer
 
 import (
 	"path/filepath"
-	"sort"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -137,11 +137,9 @@ func benchStreamContendedReads(b *testing.B, cfg Config) {
 	var wg sync.WaitGroup
 	const readers = 4
 	lats := make([][]time.Duration, readers)
-	for r := 0; r < readers; r++ {
+	for r := range readers {
 		r := r
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			rbuf := make([]byte, benchChunk)
 			seed := uint64(r)*2654435761 + 12345
 			for {
@@ -151,10 +149,7 @@ func benchStreamContendedReads(b *testing.B, cfg Config) {
 				default:
 				}
 				f := frontier.Load()
-				lo := f - 32<<20
-				if lo < 0 {
-					lo = 0
-				}
+				lo := max(f-32<<20, 0)
 				span := (f - benchChunk - lo) / benchChunk
 				if span <= 0 {
 					continue
@@ -169,7 +164,7 @@ func benchStreamContendedReads(b *testing.B, cfg Config) {
 				}
 				lats[r] = append(lats[r], time.Since(start))
 			}
-		}()
+		})
 	}
 
 	b.ReportAllocs()
@@ -196,7 +191,7 @@ func benchStreamContendedReads(b *testing.B, cfg Config) {
 		all = append(all, l...)
 	}
 	if len(all) > 0 {
-		sort.Slice(all, func(i, j int) bool { return all[i] < all[j] })
+		slices.Sort(all)
 		b.ReportMetric(float64(quantile(all, 0.5).Nanoseconds()), "p50-read-ns")
 		b.ReportMetric(float64(quantile(all, 0.99).Nanoseconds()), "p99-read-ns")
 		b.ReportMetric(float64(all[len(all)-1].Nanoseconds()), "max-read-ns")

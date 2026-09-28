@@ -60,7 +60,7 @@ func TestRemoveMatchesReference(t *testing.T) {
 
 func TestRemoveMatchesReferenceRandomized(t *testing.T) {
 	rng := rand.New(rand.NewSource(42))
-	for i := 0; i < 5000; i++ {
+	for i := range 5000 {
 		var rs Ranges
 		for j := 0; j < rng.Intn(8); j++ {
 			rs.Insert(Range{Pos: int64(rng.Intn(1000)), Size: int64(1 + rng.Intn(100))})
@@ -78,7 +78,7 @@ func TestRemoveMatchesReferenceRandomized(t *testing.T) {
 
 func TestFindAllIntoMatchesFindAll(t *testing.T) {
 	rng := rand.New(rand.NewSource(7))
-	for i := 0; i < 2000; i++ {
+	for i := range 2000 {
 		var rs Ranges
 		for j := 0; j < rng.Intn(6); j++ {
 			rs.Insert(Range{Pos: int64(rng.Intn(1000)), Size: int64(1 + rng.Intn(100))})

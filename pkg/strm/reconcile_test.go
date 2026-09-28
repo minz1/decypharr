@@ -191,7 +191,7 @@ func TestStrmRemoveEntry(t *testing.T) {
 	// Synchronous variant of RemoveEntryAsync's work for the test: reuse the
 	// async trigger and wait for the folder to disappear.
 	m.RemoveEntryAsync(entry)
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
 			return
 		}

@@ -3,12 +3,13 @@ package request
 import (
 	"errors"
 	"fmt"
-	"github.com/sirrobot01/decypharr/internal/config"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/sirrobot01/decypharr/internal/config"
 
 	json "github.com/bytedance/sonic"
 )
@@ -50,7 +51,7 @@ func TestDecodeJSON(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer DrainAndCloseResponse(resp)
+			defer resp.Body.Close()
 
 			var out []record
 			err = DecodeJSON(resp, &out)

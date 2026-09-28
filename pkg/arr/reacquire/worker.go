@@ -8,10 +8,9 @@ import (
 	"slices"
 	"sync/atomic"
 	"time"
+	"uuid"
 
 	"github.com/sirrobot01/decypharr/pkg/arr"
-
-	"github.com/google/uuid"
 )
 
 const (
@@ -81,7 +80,7 @@ func (s *Service) enqueue(request Request, binding Binding) (*Job, error) {
 	}
 	now := s.now()
 	job := Job{
-		ID:         uuid.NewString(),
+		ID:         uuid.New().String(),
 		Status:     StatusQueued,
 		Cause:      request.Cause,
 		Strategy:   request.Strategy,

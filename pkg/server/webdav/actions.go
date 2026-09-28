@@ -106,8 +106,7 @@ func (h *Handler) handleDownload(info *manager.FileInfo, w http.ResponseWriter, 
 }
 
 func (h *Handler) writeStreamError(logKey string, err error, w http.ResponseWriter) {
-	var streamErr *customerror.Error
-	if errors.As(err, &streamErr) {
+	if streamErr, ok := errors.AsType[*customerror.Error](err); ok {
 		if !streamErr.HeadersWritten {
 			http.Error(w, streamErr.Error(), streamErr.StatusCode())
 		}

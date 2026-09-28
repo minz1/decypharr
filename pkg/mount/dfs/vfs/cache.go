@@ -1343,10 +1343,7 @@ func (item *CacheItem) onBufferEvict(off, length int64) {
 	}
 	for {
 		old := item.cache.totalSize.Load()
-		next := old - length
-		if next < 0 {
-			next = 0
-		}
+		next := max(old-length, 0)
 		if item.cache.totalSize.CompareAndSwap(old, next) {
 			break
 		}

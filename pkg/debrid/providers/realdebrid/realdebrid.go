@@ -185,7 +185,7 @@ func (r *RealDebrid) doPostFormWithClient(ctx context.Context, client *request.C
 	if err != nil {
 		return nil, err
 	}
-	defer request.DrainAndClose(resp.Body)
+	defer resp.Body.Close()
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		if result != nil && resp.ContentLength != 0 {
@@ -625,7 +625,7 @@ func (r *RealDebrid) DeleteTorrent(torrentId string) error {
 	if err != nil {
 		return err
 	}
-	defer request.DrainAndClose(resp.Body)
+	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("realdebrid API error: Status: %d", resp.StatusCode)
@@ -702,7 +702,7 @@ func (r *RealDebrid) CheckFile(ctx context.Context, infohash, link string) error
 	if err != nil {
 		return err
 	}
-	defer request.DrainAndClose(resp.Body)
+	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
 		return customerror.HosterUnavailableError
@@ -788,7 +788,7 @@ func (r *RealDebrid) getTorrents(offset int, limit int) (int, []*types.Torrent, 
 	if err != nil {
 		return 0, torrents, err
 	}
-	defer request.DrainAndClose(resp.Body)
+	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNoContent {
 		return 0, torrents, nil
@@ -1026,7 +1026,7 @@ func (r *RealDebrid) deleteDownloadLink(account *account.Account, downloadLink t
 	if err != nil {
 		return err
 	}
-	request.DrainAndClose(resp.Body)
+	_ = resp.Body.Close()
 	return nil
 }
 

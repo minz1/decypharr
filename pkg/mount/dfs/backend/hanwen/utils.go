@@ -9,7 +9,7 @@ import (
 )
 
 var hasherPool = sync.Pool{
-	New: func() interface{} {
+	New: func() any {
 		return fnv.New64a()
 	},
 }

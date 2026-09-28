@@ -183,16 +183,14 @@ func (s *Service) ResolveType(ctx context.Context, name string) Type {
 func (s *Service) CleanupQueues(ctx context.Context) {
 	var wg sync.WaitGroup
 	for _, instance := range s.All() {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_, _, _ = s.cleanups.Do(instance.Name, func() (any, error) {
 				if err := s.CleanupQueue(ctx, instance.Name); err != nil {
 					s.logger.Error().Err(err).Str("arr", instance.Name).Msg("Failed to clean up arr queue")
 				}
 				return nil, nil
 			})
-		}()
+		})
 	}
 	wg.Wait()
 }
