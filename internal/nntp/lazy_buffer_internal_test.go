@@ -40,6 +40,7 @@ func backing(b []byte) uintptr {
 // TestDecodeBodyWithBufferDefersAllocation is the core Round 16 claim: no
 // decoded storage is demanded until the decoder actually has yEnc body input.
 func TestDecodeBodyWithBufferDefersAllocation(t *testing.T) {
+	t.Parallel()
 	payload := testPayload(48 * 1024)
 	for _, tc := range []struct {
 		name      string
@@ -53,6 +54,7 @@ func TestDecodeBodyWithBufferDefersAllocation(t *testing.T) {
 		{"valid yenc body", "222 0 <a@b> body\r\n" + encodeBody(payload) + ".\r\n", 1, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			c, server := newBodyTestConn(t)
 			serveResponses(t, server, tc.response)
 			source := &countingBuffer{}
@@ -85,6 +87,7 @@ func TestDecodeBodyWithBufferDefersAllocation(t *testing.T) {
 // TestDecodeBodyWithBufferMatchesExplicitBuffer pins the demand path to the
 // existing explicit-buffer path on identical fixtures, including errors.
 func TestDecodeBodyWithBufferMatchesExplicitBuffer(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name     string
 		response string
@@ -94,6 +97,7 @@ func TestDecodeBodyWithBufferMatchesExplicitBuffer(t *testing.T) {
 		{"empty", "222 0 <a@b> body\r\n.\r\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			eager, eagerServer := newBodyTestConn(t)
 			serveResponses(t, eagerServer, tc.response)
 			wantData, wantErr := eager.DecodeBodyInto("<a@b>", make([]byte, 0, DecodedBodyCapacity(1<<16)))
@@ -126,6 +130,7 @@ func TestDecodeBodyWithBufferMatchesExplicitBuffer(t *testing.T) {
 // TestDecodeBodyWithBufferNilSourceStaysCallerOwned checks the degenerate
 // case: a source supplying nothing must not hand back pooled scratch.
 func TestDecodeBodyWithBufferNilSourceStaysCallerOwned(t *testing.T) {
+	t.Parallel()
 	payload := testPayload(8 * 1024)
 	c, server := newBodyTestConn(t)
 	serveResponses(t, server, "222 0 <a@b> body\r\n"+encodeBody(payload)+".\r\n")
@@ -147,6 +152,7 @@ func TestDecodeBodyWithBufferNilSourceStaysCallerOwned(t *testing.T) {
 // TestConnectionReusableAfterDemandRead checks the source is cleared so an
 // ordinary pooled read on the same connection is unaffected.
 func TestConnectionReusableAfterDemandRead(t *testing.T) {
+	t.Parallel()
 	first, second := testPayload(4*1024), testPayload(6*1024)
 	c, server := newBodyTestConn(t)
 	serveResponses(t, server,
@@ -172,6 +178,7 @@ func TestConnectionReusableAfterDemandRead(t *testing.T) {
 // TestPipelineBodiesUsesBufferSource covers the batch path, including that a
 // skipped slot never demands storage.
 func TestPipelineBodiesUsesBufferSource(t *testing.T) {
+	t.Parallel()
 	first, second := testPayload(16*1024), testPayload(20*1024)
 	c, server := newBodyTestConn(t)
 	ids := []string{"<one@x>", "<two@x>", "<three@x>"}
@@ -220,6 +227,7 @@ func TestPipelineBodiesUsesBufferSource(t *testing.T) {
 // TestBufferSourceMemoizesAcrossRetries pins the memoization contract: a
 // second demand for the same destination reuses one backing array.
 func TestBufferSourceMemoizesAcrossRetries(t *testing.T) {
+	t.Parallel()
 	source := &countingBuffer{}
 	first := source.DecodeBuffer()
 	second := source.DecodeBuffer()

@@ -72,6 +72,7 @@ func poolEntry(pp *ProviderPool, conn *Connection, idleFor time.Duration) *conne
 }
 
 func TestReaperKeepsAndPingsIdleConnection(t *testing.T) {
+	t.Parallel()
 	pp := newTestPool(4)
 	conn := newPipeConnection(t, true)
 	// Idle past pingInterval (30s) but well inside idleTimeout (5m).
@@ -98,6 +99,7 @@ func TestReaperKeepsAndPingsIdleConnection(t *testing.T) {
 }
 
 func TestReaperSkipsRecentlyActiveConnection(t *testing.T) {
+	t.Parallel()
 	pp := newTestPool(4)
 	conn := newPipeConnection(t, true)
 	entry := poolEntry(pp, conn, 5*time.Second) // fresher than pingInterval
@@ -116,6 +118,7 @@ func TestReaperSkipsRecentlyActiveConnection(t *testing.T) {
 }
 
 func TestReaperClosesExpiredConnection(t *testing.T) {
+	t.Parallel()
 	pp := newTestPool(4)
 	conn := newPipeConnection(t, true)
 	poolEntry(pp, conn, 6*time.Minute) // past idleTimeout
@@ -134,6 +137,7 @@ func TestReaperClosesExpiredConnection(t *testing.T) {
 }
 
 func TestReaperClosesConnectionOnFailedPing(t *testing.T) {
+	t.Parallel()
 	pp := newTestPool(4)
 	conn := newPipeConnection(t, false) // server side closed: ping fails
 	poolEntry(pp, conn, 40*time.Second)
@@ -155,6 +159,7 @@ func TestReaperClosesConnectionOnFailedPing(t *testing.T) {
 }
 
 func TestReaperSkipsPingWhenPoolBusy(t *testing.T) {
+	t.Parallel()
 	pp := newTestPool(1)
 	pp.slots <- struct{}{} // all slots taken: pool fully busy
 	conn := newPipeConnection(t, true)
@@ -174,6 +179,7 @@ func TestReaperSkipsPingWhenPoolBusy(t *testing.T) {
 }
 
 func TestNormalizeTimeoutsPingInterval(t *testing.T) {
+	t.Parallel()
 	got := normalizeTimeouts(TimeoutConfig{})
 	if got.PingInterval != 30*time.Second {
 		t.Errorf("default PingInterval = %v, want 30s", got.PingInterval)
@@ -194,6 +200,7 @@ func TestNormalizeTimeoutsPingInterval(t *testing.T) {
 // batch is discarded unpinged instead of paying the ping budget each, and
 // the idle pool is flushed — the rule checkout already applies.
 func TestReaperFlushesPoolWhenEveryPingTimesOut(t *testing.T) {
+	t.Parallel()
 	pp := newTestPool(16)
 	c := newReaperTestClient(pp)
 
@@ -233,6 +240,7 @@ func TestReaperFlushesPoolWhenEveryPingTimesOut(t *testing.T) {
 // one wedged session, not a dead path. The dead entry goes; the connections
 // that answered stay pooled.
 func TestReaperKeepsPoolWhenSomePingsAnswer(t *testing.T) {
+	t.Parallel()
 	// max 16 so maxPing (max/4) covers the whole set in one batch.
 	pp := newTestPool(16)
 	c := newReaperTestClient(pp)
@@ -268,6 +276,7 @@ func TestReaperKeepsPoolWhenSomePingsAnswer(t *testing.T) {
 }
 
 func TestNormalizeTimeoutsKeepalivePing(t *testing.T) {
+	t.Parallel()
 	got := normalizeTimeouts(TimeoutConfig{})
 	if got.KeepalivePingTimeout != 5*time.Second {
 		t.Errorf("default KeepalivePingTimeout = %v, want 5s", got.KeepalivePingTimeout)

@@ -68,6 +68,7 @@ func decodeResponse(t *testing.T, response string) (yenc.BodyResult, error) {
 }
 
 func TestBodyDecoder_SimpleFile(t *testing.T) {
+	t.Parallel()
 	original := []byte("Hello, this is a test of yEnc decoding!")
 	res, err := decodeResponse(t, bodyResponse(yencEncode(original, "test.txt", 0, 0, 0)))
 	if err != nil {
@@ -86,6 +87,7 @@ func TestBodyDecoder_SimpleFile(t *testing.T) {
 }
 
 func TestBodyDecoder_BinaryData(t *testing.T) {
+	t.Parallel()
 	// Test with all byte values 0-255
 	original := make([]byte, 256)
 	for i := range original {
@@ -108,6 +110,7 @@ func TestBodyDecoder_BinaryData(t *testing.T) {
 }
 
 func TestBodyDecoder_MultipartMeta(t *testing.T) {
+	t.Parallel()
 	original := []byte("Part one data here")
 	res, err := decodeResponse(t, bodyResponse(yencEncode(original, "multipart.bin", 1, 1, int64(len(original)))))
 	if err != nil {
@@ -132,6 +135,7 @@ func TestBodyDecoder_MultipartMeta(t *testing.T) {
 }
 
 func TestBodyDecoder_LargePayload(t *testing.T) {
+	t.Parallel()
 	// Simulate a typical usenet segment (~750KB)
 	original := make([]byte, 750*1024)
 	for i := range original {
@@ -148,6 +152,7 @@ func TestBodyDecoder_LargePayload(t *testing.T) {
 }
 
 func TestBodyDecoder_SmallReads(t *testing.T) {
+	t.Parallel()
 	original := []byte("Testing small source reads with yEnc decoder")
 	response := bodyResponse(yencEncode(original, "small.txt", 0, 0, 0))
 
@@ -163,6 +168,7 @@ func TestBodyDecoder_SmallReads(t *testing.T) {
 }
 
 func TestBodyDecoder_CrcMismatch(t *testing.T) {
+	t.Parallel()
 	original := []byte("payload whose checksum will be broken")
 	encoded := yencEncode(original, "crc.bin", 0, 0, 0)
 	good := fmt.Sprintf("pcrc32=%08x", crc32.ChecksumIEEE(original))
@@ -182,6 +188,7 @@ func TestBodyDecoder_CrcMismatch(t *testing.T) {
 }
 
 func TestBodyDecoder_NonYencBody(t *testing.T) {
+	t.Parallel()
 	res, err := decodeResponse(t, "222 0 <plain@example> body\r\njust some text\r\n.\r\n")
 	if !errors.Is(err, yenc.ErrDataMissing) {
 		t.Fatalf("err = %v, want yenc.ErrDataMissing", err)
@@ -192,6 +199,7 @@ func TestBodyDecoder_NonYencBody(t *testing.T) {
 }
 
 func TestBodyDecoder_ErrorStatus(t *testing.T) {
+	t.Parallel()
 	res, err := decodeResponse(t, "430 no such article\r\n")
 	if err != nil {
 		t.Fatalf("Next failed: %v", err)
@@ -208,6 +216,7 @@ func TestBodyDecoder_ErrorStatus(t *testing.T) {
 }
 
 func TestBodyDecoder_TruncatedStream(t *testing.T) {
+	t.Parallel()
 	response := bodyResponse(yencEncode([]byte("cut short"), "trunc.bin", 0, 0, 0))
 	// Drop the ".\r\n" terminator and the trailer.
 	response = response[:len(response)-20]
@@ -219,6 +228,7 @@ func TestBodyDecoder_TruncatedStream(t *testing.T) {
 }
 
 func TestBodyDecoder_Reuse(t *testing.T) {
+	t.Parallel()
 	first := []byte("first article payload")
 	second := []byte("second article with different content entirely")
 	stream := bodyResponse(yencEncode(first, "one.bin", 1, 1, int64(len(first)))) +
@@ -240,6 +250,7 @@ func TestBodyDecoder_Reuse(t *testing.T) {
 }
 
 func TestBodyDecoder_DataFunc(t *testing.T) {
+	t.Parallel()
 	original := make([]byte, 64*1024)
 	for i := range original {
 		original[i] = byte(i % 253)

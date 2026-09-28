@@ -55,8 +55,10 @@ func finishPipelineSkipStat(reader *bufio.Reader, server net.Conn) error {
 }
 
 func TestPipelineBodiesSkipPositions(t *testing.T) {
+	t.Parallel()
 	for _, mask := range []int{0, 1, 2, 4, 8, 5, 10, 15} {
 		t.Run(fmt.Sprintf("%04b", mask), func(t *testing.T) {
+			t.Parallel()
 			c, server := newBodyTestConn(t)
 			ids := []string{"<zero@skip>", "<one@skip>", "<two@skip>", "<three@skip>"}
 			destinations := make([]BodyDestination, len(ids))
@@ -114,6 +116,7 @@ func TestPipelineBodiesSkipPositions(t *testing.T) {
 }
 
 func TestPipelineBodiesAllSkippedNeedsNoConnection(t *testing.T) {
+	t.Parallel()
 	var writer bytes.Buffer
 	results, err := (&Connection{}).PipelineBodies(
 		[]string{"<skip@all>"},
@@ -126,8 +129,10 @@ func TestPipelineBodiesAllSkippedNeedsNoConnection(t *testing.T) {
 }
 
 func TestPipelineBodiesSkipPreservesErrorIndices(t *testing.T) {
+	t.Parallel()
 	for _, disconnect := range []bool{false, true} {
 		t.Run(fmt.Sprintf("disconnect=%t", disconnect), func(t *testing.T) {
+			t.Parallel()
 			c, server := newBodyTestConn(t)
 			ids := []string{"<zero@skip>", "<one@skip>", "<two@skip>", "<three@skip>"}
 			destinations := []BodyDestination{{Skip: true}, {}, {Skip: true}, {}}

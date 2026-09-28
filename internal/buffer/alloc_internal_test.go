@@ -3,6 +3,7 @@ package buffer
 import "testing"
 
 func TestPoolCountsReusableAllocations(t *testing.T) {
+	t.Parallel()
 	p := newTestPool(t, PoolConfig{})
 	b := newTestBuffer(t, p, Config{MemorySize: 4 * blockSize})
 	data := make([]byte, 4*blockSize)
@@ -32,6 +33,7 @@ func TestPoolCountsReusableAllocations(t *testing.T) {
 }
 
 func TestPoolPressureReleasesReuseBeforeActiveData(t *testing.T) {
+	t.Parallel()
 	p := newTestPool(t, PoolConfig{MemoryBudget: 4 * blockSize})
 	idle := newTestBuffer(t, p, Config{MemorySize: 4 * blockSize})
 	active := newTestBuffer(t, p, Config{MemorySize: 4 * blockSize})
@@ -61,8 +63,10 @@ func TestPoolPressureReleasesReuseBeforeActiveData(t *testing.T) {
 }
 
 func TestAdmissionPreservesActiveDataAtAllocationLimit(t *testing.T) {
+	t.Parallel()
 	for _, reuseOwner := range []string{"idle", "active"} {
 		t.Run(reuseOwner, func(t *testing.T) {
+			t.Parallel()
 			p := newTestPool(t, PoolConfig{MemoryBudget: 4 * blockSize})
 			active := newTestBuffer(t, p, Config{MemorySize: 4 * blockSize})
 			idle := newTestBuffer(t, p, Config{MemorySize: 4 * blockSize})
@@ -104,6 +108,7 @@ func TestAdmissionPreservesActiveDataAtAllocationLimit(t *testing.T) {
 }
 
 func TestPendingBlockRemainsChargedUntilRelease(t *testing.T) {
+	t.Parallel()
 	p := newTestPool(t, PoolConfig{})
 	a := blockAllocator{pool: p}
 	data := a.get()
@@ -120,6 +125,7 @@ func TestPendingBlockRemainsChargedUntilRelease(t *testing.T) {
 }
 
 func TestCloseReleasesRetainedAndDeferredAllocations(t *testing.T) {
+	t.Parallel()
 	p := newTestPool(t, PoolConfig{})
 	b := newTestBuffer(t, p, Config{MemorySize: 16 * blockSize})
 	data := make([]byte, 16*blockSize)
