@@ -30,6 +30,9 @@ type RepairPool struct {
 	wg      sync.WaitGroup
 	quit    chan struct{}
 	once    sync.Once
+	// submitMu orders Submit against Stop: Submit enqueues under RLock, and
+	// Stop's Lock/Unlock barrier guarantees no task lands after its drain.
+	submitMu sync.RWMutex
 }
 
 // repairTask describes one bounded STAT batch.
@@ -140,6 +143,8 @@ func (p *RepairPool) Submit(ctx context.Context, msgIDs []string, done func([]St
 		return errRepairPoolClosed
 	}
 	task := repairTask{ctx: ctx, messageIDs: msgIDs, done: done}
+	p.submitMu.RLock()
+	defer p.submitMu.RUnlock()
 	// quit takes priority: once Stop closes it, refuse new work even if
 	// the buffered tasks channel still has room.
 	select {
@@ -157,17 +162,30 @@ func (p *RepairPool) Submit(ctx context.Context, msgIDs []string, done func([]St
 	}
 }
 
-// Stop signals workers to drain and exit. Blocks until all in-flight
-// chunks finish. Pending tasks still in the channel are abandoned —
-// their done callbacks never fire, which is acceptable because Stop is
-// only called during Client teardown when callers' contexts are already
-// being cancelled upstream.
+// Stop signals workers to exit and blocks until in-flight chunks finish.
+// Tasks still queued are completed with errRepairPoolClosed: BatchStat
+// waits for every accepted chunk's done callback, so abandoning them would
+// hang it forever.
 func (p *RepairPool) Stop() {
 	if p == nil {
 		return
 	}
 	p.once.Do(func() { close(p.quit) })
+	// Barrier: a Submit that raced past the quit check finishes its send
+	// before this returns, and every later Submit sees quit closed.
+	p.submitMu.Lock()
+	p.submitMu.Unlock() //nolint:staticcheck // SA2001: empty critical section is the barrier
 	p.wg.Wait()
+	for {
+		select {
+		case t := <-p.tasks:
+			if t.done != nil {
+				t.done(nil, errRepairPoolClosed)
+			}
+		default:
+			return
+		}
+	}
 }
 
 // worker runs queued STAT batches until the pool stops. Its worker count is the
