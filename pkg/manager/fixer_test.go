@@ -96,3 +96,52 @@ func TestFixTorrentWithRemovedProvider(t *testing.T) {
 		})
 	}
 }
+
+// Every caller that joins an in-flight repair must receive its result; a
+// single-slot result channel used to release only one of them.
+func TestFixTorrentReleasesAllWaiters(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		fixer := NewFixer(&Manager{logger: zerolog.Nop()})
+		entry := &storage.Entry{InfoHash: "hash", Name: "release", Protocol: config.ProtocolTorrent}
+		inFlight := &FixerRequest{InfoHash: entry.InfoHash, done: make(chan struct{})}
+		fixer.inFlightRepairs.Store(entry.InfoHash, inFlight)
+
+		const waiters = 3
+		results := make(chan *FixResult, waiters)
+		for range waiters {
+			go func() {
+				result, err := fixer.FixTorrent(t.Context(), entry, false)
+				if err != nil {
+					t.Errorf("waiter error: %v", err)
+				}
+				results <- result
+			}()
+		}
+		synctest.Wait()
+		inFlight.result = &FixResult{Success: true, NewDebrid: "remaining"}
+		close(inFlight.done)
+		for range waiters {
+			if result := <-results; result == nil || !result.Success {
+				t.Fatalf("waiter result = %#v", result)
+			}
+		}
+	})
+}
+
+func TestResetFailureStateClearsPerDebridFailures(t *testing.T) {
+	t.Parallel()
+	fixer := NewFixer(&Manager{logger: zerolog.Nop()})
+	fixer.failedToReinsert.Store(failureKey("hash", "provider"), struct{}{})
+	fixer.failedToReinsert.Store("hash", struct{}{})
+	fixer.failedToReinsert.Store(failureKey("other", "provider"), struct{}{})
+
+	fixer.ResetFailureState("hash")
+
+	if fixer.IsFailedToReinsert("hash", "provider") {
+		t.Fatal("per-debrid failure survived a reset")
+	}
+	if !fixer.IsFailedToReinsert("other", "provider") {
+		t.Fatal("reset cleared another torrent's failure")
+	}
+}
