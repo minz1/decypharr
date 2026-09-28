@@ -20,6 +20,8 @@ import (
 // SegmentCache publishes verified segments as immutable RAM extents or as
 // ranges in a sparse rewind file.
 type SegmentCache struct {
+	pools     *Pools
+	ownsPools bool
 	// Segment metadata
 	segments   []SegmentMeta
 	segCount   int
@@ -136,14 +138,31 @@ func NewSegmentCache(
 		bufCfg.TotalSize = totalSize
 		bufCfg.ImmutableDisk = true
 	}
+	pools := config.Pools
+	ownsPools := pools == nil
+	if ownsPools {
+		pools = NewPools(memSize)
+	}
+	pools.mu.RLock()
+	defer pools.mu.RUnlock()
+	if pools.closed {
+		cancel()
+		if diskPath != "" {
+			_ = os.RemoveAll(diskPath)
+		}
+		return nil, buffer.ErrClosed
+	}
 	var buf *buffer.Buffer
 	if !memoryMode {
 		var err error
-		buf, err = usenetBufferPool().NewBuffer(bufCfg)
+		buf, err = pools.buffers.NewBuffer(bufCfg)
 		if err != nil {
 			cancel()
 			if diskPath != "" {
 				_ = os.RemoveAll(diskPath)
+			}
+			if ownsPools {
+				_ = pools.buffers.Close()
 			}
 			return nil, fmt.Errorf("create buffer: %w", err)
 		}
@@ -155,6 +174,8 @@ func NewSegmentCache(
 	}
 
 	sc := &SegmentCache{
+		pools:        pools,
+		ownsPools:    ownsPools,
 		segments:     segments,
 		segCount:     segCount,
 		segOffsets:   offsets,
@@ -176,7 +197,7 @@ func NewSegmentCache(
 		stats:        stats,
 	}
 	if sc.memoryMode {
-		sc.extentPool = usenetExtentPool()
+		sc.extentPool = pools.extents
 		sc.extentPool.register(sc)
 	}
 
@@ -331,11 +352,17 @@ type memorySegmentWriter struct {
 	cache     *SegmentCache
 	segIdx    int
 	resident  *residentSegment
+	// decodeBuf memoizes the allocation so provider retries decode into the
+	// same backing array the baseline created once per destination.
+	decodeBuf []byte
 }
 
 func (w *memorySegmentWriter) DecodeBuffer() []byte {
-	size := w.dataStart + w.maxBytes
-	return make([]byte, 0, nntp.DecodedBodyCapacity(size))
+	if w.decodeBuf == nil {
+		size := w.dataStart + w.maxBytes
+		w.decodeBuf = make([]byte, 0, nntp.DecodedBodyCapacity(size))
+	}
+	return w.decodeBuf
 }
 
 func (w *memorySegmentWriter) Adopt(decoded []byte) (int64, error) {
@@ -353,6 +380,7 @@ func (w *memorySegmentWriter) Adopt(decoded []byte) (int64, error) {
 		data:   decoded[w.dataStart:end:end],
 		charge: int64(cap(decoded)),
 	}
+	w.decodeBuf = nil
 	return end - w.dataStart, nil
 }
 
@@ -365,14 +393,14 @@ func (w *memorySegmentWriter) Write(p []byte) (int, error) {
 	return int(n), nil
 }
 
-func (w *memorySegmentWriter) Discard() { w.resident = nil }
+func (w *memorySegmentWriter) Discard() { w.resident, w.decodeBuf = nil, nil }
 
 func (w *memorySegmentWriter) Finalize() {
 	if w.cache == nil || w.resident == nil || len(w.resident.data) == 0 {
 		return
 	}
 	w.cache.publishResident(w.segIdx, w.resident)
-	w.resident = nil
+	w.resident, w.decodeBuf = nil, nil
 }
 
 func (sc *SegmentCache) publishResident(segIdx int, resident *residentSegment) {
@@ -970,6 +998,9 @@ func (sc *SegmentCache) Close() error {
 	}
 	if sc.diskPath != "" {
 		closeErr = errors.Join(closeErr, os.RemoveAll(sc.diskPath))
+	}
+	if sc.ownsPools {
+		closeErr = errors.Join(closeErr, sc.pools.Close())
 	}
 	return closeErr
 }

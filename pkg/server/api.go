@@ -1,9 +1,9 @@
 package server
 
 import (
+	"bytes"
 	"fmt"
 	"io"
-	"mime/multipart"
 	"net/http"
 	"reflect"
 	"sort"
@@ -15,12 +15,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/utils"
-	"github.com/sirrobot01/decypharr/pkg/arr"
-	"github.com/sirrobot01/decypharr/pkg/manager"
 	"github.com/sirrobot01/decypharr/pkg/repair"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 	"github.com/sirrobot01/decypharr/pkg/version"
-	"github.com/sourcegraph/conc/iter"
 )
 
 type mountCacheCleaner interface {
@@ -33,192 +30,6 @@ type mountCachePurger interface {
 
 func (s *Server) handleGetArrs(w http.ResponseWriter, r *http.Request) {
 	utils.JSONResponse(w, s.manager.Arr().All(), http.StatusOK)
-}
-
-func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	if err := r.ParseMultipartForm(32 << 20); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	arrName := r.FormValue("arr")
-	action := r.FormValue("action")
-	debridName := r.FormValue("debrid")
-	callbackUrl := r.FormValue("callbackUrl")
-	downloadFolder := r.FormValue("downloadFolder")
-	if downloadFolder == "" {
-		downloadFolder = config.Get().DownloadFolder
-	}
-	skipMultiSeason := r.FormValue("skipMultiSeason") == "true"
-
-	dlUncached := r.FormValue("downloadUncached") == "true"
-	var downloadUncached *bool
-	if dlUncached {
-		downloadUncached = &dlUncached
-	}
-	rmTrackerUrls := r.FormValue("rmTrackerUrls") == "true"
-
-	// Check config setting - if always remove tracker URLs is enabled, force it to true
-	cfg := config.Get()
-	if cfg.AlwaysRmTrackerUrls {
-		rmTrackerUrls = true
-	}
-
-	// A category with no configured Arr is a throwaway that only routes the
-	// download.
-	instance, known := s.manager.Arr().Get(arrName)
-	if !known {
-		instance = arr.Arr{Name: arrName}
-	}
-
-	// Unified task type for all content types
-	type addTask struct {
-		taskType   string // "torrent", "nzbURL", "nzbFile"
-		magnet     *utils.Magnet
-		nzbContent []byte
-		name       string
-		source     string // for error messages
-	}
-
-	var tasks []addTask
-
-	// Collect torrent URLs
-	if urls := r.FormValue("urls"); urls != "" {
-		for u := range strings.SplitSeq(urls, "\n") {
-			if trimmed := strings.TrimSpace(u); trimmed != "" {
-				magnet, err := utils.GetMagnetFromUrl(trimmed, rmTrackerUrls)
-				if err != nil {
-					tasks = append(tasks, addTask{
-						taskType: "error",
-						source:   fmt.Sprintf("Failed to parse URL %s: %v", trimmed, err),
-					})
-					continue
-				}
-				tasks = append(tasks, addTask{taskType: "torrent", magnet: magnet, source: fmt.Sprintf("URL %s", trimmed)})
-			}
-		}
-	}
-
-	// Collect torrent files
-	if files := r.MultipartForm.File["files"]; len(files) > 0 {
-		for _, fileHeader := range files {
-			file, err := fileHeader.Open()
-			if err != nil {
-				tasks = append(tasks, addTask{
-					taskType: "error",
-					source:   fmt.Sprintf("Failed to open file %s: %v", fileHeader.Filename, err),
-				})
-				continue
-			}
-
-			magnet, err := utils.GetMagnetFromFile(file, fileHeader.Filename, rmTrackerUrls)
-			if err != nil {
-				tasks = append(tasks, addTask{
-					taskType: "error",
-					source:   fmt.Sprintf("Failed to parse torrent file %s: %v", fileHeader.Filename, err),
-				})
-				continue
-			}
-			tasks = append(tasks, addTask{taskType: "torrent", magnet: magnet, source: fmt.Sprintf("File %s", fileHeader.Filename), name: fileHeader.Filename})
-		}
-	}
-
-	// Collect NZB URLs
-	if nzbURLs := r.FormValue("nzbURLs"); nzbURLs != "" {
-		for u := range strings.SplitSeq(nzbURLs, "\n") {
-			if trimmed := strings.TrimSpace(u); trimmed != "" {
-				filename, content, err := utils.DownloadFile(trimmed, utils.WithHeader("User-Agent", s.nzbUserAgent))
-				if err != nil {
-					tasks = append(tasks, addTask{
-						taskType: "error",
-						source:   fmt.Sprintf("Failed to fetch NZB from URL %s: %v", trimmed, err),
-					})
-					continue
-				}
-				tasks = append(tasks, addTask{taskType: "nzb", nzbContent: content, name: filename, source: fmt.Sprintf("NZB URL %s", trimmed)})
-			}
-		}
-	}
-
-	// Collect NZB files
-	if nzbFiles := r.MultipartForm.File["nzbFiles"]; len(nzbFiles) > 0 {
-		for _, fileHeader := range nzbFiles {
-			content, err := getNZBContentFromFile(fileHeader)
-			if err != nil {
-				tasks = append(tasks, addTask{
-					taskType: "error",
-					source:   fmt.Sprintf("Failed to read NZB file %s: %v", fileHeader.Filename, err),
-				})
-				continue
-			}
-			tasks = append(tasks, addTask{taskType: "nzb", nzbContent: content, source: fmt.Sprintf("NZB File %s", fileHeader.Filename), name: fileHeader.Filename})
-		}
-	}
-
-	// Parse all tasks in parallel using iter.Map
-	mapper := iter.Mapper[addTask, *manager.ImportRequest]{
-		MaxGoroutines: min(len(tasks), 10),
-	}
-
-	results := mapper.Map(tasks, func(task *addTask) *manager.ImportRequest {
-		switch task.taskType {
-		case "error":
-			// Task already failed during collection phase
-			return &manager.ImportRequest{
-				Status: "error",
-				Error:  fmt.Sprintf("Failed to import torrent %s: %v", task.name, task.magnet),
-			}
-
-		case "torrent":
-			importReq := manager.NewTorrentRequest(debridName, downloadFolder, task.magnet, instance, config.DownloadAction(action), downloadUncached, callbackUrl, manager.ImportTypeAPI, skipMultiSeason)
-			if err := s.manager.AddNewTorrent(ctx, importReq); err != nil {
-				s.logger.Error().Err(err).Str("source", task.source).Msg("Failed to add torrent")
-				importReq.Error = err.Error()
-				importReq.Status = "error"
-			}
-			return importReq
-
-		case "nzb":
-			importReq := manager.NewNZBRequest(task.name, downloadFolder, task.nzbContent, instance, config.DownloadAction(action), callbackUrl, manager.ImportTypeAPI, skipMultiSeason)
-			nzoID, err := s.manager.AddNewNZB(ctx, importReq)
-			if err != nil {
-				s.logger.Error().Err(err).Str("source", task.source).Msg("Failed to add NZB")
-				importReq.Error = err.Error()
-				importReq.Status = "error"
-			}
-			importReq.Id = nzoID
-			return importReq
-
-		default:
-			return nil
-		}
-	})
-
-	// Filter out nil results
-	filtered := make([]*manager.ImportRequest, 0, len(results))
-	for _, r := range results {
-		if r != nil {
-			filtered = append(filtered, r)
-		}
-	}
-
-	utils.JSONResponse(w, filtered, http.StatusOK)
-}
-
-func getNZBContentFromFile(fileHeader *multipart.FileHeader) ([]byte, error) {
-	file, err := fileHeader.Open()
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
-	// Read NZB content
-	nzbContent, err := io.ReadAll(file)
-	if err != nil {
-		return nil, err
-	}
-	return nzbContent, nil
 }
 
 func (s *Server) handleGetVersion(w http.ResponseWriter, r *http.Request) {
@@ -287,7 +98,6 @@ func (s *Server) handlePurgeMountCache(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetTorrents(w http.ResponseWriter, r *http.Request) {
-	// Parse query parameters for server-side filtering, sorting, and pagination
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	if page < 1 {
 		page = 1
@@ -311,16 +121,18 @@ func (s *Server) handleGetTorrents(w http.ResponseWriter, r *http.Request) {
 		sortOrder = "desc"
 	}
 
-	// GetReader all torrents
-	allTorrents := s.manager.Queue().ListFilter("", config.ProtocolAll, "", nil, "added_on", false)
+	allTorrents, err := s.manager.Queue().ListFilter("", config.ProtocolAll, "", nil, "added_on", false)
+	if err != nil {
+		s.logger.Error().Err(err).Msg("Failed to read the download queue")
+		s.sendJSONError(w, "Failed to read the download queue", http.StatusInternalServerError)
+		return
+	}
 	for _, t := range allTorrents {
 		t.Sanitize()
 	}
 
-	// Apply filters
 	filteredTorrents := make([]*storage.Entry, 0)
 	for _, t := range allTorrents {
-		// Search filter - search in name and hash
 		if search != "" {
 			searchIn := strings.ToLower(t.Name + " " + t.InfoHash)
 			if !strings.Contains(searchIn, search) {
@@ -328,12 +140,10 @@ func (s *Server) handleGetTorrents(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Category filter
 		if category != "" && t.Category != category {
 			continue
 		}
 
-		// State filter
 		if state != "" && t.State != storage.TorrentState(state) {
 			continue
 		}
@@ -341,15 +151,12 @@ func (s *Server) handleGetTorrents(w http.ResponseWriter, r *http.Request) {
 		filteredTorrents = append(filteredTorrents, t)
 	}
 
-	// Apply sorting
 	sortQueuedTorrents(filteredTorrents, sortBy, sortOrder)
 
-	// Calculate pagination
 	total := len(filteredTorrents)
 	totalPages := (total + limit - 1) / limit
 	offset := (page - 1) * limit
 
-	// Apply pagination
 	var paginatedTorrents []*storage.Entry
 	if offset < total {
 		end := min(offset+limit, total)
@@ -358,7 +165,6 @@ func (s *Server) handleGetTorrents(w http.ResponseWriter, r *http.Request) {
 		paginatedTorrents = []*storage.Entry{}
 	}
 
-	// GetReader unique categories
 	categorySet := make(map[string]bool)
 	for _, t := range allTorrents {
 		if t.Category != "" {
@@ -383,7 +189,6 @@ func (s *Server) handleGetTorrents(w http.ResponseWriter, r *http.Request) {
 	}, http.StatusOK)
 }
 
-// sortQueuedTorrents sorts torrents based on the given field and order
 func sortQueuedTorrents(torrents []*storage.Entry, sortBy, sortOrder string) {
 	if len(torrents) == 0 {
 		return
@@ -478,18 +283,19 @@ func (s *Server) handleDeleteTorrents(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	arrStorage := s.manager.Arr()
-	cfg := config.Get()
+	cfg := *config.Get()
 	cfg.Arrs = arrStorage.SyncToConfig()
 
 	// Create response with API token info
 	type ConfigResponse struct {
 		*config.Config
+		SessionSecret string `json:"session_secret,omitempty"`
 		APIToken      string `json:"api_token,omitempty"`
 		AuthUsername  string `json:"auth_username,omitempty"`
 		AuthTokenOnly bool   `json:"auth_token_only"`
 	}
 
-	response := &ConfigResponse{Config: cfg}
+	response := &ConfigResponse{Config: &cfg}
 
 	// AddOrUpdate API token and auth information
 	auth := cfg.GetAuth()
@@ -505,92 +311,70 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
-	// Decode the incoming update over the live config so API clients can send
-	// partial documents without clearing every omitted field.
-	currentConfig := config.Get()
-	newConfig, err := mergeConfigUpdate(currentConfig, r.Body)
+	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		s.logger.Error().Err(err).Msg("Failed to decode config update request")
-		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-
-	// Basic validation
-	if newConfig.BindAddress == "" {
-		newConfig.BindAddress = "0.0.0.0"
-	}
-	if newConfig.Port == "" {
-		newConfig.Port = "8282"
-	}
-	newConfig.MigrateVirtualFolders()
-	if err := newConfig.ValidateVirtualFolders(); err != nil {
-		http.Error(w, "Invalid virtual folders: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	// Preserve fields that shouldn't be overwritten by frontend
-	newConfig.Auth = currentConfig.GetAuth()
-	// The frontend config form doesn't include use_auth or enable_webdav_auth,
-	// so they would be zero-valued (false) in the decoded payload. Preserve
-	// them from the live config so auth isn't silently disabled on every save.
-	newConfig.UseAuth = currentConfig.UseAuth
-	newConfig.EnableWebdavAuth = currentConfig.EnableWebdavAuth
-	// The frontend never sends the STRM signing secret; a save must not
-	// rotate it (rotation would invalidate every written .strm file).
-	if newConfig.Strm.Secret == "" {
-		newConfig.Strm.Secret = currentConfig.Strm.Secret
-	}
-
-	// Filter out empty or incomplete arrs
-	validArrs := make([]config.Arr, 0, len(newConfig.Arrs))
-	for _, a := range newConfig.Arrs {
-		if a.Name != "" && a.Host != "" && a.Token != "" {
-			validArrs = append(validArrs, a)
+	var before config.Config
+	invalid := false
+	updated, err := config.Update(func(current *config.Config) error {
+		next, err := mergeConfigUpdate(current, bytes.NewReader(body))
+		if err != nil {
+			invalid = true
+			return fmt.Errorf("invalid request body: %w", err)
 		}
-	}
-	newConfig.Arrs = validArrs
-
-	// Sync arr storage with the new configuration
-	s.manager.Arr().SyncFromConfig(newConfig.Arrs)
-
-	// Save the updated config. This also applies defaults to newConfig, so the
-	// restart comparison below sees a fully-normalized config on both sides.
-	if err := newConfig.Save(); err != nil {
-		s.logger.Error().Err(err).Msg("Failed to save config")
-		http.Error(w, "Error saving config: "+err.Error(), http.StatusInternalServerError)
+		next.MigrateVirtualFolders()
+		if err := next.ValidateVirtualFolders(); err != nil {
+			invalid = true
+			return fmt.Errorf("invalid virtual folders: %w", err)
+		}
+		next.Auth = current.Auth
+		next.SessionSecret = current.SessionSecret
+		next.UseAuth = current.UseAuth
+		next.EnableWebdavAuth = current.EnableWebdavAuth
+		if next.Strm.Secret == "" {
+			next.Strm.Secret = current.Strm.Secret
+		}
+		validArrs := make([]config.Arr, 0, len(next.Arrs))
+		for _, a := range next.Arrs {
+			if a.Name != "" && a.Host != "" && a.Token != "" {
+				validArrs = append(validArrs, a)
+			}
+		}
+		next.Arrs = validArrs
+		before = *current
+		*current = next
+		return nil
+	})
+	if err != nil {
+		status := http.StatusInternalServerError
+		if invalid {
+			status = http.StatusBadRequest
+		}
+		s.logger.Error().Err(err).Msg("Failed to update config")
+		http.Error(w, err.Error(), status)
 		return
 	}
-
-	// A base-URL or STRM settings change moves the desired content of every
-	// .strm file; resweep after the new config is live. Save has already
-	// normalized newConfig, so the comparison sees defaults on both sides.
-	strmChanged := currentConfig.AppURL != newConfig.AppURL ||
-		!reflect.DeepEqual(currentConfig.Strm, newConfig.Strm)
-
-	// Only restart when a field that needs it actually changed (HTTP bind,
-	// debrid/usenet clients, or the mount). For everything else, apply the new
-	// config live so users aren't disrupted by a full restart on every save.
-	restarted := config.Get().RequiresRestart(&newConfig)
+	s.manager.Arr().SyncFromConfig(updated.Arrs)
+	restarted := before.RequiresRestart(updated)
 	if restarted {
 		go s.Restart()
 	} else {
-		config.Get().ApplyRuntime(&newConfig)
-		if strmChanged {
+		if before.AppURL != updated.AppURL || !reflect.DeepEqual(before.Strm, updated.Strm) {
 			s.manager.Strm().SweepAsync("config_change")
 		}
-		if err := s.manager.ApplyVirtualFolders(newConfig.VirtualFolders); err != nil {
-			s.logger.Error().Err(err).Msg("Failed to apply virtual folders after live config update")
+		if err := s.manager.ApplyVirtualFolders(updated.VirtualFolders); err != nil {
+			s.logger.Error().Err(err).Msg("Failed to apply virtual folders")
 			http.Error(w, "Configuration was saved, but virtual folders could not be applied: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		// Reschedule/reapply the repair sweep if its settings changed.
 		if svc := s.manager.Repair(); svc != nil {
 			if err := svc.ApplyConfig(); err != nil {
-				s.logger.Warn().Err(err).Msg("Failed to apply repair config after live update")
+				s.logger.Warn().Err(err).Msg("Failed to apply repair config")
 			}
 		}
 	}
-
 	utils.JSONResponse(w, map[string]any{"status": "success", "restarted": restarted}, http.StatusOK)
 }
 
@@ -599,19 +383,14 @@ func mergeConfigUpdate(current *config.Config, update io.Reader) (config.Config,
 		return config.Config{}, fmt.Errorf("current config is unavailable")
 	}
 
-	snapshot, err := json.Marshal(current)
+	merged, err := current.Clone()
 	if err != nil {
 		return config.Config{}, fmt.Errorf("copy current config: %w", err)
 	}
-
-	var merged config.Config
-	if err := json.Unmarshal(snapshot, &merged); err != nil {
-		return config.Config{}, fmt.Errorf("copy current config: %w", err)
-	}
-	if err := json.ConfigDefault.NewDecoder(update).Decode(&merged); err != nil {
+	if err := json.ConfigDefault.NewDecoder(update).Decode(merged); err != nil {
 		return config.Config{}, err
 	}
-	return merged, nil
+	return *merged, nil
 }
 
 func (s *Server) handlePreviewVirtualFolder(w http.ResponseWriter, r *http.Request) {
@@ -686,9 +465,8 @@ func (s *Server) handleUpdateRepairConfig(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	cfg := config.Get()
-	cfg.Repair = req
-	if err := cfg.Save(); err != nil {
+	cfg, err := config.Update(func(next *config.Config) error { next.Repair = req; return nil })
+	if err != nil {
 		s.logger.Error().Err(err).Msg("Failed to save repair config")
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -1071,104 +849,56 @@ func (s *Server) handleUpdateAuth(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-
-	cfg := config.Get()
-	auth := cfg.GetAuth()
-	if auth == nil {
-		auth = &config.Auth{}
+	disable := !req.TokenOnly && req.Username == "" && req.Password == ""
+	if !req.TokenOnly && !disable {
+		if req.Username == "" {
+			http.Error(w, "Username is required", http.StatusBadRequest)
+			return
+		}
+		if req.Password == "" {
+			http.Error(w, "Password is required", http.StatusBadRequest)
+			return
+		}
+		if req.Password != req.ConfirmPassword {
+			http.Error(w, "Passwords do not match", http.StatusBadRequest)
+			return
+		}
 	}
-
-	// Token-only: the API token becomes the sole credential. Any stored
-	// username and password are dropped so nothing else can authenticate.
+	cfg, err := config.Update(func(next *config.Config) error {
+		if !req.TokenOnly && !disable {
+			return next.SetCredentials(req.Username, req.Password)
+		}
+		auth := next.GetAuth()
+		if auth == nil {
+			auth = &config.Auth{}
+		}
+		next.UseAuth = !disable
+		auth.Username, auth.Password = "", ""
+		auth.TokenOnly = req.TokenOnly
+		if disable {
+			auth.APIToken = ""
+		}
+		return next.SaveAuth(auth)
+	})
+	if err != nil {
+		s.logger.Error().Err(err).Msg("Failed to update authentication")
+		http.Error(w, "Failed to save authentication settings", http.StatusInternalServerError)
+		return
+	}
+	message := "Authentication settings updated successfully"
+	if disable {
+		message = "Authentication disabled successfully"
+	}
+	response := map[string]string{"message": message}
 	if req.TokenOnly {
-		cfg.UseAuth = true
-		auth.Username = ""
-		auth.Password = ""
-		auth.TokenOnly = true
-		if err := cfg.SaveAuth(auth); err != nil {
-			s.logger.Error().Err(err).Msg("Failed to save auth config")
-			http.Error(w, "Failed to save authentication settings", http.StatusInternalServerError)
-			return
+		response["message"] = "Token-only authentication enabled"
+		if auth := cfg.GetAuth(); auth != nil {
+			response["token"] = auth.APIToken
 		}
-		// Save mints an API token when none exists yet.
-		if err := cfg.Save(); err != nil {
-			s.logger.Error().Err(err).Msg("Failed to save config")
-			http.Error(w, "Failed to save configuration", http.StatusInternalServerError)
-			return
-		}
-
-		token := ""
-		if saved := cfg.GetAuth(); saved != nil {
-			token = saved.APIToken
-		}
-		message := "Token-only authentication enabled"
 		if cfg.EnableWebdavAuth {
-			// WebDAV authenticates with the username and password only; it never
-			// accepts the API token, so it now has no credential to check.
-			s.logger.Warn().Msg("token-only auth enabled while WebDAV auth is on; WebDAV will reject every client")
-			message += ". WebDAV auth is still enabled but has no credential to accept — turn it off, or WebDAV clients will be rejected"
+			response["message"] += ". WebDAV auth is still enabled but has no credential to accept — turn it off, or WebDAV clients will be rejected"
+			s.logger.Warn().Msg("Token-only auth enabled while WebDAV auth is on")
 		}
-		utils.JSONResponse(w, map[string]string{
-			"message": message,
-			"token":   token,
-		}, http.StatusOK)
-		return
 	}
-
-	// Check if trying to disable authentication (both empty)
-	if req.Username == "" && req.Password == "" {
-		// Disable authentication. The API token is cleared with the credentials
-		// so re-enabling auth later does not silently restore the old token.
-		cfg.UseAuth = false
-		auth.Username = ""
-		auth.Password = ""
-		auth.APIToken = ""
-		auth.TokenOnly = false
-		if err := cfg.SaveAuth(auth); err != nil {
-			s.logger.Error().Err(err).Msg("Failed to save auth config")
-			http.Error(w, "Failed to save authentication settings", http.StatusInternalServerError)
-			return
-		}
-		if err := cfg.Save(); err != nil {
-			s.logger.Error().Err(err).Msg("Failed to save config")
-			http.Error(w, "Failed to save configuration", http.StatusInternalServerError)
-			return
-		}
-
-		utils.JSONResponse(w, map[string]string{
-			"message": "Authentication disabled successfully",
-		}, http.StatusOK)
-		return
-	}
-
-	// Validate required fields
-	if req.Username == "" {
-		http.Error(w, "Username is required", http.StatusBadRequest)
-		return
-	}
-	if req.Password == "" {
-		http.Error(w, "Password is required", http.StatusBadRequest)
-		return
-	}
-	if req.Password != req.ConfirmPassword {
-		http.Error(w, "Passwords do not match", http.StatusBadRequest)
-		return
-	}
-
-	if err := cfg.SetCredentials(req.Username, req.Password); err != nil {
-		s.logger.Error().Err(err).Msg("Failed to save auth config")
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	// Save main config
-	if err := cfg.Save(); err != nil {
-		s.logger.Error().Err(err).Msg("Failed to save config")
-		http.Error(w, "Failed to save configuration", http.StatusInternalServerError)
-		return
-	}
-
-	utils.JSONResponse(w, map[string]string{
-		"message": "Authentication settings updated successfully",
-	}, http.StatusOK)
+	utils.JSONResponse(w, response, http.StatusOK)
 }

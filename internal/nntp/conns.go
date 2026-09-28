@@ -3,7 +3,6 @@ package nntp
 import (
 	"bufio"
 	"bytes"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -17,7 +16,6 @@ import (
 
 	"github.com/rs/zerolog"
 	nntpyenc "github.com/sirrobot01/decypharr/internal/nntp/yenc"
-	"github.com/sirrobot01/decypharr/internal/utils"
 )
 
 // Note: Timeout values are defined in TimeoutConfig (client.go).
@@ -185,7 +183,7 @@ func (c *Connection) readResponseWithDeadline(timeout time.Duration) (Response, 
 	if timeout <= 0 {
 		timeout = timeouts.StreamBodyTimeout
 	}
-	_ = c.conn.SetReadDeadline(utils.Now().Add(timeout))
+	_ = c.conn.SetReadDeadline(time.Now().Add(timeout))
 	defer func() { _ = c.conn.SetReadDeadline(time.Time{}) }()
 	return c.readResponse()
 }
@@ -194,7 +192,7 @@ func (c *Connection) readResponseCodeWithDeadline(timeout time.Duration) (int, [
 	if timeout <= 0 {
 		timeout = timeouts.StreamBodyTimeout
 	}
-	_ = c.conn.SetReadDeadline(utils.Now().Add(timeout))
+	_ = c.conn.SetReadDeadline(time.Now().Add(timeout))
 	defer func() { _ = c.conn.SetReadDeadline(time.Time{}) }()
 	return c.readResponseCode()
 }
@@ -224,6 +222,9 @@ type Connection struct {
 	bodyDec       *nntpyenc.BodyDecoder
 	bodyTarget    []byte
 	bodyTargetSet bool
+	// bodySource supplies caller-owned storage on demand for one response.
+	// The owning read installs and clears it; Close must not touch it.
+	bodySource BodyBuffer
 
 	// Body-decode idle tracking. lastProgressNS is refreshed by bodyReader
 	// while source reads make progress; idleNS is armed by
@@ -287,38 +288,6 @@ func (c *Connection) authenticate() error {
 	return nil
 }
 
-// startTLS initiates TLS encryption with proper error handling
-func (c *Connection) startTLS() error {
-	if err := c.sendCommand("STARTTLS"); err != nil {
-		return NewConnectionError(fmt.Errorf("failed to send STARTTLS: %w", err))
-	}
-
-	resp, err := c.readResponse()
-	if err != nil {
-		return NewConnectionError(fmt.Errorf("failed to read STARTTLS response: %w", err))
-	}
-
-	if resp.Code != 382 {
-		return classifyNNTPError(resp.Code, fmt.Sprintf("STARTTLS not supported: %s", resp.Message))
-	}
-
-	// Upgrade connection to TLS
-	tlsConn := tls.Client(c.conn, &tls.Config{
-		ServerName:         c.address,
-		InsecureSkipVerify: true, // Match createConnection behavior
-		MinVersion:         tls.VersionTLS12,
-	})
-
-	// Same sizing rationale as createConnection.
-	c.conn = tlsConn
-	c.reader = bufio.NewReaderSize(tlsConn, 128*1024)
-	c.writer = bufio.NewWriterSize(tlsConn, 4*1024)
-	c.text = textproto.NewReader(c.reader)
-
-	c.logger.Debug().Msg("TLS encryption enabled")
-	return nil
-}
-
 // ping sends a simple command to test the connection. timeout bounds the
 // whole DATE round trip; <=0 uses PingTimeout. The budget differs by caller:
 // a checkout verify-ping is user-visible latency and stays tight, while the
@@ -330,7 +299,7 @@ func (c *Connection) ping(timeout time.Duration) error {
 	if timeout <= 0 {
 		timeout = timeouts.PingTimeout
 	}
-	_ = c.conn.SetDeadline(utils.Now().Add(timeout))
+	_ = c.conn.SetDeadline(time.Now().Add(timeout))
 	c.writeTimeout = timeout
 	defer func() {
 		c.writeTimeout = 0
@@ -360,9 +329,15 @@ func (c *Connection) sendCommandArg(command, arg string) error {
 	if writeTimeout <= 0 {
 		writeTimeout = timeouts.HandshakeTimeout
 	}
-	_ = c.conn.SetWriteDeadline(utils.Now().Add(writeTimeout))
+	_ = c.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 	defer func() { _ = c.conn.SetWriteDeadline(time.Time{}) }()
+	if err := c.writeCommandArg(command, arg); err != nil {
+		return err
+	}
+	return c.writer.Flush()
+}
 
+func (c *Connection) writeCommandArg(command, arg string) error {
 	if _, err := c.writer.WriteString(command); err != nil {
 		return err
 	}
@@ -377,7 +352,7 @@ func (c *Connection) sendCommandArg(command, arg string) error {
 	if _, err := c.writer.WriteString("\r\n"); err != nil {
 		return err
 	}
-	return c.writer.Flush()
+	return nil
 }
 
 // readResponse reads a response from the NNTP server
@@ -465,21 +440,29 @@ func (c *Connection) GetArticle(messageID string) (*Article, error) {
 // be mid-response and unusable; callers rely on the pool layer to discard
 // errored connections.
 func (c *Connection) requestBody(messageID string) (nntpyenc.BodyResult, error) {
-	return c.requestBodyBuffered(messageID, nil, true)
+	return c.requestBodyBuffered(messageID, nil, nil, true)
 }
 
-func (c *Connection) requestBodyBuffered(messageID string, dst []byte, pooled bool) (nntpyenc.BodyResult, error) {
+func (c *Connection) requestBodyBuffered(messageID string, dst []byte, source BodyBuffer, pooled bool) (nntpyenc.BodyResult, error) {
 	messageID = FormatMessageID(messageID)
 	if err := c.sendCommandArg("BODY", messageID); err != nil {
 		return nntpyenc.BodyResult{}, NewConnectionError(fmt.Errorf("failed to send BODY command: %w", err))
 	}
+	return c.readBodyBuffered(dst, source, pooled)
+}
 
+func (c *Connection) readBodyBuffered(dst []byte, source BodyBuffer, pooled bool) (nntpyenc.BodyResult, error) {
 	if !pooled {
-		c.bodyTarget = dst[:0]
-		c.bodyTargetSet = true
+		if source != nil {
+			c.bodySource = source
+		} else {
+			c.bodyTarget = dst[:0]
+			c.bodyTargetSet = true
+		}
 		defer func() {
 			c.bodyTarget = nil
 			c.bodyTargetSet = false
+			c.bodySource = nil
 		}()
 	}
 	res, err := c.nextBodyWithIdleDeadline(timeouts.StreamBodyTimeout)
@@ -512,6 +495,16 @@ func (c *Connection) nextBodyBuffer() []byte {
 	if c.bodyTargetSet {
 		c.bodyTargetSet = false
 		return c.bodyTarget[:0]
+	}
+	if source := c.bodySource; source != nil {
+		// Clear before invoking so a panic cannot leave the source installed.
+		c.bodySource = nil
+		if buf := source.DecodeBuffer(); buf != nil {
+			return buf[:0]
+		}
+		// The read still owes caller-owned storage: connection-pooled
+		// scratch must never escape as a retained decoded result.
+		return []byte{}
 	}
 	return getBodyBuf()
 }
@@ -567,7 +560,7 @@ func (c *Connection) GetBody(messageID string) ([]byte, error) {
 	}
 
 	// Set read deadline to prevent hanging on stalled servers
-	_ = c.conn.SetReadDeadline(utils.Now().Add(timeouts.StreamBodyTimeout))
+	_ = c.conn.SetReadDeadline(time.Now().Add(timeouts.StreamBodyTimeout))
 	defer func() { _ = c.conn.SetReadDeadline(time.Time{}) }()
 
 	body, err := c.readDotBytes()
@@ -583,6 +576,126 @@ func (c *Connection) GetDecodedBody(messageID string) ([]byte, error) {
 	return decoded, err
 }
 
+// BodyDestination selects how one pipelined article is delivered. Writer
+// takes precedence and receives decoded data from reusable connection-owned
+// storage. Otherwise Body is returned using Buffer as caller-owned storage.
+type BodyDestination struct {
+	Buffer []byte
+	Writer io.Writer
+	// Skip omits an accepted article while preserving its result index.
+	Skip bool
+	// BufferSource supplies Buffer on demand. It takes precedence over
+	// Buffer and is ignored when Writer is set.
+	BufferSource BodyBuffer
+}
+
+// BodyBuffer supplies caller-owned decoded storage on demand. The decoder
+// asks for it only when it first needs output for a recognized yEnc body,
+// so a pending status, a negative status or a header alone never allocates
+// it. DecodeBuffer must return the same backing array for repeated calls
+// within one logical destination, so that a provider retry cannot change
+// the caller's storage identity.
+type BodyBuffer interface {
+	DecodeBuffer() []byte
+}
+
+// DecodedBodyResult is the outcome of one article in a BODY pipeline.
+type DecodedBodyResult struct {
+	Body  []byte
+	Bytes int64
+	Error error
+}
+
+// PipelineBodies sends multiple BODY commands with one flush and decodes their
+// ordered responses. Per-article results preserve partial success. The returned
+// error describes the batch-level failure used for retry and provider failover.
+// The connection must not be used concurrently.
+func (c *Connection) PipelineBodies(messageIDs []string, destinations []BodyDestination) ([]DecodedBodyResult, error) {
+	if len(messageIDs) != len(destinations) {
+		return nil, fmt.Errorf("BODY pipeline has %d message IDs and %d destinations", len(messageIDs), len(destinations))
+	}
+	results := make([]DecodedBodyResult, len(messageIDs))
+	if len(messageIDs) == 0 {
+		return results, nil
+	}
+	hasPending := false
+	for i := range destinations {
+		if !destinations[i].Skip {
+			hasPending = true
+			break
+		}
+	}
+	if !hasPending {
+		return results, nil
+	}
+
+	writeTimeout := c.writeTimeout
+	if writeTimeout <= 0 {
+		writeTimeout = timeouts.HandshakeTimeout
+	}
+	_ = c.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+	for i, messageID := range messageIDs {
+		if destinations[i].Skip {
+			continue
+		}
+		if err := c.writeCommandArg("BODY", FormatMessageID(messageID)); err != nil {
+			_ = c.conn.SetWriteDeadline(time.Time{})
+			return results, NewConnectionError(fmt.Errorf("write BODY pipeline at %d/%d: %w", i+1, len(messageIDs), err))
+		}
+	}
+	if err := c.writer.Flush(); err != nil {
+		_ = c.conn.SetWriteDeadline(time.Time{})
+		return results, NewConnectionError(fmt.Errorf("flush BODY pipeline: %w", err))
+	}
+	_ = c.conn.SetWriteDeadline(time.Time{})
+
+	var firstArticleErr error
+	for i := range messageIDs {
+		destination := destinations[i]
+		if destination.Skip {
+			continue
+		}
+		pooled := destination.Writer != nil
+		res, err := c.readBodyBuffered(destination.Buffer, destination.BufferSource, pooled)
+		if err == nil {
+			if destination.Writer == nil {
+				results[i].Body = res.Data
+				results[i].Bytes = int64(len(res.Data))
+				continue
+			}
+			n, writeErr := destination.Writer.Write(res.Data)
+			if writeErr == nil && n != len(res.Data) {
+				writeErr = io.ErrShortWrite
+			}
+			putBodyBuf(res.Data)
+			results[i].Bytes = int64(n)
+			if writeErr == nil {
+				continue
+			}
+			err = writeErr
+		}
+		results[i].Error = err
+		if res.StatusCode != 0 {
+			// Status-line negatives, fully consumed yEnc decode failures, and
+			// destination write failures all leave a clean protocol boundary.
+			// Drain the rest of the ordered pipeline before returning so the
+			// connection remains reusable.
+			if firstArticleErr == nil {
+				firstArticleErr = fmt.Errorf("BODY pipeline article %d/%d: %w", i+1, len(messageIDs), err)
+			}
+			continue
+		}
+		batchErr := fmt.Errorf("BODY pipeline article %d/%d: %w", i+1, len(messageIDs), err)
+		for j := i + 1; j < len(results); j++ {
+			if !destinations[j].Skip {
+				results[j].Error = batchErr
+			}
+		}
+		return results, batchErr
+	}
+	return results, firstArticleErr
+}
+
 // GetDecodedBodyWithMetadata retrieves and decodes the article body while also
 // returning the parsed yEnc metadata from the same pass. The returned slice
 // escapes to the caller and is not recycled.
@@ -591,7 +704,7 @@ func (c *Connection) GetDecodedBodyWithMetadata(messageID string) ([]byte, *Yenc
 	// scratch buffer out of bodyBufPool permanently. Let rapidyenc allocate
 	// storage sized for this article, just as DecodeBodyInto does when called
 	// with an empty destination.
-	res, err := c.requestBodyBuffered(messageID, nil, false)
+	res, err := c.requestBodyBuffered(messageID, nil, nil, false)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -615,7 +728,19 @@ func (c *Connection) StreamBody(messageID string, w io.Writer) (int64, error) {
 // DecodeBodyInto verifies one yEnc article into storage supplied by the
 // caller. The returned slice belongs to the caller and may be retained.
 func (c *Connection) DecodeBodyInto(messageID string, dst []byte) ([]byte, error) {
-	res, err := c.requestBodyBuffered(messageID, dst, false)
+	res, err := c.requestBodyBuffered(messageID, dst, nil, false)
+	if err != nil {
+		return nil, err
+	}
+	return res.Data, nil
+}
+
+// DecodeBodyWithBuffer verifies one yEnc article into storage the source
+// supplies on demand. The decoder asks for that storage only once it has a
+// recognized yEnc body, so a pending or negative status allocates nothing.
+// The returned slice belongs to the caller and may be retained.
+func (c *Connection) DecodeBodyWithBuffer(messageID string, source BodyBuffer) ([]byte, error) {
+	res, err := c.requestBodyBuffered(messageID, nil, source, false)
 	if err != nil {
 		return nil, err
 	}
@@ -675,7 +800,7 @@ func (c *Connection) GetHead(messageID string) ([]byte, error) {
 }
 
 func (c *Connection) Post(messageID, filename string, body []byte) error {
-	now := utils.Now().Format("2006-01-02 15:04:05")
+	now := time.Now().Format("2006-01-02 15:04:05")
 	if err := c.sendCommand("POST"); err != nil {
 		return NewConnectionError(fmt.Errorf("failed to send POST command: %w", err))
 	}
@@ -762,7 +887,10 @@ func (c *Connection) Stat(messageID string) (articleNumber int, echoedID string,
 	if err != nil {
 		return 0, "", NewConnectionError(fmt.Errorf("failed to read STAT response: %w", err))
 	}
+	return parseStatResponse(resp)
+}
 
+func parseStatResponse(resp Response) (articleNumber int, echoedID string, err error) {
 	if resp.Code != 223 {
 		return 0, "", classifyNNTPError(resp.Code, resp.Message)
 	}
@@ -778,6 +906,63 @@ func (c *Connection) Stat(messageID string) (articleNumber int, echoedID string,
 	echoedID = fields[1]
 
 	return articleNumber, echoedID, nil
+}
+
+// StatBatch pipelines independent STAT commands in one write and consumes the
+// ordered single-line responses. A transport failure makes the connection
+// unusable and marks the unread suffix with the same error.
+func (c *Connection) StatBatch(messageIDs []string) ([]StatResult, error) {
+	results := make([]StatResult, len(messageIDs))
+	if len(messageIDs) == 0 {
+		return results, nil
+	}
+	for i, messageID := range messageIDs {
+		results[i].MessageID = messageID
+	}
+
+	writeTimeout := c.writeTimeout
+	if writeTimeout <= 0 {
+		writeTimeout = timeouts.HandshakeTimeout
+	}
+	_ = c.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+	for i, messageID := range messageIDs {
+		if err := c.writeCommandArg("STAT", FormatMessageID(messageID)); err != nil {
+			_ = c.conn.SetWriteDeadline(time.Time{})
+			pipelineErr := NewConnectionError(fmt.Errorf("write STAT pipeline at %d/%d: %w", i+1, len(messageIDs), err))
+			markStatSuffixError(results, 0, pipelineErr)
+			return results, pipelineErr
+		}
+	}
+	if err := c.writer.Flush(); err != nil {
+		_ = c.conn.SetWriteDeadline(time.Time{})
+		pipelineErr := NewConnectionError(fmt.Errorf("flush STAT pipeline: %w", err))
+		markStatSuffixError(results, 0, pipelineErr)
+		return results, pipelineErr
+	}
+	_ = c.conn.SetWriteDeadline(time.Time{})
+
+	for i := range results {
+		resp, err := c.readResponseWithDeadline(timeouts.StreamBodyTimeout)
+		if err != nil {
+			pipelineErr := NewConnectionError(fmt.Errorf("read STAT pipeline at %d/%d: %w", i+1, len(results), err))
+			markStatSuffixError(results, i, pipelineErr)
+			return results, pipelineErr
+		}
+		_, _, statErr := parseStatResponse(resp)
+		if statErr == nil {
+			results[i].Available = true
+			continue
+		}
+		results[i].Error = statErr
+	}
+	return results, nil
+}
+
+func markStatSuffixError(results []StatResult, start int, err error) {
+	for i := start; i < len(results); i++ {
+		results[i].Available = false
+		results[i].Error = err
+	}
 }
 
 // SelectGroup selects a newsgroup and returns group information

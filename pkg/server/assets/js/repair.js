@@ -5,7 +5,7 @@
 // active so the UI reflects live progress.
 class RepairManager {
     constructor() {
-        this.api = (window.API || '/api').replace(/\/$/, '');
+        this.api = `${window.urlBase}api`;
         this.statusTimer = null;
         this.activeRunId = null;
         this.brokenState = {items: [], page: 1, pageSize: 25};
@@ -23,7 +23,6 @@ class RepairManager {
         $('clearStateBtn')?.addEventListener('click', () => this.openClearStateModal());
         $('viewBrokenBtn')?.addEventListener('click', () => this.openBrokenModal());
         $('refreshHistoryBtn')?.addEventListener('click', () => this.loadHistory());
-        $('refreshBrokenBtn')?.addEventListener('click', () => this.loadBroken());
         $('clearHistoryBtn')?.addEventListener('click', () => this.clearHistory());
         $('runRepairForm')?.addEventListener('submit', (e) => {
             e.preventDefault();

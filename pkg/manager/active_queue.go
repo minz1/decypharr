@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/utils"
@@ -15,40 +15,34 @@ import (
 )
 
 func (m *Manager) restoreActiveDownloadJobs() {
-	entries := m.queue.ListFilter("", config.ProtocolAll, storage.EntryStateDownloading, nil, "", false)
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].AddedOn.Before(entries[j].AddedOn)
-	})
+	entries, err := m.queue.ListFilter("", config.ProtocolAll, storage.EntryStateDownloading, nil, "", false)
+	if err != nil {
+		m.logger.Error().Err(err).Msg("Failed to restore the download queue")
+		return
+	}
+	slices.SortFunc(entries, func(left, right *storage.Entry) int { return left.AddedOn.Compare(right.AddedOn) })
 
-	// Nothing is in flight in a fresh process, so a persisted IsDownloading is
-	// always stale: it was written by a run that died mid-symlink. Leaving it
-	// set made processQueuedEntries skip the entry forever while a restored job
-	// waited on it forever, leaking a worker slot on every restart.
+	// Clear flags left by interrupted local processing. Active downloads remain
+	// in storage for processQueuedEntries. Only unfinished imports need workers.
 	for _, entry := range entries {
+		if m.ctx.Err() != nil {
+			return
+		}
 		if entry.IsDownloading {
 			entry.IsDownloading = false
-			_ = m.queue.Update(entry)
+			if err := m.queue.Update(entry); err != nil {
+				m.logger.Error().Err(err).Str("entry_id", entry.InfoHash).Msg("Failed to reset restored download")
+				continue
+			}
 		}
-	}
-
-	// Existing active downloads reserve slots before queued imports are resumed.
-	for _, entry := range entries {
-		if entry.Status == debridTypes.TorrentStatusQueued || m.nzbNeedsReprocessing(entry) {
-			continue
-		}
-		_ = m.SubmitJob(&Job{
-			ID:    entry.InfoHash,
-			Type:  jobTypeForEntry(entry),
-			Entry: entry,
-		})
-	}
-
-	for _, entry := range entries {
 		if entry.Status != debridTypes.TorrentStatusQueued && !m.nzbNeedsReprocessing(entry) {
 			continue
 		}
 		job, err := m.rebuildQueuedJob(entry)
 		if err != nil {
+			if m.ctx.Err() != nil {
+				return
+			}
 			entry.MarkAsError(err)
 			_ = m.queue.Update(entry)
 			continue
@@ -58,17 +52,13 @@ func (m *Manager) restoreActiveDownloadJobs() {
 		}
 		_ = m.queue.Update(entry)
 		if err := m.SubmitJob(job); err != nil {
+			if m.ctx.Err() != nil {
+				return
+			}
 			entry.MarkAsError(err)
 			_ = m.queue.Update(entry)
 		}
 	}
-}
-
-func jobTypeForEntry(entry *storage.Entry) JobType {
-	if entry != nil && entry.IsNZB() {
-		return JobTypeNZB
-	}
-	return JobTypeTorrent
 }
 
 func (m *Manager) nzbNeedsReprocessing(entry *storage.Entry) bool {
@@ -96,7 +86,7 @@ func (m *Manager) rebuildQueuedTorrentJob(entry *storage.Entry) (*Job, error) {
 		}, nil
 	}
 
-	magnet, err := utils.GetMagnetInfo(entry.Magnet, m.config.AlwaysRmTrackerUrls)
+	magnet, err := utils.GetMagnetInfo(entry.Magnet, config.Get().AlwaysRmTrackerUrls)
 	if err != nil {
 		magnet = utils.ConstructMagnet(entry.InfoHash, entry.Name)
 	}
@@ -104,7 +94,7 @@ func (m *Manager) rebuildQueuedTorrentJob(entry *storage.Entry) (*Job, error) {
 	downloadUncached := entry.DownloadUncached
 	req := NewTorrentRequest(
 		entry.ActiveProvider,
-		downloadFolderForEntry(m.config.DownloadFolder, entry),
+		downloadFolderForEntry(config.Get().DownloadFolder, entry),
 		magnet,
 		m.arr.GetOrCreate(entry.Category),
 		entry.Action,
@@ -158,7 +148,7 @@ func (m *Manager) rebuildQueuedNZBJob(entry *storage.Entry) (*Job, error) {
 
 	req := NewNZBRequest(
 		meta.Name,
-		downloadFolderForEntry(m.config.DownloadFolder, entry),
+		downloadFolderForEntry(config.Get().DownloadFolder, entry),
 		content,
 		m.arr.GetOrCreate(entry.Category),
 		entry.Action,

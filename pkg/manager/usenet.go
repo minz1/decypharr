@@ -89,8 +89,7 @@ func (m *Manager) processNZBJob(ctx context.Context, job *Job) error {
 	}
 	if job.NZBMeta == nil {
 		if job.Request == nil {
-			m.waitForDownloadCompletion(ctx, job.Entry)
-			return nil
+			return fmt.Errorf("NZB job has no request or processing payload")
 		}
 		content, err := os.ReadFile(job.Entry.Magnet)
 		if err != nil {
@@ -166,7 +165,7 @@ func (m *Manager) processNZB(ctx context.Context, entry *storage.Entry, metadata
 		return fmt.Errorf("nzb has no files")
 	}
 
-	go m.processAction(entry)
+	m.startDownloadTask(func() { m.processAction(entry) })
 	return nil
 }
 
@@ -305,7 +304,7 @@ func (m *Manager) syncNZBs(ctx context.Context) error {
 		}
 		req := NewNZBRequest(
 			pending.Name,
-			m.config.DownloadFolder,
+			config.Get().DownloadFolder,
 			pending.Content,
 			m.arr.GetOrCreate(""),
 			config.DownloadActionNone,

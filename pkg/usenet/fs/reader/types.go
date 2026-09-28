@@ -2,10 +2,10 @@
 package reader
 
 import (
-	"context"
 	"sync/atomic"
 	"time"
 
+	appconfig "github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
@@ -100,6 +100,10 @@ const (
 
 // Config holds configuration for StreamingReader.
 type Config struct {
+	// Pools shares memory budgets across readers in one service run.
+	// A nil value gives a standalone reader its own pools.
+	Pools *Pools
+
 	// DiskPath is the base directory for disk cache (default: system temp dir).
 	DiskPath string
 
@@ -116,6 +120,10 @@ type Config struct {
 	// PrefetchAhead is the number of segments to prefetch ahead of reads (default: 8).
 	PrefetchAhead int
 
+	// BodyPipelineDepth is the number of speculative BODY commands sent on one
+	// connection. One disables pipelining (default: 2, maximum: 4).
+	BodyPipelineDepth int
+
 	// DownloadTimeout is the timeout for a single segment download (default: 60s).
 	DownloadTimeout time.Duration
 
@@ -129,12 +137,13 @@ type Config struct {
 // DefaultConfig returns a ReaderConfig with sensible defaults.
 func DefaultConfig() Config {
 	return Config{
-		MaxConnections:  8,
-		PrefetchAhead:   8,
-		DownloadTimeout: 60 * time.Second,
-		MaxRetries:      3,
-		RetryDelay:      time.Second,
-		Retention:       RetentionWindow,
+		MaxConnections:    8,
+		PrefetchAhead:     8,
+		BodyPipelineDepth: appconfig.DefaultBodyPipelineDepth,
+		DownloadTimeout:   60 * time.Second,
+		MaxRetries:        3,
+		RetryDelay:        time.Second,
+		Retention:         RetentionWindow,
 	}
 }
 
@@ -213,6 +222,14 @@ func WithPrefetchAhead(n int) Option {
 	}
 }
 
+// WithBodyPipelineDepth sets the speculative BODY pipeline depth. Values are
+// normalized to the supported range; one disables pipelining.
+func WithBodyPipelineDepth(depth int) Option {
+	return func(c *Config) {
+		c.BodyPipelineDepth = appconfig.NormalizeBodyPipelineDepth(depth)
+	}
+}
+
 // WithDownloadTimeout sets the timeout for a single segment download.
 func WithDownloadTimeout(d time.Duration) Option {
 	return func(c *Config) {
@@ -281,17 +298,5 @@ func (s *ReaderStats) Snapshot() map[string]int64 {
 	}
 }
 
-// PrefetchableReaderAt extends io.ReaderAt with prefetch capability.
-// This allows callers to trigger segment downloads before starting reads.
-type PrefetchableReaderAt interface {
-	// ReadAt reads len(p) bytes from the reader starting at offset off.
-	// Blocks until the data is available or an error occurs.
-	ReadAt(p []byte, off int64) (n int, err error)
-
-	// ReadAtContext reads with caller cancellation.
-	ReadAtContext(ctx context.Context, p []byte, off int64) (n int, err error)
-
-	// Prefetch triggers segment downloads for the given byte range without blocking.
-	// This is a hint to the reader to start downloading segments that will be needed soon.
-	Prefetch(ctx context.Context, off, length int64)
-}
+// WithPools sets the cache pools for this reader.
+func WithPools(pools *Pools) Option { return func(c *Config) { c.Pools = pools } }

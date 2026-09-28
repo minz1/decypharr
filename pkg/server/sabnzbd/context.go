@@ -2,6 +2,7 @@ package sabnzbd
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"net/http"
 	"strings"
@@ -29,15 +30,15 @@ func getMode(ctx context.Context) string {
 
 func (s *SABnzbd) categoryContext(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		category := r.URL.Query().Get("category")
+		category := r.FormValue("category")
 		if category == "" {
-			// Check form data
-			_ = r.ParseForm()
-			category = r.Form.Get("category")
+			category = r.FormValue("cat")
 		}
-		if category == "" {
-			category = r.FormValue("category")
-		}
+		defer func() {
+			if r.MultipartForm != nil {
+				_ = r.MultipartForm.RemoveAll()
+			}
+		}()
 
 		ctx := context.WithValue(r.Context(), categoryKey, strings.TrimSpace(category))
 		next.ServeHTTP(w, r.WithContext(ctx))
@@ -59,24 +60,8 @@ func getCategory(ctx context.Context) string {
 // modeContext extracts the mode parameter from the request
 func (s *SABnzbd) modeContext(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mode := r.URL.Query().Get("mode")
-		if mode == "" {
-			// Check form data
-			_ = r.ParseForm()
-			mode = r.Form.Get("mode")
-		}
-
-		// Extract category for Arr integration
-		category := r.URL.Query().Get("cat")
-		if category == "" {
-			category = r.Form.Get("cat")
-		}
-
-		downloadUncached := false
-		a := arr.Arr{Name: category, DownloadUncached: &downloadUncached, Source: arr.SourceAuto}
-
+		mode := r.FormValue("mode")
 		ctx := context.WithValue(r.Context(), modeKey, strings.TrimSpace(mode))
-		ctx = context.WithValue(ctx, arrKey, a)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -87,8 +72,8 @@ func (s *SABnzbd) modeContext(next http.Handler) http.Handler {
 // Only a valid host and token will be added to the context/config. The rest are manual
 func (s *SABnzbd) authContext(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		host := r.URL.Query().Get("ma_username")
-		token := r.URL.Query().Get("ma_password")
+		host := r.FormValue("ma_username")
+		token := r.FormValue("ma_password")
 		category := getCategory(r.Context())
 		a, err := s.authenticate(r.Context(), category, host, token)
 		if err != nil {
@@ -114,10 +99,15 @@ func (s *SABnzbd) authenticate(ctx context.Context, category, username, password
 			}
 		}
 	}
-	// In token-only mode the arr sends the API token as the password and may
-	// leave the username empty.
-	if (username == "" || password == "") && cfg.UseAuth && !config.VerifyToken(password) {
-		return arr.Arr{}, fmt.Errorf("unauthorized: Host and token are required for authentication(you've enabled authentication)")
+	if cfg.UseAuth {
+		if config.VerifyAuth(username, password) || config.VerifyToken(password) {
+			return instance, nil
+		}
+		if known && instance.Source != arr.SourceAuto && username == instance.Host && password != "" &&
+			subtle.ConstantTimeCompare([]byte(password), []byte(instance.Token)) == 1 {
+			return instance, nil
+		}
+		return arr.Arr{}, fmt.Errorf("unauthorized: invalid credentials")
 	}
 	if instance.Source == arr.SourceAuto {
 		instance.Host = username
@@ -129,12 +119,7 @@ func (s *SABnzbd) authenticate(ctx context.Context, category, username, password
 	if validated {
 		instance.Type = kind
 	}
-	if !validated && cfg.UseAuth {
-		if !config.VerifyAuth(username, password) && !config.VerifyToken(password) {
-			return arr.Arr{}, fmt.Errorf("unauthorized: invalid credentials")
-		}
-	}
-	if username != "" && password != "" {
+	if validated && username != "" && password != "" {
 		s.manager.Arr().AddOrUpdate(instance)
 	}
 	return instance, nil

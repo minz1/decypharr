@@ -15,13 +15,14 @@ import (
 )
 
 const (
-	maintenanceInterval = time.Minute
-	executionTimeout    = 2 * time.Minute
-	waitingTimeout      = 6 * time.Hour
-	successRetention    = 24 * time.Hour
-	failureRetention    = 7 * 24 * time.Hour
-	retryBaseDelay      = time.Second
-	retryMaxDelay       = 30 * time.Second
+	maintenanceInterval   = time.Minute
+	executionTimeout      = 2 * time.Minute
+	reconciliationTimeout = 30 * time.Minute
+	waitingTimeout        = 6 * time.Hour
+	successRetention      = 24 * time.Hour
+	failureRetention      = 7 * 24 * time.Hour
+	retryBaseDelay        = time.Second
+	retryMaxDelay         = 30 * time.Second
 )
 
 func (s *Service) Reacquire(request Request) (*Job, error) {
@@ -41,6 +42,10 @@ func (s *Service) Reacquire(request Request) (*Job, error) {
 	if !binding.AuthorizesMutation() {
 		return nil, fmt.Errorf("%w: entry %q file %q", ErrBindingUnsafe, request.EntryID, request.FileID)
 	}
+	return s.enqueue(request, binding)
+}
+
+func (s *Service) enqueue(request Request, binding Binding) (*Job, error) {
 	key := keyForBinding(binding)
 
 	s.jobsMu.Lock()
@@ -50,7 +55,24 @@ func (s *Service) Reacquire(request Request) (*Job, error) {
 		return &job, nil
 	}
 
-	bindings := s.index.ByDownloadID(binding.ArrName, binding.DownloadID)
+	// An unindexed file can become indexed while its replacement is pending.
+	// Keep both request paths attached to the existing job.
+	for _, id := range s.activeReacquisitions {
+		active := s.jobs[id]
+		for _, existing := range active.Bindings {
+			if existing.ArrName == binding.ArrName && existing.ArrFileID == binding.ArrFileID &&
+				existing.ArrInstanceFingerprint == binding.ArrInstanceFingerprint {
+				job := cloneJob(active)
+				s.jobsMu.Unlock()
+				return &job, nil
+			}
+		}
+	}
+
+	var bindings []Binding
+	if binding.DownloadID != "" {
+		bindings = s.index.ByDownloadID(binding.ArrName, binding.DownloadID)
+	}
 	bindings = slices.DeleteFunc(bindings, func(binding Binding) bool {
 		return !binding.AuthorizesMutation()
 	})
@@ -193,6 +215,7 @@ func (s *Service) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			s.reconcileImportedJobs(ctx)
 			s.maintainJobs()
 			s.signal()
 		case <-s.wake:
@@ -217,6 +240,10 @@ func (s *Service) run(ctx context.Context) {
 }
 
 func (s *Service) runJob(ctx context.Context, handler Handler, job Job) bool {
+	deadline := job.reconciliationDeadline()
+	if !deadline.IsZero() && !s.now().Before(deadline) {
+		return s.stopReconciliation(job.ID, errors.New("Arr reconciliation deadline expired"))
+	}
 	started, err := s.updateJob(job.ID, StatusResolving, func(job *Job) {
 		job.RetryAt = time.Time{}
 	})
@@ -224,7 +251,11 @@ func (s *Service) runJob(ctx context.Context, handler Handler, job Job) bool {
 		return false
 	}
 	progress := &serviceJobProgress{service: s, jobID: job.ID}
-	jobCtx, cancel := context.WithTimeout(ctx, executionTimeout)
+	timeout := executionTimeout
+	if !deadline.IsZero() {
+		timeout = min(timeout, deadline.Sub(s.now()))
+	}
+	jobCtx, cancel := context.WithTimeout(ctx, timeout)
 	err = handler.Reacquire(jobCtx, started, progress)
 	if err == nil {
 		err = jobCtx.Err()
@@ -233,12 +264,19 @@ func (s *Service) runJob(ctx context.Context, handler Handler, job Job) bool {
 	if ctx.Err() != nil {
 		return true
 	}
+	current, ok := s.Job(job.ID)
+	if !ok {
+		return false
+	}
+	deadline = current.reconciliationDeadline()
+	if err != nil && !deadline.IsZero() && !s.now().Before(deadline) {
+		return s.stopReconciliation(job.ID, fmt.Errorf("Arr reconciliation deadline expired: %w", err))
+	}
 	if errors.Is(err, arr.ErrMutationOutcomeUnknown) {
-		current, ok := s.Job(job.ID)
-		if !ok {
-			return false
-		}
 		delay := retryDelay(current, err)
+		if !deadline.IsZero() {
+			delay = min(delay, deadline.Sub(s.now()))
+		}
 		queued, updateErr := s.updateJobDurable(job.ID, StatusQueued, func(job *Job) {
 			job.LastError = err.Error()
 			job.RetryAt = s.now().Add(delay)
@@ -250,13 +288,18 @@ func (s *Service) runJob(ctx context.Context, handler Handler, job Job) bool {
 		return true
 	}
 	if err != nil {
+		for _, mutation := range current.Mutations {
+			if mutation.State == MutationIntent && mutation.Attempts > 0 {
+				return s.stopReconciliation(job.ID, err)
+			}
+		}
 		_, updateErr := s.updateJob(job.ID, StatusFailed, func(job *Job) {
 			job.LastError = err.Error()
 			job.RetryAt = time.Time{}
 		})
 		return updateErr == nil
 	}
-	current, ok := s.Job(job.ID)
+	current, ok = s.Job(job.ID)
 	if !ok || current.Status.Terminal() || progress.waiting.Load() || current.Status.waiting() {
 		return true
 	}
@@ -517,6 +560,9 @@ func (s *Service) completeJobFromIndex(job Job) error {
 }
 
 func (s *Service) replacementsForJob(job Job) ([]string, bool) {
+	if len(job.Bindings) == 1 && job.Bindings[0].Confidence == ConfidenceLibraryFile {
+		return nil, false
+	}
 	downloads := make(map[string]struct{})
 	for _, target := range job.Bindings {
 		var candidates []Binding

@@ -7,6 +7,21 @@ import (
 	"strings"
 )
 
+const (
+	MinBodyPipelineDepth     = 1
+	DefaultBodyPipelineDepth = 2
+	MaxBodyPipelineDepth     = 4
+)
+
+// NormalizeBodyPipelineDepth returns a safe BODY read-ahead pipeline depth.
+// Zero represents an unset configuration value and receives the default.
+func NormalizeBodyPipelineDepth(depth int) int {
+	if depth == 0 {
+		return DefaultBodyPipelineDepth
+	}
+	return min(max(depth, MinBodyPipelineDepth), MaxBodyPipelineDepth)
+}
+
 type UsenetProvider struct {
 	Host           string `json:"host,omitempty"` // Host of the usenet server
 	Port           int    `json:"port,omitempty"` // Port of the usenet server
@@ -19,11 +34,11 @@ type UsenetProvider struct {
 	// Backup marks this provider as a fallback tier. Backups are only
 	// consulted when every non-backup ("primary") provider is excluded
 	// — e.g. all primaries returned article-not-found or had connection
-	// errors. They are NOT used just because a primary's pool is busy;
-	// the request waits for a primary slot instead. This matches the
-	// "unlimited primary + block backup for completion" model that most
-	// other Usenet clients implement, and prevents block providers from
-	// being billed for articles the unlimited could have served.
+	// errors. They are not used just because a primary's pool is busy unless
+	// stream_backup_wait explicitly enables urgent playback spillover. This
+	// matches the "unlimited primary + block backup for completion" model
+	// that most other Usenet clients implement, and prevents block providers
+	// from being billed for articles the unlimited could have served.
 	Backup bool `json:"backup,omitempty"`
 }
 
@@ -43,7 +58,12 @@ type Usenet struct {
 	MaxConnections           int `json:"max_connections,omitempty"`            // Provider-wide streaming fetch limit (default: 15)
 	ProcessingMaxConnections int `json:"processing_max_connections,omitempty"` // Maximum concurrent connections per file for parsing and NZB downloads (default: max_connections)
 	// Read-ahead configuration
-	ReadAhead string `json:"read_ahead,omitempty"` // Bytes to prefetch ahead of streaming reads e.g. "16MB", "32MB" (default: 16MB)
+	ReadAhead         string `json:"read_ahead,omitempty"`         // Bytes to prefetch ahead of streaming reads e.g. "16MB", "32MB" (default: 16MB)
+	BodyPipelineDepth int    `json:"body_pipeline_depth,omitzero"` // Speculative BODY commands sent per connection (1 disables, default: 2, max: 4)
+	// StreamBackupWait optionally permits an urgent playback read to spill to
+	// the backup-provider tier after waiting this long for a primary slot.
+	// Empty or "0" keeps backups completion-only and avoids block-account use.
+	StreamBackupWait string `json:"stream_backup_wait,omitempty"`
 	// SocketReadBuffer / SocketWriteBuffer set the per-connection TCP
 	// SO_RCVBUF / SO_SNDBUF (e.g. "4MB"). At high RTT a single connection's
 	// throughput is capped at roughly buffer ÷ RTT, so the receive buffer must
@@ -91,7 +111,7 @@ func (u Usenet) UsesDiskBuffer() bool {
 }
 
 func (u Usenet) IsZero() bool {
-	return len(u.Providers) == 0 && u.MaxConnections == 0 && u.ProcessingMaxConnections == 0 && u.ReadAhead == "" && u.ProcessingTimeout == "" && !u.UsesDiskBuffer()
+	return len(u.Providers) == 0 && u.MaxConnections == 0 && u.ProcessingMaxConnections == 0 && u.ReadAhead == "" && u.BodyPipelineDepth == 0 && u.StreamBackupWait == "" && u.ProcessingTimeout == "" && !u.UsesDiskBuffer()
 }
 
 func (c *Config) updateUsenetConfig() {
@@ -107,6 +127,7 @@ func (c *Config) updateUsenetConfig() {
 	if c.Usenet.ReadAhead == "" {
 		c.Usenet.ReadAhead = "16MB" // Default: 16MB read-ahead buffer
 	}
+	c.Usenet.BodyPipelineDepth = NormalizeBodyPipelineDepth(c.Usenet.BodyPipelineDepth)
 
 	// TCP socket buffer defaults sized for high-RTT BDP. "0" (explicit) opts
 	// into OS autotuning, so only fill when unset.
@@ -208,6 +229,14 @@ func (c *Config) applyUsenetEnvVars() {
 
 	if readAhead := getEnv("USENET__READ_AHEAD"); readAhead != "" {
 		c.Usenet.ReadAhead = readAhead
+	}
+	if pipelineDepth := getEnv("USENET__BODY_PIPELINE_DEPTH"); pipelineDepth != "" {
+		if v, err := strconv.Atoi(pipelineDepth); err == nil {
+			c.Usenet.BodyPipelineDepth = NormalizeBodyPipelineDepth(v)
+		}
+	}
+	if streamBackupWait := getEnv("USENET__STREAM_BACKUP_WAIT"); streamBackupWait != "" {
+		c.Usenet.StreamBackupWait = streamBackupWait
 	}
 
 	if v := getEnv("USENET__SOCKET_READ_BUFFER"); v != "" {
