@@ -95,6 +95,9 @@ func FromError(err error) *Error {
 }
 
 func IsSilentError(err error) bool {
+	if err == nil {
+		return false
+	}
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, context.Canceled) ||
 		errors.Is(err, context.DeadlineExceeded) ||
 		errors.Is(err, net.ErrClosed) ||
