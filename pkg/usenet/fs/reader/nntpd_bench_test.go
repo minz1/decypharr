@@ -71,7 +71,13 @@ func newBenchStack(b *testing.B, cfg nntpd.Config) (*nntpd.Server, *nntp.Client,
 	return srv, client, segs
 }
 
-func newBenchReader(b *testing.B, client *nntp.Client, segs []SegmentMeta, memory bool, diskPath string) *StreamingReader {
+func newBenchReader(
+	b *testing.B,
+	client *nntp.Client,
+	segs []SegmentMeta,
+	memory bool,
+	diskPath string,
+) *StreamingReader {
 	b.Helper()
 	retention := RetentionRewind
 	if memory {

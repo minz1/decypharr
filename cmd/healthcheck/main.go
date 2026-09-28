@@ -78,7 +78,13 @@ func main() {
 	os.Exit(1)
 }
 
-func checkQbitAPI(ctx context.Context, client *http.Client, baseUrl, port string, auth *config.Auth, authMayBeRequired bool) bool {
+func checkQbitAPI(
+	ctx context.Context,
+	client *http.Client,
+	baseUrl, port string,
+	auth *config.Auth,
+	authMayBeRequired bool,
+) bool {
 	url := localURL(port, baseUrl, "api/v2/app/version")
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -95,7 +101,13 @@ func checkQbitAPI(ctx context.Context, client *http.Client, baseUrl, port string
 	return isHealthyStatus(resp.StatusCode, authMayBeRequired, http.StatusOK)
 }
 
-func checkWebUI(ctx context.Context, client *http.Client, baseUrl, port string, auth *config.Auth, authMayBeRequired bool) bool {
+func checkWebUI(
+	ctx context.Context,
+	client *http.Client,
+	baseUrl, port string,
+	auth *config.Auth,
+	authMayBeRequired bool,
+) bool {
 	req, err := http.NewRequestWithContext(ctx, "GET", localURL(port, baseUrl, "version"), nil)
 	if err != nil {
 		return false
@@ -125,7 +137,13 @@ func checkBaseWebdav(ctx context.Context, client *http.Client, baseUrl, port str
 	defer drainAndClose(resp)
 
 	authMayBeRequired := cfg.UseAuth && cfg.EnableWebdavAuth
-	return isHealthyStatus(resp.StatusCode, authMayBeRequired, http.StatusOK, http.StatusCreated, http.StatusMultiStatus)
+	return isHealthyStatus(
+		resp.StatusCode,
+		authMayBeRequired,
+		http.StatusOK,
+		http.StatusCreated,
+		http.StatusMultiStatus,
+	)
 }
 
 func localURL(port, baseUrl, endpoint string) string {

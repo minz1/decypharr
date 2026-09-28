@@ -13,7 +13,14 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
-func (r *Service) probeTorrentFile(ctx context.Context, entry *storage.Entry, file *storage.File, name string, result fileResult, opts RunOptions) fileResult {
+func (r *Service) probeTorrentFile(
+	ctx context.Context,
+	entry *storage.Entry,
+	file *storage.File,
+	name string,
+	result fileResult,
+	opts RunOptions,
+) fileResult {
 	client := r.backend.ProviderClient(entry.ActiveProvider)
 	if client == nil {
 		result.broken = true
@@ -46,7 +53,14 @@ func (r *Service) probeTorrentFile(ctx context.Context, entry *storage.Entry, fi
 	return result
 }
 
-func (r *Service) probeTorrentFileByUnrestrict(ctx context.Context, entry *storage.Entry, file *storage.File, name string, result fileResult, client debrid.Client) fileResult {
+func (r *Service) probeTorrentFileByUnrestrict(
+	ctx context.Context,
+	entry *storage.Entry,
+	file *storage.File,
+	name string,
+	result fileResult,
+	client debrid.Client,
+) fileResult {
 	placement := entry.GetActiveProvider()
 	if placement == nil {
 		result.reason = "placement_not_found"
@@ -78,7 +92,8 @@ func (r *Service) probeTorrentFileByUnrestrict(ctx context.Context, entry *stora
 		r.hearsay.ObserveTorrent(client.Config().Provider, file.InfoHash, true)
 		return result
 	}
-	if err == nil || errors.Is(err, debridTypes.EmptyDownloadLinkError) || errors.Is(err, customerror.HosterUnavailableError) {
+	if err == nil || errors.Is(err, debridTypes.EmptyDownloadLinkError) ||
+		errors.Is(err, customerror.HosterUnavailableError) {
 		result.broken = true
 		if errors.Is(err, customerror.HosterUnavailableError) {
 			result.reason = "hoster_unavailable"

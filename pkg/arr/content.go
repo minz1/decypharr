@@ -223,7 +223,14 @@ func (s *Service) DeleteFiles(ctx context.Context, name string, files []ContentF
 		if len(ids) == 0 {
 			continue
 		}
-		resp, err := s.mutate(ctx, instance, http.MethodDelete, "api/v3/"+resource+"/bulk", map[string][]int{field: ids}, nil)
+		resp, err := s.mutate(
+			ctx,
+			instance,
+			http.MethodDelete,
+			"api/v3/"+resource+"/bulk",
+			map[string][]int{field: ids},
+			nil,
+		)
 		if err != nil {
 			return fmt.Errorf("delete %s bulk: %w", resource, err)
 		}

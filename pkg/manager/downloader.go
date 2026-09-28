@@ -185,7 +185,9 @@ func (d *Downloader) markAsError(entry *storage.Entry, err error) {
 func (d *Downloader) processSymlink(entry *storage.Entry, mountPath string) error {
 	files := entry.GetActiveFiles()
 	torrentSymlinkPath := entry.DownloadPath()
-	d.logger.Info().Str("mount_path", mountPath).Msgf("Creating symlinks for %d files in %s", len(files), torrentSymlinkPath)
+	d.logger.Info().
+		Str("mount_path", mountPath).
+		Msgf("Creating symlinks for %d files in %s", len(files), torrentSymlinkPath)
 
 	// Create symlink directory
 	err := os.MkdirAll(torrentSymlinkPath, os.ModePerm)
@@ -218,7 +220,9 @@ func (d *Downloader) processSymlink(entry *storage.Entry, mountPath string) erro
 		if err := d.manager.WarmFileCache(probeFiles); err != nil {
 			d.logger.Error().Msgf("Failed to warm cache: %s", err)
 		} else {
-			d.logger.Debug().Str("entry", entry.Name).Msgf("Warmed cache for %d/%d files", len(probeFiles), len(filePaths))
+			d.logger.Debug().
+				Str("entry", entry.Name).
+				Msgf("Warmed cache for %d/%d files", len(probeFiles), len(filePaths))
 		}
 	}
 
@@ -227,7 +231,12 @@ func (d *Downloader) processSymlink(entry *storage.Entry, mountPath string) erro
 	return nil
 }
 
-func (d *Downloader) createSymlinksWhenMountFilesAppear(entry *storage.Entry, files []*storage.File, mountPath string, symlinkDir string) ([]string, error) {
+func (d *Downloader) createSymlinksWhenMountFilesAppear(
+	entry *storage.Entry,
+	files []*storage.File,
+	mountPath string,
+	symlinkDir string,
+) ([]string, error) {
 	remainingFiles := make(map[string]*storage.File, len(files))
 	for _, file := range files {
 		remainingFiles[file.Name] = file
@@ -289,9 +298,18 @@ func (d *Downloader) createSymlinksWhenMountFilesAppear(entry *storage.Entry, fi
 		if time.Now().After(deadline) {
 			pending := pendingMountFileNames(remainingFiles, symlinkLogSampleSize)
 			if lastScanErr != nil {
-				return nil, fmt.Errorf("timeout waiting for mount files: %d files still pending (%s): last scan error: %w", len(remainingFiles), strings.Join(pending, ", "), lastScanErr)
+				return nil, fmt.Errorf(
+					"timeout waiting for mount files: %d files still pending (%s): last scan error: %w",
+					len(remainingFiles),
+					strings.Join(pending, ", "),
+					lastScanErr,
+				)
 			}
-			return nil, fmt.Errorf("timeout waiting for mount files: %d files still pending (%s)", len(remainingFiles), strings.Join(pending, ", "))
+			return nil, fmt.Errorf(
+				"timeout waiting for mount files: %d files still pending (%s)",
+				len(remainingFiles),
+				strings.Join(pending, ", "),
+			)
 		}
 
 		if shouldLogSymlinkWaitAttempt(attempt) {
@@ -341,7 +359,11 @@ func (d *Downloader) waitForSymlinkFilesReady(filePaths []string, timeout time.D
 		}
 
 		if time.Now().After(deadline) {
-			return fmt.Errorf("timeout waiting for symlink files to be ready: %d files still pending (%s)", len(pending), strings.Join(pendingSymlinkFileStatuses(pending, symlinkLogSampleSize), ", "))
+			return fmt.Errorf(
+				"timeout waiting for symlink files to be ready: %d files still pending (%s)",
+				len(pending),
+				strings.Join(pendingSymlinkFileStatuses(pending, symlinkLogSampleSize), ", "),
+			)
 		}
 
 		if shouldLogSymlinkWaitAttempt(attempt) {
@@ -559,7 +581,11 @@ func (d *Downloader) processTorrentDownload(entry *storage.Entry) error {
 // (429/5xx/network) with backoff and giving up immediately on permanent ones.
 // It exists so a batch download never silently drops a file whose link fetch
 // hit a passing blip (#315/#258); a returned error fails the whole batch.
-func (d *Downloader) resolveLinkWithRetry(ctx context.Context, entry *storage.Entry, filename string) (types.DownloadLink, error) {
+func (d *Downloader) resolveLinkWithRetry(
+	ctx context.Context,
+	entry *storage.Entry,
+	filename string,
+) (types.DownloadLink, error) {
 	const maxAttempts = 4
 	delay := config.DefaultRetryDelay
 	var lastErr error
@@ -642,7 +668,13 @@ func (d *Downloader) processUsenetDownload(entry *storage.Entry) error {
 				_ = d.manager.queue.Update(entry)
 			}
 
-			if err := d.manager.usenet.Download(d.manager.ctx, entry.InfoHash, file.Name, destFile, progressCallback); err != nil {
+			if err := d.manager.usenet.Download(
+				d.manager.ctx,
+				entry.InfoHash,
+				file.Name,
+				destFile,
+				progressCallback,
+			); err != nil {
 				_ = os.Remove(destPath)
 				return fmt.Errorf("failed to download %s: %w", file.Name, err)
 			}
@@ -711,7 +743,11 @@ func (d *Downloader) detectMultiSeason(torrent *storage.Entry) (bool, []SeasonIn
 // localDownloader downloads a file with grab and retries transient failures.
 // Each attempt observes the same destination, allowing grab to resume from the
 // partial file instead of restarting a large transfer after a CDN interruption.
-func (d *Downloader) localDownloader(downloadURL, filename string, byterange *[2]int64, progressCallback func(int64, int64)) error {
+func (d *Downloader) localDownloader(
+	downloadURL, filename string,
+	byterange *[2]int64,
+	progressCallback func(int64, int64),
+) error {
 	ctx := d.operationContext()
 	delay := config.DefaultRetryDelay
 	reported := int64(0)
@@ -750,7 +786,11 @@ func (d *Downloader) localDownloader(downloadURL, filename string, byterange *[2
 	return fmt.Errorf("local download failed after retries: %w", lastErr)
 }
 
-func (d *Downloader) localDownloadAttempt(downloadURL, filename string, byterange *[2]int64, progressCallback func(int64, int64)) error {
+func (d *Downloader) localDownloadAttempt(
+	downloadURL, filename string,
+	byterange *[2]int64,
+	progressCallback func(int64, int64),
+) error {
 	startTime := time.Now()
 	requestedRange := "full"
 	req, err := grab.NewRequest(filename, downloadURL)
@@ -842,7 +882,12 @@ func isRetryableDownloadError(err error) bool {
 	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
 }
 
-func (d *Downloader) buildDownloadLogMeta(req *http.Request, resp *http.Response, requestedRange, transferMode string, parts int) downloadLogMeta {
+func (d *Downloader) buildDownloadLogMeta(
+	req *http.Request,
+	resp *http.Response,
+	requestedRange, transferMode string,
+	parts int,
+) downloadLogMeta {
 	meta := downloadLogMeta{
 		requestHost:     req.URL.Host,
 		requestRange:    requestedRange,
@@ -875,7 +920,12 @@ func (d *Downloader) buildDownloadLogMeta(req *http.Request, resp *http.Response
 	return meta
 }
 
-func (d *Downloader) logDownloadCompletion(filename string, startTime time.Time, downloaded *atomic.Int64, meta downloadLogMeta) {
+func (d *Downloader) logDownloadCompletion(
+	filename string,
+	startTime time.Time,
+	downloaded *atomic.Int64,
+	meta downloadLogMeta,
+) {
 	bytesDownloaded := downloaded.Load()
 	elapsed := time.Since(startTime)
 	speedMBps := float64(0)

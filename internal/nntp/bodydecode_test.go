@@ -96,7 +96,12 @@ func TestPipelineBodiesPipelinesCommands(t *testing.T) {
 			}
 		}
 		for i := range messageIDs {
-			if _, err := fmt.Fprintf(server, "222 0 %s body\r\n%s.\r\n", messageIDs[i], encodeBody(payloads[i])); err != nil {
+			if _, err := fmt.Fprintf(
+				server,
+				"222 0 %s body\r\n%s.\r\n",
+				messageIDs[i],
+				encodeBody(payloads[i]),
+			); err != nil {
 				serverErr <- err
 				return
 			}
@@ -136,7 +141,11 @@ func TestPipelineBodiesDrainsNegativeResponses(t *testing.T) {
 				return
 			}
 		}
-		if _, err := fmt.Fprintf(server, "430 no such article\r\n222 0 <present@b> body\r\n%s.\r\n", encodeBody(payload)); err != nil {
+		if _, err := fmt.Fprintf(
+			server,
+			"430 no such article\r\n222 0 <present@b> body\r\n%s.\r\n",
+			encodeBody(payload),
+		); err != nil {
 			serverErr <- err
 			return
 		}

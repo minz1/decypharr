@@ -11,7 +11,11 @@ import (
 
 // GetDownloadLink fetches and validates a download link for a file in an entry.
 // This is the public interface that delegates to the link service.
-func (m *Manager) GetDownloadLink(ctx context.Context, entry *storage.Entry, filename string) (types.DownloadLink, error) {
+func (m *Manager) GetDownloadLink(
+	ctx context.Context,
+	entry *storage.Entry,
+	filename string,
+) (types.DownloadLink, error) {
 	return m.linkService.GetLink(ctx, entry, filename)
 }
 

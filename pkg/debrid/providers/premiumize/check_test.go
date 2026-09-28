@@ -35,7 +35,11 @@ func TestCheckFileHonorsCancellation(t *testing.T) {
 				}))
 				defer server.Close()
 				provider := &Premiumize{Host: server.URL, client: request.New(request.WithMaxRetries(0))}
-				provider.accountsManager = account.NewManager(config.Debrid{Name: "premiumize", DownloadAPIKeys: []string{"token"}}, nil, zerolog.Nop())
+				provider.accountsManager = account.NewManager(
+					config.Debrid{Name: "premiumize", DownloadAPIKeys: []string{"token"}},
+					nil,
+					zerolog.Nop(),
+				)
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
 				if cancelBefore {

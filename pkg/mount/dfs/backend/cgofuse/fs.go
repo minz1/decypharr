@@ -113,7 +113,12 @@ func (f *FS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 }
 
 // Readdir reads directory contents
-func (f *FS) Readdir(path string, fill func(name string, stat *fuse.Stat_t, ofst int64) bool, ofst int64, fh uint64) int {
+func (f *FS) Readdir(
+	path string,
+	fill func(name string, stat *fuse.Stat_t, ofst int64) bool,
+	ofst int64,
+	fh uint64,
+) int {
 	// Always add . and ..
 	fill(".", nil, 0)
 	fill("..", nil, 0)

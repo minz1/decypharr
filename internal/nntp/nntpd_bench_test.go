@@ -98,7 +98,11 @@ func BenchmarkStatBatchE2E(b *testing.B) {
 					messageIDs[i] = fmt.Sprintf("<stat-%d@nntpd>", i)
 					srv.AddArticle(messageIDs[i], []byte{1})
 				}
-				conn, provider, err := client.getConnectionFromProvider(context.Background(), WorkloadBackground, client.providers[0])
+				conn, provider, err := client.getConnectionFromProvider(
+					context.Background(),
+					WorkloadBackground,
+					client.providers[0],
+				)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -168,7 +172,11 @@ func BenchmarkStreamBodyPriorityUnderDownloadPressure(b *testing.B) {
 			b.SetBytes(benchSegmentSize)
 			for b.Loop() {
 				started := time.Now()
-				conn, provider, err := client.getAnyAvailableConnection(context.Background(), workload, providerExclusions{})
+				conn, provider, err := client.getAnyAvailableConnection(
+					context.Background(),
+					workload,
+					providerExclusions{},
+				)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -217,7 +225,11 @@ func BenchmarkBodyPipelineDepthE2E(b *testing.B) {
 				for i := range destinations {
 					destinations[i].Buffer = make([]byte, 0, DecodedBodyCapacity(benchSegmentSize))
 				}
-				conn, provider, err := client.getConnectionFromProvider(context.Background(), WorkloadStreamPrefetch, client.providers[0])
+				conn, provider, err := client.getConnectionFromProvider(
+					context.Background(),
+					WorkloadStreamPrefetch,
+					client.providers[0],
+				)
 				if err != nil {
 					b.Fatal(err)
 				}

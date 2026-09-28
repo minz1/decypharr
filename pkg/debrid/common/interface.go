@@ -26,8 +26,11 @@ type Client interface {
 	Config() config.Debrid
 	Logger() zerolog.Logger
 	RefreshDownloadLinks() error
-	CheckFile(ctx context.Context, infohash, fileID string) error // fileID here can link, file id(in the case of torbox), etc.
-	AccountManager() *account.Manager                             // Returns the active download account/token
+	CheckFile(
+		ctx context.Context,
+		infohash, fileID string,
+	) error // fileID here can link, file id(in the case of torbox), etc.
+	AccountManager() *account.Manager // Returns the active download account/token
 	GetProfile() (*types.Profile, error)
 	GetAvailableSlots() (int, error)
 	SyncAccounts() // Updates each accounts details(like traffic, username, etc.)

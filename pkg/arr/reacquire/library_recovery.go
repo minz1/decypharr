@@ -69,7 +69,10 @@ func (s *Service) ReacquireLibraryFile(ctx context.Context, request LibraryReque
 	if err := validateSearchBindings(instance, []Binding{binding}); err != nil {
 		return nil, err
 	}
-	return s.enqueue(Request{EntryID: entryID, FileID: fileID, Cause: request.Cause, Strategy: StrategyCommandSearch}, binding)
+	return s.enqueue(
+		Request{EntryID: entryID, FileID: fileID, Cause: request.Cause, Strategy: StrategyCommandSearch},
+		binding,
+	)
 }
 
 // reconcileImportedJobs uses Arr file IDs to confirm every replacement.
@@ -108,7 +111,8 @@ func (s *Service) reconcileImportedJobs(ctx context.Context) {
 		}
 		ready := true
 		for _, binding := range job.Bindings {
-			if !binding.AuthorizesMutation() || binding.ArrName != instance.Name || binding.ArrType != instance.Type || binding.ArrInstanceFingerprint != fingerprint {
+			if !binding.AuthorizesMutation() || binding.ArrName != instance.Name || binding.ArrType != instance.Type ||
+				binding.ArrInstanceFingerprint != fingerprint {
 				ready = false
 				break
 			}
@@ -141,7 +145,10 @@ func (s *Service) reconcileImportedJobs(ctx context.Context) {
 					break
 				}
 				if instance.Type == arr.Sonarr && file.SeriesID == binding.SeriesID {
-					remaining = slices.DeleteFunc(remaining, func(id int) bool { return slices.Contains(file.EpisodeIDs, id) })
+					remaining = slices.DeleteFunc(
+						remaining,
+						func(id int) bool { return slices.Contains(file.EpisodeIDs, id) },
+					)
 					replaced = len(binding.EpisodeIDs) > 0 && len(remaining) == 0
 				}
 			}

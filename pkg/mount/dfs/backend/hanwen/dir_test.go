@@ -98,7 +98,16 @@ func TestRefreshExistingChildUpdatesRetainedInode(t *testing.T) {
 
 func TestRefreshExistingChildUpdatesRetainedDirModTime(t *testing.T) {
 	root := NewDir(nil, "", LevelRoot, 0, &mountconfig.FuseConfig{}, zerolog.Nop(), logger.NewRateLimitedLogger())
-	child := newDir(nil, "shows", "/shows", LevelTorrent, 100, &mountconfig.FuseConfig{}, zerolog.Nop(), logger.NewRateLimitedLogger())
+	child := newDir(
+		nil,
+		"shows",
+		"/shows",
+		LevelTorrent,
+		100,
+		&mountconfig.FuseConfig{},
+		zerolog.Nop(),
+		logger.NewRateLimitedLogger(),
+	)
 
 	fs.NewNodeFS(root, &fs.Options{})
 	inode := root.NewInode(context.Background(), child, root.childStableAttr("shows", fuse.S_IFDIR|0755))
@@ -149,7 +158,15 @@ func TestSetEntryOutUsesFileTimestampFallback(t *testing.T) {
 		t.Fatalf("Getattr failed: %v", errno)
 	}
 	if entry.Mtime != attr.Mtime || entry.Ctime != attr.Ctime || entry.Atime != attr.Atime {
-		t.Fatalf("entry timestamps (%d, %d, %d) differ from Getattr (%d, %d, %d)", entry.Atime, entry.Mtime, entry.Ctime, attr.Atime, attr.Mtime, attr.Ctime)
+		t.Fatalf(
+			"entry timestamps (%d, %d, %d) differ from Getattr (%d, %d, %d)",
+			entry.Atime,
+			entry.Mtime,
+			entry.Ctime,
+			attr.Atime,
+			attr.Mtime,
+			attr.Ctime,
+		)
 	}
 	if entry.Mtime > uint64(time.Now().Add(time.Minute).Unix()) {
 		t.Fatalf("zero ModTime underflowed to %d", entry.Mtime)

@@ -148,7 +148,11 @@ func benchmarkPriorityAdmission(b *testing.B, load, contender Workload) {
 	var iterations int64
 	for b.Loop() {
 		start := time.Now()
-		conn, acquiredProvider, err := client.getAnyAvailableConnection(context.Background(), contender, providerExclusions{})
+		conn, acquiredProvider, err := client.getAnyAvailableConnection(
+			context.Background(),
+			contender,
+			providerExclusions{},
+		)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -177,7 +181,12 @@ func waitForBenchSaturation(b *testing.B, client *Client, pp *ProviderPool, work
 		}
 		time.Sleep(time.Millisecond)
 	}
-	b.Fatalf("background workload did not saturate: active=%d queued=%d, want at least %d", len(pp.slots), queued, queuedTarget)
+	b.Fatalf(
+		"background workload did not saturate: active=%d queued=%d, want at least %d",
+		len(pp.slots),
+		queued,
+		queuedTarget,
+	)
 }
 
 // benchContended runs `workers` goroutines that each loop: acquire a

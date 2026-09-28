@@ -28,7 +28,11 @@ func TestHandleLoginAlwaysReturnsSID(t *testing.T) {
 	})
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/v2/auth/login", strings.NewReader("username=homarr-user&password=homarr-password"))
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v2/auth/login",
+		strings.NewReader("username=homarr-user&password=homarr-password"),
+	)
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	(&QBit{manager: mgr}).handleLogin(recorder, request)
 
@@ -69,7 +73,8 @@ func TestWriteTorrentAddErrorPreservesSemantics(t *testing.T) {
 			retryable: true,
 		},
 		"invalid input": {
-			err:       customerror.NewError(errors.New("bad magnet"), http.StatusBadRequest, "invalid_magnet", false, false).Permanent(),
+			err: customerror.NewError(errors.New("bad magnet"), http.StatusBadRequest, "invalid_magnet", false, false).
+				Permanent(),
 			status:    http.StatusBadRequest,
 			code:      "invalid_magnet",
 			permanent: true,
@@ -99,7 +104,13 @@ func TestWriteTorrentAddErrorPreservesSemantics(t *testing.T) {
 				t.Fatalf("decode response: %v", err)
 			}
 			if response.Code != tt.code || response.Retryable != tt.retryable || response.Permanent != tt.permanent {
-				t.Fatalf("response = %#v, want code=%q retryable=%t permanent=%t", response, tt.code, tt.retryable, tt.permanent)
+				t.Fatalf(
+					"response = %#v, want code=%q retryable=%t permanent=%t",
+					response,
+					tt.code,
+					tt.retryable,
+					tt.permanent,
+				)
 			}
 		})
 	}

@@ -458,7 +458,14 @@ func (m *Manager) SendToDebrid(ctx context.Context, importRequest *ImportRequest
 		decision := m.hearsay.EvaluateAdd(db.Config().Provider, debridTorrent.InfoHash)
 		if !overrideDownloadUncached && decision.Reject() {
 			m.hearsay.DiscardAdd(decision)
-			errs = append(errs, fmt.Errorf("%s: %s recently proven not cached, skipping submit", db.Config().Name, debridTorrent.InfoHash))
+			errs = append(
+				errs,
+				fmt.Errorf(
+					"%s: %s recently proven not cached, skipping submit",
+					db.Config().Name,
+					debridTorrent.InfoHash,
+				),
+			)
 			continue
 		}
 		_logger := db.Logger()

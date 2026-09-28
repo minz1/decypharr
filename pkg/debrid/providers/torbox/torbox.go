@@ -127,7 +127,13 @@ func (tb *Torbox) doGet(endpoint string, queryParams map[string]string, result a
 	return tb.doGetWithClient(context.Background(), tb.client, endpoint, queryParams, result)
 }
 
-func (tb *Torbox) doGetWithClient(ctx context.Context, client *request.Client, endpoint string, queryParams map[string]string, result any) (*http.Response, error) {
+func (tb *Torbox) doGetWithClient(
+	ctx context.Context,
+	client *request.Client,
+	endpoint string,
+	queryParams map[string]string,
+	result any,
+) (*http.Response, error) {
 	u, err := url.Parse(tb.Host + endpoint)
 	if err != nil {
 		return nil, err
@@ -149,7 +155,12 @@ func (tb *Torbox) doGetWithClient(ctx context.Context, client *request.Client, e
 	return client.DoJSON(req, result)
 }
 
-func (tb *Torbox) doPostFormWithClient(client *request.Client, endpoint string, formData map[string]string, result any) (*http.Response, error) {
+func (tb *Torbox) doPostFormWithClient(
+	client *request.Client,
+	endpoint string,
+	formData map[string]string,
+	result any,
+) (*http.Response, error) {
 	form := url.Values{}
 	for k, v := range formData {
 		form.Set(k, v)
@@ -345,7 +356,13 @@ func (tb *Torbox) loadDownloadPresent(ctx context.Context) error {
 	total := 0
 	for {
 		var res TorrentsListResponse
-		resp, err := tb.doGetWithClient(ctx, tb.client, "/api/torrents/mylist", map[string]string{"offset": fmt.Sprintf("%d", offset)}, &res)
+		resp, err := tb.doGetWithClient(
+			ctx,
+			tb.client,
+			"/api/torrents/mylist",
+			map[string]string{"offset": fmt.Sprintf("%d", offset)},
+			&res,
+		)
 		if err != nil {
 			return err
 		}
@@ -372,7 +389,13 @@ func (tb *Torbox) UpdateTorrent(t *types.Torrent) error {
 func (tb *Torbox) updateTorrentWithClient(client *request.Client, t *types.Torrent) error {
 	var res InfoResponse
 
-	resp, err := tb.doGetWithClient(context.Background(), client, "/api/torrents/mylist", map[string]string{"id": t.Id}, &res)
+	resp, err := tb.doGetWithClient(
+		context.Background(),
+		client,
+		"/api/torrents/mylist",
+		map[string]string{"id": t.Id},
+		&res,
+	)
 	if err != nil {
 		return err
 	}
@@ -488,7 +511,12 @@ func (tb *Torbox) GetDownloadLink(ctx context.Context, id string, file *types.Fi
 	return tb.accountsManager.GetDownloadLink(ctx, id, file, tb.fetchDownloadLink)
 }
 
-func (tb *Torbox) fetchDownloadLink(ctx context.Context, account *account.Account, id string, file *types.File) (types.DownloadLink, error) {
+func (tb *Torbox) fetchDownloadLink(
+	ctx context.Context,
+	account *account.Account,
+	id string,
+	file *types.File,
+) (types.DownloadLink, error) {
 	query := url.Values{}
 	query.Set("token", account.Token)
 	query.Set("torrent_id", id)

@@ -47,7 +47,13 @@ func newFakeStreamSource(t *testing.T, content []byte) *fakeStreamSource {
 	return src
 }
 
-func (s *fakeStreamSource) OpenStream(ctx context.Context, entry *storage.Entry, filename string, offset int64, client string) (manager.StreamReader, error) {
+func (s *fakeStreamSource) OpenStream(
+	ctx context.Context,
+	entry *storage.Entry,
+	filename string,
+	offset int64,
+	client string,
+) (manager.StreamReader, error) {
 	end := int64(len(s.content)) - 1
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.srv.URL, nil)
 	if err != nil {

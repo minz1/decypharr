@@ -86,7 +86,11 @@ func (u *Usenet) VerifyFileHead(ctx context.Context, file *storage.NZBFile) erro
 			if headSignatureOK(head) {
 				return nil
 			}
-			return fmt.Errorf("head of %q matches no media container signature: %w", file.Name, customerror.UsenetCorruptContentError)
+			return fmt.Errorf(
+				"head of %q matches no media container signature: %w",
+				file.Name,
+				customerror.UsenetCorruptContentError,
+			)
 		}
 		if !errors.Is(err, parser.ErrPrefixReadUnsupported) {
 			if nntp.IsArticleNotFoundError(err) {
@@ -119,7 +123,11 @@ func (u *Usenet) VerifyFileHead(ctx context.Context, file *storage.NZBFile) erro
 	if headSignatureOK(head[:n]) {
 		return nil
 	}
-	return fmt.Errorf("head of %q matches no media container signature: %w", file.Name, customerror.UsenetCorruptContentError)
+	return fmt.Errorf(
+		"head of %q matches no media container signature: %w",
+		file.Name,
+		customerror.UsenetCorruptContentError,
+	)
 }
 
 // VerifyFile head-verifies one stored file of a completed NZB. Non-media
@@ -156,7 +164,8 @@ func (u *Usenet) verifyNZBContent(ctx context.Context, nzb *storage.NZB) error {
 		if err == nil {
 			continue
 		}
-		if errors.Is(err, customerror.UsenetCorruptContentError) || errors.Is(err, customerror.UsenetSegmentMissingError) {
+		if errors.Is(err, customerror.UsenetCorruptContentError) ||
+			errors.Is(err, customerror.UsenetSegmentMissingError) {
 			u.logger.Warn().
 				Err(err).
 				Str("nzb_id", nzb.ID).

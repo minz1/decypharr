@@ -146,7 +146,12 @@ func (r *RealDebrid) doPut(endpoint string, body []byte, contentType string, res
 }
 
 // doGetWithClient performs a GET using a specific client
-func (r *RealDebrid) doGetWithClient(client *request.Client, fullURL string, queryParams map[string]string, result any) (*http.Response, error) {
+func (r *RealDebrid) doGetWithClient(
+	client *request.Client,
+	fullURL string,
+	queryParams map[string]string,
+	result any,
+) (*http.Response, error) {
 	u, err := url.Parse(fullURL)
 	if err != nil {
 		return nil, err
@@ -169,7 +174,14 @@ func (r *RealDebrid) doGetWithClient(client *request.Client, fullURL string, que
 }
 
 // doPostFormWithClient performs a POST with form data using a specific client
-func (r *RealDebrid) doPostFormWithClient(ctx context.Context, client *request.Client, fullURL string, formData map[string]string, result any, errorResult any) (*http.Response, error) {
+func (r *RealDebrid) doPostFormWithClient(
+	ctx context.Context,
+	client *request.Client,
+	fullURL string,
+	formData map[string]string,
+	result any,
+	errorResult any,
+) (*http.Response, error) {
 	form := url.Values{}
 	for k, v := range formData {
 		form.Set(k, v)
@@ -262,7 +274,11 @@ func (r *RealDebrid) handleRarFallback(t *types.Torrent, data torrentInfo) map[s
 }
 
 // handleRarArchive processes RAR archives with multiple files
-func (r *RealDebrid) handleRarArchive(t *types.Torrent, data torrentInfo, selectedFiles []types.File) (map[string]types.File, error) {
+func (r *RealDebrid) handleRarArchive(
+	t *types.Torrent,
+	data torrentInfo,
+	selectedFiles []types.File,
+) (map[string]types.File, error) {
 	// This will block if 2 RAR operations are already in progress
 	r.rarSemaphore <- struct{}{}
 	defer func() {
@@ -272,7 +288,8 @@ func (r *RealDebrid) handleRarArchive(t *types.Torrent, data torrentInfo, select
 	files := make(map[string]types.File)
 
 	if !r.config.UnpackRar {
-		r.logger.Debug().Msgf("RAR file detected, but unpacking is disabled: %s. Falling back to single file representation.", t.Name)
+		r.logger.Debug().
+			Msgf("RAR file detected, but unpacking is disabled: %s. Falling back to single file representation.", t.Name)
 		return r.handleRarFallback(t, data), nil
 	}
 
@@ -281,7 +298,9 @@ func (r *RealDebrid) handleRarArchive(t *types.Torrent, data torrentInfo, select
 	downloadLinkObj, err := r.GetDownloadLink(context.Background(), t.Id, linkFile)
 
 	if err != nil {
-		r.logger.Debug().Err(err).Msgf("Error getting download link for RAR file: %s. Falling back to single file representation.", t.Name)
+		r.logger.Debug().
+			Err(err).
+			Msgf("Error getting download link for RAR file: %s. Falling back to single file representation.", t.Name)
 		return r.handleRarFallback(t, data), nil
 	}
 
@@ -289,14 +308,18 @@ func (r *RealDebrid) handleRarArchive(t *types.Torrent, data torrentInfo, select
 	reader, err := rar.NewReader(dlLink)
 
 	if err != nil {
-		r.logger.Debug().Err(err).Msgf("Error creating RAR reader for %s. Falling back to single file representation.", t.Name)
+		r.logger.Debug().
+			Err(err).
+			Msgf("Error creating RAR reader for %s. Falling back to single file representation.", t.Name)
 		return r.handleRarFallback(t, data), nil
 	}
 
 	rarFiles, err := reader.GetFiles()
 
 	if err != nil {
-		r.logger.Debug().Err(err).Msgf("Error reading RAR files for %s. Falling back to single file representation.", t.Name)
+		r.logger.Debug().
+			Err(err).
+			Msgf("Error reading RAR files for %s. Falling back to single file representation.", t.Name)
 		return r.handleRarFallback(t, data), nil
 	}
 
@@ -304,7 +327,8 @@ func (r *RealDebrid) handleRarArchive(t *types.Torrent, data torrentInfo, select
 	fileMap := make(map[string]*types.File)
 	for i := range selectedFiles {
 		// RD converts special chars to '_' for RAR file paths
-		safeName := strings.NewReplacer("|", "_", "\"", "_", "\\", "_", "?", "_", "*", "_", ":", "_", "<", "_", ">", "_").Replace(selectedFiles[i].Name)
+		safeName := strings.NewReplacer("|", "_", "\"", "_", "\\", "_", "?", "_", "*", "_", ":", "_", "<", "_", ">", "_").
+			Replace(selectedFiles[i].Name)
 		fileMap[safeName] = &selectedFiles[i]
 	}
 
@@ -692,7 +716,12 @@ func (r *RealDebrid) CheckFile(ctx context.Context, infohash, link string) error
 		form.Set(k, v)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.Host+"/unrestrict/check", strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		r.Host+"/unrestrict/check",
+		strings.NewReader(form.Encode()),
+	)
 	if err != nil {
 		return err
 	}
@@ -711,7 +740,12 @@ func (r *RealDebrid) CheckFile(ctx context.Context, infohash, link string) error
 	return nil
 }
 
-func (r *RealDebrid) fetchDownloadLink(ctx context.Context, account *account.Account, id string, file *types.File) (types.DownloadLink, error) {
+func (r *RealDebrid) fetchDownloadLink(
+	ctx context.Context,
+	account *account.Account,
+	id string,
+	file *types.File,
+) (types.DownloadLink, error) {
 	emptyLink := types.DownloadLink{}
 	link := file.Link
 	if strings.HasPrefix(file.Link, "https://real-debrid.com/d/") && len(file.Link) > 39 {
@@ -722,7 +756,14 @@ func (r *RealDebrid) fetchDownloadLink(ctx context.Context, account *account.Acc
 	var errResp ErrorResponse
 	var data UnrestrictResponse
 
-	resp, err := r.doPostFormWithClient(ctx, account.Client(), fmt.Sprintf("%s/unrestrict/link/", r.Host), formData, &data, &errResp)
+	resp, err := r.doPostFormWithClient(
+		ctx,
+		account.Client(),
+		fmt.Sprintf("%s/unrestrict/link/", r.Host),
+		formData,
+		&data,
+		&errResp,
+	)
 	if err != nil {
 		return emptyLink, err
 	}
@@ -733,7 +774,11 @@ func (r *RealDebrid) fetchDownloadLink(ctx context.Context, account *account.Acc
 		case 23, 34, 36:
 			return emptyLink, customerror.TrafficExceededError
 		default:
-			return emptyLink, fmt.Errorf("realdebrid API error: Status: %d || Code: %d", resp.StatusCode, errResp.ErrorCode)
+			return emptyLink, fmt.Errorf(
+				"realdebrid API error: Status: %d || Code: %d",
+				resp.StatusCode,
+				errResp.ErrorCode,
+			)
 		}
 	}
 	if data.Download == "" {

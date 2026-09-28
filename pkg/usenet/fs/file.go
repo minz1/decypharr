@@ -268,8 +268,14 @@ func (vf *File) newReaderForRange(start, end int64) (io.ReadCloser, error) {
 		if totalSegs > 0 {
 			lastSegEnd = vf.volume.Segments[totalSegs-1].EndOffset
 		}
-		return nil, fmt.Errorf("rar: no segments found for range %d-%d (volume size: %d, total segments: %d, last segment ends at: %d)",
-			start, end, vf.volume.Size, totalSegs, lastSegEnd)
+		return nil, fmt.Errorf(
+			"rar: no segments found for range %d-%d (volume size: %d, total segments: %d, last segment ends at: %d)",
+			start,
+			end,
+			vf.volume.Size,
+			totalSegs,
+			lastSegEnd,
+		)
 	}
 
 	// Build encryption config

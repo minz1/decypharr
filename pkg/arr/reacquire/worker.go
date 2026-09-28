@@ -529,7 +529,9 @@ func (status Status) waiting() bool {
 }
 
 func (status Status) dispatchable() bool {
-	return status == StatusQueued || status == StatusResolving || status == StatusInvalidating || status == StatusBlocklisting || status == StatusSearching
+	return status == StatusQueued || status == StatusResolving || status == StatusInvalidating ||
+		status == StatusBlocklisting ||
+		status == StatusSearching
 }
 
 func keyForBinding(binding Binding) jobKey {
@@ -572,9 +574,13 @@ func (s *Service) replacementsForJob(job Job) ([]string, bool) {
 		case len(target.EpisodeIDs) > 0:
 			for _, episodeID := range target.EpisodeIDs {
 				episodeCandidates := s.index.ByEpisodeID(job.ArrName, episodeID)
-				candidate, found := replacementCandidate(episodeCandidates, job.DownloadID, func(candidate Binding) bool {
-					return candidate.SeriesID == target.SeriesID
-				})
+				candidate, found := replacementCandidate(
+					episodeCandidates,
+					job.DownloadID,
+					func(candidate Binding) bool {
+						return candidate.SeriesID == target.SeriesID
+					},
+				)
 				if !found {
 					return nil, false
 				}
@@ -611,7 +617,8 @@ func (s *Service) replacementsForJob(job Job) ([]string, bool) {
 
 func replacementCandidate(candidates []Binding, oldDownloadID string, matches func(Binding) bool) (Binding, bool) {
 	for _, candidate := range candidates {
-		if candidate.AuthorizesMutation() && candidate.DownloadID != "" && candidate.DownloadID != oldDownloadID && matches(candidate) {
+		if candidate.AuthorizesMutation() && candidate.DownloadID != "" && candidate.DownloadID != oldDownloadID &&
+			matches(candidate) {
 			return candidate, true
 		}
 	}

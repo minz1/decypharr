@@ -40,7 +40,12 @@ type ActiveStream struct {
 
 // registerStream registers an active stream for observability.
 // Returns the stream ID so the caller can remove it when streaming completes.
-func (m *Manager) registerStream(entry *storage.Entry, fileName string, file *storage.File, source, debrid, client string) string {
+func (m *Manager) registerStream(
+	entry *storage.Entry,
+	fileName string,
+	file *storage.File,
+	source, debrid, client string,
+) string {
 	// Use deterministic ID to ensure a single entry per file
 	streamID := entry.Name + ":" + fileName
 	now := time.Now().Unix()

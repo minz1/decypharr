@@ -60,10 +60,16 @@ func TestShutdownResumesInterruptedSymlinks(t *testing.T) {
 				m.initEntryCache()
 				m.downloader = NewDownloadManager(m)
 				entry := &storage.Entry{
-					InfoHash: "0123456789012345678901234567890123456789", Name: "Show.S01-S02",
-					Protocol: config.ProtocolTorrent, State: storage.EntryStateDownloading,
-					ActiveProvider: "provider", Action: config.DownloadActionSymlink, SkipMultiSeason: !multiSeason,
-					SavePath: t.TempDir(), Files: map[string]*storage.File{}, Providers: map[string]*storage.ProviderEntry{},
+					InfoHash:        "0123456789012345678901234567890123456789",
+					Name:            "Show.S01-S02",
+					Protocol:        config.ProtocolTorrent,
+					State:           storage.EntryStateDownloading,
+					ActiveProvider:  "provider",
+					Action:          config.DownloadActionSymlink,
+					SkipMultiSeason: !multiSeason,
+					SavePath:        t.TempDir(),
+					Files:           map[string]*storage.File{},
+					Providers:       map[string]*storage.ProviderEntry{},
 				}
 				torrent := &types.Torrent{
 					Id: "provider-id", Debrid: "provider", InfoHash: entry.InfoHash, Name: entry.Name,
@@ -139,7 +145,8 @@ func TestShutdownResumesInterruptedSymlinks(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if saved.State != storage.EntryStateDownloading || saved.IsDownloading || saved.IsComplete || saved.LastError != "" {
+				if saved.State != storage.EntryStateDownloading || saved.IsDownloading || saved.IsComplete ||
+					saved.LastError != "" {
 					t.Fatalf("interrupted entry cannot resume: %#v", saved)
 				}
 				for name := range torrent.Files {
@@ -163,7 +170,11 @@ func TestShutdownResumesInterruptedSymlinks(t *testing.T) {
 							downloadPath = season.DownloadPath()
 						}
 					}
-					if _, err := os.Lstat(filepath.Join(completedSeason.DownloadPath(), "Show.S01E01.mkv")); !os.IsNotExist(err) {
+					if _, err := os.Lstat(
+						filepath.Join(completedSeason.DownloadPath(), "Show.S01E01.mkv"),
+					); !os.IsNotExist(
+						err,
+					) {
 						t.Fatalf("completed season was processed again: %v", err)
 					}
 				}

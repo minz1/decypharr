@@ -62,7 +62,10 @@ func TestGetTorrentSelectsRequestedMagnetFromArray(t *testing.T) {
 			t.Errorf("id = %q, want 2", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprint(w, `{"status":"success","data":{"magnets":[{"id":1,"filename":"Wrong.mkv","statusCode":1},{"id":2,"filename":"Release.mkv","statusCode":1,"hash":"ABC"}]}}`)
+		_, _ = fmt.Fprint(
+			w,
+			`{"status":"success","data":{"magnets":[{"id":1,"filename":"Wrong.mkv","statusCode":1},{"id":2,"filename":"Release.mkv","statusCode":1,"hash":"ABC"}]}}`,
+		)
 	}))
 	t.Cleanup(server.Close)
 
@@ -120,7 +123,11 @@ func TestCheckStatusRestartsStatusSeven(t *testing.T) {
 			statusCode = 1
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprintf(w, `{"status":"success","data":{"magnets":[{"id":42,"filename":"Release.mkv","statusCode":%d}]}}`, statusCode)
+		_, _ = fmt.Fprintf(
+			w,
+			`{"status":"success","data":{"magnets":[{"id":42,"filename":"Release.mkv","statusCode":%d}]}}`,
+			statusCode,
+		)
 	})
 	mux.HandleFunc("POST /v4/magnet/restart", func(w http.ResponseWriter, r *http.Request) {
 		restartCalls.Add(1)
@@ -165,7 +172,10 @@ func TestCheckStatusBoundsStatusSevenRetries(t *testing.T) {
 	mux.HandleFunc("GET /magnet/status", func(w http.ResponseWriter, r *http.Request) {
 		statusChecks.Add(1)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprint(w, `{"status":"success","data":{"magnets":[{"id":42,"filename":"Release.mkv","statusCode":7}]}}`)
+		_, _ = fmt.Fprint(
+			w,
+			`{"status":"success","data":{"magnets":[{"id":42,"filename":"Release.mkv","statusCode":7}]}}`,
+		)
 	})
 	mux.HandleFunc("POST /magnet/restart", func(w http.ResponseWriter, r *http.Request) {
 		restartCalls.Add(1)
@@ -199,7 +209,10 @@ func TestCheckStatusDoesNotRestartTerminalStatus(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /magnet/status", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprint(w, `{"status":"success","data":{"magnets":[{"id":42,"filename":"Release.mkv","statusCode":10}]}}`)
+		_, _ = fmt.Fprint(
+			w,
+			`{"status":"success","data":{"magnets":[{"id":42,"filename":"Release.mkv","statusCode":10}]}}`,
+		)
 	})
 	mux.HandleFunc("POST /magnet/restart", func(w http.ResponseWriter, r *http.Request) {
 		restartCalls.Add(1)

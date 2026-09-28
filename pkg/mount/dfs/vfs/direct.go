@@ -14,7 +14,13 @@ import (
 // streamSource is the narrow interface DirectStreamFile needs from manager.Manager.
 // Keeping it minimal lets tests inject a fake without wiring the full manager stack.
 type streamSource interface {
-	OpenStream(ctx context.Context, entry *storage.Entry, filename string, offset int64, client string) (manager.StreamReader, error)
+	OpenStream(
+		ctx context.Context,
+		entry *storage.Entry,
+		filename string,
+		offset int64,
+		client string,
+	) (manager.StreamReader, error)
 }
 
 // DirectStreamFile serves reads straight from the debrid network without
@@ -29,7 +35,13 @@ type DirectStreamFile struct {
 	closed   atomic.Bool
 }
 
-func newDirectStreamFile(mgr *manager.Manager, entry *storage.Entry, filename string, size int64, retries int) *DirectStreamFile {
+func newDirectStreamFile(
+	mgr *manager.Manager,
+	entry *storage.Entry,
+	filename string,
+	size int64,
+	retries int,
+) *DirectStreamFile {
 	return &DirectStreamFile{
 		src:      mgr,
 		entry:    entry,

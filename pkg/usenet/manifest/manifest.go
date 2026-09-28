@@ -103,7 +103,10 @@ func Decode(reader io.Reader) (*Manifest, error) {
 		case xml.StartElement:
 			if !rootSeen {
 				if value.Name.Local != "nzb" {
-					return nil, fmt.Errorf("decode NZB manifest: expected element type <nzb> but have <%s>", value.Name.Local)
+					return nil, fmt.Errorf(
+						"decode NZB manifest: expected element type <nzb> but have <%s>",
+						value.Name.Local,
+					)
 				}
 				rootSeen = true
 				depth = 1

@@ -48,8 +48,14 @@ func (l *segmentLayout) validateVolumes(volumes []storage.ArchiveVolumeInfo) err
 	nextSegment := 0
 	var total int64
 	for index, volume := range volumes {
-		if volume.SegmentStart != nextSegment || volume.SegmentStart < 0 || volume.SegmentEnd > len(l.segments) || volume.SegmentStart >= volume.SegmentEnd {
-			return fmt.Errorf("invalid segment bounds [%d, %d) for archive volume %d", volume.SegmentStart, volume.SegmentEnd, index)
+		if volume.SegmentStart != nextSegment || volume.SegmentStart < 0 || volume.SegmentEnd > len(l.segments) ||
+			volume.SegmentStart >= volume.SegmentEnd {
+			return fmt.Errorf(
+				"invalid segment bounds [%d, %d) for archive volume %d",
+				volume.SegmentStart,
+				volume.SegmentEnd,
+				index,
+			)
 		}
 		start := int64(0)
 		if volume.SegmentStart > 0 {
@@ -57,7 +63,12 @@ func (l *segmentLayout) validateVolumes(volumes []storage.ArchiveVolumeInfo) err
 		}
 		end := l.ends[volume.SegmentEnd-1]
 		if got := end - start; got != volume.Size {
-			return fmt.Errorf("archive volume %q segment size %d does not match declared size %d", volume.Name, got, volume.Size)
+			return fmt.Errorf(
+				"archive volume %q segment size %d does not match declared size %d",
+				volume.Name,
+				got,
+				volume.Size,
+			)
 		}
 		total += volume.Size
 		if total < 0 {
@@ -66,7 +77,13 @@ func (l *segmentLayout) validateVolumes(volumes []storage.ArchiveVolumeInfo) err
 		nextSegment = volume.SegmentEnd
 	}
 	if nextSegment != len(l.segments) || total != l.size {
-		return fmt.Errorf("archive volume layout covers %d of %d segments and %d of %d bytes", nextSegment, len(l.segments), total, l.size)
+		return fmt.Errorf(
+			"archive volume layout covers %d of %d segments and %d of %d bytes",
+			nextSegment,
+			len(l.segments),
+			total,
+			l.size,
+		)
 	}
 	return nil
 }
@@ -88,7 +105,13 @@ func (l *segmentLayout) slice(offset, length int64, outputOffsets bool) ([]stora
 	if offset >= l.size || end > l.size {
 		covered := max(int64(0), l.size-offset)
 		covered = min(covered, length)
-		return nil, fmt.Errorf("range [%d, %d] is only partially covered (%d of %d bytes)", offset, end-1, covered, length)
+		return nil, fmt.Errorf(
+			"range [%d, %d] is only partially covered (%d of %d bytes)",
+			offset,
+			end-1,
+			covered,
+			length,
+		)
 	}
 
 	first := sort.Search(len(l.ends), func(index int) bool {
@@ -125,7 +148,13 @@ func (l *segmentLayout) slice(offset, length int64, outputOffsets bool) ([]stora
 		outputPosition += bytesToRead
 	}
 	if outputPosition != length {
-		return nil, fmt.Errorf("range [%d, %d] has a source gap (%d of %d bytes covered)", offset, end-1, outputPosition, length)
+		return nil, fmt.Errorf(
+			"range [%d, %d] has a source gap (%d of %d bytes covered)",
+			offset,
+			end-1,
+			outputPosition,
+			length,
+		)
 	}
 	return result, nil
 }

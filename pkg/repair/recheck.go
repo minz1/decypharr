@@ -121,7 +121,13 @@ func (r *Service) RecheckMedia(ctx context.Context, arrName, mediaID string, fix
 	return run, nil
 }
 
-func (r *Service) executeRecheckMedia(ctx context.Context, run *storage.RepairRun, arrs []arr.Arr, arrName, mediaID string, fix bool) {
+func (r *Service) executeRecheckMedia(
+	ctx context.Context,
+	run *storage.RepairRun,
+	arrs []arr.Arr,
+	arrName, mediaID string,
+	fix bool,
+) {
 	candidates := make(map[string]*candidate)
 	var lastErr error
 	for _, a := range arrs {

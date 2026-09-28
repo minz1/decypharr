@@ -118,7 +118,9 @@ func (m *Manager) Current() *Account {
 	activeAccounts := m.Active()
 	if len(activeAccounts) == 0 {
 		// No active accounts left, try to use disabled ones
-		m.warnNoActiveAccounts("No active accounts available, all accounts are disabled, falling back to disabled accounts")
+		m.warnNoActiveAccounts(
+			"No active accounts available, all accounts are disabled, falling back to disabled accounts",
+		)
 		allAccounts := m.All()
 		if len(allAccounts) == 0 {
 			m.logger.Error().Str("debrid", m.debrid).Msg("Cannot set current account, no accounts available")
@@ -144,7 +146,9 @@ func (m *Manager) Disable(account *Account) {
 	// If the disabled account is currently in use, refresh the current account to switch to a new active one
 	activeAccounts := m.Active()
 	if len(activeAccounts) == 0 {
-		m.warnNoActiveAccounts("No active accounts available after disabling, all accounts are disabled, falling back to disabled accounts")
+		m.warnNoActiveAccounts(
+			"No active accounts available after disabling, all accounts are disabled, falling back to disabled accounts",
+		)
 		allAccounts := m.All()
 		if len(allAccounts) == 0 {
 			m.logger.Error().Str("debrid", m.debrid).Msg("Cannot set current account, no accounts available")
@@ -197,7 +201,12 @@ func (m *Manager) GetAccount(token string) (*Account, error) {
 	return acc, nil
 }
 
-func (m *Manager) GetDownloadLink(ctx context.Context, id string, file *types.File, fetcher LinkFetcher) (types.DownloadLink, error) {
+func (m *Manager) GetDownloadLink(
+	ctx context.Context,
+	id string,
+	file *types.File,
+	fetcher LinkFetcher,
+) (types.DownloadLink, error) {
 	if err := ctx.Err(); err != nil {
 		return types.DownloadLink{}, err
 	}
@@ -275,7 +284,11 @@ func (m *Manager) RefreshLinks(fetcher LinksFetcher) error {
 		wgPool.Go(func() error {
 			links, err := fetcher(acc)
 			if err != nil {
-				m.logger.Error().Err(err).Str("debrid", m.debrid).Str("account_token", utils.Mask(acc.Token)).Msg("Failed to fetch download links for account")
+				m.logger.Error().
+					Err(err).
+					Str("debrid", m.debrid).
+					Str("account_token", utils.Mask(acc.Token)).
+					Msg("Failed to fetch download links for account")
 				return err
 			}
 			for _, dl := range links {
@@ -297,12 +310,19 @@ func (m *Manager) Sync(syncer SyncFunc) {
 	m.accounts.Range(func(key string, acc *Account) bool {
 		wgPool.Go(func() {
 			if err := syncer(acc); err != nil {
-				m.logger.Error().Err(err).Str("debrid", m.debrid).Str("account_token", utils.Mask(acc.Token)).Msg("Failed to sync account")
+				m.logger.Error().
+					Err(err).
+					Str("debrid", m.debrid).
+					Str("account_token", utils.Mask(acc.Token)).
+					Msg("Failed to sync account")
 				return
 			}
 			// Check if account has expired
 			if !acc.Expiration.IsZero() && time.Now().After(acc.Expiration) {
-				m.logger.Warn().Str("debrid", m.debrid).Str("account_token", utils.Mask(acc.Token)).Msg("Account has expired, disabling")
+				m.logger.Warn().
+					Str("debrid", m.debrid).
+					Str("account_token", utils.Mask(acc.Token)).
+					Msg("Account has expired, disabling")
 				m.Disable(acc)
 				m.UpdateAccount(acc)
 				return
@@ -310,7 +330,10 @@ func (m *Manager) Sync(syncer SyncFunc) {
 			if acc.Disabled.Load() {
 				acc.Reset()
 				m.lastNoActiveWarning.Store(0)
-				m.logger.Info().Str("debrid", m.debrid).Str("account_token", utils.Mask(acc.Token)).Msg("Re-enabled account after successful sync")
+				m.logger.Info().
+					Str("debrid", m.debrid).
+					Str("account_token", utils.Mask(acc.Token)).
+					Msg("Re-enabled account after successful sync")
 			}
 			m.UpdateAccount(acc)
 		})

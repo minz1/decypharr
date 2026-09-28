@@ -258,7 +258,11 @@ func (p *RARParser) Process(ctx context.Context, group *FileGroup, password stri
 }
 
 // ParseArchive parses all volumes and extracts file information
-func (p *RARParser) parseArchive(ctx context.Context, volumes []*types.Volume, password string) (*RARArchiveInfo, error) {
+func (p *RARParser) parseArchive(
+	ctx context.Context,
+	volumes []*types.Volume,
+	password string,
+) (*RARArchiveInfo, error) {
 	if len(volumes) == 0 {
 		return nil, fmt.Errorf("no volumes provided")
 	}
@@ -336,7 +340,13 @@ func (p *RARParser) parseArchive(ctx context.Context, volumes []*types.Volume, p
 				isEncrypted = result.IsHeaderEncrypted
 				// Store the encryption key from first encrypted volume
 				if len(result.EncryptionKey) > 0 {
-					return volumeResult{index: volIdx, files: volumeFiles, isHeaderEncrypted: isEncrypted, encryptionKey: result.EncryptionKey, err: nil}
+					return volumeResult{
+						index:             volIdx,
+						files:             volumeFiles,
+						isHeaderEncrypted: isEncrypted,
+						encryptionKey:     result.EncryptionKey,
+						err:               nil,
+					}
 				}
 			}
 		case RARVersion4:
@@ -419,7 +429,12 @@ func detectRARVersion(data []byte) RARVersion {
 
 // parseRAR5Headers parses RAR 5.0 format headers by reading sequentially through the archive
 // This properly tracks offsets by reading headers and skipping data sections
-func (p *RARParser) parseRAR5Headers(data []byte, volumeIndex int, volumeName string, password string) ([]*RARFileEntry, error) {
+func (p *RARParser) parseRAR5Headers(
+	data []byte,
+	volumeIndex int,
+	volumeName string,
+	password string,
+) ([]*RARFileEntry, error) {
 	r := bytes.NewReader(data)
 
 	// Skip signature (8 bytes)
@@ -458,7 +473,15 @@ func (p *RARParser) parseRAR5Headers(data []byte, volumeIndex int, volumeName st
 
 		// Parse file headers
 		if header.Type == RAR5HeaderTypeFile {
-			file := p.parseRAR5FileHeader(header.Data, header.ExtraSize, volumeIndex, volumeName, dataOffset, dataSize, password)
+			file := p.parseRAR5FileHeader(
+				header.Data,
+				header.ExtraSize,
+				volumeIndex,
+				volumeName,
+				dataOffset,
+				dataSize,
+				password,
+			)
 			if file != nil {
 				files = append(files, file)
 			}
@@ -581,7 +604,15 @@ func (p *RARParser) readRAR5Header(r *bytes.Reader) (*rar5HeaderData, int, int64
 
 // parseRAR5FileHeader parses a RAR 5.0 file header
 // If password is provided and encryption salt is found, it derives the file-specific encryption key.
-func (p *RARParser) parseRAR5FileHeader(data []byte, extraSize uint64, volumeIndex int, volumeName string, dataOffset int64, packedSize int64, password string) *RARFileEntry {
+func (p *RARParser) parseRAR5FileHeader(
+	data []byte,
+	extraSize uint64,
+	volumeIndex int,
+	volumeName string,
+	dataOffset int64,
+	packedSize int64,
+	password string,
+) *RARFileEntry {
 	if extraSize > uint64(len(data)) {
 		return nil
 	}
@@ -844,7 +875,12 @@ func (p *RARParser) readRAR4Header(r *bytes.Reader) (*rar4Header, error) {
 }
 
 // parseRAR4FileHeader parses RAR 4.x file header
-func (p *RARParser) parseRAR4FileHeader(header *rar4Header, volumeIndex int, volumeName string, dataOffset int64) *RARFileEntry {
+func (p *RARParser) parseRAR4FileHeader(
+	header *rar4Header,
+	volumeIndex int,
+	volumeName string,
+	dataOffset int64,
+) *RARFileEntry {
 	if len(header.Data) < 21 { // Minimum file header data size
 		return nil
 	}

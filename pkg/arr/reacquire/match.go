@@ -54,7 +54,11 @@ func (s matchStats) matched() int {
 // matchLibraryFiles binds Arr library files to the managed files they point at.
 // managedRoot is the mount directory that holds every entry folder; an empty
 // root means the mount is off, and every readable target is considered.
-func matchLibraryFiles(library []arr.LibraryFile, managed []ManagedFile, managedRoot string) ([]libraryMatch, matchStats) {
+func matchLibraryFiles(
+	library []arr.LibraryFile,
+	managed []ManagedFile,
+	managedRoot string,
+) ([]libraryMatch, matchStats) {
 	stats := matchStats{libraryFiles: len(library), managedFiles: len(managed)}
 	managedRoot = filepath.Clean(managedRoot)
 
@@ -95,7 +99,10 @@ func matchLibraryFiles(library []arr.LibraryFile, managed []ManagedFile, managed
 		name := filepath.Base(target)
 		folder := targetFileKey{folder: entryFolderOf(target, managedRoot), name: name}
 		if files := byTarget[folder]; len(files) == 1 {
-			byFolder = append(byFolder, libraryMatch{library: libraryFile, managed: files[0], confidence: ConfidenceExactPath})
+			byFolder = append(
+				byFolder,
+				libraryMatch{library: libraryFile, managed: files[0], confidence: ConfidenceExactPath},
+			)
 			continue
 		} else if len(files) > 1 {
 			stats.ambiguousTarget++
@@ -105,7 +112,10 @@ func matchLibraryFiles(library []arr.LibraryFile, managed []ManagedFile, managed
 		// identify the managed file, as long as they identify only one.
 		if libraryFile.Size > 0 {
 			if files := bySize[sizeFileKey{name: name, size: libraryFile.Size}]; len(files) == 1 {
-				byTargetSize = append(byTargetSize, libraryMatch{library: libraryFile, managed: files[0], confidence: ConfidenceManagedTarget})
+				byTargetSize = append(
+					byTargetSize,
+					libraryMatch{library: libraryFile, managed: files[0], confidence: ConfidenceManagedTarget},
+				)
 				continue
 			} else if len(files) > 1 {
 				stats.ambiguousTarget++
@@ -133,7 +143,11 @@ func matchLibraryFiles(library []arr.LibraryFile, managed []ManagedFile, managed
 // resolveMatches keeps the candidates that bind one managed file to one Arr
 // file, and reports how many it dropped. Claimed files are carried across
 // calls so a weaker candidate never overrides a stronger one.
-func resolveMatches(candidates []libraryMatch, claimedManaged map[entryFileKey]bool, claimedArrFile map[int]bool) ([]libraryMatch, int) {
+func resolveMatches(
+	candidates []libraryMatch,
+	claimedManaged map[entryFileKey]bool,
+	claimedArrFile map[int]bool,
+) ([]libraryMatch, int) {
 	managedUses := make(map[entryFileKey]int, len(candidates))
 	arrFileUses := make(map[int]int, len(candidates))
 	for _, candidate := range candidates {

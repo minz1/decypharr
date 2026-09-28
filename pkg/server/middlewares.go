@@ -43,7 +43,11 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 
 		if err != nil || !ok || !auth || !hasVersion || currentAuth == nil || version != currentAuth.SessionVersion {
 			if isAPI {
-				s.sendJSONError(w, "Authentication required. Please provide a valid API token in the Authorization header (Bearer <token>) or authenticate via session cookies.", http.StatusUnauthorized)
+				s.sendJSONError(
+					w,
+					"Authentication required. Please provide a valid API token in the Authorization header (Bearer <token>) or authenticate via session cookies.",
+					http.StatusUnauthorized,
+				)
 			} else {
 				s.redirectTo(w, r, "/login")
 			}
@@ -98,7 +102,11 @@ func (s *Server) setupRedirectMiddleware(next http.Handler) http.Handler {
 		if err := cfg.SetupComplete(); err != nil {
 			isAPI := s.isAPIRequest(r)
 			if isAPI {
-				s.sendJSONError(w, fmt.Sprintf("[error] %s Setup wizard must be completed first. Please visit /setup", err), http.StatusServiceUnavailable)
+				s.sendJSONError(
+					w,
+					fmt.Sprintf("[error] %s Setup wizard must be completed first. Please visit /setup", err),
+					http.StatusServiceUnavailable,
+				)
 			} else {
 				s.redirectTo(w, r, "/setup")
 			}

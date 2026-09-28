@@ -45,10 +45,39 @@ func TestVirtualFolderAllAndAnySemantics(t *testing.T) {
 
 func TestVirtualFolderCaseSensitivityAndFileConditions(t *testing.T) {
 	t.Parallel()
-	compiled := mustCompileVirtualFolders(t,
-		config.VirtualFolder{Name: "Insensitive", Conditions: []config.VirtualFolderCondition{{Field: config.VirtualFolderFieldEntryName, Operator: config.VirtualFolderOperatorContains, Value: "2160p"}}},
-		config.VirtualFolder{Name: "Sensitive", Conditions: []config.VirtualFolderCondition{{Field: config.VirtualFolderFieldEntryName, Operator: config.VirtualFolderOperatorContains, Value: "2160p", CaseSensitive: true}}},
-		config.VirtualFolder{Name: "NoSamples", Conditions: []config.VirtualFolderCondition{{Field: config.VirtualFolderFieldFileName, Operator: config.VirtualFolderOperatorNotContains, Value: "sample"}}},
+	compiled := mustCompileVirtualFolders(
+		t,
+		config.VirtualFolder{
+			Name: "Insensitive",
+			Conditions: []config.VirtualFolderCondition{
+				{
+					Field:    config.VirtualFolderFieldEntryName,
+					Operator: config.VirtualFolderOperatorContains,
+					Value:    "2160p",
+				},
+			},
+		},
+		config.VirtualFolder{
+			Name: "Sensitive",
+			Conditions: []config.VirtualFolderCondition{
+				{
+					Field:         config.VirtualFolderFieldEntryName,
+					Operator:      config.VirtualFolderOperatorContains,
+					Value:         "2160p",
+					CaseSensitive: true,
+				},
+			},
+		},
+		config.VirtualFolder{
+			Name: "NoSamples",
+			Conditions: []config.VirtualFolderCondition{
+				{
+					Field:    config.VirtualFolderFieldFileName,
+					Operator: config.VirtualFolderOperatorNotContains,
+					Value:    "sample",
+				},
+			},
+		},
 	)
 	meta := &storage.EntryMetaInfo{Name: "Movie.2160P", AddedOn: time.Now()}
 
@@ -74,20 +103,79 @@ func TestVirtualFolderConditionFields(t *testing.T) {
 		name      string
 		condition config.VirtualFolderCondition
 	}{
-		{name: "entry regex", condition: config.VirtualFolderCondition{Field: config.VirtualFolderFieldEntryName, Operator: config.VirtualFolderOperatorMatchesRegex, Value: `S\d+`}},
-		{name: "file regex", condition: config.VirtualFolderCondition{Field: config.VirtualFolderFieldFileName, Operator: config.VirtualFolderOperatorMatchesRegex, Value: `S01E0[12]`}},
-		{name: "size", condition: config.VirtualFolderCondition{Field: config.VirtualFolderFieldSize, Operator: config.VirtualFolderOperatorGreaterThan, Value: "20GB"}},
-		{name: "added", condition: config.VirtualFolderCondition{Field: config.VirtualFolderFieldAdded, Operator: config.VirtualFolderOperatorWithinLast, Value: "7d"}},
-		{name: "file count", condition: config.VirtualFolderCondition{Field: config.VirtualFolderFieldFileCount, Operator: config.VirtualFolderOperatorGreaterThan, Value: "2"}},
-		{name: "protocol", condition: config.VirtualFolderCondition{Field: config.VirtualFolderFieldProtocol, Operator: config.VirtualFolderOperatorEquals, Value: "torrent"}},
-		{name: "provider", condition: config.VirtualFolderCondition{Field: config.VirtualFolderFieldProvider, Operator: config.VirtualFolderOperatorEquals, Value: "RealDebrid"}},
-		{name: "category", condition: config.VirtualFolderCondition{Field: config.VirtualFolderFieldCategory, Operator: config.VirtualFolderOperatorContains, Value: "RADARR"}},
+		{
+			name: "entry regex",
+			condition: config.VirtualFolderCondition{
+				Field:    config.VirtualFolderFieldEntryName,
+				Operator: config.VirtualFolderOperatorMatchesRegex,
+				Value:    `S\d+`,
+			},
+		},
+		{
+			name: "file regex",
+			condition: config.VirtualFolderCondition{
+				Field:    config.VirtualFolderFieldFileName,
+				Operator: config.VirtualFolderOperatorMatchesRegex,
+				Value:    `S01E0[12]`,
+			},
+		},
+		{
+			name: "size",
+			condition: config.VirtualFolderCondition{
+				Field:    config.VirtualFolderFieldSize,
+				Operator: config.VirtualFolderOperatorGreaterThan,
+				Value:    "20GB",
+			},
+		},
+		{
+			name: "added",
+			condition: config.VirtualFolderCondition{
+				Field:    config.VirtualFolderFieldAdded,
+				Operator: config.VirtualFolderOperatorWithinLast,
+				Value:    "7d",
+			},
+		},
+		{
+			name: "file count",
+			condition: config.VirtualFolderCondition{
+				Field:    config.VirtualFolderFieldFileCount,
+				Operator: config.VirtualFolderOperatorGreaterThan,
+				Value:    "2",
+			},
+		},
+		{
+			name: "protocol",
+			condition: config.VirtualFolderCondition{
+				Field:    config.VirtualFolderFieldProtocol,
+				Operator: config.VirtualFolderOperatorEquals,
+				Value:    "torrent",
+			},
+		},
+		{
+			name: "provider",
+			condition: config.VirtualFolderCondition{
+				Field:    config.VirtualFolderFieldProvider,
+				Operator: config.VirtualFolderOperatorEquals,
+				Value:    "RealDebrid",
+			},
+		},
+		{
+			name: "category",
+			condition: config.VirtualFolderCondition{
+				Field:    config.VirtualFolderFieldCategory,
+				Operator: config.VirtualFolderOperatorContains,
+				Value:    "RADARR",
+			},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			compiled := mustCompileVirtualFolders(t, config.VirtualFolder{Name: "Test", Conditions: []config.VirtualFolderCondition{tt.condition}})
+			compiled := mustCompileVirtualFolders(
+				t,
+				config.VirtualFolder{Name: "Test", Conditions: []config.VirtualFolderCondition{tt.condition}},
+			)
 			if !compiled.Matches("Test", meta, files) {
 				t.Fatalf("condition %#v did not match", tt.condition)
 			}
@@ -97,9 +185,24 @@ func TestVirtualFolderConditionFields(t *testing.T) {
 
 func TestVirtualFolderAddedConditionIsTimeSensitive(t *testing.T) {
 	t.Parallel()
-	compiled := mustCompileVirtualFolders(t,
-		config.VirtualFolder{Name: "Recent", Conditions: []config.VirtualFolderCondition{{Field: config.VirtualFolderFieldAdded, Operator: config.VirtualFolderOperatorWithinLast, Value: "7d"}}},
-		config.VirtualFolder{Name: "4K", Conditions: []config.VirtualFolderCondition{{Field: config.VirtualFolderFieldEntryName, Operator: config.VirtualFolderOperatorContains, Value: "2160p"}}},
+	compiled := mustCompileVirtualFolders(
+		t,
+		config.VirtualFolder{
+			Name: "Recent",
+			Conditions: []config.VirtualFolderCondition{
+				{Field: config.VirtualFolderFieldAdded, Operator: config.VirtualFolderOperatorWithinLast, Value: "7d"},
+			},
+		},
+		config.VirtualFolder{
+			Name: "4K",
+			Conditions: []config.VirtualFolderCondition{
+				{
+					Field:    config.VirtualFolderFieldEntryName,
+					Operator: config.VirtualFolderOperatorContains,
+					Value:    "2160p",
+				},
+			},
+		},
 	)
 	if !compiled.IsTimeSensitive("Recent") {
 		t.Fatal("relative-time folder was treated as cacheable")
@@ -122,8 +225,26 @@ func TestCompileKeepsValidDefinitionsAndOwnsSnapshot(t *testing.T) {
 	t.Parallel()
 	definitions := []config.VirtualFolder{
 		{Name: "First"},
-		{Name: "Broken", Conditions: []config.VirtualFolderCondition{{Field: config.VirtualFolderFieldEntryName, Operator: config.VirtualFolderOperatorMatchesRegex, Value: "["}}},
-		{Name: "Last", Conditions: []config.VirtualFolderCondition{{Field: config.VirtualFolderFieldEntryName, Operator: config.VirtualFolderOperatorEquals, Value: "movie"}}},
+		{
+			Name: "Broken",
+			Conditions: []config.VirtualFolderCondition{
+				{
+					Field:    config.VirtualFolderFieldEntryName,
+					Operator: config.VirtualFolderOperatorMatchesRegex,
+					Value:    "[",
+				},
+			},
+		},
+		{
+			Name: "Last",
+			Conditions: []config.VirtualFolderCondition{
+				{
+					Field:    config.VirtualFolderFieldEntryName,
+					Operator: config.VirtualFolderOperatorEquals,
+					Value:    "movie",
+				},
+			},
+		},
 	}
 	compiled, err := Compile(definitions)
 	if err == nil {

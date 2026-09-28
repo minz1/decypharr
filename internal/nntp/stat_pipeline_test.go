@@ -104,7 +104,11 @@ func TestBatchStatOnProviderYieldsToStreamBetweenPipelines(t *testing.T) {
 	releaseStream := make(chan struct{})
 	streamErr := make(chan error, 1)
 	go func() {
-		streamConn, provider, err := client.getAnyAvailableConnection(t.Context(), WorkloadStreamDemand, providerExclusions{})
+		streamConn, provider, err := client.getAnyAvailableConnection(
+			t.Context(),
+			WorkloadStreamDemand,
+			providerExclusions{},
+		)
 		if err != nil {
 			streamErr <- err
 			return

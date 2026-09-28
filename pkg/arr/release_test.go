@@ -15,7 +15,10 @@ func TestSearchAndGrabMovieRelease(t *testing.T) {
 			if r.URL.Path != "/api/v3/release" || r.URL.Query().Get("movieId") != "19" {
 				t.Errorf("release query = %s", r.URL.String())
 			}
-			_, _ = fmt.Fprint(w, `[{"guid":"release-guid","title":"Movie.Release","indexer":"Indexer","indexerId":7,"downloadAllowed":true,"unknownField":"preserved"}]`)
+			_, _ = fmt.Fprint(
+				w,
+				`[{"guid":"release-guid","title":"Movie.Release","indexer":"Indexer","indexerId":7,"downloadAllowed":true,"unknownField":"preserved"}]`,
+			)
 		case http.MethodPost:
 			if r.URL.Path != "/api/v3/release" {
 				t.Errorf("release path = %s", r.URL.Path)

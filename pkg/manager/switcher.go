@@ -11,7 +11,11 @@ import (
 )
 
 // SwitchTorrent moves a torrent from one debrid to another
-func (m *Manager) SwitchTorrent(ctx context.Context, infohash, target string, keepOld, waitComplete bool) (*storage.SwitcherJob, error) {
+func (m *Manager) SwitchTorrent(
+	ctx context.Context,
+	infohash, target string,
+	keepOld, waitComplete bool,
+) (*storage.SwitcherJob, error) {
 	entry, err := m.GetEntry(infohash)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get entry: %w", err)

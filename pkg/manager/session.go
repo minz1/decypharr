@@ -577,7 +577,13 @@ func (t *usenetTransport) open(ctx context.Context, pos int64) (io.ReadCloser, e
 	}
 	if n != len(probe) {
 		_ = h.Close()
-		return nil, fmt.Errorf("usenet stream prime at offset %d read %d bytes, want %d: %w", pos, n, len(probe), io.ErrUnexpectedEOF)
+		return nil, fmt.Errorf(
+			"usenet stream prime at offset %d read %d bytes, want %d: %w",
+			pos,
+			n,
+			len(probe),
+			io.ErrUnexpectedEOF,
+		)
 	}
 	// Warm the read-ahead window from the starting offset (bounded inside).
 	h.Prefetch(ctx, pos, t.size-pos)
@@ -621,12 +627,25 @@ func (t *usenetTransport) markArticleNotFound(err error) bool {
 // OpenStream opens a resilient, seekable session over one file of an entry and
 // registers it in the active-streams view. client identifies the consumer
 // (e.g. a User-Agent, "NFS"). Connecting is lazy — use Prime to fast-fail.
-func (m *Manager) OpenStream(ctx context.Context, entry *storage.Entry, filename string, offset int64, client string) (StreamReader, error) {
+func (m *Manager) OpenStream(
+	ctx context.Context,
+	entry *storage.Entry,
+	filename string,
+	offset int64,
+	client string,
+) (StreamReader, error) {
 	return m.OpenStreamWithRewindOwner(ctx, entry, filename, offset, client, RewindOwnerApplication)
 }
 
 // OpenStreamWithRewindOwner opens a stream with an explicit retention owner.
-func (m *Manager) OpenStreamWithRewindOwner(ctx context.Context, entry *storage.Entry, filename string, offset int64, client string, owner RewindOwner) (StreamReader, error) {
+func (m *Manager) OpenStreamWithRewindOwner(
+	ctx context.Context,
+	entry *storage.Entry,
+	filename string,
+	offset int64,
+	client string,
+	owner RewindOwner,
+) (StreamReader, error) {
 	s, source, debrid, err := m.openSession(ctx, entry, filename, offset, owner)
 	if err != nil {
 		return nil, err
@@ -661,7 +680,12 @@ func (m *Manager) OpenDirect(ctx context.Context, entry *storage.Entry, filename
 // OpenStreamUntracked opens a session without registering it in the
 // active-streams view. It is for consumers that do their own stream tracking —
 // for example a background sidecar download.
-func (m *Manager) OpenStreamUntracked(ctx context.Context, entry *storage.Entry, filename string, offset int64) (StreamReader, error) {
+func (m *Manager) OpenStreamUntracked(
+	ctx context.Context,
+	entry *storage.Entry,
+	filename string,
+	offset int64,
+) (StreamReader, error) {
 	s, _, _, err := m.openSession(ctx, entry, filename, offset, RewindOwnerApplication)
 	if err != nil {
 		return nil, err
@@ -676,7 +700,12 @@ func (m *Manager) OpenStreamUntracked(ctx context.Context, entry *storage.Entry,
 //
 // The caller is responsible for aggregate stream tracking. DFS tracks once at
 // the shared Downloaders level rather than once per read-ahead worker.
-func (m *Manager) OpenStreamUntrackedForCache(ctx context.Context, entry *storage.Entry, filename string, offset int64) (StreamReader, error) {
+func (m *Manager) OpenStreamUntrackedForCache(
+	ctx context.Context,
+	entry *storage.Entry,
+	filename string,
+	offset int64,
+) (StreamReader, error) {
 	s, _, _, err := m.openSession(ctx, entry, filename, offset, RewindOwnerDownstream)
 	if err != nil {
 		return nil, err
@@ -687,7 +716,12 @@ func (m *Manager) OpenStreamUntrackedForCache(ctx context.Context, entry *storag
 // OpenStreamForFile opens a tracked session for a catalog FileInfo, resolving
 // the backing storage entry by name. It lets the NFS layer stream without
 // depending on storage.Entry directly. client identifies the consumer.
-func (m *Manager) OpenStreamForFile(ctx context.Context, info *FileInfo, offset int64, client string) (StreamReader, error) {
+func (m *Manager) OpenStreamForFile(
+	ctx context.Context,
+	info *FileInfo,
+	offset int64,
+	client string,
+) (StreamReader, error) {
 	entry, err := m.GetEntryByName(info.Parent(), info.Name())
 	if err != nil {
 		return nil, fmt.Errorf("resolve entry for %s/%s: %w", info.Parent(), info.Name(), err)
@@ -695,7 +729,13 @@ func (m *Manager) OpenStreamForFile(ctx context.Context, info *FileInfo, offset 
 	return m.OpenStream(ctx, entry, info.Name(), offset, client)
 }
 
-func (m *Manager) openSession(ctx context.Context, entry *storage.Entry, filename string, offset int64, owner RewindOwner) (*session, string, string, error) {
+func (m *Manager) openSession(
+	ctx context.Context,
+	entry *storage.Entry,
+	filename string,
+	offset int64,
+	owner RewindOwner,
+) (*session, string, string, error) {
 	file, ok := entry.Files[filename]
 	if !ok {
 		return nil, "", "", fmt.Errorf("file %s not found in entry %s", filename, entry.Name)

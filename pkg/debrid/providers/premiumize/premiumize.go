@@ -74,7 +74,12 @@ func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter) (*Premiumize
 		request.WithLogger(_log),
 		request.WithMaxRetries(cfg.Retries),
 		request.WithRateLimiter(ratelimits["main"]),
-		request.WithRetryableStatus(http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout),
+		request.WithRetryableStatus(
+			http.StatusTooManyRequests,
+			http.StatusBadGateway,
+			http.StatusServiceUnavailable,
+			http.StatusGatewayTimeout,
+		),
 	}
 	if dc.Proxy != "" {
 		opts = append(opts, request.WithProxy(dc.Proxy))
@@ -139,7 +144,12 @@ func (pm *Premiumize) do(req *http.Request, out any) (*http.Response, error) {
 	return resp, nil
 }
 
-func (pm *Premiumize) doForm(ctx context.Context, method, apiPath string, values url.Values, out any) (*http.Response, error) {
+func (pm *Premiumize) doForm(
+	ctx context.Context,
+	method, apiPath string,
+	values url.Values,
+	out any,
+) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, pm.endpoint(apiPath), strings.NewReader(values.Encode()))
 	if err != nil {
 		return nil, err
@@ -275,7 +285,13 @@ func (pm *Premiumize) UpdateTorrent(t *types.Torrent) error {
 }
 
 func (pm *Premiumize) DeleteTorrent(torrentID string) error {
-	_, err := pm.doForm(context.Background(), http.MethodPost, "/api/transfer/delete", url.Values{"id": {torrentID}}, nil)
+	_, err := pm.doForm(
+		context.Background(),
+		http.MethodPost,
+		"/api/transfer/delete",
+		url.Values{"id": {torrentID}},
+		nil,
+	)
 	return err
 }
 
@@ -302,7 +318,11 @@ func (pm *Premiumize) IsAvailable(infohashes []string) (map[string]bool, error) 
 			return result, fmt.Errorf("check availability: %w", err)
 		}
 		if len(data.Response) != len(validHashes) {
-			return result, fmt.Errorf("check availability: got %d results for %d hashes", len(data.Response), len(validHashes))
+			return result, fmt.Errorf(
+				"check availability: got %d results for %d hashes",
+				len(data.Response),
+				len(validHashes),
+			)
 		}
 		for idx, available := range data.Response {
 			result[validHashes[idx]] = available
@@ -421,7 +441,12 @@ func (pm *Premiumize) filesForTransfer(tr premiumizeTransfer) (map[string]types.
 
 func (pm *Premiumize) itemDetails(ctx context.Context, id string) (*itemDetailsResponse, error) {
 	var data itemDetailsResponse
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pm.endpoint("/api/item/details?id="+url.QueryEscape(id)), nil)
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		pm.endpoint("/api/item/details?id="+url.QueryEscape(id)),
+		nil,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -431,7 +456,11 @@ func (pm *Premiumize) itemDetails(ctx context.Context, id string) (*itemDetailsR
 	return &data, nil
 }
 
-func (pm *Premiumize) addFolderFiles(files map[string]types.File, links *[]string, transferID, folderID, prefix string) (int, error) {
+func (pm *Premiumize) addFolderFiles(
+	files map[string]types.File,
+	links *[]string,
+	transferID, folderID, prefix string,
+) (int, error) {
 	var data folderListResponse
 	req, err := http.NewRequest(http.MethodGet, pm.endpoint("/api/folder/list?id="+url.QueryEscape(folderID)), nil)
 	if err != nil {
@@ -461,7 +490,13 @@ func (pm *Premiumize) addFolderFiles(files map[string]types.File, links *[]strin
 	return linkedFiles, nil
 }
 
-func (pm *Premiumize) addFile(files map[string]types.File, links *[]string, transferID, name, itemPath string, size int64, id, link string) {
+func (pm *Premiumize) addFile(
+	files map[string]types.File,
+	links *[]string,
+	transferID, name, itemPath string,
+	size int64,
+	id, link string,
+) {
 	if link == "" {
 		return
 	}
@@ -494,7 +529,12 @@ func (pm *Premiumize) GetDownloadLink(ctx context.Context, id string, file *type
 	return pm.accountsManager.GetDownloadLink(ctx, id, file, pm.fetchDownloadLink)
 }
 
-func (pm *Premiumize) fetchDownloadLink(ctx context.Context, acc *account.Account, id string, file *types.File) (types.DownloadLink, error) {
+func (pm *Premiumize) fetchDownloadLink(
+	ctx context.Context,
+	acc *account.Account,
+	id string,
+	file *types.File,
+) (types.DownloadLink, error) {
 	link := file.Link
 	size := file.Size
 	filename := file.Name
@@ -640,12 +680,15 @@ func (pm *Premiumize) syncAccount(acc *account.Account) error {
 }
 
 func (pm *Premiumize) DeleteLink(downloadLink types.DownloadLink) error {
-	return pm.accountsManager.DeleteDownloadLink(downloadLink, func(account *account.Account, dl types.DownloadLink) error {
-		// Premiumize exposes item and transfer deletion, but not a safe
-		// generated-link deletion endpoint. Deleting dl.Id here would delete
-		// the user's cloud file, not just invalidate this cached CDN link.
-		return nil
-	})
+	return pm.accountsManager.DeleteDownloadLink(
+		downloadLink,
+		func(account *account.Account, dl types.DownloadLink) error {
+			// Premiumize exposes item and transfer deletion, but not a safe
+			// generated-link deletion endpoint. Deleting dl.Id here would delete
+			// the user's cloud file, not just invalidate this cached CDN link.
+			return nil
+		},
+	)
 }
 
 func (pm *Premiumize) SpeedTest(ctx context.Context) types.SpeedTestResult {

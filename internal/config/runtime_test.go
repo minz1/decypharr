@@ -49,7 +49,9 @@ func TestConcurrentConfigUpdatesKeepAllChanges(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := range 12 {
 		wg.Go(func() {
-			_, err := Update(func(next *Config) error { next.Categories = append(next.Categories, fmt.Sprint(i)); return nil })
+			_, err := Update(
+				func(next *Config) error { next.Categories = append(next.Categories, fmt.Sprint(i)); return nil },
+			)
 			if err != nil {
 				t.Error(err)
 			}

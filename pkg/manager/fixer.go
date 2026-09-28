@@ -232,7 +232,8 @@ func (f *Fixer) MoveTorrent(entry *storage.Entry, debridName string, reinsert bo
 	// before re-submitting the magnet. Skipped when reinsert=true — e.g. the
 	// current active provider just failed and its placement is presumed stale.
 	if !reinsert {
-		if target, ok := entry.Providers[debridName]; ok && target != nil && target.ID != "" && target.Status == types.TorrentStatusDownloaded {
+		if target, ok := entry.Providers[debridName]; ok && target != nil && target.ID != "" &&
+			target.Status == types.TorrentStatusDownloaded {
 			if err := entry.ActivatePlacement(debridName); err == nil {
 				entry.Bad = false
 				entry.UpdatedAt = time.Now()
@@ -293,7 +294,11 @@ func (f *Fixer) MoveTorrent(entry *storage.Entry, debridName string, reinsert bo
 		}
 		return false, fmt.Errorf("failed to check status: %w", err)
 	}
-	f.manager.hearsay.ReportAdd(client.Config().Provider, entry.InfoHash, newDebridTorrent.Status == types.TorrentStatusDownloaded)
+	f.manager.hearsay.ReportAdd(
+		client.Config().Provider,
+		entry.InfoHash,
+		newDebridTorrent.Status == types.TorrentStatusDownloaded,
+	)
 
 	// Verify files have links
 	if len(newDebridTorrent.Files) == 0 {

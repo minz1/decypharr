@@ -44,13 +44,23 @@ func (s *Service) get(ctx context.Context, instance Arr, endpoint string, out an
 
 // getDecoded issues a read whose successful response has a specialized
 // decoder. Large collection endpoints use it to process one element at a time.
-func (s *Service) getDecoded(ctx context.Context, instance Arr, endpoint string, decode responseDecoder) (*http.Response, error) {
+func (s *Service) getDecoded(
+	ctx context.Context,
+	instance Arr,
+	endpoint string,
+	decode responseDecoder,
+) (*http.Response, error) {
 	return s.do(ctx, s.client, instance, http.MethodGet, endpoint, nil, decode)
 }
 
 // mutate issues a write. Writes are never retried, and a request that may have
 // reached the Arr is reported through ErrMutationOutcomeUnknown.
-func (s *Service) mutate(ctx context.Context, instance Arr, method, endpoint string, payload, out any) (*http.Response, error) {
+func (s *Service) mutate(
+	ctx context.Context,
+	instance Arr,
+	method, endpoint string,
+	payload, out any,
+) (*http.Response, error) {
 	return s.do(ctx, s.mutation, instance, method, endpoint, payload, decodeResponseInto(out))
 }
 

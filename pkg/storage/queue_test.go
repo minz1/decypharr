@@ -31,7 +31,10 @@ func TestQueueOperationsReportCorruptRecords(t *testing.T) {
 			case "delete":
 				err = s.DeleteWhereQueued(nil, func(*Entry) error { called = true; return nil })
 			case "update":
-				err = s.UpdateWhereQueued(nil, func(entry *Entry) bool { called = true; entry.Name = "after"; return true })
+				err = s.UpdateWhereQueued(
+					nil,
+					func(entry *Entry) bool { called = true; entry.Name = "after"; return true },
+				)
 			}
 			if err == nil || !strings.Contains(err.Error(), "corrupt") {
 				t.Fatalf("error = %v, want the corrupt record key", err)

@@ -649,11 +649,17 @@ func (sf *SegmentFetcher) fetchPrefetchBatch(ctx context.Context, segIndices []i
 				writeErr = err
 			}
 			if writeErr == nil {
-				writeErr = &nntp.Error{Type: nntp.ErrorTypeArticleNotFound, Message: "article produced no data after decoding"}
+				writeErr = &nntp.Error{
+					Type:    nntp.ErrorTypeArticleNotFound,
+					Message: "article produced no data after decoding",
+				}
 			}
 		}
 		if writeErr == nil && n == 0 {
-			writeErr = &nntp.Error{Type: nntp.ErrorTypeArticleNotFound, Message: "article produced no data after decoding"}
+			writeErr = &nntp.Error{
+				Type:    nntp.ErrorTypeArticleNotFound,
+				Message: "article produced no data after decoding",
+			}
 		}
 		if writeErr != nil {
 			writer.Discard()

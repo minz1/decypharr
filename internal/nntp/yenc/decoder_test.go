@@ -30,7 +30,8 @@ func yencEncode(data []byte, name string, partNum int, begin, end int64) string 
 	for _, b := range data {
 		encoded := (b + 42) & 0xFF
 		// Escape special characters: NUL, LF, CR, '=', TAB, SPACE, '.'
-		if encoded == 0 || encoded == '\n' || encoded == '\r' || encoded == '=' || encoded == '\t' || encoded == ' ' || encoded == '.' {
+		if encoded == 0 || encoded == '\n' || encoded == '\r' || encoded == '=' || encoded == '\t' || encoded == ' ' ||
+			encoded == '.' {
 			buf.WriteByte('=')
 			buf.WriteByte((encoded + 64) & 0xFF)
 			col += 2

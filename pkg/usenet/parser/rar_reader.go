@@ -195,7 +195,12 @@ type parseRAR5StreamResult struct {
 // parseRAR5Stream parses RAR 5.0 headers from a stream reader
 // This properly tracks offsets by reading headers sequentially and skipping data
 // If password is provided and headers are encrypted, it will decrypt them
-func (p *RARParser) parseRAR5Stream(stream *rarReader, volumeIndex int, volumeName string, password string) (*parseRAR5StreamResult, error) {
+func (p *RARParser) parseRAR5Stream(
+	stream *rarReader,
+	volumeIndex int,
+	volumeName string,
+	password string,
+) (*parseRAR5StreamResult, error) {
 	result := &parseRAR5StreamResult{
 		Files: make([]*RARFileEntry, 0),
 	}
@@ -273,7 +278,15 @@ func (p *RARParser) parseRAR5Stream(stream *rarReader, volumeIndex int, volumeNa
 					headerPos := stream.Position() - int64(encHeaderSize)
 					_, offsetInVol := stream.AbsoluteToVolumeOffset(headerPos + int64(encHeaderSize))
 
-					file := p.parseRAR5FileHeader(encHeader.Data, encHeader.ExtraSize, volumeIndex, volumeName, offsetInVol, encDataSize, password)
+					file := p.parseRAR5FileHeader(
+						encHeader.Data,
+						encHeader.ExtraSize,
+						volumeIndex,
+						volumeName,
+						offsetInVol,
+						encDataSize,
+						password,
+					)
 					if file != nil {
 						// Note: file.IsEncrypted is now set correctly from extra area parsing
 						// Headers being encrypted does NOT mean data is encrypted
@@ -309,7 +322,15 @@ func (p *RARParser) parseRAR5Stream(stream *rarReader, volumeIndex int, volumeNa
 
 			// Use the volumeIndex parameter passed to this function, not the stream's volume index
 			// because each stream only contains one volume
-			file := p.parseRAR5FileHeader(header.Data, header.ExtraSize, volumeIndex, volumeName, offsetInVol, dataSize, password)
+			file := p.parseRAR5FileHeader(
+				header.Data,
+				header.ExtraSize,
+				volumeIndex,
+				volumeName,
+				offsetInVol,
+				dataSize,
+				password,
+			)
 			if file != nil {
 				result.Files = append(result.Files, file)
 			}
@@ -632,7 +653,12 @@ func readVInt(r *bytes.Reader) (uint64, error) {
 
 // parseRAR4Stream parses RAR 4.x headers from a stream reader
 // This properly tracks offsets by reading headers sequentially and skipping data
-func (p *RARParser) parseRAR4Stream(stream *rarReader, volumeIndex int, volumeName string, volumeSize int64) ([]*RARFileEntry, error) {
+func (p *RARParser) parseRAR4Stream(
+	stream *rarReader,
+	volumeIndex int,
+	volumeName string,
+	volumeSize int64,
+) ([]*RARFileEntry, error) {
 	var files []*RARFileEntry
 
 	// Stream position is already at 7 (after RAR4 signature)

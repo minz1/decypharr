@@ -60,7 +60,8 @@ type QBitTorrent struct {
 }
 
 func (q QBitTorrent) IsZero() bool {
-	return q.DownloadFolder == "" && len(q.Categories) == 0 && q.RefreshInterval == 0 && !q.SkipPreCache && !q.AlwaysRmTrackerUrls
+	return q.DownloadFolder == "" && len(q.Categories) == 0 && q.RefreshInterval == 0 && !q.SkipPreCache &&
+		!q.AlwaysRmTrackerUrls
 }
 
 type Arr struct {
@@ -74,7 +75,9 @@ type Arr struct {
 }
 
 func (a Arr) IsZero() bool {
-	return a.Name == "" && a.Host == "" && a.Token == "" && !a.SkipRepair && a.DownloadUncached == nil && a.SelectedDebrid == "" && a.Source == ""
+	return a.Name == "" && a.Host == "" && a.Token == "" && !a.SkipRepair && a.DownloadUncached == nil &&
+		a.SelectedDebrid == "" &&
+		a.Source == ""
 }
 
 // QueueCleanup is the global policy that drives CleanupQueue. It maps
@@ -105,7 +108,11 @@ func DefaultQueueCleanupRules() []QueueCleanupRule {
 		{ID: "matched_by_id", Match: "Matched to series/movie by ID", Action: "import"},
 		{ID: "unable_to_parse", Match: "Unable to parse download", Action: "blacklist_research"},
 		{ID: "no_eligible_files", Match: "No files found are eligible for import", Action: "blacklist_research"},
-		{ID: "episodes_missing", Match: "Episodes not imported or missing from the release", Action: "blacklist_research"},
+		{
+			ID:     "episodes_missing",
+			Match:  "Episodes not imported or missing from the release",
+			Action: "blacklist_research",
+		},
 		{ID: "file_empty", Match: "Downloaded file is empty", Action: "blacklist_research"},
 		{ID: "invalid_local_path", Match: "Not a valid local path (remote path mapping)", Action: ""},
 		{ID: "not_grabbed", Match: "Not grabbed by the arr / no category", Action: ""},
@@ -661,7 +668,10 @@ func (c *Config) setDefaults() {
 			c.Mount.Rclone.Transfers = 4 // Default number of transfers
 		}
 		if c.Mount.Rclone.VfsCacheMode != "off" {
-			c.Mount.Rclone.VfsCachePollInterval = cmp.Or(c.Rclone.VfsCachePollInterval, "1m") // Clean cache every minute
+			c.Mount.Rclone.VfsCachePollInterval = cmp.Or(
+				c.Rclone.VfsCachePollInterval,
+				"1m",
+			) // Clean cache every minute
 		}
 		c.Mount.Rclone.DirCacheTime = cmp.Or(c.Rclone.DirCacheTime, "5m")
 		c.Mount.Rclone.LogLevel = cmp.Or(c.Rclone.LogLevel, strings.ToUpper(DefaultLogLevel))

@@ -177,8 +177,13 @@ func payload(tb testing.TB, records int) []byte {
 	rows := make([]record, records)
 	for i := range rows {
 		rows[i] = record{
-			ID:   i + 1,
-			Path: fmt.Sprintf("/mnt/decypharr/tv/A Show (2019)/Season %02d/A Show (2019) - S%02dE%02d - Title [Bluray-1080p][x264]-GROUP.mkv", i%20+1, i%20+1, i%24+1),
+			ID: i + 1,
+			Path: fmt.Sprintf(
+				"/mnt/decypharr/tv/A Show (2019)/Season %02d/A Show (2019) - S%02dE%02d - Title [Bluray-1080p][x264]-GROUP.mkv",
+				i%20+1,
+				i%20+1,
+				i%24+1,
+			),
 			Size: 3_500_000_000,
 		}
 	}

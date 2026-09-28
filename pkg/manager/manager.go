@@ -201,7 +201,10 @@ func (m *Manager) init() {
 	m.downloadsStopped = false
 	m.downloadMu.Unlock()
 	cfg := config.Get()
-	scheduler, err := gocron.NewScheduler(gocron.WithLocation(time.Local), gocron.WithGlobalJobOptions(gocron.WithTags("decypharr-manager")))
+	scheduler, err := gocron.NewScheduler(
+		gocron.WithLocation(time.Local),
+		gocron.WithGlobalJobOptions(gocron.WithTags("decypharr-manager")),
+	)
 	if err != nil {
 		scheduler, _ = gocron.NewScheduler(gocron.WithGlobalJobOptions(gocron.WithTags("decypharr-manager")))
 	}
@@ -211,7 +214,10 @@ func (m *Manager) init() {
 	if err != nil {
 		cetLocation = time.UTC
 	}
-	cetScheduler, err := gocron.NewScheduler(gocron.WithLocation(cetLocation), gocron.WithGlobalJobOptions(gocron.WithTags("decypharr-cet")))
+	cetScheduler, err := gocron.NewScheduler(
+		gocron.WithLocation(cetLocation),
+		gocron.WithGlobalJobOptions(gocron.WithTags("decypharr-cet")),
+	)
 	if err != nil {
 		cetScheduler, _ = gocron.NewScheduler(gocron.WithGlobalJobOptions(gocron.WithTags("decypharr-cet")))
 	}
@@ -261,9 +267,14 @@ func (m *Manager) init() {
 	m.fixer = NewFixer(m)
 
 	// Initialize strm reconciler
-	m.strm = strm.NewReconciler(m.ctx, m.storage, func(ctx context.Context, entry *storage.Entry, filename string) (io.ReadCloser, error) {
-		return m.OpenStreamUntracked(ctx, entry, filename, 0)
-	}, m.logger)
+	m.strm = strm.NewReconciler(
+		m.ctx,
+		m.storage,
+		func(ctx context.Context, entry *storage.Entry, filename string) (io.ReadCloser, error) {
+			return m.OpenStreamUntracked(ctx, entry, filename, 0)
+		},
+		m.logger,
+	)
 
 	// Set mount paths
 	m.setMountPaths()

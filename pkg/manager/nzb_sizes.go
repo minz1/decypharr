@@ -60,7 +60,10 @@ func (m *Manager) fixNZBFileSizes(ctx context.Context) {
 				// Add usenet placement to update it
 				_ = entry.AddUsenetProvider(nzb)
 				if err := m.storage.AddOrUpdate(entry); err != nil {
-					m.logger.Warn().Err(err).Str("nzb_id", nzb.ID).Msg("Failed to update entry during NZB size correction")
+					m.logger.Warn().
+						Err(err).
+						Str("nzb_id", nzb.ID).
+						Msg("Failed to update entry during NZB size correction")
 				}
 			}
 		}

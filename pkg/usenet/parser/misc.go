@@ -253,7 +253,10 @@ func buildBaseSegments(group *FileGroup) ([]storage.NZBSegment, []storage.Archiv
 	for idx, nzbFile := range group.Files {
 		totalSize, segments := getNZBSegments(idx, nzbFile, group)
 		if totalSize == 0 || len(segments) == 0 {
-			return nil, nil, 0, fmt.Errorf("archive volume %q has incomplete or inconsistent segments", nzbFile.Filename)
+			return nil, nil, 0, fmt.Errorf(
+				"archive volume %q has incomplete or inconsistent segments",
+				nzbFile.Filename,
+			)
 		}
 		start := len(baseSegments)
 		baseSegments = append(baseSegments, segments...)

@@ -14,8 +14,13 @@ func TestPoolBudgetsBelongToEachRun(t *testing.T) {
 	for _, budget := range []int64{64 << 20, 8 << 20} {
 		pools := NewPools(budget)
 		t.Cleanup(func() { _ = pools.Close() })
-		if pools == previous || pools.buffers.Stats().MemoryBudget != budget || pools.extents.stats().MemoryBudget != budget {
-			t.Fatalf("new run retained old budget: buffers=%#v extents=%#v", pools.buffers.Stats(), pools.extents.stats())
+		if pools == previous || pools.buffers.Stats().MemoryBudget != budget ||
+			pools.extents.stats().MemoryBudget != budget {
+			t.Fatalf(
+				"new run retained old budget: buffers=%#v extents=%#v",
+				pools.buffers.Stats(),
+				pools.extents.stats(),
+			)
 		}
 		cfg := DefaultConfig()
 		cfg.Pools = pools
@@ -38,7 +43,16 @@ func TestPoolBudgetsBelongToEachRun(t *testing.T) {
 		if pools.extents.stats().Caches != 0 || pools.buffers.Stats().Buffers != 0 {
 			t.Fatal("closed run retains caches")
 		}
-		if _, err := NewSegmentCache(t.Context(), mkSegs(4, 1024), cfg, &ReaderStats{}, zerolog.Nop()); !errors.Is(err, buffer.ErrClosed) {
+		if _, err := NewSegmentCache(
+			t.Context(),
+			mkSegs(4, 1024),
+			cfg,
+			&ReaderStats{},
+			zerolog.Nop(),
+		); !errors.Is(
+			err,
+			buffer.ErrClosed,
+		) {
 			t.Fatalf("old run accepted a cache: %v", err)
 		}
 		previous = pools

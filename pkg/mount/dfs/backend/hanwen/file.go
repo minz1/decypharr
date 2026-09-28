@@ -36,7 +36,12 @@ var (
 )
 
 // NewFile creates a new file
-func NewFile(vfsManager *vfs.Manager, config *config.FuseConfig, info *manager.FileInfo, rl *logger.RateLimitedLogger) *File {
+func NewFile(
+	vfsManager *vfs.Manager,
+	config *config.FuseConfig,
+	info *manager.FileInfo,
+	rl *logger.RateLimitedLogger,
+) *File {
 	createdAt := info.ModTime()
 	if createdAt.IsZero() {
 		// Choose the fallback once when the node is created. Recomputing it in

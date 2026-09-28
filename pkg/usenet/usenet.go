@@ -362,10 +362,14 @@ func New() (*Usenet, error) {
 	}
 
 	u := &Usenet{
-		bufferPools:              reader.NewPools(usenetConfig.BufferMemoryBytes()),
-		nzbStorage:               nzbStorage,
-		nntp:                     client,
-		analyzer:                 parser.NewParser(client, processingMaxConns, _logger.With().Str("component", "parser").Logger()),
+		bufferPools: reader.NewPools(usenetConfig.BufferMemoryBytes()),
+		nzbStorage:  nzbStorage,
+		nntp:        client,
+		analyzer: parser.NewParser(
+			client,
+			processingMaxConns,
+			_logger.With().Str("component", "parser").Logger(),
+		),
 		fetchScheduler:           reader.NewFetchScheduler(maxConns),
 		logger:                   _logger,
 		metadataDir:              metadataDir,
@@ -419,7 +423,11 @@ func (u *Usenet) createEntry(file *storage.NZBFile, prefetchSize int64, retentio
 }
 
 // getOrCreateEntry returns the fsEntry and its cache key to avoid redundant key computation.
-func (u *Usenet) getOrCreateEntry(ctx context.Context, nzoID, filename string, retention Retention) (*fsEntry, string, error) {
+func (u *Usenet) getOrCreateEntry(
+	ctx context.Context,
+	nzoID, filename string,
+	retention Retention,
+) (*fsEntry, string, error) {
 	baseKey := fsKey(nzoID, filename)
 	key := baseKey + "::window"
 	switch retention {
@@ -530,13 +538,23 @@ func (u *Usenet) cleanupIdleFS() {
 }
 
 // Parse processes an NZB for download/streaming (quick parse, defers archive extraction)
-func (u *Usenet) Parse(ctx context.Context, name string, content []byte, category string) (*storage.NZB, map[string]*parser.FileGroup, error) {
+func (u *Usenet) Parse(
+	ctx context.Context,
+	name string,
+	content []byte,
+	category string,
+) (*storage.NZB, map[string]*parser.FileGroup, error) {
 	return u.ParseWithID(ctx, "", name, content, category)
 }
 
 // ParseWithID parses an NZB using a caller-provided ID. Supplying the ID lets
 // the manager expose a queued entry before the active-download worker starts.
-func (u *Usenet) ParseWithID(ctx context.Context, id, name string, content []byte, category string) (*storage.NZB, map[string]*parser.FileGroup, error) {
+func (u *Usenet) ParseWithID(
+	ctx context.Context,
+	id, name string,
+	content []byte,
+	category string,
+) (*storage.NZB, map[string]*parser.FileGroup, error) {
 	if len(content) == 0 {
 		return nil, nil, fmt.Errorf("NZB content is empty")
 	}
@@ -589,7 +607,11 @@ func (u *Usenet) ParseWithID(ctx context.Context, id, name string, content []byt
 }
 
 // Process processes archive files in an NZB (full parse)
-func (u *Usenet) Process(ctx context.Context, nzb *storage.NZB, groups map[string]*parser.FileGroup) (*storage.NZB, error) {
+func (u *Usenet) Process(
+	ctx context.Context,
+	nzb *storage.NZB,
+	groups map[string]*parser.FileGroup,
+) (*storage.NZB, error) {
 	u.logger.Info().
 		Str("nzb_id", nzb.ID).
 		Str("name", nzb.Name).
@@ -856,7 +878,11 @@ func (u *Usenet) OpenFile(ctx context.Context, nzoID, filename string) (*FileHan
 	return u.OpenFileWithRetention(ctx, nzoID, filename, configuredRetention())
 }
 
-func (u *Usenet) OpenFileWithRetention(ctx context.Context, nzoID, filename string, retention Retention) (*FileHandle, error) {
+func (u *Usenet) OpenFileWithRetention(
+	ctx context.Context,
+	nzoID, filename string,
+	retention Retention,
+) (*FileHandle, error) {
 	entry, key, err := u.getOrCreateEntry(ctx, nzoID, filename, retention)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get or create file system: %w", err)

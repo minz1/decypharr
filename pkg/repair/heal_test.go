@@ -25,7 +25,10 @@ func (fake *fakeReacquirer) Reacquire(request reacquire.Request) (*reacquire.Job
 	return fake.reacquire(request)
 }
 
-func (fake *fakeReacquirer) ReacquireLibraryFile(_ context.Context, request reacquire.LibraryRequest) (*reacquire.Job, error) {
+func (fake *fakeReacquirer) ReacquireLibraryFile(
+	_ context.Context,
+	request reacquire.LibraryRequest,
+) (*reacquire.Job, error) {
 	fake.libraryRequests = append(fake.libraryRequests, request)
 	if fake.library == nil {
 		return nil, errors.New("library recovery unavailable")
@@ -208,7 +211,11 @@ func TestHealBrokenEntryQueuesUnindexedLibraryFile(t *testing.T) {
 	}}
 	service := New(Dependencies{Storage: store, Arrs: registry, Reacquirer: reacquirer})
 	run := &storage.RepairRun{ID: "repair-run-4"}
-	health := &storage.EntryHealth{EntryName: "Series.Release", Status: storage.HealthBroken, FileCount: 2, BrokenCount: 1,
+	health := &storage.EntryHealth{
+		EntryName:   "Series.Release",
+		Status:      storage.HealthBroken,
+		FileCount:   2,
+		BrokenCount: 1,
 		BrokenFiles: []storage.BrokenFile{{FileName: "Episode.mkv", InfoHash: "missing-entry", ArrName: "sonarr",
 			ArrFileID: 4242, EpisodeID: 7, SourcePath: "/library/Episode.mkv"}},
 	}
@@ -217,7 +224,8 @@ func TestHealBrokenEntryQueuesUnindexedLibraryFile(t *testing.T) {
 	if mutations != 0 {
 		t.Fatal("repair sent direct Arr mutations")
 	}
-	if len(reacquirer.libraryRequests) != 1 || reacquirer.libraryRequests[0].LibraryPath != "/library/Episode.mkv" || reacquirer.libraryRequests[0].ArrFileID != 4242 {
+	if len(reacquirer.libraryRequests) != 1 || reacquirer.libraryRequests[0].LibraryPath != "/library/Episode.mkv" ||
+		reacquirer.libraryRequests[0].ArrFileID != 4242 {
 		t.Fatalf("library requests = %#v", reacquirer.libraryRequests)
 	}
 	if run.Stats.Repaired != 1 || run.Stats.RepairFailed != 0 {
@@ -229,14 +237,27 @@ func TestHealBrokenEntryDoesNotBypassUnsafeOrUnavailableReacquisition(t *testing
 	for _, cause := range []error{reacquire.ErrBindingUnsafe, reacquire.ErrServiceNotStarted, reacquire.ErrServiceClosed} {
 		t.Run(cause.Error(), func(t *testing.T) {
 			store := newRepairTestStorage(t)
-			if err := store.AddOrUpdate(&storage.Entry{InfoHash: "entry", Name: "release", Files: map[string]*storage.File{
-				"movie.mkv": {ID: "file", Name: "movie.mkv", InfoHash: "entry"},
-			}}); err != nil {
+			if err := store.AddOrUpdate(
+				&storage.Entry{InfoHash: "entry", Name: "release", Files: map[string]*storage.File{
+					"movie.mkv": {ID: "file", Name: "movie.mkv", InfoHash: "entry"},
+				}},
+			); err != nil {
 				t.Fatal(err)
 			}
-			reacquirer := &fakeReacquirer{reacquire: func(reacquire.Request) (*reacquire.Job, error) { return nil, cause }}
+			reacquirer := &fakeReacquirer{
+				reacquire: func(reacquire.Request) (*reacquire.Job, error) { return nil, cause },
+			}
 			service := New(Dependencies{Storage: store, Reacquirer: reacquirer})
-			_, err := service.reacquireBrokenFile(t.Context(), storage.BrokenFile{InfoHash: "entry", FileName: "movie.mkv", ArrFileID: 7, ArrName: "radarr", SourcePath: "/library/movie.mkv"})
+			_, err := service.reacquireBrokenFile(
+				t.Context(),
+				storage.BrokenFile{
+					InfoHash:   "entry",
+					FileName:   "movie.mkv",
+					ArrFileID:  7,
+					ArrName:    "radarr",
+					SourcePath: "/library/movie.mkv",
+				},
+			)
 			if !errors.Is(err, cause) || len(reacquirer.libraryRequests) != 0 {
 				t.Fatalf("error = %v, fallback calls = %d", err, len(reacquirer.libraryRequests))
 			}

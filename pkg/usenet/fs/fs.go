@@ -63,7 +63,15 @@ func WithPools(pools *reader.Pools) Option { return func(f *FS) { f.pools = pool
 
 // NewFS creates a new filesystem backed by the provided connection nntpClient.
 // prefetchSize is the amount of data to prefetch ahead in bytes (e.g., 16*1024*1024 for 16MB)
-func NewFS(ctx context.Context, client *nntp.Client, maxConcurrent int, prefetchSize int64, volumes []*types.Volume, logger zerolog.Logger, opts ...Option) (*FS, error) {
+func NewFS(
+	ctx context.Context,
+	client *nntp.Client,
+	maxConcurrent int,
+	prefetchSize int64,
+	volumes []*types.Volume,
+	logger zerolog.Logger,
+	opts ...Option,
+) (*FS, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}

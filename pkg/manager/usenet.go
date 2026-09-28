@@ -99,7 +99,13 @@ func (m *Manager) processNZBJob(ctx context.Context, job *Job) error {
 		// so a degraded provider held the worker slot with no upper bound;
 		// give it the same budget the processing stage gets.
 		parseCtx, cancelParse := context.WithTimeout(ctx, m.usenetTimeout)
-		meta, groups, err := m.usenet.ParseWithID(parseCtx, job.Entry.InfoHash, job.Request.Name, content, job.Request.Arr.Name)
+		meta, groups, err := m.usenet.ParseWithID(
+			parseCtx,
+			job.Entry.InfoHash,
+			job.Request.Name,
+			content,
+			job.Request.Arr.Name,
+		)
 		cancelParse()
 		if err != nil {
 			// A missing article at the parse stage is a definitive
@@ -170,7 +176,12 @@ func (m *Manager) processNZB(ctx context.Context, entry *storage.Entry, metadata
 }
 
 // processNewNzb processes a new NZB entry after it has been added to the usenet client
-func (m *Manager) processNewNzb(parentCtx context.Context, entry *storage.Entry, metadata *storage.NZB, groups map[string]*parser.FileGroup) error {
+func (m *Manager) processNewNzb(
+	parentCtx context.Context,
+	entry *storage.Entry,
+	metadata *storage.NZB,
+	groups map[string]*parser.FileGroup,
+) error {
 	// Create context with timeout for processing
 	ctx, cancel := context.WithTimeout(parentCtx, m.usenetTimeout)
 	defer cancel()

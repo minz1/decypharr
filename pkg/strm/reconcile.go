@@ -31,7 +31,12 @@ type Reconciler struct {
 }
 
 // NewReconciler creates the export service with its storage and stream source.
-func NewReconciler(ctx context.Context, store *storage.Storage, openStream func(context.Context, *storage.Entry, string) (io.ReadCloser, error), logger zerolog.Logger) *Reconciler {
+func NewReconciler(
+	ctx context.Context,
+	store *storage.Storage,
+	openStream func(context.Context, *storage.Entry, string) (io.ReadCloser, error),
+	logger zerolog.Logger,
+) *Reconciler {
 	return &Reconciler{ctx: ctx, storage: store, openStream: openStream,
 		logger: logger.With().Str("component", "strm").Logger()}
 }

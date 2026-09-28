@@ -48,7 +48,16 @@ func TestRouterQueueContracts(t *testing.T) {
 		{"tv", config.ProtocolTorrent, storage.EntryStateDownloading},
 		{"tv", config.ProtocolNZB, storage.EntryStatePausedUP},
 	} {
-		entry := &storage.Entry{InfoHash: fmt.Sprintf("entry-%d", i), Name: fmt.Sprintf("Release%d.nzb", i), Category: tc.category, Protocol: tc.protocol, State: tc.state, Size: 4 << 20, Progress: 0.25, SavePath: t.TempDir()}
+		entry := &storage.Entry{
+			InfoHash: fmt.Sprintf("entry-%d", i),
+			Name:     fmt.Sprintf("Release%d.nzb", i),
+			Category: tc.category,
+			Protocol: tc.protocol,
+			State:    tc.state,
+			Size:     4 << 20,
+			Progress: 0.25,
+			SavePath: t.TempDir(),
+		}
 		if err := mgr.Queue().Add(entry); err != nil {
 			t.Fatal(err)
 		}
@@ -89,31 +98,46 @@ func TestRouterQueueContracts(t *testing.T) {
 				t.Fatalf("queue = %#v", got)
 			}
 			slot := got.Queue.Slots[0]
-			if slot.NzoId != "entry-0" || slot.Cat != "tv" || slot.Filename != "Release0.nzb" || slot.Mb != "4.00" || slot.MBLeft != "3.00" || slot.Percentage != "25" || slot.Status != StatusDownloading || slot.Labels == nil {
+			if slot.NzoId != "entry-0" || slot.Cat != "tv" || slot.Filename != "Release0.nzb" || slot.Mb != "4.00" ||
+				slot.MBLeft != "3.00" ||
+				slot.Percentage != "25" ||
+				slot.Status != StatusDownloading ||
+				slot.Labels == nil {
 				t.Fatalf("slot = %#v", slot)
 			}
 		})
 	}
 	t.Run("unknown mode", func(t *testing.T) {
 		response := httptest.NewRecorder()
-		router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/?mode=unknown&ma_password=test-token", nil))
+		router.ServeHTTP(
+			response,
+			httptest.NewRequest(http.MethodGet, "/api/?mode=unknown&ma_password=test-token", nil),
+		)
 		if response.Code != 404 {
 			t.Fatalf("status = %d", response.Code)
 		}
 	})
 	t.Run("authenticated Arr survives mode parsing", func(t *testing.T) {
 		uncached := true
-		mgr.Arr().AddOrUpdate(arr.Arr{Name: "tv", Host: "https://arr.example.test", Token: "arr-token", Source: arr.SourceManual, DownloadUncached: &uncached})
+		mgr.Arr().
+			AddOrUpdate(arr.Arr{Name: "tv", Host: "https://arr.example.test", Token: "arr-token", Source: arr.SourceManual, DownloadUncached: &uncached})
 		reached := false
-		handler := sab.categoryContext(sab.authContext(sab.modeContext(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			reached = true
-			a := getArrFromContext(r.Context())
-			if a.Name != "tv" || a.Host != "https://arr.example.test" || a.Source != arr.SourceManual || a.DownloadUncached == nil || !*a.DownloadUncached {
-				t.Errorf("Arr = %#v", a)
-			}
-		}))))
+		handler := sab.categoryContext(
+			sab.authContext(sab.modeContext(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				reached = true
+				a := getArrFromContext(r.Context())
+				if a.Name != "tv" || a.Host != "https://arr.example.test" || a.Source != arr.SourceManual ||
+					a.DownloadUncached == nil ||
+					!*a.DownloadUncached {
+					t.Errorf("Arr = %#v", a)
+				}
+			}))),
+		)
 		response := httptest.NewRecorder()
-		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/?mode=queue&category=tv&ma_password=test-token", nil))
+		handler.ServeHTTP(
+			response,
+			httptest.NewRequest(http.MethodGet, "/api/?mode=queue&category=tv&ma_password=test-token", nil),
+		)
 		if !reached {
 			t.Fatalf("handler rejected request: %d", response.Code)
 		}
@@ -138,7 +162,15 @@ func TestRouterQueueContracts(t *testing.T) {
 				if i == 1 {
 					category = "delete-movies"
 				}
-				entries[i] = &storage.Entry{InfoHash: fmt.Sprintf("%s-%d", tc.name, i), Name: "Release.nzb", Category: category, Protocol: config.ProtocolNZB, State: storage.EntryStateError, SavePath: t.TempDir(), Magnet: filepath.Join(t.TempDir(), "staged.nzb")}
+				entries[i] = &storage.Entry{
+					InfoHash: fmt.Sprintf("%s-%d", tc.name, i),
+					Name:     "Release.nzb",
+					Category: category,
+					Protocol: config.ProtocolNZB,
+					State:    storage.EntryStateError,
+					SavePath: t.TempDir(),
+					Magnet:   filepath.Join(t.TempDir(), "staged.nzb"),
+				}
 				if i == 2 {
 					entries[i].Protocol = config.ProtocolTorrent
 				}
@@ -149,7 +181,11 @@ func TestRouterQueueContracts(t *testing.T) {
 					if err := os.Mkdir(entries[i].Magnet, 0700); err != nil {
 						t.Fatal(err)
 					}
-					if err := os.WriteFile(filepath.Join(entries[i].Magnet, "block-removal"), []byte("keep"), 0600); err != nil {
+					if err := os.WriteFile(
+						filepath.Join(entries[i].Magnet, "block-removal"),
+						[]byte("keep"),
+						0600,
+					); err != nil {
 						t.Fatal(err)
 					}
 				} else if err := os.WriteFile(entries[i].Magnet, []byte("staged"), 0600); err != nil {
@@ -158,7 +194,11 @@ func TestRouterQueueContracts(t *testing.T) {
 				if err := os.MkdirAll(entries[i].DownloadPath(), 0700); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(filepath.Join(entries[i].DownloadPath(), "movie.mkv"), []byte("movie"), 0600); err != nil {
+				if err := os.WriteFile(
+					filepath.Join(entries[i].DownloadPath(), "movie.mkv"),
+					[]byte("movie"),
+					0600,
+				); err != nil {
 					t.Fatal(err)
 				}
 				if err := mgr.Queue().Add(entries[i]); err != nil {
@@ -166,7 +206,13 @@ func TestRouterQueueContracts(t *testing.T) {
 				}
 			}
 			value := strings.ReplaceAll(tc.value, "target", entries[0].InfoHash)
-			values := url.Values{"mode": {"queue"}, "name": {"delete"}, "value": {value}, "category": {"delete-tv"}, "ma_password": {"test-token"}}
+			values := url.Values{
+				"mode":        {"queue"},
+				"name":        {"delete"},
+				"value":       {value},
+				"category":    {"delete-tv"},
+				"ma_password": {"test-token"},
+			}
 			var req *http.Request
 			if tc.method == http.MethodPost {
 				req = httptest.NewRequest(tc.method, "/api/", strings.NewReader(values.Encode()))

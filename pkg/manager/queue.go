@@ -9,8 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rs/zerolog"
 	"uuid"
+
+	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/logger"
@@ -51,7 +52,17 @@ type ImportRequest struct {
 	Async bool       `json:"async"`
 }
 
-func NewTorrentRequest(debrid string, downloadFolder string, magnet *utils.Magnet, arr arr.Arr, action config.DownloadAction, downloadUncached *bool, callBackUrl string, importType ImportType, skipMultiSeason bool) *ImportRequest {
+func NewTorrentRequest(
+	debrid string,
+	downloadFolder string,
+	magnet *utils.Magnet,
+	arr arr.Arr,
+	action config.DownloadAction,
+	downloadUncached *bool,
+	callBackUrl string,
+	importType ImportType,
+	skipMultiSeason bool,
+) *ImportRequest {
 
 	return &ImportRequest{
 		Id:               uuid.New().String(),
@@ -68,7 +79,15 @@ func NewTorrentRequest(debrid string, downloadFolder string, magnet *utils.Magne
 	}
 }
 
-func NewNZBRequest(name, downloadFolder string, nzbContent []byte, arr arr.Arr, action config.DownloadAction, callBackUrl string, importType ImportType, skipMultiSeason bool) *ImportRequest {
+func NewNZBRequest(
+	name, downloadFolder string,
+	nzbContent []byte,
+	arr arr.Arr,
+	action config.DownloadAction,
+	callBackUrl string,
+	importType ImportType,
+	skipMultiSeason bool,
+) *ImportRequest {
 	return &ImportRequest{
 		Name:            name,
 		Id:              uuid.New().String(),
@@ -149,8 +168,17 @@ func (q *Queue) Delete(infohash string, deleteFiles bool, cleanup func(t *storag
 	return q.storage.DeleteQueued(infohash, cleanup)
 }
 
-func (q *Queue) DeleteWhere(category string, protocol config.Protocol, state storage.TorrentState, hashes []string, cleanup func(t *storage.Entry) error) error {
-	return q.storage.DeleteWhereQueued(q.ListFilterFunc(category, protocol, state, hashes), q.wrapCleanupWithFileDelete(cleanup))
+func (q *Queue) DeleteWhere(
+	category string,
+	protocol config.Protocol,
+	state storage.TorrentState,
+	hashes []string,
+	cleanup func(t *storage.Entry) error,
+) error {
+	return q.storage.DeleteWhereQueued(
+		q.ListFilterFunc(category, protocol, state, hashes),
+		q.wrapCleanupWithFileDelete(cleanup),
+	)
 }
 
 func (q *Queue) DeleteStalled() error {
@@ -179,7 +207,12 @@ func (q *Queue) Update(torrent *storage.Entry) error {
 	return q.storage.UpdateQueue(torrent)
 }
 
-func (q *Queue) ListFilterFunc(category string, protocol config.Protocol, state storage.TorrentState, hashes []string) func(*storage.Entry) bool {
+func (q *Queue) ListFilterFunc(
+	category string,
+	protocol config.Protocol,
+	state storage.TorrentState,
+	hashes []string,
+) func(*storage.Entry) bool {
 	hashSet := make(map[string]struct{}, len(hashes))
 	if len(hashes) > 0 {
 		for _, h := range hashes {
@@ -210,7 +243,14 @@ func (q *Queue) ListFilterFunc(category string, protocol config.Protocol, state 
 	return filterFunc
 }
 
-func (q *Queue) ListFilter(category string, protocol config.Protocol, state storage.TorrentState, hashes []string, sortBy string, reverse bool) ([]*storage.Entry, error) {
+func (q *Queue) ListFilter(
+	category string,
+	protocol config.Protocol,
+	state storage.TorrentState,
+	hashes []string,
+	sortBy string,
+	reverse bool,
+) ([]*storage.Entry, error) {
 	filterFunc := q.ListFilterFunc(category, protocol, state, hashes)
 	torrents, err := q.storage.FilterQueued(filterFunc)
 	if err != nil {

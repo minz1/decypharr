@@ -132,7 +132,11 @@ func TestHandoffFIFO(t *testing.T) {
 	acquire := func() chan *Connection {
 		ch := make(chan *Connection, 1)
 		go func() {
-			got, prov, err := c.getAnyAvailableConnection(context.Background(), WorkloadStreamDemand, providerExclusions{})
+			got, prov, err := c.getAnyAvailableConnection(
+				context.Background(),
+				WorkloadStreamDemand,
+				providerExclusions{},
+			)
 			if err != nil {
 				t.Error(err)
 				close(ch)

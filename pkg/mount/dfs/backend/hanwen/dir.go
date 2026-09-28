@@ -51,11 +51,27 @@ var _ = (fs.NodeUnlinker)((*Dir)(nil))
 var _ = (fs.NodeRmdirer)((*Dir)(nil))
 
 // NewDir creates a new directory
-func NewDir(vfsManager *vfs.Manager, name string, level DirLevel, modTime uint64, config *config.FuseConfig, log zerolog.Logger, rl *logger.RateLimitedLogger) *Dir {
+func NewDir(
+	vfsManager *vfs.Manager,
+	name string,
+	level DirLevel,
+	modTime uint64,
+	config *config.FuseConfig,
+	log zerolog.Logger,
+	rl *logger.RateLimitedLogger,
+) *Dir {
 	return newDir(vfsManager, name, path.Join("/", name), level, modTime, config, log, rl)
 }
 
-func newDir(vfsManager *vfs.Manager, name, virtualPath string, level DirLevel, modTime uint64, config *config.FuseConfig, log zerolog.Logger, rl *logger.RateLimitedLogger) *Dir {
+func newDir(
+	vfsManager *vfs.Manager,
+	name, virtualPath string,
+	level DirLevel,
+	modTime uint64,
+	config *config.FuseConfig,
+	log zerolog.Logger,
+	rl *logger.RateLimitedLogger,
+) *Dir {
 	d := &Dir{
 		vfs:         vfsManager,
 		name:        name,
@@ -93,7 +109,16 @@ func (d *Dir) newNode(info *manager.FileInfo) fs.InodeEmbedder {
 		if modTime.IsZero() {
 			modTime = time.Now()
 		}
-		node = newDir(d.vfs, info.Name(), d.childPath(info.Name()), d.level+1, uint64(modTime.Unix()), d.config, d.logger, d.rlLogger)
+		node = newDir(
+			d.vfs,
+			info.Name(),
+			d.childPath(info.Name()),
+			d.level+1,
+			uint64(modTime.Unix()),
+			d.config,
+			d.logger,
+			d.rlLogger,
+		)
 	} else {
 		node = NewFile(d.vfs, d.config, info, d.rlLogger)
 	}

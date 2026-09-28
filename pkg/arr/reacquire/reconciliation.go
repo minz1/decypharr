@@ -24,7 +24,10 @@ func (job Job) reconciliationDeadline() time.Time {
 
 func (s *Service) stopReconciliation(id string, cause error) bool {
 	_, err := s.updateJobDurable(id, StatusNeedsAttention, func(job *Job) {
-		job.LastError = fmt.Sprintf("%v; check the action in Arr, then acknowledge this job before starting another", cause)
+		job.LastError = fmt.Sprintf(
+			"%v; check the action in Arr, then acknowledge this job before starting another",
+			cause,
+		)
 		job.RetryAt = time.Time{}
 	})
 	return err == nil

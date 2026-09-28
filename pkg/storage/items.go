@@ -82,7 +82,8 @@ func (s *Storage) updateEntryItem(entry *Entry) error {
 		item = &EntryItem{Name: name, Files: make(map[string]*File)}
 	}
 	for fileName, file := range entry.Files {
-		if existing, ok := item.Files[fileName]; !ok || file.AddedOn.After(existing.AddedOn) || (file.AddedOn.Equal(existing.AddedOn) && file.Size != existing.Size) {
+		if existing, ok := item.Files[fileName]; !ok || file.AddedOn.After(existing.AddedOn) ||
+			(file.AddedOn.Equal(existing.AddedOn) && file.Size != existing.Size) {
 			item.Files[fileName] = file
 		}
 	}

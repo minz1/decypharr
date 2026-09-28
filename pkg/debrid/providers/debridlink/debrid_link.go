@@ -402,7 +402,12 @@ func (dl *DebridLink) DeleteTorrent(torrentId string) error {
 	return nil
 }
 
-func (dl *DebridLink) fetchDownloadLink(ctx context.Context, account *account.Account, id string, file *types.File) (types.DownloadLink, error) {
+func (dl *DebridLink) fetchDownloadLink(
+	ctx context.Context,
+	account *account.Account,
+	id string,
+	file *types.File,
+) (types.DownloadLink, error) {
 	now := time.Now()
 	link := types.DownloadLink{
 		Debrid:       dl.config.Name,
@@ -468,7 +473,11 @@ func (dl *DebridLink) fetchDownloadLinks(account *account.Account) ([]types.Down
 func (dl *DebridLink) _fetchDownloadLinks(account *account.Account, page, limit int) ([]types.DownloadLink, error) {
 	links := make([]types.DownloadLink, 0)
 
-	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/downloader/list?page=%d&perPage=%d", dl.Host, page, limit), nil)
+	req, err := http.NewRequest(
+		http.MethodGet,
+		fmt.Sprintf("%s/downloader/list?page=%d&perPage=%d", dl.Host, page, limit),
+		nil,
+	)
 	if err != nil {
 		return links, err
 	}

@@ -56,7 +56,14 @@ func TestBindingRepositoryFailedSnapshotPutKeepsCommittedGeneration(t *testing.T
 	store := &observedBindingStore{bindingRepositoryStore: repository.store, failNextPut: true}
 	repository.store = store
 	replacement := repositoryTestBinding("radarr", "new-entry", "new-file", 2)
-	if err := repository.ReplaceArrGeneration("radarr", 2, []Binding{replacement}); !errors.Is(err, errBindingSnapshotPut) {
+	if err := repository.ReplaceArrGeneration(
+		"radarr",
+		2,
+		[]Binding{replacement},
+	); !errors.Is(
+		err,
+		errBindingSnapshotPut,
+	) {
 		t.Fatalf("ReplaceArrGeneration error = %v, want %v", err, errBindingSnapshotPut)
 	}
 	assertSingleRepositoryBinding(t, repository, original)

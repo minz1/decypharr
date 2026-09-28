@@ -29,7 +29,10 @@ func TestFindGrabHistoryID(t *testing.T) {
 					t.Errorf("API key = %q", got)
 				}
 				w.Header().Set("Content-Type", "application/json")
-				_, _ = fmt.Fprint(w, `{"page":1,"totalRecords":1,"records":[{"id":99,"downloadId":"download-1","eventType":"grabbed"}]}`)
+				_, _ = fmt.Fprint(
+					w,
+					`{"page":1,"totalRecords":1,"records":[{"id":99,"downloadId":"download-1","eventType":"grabbed"}]}`,
+				)
 			}))
 			defer server.Close()
 
@@ -75,9 +78,15 @@ func TestHistoryByDownloadIDPaginatesAndFiltersEvent(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Query().Get("page") {
 		case "1":
-			_, _ = fmt.Fprint(w, `{"page":1,"pageSize":1,"totalRecords":2,"records":[{"id":21,"downloadId":"download-1","eventType":"grabbed"}]}`)
+			_, _ = fmt.Fprint(
+				w,
+				`{"page":1,"pageSize":1,"totalRecords":2,"records":[{"id":21,"downloadId":"download-1","eventType":"grabbed"}]}`,
+			)
 		case "2":
-			_, _ = fmt.Fprint(w, `{"page":2,"pageSize":1,"totalRecords":2,"records":[{"id":22,"downloadId":"download-1","eventType":"downloadFailed"}]}`)
+			_, _ = fmt.Fprint(
+				w,
+				`{"page":2,"pageSize":1,"totalRecords":2,"records":[{"id":22,"downloadId":"download-1","eventType":"downloadFailed"}]}`,
+			)
 		default:
 			t.Errorf("unexpected page %q", r.URL.Query().Get("page"))
 		}

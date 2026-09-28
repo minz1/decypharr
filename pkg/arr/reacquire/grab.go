@@ -67,7 +67,11 @@ func (handler *arrHandler) grabBestRelease(
 	return "", fmt.Errorf("arr returned no downloadable replacement release with reconcilable identity")
 }
 
-func (handler *arrHandler) searchReplacementReleases(ctx context.Context, instance arr.Arr, bindings []Binding) ([]arr.Release, error) {
+func (handler *arrHandler) searchReplacementReleases(
+	ctx context.Context,
+	instance arr.Arr,
+	bindings []Binding,
+) ([]arr.Release, error) {
 	var (
 		releases []arr.Release
 		err      error
@@ -145,7 +149,9 @@ func (handler *arrHandler) findPersistedRelease(
 			return release, nil
 		}
 	}
-	return arr.Release{}, fmt.Errorf("previously selected Arr release is no longer available; refusing to substitute another release")
+	return arr.Release{}, fmt.Errorf(
+		"previously selected Arr release is no longer available; refusing to substitute another release",
+	)
 }
 
 func (handler *arrHandler) dispatchReleaseMutation(
@@ -205,5 +211,6 @@ func singleSonarrSeason(bindings []Binding, seriesID, seasonNumber int) bool {
 }
 
 func releaseEligible(release arr.Release) bool {
-	return !release.Rejected && !release.TemporarilyRejected && len(release.Rejections) == 0 && (release.DownloadAllowed || release.Approved)
+	return !release.Rejected && !release.TemporarilyRejected && len(release.Rejections) == 0 &&
+		(release.DownloadAllowed || release.Approved)
 }

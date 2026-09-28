@@ -28,7 +28,9 @@ func TestTorrentResponses(t *testing.T) {
 		{"failed response", `{"success":false,"value":[]}`, 0, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, test.body) }))
+			server := httptest.NewServer(
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, test.body) }),
+			)
 			defer server.Close()
 			provider, err := New(config.Debrid{Name: "debridlink", APIKey: "token"}, nil)
 			if err != nil {
@@ -55,7 +57,8 @@ func TestTorrentResponses(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if torrent == nil || torrent.Files == nil || len(torrent.Files) != test.files || torrent.Status != types.TorrentStatusDownloaded {
+				if torrent == nil || torrent.Files == nil || len(torrent.Files) != test.files ||
+					torrent.Status != types.TorrentStatusDownloaded {
 					t.Fatalf("list=%v: torrent=%#v", list, torrent)
 				}
 				if test.files > 0 {

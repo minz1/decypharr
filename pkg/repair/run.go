@@ -100,7 +100,10 @@ func (r *Service) runSweep(trigger storage.RepairRunTrigger, opts RunOptions) (s
 func (r *Service) finalizeRun(run *storage.RepairRun, status storage.RepairRunStatus, errStr, cancelReason string) {
 	// A user-initiated cancel that already landed in storage must not be
 	// clobbered by a sweep that completed successfully after Stop was pressed.
-	if existing, err := r.storage.GetRepairRun(run.ID); err == nil && existing != nil && existing.Status == storage.RepairRunCancelled {
+	if existing, err := r.storage.GetRepairRun(
+		run.ID,
+	); err == nil && existing != nil &&
+		existing.Status == storage.RepairRunCancelled {
 		status = storage.RepairRunCancelled
 		if cancelReason == "" {
 			cancelReason = existing.CancelReason
@@ -153,9 +156,15 @@ func discordContextFor(run *storage.RepairRun) string {
 	const dateFmt = "2006-01-02 15:04:05"
 	return fmt.Sprintf(
 		"\n**Run**: %s\n**Trigger**: %s\n**Source**: %s\n**Status**: %s\n**Started**: %s\n**Completed**: %s\n**Probed**: %d (broken: %d, repaired: %d)\n",
-		run.ID, run.Trigger, run.Source, run.Status,
-		run.StartedAt.Format(dateFmt), run.CompletedAt.Format(dateFmt),
-		run.Stats.Probed, run.Stats.Broken, run.Stats.Repaired,
+		run.ID,
+		run.Trigger,
+		run.Source,
+		run.Status,
+		run.StartedAt.Format(dateFmt),
+		run.CompletedAt.Format(dateFmt),
+		run.Stats.Probed,
+		run.Stats.Broken,
+		run.Stats.Repaired,
 	)
 }
 

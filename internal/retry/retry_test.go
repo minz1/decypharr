@@ -24,7 +24,11 @@ func TestDo(t *testing.T) {
 	}
 
 	calls = 0
-	err = retry.Do(func() error { calls++; return boom }, retry.Attempts(3), retry.RetryIf(func(error) bool { return false }))
+	err = retry.Do(
+		func() error { calls++; return boom },
+		retry.Attempts(3),
+		retry.RetryIf(func(error) bool { return false }),
+	)
 	if !errors.Is(err, boom) || calls != 1 {
 		t.Fatalf("retryIf false: err=%v calls=%d, want boom after 1", err, calls)
 	}

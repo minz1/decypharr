@@ -56,7 +56,8 @@ func TestImportPreservesPreparationErrors(t *testing.T) {
 		t.Fatalf("results=%d, want %d", len(results), len(sources))
 	}
 	for i, source := range sources {
-		if results[i].Status != "error" || !strings.Contains(results[i].Error, source) || strings.Contains(results[i].Error, "<nil>") {
+		if results[i].Status != "error" || !strings.Contains(results[i].Error, source) ||
+			strings.Contains(results[i].Error, "<nil>") {
 			t.Errorf("result %d lost the source error: %+v", i, results[i])
 		}
 	}

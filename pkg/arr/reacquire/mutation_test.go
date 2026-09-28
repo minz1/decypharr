@@ -53,9 +53,24 @@ func TestFindCommandReceiptRequiresExactScopeAndTime(t *testing.T) {
 		LastDispatchedAt: dispatchedAt,
 	}
 	commands := []arr.Command{
-		{ID: 1, Name: "EpisodeSearch", Queued: dispatchedAt.Add(-time.Minute), Body: arr.CommandBody{EpisodeIDs: []int{4, 9}}},
-		{ID: 2, Name: "EpisodeSearch", Queued: dispatchedAt.Add(time.Second), Body: arr.CommandBody{EpisodeIDs: []int{4}}},
-		{ID: 3, Name: "EpisodeSearch", Queued: dispatchedAt.Add(time.Second), Body: arr.CommandBody{EpisodeIDs: []int{9, 4}}},
+		{
+			ID:     1,
+			Name:   "EpisodeSearch",
+			Queued: dispatchedAt.Add(-time.Minute),
+			Body:   arr.CommandBody{EpisodeIDs: []int{4, 9}},
+		},
+		{
+			ID:     2,
+			Name:   "EpisodeSearch",
+			Queued: dispatchedAt.Add(time.Second),
+			Body:   arr.CommandBody{EpisodeIDs: []int{4}},
+		},
+		{
+			ID:     3,
+			Name:   "EpisodeSearch",
+			Queued: dispatchedAt.Add(time.Second),
+			Body:   arr.CommandBody{EpisodeIDs: []int{9, 4}},
+		},
 	}
 	command, found := findCommandReceipt(commands, mutation)
 	if !found || command.ID != 3 {
@@ -74,11 +89,46 @@ func TestFindGrabReceiptRequiresGuidIndexerMediaAndTime(t *testing.T) {
 		LastDispatchedAt: dispatchedAt,
 	}
 	records := []arr.HistoryRecord{
-		{ID: 1, EventType: arr.EventGrabbed, Date: dispatchedAt.Add(time.Second), SeriesID: 7, EpisodeID: 101, SourceTitle: "same title"},
-		{ID: 2, EventType: arr.EventGrabbed, Date: dispatchedAt.Add(time.Second), SeriesID: 7, EpisodeID: 101, Data: map[string]string{"guid": "release-guid", "indexer": "Other"}},
-		{ID: 3, EventType: arr.EventGrabbed, Date: dispatchedAt.Add(time.Second), SeriesID: 7, EpisodeID: 102, Data: map[string]string{"guid": "release-guid", "indexer": "Indexer"}},
-		{ID: 4, EventType: arr.EventGrabbed, Date: dispatchedAt.Add(-time.Minute), SeriesID: 7, EpisodeID: 101, Data: map[string]string{"guid": "release-guid", "indexer": "Indexer"}},
-		{ID: 5, EventType: arr.EventGrabbed, Date: dispatchedAt.Add(time.Second), SeriesID: 7, EpisodeID: 101, Data: map[string]string{"Guid": "release-guid", "Indexer": "Indexer"}},
+		{
+			ID:          1,
+			EventType:   arr.EventGrabbed,
+			Date:        dispatchedAt.Add(time.Second),
+			SeriesID:    7,
+			EpisodeID:   101,
+			SourceTitle: "same title",
+		},
+		{
+			ID:        2,
+			EventType: arr.EventGrabbed,
+			Date:      dispatchedAt.Add(time.Second),
+			SeriesID:  7,
+			EpisodeID: 101,
+			Data:      map[string]string{"guid": "release-guid", "indexer": "Other"},
+		},
+		{
+			ID:        3,
+			EventType: arr.EventGrabbed,
+			Date:      dispatchedAt.Add(time.Second),
+			SeriesID:  7,
+			EpisodeID: 102,
+			Data:      map[string]string{"guid": "release-guid", "indexer": "Indexer"},
+		},
+		{
+			ID:        4,
+			EventType: arr.EventGrabbed,
+			Date:      dispatchedAt.Add(-time.Minute),
+			SeriesID:  7,
+			EpisodeID: 101,
+			Data:      map[string]string{"guid": "release-guid", "indexer": "Indexer"},
+		},
+		{
+			ID:        5,
+			EventType: arr.EventGrabbed,
+			Date:      dispatchedAt.Add(time.Second),
+			SeriesID:  7,
+			EpisodeID: 101,
+			Data:      map[string]string{"Guid": "release-guid", "Indexer": "Indexer"},
+		},
 	}
 	record, found := findGrabReceipt(records, mutation)
 	if !found || record.ID != 5 {

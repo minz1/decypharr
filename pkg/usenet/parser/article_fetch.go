@@ -44,7 +44,12 @@ func headerProbeOrder(count int) []int {
 // missing responses do not consume article bodies and therefore do not count
 // against the corruption-probe ceiling. A decoded-but-corrupt response does
 // consume bandwidth, so at most maxCorruptHeaderProbes are attempted.
-func fetchFileHeaderPrefix(ctx context.Context, source ArticleSource, file manifest.File, maxSnippet int) (*nntp.YencMetadata, error) {
+func fetchFileHeaderPrefix(
+	ctx context.Context,
+	source ArticleSource,
+	file manifest.File,
+	maxSnippet int,
+) (*nntp.YencMetadata, error) {
 	if len(file.Segments) == 0 {
 		return nil, fmt.Errorf("file has no segments")
 	}

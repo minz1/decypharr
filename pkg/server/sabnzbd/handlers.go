@@ -87,7 +87,8 @@ func (s *SABnzbd) handleDelete(w http.ResponseWriter, r *http.Request) {
 
 	if nzoIDs == "failed" {
 		// Delete all failed entries
-		if err := s.manager.Queue().DeleteWhere(cat, config.ProtocolNZB, storage.EntryStateError, nil, nil); err != nil {
+		if err := s.manager.Queue().
+			DeleteWhere(cat, config.ProtocolNZB, storage.EntryStateError, nil, nil); err != nil {
 			s.logger.Error().
 				Err(err).
 				Msg("Failed to delete all failed NZBs")
@@ -119,7 +120,11 @@ func (s *SABnzbd) handleDelete(w http.ResponseWriter, r *http.Request) {
 	if len(errors) > 0 {
 		if successCount == 0 {
 			// All deletions failed
-			s.writeError(w, fmt.Sprintf("All deletions failed: %s", strings.Join(errors, "; ")), http.StatusInternalServerError)
+			s.writeError(
+				w,
+				fmt.Sprintf("All deletions failed: %s", strings.Join(errors, "; ")),
+				http.StatusInternalServerError,
+			)
 			return
 		}
 
@@ -153,7 +158,8 @@ func (s *SABnzbd) handleListQueue(w http.ResponseWriter, r *http.Request) {
 		nzoIDs = strings.Split(nzoIDsVal, ",")
 	}
 
-	entries, err := s.manager.Queue().ListFilter(category, config.ProtocolNZB, storage.EntryStateDownloading, nzoIDs, "added_on", false)
+	entries, err := s.manager.Queue().
+		ListFilter(category, config.ProtocolNZB, storage.EntryStateDownloading, nzoIDs, "added_on", false)
 	if err != nil {
 		s.writeError(w, "Failed to read the download queue", http.StatusInternalServerError)
 		return
@@ -528,11 +534,13 @@ func (s *SABnzbd) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 func (s *SABnzbd) getHistory(ctx context.Context, limit int, nzoIDs []string) (History, error) {
 	cat := getCategory(ctx)
-	completed, err := s.manager.Queue().ListFilter(cat, config.ProtocolNZB, storage.EntryStatePausedUP, nzoIDs, "added_on", false)
+	completed, err := s.manager.Queue().
+		ListFilter(cat, config.ProtocolNZB, storage.EntryStatePausedUP, nzoIDs, "added_on", false)
 	if err != nil {
 		return History{}, err
 	}
-	failed, err := s.manager.Queue().ListFilter(cat, config.ProtocolNZB, storage.EntryStateError, nzoIDs, "added_on", false)
+	failed, err := s.manager.Queue().
+		ListFilter(cat, config.ProtocolNZB, storage.EntryStateError, nzoIDs, "added_on", false)
 	if err != nil {
 		return History{}, err
 	}
@@ -580,7 +588,12 @@ func (s *SABnzbd) writeError(w http.ResponseWriter, message string, status int) 
 	utils.JSONResponse(w, response, status)
 }
 
-func (s *SABnzbd) addNZBURL(ctx context.Context, url string, arr arr.Arr, action config.DownloadAction) (string, error) {
+func (s *SABnzbd) addNZBURL(
+	ctx context.Context,
+	url string,
+	arr arr.Arr,
+	action config.DownloadAction,
+) (string, error) {
 	if url == "" {
 		return "", fmt.Errorf("URL is required")
 	}
@@ -598,14 +611,29 @@ func (s *SABnzbd) addNZBURL(ctx context.Context, url string, arr arr.Arr, action
 	return s.addNZBFile(ctx, content, filename, arr, action)
 }
 
-func (s *SABnzbd) addNZBFile(ctx context.Context, content []byte, filename string, arr arr.Arr, action config.DownloadAction) (string, error) {
+func (s *SABnzbd) addNZBFile(
+	ctx context.Context,
+	content []byte,
+	filename string,
+	arr arr.Arr,
+	action config.DownloadAction,
+) (string, error) {
 	if len(content) == 0 {
 		return "", fmt.Errorf("NZB content is empty")
 	}
 
 	cfg := config.Get()
 
-	importReq := manager.NewNZBRequest(filename, s.downloadFolder, content, arr, action, cfg.Notifications.CallbackURL, manager.ImportTypeSABnzbd, cfg.SkipMultiSeason)
+	importReq := manager.NewNZBRequest(
+		filename,
+		s.downloadFolder,
+		content,
+		arr,
+		action,
+		cfg.Notifications.CallbackURL,
+		manager.ImportTypeSABnzbd,
+		cfg.SkipMultiSeason,
+	)
 	id, err := s.manager.AddNewNZB(ctx, importReq)
 	if err != nil {
 		return "", err

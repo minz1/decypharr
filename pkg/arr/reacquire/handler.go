@@ -136,7 +136,11 @@ type exactDownloadFailure struct {
 	grabRecord    arr.HistoryRecord
 }
 
-func (handler *arrHandler) prepareExactDownloadFailure(ctx context.Context, instance arr.Arr, downloadID string) (exactDownloadFailure, error) {
+func (handler *arrHandler) prepareExactDownloadFailure(
+	ctx context.Context,
+	instance arr.Arr,
+	downloadID string,
+) (exactDownloadFailure, error) {
 	if downloadID == "" {
 		return exactDownloadFailure{}, nil
 	}

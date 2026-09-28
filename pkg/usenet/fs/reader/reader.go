@@ -460,7 +460,12 @@ func (sr *StreamingReader) readFromCache(ctx context.Context, p []byte, off int6
 			// read would report more bytes than p can hold and panic the
 			// caller's copy loop. computeOffsets rejects such tables up
 			// front; anything reaching here is a bug, not bad metadata.
-			return totalRead, fmt.Errorf("segment %d starts at %d, behind delivered offset %d", segIdx, readStart, filled)
+			return totalRead, fmt.Errorf(
+				"segment %d starts at %d, behind delivered offset %d",
+				segIdx,
+				readStart,
+				filled,
+			)
 		}
 
 		outOffset := readStart - off
