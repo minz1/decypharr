@@ -105,6 +105,30 @@ func TestActiveStreamIncludesArrBinding(t *testing.T) {
 	}
 }
 
+// Two readers of the same file share a stream ID; closing one must keep the
+// other visible until it closes too.
+func TestActiveStreamSurvivesConcurrentReaderClose(t *testing.T) {
+	t.Parallel()
+	m := &Manager{activeStreams: xsync.NewMap[string, *ActiveStream]()}
+	entry := &storage.Entry{
+		Protocol: config.ProtocolTorrent,
+		InfoHash: "hash",
+		Name:     "Movie",
+		Files:    map[string]*storage.File{"movie.mkv": {ID: "file", Name: "movie.mkv", Size: 1}},
+	}
+
+	first := m.TrackStream(entry, "movie.mkv", "player-a")
+	second := m.TrackStream(entry, "movie.mkv", "player-b")
+	m.UntrackStream(first)
+	if got := m.GetActiveStreamsCount(); got != 1 {
+		t.Fatalf("active streams after one close = %d, want 1", got)
+	}
+	m.UntrackStream(second)
+	if got := m.GetActiveStreamsCount(); got != 0 {
+		t.Fatalf("active streams after both close = %d, want 0", got)
+	}
+}
+
 type missingArticleReader struct{}
 
 func (missingArticleReader) ReadAtContext(context.Context, []byte, int64) (int, error) {
