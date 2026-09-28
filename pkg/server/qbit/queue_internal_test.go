@@ -1,6 +1,8 @@
 package qbit
 
 import (
+	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -85,4 +87,35 @@ func TestCategoriesAndTagsAreConcurrencySafe(t *testing.T) {
 	if got := cfgCategories[:cap(cfgCategories)][1]; got != "" {
 		t.Fatalf("createCategory wrote %q into the config's category array", got)
 	}
+}
+
+// categoryContext parses multipart forms before authentication; file parts
+// spill to temp files with no limit of their own, so only the body cap bounds
+// them. Pre-fix the whole body was consumed and the trailing field honored.
+func TestOversizedBodyIsNotConsumed(t *testing.T) {
+	q := newQueueTestQBit(t)
+	pr, pw := io.Pipe()
+	mw := multipart.NewWriter(pw)
+	go func() {
+		part, _ := mw.CreateFormFile("torrents", "big.torrent")
+		_, _ = io.CopyN(part, zeros{}, maxRequestBody+1)
+		_ = mw.WriteField("category", "x")
+		_ = mw.Close()
+		_ = pw.Close()
+	}()
+	req := httptest.NewRequest(http.MethodPost, "/torrents/createCategory", pr)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	w := httptest.NewRecorder()
+	q.Routes().ServeHTTP(w, req)
+	_ = pr.Close()
+	if w.Code == http.StatusOK {
+		t.Fatal("a body over the cap was read to the end")
+	}
+}
+
+type zeros struct{}
+
+func (zeros) Read(p []byte) (int, error) {
+	clear(p)
+	return len(p), nil
 }
