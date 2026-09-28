@@ -383,10 +383,7 @@ func (dls *Downloaders) keepAhead(off, length int64) {
 	if dls.closed || dls.stopping {
 		return
 	}
-	if dls.idle {
-		dls.idle = false
-		dls.ensureKickerRunningLocked()
-	}
+	dls.restartKickerIfIdleLocked()
 	_ = dls.ensureDownloaderLocked(ranges.Range{Pos: off, Size: length}, false)
 }
 
@@ -433,11 +430,7 @@ func (dls *Downloaders) DownloadWithPriority(ctx context.Context, r ranges.Range
 		return false, ctxErr
 	}
 
-	// Lazy restart: if we went idle, restart the kicker goroutine.
-	if dls.idle {
-		dls.idle = false
-		dls.ensureKickerRunningLocked()
-	}
+	dls.restartKickerIfIdleLocked()
 	dls.ensureStreamTrackedLocked()
 
 	// Fast path: already have it
@@ -996,14 +989,6 @@ func (dls *Downloaders) checkIdleTimeout() bool {
 		return false
 	}
 
-	// Check if any downloaders are still running
-	activeDownloaders := 0
-	for _, dl := range dls.dls {
-		if !dl.isClosed() {
-			activeDownloaders++
-		}
-	}
-
 	// Check idle timeout
 	lastActivity := dls.lastActivity.Load()
 	if lastActivity == 0 {
@@ -1108,22 +1093,20 @@ func (dls *Downloaders) stopCondLocked() *sync.Cond {
 	return dls.stopCond
 }
 
-// ensureKickerRunningLocked restarts the kicker goroutine if it has stopped.
-// Caller must hold dls.mu. Refuses to start a new kicker while the session
-// is closed or being torn down — that would race against StopAll()/Close()
-// waiting on the previous kicker's exit sentinel.
-func (dls *Downloaders) ensureKickerRunningLocked() {
-	if dls.closed || dls.stopping {
+// restartKickerIfIdleLocked starts a fresh kicker when the session went idle.
+// Caller must hold dls.mu. idle is only set by the kicker's own idle exit or
+// by StopAll (which waits the kicker out), so an idle session's kicker is gone
+// or returning without touching shared state — start a new one unconditionally.
+// Probing the old kickerDone instead raced the exiting kicker's deferred
+// close: seen still open, no kicker was started and waiters lost their
+// safety-net ticker. Refuses while closed or mid-teardown, which would race
+// StopAll()/Close() waiting on the previous kicker's exit sentinel.
+func (dls *Downloaders) restartKickerIfIdleLocked() {
+	if !dls.idle || dls.closed || dls.stopping {
 		return
 	}
-	// Check if kicker has exited (non-blocking check)
-	select {
-	case <-dls.kickerDone:
-		// Kicker has exited, need to restart it
-		dls.startKicker()
-	default:
-		// Kicker still running
-	}
+	dls.idle = false
+	dls.startKicker()
 }
 
 func (dls *Downloaders) currentKickerInterval() time.Duration {
