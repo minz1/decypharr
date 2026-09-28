@@ -36,6 +36,13 @@ var planSlots = map[string]int{
 	"pro":       10,
 }
 
+// torboxStatusDetail strips parenthesised detail such as "stalled (no seeds)".
+var torboxStatusDetail = regexp.MustCompile(`\s*\(.*?\)\s*`)
+
+// downloadPresentTTL bounds how stale the repair presence snapshot may be, so
+// torrents added after the first load are not reported as missing.
+const downloadPresentTTL = 10 * time.Minute
+
 type Torbox struct {
 	Host                  string `json:"host"`
 	APIKey                string
@@ -46,9 +53,9 @@ type Torbox struct {
 	logger                zerolog.Logger
 	Profile               *types.Profile
 	config                config.Debrid
-	downloadPresentCache  sync.Map
 	downloadPresentMu     sync.Mutex
-	downloadPresentLoaded bool
+	downloadPresent       map[string]bool // torrent ID -> download_present; nil until loaded
+	downloadPresentAt     time.Time
 }
 
 func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter) (*Torbox, error) {
@@ -272,7 +279,7 @@ func (tb *Torbox) getTorboxStatus(status string, finished bool) types.TorrentSta
 	if finished {
 		return types.TorrentStatusDownloaded
 	}
-	status = regexp.MustCompile(`\s*\(.*?\)\s*`).ReplaceAllString(status, "")
+	status = torboxStatusDetail.ReplaceAllString(status, "")
 
 	switch status {
 	case "paused", "downloading", "checkingResumeData", "metaDL", "pausedUP",
@@ -351,9 +358,9 @@ func (tb *Torbox) GetTorrent(torrentId string) (*types.Torrent, error) {
 	return t, nil
 }
 
-func (tb *Torbox) loadDownloadPresent(ctx context.Context) error {
+func (tb *Torbox) loadDownloadPresent(ctx context.Context) (map[string]bool, error) {
+	present := make(map[string]bool)
 	offset := 0
-	total := 0
 	for {
 		var res TorrentsListResponse
 		resp, err := tb.doGetWithClient(
@@ -364,22 +371,21 @@ func (tb *Torbox) loadDownloadPresent(ctx context.Context) error {
 			&res,
 		)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return fmt.Errorf("torbox API error: Status: %d", resp.StatusCode)
+			return nil, fmt.Errorf("torbox API error: Status: %d", resp.StatusCode)
 		}
 		if res.Data == nil || len(*res.Data) == 0 {
 			break
 		}
 		for _, t := range *res.Data {
-			tb.downloadPresentCache.Store(strconv.Itoa(t.Id), t.DownloadPresent)
+			present[strconv.Itoa(t.Id)] = t.DownloadPresent
 		}
-		total += len(*res.Data)
 		offset += len(*res.Data)
 	}
-	tb.logger.Info().Int("count", total).Msg("loaded download_present cache for repair")
-	return nil
+	tb.logger.Info().Int("count", len(present)).Msg("loaded download_present cache for repair")
+	return present, nil
 }
 
 func (tb *Torbox) UpdateTorrent(t *types.Torrent) error {
@@ -404,6 +410,9 @@ func (tb *Torbox) updateTorrentWithClient(client *request.Client, t *types.Torre
 		return fmt.Errorf("torbox API error: Status: %d", resp.StatusCode)
 	}
 	data := res.Data
+	if data == nil {
+		return fmt.Errorf("torbox API error: no data for torrent %s: %v %s", t.Id, res.Error, res.Detail)
+	}
 	name := data.Name
 
 	t.Name = name
@@ -517,26 +526,21 @@ func (tb *Torbox) fetchDownloadLink(
 	id string,
 	file *types.File,
 ) (types.DownloadLink, error) {
-	query := url.Values{}
-	query.Set("token", account.Token)
-	query.Set("torrent_id", id)
-	query.Set("file_id", file.Id)
-
-	downloadURL := fmt.Sprintf("%s/api/torrents/requestdl?%s", tb.Host, query.Encode())
-
-	req, err := http.NewRequest(http.MethodGet, downloadURL, nil)
+	var res DownloadLinksResponse
+	resp, err := tb.doGetWithClient(ctx, account.Client(), "/api/torrents/requestdl", map[string]string{
+		"token":      account.Token,
+		"torrent_id": id,
+		"file_id":    file.Id,
+	}, &res)
 	if err != nil {
 		return types.DownloadLink{}, err
 	}
-	resp, err := account.Client().Do(req)
-	if err != nil {
-		return types.DownloadLink{}, err
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return types.DownloadLink{}, fmt.Errorf("torbox API error: Status: %d", resp.StatusCode)
 	}
-	defer resp.Body.Close()
-	var result struct {
-		Data string `json:"data"`
+	if res.Data == nil || *res.Data == "" {
+		return types.DownloadLink{}, fmt.Errorf("torbox API error: no download link: %v %s", res.Error, res.Detail)
 	}
-	json.NewDecoder(resp.Body).Decode(&result)
 
 	now := time.Now()
 
@@ -544,9 +548,9 @@ func (tb *Torbox) fetchDownloadLink(
 	dl := types.DownloadLink{
 		Filename:     file.Name,
 		Size:         file.Size,
-		Token:        tb.APIKey,
+		Token:        account.Token,
 		Link:         file.Link,
-		DownloadLink: result.Data,
+		DownloadLink: *res.Data,
 		Debrid:       tb.config.Name,
 		Id:           file.Id,
 		Generated:    now,
@@ -661,38 +665,34 @@ func (tb *Torbox) CheckFile(ctx context.Context, infohash, link string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	torrentID := link
+	if after, ok := strings.CutPrefix(link, "torbox://"); ok {
+		torrentID, _, _ = strings.Cut(after, "/")
+	}
+
 	tb.downloadPresentMu.Lock()
 	if err := ctx.Err(); err != nil {
 		tb.downloadPresentMu.Unlock()
 		return err
 	}
-	if !tb.downloadPresentLoaded {
-		if err := tb.loadDownloadPresent(ctx); err != nil {
+	if tb.downloadPresent == nil || time.Since(tb.downloadPresentAt) > downloadPresentTTL {
+		loaded, err := tb.loadDownloadPresent(ctx)
+		if err != nil {
 			tb.downloadPresentMu.Unlock()
 			return err
 		}
-		tb.downloadPresentLoaded = true
+		tb.downloadPresent, tb.downloadPresentAt = loaded, time.Now()
 	}
+	present := tb.downloadPresent[torrentID]
 	tb.downloadPresentMu.Unlock()
-
-	torrentID := link
-	if after, ok := strings.CutPrefix(link, "torbox://"); ok {
-		parts := strings.SplitN(after, "/", 2)
-		if len(parts) > 0 {
-			torrentID = parts[0]
-		}
-	}
 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if present, ok := tb.downloadPresentCache.Load(torrentID); ok {
-		if !present.(bool) {
-			return customerror.HosterUnavailableError
-		}
-		return nil
+	if !present {
+		return customerror.HosterUnavailableError
 	}
-	return customerror.HosterUnavailableError
+	return nil
 }
 
 func (tb *Torbox) GetAvailableSlots() (int, error) {
