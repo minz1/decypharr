@@ -110,6 +110,11 @@ type Service struct {
 
 // New builds a repair service from its dependencies.
 func New(deps Dependencies) *Service {
+	// A nil *reacquire.Service (its database failed to open) must not become a
+	// non-nil Reacquirer, or every auto-repair calls into a nil receiver.
+	if rq, ok := deps.Reacquirer.(*reacquire.Service); ok && rq == nil {
+		deps.Reacquirer = nil
+	}
 	return &Service{
 		scheduler:     deps.Scheduler,
 		backend:       deps.Backend,

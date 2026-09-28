@@ -152,7 +152,7 @@ func (r *Service) probeAndHealCandidates(
 
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(max(1, r.workers()))
-	nzb := newNZBProber(r.usenet)
+	nzb := r.nzbProber()
 
 	for _, name := range names {
 		c := candidates[name]

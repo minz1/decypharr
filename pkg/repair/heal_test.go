@@ -264,3 +264,15 @@ func TestHealBrokenEntryDoesNotBypassUnsafeOrUnavailableReacquisition(t *testing
 		})
 	}
 }
+
+func TestNewTreatsNilReacquireServiceAsUnavailable(t *testing.T) {
+	var unavailable *reacquire.Service
+	service := New(Dependencies{Reacquirer: unavailable})
+	if service.reacquirer != nil {
+		t.Fatal("typed-nil reacquire service must not be kept as a Reacquirer")
+	}
+	_, err := service.reacquireBrokenFile(t.Context(), storage.BrokenFile{})
+	if !errors.Is(err, errReacquirerUnavailable) {
+		t.Fatalf("error = %v, want %v", err, errReacquirerUnavailable)
+	}
+}
