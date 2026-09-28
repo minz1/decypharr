@@ -69,8 +69,7 @@ func (s *SABnzbd) SetConfig(cfg *config.Config) {
 				Name:        provider.Host,
 				Host:        provider.Host,
 				Port:        provider.Port,
-				Username:    provider.Username,
-				Password:    provider.Password,
+				Username:    provider.Username, // the password never leaves the process
 				Connections: provider.MaxConnections,
 				SSL:         provider.SSL,
 			})
