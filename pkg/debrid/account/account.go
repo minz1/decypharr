@@ -65,6 +65,11 @@ func (a *Account) GetDownloadLink(
 		if err != nil {
 			return dl, err
 		}
+		// Validate before caching: an empty or malformed link from a transient
+		// provider failure must not be served from the cache until it expires.
+		if validErr := dl.Valid(); validErr != nil {
+			return types.DownloadLink{}, validErr
+		}
 		a.storeLink(dl)
 	}
 	if err := dl.Valid(); err != nil {
