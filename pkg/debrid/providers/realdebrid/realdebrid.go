@@ -28,6 +28,8 @@ import (
 
 const (
 	profileCacheDuration = 1 * time.Hour
+	// statusTooManyActive is Real-Debrid's non-standard "too many active downloads" status.
+	statusTooManyActive = 509
 )
 
 type RealDebrid struct {
@@ -428,7 +430,7 @@ func (r *RealDebrid) addTorrent(t *types.Torrent) (*types.Torrent, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		if resp.StatusCode == 509 {
+		if resp.StatusCode == statusTooManyActive {
 			return nil, customerror.TooManyActiveDownloadsError
 		}
 		if resp.StatusCode == http.StatusUnavailableForLegalReasons {
@@ -460,7 +462,7 @@ func (r *RealDebrid) addMagnet(t *types.Torrent) (*types.Torrent, error) {
 		t.Added = time.Now()
 		return t, nil
 
-	case 509:
+	case statusTooManyActive:
 		return nil, customerror.TooManyActiveDownloadsError
 
 	case http.StatusUnavailableForLegalReasons:
@@ -612,8 +614,8 @@ func (r *RealDebrid) CheckStatus(t *types.Torrent) (*types.Torrent, error) {
 			}
 
 			if selectResp.StatusCode != http.StatusNoContent {
-				if selectResp.StatusCode == 509 {
-					return nil, customerror.TooManyActiveDownloadsError
+				if selectResp.StatusCode == statusTooManyActive {
+					return t, customerror.TooManyActiveDownloadsError
 				}
 				return t, fmt.Errorf("realdebrid API error: Status: %d", selectResp.StatusCode)
 			}
@@ -806,6 +808,8 @@ func (r *RealDebrid) GetDownloadLink(ctx context.Context, id string, file *types
 	return r.accountsManager.GetDownloadLink(ctx, id, file, r.fetchDownloadLink)
 }
 
+// getTorrents returns the number of entries on the page before filtering and
+// the downloaded torrents among them.
 func (r *RealDebrid) getTorrents(offset int, limit int) (int, []*types.Torrent, error) {
 	torrents := make([]*types.Torrent, 0)
 
@@ -852,7 +856,6 @@ func (r *RealDebrid) getTorrents(offset int, limit int) (int, []*types.Torrent, 
 		return 0, torrents, decodeJSONErr
 	}
 
-	totalItems, _ := strconv.Atoi(resp.Header.Get("X-Total-Count"))
 	for _, t := range data {
 		if t.Status != "downloaded" {
 			continue
@@ -871,12 +874,9 @@ func (r *RealDebrid) getTorrents(offset int, limit int) (int, []*types.Torrent, 
 			Debrid:           r.config.Name,
 			Added:            t.Added,
 		}
-		for _, f := range t.Files {
-			t.Files[f.Name] = f
-		}
 		torrents = append(torrents, t)
 	}
-	return totalItems, torrents, nil
+	return len(data), torrents, nil
 }
 
 func (r *RealDebrid) GetTorrents() ([]*types.Torrent, error) {
@@ -890,17 +890,18 @@ func (r *RealDebrid) GetTorrents() ([]*types.Torrent, error) {
 	var fetchError error
 	offset := 0
 	for {
-		_, torrents, err := r.getTorrents(offset, limit)
+		seen, torrents, err := r.getTorrents(offset, limit)
 		if err != nil {
 			fetchError = err
 			break
 		}
-		totalTorrents := len(torrents)
-		if totalTorrents == 0 {
+		// Advance by the raw page size: non-downloaded torrents are filtered
+		// out of torrents, and using the filtered count re-reads or stops early.
+		if seen == 0 {
 			break
 		}
 		allTorrents = append(allTorrents, torrents...)
-		offset += totalTorrents
+		offset += seen
 		if hardLimit != 0 && len(allTorrents) >= hardLimit {
 			break
 		}
