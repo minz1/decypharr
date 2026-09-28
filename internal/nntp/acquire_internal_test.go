@@ -43,6 +43,7 @@ func newTieredAcquireTestClient(primary, backup *ProviderPool, spillover time.Du
 // acquirer parks; releasing a slot (returning a healthy pooled connection)
 // wakes exactly that acquirer, with no goroutine fan-out.
 func TestWaitForConnectionUnblocksOnRelease(t *testing.T) {
+	t.Parallel()
 	pp := newTestPool(1)
 	c := newAcquireTestClient(pp)
 
@@ -90,6 +91,7 @@ func TestWaitForConnectionUnblocksOnRelease(t *testing.T) {
 // TestWaitForConnectionCtxCancelUnblocks: a parked acquirer honors context
 // cancellation promptly.
 func TestWaitForConnectionCtxCancelUnblocks(t *testing.T) {
+	t.Parallel()
 	pp := newTestPool(1)
 	c := newAcquireTestClient(pp)
 	pp.slots <- struct{}{} // saturate
@@ -115,6 +117,7 @@ func TestWaitForConnectionCtxCancelUnblocks(t *testing.T) {
 }
 
 func TestStreamDemandSpillsToBackupAfterConfiguredWait(t *testing.T) {
+	t.Parallel()
 	primary := newTestPool(1)
 	primary.config.Host = "primary"
 	primary.slots <- struct{}{}
@@ -145,8 +148,10 @@ func TestStreamDemandSpillsToBackupAfterConfiguredWait(t *testing.T) {
 }
 
 func TestOnlyStreamDemandCanSpillToBackup(t *testing.T) {
+	t.Parallel()
 	for _, workload := range []Workload{WorkloadStreamPrefetch, WorkloadDownload, WorkloadBackground} {
 		t.Run(workload.String(), func(t *testing.T) {
+			t.Parallel()
 			primary := newTestPool(1)
 			primary.config.Host = "primary"
 			primary.slots <- struct{}{}
@@ -177,6 +182,7 @@ func TestOnlyStreamDemandCanSpillToBackup(t *testing.T) {
 // progressing gets its connection closed; a disarmed connection is left
 // alone.
 func TestBodyJanitorClosesStalledConn(t *testing.T) {
+	t.Parallel()
 	stalledConn := newPipeConnection(t, true)
 	idleConn := newPipeConnection(t, true)
 

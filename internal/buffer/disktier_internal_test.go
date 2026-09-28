@@ -9,6 +9,7 @@ import (
 )
 
 func TestImmutableDiskBypassesRAMBlocks(t *testing.T) {
+	t.Parallel()
 	p := newTestPool(t, PoolConfig{MemoryBudget: 4 << 20})
 	b := newTestBuffer(t, p, Config{
 		DiskPath:      tempDisk(t),
@@ -34,6 +35,7 @@ func TestImmutableDiskBypassesRAMBlocks(t *testing.T) {
 }
 
 func TestDiskLimitSerializesConcurrentWrites(t *testing.T) {
+	t.Parallel()
 	const limit = 4 * blockSize
 	p := newTestPool(t, PoolConfig{DiskLimit: limit})
 
@@ -76,6 +78,7 @@ func TestDiskLimitSerializesConcurrentWrites(t *testing.T) {
 }
 
 func TestPersistentDiskAccountingSurvivesCloseAndReopen(t *testing.T) {
+	t.Parallel()
 	const persisted = 512 << 10
 	p := newTestPool(t, PoolConfig{
 		DiskLimit:        blockSize,
@@ -121,6 +124,7 @@ func TestPersistentDiskAccountingSurvivesCloseAndReopen(t *testing.T) {
 // most blocks are flushed out to the file, and checks every byte still reads
 // back. This is the contract the whole tier exists for.
 func TestDiskTierSurvivesEviction(t *testing.T) {
+	t.Parallel()
 	const total = 16 << 20
 	p := newTestPool(t, PoolConfig{})
 	b := newTestBuffer(t, p, Config{DiskPath: tempDisk(t), TotalSize: total, MemorySize: 4 << 20})
@@ -154,6 +158,7 @@ func TestDiskTierSurvivesEviction(t *testing.T) {
 // which makes it resident again. Without faulting the flushed bytes back in,
 // a read of them would find the block resident and copy out zeros.
 func TestDiskTierFaultsInOnReadmit(t *testing.T) {
+	t.Parallel()
 	p := newTestPool(t, PoolConfig{})
 	b := newTestBuffer(t, p, Config{DiskPath: tempDisk(t), TotalSize: 4 << 20, MemorySize: blockSize})
 
@@ -196,6 +201,7 @@ func TestDiskTierFaultsInOnReadmit(t *testing.T) {
 // TestDiskTierRewriteVisibility: overwrites are immediately visible and don't
 // disturb neighbouring bytes.
 func TestDiskTierRewriteVisibility(t *testing.T) {
+	t.Parallel()
 	p := newTestPool(t, PoolConfig{})
 	b := newTestBuffer(t, p, Config{DiskPath: tempDisk(t), TotalSize: 4 << 20})
 
@@ -223,6 +229,7 @@ func TestDiskTierRewriteVisibility(t *testing.T) {
 }
 
 func TestDiskTierRewriteSurvivesEviction(t *testing.T) {
+	t.Parallel()
 	p := newTestPool(t, PoolConfig{})
 	b := newTestBuffer(t, p, Config{DiskPath: tempDisk(t), TotalSize: 4 << 20, MemorySize: blockSize})
 
@@ -257,6 +264,7 @@ func TestDiskTierRewriteSurvivesEviction(t *testing.T) {
 }
 
 func TestFlushPublishesOnlyCleanRanges(t *testing.T) {
+	t.Parallel()
 	path := tempDisk(t)
 	p := newTestPool(t, PoolConfig{})
 	b := newTestBuffer(t, p, Config{DiskPath: path, TotalSize: 2 << 20})
@@ -279,6 +287,7 @@ func TestFlushPublishesOnlyCleanRanges(t *testing.T) {
 }
 
 func TestPersistedRangesRemainAvailableAfterClose(t *testing.T) {
+	t.Parallel()
 	p := newTestPool(t, PoolConfig{})
 	b := newTestBuffer(t, p, Config{DiskPath: tempDisk(t), TotalSize: blockSize})
 	data := make([]byte, 256<<10)
@@ -295,6 +304,7 @@ func TestPersistedRangesRemainAvailableAfterClose(t *testing.T) {
 }
 
 func TestDiskBackstopPreservesDirtyOverwrite(t *testing.T) {
+	t.Parallel()
 	p := newTestPool(t, PoolConfig{})
 	b := newTestBuffer(t, p, Config{DiskPath: tempDisk(t), TotalSize: blockSize})
 	if _, err := b.WriteAt(make([]byte, blockSize), 0); err != nil {
@@ -323,6 +333,7 @@ func TestDiskBackstopPreservesDirtyOverwrite(t *testing.T) {
 }
 
 func TestEvictionReturnsDiskWriteFailure(t *testing.T) {
+	t.Parallel()
 	p := newTestPool(t, PoolConfig{})
 	b := newTestBuffer(t, p, Config{DiskPath: tempDisk(t), TotalSize: 2 << 20, MemorySize: blockSize})
 	if _, err := b.WriteAt(make([]byte, blockSize), 0); err != nil {
@@ -348,6 +359,7 @@ func TestEvictionReturnsDiskWriteFailure(t *testing.T) {
 }
 
 func TestDiscardStaysLogicalWhenPunchingIsUnavailable(t *testing.T) {
+	t.Parallel()
 	p := newTestPool(t, PoolConfig{})
 	b := newTestBuffer(t, p, Config{DiskPath: tempDisk(t), TotalSize: blockSize})
 	data := make([]byte, 128<<10)
@@ -373,6 +385,7 @@ func TestDiscardStaysLogicalWhenPunchingIsUnavailable(t *testing.T) {
 // file behind it, an evicted block's bytes are gone and reported, not silently
 // returned as zeros.
 func TestNoDiskTierLosesEvictedBytes(t *testing.T) {
+	t.Parallel()
 	var evicted []Range
 	p := newTestPool(t, PoolConfig{})
 	b := newTestBuffer(t, p, Config{

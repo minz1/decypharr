@@ -10,6 +10,7 @@ import (
 )
 
 func TestExecuteWithFailoverTriesAnotherBackboneAfterYencCorruption(t *testing.T) {
+	t.Parallel()
 	bad, err := nntpd.New(nntpd.Config{})
 	if err != nil {
 		t.Fatal(err)

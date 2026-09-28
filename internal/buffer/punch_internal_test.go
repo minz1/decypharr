@@ -14,6 +14,7 @@ import (
 // nothing and forcing a re-download. A silent regression to that shape is
 // exactly what this test exists to catch.
 func TestPunchHoleReclaims(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "punch.bin")
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {

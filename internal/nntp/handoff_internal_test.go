@@ -31,6 +31,7 @@ func closedPort(t *testing.T) int {
 // failure, subsequent acquisitions must go straight to the healthy secondary
 // without re-dialing the dead primary.
 func TestDialCooldownReroutesAroundDeadProvider(t *testing.T) {
+	t.Parallel()
 	dead := config.UsenetProvider{Host: "127.0.0.1", Port: closedPort(t), MaxConnections: 2, Priority: 1}
 	deadPool := &ProviderPool{
 		conns:  make([]*connectionEntry, 0, dead.MaxConnections),
@@ -87,6 +88,7 @@ func TestDialCooldownReroutesAroundDeadProvider(t *testing.T) {
 // a cooldown must not delay or swallow dial errors — acquisitions keep
 // dialing and keep failing fast.
 func TestDialCooldownKeepsSingleProviderFailFast(t *testing.T) {
+	t.Parallel()
 	dead := config.UsenetProvider{Host: "127.0.0.1", Port: closedPort(t), MaxConnections: 2}
 	deadPool := &ProviderPool{
 		conns:  make([]*connectionEntry, 0, dead.MaxConnections),
@@ -125,6 +127,7 @@ func TestDialCooldownKeepsSingleProviderFailFast(t *testing.T) {
 // TestHandoffFIFO: with the pool saturated and two parked acquirers,
 // released slots must go to waiters in arrival order.
 func TestHandoffFIFO(t *testing.T) {
+	t.Parallel()
 	pp := newTestPool(1)
 	c := newAcquireTestClient(pp)
 	pp.slots <- struct{}{} // saturate
@@ -174,6 +177,7 @@ func TestHandoffFIFO(t *testing.T) {
 }
 
 func TestHandoffOrdersEveryWorkloadClass(t *testing.T) {
+	t.Parallel()
 	pp := newTestPool(1)
 	c := newAcquireTestClient(pp)
 	pp.slots <- struct{}{}
@@ -219,8 +223,10 @@ func TestHandoffOrdersEveryWorkloadClass(t *testing.T) {
 }
 
 func TestLowerPriorityCannotBargePastStreamDemand(t *testing.T) {
+	t.Parallel()
 	for _, lower := range []Workload{WorkloadStreamPrefetch, WorkloadDownload, WorkloadBackground} {
 		t.Run(lower.String(), func(t *testing.T) {
+			t.Parallel()
 			pp := newTestPool(1)
 			c := newAcquireTestClient(pp)
 			stream := newSlotWaiter(WorkloadStreamDemand, []*ProviderPool{pp})
@@ -245,6 +251,7 @@ func TestLowerPriorityCannotBargePastStreamDemand(t *testing.T) {
 // TestDeregisterDrainsPendingHandoff: a waiter that exits after a releaser
 // already handed it a slot must re-release that slot, not leak it.
 func TestDeregisterDrainsPendingHandoff(t *testing.T) {
+	t.Parallel()
 	pp := newTestPool(1)
 	c := newAcquireTestClient(pp)
 	pp.slots <- struct{}{} // slot held; hasIdle=false but no cooldown → handoff allowed
@@ -268,6 +275,7 @@ func TestDeregisterDrainsPendingHandoff(t *testing.T) {
 }
 
 func TestAdmissionMetricsRecordOutcomesAndHandoffs(t *testing.T) {
+	t.Parallel()
 	pp := newTestPool(1)
 	c := newAcquireTestClient(pp)
 	pp.slots <- struct{}{}
@@ -303,6 +311,7 @@ func TestAdmissionMetricsRecordOutcomesAndHandoffs(t *testing.T) {
 }
 
 func TestQueueSnapshotReportsOldestLiveWait(t *testing.T) {
+	t.Parallel()
 	pp := newTestPool(1)
 	c := newAcquireTestClient(pp)
 	w := c.newQueuedWaiter(WorkloadStreamPrefetch, []*ProviderPool{pp})
@@ -340,6 +349,7 @@ func newSilentPipeConnection(t *testing.T) *Connection {
 // to silently merge them, dropping one account's connection cap — and a
 // returned connection must land in its own account's pool.
 func TestSameHostProvidersGetDistinctPools(t *testing.T) {
+	t.Parallel()
 	providers := []config.UsenetProvider{
 		{Host: "news.example.com", Port: 563, Username: "alice", MaxConnections: 3, Priority: 1},
 		{Host: "news.example.com", Port: 563, Username: "bob", MaxConnections: 7, Priority: 2},
@@ -386,6 +396,7 @@ func TestSameHostProvidersGetDistinctPools(t *testing.T) {
 // the pool (it used to dial directly, exceeding max_connections by one) and
 // return the warm connection afterwards with the slot released.
 func TestSpeedTestRespectsPoolAccounting(t *testing.T) {
+	t.Parallel()
 	pp := newTestPool(1)
 	c := newAcquireTestClient(pp)
 	c.speedTestResults = xsync.NewMap[string, SpeedTestResult]()
@@ -413,6 +424,7 @@ func TestSpeedTestRespectsPoolAccounting(t *testing.T) {
 // entry and hand it out — so a dial error plus every connection closed
 // proves the flush ran.
 func TestCheckoutFlushesPoolOnPingTimeout(t *testing.T) {
+	t.Parallel()
 	pp := newTestPool(4)
 	c := newAcquireTestClient(pp)
 	// Point dials at a closed port so the post-flush dial fails fast.

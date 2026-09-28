@@ -56,6 +56,7 @@ func newBodyTestConn(t *testing.T) (*Connection, net.Conn) {
 }
 
 func TestDecodeBodyIntoUsesCallerStorage(t *testing.T) {
+	t.Parallel()
 	c, server := newBodyTestConn(t)
 	payload := testPayload(64 * 1024)
 	serveResponses(t, server, "222 0 <a@b> body\r\n"+encodeBody(payload)+".\r\n")
@@ -74,6 +75,7 @@ func TestDecodeBodyIntoUsesCallerStorage(t *testing.T) {
 }
 
 func TestPipelineBodiesPipelinesCommands(t *testing.T) {
+	t.Parallel()
 	c, server := newBodyTestConn(t)
 	messageIDs := []string{"<first@b>", "<second@b>"}
 	payloads := [][]byte{testPayload(32 * 1024), testPayload(16 * 1024)}
@@ -130,6 +132,7 @@ func TestPipelineBodiesPipelinesCommands(t *testing.T) {
 }
 
 func TestPipelineBodiesDrainsNegativeResponses(t *testing.T) {
+	t.Parallel()
 	c, server := newBodyTestConn(t)
 	payload := testPayload(8 * 1024)
 	serverErr := make(chan error, 1)
@@ -182,6 +185,7 @@ func TestPipelineBodiesDrainsNegativeResponses(t *testing.T) {
 }
 
 func TestPipelineBodiesStreamsFromPooledStorage(t *testing.T) {
+	t.Parallel()
 	c, server := newBodyTestConn(t)
 	payload := testPayload(32 * 1024)
 	serveResponses(t, server, "222 0 <stream@b> body\r\n"+encodeBody(payload)+".\r\n")
@@ -206,6 +210,7 @@ func TestPipelineBodiesStreamsFromPooledStorage(t *testing.T) {
 }
 
 func TestPipelineBodiesDrainsDecodeErrors(t *testing.T) {
+	t.Parallel()
 	c, server := newBodyTestConn(t)
 	payload := testPayload(8 * 1024)
 	serverErr := make(chan error, 1)
@@ -260,6 +265,7 @@ func serveResponses(t *testing.T, server net.Conn, responses ...string) {
 }
 
 func TestRequestBodyDecodesAndReusesConnection(t *testing.T) {
+	t.Parallel()
 	c, server := newBodyTestConn(t)
 
 	first := testPayload(300 * 1024)
@@ -288,6 +294,7 @@ func TestRequestBodyDecodesAndReusesConnection(t *testing.T) {
 }
 
 func TestRequestBodyStatusNotFound(t *testing.T) {
+	t.Parallel()
 	c, server := newBodyTestConn(t)
 	serveResponses(t, server, "430 no such article\r\n")
 
@@ -299,6 +306,7 @@ func TestRequestBodyStatusNotFound(t *testing.T) {
 }
 
 func TestRequestBodyCrcMismatch(t *testing.T) {
+	t.Parallel()
 	c, server := newBodyTestConn(t)
 
 	payload := testPayload(4 * 1024)
@@ -317,6 +325,7 @@ func TestRequestBodyCrcMismatch(t *testing.T) {
 }
 
 func TestRequestBodyNonYencBody(t *testing.T) {
+	t.Parallel()
 	c, server := newBodyTestConn(t)
 	serveResponses(t, server, "222 0 <a@b> body\r\nplain text, no yEnc here\r\n.\r\n")
 
@@ -328,6 +337,7 @@ func TestRequestBodyNonYencBody(t *testing.T) {
 }
 
 func TestRequestBodyMidStreamDisconnect(t *testing.T) {
+	t.Parallel()
 	c, server := newBodyTestConn(t)
 
 	body := encodeBody(testPayload(64 * 1024))
@@ -361,6 +371,7 @@ func (w *sizeRecordingWriter) Write(p []byte) (int, error) {
 // path: the whole decoded article must reach the segment cache in one Write,
 // so a segment costs one pwrite+lock cycle instead of one per decoder read.
 func TestStreamBodySingleWrite(t *testing.T) {
+	t.Parallel()
 	c, server := newBodyTestConn(t)
 
 	payload := testPayload(300 * 1024)

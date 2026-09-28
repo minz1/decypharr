@@ -73,12 +73,14 @@ func newTestBuffer(t testing.TB, p *Pool, cfg Config) *Buffer {
 // data has to survive a flush-on-evict round trip.
 func bothModes(t *testing.T, f func(t *testing.T, cfg Config)) {
 	t.Run("disk", func(t *testing.T) {
+		t.Parallel()
 		f(t, Config{DiskPath: tempDisk(t), TotalSize: 64 << 20, MemorySize: 8 << 20})
 	})
 	t.Run("memory", func(t *testing.T) { f(t, Config{MemorySize: 64 << 20}) })
 }
 
 func TestWriteReadRoundtrip(t *testing.T) {
+	t.Parallel()
 	bothModes(t, func(t *testing.T, cfg Config) {
 		p := newTestPool(t, PoolConfig{})
 		b := newTestBuffer(t, p, cfg)
@@ -117,6 +119,7 @@ func TestWriteReadRoundtrip(t *testing.T) {
 }
 
 func TestReadNotPresent(t *testing.T) {
+	t.Parallel()
 	bothModes(t, func(t *testing.T, cfg Config) {
 		p := newTestPool(t, PoolConfig{})
 		b := newTestBuffer(t, p, cfg)
@@ -145,6 +148,7 @@ func TestReadNotPresent(t *testing.T) {
 }
 
 func TestDiscardMakesRangeNotPresent(t *testing.T) {
+	t.Parallel()
 	bothModes(t, func(t *testing.T, cfg Config) {
 		p := newTestPool(t, PoolConfig{})
 		b := newTestBuffer(t, p, cfg)
@@ -192,6 +196,7 @@ func TestDiscardMakesRangeNotPresent(t *testing.T) {
 // present: the exact bytes are readable as soon as WriteAt returns, and while
 // the data still fits the RAM window the file is never touched.
 func TestDiskTierVisibility(t *testing.T) {
+	t.Parallel()
 	p := newTestPool(t, PoolConfig{})
 	b := newTestBuffer(t, p, Config{DiskPath: tempDisk(t), TotalSize: 16 << 20})
 
@@ -225,6 +230,7 @@ func TestDiskTierVisibility(t *testing.T) {
 
 // TestDiskPersistsAcrossReopen: disk data survives Close and InitialRanges.
 func TestDiskPersistsAcrossReopen(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "buf.bin")
 	p := newTestPool(t, PoolConfig{})
 	b := newTestBuffer(t, p, Config{DiskPath: path, TotalSize: 8 << 20})
@@ -258,6 +264,7 @@ func TestDiskPersistsAcrossReopen(t *testing.T) {
 // else deepest prefetch ahead — never the data the consumer is about to read.
 // OnEvict reports the lost ranges and no file is ever created.
 func TestDropVictimsWithoutDiskTier(t *testing.T) {
+	t.Parallel()
 	newMemBuffer := func(t *testing.T, evicted *[]Range) (*Buffer, string) {
 		p := newTestPool(t, PoolConfig{})
 		path := filepath.Join(t.TempDir(), "buf.bin")
@@ -271,6 +278,7 @@ func TestDropVictimsWithoutDiskTier(t *testing.T) {
 	// A consumer trailing right behind the write frontier: drops take the
 	// oldest history behind it, the newest data survives.
 	t.Run("advancing-head", func(t *testing.T) {
+		t.Parallel()
 		var evicted []Range
 		b, path := newMemBuffer(t, &evicted)
 		chunk := make([]byte, 1<<20)
@@ -320,6 +328,7 @@ func TestDropVictimsWithoutDiskTier(t *testing.T) {
 	// prefetch and the start of the file survives. Write-order LRU got
 	// this exactly wrong — it dropped the start.
 	t.Run("no-head-protects-start", func(t *testing.T) {
+		t.Parallel()
 		var evicted []Range
 		b, _ := newMemBuffer(t, &evicted)
 		chunk := make([]byte, 1<<20)
@@ -353,6 +362,7 @@ func TestDropVictimsWithoutDiskTier(t *testing.T) {
 // per-stream one) is exhausted by another buffer, a writing buffer drops its
 // own blocks rather than growing the pool past its budget.
 func TestMemoryModePoolPressureTrimsGreediestBuffer(t *testing.T) {
+	t.Parallel()
 	p := newTestPool(t, PoolConfig{MemoryBudget: 4 << 20})
 	a := newTestBuffer(t, p, Config{MemorySize: 64 << 20})
 	bb := newTestBuffer(t, p, Config{MemorySize: 64 << 20})
@@ -401,6 +411,7 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 // TestDiscardSubBlockFreesFullyTrimmedBlocks verifies that cumulative partial
 // discards eventually release a fully empty resident block.
 func TestDiscardSubBlockFreesFullyTrimmedBlocks(t *testing.T) {
+	t.Parallel()
 	p := newTestPool(t, PoolConfig{})
 	b := newTestBuffer(t, p, Config{MemorySize: 8 << 20})
 
@@ -454,6 +465,7 @@ func TestDiscardSubBlockFreesFullyTrimmedBlocks(t *testing.T) {
 }
 
 func TestClosedErrors(t *testing.T) {
+	t.Parallel()
 	p := newTestPool(t, PoolConfig{})
 	b := newTestBuffer(t, p, Config{DiskPath: tempDisk(t), TotalSize: 1 << 20})
 	if err := b.Close(); err != nil {
@@ -474,6 +486,7 @@ func TestClosedErrors(t *testing.T) {
 }
 
 func TestRangeAtMaximumOffset(t *testing.T) {
+	t.Parallel()
 	p := newTestPool(t, PoolConfig{})
 	b := newTestBuffer(t, p, Config{})
 	off := int64(math.MaxInt64 - 1)
@@ -503,6 +516,7 @@ func TestRangeAtMaximumOffset(t *testing.T) {
 // completed, and discarded only after its read completed. The memory variant
 // sizes its budget above the live set so drop-oldest can't race the readers.
 func TestConcurrentStreamWorkload(t *testing.T) {
+	t.Parallel()
 	const (
 		regions    = 48
 		regionSize = 1 << 20
@@ -587,6 +601,7 @@ func TestConcurrentStreamWorkload(t *testing.T) {
 // backstop: a stream that advances its read head past the limit gets its
 // tail punched (OnEvict fired), keeping the pool near its disk budget.
 func TestPoolDiskBackstopPunchesBehindHead(t *testing.T) {
+	t.Parallel()
 	var (
 		evictMu sync.Mutex
 		evicted []Range
@@ -646,6 +661,7 @@ func TestPoolDiskBackstopPunchesBehindHead(t *testing.T) {
 // to hand back the full ask, so a single stream could never be trimmed and the
 // configured memory cap did nothing until a second stream opened.
 func TestSoleStreamRespectsPoolBudget(t *testing.T) {
+	t.Parallel()
 	const budget = 4 << 20
 	p := newTestPool(t, PoolConfig{MemoryBudget: budget})
 	b := newTestBuffer(t, p, Config{MemorySize: 16 << 20})
