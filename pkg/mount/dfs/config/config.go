@@ -119,6 +119,11 @@ func Parse(cfg config.DFS, mountPath string, retries int) *FuseConfig {
 
 	if cfg.CacheCleanupInterval != "" {
 		interval, err := utils.ParseDuration(cfg.CacheCleanupInterval)
+		if err == nil && interval <= 0 {
+			// The cleanup loop feeds this to time.NewTicker, which panics on a
+			// non-positive interval and would take the process down.
+			err = fmt.Errorf("interval must be positive, got %s", interval)
+		}
 		if err == nil {
 			fuseConfig.CacheCleanupInterval = interval
 		} else {
@@ -243,38 +248,4 @@ func parseUmask(umaskStr string) (uint32, error) {
 		return 0, fmt.Errorf("invalid umask format: %s", umaskStr)
 	}
 	return umask, nil
-}
-
-// StreamingStats tracks streaming-specific performance metrics.
-type StreamingStats struct {
-	// Network stats
-	NetworkRequests   int64
-	NetworkBytes      int64
-	NetworkErrors     int64
-	ConnectionReuse   int64
-	PipelinedRequests int64
-
-	// Performance stats
-	ReadLatencyMs    float64
-	RangeFetches     int64
-	CacheHitRate     float64
-	PrefetchHitRate  float64
-	StreamingLatency float64
-
-	// Streaming quality metrics
-	StreamingInterruptions int64
-	BufferUnderrunsMs      int64
-	SeekOperations         int64
-	ConcurrentStreams      int64
-}
-
-type Stats struct {
-	// Network stats
-	NetworkRequests int64
-	NetworkBytes    int64
-	NetworkErrors   int64
-
-	// Performance stats
-	ReadLatencyMs float64
-	RangeFetches  int64
 }
