@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"net/http"
 	"net/url"
 	"path/filepath"
 	"regexp"
@@ -79,11 +78,14 @@ func GetMagnetFromFile(file io.Reader, filePath string, rmTrackerUrls bool) (*Ma
 	return m, nil
 }
 
+// GetMagnetFromUrl resolves a magnet link, or downloads a .torrent over HTTP(S).
+//
+//nolint:revive // var-naming: exported name used by pkg/server; rename to GetMagnetFromURL is a cross-area change
 func GetMagnetFromUrl(url string, rmTrackerUrls bool) (*Magnet, error) {
 	if strings.HasPrefix(url, "magnet:") {
 		return GetMagnetInfo(url, rmTrackerUrls)
 	} else if strings.HasPrefix(url, "http") {
-		return OpenMagnetHttpURL(url, rmTrackerUrls)
+		return OpenMagnetHTTPURL(url, rmTrackerUrls)
 	}
 	return nil, fmt.Errorf("invalid url")
 }
@@ -132,17 +134,13 @@ func ReadMagnetFile(file io.Reader) string {
 	return ""
 }
 
-func OpenMagnetHttpURL(magnetLink string, rmTrackerUrls bool) (*Magnet, error) {
-	resp, err := http.Get(magnetLink)
+// OpenMagnetHTTPURL downloads a .torrent file and converts it to a Magnet.
+func OpenMagnetHTTPURL(magnetLink string, rmTrackerUrls bool) (*Magnet, error) {
+	resp, err := fetch(magnetLink)
 	if err != nil {
 		return nil, fmt.Errorf("error making GET request: %w", err)
 	}
-	defer func(resp *http.Response) {
-		closeErr := resp.Body.Close()
-		if closeErr != nil {
-			return
-		}
-	}(resp) // Ensure the response is closed after the function ends
+	defer resp.Body.Close()
 	torrentData, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("error reading response body: %w", err)
@@ -260,13 +258,11 @@ func processInfoHash(input string) (string, error) {
 }
 
 func ConstructMagnet(infoHash, name string) *Magnet {
-	// Create a magnet link from the infohash and name
-	name = url.QueryEscape(strings.TrimSpace(name))
-	magnetUri := fmt.Sprintf("magnet:?xt=urn:btih:%s&dn=%s", infoHash, name)
+	// Only the link carries the escaped name; Name stays human-readable.
+	name = strings.TrimSpace(name)
 	return &Magnet{
 		InfoHash: infoHash,
 		Name:     name,
-		Size:     0,
-		Link:     magnetUri,
+		Link:     fmt.Sprintf("magnet:?xt=urn:btih:%s&dn=%s", infoHash, url.QueryEscape(name)),
 	}
 }
