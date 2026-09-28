@@ -265,3 +265,34 @@ func TestCacheItemReleaseStopsDownloadersOnZeroOpens(t *testing.T) {
 // Stall detection now lives in the manager stream session (see
 // TestSessionStallWatchdogRecovers); the downloader no longer runs its own
 // no-progress watchdog.
+
+// An idle kicker returns right after checkIdleTimeout, but closes its done
+// channel only in a deferred call. A read landing in that gap used to see the
+// channel still open, assume a kicker was running, and start none — leaving
+// parked waiters without their safety-net ticker for the whole session.
+func TestIdleRestartStartsKickerBeforeOldOneClosesDone(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	dls := &Downloaders{ctx: ctx, cancel: cancel, idle: true}
+	exiting := make(chan struct{}) // old kicker: decided to exit, done not yet closed
+	dls.kickerDone = exiting
+
+	dls.mu.Lock()
+	dls.restartKickerIfIdleLocked()
+	fresh := dls.kickerDone
+	idle := dls.idle
+	dls.mu.Unlock()
+
+	if fresh == exiting {
+		t.Fatal("no fresh kicker started while the idle one was still exiting")
+	}
+	if idle {
+		t.Fatal("session still marked idle after restart")
+	}
+	cancel()
+	select {
+	case <-fresh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("fresh kicker did not exit on cancel")
+	}
+}
