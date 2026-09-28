@@ -42,11 +42,10 @@ type RealDebrid struct {
 	autoExpiresLinksAfter time.Duration
 	logger                zerolog.Logger
 
-	rarSemaphore       chan struct{}
-	Profile            *types.Profile
-	profileLastFetched time.Time
-	config             config.Debrid
-	retries            int
+	rarSemaphore chan struct{}
+	profile      types.ProfileCache
+	config       config.Debrid
+	retries      int
 }
 
 func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter) (*RealDebrid, error) {
@@ -96,8 +95,7 @@ func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter) (*RealDebrid
 	}
 
 	go func() {
-		_, err = r.GetProfile()
-		if err != nil {
+		if _, err := r.GetProfile(); err != nil {
 			r.logger.Error().Err(err).Msg("Failed to get RealDebrid profile")
 		}
 	}()
@@ -1000,16 +998,9 @@ func (r *RealDebrid) getClientProfile(client *request.Client) (*types.Profile, e
 }
 
 func (r *RealDebrid) GetProfile() (*types.Profile, error) {
-	if r.Profile != nil && time.Since(r.profileLastFetched) < profileCacheDuration {
-		return r.Profile, nil
-	}
-	profile, err := r.getClientProfile(r.client)
-	if err != nil {
-		return nil, err
-	}
-	r.Profile = profile
-	r.profileLastFetched = time.Now()
-	return profile, nil
+	return r.profile.Get(profileCacheDuration, func() (*types.Profile, error) {
+		return r.getClientProfile(r.client)
+	})
 }
 
 func (r *RealDebrid) GetAvailableSlots() (int, error) {

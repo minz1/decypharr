@@ -222,12 +222,14 @@ func (c *Collector) collectDebrids(cfg *config.Config) []debridTypes.Stats {
 		ds := debridTypes.Stats{}
 		ls := debridTypes.LibraryStats{}
 
-		profile := profiles[debridName]
-		if profile == nil {
-			profile = &debridTypes.Profile{Name: debridName}
+		// Copy: cached profiles are shared with earlier snapshots that may be
+		// encoding concurrently.
+		profile := debridTypes.Profile{}
+		if cached := profiles[debridName]; cached != nil {
+			profile = *cached
 		}
 		profile.Name = debridName
-		ds.Profile = profile
+		ds.Profile = &profile
 
 		ls.Total = torrentCount
 		ls.ActiveLinks = c.mgr.GetTotalActiveDownloadLinks()

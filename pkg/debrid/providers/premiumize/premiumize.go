@@ -48,8 +48,7 @@ type Premiumize struct {
 	autoExpiresLinksAfter time.Duration
 	logger                zerolog.Logger
 	config                config.Debrid
-	profile               *types.Profile
-	profileLastFetched    time.Time
+	profile               types.ProfileCache
 	validateFileAllowed   func(string, int64) error
 }
 
@@ -600,16 +599,9 @@ func (pm *Premiumize) CheckFile(ctx context.Context, infohash, fileID string) er
 }
 
 func (pm *Premiumize) GetProfile() (*types.Profile, error) {
-	if pm.profile != nil && time.Since(pm.profileLastFetched) < profileCacheDuration {
-		return pm.profile, nil
-	}
-	profile, err := pm.getClientProfile(pm.client)
-	if err != nil {
-		return nil, err
-	}
-	pm.profile = profile
-	pm.profileLastFetched = time.Now()
-	return profile, nil
+	return pm.profile.Get(profileCacheDuration, func() (*types.Profile, error) {
+		return pm.getClientProfile(pm.client)
+	})
 }
 
 func (pm *Premiumize) getClientProfile(client *request.Client) (*types.Profile, error) {

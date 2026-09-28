@@ -36,7 +36,7 @@ type DebridLink struct {
 	logger                zerolog.Logger
 	config                config.Debrid
 
-	Profile *types.Profile `json:"profile,omitempty"`
+	profile types.ProfileCache
 }
 
 func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter) (*DebridLink, error) {
@@ -642,10 +642,12 @@ func (dl *DebridLink) GetAvailableSlots() (int, error) {
 	return config.DefaultAvailableSlots, nil
 }
 
+// GetProfile returns the account profile, fetched once and then cached.
 func (dl *DebridLink) GetProfile() (*types.Profile, error) {
-	if dl.Profile != nil {
-		return dl.Profile, nil
-	}
+	return dl.profile.Get(0, dl.fetchProfile)
+}
+
+func (dl *DebridLink) fetchProfile() (*types.Profile, error) {
 	var res UserInfo
 
 	resp, err := dl.doGet("/account/infos", nil, &res)
@@ -678,7 +680,6 @@ func (dl *DebridLink) GetProfile() (*types.Profile, error) {
 	} else {
 		profile.Type = "free"
 	}
-	dl.Profile = profile
 	return profile, nil
 }
 
