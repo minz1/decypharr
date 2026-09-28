@@ -557,7 +557,7 @@ func (ad *AllDebrid) fetchDownloadLink(
 	now := time.Now()
 	dl := types.DownloadLink{
 		Debrid:       ad.config.Name,
-		Token:        ad.APIKey,
+		Token:        account.Token,
 		Link:         file.Link,
 		DownloadLink: link,
 		Id:           data.Data.Id,
