@@ -1,4 +1,4 @@
-package yenc
+package yenc_test
 
 import (
 	"bytes"
@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"testing/iotest"
+
+	"github.com/sirrobot01/decypharr/internal/nntp/yenc"
 )
 
 // yencEncode encodes raw bytes into a yEnc article body for testing. The
@@ -60,9 +62,9 @@ func bodyResponse(encoded string) string {
 	return "222 0 <test@example> body\r\n" + encoded + ".\r\n"
 }
 
-func decodeResponse(t *testing.T, response string) (BodyResult, error) {
+func decodeResponse(t *testing.T, response string) (yenc.BodyResult, error) {
 	t.Helper()
-	return NewBodyDecoder(strings.NewReader(response), nil).Next()
+	return yenc.NewBodyDecoder(strings.NewReader(response), nil).Next()
 }
 
 func TestBodyDecoder_SimpleFile(t *testing.T) {
@@ -150,7 +152,7 @@ func TestBodyDecoder_SmallReads(t *testing.T) {
 	response := bodyResponse(yencEncode(original, "small.txt", 0, 0, 0))
 
 	// One byte per source Read exercises every buffer-boundary path.
-	dec := NewBodyDecoder(iotest.OneByteReader(strings.NewReader(response)), nil)
+	dec := yenc.NewBodyDecoder(iotest.OneByteReader(strings.NewReader(response)), nil)
 	res, err := dec.Next()
 	if err != nil {
 		t.Fatalf("Next failed: %v", err)
@@ -170,8 +172,8 @@ func TestBodyDecoder_CrcMismatch(t *testing.T) {
 	}
 
 	res, err := decodeResponse(t, bodyResponse(strings.Replace(encoded, good, bad, 1)))
-	if !errors.Is(err, ErrCrcMismatch) {
-		t.Fatalf("err = %v, want ErrCrcMismatch", err)
+	if !errors.Is(err, yenc.ErrCrcMismatch) {
+		t.Fatalf("err = %v, want yenc.ErrCrcMismatch", err)
 	}
 	// Decoded bytes survive the CRC failure for inspection/repair.
 	if !bytes.Equal(res.Data, original) {
@@ -181,8 +183,8 @@ func TestBodyDecoder_CrcMismatch(t *testing.T) {
 
 func TestBodyDecoder_NonYencBody(t *testing.T) {
 	res, err := decodeResponse(t, "222 0 <plain@example> body\r\njust some text\r\n.\r\n")
-	if !errors.Is(err, ErrDataMissing) {
-		t.Fatalf("err = %v, want ErrDataMissing", err)
+	if !errors.Is(err, yenc.ErrDataMissing) {
+		t.Fatalf("err = %v, want yenc.ErrDataMissing", err)
 	}
 	if len(res.Data) != 0 {
 		t.Errorf("Data = %d bytes, want none", len(res.Data))
@@ -222,7 +224,7 @@ func TestBodyDecoder_Reuse(t *testing.T) {
 	stream := bodyResponse(yencEncode(first, "one.bin", 1, 1, int64(len(first)))) +
 		bodyResponse(yencEncode(second, "two.bin", 2, 1, int64(len(second))))
 
-	dec := NewBodyDecoder(strings.NewReader(stream), nil)
+	dec := yenc.NewBodyDecoder(strings.NewReader(stream), nil)
 	for i, want := range [][]byte{first, second} {
 		res, err := dec.Next()
 		if err != nil {
@@ -245,7 +247,7 @@ func TestBodyDecoder_DataFunc(t *testing.T) {
 	response := bodyResponse(yencEncode(original, "pooled.bin", 1, 1, int64(len(original))))
 
 	supplied := make([]byte, 0, 1<<20)
-	dec := NewBodyDecoder(strings.NewReader(response), func() []byte { return supplied })
+	dec := yenc.NewBodyDecoder(strings.NewReader(response), func() []byte { return supplied })
 	res, err := dec.Next()
 	if err != nil {
 		t.Fatalf("Next failed: %v", err)
