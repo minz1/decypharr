@@ -141,3 +141,23 @@ func TestMutationRequestClassifiesOnlyPossiblyDispatchedErrorsAsUnknown(t *testi
 		t.Fatalf("transport error = %v, want unknown outcome", err)
 	}
 }
+
+// A media ID from a webhook or API call must stay one query value, not splice
+// extra parameters into the Arr request.
+func TestMediaEscapesMediaID(t *testing.T) {
+	t.Parallel()
+	const mediaID = "1&monitored=false"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		if r.URL.Path != "/api/v3/movie" || len(query) != 1 || query.Get("tmdbId") != mediaID {
+			t.Errorf("request = %s?%s", r.URL.Path, r.URL.RawQuery)
+		}
+		_, _ = fmt.Fprint(w, `[]`)
+	}))
+	defer server.Close()
+
+	s := testService(Arr{Host: server.URL, Token: "secret", Type: Radarr})
+	if _, err := s.Media(t.Context(), "arr", mediaID); err != nil {
+		t.Fatal(err)
+	}
+}
