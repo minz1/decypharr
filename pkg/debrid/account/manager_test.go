@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/rs/zerolog"
@@ -68,6 +69,28 @@ func TestNoActiveAccountWarningIsThrottled(t *testing.T) {
 
 	if got := strings.Count(logs.String(), "No active accounts"); got != 1 {
 		t.Fatalf("expected one no-active-account warning, got %d: %s", got, logs.String())
+	}
+}
+
+func TestInvalidFetchedLinkIsNotCached(t *testing.T) {
+	var logs bytes.Buffer
+	_, acc := newTestManager(&logs)
+	file := &types.File{Link: "https://example.test/file"}
+	calls := 0
+	fetcher := func(context.Context, *Account, string, *types.File) (types.DownloadLink, error) {
+		calls++
+		dl := types.DownloadLink{Link: file.Link, ExpiresAt: time.Now().Add(time.Hour)}
+		if calls > 1 {
+			dl.DownloadLink = "https://cdn.example.test/file"
+		}
+		return dl, nil
+	}
+	if _, err := acc.GetDownloadLink(t.Context(), "id", file, fetcher); !errors.Is(err, types.EmptyDownloadLinkError) {
+		t.Fatalf("first fetch error = %v, want empty link", err)
+	}
+	dl, err := acc.GetDownloadLink(t.Context(), "id", file, fetcher)
+	if err != nil || calls != 2 || dl.DownloadLink == "" {
+		t.Fatalf("second fetch: link=%q calls=%d err=%v, want refetched link", dl.DownloadLink, calls, err)
 	}
 }
 
