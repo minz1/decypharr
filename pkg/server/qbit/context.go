@@ -10,8 +10,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/go-chi/chi/v5"
-
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 )
@@ -232,18 +230,15 @@ func extractFromSID(sid string) (string, string, error) {
 
 func hashesContext(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_hashes := chi.URLParam(r, "hashes")
+		_ = r.ParseForm()
+		// qBittorrent takes several hashes as one pipe-separated value.
 		var hashes []string
-		if _hashes != "" {
-			hashes = strings.Split(_hashes, "|")
-		}
-		if hashes == nil {
-			// GetReader hashes from form
-			_ = r.ParseForm()
-			hashes = r.Form["hashes"]
-		}
-		for i, hash := range hashes {
-			hashes[i] = strings.TrimSpace(hash)
+		for _, value := range r.Form["hashes"] {
+			for hash := range strings.SplitSeq(value, "|") {
+				if hash = strings.TrimSpace(hash); hash != "" {
+					hashes = append(hashes, hash)
+				}
+			}
 		}
 		ctx := context.WithValue(r.Context(), hashesKey, hashes)
 		next.ServeHTTP(w, r.WithContext(ctx))

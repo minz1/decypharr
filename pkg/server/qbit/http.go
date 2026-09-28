@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/sirrobot01/decypharr/internal/config"
@@ -231,51 +232,18 @@ func (q *QBit) handleTorrentsDelete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func (q *QBit) handleTorrentsPause(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	hashes := getHashes(ctx)
-	for _, hash := range hashes {
-		torrent, err := q.manager.Queue().GetTorrent(hash)
-		if err != nil {
-			continue
-		}
-		go q.PauseTorrent(torrent)
-	}
-
-	w.WriteHeader(http.StatusOK)
-}
-
-func (q *QBit) handleTorrentsResume(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	hashes := getHashes(ctx)
-	for _, hash := range hashes {
-		torrent, err := q.manager.Queue().GetTorrent(hash)
-		if err != nil {
-			continue
-		}
-		go q.ResumeTorrent(torrent)
-	}
-
-	w.WriteHeader(http.StatusOK)
-}
-
-func (q *QBit) handleTorrentRecheck(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	hashes := getHashes(ctx)
-	for _, hash := range hashes {
-		torrent, err := q.manager.Queue().GetTorrent(hash)
-		if err != nil {
-			continue
-		}
-		go q.RefreshTorrent(torrent)
-	}
-
+// handleTorrentsNoop answers pause/resume/recheck: debrid-backed entries have
+// no local transfer to act on, so these always succeed.
+func (q *QBit) handleTorrentsNoop(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
 func (q *QBit) handleCategories(w http.ResponseWriter, r *http.Request) {
-	var categories = map[string]TorrentCategory{}
-	for _, cat := range q.categories {
+	q.mu.Lock()
+	names := slices.Clone(q.categories)
+	q.mu.Unlock()
+	categories := make(map[string]TorrentCategory, len(names))
+	for _, cat := range names {
 		path := filepath.Join(q.downloadFolder, cat)
 		categories[cat] = TorrentCategory{
 			Name:     cat,
@@ -298,7 +266,9 @@ func (q *QBit) handleCreateCategory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	q.mu.Lock()
 	q.categories = append(q.categories, name)
+	q.mu.Unlock()
 
 	utils.JSONResponse(w, nil, http.StatusOK)
 }
@@ -329,14 +299,13 @@ func (q *QBit) handleSetCategory(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	category := getCategory(ctx)
 	hashes := getHashes(ctx)
-	var filterFunc func(t *storage.Entry) bool
-
-	hashSet := make(map[string]bool)
-	if len(hashes) > 0 {
-		for _, h := range hashes {
-			hashSet[h] = true
-		}
+	if len(hashes) == 0 {
+		// Without hashes the queue filter matches everything; recategorizing
+		// the whole queue is never what a client asked for.
+		http.Error(w, "No hashes provided", http.StatusBadRequest)
+		return
 	}
+	filterFunc := q.manager.Queue().ListFilterFunc("", config.ProtocolTorrent, "", hashes)
 
 	updateFunc := func(t *storage.Entry) bool {
 		if t.Category != category {
@@ -347,7 +316,7 @@ func (q *QBit) handleSetCategory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := q.manager.Queue().UpdateWhere(filterFunc, updateFunc); err != nil {
-		q.logger.Warn().Err(err).Msgf("Error adding torrent")
+		q.logger.Warn().Err(err).Msgf("Error setting torrent category")
 		http.Error(w, "Failed to update torrents", http.StatusInternalServerError)
 		return
 	}
@@ -401,7 +370,10 @@ func (q *QBit) handleRemoveTorrentTags(w http.ResponseWriter, r *http.Request) {
 }
 
 func (q *QBit) handleGetTags(w http.ResponseWriter, r *http.Request) {
-	utils.JSONResponse(w, q.Tags, http.StatusOK)
+	q.mu.Lock()
+	tags := slices.Clone(q.tags)
+	q.mu.Unlock()
+	utils.JSONResponse(w, tags, http.StatusOK)
 }
 
 func (q *QBit) handleCreateTags(w http.ResponseWriter, r *http.Request) {
