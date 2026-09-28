@@ -192,7 +192,10 @@ func (f *Fixer) FixTorrent(ctx context.Context, entry *storage.Entry, skipCurren
 	entry.Bad = true
 	entry.UpdatedAt = time.Now()
 	_ = f.manager.AddOrUpdate(entry, func(t *storage.Entry) {
-		f.manager.RefreshEntries(true)
+		f.manager.InvalidateEntryCache()
+		if err := f.manager.RefreshMount(); err != nil {
+			f.manager.logger.Error().Err(err).Msg("Mount refresh failed")
+		}
 	})
 
 	result := &FixResult{
@@ -238,14 +241,14 @@ func (f *Fixer) MoveTorrent(entry *storage.Entry, debridName string, reinsert bo
 		}
 	}
 
-	// Capture the source provider's torrent ID for post-migration cleanup.
+	// Only replace the old torrent on the same provider. Other placements stay valid.
 	var oldID string
-	if source, ok := entry.Providers[entry.ActiveProvider]; ok && source != nil {
+	if source, ok := entry.Providers[debridName]; ok && source != nil && debridName == entry.ActiveProvider {
 		oldID = source.ID
 	}
 
 	// Construct magnet
-	magnet, err := utils.GetMagnetInfo(entry.Magnet, f.manager.config.AlwaysRmTrackerUrls)
+	magnet, err := utils.GetMagnetInfo(entry.Magnet, config.Get().AlwaysRmTrackerUrls)
 	if err != nil {
 		magnet = utils.ConstructMagnet(entry.InfoHash, entry.Name)
 	}

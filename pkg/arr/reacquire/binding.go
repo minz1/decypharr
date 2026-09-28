@@ -14,6 +14,7 @@ import (
 var (
 	ErrBindingNotFound   = errors.New("arr binding not found")
 	ErrBindingUnsafe     = errors.New("arr binding is not authoritative")
+	ErrJobNotBlocked     = errors.New("reacquire job does not need attention")
 	ErrJobNotTerminal    = errors.New("only completed reacquire jobs can be deleted")
 	ErrServiceNotStarted = errors.New("arr service not started")
 	ErrServiceClosed     = errors.New("arr service closed")
@@ -22,7 +23,9 @@ var (
 type Confidence string
 
 const (
-	ConfidenceExactPath Confidence = "exact_path"
+	// ConfidenceLibraryFile records an Arr file verified without a managed entry.
+	ConfidenceLibraryFile Confidence = "library_file"
+	ConfidenceExactPath   Confidence = "exact_path"
 	// ConfidenceManagedTarget binds a library symlink that points into the
 	// managed mount to the one managed file with that name and size. It is
 	// used when the entry folder no longer matches, which happens after a
@@ -58,7 +61,8 @@ func (b Binding) AuthorizesMutation() bool {
 		b.ArrInstanceFingerprint != "" &&
 		b.LibraryPath != "" &&
 		(b.ArrType == arr.Sonarr || b.ArrType == arr.Radarr) &&
-		(b.Confidence == ConfidenceExactPath ||
+		(b.Confidence == ConfidenceLibraryFile ||
+			b.Confidence == ConfidenceExactPath ||
 			b.Confidence == ConfidenceManagedTarget ||
 			b.Confidence == ConfidenceDownloadHistory)
 }
@@ -124,6 +128,7 @@ const (
 	StatusWaitingForGrab     Status = "waiting_for_grab"
 	StatusWaitingForDownload Status = "waiting_for_download"
 	StatusWaitingForImport   Status = "waiting_for_import"
+	StatusNeedsAttention     Status = "needs_attention"
 	StatusReady              Status = "ready"
 	StatusFailed             Status = "failed"
 	StatusCancelled          Status = "cancelled"
@@ -143,6 +148,7 @@ func (status Status) valid() bool {
 		StatusWaitingForGrab,
 		StatusWaitingForDownload,
 		StatusWaitingForImport,
+		StatusNeedsAttention,
 		StatusReady,
 		StatusFailed,
 		StatusCancelled:

@@ -170,14 +170,6 @@ func (c *Client) Get(url string) (*http.Response, error) {
 	return c.Do(req)
 }
 
-// zerologAdapter bridges zerolog to the retryablehttp.Logger interface so that
-// retry events (including 429 backoffs) appear in decypharr's structured log.
-type zerologAdapter struct{ log zerolog.Logger }
-
-func (z zerologAdapter) Printf(format string, args ...interface{}) {
-	z.log.Debug().Msgf(format, args...)
-}
-
 // retryAfterBackoff extends DefaultBackoff with Retry-After header support.
 // When a 429 response carries a Retry-After header decypharr waits exactly as
 // long as the server requests instead of using jittered exponential backoff.
@@ -275,14 +267,10 @@ func New(options ...ClientOption) *Client {
 			return false, ctx.Err()
 		}
 
-		// First use the default retry policy for error handling
-		// This handles the case when resp is nil (network errors)
-		shouldRetry, defaultErr := retryablehttp.DefaultRetryPolicy(ctx, resp, err)
-		if defaultErr != nil {
-			return false, defaultErr
-		}
-		if shouldRetry {
-			return true, nil
+		// Use the default policy for transport errors. HTTP responses use the
+		// configured status list so provider errors retain their response body.
+		if err != nil || resp == nil {
+			return retryablehttp.DefaultRetryPolicy(ctx, resp, err)
 		}
 
 		// Check for retryable status codes (only if resp is not nil)

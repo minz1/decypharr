@@ -3,8 +3,8 @@ package manager
 import (
 	"context"
 	"crypto/tls"
-	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -24,9 +24,12 @@ import (
 	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/hearsay"
 	"github.com/sirrobot01/decypharr/pkg/manager/link"
+	"github.com/sirrobot01/decypharr/pkg/manager/virtualfolders"
 	"github.com/sirrobot01/decypharr/pkg/notifications"
 	"github.com/sirrobot01/decypharr/pkg/repair"
 	"github.com/sirrobot01/decypharr/pkg/storage"
+	"github.com/sirrobot01/decypharr/pkg/storage/migration"
+	"github.com/sirrobot01/decypharr/pkg/strm"
 	"github.com/sirrobot01/decypharr/pkg/usenet"
 	"github.com/sirrobot01/decypharr/pkg/version"
 	"golang.org/x/sync/singleflight"
@@ -35,7 +38,7 @@ import (
 // Manager handles unified torrent management - replaces wire.Store completely
 type Manager struct {
 	storage      *storage.Storage
-	migrator     *Migrator
+	migrator     *migration.Migrator
 	repair       *repair.Service
 	clients      *xsync.Map[string, debrid.Client]
 	arr          *arr.Service
@@ -70,10 +73,10 @@ type Manager struct {
 	ctx   context.Context
 
 	// strm reconciler
-	strm *Strm
+	strm *strm.Reconciler
 
 	virtualFoldersMu sync.RWMutex
-	virtualFolders   *VirtualFolders
+	virtualFolders   *virtualfolders.Folders
 	mountManager     MountManager
 
 	startTime     time.Time
@@ -103,6 +106,11 @@ type Manager struct {
 	// Unified active-download queue for torrent and NZB imports.
 	jobQueue  *JobQueue
 	nzbSyncMu sync.Mutex
+
+	downloadMu       sync.Mutex
+	downloadTasks    sync.WaitGroup
+	downloadsStopped bool
+	cancelDownloads  context.CancelFunc
 
 	// Notifications service
 	Notifications *notifications.Service
@@ -187,6 +195,10 @@ func New() *Manager {
 }
 
 func (m *Manager) init() {
+	m.downloadMu.Lock()
+	m.ctx, m.cancelDownloads = context.WithCancel(context.Background())
+	m.downloadsStopped = false
+	m.downloadMu.Unlock()
 	cfg := config.Get()
 	scheduler, err := gocron.NewScheduler(gocron.WithLocation(time.Local), gocron.WithGlobalJobOptions(gocron.WithTags("decypharr-manager")))
 	if err != nil {
@@ -217,7 +229,7 @@ func (m *Manager) init() {
 
 	m.scheduler = scheduler
 	m.cetScheduler = cetScheduler
-	m.migrator = NewMigrator(m.storage)
+	m.migrator = migration.New(m.storage)
 	m.downloader = NewDownloadManager(m)
 
 	// Initialize HTTP pool for streaming
@@ -248,7 +260,9 @@ func (m *Manager) init() {
 	m.fixer = NewFixer(m)
 
 	// Initialize strm reconciler
-	m.strm = NewStrm(m)
+	m.strm = strm.NewReconciler(m.ctx, m.storage, func(ctx context.Context, entry *storage.Entry, filename string) (io.ReadCloser, error) {
+		return m.OpenStreamUntracked(ctx, entry, filename, 0)
+	}, m.logger)
 
 	// Set mount paths
 	m.setMountPaths()
@@ -283,6 +297,7 @@ func (m *Manager) init() {
 
 func (m *Manager) initArrServices() {
 	service, err := reacquire.NewService(reacquire.ServiceOptions{
+		Arrs:      m.arr,
 		Directory: filepath.Join(config.GetMainPath(), "db"),
 		Handler:   reacquire.NewHandler(m.arr, m),
 	})
@@ -330,22 +345,30 @@ func (m *Manager) initJobQueue() {
 	// for 60-90 minutes on big libraries, during which every arr reported
 	// "download client unavailable". Backgrounding lets the API serve and the
 	// worker pool drain immediately while the restore catches up.
-	go func() {
+	m.startDownloadTask(func() {
 		defer func() {
 			if r := recover(); r != nil {
 				m.logger.Error().Interface("panic", r).Msg("Recovered from panic while restoring active downloads")
 			}
 		}()
 		m.restoreActiveDownloadJobs()
-	}()
+	})
+}
+
+// startDownloadTask registers work before shutdown can wait for it.
+// Once shutdown starts, queued entries stay in storage for the next start.
+func (m *Manager) startDownloadTask(task func()) bool {
+	m.downloadMu.Lock()
+	defer m.downloadMu.Unlock()
+	if m.downloadsStopped {
+		return false
+	}
+	m.downloadTasks.Go(task)
+	return true
 }
 
 func (m *Manager) processJob(ctx context.Context, job *Job) {
 	if job == nil {
-		return
-	}
-	if job.Entry != nil && job.Request == nil && job.DebridTorrent == nil && job.NZBMeta == nil && !job.ResumeExisting {
-		m.waitForDownloadCompletion(ctx, job.Entry)
 		return
 	}
 
@@ -385,47 +408,12 @@ func (m *Manager) processJob(ctx context.Context, job *Job) {
 	// submitted. processQueuedEntries drives the entry from here.
 }
 
-// activeDownloadWaitTimeout bounds how long a job may hold a worker slot while
-// it waits on an entry it does not drive itself. Without a bound, an entry the
-// queue scheduler never picks up parked its worker forever, and enough of them
-// drained the pool to zero.
-const activeDownloadWaitTimeout = 35 * time.Minute
-
-func (m *Manager) waitForDownloadCompletion(ctx context.Context, entry *storage.Entry) {
-	if entry == nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(ctx, activeDownloadWaitTimeout)
-	defer cancel()
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-	for {
-		current, err := m.queue.GetTorrent(entry.InfoHash)
-		if err != nil || current.State != storage.EntryStateDownloading {
-			return
-		}
-		select {
-		case <-ctx.Done():
-			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				m.logger.Warn().
-					Str("name", entry.Name).
-					Str("infohash", entry.InfoHash).
-					Dur("waited", activeDownloadWaitTimeout).
-					Msg("Stopped waiting for download completion, releasing worker slot")
-			}
-			return
-		case <-ticker.C:
-		}
-	}
-}
-
 func (m *Manager) migrate() {
 	// Check if migration has already been done
 	status, err := m.migrator.GetStatus()
 	if err == nil && !status.Running && status.Completed > 0 {
 		m.logger.Info().
 			Int("completed", status.Completed).
-			Int("errors", status.Errors).
 			Msg("Migration already completed previously")
 		return
 	}
@@ -532,8 +520,33 @@ func (m *Manager) Start(ctx context.Context) error {
 // Stop stops the manager and cleans up all resources
 func (m *Manager) Stop() error {
 	m.logger.Info().Msg("Stopping manager")
+	m.downloadMu.Lock()
+	m.downloadsStopped = true
+	if m.cancelDownloads != nil {
+		m.cancelDownloads()
+	}
+	m.downloadMu.Unlock()
 
-	// Stop mount manager first
+	// Stop schedulers
+	if m.scheduler != nil {
+		if err := m.scheduler.Shutdown(); err != nil {
+			m.logger.Warn().Err(err).Msg("Failed to shutdown scheduler")
+		}
+	}
+	if m.cetScheduler != nil {
+		if err := m.cetScheduler.Shutdown(); err != nil {
+			m.logger.Warn().Err(err).Msg("Failed to shutdown CET scheduler")
+		}
+	}
+
+	if m.jobQueue != nil {
+		m.logger.Info().Msg("Closing active download queue")
+		m.jobQueue.Close()
+	}
+
+	m.downloadTasks.Wait()
+
+	// Downloads have saved their final or resumable state.
 	if m.mountManager != nil {
 		m.logger.Info().Msg("Stopping mount manager")
 		if err := m.mountManager.Stop(); err != nil {
@@ -552,23 +565,6 @@ func (m *Manager) Stop() error {
 		}
 	}
 	m.SetArrRecovery(nil)
-
-	// Stop schedulers
-	if m.scheduler != nil {
-		if err := m.scheduler.Shutdown(); err != nil {
-			m.logger.Warn().Err(err).Msg("Failed to shutdown scheduler")
-		}
-	}
-	if m.cetScheduler != nil {
-		if err := m.cetScheduler.Shutdown(); err != nil {
-			m.logger.Warn().Err(err).Msg("Failed to shutdown CET scheduler")
-		}
-	}
-
-	if m.jobQueue != nil {
-		m.logger.Info().Msg("Closing active download queue")
-		m.jobQueue.Close()
-	}
 
 	// Close usenet connection manager if active
 	if m.usenet != nil {
@@ -736,7 +732,12 @@ func (m *Manager) DeleteEntry(infohash string, removePlacements bool) error {
 	}
 	m.strm.RemoveEntryAsync(torr)
 	// Refresh entry cache
-	m.RefreshEntries(true)
+	m.InvalidateEntryCache()
+	go func() {
+		if err := m.RefreshMount(); err != nil {
+			m.logger.Error().Err(err).Msg("Mount refresh after entry deletion failed")
+		}
+	}()
 	return nil
 }
 

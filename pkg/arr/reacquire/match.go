@@ -44,20 +44,6 @@ type matchStats struct {
 	ambiguousTarget int
 	conflicted      int
 	managedSkipped  int
-
-	// One example path per miss, so a count that looks wrong can be chased
-	// without a second run.
-	samples map[string]string
-}
-
-// sample records the first library path to land in a miss bucket.
-func (s *matchStats) sample(bucket, path string) {
-	if s.samples == nil {
-		s.samples = make(map[string]string, 5)
-	}
-	if _, seen := s.samples[bucket]; !seen {
-		s.samples[bucket] = path
-	}
 }
 
 func (s matchStats) matched() int {
@@ -96,16 +82,13 @@ func matchLibraryFiles(library []arr.LibraryFile, managed []ManagedFile, managed
 		if target == "" {
 			if readable {
 				stats.notSymlink++
-				stats.sample("not_symlink", libraryFile.Path)
 			} else {
 				stats.unreadable++
-				stats.sample("unreadable", libraryFile.Path)
 			}
 			continue
 		}
 		if managedRoot != "." && !isUnder(target, managedRoot) {
 			stats.foreignTarget++
-			stats.sample("foreign_target", target)
 			continue
 		}
 		name := filepath.Base(target)
@@ -115,7 +98,6 @@ func matchLibraryFiles(library []arr.LibraryFile, managed []ManagedFile, managed
 			continue
 		} else if len(files) > 1 {
 			stats.ambiguousTarget++
-			stats.sample("ambiguous_target", target)
 			continue
 		}
 		// The entry folder moved or was renamed. The filename and size still
@@ -126,16 +108,13 @@ func matchLibraryFiles(library []arr.LibraryFile, managed []ManagedFile, managed
 				continue
 			} else if len(files) > 1 {
 				stats.ambiguousTarget++
-				stats.sample("ambiguous_target", target)
 				continue
 			}
 		}
 		if _, ok := folders[folder.folder]; ok {
 			stats.unknownFile++
-			stats.sample("unknown_file", target)
 		} else {
 			stats.unknownEntry++
-			stats.sample("unknown_entry", target)
 		}
 	}
 
@@ -192,20 +171,7 @@ func (s matchStats) fields(event *zerolog.Event) *zerolog.Event {
 	event = event.
 		Int("arr_files", s.libraryFiles).
 		Int("managed_files", s.managedFiles).
-		Int("indexed", s.matched()).
-		Int("indexed_by_folder", s.matchedFolder).
-		Int("indexed_by_size", s.matchedSize).
-		Int("not_symlink", s.notSymlink).
-		Int("unreadable", s.unreadable).
-		Int("foreign_target", s.foreignTarget).
-		Int("unknown_entry", s.unknownEntry).
-		Int("unknown_file", s.unknownFile).
-		Int("ambiguous_target", s.ambiguousTarget).
-		Int("conflicted", s.conflicted).
-		Int("managed_incomplete", s.managedSkipped)
-	for bucket, path := range s.samples {
-		event = event.Str("sample_"+bucket, path)
-	}
+		Int("indexed", s.matched())
 	return event
 }
 

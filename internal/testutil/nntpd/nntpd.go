@@ -19,8 +19,8 @@ import (
 
 // Config controls simulated network behavior.
 type Config struct {
-	// RTT is the artificial delay applied before every response, simulating
-	// one network round trip per command.
+	// RTT is the artificial delay applied before the first response to each
+	// command burst. Commands delivered in one pipeline share the delay.
 	RTT time.Duration
 	// Bandwidth caps body streaming per connection in bytes/second.
 	// 0 means unlimited.
@@ -36,8 +36,26 @@ type Server struct {
 	conns    map[net.Conn]struct{}
 	wg       sync.WaitGroup
 	closed   atomic.Bool
-	// Bodies counts BODY responses served, for bodies/op bench metrics.
+	// Bodies counts existing-article BODY attempts before writing the response.
 	Bodies atomic.Int64
+	// CompletedBodies and CompletedBodyBytes advance after the response flush
+	// succeeds. Body bytes include yEnc framing, excluding the status/terminator.
+	CompletedBodies    atomic.Int64
+	CompletedBodyBytes atomic.Int64
+	// SocketBytes counts bytes accepted by net.Conn.Write, including protocol
+	// framing and partial writes. It does not imply the client consumed them.
+	SocketBytes atomic.Int64
+}
+
+type socketWriter struct {
+	conn  net.Conn
+	bytes *atomic.Int64
+}
+
+func (w socketWriter) Write(p []byte) (int, error) {
+	n, err := w.conn.Write(p)
+	w.bytes.Add(int64(n))
+	return n, err
 }
 
 func New(cfg Config) (*Server, error) {
@@ -108,11 +126,12 @@ func (s *Server) handleConn(conn net.Conn) {
 	}()
 
 	reader := bufio.NewReaderSize(conn, 4096)
-	writer := bufio.NewWriterSize(conn, 256*1024)
+	writer := bufio.NewWriterSize(socketWriter{conn, &s.SocketBytes}, 256*1024)
 
 	if s.respond(writer, "200 nntpd ready") != nil {
 		return
 	}
+	inPipeline := false
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
@@ -126,30 +145,33 @@ func (s *Server) handleConn(conn net.Conn) {
 		if len(fields) > 1 {
 			arg = fields[len(fields)-1]
 		}
+		if !inPipeline {
+			s.sleepRTT()
+		}
+		inPipeline = reader.Buffered() > 0
 
 		switch strings.ToUpper(fields[0]) {
 		case "AUTHINFO":
 			if len(fields) > 1 && strings.EqualFold(fields[1], "USER") {
-				err = s.respond(writer, "381 password required")
+				err = writeResponse(writer, "381 password required")
 			} else {
-				err = s.respond(writer, "281 authentication accepted")
+				err = writeResponse(writer, "281 authentication accepted")
 			}
 		case "DATE":
-			err = s.respond(writer, "111 20260101000000")
+			err = writeResponse(writer, "111 20260101000000")
 		case "STAT":
 			if s.lookup(arg) != nil {
-				err = s.respond(writer, "223 0 "+arg)
+				err = writeResponse(writer, "223 0 "+arg)
 			} else {
-				err = s.respond(writer, "430 no such article")
+				err = writeResponse(writer, "430 no such article")
 			}
 		case "BODY":
 			body := s.lookup(arg)
 			if body == nil {
-				err = s.respond(writer, "430 no such article")
+				err = writeResponse(writer, "430 no such article")
 				break
 			}
 			s.Bodies.Add(1)
-			s.sleepRTT()
 			if _, err = writer.WriteString("222 0 " + arg + " body\r\n"); err != nil {
 				return
 			}
@@ -160,11 +182,15 @@ func (s *Server) handleConn(conn net.Conn) {
 				return
 			}
 			err = writer.Flush()
+			if err == nil {
+				s.CompletedBodies.Add(1)
+				s.CompletedBodyBytes.Add(int64(len(body)))
+			}
 		case "QUIT":
-			_ = s.respond(writer, "205 bye")
+			_ = writeResponse(writer, "205 bye")
 			return
 		default:
-			err = s.respond(writer, "500 unknown command")
+			err = writeResponse(writer, "500 unknown command")
 		}
 		if err != nil {
 			return
@@ -180,6 +206,10 @@ func (s *Server) lookup(messageID string) []byte {
 
 func (s *Server) respond(w *bufio.Writer, line string) error {
 	s.sleepRTT()
+	return writeResponse(w, line)
+}
+
+func writeResponse(w *bufio.Writer, line string) error {
 	if _, err := w.WriteString(line + "\r\n"); err != nil {
 		return err
 	}

@@ -19,7 +19,6 @@ import (
 	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/internal/nntp"
-	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 	"github.com/sirrobot01/decypharr/pkg/usenet/fs"
 	"github.com/sirrobot01/decypharr/pkg/usenet/fs/reader"
@@ -248,6 +247,7 @@ func (r *contextSectionReader) Read(p []byte) (int, error) {
 }
 
 type Usenet struct {
+	bufferPools              *reader.Pools
 	nntp                     *nntp.Client
 	analyzer                 *parser.NZBParser
 	fetchScheduler           *reader.FetchScheduler
@@ -361,6 +361,7 @@ func New() (*Usenet, error) {
 	}
 
 	u := &Usenet{
+		bufferPools:              reader.NewPools(usenetConfig.BufferMemoryBytes()),
 		nzbStorage:               nzbStorage,
 		nntp:                     client,
 		analyzer:                 parser.NewParser(client, processingMaxConns, _logger.With().Str("component", "parser").Logger()),
@@ -405,6 +406,7 @@ func (u *Usenet) createEntry(file *storage.NZBFile, prefetchSize int64, retentio
 		u.logger,
 		fs.WithRetention(retention),
 		fs.WithFetchScheduler(u.fetchScheduler),
+		fs.WithPools(u.bufferPools),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create usenet FS: %w", err)
@@ -433,7 +435,7 @@ func (u *Usenet) getOrCreateEntry(ctx context.Context, nzoID, filename string, r
 	// once the janitor claims an idle entry no new reference can be taken, so
 	// a stream can never end up on an entry whose reader is being closed.
 	if entry, ok := u.fs.Load(key); ok && entry.acquire() {
-		entry.lastAccessed.Store(utils.NowUnix())
+		entry.lastAccessed.Store(time.Now().Unix())
 		return entry, key, nil
 	}
 
@@ -461,13 +463,13 @@ func (u *Usenet) getOrCreateEntry(ctx context.Context, nzoID, filename string, r
 			if !newEntry.acquire() {
 				return nil, key, fmt.Errorf("new file-system entry was claimed during creation")
 			}
-			newEntry.lastAccessed.Store(utils.NowUnix())
+			newEntry.lastAccessed.Store(time.Now().Unix())
 			return newEntry, key, nil
 		}
 		// Another goroutine created the entry first - use theirs.
 		// Our newEntry was never used (readers are lazy), GC reclaims it.
 		if actual.acquire() {
-			actual.lastAccessed.Store(utils.NowUnix())
+			actual.lastAccessed.Store(time.Now().Unix())
 			return actual, key, nil
 		}
 		// The mapped entry is claimed for teardown; the janitor removes it
@@ -487,7 +489,7 @@ func (u *Usenet) releaseFS(key string) {
 		return
 	}
 
-	entry.lastAccessed.Store(utils.NowUnix())
+	entry.lastAccessed.Store(time.Now().Unix())
 	entry.release()
 }
 
@@ -506,7 +508,7 @@ func (u *Usenet) cleanupIdleFS() {
 			return
 		case <-ticker.C:
 		}
-		now := utils.NowUnix()
+		now := time.Now().Unix()
 
 		u.fs.Range(func(key string, entry *fsEntry) bool {
 			if entry.refCount.Load() == 0 {
@@ -790,6 +792,10 @@ func (u *Usenet) Close() error {
 			u.fetchScheduler.Close()
 		}
 
+		if u.bufferPools != nil {
+			closeErr = errors.Join(closeErr, u.bufferPools.Close())
+		}
+
 		if u.nntp != nil {
 			if err := u.nntp.Close(); err != nil {
 				closeErr = errors.Join(closeErr, err)
@@ -882,7 +888,7 @@ func (h *FileHandle) ReadAtContext(ctx context.Context, p []byte, off int64) (in
 	if h.closed.Load() {
 		return 0, io.ErrClosedPipe
 	}
-	h.entry.lastAccessed.Store(utils.NowUnix())
+	h.entry.lastAccessed.Store(time.Now().Unix())
 	n, err := h.cursor.ReadAtContext(ctx, p, off)
 	if err != nil && ctx != nil && ctx.Err() != nil {
 		return n, ctx.Err()
@@ -1084,7 +1090,7 @@ func (u *Usenet) Touch(ctx context.Context, nzoID, filename string) error {
 	// get first segment
 	firstSeg := file.Segments[0]
 	// Run STAT command to check if article exists
-	_, _, err = u.nntp.Stat(ctx, firstSeg.MessageID)
+	_, _, err = u.nntp.Stat(ctx, nntp.WorkloadStreamDemand, firstSeg.MessageID)
 	if err != nil {
 		return fmt.Errorf("segment not available: %w", err)
 	}
@@ -1140,6 +1146,7 @@ func (u *Usenet) Stats() map[string]any {
 	stats["readers"] = u.fs.Size()
 	stats["nzb_storage"] = u.nzbStorage.Stats()
 	stats["analyzer"] = u.analyzer.Metrics()
+	stats["buffers"] = u.bufferPools.Stats()
 	return stats
 }
 
