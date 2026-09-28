@@ -2,16 +2,11 @@ package storage
 
 import (
 	"testing"
-
-	"github.com/sirrobot01/decypharr/internal/config"
 )
 
 // File IDs must be assigned once and survive entries being rebuilt from
 // provider responses — the .strm URLs written from them live for years.
 func TestFileIDsAreStableAcrossUpdates(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
-
 	s, err := NewStorage(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
