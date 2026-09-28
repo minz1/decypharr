@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"mime/multipart"
 	"net/http"
 	"net/url"
@@ -785,44 +784,7 @@ func (ad *AllDebrid) SpeedTest(ctx context.Context) types.SpeedTestResult {
 	}
 	result.LatencyMs = latency.Milliseconds()
 
-	// Try to measure download speed using a cached link
-	current := ad.accountsManager.Current()
-	if current == nil {
-		return result // Latency only
-	}
-
-	link, found := current.GetRandomLink()
-	if !found || link.DownloadLink == "" {
-		return result // Latency only
-	}
-
-	// Download first 1MB to measure speed
-	const downloadSize = 1 * 1024 * 1024 // 1MB
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, link.DownloadLink, nil)
-	if err != nil {
-		return result
-	}
-	req.Header.Set("Range", fmt.Sprintf("bytes=0-%d", downloadSize-1))
-
-	downloadStart := time.Now()
-	dlResp, err := current.Client().Do(req)
-	if err != nil {
-		return result
-	}
-	defer dlResp.Body.Close()
-
-	data, err := io.ReadAll(dlResp.Body)
-	downloadDuration := time.Since(downloadStart)
-
-	if err != nil || len(data) == 0 {
-		return result
-	}
-
-	result.BytesRead = int64(len(data))
-	if downloadDuration.Seconds() > 0 {
-		result.SpeedMBps = float64(result.BytesRead) / downloadDuration.Seconds() / (1024 * 1024)
-	}
-
+	ad.accountsManager.MeasureDownload(ctx, &result)
 	return result
 }
 
