@@ -30,6 +30,8 @@ const (
 	ZIPBzip2Method   = 12 // BZIP2 compression
 	ZIPLzmaMethod    = 14 // LZMA compression
 
+	zipFlagEncrypted = 0x0001 // general-purpose bit 0
+
 	// Default snippet sizes.
 	defaultZIPEndSnippetSize   = 256 * 1024 // 256KB from end for central directory
 	defaultZIPStartSnippetSize = 64 * 1024  // 64KB from start (optional)
@@ -479,7 +481,9 @@ func (p *ZIPParser) parseCentralDirEntry(r io.Reader) (*ZIPFileEntry, error) {
 		UncompressedSize:  uncompressedSize,
 		CompressedSize:    compressedSize,
 		Method:            header.Method,
-		IsStored:          header.Method == ZIPStoreMethod,
+		// Encrypted entries (general-purpose flag bit 0) hold ciphertext even
+		// when stored, so they are not streamable.
+		IsStored:          header.Method == ZIPStoreMethod && header.Flags&zipFlagEncrypted == 0,
 		IsDirectory:       isDir,
 		LocalHeaderOffset: localHeaderOffset,
 		DiskNumberStart:   diskNumberStart,
