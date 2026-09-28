@@ -20,11 +20,8 @@ type Invalidator interface {
 	InvalidateReacquire(context.Context, Job) error
 }
 
-func NewHandler(arrs *arr.Service, invalidators ...Invalidator) Handler {
-	var invalidator Invalidator
-	if len(invalidators) > 0 {
-		invalidator = invalidators[0]
-	}
+// NewHandler returns the Arr-backed Handler. invalidator may be nil.
+func NewHandler(arrs *arr.Service, invalidator Invalidator) Handler {
 	return &arrHandler{arrs: arrs, invalidator: invalidator}
 }
 

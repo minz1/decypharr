@@ -1,6 +1,7 @@
 package request
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -10,8 +11,6 @@ import (
 	"testing"
 
 	"github.com/sirrobot01/decypharr/internal/config"
-
-	json "github.com/bytedance/sonic"
 )
 
 // errAny marks a case that wants any error, not a specific one.

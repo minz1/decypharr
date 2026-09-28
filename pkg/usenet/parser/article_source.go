@@ -9,8 +9,9 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/sirrobot01/decypharr/internal/nntp"
 	"golang.org/x/sync/singleflight"
+
+	"github.com/sirrobot01/decypharr/internal/nntp"
 )
 
 const (

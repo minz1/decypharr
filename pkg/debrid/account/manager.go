@@ -11,12 +11,13 @@ import (
 
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/rs/zerolog"
+	"github.com/sourcegraph/conc/pool"
+	"go.uber.org/ratelimit"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/request"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
-	"github.com/sourcegraph/conc/pool"
-	"go.uber.org/ratelimit"
 )
 
 type LinkFetcher func(ctx context.Context, account *Account, id string, file *types.File) (types.DownloadLink, error)

@@ -2,7 +2,6 @@ package parser
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -13,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
@@ -285,10 +285,6 @@ func zipCentralDirectoryMetadata(data []byte, eocd *endOfCentralDirRecord, eocdP
 		return 0, 0, 0, fmt.Errorf("ZIP central directory values overflow int64")
 	}
 	return totalEntries, centralDirSize, dirEnd, nil
-}
-
-func (p *ZIPParser) parseCentralDirectoryEntries(data []byte, totalEntries int64) ([]*ZIPFileEntry, error) {
-	return p.parseCentralDirectoryReader(bytes.NewReader(data), totalEntries)
 }
 
 func (p *ZIPParser) parseCentralDirectoryReader(reader io.Reader, totalEntries int64) ([]*ZIPFileEntry, error) {

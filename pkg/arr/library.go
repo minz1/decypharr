@@ -7,8 +7,9 @@ import (
 	"net/http"
 	"slices"
 
-	"github.com/sirrobot01/decypharr/internal/request"
 	"golang.org/x/sync/errgroup"
+
+	"github.com/sirrobot01/decypharr/internal/request"
 )
 
 const sonarrLibraryConcurrency = 4

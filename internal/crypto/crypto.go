@@ -9,7 +9,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"errors"
-	"io"
 )
 
 const (
@@ -147,90 +146,6 @@ func DecryptBlock(data, key, iv []byte) error {
 
 	mode.CryptBlocks(data, data)
 	return nil
-}
-
-// DecryptReader wraps an io.Reader with AES-256-CBC decryption.
-type DecryptReader struct {
-	r      io.Reader
-	mode   cipher.BlockMode
-	buf    []byte // Buffer for incomplete blocks
-	outbuf []byte // Decrypted output buffer
-	block  []byte // Single block buffer
-}
-
-// NewDecryptReader creates a new AES-256-CBC decrypting reader.
-func NewDecryptReader(r io.Reader, key, iv []byte) (*DecryptReader, error) {
-	mode, err := NewDecrypter(key, iv)
-	if err != nil {
-		return nil, err
-	}
-
-	return &DecryptReader{
-		r:     r,
-		mode:  mode,
-		block: make([]byte, BlockSize),
-	}, nil
-}
-
-// Read reads and decrypts data.
-// Only full AES blocks are decrypted; trailing bytes are buffered.
-func (d *DecryptReader) Read(p []byte) (int, error) {
-	// Return buffered decrypted data first
-	if len(d.outbuf) > 0 {
-		n := copy(p, d.outbuf)
-		d.outbuf = d.outbuf[n:]
-		return n, nil
-	}
-
-	// Small reads: use block buffer
-	if len(p) < BlockSize {
-		// Read one full block
-		l := len(d.buf)
-		_, err := io.ReadFull(d.r, d.block[l:])
-		if err != nil {
-			return 0, err
-		}
-		if l > 0 {
-			copy(d.block, d.buf)
-			d.buf = nil
-		}
-		d.mode.CryptBlocks(d.block, d.block)
-		n := copy(p, d.block)
-		d.outbuf = d.block[n:]
-		d.block = make([]byte, BlockSize) // New block buffer
-		return n, nil
-	}
-
-	// Large reads: decrypt directly into p
-	// Round down to block size
-	toRead := len(p) - (len(p) % BlockSize)
-
-	// Include any buffered partial block
-	l := len(d.buf)
-	if l > 0 {
-		copy(p, d.buf)
-		d.buf = nil
-	}
-
-	n, err := io.ReadAtLeast(d.r, p[l:toRead], BlockSize-l)
-	if err != nil {
-		return 0, err
-	}
-
-	n += l
-	// Keep any incomplete block for next read
-	remainder := n % BlockSize
-	if remainder > 0 {
-		d.buf = make([]byte, remainder)
-		copy(d.buf, p[n-remainder:n])
-		n -= remainder
-	}
-
-	if n > 0 {
-		d.mode.CryptBlocks(p[:n], p[:n])
-	}
-
-	return n, nil
 }
 
 // EncryptionHeader contains RAR5 encryption header data.

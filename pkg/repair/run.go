@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
 	"uuid"
 
 	"github.com/sirrobot01/decypharr/internal/config"

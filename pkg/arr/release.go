@@ -3,13 +3,12 @@ package arr
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	stdjson "encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
-
-	json "github.com/bytedance/sonic"
 )
 
 type Release struct {

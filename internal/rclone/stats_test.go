@@ -3,12 +3,12 @@ package rclone
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/sirrobot01/decypharr/internal/config"
 	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
 
+	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/request"
 )
 

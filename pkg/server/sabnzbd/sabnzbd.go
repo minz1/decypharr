@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/internal/utils"
@@ -114,7 +115,4 @@ func (s *SABnzbd) getCategories() []Category {
 	}
 
 	return categories
-}
-
-func (s *SABnzbd) Reset() {
 }

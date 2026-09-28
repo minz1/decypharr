@@ -1,9 +1,8 @@
 package alldebrid
 
 import (
+	"encoding/json"
 	"fmt"
-
-	json "github.com/bytedance/sonic"
 )
 
 type errorResponse struct {

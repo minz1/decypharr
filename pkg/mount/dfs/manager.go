@@ -8,10 +8,10 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/pkg/manager"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/backend"
-	_ "github.com/sirrobot01/decypharr/pkg/mount/dfs/backend/register"
 	fuseconfig "github.com/sirrobot01/decypharr/pkg/mount/dfs/config"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/vfs"
 )
@@ -56,7 +56,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	m.vfs = vfsManager
 
 	// Create backend
-	bck, err := backend.New(m.defaultBackendType, vfsManager, m.config)
+	bck, err := newBackend(m.defaultBackendType, vfsManager, m.config)
 	if err != nil {
 		return fmt.Errorf("failed to create backend: %w", err)
 	}

@@ -8,10 +8,11 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/sirrobot01/facetfs/smb"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/pkg/manager"
-	"github.com/sirrobot01/facetfs/smb"
 )
 
 // SMBServer serves the library catalog over SMB2/SMB3. Experimental until

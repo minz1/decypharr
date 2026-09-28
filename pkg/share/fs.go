@@ -15,8 +15,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sirrobot01/decypharr/pkg/manager"
 	"github.com/sirrobot01/facetfs"
+
+	"github.com/sirrobot01/decypharr/pkg/manager"
 )
 
 type catalog interface {

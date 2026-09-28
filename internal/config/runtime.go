@@ -1,13 +1,12 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"sync"
 	"sync/atomic"
-
-	json "github.com/bytedance/sonic"
 )
 
 var (

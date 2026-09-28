@@ -3,6 +3,7 @@ package customerror_test
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"testing"
 
 	"github.com/sirrobot01/decypharr/internal/customerror"
@@ -18,7 +19,7 @@ func TestRetryClassificationUsesWrappedMetadata(t *testing.T) {
 		{"refetchable 404", link.NewRefetchableError(link.Err404, "404"), true, false},
 		{"retryable forbidden", link.NewRetryableError(errors.New("forbidden"), "403"), true, false},
 		{"permanent timeout", link.NewPermanentError(errors.New("i/o timeout"), ""), false, true},
-		{"custom permanent", customerror.NewPermanentError(errors.New("broken pipe")), false, true},
+		{"custom permanent", customerror.NewError(errors.New("broken pipe"), http.StatusInternalServerError, "", false, false).Permanent(), false, true},
 		{"custom retryable", customerror.NewSilentError(errors.New("not found")).Retryable(), true, false},
 		{"plain not found", errors.New("not found"), false, true},
 		{"plain timeout", errors.New("i/o timeout"), true, false},

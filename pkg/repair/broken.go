@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"uuid"
 
 	"github.com/puzpuzpuz/xsync/v4"
+	"uuid"
 
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )

@@ -1,6 +1,7 @@
 package webdav
 
 import (
+	"bytes"
 	"fmt"
 	"path"
 	"strconv"
@@ -8,7 +9,6 @@ import (
 	"time"
 
 	"github.com/sirrobot01/decypharr/pkg/manager"
-	"github.com/stanNthe5/stringbuf"
 )
 
 var pctHex = "0123456789ABCDEF"
@@ -130,7 +130,7 @@ func xmlEscape(s string) string {
 	return b.String()
 }
 
-func convertToXML(cleanPath string, currentInfo *manager.FileInfo, children []manager.FileInfo) stringbuf.StringBuf {
+func convertToXML(cleanPath string, currentInfo *manager.FileInfo, children []manager.FileInfo) []byte {
 	entries := make([]entryItem, 0, len(children)+1)
 	// AddOrUpdate the current file itself
 	if currentInfo != nil {
@@ -161,7 +161,7 @@ func convertToXML(cleanPath string, currentInfo *manager.FileInfo, children []ma
 		})
 	}
 
-	sb := stringbuf.New("")
+	var sb bytes.Buffer
 
 	// XML header and main element
 	_, _ = sb.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
@@ -201,5 +201,5 @@ func convertToXML(cleanPath string, currentInfo *manager.FileInfo, children []ma
 
 	// Close root element
 	_, _ = sb.WriteString(`</d:multistatus>`)
-	return sb
+	return sb.Bytes()
 }

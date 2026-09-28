@@ -35,7 +35,7 @@ func TestEntryMutationsReportIndexFailures(t *testing.T) {
 				case "delete":
 					err = s.Delete(entry.InfoHash)
 				case "update item":
-					err = s.UpdateEntryItem(entry)
+					err = s.updateEntryItem(entry)
 				}
 				if err == nil || !strings.Contains(err.Error(), "folder") {
 					t.Fatalf("error = %v, want folder context", err)

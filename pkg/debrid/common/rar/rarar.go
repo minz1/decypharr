@@ -269,7 +269,6 @@ func (r *Reader) readFiles() error {
 			retry.Delay(config.DefaultRetryDelay),
 			retry.MaxDelay(config.DefaultRetryDelayMax),
 			retry.DelayType(retry.BackOffDelay),
-			retry.LastErrorOnly(true),
 		)
 		if err != nil || len(headerData) < 7 {
 			// EOF or unrecoverable read error — stop iteration.
@@ -302,7 +301,6 @@ func (r *Reader) readFiles() error {
 				retry.Delay(config.DefaultRetryDelay),
 				retry.MaxDelay(config.DefaultRetryDelayMax),
 				retry.DelayType(retry.BackOffDelay),
-				retry.LastErrorOnly(true),
 			)
 			if err != nil {
 				return fmt.Errorf("failed to read complete file header after retries: %w", err)
@@ -338,7 +336,6 @@ func (r *Reader) readFiles() error {
 					retry.Delay(config.DefaultRetryDelay),
 					retry.MaxDelay(config.DefaultRetryDelayMax),
 					retry.DelayType(retry.BackOffDelay),
-					retry.LastErrorOnly(true),
 				)
 				if err != nil {
 					return fmt.Errorf("failed to read data size after retries: %w", err)
@@ -471,18 +468,4 @@ func (r *Reader) GetFiles() ([]*File, error) {
 	}
 
 	return r.Files, nil
-}
-
-// ExtractFile extracts a file from the archive
-func (r *Reader) ExtractFile(file *File) ([]byte, error) {
-	if file.IsDirectory {
-		return nil, ErrDirectoryExtractNotSupported
-	}
-
-	// Only support "Store" method
-	if file.Method != 0x30 { // 0x30 = "Store"
-		return nil, ErrCompressionNotSupported
-	}
-
-	return r.readBytes(file.DataOffset, int(file.CompressedSize))
 }

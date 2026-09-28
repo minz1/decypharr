@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+
 	appconfig "github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/manager"
 	dfsconfig "github.com/sirrobot01/decypharr/pkg/mount/dfs/config"

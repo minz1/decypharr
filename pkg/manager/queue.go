@@ -8,9 +8,10 @@ import (
 	"slices"
 	"strings"
 	"time"
-	"uuid"
 
 	"github.com/rs/zerolog"
+	"uuid"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/internal/utils"

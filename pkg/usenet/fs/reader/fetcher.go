@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+
 	appconfig "github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/nntp"
 )
@@ -764,14 +765,6 @@ func (sf *SegmentFetcher) CancelPendingPrefetch() {
 	if cancelled > 0 {
 		sf.stats.PrefetchCancelled.Add(cancelled)
 	}
-}
-
-func (sf *SegmentFetcher) pendingPrefetch() int {
-	var pending int
-	for i := range sf.prefetchQueued {
-		pending += bits.OnesCount64(sf.prefetchQueued[i].Load())
-	}
-	return pending
 }
 
 func (sf *SegmentFetcher) fetchWithRetryDirect(ctx context.Context, segIdx int, workload nntp.Workload) error {

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/gorilla/sessions"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 )
 

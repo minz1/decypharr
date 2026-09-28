@@ -2,14 +2,15 @@ package manager
 
 import (
 	"context"
-	"github.com/sirrobot01/decypharr/internal/config"
 	"io"
 	"os"
 	"strings"
 	"time"
 
-	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sourcegraph/conc/pool"
+
+	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/internal/utils"
 )
 
 const (

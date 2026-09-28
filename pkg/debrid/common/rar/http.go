@@ -40,7 +40,6 @@ func (f *HttpFile) doWithRetry(operation func() error) error {
 		retry.Delay(config.DefaultRetryDelay),
 		retry.MaxDelay(config.DefaultRetryDelayMax),
 		retry.DelayType(retry.BackOffDelay),
-		retry.LastErrorOnly(true),
 	)
 }
 

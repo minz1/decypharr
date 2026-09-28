@@ -2,7 +2,6 @@
 
 const fs = require('fs');
 const path = require('path');
-const https = require('https');
 
 const buildDir = {
     css: './pkg/server/assets/build/css',
@@ -17,47 +16,23 @@ Object.values(buildDir).forEach(dir => {
     }
 });
 
-// Download function
-function downloadFile(url, filepath) {
-    return new Promise((resolve, reject) => {
-        console.log(`📥 Downloading ${path.basename(filepath)}...`);
-
-        const file = fs.createWriteStream(filepath);
-
-        https.get(url, (response) => {
-            if (response.statusCode === 200) {
-                response.pipe(file);
-                file.on('finish', () => {
-                    file.close();
-                    const stats = fs.statSync(filepath);
-                    const size = (stats.size / 1024).toFixed(1) + 'KB';
-                    console.log(`   ✓ Downloaded ${path.basename(filepath)} (${size})`);
-                    resolve();
-                });
-            } else if (response.statusCode === 302 || response.statusCode === 301) {
-                downloadFile(response.headers.location, filepath).then(resolve).catch(reject);
-            } else {
-                reject(new Error(`Failed to download ${url}: ${response.statusCode}`));
-            }
-        }).on('error', reject);
-    });
+async function fetchOK(url) {
+    const response = await fetch(url);
+    if (!response.ok) {
+        throw new Error(`Failed to download ${url}: ${response.status}`);
+    }
+    return response;
 }
 
-// Download text content
-function downloadText(url) {
-    return new Promise((resolve, reject) => {
-        https.get(url, (response) => {
-            let data = '';
-            response.on('data', chunk => data += chunk);
-            response.on('end', () => {
-                if (response.statusCode === 200) {
-                    resolve(data);
-                } else {
-                    reject(new Error(`Failed to download ${url}: ${response.statusCode}`));
-                }
-            });
-        }).on('error', reject);
-    });
+async function downloadFile(url, filepath) {
+    console.log(`📥 Downloading ${path.basename(filepath)}...`);
+    const data = Buffer.from(await (await fetchOK(url)).arrayBuffer());
+    fs.writeFileSync(filepath, data);
+    console.log(`   ✓ Downloaded ${path.basename(filepath)} (${(data.length / 1024).toFixed(1)}KB)`);
+}
+
+async function downloadText(url) {
+    return (await fetchOK(url)).text();
 }
 
 // Files to download

@@ -9,10 +9,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/sirrobot01/decypharr/pkg/arr"
-
 	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/logger"
+	"github.com/sirrobot01/decypharr/pkg/arr"
 )
 
 // ManagedFile is the stable Decypharr-side identity used by the arr.Arr index.

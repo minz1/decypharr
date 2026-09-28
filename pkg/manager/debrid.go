@@ -5,6 +5,8 @@ import (
 	"errors"
 	"slices"
 
+	"go.uber.org/ratelimit"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	debrid "github.com/sirrobot01/decypharr/pkg/debrid/common"
@@ -15,7 +17,6 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/debrid/providers/torbox"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/storage"
-	"go.uber.org/ratelimit"
 )
 
 var (

@@ -248,12 +248,6 @@ func parseRetryAfter(value string) time.Duration {
 	return 0
 }
 
-// IsLinkError checks if an error is a LinkError
-func IsLinkError(err error) bool {
-	var linkErr *Error
-	return errors.As(err, &linkErr)
-}
-
 // GetLinkError extracts a LinkError from an error chain
 func GetLinkError(err error) *Error {
 	if linkErr, ok := errors.AsType[*Error](err); ok {

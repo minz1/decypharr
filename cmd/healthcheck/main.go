@@ -3,6 +3,7 @@ package main
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -11,8 +12,6 @@ import (
 	"slices"
 	"strings"
 	"time"
-
-	json "github.com/bytedance/sonic"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 )

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/buffer"
 	"github.com/sirrobot01/decypharr/internal/logger"
 	fuseconfig "github.com/sirrobot01/decypharr/pkg/mount/dfs/config"

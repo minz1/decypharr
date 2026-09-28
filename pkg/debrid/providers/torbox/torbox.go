@@ -3,6 +3,7 @@ package torbox
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,9 +17,9 @@ import (
 	"sync"
 	"time"
 
-	json "github.com/bytedance/sonic"
-
 	"github.com/rs/zerolog"
+	"go.uber.org/ratelimit"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/internal/logger"
@@ -27,7 +28,6 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/debrid/account"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/version"
-	"go.uber.org/ratelimit"
 )
 
 var planSlots = map[string]int{
@@ -508,7 +508,7 @@ func (tb *Torbox) fetchDownloadLink(ctx context.Context, account *account.Accoun
 	var result struct {
 		Data string `json:"data"`
 	}
-	json.ConfigDefault.NewDecoder(resp.Body).Decode(&result)
+	json.NewDecoder(resp.Body).Decode(&result)
 
 	now := time.Now()
 

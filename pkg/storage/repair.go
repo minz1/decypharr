@@ -3,6 +3,7 @@ package storage
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -10,8 +11,8 @@ import (
 	"strconv"
 	"time"
 
-	json "github.com/bytedance/sonic"
 	"github.com/sirrobot01/appendstore"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 )
 
@@ -73,17 +74,6 @@ type RepairRun struct {
 	Error        string           `json:"error,omitempty"`
 	CancelReason string           `json:"cancel_reason,omitempty"`
 	Source       string           `json:"source,omitempty"`
-}
-
-// NormalizeRepairStrategy maps user-supplied values to a known strategy.
-// Unknown / empty input falls back to per_entry.
-func NormalizeRepairStrategy(strategy RepairStrategy) RepairStrategy {
-	switch strategy {
-	case RepairStrategyPerFile:
-		return RepairStrategyPerFile
-	default:
-		return RepairStrategyPerEntry
-	}
 }
 
 func (s *Storage) SaveRepairRun(run *RepairRun) error {

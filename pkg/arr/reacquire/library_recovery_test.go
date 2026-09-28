@@ -66,7 +66,7 @@ func TestLibraryRecoveryUsesDurableJobsAndWaitsForReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !service.runJob(t.Context(), NewHandler(registry), *job) {
+	if !service.runJob(t.Context(), NewHandler(registry, nil), *job) {
 		t.Fatal("job failed to run")
 	}
 	waiting, _ := service.Job(job.ID)

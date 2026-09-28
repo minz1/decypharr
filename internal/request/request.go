@@ -15,14 +15,10 @@ import (
 
 	"github.com/hashicorp/go-retryablehttp"
 	"github.com/rs/zerolog"
-	"github.com/sirrobot01/decypharr/internal/logger"
 	"go.uber.org/ratelimit"
 	"golang.org/x/net/proxy"
-)
 
-var (
-	once     sync.Once
-	instance *Client
+	"github.com/sirrobot01/decypharr/internal/logger"
 )
 
 type ClientOption func(*Client)
@@ -81,12 +77,6 @@ func (c *Client) SetHeader(key, value string) {
 func WithLogger(logger zerolog.Logger) ClientOption {
 	return func(c *Client) {
 		c.logger = logger
-	}
-}
-
-func WithTransport(transport *http.Transport) ClientOption {
-	return func(c *Client) {
-		c.httpClient.Transport = transport
 	}
 }
 
@@ -286,13 +276,6 @@ func New(options ...ClientOption) *Client {
 	client.client = retryClient
 
 	return client
-}
-
-func Default() *Client {
-	once.Do(func() {
-		instance = New()
-	})
-	return instance
 }
 
 func SetProxy(transport *http.Transport, proxyURL string) {

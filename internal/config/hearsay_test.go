@@ -1,9 +1,8 @@
 package config
 
 import (
+	"encoding/json"
 	"testing"
-
-	json "github.com/bytedance/sonic"
 )
 
 func TestHearsayIsZero(t *testing.T) {

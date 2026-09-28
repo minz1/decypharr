@@ -2,8 +2,6 @@ package server
 
 import (
 	"encoding/json"
-	"github.com/sirrobot01/decypharr/pkg/arr"
-	"github.com/sirrobot01/decypharr/pkg/manager"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -11,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/pkg/arr"
+	"github.com/sirrobot01/decypharr/pkg/manager"
 )
 
 func TestMergeConfigUpdatePreservesOmittedFields(t *testing.T) {

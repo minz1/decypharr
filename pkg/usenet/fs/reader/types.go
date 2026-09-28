@@ -180,17 +180,6 @@ func WithDiskPath(path string) Option {
 	}
 }
 
-// WithMemoryBuffer is the compatibility spelling for WithRetention.
-func WithMemoryBuffer(on bool) Option {
-	return func(c *Config) {
-		if on {
-			c.Retention = RetentionWindow
-		} else {
-			c.Retention = RetentionRewind
-		}
-	}
-}
-
 // WithRetention declares whether this reader or its downstream owns rewind.
 func WithRetention(retention Retention) Option {
 	return func(c *Config) {
@@ -224,13 +213,6 @@ func WithPrefetchAhead(n int) Option {
 func WithBodyPipelineDepth(depth int) Option {
 	return func(c *Config) {
 		c.BodyPipelineDepth = appconfig.NormalizeBodyPipelineDepth(depth)
-	}
-}
-
-// WithDownloadTimeout sets the timeout for a single segment download.
-func WithDownloadTimeout(d time.Duration) Option {
-	return func(c *Config) {
-		c.DownloadTimeout = d
 	}
 }
 

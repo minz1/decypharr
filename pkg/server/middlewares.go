@@ -1,11 +1,10 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
-
-	json "github.com/bytedance/sonic"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 )
@@ -69,7 +68,7 @@ func (s *Server) isAPIRequest(r *http.Request) bool {
 func (s *Server) sendJSONError(w http.ResponseWriter, message string, statusCode int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	err := json.ConfigDefault.NewEncoder(w).Encode(map[string]any{
+	err := json.NewEncoder(w).Encode(map[string]any{
 		"error":  message,
 		"status": statusCode,
 	})
@@ -87,7 +86,6 @@ func (s *Server) setupRedirectMiddleware(next http.Handler) http.Handler {
 		if strings.HasPrefix(r.URL.Path, "/setup") ||
 			strings.HasPrefix(r.URL.Path, "/api/setup") ||
 			strings.HasPrefix(r.URL.Path, "/api/login") ||
-			strings.HasPrefix(r.URL.Path, "/api/logout") ||
 			strings.HasPrefix(r.URL.Path, "/api/config") ||
 			strings.HasPrefix(r.URL.Path, "/assets") ||
 			strings.HasPrefix(r.URL.Path, "/images") ||

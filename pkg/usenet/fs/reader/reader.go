@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 
 	"github.com/rs/zerolog"
+
 	appconfig "github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/crypto"
 	"github.com/sirrobot01/decypharr/internal/nntp"
@@ -704,82 +705,4 @@ func (sr *StreamingReader) Close() error {
 
 	// Then close cache (cleans up files)
 	return sr.cache.Close()
-}
-
-// Pool manages a pool of readers for efficient resource sharing.
-// This is useful when multiple files need to be read concurrently.
-type Pool struct {
-	client *nntp.Client
-	config Config
-
-	readers sync.Map // map[string]*StreamingReader
-}
-
-// GetReader returns a reader for the given segments, creating one if needed.
-func (rp *Pool) GetReader(
-	ctx context.Context,
-	key string,
-	segments []SegmentMeta,
-	encryption EncryptionConfig,
-) (*StreamingReader, error) {
-	// Check if reader exists
-	if v, ok := rp.readers.Load(key); ok {
-		return v.(*StreamingReader), nil
-	}
-
-	// Create new reader
-	var reader *StreamingReader
-	var err error
-	if encryption.Enabled {
-		reader, err = NewStreamingReaderWithEncryption(
-			ctx, rp.client, segments, encryption,
-			WithMaxConnections(rp.config.MaxConnections),
-			WithPrefetchAhead(rp.config.PrefetchAhead),
-			WithBodyPipelineDepth(rp.config.BodyPipelineDepth),
-			WithDiskPath(rp.config.DiskPath),
-			WithRetention(rp.config.Retention),
-			WithFetchScheduler(rp.config.Scheduler),
-			WithPools(rp.config.Pools),
-		)
-	} else {
-		reader, err = NewStreamingReader(
-			ctx, rp.client, segments,
-			WithMaxConnections(rp.config.MaxConnections),
-			WithPrefetchAhead(rp.config.PrefetchAhead),
-			WithBodyPipelineDepth(rp.config.BodyPipelineDepth),
-			WithDiskPath(rp.config.DiskPath),
-			WithRetention(rp.config.Retention),
-			WithFetchScheduler(rp.config.Scheduler),
-			WithPools(rp.config.Pools),
-		)
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	// Store (race-safe: LoadOrStore)
-	actual, loaded := rp.readers.LoadOrStore(key, reader)
-	if loaded {
-		// Another goroutine beat us, close ours
-		_ = reader.Close()
-		return actual.(*StreamingReader), nil
-	}
-
-	return reader, nil
-}
-
-// RemoveReader closes and removes a reader from the pool.
-func (rp *Pool) RemoveReader(key string) {
-	if v, ok := rp.readers.LoadAndDelete(key); ok {
-		_ = v.(*StreamingReader).Close()
-	}
-}
-
-// Close closes all readers in the pool.
-func (rp *Pool) Close() {
-	rp.readers.Range(func(key, value any) bool {
-		_ = value.(*StreamingReader).Close()
-		rp.readers.Delete(key)
-		return true
-	})
 }

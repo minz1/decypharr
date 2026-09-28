@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/puzpuzpuz/xsync/v4"
+
 	"github.com/sirrobot01/decypharr/internal/request"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
 )
