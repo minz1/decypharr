@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+
 	nntpyenc "github.com/sirrobot01/decypharr/internal/nntp/yenc"
 )
 

@@ -8,18 +8,13 @@ import (
 	"sync/atomic"
 
 	"github.com/rs/zerolog"
+	"github.com/winfsp/cgofuse/fuse"
+
 	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/backend"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/config"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/vfs"
-	"github.com/winfsp/cgofuse/fuse"
 )
-
-func init() {
-	backend.Register(backend.Cgo, func(vfs *vfs.Manager, config *config.FuseConfig) (backend.Backend, error) {
-		return NewBackend(vfs, config)
-	})
-}
 
 // Backend implements the cgofuse backend for cross-platform FUSE support
 type Backend struct {

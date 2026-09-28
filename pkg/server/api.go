@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,9 +11,8 @@ import (
 	"strconv"
 	"strings"
 
-	json "github.com/bytedance/sonic"
-
 	"github.com/go-chi/chi/v5"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/repair"
@@ -387,7 +387,7 @@ func mergeConfigUpdate(current *config.Config, update io.Reader) (config.Config,
 	if err != nil {
 		return config.Config{}, fmt.Errorf("copy current config: %w", err)
 	}
-	if err := json.ConfigDefault.NewDecoder(update).Decode(merged); err != nil {
+	if err := json.NewDecoder(update).Decode(merged); err != nil {
 		return config.Config{}, err
 	}
 	return *merged, nil
@@ -398,7 +398,7 @@ func (s *Server) handlePreviewVirtualFolder(w http.ResponseWriter, r *http.Reque
 		Folder config.VirtualFolder `json:"folder"`
 		Limit  int                  `json:"limit"`
 	}
-	if err := json.ConfigDefault.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -435,7 +435,7 @@ func (s *Server) handleGetRepairConfig(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleUpdateRepairConfig(w http.ResponseWriter, r *http.Request) {
 	var req config.RepairConfig
-	if err := json.ConfigDefault.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -502,7 +502,7 @@ func (s *Server) handleRunRepair(w http.ResponseWriter, r *http.Request) {
 		Protocol          string `json:"protocol,omitempty"`
 	}
 	if r.Body != nil && r.ContentLength != 0 {
-		if err := json.ConfigDefault.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
 			http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -650,7 +650,7 @@ func (s *Server) handleRecheckMedia(w http.ResponseWriter, r *http.Request) {
 		MediaID string `json:"media_id"`
 		Fix     bool   `json:"fix"`
 	}
-	if err := json.ConfigDefault.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -713,7 +713,7 @@ func (s *Server) handleFixBroken(w http.ResponseWriter, r *http.Request) {
 	}
 	// Body is optional; ignore decode errors for empty / missing bodies.
 	if r.Body != nil && r.ContentLength != 0 {
-		if err := json.ConfigDefault.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -743,7 +743,7 @@ func (s *Server) handleClearBroken(w http.ResponseWriter, r *http.Request) {
 		Names []string `json:"names,omitempty"`
 	}
 	if r.Body != nil && r.ContentLength != 0 {
-		if err := json.ConfigDefault.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -769,7 +769,7 @@ func (s *Server) handleClearRepairState(w http.ResponseWriter, r *http.Request) 
 	var req struct {
 		Statuses []string `json:"statuses"`
 	}
-	if err := json.ConfigDefault.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -845,7 +845,7 @@ func (s *Server) handleUpdateAuth(w http.ResponseWriter, r *http.Request) {
 		ConfirmPassword string `json:"confirm_password"`
 		TokenOnly       bool   `json:"token_only"`
 	}
-	if err := json.ConfigDefault.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}

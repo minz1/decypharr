@@ -3,7 +3,6 @@ package virtualfolders
 import (
 	"slices"
 	"testing"
-
 	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"

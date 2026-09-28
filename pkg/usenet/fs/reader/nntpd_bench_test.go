@@ -73,11 +73,15 @@ func newBenchStack(b *testing.B, cfg nntpd.Config) (*nntpd.Server, *nntp.Client,
 
 func newBenchReader(b *testing.B, client *nntp.Client, segs []SegmentMeta, memory bool, diskPath string) *StreamingReader {
 	b.Helper()
+	retention := RetentionRewind
+	if memory {
+		retention = RetentionWindow
+	}
 	sr, err := NewStreamingReader(context.Background(), client, segs,
 		WithDiskPath(diskPath),
 		WithMaxConnections(8),
 		WithPrefetchAhead(8),
-		WithMemoryBuffer(memory),
+		WithRetention(retention),
 	)
 	if err != nil {
 		b.Fatal(err)
@@ -170,7 +174,7 @@ func BenchmarkConfiguredBodyPipelineDepth(b *testing.B) {
 					WithMaxConnections(8),
 					WithPrefetchAhead(prefetchAhead),
 					WithBodyPipelineDepth(depth),
-					WithMemoryBuffer(true),
+					WithRetention(RetentionWindow),
 				)
 				if err != nil {
 					b.Fatal(err)

@@ -5,8 +5,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/facetfs/smb"
+
+	"github.com/sirrobot01/decypharr/internal/config"
 )
 
 func TestSingleUserAuthenticator(t *testing.T) {

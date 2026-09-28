@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+
 	"uuid"
 
 	"github.com/sirrobot01/decypharr/pkg/arr"

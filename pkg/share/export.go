@@ -6,11 +6,12 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	"github.com/sirrobot01/facetfs"
+	"github.com/sirrobot01/facetfs/facetcache"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/pkg/manager"
-	"github.com/sirrobot01/facetfs"
-	"github.com/sirrobot01/facetfs/facetcache"
 )
 
 // overshootInterval is how often the cache's disk accounting is checked
@@ -73,14 +74,6 @@ func NewExport(ctx context.Context, mgr *manager.Manager, cfg config.ShareCache)
 
 // FileSystem returns the tree the protocol servers export.
 func (e *Export) FileSystem() facetfs.FileSystem { return e.fsys }
-
-// Stats reports the cache counters, or the zero value when caching is off.
-func (e *Export) Stats() facetcache.Stats {
-	if e.cache == nil {
-		return facetcache.Stats{}
-	}
-	return e.cache.Stats()
-}
 
 // Close stops the cache. Stop the protocol servers first.
 func (e *Export) Close() error {

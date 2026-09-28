@@ -1,7 +1,6 @@
 package retry
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -21,24 +20,11 @@ const (
 type Option func(*config)
 
 type config struct {
-	attempts      int
-	delay         time.Duration
-	maxDelay      time.Duration
-	delayType     DelayMode
-	ctx           context.Context
-	retryIf       func(error) bool
-	onRetry       func(uint, error)
-	lastErrorOnly bool
-}
-
-func defaultConfig() *config {
-	return &config{
-		attempts:      1,
-		delay:         0,
-		maxDelay:      0,
-		delayType:     FixedDelay,
-		lastErrorOnly: true,
-	}
+	attempts  int
+	delay     time.Duration
+	maxDelay  time.Duration
+	delayType DelayMode
+	retryIf   func(error) bool
 }
 
 // Attempts sets how many times the operation should be attempted.
@@ -69,31 +55,10 @@ func DelayType(dt DelayMode) Option {
 	}
 }
 
-// Context sets a context that cancels retries when done.
-func Context(ctx context.Context) Option {
-	return func(cfg *config) {
-		cfg.ctx = ctx
-	}
-}
-
 // RetryIf provides a predicate to decide if an error is retryable.
 func RetryIf(fn func(error) bool) Option {
 	return func(cfg *config) {
 		cfg.retryIf = fn
-	}
-}
-
-// OnRetry is invoked after each failed attempt (before the next delay).
-func OnRetry(fn func(uint, error)) Option {
-	return func(cfg *config) {
-		cfg.onRetry = fn
-	}
-}
-
-// LastErrorOnly controls whether Do returns only the last error or wraps it.
-func LastErrorOnly(lastOnly bool) Option {
-	return func(cfg *config) {
-		cfg.lastErrorOnly = lastOnly
 	}
 }
 
@@ -117,100 +82,34 @@ func Unrecoverable(err error) error {
 	return unrecoverableError{err: err}
 }
 
-// Do executes fn up to Attempts times until it succeeds or returns an unrecoverable error.
+// Do executes fn up to Attempts times until it succeeds or returns an
+// unrecoverable error, and returns the last error.
 func Do(fn func() error, opts ...Option) error {
 	if fn == nil {
 		return fmt.Errorf("retry: nil function")
 	}
-
-	cfg := defaultConfig()
+	cfg := config{attempts: 1}
 	for _, opt := range opts {
-		if opt != nil {
-			opt(cfg)
-		}
+		opt(&cfg)
 	}
-	if cfg.attempts <= 0 {
-		cfg.attempts = 1
-	}
-
-	var lastErr error
 	delay := cfg.delay
-	ctx := cfg.ctx
-
-	for attempt := 1; attempt <= cfg.attempts; attempt++ {
-		if ctx != nil {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
-			}
-		}
-
-		err := fn()
-		if err == nil {
+	var err error
+	for attempt := 1; ; attempt++ {
+		if err = fn(); err == nil {
 			return nil
 		}
-
-		unrecoverable := unrecoverableError{}
-		if errors.As(err, &unrecoverable) {
-			return unrecoverable.err
+		if u, ok := errors.AsType[unrecoverableError](err); ok {
+			return u.err
 		}
-
-		lastErr = err
-		if cfg.retryIf != nil && !cfg.retryIf(err) {
-			break
-		}
-
-		if attempt == cfg.attempts {
-			break
-		}
-
-		if cfg.onRetry != nil {
-			cfg.onRetry(uint(attempt), err)
-		}
-
-		if err := sleepWithContext(ctx, delay); err != nil {
+		if attempt >= cfg.attempts || (cfg.retryIf != nil && !cfg.retryIf(err)) {
 			return err
 		}
-
-		if cfg.delayType == BackOffDelay && delay > 0 {
+		time.Sleep(delay)
+		if cfg.delayType == BackOffDelay {
 			delay *= 2
-			if cfg.maxDelay > 0 && delay > cfg.maxDelay {
-				delay = cfg.maxDelay
-			}
 		}
-		if cfg.delayType == FixedDelay && cfg.maxDelay > 0 && delay > cfg.maxDelay {
-			delay = cfg.maxDelay
+		if cfg.maxDelay > 0 {
+			delay = min(delay, cfg.maxDelay)
 		}
-	}
-
-	if lastErr == nil {
-		return nil
-	}
-
-	if cfg.lastErrorOnly {
-		return lastErr
-	}
-
-	return fmt.Errorf("retry failed after %d attempts: %w", cfg.attempts, lastErr)
-}
-
-func sleepWithContext(ctx context.Context, d time.Duration) error {
-	if d <= 0 {
-		return nil
-	}
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-
-	if ctx == nil {
-		<-timer.C
-		return nil
-	}
-
-	select {
-	case <-timer.C:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
 	}
 }

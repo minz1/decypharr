@@ -9,6 +9,7 @@ import (
 
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/sirrobot01/appendstore"
+
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/arr/reacquire"
 	"github.com/sirrobot01/decypharr/pkg/storage"

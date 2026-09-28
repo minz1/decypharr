@@ -11,10 +11,11 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog"
+	"github.com/sourcegraph/conc/iter"
+
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 	"github.com/sirrobot01/decypharr/pkg/usenet/types"
-	"github.com/sourcegraph/conc/iter"
 )
 
 // RAR format constants
@@ -1056,23 +1057,6 @@ func (p *RARParser) buildSegmentsForFile(
 	return fileSegments, nil
 }
 
-// buildSegmentsForVolumePart builds segments for a single RAR volume part
-// Maps the DataOffset within the decoded RAR volume to actual NNTP segments
-// CRITICAL: We calculate two different offsets:
-//   - SegmentDataStart: where within the decoded NNTP segment to start reading
-//   - StartOffset/EndOffset: set later in buildSegmentsForFile as file output positions
-func (p *RARParser) buildSegmentsForVolumePart(
-	part *types.RARVolumePart,
-	baseSegments []storage.NZBSegment,
-	volumeOffsetMap map[int]int64,
-) ([]storage.NZBSegment, error) {
-	segmentIndex, err := newSegmentLayout(baseSegments)
-	if err != nil {
-		return nil, err
-	}
-	return p.buildSegmentsForIndexedVolumePart(part, segmentIndex, volumeOffsetMap)
-}
-
 func (p *RARParser) buildSegmentsForIndexedVolumePart(
 	part *types.RARVolumePart,
 	segmentIndex *segmentLayout,
@@ -1092,20 +1076,6 @@ func (p *RARParser) buildSegmentsForIndexedVolumePart(
 		return nil, fmt.Errorf("invalid volume start offset %d", absoluteStartOffset)
 	}
 	return segmentIndex.slice(absoluteStartOffset, part.UnpackedSize, false)
-}
-
-// sliceSegmentsForRangeSimple extracts segments covering [offset, offset+length)
-// This is a simplified version that works directly with the flat segment list
-func sliceSegmentsForRangeSimple(
-	baseSegments []storage.NZBSegment,
-	offset int64,
-	length int64,
-) ([]storage.NZBSegment, error) {
-	layout, err := newSegmentLayout(baseSegments)
-	if err != nil {
-		return nil, err
-	}
-	return layout.slice(offset, length, true)
 }
 
 // aggregateFileParts combines file parts across volumes for multi-volume RAR archives

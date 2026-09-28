@@ -15,14 +15,14 @@ import (
 
 func (h *Handler) handlePropfind(current *manager.FileInfo, children []manager.FileInfo, w http.ResponseWriter, r *http.Request) {
 	cleanPath := path.Clean(r.URL.Path)
-	sb := convertToXML(cleanPath, current, children)
+	body := convertToXML(cleanPath, current, children)
 	// Set headers
 	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
 	w.Header().Set("Vary", "Accept-Encoding")
 
 	// Set status code and write response
 	w.WriteHeader(http.StatusMultiStatus) // 207 MultiStatus
-	_, _ = w.Write(sb.Bytes())
+	_, _ = w.Write(body)
 }
 
 func (h *Handler) handleGet(current *manager.FileInfo, w http.ResponseWriter, r *http.Request) {

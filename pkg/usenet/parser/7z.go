@@ -12,6 +12,7 @@ import (
 
 	"github.com/javi11/sevenzip"
 	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
@@ -356,23 +357,6 @@ func (p *SevenZParser) buildSegmentsForRARFile(
 	}
 
 	return fileSegments, nil
-}
-
-// sliceSegmentsForRange extracts segments covering [offset, offset+length) within the 7z archive
-func sliceSegmentsForRange(
-	baseSegments []storage.NZBSegment,
-	volumeInfos []storage.ArchiveVolumeInfo,
-	offset int64,
-	length int64,
-) ([]storage.NZBSegment, error) {
-	layout, err := newSegmentLayout(baseSegments)
-	if err != nil {
-		return nil, err
-	}
-	if err := layout.validateVolumes(volumeInfos); err != nil {
-		return nil, err
-	}
-	return layout.slice(offset, length, false)
 }
 
 // isRARFile checks if a filename is a RAR file

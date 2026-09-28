@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
-
 	hearsaylib "github.com/sirrobot01/hearsay"
 	hsdebrid "github.com/sirrobot01/hearsay/debrid"
 	"github.com/sirrobot01/hearsay/transport"

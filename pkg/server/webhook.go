@@ -2,10 +2,10 @@ package server
 
 import (
 	"cmp"
+	"encoding/json"
 	"net/http"
 	"strings"
 
-	json "github.com/bytedance/sonic"
 	"github.com/sirrobot01/decypharr/pkg/repair"
 )
 
@@ -23,7 +23,7 @@ func (s *Server) handleTautulli(w http.ResponseWriter, r *http.Request) {
 		TmdbID  string `json:"tmdb_id,omitempty"`
 		Fix     bool   `json:"fix,omitempty"`
 	}
-	if err := json.ConfigDefault.NewDecoder(r.Body).Decode(&payload); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		s.logger.Error().Err(err).Msg("Failed to parse webhook body")
 		http.Error(w, "Failed to parse webhook body: "+err.Error(), http.StatusBadRequest)
 		return

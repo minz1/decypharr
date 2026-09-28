@@ -12,9 +12,8 @@ import (
 	"runtime/debug"
 	"syscall"
 
-	"github.com/sirrobot01/decypharr/internal/config"
-
 	"github.com/sirrobot01/decypharr/cmd/decypharr"
+	"github.com/sirrobot01/decypharr/internal/config"
 )
 
 func main() {

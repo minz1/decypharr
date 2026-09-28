@@ -1,10 +1,9 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
-
-	json "github.com/bytedance/sonic"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 )
@@ -37,7 +36,7 @@ func (s *Server) LoginHandler(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 
-	if err := json.ConfigDefault.NewDecoder(r.Body).Decode(&credentials); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&credentials); err != nil {
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
@@ -69,17 +68,6 @@ func (s *Server) LoginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/", http.StatusSeeOther)
-}
-
-func (s *Server) LogoutHandler(w http.ResponseWriter, r *http.Request) {
-	session, _ := s.cookie.Get(r, "auth-session")
-	session.Values["authenticated"] = false
-	session.Options.MaxAge = -1
-	err := session.Save(r, w)
-	if err != nil {
-		return
-	}
-	s.redirectTo(w, r, "/login")
 }
 
 func (s *Server) RegisterHandler(w http.ResponseWriter, r *http.Request) {

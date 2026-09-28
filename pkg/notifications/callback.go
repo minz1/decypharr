@@ -2,11 +2,10 @@ package notifications
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
-
-	json "github.com/bytedance/sonic"
 )
 
 // CallbackPayload represents the HTTP callback payload

@@ -9,11 +9,12 @@ import (
 	"sync"
 
 	"github.com/rs/zerolog"
+	"golang.org/x/sync/singleflight"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/internal/request"
 	"github.com/sirrobot01/decypharr/internal/utils"
-	"golang.org/x/sync/singleflight"
 )
 
 // Service owns every configured Arr instance and every call made to one.

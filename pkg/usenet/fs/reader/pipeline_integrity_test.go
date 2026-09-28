@@ -28,7 +28,7 @@ func newPipelineIntegrityReader(t *testing.T, providers []config.UsenetProvider,
 	}
 	sr, err := NewStreamingReader(t.Context(), client, segments,
 		WithRetention(RetentionDelivery), WithMaxConnections(2), WithPrefetchAhead(0),
-		WithBodyPipelineDepth(2), WithDownloadTimeout(5*time.Second))
+		WithBodyPipelineDepth(2), func(c *Config) { c.DownloadTimeout = 5 * time.Second })
 	if err != nil {
 		_ = client.Close()
 		t.Fatal(err)

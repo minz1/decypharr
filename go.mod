@@ -6,7 +6,6 @@ require (
 	github.com/Tensai75/nzbparser v0.1.0
 	github.com/Tensai75/subjectparser v0.1.1
 	github.com/anacrolix/torrent v1.61.0
-	github.com/bytedance/sonic v1.15.4
 	github.com/cavaliergopher/grab/v3 v3.0.1
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/go-co-op/gocron/v2 v2.22.0
@@ -23,7 +22,6 @@ require (
 	github.com/sirrobot01/facetfs v0.7.0
 	github.com/sirrobot01/hearsay v0.6.3
 	github.com/sourcegraph/conc v0.3.0
-	github.com/stanNthe5/stringbuf v0.0.3
 	github.com/winfsp/cgofuse v1.6.0
 	go.uber.org/ratelimit v0.3.1
 	go4.org v0.0.0-20260112195520-a5071408f32f
@@ -62,10 +60,7 @@ require (
 	github.com/bodgit/plumbing v1.3.0 // indirect
 	github.com/bodgit/windows v1.0.1 // indirect
 	github.com/bradfitz/iter v0.0.0-20191230175014-e8f45d346db8 // indirect
-	github.com/bytedance/gopkg v0.1.3 // indirect
-	github.com/bytedance/sonic/loader v0.5.2 // indirect
 	github.com/cespare/xxhash v1.1.0 // indirect
-	github.com/cloudwego/base64x v0.1.6 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/dustin/go-humanize v1.0.0 // indirect
 	github.com/edsrzf/mmap-go v1.1.0 // indirect
@@ -114,7 +109,6 @@ require (
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	github.com/spf13/afero v1.14.0 // indirect
 	github.com/tidwall/btree v1.8.1 // indirect
-	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ulikunitz/xz v0.5.15 // indirect
 	github.com/wlynxg/anet v0.0.3 // indirect
 	go.etcd.io/bbolt v1.3.6 // indirect
@@ -123,7 +117,6 @@ require (
 	go.opentelemetry.io/otel/metric v1.38.0 // indirect
 	go.opentelemetry.io/otel/trace v1.38.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	golang.org/x/arch v0.0.0-20210923205945-b76863e36670 // indirect
 	golang.org/x/exp v0.0.0-20251113190631-e25ba8c21ef6 // indirect
 	golang.org/x/text v0.42.0 // indirect
 	golang.org/x/time v0.14.0 // indirect

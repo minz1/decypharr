@@ -9,9 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sirrobot01/decypharr/pkg/arr"
-
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/pkg/arr"
 )
 
 type recordedProgress struct {
@@ -58,7 +57,7 @@ func TestReacquireHandlerFailsExactDownloadAndWaitsForArr(t *testing.T) {
 	registry := newTestArrStorage()
 	instance := arr.Arr{Name: "movies", Host: server.URL, Token: "secret", Type: arr.Radarr}
 	registry.AddOrUpdate(instance)
-	handler := NewHandler(registry)
+	handler := NewHandler(registry, nil)
 	progress := &recordedProgress{}
 	job := Job{
 		ArrName:    "movies",
@@ -130,7 +129,7 @@ func TestReacquireHandlerRefusesStaleArrFileIdentity(t *testing.T) {
 			Confidence:             ConfidenceExactPath,
 		}},
 	}
-	err := NewHandler(registry).Reacquire(t.Context(), job, &recordedProgress{})
+	err := NewHandler(registry, nil).Reacquire(t.Context(), job, &recordedProgress{})
 	if err == nil {
 		t.Fatal("expected stale Arr identity to be rejected")
 	}
@@ -168,7 +167,7 @@ func TestReacquireHandlerRefusesChangedArrInstance(t *testing.T) {
 			Confidence:             ConfidenceExactPath,
 		}},
 	}
-	err := NewHandler(registry).Reacquire(t.Context(), job, &recordedProgress{})
+	err := NewHandler(registry, nil).Reacquire(t.Context(), job, &recordedProgress{})
 	if err == nil {
 		t.Fatal("expected changed Arr instance to be rejected")
 	}

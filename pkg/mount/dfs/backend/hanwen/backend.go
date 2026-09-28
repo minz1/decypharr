@@ -15,6 +15,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/backend"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/config"
@@ -28,10 +29,6 @@ const (
 	AttrTimeout  = 30 * time.Second
 	EntryTimeout = 1 * time.Second
 )
-
-func init() {
-	backend.Register(backend.Hanwen, NewBackend)
-}
 
 // Backend implements the hanwen/go-fuse backend
 type Backend struct {

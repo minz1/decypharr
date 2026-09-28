@@ -3,6 +3,7 @@ package reader
 import (
 	"context"
 	"fmt"
+	"math/bits"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -88,7 +89,7 @@ func TestCursorsDoNotCancelEachOthersPrefetch(t *testing.T) {
 	if _, err := play.ReadAtContext(ctx, buf, 0); err != nil {
 		t.Fatal(err)
 	}
-	if got := sr.fetcher.pendingPrefetch(); got != 4 {
+	if got := pendingPrefetch(sr.fetcher); got != 4 {
 		t.Fatalf("setup: expected 4 queued playback hints, got %d", got)
 	}
 
@@ -99,7 +100,7 @@ func TestCursorsDoNotCancelEachOthersPrefetch(t *testing.T) {
 	if got := sr.stats.PrefetchCancelled.Load(); got != 0 {
 		t.Fatalf("probe read at tail cancelled %d playback hints", got)
 	}
-	if got := sr.fetcher.pendingPrefetch(); got != 4 {
+	if got := pendingPrefetch(sr.fetcher); got != 4 {
 		t.Fatalf("probe read at tail drained playback prefetch: %d hints left, want 4", got)
 	}
 
@@ -173,4 +174,12 @@ func TestConsumedFloorTracksSlowestCursor(t *testing.T) {
 	if got := sr.cache.consumedFloor.Load(); got != 500 {
 		t.Fatalf("floor after seek-back = %d, want 500", got)
 	}
+}
+
+func pendingPrefetch(sf *SegmentFetcher) int {
+	var pending int
+	for i := range sf.prefetchQueued {
+		pending += bits.OnesCount64(sf.prefetchQueued[i].Load())
+	}
+	return pending
 }

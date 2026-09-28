@@ -8,6 +8,7 @@ import (
 	"unsafe"
 
 	"github.com/klauspost/compress/zstd"
+
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 

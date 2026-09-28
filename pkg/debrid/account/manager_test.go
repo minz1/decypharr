@@ -9,6 +9,7 @@ import (
 
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
 )
 

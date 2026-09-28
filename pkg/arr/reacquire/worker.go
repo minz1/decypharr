@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sync/atomic"
 	"time"
+
 	"uuid"
 
 	"github.com/sirrobot01/decypharr/pkg/arr"

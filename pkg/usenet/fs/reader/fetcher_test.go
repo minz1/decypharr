@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/nntp"
 	"github.com/sirrobot01/decypharr/internal/testutil/nntpd"
@@ -49,13 +50,13 @@ func TestCancelPendingPrefetchDrainsQueue(t *testing.T) {
 	for i := 2; i <= 5; i++ {
 		sf.QueuePrefetch(i)
 	}
-	if got := sf.pendingPrefetch(); got != 4 {
+	if got := pendingPrefetch(sf); got != 4 {
 		t.Fatalf("expected 4 queued hints, got %d", got)
 	}
 
 	sf.CancelPendingPrefetch()
 
-	if got := sf.pendingPrefetch(); got != 0 {
+	if got := pendingPrefetch(sf); got != 0 {
 		t.Errorf("expected empty queue after cancel, got %d hints", got)
 	}
 	if got := sf.stats.PrefetchCancelled.Load(); got != 4 {
@@ -65,7 +66,7 @@ func TestCancelPendingPrefetchDrainsQueue(t *testing.T) {
 	// The dedup bits must be cleared so the same segments can be re-hinted
 	// for the new window.
 	sf.QueuePrefetch(3)
-	if got := sf.pendingPrefetch(); got != 1 {
+	if got := pendingPrefetch(sf); got != 1 {
 		t.Errorf("expected segment re-queueable after cancel, queue len = %d", got)
 	}
 }

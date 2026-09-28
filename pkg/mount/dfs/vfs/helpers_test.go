@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/buffer"
 	fuseconfig "github.com/sirrobot01/decypharr/pkg/mount/dfs/config"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/vfs/ranges"

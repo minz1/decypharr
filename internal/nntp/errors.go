@@ -225,17 +225,3 @@ func IsYencDecodeError(err error) bool {
 	var nntpErr *Error
 	return errors.As(err, &nntpErr) && nntpErr.Type == ErrorTypeYencDecode
 }
-
-func IsAuthenticationError(err error) bool {
-	if nntpErr, ok := errors.AsType[*Error](err); ok {
-		return nntpErr.Type == ErrorTypeAuthentication
-	}
-	return false
-}
-
-func IsRetryableError(err error) bool {
-	if nntpErr, ok := errors.AsType[*Error](err); ok {
-		return nntpErr.IsRetryable()
-	}
-	return false
-}

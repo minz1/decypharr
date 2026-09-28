@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -8,9 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	json "github.com/bytedance/sonic"
-
 	"github.com/go-chi/chi/v5"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/internal/utils"
@@ -340,7 +340,7 @@ func (s *Server) handleBatchDeleteBrowseTorrents(w http.ResponseWriter, r *http.
 		IDs []string `json:"ids"`
 	}
 
-	if err := json.ConfigDefault.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}

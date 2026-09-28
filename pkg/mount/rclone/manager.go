@@ -14,11 +14,12 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	"gopkg.in/natefinch/lumberjack.v2"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/internal/rclone"
 	"github.com/sirrobot01/decypharr/pkg/manager"
-	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 const (

@@ -4,14 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"time"
 
-	json "github.com/bytedance/sonic"
-
 	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/request"
 	"github.com/sirrobot01/decypharr/internal/utils"
 )
@@ -84,7 +84,7 @@ func (r *Client) Do(ctx context.Context, req Request, res any) error {
 	}
 
 	if res != nil {
-		if err := json.ConfigDefault.NewDecoder(response.Body).Decode(res); err != nil && err != io.EOF {
+		if err := json.NewDecoder(response.Body).Decode(res); err != nil && err != io.EOF {
 			return err
 		}
 	}

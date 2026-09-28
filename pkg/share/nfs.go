@@ -12,10 +12,11 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/sirrobot01/facetfs/nfs4"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/pkg/manager"
-	"github.com/sirrobot01/facetfs/nfs4"
 )
 
 // NFSServer serves the library catalog over NFSv4.0.

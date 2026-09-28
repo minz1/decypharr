@@ -83,14 +83,6 @@ func NewSilentError(err error) *Error {
 	}
 }
 
-func NewPermanentError(err error) *Error {
-	return &Error{
-		err:        err,
-		statusCode: http.StatusInternalServerError,
-		permanent:  true,
-	}
-}
-
 func FromError(err error) *Error {
 	if customErr, ok := errors.AsType[*Error](err); ok {
 		return customErr

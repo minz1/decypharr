@@ -19,13 +19,14 @@ import (
 
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/rs/zerolog"
+	"golang.org/x/sync/singleflight"
+
 	"github.com/sirrobot01/decypharr/internal/buffer"
 	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	dfsconfig "github.com/sirrobot01/decypharr/pkg/mount/dfs/config"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/vfs/ranges"
 	"github.com/sirrobot01/decypharr/pkg/storage"
-	"golang.org/x/sync/singleflight"
 )
 
 const (

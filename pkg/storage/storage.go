@@ -10,8 +10,9 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/sirrobot01/appendstore"
-	"github.com/sirrobot01/decypharr/internal/logger"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/sirrobot01/decypharr/internal/logger"
 )
 
 var storeNames = []string{"entries", "queue", "items", "repair_state", "repair_runs"}

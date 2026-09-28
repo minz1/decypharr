@@ -49,7 +49,7 @@ func TestZIPParserReadsCentralDirectoryLargerThanTail(t *testing.T) {
 
 func TestZIPCentralDirectoryDoesNotSilentlyReturnPartialEntries(t *testing.T) {
 	p := &ZIPParser{logger: zerolog.Nop()}
-	if _, err := p.parseCentralDirectoryEntries(make([]byte, 46), 1); err == nil {
+	if _, err := p.parseCentralDirectoryReader(bytes.NewReader(make([]byte, 46)), 1); err == nil {
 		t.Fatal("invalid central directory unexpectedly parsed")
 	}
 }

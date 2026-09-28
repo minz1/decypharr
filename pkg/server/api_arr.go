@@ -1,14 +1,14 @@
 package server
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 
-	json "github.com/bytedance/sonic"
-
 	"github.com/go-chi/chi/v5"
+
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/arr/reacquire"
 )
@@ -55,7 +55,7 @@ func (s *Server) handleDeleteArrReacquireJobs(w http.ResponseWriter, r *http.Req
 	var request struct {
 		IDs []string `json:"ids"`
 	}
-	if err := json.ConfigDefault.NewDecoder(r.Body).Decode(&request); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		s.sendJSONError(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -103,7 +103,7 @@ func (s *Server) handleArrReacquire(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var request reacquire.Request
-	if err := json.ConfigDefault.NewDecoder(r.Body).Decode(&request); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		s.sendJSONError(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
 		return
 	}

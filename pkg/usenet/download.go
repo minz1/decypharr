@@ -7,8 +7,9 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/sirrobot01/decypharr/internal/nntp"
 	"github.com/sourcegraph/conc/pool"
+
+	"github.com/sirrobot01/decypharr/internal/nntp"
 )
 
 // segmentResult holds a fetched segment and its index for ordered writing

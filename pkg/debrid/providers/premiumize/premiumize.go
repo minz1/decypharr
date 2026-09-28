@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	"go.uber.org/ratelimit"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/internal/logger"
@@ -28,7 +30,6 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/debrid/common"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/version"
-	"go.uber.org/ratelimit"
 )
 
 const (

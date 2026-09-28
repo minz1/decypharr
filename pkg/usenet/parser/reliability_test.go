@@ -7,13 +7,13 @@ import (
 	"testing"
 
 	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/internal/nntp"
 	"github.com/sirrobot01/decypharr/internal/testutil/nntpd"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 	"github.com/sirrobot01/decypharr/pkg/usenet/manifest"
-	"github.com/sirrobot01/decypharr/pkg/usenet/types"
 )
 
 func TestProbeContentAvailabilityReportsAllMissingContent(t *testing.T) {
@@ -226,21 +226,6 @@ func TestProcessMediaRebasesLogicalOffsets(t *testing.T) {
 	}
 	if got := [2]int64{file.Segments[1].StartOffset, file.Segments[1].EndOffset}; got != [2]int64{4, 6} {
 		t.Fatalf("second logical range = %v", got)
-	}
-}
-
-func TestArchiveSlicersRejectPartiallyCoveredRanges(t *testing.T) {
-	base := []storage.NZBSegment{{Number: 1, MessageID: "article@example", Bytes: 10}}
-	if _, err := sliceSegmentsForRangeSimple(base, 8, 4); err == nil {
-		t.Fatal("simple archive slicer accepted a truncated range")
-	}
-	volumeInfos := []storage.ArchiveVolumeInfo{{Size: 10, SegmentStart: 0, SegmentEnd: 1}}
-	if _, err := sliceSegmentsForRange(base, volumeInfos, 8, 4); err == nil {
-		t.Fatal("7z archive slicer accepted a truncated range")
-	}
-	part := &types.RARVolumePart{PartNumber: 0, DataOffset: 8, UnpackedSize: 4}
-	if _, err := (&RARParser{logger: zerolog.Nop()}).buildSegmentsForVolumePart(part, base, map[int]int64{0: 0}); err == nil {
-		t.Fatal("RAR volume slicer accepted a truncated range")
 	}
 }
 

@@ -396,50 +396,6 @@ func ProtoToJob(pb *JobProto) *Job {
 // SwitcherJob Conversions
 // ============================================================================
 
-func SwitcherJobToProto(sj *SwitcherJob) *SwitcherJobProto {
-	pb := &SwitcherJobProto{
-		Id:             sj.ID,
-		InfoHash:       sj.InfoHash,
-		SourceProvider: sj.SourceProvider,
-		TargetProvider: sj.TargetProvider,
-		Status:         string(sj.Status),
-		Progress:       sj.Progress,
-		Error:          sj.Error,
-		KeepOld:        sj.KeepOld,
-		WaitComplete:   sj.WaitComplete,
-	}
-	if !sj.CreatedAt.IsZero() {
-		pb.CreatedAtUnix = sj.CreatedAt.Unix()
-	}
-	if sj.CompletedAt != nil {
-		pb.HasCompletedAt = true
-		pb.CompletedAtUnix = sj.CompletedAt.Unix()
-	}
-	return pb
-}
-
-func ProtoToSwitcherJob(pb *SwitcherJobProto) *SwitcherJob {
-	sj := &SwitcherJob{
-		ID:             pb.Id,
-		InfoHash:       pb.InfoHash,
-		SourceProvider: pb.SourceProvider,
-		TargetProvider: pb.TargetProvider,
-		Status:         SwitcherStatus(pb.Status),
-		Progress:       pb.Progress,
-		Error:          pb.Error,
-		KeepOld:        pb.KeepOld,
-		WaitComplete:   pb.WaitComplete,
-	}
-	if pb.CreatedAtUnix != 0 {
-		sj.CreatedAt = time.Unix(pb.CreatedAtUnix, 0)
-	}
-	if pb.HasCompletedAt {
-		t := time.Unix(pb.CompletedAtUnix, 0)
-		sj.CompletedAt = &t
-	}
-	return sj
-}
-
 // ============================================================================
 // SystemMigrationStatus Conversions
 // ============================================================================

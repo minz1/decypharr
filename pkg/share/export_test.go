@@ -41,7 +41,7 @@ func TestExportServesThroughCache(t *testing.T) {
 		t.Fatalf("size = %d, want 100", info.Size())
 	}
 
-	if got := export.Stats().MaxBytes; got != 1<<30 {
+	if got := export.cache.Stats().MaxBytes; got != 1<<30 {
 		t.Fatalf("budget = %d, want %d", got, int64(1)<<30)
 	}
 }
@@ -64,7 +64,7 @@ func TestExportWithoutCache(t *testing.T) {
 	if _, err := export.FileSystem().Stat(context.Background(), "/__all__/Example Show/a.mkv"); err != nil {
 		t.Fatal(err)
 	}
-	if got := export.Stats().MaxBytes; got != 0 {
-		t.Fatalf("disabled cache reported a budget of %d", got)
+	if got := export.cache; got != nil {
+		t.Fatal("disabled cache was created")
 	}
 }

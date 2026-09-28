@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/internal/utils"
@@ -53,13 +54,6 @@ func New(mgr *manager.Manager) *Collector {
 func (c *Collector) Start(ctx context.Context) {
 	ctx, c.cancel = context.WithCancel(ctx)
 	go c.loop(ctx)
-}
-
-// Stop cancels the background loop.
-func (c *Collector) Stop() {
-	if c.cancel != nil {
-		c.cancel()
-	}
 }
 
 // Snapshot returns the latest cached snapshot (zero-alloc per call).

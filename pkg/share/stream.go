@@ -7,8 +7,9 @@ import (
 	"os"
 	"sync"
 
-	"github.com/sirrobot01/decypharr/pkg/manager"
 	"github.com/sirrobot01/facetfs"
+
+	"github.com/sirrobot01/decypharr/pkg/manager"
 )
 
 // streamClient labels sessions in the active-streams view. One cache serves

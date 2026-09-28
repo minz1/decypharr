@@ -7,11 +7,12 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/sourcegraph/conc/iter"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/manager"
-	"github.com/sourcegraph/conc/iter"
 )
 
 func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {

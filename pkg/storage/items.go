@@ -3,6 +3,7 @@ package storage
 import (
 	"errors"
 	"fmt"
+
 	"github.com/sirrobot01/appendstore"
 	"google.golang.org/protobuf/proto"
 )
@@ -15,11 +16,6 @@ func (s *Storage) GetEntryItems() map[string]struct{} {
 		return nil
 	})
 	return items
-}
-
-// UpdateEntryItem updates an entry item from an entry
-func (s *Storage) UpdateEntryItem(entry *Entry) error {
-	return s.updateEntryItem(entry)
 }
 
 func (s *Storage) UpdateItem(item *EntryItem) error {

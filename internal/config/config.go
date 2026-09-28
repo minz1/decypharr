@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -11,8 +12,6 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
-
-	json "github.com/bytedance/sonic"
 )
 
 type (
