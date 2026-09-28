@@ -141,8 +141,10 @@ func (r *RateLimitedLogger) ErrorOnce(key string) *zerolog.Event {
 }
 
 // Reset clears all tracked messages, allowing them to be logged again.
+// It clears the map in place: swapping the field would race with concurrent
+// Rate/ErrorOnce callers reading it.
 func (r *RateLimitedLogger) Reset() {
-	r.seen = xsync.NewMap[string, time.Time]()
+	r.seen.Clear()
 }
 
 // ResetKey allows a specific key to be logged again.
