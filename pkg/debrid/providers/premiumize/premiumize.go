@@ -716,34 +716,7 @@ func (pm *Premiumize) SpeedTest(ctx context.Context) types.SpeedTestResult {
 	}
 	result.LatencyMs = latency.Milliseconds()
 
-	current := pm.accountsManager.Current()
-	if current == nil {
-		return result
-	}
-	link, found := current.GetRandomLink()
-	if !found || link.DownloadLink == "" {
-		return result
-	}
-	req, err = http.NewRequestWithContext(ctx, http.MethodGet, link.DownloadLink, nil)
-	if err != nil {
-		return result
-	}
-	req.Header.Set("Range", "bytes=0-1048575")
-	downloadStart := time.Now()
-	dlResp, err := current.Client().Do(req)
-	if err != nil {
-		return result
-	}
-	defer dlResp.Body.Close()
-	data, err := io.ReadAll(dlResp.Body)
-	duration := time.Since(downloadStart)
-	if err != nil || len(data) == 0 {
-		return result
-	}
-	result.BytesRead = int64(len(data))
-	if duration.Seconds() > 0 {
-		result.SpeedMBps = float64(result.BytesRead) / duration.Seconds() / (1024 * 1024)
-	}
+	pm.accountsManager.MeasureDownload(ctx, &result)
 	return result
 }
 

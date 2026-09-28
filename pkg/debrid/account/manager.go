@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"slices"
 	"sync/atomic"
@@ -350,4 +351,46 @@ func (m *Manager) UpdateAccount(updatedAccount *Account) {
 		return
 	}
 	m.accounts.Store(updatedAccount.Token, updatedAccount)
+}
+
+// speedTestBytes is how much of a cached link MeasureDownload reads.
+const speedTestBytes = 1 << 20
+
+// MeasureDownload reads at most the first MiB of a cached download link of the
+// current account and records the throughput in result. It leaves result
+// untouched when no link is cached or the download fails. The read is bounded
+// even when the server ignores the Range header.
+func (m *Manager) MeasureDownload(ctx context.Context, result *types.SpeedTestResult) {
+	current := m.Current()
+	if current == nil {
+		return
+	}
+	link, found := current.GetRandomLink()
+	if !found {
+		return
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, link.DownloadLink, nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set("Range", fmt.Sprintf("bytes=0-%d", speedTestBytes-1))
+
+	start := time.Now()
+	resp, err := current.Client().Do(req)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+		return
+	}
+	n, _ := io.CopyN(io.Discard, resp.Body, speedTestBytes)
+	elapsed := time.Since(start)
+	if n == 0 {
+		return
+	}
+	result.BytesRead = n
+	if elapsed > 0 {
+		result.SpeedMBps = float64(n) / elapsed.Seconds() / speedTestBytes
+	}
 }

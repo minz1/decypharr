@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +13,8 @@ import (
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/rs/zerolog"
 
+	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/internal/request"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
 )
 
@@ -91,6 +95,24 @@ func TestInvalidFetchedLinkIsNotCached(t *testing.T) {
 	dl, err := acc.GetDownloadLink(t.Context(), "id", file, fetcher)
 	if err != nil || calls != 2 || dl.DownloadLink == "" {
 		t.Fatalf("second fetch: link=%q calls=%d err=%v, want refetched link", dl.DownloadLink, calls, err)
+	}
+}
+
+func TestMeasureDownloadIsBoundedWhenRangeIgnored(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(make([]byte, 4*speedTestBytes)) // ignores Range, sends 200 with the whole body
+	}))
+	defer server.Close()
+	var logs bytes.Buffer
+	m, acc := newTestManager(&logs)
+	config.SetConfigPath(t.TempDir())
+	t.Cleanup(config.Reset)
+	acc.httpClient = request.New(request.WithMaxRetries(0))
+	acc.storeLink(types.DownloadLink{Link: "file", DownloadLink: server.URL})
+	var result types.SpeedTestResult
+	m.MeasureDownload(t.Context(), &result)
+	if result.BytesRead != speedTestBytes {
+		t.Fatalf("BytesRead = %d, want %d", result.BytesRead, speedTestBytes)
 	}
 }
 
