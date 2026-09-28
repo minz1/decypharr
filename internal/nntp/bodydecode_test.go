@@ -382,24 +382,6 @@ func TestStreamBodySingleWrite(t *testing.T) {
 	}
 }
 
-func TestGetHeaderPrefixSnippet(t *testing.T) {
-	c, server := newBodyTestConn(t)
-
-	payload := testPayload(32 * 1024)
-	serveResponses(t, server, "222 0 <a@b> body\r\n"+encodeBody(payload)+".\r\n")
-
-	meta, err := c.GetHeaderPrefix("<a@b>", 100)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(meta.Snippet, payload[:100]) {
-		t.Fatal("snippet mismatch")
-	}
-	if meta.Size != int64(len(payload)) || meta.Begin != 1 || meta.End != int64(len(payload)) {
-		t.Fatalf("meta = %+v", meta)
-	}
-}
-
 func TestGetDecodedBodyWithMetadataDoesNotRetainScratchBuffer(t *testing.T) {
 	t.Parallel()
 

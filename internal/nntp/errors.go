@@ -26,7 +26,6 @@ const (
 	ErrorTypeInvalidCommand
 	ErrorTypeProtocol
 	ErrorTypeYencDecode
-	ErrorTypeNoAvailableConnection
 )
 
 // Error represents an NNTP-specific error.
@@ -62,22 +61,6 @@ func (e *Error) IsRetryable() bool {
 		return true
 	case ErrorTypeArticleNotFound, ErrorTypeGroupNotFound, ErrorTypePermissionDenied, ErrorTypeAuthentication:
 		return false
-	default:
-		return false
-	}
-}
-
-// ShouldStopParsing returns true if this error should stop the entire parsing process.
-func (e *Error) ShouldStopParsing() bool {
-	switch e.Type {
-	case ErrorTypeAuthentication, ErrorTypePermissionDenied:
-		return true // Critical auth issues
-	case ErrorTypeConnection:
-		return false // Can continue with other connections
-	case ErrorTypeArticleNotFound:
-		return false // Can continue searching for other articles
-	case ErrorTypeServerBusy:
-		return false // Temporary issue
 	default:
 		return false
 	}

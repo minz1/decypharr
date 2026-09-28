@@ -394,46 +394,6 @@ func (c *Connection) readResponseCode() (int, []byte, error) {
 	return code, line[4:], nil
 }
 
-// readMultilineResponse reads a multiline response.
-func (c *Connection) readMultilineResponse() (*Response, error) {
-	resp, err := c.readResponse()
-	if err != nil {
-		return nil, err
-	}
-
-	// Check if this is a multiline response
-	if resp.Code < 200 || resp.Code >= 300 {
-		return &resp, nil
-	}
-
-	lines, err := c.text.ReadDotLines()
-	if err != nil {
-		return nil, err
-	}
-
-	resp.Lines = lines
-	return &resp, nil
-}
-
-// GetArticle retrieves an article by message ID with proper error classification.
-func (c *Connection) GetArticle(messageID string) (*Article, error) {
-	messageID = FormatMessageID(messageID)
-	if err := c.sendCommandArg("ARTICLE", messageID); err != nil {
-		return nil, NewConnectionError(fmt.Errorf("failed to send ARTICLE command: %w", err))
-	}
-
-	resp, err := c.readMultilineResponse()
-	if err != nil {
-		return nil, NewConnectionError(fmt.Errorf("failed to read article response: %w", err))
-	}
-
-	if resp.Code != 220 {
-		return nil, classifyNNTPError(resp.Code, resp.Message)
-	}
-
-	return c.parseArticle(messageID, resp.Lines)
-}
-
 // requestBody sends BODY and decodes the complete response through the
 // per-connection decoder: status line, yEnc payload, and ".\r\n" terminator
 // in one pass, with size and CRC verification. The returned Data buffer
@@ -515,7 +475,7 @@ func (c *Connection) nextBodyBuffer() []byte {
 	return getBodyBuf()
 }
 
-func metadataFromResult(meta nntpyenc.DecoderMeta, snippet []byte) *YencMetadata {
+func metadataFromResult(meta nntpyenc.DecoderMeta) *YencMetadata {
 	return &YencMetadata{
 		Name:     meta.FileName,
 		Size:     meta.FileSize,
@@ -525,28 +485,7 @@ func metadataFromResult(meta nntpyenc.DecoderMeta, snippet []byte) *YencMetadata
 		PartSize: meta.PartSize,
 		Begin:    meta.Begin(),
 		End:      meta.End(),
-		Snippet:  snippet,
 	}
-}
-
-// GetHeaderPrefix retrieves exact yEnc metadata plus a small decoded prefix
-// while keeping the NNTP connection reusable (the whole response is consumed).
-func (c *Connection) GetHeaderPrefix(messageID string, maxSnippet int) (*YencMetadata, error) {
-	res, err := c.requestBody(messageID)
-	if err != nil {
-		// A parsed non-222 status leaves the connection at a clean response
-		// boundary; anything else may leave part of the article on the wire.
-		if res.StatusCode == 0 || res.StatusCode == 222 {
-			_ = c.conn.Close()
-		}
-		return nil, err
-	}
-	var snippet []byte
-	if maxSnippet > 0 {
-		snippet = bytes.Clone(res.Data[:min(maxSnippet, len(res.Data))])
-	}
-	putBodyBuf(res.Data)
-	return metadataFromResult(res.Meta, snippet), nil
 }
 
 // GetBody retrieves article body by message ID as raw bytes (used by GetHeader).
@@ -720,7 +659,7 @@ func (c *Connection) GetDecodedBodyWithMetadata(messageID string) ([]byte, *Yenc
 	if err != nil {
 		return nil, nil, err
 	}
-	return res.Data, metadataFromResult(res.Meta, nil), nil
+	return res.Data, metadataFromResult(res.Meta), nil
 }
 
 // StreamBody decodes one article body and writes it to w in a single Write.
@@ -777,114 +716,6 @@ func (c *Connection) readDotBytes() ([]byte, error) {
 	}
 
 	return buf.Bytes(), nil
-}
-
-// GetHead retrieves article headers by message ID.
-func (c *Connection) GetHead(messageID string) ([]byte, error) {
-	messageID = FormatMessageID(messageID)
-	if err := c.sendCommandArg("HEAD", messageID); err != nil {
-		return nil, NewConnectionError(fmt.Errorf("failed to send HEAD command: %w", err))
-	}
-
-	// Read the initial response
-	resp, err := c.readResponse()
-	if err != nil {
-		return nil, NewConnectionError(fmt.Errorf("failed to read head response: %w", err))
-	}
-
-	if resp.Code != 221 {
-		return nil, classifyNNTPError(resp.Code, resp.Message)
-	}
-
-	// Read the header data using textproto
-	lines, err := c.text.ReadDotLines()
-	if err != nil {
-		return nil, NewConnectionError(fmt.Errorf("failed to read header data: %w", err))
-	}
-
-	// Join with \r\n to preserve original line endings and add final \r\n
-	headers := strings.Join(lines, "\r\n")
-	if len(lines) > 0 {
-		headers += "\r\n"
-	}
-
-	return []byte(headers), nil
-}
-
-func (c *Connection) Post(messageID, filename string, body []byte) error {
-	now := time.Now().Format("2006-01-02 15:04:05")
-	if err := c.sendCommand("POST"); err != nil {
-		return NewConnectionError(fmt.Errorf("failed to send POST command: %w", err))
-	}
-
-	resp, err := c.readResponse()
-	if err != nil {
-		return NewConnectionError(fmt.Errorf("failed to read POST response: %w", err))
-	}
-
-	// 340 = send article to be posted
-	if resp.Code != 340 {
-		// 440, 441, etc should be classified properly
-		return classifyNNTPError(resp.Code, fmt.Sprintf("unexpected response to POST: %s", resp.Message))
-	}
-
-	// 2. Build RFC-822 style article (headers + blank line + body)
-	var buf bytes.Buffer
-
-	if filename != "" {
-		buf.WriteString("Subject: " + filename + "\r\n")
-	}
-
-	buf.WriteString("Date: " + now + "\r\n")
-	buf.WriteString("Newsgroups: " + "alt.binaries.friends" + "\r\n")
-	if messageID != "" {
-		// ensure proper <id> format
-		msgID := FormatMessageID(messageID)
-		buf.WriteString("Message-ID: " + msgID + "\r\n")
-	}
-
-	// End of headers
-	buf.WriteString("\r\n")
-
-	// 3. Body with CRLF normalization + dot-stuffing
-	if len(body) > 0 {
-		// Normalize to \n, then re-add \r\n
-		body := bytes.ReplaceAll(body, []byte("\r\n"), []byte("\n"))
-		lines := bytes.SplitSeq(body, []byte("\n"))
-
-		for line := range lines {
-			// Last split after trailing \n will give empty line; still write CRLF.
-			if len(line) > 0 && line[0] == '.' {
-				// dot-stuff per NNTP
-				buf.WriteByte('.')
-			}
-			buf.Write(line)
-			buf.WriteString("\r\n")
-		}
-	}
-
-	// 4. Terminator line
-	buf.WriteString(".\r\n")
-
-	// 5. Send article data
-	if _, writeErr := c.writer.Write(buf.Bytes()); writeErr != nil {
-		return NewConnectionError(fmt.Errorf("failed to send article data: %w", writeErr))
-	}
-	if flushErr := c.writer.Flush(); flushErr != nil {
-		return NewConnectionError(fmt.Errorf("failed to flush article data: %w", flushErr))
-	}
-
-	// 6. Final response
-	resp, err = c.readResponse()
-	if err != nil {
-		return NewConnectionError(fmt.Errorf("failed to read post completion response: %w", err))
-	}
-
-	if resp.Code != 240 { // 240 = article received OK
-		return classifyNNTPError(resp.Code, resp.Message)
-	}
-
-	return nil
 }
 
 // Stat retrieves article statistics by message ID with proper error classification.
@@ -977,92 +808,19 @@ func markStatSuffixError(results []StatResult, start int, err error) {
 	}
 }
 
-// SelectGroup selects a newsgroup and returns group information.
-func (c *Connection) SelectGroup(groupName string) (*GroupInfo, error) {
-	if err := c.sendCommandArg("GROUP", groupName); err != nil {
-		return nil, NewConnectionError(fmt.Errorf("failed to send GROUP command: %w", err))
-	}
-
-	resp, err := c.readResponse()
-	if err != nil {
-		return nil, NewConnectionError(fmt.Errorf("failed to read GROUP response: %w", err))
-	}
-
-	if resp.Code != 211 {
-		return nil, classifyNNTPError(resp.Code, resp.Message)
-	}
-
-	// Parse GROUP response: "211 number low high group-name"
-	fields := strings.Fields(resp.Message)
-	if len(fields) < 4 {
-		return nil, NewProtocolError(resp.Code, fmt.Sprintf("unexpected GROUP response format: %q", resp.Message))
-	}
-
-	groupInfo := &GroupInfo{
-		Name: groupName,
-	}
-
-	if count, atoiErr := strconv.Atoi(fields[0]); atoiErr == nil {
-		groupInfo.Count = count
-	}
-	if low, atoiErr := strconv.Atoi(fields[1]); atoiErr == nil {
-		groupInfo.Low = low
-	}
-	if high, atoiErr := strconv.Atoi(fields[2]); atoiErr == nil {
-		groupInfo.High = high
-	}
-
-	return groupInfo, nil
-}
-
-// parseArticle parses article data from response lines.
-func (c *Connection) parseArticle(messageID string, lines []string) (*Article, error) {
-	article := &Article{
-		MessageID: messageID,
-		Groups:    []string{},
-	}
-
-	headerEnd := -1
-	for i, line := range lines {
-		if line == "" {
-			headerEnd = i
-			break
-		}
-
-		// Parse headers
-		if after, ok := strings.CutPrefix(line, "Subject: "); ok {
-			article.Subject = after
-		} else if after, ok := strings.CutPrefix(line, "From: "); ok {
-			article.From = after
-		} else if after, ok := strings.CutPrefix(line, "Date: "); ok {
-			article.Date = after
-		} else if after, ok := strings.CutPrefix(line, "Newsgroups: "); ok {
-			groups := after
-			article.Groups = strings.Split(groups, ",")
-			for i := range article.Groups {
-				article.Groups[i] = strings.TrimSpace(article.Groups[i])
-			}
-		}
-	}
-
-	// Join body lines
-	if headerEnd != -1 && headerEnd+1 < len(lines) {
-		body := strings.Join(lines[headerEnd+1:], "\n")
-		article.Body = []byte(body)
-		article.Size = int64(len(article.Body))
-	}
-
-	return article, nil
-}
-
-// FormatMessageID ensures message ID has proper format.
+// FormatMessageID ensures message ID has proper format. Message IDs come
+// from NZB files, so embedded CR/LF is stripped: it would otherwise end the
+// command line and inject further NNTP commands on a pipelined connection.
 func FormatMessageID(messageID string) string {
+	if strings.ContainsAny(messageID, "\r\n") {
+		messageID = strings.NewReplacer("\r", "", "\n", "").Replace(messageID)
+	}
 	messageID = strings.TrimSpace(messageID)
 	if !strings.HasPrefix(messageID, "<") {
 		messageID = "<" + messageID
 	}
 	if !strings.HasSuffix(messageID, ">") {
-		messageID = messageID + ">"
+		messageID += ">"
 	}
 	return messageID
 }
