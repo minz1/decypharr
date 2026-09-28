@@ -185,6 +185,11 @@ func ParseEncryptionHeader(data []byte) (*EncryptionHeader, error) {
 	}
 	kdfCount := int(data[pos])
 	pos++
+	// The count comes from the archive: reject values unrar also rejects, or
+	// DeriveKeys would spin through up to 2^255 PBKDF2 rounds.
+	if kdfCount > MaxKdfCount {
+		return nil, ErrInvalidData
+	}
 
 	// Read salt (16 bytes)
 	if pos+16 > len(data) {
