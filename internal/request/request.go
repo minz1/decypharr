@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -162,28 +163,41 @@ func (c *Client) Get(url string) (*http.Response, error) {
 
 // retryAfterBackoff extends DefaultBackoff with Retry-After header support.
 // When a 429 response carries a Retry-After header decypharr waits exactly as
-// long as the server requests instead of using jittered exponential backoff.
-func retryAfterBackoff(min, max time.Duration, attemptNum int, resp *http.Response) time.Duration {
-	if resp != nil && resp.StatusCode == http.StatusTooManyRequests {
-		if ra := resp.Header.Get("Retry-After"); ra != "" {
-			if secs, err := strconv.Atoi(ra); err == nil && secs > 0 {
-				wait := time.Duration(secs) * time.Second
-				if wait > max {
-					return max
-				}
-				return wait
-			}
-			if t, err := http.ParseTime(ra); err == nil {
-				if wait := time.Until(t); wait > 0 {
-					if wait > max {
-						return max
-					}
-					return wait
-				}
-			}
+// long as the server requests (capped at maxWait) instead of using jittered
+// exponential backoff.
+func retryAfterBackoff(minWait, maxWait time.Duration, attemptNum int, resp *http.Response) time.Duration {
+	if wait, ok := retryAfter(resp); ok {
+		return min(wait, maxWait)
+	}
+	return retryablehttp.DefaultBackoff(minWait, maxWait, attemptNum, resp)
+}
+
+// retryAfter returns the positive wait a 429 response asks for, either as
+// delay-seconds or as an HTTP date. Huge second counts saturate instead of
+// overflowing into a negative duration.
+func retryAfter(resp *http.Response) (time.Duration, bool) {
+	if resp == nil || resp.StatusCode != http.StatusTooManyRequests {
+		return 0, false
+	}
+	ra := resp.Header.Get("Retry-After")
+	if ra == "" {
+		return 0, false
+	}
+	if secs, err := strconv.ParseInt(ra, 10, 64); err == nil {
+		if secs <= 0 {
+			return 0, false
+		}
+		if secs > int64(math.MaxInt64/time.Second) {
+			return math.MaxInt64, true
+		}
+		return time.Duration(secs) * time.Second, true
+	}
+	if t, err := http.ParseTime(ra); err == nil {
+		if wait := time.Until(t); wait > 0 {
+			return wait, true
 		}
 	}
-	return retryablehttp.DefaultBackoff(min, max, attemptNum, resp)
+	return 0, false
 }
 
 // New creates a new HTTP client with the specified options.
