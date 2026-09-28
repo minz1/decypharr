@@ -2,6 +2,7 @@ package manager
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -44,6 +45,10 @@ const (
 	refreshWorkChanBuffer  = 100
 	refreshBatchChanBuffer = 50
 )
+
+// errSyncSkipped reports a provider torrent that cannot be synced yet: its
+// provider client is gone or its files are still missing download links.
+var errSyncSkipped = errors.New("torrent not ready to sync")
 
 // refreshTorrents refreshes torrents from a specific debrid service.
 // Returns an error if the refresh fails.
@@ -226,9 +231,12 @@ func (m *Manager) processNewTorrents(provider string, newTorrents []*types.Torre
 	for range workers {
 		processWg.Go(func() {
 			for t := range workChan {
-				if mt, err := m.processSyncTorrent(t); err != nil {
+				mt, err := m.processSyncTorrent(t)
+				switch {
+				case errors.Is(err, errSyncSkipped):
+				case err != nil:
 					m.logger.Error().Err(err).Str("debrid", provider).Msgf("Failed to process torrent %s", t.Id)
-				} else if mt != nil {
+				default:
 					batchChan <- mt
 				}
 				count := processed.Add(1)
@@ -309,7 +317,7 @@ func (m *Manager) processSyncTorrent(t *types.Torrent) (*storage.Entry, error) {
 	// GetReader the debrid client
 	client := m.ProviderClient(t.Debrid)
 	if client == nil {
-		return nil, nil
+		return nil, errSyncSkipped
 	}
 
 	// Check if files are complete - only make API call if needed
@@ -323,7 +331,7 @@ func (m *Manager) processSyncTorrent(t *types.Torrent) (*storage.Entry, error) {
 
 		// Re-check completion after update
 		if !isComplete(t.Files) {
-			return nil, nil
+			return nil, errSyncSkipped
 		}
 	}
 
@@ -440,14 +448,16 @@ func (m *Manager) refreshTorrent(infohash string) (*storage.Entry, error) {
 	}
 
 	entry, err := m.processSyncTorrent(debridTorrent)
+	if errors.Is(err, errSyncSkipped) {
+		// Nothing new to store; callers dereference the result, so hand back
+		// the stored entry rather than nil.
+		return torrent, nil
+	}
 	if err != nil {
 		return nil, err
 	}
-	// Store updated entry in storage
-	if entry != nil {
-		if addOrUpdateErr := m.storage.AddOrUpdate(entry); addOrUpdateErr != nil {
-			return nil, addOrUpdateErr
-		}
+	if addOrUpdateErr := m.storage.AddOrUpdate(entry); addOrUpdateErr != nil {
+		return nil, addOrUpdateErr
 	}
 	return entry, nil
 }

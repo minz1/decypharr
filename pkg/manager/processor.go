@@ -74,10 +74,15 @@ func (m *Manager) processTorrentJob(ctx context.Context, job *Job) error {
 		return nil
 	}
 	if job.ResumeExisting {
+		// Claim the entry before flipping it to downloading: once the status
+		// changes the scheduler may pick it up too, and only one of us may
+		// drive it.
+		if _, loaded := m.processingEntries.LoadOrStore(job.Entry.InfoHash, struct{}{}); loaded {
+			return nil
+		}
 		job.Entry.Status = debridTypes.TorrentStatusDownloading
 		job.Entry.IsDownloading = false
 		_ = m.queue.Update(job.Entry)
-		m.processingEntries.Store(job.Entry.InfoHash, struct{}{})
 		m.processQueuedTorrent(job.Entry)
 		return nil
 	}
