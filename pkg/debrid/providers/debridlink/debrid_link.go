@@ -412,7 +412,7 @@ func (dl *DebridLink) fetchDownloadLink(
 	now := time.Now()
 	link := types.DownloadLink{
 		Debrid:       dl.config.Name,
-		Token:        dl.APIKey,
+		Token:        account.Token,
 		Filename:     file.Name,
 		Link:         file.Link,
 		DownloadLink: file.Link,
@@ -436,12 +436,14 @@ func (dl *DebridLink) GetTorrents() ([]*types.Torrent, error) {
 	torrents := make([]*types.Torrent, 0)
 	var fetchErr error
 	for {
-		t, err := dl.getTorrents(page, perPage)
+		// Pagination follows the provider's page size; unfinished torrents
+		// are filtered out of t, so an all-unfinished page must not stop it.
+		t, seen, err := dl.getTorrents(page, perPage)
 		if err != nil {
 			fetchErr = err
 			break
 		}
-		if len(t) == 0 {
+		if seen == 0 {
 			break
 		}
 		torrents = append(torrents, t...)
@@ -458,12 +460,13 @@ func (dl *DebridLink) fetchDownloadLinks(account *account.Account) ([]types.Down
 	limit := 100
 	page := 0
 	for {
-		data, err := dl._fetchDownloadLinks(account, page, limit)
+		data, seen, err := dl._fetchDownloadLinks(account, page, limit)
 		if err != nil {
 			return links, err
 		}
 		links = append(links, data...)
-		if len(data) < limit {
+		// Expired links are filtered out of data; paginate on the raw count.
+		if seen < limit {
 			break
 		}
 		page++
@@ -471,7 +474,12 @@ func (dl *DebridLink) fetchDownloadLinks(account *account.Account) ([]types.Down
 	return links, nil
 }
 
-func (dl *DebridLink) _fetchDownloadLinks(account *account.Account, page, limit int) ([]types.DownloadLink, error) {
+// _fetchDownloadLinks returns the unexpired links on one page and the number
+// of entries the page contained before filtering.
+func (dl *DebridLink) _fetchDownloadLinks(
+	account *account.Account,
+	page, limit int,
+) ([]types.DownloadLink, int, error) {
 	links := make([]types.DownloadLink, 0)
 
 	req, err := http.NewRequest(
@@ -480,33 +488,30 @@ func (dl *DebridLink) _fetchDownloadLinks(account *account.Account, page, limit 
 		nil,
 	)
 	if err != nil {
-		return links, err
+		return links, 0, err
 	}
 
 	resp, err := account.Client().Do(req)
 	if err != nil {
-		return links, err
+		return links, 0, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return links, fmt.Errorf("debridlink API error: Status: %d", resp.StatusCode)
+		return links, 0, fmt.Errorf("debridlink API error: Status: %d", resp.StatusCode)
 	}
 	var res DownloadLinksResponse
 
 	if resp.ContentLength == 0 {
-		return links, fmt.Errorf("empty response from debridlink API")
+		return links, 0, fmt.Errorf("empty response from debridlink API")
 	}
 	if decodeJSONErr := request.DecodeJSON(resp, &res); decodeJSONErr != nil {
-		return links, decodeJSONErr
+		return links, 0, decodeJSONErr
 	}
 	if !res.Success || res.Value == nil {
-		return links, fmt.Errorf("error getting download links")
+		return links, 0, fmt.Errorf("error getting download links")
 	}
 	data := *res.Value
-	if len(data) == 0 {
-		return links, nil
-	}
 	for _, l := range data {
 		created := time.Unix(l.Created, 0)
 		if created.IsZero() {
@@ -519,7 +524,7 @@ func (dl *DebridLink) _fetchDownloadLinks(account *account.Account, page, limit 
 		link := types.DownloadLink{
 			Debrid:       dl.config.Name,
 			Id:           l.Id,
-			Token:        dl.APIKey,
+			Token:        account.Token,
 			Filename:     l.Name,
 			Link:         l.Url,
 			DownloadLink: l.DownloadUrl,
@@ -528,14 +533,16 @@ func (dl *DebridLink) _fetchDownloadLinks(account *account.Account, page, limit 
 		}
 		links = append(links, link)
 	}
-	return links, nil
+	return links, len(data), nil
 }
 
 func (dl *DebridLink) RefreshDownloadLinks() error {
 	return dl.accountsManager.RefreshLinks(dl.fetchDownloadLinks)
 }
 
-func (dl *DebridLink) getTorrents(page, perPage int) ([]*types.Torrent, error) {
+// getTorrents returns the finished torrents on one page and the number of
+// entries the page contained before filtering.
+func (dl *DebridLink) getTorrents(page, perPage int) ([]*types.Torrent, int, error) {
 	torrents := make([]*types.Torrent, 0)
 	var res torrentInfo
 
@@ -546,22 +553,19 @@ func (dl *DebridLink) getTorrents(page, perPage int) ([]*types.Torrent, error) {
 
 	resp, err := dl.doGet("/seedbox/list", params, &res)
 	if err != nil {
-		return torrents, err
+		return torrents, 0, err
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return torrents, fmt.Errorf("debridlink API error: Status: %d", resp.StatusCode)
+		return torrents, 0, fmt.Errorf("debridlink API error: Status: %d", resp.StatusCode)
 	}
 
 	if !res.Success || res.Value == nil {
-		return nil, fmt.Errorf("error getting torrents")
+		return nil, 0, fmt.Errorf("error getting torrents")
 	}
 
 	data := *res.Value
 
-	if len(data) == 0 {
-		return torrents, nil
-	}
 	for _, t := range data {
 		if t.Status != 100 {
 			continue
@@ -608,7 +612,7 @@ func (dl *DebridLink) getTorrents(page, perPage int) ([]*types.Torrent, error) {
 		torrents = append(torrents, torrent)
 	}
 
-	return torrents, nil
+	return torrents, len(data), nil
 }
 
 func (dl *DebridLink) CheckFile(ctx context.Context, _, link string) error {

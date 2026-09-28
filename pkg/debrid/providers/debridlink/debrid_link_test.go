@@ -41,7 +41,7 @@ func TestTorrentResponses(t *testing.T) {
 				var torrent *types.Torrent
 				if list {
 					var torrents []*types.Torrent
-					torrents, err = provider.getTorrents(1, 100)
+					torrents, _, err = provider.getTorrents(1, 100)
 					if err == nil && len(torrents) == 1 {
 						torrent = torrents[0]
 					}
