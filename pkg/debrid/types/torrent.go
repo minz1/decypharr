@@ -185,3 +185,28 @@ type SpeedTestResult struct {
 	TestedAt  time.Time `json:"tested_at"`
 	Error     string    `json:"error,omitempty"`
 }
+
+// ProfileCache memoizes a provider profile and is safe for concurrent use.
+// The zero value is empty and ready to use.
+type ProfileCache struct {
+	mu      sync.Mutex
+	profile *Profile
+	fetched time.Time
+}
+
+// Get returns the cached profile while it is younger than ttl (ttl <= 0 never
+// expires) and otherwise refreshes it with fetch. Each caller receives its own
+// copy, so callers may modify the result.
+func (c *ProfileCache) Get(ttl time.Duration, fetch func() (*Profile, error)) (*Profile, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.profile == nil || (ttl > 0 && time.Since(c.fetched) >= ttl) {
+		profile, err := fetch()
+		if err != nil {
+			return nil, err
+		}
+		c.profile, c.fetched = profile, time.Now()
+	}
+	profile := *c.profile
+	return &profile, nil
+}

@@ -51,7 +51,7 @@ type Torbox struct {
 	client                *request.Client
 	submitClient          *request.Client
 	logger                zerolog.Logger
-	Profile               *types.Profile
+	profile               types.ProfileCache
 	config                config.Debrid
 	downloadPresentMu     sync.Mutex
 	downloadPresent       map[string]bool // torrent ID -> download_present; nil until loaded
@@ -708,10 +708,12 @@ func (tb *Torbox) GetAvailableSlots() (int, error) {
 	return accountSlots, nil
 }
 
+// GetProfile returns the account profile, fetched once and then cached.
 func (tb *Torbox) GetProfile() (*types.Profile, error) {
-	if tb.Profile != nil {
-		return tb.Profile, nil
-	}
+	return tb.profile.Get(0, tb.fetchProfile)
+}
+
+func (tb *Torbox) fetchProfile() (*types.Profile, error) {
 	var data ProfileResponse
 
 	resp, err := tb.doGet("/api/user/me", map[string]string{"settings": "true"}, &data)
@@ -751,8 +753,6 @@ func (tb *Torbox) GetProfile() (*types.Profile, error) {
 	default:
 		profile.Type = "free"
 	}
-
-	tb.Profile = profile
 
 	return profile, nil
 }

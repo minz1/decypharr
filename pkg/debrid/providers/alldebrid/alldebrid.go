@@ -34,7 +34,7 @@ type AllDebrid struct {
 	noPeerRetryBackoff    []time.Duration
 	client                *request.Client
 	repairClient          *request.Client
-	Profile               *types.Profile `json:"profile"`
+	profile               types.ProfileCache
 	logger                zerolog.Logger
 	config                config.Debrid
 }
@@ -684,10 +684,12 @@ func (ad *AllDebrid) GetAvailableSlots() (int, error) {
 	return config.DefaultAvailableSlots, nil
 }
 
+// GetProfile returns the account profile, fetched once and then cached.
 func (ad *AllDebrid) GetProfile() (*types.Profile, error) {
-	if ad.Profile != nil {
-		return ad.Profile, nil
-	}
+	return ad.profile.Get(0, ad.fetchProfile)
+}
+
+func (ad *AllDebrid) fetchProfile() (*types.Profile, error) {
 	var res UserProfileResponse
 
 	resp, err := ad.doRequest(context.Background(), ad.client, "/user", nil, &res)
@@ -724,7 +726,6 @@ func (ad *AllDebrid) GetProfile() (*types.Profile, error) {
 	} else {
 		profile.Type = "free"
 	}
-	ad.Profile = profile
 	return profile, nil
 }
 
