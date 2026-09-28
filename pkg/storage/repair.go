@@ -281,6 +281,7 @@ func (s *Storage) SaveEntryHealth(state *EntryHealth) error {
 	}
 	// Index the status so CountEntryHealthByStatus can build its histogram
 	// straight from the in-memory index without decoding every record.
+	defer s.invalidateHealthCounts()
 	return s.repairState.Put(state.EntryName, data, &appendstore.PutOptions{Attributes: map[string]string{
 		attributeStatus: string(state.Status),
 	}})
@@ -321,6 +322,7 @@ func (s *Storage) DeleteEntryHealth(entryName string) error {
 	if entryName == "" {
 		return nil
 	}
+	defer s.invalidateHealthCounts()
 	if err := s.repairState.Delete(entryName); err != nil && !errors.Is(err, appendstore.ErrKeyNotFound) {
 		return fmt.Errorf("delete health for %q: %w", entryName, err)
 	}
@@ -446,6 +448,14 @@ func (s *Storage) CountEntryHealthByStatus() map[HealthStatus]int {
 	out := make(map[HealthStatus]int, len(counts))
 	maps.Copy(out, counts)
 	return out
+}
+
+// invalidateHealthCounts drops the cached histogram so the next
+// CountEntryHealthByStatus reflects the mutation that just happened.
+func (s *Storage) invalidateHealthCounts() {
+	s.healthCountsMu.Lock()
+	s.healthCounts = nil
+	s.healthCountsMu.Unlock()
 }
 
 // EntryItemRepairFingerprint produces a deterministic hash of the file set
