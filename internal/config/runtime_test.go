@@ -1,9 +1,9 @@
 package config
 
 import (
-	"fmt"
 	"os"
 	"slices"
+	"strconv"
 	"sync"
 	"testing"
 )
@@ -50,7 +50,7 @@ func TestConcurrentConfigUpdatesKeepAllChanges(t *testing.T) {
 	for i := range 12 {
 		wg.Go(func() {
 			_, err := Update(
-				func(next *Config) error { next.Categories = append(next.Categories, fmt.Sprint(i)); return nil },
+				func(next *Config) error { next.Categories = append(next.Categories, strconv.Itoa(i)); return nil },
 			)
 			if err != nil {
 				t.Error(err)

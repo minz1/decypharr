@@ -9,7 +9,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/config"
 )
 
-// SetupState tracks the current setup wizard state
+// SetupState tracks the current setup wizard state.
 type SetupState struct {
 	Completed      bool   `json:"completed"`
 	CurrentStep    int    `json:"current_step"`
@@ -23,13 +23,13 @@ type SetupState struct {
 	CacheDir       string `json:"cache_dir,omitempty"`
 }
 
-// SetupWizardRequest represents a request from the setup wizard
+// SetupWizardRequest represents a request from the setup wizard.
 type SetupWizardRequest struct {
 	Step int            `json:"step"`
 	Data map[string]any `json:"data"`
 }
 
-// SetupWizardResponse represents the response from setup wizard
+// SetupWizardResponse represents the response from setup wizard.
 type SetupWizardResponse struct {
 	Success      bool        `json:"success"`
 	Message      string      `json:"message,omitempty"`
@@ -43,7 +43,7 @@ type SetupWizardResponse struct {
 	ConfigLoaded bool        `json:"config_loaded,omitempty"`
 }
 
-// SetupHandler renders the setup wizard page
+// SetupHandler renders the setup wizard page.
 func (s *Server) SetupHandler(w http.ResponseWriter, r *http.Request) {
 	cfg := config.Get()
 
@@ -62,7 +62,7 @@ func (s *Server) SetupHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// sendSetupError sends an error response
+// sendSetupError sends an error response.
 func (s *Server) sendSetupError(w http.ResponseWriter, message string, err error) {
 	response := SetupWizardResponse{
 		Success: false,
@@ -77,7 +77,7 @@ func (s *Server) sendSetupError(w http.ResponseWriter, message string, err error
 	_ = json.NewEncoder(w).Encode(response)
 }
 
-// SetupCompleteRequest represents the complete setup data from frontend
+// SetupCompleteRequest represents the complete setup data from frontend.
 type SetupCompleteRequest struct {
 	Auth struct {
 		Username  string `json:"username,omitempty"`
@@ -111,7 +111,7 @@ type SetupCompleteRequest struct {
 	} `json:"mount"`
 }
 
-// setupCompleteHandler handles the complete setup in a single request
+// setupCompleteHandler handles the complete setup in a single request.
 func (s *Server) setupCompleteHandler(w http.ResponseWriter, r *http.Request) {
 	cfg := config.Get()
 	// Prevent re-running setup once it has already been completed

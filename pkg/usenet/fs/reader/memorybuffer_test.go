@@ -304,14 +304,14 @@ func TestRetentionStorageTiers(t *testing.T) {
 			t.Cleanup(func() { _ = cache.Close() })
 
 			data := make([]byte, segSize)
-			for i := 0; i < segCount; i++ {
+			for i := range segCount {
 				for j := range data {
 					data[j] = byte(i + j)
 				}
 				putSegment(t, cache, i, data)
 			}
 			got := make([]byte, segSize)
-			for i := 0; i < segCount; i++ {
+			for i := range segCount {
 				n, ok := cache.ReadRangeInto(i, 0, segSize, got)
 				if !ok || n != segSize {
 					t.Fatalf("ReadRangeInto(%d) = %d, %v", i, n, ok)

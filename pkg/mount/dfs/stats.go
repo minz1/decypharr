@@ -5,7 +5,7 @@ import (
 )
 
 // Stats provides unified statistics across all DFS mounts
-// This aggregates stats from all mounted filesystems into a single view
+// This aggregates stats from all mounted filesystems into a single view.
 type Stats struct {
 	// Disk cache statistics
 	CacheDirSize  atomic.Int64 // Total bytes used across all mounts
@@ -21,7 +21,7 @@ type Stats struct {
 	BufferSize    int64
 }
 
-// MountStats represents statistics for a single mount
+// MountStats represents statistics for a single mount.
 type MountStats struct {
 	Name      string
 	Type      string

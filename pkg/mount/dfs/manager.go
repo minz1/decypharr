@@ -16,7 +16,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/vfs"
 )
 
-// Manager manages FUSE filesystem instances with proper caching
+// Manager manages FUSE filesystem instances with proper caching.
 type Manager struct {
 	manager            *manager.Manager
 	logger             zerolog.Logger
@@ -27,7 +27,7 @@ type Manager struct {
 	vfs                *vfs.Manager
 }
 
-// NewManager creates a new  FUSE filesystem manager
+// NewManager creates a new  FUSE filesystem manager.
 func NewManager(manager *manager.Manager) *Manager {
 	fuseConfig := fuseconfig.ParseFuseConfig()
 
@@ -40,7 +40,7 @@ func NewManager(manager *manager.Manager) *Manager {
 	return m
 }
 
-// Start starts the FUSE filesystem manager
+// Start starts the FUSE filesystem manager.
 func (m *Manager) Start(ctx context.Context) error {
 	// Create VFS manager
 
@@ -75,7 +75,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop stops the  FUSE filesystem manager
+// Stop stops the  FUSE filesystem manager.
 func (m *Manager) Stop() error {
 	if m.backend == nil {
 		m.logger.Info().Msg("Backend not initialized, nothing to stop")
@@ -110,7 +110,7 @@ func (m *Manager) Refresh(dirs []string) error {
 	return nil
 }
 
-// Stats returns unified statistics across all DFS mounts
+// Stats returns unified statistics across all DFS mounts.
 func (m *Manager) Stats() map[string]any {
 	// Aggregate stats from all mounts
 	stats := map[string]any{

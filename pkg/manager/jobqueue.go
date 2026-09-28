@@ -16,7 +16,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/usenet/parser"
 )
 
-// JobType represents the type of processing job
+// JobType represents the type of processing job.
 type JobType string
 
 const (
@@ -24,7 +24,7 @@ const (
 	JobTypeNZB     JobType = "nzb"
 )
 
-// Job represents a unified processing job for both torrents and NZBs
+// Job represents a unified processing job for both torrents and NZBs.
 type Job struct {
 	ID             string
 	Type           JobType
@@ -37,7 +37,7 @@ type Job struct {
 	CreatedAt      time.Time
 }
 
-// NewJob creates a new job
+// NewJob creates a new job.
 func NewJob(jobType JobType, req *ImportRequest) *Job {
 	id := ""
 	if req != nil {
@@ -71,7 +71,7 @@ type JobQueue struct {
 	cancel      context.CancelFunc
 }
 
-// NewJobQueue creates a new unified job queue with the given number of workers
+// NewJobQueue creates a new unified job queue with the given number of workers.
 func NewJobQueue(ctx context.Context, maxWorkers int, processFunc func(ctx context.Context, job *Job)) *JobQueue {
 	if maxWorkers <= 0 {
 		maxWorkers = 5
@@ -89,7 +89,7 @@ func NewJobQueue(ctx context.Context, maxWorkers int, processFunc func(ctx conte
 	q.cond = sync.NewCond(&q.mu)
 
 	// Start worker goroutines
-	for i := 0; i < maxWorkers; i++ {
+	for i := range maxWorkers {
 		q.wg.Add(1)
 		go q.worker(i)
 	}
@@ -98,7 +98,7 @@ func NewJobQueue(ctx context.Context, maxWorkers int, processFunc func(ctx conte
 	return q
 }
 
-// Submit adds a job to the queue (never blocks)
+// Submit adds a job to the queue (never blocks).
 func (q *JobQueue) Submit(job *Job) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -117,7 +117,7 @@ func (q *JobQueue) Submit(job *Job) error {
 	return nil
 }
 
-// Len returns the current number of pending jobs
+// Len returns the current number of pending jobs.
 func (q *JobQueue) Len() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -145,7 +145,7 @@ func (q *JobQueue) Retry(job *Job, delay time.Duration) {
 	}()
 }
 
-// Close signals all workers to stop and waits for them to finish
+// Close signals all workers to stop and waits for them to finish.
 func (q *JobQueue) Close() {
 	q.mu.Lock()
 	q.closed = true
@@ -156,7 +156,7 @@ func (q *JobQueue) Close() {
 	q.logger.Info().Msg("Job queue stopped")
 }
 
-// worker is the main loop for a single worker goroutine
+// worker is the main loop for a single worker goroutine.
 func (q *JobQueue) worker(id int) {
 	defer q.wg.Done()
 
@@ -232,7 +232,7 @@ func (q *JobQueue) DeleteJob(jobID string) bool {
 	return false
 }
 
-// FindJob returns a pending job by ID without removing it
+// FindJob returns a pending job by ID without removing it.
 func (q *JobQueue) FindJob(jobID string) *Job {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -245,7 +245,7 @@ func (q *JobQueue) FindJob(jobID string) *Job {
 	return nil
 }
 
-// PendingCount returns the count of pending jobs, optionally filtered by type
+// PendingCount returns the count of pending jobs, optionally filtered by type.
 func (q *JobQueue) PendingCount(jobType JobType) int {
 	q.mu.Lock()
 	defer q.mu.Unlock()

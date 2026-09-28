@@ -615,10 +615,8 @@ func TestPoolDiskBackstopPunchesBehindHead(t *testing.T) {
 	}
 
 	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if p.Stats().DiskInUse <= 9<<20 { // limit + 1MB slack for in-flight accounting
-			break
-		}
+	for p.Stats().DiskInUse > 9<<20 {
+
 		if time.Now().After(deadline) {
 			t.Fatalf("disk backstop never reclaimed: pool=%+v", p.Stats())
 		}

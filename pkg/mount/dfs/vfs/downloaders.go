@@ -20,24 +20,24 @@ import (
 )
 
 const (
-	// maxDownloaderIdleTime is how long a downloader waits before stopping
+	// maxDownloaderIdleTime is how long a downloader waits before stopping.
 	maxDownloaderIdleTime = 5 * time.Second
-	// maxSkipBytes is how far a downloader will skip before restarting
+	// maxSkipBytes is how far a downloader will skip before restarting.
 	maxSkipBytes = 1 << 20 // 1MB
-	// maxErrorCount is the number of errors before giving up
+	// maxErrorCount is the number of errors before giving up.
 	maxErrorCount = 10
-	// downloaderWindow is how close a read must be to reuse a downloader
+	// downloaderWindow is how close a read must be to reuse a downloader.
 	downloaderWindow = 4 * 1024 * 1024 // 4MB
 	// probeChunkSize is the (small) initial chunk a priority downloader uses.
 	// Latency-sensitive probe reads (ffprobe seeking to the moov atom near EOF)
 	// must return a few bytes fast and release the NNTP connection quickly,
 	// instead of being bundled behind a multi-MB read-ahead chunk.
 	probeChunkSize = 1 * 1024 * 1024 // 1MB
-	// kickerInterval is how often the safety-net ticker checks waiters and idle timeout
+	// kickerInterval is how often the safety-net ticker checks waiters and idle timeout.
 	kickerInterval = 5 * time.Second
 	// activeWaiterKickerInterval is the faster fallback cadence while readers are blocked.
 	activeWaiterKickerInterval = 1 * time.Second
-	// idleTimeout is how long before stopping all downloaders due to inactivity
+	// idleTimeout is how long before stopping all downloaders due to inactivity.
 	idleTimeout = 30 * time.Second
 	// circuitCooldownDuration is how long to block requests after max errors
 	// reached. Kept short: a probe-heavy workload (Sonarr/Radarr library
@@ -59,7 +59,7 @@ const (
 	readAheadPokeInterval = 1 << 20
 )
 
-// Downloaders coordinates multiple concurrent downloads to a cache item
+// Downloaders coordinates multiple concurrent downloads to a cache item.
 type Downloaders struct {
 	parentCtx     context.Context
 	ctx           context.Context
@@ -156,7 +156,7 @@ func (dls *Downloaders) untrackStreamLocked() {
 	dls.streamID = ""
 }
 
-// waiter represents a caller waiting for a range to be downloaded
+// waiter represents a caller waiting for a range to be downloaded.
 type waiter struct {
 	r       ranges.Range
 	errChan chan<- error
@@ -166,7 +166,7 @@ type waiter struct {
 	priority bool
 }
 
-// downloader represents a single download goroutine
+// downloader represents a single download goroutine.
 type downloader struct {
 	dls    *Downloaders
 	quit   chan struct{}
@@ -322,7 +322,7 @@ func (dls *Downloaders) waiterReadLimit(off int64) int64 {
 	return end - off
 }
 
-// NewDownloaders creates a new download coordinator
+// NewDownloaders creates a new download coordinator.
 func NewDownloaders(ctx context.Context, mgr Backend, item *CacheItem, cfg *fuseconfig.FuseConfig) *Downloaders {
 	parentCtx := ctx
 	ctx, cancel := context.WithCancel(parentCtx)
@@ -694,7 +694,7 @@ func (dls *Downloaders) kickExistingDownloaderLocked(pos int64) {
 	dl.setMaxOffset(offset) // kick without extending
 }
 
-// newDownloaderLocked creates and starts a new downloader
+// newDownloaderLocked creates and starts a new downloader.
 func (dls *Downloaders) newDownloaderLocked(r ranges.Range, targetEnd int64, priority bool) error {
 	baseChunk := dls.chunkSize
 	if baseChunk <= 0 {
@@ -746,7 +746,7 @@ func (dls *Downloaders) newDownloaderLocked(r ranges.Range, targetEnd int64, pri
 	return nil
 }
 
-// removeClosed removes closed downloaders from the list
+// removeClosed removes closed downloaders from the list.
 func (dls *Downloaders) removeClosed() {
 	newDls := dls.dls[:0]
 	for _, dl := range dls.dls {
@@ -797,7 +797,7 @@ func (dls *Downloaders) countErrors(n int64, err error) {
 	}
 }
 
-// kickWaiters checks all waiters and fulfills completed ones
+// kickWaiters checks all waiters and fulfills completed ones.
 func (dls *Downloaders) kickWaiters() {
 	dls.mu.Lock()
 	defer dls.mu.Unlock()
@@ -873,7 +873,7 @@ func (dls *Downloaders) kickWaiters() {
 	}
 }
 
-// Close stops all downloaders and returns unfulfilled waiters with error
+// Close stops all downloaders and returns unfulfilled waiters with error.
 func (dls *Downloaders) Close(inErr error) error {
 	dls.mu.Lock()
 	if dls.closed {
@@ -928,12 +928,12 @@ func (dls *Downloaders) Close(inErr error) error {
 	return nil
 }
 
-// touchActivity updates the last activity timestamp
+// touchActivity updates the last activity timestamp.
 func (dls *Downloaders) touchActivity() {
 	dls.lastActivity.Store(time.Now().UnixNano())
 }
 
-// isCircuitOpen returns true if the circuit breaker is open and cooldown hasn't expired
+// isCircuitOpen returns true if the circuit breaker is open and cooldown hasn't expired.
 func (dls *Downloaders) isCircuitOpen() bool {
 	if !dls.circuitOpen.Load() {
 		return false
@@ -981,7 +981,7 @@ func (dls *Downloaders) resetCircuitLocked() {
 	dls.item.cache.circuitBreakers.Add(-1)
 }
 
-// checkIdleTimeout returns true if idle timeout has been reached and stops all downloaders
+// checkIdleTimeout returns true if idle timeout has been reached and stops all downloaders.
 func (dls *Downloaders) checkIdleTimeout() bool {
 	dls.mu.Lock()
 	defer dls.mu.Unlock()
@@ -1168,7 +1168,7 @@ func (dls *Downloaders) startKicker() {
 
 // downloader methods
 
-// run is the main download loop
+// run is the main download loop.
 func (dl *downloader) run() (totalBytes int64, err error) {
 	for {
 		// Single lock to get all state
@@ -1211,7 +1211,7 @@ func (dl *downloader) run() (totalBytes int64, err error) {
 	}
 }
 
-// getState returns current download state with single lock acquisition
+// getState returns current download state with single lock acquisition.
 func (dl *downloader) getState() (start, targetEnd, chunkSize, fileSize int64, stopped bool) {
 	dl.mu.Lock()
 	defer dl.mu.Unlock()
@@ -1230,7 +1230,7 @@ func (dl *downloader) getState() (start, targetEnd, chunkSize, fileSize int64, s
 	return dl.offset, targetEnd, chunkSize, fileSize, dl.stopped
 }
 
-// waitForWork blocks until new work arrives or timeout
+// waitForWork blocks until new work arrives or timeout.
 func (dl *downloader) waitForWork() bool {
 	if dl.idleTimer == nil {
 		dl.idleTimer = time.NewTimer(maxDownloaderIdleTime)
@@ -1253,7 +1253,7 @@ func (dl *downloader) waitForWork() bool {
 	}
 }
 
-// downloadChunkWithRetry downloads a chunk with retry logic
+// downloadChunkWithRetry downloads a chunk with retry logic.
 func (dl *downloader) downloadChunkWithRetry(start, end int64) (int64, error) {
 	attempts := dl.retryAttempts()
 	chunkLen := end - start
@@ -1312,7 +1312,7 @@ func (dl *downloader) downloadChunkWithRetry(start, end int64) (int64, error) {
 	}
 }
 
-// getRange returns the current download range
+// getRange returns the current download range.
 func (dl *downloader) getRange() (start, offset int64) {
 	dl.mu.Lock()
 	defer dl.mu.Unlock()
@@ -1463,7 +1463,7 @@ func (dl *downloader) streamChunk(start, end int64) (int64, error) {
 	return writer.written, nil
 }
 
-// setMaxOffset extends the download range
+// setMaxOffset extends the download range.
 func (dl *downloader) setMaxOffset(max int64) {
 	dl.mu.Lock()
 	advanced := max > dl.maxOffset
@@ -1540,7 +1540,7 @@ func (dl *downloader) stop() {
 	}
 }
 
-// close marks the downloader as closed
+// close marks the downloader as closed.
 func (dl *downloader) close() {
 	dl.mu.Lock()
 	dl.closed = true
@@ -1553,7 +1553,7 @@ func (dl *downloader) close() {
 	}
 }
 
-// isClosed returns true if downloader is closed
+// isClosed returns true if downloader is closed.
 func (dl *downloader) isClosed() bool {
 	dl.mu.Lock()
 	defer dl.mu.Unlock()

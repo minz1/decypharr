@@ -20,7 +20,7 @@ var pctHex = "0123456789ABCDEF"
 func fastEscapePath(p string) string {
 	var b strings.Builder
 
-	for i := 0; i < len(p); i++ {
+	for i := range len(p) {
 		c := p[i]
 		// unreserved (plus '/')
 		if (c >= 'a' && c <= 'z') ||
@@ -107,7 +107,7 @@ func parseRange(s string, size int64) ([]httpRange, error) {
 	return ranges, nil
 }
 
-// Basic XML escaping function
+// Basic XML escaping function.
 func xmlEscape(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
@@ -144,7 +144,6 @@ func convertToXML(cleanPath string, currentInfo *manager.FileInfo, children []ma
 	}
 
 	for _, info := range children {
-
 		nm := info.Name()
 		// build raw href
 		href := path.Join("/", cleanPath, nm)

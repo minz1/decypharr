@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"path"
@@ -18,7 +19,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/usenet/types"
 )
 
-// RAR format constants
+// RAR format constants.
 const (
 	RAR5Signature = "Rar!\x1A\x07\x01\x00"
 	RAR4Signature = "Rar!\x1A\x07\x00"
@@ -72,7 +73,7 @@ const (
 	RAR4CompressionMethodStore = 0x30
 )
 
-// RARVersion represents the RAR format version
+// RARVersion represents the RAR format version.
 type RARVersion int
 
 const (
@@ -81,7 +82,7 @@ const (
 	RARVersionUnknown RARVersion = 0
 )
 
-// RARArchiveInfo contains information about the entire RAR archive
+// RARArchiveInfo contains information about the entire RAR archive.
 type RARArchiveInfo struct {
 	Version           RARVersion
 	IsMultiVol        bool
@@ -91,7 +92,7 @@ type RARArchiveInfo struct {
 	Files             []*RARFileEntry
 }
 
-// RARFileEntry represents a file within the RAR archive
+// RARFileEntry represents a file within the RAR archive.
 type RARFileEntry struct {
 	Name             string
 	UncompressedSize int64
@@ -107,14 +108,14 @@ type RARFileEntry struct {
 	VolumeIndex      int // Which volume this file starts in
 }
 
-// RARParser handles parsing RAR archives from usenet segments
+// RARParser handles parsing RAR archives from usenet segments.
 type RARParser struct {
 	source        ArticleSource
 	maxConcurrent int
 	logger        zerolog.Logger
 }
 
-// NewRARParser creates a new RAR parser
+// NewRARParser creates a new RAR parser.
 func NewRARParser(source ArticleSource, maxConcurrent int, logger zerolog.Logger) *RARParser {
 	return &RARParser{
 		source:        source,
@@ -257,7 +258,7 @@ func (p *RARParser) Process(ctx context.Context, group *FileGroup, password stri
 	return files, nil
 }
 
-// ParseArchive parses all volumes and extracts file information
+// ParseArchive parses all volumes and extracts file information.
 func (p *RARParser) parseArchive(
 	ctx context.Context,
 	volumes []*types.Volume,
@@ -416,7 +417,7 @@ func (p *RARParser) parseArchive(
 	return archiveInfo, nil
 }
 
-// detectRARVersion detects RAR version from signature
+// detectRARVersion detects RAR version from signature.
 func detectRARVersion(data []byte) RARVersion {
 	if len(data) >= 8 && bytes.Equal(data[:8], []byte(RAR5Signature)) {
 		return RARVersion5
@@ -428,7 +429,7 @@ func detectRARVersion(data []byte) RARVersion {
 }
 
 // parseRAR5Headers parses RAR 5.0 format headers by reading sequentially through the archive
-// This properly tracks offsets by reading headers and skipping data sections
+// This properly tracks offsets by reading headers and skipping data sections.
 func (p *RARParser) parseRAR5Headers(
 	data []byte,
 	volumeIndex int,
@@ -457,7 +458,7 @@ func (p *RARParser) parseRAR5Headers(
 		if err != nil {
 			// Any error reading headers means we've hit corrupt data or
 			// reached beyond our snippet - stop parsing this volume
-			if err == io.EOF || strings.Contains(err.Error(), "EOF") {
+			if errors.Is(err, io.EOF) || strings.Contains(err.Error(), "EOF") {
 				break
 			}
 			// Only log unexpected errors (not snippet boundary issues)
@@ -511,7 +512,7 @@ func (p *RARParser) parseRAR5Headers(
 	return files, nil
 }
 
-// rar5HeaderData represents a RAR 5.0 header
+// rar5HeaderData represents a RAR 5.0 header.
 type rar5HeaderData struct {
 	ExtraSize uint64
 	Type      uint64
@@ -519,7 +520,7 @@ type rar5HeaderData struct {
 	Data      []byte
 }
 
-// readRAR5Header reads a single RAR 5.0 header
+// readRAR5Header reads a single RAR 5.0 header.
 func (p *RARParser) readRAR5Header(r *bytes.Reader) (*rar5HeaderData, int, int64, error) {
 	startPos, _ := r.Seek(0, io.SeekCurrent)
 
@@ -748,7 +749,7 @@ func (p *RARParser) parseRAR5FileHeader(
 	}
 }
 
-// parseRAR4Headers parses RAR 4.x format headers
+// parseRAR4Headers parses RAR 4.x format headers.
 func (p *RARParser) parseRAR4Headers(data []byte, volumeIndex int, volumeName string) ([]*RARFileEntry, error) {
 	r := bytes.NewReader(data)
 
@@ -765,7 +766,7 @@ func (p *RARParser) parseRAR4Headers(data []byte, volumeIndex int, volumeName st
 	for r.Len() >= 7 {
 		header, err := p.readRAR4Header(r)
 		if err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			break
@@ -805,7 +806,7 @@ func (p *RARParser) parseRAR4Headers(data []byte, volumeIndex int, volumeName st
 	return files, nil
 }
 
-// rar4Header represents a RAR 4.x header
+// rar4Header represents a RAR 4.x header.
 type rar4Header struct {
 	CRC      uint16
 	Type     uint8
@@ -815,7 +816,7 @@ type rar4Header struct {
 	Data     []byte
 }
 
-// readRAR4Header reads a single RAR 4.x header
+// readRAR4Header reads a single RAR 4.x header.
 func (p *RARParser) readRAR4Header(r *bytes.Reader) (*rar4Header, error) {
 	var header rar4Header
 
@@ -874,7 +875,7 @@ func (p *RARParser) readRAR4Header(r *bytes.Reader) (*rar4Header, error) {
 	return &header, nil
 }
 
-// parseRAR4FileHeader parses RAR 4.x file header
+// parseRAR4FileHeader parses RAR 4.x file header.
 func (p *RARParser) parseRAR4FileHeader(
 	header *rar4Header,
 	volumeIndex int,
@@ -997,7 +998,7 @@ func (p *RARParser) parseRAR4FileHeader(
 	}
 }
 
-// buildVolumeOffsetMap builds a map of cumulative offsets for each volume
+// buildVolumeOffsetMap builds a map of cumulative offsets for each volume.
 func buildVolumeOffsetMap(volumeInfos []storage.ArchiveVolumeInfo) map[int]int64 {
 	offsetMap := make(map[int]int64)
 	var cumulativeOffset int64
@@ -1012,7 +1013,7 @@ func buildVolumeOffsetMap(volumeInfos []storage.ArchiveVolumeInfo) map[int]int64
 
 // buildSegmentsForFile builds the segment list for a file across all its RAR volume parts
 // CRITICAL: part.DataOffset is the offset WITHIN the decoded RAR volume file
-// We need to map this to the actual NNTP segment that contains that byte
+// We need to map this to the actual NNTP segment that contains that byte.
 func (p *RARParser) buildSegmentsForFile(
 	rarFile *RARFileEntry,
 	segmentIndex *segmentLayout,
@@ -1116,7 +1117,7 @@ func (p *RARParser) buildSegmentsForIndexedVolumePart(
 
 // aggregateFileParts combines file parts across volumes for multi-volume RAR archives
 // When a file spans multiple RAR volumes, each volume contains a file header for the continuation
-// This function merges these into a single RARFileEntry with all volume parts
+// This function merges these into a single RARFileEntry with all volume parts.
 func (p *RARParser) aggregateFileParts(rawFiles []*RARFileEntry) []*RARFileEntry {
 	if len(rawFiles) == 0 {
 		return nil

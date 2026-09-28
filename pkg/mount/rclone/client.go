@@ -14,7 +14,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/utils"
 )
 
-// mountWithRetry attempts to mount with retry logic using avast/retry-go
+// mountWithRetry attempts to mount with retry logic using avast/retry-go.
 func (m *Manager) mountWithRetry(ctx context.Context, maxRetries int) error {
 	return retry.Do(
 		func() error {
@@ -29,7 +29,7 @@ func (m *Manager) mountWithRetry(ctx context.Context, maxRetries int) error {
 	)
 }
 
-// performMount performs a single mount attempt
+// performMount performs a single mount attempt.
 func (m *Manager) performMount(ctx context.Context) error {
 	cfg := config.Get().Mount
 
@@ -102,7 +102,6 @@ func (m *Manager) performMount(ctx context.Context) error {
 
 	// AddOrUpdate VFS options if caching is enabled
 	if cfg.Rclone.VfsCacheMode != "off" {
-
 		if cfg.Rclone.VfsCacheMaxAge != "" {
 			vfsOpt["CacheMaxAge"] = cfg.Rclone.VfsCacheMaxAge
 		}
@@ -189,7 +188,7 @@ func (m *Manager) performMount(ctx context.Context) error {
 	return nil
 }
 
-// unmount is the internal unmount function
+// unmount is the internal unmount function.
 func (m *Manager) unmount(ctx context.Context) {
 	mountInfo := m.getMountInfo()
 
@@ -222,7 +221,7 @@ func (m *Manager) unmount(ctx context.Context) {
 	m.logger.Info().Msg("Unmount completed")
 }
 
-// createConfig creates an rclone config entry for the provider
+// createConfig creates an rclone config entry for the provider.
 func (m *Manager) createConfig() error {
 	args := map[string]any{
 		"name": ConfigName,
@@ -239,7 +238,7 @@ func (m *Manager) createConfig() error {
 	return nil
 }
 
-// forceUnmount attempts to force unmount a path using system commands
+// forceUnmount attempts to force unmount a path using system commands.
 func (m *Manager) forceUnmount(ctx context.Context) error {
 	mountPath := config.Get().Mount.MountPath
 	methods := [][]string{
@@ -264,7 +263,7 @@ func (m *Manager) forceUnmount(ctx context.Context) error {
 	return fmt.Errorf("all force unmount attempts failed for %s", mountPath)
 }
 
-// tryUnmountCommand tries to run an unmount command
+// tryUnmountCommand tries to run an unmount command.
 func (m *Manager) tryUnmountCommand(ctx context.Context, args ...string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("no command provided")

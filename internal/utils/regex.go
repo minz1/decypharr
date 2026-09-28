@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// videoExtensions is a set of known video file extensions (lowercase, without dot)
+// videoExtensions is a set of known video file extensions (lowercase, without dot).
 var videoExtensions = map[string]struct{}{
 	"webm": {}, "m4v": {}, "3gp": {}, "nsv": {}, "ty": {},
 	"rm": {}, "rmvb": {}, "ifo": {}, "mov": {}, "qt": {},
@@ -17,7 +17,7 @@ var videoExtensions = map[string]struct{}{
 	"ts": {}, "wtv": {}, "m2ts": {},
 }
 
-// mediaExtensions is a set of known media file extensions (lowercase, without dot)
+// mediaExtensions is a set of known media file extensions (lowercase, without dot).
 var mediaExtensions = func() map[string]struct{} {
 	m := map[string]struct{}{
 		"strm": {}, "m3u": {},

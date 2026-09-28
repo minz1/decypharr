@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -36,7 +37,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/version"
 )
 
-// Manager handles unified torrent management - replaces wire.Store completely
+// Manager handles unified torrent management - replaces wire.Store completely.
 type Manager struct {
 	storage      *storage.Storage
 	migrator     *migration.Migrator
@@ -122,7 +123,7 @@ type Manager struct {
 
 var _ repair.Backend = (*Manager)(nil)
 
-// New creates a new Manager instance
+// New creates a new Manager instance.
 func New() *Manager {
 	cfg := config.Get()
 	_logger := logger.New("manager")
@@ -336,7 +337,7 @@ func (m *Manager) initUsenet() {
 	m.usenet = usenetClient
 }
 
-// initLinkService initializes the link service
+// initLinkService initializes the link service.
 func (m *Manager) initLinkService() {
 	m.linkService = link.New(
 		m.clients,
@@ -461,13 +462,13 @@ func (m *Manager) migrate() {
 	m.logger.Info().Msg("Automatic migration started successfully")
 }
 
-// Start starts the manager and all its components
+// Start starts the manager and all its components.
 func (m *Manager) Start(ctx context.Context) error {
 	m.startTime = time.Now()
 	m.logger.Info().
 		Str("version", version.GetInfo().String()).
 		Str("mount_type", string(m.config.Mount.Type)).
-		Str("notifications", fmt.Sprintf("%v", m.Notifications.IsEnabled())).
+		Str("notifications", strconv.FormatBool(m.Notifications.IsEnabled())).
 		Str("mount_path", m.config.Mount.MountPath).
 		Msg("Starting manager")
 
@@ -529,7 +530,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop stops the manager and cleans up all resources
+// Stop stops the manager and cleans up all resources.
 func (m *Manager) Stop() error {
 	m.logger.Info().Msg("Stopping manager")
 	m.downloadMu.Lock()
@@ -601,7 +602,7 @@ func (m *Manager) Stop() error {
 }
 
 // Reset resets the manager with the new configuration
-// This is called after config changes (e.g., setup wizard) to apply new settings
+// This is called after config changes (e.g., setup wizard) to apply new settings.
 func (m *Manager) Reset() error {
 	m.logger.Info().Msg("Resetting manager with new configuration")
 
@@ -703,7 +704,7 @@ func (m *Manager) AddOrUpdate(entry *storage.Entry, callback func(t *storage.Ent
 	return nil
 }
 
-// GetEntry gets a torrent by name
+// GetEntry gets a torrent by name.
 func (m *Manager) GetEntry(infohash string) (*storage.Entry, error) {
 	return m.storage.Get(infohash)
 }
@@ -728,7 +729,7 @@ func (m *Manager) GetTorrentsCount() (int, error) {
 	return m.storage.Count()
 }
 
-// DeleteEntry deletes a torrent by infohash
+// DeleteEntry deletes a torrent by infohash.
 func (m *Manager) DeleteEntry(infohash string, removePlacements bool) error {
 	torr, err := m.GetEntry(infohash)
 	if err != nil {

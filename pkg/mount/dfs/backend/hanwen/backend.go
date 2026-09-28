@@ -24,13 +24,13 @@ import (
 
 const (
 	// ReadTimeout is the maximum time a single read operation can take
-	// Increased to 120s to handle slow debrid/CDN connections
+	// Increased to 120s to handle slow debrid/CDN connections.
 	ReadTimeout  = 120 * time.Second
 	AttrTimeout  = 30 * time.Second
 	EntryTimeout = 1 * time.Second
 )
 
-// Backend implements the hanwen/go-fuse backend
+// Backend implements the hanwen/go-fuse backend.
 type Backend struct {
 	config      *config.FuseConfig
 	logger      zerolog.Logger
@@ -41,7 +41,7 @@ type Backend struct {
 	vfs         *vfs.Manager
 }
 
-// NewBackend creates a new hanwen backend
+// NewBackend creates a new hanwen backend.
 func NewBackend(vfs *vfs.Manager, config *config.FuseConfig) (backend.Backend, error) {
 	now := time.Now()
 	log := logger.New("hanwen-backend")
@@ -58,7 +58,7 @@ func NewBackend(vfs *vfs.Manager, config *config.FuseConfig) (backend.Backend, e
 	}, nil
 }
 
-// Mount mounts the filesystem using hanwen/go-fuse
+// Mount mounts the filesystem using hanwen/go-fuse.
 func (b *Backend) Mount(ctx context.Context) error {
 	// Create mount point if it doesn't exist(skip if on Windows)
 
@@ -217,7 +217,7 @@ func (b *Backend) Mount(ctx context.Context) error {
 	return nil
 }
 
-// Unmount unmounts the filesystem
+// Unmount unmounts the filesystem.
 func (b *Backend) Unmount(ctx context.Context) error {
 	b.logger.Info().Msg("Unmounting hanwen backend")
 	if b.unmountFunc != nil {
@@ -236,7 +236,7 @@ func (b *Backend) Unmount(ctx context.Context) error {
 	return nil
 }
 
-// WaitReady waits for the mount to be ready
+// WaitReady waits for the mount to be ready.
 func (b *Backend) WaitReady(ctx context.Context) error {
 	if b.server == nil {
 		return fmt.Errorf("server not initialized")
@@ -244,12 +244,12 @@ func (b *Backend) WaitReady(ctx context.Context) error {
 	return b.server.WaitMount()
 }
 
-// IsReady returns true if the mount is ready
+// IsReady returns true if the mount is ready.
 func (b *Backend) IsReady() bool {
 	return b.ready.Load()
 }
 
-// Type returns the backend type
+// Type returns the backend type.
 func (b *Backend) Type() backend.Type {
 	return backend.Hanwen
 }
@@ -264,7 +264,7 @@ func (b *Backend) Refresh(dir string) {
 	}
 }
 
-// forceUnmount attempts to force unmount a path using system commands
+// forceUnmount attempts to force unmount a path using system commands.
 func (b *Backend) forceUnmount(ctx context.Context) {
 	methods := [][]string{
 		{"umount", b.config.MountPath},
@@ -287,7 +287,7 @@ func (b *Backend) forceUnmount(ctx context.Context) {
 	}
 }
 
-// tryUnmountCommand tries to run an unmount command
+// tryUnmountCommand tries to run an unmount command.
 func (b *Backend) tryUnmountCommand(ctx context.Context, args ...string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("no command provided")

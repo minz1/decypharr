@@ -26,7 +26,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/utils"
 )
 
-// ProviderPool manages connections for a single provider using a LIFO stack
+// ProviderPool manages connections for a single provider using a LIFO stack.
 type ProviderPool struct {
 	conns       []*connectionEntry // Stack: Push/Pop from end
 	mu          sync.Mutex         // Protects conns slice only
@@ -149,7 +149,7 @@ type Client struct {
 	keepalivePing  time.Duration // budget for a reaper keepalive ping
 }
 
-// SpeedTestResult holds the result of a provider speed test
+// SpeedTestResult holds the result of a provider speed test.
 type SpeedTestResult struct {
 	Provider  string    `json:"provider"`
 	SpeedMBps float64   `json:"speed_mbps"`
@@ -159,7 +159,7 @@ type SpeedTestResult struct {
 	Error     string    `json:"error,omitempty"`
 }
 
-// connectionEntry tracks a connection and its provider
+// connectionEntry tracks a connection and its provider.
 type connectionEntry struct {
 	conn     *Connection
 	provider config.UsenetProvider
@@ -258,7 +258,7 @@ var DefaultTimeouts = TimeoutConfig{
 	ReaperInterval:       5 * time.Second,
 }
 
-// Package-level timeouts used by all clients
+// Package-level timeouts used by all clients.
 var timeouts = normalizeTimeouts(DefaultTimeouts)
 
 func normalizeTimeouts(in TimeoutConfig) TimeoutConfig {
@@ -331,7 +331,7 @@ func buildPools(providers []config.UsenetProvider) (map[string]*ProviderPool, []
 	return pools, ordered
 }
 
-// NewClient creates a new connection manager
+// NewClient creates a new connection manager.
 func NewClient(cfg *config.Config) (*Client, error) {
 	providers := cfg.Usenet.Providers
 	if len(providers) == 0 {
@@ -444,7 +444,7 @@ func (c *Client) put(conn *Connection, provider config.UsenetProvider) {
 	c.releaseSlot(pp) // connection is now available for reuse
 }
 
-// release closes a connection without returning it (for error cases)
+// release closes a connection without returning it (for error cases).
 func (c *Client) release(conn *Connection) {
 	if conn != nil {
 		_ = conn.Close()
@@ -514,7 +514,7 @@ func IsAllProvidersFailed(err error) bool {
 	return errors.Is(err, ErrAllProvidersFailed)
 }
 
-// returnOrReleaseConn returns a connection to the pool or releases it if closed
+// returnOrReleaseConn returns a connection to the pool or releases it if closed.
 func (c *Client) returnOrReleaseConn(conn *Connection, provider config.UsenetProvider) {
 	if conn == nil {
 		return
@@ -586,7 +586,7 @@ func (c *Client) getConnectionFromProvider(
 	return conn, provider, nil
 }
 
-// safeExecute wraps fn execution with panic recovery
+// safeExecute wraps fn execution with panic recovery.
 func (c *Client) safeExecute(conn *Connection, fn func(conn *Connection) error) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -642,7 +642,6 @@ func (c *Client) getAnyAvailableConnectionInTier(
 	exclusions providerExclusions,
 	useBackups bool,
 ) (*Connection, config.UsenetProvider, error) {
-
 	// Cooldowns are advisory reroutes, never a denial of service: skip a
 	// cooling-down provider only when some other eligible provider is warm
 	// (see ProviderPool.isWarm). When the whole tier is cold, dial anyway —
@@ -931,7 +930,7 @@ func (c *Client) tuneTCP(tcpConn *net.TCPConn) {
 	}
 }
 
-// createConnection creates a new NNTP connection to a provider
+// createConnection creates a new NNTP connection to a provider.
 func (c *Client) createConnection(ctx context.Context, provider config.UsenetProvider) (*Connection, error) {
 	address := fmt.Sprintf("%s:%d", provider.Host, provider.Port)
 
@@ -1031,7 +1030,7 @@ func (c *Client) createConnection(ctx context.Context, provider config.UsenetPro
 	return conn, nil
 }
 
-// reaper periodically closes idle connections
+// reaper periodically closes idle connections.
 func (c *Client) reaper() {
 	ticker := time.NewTicker(timeouts.ReaperInterval)
 	defer ticker.Stop()
@@ -1229,7 +1228,7 @@ func (c *Client) keepAlive(pp *ProviderPool, entry *connectionEntry, now time.Ti
 	return nil
 }
 
-// Stats returns current pool statistics
+// Stats returns current pool statistics.
 func (c *Client) Stats() map[string]any {
 	if c.closed.Load() {
 		return nil
@@ -1668,7 +1667,7 @@ func (c *Client) batchStatOnProvider(
 	return results, nil
 }
 
-// Close shuts down the connection manager
+// Close shuts down the connection manager.
 func (c *Client) Close() error {
 	if c.closed.Swap(true) {
 		return nil
@@ -1801,7 +1800,7 @@ func (c *Client) SpeedTest(ctx context.Context, providerID string, messageID str
 	return result
 }
 
-// GetSpeedTestResults returns all stored speed test results
+// GetSpeedTestResults returns all stored speed test results.
 func (c *Client) GetSpeedTestResults() map[string]SpeedTestResult {
 	results := make(map[string]SpeedTestResult)
 	c.speedTestResults.Range(func(host string, result SpeedTestResult) bool {

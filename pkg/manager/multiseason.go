@@ -2,6 +2,7 @@ package manager
 
 import (
 	"crypto/md5"
+	"encoding/hex"
 	"fmt"
 	"maps"
 	"regexp"
@@ -14,9 +15,9 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
-// Multi-season detection patterns
+// Multi-season detection patterns.
 var (
-	// Pre-compiled patterns for multi-season replacement
+	// Pre-compiled patterns for multi-season replacement.
 	multiSeasonReplacements = []multiSeasonPattern{
 		// S01-08 -> S01 (or whatever target season)
 		{regexp.MustCompile(`(?i)S(\d{1,2})-\d{1,2}`), "S%02d"},
@@ -37,7 +38,7 @@ var (
 		{regexp.MustCompile(`(?i)All\.?Seasons?`), "Season %02d"},
 	}
 
-	// Also pre-compile other patterns
+	// Also pre-compile other patterns.
 	seasonPattern     = regexp.MustCompile(`(?i)(?:season\.?\s*|s)(\d{1,2})`)
 	qualityIndicators = regexp.MustCompile(`(?i)\b(2160p|1080p|720p|BluRay|WEB-DL|HDTV|x264|x265|HEVC)`)
 
@@ -55,7 +56,7 @@ type multiSeasonPattern struct {
 	replacement string
 }
 
-// SeasonInfo represents information about a season in a multi-season torrent
+// SeasonInfo represents information about a season in a multi-season torrent.
 type SeasonInfo struct {
 	SeasonNumber int
 	Files        []*storage.File
@@ -63,7 +64,7 @@ type SeasonInfo struct {
 	Name         string
 }
 
-// convertToMultiSeason converts a normal torrent to a multi-season torrents
+// convertToMultiSeason converts a normal torrent to a multi-season torrents.
 func convertToMultiSeason(torrent *storage.Entry, seasons []SeasonInfo) []*storage.Entry {
 	seasonResults := make([]*storage.Entry, 0, len(seasons))
 	for _, seasonInfo := range seasons {
@@ -163,7 +164,7 @@ func findAllSeasons(files []*storage.File) map[int]bool {
 	return seasons
 }
 
-// extractSeason pulls season number from a string
+// extractSeason pulls season number from a string.
 func extractSeason(text string) int {
 	matches := seasonPattern.FindStringSubmatch(text)
 	if len(matches) > 1 {
@@ -183,7 +184,7 @@ func hasMultiSeasonIndicators(torrentName string) bool {
 	return false
 }
 
-// groupFilesBySeason puts files into season buckets
+// groupFilesBySeason puts files into season buckets.
 func groupFilesBySeason(files []*storage.File, knownSeasons map[int]bool) map[int][]*storage.File {
 	groups := make(map[int][]*storage.File)
 
@@ -231,7 +232,7 @@ func inferSeasonFromPath(path string, knownSeasons map[int]bool) int {
 	return 0
 }
 
-// Helper to get sorted season list for logging
+// Helper to get sorted season list for logging.
 func getSortedSeasons(seasons map[int]bool) []int {
 	result := make([]int, 0, len(seasons))
 	for season := range seasons {
@@ -241,9 +242,9 @@ func getSortedSeasons(seasons map[int]bool) []int {
 	return result
 }
 
-// generateSeasonHash creates a unique hash for a season based on original hash
+// generateSeasonHash creates a unique hash for a season based on original hash.
 func generateSeasonHash(originalHash string, seasonNumber int) string {
 	source := fmt.Sprintf("%s-%d", originalHash, seasonNumber)
 	hash := md5.Sum([]byte(source))
-	return fmt.Sprintf("%x", hash)
+	return hex.EncodeToString(hash[:])
 }

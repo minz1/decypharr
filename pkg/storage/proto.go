@@ -33,18 +33,18 @@ func fileToProto(f *File) *FileProto {
 
 func protoToFile(pb *FileProto) *File {
 	f := &File{
-		ID:       pb.Id,
-		Name:     pb.Name,
-		Path:     pb.Path,
-		Size:     pb.Size,
-		Deleted:  pb.Deleted,
-		InfoHash: pb.InfoHash,
+		ID:       pb.GetId(),
+		Name:     pb.GetName(),
+		Path:     pb.GetPath(),
+		Size:     pb.GetSize(),
+		Deleted:  pb.GetDeleted(),
+		InfoHash: pb.GetInfoHash(),
 	}
-	if pb.AddedOnUnix != 0 {
-		f.AddedOn = time.Unix(pb.AddedOnUnix, 0)
+	if pb.GetAddedOnUnix() != 0 {
+		f.AddedOn = time.Unix(pb.GetAddedOnUnix(), 0)
 	}
-	if pb.HasByteRange {
-		f.ByteRange = &[2]int64{pb.ByteRangeStart, pb.ByteRangeEnd}
+	if pb.GetHasByteRange() {
+		f.ByteRange = &[2]int64{pb.GetByteRangeStart(), pb.GetByteRangeEnd()}
 	}
 	return f
 }
@@ -63,9 +63,9 @@ func providerFileToProto(pf *ProviderFile) *ProviderFileProto {
 
 func protoToProviderFile(pb *ProviderFileProto) *ProviderFile {
 	return &ProviderFile{
-		Id:   pb.Id,
-		Link: pb.Link,
-		Path: pb.Path,
+		Id:   pb.GetId(),
+		Link: pb.GetLink(),
+		Path: pb.GetPath(),
 	}
 }
 
@@ -100,24 +100,24 @@ func providerEntryToProto(pe *ProviderEntry) *ProviderEntryProto {
 
 func protoToProviderEntry(pb *ProviderEntryProto) *ProviderEntry {
 	pe := &ProviderEntry{
-		Provider: pb.Provider,
-		ID:       pb.Id,
-		Status:   debridTypes.TorrentStatus(pb.Status),
-		Progress: pb.Progress,
+		Provider: pb.GetProvider(),
+		ID:       pb.GetId(),
+		Status:   debridTypes.TorrentStatus(pb.GetStatus()),
+		Progress: pb.GetProgress(),
 		Files:    make(map[string]*ProviderFile),
 	}
-	if pb.AddedAtUnix != 0 {
-		pe.AddedAt = time.Unix(pb.AddedAtUnix, 0)
+	if pb.GetAddedAtUnix() != 0 {
+		pe.AddedAt = time.Unix(pb.GetAddedAtUnix(), 0)
 	}
-	if pb.HasRemovedAt {
-		t := time.Unix(pb.RemovedAtUnix, 0)
+	if pb.GetHasRemovedAt() {
+		t := time.Unix(pb.GetRemovedAtUnix(), 0)
 		pe.RemovedAt = &t
 	}
-	if pb.HasDownloadedAt {
-		t := time.Unix(pb.DownloadedAtUnix, 0)
+	if pb.GetHasDownloadedAt() {
+		t := time.Unix(pb.GetDownloadedAtUnix(), 0)
 		pe.DownloadedAt = &t
 	}
-	for name, pf := range pb.Files {
+	for name, pf := range pb.GetFiles() {
 		pe.Files[name] = protoToProviderFile(pf)
 	}
 	return pe
@@ -197,66 +197,66 @@ func EntryToProto(e *Entry) *EntryProto {
 
 func ProtoToEntry(pb *EntryProto) *Entry {
 	e := &Entry{
-		Protocol:         config.Protocol(pb.Protocol),
-		InfoHash:         pb.InfoHash,
-		Name:             pb.Name,
-		OriginalFilename: pb.OriginalFilename,
-		Size:             pb.Size,
-		Bytes:            pb.Bytes,
-		Magnet:           pb.Magnet,
-		IsDownloading:    pb.IsDownloading,
-		SizeDownloaded:   pb.SizeDownloaded,
-		ActiveProvider:   pb.ActiveProvider,
+		Protocol:         config.Protocol(pb.GetProtocol()),
+		InfoHash:         pb.GetInfoHash(),
+		Name:             pb.GetName(),
+		OriginalFilename: pb.GetOriginalFilename(),
+		Size:             pb.GetSize(),
+		Bytes:            pb.GetBytes(),
+		Magnet:           pb.GetMagnet(),
+		IsDownloading:    pb.GetIsDownloading(),
+		SizeDownloaded:   pb.GetSizeDownloaded(),
+		ActiveProvider:   pb.GetActiveProvider(),
 		Providers:        make(map[string]*ProviderEntry),
 		Files:            make(map[string]*File),
-		State:            TorrentState(pb.State),
-		Status:           debridTypes.TorrentStatus(pb.Status),
-		Progress:         pb.Progress,
-		Speed:            pb.Speed,
-		Seeders:          int(pb.Seeders),
-		IsComplete:       pb.IsComplete,
-		Bad:              pb.Bad,
-		Category:         pb.Category,
-		Tags:             pb.Tags,
-		MountPath:        pb.MountPath,
-		SavePath:         pb.SavePath,
-		ContentPath:      pb.ContentPath,
-		Action:           config.DownloadAction(pb.Action),
-		DownloadUncached: pb.DownloadUncached,
-		CallbackURL:      pb.CallbackUrl,
-		SkipMultiSeason:  pb.SkipMultiSeason,
-		LastError:        pb.LastError,
-		ErrorCount:       int(pb.ErrorCount),
+		State:            TorrentState(pb.GetState()),
+		Status:           debridTypes.TorrentStatus(pb.GetStatus()),
+		Progress:         pb.GetProgress(),
+		Speed:            pb.GetSpeed(),
+		Seeders:          int(pb.GetSeeders()),
+		IsComplete:       pb.GetIsComplete(),
+		Bad:              pb.GetBad(),
+		Category:         pb.GetCategory(),
+		Tags:             pb.GetTags(),
+		MountPath:        pb.GetMountPath(),
+		SavePath:         pb.GetSavePath(),
+		ContentPath:      pb.GetContentPath(),
+		Action:           config.DownloadAction(pb.GetAction()),
+		DownloadUncached: pb.GetDownloadUncached(),
+		CallbackURL:      pb.GetCallbackUrl(),
+		SkipMultiSeason:  pb.GetSkipMultiSeason(),
+		LastError:        pb.GetLastError(),
+		ErrorCount:       int(pb.GetErrorCount()),
 	}
 
 	// Timestamps
-	if pb.AddedOnUnix != 0 {
-		e.AddedOn = time.Unix(pb.AddedOnUnix, 0)
+	if pb.GetAddedOnUnix() != 0 {
+		e.AddedOn = time.Unix(pb.GetAddedOnUnix(), 0)
 	}
-	if pb.CreatedAtUnix != 0 {
-		e.CreatedAt = time.Unix(pb.CreatedAtUnix, 0)
+	if pb.GetCreatedAtUnix() != 0 {
+		e.CreatedAt = time.Unix(pb.GetCreatedAtUnix(), 0)
 	}
-	if pb.UpdatedAtUnix != 0 {
-		e.UpdatedAt = time.Unix(pb.UpdatedAtUnix, 0)
+	if pb.GetUpdatedAtUnix() != 0 {
+		e.UpdatedAt = time.Unix(pb.GetUpdatedAtUnix(), 0)
 	}
-	if pb.HasCompletedAt {
-		t := time.Unix(pb.CompletedAtUnix, 0)
+	if pb.GetHasCompletedAt() {
+		t := time.Unix(pb.GetCompletedAtUnix(), 0)
 		e.CompletedAt = &t
 	}
-	if pb.HasImportedAt {
-		t := time.Unix(pb.ImportedAtUnix, 0)
+	if pb.GetHasImportedAt() {
+		t := time.Unix(pb.GetImportedAtUnix(), 0)
 		e.ImportedAt = &t
 	}
-	if pb.HasLastErrorTime {
-		t := time.Unix(pb.LastErrorTimeUnix, 0)
+	if pb.GetHasLastErrorTime() {
+		t := time.Unix(pb.GetLastErrorTimeUnix(), 0)
 		e.LastErrorTime = &t
 	}
 
 	// Maps
-	for name, pe := range pb.Providers {
+	for name, pe := range pb.GetProviders() {
 		e.Providers[name] = protoToProviderEntry(pe)
 	}
-	for name, f := range pb.Files {
+	for name, f := range pb.GetFiles() {
 		e.Files[name] = protoToFile(f)
 	}
 
@@ -286,11 +286,11 @@ func EntryItemToProto(ei *EntryItem) *EntryItemProto {
 
 func ProtoToEntryItem(pb *EntryItemProto) *EntryItem {
 	ei := &EntryItem{
-		Name:  pb.Name,
-		Size:  pb.Size,
+		Name:  pb.GetName(),
+		Size:  pb.GetSize(),
 		Files: make(map[string]*File),
 	}
-	for name, f := range pb.Files {
+	for name, f := range pb.GetFiles() {
 		ei.Files[name] = protoToFile(f)
 	}
 	return ei
@@ -419,17 +419,17 @@ func SystemMigrationStatusToProto(sms *SystemMigrationStatus) *SystemMigrationSt
 
 func ProtoToSystemMigrationStatus(pb *SystemMigrationStatusProto) *SystemMigrationStatus {
 	sms := &SystemMigrationStatus{
-		Running:   pb.Running,
-		Total:     int(pb.Total),
-		Completed: int(pb.Completed),
-		Errors:    int(pb.Errors),
-		ErrorList: pb.ErrorList,
+		Running:   pb.GetRunning(),
+		Total:     int(pb.GetTotal()),
+		Completed: int(pb.GetCompleted()),
+		Errors:    int(pb.GetErrors()),
+		ErrorList: pb.GetErrorList(),
 	}
-	if pb.StartedAtUnix != 0 {
-		sms.StartedAt = time.Unix(pb.StartedAtUnix, 0)
+	if pb.GetStartedAtUnix() != 0 {
+		sms.StartedAt = time.Unix(pb.GetStartedAtUnix(), 0)
 	}
-	if pb.UpdatedAtUnix != 0 {
-		sms.UpdatedAt = time.Unix(pb.UpdatedAtUnix, 0)
+	if pb.GetUpdatedAtUnix() != 0 {
+		sms.UpdatedAt = time.Unix(pb.GetUpdatedAtUnix(), 0)
 	}
 	return sms
 }

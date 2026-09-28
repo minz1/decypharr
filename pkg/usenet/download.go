@@ -12,7 +12,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/nntp"
 )
 
-// segmentResult holds a fetched segment and its index for ordered writing
+// segmentResult holds a fetched segment and its index for ordered writing.
 type segmentResult struct {
 	index int
 	data  []byte

@@ -175,7 +175,7 @@ func (m *Manager) processNZB(ctx context.Context, entry *storage.Entry, metadata
 	return nil
 }
 
-// processNewNzb processes a new NZB entry after it has been added to the usenet client
+// processNewNzb processes a new NZB entry after it has been added to the usenet client.
 func (m *Manager) processNewNzb(
 	parentCtx context.Context,
 	entry *storage.Entry,
@@ -210,12 +210,12 @@ func (m *Manager) processNewNzb(
 	return m.processNZB(ctx, entry, metadata)
 }
 
-// HasUsenet returns true if usenet is configured
+// HasUsenet returns true if usenet is configured.
 func (m *Manager) HasUsenet() bool {
 	return m.usenet != nil
 }
 
-// UsenetStats returns usenet client statistics
+// UsenetStats returns usenet client statistics.
 func (m *Manager) UsenetStats() map[string]any {
 	if m.usenet == nil {
 		return nil
@@ -223,13 +223,13 @@ func (m *Manager) UsenetStats() map[string]any {
 	return m.usenet.Stats()
 }
 
-// SpeedTestRequest represents a speed test request payload
+// SpeedTestRequest represents a speed test request payload.
 type SpeedTestRequest struct {
 	Protocol string `json:"protocol"` // "nntp" or "debrid"
 	Provider string `json:"provider"` // provider host/identifier
 }
 
-// SpeedTestResponse represents a speed test result
+// SpeedTestResponse represents a speed test result.
 type SpeedTestResponse struct {
 	Provider  string  `json:"provider"`
 	Protocol  string  `json:"protocol"`
@@ -240,7 +240,7 @@ type SpeedTestResponse struct {
 	Error     string  `json:"error,omitempty"`
 }
 
-// SpeedTest runs a speed test for a specific provider based on protocol
+// SpeedTest runs a speed test for a specific provider based on protocol.
 func (m *Manager) SpeedTest(ctx context.Context, req SpeedTestRequest) SpeedTestResponse {
 	switch req.Protocol {
 	case "nntp":

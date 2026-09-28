@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"errors"
 	"io"
 	"testing"
 
@@ -46,7 +47,7 @@ func TestArticleReaderAtReadsAcrossSlicedSegments(t *testing.T) {
 	if got := backend.fetches.Load(); got != 2 {
 		t.Fatalf("cached read network fetches = %d, want 2", got)
 	}
-	if n, err := reader.ReadAt(make([]byte, 2), 9); n != 1 || err != io.EOF {
+	if n, err := reader.ReadAt(make([]byte, 2), 9); n != 1 || !errors.Is(err, io.EOF) {
 		t.Fatalf("tail read = (%d, %v), want (1, EOF)", n, err)
 	}
 }

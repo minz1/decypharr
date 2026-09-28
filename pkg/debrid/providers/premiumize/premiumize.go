@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -415,7 +416,7 @@ func (pm *Premiumize) transferInfoHash(tr premiumizeTransfer, fallbackInfoHash s
 	// Use a provider-scoped, deterministic 40-character key so separate cloud
 	// transfers cannot collapse into the same empty storage record during sync.
 	digest := sha256.Sum256([]byte("premiumize\x00" + pm.config.Name + "\x00" + tr.ID))
-	return fmt.Sprintf("%x", digest[:20])
+	return hex.EncodeToString(digest[:20])
 }
 
 func (pm *Premiumize) filesForTransfer(tr premiumizeTransfer) (map[string]types.File, []string, bool, error) {

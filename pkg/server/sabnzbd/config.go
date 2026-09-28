@@ -1,6 +1,6 @@
 package sabnzbd
 
-// ConfigResponse represents configuration response
+// ConfigResponse represents configuration response.
 type ConfigResponse struct {
 	Config *Config `json:"config"`
 }
@@ -14,7 +14,7 @@ type ConfigNewzbin struct {
 	Unbookmark   int    `json:"unbookmark"`
 }
 
-// Category represents a SABnzbd category
+// Category represents a SABnzbd category.
 type Category struct {
 	Name     string `json:"name"`
 	Order    int    `json:"order"`
@@ -25,7 +25,7 @@ type Category struct {
 	Priority string `json:"priority"`
 }
 
-// Server represents a usenet server
+// Server represents a usenet server.
 type Server struct {
 	Name        string `json:"name"`
 	Host        string `json:"host"`

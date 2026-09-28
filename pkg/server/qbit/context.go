@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"strings"
@@ -56,8 +57,8 @@ func decodeAuthHeader(header string) (string, string, error) {
 
 	bearer := string(bytes)
 
-	colonIndex := strings.LastIndex(bearer, ":")
-	if colonIndex < 0 {
+	before, after, ok := strings.CutLast(bearer, ":")
+	if !ok {
 		// strings.LastIndex returns -1 when the substring is absent; without
 		// this guard `bearer[:colonIndex]` would panic with
 		// "slice bounds out of range [:-1]". Triggers on any Authorization
@@ -66,8 +67,8 @@ func decodeAuthHeader(header string) (string, string, error) {
 		// 'user:pass' shape).
 		return "", "", fmt.Errorf("malformed credentials: missing colon separator")
 	}
-	username := bearer[:colonIndex]
-	password := bearer[colonIndex+1:]
+	username := before
+	password := after
 
 	if username == "" || password == "" {
 		return username, password, fmt.Errorf("empty username or password")
@@ -101,10 +102,9 @@ func (q *QBit) categoryContext(next http.Handler) http.Handler {
 // authContext creates a middleware that extracts the Arr host and token from the Authorization header
 // and adds it to the request context.
 // This is used to identify the Arr instance for the utils.
-// Only a valid host and token will be added to the context/config. The rest are manual
+// Only a valid host and token will be added to the context/config. The rest are manual.
 func (q *QBit) authContext(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-
 		username, password, err := getUsernameAndPassword(r)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusUnauthorized)
@@ -195,7 +195,7 @@ func createSID(username, password string) string {
 	cfg := config.Get()
 	combined := fmt.Sprintf("%s|%s", username, password)
 	hash := sha256.Sum256([]byte(combined + cfg.SecretKey()))
-	hashStr := fmt.Sprintf("%x", hash)[:16] // First 16 chars
+	hashStr := hex.EncodeToString(hash[:])[:16] // First 16 chars
 	// Base64 encode
 	return base64.URLEncoding.EncodeToString(fmt.Appendf(nil, "%s|%s", combined, hashStr))
 }
@@ -221,7 +221,7 @@ func extractFromSID(sid string) (string, string, error) {
 	cfg := config.Get()
 	combined := fmt.Sprintf("%s|%s", username, password)
 	expectedHash := sha256.Sum256([]byte(combined + cfg.SecretKey()))
-	expectedHashStr := fmt.Sprintf("%x", expectedHash)[:16]
+	expectedHashStr := hex.EncodeToString(expectedHash[:])[:16]
 
 	if providedHash != expectedHashStr {
 		return "", "", fmt.Errorf("invalid SID signature")

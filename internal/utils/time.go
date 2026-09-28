@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// extendedDurationRegex matches duration strings like "2d", "10d", "1w", "2w3d", "1w2d3h"
+// extendedDurationRegex matches duration strings like "2d", "10d", "1w", "2w3d", "1w2d3h".
 var extendedDurationRegex = regexp.MustCompile(`^(\d+w)?(\d+d)?(.*)$`)
 
 // ParseDuration extends Go's time.ParseDuration to support:

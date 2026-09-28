@@ -9,7 +9,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/utils"
 )
 
-// FuseConfig holds the simplified configuration for the FUSE filesystem
+// FuseConfig holds the simplified configuration for the FUSE filesystem.
 type FuseConfig struct {
 	MountPath    string
 	CacheDir     string
@@ -55,7 +55,7 @@ type FuseConfig struct {
 	Umask uint32
 }
 
-// DefaultFuseConfig returns a streaming-optimized default configuration
+// DefaultFuseConfig returns a streaming-optimized default configuration.
 func DefaultFuseConfig() *FuseConfig {
 	return &FuseConfig{
 		// Performance defaults optimized for streaming
@@ -77,7 +77,7 @@ func DefaultFuseConfig() *FuseConfig {
 	}
 }
 
-// ParseFuseConfig converts config.DFS to internal FuseConfig
+// ParseFuseConfig converts config.DFS to internal FuseConfig.
 func ParseFuseConfig() *FuseConfig {
 	mainCfg := config.Get()
 	return Parse(mainCfg.Mount.DFS, mainCfg.Mount.MountPath, mainCfg.Retries)
@@ -96,7 +96,6 @@ func Parse(cfg config.DFS, mountPath string, retries int) *FuseConfig {
 		if err == nil {
 			fuseConfig.DaemonTimeout = timeout
 		}
-
 	}
 	if cfg.DiskCacheSize != "" {
 		// The DFS mount uses a single shared on-disk cache (one CacheDir, one
@@ -237,7 +236,7 @@ func reconcileReadAhead(readAhead, chunkSize, diskLimit int64) int64 {
 	return max(maxAhead, chunkSize) // must reach at least one chunk past the reader
 }
 
-// parseUmask parses umask strings like "0022"
+// parseUmask parses umask strings like "0022".
 func parseUmask(umaskStr string) (uint32, error) {
 	var umask uint32
 	if _, err := fmt.Sscanf(umaskStr, "%o", &umask); err != nil {
@@ -246,7 +245,7 @@ func parseUmask(umaskStr string) (uint32, error) {
 	return umask, nil
 }
 
-// StreamingStats tracks streaming-specific performance metrics
+// StreamingStats tracks streaming-specific performance metrics.
 type StreamingStats struct {
 	// Network stats
 	NetworkRequests   int64

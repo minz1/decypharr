@@ -106,12 +106,12 @@ func (r *RealDebrid) Logger() zerolog.Logger {
 	return r.logger
 }
 
-// doGet performs a GET request using the main client
+// doGet performs a GET request using the main client.
 func (r *RealDebrid) doGet(endpoint string, result any) (*http.Response, error) {
 	return r.doGetWithClient(r.client, r.Host+endpoint, nil, result)
 }
 
-// doPost performs a POST request with form data
+// doPost performs a POST request with form data.
 func (r *RealDebrid) doPostForm(endpoint string, formData map[string]string, result any) (*http.Response, error) {
 	form := url.Values{}
 	for k, v := range formData {
@@ -127,7 +127,7 @@ func (r *RealDebrid) doPostForm(endpoint string, formData map[string]string, res
 	return r.client.DoJSON(req, result)
 }
 
-// doPut performs a PUT request with body
+// doPut performs a PUT request with body.
 func (r *RealDebrid) doPut(endpoint string, body []byte, contentType string, result any) (*http.Response, error) {
 	var bodyReader io.Reader
 	if body != nil {
@@ -145,7 +145,7 @@ func (r *RealDebrid) doPut(endpoint string, body []byte, contentType string, res
 	return r.client.DoJSON(req, result)
 }
 
-// doGetWithClient performs a GET using a specific client
+// doGetWithClient performs a GET using a specific client.
 func (r *RealDebrid) doGetWithClient(
 	client *request.Client,
 	fullURL string,
@@ -173,7 +173,7 @@ func (r *RealDebrid) doGetWithClient(
 	return client.DoJSON(req, result)
 }
 
-// doPostFormWithClient performs a POST with form data using a specific client
+// doPostFormWithClient performs a POST with form data using a specific client.
 func (r *RealDebrid) doPostFormWithClient(
 	ctx context.Context,
 	client *request.Client,
@@ -273,7 +273,7 @@ func (r *RealDebrid) handleRarFallback(t *types.Torrent, data torrentInfo) map[s
 	return files
 }
 
-// handleRarArchive processes RAR archives with multiple files
+// handleRarArchive processes RAR archives with multiple files.
 func (r *RealDebrid) handleRarArchive(
 	t *types.Torrent,
 	data torrentInfo,
@@ -807,10 +807,10 @@ func (r *RealDebrid) getTorrents(offset int, limit int) (int, []*types.Torrent, 
 
 	queryParams := make(map[string]string)
 	if offset > 0 {
-		queryParams["offset"] = fmt.Sprintf("%d", offset)
+		queryParams["offset"] = strconv.Itoa(offset)
 	}
 	if limit > 0 {
-		queryParams["limit"] = fmt.Sprintf("%d", limit)
+		queryParams["limit"] = strconv.Itoa(limit)
 	}
 
 	// Need to get headers, so we create request manually
@@ -935,10 +935,10 @@ func (r *RealDebrid) _getDownloadLinks(acc *account.Account, offset int, limit i
 	var data []DownloadsResponse
 
 	queryParams := map[string]string{
-		"limit": fmt.Sprintf("%d", limit),
+		"limit": strconv.Itoa(limit),
 	}
 	if offset > 0 {
-		queryParams["offset"] = fmt.Sprintf("%d", offset)
+		queryParams["offset"] = strconv.Itoa(offset)
 	}
 
 	resp, err := r.doGetWithClient(acc.Client(), fmt.Sprintf("%s/downloads", r.Host), queryParams, &data)
@@ -1079,7 +1079,7 @@ func (r *RealDebrid) DeleteLink(downloadLink types.DownloadLink) error {
 	return r.accountsManager.DeleteDownloadLink(downloadLink, r.deleteDownloadLink)
 }
 
-// SpeedTest measures API latency and download speed using cached links
+// SpeedTest measures API latency and download speed using cached links.
 func (r *RealDebrid) SpeedTest(ctx context.Context) types.SpeedTestResult {
 	result := types.SpeedTestResult{
 		Provider: r.config.Name,

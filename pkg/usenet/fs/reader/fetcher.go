@@ -697,7 +697,7 @@ func (sf *SegmentFetcher) prefetchBatch(segIndices []int) {
 	}
 	var err error
 retryLoop:
-	for attempt := 0; attempt < maxAttempts; attempt++ {
+	for attempt := range maxAttempts {
 		if attempt > 0 {
 			select {
 			case <-fetchCtx.Done():
@@ -780,7 +780,7 @@ func (sf *SegmentFetcher) fetchWithRetryDirect(ctx context.Context, segIdx int, 
 	}
 
 	var lastErr error
-	for attempt := 0; attempt < maxAttempts; attempt++ {
+	for attempt := range maxAttempts {
 		if attempt > 0 {
 			// Clear the failed state so the segment can be re-fetched, then
 			// back off briefly before retrying. ResetFailed is a CAS: if a
@@ -844,7 +844,7 @@ func (sf *SegmentFetcher) Close() {
 	sf.taskWg.Wait()
 }
 
-// Error types
+// Error types.
 var (
 	ErrSegmentNotFound = &segmentError{msg: "segment not found"}
 	ErrCacheClosed     = &segmentError{msg: "cache closed"}

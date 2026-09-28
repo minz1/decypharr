@@ -8,7 +8,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// GetEntryItems returns all entry item names
+// GetEntryItems returns all entry item names.
 func (s *Storage) GetEntryItems() map[string]struct{} {
 	items := make(map[string]struct{})
 	_ = s.entryItems.ForEachMetadata(func(key string, meta *appendstore.Metadata) error {
@@ -42,7 +42,7 @@ func (s *Storage) UpdateItem(item *EntryItem) error {
 	return nil
 }
 
-// GetEntryItem retrieves an entry item by name
+// GetEntryItem retrieves an entry item by name.
 func (s *Storage) GetEntryItem(name string) (*EntryItem, error) {
 	data, err := s.entryItems.Get(name)
 	if err != nil {
@@ -56,7 +56,7 @@ func (s *Storage) GetEntryItem(name string) (*EntryItem, error) {
 	return ProtoToEntryItem(&pb), nil
 }
 
-// ForEachEntryItem iterates over entry items
+// ForEachEntryItem iterates over entry items.
 func (s *Storage) ForEachEntryItem(fn func(*EntryItem) error) error {
 	return s.entryItems.ForEach(func(key string, value []byte) error {
 		var pb EntryItemProto

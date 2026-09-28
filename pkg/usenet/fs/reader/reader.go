@@ -526,7 +526,7 @@ func (sr *StreamingReader) readAtEncrypted(ctx context.Context, cur *Cursor, p [
 		if remainder := decryptedLen % crypto.BlockSize; remainder != 0 {
 			// Pad with zeros for decryption
 			if int64(len(buf)) >= decryptedLen+(crypto.BlockSize-remainder) {
-				for i := int64(0); i < crypto.BlockSize-remainder; i++ {
+				for i := range int64(crypto.BlockSize - remainder) {
 					buf[decryptedLen+i] = 0
 				}
 				decryptedLen += crypto.BlockSize - remainder
@@ -539,7 +539,7 @@ func (sr *StreamingReader) readAtEncrypted(ctx context.Context, cur *Cursor, p [
 		}
 	}
 
-	if err != nil && err != io.EOF {
+	if err != nil && !errors.Is(err, io.EOF) {
 		return 0, err
 	}
 
@@ -553,7 +553,7 @@ func (sr *StreamingReader) readAtEncrypted(ctx context.Context, cur *Cursor, p [
 
 	copied := copy(p, buf[startOffset:validDataEnd])
 
-	if err == io.EOF && copied == len(p) {
+	if errors.Is(err, io.EOF) && copied == len(p) {
 		return copied, nil
 	}
 
@@ -596,7 +596,7 @@ func (sr *StreamingReader) computeIVForOffset(ctx context.Context, offset int64)
 	// Read previous block (raw, not decrypted) through the default cursor —
 	// an IV fill is a peek, not a consumer position.
 	n, err := sr.readAtPlain(ctx, sr.getDefaultCursor(), iv, prevBlockOffset)
-	if err != nil && err != io.EOF {
+	if err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("read IV block at %d: %w", prevBlockOffset, err)
 	}
 	if n < crypto.BlockSize {

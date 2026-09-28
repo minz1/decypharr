@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// CallbackPayload represents the HTTP callback payload
+// CallbackPayload represents the HTTP callback payload.
 type CallbackPayload struct {
 	Hash        string `json:"hash,omitempty"`
 	Name        string `json:"name,omitempty"`
@@ -21,13 +21,13 @@ type CallbackPayload struct {
 	Message     string `json:"message,omitempty"`
 }
 
-// CallbackNotifier sends HTTP callbacks to a configured URL
+// CallbackNotifier sends HTTP callbacks to a configured URL.
 type CallbackNotifier struct {
 	callbackURL string
 	client      *http.Client
 }
 
-// NewCallback creates a new callback notifier with the specified URL
+// NewCallback creates a new callback notifier with the specified URL.
 func NewCallback(callbackURL string) *CallbackNotifier {
 	return &CallbackNotifier{
 		callbackURL: callbackURL,
@@ -37,12 +37,12 @@ func NewCallback(callbackURL string) *CallbackNotifier {
 	}
 }
 
-// Name returns the name of this notifier
+// Name returns the name of this notifier.
 func (c *CallbackNotifier) Name() string {
 	return "callback"
 }
 
-// Send dispatches the notification via HTTP POST
+// Send dispatches the notification via HTTP POST.
 func (c *CallbackNotifier) Send(event Event) error {
 	if c.callbackURL == "" {
 		return nil

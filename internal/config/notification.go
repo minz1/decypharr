@@ -2,7 +2,7 @@ package config
 
 import "slices"
 
-// NotificationEvent defines the type of notification event
+// NotificationEvent defines the type of notification event.
 type NotificationEvent string
 
 const (
@@ -14,7 +14,7 @@ const (
 	EventRepairCancelled  NotificationEvent = "repair_cancelled"
 )
 
-// Notifications holds all notification configuration
+// Notifications holds all notification configuration.
 type Notifications struct {
 	// Enabled controls whether notifications are globally enabled
 	Enabled bool `json:"enabled,omitempty"`
@@ -30,7 +30,7 @@ type Notifications struct {
 	Events []NotificationEvent `json:"events,omitempty"`
 }
 
-// IsEventEnabled checks if a specific event is enabled for notifications
+// IsEventEnabled checks if a specific event is enabled for notifications.
 func (n *Notifications) IsEventEnabled(event NotificationEvent) bool {
 	if !n.Enabled {
 		return false

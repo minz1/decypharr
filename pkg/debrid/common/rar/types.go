@@ -4,7 +4,7 @@ import (
 	"net/http"
 )
 
-// File represents a file entry in a RAR archive
+// File represents a file entry in a RAR archive.
 type File struct {
 	Path           string
 	Size           int64
@@ -16,7 +16,7 @@ type File struct {
 	NextOffset     int64
 }
 
-// HttpFile represents a RAR file accessible over HTTP
+// HttpFile represents a RAR file accessible over HTTP.
 type HttpFile struct {
 	URL        string
 	Position   int64
@@ -25,7 +25,7 @@ type HttpFile struct {
 	MaxRetries int
 }
 
-// Reader reads RAR3 format archives
+// Reader reads RAR3 format archives.
 type Reader struct {
 	File         *HttpFile
 	ChunkSize    int

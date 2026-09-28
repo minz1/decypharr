@@ -68,7 +68,7 @@ func (s *Server) isAPIRequest(r *http.Request) bool {
 	return strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/webhooks/")
 }
 
-// sendJSONError sends a JSON error response
+// sendJSONError sends a JSON error response.
 func (s *Server) sendJSONError(w http.ResponseWriter, message string, statusCode int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
@@ -81,7 +81,7 @@ func (s *Server) sendJSONError(w http.ResponseWriter, message string, statusCode
 	}
 }
 
-// setupRedirectMiddleware redirects to /setup if setup is not completed
+// setupRedirectMiddleware redirects to /setup if setup is not completed.
 func (s *Server) setupRedirectMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cfg := config.Get()

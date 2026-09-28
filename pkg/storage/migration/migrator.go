@@ -18,7 +18,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
-// Migrator handles migration from cache JSON files to unified bbolt system
+// Migrator handles migration from cache JSON files to unified bbolt system.
 type Migrator struct {
 	storage    *storage.Storage
 	cacheDir   string
@@ -29,7 +29,7 @@ type Migrator struct {
 	ctx        context.Context
 }
 
-// New creates a new migrator
+// New creates a new migrator.
 func New(storage *storage.Storage) *Migrator {
 	cacheDir := filepath.Join(config.GetMainPath(), "cache")
 	backupPath := filepath.Join(config.GetMainPath(), "backups")
@@ -42,7 +42,7 @@ func New(storage *storage.Storage) *Migrator {
 	}
 }
 
-// Start starts the migration process from cache files
+// Start starts the migration process from cache files.
 func (m *Migrator) Start() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -78,7 +78,7 @@ func (m *Migrator) Start() error {
 	return nil
 }
 
-// Stop stops the migration process
+// Stop stops the migration process.
 func (m *Migrator) Stop() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -100,12 +100,12 @@ func (m *Migrator) Stop() error {
 	return m.storage.SaveMigrationStatus(status)
 }
 
-// GetStatus returns the current migration status
+// GetStatus returns the current migration status.
 func (m *Migrator) GetStatus() (*storage.SystemMigrationStatus, error) {
 	return m.storage.GetMigrationStatus()
 }
 
-// GetStats returns migration statistics
+// GetStats returns migration statistics.
 func (m *Migrator) GetStats() (map[string]any, error) {
 	cachedTorrents, err := m.loadCacheTorrents()
 	if err != nil {
@@ -131,7 +131,7 @@ func (m *Migrator) GetStats() (map[string]any, error) {
 	}, nil
 }
 
-// countMultiDebrid counts how many torrents exist on multiple debrids
+// countMultiDebrid counts how many torrents exist on multiple debrids.
 func (m *Migrator) countMultiDebrid(torrents map[string][]*storage.CachedTorrent) int {
 	count := 0
 	for _, list := range torrents {
@@ -142,7 +142,7 @@ func (m *Migrator) countMultiDebrid(torrents map[string][]*storage.CachedTorrent
 	return count
 }
 
-// runMigration performs the actual migration
+// runMigration performs the actual migration.
 func (m *Migrator) runMigration(ctx context.Context, cachedTorrents map[string][]*storage.CachedTorrent) {
 	m.logger.Info().Msg("Starting migration from cache files")
 
@@ -213,7 +213,7 @@ func (m *Migrator) runMigration(ctx context.Context, cachedTorrents map[string][
 		Msg("Migration completed")
 }
 
-// loadCacheTorrents loads all torrents from cache directories and groups by infohash
+// loadCacheTorrents loads all torrents from cache directories and groups by infohash.
 func (m *Migrator) loadCacheTorrents() (map[string][]*storage.CachedTorrent, error) {
 	// Map: infohash -> []*CachedTorrent (multiple debrids)
 	torrentsByHash := make(map[string][]*storage.CachedTorrent)
@@ -283,7 +283,7 @@ func (m *Migrator) loadCacheTorrents() (map[string][]*storage.CachedTorrent, err
 	return torrentsByHash, nil
 }
 
-// mergeCachedTorrents merges multiple cache entries (from different debrids) into a single Entry
+// mergeCachedTorrents merges multiple cache entries (from different debrids) into a single Entry.
 func (m *Migrator) mergeCachedTorrents(cachedList []*storage.CachedTorrent) (*storage.Entry, error) {
 	if len(cachedList) == 0 {
 		return nil, fmt.Errorf("empty cached list")
@@ -371,7 +371,7 @@ func (m *Migrator) mergeCachedTorrents(cachedList []*storage.CachedTorrent) (*st
 	return managed, nil
 }
 
-// activateBestPlacement finds and activates the first placement that is completed
+// activateBestPlacement finds and activates the first placement that is completed.
 func (m *Migrator) activateBestPlacement(torrent *storage.Entry) {
 	for debrid, placement := range torrent.Providers {
 		if placement.Status == debridTypes.TorrentStatusDownloaded {

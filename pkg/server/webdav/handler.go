@@ -84,21 +84,21 @@ func (h *Handler) handler(
 	r *http.Request,
 ) {
 	switch r.Method {
-	case "HEAD":
+	case http.MethodHead:
 		h.handleHead(current, w, r)
-	case "GET":
+	case http.MethodGet:
 		if current == nil {
 			http.Error(w, "Not Found", http.StatusNotFound)
 			return
 		}
 		h.handleGet(current, w, r)
-	case "DELETE":
+	case http.MethodDelete:
 		h.handleDelete(current, w, r)
 	case PROPFIND:
 		h.handlePropfind(current, children, w, r)
 	case "COPY":
 		h.handleCopy(current, w, r, false)
-	case "OPTIONS":
+	case http.MethodOptions:
 		h.handleOptions(w, r)
 	case "MOVE":
 		h.handleCopy(current, w, r, true)
@@ -122,7 +122,6 @@ func (h *Handler) handleGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.handler(currentInfo, rawEntries, w, r)
-
 }
 
 func (h *Handler) handleTorrentFolder(w http.ResponseWriter, r *http.Request) {

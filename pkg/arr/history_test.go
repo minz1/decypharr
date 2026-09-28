@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 )
 
@@ -22,7 +23,7 @@ func TestFindGrabHistoryID(t *testing.T) {
 				if r.URL.Path != "/api/v3/history" {
 					t.Errorf("path = %q", r.URL.Path)
 				}
-				if got := r.URL.Query().Get(test.queryKey); got != fmt.Sprint(test.mediaID) {
+				if got := r.URL.Query().Get(test.queryKey); got != strconv.Itoa(test.mediaID) {
 					t.Errorf("%s = %q", test.queryKey, got)
 				}
 				if got := r.Header.Get("X-Api-Key"); got != "arr-secret" {

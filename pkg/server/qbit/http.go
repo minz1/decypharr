@@ -66,7 +66,7 @@ func (q *QBit) handleShutdown(w http.ResponseWriter, r *http.Request) {
 }
 
 func (q *QBit) handleTorrentsInfo(w http.ResponseWriter, r *http.Request) {
-	//log all url params
+	// log all url params
 	ctx := r.Context()
 	category := getCategory(ctx)
 	state := strings.Trim(r.URL.Query().Get("filter"), "")
@@ -336,7 +336,6 @@ func (q *QBit) handleSetCategory(w http.ResponseWriter, r *http.Request) {
 		for _, h := range hashes {
 			hashSet[h] = true
 		}
-
 	}
 
 	updateFunc := func(t *storage.Entry) bool {
@@ -397,7 +396,6 @@ func (q *QBit) handleRemoveTorrentTags(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, torrent := range torrents {
 		q.removeTorrentTags(torrent, tags)
-
 	}
 	utils.JSONResponse(w, nil, http.StatusOK)
 }

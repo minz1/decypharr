@@ -14,7 +14,7 @@ func TestPanicErrorPreservesPayload(t *testing.T) {
 			t.Errorf("Error() = %q, want %q", got, want)
 		}
 		cause, _ := payload.(error)
-		if got := errors.Unwrap(err); got != cause {
+		if got := errors.Unwrap(err); !errors.Is(got, cause) {
 			t.Errorf("Unwrap() = %v, want %v", got, cause)
 		}
 		if !IsPanicError(fmt.Errorf("worker: %w", err)) {

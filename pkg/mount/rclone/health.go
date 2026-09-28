@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// RecoverMount attempts to recover a failed mount
+// RecoverMount attempts to recover a failed mount.
 func (m *Manager) RecoverMount(ctx context.Context) error {
 	mountInfo := m.getMountInfo()
 
@@ -31,7 +31,7 @@ func (m *Manager) RecoverMount(ctx context.Context) error {
 	return nil
 }
 
-// MonitorMounts continuously monitors mount health and attempts recovery
+// MonitorMounts continuously monitors mount health and attempts recovery.
 func (m *Manager) MonitorMounts(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second) // Check every 30 seconds
 	defer ticker.Stop()
@@ -47,7 +47,7 @@ func (m *Manager) MonitorMounts(ctx context.Context) {
 	}
 }
 
-// performMountHealthCheck checks and attempts to recover unhealthy mounts
+// performMountHealthCheck checks and attempts to recover unhealthy mounts.
 func (m *Manager) performMountHealthCheck() {
 	if err := m.client.CheckMountHealth(context.Background(), FSName); err != nil {
 		m.logger.Warn().Err(err).Msg("Mount health check failed, attempting recovery")

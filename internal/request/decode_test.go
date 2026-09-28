@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -40,7 +41,7 @@ func TestDecodeJSON(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				if !test.chunked {
-					w.Header().Set("Content-Length", fmt.Sprint(len(test.body)))
+					w.Header().Set("Content-Length", strconv.Itoa(len(test.body)))
 				}
 				_, _ = io.WriteString(w, test.body)
 			}))
@@ -58,7 +59,7 @@ func TestDecodeJSON(t *testing.T) {
 				if err == nil {
 					t.Fatal("want an error")
 				}
-				if test.wantErr != errAny && !errors.Is(err, test.wantErr) {
+				if !errors.Is(test.wantErr, errAny) && !errors.Is(err, test.wantErr) {
 					t.Fatalf("err = %v, want %v", err, test.wantErr)
 				}
 				if len(out) != 0 {

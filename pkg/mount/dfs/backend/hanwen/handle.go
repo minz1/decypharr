@@ -24,7 +24,7 @@ var (
 	_ = (fs.FileFsyncer)((*Handle)(nil))
 )
 
-// Handle implements file operations using the new DFS implementation
+// Handle implements file operations using the new DFS implementation.
 type Handle struct {
 	file       *File
 	info       *manager.FileInfo
@@ -34,7 +34,7 @@ type Handle struct {
 	logger     *logger.RateLimitedEvent
 }
 
-// Read implements DFS streaming
+// Read implements DFS streaming.
 func (fh *Handle) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	if fh.closed.Load() {
 		return nil, syscall.EBADF
@@ -79,7 +79,7 @@ func (fh *Handle) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadRe
 	return fuse.ReadResultData(dest[:n]), 0
 }
 
-// readFromStaticContent handles static content
+// readFromStaticContent handles static content.
 func (fh *Handle) readFromStaticContent(offset, size int64) []byte {
 	content := fh.content
 	end := min(offset+size, int64(len(content)))
@@ -89,7 +89,7 @@ func (fh *Handle) readFromStaticContent(offset, size int64) []byte {
 	return content[offset:end]
 }
 
-// Release closes the file handle
+// Release closes the file handle.
 func (fh *Handle) Release(ctx context.Context) syscall.Errno {
 	if !fh.closed.CompareAndSwap(false, true) {
 		return 0

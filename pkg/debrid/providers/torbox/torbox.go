@@ -122,7 +122,7 @@ func (tb *Torbox) submissionClient() *request.Client {
 	return tb.client
 }
 
-// doGet performs a GET request and unmarshals the response
+// doGet performs a GET request and unmarshals the response.
 func (tb *Torbox) doGet(endpoint string, queryParams map[string]string, result any) (*http.Response, error) {
 	return tb.doGetWithClient(context.Background(), tb.client, endpoint, queryParams, result)
 }
@@ -360,7 +360,7 @@ func (tb *Torbox) loadDownloadPresent(ctx context.Context) error {
 			ctx,
 			tb.client,
 			"/api/torrents/mylist",
-			map[string]string{"offset": fmt.Sprintf("%d", offset)},
+			map[string]string{"offset": strconv.Itoa(offset)},
 			&res,
 		)
 		if err != nil {
@@ -774,7 +774,7 @@ func (tb *Torbox) DeleteLink(downloadLink types.DownloadLink) error {
 	return tb.accountsManager.DeleteDownloadLink(downloadLink, tb.deleteDownloadLink)
 }
 
-// SpeedTest measures API latency and download speed using cached links
+// SpeedTest measures API latency and download speed using cached links.
 func (tb *Torbox) SpeedTest(ctx context.Context) types.SpeedTestResult {
 	result := types.SpeedTestResult{
 		Provider: tb.config.Name,

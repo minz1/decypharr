@@ -15,7 +15,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
-// handleAPI is the main handler for all SABnzbd API requests
+// handleAPI is the main handler for all SABnzbd API requests.
 func (s *SABnzbd) handleAPI(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	mode := getMode(ctx)
@@ -67,13 +67,13 @@ func (s *SABnzbd) handleQueue(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleResume handles resume operations
+// handleResume handles resume operations.
 func (s *SABnzbd) handleQueueResume(w http.ResponseWriter, r *http.Request) {
 	response := StatusResponse{Status: true}
 	utils.JSONResponse(w, response, http.StatusOK)
 }
 
-// handleDelete handles delete operations
+// handleDelete handles delete operations.
 func (s *SABnzbd) handleDelete(w http.ResponseWriter, r *http.Request) {
 	nzoIDs := r.FormValue("value")
 	cat := getCategory(r.Context())
@@ -143,13 +143,13 @@ func (s *SABnzbd) handleDelete(w http.ResponseWriter, r *http.Request) {
 	utils.JSONResponse(w, response, http.StatusOK)
 }
 
-// handlePause handles pause operations
+// handlePause handles pause operations.
 func (s *SABnzbd) handleQueuePause(w http.ResponseWriter, r *http.Request) {
 	response := StatusResponse{Status: true}
 	utils.JSONResponse(w, response, http.StatusOK)
 }
 
-// handleQueue returns the current download queue
+// handleQueue returns the current download queue.
 func (s *SABnzbd) handleListQueue(w http.ResponseWriter, r *http.Request) {
 	category := getCategory(r.Context())
 	nzoIDsVal := r.FormValue("nzo_ids")
@@ -238,7 +238,7 @@ func (s *SABnzbd) handleHistory(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleHistoryList returns the download history
+// handleHistoryList returns the download history.
 func (s *SABnzbd) handleHistoryList(w http.ResponseWriter, r *http.Request) {
 	limitStr := r.FormValue("limit")
 	if limitStr == "" {
@@ -273,9 +273,8 @@ func (s *SABnzbd) handleHistoryList(w http.ResponseWriter, r *http.Request) {
 	utils.JSONResponse(w, response, http.StatusOK)
 }
 
-// handleConfig returns the configuration
+// handleConfig returns the configuration.
 func (s *SABnzbd) handleConfig(w http.ResponseWriter, r *http.Request) {
-
 	response := ConfigResponse{
 		Config: s.config,
 	}
@@ -283,7 +282,7 @@ func (s *SABnzbd) handleConfig(w http.ResponseWriter, r *http.Request) {
 	utils.JSONResponse(w, response, http.StatusOK)
 }
 
-// handleAddURL handles adding NZB by URL (supports multiple URLs separated by newlines)
+// handleAddURL handles adding NZB by URL (supports multiple URLs separated by newlines).
 func (s *SABnzbd) handleAddURL(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	_arr := getArrFromContext(ctx)
@@ -357,7 +356,7 @@ func (s *SABnzbd) handleAddURL(w http.ResponseWriter, r *http.Request) {
 	utils.JSONResponse(w, response, http.StatusOK)
 }
 
-// handleAddFile handles NZB file uploads (supports multiple files)
+// handleAddFile handles NZB file uploads (supports multiple files).
 func (s *SABnzbd) handleAddFile(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	_arr := getArrFromContext(ctx)
@@ -473,7 +472,7 @@ func (s *SABnzbd) handleAddFile(w http.ResponseWriter, r *http.Request) {
 	utils.JSONResponse(w, response, http.StatusOK)
 }
 
-// handleVersion returns version information
+// handleVersion returns version information.
 func (s *SABnzbd) handleVersion(w http.ResponseWriter, r *http.Request) {
 	response := VersionResponse{
 		Version: Version,
@@ -481,19 +480,19 @@ func (s *SABnzbd) handleVersion(w http.ResponseWriter, r *http.Request) {
 	utils.JSONResponse(w, response, http.StatusOK)
 }
 
-// handleGetCategories returns available categories
+// handleGetCategories returns available categories.
 func (s *SABnzbd) handleGetCategories(w http.ResponseWriter, r *http.Request) {
 	categories := s.getCategories()
 	utils.JSONResponse(w, categories, http.StatusOK)
 }
 
-// handleGetScripts returns available scripts
+// handleGetScripts returns available scripts.
 func (s *SABnzbd) handleGetScripts(w http.ResponseWriter, r *http.Request) {
 	scripts := []string{"None"}
 	utils.JSONResponse(w, scripts, http.StatusOK)
 }
 
-// handleGetFiles returns files for a specific NZB
+// handleGetFiles returns files for a specific NZB.
 func (s *SABnzbd) handleGetFiles(w http.ResponseWriter, r *http.Request) {
 	nzoID := r.FormValue("value")
 	if nzoID == "" {
@@ -641,7 +640,7 @@ func (s *SABnzbd) addNZBFile(
 	return id, nil
 }
 
-// formatSize formats bytes to human-readable string (SABnzbd format)
+// formatSize formats bytes to human-readable string (SABnzbd format).
 func formatSize(bytes int64) string {
 	const (
 		KB = 1024

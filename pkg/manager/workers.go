@@ -11,7 +11,7 @@ import (
 )
 
 // runInitialCalls performs any initial calls of worker functions
-// for example, call the processQueuedEntries function once
+// for example, call the processQueuedEntries function once.
 func (m *Manager) runInitialCalls(ctx context.Context) {
 	go m.refreshDownloadLinks(ctx)
 	m.startDownloadTask(m.processQueuedEntries)

@@ -12,13 +12,13 @@ import (
 )
 
 const (
-	// BlockSize AES block size
+	// BlockSize AES block size.
 	BlockSize = 16
 
-	// AESKeySize Key sizes
+	// AESKeySize Key sizes.
 	AESKeySize = 32 // AES-256
 
-	// MaxPbkdf2Salt RAR5 constants
+	// MaxPbkdf2Salt RAR5 constants.
 	MaxPbkdf2Salt = 64
 	PwCheckSize   = 8
 	MaxKdfCount   = 24
@@ -158,7 +158,7 @@ type EncryptionHeader struct {
 }
 
 // ParseEncryptionHeader parses a RAR5 encryption header.
-// Format: version (vint) + flags (vint) + kdfCount (1 byte) + salt (16 bytes) + [pwCheck (12 bytes)]
+// Format: version (vint) + flags (vint) + kdfCount (1 byte) + salt (16 bytes) + [pwCheck (12 bytes)].
 func ParseEncryptionHeader(data []byte) (*EncryptionHeader, error) {
 	if len(data) < 18 { // Minimum: version + flags + kdfCount + salt
 		return nil, ErrInvalidData

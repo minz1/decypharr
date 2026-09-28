@@ -20,7 +20,7 @@ type Manager struct {
 }
 
 // NewManager creates a new external rclone manager
-// This does nothing, just a placeholder to satisfy the interface
+// This does nothing, just a placeholder to satisfy the interface.
 func NewManager(manager *manager.Manager) *Manager {
 	_logger := logger.New("external")
 	cfg := config.Get()

@@ -19,10 +19,10 @@ func yencEncode(data []byte, name string, partNum int, begin, end int64) string 
 
 	// =ybegin header
 	if partNum > 0 {
-		buf.WriteString(fmt.Sprintf("=ybegin part=%d line=128 size=%d name=%s\r\n", partNum, len(data), name))
-		buf.WriteString(fmt.Sprintf("=ypart begin=%d end=%d\r\n", begin, end))
+		fmt.Fprintf(&buf, "=ybegin part=%d line=128 size=%d name=%s\r\n", partNum, len(data), name)
+		fmt.Fprintf(&buf, "=ypart begin=%d end=%d\r\n", begin, end)
 	} else {
-		buf.WriteString(fmt.Sprintf("=ybegin line=128 size=%d name=%s\r\n", len(data), name))
+		fmt.Fprintf(&buf, "=ybegin line=128 size=%d name=%s\r\n", len(data), name)
 	}
 
 	// Encode body
@@ -49,7 +49,7 @@ func yencEncode(data []byte, name string, partNum int, begin, end int64) string 
 	}
 
 	// =yend trailer
-	buf.WriteString(fmt.Sprintf("=yend size=%d pcrc32=%08x\r\n", len(data), crc32.ChecksumIEEE(data)))
+	fmt.Fprintf(&buf, "=yend size=%d pcrc32=%08x\r\n", len(data), crc32.ChecksumIEEE(data))
 
 	return buf.String()
 }

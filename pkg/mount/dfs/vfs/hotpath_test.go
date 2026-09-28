@@ -135,7 +135,6 @@ func TestCloseFlushesResidentBytesBeforeMetadata(t *testing.T) {
 	if !info.Rs.Present(ranges.Range{Pos: 0, Size: int64(len(data))}) {
 		t.Fatalf("resident bytes missing from close metadata: %+v", info.Rs)
 	}
-
 }
 
 func TestDiskPersistenceChangeMarksMetadataDirty(t *testing.T) {

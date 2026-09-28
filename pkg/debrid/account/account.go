@@ -37,7 +37,7 @@ func (a *Account) Client() *request.Client {
 	return a.httpClient
 }
 
-// slice download link
+// slice download link.
 func (a *Account) sliceFileLink(fileLink string) string {
 	if a.Debrid != "realdebrid" {
 		return fileLink
@@ -93,7 +93,7 @@ func (a *Account) DownloadLinksCount() int {
 }
 
 // GetRandomLink returns any cached download link for speed testing
-// Returns empty link if no links are cached
+// Returns empty link if no links are cached.
 func (a *Account) GetRandomLink() (types.DownloadLink, bool) {
 	var result types.DownloadLink
 	found := false
@@ -114,7 +114,7 @@ func (a *Account) StoreDownloadLinks(dls map[string]*types.DownloadLink) {
 	}
 }
 
-// MarkDisabled marks the account as disabled and increments the disable count
+// MarkDisabled marks the account as disabled and increments the disable count.
 func (a *Account) MarkDisabled() {
 	a.Disabled.Store(true)
 	a.DisableCount.Add(1)

@@ -211,10 +211,10 @@ func (s *session) Read(p []byte) (int, error) {
 		}
 
 		s.closeBodyLocked()
-		switch {
-		case err == nil:
+		switch err {
+		case nil:
 			err = io.ErrNoProgress
-		case err == io.EOF:
+		case io.EOF:
 			if s.pos >= s.size {
 				return 0, io.EOF
 			}

@@ -403,7 +403,7 @@ type TorrentFile struct {
 
 const qbitInfiniteETA int64 = 8640000
 
-// ToQBitTorrent converts to QBitTorrent format for API compatibility
+// ToQBitTorrent converts to QBitTorrent format for API compatibility.
 func convertToQBitTorrentTorrent(t *storage.Entry) Torrent {
 	name := t.Name
 	contentPath := t.ContentPath

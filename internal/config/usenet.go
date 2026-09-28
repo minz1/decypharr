@@ -51,7 +51,7 @@ func (u UsenetProvider) ID() string {
 	return fmt.Sprintf("%s:%d/%s", u.Host, u.Port, u.Username)
 }
 
-// Usenet configuration for usenet streaming and downloading
+// Usenet configuration for usenet streaming and downloading.
 type Usenet struct {
 	Providers []UsenetProvider `json:"providers,omitempty"` // Usenet provider configurations
 	// Streaming and processing concurrency.

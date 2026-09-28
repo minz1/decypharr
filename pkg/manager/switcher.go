@@ -10,7 +10,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
-// SwitchTorrent moves a torrent from one debrid to another
+// SwitchTorrent moves a torrent from one debrid to another.
 func (m *Manager) SwitchTorrent(
 	ctx context.Context,
 	infohash, target string,

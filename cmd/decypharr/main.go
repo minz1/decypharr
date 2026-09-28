@@ -68,7 +68,6 @@ func Start(ctx context.Context) error {
 		srv.SetRestartFunc(restartFunc)
 
 		resetFunc := func() {
-
 			config.Reset()
 			// Stop manager to reset ready channel and cleanup resources
 			if err := mgr.Reset(); err != nil {

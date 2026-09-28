@@ -27,7 +27,7 @@ const (
 	LevelFile
 )
 
-// Dir implements a FUSE directory following
+// Dir implements a FUSE directory following.
 type Dir struct {
 	fs.Inode
 	vfs   *vfs.Manager
@@ -50,7 +50,7 @@ var _ = (fs.NodeGetattrer)((*Dir)(nil))
 var _ = (fs.NodeUnlinker)((*Dir)(nil))
 var _ = (fs.NodeRmdirer)((*Dir)(nil))
 
-// NewDir creates a new directory
+// NewDir creates a new directory.
 func NewDir(
 	vfsManager *vfs.Manager,
 	name string,
@@ -96,7 +96,7 @@ func (d *Dir) childStableAttr(name string, mode uint32) fs.StableAttr {
 	}
 }
 
-// newNode creates a new fuse node from a FileInfo, caching it on the FileInfo
+// newNode creates a new fuse node from a FileInfo, caching it on the FileInfo.
 func (d *Dir) newNode(info *manager.FileInfo) fs.InodeEmbedder {
 	// Check if we have a cached node
 	if cached := info.Sys(); cached != nil {
@@ -128,7 +128,7 @@ func (d *Dir) newNode(info *manager.FileInfo) fs.InodeEmbedder {
 	return node
 }
 
-// Getattr returns directory attributes
+// Getattr returns directory attributes.
 func (d *Dir) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	out.Mode = 0755 | fuse.S_IFDIR
 	out.Size = 4096 // Standard directory size
@@ -225,7 +225,7 @@ func (d *Dir) nodeModTime(info *manager.FileInfo, node fs.InodeEmbedder) uint64 
 	}
 }
 
-// lookupChild looks up a child by name using O(1) lookups where possible
+// lookupChild looks up a child by name using O(1) lookups where possible.
 func (d *Dir) lookupChild(name string) (*manager.FileInfo, syscall.Errno) {
 	switch d.level {
 	case LevelRoot:
@@ -260,7 +260,7 @@ func (d *Dir) lookupChild(name string) (*manager.FileInfo, syscall.Errno) {
 	}
 }
 
-// setEntryOut sets the attributes for an entry
+// setEntryOut sets the attributes for an entry.
 func (d *Dir) setEntryOut(info *manager.FileInfo, out *fuse.EntryOut, modTime uint64) {
 	if info.IsDir() {
 		out.Attr.Mode = fuse.S_IFDIR | 0755
@@ -303,7 +303,7 @@ func (d *Dir) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	return fs.NewListDirStream(fuseEntries), 0
 }
 
-// listChildren returns the children of this directory
+// listChildren returns the children of this directory.
 func (d *Dir) listChildren() ([]manager.FileInfo, syscall.Errno) {
 	switch d.level {
 	case LevelRoot:
@@ -328,7 +328,7 @@ func (d *Dir) listChildren() ([]manager.FileInfo, syscall.Errno) {
 	}
 }
 
-// Refresh clears any cached nodes so next lookup gets fresh data
+// Refresh clears any cached nodes so next lookup gets fresh data.
 func (d *Dir) Refresh() {
 	// For kernel cache invalidation, we can still notify if we're mounted
 	if d.EmbeddedInode().StableAttr().Ino != 0 {
@@ -337,7 +337,7 @@ func (d *Dir) Refresh() {
 	}
 }
 
-// RefreshChild invalidates a specific child directory's cache
+// RefreshChild invalidates a specific child directory's cache.
 func (d *Dir) RefreshChild(name string) {
 	if d.EmbeddedInode().StableAttr().Ino == 0 {
 		return
@@ -362,7 +362,7 @@ func (d *Dir) RefreshChild(name string) {
 	}
 }
 
-// Unlink removes a child from this directory
+// Unlink removes a child from this directory.
 func (d *Dir) Unlink(ctx context.Context, name string) syscall.Errno {
 	if d.level != LevelFile {
 		return syscall.EPERM
@@ -381,7 +381,7 @@ func (d *Dir) Unlink(ctx context.Context, name string) syscall.Errno {
 	return 0
 }
 
-// Rmdir removes a directory from this directory
+// Rmdir removes a directory from this directory.
 func (d *Dir) Rmdir(ctx context.Context, name string) syscall.Errno {
 	if d.level != LevelTorrent {
 		return syscall.EPERM

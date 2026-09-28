@@ -16,7 +16,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/vfs"
 )
 
-// Backend implements the cgofuse backend for cross-platform FUSE support
+// Backend implements the cgofuse backend for cross-platform FUSE support.
 type Backend struct {
 	config *config.FuseConfig
 	logger zerolog.Logger
@@ -26,7 +26,7 @@ type Backend struct {
 	vfs    *vfs.Manager
 }
 
-// NewBackend creates a new cgofuse backend
+// NewBackend creates a new cgofuse backend.
 func NewBackend(vfs *vfs.Manager, config *config.FuseConfig) (backend.Backend, error) {
 	log := logger.New("cgofuse")
 	return &Backend{
@@ -37,7 +37,7 @@ func NewBackend(vfs *vfs.Manager, config *config.FuseConfig) (backend.Backend, e
 	}, nil
 }
 
-// Mount mounts the filesystem using cgofuse
+// Mount mounts the filesystem using cgofuse.
 func (b *Backend) Mount(ctx context.Context) error {
 	// Create mount point if it doesn't exist (skip on Windows)
 	if runtime.GOOS != "windows" {
@@ -113,7 +113,7 @@ func (b *Backend) Mount(ctx context.Context) error {
 	return nil
 }
 
-// Unmount unmounts the filesystem
+// Unmount unmounts the filesystem.
 func (b *Backend) Unmount(ctx context.Context) error {
 	b.logger.Info().Msg("Unmounting cgofuse backend")
 
@@ -132,7 +132,7 @@ func (b *Backend) Unmount(ctx context.Context) error {
 	return nil
 }
 
-// WaitReady waits for the mount to be ready
+// WaitReady waits for the mount to be ready.
 func (b *Backend) WaitReady(ctx context.Context) error {
 	// cgofuse doesn't have a direct ready signal
 	// We rely on the ready flag being set after successful mount
@@ -142,12 +142,12 @@ func (b *Backend) WaitReady(ctx context.Context) error {
 	return fmt.Errorf("mount not ready")
 }
 
-// IsReady returns true if the mount is ready
+// IsReady returns true if the mount is ready.
 func (b *Backend) IsReady() bool {
 	return b.ready.Load()
 }
 
-// Type returns the backend type
+// Type returns the backend type.
 func (b *Backend) Type() backend.Type {
 	return backend.Cgo
 }

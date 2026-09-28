@@ -95,7 +95,7 @@ func (ad *AllDebrid) Logger() zerolog.Logger {
 	return ad.logger
 }
 
-// doRequest performs a GET request and unmarshals the response
+// doRequest performs a GET request and unmarshals the response.
 func (ad *AllDebrid) doRequest(
 	ctx context.Context,
 	client *request.Client,
@@ -763,7 +763,7 @@ func (ad *AllDebrid) DeleteLink(downloadLink types.DownloadLink) error {
 	return ad.accountsManager.DeleteDownloadLink(downloadLink, ad.deleteLink)
 }
 
-// SpeedTest measures API latency and download speed using cached links
+// SpeedTest measures API latency and download speed using cached links.
 func (ad *AllDebrid) SpeedTest(ctx context.Context) types.SpeedTestResult {
 	result := types.SpeedTestResult{
 		Provider: ad.config.Name,

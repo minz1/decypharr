@@ -6,7 +6,7 @@ import (
 	"runtime"
 )
 
-// Type represents the type of FUSE backend
+// Type represents the type of FUSE backend.
 type Type string
 
 const (
@@ -14,7 +14,7 @@ const (
 	Cgo    Type = "cgo"
 )
 
-// Backend represents a FUSE backend implementation
+// Backend represents a FUSE backend implementation.
 type Backend interface {
 	// Mount mounts the filesystem at the configured path
 	Mount(ctx context.Context) error
@@ -36,7 +36,7 @@ type Backend interface {
 
 // GetDefaultBackendType returns the recommended backend for the current platform
 // Linux: hanwen (fastest, pure Go)
-// macOS/Windows: cgofuse (cross-platform, works with Fuse-T/WinFsp)
+// macOS/Windows: cgofuse (cross-platform, works with Fuse-T/WinFsp).
 func GetDefaultBackendType() Type {
 	if runtime.GOOS == "linux" && os.Getenv("DFS_FUSE_BACKEND") != "cgo" {
 		return Hanwen

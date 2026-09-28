@@ -30,7 +30,7 @@ func (s *Server) skipAuthHandler(w http.ResponseWriter, r *http.Request) {
 	s.redirectTo(w, r, "/")
 }
 
-// isValidAPIToken checks if the request contains a valid API token
+// isValidAPIToken checks if the request contains a valid API token.
 func (s *Server) isValidAPIToken(r *http.Request) bool {
 	// Check Authorization header for Bearer token
 	authHeader := r.Header.Get("Authorization")
@@ -55,7 +55,7 @@ func (s *Server) isValidAPIToken(r *http.Request) bool {
 	return config.VerifyToken(token)
 }
 
-// refreshAPIToken generates a new API token and saves it
+// refreshAPIToken generates a new API token and saves it.
 func (s *Server) refreshAPIToken() (string, error) {
 	token, err := config.GenerateAPIToken()
 	if err != nil {

@@ -56,7 +56,7 @@ func getCategory(ctx context.Context) string {
 	return ""
 }
 
-// modeContext extracts the mode parameter from the request
+// modeContext extracts the mode parameter from the request.
 func (s *SABnzbd) modeContext(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mode := r.FormValue("mode")
@@ -68,7 +68,7 @@ func (s *SABnzbd) modeContext(next http.Handler) http.Handler {
 // authContext creates a middleware that extracts the Arr host and token from the Authorization header
 // and adds it to the request context.
 // This is used to identify the Arr instance for the request.
-// Only a valid host and token will be added to the context/config. The rest are manual
+// Only a valid host and token will be added to the context/config. The rest are manual.
 func (s *SABnzbd) authContext(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host := r.FormValue("ma_username")

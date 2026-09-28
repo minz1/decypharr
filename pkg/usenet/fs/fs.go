@@ -32,7 +32,7 @@ type PrefetchableReaderAt interface {
 	OpenCursor() reader.ReadCursor
 }
 
-// FS implements fs.FS for RAR volumes backed by NNTP Segments
+// FS implements fs.FS for RAR volumes backed by NNTP Segments.
 type FS struct {
 	pools             *reader.Pools
 	ctx               context.Context
@@ -47,7 +47,7 @@ type FS struct {
 	logger            zerolog.Logger
 }
 
-// Option configures the filesystem
+// Option configures the filesystem.
 type Option func(*FS)
 
 func WithRetention(retention reader.Retention) Option {
@@ -62,7 +62,7 @@ func WithFetchScheduler(scheduler *reader.FetchScheduler) Option {
 func WithPools(pools *reader.Pools) Option { return func(f *FS) { f.pools = pools } }
 
 // NewFS creates a new filesystem backed by the provided connection nntpClient.
-// prefetchSize is the amount of data to prefetch ahead in bytes (e.g., 16*1024*1024 for 16MB)
+// prefetchSize is the amount of data to prefetch ahead in bytes (e.g., 16*1024*1024 for 16MB).
 func NewFS(
 	ctx context.Context,
 	client *nntp.Client,

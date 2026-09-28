@@ -28,7 +28,7 @@ var (
 	emptyDownloadLink = types.DownloadLink{}
 )
 
-// EntryRefresher is a function that refreshes an entry by infohash
+// EntryRefresher is a function that refreshes an entry by infohash.
 type EntryRefresher func(infohash string) (*storage.Entry, error)
 type EntryRepairer func(ctx context.Context, entry *storage.Entry) error
 type EntrySaver func(entry *storage.Entry) error
@@ -47,7 +47,7 @@ type Service struct {
 	logger         zerolog.Logger
 }
 
-// New creates a new LinkService
+// New creates a new LinkService.
 func New(
 	clients *xsync.Map[string, debrid.Client],
 	entryRefresher EntryRefresher,
@@ -250,7 +250,7 @@ func (s *Service) markEntryBad(entry *storage.Entry, filename string, attempt in
 		Msg("Giving up on entry after repeated failed re-insertions")
 }
 
-// fetchLink fetches a download link from the debrid provider (via account cache)
+// fetchLink fetches a download link from the debrid provider (via account cache).
 func (s *Service) fetchLink(
 	ctx context.Context,
 	entry *storage.Entry,
@@ -342,7 +342,7 @@ func (s *Service) fetchLink(
 	return downloadLink, nil
 }
 
-// getPlacementFile retrieves the placement file with refresh fallback
+// getPlacementFile retrieves the placement file with refresh fallback.
 func (s *Service) getPlacementFile(entry *storage.Entry, filename string) (*storage.ProviderFile, error) {
 	_, ok := entry.Files[filename]
 	if !ok {
@@ -407,7 +407,7 @@ func (s *Service) getPlacementFile(entry *storage.Entry, filename string) (*stor
 	return placementFile, nil
 }
 
-// validateLink validates a download link by making a HEAD request
+// validateLink validates a download link by making a HEAD request.
 func (s *Service) validateLink(ctx context.Context, link *types.DownloadLink) error {
 	if link == nil {
 		return NewPermanentError(ErrEmptyLink, "empty_link")
@@ -416,7 +416,7 @@ func (s *Service) validateLink(ctx context.Context, link *types.DownloadLink) er
 		return NewPermanentError(fmt.Errorf("download url is empty for %s||%s", link.Filename, link.Link), "empty_link")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "HEAD", link.DownloadLink, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, link.DownloadLink, nil)
 	if err != nil {
 		return NewPermanentError(
 			fmt.Errorf("failed to create HEAD request: %w", err),
@@ -445,7 +445,7 @@ func (s *Service) validateLink(ctx context.Context, link *types.DownloadLink) er
 	return ErrorCodeToLinkError(errorCode)
 }
 
-// disableLinkAccount handles errors that require disabling an account
+// disableLinkAccount handles errors that require disabling an account.
 func (s *Service) disableLinkAccount(link types.DownloadLink, linkErr *Error) error {
 	client, err := s.getClient(link.Debrid)
 	if err != nil {
@@ -475,7 +475,7 @@ func (s *Service) disableLinkAccount(link types.DownloadLink, linkErr *Error) er
 	return nil
 }
 
-// invalidateAndRefetch removes a link from both validation tracking and account cache
+// invalidateAndRefetch removes a link from both validation tracking and account cache.
 func (s *Service) invalidateAndRefetch(
 	ctx context.Context,
 	entry *storage.Entry,
@@ -500,7 +500,7 @@ func (s *Service) invalidateAndRefetch(
 	return s.fetchLink(ctx, entry, link.Filename, attempt)
 }
 
-// Clear removes all validation tracking entries
+// Clear removes all validation tracking entries.
 func (s *Service) Clear() {
 	s.validated.Clear()
 }

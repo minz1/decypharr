@@ -31,7 +31,7 @@ const (
 	EntryStateError       TorrentState = "error"
 )
 
-// Common errors
+// Common errors.
 var (
 	ErrPlacementNotFound     = fmt.Errorf("providerEntry not found")
 	ErrAlreadyOnDebrid       = fmt.Errorf("torrent already on this debrid")
@@ -39,7 +39,7 @@ var (
 	ErrNoActivePlacement     = fmt.Errorf("no active providerEntry")
 )
 
-// Entry is the unified model across debrids and nzbs
+// Entry is the unified model across debrids and nzbs.
 type Entry struct {
 	Protocol         config.Protocol `msgpack:"protocol"          json:"protocol"`          // torrent or nzb
 	InfoHash         string          `msgpack:"info_hash"         json:"info_hash"`         // Primary key - torrent hash
@@ -141,7 +141,7 @@ func (e *Entry) CanBeMoved() bool {
 
 // EntryItem These are torrents by names.
 // This keeps track of multiple torrents with the same folder name
-// Comprises only files(which has their respective infohashes) and placements
+// Comprises only files(which has their respective infohashes) and placements.
 type EntryItem struct {
 	Name  string           `msgpack:"name"  json:"name"`  // Folder name
 	Files map[string]*File `msgpack:"files" json:"files"` // filename -> File details
@@ -206,14 +206,14 @@ type File struct {
 	InfoHash  string    `msgpack:"infohash,omitempty"   json:"infohash,omitempty"` // Parent infohash(might be an nzb or torrent)
 }
 
-// ProviderFile represents debrid-specific file information
+// ProviderFile represents debrid-specific file information.
 type ProviderFile struct {
 	Id   string `msgpack:"id,omitempty"   json:"id,omitempty"`   // For TorBox-style providers (file_id)
 	Link string `msgpack:"link,omitempty" json:"link,omitempty"` // For RealDebrid/AllDebrid-style providers (restricted URL)
 	Path string `msgpack:"path,omitempty" json:"path,omitempty"` // Path within the debrid's filesystem
 }
 
-// ProviderEntry represents a torrent's providerEntry on a specific debrid service
+// ProviderEntry represents a torrent's providerEntry on a specific debrid service.
 type ProviderEntry struct {
 	Provider  string                    `msgpack:"provider,omitempty"   json:"provider,omitempty"`
 	ID        string                    `msgpack:"debrid_id"            json:"id"`                   // ID in that debrid service (e.g., L3734BKKKSBA6)
@@ -258,7 +258,7 @@ func (p *ProviderEntry) IsValid() bool {
 	return true
 }
 
-// GetActiveProvider returns the active providerEntry
+// GetActiveProvider returns the active providerEntry.
 func (e *Entry) GetActiveProvider() *ProviderEntry {
 	if e.Providers == nil || e.ActiveProvider == "" {
 		return nil
@@ -293,7 +293,7 @@ func (e *Entry) AddUsenetProvider(metadata *NZB) *ProviderEntry {
 	return providerEntry
 }
 
-// AddTorrentProvider adds or updates a providerEntry for a debrid
+// AddTorrentProvider adds or updates a providerEntry for a debrid.
 func (e *Entry) AddTorrentProvider(debridTorrent *debridTypes.Torrent) *ProviderEntry {
 	if e.Providers == nil {
 		e.Providers = make(map[string]*ProviderEntry)
@@ -318,7 +318,7 @@ func (e *Entry) AddTorrentProvider(debridTorrent *debridTypes.Torrent) *Provider
 	return providerEntry
 }
 
-// ActivatePlacement switches the active debrid
+// ActivatePlacement switches the active debrid.
 func (e *Entry) ActivatePlacement(debridName string) error {
 	if e.Providers == nil {
 		return ErrPlacementNotFound
@@ -347,7 +347,7 @@ func (e *Entry) ActivatePlacement(debridName string) error {
 	return nil
 }
 
-// RemoveProvider deletes a debrid torrent from the debrid itself
+// RemoveProvider deletes a debrid torrent from the debrid itself.
 func (e *Entry) RemoveProvider(debridName string, cleanup func(providerEntry *ProviderEntry) error) {
 	if e.Providers == nil {
 		return
@@ -382,7 +382,7 @@ func (e *Entry) RemoveProvider(debridName string, cleanup func(providerEntry *Pr
 	}
 }
 
-// HasProvider checks if torrent exists on a debrid
+// HasProvider checks if torrent exists on a debrid.
 func (e *Entry) HasProvider(provider string) bool {
 	if e.Providers == nil {
 		return false
@@ -391,7 +391,7 @@ func (e *Entry) HasProvider(provider string) bool {
 	return exists
 }
 
-// SwitchToNextProvider switches to the next completed providerEntry if available
+// SwitchToNextProvider switches to the next completed providerEntry if available.
 func (e *Entry) SwitchToNextProvider() {
 	if e.Providers == nil {
 		return
@@ -404,7 +404,7 @@ func (e *Entry) SwitchToNextProvider() {
 	}
 }
 
-// MarkAsCompleted marks the torrent as completed
+// MarkAsCompleted marks the torrent as completed.
 func (e *Entry) MarkAsCompleted(contentPath string) {
 	e.State = EntryStatePausedUP
 	e.IsDownloading = false
@@ -416,7 +416,7 @@ func (e *Entry) MarkAsCompleted(contentPath string) {
 	e.UpdatedAt = now
 }
 
-// MarkAsError marks the torrent as errored
+// MarkAsError marks the torrent as errored.
 func (e *Entry) MarkAsError(err error) {
 	e.State = EntryStateError
 	e.Status = debridTypes.TorrentStatusError
@@ -456,7 +456,7 @@ func (e *Entry) GetFileByID(id string) (*File, error) {
 }
 
 // RunChecks performs integrity checks on the Entry
-// Returns whether to refresh and any error encountered
+// Returns whether to refresh and any error encountered.
 func (e *Entry) RunChecks() (bool, error) {
 	if e.Bad {
 		return false, fmt.Errorf("entry marked as bad")
@@ -503,7 +503,7 @@ func (e *Entry) GetFolder() string {
 	return GetTorrentFolder(config.Get().FolderNaming, e)
 }
 
-// IsValid checks if the torrent has essential fields
+// IsValid checks if the torrent has essential fields.
 func (e *Entry) IsValid() bool {
 	// Check infohash
 	if e.InfoHash == "" || e.Name == "" {
@@ -524,7 +524,7 @@ func (e *Entry) IsValid() bool {
 	return activePlacement.IsValid()
 }
 
-// DownloadPath returns the expected download/symlink path for this entry
+// DownloadPath returns the expected download/symlink path for this entry.
 func (e *Entry) DownloadPath() string {
 	if config.Get().FolderNaming == config.WebDavUseArrSubmittedName {
 		return filepath.Join(e.SavePath, e.GetFolder())
@@ -532,7 +532,7 @@ func (e *Entry) DownloadPath() string {
 	return filepath.Join(e.SavePath, utils.RemoveExtension(e.Name))
 }
 
-// SwitcherJob tracks the progress of a migration operation
+// SwitcherJob tracks the progress of a migration operation.
 type SwitcherJob struct {
 	ID             string         `msgpack:"id"                     json:"id"`
 	InfoHash       string         `msgpack:"infohash"               json:"info_hash"`              // Entry being migrated
@@ -547,7 +547,7 @@ type SwitcherJob struct {
 	WaitComplete   bool           `msgpack:"wait_complete"          json:"wait_complete"`          // Whether to wait for download
 }
 
-// SystemMigrationStatus tracks overall system migration from legacy to unified
+// SystemMigrationStatus tracks overall system migration from legacy to unified.
 type SystemMigrationStatus struct {
 	Running   bool      `msgpack:"running"              json:"running"`              // Whether migration is running
 	Total     int       `msgpack:"total"                json:"total"`                // Total torrents to migrate
@@ -558,7 +558,7 @@ type SystemMigrationStatus struct {
 	ErrorList []string  `msgpack:"error_list,omitempty" json:"error_list,omitempty"` // List of errors
 }
 
-// CachedTorrent represents the debrid cache JSON format for migration
+// CachedTorrent represents the debrid cache JSON format for migration.
 type CachedTorrent struct {
 	ID               string                       `json:"id"`                // Debrid torrent ID
 	InfoHash         string                       `json:"info_hash"`         // Entry info hash
@@ -585,7 +585,7 @@ type CachedTorrent struct {
 	Bad              bool                         `json:"bad"`               // Is bad
 }
 
-// ToManagedTorrent converts a cached torrent to managed format
+// ToManagedTorrent converts a cached torrent to managed format.
 func (ct *CachedTorrent) ToManagedTorrent() *Entry {
 	now := time.Now()
 	// Parse timestamps
@@ -683,7 +683,7 @@ func (ct *CachedTorrent) ToManagedTorrent() *Entry {
 	return mt
 }
 
-// GetTorrentFolder returns the folder name for a torrent by debrid ID
+// GetTorrentFolder returns the folder name for a torrent by debrid ID.
 func GetTorrentFolder(folderNaming config.WebDavFolderNaming, entry *Entry) string {
 	var folder string
 	switch folderNaming {
