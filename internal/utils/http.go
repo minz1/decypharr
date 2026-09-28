@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -99,22 +100,25 @@ func ValidateURL(urlStr string) error {
 	return fmt.Errorf("invalid URL format: %s", urlStr)
 }
 
+// JoinURL joins paths onto base. A query string on the last path element is
+// kept verbatim after the joined path.
 func JoinURL(base string, paths ...string) (string, error) {
-	// Split the last path component to separate query parameters
-	lastPath := paths[len(paths)-1]
-	parts := strings.Split(lastPath, "?")
-	paths[len(paths)-1] = parts[0]
+	if len(paths) == 0 {
+		return url.JoinPath(base)
+	}
+	// Copy so the caller's slice is not rewritten, and split only at the
+	// first '?' so a query containing '?' survives intact.
+	paths = append([]string(nil), paths...)
+	last, query, hasQuery := strings.Cut(paths[len(paths)-1], "?")
+	paths[len(paths)-1] = last
 
 	joined, err := url.JoinPath(base, paths...)
 	if err != nil {
 		return "", err
 	}
-
-	// AddOrUpdate back query parameters if they exist
-	if len(parts) > 1 {
-		return joined + "?" + parts[1], nil
+	if hasQuery {
+		return joined + "?" + query, nil
 	}
-
 	return joined, nil
 }
 
@@ -126,27 +130,40 @@ func WithHeader(key, value string) DownloadOptions {
 	}
 }
 
-func DownloadFile(url string, options ...DownloadOptions) (string, []byte, error) {
-	req, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		return "", nil, fmt.Errorf("failed to create request: %w", err)
-	}
+// downloadTimeout bounds a whole NZB or .torrent fetch, so a stalled indexer
+// cannot hang the importing request (and its connection) forever.
+const downloadTimeout = 5 * time.Minute
 
-	// Apply options to the request
+// fetch GETs rawURL with a bounded client and returns the response only for
+// 200 OK. The caller closes the body.
+func fetch(rawURL string, options ...DownloadOptions) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
 	for _, opt := range options {
 		opt(req)
 	}
 
-	client := &http.Client{}
+	client := &http.Client{Timeout: downloadTimeout}
 	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("status code %d", resp.StatusCode)
+	}
+	return resp, nil
+}
+
+// DownloadFile fetches url and returns the server-suggested filename and body.
+func DownloadFile(url string, options ...DownloadOptions) (string, []byte, error) {
+	resp, err := fetch(url, options...)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to download file: %w", err)
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", nil, fmt.Errorf("failed to download file: status code %d", resp.StatusCode)
-	}
 
 	filename := getFilenameFromResponse(resp, url)
 
