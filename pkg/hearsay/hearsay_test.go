@@ -155,8 +155,8 @@ func TestSeededTorrentLimit(t *testing.T) {
 			}()
 			// Restrict discovery to this identity during the test.
 			s.follow = []string{hex.EncodeToString(s.engine.Identity())}
-			if err := s.Start(ctx); err != nil {
-				t.Fatal(err)
+			if startErr := s.Start(ctx); startErr != nil {
+				t.Fatal(startErr)
 			}
 			stats := s.Status().Transport
 			if stats == nil || stats.MaxSeededTorrents != test.want {
@@ -420,8 +420,8 @@ func ingestPeer(t *testing.T, service *Service, domain hearsaylib.Domain, subjec
 	}
 	defer peer.Close()
 	for _, subject := range subjects {
-		if err := peer.Observe(domain.Namespace(), subject, 1, time.Now()); err != nil {
-			t.Fatal(err)
+		if observeErr := peer.Observe(domain.Namespace(), subject, 1, time.Now()); observeErr != nil {
+			t.Fatal(observeErr)
 		}
 	}
 	generation, err := peer.Publish(domain.Namespace())
@@ -432,7 +432,7 @@ func ingestPeer(t *testing.T, service *Service, domain hearsaylib.Domain, subjec
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.engine.Ingest(raw); err != nil {
-		t.Fatal(err)
+	if _, ingestErr := service.engine.Ingest(raw); ingestErr != nil {
+		t.Fatal(ingestErr)
 	}
 }

@@ -40,8 +40,8 @@ func (m *Manager) ApplyVirtualFolders(definitions []config.VirtualFolder) error 
 	}
 	if m.mountManager != nil {
 		go func() {
-			if err := m.mountManager.Refresh([]string{""}); err != nil {
-				m.logger.Warn().Err(err).Msg("Failed to refresh mount after virtual-folder update")
+			if refreshErr := m.mountManager.Refresh([]string{""}); refreshErr != nil {
+				m.logger.Warn().Err(refreshErr).Msg("Failed to refresh mount after virtual-folder update")
 			}
 		}()
 	}

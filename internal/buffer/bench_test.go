@@ -77,13 +77,13 @@ func benchStreamSequential(b *testing.B, cfg Config) {
 	b.ResetTimer()
 	for i := range b.N {
 		off := int64(i) * benchChunk
-		if _, err := buf.WriteAt(chunk, off); err != nil {
-			b.Fatal(err)
+		if _, writeAtErr := buf.WriteAt(chunk, off); writeAtErr != nil {
+			b.Fatal(writeAtErr)
 		}
 		buf.SetReadHead(off)
 		if off >= 4<<20 {
-			if _, err := buf.ReadAt(rbuf, off-4<<20); err != nil {
-				b.Fatal(err)
+			if _, readAtErr := buf.ReadAt(rbuf, off-4<<20); readAtErr != nil {
+				b.Fatal(readAtErr)
 			}
 		}
 		// Sub-block trailing discards, like production's segment-granular
@@ -91,8 +91,8 @@ func benchStreamSequential(b *testing.B, cfg Config) {
 		// cumulatively cover it — without that the memory variant would pin
 		// its whole budget and start dropping live data.
 		if off > benchWindow {
-			if err := buf.Discard(off-benchWindow, benchChunk); err != nil {
-				b.Fatal(err)
+			if discardErr := buf.Discard(off-benchWindow, benchChunk); discardErr != nil {
+				b.Fatal(discardErr)
 			}
 		}
 	}
@@ -126,8 +126,8 @@ func benchStreamContendedReads(b *testing.B, cfg Config) {
 	fillPattern(chunk, 0)
 	const prefill = int64(8 << 20)
 	for off := int64(0); off < prefill; off += benchChunk {
-		if _, err := buf.WriteAt(chunk, off); err != nil {
-			b.Fatal(err)
+		if _, writeAtErr := buf.WriteAt(chunk, off); writeAtErr != nil {
+			b.Fatal(writeAtErr)
 		}
 	}
 
@@ -157,7 +157,7 @@ func benchStreamContendedReads(b *testing.B, cfg Config) {
 				seed = seed*6364136223846793005 + 1442695040888963407
 				off := lo + int64(seed%uint64(span))*benchChunk
 				start := time.Now()
-				if _, err := buf.ReadAt(rbuf, off); err != nil {
+				if _, readAtErr := buf.ReadAt(rbuf, off); readAtErr != nil {
 					// A discard racing the offset pick is expected near the
 					// window tail; skip it.
 					continue
@@ -172,8 +172,8 @@ func benchStreamContendedReads(b *testing.B, cfg Config) {
 	b.ResetTimer()
 	for range b.N {
 		off := frontier.Load()
-		if _, err := buf.WriteAt(chunk, off); err != nil {
-			b.Fatal(err)
+		if _, writeAtErr := buf.WriteAt(chunk, off); writeAtErr != nil {
+			b.Fatal(writeAtErr)
 		}
 		frontier.Store(off + benchChunk)
 		buf.SetReadHead(off)
@@ -214,12 +214,12 @@ func BenchmarkReadWarmDisk(b *testing.B) {
 		chunk := make([]byte, 1<<20)
 		fillPattern(chunk, 0)
 		for off := int64(0); off < size; off += 1 << 20 {
-			if _, err := w.WriteAt(chunk, off); err != nil {
-				b.Fatal(err)
+			if _, writeAtErr := w.WriteAt(chunk, off); writeAtErr != nil {
+				b.Fatal(writeAtErr)
 			}
 		}
-		if err := w.Close(); err != nil {
-			b.Fatal(err)
+		if closeErr := w.Close(); closeErr != nil {
+			b.Fatal(closeErr)
 		}
 	}
 	buf, err := p.NewBuffer(Config{
@@ -241,8 +241,8 @@ func BenchmarkReadWarmDisk(b *testing.B) {
 		for pb.Next() {
 			off := (i * benchChunk) % (size - benchChunk)
 			i++
-			if _, err := buf.ReadAt(rbuf, off); err != nil {
-				b.Error(err)
+			if _, readAtErr := buf.ReadAt(rbuf, off); readAtErr != nil {
+				b.Error(readAtErr)
 				return
 			}
 		}
@@ -265,8 +265,8 @@ func BenchmarkReadWarmRAM(b *testing.B) {
 	chunk := make([]byte, 1<<20)
 	fillPattern(chunk, 0)
 	for off := int64(0); off < size; off += 1 << 20 {
-		if _, err := buf.WriteAt(chunk, off); err != nil {
-			b.Fatal(err)
+		if _, writeAtErr := buf.WriteAt(chunk, off); writeAtErr != nil {
+			b.Fatal(writeAtErr)
 		}
 	}
 	if st := buf.Stats(); st.BytesInRAM < size {
@@ -282,8 +282,8 @@ func BenchmarkReadWarmRAM(b *testing.B) {
 		for pb.Next() {
 			off := (i * benchChunk) % (size - benchChunk)
 			i++
-			if _, err := buf.ReadAt(rbuf, off); err != nil {
-				b.Error(err)
+			if _, readAtErr := buf.ReadAt(rbuf, off); readAtErr != nil {
+				b.Error(readAtErr)
 				return
 			}
 		}

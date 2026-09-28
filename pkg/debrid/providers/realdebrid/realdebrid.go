@@ -201,14 +201,14 @@ func (r *RealDebrid) doPostFormWithClient(
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		if result != nil && resp.ContentLength != 0 {
-			if err := request.DecodeJSON(resp, result); err != nil {
-				return resp, err
+			if decodeJSONErr := request.DecodeJSON(resp, result); decodeJSONErr != nil {
+				return resp, decodeJSONErr
 			}
 		}
 	} else {
 		if errorResult != nil && resp.ContentLength != 0 {
-			if err := request.DecodeJSON(resp, errorResult); err != nil {
-				return resp, err
+			if decodeJSONErr := request.DecodeJSON(resp, errorResult); decodeJSONErr != nil {
+				return resp, decodeJSONErr
 			}
 		}
 	}
@@ -602,9 +602,13 @@ func (r *RealDebrid) CheckStatus(t *types.Torrent) (*types.Torrent, error) {
 			}
 
 			selectURL := fmt.Sprintf("/torrents/selectFiles/%s", t.Id)
-			selectResp, err := r.doPostForm(selectURL, map[string]string{"files": strings.Join(filesId, ",")}, nil)
-			if err != nil {
-				return t, err
+			selectResp, doPostFormErr := r.doPostForm(
+				selectURL,
+				map[string]string{"files": strings.Join(filesId, ",")},
+				nil,
+			)
+			if doPostFormErr != nil {
+				return t, doPostFormErr
 			}
 
 			if selectResp.StatusCode != http.StatusNoContent {
@@ -844,8 +848,8 @@ func (r *RealDebrid) getTorrents(offset int, limit int) (int, []*types.Torrent, 
 	}
 
 	var data []TorrentsResponse
-	if err := request.DecodeJSON(resp, &data); err != nil {
-		return 0, torrents, err
+	if decodeJSONErr := request.DecodeJSON(resp, &data); decodeJSONErr != nil {
+		return 0, torrents, decodeJSONErr
 	}
 
 	totalItems, _ := strconv.Atoi(resp.Header.Get("X-Total-Count"))

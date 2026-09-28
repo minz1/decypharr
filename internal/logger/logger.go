@@ -25,8 +25,8 @@ func GetLogPath() string {
 	logsDir := filepath.Join(config.GetMainPath(), "logs")
 
 	if _, err := os.Stat(logsDir); os.IsNotExist(err) {
-		if err := os.MkdirAll(logsDir, 0755); err != nil {
-			panic(fmt.Sprintf("Failed to create logs directory: %v", err))
+		if mkdirAllErr := os.MkdirAll(logsDir, 0755); mkdirAllErr != nil {
+			panic(fmt.Sprintf("Failed to create logs directory: %v", mkdirAllErr))
 		}
 	}
 

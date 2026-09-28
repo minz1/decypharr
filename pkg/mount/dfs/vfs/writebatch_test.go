@@ -115,9 +115,9 @@ func TestCopyBatchedLimitsSourceReadBeforeWaiting(t *testing.T) {
 		t.Fatalf("background source read requested %d bytes, want %d", got, downloadBatchSize)
 	}
 	select {
-	case err := <-errCh:
-		if err != nil {
-			t.Fatalf("waiter failed: %v", err)
+	case recvErr := <-errCh:
+		if recvErr != nil {
+			t.Fatalf("waiter failed: %v", recvErr)
 		}
 	default:
 		t.Fatal("waiter was not fulfilled by the bounded first read")

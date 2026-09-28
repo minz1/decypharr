@@ -48,8 +48,8 @@ func (c *Config) Clone() (*Config, error) {
 		return nil, err
 	}
 	var snapshot Config
-	if err := json.Unmarshal(data, &snapshot); err != nil {
-		return nil, err
+	if unmarshalErr := json.Unmarshal(data, &snapshot); unmarshalErr != nil {
+		return nil, unmarshalErr
 	}
 	if c.Auth != nil {
 		snapshot.Auth = new(*c.Auth)
@@ -71,11 +71,11 @@ func Update(edit func(*Config) error) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("copy configuration: %w", err)
 	}
-	if err := edit(next); err != nil {
-		return nil, err
+	if editErr := edit(next); editErr != nil {
+		return nil, editErr
 	}
-	if err := next.Save(); err != nil {
-		return nil, err
+	if saveErr := next.Save(); saveErr != nil {
+		return nil, saveErr
 	}
 	published, err := next.Clone()
 	if err != nil {

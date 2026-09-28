@@ -21,39 +21,39 @@ func TestPunchHoleReclaims(t *testing.T) {
 	}
 	defer f.Close()
 
-	if err := prepareSparse(f); err != nil {
-		t.Skipf("sparse files unsupported here: %v", err)
+	if prepareSparseErr := prepareSparse(f); prepareSparseErr != nil {
+		t.Skipf("sparse files unsupported here: %v", prepareSparseErr)
 	}
 
 	const size = 8 << 20
 	payload := bytes.Repeat([]byte{0xAB}, size)
-	if _, err := f.WriteAt(payload, 0); err != nil {
-		t.Fatal(err)
+	if _, writeAtErr := f.WriteAt(payload, 0); writeAtErr != nil {
+		t.Fatal(writeAtErr)
 	}
-	if err := f.Sync(); err != nil {
-		t.Fatal(err)
+	if syncErr := f.Sync(); syncErr != nil {
+		t.Fatal(syncErr)
 	}
 	before := allocatedBlocks(t, path)
 
-	if err := punchHole(f, 0, size); err != nil {
-		t.Skipf("punch unsupported here: %v", err)
+	if punchHoleErr := punchHole(f, 0, size); punchHoleErr != nil {
+		t.Skipf("punch unsupported here: %v", punchHoleErr)
 	}
-	if err := f.Sync(); err != nil {
-		t.Fatal(err)
+	if syncErr := f.Sync(); syncErr != nil {
+		t.Fatal(syncErr)
 	}
 
 	// The range must read back as a hole, and the logical size must survive:
 	// the Buffer writes every segment at a fixed offset, so a punch that
 	// truncated the file would invalidate every address past the hole.
 	got := make([]byte, size)
-	if _, err := f.ReadAt(got, 0); err != nil {
-		t.Fatalf("read after punch: %v", err)
+	if _, readAtErr := f.ReadAt(got, 0); readAtErr != nil {
+		t.Fatalf("read after punch: %v", readAtErr)
 	}
 	if !bytes.Equal(got, make([]byte, size)) {
 		t.Fatal("punched range still holds data")
 	}
-	if st, err := f.Stat(); err != nil || st.Size() != size {
-		t.Fatalf("logical size changed by punch: %v size=%v", err, st.Size())
+	if st, statErr := f.Stat(); statErr != nil || st.Size() != size {
+		t.Fatalf("logical size changed by punch: %v size=%v", statErr, st.Size())
 	}
 
 	if after := allocatedBlocks(t, path); before > 0 && after >= before {

@@ -306,8 +306,8 @@ func (r *Reader) readFiles() error {
 				return fmt.Errorf("failed to read complete file header after retries: %w", err)
 			}
 
-			fileInfo, err := r.parseFileHeader(completeHeader, pos)
-			if err == nil && fileInfo != nil {
+			fileInfo, parseFileHeaderErr := r.parseFileHeader(completeHeader, pos)
+			if parseFileHeaderErr == nil && fileInfo != nil {
 				r.Files = append(r.Files, fileInfo)
 				pos = fileInfo.NextOffset
 			} else {

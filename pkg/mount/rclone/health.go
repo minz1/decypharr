@@ -63,7 +63,7 @@ func (m *Manager) performMountHealthCheck() {
 
 		// Attempt recovery
 		go func() {
-			if err := m.RecoverMount(m.ctx); err != nil {
+			if recoverMountErr := m.RecoverMount(m.ctx); recoverMountErr != nil {
 				m.logger.Error().Msg("Failed to recover mount")
 			}
 		}()

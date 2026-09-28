@@ -46,7 +46,7 @@ func TestSearchAndGrabMovieRelease(t *testing.T) {
 	if len(releases) != 1 || !releases[0].DownloadAllowed {
 		t.Fatalf("releases = %#v", releases)
 	}
-	if err := s.GrabRelease(t.Context(), "arr", releases[0]); err != nil {
-		t.Fatal(err)
+	if grabReleaseErr := s.GrabRelease(t.Context(), "arr", releases[0]); grabReleaseErr != nil {
+		t.Fatal(grabReleaseErr)
 	}
 }

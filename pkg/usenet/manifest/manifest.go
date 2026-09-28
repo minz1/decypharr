@@ -117,16 +117,16 @@ func Decode(reader io.Reader) (*Manifest, error) {
 			}
 			if depth == 1 && value.Name.Local == "file" {
 				var raw rawFile
-				if err := decoder.DecodeElement(&raw, &value); err != nil {
-					return nil, fmt.Errorf("decode NZB manifest: unable to parse NZB file: %w", err)
+				if decodeElementErr := decoder.DecodeElement(&raw, &value); decodeElementErr != nil {
+					return nil, fmt.Errorf("decode NZB manifest: unable to parse NZB file: %w", decodeElementErr)
 				}
 				appendRawFile(manifest, fileBySubject, raw)
 				continue
 			}
 			if depth == 1 && value.Name.Local == "head" {
 				var head rawHead
-				if err := decoder.DecodeElement(&head, &value); err != nil {
-					return nil, fmt.Errorf("decode NZB manifest: unable to parse NZB metadata: %w", err)
+				if decodeElementErr := decoder.DecodeElement(&head, &value); decodeElementErr != nil {
+					return nil, fmt.Errorf("decode NZB manifest: unable to parse NZB metadata: %w", decodeElementErr)
 				}
 				for _, metadata := range head.Metadata {
 					manifest.Metadata[metadata.Type] = metadata.Value

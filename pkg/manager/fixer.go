@@ -344,8 +344,8 @@ func (f *Fixer) MoveTorrent(entry *storage.Entry, debridName string, reinsert bo
 	}
 
 	// Activate this debrid
-	if err := entry.ActivatePlacement(debridName); err != nil {
-		f.manager.logger.Warn().Err(err).Msg("failed to activate placement")
+	if activatePlacementErr := entry.ActivatePlacement(debridName); activatePlacementErr != nil {
+		f.manager.logger.Warn().Err(activatePlacementErr).Msg("failed to activate placement")
 	}
 
 	entry.Bad = false

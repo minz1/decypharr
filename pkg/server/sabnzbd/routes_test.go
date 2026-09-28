@@ -242,9 +242,9 @@ func TestRouterQueueContracts(t *testing.T) {
 					t.Errorf("entry %s, deleted=%v, error=%v", entry.InfoHash, deleted, err)
 				}
 				for _, path := range []string{entry.Magnet, entry.DownloadPath()} {
-					_, err := os.Stat(path)
-					if deleted && !errors.Is(err, os.ErrNotExist) || !deleted && err != nil {
-						t.Errorf("path %s, deleted=%v, error=%v", path, deleted, err)
+					_, statErr := os.Stat(path)
+					if deleted && !errors.Is(statErr, os.ErrNotExist) || !deleted && statErr != nil {
+						t.Errorf("path %s, deleted=%v, error=%v", path, deleted, statErr)
 					}
 				}
 			}

@@ -52,13 +52,13 @@ func GetMagnetFromFile(file io.Reader, filePath string, rmTrackerUrls bool) (*Ma
 		isTorrent = filepath.Ext(filePath) == ".torrent"
 	)
 	if isTorrent {
-		torrentData, err := io.ReadAll(file)
-		if err != nil {
-			return nil, err
+		torrentData, readAllErr := io.ReadAll(file)
+		if readAllErr != nil {
+			return nil, readAllErr
 		}
-		m, err = GetMagnetFromBytes(torrentData, rmTrackerUrls)
-		if err != nil {
-			return nil, err
+		m, readAllErr = GetMagnetFromBytes(torrentData, rmTrackerUrls)
+		if readAllErr != nil {
+			return nil, readAllErr
 		}
 	} else {
 		// .magnet file
@@ -138,8 +138,8 @@ func OpenMagnetHttpURL(magnetLink string, rmTrackerUrls bool) (*Magnet, error) {
 		return nil, fmt.Errorf("error making GET request: %w", err)
 	}
 	defer func(resp *http.Response) {
-		err := resp.Body.Close()
-		if err != nil {
+		closeErr := resp.Body.Close()
+		if closeErr != nil {
 			return
 		}
 	}(resp) // Ensure the response is closed after the function ends

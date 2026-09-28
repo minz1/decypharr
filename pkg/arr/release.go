@@ -81,8 +81,8 @@ func (s *Service) GrabRelease(ctx context.Context, name string, release Release)
 		}
 		return fmt.Errorf("grab release %q: %w", release.Title, err)
 	}
-	if err := expectSuccess(resp); err != nil {
-		return fmt.Errorf("grab release %q: %w", release.Title, err)
+	if expectSuccessErr := expectSuccess(resp); expectSuccessErr != nil {
+		return fmt.Errorf("grab release %q: %w", release.Title, expectSuccessErr)
 	}
 	return nil
 }
@@ -93,15 +93,15 @@ func (s *Service) releases(ctx context.Context, instance Arr, query url.Values) 
 	if err != nil {
 		return nil, fmt.Errorf("search releases: %w", err)
 	}
-	if err := expectStatus(resp, http.StatusOK); err != nil {
-		return nil, fmt.Errorf("search releases: %w", err)
+	if expectStatusErr := expectStatus(resp, http.StatusOK); expectStatusErr != nil {
+		return nil, fmt.Errorf("search releases: %w", expectStatusErr)
 	}
 
 	releases := make([]Release, 0, len(payloads))
 	for _, payload := range payloads {
 		var release Release
-		if err := json.Unmarshal(payload, &release); err != nil {
-			return nil, fmt.Errorf("decode release: %w", err)
+		if unmarshalErr := json.Unmarshal(payload, &release); unmarshalErr != nil {
+			return nil, fmt.Errorf("decode release: %w", unmarshalErr)
 		}
 		// The Arr only accepts a release it produced, verbatim.
 		release.Payload = bytes.Clone(payload)

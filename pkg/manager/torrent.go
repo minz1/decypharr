@@ -102,16 +102,16 @@ func (m *Manager) doRefreshTorrents(_ context.Context, provider string, debridCl
 		updateWg.Add(1)
 		go func(torrents []*storage.Entry) {
 			defer updateWg.Done()
-			if err := m.storage.BatchAddOrUpdate(torrents); err != nil {
-				m.logger.Error().Err(err).Msg("Failed to batch update remote")
+			if batchAddOrUpdateErr := m.storage.BatchAddOrUpdate(torrents); batchAddOrUpdateErr != nil {
+				m.logger.Error().Err(batchAddOrUpdateErr).Msg("Failed to batch update remote")
 			}
 		}(torrentsToUpdate)
 	}
 
 	// Process new torrents
 	if len(newTorrents) > 0 {
-		if err := m.processNewTorrents(provider, newTorrents); err != nil {
-			m.logger.Error().Err(err).Str("debrid", provider).Msg("Failed to process new torrents")
+		if processNewTorrentsErr := m.processNewTorrents(provider, newTorrents); processNewTorrentsErr != nil {
+			m.logger.Error().Err(processNewTorrentsErr).Str("debrid", provider).Msg("Failed to process new torrents")
 		}
 	}
 
@@ -401,9 +401,9 @@ func (m *Manager) processSyncTorrent(t *types.Torrent) (*storage.Entry, error) {
 	}
 
 	// confirm everything is complete
-	if err := mt.Validate(); err != nil {
+	if validateErr := mt.Validate(); validateErr != nil {
 		m.logger.Warn().
-			Err(err).
+			Err(validateErr).
 			Str("infohash", t.InfoHash).
 			Str("name", mt.Name).
 			Msg("Validation failed for torrent, marking as bad")
@@ -445,8 +445,8 @@ func (m *Manager) refreshTorrent(infohash string) (*storage.Entry, error) {
 	}
 	// Store updated entry in storage
 	if entry != nil {
-		if err := m.storage.AddOrUpdate(entry); err != nil {
-			return nil, err
+		if addOrUpdateErr := m.storage.AddOrUpdate(entry); addOrUpdateErr != nil {
+			return nil, addOrUpdateErr
 		}
 	}
 	return entry, nil

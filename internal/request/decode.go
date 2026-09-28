@@ -47,11 +47,11 @@ func DecodeJSONArray[T any](resp *http.Response, visit func(T) error) error {
 
 	for decoder.More() {
 		var item T
-		if err := decoder.Decode(&item); err != nil {
-			return err
+		if decodeErr := decoder.Decode(&item); decodeErr != nil {
+			return decodeErr
 		}
-		if err := visit(item); err != nil {
-			return err
+		if visitErr := visit(item); visitErr != nil {
+			return visitErr
 		}
 	}
 	closing, err := decoder.Token()
@@ -86,8 +86,8 @@ func (c *Client) DoJSON(req *http.Request, out any) (*http.Response, error) {
 	}
 	defer resp.Body.Close()
 	if out != nil && resp.StatusCode >= 200 && resp.StatusCode < 300 && resp.ContentLength != 0 {
-		if err := DecodeJSON(resp, out); err != nil && !errors.Is(err, io.EOF) {
-			return resp, err
+		if decodeJSONErr := DecodeJSON(resp, out); decodeJSONErr != nil && !errors.Is(decodeJSONErr, io.EOF) {
+			return resp, decodeJSONErr
 		}
 	}
 	return resp, nil

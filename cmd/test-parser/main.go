@@ -41,9 +41,9 @@ func main() {
 	}
 	if *localOnly {
 		started := time.Now()
-		decoded, err := manifest.Decode(bytes.NewReader(content))
-		if err != nil {
-			log.Fatal().Err(err).Str("file", nzbFile).Msg("Failed to decode local NZB manifest")
+		decoded, decodeErr := manifest.Decode(bytes.NewReader(content))
+		if decodeErr != nil {
+			log.Fatal().Err(decodeErr).Str("file", nzbFile).Msg("Failed to decode local NZB manifest")
 		}
 		printManifestSummary(nzbFile, decoded, time.Since(started))
 		return
@@ -56,8 +56,8 @@ func main() {
 		log.Fatal().Err(err).Msg("Failed to create NNTP client")
 	}
 	defer func() {
-		if err := client.Close(); err != nil {
-			log.Warn().Err(err).Msg("Failed to close NNTP client")
+		if closeErr := client.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("Failed to close NNTP client")
 		}
 	}()
 

@@ -154,7 +154,7 @@ func TestDirFileReaddirPaging(t *testing.T) {
 	if err != nil || len(second) != 1 {
 		t.Fatalf("second page: %d entries, err %v", len(second), err)
 	}
-	if _, err := f.Readdir(2); !errors.Is(err, io.EOF) {
-		t.Fatalf("exhausted dir: err = %v, want io.EOF", err)
+	if _, readdirErr := f.Readdir(2); !errors.Is(readdirErr, io.EOF) {
+		t.Fatalf("exhausted dir: err = %v, want io.EOF", readdirErr)
 	}
 }

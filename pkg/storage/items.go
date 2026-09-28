@@ -32,12 +32,12 @@ func (s *Storage) UpdateItem(item *EntryItem) error {
 		return fmt.Errorf("encode name index %q: %w", item.Name, err)
 	}
 	if oldFingerprint != EntryItemRepairFingerprint(item) {
-		if err := s.MarkEntryDirty(item.Name, "", "entry_item_changed"); err != nil {
-			return err
+		if markEntryDirtyErr := s.MarkEntryDirty(item.Name, "", "entry_item_changed"); markEntryDirtyErr != nil {
+			return markEntryDirtyErr
 		}
 	}
-	if err := s.entryItems.Put(item.Name, data, nil); err != nil {
-		return fmt.Errorf("save name index %q: %w", item.Name, err)
+	if putErr := s.entryItems.Put(item.Name, data, nil); putErr != nil {
+		return fmt.Errorf("save name index %q: %w", item.Name, putErr)
 	}
 	return nil
 }
@@ -50,8 +50,8 @@ func (s *Storage) GetEntryItem(name string) (*EntryItem, error) {
 	}
 
 	var pb EntryItemProto
-	if err := proto.Unmarshal(data, &pb); err != nil {
-		return nil, err
+	if unmarshalErr := proto.Unmarshal(data, &pb); unmarshalErr != nil {
+		return nil, unmarshalErr
 	}
 	return ProtoToEntryItem(&pb), nil
 }
@@ -93,12 +93,12 @@ func (s *Storage) updateEntryItem(entry *Entry) error {
 		return fmt.Errorf("encode name index %q: %w", name, err)
 	}
 	if oldFingerprint != EntryItemRepairFingerprint(item) {
-		if err := s.MarkEntryDirty(name, entry.Protocol, "entry_item_changed"); err != nil {
-			return err
+		if markEntryDirtyErr := s.MarkEntryDirty(name, entry.Protocol, "entry_item_changed"); markEntryDirtyErr != nil {
+			return markEntryDirtyErr
 		}
 	}
-	if err := s.entryItems.Put(name, data, nil); err != nil {
-		return fmt.Errorf("save name index %q: %w", name, err)
+	if putErr := s.entryItems.Put(name, data, nil); putErr != nil {
+		return fmt.Errorf("save name index %q: %w", name, putErr)
 	}
 	return nil
 }
@@ -122,11 +122,11 @@ func (s *Storage) removeFromEntryItem(entry *Entry) error {
 		}
 	}
 	if len(item.Files) == 0 {
-		if err := s.DeleteEntryHealth(name); err != nil {
-			return err
+		if deleteEntryHealthErr := s.DeleteEntryHealth(name); deleteEntryHealthErr != nil {
+			return deleteEntryHealthErr
 		}
-		if err := s.entryItems.Delete(name); err != nil {
-			return fmt.Errorf("delete name index %q: %w", name, err)
+		if deleteErr := s.entryItems.Delete(name); deleteErr != nil {
+			return fmt.Errorf("delete name index %q: %w", name, deleteErr)
 		}
 		return nil
 	}

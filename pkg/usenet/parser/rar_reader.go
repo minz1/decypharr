@@ -227,8 +227,8 @@ func (p *RARParser) parseRAR5Stream(
 			result.IsHeaderEncrypted = true
 
 			// Parse encryption header to get salt and kdfCount
-			encHeader, err := crypto.ParseEncryptionHeader(header.Data)
-			if err != nil {
+			encHeader, parseEncryptionHeaderErr := crypto.ParseEncryptionHeader(header.Data)
+			if parseEncryptionHeaderErr != nil {
 				break
 			}
 
@@ -257,8 +257,8 @@ func (p *RARParser) parseRAR5Stream(
 			for {
 				// Read IV (16 bytes)
 				iv := make([]byte, crypto.BlockSize)
-				if _, err := io.ReadFull(stream, iv); err != nil {
-					if err == io.EOF {
+				if _, readFullErr := io.ReadFull(stream, iv); readFullErr != nil {
+					if readFullErr == io.EOF {
 						break
 					}
 					break
@@ -266,9 +266,13 @@ func (p *RARParser) parseRAR5Stream(
 				result.EncryptionIV = iv
 
 				// Read encrypted header
-				encHeader, encHeaderSize, encDataSize, err := p.readAndDecryptRAR5Header(stream, encryptionKey, iv)
-				if err != nil {
-					if errors.Is(err, io.EOF) {
+				encHeader, encHeaderSize, encDataSize, readAndDecryptRAR5HeaderErr := p.readAndDecryptRAR5Header(
+					stream,
+					encryptionKey,
+					iv,
+				)
+				if readAndDecryptRAR5HeaderErr != nil {
+					if errors.Is(readAndDecryptRAR5HeaderErr, io.EOF) {
 						break
 					}
 					break
@@ -299,8 +303,8 @@ func (p *RARParser) parseRAR5Stream(
 				if encDataSize > 0 {
 					// Data is also encrypted, need to account for padding
 					paddedSize := ((encDataSize + crypto.BlockSize - 1) / crypto.BlockSize) * crypto.BlockSize
-					if err := stream.Skip(paddedSize); err != nil {
-						if errors.Is(err, io.EOF) {
+					if skipErr := stream.Skip(paddedSize); skipErr != nil {
+						if errors.Is(skipErr, io.EOF) {
 							break
 						}
 						break
@@ -339,11 +343,11 @@ func (p *RARParser) parseRAR5Stream(
 
 		// Skip the data section to get to the next header
 		if dataSize > 0 {
-			if err := stream.Skip(dataSize); err != nil {
-				if errors.Is(err, io.EOF) {
+			if skipErr := stream.Skip(dataSize); skipErr != nil {
+				if errors.Is(skipErr, io.EOF) {
 					break
 				}
-				return nil, fmt.Errorf("failed to skip data section: %w", err)
+				return nil, fmt.Errorf("failed to skip data section: %w", skipErr)
 			}
 		}
 
@@ -402,14 +406,14 @@ func (p *RARParser) readAndDecryptRAR5Header(stream *rarReader, key, iv []byte) 
 	if totalEncryptedSize > crypto.BlockSize {
 		// Read remaining blocks
 		remaining := make([]byte, totalEncryptedSize-crypto.BlockSize)
-		if _, err := io.ReadFull(stream, remaining); err != nil {
-			return nil, 0, 0, err
+		if _, readFullErr := io.ReadFull(stream, remaining); readFullErr != nil {
+			return nil, 0, 0, readFullErr
 		}
 
 		// Create new IV for CBC continuation (last ciphertext block)
 		newIV := firstBlockCipher[len(firstBlockCipher)-crypto.BlockSize:]
-		if err := crypto.DecryptBlock(remaining, key, newIV); err != nil {
-			return nil, 0, 0, err
+		if decryptBlockErr := crypto.DecryptBlock(remaining, key, newIV); decryptBlockErr != nil {
+			return nil, 0, 0, decryptBlockErr
 		}
 
 		firstBlock = append(firstBlock, remaining...)
@@ -465,8 +469,8 @@ func (p *RARParser) readAndDecryptRAR5Header(stream *rarReader, key, iv []byte) 
 	var headerData []byte
 	if remainingSize > 0 {
 		headerData = make([]byte, remainingSize)
-		if _, err := io.ReadFull(r, headerData); err != nil {
-			return nil, 0, 0, err
+		if _, readFullErr := io.ReadFull(r, headerData); readFullErr != nil {
+			return nil, 0, 0, readFullErr
 		}
 	}
 
@@ -497,9 +501,9 @@ func (p *RARParser) readRAR5HeaderFromStream(stream *rarReader) (*rar5HeaderData
 	if vintBytes == 0 {
 		// Need more bytes for the vint - rare case for large headers
 		for vintBytes == 0 && n < len(initialBuf) {
-			extra, err := stream.Read(initialBuf[n : n+1])
-			if err != nil {
-				return nil, 0, 0, err
+			extra, readErr := stream.Read(initialBuf[n : n+1])
+			if readErr != nil {
+				return nil, 0, 0, readErr
 			}
 			n += extra
 			headerSize, vintBytes = parseVIntFromBuffer(initialBuf[pos:n])
@@ -529,9 +533,9 @@ func (p *RARParser) readRAR5HeaderFromStream(stream *rarReader) (*rar5HeaderData
 
 	// Read the rest if needed
 	if alreadyRead < int(headerSize) {
-		_, err := io.ReadFull(stream, headerContent[alreadyRead:])
-		if err != nil {
-			return nil, 0, 0, err
+		_, readFullErr := io.ReadFull(stream, headerContent[alreadyRead:])
+		if readFullErr != nil {
+			return nil, 0, 0, readFullErr
 		}
 	}
 
@@ -557,9 +561,9 @@ func (p *RARParser) readRAR5HeaderFromStream(stream *rarReader) (*rar5HeaderData
 
 	var dataAreaSize int64
 	if headerFlags&RAR5HeaderFlagDataArea != 0 {
-		dataSize, err := readVInt(reader)
-		if err != nil {
-			return nil, 0, 0, err
+		dataSize, readVIntErr := readVInt(reader)
+		if readVIntErr != nil {
+			return nil, 0, 0, readVIntErr
 		}
 		dataAreaSize = int64(dataSize)
 	}
@@ -568,9 +572,9 @@ func (p *RARParser) readRAR5HeaderFromStream(stream *rarReader) (*rar5HeaderData
 	var headerData []byte
 	if remainingHeaderSize > 0 {
 		headerData = make([]byte, remainingHeaderSize)
-		_, err := io.ReadFull(reader, headerData)
-		if err != nil {
-			return nil, 0, 0, err
+		_, readFullErr := io.ReadFull(reader, headerData)
+		if readFullErr != nil {
+			return nil, 0, 0, readFullErr
 		}
 	}
 
@@ -712,11 +716,11 @@ func (p *RARParser) parseRAR4Stream(
 		skipTotal := dataSkipSize
 
 		if skipTotal > 0 {
-			if err := stream.Skip(skipTotal); err != nil {
-				if errors.Is(err, io.EOF) {
+			if skipErr := stream.Skip(skipTotal); skipErr != nil {
+				if errors.Is(skipErr, io.EOF) {
 					break
 				}
-				return nil, fmt.Errorf("failed to skip RAR4 data section: %w", err)
+				return nil, fmt.Errorf("failed to skip RAR4 data section: %w", skipErr)
 			}
 		}
 

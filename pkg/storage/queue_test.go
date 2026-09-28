@@ -18,11 +18,11 @@ func TestQueueOperationsReportCorruptRecords(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = queue.Close() })
 			s := &Storage{queue: queue}
-			if err := s.AddQueue(&Entry{InfoHash: "valid", Name: "before"}); err != nil {
-				t.Fatal(err)
+			if addQueueErr := s.AddQueue(&Entry{InfoHash: "valid", Name: "before"}); addQueueErr != nil {
+				t.Fatal(addQueueErr)
 			}
-			if err := queue.Put("corrupt", []byte{0xff}, nil); err != nil {
-				t.Fatal(err)
+			if putErr := queue.Put("corrupt", []byte{0xff}, nil); putErr != nil {
+				t.Fatal(putErr)
 			}
 			called := false
 			switch operation {
@@ -59,12 +59,12 @@ func TestQueueOperationsReportClosedStore(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = queue.Close() })
 			s := &Storage{queue: queue}
-			if err := s.AddQueue(&Entry{InfoHash: "entry"}); err != nil {
-				t.Fatal(err)
+			if addQueueErr := s.AddQueue(&Entry{InfoHash: "entry"}); addQueueErr != nil {
+				t.Fatal(addQueueErr)
 			}
 			if !strings.HasSuffix(operation, "write") {
-				if err := queue.Close(); err != nil {
-					t.Fatal(err)
+				if closeErr := queue.Close(); closeErr != nil {
+					t.Fatal(closeErr)
 				}
 			}
 			switch operation {
@@ -78,8 +78,8 @@ func TestQueueOperationsReportClosedStore(t *testing.T) {
 				err = s.DeleteWhereQueued(nil, func(*Entry) error { return queue.Close() })
 			case "update write":
 				err = s.UpdateWhereQueued(nil, func(*Entry) bool {
-					if err := queue.Close(); err != nil {
-						t.Fatal(err)
+					if closeErr := queue.Close(); closeErr != nil {
+						t.Fatal(closeErr)
 					}
 					return true
 				})
@@ -99,8 +99,8 @@ func TestQueueCleanupFailureRetainsEntry(t *testing.T) {
 	t.Cleanup(func() { _ = queue.Close() })
 	s := &Storage{queue: queue}
 	for _, hash := range []string{"keep", "delete"} {
-		if err := s.AddQueue(&Entry{InfoHash: hash}); err != nil {
-			t.Fatal(err)
+		if addQueueErr := s.AddQueue(&Entry{InfoHash: hash}); addQueueErr != nil {
+			t.Fatal(addQueueErr)
 		}
 	}
 	cleanupErr := errors.New("cleanup failed")
@@ -113,10 +113,10 @@ func TestQueueCleanupFailureRetainsEntry(t *testing.T) {
 	if !errors.Is(err, cleanupErr) {
 		t.Fatalf("error = %v, want the cleanup error", err)
 	}
-	if _, err := s.GetQueued("keep"); err != nil {
-		t.Fatalf("failed entry was removed: %v", err)
+	if _, getQueuedErr := s.GetQueued("keep"); getQueuedErr != nil {
+		t.Fatalf("failed entry was removed: %v", getQueuedErr)
 	}
-	if _, err := s.GetQueued("delete"); !errors.Is(err, appendstore.ErrKeyNotFound) {
-		t.Fatalf("successful entry remains: %v", err)
+	if _, getQueuedErr := s.GetQueued("delete"); !errors.Is(getQueuedErr, appendstore.ErrKeyNotFound) {
+		t.Fatalf("successful entry remains: %v", getQueuedErr)
 	}
 }

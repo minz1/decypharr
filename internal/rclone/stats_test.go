@@ -62,8 +62,8 @@ func TestStatsPreservesCountersAndPartialResults(t *testing.T) {
 	var payload struct {
 		Core CoreStatsResponse `json:"core"`
 	}
-	if err := json.Unmarshal(data, &payload); err != nil {
-		t.Fatal(err)
+	if unmarshalErr := json.Unmarshal(data, &payload); unmarshalErr != nil {
+		t.Fatal(unmarshalErr)
 	}
 	if payload.Core.Bytes != core.Bytes {
 		t.Fatal("serialized counter lost precision")

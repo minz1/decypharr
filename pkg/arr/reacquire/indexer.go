@@ -273,10 +273,10 @@ func (i *Indexer) handleRefresh(ctx context.Context, request indexRequest) {
 			continue
 		}
 		started := time.Now()
-		stats, err := i.reconcile(ctx, instance, indexRequest{}, managed)
-		if err != nil {
+		stats, reconcileErr := i.reconcile(ctx, instance, indexRequest{}, managed)
+		if reconcileErr != nil {
 			failed = true
-			i.logger.Warn().Err(err).Str("arr", instance.Name).Msg("Arr index reconciliation failed")
+			i.logger.Warn().Err(reconcileErr).Str("arr", instance.Name).Msg("Arr index reconciliation failed")
 			continue
 		}
 		indexed += stats.matched()
@@ -441,14 +441,18 @@ func (i *Indexer) reconcile(
 	matches, stats := matchLibraryFiles(library, managed, i.managedRoot)
 	bindings := bindingsFromMatches(instance, generation, matches)
 	if entryID == "" {
-		if err := i.writer.ReplaceArrGeneration(instance.Name, generation, bindings); err != nil {
-			return stats, err
+		if replaceArrGenerationErr := i.writer.ReplaceArrGeneration(
+			instance.Name,
+			generation,
+			bindings,
+		); replaceArrGenerationErr != nil {
+			return stats, replaceArrGenerationErr
 		}
 		return stats, nil
 	}
 	for _, binding := range bindings {
-		if err := i.writer.UpsertBinding(binding); err != nil {
-			return stats, err
+		if upsertBindingErr := i.writer.UpsertBinding(binding); upsertBindingErr != nil {
+			return stats, upsertBindingErr
 		}
 	}
 	return stats, nil

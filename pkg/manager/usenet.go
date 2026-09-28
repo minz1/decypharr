@@ -62,20 +62,20 @@ func (m *Manager) AddNewNZB(ctx context.Context, req *ImportRequest) (string, er
 	}
 
 	entry.ContentPath = entry.DownloadPath()
-	if err := m.queue.Add(entry); err != nil {
+	if addErr := m.queue.Add(entry); addErr != nil {
 		m.usenet.RemoveStagedNZB(stagedPath)
-		return "", fmt.Errorf("failed to add nzb to queue: %w", err)
+		return "", fmt.Errorf("failed to add nzb to queue: %w", addErr)
 	}
 
 	req.Status = "queued"
 	job := NewJob(JobTypeNZB, req)
 	job.ID = entry.InfoHash
 	job.Entry = entry
-	if err := m.SubmitJob(job); err != nil {
+	if submitJobErr := m.SubmitJob(job); submitJobErr != nil {
 		m.usenet.RemoveStagedNZB(stagedPath)
-		entry.MarkAsError(err)
+		entry.MarkAsError(submitJobErr)
 		_ = m.queue.Update(entry)
-		return "", fmt.Errorf("failed to queue NZB: %w", err)
+		return "", fmt.Errorf("failed to queue NZB: %w", submitJobErr)
 	}
 	return req.Id, nil
 }
@@ -135,8 +135,8 @@ func (m *Manager) processNZBJob(ctx context.Context, job *Job) error {
 		job.Entry.Status = debridTypes.TorrentStatusDownloading
 		job.Entry.ActiveProvider = "usenet"
 		_ = job.Entry.AddUsenetProvider(meta)
-		if err := m.queue.Update(job.Entry); err != nil {
-			return fmt.Errorf("update queued NZB: %w", err)
+		if updateErr := m.queue.Update(job.Entry); updateErr != nil {
+			return fmt.Errorf("update queued NZB: %w", updateErr)
 		}
 	}
 	if job.Request != nil {
@@ -323,8 +323,8 @@ func (m *Manager) syncNZBs(ctx context.Context) error {
 			ImportTypeWatch,
 			false,
 		)
-		if _, err := m.AddNewNZB(ctx, req); err != nil {
-			m.logger.Error().Err(err).Str("name", pending.Name).Msg("Failed to queue watched NZB")
+		if _, addNewNZBErr := m.AddNewNZB(ctx, req); addNewNZBErr != nil {
+			m.logger.Error().Err(addNewNZBErr).Str("name", pending.Name).Msg("Failed to queue watched NZB")
 			continue
 		}
 		m.usenet.RemoveClaimedNZB(pending.Path)

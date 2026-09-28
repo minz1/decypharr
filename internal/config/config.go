@@ -342,8 +342,8 @@ func (c *Config) loadConfig() error {
 		if os.IsNotExist(err) {
 			fmt.Printf("Config file not found, creating a new one at %s\n", configFile)
 			// Create a default config file if it doesn't exist
-			if err := c.createConfig(); err != nil {
-				return fmt.Errorf("failed to create config file: %w", err)
+			if createConfigErr := c.createConfig(); createConfigErr != nil {
+				return fmt.Errorf("failed to create config file: %w", createConfigErr)
 			}
 			return c.Save()
 		}
@@ -351,8 +351,8 @@ func (c *Config) loadConfig() error {
 	}
 
 	// Parse JSON
-	if err := json.Unmarshal(data, &c); err != nil {
-		return fmt.Errorf("error parsing config JSON: %w", err)
+	if unmarshalErr := json.Unmarshal(data, &c); unmarshalErr != nil {
+		return fmt.Errorf("error parsing config JSON: %w", unmarshalErr)
 	}
 	hadStrmSecret := c.Strm.Secret != ""
 	hadSessionSecret := c.SessionSecret != ""
@@ -367,8 +367,8 @@ func (c *Config) loadConfig() error {
 
 	// Hard-fail on invalid DFS size/duration strings. A wrong value silently
 	// sets CacheDiskSize=0 and disables all cache enforcement; fail loudly instead.
-	if err := c.Mount.DFS.Validate(); err != nil {
-		return fmt.Errorf("configuration error: %w", err)
+	if validateErr := c.Mount.DFS.Validate(); validateErr != nil {
+		return fmt.Errorf("configuration error: %w", validateErr)
 	}
 
 	// Save new signing secrets so signatures remain valid after a restart.
@@ -466,11 +466,11 @@ func (c *Config) SaveAuth(auth *Auth) error {
 	if err != nil {
 		return err
 	}
-	if err := os.Chmod(c.AuthFile(), 0600); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+	if chmodErr := os.Chmod(c.AuthFile(), 0600); chmodErr != nil && !errors.Is(chmodErr, os.ErrNotExist) {
+		return chmodErr
 	}
-	if err := os.WriteFile(c.AuthFile(), data, 0600); err != nil {
-		return err
+	if writeFileErr := os.WriteFile(c.AuthFile(), data, 0600); writeFileErr != nil {
+		return writeFileErr
 	}
 	c.Auth = &updated
 	return nil
@@ -759,12 +759,12 @@ func (c *Config) Save() error {
 	if err != nil {
 		return err
 	}
-	if err := os.Chmod(c.JsonFile(), 0600); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+	if chmodErr := os.Chmod(c.JsonFile(), 0600); chmodErr != nil && !errors.Is(chmodErr, os.ErrNotExist) {
+		return chmodErr
 	}
-	if err := os.WriteFile(c.JsonFile(), data, 0600); err != nil {
-		fmt.Printf("Failed to write config file: %v\n", err)
-		return err
+	if writeFileErr := os.WriteFile(c.JsonFile(), data, 0600); writeFileErr != nil {
+		fmt.Printf("Failed to write config file: %v\n", writeFileErr)
+		return writeFileErr
 	}
 	return nil
 }

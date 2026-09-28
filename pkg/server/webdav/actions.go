@@ -106,9 +106,9 @@ func (h *Handler) handleDownload(info *manager.FileInfo, w http.ResponseWriter, 
 		return
 	}
 
-	if err := h.StreamResponse(entry, info.Name(), info.Size(), w, r); err != nil {
+	if streamResponseErr := h.StreamResponse(entry, info.Name(), info.Size(), w, r); streamResponseErr != nil {
 		// Use the file path as key for rate limiting - same file error logged once per 30s
-		h.writeStreamError(fmt.Sprintf("%s/%s", info.Parent(), info.Name()), err, w)
+		h.writeStreamError(fmt.Sprintf("%s/%s", info.Parent(), info.Name()), streamResponseErr, w)
 	}
 }
 

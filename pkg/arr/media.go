@@ -52,8 +52,8 @@ func (s *Service) DownloadClientConfig(ctx context.Context, name string) (Downlo
 	if err != nil {
 		return DownloadClientConfig{}, fmt.Errorf("get download client config: %w", err)
 	}
-	if err := expectStatus(resp, http.StatusOK); err != nil {
-		return DownloadClientConfig{}, fmt.Errorf("get download client config: %w", err)
+	if expectStatusErr := expectStatus(resp, http.StatusOK); expectStatusErr != nil {
+		return DownloadClientConfig{}, fmt.Errorf("get download client config: %w", expectStatusErr)
 	}
 	return clientConfig, nil
 }
@@ -80,8 +80,8 @@ func (s *Service) LibraryFile(ctx context.Context, name string, fileID int) (Lib
 	if resp.StatusCode == http.StatusNotFound {
 		return LibraryFile{}, false, nil
 	}
-	if err := expectStatus(resp, http.StatusOK); err != nil {
-		return LibraryFile{}, false, fmt.Errorf("get %s %d: %w", resource, fileID, err)
+	if expectStatusErr := expectStatus(resp, http.StatusOK); expectStatusErr != nil {
+		return LibraryFile{}, false, fmt.Errorf("get %s %d: %w", resource, fileID, expectStatusErr)
 	}
 
 	libraryFile := LibraryFile{
@@ -93,9 +93,9 @@ func (s *Service) LibraryFile(ctx context.Context, name string, fileID int) (Lib
 		MovieID:      file.MovieID,
 	}
 	if instance.Type == Sonarr {
-		episodesByFile, err := s.sonarrEpisodeIDs(ctx, instance, file.SeriesID)
-		if err != nil {
-			return LibraryFile{}, false, err
+		episodesByFile, sonarrEpisodeIDsErr := s.sonarrEpisodeIDs(ctx, instance, file.SeriesID)
+		if sonarrEpisodeIDsErr != nil {
+			return LibraryFile{}, false, sonarrEpisodeIDsErr
 		}
 		libraryFile.EpisodeIDs = episodesByFile[file.ID]
 	}
@@ -124,8 +124,8 @@ func (s *Service) DeleteLibraryFile(ctx context.Context, name string, fileID int
 	if resp.StatusCode == http.StatusNotFound {
 		return nil
 	}
-	if err := expectSuccess(resp); err != nil {
-		return fmt.Errorf("delete %s %d: %w", resource, fileID, err)
+	if expectSuccessErr := expectSuccess(resp); expectSuccessErr != nil {
+		return fmt.Errorf("delete %s %d: %w", resource, fileID, expectSuccessErr)
 	}
 	return nil
 }
@@ -198,8 +198,8 @@ func (s *Service) Commands(ctx context.Context, name string) ([]Command, error) 
 	if err != nil {
 		return nil, fmt.Errorf("list arr commands: %w", err)
 	}
-	if err := expectStatus(resp, http.StatusOK); err != nil {
-		return nil, fmt.Errorf("list arr commands: %w", err)
+	if expectStatusErr := expectStatus(resp, http.StatusOK); expectStatusErr != nil {
+		return nil, fmt.Errorf("list arr commands: %w", expectStatusErr)
 	}
 	return commands, nil
 }
@@ -213,8 +213,8 @@ func (s *Service) command(ctx context.Context, instance Arr, payload any) (Comma
 		}
 		return Command{}, fmt.Errorf("submit arr command: %w", err)
 	}
-	if err := expectSuccess(resp); err != nil {
-		return Command{}, fmt.Errorf("submit arr command: %w", err)
+	if expectSuccessErr := expectSuccess(resp); expectSuccessErr != nil {
+		return Command{}, fmt.Errorf("submit arr command: %w", expectSuccessErr)
 	}
 	return command, nil
 }

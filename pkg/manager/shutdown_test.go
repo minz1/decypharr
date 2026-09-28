@@ -81,8 +81,8 @@ func TestShutdownResumesInterruptedSymlinks(t *testing.T) {
 				}
 				applyDebridTorrentToEntry(entry, torrent)
 				m.clients.Store("provider", completedTorrentProvider{torrent: torrent})
-				if err := m.queue.Add(entry); err != nil {
-					t.Fatal(err)
+				if addErr := m.queue.Add(entry); addErr != nil {
+					t.Fatal(addErr)
 				}
 				var completedSeason *storage.Entry
 				if multiSeason {
@@ -94,22 +94,22 @@ func TestShutdownResumesInterruptedSymlinks(t *testing.T) {
 						if season.Files["Show.S01E01.mkv"] != nil {
 							completedSeason = season
 							season.MarkAsCompleted(season.DownloadPath())
-							if err := m.queue.Add(season); err != nil {
-								t.Fatal(err)
+							if addErr := m.queue.Add(season); addErr != nil {
+								t.Fatal(addErr)
 							}
 						}
 					}
 				}
 				mountPath := m.GetTorrentMountPath(entry)
-				if err := os.MkdirAll(mountPath, 0o755); err != nil {
-					t.Fatal(err)
+				if mkdirAllErr := os.MkdirAll(mountPath, 0o755); mkdirAllErr != nil {
+					t.Fatal(mkdirAllErr)
 				}
 				mountStops := 0
 				m.mountManager = shutdownMount{stop: func() error {
 					mountStops++
-					saved, err := m.queue.GetTorrent(entry.InfoHash)
-					if err != nil {
-						return err
+					saved, getTorrentErr := m.queue.GetTorrent(entry.InfoHash)
+					if getTorrentErr != nil {
+						return getTorrentErr
 					}
 					if saved.IsDownloading {
 						t.Error("mount stopped before interrupted work was saved")
@@ -122,8 +122,8 @@ func TestShutdownResumesInterruptedSymlinks(t *testing.T) {
 				if err != nil || !saved.IsDownloading || saved.IsComplete {
 					t.Fatalf("in-flight entry = %#v, error = %v", saved, err)
 				}
-				if err := m.Stop(); err != nil {
-					t.Fatal(err)
+				if stopErr := m.Stop(); stopErr != nil {
+					t.Fatal(stopErr)
 				}
 				if mountStops != 1 {
 					t.Fatalf("mount stops = %d", mountStops)
@@ -150,8 +150,12 @@ func TestShutdownResumesInterruptedSymlinks(t *testing.T) {
 					t.Fatalf("interrupted entry cannot resume: %#v", saved)
 				}
 				for name := range torrent.Files {
-					if err := os.WriteFile(filepath.Join(mountPath, name), []byte("media"), 0o644); err != nil {
-						t.Fatal(err)
+					if writeFileErr := os.WriteFile(
+						filepath.Join(mountPath, name),
+						[]byte("media"),
+						0o644,
+					); writeFileErr != nil {
+						t.Fatal(writeFileErr)
 					}
 				}
 				m.restoreActiveDownloadJobs()
@@ -170,12 +174,12 @@ func TestShutdownResumesInterruptedSymlinks(t *testing.T) {
 							downloadPath = season.DownloadPath()
 						}
 					}
-					if _, err := os.Lstat(
+					if _, lstatErr := os.Lstat(
 						filepath.Join(completedSeason.DownloadPath(), "Show.S01E01.mkv"),
 					); !os.IsNotExist(
-						err,
+						lstatErr,
 					) {
-						t.Fatalf("completed season was processed again: %v", err)
+						t.Fatalf("completed season was processed again: %v", lstatErr)
 					}
 				}
 				linkPath := filepath.Join(downloadPath, "Show.S02E01.mkv")
@@ -183,14 +187,14 @@ func TestShutdownResumesInterruptedSymlinks(t *testing.T) {
 				if err != nil || target != filepath.Join(mountPath, "Show.S02E01.mkv") {
 					t.Fatalf("restored symlink = %q, error = %v", target, err)
 				}
-				if err := os.Remove(linkPath); err != nil {
-					t.Fatal(err)
+				if removeErr := os.Remove(linkPath); removeErr != nil {
+					t.Fatal(removeErr)
 				}
 				m.restoreActiveDownloadJobs()
 				m.processQueuedEntries()
 				m.downloadTasks.Wait()
-				if _, err := os.Lstat(linkPath); !os.IsNotExist(err) {
-					t.Fatalf("completed import was processed again: %v", err)
+				if _, lstatErr := os.Lstat(linkPath); !os.IsNotExist(lstatErr) {
+					t.Fatalf("completed import was processed again: %v", lstatErr)
 				}
 			})
 		})

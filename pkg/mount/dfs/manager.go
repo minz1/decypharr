@@ -63,8 +63,8 @@ func (m *Manager) Start(ctx context.Context) error {
 	m.backend = bck
 
 	// Mount using the backend
-	if err := m.backend.Mount(ctx); err != nil {
-		return fmt.Errorf("backend mount failed: %w", err)
+	if mountErr := m.backend.Mount(ctx); mountErr != nil {
+		return fmt.Errorf("backend mount failed: %w", mountErr)
 	}
 
 	m.ready.Store(true)

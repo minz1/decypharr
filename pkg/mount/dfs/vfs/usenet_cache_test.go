@@ -83,8 +83,8 @@ func TestPersistedNZBUsesDFSCacheAndTracksStream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(entryDir, filename+".json"), metadata, 0o644); err != nil {
-		t.Fatal(err)
+	if writeFileErr := os.WriteFile(filepath.Join(entryDir, filename+".json"), metadata, 0o644); writeFileErr != nil {
+		t.Fatal(writeFileErr)
 	}
 
 	entry := &storage.Entry{
@@ -140,8 +140,8 @@ func TestPersistedNZBUsesDFSCacheAndTracksStream(t *testing.T) {
 		t.Fatalf("tracking after read: tracks=%d active=%d, want 1/1", backend.tracks.Load(), backend.active.Load())
 	}
 
-	if err := file.Close(); err != nil {
-		t.Fatal(err)
+	if closeErr := file.Close(); closeErr != nil {
+		t.Fatal(closeErr)
 	}
 	if backend.untracks.Load() != 1 || backend.active.Load() != 0 {
 		t.Fatalf(

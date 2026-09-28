@@ -154,8 +154,8 @@ func TestArticleBrokerRetainsMetadataAfterBodyEviction(t *testing.T) {
 	if got := backend.fetches.Load(); got != 2 {
 		t.Fatalf("header caused network refetch: %d", got)
 	}
-	if _, err := broker.Body(t.Context(), "one"); err != nil {
-		t.Fatal(err)
+	if _, bodyErr := broker.Body(t.Context(), "one"); bodyErr != nil {
+		t.Fatal(bodyErr)
 	}
 	if got := backend.fetches.Load(); got != 3 {
 		t.Fatalf("evicted body fetches = %d, want 3", got)

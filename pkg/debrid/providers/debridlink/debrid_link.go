@@ -195,7 +195,7 @@ func (dl *DebridLink) GetTorrent(torrentId string) (*types.Torrent, error) {
 	}
 	cfg := config.Get()
 	for _, f := range t.Files {
-		if err := cfg.ValidateFileAllowed(f.Name, f.Size); err != nil {
+		if validateFileAllowedErr := cfg.ValidateFileAllowed(f.Name, f.Size); validateFileAllowedErr != nil {
 			continue
 		}
 		file := types.File{
@@ -256,7 +256,7 @@ func (dl *DebridLink) UpdateTorrent(t *types.Torrent) error {
 	cfg := config.Get()
 	now := time.Now()
 	for _, f := range data.Files {
-		if err := cfg.ValidateFileAllowed(f.Name, f.Size); err != nil {
+		if validateFileAllowedErr := cfg.ValidateFileAllowed(f.Name, f.Size); validateFileAllowedErr != nil {
 			continue
 		}
 		file := types.File{
@@ -313,8 +313,8 @@ func (dl *DebridLink) SubmitMagnet(t *types.Torrent) (*types.Torrent, error) {
 	if resp.ContentLength == 0 {
 		return nil, fmt.Errorf("empty response from debridlink API")
 	}
-	if err := request.DecodeJSON(resp, &res); err != nil {
-		return nil, err
+	if decodeJSONErr := request.DecodeJSON(resp, &res); decodeJSONErr != nil {
+		return nil, decodeJSONErr
 	}
 	if !res.Success || res.Value == nil {
 		return nil, fmt.Errorf("error adding torrent")
@@ -497,8 +497,8 @@ func (dl *DebridLink) _fetchDownloadLinks(account *account.Account, page, limit 
 	if resp.ContentLength == 0 {
 		return links, fmt.Errorf("empty response from debridlink API")
 	}
-	if err := request.DecodeJSON(resp, &res); err != nil {
-		return links, err
+	if decodeJSONErr := request.DecodeJSON(resp, &res); decodeJSONErr != nil {
+		return links, decodeJSONErr
 	}
 	if !res.Success || res.Value == nil {
 		return links, fmt.Errorf("error getting download links")
@@ -581,7 +581,7 @@ func (dl *DebridLink) getTorrents(page, perPage int) ([]*types.Torrent, error) {
 		cfg := config.Get()
 		now := time.Now()
 		for _, f := range t.Files {
-			if err := cfg.ValidateFileAllowed(f.Name, f.Size); err != nil {
+			if validateFileAllowedErr := cfg.ValidateFileAllowed(f.Name, f.Size); validateFileAllowedErr != nil {
 				continue
 			}
 			file := types.File{

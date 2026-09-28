@@ -220,8 +220,8 @@ func (m *Manager) GetDownloadLink(
 	}
 	errs := []error{err}
 	for _, acc := range m.Active() {
-		if err := ctx.Err(); err != nil {
-			return types.DownloadLink{}, err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return types.DownloadLink{}, ctxErr
 		}
 		if acc.Token == current.Token {
 			continue

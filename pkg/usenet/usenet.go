@@ -315,8 +315,8 @@ func New() (*Usenet, error) {
 	// codec. Runs in the background so it never blocks startup; atomic rewrites
 	// keep concurrent reads safe throughout.
 	go func() {
-		if _, err := nzbStorage.MigrateLegacy(); err != nil {
-			nzbStorage.logger.Warn().Err(err).Msg("Legacy NZB meta migration failed")
+		if _, migrateLegacyErr := nzbStorage.MigrateLegacy(); migrateLegacyErr != nil {
+			nzbStorage.logger.Warn().Err(migrateLegacyErr).Msg("Legacy NZB meta migration failed")
 		}
 	}()
 
@@ -328,20 +328,20 @@ func New() (*Usenet, error) {
 
 	// Disk rewind files are session-scoped; clear any left by an interrupted run.
 	if streamsDir := strings.TrimSpace(usenetConfig.DiskPath); streamsDir != "" {
-		if err := os.MkdirAll(streamsDir, 0o755); err != nil {
+		if mkdirAllErr := os.MkdirAll(streamsDir, 0o755); mkdirAllErr != nil {
 			_ = client.Close()
-			return nil, fmt.Errorf("create Usenet stream cache: %w", err)
+			return nil, fmt.Errorf("create Usenet stream cache: %w", mkdirAllErr)
 		}
-		staleEntries, err := os.ReadDir(streamsDir)
-		if err != nil {
+		staleEntries, readDirErr := os.ReadDir(streamsDir)
+		if readDirErr != nil {
 			_ = client.Close()
-			return nil, fmt.Errorf("read Usenet stream cache: %w", err)
+			return nil, fmt.Errorf("read Usenet stream cache: %w", readDirErr)
 		}
 		for _, entry := range staleEntries {
 			if strings.HasPrefix(entry.Name(), "cache-") {
-				if err := os.RemoveAll(filepath.Join(streamsDir, entry.Name())); err != nil {
+				if removeAllErr := os.RemoveAll(filepath.Join(streamsDir, entry.Name())); removeAllErr != nil {
 					_ = client.Close()
-					return nil, fmt.Errorf("clear stale Usenet stream cache %q: %w", entry.Name(), err)
+					return nil, fmt.Errorf("clear stale Usenet stream cache %q: %w", entry.Name(), removeAllErr)
 				}
 			}
 		}
@@ -453,8 +453,8 @@ func (u *Usenet) getOrCreateEntry(
 	}
 
 	// Pre-checks
-	if err := u.preStreamChecks(file); err != nil {
-		return nil, key, err
+	if preStreamChecksErr := u.preStreamChecks(file); preStreamChecksErr != nil {
+		return nil, key, preStreamChecksErr
 	}
 
 	newEntry, err := u.createEntry(file, u.prefetchSize, retention)
@@ -482,8 +482,8 @@ func (u *Usenet) getOrCreateEntry(
 		// The mapped entry is claimed for teardown; the janitor removes it
 		// from the map immediately after claiming, so retry until our entry
 		// can be stored.
-		if err := ctx.Err(); err != nil {
-			return nil, key, err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, key, ctxErr
 		}
 		runtime.Gosched()
 	}
@@ -585,17 +585,17 @@ func (u *Usenet) ParseWithID(
 	nzb.Path = nzbPath
 
 	// Mark as processing
-	if err := u.markAsProcessing(nzb); err != nil {
+	if markAsProcessingErr := u.markAsProcessing(nzb); markAsProcessingErr != nil {
 		// Don't leave the source file orphaned; an un-marked .nzb would be
 		// re-claimed by the refresh watcher on every scan.
 		_ = os.Remove(nzbPath)
-		return nil, nil, fmt.Errorf("failed to mark NZB as processing: %w", err)
+		return nil, nil, fmt.Errorf("failed to mark NZB as processing: %w", markAsProcessingErr)
 	}
 
-	if err := u.nzbStorage.AddNZB(nzb); err != nil {
+	if addNZBErr := u.nzbStorage.AddNZB(nzb); addNZBErr != nil {
 		_ = os.Remove(nzbPath + ".processing")
 		_ = os.Remove(nzbPath)
-		return nil, nil, fmt.Errorf("failed to save NZB to storage: %w", err)
+		return nil, nil, fmt.Errorf("failed to save NZB to storage: %w", addNZBErr)
 	}
 
 	u.logger.Info().
@@ -631,9 +631,9 @@ func (u *Usenet) Process(
 	// errors are non-fatal here (CheckFileAvailability returns nil for those),
 	// so a provider hiccup won't wrongly fail an import — only a definitively
 	// missing segment (gone on every provider) fails the NZB.
-	if err := u.checkNZBAvailability(ctx, updatedNZB); err != nil {
-		_ = u.markAsFailed(updatedNZB, err)
-		return updatedNZB, fmt.Errorf("availability check failed: %w", err)
+	if checkNZBAvailabilityErr := u.checkNZBAvailability(ctx, updatedNZB); checkNZBAvailabilityErr != nil {
+		_ = u.markAsFailed(updatedNZB, checkNZBAvailabilityErr)
+		return updatedNZB, fmt.Errorf("availability check failed: %w", checkNZBAvailabilityErr)
 	}
 
 	// Content gate: availability only proves the articles exist; it says
@@ -644,14 +644,14 @@ func (u *Usenet) Process(
 	// serving path and require a container signature, so a scrambled assembly
 	// fails here — and the arr grabs a replacement — instead of reaching the
 	// library as an unplayable file.
-	if err := u.verifyNZBContent(ctx, updatedNZB); err != nil {
-		_ = u.markAsFailed(updatedNZB, err)
-		return updatedNZB, fmt.Errorf("content verification failed: %w", err)
+	if verifyNZBContentErr := u.verifyNZBContent(ctx, updatedNZB); verifyNZBContentErr != nil {
+		_ = u.markAsFailed(updatedNZB, verifyNZBContentErr)
+		return updatedNZB, fmt.Errorf("content verification failed: %w", verifyNZBContentErr)
 	}
 
 	// Mark as completed
-	if err := u.markAsCompleted(updatedNZB); err != nil {
-		return updatedNZB, fmt.Errorf("failed to mark NZB as completed: %w", err)
+	if markAsCompletedErr := u.markAsCompleted(updatedNZB); markAsCompletedErr != nil {
+		return updatedNZB, fmt.Errorf("failed to mark NZB as completed: %w", markAsCompletedErr)
 	}
 
 	u.logger.Info().
@@ -1101,8 +1101,8 @@ func (u *Usenet) Touch(ctx context.Context, nzoID, filename string) error {
 		return fmt.Errorf("failed to get file: %w", err)
 	}
 
-	if err := u.preStreamChecks(file); err != nil {
-		return err
+	if preStreamChecksErr := u.preStreamChecks(file); preStreamChecksErr != nil {
+		return preStreamChecksErr
 	}
 
 	// Check if we have Segments
@@ -1295,8 +1295,8 @@ func (u *Usenet) markAsFailed(nzb *storage.NZB, err error) error {
 	// Mark as failed in storage
 	nzb.Status = NZBStatusFailed
 	nzb.FailMessage = err.Error()
-	if err := u.nzbStorage.AddNZB(nzb); err != nil {
-		return fmt.Errorf("failed to mark NZB as failed in storage: %w", err)
+	if addNZBErr := u.nzbStorage.AddNZB(nzb); addNZBErr != nil {
+		return fmt.Errorf("failed to mark NZB as failed in storage: %w", addNZBErr)
 	}
 
 	// Remove processing marker if exists
@@ -1305,8 +1305,11 @@ func (u *Usenet) markAsFailed(nzb *storage.NZB, err error) error {
 
 	// Remove the nzb file itself, as it's considered failed
 	if nzb.Path != "" {
-		if err := os.Remove(nzb.Path); err != nil && !os.IsNotExist(err) {
-			u.logger.Warn().Err(err).Str("path", nzb.Path).Msg("Failed to delete NZB file from disk after failure")
+		if removeErr := os.Remove(nzb.Path); removeErr != nil && !os.IsNotExist(removeErr) {
+			u.logger.Warn().
+				Err(removeErr).
+				Str("path", nzb.Path).
+				Msg("Failed to delete NZB file from disk after failure")
 		}
 	}
 	return nil
@@ -1320,8 +1323,8 @@ func (u *Usenet) Delete(nzoID string) error {
 
 	// Delete NZB XML file from disk
 	if nzb.Path != "" {
-		if err := os.Remove(nzb.Path); err != nil && !os.IsNotExist(err) {
-			u.logger.Warn().Err(err).Str("path", nzb.Path).Msg("Failed to delete NZB file from disk")
+		if removeErr := os.Remove(nzb.Path); removeErr != nil && !os.IsNotExist(removeErr) {
+			u.logger.Warn().Err(removeErr).Str("path", nzb.Path).Msg("Failed to delete NZB file from disk")
 		}
 
 		// Delete marker files
@@ -1332,8 +1335,8 @@ func (u *Usenet) Delete(nzoID string) error {
 	}
 
 	// Delete from file-based storage
-	if err := u.nzbStorage.DeleteNZB(nzoID); err != nil {
-		return fmt.Errorf("failed to delete NZB from storage: %w", err)
+	if deleteNZBErr := u.nzbStorage.DeleteNZB(nzoID); deleteNZBErr != nil {
+		return fmt.Errorf("failed to delete NZB from storage: %w", deleteNZBErr)
 	}
 	return nil
 }
@@ -1372,22 +1375,22 @@ func (u *Usenet) ClaimNewNZBs() ([]PendingNZB, error) {
 				continue
 			}
 			claimedPath = path + ".importing"
-			if err := os.Rename(path, claimedPath); err != nil {
-				if os.IsNotExist(err) {
+			if renameErr := os.Rename(path, claimedPath); renameErr != nil {
+				if os.IsNotExist(renameErr) {
 					continue
 				}
 				// Skip this entry instead of aborting the whole scan. A single
 				// poison file (e.g. a name so long that appending ".importing"
 				// exceeds the filesystem limit) previously failed every refresh
 				// and permanently blocked all other pending NZBs.
-				u.logger.Error().Err(err).Str("name", name).Msg("Failed to claim NZB; skipping")
+				u.logger.Error().Err(renameErr).Str("name", name).Msg("Failed to claim NZB; skipping")
 				continue
 			}
 		}
 
-		content, err := os.ReadFile(claimedPath)
-		if err != nil {
-			u.logger.Error().Err(err).Str("path", claimedPath).Msg("Failed to read claimed NZB")
+		content, readFileErr := os.ReadFile(claimedPath)
+		if readFileErr != nil {
+			u.logger.Error().Err(readFileErr).Str("path", claimedPath).Msg("Failed to read claimed NZB")
 			continue
 		}
 		pending = append(pending, PendingNZB{Name: name, Path: claimedPath, Content: content})

@@ -32,8 +32,8 @@ func TestArticleReaderAtReadsAcrossSlicedSegments(t *testing.T) {
 		t.Fatalf("reader size = %d, want 10", size)
 	}
 	buffer := make([]byte, 6)
-	if _, err := reader.ReadAt(buffer, 4); err != nil {
-		t.Fatal(err)
+	if _, readAtErr := reader.ReadAt(buffer, 4); readAtErr != nil {
+		t.Fatal(readAtErr)
 	}
 	if got, want := string(buffer), "fgklmn"; got != want {
 		t.Fatalf("cross-segment read = %q, want %q", got, want)
@@ -41,14 +41,14 @@ func TestArticleReaderAtReadsAcrossSlicedSegments(t *testing.T) {
 	if got := backend.fetches.Load(); got != 2 {
 		t.Fatalf("network fetches = %d, want 2", got)
 	}
-	if _, err := reader.ReadAt(buffer[:2], 4); err != nil {
-		t.Fatal(err)
+	if _, readAtErr := reader.ReadAt(buffer[:2], 4); readAtErr != nil {
+		t.Fatal(readAtErr)
 	}
 	if got := backend.fetches.Load(); got != 2 {
 		t.Fatalf("cached read network fetches = %d, want 2", got)
 	}
-	if n, err := reader.ReadAt(make([]byte, 2), 9); n != 1 || !errors.Is(err, io.EOF) {
-		t.Fatalf("tail read = (%d, %v), want (1, EOF)", n, err)
+	if n, readAtErr := reader.ReadAt(make([]byte, 2), 9); n != 1 || !errors.Is(readAtErr, io.EOF) {
+		t.Fatalf("tail read = (%d, %v), want (1, EOF)", n, readAtErr)
 	}
 }
 

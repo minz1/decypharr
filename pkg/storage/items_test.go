@@ -23,15 +23,15 @@ func TestEntryMutationsReportIndexFailures(t *testing.T) {
 					Name:     "folder",
 					Files:    map[string]*File{"file": {Name: "file", InfoHash: "hash", Size: 10}},
 				}
-				if err := s.AddOrUpdate(entry); err != nil {
-					t.Fatal(err)
+				if addOrUpdateErr := s.AddOrUpdate(entry); addOrUpdateErr != nil {
+					t.Fatal(addOrUpdateErr)
 				}
 				if failure == "corrupt" {
-					if err := s.entryItems.Put("folder", []byte{0xff}, nil); err != nil {
-						t.Fatal(err)
+					if putErr := s.entryItems.Put("folder", []byte{0xff}, nil); putErr != nil {
+						t.Fatal(putErr)
 					}
-				} else if err := s.entryItems.Close(); err != nil {
-					t.Fatal(err)
+				} else if closeErr := s.entryItems.Close(); closeErr != nil {
+					t.Fatal(closeErr)
 				}
 				switch operation {
 				case "add":
@@ -47,13 +47,13 @@ func TestEntryMutationsReportIndexFailures(t *testing.T) {
 				if failure == "closed" && !errors.Is(err, appendstore.ErrStoreClosed) {
 					t.Fatalf("error = %v, want ErrStoreClosed", err)
 				}
-				if _, err := s.Get(entry.InfoHash); err != nil {
-					t.Fatalf("source entry was lost: %v", err)
+				if _, getErr := s.Get(entry.InfoHash); getErr != nil {
+					t.Fatalf("source entry was lost: %v", getErr)
 				}
 				if failure == "corrupt" {
-					data, err := s.entryItems.Get("folder")
-					if err != nil || !bytes.Equal(data, []byte{0xff}) {
-						t.Fatalf("corrupt index was overwritten: %x, %v", data, err)
+					data, getErr := s.entryItems.Get("folder")
+					if getErr != nil || !bytes.Equal(data, []byte{0xff}) {
+						t.Fatalf("corrupt index was overwritten: %x, %v", data, getErr)
 					}
 				}
 			})
@@ -72,19 +72,19 @@ func TestEntryWriteFailureLeavesIndexUnchanged(t *testing.T) {
 		Name:     "folder",
 		Files:    map[string]*File{"file": {Name: "file", InfoHash: "hash", Size: 10}},
 	}
-	if err := s.AddOrUpdate(entry); err != nil {
-		t.Fatal(err)
+	if addOrUpdateErr := s.AddOrUpdate(entry); addOrUpdateErr != nil {
+		t.Fatal(addOrUpdateErr)
 	}
 	before, err := s.entryItems.Get("folder")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.entries.Close(); err != nil {
-		t.Fatal(err)
+	if closeErr := s.entries.Close(); closeErr != nil {
+		t.Fatal(closeErr)
 	}
 	entry.Files["file"].Size = 20
-	if err := s.AddOrUpdate(entry); !errors.Is(err, appendstore.ErrStoreClosed) {
-		t.Fatalf("error = %v, want ErrStoreClosed", err)
+	if addOrUpdateErr := s.AddOrUpdate(entry); !errors.Is(addOrUpdateErr, appendstore.ErrStoreClosed) {
+		t.Fatalf("error = %v, want ErrStoreClosed", addOrUpdateErr)
 	}
 	after, err := s.entryItems.Get("folder")
 	if err != nil || !bytes.Equal(before, after) {
@@ -105,11 +105,11 @@ func TestEntryMutationReportsHealthFailure(t *testing.T) {
 				Name:     "folder",
 				Files:    map[string]*File{"file": {Name: "file", InfoHash: "hash", Size: 10}},
 			}
-			if err := s.AddOrUpdate(entry); err != nil {
-				t.Fatal(err)
+			if addOrUpdateErr := s.AddOrUpdate(entry); addOrUpdateErr != nil {
+				t.Fatal(addOrUpdateErr)
 			}
-			if err := s.repairState.Close(); err != nil {
-				t.Fatal(err)
+			if closeErr := s.repairState.Close(); closeErr != nil {
+				t.Fatal(closeErr)
 			}
 			if operation == "add" {
 				entry.Files["file"].Size = 20

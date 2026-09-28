@@ -133,12 +133,12 @@ func (pm *Premiumize) do(req *http.Request, out any) (*http.Response, error) {
 		return resp, nil
 	}
 
-	if err := json.Unmarshal(body, out); err != nil {
-		return resp, err
+	if unmarshalErr := json.Unmarshal(body, out); unmarshalErr != nil {
+		return resp, unmarshalErr
 	}
 
 	var envelope apiError
-	if err := json.Unmarshal(body, &envelope); err == nil && envelope.Status == "error" {
+	if unmarshalErr := json.Unmarshal(body, &envelope); unmarshalErr == nil && envelope.Status == "error" {
 		return resp, fmt.Errorf("premiumize API error: %s (%s)", envelope.Message, envelope.Code)
 	}
 
@@ -190,11 +190,11 @@ func (pm *Premiumize) addTorrent(t *types.Torrent) (*types.Torrent, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := part.Write(t.Magnet.File); err != nil {
-		return nil, err
+	if _, writeErr := part.Write(t.Magnet.File); writeErr != nil {
+		return nil, writeErr
 	}
-	if err := writer.Close(); err != nil {
-		return nil, err
+	if closeErr := writer.Close(); closeErr != nil {
+		return nil, closeErr
 	}
 
 	req, err := http.NewRequest(http.MethodPost, pm.endpoint("/api/transfer/create"), &body)
@@ -204,8 +204,8 @@ func (pm *Premiumize) addTorrent(t *types.Torrent) (*types.Torrent, error) {
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
 	var data transferCreateResponse
-	if _, err := pm.do(req, &data); err != nil {
-		return nil, err
+	if _, doErr := pm.do(req, &data); doErr != nil {
+		return nil, doErr
 	}
 	pm.applySubmittedTorrent(t, data)
 	return t, nil
@@ -264,9 +264,9 @@ func (pm *Premiumize) UpdateTorrent(t *types.Torrent) error {
 	}
 	for _, tr := range transfers {
 		if tr.ID == t.Id {
-			updated, err := pm.transferToTorrent(tr, t.InfoHash)
-			if err != nil {
-				return err
+			updated, transferToTorrentErr := pm.transferToTorrent(tr, t.InfoHash)
+			if transferToTorrentErr != nil {
+				return transferToTorrentErr
 			}
 			t.Name = updated.Name
 			t.Filename = updated.Filename
@@ -339,9 +339,9 @@ func (pm *Premiumize) GetTorrents() ([]*types.Torrent, error) {
 	}
 	torrents := make([]*types.Torrent, 0, len(transfers))
 	for _, tr := range transfers {
-		torrent, err := pm.transferToTorrent(tr, "")
-		if err != nil {
-			pm.logger.Warn().Err(err).Str("transfer_id", tr.ID).Msg("Skipping Premiumize transfer")
+		torrent, transferToTorrentErr := pm.transferToTorrent(tr, "")
+		if transferToTorrentErr != nil {
+			pm.logger.Warn().Err(transferToTorrentErr).Str("transfer_id", tr.ID).Msg("Skipping Premiumize transfer")
 			continue
 		}
 		if torrent.Status == types.TorrentStatusDownloaded {
@@ -357,8 +357,8 @@ func (pm *Premiumize) listTransfers() ([]premiumizeTransfer, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := pm.do(req, &data); err != nil {
-		return nil, err
+	if _, doErr := pm.do(req, &data); doErr != nil {
+		return nil, doErr
 	}
 	return data.Transfers, nil
 }
@@ -451,8 +451,8 @@ func (pm *Premiumize) itemDetails(ctx context.Context, id string) (*itemDetailsR
 	if err != nil {
 		return nil, err
 	}
-	if _, err := pm.do(req, &data); err != nil {
-		return nil, err
+	if _, doErr := pm.do(req, &data); doErr != nil {
+		return nil, doErr
 	}
 	return &data, nil
 }
@@ -467,8 +467,8 @@ func (pm *Premiumize) addFolderFiles(
 	if err != nil {
 		return 0, err
 	}
-	if _, err := pm.do(req, &data); err != nil {
-		return 0, err
+	if _, doErr := pm.do(req, &data); doErr != nil {
+		return 0, doErr
 	}
 	// Count links from the full recursive tree, not just files that pass
 	// Decypharr's extension/size filters, so readiness reflects Premiumize.
@@ -476,9 +476,9 @@ func (pm *Premiumize) addFolderFiles(
 	for _, item := range data.Content {
 		itemPath := path.Join(prefix, item.Name)
 		if item.Type == "folder" {
-			n, err := pm.addFolderFiles(files, links, transferID, item.ID, itemPath)
-			if err != nil {
-				return 0, err
+			n, addFolderFilesErr := pm.addFolderFiles(files, links, transferID, item.ID, itemPath)
+			if addFolderFilesErr != nil {
+				return 0, addFolderFilesErr
 			}
 			linkedFiles += n
 			continue
@@ -630,8 +630,8 @@ func (pm *Premiumize) getClientProfile(client *request.Client) (*types.Profile, 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("premiumize API error: Status: %d || Body: %s", resp.StatusCode, string(body))
 	}
-	if err := json.Unmarshal(body, &data); err != nil {
-		return nil, err
+	if unmarshalErr := json.Unmarshal(body, &data); unmarshalErr != nil {
+		return nil, unmarshalErr
 	}
 	if data.Status == "error" {
 		return nil, fmt.Errorf("premiumize API error: %s (%s)", data.Message, data.Code)

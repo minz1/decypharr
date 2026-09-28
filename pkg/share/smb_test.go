@@ -24,11 +24,11 @@ func TestSingleUserAuthenticator(t *testing.T) {
 
 	// Case-insensitive user, arbitrary domain: Windows sends its machine
 	// name as the domain.
-	if _, err := auth.NTHash(ctx, "WORKGROUP", "MEDIA"); err != nil {
-		t.Fatalf("case-insensitive match failed: %v", err)
+	if _, ntHashErr := auth.NTHash(ctx, "WORKGROUP", "MEDIA"); ntHashErr != nil {
+		t.Fatalf("case-insensitive match failed: %v", ntHashErr)
 	}
 
-	if _, err := auth.NTHash(ctx, "WORKGROUP", "intruder"); err == nil {
+	if _, ntHashErr := auth.NTHash(ctx, "WORKGROUP", "intruder"); ntHashErr == nil {
 		t.Fatal("unknown user was accepted")
 	}
 }

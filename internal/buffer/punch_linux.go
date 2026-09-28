@@ -23,11 +23,11 @@ func punchHole(f *os.File, offset, length int64) error {
 		return err
 	}
 	var opErr error
-	if err := sc.Control(func(fd uintptr) {
+	if controlErr := sc.Control(func(fd uintptr) {
 		opErr = unix.Fallocate(int(fd),
 			unix.FALLOC_FL_PUNCH_HOLE|unix.FALLOC_FL_KEEP_SIZE, offset, length)
-	}); err != nil {
-		return err
+	}); controlErr != nil {
+		return controlErr
 	}
 	if errors.Is(opErr, unix.EOPNOTSUPP) || errors.Is(opErr, unix.ENOTSUP) {
 		return errPunchUnsupported

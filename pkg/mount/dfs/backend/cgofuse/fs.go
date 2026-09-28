@@ -223,10 +223,10 @@ func (f *FS) OpenEx(path string, fi *fuse.FileInfo_t) int {
 
 	// get reader/stream for remote files
 	if info.IsRemote() {
-		var err error
-		reader, err = f.vfs.GetFile(info)
-		if err != nil {
-			f.logger.Error().Err(err).Str("path", path).Msg("Failed to get DFS stream file")
+		var getFileErr error
+		reader, getFileErr = f.vfs.GetFile(info)
+		if getFileErr != nil {
+			f.logger.Error().Err(getFileErr).Str("path", path).Msg("Failed to get DFS stream file")
 			return -fuse.EIO
 		}
 	}
@@ -362,8 +362,8 @@ func (f *FS) Unlink(path string) int {
 		return -fuse.EISDIR
 	}
 
-	if err := f.vfs.GetManager().RemoveEntry(info); err != nil {
-		f.logger.Error().Err(err).Str("file", info.Name()).Msg("Failed to remove file")
+	if removeEntryErr := f.vfs.GetManager().RemoveEntry(info); removeEntryErr != nil {
+		f.logger.Error().Err(removeEntryErr).Str("file", info.Name()).Msg("Failed to remove file")
 		return -fuse.EIO
 	}
 
@@ -386,8 +386,8 @@ func (f *FS) Rmdir(path string) int {
 		return -fuse.ENOTDIR
 	}
 
-	if err := f.vfs.GetManager().RemoveEntry(info); err != nil {
-		f.logger.Error().Err(err).Str("dir", info.Name()).Msg("Failed to remove directory")
+	if removeEntryErr := f.vfs.GetManager().RemoveEntry(info); removeEntryErr != nil {
+		f.logger.Error().Err(removeEntryErr).Str("dir", info.Name()).Msg("Failed to remove directory")
 		return -fuse.EIO
 	}
 

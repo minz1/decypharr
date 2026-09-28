@@ -39,15 +39,15 @@ func (r *Service) Start(ctx context.Context) error {
 	}
 
 	r.scheduler.RemoveByTags(repairSchedulerTag)
-	if _, err := r.scheduler.NewJob(jd,
+	if _, newJobErr := r.scheduler.NewJob(jd,
 		gocron.NewTask(func() {
-			if _, err := r.runSweep(storage.RepairTriggerScheduled, RunOptions{}); err != nil {
-				r.logger.Warn().Err(err).Msg("Scheduled repair sweep skipped")
+			if _, runSweepErr := r.runSweep(storage.RepairTriggerScheduled, RunOptions{}); runSweepErr != nil {
+				r.logger.Warn().Err(runSweepErr).Msg("Scheduled repair sweep skipped")
 			}
 		}),
 		gocron.WithTags(repairSchedulerTag),
-	); err != nil {
-		return fmt.Errorf("failed to register repair sweep: %w", err)
+	); newJobErr != nil {
+		return fmt.Errorf("failed to register repair sweep: %w", newJobErr)
 	}
 	r.scheduled = true
 	r.logger.Info().Str("schedule", cfg.Schedule).Msg("Repair sweep scheduled")
@@ -55,17 +55,17 @@ func (r *Service) Start(ctx context.Context) error {
 	r.scheduler.RemoveByTags(repairStopSchedulerTag)
 	r.stopScheduled = false
 	if stopSchedule := strings.TrimSpace(cfg.StopSchedule); stopSchedule != "" {
-		stopJD, err := utils.ConvertToJobDef(stopSchedule)
-		if err != nil {
-			return fmt.Errorf("invalid repair stop schedule %q: %w", stopSchedule, err)
+		stopJD, convertToJobDefErr := utils.ConvertToJobDef(stopSchedule)
+		if convertToJobDefErr != nil {
+			return fmt.Errorf("invalid repair stop schedule %q: %w", stopSchedule, convertToJobDefErr)
 		}
-		if _, err := r.scheduler.NewJob(stopJD,
+		if _, newJobErr := r.scheduler.NewJob(stopJD,
 			gocron.NewTask(func() {
 				r.stopActiveRepairSweep()
 			}),
 			gocron.WithTags(repairStopSchedulerTag),
-		); err != nil {
-			return fmt.Errorf("failed to register repair stop schedule: %w", err)
+		); newJobErr != nil {
+			return fmt.Errorf("failed to register repair stop schedule: %w", newJobErr)
 		}
 		r.stopScheduled = true
 		r.logger.Info().Str("stop_schedule", stopSchedule).Msg("Repair sweep stop schedule registered")
@@ -157,8 +157,8 @@ func (r *Service) StopRun() error {
 			run.Stage = storage.RepairStageDone
 			run.CancelReason = "stopped by user"
 			run.CompletedAt = time.Now()
-			if err := r.storage.SaveRepairRun(run); err != nil {
-				r.logger.Warn().Err(err).Str("run_id", id).Msg("Stop: failed to persist optimistic cancel")
+			if saveRepairRunErr := r.storage.SaveRepairRun(run); saveRepairRunErr != nil {
+				r.logger.Warn().Err(saveRepairRunErr).Str("run_id", id).Msg("Stop: failed to persist optimistic cancel")
 			}
 		}
 	}
@@ -257,8 +257,11 @@ func (r *Service) reconcileOrphans() {
 			run.Stage = storage.RepairStageDone
 			run.CompletedAt = now
 			run.CancelReason = "interrupted by restart"
-			if err := s.SaveRepairRun(run); err != nil {
-				r.logger.Warn().Err(err).Str("run_id", run.ID).Msg("Reconcile: failed to persist orphaned run")
+			if saveRepairRunErr := s.SaveRepairRun(run); saveRepairRunErr != nil {
+				r.logger.Warn().
+					Err(saveRepairRunErr).
+					Str("run_id", run.ID).
+					Msg("Reconcile: failed to persist orphaned run")
 				continue
 			}
 			n++

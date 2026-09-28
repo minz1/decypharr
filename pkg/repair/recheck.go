@@ -97,13 +97,13 @@ func (r *Service) RecheckMedia(ctx context.Context, arrName, mediaID string, fix
 	r.cancelRun = cancel
 	r.mu.Unlock()
 
-	if err := r.storage.SaveRepairRun(run); err != nil {
+	if saveRepairRunErr := r.storage.SaveRepairRun(run); saveRepairRunErr != nil {
 		r.mu.Lock()
 		r.activeRunID = ""
 		r.cancelRun = nil
 		r.mu.Unlock()
 		cancel()
-		return nil, fmt.Errorf("failed to persist repair run: %w", err)
+		return nil, fmt.Errorf("failed to persist repair run: %w", saveRepairRunErr)
 	}
 
 	r.runWG.Go(func() {

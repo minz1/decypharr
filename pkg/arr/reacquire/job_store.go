@@ -56,11 +56,11 @@ func (r *JobRepository) Get(id string) (Job, bool, error) {
 		return Job{}, false, fmt.Errorf("load reacquire job: %w", err)
 	}
 	var job Job
-	if err := json.Unmarshal(data, &job); err != nil {
-		return Job{}, false, fmt.Errorf("decode reacquire job: %w", err)
+	if unmarshalErr := json.Unmarshal(data, &job); unmarshalErr != nil {
+		return Job{}, false, fmt.Errorf("decode reacquire job: %w", unmarshalErr)
 	}
-	if err := validateJob(job); err != nil {
-		return Job{}, false, fmt.Errorf("decode reacquire job: %w", err)
+	if validateJobErr := validateJob(job); validateJobErr != nil {
+		return Job{}, false, fmt.Errorf("decode reacquire job: %w", validateJobErr)
 	}
 	return cloneJob(job), true, nil
 }
@@ -88,12 +88,12 @@ func (r *JobRepository) save(job Job, durable bool) error {
 		jobAttributeArrName: job.ArrName,
 		jobAttributeStatus:  string(job.Status),
 	}}
-	if err := r.store.Put(job.ID, data, options); err != nil {
-		return fmt.Errorf("persist reacquire job: %w", err)
+	if putErr := r.store.Put(job.ID, data, options); putErr != nil {
+		return fmt.Errorf("persist reacquire job: %w", putErr)
 	}
 	if durable {
-		if err := r.store.Sync(); err != nil {
-			return fmt.Errorf("sync reacquire job: %w", err)
+		if syncErr := r.store.Sync(); syncErr != nil {
+			return fmt.Errorf("sync reacquire job: %w", syncErr)
 		}
 	}
 	return nil

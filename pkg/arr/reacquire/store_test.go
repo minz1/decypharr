@@ -165,14 +165,14 @@ func TestBindingRepositoryIgnoresUncommittedPages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repository.store.Put(bindingPageStoreKey("sonarr", 2, 0), data, nil); err != nil {
-		t.Fatal(err)
+	if putErr := repository.store.Put(bindingPageStoreKey("sonarr", 2, 0), data, nil); putErr != nil {
+		t.Fatal(putErr)
 	}
-	if err := repository.store.Sync(); err != nil {
-		t.Fatal(err)
+	if syncErr := repository.store.Sync(); syncErr != nil {
+		t.Fatal(syncErr)
 	}
-	if err := repository.Close(); err != nil {
-		t.Fatal(err)
+	if closeErr := repository.Close(); closeErr != nil {
+		t.Fatal(closeErr)
 	}
 
 	repository = openTestBindingRepository(t, path)
@@ -220,16 +220,16 @@ func TestBindingRepositoryMigratesLegacyRowsOnMutation(t *testing.T) {
 		}
 		first.EntryFileName = "updated.mkv"
 		first.Generation = 2
-		if err := repository.Save(first); err != nil {
-			t.Fatal(err)
+		if saveErr := repository.Save(first); saveErr != nil {
+			t.Fatal(saveErr)
 		}
 
 		poisoned := first
 		poisoned.EntryFileName = "legacy-row-should-be-ignored.mkv"
 		poisoned.Generation = 99
 		putLegacyBinding(t, repository.store, poisoned)
-		if err := repository.Close(); err != nil {
-			t.Fatal(err)
+		if closeErr := repository.Close(); closeErr != nil {
+			t.Fatal(closeErr)
 		}
 
 		repository = openTestBindingRepository(t, path)
@@ -312,11 +312,11 @@ func putLegacyBinding(t *testing.T, store bindingRepositoryStore, binding Bindin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Put(bindingStoreKey(binding.EntryID, binding.EntryFileID), data, nil); err != nil {
-		t.Fatal(err)
+	if putErr := store.Put(bindingStoreKey(binding.EntryID, binding.EntryFileID), data, nil); putErr != nil {
+		t.Fatal(putErr)
 	}
-	if err := store.Sync(); err != nil {
-		t.Fatal(err)
+	if syncErr := store.Sync(); syncErr != nil {
+		t.Fatal(syncErr)
 	}
 }
 

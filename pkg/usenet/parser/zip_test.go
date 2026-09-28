@@ -23,8 +23,8 @@ func TestZIPParserReadsCentralDirectoryLargerThanTail(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := entry.Write([]byte{byte(index)}); err != nil {
-			t.Fatal(err)
+		if _, writeErr := entry.Write([]byte{byte(index)}); writeErr != nil {
+			t.Fatal(writeErr)
 		}
 	}
 	if err := writer.SetComment("comment containing a false PK\x05\x06 signature"); err != nil {
@@ -64,7 +64,10 @@ func TestAbsoluteZIPHeaderOffsetUsesStartDisk(t *testing.T) {
 		t.Fatalf("absolute local header offset = %d, want 3075", offset)
 	}
 	entry.DiskNumberStart = 3
-	if _, err := absoluteZIPHeaderOffset(entry, []int64{0, 1_000, 3_000}); err == nil {
+	if _, absoluteZIPHeaderOffsetErr := absoluteZIPHeaderOffset(
+		entry,
+		[]int64{0, 1_000, 3_000},
+	); absoluteZIPHeaderOffsetErr == nil {
 		t.Fatal("out-of-range start disk unexpectedly accepted")
 	}
 }

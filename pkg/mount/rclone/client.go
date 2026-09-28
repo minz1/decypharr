@@ -206,8 +206,8 @@ func (m *Manager) unmount(ctx context.Context) {
 	// If RC unmount fails or server is not ready, try force unmount
 	if err != nil {
 		m.logger.Warn().Err(err).Msg("RC unmount failed, trying force unmount")
-		if err := m.forceUnmount(ctx); err != nil {
-			m.logger.Error().Err(err).Msg("Force unmount failed")
+		if forceUnmountErr := m.forceUnmount(ctx); forceUnmountErr != nil {
+			m.logger.Error().Err(forceUnmountErr).Msg("Force unmount failed")
 			// Don't return error here, update the state anyway
 		}
 	}

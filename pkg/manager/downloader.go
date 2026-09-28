@@ -203,8 +203,11 @@ func (d *Downloader) processSymlink(entry *storage.Entry, mountPath string) erro
 	entry.IsDownloading = true
 	_ = d.manager.queue.Update(entry)
 
-	if err := d.waitForSymlinkFilesReady(filePaths, symlinkReadyTimeout); err != nil {
-		return err
+	if waitForSymlinkFilesReadyErr := d.waitForSymlinkFilesReady(
+		filePaths,
+		symlinkReadyTimeout,
+	); waitForSymlinkFilesReadyErr != nil {
+		return waitForSymlinkFilesReadyErr
 	}
 
 	// Warm the mount cache for the first few files so a subsequent import scan is fast
@@ -217,8 +220,8 @@ func (d *Downloader) processSymlink(entry *storage.Entry, mountPath string) erro
 			probeFiles = probeFiles[:MaxNZBPreCacheFiles]
 		}
 		d.logger.Debug().Int("files", len(probeFiles)).Msgf("Warming cache for %s", entry.Name)
-		if err := d.manager.WarmFileCache(probeFiles); err != nil {
-			d.logger.Error().Msgf("Failed to warm cache: %s", err)
+		if warmFileCacheErr := d.manager.WarmFileCache(probeFiles); warmFileCacheErr != nil {
+			d.logger.Error().Msgf("Failed to warm cache: %s", warmFileCacheErr)
 		} else {
 			d.logger.Debug().
 				Str("entry", entry.Name).
@@ -264,16 +267,16 @@ func (d *Downloader) createSymlinksWhenMountFilesAppear(
 			fullPath := filepath.Join(dirPath, entryName)
 
 			if item.IsDir() {
-				if err := checkDirectory(fullPath); err != nil {
-					return err
+				if checkDirectoryErr := checkDirectory(fullPath); checkDirectoryErr != nil {
+					return checkDirectoryErr
 				}
 				continue
 			}
 
 			if file, exists := remainingFiles[entryName]; exists {
 				fileSymlinkPath := filepath.Join(symlinkDir, file.Name)
-				if err := os.Symlink(fullPath, fileSymlinkPath); err != nil && !os.IsExist(err) {
-					return fmt.Errorf("failed to create symlink %s -> %s: %w", fileSymlinkPath, fullPath, err)
+				if symlinkErr := os.Symlink(fullPath, fileSymlinkPath); symlinkErr != nil && !os.IsExist(symlinkErr) {
+					return fmt.Errorf("failed to create symlink %s -> %s: %w", fileSymlinkPath, fullPath, symlinkErr)
 				}
 				filePaths = append(filePaths, fileSymlinkPath)
 				delete(remainingFiles, entryName)
@@ -668,15 +671,15 @@ func (d *Downloader) processUsenetDownload(entry *storage.Entry) error {
 				_ = d.manager.queue.Update(entry)
 			}
 
-			if err := d.manager.usenet.Download(
+			if downloadErr := d.manager.usenet.Download(
 				d.manager.ctx,
 				entry.InfoHash,
 				file.Name,
 				destFile,
 				progressCallback,
-			); err != nil {
+			); downloadErr != nil {
 				_ = os.Remove(destPath)
-				return fmt.Errorf("failed to download %s: %w", file.Name, err)
+				return fmt.Errorf("failed to download %s: %w", file.Name, downloadErr)
 			}
 
 			d.logger.Info().Msgf("Downloaded NZB file: %s", file.Name)
@@ -844,8 +847,8 @@ func (d *Downloader) localDownloadAttempt(
 					progressCallback(final, int64(resp.BytesPerSecond()))
 				}
 			}
-			if err := resp.Err(); err != nil {
-				return err
+			if respErr := resp.Err(); respErr != nil {
+				return respErr
 			}
 			return nil
 		}

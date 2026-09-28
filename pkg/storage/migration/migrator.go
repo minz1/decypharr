@@ -64,8 +64,8 @@ func (m *Migrator) Start() error {
 		ErrorList: []string{},
 	}
 
-	if err := m.storage.SaveMigrationStatus(status); err != nil {
-		return fmt.Errorf("failed to save migration status: %w", err)
+	if saveMigrationStatusErr := m.storage.SaveMigrationStatus(status); saveMigrationStatusErr != nil {
+		return fmt.Errorf("failed to save migration status: %w", saveMigrationStatusErr)
 	}
 
 	// Start migration in background
@@ -184,10 +184,13 @@ func (m *Migrator) runMigration(ctx context.Context, cachedTorrents map[string][
 		}
 
 		// Save to new storage
-		if err := m.storage.AddOrUpdate(managed); err != nil {
-			m.logger.Error().Err(err).Str("infohash", infohash).Msg("Failed to add managed torrent")
+		if addOrUpdateErr := m.storage.AddOrUpdate(managed); addOrUpdateErr != nil {
+			m.logger.Error().Err(addOrUpdateErr).Str("infohash", infohash).Msg("Failed to add managed torrent")
 			status.Errors++
-			status.ErrorList = append(status.ErrorList, fmt.Sprintf("Failed to add %s: %v", managed.Name, err))
+			status.ErrorList = append(
+				status.ErrorList,
+				fmt.Sprintf("Failed to add %s: %v", managed.Name, addOrUpdateErr),
+			)
 			continue
 		}
 		status.Completed++
@@ -195,8 +198,8 @@ func (m *Migrator) runMigration(ctx context.Context, cachedTorrents map[string][
 
 		// Update status every 10 torrents
 		if status.Completed%10 == 0 {
-			if err := m.storage.SaveMigrationStatus(status); err != nil {
-				m.logger.Error().Err(err).Msg("Failed to update migration status")
+			if saveMigrationStatusErr := m.storage.SaveMigrationStatus(status); saveMigrationStatusErr != nil {
+				m.logger.Error().Err(saveMigrationStatusErr).Msg("Failed to update migration status")
 			}
 		}
 	}
@@ -238,9 +241,9 @@ func (m *Migrator) loadCacheTorrents() (map[string][]*storage.CachedTorrent, err
 		debridPath := filepath.Join(m.cacheDir, debridName)
 
 		// Read all JSON files in this debrid directory
-		files, err := os.ReadDir(debridPath)
-		if err != nil {
-			m.logger.Error().Err(err).Str("path", debridPath).Msg("Failed to read debrid directory")
+		files, readDirErr := os.ReadDir(debridPath)
+		if readDirErr != nil {
+			m.logger.Error().Err(readDirErr).Str("path", debridPath).Msg("Failed to read debrid directory")
 			continue
 		}
 
@@ -252,15 +255,15 @@ func (m *Migrator) loadCacheTorrents() (map[string][]*storage.CachedTorrent, err
 			filePath := filepath.Join(debridPath, file.Name())
 
 			// Read and parse JSON
-			data, err := os.ReadFile(filePath)
-			if err != nil {
-				m.logger.Error().Err(err).Str("file", filePath).Msg("Failed to read cache file")
+			data, readFileErr := os.ReadFile(filePath)
+			if readFileErr != nil {
+				m.logger.Error().Err(readFileErr).Str("file", filePath).Msg("Failed to read cache file")
 				continue
 			}
 
 			var cached storage.CachedTorrent
-			if err := json.Unmarshal(data, &cached); err != nil {
-				m.logger.Error().Err(err).Str("file", filePath).Msg("Failed to unmarshal cache file")
+			if unmarshalErr := json.Unmarshal(data, &cached); unmarshalErr != nil {
+				m.logger.Error().Err(unmarshalErr).Str("file", filePath).Msg("Failed to unmarshal cache file")
 				continue
 			}
 

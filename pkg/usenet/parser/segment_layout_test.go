@@ -55,14 +55,14 @@ func TestSegmentLayoutRejectsInvalidRangesAndVolumes(t *testing.T) {
 		{offset: 9, length: 2},
 		{offset: math.MaxInt64 - 1, length: 4},
 	} {
-		if _, err := layout.slice(test.offset, test.length, true); err == nil {
+		if _, sliceErr := layout.slice(test.offset, test.length, true); sliceErr == nil {
 			t.Fatalf("slice(%d, %d) unexpectedly succeeded", test.offset, test.length)
 		}
 	}
-	if err := layout.validateVolumes([]storage.ArchiveVolumeInfo{
+	if validateVolumesErr := layout.validateVolumes([]storage.ArchiveVolumeInfo{
 		{Name: "one", Size: 6, SegmentStart: 0, SegmentEnd: 1},
 		{Name: "two", Size: 4, SegmentStart: 1, SegmentEnd: 2},
-	}); err == nil {
+	}); validateVolumesErr == nil {
 		t.Fatal("mismatched volume sizes unexpectedly validated")
 	}
 }
@@ -89,9 +89,9 @@ func TestSegmentLayoutMatchesLegacyRangeMapping(t *testing.T) {
 	for range 2_000 {
 		offset := random.Int64N(total)
 		length := random.Int64N(total-offset) + 1
-		got, err := layout.slice(offset, length, true)
-		if err != nil {
-			t.Fatal(err)
+		got, sliceErr := layout.slice(offset, length, true)
+		if sliceErr != nil {
+			t.Fatal(sliceErr)
 		}
 		want := legacyRangeMapping(segments, offset, length)
 		if !slices.Equal(got, want) {
@@ -142,8 +142,8 @@ func BenchmarkSegmentLayoutSlice(b *testing.B) {
 	offset := int64(9_000) * 750_000
 	b.ReportAllocs()
 	for b.Loop() {
-		if _, err := layout.slice(offset, 1_500_000, true); err != nil {
-			b.Fatal(err)
+		if _, sliceErr := layout.slice(offset, 1_500_000, true); sliceErr != nil {
+			b.Fatal(sliceErr)
 		}
 	}
 }

@@ -328,9 +328,9 @@ func (vf *File) newReaderForRange(start, end int64) (io.ReadCloser, error) {
 
 	// Seek to start position for sequential reading
 	if start > 0 {
-		if _, err := r.Seek(start, io.SeekStart); err != nil {
+		if _, seekErr := r.Seek(start, io.SeekStart); seekErr != nil {
 			_ = r.Close()
-			return nil, fmt.Errorf("failed to seek to start position: %w", err)
+			return nil, fmt.Errorf("failed to seek to start position: %w", seekErr)
 		}
 	}
 

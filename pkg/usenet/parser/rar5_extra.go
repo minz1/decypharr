@@ -54,17 +54,17 @@ func parseRAR5Extra(data []byte, password string) (rar5Encryption, error) {
 			return rar5Encryption{}, fmt.Errorf("invalid RAR5 key derivation count")
 		}
 		var salt [16]byte
-		if _, err := io.ReadFull(record, salt[:]); err != nil {
-			return rar5Encryption{}, fmt.Errorf("RAR5 salt: %w", err)
+		if _, readFullErr := io.ReadFull(record, salt[:]); readFullErr != nil {
+			return rar5Encryption{}, fmt.Errorf("RAR5 salt: %w", readFullErr)
 		}
 		iv := make([]byte, 16)
-		if _, err := io.ReadFull(record, iv); err != nil {
-			return rar5Encryption{}, fmt.Errorf("RAR5 IV: %w", err)
+		if _, readFullErr := io.ReadFull(record, iv); readFullErr != nil {
+			return rar5Encryption{}, fmt.Errorf("RAR5 IV: %w", readFullErr)
 		}
 		if flags&1 != 0 {
 			var check [12]byte
-			if _, err := io.ReadFull(record, check[:]); err != nil {
-				return rar5Encryption{}, fmt.Errorf("RAR5 password check: %w", err)
+			if _, readFullErr := io.ReadFull(record, check[:]); readFullErr != nil {
+				return rar5Encryption{}, fmt.Errorf("RAR5 password check: %w", readFullErr)
 			}
 		}
 		encryption.Encrypted = true

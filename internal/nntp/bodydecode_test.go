@@ -113,8 +113,8 @@ func TestPipelineBodiesPipelinesCommands(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
+	if srvErr := <-serverErr; srvErr != nil {
+		t.Fatal(srvErr)
 	}
 	for i := range payloads {
 		if results[i].Error != nil {
@@ -173,11 +173,11 @@ func TestPipelineBodiesDrainsNegativeResponses(t *testing.T) {
 	if !bytes.Equal(results[1].Body, payload) {
 		t.Fatal("available response after missing article was not decoded")
 	}
-	if _, _, err := c.Stat("<after@b>"); err != nil {
-		t.Fatalf("connection was not reusable after drained pipeline: %v", err)
+	if _, _, statErr := c.Stat("<after@b>"); statErr != nil {
+		t.Fatalf("connection was not reusable after drained pipeline: %v", statErr)
 	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
+	if srvErr := <-serverErr; srvErr != nil {
+		t.Fatal(srvErr)
 	}
 }
 
@@ -237,8 +237,8 @@ func TestPipelineBodiesDrainsDecodeErrors(t *testing.T) {
 	if results[1].Error != nil || !bytes.Equal(results[1].Body, payload) {
 		t.Fatalf("second result = (%d bytes, %v), want successful payload", len(results[1].Body), results[1].Error)
 	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
+	if srvErr := <-serverErr; srvErr != nil {
+		t.Fatal(srvErr)
 	}
 }
 

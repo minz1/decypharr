@@ -77,17 +77,17 @@ func (s *Service) Media(ctx context.Context, name, mediaID string) ([]Content, e
 	if resp.StatusCode == http.StatusNotFound {
 		return s.movies(ctx, instance, mediaID)
 	}
-	if err := expectStatus(resp, http.StatusOK); err != nil {
-		return nil, fmt.Errorf("list series: %w", err)
+	if expectStatusErr := expectStatus(resp, http.StatusOK); expectStatusErr != nil {
+		return nil, fmt.Errorf("list series: %w", expectStatusErr)
 	}
 
 	contents := make([]Content, 0, len(series))
 	for _, item := range series {
-		if err := ctx.Err(); err != nil {
-			return contents, err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return contents, ctxErr
 		}
-		files, err := s.sonarrSeriesFiles(ctx, instance, item.Id)
-		if err != nil {
+		files, sonarrSeriesFilesErr := s.sonarrSeriesFiles(ctx, instance, item.Id)
+		if sonarrSeriesFilesErr != nil {
 			continue
 		}
 		content := Content{Title: item.Title, Id: item.Id, Files: make([]ContentFile, 0, len(files))}
@@ -119,8 +119,8 @@ func (s *Service) movies(ctx context.Context, instance Arr, mediaID string) ([]C
 	if err != nil {
 		return nil, err
 	}
-	if err := expectStatus(resp, http.StatusOK); err != nil {
-		return nil, fmt.Errorf("list movies: %w", err)
+	if expectStatusErr := expectStatus(resp, http.StatusOK); expectStatusErr != nil {
+		return nil, fmt.Errorf("list movies: %w", expectStatusErr)
 	}
 
 	contents := make([]Content, 0, len(movies))
@@ -223,7 +223,7 @@ func (s *Service) DeleteFiles(ctx context.Context, name string, files []ContentF
 		if len(ids) == 0 {
 			continue
 		}
-		resp, err := s.mutate(
+		resp, mutateErr := s.mutate(
 			ctx,
 			instance,
 			http.MethodDelete,
@@ -231,11 +231,11 @@ func (s *Service) DeleteFiles(ctx context.Context, name string, files []ContentF
 			map[string][]int{field: ids},
 			nil,
 		)
-		if err != nil {
-			return fmt.Errorf("delete %s bulk: %w", resource, err)
+		if mutateErr != nil {
+			return fmt.Errorf("delete %s bulk: %w", resource, mutateErr)
 		}
-		if err := expectSuccess(resp); err != nil {
-			return fmt.Errorf("delete %s bulk: %w", resource, err)
+		if expectSuccessErr := expectSuccess(resp); expectSuccessErr != nil {
+			return fmt.Errorf("delete %s bulk: %w", resource, expectSuccessErr)
 		}
 		for i := range batch {
 			batch[i].Delete()

@@ -29,8 +29,8 @@ func (m *Manager) InvalidateReacquire(ctx context.Context, job reacquire.Job) er
 		if !exists {
 			continue
 		}
-		if err := m.DeleteEntry(entryID, true); err != nil {
-			return fmt.Errorf("invalidate managed entry %q: %w", entryID, err)
+		if deleteEntryErr := m.DeleteEntry(entryID, true); deleteEntryErr != nil {
+			return fmt.Errorf("invalidate managed entry %q: %w", entryID, deleteEntryErr)
 		}
 	}
 	if m.arrService != nil {

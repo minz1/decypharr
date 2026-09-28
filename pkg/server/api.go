@@ -319,15 +319,15 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	var before config.Config
 	invalid := false
 	updated, err := config.Update(func(current *config.Config) error {
-		next, err := mergeConfigUpdate(current, bytes.NewReader(body))
-		if err != nil {
+		next, mergeConfigUpdateErr := mergeConfigUpdate(current, bytes.NewReader(body))
+		if mergeConfigUpdateErr != nil {
 			invalid = true
-			return fmt.Errorf("invalid request body: %w", err)
+			return fmt.Errorf("invalid request body: %w", mergeConfigUpdateErr)
 		}
 		next.MigrateVirtualFolders()
-		if err := next.ValidateVirtualFolders(); err != nil {
+		if validateVirtualFoldersErr := next.ValidateVirtualFolders(); validateVirtualFoldersErr != nil {
 			invalid = true
-			return fmt.Errorf("invalid virtual folders: %w", err)
+			return fmt.Errorf("invalid virtual folders: %w", validateVirtualFoldersErr)
 		}
 		next.Auth = current.Auth
 		next.SessionSecret = current.SessionSecret
@@ -364,18 +364,20 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		if before.AppURL != updated.AppURL || !reflect.DeepEqual(before.Strm, updated.Strm) {
 			s.manager.Strm().SweepAsync("config_change")
 		}
-		if err := s.manager.ApplyVirtualFolders(updated.VirtualFolders); err != nil {
-			s.logger.Error().Err(err).Msg("Failed to apply virtual folders")
+		if applyVirtualFoldersErr := s.manager.ApplyVirtualFolders(
+			updated.VirtualFolders,
+		); applyVirtualFoldersErr != nil {
+			s.logger.Error().Err(applyVirtualFoldersErr).Msg("Failed to apply virtual folders")
 			http.Error(
 				w,
-				"Configuration was saved, but virtual folders could not be applied: "+err.Error(),
+				"Configuration was saved, but virtual folders could not be applied: "+applyVirtualFoldersErr.Error(),
 				http.StatusInternalServerError,
 			)
 			return
 		}
 		if svc := s.manager.Repair(); svc != nil {
-			if err := svc.ApplyConfig(); err != nil {
-				s.logger.Warn().Err(err).Msg("Failed to apply repair config")
+			if applyConfigErr := svc.ApplyConfig(); applyConfigErr != nil {
+				s.logger.Warn().Err(applyConfigErr).Msg("Failed to apply repair config")
 			}
 		}
 	}
@@ -391,8 +393,8 @@ func mergeConfigUpdate(current *config.Config, update io.Reader) (config.Config,
 	if err != nil {
 		return config.Config{}, fmt.Errorf("copy current config: %w", err)
 	}
-	if err := json.NewDecoder(update).Decode(merged); err != nil {
-		return config.Config{}, err
+	if decodeErr := json.NewDecoder(update).Decode(merged); decodeErr != nil {
+		return config.Config{}, decodeErr
 	}
 	return *merged, nil
 }
@@ -477,9 +479,9 @@ func (s *Server) handleUpdateRepairConfig(w http.ResponseWriter, r *http.Request
 	}
 
 	if svc := s.manager.Repair(); svc != nil {
-		if err := svc.ApplyConfig(); err != nil {
-			s.logger.Warn().Err(err).Msg("Failed to apply repair config")
-			http.Error(w, "Saved, but failed to apply: "+err.Error(), http.StatusInternalServerError)
+		if applyConfigErr := svc.ApplyConfig(); applyConfigErr != nil {
+			s.logger.Warn().Err(applyConfigErr).Msg("Failed to apply repair config")
+			http.Error(w, "Saved, but failed to apply: "+applyConfigErr.Error(), http.StatusInternalServerError)
 			return
 		}
 	}

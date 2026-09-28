@@ -26,8 +26,8 @@ func TestFileIDsAreStableAcrossUpdates(t *testing.T) {
 			"Movie.2023.mkv": {Name: "Movie.2023.mkv", Size: 100, InfoHash: infohash},
 		},
 	}
-	if err := s.AddOrUpdate(entry); err != nil {
-		t.Fatal(err)
+	if addOrUpdateErr := s.AddOrUpdate(entry); addOrUpdateErr != nil {
+		t.Fatal(addOrUpdateErr)
 	}
 	id := entry.Files["Movie.2023.mkv"].ID
 	if id == "" {
@@ -43,8 +43,8 @@ func TestFileIDsAreStableAcrossUpdates(t *testing.T) {
 			"Movie.2023.srt": {Name: "Movie.2023.srt", Size: 10, InfoHash: infohash},
 		},
 	}
-	if err := s.AddOrUpdate(rebuilt); err != nil {
-		t.Fatal(err)
+	if addOrUpdateErr := s.AddOrUpdate(rebuilt); addOrUpdateErr != nil {
+		t.Fatal(addOrUpdateErr)
 	}
 	if got := rebuilt.Files["Movie.2023.mkv"].ID; got != id {
 		t.Fatalf("existing file ID changed: %q -> %q", id, got)

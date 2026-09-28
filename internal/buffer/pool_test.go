@@ -32,13 +32,13 @@ func TestDiskBackstop_ReclaimsOverLimit(t *testing.T) {
 	}
 
 	data := make([]byte, 1024)
-	if _, err := buf.WriteAt(data, 0); err != nil {
-		t.Fatalf("WriteAt: %v", err)
+	if _, writeAtErr := buf.WriteAt(data, 0); writeAtErr != nil {
+		t.Fatalf("WriteAt: %v", writeAtErr)
 	}
 	// Force the write out of the RAM window and onto disk (and the range
 	// tracker) immediately, rather than waiting for a block flush.
-	if err := buf.Flush(); err != nil {
-		t.Fatalf("Flush: %v", err)
+	if flushErr := buf.Flush(); flushErr != nil {
+		t.Fatalf("Flush: %v", flushErr)
 	}
 
 	if got := pool.diskInUse.Load(); got == 0 {
@@ -91,11 +91,11 @@ func TestDiskBackstop_FiresOnEvictCallback(t *testing.T) {
 	}
 
 	data := make([]byte, 1024)
-	if _, err := buf.WriteAt(data, 0); err != nil {
-		t.Fatalf("WriteAt: %v", err)
+	if _, writeAtErr := buf.WriteAt(data, 0); writeAtErr != nil {
+		t.Fatalf("WriteAt: %v", writeAtErr)
 	}
-	if err := buf.Flush(); err != nil {
-		t.Fatalf("Flush: %v", err)
+	if flushErr := buf.Flush(); flushErr != nil {
+		t.Fatalf("Flush: %v", flushErr)
 	}
 
 	buf.SetReadHead(1024)
@@ -133,11 +133,11 @@ func TestDiskBackstop_NoOpWithoutReadHead(t *testing.T) {
 	}
 
 	data := make([]byte, 512)
-	if _, err := buf.WriteAt(data, 0); err != nil {
-		t.Fatalf("WriteAt: %v", err)
+	if _, writeAtErr := buf.WriteAt(data, 0); writeAtErr != nil {
+		t.Fatalf("WriteAt: %v", writeAtErr)
 	}
-	if err := buf.Flush(); err != nil {
-		t.Fatalf("Flush: %v", err)
+	if flushErr := buf.Flush(); flushErr != nil {
+		t.Fatalf("Flush: %v", flushErr)
 	}
 
 	diskBefore := pool.diskInUse.Load()

@@ -30,13 +30,19 @@ func (handler *arrHandler) grabBestRelease(
 				return "", unavailableMutationReconciliation(mutation, err)
 			}
 			if found {
-				if err := confirmMutation(job, progress, StatusSearching, mutation, record.ID); err != nil {
-					return "", err
+				if confirmMutationErr := confirmMutation(
+					job,
+					progress,
+					StatusSearching,
+					mutation,
+					record.ID,
+				); confirmMutationErr != nil {
+					return "", confirmMutationErr
 				}
 				return StatusWaitingForDownload, nil
 			}
-			if err := mutationRedispatchError(mutation); err != nil {
-				return "", err
+			if mutationRedispatchErr := mutationRedispatchError(mutation); mutationRedispatchErr != nil {
+				return "", mutationRedispatchErr
 			}
 		}
 		release, err := handler.findPersistedRelease(ctx, instance, bindings, mutation)
@@ -54,13 +60,13 @@ func (handler *arrHandler) grabBestRelease(
 		if !releaseEligible(release) || release.GUID == "" || release.Indexer == "" || release.IndexerID <= 0 {
 			continue
 		}
-		mutation, err := releaseMutation(bindings, release)
-		if err != nil {
-			return "", err
+		mutation, releaseMutationErr := releaseMutation(bindings, release)
+		if releaseMutationErr != nil {
+			return "", releaseMutationErr
 		}
-		mutation, err = ensureMutationIntent(job, progress, StatusSearching, mutation)
-		if err != nil {
-			return "", err
+		mutation, releaseMutationErr = ensureMutationIntent(job, progress, StatusSearching, mutation)
+		if releaseMutationErr != nil {
+			return "", releaseMutationErr
 		}
 		return handler.dispatchReleaseMutation(ctx, instance, job, mutation, release, progress)
 	}
@@ -166,21 +172,27 @@ func (handler *arrHandler) dispatchReleaseMutation(
 	if err != nil {
 		return "", err
 	}
-	if err := handler.arrs.GrabRelease(ctx, instance.Name, release); err != nil {
-		if !errors.Is(err, arr.ErrMutationOutcomeUnknown) {
-			return "", err
+	if grabReleaseErr := handler.arrs.GrabRelease(ctx, instance.Name, release); grabReleaseErr != nil {
+		if !errors.Is(grabReleaseErr, arr.ErrMutationOutcomeUnknown) {
+			return "", grabReleaseErr
 		}
 		record, found, reconcileErr := handler.reconcileReleaseMutation(ctx, instance, mutation)
 		if reconcileErr == nil && found {
-			if err := confirmMutation(job, progress, StatusSearching, mutation, record.ID); err != nil {
-				return "", err
+			if confirmMutationErr := confirmMutation(
+				job,
+				progress,
+				StatusSearching,
+				mutation,
+				record.ID,
+			); confirmMutationErr != nil {
+				return "", confirmMutationErr
 			}
 			return StatusWaitingForDownload, nil
 		}
-		return "", unresolvedMutation(mutation, err, reconcileErr)
+		return "", unresolvedMutation(mutation, grabReleaseErr, reconcileErr)
 	}
-	if err := confirmMutation(job, progress, StatusSearching, mutation, 0); err != nil {
-		return "", err
+	if confirmMutationErr := confirmMutation(job, progress, StatusSearching, mutation, 0); confirmMutationErr != nil {
+		return "", confirmMutationErr
 	}
 	return StatusWaitingForDownload, nil
 }

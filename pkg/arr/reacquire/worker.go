@@ -32,8 +32,8 @@ func (s *Service) Reacquire(request Request) (*Job, error) {
 	}
 	defer release()
 	request.Strategy = request.Strategy.normalized()
-	if err := request.validate(); err != nil {
-		return nil, err
+	if validateErr := request.validate(); validateErr != nil {
+		return nil, validateErr
 	}
 	binding, ok := s.index.Lookup(request.EntryID, request.FileID)
 	if !ok {
@@ -167,8 +167,8 @@ func (s *Service) DeleteJobs(ids []string) (int, error) {
 
 	deleted := 0
 	for _, id := range uniqueIDs {
-		if err := s.jobRepository.Delete(id); err != nil {
-			return deleted, fmt.Errorf("delete reacquire job %q: %w", id, err)
+		if deleteErr := s.jobRepository.Delete(id); deleteErr != nil {
+			return deleted, fmt.Errorf("delete reacquire job %q: %w", id, deleteErr)
 		}
 		delete(s.jobs, id)
 		deleted++

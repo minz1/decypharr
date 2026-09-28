@@ -89,14 +89,14 @@ func loadHandleKey(path string) ([]byte, error) {
 		return nil, err
 	}
 	key = make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
-		return nil, err
+	if _, readErr := rand.Read(key); readErr != nil {
+		return nil, readErr
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, err
+	if mkdirAllErr := os.MkdirAll(filepath.Dir(path), 0o700); mkdirAllErr != nil {
+		return nil, mkdirAllErr
 	}
-	if err := os.WriteFile(path, key, 0o600); err != nil {
-		return nil, err
+	if writeFileErr := os.WriteFile(path, key, 0o600); writeFileErr != nil {
+		return nil, writeFileErr
 	}
 	return key, nil
 }

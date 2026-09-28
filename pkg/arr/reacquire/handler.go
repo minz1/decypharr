@@ -37,11 +37,11 @@ func (handler *arrHandler) Reacquire(ctx context.Context, job Job, progress JobP
 	if err != nil {
 		return err
 	}
-	if err := validateMutationInstance(instance, bindings); err != nil {
-		return err
+	if validateMutationInstanceErr := validateMutationInstance(instance, bindings); validateMutationInstanceErr != nil {
+		return validateMutationInstanceErr
 	}
-	if err := validateSearchBindings(instance, bindings); err != nil {
-		return err
+	if validateSearchBindingsErr := validateSearchBindings(instance, bindings); validateSearchBindingsErr != nil {
+		return validateSearchBindingsErr
 	}
 	downloadConfig, err := handler.arrs.DownloadClientConfig(ctx, instance.Name)
 	if err != nil {
@@ -67,11 +67,11 @@ func (handler *arrHandler) Reacquire(ctx context.Context, job Job, progress JobP
 		}
 	}
 
-	if err := progress.Update(StatusInvalidating, nil); err != nil {
-		return err
+	if updateErr := progress.Update(StatusInvalidating, nil); updateErr != nil {
+		return updateErr
 	}
-	if err := handler.deleteArrFiles(ctx, instance, bindings); err != nil {
-		return err
+	if deleteArrFilesErr := handler.deleteArrFiles(ctx, instance, bindings); deleteArrFilesErr != nil {
+		return deleteArrFilesErr
 	}
 	var waitingStatus Status
 	switch job.Strategy {
@@ -92,8 +92,11 @@ func (handler *arrHandler) Reacquire(ctx context.Context, job Job, progress JobP
 	if handler.invalidator != nil && bindings[0].Confidence != ConfidenceLibraryFile {
 		invalidationJob := job
 		invalidationJob.Bindings = bindings
-		if err := handler.invalidator.InvalidateReacquire(ctx, invalidationJob); err != nil {
-			return err
+		if invalidateReacquireErr := handler.invalidator.InvalidateReacquire(
+			ctx,
+			invalidationJob,
+		); invalidateReacquireErr != nil {
+			return invalidateReacquireErr
 		}
 	}
 	return progress.Update(waitingStatus, nil)
@@ -209,30 +212,33 @@ func (handler *arrHandler) executeExactDownloadFailure(
 		return confirmMutation(job, progress, StatusBlocklisting, mutation, failure.failedID)
 	}
 	if mutation.Attempts > 0 {
-		record, found, err := handler.arrs.FailedHistory(ctx, instance.Name, failure.downloadID)
-		if err != nil {
-			return unavailableMutationReconciliation(mutation, fmt.Errorf("reconcile failed-download history: %w", err))
+		record, found, failedHistoryErr := handler.arrs.FailedHistory(ctx, instance.Name, failure.downloadID)
+		if failedHistoryErr != nil {
+			return unavailableMutationReconciliation(
+				mutation,
+				fmt.Errorf("reconcile failed-download history: %w", failedHistoryErr),
+			)
 		}
 		if found {
 			return confirmMutation(job, progress, StatusBlocklisting, mutation, record.ID)
 		}
-		if err := mutationRedispatchError(mutation); err != nil {
-			return err
+		if mutationRedispatchErr := mutationRedispatchError(mutation); mutationRedispatchErr != nil {
+			return mutationRedispatchErr
 		}
 	}
 	mutation, err = recordMutationAttempt(job, progress, StatusBlocklisting, mutation)
 	if err != nil {
 		return err
 	}
-	if err := handler.arrs.FailHistory(ctx, instance.Name, mutation.HistoryID); err != nil {
-		if !errors.Is(err, arr.ErrMutationOutcomeUnknown) {
-			return err
+	if failHistoryErr := handler.arrs.FailHistory(ctx, instance.Name, mutation.HistoryID); failHistoryErr != nil {
+		if !errors.Is(failHistoryErr, arr.ErrMutationOutcomeUnknown) {
+			return failHistoryErr
 		}
 		record, found, reconcileErr := handler.arrs.FailedHistory(ctx, instance.Name, failure.downloadID)
 		if reconcileErr == nil && found {
 			return confirmMutation(job, progress, StatusBlocklisting, mutation, record.ID)
 		}
-		return unresolvedMutation(mutation, err, reconcileErr)
+		return unresolvedMutation(mutation, failHistoryErr, reconcileErr)
 	}
 	return confirmMutation(job, progress, StatusBlocklisting, mutation, mutation.HistoryID)
 }

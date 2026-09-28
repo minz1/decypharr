@@ -50,18 +50,18 @@ func (m *Manager) addNewTorrent(ctx context.Context, importReq *ImportRequest) e
 	torrent.DownloadUncached = debridTorrent.DownloadUncached
 	applyDebridTorrentToEntry(torrent, debridTorrent)
 
-	if err := m.queue.Add(torrent); err != nil {
-		return fmt.Errorf("failed to add torrent to queue: %w", err)
+	if addErr := m.queue.Add(torrent); addErr != nil {
+		return fmt.Errorf("failed to add torrent to queue: %w", addErr)
 	}
 
 	job := NewJob(JobTypeTorrent, importReq)
 	job.ID = torrent.InfoHash
 	job.Entry = torrent
 	job.DebridTorrent = debridTorrent
-	if err := m.SubmitJob(job); err != nil {
-		torrent.MarkAsError(err)
+	if submitJobErr := m.SubmitJob(job); submitJobErr != nil {
+		torrent.MarkAsError(submitJobErr)
 		_ = m.queue.Update(torrent)
-		return fmt.Errorf("failed to queue torrent: %w", err)
+		return fmt.Errorf("failed to queue torrent: %w", submitJobErr)
 	}
 	return nil
 }
@@ -225,9 +225,9 @@ func (m *Manager) processQueuedNZB(entry *storage.Entry) {
 		// Still processing, skip for now
 		return
 	case usenet.NZBStatusCompleted:
-		if err := m.processNZB(m.ctx, entry, metadata); err != nil {
-			m.logger.Error().Err(err).Str("name", entry.Name).Msg("Error processing queued NZB")
-			entry.MarkAsError(err)
+		if processNZBErr := m.processNZB(m.ctx, entry, metadata); processNZBErr != nil {
+			m.logger.Error().Err(processNZBErr).Str("name", entry.Name).Msg("Error processing queued NZB")
+			entry.MarkAsError(processNZBErr)
 			_ = m.queue.Update(entry)
 			return
 		}
@@ -357,8 +357,8 @@ func (m *Manager) processAction(entry *storage.Entry) {
 	if err != nil {
 		if errors.Is(err, context.Canceled) && m.ctx.Err() != nil {
 			entry.IsDownloading = false
-			if err := m.queue.Update(entry); err != nil {
-				m.logger.Error().Err(err).Str("name", entry.Name).Msg("Failed to save interrupted download")
+			if updateErr := m.queue.Update(entry); updateErr != nil {
+				m.logger.Error().Err(updateErr).Str("name", entry.Name).Msg("Failed to save interrupted download")
 			}
 			return
 		}
