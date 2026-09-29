@@ -18,9 +18,7 @@ func TestImmutableDiskBypassesRAMBlocks(t *testing.T) {
 	})
 	want := make([]byte, 750<<10)
 	fillPattern(want, 128<<10)
-	if _, err := b.WriteAt(want, 128<<10); err != nil {
-		t.Fatal(err)
-	}
+	mustWrite(t, b, want, 128<<10)
 	stats := b.Stats()
 	if stats.BlocksInRAM != 0 || stats.BytesInRAM != 0 {
 		t.Fatalf("immutable write allocated RAM blocks: %+v", stats)
@@ -131,9 +129,7 @@ func TestDiskTierSurvivesEviction(t *testing.T) {
 
 	data := make([]byte, total)
 	fillPattern(data, 0)
-	if _, err := b.WriteAt(data, 0); err != nil {
-		t.Fatal(err)
-	}
+	mustWrite(t, b, data, 0)
 
 	st := b.Stats()
 	if st.Evictions == 0 || st.DiskWrites == 0 {
@@ -164,16 +160,12 @@ func TestDiskTierFaultsInOnReadmit(t *testing.T) {
 
 	head := make([]byte, 256<<10)
 	fillPattern(head, 0)
-	if _, err := b.WriteAt(head, 0); err != nil {
-		t.Fatal(err)
-	}
+	mustWrite(t, b, head, 0)
 
 	// Touch the next block to push block 0 out to the file.
 	other := make([]byte, 256<<10)
 	fillPattern(other, 1<<20)
-	if _, err := b.WriteAt(other, blockSize); err != nil {
-		t.Fatal(err)
-	}
+	mustWrite(t, b, other, blockSize)
 	if _, ok := b.blocks[0]; ok {
 		t.Fatal("block 0 should have been evicted")
 	}
@@ -181,9 +173,7 @@ func TestDiskTierFaultsInOnReadmit(t *testing.T) {
 	// Re-admit block 0 by writing a disjoint region of it.
 	tail := make([]byte, 256<<10)
 	fillPattern(tail, 1<<30)
-	if _, err := b.WriteAt(tail, 512<<10); err != nil {
-		t.Fatal(err)
-	}
+	mustWrite(t, b, tail, 512<<10)
 
 	gotHead := make([]byte, 256<<10)
 	if _, err := b.ReadAt(gotHead, 0); err != nil {
@@ -207,14 +197,10 @@ func TestDiskTierRewriteVisibility(t *testing.T) {
 
 	first := make([]byte, 1<<20)
 	fillPattern(first, 0)
-	if _, err := b.WriteAt(first, 0); err != nil {
-		t.Fatal(err)
-	}
+	mustWrite(t, b, first, 0)
 	over := make([]byte, 128<<10)
 	fillPattern(over, 1<<30)
-	if _, err := b.WriteAt(over, 256<<10); err != nil {
-		t.Fatal(err)
-	}
+	mustWrite(t, b, over, 256<<10)
 	got := make([]byte, 128<<10)
 	if _, err := b.ReadAt(got, 256<<10); err != nil {
 		t.Fatal(err)
@@ -235,27 +221,19 @@ func TestDiskTierRewriteSurvivesEviction(t *testing.T) {
 
 	first := make([]byte, blockSize)
 	fillPattern(first, 0)
-	if _, err := b.WriteAt(first, 0); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := b.WriteAt(make([]byte, blockSize), blockSize); err != nil {
-		t.Fatal(err)
-	}
+	mustWrite(t, b, first, 0)
+	mustWrite(t, b, make([]byte, blockSize), blockSize)
 
 	const rewriteOff = 256 << 10
 	rewrite := make([]byte, 128<<10)
 	fillPattern(rewrite, 1<<30)
-	if _, err := b.WriteAt(rewrite, rewriteOff); err != nil {
-		t.Fatal(err)
-	}
+	mustWrite(t, b, rewrite, rewriteOff)
 	if got := b.PersistedRanges(rewriteOff, int64(len(rewrite))); len(got) != 0 {
 		t.Fatalf("dirty overwrite reported persisted: %+v", got)
 	}
 
 	// Admitting another block flushes and evicts the rewritten block.
-	if _, err := b.WriteAt(make([]byte, blockSize), 2*blockSize); err != nil {
-		t.Fatal(err)
-	}
+	mustWrite(t, b, make([]byte, blockSize), 2*blockSize)
 	got := make([]byte, len(rewrite))
 	if _, err := b.ReadAt(got, rewriteOff); err != nil {
 		t.Fatal(err)
@@ -271,9 +249,7 @@ func TestFlushPublishesOnlyCleanRanges(t *testing.T) {
 
 	data := make([]byte, 256<<10)
 	fillPattern(data, 0)
-	if _, err := b.WriteAt(data, 0); err != nil {
-		t.Fatal(err)
-	}
+	mustWrite(t, b, data, 0)
 	if got := b.PersistedRanges(0, int64(len(data))); len(got) != 0 {
 		t.Fatalf("resident write reported persisted: %+v", got)
 	}
@@ -291,9 +267,7 @@ func TestPersistedRangesRemainAvailableAfterClose(t *testing.T) {
 	p := newTestPool(t, PoolConfig{})
 	b := newTestBuffer(t, p, Config{DiskPath: tempDisk(t), TotalSize: blockSize})
 	data := make([]byte, 256<<10)
-	if _, err := b.WriteAt(data, 0); err != nil {
-		t.Fatal(err)
-	}
+	mustWrite(t, b, data, 0)
 	if err := b.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -307,9 +281,7 @@ func TestDiskBackstopPreservesDirtyOverwrite(t *testing.T) {
 	t.Parallel()
 	p := newTestPool(t, PoolConfig{})
 	b := newTestBuffer(t, p, Config{DiskPath: tempDisk(t), TotalSize: blockSize})
-	if _, err := b.WriteAt(make([]byte, blockSize), 0); err != nil {
-		t.Fatal(err)
-	}
+	mustWrite(t, b, make([]byte, blockSize), 0)
 	if err := b.Flush(); err != nil {
 		t.Fatal(err)
 	}
@@ -317,9 +289,7 @@ func TestDiskBackstopPreservesDirtyOverwrite(t *testing.T) {
 	const off = 256 << 10
 	rewrite := make([]byte, 128<<10)
 	fillPattern(rewrite, 1<<30)
-	if _, err := b.WriteAt(rewrite, off); err != nil {
-		t.Fatal(err)
-	}
+	mustWrite(t, b, rewrite, off)
 	b.SetReadHead(blockSize)
 	if reclaimed := b.punchBehindWindow(0); reclaimed == 0 {
 		t.Fatal("disk backstop did not reclaim clean bytes")
@@ -336,9 +306,7 @@ func TestEvictionReturnsDiskWriteFailure(t *testing.T) {
 	t.Parallel()
 	p := newTestPool(t, PoolConfig{})
 	b := newTestBuffer(t, p, Config{DiskPath: tempDisk(t), TotalSize: 2 << 20, MemorySize: blockSize})
-	if _, err := b.WriteAt(make([]byte, blockSize), 0); err != nil {
-		t.Fatal(err)
-	}
+	mustWrite(t, b, make([]byte, blockSize), 0)
 	if err := b.file.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -363,16 +331,12 @@ func TestDiscardStaysLogicalWhenPunchingIsUnavailable(t *testing.T) {
 	p := newTestPool(t, PoolConfig{})
 	b := newTestBuffer(t, p, Config{DiskPath: tempDisk(t), TotalSize: blockSize})
 	data := make([]byte, 128<<10)
-	if _, err := b.WriteAt(data, 0); err != nil {
-		t.Fatal(err)
-	}
+	mustWrite(t, b, data, 0)
 	if err := b.Flush(); err != nil {
 		t.Fatal(err)
 	}
 	b.punchable.Store(false)
-	if err := b.Discard(0, int64(len(data))); err != nil {
-		t.Fatal(err)
-	}
+	mustDiscard(t, b, 0, int64(len(data)))
 	if _, err := b.ReadAt(make([]byte, len(data)), 0); !errors.Is(err, ErrNotPresent) {
 		t.Fatalf("discarded read: %v", err)
 	}
@@ -396,9 +360,7 @@ func TestNoDiskTierLosesEvictedBytes(t *testing.T) {
 	data := make([]byte, blockSize)
 	for i := range 4 {
 		fillPattern(data, int64(i)*blockSize)
-		if _, err := b.WriteAt(data, int64(i)*blockSize); err != nil {
-			t.Fatal(err)
-		}
+		mustWrite(t, b, data, int64(i)*blockSize)
 	}
 	if len(evicted) == 0 {
 		t.Fatal("expected OnEvict for bytes dropped with no disk tier")
