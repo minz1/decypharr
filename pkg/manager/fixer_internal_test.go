@@ -36,8 +36,8 @@ func (c *replacementProvider) CheckStatus(torrent *types.Torrent) (*types.Torren
 }
 func (c *replacementProvider) DeleteTorrent(string) error { c.deletions.Add(1); return nil }
 
-func TestFixTorrentWithRemovedProvider(t *testing.T) {
-	for _, existing := range []bool{false, true} {
+func TestFixTorrentWithRemovedProvider(t *testing.T) { //nolint:paralleltest // subtests reset the config singleton
+	for _, existing := range []bool{false, true} { //nolint:paralleltest // subtests reset the config singleton
 		t.Run(map[bool]string{false: "submit replacement", true: "reuse placement"}[existing], func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				config.Reset()
