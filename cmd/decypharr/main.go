@@ -139,7 +139,16 @@ func startServices(
 	srv *server.Server,
 ) error {
 	var wg sync.WaitGroup
-	errChan := make(chan error, 3)
+	// Only the first error is ever received. Sends never block, so a service
+	// that fails after that (or during shutdown, when nobody receives) cannot
+	// wedge wg.Wait — with NFS and SMB there are four senders.
+	errChan := make(chan error, 1)
+	report := func(err error) {
+		select {
+		case errChan <- err:
+		default:
+		}
+	}
 
 	_log := logger.Default()
 
@@ -154,12 +163,12 @@ func startServices(
 						Msg("Recovered from panic in goroutine")
 
 					// Send error to channel so the main goroutine is aware
-					errChan <- fmt.Errorf("panic: %v", r)
+					report(fmt.Errorf("panic: %v", r))
 				}
 			}()
 
 			if err := f(); err != nil {
-				errChan <- err
+				report(err)
 			}
 		})
 	}
