@@ -109,6 +109,13 @@ func (s *Server) acceptLoop() {
 			return
 		}
 		s.mu.Lock()
+		// Close may have swept conns between Accept and here; a conn
+		// registered after the sweep would never close and Close would hang.
+		if s.closed.Load() {
+			s.mu.Unlock()
+			_ = conn.Close()
+			return
+		}
 		s.conns[conn] = struct{}{}
 		s.mu.Unlock()
 		s.wg.Add(1)
