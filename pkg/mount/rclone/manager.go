@@ -25,6 +25,14 @@ import (
 const (
 	FSName     = "decypharr:"
 	ConfigName = "decypharr"
+
+	// rcloneGracefulStop is how long Stop lets rcd exit on SIGINT before
+	// killing it; rcloneReapTimeout bounds the wait after the kill.
+	rcloneGracefulStop = 2 * time.Second
+	rcloneReapTimeout  = 5 * time.Second
+
+	// mountRetries is how many times a failed RC mount is retried.
+	mountRetries = 3
 )
 
 // Manager handles the rclone RC server and provides mount operations.
@@ -39,6 +47,11 @@ type Manager struct {
 	info          atomic.Pointer[MountInfo]
 	manager       *manager.Manager
 	webdavURL     string
+	// exited is closed once the rcd process has been reaped. Its waiter
+	// goroutine is the only cmd.Wait caller; a second concurrent Wait races
+	// on the Cmd's state.
+	exited     chan struct{}
+	recovering atomic.Bool
 
 	client *rclone.Client
 }
@@ -62,8 +75,10 @@ type RCResponse struct {
 	Error  string `json:"error,omitempty"`
 }
 
-// NewManager creates a new rclone RC manager.
-func NewManager(manager *manager.Manager) *Manager {
+// NewManager creates a new rclone RC manager. When WebDAV is disabled rclone
+// has nothing to mount, so it returns a no-op manager — never a nil *Manager,
+// which would become a non-nil interface that panics on first use.
+func NewManager(mgr *manager.Manager) manager.MountManager {
 	mainCfg := config.Get()
 	cfg := mainCfg.Mount
 	configDir := filepath.Join(config.GetMainPath(), "rclone")
@@ -71,7 +86,7 @@ func NewManager(manager *manager.Manager) *Manager {
 
 	if mainCfg.DisableWebDav {
 		_logger.Info().Msg("WebDAV support is disabled by configuration, can't use rclone with WebDAV features")
-		return nil
+		return manager.NewStubMountManager()
 	}
 
 	// Ensure config directory exists
@@ -84,14 +99,15 @@ func NewManager(manager *manager.Manager) *Manager {
 		bindAddress = "localhost"
 	}
 
-	baseUrl := fmt.Sprintf("http://%s:%s", bindAddress, mainCfg.Port)
-	webdavUrl, err := url.JoinPath(baseUrl, mainCfg.URLBase, "webdav")
+	baseURL := fmt.Sprintf("http://%s:%s", bindAddress, mainCfg.Port)
+	webdavURL, err := url.JoinPath(baseURL, mainCfg.URLBase, "webdav")
 	if err != nil {
-		return nil
+		_logger.Error().Err(err).Msg("Invalid WebDAV URL, rclone mount disabled")
+		return manager.NewStubMountManager()
 	}
 
-	if !strings.HasSuffix(webdavUrl, "/") {
-		webdavUrl += "/"
+	if !strings.HasSuffix(webdavURL, "/") {
+		webdavURL += "/"
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -105,8 +121,8 @@ func NewManager(manager *manager.Manager) *Manager {
 		cancel:      cancel,
 		client:      rcloneClient,
 		serverReady: make(chan struct{}),
-		webdavURL:   webdavUrl,
-		manager:     manager,
+		webdavURL:   webdavURL,
+		manager:     mgr,
 	}
 	return m
 }
@@ -157,6 +173,8 @@ func (m *Manager) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to start rclone: %w", err)
 	}
 	m.serverStarted.Store(true)
+	m.exited = make(chan struct{})
+	go m.reap()
 
 	// Wait for server to be ready in a goroutine
 	go func() {
@@ -182,23 +200,24 @@ func (m *Manager) Start(ctx context.Context) error {
 		} else {
 			m.logger.Info().Msgf("Successfully mounted rclone filesystem")
 		}
-
-		// Wait for command to finish and log output
-		err := m.cmd.Wait()
-		switch {
-		case err == nil:
-			m.logger.Info().Msg("Client RC server exited normally")
-
-		case errors.Is(err, context.Canceled):
-			m.logger.Info().Msg("Client RC server terminated: context canceled")
-
-		case WasHardTerminated(err): // SIGKILL on *nix; non-zero exit on Windows
-			m.logger.Info().Msg("Client RC server hard-terminated")
-
-		default:
-		}
 	}()
 	return nil
+}
+
+// reap waits for the rcd process and records its exit.
+func (m *Manager) reap() {
+	defer close(m.exited)
+	err := m.cmd.Wait()
+	switch {
+	case err == nil:
+		m.logger.Info().Msg("Client RC server exited normally")
+	case errors.Is(err, context.Canceled):
+		m.logger.Info().Msg("Client RC server terminated: context canceled")
+	case WasHardTerminated(err): // SIGKILL on *nix; non-zero exit on Windows
+		m.logger.Info().Msg("Client RC server hard-terminated")
+	default:
+		m.logger.Warn().Err(err).Msg("Client RC server exited")
+	}
 }
 
 // Stop stops the rclone RC server and unmounts all mounts.
@@ -208,40 +227,28 @@ func (m *Manager) Stop() error {
 	}
 
 	m.logger.Info().Msg("Stopping rclone RC server")
-	// Cancel context and stop process
+	// Unmount while m.ctx is live: the force-unmount fallback runs its
+	// commands under it, and a canceled context kills them before they start.
+	m.stopMount()
 	m.cancel()
 
-	// Stopping mount
-	m.stopMount()
-
 	if m.cmd != nil && m.cmd.Process != nil {
-		// Try graceful shutdown first
+		// Try graceful shutdown first, then kill.
 		if err := m.cmd.Process.Signal(os.Interrupt); err != nil {
-			if killErr := m.cmd.Process.Kill(); killErr != nil {
-				return killErr
-			}
+			_ = m.cmd.Process.Kill()
 		}
-
-		// Wait for process to exit with timeout
-		done := make(chan error, 1)
-		go func() {
-			done <- m.cmd.Wait()
-		}()
-
-		<-time.After(2 * time.Second)
-		if err := m.cmd.Process.Kill(); err != nil {
-			// Check if the process already finished
-			if !strings.Contains(err.Error(), "process already finished") {
+		select {
+		case <-m.exited:
+		case <-time.After(rcloneGracefulStop):
+			if err := m.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
 				return err
 			}
-		}
-
-		// Still wait for the Wait() to complete to clean up the process
-		select {
-		case <-done:
-			m.logger.Info().Msg("Client process cleanup completed")
-		case <-time.After(5 * time.Second):
-			m.logger.Error().Msg("Parse cleanup timeout")
+			select {
+			case <-m.exited:
+				m.logger.Info().Msg("Client process cleanup completed")
+			case <-time.After(rcloneReapTimeout):
+				m.logger.Error().Msg("Timed out waiting for rclone to exit")
+			}
 		}
 	}
 
@@ -272,7 +279,7 @@ func (m *Manager) startMount(ctx context.Context) error {
 		return fmt.Errorf("rclone RC server is not reachable: %w", err)
 	}
 
-	if err := m.mountWithRetry(ctx, 3); err != nil {
+	if err := m.mountWithRetry(ctx, mountRetries); err != nil {
 		m.logger.Error().Err(err).Msg("Mount operation failed")
 		return err
 	}
