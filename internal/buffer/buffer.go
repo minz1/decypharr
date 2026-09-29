@@ -171,26 +171,9 @@ func newBuffer(p *Pool, cfg Config) (*Buffer, error) {
 	if cfg.DiskPath == "" {
 		return b, nil
 	}
-
-	if dir := filepath.Dir(cfg.DiskPath); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return nil, fmt.Errorf("buffer: create disk dir: %w", err)
-		}
+	if err := b.openDisk(cfg.DiskPath, cfg.TotalSize); err != nil {
+		return nil, err
 	}
-	file, err := os.OpenFile(cfg.DiskPath, os.O_RDWR|os.O_CREATE, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("buffer: open disk file: %w", err)
-	}
-	// Sparse first: on NTFS the truncate below would otherwise reserve every
-	// cluster of a multi-GB file. It also gates punching (see punch.go).
-	b.punchable.Store(prepareSparse(file) == nil)
-	if cfg.TotalSize > 0 {
-		if truncateErr := file.Truncate(cfg.TotalSize); truncateErr != nil {
-			_ = file.Close()
-			return nil, fmt.Errorf("buffer: truncate disk file: %w", truncateErr)
-		}
-	}
-	b.file = file
 	b.immutableDisk = cfg.ImmutableDisk
 	b.persistentDisk = cfg.PersistentDisk
 	for _, r := range cfg.InitialRanges {
@@ -204,8 +187,32 @@ func newBuffer(p *Pool, cfg Config) (*Buffer, error) {
 			b.insertDisk(r.Off, r.Size)
 		}
 	}
-	adviseSequential(file)
+	adviseSequential(b.file)
 	return b, nil
+}
+
+// openDisk creates and sizes the sparse backing file.
+func (b *Buffer) openDisk(path string, totalSize int64) error {
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			return fmt.Errorf("buffer: create disk dir: %w", err)
+		}
+	}
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return fmt.Errorf("buffer: open disk file: %w", err)
+	}
+	// Sparse first: on NTFS the truncate below would otherwise reserve every
+	// cluster of a multi-GB file. It also gates punching (see punch.go).
+	b.punchable.Store(prepareSparse(file) == nil)
+	if totalSize > 0 {
+		if truncateErr := file.Truncate(totalSize); truncateErr != nil {
+			_ = file.Close()
+			return fmt.Errorf("buffer: truncate disk file: %w", truncateErr)
+		}
+	}
+	b.file = file
+	return nil
 }
 
 // WriteAt writes p at off. The bytes are readable as soon as it returns.
@@ -313,7 +320,7 @@ func (b *Buffer) writeRegion(blockOff int64, lo, hi int, src []byte) error {
 
 // WriteMissing writes only the bytes of p that are not already present,
 // returning how many it skipped.
-func (b *Buffer) WriteMissing(p []byte, off int64) (skipped int, err error) {
+func (b *Buffer) WriteMissing(p []byte, off int64) (int, error) {
 	if b.closed.Load() {
 		return 0, ErrClosed
 	}
@@ -328,7 +335,7 @@ func (b *Buffer) WriteMissing(p []byte, off int64) (skipped int, err error) {
 	overlaps := b.ranges.anyPresent(off, int64(len(p)))
 	b.mu.RUnlock()
 	if !overlaps {
-		_, err = b.WriteAt(p, off)
+		_, err := b.WriteAt(p, off)
 		return 0, err
 	}
 
@@ -337,10 +344,10 @@ func (b *Buffer) WriteMissing(p []byte, off int64) (skipped int, err error) {
 	present := b.ranges.presentRanges(off, int64(len(p)))
 	b.mu.RUnlock()
 
-	cur := off
+	cur, skipped := off, 0
 	for _, r := range present {
 		if r.Off > cur {
-			if _, err = b.WriteAt(p[cur-off:r.Off-off], cur); err != nil {
+			if _, err := b.WriteAt(p[cur-off:r.Off-off], cur); err != nil {
 				return skipped, err
 			}
 		}
@@ -348,9 +355,10 @@ func (b *Buffer) WriteMissing(p []byte, off int64) (skipped int, err error) {
 		cur = r.Off + r.Size
 	}
 	if end := off + int64(len(p)); cur < end {
-		_, err = b.WriteAt(p[cur-off:], cur)
+		_, err := b.WriteAt(p[cur-off:], cur)
+		return skipped, err
 	}
-	return skipped, err
+	return skipped, nil
 }
 
 // ReadAt fills p from off. Every byte must be present, else ErrNotPresent.
@@ -384,19 +392,9 @@ func (b *Buffer) ReadAt(p []byte, off int64) (int, error) {
 			copy(dst, blk.data[lo:hi])
 		} else {
 			// Present but not resident means it was flushed to the file.
-			if b.file == nil {
-				return int(cur - off), io.ErrUnexpectedEOF
-			}
 			fromDisk = true
-			n, err := b.file.ReadAt(dst, cur)
-			if err != nil {
-				if errors.Is(err, io.EOF) {
-					err = io.ErrUnexpectedEOF
-				}
-				return int(cur-off) + n, fmt.Errorf("buffer: disk read at %d: %w", cur, err)
-			}
-			if n != len(dst) {
-				return int(cur-off) + n, io.ErrUnexpectedEOF
+			if n, err := b.readDiskLocked(dst, cur); err != nil {
+				return int(cur-off) + n, err
 			}
 		}
 		cur += int64(hi - lo)
@@ -408,6 +406,24 @@ func (b *Buffer) ReadAt(p []byte, off int64) (int, error) {
 		b.statsHits.Add(1)
 	}
 	return len(p), nil
+}
+
+// readDiskLocked fills dst from the disk tier at off. Caller holds b.mu.
+func (b *Buffer) readDiskLocked(dst []byte, off int64) (int, error) {
+	if b.file == nil {
+		return 0, io.ErrUnexpectedEOF
+	}
+	n, err := b.file.ReadAt(dst, off)
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			err = io.ErrUnexpectedEOF
+		}
+		return n, fmt.Errorf("buffer: disk read at %d: %w", off, err)
+	}
+	if n != len(dst) {
+		return n, io.ErrUnexpectedEOF
+	}
+	return n, nil
 }
 
 // Discard releases [off, off+length). After it returns, reads of those bytes
@@ -430,8 +446,6 @@ func (b *Buffer) Discard(off, length int64) error {
 // reclaimed from the file. It does not fire onEvict — a caller-initiated
 // Discard already knows what it released.
 func (b *Buffer) discard(off, length int64, requireReclaim bool) int64 {
-	end := off + length
-
 	if requireReclaim {
 		if !b.mu.TryLock() {
 			return 0
@@ -447,19 +461,7 @@ func (b *Buffer) discard(off, length int64, requireReclaim bool) int64 {
 		b.mu.Unlock()
 		return 0
 	}
-	for blkOff := alignDown(off); blkOff < end; blkOff = blockEnd(blkOff) {
-		if blk, ok := b.blocks[blkOff]; ok && blkOff >= off && blockEnd(blkOff) <= end {
-			b.dropBlockLocked(blk)
-		}
-	}
-	b.ranges.remove(off, length)
-	b.dirty.remove(off, length)
-	// A boundary block may have just lost its last present byte.
-	for _, blkOff := range [2]int64{alignDown(off), alignDown(end - 1)} {
-		if blk, ok := b.blocks[blkOff]; ok && !b.ranges.anyPresent(blkOff, blockEnd(blkOff)-blkOff) {
-			b.dropBlockLocked(blk)
-		}
-	}
+	b.dropRangeLocked(off, length)
 
 	if b.file == nil {
 		b.mu.Unlock()
@@ -508,6 +510,25 @@ func (b *Buffer) discard(off, length int64, requireReclaim bool) int64 {
 	}
 	b.mu.Unlock()
 	return 0
+}
+
+// dropRangeLocked unpublishes [off, off+length) and releases the resident
+// blocks left with no present bytes. Caller holds b.mu.
+func (b *Buffer) dropRangeLocked(off, length int64) {
+	end := off + length
+	for blkOff := alignDown(off); blkOff < end; blkOff = blockEnd(blkOff) {
+		if blk, ok := b.blocks[blkOff]; ok && blkOff >= off && blockEnd(blkOff) <= end {
+			b.dropBlockLocked(blk)
+		}
+	}
+	b.ranges.remove(off, length)
+	b.dirty.remove(off, length)
+	// A boundary block may have just lost its last present byte.
+	for _, blkOff := range [2]int64{alignDown(off), alignDown(end - 1)} {
+		if blk, ok := b.blocks[blkOff]; ok && !b.ranges.anyPresent(blkOff, blockEnd(blkOff)-blkOff) {
+			b.dropBlockLocked(blk)
+		}
+	}
 }
 
 // punchBehindWindow reclaims file space below readHead-backWindow. Called by
