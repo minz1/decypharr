@@ -15,6 +15,10 @@ func (s *Server) skipAuthHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
+	if !s.mayConfigureAuth(r, cfg) {
+		http.Error(w, "authentication required: log in first", http.StatusUnauthorized)
+		return
+	}
 	_, err := config.Update(func(next *config.Config) error {
 		if err := next.SetupComplete(); err == nil {
 			return fmt.Errorf("setup is already complete")

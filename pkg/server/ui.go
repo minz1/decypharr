@@ -8,6 +8,12 @@ import (
 	"github.com/sirrobot01/decypharr/internal/config"
 )
 
+// maxJSONBody caps the JSON bodies of the unauthenticated login and setup
+// endpoints.
+const maxJSONBody = 1 << 20
+
+// LoginHandler serves the login page and exchanges credentials (or, in
+// token-only mode, the API token) for a session cookie.
 func (s *Server) LoginHandler(w http.ResponseWriter, r *http.Request) {
 	cfg := config.Get()
 	if cfg.NeedsAuth() {
@@ -36,7 +42,7 @@ func (s *Server) LoginHandler(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&credentials); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&credentials); err != nil {
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}

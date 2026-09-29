@@ -119,9 +119,13 @@ func (s *Server) setupCompleteHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
+	if !s.mayConfigureAuth(r, cfg) {
+		http.Error(w, "authentication required: log in first, then rerun setup", http.StatusUnauthorized)
+		return
+	}
 
 	var req SetupCompleteRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&req); err != nil {
 		s.sendSetupError(w, "Invalid request format", err)
 		return
 	}
