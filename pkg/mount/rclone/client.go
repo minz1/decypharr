@@ -46,11 +46,11 @@ func (m *Manager) performMount(ctx context.Context) error {
 		return nil
 	}
 
-	// Clean up any stale mount first
+	// Clean up any stale mount first. Best effort: when nothing is mounted
+	// every umount fails, and that must not block the remount.
 	if mountInfo != nil && !mountInfo.Mounted {
-		err := m.forceUnmount(ctx)
-		if err != nil {
-			return err
+		if err := m.forceUnmount(ctx); err != nil {
+			m.logger.Debug().Err(err).Msg("No stale mount to clean up")
 		}
 	}
 
@@ -201,7 +201,7 @@ func (m *Manager) unmount(ctx context.Context) {
 
 	// Try RC unmount first
 
-	err := m.client.Unmount(context.Background(), mountInfo.LocalPath)
+	err := m.client.Unmount(ctx, mountInfo.LocalPath)
 
 	// If RC unmount fails or server is not ready, try force unmount
 	if err != nil {
@@ -212,13 +212,26 @@ func (m *Manager) unmount(ctx context.Context) {
 		}
 	}
 
-	// Update mount info
-	mountInfo.Mounted = false
-	mountInfo.Error = ""
+	errMsg := ""
 	if err != nil {
-		mountInfo.Error = err.Error()
+		errMsg = err.Error()
 	}
+	m.markUnmounted(errMsg)
 	m.logger.Info().Msg("Unmount completed")
+}
+
+// markUnmounted publishes a copy of the mount info flagged unmounted. The
+// stored MountInfo is shared with concurrent readers (Stats, IsMounted), so it
+// is replaced, never mutated in place.
+func (m *Manager) markUnmounted(errMsg string) {
+	current := m.getMountInfo()
+	if current == nil {
+		return
+	}
+	next := *current
+	next.Mounted = false
+	next.Error = errMsg
+	m.info.Store(&next)
 }
 
 // createConfig creates an rclone config entry for the provider.
