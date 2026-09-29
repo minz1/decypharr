@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sirrobot01/facetfs"
@@ -53,6 +54,11 @@ type filesystem struct {
 	// linear-scans catalog listings and one protocol request can resolve the
 	// same path several times.
 	lookups sync.Map // path key -> *lookupCacheEntry
+	// nextSweep (unix nanos) is when expired lookups are next purged. An
+	// entry is otherwise dropped only when its own path is looked up again,
+	// so every distinct path a client ever named — including misses for
+	// arbitrary names — stayed in memory for the life of the process.
+	nextSweep atomic.Int64
 }
 
 func newFilesystem(c catalog, open func(*manager.FileInfo, fs.FileInfo) (facetfs.File, error)) *filesystem {
@@ -141,7 +147,23 @@ func (f *filesystem) lookupAbsolute(segments []string) (*node, error) {
 	}
 	n, err := f.lookupAbsoluteUncached(segments)
 	f.lookups.Store(key, &lookupCacheEntry{n: n, err: err, expiry: now + int64(lookupCacheTTL)})
+	f.sweepLookups(now)
 	return n, err
+}
+
+// sweepLookups purges expired lookups at most once per TTL, keeping the memo
+// bounded by the paths resolved within one TTL window.
+func (f *filesystem) sweepLookups(now int64) {
+	next := f.nextSweep.Load()
+	if now < next || !f.nextSweep.CompareAndSwap(next, now+int64(lookupCacheTTL)) {
+		return
+	}
+	f.lookups.Range(func(key, value any) bool {
+		if e, ok := value.(*lookupCacheEntry); ok && now >= e.expiry {
+			f.lookups.CompareAndDelete(key, value)
+		}
+		return true
+	})
 }
 
 func (f *filesystem) lookupAbsoluteUncached(segments []string) (*node, error) {
