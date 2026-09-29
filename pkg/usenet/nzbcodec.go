@@ -104,16 +104,27 @@ func (r *byteReader) varint() (int64, error) {
 	return v, nil
 }
 
-func (r *byteReader) span() ([]byte, error) {
+// count reads an element count and rejects one larger than the bytes left,
+// since every element occupies at least one byte. It bounds allocations sized
+// from untrusted blobs.
+func (r *byteReader) count() (int, error) {
 	n, err := r.uvarint()
+	if err != nil {
+		return 0, err
+	}
+	if n > uint64(len(r.buf)-r.pos) {
+		return 0, fmt.Errorf("nzbcodec: count %d exceeds %d remaining bytes at %d", n, len(r.buf)-r.pos, r.pos)
+	}
+	return int(n), nil
+}
+
+func (r *byteReader) span() ([]byte, error) {
+	n, err := r.count()
 	if err != nil {
 		return nil, err
 	}
-	if r.pos+int(n) > len(r.buf) {
-		return nil, fmt.Errorf("nzbcodec: span out of range")
-	}
-	b := r.buf[r.pos : r.pos+int(n)]
-	r.pos += int(n)
+	b := r.buf[r.pos : r.pos+n]
+	r.pos += n
 	return b, nil
 }
 
@@ -154,15 +165,8 @@ func (r *byteReader) bytesCopy() ([]byte, error) {
 
 // skip advances past one length-prefixed span without materializing it.
 func (r *byteReader) skip() error {
-	n, err := r.uvarint()
-	if err != nil {
-		return err
-	}
-	if r.pos+int(n) > len(r.buf) {
-		return fmt.Errorf("nzbcodec: skip out of range")
-	}
-	r.pos += int(n)
-	return nil
+	_, err := r.span()
+	return err
 }
 
 func (r *byteReader) boolean() (bool, error) {
@@ -353,26 +357,12 @@ func splitRegions(data []byte) (hc, sc, mc []byte, err error) {
 		return nil, nil, nil, fmt.Errorf("nzbcodec: not a v2 blob")
 	}
 	r := &byteReader{buf: data, pos: 1}
-	hLen, err := r.uvarint()
-	if err != nil {
-		return nil, nil, nil, err
+	if hc, err = r.span(); err != nil {
+		return nil, nil, nil, fmt.Errorf("nzbcodec: header region: %w", err)
 	}
-	if r.pos+int(hLen) > len(data) {
-		return nil, nil, nil, fmt.Errorf("nzbcodec: header region out of range")
+	if sc, err = r.span(); err != nil {
+		return nil, nil, nil, fmt.Errorf("nzbcodec: seg region: %w", err)
 	}
-	hc = data[r.pos : r.pos+int(hLen)]
-	r.pos += int(hLen)
-
-	sLen, err := r.uvarint()
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	if r.pos+int(sLen) > len(data) {
-		return nil, nil, nil, fmt.Errorf("nzbcodec: seg region out of range")
-	}
-	sc = data[r.pos : r.pos+int(sLen)]
-	r.pos += int(sLen)
-
 	mc = data[r.pos:]
 	return hc, sc, mc, nil
 }
@@ -497,7 +487,7 @@ func decodeHeader(buf []byte) (*storage.NZB, []int, error) {
 		return nil, nil, err
 	}
 
-	nFiles, err := r.uvarint()
+	nFiles, err := r.count()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -548,6 +538,9 @@ func decodeHeader(buf []byte) (*storage.NZB, []int, error) {
 		if uvarintErr != nil {
 			return nil, nil, uvarintErr
 		}
+		if c > math.MaxInt32 {
+			return nil, nil, fmt.Errorf("nzbcodec: file %d segment count %d out of range", i, c)
+		}
 		counts[i] = int(c)
 	}
 	return nzb, counts, nil
@@ -562,6 +555,9 @@ func decodeSegments(nzb *storage.NZB, counts []int, segMeta, msgIDs []byte) erro
 		total += c
 	}
 
+	if err := checkSegmentTotal(total, segMeta); err != nil {
+		return err
+	}
 	r := &byteReader{buf: segMeta}
 
 	// Group table.
@@ -604,7 +600,7 @@ func decodeSegments(nzb *storage.NZB, counts []int, segMeta, msgIDs []byte) erro
 		if uvarintErr != nil {
 			return uvarintErr
 		}
-		if int(idx) >= len(groups) {
+		if idx >= uint64(len(groups)) {
 			return fmt.Errorf("nzbcodec: group index %d out of range", idx)
 		}
 		segs[i].Group = groups[idx]
@@ -681,6 +677,9 @@ func decodeFileV2(data []byte, filename string) (*storage.NZBFile, error) {
 	if err != nil {
 		return nil, fmt.Errorf("nzbcodec: decompress seg meta: %w", err)
 	}
+	if totalErr := checkSegmentTotal(total, segMeta); totalErr != nil {
+		return nil, totalErr
+	}
 	r := &byteReader{buf: segMeta}
 	groups, err := readStrings(r)
 	if err != nil {
@@ -739,7 +738,7 @@ func decodeFileV2(data []byte, filename string) (*storage.NZBFile, error) {
 		if uvarintErr != nil {
 			return nil, uvarintErr
 		}
-		if int(idx) >= len(groups) {
+		if idx >= uint64(len(groups)) {
 			return nil, fmt.Errorf("nzbcodec: group index %d out of range", idx)
 		}
 		segs[i].Group = groups[idx]
@@ -805,15 +804,19 @@ func decodeFileMessageIDsSampled(data []byte, filename string, percent int) (ids
 		return nil, 0, nil
 	}
 
+	msgIDs, err := zstdDec.DecodeAll(mc, nil)
+	if err != nil {
+		return nil, 0, fmt.Errorf("nzbcodec: decompress msg ids: %w", err)
+	}
+	// Every id has at least a one-byte length prefix.
+	if before+c > len(msgIDs) {
+		return nil, 0, fmt.Errorf("nzbcodec: %d message ids cannot fit %d bytes", before+c, len(msgIDs))
+	}
+
 	want := sampleIndices(c, percent)
 	wantSet := make(map[int]struct{}, len(want))
 	for _, idx := range want {
 		wantSet[idx] = struct{}{}
-	}
-
-	msgIDs, err := zstdDec.DecodeAll(mc, nil)
-	if err != nil {
-		return nil, 0, fmt.Errorf("nzbcodec: decompress msg ids: %w", err)
 	}
 	mr := &byteReader{buf: msgIDs}
 
@@ -878,7 +881,7 @@ func sampleIndices(total, percent int) []int {
 }
 
 func readStrings(r *byteReader) ([]string, error) {
-	n, err := r.uvarint()
+	n, err := r.count()
 	if err != nil {
 		return nil, err
 	}
@@ -893,6 +896,16 @@ func readStrings(r *byteReader) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+// checkSegmentTotal rejects header segment counts the column region cannot
+// hold (each segment stores at least six one-byte varints) before they size
+// an allocation.
+func checkSegmentTotal(total int, segMeta []byte) error {
+	if total > len(segMeta) {
+		return fmt.Errorf("nzbcodec: %d segments cannot fit %d column bytes", total, len(segMeta))
+	}
+	return nil
 }
 
 func readTime(r *byteReader) (time.Time, error) {
