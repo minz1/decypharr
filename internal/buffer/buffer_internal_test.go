@@ -34,6 +34,20 @@ func verifyPattern(p []byte, off int64) error {
 	return nil
 }
 
+func mustWrite(t testing.TB, b *Buffer, p []byte, off int64) {
+	t.Helper()
+	if _, err := b.WriteAt(p, off); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mustDiscard(t testing.TB, b *Buffer, off, length int64) {
+	t.Helper()
+	if err := b.Discard(off, length); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func checkPattern(t *testing.T, p []byte, off int64) {
 	t.Helper()
 	if err := verifyPattern(p, off); err != nil {
@@ -131,9 +145,7 @@ func TestReadNotPresent(t *testing.T) {
 
 		data := make([]byte, 64<<10)
 		fillPattern(data, 1<<20)
-		if _, err := b.WriteAt(data, 1<<20); err != nil {
-			t.Fatal(err)
-		}
+		mustWrite(t, b, data, 1<<20)
 		// Read overlapping written and unwritten bytes must fail wholesale.
 		if _, err := b.ReadAt(make([]byte, 128<<10), 1<<20); !errors.Is(err, ErrNotPresent) {
 			t.Fatalf("read past written range: err=%v, want ErrNotPresent", err)
@@ -155,14 +167,10 @@ func TestDiscardMakesRangeNotPresent(t *testing.T) {
 
 		data := make([]byte, 6<<20)
 		fillPattern(data, 0)
-		if _, err := b.WriteAt(data, 0); err != nil {
-			t.Fatal(err)
-		}
+		mustWrite(t, b, data, 0)
 		// Discard an unaligned middle range.
 		dOff, dLen := int64(1<<20+4096), int64(2<<20)
-		if err := b.Discard(dOff, dLen); err != nil {
-			t.Fatal(err)
-		}
+		mustDiscard(t, b, dOff, dLen)
 		if _, err := b.ReadAt(make([]byte, 4096), dOff); !errors.Is(err, ErrNotPresent) {
 			t.Fatalf("read of discarded range: err=%v, want ErrNotPresent", err)
 		}
@@ -181,9 +189,7 @@ func TestDiscardMakesRangeNotPresent(t *testing.T) {
 		// Rewrite the hole and read it back.
 		re := make([]byte, dLen)
 		fillPattern(re, dOff)
-		if _, err := b.WriteAt(re, dOff); err != nil {
-			t.Fatal(err)
-		}
+		mustWrite(t, b, re, dOff)
 		got := make([]byte, dLen)
 		if _, err := b.ReadAt(got, dOff); err != nil {
 			t.Fatal(err)
@@ -237,9 +243,7 @@ func TestDiskPersistsAcrossReopen(t *testing.T) {
 
 	data := make([]byte, 3<<20)
 	fillPattern(data, 0)
-	if _, err := b.WriteAt(data, 0); err != nil {
-		t.Fatal(err)
-	}
+	mustWrite(t, b, data, 0)
 	if err := b.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -263,99 +267,99 @@ func TestDiskPersistsAcrossReopen(t *testing.T) {
 // budget drops blocks chosen against the read head — furthest behind it first,
 // else deepest prefetch ahead — never the data the consumer is about to read.
 // OnEvict reports the lost ranges and no file is ever created.
+func newMemBuffer(t *testing.T, evicted *[]Range) (*Buffer, string) {
+	t.Helper()
+	p := newTestPool(t, PoolConfig{})
+	path := filepath.Join(t.TempDir(), "buf.bin")
+	b := newTestBuffer(t, p, Config{
+		MemorySize: 4 << 20,
+		OnEvict:    func(off, length int64) { *evicted = append(*evicted, Range{off, length}) },
+	})
+	return b, path
+}
+
 func TestDropVictimsWithoutDiskTier(t *testing.T) {
 	t.Parallel()
-	newMemBuffer := func(t *testing.T, evicted *[]Range) (*Buffer, string) {
-		p := newTestPool(t, PoolConfig{})
-		path := filepath.Join(t.TempDir(), "buf.bin")
-		b := newTestBuffer(t, p, Config{
-			MemorySize: 4 << 20,
-			OnEvict:    func(off, length int64) { *evicted = append(*evicted, Range{off, length}) },
-		})
-		return b, path
-	}
-
 	// A consumer trailing right behind the write frontier: drops take the
 	// oldest history behind it, the newest data survives.
-	t.Run("advancing-head", func(t *testing.T) {
-		t.Parallel()
-		var evicted []Range
-		b, path := newMemBuffer(t, &evicted)
-		chunk := make([]byte, 1<<20)
-		for off := int64(0); off < 8<<20; off += 1 << 20 {
-			b.SetReadHead(off)
-			fillPattern(chunk, off)
-			if _, err := b.WriteAt(chunk, off); err != nil {
-				t.Fatal(err)
-			}
-		}
-
-		st := b.Stats()
-		if st.BlocksInRAM != 4 || st.Evictions != 4 || st.DiskWrites != 0 {
-			t.Fatalf("unexpected stats: %+v", st)
-		}
-		if _, err := b.ReadAt(make([]byte, 1<<20), 0); !errors.Is(err, ErrNotPresent) {
-			t.Fatalf("read of dropped range: err=%v, want ErrNotPresent", err)
-		}
-		got := make([]byte, 4<<20)
-		if _, err := b.ReadAt(got, 4<<20); err != nil {
-			t.Fatal(err)
-		}
-		checkPattern(t, got, 4<<20)
-
-		// OnEvict reported exactly the dropped [0, 4MB).
-		var reported int64
-		for _, r := range evicted {
-			if r.Off < 0 || r.Off+r.Size > 4<<20 {
-				t.Fatalf("OnEvict reported range outside dropped span: %+v", r)
-			}
-			reported += r.Size
-		}
-		if reported != 4<<20 {
-			t.Fatalf("OnEvict reported %d bytes, want %d", reported, int64(4<<20))
-		}
-
-		if err := b.Close(); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("memory mode created a disk file: %v", err)
-		}
-	})
-
+	t.Run("advancing-head", testDropAdvancingHead)
 	// No head published (a fresh stream before its first delivery): the
 	// consumer reads from the start next, so drops shed the deepest
 	// prefetch and the start of the file survives. Write-order LRU got
 	// this exactly wrong — it dropped the start.
-	t.Run("no-head-protects-start", func(t *testing.T) {
-		t.Parallel()
-		var evicted []Range
-		b, _ := newMemBuffer(t, &evicted)
-		chunk := make([]byte, 1<<20)
-		for off := int64(0); off < 8<<20; off += 1 << 20 {
-			fillPattern(chunk, off)
-			if _, err := b.WriteAt(chunk, off); err != nil {
-				t.Fatal(err)
-			}
-		}
+	t.Run("no-head-protects-start", testDropNoHeadProtectsStart)
+}
 
-		if st := b.Stats(); st.Evictions != 4 {
-			t.Fatalf("expected 4 drops, got %+v", st)
+func testDropAdvancingHead(t *testing.T) {
+	t.Parallel()
+	var evicted []Range
+	b, path := newMemBuffer(t, &evicted)
+	chunk := make([]byte, 1<<20)
+	for off := int64(0); off < 8<<20; off += 1 << 20 {
+		b.SetReadHead(off)
+		fillPattern(chunk, off)
+		mustWrite(t, b, chunk, off)
+	}
+
+	st := b.Stats()
+	if st.BlocksInRAM != 4 || st.Evictions != 4 || st.DiskWrites != 0 {
+		t.Fatalf("unexpected stats: %+v", st)
+	}
+	if _, err := b.ReadAt(make([]byte, 1<<20), 0); !errors.Is(err, ErrNotPresent) {
+		t.Fatalf("read of dropped range: err=%v, want ErrNotPresent", err)
+	}
+	got := make([]byte, 4<<20)
+	if _, err := b.ReadAt(got, 4<<20); err != nil {
+		t.Fatal(err)
+	}
+	checkPattern(t, got, 4<<20)
+
+	// OnEvict reported exactly the dropped [0, 4MB).
+	var reported int64
+	for _, r := range evicted {
+		if r.Off < 0 || r.Off+r.Size > 4<<20 {
+			t.Fatalf("OnEvict reported range outside dropped span: %+v", r)
 		}
-		// The start — what the consumer reads next — is intact.
-		got := make([]byte, 3<<20)
-		if _, err := b.ReadAt(got, 0); err != nil {
-			t.Fatalf("start of file was dropped: %v", err)
-		}
-		checkPattern(t, got, 0)
-		// The write frontier survives too; the middle prefetch was shed.
-		if _, err := b.ReadAt(got[:1<<20], 7<<20); err != nil {
-			t.Fatalf("frontier block was dropped: %v", err)
-		}
-		if _, err := b.ReadAt(got[:1<<20], 4<<20); !errors.Is(err, ErrNotPresent) {
-			t.Fatalf("middle prefetch should be shed: err=%v", err)
-		}
-	})
+		reported += r.Size
+	}
+	if reported != 4<<20 {
+		t.Fatalf("OnEvict reported %d bytes, want %d", reported, int64(4<<20))
+	}
+
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("memory mode created a disk file: %v", err)
+	}
+}
+
+func testDropNoHeadProtectsStart(t *testing.T) {
+	t.Parallel()
+	var evicted []Range
+	b, _ := newMemBuffer(t, &evicted)
+	chunk := make([]byte, 1<<20)
+	for off := int64(0); off < 8<<20; off += 1 << 20 {
+		fillPattern(chunk, off)
+		mustWrite(t, b, chunk, off)
+	}
+
+	if st := b.Stats(); st.Evictions != 4 {
+		t.Fatalf("expected 4 drops, got %+v", st)
+	}
+	// The start — what the consumer reads next — is intact.
+	got := make([]byte, 3<<20)
+	if _, err := b.ReadAt(got, 0); err != nil {
+		t.Fatalf("start of file was dropped: %v", err)
+	}
+	checkPattern(t, got, 0)
+	// The write frontier survives too; the middle prefetch was shed.
+	if _, err := b.ReadAt(got[:1<<20], 7<<20); err != nil {
+		t.Fatalf("frontier block was dropped: %v", err)
+	}
+	if _, err := b.ReadAt(got[:1<<20], 4<<20); !errors.Is(err, ErrNotPresent) {
+		t.Fatalf("middle prefetch should be shed: err=%v", err)
+	}
 }
 
 // TestMemoryModePoolPressureSelfEvicts: when the POOL budget (not the
@@ -369,15 +373,11 @@ func TestMemoryModePoolPressureTrimsGreediestBuffer(t *testing.T) {
 
 	data := make([]byte, 4<<20)
 	fillPattern(data, 0)
-	if _, err := a.WriteAt(data, 0); err != nil {
-		t.Fatal(err)
-	}
+	mustWrite(t, a, data, 0)
 	// The pool is now full and A holds all of it — twice its 2MB fair share.
 	// B's writes must not come out of B: the pool trims A back to its share
 	// instead, so the stream that is actively writing keeps its window.
-	if _, err := bb.WriteAt(data, 0); err != nil {
-		t.Fatal(err)
-	}
+	mustWrite(t, bb, data, 0)
 
 	share := int64(2 << 20)
 	waitFor(t, "pool back under budget", func() bool {
@@ -417,9 +417,7 @@ func TestDiscardSubBlockFreesFullyTrimmedBlocks(t *testing.T) {
 
 	data := make([]byte, 4<<20)
 	fillPattern(data, 0)
-	if _, err := b.WriteAt(data, 0); err != nil {
-		t.Fatal(err)
-	}
+	mustWrite(t, b, data, 0)
 	if got := b.Stats().BlocksInRAM; got != 4 {
 		t.Fatalf("expected 4 resident blocks after write, got %d", got)
 	}
@@ -427,31 +425,23 @@ func TestDiscardSubBlockFreesFullyTrimmedBlocks(t *testing.T) {
 	// Trim block 0 in quarters; it stays resident until the last quarter.
 	const q = 256 << 10
 	for i := range int64(3) {
-		if err := b.Discard(i*q, q); err != nil {
-			t.Fatal(err)
-		}
+		mustDiscard(t, b, i*q, q)
 	}
 	if got := b.Stats().BlocksInRAM; got != 4 {
 		t.Fatalf("partially-trimmed block should stay resident, got %d blocks", got)
 	}
-	if err := b.Discard(3*q, q); err != nil {
-		t.Fatal(err)
-	}
+	mustDiscard(t, b, 3*q, q)
 	if got := b.Stats().BlocksInRAM; got != 3 {
 		t.Fatalf("fully-trimmed block should be dropped, got %d blocks", got)
 	}
 
 	// A discard straddling blocks 1 and 2 empties neither; the follow-up
 	// covering block 1's remainder frees exactly block 1.
-	if err := b.Discard(1<<20+q, 1<<20); err != nil {
-		t.Fatal(err)
-	}
+	mustDiscard(t, b, 1<<20+q, 1<<20)
 	if got := b.Stats().BlocksInRAM; got != 3 {
 		t.Fatalf("straddling discard emptied a block early: %d blocks", got)
 	}
-	if err := b.Discard(1<<20, q); err != nil {
-		t.Fatal(err)
-	}
+	mustDiscard(t, b, 1<<20, q)
 	if got := b.Stats().BlocksInRAM; got != 2 {
 		t.Fatalf("expected block 1 dropped after remainder trim, got %d blocks", got)
 	}
@@ -490,9 +480,7 @@ func TestRangeAtMaximumOffset(t *testing.T) {
 	p := newTestPool(t, PoolConfig{})
 	b := newTestBuffer(t, p, Config{})
 	off := int64(math.MaxInt64 - 1)
-	if _, err := b.WriteAt([]byte{42}, off); err != nil {
-		t.Fatal(err)
-	}
+	mustWrite(t, b, []byte{42}, off)
 	got := make([]byte, 1)
 	if _, err := b.ReadAt(got, off); err != nil {
 		t.Fatal(err)
@@ -500,9 +488,7 @@ func TestRangeAtMaximumOffset(t *testing.T) {
 	if got[0] != 42 {
 		t.Fatalf("read %d, want 42", got[0])
 	}
-	if err := b.Discard(off, 1); err != nil {
-		t.Fatal(err)
-	}
+	mustDiscard(t, b, off, 1)
 	if _, err := b.ReadAt(got, off); !errors.Is(err, ErrNotPresent) {
 		t.Fatalf("read discarded maximum offset: %v", err)
 	}
@@ -515,6 +501,40 @@ func TestRangeAtMaximumOffset(t *testing.T) {
 // real callers do — a range is handed to readers only after its write
 // completed, and discarded only after its read completed. The memory variant
 // sizes its budget above the live set so drop-oldest can't race the readers.
+// writeRegions fills each region from work in uneven slabs (to hit
+// partial-block paths) and reports it on written.
+func writeRegions(t *testing.T, b *Buffer, regionSize int, work <-chan int64, written chan<- int64) {
+	buf := make([]byte, regionSize)
+	for off := range work {
+		fillPattern(buf, off)
+		for cur := 0; cur < regionSize; {
+			n := min(200<<10+(cur%4096), regionSize-cur)
+			if _, err := b.WriteAt(buf[cur:cur+n], off+int64(cur)); err != nil {
+				t.Errorf("WriteAt(%d): %v", off+int64(cur), err)
+				return
+			}
+			cur += n
+		}
+		written <- off
+	}
+}
+
+// verifyRegions checks each written region's pattern and reports it on done.
+func verifyRegions(t *testing.T, b *Buffer, regionSize int, written <-chan int64, done chan<- int64) {
+	buf := make([]byte, regionSize)
+	for off := range written {
+		if _, err := b.ReadAt(buf, off); err != nil {
+			t.Errorf("ReadAt(%d): %v", off, err)
+			return
+		}
+		if err := verifyPattern(buf, off); err != nil {
+			t.Error(err)
+			return
+		}
+		done <- off
+	}
+}
+
 func TestConcurrentStreamWorkload(t *testing.T) {
 	t.Parallel()
 	const (
@@ -540,43 +560,12 @@ func TestConcurrentStreamWorkload(t *testing.T) {
 
 		var wg sync.WaitGroup
 		for range writers {
-			wg.Go(func() {
-				buf := make([]byte, regionSize)
-				for off := range work {
-					fillPattern(buf, off)
-					// Write in uneven slabs to hit partial-block paths.
-					for cur := 0; cur < regionSize; {
-						n := 200<<10 + (cur % 4096)
-						if cur+n > regionSize {
-							n = regionSize - cur
-						}
-						if _, err := b.WriteAt(buf[cur:cur+n], off+int64(cur)); err != nil {
-							t.Errorf("WriteAt(%d): %v", off+int64(cur), err)
-							return
-						}
-						cur += n
-					}
-					written <- off
-				}
-			})
+			wg.Go(func() { writeRegions(t, b, regionSize, work, written) })
 		}
 		// Readers verify each completed region exactly once.
 		var rg sync.WaitGroup
 		for range 4 {
-			rg.Go(func() {
-				buf := make([]byte, regionSize)
-				for off := range written {
-					if _, err := b.ReadAt(buf, off); err != nil {
-						t.Errorf("ReadAt(%d): %v", off, err)
-						return
-					}
-					if err := verifyPattern(buf, off); err != nil {
-						t.Error(err)
-						return
-					}
-					done <- off
-				}
-			})
+			rg.Go(func() { verifyRegions(t, b, regionSize, written, done) })
 		}
 		// Discarder reclaims fully-consumed regions concurrently with the rest.
 		var dg sync.WaitGroup
@@ -623,15 +612,12 @@ func TestPoolDiskBackstopPunchesBehindHead(t *testing.T) {
 	chunk := make([]byte, 1<<20)
 	for off := int64(0); off < 32<<20; off += 1 << 20 {
 		fillPattern(chunk, off)
-		if _, err := b.WriteAt(chunk, off); err != nil {
-			t.Fatal(err)
-		}
+		mustWrite(t, b, chunk, off)
 		b.SetReadHead(off + 1<<20)
 	}
 
 	deadline := time.Now().Add(5 * time.Second)
 	for p.Stats().DiskInUse > 9<<20 {
-
 		if time.Now().After(deadline) {
 			t.Fatalf("disk backstop never reclaimed: pool=%+v", p.Stats())
 		}
@@ -666,9 +652,7 @@ func TestSoleStreamRespectsPoolBudget(t *testing.T) {
 	p := newTestPool(t, PoolConfig{MemoryBudget: budget})
 	b := newTestBuffer(t, p, Config{MemorySize: 16 << 20})
 
-	if _, err := b.WriteAt(make([]byte, 16<<20), 0); err != nil {
-		t.Fatal(err)
-	}
+	mustWrite(t, b, make([]byte, 16<<20), 0)
 	if got := p.Stats().MemoryInUse; got > budget {
 		t.Fatalf("single stream held %d bytes against a %d budget", got, budget)
 	}

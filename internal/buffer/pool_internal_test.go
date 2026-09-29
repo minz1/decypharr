@@ -83,7 +83,7 @@ func TestDiskBackstop_FiresOnEvictCallback(t *testing.T) {
 	buf, err := pool.NewBuffer(Config{
 		DiskPath:  filepath.Join(dir, "stream.buf"),
 		TotalSize: 1024,
-		OnEvict: func(off, length int64) {
+		OnEvict: func(_, length int64) {
 			evictCalls.Add(1)
 			evictedBytes.Add(length)
 		},

@@ -108,6 +108,34 @@ func BenchmarkStreamContendedReads(b *testing.B) {
 	b.Run("memory", func(b *testing.B) { benchStreamContendedReads(b, Config{MemorySize: benchMemBudget}) })
 }
 
+// contendedReader times random reads behind the write frontier until stop.
+func contendedReader(buf *Buffer, frontier *atomic.Int64, stop <-chan struct{}, seed uint64) []time.Duration {
+	var lats []time.Duration
+	rbuf := make([]byte, benchChunk)
+	for {
+		select {
+		case <-stop:
+			return lats
+		default:
+		}
+		f := frontier.Load()
+		lo := max(f-32<<20, 0)
+		span := (f - benchChunk - lo) / benchChunk
+		if span <= 0 {
+			continue
+		}
+		seed = seed*6364136223846793005 + 1442695040888963407
+		off := lo + int64(seed%uint64(span))*benchChunk
+		start := time.Now()
+		if _, err := buf.ReadAt(rbuf, off); err != nil {
+			// A discard racing the offset pick is expected near the
+			// window tail; skip it.
+			continue
+		}
+		lats = append(lats, time.Since(start))
+	}
+}
+
 func benchStreamContendedReads(b *testing.B, cfg Config) {
 	p := NewPool(PoolConfig{Name: "bench"})
 	defer p.Close()
@@ -138,33 +166,7 @@ func benchStreamContendedReads(b *testing.B, cfg Config) {
 	const readers = 4
 	lats := make([][]time.Duration, readers)
 	for r := range readers {
-
-		wg.Go(func() {
-			rbuf := make([]byte, benchChunk)
-			seed := uint64(r)*2654435761 + 12345
-			for {
-				select {
-				case <-stop:
-					return
-				default:
-				}
-				f := frontier.Load()
-				lo := max(f-32<<20, 0)
-				span := (f - benchChunk - lo) / benchChunk
-				if span <= 0 {
-					continue
-				}
-				seed = seed*6364136223846793005 + 1442695040888963407
-				off := lo + int64(seed%uint64(span))*benchChunk
-				start := time.Now()
-				if _, readAtErr := buf.ReadAt(rbuf, off); readAtErr != nil {
-					// A discard racing the offset pick is expected near the
-					// window tail; skip it.
-					continue
-				}
-				lats[r] = append(lats[r], time.Since(start))
-			}
-		})
+		wg.Go(func() { lats[r] = contendedReader(buf, &frontier, stop, uint64(r)*2654435761+12345) })
 	}
 
 	b.ReportAllocs()
