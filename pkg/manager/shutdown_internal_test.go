@@ -35,8 +35,8 @@ func (c completedTorrentProvider) CheckStatus(*types.Torrent) (*types.Torrent, e
 	return c.torrent, nil
 }
 
-func TestShutdownResumesInterruptedSymlinks(t *testing.T) {
-	for _, multiSeason := range []bool{false, true} {
+func TestShutdownResumesInterruptedSymlinks(t *testing.T) { //nolint:paralleltest // subtests reset the config singleton
+	for _, multiSeason := range []bool{false, true} { //nolint:paralleltest // subtests reset the config singleton
 		t.Run(map[bool]string{false: "single release", true: "season pack"}[multiSeason], func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				config.Reset()

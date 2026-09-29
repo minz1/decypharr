@@ -51,6 +51,7 @@ func (f *fakeArrRecovery) Reacquire(request reacquire.Request) (*reacquire.Job, 
 }
 
 func TestActiveStreamIncludesArrBinding(t *testing.T) {
+	t.Parallel()
 	recovery := &fakeArrRecovery{
 		binding: reacquire.Binding{
 			ArrName:      "sonarr-main",
@@ -139,6 +140,7 @@ func (missingArticleReader) Prefetch(context.Context, int64, int64) {}
 func (missingArticleReader) Close() error                           { return nil }
 
 func TestUsenetPrimeSurfacesMissingArticle(t *testing.T) {
+	t.Parallel()
 	var opens atomic.Int64
 	var notifications atomic.Int64
 	transport := &usenetTransport{
@@ -170,6 +172,7 @@ func TestUsenetPrimeSurfacesMissingArticle(t *testing.T) {
 }
 
 func TestUsenetArticleNotFoundQueuesOneNonBlockingReacquire(t *testing.T) {
+	t.Parallel()
 	recovery := &fakeArrRecovery{
 		binding: reacquire.Binding{
 			EntryID:     "nzb-1",

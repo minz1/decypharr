@@ -76,7 +76,7 @@ func mustRead(t *testing.T, path string) string {
 // Golden-tree: seed the export tree with current, stale, orphaned, and
 // foreign .strm files, then assert the sweep converges disk to the desired
 // state and leaves foreign files alone.
-func TestStrmSweepGoldenTree(t *testing.T) {
+func TestStrmSweepGoldenTree(t *testing.T) { //nolint:paralleltest // resets the config singleton
 	m := newTestReconciler(t)
 	cfg := config.Get()
 
@@ -134,7 +134,7 @@ func TestStrmSweepGoldenTree(t *testing.T) {
 	}
 }
 
-func TestStrmSweepDisabled(t *testing.T) {
+func TestStrmSweepDisabled(t *testing.T) { //nolint:paralleltest // resets the config singleton
 	m := newTestReconciler(t)
 	config.Get().Strm.Enabled = false
 
@@ -144,7 +144,7 @@ func TestStrmSweepDisabled(t *testing.T) {
 }
 
 // A repair that renames a file (new file ID) must replace the old .
-func TestStrmSyncEntryRemovesStaleAfterRename(t *testing.T) {
+func TestStrmSyncEntryRemovesStaleAfterRename(t *testing.T) { //nolint:paralleltest // resets the config singleton
 	m := newTestReconciler(t)
 	cfg := config.Get()
 
@@ -179,7 +179,7 @@ func TestStrmSyncEntryRemovesStaleAfterRename(t *testing.T) {
 
 // Deleting an entry removes its files from the export tree without waiting
 // for a sweep; the folder is pruned when empty.
-func TestStrmRemoveEntry(t *testing.T) {
+func TestStrmRemoveEntry(t *testing.T) { //nolint:paralleltest // resets the config singleton
 	m := newTestReconciler(t)
 	cfg := config.Get()
 
@@ -205,8 +205,8 @@ func TestStrmRemoveEntry(t *testing.T) {
 	t.Fatalf("entry folder %s not removed", dir)
 }
 
-func TestSidecarStreamIsCompleteBeforePublication(t *testing.T) {
-	for _, body := range []string{"complete", "short"} {
+func TestSidecarStreamIsCompleteBeforePublication(t *testing.T) { //nolint:paralleltest // subtests reset the config singleton
+	for _, body := range []string{"complete", "short"} { //nolint:paralleltest // subtests reset the config singleton
 		t.Run(body, func(t *testing.T) {
 			reconciler := newTestReconciler(t)
 			entry := &storage.Entry{InfoHash: "entry"}

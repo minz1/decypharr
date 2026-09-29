@@ -15,7 +15,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
-func TestRestoreLeavesActiveDownloadsOutsideSubmissionWorkers(t *testing.T) {
+func TestRestoreLeavesActiveDownloadsOutsideSubmissionWorkers(t *testing.T) { //nolint:paralleltest // resets the config singleton
 	config.Reset()
 	config.SetConfigPath(t.TempDir())
 	t.Cleanup(config.Reset)

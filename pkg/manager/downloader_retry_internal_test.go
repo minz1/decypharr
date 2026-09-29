@@ -16,6 +16,7 @@ import (
 )
 
 func TestLocalDownloaderRetriesServiceUnavailable(t *testing.T) {
+	t.Parallel()
 	payload := bytes.Repeat([]byte("resumable-download"), 4096)
 	var gets atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -63,6 +64,7 @@ func TestLocalDownloaderRetriesServiceUnavailable(t *testing.T) {
 }
 
 func TestLocalDownloaderResumesAfterUnexpectedEOF(t *testing.T) {
+	t.Parallel()
 	payload := bytes.Repeat([]byte("range-resume"), 8192)
 	cut := len(payload) / 2
 	var (

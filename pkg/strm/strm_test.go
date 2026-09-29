@@ -9,6 +9,7 @@ import (
 )
 
 func TestFileURLRoundTrip(t *testing.T) {
+	t.Parallel()
 	base := "https://media.example.com/decypharr"
 	infohash := "aabbccddeeff00112233445566778899aabbccdd"
 	fileID := "0123456789abcdef"
@@ -24,6 +25,7 @@ func TestFileURLRoundTrip(t *testing.T) {
 }
 
 func TestParseURLRejectsForeign(t *testing.T) {
+	t.Parallel()
 	bad := []string{
 		"",
 		"not a url",
@@ -40,6 +42,7 @@ func TestParseURLRejectsForeign(t *testing.T) {
 }
 
 func TestSignVerify(t *testing.T) {
+	t.Parallel()
 	infohash := "aabbccddeeff00112233445566778899aabbccdd"
 	fileID := "0123456789abcdef"
 	sig := strm.Sign("secret", infohash, fileID)
@@ -58,6 +61,7 @@ func TestSignVerify(t *testing.T) {
 }
 
 func TestBaseURL(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		cfg  config.Config
 		want string
@@ -76,6 +80,7 @@ func TestBaseURL(t *testing.T) {
 }
 
 func TestFileName(t *testing.T) {
+	t.Parallel()
 	if got := strm.FileName("Movie.2023.1080p.mkv", false); got != "Movie.2023.1080p.strm" {
 		t.Errorf("FileName replace = %q", got)
 	}
@@ -89,6 +94,7 @@ func TestFileName(t *testing.T) {
 }
 
 func TestIsSidecar(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"movie.en.srt", "movie.SUB", "movie.nfo", "movie.idx"} {
 		if !strm.IsSidecar(name) {
 			t.Errorf("strm.IsSidecar(%q) = false", name)

@@ -12,7 +12,7 @@ import (
 
 // Entries synced from a provider carry no category. They are still symlinked
 // into an Arr library, so the catalog must return their files.
-func TestListManagedFilesIgnoresEntryCategory(t *testing.T) {
+func TestListManagedFilesIgnoresEntryCategory(t *testing.T) { //nolint:paralleltest // resets the config singleton
 	config.Reset()
 	config.SetConfigPath(t.TempDir())
 	t.Cleanup(config.Reset)
@@ -62,7 +62,7 @@ func TestListManagedFilesIgnoresEntryCategory(t *testing.T) {
 
 // A file with no ID cannot be indexed or reacquired, so the scan must count it
 // rather than drop it silently.
-func TestEntryManagedFilesCountsSkips(t *testing.T) {
+func TestEntryManagedFilesCountsSkips(t *testing.T) { //nolint:paralleltest // resets the config singleton
 	config.Reset()
 	config.SetConfigPath(t.TempDir())
 	t.Cleanup(config.Reset)

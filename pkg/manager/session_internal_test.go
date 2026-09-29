@@ -153,6 +153,7 @@ func newTestSession(t *testing.T, tr transport, size int64) *session {
 }
 
 func TestSessionReadsFullFile(t *testing.T) {
+	t.Parallel()
 	data := testPattern(1 << 20)
 	cdn := newFakeCDN(data)
 	server := startCDN(t, cdn)
@@ -171,6 +172,7 @@ func TestSessionReadsFullFile(t *testing.T) {
 }
 
 func TestSessionResumesAfterMidBodyCutAndExpiredToken(t *testing.T) {
+	t.Parallel()
 	data := testPattern(64 << 10)
 	cdn := newFakeCDN(data)
 	server := startCDN(t, cdn)
@@ -207,6 +209,7 @@ func TestSessionResumesAfterMidBodyCutAndExpiredToken(t *testing.T) {
 }
 
 func TestSessionHonorsRetryAfter(t *testing.T) {
+	t.Parallel()
 	data := testPattern(4 << 10)
 	cdn := newFakeCDN(data)
 	server := startCDN(t, cdn)
@@ -234,6 +237,7 @@ func TestSessionHonorsRetryAfter(t *testing.T) {
 }
 
 func TestSessionSeek(t *testing.T) {
+	t.Parallel()
 	data := testPattern(1 << 20)
 	cdn := newFakeCDN(data)
 	server := startCDN(t, cdn)
@@ -304,6 +308,7 @@ func (body *closeNotifyingBody) Close() error {
 }
 
 func TestSessionIdleClosesBodyAndResumes(t *testing.T) {
+	t.Parallel()
 	data := testPattern(64 << 10)
 	cdn := newFakeCDN(data)
 	server := startCDN(t, cdn)
@@ -347,6 +352,7 @@ func TestSessionIdleClosesBodyAndResumes(t *testing.T) {
 }
 
 func TestSessionStallWatchdogRecovers(t *testing.T) {
+	t.Parallel()
 	data := testPattern(32 << 10)
 	cdn := newFakeCDN(data)
 	server := startCDN(t, cdn)
@@ -367,6 +373,7 @@ func TestSessionStallWatchdogRecovers(t *testing.T) {
 }
 
 func TestSessionNotPoisonedAfterExhaustion(t *testing.T) {
+	t.Parallel()
 	data := testPattern(8 << 10)
 	cdn := newFakeCDN(data)
 	server := startCDN(t, cdn)
@@ -398,6 +405,7 @@ func TestSessionNotPoisonedAfterExhaustion(t *testing.T) {
 }
 
 func TestSessionPrimeFailsFast(t *testing.T) {
+	t.Parallel()
 	var url atomic.Value
 	url.Store("http://127.0.0.1:0/unreachable")
 	tr := &httpTransport{
@@ -459,6 +467,7 @@ func (h *fakeUsenetHandle) Close() error {
 }
 
 func TestUsenetTransportResumesMidStream(t *testing.T) {
+	t.Parallel()
 	data := testPattern(32 << 10)
 	var opens atomic.Int64
 	var handles []*fakeUsenetHandle
@@ -498,6 +507,7 @@ func TestUsenetTransportResumesMidStream(t *testing.T) {
 }
 
 func TestSessionForwardsDownstreamCacheAcknowledgement(t *testing.T) {
+	t.Parallel()
 	h := &fakeUsenetHandle{data: testPattern(4 << 10), failAt: -1}
 	tr := &usenetTransport{
 		size: int64(len(h.data)),
@@ -517,6 +527,7 @@ func TestSessionForwardsDownstreamCacheAcknowledgement(t *testing.T) {
 }
 
 func TestRetentionForOwner(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		owner RewindOwner
@@ -527,6 +538,7 @@ func TestRetentionForOwner(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			if got := retentionForOwner(test.owner); got != test.want {
 				t.Fatalf("retentionForOwner(%d)=%d, want %d", test.owner, got, test.want)
 			}
@@ -538,6 +550,7 @@ func TestRetentionForOwner(t *testing.T) {
 // a Seek moves the position; the post-recovery reconnect must target the new
 // offset instead of the stale one.
 func TestSessionSeekDuringRecovery(t *testing.T) {
+	t.Parallel()
 	data := testPattern(64 << 10)
 	inRecover := make(chan struct{})
 	releaseRecover := make(chan struct{})
