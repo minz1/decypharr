@@ -24,7 +24,12 @@ func TestParseEncryptionHeaderRejectsHugeKdfCount(t *testing.T) {
 	// A header-supplied count above 24 would make DeriveKeys run 2^count
 	// PBKDF2 rounds; unrar rejects it and so must we.
 	for _, kdf := range []byte{crypto.MaxKdfCount + 1, 40, 255} {
-		if _, err := crypto.ParseEncryptionHeader(encryptionHeader(kdf, false)); !errors.Is(err, crypto.ErrInvalidData) {
+		if _, err := crypto.ParseEncryptionHeader(
+			encryptionHeader(kdf, false),
+		); !errors.Is(
+			err,
+			crypto.ErrInvalidData,
+		) {
 			t.Errorf("kdfCount %d: err = %v, want ErrInvalidData", kdf, err)
 		}
 	}
