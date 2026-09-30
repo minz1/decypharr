@@ -205,8 +205,9 @@ func TestStrmRemoveEntry(t *testing.T) { //nolint:paralleltest // resets the con
 	t.Fatalf("entry folder %s not removed", dir)
 }
 
-func TestSidecarStreamIsCompleteBeforePublication(t *testing.T) { //nolint:paralleltest // subtests reset the config singleton
-	for _, body := range []string{"complete", "short"} { //nolint:paralleltest // subtests reset the config singleton
+//nolint:paralleltest // subtests reset the config singleton
+func TestSidecarStreamIsCompleteBeforePublication(t *testing.T) {
+	for _, body := range []string{"complete", "short"} {
 		t.Run(body, func(t *testing.T) {
 			reconciler := newTestReconciler(t)
 			entry := &storage.Entry{InfoHash: "entry"}
@@ -221,23 +222,33 @@ func TestSidecarStreamIsCompleteBeforePublication(t *testing.T) { //nolint:paral
 			dest := filepath.Join(t.TempDir(), file.Name)
 			err := reconciler.downloadSidecar(ctx, entry, file, dest)
 			if body == "complete" {
-				if err != nil {
-					t.Fatal(err)
-				}
-				if got := mustRead(t, dest); got != body {
-					t.Fatalf("sidecar = %q", got)
-				}
-			} else {
-				if err == nil {
-					t.Fatal("short sidecar was accepted")
-				}
-				if _, statErr := os.Stat(dest); !os.IsNotExist(statErr) {
-					t.Fatalf("partial sidecar was published: %v", statErr)
-				}
-				if _, statErr := os.Stat(dest + ".part"); !os.IsNotExist(statErr) {
-					t.Fatalf("partial temporary file remains: %v", statErr)
-				}
+				assertSidecarPublished(t, dest, body, err)
+				return
 			}
+			assertSidecarRejected(t, dest, err)
 		})
+	}
+}
+
+func assertSidecarPublished(t *testing.T, dest, body string, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mustRead(t, dest); got != body {
+		t.Fatalf("sidecar = %q", got)
+	}
+}
+
+func assertSidecarRejected(t *testing.T, dest string, err error) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("short sidecar was accepted")
+	}
+	if _, statErr := os.Stat(dest); !os.IsNotExist(statErr) {
+		t.Fatalf("partial sidecar was published: %v", statErr)
+	}
+	if _, statErr := os.Stat(dest + ".part"); !os.IsNotExist(statErr) {
+		t.Fatalf("partial temporary file remains: %v", statErr)
 	}
 }
