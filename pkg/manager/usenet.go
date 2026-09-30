@@ -84,8 +84,8 @@ func (m *Manager) processNZBJob(ctx context.Context, job *Job) error {
 	if job == nil || job.Entry == nil {
 		return fmt.Errorf("invalid NZB job")
 	}
-	if _, err := m.queue.GetTorrent(job.Entry.InfoHash); err != nil {
-		return nil
+	if !m.queue.Contains(job.Entry.InfoHash) {
+		return nil // removed from the queue while waiting for a worker
 	}
 	if job.NZBMeta == nil {
 		if job.Request == nil {
@@ -133,14 +133,14 @@ func (m *Manager) processNZBJob(ctx context.Context, job *Job) error {
 		job.Entry.Size = meta.TotalSize
 		job.Entry.Bytes = meta.TotalSize
 		job.Entry.Status = debridTypes.TorrentStatusDownloading
-		job.Entry.ActiveProvider = "usenet"
+		job.Entry.ActiveProvider = usenetProvider
 		_ = job.Entry.AddUsenetProvider(meta)
 		if updateErr := m.queue.Update(job.Entry); updateErr != nil {
 			return fmt.Errorf("update queued NZB: %w", updateErr)
 		}
 	}
 	if job.Request != nil {
-		job.Request.Status = "started"
+		job.Request.Status = importStatusStarted
 	}
 	return m.processNewNzb(ctx, job.Entry, job.NZBMeta, job.NZBGroups)
 }

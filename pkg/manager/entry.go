@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/sirrobot01/decypharr/internal/config"
+
 	debrid "github.com/sirrobot01/decypharr/pkg/debrid/common"
 	"github.com/sirrobot01/decypharr/pkg/manager/virtualfolders"
 	"github.com/sirrobot01/decypharr/pkg/storage"
@@ -25,7 +27,7 @@ const (
 	EntryKindFile     string = "file"
 )
 
-// FileInfo implements os.FileInfo.
+// FileInfo implements [os.FileInfo].
 type FileInfo struct {
 	name         string
 	size         int64
@@ -250,7 +252,7 @@ func (m *Manager) getEntryChildren(group string) (*FileInfo, []FileInfo) {
 		var infos []FileInfo
 		seen := make(map[string]struct{})
 		err := m.storage.ForEachMeta(func(meta *storage.EntryMetaInfo) error {
-			if meta.Protocol == "torrent" {
+			if meta.Protocol == string(config.ProtocolTorrent) {
 				if _, ok := seen[meta.Name]; ok {
 					return nil
 				}
@@ -278,7 +280,7 @@ func (m *Manager) getEntryChildren(group string) (*FileInfo, []FileInfo) {
 		var infos []FileInfo
 		seen := make(map[string]struct{})
 		err := m.storage.ForEachMeta(func(meta *storage.EntryMetaInfo) error {
-			if meta.Protocol == "nzb" {
+			if meta.Protocol == string(config.ProtocolNZB) {
 				if _, ok := seen[meta.Name]; ok {
 					return nil
 				}

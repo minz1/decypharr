@@ -57,13 +57,13 @@ func (g *torrentSubmissionGate) Do(ctx context.Context, key string, submit func(
 
 	result := g.group.DoChan(key, func() (any, error) {
 		if g.touchRecent(key, g.now()) {
-			return nil, nil
+			return struct{}{}, nil
 		}
 		if err := submit(); err != nil {
 			return nil, err
 		}
 		g.mark(key, g.now())
-		return nil, nil
+		return struct{}{}, nil
 	})
 
 	select {

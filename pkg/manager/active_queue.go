@@ -144,7 +144,7 @@ func (m *Manager) rebuildQueuedNZBJob(entry *storage.Entry) (*Job, error) {
 	entry.Size = meta.TotalSize
 	entry.Bytes = meta.TotalSize
 	entry.Status = debridTypes.TorrentStatusDownloading
-	entry.ActiveProvider = "usenet"
+	entry.ActiveProvider = usenetProvider
 	_ = entry.AddUsenetProvider(meta)
 
 	req := NewNZBRequest(

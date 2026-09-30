@@ -2,8 +2,10 @@ package manager
 
 import (
 	"context"
+	"errors"
 
 	"github.com/rs/zerolog"
+	"github.com/sirrobot01/appendstore"
 
 	"github.com/sirrobot01/decypharr/pkg/arr/reacquire"
 	"github.com/sirrobot01/decypharr/pkg/storage"
@@ -35,8 +37,11 @@ type catalogSkips struct {
 func (c managedArrCatalog) ListManagedFiles(ctx context.Context, entryID string) ([]reacquire.ManagedFile, error) {
 	if entryID != "" {
 		entry, err := c.storage.Get(entryID)
-		if err != nil || entry == nil {
+		if errors.Is(err, appendstore.ErrKeyNotFound) || (err == nil && entry == nil) {
 			return nil, nil
+		}
+		if err != nil {
+			return nil, err
 		}
 		var skips catalogSkips
 		entryFiles, err := c.entryFiles(entry, &skips)

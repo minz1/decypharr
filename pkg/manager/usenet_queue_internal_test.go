@@ -16,7 +16,8 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/usenet"
 )
 
-func TestAddNewNZBQueuesBeforeNetworkParsing(t *testing.T) { //nolint:paralleltest // mutates the config singleton
+//nolint:paralleltest // mutates the config singleton
+func TestAddNewNZBQueuesBeforeNetworkParsing(t *testing.T) {
 	oldPath := config.GetMainPath()
 	config.SetConfigPath(t.TempDir())
 	t.Cleanup(func() { config.SetConfigPath(oldPath) })
