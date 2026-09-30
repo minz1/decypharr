@@ -31,6 +31,7 @@ func dbVersion(t *testing.T, path string) uint32 {
 // Upgrading rewrites the databases in a format older Decypharr builds reject,
 // so startup must leave each original behind for a downgrade.
 func TestStartupKeepsDowngradePath(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	for _, name := range storeNames() {
 		writeLegacyDB(t, filepath.Join(dir, name+".db"), 3)
@@ -56,6 +57,7 @@ func TestStartupKeepsDowngradePath(t *testing.T) {
 
 // A database already in the current format has nothing to preserve.
 func TestStartupWithoutMigrationLeavesNoBackups(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	s, err := NewStorage(dir)
 	if err != nil {
