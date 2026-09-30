@@ -19,7 +19,11 @@ func TestParseRejectsNonPositiveCleanupInterval(t *testing.T) {
 			t.Errorf("interval %q: got %s, want default %s", value, got, want)
 		}
 	}
-	if got := dfsconfig.Parse(config.DFS{CacheCleanupInterval: "10m"}, "/mnt", 3).CacheCleanupInterval; got.Minutes() != 10 {
+	if got := dfsconfig.Parse(
+		config.DFS{CacheCleanupInterval: "10m"},
+		"/mnt",
+		3,
+	).CacheCleanupInterval; got.Minutes() != 10 {
 		t.Errorf("valid interval not applied: got %s", got)
 	}
 }

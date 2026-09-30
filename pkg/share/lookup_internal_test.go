@@ -9,7 +9,7 @@ import (
 
 type emptyCatalog struct{}
 
-func (emptyCatalog) RootInfo() *manager.FileInfo   { return &manager.FileInfo{} }
+func (emptyCatalog) RootInfo() *manager.FileInfo    { return &manager.FileInfo{} }
 func (emptyCatalog) GetEntries() []manager.FileInfo { return nil }
 func (emptyCatalog) GetEntryChildren(string) (*manager.FileInfo, []manager.FileInfo) {
 	return nil, nil
