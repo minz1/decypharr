@@ -11,9 +11,10 @@ import (
 	"syscall"
 )
 
-// Error types for NNTP operations.
+// ErrorType classifies NNTP operation failures.
 type ErrorType int
 
+// Error types for NNTP operations.
 const (
 	ErrorTypeUnknown ErrorType = iota
 	ErrorTypeConnection
@@ -28,12 +29,67 @@ const (
 	ErrorTypeYencDecode
 )
 
+// NNTP response codes (RFC 3977, RFC 4643).
+const (
+	codeDate               = 111
+	codeBodyFollows        = 222
+	codeArticleExists      = 223
+	codeAuthAccepted       = 281
+	codePasswordRequired   = 381
+	codeServiceUnavailable = 400
+	codeNoSuchGroup        = 411
+	codeNoArticleWithNum   = 423
+	codeNoSuchArticle      = 430
+	codeAuthRejected       = 481
+	codeAuthOutOfSequence  = 482
+	codeUnknownCommand     = 500
+	codeSyntaxError        = 501
+	codePermissionDenied   = 502
+	codeServiceDown        = 503
+)
+
 // Error represents an NNTP-specific error.
 type Error struct {
 	Type    ErrorType
 	Code    int    // NNTP response code
 	Message string // Error message
 	Err     error  // Underlying error
+}
+
+// NewConnectionError wraps a transport failure.
+func NewConnectionError(err error) *Error {
+	return &Error{
+		Type:    ErrorTypeConnection,
+		Message: "connection failed",
+		Err:     err,
+	}
+}
+
+// NewTimeoutError wraps a deadline failure.
+func NewTimeoutError(err error) *Error {
+	return &Error{
+		Type:    ErrorTypeTimeout,
+		Message: "operation timed out",
+		Err:     err,
+	}
+}
+
+// NewProtocolError reports a response the client could not interpret.
+func NewProtocolError(code int, message string) *Error {
+	return &Error{
+		Type:    ErrorTypeProtocol,
+		Code:    code,
+		Message: message,
+	}
+}
+
+// NewYencDecodeError reports a body that failed yEnc decoding or CRC checks.
+func NewYencDecodeError(err error) *Error {
+	return &Error{
+		Type:    ErrorTypeYencDecode,
+		Message: "yEnc decode failed",
+		Err:     err,
+	}
 }
 
 func (e *Error) Error() string {
@@ -47,6 +103,7 @@ func (e *Error) Unwrap() error {
 	return e.Err
 }
 
+// Is matches any *Error of the same Type.
 func (e *Error) Is(target error) bool {
 	if t, ok := errors.AsType[*Error](target); ok {
 		return e.Type == t.Type
@@ -56,74 +113,27 @@ func (e *Error) Is(target error) bool {
 
 // IsRetryable returns true if the error might be resolved by retrying.
 func (e *Error) IsRetryable() bool {
-	switch e.Type {
-	case ErrorTypeConnection, ErrorTypeTimeout, ErrorTypeServerBusy:
-		return true
-	case ErrorTypeArticleNotFound, ErrorTypeGroupNotFound, ErrorTypePermissionDenied, ErrorTypeAuthentication:
-		return false
-	default:
-		return false
-	}
+	return e.Type == ErrorTypeConnection || e.Type == ErrorTypeTimeout || e.Type == ErrorTypeServerBusy
 }
 
 func (et ErrorType) String() string {
-	switch et {
-	case ErrorTypeConnection:
-		return "CONNECTION"
-	case ErrorTypeAuthentication:
-		return "AUTHENTICATION"
-	case ErrorTypeTimeout:
-		return "TIMEOUT"
-	case ErrorTypeArticleNotFound:
-		return "ARTICLE_NOT_FOUND"
-	case ErrorTypeGroupNotFound:
-		return "GROUP_NOT_FOUND"
-	case ErrorTypePermissionDenied:
-		return "PERMISSION_DENIED"
-	case ErrorTypeServerBusy:
-		return "SERVER_BUSY"
-	case ErrorTypeInvalidCommand:
-		return "INVALID_COMMAND"
-	case ErrorTypeProtocol:
-		return "PROTOCOL"
-	case ErrorTypeYencDecode:
-		return "YENC_DECODE"
-	default:
-		return "UNKNOWN"
+	names := [...]string{
+		ErrorTypeUnknown:          "UNKNOWN",
+		ErrorTypeConnection:       "CONNECTION",
+		ErrorTypeAuthentication:   "AUTHENTICATION",
+		ErrorTypeTimeout:          "TIMEOUT",
+		ErrorTypeArticleNotFound:  "ARTICLE_NOT_FOUND",
+		ErrorTypeGroupNotFound:    "GROUP_NOT_FOUND",
+		ErrorTypePermissionDenied: "PERMISSION_DENIED",
+		ErrorTypeServerBusy:       "SERVER_BUSY",
+		ErrorTypeInvalidCommand:   "INVALID_COMMAND",
+		ErrorTypeProtocol:         "PROTOCOL",
+		ErrorTypeYencDecode:       "YENC_DECODE",
 	}
-}
-
-// Helper functions to create specific errors.
-func NewConnectionError(err error) *Error {
-	return &Error{
-		Type:    ErrorTypeConnection,
-		Message: "connection failed",
-		Err:     err,
+	if et < 0 || int(et) >= len(names) {
+		return names[ErrorTypeUnknown]
 	}
-}
-
-func NewTimeoutError(err error) *Error {
-	return &Error{
-		Type:    ErrorTypeTimeout,
-		Message: "operation timed out",
-		Err:     err,
-	}
-}
-
-func NewProtocolError(code int, message string) *Error {
-	return &Error{
-		Type:    ErrorTypeProtocol,
-		Code:    code,
-		Message: message,
-	}
-}
-
-func NewYencDecodeError(err error) *Error {
-	return &Error{
-		Type:    ErrorTypeYencDecode,
-		Message: "yEnc decode failed",
-		Err:     err,
-	}
+	return names[et]
 }
 
 func classifyTransferError(message string, err error) *Error {
@@ -171,29 +181,30 @@ func isConnectionLike(err error) bool {
 
 // classifyNNTPError classifies an NNTP response code into an error type.
 func classifyNNTPError(code int, message string) *Error {
-	switch {
-	case code == 430 || code == 423:
-		return &Error{Type: ErrorTypeArticleNotFound, Code: code, Message: message}
-	case code == 411:
-		return &Error{Type: ErrorTypeGroupNotFound, Code: code, Message: message}
-	case code == 502:
-		return &Error{Type: ErrorTypePermissionDenied, Code: code, Message: message}
-	case code == 503:
+	var typ ErrorType
+	switch code {
+	case codeNoSuchArticle, codeNoArticleWithNum:
+		typ = ErrorTypeArticleNotFound
+	case codeNoSuchGroup:
+		typ = ErrorTypeGroupNotFound
+	case codePermissionDenied:
+		typ = ErrorTypePermissionDenied
+	case codeServiceUnavailable, codeServiceDown:
 		// 503 = "Service temporarily unavailable" — transient, not a permission failure
-		return &Error{Type: ErrorTypeServerBusy, Code: code, Message: message}
-	case code == 481 || code == 482:
-		return &Error{Type: ErrorTypeAuthentication, Code: code, Message: message}
-	case code == 400:
-		return &Error{Type: ErrorTypeServerBusy, Code: code, Message: message}
-	case code == 500 || code == 501:
-		return &Error{Type: ErrorTypeInvalidCommand, Code: code, Message: message}
-	case code >= 400:
-		return &Error{Type: ErrorTypeProtocol, Code: code, Message: message}
+		typ = ErrorTypeServerBusy
+	case codeAuthRejected, codeAuthOutOfSequence:
+		typ = ErrorTypeAuthentication
+	case codeUnknownCommand, codeSyntaxError:
+		typ = ErrorTypeInvalidCommand
 	default:
-		return &Error{Type: ErrorTypeUnknown, Code: code, Message: message}
+		if code >= codeServiceUnavailable {
+			typ = ErrorTypeProtocol
+		}
 	}
+	return &Error{Type: typ, Code: code, Message: message}
 }
 
+// IsArticleNotFoundError reports whether err is a missing-article failure.
 func IsArticleNotFoundError(err error) bool {
 	if nntpErr, ok := errors.AsType[*Error](err); ok {
 		return nntpErr.Type == ErrorTypeArticleNotFound

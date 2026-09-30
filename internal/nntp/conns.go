@@ -266,7 +266,7 @@ func (c *Connection) authenticate() error {
 		return NewConnectionError(fmt.Errorf("failed to read user response: %w", err))
 	}
 
-	if resp.Code != 381 {
+	if resp.Code != codePasswordRequired {
 		return classifyNNTPError(resp.Code, fmt.Sprintf("unexpected response to AUTHINFO USER: %s", resp.Message))
 	}
 
@@ -280,7 +280,7 @@ func (c *Connection) authenticate() error {
 		return NewConnectionError(fmt.Errorf("failed to read password response: %w", err))
 	}
 
-	if resp.Code != 281 {
+	if resp.Code != codeAuthAccepted {
 		return classifyNNTPError(resp.Code, fmt.Sprintf("[%s] authentication failed: %s", c.address, resp.Message))
 	}
 	return nil
@@ -311,7 +311,7 @@ func (c *Connection) ping(timeout time.Duration) error {
 	if err != nil {
 		return NewConnectionError(err)
 	}
-	if resp.Code != 111 {
+	if resp.Code != codeDate {
 		return NewConnectionError(fmt.Errorf("unexpected DATE response: %d %s", resp.Code, resp.Message))
 	}
 	return nil
@@ -444,7 +444,7 @@ func (c *Connection) readBodyBuffered(dst []byte, source BodyBuffer, pooled bool
 		}
 		return res, classifyTransferError("streaming yenc decode failed", err)
 	}
-	if res.StatusCode != 222 {
+	if res.StatusCode != codeBodyFollows {
 		if pooled {
 			putBodyBuf(res.Data)
 		}
@@ -497,7 +497,7 @@ func (c *Connection) GetBody(messageID string) ([]byte, error) {
 		return nil, NewConnectionError(fmt.Errorf("failed to read body response: %w", err))
 	}
 
-	if code != 222 {
+	if code != codeBodyFollows {
 		return nil, classifyNNTPError(code, string(message))
 	}
 
@@ -731,7 +731,7 @@ func (c *Connection) Stat(messageID string) (articleNumber int, echoedID string,
 }
 
 func parseStatResponse(resp Response) (articleNumber int, echoedID string, err error) {
-	if resp.Code != 223 {
+	if resp.Code != codeArticleExists {
 		return 0, "", classifyNNTPError(resp.Code, resp.Message)
 	}
 
