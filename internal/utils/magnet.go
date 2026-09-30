@@ -21,6 +21,10 @@ var (
 	hexRegex = regexp.MustCompile("^[0-9a-fA-F]{40}$")
 )
 
+// base32InfoHashLen is the length of a base32-encoded 20-byte SHA-1 infohash.
+const base32InfoHashLen = 32
+
+// Magnet is a parsed magnet link, optionally with the .torrent it came from.
 type Magnet struct {
 	Name     string `json:"name"`
 	InfoHash string `json:"infoHash"`
@@ -80,7 +84,7 @@ func GetMagnetFromFile(file io.Reader, filePath string, rmTrackerUrls bool) (*Ma
 
 // GetMagnetFromUrl resolves a magnet link, or downloads a .torrent over HTTP(S).
 //
-//nolint:revive // var-naming: exported name used by pkg/server; rename to GetMagnetFromURL is a cross-area change
+//nolint:revive,staticcheck // var-naming/ST1003: exported name used by pkg/server; rename to GetMagnetFromURL is a cross-area change
 func GetMagnetFromUrl(url string, rmTrackerUrls bool) (*Magnet, error) {
 	if strings.HasPrefix(url, "magnet:") {
 		return GetMagnetInfo(url, rmTrackerUrls)
@@ -103,6 +107,7 @@ func GetMagnetFromBytes(torrentData []byte, rmTrackerUrls bool) (*Magnet, error)
 	if err != nil {
 		return nil, err
 	}
+	//nolint:staticcheck // SA1019: MagnetV2 adds btmh/ws params and reorders trackers; debrid APIs get the v1 magnet on purpose
 	magnetMeta := mi.Magnet(&hash, &info)
 	if rmTrackerUrls {
 		magnetMeta = stripTrackersFromMagnet(magnetMeta, "torrent file")
@@ -196,37 +201,33 @@ func SetMagnetDisplayName(magnetLink, name string) string {
 		return magnetLink
 	}
 	encodedName := url.QueryEscape(name)
-	parts := strings.Split(magnetLink, "?")
-	if len(parts) != 2 {
+	base, query, ok := strings.Cut(magnetLink, "?")
+	if !ok || strings.Contains(query, "?") {
 		return magnetLink
 	}
-	queryParts := strings.Split(parts[1], "&")
+	queryParts := strings.Split(query, "&")
 	for i, part := range queryParts {
 		if strings.HasPrefix(part, "dn=") {
 			queryParts[i] = "dn=" + encodedName
-			return parts[0] + "?" + strings.Join(queryParts, "&")
+			return base + "?" + strings.Join(queryParts, "&")
 		}
 	}
 	separator := "&"
-	if parts[1] == "" {
+	if query == "" {
 		separator = ""
 	}
 	return magnetLink + separator + "dn=" + encodedName
 }
 
+// ExtractInfoHash returns the lowercase hex infohash of a magnet URI, or "".
 func ExtractInfoHash(magnetDesc string) string {
 	const prefix = "xt=urn:btih:"
-	start := strings.Index(magnetDesc, prefix)
-	if start == -1 {
+	_, hash, ok := strings.Cut(magnetDesc, prefix)
+	if !ok {
 		return ""
 	}
-	hash := ""
-	start += len(prefix)
-	end := strings.IndexAny(magnetDesc[start:], "&#")
-	if end == -1 {
-		hash = magnetDesc[start:]
-	} else {
-		hash = magnetDesc[start : start+end]
+	if end := strings.IndexAny(hash, "&#"); end != -1 {
+		hash = hash[:end]
 	}
 	hash, _ = processInfoHash(hash) // Convert to hex if needed
 	return hash
@@ -241,7 +242,7 @@ func processInfoHash(input string) (string, error) {
 	}
 
 	// If it's 32 characters long, it might be Base32 encoded
-	if len(input) == 32 {
+	if len(input) == base32InfoHashLen {
 		// Ensure the input is uppercase and remove any padding
 		input = strings.ToUpper(strings.TrimRight(input, "="))
 

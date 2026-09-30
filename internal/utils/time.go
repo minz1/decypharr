@@ -8,15 +8,20 @@ import (
 	"time"
 )
 
+const (
+	day  = 24 * time.Hour
+	week = 7 * day
+)
+
 // extendedDurationRegex matches duration strings like "2d", "10d", "1w", "2w3d", "1w2d3h".
 var extendedDurationRegex = regexp.MustCompile(`^(\d+w)?(\d+d)?(.*)$`)
 
-// ParseDuration extends Go's time.ParseDuration to support:
+// ParseDuration extends Go's [time.ParseDuration] to support:
 //   - weeks (w): 1w = 7 days
 //   - days (d): 1d = 24 hours
 //
 // Examples: "2d", "10d", "1w", "2w3d", "1w2d3h30m", "48h"
-// Falls back to standard time.ParseDuration for unsupported formats.
+// Falls back to standard [time.ParseDuration] for unsupported formats.
 func ParseDuration(s string) (time.Duration, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -38,7 +43,7 @@ func ParseDuration(s string) (time.Duration, error) {
 		if err != nil {
 			return 0, fmt.Errorf("invalid weeks value: %s", matches[1])
 		}
-		total += time.Duration(weeks) * 7 * 24 * time.Hour
+		total += time.Duration(weeks) * week
 	}
 
 	// Parse days
@@ -48,7 +53,7 @@ func ParseDuration(s string) (time.Duration, error) {
 		if err != nil {
 			return 0, fmt.Errorf("invalid days value: %s", matches[2])
 		}
-		total += time.Duration(days) * 24 * time.Hour
+		total += time.Duration(days) * day
 	}
 
 	// Parse remaining (hours, minutes, seconds, etc.) using standard parser

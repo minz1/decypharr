@@ -5,7 +5,12 @@ import (
 	"strings"
 )
 
+// maxFolderNameBytes is the common filesystem limit for one path component.
+const maxFolderNameBytes = 255
+
 // videoExtensions is a set of known video file extensions (lowercase, without dot).
+//
+//nolint:gochecknoglobals // read-only lookup table
 var videoExtensions = map[string]struct{}{
 	"webm": {}, "m4v": {}, "3gp": {}, "nsv": {}, "ty": {},
 	"rm": {}, "rmvb": {}, "ifo": {}, "mov": {}, "qt": {},
@@ -18,6 +23,8 @@ var videoExtensions = map[string]struct{}{
 }
 
 // mediaExtensions is a set of known media file extensions (lowercase, without dot).
+//
+//nolint:gochecknoglobals // read-only lookup table derived from videoExtensions
 var mediaExtensions = func() map[string]struct{} {
 	m := map[string]struct{}{
 		"strm": {}, "m3u": {},
@@ -32,6 +39,8 @@ var mediaExtensions = func() map[string]struct{} {
 	return m
 }()
 
+// RemoveInvalidChars drops characters that are invalid in path components,
+// keeping separators and volume names.
 func RemoveInvalidChars(value string) string {
 	return strings.Map(func(r rune) rune {
 		if r == filepath.Separator || r == ':' {
@@ -50,6 +59,8 @@ func RemoveInvalidChars(value string) string {
 	}, value)
 }
 
+// SafeFolderName turns value into a portable single folder name, or returns
+// fallback when nothing usable remains.
 func SafeFolderName(value, fallback string) string {
 	value = strings.TrimSpace(value)
 	value = strings.Map(func(r rune) rune {
@@ -66,7 +77,7 @@ func SafeFolderName(value, fallback string) string {
 	if isReservedWindowsName(value) {
 		return fallback
 	}
-	value = truncateFolderName(value, 255)
+	value = truncateFolderName(value, maxFolderNameBytes)
 	value = strings.Trim(value, " .")
 	if value == "" || isReservedWindowsName(value) {
 		return fallback
@@ -105,6 +116,7 @@ func isReservedWindowsName(value string) bool {
 	}
 }
 
+// RemoveExtension strips a known media extension from value.
 func RemoveExtension(value string) string {
 	ext := filepath.Ext(value)
 	if ext == "" {
@@ -121,6 +133,7 @@ func RemoveExtension(value string) string {
 	return value
 }
 
+// IsMediaFile reports whether path has a known audio/video/playlist extension.
 func IsMediaFile(path string) bool {
 	ext := filepath.Ext(path)
 	if ext == "" {
@@ -131,6 +144,7 @@ func IsMediaFile(path string) bool {
 	return ok
 }
 
+// IsVideoFile reports whether path has a known video extension.
 func IsVideoFile(path string) bool {
 	ext := filepath.Ext(path)
 	if ext == "" {
