@@ -546,18 +546,22 @@ func (sr *StreamingReader) readAtEncrypted(ctx context.Context, cur *Cursor, p [
 	// Copy requested data to p
 	validDataEnd := min(int64(n), reqEnd-alignedStart)
 
-	startOffset := off - alignedStart
-	if startOffset >= validDataEnd {
-		return 0, err
+	copied := 0
+	if startOffset := off - alignedStart; startOffset < validDataEnd {
+		copied = copy(p, buf[startOffset:validDataEnd])
 	}
-
-	copied := copy(p, buf[startOffset:validDataEnd])
-
-	if errors.Is(err, io.EOF) && copied == len(p) {
+	switch {
+	case copied == len(p):
 		return copied, nil
+	case err != nil:
+		return copied, err
+	case off+int64(copied) >= sr.totalSize:
+		// Block-aligned files end exactly on the aligned read, so the plain
+		// read saw no EOF; honour the io.ReaderAt short-read contract here.
+		return copied, io.EOF
+	default:
+		return copied, io.ErrUnexpectedEOF
 	}
-
-	return copied, err
 }
 
 // decryptInPlace decrypts data using AES-256-CBC.
