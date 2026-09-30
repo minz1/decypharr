@@ -139,8 +139,7 @@ func (f *filesystem) lookupAbsolute(segments []string) (*node, error) {
 	key := strings.Join(segments, "\x00")
 	now := time.Now().UnixNano()
 	if v, ok := f.lookups.Load(key); ok {
-		e := v.(*lookupCacheEntry)
-		if now < e.expiry {
+		if e, isEntry := v.(*lookupCacheEntry); isEntry && now < e.expiry {
 			return e.n, e.err
 		}
 		f.lookups.Delete(key)
