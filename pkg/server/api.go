@@ -2,10 +2,14 @@ package server
 
 import (
 	"bytes"
+	"cmp"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"reflect"
 	"sort"
 	"strconv"
@@ -222,26 +226,29 @@ func sortQueuedTorrents(torrents []*storage.Entry, sortBy, sortOrder string) {
 	sort.Slice(torrents, less)
 }
 
+// queueDeleteCleanup returns the per-entry hook for queue deletes: with
+// removeFromDebrid it also removes the entry (and its provider placement).
+func (s *Server) queueDeleteCleanup(removeFromDebrid bool) func(*storage.Entry) error {
+	if !removeFromDebrid {
+		return nil
+	}
+	return func(t *storage.Entry) error {
+		if exists, _ := s.manager.EntryExists(t.InfoHash); exists {
+			return s.manager.DeleteEntry(t.InfoHash, true)
+		}
+		go s.manager.RemoveTorrentPlacements(t)
+		return nil
+	}
+}
+
 func (s *Server) handleDeleteTorrent(w http.ResponseWriter, r *http.Request) {
 	hash := chi.URLParam(r, "hash")
-	removeFromDebrid := r.URL.Query().Get("removeFromDebrid") == "true"
+	removeFromDebrid := boolOr(queryBool(r.URL.Query(), "removeFromDebrid"), false)
 	if hash == "" {
 		http.Error(w, "No hash provided", http.StatusBadRequest)
 		return
 	}
-	var cleanup func(torrent *storage.Entry) error
-
-	if removeFromDebrid {
-		cleanup = func(t *storage.Entry) error {
-			exists, _ := s.manager.EntryExists(t.InfoHash)
-			if exists {
-				// Remove the entry from manager fully, which will handle removing from debrid and deleting the entry
-				return s.manager.DeleteEntry(t.InfoHash, true)
-			}
-			go s.manager.RemoveTorrentPlacements(t)
-			return nil
-		}
-	}
+	cleanup := s.queueDeleteCleanup(removeFromDebrid)
 
 	if err := s.manager.Queue().Delete(hash, true, cleanup); err != nil {
 		s.logger.Error().Err(err).Str("hash", hash).Msg("Failed to delete entry from queue")
@@ -254,24 +261,13 @@ func (s *Server) handleDeleteTorrent(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeleteTorrents(w http.ResponseWriter, r *http.Request) {
 	hashesStr := r.URL.Query().Get("hashes")
-	removeFromDebrid := r.URL.Query().Get("removeFromDebrid") == "true"
+	removeFromDebrid := boolOr(queryBool(r.URL.Query(), "removeFromDebrid"), false)
 	if hashesStr == "" {
 		http.Error(w, "No hashes provided", http.StatusBadRequest)
 		return
 	}
 	hashes := strings.Split(hashesStr, ",")
-	var cleanup func(torrent *storage.Entry) error
-	if removeFromDebrid {
-		cleanup = func(t *storage.Entry) error {
-			exists, _ := s.manager.EntryExists(t.InfoHash)
-			if exists {
-				// Remove the entry from manager fully, which will handle removing from debrid and deleting the entry
-				return s.manager.DeleteEntry(t.InfoHash, true)
-			}
-			go s.manager.RemoveTorrentPlacements(t)
-			return nil
-		}
-	}
+	cleanup := s.queueDeleteCleanup(removeFromDebrid)
 	if err := s.manager.Queue().DeleteWhere("", config.ProtocolAll, "", hashes, cleanup); err != nil {
 		s.logger.Error().Err(err).Msg("Failed to delete torrents")
 		http.Error(w, "Failed to delete torrents", http.StatusInternalServerError)
@@ -508,41 +504,19 @@ func (s *Server) handleRunRepair(w http.ResponseWriter, r *http.Request) {
 		Protocol          string `json:"protocol,omitempty"`
 	}
 	if r.Body != nil && r.ContentLength != 0 {
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 			http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 	}
-	ignoreLastChecked := req.IgnoreLastChecked || req.Force
-	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get("ignore_last_checked"))) {
-	case "1", "true", "yes", "on":
-		ignoreLastChecked = true
-	}
-	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get("force"))) {
-	case "1", "true", "yes", "on":
-		ignoreLastChecked = true
-	}
-	autoRepair := req.AutoRepair
-	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get("auto_repair"))) {
-	case "1", "true", "yes", "on":
-		autoRepair = new(true)
-	case "0", "false", "no", "off":
-		autoRepair = new(false)
-	}
-	unrestrictLink := req.UnrestrictLink
-	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get("unrestrict_link"))) {
-	case "1", "true", "yes", "on":
-		unrestrictLink = true
-	case "0", "false", "no", "off":
-		unrestrictLink = false
-	}
-	verifyContent := req.VerifyContent
-	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get("verify_content"))) {
-	case "1", "true", "yes", "on":
-		verifyContent = new(true)
-	case "0", "false", "no", "off":
-		verifyContent = new(false)
-	}
+	// Query parameters override the body. ignore_last_checked/force can only
+	// turn the flag on.
+	q := r.URL.Query()
+	ignoreLastChecked := req.IgnoreLastChecked || req.Force ||
+		boolOr(queryBool(q, "ignore_last_checked"), false) || boolOr(queryBool(q, "force"), false)
+	autoRepair := cmp.Or(queryBool(q, "auto_repair"), req.AutoRepair)
+	unrestrictLink := boolOr(queryBool(q, "unrestrict_link"), req.UnrestrictLink)
+	verifyContent := cmp.Or(queryBool(q, "verify_content"), req.VerifyContent)
 	protocolScope := strings.ToLower(strings.TrimSpace(req.Protocol))
 	if queryProtocol := strings.TrimSpace(r.URL.Query().Get("protocol")); queryProtocol != "" {
 		protocolScope = strings.ToLower(queryProtocol)
@@ -574,6 +548,33 @@ func (s *Server) handleRunRepair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	utils.JSONResponse(w, map[string]string{"run_id": id}, http.StatusOK)
+}
+
+// queryBool parses a lenient boolean query value; nil when absent or
+// unrecognized.
+func queryBool(q url.Values, key string) *bool {
+	switch strings.ToLower(strings.TrimSpace(q.Get(key))) {
+	case "1", "true", "yes", "on":
+		return new(true)
+	case "0", "false", "no", "off":
+		return new(false)
+	}
+	return nil
+}
+
+func boolOr(v *bool, fallback bool) bool {
+	if v != nil {
+		return *v
+	}
+	return fallback
+}
+
+// repairErrStatus maps a repair-service error to an HTTP status.
+func repairErrStatus(err error) int {
+	if strings.Contains(err.Error(), "already running") {
+		return http.StatusConflict
+	}
+	return http.StatusBadRequest
 }
 
 func (s *Server) handleStopRepair(w http.ResponseWriter, _ *http.Request) {
@@ -676,10 +677,7 @@ func (s *Server) handleRecheckMedia(w http.ResponseWriter, r *http.Request) {
 		req.Fix,
 	)
 	if err != nil {
-		status := http.StatusBadRequest
-		if strings.Contains(err.Error(), "already running") {
-			status = http.StatusConflict
-		}
+		status := repairErrStatus(err)
 		// Returning the run record (when present) gives the caller the
 		// failure detail captured in storage as well as the message.
 		if run != nil {
@@ -701,7 +699,7 @@ func (s *Server) handleRecheckEntry(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "No entry name provided", http.StatusBadRequest)
 		return
 	}
-	fix := r.URL.Query().Get("fix") == "true"
+	fix := boolOr(queryBool(r.URL.Query(), "fix"), false)
 	svc := s.manager.Repair()
 	if svc == nil {
 		http.Error(w, "Repair service not available", http.StatusServiceUnavailable)
@@ -719,40 +717,25 @@ func (s *Server) handleRecheckEntry(w http.ResponseWriter, r *http.Request) {
 // broken entries. Body: {"names": ["...", ...]}. Empty/missing names ⇒ fix
 // every broken entry in storage.
 func (s *Server) handleFixBroken(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Names []string `json:"names,omitempty"`
-	}
-	// Body is optional; ignore decode errors for empty / missing bodies.
-	if r.Body != nil && r.ContentLength != 0 {
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-	}
-	svc := s.manager.Repair()
-	if svc == nil {
-		http.Error(w, "Repair service not available", http.StatusServiceUnavailable)
-		return
-	}
-	run, err := svc.FixBroken(s.manager.Context(), req.Names)
-	if err != nil {
-		status := http.StatusBadRequest
-		if strings.Contains(err.Error(), "already running") {
-			status = http.StatusConflict
-		}
-		http.Error(w, err.Error(), status)
-		return
-	}
-	utils.JSONResponse(w, run, http.StatusOK)
+	s.runBrokenAction(w, r, (*repair.Service).FixBroken)
 }
 
 // handleClearBroken clears currently broken files without asking the Arr to
 // re-search for replacements. Body: {"names": ["...", ...]}. Empty/missing
 // names ⇒ clear every broken entry in storage.
 func (s *Server) handleClearBroken(w http.ResponseWriter, r *http.Request) {
+	s.runBrokenAction(w, r, (*repair.Service).ClearBroken)
+}
+
+func (s *Server) runBrokenAction(
+	w http.ResponseWriter,
+	r *http.Request,
+	action func(*repair.Service, context.Context, []string) (*storage.RepairRun, error),
+) {
 	var req struct {
 		Names []string `json:"names,omitempty"`
 	}
+	// Body is optional.
 	if r.Body != nil && r.ContentLength != 0 {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
@@ -764,13 +747,9 @@ func (s *Server) handleClearBroken(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Repair service not available", http.StatusServiceUnavailable)
 		return
 	}
-	run, err := svc.ClearBroken(s.manager.Context(), req.Names)
+	run, err := action(svc, s.manager.Context(), req.Names)
 	if err != nil {
-		status := http.StatusBadRequest
-		if strings.Contains(err.Error(), "already running") {
-			status = http.StatusConflict
-		}
-		http.Error(w, err.Error(), status)
+		http.Error(w, err.Error(), repairErrStatus(err))
 		return
 	}
 	utils.JSONResponse(w, run, http.StatusOK)
@@ -806,10 +785,7 @@ func (s *Server) handleClearRepairState(w http.ResponseWriter, r *http.Request) 
 	}
 	result, err := svc.ClearStates(statuses)
 	if err != nil {
-		status := http.StatusBadRequest
-		if strings.Contains(err.Error(), "already running") {
-			status = http.StatusConflict
-		}
+		status := repairErrStatus(err)
 		http.Error(w, err.Error(), status)
 		return
 	}

@@ -33,14 +33,14 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 	if downloadFolder == "" {
 		downloadFolder = config.Get().DownloadFolder
 	}
-	skipMultiSeason := r.FormValue("skipMultiSeason") == "true"
+	skipMultiSeason := boolOr(queryBool(r.Form, "skipMultiSeason"), false)
 
-	dlUncached := r.FormValue("downloadUncached") == "true"
+	dlUncached := boolOr(queryBool(r.Form, "downloadUncached"), false)
 	var downloadUncached *bool
 	if dlUncached {
 		downloadUncached = &dlUncached
 	}
-	rmTrackerUrls := r.FormValue("rmTrackerUrls") == "true"
+	rmTrackerUrls := boolOr(queryBool(r.Form, "rmTrackerUrls"), false)
 
 	// Check config setting - if always remove tracker URLs is enabled, force it to true
 	cfg := config.Get()
