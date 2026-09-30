@@ -46,8 +46,8 @@ func TestMagnetsUnmarshalJSON(t *testing.T) {
 				t.Fatalf("Unmarshal() returned %d magnets, want %d", len(magnets), len(tt.want))
 			}
 			for i, want := range tt.want {
-				if magnets[i].Id != want {
-					t.Errorf("magnets[%d].Id = %d, want %d", i, magnets[i].Id, want)
+				if magnets[i].ID != want {
+					t.Errorf("magnets[%d].Id = %d, want %d", i, magnets[i].ID, want)
 				}
 			}
 		})
@@ -84,7 +84,7 @@ func TestGetTorrentSelectsRequestedMagnetFromArray(t *testing.T) {
 }
 
 func TestFindMagnetReturnsNotFound(t *testing.T) {
-	_, err := findMagnet(Magnets{{Id: 1}}, "2")
+	_, err := findMagnet(Magnets{{ID: 1}}, "2")
 	if !errors.Is(err, customerror.TorrentNotFoundError) {
 		t.Fatalf("findMagnet() error = %v, want TorrentNotFoundError", err)
 	}

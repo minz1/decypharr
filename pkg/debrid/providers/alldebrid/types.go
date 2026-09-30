@@ -17,7 +17,7 @@ type MagnetFile struct {
 	Elements []MagnetFile `json:"e"`
 }
 type magnetInfo struct {
-	Id             int          `json:"id"`
+	ID             int          `json:"id"`
 	Filename       string       `json:"filename"`
 	Size           int64        `json:"size"`
 	Hash           string       `json:"hash"`
@@ -104,7 +104,7 @@ type DownloadLink struct {
 		Streaming []any  `json:"streaming"`
 		Paws      bool   `json:"paws"`
 		Filesize  int    `json:"filesize"`
-		Id        string `json:"id"`
+		ID        string `json:"id"`
 		Path      []struct {
 			Name string `json:"n"`
 			Size int    `json:"s"`
