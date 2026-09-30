@@ -54,7 +54,7 @@ func (f *FS) Destroy() {
 }
 
 // Statfs returns filesystem statistics.
-func (f *FS) Statfs(path string, stat *fuse.Statfs_t) int {
+func (f *FS) Statfs(_ string, stat *fuse.Statfs_t) int {
 	stat.Bsize = 4096
 	stat.Frsize = 4096
 	stat.Blocks = 1024 * 1024 * 1024 // 4TB virtual size
@@ -67,7 +67,7 @@ func (f *FS) Statfs(path string, stat *fuse.Statfs_t) int {
 }
 
 // Getattr returns file/directory attributes.
-func (f *FS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
+func (f *FS) Getattr(path string, stat *fuse.Stat_t, _ uint64) int {
 	// Root directory
 	if path == "/" {
 		stat.Mode = fuse.S_IFDIR | 0755
@@ -116,8 +116,8 @@ func (f *FS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 func (f *FS) Readdir(
 	path string,
 	fill func(name string, stat *fuse.Stat_t, ofst int64) bool,
-	ofst int64,
-	fh uint64,
+	_ int64,
+	_ uint64,
 ) int {
 	// Always add . and ..
 	fill(".", nil, 0)
@@ -196,7 +196,7 @@ func (f *FS) entryStat(info *manager.FileInfo) *fuse.Stat_t {
 }
 
 // CreateEx is required by fuse.FileSystemOpenEx but this is a read-only filesystem.
-func (f *FS) CreateEx(path string, mode uint32, fi *fuse.FileInfo_t) int {
+func (f *FS) CreateEx(_ string, mode uint32, fi *fuse.FileInfo_t) int {
 	return -fuse.EACCES
 }
 
@@ -249,7 +249,7 @@ func (f *FS) Open(path string, flags int) (int, uint64) {
 }
 
 // Read reads from a file.
-func (f *FS) Read(path string, buff []byte, off int64, fh uint64) int {
+func (f *FS) Read(_ string, buff []byte, off int64, fh uint64) int {
 	handle := f.handles.Get(fh)
 	if handle == nil {
 		return -fuse.EBADF
@@ -332,17 +332,17 @@ func (f *FS) Opendir(path string) (int, uint64) {
 }
 
 // Releasedir closes a directory.
-func (f *FS) Releasedir(path string, fh uint64) int {
+func (f *FS) Releasedir(_ string, fh uint64) int {
 	return 0
 }
 
 // Flush is called when a file descriptor is closed.
-func (f *FS) Flush(path string, fh uint64) int {
+func (f *FS) Flush(_ string, fh uint64) int {
 	return 0
 }
 
 // Fsync synchronizes file contents.
-func (f *FS) Fsync(path string, datasync bool, fh uint64) int {
+func (f *FS) Fsync(_ string, datasync bool, fh uint64) int {
 	return 0
 }
 
@@ -397,7 +397,7 @@ func (f *FS) Rmdir(path string) int {
 // Access checks file access permissions
 // This is a no-op - returning EACCES for write checks causes Windows media
 // players to refuse to open files even for reading.
-func (f *FS) Access(path string, mask uint32) int {
+func (f *FS) Access(_ string, mask uint32) int {
 	return 0
 }
 

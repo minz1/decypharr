@@ -942,7 +942,7 @@ func (c *Cache) PurgeCache() map[string]any {
 func (c *Cache) Close() error {
 	c.cancel()
 
-	c.items.Range(func(key string, item *CacheItem) bool {
+	c.items.Range(func(_ string, item *CacheItem) bool {
 		item.Close()
 		return true
 	})
@@ -1372,7 +1372,7 @@ func (item *CacheItem) WriteAtNoOverwrite(p []byte, off int64) (n, skipped int, 
 // persisted metadata itself no longer needs adjusting here — flushMetadata
 // re-derives info.Rs fresh from item.buf.PersistedRanges() on every write, so
 // a reopen never claims bytes that are now a hole on disk.
-func (item *CacheItem) onBufferEvict(off, length int64) {
+func (item *CacheItem) onBufferEvict(_, length int64) {
 	if length <= 0 {
 		return
 	}

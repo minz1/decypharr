@@ -1447,11 +1447,11 @@ func (dl *downloader) streamChunk(start, end int64) (int64, error) {
 }
 
 // setMaxOffset extends the download range.
-func (dl *downloader) setMaxOffset(max int64) {
+func (dl *downloader) setMaxOffset(target int64) {
 	dl.mu.Lock()
-	advanced := max > dl.maxOffset
+	advanced := target > dl.maxOffset
 	if advanced {
-		dl.maxOffset = max
+		dl.maxOffset = target
 	}
 	dl.mu.Unlock()
 

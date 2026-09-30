@@ -23,7 +23,7 @@ func (m *Manager) mountWithRetry(ctx context.Context, maxRetries int) error {
 		retry.Attempts(uint(maxRetries)+1),
 		retry.Delay(config.DefaultRetryDelay),
 		retry.DelayType(retry.FixedDelay),
-		retry.RetryIf(func(err error) bool {
+		retry.RetryIf(func(_ error) bool {
 			return true // Always retry on error
 		}),
 	)

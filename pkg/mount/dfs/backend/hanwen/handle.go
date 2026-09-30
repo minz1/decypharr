@@ -90,7 +90,7 @@ func (fh *Handle) readFromStaticContent(offset, size int64) []byte {
 }
 
 // Release closes the file handle.
-func (fh *Handle) Release(ctx context.Context) syscall.Errno {
+func (fh *Handle) Release(_ context.Context) syscall.Errno {
 	if !fh.closed.CompareAndSwap(false, true) {
 		return 0
 	}
@@ -102,10 +102,10 @@ func (fh *Handle) Release(ctx context.Context) syscall.Errno {
 	return 0
 }
 
-func (fh *Handle) Flush(ctx context.Context) syscall.Errno {
+func (fh *Handle) Flush(_ context.Context) syscall.Errno {
 	return 0
 }
 
-func (fh *Handle) Fsync(ctx context.Context, flags uint32) syscall.Errno {
+func (fh *Handle) Fsync(_ context.Context, flags uint32) syscall.Errno {
 	return 0
 }
