@@ -6,10 +6,12 @@ import (
 	"io"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/sourcegraph/conc/pool"
 
 	"github.com/sirrobot01/decypharr/internal/nntp"
+	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
 // segmentResult holds a fetched segment and its index for ordered writing.
@@ -40,6 +42,11 @@ func (u *Usenet) Download(
 
 	if len(file.Segments) == 0 {
 		return fmt.Errorf("file has no segments: %s", file.Name)
+	}
+	if file.IsEncrypted {
+		// Raw segments hold AES ciphertext; only the streaming reader
+		// decrypts, so route encrypted archive members through it.
+		return u.downloadDecrypted(ctx, file, writer, progressCallback)
 	}
 
 	// Track progress
@@ -190,4 +197,48 @@ func (u *Usenet) Download(
 		Msg("Download complete")
 
 	return nil
+}
+
+// downloadDecrypted copies a whole file through the decrypting reader stack.
+// ponytail: sequential, reader read-ahead only; the parallel raw path above is
+// faster, so extend it with CBC decryption if encrypted downloads matter.
+func (u *Usenet) downloadDecrypted(
+	ctx context.Context,
+	file *storage.NZBFile,
+	writer io.Writer,
+	progressCallback ProgressCallback,
+) error {
+	entry, err := u.createEntry(file, u.prefetchSize, RetentionWindow)
+	if err != nil {
+		return err
+	}
+	defer entry.cleanup()
+	readerAt, size, err := entry.getOrCreateReader()
+	if err != nil {
+		return err
+	}
+	cursor := readerAt.OpenCursor()
+	defer cursor.Close()
+
+	dst := &progressWriter{w: writer, callback: progressCallback, start: time.Now()}
+	_, err = safeCopyBuffer(ctx, dst, newContextSectionReader(ctx, cursor, 0, size), nil)
+	return err
+}
+
+// progressWriter reports cumulative bytes and average throughput per write.
+type progressWriter struct {
+	w        io.Writer
+	callback ProgressCallback
+	start    time.Time
+	written  int64
+}
+
+func (p *progressWriter) Write(b []byte) (int, error) {
+	n, err := p.w.Write(b)
+	p.written += int64(n)
+	if p.callback != nil && n > 0 {
+		elapsed := max(time.Since(p.start), time.Millisecond)
+		p.callback(p.written, int64(float64(p.written)/elapsed.Seconds()))
+	}
+	return n, err
 }
