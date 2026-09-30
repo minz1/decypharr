@@ -178,23 +178,6 @@ func TestReaperSkipsPingWhenPoolBusy(t *testing.T) {
 	}
 }
 
-func TestNormalizeTimeoutsPingInterval(t *testing.T) {
-	t.Parallel()
-	got := normalizeTimeouts(TimeoutConfig{})
-	if got.PingInterval != 30*time.Second {
-		t.Errorf("default PingInterval = %v, want 30s", got.PingInterval)
-	}
-	if got.IdleTimeout != 5*time.Minute {
-		t.Errorf("default IdleTimeout = %v, want 5m", got.IdleTimeout)
-	}
-
-	// PingInterval must stay inside the idle window.
-	got = normalizeTimeouts(TimeoutConfig{IdleTimeout: 20 * time.Second, PingInterval: time.Minute})
-	if got.PingInterval != 10*time.Second {
-		t.Errorf("clamped PingInterval = %v, want 10s", got.PingInterval)
-	}
-}
-
 // TestReaperFlushesPoolWhenEveryPingTimesOut: when the path to a provider
 // goes dark, one timed-out ping condemns the whole sweep. The rest of the
 // batch is discarded unpinged instead of paying the ping budget each, and
@@ -275,22 +258,28 @@ func TestReaperKeepsPoolWhenSomePingsAnswer(t *testing.T) {
 	}
 }
 
-func TestNormalizeTimeoutsKeepalivePing(t *testing.T) {
+// A configured idle window must pull the derived keepalive thresholds inside
+// it, and a keepalive ping may never outlast the cadence it is issued at.
+func TestSetIdleTimeoutClampsDerivedThresholds(t *testing.T) {
 	t.Parallel()
-	got := normalizeTimeouts(TimeoutConfig{})
-	if got.KeepalivePingTimeout != 5*time.Second {
-		t.Errorf("default KeepalivePingTimeout = %v, want 5s", got.KeepalivePingTimeout)
-	}
-	if got.PingTimeout != 1500*time.Millisecond {
-		t.Errorf("default PingTimeout = %v, want 1.5s", got.PingTimeout)
-	}
-
-	// A keepalive ping may not outlast the cadence it is issued at.
-	got = normalizeTimeouts(TimeoutConfig{IdleTimeout: 20 * time.Second, KeepalivePingTimeout: time.Minute})
-	if got.PingInterval != 10*time.Second {
-		t.Fatalf("PingInterval = %v, want 10s", got.PingInterval)
-	}
-	if got.KeepalivePingTimeout != 10*time.Second {
-		t.Errorf("clamped KeepalivePingTimeout = %v, want 10s", got.KeepalivePingTimeout)
+	for _, tc := range []struct {
+		idle, stale, ping, keepalive time.Duration
+	}{
+		{idle: time.Hour, stale: defaultStaleThreshold, ping: defaultPingInterval, keepalive: defaultKeepalivePingTimeout},
+		{idle: 20 * time.Second, stale: 10 * time.Second, ping: 10 * time.Second, keepalive: defaultKeepalivePingTimeout},
+		{idle: 4 * time.Second, stale: 2 * time.Second, ping: 2 * time.Second, keepalive: 2 * time.Second},
+	} {
+		c := &Client{
+			staleThreshold: defaultStaleThreshold,
+			pingInterval:   defaultPingInterval,
+			keepalivePing:  defaultKeepalivePingTimeout,
+		}
+		c.setIdleTimeout(tc.idle)
+		if c.idleTimeout != tc.idle || c.staleThreshold != tc.stale || c.pingInterval != tc.ping ||
+			c.keepalivePing != tc.keepalive {
+			t.Errorf("setIdleTimeout(%v) = idle %v stale %v ping %v keepalive %v, want %v %v %v %v",
+				tc.idle, c.idleTimeout, c.staleThreshold, c.pingInterval, c.keepalivePing,
+				tc.idle, tc.stale, tc.ping, tc.keepalive)
+		}
 	}
 }

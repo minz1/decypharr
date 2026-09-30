@@ -286,10 +286,6 @@ func startSilentServer(b *testing.B) (addr *net.TCPAddr) {
 func BenchmarkAcquireDeadPrimary(b *testing.B) {
 	addr := startSilentServer(b)
 
-	saved := timeouts
-	timeouts.HandshakeTimeout = 1 * time.Second
-	b.Cleanup(func() { timeouts = saved })
-
 	dead := config.UsenetProvider{Host: "127.0.0.1", Port: addr.Port, MaxConnections: 4, Priority: 1}
 	deadPool := &ProviderPool{
 		conns:  make([]*connectionEntry, 0, dead.MaxConnections),
@@ -304,6 +300,7 @@ func BenchmarkAcquireDeadPrimary(b *testing.B) {
 		[]config.UsenetProvider{dead, healthy},
 		[]*ProviderPool{deadPool, healthyPool},
 	)
+	c.handshakeTimeout = time.Second
 	ctx := context.Background()
 
 	for b.Loop() {

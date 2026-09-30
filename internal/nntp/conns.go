@@ -19,9 +19,6 @@ import (
 	nntpyenc "github.com/sirrobot01/decypharr/internal/nntp/yenc"
 )
 
-// Note: Timeout values are defined in TimeoutConfig (client.go).
-// Use timeouts.StreamBodyTimeout for read deadlines.
-
 // bodyBufPool reuses storage for decoded articles not retained by a caller.
 var bodyBufPool = sync.Pool{
 	New: func() any {
@@ -182,7 +179,7 @@ func (j *bodyJanitor) sweep() {
 
 func (c *Connection) readResponseWithDeadline(timeout time.Duration) (Response, error) {
 	if timeout <= 0 {
-		timeout = timeouts.StreamBodyTimeout
+		timeout = streamBodyTimeout
 	}
 	_ = c.conn.SetReadDeadline(time.Now().Add(timeout))
 	defer func() { _ = c.conn.SetReadDeadline(time.Time{}) }()
@@ -191,7 +188,7 @@ func (c *Connection) readResponseWithDeadline(timeout time.Duration) (Response, 
 
 func (c *Connection) readResponseCodeWithDeadline(timeout time.Duration) (int, []byte, error) {
 	if timeout <= 0 {
-		timeout = timeouts.StreamBodyTimeout
+		timeout = streamBodyTimeout
 	}
 	_ = c.conn.SetReadDeadline(time.Now().Add(timeout))
 	defer func() { _ = c.conn.SetReadDeadline(time.Time{}) }()
@@ -298,7 +295,7 @@ func (c *Connection) ping(timeout time.Duration) error {
 		return NewConnectionError(errors.New("connection is nil"))
 	}
 	if timeout <= 0 {
-		timeout = timeouts.PingTimeout
+		timeout = defaultPingTimeout
 	}
 	_ = c.conn.SetDeadline(time.Now().Add(timeout))
 	c.writeTimeout = timeout
@@ -328,7 +325,7 @@ func (c *Connection) sendCommand(command string) error {
 func (c *Connection) sendCommandArg(command, arg string) error {
 	writeTimeout := c.writeTimeout
 	if writeTimeout <= 0 {
-		writeTimeout = timeouts.HandshakeTimeout
+		writeTimeout = defaultHandshakeTimeout
 	}
 	_ = c.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 	defer func() { _ = c.conn.SetWriteDeadline(time.Time{}) }()
@@ -431,7 +428,7 @@ func (c *Connection) readBodyBuffered(dst []byte, source BodyBuffer, pooled bool
 			c.bodySource = nil
 		}()
 	}
-	res, err := c.nextBodyWithIdleDeadline(timeouts.StreamBodyTimeout)
+	res, err := c.nextBodyWithIdleDeadline(streamBodyTimeout)
 	if err != nil {
 		if pooled {
 			putBodyBuf(res.Data)
@@ -495,7 +492,7 @@ func (c *Connection) GetBody(messageID string) ([]byte, error) {
 		return nil, NewConnectionError(fmt.Errorf("failed to send BODY command: %w", err))
 	}
 
-	code, message, err := c.readResponseCodeWithDeadline(timeouts.StreamBodyTimeout)
+	code, message, err := c.readResponseCodeWithDeadline(streamBodyTimeout)
 	if err != nil {
 		return nil, NewConnectionError(fmt.Errorf("failed to read body response: %w", err))
 	}
@@ -505,7 +502,7 @@ func (c *Connection) GetBody(messageID string) ([]byte, error) {
 	}
 
 	// Set read deadline to prevent hanging on stalled servers
-	_ = c.conn.SetReadDeadline(time.Now().Add(timeouts.StreamBodyTimeout))
+	_ = c.conn.SetReadDeadline(time.Now().Add(streamBodyTimeout))
 	defer func() { _ = c.conn.SetReadDeadline(time.Time{}) }()
 
 	body, err := c.readDotBytes()
@@ -580,7 +577,7 @@ func (c *Connection) PipelineBodies(messageIDs []string, destinations []BodyDest
 
 	writeTimeout := c.writeTimeout
 	if writeTimeout <= 0 {
-		writeTimeout = timeouts.HandshakeTimeout
+		writeTimeout = defaultHandshakeTimeout
 	}
 	_ = c.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 	for i, messageID := range messageIDs {
@@ -726,7 +723,7 @@ func (c *Connection) Stat(messageID string) (articleNumber int, echoedID string,
 		return 0, "", NewConnectionError(fmt.Errorf("failed to send STAT: %w", err))
 	}
 
-	resp, err := c.readResponseWithDeadline(timeouts.StreamBodyTimeout)
+	resp, err := c.readResponseWithDeadline(streamBodyTimeout)
 	if err != nil {
 		return 0, "", NewConnectionError(fmt.Errorf("failed to read STAT response: %w", err))
 	}
@@ -765,7 +762,7 @@ func (c *Connection) StatBatch(messageIDs []string) ([]StatResult, error) {
 
 	writeTimeout := c.writeTimeout
 	if writeTimeout <= 0 {
-		writeTimeout = timeouts.HandshakeTimeout
+		writeTimeout = defaultHandshakeTimeout
 	}
 	_ = c.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 	for i, messageID := range messageIDs {
@@ -785,7 +782,7 @@ func (c *Connection) StatBatch(messageIDs []string) ([]StatResult, error) {
 	_ = c.conn.SetWriteDeadline(time.Time{})
 
 	for i := range results {
-		resp, err := c.readResponseWithDeadline(timeouts.StreamBodyTimeout)
+		resp, err := c.readResponseWithDeadline(streamBodyTimeout)
 		if err != nil {
 			pipelineErr := NewConnectionError(fmt.Errorf("read STAT pipeline at %d/%d: %w", i+1, len(results), err))
 			markStatSuffixError(results, i, pipelineErr)
