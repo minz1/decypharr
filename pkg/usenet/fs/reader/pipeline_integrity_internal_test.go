@@ -313,7 +313,8 @@ func TestPipelineAcceptedBufferRemainsPrivateDuringRecovery(t *testing.T) {
 			case <-time.After(5 * time.Second):
 				t.Fatal("fetch did not join")
 			}
-			if action == "idle" {
+			switch action {
+			case "idle":
 				if fetchErr != nil || sr.cache.residentN.Load() != 0 || sr.cache.extentPool.inUse.Load() != 0 {
 					t.Fatalf(
 						"idle staging retained ownership: error=%v, resident=%d",
@@ -321,15 +322,17 @@ func TestPipelineAcceptedBufferRemainsPrivateDuringRecovery(t *testing.T) {
 						sr.cache.residentN.Load(),
 					)
 				}
-			} else if action == "disconnect" {
+			case "disconnect":
 				if typed, ok := errors.AsType[*nntp.Error](
 					fetchErr,
 				); !ok || typed.Type != nntp.ErrorTypeConnection || !errors.Is(fetchErr, nntp.ErrAllProvidersFailed) ||
 					!strings.Contains(fetchErr.Error(), "article 2/2:") {
 					t.Fatalf("pending connection failure lost identity or index: %v", fetchErr)
 				}
-			} else if !errors.Is(fetchErr, context.Canceled) {
-				t.Fatalf("cancellation identity = %v", fetchErr)
+			default:
+				if !errors.Is(fetchErr, context.Canceled) {
+					t.Fatalf("cancellation identity = %v", fetchErr)
+				}
 			}
 			if action == "cancel" || action == "disconnect" {
 				if n, present := sr.cache.ReadRangeInto(

@@ -54,7 +54,10 @@ func TestFetchSchedulerBoundsConcurrency(t *testing.T) {
 		wg.Add(1)
 		if !scheduler.submit(context.Background(), priorityDemand, func() {
 			n := active.Add(1)
-			for old := peak.Load(); n > old && !peak.CompareAndSwap(old, n); old = peak.Load() {
+			for old := peak.Load(); n > old; old = peak.Load() {
+				if peak.CompareAndSwap(old, n) {
+					break
+				}
 			}
 			started <- struct{}{}
 			<-release

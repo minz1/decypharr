@@ -16,16 +16,13 @@ import (
 )
 
 // decryptionBufPool stores *[]byte so Put does not box the slice header.
+//
+//nolint:gochecknoglobals // process-wide scratch pool shared by every reader
 var decryptionBufPool = sync.Pool{}
 
 func acquireDecryptionBuffer(size int) *[]byte {
-	v := decryptionBufPool.Get()
-	if v == nil {
-		buf := make([]byte, size)
-		return &buf
-	}
-	bufPtr := v.(*[]byte)
-	if cap(*bufPtr) < size {
+	bufPtr, ok := decryptionBufPool.Get().(*[]byte)
+	if !ok || cap(*bufPtr) < size {
 		buf := make([]byte, size)
 		return &buf
 	}
@@ -37,7 +34,7 @@ func releaseDecryptionBuffer(buf *[]byte) {
 	decryptionBufPool.Put(buf)
 }
 
-// StreamingReader provides io.ReaderAt over NNTP segments with automatic
+// StreamingReader provides [io.ReaderAt] over NNTP segments with automatic
 // caching, prefetching, and error recovery.
 //
 // Key features:
@@ -116,6 +113,74 @@ type Cursor struct {
 	queuedThrough atomic.Int64
 
 	closed atomic.Bool
+}
+
+// NewStreamingReader creates a new streaming reader for NNTP segments.
+func NewStreamingReader(
+	ctx context.Context,
+	client *nntp.Client,
+	segments []SegmentMeta,
+	opts ...Option,
+) (*StreamingReader, error) {
+	if len(segments) == 0 {
+		return nil, fmt.Errorf("no segments provided")
+	}
+	if client == nil {
+		return nil, fmt.Errorf("NNTP client is required")
+	}
+
+	// Apply configuration options
+	config := DefaultConfig()
+	for _, opt := range opts {
+		opt(&config)
+	}
+	config.BodyPipelineDepth = appconfig.NormalizeBodyPipelineDepth(config.BodyPipelineDepth)
+
+	ctx, cancel := context.WithCancel(ctx)
+	logger := zerolog.Nop() // Use logger from config if available
+
+	stats := &Stats{}
+
+	// Create cache
+	cache, err := NewSegmentCache(ctx, segments, config, stats, logger)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("create cache: %w", err)
+	}
+
+	// Create fetcher
+	fetcher := NewSegmentFetcher(ctx, client, cache, config, stats, logger)
+
+	sr := &StreamingReader{
+		cache:     cache,
+		fetcher:   fetcher,
+		config:    config,
+		totalSize: cache.TotalSize(),
+		segCount:  cache.SegmentCount(),
+		cursors:   make(map[*Cursor]struct{}),
+		ctx:       ctx,
+		cancel:    cancel,
+		logger:    logger,
+		stats:     stats,
+	}
+
+	return sr, nil
+}
+
+// NewStreamingReaderWithEncryption creates an encrypted reader.
+func NewStreamingReaderWithEncryption(
+	ctx context.Context,
+	client *nntp.Client,
+	segments []SegmentMeta,
+	encConfig EncryptionConfig,
+	opts ...Option,
+) (*StreamingReader, error) {
+	sr, err := NewStreamingReader(ctx, client, segments, opts...)
+	if err != nil {
+		return nil, err
+	}
+	sr.encryption = encConfig
+	return sr, nil
 }
 
 // OpenCursor registers and returns a new cursor. Callers must Close it.
@@ -205,58 +270,6 @@ func (sr *StreamingReader) publishConsumedFloor() {
 	}
 }
 
-// NewStreamingReader creates a new streaming reader for NNTP segments.
-func NewStreamingReader(
-	ctx context.Context,
-	client *nntp.Client,
-	segments []SegmentMeta,
-	opts ...Option,
-) (*StreamingReader, error) {
-	if len(segments) == 0 {
-		return nil, fmt.Errorf("no segments provided")
-	}
-	if client == nil {
-		return nil, fmt.Errorf("NNTP client is required")
-	}
-
-	// Apply configuration options
-	config := DefaultConfig()
-	for _, opt := range opts {
-		opt(&config)
-	}
-	config.BodyPipelineDepth = appconfig.NormalizeBodyPipelineDepth(config.BodyPipelineDepth)
-
-	ctx, cancel := context.WithCancel(ctx)
-	logger := zerolog.Nop() // Use logger from config if available
-
-	stats := &Stats{}
-
-	// Create cache
-	cache, err := NewSegmentCache(ctx, segments, config, stats, logger)
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("create cache: %w", err)
-	}
-
-	// Create fetcher
-	fetcher := NewSegmentFetcher(ctx, client, cache, config, stats, logger)
-
-	sr := &StreamingReader{
-		cache:     cache,
-		fetcher:   fetcher,
-		config:    config,
-		totalSize: cache.TotalSize(),
-		segCount:  cache.SegmentCount(),
-		cursors:   make(map[*Cursor]struct{}),
-		ctx:       ctx,
-		cancel:    cancel,
-		logger:    logger,
-		stats:     stats,
-	}
-
-	return sr, nil
-}
-
 // seekAbandonedWindow reports whether a read landing on [startSeg, endSeg]
 // after a previous read that ended at prevEnd constitutes a seek that
 // abandons the queued read-ahead window. Reads within one prefetch window of
@@ -271,23 +284,7 @@ func seekAbandonedWindow(prevEnd int64, startSeg, endSeg, ahead int) bool {
 	return int64(startSeg) > prevEnd+int64(ahead) || int64(endSeg) < prevEnd-int64(ahead)
 }
 
-// NewStreamingReaderWithEncryption creates an encrypted reader.
-func NewStreamingReaderWithEncryption(
-	ctx context.Context,
-	client *nntp.Client,
-	segments []SegmentMeta,
-	encConfig EncryptionConfig,
-	opts ...Option,
-) (*StreamingReader, error) {
-	sr, err := NewStreamingReader(ctx, client, segments, opts...)
-	if err != nil {
-		return nil, err
-	}
-	sr.encryption = encConfig
-	return sr, nil
-}
-
-// ReadAt implements io.ReaderAt with blocking semantics.
+// ReadAt implements [io.ReaderAt] with blocking semantics.
 // Blocks until the requested byte range is available.
 //
 // THE CRITICAL PATH: Uses Pin/Unpin to prevent the race condition.
@@ -526,7 +523,7 @@ func (sr *StreamingReader) readAtEncrypted(ctx context.Context, cur *Cursor, p [
 		if remainder := decryptedLen % crypto.BlockSize; remainder != 0 {
 			// Pad with zeros for decryption
 			if int64(len(buf)) >= decryptedLen+(crypto.BlockSize-remainder) {
-				for i := range int64(crypto.BlockSize - remainder) {
+				for i := range crypto.BlockSize - remainder {
 					buf[decryptedLen+i] = 0
 				}
 				decryptedLen += crypto.BlockSize - remainder
@@ -641,7 +638,7 @@ func (sr *StreamingReader) ReleaseIdleDelivery() {
 	sr.fetcher.CancelPendingPrefetch()
 }
 
-// Read implements io.Reader using ReadAt with tracked position.
+// Read implements [io.Reader] using ReadAt with tracked position.
 func (sr *StreamingReader) Read(p []byte) (int, error) {
 	if sr.closed.Load() {
 		return 0, io.ErrClosedPipe
@@ -662,7 +659,7 @@ func (sr *StreamingReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// Seek implements io.Seeker.
+// Seek implements [io.Seeker].
 func (sr *StreamingReader) Seek(offset int64, whence int) (int64, error) {
 	if sr.closed.Load() {
 		return 0, io.ErrClosedPipe
