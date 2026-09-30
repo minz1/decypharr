@@ -60,6 +60,7 @@ func TestPoolBudgetsBelongToEachRun(t *testing.T) {
 }
 
 func TestStandaloneCacheClosesItsPrivatePools(t *testing.T) {
+	t.Parallel()
 	cache, err := NewSegmentCache(t.Context(), mkSegs(4, 1024), DefaultConfig(), &ReaderStats{}, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)

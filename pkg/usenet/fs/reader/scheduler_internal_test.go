@@ -8,6 +8,7 @@ import (
 )
 
 func TestFetchSchedulerRunsDemandBeforeQueuedPrefetch(t *testing.T) {
+	t.Parallel()
 	scheduler := NewFetchScheduler(1)
 	t.Cleanup(scheduler.Close)
 
@@ -40,6 +41,7 @@ func TestFetchSchedulerRunsDemandBeforeQueuedPrefetch(t *testing.T) {
 }
 
 func TestFetchSchedulerBoundsConcurrency(t *testing.T) {
+	t.Parallel()
 	const workers = 3
 	scheduler := NewFetchScheduler(workers)
 	t.Cleanup(scheduler.Close)
@@ -73,6 +75,7 @@ func TestFetchSchedulerBoundsConcurrency(t *testing.T) {
 }
 
 func TestFetchSchedulerCloseSettlesAcceptedTasks(t *testing.T) {
+	t.Parallel()
 	scheduler := NewFetchScheduler(2)
 	var accepted, settled atomic.Int64
 	start := make(chan struct{})

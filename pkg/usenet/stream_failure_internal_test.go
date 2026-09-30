@@ -11,6 +11,7 @@ import (
 )
 
 func TestPreStreamChecksPreservesArticleNotFoundClassification(t *testing.T) {
+	t.Parallel()
 	client := &Usenet{failedFiles: xsync.NewMap[string, error]()}
 	file := &storage.NZBFile{
 		NzbID:    "download-1",

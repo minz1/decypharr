@@ -9,6 +9,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/usenet/fs/reader"
 )
 
+//nolint:paralleltest // mutates the process-wide config singleton
 func TestRestartAppliesUsenetMemoryBudget(t *testing.T) {
 	config.Reset()
 	config.SetConfigPath(t.TempDir())

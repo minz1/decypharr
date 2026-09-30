@@ -10,6 +10,7 @@ import (
 )
 
 func TestSegmentLayoutSlicesAcrossBoundaries(t *testing.T) {
+	t.Parallel()
 	base := []storage.NZBSegment{
 		{Number: 1, MessageID: "one", Bytes: 5, Group: "alt.test", SegmentDataStart: 2},
 		{Number: 2, MessageID: "two", Bytes: 7, Group: "alt.test", SegmentDataStart: 3},
@@ -40,6 +41,7 @@ func TestSegmentLayoutSlicesAcrossBoundaries(t *testing.T) {
 }
 
 func TestSegmentLayoutRejectsInvalidRangesAndVolumes(t *testing.T) {
+	t.Parallel()
 	layout, err := newSegmentLayout([]storage.NZBSegment{
 		{MessageID: "one", Bytes: 5},
 		{MessageID: "two", Bytes: 5},
@@ -68,6 +70,7 @@ func TestSegmentLayoutRejectsInvalidRangesAndVolumes(t *testing.T) {
 }
 
 func TestSegmentLayoutMatchesLegacyRangeMapping(t *testing.T) {
+	t.Parallel()
 	random := rand.New(rand.NewPCG(1, 2))
 	segments := make([]storage.NZBSegment, 2_000)
 	var total int64

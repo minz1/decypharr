@@ -17,6 +17,7 @@ import (
 )
 
 func TestProbeContentAvailabilityReportsAllMissingContent(t *testing.T) {
+	t.Parallel()
 	p := &NZBParser{logger: zerolog.Nop()}
 	groups := map[string]*FileGroup{
 		"b": {
@@ -44,6 +45,7 @@ func TestProbeContentAvailabilityReportsAllMissingContent(t *testing.T) {
 }
 
 func TestProbeContentAvailabilityAcceptsAnotherAvailableGroup(t *testing.T) {
+	t.Parallel()
 	p := &NZBParser{logger: zerolog.Nop()}
 	groups := map[string]*FileGroup{
 		"a": {
@@ -68,6 +70,7 @@ func TestProbeContentAvailabilityAcceptsAnotherAvailableGroup(t *testing.T) {
 }
 
 func TestProbeContentAvailabilityStopsOnOperationalError(t *testing.T) {
+	t.Parallel()
 	p := &NZBParser{logger: zerolog.Nop()}
 	groups := map[string]*FileGroup{
 		"a": {
@@ -91,6 +94,7 @@ func TestProbeContentAvailabilityStopsOnOperationalError(t *testing.T) {
 }
 
 func TestProbeContentAvailabilityReusesBodyObservation(t *testing.T) {
+	t.Parallel()
 	backend := &fakeArticleBackend{}
 	broker := newArticleBroker(backend, 1, 1<<20)
 	if _, err := broker.Body(t.Context(), "observed@example"); err != nil {
@@ -117,6 +121,7 @@ func TestProbeContentAvailabilityReusesBodyObservation(t *testing.T) {
 }
 
 func TestHeaderProbeOrderCoversEveryPartOnce(t *testing.T) {
+	t.Parallel()
 	if got := headerProbeOrder(0); len(got) != 0 {
 		t.Fatalf("zero-part order = %v", got)
 	}
@@ -129,6 +134,7 @@ func TestHeaderProbeOrderCoversEveryPartOnce(t *testing.T) {
 }
 
 func TestDecodedPartSizeDoesNotInventByteForMissingRange(t *testing.T) {
+	t.Parallel()
 	if got := decodedPartSize(&nntp.YencMetadata{}); got != 0 {
 		t.Fatalf("empty yEnc range size = %d, want 0", got)
 	}
@@ -141,6 +147,7 @@ func TestDecodedPartSizeDoesNotInventByteForMissingRange(t *testing.T) {
 }
 
 func TestArchiveAndIgnoredFileTypeDetection(t *testing.T) {
+	t.Parallel()
 	p := &NZBParser{}
 	if got, _ := p.detectFileTypeAndExtensionFromContent(
 		[]byte{'P', 'A', 'R', '2', 0, 'P', 'K', 'T'},
@@ -164,6 +171,7 @@ func TestArchiveAndIgnoredFileTypeDetection(t *testing.T) {
 }
 
 func TestContentDetectionInfersExtensionForObfuscatedMedia(t *testing.T) {
+	t.Parallel()
 	p := &NZBParser{}
 	tests := []struct {
 		name      string
@@ -177,6 +185,7 @@ func TestContentDetectionInfersExtensionForObfuscatedMedia(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			fileType, extension := p.detectFileTypeAndExtensionFromContent(tt.data)
 			if fileType != storage.NZBFileTypeMedia || extension != tt.extension {
 				t.Fatalf(
@@ -191,6 +200,7 @@ func TestContentDetectionInfersExtensionForObfuscatedMedia(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // mutates the process-wide config singleton
 func TestExtensionlessObfuscatedMediaProducesLogicalFile(t *testing.T) {
 	config.Reset()
 	config.SetConfigPath(t.TempDir())
@@ -245,6 +255,7 @@ func TestExtensionlessObfuscatedMediaProducesLogicalFile(t *testing.T) {
 }
 
 func TestProcessMediaRebasesLogicalOffsets(t *testing.T) {
+	t.Parallel()
 	first := manifest.File{
 		Filename: "movie.mkv",
 		Number:   1,
@@ -281,6 +292,7 @@ func TestProcessMediaRebasesLogicalOffsets(t *testing.T) {
 }
 
 func TestArchiveBuildersRejectIncompleteVolume(t *testing.T) {
+	t.Parallel()
 	group := &FileGroup{
 		BaseName: "archive", metadata: &fileAnalysisResult{fileSize: 8, lastFileSize: 8, segmentSize: 4},
 		Files: []manifest.File{
@@ -309,6 +321,7 @@ func TestArchiveBuildersRejectIncompleteVolume(t *testing.T) {
 }
 
 func TestObfuscatedRARMergeDoesNotCombineNamedStandaloneArchives(t *testing.T) {
+	t.Parallel()
 	p := &NZBParser{logger: zerolog.Nop()}
 	groups := map[string]*FileGroup{
 		"movie": {
@@ -330,6 +343,7 @@ func TestObfuscatedRARMergeDoesNotCombineNamedStandaloneArchives(t *testing.T) {
 }
 
 func TestProcessFileGroupsUsesManifestOrderAndSortedGroups(t *testing.T) {
+	t.Parallel()
 	backend := &fakeArticleBackend{bodySize: 16}
 	p := NewParserWithSource(newArticleBroker(backend, 2, 1<<20), 2, zerolog.Nop())
 	groups := map[string]*FileGroup{
