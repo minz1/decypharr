@@ -477,10 +477,10 @@ func (p *ZIPParser) parseCentralDirEntry(r io.Reader) (*ZIPFileEntry, error) {
 	isDir := strings.HasSuffix(filename, "/") || uncompressedSize == 0
 
 	return &ZIPFileEntry{
-		Name:              filename,
-		UncompressedSize:  uncompressedSize,
-		CompressedSize:    compressedSize,
-		Method:            header.Method,
+		Name:             filename,
+		UncompressedSize: uncompressedSize,
+		CompressedSize:   compressedSize,
+		Method:           header.Method,
 		// Encrypted entries (general-purpose flag bit 0) hold ciphertext even
 		// when stored, so they are not streamable.
 		IsStored:          header.Method == ZIPStoreMethod && header.Flags&zipFlagEncrypted == 0,

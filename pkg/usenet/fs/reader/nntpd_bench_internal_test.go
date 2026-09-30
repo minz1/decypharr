@@ -20,18 +20,19 @@ const (
 	benchSegs    = 32
 )
 
-// benchModes compares immutable RAM extents with the sparse rewind tier.
-var benchModes = []struct {
+type benchMode struct {
 	name   string
 	memory bool
-}{
-	{"disk", false},
-	{"memory", true},
+}
+
+// benchModes compares immutable RAM extents with the sparse rewind tier.
+func benchModes() []benchMode {
+	return []benchMode{{"disk", false}, {"memory", true}}
 }
 
 // newBenchStack builds a fake NNTP server carrying benchSegs segments of
 // Pattern data, and a client pointed at it.
-func newBenchStack(b *testing.B, cfg nntpd.Config) (*nntpd.Server, *nntp.Client, []SegmentMeta) {
+func newBenchStack(b *testing.B, cfg nntpd.Config) (*nntp.Client, []SegmentMeta) {
 	b.Helper()
 	srv, err := nntpd.New(cfg)
 	if err != nil {
@@ -68,7 +69,7 @@ func newBenchStack(b *testing.B, cfg nntpd.Config) (*nntpd.Server, *nntp.Client,
 		b.Fatal(err)
 	}
 	b.Cleanup(func() { _ = client.Close() })
-	return srv, client, segs
+	return client, segs
 }
 
 func newBenchReader(
@@ -122,9 +123,9 @@ func poolRAMMB(sr *StreamingReader) float64 {
 // BenchmarkColdStream reads the whole file sequentially through a fresh
 // reader+cache each iteration: fetch, decode, cache write, cache read.
 func BenchmarkColdStream(b *testing.B) {
-	for _, mode := range benchModes {
+	for _, mode := range benchModes() {
 		b.Run(mode.name, func(b *testing.B) {
-			_, client, segs := newBenchStack(b, nntpd.Config{})
+			client, segs := newBenchStack(b, nntpd.Config{})
 			fileSize := benchSegSize * benchSegs
 			buf := make([]byte, 128*1024)
 
@@ -167,7 +168,7 @@ func BenchmarkConfiguredBodyPipelineDepth(b *testing.B) {
 	const prefetchAhead = benchSegs - 1
 	for _, depth := range []int{1, 2, 4} {
 		b.Run(fmt.Sprintf("depth%d", depth), func(b *testing.B) {
-			_, client, segs := newBenchStack(b, nntpd.Config{RTT: 30 * time.Millisecond})
+			client, segs := newBenchStack(b, nntpd.Config{RTT: 30 * time.Millisecond})
 			fileSize := benchSegSize * benchSegs
 			buf := make([]byte, 128*1024)
 
@@ -206,9 +207,9 @@ func BenchmarkConfiguredBodyPipelineDepth(b *testing.B) {
 // BenchmarkOpenToFirstByte measures reader construction plus the first 64KB
 // read — the time-to-first-byte a mount open pays.
 func BenchmarkOpenToFirstByte(b *testing.B) {
-	for _, mode := range benchModes {
+	for _, mode := range benchModes() {
 		b.Run(mode.name, func(b *testing.B) {
-			_, client, segs := newBenchStack(b, nntpd.Config{})
+			client, segs := newBenchStack(b, nntpd.Config{})
 			buf := make([]byte, 64*1024)
 
 			b.ReportAllocs()
@@ -238,9 +239,9 @@ func BenchmarkOpenToFirstByte(b *testing.B) {
 func BenchmarkSeekLatency(b *testing.B) {
 	for _, rtt := range []time.Duration{0, 30 * time.Millisecond} {
 		b.Run(fmt.Sprintf("rtt%dms", rtt/time.Millisecond), func(b *testing.B) {
-			for _, mode := range benchModes {
+			for _, mode := range benchModes() {
 				b.Run(mode.name, func(b *testing.B) {
-					_, client, segs := newBenchStack(b, nntpd.Config{RTT: rtt})
+					client, segs := newBenchStack(b, nntpd.Config{RTT: rtt})
 					buf := make([]byte, 64*1024)
 
 					var durations []time.Duration
@@ -288,9 +289,9 @@ func BenchmarkSeekLatency(b *testing.B) {
 // BenchmarkWarmReread reads a fully cached file, isolating the cache read
 // path from any network or decode work.
 func BenchmarkWarmReread(b *testing.B) {
-	for _, mode := range benchModes {
+	for _, mode := range benchModes() {
 		b.Run(mode.name, func(b *testing.B) {
-			_, client, segs := newBenchStack(b, nntpd.Config{})
+			client, segs := newBenchStack(b, nntpd.Config{})
 			fileSize := benchSegSize * benchSegs
 			buf := make([]byte, 128*1024)
 
