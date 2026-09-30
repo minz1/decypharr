@@ -53,6 +53,10 @@ type ProviderPool struct {
 // the DFS no-progress windows so a recovered provider is retried promptly.
 const maxDialCooldown = 15 * time.Second
 
+// maxDialBackoffShift caps the doubling of the dial cooldown (1s << 4 = 16s,
+// clamped to maxDialCooldown).
+const maxDialBackoffShift = 4
+
 func (pp *ProviderPool) inDialCooldown() bool {
 	until := pp.dialCooldownUntil.Load()
 	return until != 0 && nanotimeNow() < until
@@ -60,7 +64,7 @@ func (pp *ProviderPool) inDialCooldown() bool {
 
 func (pp *ProviderPool) noteDialFailure() {
 	streak := pp.dialFailStreak.Add(1)
-	backoff := min(time.Second<<min(streak-1, 4), maxDialCooldown)
+	backoff := min(time.Second<<min(streak-1, maxDialBackoffShift), maxDialCooldown)
 	pp.dialCooldownUntil.Store(nanotimeNow() + int64(backoff))
 }
 
@@ -181,6 +185,7 @@ func (e *connectionEntry) lastActivity() time.Time {
 	return e.lastUsed
 }
 
+//nolint:gochecknoglobals // a sync.Pool only pays off when shared by every Client
 var connectionEntryPool = sync.Pool{
 	New: func() any {
 		return &connectionEntry{}
@@ -188,7 +193,10 @@ var connectionEntryPool = sync.Pool{
 }
 
 func acquireConnectionEntry(conn *Connection, provider config.UsenetProvider, lastUsed time.Time) *connectionEntry {
-	entry := connectionEntryPool.Get().(*connectionEntry)
+	entry, ok := connectionEntryPool.Get().(*connectionEntry)
+	if !ok {
+		entry = &connectionEntry{}
+	}
 	entry.conn = conn
 	entry.provider = provider
 	entry.lastUsed = lastUsed
@@ -327,11 +335,12 @@ func NewClient(cfg *config.Config) (*Client, error) {
 // thresholds strictly inside it.
 func (c *Client) setIdleTimeout(d time.Duration) {
 	c.idleTimeout = d
+	const halve = 2
 	if c.staleThreshold >= d {
-		c.staleThreshold = d / 2
+		c.staleThreshold = d / halve
 	}
 	if c.pingInterval >= d {
-		c.pingInterval = d / 2
+		c.pingInterval = d / halve
 	}
 	// A keepalive ping may not outlast the cadence it is issued at.
 	c.keepalivePing = min(c.keepalivePing, c.pingInterval)
@@ -396,7 +405,7 @@ func (c *Client) release(conn *Connection) {
 // timing out rather than erroring immediately: a reset means the server
 // dropped this one session, but a silent timeout means the network path is
 // gone — and every older entry idling below it in the stack is dead too.
-func (c *Client) checkEntryHealth(entry *connectionEntry) (healthy, pingTimedOut bool) {
+func (c *Client) checkEntryHealth(entry *connectionEntry) (bool, bool) {
 	if entry == nil || entry.conn == nil {
 		return false, false
 	}
@@ -866,6 +875,13 @@ func (c *Client) tuneTCP(tcpConn *net.TCPConn) {
 	}
 }
 
+// Per-connection bufio sizes: reads match the decoder's 128KB chunks, writes
+// only carry short command lines.
+const (
+	connReadBufSize  = 128 * 1024
+	connWriteBufSize = 4 * 1024
+)
+
 // createConnection creates a new NNTP connection to a provider.
 func (c *Client) createConnection(ctx context.Context, provider config.UsenetProvider) (*Connection, error) {
 	address := fmt.Sprintf("%s:%d", provider.Host, provider.Port)
@@ -883,8 +899,11 @@ func (c *Client) createConnection(ctx context.Context, provider config.UsenetPro
 	if provider.SSL {
 		// Dial with TLS directly if possible, or Dial then Wrap
 		tlsConfig := &tls.Config{
-			ServerName:         provider.Host,
-			InsecureSkipVerify: true,
+			ServerName: provider.Host,
+			// Existing behavior: many usenet resellers present certificates
+			// that do not match the configured host. Verification needs a
+			// per-provider config toggle before it can be enabled.
+			InsecureSkipVerify: true, //nolint:gosec // G402: see above; tracked as a follow-up
 			MinVersion:         tls.VersionTLS12,
 		}
 		// Use tls.Dialer for simpler timeout handling
@@ -906,7 +925,7 @@ func (c *Client) createConnection(ctx context.Context, provider config.UsenetPro
 	if tcpConn, ok := netConn.(*net.TCPConn); ok {
 		c.tuneTCP(tcpConn)
 	}
-	if tlsConn, ok := netConn.(*tls.Conn); ok {
+	if tlsConn, isTLS := netConn.(*tls.Conn); isTLS {
 		if tcpConn, ok := tlsConn.NetConn().(*net.TCPConn); ok {
 			c.tuneTCP(tcpConn)
 		}
@@ -915,8 +934,8 @@ func (c *Client) createConnection(ctx context.Context, provider config.UsenetPro
 	// The reader matches the 128KB chunks the body copier consumes (the
 	// socket buffer, not bufio, is the RTT window); the writer carries only
 	// short command lines.
-	reader := bufio.NewReaderSize(netConn, 128*1024)
-	writer := bufio.NewWriterSize(netConn, 4*1024)
+	reader := bufio.NewReaderSize(netConn, connReadBufSize)
+	writer := bufio.NewWriterSize(netConn, connWriteBufSize)
 
 	conn := &Connection{
 		conn:     netConn,
@@ -983,6 +1002,13 @@ func (c *Client) reaper() {
 	}
 }
 
+// keepaliveSlotShare limits one sweep's keepalive pings to 1/n of a pool's
+// slots, and keepaliveWorkers bounds how many run in parallel.
+const (
+	keepaliveSlotShare = 4
+	keepaliveWorkers   = 4
+)
+
 func (c *Client) reapIdleConnections() {
 	now := time.Now()
 	for _, pp := range c.pools {
@@ -992,7 +1018,7 @@ func (c *Client) reapIdleConnections() {
 		// pause every pooled connection crosses pingInterval in the same
 		// sweep, and pinging them all at once would leave a resuming reader
 		// with no free slots. The remainder is pinged on later sweeps.
-		maxPing := max(1, pp.max/4)
+		maxPing := max(1, pp.max/keepaliveSlotShare)
 
 		pp.mu.Lock()
 		kept := pp.conns[:0]
@@ -1060,7 +1086,7 @@ var errPathDown = errors.New("provider path down, skipped keepalive ping")
 func (c *Client) keepAliveBatch(pp *ProviderPool, toPing []*connectionEntry, now time.Time) {
 	var wg sync.WaitGroup
 	var st keepaliveState
-	workers := min(len(toPing), 4)
+	workers := min(len(toPing), keepaliveWorkers)
 	pingCh := make(chan *connectionEntry, len(toPing))
 	for _, entry := range toPing {
 		pingCh <- entry
@@ -1212,7 +1238,7 @@ func (c *Client) Stats() map[string]any {
 		}
 
 		// Add speed test result if available
-		if result, ok := c.speedTestResults.Load(p.ID()); ok {
+		if result, found := c.speedTestResults.Load(p.ID()); found {
 			providerInfo["speed_test"] = map[string]any{
 				"latency_ms": result.LatencyMs,
 				"speed_mbps": result.SpeedMBps,
@@ -1304,7 +1330,7 @@ func (e *providerExclusions) excludeBackbone(backbone string) {
 	e.backbones[backbone] = struct{}{}
 }
 
-func (e providerExclusions) excludes(provider config.UsenetProvider) bool {
+func (e *providerExclusions) excludes(provider config.UsenetProvider) bool {
 	// Fast path: the overwhelming majority of acquisitions happen with
 	// no exclusions in flight (first attempt before any failover). Skip
 	// the map lookups and backbone work entirely.
@@ -1629,8 +1655,10 @@ func (c *Client) Close() error {
 		// This causes StreamBody/sendCommand reads to fail immediately, allowing prefetch
 		// workers to exit and SegmentFetcher.Close() to complete without hanging.
 		pp.activeConns.Range(func(key, _ any) bool {
-			_ = key.(*Connection).Close()
-			totalClosed++
+			if conn, ok := key.(*Connection); ok {
+				_ = conn.Close()
+				totalClosed++
+			}
 			return true
 		})
 	}
@@ -1733,7 +1761,8 @@ func (c *Client) SpeedTest(ctx context.Context, providerID string, messageID str
 
 	// Calculate speed in MB/s
 	if downloadDuration.Seconds() > 0 {
-		result.SpeedMBps = float64(result.BytesRead) / downloadDuration.Seconds() / (1024 * 1024)
+		const bytesPerMB = 1 << 20
+		result.SpeedMBps = float64(result.BytesRead) / downloadDuration.Seconds() / bytesPerMB
 	}
 
 	c.speedTestResults.Store(providerID, result)
