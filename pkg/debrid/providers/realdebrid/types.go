@@ -66,8 +66,8 @@ type FileVariant struct {
 }
 
 type AddMagnetSchema struct {
-	Id  string `json:"id"`
-	Uri string `json:"uri"`
+	ID  string `json:"id"`
+	URI string `json:"uri"`
 }
 
 type torrentInfo struct {
@@ -95,7 +95,7 @@ type torrentInfo struct {
 }
 
 type UnrestrictResponse struct {
-	Id         string `json:"id"`
+	ID         string `json:"id"`
 	Filename   string `json:"filename"`
 	MimeType   string `json:"mimeType"`
 	Filesize   int64  `json:"filesize"`
@@ -108,7 +108,7 @@ type UnrestrictResponse struct {
 }
 
 type TorrentsResponse struct {
-	Id       string    `json:"id"`
+	ID       string    `json:"id"`
 	Filename string    `json:"filename"`
 	Hash     string    `json:"hash"`
 	Bytes    int64     `json:"bytes"`
@@ -122,7 +122,7 @@ type TorrentsResponse struct {
 }
 
 type DownloadsResponse struct {
-	Id         string    `json:"id"`
+	ID         string    `json:"id"`
 	Filename   string    `json:"filename"`
 	MimeType   string    `json:"mimeType"`
 	Filesize   int64     `json:"filesize"`
@@ -141,7 +141,7 @@ type ErrorResponse struct {
 }
 
 type profileResponse struct {
-	Id         int64     `json:"id"`
+	ID         int64     `json:"id"`
 	Username   string    `json:"username"`
 	Email      string    `json:"email"`
 	Points     int       `json:"points"`

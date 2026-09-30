@@ -29,6 +29,27 @@ import (
 
 const (
 	profileCacheDuration = 1 * time.Hour
+	// defaultLinkExpiry applies when auto_expire_links_after is unset.
+	defaultLinkExpiry = 48 * time.Hour
+	// repairRetries bounds retries of repair-time link checks.
+	repairRetries = 4
+	// maxConcurrentRarReads bounds simultaneous RAR header scans.
+	maxConcurrentRarReads = 2
+	// availabilityBatchSize is the most hashes per instantAvailability call.
+	availabilityBatchSize = 200
+	// statusPollInterval is the delay before each CheckStatus poll.
+	statusPollInterval = 2 * time.Second
+
+	statusDownloaded            = "downloaded"
+	statusWaitingFilesSelection = "waiting_files_selection"
+
+	// Real-Debrid unrestrict error codes.
+	errHosterUnavailable = 19
+	errTrafficExhausted  = 23
+	errUnavailableFile   = 24
+	errTooManyRequests   = 34
+	errInfringingFile    = 35
+	errFairUsageLimit    = 36
 	// statusTooManyActive is Real-Debrid's non-standard "too many active downloads" status.
 	statusTooManyActive = 509
 )
@@ -60,7 +81,7 @@ func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter) (*RealDebrid
 
 	autoExpiresLinksAfter, err := utils.ParseDuration(dc.AutoExpireLinksAfter)
 	if autoExpiresLinksAfter == 0 || err != nil {
-		autoExpiresLinksAfter = 48 * time.Hour
+		autoExpiresLinksAfter = defaultLinkExpiry
 	}
 
 	cfg := config.Get()
@@ -76,8 +97,8 @@ func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter) (*RealDebrid
 	repairOpts := []request.ClientOption{
 		request.WithHeaders(headers),
 		request.WithLogger(_log),
-		request.WithMaxRetries(4),
-		request.WithRetryableStatus(429),
+		request.WithMaxRetries(repairRetries),
+		request.WithRetryableStatus(http.StatusTooManyRequests),
 		request.WithRateLimiter(ratelimits["repair"]),
 		request.WithProxy(dc.Proxy),
 	}
@@ -90,14 +111,14 @@ func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter) (*RealDebrid
 		client:                request.New(opts...),
 		repairClient:          request.New(repairOpts...),
 		logger:                logger.New(dc.Name),
-		rarSemaphore:          make(chan struct{}, 2),
+		rarSemaphore:          make(chan struct{}, maxConcurrentRarReads),
 		config:                dc,
 		retries:               cfg.Retries,
 	}
 
 	go func() {
-		if _, err := r.GetProfile(); err != nil {
-			r.logger.Error().Err(err).Msg("Failed to get RealDebrid profile")
+		if _, profileErr := r.GetProfile(); profileErr != nil {
+			r.logger.Error().Err(profileErr).Msg("Failed to get RealDebrid profile")
 		}
 	}()
 	return r, nil
@@ -387,8 +408,8 @@ func (r *RealDebrid) getTorrentFiles(t *types.Torrent, data torrentInfo) map[str
 func (r *RealDebrid) IsAvailable(hashes []string) (map[string]bool, error) {
 	result := make(map[string]bool)
 
-	for i := 0; i < len(hashes); i += 200 {
-		end := min(i+200, len(hashes))
+	for i := 0; i < len(hashes); i += availabilityBatchSize {
+		end := min(i+availabilityBatchSize, len(hashes))
 
 		validHashes := make([]string, 0, end-i)
 		for _, hash := range hashes[i:end] {
@@ -450,7 +471,7 @@ func (r *RealDebrid) addTorrent(t *types.Torrent) (*types.Torrent, error) {
 		return nil, fmt.Errorf("unexpected status code: %d", status)
 	}
 
-	t.Id = data.Id
+	t.Id = data.ID
 	t.Debrid = r.config.Name
 	t.Added = time.Now()
 
@@ -468,7 +489,7 @@ func (r *RealDebrid) addMagnet(t *types.Torrent) (*types.Torrent, error) {
 
 	switch status {
 	case http.StatusOK, http.StatusCreated:
-		t.Id = data.Id
+		t.Id = data.ID
 		t.Debrid = r.config.Name
 		t.Added = time.Now()
 		return t, nil
@@ -531,7 +552,7 @@ func getStatus(status string) types.TorrentStatus {
 	switch status {
 	case "downloading", "magnet_conversion", "queued", "compressing", "uploading", "waiting_files_selection":
 		return types.TorrentStatusDownloading
-	case "downloaded":
+	case statusDownloaded:
 		return types.TorrentStatusDownloaded
 	default:
 		return types.TorrentStatusError
@@ -571,81 +592,44 @@ func (r *RealDebrid) UpdateTorrent(t *types.Torrent) error {
 	}
 }
 
+// CheckStatus polls the torrent, selecting its allowed files when Real-Debrid
+// waits for a selection, until it is downloaded, still downloading or failed.
 func (r *RealDebrid) CheckStatus(t *types.Torrent) (*types.Torrent, error) {
 	for {
-		time.Sleep(2 * time.Second)
+		time.Sleep(statusPollInterval)
 
 		var data torrentInfo
-
-		status, err := r.doGet(context.Background(), fmt.Sprintf("/torrents/info/%s", t.Id), &data)
+		status, err := r.doGet(context.Background(), "/torrents/info/"+t.Id, &data)
 		if err != nil {
 			r.logger.Info().Msgf("ERROR Checking file: %v", err)
 			return t, err
 		}
-
 		if status != http.StatusOK {
 			return t, fmt.Errorf("realdebrid API error: Status: %d", status)
 		}
 
 		debridStatus := data.Status
-		t.Name = data.Filename
-		t.Filename = data.Filename
-		t.OriginalFilename = data.OriginalFilename
-		t.Bytes = data.Bytes
-		t.Progress = data.Progress
+		r.applyStatus(t, data)
 
-		t.Speed = data.Speed
-		t.Seeders = data.Seeders
-		t.Links = data.Links
-		t.Status = getStatus(debridStatus)
-		t.Debrid = r.config.Name
-		t.Added = data.Added
-		if data.Hash != "" {
-			t.InfoHash = data.Hash
-		}
-		if debridStatus == "waiting_files_selection" {
-			t.Status = types.TorrentStatusDownloading
-			t.Files = r.getTorrentFiles(t, data)
-			if len(t.Files) == 0 {
-				return t, fmt.Errorf("no valid files found")
+		switch {
+		case debridStatus == statusWaitingFilesSelection:
+			if selectErr := r.selectFiles(t, data); selectErr != nil {
+				return t, selectErr
 			}
-			filesID := make([]string, 0)
-			for _, f := range t.Files {
-				filesID = append(filesID, f.Id)
-			}
-
-			selectURL := fmt.Sprintf("/torrents/selectFiles/%s", t.Id)
-			selectStatus, doPostFormErr := r.doPostForm(context.Background(),
-				selectURL,
-				map[string]string{"files": strings.Join(filesID, ",")},
-				nil,
-			)
-			if doPostFormErr != nil {
-				return t, doPostFormErr
-			}
-
-			if selectStatus != http.StatusNoContent {
-				if selectStatus == statusTooManyActive {
-					return t, customerror.TooManyActiveDownloadsError
-				}
-				return t, fmt.Errorf("realdebrid API error: Status: %d", selectStatus)
-			}
-			continue
-		} else if debridStatus == "downloaded" {
+		case debridStatus == statusDownloaded:
 			t.Status = types.TorrentStatusDownloaded
 			t.Files, err = r.getSelectedFiles(t, data)
 			if err != nil {
 				return t, err
 			}
-
 			r.logger.Info().Msgf("Torrent: %s downloaded to RD", t.Name)
 			return t, nil
-		} else if t.Status == types.TorrentStatusDownloading {
+		case t.Status == types.TorrentStatusDownloading:
 			if !t.DownloadUncached {
 				return t, fmt.Errorf("torrent %s: %w", t.Name, customerror.TorrentNotCachedError)
 			}
 			return t, nil
-		} else {
+		default:
 			r.logger.Warn().
 				Str("torrent_id", t.Id).
 				Str("debrid_status", debridStatus).
@@ -653,6 +637,54 @@ func (r *RealDebrid) CheckStatus(t *types.Torrent) (*types.Torrent, error) {
 				Msg("Unexpected debrid status, treating as error")
 			return t, fmt.Errorf("torrent: %s has error status: %s", t.Name, debridStatus)
 		}
+	}
+}
+
+// applyStatus copies polled torrent state onto t.
+func (r *RealDebrid) applyStatus(t *types.Torrent, data torrentInfo) {
+	t.Name = data.Filename
+	t.Filename = data.Filename
+	t.OriginalFilename = data.OriginalFilename
+	t.Bytes = data.Bytes
+	t.Progress = data.Progress
+	t.Speed = data.Speed
+	t.Seeders = data.Seeders
+	t.Links = data.Links
+	t.Status = getStatus(data.Status)
+	t.Debrid = r.config.Name
+	t.Added = data.Added
+	if data.Hash != "" {
+		t.InfoHash = data.Hash
+	}
+}
+
+// selectFiles asks Real-Debrid to download the torrent's allowed files.
+func (r *RealDebrid) selectFiles(t *types.Torrent, data torrentInfo) error {
+	t.Status = types.TorrentStatusDownloading
+	t.Files = r.getTorrentFiles(t, data)
+	if len(t.Files) == 0 {
+		return fmt.Errorf("no valid files found")
+	}
+	fileIDs := make([]string, 0, len(t.Files))
+	for _, f := range t.Files {
+		fileIDs = append(fileIDs, f.Id)
+	}
+
+	status, err := r.doPostForm(
+		context.Background(),
+		"/torrents/selectFiles/"+t.Id,
+		map[string]string{"files": strings.Join(fileIDs, ",")},
+		nil,
+	)
+	switch {
+	case err != nil:
+		return err
+	case status == http.StatusNoContent:
+		return nil
+	case status == statusTooManyActive:
+		return customerror.TooManyActiveDownloadsError
+	default:
+		return fmt.Errorf("realdebrid API error: Status: %d", status)
 	}
 }
 
@@ -754,7 +786,7 @@ func (r *RealDebrid) CheckFile(ctx context.Context, _, link string) error {
 func (r *RealDebrid) fetchDownloadLink(
 	ctx context.Context,
 	account *account.Account,
-	id string,
+	_ string,
 	file *types.File,
 ) (types.DownloadLink, error) {
 	emptyLink := types.DownloadLink{}
@@ -780,9 +812,9 @@ func (r *RealDebrid) fetchDownloadLink(
 	}
 	if status != http.StatusOK {
 		switch errResp.ErrorCode {
-		case 19, 24, 35:
+		case errHosterUnavailable, errUnavailableFile, errInfringingFile:
 			return emptyLink, customerror.HosterUnavailableError
-		case 23, 34, 36:
+		case errTrafficExhausted, errTooManyRequests, errFairUsageLimit:
 			return emptyLink, customerror.TrafficExceededError
 		default:
 			return emptyLink, fmt.Errorf(
@@ -862,11 +894,11 @@ func (r *RealDebrid) getTorrents(offset int, limit int) (int, []*types.Torrent, 
 	}
 
 	for _, t := range data {
-		if t.Status != "downloaded" {
+		if t.Status != statusDownloaded {
 			continue
 		}
 		t := &types.Torrent{
-			Id:               t.Id,
+			Id:               t.ID,
 			Name:             t.Filename,
 			Bytes:            t.Bytes,
 			Progress:         t.Progress,
@@ -975,7 +1007,7 @@ func (r *RealDebrid) _getDownloadLinks(acc *account.Account, offset int, limit i
 			DownloadLink: d.Download,
 			Generated:    d.Generated,
 			ExpiresAt:    d.Generated.Add(r.autoExpiresLinksAfter),
-			Id:           d.Id,
+			Id:           d.ID,
 		})
 	}
 	return links, nil
@@ -999,7 +1031,7 @@ func (r *RealDebrid) getClientProfile(client *request.Client) (*types.Profile, e
 
 	profile := &types.Profile{
 		Name:       r.config.Name,
-		Id:         data.Id,
+		Id:         data.ID,
 		Username:   data.Username,
 		Email:      data.Email,
 		Points:     data.Points,
@@ -1058,10 +1090,9 @@ func (r *RealDebrid) syncAccount(acc *account.Account) error {
 		nil,
 		&trafficData,
 	)
-	if err != nil {
-		return nil
-	}
-	if trafficStatus != http.StatusOK {
+	if err != nil || trafficStatus != http.StatusOK {
+		// Traffic is informational; a failed lookup must not fail the sync.
+		r.logger.Debug().Err(err).Int("status", trafficStatus).Msg("Failed to fetch Real-Debrid traffic")
 		return nil
 	}
 
