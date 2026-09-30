@@ -228,8 +228,8 @@ type EncryptionConfig struct {
 	IV []byte
 }
 
-// ReaderStats holds statistics for monitoring reader performance.
-type ReaderStats struct {
+// Stats holds statistics for monitoring reader performance.
+type Stats struct {
 	// Read operations
 	Reads      atomic.Int64
 	BytesRead  atomic.Int64
@@ -257,7 +257,7 @@ type ReaderStats struct {
 }
 
 // Snapshot returns a copy of the current stats.
-func (s *ReaderStats) Snapshot() map[string]int64 {
+func (s *Stats) Snapshot() map[string]int64 {
 	return map[string]int64{
 		"reads":              s.Reads.Load(),
 		"bytes_read":         s.BytesRead.Load(),

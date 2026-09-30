@@ -32,7 +32,7 @@ func newTestFetcher(t *testing.T, segCount int) *SegmentFetcher {
 	cfg.DiskPath = t.TempDir()
 	cfg.MaxConnections = 1
 
-	stats := &ReaderStats{}
+	stats := &Stats{}
 	cache, err := NewSegmentCache(context.Background(), segs, cfg, stats, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewSegmentCache: %v", err)
@@ -150,7 +150,7 @@ func newPipelineTestFetcher(
 	t *testing.T,
 	depth int,
 	present func(int) bool,
-) (*nntpd.Server, *SegmentCache, *SegmentFetcher, *ReaderStats) {
+) (*nntpd.Server, *SegmentCache, *SegmentFetcher, *Stats) {
 	t.Helper()
 	srv, err := nntpd.New(nntpd.Config{RTT: 10 * time.Millisecond})
 	if err != nil {
@@ -191,7 +191,7 @@ func newPipelineTestFetcher(
 	cfg.MaxConnections = 2
 	cfg.BodyPipelineDepth = depth
 	cfg.DownloadTimeout = 5 * time.Second
-	stats := &ReaderStats{}
+	stats := &Stats{}
 	cache, err := NewSegmentCache(t.Context(), segments, cfg, stats, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)

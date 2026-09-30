@@ -68,7 +68,7 @@ type SegmentCache struct {
 	closed atomic.Bool
 	logger zerolog.Logger
 
-	stats *ReaderStats
+	stats *Stats
 }
 
 type residentSegment struct {
@@ -103,7 +103,7 @@ func NewSegmentCache(
 	ctx context.Context,
 	segments []SegmentMeta,
 	config Config,
-	stats *ReaderStats,
+	stats *Stats,
 	logger zerolog.Logger,
 ) (*SegmentCache, error) {
 	ctx, cancel := context.WithCancel(ctx)
@@ -126,7 +126,7 @@ func NewSegmentCache(
 		if diskPath == "" {
 			diskPath, err = os.MkdirTemp("", "usenet-cache-*")
 		} else {
-			if err = os.MkdirAll(diskPath, 0o755); err == nil {
+			if err = os.MkdirAll(diskPath, 0o750); err == nil {
 				diskPath, err = os.MkdirTemp(diskPath, "cache-*")
 			}
 		}
@@ -309,9 +309,9 @@ func (sc *SegmentCache) SegmentDataSize(segIdx int) int64 {
 	return size
 }
 
-// segmentWriter is the contract doFetch uses to stream a segment body into
+// SegmentWriter is the contract doFetch uses to stream a segment body into
 // the cache. Exactly one of Finalize/Discard is called per writer.
-type segmentWriter interface {
+type SegmentWriter interface {
 	Write(p []byte) (int, error)
 	DecodeBuffer() []byte
 	Adopt(decoded []byte) (int64, error)
@@ -322,7 +322,7 @@ type segmentWriter interface {
 // StreamWriter returns a buffer-backed writer for the segment. The writer
 // skips the yEnc dataStart header and caps writes at the segment's max
 // expected size.
-func (sc *SegmentCache) StreamWriter(segIdx int) segmentWriter {
+func (sc *SegmentCache) StreamWriter(segIdx int) SegmentWriter {
 	if segIdx < 0 || segIdx >= sc.segCount {
 		return nil
 	}
@@ -789,17 +789,8 @@ func (sc *SegmentCache) WaitForSegment(ctx context.Context, segIdx int) error {
 		ctx = context.Background()
 	}
 
-	state := SegmentState(sc.states[segIdx].Load())
-	switch state {
-	case StateOnDisk:
-		return nil
-	case StateEmpty:
-		return ErrSegmentEvicted
-	case StateFailed:
-		if err := sc.GetError(segIdx); err != nil {
-			return err
-		}
-		return fmt.Errorf("segment %d failed", segIdx)
+	if settled, err := sc.segmentSettled(segIdx); settled {
+		return err
 	}
 
 	shardIdx := segIdx & shardMask
@@ -820,17 +811,8 @@ func (sc *SegmentCache) WaitForSegment(ctx context.Context, segIdx int) error {
 	defer mu.Unlock()
 
 	for {
-		state = SegmentState(sc.states[segIdx].Load())
-		switch state {
-		case StateOnDisk:
-			return nil
-		case StateEmpty:
-			return ErrSegmentEvicted
-		case StateFailed:
-			if err := sc.GetError(segIdx); err != nil {
-				return err
-			}
-			return fmt.Errorf("segment %d failed", segIdx)
+		if settled, err := sc.segmentSettled(segIdx); settled {
+			return err
 		}
 
 		select {
@@ -843,6 +825,26 @@ func (sc *SegmentCache) WaitForSegment(ctx context.Context, segIdx int) error {
 
 		cond.Wait()
 	}
+}
+
+// segmentSettled reports whether a wait on segIdx is over and its result.
+// Empty settles with ErrSegmentEvicted because no producer exists to wake a
+// waiter; Fetching and Evicting have an active producer.
+func (sc *SegmentCache) segmentSettled(segIdx int) (bool, error) {
+	switch SegmentState(sc.states[segIdx].Load()) {
+	case StateOnDisk:
+		return true, nil
+	case StateEmpty:
+		return true, ErrSegmentEvicted
+	case StateFailed:
+		if err := sc.GetError(segIdx); err != nil {
+			return true, err
+		}
+		return true, fmt.Errorf("segment %d failed", segIdx)
+	case StateFetching, StateEvicting:
+		return false, nil
+	}
+	return false, nil
 }
 
 // WaitForEvictionRelease waits until an extent is fully unpublished.
