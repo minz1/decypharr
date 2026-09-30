@@ -22,8 +22,8 @@ import (
 
 // File implements a FUSE file with RFS streaming.
 type File struct {
-
 	fs.Inode
+
 	config    *config.FuseConfig
 	logger    *logger.RateLimitedEvent
 	info      atomic.Pointer[manager.FileInfo]

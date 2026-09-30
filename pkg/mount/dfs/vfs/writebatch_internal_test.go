@@ -214,8 +214,8 @@ func TestCopyBatchedStopsOnWriteError(t *testing.T) {
 }
 
 type prematureEOFStream struct {
-
 	*bytes.Reader
+
 	size int64
 }
 
