@@ -55,21 +55,6 @@ func (h *Handler) handleHead(entry *manager.FileInfo, w http.ResponseWriter, r *
 	w.WriteHeader(http.StatusOK)
 }
 
-func (h *Handler) handleCopy(current *manager.FileInfo, w http.ResponseWriter, r *http.Request, delete bool) {
-	destHeader := r.Header.Get("Destination")
-	if destHeader == "" {
-		http.Error(w, "Bad Request: Missing Destination header", http.StatusBadRequest)
-		return
-	}
-	destPath := path.Clean(destHeader)
-	err := h.manager.CopyEntry(current, destPath, delete)
-	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-	w.WriteHeader(http.StatusCreated) // 201 Created
-}
-
 func (h *Handler) handleOptions(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Allow", "OPTIONS, GET, HEAD, PUT, DELETE, MKCOL, COPY, MOVE, PROPFIND")
 	w.Header().Set("DAV", "1, 2")
@@ -89,9 +74,9 @@ func (h *Handler) handleDownload(info *manager.FileInfo, w http.ResponseWriter, 
 	}
 
 	if !info.IsRemote() {
-		// Write .Content disposition for local files
-		w.Header().
-			Set("Content-Disposition", fmt.Sprintf("attachment; filename*=UTF-8''%s", utils.PathUnescape(info.Name())))
+		// FormatMediaType emits a percent-encoded filename* for non-ASCII
+		// names; the old code wrote the raw (unescaped) name into filename*.
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": info.Name()}))
 		_, _ = w.Write(info.Content())
 		return
 	}
