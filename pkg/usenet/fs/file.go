@@ -1,7 +1,6 @@
 package fs
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -10,32 +9,22 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/rs/zerolog"
-
-	"github.com/sirrobot01/decypharr/internal/nntp"
 	"github.com/sirrobot01/decypharr/pkg/usenet/fs/reader"
 	"github.com/sirrobot01/decypharr/pkg/usenet/types"
 )
 
+// File is one virtual volume opened from an [FS].
 type File struct {
-	pools             *reader.Pools
-	ctx               context.Context
-	volume            *types.Volume
-	info              volumeInfo
-	reader            io.ReadCloser                          // Sequential reader (for Read() method)
-	streamingReader   atomic.Pointer[reader.StreamingReader] // Streaming reader for ReadAt()
-	readerOnce        sync.Once                              // Ensures streaming reader created exactly once
-	readerErr         error                                  // Error from streaming reader creation
-	manager           *nntp.Client                           // Connection manager
-	maxConcurrent     int                                    // Max concurrent connections for this file's reader
-	prefetchSize      int64                                  // Prefetch size in bytes
-	bodyPipelineDepth int
-	diskPath          string
-	retention         reader.Retention
-	scheduler         *reader.FetchScheduler
-	pos               atomic.Int64
-	logger            zerolog.Logger
-	closed            atomic.Bool
+	readerSettings
+
+	volume          *types.Volume
+	info            volumeInfo
+	reader          io.ReadCloser                          // Sequential reader (for Read() method)
+	streamingReader atomic.Pointer[reader.StreamingReader] // Streaming reader for ReadAt()
+	readerOnce      sync.Once                              // Ensures streaming reader created exactly once
+	readerErr       error                                  // Error from streaming reader creation
+	pos             atomic.Int64
+	closed          atomic.Bool
 }
 
 func (vf *File) Read(p []byte) (int, error) {
@@ -148,68 +137,10 @@ func (vf *File) ReadAt(p []byte, off int64) (int, error) {
 }
 
 // getOrCreateStreamingReader returns the streaming reader, creating it if needed.
-// Uses sync.Once to ensure exactly one reader is created even with concurrent calls.
+// Uses [sync.Once] to ensure exactly one reader is created even with concurrent calls.
 func (vf *File) getOrCreateStreamingReader() *reader.StreamingReader {
 	vf.readerOnce.Do(func() {
-		// Manager must be provided by FS
-		if vf.manager == nil {
-			vf.readerErr = fmt.Errorf("no connection client available for streaming reader")
-			vf.logger.Error().Msg("No connection client available for streaming reader")
-			return
-		}
-
-		// Convert volume segments to reader format
-		segments := reader.VolumeToSegmentMeta(vf.volume)
-		if len(segments) == 0 {
-			vf.readerErr = fmt.Errorf("no segments found for streaming reader")
-			vf.logger.Error().Msg("No segments found for streaming reader")
-			return
-		}
-
-		// Build encryption config
-		encConfig := reader.EncryptionFromVolume(vf.volume)
-
-		// Configure the reader
-		readerConfig := reader.DefaultConfig()
-		readerConfig.MaxConnections = vf.maxConcurrent
-		readerConfig.PrefetchAhead = reader.PrefetchAheadSegments(vf.prefetchSize, segments)
-		readerConfig.BodyPipelineDepth = vf.bodyPipelineDepth
-		readerConfig.DiskPath = vf.diskPath
-		readerConfig.Retention = vf.retention
-		readerConfig.Scheduler = vf.scheduler
-
-		var r *reader.StreamingReader
-		var err error
-
-		if encConfig.Enabled {
-			r, err = reader.NewStreamingReaderWithEncryption(
-				vf.ctx,
-				vf.manager,
-				segments,
-				encConfig,
-				reader.WithMaxConnections(readerConfig.MaxConnections),
-				reader.WithPrefetchAhead(readerConfig.PrefetchAhead),
-				reader.WithBodyPipelineDepth(readerConfig.BodyPipelineDepth),
-				reader.WithDiskPath(readerConfig.DiskPath),
-				reader.WithRetention(readerConfig.Retention),
-				reader.WithFetchScheduler(readerConfig.Scheduler),
-				reader.WithPools(vf.pools),
-			)
-		} else {
-			r, err = reader.NewStreamingReader(
-				vf.ctx,
-				vf.manager,
-				segments,
-				reader.WithMaxConnections(readerConfig.MaxConnections),
-				reader.WithPrefetchAhead(readerConfig.PrefetchAhead),
-				reader.WithBodyPipelineDepth(readerConfig.BodyPipelineDepth),
-				reader.WithDiskPath(readerConfig.DiskPath),
-				reader.WithRetention(readerConfig.Retention),
-				reader.WithFetchScheduler(readerConfig.Scheduler),
-				reader.WithPools(vf.pools),
-			)
-		}
-
+		r, err := vf.newReader(vf.volume)
 		if err != nil {
 			vf.readerErr = err
 			vf.logger.Error().Err(err).Msg("Failed to create streaming reader")
@@ -254,90 +185,22 @@ func (vf *File) Seek(offset int64, whence int) (int64, error) {
 	return vf.pos.Load(), nil
 }
 
-func (vf *File) newReaderForRange(start, end int64) (io.ReadCloser, error) {
-	// For sequential reads, we create a new StreamingReader and seek to start position
-	if vf.manager == nil {
-		return nil, fmt.Errorf("no connection client available")
-	}
-
-	// Convert volume segments to reader format
-	segments := reader.VolumeToSegmentMeta(vf.volume)
-	if len(segments) == 0 {
-		totalSegs := len(vf.volume.Segments)
-		var lastSegEnd int64
-		if totalSegs > 0 {
-			lastSegEnd = vf.volume.Segments[totalSegs-1].EndOffset
-		}
-		return nil, fmt.Errorf(
-			"rar: no segments found for range %d-%d (volume size: %d, total segments: %d, last segment ends at: %d)",
-			start,
-			end,
-			vf.volume.Size,
-			totalSegs,
-			lastSegEnd,
-		)
-	}
-
-	// Build encryption config
-	encConfig := reader.EncryptionFromVolume(vf.volume)
-
-	// Configure the reader
-	readerConfig := reader.DefaultConfig()
-	readerConfig.MaxConnections = vf.maxConcurrent
-	readerConfig.PrefetchAhead = reader.PrefetchAheadSegments(vf.prefetchSize, segments)
-	readerConfig.BodyPipelineDepth = vf.bodyPipelineDepth
-	readerConfig.DiskPath = vf.diskPath
-	readerConfig.Retention = vf.retention
-	readerConfig.Scheduler = vf.scheduler
-
-	var r *reader.StreamingReader
-	var err error
-
-	if encConfig.Enabled {
-		r, err = reader.NewStreamingReaderWithEncryption(
-			vf.ctx,
-			vf.manager,
-			segments,
-			encConfig,
-			reader.WithMaxConnections(readerConfig.MaxConnections),
-			reader.WithPrefetchAhead(readerConfig.PrefetchAhead),
-			reader.WithBodyPipelineDepth(readerConfig.BodyPipelineDepth),
-			reader.WithDiskPath(readerConfig.DiskPath),
-			reader.WithRetention(readerConfig.Retention),
-			reader.WithFetchScheduler(readerConfig.Scheduler),
-			reader.WithPools(vf.pools),
-		)
-	} else {
-		r, err = reader.NewStreamingReader(
-			vf.ctx,
-			vf.manager,
-			segments,
-			reader.WithMaxConnections(readerConfig.MaxConnections),
-			reader.WithPrefetchAhead(readerConfig.PrefetchAhead),
-			reader.WithBodyPipelineDepth(readerConfig.BodyPipelineDepth),
-			reader.WithDiskPath(readerConfig.DiskPath),
-			reader.WithRetention(readerConfig.Retention),
-			reader.WithFetchScheduler(readerConfig.Scheduler),
-			reader.WithPools(vf.pools),
-		)
-	}
-
+// newReaderAt creates a sequential reader positioned at start.
+func (vf *File) newReaderAt(start int64) (io.ReadCloser, error) {
+	r, err := vf.newReader(vf.volume)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create streaming reader: %w", err)
 	}
-
-	// Seek to start position for sequential reading
 	if start > 0 {
 		if _, seekErr := r.Seek(start, io.SeekStart); seekErr != nil {
 			_ = r.Close()
 			return nil, fmt.Errorf("failed to seek to start position: %w", seekErr)
 		}
 	}
-
 	return r, nil
 }
 
-func (vf *File) Write(p []byte) (int, error) {
+func (vf *File) Write(_ []byte) (int, error) {
 	if vf.closed.Load() {
 		return 0, fs.ErrClosed
 	}
@@ -348,9 +211,7 @@ func (vf *File) ensureReader() error {
 	if vf.reader != nil {
 		return nil
 	}
-	start := vf.pos.Load()
-	end := vf.volume.Size - 1
-	reader, err := vf.newReaderForRange(start, end)
+	reader, err := vf.newReaderAt(vf.pos.Load())
 	if err != nil {
 		return err
 	}
