@@ -1,4 +1,4 @@
-package utils
+package utils_test
 
 import (
 	"net/http"
@@ -9,15 +9,21 @@ import (
 	"testing"
 
 	"github.com/sirrobot01/decypharr/internal/testutil"
+	"github.com/sirrobot01/decypharr/internal/utils"
+)
+
+// ubuntuInfoHash is the infohash of the Ubuntu test torrent in testdata.
+const (
+	ubuntuInfoHash = "8a19577fb5f690970ca43a57ff1011ae202244b8"
+	ubuntuName     = "ubuntu-25.04-desktop-amd64.iso"
 )
 
 // checkMagnet is a helper function that verifies magnet properties.
 func checkMagnet(
 	t *testing.T,
-	magnet *Magnet,
+	magnet *utils.Magnet,
 	expectedInfoHash, expectedName, expectedLink string,
 	expectedTrackerCount int,
-	shouldBeTorrent bool,
 ) {
 	t.Helper() // This marks the function as a test helper
 
@@ -49,7 +55,7 @@ func testMagnetFromFile(
 	t *testing.T,
 	filePath string,
 	rmTrackerUrls bool,
-	expectedInfoHash, expectedName, expectedLink string,
+	expectedLink string,
 	expectedTrackerCount int,
 ) {
 	t.Helper()
@@ -60,12 +66,12 @@ func testMagnetFromFile(
 	}
 	defer file.Close()
 
-	magnet, err := GetMagnetFromFile(file, filepath.Base(filePath), rmTrackerUrls)
+	magnet, err := utils.GetMagnetFromFile(file, filepath.Base(filePath), rmTrackerUrls)
 	if err != nil {
 		t.Fatalf("GetMagnetFromFile failed: %v", err)
 	}
 
-	checkMagnet(t, magnet, expectedInfoHash, expectedName, expectedLink, expectedTrackerCount, true)
+	checkMagnet(t, magnet, ubuntuInfoHash, ubuntuName, expectedLink, expectedTrackerCount)
 
 	// Log the result
 	if rmTrackerUrls {
@@ -76,33 +82,32 @@ func testMagnetFromFile(
 }
 
 func TestGetMagnetFromFile_RealTorrentFile_StripTrue(t *testing.T) {
-	expectedInfoHash := "8a19577fb5f690970ca43a57ff1011ae202244b8"
-	expectedName := "ubuntu-25.04-desktop-amd64.iso"
+	t.Parallel()
 	expectedLink := "magnet:?xt=urn:btih:8a19577fb5f690970ca43a57ff1011ae202244b8&dn=ubuntu-25.04-desktop-amd64.iso"
 	expectedTrackerCount := 0 // Should be 0 when stripping trackers
 
 	torrentPath := testutil.GetTestTorrentPath()
-	testMagnetFromFile(t, torrentPath, true, expectedInfoHash, expectedName, expectedLink, expectedTrackerCount)
+	testMagnetFromFile(t, torrentPath, true, expectedLink, expectedTrackerCount)
 }
 
 func TestGetMagnetFromFile_RealTorrentFile_StripFalse(t *testing.T) {
-	expectedInfoHash := "8a19577fb5f690970ca43a57ff1011ae202244b8"
-	expectedName := "ubuntu-25.04-desktop-amd64.iso"
+	t.Parallel()
 	expectedLink := "magnet:?xt=urn:btih:8a19577fb5f690970ca43a57ff1011ae202244b8&dn=ubuntu-25.04-desktop-amd64.iso&tr=https%3A%2F%2Ftorrent.ubuntu.com%2Fannounce&tr=https%3A%2F%2Fipv6.torrent.ubuntu.com%2Fannounce"
 	expectedTrackerCount := 2 // Should be 2 when preserving trackers
 
 	torrentPath := testutil.GetTestTorrentPath()
-	testMagnetFromFile(t, torrentPath, false, expectedInfoHash, expectedName, expectedLink, expectedTrackerCount)
+	testMagnetFromFile(t, torrentPath, false, expectedLink, expectedTrackerCount)
 }
 
 func TestGetMagnetFromFile_UsesUploadedFilenameAsDisplayName(t *testing.T) {
+	t.Parallel()
 	file, err := os.Open(testutil.GetTestTorrentPath())
 	if err != nil {
 		t.Fatalf("Failed to open torrent file: %v", err)
 	}
 	defer file.Close()
 
-	magnet, err := GetMagnetFromFile(file, "Example Show Season 01 S01 1080p WEB-DL x265.torrent", true)
+	magnet, err := utils.GetMagnetFromFile(file, "Example Show Season 01 S01 1080p WEB-DL x265.torrent", true)
 	if err != nil {
 		t.Fatalf("GetMagnetFromFile failed: %v", err)
 	}
@@ -111,19 +116,20 @@ func TestGetMagnetFromFile_UsesUploadedFilenameAsDisplayName(t *testing.T) {
 	if magnet.Name != want {
 		t.Fatalf("expected name %q, got %q", want, magnet.Name)
 	}
-	if got := MagnetDisplayName(magnet.Link); got != want {
+	if got := utils.MagnetDisplayName(magnet.Link); got != want {
 		t.Fatalf("expected display name %q, got %q", want, got)
 	}
 }
 
 func TestGetMagnetFromFile_StripsUploadedTorrentPathFromDisplayName(t *testing.T) {
+	t.Parallel()
 	file, err := os.Open(testutil.GetTestTorrentPath())
 	if err != nil {
 		t.Fatalf("Failed to open torrent file: %v", err)
 	}
 	defer file.Close()
 
-	magnet, err := GetMagnetFromFile(file, "/tmp/Example Show Season 01 S01 1080p WEB-DL x265.torrent", true)
+	magnet, err := utils.GetMagnetFromFile(file, "/tmp/Example Show Season 01 S01 1080p WEB-DL x265.torrent", true)
 	if err != nil {
 		t.Fatalf("GetMagnetFromFile failed: %v", err)
 	}
@@ -132,15 +138,16 @@ func TestGetMagnetFromFile_StripsUploadedTorrentPathFromDisplayName(t *testing.T
 	if magnet.Name != want {
 		t.Fatalf("expected name %q, got %q", want, magnet.Name)
 	}
-	if got := MagnetDisplayName(magnet.Link); got != want {
+	if got := utils.MagnetDisplayName(magnet.Link); got != want {
 		t.Fatalf("expected display name %q, got %q", want, got)
 	}
 }
 
 func TestGetMagnetFromFile_MagnetFileKeepsEmbeddedDisplayName(t *testing.T) {
+	t.Parallel()
 	file := strings.NewReader("magnet:?xt=urn:btih:8a19577fb5f690970ca43a57ff1011ae202244b8&dn=Embedded+Release+Name")
 
-	magnet, err := GetMagnetFromFile(file, "uploaded-name.magnet", true)
+	magnet, err := utils.GetMagnetFromFile(file, "uploaded-name.magnet", true)
 	if err != nil {
 		t.Fatalf("GetMagnetFromFile failed: %v", err)
 	}
@@ -148,15 +155,16 @@ func TestGetMagnetFromFile_MagnetFileKeepsEmbeddedDisplayName(t *testing.T) {
 	if got, want := magnet.Name, "Embedded Release Name"; got != want {
 		t.Fatalf("expected name %q, got %q", want, got)
 	}
-	if got, want := MagnetDisplayName(magnet.Link), "Embedded Release Name"; got != want {
+	if got, want := utils.MagnetDisplayName(magnet.Link), "Embedded Release Name"; got != want {
 		t.Fatalf("expected display name %q, got %q", want, got)
 	}
 }
 
 func TestGetMagnetFromFile_MagnetFileWithoutDisplayNameUsesUploadedFilename(t *testing.T) {
+	t.Parallel()
 	file := strings.NewReader("magnet:?xt=urn:btih:8a19577fb5f690970ca43a57ff1011ae202244b8")
 
-	magnet, err := GetMagnetFromFile(file, "uploaded-release-name.magnet", true)
+	magnet, err := utils.GetMagnetFromFile(file, "uploaded-release-name.magnet", true)
 	if err != nil {
 		t.Fatalf("GetMagnetFromFile failed: %v", err)
 	}
@@ -164,75 +172,75 @@ func TestGetMagnetFromFile_MagnetFileWithoutDisplayNameUsesUploadedFilename(t *t
 	if got, want := magnet.Name, "uploaded-release-name"; got != want {
 		t.Fatalf("expected name %q, got %q", want, got)
 	}
-	if got, want := MagnetDisplayName(magnet.Link), "uploaded-release-name"; got != want {
+	if got, want := utils.MagnetDisplayName(magnet.Link), "uploaded-release-name"; got != want {
 		t.Fatalf("expected display name %q, got %q", want, got)
 	}
 }
 
 func TestGetMagnetFromFile_MagnetFile_StripTrue(t *testing.T) {
-	expectedInfoHash := "8a19577fb5f690970ca43a57ff1011ae202244b8"
-	expectedName := "ubuntu-25.04-desktop-amd64.iso"
+	t.Parallel()
 	expectedLink := "magnet:?xt=urn:btih:8a19577fb5f690970ca43a57ff1011ae202244b8&dn=ubuntu-25.04-desktop-amd64.iso"
 	expectedTrackerCount := 0 // Should be 0 when stripping trackers
 
 	torrentPath := testutil.GetTestMagnetPath()
-	testMagnetFromFile(t, torrentPath, true, expectedInfoHash, expectedName, expectedLink, expectedTrackerCount)
+	testMagnetFromFile(t, torrentPath, true, expectedLink, expectedTrackerCount)
 }
 
 func TestGetMagnetFromFile_MagnetFile_StripFalse(t *testing.T) {
-	expectedInfoHash := "8a19577fb5f690970ca43a57ff1011ae202244b8"
-	expectedName := "ubuntu-25.04-desktop-amd64.iso"
+	t.Parallel()
 	expectedLink := "magnet:?xt=urn:btih:8a19577fb5f690970ca43a57ff1011ae202244b8&dn=ubuntu-25.04-desktop-amd64.iso&tr=https%3A%2F%2Fipv6.torrent.ubuntu.com%2Fannounce&tr=https%3A%2F%2Ftorrent.ubuntu.com%2Fannounce"
 	expectedTrackerCount := 2
 
 	torrentPath := testutil.GetTestMagnetPath()
-	testMagnetFromFile(t, torrentPath, false, expectedInfoHash, expectedName, expectedLink, expectedTrackerCount)
+	testMagnetFromFile(t, torrentPath, false, expectedLink, expectedTrackerCount)
 }
 
 func TestGetMagnetFromUrl_MagnetLink_StripTrue(t *testing.T) {
-	expectedInfoHash := "8a19577fb5f690970ca43a57ff1011ae202244b8"
+	t.Parallel()
+	expectedInfoHash := ubuntuInfoHash
 	expectedName := "ubuntu-25.04-desktop-amd64.iso"
 	expectedLink := "magnet:?xt=urn:btih:8a19577fb5f690970ca43a57ff1011ae202244b8&dn=ubuntu-25.04-desktop-amd64.iso"
 	expectedTrackerCount := 0
 
 	// Load the magnet URL from the test file
-	magnetUrl, err := testutil.GetTestMagnetContent()
+	magnetURL, err := testutil.GetTestMagnetContent()
 	if err != nil {
 		t.Fatalf("Failed to load magnet URL from test file: %v", err)
 	}
 
-	magnet, err := GetMagnetFromUrl(magnetUrl, true)
+	magnet, err := utils.GetMagnetFromUrl(magnetURL, true)
 	if err != nil {
 		t.Fatalf("GetMagnetFromUrl failed: %v", err)
 	}
 
-	checkMagnet(t, magnet, expectedInfoHash, expectedName, expectedLink, expectedTrackerCount, false)
+	checkMagnet(t, magnet, expectedInfoHash, expectedName, expectedLink, expectedTrackerCount)
 	t.Logf("Generated clean magnet link: %s", magnet.Link)
 }
 
 func TestGetMagnetFromUrl_MagnetLink_StripFalse(t *testing.T) {
-	expectedInfoHash := "8a19577fb5f690970ca43a57ff1011ae202244b8"
+	t.Parallel()
+	expectedInfoHash := ubuntuInfoHash
 	expectedName := "ubuntu-25.04-desktop-amd64.iso"
 	expectedLink := "magnet:?xt=urn:btih:8a19577fb5f690970ca43a57ff1011ae202244b8&dn=ubuntu-25.04-desktop-amd64.iso&tr=https%3A%2F%2Fipv6.torrent.ubuntu.com%2Fannounce&tr=https%3A%2F%2Ftorrent.ubuntu.com%2Fannounce"
 	expectedTrackerCount := 2
 
 	// Load the magnet URL from the test file
-	magnetUrl, err := testutil.GetTestMagnetContent()
+	magnetURL, err := testutil.GetTestMagnetContent()
 	if err != nil {
 		t.Fatalf("Failed to load magnet URL from test file: %v", err)
 	}
 
-	magnet, err := GetMagnetFromUrl(magnetUrl, false)
+	magnet, err := utils.GetMagnetFromUrl(magnetURL, false)
 	if err != nil {
 		t.Fatalf("GetMagnetFromUrl failed: %v", err)
 	}
 
-	checkMagnet(t, magnet, expectedInfoHash, expectedName, expectedLink, expectedTrackerCount, false)
+	checkMagnet(t, magnet, expectedInfoHash, expectedName, expectedLink, expectedTrackerCount)
 	t.Logf("Generated magnet link with trackers: %s", magnet.Link)
 }
 
-// testMagnetFromHttpTorrent is a helper function for tests that use GetMagnetFromUrl with HTTP torrent links.
-func testMagnetFromHttpTorrent(
+// testMagnetFromHTTPTorrent is a helper function for tests that use GetMagnetFromUrl with HTTP torrent links.
+func testMagnetFromHTTPTorrent(
 	t *testing.T,
 	torrentPath string,
 	rmTrackerUrls bool,
@@ -248,19 +256,19 @@ func testMagnetFromHttpTorrent(
 	}
 
 	// Create a test HTTP server that serves the torrent file
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/x-bittorrent")
 		_, _ = w.Write(torrentData)
 	}))
 	defer server.Close()
 
 	// Test the function with the mock server URL
-	magnet, err := GetMagnetFromUrl(server.URL, rmTrackerUrls)
+	magnet, err := utils.GetMagnetFromUrl(server.URL, rmTrackerUrls)
 	if err != nil {
 		t.Fatalf("GetMagnetFromUrl failed: %v", err)
 	}
 
-	checkMagnet(t, magnet, expectedInfoHash, expectedName, expectedLink, expectedTrackerCount, true)
+	checkMagnet(t, magnet, expectedInfoHash, expectedName, expectedLink, expectedTrackerCount)
 
 	// Log the result
 	if rmTrackerUrls {
@@ -271,12 +279,13 @@ func testMagnetFromHttpTorrent(
 }
 
 func TestGetMagnetFromUrl_TorrentLink_StripTrue(t *testing.T) {
-	expectedInfoHash := "8a19577fb5f690970ca43a57ff1011ae202244b8"
+	t.Parallel()
+	expectedInfoHash := ubuntuInfoHash
 	expectedName := "ubuntu-25.04-desktop-amd64.iso"
 	expectedLink := "magnet:?xt=urn:btih:8a19577fb5f690970ca43a57ff1011ae202244b8&dn=ubuntu-25.04-desktop-amd64.iso"
 	expectedTrackerCount := 0
 
-	testMagnetFromHttpTorrent(
+	testMagnetFromHTTPTorrent(
 		t,
 		"ubuntu-25.04-desktop-amd64.iso.torrent",
 		true,
@@ -288,12 +297,13 @@ func TestGetMagnetFromUrl_TorrentLink_StripTrue(t *testing.T) {
 }
 
 func TestGetMagnetFromUrl_TorrentLink_StripFalse(t *testing.T) {
-	expectedInfoHash := "8a19577fb5f690970ca43a57ff1011ae202244b8"
+	t.Parallel()
+	expectedInfoHash := ubuntuInfoHash
 	expectedName := "ubuntu-25.04-desktop-amd64.iso"
 	expectedLink := "magnet:?xt=urn:btih:8a19577fb5f690970ca43a57ff1011ae202244b8&dn=ubuntu-25.04-desktop-amd64.iso&tr=https%3A%2F%2Ftorrent.ubuntu.com%2Fannounce&tr=https%3A%2F%2Fipv6.torrent.ubuntu.com%2Fannounce"
 	expectedTrackerCount := 2
 
-	testMagnetFromHttpTorrent(
+	testMagnetFromHTTPTorrent(
 		t,
 		"ubuntu-25.04-desktop-amd64.iso.torrent",
 		false,
