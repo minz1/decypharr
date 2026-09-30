@@ -587,46 +587,12 @@ func (c *Client) getAnyAvailableConnectionInTier(
 	exclusions providerExclusions,
 	useBackups bool,
 ) (*Connection, config.UsenetProvider, error) {
-	// Cooldowns are advisory reroutes, never a denial of service: skip a
-	// cooling-down provider only when some other eligible provider is warm
-	// (see ProviderPool.isWarm). When the whole tier is cold, dial anyway —
-	// otherwise a single-provider setup would trade its fail-fast behavior
-	// for a silent wait.
-	ignoreCooldowns := true
-	for i, provider := range c.providers {
-		if provider.Backup != useBackups || exclusions.excludes(provider) {
-			continue
-		}
-		if c.orderedPools[i].isWarm() {
-			ignoreCooldowns = false
-			break
-		}
-	}
-
 	// Phase 1: Non-blocking scan - try to get a free slot from any provider
 	// within the current tier.
-	eligibleCount := 0
-	for i, provider := range c.providers {
-		if provider.Backup != useBackups || exclusions.excludes(provider) {
-			continue
-		}
-		eligibleCount++
-		pp := c.orderedPools[i]
-		if !ignoreCooldowns && !pp.isWarm() {
-			continue // provider cooling down after dial failures; route around it
-		}
-
-		if c.tryAcquireSlot(pp, workload) {
-			// Got a slot - try to get or create connection
-			conn, err := c.getOrCreateFromPool(ctx, pp, provider, ignoreCooldowns)
-			if err != nil {
-				c.releaseSlot(pp) // Release slot on error
-				continue          // Try next provider
-			}
-			return conn, provider, nil
-		}
+	conn, provider, eligibleCount := c.scanTier(ctx, workload, exclusions, useBackups)
+	if conn != nil {
+		return conn, provider, nil
 	}
-
 	if eligibleCount == 0 {
 		return nil, config.UsenetProvider{}, errors.New("no eligible providers available")
 	}
@@ -635,8 +601,8 @@ func (c *Client) getAnyAvailableConnectionInTier(
 	// When the primary tier is in use this is the wait that lets a backup
 	// remain idle rather than getting roped in.
 	eligible := make([]*ProviderPool, 0, eligibleCount)
-	for i, provider := range c.providers {
-		if provider.Backup == useBackups && !exclusions.excludes(provider) {
+	for i, p := range c.providers {
+		if p.Backup == useBackups && !exclusions.excludes(p) {
 			eligible = append(eligible, c.orderedPools[i])
 		}
 	}
@@ -644,16 +610,61 @@ func (c *Client) getAnyAvailableConnectionInTier(
 	if !useBackups && workload == WorkloadStreamDemand && c.streamBackupWait > 0 &&
 		c.hasEligibleProviderInTier(exclusions, true) {
 		waitCtx, cancel := context.WithTimeoutCause(ctx, c.streamBackupWait, errStreamBackupWaitElapsed)
-		conn, provider, err := c.waitForConnection(waitCtx, workload, eligible)
+		waited, waitedProvider, err := c.waitForConnection(waitCtx, workload, eligible)
 		spillToBackup := errors.Is(context.Cause(waitCtx), errStreamBackupWaitElapsed) && ctx.Err() == nil
 		cancel()
 		if spillToBackup {
 			c.streamBackupSpillovers.Add(1)
 			return c.getAnyAvailableConnectionInTier(ctx, workload, exclusions, true)
 		}
-		return conn, provider, err
+		return waited, waitedProvider, err
 	}
 	return c.waitForConnection(ctx, workload, eligible)
+}
+
+// scanTier tries every eligible provider of one tier without blocking. It
+// returns a connection when one was free, plus the tier's eligible count.
+//
+// Cooldowns are advisory reroutes, never a denial of service: skip a
+// cooling-down provider only when some other eligible provider is warm
+// (see ProviderPool.isWarm). When the whole tier is cold, dial anyway —
+// otherwise a single-provider setup would trade its fail-fast behavior
+// for a silent wait.
+func (c *Client) scanTier(
+	ctx context.Context,
+	workload Workload,
+	exclusions providerExclusions,
+	useBackups bool,
+) (*Connection, config.UsenetProvider, int) {
+	ignoreCooldowns := true
+	for i, p := range c.providers {
+		if p.Backup == useBackups && !exclusions.excludes(p) && c.orderedPools[i].isWarm() {
+			ignoreCooldowns = false
+			break
+		}
+	}
+
+	eligibleCount := 0
+	for i, p := range c.providers {
+		if p.Backup != useBackups || exclusions.excludes(p) {
+			continue
+		}
+		eligibleCount++
+		pp := c.orderedPools[i]
+		if !ignoreCooldowns && !pp.isWarm() {
+			continue // provider cooling down after dial failures; route around it
+		}
+		if !c.tryAcquireSlot(pp, workload) {
+			continue
+		}
+		conn, err := c.getOrCreateFromPool(ctx, pp, p, ignoreCooldowns)
+		if err != nil {
+			c.releaseSlot(pp) // Release slot on error, try next provider
+			continue
+		}
+		return conn, p, eligibleCount
+	}
+	return nil, config.UsenetProvider{}, eligibleCount
 }
 
 var errStreamBackupWaitElapsed = errors.New("stream primary-tier wait elapsed")
@@ -684,43 +695,18 @@ func (c *Client) waitForConnection(
 		}
 		c.register(w)
 
-		busy := 0
-		failed := 0
-		ignoreCooldowns := true
-		for _, pp := range eligible {
-			if pp.isWarm() {
-				ignoreCooldowns = false
-				break
-			}
+		scan := c.scanEligible(ctx, workload, eligible)
+		if scan.conn != nil {
+			c.deregister(w)
+			c.finishWait(w, admissionSucceeded)
+			return scan.conn, scan.pool.config, nil
 		}
-		for _, pp := range eligible {
-			if !ignoreCooldowns && !pp.isWarm() {
-				continue
-			}
-			if c.tryAcquireSlot(pp, workload) {
-				conn, err := c.getOrCreateFromPool(ctx, pp, pp.config, ignoreCooldowns)
-				if err != nil {
-					c.releaseSlot(pp)
-					if errors.Is(err, errDialCooldown) {
-						// Raced into a cooldown (pool drained after the
-						// isWarm check): wait it out, don't surface it.
-						busy++
-					} else {
-						lastErr = err
-						failed++
-					}
-					continue
-				}
-				c.deregister(w)
-				c.finishWait(w, admissionSucceeded)
-				return conn, pp.config, nil
-			} else {
-				busy++
-			}
+		if scan.err != nil {
+			lastErr = scan.err
 		}
 		// Every provider had a free slot and failed to produce a connection:
 		// surface the error instead of spinning on dial failures.
-		if busy == 0 && failed > 0 {
+		if scan.busy == 0 && scan.failed > 0 {
 			c.deregister(w)
 			c.finishWait(w, admissionFailed)
 			return nil, config.UsenetProvider{}, lastErr
@@ -732,15 +718,14 @@ func (c *Client) waitForConnection(
 			// The releaser already removed us from the queue; we own a held
 			// slot on pp now. Do not deregister here — the token is consumed.
 			conn, err := c.getOrCreateFromPool(ctx, pp, pp.config, false)
-			if err != nil {
-				c.releaseSlot(pp)
-				if !errors.Is(err, errDialCooldown) {
-					lastErr = err
-				}
-				continue
+			if err == nil {
+				c.finishWait(w, admissionSucceeded)
+				return conn, pp.config, nil
 			}
-			c.finishWait(w, admissionSucceeded)
-			return conn, pp.config, nil
+			c.releaseSlot(pp)
+			if !errors.Is(err, errDialCooldown) {
+				lastErr = err
+			}
 		case <-timer.C:
 			c.deregister(w)
 		case <-ctx.Done():
@@ -749,6 +734,46 @@ func (c *Client) waitForConnection(
 			return nil, config.UsenetProvider{}, ctx.Err()
 		}
 	}
+}
+
+// eligibleScan is the result of one non-blocking pass over eligible pools.
+type eligibleScan struct {
+	conn   *Connection
+	pool   *ProviderPool
+	busy   int
+	failed int
+	err    error // last dial failure, if any
+}
+
+// scanEligible tries each eligible pool once without blocking, honoring dial
+// cooldowns while any pool is warm.
+func (c *Client) scanEligible(ctx context.Context, workload Workload, eligible []*ProviderPool) eligibleScan {
+	var scan eligibleScan
+	ignoreCooldowns := !slices.ContainsFunc(eligible, (*ProviderPool).isWarm)
+	for _, pp := range eligible {
+		if !ignoreCooldowns && !pp.isWarm() {
+			continue
+		}
+		if !c.tryAcquireSlot(pp, workload) {
+			scan.busy++
+			continue
+		}
+		conn, err := c.getOrCreateFromPool(ctx, pp, pp.config, ignoreCooldowns)
+		if err == nil {
+			scan.conn, scan.pool = conn, pp
+			return scan
+		}
+		c.releaseSlot(pp)
+		if errors.Is(err, errDialCooldown) {
+			// Raced into a cooldown (pool drained after the isWarm check):
+			// wait it out, don't surface it.
+			scan.busy++
+		} else {
+			scan.err = err
+			scan.failed++
+		}
+	}
+	return scan
 }
 
 // errDialCooldown is returned by getOrCreateFromPool when the pool has no
