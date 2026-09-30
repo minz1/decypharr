@@ -142,7 +142,7 @@ func newTorrentQueueEntry(importReq *ImportRequest, status debridTypes.TorrentSt
 		State:            storage.EntryStateDownloading,
 		Progress:         0,
 		Action:           importReq.Action,
-		CallbackURL:      importReq.CallBackUrl,
+		CallbackURL:      importReq.CallBackURL,
 		SkipMultiSeason:  importReq.SkipMultiSeason,
 		CreatedAt:        now,
 		UpdatedAt:        now,
@@ -166,40 +166,36 @@ func (m *Manager) processQueuedEntries() {
 		m.logger.Error().Err(err).Msg("Failed to read the download queue")
 		return
 	}
-	if len(queueEntries) == 0 {
-		return
-	}
 	for _, entry := range queueEntries {
-		// Parse only active downloading torrents
-		if entry.State != storage.EntryStateDownloading {
+		// Only active downloads that no local worker is already driving.
+		if entry.State != storage.EntryStateDownloading || entry.Status == debridTypes.TorrentStatusQueued ||
+			entry.IsDownloading {
 			continue
 		}
-		if entry.Status == debridTypes.TorrentStatusQueued {
-			continue
-		}
-		// Skip entries that are actively being downloading
-		if entry.IsDownloading {
+		task := m.queuedEntryTask(entry)
+		if task == nil {
 			continue
 		}
 		// Skip if a previous tick's goroutine hasn't finished yet for this hash.
 		if _, loaded := m.processingEntries.LoadOrStore(entry.InfoHash, struct{}{}); loaded {
 			continue
 		}
-		if entry.IsTorrent() {
-			if entry.ActiveProvider != "" {
-				if !m.startDownloadTask(func() { m.processQueuedTorrent(entry) }) {
-					m.processingEntries.Delete(entry.InfoHash)
-				}
-			} else {
-				m.processingEntries.Delete(entry.InfoHash)
-			}
-		} else if entry.IsNZB() {
-			if !m.startDownloadTask(func() { m.processQueuedNZB(entry) }) {
-				m.processingEntries.Delete(entry.InfoHash)
-			}
-		} else {
+		if !m.startDownloadTask(task) {
 			m.processingEntries.Delete(entry.InfoHash)
 		}
+	}
+}
+
+// queuedEntryTask returns the poll step for a queued entry, or nil when the
+// scheduler has nothing to drive for it.
+func (m *Manager) queuedEntryTask(entry *storage.Entry) func() {
+	switch {
+	case entry.IsTorrent() && entry.ActiveProvider != "":
+		return func() { m.processQueuedTorrent(entry) }
+	case entry.IsNZB():
+		return func() { m.processQueuedNZB(entry) }
+	default:
+		return nil
 	}
 }
 
@@ -230,7 +226,7 @@ func (m *Manager) processQueuedNZB(entry *storage.Entry) {
 		// Still processing, skip for now
 		return
 	case usenet.NZBStatusCompleted:
-		if processNZBErr := m.processNZB(m.ctx, entry, metadata); processNZBErr != nil {
+		if processNZBErr := m.processNZB(entry, metadata); processNZBErr != nil {
 			m.logger.Error().Err(processNZBErr).Str("name", entry.Name).Msg("Error processing queued NZB")
 			entry.MarkAsError(processNZBErr)
 			_ = m.queue.Update(entry)
@@ -428,7 +424,7 @@ func applyDebridTorrentToEntry(torrent *storage.Entry, debridTorrent *debridType
 }
 
 // SendToDebrid submits a magnet to debrid service(s) - replaces debrid.Parse.
-func (m *Manager) SendToDebrid(ctx context.Context, importRequest *ImportRequest) (*debridTypes.Torrent, error) {
+func (m *Manager) SendToDebrid(_ context.Context, importRequest *ImportRequest) (*debridTypes.Torrent, error) {
 	debridTorrent := &debridTypes.Torrent{
 		InfoHash: importRequest.Magnet.InfoHash,
 		Magnet:   importRequest.Magnet,

@@ -20,6 +20,7 @@ import (
 
 type shutdownMount struct {
 	MountManager
+
 	stop func() error
 }
 
@@ -28,6 +29,7 @@ func (m shutdownMount) Refresh([]string) error { return nil }
 
 type completedTorrentProvider struct {
 	debrid.Client
+
 	torrent *types.Torrent
 }
 

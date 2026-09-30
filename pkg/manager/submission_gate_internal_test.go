@@ -78,7 +78,7 @@ func TestTorrentSubmissionGateCoalescesConcurrentCalls(t *testing.T) {
 	release := make(chan struct{})
 	var calls atomic.Int64
 
-	submit := func() error {
+	submit := func() error { //nolint:unparam // must match the submit signature gate.Do takes
 		if calls.Add(1) == 1 {
 			close(started)
 		}

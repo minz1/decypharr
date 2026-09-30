@@ -20,7 +20,7 @@ func (m *Manager) runInitialCalls(ctx context.Context) {
 
 func (m *Manager) syncAccounts() {
 	// Sync accounts for all debrids
-	m.clients.Range(func(debridName string, debridClient debrid.Client) bool {
+	m.clients.Range(func(_ string, debridClient debrid.Client) bool {
 		if debridClient == nil {
 			return true
 		}

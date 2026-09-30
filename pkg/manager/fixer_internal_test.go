@@ -16,6 +16,7 @@ import (
 
 type replacementProvider struct {
 	debrid.Client
+
 	submissions int
 	deletions   atomic.Int64
 }

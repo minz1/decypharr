@@ -17,7 +17,7 @@ import (
 )
 
 // AddNewNZB persists an NZB and returns as soon as it enters the active-download queue.
-func (m *Manager) AddNewNZB(ctx context.Context, req *ImportRequest) (string, error) {
+func (m *Manager) AddNewNZB(_ context.Context, req *ImportRequest) (string, error) {
 	if m.usenet == nil {
 		return "", fmt.Errorf("usenet not configured")
 	}
@@ -51,7 +51,7 @@ func (m *Manager) AddNewNZB(ctx context.Context, req *ImportRequest) (string, er
 		State:            storage.EntryStateDownloading,
 		Progress:         0,
 		Action:           req.Action,
-		CallbackURL:      req.CallBackUrl,
+		CallbackURL:      req.CallBackURL,
 		SkipMultiSeason:  req.SkipMultiSeason,
 		CreatedAt:        time.Now(),
 		UpdatedAt:        time.Now(),
@@ -145,7 +145,7 @@ func (m *Manager) processNZBJob(ctx context.Context, job *Job) error {
 	return m.processNewNzb(ctx, job.Entry, job.NZBMeta, job.NZBGroups)
 }
 
-func (m *Manager) processNZB(ctx context.Context, entry *storage.Entry, metadata *storage.NZB) error {
+func (m *Manager) processNZB(entry *storage.Entry, metadata *storage.NZB) error {
 	// Add files using logical streamable files
 	for _, file := range metadata.Files {
 		tFile := &storage.File{
@@ -207,7 +207,7 @@ func (m *Manager) processNewNzb(
 	m.hearsay.ReportNZB(hearsaySubject, true)
 
 	metadata = updatedNZB
-	return m.processNZB(ctx, entry, metadata)
+	return m.processNZB(entry, metadata)
 }
 
 // HasUsenet returns true if usenet is configured.
