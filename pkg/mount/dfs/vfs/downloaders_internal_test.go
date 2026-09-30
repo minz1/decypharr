@@ -14,6 +14,7 @@ const (
 )
 
 func TestCurrentKickerInterval(t *testing.T) {
+	t.Parallel()
 	dls := &Downloaders{}
 
 	if got := dls.currentKickerInterval(); got != kickerInterval {
@@ -33,6 +34,7 @@ func getMaxOffset(dl *downloader) int64 {
 }
 
 func TestEnsureDownloaderLocked_ExtendsMissByReadAhead(t *testing.T) {
+	t.Parallel()
 	const (
 		reqPos    = 10 * testMiB
 		reqSize   = 128 * testKiB
@@ -67,6 +69,7 @@ func TestEnsureDownloaderLocked_ExtendsMissByReadAhead(t *testing.T) {
 }
 
 func TestEnsureDownloaderLocked_CachedRequestPrefetchesGap(t *testing.T) {
+	t.Parallel()
 	const (
 		reqPos    = 0
 		reqSize   = 128 * testKiB
@@ -102,6 +105,7 @@ func TestEnsureDownloaderLocked_CachedRequestPrefetchesGap(t *testing.T) {
 }
 
 func TestEnsureDownloaderLocked_CachedWindowFullDoesNotExtend(t *testing.T) {
+	t.Parallel()
 	const (
 		reqPos    = 0
 		reqSize   = 128 * testKiB
@@ -137,6 +141,7 @@ func TestEnsureDownloaderLocked_CachedWindowFullDoesNotExtend(t *testing.T) {
 }
 
 func TestStopAllClearsWaiters(t *testing.T) {
+	t.Parallel()
 	parentCtx := context.Background()
 	ctx, cancel := context.WithCancel(parentCtx)
 
@@ -174,6 +179,7 @@ func TestStopAllClearsWaiters(t *testing.T) {
 // stopCond instead — and that once the teardown resolves to closed, it
 // returns an error without ever having created any work.
 func TestDownloadWaitsOutStoppingThenFailsClosed(t *testing.T) {
+	t.Parallel()
 	parentCtx := context.Background()
 	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
@@ -236,6 +242,7 @@ func TestDownloadWaitsOutStoppingThenFailsClosed(t *testing.T) {
 }
 
 func TestCacheItemReleaseStopsDownloadersOnZeroOpens(t *testing.T) {
+	t.Parallel()
 	parentCtx := context.Background()
 	ctx, cancel := context.WithCancel(parentCtx)
 
@@ -271,6 +278,7 @@ func TestCacheItemReleaseStopsDownloadersOnZeroOpens(t *testing.T) {
 // channel still open, assume a kicker was running, and start none — leaving
 // parked waiters without their safety-net ticker for the whole session.
 func TestIdleRestartStartsKickerBeforeOldOneClosesDone(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	dls := &Downloaders{ctx: ctx, cancel: cancel, idle: true}

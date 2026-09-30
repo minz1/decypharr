@@ -16,6 +16,7 @@ import (
 )
 
 func TestNewFileUsesMetadataModificationTime(t *testing.T) {
+	t.Parallel()
 	var managerInstance manager.Manager
 	info := managerInstance.RootInfo()
 	file := NewFile(nil, &config.FuseConfig{}, info, &logger.RateLimitedLogger{})
@@ -26,6 +27,7 @@ func TestNewFileUsesMetadataModificationTime(t *testing.T) {
 }
 
 func TestNewFileChoosesStableFallbackTime(t *testing.T) {
+	t.Parallel()
 	info := &manager.FileInfo{}
 	file := NewFile(nil, &config.FuseConfig{}, info, &logger.RateLimitedLogger{})
 
@@ -34,7 +36,7 @@ func TestNewFileChoosesStableFallbackTime(t *testing.T) {
 	}
 }
 
-func TestHandleKeepsMetadataSnapshot(t *testing.T) {
+func TestHandleKeepsMetadataSnapshot(t *testing.T) { //nolint:paralleltest // mutates the config singleton
 	initial := testRemoteFileInfo(t, 128, time.Now().Add(-time.Hour))
 	replacement := testRemoteFileInfo(t, 256, time.Now())
 	file := NewFile(nil, &config.FuseConfig{}, initial, logger.NewRateLimitedLogger())
@@ -50,7 +52,7 @@ func TestHandleKeepsMetadataSnapshot(t *testing.T) {
 	}
 }
 
-func TestFileMetadataRefreshIsRaceSafe(t *testing.T) {
+func TestFileMetadataRefreshIsRaceSafe(t *testing.T) { //nolint:paralleltest // mutates the config singleton
 	first := testRemoteFileInfo(t, 128, time.Now().Add(-time.Hour))
 	second := testRemoteFileInfo(t, 256, time.Now())
 	file := NewFile(nil, &config.FuseConfig{}, first, logger.NewRateLimitedLogger())

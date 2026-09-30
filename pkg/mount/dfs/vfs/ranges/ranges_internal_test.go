@@ -5,6 +5,7 @@ import (
 )
 
 func TestRangeEnd(t *testing.T) {
+	t.Parallel()
 	r := Range{Pos: 10, Size: 5}
 	if r.End() != 15 {
 		t.Errorf("Expected End() = 15, got %d", r.End())
@@ -12,6 +13,7 @@ func TestRangeEnd(t *testing.T) {
 }
 
 func TestRangeIsEmpty(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		r        Range
 		expected bool
@@ -28,6 +30,7 @@ func TestRangeIsEmpty(t *testing.T) {
 }
 
 func TestRangeClip(t *testing.T) {
+	t.Parallel()
 	r := Range{Pos: 10, Size: 20}
 	r.Clip(25)
 	if r.End() != 25 || r.Size != 15 {
@@ -42,6 +45,7 @@ func TestRangeClip(t *testing.T) {
 }
 
 func TestRangesInsert(t *testing.T) {
+	t.Parallel()
 	var rs Ranges
 
 	rs.Insert(Range{Pos: 0, Size: 10})
@@ -69,6 +73,7 @@ func TestRangesInsert(t *testing.T) {
 }
 
 func TestRangesRemove(t *testing.T) {
+	t.Parallel()
 	// Straddling removal splits a range into head + tail.
 	var rs Ranges
 	rs.Insert(Range{Pos: 0, Size: 100})
@@ -106,6 +111,7 @@ func TestRangesRemove(t *testing.T) {
 }
 
 func TestRangesPresent(t *testing.T) {
+	t.Parallel()
 	var rs Ranges
 	rs.Insert(Range{Pos: 0, Size: 100})
 	rs.Insert(Range{Pos: 200, Size: 100})
@@ -131,6 +137,7 @@ func TestRangesPresent(t *testing.T) {
 }
 
 func TestRangesFindMissing(t *testing.T) {
+	t.Parallel()
 	var rs Ranges
 	rs.Insert(Range{Pos: 0, Size: 100})
 	rs.Insert(Range{Pos: 200, Size: 100})
@@ -155,6 +162,7 @@ func TestRangesFindMissing(t *testing.T) {
 }
 
 func TestRangesSize(t *testing.T) {
+	t.Parallel()
 	var rs Ranges
 	rs.Insert(Range{Pos: 0, Size: 100})
 	rs.Insert(Range{Pos: 200, Size: 50})
@@ -165,6 +173,7 @@ func TestRangesSize(t *testing.T) {
 }
 
 func TestRangesFindAll(t *testing.T) {
+	t.Parallel()
 	var rs Ranges
 	rs.Insert(Range{Pos: 0, Size: 100})
 	rs.Insert(Range{Pos: 200, Size: 100})

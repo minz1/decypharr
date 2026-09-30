@@ -31,6 +31,7 @@ func referenceRemove(rs ranges.Ranges, r ranges.Range) ranges.Ranges {
 }
 
 func TestRemoveMatchesReference(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		rs   ranges.Ranges
@@ -50,6 +51,7 @@ func TestRemoveMatchesReference(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got := append(ranges.Ranges(nil), tc.rs...)
 			got.Remove(tc.r)
 			want := referenceRemove(tc.rs, tc.r)
@@ -61,6 +63,7 @@ func TestRemoveMatchesReference(t *testing.T) {
 }
 
 func TestRemoveMatchesReferenceRandomized(t *testing.T) {
+	t.Parallel()
 	rng := rand.New(rand.NewSource(42))
 	for i := range 5000 {
 		var rs ranges.Ranges
@@ -79,6 +82,7 @@ func TestRemoveMatchesReferenceRandomized(t *testing.T) {
 }
 
 func TestFindAllIntoMatchesFindAll(t *testing.T) {
+	t.Parallel()
 	rng := rand.New(rand.NewSource(7))
 	for i := range 2000 {
 		var rs ranges.Ranges

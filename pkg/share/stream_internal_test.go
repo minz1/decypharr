@@ -69,6 +69,7 @@ func newTestReader(data []byte, mutate func(*fakeSession)) (*streamReader, *atom
 }
 
 func TestStreamReaderSequentialReuseOneSession(t *testing.T) {
+	t.Parallel()
 	data := bytes.Repeat([]byte("decypharr"), 500)
 	r, opens := newTestReader(data, nil)
 	defer r.close()
@@ -97,6 +98,7 @@ func TestStreamReaderSequentialReuseOneSession(t *testing.T) {
 }
 
 func TestStreamReaderEOFBoundaries(t *testing.T) {
+	t.Parallel()
 	data := []byte("0123456789")
 	r, _ := newTestReader(data, nil)
 	defer r.close()
@@ -124,6 +126,7 @@ func TestStreamReaderEOFBoundaries(t *testing.T) {
 }
 
 func TestStreamReaderBackwardSeek(t *testing.T) {
+	t.Parallel()
 	data := []byte("0123456789")
 	r, opens := newTestReader(data, nil)
 	defer r.close()
@@ -146,6 +149,7 @@ func TestStreamReaderBackwardSeek(t *testing.T) {
 }
 
 func TestStreamReaderReconnectsAfterFailure(t *testing.T) {
+	t.Parallel()
 	data := bytes.Repeat([]byte("x"), 100)
 	boom := errors.New("link died")
 	first := true
@@ -171,6 +175,7 @@ func TestStreamReaderReconnectsAfterFailure(t *testing.T) {
 }
 
 func TestStreamReaderCloseReleasesSession(t *testing.T) {
+	t.Parallel()
 	data := []byte("0123456789")
 	var opened *fakeSession
 	r, _ := newTestReader(data, func(s *fakeSession) { opened = s })
@@ -191,6 +196,7 @@ func TestStreamReaderCloseReleasesSession(t *testing.T) {
 }
 
 func TestStreamReaderShortReadDropsSession(t *testing.T) {
+	t.Parallel()
 	var first *fakeSession
 	r, opens := newTestReader([]byte("abcdef"), func(s *fakeSession) {
 		if first == nil {

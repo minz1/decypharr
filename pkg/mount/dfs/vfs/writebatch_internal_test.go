@@ -44,6 +44,7 @@ func (w *recordingWriter) Write(p []byte) (int, error) {
 }
 
 func TestCopyBatchedCoalescesWithoutWaiters(t *testing.T) {
+	t.Parallel()
 	const total = 4 << 20
 	src := &chunkReader{readSize: 32 << 10, total: total}
 	dst := &recordingWriter{}
@@ -63,6 +64,7 @@ func TestCopyBatchedCoalescesWithoutWaiters(t *testing.T) {
 }
 
 func TestCopyBatchedFlushesPerReadWithWaiters(t *testing.T) {
+	t.Parallel()
 	const total = 1 << 20
 	src := &chunkReader{readSize: 32 << 10, total: total}
 	dst := &recordingWriter{}
@@ -82,6 +84,7 @@ func TestCopyBatchedFlushesPerReadWithWaiters(t *testing.T) {
 }
 
 func TestCopyBatchedLimitsSourceReadBeforeWaiting(t *testing.T) {
+	t.Parallel()
 	const (
 		total       = 2 << 20
 		waiterBytes = 128 << 10
@@ -125,6 +128,7 @@ func TestCopyBatchedLimitsSourceReadBeforeWaiting(t *testing.T) {
 }
 
 func TestWaiterReadLimitUsesEarliestFrontier(t *testing.T) {
+	t.Parallel()
 	var dls Downloaders
 	dls.minWaiterEnd.Store(384 << 10)
 	dls.waiterCount.Store(1)
@@ -142,6 +146,7 @@ func TestWaiterReadLimitUsesEarliestFrontier(t *testing.T) {
 }
 
 func TestBatchBufRightSizesSmallRangeAndReusesCapacity(t *testing.T) {
+	t.Parallel()
 	dl := &downloader{}
 	small := dl.batchBuf(128 << 10)
 	if len(small) != 128<<10 || cap(small) != 128<<10 {
@@ -157,6 +162,7 @@ func TestBatchBufRightSizesSmallRangeAndReusesCapacity(t *testing.T) {
 }
 
 func TestCopyBatchedFlushesTailOnEOF(t *testing.T) {
+	t.Parallel()
 	// Source dies after 96KB of a 4MB request: the partial fill must be
 	// flushed before the error is surfaced.
 	src := &chunkReader{readSize: 32 << 10, total: 96 << 10}
@@ -183,6 +189,7 @@ type overReadingReader struct{}
 func (overReadingReader) Read(p []byte) (int, error) { return 2 * len(p), nil }
 
 func TestCopyBatchedRejectsOverRead(t *testing.T) {
+	t.Parallel()
 	dst := &recordingWriter{}
 	buf := make([]byte, downloadBatchSize)
 
@@ -196,6 +203,7 @@ func TestCopyBatchedRejectsOverRead(t *testing.T) {
 }
 
 func TestCopyBatchedStopsOnWriteError(t *testing.T) {
+	t.Parallel()
 	src := &chunkReader{readSize: 32 << 10, total: 4 << 20}
 	dst := &recordingWriter{err: io.EOF} // skip-stop signal from cacheWriter
 	buf := make([]byte, downloadBatchSize)
@@ -215,6 +223,7 @@ func (s *prematureEOFStream) Prime() error { return nil }
 func (s *prematureEOFStream) Size() int64  { return s.size }
 
 func TestStreamChunkClassifiesPrematureEOF(t *testing.T) {
+	t.Parallel()
 	const (
 		fileSize  = int64(1 << 20)
 		chunkSize = int64(32 << 10)
@@ -245,6 +254,7 @@ func TestStreamChunkClassifiesPrematureEOF(t *testing.T) {
 }
 
 func TestCacheWriterAcknowledgesCumulativePublishedRange(t *testing.T) {
+	t.Parallel()
 	item, dls := newBenchItem(t, 4<<20)
 	dl := &downloader{dls: dls}
 	const start = int64(96 << 10)
@@ -286,6 +296,7 @@ func TestCacheWriterAcknowledgesCumulativePublishedRange(t *testing.T) {
 // satisfiable is only woken by cacheWriter.Write once the write frontier
 // crosses minWaiterEnd — writes below it must not kick.
 func TestKickWaitersFrontierGate(t *testing.T) {
+	t.Parallel()
 	item, dls := newBenchItem(t, 64<<20)
 
 	// The waiter's range: [1MB, 1.25MB), pre-filled so a kick would fulfil it.
@@ -333,6 +344,7 @@ func TestKickWaitersFrontierGate(t *testing.T) {
 // cacheWriter activity (discontiguous fill) is rescued by the active-waiter
 // ticker, not lost.
 func TestWaiterTickerRescue(t *testing.T) {
+	t.Parallel()
 	item, dls := newBenchItem(t, 64<<20)
 
 	wr := ranges.Range{Pos: 8 << 20, Size: 128 << 10}

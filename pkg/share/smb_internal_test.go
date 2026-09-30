@@ -11,6 +11,7 @@ import (
 )
 
 func TestSingleUserAuthenticator(t *testing.T) {
+	t.Parallel()
 	auth := &singleUser{user: "media", hash: smb.NTHash("secret")}
 	ctx := context.Background()
 
@@ -33,7 +34,7 @@ func TestSingleUserAuthenticator(t *testing.T) {
 	}
 }
 
-func TestSMBRequiresCredentials(t *testing.T) {
+func TestSMBRequiresCredentials(t *testing.T) { //nolint:paralleltest // mutates the config singleton
 	mgr := testManager(t)
 	server := NewSMB(mgr, nil, config.SMB{Enabled: true, Username: "media"})
 	if err := server.Start(context.Background()); err == nil {

@@ -19,6 +19,7 @@ import (
 )
 
 func TestChildStableAttrIsDeterministic(t *testing.T) {
+	t.Parallel()
 	dir := &Dir{virtualPath: "/__all__/example"}
 
 	first := dir.childStableAttr("video.mkv", fuse.S_IFREG|0644)
@@ -33,6 +34,7 @@ func TestChildStableAttrIsDeterministic(t *testing.T) {
 }
 
 func TestChildStableAttrIncludesFullParentPath(t *testing.T) {
+	t.Parallel()
 	firstParent := &Dir{virtualPath: "/__all__/example"}
 	secondParent := &Dir{virtualPath: "/provider/example"}
 
@@ -45,6 +47,7 @@ func TestChildStableAttrIncludesFullParentPath(t *testing.T) {
 }
 
 func TestNewDirTracksCanonicalVirtualPath(t *testing.T) {
+	t.Parallel()
 	dir := NewDir(nil, "", LevelRoot, 0, nil, zerolog.Nop(), nil)
 
 	if got := dir.childPath("__all__"); got != "/__all__" {
@@ -58,7 +61,7 @@ func TestNewDirTracksCanonicalVirtualPath(t *testing.T) {
 	}
 }
 
-func TestRefreshExistingChildUpdatesRetainedInode(t *testing.T) {
+func TestRefreshExistingChildUpdatesRetainedInode(t *testing.T) { //nolint:paralleltest // mutates the config singleton
 	initial := testRemoteFileInfo(t, 128, time.Now().Add(-time.Hour))
 	replacement := testRemoteFileInfo(t, 256, time.Now())
 	root := NewDir(nil, "", LevelRoot, 0, &mountconfig.FuseConfig{}, zerolog.Nop(), logger.NewRateLimitedLogger())
@@ -97,6 +100,7 @@ func TestRefreshExistingChildUpdatesRetainedInode(t *testing.T) {
 }
 
 func TestRefreshExistingChildUpdatesRetainedDirModTime(t *testing.T) {
+	t.Parallel()
 	root := NewDir(nil, "", LevelRoot, 0, &mountconfig.FuseConfig{}, zerolog.Nop(), logger.NewRateLimitedLogger())
 	child := newDir(
 		nil,
@@ -127,7 +131,7 @@ func TestRefreshExistingChildUpdatesRetainedDirModTime(t *testing.T) {
 	}
 }
 
-func TestRefreshExistingChildRejectsKindMismatch(t *testing.T) {
+func TestRefreshExistingChildRejectsKindMismatch(t *testing.T) { //nolint:paralleltest // mutates the config singleton
 	initial := testRemoteFileInfo(t, 128, time.Now())
 	root := NewDir(nil, "", LevelRoot, 0, &mountconfig.FuseConfig{}, zerolog.Nop(), logger.NewRateLimitedLogger())
 	file := NewFile(nil, &mountconfig.FuseConfig{}, initial, logger.NewRateLimitedLogger())
@@ -145,6 +149,7 @@ func TestRefreshExistingChildRejectsKindMismatch(t *testing.T) {
 }
 
 func TestSetEntryOutUsesFileTimestampFallback(t *testing.T) {
+	t.Parallel()
 	info := &manager.FileInfo{}
 	mountConfig := &mountconfig.FuseConfig{}
 	dir := &Dir{config: mountConfig}
