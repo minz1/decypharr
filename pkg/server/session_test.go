@@ -38,7 +38,7 @@ func TestCredentialChangesInvalidateBrowserSessions(t *testing.T) {
 			if len(cookies) != 1 {
 				t.Fatalf("login set %d cookies, want 1", len(cookies))
 			}
-			handler := s.authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			handler := s.authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusNoContent)
 			}))
 			request := httptest.NewRequest(http.MethodGet, "/api/test", nil)

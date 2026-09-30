@@ -28,16 +28,16 @@ type mountCachePurger interface {
 	PurgeCache() (map[string]any, error)
 }
 
-func (s *Server) handleGetArrs(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleGetArrs(w http.ResponseWriter, _ *http.Request) {
 	utils.JSONResponse(w, s.manager.Arr().All(), http.StatusOK)
 }
 
-func (s *Server) handleGetVersion(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleGetVersion(w http.ResponseWriter, _ *http.Request) {
 	v := version.GetInfo()
 	utils.JSONResponse(w, v, http.StatusOK)
 }
 
-func (s *Server) handleRunMountCacheCleanup(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleRunMountCacheCleanup(w http.ResponseWriter, _ *http.Request) {
 	mountMgr := s.manager.MountManager()
 	if mountMgr == nil || !mountMgr.IsReady() {
 		http.Error(w, "Mount is not ready", http.StatusServiceUnavailable)
@@ -67,7 +67,7 @@ func (s *Server) handleRunMountCacheCleanup(w http.ResponseWriter, r *http.Reque
 	}, http.StatusOK)
 }
 
-func (s *Server) handlePurgeMountCache(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handlePurgeMountCache(w http.ResponseWriter, _ *http.Request) {
 	mountMgr := s.manager.MountManager()
 	if mountMgr == nil || !mountMgr.IsReady() {
 		http.Error(w, "Mount is not ready", http.StatusServiceUnavailable)
@@ -281,7 +281,7 @@ func (s *Server) handleDeleteTorrents(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
 	arrStorage := s.manager.Arr()
 	cfg := *config.Get()
 	cfg.Arrs = arrStorage.SyncToConfig()
@@ -426,7 +426,7 @@ func (s *Server) handlePreviewVirtualFolder(w http.ResponseWriter, r *http.Reque
 	}, http.StatusOK)
 }
 
-func (s *Server) handleStrmRegenerate(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleStrmRegenerate(w http.ResponseWriter, _ *http.Request) {
 	if !config.Get().Strm.Active() {
 		http.Error(w, "STRM is disabled or has no path configured", http.StatusBadRequest)
 		return
@@ -435,7 +435,7 @@ func (s *Server) handleStrmRegenerate(w http.ResponseWriter, r *http.Request) {
 	utils.JSONResponse(w, map[string]string{"status": "started"}, http.StatusAccepted)
 }
 
-func (s *Server) handleGetRepairConfig(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleGetRepairConfig(w http.ResponseWriter, _ *http.Request) {
 	utils.JSONResponse(w, config.Get().Repair, http.StatusOK)
 }
 
@@ -489,7 +489,7 @@ func (s *Server) handleUpdateRepairConfig(w http.ResponseWriter, r *http.Request
 	utils.JSONResponse(w, cfg.Repair, http.StatusOK)
 }
 
-func (s *Server) handleRepairStatus(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleRepairStatus(w http.ResponseWriter, _ *http.Request) {
 	svc := s.manager.Repair()
 	if svc == nil {
 		utils.JSONResponse(w, repair.Status{}, http.StatusOK)
@@ -576,7 +576,7 @@ func (s *Server) handleRunRepair(w http.ResponseWriter, r *http.Request) {
 	utils.JSONResponse(w, map[string]string{"run_id": id}, http.StatusOK)
 }
 
-func (s *Server) handleStopRepair(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleStopRepair(w http.ResponseWriter, _ *http.Request) {
 	svc := s.manager.Repair()
 	if svc == nil {
 		http.Error(w, "Repair service not available", http.StatusServiceUnavailable)
@@ -589,7 +589,7 @@ func (s *Server) handleStopRepair(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func (s *Server) handleListRepairRuns(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleListRepairRuns(w http.ResponseWriter, _ *http.Request) {
 	runs, err := s.manager.Storage().ListRepairRuns()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -612,7 +612,7 @@ func (s *Server) handleGetRepairRun(w http.ResponseWriter, r *http.Request) {
 	utils.JSONResponse(w, run, http.StatusOK)
 }
 
-func (s *Server) handleClearRepairRuns(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleClearRepairRuns(w http.ResponseWriter, _ *http.Request) {
 	if err := s.manager.Storage().ClearRepairRuns(); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

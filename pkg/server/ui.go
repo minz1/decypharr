@@ -137,7 +137,7 @@ func (s *Server) RegisterHandler(w http.ResponseWriter, r *http.Request) {
 	s.redirectTo(w, r, "/")
 }
 
-func (s *Server) IndexHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Server) IndexHandler(w http.ResponseWriter, _ *http.Request) {
 	cfg := config.Get()
 	data := map[string]any{
 		"URLBase":    cfg.URLBase,
@@ -151,7 +151,7 @@ func (s *Server) IndexHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) DownloadHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Server) DownloadHandler(w http.ResponseWriter, _ *http.Request) {
 	cfg := config.Get()
 	debrids := make([]string, 0)
 	for _, d := range cfg.Debrids {
@@ -173,7 +173,7 @@ func (s *Server) DownloadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) RepairHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Server) RepairHandler(w http.ResponseWriter, _ *http.Request) {
 	cfg := config.Get()
 	data := map[string]any{
 		"URLBase":    cfg.URLBase,
@@ -187,7 +187,7 @@ func (s *Server) RepairHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) ReacquireHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Server) ReacquireHandler(w http.ResponseWriter, _ *http.Request) {
 	cfg := config.Get()
 	data := map[string]any{
 		"URLBase":    cfg.URLBase,
@@ -200,7 +200,7 @@ func (s *Server) ReacquireHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) ConfigHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Server) ConfigHandler(w http.ResponseWriter, _ *http.Request) {
 	cfg := config.Get()
 	data := map[string]any{
 		"URLBase":    cfg.URLBase,
@@ -214,7 +214,7 @@ func (s *Server) ConfigHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) StatsHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Server) StatsHandler(w http.ResponseWriter, _ *http.Request) {
 	cfg := config.Get()
 	data := map[string]any{
 		"URLBase": cfg.URLBase,
@@ -227,7 +227,7 @@ func (s *Server) StatsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) BrowseHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Server) BrowseHandler(w http.ResponseWriter, _ *http.Request) {
 	cfg := config.Get()
 	data := map[string]any{
 		"URLBase":    cfg.URLBase,

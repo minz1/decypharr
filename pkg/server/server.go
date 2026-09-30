@@ -201,7 +201,7 @@ func (s *Server) Start(ctx context.Context) error {
 	return srv.Shutdown(context.Background())
 }
 
-func (s *Server) getLogs(w http.ResponseWriter, r *http.Request) {
+func (s *Server) getLogs(w http.ResponseWriter, _ *http.Request) {
 	logFile := filepath.Join(logger.GetLogPath(), "decypharr.log")
 
 	// Open and read the file
@@ -231,7 +231,7 @@ func (s *Server) getLogs(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) getRcloneLogs(w http.ResponseWriter, r *http.Request) {
+func (s *Server) getRcloneLogs(w http.ResponseWriter, _ *http.Request) {
 	// Rclone logs resides in the same directory as the application logs
 	logFile := filepath.Join(logger.GetLogPath(), "rclone.log")
 	// Open and read the file

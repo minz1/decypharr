@@ -68,7 +68,7 @@ func (s *SABnzbd) handleQueue(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleResume handles resume operations.
-func (s *SABnzbd) handleQueueResume(w http.ResponseWriter, r *http.Request) {
+func (s *SABnzbd) handleQueueResume(w http.ResponseWriter, _ *http.Request) {
 	response := StatusResponse{Status: true}
 	utils.JSONResponse(w, response, http.StatusOK)
 }
@@ -144,7 +144,7 @@ func (s *SABnzbd) handleDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 // handlePause handles pause operations.
-func (s *SABnzbd) handleQueuePause(w http.ResponseWriter, r *http.Request) {
+func (s *SABnzbd) handleQueuePause(w http.ResponseWriter, _ *http.Request) {
 	response := StatusResponse{Status: true}
 	utils.JSONResponse(w, response, http.StatusOK)
 }
@@ -274,7 +274,7 @@ func (s *SABnzbd) handleHistoryList(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleConfig returns the configuration.
-func (s *SABnzbd) handleConfig(w http.ResponseWriter, r *http.Request) {
+func (s *SABnzbd) handleConfig(w http.ResponseWriter, _ *http.Request) {
 	response := ConfigResponse{
 		Config: s.config,
 	}
@@ -477,7 +477,7 @@ func (s *SABnzbd) handleAddFile(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleVersion returns version information.
-func (s *SABnzbd) handleVersion(w http.ResponseWriter, r *http.Request) {
+func (s *SABnzbd) handleVersion(w http.ResponseWriter, _ *http.Request) {
 	response := VersionResponse{
 		Version: Version,
 	}
@@ -485,13 +485,13 @@ func (s *SABnzbd) handleVersion(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleGetCategories returns available categories.
-func (s *SABnzbd) handleGetCategories(w http.ResponseWriter, r *http.Request) {
+func (s *SABnzbd) handleGetCategories(w http.ResponseWriter, _ *http.Request) {
 	categories := s.getCategories()
 	utils.JSONResponse(w, categories, http.StatusOK)
 }
 
 // handleGetScripts returns available scripts.
-func (s *SABnzbd) handleGetScripts(w http.ResponseWriter, r *http.Request) {
+func (s *SABnzbd) handleGetScripts(w http.ResponseWriter, _ *http.Request) {
 	scripts := []string{"None"}
 	utils.JSONResponse(w, scripts, http.StatusOK)
 }
@@ -519,7 +519,7 @@ func (s *SABnzbd) handleGetFiles(w http.ResponseWriter, r *http.Request) {
 	utils.JSONResponse(w, response, http.StatusOK)
 }
 
-func (s *SABnzbd) handleStatus(w http.ResponseWriter, r *http.Request) {
+func (s *SABnzbd) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	type status struct {
 		CompletedDir string `json:"completed_dir"`
 	}

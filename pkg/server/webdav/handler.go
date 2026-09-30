@@ -91,15 +91,15 @@ func (h *Handler) handler(
 	}
 	switch r.Method {
 	case http.MethodHead:
-		h.handleHead(current, w, r)
+		h.handleHead(current, w)
 	case http.MethodGet:
 		h.handleGet(current, w, r)
 	case http.MethodDelete:
-		h.handleDelete(current, w, r)
+		h.handleDelete(current, w)
 	case PROPFIND:
 		h.handlePropfind(current, children, w, r)
 	case http.MethodOptions:
-		h.handleOptions(w, r)
+		h.handleOptions(w)
 	case "COPY", "MOVE":
 		// manager.CopyEntry has never been implemented; answer honestly
 		// instead of a 500.
