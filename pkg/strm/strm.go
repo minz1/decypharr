@@ -13,6 +13,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -43,7 +44,7 @@ func BaseURL(cfg *config.Config) string {
 		if host == "" || host == "0.0.0.0" {
 			host = "localhost"
 		}
-		base = fmt.Sprintf("http://%s:%s", host, cfg.Port)
+		base = "http://" + net.JoinHostPort(host, cfg.Port)
 	}
 	if ub := strings.Trim(cfg.URLBase, "/"); ub != "" && !strings.HasSuffix(base, "/"+ub) {
 		base += "/" + ub
@@ -60,7 +61,7 @@ func FileURL(base, secret, infohash, fileID, displayName string) string {
 // ParseURL extracts the identity from a canonical stream URL. It returns
 // ok=false for anything else (foreign .strm files, legacy WebDAV URLs), keyed
 // on the /stream/{infohash}/{fileID}/{name} path shape with hex identifiers.
-func ParseURL(raw string) (infohash, fileID string, ok bool) {
+func ParseURL(raw string) (string, string, bool) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 		return "", "", false
@@ -74,8 +75,11 @@ func ParseURL(raw string) (infohash, fileID string, ok bool) {
 	return "", "", false
 }
 
+// minIdentifierLen is the shortest hex identifier (a file ID) a URL carries.
+const minIdentifierLen = 16
+
 func isHex(s string) bool {
-	if len(s) < 16 {
+	if len(s) < minIdentifierLen {
 		return false
 	}
 	for _, r := range s {
@@ -95,19 +99,17 @@ func FileName(mediaName string, keepExt bool) string {
 	return utils.RemoveExtension(mediaName) + ".strm"
 }
 
-// sidecarExtensions are small companion files players read from disk next to
-// the .strm (a .strm cannot deliver them).
-var sidecarExtensions = map[string]struct{}{
-	"srt": {}, "ass": {}, "ssa": {}, "sub": {}, "idx": {},
-	"vtt": {}, "smi": {}, "sup": {}, "nfo": {},
-}
-
-// IsSidecar reports whether name has a sidecar extension.
+// IsSidecar reports whether name has a sidecar extension: a small companion
+// file players read from disk next to the .strm (a .strm cannot deliver it).
 func IsSidecar(name string) bool {
 	ext := filepath.Ext(name)
 	if ext == "" {
 		return false
 	}
-	_, ok := sidecarExtensions[strings.ToLower(ext[1:])]
-	return ok
+	switch strings.ToLower(ext[1:]) {
+	case "srt", "ass", "ssa", "sub", "idx", "vtt", "smi", "sup", "nfo":
+		return true
+	default:
+		return false
+	}
 }
