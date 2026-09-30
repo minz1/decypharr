@@ -108,6 +108,7 @@ func TestDirectStreamFile_ReadAtContext(t *testing.T) {
 	}
 
 	t.Run("full read", func(t *testing.T) {
+		t.Parallel()
 		buf := make([]byte, len(content))
 		n, err := f.ReadAtContext(context.Background(), buf, 0)
 		if err != nil {
@@ -124,6 +125,7 @@ func TestDirectStreamFile_ReadAtContext(t *testing.T) {
 	})
 
 	t.Run("mid-file range", func(t *testing.T) {
+		t.Parallel()
 		const off = 100
 		buf := make([]byte, 200)
 		n, err := f.ReadAtContext(context.Background(), buf, off)
@@ -141,6 +143,7 @@ func TestDirectStreamFile_ReadAtContext(t *testing.T) {
 	})
 
 	t.Run("no disk writes", func(t *testing.T) {
+		t.Parallel()
 		// CacheDir is never touched by DirectStreamFile — verified structurally:
 		// newDirectStreamFile takes a streamSource, not a cache, so there is
 		// no code path from ReadAtContext to any disk write.

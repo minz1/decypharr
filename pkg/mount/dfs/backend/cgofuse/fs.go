@@ -196,7 +196,7 @@ func (f *FS) entryStat(info *manager.FileInfo) *fuse.Stat_t {
 }
 
 // CreateEx is required by fuse.FileSystemOpenEx but this is a read-only filesystem.
-func (f *FS) CreateEx(_ string, mode uint32, fi *fuse.FileInfo_t) int {
+func (f *FS) CreateEx(_ string, _ uint32, fi *fuse.FileInfo_t) int {
 	return -fuse.EACCES
 }
 
@@ -332,17 +332,17 @@ func (f *FS) Opendir(path string) (int, uint64) {
 }
 
 // Releasedir closes a directory.
-func (f *FS) Releasedir(_ string, fh uint64) int {
+func (f *FS) Releasedir(_ string, _ uint64) int {
 	return 0
 }
 
 // Flush is called when a file descriptor is closed.
-func (f *FS) Flush(_ string, fh uint64) int {
+func (f *FS) Flush(_ string, _ uint64) int {
 	return 0
 }
 
 // Fsync synchronizes file contents.
-func (f *FS) Fsync(_ string, datasync bool, fh uint64) int {
+func (f *FS) Fsync(_ string, _ bool, fh uint64) int {
 	return 0
 }
 
@@ -397,7 +397,7 @@ func (f *FS) Rmdir(path string) int {
 // Access checks file access permissions
 // This is a no-op - returning EACCES for write checks causes Windows media
 // players to refuse to open files even for reading.
-func (f *FS) Access(_ string, mask uint32) int {
+func (f *FS) Access(_ string, _ uint32) int {
 	return 0
 }
 
