@@ -10,6 +10,8 @@ import (
 )
 
 // These catch errors that aren't exported as typed errors.
+//
+//nolint:gochecknoglobals // read-only lookup table scanned on every classification
 var retriableErrorStrings = []string{
 	"use of closed network connection",
 	"unexpected EOF",
@@ -34,6 +36,7 @@ var retriableErrorStrings = []string{
 	"context deadline exceeded",
 }
 
+//nolint:gochecknoglobals // read-only lookup table scanned on every classification
 var permanentErrorStrings = []string{
 	"404",
 	"not found",
