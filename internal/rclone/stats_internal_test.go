@@ -12,6 +12,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/request"
 )
 
+//nolint:paralleltest // sets the process-wide config path and resets the config singleton
 func TestStatsPreservesCountersAndPartialResults(t *testing.T) {
 	config.SetConfigPath(t.TempDir())
 	t.Cleanup(config.Reset)
@@ -41,7 +42,7 @@ func TestStatsPreservesCountersAndPartialResults(t *testing.T) {
 	if !ok || core.Bytes != 9007199254740993 {
 		t.Fatalf("core stats lost type or precision: %#v", stats["core"])
 	}
-	if memory, ok := stats["memory"].(MemoryStats); !ok || memory != (MemoryStats{}) {
+	if memory, memOK := stats["memory"].(MemoryStats); !memOK || memory != (MemoryStats{}) {
 		t.Fatalf("failed memory section = %#v", stats["memory"])
 	}
 	if stats["bandwidth"].(BandwidthStats).BytesPerSecond != 123 ||
