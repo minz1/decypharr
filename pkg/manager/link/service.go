@@ -24,10 +24,6 @@ const (
 	maxValidatedEntries = 8192
 )
 
-var (
-	emptyDownloadLink = types.DownloadLink{}
-)
-
 // EntryRefresher is a function that refreshes an entry by infohash.
 type EntryRefresher func(infohash string) (*storage.Entry, error)
 type EntryRepairer func(ctx context.Context, entry *storage.Entry) error
@@ -77,12 +73,19 @@ func (s *Service) GetLink(ctx context.Context, entry *storage.Entry, filename st
 	v, err, _ := s.singleflight.Do(key, func() (any, error) {
 		return s.fetchAndValidate(ctx, entry, filename, 0)
 	})
+	return sharedLink(v, err)
+}
 
+// sharedLink unpacks a singleflight result.
+func sharedLink(v any, err error) (types.DownloadLink, error) {
 	if err != nil {
-		return emptyDownloadLink, err
+		return types.DownloadLink{}, err
 	}
-
-	return v.(types.DownloadLink), nil
+	dl, ok := v.(types.DownloadLink)
+	if !ok {
+		return types.DownloadLink{}, fmt.Errorf("unexpected link result type %T", v)
+	}
+	return dl, nil
 }
 
 // Refresh invalidates a link that failed mid-stream and fetches a replacement.
@@ -95,16 +98,13 @@ func (s *Service) Refresh(
 	bad types.DownloadLink,
 ) (types.DownloadLink, error) {
 	if bad.Filename == "" {
-		return emptyDownloadLink, NewPermanentError(ErrEmptyLink, "empty_link")
+		return types.DownloadLink{}, NewPermanentError(ErrEmptyLink, "empty_link")
 	}
 	key := entry.InfoHash + ":" + bad.Filename
 	v, err, _ := s.singleflight.Do(key, func() (any, error) {
 		return s.invalidateAndRefetch(ctx, entry, bad, 0)
 	})
-	if err != nil {
-		return emptyDownloadLink, err
-	}
-	return v.(types.DownloadLink), nil
+	return sharedLink(v, err)
 }
 
 func (s *Service) getClient(provider string) (debrid.Client, error) {
@@ -126,7 +126,7 @@ func (s *Service) fetchAndValidate(
 	attempt int,
 ) (types.DownloadLink, error) {
 	if err := ctx.Err(); err != nil {
-		return emptyDownloadLink, err
+		return types.DownloadLink{}, err
 	}
 	link, err := s.fetchLink(ctx, entry, filename, attempt)
 	if err != nil {
@@ -140,38 +140,17 @@ func (s *Service) fetchAndValidate(
 			return link, nil // Already validated successfully
 		}
 		// Previous validation failed - check if we should retry
-		if linkErr := GetLinkError(validationErr); linkErr != nil {
-			if linkErr.ShouldRefetch() {
-				// Invalidate and refetch
-				return s.invalidateAndRefetch(ctx, entry, link, attempt)
-			}
+		if linkErr := GetLinkError(validationErr); linkErr != nil && linkErr.ShouldRefetch() {
+			return s.invalidateAndRefetch(ctx, entry, link, attempt)
 		}
-		return emptyDownloadLink, validationErr
+		return types.DownloadLink{}, validationErr
 	}
 
 	// Validate the link
 	validationErr := s.validateLink(ctx, &link)
-
-	if validationErr != nil {
-		// Handle link error categories
-		if linkErr := GetLinkError(validationErr); linkErr != nil {
-			if linkErr.ShouldDisableAccount() {
-				if disableLinkAccountErr := s.disableLinkAccount(link, linkErr); disableLinkAccountErr != nil {
-					s.logger.Error().
-						Err(disableLinkAccountErr).
-						Str("debrid", link.Debrid).
-						Str("token", utils.Mask(link.Token)).
-						Str("reason", linkErr.Code).
-						Msg("Failed to disable account after link error")
-				} else {
-					// This will use the next available account and fetch a new link, so we need to refetch and revalidate.
-					// Account swap doesn't consume a re-insertion attempt.
-					return s.fetchAndValidate(ctx, entry, filename, attempt)
-				}
-			} else if linkErr.ShouldRefetch() || linkErr.ShouldRetry() {
-				// Invalidate and refetch
-				return s.invalidateAndRefetch(ctx, entry, link, attempt)
-			}
+	if linkErr := GetLinkError(validationErr); linkErr != nil {
+		if retried, handled, retryErr := s.retryInvalidLink(ctx, entry, filename, link, linkErr, attempt); handled {
+			return retried, retryErr
 		}
 	}
 
@@ -186,7 +165,40 @@ func (s *Service) fetchAndValidate(
 	if validationErr == nil {
 		return link, nil
 	}
-	return emptyDownloadLink, validationErr
+	return types.DownloadLink{}, validationErr
+}
+
+// retryInvalidLink reacts to a failed validation: swap accounts, or fetch a
+// fresh link. handled is false when the failure should just be recorded.
+func (s *Service) retryInvalidLink(
+	ctx context.Context,
+	entry *storage.Entry,
+	filename string,
+	link types.DownloadLink,
+	linkErr *Error,
+	attempt int,
+) (types.DownloadLink, bool, error) {
+	switch {
+	case linkErr.ShouldDisableAccount():
+		if err := s.disableLinkAccount(link, linkErr); err != nil {
+			s.logger.Error().
+				Err(err).
+				Str("debrid", link.Debrid).
+				Str("token", utils.Mask(link.Token)).
+				Str("reason", linkErr.Code).
+				Msg("Failed to disable account after link error")
+			return types.DownloadLink{}, false, nil
+		}
+		// The next account serves a new link that needs validating again.
+		// Account swap doesn't consume a re-insertion attempt.
+		dl, err := s.fetchAndValidate(ctx, entry, filename, attempt)
+		return dl, true, err
+	case linkErr.ShouldRefetch() || linkErr.ShouldRetry():
+		dl, err := s.invalidateAndRefetch(ctx, entry, link, attempt)
+		return dl, true, err
+	default:
+		return types.DownloadLink{}, false, nil
+	}
 }
 
 func (s *Service) handleBadLink(
@@ -198,11 +210,11 @@ func (s *Service) handleBadLink(
 ) (types.DownloadLink, error) {
 	if errors.Is(err, customerror.HosterUnavailableError) {
 		if entry.Bad {
-			return emptyDownloadLink, fmt.Errorf("can't repair %s since it's been marked as bad", entry.GetFolder())
+			return types.DownloadLink{}, fmt.Errorf("can't repair %s since it's been marked as bad", entry.GetFolder())
 		}
 		if attempt >= MaxReinsertionAttempt {
 			s.markEntryBad(entry, dl.Filename, attempt, "hoster_unavailable")
-			return emptyDownloadLink, fmt.Errorf(
+			return types.DownloadLink{}, fmt.Errorf(
 				"entry %s file %s still unresolvable after %d re-insertion attempts",
 				entry.GetFolder(),
 				dl.Filename,
@@ -210,12 +222,12 @@ func (s *Service) handleBadLink(
 			)
 		}
 		if repairerErr := s.repairer(ctx, entry); repairerErr != nil {
-			return emptyDownloadLink, repairerErr
+			return types.DownloadLink{}, repairerErr
 		}
 
 		if entry.Bad {
 			// Entry is still bad
-			return emptyDownloadLink, fmt.Errorf(
+			return types.DownloadLink{}, fmt.Errorf(
 				"entry %s(%s) still bad after repair, un-repairable",
 				entry.GetFolder(),
 				dl.Link,
@@ -259,7 +271,7 @@ func (s *Service) fetchLink(
 ) (types.DownloadLink, error) {
 	file, err := entry.GetFile(filename)
 	if err != nil {
-		return emptyDownloadLink, NewPermanentError(
+		return types.DownloadLink{}, NewPermanentError(
 			fmt.Errorf("file %s not found in entry %s: %w", filename, entry.Name, err),
 			"file_not_found",
 		)
@@ -267,11 +279,11 @@ func (s *Service) fetchLink(
 
 	placementFile, err := s.getPlacementFile(entry, filename)
 	if err != nil {
-		return emptyDownloadLink, err
+		return types.DownloadLink{}, err
 	}
 
 	if placementFile.Link == "" && placementFile.Id == "" {
-		return emptyDownloadLink, NewPermanentError(
+		return types.DownloadLink{}, NewPermanentError(
 			fmt.Errorf("file link is missing for %s in entry %s", filename, entry.Name),
 			"link_missing",
 		)
@@ -279,7 +291,7 @@ func (s *Service) fetchLink(
 
 	client, err := s.getClient(entry.ActiveProvider)
 	if err != nil {
-		return emptyDownloadLink, NewPermanentError(
+		return types.DownloadLink{}, NewPermanentError(
 			fmt.Errorf("debrid client not found: %s", entry.ActiveProvider),
 			"client_not_found",
 		)
@@ -287,7 +299,7 @@ func (s *Service) fetchLink(
 
 	placement := entry.Providers[entry.ActiveProvider]
 	if placement == nil {
-		return emptyDownloadLink, NewPermanentError(
+		return types.DownloadLink{}, NewPermanentError(
 			fmt.Errorf("no placement found for debrid %s with infohash %s", entry.ActiveProvider, entry.InfoHash),
 			"placement_not_found",
 		)
@@ -312,11 +324,11 @@ func (s *Service) fetchLink(
 	if downloadLink.Empty() {
 		// Let's try to reinsert the entry
 		if entry.Bad {
-			return emptyDownloadLink, fmt.Errorf("can't repair %s since it's been marked as bad", entry.GetFolder())
+			return types.DownloadLink{}, fmt.Errorf("can't repair %s since it's been marked as bad", entry.GetFolder())
 		}
 		if attempt >= MaxReinsertionAttempt {
 			s.markEntryBad(entry, filename, attempt, "empty_link")
-			return emptyDownloadLink, fmt.Errorf(
+			return types.DownloadLink{}, fmt.Errorf(
 				"entry %s file %s still resolves to an empty link after %d re-insertion attempts",
 				entry.GetFolder(),
 				filename,
@@ -324,12 +336,12 @@ func (s *Service) fetchLink(
 			)
 		}
 		if repairerErr := s.repairer(ctx, entry); repairerErr != nil {
-			return emptyDownloadLink, repairerErr
+			return types.DownloadLink{}, repairerErr
 		}
 
 		if entry.Bad {
 			// Entry is still bad
-			return emptyDownloadLink, fmt.Errorf(
+			return types.DownloadLink{}, fmt.Errorf(
 				"entry %s(%s) still bad after repair, un-repairable",
 				entry.GetFolder(),
 				downloadLink.Link,
@@ -360,50 +372,58 @@ func (s *Service) getPlacementFile(entry *storage.Entry, filename string) (*stor
 		)
 	}
 
-	placementFile := placement.Files[filename]
-	if placementFile == nil || (placementFile.Link == "" && placementFile.Id == "") {
-		if s.entryRefresher == nil {
-			return nil, NewPermanentError(
-				fmt.Errorf("file %s not available and no refresher configured", filename),
-				"no_refresher",
-			)
-		}
+	if placementFile := placement.Files[filename]; hasLocator(placementFile) {
+		return placementFile, nil
+	}
+	return s.refreshPlacementFile(entry, filename)
+}
 
-		refreshed, err := s.entryRefresher(entry.InfoHash)
-		if err != nil {
-			return nil, NewRefetchableError(
-				fmt.Errorf("failed to refresh entry: %w", err),
-				"refresh_failed",
-			)
-		}
+func hasLocator(file *storage.ProviderFile) bool {
+	return file != nil && (file.Link != "" || file.Id != "")
+}
 
-		file := refreshed.Files[filename]
-		if file == nil {
-			return nil, NewPermanentError(
-				fmt.Errorf("file disappeared after refresh"),
-				"file_disappeared",
-			)
-		}
-
-		placement = refreshed.Providers[entry.ActiveProvider]
-		if placement == nil {
-			return nil, NewPermanentError(
-				fmt.Errorf("placement disappeared after refresh for debrid %s", entry.ActiveProvider),
-				"placement_disappeared",
-			)
-		}
-
-		placementFile = placement.Files[filename]
-		if placementFile == nil || (placementFile.Link == "" && placementFile.Id == "") {
-			return nil, NewPermanentError(
-				fmt.Errorf("file %s not available after refresh", filename),
-				"file_not_available",
-			)
-		}
-
-		*entry = *refreshed
+// refreshPlacementFile re-reads the entry from its provider and adopts the
+// refreshed entry when it now carries a locator for filename.
+func (s *Service) refreshPlacementFile(entry *storage.Entry, filename string) (*storage.ProviderFile, error) {
+	if s.entryRefresher == nil {
+		return nil, NewPermanentError(
+			fmt.Errorf("file %s not available and no refresher configured", filename),
+			"no_refresher",
+		)
 	}
 
+	refreshed, err := s.entryRefresher(entry.InfoHash)
+	if err != nil {
+		return nil, NewRefetchableError(
+			fmt.Errorf("failed to refresh entry: %w", err),
+			"refresh_failed",
+		)
+	}
+
+	if refreshed.Files[filename] == nil {
+		return nil, NewPermanentError(
+			fmt.Errorf("file disappeared after refresh"),
+			"file_disappeared",
+		)
+	}
+
+	placement := refreshed.Providers[entry.ActiveProvider]
+	if placement == nil {
+		return nil, NewPermanentError(
+			fmt.Errorf("placement disappeared after refresh for debrid %s", entry.ActiveProvider),
+			"placement_disappeared",
+		)
+	}
+
+	placementFile := placement.Files[filename]
+	if !hasLocator(placementFile) {
+		return nil, NewPermanentError(
+			fmt.Errorf("file %s not available after refresh", filename),
+			"file_not_available",
+		)
+	}
+
+	*entry = *refreshed
 	return placementFile, nil
 }
 
@@ -487,12 +507,12 @@ func (s *Service) invalidateAndRefetch(
 
 	// Remove from account cache
 	if link.Debrid == "" {
-		return emptyDownloadLink, fmt.Errorf("invalid link")
+		return types.DownloadLink{}, fmt.Errorf("invalid link")
 	}
 
 	client, err := s.getClient(link.Debrid)
 	if err != nil {
-		return emptyDownloadLink, err
+		return types.DownloadLink{}, err
 	}
 
 	_ = client.DeleteLink(link) // This might fail, doesnt matter
