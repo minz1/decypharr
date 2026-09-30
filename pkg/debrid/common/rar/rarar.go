@@ -5,6 +5,7 @@ package rar
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -16,25 +17,35 @@ import (
 	"github.com/sirrobot01/decypharr/internal/retry"
 )
 
-// Constants from the Python code.
-var (
-	// DefaultChunkSize Chunk sizes.
-	DefaultChunkSize = 4096
-	HttpChunkSize    = 32768
-	MaxSearchSize    = 1 << 20 // 1MB
+const (
+	httpChunkSize  = 32768
+	firstChunkSize = 8192
+	maxSearchSize  = 1 << 20 // 1MB
 
-	// Rar3Marker RAR marker and block types.
-	Rar3Marker  = []byte{0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x00}
-	BlockFile   = byte(0x74)
-	BlockHeader = byte(0x73)
-	BlockMarker = byte(0x72)
-	BlockEnd    = byte(0x7B)
+	// rar3Marker is the RAR 1.5-4.x signature.
+	rar3Marker = "Rar!\x1a\x07\x00"
 
-	// FlagDirectory Header flags.
-	FlagDirectory      = 0xE0
-	FlagHasHighSize    = 0x100
-	FlagHasUnicodeName = 0x200
-	FlagHasData        = 0x8000
+	// Block types.
+	blockFile   = 0x74
+	blockHeader = 0x73
+	blockEnd    = 0x7B
+
+	// Header flags.
+	flagDirectory      = 0xE0
+	flagHasHighSize    = 0x100
+	flagHasUnicodeName = 0x200
+	flagHasData        = 0x8000 // LONG_BLOCK: ADD_SIZE follows the base header
+
+	// Base block header: HEAD_CRC(2) HEAD_TYPE(1) HEAD_FLAGS(2) HEAD_SIZE(2).
+	baseHeaderSize = 7
+	// addSizeLen is the length of ADD_SIZE, stored right after the base header.
+	addSizeLen = 4
+	// fileHeaderSize is the fixed part of a file header before HIGH_*_SIZE.
+	fileHeaderSize = 32
+	// highSizeLen is HIGH_PACK_SIZE(4) + HIGH_UNP_SIZE(4).
+	highSizeLen = 8
+	// blockReadAttempts bounds retries of one header read.
+	blockReadAttempts = 4
 )
 
 // Error definitions.
@@ -55,108 +66,130 @@ func (f *File) Name() string {
 	return f.Path
 }
 
+// ByteRange returns the inclusive byte range of the file's stored data.
 func (f *File) ByteRange() *[2]int64 {
 	return &[2]int64{f.DataOffset, f.DataOffset + f.CompressedSize - 1}
 }
 
-// NewReader creates a new RAR3 reader.
-func NewReader(url string) (*Reader, error) {
-	file, err := NewHttpFile(url)
+// NewReader opens the RAR3 archive at url and validates its archive header.
+// All requests made while opening are bound to ctx.
+func NewReader(ctx context.Context, url string) (*Reader, error) {
+	file, err := NewHTTPFile(ctx, url)
 	if err != nil {
 		return nil, err
 	}
 
 	reader := &Reader{
 		File:      file,
-		ChunkSize: HttpChunkSize,
+		ChunkSize: httpChunkSize,
 		Files:     make([]*File, 0),
 	}
 
-	// Find RAR marker
-	marker, err := reader.findMarker()
+	marker, err := reader.findMarker(ctx)
 	if err != nil {
 		return nil, err
 	}
 	reader.Marker = marker
-	pos := reader.Marker + int64(len(Rar3Marker)) // Skip marker block
+	pos := reader.Marker + int64(len(rar3Marker)) // Skip marker block
 
-	headerData, err := reader.readBytes(pos, 7)
+	headerData, err := reader.readBytes(ctx, pos, baseHeaderSize)
 	if err != nil {
 		return nil, err
 	}
-
-	if len(headerData) < 7 {
+	if len(headerData) < baseHeaderSize || headerData[2] != blockHeader {
 		return nil, ErrInvalidFormat
 	}
-
-	headType := headerData[2]
-	headSize := int(binary.LittleEndian.Uint16(headerData[5:7]))
-
-	if headType != BlockHeader {
-		return nil, ErrInvalidFormat
-	}
+	headSize := int64(binary.LittleEndian.Uint16(headerData[5:7]))
 
 	// Store the position after the archive header
-	reader.HeaderEndPos = pos + int64(headSize)
-
+	reader.HeaderEndPos = pos + headSize
 	return reader, nil
 }
 
-// readBytes reads a range of bytes from the file.
-func (r *Reader) readBytes(start int64, length int) ([]byte, error) {
+// readBytes reads up to length bytes at start; a read past EOF is short.
+func (r *Reader) readBytes(ctx context.Context, start int64, length int) ([]byte, error) {
 	if length <= 0 {
 		return []byte{}, nil
 	}
-
 	data := make([]byte, length)
-	n, err := r.File.ReadAt(data, start)
+	n, err := r.File.ReadAtContext(ctx, data, start)
 	if err != nil && !errors.Is(err, io.EOF) {
 		return nil, err
 	}
+	return data[:n], nil
+}
 
-	if n < length {
-		// Partial read, return what we got
-		return data[:n], nil
-	}
-
-	return data, nil
+// readExact reads exactly length bytes at start, retrying transient failures.
+func (r *Reader) readExact(ctx context.Context, start int64, length int) ([]byte, error) {
+	var data []byte
+	err := retry.Do(
+		func() error {
+			var readErr error
+			data, readErr = r.readBytes(ctx, start, length)
+			if readErr != nil {
+				if !errors.Is(readErr, ErrNetworkError) || ctx.Err() != nil {
+					return retry.Unrecoverable(readErr)
+				}
+				return readErr
+			}
+			if len(data) < length {
+				return fmt.Errorf("short read at %d: %d of %d bytes", start, len(data), length)
+			}
+			return nil
+		},
+		retry.Attempts(blockReadAttempts),
+		retry.Delay(config.DefaultRetryDelay),
+		retry.MaxDelay(config.DefaultRetryDelayMax),
+		retry.DelayType(retry.BackOffDelay),
+	)
+	return data, err
 }
 
 // findMarker finds the RAR marker in the file.
-func (r *Reader) findMarker() (int64, error) {
-	// First try to find marker in the first chunk
-	firstChunkSize := 8192 // 8KB
-	chunk, err := r.readBytes(0, firstChunkSize)
+func (r *Reader) findMarker(ctx context.Context) (int64, error) {
+	marker := []byte(rar3Marker)
+	chunk, err := r.readBytes(ctx, 0, firstChunkSize)
 	if err != nil {
 		return 0, err
 	}
-
-	markerPos := bytes.Index(chunk, Rar3Marker)
-	if markerPos != -1 {
+	if markerPos := bytes.Index(chunk, marker); markerPos != -1 {
 		return int64(markerPos), nil
 	}
 
 	// If not found, continue searching
-	position := int64(firstChunkSize - len(Rar3Marker) + 1)
-	maxSearch := int64(MaxSearchSize)
-
-	for position < maxSearch {
-		chunkSize := min(r.ChunkSize, int(maxSearch-position))
-		chunk, err := r.readBytes(position, chunkSize)
-		if err != nil || len(chunk) == 0 {
+	position := int64(firstChunkSize - len(marker) + 1)
+	for position < maxSearchSize {
+		chunkSize := min(r.ChunkSize, int(maxSearchSize-position))
+		next, readErr := r.readBytes(ctx, position, chunkSize)
+		if readErr != nil || len(next) == 0 {
 			break
 		}
-
-		markerPos := bytes.Index(chunk, Rar3Marker)
-		if markerPos != -1 {
+		if markerPos := bytes.Index(next, marker); markerPos != -1 {
 			return position + int64(markerPos), nil
 		}
-
 		// Move forward by chunk size minus the marker length
-		position += int64(max(1, len(chunk)-len(Rar3Marker)+1))
+		position += int64(max(1, len(next)-len(marker)+1))
 	}
-
 	return 0, ErrMarkerNotFound
+}
+
+// unicodeFlags reads one RAR3 Unicode flag group at data[pos] and returns the
+// 2-bit flags, how many characters they control, and the next position.
+func unicodeFlags(data []byte, pos int) (uint, int, int) {
+	flags := data[pos]
+	pos++
+	if flags&0x80 == 0 {
+		return uint(flags), 4, pos // Simple flag: 4 characters
+	}
+	// Extended flag: continuation bytes extend the group.
+	bits := uint(flags)
+	count := 1
+	for (bits&(0x80>>count) != 0) && pos < len(data) {
+		bits = ((bits & ((0x80 >> count) - 1)) << 8) | uint(data[pos])
+		pos++
+		count++
+	}
+	return bits, count * 4, pos
 }
 
 // decodeUnicode decodes RAR3 Unicode encoding.
@@ -168,190 +201,119 @@ func decodeUnicode(asciiStr string, unicodeData []byte) string {
 	var result []rune
 	asciiPos := 0
 	dataPos := 0
-	highByte := byte(0)
+	var highByte byte
 
 	for dataPos < len(unicodeData) {
-		flags := unicodeData[dataPos]
-		dataPos++
+		flagBits, flagCount, next := unicodeFlags(unicodeData, dataPos)
+		dataPos = next
 
-		// Determine the number of character positions this flag byte controls
-		var flagBits uint
-		var flagCount int
-		var bitCount int
-
-		if flags&0x80 != 0 {
-			// Extended flag - controls up to 32 characters (16 bit pairs)
-			flagBits = uint(flags)
-			bitCount = 1
-			for (flagBits&(0x80>>bitCount) != 0) && dataPos < len(unicodeData) {
-				flagBits = ((flagBits & ((0x80 >> bitCount) - 1)) << 8) | uint(unicodeData[dataPos])
-				dataPos++
-				bitCount++
-			}
-			flagCount = bitCount * 4
-		} else {
-			// Simple flag - controls 4 characters (4 bit pairs)
-			flagBits = uint(flags)
-			flagCount = 4
-		}
-
-		// Parse each 2-bit flag
 		for i := range flagCount {
 			if asciiPos >= len(asciiStr) && dataPos >= len(unicodeData) {
 				break
 			}
-
-			flagValue := (flagBits >> (i * 2)) & 0x03
-
-			switch flagValue {
-			case 0:
+			op := (flagBits >> (i * 2)) & 0x03
+			if op == 0 {
 				// Use ASCII character
 				if asciiPos < len(asciiStr) {
 					result = append(result, rune(asciiStr[asciiPos]))
 					asciiPos++
 				}
-			case 1:
-				// Unicode character with high byte 0
-				if dataPos < len(unicodeData) {
-					result = append(result, rune(unicodeData[dataPos]))
-					dataPos++
-				}
-			case 2:
-				// Unicode character with current high byte
-				if dataPos < len(unicodeData) {
-					lowByte := uint(unicodeData[dataPos])
-					dataPos++
-					result = append(result, rune(lowByte|(uint(highByte)<<8)))
-				}
-			case 3:
-				// Set new high byte
-				if dataPos < len(unicodeData) {
-					highByte = unicodeData[dataPos]
-					dataPos++
-				}
+				continue
+			}
+			if dataPos >= len(unicodeData) {
+				continue
+			}
+			b := unicodeData[dataPos]
+			dataPos++
+			switch op {
+			case 1: // Unicode character with high byte 0
+				result = append(result, rune(b))
+			case 2: // Unicode character with current high byte
+				result = append(result, rune(highByte)<<8|rune(b))
+			default: // Set new high byte
+				highByte = b
 			}
 		}
 	}
 
 	// Append any remaining ASCII characters
-	for asciiPos < len(asciiStr) {
+	for ; asciiPos < len(asciiStr); asciiPos++ {
 		result = append(result, rune(asciiStr[asciiPos]))
-		asciiPos++
 	}
-
 	return string(result)
 }
 
 // readFiles reads all file entries in the archive.
-func (r *Reader) readFiles() error {
+func (r *Reader) readFiles(ctx context.Context) error {
 	// NewReader already validated the archive header and stored where it ends.
 	pos := r.HeaderEndPos
 
-	// Process all blocks until BlockEnd or EOF.
+	// Process all blocks until blockEnd or EOF.
 	for {
-		var headerData []byte
-		err := retry.Do(
-			func() error {
-				var readErr error
-				headerData, readErr = r.readBytes(pos, 7)
-				if readErr != nil {
-					if !errors.Is(readErr, io.EOF) && !errors.Is(readErr, ErrNetworkError) {
-						return retry.Unrecoverable(fmt.Errorf("error reading block header: %w", readErr))
-					}
-					return readErr
-				}
-				if len(headerData) < 7 {
-					return fmt.Errorf("incomplete block header")
-				}
-				return nil
-			},
-			retry.Attempts(4),
-			retry.Delay(config.DefaultRetryDelay),
-			retry.MaxDelay(config.DefaultRetryDelayMax),
-			retry.DelayType(retry.BackOffDelay),
-		)
-		if err != nil || len(headerData) < 7 {
+		headerData, err := r.readExact(ctx, pos, baseHeaderSize)
+		if err != nil {
 			// EOF or unrecoverable read error — stop iteration.
 			break
 		}
-
 		headType := headerData[2]
 		headFlags := int(binary.LittleEndian.Uint16(headerData[3:5]))
 		headSize := int(binary.LittleEndian.Uint16(headerData[5:7]))
-
-		if headType == BlockEnd {
+		if headType == blockEnd {
 			break
 		}
-
-		if headType == BlockFile {
-			var completeHeader []byte
-			err = retry.Do(
-				func() error {
-					var readErr error
-					completeHeader, readErr = r.readBytes(pos, headSize)
-					if readErr != nil {
-						return readErr
-					}
-					if len(completeHeader) < headSize {
-						return fmt.Errorf("incomplete header data")
-					}
-					return nil
-				},
-				retry.Attempts(4),
-				retry.Delay(config.DefaultRetryDelay),
-				retry.MaxDelay(config.DefaultRetryDelayMax),
-				retry.DelayType(retry.BackOffDelay),
-			)
-			if err != nil {
-				return fmt.Errorf("failed to read complete file header after retries: %w", err)
-			}
-
-			fileInfo, parseFileHeaderErr := r.parseFileHeader(completeHeader, pos)
-			if parseFileHeaderErr == nil && fileInfo != nil {
-				r.Files = append(r.Files, fileInfo)
-				pos = fileInfo.NextOffset
-			} else {
-				pos += int64(headSize)
-			}
-		} else {
-			// Skip non-file block
-			pos += int64(headSize)
-
-			// Skip data if present
-			if headFlags&FlagHasData != 0 {
-				var sizeData []byte
-				err = retry.Do(
-					func() error {
-						var readErr error
-						sizeData, readErr = r.readBytes(pos-4, 4)
-						if readErr != nil {
-							return readErr
-						}
-						if len(sizeData) < 4 {
-							return fmt.Errorf("incomplete size data")
-						}
-						return nil
-					},
-					retry.Attempts(4),
-					retry.Delay(config.DefaultRetryDelay),
-					retry.MaxDelay(config.DefaultRetryDelayMax),
-					retry.DelayType(retry.BackOffDelay),
-				)
-				if err != nil {
-					return fmt.Errorf("failed to read data size after retries: %w", err)
-				}
-				dataSize := int64(binary.LittleEndian.Uint32(sizeData))
-				pos += dataSize
-			}
+		// Every block covers at least its own base header; anything smaller
+		// would never advance pos and loop forever on a malformed archive.
+		if headSize < baseHeaderSize {
+			return fmt.Errorf("%w: block at offset %d has header size %d", ErrInvalidFormat, pos, headSize)
+		}
+		if pos, err = r.nextBlock(ctx, pos, headType, headFlags, headSize); err != nil {
+			return err
 		}
 	}
-
 	return nil
+}
+
+// nextBlock consumes the block at pos and returns the offset of the next one.
+func (r *Reader) nextBlock(ctx context.Context, pos int64, headType byte, headFlags, headSize int) (int64, error) {
+	if headType == blockFile {
+		header, err := r.readExact(ctx, pos, headSize)
+		if err != nil {
+			return 0, fmt.Errorf("failed to read complete file header after retries: %w", err)
+		}
+		if fileInfo, parseErr := r.parseFileHeader(header, pos); parseErr == nil {
+			r.Files = append(r.Files, fileInfo)
+			return fileInfo.NextOffset, nil
+		}
+		return pos + int64(headSize), nil
+	}
+
+	// Skip a non-file block and, for long blocks, its data.
+	next := pos + int64(headSize)
+	if headFlags&flagHasData != 0 {
+		sizeData, err := r.readExact(ctx, pos+baseHeaderSize, addSizeLen)
+		if err != nil {
+			return 0, fmt.Errorf("failed to read data size after retries: %w", err)
+		}
+		next += int64(binary.LittleEndian.Uint32(sizeData))
+	}
+	return next, nil
+}
+
+// fileName decodes a RAR3 file name field.
+func fileName(nameBytes []byte, headFlags int) string {
+	if headFlags&flagHasUnicodeName == 0 {
+		return string(nameBytes)
+	}
+	asciiPart, unicodePart, ok := bytes.Cut(nameBytes, []byte{0})
+	if !ok || utf8.Valid(asciiPart) {
+		return string(asciiPart)
+	}
+	return decodeUnicode(string(asciiPart), unicodePart)
 }
 
 // parseFileHeader parses a file header and returns file info.
 func (r *Reader) parseFileHeader(headerData []byte, position int64) (*File, error) {
-	if len(headerData) < 7 {
+	if len(headerData) < baseHeaderSize {
 		return nil, fmt.Errorf("header data too short")
 	}
 
@@ -359,97 +321,46 @@ func (r *Reader) parseFileHeader(headerData []byte, position int64) (*File, erro
 	headFlags := int(binary.LittleEndian.Uint16(headerData[3:5]))
 	headSize := int(binary.LittleEndian.Uint16(headerData[5:7]))
 
-	if headType != BlockFile {
+	if headType != blockFile {
 		return nil, fmt.Errorf("not a file block")
 	}
-
-	// Check if we have enough data
-	if len(headerData) < 32 {
+	if len(headerData) < fileHeaderSize {
 		return nil, fmt.Errorf("file header too short")
 	}
 
-	// Parse basic file header fields
-	packSize := binary.LittleEndian.Uint32(headerData[7:11])
-	unpackSize := binary.LittleEndian.Uint32(headerData[11:15])
-	// fileOS := headerData[15]
+	packSize := int64(binary.LittleEndian.Uint32(headerData[7:11]))
+	unpackSize := int64(binary.LittleEndian.Uint32(headerData[11:15]))
 	fileCRC := binary.LittleEndian.Uint32(headerData[16:20])
-	// fileTime := binary.LittleEndian.Uint32(headerData[20:24])
-	// unpVer := headerData[24]
 	method := headerData[25]
-	nameSize := binary.LittleEndian.Uint16(headerData[26:28])
-	// fileAttr := binary.LittleEndian.Uint32(headerData[28:32])
+	nameSize := int(binary.LittleEndian.Uint16(headerData[26:28]))
 
-	// Handle high pack/unp sizes
-	highPackSize := uint32(0)
-	highUnpSize := uint32(0)
-
-	offset := 32 // Start after basic header fields
-
-	if headFlags&FlagHasHighSize != 0 {
-		if offset+8 <= len(headerData) {
-			highPackSize = binary.LittleEndian.Uint32(headerData[offset : offset+4])
-			highUnpSize = binary.LittleEndian.Uint32(headerData[offset+4 : offset+8])
+	offset := fileHeaderSize
+	if headFlags&flagHasHighSize != 0 {
+		if offset+highSizeLen <= len(headerData) {
+			packSize += int64(binary.LittleEndian.Uint32(headerData[offset:offset+4])) << 32
+			unpackSize += int64(binary.LittleEndian.Uint32(headerData[offset+4:offset+highSizeLen])) << 32
 		}
-		offset += 8
+		offset += highSizeLen
 	}
 
-	// Calculate actual sizes
-	fullPackSize := int64(packSize) + (int64(highPackSize) << 32)
-	fullUnpSize := int64(unpackSize) + (int64(highUnpSize) << 32)
-
-	// Read filename
-	var fileName string
-	if offset+int(nameSize) <= len(headerData) {
-		fileNameBytes := headerData[offset : offset+int(nameSize)]
-
-		if headFlags&FlagHasUnicodeName != 0 {
-			before, after, ok := bytes.Cut(fileNameBytes, []byte{0})
-			if ok {
-				// Try UTF-8 first
-				asciiPart := before
-				if utf8.Valid(asciiPart) {
-					fileName = string(asciiPart)
-				} else {
-					// Fall back to custom decoder
-					asciiStr := string(asciiPart)
-					unicodePart := after
-					fileName = decodeUnicode(asciiStr, unicodePart)
-				}
-			} else {
-				// No null byte
-				if utf8.Valid(fileNameBytes) {
-					fileName = string(fileNameBytes)
-				} else {
-					fileName = string(fileNameBytes) // Last resort
-				}
-			}
-		} else {
-			// Non-Unicode filename
-			if utf8.Valid(fileNameBytes) {
-				fileName = string(fileNameBytes)
-			} else {
-				fileName = string(fileNameBytes) // Fallback
-			}
-		}
-	} else {
-		fileName = fmt.Sprintf("UnknownFile%d", len(r.Files))
+	name := fmt.Sprintf("UnknownFile%d", len(r.Files))
+	if offset+nameSize <= len(headerData) {
+		name = fileName(headerData[offset:offset+nameSize], headFlags)
 	}
 
-	isDirectory := (headFlags & FlagDirectory) == FlagDirectory
+	isDirectory := (headFlags & flagDirectory) == flagDirectory
 
 	// Calculate data offsets
 	dataOffset := position + int64(headSize)
 	nextOffset := dataOffset
-
-	// Only add data size if it's not a directory and has data
-	if !isDirectory && headFlags&FlagHasData != 0 {
-		nextOffset += fullPackSize
+	if !isDirectory && headFlags&flagHasData != 0 {
+		nextOffset += packSize
 	}
 
 	return &File{
-		Path:           fileName,
-		Size:           fullUnpSize,
-		CompressedSize: fullPackSize,
+		Path:           name,
+		Size:           unpackSize,
+		CompressedSize: packSize,
 		Method:         method,
 		CRC:            fileCRC,
 		IsDirectory:    isDirectory,
@@ -458,14 +369,12 @@ func (r *Reader) parseFileHeader(headerData []byte, position int64) (*File, erro
 	}, nil
 }
 
-// GetFiles returns all files in the archive.
-func (r *Reader) GetFiles() ([]*File, error) {
+// GetFiles returns all files in the archive, reading the headers on first use.
+func (r *Reader) GetFiles(ctx context.Context) ([]*File, error) {
 	if len(r.Files) == 0 {
-		err := r.readFiles()
-		if err != nil {
+		if err := r.readFiles(ctx); err != nil {
 			return nil, err
 		}
 	}
-
 	return r.Files, nil
 }

@@ -1,6 +1,7 @@
 package rar
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -13,13 +14,17 @@ import (
 	"github.com/sirrobot01/decypharr/internal/retry"
 )
 
-func NewHttpFile(url string) (*HttpFile, error) {
-	file := &HttpFile{
+// httpTimeout bounds each HEAD or ranged GET against the archive URL.
+const httpTimeout = 60 * time.Second
+
+// NewHTTPFile opens url for random access. Requests are bound to ctx.
+func NewHTTPFile(ctx context.Context, url string) (*HTTPFile, error) {
+	file := &HTTPFile{
 		URL:        url,
-		client:     &http.Client{Timeout: 60 * time.Second},
+		client:     &http.Client{Timeout: httpTimeout},
 		MaxRetries: config.Get().Retries,
 	}
-	size, err := file.getFileSize()
+	size, err := file.getFileSize(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("get file size: %w", err)
 	}
@@ -27,11 +32,11 @@ func NewHttpFile(url string) (*HttpFile, error) {
 	return file, nil
 }
 
-func (f *HttpFile) doWithRetry(operation func() error) error {
+func (f *HTTPFile) doWithRetry(ctx context.Context, operation func() error) error {
 	return retry.Do(
 		func() error {
 			err := operation()
-			if err != nil && !errors.Is(err, ErrNetworkError) {
+			if err != nil && (!errors.Is(err, ErrNetworkError) || ctx.Err() != nil) {
 				return retry.Unrecoverable(err)
 			}
 			return err
@@ -43,10 +48,10 @@ func (f *HttpFile) doWithRetry(operation func() error) error {
 	)
 }
 
-func (f *HttpFile) getFileSize() (int64, error) {
+func (f *HTTPFile) getFileSize(ctx context.Context) (int64, error) {
 	var size int64
-	err := f.doWithRetry(func() error {
-		req, err := http.NewRequest(http.MethodHead, f.URL, nil)
+	err := f.doWithRetry(ctx, func() error {
+		req, err := http.NewRequestWithContext(ctx, http.MethodHead, f.URL, nil)
 		if err != nil {
 			return err
 		}
@@ -71,7 +76,12 @@ func (f *HttpFile) getFileSize() (int64, error) {
 }
 
 // ReadAt reads bytes at off. It returns an error for a short read.
-func (f *HttpFile) ReadAt(p []byte, off int64) (int, error) {
+func (f *HTTPFile) ReadAt(p []byte, off int64) (int, error) {
+	return f.ReadAtContext(context.Background(), p, off)
+}
+
+// ReadAtContext is ReadAt with its requests bound to ctx.
+func (f *HTTPFile) ReadAtContext(ctx context.Context, p []byte, off int64) (int, error) {
 	if off < 0 {
 		return 0, fs.ErrInvalid
 	}
@@ -84,37 +94,41 @@ func (f *HttpFile) ReadAt(p []byte, off int64) (int, error) {
 	requested := len(p)
 	p = p[:min(int64(requested), f.FileSize-off)]
 	var n int
-	err := f.doWithRetry(func() error {
-		n = 0
-		req, err := http.NewRequest(http.MethodGet, f.URL, nil)
-		if err != nil {
-			return err
-		}
-		req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", off, off+int64(len(p))-1))
-		resp, err := f.client.Do(req)
-		if err != nil {
-			return fmt.Errorf("%w: %w", ErrNetworkError, err)
-		}
-		defer resp.Body.Close()
-		switch resp.StatusCode {
-		case http.StatusPartialContent:
-			n, err = io.ReadFull(resp.Body, p)
-			return err
-		case http.StatusOK:
-			// Skip the prefix when the server ignores the Range header.
-			if _, copyNErr := io.CopyN(io.Discard, resp.Body, off); copyNErr != nil {
-				return copyNErr
-			}
-			n, err = io.ReadFull(resp.Body, p)
-			return err
-		case http.StatusRequestedRangeNotSatisfiable:
-			return io.EOF
-		default:
-			return fmt.Errorf("%w: unexpected status code: %d", ErrNetworkError, resp.StatusCode)
-		}
+	err := f.doWithRetry(ctx, func() error {
+		var err error
+		n, err = f.readRange(ctx, p, off)
+		return err
 	})
 	if err == nil && n < requested {
 		err = io.EOF
 	}
 	return n, err
+}
+
+// readRange performs one ranged GET into p.
+func (f *HTTPFile) readRange(ctx context.Context, p []byte, off int64) (int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, f.URL, nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", off, off+int64(len(p))-1))
+	resp, err := f.client.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %w", ErrNetworkError, err)
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusPartialContent:
+		return io.ReadFull(resp.Body, p)
+	case http.StatusOK:
+		// Skip the prefix when the server ignores the Range header.
+		if _, copyErr := io.CopyN(io.Discard, resp.Body, off); copyErr != nil {
+			return 0, copyErr
+		}
+		return io.ReadFull(resp.Body, p)
+	case http.StatusRequestedRangeNotSatisfiable:
+		return 0, io.EOF
+	default:
+		return 0, fmt.Errorf("%w: unexpected status code: %d", ErrNetworkError, resp.StatusCode)
+	}
 }
