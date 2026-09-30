@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"math/bits"
 	"sync"
 	"sync/atomic"
@@ -21,7 +22,7 @@ type SegmentFetcher struct {
 	cache  *SegmentCache
 	config Config
 	logger zerolog.Logger
-	stats  *ReaderStats
+	stats  *Stats
 
 	// Request deduplication
 	inFlight   map[int]*fetchPromise
@@ -58,7 +59,7 @@ func NewSegmentFetcher(
 	client *nntp.Client,
 	cache *SegmentCache,
 	config Config,
-	stats *ReaderStats,
+	stats *Stats,
 	logger zerolog.Logger,
 ) *SegmentFetcher {
 	ctx, cancel := context.WithCancel(ctx)
@@ -168,21 +169,20 @@ func (sf *SegmentFetcher) submit(ctx context.Context, priority fetchPriority, ru
 // fetchDirect performs one deduplicated fetch inside a scheduler worker.
 func (sf *SegmentFetcher) fetchDirect(ctx context.Context, segIdx int, workload nntp.Workload) error {
 	// Fast path: already cached, or wait until an extent eviction completes.
-	for {
-		state := sf.cache.GetState(segIdx)
-		if state == StateEvicting {
+	for ready := false; !ready; {
+		switch sf.cache.GetState(segIdx) {
+		case StateEvicting:
 			if err := sf.cache.WaitForEvictionRelease(ctx, segIdx); err != nil {
 				return err
 			}
-			continue // slot is Empty now; re-evaluate
-		}
-		switch state {
+			// slot is Empty now; re-evaluate
 		case StateOnDisk:
 			return nil
 		case StateFailed:
 			return sf.cache.GetError(segIdx)
+		case StateEmpty, StateFetching:
+			ready = true
 		}
-		break
 	}
 
 	// Check if someone else is already fetching
@@ -262,6 +262,9 @@ func (sf *SegmentFetcher) doFetchAttempt(ctx context.Context, segIdx int, worklo
 				return err
 			}
 			return sf.doFetchAttempt(ctx, segIdx, workload, restarts+1)
+		case StateEmpty:
+			// Freed between the claim attempt and the state read; claim again.
+			return sf.doFetchAttempt(ctx, segIdx, workload, restarts+1)
 		}
 	}
 
@@ -313,10 +316,7 @@ func (sf *SegmentFetcher) doFetchAttempt(ctx context.Context, segIdx int, worklo
 		// server but its body is empty/corrupted after yEnc decoding.
 		if n == 0 {
 			writer.Discard()
-			return &nntp.Error{
-				Type:    nntp.ErrorTypeArticleNotFound,
-				Message: "article produced no data after decoding",
-			}
+			return errNoDecodedData()
 		}
 
 		// Commit (updates cache state to StateOnDisk).
@@ -545,7 +545,7 @@ func (sf *SegmentFetcher) finishPrefetchClaim(claim prefetchClaim, err error) {
 func (sf *SegmentFetcher) fetchPrefetchBatch(ctx context.Context, segIndices []int) error {
 	var (
 		claims       []prefetchClaim
-		writers      []segmentWriter
+		writers      []SegmentWriter
 		messageIDs   []string
 		destinations []nntp.BodyDestination
 		decoded      [][]byte
@@ -598,7 +598,8 @@ func (sf *SegmentFetcher) fetchPrefetchBatch(ctx context.Context, segIndices []i
 			written = make([]int64, len(claims))
 		}
 		for i, result := range results {
-			if len(result.Body) > 0 {
+			switch {
+			case len(result.Body) > 0:
 				decoded[i] = result.Body
 				bodyErrors[i] = nil
 				if result.Error == nil && destinations[i].Writer == nil {
@@ -609,10 +610,10 @@ func (sf *SegmentFetcher) fetchPrefetchBatch(ctx context.Context, segIndices []i
 						decoded[i] = nil
 					}
 				}
-			} else if result.Bytes > 0 {
+			case result.Bytes > 0:
 				written[i] = result.Bytes
 				bodyErrors[i] = nil
-			} else if result.Error != nil {
+			case result.Error != nil:
 				bodyErrors[i] = result.Error
 			}
 		}
@@ -637,11 +638,12 @@ func (sf *SegmentFetcher) fetchPrefetchBatch(ctx context.Context, segIndices []i
 		writer := writers[i]
 		var writeErr error
 		n := int64(0)
-		if i < len(written) && written[i] > 0 {
+		switch {
+		case i < len(written) && written[i] > 0:
 			n = written[i]
-		} else if i < len(decoded) && len(decoded[i]) > 0 {
+		case i < len(decoded) && len(decoded[i]) > 0:
 			n, writeErr = writer.Adopt(decoded[i])
-		} else {
+		default:
 			if i < len(bodyErrors) {
 				writeErr = bodyErrors[i]
 			}
@@ -649,17 +651,11 @@ func (sf *SegmentFetcher) fetchPrefetchBatch(ctx context.Context, segIndices []i
 				writeErr = err
 			}
 			if writeErr == nil {
-				writeErr = &nntp.Error{
-					Type:    nntp.ErrorTypeArticleNotFound,
-					Message: "article produced no data after decoding",
-				}
+				writeErr = errNoDecodedData()
 			}
 		}
 		if writeErr == nil && n == 0 {
-			writeErr = &nntp.Error{
-				Type:    nntp.ErrorTypeArticleNotFound,
-				Message: "article produced no data after decoding",
-			}
+			writeErr = errNoDecodedData()
 		}
 		if writeErr != nil {
 			writer.Discard()
@@ -681,12 +677,11 @@ func (sf *SegmentFetcher) prefetchBatch(segIndices []int) {
 	}
 	// Preserve the existing per-article timeout budget now that one task may
 	// stream multiple ordered bodies.
-	const maxDuration = time.Duration(1<<63 - 1)
-	if count := time.Duration(len(segIndices)); count > 1 {
-		if timeout > maxDuration/count {
-			timeout = maxDuration
+	if count := int64(len(segIndices)); count > 1 {
+		if int64(timeout) > math.MaxInt64/count {
+			timeout = math.MaxInt64
 		} else {
-			timeout *= count
+			timeout = time.Duration(int64(timeout) * count)
 		}
 	}
 	fetchCtx, cancel := context.WithTimeout(sf.ctx, timeout)
@@ -842,6 +837,15 @@ func (sf *SegmentFetcher) Close() {
 		sf.scheduler.Close()
 	}
 	sf.taskWg.Wait()
+}
+
+// errNoDecodedData treats an article whose body decodes to nothing as
+// missing: it exists on the server but is empty or corrupt.
+func errNoDecodedData() error {
+	return &nntp.Error{
+		Type:    nntp.ErrorTypeArticleNotFound,
+		Message: "article produced no data after decoding",
+	}
 }
 
 // Error types.

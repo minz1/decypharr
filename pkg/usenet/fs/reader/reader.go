@@ -83,7 +83,7 @@ type StreamingReader struct {
 	logger zerolog.Logger
 
 	// Stats
-	stats *ReaderStats
+	stats *Stats
 }
 
 // ReadCursor is one consumer's view of a shared StreamingReader, with its
@@ -229,7 +229,7 @@ func NewStreamingReader(
 	ctx, cancel := context.WithCancel(ctx)
 	logger := zerolog.Nop() // Use logger from config if available
 
-	stats := &ReaderStats{}
+	stats := &Stats{}
 
 	// Create cache
 	cache, err := NewSegmentCache(ctx, segments, config, stats, logger)

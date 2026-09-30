@@ -29,7 +29,7 @@ func newTestReader(t *testing.T, segCount int) *StreamingReader {
 	cfg.MaxConnections = 1
 	cfg.PrefetchAhead = 4
 
-	stats := &ReaderStats{}
+	stats := &Stats{}
 	cache, err := NewSegmentCache(context.Background(), segs, cfg, stats, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewSegmentCache: %v", err)

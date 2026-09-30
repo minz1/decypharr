@@ -26,7 +26,7 @@ func TestPoolBudgetsBelongToEachRun(t *testing.T) {
 		cfg.Pools = pools
 		for _, retention := range []Retention{RetentionWindow, RetentionRewind} {
 			cfg.Retention = retention
-			cache, err := NewSegmentCache(t.Context(), mkSegs(4, 1024), cfg, &ReaderStats{}, zerolog.Nop())
+			cache, err := NewSegmentCache(t.Context(), mkSegs(4, 1024), cfg, &Stats{}, zerolog.Nop())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -47,7 +47,7 @@ func TestPoolBudgetsBelongToEachRun(t *testing.T) {
 			t.Context(),
 			mkSegs(4, 1024),
 			cfg,
-			&ReaderStats{},
+			&Stats{},
 			zerolog.Nop(),
 		); !errors.Is(
 			err,
@@ -61,7 +61,7 @@ func TestPoolBudgetsBelongToEachRun(t *testing.T) {
 
 func TestStandaloneCacheClosesItsPrivatePools(t *testing.T) {
 	t.Parallel()
-	cache, err := NewSegmentCache(t.Context(), mkSegs(4, 1024), DefaultConfig(), &ReaderStats{}, zerolog.Nop())
+	cache, err := NewSegmentCache(t.Context(), mkSegs(4, 1024), DefaultConfig(), &Stats{}, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}
