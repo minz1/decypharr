@@ -278,17 +278,17 @@ class TorrentDashboard {
         this.refs.torrentsList.innerHTML = this.state.torrents.map(torrent => {
             const isSelected = this.state.selectedEntries.has(torrent.info_hash);
             return `
-                <tr class="hover" data-hash="${torrent.info_hash}" data-name="${this.escapeHtml(torrent.name)}" data-category="${this.escapeHtml(torrent.category || '')}">
+                <tr class="hover" data-hash="${this.escapeHtml(torrent.info_hash)}" data-name="${this.escapeHtml(torrent.name)}" data-category="${this.escapeHtml(torrent.category || '')}">
                     <td>
                         <label class="cursor-pointer">
                             <input type="checkbox" class="checkbox checkbox-sm checkbox-primary torrent-select"
-                                   data-hash="${torrent.info_hash}" ${isSelected ? 'checked' : ''}>
+                                   data-hash="${this.escapeHtml(torrent.info_hash)}" ${isSelected ? 'checked' : ''}>
                         </label>
                     </td>
                     <td>
                         <div class="flex flex-col">
                             <span class="font-medium">${this.escapeHtml(torrent.name)}</span>
-                            <span class="text-xs text-base-content/60 font-mono">${torrent.info_hash.substring(0, 8)}...</span>
+                            <span class="text-xs text-base-content/60 font-mono">${this.escapeHtml(torrent.info_hash.substring(0, 8))}...</span>
                         </div>
                     </td>
                     <td>
@@ -318,12 +318,12 @@ class TorrentDashboard {
                     <td>
                         <button class="btn btn-ghost btn-xs text-error"
                                 title="Delete Torrent"
-                                onclick="window.dashboard.deleteTorrent('${torrent.info_hash}', '${this.escapeAttr(torrent.category || '')}', false);">
+                                onclick="const row = this.closest('tr'); window.dashboard.deleteTorrent(row.dataset.hash, row.dataset.category, false);">
                             <i class="bi bi-trash"></i>
                         </button>
                         <button class="btn btn-ghost btn-xs text-error"
                                 title="Delete from Provider"
-                                onclick="window.dashboard.deleteTorrent('${torrent.info_hash}', '${this.escapeAttr(torrent.category || '')}', true);">
+                                onclick="const row = this.closest('tr'); window.dashboard.deleteTorrent(row.dataset.hash, row.dataset.category, true);">
                             <i class="bi bi-cloud-slash"></i>
                         </button>
                     </td>
