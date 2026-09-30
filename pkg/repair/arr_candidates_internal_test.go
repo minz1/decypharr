@@ -9,6 +9,7 @@ import (
 )
 
 func TestCollectArrFilesUsesUniqueManagedSizeFallback(t *testing.T) {
+	t.Parallel()
 	media := arr.Content{Files: []arr.ContentFile{{
 		Path: "/sonarr/library/renamed.mkv",
 		Size: 12345,
@@ -28,6 +29,7 @@ func TestCollectArrFilesUsesUniqueManagedSizeFallback(t *testing.T) {
 }
 
 func TestCollectArrFilesRejectsAmbiguousSizeFallback(t *testing.T) {
+	t.Parallel()
 	media := arr.Content{Files: []arr.ContentFile{{
 		Path: "/sonarr/library/renamed.mkv",
 		Size: 12345,
@@ -49,6 +51,7 @@ func TestCollectArrFilesRejectsAmbiguousSizeFallback(t *testing.T) {
 }
 
 func TestCollectArrFilesPrefersReadableSymlink(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	entryDir := filepath.Join(root, "managed", "Release.Name")
 	if err := os.MkdirAll(entryDir, 0o755); err != nil {
