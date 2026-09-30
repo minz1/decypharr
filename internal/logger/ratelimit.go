@@ -7,8 +7,8 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// nopLogger is a pre-created no-op logger for suppressed log events.
-var nopLogger = zerolog.Nop()
+// defaultMaxItems bounds the number of tracked keys.
+const defaultMaxItems = 1000
 
 // RateLimitedLogger wraps a zerolog.Logger with deduplication to prevent log spam.
 // Same message (by key) will only be logged once within the specified window.
@@ -36,7 +36,7 @@ func NewRateLimitedLogger(opts ...Options) *RateLimitedLogger {
 		logger:   Default(),
 		window:   1 * time.Minute,
 		seen:     xsync.NewMap[string, time.Time](),
-		maxItems: 1000,
+		maxItems: defaultMaxItems,
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -101,7 +101,7 @@ func (e *RateLimitedEvent) Error() *zerolog.Event {
 	if e.parent.shouldLog(e.key) {
 		return e.parent.logger.Error()
 	}
-	return nopLogger.Error()
+	return nil // disabled event; zerolog methods on a nil *Event are no-ops
 }
 
 // Warn returns a warning event, or a no-op event if rate-limited.
@@ -109,7 +109,7 @@ func (e *RateLimitedEvent) Warn() *zerolog.Event {
 	if e.parent.shouldLog(e.key) {
 		return e.parent.logger.Warn()
 	}
-	return nopLogger.Warn()
+	return nil // disabled event; zerolog methods on a nil *Event are no-ops
 }
 
 // Info returns an info event, or a no-op event if rate-limited.
@@ -117,7 +117,7 @@ func (e *RateLimitedEvent) Info() *zerolog.Event {
 	if e.parent.shouldLog(e.key) {
 		return e.parent.logger.Info()
 	}
-	return nopLogger.Info()
+	return nil // disabled event; zerolog methods on a nil *Event are no-ops
 }
 
 // Debug returns a debug event, or a no-op event if rate-limited.
@@ -125,14 +125,14 @@ func (e *RateLimitedEvent) Debug() *zerolog.Event {
 	if e.parent.shouldLog(e.key) {
 		return e.parent.logger.Debug()
 	}
-	return nopLogger.Debug()
+	return nil // disabled event; zerolog methods on a nil *Event are no-ops
 }
 
 // ErrorOnce logs an error only once per key until Reset is called.
 // Useful for "permanent" errors that should only be logged once per session.
 func (r *RateLimitedLogger) ErrorOnce(key string) *zerolog.Event {
 	if _, ok := r.seen.Load(key); ok {
-		return nopLogger.Error()
+		return nil // disabled event; zerolog methods on a nil *Event are no-ops
 	}
 
 	// Use far-future time to prevent re-logging
