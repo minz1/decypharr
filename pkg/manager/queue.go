@@ -34,14 +34,14 @@ const (
 type ImportRequest struct {
 	Name             string                `json:"name"`
 	NZBContent       []byte                `json:"-"`
-	Id               string                `json:"id"`
+	Id               string                `json:"id"` //nolint:revive // set by pkg/server; ID rename is a cross-area follow-up
 	DownloadFolder   string                `json:"downloadFolder"`
 	SelectedDebrid   string                `json:"debrid"`
 	Magnet           *utils.Magnet         `json:"magnet"`
 	Arr              arr.Arr               `json:"arr"`
 	Action           config.DownloadAction `json:"action"`
 	DownloadUncached *bool                 `json:"downloadUncached"`
-	CallBackUrl      string                `json:"callBackUrl"`
+	CallBackURL      string                `json:"callBackURL"`
 	SkipMultiSeason  bool                  `json:"skip_multi_season"`
 
 	Status      string    `json:"status"`
@@ -59,7 +59,7 @@ func NewTorrentRequest(
 	arr arr.Arr,
 	action config.DownloadAction,
 	downloadUncached *bool,
-	callBackUrl string,
+	callBackURL string,
 	importType ImportType,
 	skipMultiSeason bool,
 ) *ImportRequest {
@@ -72,7 +72,7 @@ func NewTorrentRequest(
 		Arr:              arr,
 		Action:           action,
 		DownloadUncached: downloadUncached,
-		CallBackUrl:      callBackUrl,
+		CallBackURL:      callBackURL,
 		Type:             importType,
 		SkipMultiSeason:  skipMultiSeason,
 	}
@@ -83,7 +83,7 @@ func NewNZBRequest(
 	nzbContent []byte,
 	arr arr.Arr,
 	action config.DownloadAction,
-	callBackUrl string,
+	callBackURL string,
 	importType ImportType,
 	skipMultiSeason bool,
 ) *ImportRequest {
@@ -96,7 +96,7 @@ func NewNZBRequest(
 		NZBContent:      nzbContent,
 		Arr:             arr,
 		Action:          action,
-		CallBackUrl:     callBackUrl,
+		CallBackURL:     callBackURL,
 		Type:            importType,
 		SkipMultiSeason: skipMultiSeason,
 	}

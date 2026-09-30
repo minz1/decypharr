@@ -443,7 +443,7 @@ func (m *Manager) RemoveEntry(entry *FileInfo) error {
 	return m.RemoveTorrentFile(entry.Parent(), entry.Name())
 }
 
-func (m *Manager) CopyEntry(entry *FileInfo, destPath string, delete bool) error {
+func (m *Manager) CopyEntry(entry *FileInfo, _ string, _ bool) error {
 	if entry == nil {
 		return fmt.Errorf("entry is nil")
 	}

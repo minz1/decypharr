@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -126,7 +127,7 @@ func testTransport(
 		getLink: func(context.Context) (types.DownloadLink, error) {
 			return types.DownloadLink{Filename: "file", DownloadLink: linkURL.Load().(string)}, nil
 		},
-		refresh: func(_ context.Context, bad types.DownloadLink) (types.DownloadLink, error) {
+		refresh: func(_ context.Context, _ types.DownloadLink) (types.DownloadLink, error) {
 			if refreshes != nil {
 				refreshes.Add(1)
 			}
@@ -200,7 +201,7 @@ func TestSessionResumesAfterMidBodyCutAndExpiredToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := append(first, rest...); !bytes.Equal(got, data) {
+	if got := slices.Concat(first, rest); !bytes.Equal(got, data) {
 		t.Fatalf("byte mismatch after resume: got %d bytes", len(got))
 	}
 	if refreshes.Load() == 0 {
@@ -298,6 +299,7 @@ func TestSessionSeek(t *testing.T) {
 
 type closeNotifyingBody struct {
 	io.ReadCloser
+
 	closed chan<- struct{}
 }
 
@@ -559,14 +561,14 @@ func TestSessionSeekDuringRecovery(t *testing.T) {
 	var opened []int64
 	var mu sync.Mutex
 	tr := &scriptedTransport{
-		recoverFn: func(ctx context.Context, err error, attempt int) error {
+		recoverFn: func(_ context.Context, _ error, _ int) error {
 			recoverOnce.Do(func() {
 				close(inRecover)
 				<-releaseRecover
 			})
 			return nil
 		},
-		openFn: func(ctx context.Context, pos int64) (io.ReadCloser, error) {
+		openFn: func(_ context.Context, pos int64) (io.ReadCloser, error) {
 			mu.Lock()
 			opened = append(opened, pos)
 			n := len(opened)
