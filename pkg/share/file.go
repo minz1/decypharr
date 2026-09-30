@@ -20,8 +20,8 @@ type file struct {
 	closed atomic.Bool
 }
 
-func newFile(info fs.FileInfo, reader io.ReaderAt, close func() error) *file {
-	return &file{info: info, reader: reader, close: close}
+func newFile(info fs.FileInfo, reader io.ReaderAt, closeFn func() error) *file {
+	return &file{info: info, reader: reader, close: closeFn}
 }
 
 func (f *file) Stat() (fs.FileInfo, error) { return f.info, nil }

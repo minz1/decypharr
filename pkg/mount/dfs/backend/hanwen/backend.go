@@ -237,7 +237,7 @@ func (b *Backend) Unmount(ctx context.Context) error {
 }
 
 // WaitReady waits for the mount to be ready.
-func (b *Backend) WaitReady(ctx context.Context) error {
+func (b *Backend) WaitReady(_ context.Context) error {
 	if b.server == nil {
 		return fmt.Errorf("server not initialized")
 	}

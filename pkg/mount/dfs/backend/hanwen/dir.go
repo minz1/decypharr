@@ -129,7 +129,7 @@ func (d *Dir) newNode(info *manager.FileInfo) fs.InodeEmbedder {
 }
 
 // Getattr returns directory attributes.
-func (d *Dir) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+func (d *Dir) Getattr(_ context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	out.Mode = 0755 | fuse.S_IFDIR
 	out.Size = 4096 // Standard directory size
 	out.Nlink = 2   // Directories have 2 links (itself + "." entry)
@@ -280,7 +280,7 @@ func (d *Dir) setEntryOut(info *manager.FileInfo, out *fuse.EntryOut, modTime ui
 	out.EntryValid = uint64(EntryTimeout.Seconds())
 }
 
-func (d *Dir) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
+func (d *Dir) Readdir(_ context.Context) (fs.DirStream, syscall.Errno) {
 	// Always query fresh data from manager (no caching)
 	entries, errno := d.listChildren()
 	if errno != 0 {
@@ -363,7 +363,7 @@ func (d *Dir) RefreshChild(name string) {
 }
 
 // Unlink removes a child from this directory.
-func (d *Dir) Unlink(ctx context.Context, name string) syscall.Errno {
+func (d *Dir) Unlink(_ context.Context, name string) syscall.Errno {
 	if d.level != LevelFile {
 		return syscall.EPERM
 	}
@@ -382,7 +382,7 @@ func (d *Dir) Unlink(ctx context.Context, name string) syscall.Errno {
 }
 
 // Rmdir removes a directory from this directory.
-func (d *Dir) Rmdir(ctx context.Context, name string) syscall.Errno {
+func (d *Dir) Rmdir(_ context.Context, name string) syscall.Errno {
 	if d.level != LevelTorrent {
 		return syscall.EPERM
 	}

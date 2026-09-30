@@ -51,19 +51,19 @@ func (r Range) Intersection(b Range) (intersection Range) {
 // and coalesced to the minimum size.
 type Ranges []Range
 
-// merge the Range new into dest if possible.
+// merge the Range src into dst if possible.
 // dst.Pos must be >= src.Pos.
 // Returns true if merged.
-func merge(new, dst *Range) bool {
-	if new.End() < dst.Pos {
+func merge(src, dst *Range) bool {
+	if src.End() < dst.Pos {
 		return false
 	}
-	if new.End() > dst.End() {
-		dst.Size = new.Size
+	if src.End() > dst.End() {
+		dst.Size = src.Size
 	} else {
-		dst.Size += dst.Pos - new.Pos
+		dst.Size += dst.Pos - src.Pos
 	}
-	dst.Pos = new.Pos
+	dst.Pos = src.Pos
 	return true
 }
 
