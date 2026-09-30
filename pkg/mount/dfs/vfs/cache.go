@@ -1362,8 +1362,8 @@ func (item *CacheItem) ReadAtContext(ctx context.Context, p []byte, off int64) (
 // WriteAtNoOverwrite writes only the bytes in p that aren't already cached.
 // Returns total p length as n (for [io.Writer] contract) and the count of
 // bytes skipped because they were already present.
-func (item *CacheItem) WriteAtNoOverwrite(p []byte, off int64) (n, skipped int, err error) {
-	skipped, err = item.buf.WriteMissing(p, off)
+func (item *CacheItem) WriteAtNoOverwrite(p []byte, off int64) (int, int, error) {
+	skipped, err := item.buf.WriteMissing(p, off)
 	item.markMetadataDirty()
 	return len(p), skipped, err
 }

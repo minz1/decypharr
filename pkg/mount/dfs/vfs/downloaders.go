@@ -20,6 +20,18 @@ import (
 )
 
 const (
+	// defaultChunkSize is the per-request chunk when the config sets none.
+	defaultChunkSize = 4 << 20
+	// defaultReadAheadChunks is the read-ahead, in chunks, when the config
+	// sets none.
+	defaultReadAheadChunks = 4
+	// defaultRetries is the per-chunk attempt count when the config sets none.
+	defaultRetries = 3
+	// chunkGrowthFactor is how fast adaptive chunks grow on success.
+	chunkGrowthFactor = 2
+	// matchWindowChunkDivisor: a read within chunkSize/matchWindowChunkDivisor
+	// past a downloader's offset reuses that downloader.
+	matchWindowChunkDivisor = 2
 	// maxDownloaderIdleTime is how long a downloader waits before stopping.
 	maxDownloaderIdleTime = 5 * time.Second
 	// maxSkipBytes is how far a downloader will skip before restarting.
@@ -118,6 +130,46 @@ type Downloaders struct {
 	// Circuit breaker - blocks all requests when max errors reached
 	circuitOpen   atomic.Bool  // True when circuit is "open" (blocking all requests)
 	circuitOpenAt atomic.Int64 // Unix nano timestamp when circuit opened
+}
+
+// NewDownloaders creates a new download coordinator.
+func NewDownloaders(ctx context.Context, mgr Backend, item *CacheItem, cfg *fuseconfig.FuseConfig) *Downloaders {
+	parentCtx := ctx
+	ctx, cancel := context.WithCancel(parentCtx)
+	chunkSize := cfg.ChunkSize
+	if chunkSize <= 0 {
+		chunkSize = defaultChunkSize
+	}
+	readAheadSize := cfg.ReadAheadSize
+	if readAheadSize <= 0 {
+		readAheadSize = chunkSize * defaultReadAheadChunks
+	}
+	retries := cfg.Retries
+	if retries <= 0 {
+		retries = defaultRetries
+	}
+
+	dls := &Downloaders{
+		parentCtx:     parentCtx,
+		ctx:           ctx,
+		cancel:        cancel,
+		item:          item,
+		manager:       mgr,
+		chunkSize:     chunkSize,
+		readAheadSize: readAheadSize,
+		retries:       retries,
+		client:        cfg.Client,
+		// streamID is populated lazily when the first read occurs.
+		streamID: "",
+	}
+	dls.minWaiterEnd.Store(math.MaxInt64)
+	dls.lastPoke.Store(-1)
+	dls.touchActivity() // Initialize activity timestamp
+
+	// Background kicker to handle stalled waiters and idle detection
+	dls.startKicker()
+
+	return dls
 }
 
 // ensureStreamTracked makes sure the active stream is registered when reads
@@ -322,46 +374,6 @@ func (dls *Downloaders) waiterReadLimit(off int64) int64 {
 	return end - off
 }
 
-// NewDownloaders creates a new download coordinator.
-func NewDownloaders(ctx context.Context, mgr Backend, item *CacheItem, cfg *fuseconfig.FuseConfig) *Downloaders {
-	parentCtx := ctx
-	ctx, cancel := context.WithCancel(parentCtx)
-	chunkSize := cfg.ChunkSize
-	if chunkSize <= 0 {
-		chunkSize = 4 * 1024 * 1024
-	}
-	readAheadSize := cfg.ReadAheadSize
-	if readAheadSize <= 0 {
-		readAheadSize = chunkSize * 4 // Default: 4 chunks ahead
-	}
-	retries := cfg.Retries
-	if retries <= 0 {
-		retries = 3
-	}
-
-	dls := &Downloaders{
-		parentCtx:     parentCtx,
-		ctx:           ctx,
-		cancel:        cancel,
-		item:          item,
-		manager:       mgr,
-		chunkSize:     chunkSize,
-		readAheadSize: readAheadSize,
-		retries:       retries,
-		client:        cfg.Client,
-		// streamID is populated lazily when the first read occurs.
-		streamID: "",
-	}
-	dls.minWaiterEnd.Store(math.MaxInt64)
-	dls.lastPoke.Store(-1)
-	dls.touchActivity() // Initialize activity timestamp
-
-	// Background kicker to handle stalled waiters and idle detection
-	dls.startKicker()
-
-	return dls
-}
-
 // keepAhead extends the download frontier past a read that was served from
 // cache. Warm sequential playback calls this on every read, so it is gated on
 // read position: only a seek or readAheadPokeInterval of progress takes the
@@ -398,9 +410,9 @@ func (dls *Downloaders) Download(ctx context.Context, r ranges.Range) error {
 // downloader with no read-ahead extension so they are not starved behind bulk
 // sequential prefetch under high connection load.
 //
-// hit reports whether r was already fully cached when the call was made,
-// checked under dls.mu.
-func (dls *Downloaders) DownloadWithPriority(ctx context.Context, r ranges.Range, priority bool) (hit bool, err error) {
+// The bool reports whether r was already fully cached when the call was
+// made, checked under dls.mu.
+func (dls *Downloaders) DownloadWithPriority(ctx context.Context, r ranges.Range, priority bool) (bool, error) {
 	// Circuit breaker: reject immediately if circuit is open
 	if dls.isCircuitOpen() {
 		lastErr := dls.getLastErr()
@@ -504,7 +516,9 @@ func isProbeRead(off, length, fileSize int64) bool {
 // under high load does not surface as a hard read error to ffprobe. It fails
 // fast (no retry) on cancellation, an open circuit breaker, or a non-transient
 // error — retrying those would only spin.
-func (dls *Downloaders) DownloadWithRetry(ctx context.Context, r ranges.Range, priority bool) (hit bool, err error) {
+func (dls *Downloaders) DownloadWithRetry(ctx context.Context, r ranges.Range, priority bool) (bool, error) {
+	var hit bool
+	var err error
 	for attempt := range downloadRetryAttempts {
 		if hit, err = dls.DownloadWithPriority(ctx, r, priority); err == nil {
 			return hit, nil
@@ -647,7 +661,7 @@ func (dls *Downloaders) retireAbandonedLocked(pos int64) {
 func (dls *Downloaders) extendAndFindMissingRangeLocked(r ranges.Range) ranges.Range {
 	bufferWindow := dls.readAheadSize
 	if bufferWindow <= 0 {
-		bufferWindow = dls.chunkSize * 4
+		bufferWindow = dls.chunkSize * defaultReadAheadChunks
 	}
 
 	r.Size += bufferWindow
@@ -659,7 +673,7 @@ func (dls *Downloaders) extendAndFindMissingRangeLocked(r ranges.Range) ranges.R
 
 func (dls *Downloaders) downloaderMatchWindowLocked() int64 {
 	window := int64(downloaderWindow)
-	if half := dls.chunkSize / 2; half > window {
+	if half := dls.chunkSize / matchWindowChunkDivisor; half > window {
 		window = half
 	}
 	return window
@@ -691,7 +705,7 @@ func (dls *Downloaders) kickExistingDownloaderLocked(pos int64) {
 func (dls *Downloaders) newDownloaderLocked(r ranges.Range, targetEnd int64, priority bool) error {
 	baseChunk := dls.chunkSize
 	if baseChunk <= 0 {
-		baseChunk = 4 * 1024 * 1024
+		baseChunk = defaultChunkSize
 	}
 	// Priority downloaders use a small fixed chunk so the latency-sensitive
 	// bytes return quickly and the NNTP connection is freed for other reads.
@@ -810,14 +824,15 @@ func (dls *Downloaders) kickWaiters() {
 		r := w.r
 		r = r.Clip(fileSize)
 
-		if dls.item.HasRange(r) {
+		switch {
+		case dls.item.HasRange(r):
 			w.errChan <- nil // Fulfilled!
 			fulfilled++
-		} else if circuitOpen || dls.errorCount >= maxErrorCount {
+		case circuitOpen || dls.errorCount >= maxErrorCount:
 			// Circuit is open or max errors reached - fail waiter without creating new downloaders
 			w.errChan <- dls.lastErr
 			fulfilled++
-		} else {
+		default:
 			remaining = append(remaining, w)
 		}
 	}
@@ -1151,12 +1166,15 @@ func (dls *Downloaders) startKicker() {
 
 // downloader methods
 
-// run is the main download loop.
-func (dl *downloader) run() (totalBytes int64, err error) {
+// run is the main download loop. It returns the bytes written and the error
+// that ended it.
+func (dl *downloader) run() (int64, error) {
+	var totalBytes int64
 	for {
 		// Single lock to get all state
-		start, targetEnd, chunkSize, fileSize, stopped := dl.getState()
-		if stopped || start >= fileSize {
+		st := dl.getState()
+		start, targetEnd, chunkSize, fileSize := st.start, st.targetEnd, st.chunkSize, st.fileSize
+		if st.stopped || start >= fileSize {
 			return totalBytes, nil
 		}
 
@@ -1194,23 +1212,33 @@ func (dl *downloader) run() (totalBytes int64, err error) {
 	}
 }
 
+// downloaderState is a consistent snapshot of a downloader's progress.
+type downloaderState struct {
+	start, targetEnd, chunkSize, fileSize int64
+	stopped                               bool
+}
+
 // getState returns current download state with single lock acquisition.
-func (dl *downloader) getState() (start, targetEnd, chunkSize, fileSize int64, stopped bool) {
+func (dl *downloader) getState() downloaderState {
 	dl.mu.Lock()
 	defer dl.mu.Unlock()
 
-	chunkSize = dl.currentChunkSize
+	chunkSize := dl.currentChunkSize
 	if chunkSize <= 0 {
 		chunkSize = dl.baseChunkSize
 		if chunkSize <= 0 {
-			chunkSize = 4 * 1024 * 1024
+			chunkSize = defaultChunkSize
 		}
 	}
 
-	fileSize = dl.dls.item.info.Size
-	targetEnd = min(dl.maxOffset, fileSize)
-
-	return dl.offset, targetEnd, chunkSize, fileSize, dl.stopped
+	fileSize := dl.dls.item.info.Size
+	return downloaderState{
+		start:     dl.offset,
+		targetEnd: min(dl.maxOffset, fileSize),
+		chunkSize: chunkSize,
+		fileSize:  fileSize,
+		stopped:   dl.stopped,
+	}
 }
 
 // waitForWork blocks until new work arrives or timeout.
@@ -1295,8 +1323,9 @@ func (dl *downloader) downloadChunkWithRetry(start, end int64) (int64, error) {
 	}
 }
 
-// getRange returns the current download range.
-func (dl *downloader) getRange() (start, offset int64) {
+// getRange returns the current download range: its start and the offset
+// downloaded up to.
+func (dl *downloader) getRange() (int64, int64) {
 	dl.mu.Lock()
 	defer dl.mu.Unlock()
 	return dl.start, dl.offset
@@ -1496,7 +1525,7 @@ func (dl *downloader) adjustChunkSize(chunkLen, _ int64, success bool) {
 
 	// Double chunk size on successful download to quickly ramp up on good connections,
 	// but cap at maxChunkSizeMultiplier × base to avoid oversized HTTP range requests on seeks.
-	next := dl.currentChunkSize * 2
+	next := dl.currentChunkSize * chunkGrowthFactor
 	if maxChunk := dl.baseChunkSize * maxChunkSizeMultiplier; next > maxChunk {
 		next = maxChunk
 	}
@@ -1545,7 +1574,7 @@ func (dl *downloader) isClosed() bool {
 
 func (dl *downloader) retryAttempts() int {
 	if dl.dls.retries <= 0 {
-		return 3
+		return defaultRetries
 	}
 	return dl.dls.retries
 }
