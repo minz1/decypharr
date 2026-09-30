@@ -190,6 +190,7 @@ func (d *Downloader) processSymlink(entry *storage.Entry, mountPath string) erro
 		Msgf("Creating symlinks for %d files in %s", len(files), torrentSymlinkPath)
 
 	// Create symlink directory
+	//nolint:gosec // the arr importing from this folder usually runs as another user
 	err := os.MkdirAll(torrentSymlinkPath, os.ModePerm)
 	if err != nil {
 		return fmt.Errorf("failed to create directory: %s: %w", torrentSymlinkPath, err)
@@ -507,6 +508,7 @@ func (d *Downloader) processTorrentDownload(entry *storage.Entry) error {
 		totalSize += file.Size
 	}
 	downloadedFolder := entry.DownloadPath()
+	//nolint:gosec // the arr importing from this folder usually runs as another user
 	if err := os.MkdirAll(downloadedFolder, os.ModePerm); err != nil {
 		return fmt.Errorf("failed to create download directory: %s: %w", downloadedFolder, err)
 	}
@@ -628,6 +630,7 @@ func (d *Downloader) processUsenetDownload(entry *storage.Entry) error {
 	d.logger.Info().Msgf("Downloading %d NZB files via usenet...", len(files))
 
 	downloadedFolder := entry.DownloadPath()
+	//nolint:gosec // the arr importing from this folder usually runs as another user
 	if err := os.MkdirAll(downloadedFolder, os.ModePerm); err != nil {
 		return fmt.Errorf("failed to create download directory: %s: %w", downloadedFolder, err)
 	}

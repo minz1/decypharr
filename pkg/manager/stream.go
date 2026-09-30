@@ -179,9 +179,9 @@ func (m *Manager) TrackStream(entry *storage.Entry, filename, client string) str
 
 	var source, debrid string
 	if entry.Protocol == config.ProtocolNZB {
-		source = "nzb"
+		source = string(config.ProtocolNZB)
 	} else {
-		source = "torrent"
+		source = string(config.ProtocolTorrent)
 		debrid = entry.ActiveProvider
 	}
 

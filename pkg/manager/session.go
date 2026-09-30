@@ -38,6 +38,11 @@ const (
 	// sessionMaxThrottleWait caps how long a Retry-After is honored.
 	sessionMaxThrottleWait = 30 * time.Second
 	sessionResumeBaseDelay = 500 * time.Millisecond
+	// sessionBackoffMaxShift caps the doubling of sessionResumeBaseDelay.
+	sessionBackoffMaxShift = 3
+	// sessionErrorBodyDrain is how much of an error body is read so the
+	// connection can be reused.
+	sessionErrorBodyDrain = 512
 )
 
 // StreamReader is a resilient, seekable byte stream over one remote file.
@@ -116,7 +121,7 @@ type session struct {
 	onClose func()
 }
 
-var noopCancel context.CancelFunc = func() {}
+func noopCancel() {}
 
 func newSession(ctx context.Context, t transport, size, offset int64) *session {
 	sctx, cancel := context.WithCancel(ctx)
@@ -187,7 +192,7 @@ func (s *session) Read(p []byte) (int, error) {
 		}
 		n, err := s.body.Read(p)
 		s.stall.Stop()
-		s.stallCancel.Store(noopCancel)
+		s.stallCancel.Store(context.CancelFunc(noopCancel))
 		if n > len(p) {
 			// Every consumer copies through a buffer sized to len(p); a body
 			// that over-reports makes them slice past it. Drop the body and
@@ -445,20 +450,20 @@ func (t *httpTransport) open(ctx context.Context, pos int64) (io.ReadCloser, err
 		// Server ignored the Range header but the offset is small enough to
 		// discard our way to it.
 		if _, copyNErr := io.CopyN(io.Discard, resp.Body, absStart); copyNErr != nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return nil, link.ClassifyTransportError(copyNErr)
 		}
 		return resp.Body, nil
 	case resp.StatusCode == http.StatusOK:
 		// Byte-ranged slices can't fall back to discarding: without range
 		// support the body would run past the slice end.
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return nil, link.NewPermanentError(
 			fmt.Errorf("server ignored range request at offset %d", absStart), "no_range_support")
 	default:
 		status, header := resp.StatusCode, resp.Header
-		_, _ = io.CopyN(io.Discard, resp.Body, 512)
-		resp.Body.Close()
+		_, _ = io.CopyN(io.Discard, resp.Body, sessionErrorBodyDrain)
+		_ = resp.Body.Close()
 		return nil, link.ClassifyStreamStatus(status, header)
 	}
 }
@@ -727,12 +732,12 @@ func (m *Manager) openSession(
 	}
 
 	var t transport
-	source, debrid := "torrent", entry.ActiveProvider
+	source, debrid := string(config.ProtocolTorrent), entry.ActiveProvider
 	if entry.Protocol == config.ProtocolNZB {
 		if m.usenet == nil {
 			return nil, "", "", fmt.Errorf("usenet client not configured")
 		}
-		source, debrid = "nzb", ""
+		source, debrid = string(config.ProtocolNZB), ""
 		nzoID := entry.InfoHash
 		retention := retentionForOwner(owner)
 		t = &usenetTransport{
@@ -775,7 +780,7 @@ func sessionBackoff(attempt int) time.Duration {
 	if attempt <= 0 {
 		return 0 // first retry is immediate: most blips are one-shot
 	}
-	return sessionResumeBaseDelay << min(attempt-1, 3) // 0.5s, 1s, 2s, 4s
+	return sessionResumeBaseDelay << min(attempt-1, sessionBackoffMaxShift) // 0.5s, 1s, 2s, 4s
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) error {

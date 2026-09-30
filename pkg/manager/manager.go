@@ -145,6 +145,7 @@ func New() *Manager {
 
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
+			//nolint:gosec // long-standing behavior for debrid CDN downloads; strict verification is a flagged follow-up
 			InsecureSkipVerify: true,
 			MinVersion:         tls.VersionTLS12,
 			ClientSessionCache: tls.NewLRUClientSessionCache(200),

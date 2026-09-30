@@ -70,8 +70,8 @@ func (m *Manager) processTorrentJob(ctx context.Context, job *Job) error {
 	if job == nil || job.Entry == nil {
 		return fmt.Errorf("invalid torrent job")
 	}
-	if _, err := m.queue.GetTorrent(job.Entry.InfoHash); err != nil {
-		return nil
+	if !m.queue.Contains(job.Entry.InfoHash) {
+		return nil // removed from the queue while waiting for a worker
 	}
 	if job.ResumeExisting {
 		// Claim the entry before flipping it to downloading: once the status
@@ -100,7 +100,7 @@ func (m *Manager) processTorrentJob(ctx context.Context, job *Job) error {
 	job.Entry.Status = debridTypes.TorrentStatusDownloading
 	job.Entry.DownloadUncached = job.DebridTorrent.DownloadUncached
 	if job.Request != nil {
-		job.Request.Status = "started"
+		job.Request.Status = importStatusStarted
 	}
 	m.processNewTorrent(job.Entry, job.DebridTorrent)
 	return nil
@@ -154,6 +154,9 @@ func newTorrentQueueEntry(importReq *ImportRequest, status debridTypes.TorrentSt
 	torrent.ContentPath = torrent.DownloadPath()
 	return torrent
 }
+
+// percentScale converts provider percentages to the 0..1 progress fraction.
+const percentScale = 100.0
 
 func isTooManyActiveDownloads(err error) bool {
 	customErr, ok := errors.AsType[*customerror.Error](err)
@@ -309,16 +312,14 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 	}
 
 	// Update entry progress
-	entry.Progress = debridTorrent.Progress / 100.0
+	entry.Progress = debridTorrent.Progress / percentScale
 	entry.Speed = debridTorrent.Speed
 	entry.Size = debridTorrent.GetSize()
 	entry.Seeders = debridTorrent.Seeders
 	entry.UpdatedAt = time.Now()
 
 	// Update placement progress
-	if placement := entry.GetActiveProvider(); placement != nil {
-		placement.Progress = entry.Progress
-	}
+	placement.Progress = entry.Progress
 
 	_ = m.queue.Update(entry)
 	// Check if done or failed
@@ -447,12 +448,9 @@ func (m *Manager) SendToDebrid(_ context.Context, importRequest *ImportRequest) 
 	errs := make([]error, 0, len(clients))
 
 	for _, db := range clients {
-		overrideDownloadUncached := false
-
+		overrideDownloadUncached := db.Config().DownloadUncached
 		if importRequest.DownloadUncached != nil {
 			overrideDownloadUncached = *importRequest.DownloadUncached
-		} else {
-			overrideDownloadUncached = db.Config().DownloadUncached
 		}
 		debridTorrent.DownloadUncached = overrideDownloadUncached
 

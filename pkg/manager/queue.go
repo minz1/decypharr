@@ -21,6 +21,13 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
+const (
+	// usenetProvider is the provider name NZB entries are placed on.
+	usenetProvider = "usenet"
+	// importStatusStarted marks an import request that is being processed.
+	importStatusStarted = "started"
+)
+
 type ImportType string
 
 const (
@@ -34,7 +41,7 @@ const (
 type ImportRequest struct {
 	Name             string                `json:"name"`
 	NZBContent       []byte                `json:"-"`
-	Id               string                `json:"id"` //nolint:revive // set by pkg/server; ID rename is a cross-area follow-up
+	Id               string                `json:"id"` //nolint:revive,staticcheck // set by pkg/server; ID rename is a cross-area follow-up
 	DownloadFolder   string                `json:"downloadFolder"`
 	SelectedDebrid   string                `json:"debrid"`
 	Magnet           *utils.Magnet         `json:"magnet"`
@@ -65,7 +72,7 @@ func NewTorrentRequest(
 ) *ImportRequest {
 	return &ImportRequest{
 		Id:               uuid.New().String(),
-		Status:           "started",
+		Status:           importStatusStarted,
 		DownloadFolder:   downloadFolder,
 		SelectedDebrid:   cmp.Or(arr.SelectedDebrid, debrid), // Use debrid from arr if available
 		Magnet:           magnet,
@@ -90,9 +97,9 @@ func NewNZBRequest(
 	return &ImportRequest{
 		Name:            name,
 		Id:              uuid.New().String(),
-		Status:          "started",
+		Status:          importStatusStarted,
 		DownloadFolder:  downloadFolder,
-		SelectedDebrid:  "usenet", // NZB imports always use usenet
+		SelectedDebrid:  usenetProvider, // NZB imports always use usenet
 		NZBContent:      nzbContent,
 		Arr:             arr,
 		Action:          action,
@@ -130,6 +137,12 @@ func (q *Queue) Add(torrent *storage.Entry) error {
 
 func (q *Queue) GetTorrent(infohash string) (*storage.Entry, error) {
 	return q.storage.GetQueued(infohash)
+}
+
+// Contains reports whether infohash is still in the download queue.
+func (q *Queue) Contains(infohash string) bool {
+	_, err := q.GetTorrent(infohash)
+	return err == nil
 }
 
 func (q *Queue) deleteEntryFiles(entry *storage.Entry) error {

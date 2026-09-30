@@ -29,7 +29,9 @@ func (incompleteProvider) UpdateTorrent(*types.Torrent) error { return nil }
 
 // The link service dereferences the refresher's entry; an incomplete provider
 // torrent must hand back the stored entry, never (nil, nil).
-func TestRefreshTorrentIncompleteReturnsStoredEntry(t *testing.T) { //nolint:paralleltest // mutates the config singleton
+//
+//nolint:paralleltest // mutates the config singleton
+func TestRefreshTorrentIncompleteReturnsStoredEntry(t *testing.T) {
 	config.Reset()
 	config.SetConfigPath(t.TempDir())
 	t.Cleanup(config.Reset)
@@ -74,7 +76,9 @@ func (c *countingStatusProvider) CheckStatus(torrent *types.Torrent) (*types.Tor
 
 // A resumed job must not drive an entry the queue scheduler is already
 // processing, nor release the scheduler's in-flight claim.
-func TestResumeJobSkipsEntryAlreadyInFlight(t *testing.T) { //nolint:paralleltest // mutates the config singleton
+//
+//nolint:paralleltest // mutates the config singleton
+func TestResumeJobSkipsEntryAlreadyInFlight(t *testing.T) {
 	config.Reset()
 	config.SetConfigPath(t.TempDir())
 	t.Cleanup(config.Reset)
