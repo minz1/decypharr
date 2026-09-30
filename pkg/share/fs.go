@@ -1,7 +1,7 @@
 // Package share exposes the manager's library catalog as a facetfs.FileSystem
 // so it can be served over the facetfs protocol packages (NFSv4 today; SFTP
 // and SMB share the same adapter later). The export is read-only: every
-// mutating call fails with fs.ErrPermission.
+// mutating call fails with [fs.ErrPermission].
 package share
 
 import (

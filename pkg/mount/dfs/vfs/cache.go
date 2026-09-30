@@ -1291,7 +1291,7 @@ func (item *CacheItem) StopDownloaders() {
 }
 
 // ReadAt reads from the sparse file, downloading if needed.
-// Uses context.Background() — prefer ReadAtContext when a caller context is available.
+// Uses [context.Background]() — prefer ReadAtContext when a caller context is available.
 func (item *CacheItem) ReadAt(p []byte, off int64) (int, error) {
 	return item.ReadAtContext(context.Background(), p, off)
 }
@@ -1357,7 +1357,7 @@ func (item *CacheItem) ReadAtContext(ctx context.Context, p []byte, off int64) (
 }
 
 // WriteAtNoOverwrite writes only the bytes in p that aren't already cached.
-// Returns total p length as n (for io.Writer contract) and the count of
+// Returns total p length as n (for [io.Writer] contract) and the count of
 // bytes skipped because they were already present.
 func (item *CacheItem) WriteAtNoOverwrite(p []byte, off int64) (n, skipped int, err error) {
 	skipped, err = item.buf.WriteMissing(p, off)
@@ -1433,7 +1433,7 @@ func buildCacheKey(entryName, filename string) string {
 }
 
 // decodeJSONFile stream-decodes a JSON file into v, avoiding the intermediate
-// []byte slurp of os.ReadFile + json.Unmarshal. Keeps allocation proportional
+// []byte slurp of os.ReadFile + [json.Unmarshal]. Keeps allocation proportional
 // to the decoded object rather than 2× the file size.
 func decodeJSONFile(path string, v any) error {
 	f, err := os.Open(path)

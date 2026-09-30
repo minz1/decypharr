@@ -36,7 +36,7 @@ func (s *streamer) open(info *manager.FileInfo, stat fs.FileInfo) (facetfs.File,
 	return newFile(stat, r, r.close), nil
 }
 
-// streamReader presents one resilient manager session as an io.ReaderAt. The
+// streamReader presents one resilient manager session as an [io.ReaderAt]. The
 // session is opened on first read, positioned where that read starts, and
 // dropped on failure so the next read reconnects. Callers are overwhelmingly
 // sequential, so the session rarely seeks.

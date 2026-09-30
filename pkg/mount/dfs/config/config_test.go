@@ -8,7 +8,7 @@ import (
 )
 
 // A zero or negative cleanup interval passes config validation (it parses)
-// but panics time.NewTicker in the cache's cleanup loop; Parse must keep the
+// but panics [time.NewTicker] in the cache's cleanup loop; Parse must keep the
 // default instead.
 func TestParseRejectsNonPositiveCleanupInterval(t *testing.T) {
 	t.Parallel()
