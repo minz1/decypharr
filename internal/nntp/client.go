@@ -1099,6 +1099,24 @@ type keepaliveState struct {
 // the same sweep timed out.
 var errPathDown = errors.New("provider path down, skipped keepalive ping")
 
+// keepaliveTally counts one worker's failed keepalive pings.
+type keepaliveTally struct {
+	failed int
+	err    error
+}
+
+func (t *keepaliveTally) add(err error) {
+	if err == nil {
+		return
+	}
+	t.failed++
+	// errPathDown is a consequence, not a cause — keep looking for the ping
+	// error that actually condemned the batch.
+	if t.err == nil && !errors.Is(err, errPathDown) {
+		t.err = err
+	}
+}
+
 // keepAliveBatch pings one sweep's worth of idle entries in parallel.
 //
 // A ping that times out is not one dead session: a live peer that dropped a
@@ -1121,24 +1139,11 @@ func (c *Client) keepAliveBatch(pp *ProviderPool, toPing []*connectionEntry, now
 	// Per-worker tallies, merged after the wait: rolling them up avoids one
 	// log line per dead connection, which is what made a single provider
 	// blip look like a flood.
-	type tally struct {
-		failed int
-		err    error
-	}
-	tallies := make([]tally, workers)
+	tallies := make([]keepaliveTally, workers)
 	for i := range workers {
 		wg.Go(func() {
 			for entry := range pingCh {
-				err := c.keepAlive(pp, entry, now, &st)
-				if err == nil {
-					continue
-				}
-				tallies[i].failed++
-				// errPathDown is a consequence, not a cause — keep looking
-				// for the ping error that actually condemned the batch.
-				if tallies[i].err == nil && !errors.Is(err, errPathDown) {
-					tallies[i].err = err
-				}
+				tallies[i].add(c.keepAlive(pp, entry, now, &st))
 			}
 		})
 	}
@@ -1467,11 +1472,8 @@ func (c *Client) BatchStat(ctx context.Context, messageIDs []string) (*BatchStat
 			// Per-segment provider failover has already completed inside
 			// this chunk before we get here, so this never short-circuits
 			// failover.
-			for _, r := range results {
-				if !r.Available && IsArticleNotFoundError(r.Error) {
-					bailOnce.Do(cancel)
-					break
-				}
+			if slices.ContainsFunc(results, isDefinitiveMiss) {
+				bailOnce.Do(cancel)
 			}
 		})
 		if err != nil {
@@ -1484,26 +1486,27 @@ func (c *Client) BatchStat(ctx context.Context, messageIDs []string) (*BatchStat
 	}
 	wg.Wait()
 
-	result := &BatchStatResult{
-		Results:    allResults,
-		TotalCount: len(messageIDs),
+	return summarizeStatResults(allResults), nil
+}
+
+func isDefinitiveMiss(r StatResult) bool {
+	return !r.Available && IsArticleNotFoundError(r.Error)
+}
+
+// summarizeStatResults counts found and failed results. Article-not-found
+// doesn't count as an error for the caller's availability decision; only
+// true connection/protocol failures do.
+func summarizeStatResults(results []StatResult) *BatchStatResult {
+	summary := &BatchStatResult{Results: results, TotalCount: len(results)}
+	for _, r := range results {
+		switch {
+		case r.Available:
+			summary.FoundCount++
+		case r.Error != nil && !IsArticleNotFoundError(r.Error):
+			summary.ErrorCount++
+		}
 	}
-	for _, r := range allResults {
-		if r.Available {
-			result.FoundCount++
-			continue
-		}
-		if r.Error == nil {
-			continue
-		}
-		// Article-not-found doesn't count as an error for the caller's
-		// availability decision; only true connection/protocol failures do.
-		if nntpErr, ok := errors.AsType[*Error](r.Error); ok && nntpErr.Type == ErrorTypeArticleNotFound {
-			continue
-		}
-		result.ErrorCount++
-	}
-	return result, nil
+	return summary
 }
 
 func (c *Client) batchStatAcrossProviders(ctx context.Context, messageIDs []string) ([]StatResult, error) {
@@ -1526,94 +1529,83 @@ func (c *Client) batchStatAcrossProviders(ctx context.Context, messageIDs []stri
 		queryIdxs := make([]int, 0, len(unresolved))
 		chunkIDs := make([]string, 0, len(unresolved))
 		for _, idx := range unresolved {
-			if states[idx].exclusions.excludes(provider) {
-				continue
+			if !states[idx].exclusions.excludes(provider) {
+				queryIdxs = append(queryIdxs, idx)
+				chunkIDs = append(chunkIDs, messageIDs[idx])
 			}
-			queryIdxs = append(queryIdxs, idx)
-			chunkIDs = append(chunkIDs, messageIDs[idx])
 		}
 		if len(queryIdxs) == 0 {
 			continue
 		}
 
 		providerResults, err := c.batchStatOnProvider(ctx, provider, chunkIDs)
-		if err != nil && len(providerResults) == 0 {
-			for _, idx := range queryIdxs {
-				states[idx].sawOtherErr = true
-				states[idx].lastErr = err
-			}
-			continue
-		}
-
 		for queryPos, idx := range queryIdxs {
-			if queryPos >= len(providerResults) {
-				states[idx].sawOtherErr = true
-				if err != nil {
-					states[idx].lastErr = err
-				} else {
-					states[idx].lastErr = NewConnectionError(
-						fmt.Errorf("provider %s returned incomplete batch results", provider.Host),
-					)
-				}
+			if queryPos < len(providerResults) && providerResults[queryPos].Available {
+				results[idx] = providerResults[queryPos]
 				continue
 			}
-
-			res := providerResults[queryPos]
-			if res.Available {
-				results[idx] = res
-				continue
-			}
-
-			if nntpErr, ok := errors.AsType[*Error](
-				res.Error,
-			); res.Error != nil && ok &&
-				nntpErr.Type == ErrorTypeArticleNotFound {
-				states[idx].sawNotFound = true
-				excludeForArticleNotFound(&states[idx].exclusions, provider)
-			} else {
-				states[idx].sawOtherErr = true
-				if res.Error != nil {
-					states[idx].lastErr = res.Error
-				} else if err != nil {
-					states[idx].lastErr = err
-				} else {
-					states[idx].lastErr = NewConnectionError(
-						fmt.Errorf("provider %s returned an empty STAT result for %s", provider.Host, res.MessageID),
-					)
-				}
-			}
+			states[idx].recordMiss(provider, providerResults, queryPos, err)
 		}
 		unresolved = slices.DeleteFunc(unresolved, func(idx int) bool { return results[idx].Available })
 	}
 
 	for _, idx := range unresolved {
-		switch {
-		case states[idx].sawNotFound && !states[idx].sawOtherErr:
-			results[idx].Available = false
-			results[idx].Error = classifyNNTPError(
-				codeNoSuchArticle,
-				fmt.Sprintf("segment %s not found on any provider", results[idx].MessageID),
-			)
-		case states[idx].lastErr != nil:
-			results[idx].Available = false
-			results[idx].Error = states[idx].lastErr
-		case states[idx].sawNotFound:
-			results[idx].Available = false
-			results[idx].Error = NewConnectionError(
-				fmt.Errorf(
-					"segment %s not found on some providers but could not be verified on others",
-					results[idx].MessageID,
-				),
-			)
-		default:
-			results[idx].Available = false
-			results[idx].Error = NewConnectionError(
-				fmt.Errorf("segment %s could not be verified on any provider", results[idx].MessageID),
+		results[idx].Available = false
+		results[idx].Error = states[idx].finalError(results[idx].MessageID)
+	}
+	return results, nil
+}
+
+// recordMiss books a provider's non-positive answer (or missing answer) for
+// one message ID.
+func (st *batchStatState) recordMiss(
+	provider config.UsenetProvider,
+	providerResults []StatResult,
+	queryPos int,
+	batchErr error,
+) {
+	if queryPos >= len(providerResults) {
+		st.sawOtherErr = true
+		st.lastErr = batchErr
+		if batchErr == nil {
+			st.lastErr = NewConnectionError(
+				fmt.Errorf("provider %s returned incomplete batch results", provider.Host),
 			)
 		}
+		return
 	}
+	res := providerResults[queryPos]
+	if IsArticleNotFoundError(res.Error) {
+		st.sawNotFound = true
+		excludeForArticleNotFound(&st.exclusions, provider)
+		return
+	}
+	st.sawOtherErr = true
+	switch {
+	case res.Error != nil:
+		st.lastErr = res.Error
+	case batchErr != nil:
+		st.lastErr = batchErr
+	default:
+		st.lastErr = NewConnectionError(
+			fmt.Errorf("provider %s returned an empty STAT result for %s", provider.Host, res.MessageID),
+		)
+	}
+}
 
-	return results, nil
+// finalError is the verdict for a message ID no provider confirmed.
+func (st *batchStatState) finalError(messageID string) error {
+	switch {
+	case st.sawNotFound && !st.sawOtherErr:
+		return classifyNNTPError(codeNoSuchArticle, fmt.Sprintf("segment %s not found on any provider", messageID))
+	case st.lastErr != nil:
+		return st.lastErr
+	case st.sawNotFound:
+		return NewConnectionError(fmt.Errorf(
+			"segment %s not found on some providers but could not be verified on others", messageID))
+	default:
+		return NewConnectionError(fmt.Errorf("segment %s could not be verified on any provider", messageID))
+	}
 }
 
 const statPipelineDepth = 16
