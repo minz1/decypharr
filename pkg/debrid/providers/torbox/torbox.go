@@ -26,18 +26,38 @@ import (
 	"github.com/sirrobot01/decypharr/internal/request"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/debrid/account"
+	"github.com/sirrobot01/decypharr/pkg/debrid/common"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/version"
 )
 
-var planSlots = map[string]int{
-	"essential": 3,
-	"standard":  5,
-	"pro":       10,
-}
-
 // torboxStatusDetail strips parenthesised detail such as "stalled (no seeds)".
 var torboxStatusDetail = regexp.MustCompile(`\s*\(.*?\)\s*`)
+
+const (
+	// requestsPerMinute is TorBox's per-key API limit; burstRequests is the
+	// slack allowed above the steady rate.
+	requestsPerMinute = 300
+	burstRequests     = 30
+	// defaultLinkExpiry applies when auto_expire_links_after is unset.
+	defaultLinkExpiry = 48 * time.Hour
+	// batchSize is the most hashes per checkcached call.
+	batchSize = 100
+	// percent converts TorBox's 0..1 progress to a percentage.
+	percent = 100
+
+	queryTrue = "true"
+
+	planEssential   = "essential"
+	planStandard    = "standard"
+	planPro         = "pro"
+	planIDEssential = 1
+	planIDPro       = 2
+	planIDStandard  = 3
+	essentialSlots  = 3
+	standardSlots   = 5
+	proSlots        = 10
+)
 
 // downloadPresentTTL bounds how stale the repair presence snapshot may be, so
 // torrents added after the first load are not reported as missing.
@@ -75,11 +95,11 @@ func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter) (*Torbox, er
 	// Default to that limit if the user has not configured one explicitly.
 	mainRL := ratelimits["main"]
 	if mainRL == nil {
-		mainRL = ratelimit.New(300, ratelimit.Per(time.Minute), ratelimit.WithSlack(30))
+		mainRL = ratelimit.New(requestsPerMinute, ratelimit.Per(time.Minute), ratelimit.WithSlack(burstRequests))
 	}
 	submitRL := ratelimits["download"]
 	if submitRL == nil {
-		submitRL = ratelimit.New(300, ratelimit.Per(time.Minute), ratelimit.WithSlack(30))
+		submitRL = ratelimit.New(requestsPerMinute, ratelimit.Per(time.Minute), ratelimit.WithSlack(burstRequests))
 	}
 
 	newClient := func(rateLimiter ratelimit.Limiter) *request.Client {
@@ -98,7 +118,7 @@ func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter) (*Torbox, er
 
 	autoExpiresLinksAfter, err := utils.ParseDuration(dc.AutoExpireLinksAfter)
 	if autoExpiresLinksAfter == 0 || err != nil {
-		autoExpiresLinksAfter = 48 * time.Hour
+		autoExpiresLinksAfter = defaultLinkExpiry
 	}
 
 	tb := &Torbox{
@@ -130,7 +150,7 @@ func (tb *Torbox) submissionClient() *request.Client {
 }
 
 // doGet performs a GET request and unmarshals the response.
-func (tb *Torbox) doGet(endpoint string, queryParams map[string]string, result any) (*http.Response, error) {
+func (tb *Torbox) doGet(endpoint string, queryParams map[string]string, result any) (int, error) {
 	return tb.doGetWithClient(context.Background(), tb.client, endpoint, queryParams, result)
 }
 
@@ -140,10 +160,10 @@ func (tb *Torbox) doGetWithClient(
 	endpoint string,
 	queryParams map[string]string,
 	result any,
-) (*http.Response, error) {
+) (int, error) {
 	u, err := url.Parse(tb.Host + endpoint)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
 
 	if queryParams != nil {
@@ -156,78 +176,66 @@ func (tb *Torbox) doGetWithClient(
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
 
-	return client.DoJSON(req, result)
+	return common.DoJSON(client, req, result)
 }
 
 func (tb *Torbox) doPostFormWithClient(
+	ctx context.Context,
 	client *request.Client,
 	endpoint string,
 	formData map[string]string,
 	result any,
-) (*http.Response, error) {
+) (int, error) {
 	form := url.Values{}
 	for k, v := range formData {
 		form.Set(k, v)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, tb.Host+endpoint, strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tb.Host+endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	return client.DoJSON(req, result)
+	return common.DoJSON(client, req, result)
 }
 
 // doPostJSON performs a POST request with a JSON body.
-func (tb *Torbox) doPostJSON(endpoint string, payload any, result any) (*http.Response, error) {
+func (tb *Torbox) doPostJSON(ctx context.Context, endpoint string, payload any, result any) (int, error) {
 	var body io.Reader
 	if payload != nil {
 		data, err := json.Marshal(payload)
 		if err != nil {
-			return nil, err
+			return 0, err
 		}
 		body = bytes.NewReader(data)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, tb.Host+endpoint, body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tb.Host+endpoint, body)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	return tb.client.DoJSON(req, result)
+	return common.DoJSON(tb.client, req, result)
 }
 
 func (tb *Torbox) IsAvailable(hashes []string) (map[string]bool, error) {
 	result := make(map[string]bool)
 
-	for i := 0; i < len(hashes); i += 100 {
-		end := min(i+100, len(hashes))
-
-		validHashes := make([]string, 0, end-i)
-		for _, hash := range hashes[i:end] {
-			if hash != "" {
-				validHashes = append(validHashes, hash)
-			}
-		}
-
-		if len(validHashes) == 0 {
-			continue
-		}
-
+	for _, validHashes := range common.HashBatches(hashes, batchSize) {
 		hashStr := strings.Join(validHashes, ",")
 		var res AvailableResponse
 
-		resp, err := tb.doGet("/api/torrents/checkcached", map[string]string{"hash": hashStr}, &res)
+		status, err := tb.doGet("/api/torrents/checkcached", map[string]string{"hash": hashStr}, &res)
 		if err != nil {
 			return result, fmt.Errorf("check availability: %w", err)
 		}
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return result, fmt.Errorf("check availability: HTTP %d", resp.StatusCode)
+		if !common.IsSuccess(status) {
+			return result, fmt.Errorf("check availability: HTTP %d", status)
 		}
 		if !res.Success {
 			return result, fmt.Errorf("check availability: %v", res.Error)
@@ -252,23 +260,29 @@ func (tb *Torbox) SubmitMagnet(torrent *types.Torrent) (*types.Torrent, error) {
 		"magnet": torrent.Magnet.Link,
 	}
 	if !torrent.DownloadUncached {
-		formData["add_only_if_cached"] = "true"
+		formData["add_only_if_cached"] = queryTrue
 	}
 
-	resp, err := tb.doPostFormWithClient(tb.submissionClient(), "/api/torrents/createtorrent", formData, &data)
+	status, err := tb.doPostFormWithClient(
+		context.Background(),
+		tb.submissionClient(),
+		"/api/torrents/createtorrent",
+		formData,
+		&data,
+	)
 	if err != nil {
 		return nil, err
 	}
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("torbox API error: Status: %d", resp.StatusCode)
+	if !common.IsSuccess(status) {
+		return nil, fmt.Errorf("torbox API error: Status: %d", status)
 	}
 	if data.Data == nil {
 		return nil, fmt.Errorf("error adding torrent")
 	}
 	dt := *data.Data
-	torrentId := strconv.Itoa(dt.Id)
-	torrent.Id = torrentId
+	torrentID := strconv.Itoa(dt.ID)
+	torrent.Id = torrentID
 	torrent.Debrid = tb.config.Name
 	torrent.Added = time.Now()
 
@@ -293,27 +307,27 @@ func (tb *Torbox) getTorboxStatus(status string, finished bool) types.TorrentSta
 	}
 }
 
-func (tb *Torbox) GetTorrent(torrentId string) (*types.Torrent, error) {
+func (tb *Torbox) GetTorrent(torrentID string) (*types.Torrent, error) {
 	var res InfoResponse
 
-	resp, err := tb.doGet("/api/torrents/mylist", map[string]string{"id": torrentId}, &res)
+	status, err := tb.doGet("/api/torrents/mylist", map[string]string{"id": torrentID}, &res)
 	if err != nil {
 		return nil, err
 	}
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("torbox API error: Status: %d", resp.StatusCode)
+	if !common.IsSuccess(status) {
+		return nil, fmt.Errorf("torbox API error: Status: %d", status)
 	}
 	data := res.Data
 	if data == nil {
 		return nil, fmt.Errorf("error getting torrent")
 	}
 	t := &types.Torrent{
-		Id:               strconv.Itoa(data.Id),
+		Id:               strconv.Itoa(data.ID),
 		InfoHash:         data.Hash,
 		Name:             data.Name,
 		Bytes:            data.Size,
-		Progress:         data.Progress * 100,
+		Progress:         data.Progress * percent,
 		Status:           tb.getTorboxStatus(data.DownloadState, data.DownloadFinished),
 		Speed:            data.DownloadSpeed,
 		Seeders:          data.Seeds,
@@ -333,14 +347,14 @@ func (tb *Torbox) GetTorrent(torrentId string) (*types.Torrent, error) {
 
 		file := types.File{
 			TorrentId: t.Id,
-			Id:        strconv.Itoa(f.Id),
+			Id:        strconv.Itoa(f.ID),
 			Name:      fileName,
 			Size:      f.Size,
 			Path:      f.Name,
 		}
 
 		if data.DownloadFinished {
-			file.Link = fmt.Sprintf("torbox://%s/%d", t.Id, f.Id)
+			file.Link = fmt.Sprintf("torbox://%s/%d", t.Id, f.ID)
 		}
 
 		t.Files[fileName] = file
@@ -363,7 +377,7 @@ func (tb *Torbox) loadDownloadPresent(ctx context.Context) (map[string]bool, err
 	offset := 0
 	for {
 		var res TorrentsListResponse
-		resp, err := tb.doGetWithClient(
+		status, err := tb.doGetWithClient(
 			ctx,
 			tb.client,
 			"/api/torrents/mylist",
@@ -373,14 +387,14 @@ func (tb *Torbox) loadDownloadPresent(ctx context.Context) (map[string]bool, err
 		if err != nil {
 			return nil, err
 		}
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return nil, fmt.Errorf("torbox API error: Status: %d", resp.StatusCode)
+		if !common.IsSuccess(status) {
+			return nil, fmt.Errorf("torbox API error: Status: %d", status)
 		}
 		if res.Data == nil || len(*res.Data) == 0 {
 			break
 		}
 		for _, t := range *res.Data {
-			present[strconv.Itoa(t.Id)] = t.DownloadPresent
+			present[strconv.Itoa(t.ID)] = t.DownloadPresent
 		}
 		offset += len(*res.Data)
 	}
@@ -395,7 +409,7 @@ func (tb *Torbox) UpdateTorrent(t *types.Torrent) error {
 func (tb *Torbox) updateTorrentWithClient(client *request.Client, t *types.Torrent) error {
 	var res InfoResponse
 
-	resp, err := tb.doGetWithClient(
+	status, err := tb.doGetWithClient(
 		context.Background(),
 		client,
 		"/api/torrents/mylist",
@@ -406,8 +420,8 @@ func (tb *Torbox) updateTorrentWithClient(client *request.Client, t *types.Torre
 		return err
 	}
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("torbox API error: Status: %d", resp.StatusCode)
+	if !common.IsSuccess(status) {
+		return fmt.Errorf("torbox API error: Status: %d", status)
 	}
 	data := res.Data
 	if data == nil {
@@ -417,7 +431,7 @@ func (tb *Torbox) updateTorrentWithClient(client *request.Client, t *types.Torre
 
 	t.Name = name
 	t.Bytes = data.Size
-	t.Progress = data.Progress * 100
+	t.Progress = data.Progress * percent
 	t.Status = tb.getTorboxStatus(data.DownloadState, data.DownloadFinished)
 	t.Speed = data.DownloadSpeed
 	t.Seeders = data.Seeds
@@ -441,14 +455,14 @@ func (tb *Torbox) updateTorrentWithClient(client *request.Client, t *types.Torre
 
 		file := types.File{
 			TorrentId: t.Id,
-			Id:        strconv.Itoa(f.Id),
+			Id:        strconv.Itoa(f.ID),
 			Name:      fileName,
 			Size:      f.Size,
 			Path:      fileName,
 		}
 
 		if data.DownloadFinished {
-			file.Link = fmt.Sprintf("torbox://%s/%s", t.Id, strconv.Itoa(f.Id))
+			file.Link = fmt.Sprintf("torbox://%s/%s", t.Id, strconv.Itoa(f.ID))
 		}
 
 		t.Files[fileName] = file
@@ -467,32 +481,28 @@ func (tb *Torbox) updateTorrentWithClient(client *request.Client, t *types.Torre
 }
 
 func (tb *Torbox) CheckStatus(torrent *types.Torrent) (*types.Torrent, error) {
-	for {
-		err := tb.updateTorrentWithClient(tb.submissionClient(), torrent)
-
-		if err != nil || torrent == nil {
-			return torrent, err
-		}
-
-		switch torrent.Status {
-		case types.TorrentStatusDownloaded:
-			tb.logger.Info().Msgf("Torrent: %s downloaded", torrent.Name)
-			return torrent, nil
-		case types.TorrentStatusDownloading:
-			if !torrent.DownloadUncached {
-				return torrent, fmt.Errorf("torrent %s: %w", torrent.Name, customerror.TorrentNotCachedError)
-			}
-			return torrent, nil
-		default:
-			return torrent, fmt.Errorf("torrent: %s has error", torrent.Name)
-		}
+	if err := tb.updateTorrentWithClient(tb.submissionClient(), torrent); err != nil || torrent == nil {
+		return torrent, err
 	}
+
+	switch torrent.Status {
+	case types.TorrentStatusDownloaded:
+		tb.logger.Info().Msgf("Torrent: %s downloaded", torrent.Name)
+		return torrent, nil
+	case types.TorrentStatusDownloading:
+		if !torrent.DownloadUncached {
+			return torrent, fmt.Errorf("torrent %s: %w", torrent.Name, customerror.TorrentNotCachedError)
+		}
+		return torrent, nil
+	case types.TorrentStatusQueued, types.TorrentStatusError:
+	}
+	return torrent, fmt.Errorf("torrent: %s has error", torrent.Name)
 }
 
-func (tb *Torbox) DeleteTorrent(torrentId string) error {
-	id, err := strconv.Atoi(torrentId)
+func (tb *Torbox) DeleteTorrent(torrentID string) error {
+	id, err := strconv.Atoi(torrentID)
 	if err != nil {
-		return fmt.Errorf("invalid TorBox torrent id %q: %w", torrentId, err)
+		return fmt.Errorf("invalid TorBox torrent id %q: %w", torrentID, err)
 	}
 	payload := struct {
 		TorrentID int    `json:"torrent_id"`
@@ -503,16 +513,16 @@ func (tb *Torbox) DeleteTorrent(torrentId string) error {
 		Operation: "delete",
 	}
 
-	resp, err := tb.doPostJSON("/api/torrents/controltorrent", payload, nil)
+	status, err := tb.doPostJSON(context.Background(), "/api/torrents/controltorrent", payload, nil)
 	if err != nil {
 		return err
 	}
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("torbox API error: Status: %d", resp.StatusCode)
+	if !common.IsSuccess(status) {
+		return fmt.Errorf("torbox API error: Status: %d", status)
 	}
 
-	tb.logger.Info().Msgf("Torrent %s deleted from Torbox", torrentId)
+	tb.logger.Info().Msgf("Torrent %s deleted from Torbox", torrentID)
 	return nil
 }
 
@@ -527,7 +537,7 @@ func (tb *Torbox) fetchDownloadLink(
 	file *types.File,
 ) (types.DownloadLink, error) {
 	var res DownloadLinksResponse
-	resp, err := tb.doGetWithClient(ctx, account.Client(), "/api/torrents/requestdl", map[string]string{
+	status, err := tb.doGetWithClient(ctx, account.Client(), "/api/torrents/requestdl", map[string]string{
 		"token":      account.Token,
 		"torrent_id": id,
 		"file_id":    file.Id,
@@ -535,8 +545,8 @@ func (tb *Torbox) fetchDownloadLink(
 	if err != nil {
 		return types.DownloadLink{}, err
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return types.DownloadLink{}, fmt.Errorf("torbox API error: Status: %d", resp.StatusCode)
+	if !common.IsSuccess(status) {
+		return types.DownloadLink{}, fmt.Errorf("torbox API error: Status: %d", status)
 	}
 	if res.Data == nil || *res.Data == "" {
 		return types.DownloadLink{}, fmt.Errorf("torbox API error: no download link: %v %s", res.Error, res.Detail)
@@ -580,16 +590,16 @@ func (tb *Torbox) GetTorrents() ([]*types.Torrent, error) {
 func (tb *Torbox) getTorrents(offset int) ([]*types.Torrent, error) {
 	var res TorrentsListResponse
 
-	resp, err := tb.doGet("/api/torrents/mylist", map[string]string{
-		"bypass_cache": "true",
+	status, err := tb.doGet("/api/torrents/mylist", map[string]string{
+		"bypass_cache": queryTrue,
 		"offset":       strconv.Itoa(offset),
 	}, &res)
 	if err != nil {
 		return nil, err
 	}
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("torbox API error: Status: %d", resp.StatusCode)
+	if !common.IsSuccess(status) {
+		return nil, fmt.Errorf("torbox API error: Status: %d", status)
 	}
 
 	if !res.Success || res.Data == nil {
@@ -601,10 +611,10 @@ func (tb *Torbox) getTorrents(offset int) ([]*types.Torrent, error) {
 
 	for _, data := range *res.Data {
 		t := &types.Torrent{
-			Id:               strconv.Itoa(data.Id),
+			Id:               strconv.Itoa(data.ID),
 			Name:             data.Name,
 			Bytes:            data.Size,
-			Progress:         data.Progress * 100,
+			Progress:         data.Progress * percent,
 			Status:           tb.getTorboxStatus(data.DownloadState, data.DownloadFinished),
 			Speed:            data.DownloadSpeed,
 			Seeders:          data.Seeds,
@@ -626,14 +636,14 @@ func (tb *Torbox) getTorrents(offset int) ([]*types.Torrent, error) {
 			}
 			file := types.File{
 				TorrentId: t.Id,
-				Id:        strconv.Itoa(f.Id),
+				Id:        strconv.Itoa(f.ID),
 				Name:      fileName,
 				Size:      f.Size,
 				Path:      f.Name,
 			}
 
 			if data.DownloadFinished {
-				file.Link = fmt.Sprintf("torbox://%s/%d", t.Id, f.Id)
+				file.Link = fmt.Sprintf("torbox://%s/%d", t.Id, f.ID)
 			}
 
 			t.Files[fileName] = file
@@ -653,7 +663,7 @@ func (tb *Torbox) getTorrents(offset int) ([]*types.Torrent, error) {
 	return torrents, nil
 }
 
-func (tb *Torbox) fetchDownloadLinks(account *account.Account) ([]types.DownloadLink, error) {
+func (tb *Torbox) fetchDownloadLinks(_ *account.Account) ([]types.DownloadLink, error) {
 	return []types.DownloadLink{}, nil
 }
 
@@ -661,7 +671,7 @@ func (tb *Torbox) RefreshDownloadLinks() error {
 	return tb.accountsManager.RefreshLinks(tb.fetchDownloadLinks)
 }
 
-func (tb *Torbox) CheckFile(ctx context.Context, infohash, link string) error {
+func (tb *Torbox) CheckFile(ctx context.Context, _, link string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -695,17 +705,26 @@ func (tb *Torbox) CheckFile(ctx context.Context, infohash, link string) error {
 	return nil
 }
 
+// planSlots returns the concurrent download slots of a TorBox plan.
+func planSlots(plan string) int {
+	switch plan {
+	case planEssential:
+		return essentialSlots
+	case planStandard:
+		return standardSlots
+	case planPro:
+		return proSlots
+	default:
+		return 1
+	}
+}
+
 func (tb *Torbox) GetAvailableSlots() (int, error) {
-	var accountSlots = 1
 	profile, err := tb.GetProfile()
 	if err != nil {
 		return 0, err
 	}
-
-	if slots, ok := planSlots[profile.Type]; ok {
-		accountSlots = slots
-	}
-	return accountSlots, nil
+	return planSlots(profile.Type), nil
 }
 
 // GetProfile returns the account profile, fetched once and then cached.
@@ -716,13 +735,13 @@ func (tb *Torbox) GetProfile() (*types.Profile, error) {
 func (tb *Torbox) fetchProfile() (*types.Profile, error) {
 	var data ProfileResponse
 
-	resp, err := tb.doGet("/api/user/me", map[string]string{"settings": "true"}, &data)
+	status, err := tb.doGet("/api/user/me", map[string]string{"settings": queryTrue}, &data)
 	if err != nil {
 		return nil, err
 	}
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("torbox API error: Status: %d", resp.StatusCode)
+	if !common.IsSuccess(status) {
+		return nil, fmt.Errorf("torbox API error: Status: %d", status)
 	}
 
 	userData := data.Data
@@ -737,19 +756,19 @@ func (tb *Torbox) fetchProfile() (*types.Profile, error) {
 
 	profile := &types.Profile{
 		Name:       tb.config.Name,
-		Id:         userData.Id,
+		Id:         userData.ID,
 		Username:   userData.Email,
 		Email:      userData.Email,
 		Expiration: expiration,
 	}
 
 	switch userData.Plan {
-	case 1:
-		profile.Type = "essential"
-	case 2:
-		profile.Type = "pro"
-	case 3:
-		profile.Type = "standard"
+	case planIDEssential:
+		profile.Type = planEssential
+	case planIDPro:
+		profile.Type = planPro
+	case planIDStandard:
+		profile.Type = planStandard
 	default:
 		profile.Type = "free"
 	}
@@ -761,7 +780,7 @@ func (tb *Torbox) AccountManager() *account.Manager {
 	return tb.accountsManager
 }
 
-func (tb *Torbox) syncAccount(account *account.Account) error {
+func (tb *Torbox) syncAccount(_ *account.Account) error {
 	return nil
 }
 
@@ -769,7 +788,7 @@ func (tb *Torbox) SyncAccounts() {
 	tb.accountsManager.Sync(tb.syncAccount)
 }
 
-func (tb *Torbox) deleteDownloadLink(account *account.Account, downloadLink types.DownloadLink) error {
+func (tb *Torbox) deleteDownloadLink(*account.Account, types.DownloadLink) error {
 	return nil
 }
 
@@ -785,7 +804,7 @@ func (tb *Torbox) SpeedTest(ctx context.Context) types.SpeedTestResult {
 	}
 
 	start := time.Now()
-	resp, err := tb.doGet("/api/user/me", nil, nil)
+	status, err := tb.doGet("/api/user/me", nil, nil)
 	latency := time.Since(start)
 
 	if err != nil {
@@ -793,8 +812,8 @@ func (tb *Torbox) SpeedTest(ctx context.Context) types.SpeedTestResult {
 		return result
 	}
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		result.Error = fmt.Sprintf("latency test unexpected status: %d", resp.StatusCode)
+	if !common.IsSuccess(status) {
+		result.Error = fmt.Sprintf("latency test unexpected status: %d", status)
 		return result
 	}
 	result.LatencyMs = latency.Milliseconds()

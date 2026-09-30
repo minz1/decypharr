@@ -41,10 +41,19 @@ func TestProfileCacheRefreshesAfterTTLAndKeepsErrorsUncached(t *testing.T) {
 	t.Parallel()
 	var cache types.ProfileCache
 	failure := errors.New("unavailable")
-	if _, err := cache.Get(time.Hour, func() (*types.Profile, error) { return nil, failure }); !errors.Is(err, failure) {
+	if _, err := cache.Get(
+		time.Hour,
+		func() (*types.Profile, error) { return nil, failure },
+	); !errors.Is(
+		err,
+		failure,
+	) {
 		t.Fatalf("Get() error = %v, want fetch failure", err)
 	}
-	if _, err := cache.Get(time.Nanosecond, func() (*types.Profile, error) { return &types.Profile{Id: 1}, nil }); err != nil {
+	if _, err := cache.Get(
+		time.Nanosecond,
+		func() (*types.Profile, error) { return &types.Profile{Id: 1}, nil },
+	); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(time.Millisecond)

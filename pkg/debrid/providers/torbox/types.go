@@ -21,13 +21,13 @@ type AvailableResponse APIResponse[map[string]struct {
 }]
 
 type AddMagnetResponse APIResponse[struct {
-	Id   int    `json:"torrent_id"`
+	ID   int    `json:"torrent_id"`
 	Hash string `json:"hash"`
 }]
 
 type torboxInfo struct {
-	Id              int       `json:"id"`
-	AuthId          string    `json:"auth_id"`
+	ID              int       `json:"id"`
+	AuthID          string    `json:"auth_id"`
 	Server          int       `json:"server"`
 	Hash            string    `json:"hash"`
 	Name            string    `json:"name"`
@@ -48,7 +48,7 @@ type torboxInfo struct {
 	ExpiresAt       any       `json:"expires_at"`
 	DownloadPresent bool      `json:"download_present"`
 	Files           []struct {
-		Id           int    `json:"id"`
+		ID           int    `json:"id"`
 		Md5          any    `json:"md5"`
 		Hash         string `json:"hash"`
 		Name         string `json:"name"`
@@ -129,8 +129,8 @@ type DownloadLinksResponse APIResponse[string]
 type TorrentsListResponse APIResponse[[]torboxInfo]
 
 type profileResponse struct {
-	Id                        int64  `json:"id"`
-	AuthId                    string `json:"auth_id"`
+	ID                        int64  `json:"id"`
+	AuthID                    string `json:"auth_id"`
 	CreatedAt                 string `json:"created_at"`
 	UpdatedAt                 string `json:"updated_at"`
 	Plan                      int64  `json:"plan"`
@@ -151,7 +151,7 @@ type profileResponse struct {
 	LongTermSeeding           bool   `json:"long_term_seeding"`
 	LongTermStorage           bool   `json:"long_term_storage"`
 	IsVendor                  bool   `json:"is_vendor"`
-	VendorId                  any    `json:"vendor_id"`
+	VendorID                  any    `json:"vendor_id"`
 	PurchasesReferred         int64  `json:"purchases_referred"`
 }
 
