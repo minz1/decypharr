@@ -9,7 +9,7 @@ import (
 
 // TestMain pins the global config to a temp dir: several dependencies
 // (logger.Default via the rate-limited logger, the buffer pools) lazily call
-// config.Get, which os.Exit(1)s when no config path is set.
+// config.Get, which [os.Exit](1)s when no config path is set.
 func TestMain(m *testing.M) {
 	configDir, err := os.MkdirTemp("", "decypharr-vfs-test-")
 	if err != nil {

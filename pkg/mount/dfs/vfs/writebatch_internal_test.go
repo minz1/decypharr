@@ -12,7 +12,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/vfs/ranges"
 )
 
-// chunkReader yields readSize bytes per Read up to total, then io.EOF.
+// chunkReader yields readSize bytes per Read up to total, then [io.EOF].
 type chunkReader struct {
 	readSize     int
 	total        int
@@ -214,6 +214,7 @@ func TestCopyBatchedStopsOnWriteError(t *testing.T) {
 }
 
 type prematureEOFStream struct {
+
 	*bytes.Reader
 	size int64
 }

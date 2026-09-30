@@ -29,6 +29,7 @@ const (
 
 // Dir implements a FUSE directory following.
 type Dir struct {
+
 	fs.Inode
 	vfs   *vfs.Manager
 	level DirLevel

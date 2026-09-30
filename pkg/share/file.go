@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 )
 
-// file serves one read-only regular file from an io.ReaderAt. Concurrent
+// file serves one read-only regular file from an [io.ReaderAt]. Concurrent
 // ReadAt calls go straight to the reader so positioned protocol reads
 // (kernel readahead, parallel clients) do not serialize on the seek position.
 type file struct {
@@ -78,7 +78,7 @@ func (f *file) Readdir(int) ([]fs.FileInfo, error) {
 }
 
 // dirFile serves one open directory. The listing is captured on first use and
-// paged out with os.File.Readdir semantics.
+// paged out with [os.File.Readdir] semantics.
 type dirFile struct {
 	info fs.FileInfo
 	list func() ([]fs.FileInfo, error)

@@ -13,7 +13,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
-// fakeStreamSource implements streamSource using a real httptest.Server so we
+// fakeStreamSource implements streamSource using a real [httptest.Server] so we
 // exercise HTTP range-request handling without the full manager stack.
 type fakeStreamSource struct {
 	srv *httptest.Server
@@ -71,7 +71,7 @@ func (s *fakeStreamSource) OpenStream(
 	return &fakeStreamReader{body: resp.Body, size: int64(len(s.content)) - offset}, nil
 }
 
-// fakeStreamReader adapts an http.Response body to manager.StreamReader.
+// fakeStreamReader adapts an [http.Response] body to manager.StreamReader.
 // Seek is unused by DirectStreamFile (each read opens a fresh stream at the
 // requested offset) so it is left unimplemented.
 type fakeStreamReader struct {
