@@ -13,7 +13,7 @@ import (
 // The standard-library decoder owns decoded strings instead of leaving them
 // backed by the response document. That ownership boundary matters for large
 // Arr responses: a path retained by an index must not keep the entire JSON
-// document live. An empty body returns io.EOF and leaves out untouched.
+// document live. An empty body returns [io.EOF] and leaves out untouched.
 func DecodeJSON(resp *http.Response, out any) error {
 	if resp == nil || resp.Body == nil || out == nil {
 		return nil

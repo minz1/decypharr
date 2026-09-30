@@ -22,6 +22,22 @@ import (
 	"github.com/sirrobot01/decypharr/internal/logger"
 )
 
+// Client defaults.
+const (
+	defaultMaxRetries     = 5
+	defaultTimeout        = 60 * time.Second
+	dialTimeout           = 30 * time.Second
+	dialKeepAlive         = 15 * time.Second
+	maxIdleConns          = 100
+	maxIdleConnsPerHost   = 10
+	idleConnTimeout       = 30 * time.Second
+	responseHeaderTimeout = 30 * time.Second
+	expectContinueTimeout = 1 * time.Second
+	minRetryWait          = 1 * time.Second
+	maxRetryWait          = 30 * time.Second
+)
+
+// ClientOption configures a Client in New.
 type ClientOption func(*Client)
 
 // Client represents an HTTP client with additional capabilities.
@@ -69,12 +85,14 @@ func WithHeaders(headers map[string]string) ClientOption {
 	}
 }
 
+// SetHeader sets a default header sent with every request.
 func (c *Client) SetHeader(key, value string) {
 	c.headersMu.Lock()
 	c.headers[key] = value
 	c.headersMu.Unlock()
 }
 
+// WithLogger sets the client's logger.
 func WithLogger(logger zerolog.Logger) ClientOption {
 	return func(c *Client) {
 		c.logger = logger
@@ -91,6 +109,7 @@ func WithRetryableStatus(statusCodes ...int) ClientOption {
 	}
 }
 
+// WithProxy routes requests through an HTTP(S) or socks5:// proxy.
 func WithProxy(proxyURL string) ClientOption {
 	return func(c *Client) {
 		c.proxy = proxyURL
@@ -152,8 +171,9 @@ func (c *Client) MakeRequest(req *http.Request) ([]byte, error) {
 	return bodyBytes, nil
 }
 
+// Get issues an unbounded-context GET; prefer Do with a request context.
 func (c *Client) Get(url string) (*http.Response, error) {
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating GET request: %w", err)
 	}
@@ -203,7 +223,7 @@ func retryAfter(resp *http.Response) (time.Duration, bool) {
 // New creates a new HTTP client with the specified options.
 func New(options ...ClientOption) *Client {
 	client := &Client{
-		maxRetries:    5,
+		maxRetries:    defaultMaxRetries,
 		skipTLSVerify: true,
 		retryableStatus: map[int]struct{}{
 			http.StatusTooManyRequests:     {},
@@ -213,7 +233,7 @@ func New(options ...ClientOption) *Client {
 			http.StatusGatewayTimeout:      {},
 		},
 		logger:  logger.New("request"),
-		timeout: 60 * time.Second,
+		timeout: defaultTimeout,
 		proxy:   "",
 		headers: make(map[string]string),
 	}
@@ -234,17 +254,19 @@ func New(options ...ClientOption) *Client {
 	if client.httpClient.Transport == nil {
 		transport := &http.Transport{
 			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: client.skipTLSVerify,
+				// Always true today: Arr instances on the LAN commonly use
+				// self-signed certificates. See the review report follow-up.
+				InsecureSkipVerify: client.skipTLSVerify, //nolint:gosec // G402: long-standing default relied on by self-signed Arr hosts; tightening needs a per-client opt-in
 			},
 			DialContext: (&net.Dialer{
-				Timeout:   30 * time.Second,
-				KeepAlive: 15 * time.Second,
+				Timeout:   dialTimeout,
+				KeepAlive: dialKeepAlive,
 			}).DialContext,
-			MaxIdleConns:          100,
-			MaxIdleConnsPerHost:   10,
-			IdleConnTimeout:       30 * time.Second,
-			ResponseHeaderTimeout: 30 * time.Second,
-			ExpectContinueTimeout: 1 * time.Second,
+			MaxIdleConns:          maxIdleConns,
+			MaxIdleConnsPerHost:   maxIdleConnsPerHost,
+			IdleConnTimeout:       idleConnTimeout,
+			ResponseHeaderTimeout: responseHeaderTimeout,
+			ExpectContinueTimeout: expectContinueTimeout,
 			ForceAttemptHTTP2:     true,
 		}
 
@@ -259,8 +281,8 @@ func New(options ...ClientOption) *Client {
 	retryClient := retryablehttp.NewClient()
 	retryClient.HTTPClient = client.httpClient
 	retryClient.RetryMax = client.maxRetries
-	retryClient.RetryWaitMin = 1 * time.Second
-	retryClient.RetryWaitMax = 30 * time.Second
+	retryClient.RetryWaitMin = minRetryWait
+	retryClient.RetryWaitMax = maxRetryWait
 	retryClient.Logger = nil
 	retryClient.Backoff = retryAfterBackoff
 
@@ -277,14 +299,8 @@ func New(options ...ClientOption) *Client {
 			return retryablehttp.DefaultRetryPolicy(ctx, resp, err)
 		}
 
-		// Check for retryable status codes (only if resp is not nil)
-		if resp != nil {
-			if _, ok := client.retryableStatus[resp.StatusCode]; ok {
-				return true, nil
-			}
-		}
-
-		return false, nil
+		_, retry := client.retryableStatus[resp.StatusCode]
+		return retry, nil
 	}
 
 	client.client = retryClient
@@ -292,33 +308,39 @@ func New(options ...ClientOption) *Client {
 	return client
 }
 
+// SetProxy configures transport for proxyURL: socks5:// dials through a
+// SOCKS5 proxy, anything else is an HTTP(S) proxy URL, and "" uses the
+// environment. An unparseable URL leaves the transport unchanged.
 func SetProxy(transport *http.Transport, proxyURL string) {
-	if proxyURL != "" {
-		if strings.HasPrefix(proxyURL, "socks5://") {
-			// Handle SOCKS5 proxy
-			socksURL, err := url.Parse(proxyURL)
-			if err == nil {
-				auth := &proxy.Auth{}
-				if socksURL.User != nil {
-					auth.User = socksURL.User.Username()
-					password, _ := socksURL.User.Password()
-					auth.Password = password
-				}
-
-				dialer, socks5Err := proxy.SOCKS5("tcp", socksURL.Host, auth, proxy.Direct)
-				if socks5Err == nil {
-					transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-						return dialer.Dial(network, addr)
-					}
-				}
-			}
-		} else {
-			_proxy, err := url.Parse(proxyURL)
-			if err == nil {
-				transport.Proxy = http.ProxyURL(_proxy)
-			}
-		}
-	} else {
+	if proxyURL == "" {
 		transport.Proxy = http.ProxyFromEnvironment
+		return
+	}
+	parsed, err := url.Parse(proxyURL)
+	if err != nil {
+		return
+	}
+	if !strings.HasPrefix(proxyURL, "socks5://") {
+		transport.Proxy = http.ProxyURL(parsed)
+		return
+	}
+
+	auth := &proxy.Auth{}
+	if parsed.User != nil {
+		auth.User = parsed.User.Username()
+		auth.Password, _ = parsed.User.Password()
+	}
+	dialer, err := proxy.SOCKS5("tcp", parsed.Host, auth, proxy.Direct)
+	if err != nil {
+		return
+	}
+	// The x/net SOCKS5 dialer implements ContextDialer; use it so request
+	// cancellation also aborts the proxy dial.
+	if cd, ok := dialer.(proxy.ContextDialer); ok {
+		transport.DialContext = cd.DialContext
+		return
+	}
+	transport.DialContext = func(_ context.Context, network, addr string) (net.Conn, error) {
+		return dialer.Dial(network, addr)
 	}
 }
