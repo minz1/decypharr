@@ -37,6 +37,26 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/version"
 )
 
+// Streaming HTTP transport tuning and manager defaults.
+const (
+	streamDialTimeout         = 5 * time.Second
+	streamKeepAlive           = 30 * time.Second
+	streamTLSSessionCacheSize = 200
+	streamTLSHandshakeTimeout = 20 * time.Second
+	streamMaxIdleConns        = 1000
+	streamMaxConnsPerHost     = 500
+	streamIdleConnTimeout     = 120 * time.Second
+	streamMaxHeaderBytes      = 1 << 20   // CDN responses can carry large headers
+	streamWriteBufferSize     = 32 << 10  // requests are tiny
+	streamReadBufferSize      = 256 << 10 // caps how much a single body.Read can return
+
+	defaultUsenetTimeout   = 10 * time.Minute
+	defaultRefreshInterval = 15 * time.Minute
+	// tooManyDownloadsRetryDelay is how long a job waits after the provider
+	// reports its active-download limit.
+	tooManyDownloadsRetryDelay = 30 * time.Second
+)
+
 // Manager handles unified torrent management - replaces wire.Store completely.
 type Manager struct {
 	storage      *storage.Storage
@@ -139,8 +159,8 @@ func New() *Manager {
 	// Optimized transport for high-performance streaming with HTTP/2 multiplexing
 	// DNS resolver with caching
 	dialer := &net.Dialer{
-		Timeout:   5 * time.Second,  // Fast connection timeout
-		KeepAlive: 30 * time.Second, // Keep connections alive
+		Timeout:   streamDialTimeout,
+		KeepAlive: streamKeepAlive,
 	}
 
 	transport := &http.Transport{
@@ -148,19 +168,19 @@ func New() *Manager {
 			//nolint:gosec // long-standing behavior for debrid CDN downloads; strict verification is a flagged follow-up
 			InsecureSkipVerify: true,
 			MinVersion:         tls.VersionTLS12,
-			ClientSessionCache: tls.NewLRUClientSessionCache(200),
+			ClientSessionCache: tls.NewLRUClientSessionCache(streamTLSSessionCacheSize),
 		},
-		TLSHandshakeTimeout:    20 * time.Second,
-		MaxIdleConns:           1000,
-		MaxIdleConnsPerHost:    500,
-		MaxConnsPerHost:        500,
-		IdleConnTimeout:        120 * time.Second,
+		TLSHandshakeTimeout:    streamTLSHandshakeTimeout,
+		MaxIdleConns:           streamMaxIdleConns,
+		MaxIdleConnsPerHost:    streamMaxConnsPerHost,
+		MaxConnsPerHost:        streamMaxConnsPerHost,
+		IdleConnTimeout:        streamIdleConnTimeout,
 		DisableCompression:     false, // Enable compression for better multiplexing
 		DialContext:            dialer.DialContext,
 		Proxy:                  http.ProxyFromEnvironment,
-		MaxResponseHeaderBytes: 1 << 20,   // 1MB header buffer for CDN responses
-		WriteBufferSize:        32 << 10,  // requests are tiny
-		ReadBufferSize:         256 << 10, // caps how much a single body.Read can return
+		MaxResponseHeaderBytes: streamMaxHeaderBytes,
+		WriteBufferSize:        streamWriteBufferSize,
+		ReadBufferSize:         streamReadBufferSize,
 	}
 
 	streamClient := &http.Client{
@@ -170,7 +190,7 @@ func New() *Manager {
 
 	usenetTimeout, err := utils.ParseDuration(cfg.Usenet.ProcessingTimeout)
 	if err != nil {
-		usenetTimeout = 10 * time.Minute
+		usenetTimeout = defaultUsenetTimeout
 	}
 
 	instance := &Manager{
@@ -249,7 +269,7 @@ func (m *Manager) init() {
 
 	refreshInterval, err := utils.ParseDuration(cfg.RefreshInterval)
 	if err != nil {
-		refreshInterval = 15 * time.Minute
+		refreshInterval = defaultRefreshInterval
 	}
 	m.refreshInterval = refreshInterval
 
@@ -405,7 +425,7 @@ func (m *Manager) processJob(ctx context.Context, job *Job) {
 				job.Entry.Status = debridTypes.TorrentStatusQueued
 				_ = m.queue.Update(job.Entry)
 			}
-			m.jobQueue.Retry(job, 30*time.Second)
+			m.jobQueue.Retry(job, tooManyDownloadsRetryDelay)
 			return
 		}
 		m.logger.Error().Err(err).Str("job_id", job.ID).Str("type", string(job.Type)).Msg("Active download failed")

@@ -42,6 +42,10 @@ const (
 	symlinkLogSampleSize        = 8
 	localDownloadMaxAttempts    = 4
 	defaultFileDownloadWorkers  = 5
+
+	localDownloadBufferSize       = 1 << 20
+	localDownloadProgressInterval = 500 * time.Millisecond
+	bytesPerMiB                   = 1 << 20
 )
 
 type downloadLogMeta struct {
@@ -804,7 +808,7 @@ func (d *Downloader) localDownloadAttempt(
 		return err
 	}
 	req = req.WithContext(d.operationContext())
-	req.BufferSize = 1 << 20
+	req.BufferSize = localDownloadBufferSize
 	req.HTTPRequest.Header.Set("User-Agent", "Decypharr[QBitTorrent]")
 	req.HTTPRequest.Header.Set("Accept", "*/*")
 	req.HTTPRequest.Header.Set("Accept-Encoding", "identity")
@@ -816,7 +820,7 @@ func (d *Downloader) localDownloadAttempt(
 	}
 
 	client := grab.NewClient()
-	client.BufferSize = 1 << 20
+	client.BufferSize = localDownloadBufferSize
 	client.HTTPClient = d.manager.streamClient
 
 	resp := client.Do(req)
@@ -825,7 +829,7 @@ func (d *Downloader) localDownloadAttempt(
 	}
 
 	var lastReported int64
-	t := time.NewTicker(500 * time.Millisecond)
+	t := time.NewTicker(localDownloadProgressInterval)
 	defer t.Stop()
 	defer func() {
 		var downloaded atomic.Int64
@@ -936,7 +940,7 @@ func (d *Downloader) logDownloadCompletion(
 	elapsed := time.Since(startTime)
 	speedMBps := float64(0)
 	if elapsed > 0 {
-		speedMBps = float64(bytesDownloaded) / elapsed.Seconds() / (1024 * 1024)
+		speedMBps = float64(bytesDownloaded) / elapsed.Seconds() / bytesPerMiB
 	}
 
 	d.logger.Info().
