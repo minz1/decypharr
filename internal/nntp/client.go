@@ -1208,7 +1208,7 @@ func (c *Client) Stats() map[string]any {
 			"active":          active,
 			"idle":            idle,
 			"ssl":             p.SSL,
-			"waiting":         c.providerWaiting(pp),
+			statWaiting:       c.providerWaiting(pp),
 		}
 
 		// Add speed test result if available
@@ -1236,7 +1236,7 @@ func (c *Client) Stats() map[string]any {
 		"total_created":   totalActive + totalIdle,
 		"active":          totalActive,
 		"idle":            totalIdle,
-		"waiting": map[string]int{
+		statWaiting: map[string]int{
 			WorkloadStreamDemand.String():   waiting[WorkloadStreamDemand],
 			WorkloadStreamPrefetch.String(): waiting[WorkloadStreamPrefetch],
 			WorkloadDownload.String():       waiting[WorkloadDownload],
@@ -1540,7 +1540,7 @@ func (c *Client) batchStatAcrossProviders(ctx context.Context, messageIDs []stri
 		case states[idx].sawNotFound && !states[idx].sawOtherErr:
 			results[idx].Available = false
 			results[idx].Error = classifyNNTPError(
-				430,
+				codeNoSuchArticle,
 				fmt.Sprintf("segment %s not found on any provider", results[idx].MessageID),
 			)
 		case states[idx].lastErr != nil:

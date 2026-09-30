@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"sync/atomic"
+	"time"
 )
 
 // Workload describes why a caller needs an NNTP connection. Lower values
@@ -32,18 +33,16 @@ func (w Workload) valid() bool {
 }
 
 func (w Workload) String() string {
-	switch w {
-	case WorkloadStreamDemand:
-		return "stream_demand"
-	case WorkloadStreamPrefetch:
-		return "stream_prefetch"
-	case WorkloadDownload:
-		return "download"
-	case WorkloadBackground:
-		return "background"
-	default:
-		return fmt.Sprintf("workload(%d)", w)
+	names := [workloadCount]string{
+		WorkloadStreamDemand:   "stream_demand",
+		WorkloadStreamPrefetch: "stream_prefetch",
+		WorkloadDownload:       "download",
+		WorkloadBackground:     "background",
 	}
+	if w.valid() {
+		return names[w]
+	}
+	return fmt.Sprintf("workload(%d)", w)
 }
 
 // slotWaiter is one parked acquirer waiting for a slot on any compatible
@@ -65,6 +64,12 @@ const (
 	admissionCanceled
 	admissionFailed
 )
+
+// nsPerMS converts nanosecond counters to the milliseconds Stats reports.
+const nsPerMS = float64(time.Millisecond)
+
+// statWaiting is the Stats key for queued acquirers.
+const statWaiting = "waiting"
 
 type admissionMetrics struct {
 	queued      atomic.Uint64
@@ -146,18 +151,18 @@ func (s admissionSnapshot) stats(waiting int, oldestWaitNS uint64) map[string]an
 	meanWaitMS := 0.0
 	completed := s.admitted + s.canceled + s.failed
 	if completed != 0 {
-		meanWaitMS = float64(s.waitTotalNS) / float64(completed) / 1e6
+		meanWaitMS = float64(s.waitTotalNS) / float64(completed) / nsPerMS
 	}
 	return map[string]any{
-		"waiting":        waiting,
+		statWaiting:      waiting,
 		"queued_total":   s.queued,
 		"admitted_total": s.admitted,
 		"canceled_total": s.canceled,
 		"failed_total":   s.failed,
 		"handoffs_total": s.handoffs,
 		"wait_mean_ms":   meanWaitMS,
-		"wait_max_ms":    float64(s.waitMaxNS) / 1e6,
-		"oldest_wait_ms": float64(oldestWaitNS) / 1e6,
+		"wait_max_ms":    float64(s.waitMaxNS) / nsPerMS,
+		"oldest_wait_ms": float64(oldestWaitNS) / nsPerMS,
 	}
 }
 
