@@ -1,4 +1,4 @@
-package request
+package request_test
 
 import (
 	"encoding/json"
@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/internal/request"
 )
 
 // errAny marks a case that wants any error, not a specific one.
@@ -23,14 +24,17 @@ type record struct {
 	Size int64  `json:"size"`
 }
 
+type decodeCase struct {
+	name    string
+	body    string
+	chunked bool
+	want    int
+	wantErr error
+}
+
 func TestDecodeJSON(t *testing.T) {
-	for _, test := range []struct {
-		name    string
-		body    string
-		chunked bool
-		want    int
-		wantErr error
-	}{
+	t.Parallel()
+	for _, test := range []decodeCase{
 		{name: "sized", body: `[{"id":1},{"id":2}]`, want: 2},
 		{name: "chunked", body: `[{"id":1},{"id":2}]`, chunked: true, want: 2},
 		// An empty body reports io.EOF, the same as a streaming decoder, so
@@ -39,69 +43,82 @@ func TestDecodeJSON(t *testing.T) {
 		{name: "malformed", body: `[{"id":`, wantErr: errAny},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				if !test.chunked {
-					w.Header().Set("Content-Length", strconv.Itoa(len(test.body)))
-				}
-				_, _ = io.WriteString(w, test.body)
-			}))
-			defer server.Close()
-
-			resp, err := http.Get(server.URL)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer resp.Body.Close()
-
-			var out []record
-			err = DecodeJSON(resp, &out)
-			if test.wantErr != nil {
-				if err == nil {
-					t.Fatal("want an error")
-				}
-				if !errors.Is(test.wantErr, errAny) && !errors.Is(err, test.wantErr) {
-					t.Fatalf("err = %v, want %v", err, test.wantErr)
-				}
-				if len(out) != 0 {
-					t.Fatalf("out = %#v, want untouched", out)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(out) != test.want {
-				t.Fatalf("out = %#v", out)
-			}
+			t.Parallel()
+			runDecodeCase(t, test)
 		})
 	}
 }
 
+func runDecodeCase(t *testing.T, test decodeCase) {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if !test.chunked {
+			w.Header().Set("Content-Length", strconv.Itoa(len(test.body)))
+		}
+		_, _ = io.WriteString(w, test.body)
+	}))
+	defer server.Close()
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var out []record
+	err = request.DecodeJSON(resp, &out)
+	if test.wantErr == nil {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(out) != test.want {
+			t.Fatalf("out = %#v", out)
+		}
+		return
+	}
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	if !errors.Is(test.wantErr, errAny) && !errors.Is(err, test.wantErr) {
+		t.Fatalf("err = %v, want %v", err, test.wantErr)
+	}
+	if len(out) != 0 {
+		t.Fatalf("out = %#v, want untouched", out)
+	}
+}
+
 func TestDecodeJSONIgnoresNilInputs(t *testing.T) {
-	if err := DecodeJSON(nil, &[]record{}); err != nil {
+	t.Parallel()
+	if err := request.DecodeJSON(nil, &[]record{}); err != nil {
 		t.Fatal(err)
 	}
 	resp := &http.Response{Body: io.NopCloser(strings.NewReader(`[{"id":1}]`))}
-	if err := DecodeJSON(resp, nil); err != nil {
+	if err := request.DecodeJSON(resp, nil); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestDecodeJSONRejectsTrailingValue(t *testing.T) {
+	t.Parallel()
 	resp := &http.Response{Body: io.NopCloser(strings.NewReader(`[{"id":1}] {"unexpected":true}`))}
 	var out []record
-	if err := DecodeJSON(resp, &out); err == nil {
+	if err := request.DecodeJSON(resp, &out); err == nil {
 		t.Fatal("want an error for a second JSON value")
 	}
 }
 
 func TestDecodeJSONArrayStreamsItems(t *testing.T) {
+	t.Parallel()
 	data := payload(t, 1000)
 	stream := &body{data: data, chunk: 128}
 	resp := &http.Response{Body: stream}
 
 	count, bytesReadAtFirstVisit := 0, 0
-	err := DecodeJSONArray[record](resp, func(item record) error {
+	err := request.DecodeJSONArray[record](resp, func(item record) error {
 		if item.ID <= 0 {
 			t.Fatalf("item = %#v", item)
 		}
@@ -123,30 +140,33 @@ func TestDecodeJSONArrayStreamsItems(t *testing.T) {
 }
 
 func TestDecodeJSONArrayRejectsInvalidEnvelope(t *testing.T) {
+	t.Parallel()
 	for _, body := range []string{
 		`{"id":1}`,
 		`[{"id":1}`,
 		`[{"id":1}] {"unexpected":true}`,
 	} {
 		resp := &http.Response{Body: io.NopCloser(strings.NewReader(body))}
-		if err := DecodeJSONArray[record](resp, func(record) error { return nil }); err == nil {
+		if err := request.DecodeJSONArray[record](resp, func(record) error { return nil }); err == nil {
 			t.Fatalf("body %q: want an error", body)
 		}
 	}
 }
 
 func TestDecodeJSONArrayReturnsVisitorError(t *testing.T) {
+	t.Parallel()
 	want := errors.New("stop visiting")
 	resp := &http.Response{Body: io.NopCloser(strings.NewReader(`[{"id":1},{"id":2}]`))}
-	err := DecodeJSONArray[record](resp, func(record) error { return want })
+	err := request.DecodeJSONArray[record](resp, func(record) error { return want })
 	if !errors.Is(err, want) {
 		t.Fatalf("err = %v, want %v", err, want)
 	}
 }
 
 func TestDecodeJSONArrayAcceptsNull(t *testing.T) {
+	t.Parallel()
 	resp := &http.Response{Body: io.NopCloser(strings.NewReader(`null`))}
-	if err := DecodeJSONArray[record](resp, func(record) error {
+	if err := request.DecodeJSONArray[record](resp, func(record) error {
 		t.Fatal("visited an item for a null array")
 		return nil
 	}); err != nil {
@@ -209,7 +229,7 @@ func BenchmarkDecodeJSON(b *testing.B) {
 					Body:          &body{data: data, chunk: 16 << 10},
 				}
 				var out []record
-				if err := DecodeJSON(resp, &out); err != nil {
+				if err := request.DecodeJSON(resp, &out); err != nil {
 					b.Fatal(err)
 				}
 			}
@@ -228,7 +248,7 @@ func BenchmarkDecodeJSONArray(b *testing.B) {
 					Body:          &body{data: data, chunk: 16 << 10},
 				}
 				count := 0
-				if err := DecodeJSONArray[record](resp, func(record) error {
+				if err := request.DecodeJSONArray[record](resp, func(record) error {
 					count++
 					return nil
 				}); err != nil {
@@ -242,6 +262,7 @@ func BenchmarkDecodeJSONArray(b *testing.B) {
 	}
 }
 
+//nolint:paralleltest // sets the process-wide config path (config singleton)
 func TestDoJSONResponsePolicy(t *testing.T) {
 	config.SetConfigPath(t.TempDir())
 	t.Cleanup(config.Reset)
@@ -259,7 +280,7 @@ func TestDoJSONResponsePolicy(t *testing.T) {
 		{name: "no result requested", body: "not JSON", status: 200, noResult: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(tc.status)
 				if tc.chunked {
 					w.(http.Flusher).Flush()
@@ -278,7 +299,7 @@ func TestDoJSONResponsePolicy(t *testing.T) {
 			if tc.noResult {
 				out = nil
 			}
-			resp, err := New(WithMaxRetries(0)).DoJSON(req, out)
+			resp, err := request.New(request.WithMaxRetries(0)).DoJSON(req, out)
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("error=%v, wantErr=%v", err, tc.wantErr)
 			}
