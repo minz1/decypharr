@@ -538,14 +538,16 @@ func TestPurgeCacheRemovesIdleDiskItemsAndSkipsActiveItems(t *testing.T) {
 // totalSize, so IsOverBudget() could stay false even as disk filled up.
 func TestOnBufferEvict_TotalSizeDrift(t *testing.T) {
 	t.Parallel()
-	cacheDir := t.TempDir()
-	c := newTestCache(cacheDir)
-
-	makeItem := func() *CacheItem {
-		return &CacheItem{cache: c}
+	// Each subtest owns its cache: they assert absolute totalSize values.
+	setup := func(t *testing.T) (*Cache, func() *CacheItem) {
+		t.Helper()
+		t.Parallel()
+		c := newTestCache(t.TempDir())
+		return c, func() *CacheItem { return &CacheItem{cache: c} }
 	}
 
 	t.Run("normal decrement", func(t *testing.T) {
+		c, makeItem := setup(t)
 		c.totalSize.Store(500)
 		item := makeItem()
 		item.onBufferEvict(0, 200)
@@ -555,6 +557,7 @@ func TestOnBufferEvict_TotalSizeDrift(t *testing.T) {
 	})
 
 	t.Run("floor at zero", func(t *testing.T) {
+		c, makeItem := setup(t)
 		c.totalSize.Store(100)
 		item := makeItem()
 		item.onBufferEvict(0, 300) // evict more than totalSize
@@ -564,6 +567,7 @@ func TestOnBufferEvict_TotalSizeDrift(t *testing.T) {
 	})
 
 	t.Run("zero-length no-op", func(t *testing.T) {
+		c, makeItem := setup(t)
 		c.totalSize.Store(250)
 		item := makeItem()
 		item.onBufferEvict(0, 0)
@@ -573,6 +577,7 @@ func TestOnBufferEvict_TotalSizeDrift(t *testing.T) {
 	})
 
 	t.Run("concurrent decrements sum correctly", func(t *testing.T) {
+		c, makeItem := setup(t)
 		const goroutines = 50
 		const evictEach = 10
 		c.totalSize.Store(int64(goroutines * evictEach))

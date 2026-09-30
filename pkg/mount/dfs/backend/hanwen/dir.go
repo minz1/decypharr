@@ -130,7 +130,7 @@ func (d *Dir) newNode(info *manager.FileInfo) fs.InodeEmbedder {
 }
 
 // Getattr returns directory attributes.
-func (d *Dir) Getattr(_ context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+func (d *Dir) Getattr(_ context.Context, _ fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	out.Mode = 0755 | fuse.S_IFDIR
 	out.Size = 4096 // Standard directory size
 	out.Nlink = 2   // Directories have 2 links (itself + "." entry)

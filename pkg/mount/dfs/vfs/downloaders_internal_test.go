@@ -133,7 +133,7 @@ func TestEnsureDownloaderLocked_CachedWindowFullDoesNotExtend(t *testing.T) {
 		t.Fatalf("ensureDownloaderLocked returned error: %v", err)
 	}
 
-	want := int64(2 * testMiB)
+	want := 2 * testMiB
 	got := getMaxOffset(dl)
 	if got != want {
 		t.Fatalf("unexpected maxOffset when window is full: got %d, want %d", got, want)

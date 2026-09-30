@@ -102,7 +102,7 @@ func (f *File) Getattr(_ context.Context, fh fs.FileHandle, out *fuse.AttrOut) s
 
 // Open creates file handle with VFS or DFS based on configuration
 // Reader is created eagerly here instead of lazily in Read() to surface errors early.
-func (f *File) Open(_ context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
+func (f *File) Open(_ context.Context, _ uint32) (fs.FileHandle, uint32, syscall.Errno) {
 	info := f.info.Load()
 	if info == nil {
 		return nil, 0, syscall.EIO

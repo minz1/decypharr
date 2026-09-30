@@ -1436,7 +1436,7 @@ func buildCacheKey(entryName, filename string) string {
 }
 
 // decodeJSONFile stream-decodes a JSON file into v, avoiding the intermediate
-// []byte slurp of os.ReadFile + [json.Unmarshal]. Keeps allocation proportional
+// []byte slurp of [os.ReadFile] + [json.Unmarshal]. Keeps allocation proportional
 // to the decoded object rather than 2× the file size.
 func decodeJSONFile(path string, v any) error {
 	f, err := os.Open(path)

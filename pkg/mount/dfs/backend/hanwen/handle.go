@@ -106,6 +106,6 @@ func (fh *Handle) Flush(_ context.Context) syscall.Errno {
 	return 0
 }
 
-func (fh *Handle) Fsync(_ context.Context, flags uint32) syscall.Errno {
+func (fh *Handle) Fsync(_ context.Context, _ uint32) syscall.Errno {
 	return 0
 }
