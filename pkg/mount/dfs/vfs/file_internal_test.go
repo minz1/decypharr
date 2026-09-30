@@ -7,6 +7,7 @@ import (
 )
 
 func TestStreamingFileCloseIsIdempotent(t *testing.T) {
+	t.Parallel()
 	item := &CacheItem{info: ItemInfo{Size: 1 << 20}}
 	file := NewStreamingFile(item)
 	if file == nil {
@@ -31,6 +32,7 @@ func TestStreamingFileCloseIsIdempotent(t *testing.T) {
 }
 
 func TestStreamingFileRejectsNegativeOffset(t *testing.T) {
+	t.Parallel()
 	item := &CacheItem{info: ItemInfo{Size: 1 << 20}}
 	file := NewStreamingFile(item)
 	if file == nil {
@@ -47,6 +49,7 @@ func TestStreamingFileRejectsNegativeOffset(t *testing.T) {
 // touched the item (a direct stream for the same path) cannot knock the item's
 // real handles out of the count, as the old name-keyed ReleaseFile did.
 func TestActiveFilesTracksItemHandles(t *testing.T) {
+	t.Parallel()
 	c := &Cache{}
 	item := &CacheItem{cache: c, info: ItemInfo{Size: 1 << 20}}
 

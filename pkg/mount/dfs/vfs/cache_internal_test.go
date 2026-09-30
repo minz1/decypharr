@@ -29,6 +29,7 @@ func newTestCache(cacheDir string) *Cache {
 // ParseSize("85G") failed silently, leaving CacheDiskSize=0 → threshold=0 →
 // IsOverBudget() always false → all size enforcement disabled.
 func TestIsOverBudget_BugReproduction(t *testing.T) {
+	t.Parallel()
 	cacheDir := t.TempDir()
 
 	// Bug scenario: threshold=0 (from CacheDiskSize=0). Even with 100 GB "used",
@@ -74,6 +75,7 @@ func TestIsOverBudget_BugReproduction(t *testing.T) {
 // removes oldest-by-atime items until total is within threshold, and that it
 // removes exactly as many as needed — no more, no less.
 func TestEvictCandidates_BoundsCacheBelowThreshold(t *testing.T) {
+	t.Parallel()
 	cacheDir := t.TempDir()
 	entryDir := filepath.Join(cacheDir, "entry")
 	if err := os.MkdirAll(entryDir, 0755); err != nil {
@@ -159,6 +161,7 @@ func TestEvictCandidates_BoundsCacheBelowThreshold(t *testing.T) {
 }
 
 func TestScanDiskCandidates_DoesNotDeleteLegacyFiles(t *testing.T) {
+	t.Parallel()
 	cacheDir := t.TempDir()
 	entryDir := filepath.Join(cacheDir, "entry")
 	if err := os.MkdirAll(entryDir, 0755); err != nil {
@@ -186,6 +189,7 @@ func TestScanDiskCandidates_DoesNotDeleteLegacyFiles(t *testing.T) {
 }
 
 func TestScanDiskCandidates_RemovesOrphanMetadataWithCachedRanges(t *testing.T) {
+	t.Parallel()
 	cacheDir := t.TempDir()
 	entryDir := filepath.Join(cacheDir, "entry")
 	if err := os.MkdirAll(entryDir, 0755); err != nil {
@@ -215,6 +219,7 @@ func TestScanDiskCandidates_RemovesOrphanMetadataWithCachedRanges(t *testing.T) 
 }
 
 func TestDiskAdmissionReclaimsClosedCacheFile(t *testing.T) {
+	t.Parallel()
 	cacheDir := t.TempDir()
 	entryDir := filepath.Join(cacheDir, "entry")
 	if err := os.MkdirAll(entryDir, 0o755); err != nil {
@@ -267,6 +272,7 @@ func TestDiskAdmissionReclaimsClosedCacheFile(t *testing.T) {
 }
 
 func TestNewCacheAccountsPersistentUsageAtStartup(t *testing.T) {
+	t.Parallel()
 	cacheDir := t.TempDir()
 	entryDir := filepath.Join(cacheDir, "entry")
 	if err := os.MkdirAll(entryDir, 0o755); err != nil {
@@ -300,6 +306,7 @@ func TestNewCacheAccountsPersistentUsageAtStartup(t *testing.T) {
 }
 
 func TestEvictCandidates_RemovesOnlyTargetPair(t *testing.T) {
+	t.Parallel()
 	cacheDir := t.TempDir()
 	entryDir := filepath.Join(cacheDir, "entry")
 	if err := os.MkdirAll(entryDir, 0755); err != nil {
@@ -364,6 +371,7 @@ func TestEvictCandidates_RemovesOnlyTargetPair(t *testing.T) {
 }
 
 func TestGetStatsReportsDiskItemsSeparatelyFromActiveItems(t *testing.T) {
+	t.Parallel()
 	cacheDir := t.TempDir()
 	entryDir := filepath.Join(cacheDir, "entry")
 	if err := os.MkdirAll(entryDir, 0755); err != nil {
@@ -396,6 +404,7 @@ func TestGetStatsReportsDiskItemsSeparatelyFromActiveItems(t *testing.T) {
 }
 
 func TestRunCleanupReportsResultStats(t *testing.T) {
+	t.Parallel()
 	cacheDir := t.TempDir()
 	entryDir := filepath.Join(cacheDir, "entry")
 	if err := os.MkdirAll(entryDir, 0755); err != nil {
@@ -439,6 +448,7 @@ func TestRunCleanupReportsResultStats(t *testing.T) {
 }
 
 func TestPurgeCacheRemovesIdleDiskItemsAndSkipsActiveItems(t *testing.T) {
+	t.Parallel()
 	cacheDir := t.TempDir()
 	entryDir := filepath.Join(cacheDir, "entry")
 	if err := os.MkdirAll(entryDir, 0755); err != nil {
@@ -527,6 +537,7 @@ func TestPurgeCacheRemovesIdleDiskItemsAndSkipsActiveItems(t *testing.T) {
 // Before the fix, onBufferEvict updated metadata ranges but never touched
 // totalSize, so IsOverBudget() could stay false even as disk filled up.
 func TestOnBufferEvict_TotalSizeDrift(t *testing.T) {
+	t.Parallel()
 	cacheDir := t.TempDir()
 	c := newTestCache(cacheDir)
 
@@ -584,6 +595,7 @@ func TestOnBufferEvict_TotalSizeDrift(t *testing.T) {
 }
 
 func TestCleanupItems_ForceZeroOpenClosesRecentItems(t *testing.T) {
+	t.Parallel()
 	cacheDir := t.TempDir()
 	entryDir := filepath.Join(cacheDir, "entry")
 	if err := os.MkdirAll(entryDir, 0755); err != nil {

@@ -160,6 +160,7 @@ func TestDirectStreamFile_ReadAtContext(t *testing.T) {
 }
 
 func TestDirectStreamFile_RetriesOnTransientFailure(t *testing.T) {
+	t.Parallel()
 	const fileSize = 64
 	content := make([]byte, fileSize)
 	for i := range content {

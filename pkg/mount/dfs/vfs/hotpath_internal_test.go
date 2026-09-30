@@ -18,6 +18,7 @@ import (
 // the JSON per signal: distinct on-disk versions stay bounded by the debounce,
 // and the final state still lands on stop.
 func TestMetadataFlushDebounce(t *testing.T) {
+	t.Parallel()
 	item, _ := newBenchItem(t, 64<<20)
 
 	payload := make([]byte, 32<<10)
@@ -79,6 +80,7 @@ func TestMetadataFlushDebounce(t *testing.T) {
 }
 
 func TestMetadataSnapshotReplacesLoadedRanges(t *testing.T) {
+	t.Parallel()
 	item, _ := newBenchItem(t, 8<<20)
 	data := make([]byte, 256<<10)
 	if _, _, err := item.WriteAtNoOverwrite(data, 0); err != nil {
@@ -87,6 +89,10 @@ func TestMetadataSnapshotReplacesLoadedRanges(t *testing.T) {
 	if err := item.buf.Flush(); err != nil {
 		t.Fatal(err)
 	}
+	// Production flushes from one goroutine at a time (the writer, then Close
+	// after stopping it); a live writer racing this explicit flush can land
+	// its older snapshot last.
+	item.stopMetaWriter()
 
 	item.metaMu.Lock()
 	item.info.Rs = ranges.Ranges{
@@ -107,6 +113,7 @@ func TestMetadataSnapshotReplacesLoadedRanges(t *testing.T) {
 }
 
 func TestCloseFlushesResidentBytesBeforeMetadata(t *testing.T) {
+	t.Parallel()
 	item := &CacheItem{
 		cache:    &Cache{},
 		buf:      newTestBuffer(t, 8<<20),
@@ -138,6 +145,7 @@ func TestCloseFlushesResidentBytesBeforeMetadata(t *testing.T) {
 }
 
 func TestDiskPersistenceChangeMarksMetadataDirty(t *testing.T) {
+	t.Parallel()
 	const fileSize = 8 << 20
 	pool := buffer.NewPool(buffer.PoolConfig{Name: "test"})
 	t.Cleanup(func() { _ = pool.Close() })
@@ -173,6 +181,7 @@ func TestDiskPersistenceChangeMarksMetadataDirty(t *testing.T) {
 // TestSetMaxOffsetKickOnlyOnAdvance asserts a no-advance setMaxOffset (the
 // per-read keepalive) doesn't wake the downloader every call.
 func TestSetMaxOffsetKickOnlyOnAdvance(t *testing.T) {
+	t.Parallel()
 	dl := &downloader{kick: make(chan struct{}, 1)}
 
 	drain := func() bool {
@@ -212,6 +221,7 @@ func TestSetMaxOffsetKickOnlyOnAdvance(t *testing.T) {
 // TestDownloadWithPriorityReportsHit asserts the hit flag: true when the
 // range was already cached, false when the read had to wait for a download.
 func TestDownloadWithPriorityReportsHit(t *testing.T) {
+	t.Parallel()
 	item, dls := newBenchItem(t, 64<<20)
 	prefill := make([]byte, 4<<20)
 	if _, _, err := item.WriteAtNoOverwrite(prefill, 0); err != nil {
