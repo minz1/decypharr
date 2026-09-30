@@ -17,6 +17,7 @@ func (r *idleReleaseReader) ReleaseIdleDelivery() {
 }
 
 func TestDeliveryEntryReleasesResidentsAtFinalHandle(t *testing.T) {
+	t.Parallel()
 	reader := &idleReleaseReader{}
 	entry := &fsEntry{reader: reader, retention: RetentionDelivery}
 	entry.refCount.Store(2)
@@ -38,6 +39,7 @@ func TestDeliveryEntryReleasesResidentsAtFinalHandle(t *testing.T) {
 }
 
 func TestWindowEntryKeepsWarmResidentsAtFinalHandle(t *testing.T) {
+	t.Parallel()
 	reader := &idleReleaseReader{}
 	entry := &fsEntry{reader: reader, retention: RetentionWindow}
 	entry.refCount.Store(1)

@@ -87,6 +87,7 @@ func TestPipelineRetryPreservesAcceptedBuffers(t *testing.T) {
 	const size = 64 << 10
 	for _, mode := range []string{"corrupt-redundant-copy", "adopt-rejected-primary", "pending-crc-error"} {
 		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
 			primary, err := nntpd.New(nntpd.Config{})
 			if err != nil {
 				t.Fatal(err)
@@ -187,6 +188,7 @@ func TestPipelineAcceptedBufferRemainsPrivateDuringRecovery(t *testing.T) {
 	const size = 64 << 10
 	for _, action := range []string{"disconnect", "cancel", "reader-close", "idle"} {
 		t.Run(action, func(t *testing.T) {
+			t.Parallel()
 			primary, err := nntpd.New(nntpd.Config{})
 			if err != nil {
 				t.Fatal(err)

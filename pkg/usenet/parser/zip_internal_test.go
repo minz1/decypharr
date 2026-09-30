@@ -11,6 +11,7 @@ import (
 )
 
 func TestZIPParserReadsCentralDirectoryLargerThanTail(t *testing.T) {
+	t.Parallel()
 	var archive bytes.Buffer
 	writer := zip.NewWriter(&archive)
 	const fileCount = 4_000
@@ -48,6 +49,7 @@ func TestZIPParserReadsCentralDirectoryLargerThanTail(t *testing.T) {
 }
 
 func TestZIPCentralDirectoryDoesNotSilentlyReturnPartialEntries(t *testing.T) {
+	t.Parallel()
 	p := &ZIPParser{logger: zerolog.Nop()}
 	if _, err := p.parseCentralDirectoryReader(bytes.NewReader(make([]byte, 46)), 1); err == nil {
 		t.Fatal("invalid central directory unexpectedly parsed")
@@ -55,6 +57,7 @@ func TestZIPCentralDirectoryDoesNotSilentlyReturnPartialEntries(t *testing.T) {
 }
 
 func TestAbsoluteZIPHeaderOffsetUsesStartDisk(t *testing.T) {
+	t.Parallel()
 	entry := &ZIPFileEntry{DiskNumberStart: 2, LocalHeaderOffset: 75}
 	offset, err := absoluteZIPHeaderOffset(entry, []int64{0, 1_000, 3_000})
 	if err != nil {

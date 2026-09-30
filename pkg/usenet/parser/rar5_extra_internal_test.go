@@ -45,6 +45,7 @@ func TestRAR5ExtraRecordBoundaries(t *testing.T) {
 		{"short record followed by data", append([]byte{4, 1, 0, 0, 1, 33, 7}, make([]byte, 32)...), false, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			result, err := parseRAR5Extra(test.data, "password")
 			if (err == nil) != test.valid {
 				t.Fatalf("result=%#v error=%v", result, err)

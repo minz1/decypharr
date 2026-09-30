@@ -52,6 +52,7 @@ func buildCodecNZB() *storage.NZB {
 }
 
 func TestDecodeFileV2MatchesFullDecode(t *testing.T) {
+	t.Parallel()
 	data, err := encodeNZBV2(buildCodecNZB())
 	if err != nil {
 		t.Fatalf("encode: %v", err)
@@ -83,6 +84,7 @@ func TestDecodeFileV2MatchesFullDecode(t *testing.T) {
 }
 
 func TestDecodeFileV2MissingFile(t *testing.T) {
+	t.Parallel()
 	data, err := encodeNZBV2(buildCodecNZB())
 	if err != nil {
 		t.Fatalf("encode: %v", err)
@@ -99,6 +101,7 @@ func TestDecodeFileV2MissingFile(t *testing.T) {
 // The point of the single-file path: its message ids must be owned copies, not
 // views into the decompressed buffer that the full decode aliases.
 func TestDecodeFileV2CopiesMessageIDs(t *testing.T) {
+	t.Parallel()
 	data, err := encodeNZBV2(buildCodecNZB())
 	if err != nil {
 		t.Fatalf("encode: %v", err)

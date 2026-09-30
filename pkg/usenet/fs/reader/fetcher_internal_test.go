@@ -45,6 +45,7 @@ func newTestFetcher(t *testing.T, segCount int) *SegmentFetcher {
 }
 
 func TestCancelPendingPrefetchDrainsQueue(t *testing.T) {
+	t.Parallel()
 	sf := newTestFetcher(t, 10)
 
 	for i := 2; i <= 5; i++ {
@@ -72,6 +73,7 @@ func TestCancelPendingPrefetchDrainsQueue(t *testing.T) {
 }
 
 func TestPrefetchRangePipelinesAndPublishesEverySegment(t *testing.T) {
+	t.Parallel()
 	const depth = 4
 	srv, cache, fetcher, stats := newPipelineTestFetcher(t, depth, func(int) bool { return true })
 
@@ -89,6 +91,7 @@ func TestPrefetchRangePipelinesAndPublishesEverySegment(t *testing.T) {
 }
 
 func TestPrefetchRangePublishesSuccessAfterMissingArticle(t *testing.T) {
+	t.Parallel()
 	const depth = 2
 	_, cache, fetcher, stats := newPipelineTestFetcher(t, depth, func(i int) bool { return i == 1 })
 
@@ -109,6 +112,7 @@ func TestPrefetchRangePublishesSuccessAfterMissingArticle(t *testing.T) {
 }
 
 func TestStreamBodyPipelinePlanPreservesParallelism(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name         string
 		workers      int
@@ -130,6 +134,7 @@ func TestStreamBodyPipelinePlanPreservesParallelism(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			sf := &SegmentFetcher{
 				config:    Config{BodyPipelineDepth: tt.depth},
 				scheduler: &FetchScheduler{workers: tt.workers},
@@ -222,6 +227,7 @@ func waitForCondition(t *testing.T, condition func() bool) {
 }
 
 func TestEnsureSegmentsPropagatesPermanentFailure(t *testing.T) {
+	t.Parallel()
 	sf := newTestFetcher(t, 6)
 
 	notFound := &nntp.Error{Type: nntp.ErrorTypeArticleNotFound, Message: "gone"}
@@ -241,6 +247,7 @@ func TestEnsureSegmentsPropagatesPermanentFailure(t *testing.T) {
 }
 
 func TestSeekAbandonedWindow(t *testing.T) {
+	t.Parallel()
 	const ahead = 40
 	cases := []struct {
 		name             string
@@ -259,6 +266,7 @@ func TestSeekAbandonedWindow(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			a := ahead
 			if tc.name == "prefetch disabled" {
 				a = 0

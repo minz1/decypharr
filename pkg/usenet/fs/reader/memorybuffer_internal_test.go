@@ -14,6 +14,7 @@ import (
 )
 
 func TestMemoryWindowSize(t *testing.T) {
+	t.Parallel()
 	seg750 := []SegmentMeta{{Bytes: 750 * 1024}}
 	base := DefaultConfig()
 	cases := []struct {
@@ -29,6 +30,7 @@ func TestMemoryWindowSize(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			cfg := base
 			cfg.PrefetchAhead = tc.prefetch
 			if budget := memoryWindowSize(cfg, tc.segs); budget != tc.wantBudget {
@@ -39,6 +41,7 @@ func TestMemoryWindowSize(t *testing.T) {
 }
 
 func TestWindowRetentionDropsWhenOverBudget(t *testing.T) {
+	t.Parallel()
 	const segSize = 750 * 1024
 	const segCount = 16 // 12MB total against an 8MB window
 	segs := make([]SegmentMeta, segCount)
@@ -99,6 +102,7 @@ func TestWindowRetentionDropsWhenOverBudget(t *testing.T) {
 }
 
 func TestMemoryEvictionFollowsPlayback(t *testing.T) {
+	t.Parallel()
 	const segSize = 750 * 1024
 	const segCount = 20
 	segs := make([]SegmentMeta, segCount)
@@ -157,6 +161,7 @@ func putSegment(t *testing.T, sc *SegmentCache, segIdx int, data []byte) {
 }
 
 func TestMemoryWriterAdoptsDecodedExtent(t *testing.T) {
+	t.Parallel()
 	cache, err := NewSegmentCache(
 		context.Background(),
 		mkSegs(1, 64<<10),
@@ -189,6 +194,7 @@ func TestMemoryWriterAdoptsDecodedExtent(t *testing.T) {
 }
 
 func TestDeliveryAcknowledgementReleasesCompleteSegments(t *testing.T) {
+	t.Parallel()
 	const segSize = int64(64 << 10)
 	stats := &ReaderStats{}
 	cfg := DefaultConfig()
@@ -226,6 +232,7 @@ func TestDeliveryAcknowledgementReleasesCompleteSegments(t *testing.T) {
 }
 
 func TestIdleDeliveryDropsResidentsAndLatePublishes(t *testing.T) {
+	t.Parallel()
 	const segSize = int64(64 << 10)
 	cfg := DefaultConfig()
 	cfg.Retention = RetentionDelivery
@@ -274,6 +281,7 @@ func TestRetentionStorageTiers(t *testing.T) {
 			name = "memory"
 		}
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			const segSize = 64 << 10
 			segCount := 8
 			if !memory {
@@ -367,6 +375,7 @@ func mkSegs(segCount int, segSize int64) []SegmentMeta {
 // no fetch behind it, so waiting on it waits forever. WaitForSegment must say
 // so instead of parking, leaving the caller to re-fetch.
 func TestWaitForSegmentReportsEvicted(t *testing.T) {
+	t.Parallel()
 	const segSize = 750 * 1024
 	segs := mkSegs(4, segSize)
 	cfg := DefaultConfig()
@@ -402,6 +411,7 @@ func TestWaitForSegmentReportsEvicted(t *testing.T) {
 // veto the pin was advisory, so a drop could pull the bytes out from under
 // the reader that had just ensured them.
 func TestPinnedSegmentsSurviveRAMPressure(t *testing.T) {
+	t.Parallel()
 	const segSize = 750 * 1024
 	const segCount = 16 // 12MB against an 8MB window: drops must fire
 	segs := mkSegs(segCount, segSize)
@@ -447,6 +457,7 @@ func TestPinnedSegmentsSurviveRAMPressure(t *testing.T) {
 // otherwise every stream downloads more than it can hold and re-fetches what
 // it just dropped.
 func TestMaxPrefetchSegmentsTracksFairShare(t *testing.T) {
+	t.Parallel()
 	const segSize = 750 * 1024
 	segs := mkSegs(64, segSize)
 	cfg := DefaultConfig()
