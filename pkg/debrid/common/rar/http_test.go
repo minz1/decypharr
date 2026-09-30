@@ -36,7 +36,7 @@ func TestHTTPFileReadAt(t *testing.T) {
 				_, _ = io.WriteString(w, tc.body)
 			}))
 			defer srv.Close()
-			f := &HttpFile{URL: srv.URL, client: srv.Client(), FileSize: tc.size}
+			f := &HTTPFile{URL: srv.URL, client: srv.Client(), FileSize: tc.size}
 			buf := make([]byte, tc.count)
 			n, err := f.ReadAt(buf, tc.offset)
 			if !errors.Is(err, tc.wantErr) || string(buf[:n]) != tc.want {
