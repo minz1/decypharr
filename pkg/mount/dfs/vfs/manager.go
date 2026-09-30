@@ -83,7 +83,10 @@ func (m *Manager) GetFile(info *manager.FileInfo) (File, error) {
 			return sf, nil
 		}
 	}
-	return nil, fmt.Errorf("file %s: cache item kept being torn down; giving up", buildCacheKey(info.Parent(), info.Name()))
+	return nil, fmt.Errorf(
+		"file %s: cache item kept being torn down; giving up",
+		buildCacheKey(info.Parent(), info.Name()),
+	)
 }
 
 // Close shuts down the manager.
