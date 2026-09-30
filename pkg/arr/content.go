@@ -17,16 +17,16 @@ const contentBatchSize = 50
 
 type Content struct {
 	Title string        `json:"title"`
-	Id    int           `json:"id"`
+	ID    int           `json:"id"`
 	Files []ContentFile `json:"files"`
 }
 
 type ContentFile struct {
 	Name         string `json:"name"`
 	Path         string `json:"path"`
-	Id           int    `json:"id"`
-	EpisodeId    int    `json:"showId"`
-	FileId       int    `json:"fileId"`
+	ID           int    `json:"id"`
+	EpisodeID    int    `json:"showId"`
+	FileID       int    `json:"fileId"`
 	TargetPath   string `json:"targetPath"`
 	EntryName    string `json:"entryName,omitempty"`
 	IsSymlink    bool   `json:"isSymlink"`
@@ -47,13 +47,13 @@ type Movie struct {
 	OriginalTitle string `json:"originalTitle"`
 	Path          string `json:"path"`
 	MovieFile     struct {
-		MovieId      int    `json:"movieId"`
+		MovieID      int    `json:"movieId"`
 		RelativePath string `json:"relativePath"`
 		Path         string `json:"path"`
-		Id           int    `json:"id"`
+		ID           int    `json:"id"`
 		Size         int64  `json:"size"`
 	} `json:"movieFile"`
-	Id int `json:"id"`
+	ID int `json:"id"`
 }
 
 // Media enumerates the library as repair sees it: one Content per series or
@@ -69,7 +69,7 @@ func (s *Service) Media(ctx context.Context, name, mediaID string) ([]Content, e
 
 	var series []struct {
 		Title string `json:"title"`
-		Id    int    `json:"id"`
+		ID    int    `json:"id"`
 	}
 	resp, err := s.get(ctx, instance, "api/v3/series?"+url.Values{"tvdbId": {mediaID}}.Encode(), &series)
 	if err != nil {
@@ -87,21 +87,21 @@ func (s *Service) Media(ctx context.Context, name, mediaID string) ([]Content, e
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return contents, ctxErr
 		}
-		files, sonarrSeriesFilesErr := s.sonarrSeriesFiles(ctx, instance, item.Id)
+		files, sonarrSeriesFilesErr := s.sonarrSeriesFiles(ctx, instance, item.ID)
 		if sonarrSeriesFilesErr != nil {
 			continue
 		}
-		content := Content{Title: item.Title, Id: item.Id, Files: make([]ContentFile, 0, len(files))}
+		content := Content{Title: item.Title, ID: item.ID, Files: make([]ContentFile, 0, len(files))}
 		for _, file := range files {
 			episodeID := 0
 			if len(file.EpisodeIDs) > 0 {
 				episodeID = file.EpisodeIDs[0]
 			}
 			content.Files = append(content.Files, ContentFile{
-				FileId:       file.ArrFileID,
+				FileID:       file.ArrFileID,
 				Path:         file.Path,
-				Id:           item.Id,
-				EpisodeId:    episodeID,
+				ID:           item.ID,
+				EpisodeID:    episodeID,
 				SeasonNumber: file.SeasonNumber,
 				Size:         file.Size,
 			})
@@ -126,15 +126,15 @@ func (s *Service) movies(ctx context.Context, instance Arr, mediaID string) ([]C
 
 	contents := make([]Content, 0, len(movies))
 	for _, movie := range movies {
-		if movie.MovieFile.Id == 0 || movie.MovieFile.Path == "" {
+		if movie.MovieFile.ID == 0 || movie.MovieFile.Path == "" {
 			continue
 		}
 		contents = append(contents, Content{
 			Title: movie.Title,
-			Id:    movie.Id,
+			ID:    movie.ID,
 			Files: []ContentFile{{
-				FileId: movie.MovieFile.Id,
-				Id:     movie.Id,
+				FileID: movie.MovieFile.ID,
+				ID:     movie.ID,
 				Path:   movie.MovieFile.Path,
 				Size:   movie.MovieFile.Size,
 			}},
@@ -168,7 +168,7 @@ func (s *Service) SearchMissing(ctx context.Context, name string, files []Conten
 func (s *Service) searchSonarrSeasons(ctx context.Context, instance Arr, files []ContentFile) error {
 	seasons := make(map[[2]int]struct{}, len(files))
 	for _, file := range files {
-		seasons[[2]int{file.Id, file.SeasonNumber}] = struct{}{}
+		seasons[[2]int{file.ID, file.SeasonNumber}] = struct{}{}
 	}
 
 	group, groupCtx := errgroup.WithContext(ctx)
@@ -179,9 +179,9 @@ func (s *Service) searchSonarrSeasons(ctx context.Context, instance Arr, files [
 		group.Go(func() error {
 			_, err := s.command(groupCtx, instance, struct {
 				Name         string `json:"name"`
-				SeriesId     int    `json:"seriesId"`
+				SeriesID     int    `json:"seriesId"`
 				SeasonNumber int    `json:"seasonNumber"`
-			}{Name: "SeasonSearch", SeriesId: season[0], SeasonNumber: season[1]})
+			}{Name: "SeasonSearch", SeriesID: season[0], SeasonNumber: season[1]})
 			return err
 		})
 	}
@@ -191,12 +191,12 @@ func (s *Service) searchSonarrSeasons(ctx context.Context, instance Arr, files [
 func (s *Service) searchRadarrMovies(ctx context.Context, instance Arr, files []ContentFile) error {
 	ids := make([]int, 0, len(files))
 	for _, file := range files {
-		ids = append(ids, file.Id)
+		ids = append(ids, file.ID)
 	}
 	_, err := s.command(ctx, instance, struct {
 		Name     string `json:"name"`
-		MovieIds []int  `json:"movieIds"`
-	}{Name: "MoviesSearch", MovieIds: ids})
+		MovieIDs []int  `json:"movieIds"`
+	}{Name: "MoviesSearch", MovieIDs: ids})
 	return err
 }
 
@@ -217,8 +217,8 @@ func (s *Service) DeleteFiles(ctx context.Context, name string, files []ContentF
 		ids := make([]int, 0, len(batch))
 		for _, file := range batch {
 			// Sonarr rejects the whole batch when an ID repeats.
-			if file.FileId != 0 && !slices.Contains(ids, file.FileId) {
-				ids = append(ids, file.FileId)
+			if file.FileID != 0 && !slices.Contains(ids, file.FileID) {
+				ids = append(ids, file.FileID)
 			}
 		}
 		if len(ids) == 0 {

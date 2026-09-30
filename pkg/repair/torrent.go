@@ -152,9 +152,9 @@ func (r *Service) brokenFiles(candidate *candidate, results []fileResult) []stor
 		if content, ok := candidate.contentMap[result.name]; ok {
 			file.ArrName = candidate.arrName
 			file.ArrKind = candidate.arrKind
-			file.MediaID = content.Id
-			file.EpisodeID = content.EpisodeId
-			file.ArrFileID = content.FileId
+			file.MediaID = content.ID
+			file.EpisodeID = content.EpisodeID
+			file.ArrFileID = content.FileID
 			file.TargetPath = content.TargetPath
 			file.SourcePath = content.Path
 			if file.Size == 0 {

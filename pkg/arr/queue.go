@@ -30,8 +30,8 @@ type QueueResponseScheme struct {
 }
 
 type QueueSchema struct {
-	SeriesId              int    `json:"seriesId"`
-	EpisodeId             int    `json:"episodeId"`
+	SeriesID              int    `json:"seriesId"`
+	EpisodeID             int    `json:"episodeId"`
 	SeasonNumber          int    `json:"seasonNumber"`
 	Title                 string `json:"title"`
 	Status                string `json:"status"`
@@ -41,14 +41,14 @@ type QueueSchema struct {
 		Title    string   `json:"title"`
 		Messages []string `json:"messages"`
 	} `json:"statusMessages"`
-	DownloadId                          string `json:"downloadId"`
+	DownloadID                          string `json:"downloadId"`
 	Protocol                            string `json:"protocol"`
 	DownloadClient                      string `json:"downloadClient"`
 	DownloadClientHasPostImportCategory bool   `json:"downloadClientHasPostImportCategory"`
 	Indexer                             string `json:"indexer"`
 	OutputPath                          string `json:"outputPath"`
 	EpisodeHasFile                      bool   `json:"episodeHasFile"`
-	Id                                  int    `json:"id"`
+	ID                                  int    `json:"id"`
 }
 
 // catalogMatchers are the predicates for the built-in cleanup rules, keyed by
@@ -122,11 +122,11 @@ func (s *Service) CleanupQueue(ctx context.Context, name string) error {
 	for _, item := range items {
 		switch resolveQueueAction(item, rules) {
 		case QueueActionBlocklist:
-			blocklist = append(blocklist, item.Id)
+			blocklist = append(blocklist, item.ID)
 		case QueueActionBlocklistResearch:
-			blocklistResearch = append(blocklistResearch, item.Id)
+			blocklistResearch = append(blocklistResearch, item.ID)
 		case QueueActionImport:
-			manualImports = append(manualImports, item.DownloadId)
+			manualImports = append(manualImports, item.DownloadID)
 		}
 	}
 
@@ -205,8 +205,8 @@ func (s *Service) removeQueueItems(ctx context.Context, name string, ids []int, 
 		"changeCategory":   {"false"},
 	}
 	payload := struct {
-		Ids []int `json:"ids"`
-	}{Ids: ids}
+		IDs []int `json:"ids"`
+	}{IDs: ids}
 
 	resp, err := s.mutate(ctx, instance, http.MethodDelete, "api/v3/queue/bulk?"+query.Encode(), payload, nil)
 	if err != nil {
