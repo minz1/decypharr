@@ -64,18 +64,14 @@ func (s *NFSServer) Start(ctx context.Context) error {
 	}
 
 	address := net.JoinHostPort(s.config.BindAddress, strconv.Itoa(int(s.config.Port)))
-	listener, err := net.Listen("tcp", address)
+	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", address)
 	if err != nil {
 		return fmt.Errorf("listen for NFS on %s: %w", address, err)
 	}
 
 	log.Info().Str("address", address).Msg("NFSv4 server started")
 
-	err = server.Serve(ctx, &filteredListener{Listener: listener, networks: networks})
-	if ctx.Err() != nil || errors.Is(err, net.ErrClosed) || errors.Is(err, context.Canceled) {
-		return nil
-	}
-	return fmt.Errorf("serve NFS: %w", err)
+	return serveResult(ctx, "NFS", server.Serve(ctx, &filteredListener{Listener: listener, networks: networks}))
 }
 
 // loadHandleKey returns the persisted 32-byte filehandle key, creating it on
@@ -182,4 +178,13 @@ func allows(prefixes []netip.Prefix, remote net.Addr) bool {
 		}
 	}
 	return false
+}
+
+// serveResult maps a protocol server's exit to Start's result: shutting down
+// (context canceled, listener closed) is a clean stop, not a failure.
+func serveResult(ctx context.Context, proto string, err error) error {
+	if err == nil || ctx.Err() != nil || errors.Is(err, net.ErrClosed) || errors.Is(err, context.Canceled) {
+		return nil
+	}
+	return fmt.Errorf("serve %s: %w", proto, err)
 }

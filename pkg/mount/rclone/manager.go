@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"os/exec"
@@ -99,7 +100,7 @@ func NewManager(mgr *manager.Manager) manager.MountManager {
 		bindAddress = "localhost"
 	}
 
-	baseURL := fmt.Sprintf("http://%s:%s", bindAddress, mainCfg.Port)
+	baseURL := "http://" + net.JoinHostPort(bindAddress, mainCfg.Port)
 	webdavURL, err := url.JoinPath(baseURL, mainCfg.URLBase, "webdav")
 	if err != nil {
 		_logger.Error().Err(err).Msg("Invalid WebDAV URL, rclone mount disabled")
@@ -111,7 +112,7 @@ func NewManager(mgr *manager.Manager) manager.MountManager {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	rcServer := fmt.Sprintf("http://localhost:%s", cfg.Rclone.Port)
+	rcServer := "http://" + net.JoinHostPort("localhost", cfg.Rclone.Port)
 	rcloneClient := rclone.NewClient(rcServer, "", "", _logger)
 
 	m := &Manager{
