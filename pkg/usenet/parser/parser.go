@@ -152,6 +152,7 @@ var (
 	rarMainPattern       = regexp.MustCompile(`\.rar$`)
 	rarPartPattern       = regexp.MustCompile(`(?:\.r\d{2,3}|\.[s-y]\d{2})$`) // .r00..r999, then .s00 etc.; .zNN is ZIP
 	rarVolumePattern     = regexp.MustCompile(`\.part\d+\.rar$`)
+	rarPartNumberPattern = regexp.MustCompile(`\.part(\d+)$`)
 	ignoreExtensions     = []string{".sfv", ".nfo", ".jpg", ".png", ".txt", ".srt", ".idx", ".sub", ".par2"}
 	sevenZMainPattern    = regexp.MustCompile(`\.7z$`)
 	sevenZPartPattern    = regexp.MustCompile(`\.7z\.\d{3}$`)
