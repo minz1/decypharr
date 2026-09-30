@@ -83,7 +83,7 @@ func (s *Storage) FilterQueued(filter func(*Entry) bool) ([]*Entry, error) {
 // CountQueuedByState counts queued entries without building full entry objects.
 func (s *Storage) CountQueuedByState(state TorrentState) int {
 	count := 0
-	_ = s.queue.ForEach(func(key string, value []byte) error {
+	_ = s.queue.ForEach(func(_ string, value []byte) error {
 		var pb EntryProto
 		if proto.Unmarshal(value, &pb) == nil && pb.GetState() == string(state) {
 			count++

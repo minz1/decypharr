@@ -32,7 +32,7 @@ func dbVersion(t *testing.T, path string) uint32 {
 // so startup must leave each original behind for a downgrade.
 func TestStartupKeepsDowngradePath(t *testing.T) {
 	dir := t.TempDir()
-	for _, name := range storeNames {
+	for _, name := range storeNames() {
 		writeLegacyDB(t, filepath.Join(dir, name+".db"), 3)
 	}
 
@@ -42,7 +42,7 @@ func TestStartupKeepsDowngradePath(t *testing.T) {
 	}
 	defer s.Close()
 
-	for _, name := range storeNames {
+	for _, name := range storeNames() {
 		path := filepath.Join(dir, name+".db")
 		if got := dbVersion(t, path); got == 3 {
 			t.Fatalf("%s was not migrated", name)

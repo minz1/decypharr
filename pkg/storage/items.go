@@ -11,7 +11,7 @@ import (
 // GetEntryItems returns all entry item names.
 func (s *Storage) GetEntryItems() map[string]struct{} {
 	items := make(map[string]struct{})
-	_ = s.entryItems.ForEachMetadata(func(key string, meta *appendstore.Metadata) error {
+	_ = s.entryItems.ForEachMetadata(func(key string, _ *appendstore.Metadata) error {
 		items[key] = struct{}{}
 		return nil
 	})
@@ -60,7 +60,8 @@ func (s *Storage) GetEntryItem(name string) (*EntryItem, error) {
 func (s *Storage) ForEachEntryItem(fn func(*EntryItem) error) error {
 	return s.entryItems.ForEach(func(key string, value []byte) error {
 		var pb EntryItemProto
-		if proto.Unmarshal(value, &pb) != nil {
+		if err := proto.Unmarshal(value, &pb); err != nil {
+			s.skipUndecodable("entry item", key, err)
 			return nil
 		}
 		return fn(ProtoToEntryItem(&pb))

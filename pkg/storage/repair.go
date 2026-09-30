@@ -112,6 +112,7 @@ func (s *Storage) ListRepairRuns() ([]*RepairRun, error) {
 	err := s.repairRuns.ForEach(func(key string, value []byte) error {
 		var run RepairRun
 		if err := json.Unmarshal(value, &run); err != nil {
+			s.skipUndecodable("repair run", key, err)
 			return nil
 		}
 		if run.ID == "" {
@@ -260,6 +261,8 @@ func (h *EntryHealth) IsDue(now time.Time, recheck time.Duration) bool {
 	switch h.Status {
 	case HealthHealthy, HealthUnsupported:
 		// fall through to staleness check
+	case HealthUnknown, HealthBroken, HealthRepairing, HealthStale:
+		return true
 	default:
 		return true
 	}
@@ -309,6 +312,7 @@ func (s *Storage) ForEachEntryHealth(fn func(*EntryHealth) error) error {
 	return s.repairState.ForEach(func(key string, value []byte) error {
 		var state EntryHealth
 		if err := json.Unmarshal(value, &state); err != nil {
+			s.skipUndecodable("entry health", key, err)
 			return nil
 		}
 		if state.EntryName == "" {

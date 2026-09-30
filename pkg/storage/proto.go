@@ -1,11 +1,18 @@
 package storage
 
 import (
+	"math"
 	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 )
+
+// clampInt32 narrows a count to the proto's int32 field, saturating instead of
+// wrapping to a negative number.
+func clampInt32(v int) int32 {
+	return int32(max(math.MinInt32, min(v, math.MaxInt32)))
+}
 
 // ============================================================================
 // File Conversions
@@ -145,7 +152,7 @@ func EntryToProto(e *Entry) *EntryProto {
 		Status:           string(e.Status),
 		Progress:         e.Progress,
 		Speed:            e.Speed,
-		Seeders:          int32(e.Seeders),
+		Seeders:          clampInt32(e.Seeders),
 		IsComplete:       e.IsComplete,
 		Bad:              e.Bad,
 		Category:         e.Category,
@@ -158,7 +165,7 @@ func EntryToProto(e *Entry) *EntryProto {
 		CallbackUrl:      e.CallbackURL,
 		SkipMultiSeason:  e.SkipMultiSeason,
 		LastError:        e.LastError,
-		ErrorCount:       int32(e.ErrorCount),
+		ErrorCount:       clampInt32(e.ErrorCount),
 	}
 
 	// Timestamps
@@ -403,9 +410,9 @@ func ProtoToJob(pb *JobProto) *Job {
 func SystemMigrationStatusToProto(sms *SystemMigrationStatus) *SystemMigrationStatusProto {
 	pb := &SystemMigrationStatusProto{
 		Running:   sms.Running,
-		Total:     int32(sms.Total),
-		Completed: int32(sms.Completed),
-		Errors:    int32(sms.Errors),
+		Total:     clampInt32(sms.Total),
+		Completed: clampInt32(sms.Completed),
+		Errors:    clampInt32(sms.Errors),
 		ErrorList: sms.ErrorList,
 	}
 	if !sms.StartedAt.IsZero() {
