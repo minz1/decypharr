@@ -8,6 +8,7 @@ package nntpd
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"hash/crc32"
 	"net"
@@ -47,6 +48,20 @@ type Server struct {
 	SocketBytes atomic.Int64
 }
 
+const (
+	readBufSize   = 4 << 10
+	writeBufSize  = 256 << 10
+	throttleChunk = 64 << 10
+
+	// yEnc encoding parameters.
+	yencOffset     = 42  // added to every byte
+	yencEscapeAdd  = 64  // added to an escaped byte
+	yencLineLength = 128 // encoded columns per line
+	// patternModulus is prime so Pattern does not repeat at power-of-two
+	// boundaries.
+	patternModulus = 251
+)
+
 type socketWriter struct {
 	conn  net.Conn
 	bytes *atomic.Int64
@@ -58,8 +73,10 @@ func (w socketWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
+// New starts a server on a random loopback port.
 func New(cfg Config) (*Server, error) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	var lc net.ListenConfig
+	ln, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +93,11 @@ func New(cfg Config) (*Server, error) {
 
 // Addr returns the host and port the server listens on.
 func (s *Server) Addr() (string, int) {
-	return "127.0.0.1", s.ln.Addr().(*net.TCPAddr).Port
+	addr, ok := s.ln.Addr().(*net.TCPAddr)
+	if !ok {
+		panic("nntpd: listener is not TCP")
+	}
+	return "127.0.0.1", addr.Port
 }
 
 // AddArticle registers a pre-encoded yEnc body (without the ".\r\n"
@@ -132,8 +153,8 @@ func (s *Server) handleConn(conn net.Conn) {
 		s.wg.Done()
 	}()
 
-	reader := bufio.NewReaderSize(conn, 4096)
-	writer := bufio.NewWriterSize(socketWriter{conn, &s.SocketBytes}, 256*1024)
+	reader := bufio.NewReaderSize(conn, readBufSize)
+	writer := bufio.NewWriterSize(socketWriter{conn, &s.SocketBytes}, writeBufSize)
 
 	if s.respond(writer, "200 nntpd ready") != nil {
 		return
@@ -148,61 +169,69 @@ func (s *Server) handleConn(conn net.Conn) {
 		if len(fields) == 0 {
 			continue
 		}
-		var arg string
-		if len(fields) > 1 {
-			arg = fields[len(fields)-1]
-		}
 		if !inPipeline {
 			s.sleepRTT()
 		}
 		inPipeline = reader.Buffered() > 0
 
-		switch strings.ToUpper(fields[0]) {
-		case "AUTHINFO":
-			if len(fields) > 1 && strings.EqualFold(fields[1], "USER") {
-				err = writeResponse(writer, "381 password required")
-			} else {
-				err = writeResponse(writer, "281 authentication accepted")
-			}
-		case "DATE":
-			err = writeResponse(writer, "111 20260101000000")
-		case "STAT":
-			if s.lookup(arg) != nil {
-				err = writeResponse(writer, "223 0 "+arg)
-			} else {
-				err = writeResponse(writer, "430 no such article")
-			}
-		case "BODY":
-			body := s.lookup(arg)
-			if body == nil {
-				err = writeResponse(writer, "430 no such article")
-				break
-			}
-			s.Bodies.Add(1)
-			if _, err = writer.WriteString("222 0 " + arg + " body\r\n"); err != nil {
-				return
-			}
-			if err = s.writeThrottled(writer, body); err != nil {
-				return
-			}
-			if _, err = writer.WriteString(".\r\n"); err != nil {
-				return
-			}
-			err = writer.Flush()
-			if err == nil {
-				s.CompletedBodies.Add(1)
-				s.CompletedBodyBytes.Add(int64(len(body)))
-			}
-		case "QUIT":
-			_ = writeResponse(writer, "205 bye")
-			return
-		default:
-			err = writeResponse(writer, "500 unknown command")
-		}
-		if err != nil {
+		if quit, cmdErr := s.handleCommand(writer, fields); quit || cmdErr != nil {
 			return
 		}
 	}
+}
+
+// handleCommand answers one command line. quit reports that the connection
+// should close.
+func (s *Server) handleCommand(writer *bufio.Writer, fields []string) (bool, error) {
+	var arg string
+	if len(fields) > 1 {
+		arg = fields[len(fields)-1]
+	}
+	switch strings.ToUpper(fields[0]) {
+	case "AUTHINFO":
+		if len(fields) > 1 && strings.EqualFold(fields[1], "USER") {
+			return false, writeResponse(writer, "381 password required")
+		}
+		return false, writeResponse(writer, "281 authentication accepted")
+	case "DATE":
+		return false, writeResponse(writer, "111 20260101000000")
+	case "STAT":
+		if s.lookup(arg) != nil {
+			return false, writeResponse(writer, "223 0 "+arg)
+		}
+		return false, writeResponse(writer, "430 no such article")
+	case "BODY":
+		return false, s.writeBody(writer, arg)
+	case "QUIT":
+		_ = writeResponse(writer, "205 bye")
+		return true, nil
+	default:
+		return false, writeResponse(writer, "500 unknown command")
+	}
+}
+
+// writeBody sends the article body for messageID, or 430 when unknown.
+func (s *Server) writeBody(writer *bufio.Writer, messageID string) error {
+	body := s.lookup(messageID)
+	if body == nil {
+		return writeResponse(writer, "430 no such article")
+	}
+	s.Bodies.Add(1)
+	if _, err := writer.WriteString("222 0 " + messageID + " body\r\n"); err != nil {
+		return err
+	}
+	if err := s.writeThrottled(writer, body); err != nil {
+		return err
+	}
+	if _, err := writer.WriteString(".\r\n"); err != nil {
+		return err
+	}
+	if err := writer.Flush(); err != nil {
+		return err
+	}
+	s.CompletedBodies.Add(1)
+	s.CompletedBodyBytes.Add(int64(len(body)))
+	return nil
 }
 
 func (s *Server) lookup(messageID string) []byte {
@@ -235,7 +264,7 @@ func (s *Server) writeThrottled(w *bufio.Writer, data []byte) error {
 		_, err := w.Write(data)
 		return err
 	}
-	const chunk = 64 * 1024
+	const chunk = throttleChunk
 	for off := 0; off < len(data); off += chunk {
 		end := min(off+chunk, len(data))
 		if _, err := w.Write(data[off:end]); err != nil {
@@ -254,7 +283,8 @@ func (s *Server) writeThrottled(w *bufio.Writer, data []byte) error {
 func Pattern(offset int64, n int) []byte {
 	p := make([]byte, n)
 	for i := range p {
-		p[i] = byte((offset + int64(i)) % 251)
+		v := (offset + int64(i)) % patternModulus
+		p[i] = byte(v) //nolint:gosec // G115: offsets are non-negative, so v is in [0, 250]
 	}
 	return p
 }
@@ -268,16 +298,16 @@ func Encode(payload []byte, name string, part int, fileSize, offset int64) []byt
 	fmt.Fprintf(&buf, "=ypart begin=%d end=%d\r\n", offset+1, offset+int64(len(payload)))
 	col := 0
 	for _, b := range payload {
-		e := b + 42
+		e := b + yencOffset
 		if e == 0 || e == '\n' || e == '\r' || e == '=' || e == '\t' || e == ' ' || e == '.' {
 			buf.WriteByte('=')
-			buf.WriteByte(e + 64)
+			buf.WriteByte(e + yencEscapeAdd)
 			col += 2
 		} else {
 			buf.WriteByte(e)
 			col++
 		}
-		if col >= 128 {
+		if col >= yencLineLength {
 			buf.WriteString("\r\n")
 			col = 0
 		}
