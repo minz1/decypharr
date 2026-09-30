@@ -15,16 +15,16 @@ type ImportResponseSchema struct {
 	Name         string `json:"name"`
 	Size         int    `json:"size"`
 	Series       struct {
-		Id int `json:"id"`
+		ID int `json:"id"`
 	} `json:"series"`
 	SeasonNumber int `json:"seasonNumber"`
 	Episodes     []struct {
-		Id int `json:"id"`
+		ID int `json:"id"`
 	} `json:"episodes"`
 	ReleaseGroup string `json:"releaseGroup"`
 	Quality      struct {
 		Quality struct {
-			Id         int    `json:"id"`
+			ID         int    `json:"id"`
 			Name       string `json:"name"`
 			Source     string `json:"source"`
 			Resolution int    `json:"resolution"`
@@ -36,7 +36,7 @@ type ImportResponseSchema struct {
 		} `json:"revision"`
 	} `json:"quality"`
 	Languages []struct {
-		Id   int    `json:"id"`
+		ID   int    `json:"id"`
 		Name string `json:"name"`
 	} `json:"languages"`
 	CustomFormats     []any  `json:"customFormats"`
@@ -47,20 +47,20 @@ type ImportResponseSchema struct {
 		Reason string `json:"reason"`
 		Type   string `json:"type"`
 	} `json:"rejections"`
-	Id    int       `json:"id"`
+	ID    int       `json:"id"`
 	Added time.Time `json:"added,omitzero"`
 }
 
 type ManualImportFile struct {
-	DownloadId   string `json:"downloadId"`
+	DownloadID   string `json:"downloadId"`
 	FolderName   string `json:"folderName"`
 	Path         string `json:"path"`
-	SeriesId     int    `json:"seriesId"`
+	SeriesID     int    `json:"seriesId"`
 	SeasonNumber int    `json:"seasonNumber"`
-	EpisodeIds   []int  `json:"episodeIds"`
+	EpisodeIDs   []int  `json:"episodeIds"`
 	Quality      struct {
 		Quality struct {
-			Id         int    `json:"id"`
+			ID         int    `json:"id"`
 			Name       string `json:"name"`
 			Source     string `json:"source"`
 			Resolution int    `json:"resolution"`
@@ -72,7 +72,7 @@ type ManualImportFile struct {
 		} `json:"revision"`
 	} `json:"quality"`
 	Languages []struct {
-		Id   int    `json:"id"`
+		ID   int    `json:"id"`
 		Name string `json:"name"`
 	} `json:"languages"`
 	ReleaseGroup      string `json:"releaseGroup"`
@@ -107,15 +107,15 @@ func (s *Service) ManualImport(ctx context.Context, name, downloadID string) err
 	for _, candidate := range candidates {
 		episodeIDs := make([]int, 0, len(candidate.Episodes))
 		for _, episode := range candidate.Episodes {
-			episodeIDs = append(episodeIDs, episode.Id)
+			episodeIDs = append(episodeIDs, episode.ID)
 		}
 		files = append(files, ManualImportFile{
-			DownloadId:        downloadID,
+			DownloadID:        downloadID,
 			Path:              candidate.Path,
 			FolderName:        candidate.FolderName,
-			SeriesId:          candidate.Series.Id,
+			SeriesID:          candidate.Series.ID,
 			SeasonNumber:      candidate.SeasonNumber,
-			EpisodeIds:        episodeIDs,
+			EpisodeIDs:        episodeIDs,
 			Quality:           candidate.Quality,
 			Languages:         candidate.Languages,
 			ReleaseGroup:      candidate.ReleaseGroup,
