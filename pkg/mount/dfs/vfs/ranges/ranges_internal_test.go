@@ -32,13 +32,13 @@ func TestRangeIsEmpty(t *testing.T) {
 func TestRangeClip(t *testing.T) {
 	t.Parallel()
 	r := Range{Pos: 10, Size: 20}
-	r.Clip(25)
+	r = r.Clip(25)
 	if r.End() != 25 || r.Size != 15 {
 		t.Errorf("Expected clipped to end=25, got %+v", r)
 	}
 
 	r2 := Range{Pos: 10, Size: 5}
-	r2.Clip(20) // No change needed
+	r2 = r2.Clip(20) // No change needed
 	if r2.Size != 5 {
 		t.Errorf("Expected unchanged, got %+v", r2)
 	}

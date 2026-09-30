@@ -35,7 +35,7 @@ func TestResolverAnswersLongPathsFromCatalog(t *testing.T) { //nolint:parallelte
 		t.Fatalf("resolve dir = %q, %v", got, ok)
 	}
 
-	if _, ok := r.resolve(sha256.Sum256([]byte("/not/in/the/catalog"))); ok {
+	if _, found := r.resolve(sha256.Sum256([]byte("/not/in/the/catalog"))); found {
 		t.Fatal("resolved a path that does not exist")
 	}
 }

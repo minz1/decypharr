@@ -808,7 +808,7 @@ func (dls *Downloaders) kickWaiters() {
 	for _, w := range dls.waiters {
 		// Clip range to actual file size
 		r := w.r
-		r.Clip(fileSize)
+		r = r.Clip(fileSize)
 
 		if dls.item.HasRange(r) {
 			w.errChan <- nil // Fulfilled!
