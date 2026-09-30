@@ -33,15 +33,15 @@ func (q *QBit) handleLogin(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte("Ok."))
 }
 
-func (q *QBit) handleVersion(w http.ResponseWriter, r *http.Request) {
+func (q *QBit) handleVersion(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte("v4.3.2"))
 }
 
-func (q *QBit) handleWebAPIVersion(w http.ResponseWriter, r *http.Request) {
+func (q *QBit) handleWebAPIVersion(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte("2.7"))
 }
 
-func (q *QBit) handlePreferences(w http.ResponseWriter, r *http.Request) {
+func (q *QBit) handlePreferences(w http.ResponseWriter, _ *http.Request) {
 	preferences := getAppPreferences()
 
 	preferences.SavePath = q.downloadFolder
@@ -50,7 +50,7 @@ func (q *QBit) handlePreferences(w http.ResponseWriter, r *http.Request) {
 	utils.JSONResponse(w, preferences, http.StatusOK)
 }
 
-func (q *QBit) handleBuildInfo(w http.ResponseWriter, r *http.Request) {
+func (q *QBit) handleBuildInfo(w http.ResponseWriter, _ *http.Request) {
 	res := BuildInfo{
 		Bitness:    64,
 		Boost:      "1.75.0",
@@ -62,7 +62,7 @@ func (q *QBit) handleBuildInfo(w http.ResponseWriter, r *http.Request) {
 	utils.JSONResponse(w, res, http.StatusOK)
 }
 
-func (q *QBit) handleShutdown(w http.ResponseWriter, r *http.Request) {
+func (q *QBit) handleShutdown(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -238,7 +238,7 @@ func (q *QBit) handleTorrentsNoop(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func (q *QBit) handleCategories(w http.ResponseWriter, r *http.Request) {
+func (q *QBit) handleCategories(w http.ResponseWriter, _ *http.Request) {
 	q.mu.Lock()
 	names := slices.Clone(q.categories)
 	q.mu.Unlock()
@@ -369,7 +369,7 @@ func (q *QBit) handleRemoveTorrentTags(w http.ResponseWriter, r *http.Request) {
 	utils.JSONResponse(w, nil, http.StatusOK)
 }
 
-func (q *QBit) handleGetTags(w http.ResponseWriter, r *http.Request) {
+func (q *QBit) handleGetTags(w http.ResponseWriter, _ *http.Request) {
 	q.mu.Lock()
 	tags := slices.Clone(q.tags)
 	q.mu.Unlock()

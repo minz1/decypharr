@@ -39,7 +39,7 @@ func (h *Handler) handleGet(current *manager.FileInfo, w http.ResponseWriter, r 
 	h.handleDownload(current, w, r)
 }
 
-func (h *Handler) handleDelete(current *manager.FileInfo, w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleDelete(current *manager.FileInfo, w http.ResponseWriter) {
 	if err := h.manager.RemoveEntry(current); err != nil {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
@@ -47,7 +47,7 @@ func (h *Handler) handleDelete(current *manager.FileInfo, w http.ResponseWriter,
 	w.WriteHeader(http.StatusNoContent) // 204 No Content
 }
 
-func (h *Handler) handleHead(entry *manager.FileInfo, w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleHead(entry *manager.FileInfo, w http.ResponseWriter) {
 	w.Header().Set("Content-Type", utils.GetContentType(entry.Name()))
 	w.Header().Set("Content-Length", strconv.FormatInt(entry.Size(), 10))
 	w.Header().Set("Last-Modified", entry.ModTime().UTC().Format(http.TimeFormat))
@@ -55,7 +55,7 @@ func (h *Handler) handleHead(entry *manager.FileInfo, w http.ResponseWriter, r *
 	w.WriteHeader(http.StatusOK)
 }
 
-func (h *Handler) handleOptions(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleOptions(w http.ResponseWriter) {
 	w.Header().Set("Allow", "OPTIONS, GET, HEAD, PUT, DELETE, MKCOL, COPY, MOVE, PROPFIND")
 	w.Header().Set("DAV", "1, 2")
 	w.WriteHeader(http.StatusOK)

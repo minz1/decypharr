@@ -123,7 +123,7 @@ func TestRouterQueueContracts(t *testing.T) {
 			AddOrUpdate(arr.Arr{Name: "tv", Host: "https://arr.example.test", Token: "arr-token", Source: arr.SourceManual, DownloadUncached: &uncached})
 		reached := false
 		handler := sab.categoryContext(
-			sab.authContext(sab.modeContext(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			sab.authContext(sab.modeContext(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 				reached = true
 				a := getArrFromContext(r.Context())
 				if a.Name != "tv" || a.Host != "https://arr.example.test" || a.Source != arr.SourceManual ||

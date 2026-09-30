@@ -30,7 +30,7 @@ func TestCompatibilityAPIsAuthenticateBeforeProbing(t *testing.T) {
 	})
 
 	var probes atomic.Int64
-	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		probes.Add(1)
 		_, _ = w.Write([]byte(`{"appName":"Sonarr"}`))
 	}))
