@@ -83,25 +83,27 @@ func (h *Handler) handler(
 	w http.ResponseWriter,
 	r *http.Request,
 ) {
+	if current == nil && r.Method != http.MethodOptions {
+		// Unknown torrent folder: HEAD used to nil-deref and PROPFIND
+		// answered 207 with an empty listing.
+		http.Error(w, "Not Found", http.StatusNotFound)
+		return
+	}
 	switch r.Method {
 	case http.MethodHead:
 		h.handleHead(current, w, r)
 	case http.MethodGet:
-		if current == nil {
-			http.Error(w, "Not Found", http.StatusNotFound)
-			return
-		}
 		h.handleGet(current, w, r)
 	case http.MethodDelete:
 		h.handleDelete(current, w, r)
 	case PROPFIND:
 		h.handlePropfind(current, children, w, r)
-	case "COPY":
-		h.handleCopy(current, w, r, false)
 	case http.MethodOptions:
 		h.handleOptions(w, r)
-	case "MOVE":
-		h.handleCopy(current, w, r, true)
+	case "COPY", "MOVE":
+		// manager.CopyEntry has never been implemented; answer honestly
+		// instead of a 500.
+		http.Error(w, "Not Implemented", http.StatusNotImplemented)
 	default:
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
