@@ -104,8 +104,8 @@ func loadHandleKey(path string) ([]byte, error) {
 // filteredListener drops connections from outside the allowed networks
 // before they reach the protocol layer.
 type filteredListener struct {
-
 	net.Listener
+
 	networks []netip.Prefix
 }
 
