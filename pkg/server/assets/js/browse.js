@@ -360,7 +360,7 @@ class FileBrowser {
         parts.forEach(part => {
             currentPath += '/' + part;
             const displayName = decodeURIComponent(part);
-            html += `<li><a href="${window.urlBase}browse?path=${encodeURIComponent(currentPath)}" data-path="${currentPath}">${this.escapeHtml(displayName)}</a></li>`;
+            html += `<li><a href="${window.urlBase}browse?path=${encodeURIComponent(currentPath)}" data-path="${this.escapeAttr(currentPath)}">${this.escapeHtml(displayName)}</a></li>`;
         });
 
         this.refs.breadcrumbNav.innerHTML = html;
@@ -660,7 +660,10 @@ class FileBrowser {
         if (typeof text !== 'string') {
             text = String(text);
         }
-        return text.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+        // Output lands inside onclick="...": the browser HTML-decodes the
+        // attribute before running it, so escape for HTML last or an entity
+        // such as &#39; in a name would close the JS string.
+        return this.escapeAttr(text.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r'));
     }
 
     // Multi-select methods
