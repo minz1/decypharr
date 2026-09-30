@@ -16,6 +16,12 @@ import (
 	"github.com/sirrobot01/decypharr/internal/utils"
 )
 
+const (
+	rcTimeout    = 60 * time.Second
+	rcMaxRetries = 3
+)
+
+// Client talks to an rclone remote-control (RC) server.
 type Client struct {
 	client   *request.Client
 	baseURL  string
@@ -40,8 +46,8 @@ func NewClient(url, username, password string, logger zerolog.Logger) *Client {
 
 	opts := []request.ClientOption{
 		request.WithHeaders(headers),
-		request.WithTimeout(60 * time.Second),
-		request.WithMaxRetries(3),
+		request.WithTimeout(rcTimeout),
+		request.WithMaxRetries(rcMaxRetries),
 	}
 
 	return &Client{
@@ -78,7 +84,7 @@ func (r *Client) Do(ctx context.Context, req Request, res any) error {
 	}
 	defer response.Body.Close()
 
-	if response.StatusCode >= 400 {
+	if response.StatusCode >= http.StatusBadRequest {
 		respBody, _ := io.ReadAll(response.Body)
 		return fmt.Errorf("rclone error: %s - %s", response.Status, string(respBody))
 	}

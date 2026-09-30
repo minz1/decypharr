@@ -17,7 +17,6 @@ func freshConfig(t *testing.T) string {
 	return dir
 }
 
-//nolint:paralleltest // sets DECYPHARR_* env vars and the config singleton
 func TestEnvOverridesApplyOnFirstRun(t *testing.T) {
 	t.Setenv("DECYPHARR_PORT", "9191")
 	t.Setenv("DECYPHARR_LOG_LEVEL", "debug")
@@ -32,7 +31,6 @@ func TestEnvOverridesApplyOnFirstRun(t *testing.T) {
 	}
 }
 
-//nolint:paralleltest // sets DECYPHARR_* env vars and the config singleton
 func TestTokenOnlyEnvOverridesReachConfig(t *testing.T) {
 	t.Setenv("DECYPHARR_USE_AUTH", "true")
 	t.Setenv("DECYPHARR_AUTH_TOKEN_ONLY", "true")
@@ -52,7 +50,6 @@ func TestTokenOnlyEnvOverridesReachConfig(t *testing.T) {
 	}
 }
 
-//nolint:paralleltest // sets DECYPHARR_* env vars and the config singleton
 func TestMaxDownloadsNixAlias(t *testing.T) {
 	t.Setenv("DECYPHARR_MAX_DOWNLOADS", "7")
 	freshConfig(t)
@@ -67,7 +64,6 @@ func TestMaxDownloadsNixAlias(t *testing.T) {
 	}
 }
 
-//nolint:paralleltest // sets DECYPHARR_* env vars and the config singleton
 func TestRcloneMountSettingsSurviveDefaults(t *testing.T) {
 	t.Setenv("DECYPHARR_RCLONE__RC_PORT", "6000")
 	t.Setenv("DECYPHARR_RCLONE__LOG_LEVEL", "DEBUG")
