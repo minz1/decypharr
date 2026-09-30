@@ -19,15 +19,25 @@ import (
 	nntpyenc "github.com/sirrobot01/decypharr/internal/nntp/yenc"
 )
 
+// bodyBufInitialCap covers a typical ~750KB usenet segment.
+const bodyBufInitialCap = 1 << 20
+
 // bodyBufPool reuses storage for decoded articles not retained by a caller.
+//
+//nolint:gochecknoglobals // a sync.Pool only pays off when shared by every connection
 var bodyBufPool = sync.Pool{
 	New: func() any {
-		b := make([]byte, 0, 1<<20)
+		b := make([]byte, 0, bodyBufInitialCap)
 		return &b
 	},
 }
 
-func getBodyBuf() []byte { return *bodyBufPool.Get().(*[]byte) }
+func getBodyBuf() []byte {
+	if b, ok := bodyBufPool.Get().(*[]byte); ok {
+		return *b
+	}
+	return make([]byte, 0, bodyBufInitialCap)
+}
 
 func putBodyBuf(b []byte) {
 	if cap(b) == 0 {
@@ -40,13 +50,16 @@ func putBodyBuf(b []byte) {
 // DecodedBodyCapacity matches the decoder's initial growth policy. Supplying
 // this capacity lets DecodeBodyInto keep the caller's allocation.
 func DecodedBodyCapacity(decodedSize int64) int {
-	const chunk = int64(32 * 1024)
-	const maxPart = int64(10 * 1024 * 1024)
+	const (
+		chunk    = int64(32 * 1024)
+		maxPart  = int64(10 * 1024 * 1024)
+		minTotal = int64(1024)
+	)
 	if decodedSize < 0 {
 		decodedSize = 0
 	}
 	n := ((decodedSize + 64 + chunk - 1) / chunk * chunk) + chunk
-	n = max(n, 1024)
+	n = max(n, minTotal)
 	n = min(n, maxPart)
 	return int(n)
 }
@@ -77,7 +90,7 @@ func (b *bodyReader) Read(p []byte) (int, error) {
 // nextBodyWithIdleDeadline uses the shared janitor to break a stalled decode.
 func (c *Connection) nextBodyWithIdleDeadline(idle time.Duration) (nntpyenc.BodyResult, error) {
 	if idle <= 0 {
-		idle = 60 * time.Second
+		idle = streamBodyTimeout
 	}
 	// Disable any deadline carried in from earlier on this connection.
 	_ = c.conn.SetReadDeadline(time.Time{})
@@ -101,10 +114,10 @@ func (c *Connection) nextBodyWithIdleDeadline(idle time.Duration) (nntpyenc.Body
 	return res, err
 }
 
-// nanotimeNow returns the monotonic clock in nanoseconds. Uses time.Now's
+// nanotimeNow returns the monotonic clock in nanoseconds. Uses [time.Now]'s
 // monotonic reading via Sub(zero): one runtime.nanotime call, no wall-clock
 // overhead, no allocation.
-var nanotimeEpoch = time.Now()
+var nanotimeEpoch = time.Now() //nolint:gochecknoglobals // process-wide monotonic epoch
 
 func nanotimeNow() int64 {
 	return int64(time.Since(nanotimeEpoch))
@@ -113,7 +126,7 @@ func nanotimeNow() int64 {
 // bodyIdleJanitor sweeps connections currently in nextBodyWithIdleDeadline
 // and closes any whose last-progress timestamp is older than their idle
 // deadline. One goroutine per process, started lazily on first add().
-var bodyIdleJanitor = newBodyJanitor()
+var bodyIdleJanitor = newBodyJanitor() //nolint:gochecknoglobals // one sweeper goroutine per process
 
 const bodyJanitorInterval = 5 * time.Second
 
@@ -370,25 +383,26 @@ func (c *Connection) readResponse() (Response, error) {
 // buffer. Most BODY callers only need the code on success, so keeping the
 // message as bytes avoids materializing a response string for every article.
 func (c *Connection) readResponseCode() (int, []byte, error) {
+	const statusCodeLen = 3
 	line, err := c.reader.ReadSlice('\n')
 	if err != nil {
 		return 0, nil, err
 	}
 	line = bytes.TrimSuffix(line, []byte{'\n'})
 	line = bytes.TrimSuffix(line, []byte{'\r'})
-	if len(line) < 3 ||
+	if len(line) < statusCodeLen ||
 		line[0] < '0' || line[0] > '9' ||
 		line[1] < '0' || line[1] > '9' ||
 		line[2] < '0' || line[2] > '9' ||
-		(len(line) > 3 && line[3] != ' ') {
+		(len(line) > statusCodeLen && line[statusCodeLen] != ' ') {
 		return 0, nil, fmt.Errorf("invalid response code: %s", line)
 	}
 
 	code := int(line[0]-'0')*100 + int(line[1]-'0')*10 + int(line[2]-'0')
-	if len(line) == 3 {
+	if len(line) == statusCodeLen {
 		return code, nil, nil
 	}
-	return code, line[4:], nil
+	return code, line[statusCodeLen+1:], nil
 }
 
 // requestBody sends BODY and decodes the complete response through the
@@ -702,9 +716,8 @@ func (c *Connection) readDotBytes() ([]byte, error) {
 	// and terminator detection with optimized buffered reading
 	dotReader := c.text.DotReader()
 
-	// Pre-allocate for typical usenet segment (~750KB)
-	// Using io.ReadAll with pre-sized buffer hint
-	buf := bytes.NewBuffer(make([]byte, 0, 800*1024))
+	// Pre-allocate for a typical usenet segment (~750KB).
+	buf := bytes.NewBuffer(make([]byte, 0, bodyBufInitialCap))
 
 	// Copy from DotReader to buffer
 	_, err := io.Copy(buf, dotReader)
@@ -716,10 +729,10 @@ func (c *Connection) readDotBytes() ([]byte, error) {
 }
 
 // Stat retrieves article statistics by message ID with proper error classification.
-func (c *Connection) Stat(messageID string) (articleNumber int, echoedID string, err error) {
+func (c *Connection) Stat(messageID string) (int, string, error) {
 	messageID = FormatMessageID(messageID)
 
-	if err = c.sendCommandArg("STAT", messageID); err != nil {
+	if err := c.sendCommandArg("STAT", messageID); err != nil {
 		return 0, "", NewConnectionError(fmt.Errorf("failed to send STAT: %w", err))
 	}
 
@@ -730,22 +743,24 @@ func (c *Connection) Stat(messageID string) (articleNumber int, echoedID string,
 	return parseStatResponse(resp)
 }
 
-func parseStatResponse(resp Response) (articleNumber int, echoedID string, err error) {
+// parseStatResponse returns the article number and echoed message ID of a
+// "223 n <id>" response.
+func parseStatResponse(resp Response) (int, string, error) {
 	if resp.Code != codeArticleExists {
 		return 0, "", classifyNNTPError(resp.Code, resp.Message)
 	}
 
+	const wantFields = 2 // "n <message-id>"
 	fields := strings.Fields(resp.Message)
-	if len(fields) < 2 {
+	if len(fields) < wantFields {
 		return 0, "", NewProtocolError(resp.Code, fmt.Sprintf("unexpected STAT response format: %q", resp.Message))
 	}
 
-	if articleNumber, err = strconv.Atoi(fields[0]); err != nil {
+	articleNumber, err := strconv.Atoi(fields[0])
+	if err != nil {
 		return 0, "", NewProtocolError(resp.Code, fmt.Sprintf("invalid article number %q: %v", fields[0], err))
 	}
-	echoedID = fields[1]
-
-	return articleNumber, echoedID, nil
+	return articleNumber, fields[1], nil
 }
 
 // StatBatch pipelines independent STAT commands in one write and consumes the
