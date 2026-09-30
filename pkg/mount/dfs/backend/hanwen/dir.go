@@ -100,8 +100,8 @@ func (d *Dir) childStableAttr(name string, mode uint32) fs.StableAttr {
 // newNode creates a new fuse node from a FileInfo, caching it on the FileInfo.
 func (d *Dir) newNode(info *manager.FileInfo) fs.InodeEmbedder {
 	// Check if we have a cached node
-	if cached := info.Sys(); cached != nil {
-		return cached.(fs.InodeEmbedder)
+	if cached, ok := info.Sys().(fs.InodeEmbedder); ok {
+		return cached
 	}
 
 	var node fs.InodeEmbedder

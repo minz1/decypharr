@@ -233,7 +233,10 @@ func (c *Cache) GetItem(entryName, filename string, fileSize int64) (*CacheItem,
 	if err != nil {
 		return nil, err
 	}
-	item := val.(*CacheItem)
+	item, ok := val.(*CacheItem)
+	if !ok {
+		return nil, fmt.Errorf("cache item %s: unexpected singleflight result %T", key, val)
+	}
 	item.touch()
 	return item, nil
 }

@@ -2,27 +2,23 @@
 
 package hanwen
 
-import (
-	"hash"
-	"hash/fnv"
-	"sync"
+// FNV-1a 64-bit parameters (see hash/fnv).
+const (
+	fnvOffset64 = 14695981039346656037
+	fnvPrime64  = 1099511628211
 )
 
-var hasherPool = sync.Pool{
-	New: func() any {
-		return fnv.New64a()
-	},
-}
-
+// hashPath returns the FNV-1a hash of path, the stable inode number for a
+// virtual path. Inlined rather than via hash/fnv so the hot lookup path does
+// not allocate a hasher. 0 and 1 are reserved by go-fuse, so they map to 2.
 func hashPath(path string) uint64 {
-	h := hasherPool.Get().(hash.Hash64)
-	defer hasherPool.Put(h)
-
-	h.Reset()
-	_, _ = h.Write([]byte(path))
-	hs := h.Sum64()
-	if hs <= 1 {
-		hs = 2
+	h := uint64(fnvOffset64)
+	for i := range len(path) {
+		h ^= uint64(path[i])
+		h *= fnvPrime64
 	}
-	return hs
+	if h <= 1 {
+		h = 2
+	}
+	return h
 }
