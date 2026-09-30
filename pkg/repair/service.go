@@ -51,6 +51,8 @@ type ClearStateResult struct {
 }
 
 const (
+	// repairScopeAll is the protocol scope that probes torrents and NZBs.
+	repairScopeAll         = "all"
 	repairSchedulerTag     = "repair-sweep"
 	repairStopSchedulerTag = "repair-sweep-stop"
 	repairDefaultWorkers   = 5
@@ -133,8 +135,8 @@ func (r *Service) cfg() config.RepairConfig { return config.Get().Repair }
 
 func normalizeRepairProtocolScope(scope string) string {
 	switch strings.ToLower(strings.TrimSpace(scope)) {
-	case "all", "both":
-		return "all"
+	case repairScopeAll, "both":
+		return repairScopeAll
 	case string(config.ProtocolTorrent):
 		return string(config.ProtocolTorrent)
 	case string(config.ProtocolNZB):
@@ -148,12 +150,12 @@ func (r *Service) effectiveProtocolScope(opts RunOptions) string {
 	if scope := normalizeRepairProtocolScope(opts.ProtocolScope); scope != "" {
 		return scope
 	}
-	return "all"
+	return repairScopeAll
 }
 
 func repairProtocolMatches(scope string, protocol config.Protocol) bool {
 	switch normalizeRepairProtocolScope(scope) {
-	case "", "all":
+	case "", repairScopeAll:
 		return true
 	case string(config.ProtocolTorrent):
 		return protocol == config.ProtocolTorrent
