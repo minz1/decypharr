@@ -79,9 +79,12 @@ func (s *Storage) assignFileIDs(entry *Entry) error {
 	return nil
 }
 
+// fileIDBytes is the random length of a file ID (16 hex characters).
+const fileIDBytes = 8
+
 // NewFileID returns a random stable file identifier.
 func NewFileID() string {
-	b := make([]byte, 8)
+	b := make([]byte, fileIDBytes)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
 }
@@ -113,6 +116,7 @@ func (s *Storage) List(filter func(*Entry) bool) ([]*Entry, error) {
 	err := s.entries.ForEach(func(key string, value []byte) error {
 		var pb EntryProto
 		if err := proto.Unmarshal(value, &pb); err != nil {
+			s.skipUndecodable("entry", key, err)
 			return nil
 		}
 		entry := ProtoToEntry(&pb)
@@ -130,6 +134,7 @@ func (s *Storage) ForEach(fn func(*Entry) error) error {
 	return s.entries.ForEach(func(key string, value []byte) error {
 		var pb EntryProto
 		if err := proto.Unmarshal(value, &pb); err != nil {
+			s.skipUndecodable("entry", key, err)
 			return nil
 		}
 		return fn(ProtoToEntry(&pb))
@@ -150,6 +155,7 @@ func (s *Storage) ForEachBatch(batchSize int, fn func([]*Entry) error) error {
 	err := s.entries.ForEach(func(key string, value []byte) error {
 		proto.Reset(&pb)
 		if err := proto.Unmarshal(value, &pb); err != nil {
+			s.skipUndecodable("entry", key, err)
 			return nil
 		}
 		batch = append(batch, ProtoToEntry(&pb))
@@ -167,6 +173,12 @@ func (s *Storage) ForEachBatch(batchSize int, fn func([]*Entry) error) error {
 		err = fn(batch)
 	}
 	return err
+}
+
+// skipUndecodable logs a record an iteration skips because it cannot be
+// decoded. One bad record must not hide the rest of the store.
+func (s *Storage) skipUndecodable(kind, key string, err error) {
+	s.logger.Warn().Err(err).Str("kind", kind).Str("key", key).Msg("Skipping undecodable record")
 }
 
 // EntryMetaInfo is a lightweight struct for folder listings (no disk reads).
