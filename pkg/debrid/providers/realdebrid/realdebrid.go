@@ -408,20 +408,7 @@ func (r *RealDebrid) getTorrentFiles(t *types.Torrent, data torrentInfo) map[str
 func (r *RealDebrid) IsAvailable(hashes []string) (map[string]bool, error) {
 	result := make(map[string]bool)
 
-	for i := 0; i < len(hashes); i += availabilityBatchSize {
-		end := min(i+availabilityBatchSize, len(hashes))
-
-		validHashes := make([]string, 0, end-i)
-		for _, hash := range hashes[i:end] {
-			if hash != "" {
-				validHashes = append(validHashes, hash)
-			}
-		}
-
-		if len(validHashes) == 0 {
-			continue
-		}
-
+	for _, validHashes := range common.HashBatches(hashes, availabilityBatchSize) {
 		hashStr := strings.Join(validHashes, "/")
 		var data AvailabilityResponse
 

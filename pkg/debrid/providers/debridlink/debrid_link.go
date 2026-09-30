@@ -21,6 +21,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/request"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/debrid/account"
+	"github.com/sirrobot01/decypharr/pkg/debrid/common"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
 )
 
@@ -121,20 +122,7 @@ func (dl *DebridLink) doGet(endpoint string, queryParams map[string]string, resu
 func (dl *DebridLink) IsAvailable(hashes []string) (map[string]bool, error) {
 	result := make(map[string]bool)
 
-	for i := 0; i < len(hashes); i += 100 {
-		end := min(i+100, len(hashes))
-
-		validHashes := make([]string, 0, end-i)
-		for _, hash := range hashes[i:end] {
-			if hash != "" {
-				validHashes = append(validHashes, hash)
-			}
-		}
-
-		if len(validHashes) == 0 {
-			continue
-		}
-
+	for _, validHashes := range common.HashBatches(hashes, 100) {
 		hashStr := strings.Join(validHashes, ",")
 		endpoint := fmt.Sprintf("/seedbox/cached/%s", hashStr)
 		var data AvailableResponse
