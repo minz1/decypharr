@@ -46,7 +46,7 @@ type QueueSlot struct {
 	Cat          string   `json:"cat"`
 	TimeLeft     string   `json:"timeleft"`
 	Percentage   string   `json:"percentage"`
-	NzoId        string   `json:"nzo_id"`
+	NzoID        string   `json:"nzo_id"`
 	Unpackopts   string   `json:"unpackopts"`
 }
 
@@ -67,7 +67,7 @@ type HistorySlot struct {
 	Status      string `json:"status"`
 	Name        string `json:"name"`
 	NZBName     string `json:"nzb_name"`
-	NzoId       string `json:"nzo_id"`
+	NzoID       string `json:"nzo_id"`
 	Category    string `json:"category"`
 	FailMessage string `json:"fail_message"`
 	Bytes       int64  `json:"bytes"`
@@ -114,7 +114,7 @@ type AddNZBRequest struct {
 // AddNZBResponse represents the response when adding an NZB.
 type AddNZBResponse struct {
 	Status bool     `json:"status"`
-	NzoIds []string `json:"nzo_ids"`
+	NzoIDs []string `json:"nzo_ids"`
 	Error  string   `json:"error,omitempty"`
 }
 
@@ -168,7 +168,7 @@ const (
 
 // NZB represents an NZB download in SABnzbd format (similar to qbit's Torrent).
 type NZB struct {
-	NzoId        string   `json:"nzo_id"`        // Unique NZB identifier
+	NzoID        string   `json:"nzo_id"`        // Unique NZB identifier
 	Name         string   `json:"name"`          // NZB name
 	Filename     string   `json:"filename"`      // Original filename
 	Size         int64    `json:"size"`          // Total size in bytes
@@ -203,7 +203,7 @@ type File struct {
 	Age      string `json:"age"`           // Age of file
 	Bytes    string `json:"bytes"`         // Total file size in bytes (as string)
 	Filename string `json:"filename"`      // Filename
-	NzfId    string `json:"nzf_id"`        // Unique file ID
+	NzfID    string `json:"nzf_id"`        // Unique file ID
 	Set      string `json:"set,omitempty"` // Optional set name
 }
 
@@ -239,7 +239,7 @@ func convertToSABnzbdNZB(e *storage.Entry) NZB {
 	}
 
 	nzb := NZB{
-		NzoId:        e.InfoHash,
+		NzoID:        e.InfoHash,
 		Name:         e.Name,
 		Filename:     e.OriginalFilename,
 		Size:         e.Size,
@@ -302,7 +302,7 @@ func getNZBFiles(e *storage.Entry) []File {
 			Age:      "0d", // We don't track article age
 			Bytes:    fmt.Sprintf("%.2f", float64(f.Size)),
 			Filename: f.Name,
-			NzfId:    fmt.Sprintf("%s_%d", e.InfoHash, idx),
+			NzfID:    fmt.Sprintf("%s_%d", e.InfoHash, idx),
 		})
 		idx++
 	}

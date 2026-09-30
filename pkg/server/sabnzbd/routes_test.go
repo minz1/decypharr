@@ -98,7 +98,7 @@ func TestRouterQueueContracts(t *testing.T) {
 				t.Fatalf("queue = %#v", got)
 			}
 			slot := got.Queue.Slots[0]
-			if slot.NzoId != "entry-0" || slot.Cat != "tv" || slot.Filename != "Release0.nzb" || slot.Mb != "4.00" ||
+			if slot.NzoID != "entry-0" || slot.Cat != "tv" || slot.Filename != "Release0.nzb" || slot.Mb != "4.00" ||
 				slot.MBLeft != "3.00" ||
 				slot.Percentage != "25" ||
 				slot.Status != StatusDownloading ||

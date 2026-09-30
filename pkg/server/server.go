@@ -36,28 +36,7 @@ var assetsEmbed embed.FS
 //go:embed assets/images/*
 var imagesEmbed embed.FS
 
-type AddRequest struct {
-	Url        string   `json:"url"`
-	Arr        string   `json:"arr"`
-	File       string   `json:"file"`
-	NotSymlink bool     `json:"notSymlink"`
-	Content    string   `json:"content"`
-	Seasons    []string `json:"seasons"`
-	Episodes   []string `json:"episodes"`
-}
-
-type ArrResponse struct {
-	Name string `json:"name"`
-	Url  string `json:"url"`
-}
-
-type ContentResponse struct {
-	ID    string `json:"id"`
-	Title string `json:"title"`
-	Type  string `json:"type"`
-	ArrID string `json:"arr"`
-}
-
+// Server is the HTTP front end: web UI, JSON API and the compat APIs.
 type Server struct {
 	router       *chi.Mux
 	logger       zerolog.Logger

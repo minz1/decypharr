@@ -25,7 +25,7 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 	arrName := r.FormValue("arr")
 	action := r.FormValue("action")
 	debridName := r.FormValue("debrid")
-	callbackUrl := r.FormValue("callbackUrl")
+	callbackURL := r.FormValue("callbackUrl")
 	downloadFolder := r.FormValue("downloadFolder")
 	if downloadFolder == "" {
 		downloadFolder = config.Get().DownloadFolder
@@ -82,7 +82,7 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 					instance,
 					config.DownloadAction(action),
 					downloadUncached,
-					callbackUrl,
+					callbackURL,
 					manager.ImportTypeAPI,
 					skipMultiSeason,
 				)
@@ -126,7 +126,7 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 				instance,
 				config.DownloadAction(action),
 				downloadUncached,
-				callbackUrl,
+				callbackURL,
 				manager.ImportTypeAPI,
 				skipMultiSeason,
 			)
@@ -156,7 +156,7 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 					content,
 					instance,
 					config.DownloadAction(action),
-					callbackUrl,
+					callbackURL,
 					manager.ImportTypeAPI,
 					skipMultiSeason,
 				)
@@ -186,7 +186,7 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 				content,
 				instance,
 				config.DownloadAction(action),
-				callbackUrl,
+				callbackURL,
 				manager.ImportTypeAPI,
 				skipMultiSeason,
 			)
