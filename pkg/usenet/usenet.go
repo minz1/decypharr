@@ -1299,12 +1299,11 @@ func (u *Usenet) markAsFailed(nzb *storage.NZB, err error) error {
 		return fmt.Errorf("failed to mark NZB as failed in storage: %w", addNZBErr)
 	}
 
-	// Remove processing marker if exists
-	processingMarker := nzb.Path + ".processing"
-	_ = os.Remove(processingMarker)
-
-	// Remove the nzb file itself, as it's considered failed
+	// Remove the processing marker and the nzb file itself, as it's
+	// considered failed. Without a path there is nothing to remove (a bare
+	// ".processing" would name a file in the working directory).
 	if nzb.Path != "" {
+		_ = os.Remove(nzb.Path + ".processing")
 		if removeErr := os.Remove(nzb.Path); removeErr != nil && !os.IsNotExist(removeErr) {
 			u.logger.Warn().
 				Err(removeErr).

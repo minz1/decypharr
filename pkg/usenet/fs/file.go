@@ -131,7 +131,7 @@ func (vf *File) ReadAt(p []byte, off int64) (int, error) {
 	// Use streaming reader
 	reader := vf.getOrCreateStreamingReader()
 	if reader == nil {
-		return 0, fmt.Errorf("failed to create streaming reader for volume %s", vf.volume.Name)
+		return 0, fmt.Errorf("failed to create streaming reader for volume %s: %w", vf.volume.Name, vf.readerErr)
 	}
 	n, readErr := reader.ReadAt(p[:int(toRead)], off)
 

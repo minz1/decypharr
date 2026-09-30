@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"path"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -27,8 +26,7 @@ func getRARVolumeOrder(filename string) int {
 	// Old-style naming: .rar, .r00, .r01, ...
 	if ext == ".rar" {
 		// Check for .partXX.rar pattern (new style)
-		partPattern := regexp.MustCompile(`\.part(\d+)$`)
-		if matches := partPattern.FindStringSubmatch(base); len(matches) == 2 {
+		if matches := rarPartNumberPattern.FindStringSubmatch(base); len(matches) == 2 {
 			num, _ := strconv.Atoi(matches[1])
 			return num // .part01.rar = 1, .part02.rar = 2
 		}
