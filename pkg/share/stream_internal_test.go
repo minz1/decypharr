@@ -114,14 +114,14 @@ func TestStreamReaderEOFBoundaries(t *testing.T) {
 	}
 
 	// A read starting at or past EOF returns nothing.
-	if n, err := r.ReadAt(buf, int64(len(data))); n != 0 || !errors.Is(err, io.EOF) {
-		t.Fatalf("read at EOF: n=%d err=%v, want 0, io.EOF", n, err)
+	if atEOF, eofErr := r.ReadAt(buf, int64(len(data))); atEOF != 0 || !errors.Is(eofErr, io.EOF) {
+		t.Fatalf("read at EOF: n=%d err=%v, want 0, io.EOF", atEOF, eofErr)
 	}
 
 	// An oversized request is clamped to what the file holds.
 	big := make([]byte, 64)
-	if n, err := r.ReadAt(big, 8); n != 2 || !errors.Is(err, io.EOF) {
-		t.Fatalf("oversized read: n=%d err=%v, want 2, io.EOF", n, err)
+	if clamped, clampErr := r.ReadAt(big, 8); clamped != 2 || !errors.Is(clampErr, io.EOF) {
+		t.Fatalf("oversized read: n=%d err=%v, want 2, io.EOF", clamped, clampErr)
 	}
 }
 

@@ -235,12 +235,12 @@ func (f *filesystem) torrentChildren(torrent, prefix string) []node {
 		}
 		name, _, nested := strings.Cut(remainder, "/")
 		if nested {
-			if existing, ok := children[name]; !ok || !existing.isDir {
+			if existing, seen := children[name]; !seen || !existing.isDir {
 				children[name] = node{name: name, size: 4096, modTime: entries[i].ModTime(), isDir: true}
 			}
 			continue
 		}
-		if existing, ok := children[name]; ok && existing.isDir {
+		if existing, seen := children[name]; seen && existing.isDir {
 			continue
 		}
 		entry := makeNode(&entries[i])
