@@ -22,7 +22,7 @@ type AppPreferences struct {
 	AltUpLimit                         int      `json:"alt_up_limit"`
 	AlternativeWebuiEnabled            bool     `json:"alternative_webui_enabled"`
 	AlternativeWebuiPath               string   `json:"alternative_webui_path"`
-	AnnounceIp                         string   `json:"announce_ip"`
+	AnnounceIP                         string   `json:"announce_ip"`
 	AnnounceToAllTiers                 bool     `json:"announce_to_all_tiers"`
 	AnnounceToAllTrackers              bool     `json:"announce_to_all_trackers"`
 	AnonymousMode                      bool     `json:"anonymous_mode"`
@@ -43,7 +43,7 @@ type AppPreferences struct {
 	CurrentNetworkInterface            string   `json:"current_network_interface"`
 	Dht                                bool     `json:"dht"`
 	DiskCache                          int      `json:"disk_cache"`
-	DiskCacheTtl                       int      `json:"disk_cache_ttl"`
+	DiskCacheTTL                       int      `json:"disk_cache_ttl"`
 	DlLimit                            int      `json:"dl_limit"`
 	DontCountSlowTorrents              bool     `json:"dont_count_slow_torrents"`
 	DyndnsDomain                       string   `json:"dyndns_domain"`
@@ -54,7 +54,7 @@ type AppPreferences struct {
 	EmbeddedTrackerPort                int      `json:"embedded_tracker_port"`
 	EnableCoalesceReadWrite            bool     `json:"enable_coalesce_read_write"`
 	EnableEmbeddedTracker              bool     `json:"enable_embedded_tracker"`
-	EnableMultiConnectionsFromSameIp   bool     `json:"enable_multi_connections_from_same_ip"`
+	EnableMultiConnectionsFromSameIP   bool     `json:"enable_multi_connections_from_same_ip"`
 	EnableOsCache                      bool     `json:"enable_os_cache"`
 	EnablePieceExtentAffinity          bool     `json:"enable_piece_extent_affinity"`
 	EnableSuperSeeding                 bool     `json:"enable_super_seeding"`
@@ -64,11 +64,11 @@ type AppPreferences struct {
 	ExportDirFin                       string   `json:"export_dir_fin"`
 	FilePoolSize                       int      `json:"file_pool_size"`
 	IncompleteFilesExt                 bool     `json:"incomplete_files_ext"`
-	IpFilterEnabled                    bool     `json:"ip_filter_enabled"`
-	IpFilterPath                       string   `json:"ip_filter_path"`
-	IpFilterTrackers                   bool     `json:"ip_filter_trackers"`
+	IPFilterEnabled                    bool     `json:"ip_filter_enabled"`
+	IPFilterPath                       string   `json:"ip_filter_path"`
+	IPFilterTrackers                   bool     `json:"ip_filter_trackers"`
 	LimitLanPeers                      bool     `json:"limit_lan_peers"`
-	LimitTcpOverhead                   bool     `json:"limit_tcp_overhead"`
+	LimitTCPOverhead                   bool     `json:"limit_tcp_overhead"`
 	LimitUtpRate                       bool     `json:"limit_utp_rate"`
 	ListenPort                         int      `json:"listen_port"`
 	Locale                             string   `json:"locale"`
@@ -78,7 +78,7 @@ type AppPreferences struct {
 	MailNotificationEnabled            bool     `json:"mail_notification_enabled"`
 	MailNotificationPassword           string   `json:"mail_notification_password"`
 	MailNotificationSender             string   `json:"mail_notification_sender"`
-	MailNotificationSmtp               string   `json:"mail_notification_smtp"`
+	MailNotificationSMTP               string   `json:"mail_notification_smtp"`
 	MailNotificationSslEnabled         bool     `json:"mail_notification_ssl_enabled"`
 	MailNotificationUsername           string   `json:"mail_notification_username"`
 	MaxActiveDownloads                 int      `json:"max_active_downloads"`
@@ -98,7 +98,7 @@ type AppPreferences struct {
 	Pex                                bool     `json:"pex"`
 	PreallocateAll                     bool     `json:"preallocate_all"`
 	ProxyAuthEnabled                   bool     `json:"proxy_auth_enabled"`
-	ProxyIp                            string   `json:"proxy_ip"`
+	ProxyIP                            string   `json:"proxy_ip"`
 	ProxyPassword                      string   `json:"proxy_password"`
 	ProxyPeerConnections               bool     `json:"proxy_peer_connections"`
 	ProxyPort                          int      `json:"proxy_port"`
@@ -140,29 +140,29 @@ type AppPreferences struct {
 	UploadSlotsBehavior                int      `json:"upload_slots_behavior"`
 	Upnp                               bool     `json:"upnp"`
 	UpnpLeaseDuration                  int      `json:"upnp_lease_duration"`
-	UseHttps                           bool     `json:"use_https"`
-	UtpTcpMixedMode                    int      `json:"utp_tcp_mixed_mode"`
-	WebUiAddress                       string   `json:"web_ui_address"`
-	WebUiBanDuration                   int      `json:"web_ui_ban_duration"`
-	WebUiClickjackingProtectionEnabled bool     `json:"web_ui_clickjacking_protection_enabled"`
-	WebUiCsrfProtectionEnabled         bool     `json:"web_ui_csrf_protection_enabled"`
-	WebUiDomainList                    string   `json:"web_ui_domain_list"`
-	WebUiHostHeaderValidationEnabled   bool     `json:"web_ui_host_header_validation_enabled"`
-	WebUiHttpsCertPath                 string   `json:"web_ui_https_cert_path"`
-	WebUiHttpsKeyPath                  string   `json:"web_ui_https_key_path"`
-	WebUiMaxAuthFailCount              int      `json:"web_ui_max_auth_fail_count"`
-	WebUiPort                          int      `json:"web_ui_port"`
-	WebUiSecureCookieEnabled           bool     `json:"web_ui_secure_cookie_enabled"`
-	WebUiSessionTimeout                int      `json:"web_ui_session_timeout"`
-	WebUiUpnp                          bool     `json:"web_ui_upnp"`
-	WebUiUsername                      string   `json:"web_ui_username"`
-	WebUiPassword                      string   `json:"web_ui_password"`
+	UseHTTPS                           bool     `json:"use_https"`
+	UtpTCPMixedMode                    int      `json:"utp_tcp_mixed_mode"`
+	WebUIAddress                       string   `json:"web_ui_address"`
+	WebUIBanDuration                   int      `json:"web_ui_ban_duration"`
+	WebUIClickjackingProtectionEnabled bool     `json:"web_ui_clickjacking_protection_enabled"`
+	WebUICsrfProtectionEnabled         bool     `json:"web_ui_csrf_protection_enabled"`
+	WebUIDomainList                    string   `json:"web_ui_domain_list"`
+	WebUIHostHeaderValidationEnabled   bool     `json:"web_ui_host_header_validation_enabled"`
+	WebUIHTTPSCertPath                 string   `json:"web_ui_https_cert_path"`
+	WebUIHTTPSKeyPath                  string   `json:"web_ui_https_key_path"`
+	WebUIMaxAuthFailCount              int      `json:"web_ui_max_auth_fail_count"`
+	WebUIPort                          int      `json:"web_ui_port"`
+	WebUISecureCookieEnabled           bool     `json:"web_ui_secure_cookie_enabled"`
+	WebUISessionTimeout                int      `json:"web_ui_session_timeout"`
+	WebUIUpnp                          bool     `json:"web_ui_upnp"`
+	WebUIUsername                      string   `json:"web_ui_username"`
+	WebUIPassword                      string   `json:"web_ui_password"`
 	SSLKey                             string   `json:"ssl_key"`
 	SSLCert                            string   `json:"ssl_cert"`
 	RSSDownloadRepack                  string   `json:"rss_download_repack_proper_episodes"`
 	RSSSmartEpisodeFilters             string   `json:"rss_smart_episode_filters"`
-	WebUiUseCustomHttpHeaders          bool     `json:"web_ui_use_custom_http_headers"`
-	WebUiUseCustomHttpHeadersEnabled   bool     `json:"web_ui_use_custom_http_headers_enabled"`
+	WebUIUseCustomHTTPHeaders          bool     `json:"web_ui_use_custom_http_headers"`
+	WebUIUseCustomHTTPHeadersEnabled   bool     `json:"web_ui_use_custom_http_headers_enabled"`
 }
 
 type ScanDirs struct{}
@@ -217,7 +217,7 @@ func getAppPreferences() *AppPreferences {
 		AltUpLimit:                         10240,
 		AlternativeWebuiEnabled:            false,
 		AlternativeWebuiPath:               "",
-		AnnounceIp:                         "",
+		AnnounceIP:                         "",
 		AnnounceToAllTiers:                 true,
 		AnnounceToAllTrackers:              false,
 		AnonymousMode:                      false,
@@ -238,7 +238,7 @@ func getAppPreferences() *AppPreferences {
 		CurrentNetworkInterface:            "",
 		Dht:                                true,
 		DiskCache:                          -1,
-		DiskCacheTtl:                       60,
+		DiskCacheTTL:                       60,
 		DlLimit:                            0,
 		DontCountSlowTorrents:              false,
 		DyndnsDomain:                       "changeme.dyndns.org",
@@ -249,7 +249,7 @@ func getAppPreferences() *AppPreferences {
 		EmbeddedTrackerPort:                9000,
 		EnableCoalesceReadWrite:            true,
 		EnableEmbeddedTracker:              false,
-		EnableMultiConnectionsFromSameIp:   false,
+		EnableMultiConnectionsFromSameIP:   false,
 		EnableOsCache:                      true,
 		EnablePieceExtentAffinity:          false,
 		EnableSuperSeeding:                 false,
@@ -259,11 +259,11 @@ func getAppPreferences() *AppPreferences {
 		ExportDirFin:                       "",
 		FilePoolSize:                       40,
 		IncompleteFilesExt:                 false,
-		IpFilterEnabled:                    false,
-		IpFilterPath:                       "",
-		IpFilterTrackers:                   false,
+		IPFilterEnabled:                    false,
+		IPFilterPath:                       "",
+		IPFilterTrackers:                   false,
 		LimitLanPeers:                      true,
-		LimitTcpOverhead:                   false,
+		LimitTCPOverhead:                   false,
 		LimitUtpRate:                       true,
 		ListenPort:                         31193,
 		Locale:                             "en",
@@ -273,7 +273,7 @@ func getAppPreferences() *AppPreferences {
 		MailNotificationEnabled:            false,
 		MailNotificationPassword:           "",
 		MailNotificationSender:             "qBittorrentNotification@example.com",
-		MailNotificationSmtp:               "smtp.changeme.com",
+		MailNotificationSMTP:               "smtp.changeme.com",
 		MailNotificationSslEnabled:         false,
 		MailNotificationUsername:           "",
 		MaxActiveDownloads:                 maxActiveDownloads,
@@ -293,7 +293,7 @@ func getAppPreferences() *AppPreferences {
 		Pex:                                true,
 		PreallocateAll:                     false,
 		ProxyAuthEnabled:                   false,
-		ProxyIp:                            "0.0.0.0",
+		ProxyIP:                            "0.0.0.0",
 		ProxyPassword:                      "",
 		ProxyPeerConnections:               false,
 		ProxyPort:                          8080,
@@ -333,30 +333,30 @@ func getAppPreferences() *AppPreferences {
 		UploadSlotsBehavior:                0,
 		Upnp:                               true,
 		UpnpLeaseDuration:                  0,
-		UseHttps:                           false,
-		UtpTcpMixedMode:                    0,
-		WebUiAddress:                       "*",
-		WebUiBanDuration:                   3600,
-		WebUiClickjackingProtectionEnabled: true,
-		WebUiCsrfProtectionEnabled:         true,
-		WebUiDomainList:                    "*",
-		WebUiHostHeaderValidationEnabled:   true,
-		WebUiHttpsCertPath:                 "",
-		WebUiHttpsKeyPath:                  "",
-		WebUiMaxAuthFailCount:              5,
-		WebUiPort:                          8080,
-		WebUiSecureCookieEnabled:           true,
-		WebUiSessionTimeout:                3600,
-		WebUiUpnp:                          false,
+		UseHTTPS:                           false,
+		UtpTCPMixedMode:                    0,
+		WebUIAddress:                       "*",
+		WebUIBanDuration:                   3600,
+		WebUIClickjackingProtectionEnabled: true,
+		WebUICsrfProtectionEnabled:         true,
+		WebUIDomainList:                    "*",
+		WebUIHostHeaderValidationEnabled:   true,
+		WebUIHTTPSCertPath:                 "",
+		WebUIHTTPSKeyPath:                  "",
+		WebUIMaxAuthFailCount:              5,
+		WebUIPort:                          8080,
+		WebUISecureCookieEnabled:           true,
+		WebUISessionTimeout:                3600,
+		WebUIUpnp:                          false,
 
 		// Fields in the struct but not in the JSON (set to zero values):
-		WebUiPassword:                    "",
+		WebUIPassword:                    "",
 		SSLKey:                           "",
 		SSLCert:                          "",
 		RSSDownloadRepack:                "",
 		RSSSmartEpisodeFilters:           "",
-		WebUiUseCustomHttpHeaders:        false,
-		WebUiUseCustomHttpHeadersEnabled: false,
+		WebUIUseCustomHTTPHeaders:        false,
+		WebUIUseCustomHTTPHeadersEnabled: false,
 	}
 	return preferences
 }

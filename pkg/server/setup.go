@@ -9,38 +9,14 @@ import (
 	"github.com/sirrobot01/decypharr/internal/config"
 )
 
-// SetupState tracks the current setup wizard state.
-type SetupState struct {
-	Completed      bool   `json:"completed"`
-	CurrentStep    int    `json:"current_step"`
-	Username       string `json:"username,omitempty"`
-	DebridProvider string `json:"debrid_provider,omitempty"`
-	DebridAPIKey   string `json:"debrid_api_key,omitempty"`
-	MountFolder    string `json:"mount_folder,omitempty"`
-	DownloadFolder string `json:"download_folder,omitempty"`
-	MountSystem    string `json:"mount_system,omitempty"` // "dfs" or "rclone"
-	MountPath      string `json:"mount_path,omitempty"`
-	CacheDir       string `json:"cache_dir,omitempty"`
-}
-
-// SetupWizardRequest represents a request from the setup wizard.
-type SetupWizardRequest struct {
-	Step int            `json:"step"`
-	Data map[string]any `json:"data"`
-}
-
 // SetupWizardResponse represents the response from setup wizard.
 type SetupWizardResponse struct {
-	Success      bool        `json:"success"`
-	Message      string      `json:"message,omitempty"`
-	Error        string      `json:"error,omitempty"`
-	NextStep     int         `json:"next_step,omitempty"`
-	State        *SetupState `json:"state,omitempty"`
-	Validation   any         `json:"validation,omitempty"`
-	SetupNeeded  bool        `json:"setup_needed,omitempty"`
-	RedirectTo   string      `json:"redirect_to,omitempty"`
-	APIToken     string      `json:"api_token,omitempty"`
-	ConfigLoaded bool        `json:"config_loaded,omitempty"`
+	Success    bool   `json:"success"`
+	Message    string `json:"message,omitempty"`
+	Error      string `json:"error,omitempty"`
+	RedirectTo string `json:"redirect_to,omitempty"`
+	// APIToken is returned once, in token-only mode, so the user can copy it.
+	APIToken string `json:"api_token,omitempty"` //nolint:gosec // G117: deliberately shown once after token-only setup
 }
 
 // SetupHandler renders the setup wizard page.

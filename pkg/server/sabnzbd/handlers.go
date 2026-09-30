@@ -208,7 +208,7 @@ func (s *SABnzbd) handleListQueue(w http.ResponseWriter, r *http.Request) {
 			Cat:          nzb.Category,
 			TimeLeft:     nzb.TimeLeft,
 			Percentage:   fmt.Sprintf("%.0f", nzb.Percentage),
-			NzoId:        nzb.NzoId,
+			NzoID:        nzb.NzoID,
 			Unpackopts:   "3", // Default: +Repair/Unpack/Delete
 		}
 		queue.Slots = append(queue.Slots, slot)
@@ -240,27 +240,21 @@ func (s *SABnzbd) handleHistory(w http.ResponseWriter, r *http.Request) {
 
 // handleHistoryList returns the download history.
 func (s *SABnzbd) handleHistoryList(w http.ResponseWriter, r *http.Request) {
-	limitStr := r.FormValue("limit")
-	if limitStr == "" {
-		limitStr = "0"
-	}
-	limit, err := strconv.Atoi(limitStr)
-	if err != nil {
-		s.logger.Error().Err(err).Msg("Invalid limit parameter for history")
-		s.writeError(w, "Invalid limit parameter", http.StatusBadRequest)
-		return
-	}
-	if limit < 0 {
-		limit = 0
-	}
-	nzoIDsValue := r.FormValue("nzo_ids")
-	var nzoIDs []string
-	if nzoIDsValue != "" {
-		for id := range strings.SplitSeq(nzoIDsValue, ",") {
-			nzoIDs = append(nzoIDs, id)
+	// limit is validated for SABnzbd compatibility but not applied: history is
+	// not ordered newest-first, so truncating could hide a finished download
+	// from the Arr.
+	if limitStr := r.FormValue("limit"); limitStr != "" {
+		if _, err := strconv.Atoi(limitStr); err != nil {
+			s.logger.Error().Err(err).Msg("Invalid limit parameter for history")
+			s.writeError(w, "Invalid limit parameter", http.StatusBadRequest)
+			return
 		}
 	}
-	history, err := s.getHistory(r.Context(), limit, nzoIDs)
+	var nzoIDs []string
+	if nzoIDsValue := r.FormValue("nzo_ids"); nzoIDsValue != "" {
+		nzoIDs = strings.Split(nzoIDsValue, ",")
+	}
+	history, err := s.getHistory(r.Context(), nzoIDs)
 	if err != nil {
 		s.writeError(w, "Failed to read download history", http.StatusInternalServerError)
 		return
@@ -345,7 +339,7 @@ func (s *SABnzbd) handleAddURL(w http.ResponseWriter, r *http.Request) {
 
 	response := AddNZBResponse{
 		Status: true,
-		NzoIds: nzoIDs,
+		NzoIDs: nzoIDs,
 	}
 
 	// Include partial errors if some URLs failed
@@ -465,7 +459,7 @@ func (s *SABnzbd) handleAddFile(w http.ResponseWriter, r *http.Request) {
 
 	response := AddNZBResponse{
 		Status: true,
-		NzoIds: nzoIDs,
+		NzoIDs: nzoIDs,
 	}
 
 	// Include partial errors if some files failed
@@ -535,7 +529,7 @@ func (s *SABnzbd) handleStatus(w http.ResponseWriter, _ *http.Request) {
 
 // Helper methods
 
-func (s *SABnzbd) getHistory(ctx context.Context, limit int, nzoIDs []string) (History, error) {
+func (s *SABnzbd) getHistory(ctx context.Context, nzoIDs []string) (History, error) {
 	cat := getCategory(ctx)
 	completed, err := s.manager.Queue().
 		ListFilter(cat, config.ProtocolNZB, storage.EntryStatePausedUP, nzoIDs, "added_on", false)
@@ -557,7 +551,7 @@ func (s *SABnzbd) getHistory(ctx context.Context, limit int, nzoIDs []string) (H
 			Status:      mapStorageStateToSABStatus(item.State),
 			Name:        item.Name,
 			NZBName:     item.Name,
-			NzoId:       item.InfoHash,
+			NzoID:       item.InfoHash,
 			Category:    item.Category,
 			FailMessage: item.LastError,
 			Bytes:       item.Size,
@@ -571,7 +565,7 @@ func (s *SABnzbd) getHistory(ctx context.Context, limit int, nzoIDs []string) (H
 			Status:      mapStorageStateToSABStatus(item.State),
 			Name:        item.Name,
 			NZBName:     item.Name,
-			NzoId:       item.InfoHash,
+			NzoID:       item.InfoHash,
 			Category:    item.Category,
 			FailMessage: item.LastError,
 			Bytes:       item.Size,

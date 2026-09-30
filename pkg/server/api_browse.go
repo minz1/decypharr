@@ -392,7 +392,7 @@ func (s *Server) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 		s.handleTorrentDownload(w, r, entry, file)
 		return
 	case config.ProtocolNZB:
-		s.handleUsenetDownload(w, r, torrentName, file)
+		s.handleUsenetDownload(w, r, file)
 		return
 	default:
 		s.logger.Error().Msgf("Unsupported protocol: %s for %s/%s", entry.Protocol, entry.Name, fileName)
@@ -420,7 +420,7 @@ func (s *Server) handleTorrentDownload(
 	http.Redirect(w, r, link.DownloadLink, http.StatusFound)
 }
 
-func (s *Server) handleUsenetDownload(w http.ResponseWriter, r *http.Request, entryName string, file *storage.File) {
+func (s *Server) handleUsenetDownload(w http.ResponseWriter, r *http.Request, file *storage.File) {
 	w.Header().Set("Content-Type", utils.GetContentType(file.Name))
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", file.Name))
 	w.Header().Set("Content-Length", strconv.FormatInt(file.Size, 10))

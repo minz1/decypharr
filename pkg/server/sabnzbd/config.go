@@ -5,15 +5,6 @@ type ConfigResponse struct {
 	Config *Config `json:"config"`
 }
 
-type ConfigNewzbin struct {
-	Username     string `json:"username"`
-	BookmarkRate int    `json:"bookmark_rate"`
-	Url          string `json:"url"`
-	Bookmarks    int    `json:"bookmarks"`
-	Password     string `json:"password"`
-	Unbookmark   int    `json:"unbookmark"`
-}
-
 // Category represents a SABnzbd category.
 type Category struct {
 	Name     string `json:"name"`
