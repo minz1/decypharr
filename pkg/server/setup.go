@@ -24,18 +24,10 @@ func (s *Server) SetupHandler(w http.ResponseWriter, r *http.Request) {
 	cfg := config.Get()
 
 	if err := cfg.SetupComplete(); err == nil {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+		s.redirectTo(w, r, "/")
 		return
 	}
-	data := map[string]any{
-		"URLBase": cfg.URLBase,
-		"Page":    "setup",
-		"Title":   "Setup Wizard",
-	}
-	err := s.templates.ExecuteTemplate(w, "setup_layout", data)
-	if err != nil {
-		s.logger.Error().Err(err).Msg("template error")
-	}
+	s.renderPage(w, "setup_layout", "setup", "Setup Wizard", nil)
 }
 
 // sendSetupError sends an error response.

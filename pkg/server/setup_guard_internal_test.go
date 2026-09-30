@@ -61,6 +61,26 @@ func TestSetupEndpointsProtectStoredCredentials(t *testing.T) {
 	}
 }
 
+// /register (once closed) and /setup (once complete) redirected to "/",
+// escaping a reverse-proxy URL base.
+//
+//nolint:paralleltest // mutates the process-wide config singleton
+func TestPageRedirectsKeepURLBase(t *testing.T) {
+	config.Reset()
+	config.SetConfigPath(t.TempDir())
+	t.Cleanup(config.Reset)
+	if err := config.Get().SetCredentials("admin", "secret"); err != nil {
+		t.Fatal(err)
+	}
+	s := newTestServer(t)
+	s.urlBase = "/decypharr/"
+	w := httptest.NewRecorder()
+	s.RegisterHandler(w, httptest.NewRequest(http.MethodGet, "/decypharr/register", nil))
+	if got := w.Header().Get("Location"); got != "/decypharr/" {
+		t.Fatalf("closed /register redirected to %q, want /decypharr/", got)
+	}
+}
+
 // chi never rewrites r.URL.Path, so under a URL base the skip list never
 // matched and /base/setup redirected to itself forever.
 //
