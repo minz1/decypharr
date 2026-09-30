@@ -138,15 +138,17 @@ type Client struct {
 	sockReadBuf  int
 	sockWriteBuf int
 
-	// Pool lifecycle tuning, resolved at construction from DefaultTimeouts
-	// with an optional cfg.Usenet.ConnIdleTimeout override. Kept per-client
-	// (rather than on the package-level timeouts var) so config reloads that
-	// rebuild the client can't race connections still using the old one.
+	// Pool lifecycle tuning, resolved at construction from the default
+	// timeout constants with an optional cfg.Usenet.ConnIdleTimeout
+	// override. Kept per-client so config reloads that rebuild the client
+	// can't race connections still using the old one.
 	idleTimeout    time.Duration // close pooled conns unused for this long
 	staleThreshold time.Duration // verify-ping on checkout after this much inactivity
 	pingInterval   time.Duration // reaper keepalive-ping cadence for idle conns
 	pingTimeout    time.Duration // budget for a checkout verify-ping
 	keepalivePing  time.Duration // budget for a reaper keepalive ping
+	// handshakeTimeout bounds greeting + auth on dial; 0 = default.
+	handshakeTimeout time.Duration
 }
 
 // SpeedTestResult holds the result of a provider speed test.
@@ -201,115 +203,43 @@ func releaseConnectionEntry(entry *connectionEntry) {
 	connectionEntryPool.Put(entry)
 }
 
-// TimeoutConfig holds all NNTP timeout settings in one place.
-// This provides a single location to tune timeout behavior.
-type TimeoutConfig struct {
-	// Connection establishment timeout
-	DialTimeout time.Duration
-	// TCP keepalive interval
-	KeepAlive time.Duration
-	// Auth/handshake deadline after connection
-	HandshakeTimeout time.Duration
-	// Read deadline for streaming segment data
-	StreamBodyTimeout time.Duration
-	// Deadline for the verify-ping (DATE) on checkout. This one is on the
-	// critical path — a reader is already waiting — so it stays tight and
-	// fails over to a fresh dial rather than waiting out a slow answer.
-	PingTimeout time.Duration
-	// Deadline for the reaper's background keepalive ping (DATE). Nobody is
-	// waiting on it, so it gets a wider budget: pings share the link with
-	// bulk BODY transfers, and under a saturated downlink a round trip can
-	// take seconds. A tight budget there kills warm connections that are
-	// merely queued behind a download, forcing a needless TCP+TLS+AUTH.
-	KeepalivePingTimeout time.Duration
-	// Health check connections idle longer than this
-	StaleThreshold time.Duration
-	// Close connections idle longer than this
-	IdleTimeout time.Duration
-	// Keepalive-ping idle pooled connections whose last activity (use or
-	// ping) is older than this, instead of letting them go stale
-	PingInterval time.Duration
-	// How often to check for idle connections
-	ReaperInterval time.Duration
-}
-
-// DefaultTimeouts returns production-tuned timeout values.
+// NNTP timeouts.
 //
-// IdleTimeout is deliberately long: players read in bursts (fill their
+// defaultIdleTimeout is deliberately long: players read in bursts (fill their
 // buffer, go quiet for tens of seconds, read again), and closing warm
-// connections between bursts forces a TCP+TLS+AUTH reconnect storm on
-// every resume — measured at ~38k reconnects/week in production with the
-// old 20s value. Stale sessions are handled by keepalive DATE pings
-// (PingInterval, in the reaper) plus a verify-ping on checkout
-// (StaleThreshold), not by closing early.
-var DefaultTimeouts = TimeoutConfig{
-	DialTimeout:       10 * time.Second,
-	KeepAlive:         30 * time.Second,
-	HandshakeTimeout:  10 * time.Second,
-	StreamBodyTimeout: 60 * time.Second,
-	PingTimeout:       1500 * time.Millisecond,
-	// Wide enough to ride out queueing delay on a saturated link. A dead
-	// path still costs only one of these per sweep: the first timeout
-	// flushes the pool instead of pinging the rest of the batch.
-	KeepalivePingTimeout: 5 * time.Second,
-	StaleThreshold:       60 * time.Second,
-	IdleTimeout:          5 * time.Minute,
-	PingInterval:         30 * time.Second,
-	ReaperInterval:       5 * time.Second,
-}
-
-// Package-level timeouts used by all clients.
-var timeouts = normalizeTimeouts(DefaultTimeouts)
-
-func normalizeTimeouts(in TimeoutConfig) TimeoutConfig {
-	if in.DialTimeout <= 0 {
-		in.DialTimeout = 10 * time.Second
-	}
-	if in.KeepAlive <= 0 {
-		in.KeepAlive = 30 * time.Second
-	}
-	if in.HandshakeTimeout <= 0 {
-		in.HandshakeTimeout = 10 * time.Second
-	}
-	if in.StreamBodyTimeout <= 0 {
-		in.StreamBodyTimeout = 60 * time.Second
-	}
-	if in.PingTimeout <= 0 {
-		in.PingTimeout = 1500 * time.Millisecond
-	}
-	if in.KeepalivePingTimeout <= 0 {
-		in.KeepalivePingTimeout = 5 * time.Second
-	}
-	if in.IdleTimeout <= 0 {
-		in.IdleTimeout = 5 * time.Minute
-	}
-	// Keep stale checks meaningful: stale must be >0 and below idle timeout.
-	if in.StaleThreshold <= 0 || in.StaleThreshold >= in.IdleTimeout {
-		in.StaleThreshold = in.IdleTimeout / 2
-		if in.StaleThreshold <= 0 {
-			in.StaleThreshold = 10 * time.Second
-		}
-	}
-	// Keepalive pings must fire well inside the idle window to be useful.
-	if in.PingInterval <= 0 || in.PingInterval >= in.IdleTimeout {
-		in.PingInterval = min(30*time.Second, in.IdleTimeout/2)
-	}
-	// A keepalive ping holds a pool slot while it runs. Keep that below the
-	// cadence at which pings are issued so a sweep cannot still be waiting
-	// when the next one is due.
-	if in.KeepalivePingTimeout > in.PingInterval {
-		in.KeepalivePingTimeout = in.PingInterval
-	}
-	if in.ReaperInterval <= 0 {
-		in.ReaperInterval = 5 * time.Second
-	}
-	// Sweep frequently enough to avoid long idle overhang.
-	maxReaperInterval := max(in.IdleTimeout/4, time.Second)
-	if in.ReaperInterval > maxReaperInterval {
-		in.ReaperInterval = maxReaperInterval
-	}
-	return in
-}
+// connections between bursts forces a TCP+TLS+AUTH reconnect storm on every
+// resume — measured at ~38k reconnects/week in production with the old 20s
+// value. Stale sessions are handled by keepalive DATE pings
+// (defaultPingInterval, in the reaper) plus a verify-ping on checkout
+// (defaultStaleThreshold), not by closing early.
+const (
+	// dialTimeout bounds connection establishment.
+	dialTimeout = 10 * time.Second
+	// tcpKeepAlive is the TCP keepalive interval.
+	tcpKeepAlive = 30 * time.Second
+	// defaultHandshakeTimeout bounds greeting + auth, and command writes.
+	defaultHandshakeTimeout = 10 * time.Second
+	// streamBodyTimeout is the read deadline for streaming segment data.
+	streamBodyTimeout = 60 * time.Second
+	// defaultPingTimeout bounds the verify-ping (DATE) on checkout. It is on
+	// the critical path — a reader is already waiting — so it stays tight
+	// and fails over to a fresh dial rather than waiting out a slow answer.
+	defaultPingTimeout = 1500 * time.Millisecond
+	// defaultKeepalivePingTimeout bounds the reaper's background keepalive
+	// ping. Nobody waits on it, so it rides out queueing delay on a
+	// saturated link; a dead path still costs only one of these per sweep
+	// because the first timeout flushes the pool.
+	defaultKeepalivePingTimeout = 5 * time.Second
+	// defaultStaleThreshold: verify-ping connections idle longer than this.
+	defaultStaleThreshold = 60 * time.Second
+	// defaultIdleTimeout: close pooled connections unused for this long.
+	defaultIdleTimeout = 5 * time.Minute
+	// defaultPingInterval: keepalive-ping idle pooled connections whose last
+	// activity (use or ping) is older than this.
+	defaultPingInterval = 30 * time.Second
+	// reaperInterval is how often idle connections are swept.
+	reaperInterval = 5 * time.Second
+)
 
 // buildPools creates one ProviderPool per provider. Pools are keyed by
 // provider ID (host:port/username), never bare host: dual-account setups
@@ -365,28 +295,17 @@ func NewClient(cfg *config.Config) (*Client, error) {
 		speedTestResults: xsync.NewMap[string, SpeedTestResult](),
 		sockReadBuf:      parseSockBuf(cfg.Usenet.SocketReadBuffer),
 		sockWriteBuf:     parseSockBuf(cfg.Usenet.SocketWriteBuffer),
-		idleTimeout:      timeouts.IdleTimeout,
-		staleThreshold:   timeouts.StaleThreshold,
-		pingInterval:     timeouts.PingInterval,
-		pingTimeout:      timeouts.PingTimeout,
-		keepalivePing:    timeouts.KeepalivePingTimeout,
+		idleTimeout:      defaultIdleTimeout,
+		staleThreshold:   defaultStaleThreshold,
+		pingInterval:     defaultPingInterval,
+		pingTimeout:      defaultPingTimeout,
+		keepalivePing:    defaultKeepalivePingTimeout,
 	}
-	if cfg.Usenet.ConnIdleTimeout != "" {
-		if d, err := utils.ParseDuration(cfg.Usenet.ConnIdleTimeout); err != nil || d <= 0 {
-			cm.logger.Warn().Str("conn_idle_timeout", cfg.Usenet.ConnIdleTimeout).
-				Msg("invalid conn_idle_timeout, using default")
+	if value := cfg.Usenet.ConnIdleTimeout; value != "" {
+		if d, err := utils.ParseDuration(value); err != nil || d <= 0 {
+			cm.logger.Warn().Str("conn_idle_timeout", value).Msg("invalid conn_idle_timeout, using default")
 		} else {
-			cm.idleTimeout = d
-			// Keep the derived thresholds inside the configured window.
-			if cm.staleThreshold >= cm.idleTimeout {
-				cm.staleThreshold = cm.idleTimeout / 2
-			}
-			if cm.pingInterval >= cm.idleTimeout {
-				cm.pingInterval = cm.idleTimeout / 2
-			}
-			if cm.keepalivePing > cm.pingInterval {
-				cm.keepalivePing = cm.pingInterval
-			}
+			cm.setIdleTimeout(d)
 		}
 	}
 	if value := cfg.Usenet.StreamBackupWait; value != "" && value != "0" {
@@ -402,6 +321,20 @@ func NewClient(cfg *config.Config) (*Client, error) {
 	// Start background reaper
 	go cm.reaper()
 	return cm, nil
+}
+
+// setIdleTimeout applies a configured idle window and keeps the derived
+// thresholds strictly inside it.
+func (c *Client) setIdleTimeout(d time.Duration) {
+	c.idleTimeout = d
+	if c.staleThreshold >= d {
+		c.staleThreshold = d / 2
+	}
+	if c.pingInterval >= d {
+		c.pingInterval = d / 2
+	}
+	// A keepalive ping may not outlast the cadence it is issued at.
+	c.keepalivePing = min(c.keepalivePing, c.pingInterval)
 }
 
 // put returns a connection to the pool and releases the slot.
@@ -941,8 +874,8 @@ func (c *Client) createConnection(ctx context.Context, provider config.UsenetPro
 	var err error
 
 	dialer := &net.Dialer{
-		Timeout:   timeouts.DialTimeout,
-		KeepAlive: timeouts.KeepAlive,
+		Timeout:   dialTimeout,
+		KeepAlive: tcpKeepAlive,
 		Control:   c.socketControl(),
 	}
 
@@ -1002,7 +935,11 @@ func (c *Client) createConnection(ctx context.Context, provider config.UsenetPro
 
 	// Set deadline for handshake (greeting + auth)
 	// If the server doesn't respond quickly during setup, we should abort.
-	_ = netConn.SetDeadline(time.Now().Add(timeouts.HandshakeTimeout))
+	handshake := c.handshakeTimeout
+	if handshake <= 0 {
+		handshake = defaultHandshakeTimeout
+	}
+	_ = netConn.SetDeadline(time.Now().Add(handshake))
 
 	// Read greeting
 	line, err := reader.ReadString('\n')
@@ -1035,7 +972,7 @@ func (c *Client) createConnection(ctx context.Context, provider config.UsenetPro
 
 // reaper periodically closes idle connections.
 func (c *Client) reaper() {
-	ticker := time.NewTicker(timeouts.ReaperInterval)
+	ticker := time.NewTicker(reaperInterval)
 	defer ticker.Stop()
 
 	for range ticker.C {
