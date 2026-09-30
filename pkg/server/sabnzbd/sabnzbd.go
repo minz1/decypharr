@@ -21,6 +21,10 @@ type SABnzbd struct {
 	config            *Config
 }
 
+// defaultRefreshInterval applies when the configured one does not parse.
+const defaultRefreshInterval = 30 * time.Second
+
+// New builds the SABnzbd-compatible API over mgr.
 func New(manager *manager.Manager) *SABnzbd {
 	cfg := config.Get()
 	var defaultCategories []string
@@ -31,7 +35,7 @@ func New(manager *manager.Manager) *SABnzbd {
 	}
 	refreshInterval, err := utils.ParseDuration(cfg.RefreshInterval)
 	if err != nil {
-		refreshInterval = 30 * time.Second
+		refreshInterval = defaultRefreshInterval
 	}
 	sb := &SABnzbd{
 		downloadFolder:    cfg.DownloadFolder,

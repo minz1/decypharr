@@ -15,12 +15,14 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
+const streamCopyBufSize = 1 << 20
+
 // streamCopyBufPool holds the copy buffers StreamResponse pipes sessions
 // through; every session.Read costs a lock pass and watchdog arming, so
 // copy granularity multiplies all of it.
 var streamCopyBufPool = sync.Pool{
 	New: func() any {
-		b := make([]byte, 1<<20)
+		b := make([]byte, streamCopyBufSize)
 		return &b
 	},
 }

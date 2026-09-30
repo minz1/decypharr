@@ -18,7 +18,7 @@ func (s *Server) handleIngests(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 
-	utils.JSONResponse(w, ingests, 200)
+	utils.JSONResponse(w, ingests, http.StatusOK)
 }
 
 func (s *Server) handleIngestsByDebrid(w http.ResponseWriter, r *http.Request) {
@@ -34,7 +34,7 @@ func (s *Server) handleIngestsByDebrid(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	utils.JSONResponse(w, ingests, 200)
+	utils.JSONResponse(w, ingests, http.StatusOK)
 }
 
 // handleSpeedTest runs a speed test for a specific provider.

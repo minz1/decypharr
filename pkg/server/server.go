@@ -37,6 +37,12 @@ var assetsEmbed embed.FS
 var imagesEmbed embed.FS
 
 // Server is the HTTP front end: web UI, JSON API and the compat APIs.
+const (
+	sessionMaxAge = 7 * 24 * time.Hour
+	// restartDelay lets the triggering response flush before services stop.
+	restartDelay = 200 * time.Millisecond
+)
+
 type Server struct {
 	router       *chi.Mux
 	logger       zerolog.Logger
@@ -77,7 +83,7 @@ func New(mgr *manager.Manager) *Server {
 	cookieStore := sessions.NewCookieStore([]byte(cfg.SecretKey()))
 	cookieStore.Options = &sessions.Options{
 		Path:     "/",
-		MaxAge:   86400 * 7,
+		MaxAge:   int(sessionMaxAge.Seconds()),
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	}
@@ -149,7 +155,7 @@ func (s *Server) SetRestartFunc(restartFunc func()) {
 
 func (s *Server) Restart() {
 	if s.restartFunc != nil {
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(restartDelay)
 		s.restartFunc()
 	} else {
 		s.logger.Warn().Msg("Restart function not set")

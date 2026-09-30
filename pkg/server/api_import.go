@@ -15,6 +15,9 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/manager"
 )
 
+// maxConcurrentImports bounds how many prepared imports are submitted at once.
+const maxConcurrentImports = 10
+
 func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
@@ -196,7 +199,7 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Only prepared inputs enter the bounded submission phase.
-	submitter := iter.Iterator[addTask]{MaxGoroutines: 10}
+	submitter := iter.Iterator[addTask]{MaxGoroutines: maxConcurrentImports}
 	submitter.ForEach(tasks, func(task *addTask) {
 		req := task.request
 		var err error

@@ -50,9 +50,12 @@ func (q *QBit) handlePreferences(w http.ResponseWriter, _ *http.Request) {
 	utils.JSONResponse(w, preferences, http.StatusOK)
 }
 
+// reportedBitness is the build bitness the fake qBittorrent reports.
+const reportedBitness = 64
+
 func (q *QBit) handleBuildInfo(w http.ResponseWriter, _ *http.Request) {
 	res := BuildInfo{
-		Bitness:    64,
+		Bitness:    reportedBitness,
 		Boost:      "1.75.0",
 		Libtorrent: "1.2.11.0",
 		Openssl:    "1.1.1i",
