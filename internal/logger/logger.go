@@ -13,19 +13,39 @@ import (
 	"github.com/sirrobot01/decypharr/internal/config"
 )
 
-var (
-	once   sync.Once
-	logger zerolog.Logger
-
-	rotatingLogFileOnce sync.Once
-	rotatingLogFile     *lumberjack.Logger
+// Log file rotation policy.
+const (
+	logMaxSizeMB  = 10
+	logMaxAgeDays = 15
+	logMaxBackups = 10
 )
 
+// defaultLogger is the process-wide logger returned by Default.
+//
+//nolint:gochecknoglobals // process-wide singleton, built once on first use
+var defaultLogger = sync.OnceValue(func() zerolog.Logger { return New("decypharr") })
+
+// sharedRotatingLogFile returns the process-wide lumberjack writer. All
+// component loggers share one rotator so they don't race on the same file
+// (each *lumberjack.Logger runs its own mill goroutine and rotation cycle).
+//
+//nolint:gochecknoglobals // process-wide singleton, one rotator per log file
+var sharedRotatingLogFile = sync.OnceValue(func() *lumberjack.Logger {
+	return &lumberjack.Logger{
+		Filename:   filepath.Join(GetLogPath(), "decypharr.log"),
+		MaxSize:    logMaxSizeMB,
+		MaxAge:     logMaxAgeDays,
+		MaxBackups: logMaxBackups,
+		Compress:   true,
+	}
+})
+
+// GetLogPath returns <config dir>/logs, creating it if needed.
 func GetLogPath() string {
 	logsDir := filepath.Join(config.GetMainPath(), "logs")
 
 	if _, err := os.Stat(logsDir); os.IsNotExist(err) {
-		if mkdirAllErr := os.MkdirAll(logsDir, 0755); mkdirAllErr != nil {
+		if mkdirAllErr := os.MkdirAll(logsDir, 0o750); mkdirAllErr != nil {
 			panic(fmt.Sprintf("Failed to create logs directory: %v", mkdirAllErr))
 		}
 	}
@@ -33,26 +53,12 @@ func GetLogPath() string {
 	return logsDir
 }
 
-// sharedRotatingLogFile returns the process-wide lumberjack writer. All
-// component loggers share one rotator so they don't race on the same file
-// (each *lumberjack.Logger runs its own mill goroutine and rotation cycle).
-func sharedRotatingLogFile() *lumberjack.Logger {
-	rotatingLogFileOnce.Do(func() {
-		rotatingLogFile = &lumberjack.Logger{
-			Filename:   filepath.Join(GetLogPath(), "decypharr.log"),
-			MaxSize:    10,
-			MaxAge:     15,
-			MaxBackups: 10,
-			Compress:   true,
-		}
-	})
-	return rotatingLogFile
-}
-
+// New returns a logger that tags messages with prefix and writes to stdout
+// and the rotating log file at the configured level.
 func New(prefix string) zerolog.Logger {
 	level := config.Get().LogLevel
 
-	rotatingLogFile := sharedRotatingLogFile()
+	logFile := sharedRotatingLogFile()
 
 	consoleWriter := zerolog.ConsoleWriter{
 		Out:        os.Stdout,
@@ -84,7 +90,7 @@ func New(prefix string) zerolog.Logger {
 	}
 
 	fileWriter := zerolog.ConsoleWriter{
-		Out:        rotatingLogFile,
+		Out:        logFile,
 		TimeFormat: "2006-01-02 15:04:05",
 		NoColor:    true, // No colors in file output
 		FormatLevel: func(i any) string {
@@ -97,7 +103,7 @@ func New(prefix string) zerolog.Logger {
 
 	multi := zerolog.MultiLevelWriter(consoleWriter, fileWriter)
 
-	logger := zerolog.New(multi).
+	l := zerolog.New(multi).
 		With().
 		Timestamp().
 		Logger().
@@ -107,22 +113,20 @@ func New(prefix string) zerolog.Logger {
 	level = strings.ToLower(level)
 	switch level {
 	case "debug":
-		logger = logger.Level(zerolog.DebugLevel)
+		l = l.Level(zerolog.DebugLevel)
 	case "info":
-		logger = logger.Level(zerolog.InfoLevel)
+		l = l.Level(zerolog.InfoLevel)
 	case "warn":
-		logger = logger.Level(zerolog.WarnLevel)
+		l = l.Level(zerolog.WarnLevel)
 	case "error":
-		logger = logger.Level(zerolog.ErrorLevel)
+		l = l.Level(zerolog.ErrorLevel)
 	case "trace":
-		logger = logger.Level(zerolog.TraceLevel)
+		l = l.Level(zerolog.TraceLevel)
 	}
-	return logger
+	return l
 }
 
+// Default returns the shared "decypharr" logger.
 func Default() zerolog.Logger {
-	once.Do(func() {
-		logger = New("decypharr")
-	})
-	return logger
+	return defaultLogger()
 }
