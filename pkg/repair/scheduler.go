@@ -241,11 +241,16 @@ func (r *Service) nextScheduledRun() *time.Time {
 }
 
 func (r *Service) reconcileOrphans() {
-	s := r.storage
-	if s == nil {
+	if r.storage == nil {
 		return
 	}
+	r.cancelOrphanRuns()
+	r.revertStuckHealths()
+}
 
+// cancelOrphanRuns marks runs a previous process left running as cancelled.
+func (r *Service) cancelOrphanRuns() {
+	s := r.storage
 	if runs, err := s.ListRepairRuns(); err == nil {
 		now := time.Now()
 		n := 0
@@ -270,7 +275,11 @@ func (r *Service) reconcileOrphans() {
 			r.logger.Info().Int("count", n).Msg("Reconciled orphaned repair runs")
 		}
 	}
+}
 
+// revertStuckHealths restores entries a crashed run left in "repairing".
+func (r *Service) revertStuckHealths() {
+	s := r.storage
 	cleared := 0
 	_ = s.ForEachEntryHealth(func(state *storage.EntryHealth) error {
 		if state == nil || state.ActiveRunID == "" {

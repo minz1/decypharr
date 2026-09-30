@@ -71,6 +71,8 @@ func (r *Service) probeEntry(
 		h.FailureReason = topReason(broken)
 	case storage.HealthUnknown:
 		h.FailureReason = firstDeferredReason(results)
+	case storage.HealthRepairing, storage.HealthUnsupported, storage.HealthStale:
+		// rollupStatus never produces these.
 	}
 	r.saveHealth(h)
 	return h
@@ -97,11 +99,11 @@ func (r *Service) probeFiles(
 	g.SetLimit(repairFilesPerEntry)
 	for i, name := range names {
 		g.Go(func() error {
-			if gctx.Err() != nil {
-				results[i] = fileResult{name: name, reason: "context_cancelled"}
-				return nil
+			result := fileResult{name: name, reason: "context_cancelled"}
+			if gctx.Err() == nil {
+				result = r.probeFile(gctx, c, name, nzb, opts)
 			}
-			results[i] = r.probeFile(gctx, c, name, nzb, opts)
+			results[i] = result
 			return nil
 		})
 	}

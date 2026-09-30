@@ -214,20 +214,30 @@ func (r *Service) attachArrContext(ctx context.Context, candidate *candidate) {
 		managedFiles := r.managedArrFileIndex(instance.Name)
 		for _, content := range media {
 			grouped, _ := collectArrFiles(content, managedFiles)
-			for entryPath, files := range grouped {
-				if filepath.Clean(filepath.Base(entryPath)) != candidate.name {
-					continue
-				}
-				if candidate.contentMap == nil {
-					candidate.contentMap = make(map[string]arr.ContentFile)
-				}
-				candidate.arrName = instance.Name
-				candidate.arrKind = arrKindFromType(kind)
-				for _, file := range files {
-					file.EntryName = candidate.name
-					candidate.contentMap[file.TargetPath] = file
-				}
-			}
+			attachGroupedFiles(candidate, instance.Name, arrKindFromType(kind), grouped)
+		}
+	}
+}
+
+// attachGroupedFiles records the Arr files grouped under candidate's entry.
+func attachGroupedFiles(
+	candidate *candidate,
+	arrName string,
+	kind storage.ArrKind,
+	grouped map[string][]arr.ContentFile,
+) {
+	for entryPath, files := range grouped {
+		if filepath.Clean(filepath.Base(entryPath)) != candidate.name {
+			continue
+		}
+		if candidate.contentMap == nil {
+			candidate.contentMap = make(map[string]arr.ContentFile)
+		}
+		candidate.arrName = arrName
+		candidate.arrKind = kind
+		for _, file := range files {
+			file.EntryName = candidate.name
+			candidate.contentMap[file.TargetPath] = file
 		}
 	}
 }
@@ -295,6 +305,8 @@ func arrKindFromType(kind arr.Type) storage.ArrKind {
 		return storage.ArrKindLidarr
 	case arr.Readarr:
 		return storage.ArrKindReadarr
+	case arr.Others:
+		return storage.ArrKindOther
 	default:
 		return storage.ArrKindOther
 	}
