@@ -88,6 +88,13 @@ func (q *QBit) addTorrent(
 	return nil
 }
 
+// Plausible swarm figures for properties: debrid entries have no real swarm.
+const (
+	fakeSwarmSize  = 100
+	fakePeersTotal = 2
+)
+
+// GetTorrentProperties reports qBittorrent-style properties for t.
 func (q *QBit) GetTorrentProperties(t *storage.Entry) *TorrentProperties {
 	return &TorrentProperties{
 		AdditionDate:       t.AddedOn.Unix(),
@@ -102,12 +109,12 @@ func (q *QBit) GetTorrentProperties(t *storage.Entry) *TorrentProperties {
 		TotalUploaded:      t.Bytes,
 		TotalDownloaded:    t.Bytes,
 		LastSeen:           time.Now().Unix(),
-		NbConnectionsLimit: 100,
+		NbConnectionsLimit: fakeSwarmSize,
 		Peers:              0,
-		PeersTotal:         2,
+		PeersTotal:         fakePeersTotal,
 		SeedingTime:        1,
-		Seeds:              100,
-		ShareRatio:         100,
+		Seeds:              fakeSwarmSize,
+		ShareRatio:         fakeSwarmSize,
 	}
 }
 

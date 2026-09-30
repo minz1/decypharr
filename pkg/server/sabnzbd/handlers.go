@@ -170,14 +170,12 @@ func (s *SABnzbd) handleListQueue(w http.ResponseWriter, r *http.Request) {
 		Slots:   []QueueSlot{},
 	}
 
-	const MB = 1024 * 1024
-
 	// Convert NZBs to queue slots
 	for index, e := range entries {
 		nzb := convertToSABnzbdNZB(e)
 
 		// Calculate size values as strings (SABnzbd format)
-		sizeMB := float64(e.Size) / float64(MB)
+		sizeMB := float64(e.Size) / float64(mb)
 		mbLeft := sizeMB * (1 - e.Progress)
 		sizeStr := formatSize(e.Size)
 		sizeLeftBytes := int64(float64(e.Size) * (1 - e.Progress))
@@ -640,22 +638,15 @@ func (s *SABnzbd) addNZBFile(
 
 // formatSize formats bytes to human-readable string (SABnzbd format).
 func formatSize(bytes int64) string {
-	const (
-		KB = 1024
-		MB = KB * 1024
-		GB = MB * 1024
-		TB = GB * 1024
-	)
-
 	switch {
-	case bytes >= TB:
-		return fmt.Sprintf("%.2f T", float64(bytes)/float64(TB))
-	case bytes >= GB:
-		return fmt.Sprintf("%.2f G", float64(bytes)/float64(GB))
-	case bytes >= MB:
-		return fmt.Sprintf("%.2f M", float64(bytes)/float64(MB))
-	case bytes >= KB:
-		return fmt.Sprintf("%.2f K", float64(bytes)/float64(KB))
+	case bytes >= tb:
+		return fmt.Sprintf("%.2f T", float64(bytes)/float64(tb))
+	case bytes >= gb:
+		return fmt.Sprintf("%.2f G", float64(bytes)/float64(gb))
+	case bytes >= mb:
+		return fmt.Sprintf("%.2f M", float64(bytes)/float64(mb))
+	case bytes >= kb:
+		return fmt.Sprintf("%.2f K", float64(bytes)/float64(kb))
 	default:
 		return fmt.Sprintf("%d B", bytes)
 	}

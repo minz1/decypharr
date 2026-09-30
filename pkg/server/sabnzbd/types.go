@@ -2,6 +2,7 @@ package sabnzbd
 
 import (
 	"fmt"
+	"time"
 
 	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/storage"
@@ -207,24 +208,29 @@ type File struct {
 	Set      string `json:"set,omitempty"` // Optional set name
 }
 
+// SABnzbd reports sizes in binary units.
+const (
+	kb = 1024
+	mb = kb * 1024
+	gb = mb * 1024
+	tb = gb * 1024
+
+	percent = 100
+)
+
 // convertToSABnzbdNZB converts a storage.Entry to SABnzbd NZB format.
 func convertToSABnzbdNZB(e *storage.Entry) NZB {
-	const MB = 1024 * 1024
-
 	// Calculate MB values
-	sizeMB := e.Size / MB
-	mbLeft := int64(float64(e.Size) * (1 - e.Progress) / float64(MB))
+	sizeMB := e.Size / mb
+	mbLeft := int64(float64(e.Size) * (1 - e.Progress) / float64(mb))
 	downloaded := int64(float64(e.Size) * e.Progress)
 
 	// Calculate time left (simple estimation)
 	timeLeft := "0:00:00"
 	if e.Speed > 0 && e.Progress < 1.0 {
 		bytesLeft := int64(float64(e.Size) * (1 - e.Progress))
-		secondsLeft := bytesLeft / e.Speed
-		hours := secondsLeft / 3600
-		minutes := (secondsLeft % 3600) / 60
-		seconds := secondsLeft % 60
-		timeLeft = fmt.Sprintf("%d:%02d:%02d", hours, minutes, seconds)
+		left := time.Duration(bytesLeft/e.Speed) * time.Second
+		timeLeft = fmt.Sprintf("%d:%02d:%02d", int64(left.Hours()), int64(left.Minutes())%60, int64(left.Seconds())%60)
 	}
 
 	// Map storage state to SABnzbd status
@@ -244,7 +250,7 @@ func convertToSABnzbdNZB(e *storage.Entry) NZB {
 		Filename:     e.OriginalFilename,
 		Size:         e.Size,
 		SizeMB:       sizeMB,
-		Percentage:   e.Progress * 100, // Convert to 0-100 range
+		Percentage:   e.Progress * percent,
 		MBLeft:       mbLeft,
 		TimeLeft:     timeLeft,
 		Status:       status,
@@ -269,7 +275,6 @@ func convertToSABnzbdNZB(e *storage.Entry) NZB {
 
 // getNZBFiles converts storage.Entry files to File format.
 func getNZBFiles(e *storage.Entry) []File {
-	const MB = 1024 * 1024
 	files := make([]File, 0, len(e.Files))
 
 	// Determine file status based on job state
@@ -288,7 +293,7 @@ func getNZBFiles(e *storage.Entry) []File {
 			continue
 		}
 
-		sizeMB := float64(f.Size) / float64(MB)
+		sizeMB := float64(f.Size) / float64(mb)
 		// For finished files, mbleft is 0; for active/queued, it's the full size
 		mbleft := "0.00"
 		if fileStatus != "finished" {

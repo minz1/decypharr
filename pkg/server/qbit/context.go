@@ -42,11 +42,10 @@ func getArrFromContext(ctx context.Context) arr.Arr {
 }
 
 func decodeAuthHeader(header string) (string, string, error) {
-	encodedTokens := strings.Split(header, " ")
-	if len(encodedTokens) != 2 {
+	_, encodedToken, ok := strings.Cut(header, " ")
+	if !ok || strings.Contains(encodedToken, " ") {
 		return "", "", nil
 	}
-	encodedToken := encodedTokens[1]
 
 	bytes, err := base64.StdEncoding.DecodeString(encodedToken)
 	if err != nil {
@@ -206,14 +205,11 @@ func extractFromSID(sid string) (string, string, error) {
 	}
 
 	// Split into parts: username:password:hash
-	parts := strings.Split(string(decoded), "|")
-	if len(parts) != 3 {
+	username, rest, ok := strings.Cut(string(decoded), "|")
+	password, providedHash, ok2 := strings.Cut(rest, "|")
+	if !ok || !ok2 || strings.Contains(providedHash, "|") {
 		return "", "", fmt.Errorf("invalid SID structure")
 	}
-
-	username := parts[0]
-	password := parts[1]
-	providedHash := parts[2]
 
 	// Verify hash
 	cfg := config.Get()
