@@ -76,7 +76,8 @@ func mustRead(t *testing.T, path string) string {
 // Golden-tree: seed the export tree with current, stale, orphaned, and
 // foreign .strm files, then assert the sweep converges disk to the desired
 // state and leaves foreign files alone.
-func TestStrmSweepGoldenTree(t *testing.T) { //nolint:paralleltest // resets the config singleton
+//nolint:paralleltest // resets the config singleton
+func TestStrmSweepGoldenTree(t *testing.T) {
 	m := newTestReconciler(t)
 	cfg := config.Get()
 
@@ -134,7 +135,8 @@ func TestStrmSweepGoldenTree(t *testing.T) { //nolint:paralleltest // resets the
 	}
 }
 
-func TestStrmSweepDisabled(t *testing.T) { //nolint:paralleltest // resets the config singleton
+//nolint:paralleltest // resets the config singleton
+func TestStrmSweepDisabled(t *testing.T) {
 	m := newTestReconciler(t)
 	config.Get().Strm.Enabled = false
 
@@ -144,7 +146,8 @@ func TestStrmSweepDisabled(t *testing.T) { //nolint:paralleltest // resets the c
 }
 
 // A repair that renames a file (new file ID) must replace the old .
-func TestStrmSyncEntryRemovesStaleAfterRename(t *testing.T) { //nolint:paralleltest // resets the config singleton
+//nolint:paralleltest // resets the config singleton
+func TestStrmSyncEntryRemovesStaleAfterRename(t *testing.T) {
 	m := newTestReconciler(t)
 	cfg := config.Get()
 
@@ -179,7 +182,8 @@ func TestStrmSyncEntryRemovesStaleAfterRename(t *testing.T) { //nolint:parallelt
 
 // Deleting an entry removes its files from the export tree without waiting
 // for a sweep; the folder is pruned when empty.
-func TestStrmRemoveEntry(t *testing.T) { //nolint:paralleltest // resets the config singleton
+//nolint:paralleltest // resets the config singleton
+func TestStrmRemoveEntry(t *testing.T) {
 	m := newTestReconciler(t)
 	cfg := config.Get()
 

@@ -71,15 +71,18 @@ type JobQueue struct {
 	cancel      context.CancelFunc
 }
 
+// jobQueueInitialCapacity presizes the pending-job slice.
+const jobQueueInitialCapacity = 64
+
 // NewJobQueue creates a new unified job queue with the given number of workers.
 func NewJobQueue(ctx context.Context, maxWorkers int, processFunc func(ctx context.Context, job *Job)) *JobQueue {
 	if maxWorkers <= 0 {
-		maxWorkers = 5
+		maxWorkers = defaultFileDownloadWorkers
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	q := &JobQueue{
-		jobs:        make([]*Job, 0, 64),
+		jobs:        make([]*Job, 0, jobQueueInitialCapacity),
 		maxWorkers:  maxWorkers,
 		logger:      logger.New("jobqueue"),
 		processFunc: processFunc,
