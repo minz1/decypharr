@@ -196,7 +196,7 @@ func (f *FS) entryStat(info *manager.FileInfo) *fuse.Stat_t {
 }
 
 // CreateEx is required by fuse.FileSystemOpenEx but this is a read-only filesystem.
-func (f *FS) CreateEx(_ string, _ uint32, fi *fuse.FileInfo_t) int {
+func (f *FS) CreateEx(_ string, _ uint32, _ *fuse.FileInfo_t) int {
 	return -fuse.EACCES
 }
 
@@ -342,7 +342,7 @@ func (f *FS) Flush(_ string, _ uint64) int {
 }
 
 // Fsync synchronizes file contents.
-func (f *FS) Fsync(_ string, _ bool, fh uint64) int {
+func (f *FS) Fsync(_ string, _ bool, _ uint64) int {
 	return 0
 }
 
