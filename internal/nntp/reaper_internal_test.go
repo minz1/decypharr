@@ -11,7 +11,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/config"
 )
 
-// newPipeConnection builds a Connection backed by net.Pipe and starts a fake
+// newPipeConnection builds a Connection backed by [net.Pipe] and starts a fake
 // server goroutine. respond=true answers every DATE with 111; respond=false
 // closes the server side immediately so pings fail.
 func newPipeConnection(t *testing.T, respond bool) *Connection {
@@ -56,11 +56,11 @@ func newReaperTestClient(pp *ProviderPool) *Client {
 	}
 }
 
-func newTestPool(max int) *ProviderPool {
+func newTestPool(maxConns int) *ProviderPool {
 	return &ProviderPool{
-		conns:  make([]*connectionEntry, 0, max),
-		slots:  make(chan struct{}, max),
-		max:    max,
+		conns:  make([]*connectionEntry, 0, maxConns),
+		slots:  make(chan struct{}, maxConns),
+		max:    maxConns,
 		config: config.UsenetProvider{Host: "test"},
 	}
 }

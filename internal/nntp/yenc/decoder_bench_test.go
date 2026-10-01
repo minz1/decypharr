@@ -61,7 +61,7 @@ func BenchmarkBodyDecoderNext(b *testing.B) {
 			b.ResetTimer()
 			for range b.N {
 				reader.reader.Reset(response)
-				res, err := dec.Next()
+				res, err = dec.Next()
 				if err != nil {
 					b.Fatal(err)
 				}

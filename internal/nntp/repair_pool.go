@@ -55,13 +55,12 @@ func (c *Client) newRepairPool(percent int) *RepairPool {
 	if percent <= 0 {
 		percent = repairDefaultPercent
 	}
-	if percent > 100 {
-		percent = 100
-	}
+	const fullPercent = 100
+	percent = min(percent, fullPercent)
 	total := c.TotalConnections()
 	capacity := repairPoolMinWorkers
 	if total > 0 {
-		sized := (total*percent + 99) / 100
+		sized := (total*percent + fullPercent - 1) / fullPercent
 		if sized > capacity {
 			capacity = sized
 		}
