@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"strconv"
 	"strings"
@@ -364,9 +365,8 @@ func (s *SABnzbd) handleAddFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse multipart form with larger limit for multiple files
-	err := r.ParseMultipartForm(100 << 20) // 100 MB limit for multiple files
-	if err != nil {
+	// The body itself is capped by Routes.
+	if err := r.ParseMultipartForm(multipartMemory); err != nil { //nolint:gosec // G120: body capped by Routes' MaxBytesReader
 		s.writeError(w, "Failed to parse multipart form", http.StatusBadRequest)
 		return
 	}
@@ -377,69 +377,19 @@ func (s *SABnzbd) handleAddFile(w http.ResponseWriter, r *http.Request) {
 		action = config.DownloadAction(r.FormValue("action"))
 	}
 
+	// A parsed multipart form always has a File map; uploads come in "name".
+	files := r.MultipartForm.File["name"]
+	if len(files) == 0 {
+		s.writeError(w, "No files uploaded", http.StatusBadRequest)
+		return
+	}
 	var nzoIDs []string
 	var errors []string
-
-	// Try to get multiple files from "name" field
-	if r.MultipartForm != nil && r.MultipartForm.File != nil {
-		// Parse all files from "name" field
-		files := r.MultipartForm.File["name"]
-		if len(files) == 0 {
-			s.writeError(w, "No files uploaded", http.StatusBadRequest)
-			return
-		}
-
-		for _, fileHeader := range files {
-			file, openErr := fileHeader.Open()
-			if openErr != nil {
-				errors = append(errors, fmt.Sprintf("Failed to open %s: %v", fileHeader.Filename, openErr))
-				continue
-			}
-
-			// Read file content
-			content, openErr := io.ReadAll(file)
-			_ = file.Close()
-			if openErr != nil {
-				errors = append(errors, fmt.Sprintf("Failed to read %s: %v", fileHeader.Filename, openErr))
-				continue
-			}
-
-			// Parse NZB file
-			nzbID, openErr := s.addNZBFile(ctx, content, fileHeader.Filename, _arr, action)
-			if openErr != nil {
-				s.logger.Error().Err(openErr).Str("filename", fileHeader.Filename).Msg("Failed to add NZB file")
-				errors = append(errors, fmt.Sprintf("Failed to add %s: %v", fileHeader.Filename, openErr))
-				continue
-			}
-			if nzbID != "" {
-				nzoIDs = append(nzoIDs, nzbID)
-			}
-		}
-	} else {
-		// Fallback to single file handling
-		file, header, formFileErr := r.FormFile("name")
-		if formFileErr != nil {
-			s.writeError(w, "No file uploaded", http.StatusBadRequest)
-			return
-		}
-		defer file.Close()
-
-		// Read file content
-		content, formFileErr := io.ReadAll(file)
-		if formFileErr != nil {
-			s.writeError(w, "Failed to read file", http.StatusInternalServerError)
-			return
-		}
-
-		// Parse NZB file
-		nzbID, formFileErr := s.addNZBFile(ctx, content, header.Filename, _arr, action)
-		if formFileErr != nil {
-			s.writeError(
-				w,
-				fmt.Sprintf("Failed to add NZB file: %s", formFileErr.Error()),
-				http.StatusInternalServerError,
-			)
-			return
+	for _, fileHeader := range files {
+		nzbID, err := s.addUploadedNZB(ctx, fileHeader, _arr, action)
+		if err != nil {
+			errors = append(errors, err.Error())
+			continue
 		}
 		if nzbID != "" {
 			nzoIDs = append(nzoIDs, nzbID)
@@ -466,6 +416,33 @@ func (s *SABnzbd) handleAddFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	utils.JSONResponse(w, response, http.StatusOK)
+}
+
+// multipartMemory is how much of an upload is held in memory before
+// spilling to temp files.
+const multipartMemory = 100 << 20
+
+func (s *SABnzbd) addUploadedNZB(
+	ctx context.Context,
+	fileHeader *multipart.FileHeader,
+	instance arr.Arr,
+	action config.DownloadAction,
+) (string, error) {
+	file, err := fileHeader.Open()
+	if err != nil {
+		return "", fmt.Errorf("failed to open %s: %w", fileHeader.Filename, err)
+	}
+	content, err := io.ReadAll(file)
+	_ = file.Close()
+	if err != nil {
+		return "", fmt.Errorf("failed to read %s: %w", fileHeader.Filename, err)
+	}
+	nzbID, err := s.addNZBFile(ctx, content, fileHeader.Filename, instance, action)
+	if err != nil {
+		s.logger.Error().Err(err).Str("filename", fileHeader.Filename).Msg("Failed to add NZB file")
+		return "", fmt.Errorf("failed to add %s: %w", fileHeader.Filename, err)
+	}
+	return nzbID, nil
 }
 
 // handleVersion returns version information.
