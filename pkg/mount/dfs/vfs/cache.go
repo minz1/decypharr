@@ -47,6 +47,15 @@ const (
 
 	// speedSampleInterval is how often the background goroutine updates downloadSpeed.
 	speedSampleInterval = 1 * time.Second
+
+	// maxBackWindow caps the history a stream keeps behind its read head;
+	// minStreamWindow floors both that history and a stream's RAM ask.
+	maxBackWindow   = 256 << 20
+	minStreamWindow = 32 << 20
+	// streamMemoryReadAheads: a stream's RAM ask is its read-ahead plus as
+	// much history behind it.
+	streamMemoryReadAheads = 2
+	percent                = 100
 )
 
 // Cache manages sparse cache files for streaming.
@@ -152,18 +161,18 @@ func NewCache(ctx context.Context, mgr Backend, config *dfsconfig.FuseConfig) (*
 	// History gets what's left of a stream's disk share after its read-ahead:
 	// the downloader produces those bytes regardless, so sizing history
 	// independently is what put the pool permanently over its limit.
-	backWindow := int64(256 << 20)
+	backWindow := int64(maxBackWindow)
 	if maxSize > 0 {
 		share := maxSize/dfsconfig.StreamDiskShare - config.ReadAheadSize
 		backWindow = min(backWindow, share)
-		backWindow = max(backWindow, 32<<20)
+		backWindow = max(backWindow, minStreamWindow)
 	}
 	c := &Cache{
 		config: config,
 		// Per-stream RAM ask: the read-ahead the downloader produces plus as
 		// much history behind it. The pool divides its budget across the open
 		// streams if they collectively ask for more.
-		streamMemory: max(2*config.ReadAheadSize, 32<<20),
+		streamMemory: max(streamMemoryReadAheads*config.ReadAheadSize, minStreamWindow),
 		logger:       logger.New("dfs"),
 		items:        xsync.NewMap[string, *CacheItem](),
 		manager:      mgr,
@@ -708,7 +717,7 @@ func cacheUsageText(size, maxSize int64) string {
 	if maxSize <= 0 {
 		return fmt.Sprintf("%s / unlimited", utils.FormatSize(size))
 	}
-	utilization := float64(size) / float64(maxSize) * 100
+	utilization := float64(size) / float64(maxSize) * percent
 	return fmt.Sprintf("%s / %s (%.1f%%)", utils.FormatSize(size), utils.FormatSize(maxSize), utilization)
 }
 

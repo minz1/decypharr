@@ -9,6 +9,21 @@ import (
 	"github.com/sirrobot01/decypharr/internal/utils"
 )
 
+// Streaming-optimized defaults.
+const (
+	defaultDaemonTimeout     = 10 * time.Second
+	defaultCacheExpiry       = 24 * time.Hour
+	defaultCleanupInterval   = 5 * time.Minute
+	defaultChunkSize         = 4 << 20  // matches the beta baseline
+	defaultReadAheadSize     = 16 << 20 // 4 chunks ahead
+	defaultFuseMaxBackground = 64
+	defaultFuseMaxReadAhead  = 1 << 20
+	defaultRetries           = 3
+	defaultOwnerID           = 1000
+	defaultUmask             = 0o022
+	readAheadShareDivisor    = 2 // a stream's disk share: half read-ahead, half history
+)
+
 // FuseConfig holds the simplified configuration for the FUSE filesystem.
 type FuseConfig struct {
 	MountPath    string
@@ -59,21 +74,21 @@ type FuseConfig struct {
 func DefaultFuseConfig() *FuseConfig {
 	return &FuseConfig{
 		// Performance defaults optimized for streaming
-		DaemonTimeout:        time.Second * 10, // Longer timeout for reliability
-		CacheExpiry:          24 * time.Hour,   // Longer cache for popular content
-		CacheCleanupInterval: 5 * time.Minute,  // More frequent cleanup
-		ChunkSize:            4 * 1024 * 1024,  // 4MB chunks (matches beta baseline)
-		ReadAheadSize:        16 * 1024 * 1024, // 16MB read-ahead (4 chunks ahead)
-		FuseMaxBackground:    64,
-		FuseMaxReadAhead:     1 << 20,
+		DaemonTimeout:        defaultDaemonTimeout,
+		CacheExpiry:          defaultCacheExpiry,
+		CacheCleanupInterval: defaultCleanupInterval,
+		ChunkSize:            defaultChunkSize,
+		ReadAheadSize:        defaultReadAheadSize,
+		FuseMaxBackground:    defaultFuseMaxBackground,
+		FuseMaxReadAhead:     defaultFuseMaxReadAhead,
 		Client:               "DFS",
 
-		Retries: 3,
+		Retries: defaultRetries,
 
 		// File system defaults
-		UID:   1000,
-		GID:   1000,
-		Umask: 0022,
+		UID:   defaultOwnerID,
+		GID:   defaultOwnerID,
+		Umask: defaultUmask,
 	}
 }
 
@@ -234,7 +249,7 @@ func reconcileReadAhead(readAhead, chunkSize, diskLimit int64) int64 {
 	if readAhead <= 0 || diskLimit <= 0 {
 		return readAhead
 	}
-	maxAhead := diskLimit / StreamDiskShare / 2 // other half is history
+	maxAhead := diskLimit / StreamDiskShare / readAheadShareDivisor
 	if readAhead <= maxAhead {
 		return readAhead
 	}

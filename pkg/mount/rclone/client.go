@@ -14,6 +14,9 @@ import (
 	"github.com/sirrobot01/decypharr/internal/utils"
 )
 
+// forceUnmountTimeout bounds the whole chain of umount fallbacks.
+const forceUnmountTimeout = 10 * time.Second
+
 // mountWithRetry attempts to mount with retry logic using avast/retry-go.
 func (m *Manager) mountWithRetry(ctx context.Context, maxRetries int) error {
 	return retry.Do(
@@ -260,7 +263,7 @@ func (m *Manager) forceUnmount(ctx context.Context) error {
 		{"fusermount3", "-uz", mountPath},
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, forceUnmountTimeout)
 	defer cancel()
 
 	for _, method := range methods {
