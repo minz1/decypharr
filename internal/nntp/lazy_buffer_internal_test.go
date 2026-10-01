@@ -39,6 +39,19 @@ func backing(b []byte) uintptr {
 
 // TestDecodeBodyWithBufferDefersAllocation is the core Round 16 claim: no
 // decoded storage is demanded until the decoder actually has yEnc body input.
+func checkDeferredDecode(t *testing.T, data []byte, err error, source *countingBuffer, payload []byte) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !bytes.Equal(data, payload) {
+		t.Errorf("decoded %d bytes, want the exact payload", len(data))
+	}
+	if backing(data) != backing(source.buf) {
+		t.Error("decoded result does not use the supplied caller storage")
+	}
+}
+
 func TestDecodeBodyWithBufferDefersAllocation(t *testing.T) {
 	t.Parallel()
 	payload := testPayload(48 * 1024)
@@ -65,15 +78,7 @@ func TestDecodeBodyWithBufferDefersAllocation(t *testing.T) {
 				t.Errorf("DecodeBuffer calls = %d, want %d", source.calls, tc.wantCalls)
 			}
 			if tc.wantData {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if !bytes.Equal(data, payload) {
-					t.Errorf("decoded %d bytes, want the exact payload", len(data))
-				}
-				if backing(data) != backing(source.buf) {
-					t.Error("decoded result does not use the supplied caller storage")
-				}
+				checkDeferredDecode(t, data, err, source, payload)
 			} else if err == nil {
 				t.Fatal("expected an error for a response that yields no body")
 			}

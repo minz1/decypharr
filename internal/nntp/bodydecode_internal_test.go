@@ -74,6 +74,31 @@ func TestDecodeBodyIntoUsesCallerStorage(t *testing.T) {
 	}
 }
 
+// serveBodyPipeline reads one BODY command per ID, then answers them all.
+func serveBodyPipeline(server net.Conn, messageIDs []string, payloads [][]byte) error {
+	reader := bufio.NewReader(server)
+	for i := range messageIDs {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return err
+		}
+		if !strings.HasPrefix(line, "BODY "+messageIDs[i]) {
+			return fmt.Errorf("command %d = %q", i, line)
+		}
+	}
+	for i := range messageIDs {
+		if _, err := fmt.Fprintf(
+			server,
+			"222 0 %s body\r\n%s.\r\n",
+			messageIDs[i],
+			encodeBody(payloads[i]),
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func TestPipelineBodiesPipelinesCommands(t *testing.T) {
 	t.Parallel()
 	c, server := newBodyTestConn(t)
@@ -84,32 +109,7 @@ func TestPipelineBodiesPipelinesCommands(t *testing.T) {
 		{Buffer: make([]byte, 0, DecodedBodyCapacity(int64(len(payloads[1]))))},
 	}
 	serverErr := make(chan error, 1)
-	go func() {
-		reader := bufio.NewReader(server)
-		for i := range messageIDs {
-			line, err := reader.ReadString('\n')
-			if err != nil {
-				serverErr <- err
-				return
-			}
-			if !strings.HasPrefix(line, "BODY "+messageIDs[i]) {
-				serverErr <- fmt.Errorf("command %d = %q", i, line)
-				return
-			}
-		}
-		for i := range messageIDs {
-			if _, err := fmt.Fprintf(
-				server,
-				"222 0 %s body\r\n%s.\r\n",
-				messageIDs[i],
-				encodeBody(payloads[i]),
-			); err != nil {
-				serverErr <- err
-				return
-			}
-		}
-		serverErr <- nil
-	}()
+	go func() { serverErr <- serveBodyPipeline(server, messageIDs, payloads) }()
 
 	results, err := c.PipelineBodies(messageIDs, destinations)
 	if err != nil {
