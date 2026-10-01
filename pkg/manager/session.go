@@ -182,17 +182,7 @@ func (s *session) Read(p []byte) (int, error) {
 			}
 		}
 
-		// Bound this read attempt: if no bytes flow for stallTimeout the
-		// body context is cancelled, the read errors, and we resume.
-		s.stallCancel.Store(s.bodyCancel)
-		if s.stall == nil {
-			s.stall = time.AfterFunc(s.stallTimeout, s.stallFired)
-		} else {
-			s.stall.Reset(s.stallTimeout)
-		}
-		n, err := s.body.Read(p)
-		s.stall.Stop()
-		s.stallCancel.Store(context.CancelFunc(noopCancel))
+		n, err := s.stallGuardedReadLocked(p)
 		if n > len(p) {
 			// Every consumer copies through a buffer sized to len(p); a body
 			// that over-reports makes them slice past it. Drop the body and
@@ -201,33 +191,62 @@ func (s *session) Read(p []byte) (int, error) {
 			return 0, fmt.Errorf("stream body returned %d bytes for a %d-byte read", n, len(p))
 		}
 		s.pos += int64(n)
-
 		if n > 0 {
-			if err != nil {
-				// Deliver the bytes; the next Read deals with the error.
-				s.closeBodyLocked()
-			} else {
-				s.armIdleLocked()
-			}
-			if s.onRead != nil {
-				s.onRead(s.resumes.Load())
-			}
+			s.deliveredLocked(err)
 			return n, nil
 		}
-
-		s.closeBodyLocked()
-		switch err {
-		case nil:
-			err = io.ErrNoProgress
-		case io.EOF:
-			if s.pos >= s.size {
-				return 0, io.EOF
-			}
-			err = io.ErrUnexpectedEOF // short body: resume at current offset
+		if err = s.emptyReadErrLocked(err); err == io.EOF {
+			return 0, io.EOF
 		}
 		if rerr := s.recoverStep(err, &attempt); rerr != nil {
 			return 0, rerr
 		}
+	}
+}
+
+// stallGuardedReadLocked reads once from the body: if no bytes flow for
+// stallTimeout the body context is cancelled and the read errors.
+func (s *session) stallGuardedReadLocked(p []byte) (int, error) {
+	s.stallCancel.Store(s.bodyCancel)
+	if s.stall == nil {
+		s.stall = time.AfterFunc(s.stallTimeout, s.stallFired)
+	} else {
+		s.stall.Reset(s.stallTimeout)
+	}
+	n, err := s.body.Read(p)
+	s.stall.Stop()
+	s.stallCancel.Store(context.CancelFunc(noopCancel))
+	return n, err
+}
+
+// deliveredLocked settles the body after a read that returned bytes: the
+// bytes go to the caller and the next Read deals with any error.
+func (s *session) deliveredLocked(err error) {
+	if err != nil {
+		s.closeBodyLocked()
+	} else {
+		s.armIdleLocked()
+	}
+	if s.onRead != nil {
+		s.onRead(s.resumes.Load())
+	}
+}
+
+// emptyReadErrLocked drops the body after a read that returned no bytes and
+// maps the outcome to the error recovery should see; io.EOF means the file
+// is complete.
+func (s *session) emptyReadErrLocked(err error) error {
+	s.closeBodyLocked()
+	switch err {
+	case nil:
+		return io.ErrNoProgress
+	case io.EOF:
+		if s.pos >= s.size {
+			return io.EOF
+		}
+		return io.ErrUnexpectedEOF // short body: resume at current offset
+	default:
+		return err
 	}
 }
 
