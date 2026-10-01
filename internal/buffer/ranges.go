@@ -47,12 +47,12 @@ func (r *rangeSet) coverage(lo, hi int64) int64 {
 // insert adds [off, off+length) and merges overlaps/adjacencies. Returns the
 // number of bytes that were newly covered (i.e. not already present) so the
 // caller can track total presence cheaply.
-func (r *rangeSet) insert(off, length int64) (added int64) {
+func (r *rangeSet) insert(off, length int64) int64 {
 	if length <= 0 {
 		return 0
 	}
 	end := off + length
-	added = length - r.coverage(off, end)
+	added := length - r.coverage(off, end)
 	// Binary search for the first extent that ends >= off (i.e., could
 	// overlap or be adjacent to the new range).
 	i := sort.Search(len(r.rs), func(i int) bool { return r.rs[i].end >= off })
@@ -94,12 +94,12 @@ func (r *rangeSet) insert(off, length int64) (added int64) {
 // remove removes [off, off+length) and splits ranges that straddle the
 // boundary. Ranges fully inside the removed region are dropped. Returns the
 // number of bytes that were actually present and are now gone.
-func (r *rangeSet) remove(off, length int64) (removed int64) {
+func (r *rangeSet) remove(off, length int64) int64 {
 	if length <= 0 {
 		return 0
 	}
 	end := off + length
-	removed = r.coverage(off, end)
+	removed := r.coverage(off, end)
 	// Skip past ranges entirely below the removal.
 	i := sort.Search(len(r.rs), func(i int) bool { return r.rs[i].end > off })
 	if i == len(r.rs) {

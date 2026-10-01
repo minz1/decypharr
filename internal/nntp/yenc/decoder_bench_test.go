@@ -1,10 +1,12 @@
-package yenc
+package yenc_test
 
 import (
 	"bytes"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/sirrobot01/decypharr/internal/nntp/yenc"
 )
 
 // chunkedReader returns network-sized chunks (one TLS record's worth) per
@@ -41,7 +43,7 @@ func BenchmarkBodyDecoderNext(b *testing.B) {
 		b.Run(source.name, func(b *testing.B) {
 			// One decoder reused across articles, as a connection holds it.
 			reader := &chunkedReader{limit: source.limit}
-			dec := NewBodyDecoder(reader, dataFunc)
+			dec := yenc.NewBodyDecoder(reader, dataFunc)
 
 			// Verify before timing.
 			reader.reader.Reset(response)
@@ -59,7 +61,7 @@ func BenchmarkBodyDecoderNext(b *testing.B) {
 			b.ResetTimer()
 			for range b.N {
 				reader.reader.Reset(response)
-				res, err := dec.Next()
+				res, err = dec.Next()
 				if err != nil {
 					b.Fatal(err)
 				}

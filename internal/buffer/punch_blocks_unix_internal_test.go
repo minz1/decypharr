@@ -15,5 +15,5 @@ func allocatedBlocks(t *testing.T, path string) int64 {
 	if err := syscall.Stat(path, &st); err != nil {
 		t.Fatal(err)
 	}
-	return int64(st.Blocks)
+	return st.Blocks
 }

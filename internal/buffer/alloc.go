@@ -6,11 +6,25 @@ import "sync"
 // for tens of microseconds and, worse, the eviction path calls put() while the
 // owning Buffer holds its exclusive lock (dropBlockLocked runs under b.mu).
 // Running the syscall there stalls every waiting reader — the tail-latency
-// regression vs the old sync.Pool, whose Put never syscalls. Handing overflow
+// regression vs the old [sync.Pool], whose Put never syscalls. Handing overflow
 // blocks to a shared goroutine keeps the lock holder off the syscall: the pages
 // are still released promptly (the queue drains continuously), only the *timing*
 // moves off the critical path, so deterministic RAM release is preserved.
-var unmapCh = make(chan blockRelease, 256)
+var unmapCh = startUnmapper() //nolint:gochecknoglobals // process-wide unmap worker shared by every Pool
+
+// unmapQueueDepth bounds pending background releases before put falls back to
+// an inline unmap.
+const unmapQueueDepth = 256
+
+func startUnmapper() chan blockRelease {
+	ch := make(chan blockRelease, unmapQueueDepth)
+	go func() {
+		for r := range ch {
+			r.release()
+		}
+	}()
+	return ch
+}
 
 // blockRelease keeps an allocation charged until its release completes.
 type blockRelease struct {
@@ -21,14 +35,6 @@ type blockRelease struct {
 func (r blockRelease) release() {
 	munmapBlock(r.data)
 	r.pool.memAllocated.Add(-blockSize)
-}
-
-func init() {
-	go func() {
-		for r := range unmapCh {
-			r.release()
-		}
-	}()
 }
 
 // releaseBlock unmaps p off the caller's goroutine when possible, falling back
@@ -57,7 +63,7 @@ const maxReuseBlocks = 8
 // blockAllocator hands out fixed blockSize buffers and returns them to the
 // OS when they are no longer needed.
 //
-// It replaces the per-Buffer sync.Pool. A sync.Pool only releases its
+// It replaces the per-Buffer [sync.Pool]. A [sync.Pool] only releases its
 // contents lazily — entries survive until a GC, and the freed heap pages
 // return to the OS later still, on the scavenger's schedule (MADV_FREE).
 // Under many concurrent streams that lag let RSS climb into OOM territory.

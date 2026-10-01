@@ -13,6 +13,7 @@ import (
 )
 
 func TestStatBatchPipelinesCommandsAndMapsResponses(t *testing.T) {
+	t.Parallel()
 	conn, server := newBodyTestConn(t)
 	messageIDs := []string{"a@example", "missing@example", "c@example"}
 	serverErr := serveStatPipeline(server, len(messageIDs), []string{
@@ -43,6 +44,7 @@ func TestStatBatchPipelinesCommandsAndMapsResponses(t *testing.T) {
 }
 
 func TestBatchStatOnProviderYieldsToStreamBetweenPipelines(t *testing.T) {
+	t.Parallel()
 	clientSide, serverSide := net.Pipe()
 	t.Cleanup(func() {
 		_ = clientSide.Close()
@@ -147,6 +149,7 @@ func TestBatchStatOnProviderYieldsToStreamBetweenPipelines(t *testing.T) {
 }
 
 func TestStatBatchMarksUnreadSuffixAfterDisconnect(t *testing.T) {
+	t.Parallel()
 	conn, server := newBodyTestConn(t)
 	messageIDs := []string{"a@example", "b@example", "c@example"}
 	serverErr := make(chan error, 1)
@@ -186,6 +189,7 @@ func TestStatBatchMarksUnreadSuffixAfterDisconnect(t *testing.T) {
 }
 
 func TestStatBatchPreservesMessageIDsAfterWriteFailure(t *testing.T) {
+	t.Parallel()
 	clientSide, serverSide := net.Pipe()
 	_ = serverSide.Close()
 	t.Cleanup(func() { _ = clientSide.Close() })
@@ -277,6 +281,7 @@ func waitForQueuedWorkload(t *testing.T, client *Client, workload Workload) {
 }
 
 func TestBatchStatPreservesMappingAcrossBackboneExclusions(t *testing.T) {
+	t.Parallel()
 	first, second, third := newTestPool(1), newTestPool(1), newTestPool(1)
 	first.config.Host, first.config.Backbone = "first", "shared"
 	second.config.Host, second.config.Backbone = "second", "shared"
