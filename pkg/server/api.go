@@ -809,6 +809,35 @@ func (s *Server) handleRefreshAPIToken(w http.ResponseWriter, _ *http.Request) {
 	}, http.StatusOK)
 }
 
+// validateNewCredentials returns a client-facing message, or "".
+func validateNewCredentials(username, password, confirm string) string {
+	switch {
+	case username == "":
+		return "Username is required"
+	case password == "":
+		return "Password is required"
+	case password != confirm:
+		return "Passwords do not match"
+	}
+	return ""
+}
+
+// clearPasswordAuth drops the username/password: token-only mode keeps the
+// API token, otherwise auth is disabled and the token removed too.
+func clearPasswordAuth(next *config.Config, tokenOnly bool) error {
+	auth := next.GetAuth()
+	if auth == nil {
+		auth = &config.Auth{}
+	}
+	next.UseAuth = tokenOnly
+	auth.Username, auth.Password = "", ""
+	auth.TokenOnly = tokenOnly
+	if !tokenOnly {
+		auth.APIToken = ""
+	}
+	return next.SaveAuth(auth)
+}
+
 func (s *Server) handleUpdateAuth(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Username        string `json:"username"`
@@ -821,35 +850,18 @@ func (s *Server) handleUpdateAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	disable := !req.TokenOnly && req.Username == "" && req.Password == ""
-	if !req.TokenOnly && !disable {
-		if req.Username == "" {
-			http.Error(w, "Username is required", http.StatusBadRequest)
-			return
-		}
-		if req.Password == "" {
-			http.Error(w, "Password is required", http.StatusBadRequest)
-			return
-		}
-		if req.Password != req.ConfirmPassword {
-			http.Error(w, "Passwords do not match", http.StatusBadRequest)
+	setPassword := !req.TokenOnly && !disable
+	if setPassword {
+		if msg := validateNewCredentials(req.Username, req.Password, req.ConfirmPassword); msg != "" {
+			http.Error(w, msg, http.StatusBadRequest)
 			return
 		}
 	}
 	cfg, err := config.Update(func(next *config.Config) error {
-		if !req.TokenOnly && !disable {
+		if setPassword {
 			return next.SetCredentials(req.Username, req.Password)
 		}
-		auth := next.GetAuth()
-		if auth == nil {
-			auth = &config.Auth{}
-		}
-		next.UseAuth = !disable
-		auth.Username, auth.Password = "", ""
-		auth.TokenOnly = req.TokenOnly
-		if disable {
-			auth.APIToken = ""
-		}
-		return next.SaveAuth(auth)
+		return clearPasswordAuth(next, req.TokenOnly)
 	})
 	if err != nil {
 		s.logger.Error().Err(err).Msg("Failed to update authentication")
