@@ -40,58 +40,67 @@ func (m *Manager) refreshDownloadLinks(ctx context.Context) {
 	})
 }
 
-func (m *Manager) addQueueProcessorJob(ctx context.Context) error {
-	// This function is responsible for starting queue processing scheduled tasks
-
-	if jd, err := utils.ConvertToJobDef(m.config.RefreshInterval); err != nil {
-		m.logger.Error().Err(err).Msg("Failed to convert queue processing interval to job definition")
-	} else {
-		// Schedule the job
-		if _, newJobErr := m.scheduler.NewJob(jd, gocron.NewTask(func() {
-			m.processQueuedEntries()
-		}), gocron.WithContext(ctx)); newJobErr != nil {
-			m.logger.Error().Err(newJobErr).Msg("Failed to create slots tracking job")
-		} else {
-			m.logger.Debug().Msgf("Queue processing job scheduled for every %s", m.config.RefreshInterval)
-		}
+// scheduleEvery adds task to scheduler at interval; failures are logged.
+func (m *Manager) scheduleEvery(
+	ctx context.Context,
+	scheduler gocron.Scheduler,
+	interval, name string,
+	task func(),
+) {
+	jd, err := utils.ConvertToJobDef(interval)
+	if err != nil {
+		m.logger.Error().Err(err).Str("job", name).Str("interval", interval).Msg("Invalid job interval")
+		return
 	}
+	if _, newJobErr := scheduler.NewJob(
+		jd,
+		gocron.NewTask(task),
+		gocron.WithContext(ctx),
+		gocron.WithName(name),
+	); newJobErr != nil {
+		m.logger.Error().Err(newJobErr).Str("job", name).Msg("Failed to schedule job")
+		return
+	}
+	m.logger.Debug().Str("job", name).Str("interval", interval).Msg("Job scheduled")
+}
+
+func (m *Manager) addQueueProcessorJob(ctx context.Context) {
+	m.scheduleEvery(ctx, m.scheduler, m.config.RefreshInterval, "queue-processing", m.processQueuedEntries)
 
 	if m.config.RemoveStalledAfter != "" {
-		// Stalled torrents removal job
-		if jd, err := utils.ConvertToJobDef("1m"); err != nil {
-			m.logger.Error().Err(err).Msg("Failed to convert remove stalled torrents interval to job definition")
-		} else {
-			// Schedule the job
-			if _, newJobErr := m.scheduler.NewJob(jd, gocron.NewTask(func() {
-				deleteStalledErr := m.queue.DeleteStalled()
-				if deleteStalledErr != nil {
-					m.logger.Error().Err(deleteStalledErr).Msg("Failed to process remove stalled torrents")
-				}
-			}), gocron.WithContext(ctx)); newJobErr != nil {
-				m.logger.Error().Err(newJobErr).Msg("Failed to create remove stalled torrents job")
-			} else {
-				m.logger.Debug().Msgf("Remove stalled torrents job scheduled for every %s", "1m")
+		m.scheduleEvery(ctx, m.scheduler, "1m", "remove-stalled", func() {
+			if err := m.queue.DeleteStalled(); err != nil {
+				m.logger.Error().Err(err).Msg("Failed to process remove stalled torrents")
 			}
-		}
+		})
 	}
 
-	// NZB refresh job for pending archives (every 5 minutes)
+	// NZB refresh job for pending archives
 	if m.usenet != nil {
-		if jd, err := utils.ConvertToJobDef("10m"); err != nil {
-			m.logger.Error().Err(err).Msg("Failed to convert NZB refresh interval to job definition")
-		} else {
-			if _, newJobErr := m.scheduler.NewJob(jd, gocron.NewTask(func() {
-				if syncNZBsErr := m.syncNZBs(ctx); syncNZBsErr != nil {
-					m.logger.Error().Err(syncNZBsErr).Msg("Failed to refresh NZBs")
-				}
-			}), gocron.WithContext(ctx), gocron.WithName("nzb-refresh")); newJobErr != nil {
-				m.logger.Error().Err(newJobErr).Msg("Failed to create NZB refresh job")
-			} else {
-				m.logger.Debug().Msg("NZB refresh job scheduled for every 5m")
+		m.scheduleEvery(ctx, m.scheduler, "10m", "nzb-refresh", func() {
+			if err := m.syncNZBs(ctx); err != nil {
+				m.logger.Error().Err(err).Msg("Failed to refresh NZBs")
 			}
-		}
+		})
 	}
-	return nil
+}
+
+// addDebridJobs schedules the per-provider link, torrent and account jobs.
+func (m *Manager) addDebridJobs(ctx context.Context, debridName string, debridClient debrid.Client) {
+	debridConfig := debridClient.Config()
+	m.scheduleEvery(ctx, m.scheduler, debridConfig.DownloadLinksRefreshInterval, debridName+"-download-links",
+		func() { m.refreshDebridDownloadLinks(ctx, debridName, debridClient) })
+	m.scheduleEvery(ctx, m.scheduler, debridConfig.TorrentsRefreshInterval, debridName+"-torrents", func() {
+		if err := m.refreshTorrents(ctx, debridName, debridClient); err != nil {
+			m.logger.Error().Err(err).Str("debrid", debridName).Msg("Torrent refresh failed")
+		}
+		m.InvalidateEntryCache()
+		if err := m.RefreshMount(); err != nil {
+			m.logger.Error().Err(err).Msg("Mount refresh failed")
+		}
+	})
+	m.scheduleEvery(ctx, m.scheduler, config.DefaultAccountSyncInterval, debridName+"-account-syncTorrents",
+		debridClient.SyncAccounts)
 }
 
 func (m *Manager) StartWorker(ctx context.Context) error {
@@ -101,121 +110,22 @@ func (m *Manager) StartWorker(ctx context.Context) error {
 	// Call the initial calls
 	m.runInitialCalls(ctx)
 
-	if err := m.addQueueProcessorJob(ctx); err != nil {
-		return err
-	}
-	// Schedule per-debrid refresh jobs
+	m.addQueueProcessorJob(ctx)
 	m.clients.Range(func(debridName string, debridClient debrid.Client) bool {
-		if debridClient == nil {
-			return true
+		if debridClient != nil {
+			m.addDebridJobs(ctx, debridName, debridClient)
 		}
-
-		debridConfig := debridClient.Config()
-
-		// Schedule download link refresh job for this debrid
-		if jd, err := utils.ConvertToJobDef(debridConfig.DownloadLinksRefreshInterval); err != nil {
-			m.logger.Error().
-				Err(err).
-				Str("debrid", debridName).
-				Msg("Failed to convert download link refresh interval to job definition")
-		} else {
-			jobName := debridName + "-download-links"
-			if _, newJobErr := m.scheduler.NewJob(jd, gocron.NewTask(func() {
-				m.refreshDebridDownloadLinks(ctx, debridName, debridClient)
-			}), gocron.WithContext(ctx), gocron.WithName(jobName)); newJobErr != nil {
-				m.logger.Error().
-					Err(newJobErr).
-					Str("debrid", debridName).
-					Msg("Failed to create download link refresh job")
-			} else {
-				m.logger.Debug().
-					Str("debrid", debridName).
-					Msgf("Download link refresh job scheduled for every %s", debridConfig.DownloadLinksRefreshInterval)
-			}
-		}
-
-		// Schedule torrent refresh job for this debrid
-		if jd, err := utils.ConvertToJobDef(debridConfig.TorrentsRefreshInterval); err != nil {
-			m.logger.Error().
-				Err(err).
-				Str("debrid", debridName).
-				Msg("Failed to convert torrent refresh interval to job definition")
-		} else {
-			jobName := debridName + "-torrents"
-			if _, newJobErr := m.scheduler.NewJob(jd, gocron.NewTask(func() {
-				if refreshTorrentsErr := m.refreshTorrents(ctx, debridName, debridClient); refreshTorrentsErr != nil {
-					m.logger.Error().Err(refreshTorrentsErr).Str("debrid", debridName).Msg("Torrent refresh failed")
-				}
-				m.InvalidateEntryCache()
-				if refreshMountErr := m.RefreshMount(); refreshMountErr != nil {
-					m.logger.Error().Err(refreshMountErr).Msg("Mount refresh failed")
-				}
-			}), gocron.WithContext(ctx), gocron.WithName(jobName)); newJobErr != nil {
-				m.logger.Error().Err(newJobErr).Str("debrid", debridName).Msg("Failed to create torrent refresh job")
-			} else {
-				m.logger.Debug().
-					Str("debrid", debridName).
-					Msgf("Torrent refresh job scheduled for every %s", debridConfig.TorrentsRefreshInterval)
-			}
-		}
-
-		// Schedule account syncTorrents job for this debrid
-		if jd, err := utils.ConvertToJobDef(config.DefaultAccountSyncInterval); err != nil {
-			m.logger.Error().
-				Err(err).
-				Str("debrid", debridName).
-				Msg("Failed to convert account syncTorrents interval to job definition")
-		} else {
-			jobName := debridName + "-account-syncTorrents"
-			if _, newJobErr := m.scheduler.NewJob(jd, gocron.NewTask(func() {
-				debridClient.SyncAccounts()
-			}), gocron.WithContext(ctx), gocron.WithName(jobName)); newJobErr != nil {
-				m.logger.Error().
-					Err(newJobErr).
-					Str("debrid", debridName).
-					Msg("Failed to create account syncTorrents job")
-			} else {
-				m.logger.Debug().
-					Str("debrid", debridName).
-					Msgf("Account syncTorrents job scheduled for every %s", config.DefaultAccountSyncInterval)
-			}
-		}
-
 		return true
 	})
 
-	// Schedule the reset invalid links job
-	// This job will run every at 00:00 CET
-	// and reset the invalid links in the cache
-	if jd, err := utils.ConvertToJobDef("00:00"); err != nil {
-		m.logger.Error().Err(err).Msg("Failed to convert link reset interval to job definition")
-	} else {
-		// Schedule the job
-		if _, newJobErr := m.cetScheduler.NewJob(jd, gocron.NewTask(func() {
-			// Reset link cache at midnight CET
-			m.linkService.Clear()
-			m.logger.Debug().Msg("Cleared link service cache")
-		}), gocron.WithContext(ctx)); newJobErr != nil {
-			m.logger.Error().Err(newJobErr).Msg("Failed to create link reset job")
-		} else {
-			m.logger.Debug().Msgf("Link reset job scheduled for every midnight, CET")
-		}
-	}
+	// Reset the link cache every midnight CET.
+	m.scheduleEvery(ctx, m.cetScheduler, "00:00", "link-reset", func() {
+		m.linkService.Clear()
+		m.logger.Debug().Msg("Cleared link service cache")
+	})
 
 	// Arr monitoring job
-	if jd, err := utils.ConvertToJobDef("10s"); err != nil {
-		m.logger.Error().Err(err).Msg("Failed to convert arr monitoring interval to job definition")
-	} else {
-		// Schedule the job
-		if _, newJobErr := m.scheduler.NewJob(jd, gocron.NewTask(func() {
-			// Reset invalid download links map at midnight CET
-			m.arr.CleanupQueues(ctx)
-		}), gocron.WithContext(ctx)); newJobErr != nil {
-			m.logger.Error().Err(newJobErr).Msg("Failed to create arr monitoring job")
-		} else {
-			m.logger.Debug().Msgf("Arr monitoring job scheduled for every %s", "10s")
-		}
-	}
+	m.scheduleEvery(ctx, m.scheduler, "10s", "arr-monitoring", func() { m.arr.CleanupQueues(ctx) })
 
 	// Register the health checker sweep with the scheduler if enabled.
 	if m.repair != nil {
