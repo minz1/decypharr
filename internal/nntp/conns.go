@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/textproto"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -575,87 +576,84 @@ func (c *Connection) PipelineBodies(messageIDs []string, destinations []BodyDest
 		)
 	}
 	results := make([]DecodedBodyResult, len(messageIDs))
-	if len(messageIDs) == 0 {
+	if !slices.ContainsFunc(destinations, func(d BodyDestination) bool { return !d.Skip }) {
 		return results, nil
 	}
-	hasPending := false
-	for i := range destinations {
-		if !destinations[i].Skip {
-			hasPending = true
-			break
-		}
+	if err := c.writePipeline("BODY", messageIDs, func(i int) bool { return destinations[i].Skip }); err != nil {
+		return results, NewConnectionError(err)
 	}
-	if !hasPending {
-		return results, nil
-	}
-
-	writeTimeout := c.writeTimeout
-	if writeTimeout <= 0 {
-		writeTimeout = defaultHandshakeTimeout
-	}
-	_ = c.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
-	for i, messageID := range messageIDs {
-		if destinations[i].Skip {
-			continue
-		}
-		if err := c.writeCommandArg("BODY", FormatMessageID(messageID)); err != nil {
-			_ = c.conn.SetWriteDeadline(time.Time{})
-			return results, NewConnectionError(
-				fmt.Errorf("write BODY pipeline at %d/%d: %w", i+1, len(messageIDs), err),
-			)
-		}
-	}
-	if err := c.writer.Flush(); err != nil {
-		_ = c.conn.SetWriteDeadline(time.Time{})
-		return results, NewConnectionError(fmt.Errorf("flush BODY pipeline: %w", err))
-	}
-	_ = c.conn.SetWriteDeadline(time.Time{})
 
 	var firstArticleErr error
 	for i := range messageIDs {
-		destination := destinations[i]
-		if destination.Skip {
+		if destinations[i].Skip {
 			continue
 		}
-		pooled := destination.Writer != nil
-		res, err := c.readBodyBuffered(destination.Buffer, destination.BufferSource, pooled)
-		if err == nil {
-			if destination.Writer == nil {
-				results[i].Body = res.Data
-				results[i].Bytes = int64(len(res.Data))
-				continue
-			}
-			n, writeErr := destination.Writer.Write(res.Data)
-			if writeErr == nil && n != len(res.Data) {
-				writeErr = io.ErrShortWrite
-			}
-			putBodyBuf(res.Data)
-			results[i].Bytes = int64(n)
-			if writeErr == nil {
-				continue
-			}
-			err = writeErr
+		result, status := c.readPipelinedBody(destinations[i])
+		results[i] = result
+		if result.Error == nil {
+			continue
 		}
-		results[i].Error = err
-		if res.StatusCode != 0 {
+		err := fmt.Errorf("BODY pipeline article %d/%d: %w", i+1, len(messageIDs), result.Error)
+		if status != 0 {
 			// Status-line negatives, fully consumed yEnc decode failures, and
 			// destination write failures all leave a clean protocol boundary.
 			// Drain the rest of the ordered pipeline before returning so the
 			// connection remains reusable.
 			if firstArticleErr == nil {
-				firstArticleErr = fmt.Errorf("BODY pipeline article %d/%d: %w", i+1, len(messageIDs), err)
+				firstArticleErr = err
 			}
 			continue
 		}
-		batchErr := fmt.Errorf("BODY pipeline article %d/%d: %w", i+1, len(messageIDs), err)
 		for j := i + 1; j < len(results); j++ {
 			if !destinations[j].Skip {
-				results[j].Error = batchErr
+				results[j].Error = err
 			}
 		}
-		return results, batchErr
+		return results, err
 	}
 	return results, firstArticleErr
+}
+
+// readPipelinedBody reads the next pipelined BODY response into dest. It
+// also returns the parsed status code; 0 means the status line was never
+// read and the connection is mid-response.
+func (c *Connection) readPipelinedBody(dest BodyDestination) (DecodedBodyResult, int) {
+	res, err := c.readBodyBuffered(dest.Buffer, dest.BufferSource, dest.Writer != nil)
+	if err != nil {
+		return DecodedBodyResult{Error: err}, res.StatusCode
+	}
+	if dest.Writer == nil {
+		return DecodedBodyResult{Body: res.Data, Bytes: int64(len(res.Data))}, res.StatusCode
+	}
+	n, writeErr := dest.Writer.Write(res.Data)
+	if writeErr == nil && n != len(res.Data) {
+		writeErr = io.ErrShortWrite
+	}
+	putBodyBuf(res.Data)
+	return DecodedBodyResult{Bytes: int64(n), Error: writeErr}, res.StatusCode
+}
+
+// writePipeline writes one command per message ID, except those skip
+// reports, under a single write deadline and flush.
+func (c *Connection) writePipeline(command string, messageIDs []string, skip func(int) bool) error {
+	writeTimeout := c.writeTimeout
+	if writeTimeout <= 0 {
+		writeTimeout = defaultHandshakeTimeout
+	}
+	_ = c.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+	defer func() { _ = c.conn.SetWriteDeadline(time.Time{}) }()
+	for i, messageID := range messageIDs {
+		if skip != nil && skip(i) {
+			continue
+		}
+		if err := c.writeCommandArg(command, FormatMessageID(messageID)); err != nil {
+			return fmt.Errorf("write %s pipeline at %d/%d: %w", command, i+1, len(messageIDs), err)
+		}
+	}
+	if err := c.writer.Flush(); err != nil {
+		return fmt.Errorf("flush %s pipeline: %w", command, err)
+	}
+	return nil
 }
 
 // GetDecodedBodyWithMetadata retrieves and decodes the article body while also
@@ -775,26 +773,11 @@ func (c *Connection) StatBatch(messageIDs []string) ([]StatResult, error) {
 		results[i].MessageID = messageID
 	}
 
-	writeTimeout := c.writeTimeout
-	if writeTimeout <= 0 {
-		writeTimeout = defaultHandshakeTimeout
-	}
-	_ = c.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
-	for i, messageID := range messageIDs {
-		if err := c.writeCommandArg("STAT", FormatMessageID(messageID)); err != nil {
-			_ = c.conn.SetWriteDeadline(time.Time{})
-			pipelineErr := NewConnectionError(fmt.Errorf("write STAT pipeline at %d/%d: %w", i+1, len(messageIDs), err))
-			markStatSuffixError(results, 0, pipelineErr)
-			return results, pipelineErr
-		}
-	}
-	if err := c.writer.Flush(); err != nil {
-		_ = c.conn.SetWriteDeadline(time.Time{})
-		pipelineErr := NewConnectionError(fmt.Errorf("flush STAT pipeline: %w", err))
+	if err := c.writePipeline("STAT", messageIDs, nil); err != nil {
+		pipelineErr := NewConnectionError(err)
 		markStatSuffixError(results, 0, pipelineErr)
 		return results, pipelineErr
 	}
-	_ = c.conn.SetWriteDeadline(time.Time{})
 
 	for i := range results {
 		resp, err := c.readResponseWithDeadline(streamBodyTimeout)
