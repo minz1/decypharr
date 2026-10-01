@@ -416,30 +416,31 @@ func (m *Manager) processJob(ctx context.Context, job *Job) {
 		err = fmt.Errorf("unknown job type: %s", job.Type)
 	}
 
-	if err != nil {
-		if ctx.Err() != nil {
-			return
-		}
-		if isTooManyActiveDownloads(err) {
-			if job.Entry != nil {
-				job.Entry.Status = debridTypes.TorrentStatusQueued
-				_ = m.queue.Update(job.Entry)
-			}
-			m.jobQueue.Retry(job, tooManyDownloadsRetryDelay)
-			return
-		}
-		m.logger.Error().Err(err).Str("job_id", job.ID).Str("type", string(job.Type)).Msg("Active download failed")
-		if job.Entry != nil {
-			job.Entry.MarkAsError(err)
-			_ = m.queue.Update(job.Entry)
-		}
-		return
+	if err != nil && ctx.Err() == nil {
+		m.handleJobError(job, err)
 	}
 	// The worker slot is released as soon as the job is handed off. Waiting
 	// here until the entry left the downloading state parked a worker for the
 	// whole post-download lifecycle - including the 30 minute mount wait of the
 	// symlink action - so a handful of slow imports stalled every job the arrs
 	// submitted. processQueuedEntries drives the entry from here.
+}
+
+// handleJobError requeues a job the provider throttled, or fails its entry.
+func (m *Manager) handleJobError(job *Job, err error) {
+	if isTooManyActiveDownloads(err) {
+		if job.Entry != nil {
+			job.Entry.Status = debridTypes.TorrentStatusQueued
+			_ = m.queue.Update(job.Entry)
+		}
+		m.jobQueue.Retry(job, tooManyDownloadsRetryDelay)
+		return
+	}
+	m.logger.Error().Err(err).Str("job_id", job.ID).Str("type", string(job.Type)).Msg("Active download failed")
+	if job.Entry != nil {
+		job.Entry.MarkAsError(err)
+		_ = m.queue.Update(job.Entry)
+	}
 }
 
 func (m *Manager) migrate() {
@@ -561,17 +562,7 @@ func (m *Manager) Stop() error {
 	}
 	m.downloadMu.Unlock()
 
-	// Stop schedulers
-	if m.scheduler != nil {
-		if err := m.scheduler.Shutdown(); err != nil {
-			m.logger.Warn().Err(err).Msg("Failed to shutdown scheduler")
-		}
-	}
-	if m.cetScheduler != nil {
-		if err := m.cetScheduler.Shutdown(); err != nil {
-			m.logger.Warn().Err(err).Msg("Failed to shutdown CET scheduler")
-		}
-	}
+	m.stopSchedulers()
 
 	if m.jobQueue != nil {
 		m.logger.Info().Msg("Closing active download queue")
@@ -590,15 +581,7 @@ func (m *Manager) Stop() error {
 	if m.repair != nil {
 		m.repair.Stop()
 	}
-	if m.arrIndexer != nil {
-		m.arrIndexer.Close()
-	}
-	if m.arrService != nil {
-		if err := m.arrService.Close(); err != nil {
-			m.logger.Warn().Err(err).Msg("Failed to close Arr reacquisition service")
-		}
-	}
-	m.SetArrRecovery(nil)
+	m.closeArrServices()
 
 	// Close usenet connection manager if active
 	if m.usenet != nil {
@@ -620,6 +603,31 @@ func (m *Manager) Stop() error {
 
 	m.logger.Info().Msg("Manager stopped successfully")
 	return nil
+}
+
+func (m *Manager) stopSchedulers() {
+	if m.scheduler != nil {
+		if err := m.scheduler.Shutdown(); err != nil {
+			m.logger.Warn().Err(err).Msg("Failed to shutdown scheduler")
+		}
+	}
+	if m.cetScheduler != nil {
+		if err := m.cetScheduler.Shutdown(); err != nil {
+			m.logger.Warn().Err(err).Msg("Failed to shutdown CET scheduler")
+		}
+	}
+}
+
+func (m *Manager) closeArrServices() {
+	if m.arrIndexer != nil {
+		m.arrIndexer.Close()
+	}
+	if m.arrService != nil {
+		if err := m.arrService.Close(); err != nil {
+			m.logger.Warn().Err(err).Msg("Failed to close Arr reacquisition service")
+		}
+	}
+	m.SetArrRecovery(nil)
 }
 
 // Reset resets the manager with the new configuration
