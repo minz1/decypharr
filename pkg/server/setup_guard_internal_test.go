@@ -34,7 +34,11 @@ func TestSetupEndpointsProtectStoredCredentials(t *testing.T) {
 	w := httptest.NewRecorder()
 	s.skipAuthHandler(w, httptest.NewRequest(http.MethodPost, "/skip-auth", nil))
 	if w.Code != http.StatusUnauthorized || !config.Get().UseAuth {
-		t.Fatalf("unauthenticated skip-auth = %d, UseAuth = %t; want 401 and auth still on", w.Code, config.Get().UseAuth)
+		t.Fatalf(
+			"unauthenticated skip-auth = %d, UseAuth = %t; want 401 and auth still on",
+			w.Code,
+			config.Get().UseAuth,
+		)
 	}
 
 	w = httptest.NewRecorder()

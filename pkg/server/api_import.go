@@ -40,8 +40,11 @@ type addTask struct {
 	source  string
 }
 
-func (b *addBatch) fail(format string, args ...any) {
-	b.results = append(b.results, &manager.ImportRequest{Status: importStatusError, Error: fmt.Sprintf(format, args...)})
+func (b *addBatch) failf(format string, args ...any) {
+	b.results = append(
+		b.results,
+		&manager.ImportRequest{Status: importStatusError, Error: fmt.Sprintf(format, args...)},
+	)
 }
 
 func (b *addBatch) add(req *manager.ImportRequest, source string) {
@@ -107,7 +110,9 @@ func nonEmptyLines(text string) []string {
 
 func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxAddBody)
-	if err := r.ParseMultipartForm(multipartMemory); err != nil {
+	if err := r.ParseMultipartForm(
+		multipartMemory,
+	); err != nil { //nolint:gosec // G120: body capped by MaxBytesReader above
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -118,7 +123,7 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 	for _, u := range nonEmptyLines(r.FormValue("urls")) {
 		magnet, err := utils.GetMagnetFromUrl(u, opts.rmTrackerURLs)
 		if err != nil {
-			batch.fail("Failed to parse URL %s: %v", u, err)
+			batch.failf("Failed to parse URL %s: %v", u, err)
 			continue
 		}
 		batch.add(opts.torrent(magnet), u)
@@ -126,7 +131,7 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 	for _, fileHeader := range r.MultipartForm.File["files"] {
 		magnet, err := magnetFromUpload(fileHeader, opts.rmTrackerURLs)
 		if err != nil {
-			batch.fail("Failed to parse torrent file %s: %v", fileHeader.Filename, err)
+			batch.failf("Failed to parse torrent file %s: %v", fileHeader.Filename, err)
 			continue
 		}
 		batch.add(opts.torrent(magnet), fileHeader.Filename)
@@ -134,7 +139,7 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 	for _, u := range nonEmptyLines(r.FormValue("nzbURLs")) {
 		filename, content, err := utils.DownloadFile(u, utils.WithHeader("User-Agent", s.nzbUserAgent))
 		if err != nil {
-			batch.fail("Failed to fetch NZB from URL %s: %v", u, err)
+			batch.failf("Failed to fetch NZB from URL %s: %v", u, err)
 			continue
 		}
 		batch.add(opts.nzb(filename, content), u)
@@ -142,7 +147,7 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 	for _, fileHeader := range r.MultipartForm.File["nzbFiles"] {
 		content, err := getNZBContentFromFile(fileHeader)
 		if err != nil {
-			batch.fail("Failed to read NZB file %s: %v", fileHeader.Filename, err)
+			batch.failf("Failed to read NZB file %s: %v", fileHeader.Filename, err)
 			continue
 		}
 		batch.add(opts.nzb(fileHeader.Filename, content), fileHeader.Filename)

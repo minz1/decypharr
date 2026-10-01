@@ -322,8 +322,8 @@ func prepareConfigUpdate(current *config.Config, body []byte) (config.Config, er
 		return config.Config{}, fmt.Errorf("invalid request body: %w", err)
 	}
 	next.MigrateVirtualFolders()
-	if err := next.ValidateVirtualFolders(); err != nil {
-		return config.Config{}, fmt.Errorf("invalid virtual folders: %w", err)
+	if validateErr := next.ValidateVirtualFolders(); validateErr != nil {
+		return config.Config{}, fmt.Errorf("invalid virtual folders: %w", validateErr)
 	}
 	next.Auth = current.Auth
 	next.SessionSecret = current.SessionSecret
