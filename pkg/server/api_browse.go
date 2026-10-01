@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"mime"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -51,6 +52,37 @@ const (
 	sortByName = "name"
 	sortBySize = "size"
 )
+
+// Page sizes for listing endpoints.
+const (
+	defaultQueuePageLimit  = 20
+	defaultBrowsePageLimit = 50
+	maxPageLimit           = 100
+)
+
+// pageParams reads the 1-based page and the page size, falling back to
+// defLimit when limit is missing or out of range.
+func pageParams(q url.Values, defLimit int) (int, int) {
+	page, _ := strconv.Atoi(q.Get("page"))
+	page = max(page, 1)
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	if limit < 1 || limit > maxPageLimit {
+		limit = defLimit
+	}
+	return page, limit
+}
+
+// paginate returns the 1-based page of items and the page count. Pages past
+// the end are empty. Comparing page to the page count first keeps a huge
+// page number from overflowing (page-1)*limit into a negative offset.
+func paginate[T any](items []T, page, limit int) ([]T, int) {
+	totalPages := (len(items) + limit - 1) / limit
+	if page > totalPages {
+		return []T{}, totalPages
+	}
+	start := (page - 1) * limit
+	return items[start:min(start+limit, len(items))], totalPages
+}
 
 func getBrowseSortParams(r *http.Request) (string, string) {
 	sortBy := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("sort_by")))
@@ -115,15 +147,7 @@ func sortBrowseEntries(entries []BrowseEntry, sortBy, sortOrder string) {
 
 // handleBrowseMount returns subdirectories under a mount (__all__, __bad__, etc.)
 func (s *Server) handleBrowseMount(w http.ResponseWriter, r *http.Request) {
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	if page < 1 {
-		page = 1
-	}
-
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit < 1 || limit > 100 {
-		limit = 50
-	}
+	page, limit := pageParams(r.URL.Query(), defaultBrowsePageLimit)
 	sortBy, sortOrder := getBrowseSortParams(r)
 
 	children := s.manager.GetEntries()
@@ -145,16 +169,7 @@ func (s *Server) handleBrowseMount(w http.ResponseWriter, r *http.Request) {
 
 	// Apply pagination
 	total := len(entries)
-	totalPages := (total + limit - 1) / limit
-	offset := (page - 1) * limit
-
-	var paginatedEntries []BrowseEntry
-	if offset < total {
-		end := min(offset+limit, total)
-		paginatedEntries = entries[offset:end]
-	} else {
-		paginatedEntries = []BrowseEntry{}
-	}
+	paginatedEntries, totalPages := paginate(entries, page, limit)
 
 	utils.JSONResponse(w, BrowseResponse{
 		Entries:     paginatedEntries,
@@ -171,15 +186,7 @@ func (s *Server) handleBrowseMount(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleBrowseGroup(w http.ResponseWriter, r *http.Request) {
 	group := utils.PathUnescape(chi.URLParam(r, "group"))
 
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	if page < 1 {
-		page = 1
-	}
-
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit < 1 || limit > 100 {
-		limit = 50
-	}
+	page, limit := pageParams(r.URL.Query(), defaultBrowsePageLimit)
 	sortBy, sortOrder := getBrowseSortParams(r)
 
 	search := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("search")))
@@ -220,16 +227,7 @@ func (s *Server) handleBrowseGroup(w http.ResponseWriter, r *http.Request) {
 
 	// Apply pagination
 	total := len(entries)
-	totalPages := (total + limit - 1) / limit
-	offset := (page - 1) * limit
-
-	var paginatedEntries []BrowseEntry
-	if offset < total {
-		end := min(offset+limit, total)
-		paginatedEntries = entries[offset:end]
-	} else {
-		paginatedEntries = []BrowseEntry{}
-	}
+	paginatedEntries, totalPages := paginate(entries, page, limit)
 
 	utils.JSONResponse(w, BrowseResponse{
 		Entries:     paginatedEntries,
@@ -248,15 +246,7 @@ func (s *Server) handleBrowseTorrentFiles(w http.ResponseWriter, r *http.Request
 	group := utils.PathUnescape(chi.URLParam(r, "group"))
 	torrent := utils.PathUnescape(chi.URLParam(r, "torrent"))
 
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	if page < 1 {
-		page = 1
-	}
-
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit < 1 || limit > 100 {
-		limit = 50
-	}
+	page, limit := pageParams(r.URL.Query(), defaultBrowsePageLimit)
 	sortBy, sortOrder := getBrowseSortParams(r)
 
 	search := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("search")))
@@ -293,16 +283,7 @@ func (s *Server) handleBrowseTorrentFiles(w http.ResponseWriter, r *http.Request
 
 	// Apply pagination
 	total := len(entries)
-	totalPages := (total + limit - 1) / limit
-	offset := (page - 1) * limit
-
-	var paginatedEntries []BrowseEntry
-	if offset < total {
-		end := min(offset+limit, total)
-		paginatedEntries = entries[offset:end]
-	} else {
-		paginatedEntries = []BrowseEntry{}
-	}
+	paginatedEntries, totalPages := paginate(entries, page, limit)
 
 	parentPath := "/" + group
 
