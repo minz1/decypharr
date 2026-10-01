@@ -31,6 +31,13 @@ const (
 	// killing it; rcloneReapTimeout bounds the wait after the kill.
 	rcloneGracefulStop = 2 * time.Second
 	rcloneReapTimeout  = 5 * time.Second
+	// serverReadyTimeout bounds the wait for rcd before mounting.
+	serverReadyTimeout = 30 * time.Second
+
+	// rclone.log rotation.
+	logMaxSizeMB  = 10
+	logMaxAgeDays = 15
+	logMaxBackups = 5
 
 	// mountRetries is how many times a failed RC mount is retried.
 	mountRetries = 3
@@ -137,9 +144,9 @@ func (m *Manager) Start(ctx context.Context) error {
 	// Use lumberjack for log rotation instead of rclone's --log-file
 	rotatingLog := &lumberjack.Logger{
 		Filename:   filepath.Join(logger.GetLogPath(), "rclone.log"),
-		MaxSize:    10, // 10 MB
-		MaxAge:     15, // 15 days
-		MaxBackups: 5,  // Keep max 5 backup files
+		MaxSize:    logMaxSizeMB,
+		MaxAge:     logMaxAgeDays,
+		MaxBackups: logMaxBackups,
 		Compress:   true,
 	}
 
@@ -190,7 +197,7 @@ func (m *Manager) Start(ctx context.Context) error {
 
 		// Start mounting here now
 
-		if err := m.waitForReady(30 * time.Second); err != nil {
+		if err := m.waitForReady(serverReadyTimeout); err != nil {
 			m.logger.Error().Err(err).Msg("Client RC server did not become ready in time")
 			return
 		}

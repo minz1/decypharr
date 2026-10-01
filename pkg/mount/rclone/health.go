@@ -6,6 +6,9 @@ import (
 	"time"
 )
 
+// healthCheckInterval is how often the mount's health is probed.
+const healthCheckInterval = 30 * time.Second
+
 // RecoverMount attempts to recover a failed mount.
 func (m *Manager) RecoverMount(ctx context.Context) error {
 	mountInfo := m.getMountInfo()
@@ -33,7 +36,7 @@ func (m *Manager) RecoverMount(ctx context.Context) error {
 
 // MonitorMounts continuously monitors mount health and attempts recovery.
 func (m *Manager) MonitorMounts(ctx context.Context) {
-	ticker := time.NewTicker(30 * time.Second) // Check every 30 seconds
+	ticker := time.NewTicker(healthCheckInterval)
 	defer ticker.Stop()
 
 	for {

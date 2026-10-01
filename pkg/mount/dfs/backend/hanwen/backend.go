@@ -28,6 +28,15 @@ const (
 	ReadTimeout  = 120 * time.Second
 	AttrTimeout  = 30 * time.Second
 	EntryTimeout = 1 * time.Second
+
+	// maxWrite is the largest FUSE request payload negotiated with the kernel.
+	maxWrite = 1 << 20
+	// forceUnmountTimeout bounds the whole chain of umount fallbacks.
+	forceUnmountTimeout = 10 * time.Second
+	dirPerm             = 0o755
+	filePerm            = 0o644
+	// statBlockSize is the unit of the Blocks attribute.
+	statBlockSize = 512
 )
 
 // Backend implements the hanwen/go-fuse backend.
@@ -79,7 +88,7 @@ func (b *Backend) Mount(ctx context.Context) error {
 		Name:                 "decypharr",
 		DisableXAttrs:        true,
 		IgnoreSecurityLabels: true,
-		MaxWrite:             1024 * 1024,
+		MaxWrite:             maxWrite,
 		// The kernel defaults MaxBackground to 12, which caps in-flight
 		// readahead far below the VFS readahead window.
 		MaxBackground: b.config.FuseMaxBackground,
@@ -273,7 +282,7 @@ func (b *Backend) forceUnmount(ctx context.Context) {
 		{"fusermount3", "-uz", b.config.MountPath},
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, forceUnmountTimeout)
 	defer cancel()
 
 	for _, method := range methods {

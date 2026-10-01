@@ -21,6 +21,15 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/manager"
 )
 
+const (
+	// torrentDepth is the path depth of a torrent directory (group/torrent).
+	torrentDepth = 2
+	// dirSize is the conventional size reported for directories.
+	dirSize  = 4096
+	filePerm = 0o444
+	dirPerm  = 0o555
+)
+
 type catalog interface {
 	RootInfo() *manager.FileInfo
 	GetEntries() []manager.FileInfo
@@ -176,7 +185,7 @@ func (f *filesystem) lookupAbsoluteUncached(segments []string) (*node, error) {
 				return makeNode(&entries[i]), nil
 			}
 		}
-	case 2:
+	case torrentDepth:
 		_, entries := f.catalog.GetEntryChildren(segments[0])
 		for i := range entries {
 			if entries[i].Name() == segments[1] {
@@ -199,7 +208,7 @@ func (f *filesystem) lookupAbsoluteUncached(segments []string) (*node, error) {
 			if strings.HasPrefix(children[i].Name(), prefix) {
 				return &node{
 					name:    segments[len(segments)-1],
-					size:    4096,
+					size:    dirSize,
 					modTime: children[i].ModTime(),
 					isDir:   true,
 				}, nil
@@ -236,7 +245,7 @@ func (f *filesystem) torrentChildren(torrent, prefix string) []node {
 		name, _, nested := strings.Cut(remainder, "/")
 		if nested {
 			if existing, seen := children[name]; !seen || !existing.isDir {
-				children[name] = node{name: name, size: 4096, modTime: entries[i].ModTime(), isDir: true}
+				children[name] = node{name: name, size: dirSize, modTime: entries[i].ModTime(), isDir: true}
 			}
 			continue
 		}
@@ -274,11 +283,11 @@ func makeNode(info *manager.FileInfo) *node {
 }
 
 func fileInfo(entry *node) fs.FileInfo {
-	mode := fs.FileMode(0o444)
+	mode := fs.FileMode(filePerm)
 	size := entry.size
 	if entry.isDir {
-		mode = fs.ModeDir | 0o555
-		size = 4096
+		mode = fs.ModeDir | dirPerm
+		size = dirSize
 	}
 	return nodeInfo{
 		name:    entry.name,

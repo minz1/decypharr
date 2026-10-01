@@ -16,6 +16,9 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/vfs"
 )
 
+// unmountTimeout bounds Stop's backend unmount.
+const unmountTimeout = 10 * time.Second
+
 // Manager manages FUSE filesystem instances with proper caching.
 type Manager struct {
 	manager            *manager.Manager
@@ -84,7 +87,7 @@ func (m *Manager) Stop() error {
 		Str("backend", string(m.backend.Type())).
 		Msg("Stopping FUSE filesystem")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), unmountTimeout)
 	defer cancel()
 
 	// Unmount using backend, this also ensures the VFS manager is properly closed

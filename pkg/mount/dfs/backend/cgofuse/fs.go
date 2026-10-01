@@ -20,6 +20,22 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/vfs"
 )
 
+const (
+	dirPerm  = 0o755
+	filePerm = 0o644
+	// statBlockSize is the unit of Stat_t.Blocks (and the advertised Blksize).
+	statBlockSize = 512
+	// statfsBlocks advertises a virtual 4 TiB volume of 4 KiB blocks, half free.
+	statfsBlocks      = 1 << 30
+	statfsFreeDivisor = 2
+	// readTimeout bounds one read so a stalled download cannot wedge a
+	// WinFsp/macFUSE worker thread.
+	readTimeout = 120 * time.Second
+	// fileDepth is the path depth (group/torrent or torrent/file) at which a
+	// path can name a file.
+	fileDepth = 2
+)
+
 // FS implements the cgofuse FileSystemInterface.
 type FS struct {
 	fuse.FileSystemBase // Embed base for default implementations
@@ -57,8 +73,8 @@ func (f *FS) Destroy() {
 func (f *FS) Statfs(_ string, stat *fuse.Statfs_t) int {
 	stat.Bsize = 4096
 	stat.Frsize = 4096
-	stat.Blocks = 1024 * 1024 * 1024 // 4TB virtual size
-	stat.Bfree = stat.Blocks / 2
+	stat.Blocks = statfsBlocks
+	stat.Bfree = stat.Blocks / statfsFreeDivisor
 	stat.Bavail = stat.Bfree
 	stat.Files = 1000000
 	stat.Ffree = 500000
@@ -70,7 +86,7 @@ func (f *FS) Statfs(_ string, stat *fuse.Statfs_t) int {
 func (f *FS) Getattr(path string, stat *fuse.Stat_t, _ uint64) int {
 	// Root directory
 	if path == "/" {
-		stat.Mode = fuse.S_IFDIR | 0755
+		stat.Mode = fuse.S_IFDIR | dirPerm
 		stat.Nlink = 2
 		stat.Uid = f.config.UID
 		stat.Gid = f.config.GID
@@ -90,10 +106,10 @@ func (f *FS) Getattr(path string, stat *fuse.Stat_t, _ uint64) int {
 	}
 
 	if info.IsDir() {
-		stat.Mode = fuse.S_IFDIR | 0755
+		stat.Mode = fuse.S_IFDIR | dirPerm
 		stat.Nlink = 2
 	} else {
-		stat.Mode = fuse.S_IFREG | 0644
+		stat.Mode = fuse.S_IFREG | filePerm
 		stat.Nlink = 1
 		stat.Size = info.Size()
 	}
@@ -107,7 +123,7 @@ func (f *FS) Getattr(path string, stat *fuse.Stat_t, _ uint64) int {
 	stat.Ctim = t
 	stat.Birthtim = t
 	stat.Blksize = 512
-	stat.Blocks = (stat.Size + 511) / 512
+	stat.Blocks = (stat.Size + statBlockSize - 1) / statBlockSize
 
 	return 0
 }
@@ -172,7 +188,7 @@ func (f *FS) entryStat(info *manager.FileInfo) *fuse.Stat_t {
 	stat := &fuse.Stat_t{
 		Uid:     f.config.UID,
 		Gid:     f.config.GID,
-		Blksize: 512,
+		Blksize: statBlockSize,
 	}
 
 	modTime := info.ModTime()
@@ -183,13 +199,13 @@ func (f *FS) entryStat(info *manager.FileInfo) *fuse.Stat_t {
 	stat.Birthtim = t
 
 	if info.IsDir() {
-		stat.Mode = fuse.S_IFDIR | 0755
+		stat.Mode = fuse.S_IFDIR | dirPerm
 		stat.Nlink = 2
 	} else {
-		stat.Mode = fuse.S_IFREG | 0644
+		stat.Mode = fuse.S_IFREG | filePerm
 		stat.Nlink = 1
 		stat.Size = info.Size()
-		stat.Blocks = (stat.Size + 511) / 512
+		stat.Blocks = (stat.Size + statBlockSize - 1) / statBlockSize
 	}
 
 	return stat
@@ -280,7 +296,7 @@ func (f *FS) Read(_ string, buff []byte, off int64, fh uint64) int {
 		return -fuse.EIO
 	}
 
-	readCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	readCtx, cancel := context.WithTimeout(context.Background(), readTimeout)
 	defer cancel()
 
 	n, err := handle.reader.ReadAtContext(readCtx, buff[:size], off)
@@ -349,7 +365,7 @@ func (f *FS) Fsync(_ string, _ bool, _ uint64) int {
 // Unlink removes a file.
 func (f *FS) Unlink(path string) int {
 	parts := splitPath(path)
-	if len(parts) < 2 {
+	if len(parts) < fileDepth {
 		return -fuse.EPERM
 	}
 
@@ -426,7 +442,7 @@ func (f *FS) getFileInfo(path string) (*manager.FileInfo, error) {
 	}
 
 	// Depth 2: could be a torrent inside __all__, or a file inside a torrent
-	if len(parts) == 2 {
+	if len(parts) == fileDepth {
 		groupOrTorrent := parts[0]
 		entryName := parts[1]
 

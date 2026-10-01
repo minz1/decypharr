@@ -86,11 +86,11 @@ func (f *File) Getattr(_ context.Context, fh fs.FileHandle, out *fuse.AttrOut) s
 	}
 
 	modTime := unixSeconds(f.modTime(info))
-	out.Mode = 0644 | fuse.S_IFREG
+	out.Mode = filePerm | fuse.S_IFREG
 	out.Size = nonNegative(info.Size())
 	out.Nlink = 1 // Files always have 1 link (themselves)
 	out.Blksize = 4096
-	out.Blocks = (nonNegative(info.Size()) + 511) / 512 // Number of 512-byte blocks
+	out.Blocks = (nonNegative(info.Size()) + statBlockSize - 1) / statBlockSize
 	out.Uid = f.config.UID
 	out.Gid = f.config.GID
 	out.Atime = modTime

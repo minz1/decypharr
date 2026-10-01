@@ -19,6 +19,9 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/manager"
 )
 
+// handleKeySize is the length of the NFS filehandle key.
+const handleKeySize = 32
+
 // NFSServer serves the library catalog over NFSv4.0.
 type NFSServer struct {
 	manager *manager.Manager
@@ -78,13 +81,13 @@ func (s *NFSServer) Start(ctx context.Context) error {
 // first use.
 func loadHandleKey(path string) ([]byte, error) {
 	key, err := os.ReadFile(path)
-	if err == nil && len(key) == 32 {
+	if err == nil && len(key) == handleKeySize {
 		return key, nil
 	}
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
-	key = make([]byte, 32)
+	key = make([]byte, handleKeySize)
 	if _, readErr := rand.Read(key); readErr != nil {
 		return nil, readErr
 	}

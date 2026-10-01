@@ -131,7 +131,7 @@ func (d *Dir) newNode(info *manager.FileInfo) fs.InodeEmbedder {
 
 // Getattr returns directory attributes.
 func (d *Dir) Getattr(_ context.Context, _ fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	out.Mode = 0755 | fuse.S_IFDIR
+	out.Mode = dirPerm | fuse.S_IFDIR
 	out.Size = 4096 // Standard directory size
 	out.Nlink = 2   // Directories have 2 links (itself + "." entry)
 	out.Uid = d.config.UID
@@ -264,10 +264,10 @@ func (d *Dir) lookupChild(name string) (*manager.FileInfo, syscall.Errno) {
 // setEntryOut sets the attributes for an entry.
 func (d *Dir) setEntryOut(info *manager.FileInfo, out *fuse.EntryOut, modTime uint64) {
 	if info.IsDir() {
-		out.Attr.Mode = fuse.S_IFDIR | 0755
+		out.Attr.Mode = fuse.S_IFDIR | dirPerm
 		out.Attr.Nlink = 2
 	} else {
-		out.Attr.Mode = fuse.S_IFREG | 0644
+		out.Attr.Mode = fuse.S_IFREG | filePerm
 		out.Attr.Size = nonNegative(info.Size())
 		out.Attr.Nlink = 1
 	}
@@ -290,9 +290,9 @@ func (d *Dir) Readdir(_ context.Context) (fs.DirStream, syscall.Errno) {
 
 	fuseEntries := make([]fuse.DirEntry, 0, len(entries))
 	for _, info := range entries {
-		mode := uint32(fuse.S_IFREG | 0644)
+		mode := uint32(fuse.S_IFREG | filePerm)
 		if info.IsDir() {
-			mode = fuse.S_IFDIR | 0755
+			mode = fuse.S_IFDIR | dirPerm
 		}
 		fuseEntries = append(fuseEntries, fuse.DirEntry{
 			Mode: mode,
