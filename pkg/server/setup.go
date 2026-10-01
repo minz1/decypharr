@@ -44,9 +44,8 @@ func (s *Server) sendSetupError(w http.ResponseWriter, message string, err error
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusBadRequest)
-	_ = json.NewEncoder(w).
-		Encode(response)
 	//nolint:gosec // G117: the API token is shown once, on purpose, after token-only setup
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 // SetupCompleteRequest represents the complete setup data from frontend.
@@ -136,9 +135,8 @@ func (s *Server) setupCompleteHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).
-		Encode(response)
 	//nolint:gosec // G117: the API token is shown once, on purpose, after token-only setup
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 // Defaults the wizard fills in when the user leaves them unset.
@@ -171,10 +169,8 @@ func applySetup(cfg *config.Config, req *SetupCompleteRequest, hasDebrid, hasUse
 		return errors.New("download folder is required")
 	}
 	// Shared with the Arr containers that import from it.
-	if err := os.MkdirAll(
-		req.Download.DownloadFolder,
-		0o755,
-	); err != nil { //nolint:gosec // G301: media folder read by other users/containers
+	//nolint:gosec // G301: media folder read by other users/containers
+	if err := os.MkdirAll(req.Download.DownloadFolder, 0o755); err != nil {
 		return fmt.Errorf("failed to create download folder: %w", err)
 	}
 	cfg.DownloadFolder = req.Download.DownloadFolder
