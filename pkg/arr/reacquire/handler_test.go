@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 )
 
@@ -27,7 +26,6 @@ func (progress *recordedProgress) UpdateDurable(status Status, mutate func(*Job)
 }
 
 func TestReacquireHandlerFailsExactDownloadAndWaitsForArr(t *testing.T) {
-	configureArrHTTPTest(t)
 	var historyCalls atomic.Int64
 	var failed atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
@@ -94,7 +92,6 @@ func TestReacquireHandlerFailsExactDownloadAndWaitsForArr(t *testing.T) {
 }
 
 func TestReacquireHandlerRefusesStaleArrFileIdentity(t *testing.T) {
-	configureArrHTTPTest(t)
 	var deleted atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		switch {
@@ -142,7 +139,6 @@ func TestReacquireHandlerRefusesStaleArrFileIdentity(t *testing.T) {
 }
 
 func TestReacquireHandlerRefusesChangedArrInstance(t *testing.T) {
-	configureArrHTTPTest(t)
 	var requests atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		requests.Add(1)
@@ -336,11 +332,4 @@ func newTestHandler(host string) *arrHandler {
 
 func newTestArrStorage() *arr.Service {
 	return arr.New()
-}
-
-func configureArrHTTPTest(t *testing.T) {
-	t.Helper()
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
 }
