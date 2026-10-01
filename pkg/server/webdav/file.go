@@ -20,7 +20,7 @@ const streamCopyBufSize = 1 << 20
 // streamCopyBufPool holds the copy buffers StreamResponse pipes sessions
 // through; every session.Read costs a lock pass and watchdog arming, so
 // copy granularity multiplies all of it.
-var streamCopyBufPool = sync.Pool{
+var streamCopyBufPool = sync.Pool{ //nolint:gochecknoglobals // process-wide buffer pool shared by all handlers
 	New: func() any {
 		b := make([]byte, streamCopyBufSize)
 		return &b

@@ -43,12 +43,11 @@ func (s *Server) isValidAPIToken(r *http.Request) bool {
 	}
 
 	// Support both "Bearer <token>" and "Token <token>" formats
-	var token string
-	if after, ok := strings.CutPrefix(authHeader, "Bearer "); ok {
-		token = after
-	} else if after, ok := strings.CutPrefix(authHeader, "Token "); ok {
-		token = after
-	} else {
+	token, ok := strings.CutPrefix(authHeader, "Bearer ")
+	if !ok {
+		token, ok = strings.CutPrefix(authHeader, "Token ")
+	}
+	if !ok {
 		return false
 	}
 

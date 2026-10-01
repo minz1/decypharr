@@ -2,9 +2,21 @@ package server
 
 import (
 	"cmp"
+	"mime"
 	"net/url"
 	"testing"
 )
+
+// The old fmt.Sprintf(`filename="%s"`) ended the value at an embedded quote.
+func TestAttachmentDispositionRoundTrips(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{`Show "Pilot".mkv`, "Café S01E01.mkv", "plain.mkv"} {
+		disposition, params, err := mime.ParseMediaType(attachmentDisposition(name))
+		if err != nil || disposition != "attachment" || params["filename"] != name {
+			t.Errorf("%q -> %q %v (%v)", name, disposition, params, err)
+		}
+	}
+}
 
 func TestQueryBoolOverridesBody(t *testing.T) {
 	t.Parallel()

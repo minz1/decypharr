@@ -11,7 +11,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/manager"
 )
 
-var pctHex = "0123456789ABCDEF"
+const pctHex = "0123456789ABCDEF"
 
 // fastEscapePath returns a percent-encoded path, preserving '/'
 // and only encoding bytes outside the unreserved set:

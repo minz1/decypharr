@@ -64,7 +64,7 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 	}
 	var tasks []addTask
 	results := make([]*manager.ImportRequest, 0)
-	defer r.MultipartForm.RemoveAll()
+	defer func() { _ = r.MultipartForm.RemoveAll() }()
 
 	// Collect torrent URLs
 	if urls := r.FormValue("urls"); urls != "" {

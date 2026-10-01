@@ -23,11 +23,13 @@ func (q *QBit) handleLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
-	cookie := &http.Cookie{
+	// Not Secure: Arr clients talk to decypharr over plain HTTP on the LAN.
+	cookie := &http.Cookie{ //nolint:gosec // G124: Secure would make HTTP clients drop the session
 		Name:     "SID",
 		Value:    createSID(username, password),
 		Path:     "/",
-		SameSite: http.SameSiteNoneMode,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
 	}
 	http.SetCookie(w, cookie)
 	_, _ = w.Write([]byte("Ok."))

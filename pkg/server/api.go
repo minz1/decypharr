@@ -285,6 +285,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
 	// Create response with API token info
 	type ConfigResponse struct {
 		*config.Config
+
 		SessionSecret string `json:"session_secret,omitempty"`
 		APIToken      string `json:"api_token,omitempty"`
 		AuthUsername  string `json:"auth_username,omitempty"`
