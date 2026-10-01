@@ -85,7 +85,11 @@ func (h *Handler) StreamResponse(
 
 	// The wrapper struct hides w's ReaderFrom so io.CopyBuffer uses the
 	// pooled buffer instead of net/http's 32KB one.
-	bufPtr := streamCopyBufPool.Get().(*[]byte)
+	bufPtr, ok := streamCopyBufPool.Get().(*[]byte)
+	if !ok {
+		buf := make([]byte, streamCopyBufSize)
+		bufPtr = &buf
+	}
 	_, err = io.CopyBuffer(struct{ io.Writer }{w}, io.LimitReader(stream, length), *bufPtr)
 	streamCopyBufPool.Put(bufPtr)
 	if err != nil {
