@@ -8,11 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"reflect"
+	"slices"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -67,7 +68,7 @@ func (s *Server) handleRunMountCacheCleanup(w http.ResponseWriter, _ *http.Reque
 
 	utils.JSONResponse(w, map[string]any{
 		keyStatus: keySuccess,
-		"cache":  cleanupStats,
+		"cache":   cleanupStats,
 	}, http.StatusOK)
 }
 
@@ -97,21 +98,12 @@ func (s *Server) handlePurgeMountCache(w http.ResponseWriter, _ *http.Request) {
 
 	utils.JSONResponse(w, map[string]any{
 		keyStatus: keySuccess,
-		"cache":  purgeStats,
+		"cache":   purgeStats,
 	}, http.StatusOK)
 }
 
 func (s *Server) handleGetTorrents(w http.ResponseWriter, r *http.Request) {
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	if page < 1 {
-		page = 1
-	}
-
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit < 1 || limit > 100 {
-		limit = 20
-	}
-
+	page, limit := pageParams(r.URL.Query(), defaultQueuePageLimit)
 	search := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("search")))
 	category := strings.TrimSpace(r.URL.Query().Get("category"))
 	state := strings.TrimSpace(r.URL.Query().Get("state"))
@@ -136,50 +128,22 @@ func (s *Server) handleGetTorrents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	filteredTorrents := make([]*storage.Entry, 0)
+	categorySet := make(map[string]struct{})
 	for _, t := range allTorrents {
-		if search != "" {
-			searchIn := strings.ToLower(t.Name + " " + t.InfoHash)
-			if !strings.Contains(searchIn, search) {
-				continue
-			}
+		if t.Category != "" {
+			categorySet[t.Category] = struct{}{}
 		}
-
-		if category != "" && t.Category != category {
-			continue
+		if (search == "" || strings.Contains(strings.ToLower(t.Name+" "+t.InfoHash), search)) &&
+			(category == "" || t.Category == category) &&
+			(state == "" || t.State == storage.TorrentState(state)) {
+			filteredTorrents = append(filteredTorrents, t)
 		}
-
-		if state != "" && t.State != storage.TorrentState(state) {
-			continue
-		}
-
-		filteredTorrents = append(filteredTorrents, t)
 	}
-
 	sortQueuedTorrents(filteredTorrents, sortBy, sortOrder)
 
 	total := len(filteredTorrents)
-	totalPages := (total + limit - 1) / limit
-	offset := (page - 1) * limit
-
-	var paginatedTorrents []*storage.Entry
-	if offset < total {
-		end := min(offset+limit, total)
-		paginatedTorrents = filteredTorrents[offset:end]
-	} else {
-		paginatedTorrents = []*storage.Entry{}
-	}
-
-	categorySet := make(map[string]bool)
-	for _, t := range allTorrents {
-		if t.Category != "" {
-			categorySet[t.Category] = true
-		}
-	}
-
-	categories := make([]string, 0, len(categorySet))
-	for c := range categorySet {
-		categories = append(categories, c)
-	}
+	paginatedTorrents, totalPages := paginate(filteredTorrents, page, limit)
+	categories := slices.Collect(maps.Keys(categorySet))
 
 	utils.JSONResponse(w, map[string]any{
 		"torrents":    paginatedTorrents,
@@ -684,7 +648,7 @@ func (s *Server) handleRecheckMedia(w http.ResponseWriter, r *http.Request) {
 		if run != nil {
 			utils.JSONResponse(w, map[string]any{
 				keyError: err.Error(),
-				"run":   run,
+				"run":    run,
 			}, status)
 			return
 		}
@@ -821,7 +785,7 @@ func (s *Server) handleRefreshAPIToken(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	utils.JSONResponse(w, map[string]any{
-		"token":   token,
+		"token":    token,
 		keyMessage: "API token refreshed successfully",
 	}, http.StatusOK)
 }

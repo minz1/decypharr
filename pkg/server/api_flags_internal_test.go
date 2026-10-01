@@ -18,6 +18,24 @@ func TestAttachmentDispositionRoundTrips(t *testing.T) {
 	}
 }
 
+// Before paginate, (page-1)*limit overflowed for a huge ?page= and the
+// negative offset panicked the handler.
+func TestPaginateHugePage(t *testing.T) {
+	t.Parallel()
+	page, limit := pageParams(url.Values{"page": {"9223372036854775807"}, "limit": {"100"}}, defaultQueuePageLimit)
+	items := make([]int, 250)
+	got, totalPages := paginate(items, page, limit)
+	if len(got) != 0 || totalPages != 3 {
+		t.Fatalf("huge page = %d items of %d pages, want 0 of 3", len(got), totalPages)
+	}
+	if got, _ := paginate(items, 3, 100); len(got) != 50 {
+		t.Fatalf("last page has %d items, want 50", len(got))
+	}
+	if got, totalPages := paginate([]int{}, 1, 20); len(got) != 0 || totalPages != 0 {
+		t.Fatal("empty input must give an empty page")
+	}
+}
+
 func TestQueryBoolOverridesBody(t *testing.T) {
 	t.Parallel()
 	q := url.Values{"a": {" Yes "}, "b": {"off"}, "c": {"maybe"}}
