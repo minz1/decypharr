@@ -88,28 +88,33 @@ func (d *Downloader) download(torrent *storage.Entry) error {
 	}
 	torrentMountPath := d.manager.GetTorrentMountPath(torrent)
 	if isMultiSeason {
-		seasonResults := convertToMultiSeason(torrent, seasons)
-		for _, result := range seasonResults {
-			if saved, err := d.manager.queue.GetTorrent(result.InfoHash); err == nil && saved.IsComplete {
-				continue
-			}
-			if err := d.manager.queue.Add(result); err != nil {
-				d.logger.Error().Err(err).Msgf("Failed to save season torrent")
-				continue
-			}
-			if err := d.process(result, torrentMountPath); err != nil {
-				if errors.Is(err, context.Canceled) && d.operationContext().Err() != nil {
-					return err
-				}
-				d.markAsError(result, err)
-			}
-		}
-		// Parent has been fanned out into season entries; mark it complete so
-		// it leaves the downloading queue instead of getting re-processed.
-		d.completeEntry(torrent)
-		return nil
+		return d.downloadSeasons(torrent, seasons, torrentMountPath)
 	}
 	return d.process(torrent, torrentMountPath)
+}
+
+// downloadSeasons fans a season pack out into one entry per season and
+// processes each that is not already complete.
+func (d *Downloader) downloadSeasons(torrent *storage.Entry, seasons []SeasonInfo, mountPath string) error {
+	for _, result := range convertToMultiSeason(torrent, seasons) {
+		if saved, err := d.manager.queue.GetTorrent(result.InfoHash); err == nil && saved.IsComplete {
+			continue
+		}
+		if err := d.manager.queue.Add(result); err != nil {
+			d.logger.Error().Err(err).Msgf("Failed to save season torrent")
+			continue
+		}
+		if err := d.process(result, mountPath); err != nil {
+			if errors.Is(err, context.Canceled) && d.operationContext().Err() != nil {
+				return err
+			}
+			d.markAsError(result, err)
+		}
+	}
+	// Parent has been fanned out into season entries; mark it complete so
+	// it leaves the downloading queue instead of getting re-processed.
+	d.completeEntry(torrent)
+	return nil
 }
 
 func (d *Downloader) process(entry *storage.Entry, mountPath string) error {
@@ -245,98 +250,106 @@ func (d *Downloader) createSymlinksWhenMountFilesAppear(
 	mountPath string,
 	symlinkDir string,
 ) ([]string, error) {
-	remainingFiles := make(map[string]*storage.File, len(files))
-	for _, file := range files {
-		remainingFiles[file.Name] = file
+	scan := &symlinkScan{
+		d:          d,
+		entry:      entry,
+		symlinkDir: symlinkDir,
+		remaining:  make(map[string]*storage.File, len(files)),
 	}
+	for _, file := range files {
+		scan.remaining[file.Name] = file
+	}
+	scan.paths = make([]string, 0, len(scan.remaining))
 
-	filePaths := make([]string, 0, len(remainingFiles))
 	deadline := time.Now().Add(symlinkMountWaitTimeout)
 	delay := symlinkScanInitialInterval
-	attempt := 0
-	var lastScanErr error
-	var scanErr error
-
-	var checkDirectory func(string) error
-	checkDirectory = func(dirPath string) error {
-		entries, err := os.ReadDir(dirPath)
-		if err != nil {
-			if scanErr == nil {
-				scanErr = err
-			}
-			return nil
-		}
-
-		for _, item := range entries {
-			entryName := item.Name()
-			fullPath := filepath.Join(dirPath, entryName)
-
-			if item.IsDir() {
-				if checkDirectoryErr := checkDirectory(fullPath); checkDirectoryErr != nil {
-					return checkDirectoryErr
-				}
-				continue
-			}
-
-			if file, exists := remainingFiles[entryName]; exists {
-				fileSymlinkPath := filepath.Join(symlinkDir, file.Name)
-				if symlinkErr := os.Symlink(fullPath, fileSymlinkPath); symlinkErr != nil && !os.IsExist(symlinkErr) {
-					return fmt.Errorf("failed to create symlink %s -> %s: %w", fileSymlinkPath, fullPath, symlinkErr)
-				}
-				filePaths = append(filePaths, fileSymlinkPath)
-				delete(remainingFiles, entryName)
-				d.logger.Info().Msgf("File is ready: %s/%s", entry.GetFolder(), file.Name)
-				continue
-			}
-		}
-		return nil
-	}
-
-	for len(remainingFiles) > 0 {
-		attempt++
-		scanErr = nil
-		if err := checkDirectory(mountPath); err != nil {
+	for attempt := 1; len(scan.remaining) > 0; attempt++ {
+		scan.scanErr = nil
+		if err := scan.walk(mountPath); err != nil {
 			return nil, err
 		}
-		lastScanErr = scanErr
-		if len(remainingFiles) == 0 {
+		if len(scan.remaining) == 0 {
 			break
 		}
-
 		if time.Now().After(deadline) {
-			pending := pendingMountFileNames(remainingFiles, symlinkLogSampleSize)
-			if lastScanErr != nil {
-				return nil, fmt.Errorf(
-					"timeout waiting for mount files: %d files still pending (%s): last scan error: %w",
-					len(remainingFiles),
-					strings.Join(pending, ", "),
-					lastScanErr,
-				)
-			}
-			return nil, fmt.Errorf(
-				"timeout waiting for mount files: %d files still pending (%s)",
-				len(remainingFiles),
-				strings.Join(pending, ", "),
-			)
+			return nil, scan.timeoutError()
 		}
-
 		if shouldLogSymlinkWaitAttempt(attempt) {
 			d.logger.Debug().
-				Err(lastScanErr).
+				Err(scan.scanErr).
 				Str("entry", entry.Name).
 				Str("mount_path", mountPath).
-				Int("pending", len(remainingFiles)).
-				Strs("sample", pendingMountFileNames(remainingFiles, symlinkLogSampleSize)).
+				Int("pending", len(scan.remaining)).
+				Strs("sample", pendingMountFileNames(scan.remaining, symlinkLogSampleSize)).
 				Msg("Waiting for mount files before creating symlinks")
 		}
-
 		if err := d.sleepUntilNextSymlinkAttempt(delay, deadline); err != nil {
 			return nil, err
 		}
 		delay = nextSymlinkBackoff(delay, symlinkScanMaxInterval)
 	}
+	return scan.paths, nil
+}
 
-	return filePaths, nil
+// symlinkScan links an entry's files into symlinkDir as they appear anywhere
+// under the mount.
+type symlinkScan struct {
+	d          *Downloader
+	entry      *storage.Entry
+	symlinkDir string
+	remaining  map[string]*storage.File
+	paths      []string
+	// scanErr is the first unreadable directory of the current pass.
+	scanErr error
+}
+
+func (s *symlinkScan) walk(dirPath string) error {
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
+		if s.scanErr == nil {
+			s.scanErr = err
+		}
+		return nil // retried on the next pass
+	}
+	for _, item := range entries {
+		fullPath := filepath.Join(dirPath, item.Name())
+		if item.IsDir() {
+			if walkErr := s.walk(fullPath); walkErr != nil {
+				return walkErr
+			}
+			continue
+		}
+		if linkErr := s.link(item.Name(), fullPath); linkErr != nil {
+			return linkErr
+		}
+	}
+	return nil
+}
+
+func (s *symlinkScan) link(name, fullPath string) error {
+	file, ok := s.remaining[name]
+	if !ok {
+		return nil
+	}
+	fileSymlinkPath := filepath.Join(s.symlinkDir, file.Name)
+	if err := os.Symlink(fullPath, fileSymlinkPath); err != nil && !os.IsExist(err) {
+		return fmt.Errorf("failed to create symlink %s -> %s: %w", fileSymlinkPath, fullPath, err)
+	}
+	s.paths = append(s.paths, fileSymlinkPath)
+	delete(s.remaining, name)
+	s.d.logger.Info().Msgf("File is ready: %s/%s", s.entry.GetFolder(), file.Name)
+	return nil
+}
+
+func (s *symlinkScan) timeoutError() error {
+	pending := strings.Join(pendingMountFileNames(s.remaining, symlinkLogSampleSize), ", ")
+	if s.scanErr != nil {
+		return fmt.Errorf(
+			"timeout waiting for mount files: %d files still pending (%s): last scan error: %w",
+			len(s.remaining), pending, s.scanErr,
+		)
+	}
+	return fmt.Errorf("timeout waiting for mount files: %d files still pending (%s)", len(s.remaining), pending)
 }
 
 func (d *Downloader) waitForSymlinkFilesReady(filePaths []string, timeout time.Duration) error {
