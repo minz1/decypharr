@@ -91,7 +91,7 @@ func NewManager(mgr *manager.Manager) manager.MountManager {
 	}
 
 	// Ensure config directory exists
-	if err := os.MkdirAll(configDir, 0755); err != nil {
+	if err := os.MkdirAll(configDir, 0o750); err != nil {
 		_logger.Error().Err(err).Msg("Failed to create rclone config directory")
 	}
 
@@ -160,7 +160,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	}
 
 	if cfg.Rclone.CacheDir != "" {
-		if err := os.MkdirAll(cfg.Rclone.CacheDir, 0755); err == nil {
+		if err := os.MkdirAll(cfg.Rclone.CacheDir, 0o750); err == nil {
 			args = append(args, "--cache-dir", cfg.Rclone.CacheDir)
 		}
 	}

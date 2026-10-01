@@ -2,6 +2,8 @@
 
 package hanwen
 
+import "time"
+
 // FNV-1a 64-bit parameters (see hash/fnv).
 const (
 	fnvOffset64 = 14695981039346656037
@@ -21,4 +23,19 @@ func hashPath(path string) uint64 {
 		h = 2
 	}
 	return h
+}
+
+// unixSeconds is t as FUSE attribute seconds; times before the epoch clamp
+// to 0 instead of wrapping to a far-future uint64.
+func unixSeconds(t time.Time) uint64 {
+	return nonNegative(t.Unix())
+}
+
+// nonNegative converts v for FUSE's unsigned attribute fields, clamping
+// negatives to 0.
+func nonNegative(v int64) uint64 {
+	if v < 0 {
+		return 0
+	}
+	return uint64(v)
 }

@@ -115,7 +115,7 @@ func (d *Dir) newNode(info *manager.FileInfo) fs.InodeEmbedder {
 			info.Name(),
 			d.childPath(info.Name()),
 			d.level+1,
-			uint64(modTime.Unix()),
+			unixSeconds(modTime),
 			d.config,
 			d.logger,
 			d.rlLogger,
@@ -176,7 +176,7 @@ func (d *Dir) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.
 		// Directories keep Gen 0: root listings stamp their ModTime with the
 		// current time, which would churn a new inode per lookup.
 		if mt := info.ModTime(); !mt.IsZero() {
-			attr.Gen = uint64(mt.Unix())
+			attr.Gen = unixSeconds(mt)
 		}
 	}
 	return d.NewInode(ctx, node, attr), 0
@@ -203,7 +203,7 @@ func (d *Dir) refreshExistingChild(name string, info *manager.FileInfo) *fs.Inod
 			return nil
 		}
 		if mt := info.ModTime(); !mt.IsZero() {
-			ops.modTime.Store(uint64(mt.Unix()))
+			ops.modTime.Store(unixSeconds(mt))
 		}
 	default:
 		return nil
@@ -213,12 +213,12 @@ func (d *Dir) refreshExistingChild(name string, info *manager.FileInfo) *fs.Inod
 
 func (d *Dir) nodeModTime(info *manager.FileInfo, node fs.InodeEmbedder) uint64 {
 	if modTime := info.ModTime(); !modTime.IsZero() {
-		return uint64(modTime.Unix())
+		return unixSeconds(modTime)
 	}
 
 	switch node := node.(type) {
 	case *File:
-		return uint64(node.createdAt.Unix())
+		return unixSeconds(node.createdAt)
 	case *Dir:
 		return node.modTime.Load()
 	default:
@@ -268,7 +268,7 @@ func (d *Dir) setEntryOut(info *manager.FileInfo, out *fuse.EntryOut, modTime ui
 		out.Attr.Nlink = 2
 	} else {
 		out.Attr.Mode = fuse.S_IFREG | 0644
-		out.Attr.Size = uint64(info.Size())
+		out.Attr.Size = nonNegative(info.Size())
 		out.Attr.Nlink = 1
 	}
 

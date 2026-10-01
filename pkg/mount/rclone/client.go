@@ -35,7 +35,7 @@ func (m *Manager) performMount(ctx context.Context) error {
 
 	// Create mount directory if not on windows
 	if runtime.GOOS != "windows" {
-		_ = os.MkdirAll(cfg.MountPath, 0755)
+		_ = os.MkdirAll(cfg.MountPath, 0o755) //nolint:gosec // G301: mountpoint is shared (allow_other)
 	}
 
 	// Check if already mounted
@@ -154,8 +154,7 @@ func (m *Manager) performMount(ctx context.Context) error {
 	}
 
 	if cfg.Rclone.Umask != "" {
-		umask, err := strconv.ParseInt(cfg.Rclone.Umask, 8, 32)
-		if err == nil {
+		if umask, err := strconv.ParseUint(cfg.Rclone.Umask, 8, 32); err == nil {
 			vfsOpt["Umask"] = uint32(umask)
 		}
 	}
@@ -282,6 +281,6 @@ func (m *Manager) tryUnmountCommand(ctx context.Context, args ...string) error {
 		return fmt.Errorf("no command provided")
 	}
 
-	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+	cmd := exec.CommandContext(ctx, args[0], args[1:]...) //nolint:gosec // G204: fixed umount commands, no shell
 	return cmd.Run()
 }

@@ -135,7 +135,7 @@ type purgeRunSummary struct {
 
 // NewCache creates a new sparse file cache.
 func NewCache(ctx context.Context, mgr Backend, config *dfsconfig.FuseConfig) (*Cache, error) {
-	if err := os.MkdirAll(config.CacheDir, 0755); err != nil {
+	if err := os.MkdirAll(config.CacheDir, 0o750); err != nil {
 		return nil, fmt.Errorf("failed to create cache dir: %w", err)
 	}
 
@@ -552,7 +552,7 @@ func (c *Cache) newItem(key, entryName, filename string, fileSize int64) (*Cache
 	log := logger.NewRateLimitedLogger(logger.WithLogger(_logger))
 
 	itemDir := filepath.Join(c.config.CacheDir, entryName)
-	if mkdirAllErr := os.MkdirAll(itemDir, 0o755); mkdirAllErr != nil {
+	if mkdirAllErr := os.MkdirAll(itemDir, 0o750); mkdirAllErr != nil {
 		return nil, fmt.Errorf("failed to create item dir: %w", mkdirAllErr)
 	}
 
@@ -945,8 +945,10 @@ func (c *Cache) PurgeCache() map[string]any {
 func (c *Cache) Close() error {
 	c.cancel()
 
-	c.items.Range(func(_ string, item *CacheItem) bool {
-		item.Close()
+	c.items.Range(func(key string, item *CacheItem) bool {
+		if err := item.Close(); err != nil {
+			c.logger.Warn().Err(err).Str("key", key).Msg("failed to close cache item")
+		}
 		return true
 	})
 	c.items.Clear()
@@ -1186,7 +1188,7 @@ func (item *CacheItem) flushMetadata(force bool) {
 		return
 	}
 	// Confirm directory exists before writing metadata (in case it was deleted by cleanup)
-	if mkdirAllErr := os.MkdirAll(filepath.Dir(item.metaPath), 0755); mkdirAllErr != nil {
+	if mkdirAllErr := os.MkdirAll(filepath.Dir(item.metaPath), 0o750); mkdirAllErr != nil {
 		item.cache.logger.Warn().
 			Err(mkdirAllErr).
 			Str("key", item.key).
@@ -1197,7 +1199,7 @@ func (item *CacheItem) flushMetadata(force bool) {
 	// Atomic write: write to temp file then rename to avoid corrupt reads
 	// from scanDiskCandidates racing with this write.
 	tmpPath := item.metaPath + ".tmp"
-	if writeFileErr := os.WriteFile(tmpPath, data, 0644); writeFileErr != nil {
+	if writeFileErr := os.WriteFile(tmpPath, data, 0o600); writeFileErr != nil {
 		item.cache.logger.Warn().Err(writeFileErr).Str("key", item.key).Msg("failed to write cache metadata")
 		item.metaDirty.Store(true) // retry on the next tick
 		return
