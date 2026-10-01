@@ -114,7 +114,7 @@ func TestPreferencesRequireAuthentication(t *testing.T) {
 
 // TestDecodeAuthHeader covers the fix for the slice-bounds-out-of-range panic
 // at pkg/server/qbit/context.go:60-62. When the base64-decoded payload contains
-// no colon, strings.LastIndex returns -1 and the subsequent slice expression
+// no colon, [strings.LastIndex] returns -1 and the subsequent slice expression
 // `bearer[:colonIndex]` panics with "slice bounds out of range [:-1]".
 //
 // Pre-fix the "no colon" cases panic; post-fix they return a clean error and

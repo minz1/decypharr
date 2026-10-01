@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// The old fmt.Sprintf(`filename="%s"`) ended the value at an embedded quote.
+// The old [fmt.Sprintf] of `filename="%s"` ended the value at an embedded quote.
 func TestAttachmentDispositionRoundTrips(t *testing.T) {
 	t.Parallel()
 	for _, name := range []string{`Show "Pilot".mkv`, "Café S01E01.mkv", "plain.mkv"} {
@@ -28,10 +28,10 @@ func TestPaginateHugePage(t *testing.T) {
 	if len(got) != 0 || totalPages != 3 {
 		t.Fatalf("huge page = %d items of %d pages, want 0 of 3", len(got), totalPages)
 	}
-	if got, _ := paginate(items, 3, 100); len(got) != 50 {
-		t.Fatalf("last page has %d items, want 50", len(got))
+	if last, _ := paginate(items, 3, 100); len(last) != 50 {
+		t.Fatalf("last page has %d items, want 50", len(last))
 	}
-	if got, totalPages := paginate([]int{}, 1, 20); len(got) != 0 || totalPages != 0 {
+	if empty, pages := paginate([]int{}, 1, 20); len(empty) != 0 || pages != 0 {
 		t.Fatal("empty input must give an empty page")
 	}
 }

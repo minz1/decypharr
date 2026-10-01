@@ -366,7 +366,9 @@ func (s *SABnzbd) handleAddFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// The body itself is capped by Routes.
-	if err := r.ParseMultipartForm(multipartMemory); err != nil { //nolint:gosec // G120: body capped by Routes' MaxBytesReader
+	if err := r.ParseMultipartForm(
+		multipartMemory,
+	); err != nil { //nolint:gosec // G120: body capped by Routes' MaxBytesReader
 		s.writeError(w, "Failed to parse multipart form", http.StatusBadRequest)
 		return
 	}

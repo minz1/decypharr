@@ -133,14 +133,32 @@ func (q *QBit) handleTorrentsAdd(w http.ResponseWriter, r *http.Request) {
 	if urls := r.FormValue("urls"); urls != "" {
 		for u := range strings.SplitSeq(urls, "\n") {
 			sources = append(sources, func() error {
-				return q.addMagnet(ctx, strings.TrimSpace(u), instance, debridName, action, callbackURL, rmTrackerUrls, cfg.SkipMultiSeason)
+				return q.addMagnet(
+					ctx,
+					strings.TrimSpace(u),
+					instance,
+					debridName,
+					action,
+					callbackURL,
+					rmTrackerUrls,
+					cfg.SkipMultiSeason,
+				)
 			})
 		}
 	}
 	if r.MultipartForm != nil {
 		for _, fileHeader := range r.MultipartForm.File["torrents"] {
 			sources = append(sources, func() error {
-				return q.addTorrent(ctx, fileHeader, instance, debridName, action, callbackURL, rmTrackerUrls, cfg.SkipMultiSeason)
+				return q.addTorrent(
+					ctx,
+					fileHeader,
+					instance,
+					debridName,
+					action,
+					callbackURL,
+					rmTrackerUrls,
+					cfg.SkipMultiSeason,
+				)
 			})
 		}
 	}
