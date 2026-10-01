@@ -76,6 +76,7 @@ func mustRead(t *testing.T, path string) string {
 // Golden-tree: seed the export tree with current, stale, orphaned, and
 // foreign .strm files, then assert the sweep converges disk to the desired
 // state and leaves foreign files alone.
+//
 //nolint:paralleltest // resets the config singleton
 func TestStrmSweepGoldenTree(t *testing.T) {
 	m := newTestReconciler(t)
@@ -146,6 +147,7 @@ func TestStrmSweepDisabled(t *testing.T) {
 }
 
 // A repair that renames a file (new file ID) must replace the old .
+//
 //nolint:paralleltest // resets the config singleton
 func TestStrmSyncEntryRemovesStaleAfterRename(t *testing.T) {
 	m := newTestReconciler(t)
@@ -182,6 +184,7 @@ func TestStrmSyncEntryRemovesStaleAfterRename(t *testing.T) {
 
 // Deleting an entry removes its files from the export tree without waiting
 // for a sweep; the folder is pruned when empty.
+//
 //nolint:paralleltest // resets the config singleton
 func TestStrmRemoveEntry(t *testing.T) {
 	m := newTestReconciler(t)

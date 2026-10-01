@@ -36,25 +36,7 @@ type catalogSkips struct {
 // library.
 func (c managedArrCatalog) ListManagedFiles(ctx context.Context, entryID string) ([]reacquire.ManagedFile, error) {
 	if entryID != "" {
-		entry, err := c.storage.Get(entryID)
-		if errors.Is(err, appendstore.ErrKeyNotFound) || (err == nil && entry == nil) {
-			return nil, nil
-		}
-		if err != nil {
-			return nil, err
-		}
-		var skips catalogSkips
-		entryFiles, err := c.entryFiles(entry, &skips)
-		if err != nil {
-			return nil, err
-		}
-		if skips.noID > 0 {
-			c.logger.Warn().
-				Str("entry_id", entryID).
-				Int("skipped_no_id", skips.noID).
-				Msg("Managed entry has files without an ID")
-		}
-		return entryFiles, nil
+		return c.listEntryFiles(entryID)
 	}
 
 	files := make([]reacquire.ManagedFile, 0)
@@ -105,6 +87,29 @@ func (c managedArrCatalog) ListManagedFiles(ctx context.Context, entryID string)
 		Int("skipped_deleted", skips.deleted).
 		Msg("Scanned the managed catalog")
 	return files, nil
+}
+
+// listEntryFiles reads one entry's managed files; a missing entry has none.
+func (c managedArrCatalog) listEntryFiles(entryID string) ([]reacquire.ManagedFile, error) {
+	entry, err := c.storage.Get(entryID)
+	if errors.Is(err, appendstore.ErrKeyNotFound) || (err == nil && entry == nil) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var skips catalogSkips
+	entryFiles, err := c.entryFiles(entry, &skips)
+	if err != nil {
+		return nil, err
+	}
+	if skips.noID > 0 {
+		c.logger.Warn().
+			Str("entry_id", entryID).
+			Int("skipped_no_id", skips.noID).
+			Msg("Managed entry has files without an ID")
+	}
+	return entryFiles, nil
 }
 
 func (c managedArrCatalog) entryFiles(entry *storage.Entry, skips *catalogSkips) ([]reacquire.ManagedFile, error) {

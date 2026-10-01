@@ -25,40 +25,46 @@ func (m *Manager) restoreActiveDownloadJobs() {
 	// Clear flags left by interrupted local processing. Active downloads remain
 	// in storage for processQueuedEntries. Only unfinished imports need workers.
 	for _, entry := range entries {
-		if m.ctx.Err() != nil {
+		if m.ctx.Err() != nil || !m.restoreEntry(entry) {
 			return
 		}
-		if entry.IsDownloading {
-			entry.IsDownloading = false
-			if updateErr := m.queue.Update(entry); updateErr != nil {
-				m.logger.Error().Err(updateErr).Str("entry_id", entry.InfoHash).Msg("Failed to reset restored download")
-				continue
-			}
-		}
-		if entry.Status != debridTypes.TorrentStatusQueued && !m.nzbNeedsReprocessing(entry) {
-			continue
-		}
-		job, rebuildQueuedJobErr := m.rebuildQueuedJob(entry)
-		if rebuildQueuedJobErr != nil {
-			if m.ctx.Err() != nil {
-				return
-			}
-			entry.MarkAsError(rebuildQueuedJobErr)
-			_ = m.queue.Update(entry)
-			continue
-		}
-		if job.DebridTorrent == nil && job.NZBMeta == nil {
-			entry.Status = debridTypes.TorrentStatusQueued
-		}
-		_ = m.queue.Update(entry)
-		if submitJobErr := m.SubmitJob(job); submitJobErr != nil {
-			if m.ctx.Err() != nil {
-				return
-			}
-			entry.MarkAsError(submitJobErr)
-			_ = m.queue.Update(entry)
+	}
+}
+
+// restoreEntry resubmits one interrupted entry. It returns false once
+// shutdown has started and the restore should stop.
+func (m *Manager) restoreEntry(entry *storage.Entry) bool {
+	if entry.IsDownloading {
+		entry.IsDownloading = false
+		if updateErr := m.queue.Update(entry); updateErr != nil {
+			m.logger.Error().Err(updateErr).Str("entry_id", entry.InfoHash).Msg("Failed to reset restored download")
+			return true
 		}
 	}
+	if entry.Status != debridTypes.TorrentStatusQueued && !m.nzbNeedsReprocessing(entry) {
+		return true
+	}
+	job, rebuildErr := m.rebuildQueuedJob(entry)
+	if rebuildErr != nil {
+		if m.ctx.Err() != nil {
+			return false
+		}
+		entry.MarkAsError(rebuildErr)
+		_ = m.queue.Update(entry)
+		return true
+	}
+	if job.DebridTorrent == nil && job.NZBMeta == nil {
+		entry.Status = debridTypes.TorrentStatusQueued
+	}
+	_ = m.queue.Update(entry)
+	if submitErr := m.SubmitJob(job); submitErr != nil {
+		if m.ctx.Err() != nil {
+			return false
+		}
+		entry.MarkAsError(submitErr)
+		_ = m.queue.Update(entry)
+	}
+	return true
 }
 
 func (m *Manager) nzbNeedsReprocessing(entry *storage.Entry) bool {
