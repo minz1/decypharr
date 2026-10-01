@@ -2,6 +2,7 @@ package reacquire
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -24,16 +25,16 @@ func (s *Service) ReacquireLibraryFile(ctx context.Context, request LibraryReque
 	}
 	defer release()
 	if s.arrs == nil {
-		return nil, fmt.Errorf("Arr registry is unavailable")
+		return nil, errors.New("arr registry is unavailable")
 	}
 	if request.ArrFileID <= 0 || request.LibraryPath == "" || !request.Cause.valid() {
-		return nil, fmt.Errorf("Arr file ID, library path, and cause are required")
+		return nil, errors.New("arr file ID, library path, and cause are required")
 	}
 	instance, ok := s.arrs.Get(request.ArrName)
 	if !ok {
-		return nil, fmt.Errorf("Arr %q is unavailable", request.ArrName)
+		return nil, fmt.Errorf("arr %q is unavailable", request.ArrName)
 	}
-	if binding, ok := s.index.ByArrFile(instance.Name, request.ArrFileID); ok {
+	if binding, bound := s.index.ByArrFile(instance.Name, request.ArrFileID); bound {
 		if !binding.AuthorizesMutation() || !sameLibraryPath(binding.LibraryPath, request.LibraryPath) {
 			return nil, ErrBindingUnsafe
 		}

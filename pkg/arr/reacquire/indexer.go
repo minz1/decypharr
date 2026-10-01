@@ -69,18 +69,13 @@ type Indexer struct {
 	requestSequence    atomic.Uint64
 }
 
-var targetedIndexBackoff = [...]time.Duration{
-	time.Second,
-	2 * time.Second,
-	5 * time.Second,
-	10 * time.Second,
-	30 * time.Second,
-	30 * time.Second,
-	30 * time.Second,
-	30 * time.Second,
-	30 * time.Second,
-	30 * time.Second,
-}
+// targetedIndexAttempts is how many delayed retries an index request gets
+// before a targeted request is promoted to a full refresh of its Arr.
+const (
+	targetedIndexAttempts = 10
+	// targetedIndexSteadyDelay is the retry interval once the ramp is over.
+	targetedIndexSteadyDelay = 30 * time.Second
+)
 
 // NewIndexer builds the indexer. managedRoot is the mount directory that holds
 // every entry folder; library symlinks that point outside it are not managed by
@@ -260,9 +255,7 @@ func (i *Indexer) handleRefresh(ctx context.Context, request indexRequest) {
 	managed, err := i.catalog.ListManagedFiles(ctx, "")
 	if err != nil {
 		i.logger.Warn().Err(err).Msg("Arr index reconciliation failed: cannot read managed files")
-		if request.attempt < len(targetedIndexBackoff) && ctx.Err() == nil {
-			i.retry(ctx, request, targetedIndexBackoff[request.attempt])
-		}
+		i.retryBackoff(ctx, request)
 		return
 	}
 
@@ -296,8 +289,8 @@ func (i *Indexer) handleRefresh(ctx context.Context, request indexRequest) {
 		Int("indexed", indexed).
 		Int("unclaimed", len(managed)-indexed).
 		Msg("Arr index refreshed")
-	if failed && request.attempt < len(targetedIndexBackoff) && ctx.Err() == nil {
-		i.retry(ctx, request, targetedIndexBackoff[request.attempt])
+	if failed {
+		i.retryBackoff(ctx, request)
 	}
 }
 
@@ -331,9 +324,7 @@ func (i *Indexer) handleArrRefresh(ctx context.Context, request indexRequest) {
 	}
 
 	i.logger.Warn().Err(err).Str("arr", request.arrName).Msg("Arr index reconciliation failed")
-	if request.attempt < len(targetedIndexBackoff) && ctx.Err() == nil {
-		i.retry(ctx, request, targetedIndexBackoff[request.attempt])
-	}
+	i.retryBackoff(ctx, request)
 }
 
 func (i *Indexer) coveredByRefresh(request indexRequest) bool {
@@ -418,11 +409,9 @@ func (i *Indexer) retryTargeted(ctx context.Context, request indexRequest) {
 	if ctx.Err() != nil {
 		return
 	}
-	if request.attempt < len(targetedIndexBackoff) {
-		i.retry(ctx, request, targetedIndexBackoff[request.attempt])
-		return
+	if !i.retryBackoff(ctx, request) {
+		i.enqueue(indexRequest{arrName: request.arrName})
 	}
-	i.enqueue(indexRequest{arrName: request.arrName})
 }
 
 func (i *Indexer) reconcile(
@@ -469,4 +458,24 @@ func (i *Indexer) retry(ctx context.Context, request indexRequest, delay time.Du
 			i.enqueue(request)
 		}
 	})
+}
+
+// targetedIndexDelay is the wait before retry number attempt: a quick ramp
+// while the Arr imports, then a steady interval.
+func targetedIndexDelay(attempt int) time.Duration {
+	ramp := [...]time.Duration{time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second}
+	if attempt < len(ramp) {
+		return ramp[attempt]
+	}
+	return targetedIndexSteadyDelay
+}
+
+// retryBackoff schedules request's next attempt. It reports false when the
+// backoff is exhausted or the indexer is stopping.
+func (i *Indexer) retryBackoff(ctx context.Context, request indexRequest) bool {
+	if request.attempt >= targetedIndexAttempts || ctx.Err() != nil {
+		return false
+	}
+	i.retry(ctx, request, targetedIndexDelay(request.attempt))
+	return true
 }

@@ -15,6 +15,7 @@ var errBindingSnapshotPut = errors.New("binding snapshot put failed")
 
 type observedBindingStore struct {
 	bindingRepositoryStore
+
 	failNextPut bool
 	forEach     int
 	syncs       int

@@ -16,7 +16,7 @@ type recordedProgress struct {
 	statuses []Status
 }
 
-func (progress *recordedProgress) Update(status Status, mutate func(*Job)) error {
+func (progress *recordedProgress) Update(status Status, _ func(*Job)) error {
 	progress.statuses = append(progress.statuses, status)
 	return nil
 }

@@ -522,7 +522,7 @@ func TestReconcileTargetedNeverWidensToTheWholeLibrary(t *testing.T) {
 		managedRoot: filepath.Join(dir, "managed"),
 	}
 
-	request := indexRequest{arrName: "radarr", entryID: "entry", attempt: len(targetedIndexBackoff)}
+	request := indexRequest{arrName: "radarr", entryID: "entry", attempt: targetedIndexAttempts}
 	stats, err := indexer.reconcile(t.Context(), instance, request, managed)
 	if err != nil {
 		t.Fatal(err)
@@ -544,7 +544,7 @@ func TestExhaustedTargetedRequestsCoalesceArrRefresh(t *testing.T) {
 	indexer := NewIndexer(nil, nil, nil, "")
 	indexer.ctx = ctx
 
-	finalAttempt := len(targetedIndexBackoff)
+	finalAttempt := targetedIndexAttempts
 	indexer.retryTargeted(ctx, indexRequest{arrName: "radarr", entryID: "one", attempt: finalAttempt})
 	indexer.retryTargeted(ctx, indexRequest{arrName: "radarr", entryID: "two", attempt: finalAttempt})
 
