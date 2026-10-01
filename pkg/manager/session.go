@@ -173,35 +173,41 @@ func (s *session) Read(p []byte) (int, error) {
 		if err := s.ctx.Err(); err != nil {
 			return 0, err
 		}
+		var err error
 		if s.body == nil {
-			if err := s.connectLocked(); err != nil {
-				if rerr := s.recoverStep(err, &attempt); rerr != nil {
-					return 0, rerr
-				}
-				continue
+			err = s.connectLocked()
+		}
+		if err == nil {
+			n, done, readErr := s.readAttemptLocked(p)
+			if done {
+				return n, readErr
 			}
-		}
-
-		n, err := s.stallGuardedReadLocked(p)
-		if n > len(p) {
-			// Every consumer copies through a buffer sized to len(p); a body
-			// that over-reports makes them slice past it. Drop the body and
-			// report the violation rather than hand back a bogus count.
-			s.closeBodyLocked()
-			return 0, fmt.Errorf("stream body returned %d bytes for a %d-byte read", n, len(p))
-		}
-		s.pos += int64(n)
-		if n > 0 {
-			s.deliveredLocked(err)
-			return n, nil
-		}
-		if err = s.emptyReadErrLocked(err); err == io.EOF {
-			return 0, io.EOF
+			err = readErr
 		}
 		if rerr := s.recoverStep(err, &attempt); rerr != nil {
 			return 0, rerr
 		}
 	}
+}
+
+// readAttemptLocked reads once from the open body. done reports that Read
+// returns (n, err) as is; otherwise err goes to recovery.
+func (s *session) readAttemptLocked(p []byte) (int, bool, error) {
+	n, err := s.stallGuardedReadLocked(p)
+	if n > len(p) {
+		// Every consumer copies through a buffer sized to len(p); a body
+		// that over-reports makes them slice past it. Drop the body and
+		// report the violation rather than hand back a bogus count.
+		s.closeBodyLocked()
+		return 0, true, fmt.Errorf("stream body returned %d bytes for a %d-byte read", n, len(p))
+	}
+	s.pos += int64(n)
+	if n > 0 {
+		s.deliveredLocked(err)
+		return n, true, nil
+	}
+	err = s.emptyReadErrLocked(err)
+	return 0, errors.Is(err, io.EOF), err
 }
 
 // stallGuardedReadLocked reads once from the body: if no bytes flow for
@@ -233,14 +239,14 @@ func (s *session) deliveredLocked(err error) {
 }
 
 // emptyReadErrLocked drops the body after a read that returned no bytes and
-// maps the outcome to the error recovery should see; io.EOF means the file
+// maps the outcome to the error recovery should see; [io.EOF] means the file
 // is complete.
 func (s *session) emptyReadErrLocked(err error) error {
 	s.closeBodyLocked()
-	switch err {
-	case nil:
+	switch {
+	case err == nil:
 		return io.ErrNoProgress
-	case io.EOF:
+	case errors.Is(err, io.EOF):
 		if s.pos >= s.size {
 			return io.EOF
 		}
