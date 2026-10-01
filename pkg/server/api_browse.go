@@ -44,17 +44,24 @@ type BrowseResponse struct {
 	CurrentKind string        `json:"current_kind,omitempty"`
 }
 
+// Sort parameters shared by the queue and browse listings.
+const (
+	sortDesc   = "desc"
+	sortByName = "name"
+	sortBySize = "size"
+)
+
 func getBrowseSortParams(r *http.Request) (string, string) {
 	sortBy := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("sort_by")))
 	sortOrder := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("sort_order")))
 
 	switch sortBy {
-	case "name", "size", "mod_time", "active_debrid":
+	case sortByName, sortBySize, "mod_time", "active_debrid":
 	default:
-		sortBy = "name"
+		sortBy = sortByName
 	}
 
-	if sortOrder != "desc" {
+	if sortOrder != sortDesc {
 		sortOrder = "asc"
 	}
 
@@ -81,7 +88,7 @@ func sortBrowseEntries(entries []BrowseEntry, sortBy, sortOrder string) {
 
 		cmp := 0
 		switch sortBy {
-		case "size":
+		case sortBySize:
 			cmp = compareInt64(entries[i].Size, entries[j].Size)
 		case "mod_time":
 			cmp = strings.Compare(entries[i].ModTime, entries[j].ModTime)
@@ -98,7 +105,7 @@ func sortBrowseEntries(entries []BrowseEntry, sortBy, sortOrder string) {
 			cmp = strings.Compare(entries[i].Path, entries[j].Path)
 		}
 
-		if sortOrder == "desc" {
+		if sortOrder == sortDesc {
 			cmp = -cmp
 		}
 		return cmp < 0
@@ -329,8 +336,8 @@ func (s *Server) handleDeleteBrowseTorrent(w http.ResponseWriter, r *http.Reques
 	}
 
 	utils.JSONResponse(w, map[string]any{
-		"success": true,
-		"message": "Item deleted successfully",
+		keySuccess: true,
+		keyMessage: "Item deleted successfully",
 	}, http.StatusOK)
 }
 
@@ -357,8 +364,8 @@ func (s *Server) handleBatchDeleteBrowseTorrents(w http.ResponseWriter, r *http.
 	}
 
 	utils.JSONResponse(w, map[string]any{
-		"success": true,
-		"message": "Torrents deleted successfully",
+		keySuccess: true,
+		keyMessage: "Torrents deleted successfully",
 		"count":   len(req.IDs),
 	}, http.StatusOK)
 }

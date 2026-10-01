@@ -193,7 +193,7 @@ func (s *SABnzbd) handleListQueue(w http.ResponseWriter, r *http.Request) {
 			Password:     "", // We don't expose passwords
 			AvgAge:       "0d",
 			TimeAdded:    e.CreatedAt.Unix(),
-			Script:       "None",
+			Script:       scriptNone,
 			DirectUnpack: "", // null in SABnzbd when not active
 			Mb:           fmt.Sprintf("%.2f", sizeMB),
 			MBLeft:       fmt.Sprintf("%.2f", mbLeft),
@@ -484,7 +484,7 @@ func (s *SABnzbd) handleGetCategories(w http.ResponseWriter, _ *http.Request) {
 
 // handleGetScripts returns available scripts.
 func (s *SABnzbd) handleGetScripts(w http.ResponseWriter, _ *http.Request) {
-	scripts := []string{"None"}
+	scripts := []string{scriptNone}
 	utils.JSONResponse(w, scripts, http.StatusOK)
 }
 

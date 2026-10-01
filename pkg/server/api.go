@@ -66,7 +66,7 @@ func (s *Server) handleRunMountCacheCleanup(w http.ResponseWriter, _ *http.Reque
 	}
 
 	utils.JSONResponse(w, map[string]any{
-		"status": "success",
+		keyStatus: keySuccess,
 		"cache":  cleanupStats,
 	}, http.StatusOK)
 }
@@ -96,7 +96,7 @@ func (s *Server) handlePurgeMountCache(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	utils.JSONResponse(w, map[string]any{
-		"status": "success",
+		keyStatus: keySuccess,
 		"cache":  purgeStats,
 	}, http.StatusOK)
 }
@@ -122,7 +122,7 @@ func (s *Server) handleGetTorrents(w http.ResponseWriter, r *http.Request) {
 		sortBy = "added_on"
 	}
 	if sortOrder == "" {
-		sortOrder = "desc"
+		sortOrder = sortDesc
 	}
 
 	allTorrents, err := s.manager.Queue().ListFilter("", config.ProtocolAll, "", nil, "added_on", false)
@@ -201,9 +201,9 @@ func sortQueuedTorrents(torrents []*storage.Entry, sortBy, sortOrder string) {
 	less := func(i, j int) bool {
 		var result bool
 		switch sortBy {
-		case "name":
+		case sortByName:
 			result = strings.ToLower(torrents[i].Name) < strings.ToLower(torrents[j].Name)
-		case "size":
+		case sortBySize:
 			result = torrents[i].Size < torrents[j].Size
 		case "added_on":
 			result = torrents[i].AddedOn.Before(torrents[j].AddedOn)
@@ -217,7 +217,7 @@ func sortQueuedTorrents(torrents []*storage.Entry, sortBy, sortOrder string) {
 			result = torrents[i].AddedOn.Before(torrents[j].AddedOn)
 		}
 
-		if sortOrder == "desc" {
+		if sortOrder == sortDesc {
 			return !result
 		}
 		return result
@@ -377,7 +377,7 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	utils.JSONResponse(w, map[string]any{"status": "success", "restarted": restarted}, http.StatusOK)
+	utils.JSONResponse(w, map[string]any{keyStatus: keySuccess, "restarted": restarted}, http.StatusOK)
 }
 
 func mergeConfigUpdate(current *config.Config, update io.Reader) (config.Config, error) {
@@ -428,7 +428,7 @@ func (s *Server) handleStrmRegenerate(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	s.manager.Strm().SweepAsync("regenerate")
-	utils.JSONResponse(w, map[string]string{"status": "started"}, http.StatusAccepted)
+	utils.JSONResponse(w, map[string]string{keyStatus: "started"}, http.StatusAccepted)
 }
 
 func (s *Server) handleGetRepairConfig(w http.ResponseWriter, _ *http.Request) {
@@ -682,7 +682,7 @@ func (s *Server) handleRecheckMedia(w http.ResponseWriter, r *http.Request) {
 		// failure detail captured in storage as well as the message.
 		if run != nil {
 			utils.JSONResponse(w, map[string]any{
-				"error": err.Error(),
+				keyError: err.Error(),
 				"run":   run,
 			}, status)
 			return
@@ -821,7 +821,7 @@ func (s *Server) handleRefreshAPIToken(w http.ResponseWriter, _ *http.Request) {
 
 	utils.JSONResponse(w, map[string]any{
 		"token":   token,
-		"message": "API token refreshed successfully",
+		keyMessage: "API token refreshed successfully",
 	}, http.StatusOK)
 }
 
@@ -876,14 +876,14 @@ func (s *Server) handleUpdateAuth(w http.ResponseWriter, r *http.Request) {
 	if disable {
 		message = "Authentication disabled successfully"
 	}
-	response := map[string]string{"message": message}
+	response := map[string]string{keyMessage: message}
 	if req.TokenOnly {
-		response["message"] = "Token-only authentication enabled"
+		response[keyMessage] = "Token-only authentication enabled"
 		if auth := cfg.GetAuth(); auth != nil {
 			response["token"] = auth.APIToken
 		}
 		if cfg.EnableWebdavAuth {
-			response["message"] += ". WebDAV auth is still enabled but has no credential to accept — turn it off, or WebDAV clients will be rejected"
+			response[keyMessage] += ". WebDAV auth is still enabled but has no credential to accept — turn it off, or WebDAV clients will be rejected"
 			s.logger.Warn().Msg("Token-only auth enabled while WebDAV auth is on")
 		}
 	}

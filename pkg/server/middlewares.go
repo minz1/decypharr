@@ -9,6 +9,14 @@ import (
 	"github.com/sirrobot01/decypharr/internal/config"
 )
 
+// Keys of the API's ad-hoc JSON responses.
+const (
+	keyStatus  = "status"
+	keyError   = "error"
+	keyMessage = "message"
+	keySuccess = "success"
+)
+
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Check if setup is needed
@@ -92,8 +100,8 @@ func (s *Server) sendJSONError(w http.ResponseWriter, message string, statusCode
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 	err := json.NewEncoder(w).Encode(map[string]any{
-		"error":  message,
-		"status": statusCode,
+		keyError:  message,
+		keyStatus: statusCode,
 	})
 	if err != nil {
 		return

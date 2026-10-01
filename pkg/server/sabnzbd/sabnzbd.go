@@ -95,7 +95,7 @@ func (s *SABnzbd) getCategories() []Category {
 			Name:     a.Name,
 			Order:    i + 1,
 			Pp:       "3",
-			Script:   "None",
+			Script:   scriptNone,
 			Dir:      filepath.Join(s.downloadFolder, a.Name),
 			Priority: PriorityNormal,
 		})
@@ -110,7 +110,7 @@ func (s *SABnzbd) getCategories() []Category {
 			Name:     defaultCat,
 			Order:    len(categories) + 1,
 			Pp:       "3",
-			Script:   "None",
+			Script:   scriptNone,
 			Dir:      filepath.Join(s.downloadFolder, defaultCat),
 			Priority: PriorityNormal,
 		})

@@ -208,6 +208,9 @@ type File struct {
 	Set      string `json:"set,omitempty"` // Optional set name
 }
 
+// scriptNone is SABnzbd's name for "no post-processing script".
+const scriptNone = "None"
+
 // SABnzbd reports sizes in binary units.
 const (
 	kb = 1024
@@ -258,7 +261,7 @@ func convertToSABnzbdNZB(e *storage.Entry) NZB {
 		Priority:     PriorityNormal,
 		SavePath:     e.SavePath,
 		ContentPath:  e.DownloadPath(),
-		Script:       "None",
+		Script:       scriptNone,
 		AddedOn:      e.CreatedAt.Unix(),
 		CompletedOn:  completedOn,
 		FailMessage:  e.LastError,
