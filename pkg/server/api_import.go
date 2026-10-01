@@ -15,6 +15,9 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/manager"
 )
 
+// importStatusError marks a failed item in the import results.
+const importStatusError = "error"
+
 // maxConcurrentImports bounds how many prepared imports are submitted at once.
 const maxConcurrentImports = 10
 
@@ -72,7 +75,7 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 					results = append(
 						results,
 						&manager.ImportRequest{
-							Status: "error",
+							Status: importStatusError,
 							Error:  fmt.Sprintf("Failed to parse URL %s: %v", trimmed, err),
 						},
 					)
@@ -103,7 +106,7 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 				results = append(
 					results,
 					&manager.ImportRequest{
-						Status: "error",
+						Status: importStatusError,
 						Error:  fmt.Sprintf("Failed to open file %s: %v", fileHeader.Filename, err),
 					},
 				)
@@ -116,7 +119,7 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 				results = append(
 					results,
 					&manager.ImportRequest{
-						Status: "error",
+						Status: importStatusError,
 						Error:  fmt.Sprintf("Failed to parse torrent file %s: %v", fileHeader.Filename, err),
 					},
 				)
@@ -147,7 +150,7 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 					results = append(
 						results,
 						&manager.ImportRequest{
-							Status: "error",
+							Status: importStatusError,
 							Error:  fmt.Sprintf("Failed to fetch NZB from URL %s: %v", trimmed, err),
 						},
 					)
@@ -177,7 +180,7 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 				results = append(
 					results,
 					&manager.ImportRequest{
-						Status: "error",
+						Status: importStatusError,
 						Error:  fmt.Sprintf("Failed to read NZB file %s: %v", fileHeader.Filename, err),
 					},
 				)
@@ -210,7 +213,7 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 		}
 		if err != nil {
 			s.logger.Error().Err(err).Str("source", task.source).Msg("Failed to import content")
-			req.Error, req.Status = err.Error(), "error"
+			req.Error, req.Status = err.Error(), importStatusError
 		}
 	})
 	utils.JSONResponse(w, results, http.StatusOK)

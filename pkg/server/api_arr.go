@@ -134,7 +134,7 @@ func (s *Server) handleRefreshArrIndex(w http.ResponseWriter, _ *http.Request) {
 		s.sendJSONError(w, "Arr index refresh could not be queued", http.StatusServiceUnavailable)
 		return
 	}
-	utils.JSONResponse(w, map[string]string{"status": "queued"}, http.StatusAccepted)
+	utils.JSONResponse(w, map[string]string{keyStatus: "queued"}, http.StatusAccepted)
 }
 
 func (s *Server) handleArrReacquireError(w http.ResponseWriter, err error) {
