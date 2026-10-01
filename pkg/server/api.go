@@ -280,30 +280,11 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	var before config.Config
 	invalid := false
 	updated, err := config.Update(func(current *config.Config) error {
-		next, mergeConfigUpdateErr := mergeConfigUpdate(current, bytes.NewReader(body))
-		if mergeConfigUpdateErr != nil {
+		next, prepareErr := prepareConfigUpdate(current, body)
+		if prepareErr != nil {
 			invalid = true
-			return fmt.Errorf("invalid request body: %w", mergeConfigUpdateErr)
+			return prepareErr
 		}
-		next.MigrateVirtualFolders()
-		if validateVirtualFoldersErr := next.ValidateVirtualFolders(); validateVirtualFoldersErr != nil {
-			invalid = true
-			return fmt.Errorf("invalid virtual folders: %w", validateVirtualFoldersErr)
-		}
-		next.Auth = current.Auth
-		next.SessionSecret = current.SessionSecret
-		next.UseAuth = current.UseAuth
-		next.EnableWebdavAuth = current.EnableWebdavAuth
-		if next.Strm.Secret == "" {
-			next.Strm.Secret = current.Strm.Secret
-		}
-		validArrs := make([]config.Arr, 0, len(next.Arrs))
-		for _, a := range next.Arrs {
-			if a.Name != "" && a.Host != "" && a.Token != "" {
-				validArrs = append(validArrs, a)
-			}
-		}
-		next.Arrs = validArrs
 		before = *current
 		*current = next
 		return nil
@@ -321,28 +302,59 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	restarted := before.RequiresRestart(updated)
 	if restarted {
 		go s.Restart()
-	} else {
-		if before.AppURL != updated.AppURL || !reflect.DeepEqual(before.Strm, updated.Strm) {
-			s.manager.Strm().SweepAsync("config_change")
-		}
-		if applyVirtualFoldersErr := s.manager.ApplyVirtualFolders(
-			updated.VirtualFolders,
-		); applyVirtualFoldersErr != nil {
-			s.logger.Error().Err(applyVirtualFoldersErr).Msg("Failed to apply virtual folders")
-			http.Error(
-				w,
-				"Configuration was saved, but virtual folders could not be applied: "+applyVirtualFoldersErr.Error(),
-				http.StatusInternalServerError,
-			)
-			return
-		}
-		if svc := s.manager.Repair(); svc != nil {
-			if applyConfigErr := svc.ApplyConfig(); applyConfigErr != nil {
-				s.logger.Warn().Err(applyConfigErr).Msg("Failed to apply repair config")
-			}
-		}
+	} else if applyErr := s.applyLiveConfig(&before, updated); applyErr != nil {
+		s.logger.Error().Err(applyErr).Msg("Failed to apply virtual folders")
+		http.Error(
+			w,
+			"Configuration was saved, but virtual folders could not be applied: "+applyErr.Error(),
+			http.StatusInternalServerError,
+		)
+		return
 	}
 	utils.JSONResponse(w, map[string]any{keyStatus: keySuccess, "restarted": restarted}, http.StatusOK)
+}
+
+// prepareConfigUpdate merges body onto current and validates it. Auth and
+// secrets are never taken from the request.
+func prepareConfigUpdate(current *config.Config, body []byte) (config.Config, error) {
+	next, err := mergeConfigUpdate(current, bytes.NewReader(body))
+	if err != nil {
+		return config.Config{}, fmt.Errorf("invalid request body: %w", err)
+	}
+	next.MigrateVirtualFolders()
+	if err := next.ValidateVirtualFolders(); err != nil {
+		return config.Config{}, fmt.Errorf("invalid virtual folders: %w", err)
+	}
+	next.Auth = current.Auth
+	next.SessionSecret = current.SessionSecret
+	next.UseAuth = current.UseAuth
+	next.EnableWebdavAuth = current.EnableWebdavAuth
+	next.Strm.Secret = cmp.Or(next.Strm.Secret, current.Strm.Secret)
+	validArrs := make([]config.Arr, 0, len(next.Arrs))
+	for _, a := range next.Arrs {
+		if a.Name != "" && a.Host != "" && a.Token != "" {
+			validArrs = append(validArrs, a)
+		}
+	}
+	next.Arrs = validArrs
+	return next, nil
+}
+
+// applyLiveConfig pushes a saved config that needs no restart into the
+// running services. Only a virtual-folder failure is reported.
+func (s *Server) applyLiveConfig(before, updated *config.Config) error {
+	if before.AppURL != updated.AppURL || !reflect.DeepEqual(before.Strm, updated.Strm) {
+		s.manager.Strm().SweepAsync("config_change")
+	}
+	if err := s.manager.ApplyVirtualFolders(updated.VirtualFolders); err != nil {
+		return err
+	}
+	if svc := s.manager.Repair(); svc != nil {
+		if err := svc.ApplyConfig(); err != nil {
+			s.logger.Warn().Err(err).Msg("Failed to apply repair config")
+		}
+	}
+	return nil
 }
 
 func mergeConfigUpdate(current *config.Config, update io.Reader) (config.Config, error) {
@@ -407,25 +419,9 @@ func (s *Server) handleUpdateRepairConfig(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if req.Enabled {
-		if strings.TrimSpace(req.Schedule) == "" {
-			http.Error(w, "Schedule is required when repair is enabled", http.StatusBadRequest)
-			return
-		}
-		if _, err := utils.ConvertToJobDef(req.Schedule); err != nil {
-			http.Error(w, fmt.Sprintf("Invalid schedule: %v", err), http.StatusBadRequest)
-			return
-		}
-		if req.RecheckInterval != "" {
-			if _, err := utils.ParseDuration(req.RecheckInterval); err != nil {
-				http.Error(w, fmt.Sprintf("Invalid recheck_interval: %v", err), http.StatusBadRequest)
-				return
-			}
-		}
-		if req.Source != "" && req.Source != config.RepairSourceArr && req.Source != config.RepairSourceManaged {
-			http.Error(w, "Invalid source (must be 'arr' or 'managed')", http.StatusBadRequest)
-			return
-		}
+	if msg := validateRepairConfig(&req); msg != "" {
+		http.Error(w, msg, http.StatusBadRequest)
+		return
 	}
 	if req.NNTPConnectionPercent < 0 || req.NNTPConnectionPercent > 100 {
 		http.Error(w, "Invalid nntp_connection_percent (must be between 0 and 100)", http.StatusBadRequest)
@@ -448,6 +444,29 @@ func (s *Server) handleUpdateRepairConfig(w http.ResponseWriter, r *http.Request
 	}
 
 	utils.JSONResponse(w, cfg.Repair, http.StatusOK)
+}
+
+// validateRepairConfig returns a client-facing message for an invalid
+// enabled config, or "".
+func validateRepairConfig(req *config.RepairConfig) string {
+	if !req.Enabled {
+		return ""
+	}
+	if strings.TrimSpace(req.Schedule) == "" {
+		return "Schedule is required when repair is enabled"
+	}
+	if _, err := utils.ConvertToJobDef(req.Schedule); err != nil {
+		return fmt.Sprintf("Invalid schedule: %v", err)
+	}
+	if req.RecheckInterval != "" {
+		if _, err := utils.ParseDuration(req.RecheckInterval); err != nil {
+			return fmt.Sprintf("Invalid recheck_interval: %v", err)
+		}
+	}
+	if req.Source != "" && req.Source != config.RepairSourceArr && req.Source != config.RepairSourceManaged {
+		return "Invalid source (must be 'arr' or 'managed')"
+	}
+	return ""
 }
 
 func (s *Server) handleRepairStatus(w http.ResponseWriter, _ *http.Request) {
