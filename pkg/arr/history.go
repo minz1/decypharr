@@ -14,9 +14,20 @@ const (
 	EventGrabbed        = "grabbed"
 	EventDownloadFailed = "downloadFailed"
 
-	eventTypeGrabbed = 1
-	historyPageSize  = 100
+	eventTypeGrabbed   = 1
+	historyPageSize    = 100
+	latestGrabPageSize = 50
 )
+
+// newestHistoryQuery asks for one page of history, newest record first.
+func newestHistoryQuery(page, pageSize int) url.Values {
+	return url.Values{
+		"page":          {strconv.Itoa(page)},
+		"pageSize":      {strconv.Itoa(pageSize)},
+		"sortKey":       {"date"},
+		"sortDirection": {"descending"},
+	}
+}
 
 type HistorySchema struct {
 	Page          int             `json:"page"`
@@ -65,13 +76,8 @@ func (s *Service) DownloadHistory(ctx context.Context, name, downloadID, eventTy
 	records := make([]HistoryRecord, 0)
 	fetched := 0
 	for page := 1; ; page++ {
-		query := url.Values{
-			"page":          {strconv.Itoa(page)},
-			"pageSize":      {strconv.Itoa(historyPageSize)},
-			"sortKey":       {"date"},
-			"sortDirection": {"descending"},
-			"downloadId":    {downloadID},
-		}
+		query := newestHistoryQuery(page, historyPageSize)
+		query.Set("downloadId", downloadID)
 		history, historyErr := s.history(ctx, instance, query)
 		if historyErr != nil {
 			return nil, fmt.Errorf("history for download %q: %w", downloadID, historyErr)
@@ -123,18 +129,15 @@ func (s *Service) LatestGrabID(ctx context.Context, name string, mediaID int) (i
 		return 0, "", nil
 	}
 
-	query := url.Values{
-		"page":          {"1"},
-		"pageSize":      {"50"},
-		"sortKey":       {"date"},
-		"sortDirection": {"descending"},
-		"eventType":     {strconv.Itoa(eventTypeGrabbed)},
-	}
+	query := newestHistoryQuery(1, latestGrabPageSize)
+	query.Set("eventType", strconv.Itoa(eventTypeGrabbed))
 	switch instance.Type {
 	case Sonarr:
 		query.Set("episodeId", strconv.Itoa(mediaID))
 	case Radarr:
 		query.Set("movieIds", strconv.Itoa(mediaID))
+	case Lidarr, Readarr, Others:
+		fallthrough
 	default:
 		return 0, "", nil
 	}
@@ -160,13 +163,8 @@ func (s *Service) GrabHistorySince(ctx context.Context, name string, since time.
 	records := make([]HistoryRecord, 0)
 	fetched := 0
 	for page := 1; ; page++ {
-		query := url.Values{
-			"page":          {strconv.Itoa(page)},
-			"pageSize":      {strconv.Itoa(historyPageSize)},
-			"sortKey":       {"date"},
-			"sortDirection": {"descending"},
-			"eventType":     {strconv.Itoa(eventTypeGrabbed)},
-		}
+		query := newestHistoryQuery(page, historyPageSize)
+		query.Set("eventType", strconv.Itoa(eventTypeGrabbed))
 		history, historyErr := s.history(ctx, instance, query)
 		if historyErr != nil {
 			return nil, fmt.Errorf("grab history: %w", historyErr)
