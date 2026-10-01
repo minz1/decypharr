@@ -116,7 +116,7 @@ func TestLibraryFilesForMediaReadsOneMovie(t *testing.T) {
 }
 
 func TestLibraryFilesForMediaWithoutIDs(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		t.Errorf("unexpected request to %q", r.URL.Path)
 	}))
 	defer server.Close()

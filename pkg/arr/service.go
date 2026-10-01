@@ -28,13 +28,17 @@ type Service struct {
 	cleanups singleflight.Group
 }
 
+// readRetries is how many times the shared client retries an Arr read.
+const readRetries = 5
+
+// New builds the service from the configured Arr instances.
 func New() *Service {
 	service := &Service{
 		arrs:   make(map[string]Arr),
 		logger: logger.New("arr"),
 		client: request.New(
 			request.WithTimeout(0),
-			request.WithMaxRetries(5),
+			request.WithMaxRetries(readRetries),
 		),
 		// Mutations are not retried: a repeated blocklist or search is a second
 		// user-visible action, not a second read.
@@ -172,7 +176,7 @@ func (s *Service) ResolveType(ctx context.Context, name string) Type {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if current, ok := s.arrs[name]; ok {
+	if current, found := s.arrs[name]; found {
 		current.Type = kind
 		s.arrs[name] = current
 	}
@@ -185,12 +189,12 @@ func (s *Service) CleanupQueues(ctx context.Context) {
 	var wg sync.WaitGroup
 	for _, instance := range s.All() {
 		wg.Go(func() {
-			_, _, _ = s.cleanups.Do(instance.Name, func() (any, error) {
-				if err := s.CleanupQueue(ctx, instance.Name); err != nil {
-					s.logger.Error().Err(err).Str("arr", instance.Name).Msg("Failed to clean up arr queue")
-				}
-				return nil, nil
+			_, err, _ := s.cleanups.Do(instance.Name, func() (any, error) {
+				return nil, s.CleanupQueue(ctx, instance.Name)
 			})
+			if err != nil {
+				s.logger.Error().Err(err).Str("arr", instance.Name).Msg("Failed to clean up arr queue")
+			}
 		})
 	}
 	wg.Wait()

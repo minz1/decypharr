@@ -115,6 +115,8 @@ func searchMutation(instance arr.Arr, bindings []Binding) (Mutation, error) {
 			CommandName: "MoviesSearch",
 			MovieIDs:    movieIDs,
 		}, nil
+	case arr.Lidarr, arr.Readarr, arr.Others:
+		fallthrough
 	default:
 		return Mutation{}, fmt.Errorf("search unsupported for arr type %q", instance.Type)
 	}
@@ -132,6 +134,8 @@ func (handler *arrHandler) dispatchSearchCommand(
 		return handler.arrs.SearchSeason(ctx, instance.Name, mutation.SeriesID, mutation.SeasonNumber)
 	case MutationMovieSearch:
 		return handler.arrs.SearchMovies(ctx, instance.Name, mutation.MovieIDs)
+	case MutationHistoryFailed, MutationReleaseGrab:
+		fallthrough
 	default:
 		return arr.Command{}, fmt.Errorf("unsupported Arr command mutation %q", mutation.Kind)
 	}

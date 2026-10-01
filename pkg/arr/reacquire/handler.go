@@ -306,6 +306,8 @@ func bindingMatchesManagedFile(binding Binding, current arr.LibraryFile) bool {
 			slices.Equal(binding.EpisodeIDs, current.EpisodeIDs)
 	case arr.Radarr:
 		return binding.MovieID > 0 && binding.MovieID == current.MovieID
+	case arr.Lidarr, arr.Readarr, arr.Others:
+		fallthrough
 	default:
 		return false
 	}
@@ -322,6 +324,8 @@ func validateSearchBindings(instance arr.Arr, bindings []Binding) error {
 		if len(movieTargets(bindings)) == 0 {
 			return fmt.Errorf("radarr binding has no movie target")
 		}
+	case arr.Lidarr, arr.Readarr, arr.Others:
+		fallthrough
 	default:
 		return fmt.Errorf("search unsupported for arr type %q", instance.Type)
 	}

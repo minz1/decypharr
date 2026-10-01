@@ -276,6 +276,8 @@ func commandScopeMatches(body arr.CommandBody, mutation Mutation) bool {
 		return body.SeriesID == mutation.SeriesID && body.SeasonNumber == mutation.SeasonNumber
 	case MutationMovieSearch:
 		return equalNormalizedIDs(body.MovieIDs, mutation.MovieIDs)
+	case MutationHistoryFailed, MutationReleaseGrab:
+		fallthrough
 	default:
 		return false
 	}

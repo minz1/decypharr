@@ -3,7 +3,6 @@ package arr
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	stdjson "encoding/json"
 	"fmt"
 	"net/http"
@@ -100,7 +99,7 @@ func (s *Service) releases(ctx context.Context, instance Arr, query url.Values) 
 	releases := make([]Release, 0, len(payloads))
 	for _, payload := range payloads {
 		var release Release
-		if unmarshalErr := json.Unmarshal(payload, &release); unmarshalErr != nil {
+		if unmarshalErr := stdjson.Unmarshal(payload, &release); unmarshalErr != nil {
 			return nil, fmt.Errorf("decode release: %w", unmarshalErr)
 		}
 		// The Arr only accepts a release it produced, verbatim.

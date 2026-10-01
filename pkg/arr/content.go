@@ -155,6 +155,8 @@ func (s *Service) SearchMissing(ctx context.Context, name string, files []Conten
 			err = s.searchSonarrSeasons(ctx, instance, batch)
 		case Radarr:
 			err = s.searchRadarrMovies(ctx, instance, batch)
+		case Lidarr, Readarr, Others:
+			fallthrough
 		default:
 			return fmt.Errorf("%w: %s", ErrUnsupportedType, instance.Type)
 		}
@@ -211,7 +213,10 @@ func (s *Service) DeleteFiles(ctx context.Context, name string, files []ContentF
 	if err != nil {
 		return err
 	}
-	field := map[Type]string{Sonarr: "episodeFileIds", Radarr: "movieFileIds"}[instance.Type]
+	field := "movieFileIds"
+	if instance.Type == Sonarr {
+		field = "episodeFileIds"
+	}
 
 	for batch := range slices.Chunk(files, contentBatchSize) {
 		ids := make([]int, 0, len(batch))
