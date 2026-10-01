@@ -1,6 +1,7 @@
 package vfs
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -114,13 +115,8 @@ func TestDirectStreamFile_ReadAtContext(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ReadAtContext: %v", err)
 		}
-		if n != len(content) {
-			t.Fatalf("got %d bytes, want %d", n, len(content))
-		}
-		for i, b := range buf {
-			if b != content[i] {
-				t.Fatalf("byte %d: got %d, want %d", i, b, content[i])
-			}
+		if n != len(content) || !bytes.Equal(buf, content) {
+			t.Fatalf("got %d bytes %v, want %v", n, buf, content)
 		}
 	})
 
@@ -132,13 +128,8 @@ func TestDirectStreamFile_ReadAtContext(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ReadAtContext: %v", err)
 		}
-		if n != 200 {
-			t.Fatalf("got %d bytes, want 200", n)
-		}
-		for i, b := range buf {
-			if b != content[off+i] {
-				t.Fatalf("byte %d: got %d, want %d", i, b, content[off+i])
-			}
+		if n != len(buf) || !bytes.Equal(buf, content[off:off+len(buf)]) {
+			t.Fatalf("got %d bytes %v, want content[%d:%d]", n, buf, off, off+len(buf))
 		}
 	})
 

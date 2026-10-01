@@ -185,45 +185,47 @@ func (b *Backend) Mount(ctx context.Context) error {
 		return fmt.Errorf("timeout waiting for mount to be ready: %w", mountCtx.Err())
 	}
 
-	umount := func(ctx context.Context) {
-		b.logger.Info().Msg("Unmounting filesystem")
-
-		// Create a channel to track completion
-		done := make(chan struct{})
-
-		go func() {
-			// Close VFS manager
-			if b.vfs != nil {
-				if err := b.vfs.Close(); err != nil {
-					b.logger.Warn().Err(err).Msg("Failed to close VFS")
-				}
-			}
-
-			_ = server.Unmount()
-			time.Sleep(1 * time.Second)
-
-			// Check if still mounted
-			if _, err := os.Stat(b.config.MountPath); err == nil {
-				b.logger.Warn().Msg("FUSE filesystem still mounted, attempting force unmount")
-				b.forceUnmount(ctx)
-			}
-
-			close(done)
-		}()
-
-		// Wait for unmount to complete or context timeout
-		select {
-		case <-done:
-			b.logger.Info().Msg("Filesystem unmounted successfully")
-		case <-ctx.Done():
-			b.logger.Warn().Err(ctx.Err()).Msg("Unmount timed out, forcing unmount")
-			b.forceUnmount(ctx)
-		}
-	}
-
-	b.unmountFunc = umount
+	b.unmountFunc = func(ctx context.Context) { b.unmountServer(ctx, server) }
 	b.ready.Store(true)
 	return nil
+}
+
+// unmountServer closes the VFS manager and unmounts server, force-unmounting
+// when the regular unmount does not take or ctx expires first.
+func (b *Backend) unmountServer(ctx context.Context, server *fuse.Server) {
+	b.logger.Info().Msg("Unmounting filesystem")
+
+	// Create a channel to track completion
+	done := make(chan struct{})
+
+	go func() {
+		// Close VFS manager
+		if b.vfs != nil {
+			if err := b.vfs.Close(); err != nil {
+				b.logger.Warn().Err(err).Msg("Failed to close VFS")
+			}
+		}
+
+		_ = server.Unmount()
+		time.Sleep(1 * time.Second)
+
+		// Check if still mounted
+		if _, err := os.Stat(b.config.MountPath); err == nil {
+			b.logger.Warn().Msg("FUSE filesystem still mounted, attempting force unmount")
+			b.forceUnmount(ctx)
+		}
+
+		close(done)
+	}()
+
+	// Wait for unmount to complete or context timeout
+	select {
+	case <-done:
+		b.logger.Info().Msg("Filesystem unmounted successfully")
+	case <-ctx.Done():
+		b.logger.Warn().Err(ctx.Err()).Msg("Unmount timed out, forcing unmount")
+		b.forceUnmount(ctx)
+	}
 }
 
 // Unmount unmounts the filesystem.
