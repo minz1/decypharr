@@ -398,7 +398,7 @@ func (s *SABnzbd) handleAddFile(w http.ResponseWriter, r *http.Request) {
 
 			// Read file content
 			content, openErr := io.ReadAll(file)
-			file.Close()
+			_ = file.Close()
 			if openErr != nil {
 				errors = append(errors, fmt.Sprintf("Failed to read %s: %v", fileHeader.Filename, openErr))
 				continue

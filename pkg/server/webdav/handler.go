@@ -12,16 +12,6 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/manager"
 )
 
-func init() {
-	chi.RegisterMethod("PROPFIND")
-	chi.RegisterMethod("PROPPATCH")
-	chi.RegisterMethod("MKCOL")
-	chi.RegisterMethod("COPY")
-	chi.RegisterMethod("MOVE")
-	chi.RegisterMethod("LOCK")
-	chi.RegisterMethod("UNLOCK")
-}
-
 const (
 	PROPFIND = "PROPFIND"
 )
@@ -54,7 +44,12 @@ func (h *Handler) readinessMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// Routes returns the WebDAV router.
 func (h *Handler) Routes() chi.Router {
+	// chi rejects unknown methods; registration is idempotent.
+	for _, method := range []string{"PROPFIND", "PROPPATCH", "MKCOL", "COPY", "MOVE", "LOCK", "UNLOCK"} {
+		chi.RegisterMethod(method)
+	}
 	r := chi.NewRouter()
 	r.Use(h.readinessMiddleware)
 	r.Use(h.commonMiddleware)

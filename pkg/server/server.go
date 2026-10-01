@@ -41,6 +41,9 @@ const (
 	sessionMaxAge = 7 * 24 * time.Hour
 	// restartDelay lets the triggering response flush before services stop.
 	restartDelay = 200 * time.Millisecond
+	// readHeaderTimeout bounds slow-header (slowloris) clients; bodies and
+	// long streams are unaffected.
+	readHeaderTimeout = 30 * time.Second
 )
 
 type Server struct {
@@ -171,8 +174,9 @@ func (s *Server) Start(ctx context.Context) error {
 	addr := fmt.Sprintf("%s:%s", cfg.BindAddress, cfg.Port)
 	s.logger.Info().Msgf("Starting server on %s%s", addr, cfg.URLBase)
 	srv := &http.Server{
-		Addr:    addr,
-		Handler: s.router,
+		Addr:              addr,
+		Handler:           s.router,
+		ReadHeaderTimeout: readHeaderTimeout,
 	}
 
 	go func() {

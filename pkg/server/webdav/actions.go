@@ -77,7 +77,8 @@ func (h *Handler) handleDownload(info *manager.FileInfo, w http.ResponseWriter, 
 		// FormatMediaType emits a percent-encoded filename* for non-ASCII
 		// names; the old code wrote the raw (unescaped) name into filename*.
 		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": info.Name()}))
-		_, _ = w.Write(info.Content())
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		_, _ = w.Write(info.Content()) //nolint:gosec // G705: decypharr-generated content, sent as an attachment with nosniff
 		return
 	}
 

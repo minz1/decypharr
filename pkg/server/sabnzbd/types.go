@@ -10,9 +10,8 @@ import (
 
 // SABnzbd API response types based on official documentation
 
-var (
-	Version = "4.5.0"
-)
+// Version is the SABnzbd version the compat API reports.
+const Version = "4.5.0"
 
 // QueueResponse represents the queue status response.
 type QueueResponse struct {
@@ -233,7 +232,7 @@ func convertToSABnzbdNZB(e *storage.Entry) NZB {
 	if e.Speed > 0 && e.Progress < 1.0 {
 		bytesLeft := int64(float64(e.Size) * (1 - e.Progress))
 		left := time.Duration(bytesLeft/e.Speed) * time.Second
-		timeLeft = fmt.Sprintf("%d:%02d:%02d", int64(left.Hours()), int64(left.Minutes())%60, int64(left.Seconds())%60)
+		timeLeft = fmt.Sprintf("%d:%02d:%02d", left/time.Hour, left%time.Hour/time.Minute, left%time.Minute/time.Second)
 	}
 
 	// Map storage state to SABnzbd status

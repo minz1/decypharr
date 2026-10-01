@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"mime"
 	"net/http"
 	"path/filepath"
 	"sort"
@@ -86,7 +87,7 @@ func sortBrowseEntries(entries []BrowseEntry, sortBy, sortOrder string) {
 			return entries[i].IsDir && !entries[j].IsDir
 		}
 
-		cmp := 0
+		var cmp int
 		switch sortBy {
 		case sortBySize:
 			cmp = compareInt64(entries[i].Size, entries[j].Size)
@@ -366,7 +367,7 @@ func (s *Server) handleBatchDeleteBrowseTorrents(w http.ResponseWriter, r *http.
 	utils.JSONResponse(w, map[string]any{
 		keySuccess: true,
 		keyMessage: "Torrents deleted successfully",
-		"count":   len(req.IDs),
+		"count":    len(req.IDs),
 	}, http.StatusOK)
 }
 
@@ -392,7 +393,7 @@ func (s *Server) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Last-Modified", entry.AddedOn.UTC().Format(http.TimeFormat))
 
 	w.Header().Set("Content-Type", utils.GetContentType(file.Name))
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", file.Name))
+	w.Header().Set("Content-Disposition", attachmentDisposition(file.Name))
 
 	switch entry.Protocol {
 	case config.ProtocolTorrent:
@@ -401,11 +402,19 @@ func (s *Server) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 	case config.ProtocolNZB:
 		s.handleUsenetDownload(w, r, file)
 		return
+	case config.ProtocolAll:
+		fallthrough // not an entry protocol
 	default:
 		s.logger.Error().Msgf("Unsupported protocol: %s for %s/%s", entry.Protocol, entry.Name, fileName)
 		http.Error(w, "Unsupported protocol", http.StatusPreconditionFailed)
 		return
 	}
+}
+
+// attachmentDisposition quotes name properly; a bare %q-style quote broke on
+// names containing '"' and mangled non-ASCII names.
+func attachmentDisposition(name string) string {
+	return mime.FormatMediaType("attachment", map[string]string{"filename": name})
 }
 
 func (s *Server) handleTorrentDownload(
@@ -429,7 +438,7 @@ func (s *Server) handleTorrentDownload(
 
 func (s *Server) handleUsenetDownload(w http.ResponseWriter, r *http.Request, file *storage.File) {
 	w.Header().Set("Content-Type", utils.GetContentType(file.Name))
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", file.Name))
+	w.Header().Set("Content-Disposition", attachmentDisposition(file.Name))
 	w.Header().Set("Content-Length", strconv.FormatInt(file.Size, 10))
 
 	err := s.manager.Usenet().Download(r.Context(), file.InfoHash, file.Name, w, nil)
