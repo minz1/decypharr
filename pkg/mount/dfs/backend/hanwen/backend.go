@@ -49,7 +49,7 @@ func NewBackend(vfs *vfs.Manager, config *config.FuseConfig) (backend.Backend, e
 	// it instead of allocating their own xsync map per inode — dedup keys are
 	// already unique per inode so a shared map gives identical behaviour.
 	rl := logger.NewRateLimitedLogger(logger.WithLogger(log))
-	root := NewDir(vfs, "", LevelRoot, uint64(now.Unix()), config, log, rl)
+	root := NewDir(vfs, "", LevelRoot, unixSeconds(now), config, log, rl)
 	return &Backend{
 		config: config,
 		logger: log,
@@ -69,7 +69,7 @@ func (b *Backend) Mount(ctx context.Context) error {
 		return fmt.Errorf("VFS manager is not initialized")
 	}
 
-	_ = os.MkdirAll(b.config.MountPath, 0755)
+	_ = os.MkdirAll(b.config.MountPath, 0o755) //nolint:gosec // G301: mountpoint is shared (allow_other)
 	// Try to unmount if already mounted
 	b.forceUnmount(ctx)
 
@@ -293,6 +293,6 @@ func (b *Backend) tryUnmountCommand(ctx context.Context, args ...string) error {
 		return fmt.Errorf("no command provided")
 	}
 
-	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+	cmd := exec.CommandContext(ctx, args[0], args[1:]...) //nolint:gosec // G204: fixed umount commands, no shell
 	return cmd.Run()
 }

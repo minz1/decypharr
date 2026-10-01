@@ -95,7 +95,7 @@ func (m *Manager) Close() error {
 
 	// Close cache
 	if m.cache != nil {
-		m.cache.Close()
+		return m.cache.Close()
 	}
 
 	return nil
