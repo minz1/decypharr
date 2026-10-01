@@ -30,6 +30,10 @@ const (
 	bindingPageSize     = 5000
 	jobAttributeArrName = "arrName"
 	jobAttributeStatus  = "status"
+	// arrStoreCacheSize is how many rows each reacquire store keeps decoded.
+	arrStoreCacheSize = 1000
+	// arrStoreCompactionThreshold is the dead-row ratio that triggers compaction.
+	arrStoreCompactionThreshold = 0.5
 )
 
 type bindingRepositoryStore interface {
@@ -661,13 +665,13 @@ func openArrStore(path string, indexedFields []string) (*appendstore.Store, erro
 	if path == "" {
 		return nil, errors.New("database path is required")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return nil, fmt.Errorf("create database directory: %w", err)
 	}
 	return appendstore.Open(path, appendstore.Options{
-		CacheSize:           1000,
+		CacheSize:           arrStoreCacheSize,
 		SyncInterval:        time.Second,
-		CompactionThreshold: 0.5,
+		CompactionThreshold: arrStoreCompactionThreshold,
 		AutoCompact:         true,
 		IndexedFields:       indexedFields,
 	})

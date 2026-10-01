@@ -23,6 +23,8 @@ const (
 	failureRetention      = 7 * 24 * time.Hour
 	retryBaseDelay        = time.Second
 	retryMaxDelay         = 30 * time.Second
+	// retryMaxDoublings caps how often the retry delay doubles per attempt.
+	retryMaxDoublings = 5
 )
 
 func (s *Service) Reacquire(request Request) (*Job, error) {
@@ -242,7 +244,7 @@ func (s *Service) run(ctx context.Context) {
 func (s *Service) runJob(ctx context.Context, handler Handler, job Job) bool {
 	deadline := job.reconciliationDeadline()
 	if !deadline.IsZero() && !s.now().Before(deadline) {
-		return s.stopReconciliation(job.ID, errors.New("Arr reconciliation deadline expired"))
+		return s.stopReconciliation(job.ID, errors.New("arr reconciliation deadline expired"))
 	}
 	started, err := s.updateJob(job.ID, StatusResolving, func(job *Job) {
 		job.RetryAt = time.Time{}
@@ -270,7 +272,7 @@ func (s *Service) runJob(ctx context.Context, handler Handler, job Job) bool {
 	}
 	deadline = current.reconciliationDeadline()
 	if err != nil && !deadline.IsZero() && !s.now().Before(deadline) {
-		return s.stopReconciliation(job.ID, fmt.Errorf("Arr reconciliation deadline expired: %w", err))
+		return s.stopReconciliation(job.ID, fmt.Errorf("arr reconciliation deadline expired: %w", err))
 	}
 	if errors.Is(err, arr.ErrMutationOutcomeUnknown) {
 		delay := retryDelay(current, err)
@@ -481,7 +483,7 @@ func retryDelay(job Job, err error) time.Duration {
 		attempts = max(attempts, mutation.Attempts)
 	}
 	delay := retryBaseDelay
-	for range max(0, min(attempts-1, 5)) {
+	for range max(0, min(attempts-1, retryMaxDoublings)) {
 		delay *= 2
 	}
 	return min(retryMaxDelay, max(delay, arr.MutationRetryAfter(err)))
