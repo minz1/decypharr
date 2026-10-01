@@ -12,6 +12,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/internal/utils"
+	debrid "github.com/sirrobot01/decypharr/pkg/debrid/common"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
@@ -243,16 +244,8 @@ func (f *Fixer) MoveTorrent(entry *storage.Entry, debridName string, reinsert bo
 	// Prefer activating an existing, completed placement on the target debrid
 	// before re-submitting the magnet. Skipped when reinsert=true — e.g. the
 	// current active provider just failed and its placement is presumed stale.
-	if !reinsert {
-		if target, ok := entry.Providers[debridName]; ok && target != nil && target.ID != "" &&
-			target.Status == types.TorrentStatusDownloaded {
-			if err := entry.ActivatePlacement(debridName); err == nil {
-				entry.Bad = false
-				entry.UpdatedAt = time.Now()
-				return true, nil
-			}
-			// Activation failed — fall through to a fresh submit.
-		}
+	if !reinsert && activateExistingPlacement(entry, debridName) {
+		return true, nil
 	}
 
 	// Only replace the old torrent on the same provider. Other placements stay valid.
@@ -261,107 +254,11 @@ func (f *Fixer) MoveTorrent(entry *storage.Entry, debridName string, reinsert bo
 		oldID = source.ID
 	}
 
-	// Construct magnet
-	magnet, err := utils.GetMagnetInfo(entry.Magnet, config.Get().AlwaysRmTrackerUrls)
+	newDebridTorrent, err := f.submitReplacement(client, entry)
 	if err != nil {
-		magnet = utils.ConstructMagnet(entry.InfoHash, entry.Name)
+		return false, err
 	}
-
-	if magnet == nil {
-		return false, fmt.Errorf("failed to construct magnet for entry %s", entry.Name)
-	}
-	if magnet.Link == "" {
-		return false, fmt.Errorf("failed to construct magnet for entry %s", entry.Name)
-	}
-
-	// Submit to debrid
-	newDebridTorrent := &types.Torrent{
-		Name:             entry.Name,
-		Magnet:           magnet,
-		InfoHash:         entry.InfoHash,
-		Size:             entry.Size,
-		Files:            make(map[string]types.File),
-		DownloadUncached: false,
-	}
-
-	newDebridTorrent, err = client.SubmitMagnet(newDebridTorrent)
-	if err != nil {
-		return false, fmt.Errorf("failed to submit magnet: %w", err)
-	}
-
-	if newDebridTorrent == nil || newDebridTorrent.Id == "" {
-		return false, fmt.Errorf("failed to submit magnet: empty entry")
-	}
-
-	// Check status
-	newDebridTorrent.DownloadUncached = false
-	newDebridTorrent, err = client.CheckStatus(newDebridTorrent)
-	if errors.Is(err, customerror.TorrentNotCachedError) {
-		f.manager.hearsay.ReportAdd(client.Config().Provider, entry.InfoHash, false)
-	}
-	if err != nil {
-		// Delete the failed entry
-		if newDebridTorrent != nil && newDebridTorrent.Id != "" {
-			_ = client.DeleteTorrent(newDebridTorrent.Id)
-		}
-		return false, fmt.Errorf("failed to check status: %w", err)
-	}
-	f.manager.hearsay.ReportAdd(
-		client.Config().Provider,
-		entry.InfoHash,
-		newDebridTorrent.Status == types.TorrentStatusDownloaded,
-	)
-
-	// Verify files have links
-	if len(newDebridTorrent.Files) == 0 {
-		_ = client.DeleteTorrent(newDebridTorrent.Id)
-		return false, fmt.Errorf("no files in entry after re-insertion")
-	}
-
-	for _, f := range newDebridTorrent.GetFiles() {
-		if f.Link == "" && f.Id == "" {
-			_ = client.DeleteTorrent(newDebridTorrent.Id)
-			return false, fmt.Errorf("empty link/id for file %s", f.Name)
-		}
-	}
-
-	addedOn := newDebridTorrent.Added
-	if addedOn.IsZero() {
-		addedOn = time.Now()
-	}
-
-	// Update entry with new placement
-	_ = entry.AddTorrentProvider(newDebridTorrent)
-	// Update global file metadata (revives files that previously existed)
-	if entry.Files == nil {
-		entry.Files = make(map[string]*storage.File)
-	}
-	for _, f := range newDebridTorrent.GetFiles() {
-		if existing, exists := entry.Files[f.Name]; exists {
-			existing.Size = f.Size
-			existing.ByteRange = f.ByteRange
-			existing.Deleted = false
-			existing.InfoHash = entry.InfoHash
-			existing.AddedOn = addedOn
-		} else {
-			entry.Files[f.Name] = &storage.File{
-				Name:      f.Name,
-				Size:      f.Size,
-				ByteRange: f.ByteRange,
-				Deleted:   false,
-				InfoHash:  entry.InfoHash,
-				AddedOn:   addedOn,
-			}
-		}
-	}
-
-	// Activate this debrid
-	if activatePlacementErr := entry.ActivatePlacement(debridName); activatePlacementErr != nil {
-		f.manager.logger.Warn().Err(activatePlacementErr).Msg("failed to activate placement")
-	}
-
-	entry.Bad = false
-	entry.UpdatedAt = time.Now()
+	f.adoptPlacement(entry, debridName, newDebridTorrent)
 
 	// Delete old entry from debrid if different ID
 	if oldID != "" && oldID != newDebridTorrent.Id {
@@ -371,6 +268,113 @@ func (f *Fixer) MoveTorrent(entry *storage.Entry, debridName string, reinsert bo
 	}
 
 	return true, nil
+}
+
+// activateExistingPlacement switches entry to a completed placement it
+// already has on debridName.
+func activateExistingPlacement(entry *storage.Entry, debridName string) bool {
+	target, ok := entry.Providers[debridName]
+	if !ok || target == nil || target.ID == "" || target.Status != types.TorrentStatusDownloaded {
+		return false
+	}
+	if err := entry.ActivatePlacement(debridName); err != nil {
+		return false // fall through to a fresh submit
+	}
+	entry.Bad = false
+	entry.UpdatedAt = time.Now()
+	return true
+}
+
+// submitReplacement submits entry's magnet to client and returns the new
+// placement once every file has a link or ID; a failed placement is deleted.
+func (f *Fixer) submitReplacement(client debrid.Client, entry *storage.Entry) (*types.Torrent, error) {
+	magnet, err := utils.GetMagnetInfo(entry.Magnet, config.Get().AlwaysRmTrackerUrls)
+	if err != nil {
+		magnet = utils.ConstructMagnet(entry.InfoHash, entry.Name)
+	}
+	if magnet == nil || magnet.Link == "" {
+		return nil, fmt.Errorf("failed to construct magnet for entry %s", entry.Name)
+	}
+
+	newDebridTorrent, err := client.SubmitMagnet(&types.Torrent{
+		Name:             entry.Name,
+		Magnet:           magnet,
+		InfoHash:         entry.InfoHash,
+		Size:             entry.Size,
+		Files:            make(map[string]types.File),
+		DownloadUncached: false,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to submit magnet: %w", err)
+	}
+	if newDebridTorrent == nil || newDebridTorrent.Id == "" {
+		return nil, fmt.Errorf("failed to submit magnet: empty entry")
+	}
+
+	newDebridTorrent.DownloadUncached = false
+	newDebridTorrent, err = client.CheckStatus(newDebridTorrent)
+	if errors.Is(err, customerror.TorrentNotCachedError) {
+		f.manager.hearsay.ReportAdd(client.Config().Provider, entry.InfoHash, false)
+	}
+	if err != nil {
+		if newDebridTorrent != nil && newDebridTorrent.Id != "" {
+			_ = client.DeleteTorrent(newDebridTorrent.Id)
+		}
+		return nil, fmt.Errorf("failed to check status: %w", err)
+	}
+	f.manager.hearsay.ReportAdd(
+		client.Config().Provider,
+		entry.InfoHash,
+		newDebridTorrent.Status == types.TorrentStatusDownloaded,
+	)
+
+	if len(newDebridTorrent.Files) == 0 {
+		_ = client.DeleteTorrent(newDebridTorrent.Id)
+		return nil, fmt.Errorf("no files in entry after re-insertion")
+	}
+	for _, file := range newDebridTorrent.GetFiles() {
+		if file.Link == "" && file.Id == "" {
+			_ = client.DeleteTorrent(newDebridTorrent.Id)
+			return nil, fmt.Errorf("empty link/id for file %s", file.Name)
+		}
+	}
+	return newDebridTorrent, nil
+}
+
+// adoptPlacement records a new placement on entry, revives its files and
+// makes debridName active.
+func (f *Fixer) adoptPlacement(entry *storage.Entry, debridName string, placement *types.Torrent) {
+	addedOn := placement.Added
+	if addedOn.IsZero() {
+		addedOn = time.Now()
+	}
+	_ = entry.AddTorrentProvider(placement)
+	if entry.Files == nil {
+		entry.Files = make(map[string]*storage.File)
+	}
+	for _, file := range placement.GetFiles() {
+		if existing, exists := entry.Files[file.Name]; exists {
+			existing.Size = file.Size
+			existing.ByteRange = file.ByteRange
+			existing.Deleted = false
+			existing.InfoHash = entry.InfoHash
+			existing.AddedOn = addedOn
+			continue
+		}
+		entry.Files[file.Name] = &storage.File{
+			Name:      file.Name,
+			Size:      file.Size,
+			ByteRange: file.ByteRange,
+			Deleted:   false,
+			InfoHash:  entry.InfoHash,
+			AddedOn:   addedOn,
+		}
+	}
+	if err := entry.ActivatePlacement(debridName); err != nil {
+		f.manager.logger.Warn().Err(err).Msg("failed to activate placement")
+	}
+	entry.Bad = false
+	entry.UpdatedAt = time.Now()
 }
 
 // buildAttemptOrder creates the order of debrids to attempt re-insertion
