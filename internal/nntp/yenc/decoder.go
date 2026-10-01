@@ -74,7 +74,7 @@ type BodyDecoder struct {
 }
 
 // NewBodyDecoder returns a BodyDecoder reading from r. dataFunc, when
-// non-nil, supplies output buffers (for example from a sync.Pool); the
+// non-nil, supplies output buffers (for example from a [sync.Pool]); the
 // decoder takes one per response and hands it back as BodyResult.Data.
 func NewBodyDecoder(r io.Reader, dataFunc func() []byte) *BodyDecoder {
 	if dataFunc == nil {

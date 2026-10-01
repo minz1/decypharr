@@ -53,6 +53,10 @@ type ProviderPool struct {
 // the DFS no-progress windows so a recovered provider is retried promptly.
 const maxDialCooldown = 15 * time.Second
 
+// maxDialBackoffShift caps the doubling of the dial cooldown (1s << 4 = 16s,
+// clamped to maxDialCooldown).
+const maxDialBackoffShift = 4
+
 func (pp *ProviderPool) inDialCooldown() bool {
 	until := pp.dialCooldownUntil.Load()
 	return until != 0 && nanotimeNow() < until
@@ -60,7 +64,7 @@ func (pp *ProviderPool) inDialCooldown() bool {
 
 func (pp *ProviderPool) noteDialFailure() {
 	streak := pp.dialFailStreak.Add(1)
-	backoff := min(time.Second<<min(streak-1, 4), maxDialCooldown)
+	backoff := min(time.Second<<min(streak-1, maxDialBackoffShift), maxDialCooldown)
 	pp.dialCooldownUntil.Store(nanotimeNow() + int64(backoff))
 }
 
@@ -138,15 +142,17 @@ type Client struct {
 	sockReadBuf  int
 	sockWriteBuf int
 
-	// Pool lifecycle tuning, resolved at construction from DefaultTimeouts
-	// with an optional cfg.Usenet.ConnIdleTimeout override. Kept per-client
-	// (rather than on the package-level timeouts var) so config reloads that
-	// rebuild the client can't race connections still using the old one.
+	// Pool lifecycle tuning, resolved at construction from the default
+	// timeout constants with an optional cfg.Usenet.ConnIdleTimeout
+	// override. Kept per-client so config reloads that rebuild the client
+	// can't race connections still using the old one.
 	idleTimeout    time.Duration // close pooled conns unused for this long
 	staleThreshold time.Duration // verify-ping on checkout after this much inactivity
 	pingInterval   time.Duration // reaper keepalive-ping cadence for idle conns
 	pingTimeout    time.Duration // budget for a checkout verify-ping
 	keepalivePing  time.Duration // budget for a reaper keepalive ping
+	// handshakeTimeout bounds greeting + auth on dial; 0 = default.
+	handshakeTimeout time.Duration
 }
 
 // SpeedTestResult holds the result of a provider speed test.
@@ -179,6 +185,7 @@ func (e *connectionEntry) lastActivity() time.Time {
 	return e.lastUsed
 }
 
+//nolint:gochecknoglobals // a sync.Pool only pays off when shared by every Client
 var connectionEntryPool = sync.Pool{
 	New: func() any {
 		return &connectionEntry{}
@@ -186,7 +193,10 @@ var connectionEntryPool = sync.Pool{
 }
 
 func acquireConnectionEntry(conn *Connection, provider config.UsenetProvider, lastUsed time.Time) *connectionEntry {
-	entry := connectionEntryPool.Get().(*connectionEntry)
+	entry, ok := connectionEntryPool.Get().(*connectionEntry)
+	if !ok {
+		entry = &connectionEntry{}
+	}
 	entry.conn = conn
 	entry.provider = provider
 	entry.lastUsed = lastUsed
@@ -201,115 +211,43 @@ func releaseConnectionEntry(entry *connectionEntry) {
 	connectionEntryPool.Put(entry)
 }
 
-// TimeoutConfig holds all NNTP timeout settings in one place.
-// This provides a single location to tune timeout behavior.
-type TimeoutConfig struct {
-	// Connection establishment timeout
-	DialTimeout time.Duration
-	// TCP keepalive interval
-	KeepAlive time.Duration
-	// Auth/handshake deadline after connection
-	HandshakeTimeout time.Duration
-	// Read deadline for streaming segment data
-	StreamBodyTimeout time.Duration
-	// Deadline for the verify-ping (DATE) on checkout. This one is on the
-	// critical path — a reader is already waiting — so it stays tight and
-	// fails over to a fresh dial rather than waiting out a slow answer.
-	PingTimeout time.Duration
-	// Deadline for the reaper's background keepalive ping (DATE). Nobody is
-	// waiting on it, so it gets a wider budget: pings share the link with
-	// bulk BODY transfers, and under a saturated downlink a round trip can
-	// take seconds. A tight budget there kills warm connections that are
-	// merely queued behind a download, forcing a needless TCP+TLS+AUTH.
-	KeepalivePingTimeout time.Duration
-	// Health check connections idle longer than this
-	StaleThreshold time.Duration
-	// Close connections idle longer than this
-	IdleTimeout time.Duration
-	// Keepalive-ping idle pooled connections whose last activity (use or
-	// ping) is older than this, instead of letting them go stale
-	PingInterval time.Duration
-	// How often to check for idle connections
-	ReaperInterval time.Duration
-}
-
-// DefaultTimeouts returns production-tuned timeout values.
+// NNTP timeouts.
 //
-// IdleTimeout is deliberately long: players read in bursts (fill their
+// defaultIdleTimeout is deliberately long: players read in bursts (fill their
 // buffer, go quiet for tens of seconds, read again), and closing warm
-// connections between bursts forces a TCP+TLS+AUTH reconnect storm on
-// every resume — measured at ~38k reconnects/week in production with the
-// old 20s value. Stale sessions are handled by keepalive DATE pings
-// (PingInterval, in the reaper) plus a verify-ping on checkout
-// (StaleThreshold), not by closing early.
-var DefaultTimeouts = TimeoutConfig{
-	DialTimeout:       10 * time.Second,
-	KeepAlive:         30 * time.Second,
-	HandshakeTimeout:  10 * time.Second,
-	StreamBodyTimeout: 60 * time.Second,
-	PingTimeout:       1500 * time.Millisecond,
-	// Wide enough to ride out queueing delay on a saturated link. A dead
-	// path still costs only one of these per sweep: the first timeout
-	// flushes the pool instead of pinging the rest of the batch.
-	KeepalivePingTimeout: 5 * time.Second,
-	StaleThreshold:       60 * time.Second,
-	IdleTimeout:          5 * time.Minute,
-	PingInterval:         30 * time.Second,
-	ReaperInterval:       5 * time.Second,
-}
-
-// Package-level timeouts used by all clients.
-var timeouts = normalizeTimeouts(DefaultTimeouts)
-
-func normalizeTimeouts(in TimeoutConfig) TimeoutConfig {
-	if in.DialTimeout <= 0 {
-		in.DialTimeout = 10 * time.Second
-	}
-	if in.KeepAlive <= 0 {
-		in.KeepAlive = 30 * time.Second
-	}
-	if in.HandshakeTimeout <= 0 {
-		in.HandshakeTimeout = 10 * time.Second
-	}
-	if in.StreamBodyTimeout <= 0 {
-		in.StreamBodyTimeout = 60 * time.Second
-	}
-	if in.PingTimeout <= 0 {
-		in.PingTimeout = 1500 * time.Millisecond
-	}
-	if in.KeepalivePingTimeout <= 0 {
-		in.KeepalivePingTimeout = 5 * time.Second
-	}
-	if in.IdleTimeout <= 0 {
-		in.IdleTimeout = 5 * time.Minute
-	}
-	// Keep stale checks meaningful: stale must be >0 and below idle timeout.
-	if in.StaleThreshold <= 0 || in.StaleThreshold >= in.IdleTimeout {
-		in.StaleThreshold = in.IdleTimeout / 2
-		if in.StaleThreshold <= 0 {
-			in.StaleThreshold = 10 * time.Second
-		}
-	}
-	// Keepalive pings must fire well inside the idle window to be useful.
-	if in.PingInterval <= 0 || in.PingInterval >= in.IdleTimeout {
-		in.PingInterval = min(30*time.Second, in.IdleTimeout/2)
-	}
-	// A keepalive ping holds a pool slot while it runs. Keep that below the
-	// cadence at which pings are issued so a sweep cannot still be waiting
-	// when the next one is due.
-	if in.KeepalivePingTimeout > in.PingInterval {
-		in.KeepalivePingTimeout = in.PingInterval
-	}
-	if in.ReaperInterval <= 0 {
-		in.ReaperInterval = 5 * time.Second
-	}
-	// Sweep frequently enough to avoid long idle overhang.
-	maxReaperInterval := max(in.IdleTimeout/4, time.Second)
-	if in.ReaperInterval > maxReaperInterval {
-		in.ReaperInterval = maxReaperInterval
-	}
-	return in
-}
+// connections between bursts forces a TCP+TLS+AUTH reconnect storm on every
+// resume — measured at ~38k reconnects/week in production with the old 20s
+// value. Stale sessions are handled by keepalive DATE pings
+// (defaultPingInterval, in the reaper) plus a verify-ping on checkout
+// (defaultStaleThreshold), not by closing early.
+const (
+	// dialTimeout bounds connection establishment.
+	dialTimeout = 10 * time.Second
+	// tcpKeepAlive is the TCP keepalive interval.
+	tcpKeepAlive = 30 * time.Second
+	// defaultHandshakeTimeout bounds greeting + auth, and command writes.
+	defaultHandshakeTimeout = 10 * time.Second
+	// streamBodyTimeout is the read deadline for streaming segment data.
+	streamBodyTimeout = 60 * time.Second
+	// defaultPingTimeout bounds the verify-ping (DATE) on checkout. It is on
+	// the critical path — a reader is already waiting — so it stays tight
+	// and fails over to a fresh dial rather than waiting out a slow answer.
+	defaultPingTimeout = 1500 * time.Millisecond
+	// defaultKeepalivePingTimeout bounds the reaper's background keepalive
+	// ping. Nobody waits on it, so it rides out queueing delay on a
+	// saturated link; a dead path still costs only one of these per sweep
+	// because the first timeout flushes the pool.
+	defaultKeepalivePingTimeout = 5 * time.Second
+	// defaultStaleThreshold: verify-ping connections idle longer than this.
+	defaultStaleThreshold = 60 * time.Second
+	// defaultIdleTimeout: close pooled connections unused for this long.
+	defaultIdleTimeout = 5 * time.Minute
+	// defaultPingInterval: keepalive-ping idle pooled connections whose last
+	// activity (use or ping) is older than this.
+	defaultPingInterval = 30 * time.Second
+	// reaperInterval is how often idle connections are swept.
+	reaperInterval = 5 * time.Second
+)
 
 // buildPools creates one ProviderPool per provider. Pools are keyed by
 // provider ID (host:port/username), never bare host: dual-account setups
@@ -333,13 +271,16 @@ func buildPools(providers []config.UsenetProvider) (map[string]*ProviderPool, []
 
 // NewClient creates a new connection manager.
 func NewClient(cfg *config.Config) (*Client, error) {
-	providers := cfg.Usenet.Providers
+	// Clone: sorting and normalizing below must not mutate the shared config,
+	// which other goroutines read concurrently.
+	providers := slices.Clone(cfg.Usenet.Providers)
 	if len(providers) == 0 {
 		return nil, errors.New("no NNTP providers configured")
 	}
 
-	// Sort providers by priority (lower number = higher priority)
-	slices.SortFunc(providers, func(a, b config.UsenetProvider) int {
+	// Sort providers by priority (lower number = higher priority); stable so
+	// equal priorities keep their configured order.
+	slices.SortStableFunc(providers, func(a, b config.UsenetProvider) int {
 		return cmp.Compare(a.Priority, b.Priority)
 	})
 
@@ -362,28 +303,17 @@ func NewClient(cfg *config.Config) (*Client, error) {
 		speedTestResults: xsync.NewMap[string, SpeedTestResult](),
 		sockReadBuf:      parseSockBuf(cfg.Usenet.SocketReadBuffer),
 		sockWriteBuf:     parseSockBuf(cfg.Usenet.SocketWriteBuffer),
-		idleTimeout:      timeouts.IdleTimeout,
-		staleThreshold:   timeouts.StaleThreshold,
-		pingInterval:     timeouts.PingInterval,
-		pingTimeout:      timeouts.PingTimeout,
-		keepalivePing:    timeouts.KeepalivePingTimeout,
+		idleTimeout:      defaultIdleTimeout,
+		staleThreshold:   defaultStaleThreshold,
+		pingInterval:     defaultPingInterval,
+		pingTimeout:      defaultPingTimeout,
+		keepalivePing:    defaultKeepalivePingTimeout,
 	}
-	if cfg.Usenet.ConnIdleTimeout != "" {
-		if d, err := utils.ParseDuration(cfg.Usenet.ConnIdleTimeout); err != nil || d <= 0 {
-			cm.logger.Warn().Str("conn_idle_timeout", cfg.Usenet.ConnIdleTimeout).
-				Msg("invalid conn_idle_timeout, using default")
+	if value := cfg.Usenet.ConnIdleTimeout; value != "" {
+		if d, err := utils.ParseDuration(value); err != nil || d <= 0 {
+			cm.logger.Warn().Str("conn_idle_timeout", value).Msg("invalid conn_idle_timeout, using default")
 		} else {
-			cm.idleTimeout = d
-			// Keep the derived thresholds inside the configured window.
-			if cm.staleThreshold >= cm.idleTimeout {
-				cm.staleThreshold = cm.idleTimeout / 2
-			}
-			if cm.pingInterval >= cm.idleTimeout {
-				cm.pingInterval = cm.idleTimeout / 2
-			}
-			if cm.keepalivePing > cm.pingInterval {
-				cm.keepalivePing = cm.pingInterval
-			}
+			cm.setIdleTimeout(d)
 		}
 	}
 	if value := cfg.Usenet.StreamBackupWait; value != "" && value != "0" {
@@ -399,6 +329,21 @@ func NewClient(cfg *config.Config) (*Client, error) {
 	// Start background reaper
 	go cm.reaper()
 	return cm, nil
+}
+
+// setIdleTimeout applies a configured idle window and keeps the derived
+// thresholds strictly inside it.
+func (c *Client) setIdleTimeout(d time.Duration) {
+	c.idleTimeout = d
+	const halve = 2
+	if c.staleThreshold >= d {
+		c.staleThreshold = d / halve
+	}
+	if c.pingInterval >= d {
+		c.pingInterval = d / halve
+	}
+	// A keepalive ping may not outlast the cadence it is issued at.
+	c.keepalivePing = min(c.keepalivePing, c.pingInterval)
 }
 
 // put returns a connection to the pool and releases the slot.
@@ -460,7 +405,7 @@ func (c *Client) release(conn *Connection) {
 // timing out rather than erroring immediately: a reset means the server
 // dropped this one session, but a silent timeout means the network path is
 // gone — and every older entry idling below it in the stack is dead too.
-func (c *Client) checkEntryHealth(entry *connectionEntry) (healthy, pingTimedOut bool) {
+func (c *Client) checkEntryHealth(entry *connectionEntry) (bool, bool) {
 	if entry == nil || entry.conn == nil {
 		return false, false
 	}
@@ -642,46 +587,12 @@ func (c *Client) getAnyAvailableConnectionInTier(
 	exclusions providerExclusions,
 	useBackups bool,
 ) (*Connection, config.UsenetProvider, error) {
-	// Cooldowns are advisory reroutes, never a denial of service: skip a
-	// cooling-down provider only when some other eligible provider is warm
-	// (see ProviderPool.isWarm). When the whole tier is cold, dial anyway —
-	// otherwise a single-provider setup would trade its fail-fast behavior
-	// for a silent wait.
-	ignoreCooldowns := true
-	for i, provider := range c.providers {
-		if provider.Backup != useBackups || exclusions.excludes(provider) {
-			continue
-		}
-		if c.orderedPools[i].isWarm() {
-			ignoreCooldowns = false
-			break
-		}
-	}
-
 	// Phase 1: Non-blocking scan - try to get a free slot from any provider
 	// within the current tier.
-	eligibleCount := 0
-	for i, provider := range c.providers {
-		if provider.Backup != useBackups || exclusions.excludes(provider) {
-			continue
-		}
-		eligibleCount++
-		pp := c.orderedPools[i]
-		if !ignoreCooldowns && !pp.isWarm() {
-			continue // provider cooling down after dial failures; route around it
-		}
-
-		if c.tryAcquireSlot(pp, workload) {
-			// Got a slot - try to get or create connection
-			conn, err := c.getOrCreateFromPool(ctx, pp, provider, ignoreCooldowns)
-			if err != nil {
-				c.releaseSlot(pp) // Release slot on error
-				continue          // Try next provider
-			}
-			return conn, provider, nil
-		}
+	conn, provider, eligibleCount := c.scanTier(ctx, workload, exclusions, useBackups)
+	if conn != nil {
+		return conn, provider, nil
 	}
-
 	if eligibleCount == 0 {
 		return nil, config.UsenetProvider{}, errors.New("no eligible providers available")
 	}
@@ -690,8 +601,8 @@ func (c *Client) getAnyAvailableConnectionInTier(
 	// When the primary tier is in use this is the wait that lets a backup
 	// remain idle rather than getting roped in.
 	eligible := make([]*ProviderPool, 0, eligibleCount)
-	for i, provider := range c.providers {
-		if provider.Backup == useBackups && !exclusions.excludes(provider) {
+	for i, p := range c.providers {
+		if p.Backup == useBackups && !exclusions.excludes(p) {
 			eligible = append(eligible, c.orderedPools[i])
 		}
 	}
@@ -699,16 +610,61 @@ func (c *Client) getAnyAvailableConnectionInTier(
 	if !useBackups && workload == WorkloadStreamDemand && c.streamBackupWait > 0 &&
 		c.hasEligibleProviderInTier(exclusions, true) {
 		waitCtx, cancel := context.WithTimeoutCause(ctx, c.streamBackupWait, errStreamBackupWaitElapsed)
-		conn, provider, err := c.waitForConnection(waitCtx, workload, eligible)
+		waited, waitedProvider, err := c.waitForConnection(waitCtx, workload, eligible)
 		spillToBackup := errors.Is(context.Cause(waitCtx), errStreamBackupWaitElapsed) && ctx.Err() == nil
 		cancel()
 		if spillToBackup {
 			c.streamBackupSpillovers.Add(1)
 			return c.getAnyAvailableConnectionInTier(ctx, workload, exclusions, true)
 		}
-		return conn, provider, err
+		return waited, waitedProvider, err
 	}
 	return c.waitForConnection(ctx, workload, eligible)
+}
+
+// scanTier tries every eligible provider of one tier without blocking. It
+// returns a connection when one was free, plus the tier's eligible count.
+//
+// Cooldowns are advisory reroutes, never a denial of service: skip a
+// cooling-down provider only when some other eligible provider is warm
+// (see ProviderPool.isWarm). When the whole tier is cold, dial anyway —
+// otherwise a single-provider setup would trade its fail-fast behavior
+// for a silent wait.
+func (c *Client) scanTier(
+	ctx context.Context,
+	workload Workload,
+	exclusions providerExclusions,
+	useBackups bool,
+) (*Connection, config.UsenetProvider, int) {
+	ignoreCooldowns := true
+	for i, p := range c.providers {
+		if p.Backup == useBackups && !exclusions.excludes(p) && c.orderedPools[i].isWarm() {
+			ignoreCooldowns = false
+			break
+		}
+	}
+
+	eligibleCount := 0
+	for i, p := range c.providers {
+		if p.Backup != useBackups || exclusions.excludes(p) {
+			continue
+		}
+		eligibleCount++
+		pp := c.orderedPools[i]
+		if !ignoreCooldowns && !pp.isWarm() {
+			continue // provider cooling down after dial failures; route around it
+		}
+		if !c.tryAcquireSlot(pp, workload) {
+			continue
+		}
+		conn, err := c.getOrCreateFromPool(ctx, pp, p, ignoreCooldowns)
+		if err != nil {
+			c.releaseSlot(pp) // Release slot on error, try next provider
+			continue
+		}
+		return conn, p, eligibleCount
+	}
+	return nil, config.UsenetProvider{}, eligibleCount
 }
 
 var errStreamBackupWaitElapsed = errors.New("stream primary-tier wait elapsed")
@@ -739,43 +695,18 @@ func (c *Client) waitForConnection(
 		}
 		c.register(w)
 
-		busy := 0
-		failed := 0
-		ignoreCooldowns := true
-		for _, pp := range eligible {
-			if pp.isWarm() {
-				ignoreCooldowns = false
-				break
-			}
+		scan := c.scanEligible(ctx, workload, eligible)
+		if scan.conn != nil {
+			c.deregister(w)
+			c.finishWait(w, admissionSucceeded)
+			return scan.conn, scan.pool.config, nil
 		}
-		for _, pp := range eligible {
-			if !ignoreCooldowns && !pp.isWarm() {
-				continue
-			}
-			if c.tryAcquireSlot(pp, workload) {
-				conn, err := c.getOrCreateFromPool(ctx, pp, pp.config, ignoreCooldowns)
-				if err != nil {
-					c.releaseSlot(pp)
-					if errors.Is(err, errDialCooldown) {
-						// Raced into a cooldown (pool drained after the
-						// isWarm check): wait it out, don't surface it.
-						busy++
-					} else {
-						lastErr = err
-						failed++
-					}
-					continue
-				}
-				c.deregister(w)
-				c.finishWait(w, admissionSucceeded)
-				return conn, pp.config, nil
-			} else {
-				busy++
-			}
+		if scan.err != nil {
+			lastErr = scan.err
 		}
 		// Every provider had a free slot and failed to produce a connection:
 		// surface the error instead of spinning on dial failures.
-		if busy == 0 && failed > 0 {
+		if scan.busy == 0 && scan.failed > 0 {
 			c.deregister(w)
 			c.finishWait(w, admissionFailed)
 			return nil, config.UsenetProvider{}, lastErr
@@ -787,15 +718,14 @@ func (c *Client) waitForConnection(
 			// The releaser already removed us from the queue; we own a held
 			// slot on pp now. Do not deregister here — the token is consumed.
 			conn, err := c.getOrCreateFromPool(ctx, pp, pp.config, false)
-			if err != nil {
-				c.releaseSlot(pp)
-				if !errors.Is(err, errDialCooldown) {
-					lastErr = err
-				}
-				continue
+			if err == nil {
+				c.finishWait(w, admissionSucceeded)
+				return conn, pp.config, nil
 			}
-			c.finishWait(w, admissionSucceeded)
-			return conn, pp.config, nil
+			c.releaseSlot(pp)
+			if !errors.Is(err, errDialCooldown) {
+				lastErr = err
+			}
 		case <-timer.C:
 			c.deregister(w)
 		case <-ctx.Done():
@@ -804,6 +734,46 @@ func (c *Client) waitForConnection(
 			return nil, config.UsenetProvider{}, ctx.Err()
 		}
 	}
+}
+
+// eligibleScan is the result of one non-blocking pass over eligible pools.
+type eligibleScan struct {
+	conn   *Connection
+	pool   *ProviderPool
+	busy   int
+	failed int
+	err    error // last dial failure, if any
+}
+
+// scanEligible tries each eligible pool once without blocking, honoring dial
+// cooldowns while any pool is warm.
+func (c *Client) scanEligible(ctx context.Context, workload Workload, eligible []*ProviderPool) eligibleScan {
+	var scan eligibleScan
+	ignoreCooldowns := !slices.ContainsFunc(eligible, (*ProviderPool).isWarm)
+	for _, pp := range eligible {
+		if !ignoreCooldowns && !pp.isWarm() {
+			continue
+		}
+		if !c.tryAcquireSlot(pp, workload) {
+			scan.busy++
+			continue
+		}
+		conn, err := c.getOrCreateFromPool(ctx, pp, pp.config, ignoreCooldowns)
+		if err == nil {
+			scan.conn, scan.pool = conn, pp
+			return scan
+		}
+		c.releaseSlot(pp)
+		if errors.Is(err, errDialCooldown) {
+			// Raced into a cooldown (pool drained after the isWarm check):
+			// wait it out, don't surface it.
+			scan.busy++
+		} else {
+			scan.err = err
+			scan.failed++
+		}
+	}
+	return scan
 }
 
 // errDialCooldown is returned by getOrCreateFromPool when the pool has no
@@ -930,6 +900,13 @@ func (c *Client) tuneTCP(tcpConn *net.TCPConn) {
 	}
 }
 
+// Per-connection bufio sizes: reads match the decoder's 128KB chunks, writes
+// only carry short command lines.
+const (
+	connReadBufSize  = 128 * 1024
+	connWriteBufSize = 4 * 1024
+)
+
 // createConnection creates a new NNTP connection to a provider.
 func (c *Client) createConnection(ctx context.Context, provider config.UsenetProvider) (*Connection, error) {
 	address := fmt.Sprintf("%s:%d", provider.Host, provider.Port)
@@ -938,8 +915,8 @@ func (c *Client) createConnection(ctx context.Context, provider config.UsenetPro
 	var err error
 
 	dialer := &net.Dialer{
-		Timeout:   timeouts.DialTimeout,
-		KeepAlive: timeouts.KeepAlive,
+		Timeout:   dialTimeout,
+		KeepAlive: tcpKeepAlive,
 		Control:   c.socketControl(),
 	}
 
@@ -947,8 +924,11 @@ func (c *Client) createConnection(ctx context.Context, provider config.UsenetPro
 	if provider.SSL {
 		// Dial with TLS directly if possible, or Dial then Wrap
 		tlsConfig := &tls.Config{
-			ServerName:         provider.Host,
-			InsecureSkipVerify: true,
+			ServerName: provider.Host,
+			// Existing behavior: many usenet resellers present certificates
+			// that do not match the configured host. Verification needs a
+			// per-provider config toggle before it can be enabled.
+			InsecureSkipVerify: true, //nolint:gosec // G402: see above; tracked as a follow-up
 			MinVersion:         tls.VersionTLS12,
 		}
 		// Use tls.Dialer for simpler timeout handling
@@ -970,7 +950,7 @@ func (c *Client) createConnection(ctx context.Context, provider config.UsenetPro
 	if tcpConn, ok := netConn.(*net.TCPConn); ok {
 		c.tuneTCP(tcpConn)
 	}
-	if tlsConn, ok := netConn.(*tls.Conn); ok {
+	if tlsConn, isTLS := netConn.(*tls.Conn); isTLS {
 		if tcpConn, ok := tlsConn.NetConn().(*net.TCPConn); ok {
 			c.tuneTCP(tcpConn)
 		}
@@ -979,8 +959,8 @@ func (c *Client) createConnection(ctx context.Context, provider config.UsenetPro
 	// The reader matches the 128KB chunks the body copier consumes (the
 	// socket buffer, not bufio, is the RTT window); the writer carries only
 	// short command lines.
-	reader := bufio.NewReaderSize(netConn, 128*1024)
-	writer := bufio.NewWriterSize(netConn, 4*1024)
+	reader := bufio.NewReaderSize(netConn, connReadBufSize)
+	writer := bufio.NewWriterSize(netConn, connWriteBufSize)
 
 	conn := &Connection{
 		conn:     netConn,
@@ -999,7 +979,11 @@ func (c *Client) createConnection(ctx context.Context, provider config.UsenetPro
 
 	// Set deadline for handshake (greeting + auth)
 	// If the server doesn't respond quickly during setup, we should abort.
-	_ = netConn.SetDeadline(time.Now().Add(timeouts.HandshakeTimeout))
+	handshake := c.handshakeTimeout
+	if handshake <= 0 {
+		handshake = defaultHandshakeTimeout
+	}
+	_ = netConn.SetDeadline(time.Now().Add(handshake))
 
 	// Read greeting
 	line, err := reader.ReadString('\n')
@@ -1032,7 +1016,7 @@ func (c *Client) createConnection(ctx context.Context, provider config.UsenetPro
 
 // reaper periodically closes idle connections.
 func (c *Client) reaper() {
-	ticker := time.NewTicker(timeouts.ReaperInterval)
+	ticker := time.NewTicker(reaperInterval)
 	defer ticker.Stop()
 
 	for range ticker.C {
@@ -1043,6 +1027,13 @@ func (c *Client) reaper() {
 	}
 }
 
+// keepaliveSlotShare limits one sweep's keepalive pings to 1/n of a pool's
+// slots, and keepaliveWorkers bounds how many run in parallel.
+const (
+	keepaliveSlotShare = 4
+	keepaliveWorkers   = 4
+)
+
 func (c *Client) reapIdleConnections() {
 	now := time.Now()
 	for _, pp := range c.pools {
@@ -1052,7 +1043,7 @@ func (c *Client) reapIdleConnections() {
 		// pause every pooled connection crosses pingInterval in the same
 		// sweep, and pinging them all at once would leave a resuming reader
 		// with no free slots. The remainder is pinged on later sweeps.
-		maxPing := max(1, pp.max/4)
+		maxPing := max(1, pp.max/keepaliveSlotShare)
 
 		pp.mu.Lock()
 		kept := pp.conns[:0]
@@ -1108,6 +1099,24 @@ type keepaliveState struct {
 // the same sweep timed out.
 var errPathDown = errors.New("provider path down, skipped keepalive ping")
 
+// keepaliveTally counts one worker's failed keepalive pings.
+type keepaliveTally struct {
+	failed int
+	err    error
+}
+
+func (t *keepaliveTally) add(err error) {
+	if err == nil {
+		return
+	}
+	t.failed++
+	// errPathDown is a consequence, not a cause — keep looking for the ping
+	// error that actually condemned the batch.
+	if t.err == nil && !errors.Is(err, errPathDown) {
+		t.err = err
+	}
+}
+
 // keepAliveBatch pings one sweep's worth of idle entries in parallel.
 //
 // A ping that times out is not one dead session: a live peer that dropped a
@@ -1120,7 +1129,7 @@ var errPathDown = errors.New("provider path down, skipped keepalive ping")
 func (c *Client) keepAliveBatch(pp *ProviderPool, toPing []*connectionEntry, now time.Time) {
 	var wg sync.WaitGroup
 	var st keepaliveState
-	workers := min(len(toPing), 4)
+	workers := min(len(toPing), keepaliveWorkers)
 	pingCh := make(chan *connectionEntry, len(toPing))
 	for _, entry := range toPing {
 		pingCh <- entry
@@ -1130,24 +1139,11 @@ func (c *Client) keepAliveBatch(pp *ProviderPool, toPing []*connectionEntry, now
 	// Per-worker tallies, merged after the wait: rolling them up avoids one
 	// log line per dead connection, which is what made a single provider
 	// blip look like a flood.
-	type tally struct {
-		failed int
-		err    error
-	}
-	tallies := make([]tally, workers)
+	tallies := make([]keepaliveTally, workers)
 	for i := range workers {
 		wg.Go(func() {
 			for entry := range pingCh {
-				err := c.keepAlive(pp, entry, now, &st)
-				if err == nil {
-					continue
-				}
-				tallies[i].failed++
-				// errPathDown is a consequence, not a cause — keep looking
-				// for the ping error that actually condemned the batch.
-				if tallies[i].err == nil && !errors.Is(err, errPathDown) {
-					tallies[i].err = err
-				}
+				tallies[i].add(c.keepAlive(pp, entry, now, &st))
 			}
 		})
 	}
@@ -1268,11 +1264,11 @@ func (c *Client) Stats() map[string]any {
 			"active":          active,
 			"idle":            idle,
 			"ssl":             p.SSL,
-			"waiting":         c.providerWaiting(pp),
+			statWaiting:       c.providerWaiting(pp),
 		}
 
 		// Add speed test result if available
-		if result, ok := c.speedTestResults.Load(p.ID()); ok {
+		if result, found := c.speedTestResults.Load(p.ID()); found {
 			providerInfo["speed_test"] = map[string]any{
 				"latency_ms": result.LatencyMs,
 				"speed_mbps": result.SpeedMBps,
@@ -1296,7 +1292,7 @@ func (c *Client) Stats() map[string]any {
 		"total_created":   totalActive + totalIdle,
 		"active":          totalActive,
 		"idle":            totalIdle,
-		"waiting": map[string]int{
+		statWaiting: map[string]int{
 			WorkloadStreamDemand.String():   waiting[WorkloadStreamDemand],
 			WorkloadStreamPrefetch.String(): waiting[WorkloadStreamPrefetch],
 			WorkloadDownload.String():       waiting[WorkloadDownload],
@@ -1364,7 +1360,7 @@ func (e *providerExclusions) excludeBackbone(backbone string) {
 	e.backbones[backbone] = struct{}{}
 }
 
-func (e providerExclusions) excludes(provider config.UsenetProvider) bool {
+func (e *providerExclusions) excludes(provider config.UsenetProvider) bool {
 	// Fast path: the overwhelming majority of acquisitions happen with
 	// no exclusions in flight (first attempt before any failover). Skip
 	// the map lookups and backbone work entirely.
@@ -1476,11 +1472,8 @@ func (c *Client) BatchStat(ctx context.Context, messageIDs []string) (*BatchStat
 			// Per-segment provider failover has already completed inside
 			// this chunk before we get here, so this never short-circuits
 			// failover.
-			for _, r := range results {
-				if !r.Available && IsArticleNotFoundError(r.Error) {
-					bailOnce.Do(cancel)
-					break
-				}
+			if slices.ContainsFunc(results, isDefinitiveMiss) {
+				bailOnce.Do(cancel)
 			}
 		})
 		if err != nil {
@@ -1493,26 +1486,27 @@ func (c *Client) BatchStat(ctx context.Context, messageIDs []string) (*BatchStat
 	}
 	wg.Wait()
 
-	result := &BatchStatResult{
-		Results:    allResults,
-		TotalCount: len(messageIDs),
+	return summarizeStatResults(allResults), nil
+}
+
+func isDefinitiveMiss(r StatResult) bool {
+	return !r.Available && IsArticleNotFoundError(r.Error)
+}
+
+// summarizeStatResults counts found and failed results. Article-not-found
+// doesn't count as an error for the caller's availability decision; only
+// true connection/protocol failures do.
+func summarizeStatResults(results []StatResult) *BatchStatResult {
+	summary := &BatchStatResult{Results: results, TotalCount: len(results)}
+	for _, r := range results {
+		switch {
+		case r.Available:
+			summary.FoundCount++
+		case r.Error != nil && !IsArticleNotFoundError(r.Error):
+			summary.ErrorCount++
+		}
 	}
-	for _, r := range allResults {
-		if r.Available {
-			result.FoundCount++
-			continue
-		}
-		if r.Error == nil {
-			continue
-		}
-		// Article-not-found doesn't count as an error for the caller's
-		// availability decision; only true connection/protocol failures do.
-		if nntpErr, ok := errors.AsType[*Error](r.Error); ok && nntpErr.Type == ErrorTypeArticleNotFound {
-			continue
-		}
-		result.ErrorCount++
-	}
-	return result, nil
+	return summary
 }
 
 func (c *Client) batchStatAcrossProviders(ctx context.Context, messageIDs []string) ([]StatResult, error) {
@@ -1535,94 +1529,83 @@ func (c *Client) batchStatAcrossProviders(ctx context.Context, messageIDs []stri
 		queryIdxs := make([]int, 0, len(unresolved))
 		chunkIDs := make([]string, 0, len(unresolved))
 		for _, idx := range unresolved {
-			if states[idx].exclusions.excludes(provider) {
-				continue
+			if !states[idx].exclusions.excludes(provider) {
+				queryIdxs = append(queryIdxs, idx)
+				chunkIDs = append(chunkIDs, messageIDs[idx])
 			}
-			queryIdxs = append(queryIdxs, idx)
-			chunkIDs = append(chunkIDs, messageIDs[idx])
 		}
 		if len(queryIdxs) == 0 {
 			continue
 		}
 
 		providerResults, err := c.batchStatOnProvider(ctx, provider, chunkIDs)
-		if err != nil && len(providerResults) == 0 {
-			for _, idx := range queryIdxs {
-				states[idx].sawOtherErr = true
-				states[idx].lastErr = err
-			}
-			continue
-		}
-
 		for queryPos, idx := range queryIdxs {
-			if queryPos >= len(providerResults) {
-				states[idx].sawOtherErr = true
-				if err != nil {
-					states[idx].lastErr = err
-				} else {
-					states[idx].lastErr = NewConnectionError(
-						fmt.Errorf("provider %s returned incomplete batch results", provider.Host),
-					)
-				}
+			if queryPos < len(providerResults) && providerResults[queryPos].Available {
+				results[idx] = providerResults[queryPos]
 				continue
 			}
-
-			res := providerResults[queryPos]
-			if res.Available {
-				results[idx] = res
-				continue
-			}
-
-			if nntpErr, ok := errors.AsType[*Error](
-				res.Error,
-			); res.Error != nil && ok &&
-				nntpErr.Type == ErrorTypeArticleNotFound {
-				states[idx].sawNotFound = true
-				excludeForArticleNotFound(&states[idx].exclusions, provider)
-			} else {
-				states[idx].sawOtherErr = true
-				if res.Error != nil {
-					states[idx].lastErr = res.Error
-				} else if err != nil {
-					states[idx].lastErr = err
-				} else {
-					states[idx].lastErr = NewConnectionError(
-						fmt.Errorf("provider %s returned an empty STAT result for %s", provider.Host, res.MessageID),
-					)
-				}
-			}
+			states[idx].recordMiss(provider, providerResults, queryPos, err)
 		}
 		unresolved = slices.DeleteFunc(unresolved, func(idx int) bool { return results[idx].Available })
 	}
 
 	for _, idx := range unresolved {
-		switch {
-		case states[idx].sawNotFound && !states[idx].sawOtherErr:
-			results[idx].Available = false
-			results[idx].Error = classifyNNTPError(
-				430,
-				fmt.Sprintf("segment %s not found on any provider", results[idx].MessageID),
-			)
-		case states[idx].lastErr != nil:
-			results[idx].Available = false
-			results[idx].Error = states[idx].lastErr
-		case states[idx].sawNotFound:
-			results[idx].Available = false
-			results[idx].Error = NewConnectionError(
-				fmt.Errorf(
-					"segment %s not found on some providers but could not be verified on others",
-					results[idx].MessageID,
-				),
-			)
-		default:
-			results[idx].Available = false
-			results[idx].Error = NewConnectionError(
-				fmt.Errorf("segment %s could not be verified on any provider", results[idx].MessageID),
+		results[idx].Available = false
+		results[idx].Error = states[idx].finalError(results[idx].MessageID)
+	}
+	return results, nil
+}
+
+// recordMiss books a provider's non-positive answer (or missing answer) for
+// one message ID.
+func (st *batchStatState) recordMiss(
+	provider config.UsenetProvider,
+	providerResults []StatResult,
+	queryPos int,
+	batchErr error,
+) {
+	if queryPos >= len(providerResults) {
+		st.sawOtherErr = true
+		st.lastErr = batchErr
+		if batchErr == nil {
+			st.lastErr = NewConnectionError(
+				fmt.Errorf("provider %s returned incomplete batch results", provider.Host),
 			)
 		}
+		return
 	}
+	res := providerResults[queryPos]
+	if IsArticleNotFoundError(res.Error) {
+		st.sawNotFound = true
+		excludeForArticleNotFound(&st.exclusions, provider)
+		return
+	}
+	st.sawOtherErr = true
+	switch {
+	case res.Error != nil:
+		st.lastErr = res.Error
+	case batchErr != nil:
+		st.lastErr = batchErr
+	default:
+		st.lastErr = NewConnectionError(
+			fmt.Errorf("provider %s returned an empty STAT result for %s", provider.Host, res.MessageID),
+		)
+	}
+}
 
-	return results, nil
+// finalError is the verdict for a message ID no provider confirmed.
+func (st *batchStatState) finalError(messageID string) error {
+	switch {
+	case st.sawNotFound && !st.sawOtherErr:
+		return classifyNNTPError(codeNoSuchArticle, fmt.Sprintf("segment %s not found on any provider", messageID))
+	case st.lastErr != nil:
+		return st.lastErr
+	case st.sawNotFound:
+		return NewConnectionError(fmt.Errorf(
+			"segment %s not found on some providers but could not be verified on others", messageID))
+	default:
+		return NewConnectionError(fmt.Errorf("segment %s could not be verified on any provider", messageID))
+	}
 }
 
 const statPipelineDepth = 16
@@ -1689,8 +1672,10 @@ func (c *Client) Close() error {
 		// This causes StreamBody/sendCommand reads to fail immediately, allowing prefetch
 		// workers to exit and SegmentFetcher.Close() to complete without hanging.
 		pp.activeConns.Range(func(key, _ any) bool {
-			_ = key.(*Connection).Close()
-			totalClosed++
+			if conn, ok := key.(*Connection); ok {
+				_ = conn.Close()
+				totalClosed++
+			}
 			return true
 		})
 	}
@@ -1793,7 +1778,8 @@ func (c *Client) SpeedTest(ctx context.Context, providerID string, messageID str
 
 	// Calculate speed in MB/s
 	if downloadDuration.Seconds() > 0 {
-		result.SpeedMBps = float64(result.BytesRead) / downloadDuration.Seconds() / (1024 * 1024)
+		const bytesPerMB = 1 << 20
+		result.SpeedMBps = float64(result.BytesRead) / downloadDuration.Seconds() / bytesPerMB
 	}
 
 	c.speedTestResults.Store(providerID, result)

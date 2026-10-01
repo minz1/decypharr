@@ -11,6 +11,7 @@ import (
 // pool-level bound that keeps a single open stream from exhausting the cache
 // partition even when whole-file eviction can't help (the item is still open).
 func TestDiskBackstop_ReclaimsOverLimit(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	// Start unlimited so the write below isn't rejected by the reservation
@@ -67,6 +68,7 @@ func TestDiskBackstop_ReclaimsOverLimit(t *testing.T) {
 // between the pool backstop and the vfs cache's totalSize counter: without the
 // callback, totalSize drifts upward and IsOverBudget() stays false.
 func TestDiskBackstop_FiresOnEvictCallback(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	pool := NewPool(PoolConfig{
@@ -81,7 +83,7 @@ func TestDiskBackstop_FiresOnEvictCallback(t *testing.T) {
 	buf, err := pool.NewBuffer(Config{
 		DiskPath:  filepath.Join(dir, "stream.buf"),
 		TotalSize: 1024,
-		OnEvict: func(off, length int64) {
+		OnEvict: func(_, length int64) {
 			evictCalls.Add(1)
 			evictedBytes.Add(length)
 		},
@@ -116,6 +118,7 @@ func TestDiskBackstop_FiresOnEvictCallback(t *testing.T) {
 // punch data when no read head has been set (head=0). This protects write
 // patterns that haven't started streaming yet.
 func TestDiskBackstop_NoOpWithoutReadHead(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	pool := NewPool(PoolConfig{

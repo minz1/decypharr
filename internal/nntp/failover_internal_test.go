@@ -10,6 +10,7 @@ import (
 )
 
 func TestFailoverAttributesMissingArticleToActualProvider(t *testing.T) {
+	t.Parallel()
 	first, err := nntpd.New(nntpd.Config{})
 	if err != nil {
 		t.Fatal(err)
@@ -57,6 +58,7 @@ func TestFailoverAttributesMissingArticleToActualProvider(t *testing.T) {
 }
 
 func TestFailoverHonorsSingleProviderRetryBudget(t *testing.T) {
+	t.Parallel()
 	server, err := nntpd.New(nntpd.Config{})
 	if err != nil {
 		t.Fatal(err)

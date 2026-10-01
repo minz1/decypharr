@@ -37,15 +37,15 @@ func newBenchClient(providers []config.UsenetProvider, ordered []*ProviderPool) 
 // newBenchPool creates a pool pre-filled with `max` pipe-backed connections so
 // checkout never dials. The server halves are parked; no pings fire because
 // the bench client's staleThreshold is huge.
-func newBenchPool(b *testing.B, host string, max int) (*ProviderPool, config.UsenetProvider) {
-	provider := config.UsenetProvider{Host: host, Port: 119, MaxConnections: max}
+func newBenchPool(b *testing.B, host string, maxConns int) (*ProviderPool, config.UsenetProvider) {
+	provider := config.UsenetProvider{Host: host, Port: 119, MaxConnections: maxConns}
 	pp := &ProviderPool{
-		conns:  make([]*connectionEntry, 0, max),
-		slots:  make(chan struct{}, max),
-		max:    max,
+		conns:  make([]*connectionEntry, 0, maxConns),
+		slots:  make(chan struct{}, maxConns),
+		max:    maxConns,
 		config: provider,
 	}
-	for range max {
+	for range maxConns {
 		clientSide, serverSide := net.Pipe()
 		conn := &Connection{
 			conn:   clientSide,
@@ -251,7 +251,7 @@ func BenchmarkPoolContended8x(b *testing.B) {
 // startSilentServer listens on loopback and accepts connections without ever
 // sending an NNTP greeting — a provider that is up at the TCP level but
 // unresponsive (overloaded, blackholed by a middlebox after SYN, etc).
-func startSilentServer(b *testing.B) (addr *net.TCPAddr) {
+func startSilentServer(b *testing.B) *net.TCPAddr {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		b.Fatal(err)
@@ -286,10 +286,6 @@ func startSilentServer(b *testing.B) (addr *net.TCPAddr) {
 func BenchmarkAcquireDeadPrimary(b *testing.B) {
 	addr := startSilentServer(b)
 
-	saved := timeouts
-	timeouts.HandshakeTimeout = 1 * time.Second
-	b.Cleanup(func() { timeouts = saved })
-
 	dead := config.UsenetProvider{Host: "127.0.0.1", Port: addr.Port, MaxConnections: 4, Priority: 1}
 	deadPool := &ProviderPool{
 		conns:  make([]*connectionEntry, 0, dead.MaxConnections),
@@ -304,6 +300,7 @@ func BenchmarkAcquireDeadPrimary(b *testing.B) {
 		[]config.UsenetProvider{dead, healthy},
 		[]*ProviderPool{deadPool, healthyPool},
 	)
+	c.handshakeTimeout = time.Second
 	ctx := context.Background()
 
 	for b.Loop() {
