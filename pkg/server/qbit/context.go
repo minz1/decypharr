@@ -87,7 +87,7 @@ func (q *QBit) categoryContext(next http.Handler) http.Handler {
 			category = r.Form.Get("category")
 			if category == "" {
 				// GetReader from multipart form
-				_ = r.ParseMultipartForm(32 << 20)
+				_ = r.ParseMultipartForm(multipartMemory) //nolint:gosec // G120: body capped by Routes' MaxBytesReader
 				category = r.FormValue("category")
 			}
 		}
