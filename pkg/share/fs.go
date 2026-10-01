@@ -179,18 +179,13 @@ func (f *filesystem) lookupAbsoluteUncached(segments []string) (*node, error) {
 	case 0:
 		return makeNode(f.catalog.RootInfo()), nil
 	case 1:
-		entries := f.catalog.GetEntries()
-		for i := range entries {
-			if entries[i].Name() == segments[0] {
-				return makeNode(&entries[i]), nil
-			}
+		if n := findNode(f.catalog.GetEntries(), segments[0]); n != nil {
+			return n, nil
 		}
 	case torrentDepth:
 		_, entries := f.catalog.GetEntryChildren(segments[0])
-		for i := range entries {
-			if entries[i].Name() == segments[1] {
-				return makeNode(&entries[i]), nil
-			}
+		if n := findNode(entries, segments[1]); n != nil {
+			return n, nil
 		}
 	default:
 		if _, err := f.lookupAbsolute(segments[:2]); err != nil {
@@ -198,10 +193,8 @@ func (f *filesystem) lookupAbsoluteUncached(segments []string) (*node, error) {
 		}
 		fileName := strings.Join(segments[2:], "/")
 		_, children := f.catalog.GetTorrentChildren(segments[1])
-		for i := range children {
-			if children[i].Name() == fileName {
-				return makeNode(&children[i]), nil
-			}
+		if n := findNode(children, fileName); n != nil {
+			return n, nil
 		}
 		prefix := fileName + "/"
 		for i := range children {
@@ -314,3 +307,13 @@ func (i nodeInfo) IsDir() bool        { return i.isDir }
 func (i nodeInfo) Sys() any           { return nil }
 
 var _ facetfs.FileSystem = (*filesystem)(nil)
+
+// findNode returns the entry called name, or nil.
+func findNode(entries []manager.FileInfo, name string) *node {
+	for i := range entries {
+		if entries[i].Name() == name {
+			return makeNode(&entries[i])
+		}
+	}
+	return nil
+}

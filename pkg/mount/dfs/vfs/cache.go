@@ -404,12 +404,7 @@ func (c *Cache) evictCandidates(
 
 	// Phase 2: If still over threshold, remove oldest entries first
 	if threshold > 0 && totalSize > threshold {
-		slices.SortFunc(candidates, func(a, b candidateEntry) int {
-			if order := a.atime.Compare(b.atime); order != 0 {
-				return order
-			}
-			return a.mtime.Compare(b.mtime)
-		})
+		slices.SortFunc(candidates, compareCandidateAge)
 		for _, candidate := range candidates {
 			if totalSize <= threshold {
 				break
@@ -1424,4 +1419,13 @@ func decodeJSONFile(path string, v any) error {
 		return decodeErr
 	}
 	return nil
+}
+
+// compareCandidateAge orders candidates oldest first: by access time, then
+// modification time.
+func compareCandidateAge(a, b candidateEntry) int {
+	if order := a.atime.Compare(b.atime); order != 0 {
+		return order
+	}
+	return a.mtime.Compare(b.mtime)
 }
