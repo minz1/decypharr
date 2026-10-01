@@ -110,9 +110,8 @@ func nonEmptyLines(text string) []string {
 
 func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxAddBody)
-	if err := r.ParseMultipartForm(
-		multipartMemory,
-	); err != nil { //nolint:gosec // G120: body capped by MaxBytesReader above
+	//nolint:gosec // G120: body capped by MaxBytesReader above
+	if err := r.ParseMultipartForm(multipartMemory); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
