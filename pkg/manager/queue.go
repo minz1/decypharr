@@ -225,34 +225,28 @@ func (q *Queue) ListFilterFunc(
 	state storage.TorrentState,
 	hashes []string,
 ) func(*storage.Entry) bool {
+	if category == "" && len(hashes) == 0 && state == "" && protocol == config.ProtocolAll {
+		return nil
+	}
 	hashSet := make(map[string]struct{}, len(hashes))
-	if len(hashes) > 0 {
-		for _, h := range hashes {
-			hashSet[strings.ToLower(h)] = struct{}{}
-		}
+	for _, h := range hashes {
+		hashSet[strings.ToLower(h)] = struct{}{}
 	}
+	return func(t *storage.Entry) bool {
+		return (category == "" || t.Category == category) &&
+			(state == "" || t.State == state) &&
+			(protocol == config.ProtocolAll || t.Protocol == protocol) &&
+			inHashSet(hashSet, t.InfoHash)
+	}
+}
 
-	var filterFunc func(*storage.Entry) bool
-	if category != "" || len(hashes) != 0 || state != "" || protocol != config.ProtocolAll {
-		filterFunc = func(t *storage.Entry) bool {
-			if category != "" && t.Category != category {
-				return false
-			}
-			if state != "" && t.State != state {
-				return false
-			}
-			if len(hashSet) > 0 {
-				if _, ok := hashSet[strings.ToLower(t.InfoHash)]; !ok {
-					return false
-				}
-			}
-			if protocol != config.ProtocolAll && t.Protocol != protocol {
-				return false
-			}
-			return true
-		}
+// inHashSet reports whether hash is in set; an empty set matches everything.
+func inHashSet(set map[string]struct{}, hash string) bool {
+	if len(set) == 0 {
+		return true
 	}
-	return filterFunc
+	_, ok := set[strings.ToLower(hash)]
+	return ok
 }
 
 func (q *Queue) ListFilter(
