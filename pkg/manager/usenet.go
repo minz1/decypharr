@@ -88,61 +88,70 @@ func (m *Manager) processNZBJob(ctx context.Context, job *Job) error {
 		return nil // removed from the queue while waiting for a worker
 	}
 	if job.NZBMeta == nil {
-		if job.Request == nil {
-			return fmt.Errorf("NZB job has no request or processing payload")
-		}
-		content, err := os.ReadFile(job.Entry.Magnet)
-		if err != nil {
-			return fmt.Errorf("read staged NZB: %w", err)
-		}
-		// Parsing stats segments over NNTP. It ran on the bare queue context,
-		// so a degraded provider held the worker slot with no upper bound;
-		// give it the same budget the processing stage gets.
-		parseCtx, cancelParse := context.WithTimeout(ctx, m.usenetTimeout)
-		meta, groups, err := m.usenet.ParseWithID(
-			parseCtx,
-			job.Entry.InfoHash,
-			job.Request.Name,
-			content,
-			job.Request.Arr.Name,
-		)
-		cancelParse()
-		if err != nil {
-			// A missing article at the parse stage is a definitive
-			// availability result: record and share it before failing the
-			// queued entry, so the arr can move to another release.
-			if m.hearsay != nil && errors.Is(err, customerror.UsenetSegmentMissingError) {
-				m.hearsay.ReportNZB(hearsay.NZBSubjectFromGroups(groups), false)
-			}
-			return fmt.Errorf("usenet parse failed: %w", err)
-		}
-
-		// Own truth or a strong network consensus that the segments are
-		// gone means the availability check is doomed. The accepted SAB
-		// job is marked failed in history, which tells the arr to retry.
-		if m.hearsay != nil && m.hearsay.NZBClaimedIncomplete(hearsay.NZBSubjectFromGroups(groups)) {
-			return fmt.Errorf("nzb rejected: hearsay claims segments missing on every configured backbone")
-		}
-
-		m.usenet.RemoveStagedNZB(job.Entry.Magnet)
-		job.Entry.Magnet = ""
-		job.NZBMeta = meta
-		job.NZBGroups = groups
-		job.Entry.Name = meta.Name
-		job.Entry.OriginalFilename = meta.Name
-		job.Entry.Size = meta.TotalSize
-		job.Entry.Bytes = meta.TotalSize
-		job.Entry.Status = debridTypes.TorrentStatusDownloading
-		job.Entry.ActiveProvider = usenetProvider
-		_ = job.Entry.AddUsenetProvider(meta)
-		if updateErr := m.queue.Update(job.Entry); updateErr != nil {
-			return fmt.Errorf("update queued NZB: %w", updateErr)
+		if err := m.parseQueuedNZB(ctx, job); err != nil {
+			return err
 		}
 	}
 	if job.Request != nil {
 		job.Request.Status = importStatusStarted
 	}
 	return m.processNewNzb(ctx, job.Entry, job.NZBMeta, job.NZBGroups)
+}
+
+// parseQueuedNZB parses a staged NZB for a job that reached a worker before
+// parsing, recording the parse outcome with hearsay.
+func (m *Manager) parseQueuedNZB(ctx context.Context, job *Job) error {
+	if job.Request == nil {
+		return fmt.Errorf("NZB job has no request or processing payload")
+	}
+	content, err := os.ReadFile(job.Entry.Magnet)
+	if err != nil {
+		return fmt.Errorf("read staged NZB: %w", err)
+	}
+	// Parsing stats segments over NNTP. It ran on the bare queue context,
+	// so a degraded provider held the worker slot with no upper bound;
+	// give it the same budget the processing stage gets.
+	parseCtx, cancelParse := context.WithTimeout(ctx, m.usenetTimeout)
+	meta, groups, err := m.usenet.ParseWithID(
+		parseCtx,
+		job.Entry.InfoHash,
+		job.Request.Name,
+		content,
+		job.Request.Arr.Name,
+	)
+	cancelParse()
+	if err != nil {
+		// A missing article at the parse stage is a definitive
+		// availability result: record and share it before failing the
+		// queued entry, so the arr can move to another release.
+		if m.hearsay != nil && errors.Is(err, customerror.UsenetSegmentMissingError) {
+			m.hearsay.ReportNZB(hearsay.NZBSubjectFromGroups(groups), false)
+		}
+		return fmt.Errorf("usenet parse failed: %w", err)
+	}
+
+	// Own truth or a strong network consensus that the segments are
+	// gone means the availability check is doomed. The accepted SAB
+	// job is marked failed in history, which tells the arr to retry.
+	if m.hearsay != nil && m.hearsay.NZBClaimedIncomplete(hearsay.NZBSubjectFromGroups(groups)) {
+		return fmt.Errorf("nzb rejected: hearsay claims segments missing on every configured backbone")
+	}
+
+	m.usenet.RemoveStagedNZB(job.Entry.Magnet)
+	job.Entry.Magnet = ""
+	job.NZBMeta = meta
+	job.NZBGroups = groups
+	job.Entry.Name = meta.Name
+	job.Entry.OriginalFilename = meta.Name
+	job.Entry.Size = meta.TotalSize
+	job.Entry.Bytes = meta.TotalSize
+	job.Entry.Status = debridTypes.TorrentStatusDownloading
+	job.Entry.ActiveProvider = usenetProvider
+	_ = job.Entry.AddUsenetProvider(meta)
+	if updateErr := m.queue.Update(job.Entry); updateErr != nil {
+		return fmt.Errorf("update queued NZB: %w", updateErr)
+	}
+	return nil
 }
 
 func (m *Manager) processNZB(entry *storage.Entry, metadata *storage.NZB) error {
