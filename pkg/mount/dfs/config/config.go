@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"time"
 
@@ -98,6 +99,8 @@ func ParseFuseConfig() *FuseConfig {
 	return Parse(mainCfg.Mount.DFS, mainCfg.Mount.MountPath, mainCfg.Retries)
 }
 
+// Parse converts the DFS section of the main config into a FuseConfig. Invalid
+// values keep their defaults and are reported on stderr.
 func Parse(cfg config.DFS, mountPath string, retries int) *FuseConfig {
 	fuseConfig := DefaultFuseConfig()
 
@@ -107,110 +110,28 @@ func Parse(cfg config.DFS, mountPath string, retries int) *FuseConfig {
 	fuseConfig.BufferMemory = cfg.BufferMemoryBytes()
 
 	if cfg.DaemonTimeout != "" {
-		timeout, err := utils.ParseDuration(cfg.DaemonTimeout)
-		if err == nil {
+		if timeout, err := utils.ParseDuration(cfg.DaemonTimeout); err == nil {
 			fuseConfig.DaemonTimeout = timeout
 		}
 	}
-	if cfg.DiskCacheSize != "" {
-		// The DFS mount uses a single shared on-disk cache (one CacheDir, one
-		// vfs.Cache), so the configured size is the cache budget verbatim. Do
-		// not divide by the number of debrid providers.
-		size, err := config.ParseSize(cfg.DiskCacheSize)
-		if err == nil {
-			fuseConfig.CacheDiskSize = size
-		} else {
-			// Should not happen: loadConfig validates all size strings before
-			// ParseFuseConfig is called. Log and leave CacheDiskSize=0 so the
-			// caller can still detect the misconfiguration via IsOverBudget==false.
-			_, _ = fmt.Fprintf(
-				os.Stderr,
-				"[DFS] ERROR: invalid mount.dfs.disk_cache_size %q: %v — cache enforcement DISABLED\n",
-				cfg.DiskCacheSize,
-				err,
-			)
-		}
-	}
-
-	if cfg.CacheCleanupInterval != "" {
-		interval, err := utils.ParseDuration(cfg.CacheCleanupInterval)
-		if err == nil && interval <= 0 {
-			// The cleanup loop feeds this to time.NewTicker, which panics on a
-			// non-positive interval and would take the process down.
-			err = fmt.Errorf("interval must be positive, got %s", interval)
-		}
-		if err == nil {
-			fuseConfig.CacheCleanupInterval = interval
-		} else {
-			_, _ = fmt.Fprintf(
-				os.Stderr,
-				"[DFS] ERROR: invalid mount.dfs.cache_cleanup_interval %q: %v — using default\n",
-				cfg.CacheCleanupInterval,
-				err,
-			)
-		}
-	}
-
-	if cfg.ChunkSize != "" {
-		size, err := config.ParseSize(cfg.ChunkSize)
-		if err == nil {
-			fuseConfig.ChunkSize = size
-		} else {
-			_, _ = fmt.Fprintf(
-				os.Stderr,
-				"[DFS] ERROR: invalid mount.dfs.chunk_size %q: %v — using default\n",
-				cfg.ChunkSize,
-				err,
-			)
-		}
-	}
-
-	if cfg.CacheExpiry != "" {
-		ttl, err := utils.ParseDuration(cfg.CacheExpiry)
-		if err == nil {
-			fuseConfig.CacheExpiry = ttl
-		} else {
-			_, _ = fmt.Fprintf(
-				os.Stderr,
-				"[DFS] ERROR: invalid mount.dfs.cache_expiry %q: %v — using default\n",
-				cfg.CacheExpiry,
-				err,
-			)
-		}
-	}
-
-	if cfg.ReadAheadSize != "" {
-		size, err := config.ParseSize(cfg.ReadAheadSize)
-		if err == nil {
-			fuseConfig.ReadAheadSize = size
-		} else {
-			_, _ = fmt.Fprintf(
-				os.Stderr,
-				"[DFS] ERROR: invalid mount.dfs.read_ahead_size %q: %v — using default\n",
-				cfg.ReadAheadSize,
-				err,
-			)
-		}
-	}
-	if cfg.DropBehindMargin != "" {
-		size, err := config.ParseSize(cfg.DropBehindMargin)
-		if err == nil {
-			fuseConfig.DropBehindMargin = size
-		} else {
-			_, _ = fmt.Fprintf(
-				os.Stderr,
-				"[DFS] ERROR: invalid mount.dfs.drop_behind_margin %q: %v — using default\n",
-				cfg.DropBehindMargin,
-				err,
-			)
-		}
-	}
+	// The DFS mount uses a single shared on-disk cache (one CacheDir, one
+	// vfs.Cache), so the configured size is the cache budget verbatim. Do not
+	// divide by the number of debrid providers. An invalid value should not
+	// happen (loadConfig validates sizes first); CacheDiskSize then stays 0 so
+	// IsOverBudget is never true.
+	parseSizeField("disk_cache_size", cfg.DiskCacheSize, "cache enforcement DISABLED", &fuseConfig.CacheDiskSize)
+	// The cleanup loop feeds this to time.NewTicker, which panics on a
+	// non-positive interval and would take the process down.
+	parseDurationField("cache_cleanup_interval", cfg.CacheCleanupInterval, true, &fuseConfig.CacheCleanupInterval)
+	parseSizeField("chunk_size", cfg.ChunkSize, "using default", &fuseConfig.ChunkSize)
+	parseDurationField("cache_expiry", cfg.CacheExpiry, false, &fuseConfig.CacheExpiry)
+	parseSizeField("read_ahead_size", cfg.ReadAheadSize, "using default", &fuseConfig.ReadAheadSize)
+	parseSizeField("drop_behind_margin", cfg.DropBehindMargin, "using default", &fuseConfig.DropBehindMargin)
 	if cfg.FuseMaxBackground > 0 {
 		fuseConfig.FuseMaxBackground = cfg.FuseMaxBackground
 	}
 	if cfg.FuseMaxReadAhead != "" {
-		size, err := config.ParseSize(cfg.FuseMaxReadAhead)
-		if err == nil && size > 0 {
+		if size, err := config.ParseSize(cfg.FuseMaxReadAhead); err == nil && size > 0 && size <= math.MaxInt32 {
 			fuseConfig.FuseMaxReadAhead = int(size)
 		}
 	}
@@ -218,13 +139,11 @@ func Parse(cfg config.DFS, mountPath string, retries int) *FuseConfig {
 	fuseConfig.GID = cfg.GID
 
 	if cfg.Umask != "" {
-		umask, err := parseUmask(cfg.Umask)
-		if err == nil {
+		if umask, err := parseUmask(cfg.Umask); err == nil {
 			fuseConfig.Umask = umask
 		}
 	}
 
-	// retry settings
 	fuseConfig.Retries = retries
 
 	fuseConfig.ReadAheadSize = reconcileReadAhead(
@@ -234,6 +153,41 @@ func Parse(cfg config.DFS, mountPath string, retries int) *FuseConfig {
 	)
 
 	return fuseConfig
+}
+
+// parseSizeField stores a size setting in dst, or reports it and leaves dst
+// untouched. Empty means unset.
+func parseSizeField(field, value, fallback string, dst *int64) {
+	if value == "" {
+		return
+	}
+	size, err := config.ParseSize(value)
+	if err != nil {
+		reportInvalid(field, value, err, fallback)
+		return
+	}
+	*dst = size
+}
+
+// parseDurationField stores a duration setting in dst, or reports it and
+// leaves dst untouched. Empty means unset.
+func parseDurationField(field, value string, positive bool, dst *time.Duration) {
+	if value == "" {
+		return
+	}
+	d, err := utils.ParseDuration(value)
+	if err == nil && positive && d <= 0 {
+		err = fmt.Errorf("interval must be positive, got %s", d)
+	}
+	if err != nil {
+		reportInvalid(field, value, err, "using default")
+		return
+	}
+	*dst = d
+}
+
+func reportInvalid(field, value string, err error, fallback string) {
+	_, _ = fmt.Fprintf(os.Stderr, "[DFS] ERROR: invalid mount.dfs.%s %q: %v — %s\n", field, value, err, fallback)
 }
 
 // StreamDiskShare is how many concurrent streams the disk cache is budgeted
