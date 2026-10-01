@@ -448,73 +448,11 @@ func (m *Manager) SendToDebrid(_ context.Context, importRequest *ImportRequest) 
 	errs := make([]error, 0, len(clients))
 
 	for _, db := range clients {
-		overrideDownloadUncached := db.Config().DownloadUncached
-		if importRequest.DownloadUncached != nil {
-			overrideDownloadUncached = *importRequest.DownloadUncached
-		}
-		debridTorrent.DownloadUncached = overrideDownloadUncached
-
-		decision := m.hearsay.EvaluateAdd(db.Config().Provider, debridTorrent.InfoHash)
-		if !overrideDownloadUncached && decision.Reject() {
-			m.hearsay.DiscardAdd(decision)
-			errs = append(
-				errs,
-				fmt.Errorf(
-					"%s: %s recently proven not cached, skipping submit",
-					db.Config().Name,
-					debridTorrent.InfoHash,
-				),
-			)
-			continue
-		}
-		_logger := db.Logger()
-		_logger.Info().
-			Str("Provider", db.Config().Name).
-			Str("Arr", importRequest.Arr.Name).
-			Str("Hash", debridTorrent.InfoHash).
-			Str("Name", debridTorrent.Name).
-			Str("Action", string(importRequest.Action)).
-			Msg("Processing torrent")
-
-		dbt, err := db.SubmitMagnet(debridTorrent)
-		if err != nil || dbt == nil || dbt.Id == "" {
-			if errors.Is(err, customerror.TorrentBlockedError) {
-				m.hearsay.RecordAdd(decision, false)
-			} else {
-				m.hearsay.DiscardAdd(decision)
-			}
-			if err == nil {
-				err = fmt.Errorf("%s returned an empty torrent after submission", db.Config().Name)
-			}
-			errs = append(errs, err)
-			continue
-		}
-		_logger.Info().Str("id", dbt.Id).Msgf("Entry: %s submitted to %s", dbt.Name, db.Config().Name)
-
-		torrent, err := db.CheckStatus(dbt)
-		reported := errors.Is(err, customerror.TorrentNotCachedError)
-		if reported {
-			m.hearsay.RecordAdd(decision, false)
-		}
-		if err != nil && torrent != nil && torrent.Id != "" {
-			// Delete the torrent if it was not downloaded
-			go func(id string) {
-				_ = db.DeleteTorrent(id)
-			}(torrent.Id)
-		}
+		torrent, err := m.submitToProvider(db, debridTorrent, importRequest)
 		if err != nil {
-			if !reported {
-				m.hearsay.DiscardAdd(decision)
-			}
 			errs = append(errs, err)
 			continue
 		}
-		if torrent == nil {
-			m.hearsay.DiscardAdd(decision)
-			errs = append(errs, fmt.Errorf("torrent %s returned nil after checking status", dbt.Name))
-			continue
-		}
-		m.hearsay.RecordAdd(decision, torrent.Status == debridTypes.TorrentStatusDownloaded)
 		return torrent, nil
 	}
 	if len(errs) == 0 {
@@ -522,4 +460,74 @@ func (m *Manager) SendToDebrid(_ context.Context, importRequest *ImportRequest) 
 	}
 	joinedErrors := errors.Join(errs...)
 	return nil, fmt.Errorf("failed to process torrent: %w", joinedErrors)
+}
+
+// submitToProvider submits the magnet to one provider and checks it landed,
+// recording the cache outcome with hearsay.
+func (m *Manager) submitToProvider(
+	db common.Client,
+	debridTorrent *debridTypes.Torrent,
+	importRequest *ImportRequest,
+) (*debridTypes.Torrent, error) {
+	overrideDownloadUncached := db.Config().DownloadUncached
+	if importRequest.DownloadUncached != nil {
+		overrideDownloadUncached = *importRequest.DownloadUncached
+	}
+	debridTorrent.DownloadUncached = overrideDownloadUncached
+
+	decision := m.hearsay.EvaluateAdd(db.Config().Provider, debridTorrent.InfoHash)
+	if !overrideDownloadUncached && decision.Reject() {
+		m.hearsay.DiscardAdd(decision)
+		return nil, fmt.Errorf(
+			"%s: %s recently proven not cached, skipping submit",
+			db.Config().Name,
+			debridTorrent.InfoHash,
+		)
+	}
+	_logger := db.Logger()
+	_logger.Info().
+		Str("Provider", db.Config().Name).
+		Str("Arr", importRequest.Arr.Name).
+		Str("Hash", debridTorrent.InfoHash).
+		Str("Name", debridTorrent.Name).
+		Str("Action", string(importRequest.Action)).
+		Msg("Processing torrent")
+
+	dbt, err := db.SubmitMagnet(debridTorrent)
+	if err != nil || dbt == nil || dbt.Id == "" {
+		if errors.Is(err, customerror.TorrentBlockedError) {
+			m.hearsay.RecordAdd(decision, false)
+		} else {
+			m.hearsay.DiscardAdd(decision)
+		}
+		if err == nil {
+			err = fmt.Errorf("%s returned an empty torrent after submission", db.Config().Name)
+		}
+		return nil, err
+	}
+	_logger.Info().Str("id", dbt.Id).Msgf("Entry: %s submitted to %s", dbt.Name, db.Config().Name)
+
+	torrent, err := db.CheckStatus(dbt)
+	reported := errors.Is(err, customerror.TorrentNotCachedError)
+	if reported {
+		m.hearsay.RecordAdd(decision, false)
+	}
+	if err != nil {
+		if torrent != nil && torrent.Id != "" {
+			// Delete the torrent if it was not downloaded
+			go func(id string) {
+				_ = db.DeleteTorrent(id)
+			}(torrent.Id)
+		}
+		if !reported {
+			m.hearsay.DiscardAdd(decision)
+		}
+		return nil, err
+	}
+	if torrent == nil {
+		m.hearsay.DiscardAdd(decision)
+		return nil, fmt.Errorf("torrent %s returned nil after checking status", dbt.Name)
+	}
+	m.hearsay.RecordAdd(decision, torrent.Status == debridTypes.TorrentStatusDownloaded)
+	return torrent, nil
 }
