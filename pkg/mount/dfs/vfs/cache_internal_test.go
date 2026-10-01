@@ -541,12 +541,12 @@ func TestOnBufferEvict_TotalSizeDrift(t *testing.T) {
 	// Each subtest owns its cache: they assert absolute totalSize values.
 	setup := func(t *testing.T) (*Cache, func() *CacheItem) {
 		t.Helper()
-		t.Parallel()
 		c := newTestCache(t.TempDir())
 		return c, func() *CacheItem { return &CacheItem{cache: c} }
 	}
 
 	t.Run("normal decrement", func(t *testing.T) {
+		t.Parallel()
 		c, makeItem := setup(t)
 		c.totalSize.Store(500)
 		item := makeItem()
@@ -557,6 +557,7 @@ func TestOnBufferEvict_TotalSizeDrift(t *testing.T) {
 	})
 
 	t.Run("floor at zero", func(t *testing.T) {
+		t.Parallel()
 		c, makeItem := setup(t)
 		c.totalSize.Store(100)
 		item := makeItem()
@@ -567,6 +568,7 @@ func TestOnBufferEvict_TotalSizeDrift(t *testing.T) {
 	})
 
 	t.Run("zero-length no-op", func(t *testing.T) {
+		t.Parallel()
 		c, makeItem := setup(t)
 		c.totalSize.Store(250)
 		item := makeItem()
@@ -577,6 +579,7 @@ func TestOnBufferEvict_TotalSizeDrift(t *testing.T) {
 	})
 
 	t.Run("concurrent decrements sum correctly", func(t *testing.T) {
+		t.Parallel()
 		c, makeItem := setup(t)
 		const goroutines = 50
 		const evictEach = 10

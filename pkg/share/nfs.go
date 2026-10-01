@@ -183,8 +183,8 @@ func allows(prefixes []netip.Prefix, remote net.Addr) bool {
 // serveResult maps a protocol server's exit to Start's result: shutting down
 // (context canceled, listener closed) is a clean stop, not a failure.
 func serveResult(ctx context.Context, proto string, err error) error {
-	if err == nil || ctx.Err() != nil || errors.Is(err, net.ErrClosed) || errors.Is(err, context.Canceled) {
-		return nil
+	if err != nil && ctx.Err() == nil && !errors.Is(err, net.ErrClosed) && !errors.Is(err, context.Canceled) {
+		return fmt.Errorf("serve %s: %w", proto, err)
 	}
-	return fmt.Errorf("serve %s: %w", proto, err)
+	return nil
 }
