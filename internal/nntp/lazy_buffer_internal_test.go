@@ -247,7 +247,7 @@ func BenchmarkPredecodeAllocation(b *testing.B) {
 	b.Run("eager", func(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
-			c, server := newBodyBenchConn(b)
+			c, server := newBodyBenchConn()
 			serveBenchResponse(server, "430 no such article\r\n")
 			_, _ = c.DecodeBodyInto("<a@b>", make([]byte, 0, DecodedBodyCapacity(capacity)))
 			_ = c.conn.Close()
@@ -257,7 +257,7 @@ func BenchmarkPredecodeAllocation(b *testing.B) {
 	b.Run("demand", func(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
-			c, server := newBodyBenchConn(b)
+			c, server := newBodyBenchConn()
 			serveBenchResponse(server, "430 no such article\r\n")
 			_, _ = c.DecodeBodyWithBuffer("<a@b>", &benchBuffer{capacity: capacity})
 			_ = c.conn.Close()
@@ -278,7 +278,7 @@ func (b *benchBuffer) DecodeBuffer() []byte {
 	return b.buf
 }
 
-func newBodyBenchConn(b *testing.B) (*Connection, net.Conn) {
+func newBodyBenchConn() (*Connection, net.Conn) {
 	client, server := net.Pipe()
 	c := &Connection{
 		conn:   client,
