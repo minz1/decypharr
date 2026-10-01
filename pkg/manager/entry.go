@@ -209,8 +209,7 @@ func (m *Manager) GetTorrentFile(torrentName, fileName string) (*FileInfo, error
 	}, nil
 }
 
-// getEntryChildren
-// Groups are built-in, provider, or virtual folders.
+// getEntryChildren lists a built-in, provider, or virtual folder.
 // Uses metadata-only iteration (no disk reads, no protobuf deserialization).
 func (m *Manager) getEntryChildren(group string) (*FileInfo, []FileInfo) {
 	currentDir := &FileInfo{
@@ -219,160 +218,77 @@ func (m *Manager) getEntryChildren(group string) (*FileInfo, []FileInfo) {
 		modTime: time.Now(),
 		isDir:   true,
 	}
-	switch group {
-	case EntryAllFolder:
-		currentDir.kind = EntryKindSystem
-		// This returns all entries - using metadata-only iteration (no disk reads)
-		var infos []FileInfo
-		seen := make(map[string]struct{})
-		err := m.storage.ForEachMeta(func(meta *storage.EntryMetaInfo) error {
-			if _, ok := seen[meta.Name]; ok {
-				return nil
-			}
-			seen[meta.Name] = struct{}{}
-			infos = append(infos, FileInfo{
-				infohash:     meta.InfoHash,
-				name:         meta.Name,
-				size:         meta.Size,
-				modTime:      meta.AddedOn,
-				isDir:        true,
-				activeDebrid: meta.Provider,
-				canDelete:    true,
-				kind:         EntryKindEntry,
-			})
-			return nil
-		})
-		if err != nil {
-			return nil, nil
-		}
-		return currentDir, infos
-	case EntryTorrentFolder:
-		currentDir.kind = EntryKindSystem
-		// This returns all torrents - using metadata-only iteration
-		var infos []FileInfo
-		seen := make(map[string]struct{})
-		err := m.storage.ForEachMeta(func(meta *storage.EntryMetaInfo) error {
-			if meta.Protocol == string(config.ProtocolTorrent) {
-				if _, ok := seen[meta.Name]; ok {
-					return nil
-				}
-				seen[meta.Name] = struct{}{}
-				infos = append(infos, FileInfo{
-					infohash:     meta.InfoHash,
-					name:         meta.Name,
-					size:         meta.Size,
-					modTime:      meta.AddedOn,
-					isDir:        true,
-					activeDebrid: meta.Provider,
-					canDelete:    true,
-					kind:         EntryKindEntry,
-				})
-			}
-			return nil
-		})
-		if err != nil {
-			return nil, nil
-		}
-		return currentDir, infos
-	case EntryNZBFolder:
-		currentDir.kind = EntryKindSystem
-		// This returns all nzbs - using metadata-only iteration
-		var infos []FileInfo
-		seen := make(map[string]struct{})
-		err := m.storage.ForEachMeta(func(meta *storage.EntryMetaInfo) error {
-			if meta.Protocol == string(config.ProtocolNZB) {
-				if _, ok := seen[meta.Name]; ok {
-					return nil
-				}
-				seen[meta.Name] = struct{}{}
-				infos = append(infos, FileInfo{
-					infohash:     meta.InfoHash,
-					name:         meta.Name,
-					size:         meta.Size,
-					modTime:      meta.AddedOn,
-					isDir:        true,
-					activeDebrid: meta.Provider,
-					canDelete:    true,
-					kind:         EntryKindEntry,
-				})
-			}
-			return nil
-		})
-		if err != nil {
-			return nil, nil
-		}
-		return currentDir, infos
-	case EntryBadFolder:
-		currentDir.kind = EntryKindSystem
-		// Filter for bad entries - using metadata-only iteration
-		var infos []FileInfo
-		seen := make(map[string]struct{})
-		err := m.storage.ForEachMeta(func(meta *storage.EntryMetaInfo) error {
-			if meta.Bad {
-				if _, ok := seen[meta.Name]; ok {
-					return nil
-				}
-				seen[meta.Name] = struct{}{}
-				infos = append(infos, FileInfo{
-					infohash:     meta.InfoHash,
-					name:         meta.Name,
-					size:         meta.Size,
-					modTime:      meta.AddedOn,
-					isDir:        true,
-					activeDebrid: meta.Provider,
-					canDelete:    true,
-					kind:         EntryKindEntry,
-				})
-			}
-			return nil
-		})
-		if err != nil {
-			return nil, nil
-		}
-		return currentDir, infos
-	case "version.txt":
+	if group == "version.txt" {
 		currentDir.kind = EntryKindFile
 		currentDir.content = []byte(version.GetInfo().String() + "\n")
 		currentDir.size = int64(len(currentDir.content))
 		currentDir.isDir = false
 		return currentDir, nil
-	default:
-		// Per-provider folder if the name matches a configured client
-		if _, ok := m.clients.Load(group); ok {
-			currentDir.kind = EntryKindProvider
-			var infos []FileInfo
-			seen := make(map[string]struct{})
-			err := m.storage.ForEachMeta(func(meta *storage.EntryMetaInfo) error {
-				if meta.Provider == group {
-					if _, ok := seen[meta.Name]; ok {
-						return nil
-					}
-					seen[meta.Name] = struct{}{}
-					infos = append(infos, FileInfo{
-						infohash:     meta.InfoHash,
-						name:         meta.Name,
-						size:         meta.Size,
-						modTime:      meta.AddedOn,
-						isDir:        true,
-						activeDebrid: meta.Provider,
-						canDelete:    true,
-						kind:         EntryKindEntry,
-					})
-				}
-				return nil
-			})
-			if err != nil {
-				return nil, nil
-			}
-			return currentDir, infos
-		}
-		virtualFolders := m.virtualFoldersSnapshot()
-		if !virtualFolders.Has(group) {
+	}
+	if kind, keep := m.groupFilter(group); keep != nil {
+		infos, err := m.metaFolderChildren(keep)
+		if err != nil {
 			return nil, nil
 		}
-		currentDir.kind = EntryKindVirtual
-		return currentDir, m.getVirtualFolderChildren(virtualFolders, group)
+		currentDir.kind = kind
+		return currentDir, infos
 	}
+	virtualFolders := m.virtualFoldersSnapshot()
+	if !virtualFolders.Has(group) {
+		return nil, nil
+	}
+	currentDir.kind = EntryKindVirtual
+	return currentDir, m.getVirtualFolderChildren(virtualFolders, group)
+}
+
+// groupFilter returns the kind and entry filter of a built-in or provider
+// folder; keep is nil for any other name.
+func (m *Manager) groupFilter(group string) (string, func(*storage.EntryMetaInfo) bool) {
+	switch group {
+	case EntryAllFolder:
+		return EntryKindSystem, func(*storage.EntryMetaInfo) bool { return true }
+	case EntryTorrentFolder:
+		return EntryKindSystem, func(meta *storage.EntryMetaInfo) bool {
+			return meta.Protocol == string(config.ProtocolTorrent)
+		}
+	case EntryNZBFolder:
+		return EntryKindSystem, func(meta *storage.EntryMetaInfo) bool {
+			return meta.Protocol == string(config.ProtocolNZB)
+		}
+	case EntryBadFolder:
+		return EntryKindSystem, func(meta *storage.EntryMetaInfo) bool { return meta.Bad }
+	}
+	if _, ok := m.clients.Load(group); ok {
+		return EntryKindProvider, func(meta *storage.EntryMetaInfo) bool { return meta.Provider == group }
+	}
+	return "", nil
+}
+
+// metaFolderChildren lists the entries keep accepts, one per folder name.
+func (m *Manager) metaFolderChildren(keep func(*storage.EntryMetaInfo) bool) ([]FileInfo, error) {
+	var infos []FileInfo
+	seen := make(map[string]struct{})
+	err := m.storage.ForEachMeta(func(meta *storage.EntryMetaInfo) error {
+		if !keep(meta) {
+			return nil
+		}
+		if _, ok := seen[meta.Name]; ok {
+			return nil
+		}
+		seen[meta.Name] = struct{}{}
+		infos = append(infos, FileInfo{
+			infohash:     meta.InfoHash,
+			name:         meta.Name,
+			size:         meta.Size,
+			modTime:      meta.AddedOn,
+			isDir:        true,
+			activeDebrid: meta.Provider,
+			canDelete:    true,
+			kind:         EntryKindEntry,
+		})
+		return nil
+	})
+	return infos, err
 }
 
 func (m *Manager) getTorrentChildren(name string) (*FileInfo, []FileInfo) {
@@ -423,26 +339,34 @@ func (m *Manager) RemoveEntry(entry *FileInfo) error {
 	if entry.isDir {
 		// This is a torrent folder
 		m.logger.Debug().Str("entry", entry.name).Msg("Removing entry folder")
-		infohash := entry.infohash
-		if infohash == "" {
-			// Fallback: look up from storage
-			et, err := m.storage.GetEntryItem(entry.name)
-			if err != nil {
-				return fmt.Errorf("torrent %s not found", entry.name)
-			}
-			if len(et.Files) == 0 {
-				return fmt.Errorf("torrent %s has no files", entry.name)
-			}
-			firstFile, err := et.GetFirstFile()
-			if err != nil {
-				return fmt.Errorf("failed to get first file of torrent %s: %w", entry.name, err)
-			}
-			infohash = firstFile.InfoHash
+		infohash, err := m.folderInfohash(entry)
+		if err != nil {
+			return err
 		}
 		return m.DeleteEntry(infohash, true)
 	}
 	// This is a file within a torrent
 	return m.RemoveTorrentFile(entry.Parent(), entry.Name())
+}
+
+// folderInfohash resolves the infohash behind an entry folder, falling back
+// to storage when the listing did not carry it.
+func (m *Manager) folderInfohash(entry *FileInfo) (string, error) {
+	if entry.infohash != "" {
+		return entry.infohash, nil
+	}
+	et, err := m.storage.GetEntryItem(entry.name)
+	if err != nil {
+		return "", fmt.Errorf("torrent %s not found", entry.name)
+	}
+	if len(et.Files) == 0 {
+		return "", fmt.Errorf("torrent %s has no files", entry.name)
+	}
+	firstFile, err := et.GetFirstFile()
+	if err != nil {
+		return "", fmt.Errorf("failed to get first file of torrent %s: %w", entry.name, err)
+	}
+	return firstFile.InfoHash, nil
 }
 
 func (m *Manager) CopyEntry(entry *FileInfo, _ string, _ bool) error {
@@ -488,27 +412,8 @@ func (m *Manager) RemoveTorrentFile(torrentName, filename string) error {
 }
 
 func (m *Manager) getVirtualFolderChildren(virtualFolders *virtualfolders.Folders, folder string) []FileInfo {
-	// Use metadata-only iteration (no disk reads)
-	var infos []FileInfo
-	seen := make(map[string]struct{})
-	err := m.storage.ForEachMeta(func(meta *storage.EntryMetaInfo) error {
-		if virtualFolders.Matches(folder, meta, m.virtualFolderFileNames(meta)) {
-			if _, ok := seen[meta.Name]; ok {
-				return nil
-			}
-			seen[meta.Name] = struct{}{}
-			infos = append(infos, FileInfo{
-				infohash:     meta.InfoHash,
-				name:         meta.Name,
-				size:         meta.Size,
-				modTime:      meta.AddedOn,
-				isDir:        true,
-				activeDebrid: meta.Provider,
-				canDelete:    true,
-				kind:         EntryKindEntry,
-			})
-		}
-		return nil
+	infos, err := m.metaFolderChildren(func(meta *storage.EntryMetaInfo) bool {
+		return virtualFolders.Matches(folder, meta, m.virtualFolderFileNames(meta))
 	})
 	if err != nil {
 		return nil
