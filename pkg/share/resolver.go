@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"sync"
 	"time"
+
+	"github.com/sirrobot01/decypharr/pkg/manager"
 )
 
 // longPathMin is the shortest path length worth indexing. facetfs embeds
@@ -68,24 +70,27 @@ func (r *resolver) rebuildLocked() {
 		for i := range torrents {
 			torrentPath := entryPath + "/" + torrents[i].Name()
 			add(torrentPath)
-			if !torrents[i].IsDir() {
-				continue
-			}
-			_, files := r.catalog.GetTorrentChildren(torrents[i].Name())
-			for j := range files {
-				// File names may nest ("a/b/c.mkv"); every prefix is a
-				// directory clients can hold a handle to.
-				name := files[j].Name()
-				add(torrentPath + "/" + name)
-				for k := len(name) - 1; k > 0; k-- {
-					if name[k] == '/' {
-						add(torrentPath + "/" + name[:k])
-					}
-				}
+			if torrents[i].IsDir() {
+				_, files := r.catalog.GetTorrentChildren(torrents[i].Name())
+				addTorrentFiles(add, torrentPath, files)
 			}
 		}
 	}
 
 	r.index = index
 	r.lastBuild = time.Now()
+}
+
+// addTorrentFiles indexes a torrent's files. File names may nest
+// ("a/b/c.mkv"); every prefix is a directory clients can hold a handle to.
+func addTorrentFiles(add func(string), torrentPath string, files []manager.FileInfo) {
+	for j := range files {
+		name := files[j].Name()
+		add(torrentPath + "/" + name)
+		for k := len(name) - 1; k > 0; k-- {
+			if name[k] == '/' {
+				add(torrentPath + "/" + name[:k])
+			}
+		}
+	}
 }
