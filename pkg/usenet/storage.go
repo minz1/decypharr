@@ -195,8 +195,8 @@ func (s *NZBStorage) GetNZBHeader(id string) (*storage.NZB, error) {
 // the requested file, so probing one file of a large NZB neither builds nor
 // retains the segment maps of every other file - the full decode aliases every
 // message id into one large buffer, which then stays alive for as long as any
-// of those ids does. Legacy proto files fall back to a full decode. A nil file
-// with a nil error means the file was not found or is deleted.
+// of those ids does. Legacy proto files fall back to a full decode. A missing
+// or deleted file yields errFileNotFound.
 func (s *NZBStorage) GetNZBFile(id, filename string) (*storage.NZBFile, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -224,7 +224,7 @@ func (s *NZBStorage) GetNZBFile(id, filename string) (*storage.NZBFile, error) {
 			return &file, nil
 		}
 	}
-	return nil, nil
+	return nil, errFileNotFound
 }
 
 // SampleFileMessageIDs returns the sampled message ids for a single file,

@@ -2,6 +2,7 @@ package usenet
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"time"
@@ -30,6 +31,9 @@ import (
 // MessageID strings alias the single decompressed msgIDs buffer via
 // unsafe.String (one allocation for all ids instead of one per segment).
 const codecMagicV2 = 0xB1
+
+// errFileNotFound reports that an NZB has no live file with the given name.
+var errFileNotFound = errors.New("file not found in NZB")
 
 var (
 	zstdEnc *zstd.Encoder
@@ -631,7 +635,7 @@ func decodeSegments(nzb *storage.NZB, counts []int, segMeta, msgIDs []byte) erro
 // every file's segments and aliases every id into the multi-megabyte message-id
 // buffer, which keeps that buffer alive for as long as any id survives.
 //
-// It returns (nil, nil) when the file is absent or deleted.
+// It returns errFileNotFound when the file is absent or deleted.
 func decodeFileV2(data []byte, filename string) (*storage.NZBFile, error) {
 	hc, sc, mc, err := splitRegions(data)
 	if err != nil {
@@ -657,7 +661,7 @@ func decodeFileV2(data []byte, filename string) (*storage.NZBFile, error) {
 		before += counts[i]
 	}
 	if target == -1 {
-		return nil, nil
+		return nil, errFileNotFound
 	}
 
 	file := nzb.Files[target]
