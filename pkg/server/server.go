@@ -36,27 +36,15 @@ var assetsEmbed embed.FS
 //go:embed assets/images/*
 var imagesEmbed embed.FS
 
-type AddRequest struct {
-	Url        string   `json:"url"`
-	Arr        string   `json:"arr"`
-	File       string   `json:"file"`
-	NotSymlink bool     `json:"notSymlink"`
-	Content    string   `json:"content"`
-	Seasons    []string `json:"seasons"`
-	Episodes   []string `json:"episodes"`
-}
-
-type ArrResponse struct {
-	Name string `json:"name"`
-	Url  string `json:"url"`
-}
-
-type ContentResponse struct {
-	ID    string `json:"id"`
-	Title string `json:"title"`
-	Type  string `json:"type"`
-	ArrID string `json:"arr"`
-}
+// Server is the HTTP front end: web UI, JSON API and the compat APIs.
+const (
+	sessionMaxAge = 7 * 24 * time.Hour
+	// restartDelay lets the triggering response flush before services stop.
+	restartDelay = 200 * time.Millisecond
+	// readHeaderTimeout bounds slow-header (slowloris) clients; bodies and
+	// long streams are unaffected.
+	readHeaderTimeout = 30 * time.Second
+)
 
 type Server struct {
 	router       *chi.Mux
@@ -98,7 +86,7 @@ func New(mgr *manager.Manager) *Server {
 	cookieStore := sessions.NewCookieStore([]byte(cfg.SecretKey()))
 	cookieStore.Options = &sessions.Options{
 		Path:     "/",
-		MaxAge:   86400 * 7,
+		MaxAge:   int(sessionMaxAge.Seconds()),
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	}
@@ -170,7 +158,7 @@ func (s *Server) SetRestartFunc(restartFunc func()) {
 
 func (s *Server) Restart() {
 	if s.restartFunc != nil {
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(restartDelay)
 		s.restartFunc()
 	} else {
 		s.logger.Warn().Msg("Restart function not set")
@@ -186,8 +174,9 @@ func (s *Server) Start(ctx context.Context) error {
 	addr := fmt.Sprintf("%s:%s", cfg.BindAddress, cfg.Port)
 	s.logger.Info().Msgf("Starting server on %s%s", addr, cfg.URLBase)
 	srv := &http.Server{
-		Addr:    addr,
-		Handler: s.router,
+		Addr:              addr,
+		Handler:           s.router,
+		ReadHeaderTimeout: readHeaderTimeout,
 	}
 
 	go func() {
@@ -201,7 +190,7 @@ func (s *Server) Start(ctx context.Context) error {
 	return srv.Shutdown(context.Background())
 }
 
-func (s *Server) getLogs(w http.ResponseWriter, r *http.Request) {
+func (s *Server) getLogs(w http.ResponseWriter, _ *http.Request) {
 	logFile := filepath.Join(logger.GetLogPath(), "decypharr.log")
 
 	// Open and read the file
@@ -231,7 +220,7 @@ func (s *Server) getLogs(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) getRcloneLogs(w http.ResponseWriter, r *http.Request) {
+func (s *Server) getRcloneLogs(w http.ResponseWriter, _ *http.Request) {
 	// Rclone logs resides in the same directory as the application logs
 	logFile := filepath.Join(logger.GetLogPath(), "rclone.log")
 	// Open and read the file

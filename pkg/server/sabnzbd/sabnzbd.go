@@ -21,6 +21,10 @@ type SABnzbd struct {
 	config            *Config
 }
 
+// defaultRefreshInterval applies when the configured one does not parse.
+const defaultRefreshInterval = 30 * time.Second
+
+// New builds the SABnzbd-compatible API over mgr.
 func New(manager *manager.Manager) *SABnzbd {
 	cfg := config.Get()
 	var defaultCategories []string
@@ -31,7 +35,7 @@ func New(manager *manager.Manager) *SABnzbd {
 	}
 	refreshInterval, err := utils.ParseDuration(cfg.RefreshInterval)
 	if err != nil {
-		refreshInterval = 30 * time.Second
+		refreshInterval = defaultRefreshInterval
 	}
 	sb := &SABnzbd{
 		downloadFolder:    cfg.DownloadFolder,
@@ -69,8 +73,7 @@ func (s *SABnzbd) SetConfig(cfg *config.Config) {
 				Name:        provider.Host,
 				Host:        provider.Host,
 				Port:        provider.Port,
-				Username:    provider.Username,
-				Password:    provider.Password,
+				Username:    provider.Username, // the password never leaves the process
 				Connections: provider.MaxConnections,
 				SSL:         provider.SSL,
 			})
@@ -92,7 +95,7 @@ func (s *SABnzbd) getCategories() []Category {
 			Name:     a.Name,
 			Order:    i + 1,
 			Pp:       "3",
-			Script:   "None",
+			Script:   scriptNone,
 			Dir:      filepath.Join(s.downloadFolder, a.Name),
 			Priority: PriorityNormal,
 		})
@@ -107,7 +110,7 @@ func (s *SABnzbd) getCategories() []Category {
 			Name:     defaultCat,
 			Order:    len(categories) + 1,
 			Pp:       "3",
-			Script:   "None",
+			Script:   scriptNone,
 			Dir:      filepath.Join(s.downloadFolder, defaultCat),
 			Priority: PriorityNormal,
 		})

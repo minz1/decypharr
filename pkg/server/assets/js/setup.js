@@ -434,12 +434,13 @@ class SetupWizard {
             authOverview.textContent = 'Not configured';
         }
 
+        const esc = (v) => window.decypharrUtils.escapeHtml(String(v ?? ''));
         const debridOverview = document.getElementById('overview-debrid');
         if (this.setupState.step2 && this.setupState.step2.skip_debrid) {
             debridOverview.textContent = 'Debrid disabled (skipped)';
         } else if (this.setupState.step2 && this.setupState.step2.provider) {
             debridOverview.innerHTML = `
-                <p><strong>Provider:</strong> ${this.setupState.step2.provider}</p>
+                <p><strong>Provider:</strong> ${esc(this.setupState.step2.provider)}</p>
             `;
         } else {
             debridOverview.textContent = 'Not configured';
@@ -450,10 +451,10 @@ class SetupWizard {
             usenetOverview.textContent = 'Usenet disabled (skipped)';
         } else if (this.setupState.step3 && this.setupState.step3.host) {
             usenetOverview.innerHTML = `
-                <p><strong>Server:</strong> ${this.setupState.step3.host}:${this.setupState.step3.port}</p>
-                <p><strong>Username:</strong> ${this.setupState.step3.username}</p>
-                <p><strong>Max Connections:</strong> ${this.setupState.step3.max_connections}</p>
-                <p><strong>Connections Per Stream:</strong> ${this.setupState.step3.reader_connections}</p>
+                <p><strong>Server:</strong> ${esc(this.setupState.step3.host)}:${esc(this.setupState.step3.port)}</p>
+                <p><strong>Username:</strong> ${esc(this.setupState.step3.username)}</p>
+                <p><strong>Max Connections:</strong> ${esc(this.setupState.step3.max_connections)}</p>
+                <p><strong>Connections Per Stream:</strong> ${esc(this.setupState.step3.reader_connections)}</p>
                 <p><strong>Use SSL:</strong> ${this.setupState.step3.ssl ? 'Yes' : 'No'}</p>
             `;
         } else {
@@ -475,8 +476,8 @@ class SetupWizard {
             }
             mountOverview.innerHTML = `
                 <p><strong>Type:</strong> ${mountType}</p>
-                <p><strong>Mount Path:</strong> ${this.setupState.step5.mount_path}</p>
-                <p><strong>Cache Directory:</strong> ${this.setupState.step5.cache_dir}</p>
+                <p><strong>Mount Path:</strong> ${esc(this.setupState.step5.mount_path)}</p>
+                <p><strong>Cache Directory:</strong> ${esc(this.setupState.step5.cache_dir)}</p>
             `;
         } else {
             mountOverview.textContent = 'Not configured';

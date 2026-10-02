@@ -10,7 +10,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/manager"
 )
 
-func (s *Server) handleIngests(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleIngests(w http.ResponseWriter, _ *http.Request) {
 	ingests, err := s.manager.GetIngests()
 	if err != nil {
 		s.logger.Error().Err(err).Msg("Failed to get ingests")
@@ -18,7 +18,7 @@ func (s *Server) handleIngests(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	utils.JSONResponse(w, ingests, 200)
+	utils.JSONResponse(w, ingests, http.StatusOK)
 }
 
 func (s *Server) handleIngestsByDebrid(w http.ResponseWriter, r *http.Request) {
@@ -34,7 +34,7 @@ func (s *Server) handleIngestsByDebrid(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	utils.JSONResponse(w, ingests, 200)
+	utils.JSONResponse(w, ingests, http.StatusOK)
 }
 
 // handleSpeedTest runs a speed test for a specific provider.

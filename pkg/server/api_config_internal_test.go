@@ -13,6 +13,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/manager"
 )
 
+//nolint:paralleltest // mutates the process-wide config singleton
 func TestMergeConfigUpdatePreservesOmittedFields(t *testing.T) {
 	current := config.Config{
 		Port:     "9000",
@@ -53,6 +54,7 @@ func TestMergeConfigUpdatePreservesOmittedFields(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // mutates the process-wide config singleton
 func TestMergeConfigUpdateMergesNestedObjects(t *testing.T) {
 	current := config.Config{
 		Mount: config.Mount{
@@ -74,6 +76,7 @@ func TestMergeConfigUpdateMergesNestedObjects(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // mutates the process-wide config singleton
 func TestMergeConfigUpdateAllowsExplicitClear(t *testing.T) {
 	current := config.Config{Debrids: []config.Debrid{{Name: "realdebrid", APIKey: "secret"}}}
 
@@ -87,6 +90,7 @@ func TestMergeConfigUpdateAllowsExplicitClear(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // mutates the process-wide config singleton
 func TestConfigHandlersUseSnapshots(t *testing.T) {
 	config.Reset()
 	config.SetConfigPath(t.TempDir())

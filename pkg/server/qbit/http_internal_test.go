@@ -14,6 +14,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/manager"
 )
 
+//nolint:paralleltest // mutates the process-wide config singleton
 func TestHandleLoginAlwaysReturnsSID(t *testing.T) {
 	config.Reset()
 	config.SetConfigPath(t.TempDir())
@@ -53,6 +54,7 @@ func TestHandleLoginAlwaysReturnsSID(t *testing.T) {
 }
 
 func TestWriteTorrentAddErrorPreservesSemantics(t *testing.T) {
+	t.Parallel()
 	tests := map[string]struct {
 		err       error
 		status    int
@@ -89,6 +91,7 @@ func TestWriteTorrentAddErrorPreservesSemantics(t *testing.T) {
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			recorder := httptest.NewRecorder()
 			writeTorrentAddError(recorder, tt.err)
 

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/sirrobot01/decypharr/internal/config"
@@ -22,25 +23,27 @@ func (q *QBit) handleLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
-	cookie := &http.Cookie{
+	// Not Secure: Arr clients talk to decypharr over plain HTTP on the LAN.
+	cookie := &http.Cookie{ //nolint:gosec // G124: Secure would make HTTP clients drop the session
 		Name:     "SID",
 		Value:    createSID(username, password),
 		Path:     "/",
-		SameSite: http.SameSiteNoneMode,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
 	}
 	http.SetCookie(w, cookie)
 	_, _ = w.Write([]byte("Ok."))
 }
 
-func (q *QBit) handleVersion(w http.ResponseWriter, r *http.Request) {
+func (q *QBit) handleVersion(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte("v4.3.2"))
 }
 
-func (q *QBit) handleWebAPIVersion(w http.ResponseWriter, r *http.Request) {
+func (q *QBit) handleWebAPIVersion(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte("2.7"))
 }
 
-func (q *QBit) handlePreferences(w http.ResponseWriter, r *http.Request) {
+func (q *QBit) handlePreferences(w http.ResponseWriter, _ *http.Request) {
 	preferences := getAppPreferences()
 
 	preferences.SavePath = q.downloadFolder
@@ -49,9 +52,12 @@ func (q *QBit) handlePreferences(w http.ResponseWriter, r *http.Request) {
 	utils.JSONResponse(w, preferences, http.StatusOK)
 }
 
-func (q *QBit) handleBuildInfo(w http.ResponseWriter, r *http.Request) {
+// reportedBitness is the build bitness the fake qBittorrent reports.
+const reportedBitness = 64
+
+func (q *QBit) handleBuildInfo(w http.ResponseWriter, _ *http.Request) {
 	res := BuildInfo{
-		Bitness:    64,
+		Bitness:    reportedBitness,
 		Boost:      "1.75.0",
 		Libtorrent: "1.2.11.0",
 		Openssl:    "1.1.1i",
@@ -61,7 +67,7 @@ func (q *QBit) handleBuildInfo(w http.ResponseWriter, r *http.Request) {
 	utils.JSONResponse(w, res, http.StatusOK)
 }
 
-func (q *QBit) handleShutdown(w http.ResponseWriter, r *http.Request) {
+func (q *QBit) handleShutdown(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -86,103 +92,87 @@ func (q *QBit) handleTorrentsInfo(w http.ResponseWriter, r *http.Request) {
 	utils.JSONResponse(w, qbitTorrents, http.StatusOK)
 }
 
+// multipartMemory is how much of a multipart form is held in memory before
+// spilling to temp files; the body itself is capped by Routes.
+const multipartMemory = 32 << 20
+
+func parseAddForm(r *http.Request) error {
+	contentType := r.Header.Get("Content-Type")
+	switch {
+	case strings.Contains(contentType, "multipart/form-data"):
+		return r.ParseMultipartForm(multipartMemory) //nolint:gosec // G120: body capped by Routes' MaxBytesReader
+	case strings.Contains(contentType, "application/x-www-form-urlencoded"):
+		return r.ParseForm()
+	default:
+		return errors.New("invalid content type")
+	}
+}
+
 func (q *QBit) handleTorrentsAdd(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-
-	// Parse form based on content type
-	contentType := r.Header.Get("Content-Type")
-	if strings.Contains(contentType, "multipart/form-data") {
-		if err := r.ParseMultipartForm(32 << 20); err != nil {
-			q.logger.Error().Err(err).Msgf("Error parsing multipart form")
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-	} else if strings.Contains(contentType, "application/x-www-form-urlencoded") {
-		if err := r.ParseForm(); err != nil {
-			q.logger.Error().Err(err).Msgf("Error parsing form")
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-	} else {
-		http.Error(w, "Invalid content type", http.StatusBadRequest)
+	if err := parseAddForm(r); err != nil {
+		q.logger.Error().Err(err).Msg("Error parsing torrent add form")
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	cfg := config.Get()
 	action := cfg.DefaultDownloadAction
-	if strings.ToLower(r.FormValue("sequentialDownload")) == "true" {
+	if strings.EqualFold(r.FormValue("sequentialDownload"), "true") {
 		action = config.DownloadActionDownload
 	}
-
-	rmTrackerUrls := strings.ToLower(r.FormValue("firstLastPiecePrio")) == "true"
-
-	// Check config setting - if always remove tracker URLs is enabled, force it to true
-	if q.alwaysRemoveTrackerURLS {
-		rmTrackerUrls = true
-	}
-
+	rmTrackerUrls := q.alwaysRemoveTrackerURLS || strings.EqualFold(r.FormValue("firstLastPiecePrio"), "true")
 	debridName := r.FormValue("debrid")
-	category := r.FormValue("category")
-	_arr := getArrFromContext(ctx)
-	if _arr.Name == "" {
-		// Arr is not in context
-		_arr = arr.Arr{Name: category}
+	instance := getArrFromContext(ctx)
+	if instance.Name == "" {
+		instance = arr.Arr{Name: r.FormValue("category")}
 	}
-	atleastOne := false
+	callbackURL := cfg.Notifications.CallbackURL
 
-	// Handle magnet URLs
+	var sources []func() error
 	if urls := r.FormValue("urls"); urls != "" {
-		var urlList []string
 		for u := range strings.SplitSeq(urls, "\n") {
-			urlList = append(urlList, strings.TrimSpace(u))
-		}
-		for _, url := range urlList {
-			if err := q.addMagnet(
-				ctx,
-				url,
-				_arr,
-				debridName,
-				action,
-				cfg.Notifications.CallbackURL,
-				rmTrackerUrls,
-				cfg.SkipMultiSeason,
-			); err != nil {
-				q.logger.Debug().Msgf("Error adding magnet: %s", err.Error())
-				writeTorrentAddError(w, err)
-				return
-			}
-			atleastOne = true
-		}
-	}
-
-	// Handle torrent files
-	if r.MultipartForm != nil && r.MultipartForm.File != nil {
-		if files := r.MultipartForm.File["torrents"]; len(files) > 0 {
-			for _, fileHeader := range files {
-				if err := q.addTorrent(
+			sources = append(sources, func() error {
+				return q.addMagnet(
 					ctx,
-					fileHeader,
-					_arr,
+					strings.TrimSpace(u),
+					instance,
 					debridName,
 					action,
-					cfg.Notifications.CallbackURL,
+					callbackURL,
 					rmTrackerUrls,
 					cfg.SkipMultiSeason,
-				); err != nil {
-					q.logger.Debug().Err(err).Str("torrent", fileHeader.Filename).Msgf("Error adding torrent")
-					writeTorrentAddError(w, err)
-					return
-				}
-				atleastOne = true
-			}
+				)
+			})
 		}
 	}
-
-	if !atleastOne {
+	if r.MultipartForm != nil {
+		for _, fileHeader := range r.MultipartForm.File["torrents"] {
+			sources = append(sources, func() error {
+				return q.addTorrent(
+					ctx,
+					fileHeader,
+					instance,
+					debridName,
+					action,
+					callbackURL,
+					rmTrackerUrls,
+					cfg.SkipMultiSeason,
+				)
+			})
+		}
+	}
+	if len(sources) == 0 {
 		http.Error(w, "No valid URLs or torrents provided", http.StatusBadRequest)
 		return
 	}
-
+	for _, add := range sources {
+		if err := add(); err != nil {
+			q.logger.Debug().Err(err).Msg("Error adding torrent")
+			writeTorrentAddError(w, err)
+			return
+		}
+	}
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -231,51 +221,18 @@ func (q *QBit) handleTorrentsDelete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func (q *QBit) handleTorrentsPause(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	hashes := getHashes(ctx)
-	for _, hash := range hashes {
-		torrent, err := q.manager.Queue().GetTorrent(hash)
-		if err != nil {
-			continue
-		}
-		go q.PauseTorrent(torrent)
-	}
-
+// handleTorrentsNoop answers pause/resume/recheck: debrid-backed entries have
+// no local transfer to act on, so these always succeed.
+func (q *QBit) handleTorrentsNoop(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func (q *QBit) handleTorrentsResume(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	hashes := getHashes(ctx)
-	for _, hash := range hashes {
-		torrent, err := q.manager.Queue().GetTorrent(hash)
-		if err != nil {
-			continue
-		}
-		go q.ResumeTorrent(torrent)
-	}
-
-	w.WriteHeader(http.StatusOK)
-}
-
-func (q *QBit) handleTorrentRecheck(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	hashes := getHashes(ctx)
-	for _, hash := range hashes {
-		torrent, err := q.manager.Queue().GetTorrent(hash)
-		if err != nil {
-			continue
-		}
-		go q.RefreshTorrent(torrent)
-	}
-
-	w.WriteHeader(http.StatusOK)
-}
-
-func (q *QBit) handleCategories(w http.ResponseWriter, r *http.Request) {
-	var categories = map[string]TorrentCategory{}
-	for _, cat := range q.categories {
+func (q *QBit) handleCategories(w http.ResponseWriter, _ *http.Request) {
+	q.mu.Lock()
+	names := slices.Clone(q.categories)
+	q.mu.Unlock()
+	categories := make(map[string]TorrentCategory, len(names))
+	for _, cat := range names {
 		path := filepath.Join(q.downloadFolder, cat)
 		categories[cat] = TorrentCategory{
 			Name:     cat,
@@ -298,7 +255,9 @@ func (q *QBit) handleCreateCategory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	q.mu.Lock()
 	q.categories = append(q.categories, name)
+	q.mu.Unlock()
 
 	utils.JSONResponse(w, nil, http.StatusOK)
 }
@@ -329,14 +288,13 @@ func (q *QBit) handleSetCategory(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	category := getCategory(ctx)
 	hashes := getHashes(ctx)
-	var filterFunc func(t *storage.Entry) bool
-
-	hashSet := make(map[string]bool)
-	if len(hashes) > 0 {
-		for _, h := range hashes {
-			hashSet[h] = true
-		}
+	if len(hashes) == 0 {
+		// Without hashes the queue filter matches everything; recategorizing
+		// the whole queue is never what a client asked for.
+		http.Error(w, "No hashes provided", http.StatusBadRequest)
+		return
 	}
+	filterFunc := q.manager.Queue().ListFilterFunc("", config.ProtocolTorrent, "", hashes)
 
 	updateFunc := func(t *storage.Entry) bool {
 		if t.Category != category {
@@ -347,7 +305,7 @@ func (q *QBit) handleSetCategory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := q.manager.Queue().UpdateWhere(filterFunc, updateFunc); err != nil {
-		q.logger.Warn().Err(err).Msgf("Error adding torrent")
+		q.logger.Warn().Err(err).Msgf("Error setting torrent category")
 		http.Error(w, "Failed to update torrents", http.StatusInternalServerError)
 		return
 	}
@@ -400,8 +358,11 @@ func (q *QBit) handleRemoveTorrentTags(w http.ResponseWriter, r *http.Request) {
 	utils.JSONResponse(w, nil, http.StatusOK)
 }
 
-func (q *QBit) handleGetTags(w http.ResponseWriter, r *http.Request) {
-	utils.JSONResponse(w, q.Tags, http.StatusOK)
+func (q *QBit) handleGetTags(w http.ResponseWriter, _ *http.Request) {
+	q.mu.Lock()
+	tags := slices.Clone(q.tags)
+	q.mu.Unlock()
+	utils.JSONResponse(w, tags, http.StatusOK)
 }
 
 func (q *QBit) handleCreateTags(w http.ResponseWriter, r *http.Request) {

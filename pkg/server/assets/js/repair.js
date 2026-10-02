@@ -727,14 +727,14 @@ class RepairManager {
             const duration = start && end ? this.formatDuration(end - start) : (start ? 'running' : '-');
             tr.innerHTML = `
                 <td class="font-mono text-sm">${start ? start.toLocaleString() : '-'}</td>
-                <td>${run.trigger || '-'}</td>
+                <td>${this.escape(run.trigger || '-')}</td>
                 <td>${this.statusBadge(run.status)}</td>
                 <td>${run.stats?.probed ?? 0}</td>
                 <td class="${run.stats?.broken ? 'text-error font-medium' : ''}">${run.stats?.broken ?? 0}</td>
                 <td class="${run.stats?.repaired ? 'text-success font-medium' : ''}">${run.stats?.repaired ?? 0}</td>
                 <td class="${run.stats?.cleared ? 'text-warning font-medium' : ''}">${run.stats?.cleared ?? 0}</td>
                 <td>${duration}</td>
-                <td class="text-xs text-error">${run.error || ''}</td>
+                <td class="text-xs text-error">${this.escape(run.error || '')}</td>
             `;
             tbody.appendChild(tr);
         }
@@ -747,7 +747,7 @@ class RepairManager {
             failed: 'badge-error',
             cancelled: 'badge-warning',
         }[status] || 'badge-ghost';
-        return `<span class="badge ${cls}">${status || 'unknown'}</span>`;
+        return `<span class="badge ${cls}">${this.escape(status || 'unknown')}</span>`;
     }
 
     formatDuration(ms) {

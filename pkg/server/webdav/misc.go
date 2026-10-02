@@ -2,7 +2,7 @@ package webdav
 
 import (
 	"bytes"
-	"fmt"
+	"errors"
 	"path"
 	"strconv"
 	"strings"
@@ -11,7 +11,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/manager"
 )
 
-var pctHex = "0123456789ABCDEF"
+const pctHex = "0123456789ABCDEF"
 
 // fastEscapePath returns a percent-encoded path, preserving '/'
 // and only encoding bytes outside the unreserved set:
@@ -49,62 +49,61 @@ type entryItem struct {
 
 type httpRange struct{ start, end int64 }
 
+var errInvalidRange = errors.New("invalid range")
+
 func parseRange(s string, size int64) ([]httpRange, error) {
 	if s == "" {
 		return nil, nil
 	}
-	const b = "bytes="
-	if !strings.HasPrefix(s, b) {
-		return nil, fmt.Errorf("invalid range")
+	spec, ok := strings.CutPrefix(s, "bytes=")
+	if !ok {
+		return nil, errInvalidRange
 	}
 
 	var ranges []httpRange
-	for ra := range strings.SplitSeq(s[len(b):], ",") {
+	for ra := range strings.SplitSeq(spec, ",") {
 		ra = strings.TrimSpace(ra)
 		if ra == "" {
 			continue
 		}
-		before, after, ok := strings.Cut(ra, "-")
-		if !ok {
-			return nil, fmt.Errorf("invalid range")
-		}
-		start, end := strings.TrimSpace(before), strings.TrimSpace(after)
-		var r httpRange
-		if start == "" {
-			i, err := strconv.ParseInt(end, 10, 64)
-			if err != nil {
-				return nil, fmt.Errorf("invalid range")
-			}
-			if i > size {
-				i = size
-			}
-			r.start = size - i
-			r.end = size - 1
-		} else {
-			i, err := strconv.ParseInt(start, 10, 64)
-			if err != nil || i < 0 {
-				return nil, fmt.Errorf("invalid range")
-			}
-			r.start = i
-			if end == "" {
-				r.end = size - 1
-			} else {
-				i, err := strconv.ParseInt(end, 10, 64)
-				if err != nil || r.start > i {
-					return nil, fmt.Errorf("invalid range")
-				}
-				if i >= size {
-					i = size - 1
-				}
-				r.end = i
-			}
+		r, err := parseOneRange(ra, size)
+		if err != nil {
+			return nil, err
 		}
 		if r.start > size-1 {
-			continue
+			continue // unsatisfiable; RFC 7233 lets us drop it
 		}
 		ranges = append(ranges, r)
 	}
 	return ranges, nil
+}
+
+// parseOneRange parses "first-last", "first-" or "-suffix", clamped to size.
+func parseOneRange(ra string, size int64) (httpRange, error) {
+	before, after, ok := strings.Cut(ra, "-")
+	if !ok {
+		return httpRange{}, errInvalidRange
+	}
+	first, last := strings.TrimSpace(before), strings.TrimSpace(after)
+	if first == "" {
+		suffix, err := strconv.ParseInt(last, 10, 64)
+		if err != nil {
+			return httpRange{}, errInvalidRange
+		}
+		return httpRange{start: size - min(suffix, size), end: size - 1}, nil
+	}
+	start, err := strconv.ParseInt(first, 10, 64)
+	if err != nil || start < 0 {
+		return httpRange{}, errInvalidRange
+	}
+	if last == "" {
+		return httpRange{start: start, end: size - 1}, nil
+	}
+	end, err := strconv.ParseInt(last, 10, 64)
+	if err != nil || start > end {
+		return httpRange{}, errInvalidRange
+	}
+	return httpRange{start: start, end: min(end, size-1)}, nil
 }
 
 // Basic XML escaping function.

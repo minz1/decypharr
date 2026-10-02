@@ -52,10 +52,7 @@ func (s *Server) handleTautulli(w http.ResponseWriter, r *http.Request) {
 
 	run, err := svc.RecheckMedia(s.manager.Context(), strings.TrimSpace(payload.Arr), mediaID, payload.Fix)
 	if err != nil {
-		status := http.StatusBadRequest
-		if strings.Contains(err.Error(), "already running") {
-			status = http.StatusConflict
-		}
+		status := repairErrStatus(err)
 		http.Error(w, err.Error(), status)
 		return
 	}

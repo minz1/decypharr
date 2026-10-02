@@ -2,6 +2,7 @@ package sabnzbd
 
 import (
 	"fmt"
+	"time"
 
 	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/storage"
@@ -9,9 +10,8 @@ import (
 
 // SABnzbd API response types based on official documentation
 
-var (
-	Version = "4.5.0"
-)
+// Version is the SABnzbd version the compat API reports.
+const Version = "4.5.0"
 
 // QueueResponse represents the queue status response.
 type QueueResponse struct {
@@ -46,7 +46,7 @@ type QueueSlot struct {
 	Cat          string   `json:"cat"`
 	TimeLeft     string   `json:"timeleft"`
 	Percentage   string   `json:"percentage"`
-	NzoId        string   `json:"nzo_id"`
+	NzoID        string   `json:"nzo_id"`
 	Unpackopts   string   `json:"unpackopts"`
 }
 
@@ -67,7 +67,7 @@ type HistorySlot struct {
 	Status      string `json:"status"`
 	Name        string `json:"name"`
 	NZBName     string `json:"nzb_name"`
-	NzoId       string `json:"nzo_id"`
+	NzoID       string `json:"nzo_id"`
 	Category    string `json:"category"`
 	FailMessage string `json:"fail_message"`
 	Bytes       int64  `json:"bytes"`
@@ -114,7 +114,7 @@ type AddNZBRequest struct {
 // AddNZBResponse represents the response when adding an NZB.
 type AddNZBResponse struct {
 	Status bool     `json:"status"`
-	NzoIds []string `json:"nzo_ids"`
+	NzoIDs []string `json:"nzo_ids"`
 	Error  string   `json:"error,omitempty"`
 }
 
@@ -168,7 +168,7 @@ const (
 
 // NZB represents an NZB download in SABnzbd format (similar to qbit's Torrent).
 type NZB struct {
-	NzoId        string   `json:"nzo_id"`        // Unique NZB identifier
+	NzoID        string   `json:"nzo_id"`        // Unique NZB identifier
 	Name         string   `json:"name"`          // NZB name
 	Filename     string   `json:"filename"`      // Original filename
 	Size         int64    `json:"size"`          // Total size in bytes
@@ -203,28 +203,36 @@ type File struct {
 	Age      string `json:"age"`           // Age of file
 	Bytes    string `json:"bytes"`         // Total file size in bytes (as string)
 	Filename string `json:"filename"`      // Filename
-	NzfId    string `json:"nzf_id"`        // Unique file ID
+	NzfID    string `json:"nzf_id"`        // Unique file ID
 	Set      string `json:"set,omitempty"` // Optional set name
 }
 
+// scriptNone is SABnzbd's name for "no post-processing script".
+const scriptNone = "None"
+
+// SABnzbd reports sizes in binary units.
+const (
+	kb = 1024
+	mb = kb * 1024
+	gb = mb * 1024
+	tb = gb * 1024
+
+	percent = 100
+)
+
 // convertToSABnzbdNZB converts a storage.Entry to SABnzbd NZB format.
 func convertToSABnzbdNZB(e *storage.Entry) NZB {
-	const MB = 1024 * 1024
-
 	// Calculate MB values
-	sizeMB := e.Size / MB
-	mbLeft := int64(float64(e.Size) * (1 - e.Progress) / float64(MB))
+	sizeMB := e.Size / mb
+	mbLeft := int64(float64(e.Size) * (1 - e.Progress) / float64(mb))
 	downloaded := int64(float64(e.Size) * e.Progress)
 
 	// Calculate time left (simple estimation)
 	timeLeft := "0:00:00"
 	if e.Speed > 0 && e.Progress < 1.0 {
 		bytesLeft := int64(float64(e.Size) * (1 - e.Progress))
-		secondsLeft := bytesLeft / e.Speed
-		hours := secondsLeft / 3600
-		minutes := (secondsLeft % 3600) / 60
-		seconds := secondsLeft % 60
-		timeLeft = fmt.Sprintf("%d:%02d:%02d", hours, minutes, seconds)
+		left := time.Duration(bytesLeft/e.Speed) * time.Second
+		timeLeft = fmt.Sprintf("%d:%02d:%02d", left/time.Hour, left%time.Hour/time.Minute, left%time.Minute/time.Second)
 	}
 
 	// Map storage state to SABnzbd status
@@ -239,12 +247,12 @@ func convertToSABnzbdNZB(e *storage.Entry) NZB {
 	}
 
 	nzb := NZB{
-		NzoId:        e.InfoHash,
+		NzoID:        e.InfoHash,
 		Name:         e.Name,
 		Filename:     e.OriginalFilename,
 		Size:         e.Size,
 		SizeMB:       sizeMB,
-		Percentage:   e.Progress * 100, // Convert to 0-100 range
+		Percentage:   e.Progress * percent,
 		MBLeft:       mbLeft,
 		TimeLeft:     timeLeft,
 		Status:       status,
@@ -252,7 +260,7 @@ func convertToSABnzbdNZB(e *storage.Entry) NZB {
 		Priority:     PriorityNormal,
 		SavePath:     e.SavePath,
 		ContentPath:  e.DownloadPath(),
-		Script:       "None",
+		Script:       scriptNone,
 		AddedOn:      e.CreatedAt.Unix(),
 		CompletedOn:  completedOn,
 		FailMessage:  e.LastError,
@@ -269,7 +277,6 @@ func convertToSABnzbdNZB(e *storage.Entry) NZB {
 
 // getNZBFiles converts storage.Entry files to File format.
 func getNZBFiles(e *storage.Entry) []File {
-	const MB = 1024 * 1024
 	files := make([]File, 0, len(e.Files))
 
 	// Determine file status based on job state
@@ -288,7 +295,7 @@ func getNZBFiles(e *storage.Entry) []File {
 			continue
 		}
 
-		sizeMB := float64(f.Size) / float64(MB)
+		sizeMB := float64(f.Size) / float64(mb)
 		// For finished files, mbleft is 0; for active/queued, it's the full size
 		mbleft := "0.00"
 		if fileStatus != "finished" {
@@ -302,7 +309,7 @@ func getNZBFiles(e *storage.Entry) []File {
 			Age:      "0d", // We don't track article age
 			Bytes:    fmt.Sprintf("%.2f", float64(f.Size)),
 			Filename: f.Name,
-			NzfId:    fmt.Sprintf("%s_%d", e.InfoHash, idx),
+			NzfID:    fmt.Sprintf("%s_%d", e.InfoHash, idx),
 		})
 		idx++
 	}
