@@ -78,10 +78,10 @@ func TestFailedSaveDoesNotPublishConfig(t *testing.T) {
 	SetConfigPath(t.TempDir())
 	t.Cleanup(Reset)
 	before := Get()
-	if err := os.Remove(before.JsonFile()); err != nil {
+	if err := os.Remove(before.JSONFile()); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(before.JsonFile(), 0700); err != nil {
+	if err := os.Mkdir(before.JSONFile(), 0700); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Update(func(next *Config) error { next.AppURL = "https://changed.test"; return nil }); err == nil {
