@@ -21,6 +21,13 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
+const (
+	// usenetProvider is the provider name NZB entries are placed on.
+	usenetProvider = "usenet"
+	// importStatusStarted marks an import request that is being processed.
+	importStatusStarted = "started"
+)
+
 type ImportType string
 
 const (
@@ -34,14 +41,14 @@ const (
 type ImportRequest struct {
 	Name             string                `json:"name"`
 	NZBContent       []byte                `json:"-"`
-	Id               string                `json:"id"`
+	Id               string                `json:"id"` //nolint:revive,staticcheck // set by pkg/server; ID rename is a cross-area follow-up
 	DownloadFolder   string                `json:"downloadFolder"`
 	SelectedDebrid   string                `json:"debrid"`
 	Magnet           *utils.Magnet         `json:"magnet"`
 	Arr              arr.Arr               `json:"arr"`
 	Action           config.DownloadAction `json:"action"`
 	DownloadUncached *bool                 `json:"downloadUncached"`
-	CallBackUrl      string                `json:"callBackUrl"`
+	CallBackURL      string                `json:"callBackURL"`
 	SkipMultiSeason  bool                  `json:"skip_multi_season"`
 
 	Status      string    `json:"status"`
@@ -59,20 +66,20 @@ func NewTorrentRequest(
 	arr arr.Arr,
 	action config.DownloadAction,
 	downloadUncached *bool,
-	callBackUrl string,
+	callBackURL string,
 	importType ImportType,
 	skipMultiSeason bool,
 ) *ImportRequest {
 	return &ImportRequest{
 		Id:               uuid.New().String(),
-		Status:           "started",
+		Status:           importStatusStarted,
 		DownloadFolder:   downloadFolder,
 		SelectedDebrid:   cmp.Or(arr.SelectedDebrid, debrid), // Use debrid from arr if available
 		Magnet:           magnet,
 		Arr:              arr,
 		Action:           action,
 		DownloadUncached: downloadUncached,
-		CallBackUrl:      callBackUrl,
+		CallBackURL:      callBackURL,
 		Type:             importType,
 		SkipMultiSeason:  skipMultiSeason,
 	}
@@ -83,20 +90,20 @@ func NewNZBRequest(
 	nzbContent []byte,
 	arr arr.Arr,
 	action config.DownloadAction,
-	callBackUrl string,
+	callBackURL string,
 	importType ImportType,
 	skipMultiSeason bool,
 ) *ImportRequest {
 	return &ImportRequest{
 		Name:            name,
 		Id:              uuid.New().String(),
-		Status:          "started",
+		Status:          importStatusStarted,
 		DownloadFolder:  downloadFolder,
-		SelectedDebrid:  "usenet", // NZB imports always use usenet
+		SelectedDebrid:  usenetProvider, // NZB imports always use usenet
 		NZBContent:      nzbContent,
 		Arr:             arr,
 		Action:          action,
-		CallBackUrl:     callBackUrl,
+		CallBackURL:     callBackURL,
 		Type:            importType,
 		SkipMultiSeason: skipMultiSeason,
 	}
@@ -130,6 +137,12 @@ func (q *Queue) Add(torrent *storage.Entry) error {
 
 func (q *Queue) GetTorrent(infohash string) (*storage.Entry, error) {
 	return q.storage.GetQueued(infohash)
+}
+
+// Contains reports whether infohash is still in the download queue.
+func (q *Queue) Contains(infohash string) bool {
+	_, err := q.GetTorrent(infohash)
+	return err == nil
 }
 
 func (q *Queue) deleteEntryFiles(entry *storage.Entry) error {
@@ -212,34 +225,28 @@ func (q *Queue) ListFilterFunc(
 	state storage.TorrentState,
 	hashes []string,
 ) func(*storage.Entry) bool {
+	if category == "" && len(hashes) == 0 && state == "" && protocol == config.ProtocolAll {
+		return nil
+	}
 	hashSet := make(map[string]struct{}, len(hashes))
-	if len(hashes) > 0 {
-		for _, h := range hashes {
-			hashSet[strings.ToLower(h)] = struct{}{}
-		}
+	for _, h := range hashes {
+		hashSet[strings.ToLower(h)] = struct{}{}
 	}
+	return func(t *storage.Entry) bool {
+		return (category == "" || t.Category == category) &&
+			(state == "" || t.State == state) &&
+			(protocol == config.ProtocolAll || t.Protocol == protocol) &&
+			inHashSet(hashSet, t.InfoHash)
+	}
+}
 
-	var filterFunc func(*storage.Entry) bool
-	if category != "" || len(hashes) != 0 || state != "" || protocol != config.ProtocolAll {
-		filterFunc = func(t *storage.Entry) bool {
-			if category != "" && t.Category != category {
-				return false
-			}
-			if state != "" && t.State != state {
-				return false
-			}
-			if len(hashSet) > 0 {
-				if _, ok := hashSet[strings.ToLower(t.InfoHash)]; !ok {
-					return false
-				}
-			}
-			if protocol != config.ProtocolAll && t.Protocol != protocol {
-				return false
-			}
-			return true
-		}
+// inHashSet reports whether hash is in set; an empty set matches everything.
+func inHashSet(set map[string]struct{}, hash string) bool {
+	if len(set) == 0 {
+		return true
 	}
-	return filterFunc
+	_, ok := set[strings.ToLower(hash)]
+	return ok
 }
 
 func (q *Queue) ListFilter(

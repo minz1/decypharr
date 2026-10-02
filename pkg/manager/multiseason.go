@@ -1,7 +1,7 @@
 package manager
 
 import (
-	"crypto/md5"
+	"crypto/md5" //nolint:gosec // see generateSeasonHash
 	"encoding/hex"
 	"fmt"
 	"maps"
@@ -15,7 +15,12 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
-// Multi-season detection patterns.
+// seasonFormat renders a single season in a release name.
+const seasonFormat = "Season %02d"
+
+// Multi-season detection patterns, compiled once.
+//
+//nolint:gochecknoglobals // read-only precompiled regexp tables
 var (
 	// Pre-compiled patterns for multi-season replacement.
 	multiSeasonReplacements = []multiSeasonPattern{
@@ -26,16 +31,16 @@ var (
 		{regexp.MustCompile(`(?i)S(\d{1,2})-S\d{1,2}`), "S%02d"},
 
 		// Season 1-8 -> Season 1
-		{regexp.MustCompile(`(?i)Season\.?\s*\d{1,2}-\d{1,2}`), "Season %02d"},
+		{regexp.MustCompile(`(?i)Season\.?\s*\d{1,2}-\d{1,2}`), seasonFormat},
 
 		// Seasons 1-8 -> Season 1
-		{regexp.MustCompile(`(?i)Seasons\.?\s*\d{1,2}-\d{1,2}`), "Season %02d"},
+		{regexp.MustCompile(`(?i)Seasons\.?\s*\d{1,2}-\d{1,2}`), seasonFormat},
 
 		// Complete Series -> Season X
-		{regexp.MustCompile(`(?i)Complete\.?Series`), "Season %02d"},
+		{regexp.MustCompile(`(?i)Complete\.?Series`), seasonFormat},
 
 		// All Seasons -> Season X
-		{regexp.MustCompile(`(?i)All\.?Seasons?`), "Season %02d"},
+		{regexp.MustCompile(`(?i)All\.?Seasons?`), seasonFormat},
 	}
 
 	// Also pre-compile other patterns.
@@ -245,6 +250,7 @@ func getSortedSeasons(seasons map[int]bool) []int {
 // generateSeasonHash creates a unique hash for a season based on original hash.
 func generateSeasonHash(originalHash string, seasonNumber int) string {
 	source := fmt.Sprintf("%s-%d", originalHash, seasonNumber)
-	hash := md5.Sum([]byte(source))
+	hash := md5.Sum([]byte(source)) //nolint:gosec // derives a stable ID persisted as the season infohash; not security
+
 	return hex.EncodeToString(hash[:])
 }

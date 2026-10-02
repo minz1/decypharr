@@ -150,7 +150,7 @@ func drainRange(ctx context.Context, r io.ReaderAt, off, length int64) error {
 
 type stubMountManager struct{}
 
-func (s *stubMountManager) Refresh(dirs []string) error {
+func (s *stubMountManager) Refresh(_ []string) error {
 	return nil
 }
 
@@ -158,7 +158,7 @@ func NewStubMountManager() MountManager {
 	return &stubMountManager{}
 }
 
-func (s *stubMountManager) Start(ctx context.Context) error {
+func (s *stubMountManager) Start(_ context.Context) error {
 	return nil
 }
 func (s *stubMountManager) Stop() error {

@@ -12,7 +12,7 @@ import (
 
 // SwitchTorrent moves a torrent from one debrid to another.
 func (m *Manager) SwitchTorrent(
-	ctx context.Context,
+	_ context.Context,
 	infohash, target string,
 	keepOld, waitComplete bool,
 ) (*storage.SwitcherJob, error) {
@@ -89,7 +89,7 @@ func (m *Manager) executeMigration(job *storage.SwitcherJob, torrent *storage.En
 		}
 	}
 
-	if addOrUpdateErr := m.AddOrUpdate(torrent, func(t *storage.Entry) {
+	if addOrUpdateErr := m.AddOrUpdate(torrent, func(_ *storage.Entry) {
 		m.InvalidateEntryCache()
 	}); addOrUpdateErr != nil {
 		job.Status = storage.SwitcherStatusFailed

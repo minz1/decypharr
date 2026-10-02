@@ -9,6 +9,7 @@ import (
 )
 
 func TestQueueDeleteKeepsFilesWhenNotRequested(t *testing.T) {
+	t.Parallel()
 	queue, entry, downloadedPath := newQueueDeleteTest(t)
 
 	if err := queue.Delete(entry.InfoHash, false, nil); err != nil {
@@ -23,6 +24,7 @@ func TestQueueDeleteKeepsFilesWhenNotRequested(t *testing.T) {
 }
 
 func TestQueueDeleteRemovesFilesWhenRequested(t *testing.T) {
+	t.Parallel()
 	queue, entry, downloadedPath := newQueueDeleteTest(t)
 
 	if err := queue.Delete(entry.InfoHash, true, nil); err != nil {

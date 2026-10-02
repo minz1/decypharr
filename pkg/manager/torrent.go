@@ -2,6 +2,7 @@ package manager
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -35,15 +36,21 @@ func (m *Manager) syncTorrents(ctx context.Context) {
 
 // Refresh configuration constants.
 const (
-	refreshBatchSize       = 500
-	refreshWriteBatchSize  = 50
-	refreshFlushInterval   = 3 * time.Second
-	refreshMaxWorkers      = 50 // Capped to avoid overwhelming debrid APIs
-	refreshMinWorkers      = 5
-	refreshDeleteWorkers   = 10
-	refreshWorkChanBuffer  = 100
-	refreshBatchChanBuffer = 50
+	refreshBatchSize      = 500
+	refreshWriteBatchSize = 50
+	refreshFlushInterval  = 3 * time.Second
+	refreshMaxWorkers     = 50 // Capped to avoid overwhelming debrid APIs
+	refreshMinWorkers     = 5
+	// refreshTorrentsPerWorker scales refresh workers with the batch size.
+	refreshTorrentsPerWorker = 10
+	refreshDeleteWorkers     = 10
+	refreshWorkChanBuffer    = 100
+	refreshBatchChanBuffer   = 50
 )
+
+// errSyncSkipped reports a provider torrent that cannot be synced yet: its
+// provider client is gone or its files are still missing download links.
+var errSyncSkipped = errors.New("torrent not ready to sync")
 
 // refreshTorrents refreshes torrents from a specific debrid service.
 // Returns an error if the refresh fails.
@@ -88,13 +95,14 @@ func (m *Manager) doRefreshTorrents(_ context.Context, provider string, debridCl
 	}
 
 	// Detect changes by streaming through cached entries
-	newTorrents, torrentsToUpdate, torrentsToDelete, err := m.detectTorrentChanges(provider, remoteTorrentsByHash)
+	changes, err := m.detectTorrentChanges(provider, remoteTorrentsByHash)
 	if err != nil {
 		return err
 	}
+	newTorrents, torrentsToUpdate := changes.fetch, changes.update
 
 	// Handle deletions
-	m.handleTorrentDeletions(torrentsToDelete)
+	m.handleTorrentDeletions(changes.delete)
 
 	// Batch update torrents with changed placements (run concurrently)
 	var updateWg sync.WaitGroup
@@ -121,60 +129,63 @@ func (m *Manager) doRefreshTorrents(_ context.Context, provider string, debridCl
 	return nil
 }
 
+// torrentChanges is what one provider listing changes in storage.
+type torrentChanges struct {
+	fetch  []*types.Torrent // new or changed on the provider; re-fetched in full
+	update []*storage.Entry // lost this provider but keep others
+	delete []string         // lost their last provider
+}
+
+// classify records how entry changes given the provider's current listing
+// of it (nil when the provider no longer lists it).
+func (c *torrentChanges) classify(provider string, entry *storage.Entry, current *types.Torrent) {
+	placement, onProvider := entry.Providers[provider]
+	switch {
+	case !onProvider:
+		if current != nil {
+			c.fetch = append(c.fetch, current)
+		}
+	case current == nil:
+		entry.RemoveProvider(provider, nil)
+		if len(entry.Providers) == 0 {
+			c.delete = append(c.delete, entry.InfoHash)
+		} else {
+			c.update = append(c.update, entry)
+		}
+	case placement.NeedsUpdate(current):
+		// The listing lacks full metadata (files, downloadedAt), so re-fetch;
+		// processNewTorrents only updates the placement of known entries.
+		c.fetch = append(c.fetch, current)
+	}
+}
+
 // detectTorrentChanges streams through cached entries and detects what changed.
-func (m *Manager) detectTorrentChanges(provider string, remoteTorrentsByHash map[string]*types.Torrent) (
-	newTorrents []*types.Torrent,
-	torrentsToUpdate []*storage.Entry,
-	torrentsToDelete []string,
-	err error,
-) {
-	newTorrents = make([]*types.Torrent, 0, 100)
-	torrentsToUpdate = make([]*storage.Entry, 0, 100)
-	torrentsToDelete = make([]string, 0, 10)
+func (m *Manager) detectTorrentChanges(
+	provider string,
+	remoteTorrentsByHash map[string]*types.Torrent,
+) (torrentChanges, error) {
+	var changes torrentChanges
 	cachedInfoHashes := make(map[string]bool, len(remoteTorrentsByHash))
 
-	err = m.storage.ForEachBatch(refreshBatchSize, func(batch []*storage.Entry) error {
+	err := m.storage.ForEachBatch(refreshBatchSize, func(batch []*storage.Entry) error {
 		for _, entry := range batch {
 			cachedInfoHashes[entry.InfoHash] = true
-
-			currentTorrent, onRemote := remoteTorrentsByHash[entry.InfoHash]
-			oldPlacement, placementOnDebrid := entry.Providers[provider]
-
-			if placementOnDebrid {
-				if !onRemote {
-					entry.RemoveProvider(provider, nil)
-					if len(entry.Providers) == 0 {
-						torrentsToDelete = append(torrentsToDelete, entry.InfoHash)
-					} else {
-						torrentsToUpdate = append(torrentsToUpdate, entry)
-					}
-				} else if oldPlacement.NeedsUpdate(currentTorrent) {
-					// currentTorrent has changes for this provider - update placement info
-					// But the issue is that currentTorrent may not have all the metadata we need to update the placement (e.g. downloadedAt, files etc)
-					// So we need to fetch the full torrent info from debrid to ensure we have all the metadata to update the placement correctly
-					// So let's just add it to the newTorrents list and let processNewTorrents handle the update logic - it will be smart enough to only update the placement info without overwriting other metadata
-					newTorrents = append(newTorrents, currentTorrent)
-				}
-			} else if onRemote {
-				newTorrents = append(newTorrents, currentTorrent)
-			}
+			changes.classify(provider, entry, remoteTorrentsByHash[entry.InfoHash])
 		}
 		return nil
 	})
-
 	if err != nil {
 		m.logger.Error().Err(err).Msg("Failed to stream cached remote")
-		return nil, nil, nil, err
+		return torrentChanges{}, err
 	}
 
 	// Check for brand new torrents (not in cache at all)
 	for infohash, t := range remoteTorrentsByHash {
 		if !cachedInfoHashes[infohash] {
-			newTorrents = append(newTorrents, t)
+			changes.fetch = append(changes.fetch, t)
 		}
 	}
-
-	return newTorrents, torrentsToUpdate, torrentsToDelete, nil
+	return changes, nil
 }
 
 // handleTorrentDeletions processes torrent deletions concurrently.
@@ -221,14 +232,17 @@ func (m *Manager) processNewTorrents(provider string, newTorrents []*types.Torre
 	})
 
 	// Scale workers based on torrent count, but cap to avoid overwhelming APIs
-	workers := min(refreshMaxWorkers, max(refreshMinWorkers, len(newTorrents)/10))
+	workers := min(refreshMaxWorkers, max(refreshMinWorkers, len(newTorrents)/refreshTorrentsPerWorker))
 
 	for range workers {
 		processWg.Go(func() {
 			for t := range workChan {
-				if mt, err := m.processSyncTorrent(t); err != nil {
+				mt, err := m.processSyncTorrent(t)
+				switch {
+				case errors.Is(err, errSyncSkipped):
+				case err != nil:
 					m.logger.Error().Err(err).Str("debrid", provider).Msgf("Failed to process torrent %s", t.Id)
-				} else if mt != nil {
+				default:
 					batchChan <- mt
 				}
 				count := processed.Add(1)
@@ -309,7 +323,7 @@ func (m *Manager) processSyncTorrent(t *types.Torrent) (*storage.Entry, error) {
 	// GetReader the debrid client
 	client := m.ProviderClient(t.Debrid)
 	if client == nil {
-		return nil, nil
+		return nil, errSyncSkipped
 	}
 
 	// Check if files are complete - only make API call if needed
@@ -323,7 +337,7 @@ func (m *Manager) processSyncTorrent(t *types.Torrent) (*storage.Entry, error) {
 
 		// Re-check completion after update
 		if !isComplete(t.Files) {
-			return nil, nil
+			return nil, errSyncSkipped
 		}
 	}
 
@@ -337,38 +351,7 @@ func (m *Manager) processSyncTorrent(t *types.Torrent) (*storage.Entry, error) {
 	// or an in-memory cache, but storage.GetReader is likely fast (indexed by InfoHash)
 	mt, err := m.storage.Get(t.InfoHash)
 	if err != nil {
-		// Create new managed torrent
-		var magnet *utils.Magnet
-		if t.Magnet == nil || t.Magnet.Link == "" {
-			magnet = utils.ConstructMagnet(t.InfoHash, t.Name)
-		} else {
-			magnet = t.Magnet
-		}
-		size := t.Size
-		if size == 0 {
-			size = t.Bytes
-		}
-		mt = &storage.Entry{
-			Protocol:         config.ProtocolTorrent,
-			InfoHash:         t.InfoHash,
-			Name:             t.Name,
-			OriginalFilename: t.OriginalFilename,
-			Size:             size,
-			Bytes:            size,
-			Magnet:           magnet.Link,
-			ActiveProvider:   t.Debrid,
-			Providers:        make(map[string]*storage.ProviderEntry),
-			Files:            make(map[string]*storage.File),
-			Status:           t.Status,
-			Progress:         t.Progress,
-			Speed:            t.Speed,
-			Seeders:          t.Seeders,
-			IsComplete:       len(t.Files) > 0,
-			Bad:              false,
-			AddedOn:          addedOn,
-			CreatedAt:        addedOn,
-			UpdatedAt:        time.Now(),
-		}
+		mt = newSyncedEntry(t, addedOn)
 	}
 
 	// Populate global Files metadata (only if empty)
@@ -394,10 +377,8 @@ func (m *Manager) processSyncTorrent(t *types.Torrent) (*storage.Entry, error) {
 	}
 
 	// If this is the first placement or the only one, make it active
-	if mt.ActiveProvider == "" || len(mt.Providers) == 1 {
-		if t.Status == types.TorrentStatusDownloaded {
-			_ = mt.ActivatePlacement(t.Debrid)
-		}
+	if (mt.ActiveProvider == "" || len(mt.Providers) == 1) && t.Status == types.TorrentStatusDownloaded {
+		_ = mt.ActivatePlacement(t.Debrid)
 	}
 
 	// confirm everything is complete
@@ -410,6 +391,40 @@ func (m *Manager) processSyncTorrent(t *types.Torrent) (*storage.Entry, error) {
 	}
 
 	return mt, nil
+}
+
+// newSyncedEntry builds the managed entry for a provider torrent that storage
+// does not know yet.
+func newSyncedEntry(t *types.Torrent, addedOn time.Time) *storage.Entry {
+	magnet := t.Magnet
+	if magnet == nil || magnet.Link == "" {
+		magnet = utils.ConstructMagnet(t.InfoHash, t.Name)
+	}
+	size := t.Size
+	if size == 0 {
+		size = t.Bytes
+	}
+	return &storage.Entry{
+		Protocol:         config.ProtocolTorrent,
+		InfoHash:         t.InfoHash,
+		Name:             t.Name,
+		OriginalFilename: t.OriginalFilename,
+		Size:             size,
+		Bytes:            size,
+		Magnet:           magnet.Link,
+		ActiveProvider:   t.Debrid,
+		Providers:        make(map[string]*storage.ProviderEntry),
+		Files:            make(map[string]*storage.File),
+		Status:           t.Status,
+		Progress:         t.Progress,
+		Speed:            t.Speed,
+		Seeders:          t.Seeders,
+		IsComplete:       len(t.Files) > 0,
+		Bad:              false,
+		AddedOn:          addedOn,
+		CreatedAt:        addedOn,
+		UpdatedAt:        time.Now(),
+	}
 }
 
 // refreshTorrent refreshes a single torrent from its active debrid.
@@ -440,14 +455,16 @@ func (m *Manager) refreshTorrent(infohash string) (*storage.Entry, error) {
 	}
 
 	entry, err := m.processSyncTorrent(debridTorrent)
+	if errors.Is(err, errSyncSkipped) {
+		// Nothing new to store; callers dereference the result, so hand back
+		// the stored entry rather than nil.
+		return torrent, nil
+	}
 	if err != nil {
 		return nil, err
 	}
-	// Store updated entry in storage
-	if entry != nil {
-		if addOrUpdateErr := m.storage.AddOrUpdate(entry); addOrUpdateErr != nil {
-			return nil, addOrUpdateErr
-		}
+	if addOrUpdateErr := m.storage.AddOrUpdate(entry); addOrUpdateErr != nil {
+		return nil, addOrUpdateErr
 	}
 	return entry, nil
 }

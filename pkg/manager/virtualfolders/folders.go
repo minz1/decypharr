@@ -51,24 +51,7 @@ nextFolder:
 
 		folder := compiledVirtualFolder{definition: definition}
 		for _, condition := range definition.Conditions {
-			filter := directoryFilter{definition: condition}
-			var err error
-			switch condition.Field {
-			case config.VirtualFolderFieldEntryName, config.VirtualFolderFieldFileName, config.VirtualFolderFieldCategory:
-				if condition.Operator == config.VirtualFolderOperatorMatchesRegex || condition.Operator == config.VirtualFolderOperatorNotMatchesRegex {
-					pattern := condition.Value
-					if !condition.CaseSensitive {
-						pattern = "(?i:" + pattern + ")"
-					}
-					filter.regex, err = regexp.Compile(pattern)
-				}
-			case config.VirtualFolderFieldSize:
-				filter.sizeThreshold, err = config.ParseSize(condition.Value)
-			case config.VirtualFolderFieldAdded:
-				filter.ageThreshold, err = utils.ParseDuration(condition.Value)
-			case config.VirtualFolderFieldFileCount:
-				filter.countThreshold, err = strconv.Atoi(condition.Value)
-			}
+			filter, err := compileCondition(condition)
 			if err != nil {
 				errs = append(errs, fmt.Errorf("virtual folder %q condition %s/%s: %w", definition.Name, condition.Field, condition.Operator, err))
 				continue nextFolder
@@ -80,6 +63,30 @@ nextFolder:
 		compiled.folders = append(compiled.folders, definition.Name)
 	}
 	return compiled, errors.Join(errs...)
+}
+
+// compileCondition parses a condition's value once for matching.
+func compileCondition(condition config.VirtualFolderCondition) (directoryFilter, error) {
+	filter := directoryFilter{definition: condition}
+	var err error
+	switch condition.Field {
+	case config.VirtualFolderFieldEntryName, config.VirtualFolderFieldFileName, config.VirtualFolderFieldCategory:
+		if condition.Operator == config.VirtualFolderOperatorMatchesRegex ||
+			condition.Operator == config.VirtualFolderOperatorNotMatchesRegex {
+			pattern := condition.Value
+			if !condition.CaseSensitive {
+				pattern = "(?i:" + pattern + ")"
+			}
+			filter.regex, err = regexp.Compile(pattern)
+		}
+	case config.VirtualFolderFieldSize:
+		filter.sizeThreshold, err = config.ParseSize(condition.Value)
+	case config.VirtualFolderFieldAdded:
+		filter.ageThreshold, err = utils.ParseDuration(condition.Value)
+	case config.VirtualFolderFieldFileCount:
+		filter.countThreshold, err = strconv.Atoi(condition.Value)
+	}
+	return filter, err
 }
 
 func (cf *Folders) Names() []string {

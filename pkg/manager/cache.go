@@ -52,7 +52,8 @@ func (e *EntryCache) refreshEntry(name string) EntryCacheItem {
 	result, _, _ := e.refreshing.Do(name, func() (any, error) {
 		return e._refreshEntry(name), nil
 	})
-	return result.(EntryCacheItem)
+	item, _ := result.(EntryCacheItem) // always an EntryCacheItem; zero value on the impossible miss
+	return item
 }
 
 func (e *EntryCache) _refreshEntry(name string) EntryCacheItem {
