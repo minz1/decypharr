@@ -94,7 +94,7 @@ func TestRAR5HeaderSizesAndCompression(t *testing.T) {
 				t.Fatalf("header size=%d packed=%d remaining=%d error=%v", size, packed, reader.Len(), err)
 			}
 			stream := &rarReader{ctx: t.Context(), currentSegmentData: append(bytes.Clone(raw), 0xaa)}
-			streamHeader, streamSize, _, err := parser.readRAR5HeaderFromStream(stream)
+			streamHeader, streamSize, _, err := parser.readRAR5Header(stream)
 			if err != nil || streamSize != size || !bytes.Equal(streamHeader.Data, header.Data) {
 				t.Fatalf("stream header size=%d error=%v", streamSize, err)
 			}
