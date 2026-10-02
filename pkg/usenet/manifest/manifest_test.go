@@ -347,20 +347,16 @@ func decodeLegacy(t *testing.T, source string) *manifest.Manifest {
 	return result
 }
 
-var benchmarkResult *manifest.Manifest
-var legacyBenchmarkResult *nzbparser.Nzb
-
 func BenchmarkDecode(b *testing.B) {
 	source := generatedNZB(64, 128)
 	b.ReportAllocs()
 	b.SetBytes(int64(len(source)))
 
 	for b.Loop() {
-		decoded, err := manifest.Decode(strings.NewReader(source))
-		if err != nil {
+		// b.Loop keeps the result alive; no sink variable needed.
+		if _, err := manifest.Decode(strings.NewReader(source)); err != nil {
 			b.Fatal(err)
 		}
-		benchmarkResult = decoded
 	}
 }
 
@@ -370,11 +366,9 @@ func BenchmarkLegacyDecode(b *testing.B) {
 	b.SetBytes(int64(len(source)))
 
 	for b.Loop() {
-		decoded, err := nzbparser.Parse(strings.NewReader(source))
-		if err != nil {
+		if _, err := nzbparser.Parse(strings.NewReader(source)); err != nil {
 			b.Fatal(err)
 		}
-		legacyBenchmarkResult = decoded
 	}
 }
 

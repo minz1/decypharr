@@ -112,17 +112,15 @@ func NewFS(
 		retention = reader.RetentionRewind
 	}
 	f := &FS{
-		readerSettings: readerSettings{
-			ctx:               ctx,
-			client:            client,
-			maxConcurrent:     maxConcurrent,
-			prefetchSize:      prefetchSize,
-			bodyPipelineDepth: usenetConfig.BodyPipelineDepth,
-			diskPath:          usenetConfig.DiskPath,
-			retention:         retention,
-			logger:            logger,
-		},
-		volumes: xsync.NewMap[string, *types.Volume](),
+		ctx:               ctx,
+		client:            client,
+		maxConcurrent:     maxConcurrent,
+		prefetchSize:      prefetchSize,
+		bodyPipelineDepth: usenetConfig.BodyPipelineDepth,
+		diskPath:          usenetConfig.DiskPath,
+		retention:         retention,
+		logger:            logger,
+		volumes:           xsync.NewMap[string, *types.Volume](),
 	}
 
 	// Apply options

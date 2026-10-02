@@ -7,9 +7,9 @@ import (
 )
 
 // TestEncryptedReadPastEOFReportsEOF: RAR5 AES data is always block-aligned,
-// so a read crossing the end of such a file must report io.EOF with the
+// so a read crossing the end of such a file must report [io.EOF] with the
 // short count, exactly like the plain path; (n < len(p), nil) breaks the
-// io.ReaderAt contract.
+// [io.ReaderAt] contract.
 func TestEncryptedReadPastEOFReportsEOF(t *testing.T) {
 	t.Parallel()
 	sr := newTestReader(t, 2) // 2000 bytes: a multiple of the AES block

@@ -15,20 +15,6 @@ import (
 	"github.com/sirrobot01/decypharr/internal/nntp"
 )
 
-func (sr *StreamingReader) acquireDecryptionBuffer(size int) *[]byte {
-	bufPtr, ok := sr.decryptBufs.Get().(*[]byte)
-	if !ok || cap(*bufPtr) < size {
-		buf := make([]byte, size)
-		return &buf
-	}
-	*bufPtr = (*bufPtr)[:size]
-	return bufPtr
-}
-
-func (sr *StreamingReader) releaseDecryptionBuffer(buf *[]byte) {
-	sr.decryptBufs.Put(buf)
-}
-
 // StreamingReader provides [io.ReaderAt] over NNTP segments with automatic
 // caching, prefetching, and error recovery.
 //
@@ -556,6 +542,20 @@ func (sr *StreamingReader) readAtEncrypted(ctx context.Context, cur *Cursor, p [
 	default:
 		return copied, io.ErrUnexpectedEOF
 	}
+}
+
+func (sr *StreamingReader) acquireDecryptionBuffer(size int) *[]byte {
+	bufPtr, ok := sr.decryptBufs.Get().(*[]byte)
+	if !ok || cap(*bufPtr) < size {
+		buf := make([]byte, size)
+		return &buf
+	}
+	*bufPtr = (*bufPtr)[:size]
+	return bufPtr
+}
+
+func (sr *StreamingReader) releaseDecryptionBuffer(buf *[]byte) {
+	sr.decryptBufs.Put(buf)
 }
 
 // decryptInPlace decrypts data using AES-256-CBC.
