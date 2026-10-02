@@ -30,8 +30,8 @@ type QueueResponseScheme struct {
 }
 
 type QueueSchema struct {
-	SeriesId              int    `json:"seriesId"`
-	EpisodeId             int    `json:"episodeId"`
+	SeriesID              int    `json:"seriesId"`
+	EpisodeID             int    `json:"episodeId"`
 	SeasonNumber          int    `json:"seasonNumber"`
 	Title                 string `json:"title"`
 	Status                string `json:"status"`
@@ -41,47 +41,43 @@ type QueueSchema struct {
 		Title    string   `json:"title"`
 		Messages []string `json:"messages"`
 	} `json:"statusMessages"`
-	DownloadId                          string `json:"downloadId"`
+	DownloadID                          string `json:"downloadId"`
 	Protocol                            string `json:"protocol"`
 	DownloadClient                      string `json:"downloadClient"`
 	DownloadClientHasPostImportCategory bool   `json:"downloadClientHasPostImportCategory"`
 	Indexer                             string `json:"indexer"`
 	OutputPath                          string `json:"outputPath"`
 	EpisodeHasFile                      bool   `json:"episodeHasFile"`
-	Id                                  int    `json:"id"`
+	ID                                  int    `json:"id"`
 }
 
-// catalogMatchers are the predicates for the built-in cleanup rules, keyed by
+// matchCatalogRule applies the built-in cleanup rule id, a
 // config.QueueCleanupRule.ID. text is the lowercased join of a queue item's
-// status message titles and messages.
-var catalogMatchers = map[string]func(item QueueSchema, text string) bool{
-	"failed_download": func(item QueueSchema, _ string) bool {
-		return strings.EqualFold(item.Status, "failed")
-	},
-	"title_mismatch": func(_ QueueSchema, text string) bool {
-		return strings.Contains(text, "title mismatch")
-	},
-	"matched_by_id": func(_ QueueSchema, text string) bool {
-		return strings.Contains(text, "matched to") && strings.Contains(text, "by id")
-	},
-	"unable_to_parse": func(_ QueueSchema, text string) bool {
-		return strings.Contains(text, "unable to parse download")
-	},
-	"no_eligible_files": func(_ QueueSchema, text string) bool {
-		return strings.Contains(text, "no files found are eligible")
-	},
-	"episodes_missing": func(_ QueueSchema, text string) bool {
-		return strings.Contains(text, "not imported or missing from the release")
-	},
-	"file_empty": func(_ QueueSchema, text string) bool {
-		return strings.Contains(text, "file is empty")
-	},
-	"invalid_local_path": func(_ QueueSchema, text string) bool {
-		return strings.Contains(text, "is not a valid local path")
-	},
-	"not_grabbed": func(_ QueueSchema, text string) bool {
-		return strings.Contains(text, "not in a category")
-	},
+// status message titles and messages. The second result is false for an
+// unknown id.
+func matchCatalogRule(id string, item QueueSchema, text string) (bool, bool) {
+	switch id {
+	case "failed_download":
+		return strings.EqualFold(item.Status, "failed"), true
+	case "title_mismatch":
+		return strings.Contains(text, "title mismatch"), true
+	case "matched_by_id":
+		return strings.Contains(text, "matched to") && strings.Contains(text, "by id"), true
+	case "unable_to_parse":
+		return strings.Contains(text, "unable to parse download"), true
+	case "no_eligible_files":
+		return strings.Contains(text, "no files found are eligible"), true
+	case "episodes_missing":
+		return strings.Contains(text, "not imported or missing from the release"), true
+	case "file_empty":
+		return strings.Contains(text, "file is empty"), true
+	case "invalid_local_path":
+		return strings.Contains(text, "is not a valid local path"), true
+	case "not_grabbed":
+		return strings.Contains(text, "not in a category"), true
+	default:
+		return false, false
+	}
 }
 
 func (s *Service) Queue(ctx context.Context, name string) ([]QueueSchema, error) {
@@ -122,11 +118,13 @@ func (s *Service) CleanupQueue(ctx context.Context, name string) error {
 	for _, item := range items {
 		switch resolveQueueAction(item, rules) {
 		case QueueActionBlocklist:
-			blocklist = append(blocklist, item.Id)
+			blocklist = append(blocklist, item.ID)
 		case QueueActionBlocklistResearch:
-			blocklistResearch = append(blocklistResearch, item.Id)
+			blocklistResearch = append(blocklistResearch, item.ID)
 		case QueueActionImport:
-			manualImports = append(manualImports, item.DownloadId)
+			manualImports = append(manualImports, item.DownloadID)
+		case QueueActionNone:
+			// Nothing to do.
 		}
 	}
 
@@ -172,9 +170,7 @@ func resolveQueueAction(item QueueSchema, rules []config.QueueCleanupRule) Queue
 	for _, rule := range rules {
 		matched := false
 		if rule.ID != "" {
-			if match, ok := catalogMatchers[rule.ID]; ok {
-				matched = match(item, text)
-			}
+			matched, _ = matchCatalogRule(rule.ID, item, text)
 		} else if needle := strings.ToLower(strings.TrimSpace(rule.Match)); needle != "" {
 			matched = strings.Contains(text, needle)
 		}
@@ -184,6 +180,8 @@ func resolveQueueAction(item QueueSchema, rules []config.QueueCleanupRule) Queue
 		switch QueueAction(rule.Action) {
 		case QueueActionImport, QueueActionBlocklist, QueueActionBlocklistResearch:
 			return QueueAction(rule.Action)
+		case QueueActionNone:
+			fallthrough
 		default:
 			return QueueActionNone
 		}
@@ -205,8 +203,8 @@ func (s *Service) removeQueueItems(ctx context.Context, name string, ids []int, 
 		"changeCategory":   {"false"},
 	}
 	payload := struct {
-		Ids []int `json:"ids"`
-	}{Ids: ids}
+		IDs []int `json:"ids"`
+	}{IDs: ids}
 
 	resp, err := s.mutate(ctx, instance, http.MethodDelete, "api/v3/queue/bulk?"+query.Encode(), payload, nil)
 	if err != nil {

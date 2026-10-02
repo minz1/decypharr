@@ -1,28 +1,26 @@
-package storage
+package storage_test
 
 import (
 	"testing"
 
-	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
-// File IDs must be assigned once and survive entries being rebuilt from
+// storage.File IDs must be assigned once and survive entries being rebuilt from
 // provider responses — the .strm URLs written from them live for years.
 func TestFileIDsAreStableAcrossUpdates(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
-
-	s, err := NewStorage(t.TempDir())
+	t.Parallel()
+	s, err := storage.NewStorage(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
 
 	infohash := "aabbccddeeff00112233445566778899aabbccdd"
-	entry := &Entry{
+	entry := &storage.Entry{
 		InfoHash: infohash,
 		Name:     "Movie.2023",
-		Files: map[string]*File{
+		Files: map[string]*storage.File{
 			"Movie.2023.mkv": {Name: "Movie.2023.mkv", Size: 100, InfoHash: infohash},
 		},
 	}
@@ -35,10 +33,10 @@ func TestFileIDsAreStableAcrossUpdates(t *testing.T) {
 	}
 
 	// Same entry rebuilt without IDs, plus a new file.
-	rebuilt := &Entry{
+	rebuilt := &storage.Entry{
 		InfoHash: infohash,
 		Name:     "Movie.2023",
-		Files: map[string]*File{
+		Files: map[string]*storage.File{
 			"Movie.2023.mkv": {Name: "Movie.2023.mkv", Size: 100, InfoHash: infohash},
 			"Movie.2023.srt": {Name: "Movie.2023.srt", Size: 10, InfoHash: infohash},
 		},

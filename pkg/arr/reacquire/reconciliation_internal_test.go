@@ -1,0 +1,157 @@
+package reacquire
+
+import (
+	"context"
+	"errors"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sirrobot01/decypharr/pkg/arr"
+)
+
+type reconciliationHandler func(context.Context, Job, JobProgress) error
+
+func (handler reconciliationHandler) Reacquire(ctx context.Context, job Job, progress JobProgress) error {
+	return handler(ctx, job, progress)
+}
+
+func TestReconciliationStopsAndRetainsDuplicateProtection(t *testing.T) {
+	t.Parallel()
+	for _, scenario := range []string{"expired before dispatch", "expired during reconciliation", "attempts exhausted"} {
+		t.Run(scenario, func(t *testing.T) {
+			t.Parallel()
+			runReconciliationStop(t, scenario)
+		})
+	}
+}
+
+// runReconciliationStop drives one way an unconfirmed mutation stops for an operator.
+func runReconciliationStop(t *testing.T, scenario string) {
+	t.Helper()
+	directory := t.TempDir()
+	service, err := NewService(ServiceOptions{Directory: directory})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = service.Close() })
+	base := time.Now().UTC()
+	var elapsed atomic.Int64
+	service.now = func() time.Time { return base.Add(time.Duration(elapsed.Load())) }
+	if startErr := service.Start(t.Context()); startErr != nil {
+		t.Fatal(startErr)
+	}
+	request, job := queueAttemptedSearch(t, service, base)
+	if scenario == "expired before dispatch" {
+		elapsed.Store(int64(reconciliationTimeout))
+	}
+	calls := 0
+	handler := reconciliationHandler(func(context.Context, Job, JobProgress) error {
+		calls++
+		if scenario == "attempts exhausted" {
+			return errors.New("dispatch budget exhausted")
+		}
+		elapsed.Store(int64(reconciliationTimeout))
+		return arr.UnknownMutationOutcome(errors.New("receipt endpoint unavailable"), time.Second)
+	})
+	if !service.runJob(t.Context(), handler, job) {
+		t.Fatal("could not save stopped job")
+	}
+	wantCalls := 1
+	if scenario == "expired before dispatch" {
+		wantCalls = 0
+	}
+	if calls != wantCalls {
+		t.Fatalf("handler calls = %d, want %d", calls, wantCalls)
+	}
+	assertStoppedJobHeld(t, service, request, job, base, &elapsed)
+	if closeErr := service.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	assertStoppedJobSurvivesRestart(t, directory, request, job)
+}
+
+// queueAttemptedSearch queues a job whose movie search was dispatched once at
+// base and never confirmed.
+func queueAttemptedSearch(t *testing.T, service *Service, base time.Time) (Request, Job) {
+	t.Helper()
+	binding := Binding{
+		ArrName: "radarr", ArrType: arr.Radarr, ArrInstanceFingerprint: testArrInstanceFingerprint,
+		EntryID: "entry", EntryFileID: "file", DownloadID: "download", ArrFileID: 7,
+		LibraryPath: "/library/movie.mkv", MovieID: 7, Confidence: ConfidenceExactPath,
+	}
+	if upsertBindingErr := service.UpsertBinding(binding); upsertBindingErr != nil {
+		t.Fatal(upsertBindingErr)
+	}
+	request := Request{EntryID: binding.EntryID, FileID: binding.EntryFileID, Cause: CauseStream}
+	created, err := service.Reacquire(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, acknowledgeJobErr := service.AcknowledgeJob(created.ID); !errors.Is(acknowledgeJobErr, ErrJobNotBlocked) {
+		t.Fatalf("acknowledge queued job: %v", acknowledgeJobErr)
+	}
+	job, err := service.updateJobDurable(created.ID, StatusQueued, func(job *Job) {
+		job.Mutations = []Mutation{{Key: "movie_search:7", Kind: MutationMovieSearch, State: MutationIntent,
+			CommandName: "MoviesSearch", MovieIDs: []int{7}, IntentAt: base,
+			LastDispatchedAt: base, Attempts: 1}}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return request, job
+}
+
+// assertStoppedJobHeld checks a stopped job keeps its mutation evidence, is
+// never pruned or redispatched, and still owns its duplicate key.
+func assertStoppedJobHeld(
+	t *testing.T,
+	service *Service,
+	request Request,
+	job Job,
+	base time.Time,
+	elapsed *atomic.Int64,
+) {
+	t.Helper()
+	stopped, _ := service.Job(job.ID)
+	if stopped.Status != StatusNeedsAttention || !stopped.RetryAt.IsZero() || !stopped.CompletedAt.IsZero() {
+		t.Fatalf("stopped job = %#v", stopped)
+	}
+	if stopped.Mutations[0].State != MutationIntent || !stopped.Mutations[0].IntentAt.Equal(base) {
+		t.Fatalf("mutation evidence changed: %#v", stopped.Mutations)
+	}
+	elapsed.Store(int64(2 * failureRetention))
+	service.maintainJobs()
+	if _, ok := service.nextJob(); ok {
+		t.Fatal("stopped job remains dispatchable")
+	}
+	duplicate, err := service.Reacquire(request)
+	if err != nil || duplicate.ID != job.ID {
+		t.Fatalf("duplicate = %v, %v", duplicate, err)
+	}
+	if _, deleteJobsErr := service.DeleteJobs([]string{job.ID}); !errors.Is(deleteJobsErr, ErrJobNotTerminal) {
+		t.Fatalf("delete stopped job: %v", deleteJobsErr)
+	}
+}
+
+// assertStoppedJobSurvivesRestart checks the stop persists until an operator
+// acknowledges it, after which a new request gets a new job.
+func assertStoppedJobSurvivesRestart(t *testing.T, directory string, request Request, job Job) {
+	t.Helper()
+	reopened := startTestService(t, directory, nil)
+	duplicate, err := reopened.Reacquire(request)
+	if err != nil || duplicate.ID != job.ID || duplicate.Status != StatusNeedsAttention {
+		t.Fatalf("restored duplicate = %v, %v", duplicate, err)
+	}
+	if _, ok := reopened.nextJob(); ok {
+		t.Fatal("restart resumes stopped job")
+	}
+	acknowledged, err := reopened.AcknowledgeJob(job.ID)
+	if err != nil || acknowledged.Status != StatusCancelled || len(acknowledged.Mutations) != 1 {
+		t.Fatalf("acknowledge = %#v, %v", acknowledged, err)
+	}
+	fresh, err := reopened.Reacquire(request)
+	if err != nil || fresh.ID == job.ID {
+		t.Fatalf("new request = %v, %v", fresh, err)
+	}
+}

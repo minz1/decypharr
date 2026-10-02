@@ -112,6 +112,7 @@ func (s *Storage) ListRepairRuns() ([]*RepairRun, error) {
 	err := s.repairRuns.ForEach(func(key string, value []byte) error {
 		var run RepairRun
 		if err := json.Unmarshal(value, &run); err != nil {
+			s.skipUndecodable("repair run", key, err)
 			return nil
 		}
 		if run.ID == "" {
@@ -260,6 +261,8 @@ func (h *EntryHealth) IsDue(now time.Time, recheck time.Duration) bool {
 	switch h.Status {
 	case HealthHealthy, HealthUnsupported:
 		// fall through to staleness check
+	case HealthUnknown, HealthBroken, HealthRepairing, HealthStale:
+		return true
 	default:
 		return true
 	}
@@ -281,6 +284,7 @@ func (s *Storage) SaveEntryHealth(state *EntryHealth) error {
 	}
 	// Index the status so CountEntryHealthByStatus can build its histogram
 	// straight from the in-memory index without decoding every record.
+	defer s.invalidateHealthCounts()
 	return s.repairState.Put(state.EntryName, data, &appendstore.PutOptions{Attributes: map[string]string{
 		attributeStatus: string(state.Status),
 	}})
@@ -308,6 +312,7 @@ func (s *Storage) ForEachEntryHealth(fn func(*EntryHealth) error) error {
 	return s.repairState.ForEach(func(key string, value []byte) error {
 		var state EntryHealth
 		if err := json.Unmarshal(value, &state); err != nil {
+			s.skipUndecodable("entry health", key, err)
 			return nil
 		}
 		if state.EntryName == "" {
@@ -321,6 +326,7 @@ func (s *Storage) DeleteEntryHealth(entryName string) error {
 	if entryName == "" {
 		return nil
 	}
+	defer s.invalidateHealthCounts()
 	if err := s.repairState.Delete(entryName); err != nil && !errors.Is(err, appendstore.ErrKeyNotFound) {
 		return fmt.Errorf("delete health for %q: %w", entryName, err)
 	}
@@ -446,6 +452,14 @@ func (s *Storage) CountEntryHealthByStatus() map[HealthStatus]int {
 	out := make(map[HealthStatus]int, len(counts))
 	maps.Copy(out, counts)
 	return out
+}
+
+// invalidateHealthCounts drops the cached histogram so the next
+// CountEntryHealthByStatus reflects the mutation that just happened.
+func (s *Storage) invalidateHealthCounts() {
+	s.healthCountsMu.Lock()
+	s.healthCounts = nil
+	s.healthCountsMu.Unlock()
 }
 
 // EntryItemRepairFingerprint produces a deterministic hash of the file set

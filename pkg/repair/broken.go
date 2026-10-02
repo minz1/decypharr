@@ -30,30 +30,27 @@ func (r *Service) collectBrokenHealths(
 		if h == nil || h.Status != storage.HealthBroken {
 			return nil
 		}
-		if len(wanted) > 0 {
-			if _, ok := wanted[h.EntryName]; !ok {
-				return nil
-			}
+		if _, ok := wanted[h.EntryName]; len(wanted) > 0 && !ok {
+			return nil
 		}
-		if requireArrFile {
-			if len(h.BrokenFiles) == 0 {
-				return nil
-			}
-			hasArrFile := false
-			for _, bf := range h.BrokenFiles {
-				if bf.ArrName != "" && bf.InfoHash != "" && bf.FileName != "" {
-					hasArrFile = true
-					break
-				}
-			}
-			if !hasArrFile {
-				return nil
-			}
+		if requireArrFile && !hasArrBrokenFile(h) {
+			return nil
 		}
 		healths.Store(h.EntryName, h)
 		return nil
 	})
 	return healths, len(wanted)
+}
+
+// hasArrBrokenFile reports whether any broken file carries enough Arr identity
+// for a reacquisition.
+func hasArrBrokenFile(h *storage.EntryHealth) bool {
+	for _, bf := range h.BrokenFiles {
+		if bf.ArrName != "" && bf.InfoHash != "" && bf.FileName != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Service) markBrokenHealthCleared(h *storage.EntryHealth, at time.Time) {
@@ -86,85 +83,82 @@ func isAlreadyClearedFileError(err error) bool {
 
 // FixBroken repairs persisted broken entries without probing them again.
 func (r *Service) FixBroken(ctx context.Context, names []string) (*storage.RepairRun, error) {
-	if ctx == nil {
-		ctx = r.parentCtx
-	}
-
 	healths, wantedCount := r.collectBrokenHealths(names, true)
 	if healths.Size() == 0 {
 		return nil, errors.New("no fixable broken entries")
 	}
-
-	r.mu.Lock()
-	if r.activeRunID != "" {
-		id := r.activeRunID
-		r.mu.Unlock()
-		return nil, fmt.Errorf("repair already running (run %s)", id)
-	}
-	runCtx, cancel := context.WithCancel(ctx)
-	source := "fix-broken:all"
-	if wantedCount > 0 {
-		source = fmt.Sprintf("fix-broken:%d", wantedCount)
-	}
-	run := &storage.RepairRun{
-		ID:        uuid.New().String(),
-		Trigger:   storage.RepairTriggerManual,
-		Status:    storage.RepairRunRunning,
-		Stage:     storage.RepairStageRepairing,
-		StartedAt: time.Now(),
-		Source:    source,
-	}
-	run.Stats.Candidates = healths.Size()
-	r.activeRunID = run.ID
-	r.cancelRun = cancel
-	r.mu.Unlock()
-
-	if err := r.storage.SaveRepairRun(run); err != nil {
-		r.mu.Lock()
-		r.activeRunID = ""
-		r.cancelRun = nil
-		r.mu.Unlock()
-		cancel()
-		return nil, fmt.Errorf("failed to persist repair run: %w", err)
-	}
-
-	r.runWG.Go(func() {
-		defer func() {
-			r.mu.Lock()
-			if r.activeRunID == run.ID {
-				r.activeRunID = ""
-				r.cancelRun = nil
-			}
-			r.mu.Unlock()
-			cancel()
-		}()
-		r.repairBroken(runCtx, run, healths)
-		if runCtx.Err() != nil {
-			r.finalizeRun(run, storage.RepairRunCancelled, "", "context cancelled during repair")
-			return
-		}
-		r.finalizeRun(run, storage.RepairRunCompleted, "", "")
-		r.logger.Info().
-			Str("run_id", run.ID).
-			Int("candidates", run.Stats.Candidates).
-			Int("repaired", run.Stats.Repaired).
-			Int("repair_failed", run.Stats.RepairFailed).
-			Msg("FixBroken: completed")
-	})
-	return run, nil
+	return r.startBrokenRun(ctx, healths, brokenRunSource("fix-broken", wantedCount), "repair", r.repairBroken)
 }
 
 // ClearBroken removes persisted broken files without calling Arr.
 func (r *Service) ClearBroken(ctx context.Context, names []string) (*storage.RepairRun, error) {
-	if ctx == nil {
-		ctx = r.parentCtx
-	}
-
 	healths, wantedCount := r.collectBrokenHealths(names, false)
 	if healths.Size() == 0 {
 		return nil, errors.New("no broken files to clear")
 	}
+	return r.startBrokenRun(ctx, healths, brokenRunSource("clear-broken", wantedCount), "clear", r.clearBroken)
+}
 
+// startBrokenRun runs apply over already-probed broken healths as a manual
+// run. verb names the work in the cancellation reason.
+func (r *Service) startBrokenRun(
+	ctx context.Context,
+	healths *xsync.Map[string, *storage.EntryHealth],
+	source, verb string,
+	apply func(context.Context, *storage.RepairRun, *xsync.Map[string, *storage.EntryHealth]),
+) (*storage.RepairRun, error) {
+	run := newManualRun(storage.RepairStageRepairing, source)
+	run.Stats.Candidates = healths.Size()
+	return r.startManualRun(ctx, run, func(runCtx context.Context) {
+		apply(runCtx, run, healths)
+		if runCtx.Err() != nil {
+			r.finalizeRun(run, storage.RepairRunCancelled, "", "context cancelled during "+verb)
+			return
+		}
+		r.finalizeRun(run, storage.RepairRunCompleted, "", "")
+		r.logger.Info().
+			Str("run_id", run.ID).
+			Str("source", source).
+			Int("candidates", run.Stats.Candidates).
+			Int("repaired", run.Stats.Repaired).
+			Int("cleared", run.Stats.Cleared).
+			Int("failed", run.Stats.RepairFailed).
+			Msg("Broken-entry run completed")
+	})
+}
+
+// brokenRunSource labels a fix/clear run by how many entries were requested.
+func brokenRunSource(action string, wantedCount int) string {
+	if wantedCount > 0 {
+		return fmt.Sprintf("%s:%d", action, wantedCount)
+	}
+	return action + ":all"
+}
+
+// newManualRun builds the record of a manually triggered run.
+func newManualRun(stage storage.RepairRunStage, source string) *storage.RepairRun {
+	return &storage.RepairRun{
+		ID:        uuid.New().String(),
+		Trigger:   storage.RepairTriggerManual,
+		Status:    storage.RepairRunRunning,
+		Stage:     stage,
+		StartedAt: time.Now(),
+		Source:    source,
+	}
+}
+
+// startManualRun claims the single active-run slot for run, persists it, and
+// runs work in the background with a context Stop and StopRun cancel. It fails
+// when another run is active or the run record cannot be saved. A nil ctx
+// falls back to the service's parent context.
+func (r *Service) startManualRun(
+	ctx context.Context,
+	run *storage.RepairRun,
+	work func(context.Context),
+) (*storage.RepairRun, error) {
+	if ctx == nil {
+		ctx = r.parentCtx
+	}
 	r.mu.Lock()
 	if r.activeRunID != "" {
 		id := r.activeRunID
@@ -172,19 +166,6 @@ func (r *Service) ClearBroken(ctx context.Context, names []string) (*storage.Rep
 		return nil, fmt.Errorf("repair already running (run %s)", id)
 	}
 	runCtx, cancel := context.WithCancel(ctx)
-	source := "clear-broken:all"
-	if wantedCount > 0 {
-		source = fmt.Sprintf("clear-broken:%d", wantedCount)
-	}
-	run := &storage.RepairRun{
-		ID:        uuid.New().String(),
-		Trigger:   storage.RepairTriggerManual,
-		Status:    storage.RepairRunRunning,
-		Stage:     storage.RepairStageRepairing,
-		StartedAt: time.Now(),
-		Source:    source,
-	}
-	run.Stats.Candidates = healths.Size()
 	r.activeRunID = run.ID
 	r.cancelRun = cancel
 	r.mu.Unlock()
@@ -208,18 +189,7 @@ func (r *Service) ClearBroken(ctx context.Context, names []string) (*storage.Rep
 			r.mu.Unlock()
 			cancel()
 		}()
-		r.clearBroken(runCtx, run, healths)
-		if runCtx.Err() != nil {
-			r.finalizeRun(run, storage.RepairRunCancelled, "", "context cancelled during clear")
-			return
-		}
-		r.finalizeRun(run, storage.RepairRunCompleted, "", "")
-		r.logger.Info().
-			Str("run_id", run.ID).
-			Int("candidates", run.Stats.Candidates).
-			Int("cleared", run.Stats.Cleared).
-			Int("clear_failed", run.Stats.RepairFailed).
-			Msg("ClearBroken: completed")
+		work(runCtx)
 	})
 	return run, nil
 }
@@ -230,7 +200,7 @@ func (r *Service) clearBroken(
 	healths *xsync.Map[string, *storage.EntryHealth],
 ) {
 	now := time.Now()
-	healths.Range(func(name string, h *storage.EntryHealth) bool {
+	healths.Range(func(_ string, h *storage.EntryHealth) bool {
 		if ctx != nil && ctx.Err() != nil {
 			return false
 		}

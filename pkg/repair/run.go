@@ -148,6 +148,8 @@ func notificationEventFor(status storage.RepairRunStatus) config.NotificationEve
 		return config.EventRepairFailed
 	case storage.RepairRunCancelled:
 		return config.EventRepairCancelled
+	case storage.RepairRunRunning:
+		return ""
 	}
 	return ""
 }

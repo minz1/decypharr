@@ -2,6 +2,7 @@ package reacquire
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -24,16 +25,16 @@ func (s *Service) ReacquireLibraryFile(ctx context.Context, request LibraryReque
 	}
 	defer release()
 	if s.arrs == nil {
-		return nil, fmt.Errorf("Arr registry is unavailable")
+		return nil, errors.New("arr registry is unavailable")
 	}
 	if request.ArrFileID <= 0 || request.LibraryPath == "" || !request.Cause.valid() {
-		return nil, fmt.Errorf("Arr file ID, library path, and cause are required")
+		return nil, errors.New("arr file ID, library path, and cause are required")
 	}
 	instance, ok := s.arrs.Get(request.ArrName)
 	if !ok {
-		return nil, fmt.Errorf("Arr %q is unavailable", request.ArrName)
+		return nil, fmt.Errorf("arr %q is unavailable", request.ArrName)
 	}
-	if binding, ok := s.index.ByArrFile(instance.Name, request.ArrFileID); ok {
+	if binding, bound := s.index.ByArrFile(instance.Name, request.ArrFileID); bound {
 		if !binding.AuthorizesMutation() || !sameLibraryPath(binding.LibraryPath, request.LibraryPath) {
 			return nil, ErrBindingUnsafe
 		}
@@ -78,6 +79,19 @@ func (s *Service) ReacquireLibraryFile(ctx context.Context, request LibraryReque
 	)
 }
 
+// mediaFilesKey identifies one series or movie read during a reconciliation pass.
+type mediaFilesKey struct {
+	arrName     string
+	fingerprint string
+	mediaID     int
+}
+
+// mediaFilesResult caches one read so jobs sharing media read it once.
+type mediaFilesResult struct {
+	files []arr.LibraryFile
+	err   error
+}
+
 // reconcileImportedJobs uses Arr file IDs to confirm every replacement.
 // A replacement can be imported before the managed index observes it.
 func (s *Service) reconcileImportedJobs(ctx context.Context) {
@@ -86,16 +100,7 @@ func (s *Service) reconcileImportedJobs(ctx context.Context) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, executionTimeout)
 	defer cancel()
-	type mediaKey struct {
-		arrName     string
-		fingerprint string
-		mediaID     int
-	}
-	type mediaResult struct {
-		files []arr.LibraryFile
-		err   error
-	}
-	checked := make(map[mediaKey]mediaResult)
+	checked := make(map[mediaFilesKey]mediaFilesResult)
 	for _, job := range s.Jobs() {
 		if ctx.Err() != nil {
 			return
@@ -107,61 +112,69 @@ func (s *Service) reconcileImportedJobs(ctx context.Context) {
 		if !ok {
 			continue
 		}
-		fingerprint := instance.Fingerprint()
-		oldFiles := make(map[int]struct{}, len(job.Bindings))
-		for _, binding := range job.Bindings {
-			oldFiles[binding.ArrFileID] = struct{}{}
-		}
-		ready := true
-		for _, binding := range job.Bindings {
-			if !binding.AuthorizesMutation() || binding.ArrName != instance.Name || binding.ArrType != instance.Type ||
-				binding.ArrInstanceFingerprint != fingerprint {
-				ready = false
-				break
-			}
-			mediaID := binding.MovieID
-			if instance.Type == arr.Sonarr {
-				mediaID = binding.SeriesID
-			}
-			if mediaID <= 0 {
-				ready = false
-				break
-			}
-			key := mediaKey{arrName: instance.Name, fingerprint: fingerprint, mediaID: mediaID}
-			result, exists := checked[key]
-			if !exists {
-				result.files, result.err = s.arrs.LibraryFilesForMedia(ctx, instance.Name, []int{mediaID})
-				checked[key] = result
-			}
-			if result.err != nil {
-				ready = false
-				break
-			}
-			remaining := slices.Clone(binding.EpisodeIDs)
-			replaced := false
-			for _, file := range result.files {
-				if _, old := oldFiles[file.ArrFileID]; old || file.ArrFileID <= 0 || file.Path == "" {
-					continue
-				}
-				if instance.Type == arr.Radarr && file.MovieID == binding.MovieID {
-					replaced = true
-					break
-				}
-				if instance.Type == arr.Sonarr && file.SeriesID == binding.SeriesID {
-					remaining = slices.DeleteFunc(
-						remaining,
-						func(id int) bool { return slices.Contains(file.EpisodeIDs, id) },
-					)
-					replaced = len(binding.EpisodeIDs) > 0 && len(remaining) == 0
-				}
-			}
-			if !replaced {
-				ready = false
-				break
-			}
-		}
-		if ready {
+		if s.jobReplaced(ctx, instance, job, checked) {
 			_, _ = s.updateJobDurable(job.ID, StatusReady, func(job *Job) { job.LastError = "" })
 		}
 	}
+}
+
+// jobReplaced reports whether the Arr imported a new file for every binding of
+// job. Any binding it cannot verify keeps the job waiting.
+func (s *Service) jobReplaced(
+	ctx context.Context,
+	instance arr.Arr,
+	job Job,
+	checked map[mediaFilesKey]mediaFilesResult,
+) bool {
+	fingerprint := instance.Fingerprint()
+	oldFiles := make(map[int]struct{}, len(job.Bindings))
+	for _, binding := range job.Bindings {
+		oldFiles[binding.ArrFileID] = struct{}{}
+	}
+	for _, binding := range job.Bindings {
+		if !binding.AuthorizesMutation() || binding.ArrName != instance.Name || binding.ArrType != instance.Type ||
+			binding.ArrInstanceFingerprint != fingerprint {
+			return false
+		}
+		mediaID := binding.MovieID
+		if instance.Type == arr.Sonarr {
+			mediaID = binding.SeriesID
+		}
+		if mediaID <= 0 {
+			return false
+		}
+		key := mediaFilesKey{arrName: instance.Name, fingerprint: fingerprint, mediaID: mediaID}
+		result, exists := checked[key]
+		if !exists {
+			result.files, result.err = s.arrs.LibraryFilesForMedia(ctx, instance.Name, []int{mediaID})
+			checked[key] = result
+		}
+		if result.err != nil || !bindingReplaced(instance.Type, binding, result.files, oldFiles) {
+			return false
+		}
+	}
+	return true
+}
+
+// bindingReplaced reports whether files hold a new import for binding's movie,
+// or for every one of its episodes.
+func bindingReplaced(kind arr.Type, binding Binding, files []arr.LibraryFile, oldFiles map[int]struct{}) bool {
+	remaining := slices.Clone(binding.EpisodeIDs)
+	replaced := false
+	for _, file := range files {
+		if _, old := oldFiles[file.ArrFileID]; old || file.ArrFileID <= 0 || file.Path == "" {
+			continue
+		}
+		if kind == arr.Radarr && file.MovieID == binding.MovieID {
+			return true
+		}
+		if kind == arr.Sonarr && file.SeriesID == binding.SeriesID {
+			remaining = slices.DeleteFunc(
+				remaining,
+				func(id int) bool { return slices.Contains(file.EpisodeIDs, id) },
+			)
+			replaced = len(binding.EpisodeIDs) > 0 && len(remaining) == 0
+		}
+	}
+	return replaced
 }

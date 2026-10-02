@@ -10,6 +10,7 @@ import (
 )
 
 func TestListSonarrLibraryFilesPreservesMultiEpisodeFiles(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v3/series":
@@ -38,6 +39,7 @@ func TestListSonarrLibraryFilesPreservesMultiEpisodeFiles(t *testing.T) {
 }
 
 func TestListRadarrLibraryFiles(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v3/movie" {
 			http.NotFound(w, r)
@@ -58,6 +60,7 @@ func TestListRadarrLibraryFiles(t *testing.T) {
 }
 
 func TestLibraryFilesForMediaReadsOnlyTheNamedSeries(t *testing.T) {
+	t.Parallel()
 	var paths []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, r.URL.Path)
@@ -92,6 +95,7 @@ func TestLibraryFilesForMediaReadsOnlyTheNamedSeries(t *testing.T) {
 }
 
 func TestLibraryFilesForMediaReadsOneMovie(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v3/movie/8":
@@ -116,7 +120,8 @@ func TestLibraryFilesForMediaReadsOneMovie(t *testing.T) {
 }
 
 func TestLibraryFilesForMediaWithoutIDs(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		t.Errorf("unexpected request to %q", r.URL.Path)
 	}))
 	defer server.Close()

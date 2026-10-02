@@ -1,11 +1,18 @@
 package storage
 
 import (
+	"math"
 	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 )
+
+// clampInt32 narrows a count to the proto's int32 field, saturating instead of
+// wrapping to a negative number.
+func clampInt32(v int) int32 {
+	return int32(max(math.MinInt32, min(v, math.MaxInt32)))
+}
 
 // ============================================================================
 // File Conversions
@@ -145,7 +152,7 @@ func EntryToProto(e *Entry) *EntryProto {
 		Status:           string(e.Status),
 		Progress:         e.Progress,
 		Speed:            e.Speed,
-		Seeders:          int32(e.Seeders),
+		Seeders:          clampInt32(e.Seeders),
 		IsComplete:       e.IsComplete,
 		Bad:              e.Bad,
 		Category:         e.Category,
@@ -158,7 +165,7 @@ func EntryToProto(e *Entry) *EntryProto {
 		CallbackUrl:      e.CallbackURL,
 		SkipMultiSeason:  e.SkipMultiSeason,
 		LastError:        e.LastError,
-		ErrorCount:       int32(e.ErrorCount),
+		ErrorCount:       clampInt32(e.ErrorCount),
 	}
 
 	// Timestamps
@@ -297,115 +304,15 @@ func ProtoToEntryItem(pb *EntryItemProto) *EntryItem {
 }
 
 // ============================================================================
-// Job (Repair) Conversions — removed in repair v2.
-// ============================================================================
-
-/*
-func JobToProto(j *Job) *JobProto {
-	pb := &JobProto{
-		Id:          j.ID,
-		Arrs:        j.Arrs,
-		MediaIds:    j.MediaIDs,
-		Status:      string(j.Status),
-		AutoProcess: j.AutoProcess,
-		Recurrent:   j.Recurrent,
-		Error:       j.Error,
-		BrokenItems: make(map[string]*BrokenItemsProto),
-	}
-	if !j.StartedAt.IsZero() {
-		pb.StartedAtUnix = j.StartedAt.Unix()
-	}
-	if !j.CompletedAt.IsZero() {
-		pb.CompletedAtUnix = j.CompletedAt.Unix()
-	}
-	if !j.FailedAt.IsZero() {
-		pb.FailedAtUnix = j.FailedAt.Unix()
-	}
-
-	// Convert broken items
-	for key, files := range j.BrokenItems {
-		protoFiles := make([]*ContentFileProto, len(files))
-		for i, f := range files {
-			protoFiles[i] = &ContentFileProto{
-				Name:         f.Name,
-				Path:         f.Path,
-				Id:           int32(f.Id),
-				EpisodeId:    int32(f.EpisodeId),
-				FileId:       int32(f.FileId),
-				TargetPath:   f.TargetPath,
-				IsSymlink:    f.IsSymlink,
-				IsBroken:     f.IsBroken,
-				SeasonNumber: int32(f.SeasonNumber),
-				Processed:    f.Processed,
-				Size:         f.Size,
-			}
-		}
-		pb.BrokenItems[key] = &BrokenItemsProto{Files: protoFiles}
-	}
-
-	return pb
-}
-
-func ProtoToJob(pb *JobProto) *Job {
-	j := &Job{
-		ID:          pb.Id,
-		Arrs:        pb.Arrs,
-		MediaIDs:    pb.MediaIds,
-		Status:      JobStatus(pb.Status),
-		AutoProcess: pb.AutoProcess,
-		Recurrent:   pb.Recurrent,
-		Error:       pb.Error,
-		BrokenItems: make(map[string][]arr.ContentFile),
-	}
-	if pb.StartedAtUnix != 0 {
-		j.StartedAt = time.Unix(pb.StartedAtUnix, 0)
-	}
-	if pb.CompletedAtUnix != 0 {
-		j.CompletedAt = time.Unix(pb.CompletedAtUnix, 0)
-	}
-	if pb.FailedAtUnix != 0 {
-		j.FailedAt = time.Unix(pb.FailedAtUnix, 0)
-	}
-
-	// Convert broken items
-	for key, protoFiles := range pb.BrokenItems {
-		files := make([]arr.ContentFile, len(protoFiles.Files))
-		for i, f := range protoFiles.Files {
-			files[i] = arr.ContentFile{
-				Name:         f.Name,
-				Path:         f.Path,
-				Id:           int(f.Id),
-				EpisodeId:    int(f.EpisodeId),
-				FileId:       int(f.FileId),
-				TargetPath:   f.TargetPath,
-				IsSymlink:    f.IsSymlink,
-				IsBroken:     f.IsBroken,
-				SeasonNumber: int(f.SeasonNumber),
-				Processed:    f.Processed,
-				Size:         f.Size,
-			}
-		}
-		j.BrokenItems[key] = files
-	}
-
-	return j
-}
-*/
-
-// ============================================================================
-// SwitcherJob Conversions
-// ============================================================================
-
-// ============================================================================
 // SystemMigrationStatus Conversions
 // ============================================================================
 
 func SystemMigrationStatusToProto(sms *SystemMigrationStatus) *SystemMigrationStatusProto {
 	pb := &SystemMigrationStatusProto{
 		Running:   sms.Running,
-		Total:     int32(sms.Total),
-		Completed: int32(sms.Completed),
-		Errors:    int32(sms.Errors),
+		Total:     clampInt32(sms.Total),
+		Completed: clampInt32(sms.Completed),
+		Errors:    clampInt32(sms.Errors),
 		ErrorList: sms.ErrorList,
 	}
 	if !sms.StartedAt.IsZero() {

@@ -7,9 +7,7 @@ import (
 )
 
 func TestSyncFromConfigAppliesValidHost(t *testing.T) {
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 
 	arrs := New()
 	arrs.AddOrUpdate(Arr{Name: "whisparr", Host: "http://old.example", Token: "old-token", Source: SourceAuto})
@@ -27,9 +25,7 @@ func TestSyncFromConfigAppliesValidHost(t *testing.T) {
 }
 
 func TestSyncFromConfigPreservesResolvedHostForInvalidUpdate(t *testing.T) {
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 
 	arrs := New()
 	arrs.AddOrUpdate(Arr{Name: "whisparr", Host: "http://resolved.example", Token: "old-token", Source: SourceAuto})
@@ -47,6 +43,7 @@ func TestSyncFromConfigPreservesResolvedHostForInvalidUpdate(t *testing.T) {
 }
 
 func TestArrInstanceFingerprintCanonicalizesHost(t *testing.T) {
+	t.Parallel()
 	first := Arr{Type: Sonarr, Host: "HTTP://Example.COM:80/sonarr/", Token: "first"}.Fingerprint()
 	second := Arr{Type: Sonarr, Host: "http://example.com/sonarr", Token: "second"}.Fingerprint()
 	if first == "" || first != second {

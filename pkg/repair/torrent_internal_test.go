@@ -13,6 +13,7 @@ import (
 
 type removedProviderBackend struct {
 	Backend
+
 	reinsert func(*storage.Entry) error
 }
 
@@ -22,6 +23,7 @@ func (b *removedProviderBackend) ReinsertEntry(_ context.Context, entry *storage
 }
 
 func TestProbeEntryWithRemovedProvider(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name        string
 		autoRepair  bool
@@ -34,6 +36,7 @@ func TestProbeEntryWithRemovedProvider(t *testing.T) {
 		{name: "activate replacement", autoRepair: true, replacement: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			store := newRepairTestStorage(t)
 			entry := &storage.Entry{
 				InfoHash: "0123456789012345678901234567890123456789", Name: "release",
@@ -71,31 +74,45 @@ func TestProbeEntryWithRemovedProvider(t *testing.T) {
 				RunOptions{UnrestrictLink: tc.unrestrict},
 				tc.autoRepair,
 			)
-			want := storage.HealthBroken
-			if tc.replacement {
-				want = storage.HealthHealthy
-			}
-			if health.Status != want {
-				t.Fatalf("health = %s, want %s", health.Status, want)
-			}
-			if want == storage.HealthBroken &&
-				(health.FailureReason != "provider_client_not_found" || health.BrokenCount != 1) {
-				t.Fatalf("broken health = %#v", health)
-			}
 			if tc.autoRepair && calls != 1 || !tc.autoRepair && calls != 0 {
 				t.Fatalf("repair calls = %d", calls)
 			}
-			saved, err := store.GetEntryHealth(entry.Name)
-			if err != nil || saved.Status != want {
-				t.Fatalf("saved health = %#v, error = %v", saved, err)
-			}
-			loaded, err := store.Get(entry.InfoHash)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if tc.replacement && loaded.ActiveProvider != "remaining" {
-				t.Fatalf("active provider = %q", loaded.ActiveProvider)
-			}
+			assertRemovedProviderOutcome(t, store, entry, health, tc.replacement)
 		})
+	}
+}
+
+// assertRemovedProviderOutcome checks the probe result, and what was saved,
+// for an entry whose active provider is gone: broken unless a replacement
+// placement was activated.
+func assertRemovedProviderOutcome(
+	t *testing.T,
+	store *storage.Storage,
+	entry *storage.Entry,
+	health *storage.EntryHealth,
+	replacement bool,
+) {
+	t.Helper()
+	want := storage.HealthBroken
+	if replacement {
+		want = storage.HealthHealthy
+	}
+	if health.Status != want {
+		t.Fatalf("health = %s, want %s", health.Status, want)
+	}
+	if want == storage.HealthBroken &&
+		(health.FailureReason != "provider_client_not_found" || health.BrokenCount != 1) {
+		t.Fatalf("broken health = %#v", health)
+	}
+	saved, err := store.GetEntryHealth(entry.Name)
+	if err != nil || saved.Status != want {
+		t.Fatalf("saved health = %#v, error = %v", saved, err)
+	}
+	loaded, err := store.Get(entry.InfoHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacement && loaded.ActiveProvider != "remaining" {
+		t.Fatalf("active provider = %q", loaded.ActiveProvider)
 	}
 }

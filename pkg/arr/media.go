@@ -225,6 +225,8 @@ func fileResource(kind Type) (string, error) {
 		return "episodefile", nil
 	case Radarr:
 		return "moviefile", nil
+	case Lidarr, Readarr, Others:
+		fallthrough
 	default:
 		return "", fmt.Errorf("%w: %s", ErrUnsupportedType, kind)
 	}

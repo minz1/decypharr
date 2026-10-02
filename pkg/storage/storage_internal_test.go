@@ -5,8 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/sirrobot01/decypharr/internal/config"
 )
 
 // writeLegacyDB writes a store log carrying an older format header. Only the
@@ -33,11 +31,9 @@ func dbVersion(t *testing.T, path string) uint32 {
 // Upgrading rewrites the databases in a format older Decypharr builds reject,
 // so startup must leave each original behind for a downgrade.
 func TestStartupKeepsDowngradePath(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
-
+	t.Parallel()
 	dir := t.TempDir()
-	for _, name := range storeNames {
+	for _, name := range storeNames() {
 		writeLegacyDB(t, filepath.Join(dir, name+".db"), 3)
 	}
 
@@ -47,7 +43,7 @@ func TestStartupKeepsDowngradePath(t *testing.T) {
 	}
 	defer s.Close()
 
-	for _, name := range storeNames {
+	for _, name := range storeNames() {
 		path := filepath.Join(dir, name+".db")
 		if got := dbVersion(t, path); got == 3 {
 			t.Fatalf("%s was not migrated", name)
@@ -61,9 +57,7 @@ func TestStartupKeepsDowngradePath(t *testing.T) {
 
 // A database already in the current format has nothing to preserve.
 func TestStartupWithoutMigrationLeavesNoBackups(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
-
+	t.Parallel()
 	dir := t.TempDir()
 	s, err := NewStorage(dir)
 	if err != nil {

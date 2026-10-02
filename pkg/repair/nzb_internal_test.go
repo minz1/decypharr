@@ -26,6 +26,7 @@ func (c stubNZBRepairClient) VerifyFile(ctx context.Context, nzbID, fileName str
 }
 
 func TestNZBProberReportsHealthyFile(t *testing.T) {
+	t.Parallel()
 	client := stubNZBRepairClient{checkFile: func(context.Context, string, string) error { return nil }}
 	result := newNZBProber(client).probe(t.Context(), nzbProbeRequest{nzbID: "nzb", fileName: "movie.mkv"})
 	if !result.healthy || result.broken || result.deferred {
@@ -34,6 +35,7 @@ func TestNZBProberReportsHealthyFile(t *testing.T) {
 }
 
 func TestNZBProberReportsMissingFile(t *testing.T) {
+	t.Parallel()
 	client := stubNZBRepairClient{checkFile: func(context.Context, string, string) error {
 		return customerror.UsenetSegmentMissingError
 	}}
@@ -44,6 +46,7 @@ func TestNZBProberReportsMissingFile(t *testing.T) {
 }
 
 func TestNZBProberVerifiesContentWhenRequested(t *testing.T) {
+	t.Parallel()
 	verified := false
 	client := stubNZBRepairClient{
 		checkFile: func(context.Context, string, string) error { return nil },
@@ -61,6 +64,7 @@ func TestNZBProberVerifiesContentWhenRequested(t *testing.T) {
 }
 
 func TestNZBProberDefersOperationalFailure(t *testing.T) {
+	t.Parallel()
 	wantErr := errors.New("provider unavailable")
 	client := stubNZBRepairClient{checkFile: func(context.Context, string, string) error { return wantErr }}
 	result := newNZBProber(client).probe(t.Context(), nzbProbeRequest{nzbID: "nzb", fileName: "movie.mkv"})
@@ -70,6 +74,7 @@ func TestNZBProberDefersOperationalFailure(t *testing.T) {
 }
 
 func TestRollupStatusKeepsUnresolvedEntryUnknown(t *testing.T) {
+	t.Parallel()
 	results := []fileResult{
 		{name: "healthy.mkv", healthy: true},
 		{name: "unresolved.mkv", deferred: true, reason: "usenet_probe_error"},
@@ -80,5 +85,14 @@ func TestRollupStatusKeepsUnresolvedEntryUnknown(t *testing.T) {
 	results = append(results, fileResult{name: "broken.mkv", broken: true})
 	if got := rollupStatus(results); got != storage.HealthBroken {
 		t.Fatalf("status with definitive failure = %q, want broken", got)
+	}
+}
+
+func TestServiceNZBProberWithoutUsenetReportsNotConfigured(t *testing.T) {
+	t.Parallel()
+	// A nil *usenet.Usenet used to become a non-nil interface and panic in CheckFile.
+	result := New(Dependencies{}).nzbProber().probe(t.Context(), nzbProbeRequest{nzbID: "nzb", fileName: "movie.mkv"})
+	if result.reason != "usenet_client_not_configured" || result.broken || result.healthy {
+		t.Fatalf("result = %+v", result)
 	}
 }
