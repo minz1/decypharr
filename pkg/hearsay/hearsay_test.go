@@ -82,9 +82,11 @@ func TestDisabledIsInert(t *testing.T) {
 	cfg := &config.Config{Debrids: []config.Debrid{{Provider: "realdebrid"}}}
 	cfg.Hearsay.Disabled = true
 	s, err := New(cfg, zerolog.Nop())
-	if err != nil || s != nil {
-		t.Fatalf("want nil service, got %v, %v", s, err)
+	if err != nil || s == nil || s.Status().Enabled {
+		t.Fatalf("want an inert service, got %v, %v", s, err)
 	}
+	var nilService *Service
+	nilService.Close()
 	s.ObserveTorrent("realdebrid", "abc", true)
 	s.ReportAdd("realdebrid", "abc", true)
 	s.ReportNZB("abc", true)
