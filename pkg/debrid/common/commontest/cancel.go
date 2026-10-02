@@ -16,7 +16,7 @@ const cancelTimeout = 3 * time.Second
 
 // AssertCancellation starts a server that holds every request open until it
 // is cancelled, runs op against it, cancels op's context before or during the
-// request, and fails t unless op returns context.Canceled promptly.
+// request, and fails t unless op returns [context.Canceled] promptly.
 func AssertCancellation(t *testing.T, cancelBefore bool, op func(ctx context.Context, host string) error) {
 	t.Helper()
 	started := make(chan struct{})

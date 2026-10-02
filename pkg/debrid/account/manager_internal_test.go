@@ -165,11 +165,19 @@ func TestDownloadLinkPropagatesFailuresAndCancellation(t *testing.T) {
 			if calls != tc.wantCalls {
 				t.Fatalf("fetch calls=%d, want %d", calls, tc.wantCalls)
 			}
-			for _, want := range tc.wantErrs {
-				if !errors.Is(err, want) {
-					t.Fatalf("error=%v, want %v", err, want)
-				}
+			if !isAll(err, tc.wantErrs) {
+				t.Fatalf("error=%v, want all of %v", err, tc.wantErrs)
 			}
 		})
 	}
+}
+
+// isAll reports whether err matches every target.
+func isAll(err error, targets []error) bool {
+	for _, target := range targets {
+		if !errors.Is(err, target) {
+			return false
+		}
+	}
+	return true
 }
