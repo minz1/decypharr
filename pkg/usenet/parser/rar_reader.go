@@ -307,7 +307,15 @@ func (p *RARParser) appendRAR5File(
 	vol rar5Volume,
 	dataOffset, dataSize int64,
 ) {
-	file := p.parseRAR5FileHeader(header.Data, header.ExtraSize, vol.index, vol.name, dataOffset, dataSize, vol.password)
+	file := p.parseRAR5FileHeader(
+		header.Data,
+		header.ExtraSize,
+		vol.index,
+		vol.name,
+		dataOffset,
+		dataSize,
+		vol.password,
+	)
 	if file != nil {
 		result.Files = append(result.Files, file)
 	}

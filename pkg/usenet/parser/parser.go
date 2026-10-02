@@ -353,24 +353,7 @@ func (p *NZBParser) process(
 }
 
 func (p *NZBParser) groupFiles(ctx context.Context, files []manifest.File) map[string]*FileGroup {
-	// Assign XML document order as Number for files with uniform Number values.
-	// This preserves upload order for obfuscated archives where the subject
-	// line doesn't contain file number patterns like [X/Y].
-	if len(files) > 1 {
-		allSameNumber := true
-		firstNum := files[0].Number
-		for _, f := range files[1:] {
-			if f.Number != firstNum {
-				allSameNumber = false
-				break
-			}
-		}
-		if allSameNumber {
-			for i := range files {
-				files[i].Number = i + 1
-			}
-		}
-	}
+	numberByDocumentOrder(files)
 
 	var unknownFiles []manifest.File
 	var allFiles []contentResult
@@ -412,6 +395,23 @@ func (p *NZBParser) groupFiles(ctx context.Context, files []manifest.File) map[s
 	groups = p.mergeObfuscatedRarGroups(groups)
 
 	return groups
+}
+
+// numberByDocumentOrder assigns XML document order as Number when every file
+// shares one Number. This preserves upload order for obfuscated archives whose
+// subject lines carry no [X/Y] file number.
+func numberByDocumentOrder(files []manifest.File) {
+	if len(files) < 2 {
+		return
+	}
+	for _, f := range files[1:] {
+		if f.Number != files[0].Number {
+			return
+		}
+	}
+	for i := range files {
+		files[i].Number = i + 1
+	}
 }
 
 // mergeObfuscatedRarGroups detects and merges RAR FileGroups that likely belong
@@ -585,31 +585,7 @@ func (p *NZBParser) groupProcessedFiles(allFiles []contentResult) map[string]*Fi
 			}
 		}
 
-		var groupKey string
-		if item.actualFilename != "" && item.actualFilename != item.file.Filename {
-			groupKey = p.getBaseFilename(item.actualFilename)
-		} else {
-			groupKey = item.file.BaseFilename
-		}
-
-		group, exists := groups[groupKey]
-		if !exists {
-			group = &FileGroup{
-				ActualFilename: item.actualFilename,
-				BaseName:       groupKey,
-				Type:           item.fileType,
-				Files:          []manifest.File{},
-				fileMeta:       make(map[string]filePartMeta),
-				Groups:         make(map[string]struct{}),
-			}
-			groups[groupKey] = group
-		} else if group.Type == storage.NZBFileTypeUnknown && item.fileType != storage.NZBFileTypeUnknown {
-			group.Type = item.fileType
-		}
-		if group.ActualFilename == "" && item.actualFilename != "" {
-			group.ActualFilename = item.actualFilename
-		}
-		group.articleObserved = group.articleObserved || item.articleObserved
+		group := groupFor(groups, p.groupKeyFor(item), item)
 
 		// Update the filename only when content detection produced one; a
 		// content-detected file whose yEnc header carried no name must keep
@@ -623,31 +599,102 @@ func (p *NZBParser) groupProcessedFiles(allFiles []contentResult) map[string]*Fi
 			group.Groups[g] = struct{}{}
 		}
 
-		if item.fileSize > 0 || item.segmentSize > 0 || item.partNumber > 0 || item.partBegin > 0 {
-			if group.fileMeta == nil {
-				group.fileMeta = make(map[string]filePartMeta)
-			}
-			metaKey := fileMetaKey(item.file)
-			if metaKey != "" {
-				meta := group.fileMeta[metaKey]
-				if meta.fileSize == 0 && item.fileSize > 0 {
-					meta.fileSize = item.fileSize
-				}
-				if meta.segmentSize == 0 && item.segmentSize > 0 {
-					meta.segmentSize = item.segmentSize
-				}
-				if meta.partNumber == 0 && item.partNumber > 0 {
-					meta.partNumber = item.partNumber
-				}
-				if meta.partBegin == 0 && item.partBegin > 0 {
-					meta.partBegin = item.partBegin
-				}
-				group.fileMeta[metaKey] = meta
-			}
+		if incoming := item.partMeta(); incoming.hasData() {
+			group.mergeFileMeta(fileMetaKey(item.file), incoming.fillInto)
 		}
 	}
 
 	return groups
+}
+
+// groupKeyFor groups by the yEnc name when it differs from the subject name.
+func (p *NZBParser) groupKeyFor(item contentResult) string {
+	if item.actualFilename != "" && item.actualFilename != item.file.Filename {
+		return p.getBaseFilename(item.actualFilename)
+	}
+	return item.file.BaseFilename
+}
+
+// groupFor returns the group for key, creating it or upgrading its type and
+// filename from item.
+func groupFor(groups map[string]*FileGroup, key string, item contentResult) *FileGroup {
+	group, exists := groups[key]
+	if !exists {
+		group = &FileGroup{
+			ActualFilename: item.actualFilename,
+			BaseName:       key,
+			Type:           item.fileType,
+			Files:          []manifest.File{},
+			fileMeta:       make(map[string]filePartMeta),
+			Groups:         make(map[string]struct{}),
+		}
+		groups[key] = group
+	} else if group.Type == storage.NZBFileTypeUnknown && item.fileType != storage.NZBFileTypeUnknown {
+		group.Type = item.fileType
+	}
+	if group.ActualFilename == "" && item.actualFilename != "" {
+		group.ActualFilename = item.actualFilename
+	}
+	group.articleObserved = group.articleObserved || item.articleObserved
+	return group
+}
+
+func (item contentResult) partMeta() filePartMeta {
+	return filePartMeta{
+		fileSize:    item.fileSize,
+		segmentSize: item.segmentSize,
+		partNumber:  item.partNumber,
+		partBegin:   item.partBegin,
+	}
+}
+
+func (m filePartMeta) hasData() bool {
+	return m.fileSize > 0 || m.segmentSize > 0 || m.partNumber > 0 || m.partBegin > 0
+}
+
+// fillInto returns current with its unset fields taken from m.
+func (m filePartMeta) fillInto(current filePartMeta) filePartMeta {
+	if current.fileSize == 0 {
+		current.fileSize = max(m.fileSize, 0)
+	}
+	if current.segmentSize == 0 {
+		current.segmentSize = max(m.segmentSize, 0)
+	}
+	if current.partNumber == 0 {
+		current.partNumber = max(m.partNumber, 0)
+	}
+	if current.partBegin == 0 {
+		current.partBegin = max(m.partBegin, 0)
+	}
+	return current
+}
+
+// overwrite returns current with every positive field of m replacing it.
+func (m filePartMeta) overwrite(current filePartMeta) filePartMeta {
+	if m.fileSize > 0 {
+		current.fileSize = m.fileSize
+	}
+	if m.segmentSize > 0 {
+		current.segmentSize = m.segmentSize
+	}
+	if m.partNumber > 0 {
+		current.partNumber = m.partNumber
+	}
+	if m.partBegin > 0 {
+		current.partBegin = m.partBegin
+	}
+	return current
+}
+
+// mergeFileMeta updates the metadata stored under key (ignored when empty).
+func (f *FileGroup) mergeFileMeta(key string, update func(filePartMeta) filePartMeta) {
+	if key == "" {
+		return
+	}
+	if f.fileMeta == nil {
+		f.fileMeta = make(map[string]filePartMeta)
+	}
+	f.fileMeta[key] = update(f.fileMeta[key])
 }
 
 func (p *NZBParser) getBaseFilename(filename string) string {
@@ -951,27 +998,13 @@ func (p *NZBParser) recordFileMetadata(group *FileGroup, file manifest.File, dat
 	if group == nil || data == nil {
 		return
 	}
-	segmentSize := decodedPartSize(data)
-	key := fileMetaKey(file)
-	if key != "" {
-		if group.fileMeta == nil {
-			group.fileMeta = make(map[string]filePartMeta)
-		}
-		meta := group.fileMeta[key]
-		if data.Size > 0 {
-			meta.fileSize = data.Size
-		}
-		if segmentSize > 0 {
-			meta.segmentSize = segmentSize
-		}
-		if data.Part > 0 {
-			meta.partNumber = data.Part
-		}
-		if data.Begin > 0 {
-			meta.partBegin = data.Begin
-		}
-		group.fileMeta[key] = meta
+	observed := filePartMeta{
+		fileSize:    data.Size,
+		segmentSize: decodedPartSize(data),
+		partNumber:  data.Part,
+		partBegin:   data.Begin,
 	}
+	group.mergeFileMeta(fileMetaKey(file), observed.overwrite)
 }
 
 // Process regular media files.
@@ -1090,84 +1123,61 @@ func decodedPartSize(data *nntp.YencMetadata) int64 {
 	return 0
 }
 
+// contentSignature maps leading bytes to a file type and, when specific
+// enough to build a streamable filename, a canonical extension.
+type contentSignature struct {
+	fileType  storage.NZBFileType
+	extension string
+	parts     []signaturePart
+}
+
+// signaturePart requires magic at offset.
+type signaturePart struct {
+	offset int
+	magic  string
+}
+
+func (sig contentSignature) matches(data []byte) bool {
+	for _, part := range sig.parts {
+		end := part.offset + len(part.magic)
+		if len(data) < end || string(data[part.offset:end]) != part.magic {
+			return false
+		}
+	}
+	return true
+}
+
+// contentSignatures lists signatures in match order. Parity data comes first:
+// it is not playable content, including when the filename is obfuscated.
+func contentSignatures() []contentSignature {
+	return []contentSignature{
+		{storage.NZBFileTypeIgnore, "", []signaturePart{{0, "PAR2\x00PKT"}}},
+		{storage.NZBFileTypeRar, "", []signaturePart{{0, RAR4Signature}}},
+		{storage.NZBFileTypeRar, "", []signaturePart{{0, RAR5Signature}}},
+		{storage.NZBFileTypeZip, "", []signaturePart{{0, "PK\x03\x04"}}},
+		{storage.NZBFileTypeSevenZip, "", []signaturePart{{0, "7z\xBC\xAF\x27\x1C"}}},
+		{storage.NZBFileTypeMedia, ".mkv", []signaturePart{{0, "\x1A\x45\xDF\xA3"}}},
+		{storage.NZBFileTypeMedia, ".mp4", []signaturePart{{4, "ftyp"}}},
+		{storage.NZBFileTypeMedia, ".avi", []signaturePart{{0, "RIFF"}, {8, "AVI "}}},
+		{storage.NZBFileTypeMedia, ".mpg", []signaturePart{{0, "\x00\x00\x01\xBA"}}}, // MPEG program stream
+		{storage.NZBFileTypeMedia, ".mpg", []signaturePart{{0, "\x00\x00\x01\xB3"}}}, // MPEG video stream
+		// Transport stream: the next 188-byte packet's sync byte must follow.
+		{storage.NZBFileTypeMedia, ".ts", []signaturePart{{0, "\x47"}, {tsPacketSize, "\x47"}}},
+	}
+}
+
+// tsPacketSize is the MPEG transport stream packet length.
+const tsPacketSize = 188
+
 // detectFileTypeAndExtensionFromContent classifies an extensionless post from
 // its leading bytes and returns a canonical extension when the signature is
 // specific enough to build a streamable filename.
 func (p *NZBParser) detectFileTypeAndExtensionFromContent(data []byte) (storage.NZBFileType, string) {
-	if len(data) == 0 {
-		return storage.NZBFileTypeUnknown, ""
-	}
-
-	// Parity data is not playable content, including when the filename is
-	// obfuscated, so never surface it as a streamable file.
-	if len(data) >= 8 && bytes.Equal(data[:8], []byte{'P', 'A', 'R', '2', 0, 'P', 'K', 'T'}) {
-		return storage.NZBFileTypeIgnore, ""
-	}
-
-	// Check for RAR signatures (both RAR 4.x and 5.x)
-	if len(data) >= 7 {
-		// RAR 4.x signature
-		if bytes.Equal(data[:7], []byte("Rar!\x1A\x07\x00")) {
-			return storage.NZBFileTypeRar, ""
+	for _, sig := range contentSignatures() {
+		if sig.matches(data) {
+			return sig.fileType, sig.extension
 		}
 	}
-	if len(data) >= 8 {
-		// RAR 5.x signature
-		if bytes.Equal(data[:8], []byte("Rar!\x1A\x07\x01\x00")) {
-			return storage.NZBFileTypeRar, ""
-		}
-	}
-
-	// Check for ZIP signature
-	if len(data) >= 4 && bytes.Equal(data[:4], []byte{0x50, 0x4B, 0x03, 0x04}) {
-		return storage.NZBFileTypeZip, ""
-	}
-
-	// Check for 7z signature
-	if len(data) >= 6 && bytes.Equal(data[:6], []byte{0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C}) {
-		return storage.NZBFileTypeSevenZip, ""
-	}
-
-	// Check for common media file signatures
-	if len(data) >= 4 {
-		// Matroska (MKV/WebM)
-		if bytes.Equal(data[:4], []byte{0x1A, 0x45, 0xDF, 0xA3}) {
-			return storage.NZBFileTypeMedia, ".mkv"
-		}
-
-		// MP4/MOV (check for 'ftyp' at offset 4)
-		if len(data) >= 8 && bytes.Equal(data[4:8], []byte("ftyp")) {
-			return storage.NZBFileTypeMedia, ".mp4"
-		}
-
-		// AVI
-		if len(data) >= 12 && bytes.Equal(data[:4], []byte("RIFF")) &&
-			bytes.Equal(data[8:12], []byte("AVI ")) {
-			return storage.NZBFileTypeMedia, ".avi"
-		}
-	}
-
-	// MPEG checks need more specific patterns
-	if len(data) >= 4 {
-		// MPEG-1/2 Program Stream
-		if bytes.Equal(data[:4], []byte{0x00, 0x00, 0x01, 0xBA}) {
-			return storage.NZBFileTypeMedia, ".mpg"
-		}
-
-		// MPEG-1/2 Video Stream
-		if bytes.Equal(data[:4], []byte{0x00, 0x00, 0x01, 0xB3}) {
-			return storage.NZBFileTypeMedia, ".mpg"
-		}
-	}
-
-	// Check for Transport Stream (TS files)
-	if len(data) >= 1 && data[0] == 0x47 {
-		// Additional validation: TS packets are 188 bytes, so the next
-		// sync byte sits at index 188 (requires at least 189 bytes).
-		if len(data) > 188 && data[188] == 0x47 {
-			return storage.NZBFileTypeMedia, ".ts"
-		}
-	}
-
 	return storage.NZBFileTypeUnknown, ""
+
 }
