@@ -54,6 +54,7 @@ func (b *persistedNZBBackend) OpenStreamUntrackedForCache(
 }
 
 func TestPersistedNZBUsesDFSCacheAndTracksStream(t *testing.T) {
+	t.Parallel()
 	const (
 		entryName = "Cached.Movie"
 		filename  = "movie.mkv"
@@ -154,7 +155,7 @@ func seedPersistedItem(t *testing.T, cacheDir, entryName, filename string, data 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(entryDir, filename+".json"), metadata, 0o600); err != nil {
-		t.Fatal(err)
+	if writeErr := os.WriteFile(filepath.Join(entryDir, filename+".json"), metadata, 0o600); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 }

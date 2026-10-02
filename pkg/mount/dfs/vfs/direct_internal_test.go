@@ -89,6 +89,7 @@ func (r *fakeStreamReader) Seek(int64, int) (int64, error) {
 }
 
 func TestDirectStreamFile_ReadAtContext(t *testing.T) {
+	t.Parallel()
 	content := make([]byte, 1024)
 	for i := range content {
 		content[i] = byte(i % 251)

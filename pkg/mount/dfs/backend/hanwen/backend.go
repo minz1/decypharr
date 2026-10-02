@@ -82,49 +82,7 @@ func (b *Backend) Mount(ctx context.Context) error {
 	// Try to unmount if already mounted
 	b.forceUnmount(ctx)
 
-	mountOpt := fuse.MountOptions{
-		FsName:               "decypharr",
-		Debug:                false,
-		Name:                 "decypharr",
-		DisableXAttrs:        true,
-		IgnoreSecurityLabels: true,
-		MaxWrite:             maxWrite,
-		// The kernel defaults MaxBackground to 12, which caps in-flight
-		// readahead far below the VFS readahead window.
-		MaxBackground: b.config.FuseMaxBackground,
-		MaxReadAhead:  b.config.FuseMaxReadAhead,
-		AllowOther:    true,
-		// Route handler panics through our logger; go-fuse fails the single
-		// request with EIO instead of the panic unwinding into its serve loop.
-		PanicHandler: func(p any) fuse.Status {
-			b.logger.Error().Any("panic", p).Bytes("stack", debug.Stack()).Msg("FUSE handler panic")
-			return fuse.EIO
-		},
-	}
-
-	var opt []string
-
-	opt = append(opt, "default_permissions")
-
-	if runtime.GOOS == "darwin" {
-		opt = append(opt, "volname=decypharr")
-		opt = append(opt, "noapplexattr")
-		opt = append(opt, "noappledouble")
-	}
-
-	mountOpt.Options = opt
-
-	// Configure FUSE options
-	// Use short entry timeout (1s) to ensure new files appear quickly
-	entryTimeout := EntryTimeout
-	attrTimeout := AttrTimeout
-	opts := &fs.Options{
-		AttrTimeout:  &attrTimeout,
-		EntryTimeout: &entryTimeout,
-		MountOptions: mountOpt,
-		UID:          b.config.UID,
-		GID:          b.config.GID,
-	}
+	opts := b.mountOptions()
 
 	// Start timer before creating NodeFS - adjust timeout duration as needed
 	mountCtx, cancel := context.WithTimeout(ctx, b.config.DaemonTimeout)
@@ -226,6 +184,54 @@ func (b *Backend) unmountServer(ctx context.Context, server *fuse.Server) {
 		b.logger.Warn().Err(ctx.Err()).Msg("Unmount timed out, forcing unmount")
 		b.forceUnmount(ctx)
 	}
+}
+
+// mountOptions builds the go-fuse options for this mount.
+func (b *Backend) mountOptions() *fs.Options {
+	mountOpt := fuse.MountOptions{
+		FsName:               "decypharr",
+		Debug:                false,
+		Name:                 "decypharr",
+		DisableXAttrs:        true,
+		IgnoreSecurityLabels: true,
+		MaxWrite:             maxWrite,
+		// The kernel defaults MaxBackground to 12, which caps in-flight
+		// readahead far below the VFS readahead window.
+		MaxBackground: b.config.FuseMaxBackground,
+		MaxReadAhead:  b.config.FuseMaxReadAhead,
+		AllowOther:    true,
+		// Route handler panics through our logger; go-fuse fails the single
+		// request with EIO instead of the panic unwinding into its serve loop.
+		PanicHandler: func(p any) fuse.Status {
+			b.logger.Error().Any("panic", p).Bytes("stack", debug.Stack()).Msg("FUSE handler panic")
+			return fuse.EIO
+		},
+	}
+
+	var opt []string
+
+	opt = append(opt, "default_permissions")
+
+	if runtime.GOOS == "darwin" {
+		opt = append(opt, "volname=decypharr")
+		opt = append(opt, "noapplexattr")
+		opt = append(opt, "noappledouble")
+	}
+
+	mountOpt.Options = opt
+
+	// Configure FUSE options
+	// Use short entry timeout (1s) to ensure new files appear quickly
+	entryTimeout := EntryTimeout
+	attrTimeout := AttrTimeout
+	opts := &fs.Options{
+		AttrTimeout:  &attrTimeout,
+		EntryTimeout: &entryTimeout,
+		MountOptions: mountOpt,
+		UID:          b.config.UID,
+		GID:          b.config.GID,
+	}
+	return opts
 }
 
 // Unmount unmounts the filesystem.
