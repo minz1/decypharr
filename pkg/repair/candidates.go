@@ -32,8 +32,8 @@ func (r *Service) filterCandidatesByProtocol(candidates map[string]*candidate, s
 	}
 	filtered := make(map[string]*candidate, len(candidates))
 	for name, candidate := range candidates {
-		if candidate := r.filterCandidateByProtocol(candidate, scope); candidate != nil {
-			filtered[name] = candidate
+		if kept := r.filterCandidateByProtocol(candidate, scope); kept != nil {
+			filtered[name] = kept
 		}
 	}
 	return filtered

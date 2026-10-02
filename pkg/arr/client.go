@@ -26,6 +26,13 @@ type transportError struct{ cause error }
 func (e *transportError) Error() string { return e.cause.Error() }
 func (e *transportError) Unwrap() error { return e.cause }
 
+// response is the part of an Arr reply callers read. do consumes and closes
+// the body itself, so no caller ever holds one open.
+type response struct {
+	StatusCode int
+	Status     string
+}
+
 type responseDecoder func(*http.Response) error
 
 func decodeResponseInto(out any) responseDecoder {
@@ -38,7 +45,7 @@ func decodeResponseInto(out any) responseDecoder {
 }
 
 // get issues a read. Reads are retried by the shared client.
-func (s *Service) get(ctx context.Context, instance Arr, endpoint string, out any) (*http.Response, error) {
+func (s *Service) get(ctx context.Context, instance Arr, endpoint string, out any) (*response, error) {
 	return s.getDecoded(ctx, instance, endpoint, decodeResponseInto(out))
 }
 
@@ -49,7 +56,7 @@ func (s *Service) getDecoded(
 	instance Arr,
 	endpoint string,
 	decode responseDecoder,
-) (*http.Response, error) {
+) (*response, error) {
 	return s.do(ctx, s.client, instance, http.MethodGet, endpoint, nil, decode)
 }
 
@@ -60,7 +67,7 @@ func (s *Service) mutate(
 	instance Arr,
 	method, endpoint string,
 	payload, out any,
-) (*http.Response, error) {
+) (*response, error) {
 	return s.do(ctx, s.mutation, instance, method, endpoint, payload, decodeResponseInto(out))
 }
 
@@ -71,7 +78,7 @@ func (s *Service) do(
 	method, endpoint string,
 	payload any,
 	decode responseDecoder,
-) (*http.Response, error) {
+) (*response, error) {
 	if !instance.Reachable() {
 		return nil, fmt.Errorf("%w: %q", ErrNotConfigured, instance.Name)
 	}
@@ -102,20 +109,19 @@ func (s *Service) do(
 	if err != nil {
 		return nil, &transportError{cause: err}
 	}
-	// Callers only read status and headers, which stay valid after close, so
-	// the body lifecycle is owned here.
 	defer resp.Body.Close()
+	reply := &response{StatusCode: resp.StatusCode, Status: resp.Status}
 
 	if decode != nil && resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
 		if decodeErr := decode(resp); decodeErr != nil && !errors.Is(decodeErr, io.EOF) {
-			return resp, fmt.Errorf("decode response: %w", decodeErr)
+			return reply, fmt.Errorf("decode response: %w", decodeErr)
 		}
 	}
-	return resp, nil
+	return reply, nil
 }
 
 // dispatched reports whether a failed mutation may still have reached the Arr.
-func dispatched(resp *http.Response, err error) bool {
+func dispatched(resp *response, err error) bool {
 	if resp != nil {
 		return true
 	}
@@ -123,7 +129,7 @@ func dispatched(resp *http.Response, err error) bool {
 	return ok
 }
 
-func expectStatus(resp *http.Response, allowed ...int) error {
+func expectStatus(resp *response, allowed ...int) error {
 	if resp == nil {
 		return errors.New("arr returned no response")
 	}
@@ -133,7 +139,7 @@ func expectStatus(resp *http.Response, allowed ...int) error {
 	return fmt.Errorf("arr returned %s", resp.Status)
 }
 
-func expectSuccess(resp *http.Response) error {
+func expectSuccess(resp *response) error {
 	if resp == nil {
 		return errors.New("arr returned no response")
 	}

@@ -52,7 +52,6 @@ func (r *Service) executeSweep(
 	}
 
 	due, skipped := r.filterDueCandidates(candidates, opts)
-	candidates = nil
 	protocolScope := r.effectiveProtocolScope(opts)
 	due = r.filterCandidatesByProtocol(due, protocolScope)
 	run.Stats.Candidates = len(due)
@@ -71,7 +70,6 @@ func (r *Service) executeSweep(
 
 	heal := newErrorCache()
 	err = r.probeAndHealCandidates(ctx, run, due, names, heal, opts, autoRepair)
-	due = nil
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			r.finishCancelledRepairSweep(ctx, run, stopState, autoRepair, "context cancelled during probing", names)
@@ -152,7 +150,7 @@ func (r *Service) probeAndHealCandidates(
 
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(max(1, r.workers()))
-	nzb := newNZBProber(r.usenet)
+	nzb := r.nzbProber()
 
 	for _, name := range names {
 		c := candidates[name]
@@ -184,6 +182,8 @@ func (r *Service) probeAndHealCandidates(
 				run.Stats.Broken++
 			case storage.HealthUnknown, storage.HealthUnsupported:
 				run.Stats.Unknown++
+			case storage.HealthRepairing, storage.HealthStale:
+				// A finished probe never leaves these; nothing to count.
 			}
 			r.saveRun(run)
 			runMu.Unlock()

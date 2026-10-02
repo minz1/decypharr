@@ -30,6 +30,10 @@ const (
 	bindingPageSize     = 5000
 	jobAttributeArrName = "arrName"
 	jobAttributeStatus  = "status"
+	// arrStoreCacheSize is how many rows each reacquire store keeps decoded.
+	arrStoreCacheSize = 1000
+	// arrStoreCompactionThreshold is the dead-row ratio that triggers compaction.
+	arrStoreCompactionThreshold = 0.5
 )
 
 type bindingRepositoryStore interface {
@@ -195,28 +199,10 @@ func (r *BindingRepository) Delete(entryID, fileID string) error {
 }
 
 func (r *BindingRepository) ReplaceArrGeneration(arrName string, generation uint64, bindings []Binding) error {
-	if arrName == "" {
-		return errors.New("arr name is required")
-	}
-	prepared := make([]Binding, len(bindings))
-	for i, binding := range bindings {
-		if binding.ArrName != "" && binding.ArrName != arrName {
-			return fmt.Errorf("binding %q belongs to arr %q", binding.EntryFileID, binding.ArrName)
-		}
-		binding.ArrName = arrName
-		binding.Generation = generation
-		if err := binding.validate(); err != nil {
-			return fmt.Errorf("replace arr bindings: %w", err)
-		}
-		prepared[i] = cloneBinding(binding)
-	}
-	if err := validateUniqueArrFiles(prepared); err != nil {
+	prepared, err := prepareGeneration(arrName, generation, bindings)
+	if err != nil {
 		return err
 	}
-	if err := validateUniqueManagedFiles(prepared); err != nil {
-		return fmt.Errorf("replace arr bindings: %w", err)
-	}
-	sortBindings(prepared)
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -236,32 +222,9 @@ func (r *BindingRepository) ReplaceArrGeneration(arrName string, generation uint
 		bindingAttributeArrName: arrName,
 		"generation":            strconv.FormatUint(generation, 10),
 	}}
-	written := make([]storedPage, 0, len(prepared)/bindingPageSize+1)
-	index := 0
-	for chunk := range slices.Chunk(prepared, bindingPageSize) {
-		page := bindingPage{
-			Version:    bindingSnapshotVersion,
-			ArrName:    arrName,
-			Generation: generation,
-			Page:       index,
-			Bindings:   chunk,
-		}
-		data, marshalErr := json.Marshal(page)
-		if marshalErr != nil {
-			return fmt.Errorf("encode arr binding page: %w", marshalErr)
-		}
-		key := bindingPageStoreKey(arrName, generation, index)
-		if putErr := r.store.Put(key, data, options); putErr != nil {
-			return fmt.Errorf("persist arr binding page: %w", putErr)
-		}
-		written = append(written, storedPage{key: key, generation: generation})
-		index++
-	}
-	// The pages must be durable before the manifest names them, or a crash
-	// could leave a manifest pointing at a page that is not there.
-	if syncErr := r.store.Sync(); syncErr != nil {
-		r.invalidateLocked()
-		return fmt.Errorf("sync arr binding pages: %w", syncErr)
+	written, err := r.writePagesLocked(arrName, generation, prepared, options)
+	if err != nil {
+		return err
 	}
 
 	manifest := bindingManifest{
@@ -285,10 +248,74 @@ func (r *BindingRepository) ReplaceArrGeneration(arrName string, generation uint
 
 	// The generation is committed from here on, so the rows it replaces are
 	// dropped. A crash in between leaves rows the loader ignores.
-	r.dropSupersededRowsLocked(state, arrName, prepared)
+	r.dropSupersededRowsLocked(state, arrName, prepared, written)
 	state.stored[arrName] = written
 	state.generations[arrName] = generation
 	return nil
+}
+
+// prepareGeneration stamps bindings with arrName and generation, validates
+// them, and sorts them into page order.
+func prepareGeneration(arrName string, generation uint64, bindings []Binding) ([]Binding, error) {
+	if arrName == "" {
+		return nil, errors.New("arr name is required")
+	}
+	prepared := make([]Binding, len(bindings))
+	for i, binding := range bindings {
+		if binding.ArrName != "" && binding.ArrName != arrName {
+			return nil, fmt.Errorf("binding %q belongs to arr %q", binding.EntryFileID, binding.ArrName)
+		}
+		binding.ArrName = arrName
+		binding.Generation = generation
+		if err := binding.validate(); err != nil {
+			return nil, fmt.Errorf("replace arr bindings: %w", err)
+		}
+		prepared[i] = cloneBinding(binding)
+	}
+	if err := validateUniqueArrFiles(prepared); err != nil {
+		return nil, err
+	}
+	if err := validateUniqueManagedFiles(prepared); err != nil {
+		return nil, fmt.Errorf("replace arr bindings: %w", err)
+	}
+	sortBindings(prepared)
+	return prepared, nil
+}
+
+// writePagesLocked writes a generation's pages and syncs them, so that a
+// manifest written afterwards never names a page that is not on disk.
+func (r *BindingRepository) writePagesLocked(
+	arrName string,
+	generation uint64,
+	prepared []Binding,
+	options *appendstore.PutOptions,
+) ([]storedPage, error) {
+	written := make([]storedPage, 0, len(prepared)/bindingPageSize+1)
+	index := 0
+	for chunk := range slices.Chunk(prepared, bindingPageSize) {
+		page := bindingPage{
+			Version:    bindingSnapshotVersion,
+			ArrName:    arrName,
+			Generation: generation,
+			Page:       index,
+			Bindings:   chunk,
+		}
+		data, marshalErr := json.Marshal(page)
+		if marshalErr != nil {
+			return nil, fmt.Errorf("encode arr binding page: %w", marshalErr)
+		}
+		key := bindingPageStoreKey(arrName, generation, index)
+		if putErr := r.store.Put(key, data, options); putErr != nil {
+			return nil, fmt.Errorf("persist arr binding page: %w", putErr)
+		}
+		written = append(written, storedPage{key: key, generation: generation})
+		index++
+	}
+	if syncErr := r.store.Sync(); syncErr != nil {
+		r.invalidateLocked()
+		return nil, fmt.Errorf("sync arr binding pages: %w", syncErr)
+	}
+	return written, nil
 }
 
 func (r *BindingRepository) Close() error {
@@ -319,88 +346,128 @@ func (r *BindingRepository) invalidateLocked() {
 // authoritative for its arr.Arr, deltas written after it win per managed file, and
 // legacy rows only apply to an arr.Arr that has no snapshot yet.
 func (r *BindingRepository) scanLocked() ([]Binding, bindingRepositoryState, error) {
-	manifests := make(map[string]bindingManifest)
-	pages := make(map[string][]bindingPage)
-	deltas := make(map[entryFileKey]bindingDelta)
-	legacy := make(map[string][]Binding)
-	stored := make(map[string][]storedPage)
-
-	if err := r.store.ForEach(func(key string, value []byte) error {
-		switch {
-		case strings.HasPrefix(key, bindingManifestKeyPrefix):
-			var manifest bindingManifest
-			if err := json.Unmarshal(value, &manifest); err != nil {
-				return fmt.Errorf("decode arr binding manifest %q: %w", key, err)
-			}
-			if err := validateBindingManifest(key, manifest); err != nil {
-				return fmt.Errorf("decode arr binding manifest %q: %w", key, err)
-			}
-			manifests[manifest.ArrName] = manifest
-		case strings.HasPrefix(key, bindingPageKeyPrefix):
-			var page bindingPage
-			if err := json.Unmarshal(value, &page); err != nil {
-				return fmt.Errorf("decode arr binding page %q: %w", key, err)
-			}
-			if err := validateBindingPage(key, page); err != nil {
-				return fmt.Errorf("decode arr binding page %q: %w", key, err)
-			}
-			pages[page.ArrName] = append(pages[page.ArrName], page)
-			stored[page.ArrName] = append(stored[page.ArrName], storedPage{key: key, generation: page.Generation})
-		case strings.HasPrefix(key, bindingSnapshotKeyPrefix):
-			// The single-row format an older build wrote.
-			var snapshot bindingSnapshot
-			if err := json.Unmarshal(value, &snapshot); err != nil {
-				return fmt.Errorf("decode arr binding snapshot %q: %w", key, err)
-			}
-			if err := validateBindingSnapshot(key, snapshot); err != nil {
-				return fmt.Errorf("decode arr binding snapshot %q: %w", key, err)
-			}
-			pages[snapshot.ArrName] = append(pages[snapshot.ArrName], bindingPage{
-				Version:    snapshot.Version,
-				ArrName:    snapshot.ArrName,
-				Generation: snapshot.Generation,
-				Bindings:   snapshot.Bindings,
-			})
-			stored[snapshot.ArrName] = append(
-				stored[snapshot.ArrName],
-				storedPage{key: key, generation: snapshot.Generation},
-			)
-		case strings.HasPrefix(key, bindingDeltaKeyPrefix):
-			var delta bindingDelta
-			if err := json.Unmarshal(value, &delta); err != nil {
-				return fmt.Errorf("decode arr binding delta %q: %w", key, err)
-			}
-			if err := validateBindingDelta(key, delta); err != nil {
-				return fmt.Errorf("decode arr binding delta %q: %w", key, err)
-			}
-			deltas[entryFileKey{entryID: delta.EntryID, fileID: delta.EntryFileID}] = delta
-		default:
-			var binding Binding
-			if err := json.Unmarshal(value, &binding); err != nil {
-				return fmt.Errorf("decode legacy arr binding %q: %w", key, err)
-			}
-			if err := binding.validate(); err != nil {
-				return fmt.Errorf("decode legacy arr binding %q: %w", key, err)
-			}
-			legacy[binding.ArrName] = append(legacy[binding.ArrName], binding)
-		}
-		return nil
-	}); err != nil {
+	rows := scannedRows{
+		manifests: make(map[string]bindingManifest),
+		pages:     make(map[string][]bindingPage),
+		deltas:    make(map[entryFileKey]bindingDelta),
+		legacy:    make(map[string][]Binding),
+		stored:    make(map[string][]storedPage),
+	}
+	if err := r.store.ForEach(rows.add); err != nil {
 		return nil, bindingRepositoryState{}, err
 	}
+	return rows.merge()
+}
 
+// scannedRows holds every row of the binding store, decoded and grouped by kind.
+type scannedRows struct {
+	manifests map[string]bindingManifest
+	pages     map[string][]bindingPage
+	deltas    map[entryFileKey]bindingDelta
+	legacy    map[string][]Binding
+	stored    map[string][]storedPage
+}
+
+// add decodes one row by its key prefix. Any row that fails to decode or
+// validate fails the whole scan.
+func (rows *scannedRows) add(key string, value []byte) error {
+	switch {
+	case strings.HasPrefix(key, bindingManifestKeyPrefix):
+		manifest, err := decodeRow(key, value, "manifest", validateBindingManifest)
+		if err != nil {
+			return err
+		}
+		rows.manifests[manifest.ArrName] = manifest
+	case strings.HasPrefix(key, bindingPageKeyPrefix):
+		page, err := decodeRow(key, value, "page", validateBindingPage)
+		if err != nil {
+			return err
+		}
+		rows.addPage(key, page)
+	case strings.HasPrefix(key, bindingSnapshotKeyPrefix):
+		// The single-row format an older build wrote.
+		snapshot, err := decodeRow(key, value, "snapshot", validateBindingSnapshot)
+		if err != nil {
+			return err
+		}
+		rows.addPage(key, bindingPage{
+			Version:    snapshot.Version,
+			ArrName:    snapshot.ArrName,
+			Generation: snapshot.Generation,
+			Bindings:   snapshot.Bindings,
+		})
+	case strings.HasPrefix(key, bindingDeltaKeyPrefix):
+		delta, err := decodeRow(key, value, "delta", validateBindingDelta)
+		if err != nil {
+			return err
+		}
+		rows.deltas[entryFileKey{entryID: delta.EntryID, fileID: delta.EntryFileID}] = delta
+	default:
+		binding, err := decodeRow(key, value, "legacy", func(_ string, binding Binding) error {
+			return binding.validate()
+		})
+		if err != nil {
+			return err
+		}
+		rows.legacy[binding.ArrName] = append(rows.legacy[binding.ArrName], binding)
+	}
+	return nil
+}
+
+// decodeRow unmarshals and validates one stored row of the named kind.
+func decodeRow[T any](key string, value []byte, kind string, validate func(string, T) error) (T, error) {
+	var row T
+	if err := json.Unmarshal(value, &row); err != nil {
+		return row, fmt.Errorf("decode arr binding %s %q: %w", kind, key, err)
+	}
+	if err := validate(key, row); err != nil {
+		return row, fmt.Errorf("decode arr binding %s %q: %w", kind, key, err)
+	}
+	return row, nil
+}
+
+func (rows *scannedRows) addPage(key string, page bindingPage) {
+	rows.pages[page.ArrName] = append(rows.pages[page.ArrName], page)
+	rows.stored[page.ArrName] = append(rows.stored[page.ArrName], storedPage{key: key, generation: page.Generation})
+}
+
+// merge resolves the rows into the current bindings and the repository state.
+func (rows *scannedRows) merge() ([]Binding, bindingRepositoryState, error) {
 	state := bindingRepositoryState{
 		owners:      make(map[entryFileKey]string),
-		generations: make(map[string]uint64, len(pages)),
-		deltas:      make(map[entryFileKey]struct{}, len(deltas)),
-		legacy:      make(map[string]map[entryFileKey]struct{}, len(legacy)),
-		stored:      stored,
+		generations: make(map[string]uint64, len(rows.pages)),
+		deltas:      make(map[entryFileKey]struct{}, len(rows.deltas)),
+		legacy:      make(map[string]map[entryFileKey]struct{}, len(rows.legacy)),
+		stored:      rows.stored,
 	}
 	merged := make(map[entryFileKey]Binding)
-	committed := make(map[string]uint64, len(pages))
+	committed := rows.mergeSnapshots(&state, merged)
+	rows.mergeLegacy(&state, merged, committed)
+	rows.mergeDeltas(&state, merged, committed)
 
-	for arrName, arrPages := range pages {
-		generation, ok := committedGeneration(arrName, manifests, arrPages)
+	bindings := make([]Binding, 0, len(merged))
+	for key, binding := range merged {
+		if owner, exists := state.owners[key]; exists {
+			return nil, bindingRepositoryState{}, fmt.Errorf(
+				"managed file belongs to both arr %q and %q",
+				owner,
+				binding.ArrName,
+			)
+		}
+		state.owners[key] = binding.ArrName
+		bindings = append(bindings, cloneBinding(binding))
+	}
+	return bindings, state, nil
+}
+
+// mergeSnapshots applies each Arr's committed generation and returns it per Arr.
+func (rows *scannedRows) mergeSnapshots(
+	state *bindingRepositoryState,
+	merged map[entryFileKey]Binding,
+) map[string]uint64 {
+	committed := make(map[string]uint64, len(rows.pages))
+	for arrName, arrPages := range rows.pages {
+		generation, ok := committedGeneration(arrName, rows.manifests, arrPages)
 		if !ok {
 			// Pages with no manifest, or too few for the one on disk: an
 			// interrupted write, which the previous generation still covers.
@@ -417,8 +484,17 @@ func (r *BindingRepository) scanLocked() ([]Binding, bindingRepositoryState, err
 			}
 		}
 	}
+	return committed
+}
 
-	for arrName, bindings := range legacy {
+// mergeLegacy applies per-file rows from before snapshots, for Arrs that have
+// no committed snapshot yet.
+func (rows *scannedRows) mergeLegacy(
+	state *bindingRepositoryState,
+	merged map[entryFileKey]Binding,
+	committed map[string]uint64,
+) {
+	for arrName, bindings := range rows.legacy {
 		keys := make(map[entryFileKey]struct{}, len(bindings))
 		for _, binding := range bindings {
 			keys[entryFileKey{entryID: binding.EntryID, fileID: binding.EntryFileID}] = struct{}{}
@@ -433,8 +509,15 @@ func (r *BindingRepository) scanLocked() ([]Binding, bindingRepositoryState, err
 			state.generations[arrName] = max(state.generations[arrName], binding.Generation)
 		}
 	}
+}
 
-	for key, delta := range deltas {
+// mergeDeltas applies targeted changes written after their Arr's snapshot.
+func (rows *scannedRows) mergeDeltas(
+	state *bindingRepositoryState,
+	merged map[entryFileKey]Binding,
+	committed map[string]uint64,
+) {
+	for key, delta := range rows.deltas {
 		state.deltas[key] = struct{}{}
 		if delta.Generation < committed[delta.ArrName] {
 			continue // superseded by a generation written after this delta
@@ -446,20 +529,6 @@ func (r *BindingRepository) scanLocked() ([]Binding, bindingRepositoryState, err
 		merged[key] = *delta.Binding
 		state.generations[delta.ArrName] = max(state.generations[delta.ArrName], delta.Generation)
 	}
-
-	bindings := make([]Binding, 0, len(merged))
-	for key, binding := range merged {
-		if owner, exists := state.owners[key]; exists {
-			return nil, bindingRepositoryState{}, fmt.Errorf(
-				"managed file belongs to both arr %q and %q",
-				owner,
-				binding.ArrName,
-			)
-		}
-		state.owners[key] = binding.ArrName
-		bindings = append(bindings, cloneBinding(binding))
-	}
-	return bindings, state, nil
 }
 
 // committedGeneration reports the newest generation whose pages are all on
@@ -521,10 +590,13 @@ func (r *BindingRepository) dropSupersededRowsLocked(
 	state *bindingRepositoryState,
 	arrName string,
 	bindings []Binding,
+	written []storedPage,
 ) {
+	// A replace that reuses the committed generation overwrites the same page
+	// keys; deleting those would drop the pages the new manifest names.
 	for _, page := range state.stored[arrName] {
-		if err := r.store.Delete(page.key); err != nil {
-			continue
+		if !slices.Contains(written, page) {
+			_ = r.store.Delete(page.key)
 		}
 	}
 	delete(state.stored, arrName)
@@ -658,13 +730,13 @@ func openArrStore(path string, indexedFields []string) (*appendstore.Store, erro
 	if path == "" {
 		return nil, errors.New("database path is required")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return nil, fmt.Errorf("create database directory: %w", err)
 	}
 	return appendstore.Open(path, appendstore.Options{
-		CacheSize:           1000,
+		CacheSize:           arrStoreCacheSize,
 		SyncInterval:        time.Second,
-		CompactionThreshold: 0.5,
+		CompactionThreshold: arrStoreCompactionThreshold,
 		AutoCompact:         true,
 		IndexedFields:       indexedFields,
 	})

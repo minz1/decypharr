@@ -85,7 +85,6 @@ func TestIndexRetainedBytesPerBinding(t *testing.T) {
 	if err := index.ReplaceArrGeneration("sonarr", 1, bindings); err != nil {
 		t.Fatal(err)
 	}
-	bindings = nil
 	retained := heapAlloc() - baseline
 	runtime.KeepAlive(index)
 

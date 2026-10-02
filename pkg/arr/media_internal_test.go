@@ -11,6 +11,7 @@ import (
 )
 
 func TestDeleteManagedFile(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name       string
 		arrType    Type
@@ -23,6 +24,7 @@ func TestDeleteManagedFile(t *testing.T) {
 		{name: "failure", arrType: Radarr, path: "/api/v3/moviefile/17", statusCode: http.StatusBadRequest, wantErr: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method != http.MethodDelete || r.URL.Path != test.path {
 					t.Errorf("request = %s %s", r.Method, r.URL.Path)
@@ -41,6 +43,7 @@ func TestDeleteManagedFile(t *testing.T) {
 }
 
 func TestGetDownloadClientConfig(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/api/v3/config/downloadclient" {
 			t.Errorf("request = %s %s", r.Method, r.URL.Path)
@@ -64,6 +67,7 @@ func TestGetDownloadClientConfig(t *testing.T) {
 }
 
 func TestExplicitSearchCommands(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name     string
 		arrType  Type
@@ -96,6 +100,7 @@ func TestExplicitSearchCommands(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method != http.MethodPost || r.URL.Path != "/api/v3/command" {
 					t.Errorf("request = %s %s", r.Method, r.URL.Path)
@@ -126,6 +131,7 @@ func TestExplicitSearchCommands(t *testing.T) {
 }
 
 func TestMutationRequestClassifiesOnlyPossiblyDispatchedErrorsAsUnknown(t *testing.T) {
+	t.Parallel()
 	unconfigured := testService(Arr{Type: Radarr})
 	_, err := unconfigured.SearchMovies(t.Context(), "arr", []int{7})
 	if err == nil || errors.Is(err, ErrMutationOutcomeUnknown) {
@@ -139,5 +145,25 @@ func TestMutationRequestClassifiesOnlyPossiblyDispatchedErrorsAsUnknown(t *testi
 	_, err = unreachable.SearchMovies(t.Context(), "arr", []int{7})
 	if !errors.Is(err, ErrMutationOutcomeUnknown) {
 		t.Fatalf("transport error = %v, want unknown outcome", err)
+	}
+}
+
+// A media ID from a webhook or API call must stay one query value, not splice
+// extra parameters into the Arr request.
+func TestMediaEscapesMediaID(t *testing.T) {
+	t.Parallel()
+	const mediaID = "1&monitored=false"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		if r.URL.Path != "/api/v3/movie" || len(query) != 1 || query.Get("tmdbId") != mediaID {
+			t.Errorf("request = %s?%s", r.URL.Path, r.URL.RawQuery)
+		}
+		_, _ = fmt.Fprint(w, `[]`)
+	}))
+	defer server.Close()
+
+	s := testService(Arr{Host: server.URL, Token: "secret", Type: Radarr})
+	if _, err := s.Media(t.Context(), "arr", mediaID); err != nil {
+		t.Fatal(err)
 	}
 }

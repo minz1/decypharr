@@ -9,6 +9,7 @@ import (
 )
 
 func TestFindGrabHistoryID(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name     string
 		arrType  Type
@@ -19,6 +20,7 @@ func TestFindGrabHistoryID(t *testing.T) {
 		{name: "radarr movie", arrType: Radarr, queryKey: "movieIds", mediaID: 73},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path != "/api/v3/history" {
 					t.Errorf("path = %q", r.URL.Path)
@@ -50,6 +52,7 @@ func TestFindGrabHistoryID(t *testing.T) {
 }
 
 func TestFindGrabHistoryIDReturnsEmptyWhenNoGrabExists(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, `{"page":1,"totalRecords":0,"records":[]}`)
 	}))
@@ -63,6 +66,7 @@ func TestFindGrabHistoryIDReturnsEmptyWhenNoGrabExists(t *testing.T) {
 }
 
 func TestHistoryByDownloadIDPaginatesAndFiltersEvent(t *testing.T) {
+	t.Parallel()
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
@@ -108,6 +112,7 @@ func TestHistoryByDownloadIDPaginatesAndFiltersEvent(t *testing.T) {
 }
 
 func TestMarkHistoryFailedCtxValidatesStatus(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/api/v3/history/failed/42" {
 			t.Errorf("request = %s %s", r.Method, r.URL.Path)

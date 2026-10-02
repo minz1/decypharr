@@ -15,11 +15,23 @@ import (
 	"github.com/sirrobot01/decypharr/internal/logger"
 )
 
-var storeNames = []string{"entries", "queue", "items", "repair_state", "repair_runs"}
+const (
+	// storeCacheSize is how many records each store keeps decoded in memory.
+	storeCacheSize = 5000
+	// storeCompactionThreshold is the dead-record ratio that triggers compaction.
+	storeCompactionThreshold = 0.5
+)
+
+// storeNames lists the databases NewStorage opens, one file each.
+func storeNames() []string {
+	return []string{"entries", "queue", "items", "repair_state", "repair_runs"}
+}
 
 // legacyStoreNames are buckets from the v1 repair system. They are removed
 // on startup so they don't accumulate dead data.
-var legacyStoreNames = []string{"repair_jobs", "repair_keys"}
+func legacyStoreNames() []string {
+	return []string{"repair_jobs", "repair_keys"}
+}
 
 // Storage handles application persistence using appendstore.
 type Storage struct {
@@ -38,7 +50,7 @@ type Storage struct {
 
 func createItemStores(baseDir string, baseOptions appendstore.Options) (map[string]*appendstore.Store, error) {
 	items := make(map[string]*appendstore.Store)
-	for _, name := range storeNames {
+	for _, name := range storeNames() {
 		path := filepath.Join(baseDir, name+".db")
 		store, err := appendstore.Open(path, baseOptions)
 		if err != nil {
@@ -62,7 +74,7 @@ func createItemStores(baseDir string, baseOptions appendstore.Options) (map[stri
 }
 
 func dropLegacyStores(baseDir string, log zerolog.Logger) {
-	for _, name := range legacyStoreNames {
+	for _, name := range legacyStoreNames() {
 		path := filepath.Join(baseDir, name+".db")
 		if _, err := os.Stat(path); err == nil {
 			if removeAllErr := os.RemoveAll(path); removeAllErr != nil {
@@ -76,7 +88,7 @@ func dropLegacyStores(baseDir string, log zerolog.Logger) {
 
 func NewStorage(dbPath string) (*Storage, error) {
 	dbPath = filepath.Clean(dbPath)
-	if err := os.MkdirAll(dbPath, 0755); err != nil {
+	if err := os.MkdirAll(dbPath, 0o750); err != nil {
 		return nil, fmt.Errorf("failed to create db directory: %w", err)
 	}
 
@@ -85,9 +97,9 @@ func NewStorage(dbPath string) (*Storage, error) {
 	dropLegacyStores(dbPath, log)
 
 	baseOptions := appendstore.Options{
-		CacheSize:           5000,
+		CacheSize:           storeCacheSize,
 		SyncInterval:        time.Second,
-		CompactionThreshold: 0.5,
+		CompactionThreshold: storeCompactionThreshold,
 		AutoCompact:         true,
 		IndexedFields:       []string{attributeCategory, attributeProvider, attributeStatus},
 		OnError: func(err error) {

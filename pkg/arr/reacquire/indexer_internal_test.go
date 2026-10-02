@@ -14,6 +14,7 @@ import (
 )
 
 func TestMatchLibraryFilesBySymlinkTarget(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	target := filepath.Join(dir, "managed", "Movie.Release", "movie.mkv")
 	libraryPath := filepath.Join(dir, "library", "Movie.mkv")
@@ -38,6 +39,7 @@ func TestMatchLibraryFilesBySymlinkTarget(t *testing.T) {
 }
 
 func TestMatchLibraryFilesResolvesRelativeSymlink(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	libraryPath := filepath.Join(dir, "library", "Movie.mkv")
 	if err := os.MkdirAll(filepath.Dir(libraryPath), 0o755); err != nil {
@@ -59,6 +61,7 @@ func TestMatchLibraryFilesResolvesRelativeSymlink(t *testing.T) {
 }
 
 func TestMatchLibraryFilesSkipsNonSymlink(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	libraryPath := filepath.Join(dir, "Movie.mkv")
 	if err := os.WriteFile(libraryPath, []byte("media"), 0o644); err != nil {
@@ -79,6 +82,7 @@ func TestMatchLibraryFilesSkipsNonSymlink(t *testing.T) {
 }
 
 func TestMatchLibraryFilesRequiresFolderAndFilename(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	target := filepath.Join(dir, "managed", "Movie.Release", "movie.mkv")
 	libraryPath := filepath.Join(dir, "library", "Movie.mkv")
@@ -103,6 +107,7 @@ func TestMatchLibraryFilesRequiresFolderAndFilename(t *testing.T) {
 }
 
 func TestMatchLibraryFilesRejectsAmbiguousManagedFile(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	target := filepath.Join(dir, "managed", "Movie.Release", "movie.mkv")
 	libraryPath := filepath.Join(dir, "library", "Movie.mkv")
@@ -130,6 +135,7 @@ func TestMatchLibraryFilesRejectsAmbiguousManagedFile(t *testing.T) {
 }
 
 func TestMatchLibraryFilesRejectsDuplicateArrTargets(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	target := filepath.Join(dir, "managed", "Movie.Release", "movie.mkv")
 	libraryDir := filepath.Join(dir, "library")
@@ -163,6 +169,7 @@ func TestMatchLibraryFilesRejectsDuplicateArrTargets(t *testing.T) {
 }
 
 func TestReconcileBuildsIndexFromSymlinks(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	target := filepath.Join(dir, "managed", "Movie.Release", "movie.mkv")
 	libraryPath := filepath.Join(dir, "library", "Movie.mkv")
@@ -248,6 +255,7 @@ func (w *recordingBindingWriter) ReplaceArrGeneration(_ string, _ uint64, bindin
 }
 
 func TestMatchLibraryFilesMatchesRenamedFolderBySize(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	target := filepath.Join(dir, "managed", "Show.S01.Complete", "episode.mkv")
 	libraryPath := filepath.Join(dir, "library", "Episode.mkv")
@@ -277,6 +285,7 @@ func TestMatchLibraryFilesMatchesRenamedFolderBySize(t *testing.T) {
 }
 
 func TestMatchLibraryFilesSizeMatchNeedsUniqueName(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	target := filepath.Join(dir, "managed", "Show.S01.Complete", "episode.mkv")
 	libraryPath := filepath.Join(dir, "library", "Episode.mkv")
@@ -310,6 +319,7 @@ func TestMatchLibraryFilesSizeMatchNeedsUniqueName(t *testing.T) {
 }
 
 func TestMatchLibraryFilesSkipsTargetsOutsideMount(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	target := filepath.Join(dir, "elsewhere", "Movie.Release", "movie.mkv")
 	libraryPath := filepath.Join(dir, "library", "Movie.mkv")
@@ -336,6 +346,7 @@ func TestMatchLibraryFilesSkipsTargetsOutsideMount(t *testing.T) {
 }
 
 func TestMatchLibraryFilesFolderMatchWinsOverSizeMatch(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	root := filepath.Join(dir, "managed")
 	libraryDir := filepath.Join(dir, "library")
@@ -373,6 +384,7 @@ func TestMatchLibraryFilesFolderMatchWinsOverSizeMatch(t *testing.T) {
 }
 
 func TestMatchLibraryFilesMatchesNestedMountTarget(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	root := filepath.Join(dir, "managed")
 	target := filepath.Join(root, "Show.S01", "Season 1", "episode.mkv")
@@ -398,6 +410,7 @@ func TestMatchLibraryFilesMatchesNestedMountTarget(t *testing.T) {
 }
 
 func TestMatchLibraryFilesSeparatesUnknownEntryFromUnknownFile(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	root := filepath.Join(dir, "managed")
 	libraryDir := filepath.Join(dir, "library")
@@ -427,6 +440,7 @@ func TestMatchLibraryFilesSeparatesUnknownEntryFromUnknownFile(t *testing.T) {
 }
 
 func TestReconcileTargetedReadsOnlyTheEntrysMovie(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	target := filepath.Join(dir, "managed", "Movie.Release", "movie.mkv")
 	libraryPath := filepath.Join(dir, "library", "Movie.mkv")
@@ -491,6 +505,7 @@ func TestReconcileTargetedReadsOnlyTheEntrysMovie(t *testing.T) {
 }
 
 func TestReconcileTargetedNeverWidensToTheWholeLibrary(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	var paths []string
@@ -522,7 +537,7 @@ func TestReconcileTargetedNeverWidensToTheWholeLibrary(t *testing.T) {
 		managedRoot: filepath.Join(dir, "managed"),
 	}
 
-	request := indexRequest{arrName: "radarr", entryID: "entry", attempt: len(targetedIndexBackoff)}
+	request := indexRequest{arrName: "radarr", entryID: "entry", attempt: targetedIndexAttempts}
 	stats, err := indexer.reconcile(t.Context(), instance, request, managed)
 	if err != nil {
 		t.Fatal(err)
@@ -539,12 +554,13 @@ func TestReconcileTargetedNeverWidensToTheWholeLibrary(t *testing.T) {
 }
 
 func TestExhaustedTargetedRequestsCoalesceArrRefresh(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	indexer := NewIndexer(nil, nil, nil, "")
 	indexer.ctx = ctx
 
-	finalAttempt := len(targetedIndexBackoff)
+	finalAttempt := targetedIndexAttempts
 	indexer.retryTargeted(ctx, indexRequest{arrName: "radarr", entryID: "one", attempt: finalAttempt})
 	indexer.retryTargeted(ctx, indexRequest{arrName: "radarr", entryID: "two", attempt: finalAttempt})
 
@@ -560,6 +576,7 @@ func TestExhaustedTargetedRequestsCoalesceArrRefresh(t *testing.T) {
 }
 
 func TestRefreshCoverageSkipsOnlyOlderTargetedRequests(t *testing.T) {
+	t.Parallel()
 	indexer := NewIndexer(nil, nil, nil, "")
 	indexer.markCovered("radarr", 10)
 

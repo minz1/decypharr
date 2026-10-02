@@ -12,6 +12,7 @@ import (
 const maxGenerationRowBytes = 8 << 20
 
 func TestGenerationWritesBoundedRows(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("writes a library-sized generation")
 	}
@@ -34,6 +35,7 @@ func TestGenerationWritesBoundedRows(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// churn is process-wide, so parallel tests inflate it; it is logged, not asserted.
 	t.Logf("bindings=%d rows=%d largest-row=%.1fMB churn=%.1fMB",
 		count, len(store.puts),
 		float64(store.largestPut)/(1<<20),

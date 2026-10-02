@@ -69,6 +69,8 @@ func (s *Service) LibraryFiles(ctx context.Context, name string) ([]LibraryFile,
 		return s.sonarrLibraryFiles(ctx, instance)
 	case Radarr:
 		return s.radarrLibraryFiles(ctx, instance)
+	case Lidarr, Readarr, Others:
+		fallthrough
 	default:
 		return nil, fmt.Errorf("%w: %s", ErrUnsupportedType, instance.Type)
 	}
@@ -248,6 +250,8 @@ func (s *Service) LibraryFilesForMedia(ctx context.Context, name string, mediaID
 		read = func(ctx context.Context, id int) ([]LibraryFile, error) {
 			return s.radarrMovieFiles(ctx, instance, id)
 		}
+	case Lidarr, Readarr, Others:
+		fallthrough
 	default:
 		return nil, fmt.Errorf("%w: %s", ErrUnsupportedType, instance.Type)
 	}

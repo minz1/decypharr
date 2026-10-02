@@ -8,9 +8,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"time"
-
-	"uuid"
 
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/storage"
@@ -42,7 +39,7 @@ func (r *Service) RecheckEntry(ctx context.Context, entryName string, fix bool) 
 			r.attachArrContext(ctx, c)
 		}
 		heal := newErrorCache()
-		nzb := newNZBProber(r.usenet)
+		nzb := r.nzbProber()
 		final := r.probeEntry(ctx, runID, c, heal, nzb, RunOptions{}, fix)
 		if final == nil {
 			return
@@ -69,56 +66,16 @@ func (r *Service) RecheckMedia(ctx context.Context, arrName, mediaID string, fix
 	if mediaID == "" {
 		return nil, errors.New("media_id is required")
 	}
-	if ctx == nil {
-		ctx = r.parentCtx
-	}
 
 	arrs, err := r.resolveArrsForMedia(arrName)
 	if err != nil {
 		return nil, err
 	}
 
-	r.mu.Lock()
-	if r.activeRunID != "" {
-		id := r.activeRunID
-		r.mu.Unlock()
-		return nil, fmt.Errorf("repair already running (run %s)", id)
-	}
-	runCtx, cancel := context.WithCancel(ctx)
-	run := &storage.RepairRun{
-		ID:        uuid.New().String(),
-		Trigger:   storage.RepairTriggerManual,
-		Status:    storage.RepairRunRunning,
-		Stage:     storage.RepairStageSelecting,
-		StartedAt: time.Now(),
-		Source:    fmt.Sprintf("media:%s/%s", arrName, mediaID),
-	}
-	r.activeRunID = run.ID
-	r.cancelRun = cancel
-	r.mu.Unlock()
-
-	if saveRepairRunErr := r.storage.SaveRepairRun(run); saveRepairRunErr != nil {
-		r.mu.Lock()
-		r.activeRunID = ""
-		r.cancelRun = nil
-		r.mu.Unlock()
-		cancel()
-		return nil, fmt.Errorf("failed to persist repair run: %w", saveRepairRunErr)
-	}
-
-	r.runWG.Go(func() {
-		defer func() {
-			r.mu.Lock()
-			if r.activeRunID == run.ID {
-				r.activeRunID = ""
-				r.cancelRun = nil
-			}
-			r.mu.Unlock()
-			cancel()
-		}()
+	run := newManualRun(storage.RepairStageSelecting, fmt.Sprintf("media:%s/%s", arrName, mediaID))
+	return r.startManualRun(ctx, run, func(runCtx context.Context) {
 		r.executeRecheckMedia(runCtx, run, arrs, arrName, mediaID, fix)
 	})
-	return run, nil
 }
 
 func (r *Service) executeRecheckMedia(
@@ -162,7 +119,6 @@ func (r *Service) executeRecheckMedia(
 	heal := newErrorCache()
 	mediaNames := slices.Sorted(maps.Keys(candidates))
 	err := r.probeAndHealCandidates(ctx, run, candidates, mediaNames, heal, RunOptions{}, fix)
-	candidates = nil
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			r.finalizeRun(run, storage.RepairRunCancelled, "", "context cancelled during probing")

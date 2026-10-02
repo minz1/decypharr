@@ -216,6 +216,9 @@ func (m *Migrator) runMigration(ctx context.Context, cachedTorrents map[string][
 		Msg("Migration completed")
 }
 
+// cachePercentScale converts the cache's 0-100 progress to a placement's 0-1.
+const cachePercentScale = 100.0
+
 // loadCacheTorrents loads all torrents from cache directories and groups by infohash.
 func (m *Migrator) loadCacheTorrents() (map[string][]*storage.CachedTorrent, error) {
 	// Map: infohash -> []*CachedTorrent (multiple debrids)
@@ -233,57 +236,66 @@ func (m *Migrator) loadCacheTorrents() (map[string][]*storage.CachedTorrent, err
 	}
 
 	for _, debridDir := range debridDirs {
-		if !debridDir.IsDir() {
-			continue
-		}
-
-		debridName := debridDir.Name()
-		debridPath := filepath.Join(m.cacheDir, debridName)
-
-		// Read all JSON files in this debrid directory
-		files, readDirErr := os.ReadDir(debridPath)
-		if readDirErr != nil {
-			m.logger.Error().Err(readDirErr).Str("path", debridPath).Msg("Failed to read debrid directory")
-			continue
-		}
-
-		for _, file := range files {
-			if file.IsDir() || !strings.HasSuffix(file.Name(), ".json") {
-				continue
-			}
-
-			filePath := filepath.Join(debridPath, file.Name())
-
-			// Read and parse JSON
-			data, readFileErr := os.ReadFile(filePath)
-			if readFileErr != nil {
-				m.logger.Error().Err(readFileErr).Str("file", filePath).Msg("Failed to read cache file")
-				continue
-			}
-
-			var cached storage.CachedTorrent
-			if unmarshalErr := json.Unmarshal(data, &cached); unmarshalErr != nil {
-				m.logger.Error().Err(unmarshalErr).Str("file", filePath).Msg("Failed to unmarshal cache file")
-				continue
-			}
-
-			// Validate required fields
-			if cached.InfoHash == "" {
-				m.logger.Warn().Str("file", filePath).Msg("Cache file missing info_hash, skipping")
-				continue
-			}
-
-			// Ensure debrid field is set
-			if cached.Debrid == "" {
-				cached.Debrid = debridName
-			}
-
-			// Group by infohash
-			torrentsByHash[cached.InfoHash] = append(torrentsByHash[cached.InfoHash], &cached)
+		if debridDir.IsDir() {
+			m.loadDebridCache(debridDir.Name(), torrentsByHash)
 		}
 	}
 
 	return torrentsByHash, nil
+}
+
+// loadDebridCache adds every readable cache file of one debrid directory to
+// torrentsByHash. Unreadable files are logged and skipped.
+func (m *Migrator) loadDebridCache(debridName string, torrentsByHash map[string][]*storage.CachedTorrent) {
+	debridPath := filepath.Join(m.cacheDir, debridName)
+
+	// Read all JSON files in this debrid directory
+	files, err := os.ReadDir(debridPath)
+	if err != nil {
+		m.logger.Error().Err(err).Str("path", debridPath).Msg("Failed to read debrid directory")
+		return
+	}
+
+	for _, file := range files {
+		if file.IsDir() || !strings.HasSuffix(file.Name(), ".json") {
+			continue
+		}
+		cached, ok := m.readCachedTorrent(filepath.Join(debridPath, file.Name()))
+		if !ok {
+			continue
+		}
+
+		// Ensure debrid field is set
+		if cached.Debrid == "" {
+			cached.Debrid = debridName
+		}
+
+		// Group by infohash
+		torrentsByHash[cached.InfoHash] = append(torrentsByHash[cached.InfoHash], cached)
+	}
+}
+
+// readCachedTorrent parses one cache file. It reports false, after logging,
+// for a file that cannot be read, decoded, or has no info hash.
+func (m *Migrator) readCachedTorrent(filePath string) (*storage.CachedTorrent, bool) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		m.logger.Error().Err(err).Str("file", filePath).Msg("Failed to read cache file")
+		return nil, false
+	}
+
+	var cached storage.CachedTorrent
+	if unmarshalErr := json.Unmarshal(data, &cached); unmarshalErr != nil {
+		m.logger.Error().Err(unmarshalErr).Str("file", filePath).Msg("Failed to unmarshal cache file")
+		return nil, false
+	}
+
+	// Validate required fields
+	if cached.InfoHash == "" {
+		m.logger.Warn().Str("file", filePath).Msg("Cache file missing info_hash, skipping")
+		return nil, false
+	}
+	return &cached, true
 }
 
 // mergeCachedTorrents merges multiple cache entries (from different debrids) into a single Entry.
@@ -297,81 +309,80 @@ func (m *Migrator) mergeCachedTorrents(cachedList []*storage.CachedTorrent) (*st
 	managed := base.ToManagedTorrent()
 
 	// AddOrUpdate placements from other debrids
-	for i := 1; i < len(cachedList); i++ {
-		other := cachedList[i]
-
+	for _, other := range cachedList[1:] {
 		// Check if placement already exists for this debrid+infohash combo
 		if _, exists := managed.Providers[other.Debrid]; exists {
 			continue
 		}
-
-		// Parse timestamp
-		addedAt, err := time.Parse(time.RFC3339, other.AddedOn)
-		if err != nil {
-			addedAt = time.Now()
-		}
-
-		// Determine placement status
-		status := debridTypes.TorrentStatusDownloaded
-		if other.Bad {
-			status = debridTypes.TorrentStatusError
-		} else if other.IsComplete {
-			status = debridTypes.TorrentStatusDownloaded
-		}
-
-		// Create placement
-		placement := &storage.ProviderEntry{
-			Provider: other.Debrid,
-			ID:       other.ID,
-			AddedAt:  addedAt,
-			Status:   status,
-			Progress: other.Progress / 100.0,
-			Files:    make(map[string]*storage.ProviderFile),
-		}
-
-		// Set downloaded timestamp if complete
-		if other.IsComplete && other.Status == "downloaded" {
-			downloadedAt := addedAt // Use added time as approximation
-			placement.DownloadedAt = &downloadedAt
-		}
-
-		managed.Providers[other.Debrid] = placement
-
-		// Merge files - add any files not in the base and populate placement files
-		if other.Files != nil {
-			for fileName, file := range other.Files {
-				// AddOrUpdate to global files if not exists
-				if _, exists := managed.Files[fileName]; !exists {
-					managed.Files[fileName] = &storage.File{
-						Name:      fileName,
-						Size:      file.Size,
-						ByteRange: file.ByteRange,
-						Deleted:   file.Deleted,
-						InfoHash:  other.InfoHash, // Track which torrent this file came from
-						AddedOn:   addedAt,
-					}
-				}
-
-				// AddOrUpdate placement-specific file data
-				placement.Files[fileName] = &storage.ProviderFile{
-					Id:   file.Id,
-					Link: file.Link,
-					Path: file.Path,
-				}
-			}
-		}
-
-		// Update size if other has larger size
-		if other.Bytes > managed.Bytes {
-			managed.Bytes = other.Bytes
-			managed.Size = other.Bytes
-		}
+		mergeCachedPlacement(managed, other)
 	}
 
 	// Activate the most complete placement
 	m.activateBestPlacement(managed)
 
 	return managed, nil
+}
+
+// mergeCachedPlacement adds other's debrid placement to managed, along with any
+// files managed does not know yet.
+func mergeCachedPlacement(managed *storage.Entry, other *storage.CachedTorrent) {
+	// Parse timestamp
+	addedAt, err := time.Parse(time.RFC3339, other.AddedOn)
+	if err != nil {
+		addedAt = time.Now()
+	}
+
+	// Determine placement status
+	status := debridTypes.TorrentStatusDownloaded
+	if other.Bad {
+		status = debridTypes.TorrentStatusError
+	}
+
+	// Create placement
+	placement := &storage.ProviderEntry{
+		Provider: other.Debrid,
+		ID:       other.ID,
+		AddedAt:  addedAt,
+		Status:   status,
+		Progress: other.Progress / cachePercentScale,
+		Files:    make(map[string]*storage.ProviderFile),
+	}
+
+	// Set downloaded timestamp if complete
+	if other.IsComplete && other.Status == "downloaded" {
+		downloadedAt := addedAt // Use added time as approximation
+		placement.DownloadedAt = &downloadedAt
+	}
+
+	managed.Providers[other.Debrid] = placement
+
+	// Merge files - add any files not in the base and populate placement files
+	for fileName, file := range other.Files {
+		// AddOrUpdate to global files if not exists
+		if _, exists := managed.Files[fileName]; !exists {
+			managed.Files[fileName] = &storage.File{
+				Name:      fileName,
+				Size:      file.Size,
+				ByteRange: file.ByteRange,
+				Deleted:   file.Deleted,
+				InfoHash:  other.InfoHash, // Track which torrent this file came from
+				AddedOn:   addedAt,
+			}
+		}
+
+		// AddOrUpdate placement-specific file data
+		placement.Files[fileName] = &storage.ProviderFile{
+			Id:   file.Id,
+			Link: file.Link,
+			Path: file.Path,
+		}
+	}
+
+	// Update size if other has larger size
+	if other.Bytes > managed.Bytes {
+		managed.Bytes = other.Bytes
+		managed.Size = other.Bytes
+	}
 }
 
 // activateBestPlacement finds and activates the first placement that is completed.

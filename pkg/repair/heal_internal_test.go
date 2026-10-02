@@ -37,6 +37,7 @@ func (fake *fakeReacquirer) ReacquireLibraryFile(
 }
 
 func TestHealBrokenEntryQueuesStableFileIdentity(t *testing.T) {
+	t.Parallel()
 	store := newRepairTestStorage(t)
 	const (
 		entryID  = "nzb-entry-1"
@@ -101,6 +102,7 @@ func TestHealBrokenEntryQueuesStableFileIdentity(t *testing.T) {
 }
 
 func TestHealBrokenEntryCountsQueueAndIdentityFailures(t *testing.T) {
+	t.Parallel()
 	store := newRepairTestStorage(t)
 	const (
 		entryID  = "nzb-entry-2"
@@ -158,6 +160,7 @@ func newRepairTestStorage(t *testing.T) *storage.Storage {
 }
 
 func TestHealBrokenEntrySkipsArrsWithoutReacquisition(t *testing.T) {
+	t.Parallel()
 	store := newRepairTestStorage(t)
 	registry := arr.New()
 	registry.AddOrUpdate(arr.Arr{Name: "lidarr", Host: "http://lidarr.test", Token: "token"})
@@ -195,6 +198,7 @@ func TestHealBrokenEntrySkipsArrsWithoutReacquisition(t *testing.T) {
 }
 
 func TestHealBrokenEntryQueuesUnindexedLibraryFile(t *testing.T) {
+	t.Parallel()
 	var mutations int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -234,8 +238,10 @@ func TestHealBrokenEntryQueuesUnindexedLibraryFile(t *testing.T) {
 }
 
 func TestHealBrokenEntryDoesNotBypassUnsafeOrUnavailableReacquisition(t *testing.T) {
+	t.Parallel()
 	for _, cause := range []error{reacquire.ErrBindingUnsafe, reacquire.ErrServiceNotStarted, reacquire.ErrServiceClosed} {
 		t.Run(cause.Error(), func(t *testing.T) {
+			t.Parallel()
 			store := newRepairTestStorage(t)
 			if err := store.AddOrUpdate(
 				&storage.Entry{InfoHash: "entry", Name: "release", Files: map[string]*storage.File{
@@ -262,5 +268,18 @@ func TestHealBrokenEntryDoesNotBypassUnsafeOrUnavailableReacquisition(t *testing
 				t.Fatalf("error = %v, fallback calls = %d", err, len(reacquirer.libraryRequests))
 			}
 		})
+	}
+}
+
+func TestNewTreatsNilReacquireServiceAsUnavailable(t *testing.T) {
+	t.Parallel()
+	var unavailable *reacquire.Service
+	service := New(Dependencies{Reacquirer: unavailable})
+	if service.reacquirer != nil {
+		t.Fatal("typed-nil reacquire service must not be kept as a Reacquirer")
+	}
+	_, err := service.reacquireBrokenFile(t.Context(), storage.BrokenFile{})
+	if !errors.Is(err, errReacquirerUnavailable) {
+		t.Fatalf("error = %v, want %v", err, errReacquirerUnavailable)
 	}
 }

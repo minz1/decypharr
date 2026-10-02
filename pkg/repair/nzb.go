@@ -27,6 +27,16 @@ func newNZBProber(client nzbProbeClient) *nzbProber {
 	return &nzbProber{client: client}
 }
 
+// nzbProber builds the prober for a sweep. A nil *usenet.Usenet must stay a
+// nil interface: wrapped, it passes the "not configured" check and CheckFile
+// dereferences it.
+func (r *Service) nzbProber() *nzbProber {
+	if r.usenet == nil {
+		return newNZBProber(nil)
+	}
+	return newNZBProber(r.usenet)
+}
+
 func (p *nzbProber) probe(ctx context.Context, request nzbProbeRequest) fileResult {
 	result := fileResult{
 		name:     request.fileName,
