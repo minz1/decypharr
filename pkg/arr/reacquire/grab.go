@@ -2,7 +2,6 @@ package reacquire
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strconv"
 
@@ -21,35 +20,7 @@ func (handler *arrHandler) grabBestRelease(
 	}
 
 	if mutation, found := mutationOfKind(*job, MutationReleaseGrab); found {
-		if mutation.State == MutationConfirmed {
-			return StatusWaitingForDownload, nil
-		}
-		if mutation.Attempts > 0 {
-			record, found, err := handler.reconcileReleaseMutation(ctx, instance, mutation)
-			if err != nil {
-				return "", unavailableMutationReconciliation(mutation, err)
-			}
-			if found {
-				if confirmMutationErr := confirmMutation(
-					job,
-					progress,
-					StatusSearching,
-					mutation,
-					record.ID,
-				); confirmMutationErr != nil {
-					return "", confirmMutationErr
-				}
-				return StatusWaitingForDownload, nil
-			}
-			if mutationRedispatchErr := mutationRedispatchError(mutation); mutationRedispatchErr != nil {
-				return "", mutationRedispatchErr
-			}
-		}
-		release, err := handler.findPersistedRelease(ctx, instance, bindings, mutation)
-		if err != nil {
-			return "", err
-		}
-		return handler.dispatchReleaseMutation(ctx, instance, job, mutation, release, progress)
+		return handler.resumeReleaseGrab(ctx, instance, job, bindings, mutation, progress)
 	}
 
 	releases, err := handler.searchReplacementReleases(ctx, instance, bindings)
@@ -71,6 +42,42 @@ func (handler *arrHandler) grabBestRelease(
 		return handler.dispatchReleaseMutation(ctx, instance, job, mutation, release, progress)
 	}
 	return "", fmt.Errorf("arr returned no downloadable replacement release with reconcilable identity")
+}
+
+// resumeReleaseGrab continues a grab chosen by an earlier run. It never picks
+// a different release: the persisted one is confirmed, reconciled, or sent
+// again, or the job fails.
+func (handler *arrHandler) resumeReleaseGrab(
+	ctx context.Context,
+	instance arr.Arr,
+	job *Job,
+	bindings []Binding,
+	mutation Mutation,
+	progress JobProgress,
+) (Status, error) {
+	if mutation.State == MutationConfirmed {
+		return StatusWaitingForDownload, nil
+	}
+	done, err := reconcileAttempted(job, progress, StatusSearching, mutation, handler.grabReceipt(ctx, instance))
+	if err != nil {
+		return "", err
+	}
+	if done {
+		return StatusWaitingForDownload, nil
+	}
+	release, err := handler.findPersistedRelease(ctx, instance, bindings, mutation)
+	if err != nil {
+		return "", err
+	}
+	return handler.dispatchReleaseMutation(ctx, instance, job, mutation, release, progress)
+}
+
+// grabReceipt finds a release grab in the Arr's grab history.
+func (handler *arrHandler) grabReceipt(ctx context.Context, instance arr.Arr) receiptLookup {
+	return func(mutation Mutation) (int, bool, error) {
+		record, found, err := handler.reconcileReleaseMutation(ctx, instance, mutation)
+		return record.ID, found, err
+	}
 }
 
 func (handler *arrHandler) searchReplacementReleases(
@@ -176,27 +183,11 @@ func (handler *arrHandler) dispatchReleaseMutation(
 	if err != nil {
 		return "", err
 	}
-	if grabReleaseErr := handler.arrs.GrabRelease(ctx, instance.Name, release); grabReleaseErr != nil {
-		if !errors.Is(grabReleaseErr, arr.ErrMutationOutcomeUnknown) {
-			return "", grabReleaseErr
-		}
-		record, found, reconcileErr := handler.reconcileReleaseMutation(ctx, instance, mutation)
-		if reconcileErr == nil && found {
-			if confirmMutationErr := confirmMutation(
-				job,
-				progress,
-				StatusSearching,
-				mutation,
-				record.ID,
-			); confirmMutationErr != nil {
-				return "", confirmMutationErr
-			}
-			return StatusWaitingForDownload, nil
-		}
-		return "", unresolvedMutation(mutation, grabReleaseErr, reconcileErr)
-	}
-	if confirmMutationErr := confirmMutation(job, progress, StatusSearching, mutation, 0); confirmMutationErr != nil {
-		return "", confirmMutationErr
+	dispatchErr := handler.arrs.GrabRelease(ctx, instance.Name, release)
+	if settleErr := settleDispatch(
+		job, progress, StatusSearching, mutation, dispatchErr, 0, handler.grabReceipt(ctx, instance),
+	); settleErr != nil {
+		return "", settleErr
 	}
 	return StatusWaitingForDownload, nil
 }

@@ -2,7 +2,6 @@ package reacquire
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strconv"
 
@@ -31,61 +30,33 @@ func (handler *arrHandler) searchBindings(
 	if mutation.State == MutationConfirmed {
 		return StatusWaitingForGrab, nil
 	}
-	if mutation.Attempts > 0 {
-		command, found, reconcileCommandMutationErr := handler.reconcileCommandMutation(ctx, instance, mutation)
-		if reconcileCommandMutationErr != nil {
-			return "", unavailableMutationReconciliation(mutation, reconcileCommandMutationErr)
-		}
-		if found {
-			if confirmMutationErr := confirmMutation(
-				job,
-				progress,
-				StatusSearching,
-				mutation,
-				command.ID,
-			); confirmMutationErr != nil {
-				return "", confirmMutationErr
-			}
-			return StatusWaitingForGrab, nil
-		}
-		if mutationRedispatchErr := mutationRedispatchError(mutation); mutationRedispatchErr != nil {
-			return "", mutationRedispatchErr
-		}
+	lookup := handler.commandReceipt(ctx, instance)
+	done, err := reconcileAttempted(job, progress, StatusSearching, mutation, lookup)
+	if err != nil {
+		return "", err
+	}
+	if done {
+		return StatusWaitingForGrab, nil
 	}
 	mutation, err = recordMutationAttempt(job, progress, StatusSearching, mutation)
 	if err != nil {
 		return "", err
 	}
-	command, err := handler.dispatchSearchCommand(ctx, instance, mutation)
-	if err != nil {
-		if !errors.Is(err, arr.ErrMutationOutcomeUnknown) {
-			return "", err
-		}
-		receipt, found, reconcileErr := handler.reconcileCommandMutation(ctx, instance, mutation)
-		if reconcileErr == nil && found {
-			if confirmMutationErr := confirmMutation(
-				job,
-				progress,
-				StatusSearching,
-				mutation,
-				receipt.ID,
-			); confirmMutationErr != nil {
-				return "", confirmMutationErr
-			}
-			return StatusWaitingForGrab, nil
-		}
-		return "", unresolvedMutation(mutation, err, reconcileErr)
-	}
-	if confirmMutationErr := confirmMutation(
-		job,
-		progress,
-		StatusSearching,
-		mutation,
-		command.ID,
-	); confirmMutationErr != nil {
-		return "", confirmMutationErr
+	command, dispatchErr := handler.dispatchSearchCommand(ctx, instance, mutation)
+	if settleErr := settleDispatch(
+		job, progress, StatusSearching, mutation, dispatchErr, command.ID, lookup,
+	); settleErr != nil {
+		return "", settleErr
 	}
 	return StatusWaitingForGrab, nil
+}
+
+// commandReceipt finds a search command in the Arr's command list.
+func (handler *arrHandler) commandReceipt(ctx context.Context, instance arr.Arr) receiptLookup {
+	return func(mutation Mutation) (int, bool, error) {
+		command, found, err := handler.reconcileCommandMutation(ctx, instance, mutation)
+		return command.ID, found, err
+	}
 }
 
 func searchMutation(instance arr.Arr, bindings []Binding) (Mutation, error) {
