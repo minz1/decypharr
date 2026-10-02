@@ -15,7 +15,6 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
-//nolint:paralleltest // points the process-wide config singleton at a temp dir
 func TestDownloadDecryptsEncryptedFiles(t *testing.T) {
 	config.SetConfigPath(t.TempDir())
 	config.Reset()

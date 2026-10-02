@@ -66,9 +66,8 @@ func ppStack(t *testing.T, streams, segsPer int, rtt time.Duration) (*nntpd.Serv
 // test asserts the two properties that failure violated — playback keeps up
 // with the consumer, and the pool does not force streams to re-download what
 // they just fetched.
-//
-//nolint:paralleltest // asserts throughput under a shared RAM budget; concurrent tests skew timing
 func TestPlaybackUnderPoolPressure(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name             string
 		streams, segsPer int
@@ -84,6 +83,7 @@ func TestPlaybackUnderPoolPressure(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			pools := NewPools(tc.poolMB << 20)
 			t.Cleanup(func() { _ = pools.Close() })
 			srv, client, all := ppStack(t, tc.streams, tc.segsPer, 2*time.Millisecond)
