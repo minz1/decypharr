@@ -28,45 +28,7 @@ func TestCheckStatusSelectsAllowedFilesAndMapsLinks(t *testing.T) {
 		t.Fatal(err)
 	}
 	var gets, selections atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer test-key" {
-			t.Errorf("Authorization = %q", r.Header.Get("Authorization"))
-		}
-		switch r.Method + " " + r.URL.Path {
-		case "GET /torrents/info/torrent-id":
-			status := "waiting_files_selection"
-			selected := 0
-			if gets.Add(1) == 2 {
-				status = "downloaded"
-				selected = 1
-			}
-			if gets.Load() > 2 {
-				http.Error(w, "unexpected poll", http.StatusInternalServerError)
-				return
-			}
-			fmt.Fprintf(
-				w,
-				`{"id":"torrent-id","filename":"Release","original_filename":"Original","hash":"hash","bytes":3000,"progress":100,"status":%q,"files":[{"id":7,"path":"/Release/first.mkv","bytes":1000,"selected":%d},{"id":8,"path":"/Release/readme.txt","bytes":10,"selected":0},{"id":9,"path":"/Release/second.mkv","bytes":2000,"selected":%d}],"links":["https://example.test/first","https://example.test/second"]}`,
-				status,
-				selected,
-				selected,
-			)
-		case "POST /torrents/selectFiles/torrent-id":
-			selections.Add(1)
-			if err := r.ParseForm(); err != nil {
-				t.Error(err)
-			}
-			ids := strings.Split(r.Form.Get("files"), ",")
-			slices.Sort(ids)
-			if !slices.Equal(ids, []string{"7", "9"}) {
-				t.Errorf("selected IDs = %v", ids)
-			}
-			w.WriteHeader(http.StatusNoContent)
-		default:
-			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
-			http.NotFound(w, r)
-		}
-	}))
+	server := httptest.NewServer(selectionFlowHandler(t, &gets, &selections))
 	defer server.Close()
 	provider := &RealDebrid{
 		Host: server.URL,
@@ -133,29 +95,7 @@ func TestCheckStatusFailureAndUncachedContracts(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			var gets, selects atomic.Int32
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				switch r.Method + " " + r.URL.Path {
-				case "GET /torrents/info/id":
-					if gets.Add(1) > 1 {
-						http.Error(w, "unexpected poll", http.StatusInternalServerError)
-						return
-					}
-					fmt.Fprintf(
-						w,
-						`{"status":%q,"filename":"movie","files":[{"id":1,"path":"/movie.mkv","bytes":1000}]}`,
-						tc.state,
-					)
-				case "POST /torrents/selectFiles/id":
-					selects.Add(1)
-					if r.FormValue("files") != "1" {
-						t.Errorf("files = %q", r.FormValue("files"))
-					}
-					w.WriteHeader(tc.selectStatus)
-				default:
-					t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
-					http.NotFound(w, r)
-				}
-			}))
+			server := httptest.NewServer(singlePollHandler(t, tc.state, tc.selectStatus, &gets, &selects))
 			defer server.Close()
 			provider := &RealDebrid{
 				Host:   server.URL,
@@ -163,18 +103,7 @@ func TestCheckStatusFailureAndUncachedContracts(t *testing.T) {
 				logger: zerolog.Nop(),
 			}
 			result, err := provider.CheckStatus(&types.Torrent{Id: "id", DownloadUncached: tc.allowUncached})
-			switch {
-			case tc.wantErr != nil:
-				if !errors.Is(err, tc.wantErr) {
-					t.Fatalf("error = %v, want %v", err, tc.wantErr)
-				}
-			case tc.wantText != "":
-				if err == nil || !strings.Contains(err.Error(), tc.wantText) {
-					t.Fatalf("error = %v, want %q", err, tc.wantText)
-				}
-			case err != nil:
-				t.Fatal(err)
-			}
+			assertError(t, err, tc.wantErr, tc.wantText)
 			if tc.wantStatus != "" && (result == nil || result.Status != tc.wantStatus) {
 				t.Fatalf("result = %#v, want status %s", result, tc.wantStatus)
 			}
@@ -186,5 +115,95 @@ func TestCheckStatusFailureAndUncachedContracts(t *testing.T) {
 				t.Fatalf("GETs = %d, selections = %d", gets.Load(), selects.Load())
 			}
 		})
+	}
+}
+
+// selectionFlowHandler serves a torrent that waits for file selection once
+// and is downloaded on the next poll.
+func selectionFlowHandler(t *testing.T, gets, selections *atomic.Int32) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-key" {
+			t.Errorf("Authorization = %q", r.Header.Get("Authorization"))
+		}
+		switch r.Method + " " + r.URL.Path {
+		case "GET /torrents/info/torrent-id":
+			status := "waiting_files_selection"
+			selected := 0
+			if gets.Add(1) == 2 {
+				status = "downloaded"
+				selected = 1
+			}
+			if gets.Load() > 2 {
+				http.Error(w, "unexpected poll", http.StatusInternalServerError)
+				return
+			}
+			fmt.Fprintf(
+				w,
+				`{"id":"torrent-id","filename":"Release","original_filename":"Original","hash":"hash","bytes":3000,"progress":100,"status":%q,"files":[{"id":7,"path":"/Release/first.mkv","bytes":1000,"selected":%d},{"id":8,"path":"/Release/readme.txt","bytes":10,"selected":0},{"id":9,"path":"/Release/second.mkv","bytes":2000,"selected":%d}],"links":["https://example.test/first","https://example.test/second"]}`,
+				status,
+				selected,
+				selected,
+			)
+		case "POST /torrents/selectFiles/torrent-id":
+			selections.Add(1)
+			if err := r.ParseForm(); err != nil {
+				t.Error(err)
+			}
+			ids := strings.Split(r.Form.Get("files"), ",")
+			slices.Sort(ids)
+			if !slices.Equal(ids, []string{"7", "9"}) {
+				t.Errorf("selected IDs = %v", ids)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}
+}
+
+// singlePollHandler serves one poll in the given state and answers file
+// selection with selectStatus.
+func singlePollHandler(t *testing.T, state string, selectStatus int, gets, selects *atomic.Int32) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /torrents/info/id":
+			if gets.Add(1) > 1 {
+				http.Error(w, "unexpected poll", http.StatusInternalServerError)
+				return
+			}
+			fmt.Fprintf(
+				w,
+				`{"status":%q,"filename":"movie","files":[{"id":1,"path":"/movie.mkv","bytes":1000}]}`,
+				state,
+			)
+		case "POST /torrents/selectFiles/id":
+			selects.Add(1)
+			if r.FormValue("files") != "1" {
+				t.Errorf("files = %q", r.FormValue("files"))
+			}
+			w.WriteHeader(selectStatus)
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}
+}
+
+// assertError checks err against a wanted sentinel, a wanted substring, or
+// success when neither is set.
+func assertError(t *testing.T, err, wantErr error, wantText string) {
+	t.Helper()
+	switch {
+	case wantErr != nil:
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("error = %v, want %v", err, wantErr)
+		}
+	case wantText != "":
+		if err == nil || !strings.Contains(err.Error(), wantText) {
+			t.Fatalf("error = %v, want %q", err, wantText)
+		}
+	case err != nil:
+		t.Fatal(err)
 	}
 }
