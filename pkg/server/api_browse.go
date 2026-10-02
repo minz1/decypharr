@@ -3,7 +3,9 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"mime"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -44,17 +46,55 @@ type BrowseResponse struct {
 	CurrentKind string        `json:"current_kind,omitempty"`
 }
 
+// Sort parameters shared by the queue and browse listings.
+const (
+	sortDesc   = "desc"
+	sortByName = "name"
+	sortBySize = "size"
+)
+
+// Page sizes for listing endpoints.
+const (
+	defaultQueuePageLimit  = 20
+	defaultBrowsePageLimit = 50
+	maxPageLimit           = 100
+)
+
+// pageParams reads the 1-based page and the page size, falling back to
+// defLimit when limit is missing or out of range.
+func pageParams(q url.Values, defLimit int) (int, int) {
+	page, _ := strconv.Atoi(q.Get("page"))
+	page = max(page, 1)
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	if limit < 1 || limit > maxPageLimit {
+		limit = defLimit
+	}
+	return page, limit
+}
+
+// paginate returns the 1-based page of items and the page count. Pages past
+// the end are empty. Comparing page to the page count first keeps a huge
+// page number from overflowing (page-1)*limit into a negative offset.
+func paginate[T any](items []T, page, limit int) ([]T, int) {
+	totalPages := (len(items) + limit - 1) / limit
+	if page > totalPages {
+		return []T{}, totalPages
+	}
+	start := (page - 1) * limit
+	return items[start:min(start+limit, len(items))], totalPages
+}
+
 func getBrowseSortParams(r *http.Request) (string, string) {
 	sortBy := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("sort_by")))
 	sortOrder := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("sort_order")))
 
 	switch sortBy {
-	case "name", "size", "mod_time", "active_debrid":
+	case sortByName, sortBySize, "mod_time", "active_debrid":
 	default:
-		sortBy = "name"
+		sortBy = sortByName
 	}
 
-	if sortOrder != "desc" {
+	if sortOrder != sortDesc {
 		sortOrder = "asc"
 	}
 
@@ -79,9 +119,9 @@ func sortBrowseEntries(entries []BrowseEntry, sortBy, sortOrder string) {
 			return entries[i].IsDir && !entries[j].IsDir
 		}
 
-		cmp := 0
+		var cmp int
 		switch sortBy {
-		case "size":
+		case sortBySize:
 			cmp = compareInt64(entries[i].Size, entries[j].Size)
 		case "mod_time":
 			cmp = strings.Compare(entries[i].ModTime, entries[j].ModTime)
@@ -98,7 +138,7 @@ func sortBrowseEntries(entries []BrowseEntry, sortBy, sortOrder string) {
 			cmp = strings.Compare(entries[i].Path, entries[j].Path)
 		}
 
-		if sortOrder == "desc" {
+		if sortOrder == sortDesc {
 			cmp = -cmp
 		}
 		return cmp < 0
@@ -107,15 +147,7 @@ func sortBrowseEntries(entries []BrowseEntry, sortBy, sortOrder string) {
 
 // handleBrowseMount returns subdirectories under a mount (__all__, __bad__, etc.)
 func (s *Server) handleBrowseMount(w http.ResponseWriter, r *http.Request) {
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	if page < 1 {
-		page = 1
-	}
-
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit < 1 || limit > 100 {
-		limit = 50
-	}
+	page, limit := pageParams(r.URL.Query(), defaultBrowsePageLimit)
 	sortBy, sortOrder := getBrowseSortParams(r)
 
 	children := s.manager.GetEntries()
@@ -137,16 +169,7 @@ func (s *Server) handleBrowseMount(w http.ResponseWriter, r *http.Request) {
 
 	// Apply pagination
 	total := len(entries)
-	totalPages := (total + limit - 1) / limit
-	offset := (page - 1) * limit
-
-	var paginatedEntries []BrowseEntry
-	if offset < total {
-		end := min(offset+limit, total)
-		paginatedEntries = entries[offset:end]
-	} else {
-		paginatedEntries = []BrowseEntry{}
-	}
+	paginatedEntries, totalPages := paginate(entries, page, limit)
 
 	utils.JSONResponse(w, BrowseResponse{
 		Entries:     paginatedEntries,
@@ -163,15 +186,7 @@ func (s *Server) handleBrowseMount(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleBrowseGroup(w http.ResponseWriter, r *http.Request) {
 	group := utils.PathUnescape(chi.URLParam(r, "group"))
 
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	if page < 1 {
-		page = 1
-	}
-
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit < 1 || limit > 100 {
-		limit = 50
-	}
+	page, limit := pageParams(r.URL.Query(), defaultBrowsePageLimit)
 	sortBy, sortOrder := getBrowseSortParams(r)
 
 	search := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("search")))
@@ -212,16 +227,7 @@ func (s *Server) handleBrowseGroup(w http.ResponseWriter, r *http.Request) {
 
 	// Apply pagination
 	total := len(entries)
-	totalPages := (total + limit - 1) / limit
-	offset := (page - 1) * limit
-
-	var paginatedEntries []BrowseEntry
-	if offset < total {
-		end := min(offset+limit, total)
-		paginatedEntries = entries[offset:end]
-	} else {
-		paginatedEntries = []BrowseEntry{}
-	}
+	paginatedEntries, totalPages := paginate(entries, page, limit)
 
 	utils.JSONResponse(w, BrowseResponse{
 		Entries:     paginatedEntries,
@@ -240,15 +246,7 @@ func (s *Server) handleBrowseTorrentFiles(w http.ResponseWriter, r *http.Request
 	group := utils.PathUnescape(chi.URLParam(r, "group"))
 	torrent := utils.PathUnescape(chi.URLParam(r, "torrent"))
 
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	if page < 1 {
-		page = 1
-	}
-
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit < 1 || limit > 100 {
-		limit = 50
-	}
+	page, limit := pageParams(r.URL.Query(), defaultBrowsePageLimit)
 	sortBy, sortOrder := getBrowseSortParams(r)
 
 	search := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("search")))
@@ -285,16 +283,7 @@ func (s *Server) handleBrowseTorrentFiles(w http.ResponseWriter, r *http.Request
 
 	// Apply pagination
 	total := len(entries)
-	totalPages := (total + limit - 1) / limit
-	offset := (page - 1) * limit
-
-	var paginatedEntries []BrowseEntry
-	if offset < total {
-		end := min(offset+limit, total)
-		paginatedEntries = entries[offset:end]
-	} else {
-		paginatedEntries = []BrowseEntry{}
-	}
+	paginatedEntries, totalPages := paginate(entries, page, limit)
 
 	parentPath := "/" + group
 
@@ -329,8 +318,8 @@ func (s *Server) handleDeleteBrowseTorrent(w http.ResponseWriter, r *http.Reques
 	}
 
 	utils.JSONResponse(w, map[string]any{
-		"success": true,
-		"message": "Item deleted successfully",
+		keySuccess: true,
+		keyMessage: "Item deleted successfully",
 	}, http.StatusOK)
 }
 
@@ -357,9 +346,9 @@ func (s *Server) handleBatchDeleteBrowseTorrents(w http.ResponseWriter, r *http.
 	}
 
 	utils.JSONResponse(w, map[string]any{
-		"success": true,
-		"message": "Torrents deleted successfully",
-		"count":   len(req.IDs),
+		keySuccess: true,
+		keyMessage: "Torrents deleted successfully",
+		"count":    len(req.IDs),
 	}, http.StatusOK)
 }
 
@@ -385,20 +374,28 @@ func (s *Server) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Last-Modified", entry.AddedOn.UTC().Format(http.TimeFormat))
 
 	w.Header().Set("Content-Type", utils.GetContentType(file.Name))
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", file.Name))
+	w.Header().Set("Content-Disposition", attachmentDisposition(file.Name))
 
 	switch entry.Protocol {
 	case config.ProtocolTorrent:
 		s.handleTorrentDownload(w, r, entry, file)
 		return
 	case config.ProtocolNZB:
-		s.handleUsenetDownload(w, r, torrentName, file)
+		s.handleUsenetDownload(w, r, file)
 		return
+	case config.ProtocolAll:
+		fallthrough // not an entry protocol
 	default:
 		s.logger.Error().Msgf("Unsupported protocol: %s for %s/%s", entry.Protocol, entry.Name, fileName)
 		http.Error(w, "Unsupported protocol", http.StatusPreconditionFailed)
 		return
 	}
+}
+
+// attachmentDisposition quotes name properly; a bare %q-style quote broke on
+// names containing '"' and mangled non-ASCII names.
+func attachmentDisposition(name string) string {
+	return mime.FormatMediaType("attachment", map[string]string{"filename": name})
 }
 
 func (s *Server) handleTorrentDownload(
@@ -420,9 +417,9 @@ func (s *Server) handleTorrentDownload(
 	http.Redirect(w, r, link.DownloadLink, http.StatusFound)
 }
 
-func (s *Server) handleUsenetDownload(w http.ResponseWriter, r *http.Request, entryName string, file *storage.File) {
+func (s *Server) handleUsenetDownload(w http.ResponseWriter, r *http.Request, file *storage.File) {
 	w.Header().Set("Content-Type", utils.GetContentType(file.Name))
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", file.Name))
+	w.Header().Set("Content-Disposition", attachmentDisposition(file.Name))
 	w.Header().Set("Content-Length", strconv.FormatInt(file.Size, 10))
 
 	err := s.manager.Usenet().Download(r.Context(), file.InfoHash, file.Name, w, nil)

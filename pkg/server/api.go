@@ -2,13 +2,18 @@ package server
 
 import (
 	"bytes"
+	"cmp"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
+	"net/url"
 	"reflect"
+	"slices"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -28,16 +33,16 @@ type mountCachePurger interface {
 	PurgeCache() (map[string]any, error)
 }
 
-func (s *Server) handleGetArrs(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleGetArrs(w http.ResponseWriter, _ *http.Request) {
 	utils.JSONResponse(w, s.manager.Arr().All(), http.StatusOK)
 }
 
-func (s *Server) handleGetVersion(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleGetVersion(w http.ResponseWriter, _ *http.Request) {
 	v := version.GetInfo()
 	utils.JSONResponse(w, v, http.StatusOK)
 }
 
-func (s *Server) handleRunMountCacheCleanup(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleRunMountCacheCleanup(w http.ResponseWriter, _ *http.Request) {
 	mountMgr := s.manager.MountManager()
 	if mountMgr == nil || !mountMgr.IsReady() {
 		http.Error(w, "Mount is not ready", http.StatusServiceUnavailable)
@@ -62,12 +67,12 @@ func (s *Server) handleRunMountCacheCleanup(w http.ResponseWriter, r *http.Reque
 	}
 
 	utils.JSONResponse(w, map[string]any{
-		"status": "success",
-		"cache":  cleanupStats,
+		keyStatus: keySuccess,
+		"cache":   cleanupStats,
 	}, http.StatusOK)
 }
 
-func (s *Server) handlePurgeMountCache(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handlePurgeMountCache(w http.ResponseWriter, _ *http.Request) {
 	mountMgr := s.manager.MountManager()
 	if mountMgr == nil || !mountMgr.IsReady() {
 		http.Error(w, "Mount is not ready", http.StatusServiceUnavailable)
@@ -92,22 +97,13 @@ func (s *Server) handlePurgeMountCache(w http.ResponseWriter, r *http.Request) {
 	}
 
 	utils.JSONResponse(w, map[string]any{
-		"status": "success",
-		"cache":  purgeStats,
+		keyStatus: keySuccess,
+		"cache":   purgeStats,
 	}, http.StatusOK)
 }
 
 func (s *Server) handleGetTorrents(w http.ResponseWriter, r *http.Request) {
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	if page < 1 {
-		page = 1
-	}
-
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit < 1 || limit > 100 {
-		limit = 20
-	}
-
+	page, limit := pageParams(r.URL.Query(), defaultQueuePageLimit)
 	search := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("search")))
 	category := strings.TrimSpace(r.URL.Query().Get("category"))
 	state := strings.TrimSpace(r.URL.Query().Get("state"))
@@ -118,7 +114,7 @@ func (s *Server) handleGetTorrents(w http.ResponseWriter, r *http.Request) {
 		sortBy = "added_on"
 	}
 	if sortOrder == "" {
-		sortOrder = "desc"
+		sortOrder = sortDesc
 	}
 
 	allTorrents, err := s.manager.Queue().ListFilter("", config.ProtocolAll, "", nil, "added_on", false)
@@ -132,50 +128,22 @@ func (s *Server) handleGetTorrents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	filteredTorrents := make([]*storage.Entry, 0)
+	categorySet := make(map[string]struct{})
 	for _, t := range allTorrents {
-		if search != "" {
-			searchIn := strings.ToLower(t.Name + " " + t.InfoHash)
-			if !strings.Contains(searchIn, search) {
-				continue
-			}
+		if t.Category != "" {
+			categorySet[t.Category] = struct{}{}
 		}
-
-		if category != "" && t.Category != category {
-			continue
+		if (search == "" || strings.Contains(strings.ToLower(t.Name+" "+t.InfoHash), search)) &&
+			(category == "" || t.Category == category) &&
+			(state == "" || t.State == storage.TorrentState(state)) {
+			filteredTorrents = append(filteredTorrents, t)
 		}
-
-		if state != "" && t.State != storage.TorrentState(state) {
-			continue
-		}
-
-		filteredTorrents = append(filteredTorrents, t)
 	}
-
 	sortQueuedTorrents(filteredTorrents, sortBy, sortOrder)
 
 	total := len(filteredTorrents)
-	totalPages := (total + limit - 1) / limit
-	offset := (page - 1) * limit
-
-	var paginatedTorrents []*storage.Entry
-	if offset < total {
-		end := min(offset+limit, total)
-		paginatedTorrents = filteredTorrents[offset:end]
-	} else {
-		paginatedTorrents = []*storage.Entry{}
-	}
-
-	categorySet := make(map[string]bool)
-	for _, t := range allTorrents {
-		if t.Category != "" {
-			categorySet[t.Category] = true
-		}
-	}
-
-	categories := make([]string, 0, len(categorySet))
-	for c := range categorySet {
-		categories = append(categories, c)
-	}
+	paginatedTorrents, totalPages := paginate(filteredTorrents, page, limit)
+	categories := slices.Collect(maps.Keys(categorySet))
 
 	utils.JSONResponse(w, map[string]any{
 		"torrents":    paginatedTorrents,
@@ -197,9 +165,9 @@ func sortQueuedTorrents(torrents []*storage.Entry, sortBy, sortOrder string) {
 	less := func(i, j int) bool {
 		var result bool
 		switch sortBy {
-		case "name":
+		case sortByName:
 			result = strings.ToLower(torrents[i].Name) < strings.ToLower(torrents[j].Name)
-		case "size":
+		case sortBySize:
 			result = torrents[i].Size < torrents[j].Size
 		case "added_on":
 			result = torrents[i].AddedOn.Before(torrents[j].AddedOn)
@@ -213,7 +181,7 @@ func sortQueuedTorrents(torrents []*storage.Entry, sortBy, sortOrder string) {
 			result = torrents[i].AddedOn.Before(torrents[j].AddedOn)
 		}
 
-		if sortOrder == "desc" {
+		if sortOrder == sortDesc {
 			return !result
 		}
 		return result
@@ -222,26 +190,29 @@ func sortQueuedTorrents(torrents []*storage.Entry, sortBy, sortOrder string) {
 	sort.Slice(torrents, less)
 }
 
+// queueDeleteCleanup returns the per-entry hook for queue deletes: with
+// removeFromDebrid it also removes the entry (and its provider placement).
+func (s *Server) queueDeleteCleanup(removeFromDebrid bool) func(*storage.Entry) error {
+	if !removeFromDebrid {
+		return nil
+	}
+	return func(t *storage.Entry) error {
+		if exists, _ := s.manager.EntryExists(t.InfoHash); exists {
+			return s.manager.DeleteEntry(t.InfoHash, true)
+		}
+		go s.manager.RemoveTorrentPlacements(t)
+		return nil
+	}
+}
+
 func (s *Server) handleDeleteTorrent(w http.ResponseWriter, r *http.Request) {
 	hash := chi.URLParam(r, "hash")
-	removeFromDebrid := r.URL.Query().Get("removeFromDebrid") == "true"
+	removeFromDebrid := boolOr(queryBool(r.URL.Query(), "removeFromDebrid"), false)
 	if hash == "" {
 		http.Error(w, "No hash provided", http.StatusBadRequest)
 		return
 	}
-	var cleanup func(torrent *storage.Entry) error
-
-	if removeFromDebrid {
-		cleanup = func(t *storage.Entry) error {
-			exists, _ := s.manager.EntryExists(t.InfoHash)
-			if exists {
-				// Remove the entry from manager fully, which will handle removing from debrid and deleting the entry
-				return s.manager.DeleteEntry(t.InfoHash, true)
-			}
-			go s.manager.RemoveTorrentPlacements(t)
-			return nil
-		}
-	}
+	cleanup := s.queueDeleteCleanup(removeFromDebrid)
 
 	if err := s.manager.Queue().Delete(hash, true, cleanup); err != nil {
 		s.logger.Error().Err(err).Str("hash", hash).Msg("Failed to delete entry from queue")
@@ -254,24 +225,13 @@ func (s *Server) handleDeleteTorrent(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeleteTorrents(w http.ResponseWriter, r *http.Request) {
 	hashesStr := r.URL.Query().Get("hashes")
-	removeFromDebrid := r.URL.Query().Get("removeFromDebrid") == "true"
+	removeFromDebrid := boolOr(queryBool(r.URL.Query(), "removeFromDebrid"), false)
 	if hashesStr == "" {
 		http.Error(w, "No hashes provided", http.StatusBadRequest)
 		return
 	}
 	hashes := strings.Split(hashesStr, ",")
-	var cleanup func(torrent *storage.Entry) error
-	if removeFromDebrid {
-		cleanup = func(t *storage.Entry) error {
-			exists, _ := s.manager.EntryExists(t.InfoHash)
-			if exists {
-				// Remove the entry from manager fully, which will handle removing from debrid and deleting the entry
-				return s.manager.DeleteEntry(t.InfoHash, true)
-			}
-			go s.manager.RemoveTorrentPlacements(t)
-			return nil
-		}
-	}
+	cleanup := s.queueDeleteCleanup(removeFromDebrid)
 	if err := s.manager.Queue().DeleteWhere("", config.ProtocolAll, "", hashes, cleanup); err != nil {
 		s.logger.Error().Err(err).Msg("Failed to delete torrents")
 		http.Error(w, "Failed to delete torrents", http.StatusInternalServerError)
@@ -281,7 +241,7 @@ func (s *Server) handleDeleteTorrents(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
 	arrStorage := s.manager.Arr()
 	cfg := *config.Get()
 	cfg.Arrs = arrStorage.SyncToConfig()
@@ -289,6 +249,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	// Create response with API token info
 	type ConfigResponse struct {
 		*config.Config
+
 		SessionSecret string `json:"session_secret,omitempty"`
 		APIToken      string `json:"api_token,omitempty"`
 		AuthUsername  string `json:"auth_username,omitempty"`
@@ -319,30 +280,11 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	var before config.Config
 	invalid := false
 	updated, err := config.Update(func(current *config.Config) error {
-		next, mergeConfigUpdateErr := mergeConfigUpdate(current, bytes.NewReader(body))
-		if mergeConfigUpdateErr != nil {
+		next, prepareErr := prepareConfigUpdate(current, body)
+		if prepareErr != nil {
 			invalid = true
-			return fmt.Errorf("invalid request body: %w", mergeConfigUpdateErr)
+			return prepareErr
 		}
-		next.MigrateVirtualFolders()
-		if validateVirtualFoldersErr := next.ValidateVirtualFolders(); validateVirtualFoldersErr != nil {
-			invalid = true
-			return fmt.Errorf("invalid virtual folders: %w", validateVirtualFoldersErr)
-		}
-		next.Auth = current.Auth
-		next.SessionSecret = current.SessionSecret
-		next.UseAuth = current.UseAuth
-		next.EnableWebdavAuth = current.EnableWebdavAuth
-		if next.Strm.Secret == "" {
-			next.Strm.Secret = current.Strm.Secret
-		}
-		validArrs := make([]config.Arr, 0, len(next.Arrs))
-		for _, a := range next.Arrs {
-			if a.Name != "" && a.Host != "" && a.Token != "" {
-				validArrs = append(validArrs, a)
-			}
-		}
-		next.Arrs = validArrs
 		before = *current
 		*current = next
 		return nil
@@ -360,28 +302,59 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	restarted := before.RequiresRestart(updated)
 	if restarted {
 		go s.Restart()
-	} else {
-		if before.AppURL != updated.AppURL || !reflect.DeepEqual(before.Strm, updated.Strm) {
-			s.manager.Strm().SweepAsync("config_change")
-		}
-		if applyVirtualFoldersErr := s.manager.ApplyVirtualFolders(
-			updated.VirtualFolders,
-		); applyVirtualFoldersErr != nil {
-			s.logger.Error().Err(applyVirtualFoldersErr).Msg("Failed to apply virtual folders")
-			http.Error(
-				w,
-				"Configuration was saved, but virtual folders could not be applied: "+applyVirtualFoldersErr.Error(),
-				http.StatusInternalServerError,
-			)
-			return
-		}
-		if svc := s.manager.Repair(); svc != nil {
-			if applyConfigErr := svc.ApplyConfig(); applyConfigErr != nil {
-				s.logger.Warn().Err(applyConfigErr).Msg("Failed to apply repair config")
-			}
+	} else if applyErr := s.applyLiveConfig(&before, updated); applyErr != nil {
+		s.logger.Error().Err(applyErr).Msg("Failed to apply virtual folders")
+		http.Error(
+			w,
+			"Configuration was saved, but virtual folders could not be applied: "+applyErr.Error(),
+			http.StatusInternalServerError,
+		)
+		return
+	}
+	utils.JSONResponse(w, map[string]any{keyStatus: keySuccess, "restarted": restarted}, http.StatusOK)
+}
+
+// prepareConfigUpdate merges body onto current and validates it. Auth and
+// secrets are never taken from the request.
+func prepareConfigUpdate(current *config.Config, body []byte) (config.Config, error) {
+	next, err := mergeConfigUpdate(current, bytes.NewReader(body))
+	if err != nil {
+		return config.Config{}, fmt.Errorf("invalid request body: %w", err)
+	}
+	next.MigrateVirtualFolders()
+	if validateErr := next.ValidateVirtualFolders(); validateErr != nil {
+		return config.Config{}, fmt.Errorf("invalid virtual folders: %w", validateErr)
+	}
+	next.Auth = current.Auth
+	next.SessionSecret = current.SessionSecret
+	next.UseAuth = current.UseAuth
+	next.EnableWebdavAuth = current.EnableWebdavAuth
+	next.Strm.Secret = cmp.Or(next.Strm.Secret, current.Strm.Secret)
+	validArrs := make([]config.Arr, 0, len(next.Arrs))
+	for _, a := range next.Arrs {
+		if a.Name != "" && a.Host != "" && a.Token != "" {
+			validArrs = append(validArrs, a)
 		}
 	}
-	utils.JSONResponse(w, map[string]any{"status": "success", "restarted": restarted}, http.StatusOK)
+	next.Arrs = validArrs
+	return next, nil
+}
+
+// applyLiveConfig pushes a saved config that needs no restart into the
+// running services. Only a virtual-folder failure is reported.
+func (s *Server) applyLiveConfig(before, updated *config.Config) error {
+	if before.AppURL != updated.AppURL || !reflect.DeepEqual(before.Strm, updated.Strm) {
+		s.manager.Strm().SweepAsync("config_change")
+	}
+	if err := s.manager.ApplyVirtualFolders(updated.VirtualFolders); err != nil {
+		return err
+	}
+	if svc := s.manager.Repair(); svc != nil {
+		if err := svc.ApplyConfig(); err != nil {
+			s.logger.Warn().Err(err).Msg("Failed to apply repair config")
+		}
+	}
+	return nil
 }
 
 func mergeConfigUpdate(current *config.Config, update io.Reader) (config.Config, error) {
@@ -426,16 +399,16 @@ func (s *Server) handlePreviewVirtualFolder(w http.ResponseWriter, r *http.Reque
 	}, http.StatusOK)
 }
 
-func (s *Server) handleStrmRegenerate(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleStrmRegenerate(w http.ResponseWriter, _ *http.Request) {
 	if !config.Get().Strm.Active() {
 		http.Error(w, "STRM is disabled or has no path configured", http.StatusBadRequest)
 		return
 	}
 	s.manager.Strm().SweepAsync("regenerate")
-	utils.JSONResponse(w, map[string]string{"status": "started"}, http.StatusAccepted)
+	utils.JSONResponse(w, map[string]string{keyStatus: "started"}, http.StatusAccepted)
 }
 
-func (s *Server) handleGetRepairConfig(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleGetRepairConfig(w http.ResponseWriter, _ *http.Request) {
 	utils.JSONResponse(w, config.Get().Repair, http.StatusOK)
 }
 
@@ -446,25 +419,9 @@ func (s *Server) handleUpdateRepairConfig(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if req.Enabled {
-		if strings.TrimSpace(req.Schedule) == "" {
-			http.Error(w, "Schedule is required when repair is enabled", http.StatusBadRequest)
-			return
-		}
-		if _, err := utils.ConvertToJobDef(req.Schedule); err != nil {
-			http.Error(w, fmt.Sprintf("Invalid schedule: %v", err), http.StatusBadRequest)
-			return
-		}
-		if req.RecheckInterval != "" {
-			if _, err := utils.ParseDuration(req.RecheckInterval); err != nil {
-				http.Error(w, fmt.Sprintf("Invalid recheck_interval: %v", err), http.StatusBadRequest)
-				return
-			}
-		}
-		if req.Source != "" && req.Source != config.RepairSourceArr && req.Source != config.RepairSourceManaged {
-			http.Error(w, "Invalid source (must be 'arr' or 'managed')", http.StatusBadRequest)
-			return
-		}
+	if msg := validateRepairConfig(&req); msg != "" {
+		http.Error(w, msg, http.StatusBadRequest)
+		return
 	}
 	if req.NNTPConnectionPercent < 0 || req.NNTPConnectionPercent > 100 {
 		http.Error(w, "Invalid nntp_connection_percent (must be between 0 and 100)", http.StatusBadRequest)
@@ -489,7 +446,30 @@ func (s *Server) handleUpdateRepairConfig(w http.ResponseWriter, r *http.Request
 	utils.JSONResponse(w, cfg.Repair, http.StatusOK)
 }
 
-func (s *Server) handleRepairStatus(w http.ResponseWriter, r *http.Request) {
+// validateRepairConfig returns a client-facing message for an invalid
+// enabled config, or "".
+func validateRepairConfig(req *config.RepairConfig) string {
+	if !req.Enabled {
+		return ""
+	}
+	if strings.TrimSpace(req.Schedule) == "" {
+		return "Schedule is required when repair is enabled"
+	}
+	if _, err := utils.ConvertToJobDef(req.Schedule); err != nil {
+		return fmt.Sprintf("Invalid schedule: %v", err)
+	}
+	if req.RecheckInterval != "" {
+		if _, err := utils.ParseDuration(req.RecheckInterval); err != nil {
+			return fmt.Sprintf("Invalid recheck_interval: %v", err)
+		}
+	}
+	if req.Source != "" && req.Source != config.RepairSourceArr && req.Source != config.RepairSourceManaged {
+		return "Invalid source (must be 'arr' or 'managed')"
+	}
+	return ""
+}
+
+func (s *Server) handleRepairStatus(w http.ResponseWriter, _ *http.Request) {
 	svc := s.manager.Repair()
 	if svc == nil {
 		utils.JSONResponse(w, repair.Status{}, http.StatusOK)
@@ -508,41 +488,19 @@ func (s *Server) handleRunRepair(w http.ResponseWriter, r *http.Request) {
 		Protocol          string `json:"protocol,omitempty"`
 	}
 	if r.Body != nil && r.ContentLength != 0 {
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 			http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 	}
-	ignoreLastChecked := req.IgnoreLastChecked || req.Force
-	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get("ignore_last_checked"))) {
-	case "1", "true", "yes", "on":
-		ignoreLastChecked = true
-	}
-	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get("force"))) {
-	case "1", "true", "yes", "on":
-		ignoreLastChecked = true
-	}
-	autoRepair := req.AutoRepair
-	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get("auto_repair"))) {
-	case "1", "true", "yes", "on":
-		autoRepair = new(true)
-	case "0", "false", "no", "off":
-		autoRepair = new(false)
-	}
-	unrestrictLink := req.UnrestrictLink
-	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get("unrestrict_link"))) {
-	case "1", "true", "yes", "on":
-		unrestrictLink = true
-	case "0", "false", "no", "off":
-		unrestrictLink = false
-	}
-	verifyContent := req.VerifyContent
-	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get("verify_content"))) {
-	case "1", "true", "yes", "on":
-		verifyContent = new(true)
-	case "0", "false", "no", "off":
-		verifyContent = new(false)
-	}
+	// Query parameters override the body. ignore_last_checked/force can only
+	// turn the flag on.
+	q := r.URL.Query()
+	ignoreLastChecked := req.IgnoreLastChecked || req.Force ||
+		boolOr(queryBool(q, "ignore_last_checked"), false) || boolOr(queryBool(q, "force"), false)
+	autoRepair := cmp.Or(queryBool(q, "auto_repair"), req.AutoRepair)
+	unrestrictLink := boolOr(queryBool(q, "unrestrict_link"), req.UnrestrictLink)
+	verifyContent := cmp.Or(queryBool(q, "verify_content"), req.VerifyContent)
 	protocolScope := strings.ToLower(strings.TrimSpace(req.Protocol))
 	if queryProtocol := strings.TrimSpace(r.URL.Query().Get("protocol")); queryProtocol != "" {
 		protocolScope = strings.ToLower(queryProtocol)
@@ -576,7 +534,34 @@ func (s *Server) handleRunRepair(w http.ResponseWriter, r *http.Request) {
 	utils.JSONResponse(w, map[string]string{"run_id": id}, http.StatusOK)
 }
 
-func (s *Server) handleStopRepair(w http.ResponseWriter, r *http.Request) {
+// queryBool parses a lenient boolean query value; nil when absent or
+// unrecognized.
+func queryBool(q url.Values, key string) *bool {
+	switch strings.ToLower(strings.TrimSpace(q.Get(key))) {
+	case "1", "true", "yes", "on":
+		return new(true)
+	case "0", "false", "no", "off":
+		return new(false)
+	}
+	return nil
+}
+
+func boolOr(v *bool, fallback bool) bool {
+	if v != nil {
+		return *v
+	}
+	return fallback
+}
+
+// repairErrStatus maps a repair-service error to an HTTP status.
+func repairErrStatus(err error) int {
+	if strings.Contains(err.Error(), "already running") {
+		return http.StatusConflict
+	}
+	return http.StatusBadRequest
+}
+
+func (s *Server) handleStopRepair(w http.ResponseWriter, _ *http.Request) {
 	svc := s.manager.Repair()
 	if svc == nil {
 		http.Error(w, "Repair service not available", http.StatusServiceUnavailable)
@@ -589,7 +574,7 @@ func (s *Server) handleStopRepair(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func (s *Server) handleListRepairRuns(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleListRepairRuns(w http.ResponseWriter, _ *http.Request) {
 	runs, err := s.manager.Storage().ListRepairRuns()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -612,7 +597,7 @@ func (s *Server) handleGetRepairRun(w http.ResponseWriter, r *http.Request) {
 	utils.JSONResponse(w, run, http.StatusOK)
 }
 
-func (s *Server) handleClearRepairRuns(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleClearRepairRuns(w http.ResponseWriter, _ *http.Request) {
 	if err := s.manager.Storage().ClearRepairRuns(); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -676,16 +661,13 @@ func (s *Server) handleRecheckMedia(w http.ResponseWriter, r *http.Request) {
 		req.Fix,
 	)
 	if err != nil {
-		status := http.StatusBadRequest
-		if strings.Contains(err.Error(), "already running") {
-			status = http.StatusConflict
-		}
+		status := repairErrStatus(err)
 		// Returning the run record (when present) gives the caller the
 		// failure detail captured in storage as well as the message.
 		if run != nil {
 			utils.JSONResponse(w, map[string]any{
-				"error": err.Error(),
-				"run":   run,
+				keyError: err.Error(),
+				"run":    run,
 			}, status)
 			return
 		}
@@ -701,7 +683,7 @@ func (s *Server) handleRecheckEntry(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "No entry name provided", http.StatusBadRequest)
 		return
 	}
-	fix := r.URL.Query().Get("fix") == "true"
+	fix := boolOr(queryBool(r.URL.Query(), "fix"), false)
 	svc := s.manager.Repair()
 	if svc == nil {
 		http.Error(w, "Repair service not available", http.StatusServiceUnavailable)
@@ -719,40 +701,25 @@ func (s *Server) handleRecheckEntry(w http.ResponseWriter, r *http.Request) {
 // broken entries. Body: {"names": ["...", ...]}. Empty/missing names ⇒ fix
 // every broken entry in storage.
 func (s *Server) handleFixBroken(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Names []string `json:"names,omitempty"`
-	}
-	// Body is optional; ignore decode errors for empty / missing bodies.
-	if r.Body != nil && r.ContentLength != 0 {
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-	}
-	svc := s.manager.Repair()
-	if svc == nil {
-		http.Error(w, "Repair service not available", http.StatusServiceUnavailable)
-		return
-	}
-	run, err := svc.FixBroken(s.manager.Context(), req.Names)
-	if err != nil {
-		status := http.StatusBadRequest
-		if strings.Contains(err.Error(), "already running") {
-			status = http.StatusConflict
-		}
-		http.Error(w, err.Error(), status)
-		return
-	}
-	utils.JSONResponse(w, run, http.StatusOK)
+	s.runBrokenAction(w, r, (*repair.Service).FixBroken)
 }
 
 // handleClearBroken clears currently broken files without asking the Arr to
 // re-search for replacements. Body: {"names": ["...", ...]}. Empty/missing
 // names ⇒ clear every broken entry in storage.
 func (s *Server) handleClearBroken(w http.ResponseWriter, r *http.Request) {
+	s.runBrokenAction(w, r, (*repair.Service).ClearBroken)
+}
+
+func (s *Server) runBrokenAction(
+	w http.ResponseWriter,
+	r *http.Request,
+	action func(*repair.Service, context.Context, []string) (*storage.RepairRun, error),
+) {
 	var req struct {
 		Names []string `json:"names,omitempty"`
 	}
+	// Body is optional.
 	if r.Body != nil && r.ContentLength != 0 {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
@@ -764,13 +731,9 @@ func (s *Server) handleClearBroken(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Repair service not available", http.StatusServiceUnavailable)
 		return
 	}
-	run, err := svc.ClearBroken(s.manager.Context(), req.Names)
+	run, err := action(svc, s.manager.Context(), req.Names)
 	if err != nil {
-		status := http.StatusBadRequest
-		if strings.Contains(err.Error(), "already running") {
-			status = http.StatusConflict
-		}
-		http.Error(w, err.Error(), status)
+		http.Error(w, err.Error(), repairErrStatus(err))
 		return
 	}
 	utils.JSONResponse(w, run, http.StatusOK)
@@ -806,10 +769,7 @@ func (s *Server) handleClearRepairState(w http.ResponseWriter, r *http.Request) 
 	}
 	result, err := svc.ClearStates(statuses)
 	if err != nil {
-		status := http.StatusBadRequest
-		if strings.Contains(err.Error(), "already running") {
-			status = http.StatusConflict
-		}
+		status := repairErrStatus(err)
 		http.Error(w, err.Error(), status)
 		return
 	}
@@ -844,9 +804,38 @@ func (s *Server) handleRefreshAPIToken(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	utils.JSONResponse(w, map[string]any{
-		"token":   token,
-		"message": "API token refreshed successfully",
+		"token":    token,
+		keyMessage: "API token refreshed successfully",
 	}, http.StatusOK)
+}
+
+// validateNewCredentials returns a client-facing message, or "".
+func validateNewCredentials(username, password, confirm string) string {
+	switch {
+	case username == "":
+		return "Username is required"
+	case password == "":
+		return "Password is required"
+	case password != confirm:
+		return "Passwords do not match"
+	}
+	return ""
+}
+
+// clearPasswordAuth drops the username/password: token-only mode keeps the
+// API token, otherwise auth is disabled and the token removed too.
+func clearPasswordAuth(next *config.Config, tokenOnly bool) error {
+	auth := next.GetAuth()
+	if auth == nil {
+		auth = &config.Auth{}
+	}
+	next.UseAuth = tokenOnly
+	auth.Username, auth.Password = "", ""
+	auth.TokenOnly = tokenOnly
+	if !tokenOnly {
+		auth.APIToken = ""
+	}
+	return next.SaveAuth(auth)
 }
 
 func (s *Server) handleUpdateAuth(w http.ResponseWriter, r *http.Request) {
@@ -861,35 +850,18 @@ func (s *Server) handleUpdateAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	disable := !req.TokenOnly && req.Username == "" && req.Password == ""
-	if !req.TokenOnly && !disable {
-		if req.Username == "" {
-			http.Error(w, "Username is required", http.StatusBadRequest)
-			return
-		}
-		if req.Password == "" {
-			http.Error(w, "Password is required", http.StatusBadRequest)
-			return
-		}
-		if req.Password != req.ConfirmPassword {
-			http.Error(w, "Passwords do not match", http.StatusBadRequest)
+	setPassword := !req.TokenOnly && !disable
+	if setPassword {
+		if msg := validateNewCredentials(req.Username, req.Password, req.ConfirmPassword); msg != "" {
+			http.Error(w, msg, http.StatusBadRequest)
 			return
 		}
 	}
 	cfg, err := config.Update(func(next *config.Config) error {
-		if !req.TokenOnly && !disable {
+		if setPassword {
 			return next.SetCredentials(req.Username, req.Password)
 		}
-		auth := next.GetAuth()
-		if auth == nil {
-			auth = &config.Auth{}
-		}
-		next.UseAuth = !disable
-		auth.Username, auth.Password = "", ""
-		auth.TokenOnly = req.TokenOnly
-		if disable {
-			auth.APIToken = ""
-		}
-		return next.SaveAuth(auth)
+		return clearPasswordAuth(next, req.TokenOnly)
 	})
 	if err != nil {
 		s.logger.Error().Err(err).Msg("Failed to update authentication")
@@ -900,14 +872,14 @@ func (s *Server) handleUpdateAuth(w http.ResponseWriter, r *http.Request) {
 	if disable {
 		message = "Authentication disabled successfully"
 	}
-	response := map[string]string{"message": message}
+	response := map[string]string{keyMessage: message}
 	if req.TokenOnly {
-		response["message"] = "Token-only authentication enabled"
+		response[keyMessage] = "Token-only authentication enabled"
 		if auth := cfg.GetAuth(); auth != nil {
 			response["token"] = auth.APIToken
 		}
 		if cfg.EnableWebdavAuth {
-			response["message"] += ". WebDAV auth is still enabled but has no credential to accept — turn it off, or WebDAV clients will be rejected"
+			response[keyMessage] += ". WebDAV auth is still enabled but has no credential to accept — turn it off, or WebDAV clients will be rejected"
 			s.logger.Warn().Msg("Token-only auth enabled while WebDAV auth is on")
 		}
 	}

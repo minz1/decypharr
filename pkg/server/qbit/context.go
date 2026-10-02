@@ -10,8 +10,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/go-chi/chi/v5"
-
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 )
@@ -44,11 +42,10 @@ func getArrFromContext(ctx context.Context) arr.Arr {
 }
 
 func decodeAuthHeader(header string) (string, string, error) {
-	encodedTokens := strings.Split(header, " ")
-	if len(encodedTokens) != 2 {
+	_, encodedToken, ok := strings.Cut(header, " ")
+	if !ok || strings.Contains(encodedToken, " ") {
 		return "", "", nil
 	}
-	encodedToken := encodedTokens[1]
 
 	bytes, err := base64.StdEncoding.DecodeString(encodedToken)
 	if err != nil {
@@ -90,7 +87,7 @@ func (q *QBit) categoryContext(next http.Handler) http.Handler {
 			category = r.Form.Get("category")
 			if category == "" {
 				// GetReader from multipart form
-				_ = r.ParseMultipartForm(32 << 20)
+				_ = r.ParseMultipartForm(multipartMemory) //nolint:gosec // G120: body capped by Routes' MaxBytesReader
 				category = r.FormValue("category")
 			}
 		}
@@ -208,14 +205,11 @@ func extractFromSID(sid string) (string, string, error) {
 	}
 
 	// Split into parts: username:password:hash
-	parts := strings.Split(string(decoded), "|")
-	if len(parts) != 3 {
+	username, rest, ok := strings.Cut(string(decoded), "|")
+	password, providedHash, ok2 := strings.Cut(rest, "|")
+	if !ok || !ok2 || strings.Contains(providedHash, "|") {
 		return "", "", fmt.Errorf("invalid SID structure")
 	}
-
-	username := parts[0]
-	password := parts[1]
-	providedHash := parts[2]
 
 	// Verify hash
 	cfg := config.Get()
@@ -232,18 +226,15 @@ func extractFromSID(sid string) (string, string, error) {
 
 func hashesContext(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_hashes := chi.URLParam(r, "hashes")
+		_ = r.ParseForm()
+		// qBittorrent takes several hashes as one pipe-separated value.
 		var hashes []string
-		if _hashes != "" {
-			hashes = strings.Split(_hashes, "|")
-		}
-		if hashes == nil {
-			// GetReader hashes from form
-			_ = r.ParseForm()
-			hashes = r.Form["hashes"]
-		}
-		for i, hash := range hashes {
-			hashes[i] = strings.TrimSpace(hash)
+		for _, value := range r.Form["hashes"] {
+			for hash := range strings.SplitSeq(value, "|") {
+				if hash = strings.TrimSpace(hash); hash != "" {
+					hashes = append(hashes, hash)
+				}
+			}
 		}
 		ctx := context.WithValue(r.Context(), hashesKey, hashes)
 		next.ServeHTTP(w, r.WithContext(ctx))

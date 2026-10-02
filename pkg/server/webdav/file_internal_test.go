@@ -10,6 +10,7 @@ import (
 )
 
 func TestResolveRange(t *testing.T) {
+	t.Parallel()
 	const size = int64(1 << 20)
 	cases := []struct {
 		name       string
@@ -30,6 +31,7 @@ func TestResolveRange(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			start, end := resolveRange(tc.header, size)
 			if start != tc.start || end != tc.end {
 				t.Fatalf("resolveRange(%q) = (%d, %d), want (%d, %d)",
@@ -39,6 +41,7 @@ func TestResolveRange(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // mutates the process-wide config singleton
 func TestWriteStreamErrorPreservesTypedStatus(t *testing.T) {
 	config.Reset()
 	config.SetConfigPath(t.TempDir())

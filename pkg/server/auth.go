@@ -15,6 +15,10 @@ func (s *Server) skipAuthHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
+	if !s.mayConfigureAuth(r, cfg) {
+		http.Error(w, "authentication required: log in first", http.StatusUnauthorized)
+		return
+	}
 	_, err := config.Update(func(next *config.Config) error {
 		if err := next.SetupComplete(); err == nil {
 			return fmt.Errorf("setup is already complete")
@@ -39,12 +43,11 @@ func (s *Server) isValidAPIToken(r *http.Request) bool {
 	}
 
 	// Support both "Bearer <token>" and "Token <token>" formats
-	var token string
-	if after, ok := strings.CutPrefix(authHeader, "Bearer "); ok {
-		token = after
-	} else if after, ok := strings.CutPrefix(authHeader, "Token "); ok {
-		token = after
-	} else {
+	token, ok := strings.CutPrefix(authHeader, "Bearer ")
+	if !ok {
+		token, ok = strings.CutPrefix(authHeader, "Token ")
+	}
+	if !ok {
 		return false
 	}
 

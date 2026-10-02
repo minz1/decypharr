@@ -88,18 +88,13 @@ func (q *QBit) addTorrent(
 	return nil
 }
 
-func (q *QBit) ResumeTorrent(t *storage.Entry) bool {
-	return true
-}
+// Plausible swarm figures for properties: debrid entries have no real swarm.
+const (
+	fakeSwarmSize  = 100
+	fakePeersTotal = 2
+)
 
-func (q *QBit) PauseTorrent(t *storage.Entry) bool {
-	return true
-}
-
-func (q *QBit) RefreshTorrent(t *storage.Entry) bool {
-	return true
-}
-
+// GetTorrentProperties reports qBittorrent-style properties for t.
 func (q *QBit) GetTorrentProperties(t *storage.Entry) *TorrentProperties {
 	return &TorrentProperties{
 		AdditionDate:       t.AddedOn.Unix(),
@@ -114,46 +109,39 @@ func (q *QBit) GetTorrentProperties(t *storage.Entry) *TorrentProperties {
 		TotalUploaded:      t.Bytes,
 		TotalDownloaded:    t.Bytes,
 		LastSeen:           time.Now().Unix(),
-		NbConnectionsLimit: 100,
+		NbConnectionsLimit: fakeSwarmSize,
 		Peers:              0,
-		PeersTotal:         2,
+		PeersTotal:         fakePeersTotal,
 		SeedingTime:        1,
-		Seeds:              100,
-		ShareRatio:         100,
+		Seeds:              fakeSwarmSize,
+		ShareRatio:         fakeSwarmSize,
 	}
 }
 
 func (q *QBit) setTorrentTags(t *storage.Entry, tags []string) {
 	for _, tag := range tags {
-		if tag == "" {
-			continue
-		}
-		if !slices.Contains(t.Tags, tag) {
+		if tag != "" && !slices.Contains(t.Tags, tag) {
 			t.Tags = append(t.Tags, tag)
 		}
-		if !slices.Contains(q.Tags, tag) {
-			q.Tags = append(q.Tags, tag)
-		}
 	}
+	q.addTags(tags)
 	_ = q.manager.Queue().Update(t)
 }
 
-func (q *QBit) removeTorrentTags(t *storage.Entry, tags []string) bool {
-	newTorrentTags := utils.RemoveItem(t.Tags, tags...)
-	q.Tags = utils.RemoveItem(q.Tags, tags...)
-	t.Tags = newTorrentTags
+func (q *QBit) removeTorrentTags(t *storage.Entry, tags []string) {
+	t.Tags = utils.RemoveItem(t.Tags, tags...)
+	q.mu.Lock()
+	q.tags = utils.RemoveItem(q.tags, tags...)
+	q.mu.Unlock()
 	_ = q.manager.Queue().Update(t)
-	return true
 }
 
-func (q *QBit) addTags(tags []string) bool {
+func (q *QBit) addTags(tags []string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
 	for _, tag := range tags {
-		if tag == "" {
-			continue
-		}
-		if !slices.Contains(q.Tags, tag) {
-			q.Tags = append(q.Tags, tag)
+		if tag != "" && !slices.Contains(q.tags, tag) {
+			q.tags = append(q.tags, tag)
 		}
 	}
-	return true
 }

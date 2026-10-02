@@ -11,6 +11,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/arr/reacquire"
 )
 
+//nolint:paralleltest // mutates the process-wide config singleton
 func TestArrReacquireRoutesRequireAuthentication(t *testing.T) {
 	config.Reset()
 	config.SetConfigPath(t.TempDir())
@@ -54,6 +55,7 @@ func TestArrReacquireRoutesRequireAuthentication(t *testing.T) {
 }
 
 func TestValidateArrReacquireRequest(t *testing.T) {
+	t.Parallel()
 	valid := reacquire.Request{
 		EntryID: "entry",
 		FileID:  "file",

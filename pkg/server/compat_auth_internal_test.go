@@ -15,6 +15,23 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/server/sabnzbd"
 )
 
+// compatAuthRequest carries the credentials the way each compat API reads
+// them: Basic auth for qBittorrent, ma_username/ma_password for SABnzbd.
+func compatAuthRequest(protocol, category, username, password string) *http.Request {
+	query := url.Values{"category": {category}}
+	path := "/torrents/categories"
+	if protocol == "sabnzbd" {
+		path = "/api/"
+		query.Set("mode", "version")
+		query.Set("ma_username", username)
+		query.Set("ma_password", password)
+	}
+	req := httptest.NewRequest(http.MethodGet, path+"?"+query.Encode(), nil)
+	req.SetBasicAuth(username, password)
+	return req
+}
+
+//nolint:paralleltest // mutates the process-wide config singleton
 func TestCompatibilityAPIsAuthenticateBeforeProbing(t *testing.T) {
 	config.Reset()
 	config.SetConfigPath(t.TempDir())
@@ -30,7 +47,7 @@ func TestCompatibilityAPIsAuthenticateBeforeProbing(t *testing.T) {
 	})
 
 	var probes atomic.Int64
-	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		probes.Add(1)
 		_, _ = w.Write([]byte(`{"appName":"Sonarr"}`))
 	}))
@@ -58,18 +75,11 @@ func TestCompatibilityAPIsAuthenticateBeforeProbing(t *testing.T) {
 				{"local token", "manual", "", "server-token", http.StatusOK},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
-					query := url.Values{"category": {tc.category}}
-					path := "/torrents/categories"
-					if protocol.name == "sabnzbd" {
-						path = "/api/"
-						query.Set("mode", "version")
-						query.Set("ma_username", tc.username)
-						query.Set("ma_password", tc.password)
-					}
-					req := httptest.NewRequest(http.MethodGet, path+"?"+query.Encode(), nil)
-					req.SetBasicAuth(tc.username, tc.password)
 					response := httptest.NewRecorder()
-					protocol.handler.ServeHTTP(response, req)
+					protocol.handler.ServeHTTP(
+						response,
+						compatAuthRequest(protocol.name, tc.category, tc.username, tc.password),
+					)
 					if response.Code != tc.wantStatus {
 						t.Fatalf("status = %d, want %d: %s", response.Code, tc.wantStatus, response.Body.String())
 					}

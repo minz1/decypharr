@@ -27,6 +27,7 @@ func newAuthenticationTestQBit(t *testing.T) *QBit {
 	return &QBit{manager: mgr}
 }
 
+//nolint:paralleltest // mutates the process-wide config singleton
 func TestAuthenticateDoesNotOverwriteArrWithClientCredentials(t *testing.T) {
 	q := newAuthenticationTestQBit(t)
 	existing := arr.Arr{Name: "whisparr", Host: "http://whisparr:6969", Token: "arr-api-key"}
@@ -57,6 +58,7 @@ func TestAuthenticateDoesNotOverwriteArrWithClientCredentials(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // mutates the process-wide config singleton
 func TestAuthenticateDiscoversValidatedArrCredentials(t *testing.T) {
 	q := newAuthenticationTestQBit(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -84,6 +86,7 @@ func TestAuthenticateDiscoversValidatedArrCredentials(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // mutates the process-wide config singleton
 func TestPreferencesRequireAuthentication(t *testing.T) {
 	q := newAuthenticationTestQBit(t)
 	cfg := config.Get()
@@ -114,7 +117,7 @@ func TestPreferencesRequireAuthentication(t *testing.T) {
 
 // TestDecodeAuthHeader covers the fix for the slice-bounds-out-of-range panic
 // at pkg/server/qbit/context.go:60-62. When the base64-decoded payload contains
-// no colon, strings.LastIndex returns -1 and the subsequent slice expression
+// no colon, [strings.LastIndex] returns -1 and the subsequent slice expression
 // `bearer[:colonIndex]` panics with "slice bounds out of range [:-1]".
 //
 // Pre-fix the "no colon" cases panic; post-fix they return a clean error and
@@ -122,6 +125,7 @@ func TestPreferencesRequireAuthentication(t *testing.T) {
 // (chi's Recoverer middleware catches the panic, but the goroutine traceback
 // is logged on every occurrence).
 func TestDecodeAuthHeader(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name         string
 		header       string
@@ -177,26 +181,12 @@ func TestDecodeAuthHeader(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			defer func() {
-				if r := recover(); r != nil {
-					if tt.mustNotPanic {
-						t.Fatalf(
-							"decodeAuthHeader panicked on %q: %v (regression — function must return an error, not panic)",
-							tt.header,
-							r,
-						)
-					}
-					panic(r)
-				}
-			}()
-
+			t.Parallel()
+			// A panic fails the test on its own; mustNotPanic documents which
+			// cases used to panic.
 			user, pass, err := decodeAuthHeader(tt.header)
-
-			if tt.wantErr && err == nil {
-				t.Errorf("expected an error for header=%q, got nil (user=%q, pass=%q)", tt.header, user, pass)
-			}
-			if !tt.wantErr && err != nil {
-				t.Errorf("unexpected error for header=%q: %v", tt.header, err)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("header=%q: err = %v, wantErr %t (user=%q, pass=%q)", tt.header, err, tt.wantErr, user, pass)
 			}
 			if tt.wantUser != "" && user != tt.wantUser {
 				t.Errorf("user mismatch: got %q want %q", user, tt.wantUser)

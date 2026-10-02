@@ -1,6 +1,8 @@
 package qbit
 
 import (
+	"encoding/json"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/storage"
@@ -22,7 +24,7 @@ type AppPreferences struct {
 	AltUpLimit                         int      `json:"alt_up_limit"`
 	AlternativeWebuiEnabled            bool     `json:"alternative_webui_enabled"`
 	AlternativeWebuiPath               string   `json:"alternative_webui_path"`
-	AnnounceIp                         string   `json:"announce_ip"`
+	AnnounceIP                         string   `json:"announce_ip"`
 	AnnounceToAllTiers                 bool     `json:"announce_to_all_tiers"`
 	AnnounceToAllTrackers              bool     `json:"announce_to_all_trackers"`
 	AnonymousMode                      bool     `json:"anonymous_mode"`
@@ -43,7 +45,7 @@ type AppPreferences struct {
 	CurrentNetworkInterface            string   `json:"current_network_interface"`
 	Dht                                bool     `json:"dht"`
 	DiskCache                          int      `json:"disk_cache"`
-	DiskCacheTtl                       int      `json:"disk_cache_ttl"`
+	DiskCacheTTL                       int      `json:"disk_cache_ttl"`
 	DlLimit                            int      `json:"dl_limit"`
 	DontCountSlowTorrents              bool     `json:"dont_count_slow_torrents"`
 	DyndnsDomain                       string   `json:"dyndns_domain"`
@@ -54,7 +56,7 @@ type AppPreferences struct {
 	EmbeddedTrackerPort                int      `json:"embedded_tracker_port"`
 	EnableCoalesceReadWrite            bool     `json:"enable_coalesce_read_write"`
 	EnableEmbeddedTracker              bool     `json:"enable_embedded_tracker"`
-	EnableMultiConnectionsFromSameIp   bool     `json:"enable_multi_connections_from_same_ip"`
+	EnableMultiConnectionsFromSameIP   bool     `json:"enable_multi_connections_from_same_ip"`
 	EnableOsCache                      bool     `json:"enable_os_cache"`
 	EnablePieceExtentAffinity          bool     `json:"enable_piece_extent_affinity"`
 	EnableSuperSeeding                 bool     `json:"enable_super_seeding"`
@@ -64,11 +66,11 @@ type AppPreferences struct {
 	ExportDirFin                       string   `json:"export_dir_fin"`
 	FilePoolSize                       int      `json:"file_pool_size"`
 	IncompleteFilesExt                 bool     `json:"incomplete_files_ext"`
-	IpFilterEnabled                    bool     `json:"ip_filter_enabled"`
-	IpFilterPath                       string   `json:"ip_filter_path"`
-	IpFilterTrackers                   bool     `json:"ip_filter_trackers"`
+	IPFilterEnabled                    bool     `json:"ip_filter_enabled"`
+	IPFilterPath                       string   `json:"ip_filter_path"`
+	IPFilterTrackers                   bool     `json:"ip_filter_trackers"`
 	LimitLanPeers                      bool     `json:"limit_lan_peers"`
-	LimitTcpOverhead                   bool     `json:"limit_tcp_overhead"`
+	LimitTCPOverhead                   bool     `json:"limit_tcp_overhead"`
 	LimitUtpRate                       bool     `json:"limit_utp_rate"`
 	ListenPort                         int      `json:"listen_port"`
 	Locale                             string   `json:"locale"`
@@ -78,7 +80,7 @@ type AppPreferences struct {
 	MailNotificationEnabled            bool     `json:"mail_notification_enabled"`
 	MailNotificationPassword           string   `json:"mail_notification_password"`
 	MailNotificationSender             string   `json:"mail_notification_sender"`
-	MailNotificationSmtp               string   `json:"mail_notification_smtp"`
+	MailNotificationSMTP               string   `json:"mail_notification_smtp"`
 	MailNotificationSslEnabled         bool     `json:"mail_notification_ssl_enabled"`
 	MailNotificationUsername           string   `json:"mail_notification_username"`
 	MaxActiveDownloads                 int      `json:"max_active_downloads"`
@@ -98,7 +100,7 @@ type AppPreferences struct {
 	Pex                                bool     `json:"pex"`
 	PreallocateAll                     bool     `json:"preallocate_all"`
 	ProxyAuthEnabled                   bool     `json:"proxy_auth_enabled"`
-	ProxyIp                            string   `json:"proxy_ip"`
+	ProxyIP                            string   `json:"proxy_ip"`
 	ProxyPassword                      string   `json:"proxy_password"`
 	ProxyPeerConnections               bool     `json:"proxy_peer_connections"`
 	ProxyPort                          int      `json:"proxy_port"`
@@ -140,29 +142,29 @@ type AppPreferences struct {
 	UploadSlotsBehavior                int      `json:"upload_slots_behavior"`
 	Upnp                               bool     `json:"upnp"`
 	UpnpLeaseDuration                  int      `json:"upnp_lease_duration"`
-	UseHttps                           bool     `json:"use_https"`
-	UtpTcpMixedMode                    int      `json:"utp_tcp_mixed_mode"`
-	WebUiAddress                       string   `json:"web_ui_address"`
-	WebUiBanDuration                   int      `json:"web_ui_ban_duration"`
-	WebUiClickjackingProtectionEnabled bool     `json:"web_ui_clickjacking_protection_enabled"`
-	WebUiCsrfProtectionEnabled         bool     `json:"web_ui_csrf_protection_enabled"`
-	WebUiDomainList                    string   `json:"web_ui_domain_list"`
-	WebUiHostHeaderValidationEnabled   bool     `json:"web_ui_host_header_validation_enabled"`
-	WebUiHttpsCertPath                 string   `json:"web_ui_https_cert_path"`
-	WebUiHttpsKeyPath                  string   `json:"web_ui_https_key_path"`
-	WebUiMaxAuthFailCount              int      `json:"web_ui_max_auth_fail_count"`
-	WebUiPort                          int      `json:"web_ui_port"`
-	WebUiSecureCookieEnabled           bool     `json:"web_ui_secure_cookie_enabled"`
-	WebUiSessionTimeout                int      `json:"web_ui_session_timeout"`
-	WebUiUpnp                          bool     `json:"web_ui_upnp"`
-	WebUiUsername                      string   `json:"web_ui_username"`
-	WebUiPassword                      string   `json:"web_ui_password"`
+	UseHTTPS                           bool     `json:"use_https"`
+	UtpTCPMixedMode                    int      `json:"utp_tcp_mixed_mode"`
+	WebUIAddress                       string   `json:"web_ui_address"`
+	WebUIBanDuration                   int      `json:"web_ui_ban_duration"`
+	WebUIClickjackingProtectionEnabled bool     `json:"web_ui_clickjacking_protection_enabled"`
+	WebUICsrfProtectionEnabled         bool     `json:"web_ui_csrf_protection_enabled"`
+	WebUIDomainList                    string   `json:"web_ui_domain_list"`
+	WebUIHostHeaderValidationEnabled   bool     `json:"web_ui_host_header_validation_enabled"`
+	WebUIHTTPSCertPath                 string   `json:"web_ui_https_cert_path"`
+	WebUIHTTPSKeyPath                  string   `json:"web_ui_https_key_path"`
+	WebUIMaxAuthFailCount              int      `json:"web_ui_max_auth_fail_count"`
+	WebUIPort                          int      `json:"web_ui_port"`
+	WebUISecureCookieEnabled           bool     `json:"web_ui_secure_cookie_enabled"`
+	WebUISessionTimeout                int      `json:"web_ui_session_timeout"`
+	WebUIUpnp                          bool     `json:"web_ui_upnp"`
+	WebUIUsername                      string   `json:"web_ui_username"`
+	WebUIPassword                      string   `json:"web_ui_password"`
 	SSLKey                             string   `json:"ssl_key"`
 	SSLCert                            string   `json:"ssl_cert"`
 	RSSDownloadRepack                  string   `json:"rss_download_repack_proper_episodes"`
 	RSSSmartEpisodeFilters             string   `json:"rss_smart_episode_filters"`
-	WebUiUseCustomHttpHeaders          bool     `json:"web_ui_use_custom_http_headers"`
-	WebUiUseCustomHttpHeadersEnabled   bool     `json:"web_ui_use_custom_http_headers_enabled"`
+	WebUIUseCustomHTTPHeaders          bool     `json:"web_ui_use_custom_http_headers"`
+	WebUIUseCustomHTTPHeadersEnabled   bool     `json:"web_ui_use_custom_http_headers_enabled"`
 }
 
 type ScanDirs struct{}
@@ -208,156 +210,78 @@ type TorrentProperties struct {
 	UpSpeedAvg             int    `json:"up_speed_avg,omitempty"`
 }
 
-func getAppPreferences() *AppPreferences {
-	maxActiveDownloads := config.Get().MaxActiveDownloads
-	preferences := &AppPreferences{
-		AddTrackers:                        "",
-		AddTrackersEnabled:                 false,
-		AltDlLimit:                         10240,
-		AltUpLimit:                         10240,
-		AlternativeWebuiEnabled:            false,
-		AlternativeWebuiPath:               "",
-		AnnounceIp:                         "",
-		AnnounceToAllTiers:                 true,
-		AnnounceToAllTrackers:              false,
-		AnonymousMode:                      false,
-		AsyncIoThreads:                     4,
-		AutoDeleteMode:                     0,
-		AutoTmmEnabled:                     false,
-		AutorunEnabled:                     false,
-		AutorunProgram:                     "",
-		BannedIPs:                          "",
-		BittorrentProtocol:                 0,
-		BypassAuthSubnetWhitelist:          "",
-		BypassAuthSubnetWhitelistEnabled:   false,
-		BypassLocalAuth:                    false,
-		CategoryChangedTmmEnabled:          false,
-		CheckingMemoryUse:                  32,
-		CreateSubfolderEnabled:             true,
-		CurrentInterfaceAddress:            "",
-		CurrentNetworkInterface:            "",
-		Dht:                                true,
-		DiskCache:                          -1,
-		DiskCacheTtl:                       60,
-		DlLimit:                            0,
-		DontCountSlowTorrents:              false,
-		DyndnsDomain:                       "changeme.dyndns.org",
-		DyndnsEnabled:                      false,
-		DyndnsPassword:                     "",
-		DyndnsService:                      0,
-		DyndnsUsername:                     "",
-		EmbeddedTrackerPort:                9000,
-		EnableCoalesceReadWrite:            true,
-		EnableEmbeddedTracker:              false,
-		EnableMultiConnectionsFromSameIp:   false,
-		EnableOsCache:                      true,
-		EnablePieceExtentAffinity:          false,
-		EnableSuperSeeding:                 false,
-		EnableUploadSuggestions:            false,
-		Encryption:                         0,
-		ExportDir:                          "",
-		ExportDirFin:                       "",
-		FilePoolSize:                       40,
-		IncompleteFilesExt:                 false,
-		IpFilterEnabled:                    false,
-		IpFilterPath:                       "",
-		IpFilterTrackers:                   false,
-		LimitLanPeers:                      true,
-		LimitTcpOverhead:                   false,
-		LimitUtpRate:                       true,
-		ListenPort:                         31193,
-		Locale:                             "en",
-		Lsd:                                true,
-		MailNotificationAuthEnabled:        false,
-		MailNotificationEmail:              "",
-		MailNotificationEnabled:            false,
-		MailNotificationPassword:           "",
-		MailNotificationSender:             "qBittorrentNotification@example.com",
-		MailNotificationSmtp:               "smtp.changeme.com",
-		MailNotificationSslEnabled:         false,
-		MailNotificationUsername:           "",
-		MaxActiveDownloads:                 maxActiveDownloads,
-		MaxActiveTorrents:                  maxActiveDownloads,
-		MaxActiveUploads:                   3,
-		MaxConnec:                          500,
-		MaxConnecPerTorrent:                100,
-		MaxRatio:                           -1,
-		MaxRatioAct:                        0,
-		MaxRatioEnabled:                    false,
-		MaxSeedingTime:                     -1,
-		MaxSeedingTimeEnabled:              false,
-		MaxUploads:                         -1,
-		MaxUploadsPerTorrent:               -1,
-		OutgoingPortsMax:                   0,
-		OutgoingPortsMin:                   0,
-		Pex:                                true,
-		PreallocateAll:                     false,
-		ProxyAuthEnabled:                   false,
-		ProxyIp:                            "0.0.0.0",
-		ProxyPassword:                      "",
-		ProxyPeerConnections:               false,
-		ProxyPort:                          8080,
-		ProxyTorrentsOnly:                  false,
-		ProxyType:                          0,
-		ProxyUsername:                      "",
-		QueueingEnabled:                    false,
-		RandomPort:                         false,
-		RecheckCompletedTorrents:           false,
-		ResolvePeerCountries:               true,
-		RssAutoDownloadingEnabled:          false,
-		RssMaxArticlesPerFeed:              50,
-		RssProcessingEnabled:               false,
-		RssRefreshInterval:                 30,
-		SavePathChangedTmmEnabled:          false,
-		SaveResumeDataInterval:             60,
-		ScanDirs:                           ScanDirs{},
-		ScheduleFromHour:                   8,
-		ScheduleFromMin:                    0,
-		ScheduleToHour:                     20,
-		ScheduleToMin:                      0,
-		SchedulerDays:                      0,
-		SchedulerEnabled:                   false,
-		SendBufferLowWatermark:             10,
-		SendBufferWatermark:                500,
-		SendBufferWatermarkFactor:          50,
-		SlowTorrentDlRateThreshold:         2,
-		SlowTorrentInactiveTimer:           60,
-		SlowTorrentUlRateThreshold:         2,
-		SocketBacklogSize:                  30,
-		StartPausedEnabled:                 false,
-		StopTrackerTimeout:                 1,
-		TempPathEnabled:                    false,
-		TorrentChangedTmmEnabled:           true,
-		UpLimit:                            0,
-		UploadChokingAlgorithm:             1,
-		UploadSlotsBehavior:                0,
-		Upnp:                               true,
-		UpnpLeaseDuration:                  0,
-		UseHttps:                           false,
-		UtpTcpMixedMode:                    0,
-		WebUiAddress:                       "*",
-		WebUiBanDuration:                   3600,
-		WebUiClickjackingProtectionEnabled: true,
-		WebUiCsrfProtectionEnabled:         true,
-		WebUiDomainList:                    "*",
-		WebUiHostHeaderValidationEnabled:   true,
-		WebUiHttpsCertPath:                 "",
-		WebUiHttpsKeyPath:                  "",
-		WebUiMaxAuthFailCount:              5,
-		WebUiPort:                          8080,
-		WebUiSecureCookieEnabled:           true,
-		WebUiSessionTimeout:                3600,
-		WebUiUpnp:                          false,
+// defaultPreferencesJSON is the static part of what /app/preferences reports:
+// plausible qBittorrent defaults that Arr clients read but decypharr ignores.
+// Omitted keys decode to zero values.
+const defaultPreferencesJSON = `{
+	"alt_dl_limit": 10240,
+	"alt_up_limit": 10240,
+	"announce_to_all_tiers": true,
+	"async_io_threads": 4,
+	"checking_memory_use": 32,
+	"create_subfolder_enabled": true,
+	"dht": true,
+	"disk_cache": -1,
+	"disk_cache_ttl": 60,
+	"dyndns_domain": "changeme.dyndns.org",
+	"embedded_tracker_port": 9000,
+	"enable_coalesce_read_write": true,
+	"enable_os_cache": true,
+	"file_pool_size": 40,
+	"limit_lan_peers": true,
+	"limit_utp_rate": true,
+	"listen_port": 31193,
+	"locale": "en",
+	"lsd": true,
+	"mail_notification_sender": "qBittorrentNotification@example.com",
+	"mail_notification_smtp": "smtp.changeme.com",
+	"max_active_uploads": 3,
+	"max_connec": 500,
+	"max_connec_per_torrent": 100,
+	"max_ratio": -1,
+	"max_seeding_time": -1,
+	"max_uploads": -1,
+	"max_uploads_per_torrent": -1,
+	"pex": true,
+	"proxy_ip": "0.0.0.0",
+	"proxy_port": 8080,
+	"resolve_peer_countries": true,
+	"rss_max_articles_per_feed": 50,
+	"rss_refresh_interval": 30,
+	"save_resume_data_interval": 60,
+	"schedule_from_hour": 8,
+	"schedule_to_hour": 20,
+	"send_buffer_low_watermark": 10,
+	"send_buffer_watermark": 500,
+	"send_buffer_watermark_factor": 50,
+	"slow_torrent_dl_rate_threshold": 2,
+	"slow_torrent_inactive_timer": 60,
+	"slow_torrent_ul_rate_threshold": 2,
+	"socket_backlog_size": 30,
+	"stop_tracker_timeout": 1,
+	"torrent_changed_tmm_enabled": true,
+	"upload_choking_algorithm": 1,
+	"upnp": true,
+	"web_ui_address": "*",
+	"web_ui_ban_duration": 3600,
+	"web_ui_clickjacking_protection_enabled": true,
+	"web_ui_csrf_protection_enabled": true,
+	"web_ui_domain_list": "*",
+	"web_ui_host_header_validation_enabled": true,
+	"web_ui_max_auth_fail_count": 5,
+	"web_ui_port": 8080,
+	"web_ui_secure_cookie_enabled": true,
+	"web_ui_session_timeout": 3600
+}`
 
-		// Fields in the struct but not in the JSON (set to zero values):
-		WebUiPassword:                    "",
-		SSLKey:                           "",
-		SSLCert:                          "",
-		RSSDownloadRepack:                "",
-		RSSSmartEpisodeFilters:           "",
-		WebUiUseCustomHttpHeaders:        false,
-		WebUiUseCustomHttpHeadersEnabled: false,
+func getAppPreferences() *AppPreferences {
+	preferences := &AppPreferences{}
+	if err := json.Unmarshal([]byte(defaultPreferencesJSON), preferences); err != nil {
+		panic("qbit: invalid defaultPreferencesJSON: " + err.Error()) // constant input; a test covers it
 	}
+	maxActiveDownloads := config.Get().MaxActiveDownloads
+	preferences.MaxActiveDownloads = maxActiveDownloads
+	preferences.MaxActiveTorrents = maxActiveDownloads
 	return preferences
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"strconv"
 	"strings"
@@ -68,7 +69,7 @@ func (s *SABnzbd) handleQueue(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleResume handles resume operations.
-func (s *SABnzbd) handleQueueResume(w http.ResponseWriter, r *http.Request) {
+func (s *SABnzbd) handleQueueResume(w http.ResponseWriter, _ *http.Request) {
 	response := StatusResponse{Status: true}
 	utils.JSONResponse(w, response, http.StatusOK)
 }
@@ -144,7 +145,7 @@ func (s *SABnzbd) handleDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 // handlePause handles pause operations.
-func (s *SABnzbd) handleQueuePause(w http.ResponseWriter, r *http.Request) {
+func (s *SABnzbd) handleQueuePause(w http.ResponseWriter, _ *http.Request) {
 	response := StatusResponse{Status: true}
 	utils.JSONResponse(w, response, http.StatusOK)
 }
@@ -170,14 +171,12 @@ func (s *SABnzbd) handleListQueue(w http.ResponseWriter, r *http.Request) {
 		Slots:   []QueueSlot{},
 	}
 
-	const MB = 1024 * 1024
-
 	// Convert NZBs to queue slots
 	for index, e := range entries {
 		nzb := convertToSABnzbdNZB(e)
 
 		// Calculate size values as strings (SABnzbd format)
-		sizeMB := float64(e.Size) / float64(MB)
+		sizeMB := float64(e.Size) / float64(mb)
 		mbLeft := sizeMB * (1 - e.Progress)
 		sizeStr := formatSize(e.Size)
 		sizeLeftBytes := int64(float64(e.Size) * (1 - e.Progress))
@@ -195,7 +194,7 @@ func (s *SABnzbd) handleListQueue(w http.ResponseWriter, r *http.Request) {
 			Password:     "", // We don't expose passwords
 			AvgAge:       "0d",
 			TimeAdded:    e.CreatedAt.Unix(),
-			Script:       "None",
+			Script:       scriptNone,
 			DirectUnpack: "", // null in SABnzbd when not active
 			Mb:           fmt.Sprintf("%.2f", sizeMB),
 			MBLeft:       fmt.Sprintf("%.2f", mbLeft),
@@ -208,7 +207,7 @@ func (s *SABnzbd) handleListQueue(w http.ResponseWriter, r *http.Request) {
 			Cat:          nzb.Category,
 			TimeLeft:     nzb.TimeLeft,
 			Percentage:   fmt.Sprintf("%.0f", nzb.Percentage),
-			NzoId:        nzb.NzoId,
+			NzoID:        nzb.NzoID,
 			Unpackopts:   "3", // Default: +Repair/Unpack/Delete
 		}
 		queue.Slots = append(queue.Slots, slot)
@@ -240,27 +239,21 @@ func (s *SABnzbd) handleHistory(w http.ResponseWriter, r *http.Request) {
 
 // handleHistoryList returns the download history.
 func (s *SABnzbd) handleHistoryList(w http.ResponseWriter, r *http.Request) {
-	limitStr := r.FormValue("limit")
-	if limitStr == "" {
-		limitStr = "0"
-	}
-	limit, err := strconv.Atoi(limitStr)
-	if err != nil {
-		s.logger.Error().Err(err).Msg("Invalid limit parameter for history")
-		s.writeError(w, "Invalid limit parameter", http.StatusBadRequest)
-		return
-	}
-	if limit < 0 {
-		limit = 0
-	}
-	nzoIDsValue := r.FormValue("nzo_ids")
-	var nzoIDs []string
-	if nzoIDsValue != "" {
-		for id := range strings.SplitSeq(nzoIDsValue, ",") {
-			nzoIDs = append(nzoIDs, id)
+	// limit is validated for SABnzbd compatibility but not applied: history is
+	// not ordered newest-first, so truncating could hide a finished download
+	// from the Arr.
+	if limitStr := r.FormValue("limit"); limitStr != "" {
+		if _, err := strconv.Atoi(limitStr); err != nil {
+			s.logger.Error().Err(err).Msg("Invalid limit parameter for history")
+			s.writeError(w, "Invalid limit parameter", http.StatusBadRequest)
+			return
 		}
 	}
-	history, err := s.getHistory(r.Context(), limit, nzoIDs)
+	var nzoIDs []string
+	if nzoIDsValue := r.FormValue("nzo_ids"); nzoIDsValue != "" {
+		nzoIDs = strings.Split(nzoIDsValue, ",")
+	}
+	history, err := s.getHistory(r.Context(), nzoIDs)
 	if err != nil {
 		s.writeError(w, "Failed to read download history", http.StatusInternalServerError)
 		return
@@ -274,7 +267,7 @@ func (s *SABnzbd) handleHistoryList(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleConfig returns the configuration.
-func (s *SABnzbd) handleConfig(w http.ResponseWriter, r *http.Request) {
+func (s *SABnzbd) handleConfig(w http.ResponseWriter, _ *http.Request) {
 	response := ConfigResponse{
 		Config: s.config,
 	}
@@ -345,7 +338,7 @@ func (s *SABnzbd) handleAddURL(w http.ResponseWriter, r *http.Request) {
 
 	response := AddNZBResponse{
 		Status: true,
-		NzoIds: nzoIDs,
+		NzoIDs: nzoIDs,
 	}
 
 	// Include partial errors if some URLs failed
@@ -372,9 +365,9 @@ func (s *SABnzbd) handleAddFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse multipart form with larger limit for multiple files
-	err := r.ParseMultipartForm(100 << 20) // 100 MB limit for multiple files
-	if err != nil {
+	// The body itself is capped by Routes.
+	//nolint:gosec // G120: body capped by Routes' MaxBytesReader
+	if err := r.ParseMultipartForm(multipartMemory); err != nil {
 		s.writeError(w, "Failed to parse multipart form", http.StatusBadRequest)
 		return
 	}
@@ -385,69 +378,19 @@ func (s *SABnzbd) handleAddFile(w http.ResponseWriter, r *http.Request) {
 		action = config.DownloadAction(r.FormValue("action"))
 	}
 
+	// A parsed multipart form always has a File map; uploads come in "name".
+	files := r.MultipartForm.File["name"]
+	if len(files) == 0 {
+		s.writeError(w, "No files uploaded", http.StatusBadRequest)
+		return
+	}
 	var nzoIDs []string
 	var errors []string
-
-	// Try to get multiple files from "name" field
-	if r.MultipartForm != nil && r.MultipartForm.File != nil {
-		// Parse all files from "name" field
-		files := r.MultipartForm.File["name"]
-		if len(files) == 0 {
-			s.writeError(w, "No files uploaded", http.StatusBadRequest)
-			return
-		}
-
-		for _, fileHeader := range files {
-			file, openErr := fileHeader.Open()
-			if openErr != nil {
-				errors = append(errors, fmt.Sprintf("Failed to open %s: %v", fileHeader.Filename, openErr))
-				continue
-			}
-
-			// Read file content
-			content, openErr := io.ReadAll(file)
-			file.Close()
-			if openErr != nil {
-				errors = append(errors, fmt.Sprintf("Failed to read %s: %v", fileHeader.Filename, openErr))
-				continue
-			}
-
-			// Parse NZB file
-			nzbID, openErr := s.addNZBFile(ctx, content, fileHeader.Filename, _arr, action)
-			if openErr != nil {
-				s.logger.Error().Err(openErr).Str("filename", fileHeader.Filename).Msg("Failed to add NZB file")
-				errors = append(errors, fmt.Sprintf("Failed to add %s: %v", fileHeader.Filename, openErr))
-				continue
-			}
-			if nzbID != "" {
-				nzoIDs = append(nzoIDs, nzbID)
-			}
-		}
-	} else {
-		// Fallback to single file handling
-		file, header, formFileErr := r.FormFile("name")
-		if formFileErr != nil {
-			s.writeError(w, "No file uploaded", http.StatusBadRequest)
-			return
-		}
-		defer file.Close()
-
-		// Read file content
-		content, formFileErr := io.ReadAll(file)
-		if formFileErr != nil {
-			s.writeError(w, "Failed to read file", http.StatusInternalServerError)
-			return
-		}
-
-		// Parse NZB file
-		nzbID, formFileErr := s.addNZBFile(ctx, content, header.Filename, _arr, action)
-		if formFileErr != nil {
-			s.writeError(
-				w,
-				fmt.Sprintf("Failed to add NZB file: %s", formFileErr.Error()),
-				http.StatusInternalServerError,
-			)
-			return
+	for _, fileHeader := range files {
+		nzbID, err := s.addUploadedNZB(ctx, fileHeader, _arr, action)
+		if err != nil {
+			errors = append(errors, err.Error())
+			continue
 		}
 		if nzbID != "" {
 			nzoIDs = append(nzoIDs, nzbID)
@@ -465,7 +408,7 @@ func (s *SABnzbd) handleAddFile(w http.ResponseWriter, r *http.Request) {
 
 	response := AddNZBResponse{
 		Status: true,
-		NzoIds: nzoIDs,
+		NzoIDs: nzoIDs,
 	}
 
 	// Include partial errors if some files failed
@@ -476,8 +419,35 @@ func (s *SABnzbd) handleAddFile(w http.ResponseWriter, r *http.Request) {
 	utils.JSONResponse(w, response, http.StatusOK)
 }
 
+// multipartMemory is how much of an upload is held in memory before
+// spilling to temp files.
+const multipartMemory = 100 << 20
+
+func (s *SABnzbd) addUploadedNZB(
+	ctx context.Context,
+	fileHeader *multipart.FileHeader,
+	instance arr.Arr,
+	action config.DownloadAction,
+) (string, error) {
+	file, err := fileHeader.Open()
+	if err != nil {
+		return "", fmt.Errorf("failed to open %s: %w", fileHeader.Filename, err)
+	}
+	content, err := io.ReadAll(file)
+	_ = file.Close()
+	if err != nil {
+		return "", fmt.Errorf("failed to read %s: %w", fileHeader.Filename, err)
+	}
+	nzbID, err := s.addNZBFile(ctx, content, fileHeader.Filename, instance, action)
+	if err != nil {
+		s.logger.Error().Err(err).Str("filename", fileHeader.Filename).Msg("Failed to add NZB file")
+		return "", fmt.Errorf("failed to add %s: %w", fileHeader.Filename, err)
+	}
+	return nzbID, nil
+}
+
 // handleVersion returns version information.
-func (s *SABnzbd) handleVersion(w http.ResponseWriter, r *http.Request) {
+func (s *SABnzbd) handleVersion(w http.ResponseWriter, _ *http.Request) {
 	response := VersionResponse{
 		Version: Version,
 	}
@@ -485,14 +455,14 @@ func (s *SABnzbd) handleVersion(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleGetCategories returns available categories.
-func (s *SABnzbd) handleGetCategories(w http.ResponseWriter, r *http.Request) {
+func (s *SABnzbd) handleGetCategories(w http.ResponseWriter, _ *http.Request) {
 	categories := s.getCategories()
 	utils.JSONResponse(w, categories, http.StatusOK)
 }
 
 // handleGetScripts returns available scripts.
-func (s *SABnzbd) handleGetScripts(w http.ResponseWriter, r *http.Request) {
-	scripts := []string{"None"}
+func (s *SABnzbd) handleGetScripts(w http.ResponseWriter, _ *http.Request) {
+	scripts := []string{scriptNone}
 	utils.JSONResponse(w, scripts, http.StatusOK)
 }
 
@@ -519,7 +489,7 @@ func (s *SABnzbd) handleGetFiles(w http.ResponseWriter, r *http.Request) {
 	utils.JSONResponse(w, response, http.StatusOK)
 }
 
-func (s *SABnzbd) handleStatus(w http.ResponseWriter, r *http.Request) {
+func (s *SABnzbd) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	type status struct {
 		CompletedDir string `json:"completed_dir"`
 	}
@@ -535,7 +505,7 @@ func (s *SABnzbd) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 // Helper methods
 
-func (s *SABnzbd) getHistory(ctx context.Context, limit int, nzoIDs []string) (History, error) {
+func (s *SABnzbd) getHistory(ctx context.Context, nzoIDs []string) (History, error) {
 	cat := getCategory(ctx)
 	completed, err := s.manager.Queue().
 		ListFilter(cat, config.ProtocolNZB, storage.EntryStatePausedUP, nzoIDs, "added_on", false)
@@ -557,7 +527,7 @@ func (s *SABnzbd) getHistory(ctx context.Context, limit int, nzoIDs []string) (H
 			Status:      mapStorageStateToSABStatus(item.State),
 			Name:        item.Name,
 			NZBName:     item.Name,
-			NzoId:       item.InfoHash,
+			NzoID:       item.InfoHash,
 			Category:    item.Category,
 			FailMessage: item.LastError,
 			Bytes:       item.Size,
@@ -571,7 +541,7 @@ func (s *SABnzbd) getHistory(ctx context.Context, limit int, nzoIDs []string) (H
 			Status:      mapStorageStateToSABStatus(item.State),
 			Name:        item.Name,
 			NZBName:     item.Name,
-			NzoId:       item.InfoHash,
+			NzoID:       item.InfoHash,
 			Category:    item.Category,
 			FailMessage: item.LastError,
 			Bytes:       item.Size,
@@ -646,22 +616,15 @@ func (s *SABnzbd) addNZBFile(
 
 // formatSize formats bytes to human-readable string (SABnzbd format).
 func formatSize(bytes int64) string {
-	const (
-		KB = 1024
-		MB = KB * 1024
-		GB = MB * 1024
-		TB = GB * 1024
-	)
-
 	switch {
-	case bytes >= TB:
-		return fmt.Sprintf("%.2f T", float64(bytes)/float64(TB))
-	case bytes >= GB:
-		return fmt.Sprintf("%.2f G", float64(bytes)/float64(GB))
-	case bytes >= MB:
-		return fmt.Sprintf("%.2f M", float64(bytes)/float64(MB))
-	case bytes >= KB:
-		return fmt.Sprintf("%.2f K", float64(bytes)/float64(KB))
+	case bytes >= tb:
+		return fmt.Sprintf("%.2f T", float64(bytes)/float64(tb))
+	case bytes >= gb:
+		return fmt.Sprintf("%.2f G", float64(bytes)/float64(gb))
+	case bytes >= mb:
+		return fmt.Sprintf("%.2f M", float64(bytes)/float64(mb))
+	case bytes >= kb:
+		return fmt.Sprintf("%.2f K", float64(bytes)/float64(kb))
 	default:
 		return fmt.Sprintf("%d B", bytes)
 	}

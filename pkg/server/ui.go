@@ -3,11 +3,18 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 )
 
+// maxJSONBody caps the JSON bodies of the unauthenticated login and setup
+// endpoints.
+const maxJSONBody = 1 << 20
+
+// LoginHandler serves the login page and exchanges credentials (or, in
+// token-only mode, the API token) for a session cookie.
 func (s *Server) LoginHandler(w http.ResponseWriter, r *http.Request) {
 	cfg := config.Get()
 	if cfg.NeedsAuth() {
@@ -18,16 +25,7 @@ func (s *Server) LoginHandler(w http.ResponseWriter, r *http.Request) {
 	tokenOnly := auth != nil && auth.TokenOnly
 
 	if r.Method == http.MethodGet {
-		data := map[string]any{
-			"URLBase":   cfg.URLBase,
-			"Page":      "login",
-			"Title":     "Login",
-			"TokenOnly": tokenOnly,
-		}
-		err := s.templates.ExecuteTemplate(w, "layout", data)
-		if err != nil {
-			s.logger.Warn().Err(err).Msg("error rendering /login template")
-		}
+		s.renderPage(w, "layout", "login", "Login", map[string]any{"TokenOnly": tokenOnly})
 		return
 	}
 
@@ -36,7 +34,7 @@ func (s *Server) LoginHandler(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&credentials); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&credentials); err != nil {
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
@@ -67,7 +65,7 @@ func (s *Server) LoginHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error saving session", http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	s.redirectTo(w, r, "/")
 }
 
 func (s *Server) RegisterHandler(w http.ResponseWriter, r *http.Request) {
@@ -81,20 +79,12 @@ func (s *Server) RegisterHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+		s.redirectTo(w, r, "/")
 		return
 	}
 
 	if r.Method == http.MethodGet {
-		data := map[string]any{
-			"URLBase": cfg.URLBase,
-			"Page":    "register",
-			"Title":   "registerVolume",
-		}
-		err := s.templates.ExecuteTemplate(w, "layout", data)
-		if err != nil {
-			s.logger.Warn().Err(err).Msg("error rendering /register template")
-		}
+		s.renderPage(w, "layout", "register", "registerVolume", nil)
 		return
 	}
 
@@ -131,106 +121,63 @@ func (s *Server) RegisterHandler(w http.ResponseWriter, r *http.Request) {
 	s.redirectTo(w, r, "/")
 }
 
-func (s *Server) IndexHandler(w http.ResponseWriter, r *http.Request) {
+// renderPage executes templateName with the fields every page reads plus
+// extra. Templates that do not show the setup banner ignore SetupError.
+func (s *Server) renderPage(w http.ResponseWriter, templateName, page, title string, extra map[string]any) {
 	cfg := config.Get()
 	data := map[string]any{
 		"URLBase":    cfg.URLBase,
-		"Page":       "index",
-		"Title":      "Queues",
+		"Page":       page,
+		"Title":      title,
 		"SetupError": cfg.SetupError(),
 	}
-	err := s.templates.ExecuteTemplate(w, "layout", data)
-	if err != nil {
-		s.logger.Warn().Err(err).Msg("error rendering /index template")
+	maps.Copy(data, extra)
+	if err := s.templates.ExecuteTemplate(w, templateName, data); err != nil {
+		s.logger.Warn().Err(err).Str("page", page).Msg("error rendering template")
 	}
 }
 
-func (s *Server) DownloadHandler(w http.ResponseWriter, r *http.Request) {
+// IndexHandler renders the queue dashboard.
+func (s *Server) IndexHandler(w http.ResponseWriter, _ *http.Request) {
+	s.renderPage(w, "layout", "index", "Queues", nil)
+}
+
+// DownloadHandler renders the add-content page.
+func (s *Server) DownloadHandler(w http.ResponseWriter, _ *http.Request) {
 	cfg := config.Get()
-	debrids := make([]string, 0)
+	debrids := make([]string, 0, len(cfg.Debrids))
 	for _, d := range cfg.Debrids {
 		debrids = append(debrids, d.Name)
 	}
-	data := map[string]any{
-		"URLBase":                 cfg.URLBase,
-		"Page":                    "download",
-		"Title":                   "Download",
+	s.renderPage(w, "layout", "download", "Download", map[string]any{
 		"Debrids":                 debrids,
 		"HasMultiDebrid":          len(debrids) > 1,
 		"downloadFolder":          cfg.DownloadFolder,
 		"alwaysRemoveTrackerURLS": cfg.AlwaysRmTrackerUrls,
-		"SetupError":              cfg.SetupError(),
-	}
-	err := s.templates.ExecuteTemplate(w, "layout", data)
-	if err != nil {
-		s.logger.Warn().Err(err).Msg("error rendering /download template")
-	}
+	})
 }
 
-func (s *Server) RepairHandler(w http.ResponseWriter, r *http.Request) {
-	cfg := config.Get()
-	data := map[string]any{
-		"URLBase":    cfg.URLBase,
-		"Page":       "repair",
-		"Title":      "Repair",
-		"SetupError": cfg.SetupError(),
-	}
-	err := s.templates.ExecuteTemplate(w, "layout", data)
-	if err != nil {
-		s.logger.Warn().Err(err).Msg("error rendering /repair template")
-	}
+// RepairHandler renders the repair page.
+func (s *Server) RepairHandler(w http.ResponseWriter, _ *http.Request) {
+	s.renderPage(w, "layout", "repair", "Repair", nil)
 }
 
-func (s *Server) ReacquireHandler(w http.ResponseWriter, r *http.Request) {
-	cfg := config.Get()
-	data := map[string]any{
-		"URLBase":    cfg.URLBase,
-		"Page":       "reacquire",
-		"Title":      "Reacquire",
-		"SetupError": cfg.SetupError(),
-	}
-	if err := s.templates.ExecuteTemplate(w, "layout", data); err != nil {
-		s.logger.Warn().Err(err).Msg("error rendering /reacquire template")
-	}
+// ReacquireHandler renders the Arr reacquisition page.
+func (s *Server) ReacquireHandler(w http.ResponseWriter, _ *http.Request) {
+	s.renderPage(w, "layout", "reacquire", "Reacquire", nil)
 }
 
-func (s *Server) ConfigHandler(w http.ResponseWriter, r *http.Request) {
-	cfg := config.Get()
-	data := map[string]any{
-		"URLBase":    cfg.URLBase,
-		"Page":       "config",
-		"Title":      "Config",
-		"SetupError": cfg.SetupError(),
-	}
-	err := s.templates.ExecuteTemplate(w, "layout", data)
-	if err != nil {
-		s.logger.Warn().Err(err).Msg("error rendering /config template")
-	}
+// ConfigHandler renders the settings page.
+func (s *Server) ConfigHandler(w http.ResponseWriter, _ *http.Request) {
+	s.renderPage(w, "layout", "config", "Config", nil)
 }
 
-func (s *Server) StatsHandler(w http.ResponseWriter, r *http.Request) {
-	cfg := config.Get()
-	data := map[string]any{
-		"URLBase": cfg.URLBase,
-		"Page":    "stats",
-		"Title":   "Statistics",
-	}
-	err := s.templates.ExecuteTemplate(w, "layout", data)
-	if err != nil {
-		s.logger.Warn().Err(err).Msg("error rendering /stats template")
-	}
+// StatsHandler renders the statistics page.
+func (s *Server) StatsHandler(w http.ResponseWriter, _ *http.Request) {
+	s.renderPage(w, "layout", "stats", "Statistics", nil)
 }
 
-func (s *Server) BrowseHandler(w http.ResponseWriter, r *http.Request) {
-	cfg := config.Get()
-	data := map[string]any{
-		"URLBase":    cfg.URLBase,
-		"Page":       "browse",
-		"Title":      "Browse Torrents",
-		"SetupError": cfg.SetupError(),
-	}
-	err := s.templates.ExecuteTemplate(w, "layout", data)
-	if err != nil {
-		s.logger.Warn().Err(err).Msg("error rendering /browse template")
-	}
+// BrowseHandler renders the file browser.
+func (s *Server) BrowseHandler(w http.ResponseWriter, _ *http.Request) {
+	s.renderPage(w, "layout", "browse", "Browse Torrents", nil)
 }

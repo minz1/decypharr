@@ -9,6 +9,14 @@ import (
 	"github.com/sirrobot01/decypharr/internal/config"
 )
 
+// Keys of the API's ad-hoc JSON responses.
+const (
+	keyStatus  = "status"
+	keyError   = "error"
+	keyMessage = "message"
+	keySuccess = "success"
+)
+
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Check if setup is needed
@@ -29,19 +37,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Check for API token first
-		if s.isValidAPIToken(r) {
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		// Fall back to session authentication
-		session, err := s.cookie.Get(r, "auth-session")
-		auth, ok := session.Values["authenticated"].(bool)
-		version, hasVersion := session.Values["auth_version"].(string)
-		currentAuth := cfg.GetAuth()
-
-		if err != nil || !ok || !auth || !hasVersion || currentAuth == nil || version != currentAuth.SessionVersion {
+		if !s.isAuthenticated(r) {
 			if isAPI {
 				s.sendJSONError(
 					w,
@@ -58,13 +54,44 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// isAPIRequest reports whether an authentication failure should be returned as
-// JSON instead of redirecting the caller to the login page.
-func (s *Server) isAPIRequest(r *http.Request) bool {
+// isAuthenticated reports whether r carries a valid API token or a login
+// session minted for the current credentials.
+func (s *Server) isAuthenticated(r *http.Request) bool {
+	if s.isValidAPIToken(r) {
+		return true
+	}
+	session, err := s.cookie.Get(r, "auth-session")
+	if err != nil {
+		return false
+	}
+	auth, _ := session.Values["authenticated"].(bool)
+	version, hasVersion := session.Values["auth_version"].(string)
+	currentAuth := config.Get().GetAuth()
+	return auth && hasVersion && currentAuth != nil && version == currentAuth.SessionVersion
+}
+
+// mayConfigureAuth guards the unauthenticated setup endpoints. They exist to
+// set the first credential; once one is stored, reaching them unauthenticated
+// (e.g. because a later config edit made setup "incomplete" again) must not
+// let a caller replace or disable it.
+func (s *Server) mayConfigureAuth(r *http.Request, cfg *config.Config) bool {
+	return !cfg.UseAuth || cfg.NeedsAuth() || s.isAuthenticated(r)
+}
+
+// relPath returns the request path with the URL base stripped. chi routes on
+// its own context, so r.URL.Path still carries the base.
+func (s *Server) relPath(r *http.Request) string {
 	path := r.URL.Path
 	if urlBase := strings.TrimSuffix(s.urlBase, "/"); urlBase != "" {
 		path = strings.TrimPrefix(path, urlBase)
 	}
+	return path
+}
+
+// isAPIRequest reports whether an authentication failure should be returned as
+// JSON instead of redirecting the caller to the login page.
+func (s *Server) isAPIRequest(r *http.Request) bool {
+	path := s.relPath(r)
 	return strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/webhooks/")
 }
 
@@ -73,8 +100,8 @@ func (s *Server) sendJSONError(w http.ResponseWriter, message string, statusCode
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 	err := json.NewEncoder(w).Encode(map[string]any{
-		"error":  message,
-		"status": statusCode,
+		keyError:  message,
+		keyStatus: statusCode,
 	})
 	if err != nil {
 		return
@@ -86,14 +113,16 @@ func (s *Server) setupRedirectMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cfg := config.Get()
 
-		// Skip setup check for setup-related routes
-		if strings.HasPrefix(r.URL.Path, "/setup") ||
-			strings.HasPrefix(r.URL.Path, "/api/setup") ||
-			strings.HasPrefix(r.URL.Path, "/api/login") ||
-			strings.HasPrefix(r.URL.Path, "/api/config") ||
-			strings.HasPrefix(r.URL.Path, "/assets") ||
-			strings.HasPrefix(r.URL.Path, "/images") ||
-			r.URL.Path == "/version" {
+		// Skip setup check for setup-related routes. /login stays reachable so
+		// an instance with stored credentials can authenticate to rerun setup.
+		path := s.relPath(r)
+		if strings.HasPrefix(path, "/setup") ||
+			strings.HasPrefix(path, "/api/setup") ||
+			strings.HasPrefix(path, "/login") ||
+			strings.HasPrefix(path, "/api/config") ||
+			strings.HasPrefix(path, "/assets") ||
+			strings.HasPrefix(path, "/images") ||
+			path == "/version" {
 			next.ServeHTTP(w, r)
 			return
 		}

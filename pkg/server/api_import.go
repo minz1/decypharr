@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -15,189 +16,146 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/manager"
 )
 
-func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	if err := r.ParseMultipartForm(32 << 20); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
+// importStatusError marks a failed item in the import results.
+const importStatusError = "error"
 
-	arrName := r.FormValue("arr")
-	action := r.FormValue("action")
-	debridName := r.FormValue("debrid")
-	callbackUrl := r.FormValue("callbackUrl")
-	downloadFolder := r.FormValue("downloadFolder")
-	if downloadFolder == "" {
-		downloadFolder = config.Get().DownloadFolder
-	}
-	skipMultiSeason := r.FormValue("skipMultiSeason") == "true"
+// maxConcurrentImports bounds how many prepared imports are submitted at once.
+const maxConcurrentImports = 10
 
-	dlUncached := r.FormValue("downloadUncached") == "true"
-	var downloadUncached *bool
-	if dlUncached {
-		downloadUncached = &dlUncached
-	}
-	rmTrackerUrls := r.FormValue("rmTrackerUrls") == "true"
+// maxAddBody caps uploads to the add-content form.
+const (
+	maxAddBody      = 256 << 20
+	multipartMemory = 32 << 20 // in memory before spilling to temp files
+)
 
-	// Check config setting - if always remove tracker URLs is enabled, force it to true
+// addBatch collects the per-item results of one add request and the
+// prepared imports that still need submitting.
+type addBatch struct {
+	results []*manager.ImportRequest
+	tasks   []addTask
+}
+
+type addTask struct {
+	request *manager.ImportRequest
+	source  string
+}
+
+func (b *addBatch) failf(format string, args ...any) {
+	b.results = append(
+		b.results,
+		&manager.ImportRequest{Status: importStatusError, Error: fmt.Sprintf(format, args...)},
+	)
+}
+
+func (b *addBatch) add(req *manager.ImportRequest, source string) {
+	b.results = append(b.results, req)
+	b.tasks = append(b.tasks, addTask{request: req, source: source})
+}
+
+// addOptions are the form fields shared by every item of one add request.
+type addOptions struct {
+	instance         arr.Arr
+	action           config.DownloadAction
+	debrid           string
+	callbackURL      string
+	downloadFolder   string
+	downloadUncached *bool
+	rmTrackerURLs    bool
+	skipMultiSeason  bool
+}
+
+func (o *addOptions) torrent(magnet *utils.Magnet) *manager.ImportRequest {
+	return manager.NewTorrentRequest(o.debrid, o.downloadFolder, magnet, o.instance, o.action,
+		o.downloadUncached, o.callbackURL, manager.ImportTypeAPI, o.skipMultiSeason)
+}
+
+func (o *addOptions) nzb(name string, content []byte) *manager.ImportRequest {
+	return manager.NewNZBRequest(name, o.downloadFolder, content, o.instance, o.action,
+		o.callbackURL, manager.ImportTypeAPI, o.skipMultiSeason)
+}
+
+func (s *Server) parseAddOptions(r *http.Request) *addOptions {
 	cfg := config.Get()
-	if cfg.AlwaysRmTrackerUrls {
-		rmTrackerUrls = true
-	}
-
+	arrName := r.FormValue("arr")
 	// A category with no configured Arr is a throwaway that only routes the
 	// download.
 	instance, known := s.manager.Arr().Get(arrName)
 	if !known {
 		instance = arr.Arr{Name: arrName}
 	}
-
-	type addTask struct {
-		request *manager.ImportRequest
-		source  string
+	opts := &addOptions{
+		instance:        instance,
+		action:          config.DownloadAction(r.FormValue("action")),
+		debrid:          r.FormValue("debrid"),
+		callbackURL:     r.FormValue("callbackUrl"),
+		downloadFolder:  cmp.Or(r.FormValue("downloadFolder"), cfg.DownloadFolder),
+		rmTrackerURLs:   cfg.AlwaysRmTrackerUrls || boolOr(queryBool(r.Form, "rmTrackerUrls"), false),
+		skipMultiSeason: boolOr(queryBool(r.Form, "skipMultiSeason"), false),
 	}
-	var tasks []addTask
-	results := make([]*manager.ImportRequest, 0)
-	defer r.MultipartForm.RemoveAll()
+	if boolOr(queryBool(r.Form, "downloadUncached"), false) {
+		opts.downloadUncached = new(true)
+	}
+	return opts
+}
 
-	// Collect torrent URLs
-	if urls := r.FormValue("urls"); urls != "" {
-		for u := range strings.SplitSeq(urls, "\n") {
-			if trimmed := strings.TrimSpace(u); trimmed != "" {
-				magnet, err := utils.GetMagnetFromUrl(trimmed, rmTrackerUrls)
-				if err != nil {
-					results = append(
-						results,
-						&manager.ImportRequest{
-							Status: "error",
-							Error:  fmt.Sprintf("Failed to parse URL %s: %v", trimmed, err),
-						},
-					)
-					continue
-				}
-				req := manager.NewTorrentRequest(
-					debridName,
-					downloadFolder,
-					magnet,
-					instance,
-					config.DownloadAction(action),
-					downloadUncached,
-					callbackUrl,
-					manager.ImportTypeAPI,
-					skipMultiSeason,
-				)
-				results = append(results, req)
-				tasks = append(tasks, addTask{request: req, source: trimmed})
-			}
+func nonEmptyLines(text string) []string {
+	var lines []string
+	for line := range strings.SplitSeq(text, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			lines = append(lines, trimmed)
 		}
 	}
+	return lines
+}
 
-	// Collect torrent files
-	if files := r.MultipartForm.File["files"]; len(files) > 0 {
-		for _, fileHeader := range files {
-			file, err := fileHeader.Open()
-			if err != nil {
-				results = append(
-					results,
-					&manager.ImportRequest{
-						Status: "error",
-						Error:  fmt.Sprintf("Failed to open file %s: %v", fileHeader.Filename, err),
-					},
-				)
-				continue
-			}
-
-			magnet, err := utils.GetMagnetFromFile(file, fileHeader.Filename, rmTrackerUrls)
-			_ = file.Close()
-			if err != nil {
-				results = append(
-					results,
-					&manager.ImportRequest{
-						Status: "error",
-						Error:  fmt.Sprintf("Failed to parse torrent file %s: %v", fileHeader.Filename, err),
-					},
-				)
-				continue
-			}
-			req := manager.NewTorrentRequest(
-				debridName,
-				downloadFolder,
-				magnet,
-				instance,
-				config.DownloadAction(action),
-				downloadUncached,
-				callbackUrl,
-				manager.ImportTypeAPI,
-				skipMultiSeason,
-			)
-			results = append(results, req)
-			tasks = append(tasks, addTask{request: req, source: fileHeader.Filename})
-		}
+func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxAddBody)
+	//nolint:gosec // G120: body capped by MaxBytesReader above
+	if err := r.ParseMultipartForm(multipartMemory); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
+	defer func() { _ = r.MultipartForm.RemoveAll() }()
+	opts := s.parseAddOptions(r)
+	batch := &addBatch{results: make([]*manager.ImportRequest, 0)}
 
-	// Collect NZB URLs
-	if nzbURLs := r.FormValue("nzbURLs"); nzbURLs != "" {
-		for u := range strings.SplitSeq(nzbURLs, "\n") {
-			if trimmed := strings.TrimSpace(u); trimmed != "" {
-				filename, content, err := utils.DownloadFile(trimmed, utils.WithHeader("User-Agent", s.nzbUserAgent))
-				if err != nil {
-					results = append(
-						results,
-						&manager.ImportRequest{
-							Status: "error",
-							Error:  fmt.Sprintf("Failed to fetch NZB from URL %s: %v", trimmed, err),
-						},
-					)
-					continue
-				}
-				req := manager.NewNZBRequest(
-					filename,
-					downloadFolder,
-					content,
-					instance,
-					config.DownloadAction(action),
-					callbackUrl,
-					manager.ImportTypeAPI,
-					skipMultiSeason,
-				)
-				results = append(results, req)
-				tasks = append(tasks, addTask{request: req, source: trimmed})
-			}
+	for _, u := range nonEmptyLines(r.FormValue("urls")) {
+		magnet, err := utils.GetMagnetFromUrl(u, opts.rmTrackerURLs)
+		if err != nil {
+			batch.failf("Failed to parse URL %s: %v", u, err)
+			continue
 		}
+		batch.add(opts.torrent(magnet), u)
 	}
-
-	// Collect NZB files
-	if nzbFiles := r.MultipartForm.File["nzbFiles"]; len(nzbFiles) > 0 {
-		for _, fileHeader := range nzbFiles {
-			content, err := getNZBContentFromFile(fileHeader)
-			if err != nil {
-				results = append(
-					results,
-					&manager.ImportRequest{
-						Status: "error",
-						Error:  fmt.Sprintf("Failed to read NZB file %s: %v", fileHeader.Filename, err),
-					},
-				)
-				continue
-			}
-			req := manager.NewNZBRequest(
-				fileHeader.Filename,
-				downloadFolder,
-				content,
-				instance,
-				config.DownloadAction(action),
-				callbackUrl,
-				manager.ImportTypeAPI,
-				skipMultiSeason,
-			)
-			results = append(results, req)
-			tasks = append(tasks, addTask{request: req, source: fileHeader.Filename})
+	for _, fileHeader := range r.MultipartForm.File["files"] {
+		magnet, err := magnetFromUpload(fileHeader, opts.rmTrackerURLs)
+		if err != nil {
+			batch.failf("Failed to parse torrent file %s: %v", fileHeader.Filename, err)
+			continue
 		}
+		batch.add(opts.torrent(magnet), fileHeader.Filename)
+	}
+	for _, u := range nonEmptyLines(r.FormValue("nzbURLs")) {
+		filename, content, err := utils.DownloadFile(u, utils.WithHeader("User-Agent", s.nzbUserAgent))
+		if err != nil {
+			batch.failf("Failed to fetch NZB from URL %s: %v", u, err)
+			continue
+		}
+		batch.add(opts.nzb(filename, content), u)
+	}
+	for _, fileHeader := range r.MultipartForm.File["nzbFiles"] {
+		content, err := getNZBContentFromFile(fileHeader)
+		if err != nil {
+			batch.failf("Failed to read NZB file %s: %v", fileHeader.Filename, err)
+			continue
+		}
+		batch.add(opts.nzb(fileHeader.Filename, content), fileHeader.Filename)
 	}
 
 	// Only prepared inputs enter the bounded submission phase.
-	submitter := iter.Iterator[addTask]{MaxGoroutines: 10}
-	submitter.ForEach(tasks, func(task *addTask) {
+	ctx := r.Context()
+	submitter := iter.Iterator[addTask]{MaxGoroutines: maxConcurrentImports}
+	submitter.ForEach(batch.tasks, func(task *addTask) {
 		req := task.request
 		var err error
 		if req.Magnet != nil {
@@ -207,10 +165,19 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 		}
 		if err != nil {
 			s.logger.Error().Err(err).Str("source", task.source).Msg("Failed to import content")
-			req.Error, req.Status = err.Error(), "error"
+			req.Error, req.Status = err.Error(), importStatusError
 		}
 	})
-	utils.JSONResponse(w, results, http.StatusOK)
+	utils.JSONResponse(w, batch.results, http.StatusOK)
+}
+
+func magnetFromUpload(fileHeader *multipart.FileHeader, rmTrackerURLs bool) (*utils.Magnet, error) {
+	file, err := fileHeader.Open()
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return utils.GetMagnetFromFile(file, fileHeader.Filename, rmTrackerURLs)
 }
 
 func getNZBContentFromFile(fileHeader *multipart.FileHeader) ([]byte, error) {

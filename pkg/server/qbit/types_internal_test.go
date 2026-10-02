@@ -3,10 +3,24 @@ package qbit
 import (
 	"testing"
 
+	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
+//nolint:paralleltest // mutates the process-wide config singleton
+func TestAppPreferencesDecodeAndReflectConfig(t *testing.T) {
+	config.Get().MaxActiveDownloads = 7
+	prefs := getAppPreferences() // panics if defaultPreferencesJSON stops decoding
+	if prefs.MaxActiveDownloads != 7 || prefs.MaxActiveTorrents != 7 {
+		t.Fatalf("max active = %d/%d, want 7/7", prefs.MaxActiveDownloads, prefs.MaxActiveTorrents)
+	}
+	if prefs.WebUIPort != 8080 || prefs.ListenPort != 31193 || prefs.Locale != "en" {
+		t.Fatalf("static defaults lost: %+v", prefs)
+	}
+}
+
 func TestConvertToQBitTorrentTorrentCalculatesETA(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		entry    *storage.Entry
@@ -47,6 +61,7 @@ func TestConvertToQBitTorrentTorrentCalculatesETA(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := convertToQBitTorrentTorrent(tt.entry)
 			if got.AmountLeft != tt.wantLeft {
 				t.Fatalf("AmountLeft = %d, want %d", got.AmountLeft, tt.wantLeft)
