@@ -18,6 +18,7 @@ import (
 )
 
 func TestMagnetsUnmarshalJSON(t *testing.T) {
+	t.Parallel()
 	tests := map[string]struct {
 		input string
 		want  []int
@@ -38,6 +39,7 @@ func TestMagnetsUnmarshalJSON(t *testing.T) {
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			var magnets Magnets
 			if err := json.Unmarshal([]byte(tt.input), &magnets); err != nil {
 				t.Fatalf("Unmarshal() error = %v", err)
@@ -84,6 +86,7 @@ func TestGetTorrentSelectsRequestedMagnetFromArray(t *testing.T) {
 }
 
 func TestFindMagnetReturnsNotFound(t *testing.T) {
+	t.Parallel()
 	_, err := findMagnet(Magnets{{ID: 1}}, "2")
 	if !errors.Is(err, customerror.TorrentNotFoundError) {
 		t.Fatalf("findMagnet() error = %v, want TorrentNotFoundError", err)
@@ -91,6 +94,7 @@ func TestFindMagnetReturnsNotFound(t *testing.T) {
 }
 
 func TestAllDebridStatusClassification(t *testing.T) {
+	t.Parallel()
 	tests := map[string]struct {
 		statusCode int
 		want       debridTypes.TorrentStatus
@@ -104,6 +108,7 @@ func TestAllDebridStatusClassification(t *testing.T) {
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			if got := getAlldebridStatus(tt.statusCode); got != tt.want {
 				t.Errorf("getAlldebridStatus(%d) = %q, want %q", tt.statusCode, got, tt.want)
 			}
@@ -245,6 +250,7 @@ func testAllDebrid(host string) *AllDebrid {
 }
 
 func TestAvailabilityReportsUnsupported(t *testing.T) {
+	t.Parallel()
 	result, err := (&AllDebrid{}).IsAvailable([]string{"hash"})
 	if !errors.Is(err, debridTypes.ErrAvailabilityUnsupported) || result != nil {
 		t.Fatalf("IsAvailable = %v, %v", result, err)

@@ -52,7 +52,8 @@ func TestFetchDownloadLinkReportsProviderErrors(t *testing.T) {
 }
 
 func TestUpdateTorrentRejectsNullData(t *testing.T) {
-	t.Parallel()
+	config.SetConfigPath(t.TempDir())
+	t.Cleanup(config.Reset)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, `{"success":false,"error":"NOT_FOUND","data":null}`)
 	}))
@@ -63,7 +64,8 @@ func TestUpdateTorrentRejectsNullData(t *testing.T) {
 }
 
 func TestCheckFileRefreshesStalePresence(t *testing.T) {
-	t.Parallel()
+	config.SetConfigPath(t.TempDir())
+	t.Cleanup(config.Reset)
 	var loads atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("offset") != "0" {

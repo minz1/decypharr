@@ -72,6 +72,8 @@ func TestGetTorrentsAssignsStableUniqueHashesWithoutMagnetSources(t *testing.T) 
 }
 
 func TestTransferInfoHashPrefersRealHash(t *testing.T) {
+	config.SetConfigPath(t.TempDir())
+	t.Cleanup(config.Reset)
 	const infoHash = "8d2b41ef6a4cd8f42c601c396c1caeebe2aed47d"
 	pm := &Premiumize{config: config.Debrid{Name: "premiumize-primary"}}
 	transfer := premiumizeTransfer{
@@ -85,6 +87,8 @@ func TestTransferInfoHashPrefersRealHash(t *testing.T) {
 }
 
 func TestAvailabilityRejectsIncompleteResponses(t *testing.T) {
+	config.SetConfigPath(t.TempDir())
+	t.Cleanup(config.Reset)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprint(w, `{"status":"success","response":[true]}`)
 	}))
