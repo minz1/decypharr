@@ -288,76 +288,88 @@ func copyBatched(dst io.Writer, src io.Reader, size int64, buf []byte, nextReadL
 	if len(buf) == 0 {
 		return io.ErrShortBuffer
 	}
-
-	remaining := size
-	fill := 0
-	flush := func() error {
-		if fill == 0 {
-			return nil
-		}
-		n, err := dst.Write(buf[:fill])
-		if err != nil {
+	c := &batchCopier{dst: dst, src: src, buf: buf, remaining: size, nextReadLimit: nextReadLimit}
+	for c.remaining > 0 {
+		if err := c.step(); err != nil {
 			return err
-		}
-		if n != fill {
-			return io.ErrShortWrite
-		}
-		fill = 0
-		return nil
-	}
-
-	for remaining > 0 {
-		var limit int64
-		if nextReadLimit != nil {
-			limit = nextReadLimit()
-		}
-		latencyMode := limit > 0
-
-		// A waiter may arrive while a background batch is partly full. Publish
-		// those bytes before initiating any more potentially-blocking I/O.
-		if latencyMode && fill > 0 {
-			if err := flush(); err != nil {
-				return err
-			}
-			continue // dst progress may have changed the waiter's remaining range
-		}
-
-		want := min(int64(len(buf)-fill), remaining)
-		if latencyMode {
-			want = min(want, limit)
-		}
-		n, rerr := src.Read(buf[fill : fill+int(want)])
-		if n < 0 || n > int(want) {
-			// A Reader that reports more bytes than the slice it was handed
-			// would make the write below slice past the batch buffer and
-			// panic the process (this goroutine has no recover). Fail the
-			// chunk instead and let the retry path deal with it.
-			return fmt.Errorf("stream read returned %d bytes for a %d-byte buffer", n, want)
-		}
-		fill += n
-		remaining -= int64(n)
-		if n == 0 && rerr == nil {
-			if err := flush(); err != nil {
-				return err
-			}
-			return io.ErrNoProgress
-		}
-
-		// Recheck after Read: a waiter could have arrived while the source was
-		// blocked, in which case the bytes just returned must be visible now.
-		if !latencyMode && nextReadLimit != nil {
-			latencyMode = nextReadLimit() > 0
-		}
-		if rerr != nil || fill == len(buf) || remaining == 0 || latencyMode {
-			if err := flush(); err != nil {
-				return err
-			}
-		}
-		if rerr != nil {
-			return rerr
 		}
 	}
 	return nil
+}
+
+// batchCopier is copyBatched's state: buf[:fill] holds read bytes not yet
+// written to dst.
+type batchCopier struct {
+	dst           io.Writer
+	src           io.Reader
+	buf           []byte
+	fill          int
+	remaining     int64
+	nextReadLimit func() int64
+}
+
+func (c *batchCopier) readLimit() int64 {
+	if c.nextReadLimit == nil {
+		return 0
+	}
+	return c.nextReadLimit()
+}
+
+func (c *batchCopier) flush() error {
+	if c.fill == 0 {
+		return nil
+	}
+	n, err := c.dst.Write(c.buf[:c.fill])
+	if err != nil {
+		return err
+	}
+	if n != c.fill {
+		return io.ErrShortWrite
+	}
+	c.fill = 0
+	return nil
+}
+
+// step performs one source read (or one pending flush) of copyBatched.
+func (c *batchCopier) step() error {
+	limit := c.readLimit()
+	// A waiter may arrive while a background batch is partly full. Publish
+	// those bytes before initiating any more potentially-blocking I/O; dst
+	// progress may then change the waiter's remaining range.
+	if limit > 0 && c.fill > 0 {
+		return c.flush()
+	}
+
+	want := min(int64(len(c.buf)-c.fill), c.remaining)
+	if limit > 0 {
+		want = min(want, limit)
+	}
+	n, rerr := c.src.Read(c.buf[c.fill : c.fill+int(want)])
+	if n < 0 || n > int(want) {
+		// A Reader that reports more bytes than the slice it was handed
+		// would make the write below slice past the batch buffer and
+		// panic the process (this goroutine has no recover). Fail the
+		// chunk instead and let the retry path deal with it.
+		return fmt.Errorf("stream read returned %d bytes for a %d-byte buffer", n, want)
+	}
+	c.fill += n
+	c.remaining -= int64(n)
+	if n == 0 && rerr == nil {
+		if err := c.flush(); err != nil {
+			return err
+		}
+		return io.ErrNoProgress
+	}
+
+	// Recheck after Read: a waiter could have arrived while the source was
+	// blocked, in which case the bytes just returned must be visible now.
+	latencyMode := limit > 0 || c.readLimit() > 0
+	if rerr != nil || c.fill == len(c.buf) || c.remaining == 0 || latencyMode {
+		if err := c.flush(); err != nil {
+			return err
+		}
+	}
+	return rerr
 }
 
 // waiterReadLimit returns how many bytes this downloader may request before it
