@@ -13,6 +13,7 @@ import (
 )
 
 func TestLibraryRecoveryUsesDurableJobsAndWaitsForReplacement(t *testing.T) {
+	t.Parallel()
 	var deleted, imported atomic.Bool
 	var searches atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -123,6 +124,7 @@ func TestLibraryRecoveryUsesDurableJobsAndWaitsForReplacement(t *testing.T) {
 }
 
 func TestReconcileImportedManagedJobs(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name            string
 		kind            arr.Type
@@ -152,6 +154,7 @@ func TestReconcileImportedManagedJobs(t *testing.T) {
 			episodes: `[{"id":103,"episodeFileId":44}]`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			var requests atomic.Int64
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				requests.Add(1)

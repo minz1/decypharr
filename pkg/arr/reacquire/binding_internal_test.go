@@ -9,6 +9,7 @@ import (
 )
 
 func TestBindingsFromMatchesOwnLibraryPath(t *testing.T) {
+	t.Parallel()
 	const suffix = "/library/movie.mkv"
 	responseDocument := strings.Repeat("x", 1<<20) + suffix
 	path := responseDocument[len(responseDocument)-len(suffix):]
@@ -23,6 +24,7 @@ func TestBindingsFromMatchesOwnLibraryPath(t *testing.T) {
 }
 
 func TestBindingRequiresCurrentIdentityToAuthorizeMutation(t *testing.T) {
+	t.Parallel()
 	binding := Binding{
 		ArrType:                arr.Radarr,
 		ArrInstanceFingerprint: "v1:test",

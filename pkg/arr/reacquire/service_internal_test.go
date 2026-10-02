@@ -12,6 +12,7 @@ import (
 const testArrInstanceFingerprint = "v1:test-instance"
 
 func TestIndexReplacesOneArrGeneration(t *testing.T) {
+	t.Parallel()
 	index := NewIndex()
 	sonarr := Binding{
 		ArrName:     "sonarr",
@@ -105,6 +106,7 @@ func (handler *delayedWaitingHandler) Reacquire(_ context.Context, _ Job, progre
 }
 
 func TestServiceDeduplicatesAndPersistsReacquireJobs(t *testing.T) {
+	t.Parallel()
 	directory := t.TempDir()
 	handler := &waitingReacquireHandler{called: make(chan string, 1)}
 	service, err := NewService(ServiceOptions{Directory: directory, Handler: handler})
@@ -189,6 +191,7 @@ func TestServiceDeduplicatesAndPersistsReacquireJobs(t *testing.T) {
 }
 
 func TestServiceDeletesOnlyTerminalJobsAndPersistsDeletion(t *testing.T) {
+	t.Parallel()
 	directory := t.TempDir()
 	service, err := NewService(ServiceOptions{Directory: directory})
 	if err != nil {
@@ -275,6 +278,7 @@ func TestServiceDeletesOnlyTerminalJobsAndPersistsDeletion(t *testing.T) {
 }
 
 func TestServicePersistsUnknownMutationForRestartReconciliation(t *testing.T) {
+	t.Parallel()
 	directory := t.TempDir()
 	service, err := NewService(ServiceOptions{Directory: directory, Handler: unknownMutationHandler{}})
 	if err != nil {
@@ -338,6 +342,7 @@ func TestServicePersistsUnknownMutationForRestartReconciliation(t *testing.T) {
 }
 
 func TestWaitingTransitionFindsExistingCompleteEpisodeReplacement(t *testing.T) {
+	t.Parallel()
 	handler := &delayedWaitingHandler{started: make(chan struct{}), release: make(chan struct{})}
 	service, err := NewService(ServiceOptions{Directory: t.TempDir(), Handler: handler})
 	if err != nil {
@@ -423,6 +428,7 @@ func TestWaitingTransitionFindsExistingCompleteEpisodeReplacement(t *testing.T) 
 }
 
 func TestWaitingJobExpiresAndReleasesDeduplicationKey(t *testing.T) {
+	t.Parallel()
 	handler := &waitingReacquireHandler{called: make(chan string, 2)}
 	service, err := NewService(ServiceOptions{Directory: t.TempDir(), Handler: handler})
 	if err != nil {
@@ -483,6 +489,7 @@ func waitForJobStatus(t *testing.T, service *Service, id string, status Status) 
 }
 
 func TestIndexSummaryAndSearch(t *testing.T) {
+	t.Parallel()
 	index := NewIndex()
 	bindings := []Binding{
 		{ArrName: "sonarr", ArrType: arr.Sonarr, EntryID: "e1", EntryFileID: "f1",

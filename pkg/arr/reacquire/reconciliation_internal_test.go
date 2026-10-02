@@ -17,8 +17,10 @@ func (handler reconciliationHandler) Reacquire(ctx context.Context, job Job, pro
 }
 
 func TestReconciliationStopsAndRetainsDuplicateProtection(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"expired before dispatch", "expired during reconciliation", "attempts exhausted"} {
 		t.Run(scenario, func(t *testing.T) {
+			t.Parallel()
 			directory := t.TempDir()
 			service, err := NewService(ServiceOptions{Directory: directory})
 			if err != nil {

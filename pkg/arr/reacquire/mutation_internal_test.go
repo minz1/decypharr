@@ -21,6 +21,7 @@ func (progress failingDurableProgress) UpdateDurable(Status, func(*Job)) error {
 }
 
 func TestConfirmMutationPersistenceFailureHasUnknownOutcome(t *testing.T) {
+	t.Parallel()
 	now := time.Now().UTC()
 	mutation := Mutation{
 		Key:              "movie_search:9",
@@ -45,6 +46,7 @@ func TestConfirmMutationPersistenceFailureHasUnknownOutcome(t *testing.T) {
 }
 
 func TestFindCommandReceiptRequiresExactScopeAndTime(t *testing.T) {
+	t.Parallel()
 	dispatchedAt := time.Now().UTC().Add(-time.Minute)
 	mutation := Mutation{
 		Kind:             MutationEpisodeSearch,
@@ -79,6 +81,7 @@ func TestFindCommandReceiptRequiresExactScopeAndTime(t *testing.T) {
 }
 
 func TestFindGrabReceiptRequiresGuidIndexerMediaAndTime(t *testing.T) {
+	t.Parallel()
 	dispatchedAt := time.Now().UTC().Add(-time.Minute)
 	mutation := Mutation{
 		Kind:             MutationReleaseGrab,
@@ -137,6 +140,7 @@ func TestFindGrabReceiptRequiresGuidIndexerMediaAndTime(t *testing.T) {
 }
 
 func TestMutationRedispatchWaitsAndStopsAtAttemptCap(t *testing.T) {
+	t.Parallel()
 	mutation := Mutation{
 		Key:              "movie_search:9",
 		Attempts:         maxMutationAttempts,
