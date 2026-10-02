@@ -42,6 +42,7 @@ func postForm(handler http.Handler, path string, form url.Values) *httptest.Resp
 
 // Before the fix setCategory ignored the hashes and recategorized every
 // queued entry, and a pipe-separated hash list was treated as one hash.
+//nolint:paralleltest // mutates the process-wide config singleton
 func TestSetCategoryOnlyTouchesRequestedHashes(t *testing.T) {
 	q := newQueueTestQBit(t, "aaa", "bbb", "ccc")
 	w := postForm(q.Routes(), "/torrents/setCategory", url.Values{"hashes": {"aaa|bbb"}, "category": {"radarr"}})
@@ -68,6 +69,7 @@ func TestSetCategoryOnlyTouchesRequestedHashes(t *testing.T) {
 }
 
 // Arr clients hit these concurrently; run with -race.
+//nolint:paralleltest // mutates the process-wide config singleton
 func TestCategoriesAndTagsAreConcurrencySafe(t *testing.T) {
 	q := newQueueTestQBit(t)
 	// Spare capacity: an aliased append would write into the config's array.
@@ -92,6 +94,7 @@ func TestCategoriesAndTagsAreConcurrencySafe(t *testing.T) {
 // categoryContext parses multipart forms before authentication; file parts
 // spill to temp files with no limit of their own, so only the body cap bounds
 // them. Pre-fix the whole body was consumed and the trailing field honored.
+//nolint:paralleltest // mutates the process-wide config singleton
 func TestOversizedBodyIsNotConsumed(t *testing.T) {
 	q := newQueueTestQBit(t)
 	pr, pw := io.Pipe()

@@ -20,6 +20,7 @@ func TestAppPreferencesDecodeAndReflectConfig(t *testing.T) {
 }
 
 func TestConvertToQBitTorrentTorrentCalculatesETA(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		entry    *storage.Entry
@@ -60,6 +61,7 @@ func TestConvertToQBitTorrentTorrentCalculatesETA(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := convertToQBitTorrentTorrent(tt.entry)
 			if got.AmountLeft != tt.wantLeft {
 				t.Fatalf("AmountLeft = %d, want %d", got.AmountLeft, tt.wantLeft)

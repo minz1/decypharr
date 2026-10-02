@@ -14,6 +14,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/manager"
 )
 
+//nolint:paralleltest // mutates the process-wide config singleton
 func TestImportPreservesPreparationErrors(t *testing.T) {
 	config.Reset()
 	config.SetConfigPath(t.TempDir())

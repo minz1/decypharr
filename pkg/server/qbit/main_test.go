@@ -1,4 +1,4 @@
-package qbit
+package qbit_test
 
 import (
 	"os"

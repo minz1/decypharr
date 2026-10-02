@@ -18,6 +18,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
+//nolint:paralleltest // mutates the process-wide config singleton
 func TestRouterQueueContracts(t *testing.T) {
 	config.Reset()
 	config.SetConfigPath(t.TempDir())

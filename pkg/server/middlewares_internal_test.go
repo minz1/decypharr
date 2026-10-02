@@ -7,6 +7,7 @@ import (
 )
 
 func TestIsAPIRequest(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		urlBase string
@@ -22,6 +23,7 @@ func TestIsAPIRequest(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			s := &Server{urlBase: tt.urlBase}
 			r := httptest.NewRequest(http.MethodGet, tt.path, nil)
 			if got := s.isAPIRequest(r); got != tt.want {
