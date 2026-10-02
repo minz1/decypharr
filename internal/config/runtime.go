@@ -27,18 +27,27 @@ func Get() *Config {
 	if current := instance.Load(); current != nil {
 		return current
 	}
-	configMu.Lock()
-	defer configMu.Unlock()
-	if current := instance.Load(); current != nil {
-		return current
-	}
-	current := &Config{}
-	if err := current.loadConfig(); err != nil {
+	current, err := loadInstance()
+	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "configuration error: %v\n", err)
 		os.Exit(1)
 	}
-	instance.Store(current)
 	return current
+}
+
+// loadInstance loads and publishes the config once under configMu.
+func loadInstance() (*Config, error) {
+	configMu.Lock()
+	defer configMu.Unlock()
+	if current := instance.Load(); current != nil {
+		return current, nil
+	}
+	current := &Config{}
+	if err := current.loadConfig(); err != nil {
+		return nil, err
+	}
+	instance.Store(current)
+	return current, nil
 }
 
 // Clone returns an independent copy for editing.

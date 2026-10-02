@@ -95,14 +95,7 @@ type Usenet struct {
 // BufferMemoryBytes resolves the usenet streaming-buffer RAM cap. Empty ->
 // 512MB default; "0" -> disabled (0).
 func (u Usenet) BufferMemoryBytes() int64 {
-	if u.BufferMemory == "" {
-		return 512 << 20
-	}
-	n, err := ParseSize(u.BufferMemory)
-	if err != nil {
-		return 512 << 20
-	}
-	return n
+	return bufferMemoryBytes(u.BufferMemory)
 }
 
 // UsesDiskBuffer reports whether Usenet streams should retain rewind data on disk.
@@ -150,20 +143,29 @@ func (c *Config) updateUsenetConfig() {
 	// DiskPath intentionally remains empty so memory buffering is the default.
 
 	// Availability sample percent default - clamp to valid range
-	if c.Usenet.AvailabilitySamplePercent <= 0 {
-		c.Usenet.AvailabilitySamplePercent = 10
-	} else if c.Usenet.AvailabilitySamplePercent > 100 {
-		c.Usenet.AvailabilitySamplePercent = 100
-	}
-	if c.Usenet.ImportAvailabilitySamplePercent <= 0 {
-		c.Usenet.ImportAvailabilitySamplePercent = 1
-	} else if c.Usenet.ImportAvailabilitySamplePercent > 100 {
-		c.Usenet.ImportAvailabilitySamplePercent = 100
-	}
+	c.Usenet.AvailabilitySamplePercent = samplePercent(
+		c.Usenet.AvailabilitySamplePercent, defaultRepairSamplePercent)
+	c.Usenet.ImportAvailabilitySamplePercent = samplePercent(
+		c.Usenet.ImportAvailabilitySamplePercent, defaultImportSamplePercent)
 
 	for i, provider := range c.Usenet.Providers {
 		c.Usenet.Providers[i] = c.updateUsenetProvider(i, provider)
 	}
+}
+
+// Availability sampling defaults (percent of segments checked).
+const (
+	defaultRepairSamplePercent = 10
+	defaultImportSamplePercent = 1
+	maxSamplePercent           = 100
+)
+
+// samplePercent returns def for unset (<= 0) values and caps the rest at 100.
+func samplePercent(value, def int) int {
+	if value <= 0 {
+		return def
+	}
+	return min(value, maxSamplePercent)
 }
 
 func (c *Config) updateUsenetProvider(index int, u UsenetProvider) UsenetProvider {

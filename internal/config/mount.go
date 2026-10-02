@@ -145,15 +145,24 @@ func (d DFS) DiskCacheSizeBytes() int64 {
 	return n
 }
 
+// defaultBufferMemory is the streaming-buffer RAM cap used when unset.
+const defaultBufferMemory = 512 * mib
+
 // BufferMemoryBytes resolves the DFS streaming-buffer RAM cap. Empty -> 512MB
 // default; "0" -> disabled (0).
 func (d DFS) BufferMemoryBytes() int64 {
-	if d.BufferMemory == "" {
-		return 512 << 20
+	return bufferMemoryBytes(d.BufferMemory)
+}
+
+// bufferMemoryBytes parses a buffer_memory setting, falling back to
+// defaultBufferMemory when it is empty or invalid.
+func bufferMemoryBytes(value string) int64 {
+	if value == "" {
+		return defaultBufferMemory
 	}
-	n, err := ParseSize(d.BufferMemory)
+	n, err := ParseSize(value)
 	if err != nil {
-		return 512 << 20
+		return defaultBufferMemory
 	}
 	return n
 }
