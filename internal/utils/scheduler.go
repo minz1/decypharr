@@ -34,15 +34,15 @@ func ConvertToJobDef(interval string) (gocron.JobDefinition, error) {
 }
 
 func parseClockTime(s string) (time.Time, bool) {
-	parts := strings.Split(s, ":")
-	if len(parts) != 2 {
+	hour, minute, ok := strings.Cut(s, ":")
+	if !ok {
 		return time.Time{}, false
 	}
-	h, err := strconv.Atoi(parts[0])
+	h, err := strconv.Atoi(hour)
 	if err != nil || h < 0 || h > 23 {
 		return time.Time{}, false
 	}
-	m, err := strconv.Atoi(parts[1])
+	m, err := strconv.Atoi(minute)
 	if err != nil || m < 0 || m > 59 {
 		return time.Time{}, false
 	}

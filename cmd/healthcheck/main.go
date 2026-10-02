@@ -24,7 +24,17 @@ type HealthStatus struct {
 	OverallStatus bool `json:"overall_status"`
 }
 
+// healthTimeout bounds all probes together.
+const healthTimeout = 30 * time.Second
+
 func main() {
+	if !healthy() {
+		os.Exit(1)
+	}
+}
+
+// healthy probes the qBittorrent API, web UI, and WebDAV endpoints.
+func healthy() bool {
 	var (
 		configPath string
 		debug      bool
@@ -46,20 +56,20 @@ func main() {
 	}
 
 	// Create a context with timeout for all HTTP requests
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), healthTimeout)
 	defer cancel()
 	client := &http.Client{
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}
 
-	baseUrl := cmp.Or(cfg.URLBase, "/")
+	baseURL := cmp.Or(cfg.URLBase, "/")
 	auth := cfg.GetAuth()
 
-	status.QbitAPI = checkQbitAPI(ctx, client, baseUrl, port, auth, cfg.UseAuth)
-	status.WebUI = checkWebUI(ctx, client, baseUrl, port, auth, cfg.UseAuth)
-	status.WebDAVService = checkBaseWebdav(ctx, client, baseUrl, port, cfg)
+	status.QbitAPI = checkQbitAPI(ctx, client, baseURL, port, auth, cfg.UseAuth)
+	status.WebUI = checkWebUI(ctx, client, baseURL, port, auth, cfg.UseAuth)
+	status.WebDAVService = checkBaseWebdav(ctx, client, baseURL, port, cfg)
 	// Determine overall status
 	// Consider the application healthy if core services are running
 	status.OverallStatus = status.QbitAPI && status.WebUI && status.WebDAVService
@@ -67,25 +77,20 @@ func main() {
 	// Optional: output health status as JSON for logging
 	if debug {
 		statusJSON, _ := json.MarshalIndent(status, "", "  ")
-		fmt.Println(string(statusJSON))
+		_, _ = fmt.Fprintln(os.Stdout, string(statusJSON))
 	}
 
-	// Exit with appropriate code
-	if status.OverallStatus {
-		os.Exit(0)
-	}
-
-	os.Exit(1)
+	return status.OverallStatus
 }
 
 func checkQbitAPI(
 	ctx context.Context,
 	client *http.Client,
-	baseUrl, port string,
+	baseURL, port string,
 	auth *config.Auth,
 	authMayBeRequired bool,
 ) bool {
-	url := localURL(port, baseUrl, "api/v2/app/version")
+	url := localURL(port, baseURL, "api/v2/app/version")
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return false
@@ -104,11 +109,11 @@ func checkQbitAPI(
 func checkWebUI(
 	ctx context.Context,
 	client *http.Client,
-	baseUrl, port string,
+	baseURL, port string,
 	auth *config.Auth,
 	authMayBeRequired bool,
 ) bool {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, localURL(port, baseUrl, "version"), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, localURL(port, baseURL, "version"), nil)
 	if err != nil {
 		return false
 	}
@@ -123,8 +128,8 @@ func checkWebUI(
 	return isHealthyStatus(resp.StatusCode, authMayBeRequired, http.StatusOK) || isRedirect(resp.StatusCode)
 }
 
-func checkBaseWebdav(ctx context.Context, client *http.Client, baseUrl, port string, cfg *config.Config) bool {
-	url := localURL(port, baseUrl, "webdav/")
+func checkBaseWebdav(ctx context.Context, client *http.Client, baseURL, port string, cfg *config.Config) bool {
+	url := localURL(port, baseURL, "webdav/")
 	req, err := http.NewRequestWithContext(ctx, "PROPFIND", url, nil)
 	if err != nil {
 		return false
@@ -146,8 +151,8 @@ func checkBaseWebdav(ctx context.Context, client *http.Client, baseUrl, port str
 	)
 }
 
-func localURL(port, baseUrl, endpoint string) string {
-	base := strings.Trim(baseUrl, "/")
+func localURL(port, baseURL, endpoint string) string {
+	base := strings.Trim(baseURL, "/")
 	endpoint = strings.TrimLeft(endpoint, "/")
 
 	switch {

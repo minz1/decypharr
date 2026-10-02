@@ -60,7 +60,7 @@ func (s Strm) SidecarMaxBytes() int64 {
 
 func (c *Config) setStrmDefaults() {
 	if c.Strm.Secret == "" {
-		b := make([]byte, 32)
+		b := make([]byte, secretBytes)
 		_, _ = rand.Read(b)
 		c.Strm.Secret = hex.EncodeToString(b)
 	}

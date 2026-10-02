@@ -1,7 +1,6 @@
 package config
 
 import (
-	"strconv"
 	"strings"
 )
 
@@ -38,61 +37,21 @@ func (h Hearsay) IsZero() bool {
 }
 
 func (c *Config) applyHearsayEnvVars() {
-	if v := getEnv("HEARSAY__DISABLED"); v != "" {
-		c.Hearsay.Disabled = parseBool(v)
-	}
-	if v := getEnv("HEARSAY__PARTICIPATE"); v != "" {
-		c.Hearsay.Participate = new(parseBool(v))
-	}
-	if v := getEnv("HEARSAY__PUBLISH"); v != "" {
-		c.Hearsay.Publish = new(parseBool(v))
-	}
+	envBool("HEARSAY__DISABLED", &c.Hearsay.Disabled)
+	envBoolPtr("HEARSAY__PARTICIPATE", &c.Hearsay.Participate)
+	envBoolPtr("HEARSAY__PUBLISH", &c.Hearsay.Publish)
 	if v := getEnv("HEARSAY__ADVICE_MODE"); v != "" {
 		c.Hearsay.AdviceMode = strings.ToLower(strings.TrimSpace(v))
 	}
-	if v := getEnv("HEARSAY__MIN_SUPPORT"); v != "" {
-		if n, err := strconv.ParseFloat(v, 64); err == nil {
-			c.Hearsay.MinSupport = n
-		}
-	}
-	if v := getEnv("HEARSAY__MIN_EVIDENCE"); v != "" {
-		if n, err := strconv.ParseFloat(v, 64); err == nil {
-			c.Hearsay.MinEvidence = n
-		}
-	}
-	if v := getEnv("HEARSAY__MIN_SOURCES"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			c.Hearsay.MinSources = n
-		}
-	}
-	if v := getEnv("HEARSAY__PORT"); v != "" {
-		if p, err := strconv.Atoi(v); err == nil {
-			c.Hearsay.Port = p
-		}
-	}
-	if v := getEnv("HEARSAY__GOSSIP_PORT"); v != "" {
-		if p, err := strconv.Atoi(v); err == nil {
-			c.Hearsay.GossipPort = p
-		}
-	}
-	if v := getEnv("HEARSAY__INTERVAL"); v != "" {
-		c.Hearsay.Interval = v
-	}
-	if v := getEnv("HEARSAY__MAX_STORAGE_BYTES"); v != "" {
-		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
-			c.Hearsay.MaxStorageBytes = n
-		}
-	}
-	if v := getEnv("HEARSAY__MAX_FEEDS_PER_NAMESPACE"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			c.Hearsay.MaxFeedsPerNamespace = n
-		}
-	}
-	if v := getEnv("HEARSAY__MAX_SEEDED_TORRENTS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			c.Hearsay.MaxSeededTorrents = n
-		}
-	}
+	envFloat("HEARSAY__MIN_SUPPORT", &c.Hearsay.MinSupport)
+	envFloat("HEARSAY__MIN_EVIDENCE", &c.Hearsay.MinEvidence)
+	envInt("HEARSAY__MIN_SOURCES", &c.Hearsay.MinSources)
+	envInt("HEARSAY__PORT", &c.Hearsay.Port)
+	envInt("HEARSAY__GOSSIP_PORT", &c.Hearsay.GossipPort)
+	envString("HEARSAY__INTERVAL", &c.Hearsay.Interval)
+	envInt64("HEARSAY__MAX_STORAGE_BYTES", &c.Hearsay.MaxStorageBytes)
+	envInt("HEARSAY__MAX_FEEDS_PER_NAMESPACE", &c.Hearsay.MaxFeedsPerNamespace)
+	envInt("HEARSAY__MAX_SEEDED_TORRENTS", &c.Hearsay.MaxSeededTorrents)
 	if v := getEnv("HEARSAY__FOLLOW"); v != "" {
 		c.Hearsay.Follow = nil
 		for key := range strings.SplitSeq(v, ",") {

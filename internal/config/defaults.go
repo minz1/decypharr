@@ -7,7 +7,7 @@ const (
 	DefaultSMBPort uint16 = 1445
 )
 
-var (
+const (
 	DefaultPort     = "8282"
 	DefaultLogLevel = "info"
 
