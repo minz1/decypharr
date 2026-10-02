@@ -5,18 +5,29 @@ import (
 	"flag"
 	"log"
 	"net/http"
-	_ "net/http/pprof"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
 	"syscall"
+	"time"
 
 	"github.com/sirrobot01/decypharr/cmd/decypharr"
 	"github.com/sirrobot01/decypharr/internal/config"
 )
 
+// pprofReadHeaderTimeout bounds slow clients on the opt-in pprof listener.
+const pprofReadHeaderTimeout = 10 * time.Second
+
 func main() {
+	if err := run(); err != nil {
+		log.Print(err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("FATAL: Recovered from panic in main: %v\n", r)
@@ -52,19 +63,28 @@ func main() {
 
 	// Start pprof server if enabled
 	if pprofAddr != "" && enablePprof {
-		go func() {
-			log.Printf("Starting pprof server on %s", pprofAddr)
-			if err := http.ListenAndServe(pprofAddr, nil); err != nil {
-				log.Printf("pprof server error: %v", err)
-			}
-		}()
+		go servePprof(pprofAddr)
 	}
 
 	// Create a context canceled on SIGINT/SIGTERM
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := decypharr.Start(ctx); err != nil {
-		log.Fatal(err)
+	return decypharr.Start(ctx)
+}
+
+// servePprof exposes the profiling endpoints on their own mux, so they are
+// only reachable on the opt-in pprof listener.
+func servePprof(addr string) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: pprofReadHeaderTimeout}
+	log.Printf("Starting pprof server on %s", addr)
+	if err := srv.ListenAndServe(); err != nil {
+		log.Printf("pprof server error: %v", err)
 	}
 }
