@@ -215,7 +215,8 @@ func validateUsenet(providers []UsenetProvider) error {
 }
 
 func (c *Config) applyUsenetEnvVars() {
-	// Per-stream configuration
+	// Per-stream configuration. MAX_CONNECTIONS also sets the processing limit
+	// unless PROCESSING_MAX_CONNECTIONS is given explicitly.
 	processingMaxConns := getEnv("USENET__PROCESSING_MAX_CONNECTIONS")
 	if maxConns := getEnv("USENET__MAX_CONNECTIONS"); maxConns != "" {
 		if v, err := strconv.Atoi(maxConns); err == nil {
@@ -225,96 +226,42 @@ func (c *Config) applyUsenetEnvVars() {
 			}
 		}
 	}
-	if processingMaxConns != "" {
-		if v, err := strconv.Atoi(processingMaxConns); err == nil {
-			c.Usenet.ProcessingMaxConnections = v
-		}
-	}
+	envInt("USENET__PROCESSING_MAX_CONNECTIONS", &c.Usenet.ProcessingMaxConnections)
 
-	if readAhead := getEnv("USENET__READ_AHEAD"); readAhead != "" {
-		c.Usenet.ReadAhead = readAhead
-	}
+	envString("USENET__READ_AHEAD", &c.Usenet.ReadAhead)
 	if pipelineDepth := getEnv("USENET__BODY_PIPELINE_DEPTH"); pipelineDepth != "" {
 		if v, err := strconv.Atoi(pipelineDepth); err == nil {
 			c.Usenet.BodyPipelineDepth = NormalizeBodyPipelineDepth(v)
 		}
 	}
-	if streamBackupWait := getEnv("USENET__STREAM_BACKUP_WAIT"); streamBackupWait != "" {
-		c.Usenet.StreamBackupWait = streamBackupWait
-	}
+	envString("USENET__STREAM_BACKUP_WAIT", &c.Usenet.StreamBackupWait)
+	envString("USENET__SOCKET_READ_BUFFER", &c.Usenet.SocketReadBuffer)
+	envString("USENET__SOCKET_WRITE_BUFFER", &c.Usenet.SocketWriteBuffer)
+	envString("USENET__PROCESSING_TIMEOUT", &c.Usenet.ProcessingTimeout)
+	envInt("USENET__AVAILABILITY_SAMPLE_PERCENT", &c.Usenet.AvailabilitySamplePercent)
+	envInt("USENET__IMPORT_AVAILABILITY_SAMPLE_PERCENT", &c.Usenet.ImportAvailabilitySamplePercent)
+	envString("USENET__DISK_PATH", &c.Usenet.DiskPath)
 
-	if v := getEnv("USENET__SOCKET_READ_BUFFER"); v != "" {
-		c.Usenet.SocketReadBuffer = v
-	}
-
-	if v := getEnv("USENET__SOCKET_WRITE_BUFFER"); v != "" {
-		c.Usenet.SocketWriteBuffer = v
-	}
-
-	if processingTimeout := getEnv("USENET__PROCESSING_TIMEOUT"); processingTimeout != "" {
-		c.Usenet.ProcessingTimeout = processingTimeout
-	}
-
-	if availabilitySample := getEnv("USENET__AVAILABILITY_SAMPLE_PERCENT"); availabilitySample != "" {
-		if v, err := strconv.Atoi(availabilitySample); err == nil {
-			c.Usenet.AvailabilitySamplePercent = v
-		}
-	}
-	if availabilitySample := getEnv("USENET__IMPORT_AVAILABILITY_SAMPLE_PERCENT"); availabilitySample != "" {
-		if v, err := strconv.Atoi(availabilitySample); err == nil {
-			c.Usenet.ImportAvailabilitySamplePercent = v
-		}
-	}
-	if diskPath := getEnv("USENET__DISK_PATH"); diskPath != "" {
-		c.Usenet.DiskPath = diskPath
-	}
-
-	// Usenet providers array
-	for i := range 10 { // Support up to 10 usenet providers
+	// Usenet providers array. HOST creates a new entry; credentials apply to
+	// existing entries by index so users can set only secrets in
+	// environmentFiles without repeating host.
+	for i := range maxEnvProviders {
 		prefix := fmt.Sprintf("USENET__PROVIDERS__%d__", i)
-
-		// HOST creates a new entry; credentials apply to existing entries by index
-		// so users can set only secrets in environmentFiles without repeating host.
 		if val := getEnv(prefix + "HOST"); val != "" {
-			if i >= len(c.Usenet.Providers) {
-				c.Usenet.Providers = append(c.Usenet.Providers, make([]UsenetProvider, i-len(c.Usenet.Providers)+1)...)
-			}
+			c.Usenet.Providers = growTo(c.Usenet.Providers, i)
 			c.Usenet.Providers[i].Host = val
 		}
-
 		if i >= len(c.Usenet.Providers) {
 			continue
 		}
-
-		if port := getEnv(prefix + "PORT"); port != "" {
-			if v, err := strconv.Atoi(port); err == nil {
-				c.Usenet.Providers[i].Port = v
-			}
-		}
-		if username := getEnv(prefix + "USERNAME"); username != "" {
-			c.Usenet.Providers[i].Username = username
-		}
-		if password := getEnv(prefix + "PASSWORD"); password != "" {
-			c.Usenet.Providers[i].Password = password
-		}
-		if backbone := getEnv(prefix + "BACKBONE"); backbone != "" {
-			c.Usenet.Providers[i].Backbone = backbone
-		}
-		if maxConnections := getEnv(prefix + "MAX_CONNECTIONS"); maxConnections != "" {
-			if v, err := strconv.Atoi(maxConnections); err == nil {
-				c.Usenet.Providers[i].MaxConnections = v
-			}
-		}
-		if ssl := getEnv(prefix + "SSL"); ssl != "" {
-			c.Usenet.Providers[i].SSL = parseBool(ssl)
-		}
-		if priority := getEnv(prefix + "PRIORITY"); priority != "" {
-			if v, err := strconv.Atoi(priority); err == nil {
-				c.Usenet.Providers[i].Priority = v
-			}
-		}
-		if backup := getEnv(prefix + "BACKUP"); backup != "" {
-			c.Usenet.Providers[i].Backup = parseBool(backup)
-		}
+		provider := &c.Usenet.Providers[i]
+		envInt(prefix+"PORT", &provider.Port)
+		envString(prefix+"USERNAME", &provider.Username)
+		envString(prefix+"PASSWORD", &provider.Password)
+		envString(prefix+"BACKBONE", &provider.Backbone)
+		envInt(prefix+"MAX_CONNECTIONS", &provider.MaxConnections)
+		envBool(prefix+"SSL", &provider.SSL)
+		envInt(prefix+"PRIORITY", &provider.Priority)
+		envBool(prefix+"BACKUP", &provider.Backup)
 	}
 }

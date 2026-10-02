@@ -7,12 +7,116 @@ import (
 	"strings"
 )
 
+// Upper bounds for indexed environment variables (FOO__0, FOO__1, ...).
+const (
+	maxEnvListItems = 100
+	maxEnvArrs      = 20
+	maxEnvProviders = 10
+	maxEnvAPIKeys   = 20
+)
+
 func getEnv(key string) string {
 	return os.Getenv("DECYPHARR_" + key)
 }
 
 func parseBool(val string) bool {
 	return val == "true" || val == "1" || val == "yes"
+}
+
+// envString overwrites *dst with DECYPHARR_<key> when it is set.
+func envString(key string, dst *string) {
+	if v := getEnv(key); v != "" {
+		*dst = v
+	}
+}
+
+// envBool overwrites *dst with the boolean DECYPHARR_<key> when it is set.
+func envBool(key string, dst *bool) {
+	if v := getEnv(key); v != "" {
+		*dst = parseBool(v)
+	}
+}
+
+// envBoolPtr is envBool for optional (pointer) settings.
+func envBoolPtr(key string, dst **bool) {
+	if v := getEnv(key); v != "" {
+		*dst = new(parseBool(v))
+	}
+}
+
+// envInt overwrites *dst with DECYPHARR_<key> when it is set and parses.
+func envInt(key string, dst *int) {
+	if v := getEnv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			*dst = n
+		}
+	}
+}
+
+// envInt64 is envInt for int64 settings.
+func envInt64(key string, dst *int64) {
+	if v := getEnv(key); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			*dst = n
+		}
+	}
+}
+
+// envFloat is envInt for float64 settings.
+func envFloat(key string, dst *float64) {
+	if v := getEnv(key); v != "" {
+		if n, err := strconv.ParseFloat(v, 64); err == nil {
+			*dst = n
+		}
+	}
+}
+
+// envUint16 is envInt for 16-bit unsigned settings such as ports.
+func envUint16(key string, dst *uint16) {
+	if v := getEnv(key); v != "" {
+		if n, err := strconv.ParseUint(v, 10, 16); err == nil {
+			*dst = uint16(n)
+		}
+	}
+}
+
+// envUint32 is envInt for 32-bit unsigned settings such as uid/gid.
+func envUint32(key string, dst *uint32) {
+	if v := getEnv(key); v != "" {
+		if n, err := strconv.ParseUint(v, 10, 32); err == nil {
+			*dst = uint32(n)
+		}
+	}
+}
+
+// envNetworks overwrites *dst with a comma/space/newline separated list.
+func envNetworks(key string, dst *[]string) {
+	if v := getEnv(key); v != "" {
+		*dst = strings.FieldsFunc(v, func(r rune) bool {
+			return r == ',' || r == ' ' || r == '\n'
+		})
+	}
+}
+
+// envIndexedList sets (*dst)[i] from DECYPHARR_<format % i> for i = 0, 1, ...
+// until the first unset index, growing the slice as needed.
+func envIndexedList(format string, limit int, dst *[]string) {
+	for i := range limit {
+		val := getEnv(fmt.Sprintf(format, i))
+		if val == "" {
+			return
+		}
+		*dst = growTo(*dst, i)
+		(*dst)[i] = val
+	}
+}
+
+// growTo returns s extended with zero values so that index i is valid.
+func growTo[T any](s []T, i int) []T {
+	if i < len(s) {
+		return s
+	}
+	return append(s, make([]T, i-len(s)+1)...)
 }
 
 // applyEnvOverrides applies environment variable overrides with DECYPHARR_ prefix
@@ -25,30 +129,27 @@ func parseBool(val string) bool {
 //	DECYPHARR_DEBRIDS__0__API_KEY=abc123
 func (c *Config) applyEnvOverrides() {
 	// Root level fields
-	if val := getEnv("PORT"); val != "" {
-		c.Port = val
-	}
-	if val := getEnv("BIND_ADDRESS"); val != "" {
-		c.BindAddress = val
-	}
-	if val := getEnv("URL_BASE"); val != "" {
-		c.URLBase = val
-	}
-	if val := getEnv("LOG_LEVEL"); val != "" {
-		c.LogLevel = val
-	}
-	if val := getEnv("USE_AUTH"); val != "" {
-		c.UseAuth = parseBool(val)
-	}
+	envString("PORT", &c.Port)
+	envString("BIND_ADDRESS", &c.BindAddress)
+	envString("URL_BASE", &c.URLBase)
+	envString("LOG_LEVEL", &c.LogLevel)
+	envBool("USE_AUTH", &c.UseAuth)
 	c.applyAuthEnvVars()
 
-	// Manager settings
-	if val := getEnv("DOWNLOAD_FOLDER"); val != "" {
-		c.DownloadFolder = val
-	}
-	if val := getEnv("REFRESH_INTERVAL"); val != "" {
-		c.RefreshInterval = val
-	}
+	c.applyManagerEnvVars()
+	c.applyMountEnvVars()
+	c.applyNFSEnvVars()
+	c.applySMBEnvVars()
+	c.applyShareCacheEnvVars()
+	c.applyDebridEnvVars()
+	c.applyUsenetEnvVars()
+	c.applyHearsayEnvVars()
+	c.applyArrEnvVars()
+}
+
+func (c *Config) applyManagerEnvVars() {
+	envString("DOWNLOAD_FOLDER", &c.DownloadFolder)
+	envString("REFRESH_INTERVAL", &c.RefreshInterval)
 	// nix/module.nix exports MAX_DOWNLOADS (always, "0" when unset), so it is
 	// honored as an alias but only a positive value overrides the config.
 	if val := getEnv("MAX_DOWNLOADS"); val != "" {
@@ -56,104 +157,35 @@ func (c *Config) applyEnvOverrides() {
 			c.MaxActiveDownloads = v
 		}
 	}
-	if val := getEnv("MAX_ACTIVE_DOWNLOADS"); val != "" {
-		if v, err := strconv.Atoi(val); err == nil {
-			c.MaxActiveDownloads = v
-		}
-	}
-	if val := getEnv("SKIP_PRE_CACHE"); val != "" {
-		c.SkipPreCache = parseBool(val)
-	}
-	if val := getEnv("ALWAYS_RM_TRACKER_URLS"); val != "" {
-		c.AlwaysRmTrackerUrls = parseBool(val)
-	}
-	if val := getEnv("MIN_FILE_SIZE"); val != "" {
-		c.MinFileSize = val
-	}
-	if val := getEnv("MAX_FILE_SIZE"); val != "" {
-		c.MaxFileSize = val
-	}
-	if val := getEnv("REMOVE_STALLED_AFTER"); val != "" {
-		c.RemoveStalledAfter = val
-	}
-	if val := getEnv("ENABLE_WEBDAV_AUTH"); val != "" {
-		c.EnableWebdavAuth = parseBool(val)
-	}
-	if val := getEnv("RETRIES"); val != "" {
-		if v, err := strconv.Atoi(val); err == nil {
-			c.Retries = v
-		}
-	}
+	envInt("MAX_ACTIVE_DOWNLOADS", &c.MaxActiveDownloads)
+	envBool("SKIP_PRE_CACHE", &c.SkipPreCache)
+	envBool("ALWAYS_RM_TRACKER_URLS", &c.AlwaysRmTrackerUrls)
+	envString("MIN_FILE_SIZE", &c.MinFileSize)
+	envString("MAX_FILE_SIZE", &c.MaxFileSize)
+	envString("REMOVE_STALLED_AFTER", &c.RemoveStalledAfter)
+	envBool("ENABLE_WEBDAV_AUTH", &c.EnableWebdavAuth)
+	envInt("RETRIES", &c.Retries)
+	envBool("SKIP_AUTO_MOVE", &c.SkipAutoMove)
+	envIndexedList("CATEGORIES__%d", maxEnvListItems, &c.Categories)
+	envIndexedList("ALLOWED_FILE_TYPES__%d", maxEnvListItems, &c.AllowedExt)
+	envString("NZB_USER_AGENT", &c.NZBUserAgent)
+}
 
-	if val := getEnv("SKIP_AUTO_MOVE"); val != "" {
-		c.SkipAutoMove = parseBool(val)
-	}
-	// Manager categories array
-	for i := range 100 { // Support up to 100 categories
-		key := fmt.Sprintf("CATEGORIES__%d", i)
-		if val := getEnv(key); val != "" {
-			if i >= len(c.Categories) {
-				c.Categories = append(c.Categories, make([]string, i-len(c.Categories)+1)...)
-			}
-			c.Categories[i] = val
-		} else {
-			break
-		}
-	}
-	// Manager allowed extensions array
-	for i := range 100 {
-		key := fmt.Sprintf("ALLOWED_FILE_TYPES__%d", i)
-		if val := getEnv(key); val != "" {
-			if i >= len(c.AllowedExt) {
-				c.AllowedExt = append(c.AllowedExt, make([]string, i-len(c.AllowedExt)+1)...)
-			}
-			c.AllowedExt[i] = val
-		} else {
-			break
-		}
-	}
-
-	if nzbUserAgent := getEnv("NZB_USER_AGENT"); nzbUserAgent != "" {
-		c.NZBUserAgent = nzbUserAgent
-	}
-
-	c.applyMountEnvVars()
-
-	c.applyNFSEnvVars()
-
-	c.applySMBEnvVars()
-
-	c.applyShareCacheEnvVars()
-
-	c.applyDebridEnvVars()
-
-	c.applyUsenetEnvVars()
-
-	c.applyHearsayEnvVars()
-
-	// Arr applications array
-	for i := range 20 { // Support up to 20 arr applications
+// applyArrEnvVars applies ARRS__<i>__*. NAME creates a new entry; TOKEN and
+// other fields apply to existing entries by index so users can set only
+// secrets in environmentFiles.
+func (c *Config) applyArrEnvVars() {
+	for i := range maxEnvArrs {
 		prefix := fmt.Sprintf("ARRS__%d__", i)
-
-		// NAME creates a new entry; TOKEN and other fields apply to existing
-		// entries by index so users can set only secrets in environmentFiles.
 		if val := getEnv(prefix + "NAME"); val != "" {
-			if i >= len(c.Arrs) {
-				c.Arrs = append(c.Arrs, make([]Arr, i-len(c.Arrs)+1)...)
-			}
+			c.Arrs = growTo(c.Arrs, i)
 			c.Arrs[i].Name = val
 		}
-
 		if i >= len(c.Arrs) {
 			continue
 		}
-
-		if host := getEnv(prefix + "HOST"); host != "" {
-			c.Arrs[i].Host = host
-		}
-		if token := getEnv(prefix + "TOKEN"); token != "" {
-			c.Arrs[i].Token = token
-		}
+		envString(prefix+"HOST", &c.Arrs[i].Host)
+		envString(prefix+"TOKEN", &c.Arrs[i].Token)
 	}
 }
 
@@ -191,76 +223,31 @@ func (c *Config) applyAuthEnvVars() {
 }
 
 func (c *Config) applyNFSEnvVars() {
-	if val := getEnv("NFS__ENABLED"); val != "" {
-		c.NFS.Enabled = parseBool(val)
-	}
-	if val := getEnv("NFS__BIND_ADDRESS"); val != "" {
-		c.NFS.BindAddress = val
-	}
-	if val := getEnv("NFS__PORT"); val != "" {
-		if v, err := strconv.ParseUint(val, 10, 16); err == nil {
-			c.NFS.Port = uint16(v)
-		}
-	}
-	if val := getEnv("NFS__ALLOWED_NETWORKS"); val != "" {
-		c.NFS.AllowedNetworks = strings.FieldsFunc(val, func(r rune) bool {
-			return r == ',' || r == ' ' || r == '\n'
-		})
-	}
+	envBool("NFS__ENABLED", &c.NFS.Enabled)
+	envString("NFS__BIND_ADDRESS", &c.NFS.BindAddress)
+	envUint16("NFS__PORT", &c.NFS.Port)
+	envNetworks("NFS__ALLOWED_NETWORKS", &c.NFS.AllowedNetworks)
 	c.setNFSDefaults()
 }
 
 func (c *Config) applySMBEnvVars() {
-	if val := getEnv("SMB__ENABLED"); val != "" {
-		c.SMB.Enabled = parseBool(val)
-	}
-	if val := getEnv("SMB__BIND_ADDRESS"); val != "" {
-		c.SMB.BindAddress = val
-	}
-	if val := getEnv("SMB__PORT"); val != "" {
-		if v, err := strconv.ParseUint(val, 10, 16); err == nil {
-			c.SMB.Port = uint16(v)
-		}
-	}
-	if val := getEnv("SMB__SHARE_NAME"); val != "" {
-		c.SMB.ShareName = val
-	}
-	if val := getEnv("SMB__USERNAME"); val != "" {
-		c.SMB.Username = val
-	}
-	if val := getEnv("SMB__PASSWORD"); val != "" {
-		c.SMB.Password = val
-	}
-	if val := getEnv("SMB__REQUIRE_SIGNING"); val != "" {
-		c.SMB.RequireSigning = parseBool(val)
-	}
-	if val := getEnv("SMB__ALLOWED_NETWORKS"); val != "" {
-		c.SMB.AllowedNetworks = strings.FieldsFunc(val, func(r rune) bool {
-			return r == ',' || r == ' ' || r == '\n'
-		})
-	}
+	envBool("SMB__ENABLED", &c.SMB.Enabled)
+	envString("SMB__BIND_ADDRESS", &c.SMB.BindAddress)
+	envUint16("SMB__PORT", &c.SMB.Port)
+	envString("SMB__SHARE_NAME", &c.SMB.ShareName)
+	envString("SMB__USERNAME", &c.SMB.Username)
+	envString("SMB__PASSWORD", &c.SMB.Password)
+	envBool("SMB__REQUIRE_SIGNING", &c.SMB.RequireSigning)
+	envNetworks("SMB__ALLOWED_NETWORKS", &c.SMB.AllowedNetworks)
 	c.setSMBDefaults()
 }
 
 func (c *Config) applyShareCacheEnvVars() {
-	if val := getEnv("SHARE_CACHE__ENABLED"); val != "" {
-		enabled := parseBool(val)
-		c.ShareCache.Enabled = &enabled
-	}
-	if val := getEnv("SHARE_CACHE__DIR"); val != "" {
-		c.ShareCache.Dir = val
-	}
-	if val := getEnv("SHARE_CACHE__MAX_SIZE"); val != "" {
-		c.ShareCache.MaxSize = val
-	}
-	if val := getEnv("SHARE_CACHE__MAX_AGE"); val != "" {
-		c.ShareCache.MaxAge = val
-	}
-	if val := getEnv("SHARE_CACHE__CHUNK_SIZE"); val != "" {
-		c.ShareCache.ChunkSize = val
-	}
-	if val := getEnv("SHARE_CACHE__READ_AHEAD"); val != "" {
-		c.ShareCache.ReadAhead = val
-	}
+	envBoolPtr("SHARE_CACHE__ENABLED", &c.ShareCache.Enabled)
+	envString("SHARE_CACHE__DIR", &c.ShareCache.Dir)
+	envString("SHARE_CACHE__MAX_SIZE", &c.ShareCache.MaxSize)
+	envString("SHARE_CACHE__MAX_AGE", &c.ShareCache.MaxAge)
+	envString("SHARE_CACHE__CHUNK_SIZE", &c.ShareCache.ChunkSize)
+	envString("SHARE_CACHE__READ_AHEAD", &c.ShareCache.ReadAhead)
 	c.setShareCacheDefaults()
 }

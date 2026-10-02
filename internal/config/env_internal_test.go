@@ -84,3 +84,32 @@ func TestRcloneMountSettingsSurviveDefaults(t *testing.T) {
 		t.Fatalf("legacy rclone.port not used as fallback: %q", legacy.Mount.Rclone.Port)
 	}
 }
+
+func TestIndexedEnvOverrides(t *testing.T) {
+	t.Setenv("DECYPHARR_CATEGORIES__0", "tv")
+	t.Setenv("DECYPHARR_CATEGORIES__1", "movies")
+	t.Setenv("DECYPHARR_CATEGORIES__3", "ignored after a gap")
+	t.Setenv("DECYPHARR_DEBRIDS__0__API_KEY", "dropped: no entry 0 exists yet")
+	t.Setenv("DECYPHARR_DEBRIDS__1__NAME", "torbox")
+	t.Setenv("DECYPHARR_DEBRIDS__1__DOWNLOAD_API_KEYS__0", "dl0")
+	t.Setenv("DECYPHARR_DEBRIDS__1__DOWNLOAD_API_KEYS__1", "dl1")
+	t.Setenv("DECYPHARR_ARRS__0__TOKEN", "no entry to attach to")
+	t.Setenv("DECYPHARR_NFS__PORT", "70000") // out of range: ignored
+
+	c := &Config{Categories: []string{"old"}, NFS: NFS{Port: 1}}
+	c.applyEnvOverrides()
+
+	if len(c.Categories) != 2 || c.Categories[0] != "tv" || c.Categories[1] != "movies" {
+		t.Errorf("Categories = %q", c.Categories)
+	}
+	if len(c.Debrids) != 2 || c.Debrids[0].APIKey != "" || c.Debrids[1].Name != "torbox" ||
+		len(c.Debrids[1].DownloadAPIKeys) != 2 || c.Debrids[1].DownloadAPIKeys[1] != "dl1" {
+		t.Errorf("Debrids = %+v", c.Debrids)
+	}
+	if len(c.Arrs) != 0 {
+		t.Errorf("TOKEN without NAME created an arr: %+v", c.Arrs)
+	}
+	if c.NFS.Port != 1 {
+		t.Errorf("NFS.Port = %d, want unchanged for an out-of-range value", c.NFS.Port)
+	}
+}

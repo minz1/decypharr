@@ -88,45 +88,22 @@ func validateDebrids(debrids []Debrid) error {
 }
 
 func (c *Config) applyDebridEnvVars() {
-	// Debrid providers array
-	for i := range 10 { // Support up to 10 debrid providers
+	// NAME creates a new entry; secret fields apply to existing entries by index
+	// so users can set only secrets in environmentFiles without repeating names.
+	for i := range maxEnvProviders {
 		prefix := fmt.Sprintf("DEBRIDS__%d__", i)
-
-		// NAME creates a new entry; secret fields apply to existing entries by index
-		// so users can set only secrets in environmentFiles without repeating names.
 		if val := getEnv(prefix + "NAME"); val != "" {
-			if i >= len(c.Debrids) {
-				c.Debrids = append(c.Debrids, make([]Debrid, i-len(c.Debrids)+1)...)
-			}
+			c.Debrids = growTo(c.Debrids, i)
 			c.Debrids[i].Name = val
 		}
-
 		if i >= len(c.Debrids) {
 			continue
 		}
-
-		if apiKey := getEnv(prefix + "API_KEY"); apiKey != "" {
-			c.Debrids[i].APIKey = apiKey
-		}
-		if folder := getEnv(prefix + "FOLDER"); folder != "" {
-			c.Debrids[i].Folder = folder
-		}
-		if provider := getEnv(prefix + "PROVIDER"); provider != "" {
-			c.Debrids[i].Provider = provider
-		}
-		if proxy := getEnv(prefix + "PROXY"); proxy != "" {
-			c.Debrids[i].Proxy = proxy
-		}
-		for j := range 20 {
-			dkey := getEnv(fmt.Sprintf("DEBRIDS__%d__DOWNLOAD_API_KEYS__%d", i, j))
-			if dkey == "" {
-				break
-			}
-			if j >= len(c.Debrids[i].DownloadAPIKeys) {
-				c.Debrids[i].DownloadAPIKeys = append(c.Debrids[i].DownloadAPIKeys,
-					make([]string, j-len(c.Debrids[i].DownloadAPIKeys)+1)...)
-			}
-			c.Debrids[i].DownloadAPIKeys[j] = dkey
-		}
+		debrid := &c.Debrids[i]
+		envString(prefix+"API_KEY", &debrid.APIKey)
+		envString(prefix+"FOLDER", &debrid.Folder)
+		envString(prefix+"PROVIDER", &debrid.Provider)
+		envString(prefix+"PROXY", &debrid.Proxy)
+		envIndexedList(prefix+"DOWNLOAD_API_KEYS__%d", maxEnvAPIKeys, &debrid.DownloadAPIKeys)
 	}
 }
