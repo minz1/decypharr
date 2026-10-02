@@ -44,6 +44,8 @@ const (
 	fileHeaderSize = 32
 	// highSizeLen is HIGH_PACK_SIZE(4) + HIGH_UNP_SIZE(4).
 	highSizeLen = 8
+	// highSizeShift places HIGH_*_SIZE above the low 32 bits.
+	highSizeShift = 32
 	// blockReadAttempts bounds retries of one header read.
 	blockReadAttempts = 4
 )
@@ -56,6 +58,8 @@ var (
 	ErrRangeRequestsNotSupported    = errors.New("server does not support range requests")
 	ErrCompressionNotSupported      = errors.New("compression method not supported")
 	ErrDirectoryExtractNotSupported = errors.New("directory extract not supported")
+
+	errShortRead = errors.New("short read")
 )
 
 // Name returns the base filename of the file.
@@ -133,7 +137,10 @@ func (r *Reader) readExact(ctx context.Context, start int64, length int) ([]byte
 				return readErr
 			}
 			if len(data) < length {
-				return fmt.Errorf("short read at %d: %d of %d bytes", start, len(data), length)
+				// A short read is end of file, not a transient failure.
+				return retry.Unrecoverable(
+					fmt.Errorf("%w at %d: %d of %d bytes", errShortRead, start, len(data), length),
+				)
 			}
 			return nil
 		},
@@ -173,23 +180,73 @@ func (r *Reader) findMarker(ctx context.Context) (int64, error) {
 	return 0, ErrMarkerNotFound
 }
 
+// RAR3 Unicode name encoding: each flag byte holds four 2-bit operations.
+const (
+	opASCII      = 0 // copy the next ASCII byte
+	opLowByte    = 1 // next data byte, high byte 0
+	opWithHigh   = 2 // next data byte with the current high byte
+	opMask       = 0x03
+	opBits       = 2
+	opsPerByte   = 4
+	flagExtended = 0x80
+	byteBits     = 8
+)
+
 // unicodeFlags reads one RAR3 Unicode flag group at data[pos] and returns the
-// 2-bit flags, how many characters they control, and the next position.
+// 2-bit operations, how many characters they control, and the next position.
 func unicodeFlags(data []byte, pos int) (uint, int, int) {
 	flags := data[pos]
 	pos++
-	if flags&0x80 == 0 {
-		return uint(flags), 4, pos // Simple flag: 4 characters
+	if flags&flagExtended == 0 {
+		return uint(flags), opsPerByte, pos
 	}
 	// Extended flag: continuation bytes extend the group.
 	bits := uint(flags)
 	count := 1
-	for (bits&(0x80>>count) != 0) && pos < len(data) {
-		bits = ((bits & ((0x80 >> count) - 1)) << 8) | uint(data[pos])
+	for (bits&(flagExtended>>count) != 0) && pos < len(data) {
+		bits = ((bits & ((flagExtended >> count) - 1)) << byteBits) | uint(data[pos])
 		pos++
 		count++
 	}
-	return bits, count * 4, pos
+	return bits, count * opsPerByte, pos
+}
+
+// unicodeDecoder holds the state of one RAR3 Unicode name decode.
+type unicodeDecoder struct {
+	ascii    string
+	data     []byte
+	asciiPos int
+	dataPos  int
+	high     byte
+	out      []rune
+}
+
+func (d *unicodeDecoder) exhausted() bool {
+	return d.asciiPos >= len(d.ascii) && d.dataPos >= len(d.data)
+}
+
+// apply executes one 2-bit operation.
+func (d *unicodeDecoder) apply(op uint) {
+	if op == opASCII {
+		if d.asciiPos < len(d.ascii) {
+			d.out = append(d.out, rune(d.ascii[d.asciiPos]))
+			d.asciiPos++
+		}
+		return
+	}
+	if d.dataPos >= len(d.data) {
+		return
+	}
+	b := d.data[d.dataPos]
+	d.dataPos++
+	switch op {
+	case opLowByte:
+		d.out = append(d.out, rune(b))
+	case opWithHigh:
+		d.out = append(d.out, rune(d.high)<<byteBits|rune(b))
+	default: // set a new high byte
+		d.high = b
+	}
 }
 
 // decodeUnicode decodes RAR3 Unicode encoding.
@@ -197,50 +254,19 @@ func decodeUnicode(asciiStr string, unicodeData []byte) string {
 	if len(unicodeData) == 0 {
 		return asciiStr
 	}
-
-	var result []rune
-	asciiPos := 0
-	dataPos := 0
-	var highByte byte
-
-	for dataPos < len(unicodeData) {
-		flagBits, flagCount, next := unicodeFlags(unicodeData, dataPos)
-		dataPos = next
-
-		for i := range flagCount {
-			if asciiPos >= len(asciiStr) && dataPos >= len(unicodeData) {
-				break
-			}
-			op := (flagBits >> (i * 2)) & 0x03
-			if op == 0 {
-				// Use ASCII character
-				if asciiPos < len(asciiStr) {
-					result = append(result, rune(asciiStr[asciiPos]))
-					asciiPos++
-				}
-				continue
-			}
-			if dataPos >= len(unicodeData) {
-				continue
-			}
-			b := unicodeData[dataPos]
-			dataPos++
-			switch op {
-			case 1: // Unicode character with high byte 0
-				result = append(result, rune(b))
-			case 2: // Unicode character with current high byte
-				result = append(result, rune(highByte)<<8|rune(b))
-			default: // Set new high byte
-				highByte = b
-			}
+	d := &unicodeDecoder{ascii: asciiStr, data: unicodeData}
+	for d.dataPos < len(d.data) {
+		ops, count, next := unicodeFlags(d.data, d.dataPos)
+		d.dataPos = next
+		for i := 0; i < count && !d.exhausted(); i++ {
+			d.apply((ops >> (i * opBits)) & opMask)
 		}
 	}
-
 	// Append any remaining ASCII characters
-	for ; asciiPos < len(asciiStr); asciiPos++ {
-		result = append(result, rune(asciiStr[asciiPos]))
+	for ; d.asciiPos < len(d.ascii); d.asciiPos++ {
+		d.out = append(d.out, rune(d.ascii[d.asciiPos]))
 	}
-	return string(result)
+	return string(d.out)
 }
 
 // readFiles reads all file entries in the archive.
@@ -251,9 +277,11 @@ func (r *Reader) readFiles(ctx context.Context) error {
 	// Process all blocks until blockEnd or EOF.
 	for {
 		headerData, err := r.readExact(ctx, pos, baseHeaderSize)
+		if errors.Is(err, errShortRead) {
+			break // end of data without an end block
+		}
 		if err != nil {
-			// EOF or unrecoverable read error — stop iteration.
-			break
+			return fmt.Errorf("read block header at offset %d: %w", pos, err)
 		}
 		headType := headerData[2]
 		headFlags := int(binary.LittleEndian.Uint16(headerData[3:5]))
@@ -337,8 +365,8 @@ func (r *Reader) parseFileHeader(headerData []byte, position int64) (*File, erro
 	offset := fileHeaderSize
 	if headFlags&flagHasHighSize != 0 {
 		if offset+highSizeLen <= len(headerData) {
-			packSize += int64(binary.LittleEndian.Uint32(headerData[offset:offset+4])) << 32
-			unpackSize += int64(binary.LittleEndian.Uint32(headerData[offset+4:offset+highSizeLen])) << 32
+			packSize += int64(binary.LittleEndian.Uint32(headerData[offset:offset+4])) << highSizeShift
+			unpackSize += int64(binary.LittleEndian.Uint32(headerData[offset+4:offset+highSizeLen])) << highSizeShift
 		}
 		offset += highSizeLen
 	}
