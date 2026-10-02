@@ -10,6 +10,7 @@ import (
 )
 
 func TestHTTPFileReadAt(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name         string
 		status       int
@@ -31,12 +32,13 @@ func TestHTTPFileReadAt(t *testing.T) {
 		{"negative offset", 200, "abcdef", 6, -1, 1, "", fs.ErrInvalid},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Parallel()
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(tc.status)
 				_, _ = io.WriteString(w, tc.body)
 			}))
 			defer srv.Close()
-			f := &HttpFile{URL: srv.URL, client: srv.Client(), FileSize: tc.size}
+			f := &HTTPFile{URL: srv.URL, client: srv.Client(), FileSize: tc.size}
 			buf := make([]byte, tc.count)
 			n, err := f.ReadAt(buf, tc.offset)
 			if !errors.Is(err, tc.wantErr) || string(buf[:n]) != tc.want {

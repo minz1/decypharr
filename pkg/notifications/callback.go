@@ -2,10 +2,10 @@ package notifications
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"time"
 )
 
 // CallbackPayload represents the HTTP callback payload.
@@ -31,9 +31,7 @@ type CallbackNotifier struct {
 func NewCallback(callbackURL string) *CallbackNotifier {
 	return &CallbackNotifier{
 		callbackURL: callbackURL,
-		client: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		client:      &http.Client{},
 	}
 }
 
@@ -43,7 +41,7 @@ func (c *CallbackNotifier) Name() string {
 }
 
 // Send dispatches the notification via HTTP POST.
-func (c *CallbackNotifier) Send(event Event) error {
+func (c *CallbackNotifier) Send(ctx context.Context, event Event) error {
 	if c.callbackURL == "" {
 		return nil
 	}
@@ -71,7 +69,7 @@ func (c *CallbackNotifier) Send(event Event) error {
 		return fmt.Errorf("failed to marshal callback payload: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, c.callbackURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.callbackURL, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("failed to create callback request: %w", err)
 	}
