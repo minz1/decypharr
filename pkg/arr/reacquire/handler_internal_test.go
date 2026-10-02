@@ -26,6 +26,7 @@ func (progress *recordedProgress) UpdateDurable(status Status, mutate func(*Job)
 }
 
 func TestReacquireHandlerFailsExactDownloadAndWaitsForArr(t *testing.T) {
+	t.Parallel()
 	var historyCalls atomic.Int64
 	var failed atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
@@ -92,6 +93,7 @@ func TestReacquireHandlerFailsExactDownloadAndWaitsForArr(t *testing.T) {
 }
 
 func TestReacquireHandlerRefusesStaleArrFileIdentity(t *testing.T) {
+	t.Parallel()
 	var deleted atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		switch {
@@ -139,6 +141,7 @@ func TestReacquireHandlerRefusesStaleArrFileIdentity(t *testing.T) {
 }
 
 func TestReacquireHandlerRefusesChangedArrInstance(t *testing.T) {
+	t.Parallel()
 	var requests atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		requests.Add(1)
@@ -176,6 +179,7 @@ func TestReacquireHandlerRefusesChangedArrInstance(t *testing.T) {
 }
 
 func TestAutoRedownloadsFailureHonorsInteractiveSourceConfig(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name   string
 		config arr.DownloadClientConfig
@@ -189,6 +193,7 @@ func TestAutoRedownloadsFailureHonorsInteractiveSourceConfig(t *testing.T) {
 		{name: "interactive enabled", config: arr.DownloadClientConfig{AutoRedownloadFailed: true, AutoRedownloadFailedFromInteractiveSearch: true}, source: "InteractiveSearch", want: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			failure := exactDownloadFailure{
 				grabRecord: arr.HistoryRecord{Data: map[string]string{"releaseSource": test.source}},
 			}
@@ -200,6 +205,7 @@ func TestAutoRedownloadsFailureHonorsInteractiveSourceConfig(t *testing.T) {
 }
 
 func TestSearchBindingsReconcilesPersistedCommandWithoutRedispatch(t *testing.T) {
+	t.Parallel()
 	dispatched := atomic.Int64{}
 	queued := time.Now().UTC().Add(-time.Second)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
@@ -253,6 +259,7 @@ func TestSearchBindingsReconcilesPersistedCommandWithoutRedispatch(t *testing.T)
 }
 
 func TestSearchBindingsWaitsForCommandVisibilityBeforeRedispatch(t *testing.T) {
+	t.Parallel()
 	dispatched := atomic.Int64{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		if request.Method == http.MethodPost {
@@ -290,6 +297,7 @@ func TestSearchBindingsWaitsForCommandVisibilityBeforeRedispatch(t *testing.T) {
 }
 
 func TestPreexistingFailedHistoryUsesExplicitSearch(t *testing.T) {
+	t.Parallel()
 	searches := atomic.Int64{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodPost || request.URL.Path != "/api/v3/command" {

@@ -47,6 +47,7 @@ func (s *observedBindingStore) Sync() error {
 }
 
 func TestBindingRepositoryFailedSnapshotPutKeepsCommittedGeneration(t *testing.T) {
+	t.Parallel()
 	path := t.TempDir() + "/bindings.db"
 	repository := openTestBindingRepository(t, path)
 	original := repositoryTestBinding("radarr", "old-entry", "old-file", 1)
@@ -81,6 +82,7 @@ func TestBindingRepositoryFailedSnapshotPutKeepsCommittedGeneration(t *testing.T
 }
 
 func TestBindingRepositoryCommitsPagesBeforeTheManifest(t *testing.T) {
+	t.Parallel()
 	repository := openTestBindingRepository(t, t.TempDir()+"/bindings.db")
 	t.Cleanup(func() { _ = repository.Close() })
 	store := &observedBindingStore{bindingRepositoryStore: repository.store}
@@ -119,6 +121,7 @@ func TestBindingRepositoryCommitsPagesBeforeTheManifest(t *testing.T) {
 
 // A page is one row, so a large generation must not be one large write.
 func TestBindingRepositoryPagesLargeGenerations(t *testing.T) {
+	t.Parallel()
 	path := t.TempDir() + "/bindings.db"
 	repository := openTestBindingRepository(t, path)
 	bindings := make([]Binding, bindingPageSize*2+3)
@@ -149,6 +152,7 @@ func TestBindingRepositoryPagesLargeGenerations(t *testing.T) {
 // An interrupted write leaves pages with no manifest; the committed generation
 // must survive it.
 func TestBindingRepositoryIgnoresUncommittedPages(t *testing.T) {
+	t.Parallel()
 	path := t.TempDir() + "/bindings.db"
 	repository := openTestBindingRepository(t, path)
 	committed := repositoryTestBinding("sonarr", "entry-1", "file-1", 1)
@@ -182,6 +186,7 @@ func TestBindingRepositoryIgnoresUncommittedPages(t *testing.T) {
 }
 
 func TestBindingRepositoryRejectsCorruptAuthoritativeSnapshot(t *testing.T) {
+	t.Parallel()
 	path := t.TempDir() + "/bindings.db"
 	repository := openTestBindingRepository(t, path)
 	t.Cleanup(func() { _ = repository.Close() })
@@ -204,7 +209,9 @@ func TestBindingRepositoryRejectsCorruptAuthoritativeSnapshot(t *testing.T) {
 }
 
 func TestBindingRepositoryMigratesLegacyRowsOnMutation(t *testing.T) {
+	t.Parallel()
 	t.Run("save", func(t *testing.T) {
+		t.Parallel()
 		path := t.TempDir() + "/bindings.db"
 		repository := openTestBindingRepository(t, path)
 		first := repositoryTestBinding("sonarr", "entry-1", "file-1", 1)
@@ -248,6 +255,7 @@ func TestBindingRepositoryMigratesLegacyRowsOnMutation(t *testing.T) {
 	})
 
 	t.Run("delete", func(t *testing.T) {
+		t.Parallel()
 		path := t.TempDir() + "/bindings.db"
 		repository := openTestBindingRepository(t, path)
 		binding := repositoryTestBinding("radarr", "entry", "file", 1)
@@ -272,6 +280,7 @@ func TestBindingRepositoryMigratesLegacyRowsOnMutation(t *testing.T) {
 }
 
 func TestBindingRepositoryCachesStateAcrossTargetedSaves(t *testing.T) {
+	t.Parallel()
 	repository := openTestBindingRepository(t, t.TempDir()+"/bindings.db")
 	t.Cleanup(func() { _ = repository.Close() })
 	store := &observedBindingStore{bindingRepositoryStore: repository.store}
@@ -366,6 +375,7 @@ func assertSingleRepositoryBinding(t *testing.T, repository *BindingRepository, 
 }
 
 func TestBindingRepositorySaveWritesOneRow(t *testing.T) {
+	t.Parallel()
 	path := t.TempDir() + "/bindings.db"
 	repository := openTestBindingRepository(t, path)
 	baseline := []Binding{
@@ -407,6 +417,7 @@ func TestBindingRepositorySaveWritesOneRow(t *testing.T) {
 }
 
 func TestBindingRepositoryGenerationReplacesDeltas(t *testing.T) {
+	t.Parallel()
 	path := t.TempDir() + "/bindings.db"
 	repository := openTestBindingRepository(t, path)
 	if err := repository.ReplaceArrGeneration("radarr", 1, []Binding{
