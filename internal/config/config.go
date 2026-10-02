@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -98,22 +99,33 @@ type QueueCleanupRule struct {
 	Action string `json:"action,omitempty"` // "" (ignore) | "import" | "blacklist" | "blacklist_research"
 }
 
+// actionBlacklistResearch blocklists a release and searches for a new one.
+const actionBlacklistResearch = "blacklist_research"
+
+// Fallbacks applied by setDefaults.
+const (
+	secretBytes               = 32 // 256-bit session secrets and API tokens
+	defaultMaxActiveDownloads = 5
+	defaultRetries            = 3
+	defaultRcloneTransfers    = 4
+)
+
 // DefaultQueueCleanupRules returns the built-in catalog of known Servarr queue
 // issues with sensible default actions. The order is significant: resolution is
 // first-match-wins, so more specific entries should precede broader ones.
 func DefaultQueueCleanupRules() []QueueCleanupRule {
 	return []QueueCleanupRule{
-		{ID: "failed_download", Match: "Failed download", Action: "blacklist_research"},
+		{ID: "failed_download", Match: "Failed download", Action: actionBlacklistResearch},
 		{ID: "title_mismatch", Match: "Title mismatch; automatic import is not possible", Action: "import"},
 		{ID: "matched_by_id", Match: "Matched to series/movie by ID", Action: "import"},
-		{ID: "unable_to_parse", Match: "Unable to parse download", Action: "blacklist_research"},
-		{ID: "no_eligible_files", Match: "No files found are eligible for import", Action: "blacklist_research"},
+		{ID: "unable_to_parse", Match: "Unable to parse download", Action: actionBlacklistResearch},
+		{ID: "no_eligible_files", Match: "No files found are eligible for import", Action: actionBlacklistResearch},
 		{
 			ID:     "episodes_missing",
 			Match:  "Episodes not imported or missing from the release",
-			Action: "blacklist_research",
+			Action: actionBlacklistResearch,
 		},
-		{ID: "file_empty", Match: "Downloaded file is empty", Action: "blacklist_research"},
+		{ID: "file_empty", Match: "Downloaded file is empty", Action: actionBlacklistResearch},
 		{ID: "invalid_local_path", Match: "Not a valid local path (remote path mapping)", Action: ""},
 		{ID: "not_grabbed", Match: "Not grabbed by the arr / no category", Action: ""},
 	}
@@ -321,7 +333,8 @@ type Config struct {
 	QueueCleanup QueueCleanup `json:"queue_cleanup"`
 }
 
-func (c *Config) JsonFile() string {
+// JSONFile is the path of config.json.
+func (c *Config) JSONFile() string {
 	return filepath.Join(GetMainPath(), "config.json")
 }
 func (c *Config) AuthFile() string {
@@ -335,14 +348,14 @@ func (c *Config) TorrentsFile() string {
 func (c *Config) loadConfig() error {
 	// Load the config file
 	// Read the JSON config file directly
-	configFile := c.JsonFile()
-	fmt.Printf("Loading config from %s\n", configFile)
+	configFile := c.JSONFile()
+	fmt.Fprintf(os.Stdout, "Loading config from %s\n", configFile)
 	data, err := os.ReadFile(configFile)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
 		// First run: start from the built-in defaults, then fall through so
 		// the environment overrides apply before the file is first written.
-		fmt.Printf("Config file not found, creating a new one at %s\n", configFile)
+		fmt.Fprintf(os.Stdout, "Config file not found, creating a new one at %s\n", configFile)
 		if createConfigErr := c.createConfig(); createConfigErr != nil {
 			return fmt.Errorf("failed to create config file: %w", createConfigErr)
 		}
@@ -405,7 +418,7 @@ func (c *Config) Validate() error {
 
 // GenerateAPIToken creates a new random API token.
 func GenerateAPIToken() (string, error) {
-	bytes := make([]byte, 32) // 256-bit token
+	bytes := make([]byte, secretBytes) // 256-bit token
 	if _, err := rand.Read(bytes); err != nil {
 		return "", err
 	}
@@ -553,7 +566,7 @@ func (c *Config) migrateNotifications() {
 
 func (c *Config) setDefaults() {
 	if c.SessionSecret == "" {
-		var key [32]byte
+		var key [secretBytes]byte
 		_, _ = rand.Read(key[:])
 		c.SessionSecret = hex.EncodeToString(key[:])
 	}
@@ -566,7 +579,7 @@ func (c *Config) setDefaults() {
 		c.DefaultDownloadAction = DownloadActionSymlink
 	}
 	if c.MaxActiveDownloads <= 0 {
-		c.MaxActiveDownloads = 5
+		c.MaxActiveDownloads = defaultMaxActiveDownloads
 	}
 
 	for i, debrid := range c.Debrids {
@@ -576,41 +589,7 @@ func (c *Config) setDefaults() {
 	// Set usenet defaults
 	c.updateUsenetConfig()
 
-	firstDebrid := Debrid{}
-	if len(c.Debrids) > 0 {
-		firstDebrid = c.Debrids[0]
-	}
-
-	if c.Mount.Type == "" {
-		if c.Rclone.Enabled {
-			c.Mount.Type = MountTypeRclone
-			c.Mount.Rclone = c.Rclone
-		}
-	}
-
-	if c.Mount.MountPath == "" {
-		// Set MountPath from debridConfig.Folder by splliting it
-		// debrid.Folder is usually {mount_path}/{debrid_name}/__all__ or {mount_path}/{debrid_name}/torrents
-		if len(c.Debrids) > 0 {
-			folder := filepath.Clean(firstDebrid.Folder)
-			c.Mount.MountPath = filepath.Dir(folder)
-		}
-	}
-
-	// Move WebDav global settings to Manager if not set
-	if c.Mount.ExternalRclone.RCUrl == "" {
-		c.Mount.ExternalRclone.RCUrl = firstDebrid.RcUrl
-	}
-	if c.Mount.ExternalRclone.RCUsername == "" {
-		c.Mount.ExternalRclone.RCUsername = firstDebrid.RcUser
-	}
-	if c.Mount.ExternalRclone.RCPassword == "" {
-		c.Mount.ExternalRclone.RCPassword = firstDebrid.RcPass
-	}
-
-	if c.FolderNaming == "" {
-		c.FolderNaming = WebDavFolderNaming(firstDebrid.FolderNaming)
-	}
+	c.migrateLegacyMountSettings()
 
 	// Set default allowed extensions if not set in Manager
 	if len(c.AllowedExt) == 0 {
@@ -619,113 +598,15 @@ func (c *Config) setDefaults() {
 
 	// Set default error threshold for multi-debrid switching
 	if c.Retries == 0 {
-		c.Retries = 3 // Default to 3 consecutive errors before switching
+		c.Retries = defaultRetries // consecutive errors before switching
 	}
 
 	c.QueueCleanup.Rules = mergeQueueCleanupRules(c.QueueCleanup.Rules)
 
-	// Basic defaults
-	if c.URLBase == "" {
-		c.URLBase = "/"
-	}
-	// validate url base starts with /
-	if !strings.HasPrefix(c.URLBase, "/") {
-		c.URLBase = "/" + c.URLBase
-	}
-	if !strings.HasSuffix(c.URLBase, "/") {
-		c.URLBase += "/"
-	}
-
-	if c.Port == "" {
-		c.Port = DefaultPort
-	}
-
-	if c.LogLevel == "" {
-		c.LogLevel = DefaultLogLevel
-	}
-
-	// Rclone defaults
-	if c.Mount.Type == MountTypeRclone {
-		// mount.rclone (and its RCLONE__* env vars) wins; the deprecated
-		// top-level rclone section only fills gaps, then the defaults.
-		c.Mount.Rclone.Port = cmp.Or(c.Mount.Rclone.Port, c.Rclone.Port, DefaultRclonePort)
-		if c.Mount.Rclone.AsyncRead == nil {
-			_asyncTrue := true
-			c.Mount.Rclone.AsyncRead = &_asyncTrue
-		}
-		c.Mount.Rclone.VfsCacheMode = cmp.Or(c.Mount.Rclone.VfsCacheMode, "off")
-		if c.Mount.Rclone.UID == 0 {
-			c.Mount.Rclone.UID = uint32(os.Getuid())
-		}
-		if c.Mount.Rclone.GID == 0 {
-			if runtime.GOOS == "windows" {
-				// On Windows, we use the current user's SID as GID
-				c.Mount.Rclone.GID = uint32(os.Getuid()) // Windows does not have GID, using UID instead
-			} else {
-				c.Mount.Rclone.GID = uint32(os.Getgid())
-			}
-		}
-		if c.Mount.Rclone.Transfers == 0 {
-			c.Mount.Rclone.Transfers = 4 // Default number of transfers
-		}
-		if c.Mount.Rclone.VfsCacheMode != "off" {
-			c.Mount.Rclone.VfsCachePollInterval = cmp.Or(
-				c.Mount.Rclone.VfsCachePollInterval,
-				c.Rclone.VfsCachePollInterval,
-				"1m",
-			) // Clean cache every minute
-		}
-		c.Mount.Rclone.DirCacheTime = cmp.Or(c.Mount.Rclone.DirCacheTime, c.Rclone.DirCacheTime, "5m")
-		c.Mount.Rclone.LogLevel = cmp.Or(
-			c.Mount.Rclone.LogLevel,
-			c.Rclone.LogLevel,
-			strings.ToUpper(DefaultLogLevel),
-		)
-	}
-
-	// DFS defaults
-	if c.Mount.Type == MountTypeDFS {
-		if c.Mount.DFS.ChunkSize == "" {
-			c.Mount.DFS.ChunkSize = DefaultDFSChunkSize
-		}
-		if c.Mount.DFS.ReadAheadSize == "" {
-			c.Mount.DFS.ReadAheadSize = DefaultDFSReadAheadSize
-		}
-		if c.Mount.DFS.CacheExpiry == "" {
-			c.Mount.DFS.CacheExpiry = DefaultDFSCacheExpiry
-		}
-		if c.Mount.DFS.DiskCacheSize == "" {
-			c.Mount.DFS.DiskCacheSize = DefaultDFSDiskCacheSize
-		}
-
-		if c.Mount.DFS.UID == 0 {
-			c.Mount.DFS.UID = uint32(os.Getuid())
-		}
-		if c.Mount.DFS.GID == 0 {
-			if runtime.GOOS == "windows" {
-				// On Windows, we use the current user's SID as GID
-				c.Mount.DFS.GID = uint32(os.Getuid()) // Windows does not have GID, using UID instead
-			} else {
-				c.Mount.DFS.GID = uint32(os.Getgid())
-			}
-		}
-	}
-	// Load the auth file
-	c.Auth = c.GetAuth()
-
-	// Generate API token if auth is enabled and no token exists
-	if c.UseAuth {
-		if c.Auth == nil {
-			c.Auth = &Auth{}
-		}
-		if c.Auth.APIToken == "" {
-			if token, err := GenerateAPIToken(); err == nil {
-				c.Auth.APIToken = token
-				// Save the updated auth config
-				_ = c.SaveAuth(c.Auth)
-			}
-		}
-	}
+	c.setServerDefaults()
+	c.setRcloneMountDefaults()
+	c.setDFSMountDefaults()
+	c.setAuthDefaults()
 
 	// Set folder naming from first debrid if available
 	if len(c.Debrids) > 0 && c.FolderNaming == "" {
@@ -738,6 +619,141 @@ func (c *Config) setDefaults() {
 
 	c.applyRepairDefaults()
 	c.setStrmDefaults()
+}
+
+// migrateLegacyMountSettings fills mount settings from the deprecated
+// top-level rclone section and the first debrid's per-provider fields.
+func (c *Config) migrateLegacyMountSettings() {
+	firstDebrid := Debrid{}
+	if len(c.Debrids) > 0 {
+		firstDebrid = c.Debrids[0]
+	}
+
+	if c.Mount.Type == "" && c.Rclone.Enabled {
+		c.Mount.Type = MountTypeRclone
+		c.Mount.Rclone = c.Rclone
+	}
+
+	// debrid.Folder is usually {mount_path}/{debrid_name}/__all__ or
+	// {mount_path}/{debrid_name}/torrents
+	if c.Mount.MountPath == "" && len(c.Debrids) > 0 {
+		c.Mount.MountPath = filepath.Dir(filepath.Clean(firstDebrid.Folder))
+	}
+
+	// Move WebDav global settings to Manager if not set
+	c.Mount.ExternalRclone.RCUrl = cmp.Or(c.Mount.ExternalRclone.RCUrl, firstDebrid.RcURL)
+	c.Mount.ExternalRclone.RCUsername = cmp.Or(c.Mount.ExternalRclone.RCUsername, firstDebrid.RcUser)
+	c.Mount.ExternalRclone.RCPassword = cmp.Or(c.Mount.ExternalRclone.RCPassword, firstDebrid.RcPass)
+
+	if c.FolderNaming == "" {
+		c.FolderNaming = WebDavFolderNaming(firstDebrid.FolderNaming)
+	}
+}
+
+// setServerDefaults normalizes URLBase to "/.../" and fills port and log level.
+func (c *Config) setServerDefaults() {
+	if c.URLBase == "" {
+		c.URLBase = "/"
+	}
+	if !strings.HasPrefix(c.URLBase, "/") {
+		c.URLBase = "/" + c.URLBase
+	}
+	if !strings.HasSuffix(c.URLBase, "/") {
+		c.URLBase += "/"
+	}
+	if c.Port == "" {
+		c.Port = DefaultPort
+	}
+	if c.LogLevel == "" {
+		c.LogLevel = DefaultLogLevel
+	}
+}
+
+func (c *Config) setRcloneMountDefaults() {
+	if c.Mount.Type != MountTypeRclone {
+		return
+	}
+	r := &c.Mount.Rclone
+	// mount.rclone (and its RCLONE__* env vars) wins; the deprecated
+	// top-level rclone section only fills gaps, then the defaults.
+	r.Port = cmp.Or(r.Port, c.Rclone.Port, DefaultRclonePort)
+	if r.AsyncRead == nil {
+		r.AsyncRead = new(true)
+	}
+	r.VfsCacheMode = cmp.Or(r.VfsCacheMode, "off")
+	if r.UID == 0 {
+		r.UID = currentUID()
+	}
+	if r.GID == 0 {
+		r.GID = currentGID()
+	}
+	if r.Transfers == 0 {
+		r.Transfers = defaultRcloneTransfers
+	}
+	if r.VfsCacheMode != "off" {
+		// Clean cache every minute
+		r.VfsCachePollInterval = cmp.Or(r.VfsCachePollInterval, c.Rclone.VfsCachePollInterval, "1m")
+	}
+	r.DirCacheTime = cmp.Or(r.DirCacheTime, c.Rclone.DirCacheTime, "5m")
+	r.LogLevel = cmp.Or(r.LogLevel, c.Rclone.LogLevel, strings.ToUpper(DefaultLogLevel))
+}
+
+func (c *Config) setDFSMountDefaults() {
+	if c.Mount.Type != MountTypeDFS {
+		return
+	}
+	d := &c.Mount.DFS
+	d.ChunkSize = cmp.Or(d.ChunkSize, DefaultDFSChunkSize)
+	d.ReadAheadSize = cmp.Or(d.ReadAheadSize, DefaultDFSReadAheadSize)
+	d.CacheExpiry = cmp.Or(d.CacheExpiry, DefaultDFSCacheExpiry)
+	d.DiskCacheSize = cmp.Or(d.DiskCacheSize, DefaultDFSDiskCacheSize)
+	if d.UID == 0 {
+		d.UID = currentUID()
+	}
+	if d.GID == 0 {
+		d.GID = currentGID()
+	}
+}
+
+// setAuthDefaults loads auth.json and mints an API token when auth is enabled
+// and none exists.
+func (c *Config) setAuthDefaults() {
+	c.Auth = c.GetAuth()
+	if !c.UseAuth {
+		return
+	}
+	if c.Auth == nil {
+		c.Auth = &Auth{}
+	}
+	if c.Auth.APIToken == "" {
+		if token, err := GenerateAPIToken(); err == nil {
+			c.Auth.APIToken = token
+			// Save the updated auth config
+			_ = c.SaveAuth(c.Auth)
+		}
+	}
+}
+
+// currentUID returns the process uid for mount ownership. Windows reports -1,
+// which maps to 4294967295 (rclone's "current user" on Windows).
+func currentUID() uint32 { return idToUint32(os.Getuid()) }
+
+// currentGID is currentUID for the group; Windows has no gid, so the uid is
+// used there, as before.
+func currentGID() uint32 {
+	if runtime.GOOS == "windows" {
+		return currentUID()
+	}
+	return idToUint32(os.Getgid())
+}
+
+// idToUint32 converts an OS id, mapping -1 (and anything out of range) to
+// MaxUint32 exactly as the previous unchecked uint32(id) did for -1.
+func idToUint32(id int) uint32 {
+	if id < 0 || id > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(id)
 }
 
 func (c *Config) applyRepairDefaults() {
@@ -765,11 +781,11 @@ func (c *Config) Save() error {
 	if err != nil {
 		return err
 	}
-	if chmodErr := os.Chmod(c.JsonFile(), 0600); chmodErr != nil && !errors.Is(chmodErr, os.ErrNotExist) {
+	if chmodErr := os.Chmod(c.JSONFile(), 0600); chmodErr != nil && !errors.Is(chmodErr, os.ErrNotExist) {
 		return chmodErr
 	}
-	if writeFileErr := os.WriteFile(c.JsonFile(), data, 0600); writeFileErr != nil {
-		fmt.Printf("Failed to write config file: %v\n", writeFileErr)
+	if writeFileErr := os.WriteFile(c.JSONFile(), data, 0600); writeFileErr != nil {
+		fmt.Fprintf(os.Stderr, "Failed to write config file: %v\n", writeFileErr)
 		return writeFileErr
 	}
 	return nil
@@ -852,7 +868,7 @@ func (c *Config) RequiresRestart(n *Config) bool {
 
 func (c *Config) createConfig() error {
 	// Create the directory if it doesn't exist
-	if err := os.MkdirAll(GetMainPath(), 0755); err != nil {
+	if err := os.MkdirAll(GetMainPath(), 0o750); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 	c.URLBase = "/"

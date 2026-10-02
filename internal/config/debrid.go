@@ -29,7 +29,7 @@ type Debrid struct {
 	// Folder
 	Folder        string `json:"folder,omitempty"`          // Deprecated. Use Mount MountPath instead.
 	FolderNaming  string `json:"folder_naming,omitempty"`   // Deprecated. Use global setting instead.
-	RcUrl         string `json:"rc_url,omitempty"`          // Deprecated. Use global setting instead.
+	RcURL         string `json:"rc_url,omitempty"`          // Deprecated. Use global setting instead.
 	RcUser        string `json:"rc_user,omitempty"`         // Deprecated. Use global setting instead.
 	RcPass        string `json:"rc_pass,omitempty"`         // Deprecated. Use global setting instead.
 	RcRefreshDirs string `json:"rc_refresh_dirs,omitempty"` // Deprecated. Use global setting instead.
