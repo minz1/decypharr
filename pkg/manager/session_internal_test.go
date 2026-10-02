@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -126,7 +127,7 @@ func testTransport(
 		getLink: func(context.Context) (types.DownloadLink, error) {
 			return types.DownloadLink{Filename: "file", DownloadLink: linkURL.Load().(string)}, nil
 		},
-		refresh: func(_ context.Context, bad types.DownloadLink) (types.DownloadLink, error) {
+		refresh: func(_ context.Context, _ types.DownloadLink) (types.DownloadLink, error) {
 			if refreshes != nil {
 				refreshes.Add(1)
 			}
@@ -153,6 +154,7 @@ func newTestSession(t *testing.T, tr transport, size int64) *session {
 }
 
 func TestSessionReadsFullFile(t *testing.T) {
+	t.Parallel()
 	data := testPattern(1 << 20)
 	cdn := newFakeCDN(data)
 	server := startCDN(t, cdn)
@@ -171,6 +173,7 @@ func TestSessionReadsFullFile(t *testing.T) {
 }
 
 func TestSessionResumesAfterMidBodyCutAndExpiredToken(t *testing.T) {
+	t.Parallel()
 	data := testPattern(64 << 10)
 	cdn := newFakeCDN(data)
 	server := startCDN(t, cdn)
@@ -198,7 +201,7 @@ func TestSessionResumesAfterMidBodyCutAndExpiredToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := append(first, rest...); !bytes.Equal(got, data) {
+	if got := slices.Concat(first, rest); !bytes.Equal(got, data) {
 		t.Fatalf("byte mismatch after resume: got %d bytes", len(got))
 	}
 	if refreshes.Load() == 0 {
@@ -207,6 +210,7 @@ func TestSessionResumesAfterMidBodyCutAndExpiredToken(t *testing.T) {
 }
 
 func TestSessionHonorsRetryAfter(t *testing.T) {
+	t.Parallel()
 	data := testPattern(4 << 10)
 	cdn := newFakeCDN(data)
 	server := startCDN(t, cdn)
@@ -234,6 +238,7 @@ func TestSessionHonorsRetryAfter(t *testing.T) {
 }
 
 func TestSessionSeek(t *testing.T) {
+	t.Parallel()
 	data := testPattern(1 << 20)
 	cdn := newFakeCDN(data)
 	server := startCDN(t, cdn)
@@ -294,6 +299,7 @@ func TestSessionSeek(t *testing.T) {
 
 type closeNotifyingBody struct {
 	io.ReadCloser
+
 	closed chan<- struct{}
 }
 
@@ -304,6 +310,7 @@ func (body *closeNotifyingBody) Close() error {
 }
 
 func TestSessionIdleClosesBodyAndResumes(t *testing.T) {
+	t.Parallel()
 	data := testPattern(64 << 10)
 	cdn := newFakeCDN(data)
 	server := startCDN(t, cdn)
@@ -347,6 +354,7 @@ func TestSessionIdleClosesBodyAndResumes(t *testing.T) {
 }
 
 func TestSessionStallWatchdogRecovers(t *testing.T) {
+	t.Parallel()
 	data := testPattern(32 << 10)
 	cdn := newFakeCDN(data)
 	server := startCDN(t, cdn)
@@ -367,6 +375,7 @@ func TestSessionStallWatchdogRecovers(t *testing.T) {
 }
 
 func TestSessionNotPoisonedAfterExhaustion(t *testing.T) {
+	t.Parallel()
 	data := testPattern(8 << 10)
 	cdn := newFakeCDN(data)
 	server := startCDN(t, cdn)
@@ -398,6 +407,7 @@ func TestSessionNotPoisonedAfterExhaustion(t *testing.T) {
 }
 
 func TestSessionPrimeFailsFast(t *testing.T) {
+	t.Parallel()
 	var url atomic.Value
 	url.Store("http://127.0.0.1:0/unreachable")
 	tr := &httpTransport{
@@ -459,6 +469,7 @@ func (h *fakeUsenetHandle) Close() error {
 }
 
 func TestUsenetTransportResumesMidStream(t *testing.T) {
+	t.Parallel()
 	data := testPattern(32 << 10)
 	var opens atomic.Int64
 	var handles []*fakeUsenetHandle
@@ -498,6 +509,7 @@ func TestUsenetTransportResumesMidStream(t *testing.T) {
 }
 
 func TestSessionForwardsDownstreamCacheAcknowledgement(t *testing.T) {
+	t.Parallel()
 	h := &fakeUsenetHandle{data: testPattern(4 << 10), failAt: -1}
 	tr := &usenetTransport{
 		size: int64(len(h.data)),
@@ -517,6 +529,7 @@ func TestSessionForwardsDownstreamCacheAcknowledgement(t *testing.T) {
 }
 
 func TestRetentionForOwner(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		owner RewindOwner
@@ -527,6 +540,7 @@ func TestRetentionForOwner(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			if got := retentionForOwner(test.owner); got != test.want {
 				t.Fatalf("retentionForOwner(%d)=%d, want %d", test.owner, got, test.want)
 			}
@@ -538,6 +552,7 @@ func TestRetentionForOwner(t *testing.T) {
 // a Seek moves the position; the post-recovery reconnect must target the new
 // offset instead of the stale one.
 func TestSessionSeekDuringRecovery(t *testing.T) {
+	t.Parallel()
 	data := testPattern(64 << 10)
 	inRecover := make(chan struct{})
 	releaseRecover := make(chan struct{})
@@ -546,14 +561,14 @@ func TestSessionSeekDuringRecovery(t *testing.T) {
 	var opened []int64
 	var mu sync.Mutex
 	tr := &scriptedTransport{
-		recoverFn: func(ctx context.Context, err error, attempt int) error {
+		recoverFn: func(_ context.Context, _ error, _ int) error {
 			recoverOnce.Do(func() {
 				close(inRecover)
 				<-releaseRecover
 			})
 			return nil
 		},
-		openFn: func(ctx context.Context, pos int64) (io.ReadCloser, error) {
+		openFn: func(_ context.Context, pos int64) (io.ReadCloser, error) {
 			mu.Lock()
 			opened = append(opened, pos)
 			n := len(opened)

@@ -38,7 +38,7 @@ func (m *Manager) GetDownloadByteRange(torrentName, filename string) (*[2]int64,
 func (m *Manager) GetTotalActiveDownloadLinks() int {
 	total := 0
 
-	m.clients.Range(func(name string, client debrid.Client) bool {
+	m.clients.Range(func(_ string, client debrid.Client) bool {
 		if client == nil {
 			return true
 		}

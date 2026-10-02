@@ -8,7 +8,7 @@ func (m *Manager) RemoveFromProvider(providerEntry *storage.ProviderEntry) error
 	if providerEntry == nil {
 		return nil
 	}
-	if providerEntry.Provider == "usenet" {
+	if providerEntry.Provider == usenetProvider {
 		if m.usenet != nil {
 			return m.usenet.Delete(providerEntry.ID)
 		}

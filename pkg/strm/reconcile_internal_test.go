@@ -76,6 +76,8 @@ func mustRead(t *testing.T, path string) string {
 // Golden-tree: seed the export tree with current, stale, orphaned, and
 // foreign .strm files, then assert the sweep converges disk to the desired
 // state and leaves foreign files alone.
+//
+//nolint:paralleltest // resets the config singleton
 func TestStrmSweepGoldenTree(t *testing.T) {
 	m := newTestReconciler(t)
 	cfg := config.Get()
@@ -134,6 +136,7 @@ func TestStrmSweepGoldenTree(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // resets the config singleton
 func TestStrmSweepDisabled(t *testing.T) {
 	m := newTestReconciler(t)
 	config.Get().Strm.Enabled = false
@@ -144,6 +147,8 @@ func TestStrmSweepDisabled(t *testing.T) {
 }
 
 // A repair that renames a file (new file ID) must replace the old .
+//
+//nolint:paralleltest // resets the config singleton
 func TestStrmSyncEntryRemovesStaleAfterRename(t *testing.T) {
 	m := newTestReconciler(t)
 	cfg := config.Get()
@@ -179,6 +184,8 @@ func TestStrmSyncEntryRemovesStaleAfterRename(t *testing.T) {
 
 // Deleting an entry removes its files from the export tree without waiting
 // for a sweep; the folder is pruned when empty.
+//
+//nolint:paralleltest // resets the config singleton
 func TestStrmRemoveEntry(t *testing.T) {
 	m := newTestReconciler(t)
 	cfg := config.Get()
@@ -205,6 +212,7 @@ func TestStrmRemoveEntry(t *testing.T) {
 	t.Fatalf("entry folder %s not removed", dir)
 }
 
+//nolint:paralleltest // subtests reset the config singleton
 func TestSidecarStreamIsCompleteBeforePublication(t *testing.T) {
 	for _, body := range []string{"complete", "short"} {
 		t.Run(body, func(t *testing.T) {
@@ -221,23 +229,33 @@ func TestSidecarStreamIsCompleteBeforePublication(t *testing.T) {
 			dest := filepath.Join(t.TempDir(), file.Name)
 			err := reconciler.downloadSidecar(ctx, entry, file, dest)
 			if body == "complete" {
-				if err != nil {
-					t.Fatal(err)
-				}
-				if got := mustRead(t, dest); got != body {
-					t.Fatalf("sidecar = %q", got)
-				}
-			} else {
-				if err == nil {
-					t.Fatal("short sidecar was accepted")
-				}
-				if _, statErr := os.Stat(dest); !os.IsNotExist(statErr) {
-					t.Fatalf("partial sidecar was published: %v", statErr)
-				}
-				if _, statErr := os.Stat(dest + ".part"); !os.IsNotExist(statErr) {
-					t.Fatalf("partial temporary file remains: %v", statErr)
-				}
+				assertSidecarPublished(t, dest, body, err)
+				return
 			}
+			assertSidecarRejected(t, dest, err)
 		})
+	}
+}
+
+func assertSidecarPublished(t *testing.T, dest, body string, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mustRead(t, dest); got != body {
+		t.Fatalf("sidecar = %q", got)
+	}
+}
+
+func assertSidecarRejected(t *testing.T, dest string, err error) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("short sidecar was accepted")
+	}
+	if _, statErr := os.Stat(dest); !os.IsNotExist(statErr) {
+		t.Fatalf("partial sidecar was published: %v", statErr)
+	}
+	if _, statErr := os.Stat(dest + ".part"); !os.IsNotExist(statErr) {
+		t.Fatalf("partial temporary file remains: %v", statErr)
 	}
 }

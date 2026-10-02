@@ -44,41 +44,41 @@ func (m *Manager) fixNZBFileSizes(ctx context.Context) {
 			continue
 		}
 
-		if entry, getErr := m.storage.Get(
-			nzb.ID,
-		); getErr == nil && entry != nil &&
-			entry.Protocol == config.ProtocolNZB {
-			entryChanged := entry.Size != total || entry.Bytes != total
-			entry.Size = total
-			entry.Bytes = total
-			changedEntry := false
-
-			for _, nzbFile := range nzb.Files {
-				if file, ok := entry.Files[nzbFile.Name]; ok {
-					if file.Size != nzbFile.Size {
-						file.Size = nzbFile.Size
-						changedEntry = true
-					}
-				}
-			}
-
-			if changedEntry || entryChanged {
-				// Add usenet placement to update it
-				_ = entry.AddUsenetProvider(nzb)
-				if addOrUpdateErr := m.storage.AddOrUpdate(entry); addOrUpdateErr != nil {
-					m.logger.Warn().
-						Err(addOrUpdateErr).
-						Str("nzb_id", nzb.ID).
-						Msg("Failed to update entry during NZB size correction")
-				}
-			}
-		}
+		m.applyNZBSizesToEntry(nzb, total)
 
 		updated++
 	}
 
 	if updated > 0 {
 		m.logger.Info().Int("updated", updated).Msg("Corrected NZB file sizes")
+	}
+}
+
+// applyNZBSizesToEntry copies corrected NZB sizes onto the managed entry.
+func (m *Manager) applyNZBSizesToEntry(nzb *storage.NZB, total int64) {
+	entry, err := m.storage.Get(nzb.ID)
+	if err != nil || entry == nil || entry.Protocol != config.ProtocolNZB {
+		return
+	}
+	changed := entry.Size != total || entry.Bytes != total
+	entry.Size = total
+	entry.Bytes = total
+	for _, nzbFile := range nzb.Files {
+		if file, ok := entry.Files[nzbFile.Name]; ok && file.Size != nzbFile.Size {
+			file.Size = nzbFile.Size
+			changed = true
+		}
+	}
+	if !changed {
+		return
+	}
+	// Add usenet placement to update it
+	_ = entry.AddUsenetProvider(nzb)
+	if addErr := m.storage.AddOrUpdate(entry); addErr != nil {
+		m.logger.Warn().
+			Err(addErr).
+			Str("nzb_id", nzb.ID).
+			Msg("Failed to update entry during NZB size correction")
 	}
 }
 

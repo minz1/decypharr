@@ -70,14 +70,19 @@ func (m *Manager) processTorrentJob(ctx context.Context, job *Job) error {
 	if job == nil || job.Entry == nil {
 		return fmt.Errorf("invalid torrent job")
 	}
-	if _, err := m.queue.GetTorrent(job.Entry.InfoHash); err != nil {
-		return nil
+	if !m.queue.Contains(job.Entry.InfoHash) {
+		return nil // removed from the queue while waiting for a worker
 	}
 	if job.ResumeExisting {
+		// Claim the entry before flipping it to downloading: once the status
+		// changes the scheduler may pick it up too, and only one of us may
+		// drive it.
+		if _, loaded := m.processingEntries.LoadOrStore(job.Entry.InfoHash, struct{}{}); loaded {
+			return nil
+		}
 		job.Entry.Status = debridTypes.TorrentStatusDownloading
 		job.Entry.IsDownloading = false
 		_ = m.queue.Update(job.Entry)
-		m.processingEntries.Store(job.Entry.InfoHash, struct{}{})
 		m.processQueuedTorrent(job.Entry)
 		return nil
 	}
@@ -95,7 +100,7 @@ func (m *Manager) processTorrentJob(ctx context.Context, job *Job) error {
 	job.Entry.Status = debridTypes.TorrentStatusDownloading
 	job.Entry.DownloadUncached = job.DebridTorrent.DownloadUncached
 	if job.Request != nil {
-		job.Request.Status = "started"
+		job.Request.Status = importStatusStarted
 	}
 	m.processNewTorrent(job.Entry, job.DebridTorrent)
 	return nil
@@ -137,7 +142,7 @@ func newTorrentQueueEntry(importReq *ImportRequest, status debridTypes.TorrentSt
 		State:            storage.EntryStateDownloading,
 		Progress:         0,
 		Action:           importReq.Action,
-		CallbackURL:      importReq.CallBackUrl,
+		CallbackURL:      importReq.CallBackURL,
 		SkipMultiSeason:  importReq.SkipMultiSeason,
 		CreatedAt:        now,
 		UpdatedAt:        now,
@@ -150,6 +155,9 @@ func newTorrentQueueEntry(importReq *ImportRequest, status debridTypes.TorrentSt
 	return torrent
 }
 
+// percentScale converts provider percentages to the 0..1 progress fraction.
+const percentScale = 100.0
+
 func isTooManyActiveDownloads(err error) bool {
 	customErr, ok := errors.AsType[*customerror.Error](err)
 	return ok && customErr.Code == "too_many_active_downloads"
@@ -161,40 +169,36 @@ func (m *Manager) processQueuedEntries() {
 		m.logger.Error().Err(err).Msg("Failed to read the download queue")
 		return
 	}
-	if len(queueEntries) == 0 {
-		return
-	}
 	for _, entry := range queueEntries {
-		// Parse only active downloading torrents
-		if entry.State != storage.EntryStateDownloading {
+		// Only active downloads that no local worker is already driving.
+		if entry.State != storage.EntryStateDownloading || entry.Status == debridTypes.TorrentStatusQueued ||
+			entry.IsDownloading {
 			continue
 		}
-		if entry.Status == debridTypes.TorrentStatusQueued {
-			continue
-		}
-		// Skip entries that are actively being downloading
-		if entry.IsDownloading {
+		task := m.queuedEntryTask(entry)
+		if task == nil {
 			continue
 		}
 		// Skip if a previous tick's goroutine hasn't finished yet for this hash.
 		if _, loaded := m.processingEntries.LoadOrStore(entry.InfoHash, struct{}{}); loaded {
 			continue
 		}
-		if entry.IsTorrent() {
-			if entry.ActiveProvider != "" {
-				if !m.startDownloadTask(func() { m.processQueuedTorrent(entry) }) {
-					m.processingEntries.Delete(entry.InfoHash)
-				}
-			} else {
-				m.processingEntries.Delete(entry.InfoHash)
-			}
-		} else if entry.IsNZB() {
-			if !m.startDownloadTask(func() { m.processQueuedNZB(entry) }) {
-				m.processingEntries.Delete(entry.InfoHash)
-			}
-		} else {
+		if !m.startDownloadTask(task) {
 			m.processingEntries.Delete(entry.InfoHash)
 		}
+	}
+}
+
+// queuedEntryTask returns the poll step for a queued entry, or nil when the
+// scheduler has nothing to drive for it.
+func (m *Manager) queuedEntryTask(entry *storage.Entry) func() {
+	switch {
+	case entry.IsTorrent() && entry.ActiveProvider != "":
+		return func() { m.processQueuedTorrent(entry) }
+	case entry.IsNZB():
+		return func() { m.processQueuedNZB(entry) }
+	default:
+		return nil
 	}
 }
 
@@ -225,7 +229,7 @@ func (m *Manager) processQueuedNZB(entry *storage.Entry) {
 		// Still processing, skip for now
 		return
 	case usenet.NZBStatusCompleted:
-		if processNZBErr := m.processNZB(m.ctx, entry, metadata); processNZBErr != nil {
+		if processNZBErr := m.processNZB(entry, metadata); processNZBErr != nil {
 			m.logger.Error().Err(processNZBErr).Str("name", entry.Name).Msg("Error processing queued NZB")
 			entry.MarkAsError(processNZBErr)
 			_ = m.queue.Update(entry)
@@ -308,16 +312,14 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 	}
 
 	// Update entry progress
-	entry.Progress = debridTorrent.Progress / 100.0
+	entry.Progress = debridTorrent.Progress / percentScale
 	entry.Speed = debridTorrent.Speed
 	entry.Size = debridTorrent.GetSize()
 	entry.Seeders = debridTorrent.Seeders
 	entry.UpdatedAt = time.Now()
 
 	// Update placement progress
-	if placement := entry.GetActiveProvider(); placement != nil {
-		placement.Progress = entry.Progress
-	}
+	placement.Progress = entry.Progress
 
 	_ = m.queue.Update(entry)
 	// Check if done or failed
@@ -423,7 +425,7 @@ func applyDebridTorrentToEntry(torrent *storage.Entry, debridTorrent *debridType
 }
 
 // SendToDebrid submits a magnet to debrid service(s) - replaces debrid.Parse.
-func (m *Manager) SendToDebrid(ctx context.Context, importRequest *ImportRequest) (*debridTypes.Torrent, error) {
+func (m *Manager) SendToDebrid(_ context.Context, importRequest *ImportRequest) (*debridTypes.Torrent, error) {
 	debridTorrent := &debridTypes.Torrent{
 		InfoHash: importRequest.Magnet.InfoHash,
 		Magnet:   importRequest.Magnet,
@@ -446,76 +448,11 @@ func (m *Manager) SendToDebrid(ctx context.Context, importRequest *ImportRequest
 	errs := make([]error, 0, len(clients))
 
 	for _, db := range clients {
-		overrideDownloadUncached := false
-
-		if importRequest.DownloadUncached != nil {
-			overrideDownloadUncached = *importRequest.DownloadUncached
-		} else {
-			overrideDownloadUncached = db.Config().DownloadUncached
-		}
-		debridTorrent.DownloadUncached = overrideDownloadUncached
-
-		decision := m.hearsay.EvaluateAdd(db.Config().Provider, debridTorrent.InfoHash)
-		if !overrideDownloadUncached && decision.Reject() {
-			m.hearsay.DiscardAdd(decision)
-			errs = append(
-				errs,
-				fmt.Errorf(
-					"%s: %s recently proven not cached, skipping submit",
-					db.Config().Name,
-					debridTorrent.InfoHash,
-				),
-			)
-			continue
-		}
-		_logger := db.Logger()
-		_logger.Info().
-			Str("Provider", db.Config().Name).
-			Str("Arr", importRequest.Arr.Name).
-			Str("Hash", debridTorrent.InfoHash).
-			Str("Name", debridTorrent.Name).
-			Str("Action", string(importRequest.Action)).
-			Msg("Processing torrent")
-
-		dbt, err := db.SubmitMagnet(debridTorrent)
-		if err != nil || dbt == nil || dbt.Id == "" {
-			if errors.Is(err, customerror.TorrentBlockedError) {
-				m.hearsay.RecordAdd(decision, false)
-			} else {
-				m.hearsay.DiscardAdd(decision)
-			}
-			if err == nil {
-				err = fmt.Errorf("%s returned an empty torrent after submission", db.Config().Name)
-			}
-			errs = append(errs, err)
-			continue
-		}
-		_logger.Info().Str("id", dbt.Id).Msgf("Entry: %s submitted to %s", dbt.Name, db.Config().Name)
-
-		torrent, err := db.CheckStatus(dbt)
-		reported := errors.Is(err, customerror.TorrentNotCachedError)
-		if reported {
-			m.hearsay.RecordAdd(decision, false)
-		}
-		if err != nil && torrent != nil && torrent.Id != "" {
-			// Delete the torrent if it was not downloaded
-			go func(id string) {
-				_ = db.DeleteTorrent(id)
-			}(torrent.Id)
-		}
+		torrent, err := m.submitToProvider(db, debridTorrent, importRequest)
 		if err != nil {
-			if !reported {
-				m.hearsay.DiscardAdd(decision)
-			}
 			errs = append(errs, err)
 			continue
 		}
-		if torrent == nil {
-			m.hearsay.DiscardAdd(decision)
-			errs = append(errs, fmt.Errorf("torrent %s returned nil after checking status", dbt.Name))
-			continue
-		}
-		m.hearsay.RecordAdd(decision, torrent.Status == debridTypes.TorrentStatusDownloaded)
 		return torrent, nil
 	}
 	if len(errs) == 0 {
@@ -523,4 +460,74 @@ func (m *Manager) SendToDebrid(ctx context.Context, importRequest *ImportRequest
 	}
 	joinedErrors := errors.Join(errs...)
 	return nil, fmt.Errorf("failed to process torrent: %w", joinedErrors)
+}
+
+// submitToProvider submits the magnet to one provider and checks it landed,
+// recording the cache outcome with hearsay.
+func (m *Manager) submitToProvider(
+	db common.Client,
+	debridTorrent *debridTypes.Torrent,
+	importRequest *ImportRequest,
+) (*debridTypes.Torrent, error) {
+	overrideDownloadUncached := db.Config().DownloadUncached
+	if importRequest.DownloadUncached != nil {
+		overrideDownloadUncached = *importRequest.DownloadUncached
+	}
+	debridTorrent.DownloadUncached = overrideDownloadUncached
+
+	decision := m.hearsay.EvaluateAdd(db.Config().Provider, debridTorrent.InfoHash)
+	if !overrideDownloadUncached && decision.Reject() {
+		m.hearsay.DiscardAdd(decision)
+		return nil, fmt.Errorf(
+			"%s: %s recently proven not cached, skipping submit",
+			db.Config().Name,
+			debridTorrent.InfoHash,
+		)
+	}
+	_logger := db.Logger()
+	_logger.Info().
+		Str("Provider", db.Config().Name).
+		Str("Arr", importRequest.Arr.Name).
+		Str("Hash", debridTorrent.InfoHash).
+		Str("Name", debridTorrent.Name).
+		Str("Action", string(importRequest.Action)).
+		Msg("Processing torrent")
+
+	dbt, err := db.SubmitMagnet(debridTorrent)
+	if err != nil || dbt == nil || dbt.Id == "" {
+		if errors.Is(err, customerror.TorrentBlockedError) {
+			m.hearsay.RecordAdd(decision, false)
+		} else {
+			m.hearsay.DiscardAdd(decision)
+		}
+		if err == nil {
+			err = fmt.Errorf("%s returned an empty torrent after submission", db.Config().Name)
+		}
+		return nil, err
+	}
+	_logger.Info().Str("id", dbt.Id).Msgf("Entry: %s submitted to %s", dbt.Name, db.Config().Name)
+
+	torrent, err := db.CheckStatus(dbt)
+	reported := errors.Is(err, customerror.TorrentNotCachedError)
+	if reported {
+		m.hearsay.RecordAdd(decision, false)
+	}
+	if err != nil {
+		if torrent != nil && torrent.Id != "" {
+			// Delete the torrent if it was not downloaded
+			go func(id string) {
+				_ = db.DeleteTorrent(id)
+			}(torrent.Id)
+		}
+		if !reported {
+			m.hearsay.DiscardAdd(decision)
+		}
+		return nil, err
+	}
+	if torrent == nil {
+		m.hearsay.DiscardAdd(decision)
+		return nil, fmt.Errorf("torrent %s returned nil after checking status", dbt.Name)
+	}
+	m.hearsay.RecordAdd(decision, torrent.Status == debridTypes.TorrentStatusDownloaded)
+	return torrent, nil
 }

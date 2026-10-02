@@ -16,33 +16,9 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/usenet"
 )
 
+//nolint:paralleltest // mutates the config singleton
 func TestAddNewNZBQueuesBeforeNetworkParsing(t *testing.T) {
-	oldPath := config.GetMainPath()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(func() { config.SetConfigPath(oldPath) })
-
-	cfg := config.Get()
-	oldUsenet := cfg.Usenet
-	cfg.Usenet = config.Usenet{
-		Providers: []config.UsenetProvider{{
-			Host:           "127.0.0.1",
-			Port:           1,
-			MaxConnections: 1,
-		}},
-		MaxConnections:           1,
-		ProcessingMaxConnections: 1,
-	}
-	t.Cleanup(func() { cfg.Usenet = oldUsenet })
-
-	usenetClient, err := usenet.New()
-	if err != nil {
-		t.Fatalf("create usenet client: %v", err)
-	}
-	t.Cleanup(func() {
-		if closeErr := usenetClient.Close(); closeErr != nil {
-			t.Errorf("close usenet client: %v", closeErr)
-		}
-	})
+	usenetClient := newUnreachableUsenet(t)
 
 	store, err := storage.NewStorage(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
@@ -131,4 +107,37 @@ func TestAddNewNZBQueuesBeforeNetworkParsing(t *testing.T) {
 	if failed.State != storage.EntryStateError {
 		t.Fatalf("invalid NZB state = %q, want error", failed.State)
 	}
+}
+
+// newUnreachableUsenet builds a usenet client whose only provider refuses
+// connections, so any network parse fails fast.
+func newUnreachableUsenet(t *testing.T) *usenet.Usenet {
+	t.Helper()
+	oldPath := config.GetMainPath()
+	config.SetConfigPath(t.TempDir())
+	t.Cleanup(func() { config.SetConfigPath(oldPath) })
+
+	cfg := config.Get()
+	oldUsenet := cfg.Usenet
+	cfg.Usenet = config.Usenet{
+		Providers: []config.UsenetProvider{{
+			Host:           "127.0.0.1",
+			Port:           1,
+			MaxConnections: 1,
+		}},
+		MaxConnections:           1,
+		ProcessingMaxConnections: 1,
+	}
+	t.Cleanup(func() { cfg.Usenet = oldUsenet })
+
+	usenetClient, err := usenet.New()
+	if err != nil {
+		t.Fatalf("create usenet client: %v", err)
+	}
+	t.Cleanup(func() {
+		if closeErr := usenetClient.Close(); closeErr != nil {
+			t.Errorf("close usenet client: %v", closeErr)
+		}
+	})
+	return usenetClient
 }

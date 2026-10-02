@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/puzpuzpuz/xsync/v4"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/storage"
@@ -34,6 +36,9 @@ type ActiveStream struct {
 	ReacquireJobID string   `json:"reacquire_job_id,omitempty"`
 
 	mu sync.RWMutex
+	// refs counts the open registrations sharing this stream's ID; only
+	// touched inside activeStreams.Compute, which serializes per key.
+	refs int
 }
 
 // === Active Streams Tracking ===
@@ -72,16 +77,34 @@ func (m *Manager) registerStream(
 		stream.MovieID = binding.MovieID
 	}
 
-	m.activeStreams.Store(streamID, stream)
+	// Concurrent readers of one file share the ID; count them so the first to
+	// close does not drop the entry while others are still streaming.
+	m.activeStreams.Compute(streamID, func(old *ActiveStream, loaded bool) (*ActiveStream, xsync.ComputeOp) {
+		if loaded {
+			old.refs++
+			return old, xsync.UpdateOp
+		}
+		stream.refs = 1
+		return stream, xsync.UpdateOp
+	})
 	return streamID
 }
 
-// unregisterStream removes an active stream entry if it exists.
+// unregisterStream releases one registration and removes the entry once the
+// last one is gone.
 func (m *Manager) unregisterStream(streamID string) {
 	if streamID == "" {
 		return
 	}
-	m.activeStreams.Delete(streamID)
+	m.activeStreams.Compute(streamID, func(old *ActiveStream, loaded bool) (*ActiveStream, xsync.ComputeOp) {
+		if !loaded {
+			return old, xsync.CancelOp
+		}
+		if old.refs--; old.refs > 0 {
+			return old, xsync.UpdateOp
+		}
+		return old, xsync.DeleteOp
+	})
 }
 
 // touchStream records read activity on an active stream. LastActive and
@@ -156,9 +179,9 @@ func (m *Manager) TrackStream(entry *storage.Entry, filename, client string) str
 
 	var source, debrid string
 	if entry.Protocol == config.ProtocolNZB {
-		source = "nzb"
+		source = string(config.ProtocolNZB)
 	} else {
-		source = "torrent"
+		source = string(config.ProtocolTorrent)
 		debrid = entry.ActiveProvider
 	}
 

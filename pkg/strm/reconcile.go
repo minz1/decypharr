@@ -161,27 +161,43 @@ func (s *Reconciler) removeStale(entry *storage.Entry, targets []strmTarget, rep
 	for _, t := range targets {
 		keep[t.path] = struct{}{}
 	}
-	_ = filepath.WalkDir(entryDir(config.Get(), entry), func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.EqualFold(filepath.Ext(path), ".strm") {
-			return nil
-		}
+	for _, path := range entryStrmFiles(entryDir(config.Get(), entry), entry.InfoHash) {
 		if _, ok := keep[path]; ok {
-			return nil
-		}
-		content, err := readStrm(path)
-		if err != nil {
-			return nil
-		}
-		if infohash, _, ok := ParseURL(content); !ok || infohash != entry.InfoHash {
-			return nil
+			continue
 		}
 		if removeErr := os.Remove(path); removeErr != nil {
 			rep.addError(removeErr)
-			return nil
+			continue
 		}
 		rep.Deleted++
+	}
+}
+
+// entryStrmFiles lists the .strm files under dir that point at infohash.
+// Unreadable paths are skipped: they are not provably ours.
+func entryStrmFiles(dir, infohash string) []string {
+	var files []string
+	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, walkErr error) error {
+		if owner, ok := strmOwner(path, d, walkErr); ok && owner == infohash {
+			files = append(files, path)
+		}
 		return nil
 	})
+	return files
+}
+
+// strmOwner returns the infohash a walked .strm file of ours points at; ok is
+// false for directories, other files, foreign URLs and walk errors.
+func strmOwner(path string, d fs.DirEntry, walkErr error) (string, bool) {
+	if walkErr != nil || d.IsDir() || !strings.EqualFold(filepath.Ext(path), ".strm") {
+		return "", false
+	}
+	content, err := readStrm(path)
+	if err != nil {
+		return "", false
+	}
+	infohash, _, ok := ParseURL(content)
+	return infohash, ok
 }
 
 func (s *Reconciler) syncSidecar(ctx context.Context, entry *storage.Entry, file *storage.File, rep *Report) {
@@ -203,7 +219,8 @@ func (s *Reconciler) downloadSidecar(ctx context.Context, entry *storage.Entry, 
 	}
 	defer stream.Close()
 
-	if mkdirAllErr := os.MkdirAll(filepath.Dir(dest), 0755); mkdirAllErr != nil {
+	//nolint:gosec // the export tree is read by media servers running as other users
+	if mkdirAllErr := os.MkdirAll(filepath.Dir(dest), 0o755); mkdirAllErr != nil {
 		return mkdirAllErr
 	}
 	tmp := dest + ".part"
@@ -255,19 +272,11 @@ func (s *Reconciler) Sweep(ctx context.Context) (*Report, error) {
 	}
 
 	var stale []string
-	_ = filepath.WalkDir(cfg.Strm.Path, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.EqualFold(filepath.Ext(path), ".strm") {
-			return ctx.Err()
-		}
-		if _, ok := owned[path]; ok {
-			return ctx.Err()
-		}
-		content, err := readStrm(path)
-		if err != nil {
-			return ctx.Err()
-		}
-		if _, _, ok := ParseURL(content); ok {
-			stale = append(stale, path)
+	_ = filepath.WalkDir(cfg.Strm.Path, func(path string, d fs.DirEntry, walkErr error) error {
+		if _, isOwned := owned[path]; !isOwned {
+			if _, ours := strmOwner(path, d, walkErr); ours {
+				stale = append(stale, path)
+			}
 		}
 		return ctx.Err()
 	})
@@ -317,19 +326,9 @@ func (s *Reconciler) RemoveEntryAsync(entry *storage.Entry) {
 	}
 	go func() {
 		dir := entryDir(cfg, entry)
-		_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() || !strings.EqualFold(filepath.Ext(path), ".strm") {
-				return nil
-			}
-			content, err := readStrm(path)
-			if err != nil {
-				return nil
-			}
-			if infohash, _, ok := ParseURL(content); ok && infohash == entry.InfoHash {
-				_ = os.Remove(path)
-			}
-			return nil
-		})
+		for _, path := range entryStrmFiles(dir, entry.InfoHash) {
+			_ = os.Remove(path)
+		}
 		// Sidecars carry no signature; remove them by name while we still
 		// know the entry's file list.
 		for _, f := range entry.Files {
@@ -365,8 +364,10 @@ func readStrm(path string) (string, error) {
 }
 
 func writeStrm(path, content string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	//nolint:gosec // the export tree is read by media servers running as other users
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(content), 0644)
+	//nolint:gosec // the export tree is read by media servers running as other users
+	return os.WriteFile(path, []byte(content), 0o644)
 }

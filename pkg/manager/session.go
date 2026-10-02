@@ -38,6 +38,11 @@ const (
 	// sessionMaxThrottleWait caps how long a Retry-After is honored.
 	sessionMaxThrottleWait = 30 * time.Second
 	sessionResumeBaseDelay = 500 * time.Millisecond
+	// sessionBackoffMaxShift caps the doubling of sessionResumeBaseDelay.
+	sessionBackoffMaxShift = 3
+	// sessionErrorBodyDrain is how much of an error body is read so the
+	// connection can be reused.
+	sessionErrorBodyDrain = 512
 )
 
 // StreamReader is a resilient, seekable byte stream over one remote file.
@@ -116,7 +121,7 @@ type session struct {
 	onClose func()
 }
 
-var noopCancel context.CancelFunc = func() {}
+func noopCancel() {}
 
 func newSession(ctx context.Context, t transport, size, offset int64) *session {
 	sctx, cancel := context.WithCancel(ctx)
@@ -168,61 +173,86 @@ func (s *session) Read(p []byte) (int, error) {
 		if err := s.ctx.Err(); err != nil {
 			return 0, err
 		}
+		var err error
 		if s.body == nil {
-			if err := s.connectLocked(); err != nil {
-				if rerr := s.recoverStep(err, &attempt); rerr != nil {
-					return 0, rerr
-				}
-				continue
-			}
+			err = s.connectLocked()
 		}
-
-		// Bound this read attempt: if no bytes flow for stallTimeout the
-		// body context is cancelled, the read errors, and we resume.
-		s.stallCancel.Store(s.bodyCancel)
-		if s.stall == nil {
-			s.stall = time.AfterFunc(s.stallTimeout, s.stallFired)
-		} else {
-			s.stall.Reset(s.stallTimeout)
-		}
-		n, err := s.body.Read(p)
-		s.stall.Stop()
-		s.stallCancel.Store(noopCancel)
-		if n > len(p) {
-			// Every consumer copies through a buffer sized to len(p); a body
-			// that over-reports makes them slice past it. Drop the body and
-			// report the violation rather than hand back a bogus count.
-			s.closeBodyLocked()
-			return 0, fmt.Errorf("stream body returned %d bytes for a %d-byte read", n, len(p))
-		}
-		s.pos += int64(n)
-
-		if n > 0 {
-			if err != nil {
-				// Deliver the bytes; the next Read deals with the error.
-				s.closeBodyLocked()
-			} else {
-				s.armIdleLocked()
+		if err == nil {
+			n, done, readErr := s.readAttemptLocked(p)
+			if done {
+				return n, readErr
 			}
-			if s.onRead != nil {
-				s.onRead(s.resumes.Load())
-			}
-			return n, nil
-		}
-
-		s.closeBodyLocked()
-		switch err {
-		case nil:
-			err = io.ErrNoProgress
-		case io.EOF:
-			if s.pos >= s.size {
-				return 0, io.EOF
-			}
-			err = io.ErrUnexpectedEOF // short body: resume at current offset
+			err = readErr
 		}
 		if rerr := s.recoverStep(err, &attempt); rerr != nil {
 			return 0, rerr
 		}
+	}
+}
+
+// readAttemptLocked reads once from the open body. done reports that Read
+// returns (n, err) as is; otherwise err goes to recovery.
+func (s *session) readAttemptLocked(p []byte) (int, bool, error) {
+	n, err := s.stallGuardedReadLocked(p)
+	if n > len(p) {
+		// Every consumer copies through a buffer sized to len(p); a body
+		// that over-reports makes them slice past it. Drop the body and
+		// report the violation rather than hand back a bogus count.
+		s.closeBodyLocked()
+		return 0, true, fmt.Errorf("stream body returned %d bytes for a %d-byte read", n, len(p))
+	}
+	s.pos += int64(n)
+	if n > 0 {
+		s.deliveredLocked(err)
+		return n, true, nil
+	}
+	err = s.emptyReadErrLocked(err)
+	return 0, errors.Is(err, io.EOF), err
+}
+
+// stallGuardedReadLocked reads once from the body: if no bytes flow for
+// stallTimeout the body context is cancelled and the read errors.
+func (s *session) stallGuardedReadLocked(p []byte) (int, error) {
+	s.stallCancel.Store(s.bodyCancel)
+	if s.stall == nil {
+		s.stall = time.AfterFunc(s.stallTimeout, s.stallFired)
+	} else {
+		s.stall.Reset(s.stallTimeout)
+	}
+	n, err := s.body.Read(p)
+	s.stall.Stop()
+	s.stallCancel.Store(context.CancelFunc(noopCancel))
+	return n, err
+}
+
+// deliveredLocked settles the body after a read that returned bytes: the
+// bytes go to the caller and the next Read deals with any error.
+func (s *session) deliveredLocked(err error) {
+	if err != nil {
+		s.closeBodyLocked()
+	} else {
+		s.armIdleLocked()
+	}
+	if s.onRead != nil {
+		s.onRead(s.resumes.Load())
+	}
+}
+
+// emptyReadErrLocked drops the body after a read that returned no bytes and
+// maps the outcome to the error recovery should see; [io.EOF] means the file
+// is complete.
+func (s *session) emptyReadErrLocked(err error) error {
+	s.closeBodyLocked()
+	switch {
+	case err == nil:
+		return io.ErrNoProgress
+	case errors.Is(err, io.EOF):
+		if s.pos >= s.size {
+			return io.EOF
+		}
+		return io.ErrUnexpectedEOF // short body: resume at current offset
+	default:
+		return err
 	}
 }
 
@@ -445,20 +475,20 @@ func (t *httpTransport) open(ctx context.Context, pos int64) (io.ReadCloser, err
 		// Server ignored the Range header but the offset is small enough to
 		// discard our way to it.
 		if _, copyNErr := io.CopyN(io.Discard, resp.Body, absStart); copyNErr != nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return nil, link.ClassifyTransportError(copyNErr)
 		}
 		return resp.Body, nil
 	case resp.StatusCode == http.StatusOK:
 		// Byte-ranged slices can't fall back to discarding: without range
 		// support the body would run past the slice end.
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return nil, link.NewPermanentError(
 			fmt.Errorf("server ignored range request at offset %d", absStart), "no_range_support")
 	default:
 		status, header := resp.StatusCode, resp.Header
-		_, _ = io.CopyN(io.Discard, resp.Body, 512)
-		resp.Body.Close()
+		_, _ = io.CopyN(io.Discard, resp.Body, sessionErrorBodyDrain)
+		_ = resp.Body.Close()
 		return nil, link.ClassifyStreamStatus(status, header)
 	}
 }
@@ -656,27 +686,6 @@ func (m *Manager) OpenStreamWithRewindOwner(
 	return s, nil
 }
 
-// SupportsDirectRead reports whether an entry has a protocol-native
-// random-access reader. It does not imply that a downstream persistent cache
-// should be bypassed; cache owners should use OpenStreamUntrackedForCache.
-func SupportsDirectRead(entry *storage.Entry) bool {
-	return entry != nil && entry.Protocol == config.ProtocolNZB
-}
-
-// OpenDirect opens an application-owned protocol reader without active-stream
-// tracking. It is retained for non-cache consumers that explicitly need native
-// random access. Persistent cache layers should use
-// OpenStreamUntrackedForCache so cache ownership and observability stay intact.
-func (m *Manager) OpenDirect(ctx context.Context, entry *storage.Entry, filename string) (DirectReader, error) {
-	if !SupportsDirectRead(entry) {
-		return nil, nil
-	}
-	if m.usenet == nil {
-		return nil, fmt.Errorf("usenet client not configured")
-	}
-	return m.usenet.OpenFileWithRetention(ctx, entry.InfoHash, filename, usenet.RetentionRewind)
-}
-
 // OpenStreamUntracked opens a session without registering it in the
 // active-streams view. It is for consumers that do their own stream tracking —
 // for example a background sidecar download.
@@ -748,12 +757,12 @@ func (m *Manager) openSession(
 	}
 
 	var t transport
-	source, debrid := "torrent", entry.ActiveProvider
+	source, debrid := string(config.ProtocolTorrent), entry.ActiveProvider
 	if entry.Protocol == config.ProtocolNZB {
 		if m.usenet == nil {
 			return nil, "", "", fmt.Errorf("usenet client not configured")
 		}
-		source, debrid = "nzb", ""
+		source, debrid = string(config.ProtocolNZB), ""
 		nzoID := entry.InfoHash
 		retention := retentionForOwner(owner)
 		t = &usenetTransport{
@@ -796,7 +805,7 @@ func sessionBackoff(attempt int) time.Duration {
 	if attempt <= 0 {
 		return 0 // first retry is immediate: most blips are one-shot
 	}
-	return sessionResumeBaseDelay << min(attempt-1, 3) // 0.5s, 1s, 2s, 4s
+	return sessionResumeBaseDelay << min(attempt-1, sessionBackoffMaxShift) // 0.5s, 1s, 2s, 4s
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) error {

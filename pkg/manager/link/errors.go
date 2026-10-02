@@ -54,6 +54,35 @@ type Error struct {
 	RetryAfter time.Duration // For CategoryThrottled: server-requested wait, 0 if unspecified
 }
 
+// NewLinkError creates a new LinkError with the given error and category.
+func NewLinkError(err error, category ErrorCategory, code string) *Error {
+	return &Error{
+		Err:      err,
+		Category: category,
+		Code:     code,
+	}
+}
+
+// NewPermanentError creates a permanent error.
+func NewPermanentError(err error, code string) *Error {
+	return NewLinkError(err, CategoryPermanent, code)
+}
+
+// NewRetryableError creates a retryable error.
+func NewRetryableError(err error, code string) *Error {
+	return NewLinkError(err, CategoryRetryable, code)
+}
+
+// NewRefetchableError creates an error that requires refetching the link.
+func NewRefetchableError(err error, code string) *Error {
+	return NewLinkError(err, CategoryRefetchable, code)
+}
+
+// NewAccountError creates an error that requires disabling the account.
+func NewAccountError(err error, code string) *Error {
+	return NewLinkError(err, CategoryAccountIssue, code)
+}
+
 // Error implements the error interface.
 func (e *Error) Error() string {
 	if e.Code != "" {
@@ -103,40 +132,13 @@ var (
 )
 
 // HTTP error sentinels.
+//
+//nolint:errname // Err404 is referenced from internal/customerror tests; renaming is a cross-area follow-up
 var (
 	Err404 = errors.New("HTTP 404 Not Found")
 	Err429 = errors.New("HTTP 429 Too Many Requests")
 	Err503 = errors.New("HTTP 503 Service Unavailable")
 )
-
-// NewLinkError creates a new LinkError with the given error and category.
-func NewLinkError(err error, category ErrorCategory, code string) *Error {
-	return &Error{
-		Err:      err,
-		Category: category,
-		Code:     code,
-	}
-}
-
-// NewPermanentError creates a permanent error.
-func NewPermanentError(err error, code string) *Error {
-	return NewLinkError(err, CategoryPermanent, code)
-}
-
-// NewRetryableError creates a retryable error.
-func NewRetryableError(err error, code string) *Error {
-	return NewLinkError(err, CategoryRetryable, code)
-}
-
-// NewRefetchableError creates an error that requires refetching the link.
-func NewRefetchableError(err error, code string) *Error {
-	return NewLinkError(err, CategoryRefetchable, code)
-}
-
-// NewAccountError creates an error that requires disabling the account.
-func NewAccountError(err error, code string) *Error {
-	return NewLinkError(err, CategoryAccountIssue, code)
-}
 
 // ErrorCodeToLinkError converts an error code string to a LinkError with appropriate category.
 func ErrorCodeToLinkError(code string) *Error {
@@ -196,7 +198,7 @@ func ClassifyStreamStatus(status int, header http.Header) *Error {
 		e := NewLinkError(Err429, CategoryThrottled, "429")
 		e.RetryAfter = parseRetryAfter(header.Get("Retry-After"))
 		return e
-	case status >= 500:
+	case status >= http.StatusInternalServerError:
 		return NewRetryableError(fmt.Errorf("HTTP %d", status), strconv.Itoa(status))
 	default:
 		return NewPermanentError(fmt.Errorf("unexpected HTTP status %d", status), strconv.Itoa(status))

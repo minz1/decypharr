@@ -12,6 +12,7 @@ import (
 )
 
 func TestTorrentSubmissionGateUsesSlidingWindow(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, time.August, 25, 12, 0, 0, 0, time.UTC)
 	gate := newTorrentSubmissionGate(5 * time.Minute)
 	gate.clock = func() time.Time { return now }
@@ -47,6 +48,7 @@ func TestTorrentSubmissionGateUsesSlidingWindow(t *testing.T) {
 }
 
 func TestTorrentSubmissionGateDoesNotCacheFailures(t *testing.T) {
+	t.Parallel()
 	gate := newTorrentSubmissionGate(time.Minute)
 	wantErr := errors.New("provider unavailable")
 	var calls int
@@ -70,12 +72,13 @@ func TestTorrentSubmissionGateDoesNotCacheFailures(t *testing.T) {
 }
 
 func TestTorrentSubmissionGateCoalescesConcurrentCalls(t *testing.T) {
+	t.Parallel()
 	gate := newTorrentSubmissionGate(time.Minute)
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var calls atomic.Int64
 
-	submit := func() error {
+	submit := func() error { //nolint:unparam // must match the submit signature gate.Do takes
 		if calls.Add(1) == 1 {
 			close(started)
 		}
@@ -107,6 +110,7 @@ func TestTorrentSubmissionGateCoalescesConcurrentCalls(t *testing.T) {
 }
 
 func TestTorrentSubmissionKeyNormalizesProviderAndHash(t *testing.T) {
+	t.Parallel()
 	req := NewTorrentRequest(
 		" TorBox ",
 		"/downloads",

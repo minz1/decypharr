@@ -11,6 +11,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
+//nolint:paralleltest // sets the config singleton's path
 func TestCreateSymlinksSkipsMatchingDirectoryName(t *testing.T) {
 	config.SetConfigPath(t.TempDir())
 	mountPath := t.TempDir()

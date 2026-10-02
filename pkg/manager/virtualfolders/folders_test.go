@@ -1,4 +1,4 @@
-package virtualfolders
+package virtualfolders_test
 
 import (
 	"slices"
@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/pkg/manager/virtualfolders"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
@@ -212,9 +213,9 @@ func TestVirtualFolderAddedConditionIsTimeSensitive(t *testing.T) {
 	}
 }
 
-func mustCompileVirtualFolders(t *testing.T, definitions ...config.VirtualFolder) *Folders {
+func mustCompileVirtualFolders(t *testing.T, definitions ...config.VirtualFolder) *virtualfolders.Folders {
 	t.Helper()
-	compiled, err := Compile(definitions)
+	compiled, err := virtualfolders.Compile(definitions)
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
 	}
@@ -246,7 +247,7 @@ func TestCompileKeepsValidDefinitionsAndOwnsSnapshot(t *testing.T) {
 			},
 		},
 	}
-	compiled, err := Compile(definitions)
+	compiled, err := virtualfolders.Compile(definitions)
 	if err == nil {
 		t.Fatal("invalid definition was accepted")
 	}
