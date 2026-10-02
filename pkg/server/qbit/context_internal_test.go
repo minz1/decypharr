@@ -182,26 +182,11 @@ func TestDecodeAuthHeader(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			defer func() {
-				if r := recover(); r != nil {
-					if tt.mustNotPanic {
-						t.Fatalf(
-							"decodeAuthHeader panicked on %q: %v (regression — function must return an error, not panic)",
-							tt.header,
-							r,
-						)
-					}
-					panic(r)
-				}
-			}()
-
+			// A panic fails the test on its own; mustNotPanic documents which
+			// cases used to panic.
 			user, pass, err := decodeAuthHeader(tt.header)
-
-			if tt.wantErr && err == nil {
-				t.Errorf("expected an error for header=%q, got nil (user=%q, pass=%q)", tt.header, user, pass)
-			}
-			if !tt.wantErr && err != nil {
-				t.Errorf("unexpected error for header=%q: %v", tt.header, err)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("header=%q: err = %v, wantErr %t (user=%q, pass=%q)", tt.header, err, tt.wantErr, user, pass)
 			}
 			if tt.wantUser != "" && user != tt.wantUser {
 				t.Errorf("user mismatch: got %q want %q", user, tt.wantUser)
