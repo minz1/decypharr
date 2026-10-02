@@ -9,7 +9,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/config"
 )
 
-func TestExportServesThroughCache(t *testing.T) {
+func TestExportServesThroughCache(t *testing.T) { //nolint:paralleltest // mutates the config singleton
 	mgr := testManager(t)
 	addEntry(t, mgr, "Example Show", map[string]int64{"Season 01/Episode 01.mkv": 100})
 
@@ -47,7 +47,7 @@ func TestExportServesThroughCache(t *testing.T) {
 }
 
 // The cache is opt-in, so an unset config must not touch the disk.
-func TestExportWithoutCache(t *testing.T) {
+func TestExportWithoutCache(t *testing.T) { //nolint:paralleltest // mutates the config singleton
 	mgr := testManager(t)
 	addEntry(t, mgr, "Example Show", map[string]int64{"a.mkv": 1})
 

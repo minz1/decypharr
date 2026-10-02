@@ -68,7 +68,7 @@ func readdir(t *testing.T, fsys *filesystem, name string) []fs.FileInfo {
 	return entries
 }
 
-func TestFilesystemBuildsNestedFileTree(t *testing.T) {
+func TestFilesystemBuildsNestedFileTree(t *testing.T) { //nolint:paralleltest // mutates the config singleton
 	mgr := testManager(t)
 	addEntry(t, mgr, "Example Show", map[string]int64{
 		"Season 01/Episode 01.mkv": 100,
@@ -97,7 +97,7 @@ func TestFilesystemBuildsNestedFileTree(t *testing.T) {
 	}
 }
 
-func TestFilesystemIsReadOnly(t *testing.T) {
+func TestFilesystemIsReadOnly(t *testing.T) { //nolint:paralleltest // mutates the config singleton
 	mgr := testManager(t)
 	addEntry(t, mgr, "Example Show", map[string]int64{"a.mkv": 1})
 	fsys := newFilesystem(mgr, nil)
@@ -119,7 +119,7 @@ func TestFilesystemIsReadOnly(t *testing.T) {
 	}
 }
 
-func TestFilesystemErrorSentinels(t *testing.T) {
+func TestFilesystemErrorSentinels(t *testing.T) { //nolint:paralleltest // mutates the config singleton
 	mgr := testManager(t)
 	addEntry(t, mgr, "Example Show", map[string]int64{"a.mkv": 1})
 	fsys := newFilesystem(mgr, nil)
@@ -133,7 +133,7 @@ func TestFilesystemErrorSentinels(t *testing.T) {
 	}
 }
 
-func TestDirFileReaddirPaging(t *testing.T) {
+func TestDirFileReaddirPaging(t *testing.T) { //nolint:paralleltest // mutates the config singleton
 	mgr := testManager(t)
 	addEntry(t, mgr, "Example Show", map[string]int64{
 		"e1.mkv": 1, "e2.mkv": 2, "e3.mkv": 3,

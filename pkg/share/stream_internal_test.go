@@ -69,6 +69,7 @@ func newTestReader(data []byte, mutate func(*fakeSession)) (*streamReader, *atom
 }
 
 func TestStreamReaderSequentialReuseOneSession(t *testing.T) {
+	t.Parallel()
 	data := bytes.Repeat([]byte("decypharr"), 500)
 	r, opens := newTestReader(data, nil)
 	defer r.close()
@@ -97,6 +98,7 @@ func TestStreamReaderSequentialReuseOneSession(t *testing.T) {
 }
 
 func TestStreamReaderEOFBoundaries(t *testing.T) {
+	t.Parallel()
 	data := []byte("0123456789")
 	r, _ := newTestReader(data, nil)
 	defer r.close()
@@ -112,18 +114,19 @@ func TestStreamReaderEOFBoundaries(t *testing.T) {
 	}
 
 	// A read starting at or past EOF returns nothing.
-	if n, err := r.ReadAt(buf, int64(len(data))); n != 0 || !errors.Is(err, io.EOF) {
-		t.Fatalf("read at EOF: n=%d err=%v, want 0, io.EOF", n, err)
+	if atEOF, eofErr := r.ReadAt(buf, int64(len(data))); atEOF != 0 || !errors.Is(eofErr, io.EOF) {
+		t.Fatalf("read at EOF: n=%d err=%v, want 0, io.EOF", atEOF, eofErr)
 	}
 
 	// An oversized request is clamped to what the file holds.
 	big := make([]byte, 64)
-	if n, err := r.ReadAt(big, 8); n != 2 || !errors.Is(err, io.EOF) {
-		t.Fatalf("oversized read: n=%d err=%v, want 2, io.EOF", n, err)
+	if clamped, clampErr := r.ReadAt(big, 8); clamped != 2 || !errors.Is(clampErr, io.EOF) {
+		t.Fatalf("oversized read: n=%d err=%v, want 2, io.EOF", clamped, clampErr)
 	}
 }
 
 func TestStreamReaderBackwardSeek(t *testing.T) {
+	t.Parallel()
 	data := []byte("0123456789")
 	r, opens := newTestReader(data, nil)
 	defer r.close()
@@ -146,6 +149,7 @@ func TestStreamReaderBackwardSeek(t *testing.T) {
 }
 
 func TestStreamReaderReconnectsAfterFailure(t *testing.T) {
+	t.Parallel()
 	data := bytes.Repeat([]byte("x"), 100)
 	boom := errors.New("link died")
 	first := true
@@ -171,6 +175,7 @@ func TestStreamReaderReconnectsAfterFailure(t *testing.T) {
 }
 
 func TestStreamReaderCloseReleasesSession(t *testing.T) {
+	t.Parallel()
 	data := []byte("0123456789")
 	var opened *fakeSession
 	r, _ := newTestReader(data, func(s *fakeSession) { opened = s })
@@ -191,6 +196,7 @@ func TestStreamReaderCloseReleasesSession(t *testing.T) {
 }
 
 func TestStreamReaderShortReadDropsSession(t *testing.T) {
+	t.Parallel()
 	var first *fakeSession
 	r, opens := newTestReader([]byte("abcdef"), func(s *fakeSession) {
 		if first == nil {

@@ -20,6 +20,22 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/vfs"
 )
 
+const (
+	dirPerm  = 0o755
+	filePerm = 0o644
+	// statBlockSize is the unit of Stat_t.Blocks (and the advertised Blksize).
+	statBlockSize = 512
+	// statfsBlocks advertises a virtual 4 TiB volume of 4 KiB blocks, half free.
+	statfsBlocks      = 1 << 30
+	statfsFreeDivisor = 2
+	// readTimeout bounds one read so a stalled download cannot wedge a
+	// WinFsp/macFUSE worker thread.
+	readTimeout = 120 * time.Second
+	// fileDepth is the path depth (group/torrent or torrent/file) at which a
+	// path can name a file.
+	fileDepth = 2
+)
+
 // FS implements the cgofuse FileSystemInterface.
 type FS struct {
 	fuse.FileSystemBase // Embed base for default implementations
@@ -54,11 +70,11 @@ func (f *FS) Destroy() {
 }
 
 // Statfs returns filesystem statistics.
-func (f *FS) Statfs(path string, stat *fuse.Statfs_t) int {
+func (f *FS) Statfs(_ string, stat *fuse.Statfs_t) int {
 	stat.Bsize = 4096
 	stat.Frsize = 4096
-	stat.Blocks = 1024 * 1024 * 1024 // 4TB virtual size
-	stat.Bfree = stat.Blocks / 2
+	stat.Blocks = statfsBlocks
+	stat.Bfree = stat.Blocks / statfsFreeDivisor
 	stat.Bavail = stat.Bfree
 	stat.Files = 1000000
 	stat.Ffree = 500000
@@ -67,10 +83,10 @@ func (f *FS) Statfs(path string, stat *fuse.Statfs_t) int {
 }
 
 // Getattr returns file/directory attributes.
-func (f *FS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
+func (f *FS) Getattr(path string, stat *fuse.Stat_t, _ uint64) int {
 	// Root directory
 	if path == "/" {
-		stat.Mode = fuse.S_IFDIR | 0755
+		stat.Mode = fuse.S_IFDIR | dirPerm
 		stat.Nlink = 2
 		stat.Uid = f.config.UID
 		stat.Gid = f.config.GID
@@ -90,10 +106,10 @@ func (f *FS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 	}
 
 	if info.IsDir() {
-		stat.Mode = fuse.S_IFDIR | 0755
+		stat.Mode = fuse.S_IFDIR | dirPerm
 		stat.Nlink = 2
 	} else {
-		stat.Mode = fuse.S_IFREG | 0644
+		stat.Mode = fuse.S_IFREG | filePerm
 		stat.Nlink = 1
 		stat.Size = info.Size()
 	}
@@ -107,7 +123,7 @@ func (f *FS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 	stat.Ctim = t
 	stat.Birthtim = t
 	stat.Blksize = 512
-	stat.Blocks = (stat.Size + 511) / 512
+	stat.Blocks = (stat.Size + statBlockSize - 1) / statBlockSize
 
 	return 0
 }
@@ -116,8 +132,8 @@ func (f *FS) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 func (f *FS) Readdir(
 	path string,
 	fill func(name string, stat *fuse.Stat_t, ofst int64) bool,
-	ofst int64,
-	fh uint64,
+	_ int64,
+	_ uint64,
 ) int {
 	// Always add . and ..
 	fill(".", nil, 0)
@@ -172,7 +188,7 @@ func (f *FS) entryStat(info *manager.FileInfo) *fuse.Stat_t {
 	stat := &fuse.Stat_t{
 		Uid:     f.config.UID,
 		Gid:     f.config.GID,
-		Blksize: 512,
+		Blksize: statBlockSize,
 	}
 
 	modTime := info.ModTime()
@@ -183,20 +199,20 @@ func (f *FS) entryStat(info *manager.FileInfo) *fuse.Stat_t {
 	stat.Birthtim = t
 
 	if info.IsDir() {
-		stat.Mode = fuse.S_IFDIR | 0755
+		stat.Mode = fuse.S_IFDIR | dirPerm
 		stat.Nlink = 2
 	} else {
-		stat.Mode = fuse.S_IFREG | 0644
+		stat.Mode = fuse.S_IFREG | filePerm
 		stat.Nlink = 1
 		stat.Size = info.Size()
-		stat.Blocks = (stat.Size + 511) / 512
+		stat.Blocks = (stat.Size + statBlockSize - 1) / statBlockSize
 	}
 
 	return stat
 }
 
 // CreateEx is required by fuse.FileSystemOpenEx but this is a read-only filesystem.
-func (f *FS) CreateEx(path string, mode uint32, fi *fuse.FileInfo_t) int {
+func (f *FS) CreateEx(_ string, _ uint32, _ *fuse.FileInfo_t) int {
 	return -fuse.EACCES
 }
 
@@ -249,7 +265,7 @@ func (f *FS) Open(path string, flags int) (int, uint64) {
 }
 
 // Read reads from a file.
-func (f *FS) Read(path string, buff []byte, off int64, fh uint64) int {
+func (f *FS) Read(_ string, buff []byte, off int64, fh uint64) int {
 	handle := f.handles.Get(fh)
 	if handle == nil {
 		return -fuse.EBADF
@@ -280,7 +296,7 @@ func (f *FS) Read(path string, buff []byte, off int64, fh uint64) int {
 		return -fuse.EIO
 	}
 
-	readCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	readCtx, cancel := context.WithTimeout(context.Background(), readTimeout)
 	defer cancel()
 
 	n, err := handle.reader.ReadAtContext(readCtx, buff[:size], off)
@@ -304,12 +320,12 @@ func (f *FS) Read(path string, buff []byte, off int64, fh uint64) int {
 }
 
 // Release closes a file handle.
-func (f *FS) Release(path string, fh uint64) int {
-	handle := f.handles.Get(fh)
-	if handle != nil {
+func (f *FS) Release(_ string, fh uint64) int {
+	// Take makes the release exactly-once even when the kernel's Release
+	// races Destroy's CloseAll.
+	if handle, ok := f.handles.Take(fh); ok {
 		f.releaseHandleResources(handle)
 	}
-	f.handles.Delete(fh)
 	return 0
 }
 
@@ -332,24 +348,24 @@ func (f *FS) Opendir(path string) (int, uint64) {
 }
 
 // Releasedir closes a directory.
-func (f *FS) Releasedir(path string, fh uint64) int {
+func (f *FS) Releasedir(_ string, _ uint64) int {
 	return 0
 }
 
 // Flush is called when a file descriptor is closed.
-func (f *FS) Flush(path string, fh uint64) int {
+func (f *FS) Flush(_ string, _ uint64) int {
 	return 0
 }
 
 // Fsync synchronizes file contents.
-func (f *FS) Fsync(path string, datasync bool, fh uint64) int {
+func (f *FS) Fsync(_ string, _ bool, _ uint64) int {
 	return 0
 }
 
 // Unlink removes a file.
 func (f *FS) Unlink(path string) int {
 	parts := splitPath(path)
-	if len(parts) < 2 {
+	if len(parts) < fileDepth {
 		return -fuse.EPERM
 	}
 
@@ -397,7 +413,7 @@ func (f *FS) Rmdir(path string) int {
 // Access checks file access permissions
 // This is a no-op - returning EACCES for write checks causes Windows media
 // players to refuse to open files even for reading.
-func (f *FS) Access(path string, mask uint32) int {
+func (f *FS) Access(_ string, _ uint32) int {
 	return 0
 }
 
@@ -426,7 +442,7 @@ func (f *FS) getFileInfo(path string) (*manager.FileInfo, error) {
 	}
 
 	// Depth 2: could be a torrent inside __all__, or a file inside a torrent
-	if len(parts) == 2 {
+	if len(parts) == fileDepth {
 		groupOrTorrent := parts[0]
 		entryName := parts[1]
 
@@ -464,12 +480,12 @@ func (f *FS) releaseHandleResources(handle *FileHandle) {
 		return
 	}
 
-	if handle.reader != nil && handle.info != nil {
+	// The reader stays set: a Read racing this release sees a closed file
+	// and fails cleanly instead of racing a nil write.
+	if handle.reader != nil {
 		if err := handle.reader.Close(); err != nil && !customerror.IsSilentError(err) {
 			f.logger.Debug().Err(err).Msg("Failed to close VFS reader")
 		}
-		f.vfs.ReleaseFile(handle.info)
-		handle.reader = nil
 	}
 }
 
@@ -496,8 +512,9 @@ func NewHandleManager() *HandleManager {
 
 // Create creates a new handle.
 func (h *HandleManager) Create(info *manager.FileInfo, reader vfs.File) uint64 {
-	fh := h.nextFH.Load()
-	h.nextFH.Add(1)
+	// One atomic step: a Load-then-Add pair hands concurrent opens the same
+	// ID, and the second Store silently orphans the first handle's reader.
+	fh := h.nextFH.Add(1) - 1
 	h.handles.Store(fh, &FileHandle{
 		info:   info,
 		reader: reader,
@@ -514,18 +531,18 @@ func (h *HandleManager) Get(fh uint64) *FileHandle {
 	return fhi
 }
 
-// Delete removes a handle.
-func (h *HandleManager) Delete(fh uint64) {
-	h.handles.Delete(fh)
+// Take removes a handle and returns it. Only one caller ever gets a given
+// handle back, so its resources are released exactly once.
+func (h *HandleManager) Take(fh uint64) (*FileHandle, bool) {
+	return h.handles.LoadAndDelete(fh)
 }
 
 // CloseAll closes all handles.
 func (h *HandleManager) CloseAll(cleanup func(*FileHandle)) {
-	h.handles.Range(func(key uint64, handle *FileHandle) bool {
-		if cleanup != nil {
+	h.handles.Range(func(key uint64, _ *FileHandle) bool {
+		if handle, ok := h.Take(key); ok && cleanup != nil {
 			cleanup(handle)
 		}
-		h.handles.Delete(key)
 		return true
 	})
 }

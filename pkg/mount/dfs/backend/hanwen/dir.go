@@ -30,6 +30,7 @@ const (
 // Dir implements a FUSE directory following.
 type Dir struct {
 	fs.Inode
+
 	vfs   *vfs.Manager
 	level DirLevel
 	name  string
@@ -99,8 +100,8 @@ func (d *Dir) childStableAttr(name string, mode uint32) fs.StableAttr {
 // newNode creates a new fuse node from a FileInfo, caching it on the FileInfo.
 func (d *Dir) newNode(info *manager.FileInfo) fs.InodeEmbedder {
 	// Check if we have a cached node
-	if cached := info.Sys(); cached != nil {
-		return cached.(fs.InodeEmbedder)
+	if cached, ok := info.Sys().(fs.InodeEmbedder); ok {
+		return cached
 	}
 
 	var node fs.InodeEmbedder
@@ -114,7 +115,7 @@ func (d *Dir) newNode(info *manager.FileInfo) fs.InodeEmbedder {
 			info.Name(),
 			d.childPath(info.Name()),
 			d.level+1,
-			uint64(modTime.Unix()),
+			unixSeconds(modTime),
 			d.config,
 			d.logger,
 			d.rlLogger,
@@ -129,8 +130,8 @@ func (d *Dir) newNode(info *manager.FileInfo) fs.InodeEmbedder {
 }
 
 // Getattr returns directory attributes.
-func (d *Dir) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	out.Mode = 0755 | fuse.S_IFDIR
+func (d *Dir) Getattr(_ context.Context, _ fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	out.Mode = dirPerm | fuse.S_IFDIR
 	out.Size = 4096 // Standard directory size
 	out.Nlink = 2   // Directories have 2 links (itself + "." entry)
 	out.Uid = d.config.UID
@@ -175,7 +176,7 @@ func (d *Dir) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.
 		// Directories keep Gen 0: root listings stamp their ModTime with the
 		// current time, which would churn a new inode per lookup.
 		if mt := info.ModTime(); !mt.IsZero() {
-			attr.Gen = uint64(mt.Unix())
+			attr.Gen = unixSeconds(mt)
 		}
 	}
 	return d.NewInode(ctx, node, attr), 0
@@ -202,7 +203,7 @@ func (d *Dir) refreshExistingChild(name string, info *manager.FileInfo) *fs.Inod
 			return nil
 		}
 		if mt := info.ModTime(); !mt.IsZero() {
-			ops.modTime.Store(uint64(mt.Unix()))
+			ops.modTime.Store(unixSeconds(mt))
 		}
 	default:
 		return nil
@@ -212,12 +213,12 @@ func (d *Dir) refreshExistingChild(name string, info *manager.FileInfo) *fs.Inod
 
 func (d *Dir) nodeModTime(info *manager.FileInfo, node fs.InodeEmbedder) uint64 {
 	if modTime := info.ModTime(); !modTime.IsZero() {
-		return uint64(modTime.Unix())
+		return unixSeconds(modTime)
 	}
 
 	switch node := node.(type) {
 	case *File:
-		return uint64(node.createdAt.Unix())
+		return unixSeconds(node.createdAt)
 	case *Dir:
 		return node.modTime.Load()
 	default:
@@ -263,11 +264,11 @@ func (d *Dir) lookupChild(name string) (*manager.FileInfo, syscall.Errno) {
 // setEntryOut sets the attributes for an entry.
 func (d *Dir) setEntryOut(info *manager.FileInfo, out *fuse.EntryOut, modTime uint64) {
 	if info.IsDir() {
-		out.Attr.Mode = fuse.S_IFDIR | 0755
+		out.Attr.Mode = fuse.S_IFDIR | dirPerm
 		out.Attr.Nlink = 2
 	} else {
-		out.Attr.Mode = fuse.S_IFREG | 0644
-		out.Attr.Size = uint64(info.Size())
+		out.Attr.Mode = fuse.S_IFREG | filePerm
+		out.Attr.Size = nonNegative(info.Size())
 		out.Attr.Nlink = 1
 	}
 
@@ -280,7 +281,7 @@ func (d *Dir) setEntryOut(info *manager.FileInfo, out *fuse.EntryOut, modTime ui
 	out.EntryValid = uint64(EntryTimeout.Seconds())
 }
 
-func (d *Dir) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
+func (d *Dir) Readdir(_ context.Context) (fs.DirStream, syscall.Errno) {
 	// Always query fresh data from manager (no caching)
 	entries, errno := d.listChildren()
 	if errno != 0 {
@@ -289,9 +290,9 @@ func (d *Dir) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 
 	fuseEntries := make([]fuse.DirEntry, 0, len(entries))
 	for _, info := range entries {
-		mode := uint32(fuse.S_IFREG | 0644)
+		mode := uint32(fuse.S_IFREG | filePerm)
 		if info.IsDir() {
-			mode = fuse.S_IFDIR | 0755
+			mode = fuse.S_IFDIR | dirPerm
 		}
 		fuseEntries = append(fuseEntries, fuse.DirEntry{
 			Mode: mode,
@@ -363,7 +364,7 @@ func (d *Dir) RefreshChild(name string) {
 }
 
 // Unlink removes a child from this directory.
-func (d *Dir) Unlink(ctx context.Context, name string) syscall.Errno {
+func (d *Dir) Unlink(_ context.Context, name string) syscall.Errno {
 	if d.level != LevelFile {
 		return syscall.EPERM
 	}
@@ -382,7 +383,7 @@ func (d *Dir) Unlink(ctx context.Context, name string) syscall.Errno {
 }
 
 // Rmdir removes a directory from this directory.
-func (d *Dir) Rmdir(ctx context.Context, name string) syscall.Errno {
+func (d *Dir) Rmdir(_ context.Context, name string) syscall.Errno {
 	if d.level != LevelTorrent {
 		return syscall.EPERM
 	}

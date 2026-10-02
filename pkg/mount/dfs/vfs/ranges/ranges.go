@@ -23,27 +23,27 @@ func (r Range) IsEmpty() bool {
 	return r.Size <= 0
 }
 
-// Clip ensures r.End() <= offset by modifying r.Size if necessary.
-// If r.Pos > offset then an empty Range will be returned.
-func (r *Range) Clip(offset int64) {
+// Clip returns r shortened so that its End() <= offset.
+// If r.Pos > offset then an empty Range is returned.
+func (r Range) Clip(offset int64) Range {
 	if r.End() <= offset {
-		return
+		return r
 	}
 	r.Size -= r.End() - offset
 	if r.Size < 0 {
-		r.Pos = 0
-		r.Size = 0
+		return Range{}
 	}
+	return r
 }
 
 // Intersection returns the common Range for two Ranges.
 // If there is no intersection then the Range returned will have IsEmpty() true.
-func (r Range) Intersection(b Range) (intersection Range) {
+func (r Range) Intersection(b Range) Range {
 	if (r.Pos >= b.Pos && r.Pos < b.End()) || (b.Pos >= r.Pos && b.Pos < r.End()) {
-		intersection.Pos = max(r.Pos, b.Pos)
-		intersection.Size = min(r.End(), b.End()) - intersection.Pos
+		pos := max(r.Pos, b.Pos)
+		return Range{Pos: pos, Size: min(r.End(), b.End()) - pos}
 	}
-	return
+	return Range{}
 }
 
 // Ranges describes a number of Range segments. These should only be
@@ -51,19 +51,19 @@ func (r Range) Intersection(b Range) (intersection Range) {
 // and coalesced to the minimum size.
 type Ranges []Range
 
-// merge the Range new into dest if possible.
+// merge the Range src into dst if possible.
 // dst.Pos must be >= src.Pos.
 // Returns true if merged.
-func merge(new, dst *Range) bool {
-	if new.End() < dst.Pos {
+func merge(src, dst *Range) bool {
+	if src.End() < dst.Pos {
 		return false
 	}
-	if new.End() > dst.End() {
-		dst.Size = new.Size
+	if src.End() > dst.End() {
+		dst.Size = src.Size
 	} else {
-		dst.Size += dst.Pos - new.Pos
+		dst.Size += dst.Pos - src.Pos
 	}
-	dst.Pos = new.Pos
+	dst.Pos = src.Pos
 	return true
 }
 
@@ -92,9 +92,10 @@ func (rs *Ranges) coalesce(i int) {
 
 // search finds the first Range in rs that has Pos >= r.Pos.
 // The return takes on values 0..len(rs) so may point beyond the end of the slice.
-func (rs Ranges) search(r Range) int {
-	return sort.Search(len(rs), func(i int) bool {
-		return rs[i].Pos >= r.Pos
+func (rs *Ranges) search(r Range) int {
+	s := *rs
+	return sort.Search(len(s), func(i int) bool {
+		return s[i].Pos >= r.Pos
 	})
 }
 
@@ -110,7 +111,7 @@ func (rs *Ranges) Insert(r Range) {
 		*rs = ranges
 		return
 	}
-	i := ranges.search(r)
+	i := rs.search(r)
 	if i == len(ranges) || !merge(&r, &ranges[i]) {
 		// insert into the range
 		ranges = append(ranges, Range{})
@@ -129,14 +130,15 @@ func (rs *Ranges) Insert(r Range) {
 //
 // If !next.IsEmpty() then Find should be called again with r = next
 // to retrieve the next Range.
-func (rs Ranges) Find(r Range) (curr, next Range, present bool) {
+func (rs *Ranges) Find(r Range) (Range, Range, bool) {
 	if r.IsEmpty() {
-		return r, next, false
+		return r, Range{}, false
 	}
+	s := *rs
 	var intersection Range
 	i := rs.search(r)
 	if i > 0 {
-		prev := rs[i-1]
+		prev := s[i-1]
 		// we know prev.Pos < r.Pos so intersection.Pos == r.Pos
 		intersection = prev.Intersection(r)
 		if !intersection.IsEmpty() {
@@ -145,16 +147,16 @@ func (rs Ranges) Find(r Range) (curr, next Range, present bool) {
 			return intersection, r, true
 		}
 	}
-	if i >= len(rs) {
+	if i >= len(s) {
 		return r, Range{}, false
 	}
-	found := rs[i]
+	found := s[i]
 	intersection = found.Intersection(r)
 	if intersection.IsEmpty() {
 		return r, Range{}, false
 	}
 	if r.Pos < intersection.Pos {
-		curr = Range{
+		curr := Range{
 			Pos:  r.Pos,
 			Size: intersection.Pos - r.Pos,
 		}
@@ -175,14 +177,14 @@ type FoundRange struct {
 
 // FindAll repeatedly calls Find searching for r in rs and returning
 // present or absent ranges.
-func (rs Ranges) FindAll(r Range) (frs []FoundRange) {
+func (rs *Ranges) FindAll(r Range) []FoundRange {
 	return rs.FindAllInto(r, nil)
 }
 
 // FindAllInto is FindAll appending into a caller-supplied slice, so hot
 // callers can reuse a scratch buffer (e.g. a stack array) instead of
 // allocating a fresh result per call.
-func (rs Ranges) FindAllInto(r Range, frs []FoundRange) []FoundRange {
+func (rs *Ranges) FindAllInto(r Range, frs []FoundRange) []FoundRange {
 	for !r.IsEmpty() {
 		var fr FoundRange
 		fr.R, r, fr.Present = rs.Find(r)
@@ -192,7 +194,7 @@ func (rs Ranges) FindAllInto(r Range, frs []FoundRange) []FoundRange {
 }
 
 // Present returns whether r can be satisfied by rs.
-func (rs Ranges) Present(r Range) bool {
+func (rs *Ranges) Present(r Range) bool {
 	if r.IsEmpty() {
 		return true
 	}
@@ -208,10 +210,11 @@ func (rs Ranges) Present(r Range) bool {
 
 // Intersection works out which ranges out of rs are entirely
 // contained within r and returns a new Ranges.
-func (rs Ranges) Intersection(r Range) (newRs Ranges) {
-	if len(rs) == 0 {
-		return rs
+func (rs *Ranges) Intersection(r Range) Ranges {
+	if len(*rs) == 0 {
+		return *rs
 	}
+	var newRs Ranges
 	for !r.IsEmpty() {
 		var curr Range
 		var found bool
@@ -224,15 +227,16 @@ func (rs Ranges) Intersection(r Range) (newRs Ranges) {
 }
 
 // Equal returns true if rs == bs.
-func (rs Ranges) Equal(bs Ranges) bool {
-	if len(rs) != len(bs) {
+func (rs *Ranges) Equal(bs Ranges) bool {
+	s := *rs
+	if len(s) != len(bs) {
 		return false
 	}
-	if rs == nil || bs == nil {
+	if s == nil || bs == nil {
 		return true
 	}
-	for i := range rs {
-		if rs[i] != bs[i] {
+	for i := range s {
+		if s[i] != bs[i] {
 			return false
 		}
 	}
@@ -240,8 +244,9 @@ func (rs Ranges) Equal(bs Ranges) bool {
 }
 
 // Size returns the total size of all the segments.
-func (rs Ranges) Size() (size int64) {
-	for _, r := range rs {
+func (rs *Ranges) Size() int64 {
+	var size int64
+	for _, r := range *rs {
 		size += r.Size
 	}
 	return size
@@ -250,8 +255,8 @@ func (rs Ranges) Size() (size int64) {
 // FindMissing finds the initial part of r that is not in rs.
 // If r is entirely present in rs then an empty Range will be returned.
 // For all returns rout.End() == r.End().
-func (rs Ranges) FindMissing(r Range) (rout Range) {
-	rout = r
+func (rs *Ranges) FindMissing(r Range) Range {
+	rout := r
 	if r.IsEmpty() {
 		return rout
 	}

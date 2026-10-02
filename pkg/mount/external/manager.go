@@ -39,7 +39,7 @@ func NewManager(manager *manager.Manager) *Manager {
 	return m
 }
 
-func (m *Manager) Start(ctx context.Context) error {
+func (m *Manager) Start(_ context.Context) error {
 	if !m.webdavEnabled {
 		return fmt.Errorf("webdav is not enabled")
 	}

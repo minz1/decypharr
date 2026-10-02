@@ -28,6 +28,15 @@ const (
 	ReadTimeout  = 120 * time.Second
 	AttrTimeout  = 30 * time.Second
 	EntryTimeout = 1 * time.Second
+
+	// maxWrite is the largest FUSE request payload negotiated with the kernel.
+	maxWrite = 1 << 20
+	// forceUnmountTimeout bounds the whole chain of umount fallbacks.
+	forceUnmountTimeout = 10 * time.Second
+	dirPerm             = 0o755
+	filePerm            = 0o644
+	// statBlockSize is the unit of the Blocks attribute.
+	statBlockSize = 512
 )
 
 // Backend implements the hanwen/go-fuse backend.
@@ -49,7 +58,7 @@ func NewBackend(vfs *vfs.Manager, config *config.FuseConfig) (backend.Backend, e
 	// it instead of allocating their own xsync map per inode — dedup keys are
 	// already unique per inode so a shared map gives identical behaviour.
 	rl := logger.NewRateLimitedLogger(logger.WithLogger(log))
-	root := NewDir(vfs, "", LevelRoot, uint64(now.Unix()), config, log, rl)
+	root := NewDir(vfs, "", LevelRoot, unixSeconds(now), config, log, rl)
 	return &Backend{
 		config: config,
 		logger: log,
@@ -69,53 +78,11 @@ func (b *Backend) Mount(ctx context.Context) error {
 		return fmt.Errorf("VFS manager is not initialized")
 	}
 
-	_ = os.MkdirAll(b.config.MountPath, 0755)
+	_ = os.MkdirAll(b.config.MountPath, 0o755) //nolint:gosec // G301: mountpoint is shared (allow_other)
 	// Try to unmount if already mounted
 	b.forceUnmount(ctx)
 
-	mountOpt := fuse.MountOptions{
-		FsName:               "decypharr",
-		Debug:                false,
-		Name:                 "decypharr",
-		DisableXAttrs:        true,
-		IgnoreSecurityLabels: true,
-		MaxWrite:             1024 * 1024,
-		// The kernel defaults MaxBackground to 12, which caps in-flight
-		// readahead far below the VFS readahead window.
-		MaxBackground: b.config.FuseMaxBackground,
-		MaxReadAhead:  b.config.FuseMaxReadAhead,
-		AllowOther:    true,
-		// Route handler panics through our logger; go-fuse fails the single
-		// request with EIO instead of the panic unwinding into its serve loop.
-		PanicHandler: func(p any) fuse.Status {
-			b.logger.Error().Any("panic", p).Bytes("stack", debug.Stack()).Msg("FUSE handler panic")
-			return fuse.EIO
-		},
-	}
-
-	var opt []string
-
-	opt = append(opt, "default_permissions")
-
-	if runtime.GOOS == "darwin" {
-		opt = append(opt, "volname=decypharr")
-		opt = append(opt, "noapplexattr")
-		opt = append(opt, "noappledouble")
-	}
-
-	mountOpt.Options = opt
-
-	// Configure FUSE options
-	// Use short entry timeout (1s) to ensure new files appear quickly
-	entryTimeout := EntryTimeout
-	attrTimeout := AttrTimeout
-	opts := &fs.Options{
-		AttrTimeout:  &attrTimeout,
-		EntryTimeout: &entryTimeout,
-		MountOptions: mountOpt,
-		UID:          b.config.UID,
-		GID:          b.config.GID,
-	}
+	opts := b.mountOptions()
 
 	// Start timer before creating NodeFS - adjust timeout duration as needed
 	mountCtx, cancel := context.WithTimeout(ctx, b.config.DaemonTimeout)
@@ -176,45 +143,95 @@ func (b *Backend) Mount(ctx context.Context) error {
 		return fmt.Errorf("timeout waiting for mount to be ready: %w", mountCtx.Err())
 	}
 
-	umount := func(ctx context.Context) {
-		b.logger.Info().Msg("Unmounting filesystem")
-
-		// Create a channel to track completion
-		done := make(chan struct{})
-
-		go func() {
-			// Close VFS manager
-			if b.vfs != nil {
-				if err := b.vfs.Close(); err != nil {
-					b.logger.Warn().Err(err).Msg("Failed to close VFS")
-				}
-			}
-
-			_ = server.Unmount()
-			time.Sleep(1 * time.Second)
-
-			// Check if still mounted
-			if _, err := os.Stat(b.config.MountPath); err == nil {
-				b.logger.Warn().Msg("FUSE filesystem still mounted, attempting force unmount")
-				b.forceUnmount(ctx)
-			}
-
-			close(done)
-		}()
-
-		// Wait for unmount to complete or context timeout
-		select {
-		case <-done:
-			b.logger.Info().Msg("Filesystem unmounted successfully")
-		case <-ctx.Done():
-			b.logger.Warn().Err(ctx.Err()).Msg("Unmount timed out, forcing unmount")
-			b.forceUnmount(ctx)
-		}
-	}
-
-	b.unmountFunc = umount
+	b.unmountFunc = func(ctx context.Context) { b.unmountServer(ctx, server) }
 	b.ready.Store(true)
 	return nil
+}
+
+// unmountServer closes the VFS manager and unmounts server, force-unmounting
+// when the regular unmount does not take or ctx expires first.
+func (b *Backend) unmountServer(ctx context.Context, server *fuse.Server) {
+	b.logger.Info().Msg("Unmounting filesystem")
+
+	// Create a channel to track completion
+	done := make(chan struct{})
+
+	go func() {
+		// Close VFS manager
+		if b.vfs != nil {
+			if err := b.vfs.Close(); err != nil {
+				b.logger.Warn().Err(err).Msg("Failed to close VFS")
+			}
+		}
+
+		_ = server.Unmount()
+		time.Sleep(1 * time.Second)
+
+		// Check if still mounted
+		if _, err := os.Stat(b.config.MountPath); err == nil {
+			b.logger.Warn().Msg("FUSE filesystem still mounted, attempting force unmount")
+			b.forceUnmount(ctx)
+		}
+
+		close(done)
+	}()
+
+	// Wait for unmount to complete or context timeout
+	select {
+	case <-done:
+		b.logger.Info().Msg("Filesystem unmounted successfully")
+	case <-ctx.Done():
+		b.logger.Warn().Err(ctx.Err()).Msg("Unmount timed out, forcing unmount")
+		b.forceUnmount(ctx)
+	}
+}
+
+// mountOptions builds the go-fuse options for this mount.
+func (b *Backend) mountOptions() *fs.Options {
+	mountOpt := fuse.MountOptions{
+		FsName:               "decypharr",
+		Debug:                false,
+		Name:                 "decypharr",
+		DisableXAttrs:        true,
+		IgnoreSecurityLabels: true,
+		MaxWrite:             maxWrite,
+		// The kernel defaults MaxBackground to 12, which caps in-flight
+		// readahead far below the VFS readahead window.
+		MaxBackground: b.config.FuseMaxBackground,
+		MaxReadAhead:  b.config.FuseMaxReadAhead,
+		AllowOther:    true,
+		// Route handler panics through our logger; go-fuse fails the single
+		// request with EIO instead of the panic unwinding into its serve loop.
+		PanicHandler: func(p any) fuse.Status {
+			b.logger.Error().Any("panic", p).Bytes("stack", debug.Stack()).Msg("FUSE handler panic")
+			return fuse.EIO
+		},
+	}
+
+	var opt []string
+
+	opt = append(opt, "default_permissions")
+
+	if runtime.GOOS == "darwin" {
+		opt = append(opt, "volname=decypharr")
+		opt = append(opt, "noapplexattr")
+		opt = append(opt, "noappledouble")
+	}
+
+	mountOpt.Options = opt
+
+	// Configure FUSE options
+	// Use short entry timeout (1s) to ensure new files appear quickly
+	entryTimeout := EntryTimeout
+	attrTimeout := AttrTimeout
+	opts := &fs.Options{
+		AttrTimeout:  &attrTimeout,
+		EntryTimeout: &entryTimeout,
+		MountOptions: mountOpt,
+		UID:          b.config.UID,
+		GID:          b.config.GID,
+	}
+	return opts
 }
 
 // Unmount unmounts the filesystem.
@@ -237,7 +254,7 @@ func (b *Backend) Unmount(ctx context.Context) error {
 }
 
 // WaitReady waits for the mount to be ready.
-func (b *Backend) WaitReady(ctx context.Context) error {
+func (b *Backend) WaitReady(_ context.Context) error {
 	if b.server == nil {
 		return fmt.Errorf("server not initialized")
 	}
@@ -273,7 +290,7 @@ func (b *Backend) forceUnmount(ctx context.Context) {
 		{"fusermount3", "-uz", b.config.MountPath},
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, forceUnmountTimeout)
 	defer cancel()
 
 	for _, method := range methods {
@@ -293,6 +310,6 @@ func (b *Backend) tryUnmountCommand(ctx context.Context, args ...string) error {
 		return fmt.Errorf("no command provided")
 	}
 
-	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+	cmd := exec.CommandContext(ctx, args[0], args[1:]...) //nolint:gosec // G204: fixed umount commands, no shell
 	return cmd.Run()
 }
