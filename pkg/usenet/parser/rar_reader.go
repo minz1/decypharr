@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 
 	"github.com/sirrobot01/decypharr/internal/crypto"
 	"github.com/sirrobot01/decypharr/pkg/usenet/types"
@@ -37,7 +38,7 @@ func newRarReader(ctx context.Context, source ArticleSource, volumes []*types.Vo
 	}
 }
 
-// Read implements io.Reader.
+// Read implements [io.Reader].
 func (r *rarReader) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
@@ -157,7 +158,7 @@ func (r *rarReader) Position() int64 {
 }
 
 // AbsoluteToVolumeOffset converts an absolute position in the stream to (volumeIndex, offsetWithinVolume).
-func (r *rarReader) AbsoluteToVolumeOffset(absolutePos int64) (volumeIndex int, offsetInVolume int64) {
+func (r *rarReader) AbsoluteToVolumeOffset(absolutePos int64) (int, int64) {
 	currentPos := int64(0)
 
 	for volIdx, volume := range r.volumes {
@@ -416,16 +417,19 @@ func (p *RARParser) readAndDecryptRAR5Header(stream *rarReader, key, iv []byte) 
 			return nil, 0, 0, decryptBlockErr
 		}
 
-		firstBlock = append(firstBlock, remaining...)
+		firstBlock = slices.Concat(firstBlock, remaining)
 	}
 
 	// Parse the decrypted header data
 	r = bytes.NewReader(firstBlock[4:]) // Skip CRC
 
 	// Read header size again
-	headerSize, _, _, err = readVIntFromReaderWithBytes(r)
+	headerSize, _, err = readVIntFromReader(r)
 	if err != nil {
 		return nil, 0, 0, err
+	}
+	if headerSize > maxRAR5HeaderSize {
+		return nil, 0, 0, fmt.Errorf("encrypted header size too large: %d", headerSize)
 	}
 
 	headerType, n, err := readVIntFromReader(r)
@@ -453,11 +457,11 @@ func (p *RARParser) readAndDecryptRAR5Header(stream *rarReader, key, iv []byte) 
 	// Read data area size if present
 	var dataAreaSize int64
 	if headerFlags&RAR5HeaderFlagDataArea != 0 {
-		dataSize, n, err := readVIntFromReader(r)
+		dataSize, sizeLen, err := readVIntFromReader(r)
 		if err != nil {
 			return nil, 0, 0, err
 		}
-		bytesConsumed += n
+		bytesConsumed += sizeLen
 		var sizeErr error
 		if dataAreaSize, sizeErr = rar5Size(dataSize); sizeErr != nil {
 			return nil, 0, 0, sizeErr
@@ -599,6 +603,17 @@ func (p *RARParser) readRAR5HeaderFromStream(stream *rarReader) (*rar5HeaderData
 // AES block padding on them cannot overflow int64.
 const maxRAR5Size = 1 << 62
 
+// RAR5 vint encoding: 7 payload bits per byte, high bit continues; at most
+// ten bytes encode a uint64.
+const (
+	maxVIntLen      = 10
+	vintBitsPerByte = 7
+	vintPayloadMask = 0x7F
+	vintContinue    = 0x80
+	// maxRAR5HeaderSize bounds header allocations from corrupt sizes.
+	maxRAR5HeaderSize = 64 << 10
+)
+
 // rar5Size converts an untrusted RAR5 size vint to int64.
 func rar5Size(v uint64) (int64, error) {
 	if v > maxRAR5Size {
@@ -621,54 +636,28 @@ func parseVIntFromBuffer(buf []byte) (uint64, int) {
 	return 0, 0 // Incomplete vint
 }
 
-// readVIntFromReaderWithBytes reads a variable-length integer from a reader
-// Returns the value, number of bytes read, the actual bytes read, and any error
-// Optimized: uses stack-allocated array to minimize allocations.
-func readVIntFromReaderWithBytes(r io.Reader) (uint64, int, []byte, error) {
-	// A vint can be at most 10 bytes for a 64-bit value (7 bits per byte)
-	// Use stack-allocated array to avoid heap allocation
-	var buf [10]byte
+// readVIntFromReader reads a variable-length integer from a reader one byte
+// at a time and returns the value and the number of bytes read.
+func readVIntFromReader(r io.Reader) (uint64, int, error) {
+	var buf [1]byte
 	var result uint64
-	bytesRead := 0
-
-	for shift := uint(0); shift < 64 && bytesRead < 10; shift += 7 {
-		// Read one byte into our buffer
-		n, err := r.Read(buf[bytesRead : bytesRead+1])
+	for bytesRead := 0; bytesRead < maxVIntLen; bytesRead++ {
+		n, err := r.Read(buf[:])
 		if err != nil {
-			if bytesRead > 0 {
-				return 0, bytesRead, buf[:bytesRead], err
-			}
-			return 0, 0, nil, err
+			return 0, bytesRead, err
 		}
 		if n == 0 {
-			if bytesRead > 0 {
-				return 0, bytesRead, buf[:bytesRead], io.EOF
-			}
-			return 0, 0, nil, io.EOF
+			return 0, bytesRead, io.EOF
 		}
-
-		b := buf[bytesRead]
-		bytesRead++
-
-		result |= uint64(b&0x7F) << shift
-
-		if b&0x80 == 0 {
-			// Done - return slice of what we read
-			return result, bytesRead, buf[:bytesRead], nil
+		result |= uint64(buf[0]&vintPayloadMask) << (vintBitsPerByte * bytesRead)
+		if buf[0]&vintContinue == 0 {
+			return result, bytesRead + 1, nil
 		}
 	}
-
-	return 0, bytesRead, buf[:bytesRead], fmt.Errorf("vint too large")
+	return 0, maxVIntLen, fmt.Errorf("vint too large")
 }
 
-// readVIntFromReader reads a variable-length integer from a reader
-// Returns the value, number of bytes read, and any error.
-func readVIntFromReader(r io.Reader) (uint64, int, error) {
-	val, n, _, err := readVIntFromReaderWithBytes(r)
-	return val, n, err
-}
-
-// readVInt reads a variable-length integer from bytes.Reader (keep for compatibility).
+// readVInt reads a variable-length integer from [bytes.Reader] (keep for compatibility).
 func readVInt(r *bytes.Reader) (uint64, error) {
 	val, _, err := readVIntFromReader(r)
 	return val, err

@@ -26,7 +26,7 @@ import (
 
 var ErrMoreRarDataNeeded = fmt.Errorf("rar: need more data")
 
-var (
+const (
 	// defaultMaxSnippetSize is used for content-type detection via magic bytes.
 	// TS sync-byte check at offset 188 is the deepest we go, so 512 bytes is ample.
 	defaultMaxSnippetSize = 512
@@ -153,7 +153,6 @@ var (
 	rarPartPattern       = regexp.MustCompile(`(?:\.r\d{2,3}|\.[s-y]\d{2})$`) // .r00..r999, then .s00 etc.; .zNN is ZIP
 	rarVolumePattern     = regexp.MustCompile(`\.part\d+\.rar$`)
 	rarPartNumberPattern = regexp.MustCompile(`\.part(\d+)$`)
-	ignoreExtensions     = []string{".sfv", ".nfo", ".jpg", ".png", ".txt", ".srt", ".idx", ".sub", ".par2"}
 	sevenZMainPattern    = regexp.MustCompile(`\.7z$`)
 	sevenZPartPattern    = regexp.MustCompile(`\.7z\.\d{3}$`)
 	zipPartPattern       = regexp.MustCompile(`\.z\d{2,3}$`)
@@ -162,26 +161,50 @@ var (
 	regularExtPattern    = regexp.MustCompile(`\.[^ "\.]*$`)
 )
 
+// recoverPanic converts a panic in fn into an error so one malformed NZB
+// cannot crash the service.
+func (p *NZBParser) recoverPanic(op, name string, fn func() error) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			p.logger.Error().Interface("panic", r).Str("name", name).Msgf("Panic recovered in %s", op)
+			err = fmt.Errorf("%s panic: %v", op, r)
+		}
+	}()
+	return fn()
+}
+
+// Parse decodes an NZB, groups its files and probes content availability.
+// Groups are returned even when the probe fails so callers can identify the
+// dead post.
 func (p *NZBParser) Parse(
 	ctx context.Context,
 	filename string,
 	content []byte,
-) (nzb *storage.NZB, groups map[string]*FileGroup, err error) {
-	// Recover from panics to prevent crashes
-	defer func() {
-		if r := recover(); r != nil {
-			p.logger.Error().Interface("panic", r).Str("filename", filename).Msg("Panic recovered in Parse")
-			err = fmt.Errorf("parse panic: %v", r)
-		}
-	}()
+) (*storage.NZB, map[string]*FileGroup, error) {
+	var (
+		nzb    *storage.NZB
+		groups map[string]*FileGroup
+	)
+	err := p.recoverPanic("parse", filename, func() error {
+		var parseErr error
+		nzb, groups, parseErr = p.parse(ctx, filename, content)
+		return parseErr
+	})
+	return nzb, groups, err
+}
 
+func (p *NZBParser) parse(
+	ctx context.Context,
+	filename string,
+	content []byte,
+) (*storage.NZB, map[string]*FileGroup, error) {
 	raw, err := manifest.Decode(bytes.NewReader(content))
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to parse NZB content: %w", err)
 	}
 
 	// Create base NZB structure
-	nzb = &storage.NZB{
+	nzb := &storage.NZB{
 		ID:       uuid.New().String(),
 		Files:    []storage.NZBFile{},
 		Status:   "parsed",
@@ -196,9 +219,8 @@ func (p *NZBParser) Parse(
 		return nil, nil, fmt.Errorf("no valid file groups found in NZB")
 	}
 
-	err = p.probeContentAvailability(ctx, fileGroups, p.source.Stat)
-	if err != nil {
-		return nil, fileGroups, err
+	if probeErr := p.probeContentAvailability(ctx, fileGroups, p.source.Stat); probeErr != nil {
+		return nil, fileGroups, probeErr
 	}
 
 	return nzb, fileGroups, nil
@@ -257,19 +279,26 @@ func (p *NZBParser) probeContentAvailability(
 	)
 }
 
+// Process extracts every file group of a parsed NZB into streamable files.
 func (p *NZBParser) Process(
 	ctx context.Context,
 	nzb *storage.NZB,
 	groups map[string]*FileGroup,
-) (result *storage.NZB, err error) {
-	// Recover from panics to prevent crashes
-	defer func() {
-		if r := recover(); r != nil {
-			p.logger.Error().Interface("panic", r).Str("nzb", nzb.Name).Msg("Panic recovered in Process")
-			err = fmt.Errorf("process panic: %v", r)
-		}
-	}()
+) (*storage.NZB, error) {
+	var result *storage.NZB
+	err := p.recoverPanic("process", nzb.Name, func() error {
+		var processErr error
+		result, processErr = p.process(ctx, nzb, groups)
+		return processErr
+	})
+	return result, err
+}
 
+func (p *NZBParser) process(
+	ctx context.Context,
+	nzb *storage.NZB,
+	groups map[string]*FileGroup,
+) (*storage.NZB, error) {
 	// Parse each group (with deferred archive option)
 	files, groupErr := p.processFileGroups(ctx, groups, nzb.Password)
 	if groupErr != nil {
@@ -677,10 +706,9 @@ func (p *NZBParser) detectFileType(filename string) storage.NZBFileType {
 	}
 
 	// Check for ignored file types
-	for _, ext := range ignoreExtensions {
-		if strings.HasSuffix(lower, ext) {
-			return storage.NZBFileTypeIgnore
-		}
+	switch filepath.Ext(lower) {
+	case ".sfv", ".nfo", ".jpg", ".png", ".txt", ".srt", ".idx", ".sub", ".par2":
+		return storage.NZBFileTypeIgnore
 	}
 	// Default to unknown type
 	return storage.NZBFileTypeUnknown
@@ -701,7 +729,6 @@ func (p *NZBParser) processFileGroups(
 	if len(groups) == 0 {
 		return nil, nil
 	}
-	rarCounts, sevenZCounts, zipCounts, mediaCounts, deferredCounts := 0, 0, 0, 0, 0
 
 	// Convert map into slice of *values*, not pointers
 	fileGroups := make([]FileGroup, 0, len(groups))
@@ -751,26 +778,7 @@ func (p *NZBParser) processFileGroups(
 		for _, f := range result.files {
 			if f != nil {
 				files = append(files, *f)
-				// Count types
-				switch f.FileType {
-				case storage.NZBFileTypeRar:
-					rarCounts++
-				case storage.NZBFileTypeSevenZip:
-					sevenZCounts++
-				case storage.NZBFileTypeZip:
-					zipCounts++
-				case storage.NZBFileTypeMedia:
-					mediaCounts++
-				}
 			}
-		}
-	}
-
-	// Count deferred archives
-	for _, g := range fileGroups {
-		switch g.Type {
-		case storage.NZBFileTypeRar, storage.NZBFileTypeSevenZip, storage.NZBFileTypeZip:
-			deferredCounts++
 		}
 	}
 
@@ -823,6 +831,8 @@ func (p *NZBParser) processFileGroup(
 	case storage.NZBFileTypeZip:
 		zipParser := NewZIPParser(p.source, p.maxConcurrent, p.logger)
 		return zipParser.Process(ctx, group, password)
+	case storage.NZBFileTypeIgnore, storage.NZBFileTypeUnknown:
+		return nil, fmt.Errorf("unsupported file type: %v", group.Type)
 	default:
 		return nil, fmt.Errorf("unsupported file type: %v", group.Type)
 	}
