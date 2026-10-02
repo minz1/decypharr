@@ -76,9 +76,10 @@ func (f *File) ByteRange() *[2]int64 {
 }
 
 // NewReader opens the RAR3 archive at url and validates its archive header.
-// All requests made while opening are bound to ctx.
-func NewReader(ctx context.Context, url string) (*Reader, error) {
-	file, err := NewHTTPFile(ctx, url)
+// All requests made while opening are bound to ctx; network failures are
+// retried up to maxRetries times.
+func NewReader(ctx context.Context, url string, maxRetries int) (*Reader, error) {
+	file, err := NewHTTPFile(ctx, url, maxRetries)
 	if err != nil {
 		return nil, err
 	}
