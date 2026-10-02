@@ -90,7 +90,7 @@ func TestRAR5HeaderRejectsDataSizeBeyondInt64(t *testing.T) {
 		t.Fatalf("data size %d accepted", size)
 	}
 	stream := &rarReader{ctx: t.Context(), currentSegmentData: raw}
-	if _, _, size, err := parser.readRAR5HeaderFromStream(stream); err == nil {
+	if _, _, size, err := parser.readRAR5Header(stream); err == nil {
 		t.Fatalf("stream data size %d accepted", size)
 	}
 }
