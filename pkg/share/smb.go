@@ -60,18 +60,14 @@ func (s *SMBServer) Start(ctx context.Context) error {
 	}
 
 	address := net.JoinHostPort(s.config.BindAddress, strconv.Itoa(int(s.config.Port)))
-	listener, err := net.Listen("tcp", address)
+	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", address)
 	if err != nil {
 		return fmt.Errorf("listen for SMB on %s: %w", address, err)
 	}
 
 	log.Info().Str("address", address).Str("share", s.config.ShareName).Msg("SMB server started (experimental)")
 
-	err = server.Serve(ctx, &filteredListener{Listener: listener, networks: networks})
-	if ctx.Err() != nil || errors.Is(err, net.ErrClosed) || errors.Is(err, context.Canceled) {
-		return nil
-	}
-	return fmt.Errorf("serve SMB: %w", err)
+	return serveResult(ctx, "SMB", server.Serve(ctx, &filteredListener{Listener: listener, networks: networks}))
 }
 
 // singleUser authenticates one account. The domain is ignored: Windows

@@ -1,6 +1,7 @@
 package vfs
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -13,7 +14,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
-// fakeStreamSource implements streamSource using a real httptest.Server so we
+// fakeStreamSource implements streamSource using a real [httptest.Server] so we
 // exercise HTTP range-request handling without the full manager stack.
 type fakeStreamSource struct {
 	srv *httptest.Server
@@ -49,10 +50,10 @@ func newFakeStreamSource(t *testing.T, content []byte) *fakeStreamSource {
 
 func (s *fakeStreamSource) OpenStream(
 	ctx context.Context,
-	entry *storage.Entry,
-	filename string,
+	_ *storage.Entry,
+	_ string,
 	offset int64,
-	client string,
+	_ string,
 ) (manager.StreamReader, error) {
 	end := int64(len(s.content)) - 1
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.srv.URL, nil)
@@ -71,7 +72,7 @@ func (s *fakeStreamSource) OpenStream(
 	return &fakeStreamReader{body: resp.Body, size: int64(len(s.content)) - offset}, nil
 }
 
-// fakeStreamReader adapts an http.Response body to manager.StreamReader.
+// fakeStreamReader adapts an [http.Response] body to manager.StreamReader.
 // Seek is unused by DirectStreamFile (each read opens a fresh stream at the
 // requested offset) so it is left unimplemented.
 type fakeStreamReader struct {
@@ -88,6 +89,7 @@ func (r *fakeStreamReader) Seek(int64, int) (int64, error) {
 }
 
 func TestDirectStreamFile_ReadAtContext(t *testing.T) {
+	t.Parallel()
 	content := make([]byte, 1024)
 	for i := range content {
 		content[i] = byte(i % 251)
@@ -108,39 +110,32 @@ func TestDirectStreamFile_ReadAtContext(t *testing.T) {
 	}
 
 	t.Run("full read", func(t *testing.T) {
+		t.Parallel()
 		buf := make([]byte, len(content))
 		n, err := f.ReadAtContext(context.Background(), buf, 0)
 		if err != nil {
 			t.Fatalf("ReadAtContext: %v", err)
 		}
-		if n != len(content) {
-			t.Fatalf("got %d bytes, want %d", n, len(content))
-		}
-		for i, b := range buf {
-			if b != content[i] {
-				t.Fatalf("byte %d: got %d, want %d", i, b, content[i])
-			}
+		if n != len(content) || !bytes.Equal(buf, content) {
+			t.Fatalf("got %d bytes %v, want %v", n, buf, content)
 		}
 	})
 
 	t.Run("mid-file range", func(t *testing.T) {
+		t.Parallel()
 		const off = 100
 		buf := make([]byte, 200)
 		n, err := f.ReadAtContext(context.Background(), buf, off)
 		if err != nil {
 			t.Fatalf("ReadAtContext: %v", err)
 		}
-		if n != 200 {
-			t.Fatalf("got %d bytes, want 200", n)
-		}
-		for i, b := range buf {
-			if b != content[off+i] {
-				t.Fatalf("byte %d: got %d, want %d", i, b, content[off+i])
-			}
+		if n != len(buf) || !bytes.Equal(buf, content[off:off+len(buf)]) {
+			t.Fatalf("got %d bytes %v, want content[%d:%d]", n, buf, off, off+len(buf))
 		}
 	})
 
 	t.Run("no disk writes", func(t *testing.T) {
+		t.Parallel()
 		// CacheDir is never touched by DirectStreamFile — verified structurally:
 		// newDirectStreamFile takes a streamSource, not a cache, so there is
 		// no code path from ReadAtContext to any disk write.
@@ -160,6 +155,7 @@ func TestDirectStreamFile_ReadAtContext(t *testing.T) {
 }
 
 func TestDirectStreamFile_RetriesOnTransientFailure(t *testing.T) {
+	t.Parallel()
 	const fileSize = 64
 	content := make([]byte, fileSize)
 	for i := range content {

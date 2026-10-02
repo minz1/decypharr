@@ -1,7 +1,7 @@
 // Package share exposes the manager's library catalog as a facetfs.FileSystem
 // so it can be served over the facetfs protocol packages (NFSv4 today; SFTP
 // and SMB share the same adapter later). The export is read-only: every
-// mutating call fails with fs.ErrPermission.
+// mutating call fails with [fs.ErrPermission].
 package share
 
 import (
@@ -13,11 +13,21 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sirrobot01/facetfs"
 
 	"github.com/sirrobot01/decypharr/pkg/manager"
+)
+
+const (
+	// torrentDepth is the path depth of a torrent directory (group/torrent).
+	torrentDepth = 2
+	// dirSize is the conventional size reported for directories.
+	dirSize  = 4096
+	filePerm = 0o444
+	dirPerm  = 0o555
 )
 
 type catalog interface {
@@ -53,6 +63,11 @@ type filesystem struct {
 	// linear-scans catalog listings and one protocol request can resolve the
 	// same path several times.
 	lookups sync.Map // path key -> *lookupCacheEntry
+	// nextSweep (unix nanos) is when expired lookups are next purged. An
+	// entry is otherwise dropped only when its own path is looked up again,
+	// so every distinct path a client ever named — including misses for
+	// arbitrary names — stayed in memory for the life of the process.
+	nextSweep atomic.Int64
 }
 
 func newFilesystem(c catalog, open func(*manager.FileInfo, fs.FileInfo) (facetfs.File, error)) *filesystem {
@@ -133,15 +148,30 @@ func (f *filesystem) lookupAbsolute(segments []string) (*node, error) {
 	key := strings.Join(segments, "\x00")
 	now := time.Now().UnixNano()
 	if v, ok := f.lookups.Load(key); ok {
-		e := v.(*lookupCacheEntry)
-		if now < e.expiry {
+		if e, isEntry := v.(*lookupCacheEntry); isEntry && now < e.expiry {
 			return e.n, e.err
 		}
 		f.lookups.Delete(key)
 	}
 	n, err := f.lookupAbsoluteUncached(segments)
 	f.lookups.Store(key, &lookupCacheEntry{n: n, err: err, expiry: now + int64(lookupCacheTTL)})
+	f.sweepLookups(now)
 	return n, err
+}
+
+// sweepLookups purges expired lookups at most once per TTL, keeping the memo
+// bounded by the paths resolved within one TTL window.
+func (f *filesystem) sweepLookups(now int64) {
+	next := f.nextSweep.Load()
+	if now < next || !f.nextSweep.CompareAndSwap(next, now+int64(lookupCacheTTL)) {
+		return
+	}
+	f.lookups.Range(func(key, value any) bool {
+		if e, ok := value.(*lookupCacheEntry); ok && now >= e.expiry {
+			f.lookups.CompareAndDelete(key, value)
+		}
+		return true
+	})
 }
 
 func (f *filesystem) lookupAbsoluteUncached(segments []string) (*node, error) {
@@ -149,18 +179,13 @@ func (f *filesystem) lookupAbsoluteUncached(segments []string) (*node, error) {
 	case 0:
 		return makeNode(f.catalog.RootInfo()), nil
 	case 1:
-		entries := f.catalog.GetEntries()
-		for i := range entries {
-			if entries[i].Name() == segments[0] {
-				return makeNode(&entries[i]), nil
-			}
+		if n := findNode(f.catalog.GetEntries(), segments[0]); n != nil {
+			return n, nil
 		}
-	case 2:
+	case torrentDepth:
 		_, entries := f.catalog.GetEntryChildren(segments[0])
-		for i := range entries {
-			if entries[i].Name() == segments[1] {
-				return makeNode(&entries[i]), nil
-			}
+		if n := findNode(entries, segments[1]); n != nil {
+			return n, nil
 		}
 	default:
 		if _, err := f.lookupAbsolute(segments[:2]); err != nil {
@@ -168,17 +193,15 @@ func (f *filesystem) lookupAbsoluteUncached(segments []string) (*node, error) {
 		}
 		fileName := strings.Join(segments[2:], "/")
 		_, children := f.catalog.GetTorrentChildren(segments[1])
-		for i := range children {
-			if children[i].Name() == fileName {
-				return makeNode(&children[i]), nil
-			}
+		if n := findNode(children, fileName); n != nil {
+			return n, nil
 		}
 		prefix := fileName + "/"
 		for i := range children {
 			if strings.HasPrefix(children[i].Name(), prefix) {
 				return &node{
 					name:    segments[len(segments)-1],
-					size:    4096,
+					size:    dirSize,
 					modTime: children[i].ModTime(),
 					isDir:   true,
 				}, nil
@@ -214,12 +237,12 @@ func (f *filesystem) torrentChildren(torrent, prefix string) []node {
 		}
 		name, _, nested := strings.Cut(remainder, "/")
 		if nested {
-			if existing, ok := children[name]; !ok || !existing.isDir {
-				children[name] = node{name: name, size: 4096, modTime: entries[i].ModTime(), isDir: true}
+			if existing, seen := children[name]; !seen || !existing.isDir {
+				children[name] = node{name: name, size: dirSize, modTime: entries[i].ModTime(), isDir: true}
 			}
 			continue
 		}
-		if existing, ok := children[name]; ok && existing.isDir {
+		if existing, seen := children[name]; seen && existing.isDir {
 			continue
 		}
 		entry := makeNode(&entries[i])
@@ -253,11 +276,11 @@ func makeNode(info *manager.FileInfo) *node {
 }
 
 func fileInfo(entry *node) fs.FileInfo {
-	mode := fs.FileMode(0o444)
+	mode := fs.FileMode(filePerm)
 	size := entry.size
 	if entry.isDir {
-		mode = fs.ModeDir | 0o555
-		size = 4096
+		mode = fs.ModeDir | dirPerm
+		size = dirSize
 	}
 	return nodeInfo{
 		name:    entry.name,
@@ -284,3 +307,13 @@ func (i nodeInfo) IsDir() bool        { return i.isDir }
 func (i nodeInfo) Sys() any           { return nil }
 
 var _ facetfs.FileSystem = (*filesystem)(nil)
+
+// findNode returns the entry called name, or nil.
+func findNode(entries []manager.FileInfo, name string) *node {
+	for i := range entries {
+		if entries[i].Name() == name {
+			return makeNode(&entries[i])
+		}
+	}
+	return nil
+}

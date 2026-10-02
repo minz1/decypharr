@@ -8,6 +8,7 @@ import (
 )
 
 func TestHandleKeyPersists(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "nfs", "handle.key")
 
 	first, err := loadHandleKey(path)
@@ -28,6 +29,7 @@ func TestHandleKeyPersists(t *testing.T) {
 }
 
 func TestAllowsFiltersNetworks(t *testing.T) {
+	t.Parallel()
 	networks, err := parseNetworks([]string{"192.168.0.0/16", "127.0.0.1", "::1/128"})
 	if err != nil {
 		t.Fatal(err)
@@ -53,6 +55,7 @@ func TestAllowsFiltersNetworks(t *testing.T) {
 }
 
 func TestParseNetworksRejectsEmpty(t *testing.T) {
+	t.Parallel()
 	if _, err := parseNetworks([]string{" ", ""}); err == nil {
 		t.Fatal("expected an error for an empty network list")
 	}

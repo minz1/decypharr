@@ -54,6 +54,7 @@ func (b *persistedNZBBackend) OpenStreamUntrackedForCache(
 }
 
 func TestPersistedNZBUsesDFSCacheAndTracksStream(t *testing.T) {
+	t.Parallel()
 	const (
 		entryName = "Cached.Movie"
 		filename  = "movie.mkv"
@@ -61,31 +62,11 @@ func TestPersistedNZBUsesDFSCacheAndTracksStream(t *testing.T) {
 	)
 
 	cacheDir := t.TempDir()
-	entryDir := filepath.Join(cacheDir, entryName)
-	if err := os.MkdirAll(entryDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
 	want := make([]byte, fileSize)
 	for i := range want {
 		want[i] = byte(i*17 + 3)
 	}
-	if err := os.WriteFile(filepath.Join(entryDir, filename), want, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now()
-	metadata, err := json.Marshal(ItemInfo{
-		Size:    fileSize,
-		Rs:      ranges.Ranges{{Pos: 0, Size: fileSize}},
-		ModTime: now,
-		ATime:   now,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if writeFileErr := os.WriteFile(filepath.Join(entryDir, filename+".json"), metadata, 0o644); writeFileErr != nil {
-		t.Fatal(writeFileErr)
-	}
+	seedPersistedItem(t, cacheDir, entryName, filename, want)
 
 	entry := &storage.Entry{
 		Name:     entryName,
@@ -149,5 +130,32 @@ func TestPersistedNZBUsesDFSCacheAndTracksStream(t *testing.T) {
 			backend.untracks.Load(),
 			backend.active.Load(),
 		)
+	}
+}
+
+// seedPersistedItem writes a fully cached item, data plus metadata, as a
+// previous run would have left it.
+func seedPersistedItem(t *testing.T, cacheDir, entryName, filename string, data []byte) {
+	t.Helper()
+	entryDir := filepath.Join(cacheDir, entryName)
+	if err := os.MkdirAll(entryDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(entryDir, filename), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	size := int64(len(data))
+	metadata, err := json.Marshal(ItemInfo{
+		Size:    size,
+		Rs:      ranges.Ranges{{Pos: 0, Size: size}},
+		ModTime: now,
+		ATime:   now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if writeErr := os.WriteFile(filepath.Join(entryDir, filename+".json"), metadata, 0o600); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 }

@@ -16,6 +16,9 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/vfs"
 )
 
+// unmountTimeout bounds Stop's backend unmount.
+const unmountTimeout = 10 * time.Second
+
 // Manager manages FUSE filesystem instances with proper caching.
 type Manager struct {
 	manager            *manager.Manager
@@ -53,19 +56,18 @@ func (m *Manager) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to create VFS manager: %w", err)
 	}
-	m.vfs = vfsManager
-
-	// Create backend
 	bck, err := newBackend(m.defaultBackendType, vfsManager, m.config)
+	if err == nil {
+		err = bck.Mount(ctx)
+	}
 	if err != nil {
-		return fmt.Errorf("failed to create backend: %w", err)
+		// Nothing will ever Stop a manager that failed to start: release the
+		// VFS cache's loops, files and buffer pool now.
+		_ = vfsManager.Close()
+		return fmt.Errorf("failed to start DFS backend: %w", err)
 	}
+	m.vfs = vfsManager
 	m.backend = bck
-
-	// Mount using the backend
-	if mountErr := m.backend.Mount(ctx); mountErr != nil {
-		return fmt.Errorf("backend mount failed: %w", mountErr)
-	}
 
 	m.ready.Store(true)
 	m.logger.Info().
@@ -85,7 +87,7 @@ func (m *Manager) Stop() error {
 		Str("backend", string(m.backend.Type())).
 		Msg("Stopping FUSE filesystem")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), unmountTimeout)
 	defer cancel()
 
 	// Unmount using backend, this also ensures the VFS manager is properly closed

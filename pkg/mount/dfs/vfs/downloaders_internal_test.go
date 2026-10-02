@@ -14,6 +14,7 @@ const (
 )
 
 func TestCurrentKickerInterval(t *testing.T) {
+	t.Parallel()
 	dls := &Downloaders{}
 
 	if got := dls.currentKickerInterval(); got != kickerInterval {
@@ -33,6 +34,7 @@ func getMaxOffset(dl *downloader) int64 {
 }
 
 func TestEnsureDownloaderLocked_ExtendsMissByReadAhead(t *testing.T) {
+	t.Parallel()
 	const (
 		reqPos    = 10 * testMiB
 		reqSize   = 128 * testKiB
@@ -67,6 +69,7 @@ func TestEnsureDownloaderLocked_ExtendsMissByReadAhead(t *testing.T) {
 }
 
 func TestEnsureDownloaderLocked_CachedRequestPrefetchesGap(t *testing.T) {
+	t.Parallel()
 	const (
 		reqPos    = 0
 		reqSize   = 128 * testKiB
@@ -102,6 +105,7 @@ func TestEnsureDownloaderLocked_CachedRequestPrefetchesGap(t *testing.T) {
 }
 
 func TestEnsureDownloaderLocked_CachedWindowFullDoesNotExtend(t *testing.T) {
+	t.Parallel()
 	const (
 		reqPos    = 0
 		reqSize   = 128 * testKiB
@@ -129,7 +133,7 @@ func TestEnsureDownloaderLocked_CachedWindowFullDoesNotExtend(t *testing.T) {
 		t.Fatalf("ensureDownloaderLocked returned error: %v", err)
 	}
 
-	want := int64(2 * testMiB)
+	want := 2 * testMiB
 	got := getMaxOffset(dl)
 	if got != want {
 		t.Fatalf("unexpected maxOffset when window is full: got %d, want %d", got, want)
@@ -137,6 +141,7 @@ func TestEnsureDownloaderLocked_CachedWindowFullDoesNotExtend(t *testing.T) {
 }
 
 func TestStopAllClearsWaiters(t *testing.T) {
+	t.Parallel()
 	parentCtx := context.Background()
 	ctx, cancel := context.WithCancel(parentCtx)
 
@@ -174,6 +179,7 @@ func TestStopAllClearsWaiters(t *testing.T) {
 // stopCond instead — and that once the teardown resolves to closed, it
 // returns an error without ever having created any work.
 func TestDownloadWaitsOutStoppingThenFailsClosed(t *testing.T) {
+	t.Parallel()
 	parentCtx := context.Background()
 	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
@@ -236,6 +242,7 @@ func TestDownloadWaitsOutStoppingThenFailsClosed(t *testing.T) {
 }
 
 func TestCacheItemReleaseStopsDownloadersOnZeroOpens(t *testing.T) {
+	t.Parallel()
 	parentCtx := context.Background()
 	ctx, cancel := context.WithCancel(parentCtx)
 
@@ -265,3 +272,35 @@ func TestCacheItemReleaseStopsDownloadersOnZeroOpens(t *testing.T) {
 // Stall detection now lives in the manager stream session (see
 // TestSessionStallWatchdogRecovers); the downloader no longer runs its own
 // no-progress watchdog.
+
+// An idle kicker returns right after checkIdleTimeout, but closes its done
+// channel only in a deferred call. A read landing in that gap used to see the
+// channel still open, assume a kicker was running, and start none — leaving
+// parked waiters without their safety-net ticker for the whole session.
+func TestIdleRestartStartsKickerBeforeOldOneClosesDone(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	dls := &Downloaders{ctx: ctx, cancel: cancel, idle: true}
+	exiting := make(chan struct{}) // old kicker: decided to exit, done not yet closed
+	dls.kickerDone = exiting
+
+	dls.mu.Lock()
+	dls.restartKickerIfIdleLocked()
+	fresh := dls.kickerDone
+	idle := dls.idle
+	dls.mu.Unlock()
+
+	if fresh == exiting {
+		t.Fatal("no fresh kicker started while the idle one was still exiting")
+	}
+	if idle {
+		t.Fatal("session still marked idle after restart")
+	}
+	cancel()
+	select {
+	case <-fresh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("fresh kicker did not exit on cancel")
+	}
+}

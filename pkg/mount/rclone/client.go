@@ -14,6 +14,9 @@ import (
 	"github.com/sirrobot01/decypharr/internal/utils"
 )
 
+// forceUnmountTimeout bounds the whole chain of umount fallbacks.
+const forceUnmountTimeout = 10 * time.Second
+
 // mountWithRetry attempts to mount with retry logic using avast/retry-go.
 func (m *Manager) mountWithRetry(ctx context.Context, maxRetries int) error {
 	return retry.Do(
@@ -23,7 +26,7 @@ func (m *Manager) mountWithRetry(ctx context.Context, maxRetries int) error {
 		retry.Attempts(uint(maxRetries)+1),
 		retry.Delay(config.DefaultRetryDelay),
 		retry.DelayType(retry.FixedDelay),
-		retry.RetryIf(func(err error) bool {
+		retry.RetryIf(func(_ error) bool {
 			return true // Always retry on error
 		}),
 	)
@@ -35,7 +38,7 @@ func (m *Manager) performMount(ctx context.Context) error {
 
 	// Create mount directory if not on windows
 	if runtime.GOOS != "windows" {
-		_ = os.MkdirAll(cfg.MountPath, 0755)
+		_ = os.MkdirAll(cfg.MountPath, 0o755) //nolint:gosec // G301: mountpoint is shared (allow_other)
 	}
 
 	// Check if already mounted
@@ -46,11 +49,11 @@ func (m *Manager) performMount(ctx context.Context) error {
 		return nil
 	}
 
-	// Clean up any stale mount first
+	// Clean up any stale mount first. Best effort: when nothing is mounted
+	// every umount fails, and that must not block the remount.
 	if mountInfo != nil && !mountInfo.Mounted {
-		err := m.forceUnmount(ctx)
-		if err != nil {
-			return err
+		if err := m.forceUnmount(ctx); err != nil {
+			m.logger.Debug().Err(err).Msg("No stale mount to clean up")
 		}
 	}
 
@@ -59,115 +62,16 @@ func (m *Manager) performMount(ctx context.Context) error {
 		return fmt.Errorf("failed to create rclone config: %w", err)
 	}
 
-	// Prepare mount arguments
 	mountArgs := map[string]any{
 		"fs":         FSName,
 		"mountPoint": cfg.MountPath,
+		"vfsOpt":     vfsOptions(cfg.Rclone),
+		"mountOpt":   mountOptions(cfg.Rclone),
 	}
-	mountOpt := map[string]any{
-		"AllowNonEmpty": true,
-		"AllowOther":    true,
-		"DebugFUSE":     false,
-		"DeviceName":    "decypharr",
-		"VolumeName":    "decypharr",
-	}
-
-	if cfg.Rclone.AsyncRead != nil {
-		mountOpt["AsyncRead"] = *cfg.Rclone.AsyncRead
-	}
-
-	if cfg.Rclone.UseMmap {
-		mountOpt["UseMmap"] = cfg.Rclone.UseMmap
-	}
-
-	if cfg.Rclone.Transfers != 0 {
-		mountOpt["Transfers"] = cfg.Rclone.Transfers
-	}
-
-	configOpts := make(map[string]any)
-
 	if cfg.Rclone.BufferSize != "" {
-		configOpts["BufferSize"] = cfg.Rclone.BufferSize
-	}
-
-	if len(configOpts) > 0 {
 		// Only add _config if there are options to set
-		mountArgs["_config"] = configOpts
+		mountArgs["_config"] = map[string]any{"BufferSize": cfg.Rclone.BufferSize}
 	}
-	vfsOpt := map[string]any{
-		"CacheMode":    cfg.Rclone.VfsCacheMode,
-		"DirCacheTime": cfg.Rclone.DirCacheTime,
-	}
-	vfsOpt["PollInterval"] = 0 // Poll interval not supported for webdav, set to 0
-
-	// AddOrUpdate VFS options if caching is enabled
-	if cfg.Rclone.VfsCacheMode != "off" {
-		if cfg.Rclone.VfsCacheMaxAge != "" {
-			vfsOpt["CacheMaxAge"] = cfg.Rclone.VfsCacheMaxAge
-		}
-		if cfg.Rclone.VfsDiskSpaceTotal != "" {
-			vfsOpt["DiskSpaceTotalSize"] = cfg.Rclone.VfsDiskSpaceTotal
-		}
-		if cfg.Rclone.VfsReadChunkSizeLimit != "" {
-			vfsOpt["ChunkSizeLimit"] = cfg.Rclone.VfsReadChunkSizeLimit
-		}
-
-		if cfg.Rclone.VfsCacheMaxSize != "" {
-			vfsOpt["CacheMaxSize"] = cfg.Rclone.VfsCacheMaxSize
-		}
-		if cfg.Rclone.VfsCachePollInterval != "" {
-			vfsOpt["CachePollInterval"] = cfg.Rclone.VfsCachePollInterval
-		}
-		if cfg.Rclone.VfsReadChunkSize != "" {
-			vfsOpt["ChunkSize"] = cfg.Rclone.VfsReadChunkSize
-		}
-		if cfg.Rclone.VfsReadAhead != "" {
-			vfsOpt["ReadAhead"] = cfg.Rclone.VfsReadAhead
-		}
-
-		if cfg.Rclone.VfsCacheMinFreeSpace != "" {
-			vfsOpt["CacheMinFreeSpace"] = cfg.Rclone.VfsCacheMinFreeSpace
-		}
-
-		if cfg.Rclone.VfsFastFingerprint {
-			vfsOpt["FastFingerprint"] = cfg.Rclone.VfsFastFingerprint
-		}
-
-		if cfg.Rclone.VfsReadChunkStreams != 0 {
-			vfsOpt["ChunkStreams"] = cfg.Rclone.VfsReadChunkStreams
-		}
-
-		if cfg.Rclone.NoChecksum {
-			vfsOpt["NoChecksum"] = cfg.Rclone.NoChecksum
-		}
-		if cfg.Rclone.NoModTime {
-			vfsOpt["NoModTime"] = cfg.Rclone.NoModTime
-		}
-	}
-
-	// AddOrUpdate mount options based on configuration
-	if cfg.Rclone.UID != 0 {
-		vfsOpt["UID"] = cfg.Rclone.UID
-	}
-	if cfg.Rclone.GID != 0 {
-		vfsOpt["GID"] = cfg.Rclone.GID
-	}
-
-	if cfg.Rclone.Umask != "" {
-		umask, err := strconv.ParseInt(cfg.Rclone.Umask, 8, 32)
-		if err == nil {
-			vfsOpt["Umask"] = uint32(umask)
-		}
-	}
-
-	if cfg.Rclone.AttrTimeout != "" {
-		if attrTimeout, err := utils.ParseDuration(cfg.Rclone.AttrTimeout); err == nil {
-			mountOpt["AttrTimeout"] = attrTimeout.String()
-		}
-	}
-
-	mountArgs["vfsOpt"] = vfsOpt
-	mountArgs["mountOpt"] = mountOpt
 
 	if err := m.client.Mount(ctx, mountArgs); err != nil {
 		_ = m.forceUnmount(ctx)
@@ -201,7 +105,7 @@ func (m *Manager) unmount(ctx context.Context) {
 
 	// Try RC unmount first
 
-	err := m.client.Unmount(context.Background(), mountInfo.LocalPath)
+	err := m.client.Unmount(ctx, mountInfo.LocalPath)
 
 	// If RC unmount fails or server is not ready, try force unmount
 	if err != nil {
@@ -212,13 +116,26 @@ func (m *Manager) unmount(ctx context.Context) {
 		}
 	}
 
-	// Update mount info
-	mountInfo.Mounted = false
-	mountInfo.Error = ""
+	errMsg := ""
 	if err != nil {
-		mountInfo.Error = err.Error()
+		errMsg = err.Error()
 	}
+	m.markUnmounted(errMsg)
 	m.logger.Info().Msg("Unmount completed")
+}
+
+// markUnmounted publishes a copy of the mount info flagged unmounted. The
+// stored MountInfo is shared with concurrent readers (Stats, IsMounted), so it
+// is replaced, never mutated in place.
+func (m *Manager) markUnmounted(errMsg string) {
+	current := m.getMountInfo()
+	if current == nil {
+		return
+	}
+	next := *current
+	next.Mounted = false
+	next.Error = errMsg
+	m.info.Store(&next)
 }
 
 // createConfig creates an rclone config entry for the provider.
@@ -248,7 +165,7 @@ func (m *Manager) forceUnmount(ctx context.Context) error {
 		{"fusermount3", "-uz", mountPath},
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, forceUnmountTimeout)
 	defer cancel()
 
 	for _, method := range methods {
@@ -269,6 +186,90 @@ func (m *Manager) tryUnmountCommand(ctx context.Context, args ...string) error {
 		return fmt.Errorf("no command provided")
 	}
 
-	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+	cmd := exec.CommandContext(ctx, args[0], args[1:]...) //nolint:gosec // G204: fixed umount commands, no shell
 	return cmd.Run()
+}
+
+// mountOptions builds rclone's mountOpt from the config.
+func mountOptions(rc config.Rclone) map[string]any {
+	opt := map[string]any{
+		"AllowNonEmpty": true,
+		"AllowOther":    true,
+		"DebugFUSE":     false,
+		"DeviceName":    "decypharr",
+		"VolumeName":    "decypharr",
+	}
+	if rc.AsyncRead != nil {
+		opt["AsyncRead"] = *rc.AsyncRead
+	}
+	if rc.UseMmap {
+		opt["UseMmap"] = true
+	}
+	if rc.Transfers != 0 {
+		opt["Transfers"] = rc.Transfers
+	}
+	if rc.AttrTimeout != "" {
+		if attrTimeout, err := utils.ParseDuration(rc.AttrTimeout); err == nil {
+			opt["AttrTimeout"] = attrTimeout.String()
+		}
+	}
+	return opt
+}
+
+// vfsOptions builds rclone's vfsOpt from the config. Cache tuning applies
+// only when the VFS cache is on.
+func vfsOptions(rc config.Rclone) map[string]any {
+	opt := map[string]any{
+		"CacheMode":    rc.VfsCacheMode,
+		"DirCacheTime": rc.DirCacheTime,
+		"PollInterval": 0, // Poll interval not supported for webdav, set to 0
+	}
+	if rc.VfsCacheMode != "off" {
+		setIfNonEmpty(opt, map[string]string{
+			"CacheMaxAge":        rc.VfsCacheMaxAge,
+			"DiskSpaceTotalSize": rc.VfsDiskSpaceTotal,
+			"ChunkSizeLimit":     rc.VfsReadChunkSizeLimit,
+			"CacheMaxSize":       rc.VfsCacheMaxSize,
+			"CachePollInterval":  rc.VfsCachePollInterval,
+			"ChunkSize":          rc.VfsReadChunkSize,
+			"ReadAhead":          rc.VfsReadAhead,
+			"CacheMinFreeSpace":  rc.VfsCacheMinFreeSpace,
+		})
+		setIfTrue(opt, map[string]bool{
+			"FastFingerprint": rc.VfsFastFingerprint,
+			"NoChecksum":      rc.NoChecksum,
+			"NoModTime":       rc.NoModTime,
+		})
+		if rc.VfsReadChunkStreams != 0 {
+			opt["ChunkStreams"] = rc.VfsReadChunkStreams
+		}
+	}
+	if rc.UID != 0 {
+		opt["UID"] = rc.UID
+	}
+	if rc.GID != 0 {
+		opt["GID"] = rc.GID
+	}
+	if rc.Umask != "" {
+		if umask, err := strconv.ParseUint(rc.Umask, 8, 32); err == nil {
+			opt["Umask"] = uint32(umask)
+		}
+	}
+	return opt
+}
+
+func setIfNonEmpty(opt map[string]any, values map[string]string) {
+	for k, v := range values {
+		if v != "" {
+			opt[k] = v
+		}
+	}
+}
+
+func setIfTrue(opt map[string]any, values map[string]bool) {
+	for k, v := range values {
+		if v {
+			opt[k] = true
+		}
+	}
 }

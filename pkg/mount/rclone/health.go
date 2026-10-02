@@ -6,6 +6,9 @@ import (
 	"time"
 )
 
+// healthCheckInterval is how often the mount's health is probed.
+const healthCheckInterval = 30 * time.Second
+
 // RecoverMount attempts to recover a failed mount.
 func (m *Manager) RecoverMount(ctx context.Context) error {
 	mountInfo := m.getMountInfo()
@@ -16,15 +19,15 @@ func (m *Manager) RecoverMount(ctx context.Context) error {
 
 	m.logger.Warn().Msg("Attempting to recover mount")
 
-	// First try to unmount cleanly
-	m.unmount(ctx)
-
-	// Wait a moment
-	time.Sleep(1 * time.Second)
-
-	// Try to remount
-	if err := m.Start(context.Background()); err != nil {
-		return fmt.Errorf("failed to recover mount : %w", err)
+	// Drop rclone's registration of the dead mount (best effort), then mount
+	// again. This used to call Start, which returns immediately once the RC
+	// server is up — so "recovery" never remounted anything.
+	if err := m.client.Unmount(ctx, mountInfo.LocalPath); err != nil {
+		m.logger.Debug().Err(err).Msg("RC unmount before recovery failed")
+	}
+	m.markUnmounted("")
+	if err := m.mountWithRetry(ctx, mountRetries); err != nil {
+		return fmt.Errorf("failed to recover mount: %w", err)
 	}
 
 	m.logger.Info().Msg("Successfully recovered mount")
@@ -33,7 +36,7 @@ func (m *Manager) RecoverMount(ctx context.Context) error {
 
 // MonitorMounts continuously monitors mount health and attempts recovery.
 func (m *Manager) MonitorMounts(ctx context.Context) {
-	ticker := time.NewTicker(30 * time.Second) // Check every 30 seconds
+	ticker := time.NewTicker(healthCheckInterval)
 	defer ticker.Stop()
 
 	for {
@@ -52,19 +55,19 @@ func (m *Manager) performMountHealthCheck() {
 	if err := m.client.CheckMountHealth(context.Background(), FSName); err != nil {
 		m.logger.Warn().Err(err).Msg("Mount health check failed, attempting recovery")
 
-		// Mark mount as unhealthy
-		mountInfo := m.getMountInfo()
-		if mountInfo == nil {
+		if m.getMountInfo() == nil {
 			return
 		}
-		mountInfo.Error = "Health check failed"
-		mountInfo.Mounted = false
-		m.info.Store(mountInfo)
-
-		// Attempt recovery
+		// One recovery at a time: a remount with retries can outlast the
+		// next health tick.
+		if !m.recovering.CompareAndSwap(false, true) {
+			return
+		}
+		m.markUnmounted("Health check failed")
 		go func() {
+			defer m.recovering.Store(false)
 			if recoverMountErr := m.RecoverMount(m.ctx); recoverMountErr != nil {
-				m.logger.Error().Msg("Failed to recover mount")
+				m.logger.Error().Err(recoverMountErr).Msg("Failed to recover mount")
 			}
 		}()
 	}

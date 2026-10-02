@@ -55,6 +55,7 @@ func markCached(tb testing.TB, buf *buffer.Buffer, r ranges.Range) {
 // cache for themselves: no buffer, no downloaders, no metadata writer. Every
 // lifecycle call must tolerate that rather than dereference a nil buffer.
 func TestSelfCachingItemLifecycle(t *testing.T) {
+	t.Parallel()
 	item := &CacheItem{
 		cache: &Cache{config: &fuseconfig.FuseConfig{}, logger: zerolog.Nop()},
 		key:   "entry/file.mkv",

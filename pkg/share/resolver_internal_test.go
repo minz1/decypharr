@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-func TestResolverAnswersLongPathsFromCatalog(t *testing.T) {
+func TestResolverAnswersLongPathsFromCatalog(t *testing.T) { //nolint:paralleltest // mutates the config singleton
 	mgr := testManager(t)
 	// A release-style name pushes every file path well past the long-handle
 	// threshold.
@@ -35,12 +35,12 @@ func TestResolverAnswersLongPathsFromCatalog(t *testing.T) {
 		t.Fatalf("resolve dir = %q, %v", got, ok)
 	}
 
-	if _, ok := r.resolve(sha256.Sum256([]byte("/not/in/the/catalog"))); ok {
+	if _, found := r.resolve(sha256.Sum256([]byte("/not/in/the/catalog"))); found {
 		t.Fatal("resolved a path that does not exist")
 	}
 }
 
-func TestResolverRateLimitsRebuilds(t *testing.T) {
+func TestResolverRateLimitsRebuilds(t *testing.T) { //nolint:paralleltest // mutates the config singleton
 	mgr := testManager(t)
 	r := newResolver(mgr)
 

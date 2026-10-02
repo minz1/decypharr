@@ -41,7 +41,7 @@ func NewBackend(vfs *vfs.Manager, config *config.FuseConfig) (backend.Backend, e
 func (b *Backend) Mount(ctx context.Context) error {
 	// Create mount point if it doesn't exist (skip on Windows)
 	if runtime.GOOS != "windows" {
-		_ = os.MkdirAll(b.config.MountPath, 0755)
+		_ = os.MkdirAll(b.config.MountPath, 0o755) //nolint:gosec // G301: mountpoint is shared (allow_other)
 	}
 	if b.root == nil {
 		return fmt.Errorf("root node is not initialized")
@@ -114,7 +114,7 @@ func (b *Backend) Mount(ctx context.Context) error {
 }
 
 // Unmount unmounts the filesystem.
-func (b *Backend) Unmount(ctx context.Context) error {
+func (b *Backend) Unmount(_ context.Context) error {
 	b.logger.Info().Msg("Unmounting cgofuse backend")
 
 	if b.host != nil {
@@ -133,7 +133,7 @@ func (b *Backend) Unmount(ctx context.Context) error {
 }
 
 // WaitReady waits for the mount to be ready.
-func (b *Backend) WaitReady(ctx context.Context) error {
+func (b *Backend) WaitReady(_ context.Context) error {
 	// cgofuse doesn't have a direct ready signal
 	// We rely on the ready flag being set after successful mount
 	if b.ready.Load() {
@@ -152,5 +152,5 @@ func (b *Backend) Type() backend.Type {
 	return backend.Cgo
 }
 
-func (b *Backend) Refresh(name string) {
+func (b *Backend) Refresh(_ string) {
 }
