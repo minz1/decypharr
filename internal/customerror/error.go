@@ -12,6 +12,8 @@ import (
 
 const usenetArticleNotFoundCode = "usenet_article_not_found"
 
+// Error carries an HTTP status, a machine-readable code, and retry/log
+// metadata alongside the wrapped cause.
 type Error struct {
 	err            error
 	silent         bool
@@ -22,49 +24,7 @@ type Error struct {
 	permanent      bool // True if the error is permanent and should not be retried
 }
 
-func (e *Error) Error() string {
-	return e.err.Error()
-}
-
-func (e *Error) Unwrap() error {
-	return e.err
-}
-
-func (e *Error) Retryable() *Error {
-	e.retry = true
-	return e
-}
-
-func (e *Error) Permanent() *Error {
-	e.permanent = true
-	return e
-}
-
-func (e *Error) IsRetryable() bool {
-	return e.retry && !e.permanent
-}
-
-func (e *Error) IsPermanent() bool {
-	return e.permanent
-}
-
-func (e *Error) StatusCode() int {
-	if e.statusCode < http.StatusBadRequest {
-		return http.StatusInternalServerError
-	}
-	return e.statusCode
-}
-
-func (e *Error) IsSilent() bool {
-	if e.err == nil {
-		return false
-	}
-	if e.silent {
-		return true
-	}
-	return IsSilentError(e.err)
-}
-
+// NewError wraps err with the given status, code, and logging hints.
 func NewError(err error, statusCode int, code string, silent bool, headersWritten bool) *Error {
 	return &Error{
 		err:            err,
@@ -75,6 +35,7 @@ func NewError(err error, statusCode int, code string, silent bool, headersWritte
 	}
 }
 
+// NewSilentError wraps err as a 500 that should not be logged.
 func NewSilentError(err error) *Error {
 	return &Error{
 		err:        err,
@@ -83,6 +44,69 @@ func NewSilentError(err error) *Error {
 	}
 }
 
+// NewArticleNotFoundError marks err (or a default message) as a permanent
+// Usenet article-not-found failure.
+func NewArticleNotFoundError(err error) *Error {
+	if err == nil {
+		err = errors.New("article not found")
+	}
+	return (&Error{
+		err:        err,
+		statusCode: http.StatusNotFound,
+		Code:       usenetArticleNotFoundCode,
+	}).Permanent()
+}
+
+func (e *Error) Error() string {
+	return e.err.Error()
+}
+
+func (e *Error) Unwrap() error {
+	return e.err
+}
+
+// Retryable marks the error as safe to retry and returns it.
+func (e *Error) Retryable() *Error {
+	e.retry = true
+	return e
+}
+
+// Permanent marks the error as never retryable and returns it.
+func (e *Error) Permanent() *Error {
+	e.permanent = true
+	return e
+}
+
+// IsRetryable reports whether the error was marked retryable and not permanent.
+func (e *Error) IsRetryable() bool {
+	return e.retry && !e.permanent
+}
+
+// IsPermanent reports whether the error was marked permanent.
+func (e *Error) IsPermanent() bool {
+	return e.permanent
+}
+
+// StatusCode returns the HTTP status to send, defaulting to 500 for non-error codes.
+func (e *Error) StatusCode() int {
+	if e.statusCode < http.StatusBadRequest {
+		return http.StatusInternalServerError
+	}
+	return e.statusCode
+}
+
+// IsSilent reports whether the error should be kept out of the logs.
+func (e *Error) IsSilent() bool {
+	if e.err == nil {
+		return false
+	}
+	if e.silent {
+		return true
+	}
+	return IsSilentError(e.err)
+}
+
+// FromError returns the *Error in err's chain, or wraps err as a 500.
 func FromError(err error) *Error {
 	if customErr, ok := errors.AsType[*Error](err); ok {
 		return customErr
@@ -94,7 +118,12 @@ func FromError(err error) *Error {
 	}
 }
 
+// IsSilentError reports whether err is a client disconnect, cancellation, or
+// other expected condition that should not be logged.
 func IsSilentError(err error) bool {
+	if err == nil {
+		return false
+	}
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, context.Canceled) ||
 		errors.Is(err, context.DeadlineExceeded) ||
 		errors.Is(err, net.ErrClosed) ||
@@ -121,17 +150,6 @@ func IsSilentError(err error) bool {
 	}
 
 	return false
-}
-
-func NewArticleNotFoundError(err error) *Error {
-	if err == nil {
-		err = errors.New("article not found")
-	}
-	return (&Error{
-		err:        err,
-		statusCode: http.StatusNotFound,
-		Code:       usenetArticleNotFoundCode,
-	}).Permanent()
 }
 
 // IsArticleNotFoundError reports a confirmed permanent Usenet article failure.

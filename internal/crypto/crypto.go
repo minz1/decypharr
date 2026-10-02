@@ -24,6 +24,19 @@ const (
 	MaxKdfCount   = 24
 )
 
+const (
+	saltSize         = 16 // salt length in the encryption header
+	pwCheckFieldSize = 12 // stored check value: PwCheckSize bytes + 4-byte SHA-256 prefix
+	pwCheckSumSize   = pwCheckFieldSize - PwCheckSize
+	derivedKeyCount  = 3    // key, check key, password check
+	extraKeyRounds   = 16   // additional PBKDF2 rounds for the 2nd and 3rd value
+	vintValueMask    = 0x7F // low 7 bits of a vint byte
+	vintMoreFlag     = 0x80 // continuation bit of a vint byte
+	flagHasPwCheck   = 0x0001
+	// minHeaderSize is version + flags + kdfCount + salt.
+	minHeaderSize = 3 + saltSize
+)
+
 var (
 	ErrBadPassword    = errors.New("rar: incorrect password")
 	ErrInvalidKeySize = errors.New("rar: invalid key size")
@@ -62,8 +75,8 @@ func DeriveKeys(password, salt []byte, kdfCount int) *DerivedKeys {
 	iterations--
 
 	// Derive 3 keys with different iteration counts
-	keys := make([][]byte, 3)
-	iterCounts := []int{iterations, 16, 16}
+	keys := make([][]byte, derivedKeyCount)
+	iterCounts := []int{iterations, extraKeyRounds, extraKeyRounds}
 
 	for i, iter := range iterCounts {
 		for iter > 0 {
@@ -87,11 +100,10 @@ func DeriveKeys(password, salt []byte, kdfCount int) *DerivedKeys {
 	for i, v := range pwcheck[PwCheckSize:] {
 		pwcheck[i&(PwCheckSize-1)] ^= v
 	}
-	pwcheck = pwcheck[:PwCheckSize]
-
-	// Add SHA256 checksum (first 4 bytes)
-	sum := sha256.Sum256(pwcheck)
-	pwcheck = append(pwcheck, sum[:4]...)
+	// Add SHA256 checksum (first 4 bytes) of the folded value.
+	sum := sha256.Sum256(pwcheck[:PwCheckSize])
+	copy(pwcheck[PwCheckSize:], sum[:pwCheckSumSize])
+	pwcheck = pwcheck[:pwCheckFieldSize]
 
 	return &DerivedKeys{
 		Key:      keys[0],
@@ -160,22 +172,22 @@ type EncryptionHeader struct {
 // ParseEncryptionHeader parses a RAR5 encryption header.
 // Format: version (vint) + flags (vint) + kdfCount (1 byte) + salt (16 bytes) + [pwCheck (12 bytes)].
 func ParseEncryptionHeader(data []byte) (*EncryptionHeader, error) {
-	if len(data) < 18 { // Minimum: version + flags + kdfCount + salt
+	if len(data) < minHeaderSize {
 		return nil, ErrInvalidData
 	}
 
 	// Read version (should be 0)
-	version := int(data[0] & 0x7F)
+	version := int(data[0] & vintValueMask)
 	pos := 1
-	if data[0]&0x80 != 0 {
+	if data[0]&vintMoreFlag != 0 {
 		// Multi-byte vint, but version should be 0
 		return nil, ErrInvalidData
 	}
 
 	// Read flags
-	flags := int(data[pos] & 0x7F)
+	flags := int(data[pos] & vintValueMask)
 	pos++
-	if data[pos-1]&0x80 != 0 {
+	if data[pos-1]&vintMoreFlag != 0 {
 		return nil, ErrInvalidData
 	}
 
@@ -185,14 +197,19 @@ func ParseEncryptionHeader(data []byte) (*EncryptionHeader, error) {
 	}
 	kdfCount := int(data[pos])
 	pos++
-
-	// Read salt (16 bytes)
-	if pos+16 > len(data) {
+	// The count comes from the archive: reject values unrar also rejects, or
+	// DeriveKeys would spin through up to 2^255 PBKDF2 rounds.
+	if kdfCount > MaxKdfCount {
 		return nil, ErrInvalidData
 	}
-	salt := make([]byte, 16)
-	copy(salt, data[pos:pos+16])
-	pos += 16
+
+	// Read salt (16 bytes)
+	if pos+saltSize > len(data) {
+		return nil, ErrInvalidData
+	}
+	salt := make([]byte, saltSize)
+	copy(salt, data[pos:pos+saltSize])
+	pos += saltSize
 
 	header := &EncryptionHeader{
 		Version:  version,
@@ -201,12 +218,12 @@ func ParseEncryptionHeader(data []byte) (*EncryptionHeader, error) {
 	}
 
 	// Read password check if present (flag 0x0001)
-	if flags&0x0001 != 0 {
-		if pos+12 > len(data) {
+	if flags&flagHasPwCheck != 0 {
+		if pos+pwCheckFieldSize > len(data) {
 			return nil, ErrInvalidData
 		}
-		header.PwCheck = make([]byte, 12)
-		copy(header.PwCheck, data[pos:pos+12])
+		header.PwCheck = make([]byte, pwCheckFieldSize)
+		copy(header.PwCheck, data[pos:pos+pwCheckFieldSize])
 		header.HasPwCheck = true
 	}
 

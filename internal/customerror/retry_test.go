@@ -11,6 +11,7 @@ import (
 )
 
 func TestRetryClassificationUsesWrappedMetadata(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name             string
 		err              error
@@ -25,6 +26,7 @@ func TestRetryClassificationUsesWrappedMetadata(t *testing.T) {
 		{"plain timeout", errors.New("i/o timeout"), true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			for _, err := range []error{tc.err, fmt.Errorf("fetch: %w", tc.err), errors.Join(errors.New("context"), tc.err)} {
 				if got := customerror.IsRetriableError(err); got != tc.retry {
 					t.Errorf("IsRetriableError(%v) = %v, want %v", err, got, tc.retry)

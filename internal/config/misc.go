@@ -16,10 +16,9 @@ var (
 	ErrFileExtNotAllowed = errors.New("file extension not allowed")
 )
 
-var (
-	sampleMatch = `(?i)(^|[\s/\\])(sample|trailer|thumb|special|extras?)s?[-/]|(\((sample|trailer|thumb|special|extras?)s?\))|(-\s*(sample|trailer|thumb|special|extras?)s?)`
-	sampleRegex = regexp.MustCompile(sampleMatch)
-)
+const sampleMatch = `(?i)(^|[\s/\\])(sample|trailer|thumb|special|extras?)s?[-/]|(\((sample|trailer|thumb|special|extras?)s?\))|(-\s*(sample|trailer|thumb|special|extras?)s?)`
+
+var sampleRegex = regexp.MustCompile(sampleMatch)
 
 func isSample(path string) bool {
 	filename := filepath.Base(path)
@@ -86,7 +85,7 @@ func getDefaultExtensions() []string {
 	)
 
 	// Combine both slices
-	allExts := append(videoExts, musicExts...)
+	allExts := slices.Concat(videoExts, musicExts)
 
 	// Convert to lowercase
 	for i, ext := range allExts {
@@ -108,46 +107,38 @@ func getDefaultExtensions() []string {
 	return unique
 }
 
+// Binary size units accepted by ParseSize.
+const (
+	kib = 1 << 10
+	mib = 1 << 20
+	gib = 1 << 30
+	tib = 1 << 40
+	pib = 1 << 50
+)
+
+// ParseSize parses sizes such as "512MB", "1.5G" or "100" (bytes) using
+// binary units.
 func ParseSize(sizeStr string) (int64, error) {
 	sizeStr = strings.ToUpper(strings.TrimSpace(sizeStr))
 
 	// Absolute size-based cache. Order matters: two-letter units must be
 	// checked before single-letter units, and single-letter before bare "B".
 	// ParseFloat below means decimal values (e.g. "2.2T", "1.5G") work too.
+	units := []struct {
+		suffix     string
+		multiplier float64
+	}{
+		{"PB", pib}, {"TB", tib}, {"GB", gib}, {"MB", mib}, {"KB", kib},
+		{"P", pib}, {"T", tib}, {"G", gib}, {"M", mib}, {"K", kib},
+		{"B", 1},
+	}
 	multiplier := 1.0
-	switch {
-	case strings.HasSuffix(sizeStr, "PB"):
-		multiplier = 1024 * 1024 * 1024 * 1024 * 1024
-		sizeStr = strings.TrimSuffix(sizeStr, "PB")
-	case strings.HasSuffix(sizeStr, "TB"):
-		multiplier = 1024 * 1024 * 1024 * 1024
-		sizeStr = strings.TrimSuffix(sizeStr, "TB")
-	case strings.HasSuffix(sizeStr, "GB"):
-		multiplier = 1024 * 1024 * 1024
-		sizeStr = strings.TrimSuffix(sizeStr, "GB")
-	case strings.HasSuffix(sizeStr, "MB"):
-		multiplier = 1024 * 1024
-		sizeStr = strings.TrimSuffix(sizeStr, "MB")
-	case strings.HasSuffix(sizeStr, "KB"):
-		multiplier = 1024
-		sizeStr = strings.TrimSuffix(sizeStr, "KB")
-	case strings.HasSuffix(sizeStr, "P"):
-		multiplier = 1024 * 1024 * 1024 * 1024 * 1024
-		sizeStr = strings.TrimSuffix(sizeStr, "P")
-	case strings.HasSuffix(sizeStr, "T"):
-		multiplier = 1024 * 1024 * 1024 * 1024
-		sizeStr = strings.TrimSuffix(sizeStr, "T")
-	case strings.HasSuffix(sizeStr, "G"):
-		multiplier = 1024 * 1024 * 1024
-		sizeStr = strings.TrimSuffix(sizeStr, "G")
-	case strings.HasSuffix(sizeStr, "M"):
-		multiplier = 1024 * 1024
-		sizeStr = strings.TrimSuffix(sizeStr, "M")
-	case strings.HasSuffix(sizeStr, "K"):
-		multiplier = 1024
-		sizeStr = strings.TrimSuffix(sizeStr, "K")
-	case strings.HasSuffix(sizeStr, "B"):
-		sizeStr = strings.TrimSuffix(sizeStr, "B")
+	for _, unit := range units {
+		if strings.HasSuffix(sizeStr, unit.suffix) {
+			multiplier = unit.multiplier
+			sizeStr = strings.TrimSuffix(sizeStr, unit.suffix)
+			break
+		}
 	}
 
 	size, err := strconv.ParseFloat(strings.TrimSpace(sizeStr), 64)

@@ -9,47 +9,6 @@ import (
 	"syscall"
 )
 
-// These catch errors that aren't exported as typed errors.
-var retriableErrorStrings = []string{
-	"use of closed network connection",
-	"unexpected EOF",
-	"connection reset by peer",
-	"connection refused",
-	"broken pipe",
-	"i/o timeout",
-	"TLS handshake timeout",
-	"no such host",
-	"server misbehaving",
-	"connection timed out",
-	"network is unreachable",
-	"no route to host",
-	"transport connection broken",
-	"http2: client connection lost",
-	"http2: server sent GOAWAY",
-	"http2: timeout awaiting",
-	"stream error:",
-	"bad record MAC",
-	"server closed idle connection",
-	"client connection force closed",
-	"context deadline exceeded",
-}
-
-var permanentErrorStrings = []string{
-	"404",
-	"not found",
-	"403",
-	"forbidden",
-	"401",
-	"unauthorized",
-	"402",
-	"payment required",
-	"410",
-	"gone",
-	"invalid api key",
-	"file not exist",
-	"no such file",
-}
-
 // IsRetriableError returns true if the error is likely transient and should be retried.
 func IsRetriableError(err error) bool {
 	if err == nil {
@@ -100,6 +59,30 @@ func IsRetriableError(err error) bool {
 		return true
 	}
 
+	// These catch errors that aren't exported as typed errors.
+	retriableErrorStrings := []string{
+		"use of closed network connection",
+		"unexpected EOF",
+		"connection reset by peer",
+		"connection refused",
+		"broken pipe",
+		"i/o timeout",
+		"TLS handshake timeout",
+		"no such host",
+		"server misbehaving",
+		"connection timed out",
+		"network is unreachable",
+		"no route to host",
+		"transport connection broken",
+		"http2: client connection lost",
+		"http2: server sent GOAWAY",
+		"http2: timeout awaiting",
+		"stream error:",
+		"bad record MAC",
+		"server closed idle connection",
+		"client connection force closed",
+		"context deadline exceeded",
+	}
 	errStr := strings.ToLower(err.Error())
 	for _, pattern := range retriableErrorStrings {
 		if strings.Contains(errStr, strings.ToLower(pattern)) {
@@ -135,6 +118,21 @@ func IsPermanentError(err error) bool {
 		return !r.IsRetryable()
 	}
 
+	permanentErrorStrings := []string{
+		"404",
+		"not found",
+		"403",
+		"forbidden",
+		"401",
+		"unauthorized",
+		"402",
+		"payment required",
+		"410",
+		"gone",
+		"invalid api key",
+		"file not exist",
+		"no such file",
+	}
 	errStr := strings.ToLower(err.Error())
 	for _, pattern := range permanentErrorStrings {
 		if strings.Contains(errStr, pattern) {

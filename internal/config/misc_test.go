@@ -1,10 +1,13 @@
-package config
+package config_test
 
 import (
 	"testing"
+
+	"github.com/sirrobot01/decypharr/internal/config"
 )
 
 func TestParseSize(t *testing.T) {
+	t.Parallel()
 	const (
 		_K = 1024
 		_M = 1024 * _K
@@ -52,7 +55,8 @@ func TestParseSize(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.input, func(t *testing.T) {
-			got, err := ParseSize(tc.input)
+			t.Parallel()
+			got, err := config.ParseSize(tc.input)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("ParseSize(%q) = %d, want error", tc.input, got)

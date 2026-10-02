@@ -20,6 +20,8 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/version"
 )
 
+// Start runs decypharr until ctx is cancelled or a service fails, rebuilding
+// every service (with a fresh config) each time a restart is requested.
 func Start(ctx context.Context) error {
 	if umaskStr := os.Getenv("UMASK"); umaskStr != "" {
 		umask, err := strconv.ParseInt(umaskStr, 8, 32)
@@ -30,25 +32,28 @@ func Start(ctx context.Context) error {
 	}
 
 	restartCh := make(chan struct{}, 1)
-	restartFunc := func() {
-		select {
-		case restartCh <- struct{}{}:
-		default:
+	mgr := manager.New()
+	for {
+		restart, err := runOnce(ctx, mgr, restartCh)
+		if !restart {
+			return err
 		}
 	}
+}
 
-	mgr := manager.New()
-
+// runOnce starts all services under a fresh child of ctx and waits. It
+// reports restart=true after a requested restart has torn the services down
+// and reset the config and manager; otherwise the process should exit with
+// the returned error.
+func runOnce(ctx context.Context, mgr *manager.Manager, restartCh chan struct{}) (bool, error) {
 	svcCtx, cancelSvc := context.WithCancel(ctx)
 	defer cancelSvc()
 
-	// Create the logger path if it doesn't exist
-	for {
-		cfg := config.Get()
-		_log := logger.Default()
+	cfg := config.Get()
+	_log := logger.Default()
 
-		// ascii banner
-		fmt.Printf(`
+	// ascii banner
+	fmt.Fprintf(os.Stdout, `
 +-------------------------------------------------------+
 |                                                       |
 |  ╔╦╗╔═╗╔═╗╦ ╦╔═╗╦ ╦╔═╗╦═╗╦═╗                          |
@@ -60,62 +65,60 @@ func Start(ctx context.Context) error {
 +-------------------------------------------------------+
 `, version.GetInfo(), cfg.LogLevel)
 
-		// Initialize services
-		mountMgr := createMountManager(mgr, cfg)
-		mgr.SetMountManager(mountMgr)
-		srv := server.New(mgr)
-
-		srv.SetRestartFunc(restartFunc)
-
-		resetFunc := func() {
-			config.Reset()
-			// Stop manager to reset ready channel and cleanup resources
-			if err := mgr.Reset(); err != nil {
-				_log.Warn().Err(err).Msg("Failed to reset manager")
-			}
-			// refresh GC
-			runtime.GC()
-		}
-
-		shutdownFunc := func() {
-			config.Reset()
-			// Stop manager to cleanup all resources including mounts
-			if err := mgr.Stop(); err != nil {
-				_log.Warn().Err(err).Msg("Failed to stop manager during shutdown")
-			}
-			// refresh GC
-			runtime.GC()
-		}
-
-		serviceResult := make(chan error, 1)
-		go func(ctx context.Context) {
-			serviceResult <- startServices(ctx, mgr, cancelSvc, srv)
-		}(svcCtx)
-
+	// Initialize services
+	mgr.SetMountManager(createMountManager(mgr, cfg))
+	srv := server.New(mgr)
+	srv.SetRestartFunc(func() {
 		select {
-		case <-ctx.Done():
-			cancelSvc()
-			<-serviceResult
-			_log.Info().Msg("Decypharr has been stopped gracefully.")
-			shutdownFunc()
-			return nil
-
-		case <-restartCh:
-			cancelSvc()
-			_log.Info().Msg("Restarting Decypharr...")
-			<-serviceResult
-			_log.Info().Msg("Decypharr has been restarted.")
-			resetFunc()
-			svcCtx, cancelSvc = context.WithCancel(ctx)
-
-		case err := <-serviceResult:
-			cancelSvc()
-			if err != nil {
-				_log.Error().Err(err).Msg("Service stopped unexpectedly")
-			}
-			shutdownFunc()
-			return err
+		case restartCh <- struct{}{}:
+		default:
 		}
+	})
+
+	shutdown := func() {
+		config.Reset()
+		// Stop manager to cleanup all resources including mounts
+		if err := mgr.Stop(); err != nil {
+			_log.Warn().Err(err).Msg("Failed to stop manager during shutdown")
+		}
+		// refresh GC
+		runtime.GC()
+	}
+
+	serviceResult := make(chan error, 1)
+	go func() {
+		serviceResult <- startServices(svcCtx, mgr, cancelSvc, srv)
+	}()
+
+	select {
+	case <-ctx.Done():
+		cancelSvc()
+		<-serviceResult
+		_log.Info().Msg("Decypharr has been stopped gracefully.")
+		shutdown()
+		return false, nil
+
+	case <-restartCh:
+		cancelSvc()
+		_log.Info().Msg("Restarting Decypharr...")
+		<-serviceResult
+		_log.Info().Msg("Decypharr has been restarted.")
+		config.Reset()
+		// Stop manager to reset ready channel and cleanup resources
+		if err := mgr.Reset(); err != nil {
+			_log.Warn().Err(err).Msg("Failed to reset manager")
+		}
+		// refresh GC
+		runtime.GC()
+		return true, nil
+
+	case err := <-serviceResult:
+		cancelSvc()
+		if err != nil {
+			_log.Error().Err(err).Msg("Service stopped unexpectedly")
+		}
+		shutdown()
+		return false, err
 	}
 }
 
@@ -127,7 +130,9 @@ func createMountManager(mgr *manager.Manager, cfg *config.Config) manager.MountM
 		return dfs.NewManager(mgr)
 	case config.MountTypeExternalRclone:
 		return external.NewManager(mgr)
-	default:
+	case config.MountTypeNone:
+		return manager.NewStubMountManager()
+	default: // unset
 		return manager.NewStubMountManager()
 	}
 }
@@ -139,7 +144,16 @@ func startServices(
 	srv *server.Server,
 ) error {
 	var wg sync.WaitGroup
-	errChan := make(chan error, 3)
+	// Only the first error is ever received. Sends never block, so a service
+	// that fails after that (or during shutdown, when nobody receives) cannot
+	// wedge wg.Wait — with NFS and SMB there are four senders.
+	errChan := make(chan error, 1)
+	report := func(err error) {
+		select {
+		case errChan <- err:
+		default:
+		}
+	}
 
 	_log := logger.Default()
 
@@ -154,12 +168,12 @@ func startServices(
 						Msg("Recovered from panic in goroutine")
 
 					// Send error to channel so the main goroutine is aware
-					errChan <- fmt.Errorf("panic: %v", r)
+					report(fmt.Errorf("panic: %v", r))
 				}
 			}()
 
 			if err := f(); err != nil {
-				errChan <- err
+				report(err)
 			}
 		})
 	}

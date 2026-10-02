@@ -2,7 +2,6 @@ package config
 
 import (
 	"fmt"
-	"strconv"
 	"time"
 )
 
@@ -146,15 +145,24 @@ func (d DFS) DiskCacheSizeBytes() int64 {
 	return n
 }
 
+// defaultBufferMemory is the streaming-buffer RAM cap used when unset.
+const defaultBufferMemory = 512 * mib
+
 // BufferMemoryBytes resolves the DFS streaming-buffer RAM cap. Empty -> 512MB
 // default; "0" -> disabled (0).
 func (d DFS) BufferMemoryBytes() int64 {
-	if d.BufferMemory == "" {
-		return 512 << 20
+	return bufferMemoryBytes(d.BufferMemory)
+}
+
+// bufferMemoryBytes parses a buffer_memory setting, falling back to
+// defaultBufferMemory when it is empty or invalid.
+func bufferMemoryBytes(value string) int64 {
+	if value == "" {
+		return defaultBufferMemory
 	}
-	n, err := ParseSize(d.BufferMemory)
+	n, err := ParseSize(value)
 	if err != nil {
-		return 512 << 20
+		return defaultBufferMemory
 	}
 	return n
 }
@@ -176,67 +184,23 @@ type Mount struct {
 
 func (c *Config) applyMountEnvVars() {
 	// DFS settings
-	if val := getEnv("MOUNT__DFS__CACHE_DIR"); val != "" {
-		c.Mount.DFS.CacheDir = val
-	}
-	if val := getEnv("MOUNT__DFS__CHUNK_SIZE"); val != "" {
-		c.Mount.DFS.ChunkSize = val
-	}
-	if val := getEnv("MOUNT__DFS__READ_AHEAD_SIZE"); val != "" {
-		c.Mount.DFS.ReadAheadSize = val
-	}
-	if val := getEnv("MOUNT__DFS__CACHE_EXPIRY"); val != "" {
-		c.Mount.DFS.CacheExpiry = val
-	}
-	if val := getEnv("MOUNT__DFS__DISK_CACHE_SIZE"); val != "" {
-		c.Mount.DFS.DiskCacheSize = val
-	}
-	if val := getEnv("MOUNT__DFS__DISABLE_CACHE"); val != "" {
-		c.Mount.DFS.DisableCache = parseBool(val)
-	}
-	if val := getEnv("MOUNT__DFS__CACHE_CLEANUP_INTERVAL"); val != "" {
-		c.Mount.DFS.CacheCleanupInterval = val
-	}
-	if val := getEnv("MOUNT__DFS__DAEMON_TIMEOUT"); val != "" {
-		c.Mount.DFS.DaemonTimeout = val
-	}
-	if val := getEnv("MOUNT__DFS__FUSE_MAX_BACKGROUND"); val != "" {
-		if v, err := strconv.Atoi(val); err == nil {
-			c.Mount.DFS.FuseMaxBackground = v
-		}
-	}
-	if val := getEnv("MOUNT__DFS__FUSE_MAX_READ_AHEAD"); val != "" {
-		c.Mount.DFS.FuseMaxReadAhead = val
-	}
-	if val := getEnv("MOUNT__DFS__UID"); val != "" {
-		if v, err := strconv.ParseUint(val, 10, 32); err == nil {
-			c.Mount.DFS.UID = uint32(v)
-		}
-	}
-	if val := getEnv("MOUNT__DFS__GID"); val != "" {
-		if v, err := strconv.ParseUint(val, 10, 32); err == nil {
-			c.Mount.DFS.GID = uint32(v)
-		}
-	}
-	if val := getEnv("MOUNT__DFS__UMASK"); val != "" {
-		c.Mount.DFS.Umask = val
-	}
+	envString("MOUNT__DFS__CACHE_DIR", &c.Mount.DFS.CacheDir)
+	envString("MOUNT__DFS__CHUNK_SIZE", &c.Mount.DFS.ChunkSize)
+	envString("MOUNT__DFS__READ_AHEAD_SIZE", &c.Mount.DFS.ReadAheadSize)
+	envString("MOUNT__DFS__CACHE_EXPIRY", &c.Mount.DFS.CacheExpiry)
+	envString("MOUNT__DFS__DISK_CACHE_SIZE", &c.Mount.DFS.DiskCacheSize)
+	envBool("MOUNT__DFS__DISABLE_CACHE", &c.Mount.DFS.DisableCache)
+	envString("MOUNT__DFS__CACHE_CLEANUP_INTERVAL", &c.Mount.DFS.CacheCleanupInterval)
+	envString("MOUNT__DFS__DAEMON_TIMEOUT", &c.Mount.DFS.DaemonTimeout)
+	envInt("MOUNT__DFS__FUSE_MAX_BACKGROUND", &c.Mount.DFS.FuseMaxBackground)
+	envString("MOUNT__DFS__FUSE_MAX_READ_AHEAD", &c.Mount.DFS.FuseMaxReadAhead)
+	envUint32("MOUNT__DFS__UID", &c.Mount.DFS.UID)
+	envUint32("MOUNT__DFS__GID", &c.Mount.DFS.GID)
+	envString("MOUNT__DFS__UMASK", &c.Mount.DFS.Umask)
 	// Rclone settings
-	if val := getEnv("RCLONE__RC_PORT"); val != "" {
-		c.Mount.Rclone.Port = val
-	}
-	if val := getEnv("RCLONE__LOG_LEVEL"); val != "" {
-		c.Mount.Rclone.LogLevel = val
-	}
-	if val := getEnv("RCLONE__VFS_CACHE_MODE"); val != "" {
-		c.Mount.Rclone.VfsCacheMode = val
-	}
-	if val := getEnv("RCLONE__CACHE_DIR"); val != "" {
-		c.Mount.Rclone.CacheDir = val
-	}
-	if val := getEnv("RCLONE__TRANSFERS"); val != "" {
-		if v, err := strconv.Atoi(val); err == nil {
-			c.Mount.Rclone.Transfers = v
-		}
-	}
+	envString("RCLONE__RC_PORT", &c.Mount.Rclone.Port)
+	envString("RCLONE__LOG_LEVEL", &c.Mount.Rclone.LogLevel)
+	envString("RCLONE__VFS_CACHE_MODE", &c.Mount.Rclone.VfsCacheMode)
+	envString("RCLONE__CACHE_DIR", &c.Mount.Rclone.CacheDir)
+	envInt("RCLONE__TRANSFERS", &c.Mount.Rclone.Transfers)
 }
