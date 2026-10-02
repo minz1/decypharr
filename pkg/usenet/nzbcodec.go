@@ -29,7 +29,7 @@ import (
 // []NZBSegment backing array (each file takes a sub-slice, no per-file copy),
 // whose Group strings are interned (one allocation per unique group), and whose
 // MessageID strings alias the single decompressed msgIDs buffer via
-// unsafe.String (one allocation for all ids instead of one per segment).
+// [unsafe.String] (one allocation for all ids instead of one per segment).
 const codecMagicV2 = 0xB1
 
 // errFileNotFound reports that an NZB has no live file with the given name.
@@ -125,8 +125,9 @@ func (r *byteReader) count() (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if n > uint64(len(r.buf)-r.pos) {
-		return 0, fmt.Errorf("nzbcodec: count %d exceeds %d remaining bytes at %d", n, len(r.buf)-r.pos, r.pos)
+	remaining := len(r.buf) - r.pos
+	if remaining < 0 || n > math.MaxInt32 || int(n) > remaining {
+		return 0, fmt.Errorf("nzbcodec: count %d exceeds %d remaining bytes at %d", n, remaining, r.pos)
 	}
 	return int(n), nil
 }
@@ -365,19 +366,20 @@ func isCodecV2(data []byte) bool {
 }
 
 // splitRegions returns the three compressed regions of a v2 blob.
-func splitRegions(data []byte) (hc, sc, mc []byte, err error) {
+func splitRegions(data []byte) ([]byte, []byte, []byte, error) {
 	if !isCodecV2(data) {
 		return nil, nil, nil, fmt.Errorf("nzbcodec: not a v2 blob")
 	}
 	r := &byteReader{buf: data, pos: 1}
-	if hc, err = r.span(); err != nil {
+	hc, err := r.span()
+	if err != nil {
 		return nil, nil, nil, fmt.Errorf("nzbcodec: header region: %w", err)
 	}
-	if sc, err = r.span(); err != nil {
+	sc, err := r.span()
+	if err != nil {
 		return nil, nil, nil, fmt.Errorf("nzbcodec: seg region: %w", err)
 	}
-	mc = data[r.pos:]
-	return hc, sc, mc, nil
+	return hc, sc, data[r.pos:], nil
 }
 
 // decodeNZBV2Header decodes only the NZB scalars and per-file metadata. The
@@ -432,14 +434,9 @@ func decodeHeader(buf []byte) (*storage.NZB, []int, error) {
 	nzb := &storage.NZB{}
 
 	var err error
-	get := func(dst *string, alias bool) bool {
+	get := func(dst *string) bool {
 		var s string
-		if alias {
-			s, err = r.strAlias()
-		} else {
-			s, err = r.strCopy()
-		}
-		if err != nil {
+		if s, err = r.strCopy(); err != nil {
 			return false
 		}
 		*dst = s
@@ -448,7 +445,7 @@ func decodeHeader(buf []byte) (*storage.NZB, []int, error) {
 
 	// Header strings are long-lived and few; copy them so the (small) header
 	// buffer can be freed.
-	if !get(&nzb.ID, false) || !get(&nzb.Name, false) || !get(&nzb.Title, false) || !get(&nzb.Path, false) {
+	if !get(&nzb.ID) || !get(&nzb.Name) || !get(&nzb.Title) || !get(&nzb.Path) {
 		return nil, nil, err
 	}
 	if nzb.TotalSize, err = r.varint(); err != nil {
@@ -457,7 +454,7 @@ func decodeHeader(buf []byte) (*storage.NZB, []int, error) {
 	if nzb.DatePosted, err = readTime(r); err != nil {
 		return nil, nil, err
 	}
-	if !get(&nzb.Category, false) {
+	if !get(&nzb.Category) {
 		return nil, nil, err
 	}
 	if nzb.Groups, err = readStrings(r); err != nil {
@@ -472,7 +469,7 @@ func decodeHeader(buf []byte) (*storage.NZB, []int, error) {
 	if nzb.LastActivity, err = readTime(r); err != nil {
 		return nil, nil, err
 	}
-	if !get(&nzb.Status, false) {
+	if !get(&nzb.Status) {
 		return nil, nil, err
 	}
 	if nzb.Progress, err = r.f64(); err != nil {
@@ -496,7 +493,7 @@ func decodeHeader(buf []byte) (*storage.NZB, []int, error) {
 	if nzb.IsBad, err = r.boolean(); err != nil {
 		return nil, nil, err
 	}
-	if !get(&nzb.Storage, false) || !get(&nzb.FailMessage, false) || !get(&nzb.Password, false) {
+	if !get(&nzb.Storage) || !get(&nzb.FailMessage) || !get(&nzb.Password) {
 		return nil, nil, err
 	}
 
@@ -510,7 +507,7 @@ func decodeHeader(buf []byte) (*storage.NZB, []int, error) {
 		f := &nzb.Files[i]
 		f.NzbID = nzb.ID
 		var ft string
-		if !get(&f.Name, false) || !get(&f.InternalPath, false) {
+		if !get(&f.Name) || !get(&f.InternalPath) {
 			return nil, nil, err
 		}
 		if f.Size, err = r.varint(); err != nil {
@@ -522,11 +519,11 @@ func decodeHeader(buf []byte) (*storage.NZB, []int, error) {
 		if f.Groups, err = readStrings(r); err != nil {
 			return nil, nil, err
 		}
-		if !get(&ft, false) {
+		if !get(&ft) {
 			return nil, nil, err
 		}
 		f.FileType = storage.NZBFileType(ft)
-		if !get(&f.Password, false) {
+		if !get(&f.Password) {
 			return nil, nil, err
 		}
 		if f.IsDeleted, err = r.boolean(); err != nil {

@@ -13,7 +13,7 @@ import (
 func TestReadAtSurfacesReaderCreationError(t *testing.T) {
 	t.Parallel()
 	file := &File{
-		readerSettings: readerSettings{logger: zerolog.Nop()},
+		logger: zerolog.Nop(),
 		volume: &types.Volume{
 			Name:     "movie.mkv",
 			Size:     10,

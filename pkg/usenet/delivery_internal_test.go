@@ -9,6 +9,7 @@ import (
 
 type idleReleaseReader struct {
 	usenetfs.PrefetchableReaderAt
+
 	releases atomic.Int64
 }
 

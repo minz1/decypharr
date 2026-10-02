@@ -68,8 +68,8 @@ func NewNZBStorage() (*NZBStorage, error) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.recalculateStatsLocked(); err != nil {
-		return nil, fmt.Errorf("failed to initialize NZB stats cache: %w", err)
+	if statsErr := s.recalculateStatsLocked(); statsErr != nil {
+		return nil, fmt.Errorf("failed to initialize NZB stats cache: %w", statsErr)
 	}
 
 	return s, nil
@@ -492,8 +492,17 @@ func (s *NZBStorage) MigrateLegacy() (int, error) {
 // read/decode/encode runs lock-free; the storage lock is held only for the
 // final re-check + atomic rename so a concurrent AddNZB can't be clobbered
 // (AddNZB always writes v2, so a file that became v2 meanwhile is skipped).
+// File operations go through an [os.Root] so a directory entry name can never
+// address anything outside the meta directory.
 func (s *NZBStorage) migrateFile(path string) (bool, error) {
-	data, err := os.ReadFile(path)
+	root, err := os.OpenRoot(s.metaDir)
+	if err != nil {
+		return false, fmt.Errorf("open meta dir: %w", err)
+	}
+	defer root.Close()
+	name := filepath.Base(path)
+
+	data, err := root.ReadFile(name)
 	if err != nil {
 		return false, fmt.Errorf("read: %w", err)
 	}
@@ -508,8 +517,8 @@ func (s *NZBStorage) migrateFile(path string) (bool, error) {
 	out := s.codec.encodeNZBV2(nzb)
 
 	// Unique temp name so it can't collide with AddNZB's "<path>.tmp".
-	tmpPath := path + ".v2tmp"
-	if writeFileErr := os.WriteFile(tmpPath, out, 0o600); writeFileErr != nil {
+	tmpName := name + ".v2tmp"
+	if writeFileErr := root.WriteFile(tmpName, out, 0o600); writeFileErr != nil {
 		return false, fmt.Errorf("write temp: %w", writeFileErr)
 	}
 
@@ -518,11 +527,11 @@ func (s *NZBStorage) migrateFile(path string) (bool, error) {
 	// If AddNZB rewrote this file as v2 while we were encoding, its content is
 	// newer — don't overwrite it with our re-encoded older copy.
 	if cur, cerr := fileIsCodecV2(path); cerr == nil && cur {
-		_ = os.Remove(tmpPath)
+		_ = root.Remove(tmpName)
 		return false, nil
 	}
-	if renameErr := os.Rename(tmpPath, path); renameErr != nil {
-		_ = os.Remove(tmpPath)
+	if renameErr := root.Rename(tmpName, name); renameErr != nil {
+		_ = root.Remove(tmpName)
 		return false, fmt.Errorf("rename: %w", renameErr)
 	}
 	return true, nil
