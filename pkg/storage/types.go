@@ -208,7 +208,7 @@ type File struct {
 
 // ProviderFile represents debrid-specific file information.
 type ProviderFile struct {
-	Id   string `msgpack:"id,omitempty"   json:"id,omitempty"`   //nolint:revive,staticcheck // For TorBox-style providers (file_id); renaming breaks pkg/manager/link and pkg/debrid callers.
+	Id   string `msgpack:"id,omitempty"   json:"id,omitempty"`   // For TorBox-style providers (file_id)
 	Link string `msgpack:"link,omitempty" json:"link,omitempty"` // For RealDebrid/AllDebrid-style providers (restricted URL)
 	Path string `msgpack:"path,omitempty" json:"path,omitempty"` // Path within the debrid's filesystem
 }
