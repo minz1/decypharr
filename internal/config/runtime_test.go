@@ -1,4 +1,4 @@
-package config
+package config_test
 
 import (
 	"os"
@@ -6,17 +6,19 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+
+	"github.com/sirrobot01/decypharr/internal/config"
 )
 
 func TestUpdatePublishesIndependentSnapshots(t *testing.T) {
-	Reset()
-	SetConfigPath(t.TempDir())
-	t.Cleanup(Reset)
-	before := Get()
+	config.Reset()
+	config.SetConfigPath(t.TempDir())
+	t.Cleanup(config.Reset)
+	before := config.Get()
 	beforeCategories := slices.Clone(before.Categories)
 	beforeToken := before.GetAuth().APIToken
-	var edited *Config
-	after, err := Update(func(next *Config) error {
+	var edited *config.Config
+	after, err := config.Update(func(next *config.Config) error {
 		edited = next
 		next.Categories = append(next.Categories, "added")
 		next.Auth.APIToken = "updated"
@@ -41,16 +43,19 @@ func TestUpdatePublishesIndependentSnapshots(t *testing.T) {
 }
 
 func TestConcurrentConfigUpdatesKeepAllChanges(t *testing.T) {
-	Reset()
-	SetConfigPath(t.TempDir())
-	t.Cleanup(Reset)
-	before := Get()
+	config.Reset()
+	config.SetConfigPath(t.TempDir())
+	t.Cleanup(config.Reset)
+	before := config.Get()
 	initialCount := len(before.Categories)
 	var wg sync.WaitGroup
 	for i := range 12 {
 		wg.Go(func() {
-			_, err := Update(
-				func(next *Config) error { next.Categories = append(next.Categories, strconv.Itoa(i)); return nil },
+			_, err := config.Update(
+				func(next *config.Config) error {
+					next.Categories = append(next.Categories, strconv.Itoa(i))
+					return nil
+				},
 			)
 			if err != nil {
 				t.Error(err)
@@ -58,14 +63,14 @@ func TestConcurrentConfigUpdatesKeepAllChanges(t *testing.T) {
 		})
 		wg.Go(func() {
 			for range 100 {
-				current := Get()
+				current := config.Get()
 				_ = slices.Clone(current.Categories)
 				_ = current.GetAuth()
 			}
 		})
 	}
 	wg.Wait()
-	if got := len(Get().Categories); got != initialCount+12 {
+	if got := len(config.Get().Categories); got != initialCount+12 {
 		t.Fatalf("categories=%d, want %d", got, initialCount+12)
 	}
 	if len(before.Categories) != initialCount {
@@ -74,28 +79,32 @@ func TestConcurrentConfigUpdatesKeepAllChanges(t *testing.T) {
 }
 
 func TestFailedSaveDoesNotPublishConfig(t *testing.T) {
-	Reset()
-	SetConfigPath(t.TempDir())
-	t.Cleanup(Reset)
-	before := Get()
+	config.Reset()
+	config.SetConfigPath(t.TempDir())
+	t.Cleanup(config.Reset)
+	before := config.Get()
 	if err := os.Remove(before.JSONFile()); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Mkdir(before.JSONFile(), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Update(func(next *Config) error { next.AppURL = "https://changed.test"; return nil }); err == nil {
+	if _, err := config.Update(
+		func(next *config.Config) error { next.AppURL = "https://changed.test"; return nil },
+	); err == nil {
 		t.Fatal("save to a directory succeeded")
 	}
-	if Get() != before {
+	if config.Get() != before {
 		t.Fatal("failed save published a new snapshot")
 	}
 }
 
 func TestStartupSettingsRequireRestart(t *testing.T) {
+	t.Parallel()
 	for _, field := range []string{"workers", "retries", "schedule", "notifications"} {
 		t.Run(field, func(t *testing.T) {
-			before := &Config{}
+			t.Parallel()
+			before := &config.Config{}
 			after := *before
 			switch field {
 			case "workers":

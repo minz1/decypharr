@@ -9,6 +9,7 @@ import (
 // The cache claims disk nobody asked for, so it stays off until an operator
 // turns it on.
 func TestShareCacheDefaultsOff(t *testing.T) {
+	t.Parallel()
 	if (ShareCache{}).IsEnabled() {
 		t.Fatal("unset cache should be disabled")
 	}
@@ -22,6 +23,7 @@ func TestShareCacheDefaultsOff(t *testing.T) {
 }
 
 func TestShareCacheResolvesValues(t *testing.T) {
+	t.Parallel()
 	s := ShareCache{MaxSize: "20GB", MaxAge: "6h", ChunkSize: "8MB", ReadAhead: "32MB"}
 	if got := s.MaxSizeBytes(); got != 20*1000*1000*1000 && got != 20<<30 {
 		t.Fatalf("max size = %d", got)
@@ -37,6 +39,7 @@ func TestShareCacheResolvesValues(t *testing.T) {
 // An unset or unusable value resolves to zero, which the cache reads as "use
 // the package default" — it must never be mistaken for "no budget".
 func TestShareCacheUnsetValuesAreZero(t *testing.T) {
+	t.Parallel()
 	for _, s := range []ShareCache{{}, {MaxSize: "nonsense", MaxAge: "nonsense"}} {
 		if s.MaxSizeBytes() != 0 || s.ChunkSizeBytes() != 0 || s.ReadAheadBytes() != 0 {
 			t.Fatalf("%#v resolved a nonzero size", s)
