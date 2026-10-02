@@ -61,71 +61,18 @@ func matchLibraryFiles(
 ) ([]libraryMatch, matchStats) {
 	stats := matchStats{libraryFiles: len(library), managedFiles: len(managed)}
 	managedRoot = filepath.Clean(managedRoot)
-
-	byTarget := make(map[targetFileKey][]ManagedFile, len(managed))
-	bySize := make(map[sizeFileKey][]ManagedFile, len(managed))
-	folders := make(map[string]struct{}, len(managed))
-	for _, file := range managed {
-		if file.EntryFolder == "" || file.FileName == "" {
-			stats.managedSkipped++
-			continue
-		}
-		name := filepath.Clean(file.FileName)
-		folder := targetFileKey{folder: filepath.Clean(file.EntryFolder), name: name}
-		byTarget[folder] = append(byTarget[folder], file)
-		folders[folder.folder] = struct{}{}
-		if file.FileSize > 0 {
-			size := sizeFileKey{name: name, size: file.FileSize}
-			bySize[size] = append(bySize[size], file)
-		}
-	}
+	index := newManagedIndex(managed, &stats)
 
 	byFolder := make([]libraryMatch, 0, min(len(library), len(managed)))
 	byTargetSize := make([]libraryMatch, 0)
 	for _, libraryFile := range library {
-		target, readable := symlinkTarget(libraryFile.Path)
-		if target == "" {
-			if readable {
-				stats.notSymlink++
-			} else {
-				stats.unreadable++
-			}
-			continue
-		}
-		if managedRoot != "." && !isUnder(target, managedRoot) {
-			stats.foreignTarget++
-			continue
-		}
-		name := filepath.Base(target)
-		folder := targetFileKey{folder: entryFolderOf(target, managedRoot), name: name}
-		if files := byTarget[folder]; len(files) == 1 {
-			byFolder = append(
-				byFolder,
-				libraryMatch{library: libraryFile, managed: files[0], confidence: ConfidenceExactPath},
-			)
-			continue
-		} else if len(files) > 1 {
-			stats.ambiguousTarget++
-			continue
-		}
-		// The entry folder moved or was renamed. The filename and size still
-		// identify the managed file, as long as they identify only one.
-		if libraryFile.Size > 0 {
-			if files := bySize[sizeFileKey{name: name, size: libraryFile.Size}]; len(files) == 1 {
-				byTargetSize = append(
-					byTargetSize,
-					libraryMatch{library: libraryFile, managed: files[0], confidence: ConfidenceManagedTarget},
-				)
-				continue
-			} else if len(files) > 1 {
-				stats.ambiguousTarget++
-				continue
-			}
-		}
-		if _, ok := folders[folder.folder]; ok {
-			stats.unknownFile++
-		} else {
-			stats.unknownEntry++
+		match, ok := index.match(libraryFile, managedRoot, &stats)
+		switch {
+		case !ok:
+		case match.confidence == ConfidenceExactPath:
+			byFolder = append(byFolder, match)
+		default:
+			byTargetSize = append(byTargetSize, match)
 		}
 	}
 
@@ -138,6 +85,83 @@ func matchLibraryFiles(
 	stats.matchedSize = len(sized)
 	stats.conflicted += dropped
 	return append(matches, sized...), stats
+}
+
+// managedIndex looks managed files up by the target a library symlink names.
+type managedIndex struct {
+	byTarget map[targetFileKey][]ManagedFile
+	bySize   map[sizeFileKey][]ManagedFile
+	folders  map[string]struct{}
+}
+
+func newManagedIndex(managed []ManagedFile, stats *matchStats) managedIndex {
+	index := managedIndex{
+		byTarget: make(map[targetFileKey][]ManagedFile, len(managed)),
+		bySize:   make(map[sizeFileKey][]ManagedFile, len(managed)),
+		folders:  make(map[string]struct{}, len(managed)),
+	}
+	for _, file := range managed {
+		if file.EntryFolder == "" || file.FileName == "" {
+			stats.managedSkipped++
+			continue
+		}
+		name := filepath.Clean(file.FileName)
+		folder := targetFileKey{folder: filepath.Clean(file.EntryFolder), name: name}
+		index.byTarget[folder] = append(index.byTarget[folder], file)
+		index.folders[folder.folder] = struct{}{}
+		if file.FileSize > 0 {
+			size := sizeFileKey{name: name, size: file.FileSize}
+			index.bySize[size] = append(index.bySize[size], file)
+		}
+	}
+	return index
+}
+
+// match finds the one managed file libraryFile's symlink points at, by entry
+// folder and name first, then by name and size. When there is none it counts
+// the reason in stats and reports false.
+func (index managedIndex) match(
+	libraryFile arr.LibraryFile,
+	managedRoot string,
+	stats *matchStats,
+) (libraryMatch, bool) {
+	target, readable := symlinkTarget(libraryFile.Path)
+	if target == "" {
+		if readable {
+			stats.notSymlink++
+		} else {
+			stats.unreadable++
+		}
+		return libraryMatch{}, false
+	}
+	if managedRoot != "." && !isUnder(target, managedRoot) {
+		stats.foreignTarget++
+		return libraryMatch{}, false
+	}
+	name := filepath.Base(target)
+	folder := targetFileKey{folder: entryFolderOf(target, managedRoot), name: name}
+	if files := index.byTarget[folder]; len(files) == 1 {
+		return libraryMatch{library: libraryFile, managed: files[0], confidence: ConfidenceExactPath}, true
+	} else if len(files) > 1 {
+		stats.ambiguousTarget++
+		return libraryMatch{}, false
+	}
+	// The entry folder moved or was renamed. The filename and size still
+	// identify the managed file, as long as they identify only one.
+	if libraryFile.Size > 0 {
+		if files := index.bySize[sizeFileKey{name: name, size: libraryFile.Size}]; len(files) == 1 {
+			return libraryMatch{library: libraryFile, managed: files[0], confidence: ConfidenceManagedTarget}, true
+		} else if len(files) > 1 {
+			stats.ambiguousTarget++
+			return libraryMatch{}, false
+		}
+	}
+	if _, ok := index.folders[folder.folder]; ok {
+		stats.unknownFile++
+	} else {
+		stats.unknownEntry++
+	}
+	return libraryMatch{}, false
 }
 
 // resolveMatches keeps the candidates that bind one managed file to one Arr
