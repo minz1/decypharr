@@ -194,9 +194,18 @@ type parseRAR5StreamResult struct {
 	EncryptionIV      []byte // AES IV for file data decryption (if encrypted)
 }
 
+// rar5Volume identifies the volume whose entries a stream parse emits.
+type rar5Volume struct {
+	index    int
+	name     string
+	password string
+}
+
 // parseRAR5Stream parses RAR 5.0 headers from a stream reader
 // This properly tracks offsets by reading headers sequentially and skipping data
 // If password is provided and headers are encrypted, it will decrypt them.
+// A header that cannot be read (truncated or corrupt data after the last
+// parseable header) ends the scan rather than failing the volume.
 func (p *RARParser) parseRAR5Stream(
 	stream *rarReader,
 	volumeIndex int,
@@ -206,159 +215,136 @@ func (p *RARParser) parseRAR5Stream(
 	result := &parseRAR5StreamResult{
 		Files: make([]*RARFileEntry, 0),
 	}
-
-	var encryptionKey []byte // Key for decrypting file data
+	vol := rar5Volume{index: volumeIndex, name: volumeName, password: password}
 
 	// Stream position is already at 8 (after signature)
 	for {
-		// Record position before reading header
 		headerStartPos := stream.Position()
-
-		// Read header
-		header, headerSize, dataSize, err := p.readRAR5HeaderFromStream(stream)
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			break
+		header, headerSize, dataSize, ok := p.nextRAR5Header(stream)
+		if !ok {
+			return result, nil
 		}
 
-		// Check for encryption header - this means headers are encrypted
+		// An encryption header means every following header is encrypted.
 		if header.Type == RAR5HeaderTypeEncrypt {
 			result.IsHeaderEncrypted = true
-
-			// Parse encryption header to get salt and kdfCount
-			encHeader, parseEncryptionHeaderErr := crypto.ParseEncryptionHeader(header.Data)
-			if parseEncryptionHeaderErr != nil {
-				break
-			}
-
-			// If no password provided, we can't continue
-			if password == "" {
-				break
-			}
-
-			// Derive key from password
-			keys := crypto.DeriveKeys([]byte(password), encHeader.Salt, encHeader.KdfCount)
-
-			// Verify password if check is present
-			if encHeader.HasPwCheck {
-				if !crypto.VerifyPassword(keys, encHeader.PwCheck) {
-					return nil, crypto.ErrBadPassword
-				}
-			}
-
-			// Store the encryption key for file data decryption
-			encryptionKey = keys.Key
-			result.EncryptionKey = keys.Key
-
-			// Now we need to read encrypted headers
-			// Each encrypted header is: 16-byte IV + encrypted data (aligned to 16 bytes)
-			// Continue parsing with decryption enabled
-			for {
-				// Read IV (16 bytes)
-				iv := make([]byte, crypto.BlockSize)
-				if _, readFullErr := io.ReadFull(stream, iv); readFullErr != nil {
-					if readFullErr == io.EOF {
-						break
-					}
-					break
-				}
-				result.EncryptionIV = iv
-
-				// Read encrypted header
-				encHeader, encHeaderSize, encDataSize, readAndDecryptRAR5HeaderErr := p.readAndDecryptRAR5Header(
-					stream,
-					encryptionKey,
-					iv,
-				)
-				if readAndDecryptRAR5HeaderErr != nil {
-					if errors.Is(readAndDecryptRAR5HeaderErr, io.EOF) {
-						break
-					}
-					break
-				}
-
-				// Parse the decrypted header
-				if encHeader.Type == RAR5HeaderTypeFile {
-					headerPos := stream.Position() - int64(encHeaderSize)
-					_, offsetInVol := stream.AbsoluteToVolumeOffset(headerPos + int64(encHeaderSize))
-
-					file := p.parseRAR5FileHeader(
-						encHeader.Data,
-						encHeader.ExtraSize,
-						volumeIndex,
-						volumeName,
-						offsetInVol,
-						encDataSize,
-						password,
-					)
-					if file != nil {
-						// Note: file.IsEncrypted is now set correctly from extra area parsing
-						// Headers being encrypted does NOT mean data is encrypted
-						result.Files = append(result.Files, file)
-					}
-				}
-
-				// Skip data section
-				if encDataSize > 0 {
-					// Data is also encrypted, need to account for padding
-					paddedSize := ((encDataSize + crypto.BlockSize - 1) / crypto.BlockSize) * crypto.BlockSize
-					if skipErr := stream.Skip(paddedSize); skipErr != nil {
-						if errors.Is(skipErr, io.EOF) {
-							break
-						}
-						break
-					}
-				}
-
-				if encHeader.Type == RAR5HeaderTypeEndOfArc {
-					break
-				}
-			}
-			break
+			return result, p.parseEncryptedRAR5Headers(stream, header, vol, result)
 		}
 
-		// Data offset is immediately after the header (absolute position in stream)
-		dataOffsetAbsolute := headerStartPos + int64(headerSize)
-
-		// Parse file headers
+		// Data starts immediately after the header. Use the volume passed in,
+		// not the stream's index: each stream only contains one volume.
 		if header.Type == RAR5HeaderTypeFile {
-			_, offsetInVol := stream.AbsoluteToVolumeOffset(dataOffsetAbsolute)
-
-			// Use the volumeIndex parameter passed to this function, not the stream's volume index
-			// because each stream only contains one volume
-			file := p.parseRAR5FileHeader(
-				header.Data,
-				header.ExtraSize,
-				volumeIndex,
-				volumeName,
-				offsetInVol,
-				dataSize,
-				password,
-			)
-			if file != nil {
-				result.Files = append(result.Files, file)
-			}
+			_, offsetInVol := stream.AbsoluteToVolumeOffset(headerStartPos + int64(headerSize))
+			p.appendRAR5File(result, header, vol, offsetInVol, dataSize)
 		}
 
 		// Skip the data section to get to the next header
 		if dataSize > 0 {
 			if skipErr := stream.Skip(dataSize); skipErr != nil {
 				if errors.Is(skipErr, io.EOF) {
-					break
+					return result, nil
 				}
 				return nil, fmt.Errorf("failed to skip data section: %w", skipErr)
 			}
 		}
 
-		// Stop at end of archive
 		if header.Type == RAR5HeaderTypeEndOfArc {
-			break
+			return result, nil
 		}
 	}
+}
 
-	return result, nil
+// parseEncryptedRAR5Headers reads the encrypted headers that follow an
+// encryption header. Each one is a 16-byte IV plus AES-CBC data aligned to
+// the block size. Without a usable password (or once the data runs out) the
+// scan simply ends; only a failed password check is an error.
+func (p *RARParser) parseEncryptedRAR5Headers(
+	stream *rarReader,
+	header *rar5HeaderData,
+	vol rar5Volume,
+	result *parseRAR5StreamResult,
+) error {
+	encryption, ok := parseRAR5EncryptionHeader(header.Data)
+	if !ok || vol.password == "" {
+		return nil
+	}
+	keys := crypto.DeriveKeys([]byte(vol.password), encryption.Salt, encryption.KdfCount)
+	if encryption.HasPwCheck && !crypto.VerifyPassword(keys, encryption.PwCheck) {
+		return crypto.ErrBadPassword
+	}
+	result.EncryptionKey = keys.Key
+
+	for {
+		iv := make([]byte, crypto.BlockSize)
+		if !readFullOK(stream, iv) {
+			return nil
+		}
+		result.EncryptionIV = iv
+
+		encHeader, _, encDataSize, ok := p.nextEncryptedRAR5Header(stream, keys.Key, iv)
+		if !ok {
+			return nil
+		}
+		if encHeader.Type == RAR5HeaderTypeFile {
+			// Headers being encrypted does not mean data is; the extra
+			// area sets file.IsEncrypted.
+			_, offsetInVol := stream.AbsoluteToVolumeOffset(stream.Position())
+			p.appendRAR5File(result, encHeader, vol, offsetInVol, encDataSize)
+		}
+		// The data area is encrypted too, so it is padded to the block size.
+		if encDataSize > 0 && !stream.trySkip(alignToBlock(encDataSize)) {
+			return nil
+		}
+		if encHeader.Type == RAR5HeaderTypeEndOfArc {
+			return nil
+		}
+	}
+}
+
+func (p *RARParser) appendRAR5File(
+	result *parseRAR5StreamResult,
+	header *rar5HeaderData,
+	vol rar5Volume,
+	dataOffset, dataSize int64,
+) {
+	file := p.parseRAR5FileHeader(header.Data, header.ExtraSize, vol.index, vol.name, dataOffset, dataSize, vol.password)
+	if file != nil {
+		result.Files = append(result.Files, file)
+	}
+}
+
+// nextRAR5Header reads one header; ok is false when none can be read.
+func (p *RARParser) nextRAR5Header(stream *rarReader) (*rar5HeaderData, int, int64, bool) {
+	header, size, dataSize, err := p.readRAR5HeaderFromStream(stream)
+	return header, size, dataSize, err == nil
+}
+
+// nextEncryptedRAR5Header decrypts one header; ok is false when none can be read.
+func (p *RARParser) nextEncryptedRAR5Header(stream *rarReader, key, iv []byte) (*rar5HeaderData, int, int64, bool) {
+	header, size, dataSize, err := p.readAndDecryptRAR5Header(stream, key, iv)
+	return header, size, dataSize, err == nil
+}
+
+// parseRAR5EncryptionHeader parses the archive encryption header; ok is false
+// for a malformed one.
+func parseRAR5EncryptionHeader(data []byte) (*crypto.EncryptionHeader, bool) {
+	header, err := crypto.ParseEncryptionHeader(data)
+	return header, err == nil
+}
+
+func readFullOK(r io.Reader, buf []byte) bool {
+	_, err := io.ReadFull(r, buf)
+	return err == nil
+}
+
+// trySkip skips n bytes and reports whether the stream had them.
+func (r *rarReader) trySkip(n int64) bool {
+	return r.Skip(n) == nil
+}
+
+// alignToBlock rounds n up to the AES block size.
+func alignToBlock(n int64) int64 {
+	return (n + crypto.BlockSize - 1) / crypto.BlockSize * crypto.BlockSize
 }
 
 // readAndDecryptRAR5Header reads an encrypted RAR5 header from stream.

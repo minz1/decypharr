@@ -221,9 +221,9 @@ func (p *SevenZParser) processRARFilesFromPositions(
 		var volumeFiles []*RARFileEntry
 		switch version {
 		case RARVersion5:
-			volumeFiles, _ = p.rarParser.parseRAR5Headers(headerData, volIndex, filepath.Base(rarFile.Name), password)
+			volumeFiles = p.rarParser.parseRAR5Headers(headerData, volIndex, filepath.Base(rarFile.Name), password)
 		case RARVersion4:
-			volumeFiles, _ = p.rarParser.parseRAR4Headers(headerData, volIndex, filepath.Base(rarFile.Name))
+			volumeFiles = p.rarParser.parseRAR4Headers(headerData, volIndex, filepath.Base(rarFile.Name))
 		case RARVersionUnknown:
 			// rejected above
 		}

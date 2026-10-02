@@ -36,9 +36,9 @@ func TestRAR4SnippetParserReadsLongBlockFileHeader(t *testing.T) {
 	data = append(data, file...)
 	data = append(data, make([]byte, 100)...)
 
-	files, err := (&RARParser{}).parseRAR4Headers(data, 0, "a.rar")
-	if err != nil || len(files) != 1 {
-		t.Fatalf("files=%d err=%v", len(files), err)
+	files := (&RARParser{}).parseRAR4Headers(data, 0, "a.rar")
+	if len(files) != 1 {
+		t.Fatalf("files = %d, want 1", len(files))
 	}
 	got := files[0]
 	wantOffset := int64(len(RAR4Signature) + len(archive) + len(file))
