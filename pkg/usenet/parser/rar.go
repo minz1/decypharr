@@ -73,6 +73,9 @@ const (
 
 	RAR4CompressionMethodStore = 0x30
 
+	// rar5MinHeaderSize is CRC(4) plus the smallest size/type/flags vints.
+	rar5MinHeaderSize = 11
+
 	rar4SignatureSize  = 7 // "Rar!\x1A\x07\x00"
 	rar4BaseHeaderSize = 7 // CRC(2) + Type(1) + Flags(2) + HeadSize(2)
 	rar4SizeFieldLen   = 4
@@ -440,88 +443,56 @@ func detectRARVersion(data []byte) RARVersion {
 	return RARVersionUnknown
 }
 
-// parseRAR5Headers parses RAR 5.0 format headers by reading sequentially through the archive
-// This properly tracks offsets by reading headers and skipping data sections.
+// parseRAR5Headers parses the RAR 5.0 headers of an in-memory volume
+// snippet, tracking absolute offsets and skipping data areas. Parsing stops at
+// the end of archive, at a data area that extends past the snippet, or at an
+// unreadable header (the snippet boundary or corrupt data).
 func (p *RARParser) parseRAR5Headers(
 	data []byte,
 	volumeIndex int,
 	volumeName string,
 	password string,
-) ([]*RARFileEntry, error) {
-	r := bytes.NewReader(data)
-
-	// Skip signature (8 bytes)
-	if _, err := r.Seek(8, io.SeekStart); err != nil {
-		return nil, err
+) []*RARFileEntry {
+	if len(data) < len(RAR5Signature) {
+		return nil
 	}
+	r := bytes.NewReader(data[len(RAR5Signature):])
+	vol := rar5Volume{index: volumeIndex, name: volumeName, password: password}
+	result := &parseRAR5StreamResult{}
+	currentOffset := int64(len(RAR5Signature)) // absolute position in the volume
 
-	var files []*RARFileEntry
-	currentOffset := int64(8) // Current absolute position in the archive file
-
-	for {
-		// Save position before reading header
-		headerStartOffset := currentOffset
-
-		if r.Len() < 11 { // Minimum header size (CRC + vint sizes)
-			break
-		}
-
+	for r.Len() >= rar5MinHeaderSize {
 		header, headerSize, dataSize, err := p.readRAR5Header(r)
 		if err != nil {
-			// Any error reading headers means we've hit corrupt data or
-			// reached beyond our snippet - stop parsing this volume
-			if errors.Is(err, io.EOF) || strings.Contains(err.Error(), "EOF") {
-				break
-			}
-			// Only log unexpected errors (not snippet boundary issues)
-			if !strings.Contains(err.Error(), "invalid header size") &&
-				!strings.Contains(err.Error(), "too large") {
-				p.logger.Debug().Err(err).Msg("Unexpected error reading RAR5 header")
-			}
+			p.logUnexpectedRAR5HeaderError(err)
 			break
 		}
 
 		// Data starts immediately after the header
-		dataOffset := headerStartOffset + int64(headerSize)
-
-		// Parse file headers
+		dataOffset := currentOffset + int64(headerSize)
 		if header.Type == RAR5HeaderTypeFile {
-			file := p.parseRAR5FileHeader(
-				header.Data,
-				header.ExtraSize,
-				volumeIndex,
-				volumeName,
-				dataOffset,
-				dataSize,
-				password,
-			)
-			if file != nil {
-				files = append(files, file)
-			}
+			p.appendRAR5File(result, header, vol, dataOffset, dataSize)
 		}
-
-		// Move current offset past this header and its data
 		currentOffset = dataOffset + dataSize
 
-		// Try to skip the data area in the reader (if it fits in our snippet)
-		if dataSize > 0 && r.Len() >= int(dataSize) {
-			// Data is in our snippet, skip it
-			if _, seekErr := r.Seek(dataSize, io.SeekCurrent); seekErr != nil {
-				break
-			}
-		} else if dataSize > 0 {
-			// Data extends beyond our snippet
-			// We can't read more headers from this volume snippet
+		// The next header is only readable if this data area fits the snippet.
+		if header.Type == RAR5HeaderTypeEndOfArc || dataSize > int64(r.Len()) {
 			break
 		}
-
-		// Stop at end of archive header
-		if header.Type == RAR5HeaderTypeEndOfArc {
-			break
-		}
+		_, _ = r.Seek(dataSize, io.SeekCurrent) // in range: checked above
 	}
+	return result.Files
+}
 
-	return files, nil
+// logUnexpectedRAR5HeaderError logs header errors other than the expected
+// snippet-boundary ones (EOF, sizes that run past the snippet).
+func (p *RARParser) logUnexpectedRAR5HeaderError(err error) {
+	msg := err.Error()
+	if errors.Is(err, io.EOF) || strings.Contains(msg, "EOF") ||
+		strings.Contains(msg, "invalid header size") || strings.Contains(msg, "too large") {
+		return
+	}
+	p.logger.Debug().Err(err).Msg("Unexpected error reading RAR5 header")
 }
 
 // rar5HeaderData represents a RAR 5.0 header.
@@ -771,22 +742,23 @@ func (p *RARParser) parseRAR5FileHeader(
 	}
 }
 
-// parseRAR4Headers parses RAR 4.x format headers.
-func (p *RARParser) parseRAR4Headers(data []byte, volumeIndex int, volumeName string) ([]*RARFileEntry, error) {
-	r := bytes.NewReader(data)
-
-	// Skip marker block (7 bytes signature + marker header)
-	if _, err := r.Seek(rar4SignatureSize, io.SeekStart); err != nil {
-		return nil, err
+// parseRAR4Headers parses the RAR 4.x headers of an in-memory volume
+// snippet. Parsing stops at the end of archive, at a data area that extends
+// past the snippet, or at an unreadable header.
+func (p *RARParser) parseRAR4Headers(data []byte, volumeIndex int, volumeName string) []*RARFileEntry {
+	if len(data) < rar4SignatureSize {
+		return nil
 	}
+	r := bytes.NewReader(data)
+	_, _ = r.Seek(rar4SignatureSize, io.SeekStart) // in range: checked above
 
 	var files []*RARFileEntry
 	currentOffset := int64(rar4SignatureSize)
 
 	// Continue while at least one minimal header may remain.
 	for r.Len() >= rar4BaseHeaderSize {
-		header, err := p.readRAR4HeaderFromStream(r)
-		if err != nil {
+		header, ok := p.nextRAR4Header(r)
+		if !ok {
 			break
 		}
 		dataSize, ok := rar4DataSize(header)
@@ -801,31 +773,23 @@ func (p *RARParser) parseRAR4Headers(data []byte, volumeIndex int, volumeName st
 			}
 		}
 
-		// Move to next header
+		// Move to the next header if it is still inside the snippet; beyond
+		// it lies file data we do not need.
 		nextOffset := currentOffset + int64(header.HeadSize) + dataSize
-		if nextOffset <= currentOffset {
+		if header.Type == RAR4HeaderTypeEnd || nextOffset <= currentOffset || nextOffset > int64(len(data)) {
 			break
 		}
-
-		// Check if we have enough data in our snippet to continue
-		if nextOffset > int64(len(data)) {
-			// We've reached the actual file data which is beyond our snippet
-			// This is fine - we have the header info we need
-			break
-		}
-
 		currentOffset = nextOffset
-
-		if _, seekErr := r.Seek(currentOffset, io.SeekStart); seekErr != nil {
-			break
-		}
-
-		if header.Type == RAR4HeaderTypeEnd {
-			break
-		}
+		_, _ = r.Seek(currentOffset, io.SeekStart) // in range: checked above
 	}
 
-	return files, nil
+	return files
+}
+
+// nextRAR4Header reads one header; ok is false when none can be read.
+func (p *RARParser) nextRAR4Header(r io.Reader) (*rar4Header, bool) {
+	header, err := p.readRAR4HeaderFromStream(r)
+	return header, err == nil
 }
 
 // rar4Header represents a RAR 4.x block header. Data holds every header byte
