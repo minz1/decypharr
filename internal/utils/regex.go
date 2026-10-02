@@ -8,36 +8,36 @@ import (
 // maxFolderNameBytes is the common filesystem limit for one path component.
 const maxFolderNameBytes = 255
 
-// videoExtensions is a set of known video file extensions (lowercase, without dot).
-//
-//nolint:gochecknoglobals // read-only lookup table
-var videoExtensions = map[string]struct{}{
-	"webm": {}, "m4v": {}, "3gp": {}, "nsv": {}, "ty": {},
-	"rm": {}, "rmvb": {}, "ifo": {}, "mov": {}, "qt": {},
-	"divx": {}, "xvid": {}, "bivx": {}, "nrg": {}, "pva": {}, "wmv": {},
-	"asf": {}, "asx": {}, "ogm": {}, "ogv": {}, "m2v": {}, "avi": {},
-	"bin": {}, "dat": {}, "dvr-ms": {}, "mpg": {}, "mpeg": {}, "mp4": {},
-	"avc": {}, "vp3": {}, "svq3": {}, "nuv": {}, "viv": {}, "dv": {},
-	"fli": {}, "flv": {}, "wpl": {}, "vob": {}, "mkv": {}, "mk3d": {},
-	"ts": {}, "wtv": {}, "m2ts": {},
+// isVideoExt reports whether ext (lowercase, without dot) is a known video
+// extension.
+func isVideoExt(ext string) bool {
+	switch ext {
+	case "webm", "m4v", "3gp", "nsv", "ty",
+		"rm", "rmvb", "ifo", "mov", "qt",
+		"divx", "xvid", "bivx", "nrg", "pva", "wmv",
+		"asf", "asx", "ogm", "ogv", "m2v", "avi",
+		"bin", "dat", "dvr-ms", "mpg", "mpeg", "mp4",
+		"avc", "vp3", "svq3", "nuv", "viv", "dv",
+		"fli", "flv", "wpl", "vob", "mkv", "mk3d",
+		"ts", "wtv", "m2ts":
+		return true
+	}
+	return false
 }
 
-// mediaExtensions is a set of known media file extensions (lowercase, without dot).
-//
-//nolint:gochecknoglobals // read-only lookup table derived from videoExtensions
-var mediaExtensions = func() map[string]struct{} {
-	m := map[string]struct{}{
-		"strm": {}, "m3u": {},
+// isMediaExt reports whether ext (lowercase, without dot) is a known video,
+// audio, or playlist extension.
+func isMediaExt(ext string) bool {
+	switch ext {
+	case "strm", "m3u",
 		// Audio
-		"mp2": {}, "mp3": {}, "m4a": {}, "m4b": {}, "m4p": {}, "ogg": {},
-		"oga": {}, "opus": {}, "wma": {}, "wav": {}, "wv": {}, "flac": {},
-		"ape": {}, "aif": {}, "aiff": {}, "aifc": {},
+		"mp2", "mp3", "m4a", "m4b", "m4p", "ogg",
+		"oga", "opus", "wma", "wav", "wv", "flac",
+		"ape", "aif", "aiff", "aifc":
+		return true
 	}
-	for ext := range videoExtensions {
-		m[ext] = struct{}{}
-	}
-	return m
-}()
+	return isVideoExt(ext)
+}
 
 // RemoveInvalidChars drops characters that are invalid in path components,
 // keeping separators and volume names.
@@ -124,7 +124,7 @@ func RemoveExtension(value string) string {
 	}
 	// Remove the leading dot and lowercase for lookup
 	extLower := strings.ToLower(ext[1:])
-	if _, ok := mediaExtensions[extLower]; ok {
+	if isMediaExt(extLower) {
 		name := value[:len(value)-len(ext)]
 		if name != "" && name != "." {
 			return name
@@ -140,8 +140,7 @@ func IsMediaFile(path string) bool {
 		return false
 	}
 	extLower := strings.ToLower(ext[1:])
-	_, ok := mediaExtensions[extLower]
-	return ok
+	return isMediaExt(extLower)
 }
 
 // IsVideoFile reports whether path has a known video extension.
@@ -150,6 +149,5 @@ func IsVideoFile(path string) bool {
 	if ext == "" {
 		return false
 	}
-	_, ok := videoExtensions[strings.ToLower(ext[1:])]
-	return ok
+	return isVideoExt(strings.ToLower(ext[1:]))
 }

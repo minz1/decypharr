@@ -83,8 +83,6 @@ func GetMagnetFromFile(file io.Reader, filePath string, rmTrackerUrls bool) (*Ma
 }
 
 // GetMagnetFromUrl resolves a magnet link, or downloads a .torrent over HTTP(S).
-//
-//nolint:revive,staticcheck // var-naming/ST1003: exported name used by pkg/server; rename to GetMagnetFromURL is a cross-area change
 func GetMagnetFromUrl(url string, rmTrackerUrls bool) (*Magnet, error) {
 	if strings.HasPrefix(url, "magnet:") {
 		return GetMagnetInfo(url, rmTrackerUrls)
@@ -107,8 +105,14 @@ func GetMagnetFromBytes(torrentData []byte, rmTrackerUrls bool) (*Magnet, error)
 	if err != nil {
 		return nil, err
 	}
-	//nolint:staticcheck // SA1019: MagnetV2 adds btmh/ws params and reorders trackers; debrid APIs get the v1 magnet on purpose
-	magnetMeta := mi.Magnet(&hash, &info)
+	// Built by hand: the deprecated mi.Magnet produced exactly this v1 magnet,
+	// while MagnetV2 would add btmh for hybrid torrents.
+	magnetMeta := metainfo.Magnet{
+		InfoHash:    hash,
+		DisplayName: info.BestName(),
+		Trackers:    mi.UpvertedAnnounceList().DistinctValues(),
+		Params:      url.Values{"ws": mi.UrlList},
+	}
 	if rmTrackerUrls {
 		magnetMeta = stripTrackersFromMagnet(magnetMeta, "torrent file")
 	}

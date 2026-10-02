@@ -12,7 +12,6 @@ import (
 	"github.com/sirrobot01/decypharr/internal/request"
 )
 
-//nolint:paralleltest // sets the process-wide config path and resets the config singleton
 func TestStatsPreservesCountersAndPartialResults(t *testing.T) {
 	config.SetConfigPath(t.TempDir())
 	t.Cleanup(config.Reset)

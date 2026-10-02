@@ -13,7 +13,6 @@ import (
 
 const activeDownloadsLimit = `{"error":"active_downloads_limit"}`
 
-//nolint:paralleltest // sets the process-wide config path (config singleton)
 func TestRetryPolicyPreservesUnlistedProviderStatus(t *testing.T) {
 	config.SetConfigPath(t.TempDir())
 	t.Cleanup(config.Reset)

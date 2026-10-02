@@ -262,7 +262,6 @@ func BenchmarkDecodeJSONArray(b *testing.B) {
 	}
 }
 
-//nolint:paralleltest // sets the process-wide config path (config singleton)
 func TestDoJSONResponsePolicy(t *testing.T) {
 	config.SetConfigPath(t.TempDir())
 	t.Cleanup(config.Reset)
