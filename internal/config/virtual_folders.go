@@ -37,26 +37,32 @@ const (
 	VirtualFolderOperatorWithinLast      = "within_last"
 )
 
-var virtualFolderReservedNames = []string{
-	"__all__",
-	"__bad__",
-	"torrents",
-	"nzbs",
-	"version.txt",
+// virtualFolderReservedNames lists the built-in mount entries a virtual
+// folder may not shadow.
+func virtualFolderReservedNames() []string {
+	return []string{"__all__", "__bad__", "torrents", "nzbs", "version.txt"}
 }
 
 var windowsReservedFolderName = regexp.MustCompile(`(?i)^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$`)
 
-var legacyFilterOrder = []string{
-	"name", "category",
-	"include", "exclude",
-	"starts_with", "ends_with", "not_starts_with", "not_ends_with",
-	"exact_match", "not_exact_match",
-	"regex", "not_regex",
-	"size_gt", "size_lt", "last_added",
-	"file_count_gt", "file_count_lt",
-	"files_regex", "not_files_regex",
+// legacyFilterOrder is the order legacy custom_folders filters migrate in.
+func legacyFilterOrder() []string {
+	return []string{
+		"name", "category",
+		"include", "exclude",
+		"starts_with", "ends_with", "not_starts_with", "not_ends_with",
+		"exact_match", "not_exact_match",
+		"regex", "not_regex",
+		"size_gt", "size_lt", "last_added",
+		"file_count_gt", "file_count_lt",
+		"files_regex", "not_files_regex",
+	}
 }
+
+const (
+	day  = 24 * time.Hour
+	week = 7 * day
+)
 
 var virtualFolderDurationPattern = regexp.MustCompile(`^(?:(\d+)w)?(?:(\d+)d)?(.*)$`)
 
@@ -92,7 +98,7 @@ func (c *Config) MigrateVirtualFolders() {
 		}
 
 		keys := make([]string, 0, len(legacy.Filters))
-		for _, key := range legacyFilterOrder {
+		for _, key := range legacyFilterOrder() {
 			if _, ok := legacy.Filters[key]; ok {
 				keys = append(keys, key)
 			}
@@ -133,52 +139,6 @@ func NormalizeVirtualFolder(folder *VirtualFolder) {
 func legacyVirtualFolderCondition(filterType, value string) VirtualFolderCondition {
 	c := VirtualFolderCondition{Value: value}
 	switch filterType {
-	case "include":
-		c.Field, c.Operator = VirtualFolderFieldEntryName, VirtualFolderOperatorContains
-		c.CaseSensitive = true
-	case "exclude":
-		c.Field, c.Operator = VirtualFolderFieldEntryName, VirtualFolderOperatorNotContains
-		c.CaseSensitive = true
-	case "starts_with":
-		c.Field, c.Operator = VirtualFolderFieldEntryName, VirtualFolderOperatorStartsWith
-		c.CaseSensitive = true
-	case "not_starts_with":
-		c.Field, c.Operator = VirtualFolderFieldEntryName, VirtualFolderOperatorNotStartsWith
-		c.CaseSensitive = true
-	case "ends_with":
-		c.Field, c.Operator = VirtualFolderFieldEntryName, VirtualFolderOperatorEndsWith
-		c.CaseSensitive = true
-	case "not_ends_with":
-		c.Field, c.Operator = VirtualFolderFieldEntryName, VirtualFolderOperatorNotEndsWith
-		c.CaseSensitive = true
-	case "exact_match":
-		c.Field, c.Operator = VirtualFolderFieldEntryName, VirtualFolderOperatorEquals
-		c.CaseSensitive = true
-	case "not_exact_match":
-		c.Field, c.Operator = VirtualFolderFieldEntryName, VirtualFolderOperatorNotEquals
-		c.CaseSensitive = true
-	case "regex":
-		c.Field, c.Operator = VirtualFolderFieldEntryName, VirtualFolderOperatorMatchesRegex
-		c.CaseSensitive = true
-	case "not_regex":
-		c.Field, c.Operator = VirtualFolderFieldEntryName, VirtualFolderOperatorNotMatchesRegex
-		c.CaseSensitive = true
-	case "size_gt":
-		c.Field, c.Operator = VirtualFolderFieldSize, VirtualFolderOperatorGreaterThan
-	case "size_lt":
-		c.Field, c.Operator = VirtualFolderFieldSize, VirtualFolderOperatorLessThan
-	case "last_added":
-		c.Field, c.Operator = VirtualFolderFieldAdded, VirtualFolderOperatorWithinLast
-	case "file_count_gt":
-		c.Field, c.Operator = VirtualFolderFieldFileCount, VirtualFolderOperatorGreaterThan
-	case "file_count_lt":
-		c.Field, c.Operator = VirtualFolderFieldFileCount, VirtualFolderOperatorLessThan
-	case "files_regex":
-		c.Field, c.Operator = VirtualFolderFieldFileName, VirtualFolderOperatorMatchesRegex
-		c.CaseSensitive = true
-	case "not_files_regex":
-		c.Field, c.Operator = VirtualFolderFieldFileName, VirtualFolderOperatorNotMatchesRegex
-		c.CaseSensitive = true
 	case "name":
 		c.Field = VirtualFolderFieldEntryName
 		c.Operator, c.Value = legacyTextOperator(value)
@@ -186,11 +146,57 @@ func legacyVirtualFolderCondition(filterType, value string) VirtualFolderConditi
 		c.Field = VirtualFolderFieldCategory
 		c.Operator, c.Value = legacyTextOperator(value)
 	default:
-		// Retain unknown legacy keys so validation can give the user a useful
-		// error instead of silently dropping their configuration.
-		c.Field, c.Operator = filterType, "unknown"
+		var ok bool
+		if c.Field, c.Operator, c.CaseSensitive, ok = legacyFilterSpec(filterType); !ok {
+			// Retain unknown legacy keys so validation can give the user a useful
+			// error instead of silently dropping their configuration.
+			c.Field, c.Operator = filterType, "unknown"
+		}
 	}
 	return c
+}
+
+// legacyFilterSpec maps a fixed-operator legacy filter key to its field,
+// operator, and case sensitivity.
+func legacyFilterSpec(filterType string) (string, string, bool, bool) {
+	switch filterType {
+	case "include":
+		return VirtualFolderFieldEntryName, VirtualFolderOperatorContains, true, true
+	case "exclude":
+		return VirtualFolderFieldEntryName, VirtualFolderOperatorNotContains, true, true
+	case "starts_with":
+		return VirtualFolderFieldEntryName, VirtualFolderOperatorStartsWith, true, true
+	case "not_starts_with":
+		return VirtualFolderFieldEntryName, VirtualFolderOperatorNotStartsWith, true, true
+	case "ends_with":
+		return VirtualFolderFieldEntryName, VirtualFolderOperatorEndsWith, true, true
+	case "not_ends_with":
+		return VirtualFolderFieldEntryName, VirtualFolderOperatorNotEndsWith, true, true
+	case "exact_match":
+		return VirtualFolderFieldEntryName, VirtualFolderOperatorEquals, true, true
+	case "not_exact_match":
+		return VirtualFolderFieldEntryName, VirtualFolderOperatorNotEquals, true, true
+	case "regex":
+		return VirtualFolderFieldEntryName, VirtualFolderOperatorMatchesRegex, true, true
+	case "not_regex":
+		return VirtualFolderFieldEntryName, VirtualFolderOperatorNotMatchesRegex, true, true
+	case "files_regex":
+		return VirtualFolderFieldFileName, VirtualFolderOperatorMatchesRegex, true, true
+	case "not_files_regex":
+		return VirtualFolderFieldFileName, VirtualFolderOperatorNotMatchesRegex, true, true
+	case "size_gt":
+		return VirtualFolderFieldSize, VirtualFolderOperatorGreaterThan, false, true
+	case "size_lt":
+		return VirtualFolderFieldSize, VirtualFolderOperatorLessThan, false, true
+	case "last_added":
+		return VirtualFolderFieldAdded, VirtualFolderOperatorWithinLast, false, true
+	case "file_count_gt":
+		return VirtualFolderFieldFileCount, VirtualFolderOperatorGreaterThan, false, true
+	case "file_count_lt":
+		return VirtualFolderFieldFileCount, VirtualFolderOperatorLessThan, false, true
+	default:
+		return "", "", false, false
+	}
 }
 
 func legacyTextOperator(value string) (string, string) {
@@ -204,7 +210,7 @@ func legacyTextOperator(value string) (string, string) {
 }
 
 func (c *Config) ValidateVirtualFolders() error {
-	reserved := append([]string(nil), virtualFolderReservedNames...)
+	reserved := virtualFolderReservedNames()
 	for _, d := range c.Debrids {
 		if strings.TrimSpace(d.Name) != "" {
 			reserved = append(reserved, d.Name)
@@ -276,37 +282,11 @@ func validateVirtualFolderCondition(condition VirtualFolderCondition) error {
 		return fmt.Errorf("value is required")
 	}
 
-	textOperators := []string{
-		VirtualFolderOperatorContains, VirtualFolderOperatorNotContains,
-		VirtualFolderOperatorStartsWith, VirtualFolderOperatorNotStartsWith,
-		VirtualFolderOperatorEndsWith, VirtualFolderOperatorNotEndsWith,
-		VirtualFolderOperatorEquals, VirtualFolderOperatorNotEquals,
-		VirtualFolderOperatorMatchesRegex, VirtualFolderOperatorNotMatchesRegex,
-	}
-	comparisonOperators := []string{VirtualFolderOperatorGreaterThan, VirtualFolderOperatorLessThan}
-
 	switch condition.Field {
 	case VirtualFolderFieldEntryName, VirtualFolderFieldFileName, VirtualFolderFieldCategory:
-		if !slices.Contains(textOperators, condition.Operator) {
-			return fmt.Errorf("operator %q is not valid for %s", condition.Operator, condition.Field)
-		}
-		if condition.Operator == VirtualFolderOperatorMatchesRegex ||
-			condition.Operator == VirtualFolderOperatorNotMatchesRegex {
-			if _, err := regexp.Compile(value); err != nil {
-				return fmt.Errorf("invalid regular expression: %w", err)
-			}
-		}
+		return validateTextCondition(condition, value)
 	case VirtualFolderFieldSize:
-		if !slices.Contains(comparisonOperators, condition.Operator) {
-			return fmt.Errorf("operator %q is not valid for size", condition.Operator)
-		}
-		size, err := ParseSize(value)
-		if err != nil {
-			return fmt.Errorf("invalid size %q: %w", value, err)
-		}
-		if size < 0 {
-			return fmt.Errorf("size must not be negative")
-		}
+		return validateSizeCondition(condition.Operator, value)
 	case VirtualFolderFieldAdded:
 		if condition.Operator != VirtualFolderOperatorWithinLast {
 			return fmt.Errorf("operator %q is not valid for added time", condition.Operator)
@@ -316,7 +296,7 @@ func validateVirtualFolderCondition(condition VirtualFolderCondition) error {
 			return fmt.Errorf("invalid duration %q; use a positive value such as 12h, 7d, or 2w", value)
 		}
 	case VirtualFolderFieldFileCount:
-		if !slices.Contains(comparisonOperators, condition.Operator) {
+		if !isComparisonOperator(condition.Operator) {
 			return fmt.Errorf("operator %q is not valid for file count", condition.Operator)
 		}
 		n, err := strconv.Atoi(value)
@@ -324,21 +304,59 @@ func validateVirtualFolderCondition(condition VirtualFolderCondition) error {
 			return fmt.Errorf("file count must be a non-negative whole number")
 		}
 	case VirtualFolderFieldProtocol:
-		if condition.Operator != VirtualFolderOperatorEquals && condition.Operator != VirtualFolderOperatorNotEquals {
+		if !isEqualityOperator(condition.Operator) {
 			return fmt.Errorf("operator %q is not valid for protocol", condition.Operator)
 		}
 		if value != "torrent" && value != "nzb" {
 			return fmt.Errorf("protocol must be %q or %q", "torrent", "nzb")
 		}
 	case VirtualFolderFieldProvider:
-		if condition.Operator != VirtualFolderOperatorEquals && condition.Operator != VirtualFolderOperatorNotEquals {
+		if !isEqualityOperator(condition.Operator) {
 			return fmt.Errorf("operator %q is not valid for provider", condition.Operator)
 		}
 	default:
 		return fmt.Errorf("field %q is not supported", condition.Field)
 	}
-
 	return nil
+}
+
+func validateTextCondition(condition VirtualFolderCondition, value string) error {
+	switch condition.Operator {
+	case VirtualFolderOperatorContains, VirtualFolderOperatorNotContains,
+		VirtualFolderOperatorStartsWith, VirtualFolderOperatorNotStartsWith,
+		VirtualFolderOperatorEndsWith, VirtualFolderOperatorNotEndsWith,
+		VirtualFolderOperatorEquals, VirtualFolderOperatorNotEquals:
+		return nil
+	case VirtualFolderOperatorMatchesRegex, VirtualFolderOperatorNotMatchesRegex:
+		if _, err := regexp.Compile(value); err != nil {
+			return fmt.Errorf("invalid regular expression: %w", err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("operator %q is not valid for %s", condition.Operator, condition.Field)
+	}
+}
+
+func validateSizeCondition(operator, value string) error {
+	if !isComparisonOperator(operator) {
+		return fmt.Errorf("operator %q is not valid for size", operator)
+	}
+	size, err := ParseSize(value)
+	if err != nil {
+		return fmt.Errorf("invalid size %q: %w", value, err)
+	}
+	if size < 0 {
+		return fmt.Errorf("size must not be negative")
+	}
+	return nil
+}
+
+func isComparisonOperator(operator string) bool {
+	return operator == VirtualFolderOperatorGreaterThan || operator == VirtualFolderOperatorLessThan
+}
+
+func isEqualityOperator(operator string) bool {
+	return operator == VirtualFolderOperatorEquals || operator == VirtualFolderOperatorNotEquals
 }
 
 func parseVirtualFolderDuration(value string) (time.Duration, error) {
@@ -352,14 +370,14 @@ func parseVirtualFolderDuration(value string) (time.Duration, error) {
 		if err != nil {
 			return 0, err
 		}
-		total += time.Duration(weeks) * 7 * 24 * time.Hour
+		total += time.Duration(weeks) * week
 	}
 	if matches[2] != "" {
 		days, err := strconv.ParseInt(matches[2], 10, 64)
 		if err != nil {
 			return 0, err
 		}
-		total += time.Duration(days) * 24 * time.Hour
+		total += time.Duration(days) * day
 	}
 	if matches[3] != "" {
 		remainder, err := time.ParseDuration(matches[3])
