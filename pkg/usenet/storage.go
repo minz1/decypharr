@@ -52,7 +52,7 @@ type NZBStorage struct {
 // NewNZBStorage creates a new file-based NZB storage.
 func NewNZBStorage() (*NZBStorage, error) {
 	metaDir := filepath.Join(config.GetMainPath(), "usenet", metaDirName)
-	if err := os.MkdirAll(metaDir, 0755); err != nil {
+	if err := os.MkdirAll(metaDir, 0o750); err != nil {
 		return nil, fmt.Errorf("failed to create meta directory: %w", err)
 	}
 
@@ -135,7 +135,7 @@ func (s *NZBStorage) writeNZBLocked(nzb *storage.NZB) error {
 
 	// Write atomically using temp file
 	tmpPath := path + ".tmp"
-	if writeFileErr := os.WriteFile(tmpPath, data, 0644); writeFileErr != nil {
+	if writeFileErr := os.WriteFile(tmpPath, data, 0o600); writeFileErr != nil {
 		return fmt.Errorf("failed to write NZB meta file: %w", writeFileErr)
 	}
 
@@ -509,7 +509,7 @@ func (s *NZBStorage) migrateFile(path string) (bool, error) {
 
 	// Unique temp name so it can't collide with AddNZB's "<path>.tmp".
 	tmpPath := path + ".v2tmp"
-	if writeFileErr := os.WriteFile(tmpPath, out, 0644); writeFileErr != nil {
+	if writeFileErr := os.WriteFile(tmpPath, out, 0o600); writeFileErr != nil {
 		return false, fmt.Errorf("write temp: %w", writeFileErr)
 	}
 
@@ -538,7 +538,7 @@ func (s *NZBStorage) migrationMarkerExists() bool {
 }
 
 func (s *NZBStorage) writeMigrationMarker() {
-	if err := os.WriteFile(s.migrationMarkerPath(), []byte("v2\n"), 0644); err != nil {
+	if err := os.WriteFile(s.migrationMarkerPath(), []byte("v2\n"), 0o600); err != nil {
 		s.logger.Warn().Err(err).Msg("Migration: failed to write completion marker")
 	}
 }

@@ -157,8 +157,10 @@ func (u *Usenet) verifyNZBContent(ctx context.Context, nzb *storage.NZB) error {
 		if file.FileType == storage.NZBFileTypeIgnore {
 			continue
 		}
-		if ctx.Err() != nil {
+		select {
+		case <-ctx.Done():
 			return nil // cancelled/timed out: not a content failure
+		default:
 		}
 		err := u.VerifyFileHead(ctx, file)
 		if err == nil {
