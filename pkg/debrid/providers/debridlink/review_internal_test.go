@@ -12,8 +12,6 @@ import (
 )
 
 // Pagination must follow the provider's raw page size, not the filtered result.
-//
-//nolint:paralleltest // config.SetConfigPath mutates the process-wide config.
 func TestPaginationIgnoresFilteredEntries(t *testing.T) {
 	config.Reset()
 	config.SetConfigPath(t.TempDir())

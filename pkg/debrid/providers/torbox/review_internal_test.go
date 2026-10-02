@@ -15,7 +15,6 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
 )
 
-//nolint:paralleltest // config.SetConfigPath mutates the process-wide config.
 func TestFetchDownloadLinkReportsProviderErrors(t *testing.T) {
 	config.SetConfigPath(t.TempDir())
 	t.Cleanup(config.Reset)

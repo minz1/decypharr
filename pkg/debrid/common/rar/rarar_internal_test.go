@@ -49,7 +49,6 @@ func serveArchive(t *testing.T, parts ...[]byte) string {
 	return server.URL
 }
 
-//nolint:paralleltest // config.SetConfigPath mutates the process-wide config.
 func TestReadFilesRejectsZeroSizeBlock(t *testing.T) {
 	config.SetConfigPath(t.TempDir())
 	t.Cleanup(config.Reset)
@@ -64,7 +63,6 @@ func TestReadFilesRejectsZeroSizeBlock(t *testing.T) {
 	}
 }
 
-//nolint:paralleltest // config.SetConfigPath mutates the process-wide config.
 func TestReadFilesSkipsLongBlockByAddSize(t *testing.T) {
 	config.SetConfigPath(t.TempDir())
 	t.Cleanup(config.Reset)

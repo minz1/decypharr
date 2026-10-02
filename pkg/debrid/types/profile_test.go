@@ -16,7 +16,9 @@ func TestProfileCacheIsConcurrentAndCopies(t *testing.T) {
 	var cache types.ProfileCache
 	var fetches atomic.Int32
 	fetch := func() (*types.Profile, error) {
-		fetches.Add(1)
+		if fetches.Add(1) > 1 {
+			return nil, errors.New("profile fetched more than once")
+		}
 		return &types.Profile{Name: "provider"}, nil
 	}
 	var wg sync.WaitGroup
@@ -52,13 +54,13 @@ func TestProfileCacheRefreshesAfterTTLAndKeepsErrorsUncached(t *testing.T) {
 	}
 	if _, err := cache.Get(
 		time.Nanosecond,
-		func() (*types.Profile, error) { return &types.Profile{Id: 1}, nil },
+		func() (*types.Profile, error) { return &types.Profile{ID: 1}, nil },
 	); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(time.Millisecond)
-	profile, err := cache.Get(time.Nanosecond, func() (*types.Profile, error) { return &types.Profile{Id: 2}, nil })
-	if err != nil || profile.Id != 2 {
+	profile, err := cache.Get(time.Nanosecond, func() (*types.Profile, error) { return &types.Profile{ID: 2}, nil })
+	if err != nil || profile.ID != 2 {
 		t.Fatalf("profile=%v err=%v, want refreshed profile", profile, err)
 	}
 }

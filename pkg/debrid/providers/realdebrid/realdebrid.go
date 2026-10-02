@@ -251,7 +251,7 @@ func (r *RealDebrid) getSelectedFiles(t *types.Torrent, data torrentInfo) (map[s
 	for _, f := range data.Files {
 		if f.Selected == 1 {
 			selectedFiles = append(selectedFiles, types.File{
-				TorrentId: t.Id,
+				TorrentID: t.Id,
 				Name:      filepath.Base(f.Path),
 				Path:      filepath.Base(f.Path),
 				Size:      f.Bytes,
@@ -287,7 +287,7 @@ func (r *RealDebrid) getSelectedFiles(t *types.Torrent, data torrentInfo) (map[s
 func (r *RealDebrid) handleRarFallback(t *types.Torrent, data torrentInfo) map[string]types.File {
 	files := make(map[string]types.File)
 	file := types.File{
-		TorrentId: t.Id,
+		TorrentID: t.Id,
 		Id:        "0",
 		Name:      t.Name + ".rar",
 		Size:      data.Bytes,
@@ -322,7 +322,7 @@ func (r *RealDebrid) handleRarArchive(
 	}
 
 	r.logger.Info().Msgf("RAR file detected, unpacking: %s", t.Name)
-	linkFile := &types.File{TorrentId: t.Id, Link: data.Links[0]}
+	linkFile := &types.File{TorrentID: t.Id, Link: data.Links[0]}
 	downloadLinkObj, err := r.GetDownloadLink(context.Background(), t.Id, linkFile)
 
 	if err != nil {
@@ -393,7 +393,7 @@ func (r *RealDebrid) getTorrentFiles(t *types.Torrent, data torrentInfo) map[str
 		}
 
 		file := types.File{
-			TorrentId: t.Id,
+			TorrentID: t.Id,
 			Name:      name,
 			Path:      name,
 			Size:      f.Bytes,
@@ -994,7 +994,7 @@ func (r *RealDebrid) _getDownloadLinks(acc *account.Account, offset int, limit i
 			DownloadLink: d.Download,
 			Generated:    d.Generated,
 			ExpiresAt:    d.Generated.Add(r.autoExpiresLinksAfter),
-			Id:           d.ID,
+			ID:           d.ID,
 		})
 	}
 	return links, nil
@@ -1018,7 +1018,7 @@ func (r *RealDebrid) getClientProfile(client *request.Client) (*types.Profile, e
 
 	profile := &types.Profile{
 		Name:       r.config.Name,
-		Id:         data.ID,
+		ID:         data.ID,
 		Username:   data.Username,
 		Email:      data.Email,
 		Points:     data.Points,
@@ -1098,7 +1098,7 @@ func (r *RealDebrid) deleteDownloadLink(account *account.Account, downloadLink t
 	req, err := http.NewRequestWithContext(
 		context.Background(),
 		http.MethodDelete,
-		fmt.Sprintf("%s/downloads/delete/%s", r.Host, downloadLink.Id),
+		fmt.Sprintf("%s/downloads/delete/%s", r.Host, downloadLink.ID),
 		nil,
 	)
 	if err != nil {
