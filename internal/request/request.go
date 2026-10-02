@@ -256,7 +256,7 @@ func New(options ...ClientOption) *Client {
 			TLSClientConfig: &tls.Config{
 				// Always true today: Arr instances on the LAN commonly use
 				// self-signed certificates. See the review report follow-up.
-				InsecureSkipVerify: client.skipTLSVerify, //nolint:gosec // G402: long-standing default relied on by self-signed Arr hosts; tightening needs a per-client opt-in
+				InsecureSkipVerify: client.skipTLSVerify,
 			},
 			DialContext: (&net.Dialer{
 				Timeout:   dialTimeout,

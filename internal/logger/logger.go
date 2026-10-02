@@ -21,15 +21,13 @@ const (
 )
 
 // defaultLogger is the process-wide logger returned by Default.
-//
-//nolint:gochecknoglobals // process-wide singleton, built once on first use
+
 var defaultLogger = sync.OnceValue(func() zerolog.Logger { return New("decypharr") })
 
 // sharedRotatingLogFile returns the process-wide lumberjack writer. All
 // component loggers share one rotator so they don't race on the same file
 // (each *lumberjack.Logger runs its own mill goroutine and rotation cycle).
-//
-//nolint:gochecknoglobals // process-wide singleton, one rotator per log file
+
 var sharedRotatingLogFile = sync.OnceValue(func() *lumberjack.Logger {
 	return &lumberjack.Logger{
 		Filename:   filepath.Join(GetLogPath(), "decypharr.log"),

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -90,7 +91,7 @@ func (r *Client) Do(ctx context.Context, req Request, res any) error {
 	}
 
 	if res != nil {
-		if decodeErr := json.NewDecoder(response.Body).Decode(res); decodeErr != nil && decodeErr != io.EOF {
+		if decodeErr := json.NewDecoder(response.Body).Decode(res); decodeErr != nil && !errors.Is(decodeErr, io.EOF) {
 			return decodeErr
 		}
 	}

@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"hash/crc32"
+	"math"
 	"net"
 	"strings"
 	"sync"
@@ -284,7 +285,10 @@ func Pattern(offset int64, n int) []byte {
 	p := make([]byte, n)
 	for i := range p {
 		v := (offset + int64(i)) % patternModulus
-		p[i] = byte(v) //nolint:gosec // G115: offsets are non-negative, so v is in [0, 250]
+		if v < 0 || v > math.MaxUint8 {
+			panic("nntpd: Pattern needs a non-negative offset")
+		}
+		p[i] = byte(v)
 	}
 	return p
 }

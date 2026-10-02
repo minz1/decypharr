@@ -56,8 +56,7 @@ func DelayType(dt DelayMode) Option {
 }
 
 // RetryIf provides a predicate to decide if an error is retryable.
-//
-//nolint:revive // exported stutter: retry.RetryIf is used by pkg/mount/rclone; renaming to If is a cross-area change
+
 func RetryIf(fn func(error) bool) Option {
 	return func(cfg *config) {
 		cfg.retryIf = fn
