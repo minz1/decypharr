@@ -7,6 +7,7 @@ import (
 )
 
 func TestDiscordHeaderTitleCasesUnknownEvents(t *testing.T) {
+	t.Parallel()
 	config.SetConfigPath(t.TempDir())
 	t.Cleanup(config.Reset)
 	got := (&DiscordNotifier{}).getHeader(config.NotificationEvent("download_started"))

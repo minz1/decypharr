@@ -157,7 +157,7 @@ func TestGetTorrentAcceptsObjectAndArrayResponses(t *testing.T) {
 
 	for name, body := range tests {
 		t.Run(name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				_, _ = fmt.Fprint(w, body)
 			}))
@@ -218,7 +218,7 @@ func TestAvailabilityPreservesKeysAndReportsIncompleteBatches(t *testing.T) {
 	config.SetConfigPath(t.TempDir())
 	t.Cleanup(config.Reset)
 	calls := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls++
 		if calls > 1 {
 			http.Error(w, "unavailable", http.StatusServiceUnavailable)
