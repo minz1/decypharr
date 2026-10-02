@@ -249,6 +249,58 @@ func unavailableMutationReconciliation(mutation Mutation, err error) error {
 	return arr.UnknownMutationOutcome(err, mutationVisibilityRemaining(mutation))
 }
 
+// receiptLookup asks the Arr whether a dispatched mutation landed. It returns
+// the receipt ID the mutation is confirmed with.
+type receiptLookup func(Mutation) (int, bool, error)
+
+// reconcileAttempted runs before a mutation that was already dispatched is
+// sent again. done reports that the Arr shows it, and it is now confirmed; a
+// nil error with done false means another dispatch is allowed.
+func reconcileAttempted(
+	job *Job,
+	progress JobProgress,
+	status Status,
+	mutation Mutation,
+	lookup receiptLookup,
+) (bool, error) {
+	if mutation.Attempts == 0 {
+		return false, nil
+	}
+	receiptID, found, err := lookup(mutation)
+	if err != nil {
+		return false, unavailableMutationReconciliation(mutation, err)
+	}
+	if found {
+		return true, confirmMutation(job, progress, status, mutation, receiptID)
+	}
+	return false, mutationRedispatchError(mutation)
+}
+
+// settleDispatch confirms a mutation whose attempt was persisted before it was
+// sent. A dispatch with an unclear outcome is reconciled against the Arr, and
+// stays unknown when the Arr does not show it.
+func settleDispatch(
+	job *Job,
+	progress JobProgress,
+	status Status,
+	mutation Mutation,
+	dispatchErr error,
+	receiptID int,
+	lookup receiptLookup,
+) error {
+	if dispatchErr == nil {
+		return confirmMutation(job, progress, status, mutation, receiptID)
+	}
+	if !errors.Is(dispatchErr, arr.ErrMutationOutcomeUnknown) {
+		return dispatchErr
+	}
+	reconciledID, found, reconcileErr := lookup(mutation)
+	if reconcileErr == nil && found {
+		return confirmMutation(job, progress, status, mutation, reconciledID)
+	}
+	return unresolvedMutation(mutation, dispatchErr, reconcileErr)
+}
+
 func mutationKey(kind MutationKind, values ...string) string {
 	return string(kind) + ":" + strings.Join(values, ":")
 }

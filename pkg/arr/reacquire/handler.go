@@ -2,7 +2,6 @@ package reacquire
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -211,36 +210,23 @@ func (handler *arrHandler) executeExactDownloadFailure(
 	if failure.alreadyFailed {
 		return confirmMutation(job, progress, StatusBlocklisting, mutation, failure.failedID)
 	}
-	if mutation.Attempts > 0 {
+	lookup := func(Mutation) (int, bool, error) {
 		record, found, failedHistoryErr := handler.arrs.FailedHistory(ctx, instance.Name, failure.downloadID)
 		if failedHistoryErr != nil {
-			return unavailableMutationReconciliation(
-				mutation,
-				fmt.Errorf("reconcile failed-download history: %w", failedHistoryErr),
-			)
+			return 0, false, fmt.Errorf("reconcile failed-download history: %w", failedHistoryErr)
 		}
-		if found {
-			return confirmMutation(job, progress, StatusBlocklisting, mutation, record.ID)
-		}
-		if mutationRedispatchErr := mutationRedispatchError(mutation); mutationRedispatchErr != nil {
-			return mutationRedispatchErr
-		}
+		return record.ID, found, nil
+	}
+	done, err := reconcileAttempted(job, progress, StatusBlocklisting, mutation, lookup)
+	if err != nil || done {
+		return err
 	}
 	mutation, err = recordMutationAttempt(job, progress, StatusBlocklisting, mutation)
 	if err != nil {
 		return err
 	}
-	if failHistoryErr := handler.arrs.FailHistory(ctx, instance.Name, mutation.HistoryID); failHistoryErr != nil {
-		if !errors.Is(failHistoryErr, arr.ErrMutationOutcomeUnknown) {
-			return failHistoryErr
-		}
-		record, found, reconcileErr := handler.arrs.FailedHistory(ctx, instance.Name, failure.downloadID)
-		if reconcileErr == nil && found {
-			return confirmMutation(job, progress, StatusBlocklisting, mutation, record.ID)
-		}
-		return unresolvedMutation(mutation, failHistoryErr, reconcileErr)
-	}
-	return confirmMutation(job, progress, StatusBlocklisting, mutation, mutation.HistoryID)
+	dispatchErr := handler.arrs.FailHistory(ctx, instance.Name, mutation.HistoryID)
+	return settleDispatch(job, progress, StatusBlocklisting, mutation, dispatchErr, mutation.HistoryID, lookup)
 }
 
 func mutationBindings(job Job) ([]Binding, error) {
