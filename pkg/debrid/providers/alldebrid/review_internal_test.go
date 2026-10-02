@@ -15,8 +15,6 @@ import (
 
 // Links must carry the token of the account that unlocked them, or the
 // account manager cannot find the account to store or delete them.
-//
-//nolint:paralleltest // config.SetConfigPath mutates the process-wide config.
 func TestFetchedLinkUsesAccountToken(t *testing.T) {
 	config.SetConfigPath(t.TempDir())
 	t.Cleanup(config.Reset)

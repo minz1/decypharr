@@ -264,7 +264,7 @@ func (ad *AllDebrid) flattenFiles(
 
 			*index++
 			file := types.File{
-				TorrentId: torrentID,
+				TorrentID: torrentID,
 				Id:        strconv.Itoa(*index),
 				Name:      fileName,
 				Size:      f.Size,
@@ -576,7 +576,7 @@ func (ad *AllDebrid) fetchDownloadLink(
 		Token:        account.Token,
 		Link:         file.Link,
 		DownloadLink: link,
-		Id:           data.Data.ID,
+		ID:           data.Data.ID,
 		Size:         file.Size,
 		Filename:     file.Name,
 		Generated:    now,
@@ -628,7 +628,7 @@ func (ad *AllDebrid) GetTorrents() ([]*types.Torrent, error) {
 				continue
 			}
 			file := types.File{
-				TorrentId: t.Id,
+				TorrentID: t.Id,
 				Name:      f.Name,
 				Size:      f.Size,
 				Link:      f.Link,
@@ -728,7 +728,7 @@ func (ad *AllDebrid) fetchProfile() (*types.Profile, error) {
 	userData := res.Data.User
 	expiration := time.Unix(userData.PremiumUntil, 0)
 	profile := &types.Profile{
-		Id:         1,
+		ID:         1,
 		Name:       ad.config.Name,
 		Username:   userData.Username,
 		Email:      userData.Email,

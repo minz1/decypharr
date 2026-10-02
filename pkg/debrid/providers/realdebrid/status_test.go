@@ -98,7 +98,7 @@ func TestCheckStatusSelectsAllowedFilesAndMapsLinks(t *testing.T) {
 	}{{"first.mkv", "7", "https://example.test/first", 1000}, {"second.mkv", "9", "https://example.test/second", 2000}} {
 		file := torrent.Files[want.name]
 		if file.Id != want.id || file.Name != want.name || file.Link != want.link || file.Size != want.size ||
-			file.TorrentId != "torrent-id" {
+			file.TorrentID != "torrent-id" {
 			t.Errorf("file = %#v, want %#v", file, want)
 		}
 	}

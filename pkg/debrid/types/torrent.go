@@ -32,7 +32,7 @@ type Torrent struct {
 	SizeDownloaded   int64 `json:"-"` // This is used for local download
 	DownloadUncached bool  `json:"-"`
 
-	sync.Mutex
+	mu sync.Mutex // guards Copy
 }
 
 func (t *Torrent) GetSize() int64 {
@@ -43,8 +43,8 @@ func (t *Torrent) GetSize() int64 {
 }
 
 func (t *Torrent) Copy() *Torrent {
-	t.Lock()
-	defer t.Unlock()
+	t.mu.Lock()
+	defer t.mu.Unlock()
 
 	newFiles := make(map[string]File, len(t.Files))
 	maps.Copy(newFiles, t.Files)
@@ -89,7 +89,7 @@ func (t *Torrent) GetFiles() []File {
 }
 
 type File struct {
-	TorrentId    string       `json:"torrent_id"`
+	TorrentID    string       `json:"torrent_id"`
 	Id           string       `json:"id"`
 	Name         string       `json:"name"`
 	Size         int64        `json:"size"`
@@ -97,7 +97,7 @@ type File struct {
 	ByteRange    *[2]int64    `json:"byte_range,omitempty"`
 	Path         string       `json:"path"`
 	Link         string       `json:"link"`
-	AccountId    string       `json:"account_id"`
+	AccountID    string       `json:"account_id"`
 	Generated    time.Time    `json:"generated"`
 	Deleted      bool         `json:"deleted"`
 	DownloadLink DownloadLink `json:"-"`
@@ -134,7 +134,7 @@ type Stats struct {
 
 type Profile struct {
 	Name       string    `json:"name"`
-	Id         int64     `json:"id"`
+	ID         int64     `json:"id"`
 	Username   string    `json:"username"`
 	Email      string    `json:"email"`
 	Points     int       `json:"points"`
@@ -151,7 +151,7 @@ type DownloadLink struct {
 	DownloadLink string    `json:"download_link"`
 	Generated    time.Time `json:"generated"`
 	Size         int64     `json:"size"`
-	Id           string    `json:"id"`
+	ID           string    `json:"id"`
 	ExpiresAt    time.Time
 }
 
@@ -162,7 +162,7 @@ func (dl *DownloadLink) Valid() error {
 
 	// Validate url format
 	if !utils.IsValidURL(dl.DownloadLink) {
-		return InvalidDownloadLinkError
+		return ErrInvalidDownloadLink
 	}
 
 	return nil

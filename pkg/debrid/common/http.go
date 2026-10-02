@@ -10,10 +10,13 @@ import (
 // the HTTP status. request.Client.DoJSON has already closed the body, so the
 // response itself is not handed to callers.
 func DoJSON(client *request.Client, req *http.Request, out any) (int, error) {
-	resp, err := client.DoJSON(req, out) //nolint:bodyclose // request.Client.DoJSON closes the body before returning
+	resp, err := client.DoJSON(req, out)
 	if err != nil {
 		return 0, err
 	}
+	// DoJSON has already drained and closed the body; closing again is a
+	// harmless no-op that keeps the ownership local and checkable.
+	_ = resp.Body.Close()
 	return resp.StatusCode, nil
 }
 

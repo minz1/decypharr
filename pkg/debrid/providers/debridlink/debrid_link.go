@@ -197,7 +197,7 @@ func (dl *DebridLink) GetTorrent(torrentID string) (*types.Torrent, error) {
 			continue
 		}
 		file := types.File{
-			TorrentId: t.ID,
+			TorrentID: t.ID,
 			Id:        f.ID,
 			Name:      f.Name,
 			Size:      f.Size,
@@ -258,7 +258,7 @@ func (dl *DebridLink) UpdateTorrent(t *types.Torrent) error {
 			continue
 		}
 		file := types.File{
-			TorrentId: t.Id,
+			TorrentID: t.Id,
 			Id:        f.ID,
 			Name:      f.Name,
 			Size:      f.Size,
@@ -333,7 +333,7 @@ func (dl *DebridLink) SubmitMagnet(t *types.Torrent) (*types.Torrent, error) {
 	now := time.Now()
 	for _, f := range data.Files {
 		file := types.File{
-			TorrentId: t.Id,
+			TorrentID: t.Id,
 			Id:        f.ID,
 			Name:      f.Name,
 			Size:      f.Size,
@@ -519,7 +519,7 @@ func (dl *DebridLink) _fetchDownloadLinks(
 		}
 		link := types.DownloadLink{
 			Debrid:       dl.config.Name,
-			Id:           l.ID,
+			ID:           l.ID,
 			Token:        account.Token,
 			Filename:     l.Name,
 			Link:         l.URL,
@@ -585,7 +585,7 @@ func (dl *DebridLink) getTorrents(page, perPage int) ([]*types.Torrent, int, err
 				continue
 			}
 			file := types.File{
-				TorrentId: torrent.Id,
+				TorrentID: torrent.Id,
 				Id:        f.ID,
 				Name:      f.Name,
 				Size:      f.Size,
@@ -660,7 +660,7 @@ func (dl *DebridLink) fetchProfile() (*types.Profile, error) {
 	data := *res.Value
 	expiration := time.Unix(data.PremiumLeft, 0)
 	profile := &types.Profile{
-		Id:         1,
+		ID:         1,
 		Username:   data.Username,
 		Name:       dl.config.Name,
 		Email:      data.Email,
@@ -693,7 +693,7 @@ func (dl *DebridLink) SyncAccounts() {
 }
 
 func (dl *DebridLink) deleteDownloadLink(account *account.Account, downloadLink types.DownloadLink) error {
-	deleteURL := fmt.Sprintf("%s/downloader/%s/remove", dl.Host, downloadLink.Id)
+	deleteURL := fmt.Sprintf("%s/downloader/%s/remove", dl.Host, downloadLink.ID)
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodDelete, deleteURL, nil)
 	if err != nil {
 		return err

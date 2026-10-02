@@ -346,7 +346,7 @@ func (tb *Torbox) GetTorrent(torrentID string) (*types.Torrent, error) {
 		}
 
 		file := types.File{
-			TorrentId: t.Id,
+			TorrentID: t.Id,
 			Id:        strconv.Itoa(f.ID),
 			Name:      fileName,
 			Size:      f.Size,
@@ -454,7 +454,7 @@ func (tb *Torbox) updateTorrentWithClient(client *request.Client, t *types.Torre
 		}
 
 		file := types.File{
-			TorrentId: t.Id,
+			TorrentID: t.Id,
 			Id:        strconv.Itoa(f.ID),
 			Name:      fileName,
 			Size:      f.Size,
@@ -562,7 +562,7 @@ func (tb *Torbox) fetchDownloadLink(
 		Link:         file.Link,
 		DownloadLink: *res.Data,
 		Debrid:       tb.config.Name,
-		Id:           file.Id,
+		ID:           file.Id,
 		Generated:    now,
 		ExpiresAt:    now.Add(tb.autoExpiresLinksAfter),
 	}
@@ -635,7 +635,7 @@ func (tb *Torbox) getTorrents(offset int) ([]*types.Torrent, error) {
 				continue
 			}
 			file := types.File{
-				TorrentId: t.Id,
+				TorrentID: t.Id,
 				Id:        strconv.Itoa(f.ID),
 				Name:      fileName,
 				Size:      f.Size,
@@ -756,7 +756,7 @@ func (tb *Torbox) fetchProfile() (*types.Profile, error) {
 
 	profile := &types.Profile{
 		Name:       tb.config.Name,
-		Id:         userData.ID,
+		ID:         userData.ID,
 		Username:   userData.Email,
 		Email:      userData.Email,
 		Expiration: expiration,

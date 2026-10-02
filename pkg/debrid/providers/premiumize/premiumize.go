@@ -529,7 +529,7 @@ func (pm *Premiumize) addFile(
 		fileName = itemPath
 	}
 	files[fileName] = types.File{
-		TorrentId: transferID,
+		TorrentID: transferID,
 		Id:        id,
 		Name:      fileName,
 		Path:      itemPath,
@@ -574,7 +574,7 @@ func (pm *Premiumize) fetchDownloadLink(
 		DownloadLink: link,
 		Generated:    now,
 		ExpiresAt:    now.Add(pm.autoExpiresLinksAfter),
-		Id:           file.Id,
+		ID:           file.Id,
 	}, nil
 }
 
@@ -654,7 +654,7 @@ func (pm *Premiumize) getClientProfile(client *request.Client) (*types.Profile, 
 	}
 	return &types.Profile{
 		Name:       pm.config.Name,
-		Id:         data.customerIDInt64(),
+		ID:         data.customerIDInt64(),
 		Username:   strconv.FormatInt(data.customerIDInt64(), 10),
 		Points:     data.BoosterPoints,
 		Premium:    premium,
