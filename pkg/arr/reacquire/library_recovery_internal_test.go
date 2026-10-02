@@ -257,47 +257,53 @@ func TestReconcileImportedManagedJobs(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			var requests atomic.Int64
-			server := serveImportedJobCase(t, tc, &requests)
-			instance := arr.Arr{Name: "library", Type: tc.kind, Host: server.URL, Token: "token"}
-			registry := arr.New()
-			registry.AddOrUpdate(instance)
-			directory := t.TempDir()
-			service, err := NewService(ServiceOptions{Directory: directory, Arrs: registry})
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = service.Close() })
-			now := time.Now()
-			job, binding := waitingImportJob(tc, instance, now)
-			service.now = func() time.Time { return now }
-			if saveErr := service.jobRepository.Save(job); saveErr != nil {
-				t.Fatal(saveErr)
-			}
-			if startErr := service.Start(t.Context()); startErr != nil {
-				t.Fatal(startErr)
-			}
-			if tc.sameDownload {
-				replacement := binding
-				replacement.EntryID, replacement.EntryFileID, replacement.ArrFileID = "new-entry", "new-file", 44
-				if upsertBindingErr := service.UpsertBinding(replacement); upsertBindingErr != nil {
-					t.Fatal(upsertBindingErr)
-				}
-			}
-			if before, _ := service.Job(job.ID); !before.Status.waiting() {
-				t.Fatalf("job was already %s", before.Status)
-			}
-			service.reconcileImportedJobs(t.Context())
-			updated, _ := service.Job(job.ID)
-			if tc.ready && updated.Status != StatusReady || !tc.ready && !updated.Status.waiting() {
-				t.Fatalf("status = %s, imported = %v", updated.Status, tc.ready)
-			}
-			if got, want := requests.Load(), wantImportRequests(tc); got != want {
-				t.Fatalf("requests = %d, want %d", got, want)
-			}
-			assertImportTimeoutOutcome(t, service, directory, registry, job.ID, tc.ready)
+			runImportedJobCase(t, tc)
 		})
 	}
+}
+
+// runImportedJobCase judges one waiting job against tc's library state.
+func runImportedJobCase(t *testing.T, tc importedJobCase) {
+	t.Helper()
+	var requests atomic.Int64
+	server := serveImportedJobCase(t, tc, &requests)
+	instance := arr.Arr{Name: "library", Type: tc.kind, Host: server.URL, Token: "token"}
+	registry := arr.New()
+	registry.AddOrUpdate(instance)
+	directory := t.TempDir()
+	service, err := NewService(ServiceOptions{Directory: directory, Arrs: registry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = service.Close() })
+	now := time.Now()
+	job, binding := waitingImportJob(tc, instance, now)
+	service.now = func() time.Time { return now }
+	if saveErr := service.jobRepository.Save(job); saveErr != nil {
+		t.Fatal(saveErr)
+	}
+	if startErr := service.Start(t.Context()); startErr != nil {
+		t.Fatal(startErr)
+	}
+	if tc.sameDownload {
+		replacement := binding
+		replacement.EntryID, replacement.EntryFileID, replacement.ArrFileID = "new-entry", "new-file", 44
+		if upsertBindingErr := service.UpsertBinding(replacement); upsertBindingErr != nil {
+			t.Fatal(upsertBindingErr)
+		}
+	}
+	if before, _ := service.Job(job.ID); !before.Status.waiting() {
+		t.Fatalf("job was already %s", before.Status)
+	}
+	service.reconcileImportedJobs(t.Context())
+	updated, _ := service.Job(job.ID)
+	if tc.ready && updated.Status != StatusReady || !tc.ready && !updated.Status.waiting() {
+		t.Fatalf("status = %s, imported = %v", updated.Status, tc.ready)
+	}
+	if got, want := requests.Load(), wantImportRequests(tc); got != want {
+		t.Fatalf("requests = %d, want %d", got, want)
+	}
+	assertImportTimeoutOutcome(t, service, directory, registry, job.ID, tc.ready)
 }
 
 // assertImportTimeoutOutcome runs maintenance past the waiting timeout: a
