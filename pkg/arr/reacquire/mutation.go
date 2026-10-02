@@ -90,6 +90,12 @@ func (m Mutation) validate() error {
 	case m.State == MutationConfirmed && m.ConfirmedAt.IsZero():
 		return errors.New("confirmed mutation timestamp is required")
 	}
+	return m.validateScope()
+}
+
+// validateScope checks the kind-specific fields that identify what the
+// mutation acts on.
+func (m Mutation) validateScope() error {
 	switch m.Kind {
 	case MutationHistoryFailed:
 		if m.DownloadID == "" {

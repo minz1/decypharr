@@ -221,22 +221,30 @@ func (s *Service) run(ctx context.Context) {
 			s.maintainJobs()
 			s.signal()
 		case <-s.wake:
-			for {
-				handler := s.currentHandler()
-				if handler == nil {
-					break
-				}
-				job, ok := s.nextJob()
-				if !ok {
-					break
-				}
-				if !s.runJob(ctx, handler, job) {
-					break
-				}
-				if ctx.Err() != nil {
-					return
-				}
+			if !s.drainJobs(ctx) {
+				return
 			}
+		}
+	}
+}
+
+// drainJobs runs dispatchable jobs until none is ready or one cannot be
+// settled. It reports false once ctx is cancelled.
+func (s *Service) drainJobs(ctx context.Context) bool {
+	for {
+		handler := s.currentHandler()
+		if handler == nil {
+			return true
+		}
+		job, ok := s.nextJob()
+		if !ok {
+			return true
+		}
+		if !s.runJob(ctx, handler, job) {
+			return true
+		}
+		if ctx.Err() != nil {
+			return false
 		}
 	}
 }
@@ -266,20 +274,27 @@ func (s *Service) runJob(ctx context.Context, handler Handler, job Job) bool {
 	if ctx.Err() != nil {
 		return true
 	}
-	current, ok := s.Job(job.ID)
+	return s.settleJob(job.ID, err, progress)
+}
+
+// settleJob records how one handler run ended: retry an unconfirmed mutation,
+// stop for an operator, fail, or mark the job ready. It reports false when the
+// job could not be updated.
+func (s *Service) settleJob(id string, err error, progress *serviceJobProgress) bool {
+	current, ok := s.Job(id)
 	if !ok {
 		return false
 	}
-	deadline = current.reconciliationDeadline()
+	deadline := current.reconciliationDeadline()
 	if err != nil && !deadline.IsZero() && !s.now().Before(deadline) {
-		return s.stopReconciliation(job.ID, fmt.Errorf("arr reconciliation deadline expired: %w", err))
+		return s.stopReconciliation(id, fmt.Errorf("arr reconciliation deadline expired: %w", err))
 	}
 	if errors.Is(err, arr.ErrMutationOutcomeUnknown) {
 		delay := retryDelay(current, err)
 		if !deadline.IsZero() {
 			delay = min(delay, deadline.Sub(s.now()))
 		}
-		queued, updateErr := s.updateJobDurable(job.ID, StatusQueued, func(job *Job) {
+		queued, updateErr := s.updateJobDurable(id, StatusQueued, func(job *Job) {
 			job.LastError = err.Error()
 			job.RetryAt = s.now().Add(delay)
 		})
@@ -292,20 +307,20 @@ func (s *Service) runJob(ctx context.Context, handler Handler, job Job) bool {
 	if err != nil {
 		for _, mutation := range current.Mutations {
 			if mutation.State == MutationIntent && mutation.Attempts > 0 {
-				return s.stopReconciliation(job.ID, err)
+				return s.stopReconciliation(id, err)
 			}
 		}
-		_, updateErr := s.updateJob(job.ID, StatusFailed, func(job *Job) {
+		_, updateErr := s.updateJob(id, StatusFailed, func(job *Job) {
 			job.LastError = err.Error()
 			job.RetryAt = time.Time{}
 		})
 		return updateErr == nil
 	}
-	current, ok = s.Job(job.ID)
+	current, ok = s.Job(id)
 	if !ok || current.Status.Terminal() || progress.waiting.Load() || current.Status.waiting() {
 		return true
 	}
-	_, err = s.updateJob(job.ID, StatusReady, func(job *Job) {
+	_, err = s.updateJob(id, StatusReady, func(job *Job) {
 		job.LastError = ""
 		job.RetryAt = time.Time{}
 	})
