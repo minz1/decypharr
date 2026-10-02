@@ -25,72 +25,24 @@ func NewHandler(arrs *arr.Service, invalidator Invalidator) Handler {
 }
 
 func (handler *arrHandler) Reacquire(ctx context.Context, job Job, progress JobProgress) error {
-	if handler == nil || handler.arrs == nil {
-		return fmt.Errorf("arr reacquirer is not configured")
-	}
-	instance, ok := handler.arrs.Get(job.ArrName)
-	if !ok {
-		return fmt.Errorf("arr %q is not configured", job.ArrName)
-	}
-	bindings, err := mutationBindings(job)
+	plan, err := handler.prepare(ctx, job)
 	if err != nil {
 		return err
-	}
-	if validateMutationInstanceErr := validateMutationInstance(instance, bindings); validateMutationInstanceErr != nil {
-		return validateMutationInstanceErr
-	}
-	if validateSearchBindingsErr := validateSearchBindings(instance, bindings); validateSearchBindingsErr != nil {
-		return validateSearchBindingsErr
-	}
-	downloadConfig, err := handler.arrs.DownloadClientConfig(ctx, instance.Name)
-	if err != nil {
-		return err
-	}
-	if !downloadConfig.EnableCompletedDownloadHandling {
-		return fmt.Errorf("arr completed download handling is disabled")
-	}
-
-	var failurePlan exactDownloadFailure
-	if job.Strategy == StrategyHistoryFailed || job.Strategy == StrategyInteractiveBest {
-		failurePlan, err = handler.prepareExactDownloadFailure(ctx, instance, job.DownloadID)
-		if err != nil {
-			return err
-		}
-	}
-	if job.Strategy == StrategyInteractiveBest {
-		if !failurePlan.grabFound {
-			return fmt.Errorf("interactive reacquisition requires exact grab history")
-		}
-		if autoRedownloadsFailure(downloadConfig, failurePlan) {
-			return fmt.Errorf("interactive reacquisition requires automatic failed-download redownload to be disabled")
-		}
 	}
 
 	if updateErr := progress.Update(StatusInvalidating, nil); updateErr != nil {
 		return updateErr
 	}
-	if deleteArrFilesErr := handler.deleteArrFiles(ctx, instance, bindings); deleteArrFilesErr != nil {
+	if deleteArrFilesErr := handler.deleteArrFiles(ctx, plan.instance, plan.bindings); deleteArrFilesErr != nil {
 		return deleteArrFilesErr
 	}
-	var waitingStatus Status
-	switch job.Strategy {
-	case StrategyHistoryFailed:
-		waitingStatus, err = handler.failHistory(ctx, instance, &job, bindings, failurePlan, downloadConfig, progress)
-	case StrategyCommandSearch:
-		waitingStatus, err = handler.searchBindings(ctx, instance, &job, bindings, progress)
-	case StrategyInteractiveBest:
-		if err = handler.executeExactDownloadFailure(ctx, instance, &job, failurePlan, progress); err == nil {
-			waitingStatus, err = handler.grabBestRelease(ctx, instance, &job, bindings, progress)
-		}
-	default:
-		return fmt.Errorf("unsupported reacquire strategy %q", job.Strategy)
-	}
+	waitingStatus, err := handler.runStrategy(ctx, &job, plan, progress)
 	if err != nil {
 		return err
 	}
-	if handler.invalidator != nil && bindings[0].Confidence != ConfidenceLibraryFile {
+	if handler.invalidator != nil && plan.bindings[0].Confidence != ConfidenceLibraryFile {
 		invalidationJob := job
-		invalidationJob.Bindings = bindings
+		invalidationJob.Bindings = plan.bindings
 		if invalidateReacquireErr := handler.invalidator.InvalidateReacquire(
 			ctx,
 			invalidationJob,
@@ -99,6 +51,85 @@ func (handler *arrHandler) Reacquire(ctx context.Context, job Job, progress JobP
 		}
 	}
 	return progress.Update(waitingStatus, nil)
+}
+
+// reacquirePlan is what Reacquire verified before it touches the Arr.
+type reacquirePlan struct {
+	instance       arr.Arr
+	bindings       []Binding
+	downloadConfig arr.DownloadClientConfig
+	failure        exactDownloadFailure
+}
+
+// prepare checks the job can still act on the Arr it was bound to, and reads
+// the history the chosen strategy needs. It makes no Arr mutation.
+func (handler *arrHandler) prepare(ctx context.Context, job Job) (reacquirePlan, error) {
+	if handler == nil || handler.arrs == nil {
+		return reacquirePlan{}, fmt.Errorf("arr reacquirer is not configured")
+	}
+	instance, ok := handler.arrs.Get(job.ArrName)
+	if !ok {
+		return reacquirePlan{}, fmt.Errorf("arr %q is not configured", job.ArrName)
+	}
+	bindings, err := mutationBindings(job)
+	if err != nil {
+		return reacquirePlan{}, err
+	}
+	if validateMutationInstanceErr := validateMutationInstance(instance, bindings); validateMutationInstanceErr != nil {
+		return reacquirePlan{}, validateMutationInstanceErr
+	}
+	if validateSearchBindingsErr := validateSearchBindings(instance, bindings); validateSearchBindingsErr != nil {
+		return reacquirePlan{}, validateSearchBindingsErr
+	}
+	downloadConfig, err := handler.arrs.DownloadClientConfig(ctx, instance.Name)
+	if err != nil {
+		return reacquirePlan{}, err
+	}
+	if !downloadConfig.EnableCompletedDownloadHandling {
+		return reacquirePlan{}, fmt.Errorf("arr completed download handling is disabled")
+	}
+
+	plan := reacquirePlan{instance: instance, bindings: bindings, downloadConfig: downloadConfig}
+	if job.Strategy != StrategyHistoryFailed && job.Strategy != StrategyInteractiveBest {
+		return plan, nil
+	}
+	plan.failure, err = handler.prepareExactDownloadFailure(ctx, instance, job.DownloadID)
+	if err != nil {
+		return reacquirePlan{}, err
+	}
+	if job.Strategy == StrategyInteractiveBest {
+		if !plan.failure.grabFound {
+			return reacquirePlan{}, fmt.Errorf("interactive reacquisition requires exact grab history")
+		}
+		if autoRedownloadsFailure(downloadConfig, plan.failure) {
+			return reacquirePlan{}, fmt.Errorf(
+				"interactive reacquisition requires automatic failed-download redownload to be disabled",
+			)
+		}
+	}
+	return plan, nil
+}
+
+// runStrategy performs the job's Arr mutations and returns the status to wait in.
+func (handler *arrHandler) runStrategy(
+	ctx context.Context,
+	job *Job,
+	plan reacquirePlan,
+	progress JobProgress,
+) (Status, error) {
+	switch job.Strategy {
+	case StrategyHistoryFailed:
+		return handler.failHistory(ctx, plan.instance, job, plan.bindings, plan.failure, plan.downloadConfig, progress)
+	case StrategyCommandSearch:
+		return handler.searchBindings(ctx, plan.instance, job, plan.bindings, progress)
+	case StrategyInteractiveBest:
+		if err := handler.executeExactDownloadFailure(ctx, plan.instance, job, plan.failure, progress); err != nil {
+			return "", err
+		}
+		return handler.grabBestRelease(ctx, plan.instance, job, plan.bindings, progress)
+	default:
+		return "", fmt.Errorf("unsupported reacquire strategy %q", job.Strategy)
+	}
 }
 
 func (handler *arrHandler) failHistory(
