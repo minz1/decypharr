@@ -27,8 +27,15 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/usenet/parser"
 )
 
-// Transport statistics can be up to 30 seconds old.
-const transportStatsTTL = 30 * time.Second
+const (
+	// Transport statistics can be up to 30 seconds old.
+	transportStatsTTL = 30 * time.Second
+	// minNetworkSources is the fewest independent sources a network-only
+	// "incomplete" claim needs, whatever the configured policy.
+	minNetworkSources = 2
+	// feedLogPrefix is how much of a feed key debug logs show.
+	feedLogPrefix = 8
+)
 
 type Service struct {
 	engine      *hearsaylib.Hearsay
@@ -56,12 +63,12 @@ type Service struct {
 	closeOnce        sync.Once
 }
 
-// New builds the service from configuration. It returns (nil, nil)
-// when hearsay is disabled or no observable domain is configured; a
-// nil *Service is safe to use everywhere.
+// New builds the service from configuration. When hearsay is disabled or no
+// observable domain is configured it returns an inert service whose methods
+// do nothing; a nil *Service is equally safe to use.
 func New(cfg *config.Config, log zerolog.Logger) (*Service, error) {
 	if cfg.Hearsay.Disabled {
-		return nil, nil
+		return &Service{}, nil
 	}
 	if cfg.Hearsay.MaxStorageBytes < 0 || cfg.Hearsay.MaxFeedsPerNamespace < 0 || cfg.Hearsay.MaxSeededTorrents < 0 {
 		return nil, fmt.Errorf("hearsay: transport limits must not be negative")
@@ -90,40 +97,9 @@ func New(cfg *config.Config, log zerolog.Logger) (*Service, error) {
 		maxFeeds:    cfg.Hearsay.MaxFeedsPerNamespace,
 		maxSeeded:   cfg.Hearsay.MaxSeededTorrents,
 	}
-	var domains []hearsaylib.Domain
-	for _, d := range cfg.Debrids {
-		vendor := strings.ToLower(strings.TrimSpace(d.Provider))
-		if vendor == "" {
-			continue
-		}
-		if _, dup := s.debrids[vendor]; dup {
-			continue
-		}
-		dom := hsdebrid.New(vendor)
-		undom := hsdebrid.NewUncached(vendor)
-		s.debrids[vendor] = dom.Namespace()
-		s.uncached[vendor] = undom.Namespace()
-		domains = append(domains, dom, undom)
-	}
-	for _, p := range cfg.Usenet.Providers {
-		// The explicit failover backbone wins; otherwise infer it from
-		// the host so operators do not need to know their backbone.
-		backbone := strings.ToLower(strings.TrimSpace(p.Backbone))
-		if backbone == "" {
-			backbone = hsusenet.InferBackbone(p.Host)
-		}
-		if backbone == "" {
-			continue
-		}
-		if _, dup := s.usenets[backbone]; dup {
-			continue
-		}
-		dom := hsusenet.New(backbone)
-		s.usenets[backbone] = dom.Namespace()
-		domains = append(domains, dom)
-	}
+	domains := append(s.debridDomains(cfg.Debrids), s.usenetDomains(cfg.Usenet.Providers)...)
 	if len(domains) == 0 {
-		return nil, nil
+		return &Service{}, nil
 	}
 	if cfg.Hearsay.Interval != "" {
 		interval, parseDurationErr := time.ParseDuration(cfg.Hearsay.Interval)
@@ -142,41 +118,114 @@ func New(cfg *config.Config, log zerolog.Logger) (*Service, error) {
 		return nil, err
 	}
 	s.engine = engine
+	if err = s.openAdvisors(dir); err == nil {
+		err = s.dropUnfollowedFeeds()
+	}
+	if err != nil {
+		s.closeEngine()
+		return nil, err
+	}
+	return s, nil
+}
+
+// debridDomains registers one cached/uncached domain pair per provider.
+func (s *Service) debridDomains(debrids []config.Debrid) []hearsaylib.Domain {
+	var domains []hearsaylib.Domain
+	for _, d := range debrids {
+		vendor := strings.ToLower(strings.TrimSpace(d.Provider))
+		if vendor == "" {
+			continue
+		}
+		if _, dup := s.debrids[vendor]; dup {
+			continue
+		}
+		dom := hsdebrid.New(vendor)
+		undom := hsdebrid.NewUncached(vendor)
+		s.debrids[vendor] = dom.Namespace()
+		s.uncached[vendor] = undom.Namespace()
+		domains = append(domains, dom, undom)
+	}
+	return domains
+}
+
+// usenetDomains registers one domain per usenet backbone.
+func (s *Service) usenetDomains(providers []config.UsenetProvider) []hearsaylib.Domain {
+	var domains []hearsaylib.Domain
+	for _, p := range providers {
+		// The explicit failover backbone wins; otherwise infer it from
+		// the host so operators do not need to know their backbone.
+		backbone := strings.ToLower(strings.TrimSpace(p.Backbone))
+		if backbone == "" {
+			backbone = hsusenet.InferBackbone(p.Host)
+		}
+		if backbone == "" {
+			continue
+		}
+		if _, dup := s.usenets[backbone]; dup {
+			continue
+		}
+		dom := hsusenet.New(backbone)
+		s.usenets[backbone] = dom.Namespace()
+		domains = append(domains, dom)
+	}
+	return domains
+}
+
+// openAdvisors creates the per-provider add advisors.
+func (s *Service) openAdvisors(dir string) error {
 	for vendor := range maps.Keys(s.debrids) {
-		advisor, newAdvisorWithPolicyErr := hsdebrid.NewAdvisorWithPolicy(
-			engine,
+		advisor, err := hsdebrid.NewAdvisorWithPolicy(
+			s.engine,
 			vendor,
-			mode,
-			policy,
+			s.adviceMode,
+			s.policy,
 			filepath.Join(dir, "advice", vendor+".json"),
 		)
-		if newAdvisorWithPolicyErr != nil {
-			engine.Close()
-			return nil, newAdvisorWithPolicyErr
+		if err != nil {
+			return err
 		}
 		s.advisors[vendor] = advisor
 	}
-	// A non-empty follow list is an allowlist, not a set of extra seeds.
-	// Retained generations answer queries whether or not the network is
-	// running, so drop what an earlier, unrestricted run discovered.
-	// Failing here disables participation, which is the safe outcome:
-	// better no hints than hints from a publisher the operator dropped.
-	if len(s.follow) > 0 {
-		self := hex.EncodeToString(engine.Identity())
-		for _, ns := range s.namespaces() {
-			for _, feed := range engine.Feeds(ns) {
-				if feed == self || slices.Contains(s.follow, feed) {
-					continue
-				}
-				if forgetErr := engine.Forget(ns, feed); forgetErr != nil {
-					engine.Close()
-					return nil, fmt.Errorf("hearsay: dropping feed outside the follow list: %w", forgetErr)
-				}
-				s.log.Debug().Str("ns", ns).Str("feed", feed[:8]).Msg("dropped feed outside the follow list")
+	return nil
+}
+
+// dropUnfollowedFeeds enforces a non-empty follow list as an allowlist, not a
+// set of extra seeds. Retained generations answer queries whether or not the
+// network is running, so drop what an earlier, unrestricted run discovered.
+// Failing here disables participation, which is the safe outcome: better no
+// hints than hints from a publisher the operator dropped.
+func (s *Service) dropUnfollowedFeeds() error {
+	if len(s.follow) == 0 {
+		return nil
+	}
+	self := hex.EncodeToString(s.engine.Identity())
+	for _, ns := range s.namespaces() {
+		for _, feed := range s.engine.Feeds(ns) {
+			if feed == self || slices.Contains(s.follow, feed) {
+				continue
 			}
+			if err := s.engine.Forget(ns, feed); err != nil {
+				return fmt.Errorf("hearsay: dropping feed outside the follow list: %w", err)
+			}
+			s.log.Debug().
+				Str("ns", ns).
+				Str("feed", feed[:min(len(feed), feedLogPrefix)]).
+				Msg("dropped feed outside the follow list")
 		}
 	}
-	return s, nil
+	return nil
+}
+
+// closeEngine closes the engine, logging a failure.
+func (s *Service) closeEngine() {
+	if err := s.engine.Close(); err != nil {
+		s.log.Debug().Err(err).Msg("hearsay close")
+	}
+}
+
+// inert reports whether the service is nil or disabled.
+func (s *Service) inert() bool {
+	return s == nil || s.engine == nil
 }
 
 func parseAdviceMode(value string) (hsdebrid.AdviceMode, error) {
@@ -210,7 +259,7 @@ func advicePolicy(cfg config.Hearsay) (hsdebrid.AdvicePolicy, error) {
 // Start joins the network: seed and publish own generations, discover
 // and fetch others'. Runs until ctx is done.
 func (s *Service) Start(ctx context.Context) error {
-	if s == nil || !s.participate {
+	if s.inert() || !s.participate {
 		return nil
 	}
 	node, err := transport.ListenWithConfig(transport.NodeConfig{
@@ -267,7 +316,7 @@ func (s *Service) namespaces() []string {
 }
 
 func (s *Service) Close() {
-	if s == nil {
+	if s.inert() {
 		return
 	}
 	s.closeOnce.Do(func() {
@@ -277,11 +326,11 @@ func (s *Service) Close() {
 		s.transportStats = nil
 		s.mu.Unlock()
 		if node != nil {
-			node.Close()
+			if err := node.Close(); err != nil {
+				s.log.Debug().Err(err).Msg("hearsay transport close")
+			}
 		}
-		if err := s.engine.Close(); err != nil {
-			s.log.Debug().Err(err).Msg("hearsay close")
-		}
+		s.closeEngine()
 	})
 }
 
@@ -300,7 +349,7 @@ type Status struct {
 }
 
 func (s *Service) Status() Status {
-	if s == nil {
+	if s.inert() {
 		return Status{}
 	}
 	st := Status{
@@ -491,7 +540,7 @@ func (s *Service) NZBClaimedIncomplete(subject string) bool {
 			return a.Value < 0.5 && a.Age <= 24*time.Hour
 		}
 		if a.Value > 0.2 || a.Age > 24*time.Hour || a.Support < s.policy.MinSupport ||
-			a.EvidenceWeight < s.policy.MinEvidence || a.Sources < max(2, s.policy.MinSources) {
+			a.EvidenceWeight < s.policy.MinEvidence || a.Sources < max(minNetworkSources, s.policy.MinSources) {
 			return false
 		}
 	}
