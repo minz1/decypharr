@@ -21,48 +21,54 @@ func TestReconciliationStopsAndRetainsDuplicateProtection(t *testing.T) {
 	for _, scenario := range []string{"expired before dispatch", "expired during reconciliation", "attempts exhausted"} {
 		t.Run(scenario, func(t *testing.T) {
 			t.Parallel()
-			directory := t.TempDir()
-			service, err := NewService(ServiceOptions{Directory: directory})
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = service.Close() })
-			base := time.Now().UTC()
-			var elapsed atomic.Int64
-			service.now = func() time.Time { return base.Add(time.Duration(elapsed.Load())) }
-			if startErr := service.Start(t.Context()); startErr != nil {
-				t.Fatal(startErr)
-			}
-			request, job := queueAttemptedSearch(t, service, base)
-			if scenario == "expired before dispatch" {
-				elapsed.Store(int64(reconciliationTimeout))
-			}
-			calls := 0
-			handler := reconciliationHandler(func(context.Context, Job, JobProgress) error {
-				calls++
-				if scenario == "attempts exhausted" {
-					return errors.New("dispatch budget exhausted")
-				}
-				elapsed.Store(int64(reconciliationTimeout))
-				return arr.UnknownMutationOutcome(errors.New("receipt endpoint unavailable"), time.Second)
-			})
-			if !service.runJob(t.Context(), handler, job) {
-				t.Fatal("could not save stopped job")
-			}
-			wantCalls := 1
-			if scenario == "expired before dispatch" {
-				wantCalls = 0
-			}
-			if calls != wantCalls {
-				t.Fatalf("handler calls = %d, want %d", calls, wantCalls)
-			}
-			assertStoppedJobHeld(t, service, request, job, base, &elapsed)
-			if closeErr := service.Close(); closeErr != nil {
-				t.Fatal(closeErr)
-			}
-			assertStoppedJobSurvivesRestart(t, directory, request, job)
+			runReconciliationStop(t, scenario)
 		})
 	}
+}
+
+// runReconciliationStop drives one way an unconfirmed mutation stops for an operator.
+func runReconciliationStop(t *testing.T, scenario string) {
+	t.Helper()
+	directory := t.TempDir()
+	service, err := NewService(ServiceOptions{Directory: directory})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = service.Close() })
+	base := time.Now().UTC()
+	var elapsed atomic.Int64
+	service.now = func() time.Time { return base.Add(time.Duration(elapsed.Load())) }
+	if startErr := service.Start(t.Context()); startErr != nil {
+		t.Fatal(startErr)
+	}
+	request, job := queueAttemptedSearch(t, service, base)
+	if scenario == "expired before dispatch" {
+		elapsed.Store(int64(reconciliationTimeout))
+	}
+	calls := 0
+	handler := reconciliationHandler(func(context.Context, Job, JobProgress) error {
+		calls++
+		if scenario == "attempts exhausted" {
+			return errors.New("dispatch budget exhausted")
+		}
+		elapsed.Store(int64(reconciliationTimeout))
+		return arr.UnknownMutationOutcome(errors.New("receipt endpoint unavailable"), time.Second)
+	})
+	if !service.runJob(t.Context(), handler, job) {
+		t.Fatal("could not save stopped job")
+	}
+	wantCalls := 1
+	if scenario == "expired before dispatch" {
+		wantCalls = 0
+	}
+	if calls != wantCalls {
+		t.Fatalf("handler calls = %d, want %d", calls, wantCalls)
+	}
+	assertStoppedJobHeld(t, service, request, job, base, &elapsed)
+	if closeErr := service.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	assertStoppedJobSurvivesRestart(t, directory, request, job)
 }
 
 // queueAttemptedSearch queues a job whose movie search was dispatched once at
