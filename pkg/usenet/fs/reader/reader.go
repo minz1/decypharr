@@ -15,13 +15,8 @@ import (
 	"github.com/sirrobot01/decypharr/internal/nntp"
 )
 
-// decryptionBufPool stores *[]byte so Put does not box the slice header.
-//
-//nolint:gochecknoglobals // process-wide scratch pool shared by every reader
-var decryptionBufPool = sync.Pool{}
-
-func acquireDecryptionBuffer(size int) *[]byte {
-	bufPtr, ok := decryptionBufPool.Get().(*[]byte)
+func (sr *StreamingReader) acquireDecryptionBuffer(size int) *[]byte {
+	bufPtr, ok := sr.decryptBufs.Get().(*[]byte)
 	if !ok || cap(*bufPtr) < size {
 		buf := make([]byte, size)
 		return &buf
@@ -30,8 +25,8 @@ func acquireDecryptionBuffer(size int) *[]byte {
 	return bufPtr
 }
 
-func releaseDecryptionBuffer(buf *[]byte) {
-	decryptionBufPool.Put(buf)
+func (sr *StreamingReader) releaseDecryptionBuffer(buf *[]byte) {
+	sr.decryptBufs.Put(buf)
 }
 
 // StreamingReader provides [io.ReaderAt] over NNTP segments with automatic
@@ -59,8 +54,10 @@ type StreamingReader struct {
 	totalSize int64
 	segCount  int
 
-	// Encryption support
-	encryption EncryptionConfig
+	// Encryption support. decryptBufs stores *[]byte so Put does not box
+	// the slice header.
+	encryption  EncryptionConfig
+	decryptBufs sync.Pool
 
 	// Read position for io.Reader interface
 	readOffset atomic.Int64
@@ -511,8 +508,8 @@ func (sr *StreamingReader) readAtEncrypted(ctx context.Context, cur *Cursor, p [
 	}
 
 	bufLen := alignedEnd - alignedStart
-	bufPtr := acquireDecryptionBuffer(int(bufLen))
-	defer releaseDecryptionBuffer(bufPtr)
+	bufPtr := sr.acquireDecryptionBuffer(int(bufLen))
+	defer sr.releaseDecryptionBuffer(bufPtr)
 	buf := *bufPtr
 
 	// Read aligned data

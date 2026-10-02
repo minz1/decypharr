@@ -10,7 +10,6 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
-//nolint:paralleltest // changes the process working directory
 func TestMarkAsFailedWithoutPathLeavesWorkingDirectoryAlone(t *testing.T) {
 	t.Chdir(t.TempDir())
 	if err := os.WriteFile(".processing", nil, 0o600); err != nil {

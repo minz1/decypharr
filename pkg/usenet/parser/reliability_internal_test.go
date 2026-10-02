@@ -200,7 +200,6 @@ func TestContentDetectionInfersExtensionForObfuscatedMedia(t *testing.T) {
 	}
 }
 
-//nolint:paralleltest // mutates the process-wide config singleton
 func TestExtensionlessObfuscatedMediaProducesLogicalFile(t *testing.T) {
 	config.Reset()
 	config.SetConfigPath(t.TempDir())
