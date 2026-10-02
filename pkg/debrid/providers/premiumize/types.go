@@ -146,10 +146,10 @@ func (t *flexibleUnixTime) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &s); err != nil {
 		return err
 	}
-	parsed, err := strconv.ParseInt(s, 10, 64)
-	if err != nil {
-		return nil
+	// Unparseable strings decode as "unknown" (0) rather than failing the
+	// whole transfer list.
+	if parsed, err := strconv.ParseInt(s, 10, 64); err == nil {
+		t.Unix = parsed
 	}
-	t.Unix = parsed
 	return nil
 }

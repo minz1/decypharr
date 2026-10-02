@@ -33,9 +33,15 @@ type Collector struct {
 	profileCache   map[string]*debridTypes.Profile
 	profileFetched time.Time
 	profileTTL     time.Duration
-
-	cancel context.CancelFunc
 }
+
+const (
+	// profileTTL is how long debrid profiles are cached between refreshes.
+	profileTTL = time.Minute
+	// refreshInterval is how often the background loop rebuilds the snapshot.
+	refreshInterval = 5 * time.Second
+	bytesPerMB      = 1 << 20
+)
 
 // New creates a Collector and starts the background refresh goroutine.
 func New(mgr *manager.Manager) *Collector {
@@ -43,16 +49,15 @@ func New(mgr *manager.Manager) *Collector {
 		mgr:          mgr,
 		logger:       logger.New("stats"),
 		profileCache: make(map[string]*debridTypes.Profile),
-		profileTTL:   60 * time.Second,
+		profileTTL:   profileTTL,
 	}
 	// Build an initial snapshot synchronously so the first request is served immediately.
 	c.snapshot = c.collect()
 	return c
 }
 
-// Start begins the background refresh loop. Call from server startup.
+// Start begins the background refresh loop, which runs until ctx is done.
 func (c *Collector) Start(ctx context.Context) {
-	ctx, c.cancel = context.WithCancel(ctx)
 	go c.loop(ctx)
 }
 
@@ -72,9 +77,9 @@ func (c *Collector) Refresh() *Snapshot {
 	return snap
 }
 
-// Handler returns an http.HandlerFunc that serves the cached snapshot as JSON.
+// Handler returns an [http.HandlerFunc] that serves the cached snapshot as JSON.
 func (c *Collector) Handler() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, _ *http.Request) {
 		snap := c.Snapshot()
 		utils.JSONResponse(w, snap, http.StatusOK)
 	}
@@ -82,7 +87,7 @@ func (c *Collector) Handler() http.HandlerFunc {
 
 // loop refreshes the snapshot on a timer.
 func (c *Collector) loop(ctx context.Context) {
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(refreshInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -109,7 +114,7 @@ func (c *Collector) collect() *Snapshot {
 	snap := &Snapshot{}
 
 	// --- System ---
-	mb := func(b uint64) string { return fmt.Sprintf("%.2fMB", float64(b)/1024/1024) }
+	mb := func(b uint64) string { return fmt.Sprintf("%.2fMB", float64(b)/bytesPerMB) }
 	snap.System = SystemStats{
 		// This is Go runtime memory. Direct mmap allocations are excluded.
 		MemoryUsed:     mb(memStats.Sys - memStats.HeapReleased),
@@ -222,12 +227,14 @@ func (c *Collector) collectDebrids(cfg *config.Config) []debridTypes.Stats {
 		ds := debridTypes.Stats{}
 		ls := debridTypes.LibraryStats{}
 
-		profile := profiles[debridName]
-		if profile == nil {
-			profile = &debridTypes.Profile{Name: debridName}
+		// Copy: cached profiles are shared with earlier snapshots that may be
+		// encoding concurrently.
+		profile := debridTypes.Profile{}
+		if cached := profiles[debridName]; cached != nil {
+			profile = *cached
 		}
 		profile.Name = debridName
-		ds.Profile = profile
+		ds.Profile = &profile
 
 		ls.Total = torrentCount
 		ls.ActiveLinks = c.mgr.GetTotalActiveDownloadLinks()

@@ -55,10 +55,10 @@ type UserInfo APIResponse[struct {
 
 type DownloadLinksResponse APIResponse[[]struct {
 	Created     int64  `json:"created"`
-	Id          string `json:"id"`
+	ID          string `json:"id"`
 	Name        string `json:"name"`
-	Url         string `json:"url"`
-	DownloadUrl string `json:"downloadUrl"`
+	URL         string `json:"url"`
+	DownloadURL string `json:"downloadUrl"`
 	Expired     bool   `json:"expired"`
 	Chunk       int    `json:"chunk"`
 	Host        string `json:"host"`

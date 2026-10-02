@@ -29,7 +29,7 @@ func TestTorrentResponses(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			server := httptest.NewServer(
-				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, test.body) }),
+				http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, test.body) }),
 			)
 			defer server.Close()
 			provider, err := New(config.Debrid{Name: "debridlink", APIKey: "token"}, nil)
@@ -38,36 +38,46 @@ func TestTorrentResponses(t *testing.T) {
 			}
 			provider.Host = server.URL
 			for _, list := range []bool{false, true} {
-				var torrent *types.Torrent
-				if list {
-					var torrents []*types.Torrent
-					torrents, err = provider.getTorrents(1, 100)
-					if err == nil && len(torrents) == 1 {
-						torrent = torrents[0]
-					}
-				} else {
-					torrent, err = provider.GetTorrent("torrent")
-				}
+				torrent, fetchErr := fetchTorrent(provider, list)
 				if test.wantError {
-					if err == nil {
+					if fetchErr == nil {
 						t.Fatalf("list=%v: invalid envelope accepted", list)
 					}
 					continue
 				}
-				if err != nil {
-					t.Fatal(err)
+				if fetchErr != nil {
+					t.Fatal(fetchErr)
 				}
-				if torrent == nil || torrent.Files == nil || len(torrent.Files) != test.files ||
-					torrent.Status != types.TorrentStatusDownloaded {
-					t.Fatalf("list=%v: torrent=%#v", list, torrent)
-				}
-				if test.files > 0 {
-					file := torrent.Files["movie.mkv"]
-					if file.Id != "file" || file.Link != "https://files.example/movie" || torrent.InfoHash != "hash" {
-						t.Fatalf("lost file identity: %#v", torrent)
-					}
-				}
+				checkTorrent(t, list, torrent, test.files)
 			}
 		})
+	}
+}
+
+// fetchTorrent reads torrent "torrent" through the list or the info endpoint.
+func fetchTorrent(provider *DebridLink, list bool) (*types.Torrent, error) {
+	if !list {
+		return provider.GetTorrent("torrent")
+	}
+	torrents, _, err := provider.getTorrents(1, pageSize)
+	if err != nil || len(torrents) != 1 {
+		return nil, err
+	}
+	return torrents[0], nil
+}
+
+// checkTorrent asserts a downloaded torrent with files allowed files.
+func checkTorrent(t *testing.T, list bool, torrent *types.Torrent, files int) {
+	t.Helper()
+	if torrent == nil || torrent.Files == nil || len(torrent.Files) != files ||
+		torrent.Status != types.TorrentStatusDownloaded {
+		t.Fatalf("list=%v: torrent=%#v", list, torrent)
+	}
+	if files == 0 {
+		return
+	}
+	file := torrent.Files["movie.mkv"]
+	if file.Id != "file" || file.Link != "https://files.example/movie" || torrent.InfoHash != "hash" {
+		t.Fatalf("lost file identity: %#v", torrent)
 	}
 }

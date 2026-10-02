@@ -14,14 +14,14 @@ type Client interface {
 	SubmitMagnet(tr *types.Torrent) (*types.Torrent, error)
 	CheckStatus(tr *types.Torrent) (*types.Torrent, error)
 	GetDownloadLink(ctx context.Context, torrentID string, file *types.File) (types.DownloadLink, error)
-	DeleteTorrent(torrentId string) error
+	DeleteTorrent(torrentID string) error
 	// IsAvailable returns one result for each checked, nonempty input hash.
 	// Result keys retain the input spelling. Missing keys were not checked.
 	// On failure, results contain only completed batches. Unsupported providers
 	// return types.ErrAvailabilityUnsupported.
 	IsAvailable(infohashes []string) (map[string]bool, error)
 	UpdateTorrent(torrent *types.Torrent) error
-	GetTorrent(torrentId string) (*types.Torrent, error)
+	GetTorrent(torrentID string) (*types.Torrent, error)
 	GetTorrents() ([]*types.Torrent, error)
 	Config() config.Debrid
 	Logger() zerolog.Logger

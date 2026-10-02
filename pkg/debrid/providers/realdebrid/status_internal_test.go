@@ -28,7 +28,100 @@ func TestCheckStatusSelectsAllowedFilesAndMapsLinks(t *testing.T) {
 		t.Fatal(err)
 	}
 	var gets, selections atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(selectionFlowHandler(t, &gets, &selections))
+	defer server.Close()
+	provider := &RealDebrid{
+		Host: server.URL,
+		client: request.New(
+			request.WithMaxRetries(0),
+			request.WithHeaders(map[string]string{"Authorization": "Bearer test-key"}),
+		),
+		config: config.Debrid{Name: "realdebrid"},
+		logger: zerolog.Nop(),
+	}
+	torrent, err := provider.CheckStatus(&types.Torrent{Id: "torrent-id"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gets.Load() != 2 || selections.Load() != 1 {
+		t.Fatalf("GETs = %d, selections = %d", gets.Load(), selections.Load())
+	}
+	if torrent.Status != types.TorrentStatusDownloaded || torrent.InfoHash != "hash" ||
+		torrent.Debrid != "realdebrid" ||
+		torrent.Name != "Release" ||
+		torrent.OriginalFilename != "Original" ||
+		torrent.Bytes != 3000 ||
+		len(torrent.Files) != 2 {
+		t.Fatalf("torrent = %#v", torrent)
+	}
+	for _, want := range []struct {
+		name, id, link string
+		size           int64
+	}{{"first.mkv", "7", "https://example.test/first", 1000}, {"second.mkv", "9", "https://example.test/second", 2000}} {
+		file := torrent.Files[want.name]
+		if file.Id != want.id || file.Name != want.name || file.Link != want.link || file.Size != want.size ||
+			file.TorrentID != "torrent-id" {
+			t.Errorf("file = %#v, want %#v", file, want)
+		}
+	}
+}
+
+func TestCheckStatusFailureAndUncachedContracts(t *testing.T) {
+	config.Reset()
+	config.SetConfigPath(t.TempDir())
+	t.Cleanup(config.Reset)
+	if _, err := config.Update(
+		func(c *config.Config) error { c.AllowedExt = []string{"mkv"}; return nil },
+	); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, state   string
+		selectStatus  int
+		allowUncached bool
+		wantStatus    types.TorrentStatus
+		wantErr       error
+		wantText      string
+	}{
+		{name: "selection limit", state: "waiting_files_selection", selectStatus: 509, wantErr: customerror.TooManyActiveDownloadsError},
+		{name: "selection rejected", state: "waiting_files_selection", selectStatus: 400, wantStatus: types.TorrentStatusDownloading, wantText: "Status: 400"},
+		{name: "uncached rejected", state: "downloading", wantStatus: types.TorrentStatusDownloading, wantErr: customerror.TorrentNotCachedError},
+		{name: "uncached allowed", state: "queued", allowUncached: true, wantStatus: types.TorrentStatusDownloading},
+		{name: "magnet error", state: "magnet_error", wantStatus: types.TorrentStatusError, wantText: "magnet_error"},
+		{name: "virus", state: "virus", wantStatus: types.TorrentStatusError, wantText: "virus"},
+		{name: "dead", state: "dead", wantStatus: types.TorrentStatusError, wantText: "dead"},
+		{name: "unknown", state: "future_state", wantStatus: types.TorrentStatusError, wantText: "future_state"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var gets, selects atomic.Int32
+			server := httptest.NewServer(singlePollHandler(t, tc.state, tc.selectStatus, &gets, &selects))
+			defer server.Close()
+			provider := &RealDebrid{
+				Host:   server.URL,
+				client: request.New(request.WithMaxRetries(0)),
+				logger: zerolog.Nop(),
+			}
+			result, err := provider.CheckStatus(&types.Torrent{Id: "id", DownloadUncached: tc.allowUncached})
+			assertError(t, err, tc.wantErr, tc.wantText)
+			if tc.wantStatus != "" && (result == nil || result.Status != tc.wantStatus) {
+				t.Fatalf("result = %#v, want status %s", result, tc.wantStatus)
+			}
+			wantSelects := int32(0)
+			if tc.selectStatus != 0 {
+				wantSelects = 1
+			}
+			if gets.Load() != 1 || selects.Load() != wantSelects {
+				t.Fatalf("GETs = %d, selections = %d", gets.Load(), selects.Load())
+			}
+		})
+	}
+}
+
+// selectionFlowHandler serves a torrent that waits for file selection once
+// and is downloaded on the next poll.
+func selectionFlowHandler(t *testing.T, gets, selections *atomic.Int32) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer test-key" {
 			t.Errorf("Authorization = %q", r.Header.Get("Authorization"))
 		}
@@ -66,125 +159,51 @@ func TestCheckStatusSelectsAllowedFilesAndMapsLinks(t *testing.T) {
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 			http.NotFound(w, r)
 		}
-	}))
-	defer server.Close()
-	provider := &RealDebrid{
-		Host: server.URL,
-		client: request.New(
-			request.WithMaxRetries(0),
-			request.WithHeaders(map[string]string{"Authorization": "Bearer test-key"}),
-		),
-		config: config.Debrid{Name: "realdebrid"},
-		logger: zerolog.Nop(),
 	}
-	torrent, err := provider.CheckStatus(&types.Torrent{Id: "torrent-id"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if gets.Load() != 2 || selections.Load() != 1 {
-		t.Fatalf("GETs = %d, selections = %d", gets.Load(), selections.Load())
-	}
-	if torrent.Status != types.TorrentStatusDownloaded || torrent.InfoHash != "hash" ||
-		torrent.Debrid != "realdebrid" ||
-		torrent.Name != "Release" ||
-		torrent.OriginalFilename != "Original" ||
-		torrent.Bytes != 3000 ||
-		len(torrent.Files) != 2 {
-		t.Fatalf("torrent = %#v", torrent)
-	}
-	for _, want := range []struct {
-		name, id, link string
-		size           int64
-	}{{"first.mkv", "7", "https://example.test/first", 1000}, {"second.mkv", "9", "https://example.test/second", 2000}} {
-		file := torrent.Files[want.name]
-		if file.Id != want.id || file.Name != want.name || file.Link != want.link || file.Size != want.size ||
-			file.TorrentId != "torrent-id" {
-			t.Errorf("file = %#v, want %#v", file, want)
+}
+
+// singlePollHandler serves one poll in the given state and answers file
+// selection with selectStatus.
+func singlePollHandler(t *testing.T, state string, selectStatus int, gets, selects *atomic.Int32) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /torrents/info/id":
+			if gets.Add(1) > 1 {
+				http.Error(w, "unexpected poll", http.StatusInternalServerError)
+				return
+			}
+			fmt.Fprintf(
+				w,
+				`{"status":%q,"filename":"movie","files":[{"id":1,"path":"/movie.mkv","bytes":1000}]}`,
+				state,
+			)
+		case "POST /torrents/selectFiles/id":
+			selects.Add(1)
+			if r.FormValue("files") != "1" {
+				t.Errorf("files = %q", r.FormValue("files"))
+			}
+			w.WriteHeader(selectStatus)
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
 		}
 	}
 }
 
-func TestCheckStatusFailureAndUncachedContracts(t *testing.T) {
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
-	if _, err := config.Update(
-		func(c *config.Config) error { c.AllowedExt = []string{"mkv"}; return nil },
-	); err != nil {
+// assertError checks err against a wanted sentinel, a wanted substring, or
+// success when neither is set.
+func assertError(t *testing.T, err, wantErr error, wantText string) {
+	t.Helper()
+	switch {
+	case wantErr != nil:
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("error = %v, want %v", err, wantErr)
+		}
+	case wantText != "":
+		if err == nil || !strings.Contains(err.Error(), wantText) {
+			t.Fatalf("error = %v, want %q", err, wantText)
+		}
+	case err != nil:
 		t.Fatal(err)
-	}
-	for _, tc := range []struct {
-		name, state   string
-		selectStatus  int
-		allowUncached bool
-		wantStatus    types.TorrentStatus
-		wantErr       error
-		wantText      string
-	}{
-		{name: "selection limit", state: "waiting_files_selection", selectStatus: 509, wantErr: customerror.TooManyActiveDownloadsError},
-		{name: "selection rejected", state: "waiting_files_selection", selectStatus: 400, wantStatus: types.TorrentStatusDownloading, wantText: "Status: 400"},
-		{name: "uncached rejected", state: "downloading", wantStatus: types.TorrentStatusDownloading, wantErr: customerror.TorrentNotCachedError},
-		{name: "uncached allowed", state: "queued", allowUncached: true, wantStatus: types.TorrentStatusDownloading},
-		{name: "magnet error", state: "magnet_error", wantStatus: types.TorrentStatusError, wantText: "magnet_error"},
-		{name: "virus", state: "virus", wantStatus: types.TorrentStatusError, wantText: "virus"},
-		{name: "dead", state: "dead", wantStatus: types.TorrentStatusError, wantText: "dead"},
-		{name: "unknown", state: "future_state", wantStatus: types.TorrentStatusError, wantText: "future_state"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			var gets, selects atomic.Int32
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				switch r.Method + " " + r.URL.Path {
-				case "GET /torrents/info/id":
-					if gets.Add(1) > 1 {
-						http.Error(w, "unexpected poll", http.StatusInternalServerError)
-						return
-					}
-					fmt.Fprintf(
-						w,
-						`{"status":%q,"filename":"movie","files":[{"id":1,"path":"/movie.mkv","bytes":1000}]}`,
-						tc.state,
-					)
-				case "POST /torrents/selectFiles/id":
-					selects.Add(1)
-					if r.FormValue("files") != "1" {
-						t.Errorf("files = %q", r.FormValue("files"))
-					}
-					w.WriteHeader(tc.selectStatus)
-				default:
-					t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
-					http.NotFound(w, r)
-				}
-			}))
-			defer server.Close()
-			provider := &RealDebrid{
-				Host:   server.URL,
-				client: request.New(request.WithMaxRetries(0)),
-				logger: zerolog.Nop(),
-			}
-			result, err := provider.CheckStatus(&types.Torrent{Id: "id", DownloadUncached: tc.allowUncached})
-			switch {
-			case tc.wantErr != nil:
-				if !errors.Is(err, tc.wantErr) {
-					t.Fatalf("error = %v, want %v", err, tc.wantErr)
-				}
-			case tc.wantText != "":
-				if err == nil || !strings.Contains(err.Error(), tc.wantText) {
-					t.Fatalf("error = %v, want %q", err, tc.wantText)
-				}
-			case err != nil:
-				t.Fatal(err)
-			}
-			if tc.wantStatus != "" && (result == nil || result.Status != tc.wantStatus) {
-				t.Fatalf("result = %#v, want status %s", result, tc.wantStatus)
-			}
-			wantSelects := int32(0)
-			if tc.selectStatus != 0 {
-				wantSelects = 1
-			}
-			if gets.Load() != 1 || selects.Load() != wantSelects {
-				t.Fatalf("GETs = %d, selections = %d", gets.Load(), selects.Load())
-			}
-		})
 	}
 }

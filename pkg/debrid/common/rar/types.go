@@ -16,10 +16,9 @@ type File struct {
 	NextOffset     int64
 }
 
-// HttpFile represents a RAR file accessible over HTTP.
-type HttpFile struct {
+// HTTPFile represents a RAR file accessible over HTTP.
+type HTTPFile struct {
 	URL        string
-	Position   int64
 	client     *http.Client
 	FileSize   int64
 	MaxRetries int
@@ -27,7 +26,7 @@ type HttpFile struct {
 
 // Reader reads RAR3 format archives.
 type Reader struct {
-	File         *HttpFile
+	File         *HTTPFile
 	ChunkSize    int
 	Marker       int64
 	HeaderEndPos int64 // Position after the archive header

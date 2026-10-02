@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"slices"
 	"sync/atomic"
@@ -33,7 +34,12 @@ type Manager struct {
 	lastNoActiveWarning atomic.Int64
 }
 
-const noActiveWarningInterval = time.Minute
+const (
+	noActiveWarningInterval = time.Minute
+	// statusRetryableNonStandard is a non-standard transient status that
+	// download hosts return; requests are retried like 429 and 502.
+	statusRetryableNonStandard = 447
+)
 
 func NewManager(debridConf config.Debrid, downloadRL ratelimit.Limiter, logger zerolog.Logger) *Manager {
 	m := &Manager{
@@ -57,7 +63,7 @@ func NewManager(debridConf config.Debrid, downloadRL ratelimit.Limiter, logger z
 			request.WithRateLimiter(downloadRL),
 			request.WithHeaders(headers),
 			request.WithMaxRetries(cfg.Retries),
-			request.WithRetryableStatus(http.StatusTooManyRequests, http.StatusBadGateway, 447),
+			request.WithRetryableStatus(http.StatusTooManyRequests, http.StatusBadGateway, statusRetryableNonStandard),
 		}
 		if debridConf.Proxy != "" {
 			opts = append(opts, request.WithProxy(debridConf.Proxy))
@@ -81,7 +87,7 @@ func NewManager(debridConf config.Debrid, downloadRL ratelimit.Limiter, logger z
 
 func (m *Manager) Active() []*Account {
 	activeAccounts := make([]*Account, 0)
-	m.accounts.Range(func(key string, acc *Account) bool {
+	m.accounts.Range(func(_ string, acc *Account) bool {
 		if !acc.Disabled.Load() {
 			activeAccounts = append(activeAccounts, acc)
 		}
@@ -96,7 +102,7 @@ func (m *Manager) Active() []*Account {
 
 func (m *Manager) All() []*Account {
 	allAccounts := make([]*Account, 0)
-	m.accounts.Range(func(key string, acc *Account) bool {
+	m.accounts.Range(func(_ string, acc *Account) bool {
 		allAccounts = append(allAccounts, acc)
 		return true
 	})
@@ -163,7 +169,7 @@ func (m *Manager) Disable(account *Account) {
 }
 
 func (m *Manager) Reset() {
-	m.accounts.Range(func(key string, acc *Account) bool {
+	m.accounts.Range(func(_ string, acc *Account) bool {
 		acc.Reset()
 		return true
 	})
@@ -280,7 +286,7 @@ func (m *Manager) Stats() []map[string]any {
 
 func (m *Manager) RefreshLinks(fetcher LinksFetcher) error {
 	wgPool := pool.New().WithMaxGoroutines(max(1, m.accounts.Size())).WithErrors()
-	m.accounts.Range(func(key string, acc *Account) bool {
+	m.accounts.Range(func(_ string, acc *Account) bool {
 		wgPool.Go(func() error {
 			links, err := fetcher(acc)
 			if err != nil {
@@ -307,7 +313,7 @@ func (m *Manager) Sync(syncer SyncFunc) {
 		return
 	}
 	wgPool := pool.New().WithMaxGoroutines(workers)
-	m.accounts.Range(func(key string, acc *Account) bool {
+	m.accounts.Range(func(_ string, acc *Account) bool {
 		wgPool.Go(func() {
 			if err := syncer(acc); err != nil {
 				m.logger.Error().
@@ -350,4 +356,46 @@ func (m *Manager) UpdateAccount(updatedAccount *Account) {
 		return
 	}
 	m.accounts.Store(updatedAccount.Token, updatedAccount)
+}
+
+// speedTestBytes is how much of a cached link MeasureDownload reads.
+const speedTestBytes = 1 << 20
+
+// MeasureDownload reads at most the first MiB of a cached download link of the
+// current account and records the throughput in result. It leaves result
+// untouched when no link is cached or the download fails. The read is bounded
+// even when the server ignores the Range header.
+func (m *Manager) MeasureDownload(ctx context.Context, result *types.SpeedTestResult) {
+	current := m.Current()
+	if current == nil {
+		return
+	}
+	link, found := current.GetRandomLink()
+	if !found {
+		return
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, link.DownloadLink, nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set("Range", fmt.Sprintf("bytes=0-%d", speedTestBytes-1))
+
+	start := time.Now()
+	resp, err := current.Client().Do(req)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+		return
+	}
+	n, _ := io.CopyN(io.Discard, resp.Body, speedTestBytes)
+	elapsed := time.Since(start)
+	if n == 0 {
+		return
+	}
+	result.BytesRead = n
+	if elapsed > 0 {
+		result.SpeedMBps = float64(n) / elapsed.Seconds() / speedTestBytes
+	}
 }

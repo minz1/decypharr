@@ -2,14 +2,23 @@ package notifications
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+)
+
+// Discord embed colors and the error-body excerpt limit.
+const (
+	colorGreen   = 0x2ECC71
+	colorRed     = 0xE74C3C
+	colorYellow  = 0xF1C40F
+	colorBlue    = 0x3498DB
+	maxErrorBody = 1024
 )
 
 // DiscordEmbed represents a Discord embed object.
@@ -34,9 +43,7 @@ type DiscordNotifier struct {
 func NewDiscord(webhookURL string) *DiscordNotifier {
 	return &DiscordNotifier{
 		webhookURL: webhookURL,
-		client: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		client:     &http.Client{},
 	}
 }
 
@@ -46,7 +53,7 @@ func (d *DiscordNotifier) Name() string {
 }
 
 // Send dispatches the notification to Discord.
-func (d *DiscordNotifier) Send(event Event) error {
+func (d *DiscordNotifier) Send(ctx context.Context, event Event) error {
 	if d.webhookURL == "" {
 		return nil
 	}
@@ -67,7 +74,7 @@ func (d *DiscordNotifier) Send(event Event) error {
 		return fmt.Errorf("failed to marshal discord webhook: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, d.webhookURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.webhookURL, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("failed to create discord request: %w", err)
 	}
@@ -80,7 +87,7 @@ func (d *DiscordNotifier) Send(event Event) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
 		return fmt.Errorf("discord returned error status code: %s, body: %s", resp.Status, string(bodyBytes))
 	}
 
@@ -91,13 +98,13 @@ func (d *DiscordNotifier) Send(event Event) error {
 func (d *DiscordNotifier) getColor(status string) int {
 	switch status {
 	case "success":
-		return 3066993 // Green
+		return colorGreen
 	case "error":
-		return 15158332 // Red
+		return colorRed
 	case "warning":
-		return 15844367 // Yellow/Orange
+		return colorYellow
 	case "pending":
-		return 3447003 // Blue
+		return colorBlue
 	default:
 		return 0 // Default
 	}
@@ -120,9 +127,12 @@ func (d *DiscordNotifier) getHeader(event config.NotificationEvent) string {
 		return "[Decypharr] Repair Cancelled"
 	default:
 		// Split the event string and capitalize the first letter of each word
+		// (strings.ToTitle would upper-case every letter).
 		evs := strings.Split(string(event), "_")
 		for i, ev := range evs {
-			evs[i] = strings.ToTitle(ev)
+			if ev != "" {
+				evs[i] = strings.ToUpper(ev[:1]) + ev[1:]
+			}
 		}
 		return "[Decypharr] " + strings.Join(evs, " ")
 	}

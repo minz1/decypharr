@@ -9,6 +9,7 @@ import (
 )
 
 func TestProcessRSSIncludesMappedPages(t *testing.T) {
+	t.Parallel()
 	before, err := processRSS()
 	if err != nil {
 		t.Fatal(err)
