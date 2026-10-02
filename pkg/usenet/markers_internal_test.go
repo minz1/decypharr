@@ -15,7 +15,7 @@ func TestMarkAsFailedWithoutPathLeavesWorkingDirectoryAlone(t *testing.T) {
 	if err := os.WriteFile(".processing", nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	u := &Usenet{nzbStorage: &NZBStorage{metaDir: t.TempDir(), logger: zerolog.Nop()}, logger: zerolog.Nop()}
+	u := &Usenet{nzbStorage: &NZBStorage{metaDir: t.TempDir(), codec: testCodec(t), logger: zerolog.Nop()}, logger: zerolog.Nop()}
 	if err := u.markAsFailed(&storage.NZB{ID: "queued"}, errors.New("boom")); err != nil {
 		t.Fatal(err)
 	}

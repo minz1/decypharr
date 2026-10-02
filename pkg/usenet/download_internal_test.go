@@ -62,7 +62,7 @@ func TestDownloadDecryptsEncryptedFiles(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = client.Close() })
 
-	metaStore := &NZBStorage{metaDir: t.TempDir(), logger: zerolog.Nop()}
+	metaStore := &NZBStorage{metaDir: t.TempDir(), codec: testCodec(t), logger: zerolog.Nop()}
 	if addErr := metaStore.AddNZB(&storage.NZB{ID: "nzb", Files: []storage.NZBFile{file}}); addErr != nil {
 		t.Fatal(addErr)
 	}
