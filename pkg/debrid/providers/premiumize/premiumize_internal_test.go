@@ -14,7 +14,7 @@ func TestGetTorrentsAssignsStableUniqueHashesWithoutMagnetSources(t *testing.T) 
 	config.SetConfigPath(t.TempDir())
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/transfer/list", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /api/transfer/list", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprint(w, `{
 			"status":"success",
@@ -89,7 +89,7 @@ func TestTransferInfoHashPrefersRealHash(t *testing.T) {
 func TestAvailabilityRejectsIncompleteResponses(t *testing.T) {
 	config.SetConfigPath(t.TempDir())
 	t.Cleanup(config.Reset)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, `{"status":"success","response":[true]}`)
 	}))
 	defer server.Close()

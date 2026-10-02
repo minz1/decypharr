@@ -23,7 +23,7 @@ func TestCheckFileHonorsCancellation(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			started := make(chan struct{})
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 				_, _ = io.Copy(io.Discard, r.Body)
 				close(started)
 				<-r.Context().Done()

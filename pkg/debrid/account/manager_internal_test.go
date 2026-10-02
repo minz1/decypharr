@@ -122,8 +122,19 @@ func TestMeasureDownloadIsBoundedWhenRangeIgnored(t *testing.T) {
 
 func TestDownloadLinkPropagatesFailuresAndCancellation(t *testing.T) {
 	t.Parallel()
-	for _, scenario := range []string{"all fail", "cancel before", "cancel during"} {
-		t.Run(scenario, func(t *testing.T) {
+	firstErr, secondErr := errors.New("first failed"), errors.New("second failed")
+	for _, tc := range []struct {
+		name         string
+		cancelBefore bool
+		cancelDuring bool
+		wantCalls    int
+		wantErrs     []error
+	}{
+		{name: "all fail", wantCalls: 2, wantErrs: []error{firstErr, secondErr}},
+		{name: "cancel before", cancelBefore: true, wantCalls: 0, wantErrs: []error{context.Canceled}},
+		{name: "cancel during", cancelDuring: true, wantCalls: 1, wantErrs: []error{context.Canceled}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			var logs bytes.Buffer
 			m, first := newTestManager(&logs)
@@ -131,44 +142,32 @@ func TestDownloadLinkPropagatesFailuresAndCancellation(t *testing.T) {
 			m.accounts.Store(second.Token, second)
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			if scenario == "cancel before" {
+			if tc.cancelBefore {
 				cancel()
 			}
-			firstErr, secondErr := errors.New("first failed"), errors.New("second failed")
 			calls := 0
-			_, err := m.GetDownloadLink(
-				ctx,
-				"id",
-				&types.File{Link: "file"},
-				func(got context.Context, acc *Account, _ string, _ *types.File) (types.DownloadLink, error) {
-					calls++
-					if got != ctx {
-						t.Error("caller context was replaced")
-					}
-					if scenario == "cancel during" {
-						cancel()
-						return types.DownloadLink{}, ctx.Err()
-					}
-					if acc == first {
-						return types.DownloadLink{}, firstErr
-					}
+			fetch := func(got context.Context, acc *Account, _ string, _ *types.File) (types.DownloadLink, error) {
+				calls++
+				if got != ctx {
+					t.Error("caller context was replaced")
+				}
+				switch {
+				case tc.cancelDuring:
+					cancel()
+					return types.DownloadLink{}, ctx.Err()
+				case acc == first:
+					return types.DownloadLink{}, firstErr
+				default:
 					return types.DownloadLink{}, secondErr
-				},
-			)
-			if scenario == "all fail" {
-				if calls != 2 || !errors.Is(err, firstErr) || !errors.Is(err, secondErr) {
-					t.Fatalf("calls=%d error=%v, want both failures", calls, err)
 				}
-			} else {
-				if !errors.Is(err, context.Canceled) {
-					t.Fatalf("error=%v, want context.Canceled", err)
-				}
-				wantCalls := 1
-				if scenario == "cancel before" {
-					wantCalls = 0
-				}
-				if calls != wantCalls {
-					t.Fatalf("fetch calls=%d, want %d", calls, wantCalls)
+			}
+			_, err := m.GetDownloadLink(ctx, "id", &types.File{Link: "file"}, fetch)
+			if calls != tc.wantCalls {
+				t.Fatalf("fetch calls=%d, want %d", calls, tc.wantCalls)
+			}
+			for _, want := range tc.wantErrs {
+				if !errors.Is(err, want) {
+					t.Fatalf("error=%v, want %v", err, want)
 				}
 			}
 		})

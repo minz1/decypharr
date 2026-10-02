@@ -122,7 +122,7 @@ func TestCheckStatusRestartsStatusSeven(t *testing.T) {
 	var statusChecks atomic.Int32
 	var restartCalls atomic.Int32
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /v4.1/magnet/status", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /v4.1/magnet/status", func(w http.ResponseWriter, _ *http.Request) {
 		statusCode := 7
 		if statusChecks.Add(1) > 1 {
 			statusCode = 1
@@ -174,7 +174,7 @@ func TestCheckStatusBoundsStatusSevenRetries(t *testing.T) {
 	var statusChecks atomic.Int32
 	var restartCalls atomic.Int32
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /magnet/status", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /magnet/status", func(w http.ResponseWriter, _ *http.Request) {
 		statusChecks.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprint(
@@ -182,7 +182,7 @@ func TestCheckStatusBoundsStatusSevenRetries(t *testing.T) {
 			`{"status":"success","data":{"magnets":[{"id":42,"filename":"Release.mkv","statusCode":7}]}}`,
 		)
 	})
-	mux.HandleFunc("POST /magnet/restart", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /magnet/restart", func(w http.ResponseWriter, _ *http.Request) {
 		restartCalls.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprint(w, `{"status":"success","data":{"message":"Magnet was successfully restarted"}}`)
@@ -212,14 +212,14 @@ func TestCheckStatusDoesNotRestartTerminalStatus(t *testing.T) {
 
 	var restartCalls atomic.Int32
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /magnet/status", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /magnet/status", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprint(
 			w,
 			`{"status":"success","data":{"magnets":[{"id":42,"filename":"Release.mkv","statusCode":10}]}}`,
 		)
 	})
-	mux.HandleFunc("POST /magnet/restart", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /magnet/restart", func(w http.ResponseWriter, _ *http.Request) {
 		restartCalls.Add(1)
 		w.WriteHeader(http.StatusNoContent)
 	})
