@@ -27,6 +27,7 @@ func newAuthenticationTestQBit(t *testing.T) *QBit {
 	return &QBit{manager: mgr}
 }
 
+//nolint:paralleltest // mutates the process-wide config singleton
 func TestAuthenticateDoesNotOverwriteArrWithClientCredentials(t *testing.T) {
 	q := newAuthenticationTestQBit(t)
 	existing := arr.Arr{Name: "whisparr", Host: "http://whisparr:6969", Token: "arr-api-key"}
@@ -57,6 +58,7 @@ func TestAuthenticateDoesNotOverwriteArrWithClientCredentials(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // mutates the process-wide config singleton
 func TestAuthenticateDiscoversValidatedArrCredentials(t *testing.T) {
 	q := newAuthenticationTestQBit(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -84,6 +86,7 @@ func TestAuthenticateDiscoversValidatedArrCredentials(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // mutates the process-wide config singleton
 func TestPreferencesRequireAuthentication(t *testing.T) {
 	q := newAuthenticationTestQBit(t)
 	cfg := config.Get()
@@ -122,6 +125,7 @@ func TestPreferencesRequireAuthentication(t *testing.T) {
 // (chi's Recoverer middleware catches the panic, but the goroutine traceback
 // is logged on every occurrence).
 func TestDecodeAuthHeader(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name         string
 		header       string
@@ -177,6 +181,7 @@ func TestDecodeAuthHeader(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			defer func() {
 				if r := recover(); r != nil {
 					if tt.mustNotPanic {

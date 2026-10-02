@@ -53,6 +53,7 @@ func serve(s *Server, method, path string, protected bool) *httptest.ResponseRec
 	return w
 }
 
+//nolint:paralleltest // mutates the process-wide config singleton
 func TestRegisterRedirects(t *testing.T) {
 	config.Reset()
 	config.SetConfigPath(t.TempDir())

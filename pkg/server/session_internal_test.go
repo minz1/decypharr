@@ -11,6 +11,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/config"
 )
 
+//nolint:paralleltest // mutates the process-wide config singleton
 func TestCredentialChangesInvalidateBrowserSessions(t *testing.T) {
 	for _, change := range []string{"password", "token", "mode"} {
 		t.Run(change, func(t *testing.T) {

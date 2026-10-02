@@ -55,6 +55,7 @@ func streamURL(srv *httptest.Server, entry *storage.Entry, sig string) string {
 	return u
 }
 
+//nolint:paralleltest // mutates the process-wide config singleton
 func TestStreamHeadServesFromStorageAlone(t *testing.T) {
 	srv, entry := newStreamServer(t)
 
@@ -90,6 +91,7 @@ func TestStreamHeadServesFromStorageAlone(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // mutates the process-wide config singleton
 func TestStreamAuth(t *testing.T) {
 	srv, entry := newStreamServer(t)
 	cfg := config.Get()
@@ -143,6 +145,7 @@ func TestStreamAuth(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // mutates the process-wide config singleton
 func TestStreamUnknownIdentity(t *testing.T) {
 	srv, entry := newStreamServer(t)
 
