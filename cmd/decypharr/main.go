@@ -48,7 +48,7 @@ func Start(ctx context.Context) error {
 		_log := logger.Default()
 
 		// ascii banner
-		fmt.Printf(`
+		fmt.Fprintf(os.Stdout, `
 +-------------------------------------------------------+
 |                                                       |
 |  ╔╦╗╔═╗╔═╗╦ ╦╔═╗╦ ╦╔═╗╦═╗╦═╗                          |
@@ -106,6 +106,10 @@ func Start(ctx context.Context) error {
 			<-serviceResult
 			_log.Info().Msg("Decypharr has been restarted.")
 			resetFunc()
+			// Derived from the outer ctx, not from the previous svcCtx, so
+			// restarts do not nest contexts. Must stay an assignment: the
+			// next iteration's goroutine and cancel paths use these variables.
+			//nolint:fatcontext // fresh child of ctx per restart, not nested
 			svcCtx, cancelSvc = context.WithCancel(ctx)
 
 		case err := <-serviceResult:
@@ -127,7 +131,9 @@ func createMountManager(mgr *manager.Manager, cfg *config.Config) manager.MountM
 		return dfs.NewManager(mgr)
 	case config.MountTypeExternalRclone:
 		return external.NewManager(mgr)
-	default:
+	case config.MountTypeNone:
+		return manager.NewStubMountManager()
+	default: // unset
 		return manager.NewStubMountManager()
 	}
 }
