@@ -31,17 +31,9 @@ const (
 	bufferSize = 256 * 1024 // 256KB buffer for streaming
 )
 
-// streamBufferPool stores *[]byte so Put does not box the slice header.
-var streamBufferPool = sync.Pool{
-	New: func() any {
-		buf := make([]byte, bufferSize)
-		return &buf
-	},
-}
-
-func acquireStreamBuffer() *[]byte {
-	bufPtr := streamBufferPool.Get().(*[]byte)
-	if cap(*bufPtr) < bufferSize {
+func (u *Usenet) acquireStreamBuffer() *[]byte {
+	bufPtr, ok := u.streamBuffers.Get().(*[]byte)
+	if !ok || cap(*bufPtr) < bufferSize {
 		buf := make([]byte, bufferSize)
 		return &buf
 	}
@@ -49,11 +41,11 @@ func acquireStreamBuffer() *[]byte {
 	return bufPtr
 }
 
-func releaseStreamBuffer(buf *[]byte) {
+func (u *Usenet) releaseStreamBuffer(buf *[]byte) {
 	if buf == nil || cap(*buf) < bufferSize {
 		return
 	}
-	streamBufferPool.Put(buf)
+	u.streamBuffers.Put(buf)
 }
 
 type fsEntry struct {
@@ -119,7 +111,7 @@ func (fe *fsEntry) release() {
 }
 
 // getOrCreateReader returns the shared reader, creating it lazily on first use.
-// Uses sync.Once to ensure the reader is created exactly once even under concurrent access.
+// Uses [sync.Once] to ensure the reader is created exactly once even under concurrent access.
 func (fe *fsEntry) getOrCreateReader() (fs.PrefetchableReaderAt, int64, error) {
 	fe.readerOnce.Do(func() {
 		var readerAt fs.PrefetchableReaderAt
@@ -164,7 +156,7 @@ func (fe *fsEntry) getOrCreateReader() (fs.PrefetchableReaderAt, int64, error) {
 	return fe.reader, fe.readerSize, nil
 }
 
-// noPrefetchReader wraps io.ReaderAt for cases where prefetch isn't available.
+// noPrefetchReader wraps [io.ReaderAt] for cases where prefetch isn't available.
 type noPrefetchReader struct {
 	io.ReaderAt
 }
@@ -183,7 +175,7 @@ func (n *noPrefetchReader) ReadAtContext(ctx context.Context, p []byte, off int6
 	return nr, err
 }
 
-func (n *noPrefetchReader) Prefetch(ctx context.Context, off, length int64) {
+func (n *noPrefetchReader) Prefetch(_ context.Context, _, _ int64) {
 	// No-op for multi-volume readers
 }
 
@@ -262,6 +254,8 @@ type Usenet struct {
 	cleanupStop              chan struct{}
 	cleanupWg                sync.WaitGroup
 	closeOnce                sync.Once
+	// streamBuffers stores *[]byte so Put does not box the slice header.
+	streamBuffers sync.Pool
 
 	fs *xsync.Map[string, *fsEntry]
 }
@@ -301,7 +295,7 @@ func New() (*Usenet, error) {
 	_logger := logger.New("usenet")
 
 	metadataDir := filepath.Join(config.GetMainPath(), "usenet", "nzbs")
-	if err := os.MkdirAll(metadataDir, 0755); err != nil {
+	if err := os.MkdirAll(metadataDir, 0o750); err != nil {
 		return nil, fmt.Errorf("failed to create metadata dir: %w", err)
 	}
 
@@ -328,7 +322,7 @@ func New() (*Usenet, error) {
 
 	// Disk rewind files are session-scoped; clear any left by an interrupted run.
 	if streamsDir := strings.TrimSpace(usenetConfig.DiskPath); streamsDir != "" {
-		if mkdirAllErr := os.MkdirAll(streamsDir, 0o755); mkdirAllErr != nil {
+		if mkdirAllErr := os.MkdirAll(streamsDir, 0o750); mkdirAllErr != nil {
 			_ = client.Close()
 			return nil, fmt.Errorf("create Usenet stream cache: %w", mkdirAllErr)
 		}
@@ -435,6 +429,8 @@ func (u *Usenet) getOrCreateEntry(
 		key = baseKey + "::rewind"
 	case RetentionDelivery:
 		key = baseKey + "::delivery"
+	case RetentionWindow:
+		// default key
 	}
 
 	// Fast path: entry already exists and isn't being torn down. acquire() (a
@@ -680,9 +676,11 @@ func (u *Usenet) checkNZBAvailability(ctx context.Context, nzb *storage.NZB) err
 		if file.FileType == storage.NZBFileTypeIgnore {
 			continue
 		}
-		if ctx.Err() != nil {
+		select {
+		case <-ctx.Done():
 			// Cancelled/timed out: not a content failure — don't fail the NZB.
 			return nil
+		default:
 		}
 		if err := u.CheckFileAvailability(ctx, file, samplePercent); err != nil {
 			u.logger.Warn().
@@ -795,7 +793,7 @@ func (u *Usenet) Close() error {
 		u.cleanupWg.Wait()
 
 		entries := make([]*fsEntry, 0, u.fs.Size())
-		u.fs.Range(func(key string, entry *fsEntry) bool {
+		u.fs.Range(func(_ string, entry *fsEntry) bool {
 			entries = append(entries, entry)
 			return true
 		})
@@ -1015,8 +1013,8 @@ func (u *Usenet) Stream(ctx context.Context, nzoID, filename string, start, end 
 	cursor.Prefetch(ctx, rangeStart, prefetchLen)
 
 	section := newContextSectionReader(ctx, cursor, rangeStart, length)
-	bufPtr := acquireStreamBuffer()
-	defer releaseStreamBuffer(bufPtr)
+	bufPtr := u.acquireStreamBuffer()
+	defer u.releaseStreamBuffer(bufPtr)
 
 	// Use a safe copy loop that checks context and validates read counts
 	_, err = safeCopyBuffer(ctx, writer, section, *bufPtr)
@@ -1040,9 +1038,7 @@ func (u *Usenet) Stream(ctx context.Context, nzoID, filename string, start, end 
 // validation of read counts to prevent panics from corrupted readers during shutdown.
 func safeCopyBuffer(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) (written int64, err error) {
 	if len(buf) == 0 {
-		bufPtr := acquireStreamBuffer()
-		defer releaseStreamBuffer(bufPtr)
-		buf = *bufPtr
+		buf = make([]byte, bufferSize)
 	}
 	bufLen := len(buf)
 
@@ -1238,7 +1234,7 @@ func (u *Usenet) saveNZBFile(id string, content []byte) (string, error) {
 	// refresh watcher, and left truncated fragment files behind. The UUID keeps
 	// every derived name comfortably under the cap.
 	path := filepath.Join(u.metadataDir, id+".nzb")
-	if err := os.WriteFile(path, content, 0644); err != nil {
+	if err := os.WriteFile(path, content, 0o600); err != nil {
 		return "", fmt.Errorf("failed to save NZB file to disk: %w", err)
 	}
 	return path, nil
@@ -1252,7 +1248,7 @@ func (u *Usenet) StageNZB(id string, content []byte) (string, error) {
 	// Keep the staged file off the .nzb extension so the metadata-directory
 	// watcher does not treat a pending active-download job as an unmanaged import.
 	path := filepath.Join(u.metadataDir, id+".queued")
-	if err := os.WriteFile(path, content, 0644); err != nil {
+	if err := os.WriteFile(path, content, 0o600); err != nil {
 		return "", fmt.Errorf("failed to stage NZB file: %w", err)
 	}
 	return path, nil
@@ -1268,7 +1264,7 @@ func (u *Usenet) RemoveStagedNZB(path string) {
 func (u *Usenet) markAsProcessing(nzb *storage.NZB) error {
 	// Mark as processing by creating a marker file with the NZB ID
 	markerPath := nzb.Path + ".processing"
-	if err := os.WriteFile(markerPath, []byte(nzb.ID), 0644); err != nil {
+	if err := os.WriteFile(markerPath, []byte(nzb.ID), 0o600); err != nil {
 		return fmt.Errorf("failed to create processing marker: %w", err)
 	}
 	return nil
