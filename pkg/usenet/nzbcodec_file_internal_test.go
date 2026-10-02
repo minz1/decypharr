@@ -1,6 +1,7 @@
 package usenet
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"testing"
@@ -65,17 +66,14 @@ func TestDecodeFileV2MatchesFullDecode(t *testing.T) {
 	for i := range full.Files {
 		want := full.Files[i]
 		got, decodeFileV2Err := decodeFileV2(data, want.Name)
-		if decodeFileV2Err != nil {
-			t.Fatalf("decodeFileV2(%q): %v", want.Name, decodeFileV2Err)
-		}
 		if want.IsDeleted {
-			if got != nil {
-				t.Fatalf("decodeFileV2(%q) returned a deleted file", want.Name)
+			if !errors.Is(decodeFileV2Err, errFileNotFound) {
+				t.Fatalf("decodeFileV2(%q) on a deleted file: %v", want.Name, decodeFileV2Err)
 			}
 			continue
 		}
-		if got == nil {
-			t.Fatalf("decodeFileV2(%q) returned nil", want.Name)
+		if decodeFileV2Err != nil {
+			t.Fatalf("decodeFileV2(%q): %v", want.Name, decodeFileV2Err)
 		}
 		if !reflect.DeepEqual(*got, want) {
 			t.Fatalf("decodeFileV2(%q) mismatch:\n got %+v\nwant %+v", want.Name, *got, want)
@@ -89,12 +87,8 @@ func TestDecodeFileV2MissingFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	got, err := decodeFileV2(data, "not-here.mkv")
-	if err != nil {
-		t.Fatalf("decodeFileV2: %v", err)
-	}
-	if got != nil {
-		t.Fatalf("expected nil for a missing file, got %+v", *got)
+	if _, err = decodeFileV2(data, "not-here.mkv"); !errors.Is(err, errFileNotFound) {
+		t.Fatalf("decodeFileV2 error = %v, want errFileNotFound", err)
 	}
 }
 

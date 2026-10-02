@@ -828,11 +828,11 @@ func (u *Usenet) Close() error {
 
 func (u *Usenet) getFile(nzoID, filename string) (*storage.NZBFile, error) {
 	file, err := u.nzbStorage.GetNZBFile(nzoID, filename)
+	if errors.Is(err, errFileNotFound) {
+		return nil, fmt.Errorf("file %s not found in NZB %s", filename, nzoID)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("metadata load failed: %w", err)
-	}
-	if file == nil {
-		return nil, fmt.Errorf("file %s not found in NZB %s", filename, nzoID)
 	}
 	if file.NzbID == "" {
 		file.NzbID = nzoID
