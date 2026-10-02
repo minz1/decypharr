@@ -9,8 +9,6 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
-
-	"github.com/sirrobot01/decypharr/internal/config"
 )
 
 // block builds a RAR3 block header of the given size; extra is written right
@@ -33,7 +31,7 @@ func fileBlock(name string) []byte {
 	binary.LittleEndian.PutUint32(h[11:15], 3) // unpacked size
 	binary.LittleEndian.PutUint16(h[26:28], uint16(len(name)))
 	copy(h[fileHeaderSize:], name)
-	return append(h, "abc"...)
+	return bytes.Join([][]byte{h, []byte("abc")}, nil)
 }
 
 func serveArchive(t *testing.T, parts ...[]byte) string {
@@ -50,11 +48,10 @@ func serveArchive(t *testing.T, parts ...[]byte) string {
 }
 
 func TestReadFilesRejectsZeroSizeBlock(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	reader, err := NewReader(ctx, serveArchive(t, block(0x7A, 0, 0, nil)))
+	reader, err := NewReader(ctx, serveArchive(t, block(0x7A, 0, 0, nil)), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,13 +61,12 @@ func TestReadFilesRejectsZeroSizeBlock(t *testing.T) {
 }
 
 func TestReadFilesSkipsLongBlockByAddSize(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 	// A 20-byte sub-block whose ADD_SIZE (5) follows the base header; its
 	// last four header bytes are 0xFF and must not be read as the data size.
 	sub := append(block(0x7A, flagHasData, 20, []byte{5, 0, 0, 0}), "xxxxx"...)
 	url := serveArchive(t, sub, fileBlock("movie.mkv"), block(blockEnd, 0, baseHeaderSize, nil))
-	reader, err := NewReader(t.Context(), url)
+	reader, err := NewReader(t.Context(), url, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

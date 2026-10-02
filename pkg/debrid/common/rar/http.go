@@ -17,12 +17,13 @@ import (
 // httpTimeout bounds each HEAD or ranged GET against the archive URL.
 const httpTimeout = 60 * time.Second
 
-// NewHTTPFile opens url for random access. Requests are bound to ctx.
-func NewHTTPFile(ctx context.Context, url string) (*HTTPFile, error) {
+// NewHTTPFile opens url for random access, retrying network failures up to
+// maxRetries times. Requests are bound to ctx.
+func NewHTTPFile(ctx context.Context, url string, maxRetries int) (*HTTPFile, error) {
 	file := &HTTPFile{
 		URL:        url,
 		client:     &http.Client{Timeout: httpTimeout},
-		MaxRetries: config.Get().Retries,
+		MaxRetries: maxRetries,
 	}
 	size, err := file.getFileSize(ctx)
 	if err != nil {
