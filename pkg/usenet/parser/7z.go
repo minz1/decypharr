@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"path"
 	"path/filepath"
 	"sort"
@@ -83,7 +84,6 @@ func (p *SevenZParser) Process(ctx context.Context, group *FileGroup, password s
 	// Parse RAR files by reading their headers directly from readerAt
 	if len(rarFiles) > 0 {
 		rarNZBFiles, processRARFilesFromPositionsErr := p.processRARFilesFromPositions(
-			ctx,
 			rarFiles,
 			group,
 			readerAt,
@@ -109,25 +109,22 @@ func (p *SevenZParser) Process(ctx context.Context, group *FileGroup, password s
 		}
 
 		// Slice segments for this file's byte range using offset from sevenzip
-		var segments []storage.NZBSegment
-		if file.Offset >= 0 && file.Size > 0 {
-			sliced, sliceErr := segmentIndex.slice(file.Offset, int64(file.Size), true)
-			if sliceErr != nil || len(sliced) == 0 {
-				if sliceErr == nil {
-					sliceErr = fmt.Errorf("no source segments overlap the file range")
-				}
-				return nil, fmt.Errorf("map 7z file %q to raw source: %w", internal, sliceErr)
-			} else {
-				segments = sliced
-			}
-		} else {
-			return nil, fmt.Errorf("7z file %q has no usable source offset", internal)
+		if file.Offset < 0 || file.Size == 0 || file.Size > math.MaxInt64 {
+			return nil, fmt.Errorf("7z file %q has no usable source range", internal)
+		}
+		size := int64(file.Size)
+		segments, sliceErr := segmentIndex.slice(file.Offset, size, true)
+		if sliceErr == nil && len(segments) == 0 {
+			sliceErr = fmt.Errorf("no source segments overlap the file range")
+		}
+		if sliceErr != nil {
+			return nil, fmt.Errorf("map 7z file %q to raw source: %w", internal, sliceErr)
 		}
 
 		files = append(files, &storage.NZBFile{
 			Name:         name,
 			InternalPath: internal,
-			Size:         int64(file.Size),
+			Size:         size,
 			IsStored:     true,
 			Groups:       getGroupsList(group.Groups),
 			Segments:     segments,
@@ -150,7 +147,6 @@ func (p *SevenZParser) Process(ctx context.Context, group *FileGroup, password s
 // processRARFilesFromPositions creates volume descriptors for RAR files based on their positions
 // within the 7z archive and passes them to the RAR parser.
 func (p *SevenZParser) processRARFilesFromPositions(
-	ctx context.Context,
 	rarFiles []sevenzip.FileInfo,
 	group *FileGroup,
 	readerAt io.ReaderAt,
@@ -199,7 +195,7 @@ func (p *SevenZParser) processRARFilesFromPositions(
 		volumesToScan = append(volumesToScan, logicalFirst)
 	}
 	// Add first 3 by physical order if not already added
-	for i := 0; i < min(3, len(rarFiles)); i++ {
+	for i := range min(3, len(rarFiles)) {
 		if i != logicalFirst {
 			volumesToScan = append(volumesToScan, i)
 		}
@@ -209,7 +205,10 @@ func (p *SevenZParser) processRARFilesFromPositions(
 		rarFile := rarFiles[volIndex]
 
 		// Optimization: RAR headers are small - 64KB is usually enough
-		headerSize := min(int64(64*1024), int64(rarFile.Size))
+		headerSize := int64(rarSnippetSize)
+		if rarFile.Size < rarSnippetSize {
+			headerSize = int64(rarFile.Size)
+		}
 
 		headerData := make([]byte, headerSize)
 		n, err := readerAt.ReadAt(headerData, rarFile.Offset)
@@ -225,6 +224,8 @@ func (p *SevenZParser) processRARFilesFromPositions(
 			volumeFiles, _ = p.rarParser.parseRAR5Headers(headerData, volIndex, filepath.Base(rarFile.Name), password)
 		case RARVersion4:
 			volumeFiles, _ = p.rarParser.parseRAR4Headers(headerData, volIndex, filepath.Base(rarFile.Name))
+		case RARVersionUnknown:
+			// rejected above
 		}
 
 		allRawFiles = append(allRawFiles, volumeFiles...)
@@ -374,6 +375,10 @@ func splitStreamable7zEntries(files []sevenzip.FileInfo) ([]sevenzip.FileInfo, [
 	}
 	return rarFiles, plainFiles
 }
+
+// rarSnippetSize is how much of an embedded RAR volume is read for its
+// headers; RAR headers are small, so 64KB is usually enough.
+const rarSnippetSize = 64 << 10
 
 // isRARFile checks if a filename is a RAR file.
 func isRARFile(filename string) bool {

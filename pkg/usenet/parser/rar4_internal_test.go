@@ -15,13 +15,13 @@ func rar4Block(kind byte, flags uint16, body []byte) []byte {
 }
 
 // rar4FileBody lays out FILE_HEAD/NEWSUB_HEAD fields after the base header.
-func rar4FileBody(name string, packed, unpacked uint32, method byte) []byte {
+func rar4FileBody(name string, packed, unpacked uint32) []byte {
 	body := make([]byte, rar4MinFileHeaderData, rar4MinFileHeaderData+len(name))
 	binary.LittleEndian.PutUint32(body[0:], packed)
 	binary.LittleEndian.PutUint32(body[4:], unpacked)
 	body[8] = 2 // host OS
 	body[17] = 29
-	body[18] = method
+	body[18] = RAR4CompressionMethodStore
 	binary.LittleEndian.PutUint16(body[19:], uint16(len(name)))
 	binary.LittleEndian.PutUint32(body[21:], 0x20) // archive attribute
 	return append(body, name...)
@@ -31,7 +31,7 @@ func TestRAR4SnippetParserReadsLongBlockFileHeader(t *testing.T) {
 	t.Parallel()
 	archive := rar4Block(RAR4HeaderTypeArchive, 0, make([]byte, 6))
 	file := rar4Block(RAR4HeaderTypeFile, RAR4HeaderFlagLongBlock,
-		rar4FileBody("movie.mkv", 100, 100, RAR4CompressionMethodStore))
+		rar4FileBody("movie.mkv", 100, 100))
 	data := append([]byte(RAR4Signature), archive...)
 	data = append(data, file...)
 	data = append(data, make([]byte, 100)...)
@@ -52,9 +52,9 @@ func TestRAR4StreamSkipsServiceHeaderData(t *testing.T) {
 	t.Parallel()
 	comment := []byte("release comment!")
 	service := rar4Block(RAR4HeaderTypeService, RAR4HeaderFlagLongBlock,
-		rar4FileBody("CMT", uint32(len(comment)), uint32(len(comment)), RAR4CompressionMethodStore))
+		rar4FileBody("CMT", uint32(len(comment)), uint32(len(comment))))
 	file := rar4Block(RAR4HeaderTypeFile, RAR4HeaderFlagLongBlock,
-		rar4FileBody("movie.mkv", 64, 64, RAR4CompressionMethodStore))
+		rar4FileBody("movie.mkv", 64, 64))
 	var data []byte
 	data = append(data, rar4Block(RAR4HeaderTypeArchive, 0, make([]byte, 6))...)
 	data = append(data, service...)
@@ -97,7 +97,7 @@ func TestRAR5HeaderRejectsDataSizeBeyondInt64(t *testing.T) {
 
 func TestRAR4DataSizeRejectsOverflow(t *testing.T) {
 	t.Parallel()
-	body := rar4FileBody("x", 1, 1, RAR4CompressionMethodStore)
+	body := rar4FileBody("x", 1, 1)
 	body = append(body[:rar4HighPackSizeOffset], append([]byte{0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0}, 'x')...)
 	header := &rar4Header{
 		Type:  RAR4HeaderTypeFile,

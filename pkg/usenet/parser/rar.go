@@ -362,6 +362,8 @@ func (p *RARParser) parseArchive(
 			}
 		case RARVersion4:
 			volumeFiles, err = p.parseRAR4Stream(stream, volIdx, vol.Name, vol.Size)
+		case RARVersionUnknown:
+			err = fmt.Errorf("unsupported RAR version: %d", version)
 		default:
 			err = fmt.Errorf("unsupported RAR version: %d", version)
 		}
@@ -627,7 +629,7 @@ func (p *RARParser) parseRAR5FileHeader(
 	packedSize int64,
 	password string,
 ) *RARFileEntry {
-	if extraSize > uint64(len(data)) {
+	if extraSize > math.MaxInt32 || int(extraSize) > len(data) {
 		return nil
 	}
 	baseEnd := len(data) - int(extraSize)
@@ -1107,14 +1109,11 @@ func (p *RARParser) aggregateFileParts(rawFiles []*RARFileEntry) []*RARFileEntry
 		if !found {
 			// First occurrence of this file
 			fileMap[file.Name] = file
-		} else {
+		} else if len(file.VolumeParts) > 0 {
 			// File continuation from another volume - merge the parts
-			if len(file.VolumeParts) > 0 {
-				// Append volume parts (PartNumber already set correctly during parsing)
-				existing.VolumeParts = append(existing.VolumeParts, file.VolumeParts...)
-				// Update total packed size
-				existing.PackedSize += file.PackedSize
-			}
+			// (PartNumber already set correctly during parsing).
+			existing.VolumeParts = append(existing.VolumeParts, file.VolumeParts...)
+			existing.PackedSize += file.PackedSize
 		}
 	}
 
