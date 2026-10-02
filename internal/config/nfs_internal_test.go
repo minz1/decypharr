@@ -5,6 +5,7 @@ import (
 )
 
 func TestNFSDefaults(t *testing.T) {
+	t.Parallel()
 	cfg := Config{NFS: NFS{Enabled: true}}
 	cfg.setNFSDefaults()
 
@@ -20,6 +21,7 @@ func TestNFSDefaults(t *testing.T) {
 }
 
 func TestNFSBindAddressInheritsServer(t *testing.T) {
+	t.Parallel()
 	// Unset, it follows the server's bind address...
 	cfg := Config{BindAddress: "192.168.1.10", NFS: NFS{Enabled: true}}
 	cfg.setNFSDefaults()
@@ -36,6 +38,7 @@ func TestNFSBindAddressInheritsServer(t *testing.T) {
 }
 
 func TestNFSDefaultsSkippedWhenDisabled(t *testing.T) {
+	t.Parallel()
 	cfg := Config{}
 	cfg.setNFSDefaults()
 	if !cfg.NFS.IsZero() {
@@ -44,6 +47,7 @@ func TestNFSDefaultsSkippedWhenDisabled(t *testing.T) {
 }
 
 func TestSMBDefaults(t *testing.T) {
+	t.Parallel()
 	cfg := Config{SMB: SMB{Enabled: true, Username: "media", Password: "secret"}}
 	cfg.setSMBDefaults()
 

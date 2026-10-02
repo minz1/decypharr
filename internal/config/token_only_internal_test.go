@@ -3,6 +3,7 @@ package config
 import "testing"
 
 func TestNeedsAuth(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name    string
 		useAuth bool
@@ -21,6 +22,7 @@ func TestNeedsAuth(t *testing.T) {
 		{name: "token-only without token", useAuth: true, auth: &Auth{TokenOnly: true}, want: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			c := &Config{UseAuth: tc.useAuth, Auth: tc.auth}
 			if got := c.NeedsAuth(); got != tc.want {
 				t.Fatalf("NeedsAuth() = %v, want %v", got, tc.want)

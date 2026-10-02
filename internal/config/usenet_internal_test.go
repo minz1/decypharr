@@ -5,6 +5,7 @@ import (
 )
 
 func TestUsenetProviderID(t *testing.T) {
+	t.Parallel()
 	a := UsenetProvider{Host: "news.example.com", Port: 563, Username: "alice"}
 	b := UsenetProvider{Host: "news.example.com", Port: 563, Username: "bob"}
 	c := UsenetProvider{Host: "news.example.com", Port: 119, Username: "alice"}
@@ -21,6 +22,7 @@ func TestUsenetProviderID(t *testing.T) {
 }
 
 func TestValidateUsenetRejectsDuplicateProvider(t *testing.T) {
+	t.Parallel()
 	dup := UsenetProvider{Host: "news.example.com", Port: 563, Username: "alice", Password: "pw"}
 	if err := validateUsenet([]UsenetProvider{dup, dup}); err == nil {
 		t.Fatal("expected duplicate provider to be rejected")
@@ -35,6 +37,7 @@ func TestValidateUsenetRejectsDuplicateProvider(t *testing.T) {
 }
 
 func TestUsenetDiskPathSelectsBufferStorage(t *testing.T) {
+	t.Parallel()
 	var c Config
 	c.updateUsenetConfig()
 	if c.Usenet.DiskPath != "" {
@@ -66,6 +69,7 @@ func TestApplyUsenetEnvVarsDiskPath(t *testing.T) {
 }
 
 func TestNormalizeBodyPipelineDepth(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		depth int
@@ -81,6 +85,7 @@ func TestNormalizeBodyPipelineDepth(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			if got := NormalizeBodyPipelineDepth(tt.depth); got != tt.want {
 				t.Fatalf("NormalizeBodyPipelineDepth(%d) = %d, want %d", tt.depth, got, tt.want)
 			}

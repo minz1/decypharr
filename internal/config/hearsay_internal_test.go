@@ -6,6 +6,7 @@ import (
 )
 
 func TestHearsayIsZero(t *testing.T) {
+	t.Parallel()
 	if !(Hearsay{}).IsZero() {
 		t.Fatal("empty Hearsay config should be zero")
 	}
@@ -18,6 +19,7 @@ func TestHearsayIsZero(t *testing.T) {
 }
 
 func TestHearsaySeededTorrentLimitRoundTrip(t *testing.T) {
+	t.Parallel()
 	for _, limit := range []int{0, 64} {
 		cfg := Config{Hearsay: Hearsay{MaxSeededTorrents: limit}}
 		raw, err := json.Marshal(cfg)
@@ -35,6 +37,7 @@ func TestHearsaySeededTorrentLimitRoundTrip(t *testing.T) {
 }
 
 func TestHearsaySeededTorrentLimitRequiresRestart(t *testing.T) {
+	t.Parallel()
 	before := &Config{}
 	after := &Config{Hearsay: Hearsay{MaxSeededTorrents: 64}}
 	if !before.RequiresRestart(after) {
@@ -43,6 +46,7 @@ func TestHearsaySeededTorrentLimitRequiresRestart(t *testing.T) {
 }
 
 func TestHearsayNetworkDefaults(t *testing.T) {
+	t.Parallel()
 	if !(Hearsay{}).Participates() || !(Hearsay{}).Publishes() {
 		t.Fatal("network participation and publishing should default on")
 	}
@@ -55,6 +59,7 @@ func TestHearsayNetworkDefaults(t *testing.T) {
 }
 
 func TestHearsayExplicitOptOutRoundTrip(t *testing.T) {
+	t.Parallel()
 	cfg := Config{Hearsay: Hearsay{
 		Participate: new(false),
 		Publish:     new(false),
