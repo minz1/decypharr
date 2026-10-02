@@ -1407,10 +1407,7 @@ func (dl *downloader) streamChunk(start, end int64) (int64, error) {
 	// propagates into the session and unblocks any in-flight read.
 	stream, err := dl.ensureSession()
 	if err != nil {
-		if dl.ctx.Err() != nil {
-			return 0, dl.ctx.Err()
-		}
-		return 0, err
+		return 0, dl.preferCtxErr(err)
 	}
 	// Only NZB sources own disposable decoded extents. Avoid putting even a
 	// no-op acknowledgement/mutex on the HTTP/debrid hot path.
@@ -1420,10 +1417,7 @@ func (dl *downloader) streamChunk(start, end int64) (int64, error) {
 		}
 	}
 	if _, seekErr := stream.Seek(missingRange.Pos, io.SeekStart); seekErr != nil {
-		if dl.ctx.Err() != nil {
-			return writer.written, dl.ctx.Err()
-		}
-		return writer.written, seekErr
+		return writer.written, dl.preferCtxErr(seekErr)
 	}
 
 	// Batch to one DFS block in the background. While a reader is parked, cap
@@ -1439,27 +1433,10 @@ func (dl *downloader) streamChunk(start, end int64) (int64, error) {
 	// cleared here and then reported as the generic "stream produced no data",
 	// which hid the real condition and emitted one debug line per scanned file.
 	if errors.Is(err, io.EOF) {
-		dl.mu.Lock()
-		stopped := dl.stopped
-		dl.mu.Unlock()
-		if stopped || writer.offset >= missingRange.End() {
-			err = nil
-		} else {
-			err = fmt.Errorf(
-				"stream ended at offset %d before requested range %d-%d: %w",
-				writer.offset,
-				missingRange.Pos,
-				missingRange.End(),
-				io.ErrUnexpectedEOF,
-			)
-		}
+		err = dl.classifyEOF(writer.offset, missingRange)
 	}
-
 	if err != nil {
-		if dl.ctx.Err() != nil {
-			return writer.written, dl.ctx.Err()
-		}
-		return writer.written, err
+		return writer.written, dl.preferCtxErr(err)
 	}
 
 	// Ensure we made progress (either written data or skipped existing data).
@@ -1485,6 +1462,34 @@ func (dl *downloader) streamChunk(start, end int64) (int64, error) {
 	}
 
 	return writer.written, nil
+}
+
+// preferCtxErr reports the downloader's own cancellation over err: once
+// stop() cancels dl.ctx, whatever the stream returned is a symptom of that.
+func (dl *downloader) preferCtxErr(err error) error {
+	if ctxErr := dl.ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	return err
+}
+
+// classifyEOF decides what a source EOF at offset means for the missing
+// range: success when the range is complete or the writer stopped on purpose
+// (skipping cached data), truncated input otherwise.
+func (dl *downloader) classifyEOF(offset int64, missing ranges.Range) error {
+	dl.mu.Lock()
+	stopped := dl.stopped
+	dl.mu.Unlock()
+	if stopped || offset >= missing.End() {
+		return nil
+	}
+	return fmt.Errorf(
+		"stream ended at offset %d before requested range %d-%d: %w",
+		offset,
+		missing.Pos,
+		missing.End(),
+		io.ErrUnexpectedEOF,
+	)
 }
 
 // setMaxOffset extends the download range.
