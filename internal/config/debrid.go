@@ -38,8 +38,11 @@ type Debrid struct {
 	Directories map[string]WebdavDirectories `json:"directories,omitempty"` // Deprecated. Use global setting instead.
 }
 
+// workersPerCPU sizes the default debrid worker pool, split across providers.
+const workersPerCPU = 50
+
 func (c *Config) updateDebrid(d Debrid) Debrid {
-	workers := runtime.NumCPU() * 50
+	workers := runtime.NumCPU() * workersPerCPU
 	perDebrid := workers / len(c.Debrids)
 
 	if d.Provider == "" {
