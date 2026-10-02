@@ -34,6 +34,9 @@ import (
 )
 
 const (
+	// defaultLinkExpiry applies when auto_expire_links_after is unset.
+	defaultLinkExpiry    = 48 * time.Hour
+	percent              = 100
 	defaultHost          = "https://www.premiumize.me"
 	profileCacheDuration = time.Hour
 )
@@ -66,7 +69,7 @@ func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter) (*Premiumize
 
 	autoExpiresLinksAfter, err := utils.ParseDuration(dc.AutoExpireLinksAfter)
 	if autoExpiresLinksAfter == 0 || err != nil {
-		autoExpiresLinksAfter = 48 * time.Hour
+		autoExpiresLinksAfter = defaultLinkExpiry
 	}
 
 	opts := []request.ClientOption{
@@ -112,36 +115,38 @@ func (pm *Premiumize) endpoint(apiPath string) string {
 	return pm.Host + "/" + apiPath
 }
 
-func (pm *Premiumize) do(req *http.Request, out any) (*http.Response, error) {
+// do sends req, rejects non-2xx and "status":"error" envelopes, and decodes
+// the body into out.
+func (pm *Premiumize) do(req *http.Request, out any) error {
 	resp, err := pm.client.Do(req)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return resp, fmt.Errorf("reading response body: %w", err)
+		return fmt.Errorf("reading response body: %w", err)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return resp, fmt.Errorf("premiumize API error: Status: %d || Body: %s", resp.StatusCode, string(body))
+		return fmt.Errorf("premiumize API error: Status: %d || Body: %s", resp.StatusCode, string(body))
 	}
 
 	if len(bytes.TrimSpace(body)) == 0 || out == nil {
-		return resp, nil
+		return nil
 	}
 
 	if unmarshalErr := json.Unmarshal(body, out); unmarshalErr != nil {
-		return resp, unmarshalErr
+		return unmarshalErr
 	}
 
 	var envelope apiError
 	if unmarshalErr := json.Unmarshal(body, &envelope); unmarshalErr == nil && envelope.Status == "error" {
-		return resp, fmt.Errorf("premiumize API error: %s (%s)", envelope.Message, envelope.Code)
+		return fmt.Errorf("premiumize API error: %s (%s)", envelope.Message, envelope.Code)
 	}
 
-	return resp, nil
+	return nil
 }
 
 func (pm *Premiumize) doForm(
@@ -149,10 +154,10 @@ func (pm *Premiumize) doForm(
 	method, apiPath string,
 	values url.Values,
 	out any,
-) (*http.Response, error) {
+) error {
 	req, err := http.NewRequestWithContext(ctx, method, pm.endpoint(apiPath), strings.NewReader(values.Encode()))
 	if err != nil {
-		return nil, err
+		return err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	return pm.do(req, out)
@@ -174,7 +179,7 @@ func (pm *Premiumize) addMagnet(t *types.Torrent) (*types.Torrent, error) {
 		src = utils.ConstructMagnet(t.InfoHash, t.Name).Link
 	}
 	var data transferCreateResponse
-	_, err := pm.doForm(context.Background(), http.MethodPost, "/api/transfer/create", url.Values{"src": {src}}, &data)
+	err := pm.doForm(context.Background(), http.MethodPost, "/api/transfer/create", url.Values{"src": {src}}, &data)
 	if err != nil {
 		return nil, err
 	}
@@ -196,14 +201,19 @@ func (pm *Premiumize) addTorrent(t *types.Torrent) (*types.Torrent, error) {
 		return nil, closeErr
 	}
 
-	req, err := http.NewRequest(http.MethodPost, pm.endpoint("/api/transfer/create"), &body)
+	req, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		pm.endpoint("/api/transfer/create"),
+		&body,
+	)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
 	var data transferCreateResponse
-	if _, doErr := pm.do(req, &data); doErr != nil {
+	if doErr := pm.do(req, &data); doErr != nil {
 		return nil, doErr
 	}
 	pm.applySubmittedTorrent(t, data)
@@ -285,14 +295,13 @@ func (pm *Premiumize) UpdateTorrent(t *types.Torrent) error {
 }
 
 func (pm *Premiumize) DeleteTorrent(torrentID string) error {
-	_, err := pm.doForm(
+	return pm.doForm(
 		context.Background(),
 		http.MethodPost,
 		"/api/transfer/delete",
 		url.Values{"id": {torrentID}},
 		nil,
 	)
-	return err
 }
 
 func (pm *Premiumize) IsAvailable(infohashes []string) (map[string]bool, error) {
@@ -314,7 +323,7 @@ func (pm *Premiumize) IsAvailable(infohashes []string) (map[string]bool, error) 
 			continue
 		}
 		var data cacheCheckResponse
-		if _, err := pm.doForm(context.Background(), http.MethodPost, "/api/cache/check", values, &data); err != nil {
+		if err := pm.doForm(context.Background(), http.MethodPost, "/api/cache/check", values, &data); err != nil {
 			return result, fmt.Errorf("check availability: %w", err)
 		}
 		if len(data.Response) != len(validHashes) {
@@ -352,11 +361,11 @@ func (pm *Premiumize) GetTorrents() ([]*types.Torrent, error) {
 
 func (pm *Premiumize) listTransfers() ([]premiumizeTransfer, error) {
 	var data transferListResponse
-	req, err := http.NewRequest(http.MethodGet, pm.endpoint("/api/transfer/list"), nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, pm.endpoint("/api/transfer/list"), nil)
 	if err != nil {
 		return nil, err
 	}
-	if _, doErr := pm.do(req, &data); doErr != nil {
+	if doErr := pm.do(req, &data); doErr != nil {
 		return nil, doErr
 	}
 	return data.Transfers, nil
@@ -450,7 +459,7 @@ func (pm *Premiumize) itemDetails(ctx context.Context, id string) (*itemDetailsR
 	if err != nil {
 		return nil, err
 	}
-	if _, doErr := pm.do(req, &data); doErr != nil {
+	if doErr := pm.do(req, &data); doErr != nil {
 		return nil, doErr
 	}
 	return &data, nil
@@ -462,11 +471,16 @@ func (pm *Premiumize) addFolderFiles(
 	transferID, folderID, prefix string,
 ) (int, error) {
 	var data folderListResponse
-	req, err := http.NewRequest(http.MethodGet, pm.endpoint("/api/folder/list?id="+url.QueryEscape(folderID)), nil)
+	req, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodGet,
+		pm.endpoint("/api/folder/list?id="+url.QueryEscape(folderID)),
+		nil,
+	)
 	if err != nil {
 		return 0, err
 	}
-	if _, doErr := pm.do(req, &data); doErr != nil {
+	if doErr := pm.do(req, &data); doErr != nil {
 		return 0, doErr
 	}
 	// Count links from the full recursive tree, not just files that pass
@@ -532,7 +546,7 @@ func (pm *Premiumize) GetDownloadLink(ctx context.Context, id string, file *type
 func (pm *Premiumize) fetchDownloadLink(
 	ctx context.Context,
 	acc *account.Account,
-	id string,
+	_ string,
 	file *types.File,
 ) (types.DownloadLink, error) {
 	link := file.Link
@@ -565,12 +579,12 @@ func (pm *Premiumize) fetchDownloadLink(
 }
 
 func (pm *Premiumize) RefreshDownloadLinks() error {
-	return pm.accountsManager.RefreshLinks(func(account *account.Account) ([]types.DownloadLink, error) {
+	return pm.accountsManager.RefreshLinks(func(*account.Account) ([]types.DownloadLink, error) {
 		return []types.DownloadLink{}, nil
 	})
 }
 
-func (pm *Premiumize) CheckFile(ctx context.Context, infohash, fileID string) error {
+func (pm *Premiumize) CheckFile(ctx context.Context, _, fileID string) error {
 	if strings.HasPrefix(fileID, "http://") || strings.HasPrefix(fileID, "https://") {
 		req, err := http.NewRequestWithContext(ctx, http.MethodHead, fileID, nil)
 		if err != nil {
@@ -584,7 +598,7 @@ func (pm *Premiumize) CheckFile(ctx context.Context, infohash, fileID string) er
 		if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
 			return customerror.HosterUnavailableError
 		}
-		if resp.StatusCode >= 400 {
+		if resp.StatusCode >= http.StatusBadRequest {
 			return fmt.Errorf("premiumize link check failed: Status: %d", resp.StatusCode)
 		}
 		return nil
@@ -606,7 +620,7 @@ func (pm *Premiumize) GetProfile() (*types.Profile, error) {
 
 func (pm *Premiumize) getClientProfile(client *request.Client) (*types.Profile, error) {
 	var data accountInfoResponse
-	req, err := http.NewRequest(http.MethodGet, pm.endpoint("/api/account/info"), nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, pm.endpoint("/api/account/info"), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -675,7 +689,7 @@ func (pm *Premiumize) syncAccount(acc *account.Account) error {
 func (pm *Premiumize) DeleteLink(downloadLink types.DownloadLink) error {
 	return pm.accountsManager.DeleteDownloadLink(
 		downloadLink,
-		func(account *account.Account, dl types.DownloadLink) error {
+		func(*account.Account, types.DownloadLink) error {
 			// Premiumize exposes item and transfer deletion, but not a safe
 			// generated-link deletion endpoint. Deleting dl.Id here would delete
 			// the user's cloud file, not just invalidate this cached CDN link.
@@ -701,7 +715,7 @@ func (pm *Premiumize) SpeedTest(ctx context.Context) types.SpeedTestResult {
 		result.Error = fmt.Sprintf("latency test failed: %v", err)
 		return result
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close() // only the status is needed
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		result.Error = fmt.Sprintf("latency test unexpected status: %d", resp.StatusCode)
 		return result
@@ -731,7 +745,7 @@ func mapStatus(status string) types.TorrentStatus {
 
 func normalizeProgress(progress float64) float64 {
 	if progress <= 1 {
-		return progress * 100
+		return progress * percent
 	}
 	return progress
 }
