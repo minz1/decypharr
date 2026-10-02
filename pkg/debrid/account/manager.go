@@ -34,7 +34,12 @@ type Manager struct {
 	lastNoActiveWarning atomic.Int64
 }
 
-const noActiveWarningInterval = time.Minute
+const (
+	noActiveWarningInterval = time.Minute
+	// statusRetryableNonStandard is a non-standard transient status that
+	// download hosts return; requests are retried like 429 and 502.
+	statusRetryableNonStandard = 447
+)
 
 func NewManager(debridConf config.Debrid, downloadRL ratelimit.Limiter, logger zerolog.Logger) *Manager {
 	m := &Manager{
@@ -58,7 +63,7 @@ func NewManager(debridConf config.Debrid, downloadRL ratelimit.Limiter, logger z
 			request.WithRateLimiter(downloadRL),
 			request.WithHeaders(headers),
 			request.WithMaxRetries(cfg.Retries),
-			request.WithRetryableStatus(http.StatusTooManyRequests, http.StatusBadGateway, 447),
+			request.WithRetryableStatus(http.StatusTooManyRequests, http.StatusBadGateway, statusRetryableNonStandard),
 		}
 		if debridConf.Proxy != "" {
 			opts = append(opts, request.WithProxy(debridConf.Proxy))
@@ -82,7 +87,7 @@ func NewManager(debridConf config.Debrid, downloadRL ratelimit.Limiter, logger z
 
 func (m *Manager) Active() []*Account {
 	activeAccounts := make([]*Account, 0)
-	m.accounts.Range(func(key string, acc *Account) bool {
+	m.accounts.Range(func(_ string, acc *Account) bool {
 		if !acc.Disabled.Load() {
 			activeAccounts = append(activeAccounts, acc)
 		}
@@ -97,7 +102,7 @@ func (m *Manager) Active() []*Account {
 
 func (m *Manager) All() []*Account {
 	allAccounts := make([]*Account, 0)
-	m.accounts.Range(func(key string, acc *Account) bool {
+	m.accounts.Range(func(_ string, acc *Account) bool {
 		allAccounts = append(allAccounts, acc)
 		return true
 	})
@@ -164,7 +169,7 @@ func (m *Manager) Disable(account *Account) {
 }
 
 func (m *Manager) Reset() {
-	m.accounts.Range(func(key string, acc *Account) bool {
+	m.accounts.Range(func(_ string, acc *Account) bool {
 		acc.Reset()
 		return true
 	})
@@ -281,7 +286,7 @@ func (m *Manager) Stats() []map[string]any {
 
 func (m *Manager) RefreshLinks(fetcher LinksFetcher) error {
 	wgPool := pool.New().WithMaxGoroutines(max(1, m.accounts.Size())).WithErrors()
-	m.accounts.Range(func(key string, acc *Account) bool {
+	m.accounts.Range(func(_ string, acc *Account) bool {
 		wgPool.Go(func() error {
 			links, err := fetcher(acc)
 			if err != nil {
@@ -308,7 +313,7 @@ func (m *Manager) Sync(syncer SyncFunc) {
 		return
 	}
 	wgPool := pool.New().WithMaxGoroutines(workers)
-	m.accounts.Range(func(key string, acc *Account) bool {
+	m.accounts.Range(func(_ string, acc *Account) bool {
 		wgPool.Go(func() {
 			if err := syncer(acc); err != nil {
 				m.logger.Error().

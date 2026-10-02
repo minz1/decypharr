@@ -37,15 +37,16 @@ func (a *Account) Client() *request.Client {
 	return a.httpClient
 }
 
-// slice download link.
+// realDebridLinkLen is the length of a Real-Debrid hoster link
+// ("https://real-debrid.com/d/" plus a 13-character ID) without its suffix.
+const realDebridLinkLen = 39
+
+// sliceFileLink trims Real-Debrid links to their stable prefix, the cache key.
 func (a *Account) sliceFileLink(fileLink string) string {
-	if a.Debrid != "realdebrid" {
+	if a.Debrid != "realdebrid" || len(fileLink) < realDebridLinkLen {
 		return fileLink
 	}
-	if len(fileLink) < 39 {
-		return fileLink
-	}
-	return fileLink[0:39]
+	return fileLink[:realDebridLinkLen]
 }
 
 func (a *Account) GetDownloadLink(
