@@ -11,13 +11,14 @@ import (
 // accepts the blob; a panic fails the test on its own.
 func decodeAllPaths(t *testing.T, blob []byte) {
 	t.Helper()
-	if _, err := decodeNZB(blob); err == nil {
+	codec := testCodec(t)
+	if _, err := codec.decodeNZB(blob); err == nil {
 		t.Error("decodeNZB accepted a corrupt blob")
 	}
-	if _, err := decodeFileV2(blob, "movie.mkv"); err == nil {
+	if _, err := codec.decodeFileV2(blob, "movie.mkv"); err == nil {
 		t.Error("decodeFileV2 accepted a corrupt blob")
 	}
-	if _, _, err := decodeFileMessageIDsSampled(blob, "movie.mkv", 100); err == nil {
+	if _, _, err := codec.decodeFileMessageIDsSampled(blob, "movie.mkv", 100); err == nil {
 		t.Error("decodeFileMessageIDsSampled accepted a corrupt blob")
 	}
 }
@@ -26,7 +27,7 @@ func TestDecodeRejectsOverflowingRegionLength(t *testing.T) {
 	t.Parallel()
 	blob := binary.AppendUvarint([]byte{codecMagicV2}, ^uint64(0))
 	decodeAllPaths(t, blob)
-	if _, err := decodeNZBV2Header(blob); err == nil {
+	if _, err := testCodec(t).decodeNZBV2Header(blob); err == nil {
 		t.Error("decodeNZBV2Header accepted a corrupt blob")
 	}
 }
@@ -39,12 +40,13 @@ func TestDecodeRejectsImpossibleSegmentCount(t *testing.T) {
 	header = binary.AppendUvarint(header[:len(header)-1], 1<<40)
 	segMeta, msgIDs := encodeSegments(nzb)
 
-	hc := zstdEnc.EncodeAll(header, nil)
-	sc := zstdEnc.EncodeAll(segMeta, nil)
+	codec := testCodec(t)
+	hc := codec.enc.EncodeAll(header, nil)
+	sc := codec.enc.EncodeAll(segMeta, nil)
 	blob := binary.AppendUvarint([]byte{codecMagicV2}, uint64(len(hc)))
 	blob = append(blob, hc...)
 	blob = binary.AppendUvarint(blob, uint64(len(sc)))
 	blob = append(blob, sc...)
-	blob = append(blob, zstdEnc.EncodeAll(msgIDs, nil)...)
+	blob = append(blob, codec.enc.EncodeAll(msgIDs, nil)...)
 	decodeAllPaths(t, blob)
 }

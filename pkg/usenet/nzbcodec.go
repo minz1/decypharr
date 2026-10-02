@@ -35,21 +35,30 @@ const codecMagicV2 = 0xB1
 // errFileNotFound reports that an NZB has no live file with the given name.
 var errFileNotFound = errors.New("file not found in NZB")
 
-var (
-	zstdEnc *zstd.Encoder
-	zstdDec *zstd.Decoder
-)
+// nzbCodec owns the zstd state for v2 meta blobs. EncodeAll/DecodeAll on it
+// are safe for concurrent use.
+type nzbCodec struct {
+	enc *zstd.Encoder
+	dec *zstd.Decoder
+}
 
-func init() {
-	// EncodeAll/DecodeAll on these shared instances are safe for concurrent use.
-	// .meta blobs are small, so cap concurrency and the window instead of
-	// letting each of GOMAXPROCS encoder states hold an 8MB history.
-	zstdEnc, _ = zstd.NewWriter(nil,
+// newNZBCodec caps encoder concurrency and window: .meta blobs are small, so
+// GOMAXPROCS encoder states each holding an 8MB history would be waste.
+func newNZBCodec() (*nzbCodec, error) {
+	enc, err := zstd.NewWriter(nil,
 		zstd.WithEncoderLevel(zstd.SpeedDefault),
 		zstd.WithEncoderConcurrency(2),
 		zstd.WithWindowSize(1<<20),
 	)
-	zstdDec, _ = zstd.NewReader(nil, zstd.WithDecoderConcurrency(0))
+	if err != nil {
+		return nil, fmt.Errorf("create zstd encoder: %w", err)
+	}
+	dec, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(0))
+	if err != nil {
+		_ = enc.Close()
+		return nil, fmt.Errorf("create zstd decoder: %w", err)
+	}
+	return &nzbCodec{enc: enc, dec: dec}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -195,13 +204,13 @@ func (r *byteReader) f64() (float64, error) {
 // encode
 // ---------------------------------------------------------------------------
 
-func encodeNZBV2(nzb *storage.NZB) ([]byte, error) {
+func (c *nzbCodec) encodeNZBV2(nzb *storage.NZB) []byte {
 	header := encodeHeader(nzb)
 	segMeta, msgIDs := encodeSegments(nzb)
 
-	hc := zstdEnc.EncodeAll(header, nil)
-	sc := zstdEnc.EncodeAll(segMeta, nil)
-	mc := zstdEnc.EncodeAll(msgIDs, nil)
+	hc := c.enc.EncodeAll(header, nil)
+	sc := c.enc.EncodeAll(segMeta, nil)
+	mc := c.enc.EncodeAll(msgIDs, nil)
 
 	out := make([]byte, 0, 1+binary.MaxVarintLen64*2+len(hc)+len(sc)+len(mc))
 	out = append(out, codecMagicV2)
@@ -210,7 +219,7 @@ func encodeNZBV2(nzb *storage.NZB) ([]byte, error) {
 	out = binary.AppendUvarint(out, uint64(len(sc)))
 	out = append(out, sc...)
 	out = append(out, mc...)
-	return out, nil
+	return out
 }
 
 func encodeHeader(nzb *storage.NZB) []byte {
@@ -373,12 +382,12 @@ func splitRegions(data []byte) (hc, sc, mc []byte, err error) {
 
 // decodeNZBV2Header decodes only the NZB scalars and per-file metadata. The
 // returned files have nil Segments. It never decompresses the segment regions.
-func decodeNZBV2Header(data []byte) (*storage.NZB, error) {
+func (c *nzbCodec) decodeNZBV2Header(data []byte) (*storage.NZB, error) {
 	hc, _, _, err := splitRegions(data)
 	if err != nil {
 		return nil, err
 	}
-	header, err := zstdDec.DecodeAll(hc, nil)
+	header, err := c.dec.DecodeAll(hc, nil)
 	if err != nil {
 		return nil, fmt.Errorf("nzbcodec: decompress header: %w", err)
 	}
@@ -387,12 +396,12 @@ func decodeNZBV2Header(data []byte) (*storage.NZB, error) {
 }
 
 // decodeNZBV2 fully decodes an NZB including its segment map.
-func decodeNZBV2(data []byte) (*storage.NZB, error) {
+func (c *nzbCodec) decodeNZBV2(data []byte) (*storage.NZB, error) {
 	hc, sc, mc, err := splitRegions(data)
 	if err != nil {
 		return nil, err
 	}
-	header, err := zstdDec.DecodeAll(hc, nil)
+	header, err := c.dec.DecodeAll(hc, nil)
 	if err != nil {
 		return nil, fmt.Errorf("nzbcodec: decompress header: %w", err)
 	}
@@ -401,12 +410,12 @@ func decodeNZBV2(data []byte) (*storage.NZB, error) {
 		return nil, err
 	}
 
-	segMeta, err := zstdDec.DecodeAll(sc, nil)
+	segMeta, err := c.dec.DecodeAll(sc, nil)
 	if err != nil {
 		return nil, fmt.Errorf("nzbcodec: decompress seg meta: %w", err)
 	}
 	// msgIDs is retained (aliased by MessageID strings); keep this buffer alive.
-	msgIDs, err := zstdDec.DecodeAll(mc, nil)
+	msgIDs, err := c.dec.DecodeAll(mc, nil)
 	if err != nil {
 		return nil, fmt.Errorf("nzbcodec: decompress msg ids: %w", err)
 	}
@@ -636,12 +645,12 @@ func decodeSegments(nzb *storage.NZB, counts []int, segMeta, msgIDs []byte) erro
 // buffer, which keeps that buffer alive for as long as any id survives.
 //
 // It returns errFileNotFound when the file is absent or deleted.
-func decodeFileV2(data []byte, filename string) (*storage.NZBFile, error) {
+func (c *nzbCodec) decodeFileV2(data []byte, filename string) (*storage.NZBFile, error) {
 	hc, sc, mc, err := splitRegions(data)
 	if err != nil {
 		return nil, err
 	}
-	header, err := zstdDec.DecodeAll(hc, nil)
+	header, err := c.dec.DecodeAll(hc, nil)
 	if err != nil {
 		return nil, fmt.Errorf("nzbcodec: decompress header: %w", err)
 	}
@@ -677,7 +686,7 @@ func decodeFileV2(data []byte, filename string) (*storage.NZBFile, error) {
 	}
 	after := total - before - count
 
-	segMeta, err := zstdDec.DecodeAll(sc, nil)
+	segMeta, err := c.dec.DecodeAll(sc, nil)
 	if err != nil {
 		return nil, fmt.Errorf("nzbcodec: decompress seg meta: %w", err)
 	}
@@ -748,7 +757,7 @@ func decodeFileV2(data []byte, filename string) (*storage.NZBFile, error) {
 		segs[i].Group = groups[idx]
 	}
 
-	msgIDs, err := zstdDec.DecodeAll(mc, nil)
+	msgIDs, err := c.dec.DecodeAll(mc, nil)
 	if err != nil {
 		return nil, fmt.Errorf("nzbcodec: decompress msg ids: %w", err)
 	}
@@ -776,12 +785,12 @@ func decodeFileV2(data []byte, filename string) (*storage.NZBFile, error) {
 // This is the low-memory path used by repair availability probes.
 //
 // It returns (nil, -1, nil) when the file is not found or has no segments.
-func decodeFileMessageIDsSampled(data []byte, filename string, percent int) (ids []string, segCount int, err error) {
+func (c *nzbCodec) decodeFileMessageIDsSampled(data []byte, filename string, percent int) ([]string, int, error) {
 	hc, _, mc, err := splitRegions(data)
 	if err != nil {
 		return nil, 0, err
 	}
-	header, err := zstdDec.DecodeAll(hc, nil)
+	header, err := c.dec.DecodeAll(hc, nil)
 	if err != nil {
 		return nil, 0, fmt.Errorf("nzbcodec: decompress header: %w", err)
 	}
@@ -803,21 +812,21 @@ func decodeFileMessageIDsSampled(data []byte, filename string, percent int) (ids
 	if target == -1 {
 		return nil, -1, nil
 	}
-	c := counts[target]
-	if c == 0 {
+	segCount := counts[target]
+	if segCount == 0 {
 		return nil, 0, nil
 	}
 
-	msgIDs, err := zstdDec.DecodeAll(mc, nil)
+	msgIDs, err := c.dec.DecodeAll(mc, nil)
 	if err != nil {
 		return nil, 0, fmt.Errorf("nzbcodec: decompress msg ids: %w", err)
 	}
 	// Every id has at least a one-byte length prefix.
-	if before+c > len(msgIDs) {
-		return nil, 0, fmt.Errorf("nzbcodec: %d message ids cannot fit %d bytes", before+c, len(msgIDs))
+	if before+segCount > len(msgIDs) {
+		return nil, 0, fmt.Errorf("nzbcodec: %d message ids cannot fit %d bytes", before+segCount, len(msgIDs))
 	}
 
-	want := sampleIndices(c, percent)
+	want := sampleIndices(segCount, percent)
 	wantSet := make(map[int]struct{}, len(want))
 	for _, idx := range want {
 		wantSet[idx] = struct{}{}
@@ -832,7 +841,7 @@ func decodeFileMessageIDsSampled(data []byte, filename string, percent int) (ids
 	}
 
 	out := make([]string, 0, len(want))
-	for j := range c {
+	for j := range segCount {
 		if _, ok := wantSet[j]; ok {
 			// Owned copy: lets the decompressed buffer be collected.
 			s, strCopyErr := mr.strCopy()
@@ -846,7 +855,7 @@ func decodeFileMessageIDsSampled(data []byte, filename string, percent int) (ids
 			return nil, 0, skipErr
 		}
 	}
-	return out, c, nil
+	return out, segCount, nil
 }
 
 // sampleIndices returns the segment indices to probe for availability: always

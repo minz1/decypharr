@@ -40,6 +40,7 @@ const (
 // NZBStorage handles file-based persistence of NZB metadata using protobuf.
 type NZBStorage struct {
 	metaDir string
+	codec   *nzbCodec
 	logger  zerolog.Logger
 	mu      sync.RWMutex // Protects file operations and cached stats
 
@@ -55,8 +56,13 @@ func NewNZBStorage() (*NZBStorage, error) {
 		return nil, fmt.Errorf("failed to create meta directory: %w", err)
 	}
 
+	codec, err := newNZBCodec()
+	if err != nil {
+		return nil, err
+	}
 	s := &NZBStorage{
 		metaDir: metaDir,
+		codec:   codec,
 		logger:  logger.New("nzb-storage"),
 	}
 
@@ -115,10 +121,7 @@ func (s *NZBStorage) writeNZBLocked(nzb *storage.NZB) error {
 		return fmt.Errorf("NZB and ID are required")
 	}
 
-	data, err := encodeNZBV2(nzb)
-	if err != nil {
-		return fmt.Errorf("failed to encode NZB: %w", err)
-	}
+	data := s.codec.encodeNZBV2(nzb)
 
 	path := s.metaFilePath(nzb.ID)
 	var oldSize int64
@@ -166,7 +169,7 @@ func (s *NZBStorage) GetNZB(id string) (*storage.NZB, error) {
 		return nil, fmt.Errorf("failed to read NZB meta file: %w", err)
 	}
 
-	return decodeNZB(data)
+	return s.codec.decodeNZB(data)
 }
 
 // GetNZBHeader retrieves an NZB without its segment map. It is far cheaper than
@@ -186,9 +189,9 @@ func (s *NZBStorage) GetNZBHeader(id string) (*storage.NZB, error) {
 	}
 
 	if isCodecV2(data) {
-		return decodeNZBV2Header(data)
+		return s.codec.decodeNZBV2Header(data)
 	}
-	return decodeNZB(data)
+	return s.codec.decodeNZB(data)
 }
 
 // GetNZBFile returns one file of an NZB with its segment map. It decodes only
@@ -211,10 +214,10 @@ func (s *NZBStorage) GetNZBFile(id, filename string) (*storage.NZBFile, error) {
 	}
 
 	if isCodecV2(data) {
-		return decodeFileV2(data, filename)
+		return s.codec.decodeFileV2(data, filename)
 	}
 
-	nzb, err := decodeNZB(data)
+	nzb, err := s.codec.decodeNZB(data)
 	if err != nil {
 		return nil, err
 	}
@@ -247,12 +250,12 @@ func (s *NZBStorage) SampleFileMessageIDs(id, filename string, percent int) ([]s
 	}
 
 	if isCodecV2(data) {
-		ids, _, decodeFileMessageIDsSampledErr := decodeFileMessageIDsSampled(data, filename, percent)
+		ids, _, decodeFileMessageIDsSampledErr := s.codec.decodeFileMessageIDsSampled(data, filename, percent)
 		return ids, decodeFileMessageIDsSampledErr
 	}
 
 	// Legacy proto: full decode then sample in memory.
-	nzb, err := decodeNZB(data)
+	nzb, err := s.codec.decodeNZB(data)
 	if err != nil {
 		return nil, err
 	}
@@ -270,9 +273,9 @@ func (s *NZBStorage) SampleFileMessageIDs(id, filename string, percent int) ([]s
 
 // decodeNZB decodes a meta blob, supporting both the v2 codec and legacy
 // protobuf files (which migrate to v2 on their next write).
-func decodeNZB(data []byte) (*storage.NZB, error) {
+func (c *nzbCodec) decodeNZB(data []byte) (*storage.NZB, error) {
 	if isCodecV2(data) {
-		return decodeNZBV2(data)
+		return c.decodeNZBV2(data)
 	}
 
 	var pb NZBProto
@@ -336,7 +339,7 @@ func (s *NZBStorage) ForEachNZB(fn func(*storage.NZB) error) error {
 			continue
 		}
 
-		nzb, readFileErr := decodeNZB(data)
+		nzb, readFileErr := s.codec.decodeNZB(data)
 		if readFileErr != nil {
 			s.logger.Warn().Err(readFileErr).Str("file", entry.Name()).Msg("Failed to decode NZB")
 			continue
@@ -498,14 +501,11 @@ func (s *NZBStorage) migrateFile(path string) (bool, error) {
 		return false, nil
 	}
 
-	nzb, err := decodeNZB(data)
+	nzb, err := s.codec.decodeNZB(data)
 	if err != nil {
 		return false, fmt.Errorf("decode: %w", err)
 	}
-	out, err := encodeNZBV2(nzb)
-	if err != nil {
-		return false, fmt.Errorf("encode: %w", err)
-	}
+	out := s.codec.encodeNZBV2(nzb)
 
 	// Unique temp name so it can't collide with AddNZB's "<path>.tmp".
 	tmpPath := path + ".v2tmp"
