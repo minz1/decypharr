@@ -25,7 +25,8 @@ func testRealDebrid(host string) *RealDebrid {
 }
 
 func TestGetTorrentsPaginatesOnRawPageSize(t *testing.T) {
-	t.Parallel()
+	config.SetConfigPath(t.TempDir())
+	t.Cleanup(config.Reset)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Query().Get("offset") {
 		case "":
@@ -48,7 +49,8 @@ func TestGetTorrentsPaginatesOnRawPageSize(t *testing.T) {
 
 // A 509 on file selection must still return the torrent so callers delete it.
 func TestCheckStatusReturnsTorrentOnSlotLimit(t *testing.T) {
-	t.Parallel()
+	config.SetConfigPath(t.TempDir())
+	t.Cleanup(config.Reset)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			w.WriteHeader(statusTooManyActive)

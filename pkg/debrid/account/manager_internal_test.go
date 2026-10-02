@@ -36,6 +36,7 @@ func newTestManager(logOutput *bytes.Buffer) (*Manager, *Account) {
 }
 
 func TestSyncReenablesHealthyDisabledAccount(t *testing.T) {
+	t.Parallel()
 	var logs bytes.Buffer
 	m, acc := newTestManager(&logs)
 	m.Disable(acc)
@@ -51,6 +52,7 @@ func TestSyncReenablesHealthyDisabledAccount(t *testing.T) {
 }
 
 func TestSyncKeepsAccountDisabledOnFailure(t *testing.T) {
+	t.Parallel()
 	var logs bytes.Buffer
 	m, acc := newTestManager(&logs)
 	m.Disable(acc)
@@ -63,6 +65,7 @@ func TestSyncKeepsAccountDisabledOnFailure(t *testing.T) {
 }
 
 func TestNoActiveAccountWarningIsThrottled(t *testing.T) {
+	t.Parallel()
 	var logs bytes.Buffer
 	m, acc := newTestManager(&logs)
 	m.Disable(acc)
@@ -77,6 +80,7 @@ func TestNoActiveAccountWarningIsThrottled(t *testing.T) {
 }
 
 func TestInvalidFetchedLinkIsNotCached(t *testing.T) {
+	t.Parallel()
 	var logs bytes.Buffer
 	_, acc := newTestManager(&logs)
 	file := &types.File{Link: "https://example.test/file"}
@@ -117,8 +121,10 @@ func TestMeasureDownloadIsBoundedWhenRangeIgnored(t *testing.T) {
 }
 
 func TestDownloadLinkPropagatesFailuresAndCancellation(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"all fail", "cancel before", "cancel during"} {
 		t.Run(scenario, func(t *testing.T) {
+			t.Parallel()
 			var logs bytes.Buffer
 			m, first := newTestManager(&logs)
 			second := &Account{Token: "second", Debrid: first.Debrid, links: xsync.NewMap[string, types.DownloadLink]()}

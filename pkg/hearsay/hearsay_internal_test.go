@@ -23,6 +23,7 @@ import (
 )
 
 func TestZerologHandlerDemotesRoutineSyncTraffic(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		level   slog.Level
@@ -37,6 +38,7 @@ func TestZerologHandlerDemotesRoutineSyncTraffic(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			var output bytes.Buffer
 			log := zerolog.New(&output).Level(zerolog.TraceLevel)
 			slog.New(zerologHandler{log: log}).Log(t.Context(), test.level, test.message, "ns", "example")
@@ -169,6 +171,8 @@ func TestSeededTorrentLimit(t *testing.T) {
 }
 
 func TestTransportStatsCache(t *testing.T) {
+	config.SetConfigPath(t.TempDir())
+	t.Cleanup(config.Reset)
 	s := testService(t)
 	node, err := transport.Listen(t.TempDir(), 0, 0)
 	if err != nil {
@@ -240,6 +244,8 @@ func TestInvalidConfigurationDisablesHearsay(t *testing.T) {
 // still propagating must get another stat once the window passes, or
 // the gate prevents the check that would correct it.
 func TestNZBClaimedIncompleteExpires(t *testing.T) {
+	config.SetConfigPath(t.TempDir())
+	t.Cleanup(config.Reset)
 	s := testService(t)
 	const subject = "2c6b6858d61da9543d4231a71db4b1c9264b06852c6b6858d61da9543d4231a7"
 
@@ -267,6 +273,8 @@ func TestNZBClaimedIncompleteExpires(t *testing.T) {
 }
 
 func TestActiveAdviceUsesLocalTruth(t *testing.T) {
+	config.SetConfigPath(t.TempDir())
+	t.Cleanup(config.Reset)
 	s := testService(t)
 	const ih = "2c6b6858d61da9543d4231a71db4b1c9264b0685"
 	decision := s.EvaluateAdd("realdebrid", ih)
@@ -315,6 +323,8 @@ func TestShadowAdviceMeasuresWithoutGating(t *testing.T) {
 }
 
 func TestActiveAdviceRequiresEarnedEvidence(t *testing.T) {
+	config.SetConfigPath(t.TempDir())
+	t.Cleanup(config.Reset)
 	s := testService(t)
 	const ih = "2c6b6858d61da9543d4231a71db4b1c9264b0685"
 	negativeTraining := []string{
@@ -353,6 +363,8 @@ func TestActiveAdviceRequiresEarnedEvidence(t *testing.T) {
 }
 
 func TestObserveAndReport(t *testing.T) {
+	config.SetConfigPath(t.TempDir())
+	t.Cleanup(config.Reset)
 	s := testService(t)
 	const ih = "2c6b6858d61da9543d4231a71db4b1c9264b0685"
 	s.ObserveTorrent("realdebrid", ih, true)
