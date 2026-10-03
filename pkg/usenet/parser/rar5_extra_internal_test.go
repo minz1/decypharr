@@ -11,6 +11,7 @@ import (
 )
 
 func TestRAR5ExtraRecordBoundaries(t *testing.T) {
+	t.Parallel()
 	payload := append([]byte{0, 0, 1}, make([]byte, 16)...)
 	iv := bytes.Repeat([]byte{7}, 16)
 	payload = append(payload, iv...)
@@ -75,6 +76,7 @@ func checkRAR5Extra(t *testing.T, data []byte, encrypted, valid bool, iv []byte)
 }
 
 func TestRAR5HeaderSizesAndCompression(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"movie.mkv", "movies1.mkv", strings.Repeat("a", 130) + ".mkv"} {
 		for _, method := range []uint64{0, 1, 5} {
 			checkRAR5HeaderRoundTrip(t, name, method)
