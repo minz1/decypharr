@@ -817,6 +817,20 @@ func (dls *Downloaders) countErrors(n int64, err error) {
 }
 
 // kickWaiters checks all waiters and fulfills completed ones.
+// errDownloadsFailing fails waiters once downloading has given up and no
+// specific error was recorded.
+var errDownloadsFailing = errors.New("downloads failing: circuit breaker open")
+
+// failureLocked is the error that fails waiters once downloading has given
+// up. It is never nil: a waiter takes nil to mean its range is ready. Caller
+// must hold dls.mu.
+func (dls *Downloaders) failureLocked() error {
+	if dls.lastErr != nil {
+		return dls.lastErr
+	}
+	return errDownloadsFailing
+}
+
 func (dls *Downloaders) kickWaiters() {
 	dls.mu.Lock()
 	defer dls.mu.Unlock()
@@ -842,7 +856,7 @@ func (dls *Downloaders) kickWaiters() {
 			fulfilled++
 		case circuitOpen || dls.errorCount >= maxErrorCount:
 			// Circuit is open or max errors reached - fail waiter without creating new downloaders
-			w.errChan <- dls.lastErr
+			w.errChan <- dls.failureLocked()
 			fulfilled++
 		default:
 			remaining = append(remaining, w)
