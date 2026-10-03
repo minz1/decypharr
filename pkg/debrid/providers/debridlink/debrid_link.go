@@ -66,6 +66,7 @@ func New(
 	log := options.Logger
 
 	opts := []request.ClientOption{
+		request.WithTLSConfig(options.TLSConfig),
 		request.WithHeaders(headers),
 		request.WithRateLimiter(ratelimits["main"]),
 		request.WithMaxRetries(options.Retries),
@@ -75,6 +76,7 @@ func New(
 		opts = append(opts, request.WithProxy(dc.Proxy))
 	}
 	repairOpts := []request.ClientOption{
+		request.WithTLSConfig(options.TLSConfig),
 		request.WithHeaders(headers),
 		request.WithRateLimiter(ratelimits["repair"]),
 		request.WithMaxRetries(repairRetries),
@@ -91,7 +93,7 @@ func New(
 	dbl := &DebridLink{
 		Host:                  "https://debrid-link.com/api/v2",
 		APIKey:                dc.APIKey,
-		accountsManager:       account.NewManager(dc, options.Retries, ratelimits["download"], log),
+		accountsManager:       account.NewManager(dc, options, ratelimits["download"]),
 		options:               options,
 		DownloadUncached:      dc.DownloadUncached,
 		autoExpiresLinksAfter: autoExpiresLinksAfter,

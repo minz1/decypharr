@@ -114,6 +114,10 @@ type Client struct {
 	entries sync.Pool
 	janitor *bodyJanitor
 
+	// tlsBase is the verified TLS configuration SSL providers specialize
+	// with their server name (config.ProviderTLSConfig).
+	tlsBase *tls.Config
+
 	retries int // Number of retries per provider for transient errors
 
 	// waitMu guards the priority queues of parked acquirers. releaseSlot hands
@@ -277,8 +281,13 @@ func NewClient(cfg *config.Config, log zerolog.Logger) (*Client, error) {
 	}
 
 	clock := newMonoClock()
+	tlsBase, tlsErr := cfg.TLSClientConfig()
+	if tlsErr != nil {
+		return nil, tlsErr
+	}
 	pools, orderedPools := buildPools(providers, clock)
 	cm := &Client{
+		tlsBase:          tlsBase,
 		clock:            clock,
 		bufs:             &bodyBufPool{},
 		janitor:          newBodyJanitor(),
@@ -933,14 +942,9 @@ func (c *Client) createConnection(ctx context.Context, provider config.UsenetPro
 	// TLS if enabled
 	if provider.SSL {
 		// Dial with TLS directly if possible, or Dial then Wrap
-		tlsConfig := &tls.Config{
-			ServerName: provider.Host,
-			// Existing behavior: many usenet resellers present certificates
-			// that do not match the configured host. Verification needs a
-			// per-provider config toggle before it can be enabled.
-			InsecureSkipVerify: true, //nolint:gosec // G402: see above; tracked as a follow-up
-			MinVersion:         tls.VersionTLS12,
-		}
+		// Certificates are verified. A reseller whose certificate does not
+		// name the configured host sets the provider's tls_server_name.
+		tlsConfig := config.ProviderTLSConfig(c.tlsBase, provider)
 		// Use tls.Dialer for simpler timeout handling
 		tlsDialer := &tls.Dialer{
 			NetDialer: dialer,

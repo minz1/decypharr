@@ -202,7 +202,7 @@ func TestReconcileBuildsIndexFromSymlinks(t *testing.T) {
 	defer server.Close()
 
 	instance := arr.Arr{Name: "radarr", Host: server.URL, Token: "secret", Type: arr.Radarr}
-	arrs := arr.New(config.NewStore(&config.Config{}), zerolog.Nop())
+	arrs := arr.New(config.NewStore(&config.Config{}), nil, zerolog.Nop())
 	arrs.AddOrUpdate(instance)
 	writer := new(recordingBindingWriter)
 	managed := []ManagedFile{{
@@ -473,7 +473,7 @@ func TestReconcileTargetedReadsOnlyTheEntrysMovie(t *testing.T) {
 	defer server.Close()
 
 	instance := arr.Arr{Name: "radarr", Host: server.URL, Token: "secret", Type: arr.Radarr}
-	arrs := arr.New(config.NewStore(&config.Config{}), zerolog.Nop())
+	arrs := arr.New(config.NewStore(&config.Config{}), nil, zerolog.Nop())
 	arrs.AddOrUpdate(instance)
 	writer := new(recordingBindingWriter)
 	managed := []ManagedFile{{
@@ -524,7 +524,7 @@ func TestReconcileTargetedNeverWidensToTheWholeLibrary(t *testing.T) {
 	defer server.Close()
 
 	instance := arr.Arr{Name: "radarr", Host: server.URL, Token: "secret", Type: arr.Radarr}
-	arrs := arr.New(config.NewStore(&config.Config{}), zerolog.Nop())
+	arrs := arr.New(config.NewStore(&config.Config{}), nil, zerolog.Nop())
 	arrs.AddOrUpdate(instance)
 	managed := []ManagedFile{{
 		EntryID:     "entry",

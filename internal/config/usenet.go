@@ -30,7 +30,11 @@ type UsenetProvider struct {
 	Backbone       string `json:"backbone,omitempty"`        // Shared article backbone identifier used for failover decisions
 	MaxConnections int    `json:"max_connections,omitempty"` // Max connections for this provider (default: 10)
 	SSL            bool   `json:"ssl,omitempty"`             // Use SSL/TLS for the connection
-	Priority       int    `json:"priority,omitempty"`        // Priority for this provider (lower = higher priority)
+	// TLSServerName is the name the provider's certificate is verified
+	// against, for resellers whose certificate does not name the host
+	// configured above. Empty means Host.
+	TLSServerName string `json:"tls_server_name,omitempty"`
+	Priority      int    `json:"priority,omitempty"` // Priority for this provider (lower = higher priority)
 	// Backup marks this provider as a fallback tier. Backups are only
 	// consulted when every non-backup ("primary") provider is excluded
 	// — e.g. all primaries returned article-not-found or had connection
@@ -263,6 +267,7 @@ func (c *Config) applyUsenetEnvVars(e env) {
 		e.envString(prefix+"BACKBONE", &provider.Backbone)
 		e.envInt(prefix+"MAX_CONNECTIONS", &provider.MaxConnections)
 		e.envBool(prefix+"SSL", &provider.SSL)
+		e.envString(prefix+"TLS_SERVER_NAME", &provider.TLSServerName)
 		e.envInt(prefix+"PRIORITY", &provider.Priority)
 		e.envBool(prefix+"BACKUP", &provider.Backup)
 	}

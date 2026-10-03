@@ -309,6 +309,11 @@ type Config struct {
 	SharedDirMode  string `json:"shared_dir_mode,omitempty"`
 	SharedFileMode string `json:"shared_file_mode,omitempty"`
 
+	// TLSCAFile is a PEM bundle of extra certificate authorities trusted for
+	// outgoing TLS (debrid, *arr, usenet), e.g. a LAN CA or a self-signed
+	// *arr certificate. Certificates are always verified.
+	TLSCAFile string `json:"tls_ca_file,omitempty"`
+
 	// Notifications configuration
 	Notifications Notifications `json:"notifications"`
 
@@ -400,6 +405,9 @@ func (c *Config) load(lookup LookupEnv) error {
 	}
 	if modesErr := c.validateModes(); modesErr != nil {
 		return fmt.Errorf("configuration error: %w", modesErr)
+	}
+	if _, tlsErr := c.TLSClientConfig(); tlsErr != nil {
+		return fmt.Errorf("configuration error: %w", tlsErr)
 	}
 
 	// Save new signing secrets so signatures remain valid after a restart.

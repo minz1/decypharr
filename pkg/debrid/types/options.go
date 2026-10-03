@@ -1,6 +1,10 @@
 package types
 
-import "github.com/rs/zerolog"
+import (
+	"crypto/tls"
+
+	"github.com/rs/zerolog"
+)
 
 // ProviderOptions carries what every debrid provider takes from the
 // application besides its own config.Debrid section.
@@ -13,6 +17,9 @@ type ProviderOptions struct {
 	ValidateFile func(name string, size int64) error
 	// Logger is the provider's logger.
 	Logger zerolog.Logger
+	// TLSConfig is the verified TLS configuration for API and download
+	// requests. Nil means the system roots.
+	TLSConfig *tls.Config
 }
 
 // FileAllowed applies ValidateFile, allowing every file when it is nil.

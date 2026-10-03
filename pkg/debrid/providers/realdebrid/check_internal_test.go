@@ -20,9 +20,8 @@ func TestCheckFileHonorsCancellation(t *testing.T) {
 		provider := &RealDebrid{Host: host, repairClient: request.New(request.WithMaxRetries(0))}
 		provider.accountsManager = account.NewManager(
 			config.Debrid{Name: "realdebrid", DownloadAPIKeys: []string{"token"}},
-			0,
+			types.ProviderOptions{Logger: zerolog.Nop()},
 			nil,
-			zerolog.Nop(),
 		)
 		return provider
 	}

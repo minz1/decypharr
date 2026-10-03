@@ -60,6 +60,7 @@ func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter, options type
 	_log := options.Logger
 
 	opts := []request.ClientOption{
+		request.WithTLSConfig(options.TLSConfig),
 		request.WithHeaders(headers),
 		request.WithRateLimiter(ratelimits["main"]),
 		request.WithMaxRetries(options.Retries),
@@ -69,6 +70,7 @@ func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter, options type
 		opts = append(opts, request.WithProxy(dc.Proxy))
 	}
 	repairOpts := []request.ClientOption{
+		request.WithTLSConfig(options.TLSConfig),
 		request.WithHeaders(headers),
 		request.WithRateLimiter(ratelimits["repair"]),
 		request.WithMaxRetries(repairRetries),
@@ -85,7 +87,7 @@ func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter, options type
 	ad := &AllDebrid{
 		Host:                  "https://api.alldebrid.com/v4.1",
 		APIKey:                dc.APIKey,
-		accountsManager:       account.NewManager(dc, options.Retries, ratelimits["download"], _log),
+		accountsManager:       account.NewManager(dc, options, ratelimits["download"]),
 		options:               options,
 		autoExpiresLinksAfter: autoExpiresLinksAfter,
 		noPeerRetryBackoff:    defaultNoPeerRetryBackoff(),

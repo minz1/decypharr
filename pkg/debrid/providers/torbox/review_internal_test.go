@@ -33,9 +33,8 @@ func TestFetchDownloadLinkReportsProviderErrors(t *testing.T) {
 	tb := testTorbox(server.URL)
 	tb.accountsManager = account.NewManager(
 		config.Debrid{Name: "torbox", DownloadAPIKeys: []string{"download-token"}},
-		0,
+		types.ProviderOptions{Logger: tb.logger},
 		nil,
-		tb.logger,
 	)
 	file := &types.File{ID: "1", Link: "torbox://17/1"}
 	if _, err := tb.GetDownloadLink(t.Context(), "17", file); err == nil {

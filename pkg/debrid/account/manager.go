@@ -41,7 +41,10 @@ const (
 	statusRetryableNonStandard = 447
 )
 
-func NewManager(debridConf config.Debrid, retries int, downloadRL ratelimit.Limiter, logger zerolog.Logger) *Manager {
+// NewManager builds the download accounts of one debrid provider, using the
+// provider's retry count, TLS settings and logger.
+func NewManager(debridConf config.Debrid, options types.ProviderOptions, downloadRL ratelimit.Limiter) *Manager {
+	logger := options.Logger
 	m := &Manager{
 		debrid:   debridConf.Name,
 		accounts: xsync.NewMap[string, *Account](),
@@ -60,7 +63,8 @@ func NewManager(debridConf config.Debrid, retries int, downloadRL ratelimit.Limi
 		opts := []request.ClientOption{
 			request.WithRateLimiter(downloadRL),
 			request.WithHeaders(headers),
-			request.WithMaxRetries(retries),
+			request.WithMaxRetries(options.Retries),
+			request.WithTLSConfig(options.TLSConfig),
 			request.WithRetryableStatus(http.StatusTooManyRequests, http.StatusBadGateway, statusRetryableNonStandard),
 		}
 		if debridConf.Proxy != "" {

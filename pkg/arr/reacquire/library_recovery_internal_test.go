@@ -107,7 +107,7 @@ func TestLibraryRecoveryUsesDurableJobsAndWaitsForReplacement(t *testing.T) {
 	fake := &fakeRadarrLibrary{}
 	server := httptest.NewServer(fake)
 	defer server.Close()
-	registry := arr.New(config.NewStore(&config.Config{}), zerolog.Nop())
+	registry := arr.New(config.NewStore(&config.Config{}), nil, zerolog.Nop())
 	registry.AddOrUpdate(arr.Arr{Name: "movies", Type: arr.Radarr, Host: server.URL, Token: "token"})
 	directory := t.TempDir()
 	service := startTestService(t, directory, registry)
@@ -271,7 +271,7 @@ func runImportedJobCase(t *testing.T, tc importedJobCase) {
 	var requests atomic.Int64
 	server := serveImportedJobCase(t, tc, &requests)
 	instance := arr.Arr{Name: "library", Type: tc.kind, Host: server.URL, Token: "token"}
-	registry := arr.New(config.NewStore(&config.Config{}), zerolog.Nop())
+	registry := arr.New(config.NewStore(&config.Config{}), nil, zerolog.Nop())
 	registry.AddOrUpdate(instance)
 	directory := t.TempDir()
 	service, err := NewService(ServiceOptions{Directory: directory, Arrs: registry})

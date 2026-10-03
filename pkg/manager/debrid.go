@@ -62,7 +62,8 @@ func (m *Manager) createClient(dc config.Debrid) (debrid.Client, error) {
 		ValidateFile: func(name string, size int64) error {
 			return m.store.Get().ValidateFileAllowed(name, size)
 		},
-		Logger: m.logs.New(dc.Name),
+		Logger:    m.logs.New(dc.Name),
+		TLSConfig: m.tlsConfig,
 	}
 
 	switch dc.Provider {

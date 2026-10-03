@@ -180,6 +180,7 @@ func (c *Config) applyManagerEnvVars(e env) {
 	e.envString("NZB_USER_AGENT", &c.NZBUserAgent)
 	e.envString("SHARED_DIR_MODE", &c.SharedDirMode)
 	e.envString("SHARED_FILE_MODE", &c.SharedFileMode)
+	e.envString("TLS_CA_FILE", &c.TLSCAFile)
 }
 
 // applyArrEnvVars applies ARRS__<i>__*. NAME creates a new entry; TOKEN and

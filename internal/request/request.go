@@ -47,7 +47,7 @@ type Client struct {
 	headersMu       sync.RWMutex
 	maxRetries      int
 	timeout         time.Duration
-	skipTLSVerify   bool
+	tlsConfig       *tls.Config
 	retryableStatus map[int]struct{}
 	logger          zerolog.Logger
 	proxy           string
@@ -103,6 +103,16 @@ func WithRetryableStatus(statusCodes ...int) ClientOption {
 		c.retryableStatus = make(map[int]struct{}) // reset the map
 		for _, code := range statusCodes {
 			c.retryableStatus[code] = struct{}{}
+		}
+	}
+}
+
+// WithTLSConfig sets the TLS settings for HTTPS requests (trusted roots,
+// minimum version). Certificates are always verified.
+func WithTLSConfig(tlsConfig *tls.Config) ClientOption {
+	return func(c *Client) {
+		if tlsConfig != nil {
+			c.tlsConfig = tlsConfig.Clone()
 		}
 	}
 }
@@ -221,8 +231,8 @@ func retryAfter(resp *http.Response) (time.Duration, bool) {
 // New creates a new HTTP client with the specified options.
 func New(options ...ClientOption) *Client {
 	client := &Client{
-		maxRetries:    defaultMaxRetries,
-		skipTLSVerify: true,
+		maxRetries: defaultMaxRetries,
+		tlsConfig:  &tls.Config{MinVersion: tls.VersionTLS12},
 		retryableStatus: map[int]struct{}{
 			http.StatusTooManyRequests:     {},
 			http.StatusInternalServerError: {},
@@ -251,11 +261,7 @@ func New(options ...ClientOption) *Client {
 	// Check if transport was set by WithTransport option
 	if client.httpClient.Transport == nil {
 		transport := &http.Transport{
-			TLSClientConfig: &tls.Config{
-				// Always true today: Arr instances on the LAN commonly use
-				// self-signed certificates. See the review report follow-up.
-				InsecureSkipVerify: client.skipTLSVerify,
-			},
+			TLSClientConfig: client.tlsConfig,
 			DialContext: (&net.Dialer{
 				Timeout:   dialTimeout,
 				KeepAlive: dialKeepAlive,

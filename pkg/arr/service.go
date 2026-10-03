@@ -3,6 +3,7 @@ package arr
 import (
 	"cmp"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"maps"
 	"slices"
@@ -33,7 +34,7 @@ const readRetries = 5
 
 // New builds the service from the Arr instances configured in cfg. The
 // instance list and queue cleanup rules are read live from cfg.
-func New(cfg *config.Store, log zerolog.Logger) *Service {
+func New(cfg *config.Store, tlsConfig *tls.Config, log zerolog.Logger) *Service {
 	service := &Service{
 		arrs:   make(map[string]Arr),
 		config: cfg,
@@ -41,12 +42,14 @@ func New(cfg *config.Store, log zerolog.Logger) *Service {
 		client: request.New(
 			request.WithTimeout(0),
 			request.WithMaxRetries(readRetries),
+			request.WithTLSConfig(tlsConfig),
 		),
 		// Mutations are not retried: a repeated blocklist or search is a second
 		// user-visible action, not a second read.
 		mutation: request.New(
 			request.WithTimeout(0),
 			request.WithMaxRetries(0),
+			request.WithTLSConfig(tlsConfig),
 		),
 	}
 	for _, configured := range cfg.Get().Arrs {
