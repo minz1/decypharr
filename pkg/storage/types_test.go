@@ -94,3 +94,23 @@ func TestGetTorrentFolderIsOneElement(t *testing.T) {
 		t.Fatalf("ordinary name changed to %q", got)
 	}
 }
+
+// A usenet entry has one placement, under "usenet". Earlier versions also
+// stored it under every file's name; loading such an entry drops those.
+func TestUsenetEntryHasOnePlacement(t *testing.T) {
+	t.Parallel()
+	nzb := &storage.NZB{ID: "nzo", Files: []storage.NZBFile{{Name: "a.mkv"}, {Name: "b.mkv"}}}
+	entry := &storage.Entry{InfoHash: "h"}
+	entry.AddUsenetProvider(nzb)
+	if len(entry.Providers) != 1 || entry.Providers[storage.UsenetProvider] == nil {
+		t.Fatalf("providers = %v, want only %q", entry.Providers, storage.UsenetProvider)
+	}
+
+	legacy := storage.EntryToProto(entry)
+	usenet := legacy.GetProviders()[storage.UsenetProvider]
+	legacy.Providers["a.mkv"], legacy.Providers["b.mkv"] = usenet, usenet
+	loaded := storage.ProtoToEntry(legacy)
+	if len(loaded.Providers) != 1 || loaded.Providers[storage.UsenetProvider] == nil {
+		t.Fatalf("loaded providers = %v, want only %q", loaded.Providers, storage.UsenetProvider)
+	}
+}

@@ -263,6 +263,7 @@ func ProtoToEntry(pb *EntryProto) *Entry {
 	for name, pe := range pb.GetProviders() {
 		e.Providers[name] = protoToProviderEntry(pe)
 	}
+	dropStrayUsenetPlacements(e.Providers)
 	for name, f := range pb.GetFiles() {
 		e.Files[name] = protoToFile(f)
 	}
