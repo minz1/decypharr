@@ -107,7 +107,7 @@ func (h *Handler) handler(
 	case http.MethodOptions:
 		h.handleOptions(w)
 	case "COPY", "MOVE":
-		// manager.CopyEntry has never been implemented; answer honestly
+		// Copying and moving entries is not supported; answer honestly
 		// instead of a 500.
 		http.Error(w, "Not Implemented", http.StatusNotImplemented)
 	default:

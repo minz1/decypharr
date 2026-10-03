@@ -62,7 +62,7 @@ class ConfigManager {
     }
 
     // Display labels for the built-in queue-cleanup catalog. IDs MUST match
-    // config.DefaultQueueCleanupRules / catalogMatchers on the backend.
+    // config.DefaultQueueCleanupRules / matchCatalogRule on the backend.
     get queueCleanupCatalog() {
         return [
             {id: 'failed_download', label: 'Failed download'},
