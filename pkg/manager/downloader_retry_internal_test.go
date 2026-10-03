@@ -152,3 +152,39 @@ type unexpectedEOFReader struct{}
 func (unexpectedEOFReader) Read([]byte) (int, error) {
 	return 0, io.ErrUnexpectedEOF
 }
+
+// A torrent download through grab gets the shared file mode, like every
+// other file the arr imports, not grab's 0666.
+func TestLocalDownloaderUsesSharedFileMode(t *testing.T) {
+	t.Parallel()
+	payload := []byte("movie bytes")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
+		_, _ = w.Write(payload)
+	}))
+	t.Cleanup(server.Close)
+
+	dir := t.TempDir()
+	m := withTestConfig(t, &Manager{ctx: t.Context(), streamClient: server.Client()})
+	d := &Downloader{manager: m, logger: zerolog.Nop()}
+	destination := filepath.Join(dir, "release.mkv")
+	if err := d.localDownloader(server.URL, destination, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// The same mode and umask applied by os.OpenFile, as the other paths do.
+	probe := filepath.Join(dir, "probe")
+	f, err := os.OpenFile(probe, os.O_CREATE|os.O_WRONLY, m.config.SharedFileModeValue())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Close()
+	want, _ := os.Stat(probe)
+	got, err := os.Stat(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Mode().Perm() != want.Mode().Perm() {
+		t.Fatalf("downloaded file mode = %o, want %o", got.Mode().Perm(), want.Mode().Perm())
+	}
+}

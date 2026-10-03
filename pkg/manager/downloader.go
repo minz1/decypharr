@@ -883,21 +883,9 @@ func (d *Downloader) localDownloadAttempt(
 	progressCallback func(int64, int64),
 ) error {
 	startTime := time.Now()
-	requestedRange := "full"
-	req, err := grab.NewRequest(filename, downloadURL)
+	req, requestedRange, err := d.newGrabRequest(downloadURL, filename, byterange)
 	if err != nil {
 		return err
-	}
-	req = req.WithContext(d.operationContext())
-	req.BufferSize = localDownloadBufferSize
-	req.HTTPRequest.Header.Set("User-Agent", "Decypharr[QBitTorrent]")
-	req.HTTPRequest.Header.Set("Accept", "*/*")
-	req.HTTPRequest.Header.Set("Accept-Encoding", "identity")
-
-	if byterange != nil {
-		requestedRange = fmt.Sprintf("bytes=%d-%d", byterange[0], byterange[1])
-		req.NoResume = true
-		req.HTTPRequest.Header.Set("Range", requestedRange)
 	}
 
 	client := grab.NewClient()
@@ -941,6 +929,37 @@ func (d *Downloader) localDownloadAttempt(
 			return nil
 		}
 	}
+}
+
+// newGrabRequest prepares the download of downloadURL (or its byterange) to
+// filename and returns it with the range it requests.
+func (d *Downloader) newGrabRequest(
+	downloadURL, filename string,
+	byterange *[2]int64,
+) (*grab.Request, string, error) {
+	// grab creates the file with mode 0666; create it first with the shared
+	// mode, like every other file the arr imports. grab resumes from (or, for
+	// a byte range, truncates) the empty file and keeps its mode.
+	if err := fsutil.CreateShared(filename, d.manager.config.SharedFileModeValue()); err != nil {
+		return nil, "", fmt.Errorf("create %s: %w", filename, err)
+	}
+	req, err := grab.NewRequest(filename, downloadURL)
+	if err != nil {
+		return nil, "", err
+	}
+	req = req.WithContext(d.operationContext())
+	req.BufferSize = localDownloadBufferSize
+	req.HTTPRequest.Header.Set("User-Agent", "Decypharr[QBitTorrent]")
+	req.HTTPRequest.Header.Set("Accept", "*/*")
+	req.HTTPRequest.Header.Set("Accept-Encoding", "identity")
+
+	requestedRange := "full"
+	if byterange != nil {
+		requestedRange = fmt.Sprintf("bytes=%d-%d", byterange[0], byterange[1])
+		req.NoResume = true
+		req.HTTPRequest.Header.Set("Range", requestedRange)
+	}
+	return req, requestedRange, nil
 }
 
 func isRetryableDownloadError(err error) bool {

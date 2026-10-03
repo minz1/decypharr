@@ -30,6 +30,17 @@ func isElement(name string) bool {
 		!strings.ContainsRune(name, '/') && !strings.ContainsRune(name, filepath.Separator)
 }
 
+// CreateShared creates path with mode's permission bits (less the process
+// umask) if it does not exist yet; an existing file is left as it is. It is
+// for files a third-party writer then opens without choosing a mode.
+func CreateShared(path string, mode fs.FileMode) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, mode.Perm())
+	if err != nil {
+		return err
+	}
+	return f.Close()
+}
+
 // MkdirShared creates path and any missing parents with mode's permission
 // bits (less the process umask). When mode has the setgid bit, every
 // directory it creates gets it too, so files and directories created inside
