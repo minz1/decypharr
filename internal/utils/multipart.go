@@ -31,8 +31,7 @@ func ParseBoundedMultipartForm(w http.ResponseWriter, r *http.Request, maxBody, 
 	}
 	form, err := reader.ReadForm(maxMemory)
 	if err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
+		if _, tooLarge := errors.AsType[*http.MaxBytesError](err); tooLarge {
 			return fmt.Errorf("request body exceeds %d bytes: %w", maxBody, err)
 		}
 		return err
