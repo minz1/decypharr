@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -125,8 +126,8 @@ func TestSessionSecretIsNotSerialized(t *testing.T) {
 	}
 }
 
-// A debrid proxy that cannot be used is reported as a setup error, not left
-// to a silent direct connection.
+// A debrid proxy that cannot be used is a field error when loading, not a
+// silent direct connection, and it does not count against setup.
 func TestLoadRejectsInvalidDebridProxy(t *testing.T) {
 	t.Parallel()
 	directory := t.TempDir()
@@ -134,8 +135,43 @@ func TestLoadRejectsInvalidDebridProxy(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, "config.json"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg := load(t, directory, nil)
-	if msg := cfg.SetupError(); !strings.Contains(msg, "proxy") {
-		t.Fatalf("SetupError = %q, want a proxy error", msg)
+	_, err := config.Load(directory, config.MapEnv(nil))
+	if err == nil || !strings.Contains(err.Error(), "debrids[0].proxy") {
+		t.Fatalf("Load = %v, want a debrids[0].proxy error", err)
+	}
+	cfg := config.New(directory)
+	cfg.Debrids = []config.Debrid{{Name: "rd", APIKey: "k", Proxy: "http://[::1"}}
+	cfg.DownloadFolder = directory
+	if msg := cfg.SetupError(); msg != "" {
+		t.Fatalf("SetupError = %q: a bad proxy must not send the UI to setup", msg)
+	}
+}
+
+// Store.Update never writes a configuration that Load would refuse, whatever
+// path edits it.
+func TestStoreUpdateRefusesUnloadableConfig(t *testing.T) {
+	t.Parallel()
+	directory := t.TempDir()
+	store := config.NewStore(load(t, directory, nil))
+	before, err := os.ReadFile(filepath.Join(directory, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, updateErr := store.Update(func(next *config.Config) error {
+		next.SharedFileMode = "rw-rw----"
+		return nil
+	})
+	if updateErr == nil || !strings.Contains(updateErr.Error(), "shared_file_mode") {
+		t.Fatalf("Update = %v, want a shared_file_mode error", updateErr)
+	}
+	after, err := os.ReadFile(filepath.Join(directory, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("an unloadable configuration was saved")
+	}
+	if _, loadErr := config.Load(directory, config.MapEnv(nil)); loadErr != nil {
+		t.Fatalf("Load after the refused update: %v", loadErr)
 	}
 }

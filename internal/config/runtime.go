@@ -30,6 +30,8 @@ type meta struct {
 	secretKey string
 	// readOnly forbids every write to the data folder (see LoadReadOnly).
 	readOnly bool
+	// modes are the shared modes parsed by CheckLoadable.
+	modes sharedModes
 }
 
 // errReadOnly is returned by writes on a Config loaded with LoadReadOnly.
@@ -123,6 +125,11 @@ func (s *Store) Update(edit func(*Config) error) (*Config, error) {
 	}
 	if editErr := edit(next); editErr != nil {
 		return nil, editErr
+	}
+	// Never write a configuration the next Load would refuse: a restart
+	// would then fail to start until config.json is fixed by hand.
+	if checkErr := next.CheckLoadable(); checkErr != nil {
+		return nil, checkErr
 	}
 	if saveErr := next.Save(); saveErr != nil {
 		return nil, saveErr

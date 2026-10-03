@@ -84,6 +84,9 @@ func TestSharedModes(t *testing.T) {
 		t.Errorf("default file mode = %v", got)
 	}
 	cfg.SharedDirMode, cfg.SharedFileMode = "0o755", "644"
+	if err := cfg.CheckLoadable(); err != nil {
+		t.Fatal(err)
+	}
 	if got := cfg.SharedDirModeValue(); got != 0o755 {
 		t.Errorf("dir mode = %v, want 0755", got)
 	}
