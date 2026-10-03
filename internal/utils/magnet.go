@@ -5,8 +5,10 @@ import (
 	"bytes"
 	"encoding/base32"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"path/filepath"
 	"regexp"
@@ -136,7 +138,24 @@ func ReadMagnetFile(file io.Reader) (string, error) {
 
 // OpenMagnetHTTPURL downloads a .torrent file and converts it to a Magnet.
 func OpenMagnetHTTPURL(magnetLink string, rmTrackerUrls bool) (*Magnet, error) {
-	resp, err := fetch(magnetLink)
+	// Indexers often answer a torrent URL with a redirect to a magnet link,
+	// which an HTTP client cannot follow: stop there and use the link.
+	client := &http.Client{
+		Timeout: downloadTimeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if strings.EqualFold(req.URL.Scheme, "magnet") && req.Response != nil {
+				return &magnetRedirectError{link: req.Response.Header.Get("Location")}
+			}
+			if len(via) >= maxRedirects {
+				return fmt.Errorf("stopped after %d redirects", maxRedirects)
+			}
+			return nil
+		},
+	}
+	resp, err := fetchWith(client, magnetLink)
+	if redirect, ok := errors.AsType[*magnetRedirectError](err); ok {
+		return GetMagnetInfo(redirect.link, rmTrackerUrls)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("error making GET request: %w", err)
 	}
@@ -147,6 +166,16 @@ func OpenMagnetHTTPURL(magnetLink string, rmTrackerUrls bool) (*Magnet, error) {
 	}
 	return GetMagnetFromBytes(torrentData, rmTrackerUrls)
 }
+
+// maxRedirects matches net/http's default redirect limit.
+const maxRedirects = 10
+
+// magnetRedirectError stops a torrent download that redirected to a magnet link.
+type magnetRedirectError struct {
+	link string
+}
+
+func (m *magnetRedirectError) Error() string { return "redirected to a magnet link" }
 
 func GetMagnetInfo(magnetLink string, rmTrackerUrls bool) (*Magnet, error) {
 	if magnetLink == "" {
