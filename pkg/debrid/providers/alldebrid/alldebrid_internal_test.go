@@ -256,3 +256,32 @@ func TestAvailabilityReportsUnsupported(t *testing.T) {
 		t.Fatalf("IsAvailable = %v, %v", result, err)
 	}
 }
+
+// A synced torrent lists the files inside folders, as GetTorrent does.
+func TestGetTorrentsFlattensFolders(t *testing.T) {
+	t.Parallel()
+	const magnets = `{"status":"success","data":{"magnets":[{"id":7,"filename":"Show","statusCode":4,"hash":"H",` +
+		`"files":[{"n":"Show","e":[{"n":"Season 1","e":[{"n":"S01E01.mkv","s":10,"l":"https://l/1"}]},` +
+		`{"n":"S00E01.mkv","s":5,"l":"https://l/0"}]},{"n":"top.mkv","s":1,"l":"https://l/t"}]}]}}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, magnets)
+	}))
+	t.Cleanup(server.Close)
+
+	torrents, err := testAllDebrid(server.URL).GetTorrents()
+	if err != nil || len(torrents) != 1 {
+		t.Fatalf("GetTorrents() = %v, %v", torrents, err)
+	}
+	files := torrents[0].Files
+	for name, link := range map[string]string{
+		"S01E01.mkv": "https://l/1", "S00E01.mkv": "https://l/0", "top.mkv": "https://l/t",
+	} {
+		if files[name].Link != link {
+			t.Errorf("file %s = %+v, want link %s", name, files[name], link)
+		}
+	}
+	if len(files) != 3 {
+		t.Errorf("files = %v, want the three leaf files", files)
+	}
+}

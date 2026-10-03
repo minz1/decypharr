@@ -616,23 +616,14 @@ func (ad *AllDebrid) GetTorrents() ([]*types.Torrent, error) {
 			Status:           getAlldebridStatus(magnet.StatusCode),
 			Filename:         magnet.Filename,
 			OriginalFilename: magnet.Filename,
-			Files:            make(map[string]types.File),
 			InfoHash:         magnet.Hash,
 			Debrid:           ad.config.Name,
 			Added:            time.Unix(magnet.CompletionDate, 0),
 		}
-		for _, f := range magnet.Files {
-			if validateFileAllowedErr := ad.options.FileAllowed(f.Name, f.Size); validateFileAllowedErr != nil {
-				continue
-			}
-			file := types.File{
-				TorrentID: t.ID,
-				Name:      f.Name,
-				Size:      f.Size,
-				Link:      f.Link,
-			}
-			t.Files[file.Name] = file
-		}
+		// Folders nest their files in Elements; flatten them the way
+		// GetTorrent does so a synced torrent lists the same files.
+		index := -1
+		t.Files = ad.flattenFiles(t.ID, magnet.Files, "", &index)
 		torrents = append(torrents, t)
 	}
 
