@@ -1,7 +1,7 @@
 package manager
 
 import (
-	"crypto/md5" //nolint:gosec // see generateSeasonHash
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"maps"
@@ -253,10 +253,14 @@ func getSortedSeasons(seasons map[int]bool) []int {
 	return result
 }
 
-// generateSeasonHash creates a unique hash for a season based on original hash.
-func generateSeasonHash(originalHash string, seasonNumber int) string {
-	source := fmt.Sprintf("%s-%d", originalHash, seasonNumber)
-	hash := md5.Sum([]byte(source)) //nolint:gosec // derives a stable ID persisted as the season infohash; not security
+// seasonHashBytes keeps season IDs at 32 hex digits, the shape of the
+// md5-derived IDs earlier versions persisted.
+const seasonHashBytes = 16
 
-	return hex.EncodeToString(hash[:])
+// generateSeasonHash derives a season entry's ID from its pack's infohash and
+// season number. Entries persisted by earlier versions carry an md5-derived
+// ID; downloadSeasons finds those by pack and name instead of re-deriving.
+func generateSeasonHash(originalHash string, seasonNumber int) string {
+	sum := sha256.Sum256(fmt.Appendf(nil, "%s-%d", originalHash, seasonNumber))
+	return hex.EncodeToString(sum[:seasonHashBytes])
 }
