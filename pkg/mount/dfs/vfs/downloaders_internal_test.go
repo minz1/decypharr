@@ -2,7 +2,9 @@ package vfs
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/vfs/ranges"
@@ -303,4 +305,45 @@ func TestIdleRestartStartsKickerBeforeOldOneClosesDone(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("fresh kicker did not exit on cancel")
 	}
+}
+
+// The idle timeout tears a session down like StopAll: it holds the session
+// in stopping until stopped downloaders have exited, so an error one records
+// on its way out cannot land in the fresh session's error budget.
+func TestIdleTimeoutWaitsForStoppedDownloaders(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		dls := &Downloaders{item: &CacheItem{info: ItemInfo{Size: testMiB}}}
+		dl := &downloader{quit: make(chan struct{}), cancel: func() {}}
+		dl.wg.Add(1) // the downloader goroutine is still finishing a read
+		dls.dls = []*downloader{dl}
+		dls.lastActivity.Store(time.Now().Add(-2 * idleTimeout).UnixNano())
+
+		result := make(chan bool, 1)
+		go func() { result <- dls.checkIdleTimeout() }()
+		synctest.Wait()
+
+		dls.mu.Lock()
+		stopping := dls.stopping
+		// The exiting downloader records its interrupted read.
+		dls.errorCount++
+		dls.lastErr = errors.New("read interrupted")
+		dls.mu.Unlock()
+		if !stopping {
+			t.Error("session was not held in stopping while a downloader was still running")
+		}
+		dl.wg.Done()
+
+		if !<-result {
+			t.Fatal("idle timeout did not end the session")
+		}
+		dls.mu.Lock()
+		defer dls.mu.Unlock()
+		if dls.errorCount != 0 || dls.lastErr != nil {
+			t.Fatalf("next session starts with error count %d (%v)", dls.errorCount, dls.lastErr)
+		}
+		if dls.stopping || !dls.idle {
+			t.Fatalf("stopping = %v, idle = %v after teardown", dls.stopping, dls.idle)
+		}
+	})
 }
