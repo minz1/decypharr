@@ -1,6 +1,7 @@
 package config
 
 import (
+	"cmp"
 	"fmt"
 	"io/fs"
 	"strconv"
@@ -41,35 +42,46 @@ func parseMode(field, value string) (fs.FileMode, error) {
 	return mode, nil
 }
 
-// SharedDirModeValue is the mode for directories in the shared trees. An
-// unset or invalid value means DefaultSharedDirMode; Load rejects invalid
-// values.
+// Parsed defaults, for a Config that was never checked (built in code).
+const (
+	defaultSharedDirMode  = fs.ModeSetgid | 0o770
+	defaultSharedFileMode = fs.FileMode(0o660)
+)
+
+// sharedModes holds the shared modes parsed by CheckLoadable.
+type sharedModes struct {
+	set       bool
+	dir, file fs.FileMode
+}
+
+// SharedDirModeValue is the mode for directories in the shared trees, as
+// parsed by CheckLoadable (Load and every save run it).
 func (c *Config) SharedDirModeValue() fs.FileMode {
-	if mode, err := parseMode("shared_dir_mode", c.SharedDirMode); err == nil {
-		return mode
+	if !c.meta.modes.set {
+		return defaultSharedDirMode
 	}
-	mode, _ := parseMode("shared_dir_mode", DefaultSharedDirMode)
-	return mode
+	return c.meta.modes.dir
 }
 
 // SharedFileModeValue is the mode for files decypharr writes into the shared
-// trees (.strm files and sidecars). An unset or invalid value means
-// DefaultSharedFileMode.
+// trees (downloads, .strm files and sidecars), as parsed by CheckLoadable.
 func (c *Config) SharedFileModeValue() fs.FileMode {
-	if mode, err := parseMode("shared_file_mode", c.SharedFileMode); err == nil {
-		return mode.Perm()
+	if !c.meta.modes.set {
+		return defaultSharedFileMode
 	}
-	mode, _ := parseMode("shared_file_mode", DefaultSharedFileMode)
-	return mode.Perm()
+	return c.meta.modes.file
 }
 
-// validateModes rejects unparsable shared modes.
-func (c *Config) validateModes() error {
-	if _, err := parseMode("shared_dir_mode", c.SharedDirMode); err != nil {
+// parseModes parses the shared modes once; an empty field means its default.
+func (c *Config) parseModes() error {
+	dir, err := parseMode("shared_dir_mode", cmp.Or(c.SharedDirMode, DefaultSharedDirMode))
+	if err != nil {
 		return err
 	}
-	if _, err := parseMode("shared_file_mode", c.SharedFileMode); err != nil {
+	file, err := parseMode("shared_file_mode", cmp.Or(c.SharedFileMode, DefaultSharedFileMode))
+	if err != nil {
 		return err
 	}
+	c.meta.modes = sharedModes{set: true, dir: dir, file: file.Perm()}
 	return nil
 }

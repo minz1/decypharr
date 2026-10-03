@@ -77,6 +77,20 @@ func (c *Config) updateDebrid(d Debrid) Debrid {
 	return d
 }
 
+// validateDebridProxies rejects a debrid proxy URL that cannot be used:
+// requests would otherwise fail, or bypass the proxy.
+func validateDebridProxies(debrids []Debrid) error {
+	for i, debrid := range debrids {
+		if debrid.Proxy == "" {
+			continue
+		}
+		if _, err := request.ParseProxy(debrid.Proxy); err != nil {
+			return fmt.Errorf("debrids[%d].proxy (%s): %w", i, debrid.Name, err)
+		}
+	}
+	return nil
+}
+
 func validateDebrids(debrids []Debrid) error {
 	if len(debrids) == 0 {
 		return nil
@@ -86,11 +100,6 @@ func validateDebrids(debrids []Debrid) error {
 		// Basic field validation
 		if debrid.APIKey == "" {
 			return errors.New("debrid api key is required")
-		}
-		if debrid.Proxy != "" {
-			if _, err := request.ParseProxy(debrid.Proxy); err != nil {
-				return fmt.Errorf("debrid %s: %w", debrid.Name, err)
-			}
 		}
 	}
 

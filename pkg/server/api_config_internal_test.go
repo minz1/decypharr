@@ -1,12 +1,16 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/arr"
@@ -176,5 +180,49 @@ func TestMergeConfigUpdateMatchesListItemsByName(t *testing.T) {
 	if current.Debrids[0].APIKey != "rd-key" ||
 		!reflect.DeepEqual(current.Debrids[1].DownloadAPIKeys, []string{"a", "b"}) {
 		t.Fatal("merge changed the current config")
+	}
+}
+
+// A save that the next Load would refuse is rejected with a 400 and never
+// written: saving it used to crash every restart until config.json was
+// fixed by hand.
+func TestUpdateConfigRejectsUnloadableSettings(t *testing.T) {
+	t.Parallel()
+	for name, body := range map[string]string{
+		"bad shared mode":     `{"shared_dir_mode":"775x"}`,
+		"missing tls ca file": `{"tls_ca_file":"/nonexistent/ca.pem"}`,
+		"bad dfs size":        `{"mount":{"dfs":{"chunk_size":"lots"}}}`,
+		"bad debrid proxy":    `{"debrids":[{"name":"rd","provider":"realdebrid","api_key":"k","proxy":"http://[::1"}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			mgr, store := managertest.New(t, nil)
+			if err := store.Get().Save(); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(store.Get().JSONFile())
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := &Server{manager: mgr, config: store, logger: zerolog.Nop()}
+			response := httptest.NewRecorder()
+			server.handleUpdateConfig(
+				response,
+				httptest.NewRequest(http.MethodPost, "/api/config", strings.NewReader(body)),
+			)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d (%s), want 400", response.Code, response.Body.String())
+			}
+			after, err := os.ReadFile(store.Get().JSONFile())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(before, after) {
+				t.Fatal("the rejected settings were written to config.json")
+			}
+			if _, loadErr := config.Load(store.Get().Dir(), config.MapEnv(nil)); loadErr != nil {
+				t.Fatalf("config.json no longer loads: %v", loadErr)
+			}
+		})
 	}
 }

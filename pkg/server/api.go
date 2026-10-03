@@ -336,6 +336,9 @@ func prepareConfigUpdate(current *config.Config, body []byte) (config.Config, er
 		}
 	}
 	next.Arrs = validArrs
+	if checkErr := next.CheckLoadable(); checkErr != nil {
+		return config.Config{}, checkErr
+	}
 	return next, nil
 }
 

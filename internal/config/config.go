@@ -398,16 +398,8 @@ func (c *Config) load(lookup LookupEnv) error {
 	// Set defaults for any missing values
 	c.setDefaults()
 
-	// Hard-fail on invalid DFS size/duration strings. A wrong value silently
-	// sets CacheDiskSize=0 and disables all cache enforcement; fail loudly instead.
-	if validateErr := c.Mount.DFS.Validate(); validateErr != nil {
-		return fmt.Errorf("configuration error: %w", validateErr)
-	}
-	if modesErr := c.validateModes(); modesErr != nil {
-		return fmt.Errorf("configuration error: %w", modesErr)
-	}
-	if _, tlsErr := c.TLSClientConfig(); tlsErr != nil {
-		return fmt.Errorf("configuration error: %w", tlsErr)
+	if checkErr := c.CheckLoadable(); checkErr != nil {
+		return fmt.Errorf("configuration error: %w", checkErr)
 	}
 
 	// Save new signing secrets so signatures remain valid after a restart.
@@ -416,6 +408,23 @@ func (c *Config) load(lookup LookupEnv) error {
 	}
 
 	return nil
+}
+
+// CheckLoadable runs the checks Load enforces, so a configuration that
+// fails them is never saved: an invalid DFS size or duration (which would
+// silently disable cache enforcement), shared mode, TLS CA file or debrid
+// proxy. It also parses the shared modes. Errors name the field.
+func (c *Config) CheckLoadable() error {
+	if err := c.Mount.DFS.Validate(); err != nil {
+		return err
+	}
+	if err := c.parseModes(); err != nil {
+		return err
+	}
+	if _, err := c.TLSClientConfig(); err != nil {
+		return err
+	}
+	return validateDebridProxies(c.Debrids)
 }
 
 func (c *Config) Validate() error {
