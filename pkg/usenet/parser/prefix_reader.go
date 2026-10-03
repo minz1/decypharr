@@ -14,6 +14,67 @@ import (
 // transformations the analyzer deliberately does not duplicate.
 var ErrPrefixReadUnsupported = errors.New("analyzer prefix read is unsupported")
 
+// segmentsByOffset returns segments in ascending StartOffset order. Stored
+// segments are already sorted and a head read only touches the first few, so
+// cloning and sorting (a full copy of a remux's tens of thousands of
+// segments, per 16KB head, for every media file in a repair sweep) only
+// happens when the input really is out of order.
+func segmentsByOffset(segments []storage.NZBSegment) []storage.NZBSegment {
+	byOffset := func(left, right storage.NZBSegment) int {
+		if order := cmp.Compare(left.StartOffset, right.StartOffset); order != 0 {
+			return order
+		}
+		return cmp.Compare(left.Number, right.Number)
+	}
+	if slices.IsSortedFunc(segments, byOffset) {
+		return segments
+	}
+	sorted := slices.Clone(segments)
+	slices.SortFunc(sorted, byOffset)
+	return sorted
+}
+
+// segmentCoversPosition validates a segment's range and reports whether it
+// holds bytes at position; a segment starting past position is a gap.
+func segmentCoversPosition(name string, segment storage.NZBSegment, position int64) (bool, error) {
+	if segment.Bytes <= 0 {
+		return false, fmt.Errorf("file %q has non-positive segment size %d", name, segment.Bytes)
+	}
+	segmentEnd := segment.StartOffset + segment.Bytes
+	if segmentEnd < segment.StartOffset {
+		return false, fmt.Errorf("file %q segment range overflows int64", name)
+	}
+	if segmentEnd <= position {
+		return false, nil
+	}
+	if segment.StartOffset > position {
+		return false, fmt.Errorf("file %q has a source gap at offset %d", name, position)
+	}
+	return true, nil
+}
+
+// copySegmentPrefix copies the segment's bytes from position into dst and
+// returns how many were copied.
+func (p *NZBParser) copySegmentPrefix(
+	ctx context.Context,
+	name string,
+	segment storage.NZBSegment,
+	dst []byte,
+	position int64,
+) (int64, error) {
+	data, err := fetchSegmentData(ctx, p.source, segment)
+	if err != nil {
+		return 0, fmt.Errorf("read head segment %s for %q: %w", segment.MessageID, name, err)
+	}
+	within := position - segment.StartOffset
+	count := min(int64(len(dst)), int64(len(data))-within)
+	if count <= 0 {
+		return 0, fmt.Errorf("file %q segment %s does not cover offset %d", name, segment.MessageID, position)
+	}
+	copy(dst[:count], data[within:within+count])
+	return count, nil
+}
+
 // ReadFilePrefix reads a logical file head through the analyzer's shared body
 // broker. Direct media and stored archive entries need no second NNTP fetch;
 // encrypted or compressed entries remain on the serving reader's transform
@@ -39,58 +100,23 @@ func (p *NZBParser) ReadFilePrefix(ctx context.Context, file *storage.NZBFile, m
 	if file.Size > 0 {
 		wanted = min(wanted, file.Size)
 	}
-	// Stored segments are already in ascending StartOffset order, and a head
-	// read only touches the first few. Cloning and sorting first cost a full
-	// copy of the segment list (72 bytes each, tens of thousands for a remux)
-	// plus a sort, per 16KB head - and the repair sweep does this for every
-	// media file. Only pay it when the input really is out of order.
-	byOffset := func(left, right storage.NZBSegment) int {
-		if order := cmp.Compare(left.StartOffset, right.StartOffset); order != 0 {
-			return order
-		}
-		return cmp.Compare(left.Number, right.Number)
-	}
-	segments := file.Segments
-	if !slices.IsSortedFunc(segments, byOffset) {
-		segments = slices.Clone(segments)
-		slices.SortFunc(segments, byOffset)
-	}
-
 	result := make([]byte, wanted)
 	var position int64
-	for _, segment := range segments {
+	for _, segment := range segmentsByOffset(file.Segments) {
 		if position == wanted {
 			break
 		}
-		if segment.Bytes <= 0 {
-			return nil, fmt.Errorf("file %q has non-positive segment size %d", file.Name, segment.Bytes)
+		covers, err := segmentCoversPosition(file.Name, segment, position)
+		if err != nil {
+			return nil, err
 		}
-		segmentEnd := segment.StartOffset + segment.Bytes
-		if segmentEnd < segment.StartOffset {
-			return nil, fmt.Errorf("file %q segment range overflows int64", file.Name)
-		}
-		if segmentEnd <= position {
+		if !covers {
 			continue
 		}
-		if segment.StartOffset > position {
-			return nil, fmt.Errorf("file %q has a source gap at offset %d", file.Name, position)
-		}
-
-		data, err := fetchSegmentData(ctx, p.source, segment)
+		count, err := p.copySegmentPrefix(ctx, file.Name, segment, result[position:], position)
 		if err != nil {
-			return nil, fmt.Errorf("read head segment %s for %q: %w", segment.MessageID, file.Name, err)
+			return nil, err
 		}
-		within := position - segment.StartOffset
-		count := min(wanted-position, int64(len(data))-within)
-		if count <= 0 {
-			return nil, fmt.Errorf(
-				"file %q segment %s does not cover offset %d",
-				file.Name,
-				segment.MessageID,
-				position,
-			)
-		}
-		copy(result[position:position+count], data[within:within+count])
 		position += count
 	}
 	if position != wanted {
