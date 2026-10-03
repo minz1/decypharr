@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"runtime"
 	"runtime/debug"
 	"sync/atomic"
@@ -20,6 +19,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/backend"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/config"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/vfs"
+	"github.com/sirrobot01/decypharr/pkg/mount/unmount"
 )
 
 const (
@@ -31,10 +31,8 @@ const (
 
 	// maxWrite is the largest FUSE request payload negotiated with the kernel.
 	maxWrite = 1 << 20
-	// forceUnmountTimeout bounds the whole chain of umount fallbacks.
-	forceUnmountTimeout = 10 * time.Second
-	dirPerm             = 0o755
-	filePerm            = 0o644
+	dirPerm  = 0o755
+	filePerm = 0o644
 	// statBlockSize is the unit of the Blocks attribute.
 	statBlockSize = 512
 )
@@ -48,6 +46,7 @@ type Backend struct {
 	unmountFunc func(ctx context.Context)
 	root        *Dir
 	vfs         *vfs.Manager
+	unmounter   *unmount.Unmounter
 }
 
 // NewBackend creates a new hanwen backend.
@@ -59,10 +58,11 @@ func NewBackend(vfs *vfs.Manager, config *config.FuseConfig, log zerolog.Logger)
 	rl := logger.NewRateLimitedLogger(logger.WithLogger(log))
 	root := NewDir(vfs, "", LevelRoot, unixSeconds(now), config, log, rl)
 	return &Backend{
-		config: config,
-		logger: log,
-		root:   root,
-		vfs:    vfs,
+		config:    config,
+		logger:    log,
+		root:      root,
+		vfs:       vfs,
+		unmounter: unmount.New(log),
 	}, nil
 }
 
@@ -280,35 +280,10 @@ func (b *Backend) Refresh(dir string) {
 	}
 }
 
-// forceUnmount attempts to force unmount a path using system commands.
+// forceUnmount detaches the mount point without the FUSE server, for a
+// stale mount or one whose server did not come up.
 func (b *Backend) forceUnmount(ctx context.Context) {
-	methods := [][]string{
-		{"umount", b.config.MountPath},
-		{"umount", "-l", b.config.MountPath}, // lazy unmount
-		{"fusermount", "-uz", b.config.MountPath},
-		{"fusermount3", "-uz", b.config.MountPath},
+	if err := b.unmounter.Unmount(ctx, b.config.MountPath); err != nil {
+		b.logger.Debug().Err(err).Msg("Force unmount did not detach the mount point")
 	}
-
-	ctx, cancel := context.WithTimeout(ctx, forceUnmountTimeout)
-	defer cancel()
-
-	for _, method := range methods {
-		if err := b.tryUnmountCommand(ctx, method...); err == nil {
-			return
-		}
-		if ctx.Err() != nil {
-			b.logger.Warn().Err(ctx.Err()).Msg("Unmount command timed out")
-			return
-		}
-	}
-}
-
-// tryUnmountCommand tries to run an unmount command.
-func (b *Backend) tryUnmountCommand(ctx context.Context, args ...string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("no command provided")
-	}
-
-	cmd := exec.CommandContext(ctx, args[0], args[1:]...) //nolint:gosec // G204: fixed umount commands, no shell
-	return cmd.Run()
 }

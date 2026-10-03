@@ -21,6 +21,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/internal/rclone"
 	"github.com/sirrobot01/decypharr/pkg/manager"
+	"github.com/sirrobot01/decypharr/pkg/mount/unmount"
 )
 
 const (
@@ -49,6 +50,7 @@ type Manager struct {
 	configDir     string
 	logsDir       string
 	mount         config.Mount
+	unmounter     *unmount.Unmounter
 	logger        zerolog.Logger
 	ctx           context.Context
 	cancel        context.CancelFunc
@@ -126,6 +128,7 @@ func NewManager(mgr *manager.Manager, mainCfg *config.Config, _logger zerolog.Lo
 		configDir:   configDir,
 		logsDir:     logger.Dir(mainCfg.Dir()),
 		mount:       cfg,
+		unmounter:   unmount.New(_logger),
 		logger:      _logger,
 		ctx:         ctx,
 		cancel:      cancel,
