@@ -8,6 +8,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -176,25 +177,37 @@ func DownloadFile(url string, options ...DownloadOptions) (string, []byte, error
 	return filename, data, nil
 }
 
+// getFilenameFromResponse returns the file name the server suggests for
+// resp, or one from the URL path. Either is a suggestion of a name, never a
+// path (RFC 6266 section 4.3), so only its last element is kept.
 func getFilenameFromResponse(resp *http.Response, originalURL string) string {
-	// 1. Try Content-Disposition header
-	if filename := filenameFromDisposition(resp.Header.Get("Content-Disposition")); filename != "" {
-		return filename
+	filename := filenameFromDisposition(resp.Header.Get("Content-Disposition"))
+	if filename == "" {
+		filename = filenameFromURL(originalURL)
 	}
+	return lastElement(filename, "downloaded_file")
+}
 
-	// 2. Fall back to URL path
-	if parsedURL, err := url.Parse(originalURL); err == nil {
-		if filename := filepath.Base(parsedURL.Path); filename != "." && filename != "/" {
-			// URL decode the filename
-			if decoded, queryUnescapeErr := url.QueryUnescape(filename); queryUnescapeErr == nil {
-				return decoded
-			}
-			return filename
-		}
+func filenameFromURL(originalURL string) string {
+	parsedURL, err := url.Parse(originalURL)
+	if err != nil {
+		return ""
 	}
+	filename := path.Base(parsedURL.Path)
+	if decoded, queryUnescapeErr := url.QueryUnescape(filename); queryUnescapeErr == nil {
+		return decoded
+	}
+	return filename
+}
 
-	// 3. Default filename
-	return "downloaded_file"
+// lastElement keeps the part of name after its last slash or backslash, as
+// one path element, or returns fallback when nothing usable remains.
+func lastElement(name, fallback string) string {
+	name = path.Base(strings.ReplaceAll(name, `\`, "/"))
+	if name == "/" {
+		return fallback
+	}
+	return PathElement(name, fallback)
 }
 
 // filenameFromDisposition returns the filename a Content-Disposition header
