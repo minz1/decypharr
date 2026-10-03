@@ -1,9 +1,11 @@
 package premiumize
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/sirrobot01/decypharr/internal/config"
@@ -95,5 +97,27 @@ func TestAvailabilityRejectsIncompleteResponses(t *testing.T) {
 	result, err := pm.IsAvailable([]string{"first", "second"})
 	if err == nil || len(result) != 0 {
 		t.Fatalf("incomplete response = %v, %v", result, err)
+	}
+}
+
+// Transfer folder and file IDs decode whether the API sends them as
+// strings, numbers or null; a numeric ID used to fail the whole list.
+func TestTransferIDsAcceptNumbers(t *testing.T) {
+	t.Parallel()
+	var transfers []premiumizeTransfer
+	data := `[{"id":"a","folder_id":"f1","file_id":null},{"id":"b","folder_id":12345,"file_id":678}]`
+	if err := json.Unmarshal([]byte(data), &transfers); err != nil {
+		t.Fatal(err)
+	}
+	got := [][2]string{
+		{transfers[0].FolderID.String(), transfers[0].FileID.String()},
+		{transfers[1].FolderID.String(), transfers[1].FileID.String()},
+	}
+	if want := [][2]string{{"f1", ""}, {"12345", "678"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ids = %v, want %v", got, want)
+	}
+	var id nullableString
+	if err := json.Unmarshal([]byte(`{"x":1}`), &id); err == nil {
+		t.Fatal("an object decoded as an id")
 	}
 }
