@@ -17,6 +17,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/mount/external"
 	"github.com/sirrobot01/decypharr/pkg/mount/rclone"
 	"github.com/sirrobot01/decypharr/pkg/server"
+	"github.com/sirrobot01/decypharr/pkg/server/webdav"
 	"github.com/sirrobot01/decypharr/pkg/share"
 	"github.com/sirrobot01/decypharr/pkg/version"
 )
@@ -33,6 +34,10 @@ func Start(ctx context.Context, dataDir string) error {
 		}
 		SetUmask(int(umask))
 	}
+
+	// chi's method table is process state: register the WebDAV verbs once,
+	// before any generation builds its routers.
+	webdav.RegisterMethods()
 
 	// The rotating log file outlives generations: every component logger of
 	// every generation shares this one rotator.

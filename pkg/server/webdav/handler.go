@@ -55,12 +55,18 @@ func (h *Handler) readinessMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// Routes returns the WebDAV router.
-func (h *Handler) Routes() chi.Router {
-	// chi rejects unknown methods; registration is idempotent.
+// RegisterMethods teaches chi the WebDAV verbs; chi answers 405 to methods
+// it does not know. chi keeps its method table in package state, so this
+// runs once per process, before any router is built or serves (see
+// cmd/decypharr), never while routers are in use.
+func RegisterMethods() {
 	for _, method := range []string{"PROPFIND", "PROPPATCH", "MKCOL", "COPY", "MOVE", "LOCK", "UNLOCK"} {
 		chi.RegisterMethod(method)
 	}
+}
+
+// Routes returns the WebDAV router. RegisterMethods must have run.
+func (h *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
 	r.Use(h.readinessMiddleware)
 	r.Use(h.commonMiddleware)
