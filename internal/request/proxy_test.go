@@ -14,6 +14,7 @@ func TestParseProxy(t *testing.T) {
 	for raw, want := range map[string]string{
 		"http://proxy:3128":        "http://proxy:3128",
 		"socks5://u:p@proxy:1080":  "socks5://u:p@proxy:1080",
+		"socks5h://proxy:1080":     "socks5h://proxy:1080",
 		"proxy.lan:3128":           "http://proxy.lan:3128",
 		"\thttps://proxy:443\n":    "https://proxy:443",
 		"http://[::1":              "",
@@ -55,5 +56,16 @@ func TestInvalidProxyFailsClosed(t *testing.T) {
 	}
 	if direct.Load() != 0 {
 		t.Fatal("request bypassed the configured proxy")
+	}
+}
+
+// A socks5h:// proxy (host names resolved by the proxy) is dialed through,
+// not refused as invalid.
+func TestSetProxyAcceptsSocks5h(t *testing.T) {
+	t.Parallel()
+	transport := &http.Transport{}
+	request.SetProxy(transport, "socks5h://user:pass@127.0.0.1:1080")
+	if transport.Proxy != nil || transport.DialContext == nil {
+		t.Fatal("socks5h proxy was not configured as a SOCKS5 dialer")
 	}
 }

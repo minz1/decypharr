@@ -312,8 +312,9 @@ func New(options ...ClientOption) *Client {
 	return client
 }
 
-// ParseProxy parses a proxy URL: http://, https:// or socks5://, with a
-// host. A bare host:port means an HTTP proxy, as with curl.
+// ParseProxy parses a proxy URL: http://, https://, socks5:// or socks5h://
+// (the schemes net/http supports), with a host. A bare host:port means an
+// HTTP proxy, as with curl.
 func ParseProxy(proxyURL string) (*url.URL, error) {
 	raw := strings.TrimSpace(proxyURL)
 	if !strings.Contains(raw, "://") {
@@ -324,9 +325,9 @@ func ParseProxy(proxyURL string) (*url.URL, error) {
 		return nil, fmt.Errorf("invalid proxy URL: %w", err)
 	}
 	switch parsed.Scheme {
-	case "http", "https", "socks5":
+	case "http", "https", "socks5", "socks5h":
 	default:
-		return nil, fmt.Errorf("invalid proxy URL %q: scheme must be http, https or socks5", parsed.Redacted())
+		return nil, fmt.Errorf("invalid proxy URL %q: scheme must be http, https, socks5 or socks5h", parsed.Redacted())
 	}
 	if parsed.Host == "" {
 		return nil, fmt.Errorf("invalid proxy URL %q: no host", parsed.Redacted())
@@ -348,7 +349,9 @@ func SetProxy(transport *http.Transport, proxyURL string) {
 		failAllRequests(transport, err)
 		return
 	}
-	if parsed.Scheme != "socks5" {
+	// x/net's SOCKS5 dialer passes host names to the proxy to resolve, so it
+	// serves socks5h too.
+	if parsed.Scheme != "socks5" && parsed.Scheme != "socks5h" {
 		transport.Proxy = http.ProxyURL(parsed)
 		return
 	}
