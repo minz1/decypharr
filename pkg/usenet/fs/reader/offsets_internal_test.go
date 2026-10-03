@@ -3,6 +3,7 @@ package reader
 import "testing"
 
 func TestComputeOffsetsUsesMetadataWhenAscending(t *testing.T) {
+	t.Parallel()
 	segs := []SegmentMeta{
 		{Bytes: 100, StartOffset: 0, EndOffset: 99},
 		{Bytes: 100, StartOffset: 100, EndOffset: 199},
@@ -19,6 +20,7 @@ func TestComputeOffsetsUsesMetadataWhenAscending(t *testing.T) {
 }
 
 func TestComputeOffsetsFallsBackOnOverlap(t *testing.T) {
+	t.Parallel()
 	// A zero-filled slot from a .meta file written before parsing rejected
 	// files with holes: its offsets sit inside the segment before it, so the
 	// two cover the same bytes. Trusting them makes reads double-count.

@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"io"
 	"sync"
-	"sync/atomic"
+	"time"
 
 	"github.com/sourcegraph/conc/pool"
 
 	"github.com/sirrobot01/decypharr/internal/nntp"
+	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
 // segmentResult holds a fetched segment and its index for ordered writing.
@@ -32,152 +33,52 @@ func (u *Usenet) Download(
 	writer io.Writer,
 	progressCallback ProgressCallback,
 ) error {
-	// get file metadata
 	file, err := u.getFile(nzoID, filename)
 	if err != nil {
 		return fmt.Errorf("failed to get file: %w", err)
 	}
-
 	if len(file.Segments) == 0 {
 		return fmt.Errorf("file has no segments: %s", file.Name)
 	}
+	if file.IsEncrypted {
+		// Raw segments hold AES ciphertext; only the streaming reader
+		// decrypts, so route encrypted archive members through it.
+		return u.downloadDecrypted(ctx, file, writer, progressCallback)
+	}
 
-	// Track progress
-	var completedSegments atomic.Int64
-	var downloadedBytes atomic.Int64
-
-	// Channel for segment results - buffered to allow parallel fetching ahead
-	resultChan := make(chan segmentResult, max(u.processingMaxConnections, 1)*2)
-
-	// Map to hold out-of-order segments waiting to be written
-	pendingSegments := make(map[int][]byte)
-	var pendingMu sync.Mutex
-	nextToWrite := 0
-
-	// Error tracking
-	var writeErr error
-	var writeErrMu sync.Mutex
-
-	// Writer goroutine - writes segments in order as they arrive
+	workers := max(u.processingMaxConnections, 1)
+	// Buffered so fetching can run ahead of the in-order writer.
+	results := make(chan segmentResult, workers*downloadResultsPerWorker)
+	ordered := &orderedSegmentWriter{
+		w:        writer,
+		pending:  make(map[int][]byte),
+		progress: progressCallback,
+		workers:  int64(workers),
+	}
 	var writerWg sync.WaitGroup
-	writerWg.Go(func() {
-		for result := range resultChan {
-			if result.err != nil {
-				writeErrMu.Lock()
-				if writeErr == nil {
-					writeErr = result.err
-				}
-				writeErrMu.Unlock()
-				continue
-			}
+	writerWg.Go(func() { ordered.run(results) })
 
-			pendingMu.Lock()
-			pendingSegments[result.index] = result.data
-
-			// Write all consecutive segments starting from nextToWrite
-			for {
-				data, exists := pendingSegments[nextToWrite]
-				if !exists {
-					break
-				}
-				delete(pendingSegments, nextToWrite)
-				pendingMu.Unlock()
-
-				// Write to output
-				n, writeErr2 := writer.Write(data)
-				if writeErr2 != nil {
-					writeErrMu.Lock()
-					if writeErr == nil {
-						writeErr = fmt.Errorf("write failed at segment %d: %w", nextToWrite, writeErr2)
-					}
-					writeErrMu.Unlock()
-					pendingMu.Lock()
-					break
-				}
-
-				completedSegments.Add(1)
-				downloaded := downloadedBytes.Add(int64(n))
-				nextToWrite++
-
-				// Call progress callback if provided
-				if progressCallback != nil {
-					// Estimate speed (rough: assume ~1s per segment batch)
-					completed := completedSegments.Load()
-					speed := downloaded / max(1, completed) * int64(max(u.processingMaxConnections, 1))
-					progressCallback(downloaded, speed)
-				}
-
-				pendingMu.Lock()
-			}
-			pendingMu.Unlock()
-		}
-	})
-
-	// Fetch segments in parallel
-	p := pool.New().WithContext(ctx).WithMaxGoroutines(max(u.processingMaxConnections, 1))
-
+	p := pool.New().WithContext(ctx).WithMaxGoroutines(workers)
 	for idx, segment := range file.Segments {
-		segIdx := idx
-		seg := segment
-
 		p.Go(func(ctx context.Context) error {
-			// Check for write errors
-			writeErrMu.Lock()
-			if writeErr != nil {
-				writeErrMu.Unlock()
+			if writeErr := ordered.err(); writeErr != nil {
 				return writeErr
 			}
-			writeErrMu.Unlock()
-
-			// Check context
-			if ctx.Err() != nil {
-				return ctx.Err()
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
 			}
-
-			// Fetch segment using manager with failover
-			var data []byte
-			executeWithFailoverErr := u.nntp.ExecuteWithFailover(
-				ctx,
-				nntp.WorkloadDownload,
-				func(conn *nntp.Connection) error {
-					d, e := conn.GetDecodedBody(seg.MessageID)
-					data = d
-					return e
-				},
-			)
-			if executeWithFailoverErr != nil {
-				resultChan <- segmentResult{index: segIdx, err: fmt.Errorf("segment %d: %w", segIdx, executeWithFailoverErr)}
-				return nil // Don't stop other workers
-			}
-
-			// Handle SegmentDataStart for sliced segments
-			if seg.SegmentDataStart > 0 {
-				if seg.SegmentDataStart >= int64(len(data)) {
-					resultChan <- segmentResult{index: segIdx, err: fmt.Errorf("segment %d: offset exceeds data", segIdx)}
-					return nil
-				}
-				data = data[seg.SegmentDataStart:]
-			}
-
-			// Trim to expected size
-			if int64(len(data)) > seg.Bytes {
-				data = data[:seg.Bytes]
-			}
-
-			resultChan <- segmentResult{index: segIdx, data: data}
+			// A failed segment is reported through results; other workers
+			// keep going until the writer records it.
+			results <- u.fetchDownloadSegment(ctx, idx, segment)
 			return nil
 		})
 	}
 
-	// Wait for all fetches to complete, then close result channel
 	fetchErr := p.Wait()
-	close(resultChan)
-
-	// Wait for writer to finish
+	close(results)
 	writerWg.Wait()
 
-	// Check for errors
-	if writeErr != nil {
+	if writeErr := ordered.err(); writeErr != nil {
 		return writeErr
 	}
 	if fetchErr != nil {
@@ -186,8 +87,142 @@ func (u *Usenet) Download(
 
 	u.logger.Info().
 		Str("file", filename).
-		Int64("bytes", downloadedBytes.Load()).
+		Int64("bytes", ordered.downloaded).
 		Msg("Download complete")
-
 	return nil
+}
+
+// downloadResultsPerWorker sizes the result buffer per fetch worker.
+const downloadResultsPerWorker = 2
+
+// fetchDownloadSegment fetches one segment through provider failover and
+// trims it to the bytes this file uses.
+func (u *Usenet) fetchDownloadSegment(ctx context.Context, idx int, seg storage.NZBSegment) segmentResult {
+	var data []byte
+	err := u.nntp.ExecuteWithFailover(ctx, nntp.WorkloadDownload, func(conn *nntp.Connection) error {
+		d, e := conn.GetDecodedBody(seg.MessageID)
+		data = d
+		return e
+	})
+	if err != nil {
+		return segmentResult{index: idx, err: fmt.Errorf("segment %d: %w", idx, err)}
+	}
+	// Handle SegmentDataStart for sliced segments
+	if seg.SegmentDataStart > 0 {
+		if seg.SegmentDataStart >= int64(len(data)) {
+			return segmentResult{index: idx, err: fmt.Errorf("segment %d: offset exceeds data", idx)}
+		}
+		data = data[seg.SegmentDataStart:]
+	}
+	if int64(len(data)) > seg.Bytes {
+		data = data[:seg.Bytes]
+	}
+	return segmentResult{index: idx, data: data}
+}
+
+// orderedSegmentWriter writes fetched segments in index order, holding
+// out-of-order arrivals until their predecessors land.
+type orderedSegmentWriter struct {
+	w        io.Writer
+	pending  map[int][]byte
+	next     int
+	progress ProgressCallback
+	workers  int64
+
+	written    int64 // segments written; owned by run
+	downloaded int64 // bytes written; read after run returns
+
+	mu       sync.Mutex
+	firstErr error
+}
+
+func (o *orderedSegmentWriter) err() error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.firstErr
+}
+
+func (o *orderedSegmentWriter) setErr(err error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.firstErr == nil {
+		o.firstErr = err
+	}
+}
+
+func (o *orderedSegmentWriter) run(results <-chan segmentResult) {
+	for result := range results {
+		if result.err != nil {
+			o.setErr(result.err)
+			continue
+		}
+		o.pending[result.index] = result.data
+		o.flush()
+	}
+}
+
+// flush writes every consecutive pending segment starting at next.
+func (o *orderedSegmentWriter) flush() {
+	for {
+		data, ok := o.pending[o.next]
+		if !ok {
+			return
+		}
+		delete(o.pending, o.next)
+		n, err := o.w.Write(data)
+		if err != nil {
+			o.setErr(fmt.Errorf("write failed at segment %d: %w", o.next, err))
+			return
+		}
+		o.written++
+		o.downloaded += int64(n)
+		o.next++
+		if o.progress != nil {
+			// Rough speed estimate: assume ~1s per segment batch.
+			o.progress(o.downloaded, o.downloaded/max(1, o.written)*o.workers)
+		}
+	}
+}
+
+// downloadDecrypted copies a whole file through the decrypting reader stack.
+// ponytail: sequential, reader read-ahead only; the parallel raw path above is
+// faster, so extend it with CBC decryption if encrypted downloads matter.
+func (u *Usenet) downloadDecrypted(
+	ctx context.Context,
+	file *storage.NZBFile,
+	writer io.Writer,
+	progressCallback ProgressCallback,
+) error {
+	entry, err := u.createEntry(file, u.prefetchSize, RetentionWindow)
+	if err != nil {
+		return err
+	}
+	defer entry.cleanup()
+	readerAt, size, err := entry.getOrCreateReader()
+	if err != nil {
+		return err
+	}
+	cursor := readerAt.OpenCursor()
+	defer cursor.Close()
+
+	dst := &progressWriter{w: writer, callback: progressCallback, start: time.Now()}
+	return safeCopyBuffer(ctx, dst, newContextSectionReader(ctx, cursor, 0, size), nil)
+}
+
+// progressWriter reports cumulative bytes and average throughput per write.
+type progressWriter struct {
+	w        io.Writer
+	callback ProgressCallback
+	start    time.Time
+	written  int64
+}
+
+func (p *progressWriter) Write(b []byte) (int, error) {
+	n, err := p.w.Write(b)
+	p.written += int64(n)
+	if p.callback != nil && n > 0 {
+		elapsed := max(time.Since(p.start), time.Millisecond)
+		p.callback(p.written, int64(float64(p.written)/elapsed.Seconds()))
+	}
+	return n, err
 }

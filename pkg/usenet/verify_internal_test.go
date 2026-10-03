@@ -17,6 +17,7 @@ func pad(head []byte) []byte {
 }
 
 func TestHeadSignatureOK(t *testing.T) {
+	t.Parallel()
 	mp4 := pad(nil)
 	copy(mp4[4:], "ftyp")
 

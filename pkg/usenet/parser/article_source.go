@@ -404,7 +404,7 @@ func (b *ArticleBroker) evictLocked() {
 		if oldest == nil {
 			return
 		}
-		messageID := oldest.Value.(string)
+		messageID, _ := oldest.Value.(string) // only strings are pushed
 		b.lru.Remove(oldest)
 		entry := b.entries[messageID]
 		if entry == nil || entry.body == nil {
@@ -422,7 +422,7 @@ func (b *ArticleBroker) evictEntriesLocked() {
 		if oldest == nil {
 			return
 		}
-		messageID := oldest.Value.(string)
+		messageID, _ := oldest.Value.(string) // only strings are pushed
 		b.entryLRU.Remove(oldest)
 		entry := b.entries[messageID]
 		if entry == nil {
