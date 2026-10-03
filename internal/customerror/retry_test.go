@@ -17,7 +17,7 @@ func TestRetryClassificationUsesWrappedMetadata(t *testing.T) {
 		err              error
 		retry, permanent bool
 	}{
-		{"refetchable 404", link.NewRefetchableError(link.Err404, "404"), true, false},
+		{"refetchable 404", link.NewRefetchableError(link.ErrHTTP404, "404"), true, false},
 		{"retryable forbidden", link.NewRetryableError(errors.New("forbidden"), "403"), true, false},
 		{"permanent timeout", link.NewPermanentError(errors.New("i/o timeout"), ""), false, true},
 		{"custom permanent", customerror.NewError(errors.New("broken pipe"), http.StatusInternalServerError, "", false, false).Permanent(), false, true},
