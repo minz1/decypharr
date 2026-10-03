@@ -767,11 +767,15 @@ func (r *RealDebrid) CheckFile(ctx context.Context, _, link string) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusNotFound {
+	switch {
+	case common.IsSuccess(resp.StatusCode):
+		return nil
+	case resp.StatusCode == http.StatusNotFound:
 		return customerror.ErrHosterUnavailable
+	default:
+		// An auth, rate-limit or server error says nothing about the file.
+		return fmt.Errorf("realdebrid: check file: unexpected status %d", resp.StatusCode)
 	}
-
-	return nil
 }
 
 func (r *RealDebrid) fetchDownloadLink(
