@@ -2,6 +2,7 @@ package parser
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"io"
 	"math"
 	"path"
+	"slices"
 	"sort"
 	"strings"
 
@@ -476,6 +478,90 @@ type rar5HeaderData struct {
 	Data      []byte
 }
 
+// rar5FileFields are the fixed FILE header fields before the extra area.
+type rar5FileFields struct {
+	flags           uint64
+	unpackedSize    uint64
+	compressionInfo uint64
+	crc32           uint32
+	name            []byte
+}
+
+// RAR5 FILE header layout limits.
+const (
+	// rar5FileFlagsMask covers the defined flags (directory, unix time, CRC32,
+	// unknown size); any other bit means we are reading garbage, e.g. from a
+	// continuation volume without file headers.
+	rar5FileFlagsMask = 0x0F
+	rar5UnixTimeSize  = 4
+	maxRAR5NameLength = 4096
+	// compression_info bits 7-9 hold the method; 0 is stored.
+	rar5CompressionMethodMask  = 0x0380
+	rar5CompressionMethodShift = 7
+)
+
+// readRAR5FileFields reads the FILE header fields; ok is false on garbage or
+// truncated data.
+func readRAR5FileFields(r *bytes.Reader) (rar5FileFields, bool) {
+	var f rar5FileFields
+	var err error
+	if f.flags, err = readVInt(r); err != nil || f.flags > rar5FileFlagsMask {
+		return f, false
+	}
+	if f.unpackedSize, err = readVInt(r); err != nil {
+		return f, false
+	}
+	if _, err = readVInt(r); err != nil { // file attributes
+		return f, false
+	}
+	if f.flags&RAR5FileFlagHasUnixTime != 0 {
+		_, _ = r.Seek(rar5UnixTimeSize, io.SeekCurrent) // a short read fails below
+	}
+	if f.flags&RAR5FileFlagHasCRC32 != 0 && binary.Read(r, binary.LittleEndian, &f.crc32) != nil {
+		return f, false
+	}
+	if f.compressionInfo, err = readVInt(r); err != nil {
+		return f, false
+	}
+	if _, err = readVInt(r); err != nil { // host OS
+		return f, false
+	}
+	nameLength, err := readVInt(r)
+	if err != nil || nameLength > maxRAR5NameLength {
+		return f, false
+	}
+	f.name = make([]byte, nameLength)
+	if _, err = io.ReadFull(r, f.name); err != nil {
+		return f, false
+	}
+	return f, true
+}
+
+// validRAR5Name rejects names with control characters other than tab and
+// newlines, which only garbage data produces.
+func validRAR5Name(name []byte) bool {
+	for _, b := range name {
+		if b < ' ' && b != '\t' && b != '\n' && b != '\r' {
+			return false
+		}
+	}
+	return true
+}
+
+// isDirectory trusts the directory flag only for empty entries without a
+// media extension: split files and garbage data set it improperly.
+func (f rar5FileFields) isDirectory(filename string) bool {
+	if f.flags&RAR5FileFlagDirectory == 0 || f.unpackedSize > 0 {
+		return false
+	}
+	return filename == "" || !utils.IsMediaFile(filename)
+}
+
+// isStored reports compression method 0 (no compression).
+func (f rar5FileFields) isStored() bool {
+	return (f.compressionInfo&rar5CompressionMethodMask)>>rar5CompressionMethodShift == 0
+}
+
 // parseRAR5FileHeader parses a RAR 5.0 file header
 // If password is provided and encryption salt is found, it derives the file-specific encryption key.
 func (p *RARParser) parseRAR5FileHeader(
@@ -491,108 +577,16 @@ func (p *RARParser) parseRAR5FileHeader(
 		return nil
 	}
 	baseEnd := len(data) - int(extraSize)
-	r := bytes.NewReader(data[:baseEnd])
-
-	// Read file flags (vint)
-	fileFlags, err := readVInt(r)
-	if err != nil {
+	fields, ok := readRAR5FileFields(bytes.NewReader(data[:baseEnd]))
+	if !ok || !validRAR5Name(fields.name) {
 		return nil
 	}
-
-	// Validate file flags - RAR5 file flags use only bits 0-3:
-	// 0x0001 = Directory, 0x0002 = Has Unix time, 0x0004 = Has CRC32,
-	// 0x0008 = Unpacked size unknown
-	// Values with other bits set indicate we're reading garbage data
-	// (e.g., from continuation volumes that don't have file headers)
-	if fileFlags > 0x0F {
-		return nil
-	}
-
-	// Read unpacked size (vint)
-	unpackedSize, err := readVInt(r)
-	if err != nil {
-		return nil
-	}
-
-	// Read file attributes (vint)
-	if _, readVIntErr := readVInt(r); readVIntErr != nil {
-		return nil
-	}
-
-	// Read modification time if present (4 bytes)
-	if fileFlags&RAR5FileFlagHasUnixTime != 0 {
-		_, _ = r.Seek(4, io.SeekCurrent)
-	}
-
-	// Read CRC32 if present
-	var crc32 uint32
-	if fileFlags&RAR5FileFlagHasCRC32 != 0 {
-		if readErr := binary.Read(r, binary.LittleEndian, &crc32); readErr != nil {
-			return nil
-		}
-	}
-
-	// Read compression info (vint)
-	compressionInfo, err := readVInt(r)
-	if err != nil {
-		return nil
-	}
-
-	// Read host OS (vint)
-	if _, readVIntErr := readVInt(r); readVIntErr != nil {
-		return nil
-	}
-
-	// Read name length (vint)
-	nameLength, err := readVInt(r)
-	if err != nil {
-		return nil
-	}
-
-	// Sanity check: filename should not exceed 4KB
-	if nameLength > 4096 {
-		return nil
-	}
-
-	// Read filename
-	nameBytes := make([]byte, nameLength)
-	if _, readFullErr := io.ReadFull(r, nameBytes); readFullErr != nil {
-		return nil
-	}
-
 	// Sanitize filename to ensure valid UTF-8
 	// This prevents "string field contains invalid UTF-8" errors during NZB marshaling
-	filename := strings.ToValidUTF8(string(nameBytes), "")
-
-	// Validate filename - should be valid UTF-8 and not contain control characters
-	// (except for null which shouldn't be in the name at all)
-	for _, b := range nameBytes {
-		if b < 0x20 && b != 0x09 && b != 0x0A && b != 0x0D { // Control chars except tab/newline
-			return nil
-		}
-	}
-
-	isDirectory := fileFlags&RAR5FileFlagDirectory != 0
-
-	// If file has content, it's not a directory (heuristic to handle split files that might have 0x01 flag set improperly or confused)
-	if unpackedSize > 0 {
-		isDirectory = false
-	}
-
-	// Sanity check: if filename has a file extension, it's NOT a directory
-	// This catches cases where garbage data has directory flag set incorrectly
-	if isDirectory && len(filename) > 0 {
-		if utils.IsMediaFile(filename) {
-			isDirectory = false
-		}
-	}
-	// RAR5 compression_info format:
-	// - Bits 0-5 (0x003F): Algorithm version (0 or 1)
-	// - Bit 6 (0x0040): Solid flag
-	// - Bits 8-10 (0x0380): Compression method (0-5, where 0 = stored/no compression)
-	// - Bits 11-15 (0x7C00): Dictionary size
-	compressionMethod := (compressionInfo & 0x0380) >> 7
-	isStored := compressionMethod == 0 // Method 0 = no compression
+	filename := strings.ToValidUTF8(string(fields.name), "")
+	unpackedSize, crc32 := fields.unpackedSize, fields.crc32
+	isDirectory := fields.isDirectory(filename)
+	isStored := fields.isStored()
 
 	// An out-of-range (or "unknown") unpacked size is left at 0; Process
 	// then advertises the streamable size instead.
@@ -849,24 +843,7 @@ func (p *RARParser) buildSegmentsForFile(
 	}
 
 	// Ensure volume parts are ordered by volume index and data offset.
-	partsSorted := true
-	for i := 1; i < len(rarFile.VolumeParts); i++ {
-		prev := rarFile.VolumeParts[i-1]
-		cur := rarFile.VolumeParts[i]
-		if cur.PartNumber < prev.PartNumber ||
-			(cur.PartNumber == prev.PartNumber && cur.DataOffset < prev.DataOffset) {
-			partsSorted = false
-			break
-		}
-	}
-	if !partsSorted {
-		sort.Slice(rarFile.VolumeParts, func(i, j int) bool {
-			if rarFile.VolumeParts[i].PartNumber == rarFile.VolumeParts[j].PartNumber {
-				return rarFile.VolumeParts[i].DataOffset < rarFile.VolumeParts[j].DataOffset
-			}
-			return rarFile.VolumeParts[i].PartNumber < rarFile.VolumeParts[j].PartNumber
-		})
-	}
+	sortVolumeParts(rarFile.VolumeParts)
 
 	var fileSegments []storage.NZBSegment
 	var currentFileOffset int64 // Offset within the final extracted file
@@ -903,20 +880,25 @@ func (p *RARParser) buildSegmentsForFile(
 	}
 
 	// Ensure segments are ordered by output offsets for streaming correctness.
-	ordered := true
-	for i := 1; i < len(fileSegments); i++ {
-		if fileSegments[i].StartOffset < fileSegments[i-1].StartOffset {
-			ordered = false
-			break
-		}
-	}
-	if !ordered {
-		sort.Slice(fileSegments, func(i, j int) bool {
-			return fileSegments[i].StartOffset < fileSegments[j].StartOffset
-		})
+	byOutput := func(a, b storage.NZBSegment) int { return cmp.Compare(a.StartOffset, b.StartOffset) }
+	if !slices.IsSortedFunc(fileSegments, byOutput) {
+		slices.SortFunc(fileSegments, byOutput)
 	}
 
 	return fileSegments, nil
+}
+
+// sortVolumeParts orders parts by volume, then by data offset.
+func sortVolumeParts(parts []*types.RARVolumePart) {
+	byVolume := func(a, b *types.RARVolumePart) int {
+		if order := cmp.Compare(a.PartNumber, b.PartNumber); order != 0 {
+			return order
+		}
+		return cmp.Compare(a.DataOffset, b.DataOffset)
+	}
+	if !slices.IsSortedFunc(parts, byVolume) {
+		slices.SortStableFunc(parts, byVolume)
+	}
 }
 
 func (p *RARParser) buildSegmentsForIndexedVolumePart(
