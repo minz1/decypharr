@@ -1004,37 +1004,47 @@ func (dls *Downloaders) resetCircuitLocked() {
 // checkIdleTimeout returns true if idle timeout has been reached and stops all downloaders.
 func (dls *Downloaders) checkIdleTimeout() bool {
 	dls.mu.Lock()
-	defer dls.mu.Unlock()
 
-	// Don't timeout if already closed or already idle
-	if dls.closed {
+	// Don't timeout if already closed; a StopAll in progress waits for this
+	// kicker to exit.
+	if dls.closed || dls.stopping {
+		dls.mu.Unlock()
 		return true
 	}
 
 	// Don't timeout if there are active waiters
 	if len(dls.waiters) > 0 {
+		dls.mu.Unlock()
 		return false
 	}
 
 	// Check idle timeout
 	lastActivity := dls.lastActivity.Load()
-	if lastActivity == 0 {
+	if lastActivity == 0 || time.Since(time.Unix(0, lastActivity)) < idleTimeout {
+		dls.mu.Unlock()
 		return false
 	}
 
-	idleDuration := time.Since(time.Unix(0, lastActivity))
-	if idleDuration < idleTimeout {
-		return false
-	}
-
-	// Idle timeout reached - stop all downloaders
-	for _, dl := range dls.dls {
+	// Idle timeout reached - stop all downloaders. Like StopAll, mark the
+	// session stopping until they have exited: one may still be finishing a
+	// read, and must neither overlap a new session nor record its error
+	// into the budget reset below.
+	dls.stopping = true
+	stopped := dls.dls
+	for _, dl := range stopped {
 		dl.stop()
 	}
 	dls.dls = nil
 	dls.untrackStreamLocked()
-	dls.idle = true
+	dls.mu.Unlock()
 
+	for _, dl := range stopped {
+		dl.wg.Wait()
+	}
+
+	dls.mu.Lock()
+	defer dls.mu.Unlock()
+	dls.idle = true
 	// Reset error budget so the next session starts fresh.
 	// Errors from the previous session must not carry into a resumed session —
 	// that would shrink the error budget and could immediately trip the circuit
@@ -1042,7 +1052,8 @@ func (dls *Downloaders) checkIdleTimeout() bool {
 	dls.errorCount = 0
 	dls.lastErr = nil
 	dls.resetCircuitLocked()
-
+	dls.stopping = false
+	dls.stopCondLocked().Broadcast() // wake Downloads parked on the teardown
 	return true
 }
 
