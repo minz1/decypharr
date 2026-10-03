@@ -275,7 +275,7 @@ func (e *Entry) AddUsenetProvider(metadata *NZB) *ProviderEntry {
 		e.Providers = make(map[string]*ProviderEntry)
 	}
 	providerEntry := &ProviderEntry{
-		Provider: "usenet",
+		Provider: UsenetProvider,
 		ID:       metadata.ID,
 		AddedAt:  time.Now(),
 		Status:   debridTypes.TorrentStatusDownloaded,
@@ -287,10 +287,24 @@ func (e *Entry) AddUsenetProvider(metadata *NZB) *ProviderEntry {
 			Link: path.Join(e.MountPath, f.Name),
 			Path: path.Join(e.MountPath, f.Name),
 		}
-		e.Providers[f.Name] = providerEntry
 	}
-	e.Providers["usenet"] = providerEntry
+	dropStrayUsenetPlacements(e.Providers)
+	e.Providers[UsenetProvider] = providerEntry
 	return providerEntry
+}
+
+// UsenetProvider is the placement key and provider name of usenet entries.
+const UsenetProvider = "usenet"
+
+// dropStrayUsenetPlacements removes usenet placements stored under a key
+// other than UsenetProvider. Earlier versions also stored the placement
+// under every file's name; those copies are not providers.
+func dropStrayUsenetPlacements(providers map[string]*ProviderEntry) {
+	for key, placement := range providers {
+		if key != UsenetProvider && placement != nil && placement.Provider == UsenetProvider {
+			delete(providers, key)
+		}
+	}
 }
 
 // AddTorrentProvider adds or updates a providerEntry for a debrid.
