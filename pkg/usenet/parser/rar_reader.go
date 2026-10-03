@@ -239,16 +239,11 @@ func (p *RARParser) parseRAR5Stream(
 		}
 
 		// Skip the data section to get to the next header
-		if dataSize > 0 {
-			if skipErr := stream.Skip(dataSize); skipErr != nil {
-				if errors.Is(skipErr, io.EOF) {
-					return result, nil
-				}
-				return nil, fmt.Errorf("failed to skip data section: %w", skipErr)
-			}
+		ended, err := skipDataArea(stream, dataSize)
+		if err != nil {
+			return nil, fmt.Errorf("failed to skip data section: %w", err)
 		}
-
-		if header.Type == RAR5HeaderTypeEndOfArc {
+		if ended || header.Type == RAR5HeaderTypeEndOfArc {
 			return result, nil
 		}
 	}
@@ -343,6 +338,19 @@ func parseRAR5EncryptionHeader(data []byte) (*crypto.EncryptionHeader, bool) {
 func readFullOK(r io.Reader, buf []byte) bool {
 	_, err := io.ReadFull(r, buf)
 	return err == nil
+}
+
+// skipDataArea skips a header's data area; ended reports that the volume
+// ran out first, which simply ends the scan.
+func skipDataArea(stream *rarReader, n int64) (bool, error) {
+	if n <= 0 {
+		return false, nil
+	}
+	err := stream.Skip(n)
+	if errors.Is(err, io.EOF) {
+		return true, nil
+	}
+	return false, err
 }
 
 // trySkip skips n bytes and reports whether the stream had them.
@@ -559,16 +567,11 @@ func (p *RARParser) parseRAR4Stream(
 			}
 		}
 
-		if dataSkipSize > 0 {
-			if skipErr := stream.Skip(dataSkipSize); skipErr != nil {
-				if errors.Is(skipErr, io.EOF) {
-					return files, nil
-				}
-				return nil, fmt.Errorf("failed to skip RAR4 data section: %w", skipErr)
-			}
+		ended, err := skipDataArea(stream, dataSkipSize)
+		if err != nil {
+			return nil, fmt.Errorf("failed to skip RAR4 data section: %w", err)
 		}
-
-		if header.Type == RAR4HeaderTypeEnd {
+		if ended || header.Type == RAR4HeaderTypeEnd {
 			return files, nil
 		}
 	}
