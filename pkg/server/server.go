@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -171,29 +172,42 @@ func (s *Server) Restart() {
 	}
 }
 
+// Start serves HTTP until ctx is done. It returns an error when the
+// listener cannot be opened or the server fails, so the process does not
+// keep running without its web UI and APIs.
 func (s *Server) Start(ctx context.Context) error {
 	cfg := s.config.Get()
+
+	addr := net.JoinHostPort(cfg.BindAddress, cfg.Port)
+	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", addr)
+	if err != nil {
+		return fmt.Errorf("http server: %w", err)
+	}
 
 	// Start background stats collector
 	s.stats.Start(ctx)
 
-	addr := fmt.Sprintf("%s:%s", cfg.BindAddress, cfg.Port)
-	s.logger.Info().Msgf("Starting server on %s%s", addr, cfg.URLBase)
+	s.logger.Info().Msgf("Starting server on %s%s", listener.Addr(), cfg.URLBase)
 	srv := &http.Server{
-		Addr:              addr,
 		Handler:           s.router,
 		ReadHeaderTimeout: readHeaderTimeout,
 	}
 
+	serveErr := make(chan error, 1)
 	go func() {
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			s.logger.Error().Err(err).Msgf("Error starting server")
-		}
+		serveErr <- srv.Serve(listener)
 	}()
 
-	<-ctx.Done()
-	s.logger.Info().Msg("Shutting down gracefully...")
-	return srv.Shutdown(context.Background())
+	select {
+	case err = <-serveErr:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return fmt.Errorf("http server: %w", err)
+	case <-ctx.Done():
+		s.logger.Info().Msg("Shutting down gracefully...")
+		return srv.Shutdown(context.WithoutCancel(ctx))
+	}
 }
 
 func (s *Server) getLogs(w http.ResponseWriter, _ *http.Request) {
