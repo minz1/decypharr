@@ -2,11 +2,13 @@ package notifications
 
 import (
 	"context"
+	"crypto/tls"
 	"time"
 
 	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/internal/utils"
 )
 
 // sendTimeout bounds one notifier delivery.
@@ -20,7 +22,8 @@ type Service struct {
 }
 
 // New creates a new notification service based on the provided configuration.
-func New(cfg *config.Notifications, logger zerolog.Logger) *Service {
+// tlsConfig is the verified TLS base (the configured CA file).
+func New(cfg *config.Notifications, tlsConfig *tls.Config, logger zerolog.Logger) *Service {
 	s := &Service{
 		config:    cfg,
 		logger:    logger.With().Str("component", "notifications").Logger(),
@@ -29,11 +32,12 @@ func New(cfg *config.Notifications, logger zerolog.Logger) *Service {
 	if !cfg.Enabled {
 		return s
 	}
+	client := utils.NewHTTPClient(tlsConfig, 0) // each send is bounded by sendTimeout
 	if cfg.WebhookURL != "" {
-		s.notifiers = append(s.notifiers, NewDiscord(cfg.WebhookURL))
+		s.notifiers = append(s.notifiers, NewDiscord(cfg.WebhookURL, client))
 	}
 	if cfg.CallbackURL != "" {
-		s.notifiers = append(s.notifiers, NewCallback(cfg.CallbackURL))
+		s.notifiers = append(s.notifiers, NewCallback(cfg.CallbackURL, client))
 	}
 	return s
 }

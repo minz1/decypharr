@@ -3,6 +3,7 @@ package manager
 import (
 	"context"
 	"crypto/tls"
+	"net/http"
 
 	"github.com/go-co-op/gocron/v2"
 	"github.com/puzpuzpuz/xsync/v4"
@@ -98,6 +99,12 @@ func (m *Manager) Usenet() *usenet.Usenet {
 // GetDebridSpeedTestResult returns stored speed test result for a specific debrid provider.
 func (m *Manager) GetDebridSpeedTestResult(provider string) (debridTypes.SpeedTestResult, bool) {
 	return m.debridSpeedTestResults.Load(provider)
+}
+
+// FetchClient downloads NZB and .torrent files from indexers, verifying TLS
+// against the configured CA.
+func (m *Manager) FetchClient() *http.Client {
+	return m.fetchClient
 }
 
 // TLSConfig is the verified TLS base for outgoing clients: the system roots

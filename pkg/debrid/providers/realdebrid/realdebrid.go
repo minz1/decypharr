@@ -335,7 +335,7 @@ func (r *RealDebrid) handleRarArchive(
 	}
 
 	dlLink := downloadLinkObj.DownloadLink
-	reader, err := rar.NewReader(context.Background(), dlLink, r.retries)
+	reader, err := rar.NewReader(context.Background(), r.options.TLSConfig, dlLink, r.retries)
 
 	if err != nil {
 		r.logger.Debug().

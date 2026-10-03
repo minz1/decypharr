@@ -51,7 +51,7 @@ func TestReadFilesRejectsZeroSizeBlock(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	reader, err := NewReader(ctx, serveArchive(t, block(0x7A, 0, 0, nil)), 0)
+	reader, err := NewReader(ctx, nil, serveArchive(t, block(0x7A, 0, 0, nil)), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestReadFilesSkipsLongBlockByAddSize(t *testing.T) {
 	// last four header bytes are 0xFF and must not be read as the data size.
 	sub := append(block(0x7A, flagHasData, 20, []byte{5, 0, 0, 0}), "xxxxx"...)
 	url := serveArchive(t, sub, fileBlock("movie.mkv"), block(blockEnd, 0, baseHeaderSize, nil))
-	reader, err := NewReader(t.Context(), url, 0)
+	reader, err := NewReader(t.Context(), nil, url, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

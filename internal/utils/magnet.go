@@ -60,12 +60,13 @@ func GetMagnetFromFile(file io.Reader, filePath string, rmTrackerUrls bool) (*Ma
 	return m, nil
 }
 
-// GetMagnetFromURL resolves a magnet link, or downloads a .torrent over HTTP(S).
-func GetMagnetFromURL(url string, rmTrackerUrls bool) (*Magnet, error) {
+// GetMagnetFromURL resolves a magnet link, or downloads a .torrent over
+// HTTP(S) with client.
+func GetMagnetFromURL(client *http.Client, url string, rmTrackerUrls bool) (*Magnet, error) {
 	if strings.HasPrefix(url, "magnet:") {
 		return GetMagnetInfo(url, rmTrackerUrls)
 	} else if strings.HasPrefix(url, "http") {
-		return OpenMagnetHTTPURL(url, rmTrackerUrls)
+		return OpenMagnetHTTPURL(client, url, rmTrackerUrls)
 	}
 	return nil, fmt.Errorf("invalid url")
 }
@@ -136,23 +137,22 @@ func ReadMagnetFile(file io.Reader) (string, error) {
 	return "", nil
 }
 
-// OpenMagnetHTTPURL downloads a .torrent file and converts it to a Magnet.
-func OpenMagnetHTTPURL(magnetLink string, rmTrackerUrls bool) (*Magnet, error) {
+// OpenMagnetHTTPURL downloads a .torrent file with client and converts it
+// to a Magnet.
+func OpenMagnetHTTPURL(client *http.Client, magnetLink string, rmTrackerUrls bool) (*Magnet, error) {
 	// Indexers often answer a torrent URL with a redirect to a magnet link,
 	// which an HTTP client cannot follow: stop there and use the link.
-	client := &http.Client{
-		Timeout: downloadTimeout,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if strings.EqualFold(req.URL.Scheme, "magnet") && req.Response != nil {
-				return &magnetRedirectError{link: req.Response.Header.Get("Location")}
-			}
-			if len(via) >= maxRedirects {
-				return fmt.Errorf("stopped after %d redirects", maxRedirects)
-			}
-			return nil
-		},
+	stopAtMagnet := *client
+	stopAtMagnet.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if strings.EqualFold(req.URL.Scheme, "magnet") && req.Response != nil {
+			return &magnetRedirectError{link: req.Response.Header.Get("Location")}
+		}
+		if len(via) >= maxRedirects {
+			return fmt.Errorf("stopped after %d redirects", maxRedirects)
+		}
+		return nil
 	}
-	resp, err := fetchWith(client, magnetLink)
+	resp, err := fetchWith(&stopAtMagnet, magnetLink)
 	if redirect, ok := errors.AsType[*magnetRedirectError](err); ok {
 		return GetMagnetInfo(redirect.link, rmTrackerUrls)
 	}

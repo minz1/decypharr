@@ -45,11 +45,15 @@ func TestOpenMagnetHTTPURLReportsHTTPStatus(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := utils.OpenMagnetHTTPURL(server.URL, false)
+	_, err := utils.OpenMagnetHTTPURL(utils.NewDownloadClient(nil), server.URL, false)
 	if err == nil || !strings.Contains(err.Error(), "404") {
 		t.Fatalf("err = %v, want the 404 status instead of a bencode parse error", err)
 	}
-	if _, _, err = utils.DownloadFile(server.URL); err == nil || !strings.Contains(err.Error(), "404") {
+	if _, _, err = utils.DownloadFile(
+		utils.NewDownloadClient(nil),
+		server.URL,
+	); err == nil ||
+		!strings.Contains(err.Error(), "404") {
 		t.Fatalf("DownloadFile err = %v, want 404", err)
 	}
 }
@@ -76,7 +80,7 @@ func TestDownloadFileNameIsOneElement(t *testing.T) {
 			}
 			_, _ = w.Write([]byte("nzb"))
 		}))
-		name, _, err := utils.DownloadFile(server.URL + tt.urlPath)
+		name, _, err := utils.DownloadFile(utils.NewDownloadClient(nil), server.URL+tt.urlPath)
 		server.Close()
 		if err != nil {
 			t.Fatalf("%q: %v", tt.disposition, err)
@@ -102,7 +106,7 @@ func TestOpenMagnetHTTPURLFollowsMagnetRedirect(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	got, err := utils.OpenMagnetHTTPURL(server.URL+"/download", false)
+	got, err := utils.OpenMagnetHTTPURL(utils.NewDownloadClient(nil), server.URL+"/download", false)
 	if err != nil {
 		t.Fatal(err)
 	}
