@@ -208,7 +208,7 @@ func TestGetMagnetFromURL_MagnetLink_StripTrue(t *testing.T) {
 		t.Fatalf("Failed to load magnet URL from test file: %v", err)
 	}
 
-	magnet, err := utils.GetMagnetFromURL(magnetURL, true)
+	magnet, err := utils.GetMagnetFromURL(utils.NewDownloadClient(nil), magnetURL, true)
 	if err != nil {
 		t.Fatalf("GetMagnetFromURL failed: %v", err)
 	}
@@ -230,7 +230,7 @@ func TestGetMagnetFromURL_MagnetLink_StripFalse(t *testing.T) {
 		t.Fatalf("Failed to load magnet URL from test file: %v", err)
 	}
 
-	magnet, err := utils.GetMagnetFromURL(magnetURL, false)
+	magnet, err := utils.GetMagnetFromURL(utils.NewDownloadClient(nil), magnetURL, false)
 	if err != nil {
 		t.Fatalf("GetMagnetFromURL failed: %v", err)
 	}
@@ -263,7 +263,7 @@ func testMagnetFromHTTPTorrent(
 	defer server.Close()
 
 	// Test the function with the mock server URL
-	magnet, err := utils.GetMagnetFromURL(server.URL, rmTrackerUrls)
+	magnet, err := utils.GetMagnetFromURL(utils.NewDownloadClient(nil), server.URL, rmTrackerUrls)
 	if err != nil {
 		t.Fatalf("GetMagnetFromURL failed: %v", err)
 	}

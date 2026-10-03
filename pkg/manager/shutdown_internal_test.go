@@ -155,7 +155,7 @@ func newShutdownTestManager(t *testing.T, dbPath string) *Manager {
 		logger:            zerolog.Nop(),
 		clients:           xsync.NewMap[string, debrid.Client](),
 		processingEntries: xsync.NewMap[string, struct{}](),
-		Notifications:     notifications.New(&cfg.Notifications, zerolog.Nop()),
+		Notifications:     notifications.New(&cfg.Notifications, nil, zerolog.Nop()),
 	}
 	m.initEntryCache()
 	m.downloader = NewDownloadManager(m)

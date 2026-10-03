@@ -86,6 +86,8 @@ type Manager struct {
 	logs   *logger.Factory
 	// tlsConfig is the verified TLS base every outgoing client starts from.
 	tlsConfig *tls.Config
+	// fetchClient downloads NZB and .torrent files from indexers.
+	fetchClient *http.Client
 
 	// Processing workers
 	scheduler    gocron.Scheduler
@@ -213,6 +215,7 @@ func New(store *config.Store, logs *logger.Factory) (*Manager, error) {
 		store:                  store,
 		logs:                   logs,
 		tlsConfig:              tlsConfig,
+		fetchClient:            utils.NewDownloadClient(tlsConfig),
 		arr:                    arr.New(store, tlsConfig, logs.New("arr")),
 		ready:                  make(chan struct{}),
 		streamClient:           streamClient,
@@ -308,7 +311,7 @@ func (m *Manager) init() {
 	m.initArrServices()
 
 	// Initialize notifications service
-	m.Notifications = notifications.New(&m.config.Notifications, m.logger)
+	m.Notifications = notifications.New(&m.config.Notifications, m.tlsConfig, m.logger)
 
 	// Initialize Hearsay state and its default network participation.
 	if hs, newErr := hearsay.New(m.config, m.logger); newErr != nil {

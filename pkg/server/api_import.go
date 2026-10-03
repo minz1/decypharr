@@ -118,7 +118,7 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 	batch := &addBatch{results: make([]*manager.ImportRequest, 0)}
 
 	for _, u := range nonEmptyLines(r.FormValue("urls")) {
-		magnet, err := utils.GetMagnetFromURL(u, opts.rmTrackerURLs)
+		magnet, err := utils.GetMagnetFromURL(s.manager.FetchClient(), u, opts.rmTrackerURLs)
 		if err != nil {
 			batch.failf("Failed to parse URL %s: %v", u, err)
 			continue
@@ -135,7 +135,7 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 	}
 	userAgent := utils.WithUserAgent(s.config.Get().NZBUserAgent)
 	for _, u := range nonEmptyLines(r.FormValue("nzbURLs")) {
-		filename, content, err := utils.DownloadFile(u, userAgent)
+		filename, content, err := utils.DownloadFile(s.manager.FetchClient(), u, userAgent)
 		if err != nil {
 			batch.failf("Failed to fetch NZB from URL %s: %v", u, err)
 			continue

@@ -28,10 +28,10 @@ type CallbackNotifier struct {
 }
 
 // NewCallback creates a new callback notifier with the specified URL.
-func NewCallback(callbackURL string) *CallbackNotifier {
+func NewCallback(callbackURL string, client *http.Client) *CallbackNotifier {
 	return &CallbackNotifier{
 		callbackURL: callbackURL,
-		client:      &http.Client{},
+		client:      client,
 	}
 }
 

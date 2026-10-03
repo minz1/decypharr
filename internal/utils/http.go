@@ -2,6 +2,7 @@ package utils
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -146,12 +147,29 @@ func WithUserAgent(ua string) DownloadOptions {
 // cannot hang the importing request (and its connection) forever.
 const downloadTimeout = 5 * time.Minute
 
-// fetch GETs rawURL with a bounded client and returns the response only for
-// 200 OK. The caller closes the body.
-func fetch(rawURL string, options ...DownloadOptions) (*http.Response, error) {
-	return fetchWith(&http.Client{Timeout: downloadTimeout}, rawURL, options...)
+// NewHTTPClient returns a client with net/http's default transport settings
+// (proxy environment, dial and idle timeouts) whose TLS verification uses
+// tlsConfig, the configured CA file; nil means the system roots.
+func NewHTTPClient(tlsConfig *tls.Config, timeout time.Duration) *http.Client {
+	var transport *http.Transport
+	if defaults, ok := http.DefaultTransport.(*http.Transport); ok {
+		transport = defaults.Clone()
+	} else {
+		transport = &http.Transport{Proxy: http.ProxyFromEnvironment}
+	}
+	if tlsConfig != nil {
+		transport.TLSClientConfig = tlsConfig.Clone()
+	}
+	return &http.Client{Timeout: timeout, Transport: transport}
 }
 
+// NewDownloadClient returns the client for NZB and .torrent downloads.
+func NewDownloadClient(tlsConfig *tls.Config) *http.Client {
+	return NewHTTPClient(tlsConfig, downloadTimeout)
+}
+
+// fetchWith GETs rawURL with client and returns the response only for 200
+// OK. The caller closes the body.
 func fetchWith(client *http.Client, rawURL string, options ...DownloadOptions) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, rawURL, nil)
 	if err != nil {
@@ -172,9 +190,10 @@ func fetchWith(client *http.Client, rawURL string, options ...DownloadOptions) (
 	return resp, nil
 }
 
-// DownloadFile fetches url and returns the server-suggested filename and body.
-func DownloadFile(url string, options ...DownloadOptions) (string, []byte, error) {
-	resp, err := fetch(url, options...)
+// DownloadFile fetches url with client and returns the server-suggested
+// filename and body.
+func DownloadFile(client *http.Client, url string, options ...DownloadOptions) (string, []byte, error) {
+	resp, err := fetchWith(client, url, options...)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to download file: %w", err)
 	}
