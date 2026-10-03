@@ -1179,5 +1179,4 @@ func (p *NZBParser) detectFileTypeAndExtensionFromContent(data []byte) (storage.
 		}
 	}
 	return storage.NZBFileTypeUnknown, ""
-
 }
