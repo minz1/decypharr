@@ -15,6 +15,7 @@ import (
 
 	"github.com/javi11/sevenzip"
 	"github.com/rs/zerolog"
+	"github.com/sourcegraph/conc/iter"
 
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/storage"
@@ -225,35 +226,66 @@ func (p *SevenZParser) processRARFilesFromPositions(
 	return files, nil
 }
 
-// scanEmbeddedRARHeaders parses the member headers of every volume, in
-// logical order. Each volume a file spans carries a header for its part
-// there, and a file may also start in a later volume, so no volume can be
-// skipped.
+// scanEmbeddedRARHeaders parses member headers volume by volume in logical
+// order until the volume that ends the archive. Each volume a file spans
+// carries a header for its part there, and a file may also start in a later
+// volume, so no volume before the last can be skipped. Volume heads are
+// fetched in batches of the parser's concurrency, as each is an article
+// fetch.
 func (p *SevenZParser) scanEmbeddedRARHeaders(
 	rarFiles []sevenzip.FileInfo,
 	readerAt io.ReaderAt,
 	version RARVersion,
 	password string,
 ) []*RARFileEntry {
+	if version == RARVersionUnknown {
+		return nil
+	}
+	batch := max(p.rarParser.maxConcurrent, 1)
 	var allRawFiles []*RARFileEntry
-	for volIndex, rarFile := range rarFiles {
-		headerData, ok := readEmbeddedRARSnippet(readerAt, rarFile)
-		if !ok {
-			continue
-		}
-		volumeName := filepath.Base(rarFile.Name)
-		switch version {
-		case RARVersion5:
-			allRawFiles = append(
-				allRawFiles,
-				p.rarParser.parseRAR5Headers(headerData, volIndex, volumeName, password)...)
-		case RARVersion4:
-			allRawFiles = append(allRawFiles, p.rarParser.parseRAR4Headers(headerData, volIndex, volumeName)...)
-		case RARVersionUnknown:
-			return nil
+	for start := 0; start < len(rarFiles); start += batch {
+		volumes := rarFiles[start:min(start+batch, len(rarFiles))]
+		mapper := iter.Mapper[sevenzip.FileInfo, []byte]{MaxGoroutines: batch}
+		heads := mapper.Map(volumes, func(rarFile *sevenzip.FileInfo) []byte {
+			headerData, ok := readEmbeddedRARSnippet(readerAt, *rarFile)
+			if !ok {
+				return nil
+			}
+			return headerData
+		})
+		for i, headerData := range heads {
+			if headerData == nil {
+				continue
+			}
+			files, last := p.parseEmbeddedRARHead(
+				headerData,
+				start+i,
+				filepath.Base(volumes[i].Name),
+				version,
+				password,
+			)
+			allRawFiles = append(allRawFiles, files...)
+			if last {
+				return allRawFiles
+			}
 		}
 	}
 	return allRawFiles
+}
+
+// parseEmbeddedRARHead parses one volume head and reports whether it is the
+// archive's last volume.
+func (p *SevenZParser) parseEmbeddedRARHead(
+	headerData []byte,
+	volIndex int,
+	volumeName string,
+	version RARVersion,
+	password string,
+) ([]*RARFileEntry, bool) {
+	if version == RARVersion5 {
+		return p.rarParser.scanRAR5Headers(headerData, volIndex, volumeName, password)
+	}
+	return p.rarParser.scanRAR4Headers(headerData, volIndex, volumeName)
 }
 
 // readEmbeddedRARSnippet reads the head of an embedded volume, where its
