@@ -15,6 +15,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/rs/zerolog"
 
+	"github.com/sirrobot01/decypharr/internal/fsutil"
 	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/backend"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/config"
@@ -77,7 +78,7 @@ func (b *Backend) Mount(ctx context.Context) error {
 		return fmt.Errorf("VFS manager is not initialized")
 	}
 
-	_ = os.MkdirAll(b.config.MountPath, 0o755) //nolint:gosec // G301: mountpoint is shared (allow_other)
+	_ = fsutil.MkdirShared(b.config.MountPath, b.config.MountDirMode)
 	// Try to unmount if already mounted
 	b.forceUnmount(ctx)
 

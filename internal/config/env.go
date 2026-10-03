@@ -178,6 +178,8 @@ func (c *Config) applyManagerEnvVars(e env) {
 	e.envIndexedList("CATEGORIES__%d", maxEnvListItems, &c.Categories)
 	e.envIndexedList("ALLOWED_FILE_TYPES__%d", maxEnvListItems, &c.AllowedExt)
 	e.envString("NZB_USER_AGENT", &c.NZBUserAgent)
+	e.envString("SHARED_DIR_MODE", &c.SharedDirMode)
+	e.envString("SHARED_FILE_MODE", &c.SharedFileMode)
 }
 
 // applyArrEnvVars applies ARRS__<i>__*. NAME creates a new entry; TOKEN and

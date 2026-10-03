@@ -20,6 +20,7 @@ import (
 	"github.com/sourcegraph/conc/pool"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/internal/fsutil"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/manager/link"
 	"github.com/sirrobot01/decypharr/pkg/notifications"
@@ -206,8 +207,8 @@ func (d *Downloader) processSymlink(entry *storage.Entry, mountPath string) erro
 		Msgf("Creating symlinks for %d files in %s", len(files), torrentSymlinkPath)
 
 	// Create symlink directory
-	//nolint:gosec // the arr importing from this folder usually runs as another user
-	err := os.MkdirAll(torrentSymlinkPath, os.ModePerm)
+	// The arr importing from this folder usually runs as another user.
+	err := fsutil.MkdirShared(torrentSymlinkPath, d.manager.config.SharedDirModeValue())
 	if err != nil {
 		return fmt.Errorf("failed to create directory: %s: %w", torrentSymlinkPath, err)
 	}
@@ -532,8 +533,8 @@ func (d *Downloader) processTorrentDownload(entry *storage.Entry) error {
 		totalSize += file.Size
 	}
 	downloadedFolder := entry.DownloadPath(d.manager.folderNaming())
-	//nolint:gosec // the arr importing from this folder usually runs as another user
-	if err := os.MkdirAll(downloadedFolder, os.ModePerm); err != nil {
+	// The arr importing from this folder usually runs as another user.
+	if err := fsutil.MkdirShared(downloadedFolder, d.manager.config.SharedDirModeValue()); err != nil {
 		return fmt.Errorf("failed to create download directory: %s: %w", downloadedFolder, err)
 	}
 	entry.SizeDownloaded = 0
@@ -654,8 +655,8 @@ func (d *Downloader) processUsenetDownload(entry *storage.Entry) error {
 	d.logger.Info().Msgf("Downloading %d NZB files via usenet...", len(files))
 
 	downloadedFolder := entry.DownloadPath(d.manager.folderNaming())
-	//nolint:gosec // the arr importing from this folder usually runs as another user
-	if err := os.MkdirAll(downloadedFolder, os.ModePerm); err != nil {
+	// The arr importing from this folder usually runs as another user.
+	if err := fsutil.MkdirShared(downloadedFolder, d.manager.config.SharedDirModeValue()); err != nil {
 		return fmt.Errorf("failed to create download directory: %s: %w", downloadedFolder, err)
 	}
 
@@ -677,7 +678,11 @@ func (d *Downloader) processUsenetDownload(entry *storage.Entry) error {
 	for _, file := range files {
 		p.Go(func() error {
 			destPath := filepath.Join(downloadedFolder, file.Name)
-			destFile, err := os.Create(destPath)
+			destFile, err := os.OpenFile(
+				destPath,
+				os.O_CREATE|os.O_WRONLY|os.O_TRUNC,
+				d.manager.config.SharedFileModeValue(),
+			)
 			if err != nil {
 				return fmt.Errorf("failed to create file %s: %w", file.Name, err)
 			}

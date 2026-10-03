@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/url"
 	"os"
@@ -50,6 +51,7 @@ type Manager struct {
 	configDir     string
 	logsDir       string
 	mount         config.Mount
+	mountDirMode  fs.FileMode
 	unmounter     *unmount.Unmounter
 	logger        zerolog.Logger
 	ctx           context.Context
@@ -125,17 +127,18 @@ func NewManager(mgr *manager.Manager, mainCfg *config.Config, _logger zerolog.Lo
 	rcloneClient := rclone.NewClient(rcServer, "", "", _logger)
 
 	m := &Manager{
-		configDir:   configDir,
-		logsDir:     logger.Dir(mainCfg.Dir()),
-		mount:       cfg,
-		unmounter:   unmount.New(_logger),
-		logger:      _logger,
-		ctx:         ctx,
-		cancel:      cancel,
-		client:      rcloneClient,
-		serverReady: make(chan struct{}),
-		webdavURL:   webdavURL,
-		manager:     mgr,
+		configDir:    configDir,
+		logsDir:      logger.Dir(mainCfg.Dir()),
+		mount:        cfg,
+		mountDirMode: mainCfg.SharedDirModeValue(),
+		unmounter:    unmount.New(_logger),
+		logger:       _logger,
+		ctx:          ctx,
+		cancel:       cancel,
+		client:       rcloneClient,
+		serverReady:  make(chan struct{}),
+		webdavURL:    webdavURL,
+		manager:      mgr,
 	}
 	return m
 }

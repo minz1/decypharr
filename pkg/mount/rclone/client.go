@@ -3,12 +3,12 @@ package rclone
 import (
 	"context"
 	"fmt"
-	"os"
 	"runtime"
 	"strconv"
 	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/internal/fsutil"
 	"github.com/sirrobot01/decypharr/internal/retry"
 	"github.com/sirrobot01/decypharr/internal/utils"
 )
@@ -34,7 +34,7 @@ func (m *Manager) performMount(ctx context.Context) error {
 
 	// Create mount directory if not on windows
 	if runtime.GOOS != "windows" {
-		_ = os.MkdirAll(cfg.MountPath, 0o755) //nolint:gosec // G301: mountpoint is shared (allow_other)
+		_ = fsutil.MkdirShared(cfg.MountPath, m.mountDirMode)
 	}
 
 	// Check if already mounted
