@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -168,13 +169,20 @@ func (p *SevenZParser) processRARFilesFromPositions(
 		return nil, nil
 	}
 
-	// Sort RAR files by their offset within the 7z archive
-	// This is the PHYSICAL order of the data, which for 7z-embedded RAR is typically:
-	// .r00, .r01, ..., .r51, .rar (opposite of RAR's logical naming!)
-	sort.Slice(rarFiles, func(i, j int) bool {
-		return rarFiles[i].Offset < rarFiles[j].Offset
+	// Order the volumes logically (.rar, .r00, .r01, ... or .partN.rar).
+	// Their physical order inside the 7z is often different (.r00 ... .rar),
+	// and a file spanning volumes is joined in logical order.
+	rarFiles = slices.Clone(rarFiles)
+	slices.SortStableFunc(rarFiles, func(a, b sevenzip.FileInfo) int {
+		if order := cmp.Compare(
+			getRARVolumeOrder(filepath.Base(a.Name)),
+			getRARVolumeOrder(filepath.Base(b.Name)),
+		); order != 0 {
+			return order
+		}
+		return cmp.Compare(a.Offset, b.Offset)
 	})
-	// Detect RAR version from first volume (by logical order)
+	// Detect RAR version from the first volume
 	firstRAR := rarFiles[0]
 	versionBuf := make([]byte, len(RAR5Signature))
 	if _, err := readerAt.ReadAt(versionBuf, firstRAR.Offset); err != nil && !errors.Is(err, io.EOF) {
@@ -217,11 +225,10 @@ func (p *SevenZParser) processRARFilesFromPositions(
 	return files, nil
 }
 
-// scanEmbeddedRARHeaders parses member headers from the volumes most likely
-// to hold them. Files may have their primary header in either the logical
-// first volume (.rar by naming convention) or the physical first (lowest
-// offset), so scan the logical first, then the first few physical volumes,
-// stopping once named members are found.
+// scanEmbeddedRARHeaders parses the member headers of every volume, in
+// logical order. Each volume a file spans carries a header for its part
+// there, and a file may also start in a later volume, so no volume can be
+// skipped.
 func (p *SevenZParser) scanEmbeddedRARHeaders(
 	rarFiles []sevenzip.FileInfo,
 	readerAt io.ReaderAt,
@@ -229,8 +236,7 @@ func (p *SevenZParser) scanEmbeddedRARHeaders(
 	password string,
 ) []*RARFileEntry {
 	var allRawFiles []*RARFileEntry
-	for _, volIndex := range embeddedRARScanOrder(rarFiles) {
-		rarFile := rarFiles[volIndex]
+	for volIndex, rarFile := range rarFiles {
 		headerData, ok := readEmbeddedRARSnippet(readerAt, rarFile)
 		if !ok {
 			continue
@@ -246,33 +252,8 @@ func (p *SevenZParser) scanEmbeddedRARHeaders(
 		case RARVersionUnknown:
 			return nil
 		}
-		// The first volume should hold every file header.
-		if slices.ContainsFunc(allRawFiles, func(f *RARFileEntry) bool { return f.Name != "" }) {
-			break
-		}
 	}
 	return allRawFiles
-}
-
-// embeddedRARPhysicalScan is how many physically-first volumes are scanned.
-const embeddedRARPhysicalScan = 3
-
-// embeddedRARScanOrder lists the logical first volume (.rar), then the first
-// few by physical order.
-func embeddedRARScanOrder(rarFiles []sevenzip.FileInfo) []int {
-	logicalFirst := slices.IndexFunc(rarFiles, func(rf sevenzip.FileInfo) bool {
-		return strings.HasSuffix(strings.ToLower(rf.Name), ".rar")
-	})
-	order := make([]int, 0, embeddedRARPhysicalScan+1)
-	if logicalFirst >= 0 {
-		order = append(order, logicalFirst)
-	}
-	for i := range min(embeddedRARPhysicalScan, len(rarFiles)) {
-		if i != logicalFirst {
-			order = append(order, i)
-		}
-	}
-	return order
 }
 
 // readEmbeddedRARSnippet reads the head of an embedded volume, where its
@@ -339,7 +320,8 @@ func (p *SevenZParser) buildSegmentsForRARFile(
 	var fileSegments []storage.NZBSegment
 	var currentFileOffset int64 // Offset within the final extracted file
 
-	// Parse each volume part of this file
+	// Parse each volume part of this file, in volume order
+	sortVolumeParts(rarEntry.VolumeParts)
 	for partIdx, part := range rarEntry.VolumeParts {
 		if part.PackedSize <= 0 {
 			continue
