@@ -8,6 +8,7 @@ import (
 	"math"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -62,12 +63,12 @@ func (p *SevenZParser) Process(ctx context.Context, group *FileGroup, password s
 		return nil, fmt.Errorf("validate 7z volume layout: %w", validateVolumesErr)
 	}
 
-	readerAt, size, err := newArticleReaderAt(ctx, p.source, volumes)
+	readerAt, archiveSize, err := newArticleReaderAt(ctx, p.source, volumes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create archive reader: %w", err)
 	}
 
-	reader, err := sevenzip.NewReaderWithPassword(readerAt, size, password)
+	reader, err := sevenzip.NewReaderWithPassword(readerAt, archiveSize, password)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open sevenzip reader: %w", err)
 	}
@@ -83,54 +84,22 @@ func (p *SevenZParser) Process(ctx context.Context, group *FileGroup, password s
 
 	// Parse RAR files by reading their headers directly from readerAt
 	if len(rarFiles) > 0 {
-		rarNZBFiles, processRARFilesFromPositionsErr := p.processRARFilesFromPositions(
-			rarFiles,
-			group,
-			readerAt,
-			segmentIndex,
-			password,
-		)
-		if processRARFilesFromPositionsErr != nil {
-			return nil, fmt.Errorf("process RAR files embedded in 7z: %w", processRARFilesFromPositionsErr)
+		rarNZBFiles, rarErr := p.processRARFilesFromPositions(rarFiles, group, readerAt, segmentIndex, password)
+		if rarErr != nil {
+			return nil, fmt.Errorf("process RAR files embedded in 7z: %w", rarErr)
 		}
 		files = append(files, rarNZBFiles...)
 	}
 
 	// Parse non-RAR files as regular files
 	for _, file := range nonRARFiles {
-		internal := NormalizeArchivePath(file.Name)
-		if internal == "" {
-			continue
+		nzbFile, ok, plainErr := sevenZPlainFile(file, group, segmentIndex, password)
+		if plainErr != nil {
+			return nil, plainErr
 		}
-
-		name := utils.RemoveInvalidChars(filepath.Base(internal))
-		if name == "" {
-			name = path.Base(internal)
+		if ok {
+			files = append(files, nzbFile)
 		}
-
-		// Slice segments for this file's byte range using offset from sevenzip
-		if file.Offset < 0 || file.Size == 0 || file.Size > math.MaxInt64 {
-			return nil, fmt.Errorf("7z file %q has no usable source range", internal)
-		}
-		size := int64(file.Size)
-		segments, sliceErr := segmentIndex.slice(file.Offset, size, true)
-		if sliceErr == nil && len(segments) == 0 {
-			sliceErr = fmt.Errorf("no source segments overlap the file range")
-		}
-		if sliceErr != nil {
-			return nil, fmt.Errorf("map 7z file %q to raw source: %w", internal, sliceErr)
-		}
-
-		files = append(files, &storage.NZBFile{
-			Name:         name,
-			InternalPath: internal,
-			Size:         size,
-			IsStored:     true,
-			Groups:       getGroupsList(group.Groups),
-			Segments:     segments,
-			Password:     password,
-			FileType:     storage.NZBFileTypeSevenZip,
-		})
 	}
 
 	if len(files) == 0 {
@@ -142,6 +111,48 @@ func (p *SevenZParser) Process(ctx context.Context, group *FileGroup, password s
 		Msg("7z archive processing complete")
 
 	return files, nil
+}
+
+// sevenZPlainFile maps a stored 7z member onto the raw segments; ok is false
+// for an unusable member path.
+func sevenZPlainFile(
+	file sevenzip.FileInfo,
+	group *FileGroup,
+	segmentIndex *segmentLayout,
+	password string,
+) (*storage.NZBFile, bool, error) {
+	internal := NormalizeArchivePath(file.Name)
+	if internal == "" {
+		return nil, false, nil
+	}
+	name := utils.RemoveInvalidChars(filepath.Base(internal))
+	if name == "" {
+		name = path.Base(internal)
+	}
+
+	// Slice segments for this file's byte range using offset from sevenzip
+	if file.Offset < 0 || file.Size == 0 || file.Size > math.MaxInt64 {
+		return nil, false, fmt.Errorf("7z file %q has no usable source range", internal)
+	}
+	size := int64(file.Size)
+	segments, err := segmentIndex.slice(file.Offset, size, true)
+	if err == nil && len(segments) == 0 {
+		err = fmt.Errorf("no source segments overlap the file range")
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("map 7z file %q to raw source: %w", internal, err)
+	}
+
+	return &storage.NZBFile{
+		Name:         name,
+		InternalPath: internal,
+		Size:         size,
+		IsStored:     true,
+		Groups:       getGroupsList(group.Groups),
+		Segments:     segments,
+		Password:     password,
+		FileType:     storage.NZBFileTypeSevenZip,
+	}, true, nil
 }
 
 // processRARFilesFromPositions creates volume descriptors for RAR files based on their positions
@@ -174,76 +185,7 @@ func (p *SevenZParser) processRARFilesFromPositions(
 		return nil, fmt.Errorf("unknown RAR format in 7z")
 	}
 
-	// Parse headers from volumes to find file info
-	// Strategy: Files may have their primary header in either the logical first volume
-	// (.rar by naming convention) OR the physical first volume (lowest offset)
-	// We'll check both approaches and aggregate
-	var allRawFiles []*RARFileEntry
-
-	// Find logical first volume (.rar)
-	logicalFirst := -1
-	for i, rf := range rarFiles {
-		if strings.HasSuffix(strings.ToLower(rf.Name), ".rar") {
-			logicalFirst = i
-			break
-		}
-	}
-
-	// Scan order: logical first (.rar), then physical first (.r00), then next few
-	volumesToScan := make([]int, 0, 6)
-	if logicalFirst >= 0 {
-		volumesToScan = append(volumesToScan, logicalFirst)
-	}
-	// Add first 3 by physical order if not already added
-	for i := range min(3, len(rarFiles)) {
-		if i != logicalFirst {
-			volumesToScan = append(volumesToScan, i)
-		}
-	}
-
-	for _, volIndex := range volumesToScan {
-		rarFile := rarFiles[volIndex]
-
-		// Optimization: RAR headers are small - 64KB is usually enough
-		headerSize := int64(rarSnippetSize)
-		if rarFile.Size < rarSnippetSize {
-			headerSize = int64(rarFile.Size)
-		}
-
-		headerData := make([]byte, headerSize)
-		n, err := readerAt.ReadAt(headerData, rarFile.Offset)
-		if err != nil && !errors.Is(err, io.EOF) {
-			continue
-		}
-		headerData = headerData[:n]
-
-		// Parse headers from this volume
-		var volumeFiles []*RARFileEntry
-		switch version {
-		case RARVersion5:
-			volumeFiles = p.rarParser.parseRAR5Headers(headerData, volIndex, filepath.Base(rarFile.Name), password)
-		case RARVersion4:
-			volumeFiles = p.rarParser.parseRAR4Headers(headerData, volIndex, filepath.Base(rarFile.Name))
-		case RARVersionUnknown:
-			// rejected above
-		}
-
-		allRawFiles = append(allRawFiles, volumeFiles...)
-
-		// Optimization: If we found files with names, we can stop scanning
-		// (first volume should have all file headers)
-		hasNamedFiles := false
-		for _, f := range allRawFiles {
-			if f.Name != "" {
-				hasNamedFiles = true
-				break
-			}
-		}
-		if hasNamedFiles {
-			break
-		}
-	}
-
+	allRawFiles := p.scanEmbeddedRARHeaders(rarFiles, readerAt, version, password)
 	if len(allRawFiles) == 0 {
 		return nil, fmt.Errorf("no files found in RAR volumes")
 	}
@@ -257,52 +199,131 @@ func (p *SevenZParser) processRARFilesFromPositions(
 		rarFileOffsets[filepath.Base(rarFile.Name)] = rarFile.Offset
 	}
 
-	// Build NZBFile list
+	// Build NZBFile list; only stored RAR members can be streamed.
 	var files []*storage.NZBFile
 	for _, rarEntry := range rarFileEntries {
-		if rarEntry.IsDirectory {
+		if rarEntry.IsDirectory || !rarEntry.IsStored {
 			continue
 		}
-
-		// Only support stored RAR files for streaming
-		if !rarEntry.IsStored {
-			continue
-		}
-
-		filename := utils.RemoveInvalidChars(filepath.Base(rarEntry.Name))
-		if filename == "" {
-			filename = path.Base(rarEntry.Name)
-		}
-
-		// get segments for this file by processing all its volume parts
-		fileSegments, err := p.buildSegmentsForRARFile(rarEntry, rarFileOffsets, segmentIndex)
+		file, err := p.embeddedRARFile(rarEntry, rarFileOffsets, segmentIndex)
 		if err != nil {
-			return nil, fmt.Errorf("map RAR file %q embedded in 7z: %w", rarEntry.Name, err)
+			return nil, err
 		}
-
-		if len(fileSegments) == 0 {
-			return nil, fmt.Errorf("RAR file %q embedded in 7z has no source segments", rarEntry.Name)
-		}
-
-		p.logger.Debug().
-			Str("file", rarEntry.Name).
-			Int("segment_count", len(fileSegments)).
-			Int64("file_size", rarEntry.UncompressedSize).
-			Msg("Built segments for RAR file in 7z")
-
-		files = append(files, &storage.NZBFile{
-			Name:         filename,
-			InternalPath: rarEntry.Name,
-			Size:         rarEntry.UncompressedSize,
-			IsStored:     true,
-			Segments:     fileSegments,
-			Groups:       getGroupsList(group.Groups),
-			Password:     password,
-			FileType:     storage.NZBFileTypeRar,
-		})
+		file.Groups = getGroupsList(group.Groups)
+		file.Password = password
+		files = append(files, file)
 	}
 
 	return files, nil
+}
+
+// scanEmbeddedRARHeaders parses member headers from the volumes most likely
+// to hold them. Files may have their primary header in either the logical
+// first volume (.rar by naming convention) or the physical first (lowest
+// offset), so scan the logical first, then the first few physical volumes,
+// stopping once named members are found.
+func (p *SevenZParser) scanEmbeddedRARHeaders(
+	rarFiles []sevenzip.FileInfo,
+	readerAt io.ReaderAt,
+	version RARVersion,
+	password string,
+) []*RARFileEntry {
+	var allRawFiles []*RARFileEntry
+	for _, volIndex := range embeddedRARScanOrder(rarFiles) {
+		rarFile := rarFiles[volIndex]
+		headerData, ok := readEmbeddedRARSnippet(readerAt, rarFile)
+		if !ok {
+			continue
+		}
+		volumeName := filepath.Base(rarFile.Name)
+		switch version {
+		case RARVersion5:
+			allRawFiles = append(
+				allRawFiles,
+				p.rarParser.parseRAR5Headers(headerData, volIndex, volumeName, password)...)
+		case RARVersion4:
+			allRawFiles = append(allRawFiles, p.rarParser.parseRAR4Headers(headerData, volIndex, volumeName)...)
+		case RARVersionUnknown:
+			return nil
+		}
+		// The first volume should hold every file header.
+		if slices.ContainsFunc(allRawFiles, func(f *RARFileEntry) bool { return f.Name != "" }) {
+			break
+		}
+	}
+	return allRawFiles
+}
+
+// embeddedRARPhysicalScan is how many physically-first volumes are scanned.
+const embeddedRARPhysicalScan = 3
+
+// embeddedRARScanOrder lists the logical first volume (.rar), then the first
+// few by physical order.
+func embeddedRARScanOrder(rarFiles []sevenzip.FileInfo) []int {
+	logicalFirst := slices.IndexFunc(rarFiles, func(rf sevenzip.FileInfo) bool {
+		return strings.HasSuffix(strings.ToLower(rf.Name), ".rar")
+	})
+	order := make([]int, 0, embeddedRARPhysicalScan+1)
+	if logicalFirst >= 0 {
+		order = append(order, logicalFirst)
+	}
+	for i := range min(embeddedRARPhysicalScan, len(rarFiles)) {
+		if i != logicalFirst {
+			order = append(order, i)
+		}
+	}
+	return order
+}
+
+// readEmbeddedRARSnippet reads the head of an embedded volume, where its
+// (small) headers live; ok is false when it cannot be read.
+func readEmbeddedRARSnippet(readerAt io.ReaderAt, rarFile sevenzip.FileInfo) ([]byte, bool) {
+	headerSize := int64(rarSnippetSize)
+	if rarFile.Size < rarSnippetSize {
+		headerSize = int64(rarFile.Size)
+	}
+	headerData := make([]byte, headerSize)
+	n, err := readerAt.ReadAt(headerData, rarFile.Offset)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, false
+	}
+	return headerData[:n], true
+}
+
+// embeddedRARFile maps a stored RAR member embedded in a 7z archive.
+func (p *SevenZParser) embeddedRARFile(
+	rarEntry *RARFileEntry,
+	rarFileOffsets map[string]int64,
+	segmentIndex *segmentLayout,
+) (*storage.NZBFile, error) {
+	filename := utils.RemoveInvalidChars(filepath.Base(rarEntry.Name))
+	if filename == "" {
+		filename = path.Base(rarEntry.Name)
+	}
+
+	// get segments for this file by processing all its volume parts
+	fileSegments, err := p.buildSegmentsForRARFile(rarEntry, rarFileOffsets, segmentIndex)
+	if err != nil {
+		return nil, fmt.Errorf("map RAR file %q embedded in 7z: %w", rarEntry.Name, err)
+	}
+	if len(fileSegments) == 0 {
+		return nil, fmt.Errorf("RAR file %q embedded in 7z has no source segments", rarEntry.Name)
+	}
+
+	p.logger.Debug().
+		Str("file", rarEntry.Name).
+		Int("segment_count", len(fileSegments)).
+		Int64("file_size", rarEntry.UncompressedSize).
+		Msg("Built segments for RAR file in 7z")
+
+	return &storage.NZBFile{
+		Name:         filename,
+		InternalPath: rarEntry.Name,
+		Size:         rarEntry.UncompressedSize,
+		IsStored:     true,
+		Segments:     fileSegments,
+		FileType:     storage.NZBFileTypeRar,
+	}, nil
 }
 
 // buildSegmentsForRARFile builds the segment list for a file across all RAR volume parts.
