@@ -137,6 +137,8 @@ func NewRARParser(source ArticleSource, maxConcurrent int, logger zerolog.Logger
 	}
 }
 
+// Process parses a RAR volume group and maps every stored member onto the
+// raw article segments.
 func (p *RARParser) Process(ctx context.Context, group *FileGroup, password string) ([]*storage.NZBFile, error) {
 	p.logger.Debug().
 		Str("group", group.BaseName).
@@ -166,11 +168,33 @@ func (p *RARParser) Process(ctx context.Context, group *FileGroup, password stri
 	if len(volumes) == 0 {
 		return nil, fmt.Errorf("no RAR volumes found")
 	}
+	layout, err := newArchiveLayout(group)
+	if err != nil {
+		return nil, err
+	}
 
-	filename := group.BaseName
-	filename = utils.RemoveInvalidChars(path.Base(filename))
+	// Parse RAR archive to get file entries with volume parts
+	archiveInfo, err := p.parseArchive(ctx, volumes, password)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse RAR archive: %w", err)
+	}
 
-	// Build base segments and volume info
+	// Check if archive has encrypted headers and we couldn't parse it
+	if archiveInfo.IsHeaderEncrypted && len(archiveInfo.Files) == 0 {
+		return nil, fmt.Errorf("RAR archive has encrypted headers; password required or incorrect")
+	}
+
+	return p.streamableFiles(archiveInfo, group, layout, password)
+}
+
+// archiveLayout indexes a volume group's raw segments and where each volume
+// starts in that flat byte space.
+type archiveLayout struct {
+	segments     *segmentLayout
+	volumeStarts map[int]int64
+}
+
+func newArchiveLayout(group *FileGroup) (*archiveLayout, error) {
 	baseSegments, volumeInfos, err := buildBaseSegments(group)
 	if err != nil {
 		return nil, err
@@ -185,80 +209,40 @@ func (p *RARParser) Process(ctx context.Context, group *FileGroup, password stri
 	if validateVolumesErr := segmentIndex.validateVolumes(volumeInfos); validateVolumesErr != nil {
 		return nil, fmt.Errorf("validate RAR volume layout: %w", validateVolumesErr)
 	}
+	return &archiveLayout{segments: segmentIndex, volumeStarts: buildVolumeOffsetMap(volumeInfos)}, nil
+}
 
-	// Parse RAR archive to get file entries with volume parts
-	archiveInfo, err := p.parseArchive(ctx, volumes, password)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse RAR archive: %w", err)
-	}
-
-	// Check if archive has encrypted headers and we couldn't parse it
-	if archiveInfo.IsHeaderEncrypted && len(archiveInfo.Files) == 0 {
-		return nil, fmt.Errorf("RAR archive has encrypted headers; password required or incorrect")
-	}
-
-	// Build volume offset map
-	volumeOffsetMap := buildVolumeOffsetMap(volumeInfos)
-
+// streamableFiles turns the archive's stored members into NZB files; only
+// stored (uncompressed) files can be streamed.
+func (p *RARParser) streamableFiles(
+	archiveInfo *RARArchiveInfo,
+	group *FileGroup,
+	layout *archiveLayout,
+	password string,
+) ([]*storage.NZBFile, error) {
+	fallbackName := utils.RemoveInvalidChars(path.Base(group.BaseName))
 	files := make([]*storage.NZBFile, 0, len(archiveInfo.Files))
 	hasNoneStored := false
-
-	// Parse each file in the RAR archive
 	for _, rarFile := range archiveInfo.Files {
 		if rarFile.IsDirectory {
 			continue
 		}
-		// Only process stored (uncompressed) files for streaming
 		if !rarFile.IsStored {
 			hasNoneStored = true
 			continue
 		}
-
-		name := utils.RemoveInvalidChars(path.Base(rarFile.Name))
-		if name == "" {
-			name = filename
+		file, err := p.streamableFile(rarFile, layout, password)
+		if err != nil {
+			return nil, err
 		}
-
-		// Build segments for this file across all its volume parts
-		fileSegments, buildSegmentsForFileErr := p.buildSegmentsForFile(rarFile, segmentIndex, volumeOffsetMap)
-		if buildSegmentsForFileErr != nil {
-			return nil, fmt.Errorf("map stored RAR file %q: %w", rarFile.Name, buildSegmentsForFileErr)
+		if file.Name == "" {
+			file.Name = fallbackName
 		}
-
-		if len(fileSegments) == 0 {
-			return nil, fmt.Errorf("stored RAR file %q has no source segments", rarFile.Name)
-		}
-
-		streamSize := int64(0)
-		for _, seg := range fileSegments {
-			streamSize += seg.Bytes
-		}
-
-		size := rarFile.UncompressedSize
-		if size <= 0 || (streamSize > 0 && size > streamSize) {
-			// Clamp to streamable size to avoid advertising bytes we can't serve.
-			size = streamSize
-		}
-
-		file := &storage.NZBFile{
-			Name:          name,
-			InternalPath:  rarFile.Name,
-			Groups:        getGroupsList(group.Groups),
-			Segments:      fileSegments, // Direct segment list with offsets!
-			Password:      password,
-			FileType:      storage.NZBFileTypeRar,
-			Size:          size,
-			IsStored:      rarFile.IsStored,
-			IsEncrypted:   rarFile.IsEncrypted, // Per-file encryption from extra area
-			EncryptionKey: rarFile.EncryptionKey,
-			EncryptionIV:  rarFile.EncryptionIV, // Per-file IV from extra area
-		}
-
-		// Fallback to global archive key if no specific file key derived
+		file.Groups = getGroupsList(group.Groups)
+		// Fall back to the archive key if no file-specific key was derived.
 		if len(file.EncryptionKey) == 0 {
 			file.EncryptionKey = archiveInfo.EncryptionKey
 		}
-
 		files = append(files, file)
 	}
 
@@ -271,7 +255,54 @@ func (p *RARParser) Process(ctx context.Context, group *FileGroup, password stri
 	return files, nil
 }
 
-// ParseArchive parses all volumes and extracts file information.
+// streamableFile maps one stored member across its volume parts.
+func (p *RARParser) streamableFile(
+	rarFile *RARFileEntry,
+	layout *archiveLayout,
+	password string,
+) (*storage.NZBFile, error) {
+	fileSegments, err := p.buildSegmentsForFile(rarFile, layout.segments, layout.volumeStarts)
+	if err != nil {
+		return nil, fmt.Errorf("map stored RAR file %q: %w", rarFile.Name, err)
+	}
+	if len(fileSegments) == 0 {
+		return nil, fmt.Errorf("stored RAR file %q has no source segments", rarFile.Name)
+	}
+
+	var streamSize int64
+	for _, seg := range fileSegments {
+		streamSize += seg.Bytes
+	}
+	size := rarFile.UncompressedSize
+	if size <= 0 || (streamSize > 0 && size > streamSize) {
+		// Clamp to streamable size to avoid advertising bytes we can't serve.
+		size = streamSize
+	}
+
+	return &storage.NZBFile{
+		Name:          utils.RemoveInvalidChars(path.Base(rarFile.Name)),
+		InternalPath:  rarFile.Name,
+		Segments:      fileSegments, // Direct segment list with offsets!
+		Password:      password,
+		FileType:      storage.NZBFileTypeRar,
+		Size:          size,
+		IsStored:      rarFile.IsStored,
+		IsEncrypted:   rarFile.IsEncrypted, // Per-file encryption from extra area
+		EncryptionKey: rarFile.EncryptionKey,
+		EncryptionIV:  rarFile.EncryptionIV, // Per-file IV from extra area
+	}, nil
+}
+
+// rarVolumeResult is one volume's parse outcome.
+type rarVolumeResult struct {
+	index             int
+	files             []*RARFileEntry
+	isHeaderEncrypted bool
+	encryptionKey     []byte // AES-256 key for encrypted file data
+	err               error
+}
+
+// parseArchive parses every volume in parallel and aggregates the members.
 func (p *RARParser) parseArchive(
 	ctx context.Context,
 	volumes []*types.Volume,
@@ -283,153 +314,95 @@ func (p *RARParser) parseArchive(
 
 	// Detect RAR version from first volume
 	firstStream := newRarReader(ctx, p.source, []*types.Volume{volumes[0]})
-	sig := make([]byte, 8)
+	sig := make([]byte, len(RAR5Signature))
 	if _, err := io.ReadFull(firstStream, sig); err != nil {
 		return nil, fmt.Errorf("failed to read RAR signature: %w", err)
 	}
-
 	version := detectRARVersion(sig)
 	if version == RARVersionUnknown {
 		return nil, fmt.Errorf("unknown RAR format")
 	}
 
-	// Parse ALL volumes in parallel using worker pool
-	type volumeResult struct {
-		index             int
-		files             []*RARFileEntry
-		isHeaderEncrypted bool
-		encryptionKey     []byte // AES-256 key for encrypted file data
-		err               error
+	indices := make([]int, len(volumes))
+	for i := range indices {
+		indices[i] = i
 	}
-
-	type volumeInput struct {
-		idx int
-		vol *types.Volume
-	}
-
-	// Create a worker pool with up to 10 concurrent workers (or number of volumes, whichever is smaller)
-	maxWorkers := min(len(volumes), p.maxConcurrent)
-
-	// Create input slice with volume index and volume
-	inputs := make([]volumeInput, len(volumes))
-	for i, vol := range volumes {
-		inputs[i] = volumeInput{idx: i, vol: vol}
-	}
-
-	// Use iter.Mapper for parallel processing
-	mapper := iter.Mapper[volumeInput, volumeResult]{
-		MaxGoroutines: maxWorkers,
-	}
-
-	// Map function to parse each volume
-	results := mapper.Map(inputs, func(input *volumeInput) volumeResult {
-		volIdx := input.idx
-		vol := input.vol
-
-		// Create stream reader for this specific volume
-		stream := newRarReader(ctx, p.source, []*types.Volume{vol})
-
-		// Skip signature (7 or 8 bytes depending on version)
-		sigSize := 8
-		if version == RARVersion4 {
-			sigSize = 7
-		}
-		sigBuf := make([]byte, sigSize)
-		if _, err := io.ReadFull(stream, sigBuf); err != nil {
-			return volumeResult{index: volIdx, files: nil, err: err}
-		}
-
-		// Parse this volume's file entries
-		var volumeFiles []*RARFileEntry
-		var isEncrypted bool
-		var err error
-
-		switch version {
-		case RARVersion5:
-			result, parseErr := p.parseRAR5Stream(stream, volIdx, vol.Name, password)
-			if parseErr != nil {
-				err = parseErr
-			} else if result != nil {
-				volumeFiles = result.Files
-				isEncrypted = result.IsHeaderEncrypted
-				// Store the encryption key from first encrypted volume
-				if len(result.EncryptionKey) > 0 {
-					return volumeResult{
-						index:             volIdx,
-						files:             volumeFiles,
-						isHeaderEncrypted: isEncrypted,
-						encryptionKey:     result.EncryptionKey,
-						err:               nil,
-					}
-				}
-			}
-		case RARVersion4:
-			volumeFiles, err = p.parseRAR4Stream(stream, volIdx, vol.Name, vol.Size)
-		case RARVersionUnknown:
-			err = fmt.Errorf("unsupported RAR version: %d", version)
-		default:
-			err = fmt.Errorf("unsupported RAR version: %d", version)
-		}
-
-		if err != nil {
-			return volumeResult{index: volIdx, files: nil, err: err}
-		}
-
-		return volumeResult{index: volIdx, files: volumeFiles, isHeaderEncrypted: isEncrypted, err: nil}
-	})
-
-	// Sort results by index to maintain order and collect files
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].index < results[j].index
+	mapper := iter.Mapper[int, rarVolumeResult]{MaxGoroutines: min(len(volumes), p.maxConcurrent)}
+	results := mapper.Map(indices, func(idx *int) rarVolumeResult {
+		return p.parseVolume(ctx, volumes[*idx], *idx, version, password)
 	})
 
 	var allRawFiles []*RARFileEntry
+	var encryptionKey []byte
 	isHeaderEncrypted := false
-	for _, result := range results {
+	for _, result := range results { // Map preserves input order
 		if result.err != nil {
 			return nil, fmt.Errorf("parse RAR volume %d (%s): %w", result.index, volumes[result.index].Name, result.err)
 		}
-		if result.isHeaderEncrypted {
-			isHeaderEncrypted = true
+		isHeaderEncrypted = isHeaderEncrypted || result.isHeaderEncrypted
+		if len(encryptionKey) == 0 {
+			encryptionKey = result.encryptionKey
 		}
 		allRawFiles = append(allRawFiles, result.files...)
 	}
-
-	// If headers are encrypted, we can't list files without password
-	if isHeaderEncrypted && len(allRawFiles) == 0 {
-		return &RARArchiveInfo{
-			Version:           version,
-			IsMultiVol:        len(volumes) > 1,
-			IsHeaderEncrypted: true,
-			Files:             nil,
-		}, nil
-	}
-
-	if len(allRawFiles) == 0 {
-		return nil, fmt.Errorf("no files found in any RAR volume")
-	}
-
-	var encryptionKey []byte
-	for _, result := range results {
-		if len(result.encryptionKey) > 0 {
-			encryptionKey = result.encryptionKey
-			break
-		}
-	}
-
-	// Aggregate file parts across volumes
-	// Files that span multiple volumes will have multiple entries with the same name
-	files := p.aggregateFileParts(allRawFiles)
 
 	archiveInfo := &RARArchiveInfo{
 		Version:           version,
 		IsMultiVol:        len(volumes) > 1,
 		IsHeaderEncrypted: isHeaderEncrypted,
-		IsDataEncrypted:   len(encryptionKey) > 0,
-		EncryptionKey:     encryptionKey,
-		Files:             files,
 	}
+	// If headers are encrypted, we can't list files without password
+	if isHeaderEncrypted && len(allRawFiles) == 0 {
+		return archiveInfo, nil
+	}
+	if len(allRawFiles) == 0 {
+		return nil, fmt.Errorf("no files found in any RAR volume")
+	}
+
+	// Files that span multiple volumes have one entry per volume; merge them.
+	archiveInfo.IsDataEncrypted = len(encryptionKey) > 0
+	archiveInfo.EncryptionKey = encryptionKey
+	archiveInfo.Files = p.aggregateFileParts(allRawFiles)
 	return archiveInfo, nil
+}
+
+// parseVolume parses one volume's headers from its own stream.
+func (p *RARParser) parseVolume(
+	ctx context.Context,
+	vol *types.Volume,
+	volIdx int,
+	version RARVersion,
+	password string,
+) rarVolumeResult {
+	stream := newRarReader(ctx, p.source, []*types.Volume{vol})
+
+	// Skip the signature (7 or 8 bytes depending on version)
+	sigSize := len(RAR5Signature)
+	if version == RARVersion4 {
+		sigSize = len(RAR4Signature)
+	}
+	if _, err := io.ReadFull(stream, make([]byte, sigSize)); err != nil {
+		return rarVolumeResult{index: volIdx, err: err}
+	}
+
+	switch version {
+	case RARVersion5:
+		result, err := p.parseRAR5Stream(stream, volIdx, vol.Name, password)
+		if err != nil {
+			return rarVolumeResult{index: volIdx, err: err}
+		}
+		return rarVolumeResult{
+			index:             volIdx,
+			files:             result.Files,
+			isHeaderEncrypted: result.IsHeaderEncrypted,
+			encryptionKey:     result.EncryptionKey,
+		}
+	case RARVersion4:
+		files, err := p.parseRAR4Stream(stream, volIdx, vol.Name, vol.Size)
+		return rarVolumeResult{index: volIdx, files: files, err: err}
+	case RARVersionUnknown:
+	}
+	return rarVolumeResult{index: volIdx, err: fmt.Errorf("unsupported RAR version: %d", version)}
 }
 
 // detectRARVersion detects RAR version from signature.
