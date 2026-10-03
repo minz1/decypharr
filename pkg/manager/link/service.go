@@ -279,7 +279,9 @@ func (s *Service) fetchLink(
 		)
 	}
 
-	placementFile, err := s.getPlacementFile(entry, filename)
+	// A refresh hands back a newer entry. It is used for this fetch only:
+	// the caller's entry is shared with concurrent readers and stays as is.
+	current, placementFile, err := s.getPlacementFile(entry, filename)
 	if err != nil {
 		return types.DownloadLink{}, err
 	}
@@ -291,18 +293,18 @@ func (s *Service) fetchLink(
 		)
 	}
 
-	client, err := s.getClient(entry.ActiveProvider)
+	client, err := s.getClient(current.ActiveProvider)
 	if err != nil {
 		return types.DownloadLink{}, NewPermanentError(
-			fmt.Errorf("debrid client not found: %s", entry.ActiveProvider),
+			fmt.Errorf("debrid client not found: %s", current.ActiveProvider),
 			"client_not_found",
 		)
 	}
 
-	placement := entry.Providers[entry.ActiveProvider]
+	placement := current.Providers[current.ActiveProvider]
 	if placement == nil {
 		return types.DownloadLink{}, NewPermanentError(
-			fmt.Errorf("no placement found for debrid %s with infohash %s", entry.ActiveProvider, entry.InfoHash),
+			fmt.Errorf("no placement found for debrid %s with infohash %s", current.ActiveProvider, current.InfoHash),
 			"placement_not_found",
 		)
 	}
@@ -356,11 +358,15 @@ func (s *Service) fetchLink(
 	return downloadLink, nil
 }
 
-// getPlacementFile retrieves the placement file with refresh fallback.
-func (s *Service) getPlacementFile(entry *storage.Entry, filename string) (*storage.ProviderFile, error) {
+// getPlacementFile retrieves the placement file with refresh fallback. It
+// returns the entry the file belongs to: entry itself, or the refreshed copy.
+func (s *Service) getPlacementFile(
+	entry *storage.Entry,
+	filename string,
+) (*storage.Entry, *storage.ProviderFile, error) {
 	_, ok := entry.Files[filename]
 	if !ok {
-		return nil, NewPermanentError(
+		return nil, nil, NewPermanentError(
 			fmt.Errorf("file %s not found in entry", filename),
 			"file_not_found",
 		)
@@ -368,14 +374,14 @@ func (s *Service) getPlacementFile(entry *storage.Entry, filename string) (*stor
 
 	placement := entry.Providers[entry.ActiveProvider]
 	if placement == nil {
-		return nil, NewPermanentError(
+		return nil, nil, NewPermanentError(
 			fmt.Errorf("no placement found for debrid %s with infohash %s", entry.ActiveProvider, entry.InfoHash),
 			"placement_not_found",
 		)
 	}
 
 	if placementFile := placement.Files[filename]; hasLocator(placementFile) {
-		return placementFile, nil
+		return entry, placementFile, nil
 	}
 	return s.refreshPlacementFile(entry, filename)
 }
@@ -384,11 +390,15 @@ func hasLocator(file *storage.ProviderFile) bool {
 	return file != nil && (file.Link != "" || file.ID != "")
 }
 
-// refreshPlacementFile re-reads the entry from its provider and adopts the
-// refreshed entry when it now carries a locator for filename.
-func (s *Service) refreshPlacementFile(entry *storage.Entry, filename string) (*storage.ProviderFile, error) {
+// refreshPlacementFile re-reads the entry from its provider and returns the
+// refreshed entry when it now carries a locator for filename. entry is never
+// written: callers share it with other readers.
+func (s *Service) refreshPlacementFile(
+	entry *storage.Entry,
+	filename string,
+) (*storage.Entry, *storage.ProviderFile, error) {
 	if s.entryRefresher == nil {
-		return nil, NewPermanentError(
+		return nil, nil, NewPermanentError(
 			fmt.Errorf("file %s not available and no refresher configured", filename),
 			"no_refresher",
 		)
@@ -396,14 +406,14 @@ func (s *Service) refreshPlacementFile(entry *storage.Entry, filename string) (*
 
 	refreshed, err := s.entryRefresher(entry.InfoHash)
 	if err != nil {
-		return nil, NewRefetchableError(
+		return nil, nil, NewRefetchableError(
 			fmt.Errorf("failed to refresh entry: %w", err),
 			"refresh_failed",
 		)
 	}
 
 	if refreshed.Files[filename] == nil {
-		return nil, NewPermanentError(
+		return nil, nil, NewPermanentError(
 			fmt.Errorf("file disappeared after refresh"),
 			"file_disappeared",
 		)
@@ -411,7 +421,7 @@ func (s *Service) refreshPlacementFile(entry *storage.Entry, filename string) (*
 
 	placement := refreshed.Providers[entry.ActiveProvider]
 	if placement == nil {
-		return nil, NewPermanentError(
+		return nil, nil, NewPermanentError(
 			fmt.Errorf("placement disappeared after refresh for debrid %s", entry.ActiveProvider),
 			"placement_disappeared",
 		)
@@ -419,14 +429,13 @@ func (s *Service) refreshPlacementFile(entry *storage.Entry, filename string) (*
 
 	placementFile := placement.Files[filename]
 	if !hasLocator(placementFile) {
-		return nil, NewPermanentError(
+		return nil, nil, NewPermanentError(
 			fmt.Errorf("file %s not available after refresh", filename),
 			"file_not_available",
 		)
 	}
 
-	*entry = *refreshed
-	return placementFile, nil
+	return refreshed, placementFile, nil
 }
 
 // validateLink validates a download link by making a HEAD request.
