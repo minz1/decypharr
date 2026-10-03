@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sirrobot01/decypharr/internal/kvstore"
+
 	"github.com/sirrobot01/appendstore"
 )
 
@@ -726,14 +728,14 @@ func validateBindingDelta(key string, delta bindingDelta) error {
 	return nil
 }
 
-func openArrStore(path string, indexedFields []string) (*appendstore.Store, error) {
+func openArrStore(path string, indexedFields []string) (*kvstore.Store, error) {
 	if path == "" {
 		return nil, errors.New("database path is required")
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return nil, fmt.Errorf("create database directory: %w", err)
 	}
-	return appendstore.Open(path, appendstore.Options{
+	return kvstore.Open(path, appendstore.Options{
 		CacheSize:           arrStoreCacheSize,
 		SyncInterval:        time.Second,
 		CompactionThreshold: arrStoreCompactionThreshold,
@@ -771,7 +773,7 @@ func arrNameHash(arrName string) string {
 	return hex.EncodeToString(hash[:])
 }
 
-func deleteStoreKey(store *appendstore.Store, key string) error {
+func deleteStoreKey(store *kvstore.Store, key string) error {
 	if err := store.Delete(key); err != nil && !errors.Is(err, appendstore.ErrKeyNotFound) {
 		return err
 	}
