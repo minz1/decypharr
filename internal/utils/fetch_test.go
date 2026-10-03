@@ -86,3 +86,27 @@ func TestDownloadFileNameIsOneElement(t *testing.T) {
 		}
 	}
 }
+
+// Indexers often answer a torrent URL with a redirect to a magnet link; that
+// link is the result, not an unsupported-scheme error.
+func TestOpenMagnetHTTPURLFollowsMagnetRedirect(t *testing.T) {
+	t.Parallel()
+	const magnet = "magnet:?xt=urn:btih:8a19577fb5f690970ca43a57ff1011ae202244b8&dn=Example"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/download" {
+			http.Redirect(w, r, "/indexer", http.StatusFound)
+			return
+		}
+		w.Header().Set("Location", magnet)
+		w.WriteHeader(http.StatusFound)
+	}))
+	t.Cleanup(server.Close)
+
+	got, err := utils.OpenMagnetHTTPURL(server.URL+"/download", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.InfoHash != "8a19577fb5f690970ca43a57ff1011ae202244b8" || got.Name != "Example" {
+		t.Fatalf("magnet = %+v, want the redirect target", got)
+	}
+}

@@ -139,6 +139,10 @@ const downloadTimeout = 5 * time.Minute
 // fetch GETs rawURL with a bounded client and returns the response only for
 // 200 OK. The caller closes the body.
 func fetch(rawURL string, options ...DownloadOptions) (*http.Response, error) {
+	return fetchWith(&http.Client{Timeout: downloadTimeout}, rawURL, options...)
+}
+
+func fetchWith(client *http.Client, rawURL string, options ...DownloadOptions) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -147,7 +151,6 @@ func fetch(rawURL string, options ...DownloadOptions) (*http.Response, error) {
 		opt(req)
 	}
 
-	client := &http.Client{Timeout: downloadTimeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
