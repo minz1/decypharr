@@ -1,12 +1,16 @@
 package rclone
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
+
+	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/request"
 )
@@ -33,7 +37,7 @@ func TestStatsPreservesCountersAndPartialResults(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	client := &Client{baseURL: server.URL, client: request.New(request.WithMaxRetries(0))}
+	client := &Client{baseURL: server.URL, client: request.New(zerolog.Nop(), nil, request.WithMaxRetries(0))}
 	stats := client.Stats(t.Context())
 	core, ok := stats["core"].(CoreStatsResponse)
 	if !ok || core.Bytes != 9007199254740993 {
@@ -65,5 +69,26 @@ func TestStatsPreservesCountersAndPartialResults(t *testing.T) {
 	}
 	if payload.Core.Bytes != core.Bytes {
 		t.Fatal("serialized counter lost precision")
+	}
+}
+
+// The RC client trusts the configured CA (tls_ca_file), so an rclone RC
+// endpoint behind a private certificate works.
+func TestClientUsesConfiguredTLS(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `{"version":"test"}`)
+	}))
+	defer server.Close()
+	roots := x509.NewCertPool()
+	roots.AddCert(server.Certificate())
+
+	client := NewClient(server.URL, "", "", &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots}, zerolog.Nop())
+	var version VersionResponse
+	if err := client.Do(t.Context(), Request{Command: "core/version"}, &version); err != nil {
+		t.Fatalf("RC call over the configured CA: %v", err)
+	}
+	if version.Version != "test" {
+		t.Fatalf("version = %+v", version)
 	}
 }

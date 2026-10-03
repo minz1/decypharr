@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/request"
 )
 
@@ -297,7 +299,7 @@ func TestDoJSONResponsePolicy(t *testing.T) {
 			if tc.noResult {
 				out = nil
 			}
-			resp, err := request.New(request.WithMaxRetries(0)).DoJSON(req, out)
+			resp, err := request.New(zerolog.Nop(), nil, request.WithMaxRetries(0)).DoJSON(req, out)
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("error=%v, wantErr=%v", err, tc.wantErr)
 			}

@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/request"
 )
 
@@ -44,7 +46,7 @@ func TestInvalidProxyFailsClosed(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	client := request.New(request.WithProxy("http://[::1"), request.WithMaxRetries(0))
+	client := request.New(zerolog.Nop(), nil, request.WithProxy("http://[::1"), request.WithMaxRetries(0))
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL, nil)
 	if err != nil {
 		t.Fatal(err)

@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/internal/request"
@@ -73,7 +75,7 @@ func TestGetTorrentSelectsRequestedMagnetFromArray(t *testing.T) {
 
 	ad := &AllDebrid{
 		Host:   server.URL,
-		client: request.New(request.WithMaxRetries(0)),
+		client: request.New(zerolog.Nop(), nil, request.WithMaxRetries(0)),
 		config: config.Debrid{Name: "alldebrid"},
 	}
 	torrent, err := ad.GetTorrent("2")
@@ -243,7 +245,7 @@ func TestCheckStatusDoesNotRestartTerminalStatus(t *testing.T) {
 func testAllDebrid(host string) *AllDebrid {
 	return &AllDebrid{
 		Host:               host,
-		client:             request.New(request.WithMaxRetries(0)),
+		client:             request.New(zerolog.Nop(), nil, request.WithMaxRetries(0)),
 		config:             config.Debrid{Name: "alldebrid"},
 		noPeerRetryBackoff: []time.Duration{0, 0, 0},
 	}

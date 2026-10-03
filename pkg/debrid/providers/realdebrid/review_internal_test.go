@@ -18,7 +18,7 @@ import (
 func testRealDebrid(host string) *RealDebrid {
 	return &RealDebrid{
 		Host:    host,
-		client:  request.New(request.WithMaxRetries(0)),
+		client:  request.New(zerolog.Nop(), nil, request.WithMaxRetries(0)),
 		config:  config.Debrid{Name: "realdebrid"},
 		logger:  zerolog.Nop(),
 		options: mkvOnly(),

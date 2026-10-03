@@ -110,7 +110,7 @@ func TestMeasureDownloadIsBoundedWhenRangeIgnored(t *testing.T) {
 	defer server.Close()
 	var logs bytes.Buffer
 	m, acc := newTestManager(&logs)
-	acc.httpClient = request.New(request.WithMaxRetries(0))
+	acc.httpClient = request.New(zerolog.Nop(), nil, request.WithMaxRetries(0))
 	acc.storeLink(types.DownloadLink{Link: "file", DownloadLink: server.URL})
 	var result types.SpeedTestResult
 	m.MeasureDownload(t.Context(), &result)

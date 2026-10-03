@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/request"
 )
@@ -40,7 +42,7 @@ func TestGetTorrentsAssignsStableUniqueHashesWithoutMagnetSources(t *testing.T) 
 
 	pm := &Premiumize{
 		Host:                server.URL,
-		client:              request.New(request.WithMaxRetries(0)),
+		client:              request.New(zerolog.Nop(), nil, request.WithMaxRetries(0)),
 		config:              config.Debrid{Name: "premiumize-primary"},
 		validateFileAllowed: func(string, int64) error { return nil },
 	}
@@ -93,7 +95,7 @@ func TestAvailabilityRejectsIncompleteResponses(t *testing.T) {
 		_, _ = fmt.Fprint(w, `{"status":"success","response":[true]}`)
 	}))
 	defer server.Close()
-	pm := &Premiumize{Host: server.URL, client: request.New(request.WithMaxRetries(0))}
+	pm := &Premiumize{Host: server.URL, client: request.New(zerolog.Nop(), nil, request.WithMaxRetries(0))}
 	result, err := pm.IsAvailable([]string{"first", "second"})
 	if err == nil || len(result) != 0 {
 		t.Fatalf("incomplete response = %v, %v", result, err)

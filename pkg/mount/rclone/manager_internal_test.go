@@ -71,7 +71,7 @@ func TestRecoverMountRemounts(t *testing.T) {
 		mount:  cfg.Mount,
 		ctx:    ctx,
 		cancel: cancel,
-		client: rclone.NewClient(srv.URL, "", "", zerolog.Nop()),
+		client: rclone.NewClient(srv.URL, "", "", nil, zerolog.Nop()),
 	}
 	m.info.Store(&MountInfo{LocalPath: "/mnt/x", Mounted: false, Error: "Health check failed"})
 

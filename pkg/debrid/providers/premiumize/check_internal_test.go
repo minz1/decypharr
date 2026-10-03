@@ -17,7 +17,7 @@ import (
 func TestCheckFileHonorsCancellation(t *testing.T) {
 	t.Parallel()
 	newProvider := func(host string) *Premiumize {
-		provider := &Premiumize{Host: host, client: request.New(request.WithMaxRetries(0))}
+		provider := &Premiumize{Host: host, client: request.New(zerolog.Nop(), nil, request.WithMaxRetries(0))}
 		provider.accountsManager = account.NewManager(
 			config.Debrid{Name: "premiumize", DownloadAPIKeys: []string{"token"}},
 			types.ProviderOptions{Logger: zerolog.Nop()},
