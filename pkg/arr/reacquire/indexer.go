@@ -37,6 +37,8 @@ type ManagedCatalog interface {
 type bindingWriter interface {
 	UpsertBinding(Binding) error
 	ReplaceArrGeneration(string, uint64, []Binding) error
+	// Generation is the newest generation stored for an Arr.
+	Generation(arrName string) uint64
 }
 
 type indexRequest struct {
@@ -431,7 +433,7 @@ func (i *Indexer) reconcile(
 		return matchStats{}, err
 	}
 
-	generation := uint64(time.Now().UnixMilli()) + i.generationSequence.Add(1)
+	generation := i.nextGeneration(instance.Name)
 	matches, stats := matchLibraryFiles(library, managed, i.managedRoot)
 	bindings := bindingsFromMatches(instance, generation, matches)
 	if entryID == "" {
@@ -450,6 +452,15 @@ func (i *Indexer) reconcile(
 		}
 	}
 	return stats, nil
+}
+
+// nextGeneration returns a generation newer than any stored for arrName.
+// Clock time keeps generations roughly ordered across restarts, but the
+// clock can step back, and a generation below the stored one would be
+// discarded as superseded on the next load.
+func (i *Indexer) nextGeneration(arrName string) uint64 {
+	clock := uint64(time.Now().UnixMilli()) + i.generationSequence.Add(1)
+	return max(clock, i.writer.Generation(arrName)+1)
 }
 
 func (i *Indexer) retry(ctx context.Context, request indexRequest, delay time.Duration) {

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 
@@ -245,15 +246,20 @@ func (c fixedManagedCatalog) ListManagedFiles(context.Context, string) ([]Manage
 type recordingBindingWriter struct {
 	replacement []Binding
 	upserts     []Binding
+	stored      uint64 // generation reported as already stored
+	generation  uint64 // generation of the last replacement
 }
+
+func (w *recordingBindingWriter) Generation(string) uint64 { return w.stored }
 
 func (w *recordingBindingWriter) UpsertBinding(binding Binding) error {
 	w.upserts = append(w.upserts, binding)
 	return nil
 }
 
-func (w *recordingBindingWriter) ReplaceArrGeneration(_ string, _ uint64, bindings []Binding) error {
+func (w *recordingBindingWriter) ReplaceArrGeneration(_ string, generation uint64, bindings []Binding) error {
 	w.replacement = bindings
+	w.generation = generation
 	return nil
 }
 
@@ -591,5 +597,30 @@ func TestRefreshCoverageSkipsOnlyOlderTargetedRequests(t *testing.T) {
 	}
 	if indexer.coveredByRefresh(indexRequest{arrName: "sonarr", entryID: "other", version: 1}) {
 		t.Fatal("Radarr refresh covered a Sonarr request")
+	}
+}
+
+// A new generation is always newer than the stored one, even when the clock
+// has stepped back: an older generation would be discarded as superseded the
+// next time bindings load.
+func TestReconcileGenerationOutrunsStoredGeneration(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `[]`)
+	}))
+	defer server.Close()
+
+	instance := arr.Arr{Name: "radarr", Host: server.URL, Token: "secret", Type: arr.Radarr}
+	arrs := arr.New(config.NewStore(&config.Config{}), nil, zerolog.Nop())
+	arrs.AddOrUpdate(instance)
+	stored := uint64(time.Now().Add(time.Hour).UnixMilli()) // written before the clock went back
+	writer := &recordingBindingWriter{stored: stored}
+	indexer := &Indexer{arrs: arrs, catalog: fixedManagedCatalog(nil), writer: writer}
+
+	if _, err := indexer.reconcile(t.Context(), instance, indexRequest{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if writer.generation <= stored {
+		t.Fatalf("generation %d is not newer than the stored %d", writer.generation, stored)
 	}
 }
