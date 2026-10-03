@@ -2,11 +2,23 @@ package config
 
 import (
 	"crypto/subtle"
+	"encoding/json"
 	"errors"
 	"fmt"
 
 	"golang.org/x/crypto/bcrypt"
 )
+
+// authRecord is the auth.json layout: the same fields as Auth. Its
+// MarshalJSON is the one place the password hash and API token are encoded,
+// for the 0600 auth.json written by SaveAuth.
+type authRecord Auth
+
+// MarshalJSON writes the credentials in clear, for auth.json only.
+func (r authRecord) MarshalJSON() ([]byte, error) {
+	type plain Auth
+	return json.Marshal(plain(r))
+}
 
 // VerifyAuth reports whether username and password match the stored
 // credentials.

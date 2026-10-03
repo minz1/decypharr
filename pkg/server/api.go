@@ -250,7 +250,6 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
 	type ConfigResponse struct {
 		*config.Config
 
-		SessionSecret string `json:"session_secret,omitempty"`
 		APIToken      string `json:"api_token,omitempty"`
 		AuthUsername  string `json:"auth_username,omitempty"`
 		AuthTokenOnly bool   `json:"auth_token_only"`
