@@ -283,3 +283,27 @@ func TestRouterQueueDelete(t *testing.T) {
 		})
 	}
 }
+
+// An NZB fetched by URL is requested with the configured nzb_user_agent;
+// indexers often refuse Go's default.
+func TestAddNZBURLSendsConfiguredUserAgent(t *testing.T) {
+	t.Parallel()
+	gotAgent := make(chan string, 1)
+	indexer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAgent <- r.UserAgent()
+		http.Error(w, "gone", http.StatusNotFound)
+	}))
+	t.Cleanup(indexer.Close)
+
+	mgr, store := managertest.New(t, func(c *config.Config) {
+		c.NZBUserAgent = "decypharr-test/1.0"
+		c.DownloadFolder = t.TempDir()
+	})
+	sab := New(mgr, store, zerolog.Nop())
+	if _, err := sab.addNZBURL(t.Context(), indexer.URL+"/get.nzb", arr.Arr{Name: "sonarr"}, ""); err == nil {
+		t.Fatal("a 404 NZB was accepted")
+	}
+	if agent := <-gotAgent; agent != "decypharr-test/1.0" {
+		t.Fatalf("User-Agent = %q, want the configured nzb_user_agent", agent)
+	}
+}

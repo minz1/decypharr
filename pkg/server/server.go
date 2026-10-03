@@ -48,17 +48,16 @@ const (
 )
 
 type Server struct {
-	config       *config.Store
-	logsDir      string
-	router       *chi.Mux
-	logger       zerolog.Logger
-	manager      *manager.Manager
-	stats        *stats.Collector
-	cookie       *sessions.CookieStore
-	templates    *template.Template
-	nzbUserAgent string
-	urlBase      string
-	restartFunc  func()
+	config      *config.Store
+	logsDir     string
+	router      *chi.Mux
+	logger      zerolog.Logger
+	manager     *manager.Manager
+	stats       *stats.Collector
+	cookie      *sessions.CookieStore
+	templates   *template.Template
+	urlBase     string
+	restartFunc func()
 }
 
 // New builds the HTTP front end for one service generation. Settings that

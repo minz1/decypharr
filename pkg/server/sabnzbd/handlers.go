@@ -570,7 +570,7 @@ func (s *SABnzbd) addNZBURL(
 		return "", fmt.Errorf("URL is required")
 	}
 	// Download NZB content
-	filename, content, err := utils.DownloadFile(url)
+	filename, content, err := utils.DownloadFile(url, utils.WithUserAgent(s.settings.Get().NZBUserAgent))
 	if err != nil {
 		s.logger.Error().Err(err).Str("url", url).Msg("Failed to download NZB from URL")
 		return "", fmt.Errorf("failed to download NZB from URL: %w", err)
