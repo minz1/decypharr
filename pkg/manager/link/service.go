@@ -491,7 +491,7 @@ func (s *Service) disableLinkAccount(link types.DownloadLink, linkErr *Error) er
 	s.logger.Warn().
 		Str("debrid", link.Debrid).
 		Str("token", utils.Mask(account.Token)).
-		Str("account", utils.Mask(account.Username)).
+		Str("account", utils.Mask(account.Username())).
 		Str("reason", linkErr.Code).
 		Msg("Disabled account due to error")
 	return nil

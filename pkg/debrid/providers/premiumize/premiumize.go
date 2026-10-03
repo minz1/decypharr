@@ -684,8 +684,7 @@ func (pm *Premiumize) syncAccount(acc *account.Account) error {
 	if err != nil {
 		return err
 	}
-	acc.Username = profile.Username
-	acc.Expiration = profile.Expiration
+	acc.SetProfile(profile.Username, profile.Expiration)
 	return nil
 }
 
