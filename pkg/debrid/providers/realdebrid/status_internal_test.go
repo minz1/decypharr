@@ -70,9 +70,9 @@ func TestCheckStatusFailureAndUncachedContracts(t *testing.T) {
 		wantErr       error
 		wantText      string
 	}{
-		{name: "selection limit", state: "waiting_files_selection", selectStatus: 509, wantErr: customerror.TooManyActiveDownloadsError},
+		{name: "selection limit", state: "waiting_files_selection", selectStatus: 509, wantErr: customerror.ErrTooManyActiveDownloads},
 		{name: "selection rejected", state: "waiting_files_selection", selectStatus: 400, wantStatus: types.TorrentStatusDownloading, wantText: "Status: 400"},
-		{name: "uncached rejected", state: "downloading", wantStatus: types.TorrentStatusDownloading, wantErr: customerror.TorrentNotCachedError},
+		{name: "uncached rejected", state: "downloading", wantStatus: types.TorrentStatusDownloading, wantErr: customerror.ErrTorrentNotCached},
 		{name: "uncached allowed", state: "queued", allowUncached: true, wantStatus: types.TorrentStatusDownloading},
 		{name: "magnet error", state: "magnet_error", wantStatus: types.TorrentStatusError, wantText: "magnet_error"},
 		{name: "virus", state: "virus", wantStatus: types.TorrentStatusError, wantText: "virus"},

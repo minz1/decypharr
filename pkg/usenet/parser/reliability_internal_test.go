@@ -36,7 +36,7 @@ func TestProbeContentAvailabilityReportsAllMissingContent(t *testing.T) {
 		calls = append(calls, messageID)
 		return missing
 	})
-	if !errors.Is(err, customerror.UsenetSegmentMissingError) {
+	if !errors.Is(err, customerror.ErrUsenetSegmentMissing) {
 		t.Fatalf("all-missing availability error = %v", err)
 	}
 	if want := []string{"a@example", "b@example"}; !slices.Equal(calls, want) {

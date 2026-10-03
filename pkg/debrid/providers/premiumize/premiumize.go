@@ -248,7 +248,7 @@ func (pm *Premiumize) UpdateAndReturnTorrent(t *types.Torrent) (*types.Torrent, 
 	}
 	if t.Status == types.TorrentStatusDownloading || t.Status == types.TorrentStatusQueued {
 		if !t.DownloadUncached {
-			return t, fmt.Errorf("torrent %s: %w", t.Name, customerror.TorrentNotCachedError)
+			return t, fmt.Errorf("torrent %s: %w", t.Name, customerror.ErrTorrentNotCached)
 		}
 		return t, nil
 	}
@@ -265,7 +265,7 @@ func (pm *Premiumize) GetTorrent(torrentID string) (*types.Torrent, error) {
 			return pm.transferToTorrent(tr, "")
 		}
 	}
-	return nil, customerror.TorrentNotFoundError
+	return nil, customerror.ErrTorrentNotFound
 }
 
 func (pm *Premiumize) UpdateTorrent(t *types.Torrent) error {
@@ -293,7 +293,7 @@ func (pm *Premiumize) UpdateTorrent(t *types.Torrent) error {
 			return nil
 		}
 	}
-	return customerror.TorrentNotFoundError
+	return customerror.ErrTorrentNotFound
 }
 
 func (pm *Premiumize) DeleteTorrent(torrentID string) error {
@@ -564,7 +564,7 @@ func (pm *Premiumize) fetchDownloadLink(
 		filename = item.Name
 	}
 	if link == "" {
-		return types.DownloadLink{}, customerror.HosterUnavailableError
+		return types.DownloadLink{}, customerror.ErrHosterUnavailable
 	}
 	now := time.Now()
 	return types.DownloadLink{
@@ -598,7 +598,7 @@ func (pm *Premiumize) CheckFile(ctx context.Context, _, fileID string) error {
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
-			return customerror.HosterUnavailableError
+			return customerror.ErrHosterUnavailable
 		}
 		if resp.StatusCode >= http.StatusBadRequest {
 			return fmt.Errorf("premiumize link check failed: Status: %d", resp.StatusCode)
@@ -606,7 +606,7 @@ func (pm *Premiumize) CheckFile(ctx context.Context, _, fileID string) error {
 		return nil
 	}
 	if fileID == "" {
-		return customerror.HosterUnavailableError
+		return customerror.ErrHosterUnavailable
 	}
 	if _, err := pm.itemDetails(ctx, fileID); err != nil {
 		return err

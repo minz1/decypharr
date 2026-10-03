@@ -58,10 +58,10 @@ func (p *nzbProber) probe(ctx context.Context, request nzbProbeRequest) fileResu
 	}
 
 	switch {
-	case errors.Is(probeErr, customerror.UsenetSegmentMissingError):
+	case errors.Is(probeErr, customerror.ErrUsenetSegmentMissing):
 		result.broken = true
 		result.reason = "usenet_segment_missing"
-	case errors.Is(probeErr, customerror.UsenetCorruptContentError):
+	case errors.Is(probeErr, customerror.ErrUsenetCorruptContent):
 		result.broken = true
 		result.reason = "usenet_corrupt_content"
 	default:

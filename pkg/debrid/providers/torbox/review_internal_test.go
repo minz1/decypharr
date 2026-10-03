@@ -81,7 +81,7 @@ func TestCheckFileRefreshesStalePresence(t *testing.T) {
 	}))
 	defer server.Close()
 	tb := testTorbox(server.URL)
-	if err := tb.CheckFile(t.Context(), "", "torbox://2/1"); !errors.Is(err, customerror.HosterUnavailableError) {
+	if err := tb.CheckFile(t.Context(), "", "torbox://2/1"); !errors.Is(err, customerror.ErrHosterUnavailable) {
 		t.Fatalf("unknown torrent: %v, want hoster unavailable", err)
 	}
 	tb.downloadPresentAt = time.Now().Add(-2 * downloadPresentTTL)

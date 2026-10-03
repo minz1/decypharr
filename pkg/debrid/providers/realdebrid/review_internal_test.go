@@ -62,7 +62,7 @@ func TestCheckStatusReturnsTorrentOnSlotLimit(t *testing.T) {
 	}))
 	defer server.Close()
 	torrent, err := testRealDebrid(server.URL).CheckStatus(&types.Torrent{Id: "t"})
-	if !errors.Is(err, customerror.TooManyActiveDownloadsError) {
+	if !errors.Is(err, customerror.ErrTooManyActiveDownloads) {
 		t.Fatalf("CheckStatus() error = %v, want too many active downloads", err)
 	}
 	if torrent == nil || torrent.Id != "t" {

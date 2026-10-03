@@ -221,7 +221,7 @@ func (s *Service) handleBadLink(
 	dl types.DownloadLink,
 	attempt int,
 ) (types.DownloadLink, error) {
-	if errors.Is(err, customerror.HosterUnavailableError) {
+	if errors.Is(err, customerror.ErrHosterUnavailable) {
 		if entry.Bad {
 			return types.DownloadLink{}, fmt.Errorf("can't repair %s since it's been marked as bad", s.folder(entry))
 		}

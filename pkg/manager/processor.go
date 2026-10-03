@@ -499,7 +499,7 @@ func (m *Manager) submitToProvider(
 
 	dbt, err := db.SubmitMagnet(debridTorrent)
 	if err != nil || dbt == nil || dbt.Id == "" {
-		if errors.Is(err, customerror.TorrentBlockedError) {
+		if errors.Is(err, customerror.ErrTorrentBlocked) {
 			m.hearsay.RecordAdd(decision, false)
 		} else {
 			m.hearsay.DiscardAdd(decision)
@@ -512,7 +512,7 @@ func (m *Manager) submitToProvider(
 	_logger.Info().Str("id", dbt.Id).Msgf("Entry: %s submitted to %s", dbt.Name, db.Config().Name)
 
 	torrent, err := db.CheckStatus(dbt)
-	reported := errors.Is(err, customerror.TorrentNotCachedError)
+	reported := errors.Is(err, customerror.ErrTorrentNotCached)
 	if reported {
 		m.hearsay.RecordAdd(decision, false)
 	}

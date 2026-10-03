@@ -88,7 +88,7 @@ func TestGetTorrentSelectsRequestedMagnetFromArray(t *testing.T) {
 func TestFindMagnetReturnsNotFound(t *testing.T) {
 	t.Parallel()
 	_, err := findMagnet(Magnets{{ID: 1}}, "2")
-	if !errors.Is(err, customerror.TorrentNotFoundError) {
+	if !errors.Is(err, customerror.ErrTorrentNotFound) {
 		t.Fatalf("findMagnet() error = %v, want TorrentNotFoundError", err)
 	}
 }

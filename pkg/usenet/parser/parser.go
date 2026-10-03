@@ -290,7 +290,7 @@ func (p *NZBParser) probeContentAvailability(
 	}
 	return fmt.Errorf(
 		"%w: no sampled content article is available: %w",
-		customerror.UsenetSegmentMissingError,
+		customerror.ErrUsenetSegmentMissing,
 		errors.Join(missing...),
 	)
 }

@@ -452,10 +452,10 @@ func (r *RealDebrid) addTorrent(t *types.Torrent) (*types.Torrent, error) {
 
 	if status != http.StatusOK && status != http.StatusCreated {
 		if status == statusTooManyActive {
-			return nil, customerror.TooManyActiveDownloadsError
+			return nil, customerror.ErrTooManyActiveDownloads
 		}
 		if status == http.StatusUnavailableForLegalReasons {
-			return nil, customerror.TorrentBlockedError
+			return nil, customerror.ErrTorrentBlocked
 		}
 		return nil, fmt.Errorf("unexpected status code: %d", status)
 	}
@@ -484,10 +484,10 @@ func (r *RealDebrid) addMagnet(t *types.Torrent) (*types.Torrent, error) {
 		return t, nil
 
 	case statusTooManyActive:
-		return nil, customerror.TooManyActiveDownloadsError
+		return nil, customerror.ErrTooManyActiveDownloads
 
 	case http.StatusUnavailableForLegalReasons:
-		return nil, customerror.TorrentBlockedError
+		return nil, customerror.ErrTorrentBlocked
 
 	default:
 		return nil, fmt.Errorf("realdebrid API error: Status: %d", status)
@@ -526,7 +526,7 @@ func (r *RealDebrid) GetTorrent(torrentID string) (*types.Torrent, error) {
 		t.Files = r.getTorrentFiles(t, data)
 		return t, nil
 	case http.StatusNotFound:
-		return nil, customerror.TorrentNotFoundError
+		return nil, customerror.ErrTorrentNotFound
 
 	default:
 		return nil, fmt.Errorf("realdebrid API error: Status: %d", status)
@@ -574,7 +574,7 @@ func (r *RealDebrid) UpdateTorrent(t *types.Torrent) error {
 		return nil
 
 	case http.StatusNotFound:
-		return customerror.TorrentNotFoundError
+		return customerror.ErrTorrentNotFound
 
 	default:
 		return fmt.Errorf("realdebrid API error: Status: %d", status)
@@ -615,7 +615,7 @@ func (r *RealDebrid) CheckStatus(t *types.Torrent) (*types.Torrent, error) {
 			return t, nil
 		case t.Status == types.TorrentStatusDownloading:
 			if !t.DownloadUncached {
-				return t, fmt.Errorf("torrent %s: %w", t.Name, customerror.TorrentNotCachedError)
+				return t, fmt.Errorf("torrent %s: %w", t.Name, customerror.ErrTorrentNotCached)
 			}
 			return t, nil
 		default:
@@ -671,7 +671,7 @@ func (r *RealDebrid) selectFiles(t *types.Torrent, data torrentInfo) error {
 	case status == http.StatusNoContent:
 		return nil
 	case status == statusTooManyActive:
-		return customerror.TooManyActiveDownloadsError
+		return customerror.ErrTooManyActiveDownloads
 	default:
 		return fmt.Errorf("realdebrid API error: Status: %d", status)
 	}
@@ -766,7 +766,7 @@ func (r *RealDebrid) CheckFile(ctx context.Context, _, link string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		return customerror.HosterUnavailableError
+		return customerror.ErrHosterUnavailable
 	}
 
 	return nil
@@ -802,9 +802,9 @@ func (r *RealDebrid) fetchDownloadLink(
 	if status != http.StatusOK {
 		switch errResp.ErrorCode {
 		case errHosterUnavailable, errUnavailableFile, errInfringingFile:
-			return emptyLink, customerror.HosterUnavailableError
+			return emptyLink, customerror.ErrHosterUnavailable
 		case errTrafficExhausted, errTooManyRequests, errFairUsageLimit:
-			return emptyLink, customerror.TrafficExceededError
+			return emptyLink, customerror.ErrTrafficExceeded
 		default:
 			return emptyLink, fmt.Errorf(
 				"realdebrid API error: Status: %d || Code: %d",

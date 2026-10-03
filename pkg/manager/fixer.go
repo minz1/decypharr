@@ -312,7 +312,7 @@ func (f *Fixer) submitReplacement(client debrid.Client, entry *storage.Entry) (*
 
 	newDebridTorrent.DownloadUncached = false
 	newDebridTorrent, err = client.CheckStatus(newDebridTorrent)
-	if errors.Is(err, customerror.TorrentNotCachedError) {
+	if errors.Is(err, customerror.ErrTorrentNotCached) {
 		f.manager.hearsay.ReportAdd(client.Config().Provider, entry.InfoHash, false)
 	}
 	if err != nil {
