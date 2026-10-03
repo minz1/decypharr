@@ -25,6 +25,7 @@ func NewManager(manager *manager.Manager, cfg *config.Config, _logger zerolog.Lo
 		cfg.Mount.ExternalRclone.RCUrl,
 		cfg.Mount.ExternalRclone.RCUsername,
 		cfg.Mount.ExternalRclone.RCPassword,
+		manager.TLSConfig(),
 		_logger,
 	)
 	m := &Manager{

@@ -22,7 +22,7 @@ import (
 func TestCheckFileHonorsCancellation(t *testing.T) {
 	t.Parallel()
 	newProvider := func(host string) *RealDebrid {
-		provider := &RealDebrid{Host: host, repairClient: request.New(request.WithMaxRetries(0))}
+		provider := &RealDebrid{Host: host, repairClient: request.New(zerolog.Nop(), nil, request.WithMaxRetries(0))}
 		provider.accountsManager = account.NewManager(
 			config.Debrid{Name: "realdebrid", DownloadAPIKeys: []string{"token"}},
 			types.ProviderOptions{Logger: zerolog.Nop()},
@@ -68,7 +68,10 @@ func TestCheckFileStatus(t *testing.T) {
 				w.WriteHeader(status)
 			}))
 			t.Cleanup(server.Close)
-			provider := &RealDebrid{Host: server.URL, repairClient: request.New(request.WithMaxRetries(0))}
+			provider := &RealDebrid{
+				Host:         server.URL,
+				repairClient: request.New(zerolog.Nop(), nil, request.WithMaxRetries(0)),
+			}
 			err := provider.CheckFile(t.Context(), "hash", "https://real-debrid.com/d/file")
 			var got string
 			switch {

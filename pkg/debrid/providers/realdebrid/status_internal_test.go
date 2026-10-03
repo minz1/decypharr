@@ -25,7 +25,7 @@ func TestCheckStatusSelectsAllowedFilesAndMapsLinks(t *testing.T) {
 	defer server.Close()
 	provider := &RealDebrid{
 		Host: server.URL,
-		client: request.New(
+		client: request.New(zerolog.Nop(), nil,
 			request.WithMaxRetries(0),
 			request.WithHeaders(map[string]string{"Authorization": "Bearer test-key"}),
 		),
@@ -86,7 +86,7 @@ func TestCheckStatusFailureAndUncachedContracts(t *testing.T) {
 			defer server.Close()
 			provider := &RealDebrid{
 				Host:    server.URL,
-				client:  request.New(request.WithMaxRetries(0)),
+				client:  request.New(zerolog.Nop(), nil, request.WithMaxRetries(0)),
 				logger:  zerolog.Nop(),
 				options: mkvOnly(),
 			}

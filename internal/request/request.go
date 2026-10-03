@@ -90,29 +90,12 @@ func (c *Client) SetHeader(key, value string) {
 	c.headersMu.Unlock()
 }
 
-// WithLogger sets the client's logger.
-func WithLogger(logger zerolog.Logger) ClientOption {
-	return func(c *Client) {
-		c.logger = logger
-	}
-}
-
 // WithRetryableStatus adds status codes that should trigger a retry.
 func WithRetryableStatus(statusCodes ...int) ClientOption {
 	return func(c *Client) {
 		c.retryableStatus = make(map[int]struct{}) // reset the map
 		for _, code := range statusCodes {
 			c.retryableStatus[code] = struct{}{}
-		}
-	}
-}
-
-// WithTLSConfig sets the TLS settings for HTTPS requests (trusted roots,
-// minimum version). Certificates are always verified.
-func WithTLSConfig(tlsConfig *tls.Config) ClientOption {
-	return func(c *Client) {
-		if tlsConfig != nil {
-			c.tlsConfig = tlsConfig.Clone()
 		}
 	}
 }
@@ -228,11 +211,16 @@ func retryAfter(resp *http.Response) (time.Duration, bool) {
 	return 0, false
 }
 
-// New creates a new HTTP client with the specified options.
-func New(options ...ClientOption) *Client {
+// New creates an HTTP client. logger receives the client's own diagnostics;
+// tlsConfig is the verified TLS base for HTTPS (the configured CA file);
+// nil means the system roots. Both are required so no caller forgets them.
+func New(logger zerolog.Logger, tlsConfig *tls.Config, options ...ClientOption) *Client {
+	if tlsConfig == nil {
+		tlsConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	}
 	client := &Client{
 		maxRetries: defaultMaxRetries,
-		tlsConfig:  &tls.Config{MinVersion: tls.VersionTLS12},
+		tlsConfig:  tlsConfig.Clone(),
 		retryableStatus: map[int]struct{}{
 			http.StatusTooManyRequests:     {},
 			http.StatusInternalServerError: {},
@@ -240,7 +228,7 @@ func New(options ...ClientOption) *Client {
 			http.StatusServiceUnavailable:  {},
 			http.StatusGatewayTimeout:      {},
 		},
-		logger:  zerolog.Nop(),
+		logger:  logger,
 		timeout: defaultTimeout,
 		proxy:   "",
 		headers: make(map[string]string),

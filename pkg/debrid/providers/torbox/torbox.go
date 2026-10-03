@@ -103,17 +103,15 @@ func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter, options type
 
 	newClient := func(rateLimiter ratelimit.Limiter) *request.Client {
 		opts := []request.ClientOption{
-			request.WithTLSConfig(options.TLSConfig),
 			request.WithHeaders(headers),
 			request.WithRateLimiter(rateLimiter),
 			request.WithMaxRetries(options.Retries),
 			request.WithRetryableStatus(http.StatusTooManyRequests, http.StatusBadGateway),
-			request.WithLogger(_log),
 		}
 		if dc.Proxy != "" {
 			opts = append(opts, request.WithProxy(dc.Proxy))
 		}
-		return request.New(opts...)
+		return request.New(_log, options.TLSConfig, opts...)
 	}
 
 	autoExpiresLinksAfter, err := utils.ParseDuration(dc.AutoExpireLinksAfter)

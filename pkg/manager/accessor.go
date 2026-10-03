@@ -2,6 +2,7 @@ package manager
 
 import (
 	"context"
+	"crypto/tls"
 
 	"github.com/go-co-op/gocron/v2"
 	"github.com/puzpuzpuz/xsync/v4"
@@ -97,4 +98,10 @@ func (m *Manager) Usenet() *usenet.Usenet {
 // GetDebridSpeedTestResult returns stored speed test result for a specific debrid provider.
 func (m *Manager) GetDebridSpeedTestResult(provider string) (debridTypes.SpeedTestResult, bool) {
 	return m.debridSpeedTestResults.Load(provider)
+}
+
+// TLSConfig is the verified TLS base for outgoing clients: the system roots
+// plus the configured tls_ca_file.
+func (m *Manager) TLSConfig() *tls.Config {
+	return m.tlsConfig
 }

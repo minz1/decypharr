@@ -66,7 +66,6 @@ func New(
 	log := options.Logger
 
 	opts := []request.ClientOption{
-		request.WithTLSConfig(options.TLSConfig),
 		request.WithHeaders(headers),
 		request.WithRateLimiter(ratelimits["main"]),
 		request.WithMaxRetries(options.Retries),
@@ -76,7 +75,6 @@ func New(
 		opts = append(opts, request.WithProxy(dc.Proxy))
 	}
 	repairOpts := []request.ClientOption{
-		request.WithTLSConfig(options.TLSConfig),
 		request.WithHeaders(headers),
 		request.WithRateLimiter(ratelimits["repair"]),
 		request.WithMaxRetries(repairRetries),
@@ -97,8 +95,8 @@ func New(
 		options:               options,
 		DownloadUncached:      dc.DownloadUncached,
 		autoExpiresLinksAfter: autoExpiresLinksAfter,
-		client:                request.New(opts...),
-		repairClient:          request.New(repairOpts...),
+		client:                request.New(log, options.TLSConfig, opts...),
+		repairClient:          request.New(log, options.TLSConfig, repairOpts...),
 		logger:                log,
 		config:                dc,
 	}

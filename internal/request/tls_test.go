@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/request"
 )
@@ -33,7 +35,7 @@ func TestClientVerifiesCertificates(t *testing.T) {
 		return err
 	}
 
-	if err := get(request.New(request.WithMaxRetries(0))); err == nil {
+	if err := get(request.New(zerolog.Nop(), nil, request.WithMaxRetries(0))); err == nil {
 		t.Fatal("a self-signed certificate was accepted by default")
 	}
 
@@ -46,7 +48,7 @@ func TestClientVerifiesCertificates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = get(request.New(request.WithMaxRetries(0), request.WithTLSConfig(tlsConfig))); err != nil {
+	if err = get(request.New(zerolog.Nop(), tlsConfig, request.WithMaxRetries(0))); err != nil {
 		t.Fatalf("a certificate from tls_ca_file was refused: %v", err)
 	}
 }

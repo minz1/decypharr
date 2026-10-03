@@ -64,7 +64,6 @@ func NewManager(debridConf config.Debrid, options types.ProviderOptions, downloa
 			request.WithRateLimiter(downloadRL),
 			request.WithHeaders(headers),
 			request.WithMaxRetries(options.Retries),
-			request.WithTLSConfig(options.TLSConfig),
 			request.WithRetryableStatus(http.StatusTooManyRequests, http.StatusBadGateway, statusRetryableNonStandard),
 		}
 		if debridConf.Proxy != "" {
@@ -76,7 +75,7 @@ func NewManager(debridConf config.Debrid, options types.ProviderOptions, downloa
 			Token:      token,
 			Index:      idx,
 			links:      xsync.NewMap[string, types.DownloadLink](),
-			httpClient: request.New(opts...),
+			httpClient: request.New(logger, options.TLSConfig, opts...),
 		}
 		m.accounts.Store(token, account)
 		if firstAccount == nil {

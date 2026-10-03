@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/request"
 )
 
@@ -39,7 +41,7 @@ func checkRetryPolicy(t *testing.T, explicit bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := request.New(opts...).Do(req)
+	resp, err := request.New(zerolog.Nop(), nil, opts...).Do(req)
 	if calls.Load() != 1 {
 		t.Fatalf("calls = %d", calls.Load())
 	}

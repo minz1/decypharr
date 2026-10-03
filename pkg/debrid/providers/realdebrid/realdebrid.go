@@ -89,7 +89,6 @@ func New(
 	}
 
 	opts := []request.ClientOption{
-		request.WithTLSConfig(options.TLSConfig),
 		request.WithHeaders(headers),
 		request.WithMaxRetries(options.Retries),
 		request.WithRateLimiter(ratelimits["main"]),
@@ -98,9 +97,7 @@ func New(
 	}
 
 	repairOpts := []request.ClientOption{
-		request.WithTLSConfig(options.TLSConfig),
 		request.WithHeaders(headers),
-		request.WithLogger(_log),
 		request.WithMaxRetries(repairRetries),
 		request.WithRetryableStatus(http.StatusTooManyRequests),
 		request.WithRateLimiter(ratelimits["repair"]),
@@ -113,8 +110,8 @@ func New(
 		accountsManager:       account.NewManager(dc, options, ratelimits["download"]),
 		options:               options,
 		autoExpiresLinksAfter: autoExpiresLinksAfter,
-		client:                request.New(opts...),
-		repairClient:          request.New(repairOpts...),
+		client:                request.New(_log, options.TLSConfig, opts...),
+		repairClient:          request.New(_log, options.TLSConfig, repairOpts...),
 		logger:                _log,
 		rarSemaphore:          make(chan struct{}, maxConcurrentRarReads),
 		config:                dc,

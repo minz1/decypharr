@@ -40,16 +40,18 @@ func New(cfg *config.Store, tlsConfig *tls.Config, log zerolog.Logger) *Service 
 		config: cfg,
 		logger: log,
 		client: request.New(
+			log,
+			tlsConfig,
 			request.WithTimeout(0),
 			request.WithMaxRetries(readRetries),
-			request.WithTLSConfig(tlsConfig),
 		),
 		// Mutations are not retried: a repeated blocklist or search is a second
 		// user-visible action, not a second read.
 		mutation: request.New(
+			log,
+			tlsConfig,
 			request.WithTimeout(0),
 			request.WithMaxRetries(0),
-			request.WithTLSConfig(tlsConfig),
 		),
 	}
 	for _, configured := range cfg.Get().Arrs {

@@ -46,11 +46,11 @@ func TestSubmissionRequestsUseDedicatedClient(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	tb := testTorbox(server.URL)
-	tb.client = request.New(
+	tb.client = request.New(zerolog.Nop(), nil,
 		request.WithHeaders(map[string]string{"X-Lane": "main"}),
 		request.WithMaxRetries(0),
 	)
-	tb.submitClient = request.New(
+	tb.submitClient = request.New(zerolog.Nop(), nil,
 		request.WithHeaders(map[string]string{"X-Lane": "submit"}),
 		request.WithMaxRetries(0),
 	)
@@ -206,7 +206,7 @@ func TestDeleteTorrentUsesControlEndpoint(t *testing.T) {
 func testTorbox(host string) *Torbox {
 	return &Torbox{
 		Host:   host,
-		client: request.New(request.WithMaxRetries(0)),
+		client: request.New(zerolog.Nop(), nil, request.WithMaxRetries(0)),
 		logger: zerolog.Nop(),
 		config: config.Debrid{Name: "torbox"},
 	}

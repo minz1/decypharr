@@ -60,7 +60,6 @@ func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter, options type
 	_log := options.Logger
 
 	opts := []request.ClientOption{
-		request.WithTLSConfig(options.TLSConfig),
 		request.WithHeaders(headers),
 		request.WithRateLimiter(ratelimits["main"]),
 		request.WithMaxRetries(options.Retries),
@@ -70,7 +69,6 @@ func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter, options type
 		opts = append(opts, request.WithProxy(dc.Proxy))
 	}
 	repairOpts := []request.ClientOption{
-		request.WithTLSConfig(options.TLSConfig),
 		request.WithHeaders(headers),
 		request.WithRateLimiter(ratelimits["repair"]),
 		request.WithMaxRetries(repairRetries),
@@ -91,8 +89,8 @@ func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter, options type
 		options:               options,
 		autoExpiresLinksAfter: autoExpiresLinksAfter,
 		noPeerRetryBackoff:    defaultNoPeerRetryBackoff(),
-		client:                request.New(opts...),
-		repairClient:          request.New(repairOpts...),
+		client:                request.New(_log, options.TLSConfig, opts...),
+		repairClient:          request.New(_log, options.TLSConfig, repairOpts...),
 		logger:                _log,
 		config:                dc,
 	}

@@ -3,6 +3,7 @@ package rclone
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -36,7 +37,7 @@ type Request struct {
 	Args    map[string]any `json:"args,omitempty"`
 }
 
-func NewClient(url, username, password string, logger zerolog.Logger) *Client {
+func NewClient(url, username, password string, tlsConfig *tls.Config, logger zerolog.Logger) *Client {
 	headers := map[string]string{}
 
 	// Add basic auth header if credentials provided
@@ -52,7 +53,7 @@ func NewClient(url, username, password string, logger zerolog.Logger) *Client {
 	}
 
 	return &Client{
-		client:   request.New(opts...),
+		client:   request.New(logger, tlsConfig, opts...),
 		baseURL:  url,
 		username: username,
 		password: password,

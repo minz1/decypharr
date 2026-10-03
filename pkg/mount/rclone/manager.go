@@ -124,7 +124,7 @@ func NewManager(mgr *manager.Manager, mainCfg *config.Config, _logger zerolog.Lo
 
 	ctx, cancel := context.WithCancel(context.Background())
 	rcServer := "http://" + net.JoinHostPort("localhost", cfg.Rclone.Port)
-	rcloneClient := rclone.NewClient(rcServer, "", "", _logger)
+	rcloneClient := rclone.NewClient(rcServer, "", "", mgr.TLSConfig(), _logger)
 
 	m := &Manager{
 		configDir:    configDir,

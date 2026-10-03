@@ -75,9 +75,7 @@ func New(
 	}
 
 	opts := []request.ClientOption{
-		request.WithTLSConfig(options.TLSConfig),
 		request.WithHeaders(headers),
-		request.WithLogger(_log),
 		request.WithMaxRetries(options.Retries),
 		request.WithRateLimiter(ratelimits["main"]),
 		request.WithRetryableStatus(
@@ -94,7 +92,7 @@ func New(
 	return &Premiumize{
 		Host:                  defaultHost,
 		APIKey:                dc.APIKey,
-		client:                request.New(opts...),
+		client:                request.New(_log, options.TLSConfig, opts...),
 		accountsManager:       account.NewManager(dc, options, ratelimits["download"]),
 		autoExpiresLinksAfter: autoExpiresLinksAfter,
 		logger:                _log,
