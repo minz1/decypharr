@@ -28,13 +28,13 @@ func TestDoStopsOnUnrecoverable(t *testing.T) {
 	}
 }
 
-func TestDoHonorsRetryIf(t *testing.T) {
+func TestDoHonorsIf(t *testing.T) {
 	t.Parallel()
 	calls := 0
 	err := retry.Do(
 		func() error { calls++; return errBoom },
 		retry.Attempts(3),
-		retry.RetryIf(func(error) bool { return false }),
+		retry.If(func(error) bool { return false }),
 	)
 	if !errors.Is(err, errBoom) || calls != 1 {
 		t.Fatalf("err=%v calls=%d, want boom after 1", err, calls)
