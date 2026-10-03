@@ -317,12 +317,18 @@ func (m *Manager) init() {
 		m.hearsay = hs
 	}
 
+	// A nil *reacquire.Service must reach repair as a nil interface, not a
+	// non-nil Reacquirer wrapping a nil pointer.
+	var reacquirer repair.Reacquirer
+	if m.arrService != nil {
+		reacquirer = m.arrService
+	}
 	m.repair = repair.New(repair.Dependencies{
 		Scheduler:     m.scheduler,
 		Backend:       m,
 		Storage:       m.storage,
 		Arrs:          m.arr,
-		Reacquirer:    m.arrService,
+		Reacquirer:    reacquirer,
 		Usenet:        m.usenet,
 		Notifications: m.Notifications,
 		Hearsay:       m.hearsay,
