@@ -1,6 +1,7 @@
 package usenet
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -94,112 +95,171 @@ func (w *byteWriter) f64(f float64) {
 // byte reader
 // ---------------------------------------------------------------------------
 
+// byteReader decodes the v2 primitives. Errors are sticky: after the first
+// failure every read returns a zero value and err keeps that failure, so a
+// decoder can read a whole record and check err once.
 type byteReader struct {
 	buf []byte
 	pos int
+	err error
 }
 
-func (r *byteReader) uvarint() (uint64, error) {
+func (r *byteReader) fail(format string, args ...any) {
+	if r.err == nil {
+		r.err = fmt.Errorf("nzbcodec: "+format, args...)
+	}
+}
+
+func (r *byteReader) uvarint() uint64 {
+	if r.err != nil {
+		return 0
+	}
 	v, n := binary.Uvarint(r.buf[r.pos:])
 	if n <= 0 {
-		return 0, fmt.Errorf("nzbcodec: bad uvarint at %d", r.pos)
+		r.fail("bad uvarint at %d", r.pos)
+		return 0
 	}
 	r.pos += n
-	return v, nil
+	return v
 }
 
-func (r *byteReader) varint() (int64, error) {
+func (r *byteReader) varint() int64 {
+	if r.err != nil {
+		return 0
+	}
 	v, n := binary.Varint(r.buf[r.pos:])
 	if n <= 0 {
-		return 0, fmt.Errorf("nzbcodec: bad varint at %d", r.pos)
+		r.fail("bad varint at %d", r.pos)
+		return 0
 	}
 	r.pos += n
-	return v, nil
+	return v
 }
 
 // count reads an element count and rejects one larger than the bytes left,
 // since every element occupies at least one byte. It bounds allocations sized
 // from untrusted blobs.
-func (r *byteReader) count() (int, error) {
-	n, err := r.uvarint()
-	if err != nil {
-		return 0, err
+func (r *byteReader) count() int {
+	n := r.uvarint()
+	if r.err != nil {
+		return 0
 	}
 	remaining := len(r.buf) - r.pos
 	if remaining < 0 || n > math.MaxInt32 || int(n) > remaining {
-		return 0, fmt.Errorf("nzbcodec: count %d exceeds %d remaining bytes at %d", n, remaining, r.pos)
+		r.fail("count %d exceeds %d remaining bytes at %d", n, remaining, r.pos)
+		return 0
 	}
-	return int(n), nil
+	return int(n)
 }
 
-func (r *byteReader) span() ([]byte, error) {
-	n, err := r.count()
-	if err != nil {
-		return nil, err
+// segmentCount reads a per-file segment count, which sizes allocations in
+// another region and is validated against it there.
+func (r *byteReader) segmentCount() int {
+	n := r.uvarint()
+	if n > math.MaxInt32 {
+		r.fail("segment count %d out of range", n)
+		return 0
+	}
+	return int(n)
+}
+
+func (r *byteReader) span() []byte {
+	n := r.count()
+	if r.err != nil {
+		return nil
 	}
 	b := r.buf[r.pos : r.pos+n]
 	r.pos += n
-	return b, nil
+	return b
 }
 
 // strCopy returns an owned copy (use for small/long-lived header strings).
-func (r *byteReader) strCopy() (string, error) {
-	b, err := r.span()
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
+func (r *byteReader) strCopy() string {
+	return string(r.span())
 }
 
 // strAlias returns a string aliasing r.buf without copying. The caller must
 // keep r.buf alive for as long as the returned string is used.
-func (r *byteReader) strAlias() (string, error) {
-	b, err := r.span()
-	if err != nil {
-		return "", err
-	}
+func (r *byteReader) strAlias() string {
+	b := r.span()
 	if len(b) == 0 {
-		return "", nil
+		return ""
 	}
-	return unsafe.String(&b[0], len(b)), nil
+	return unsafe.String(&b[0], len(b))
 }
 
-func (r *byteReader) bytesCopy() ([]byte, error) {
-	b, err := r.span()
-	if err != nil {
-		return nil, err
-	}
+func (r *byteReader) bytesCopy() []byte {
+	b := r.span()
 	if len(b) == 0 {
-		return nil, nil
+		return nil
 	}
-	out := make([]byte, len(b))
-	copy(out, b)
-	return out, nil
+	return bytes.Clone(b)
 }
 
-// skip advances past one length-prefixed span without materializing it.
-func (r *byteReader) skip() error {
-	_, err := r.span()
-	return err
-}
-
-func (r *byteReader) boolean() (bool, error) {
+func (r *byteReader) boolean() bool {
+	if r.err != nil {
+		return false
+	}
 	if r.pos >= len(r.buf) {
-		return false, fmt.Errorf("nzbcodec: bool out of range")
+		r.fail("bool out of range")
+		return false
 	}
 	b := r.buf[r.pos]
 	r.pos++
-	return b != 0, nil
+	return b != 0
 }
 
-func (r *byteReader) f64() (float64, error) {
-	if r.pos+8 > len(r.buf) {
-		return 0, fmt.Errorf("nzbcodec: float out of range")
+func (r *byteReader) f64() float64 {
+	if r.err != nil {
+		return 0
+	}
+	if len(r.buf)-r.pos < float64Size {
+		r.fail("float out of range")
+		return 0
 	}
 	v := binary.LittleEndian.Uint64(r.buf[r.pos:])
-	r.pos += 8
-	return math.Float64frombits(v), nil
+	r.pos += float64Size
+	return math.Float64frombits(v)
 }
+
+func (r *byteReader) strings() []string {
+	n := r.count()
+	if n == 0 {
+		return nil
+	}
+	out := make([]string, n)
+	for i := range out {
+		// Group/header strings copied: few unique, long-lived.
+		out[i] = r.strCopy()
+	}
+	return out
+}
+
+func (r *byteReader) time() time.Time {
+	return time.Unix(r.varint(), 0)
+}
+
+// groupIndex reads a group-table index and checks it against the table.
+func (r *byteReader) groupIndex(groups int) int {
+	idx := r.uvarint()
+	if r.err == nil && idx >= uint64(groups) {
+		r.fail("group index %d out of range", idx)
+	}
+	if r.err != nil {
+		return 0
+	}
+	return int(idx)
+}
+
+// skipVarints advances past n varints.
+func (r *byteReader) skipVarints(n int) {
+	for range n {
+		r.varint()
+	}
+}
+
+// float64Size is the encoded width of a float64.
+const float64Size = 8
 
 // ---------------------------------------------------------------------------
 // encode
@@ -279,66 +339,44 @@ func encodeHeader(nzb *storage.NZB) []byte {
 // encodeSegments produces two buffers: segMeta (columnar numeric + group data
 // for every segment across all files, in file order) and msgIDs (the
 // concatenated, length-prefixed message ids).
-func encodeSegments(nzb *storage.NZB) (segMeta, msgIDs []byte) {
-	total := 0
-	for i := range nzb.Files {
-		total += len(nzb.Files[i].Segments)
-	}
-
-	mw := &byteWriter{buf: make([]byte, 0, total*48)}
-	sw := &byteWriter{}
-
-	// Group interning table.
-	groupIdx := make(map[string]uint64)
-	var groups []string
-	idxOf := func(g string) uint64 {
-		if id, ok := groupIdx[g]; ok {
-			return id
-		}
-		id := uint64(len(groups))
-		groupIdx[g] = id
-		groups = append(groups, g)
-		return id
-	}
-
-	// Pre-walk to build the group table and per-segment index column data.
-	idxCol := make([]uint64, 0, total)
+func encodeSegments(nzb *storage.NZB) ([]byte, []byte) {
+	var segments []*storage.NZBSegment
 	for i := range nzb.Files {
 		for j := range nzb.Files[i].Segments {
-			idxCol = append(idxCol, idxOf(nzb.Files[i].Segments[j].Group))
+			segments = append(segments, &nzb.Files[i].Segments[j])
 		}
 	}
 
-	// Group table.
+	// Group interning table and the per-segment index column.
+	groupIdx := make(map[string]uint64)
+	var groups []string
+	idxCol := make([]uint64, len(segments))
+	for i, seg := range segments {
+		id, ok := groupIdx[seg.Group]
+		if !ok {
+			id = uint64(len(groups))
+			groupIdx[seg.Group] = id
+			groups = append(groups, seg.Group)
+		}
+		idxCol[i] = id
+	}
+
+	sw := &byteWriter{}
 	sw.uvarint(uint64(len(groups)))
 	for _, g := range groups {
 		sw.str(g)
 	}
-
 	// Numeric columns (grouped by field for better compression).
-	for i := range nzb.Files {
-		for j := range nzb.Files[i].Segments {
-			sw.varint(int64(nzb.Files[i].Segments[j].Number))
-		}
+	columns := []func(*storage.NZBSegment) int64{
+		func(seg *storage.NZBSegment) int64 { return int64(seg.Number) },
+		func(seg *storage.NZBSegment) int64 { return seg.Bytes },
+		func(seg *storage.NZBSegment) int64 { return seg.StartOffset },
+		func(seg *storage.NZBSegment) int64 { return seg.EndOffset },
+		func(seg *storage.NZBSegment) int64 { return seg.SegmentDataStart },
 	}
-	for i := range nzb.Files {
-		for j := range nzb.Files[i].Segments {
-			sw.varint(nzb.Files[i].Segments[j].Bytes)
-		}
-	}
-	for i := range nzb.Files {
-		for j := range nzb.Files[i].Segments {
-			sw.varint(nzb.Files[i].Segments[j].StartOffset)
-		}
-	}
-	for i := range nzb.Files {
-		for j := range nzb.Files[i].Segments {
-			sw.varint(nzb.Files[i].Segments[j].EndOffset)
-		}
-	}
-	for i := range nzb.Files {
-		for j := range nzb.Files[i].Segments {
-			sw.varint(nzb.Files[i].Segments[j].SegmentDataStart)
+	for _, column := range columns {
+		for _, seg := range segments {
+			sw.varint(column(seg))
 		}
 	}
 	for _, idx := range idxCol {
@@ -347,14 +385,15 @@ func encodeSegments(nzb *storage.NZB) (segMeta, msgIDs []byte) {
 
 	// Message id region (its own buffer so a full decode retains only these
 	// bytes, not the numeric columns).
-	for i := range nzb.Files {
-		for j := range nzb.Files[i].Segments {
-			mw.str(nzb.Files[i].Segments[j].MessageID)
-		}
+	mw := &byteWriter{buf: make([]byte, 0, len(segments)*msgIDBytesHint)}
+	for _, seg := range segments {
+		mw.str(seg.MessageID)
 	}
-
 	return sw.buf, mw.buf
 }
+
+// msgIDBytesHint sizes the message-id buffer per segment.
+const msgIDBytesHint = 48
 
 // ---------------------------------------------------------------------------
 // decode
@@ -371,13 +410,9 @@ func splitRegions(data []byte) ([]byte, []byte, []byte, error) {
 		return nil, nil, nil, fmt.Errorf("nzbcodec: not a v2 blob")
 	}
 	r := &byteReader{buf: data, pos: 1}
-	hc, err := r.span()
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("nzbcodec: header region: %w", err)
-	}
-	sc, err := r.span()
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("nzbcodec: seg region: %w", err)
+	hc, sc := r.span(), r.span()
+	if r.err != nil {
+		return nil, nil, nil, fmt.Errorf("split regions: %w", r.err)
 	}
 	return hc, sc, data[r.pos:], nil
 }
@@ -429,131 +464,101 @@ func (c *nzbCodec) decodeNZBV2(data []byte) (*storage.NZB, error) {
 }
 
 // decodeHeader returns the NZB (segments nil) and the per-file segment counts.
+// Header strings are long-lived and few; they are copied so the (small)
+// header buffer can be freed.
 func decodeHeader(buf []byte) (*storage.NZB, []int, error) {
 	r := &byteReader{buf: buf}
 	nzb := &storage.NZB{}
+	nzb.ID = r.strCopy()
+	nzb.Name = r.strCopy()
+	nzb.Title = r.strCopy()
+	nzb.Path = r.strCopy()
+	nzb.TotalSize = r.varint()
+	nzb.DatePosted = r.time()
+	nzb.Category = r.strCopy()
+	nzb.Groups = r.strings()
+	nzb.Downloaded = r.boolean()
+	nzb.AddedOn = r.time()
+	nzb.LastActivity = r.time()
+	nzb.Status = r.strCopy()
+	nzb.Progress = r.f64()
+	nzb.Percentage = r.f64()
+	nzb.SizeDownloaded = r.varint()
+	nzb.ETA = r.varint()
+	nzb.Speed = r.varint()
+	nzb.CompletedOn = r.time()
+	nzb.IsBad = r.boolean()
+	nzb.Storage = r.strCopy()
+	nzb.FailMessage = r.strCopy()
+	nzb.Password = r.strCopy()
 
-	var err error
-	get := func(dst *string) bool {
-		var s string
-		if s, err = r.strCopy(); err != nil {
-			return false
-		}
-		*dst = s
-		return true
-	}
-
-	// Header strings are long-lived and few; copy them so the (small) header
-	// buffer can be freed.
-	if !get(&nzb.ID) || !get(&nzb.Name) || !get(&nzb.Title) || !get(&nzb.Path) {
-		return nil, nil, err
-	}
-	if nzb.TotalSize, err = r.varint(); err != nil {
-		return nil, nil, err
-	}
-	if nzb.DatePosted, err = readTime(r); err != nil {
-		return nil, nil, err
-	}
-	if !get(&nzb.Category) {
-		return nil, nil, err
-	}
-	if nzb.Groups, err = readStrings(r); err != nil {
-		return nil, nil, err
-	}
-	if nzb.Downloaded, err = r.boolean(); err != nil {
-		return nil, nil, err
-	}
-	if nzb.AddedOn, err = readTime(r); err != nil {
-		return nil, nil, err
-	}
-	if nzb.LastActivity, err = readTime(r); err != nil {
-		return nil, nil, err
-	}
-	if !get(&nzb.Status) {
-		return nil, nil, err
-	}
-	if nzb.Progress, err = r.f64(); err != nil {
-		return nil, nil, err
-	}
-	if nzb.Percentage, err = r.f64(); err != nil {
-		return nil, nil, err
-	}
-	if nzb.SizeDownloaded, err = r.varint(); err != nil {
-		return nil, nil, err
-	}
-	if nzb.ETA, err = r.varint(); err != nil {
-		return nil, nil, err
-	}
-	if nzb.Speed, err = r.varint(); err != nil {
-		return nil, nil, err
-	}
-	if nzb.CompletedOn, err = readTime(r); err != nil {
-		return nil, nil, err
-	}
-	if nzb.IsBad, err = r.boolean(); err != nil {
-		return nil, nil, err
-	}
-	if !get(&nzb.Storage) || !get(&nzb.FailMessage) || !get(&nzb.Password) {
-		return nil, nil, err
-	}
-
-	nFiles, err := r.count()
-	if err != nil {
-		return nil, nil, err
+	nFiles := r.count()
+	if r.err != nil {
+		return nil, nil, r.err
 	}
 	nzb.Files = make([]storage.NZBFile, nFiles)
 	counts := make([]int, nFiles)
-	for i := range nFiles {
-		f := &nzb.Files[i]
-		f.NzbID = nzb.ID
-		var ft string
-		if !get(&f.Name) || !get(&f.InternalPath) {
-			return nil, nil, err
-		}
-		if f.Size, err = r.varint(); err != nil {
-			return nil, nil, err
-		}
-		if f.StartOffset, err = r.varint(); err != nil {
-			return nil, nil, err
-		}
-		if f.Groups, err = readStrings(r); err != nil {
-			return nil, nil, err
-		}
-		if !get(&ft) {
-			return nil, nil, err
-		}
-		f.FileType = storage.NZBFileType(ft)
-		if !get(&f.Password) {
-			return nil, nil, err
-		}
-		if f.IsDeleted, err = r.boolean(); err != nil {
-			return nil, nil, err
-		}
-		if f.IsStored, err = r.boolean(); err != nil {
-			return nil, nil, err
-		}
-		if f.SegmentSize, err = r.varint(); err != nil {
-			return nil, nil, err
-		}
-		if f.EncryptionKey, err = r.bytesCopy(); err != nil {
-			return nil, nil, err
-		}
-		if f.EncryptionIV, err = r.bytesCopy(); err != nil {
-			return nil, nil, err
-		}
-		if f.IsEncrypted, err = r.boolean(); err != nil {
-			return nil, nil, err
-		}
-		c, uvarintErr := r.uvarint()
-		if uvarintErr != nil {
-			return nil, nil, uvarintErr
-		}
-		if c > math.MaxInt32 {
-			return nil, nil, fmt.Errorf("nzbcodec: file %d segment count %d out of range", i, c)
-		}
-		counts[i] = int(c)
+	for i := range nzb.Files {
+		counts[i] = decodeFileHeader(r, &nzb.Files[i])
+		nzb.Files[i].NzbID = nzb.ID
+	}
+	if r.err != nil {
+		return nil, nil, r.err
 	}
 	return nzb, counts, nil
+}
+
+// decodeFileHeader reads one file's metadata and returns its segment count.
+// NzbID is not stored (filled from the NZB).
+func decodeFileHeader(r *byteReader, f *storage.NZBFile) int {
+	f.Name = r.strCopy()
+	f.InternalPath = r.strCopy()
+	f.Size = r.varint()
+	f.StartOffset = r.varint()
+	f.Groups = r.strings()
+	f.FileType = storage.NZBFileType(r.strCopy())
+	f.Password = r.strCopy()
+	f.IsDeleted = r.boolean()
+	f.IsStored = r.boolean()
+	f.SegmentSize = r.varint()
+	f.EncryptionKey = r.bytesCopy()
+	f.EncryptionIV = r.bytesCopy()
+	f.IsEncrypted = r.boolean()
+	return r.segmentCount()
+}
+
+// segmentColumns assign the numeric columns, in encoded order.
+func segmentColumns() []func(*storage.NZBSegment, int64) {
+	return []func(*storage.NZBSegment, int64){
+		func(seg *storage.NZBSegment, v int64) { seg.Number = int(v) },
+		func(seg *storage.NZBSegment, v int64) { seg.Bytes = v },
+		func(seg *storage.NZBSegment, v int64) { seg.StartOffset = v },
+		func(seg *storage.NZBSegment, v int64) { seg.EndOffset = v },
+		func(seg *storage.NZBSegment, v int64) { seg.SegmentDataStart = v },
+	}
+}
+
+// decodeSegmentWindow fills segs from the columnar segMeta, where each column
+// holds one value per segment of the whole NZB and segs covers
+// [before, before+len(segs)) of them.
+func decodeSegmentWindow(r *byteReader, segs []storage.NZBSegment, before, after int) {
+	groups := r.strings()
+	for _, assign := range segmentColumns() {
+		r.skipVarints(before)
+		for i := range segs {
+			assign(&segs[i], r.varint())
+		}
+		r.skipVarints(after)
+	}
+	// Group column is last, so the trailing entries need no skip.
+	for range before {
+		r.uvarint()
+	}
+	for i := range segs {
+		if idx := r.groupIndex(len(groups)); r.err == nil {
+			segs[i].Group = groups[idx]
+		}
+	}
 }
 
 // decodeSegments fills nzb.Files[*].Segments from the columnar segMeta and the
@@ -564,64 +569,21 @@ func decodeSegments(nzb *storage.NZB, counts []int, segMeta, msgIDs []byte) erro
 	for _, c := range counts {
 		total += c
 	}
-
 	if err := checkSegmentTotal(total, segMeta); err != nil {
-		return err
-	}
-	r := &byteReader{buf: segMeta}
-
-	// Group table.
-	groups, err := readStrings(r)
-	if err != nil {
 		return err
 	}
 
 	segs := make([]storage.NZBSegment, total)
-
-	for i := range total {
-		v, varintErr := r.varint()
-		if varintErr != nil {
-			return varintErr
-		}
-		segs[i].Number = int(v)
-	}
-	for i := range total {
-		if segs[i].Bytes, err = r.varint(); err != nil {
-			return err
-		}
-	}
-	for i := range total {
-		if segs[i].StartOffset, err = r.varint(); err != nil {
-			return err
-		}
-	}
-	for i := range total {
-		if segs[i].EndOffset, err = r.varint(); err != nil {
-			return err
-		}
-	}
-	for i := range total {
-		if segs[i].SegmentDataStart, err = r.varint(); err != nil {
-			return err
-		}
-	}
-	for i := range total {
-		idx, uvarintErr := r.uvarint()
-		if uvarintErr != nil {
-			return uvarintErr
-		}
-		if idx >= uint64(len(groups)) {
-			return fmt.Errorf("nzbcodec: group index %d out of range", idx)
-		}
-		segs[i].Group = groups[idx]
-	}
+	r := &byteReader{buf: segMeta}
+	decodeSegmentWindow(r, segs, 0, 0)
 
 	// Message ids alias the msgIDs buffer (no per-id allocation).
 	mr := &byteReader{buf: msgIDs}
-	for i := range total {
-		if segs[i].MessageID, err = mr.strAlias(); err != nil {
-			return err
-		}
+	for i := range segs {
+		segs[i].MessageID = mr.strAlias()
+	}
+	if err := errors.Join(r.err, mr.err); err != nil {
+		return err
 	}
 
 	// Hand out sub-slices to each file (no copy).
@@ -632,6 +594,19 @@ func decodeSegments(nzb *storage.NZB, counts []int, segMeta, msgIDs []byte) erro
 		off += c
 	}
 	return nil
+}
+
+// fileWindow locates the live (non-deleted) file named filename and the
+// number of segments stored before it; ok is false when there is none.
+func fileWindow(nzb *storage.NZB, counts []int, filename string) (int, int, bool) {
+	before := 0
+	for i := range nzb.Files {
+		if nzb.Files[i].Name == filename && !nzb.Files[i].IsDeleted {
+			return i, before, true
+		}
+		before += counts[i]
+	}
+	return 0, 0, false
 }
 
 // decodeFileV2 decodes the header plus exactly one file's segment map. It
@@ -655,18 +630,8 @@ func (c *nzbCodec) decodeFileV2(data []byte, filename string) (*storage.NZBFile,
 	if err != nil {
 		return nil, err
 	}
-
-	// Locate the requested (non-deleted) file and its segment range.
-	target := -1
-	before := 0
-	for i := range nzb.Files {
-		if nzb.Files[i].Name == filename && !nzb.Files[i].IsDeleted {
-			target = i
-			break
-		}
-		before += counts[i]
-	}
-	if target == -1 {
+	target, before, found := fileWindow(nzb, counts, filename)
+	if !found {
 		return nil, errFileNotFound
 	}
 
@@ -678,10 +643,9 @@ func (c *nzbCodec) decodeFileV2(data []byte, filename string) (*storage.NZBFile,
 		return &file, nil
 	}
 	total := 0
-	for _, c := range counts {
-		total += c
+	for _, n := range counts {
+		total += n
 	}
-	after := total - before - count
 
 	segMeta, err := c.dec.DecodeAll(sc, nil)
 	if err != nil {
@@ -690,68 +654,11 @@ func (c *nzbCodec) decodeFileV2(data []byte, filename string) (*storage.NZBFile,
 	if totalErr := checkSegmentTotal(total, segMeta); totalErr != nil {
 		return nil, totalErr
 	}
-	r := &byteReader{buf: segMeta}
-	groups, err := readStrings(r)
-	if err != nil {
-		return nil, err
-	}
-
 	segs := make([]storage.NZBSegment, count)
-
-	// The numeric columns each hold one value per segment of the whole NZB, so
-	// reaching this file's window means reading past the files before it.
-	column := func(assign func(seg *storage.NZBSegment, v int64)) error {
-		for range before {
-			if _, varintErr := r.varint(); varintErr != nil {
-				return varintErr
-			}
-		}
-		for i := range segs {
-			v, varintErr := r.varint()
-			if varintErr != nil {
-				return varintErr
-			}
-			assign(&segs[i], v)
-		}
-		for range after {
-			if _, varintErr := r.varint(); varintErr != nil {
-				return varintErr
-			}
-		}
-		return nil
-	}
-
-	if columnErr := column(func(seg *storage.NZBSegment, v int64) { seg.Number = int(v) }); columnErr != nil {
-		return nil, columnErr
-	}
-	if columnErr := column(func(seg *storage.NZBSegment, v int64) { seg.Bytes = v }); columnErr != nil {
-		return nil, columnErr
-	}
-	if columnErr := column(func(seg *storage.NZBSegment, v int64) { seg.StartOffset = v }); columnErr != nil {
-		return nil, columnErr
-	}
-	if columnErr := column(func(seg *storage.NZBSegment, v int64) { seg.EndOffset = v }); columnErr != nil {
-		return nil, columnErr
-	}
-	if columnErr := column(func(seg *storage.NZBSegment, v int64) { seg.SegmentDataStart = v }); columnErr != nil {
-		return nil, columnErr
-	}
-
-	// Group column is last, so the trailing entries need no skip.
-	for range before {
-		if _, uvarintErr := r.uvarint(); uvarintErr != nil {
-			return nil, uvarintErr
-		}
-	}
-	for i := range segs {
-		idx, uvarintErr := r.uvarint()
-		if uvarintErr != nil {
-			return nil, uvarintErr
-		}
-		if idx >= uint64(len(groups)) {
-			return nil, fmt.Errorf("nzbcodec: group index %d out of range", idx)
-		}
-		segs[i].Group = groups[idx]
+	r := &byteReader{buf: segMeta}
+	decodeSegmentWindow(r, segs, before, total-before-count)
+	if r.err != nil {
+		return nil, r.err
 	}
 
 	msgIDs, err := c.dec.DecodeAll(mc, nil)
@@ -760,15 +667,14 @@ func (c *nzbCodec) decodeFileV2(data []byte, filename string) (*storage.NZBFile,
 	}
 	mr := &byteReader{buf: msgIDs}
 	for range before {
-		if skipErr := mr.skip(); skipErr != nil {
-			return nil, skipErr
-		}
+		mr.span()
 	}
 	for i := range segs {
 		// Owned copies: lets the decompressed buffer be collected.
-		if segs[i].MessageID, err = mr.strCopy(); err != nil {
-			return nil, err
-		}
+		segs[i].MessageID = mr.strCopy()
+	}
+	if mr.err != nil {
+		return nil, mr.err
 	}
 
 	file.Segments = segs
@@ -795,18 +701,8 @@ func (c *nzbCodec) decodeFileMessageIDsSampled(data []byte, filename string, per
 	if err != nil {
 		return nil, 0, err
 	}
-
-	// Locate the requested (non-deleted) file and its segment range.
-	target := -1
-	before := 0
-	for i := range nzb.Files {
-		if nzb.Files[i].Name == filename && !nzb.Files[i].IsDeleted {
-			target = i
-			break
-		}
-		before += counts[i]
-	}
-	if target == -1 {
+	target, before, found := fileWindow(nzb, counts, filename)
+	if !found {
 		return nil, -1, nil
 	}
 	segCount := counts[target]
@@ -829,28 +725,20 @@ func (c *nzbCodec) decodeFileMessageIDsSampled(data []byte, filename string, per
 		wantSet[idx] = struct{}{}
 	}
 	mr := &byteReader{buf: msgIDs}
-
 	// Skip earlier files' ids without allocating.
 	for range before {
-		if skipErr := mr.skip(); skipErr != nil {
-			return nil, 0, skipErr
-		}
+		mr.span()
 	}
-
 	out := make([]string, 0, len(want))
 	for j := range segCount {
+		id := mr.span()
 		if _, ok := wantSet[j]; ok {
 			// Owned copy: lets the decompressed buffer be collected.
-			s, strCopyErr := mr.strCopy()
-			if strCopyErr != nil {
-				return nil, 0, strCopyErr
-			}
-			out = append(out, s)
-			continue
+			out = append(out, string(id))
 		}
-		if skipErr := mr.skip(); skipErr != nil {
-			return nil, 0, skipErr
-		}
+	}
+	if mr.err != nil {
+		return nil, 0, mr.err
 	}
 	return out, segCount, nil
 }
@@ -890,24 +778,6 @@ func sampleIndices(total, percent int) []int {
 	return out
 }
 
-func readStrings(r *byteReader) ([]string, error) {
-	n, err := r.count()
-	if err != nil {
-		return nil, err
-	}
-	if n == 0 {
-		return nil, nil
-	}
-	out := make([]string, n)
-	for i := range out {
-		// Group/header strings copied: few unique, long-lived.
-		if out[i], err = r.strCopy(); err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
-}
-
 // checkSegmentTotal rejects header segment counts the column region cannot
 // hold (each segment stores at least six one-byte varints) before they size
 // an allocation.
@@ -916,12 +786,4 @@ func checkSegmentTotal(total int, segMeta []byte) error {
 		return fmt.Errorf("nzbcodec: %d segments cannot fit %d column bytes", total, len(segMeta))
 	}
 	return nil
-}
-
-func readTime(r *byteReader) (time.Time, error) {
-	sec, err := r.varint()
-	if err != nil {
-		return time.Time{}, err
-	}
-	return time.Unix(sec, 0), nil
 }
