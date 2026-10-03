@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 )
 
@@ -86,7 +87,7 @@ func (q *QBit) categoryContext(next http.Handler) http.Handler {
 			category = r.Form.Get("category")
 			if category == "" {
 				// GetReader from multipart form
-				_ = r.ParseMultipartForm(multipartMemory) //nolint:gosec // G120: body capped by Routes' MaxBytesReader
+				_ = utils.ParseBoundedMultipartForm(w, r, maxRequestBody, multipartMemory)
 				category = r.FormValue("category")
 			}
 		}

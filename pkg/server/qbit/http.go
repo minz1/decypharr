@@ -93,14 +93,14 @@ func (q *QBit) handleTorrentsInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 // multipartMemory is how much of a multipart form is held in memory before
-// spilling to temp files; the body itself is capped by Routes.
+// spilling to temp files; the body itself is capped at maxRequestBody.
 const multipartMemory = 32 << 20
 
-func parseAddForm(r *http.Request) error {
+func parseAddForm(w http.ResponseWriter, r *http.Request) error {
 	contentType := r.Header.Get("Content-Type")
 	switch {
 	case strings.Contains(contentType, "multipart/form-data"):
-		return r.ParseMultipartForm(multipartMemory) //nolint:gosec // G120: body capped by Routes' MaxBytesReader
+		return utils.ParseBoundedMultipartForm(w, r, maxRequestBody, multipartMemory)
 	case strings.Contains(contentType, "application/x-www-form-urlencoded"):
 		return r.ParseForm()
 	default:
@@ -110,7 +110,7 @@ func parseAddForm(r *http.Request) error {
 
 func (q *QBit) handleTorrentsAdd(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	if err := parseAddForm(r); err != nil {
+	if err := parseAddForm(w, r); err != nil {
 		q.logger.Error().Err(err).Msg("Error parsing torrent add form")
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
