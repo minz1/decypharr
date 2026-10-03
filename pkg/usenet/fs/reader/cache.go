@@ -91,11 +91,31 @@ func memoryWindowSize(cfg Config, segments []SegmentMeta) int64 {
 	if cfg.PrefetchAhead <= 0 {
 		floor = 8 << 20
 	}
-	segBytes := int64(750 * 1024) // typical usenet segment
+	return max(3*int64(cfg.PrefetchAhead)*nominalSegmentBytes(segments), floor)
+}
+
+// typicalSegmentBytes is the usual decoded Usenet segment size, used when a
+// file's segment metadata carries none.
+const typicalSegmentBytes = 750 * 1024
+
+// nominalSegmentBytes is the first segment's size, or the typical one.
+func nominalSegmentBytes(segments []SegmentMeta) int64 {
 	if len(segments) > 0 && segments[0].Bytes > 0 {
-		segBytes = segments[0].Bytes
+		return segments[0].Bytes
 	}
-	return max(3*int64(cfg.PrefetchAhead)*segBytes, floor)
+	return typicalSegmentBytes
+}
+
+// makeRewindDir creates this reader's private rewind directory: under base
+// when configured, else in the system temp dir.
+func makeRewindDir(base string) (string, error) {
+	if base == "" {
+		return os.MkdirTemp("", "usenet-cache-*")
+	}
+	if err := os.MkdirAll(base, 0o750); err != nil {
+		return "", err
+	}
+	return os.MkdirTemp(base, "cache-*")
 }
 
 // NewSegmentCache creates a bounded extent window or a sparse rewind tier.
@@ -115,22 +135,13 @@ func NewSegmentCache(
 		totalSize = offsets[len(offsets)-1]
 	}
 
-	bufCfg := buffer.Config{}
-	diskPath := ""
 	memSize := memoryWindowSize(config, segments)
-	bufCfg.MemorySize = memSize
+	bufCfg := buffer.Config{MemorySize: memSize}
 	memoryMode := config.Retention != RetentionRewind
+	diskPath := ""
 	if !memoryMode {
 		var err error
-		diskPath = config.DiskPath
-		if diskPath == "" {
-			diskPath, err = os.MkdirTemp("", "usenet-cache-*")
-		} else {
-			if err = os.MkdirAll(diskPath, 0o750); err == nil {
-				diskPath, err = os.MkdirTemp(diskPath, "cache-*")
-			}
-		}
-		if err != nil {
+		if diskPath, err = makeRewindDir(config.DiskPath); err != nil {
 			cancel()
 			return nil, fmt.Errorf("create cache dir: %w", err)
 		}
@@ -138,6 +149,13 @@ func NewSegmentCache(
 		bufCfg.TotalSize = totalSize
 		bufCfg.ImmutableDisk = true
 	}
+	abort := func() {
+		cancel()
+		if diskPath != "" {
+			_ = os.RemoveAll(diskPath)
+		}
+	}
+
 	pools := config.Pools
 	ownsPools := pools == nil
 	if ownsPools {
@@ -146,21 +164,14 @@ func NewSegmentCache(
 	pools.mu.RLock()
 	defer pools.mu.RUnlock()
 	if pools.closed {
-		cancel()
-		if diskPath != "" {
-			_ = os.RemoveAll(diskPath)
-		}
+		abort()
 		return nil, buffer.ErrClosed
 	}
 	var buf *buffer.Buffer
 	if !memoryMode {
 		var err error
-		buf, err = pools.buffers.NewBuffer(bufCfg)
-		if err != nil {
-			cancel()
-			if diskPath != "" {
-				_ = os.RemoveAll(diskPath)
-			}
+		if buf, err = pools.buffers.NewBuffer(bufCfg); err != nil {
+			abort()
 			if ownsPools {
 				_ = pools.buffers.Close()
 			}
@@ -168,10 +179,7 @@ func NewSegmentCache(
 		}
 	}
 
-	segBytesHint := int64(750 * 1024)
-	if len(segments) > 0 && segments[0].Bytes > 0 {
-		segBytesHint = segments[0].Bytes
-	}
+	segBytesHint := nominalSegmentBytes(segments)
 
 	sc := &SegmentCache{
 		pools:        pools,
@@ -449,23 +457,7 @@ func (sc *SegmentCache) trimResidentTo(target int64) int64 {
 	var wake []int
 	sc.residentMu.Lock()
 	for sc.residentN.Load() > target {
-		victimPos := -1
-		var victimDistance int64 = -1
-		floor := sc.consumedFloor.Load()
-		for pos, idx := range sc.residentAt {
-			if sc.pinCounts[idx].Load() > 0 || sc.resident[idx].Load() == nil {
-				continue
-			}
-			mid := (sc.segOffsets[idx] + sc.segOffsets[idx+1]) / 2
-			distance := mid - floor
-			if distance < 0 {
-				distance = -distance
-			}
-			if distance > victimDistance {
-				victimDistance = distance
-				victimPos = pos
-			}
-		}
+		victimPos := sc.pickVictimLocked()
 		if victimPos < 0 {
 			break
 		}
@@ -493,6 +485,30 @@ func (sc *SegmentCache) trimResidentTo(target int64) int64 {
 		sc.wakeWaiters(idx)
 	}
 	return released
+}
+
+// pickVictimLocked returns the residentAt position of the unpinned resident
+// segment farthest from the consumed floor (-1 if none), so eviction steers
+// away from active playback. Caller holds residentMu.
+func (sc *SegmentCache) pickVictimLocked() int {
+	victimPos := -1
+	var victimDistance int64 = -1
+	floor := sc.consumedFloor.Load()
+	for pos, idx := range sc.residentAt {
+		if sc.pinCounts[idx].Load() > 0 || sc.resident[idx].Load() == nil {
+			continue
+		}
+		mid := (sc.segOffsets[idx] + sc.segOffsets[idx+1]) / 2
+		distance := mid - floor
+		if distance < 0 {
+			distance = -distance
+		}
+		if distance > victimDistance {
+			victimDistance = distance
+			victimPos = pos
+		}
+	}
+	return victimPos
 }
 
 // bufferStreamWriter pipes decoded body bytes from NNTP into the buffer at
