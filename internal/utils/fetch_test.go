@@ -53,3 +53,36 @@ func TestOpenMagnetHTTPURLReportsHTTPStatus(t *testing.T) {
 		t.Fatalf("DownloadFile err = %v, want 404", err)
 	}
 }
+
+// A server suggests a file name, never a path: DownloadFile keeps only the
+// last element of whatever Content-Disposition or the URL names.
+func TestDownloadFileNameIsOneElement(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		disposition, urlPath, want string
+	}{
+		{`attachment; filename="Show.S01E01.nzb"`, "/get", "Show.S01E01.nzb"},
+		{`attachment; filename="../../etc/cron.d/job.nzb"`, "/get", "job.nzb"},
+		{`attachment; filename*=UTF-8''..%2F..%2Fescape.nzb`, "/get", "escape.nzb"},
+		{`attachment; filename="..\\..\\win.nzb"`, "/get", "win.nzb"},
+		{`attachment; filename=".."`, "/get", "downloaded_file"},
+		{"", "/nzb/..%2Fup.nzb", "up.nzb"},
+		{"", "/", "downloaded_file"},
+	}
+	for _, tt := range tests {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			if tt.disposition != "" {
+				w.Header().Set("Content-Disposition", tt.disposition)
+			}
+			_, _ = w.Write([]byte("nzb"))
+		}))
+		name, _, err := utils.DownloadFile(server.URL + tt.urlPath)
+		server.Close()
+		if err != nil {
+			t.Fatalf("%q: %v", tt.disposition, err)
+		}
+		if name != tt.want {
+			t.Errorf("Content-Disposition %q, path %q: name = %q, want %q", tt.disposition, tt.urlPath, name, tt.want)
+		}
+	}
+}
