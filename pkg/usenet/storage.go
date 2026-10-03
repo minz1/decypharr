@@ -29,6 +29,12 @@ const (
 	metaMigrationMarker = ".codec-v2.done"
 )
 
+// migrationWorkers bounds concurrent legacy re-encodes.
+const migrationWorkers = 6
+
+// metaFileMode keeps NZB metadata (passwords, keys) private to the service.
+const metaFileMode os.FileMode = 0o600
+
 const (
 	NZBStatusPending     = "pending"
 	NZBStatusParsing     = "parsing"
@@ -135,7 +141,7 @@ func (s *NZBStorage) writeNZBLocked(nzb *storage.NZB) error {
 
 	// Write atomically using temp file
 	tmpPath := path + ".tmp"
-	if writeFileErr := os.WriteFile(tmpPath, data, 0o600); writeFileErr != nil {
+	if writeFileErr := os.WriteFile(tmpPath, data, metaFileMode); writeFileErr != nil {
 		return fmt.Errorf("failed to write NZB meta file: %w", writeFileErr)
 	}
 
@@ -430,7 +436,7 @@ func (s *NZBStorage) MigrateLegacy() (int, error) {
 	s.logger.Info().Int("legacy", len(legacy)).Msg("Migration: upgrading legacy NZB meta to v2")
 
 	var migrated, failed atomic.Int64
-	pl := pool.New().WithMaxGoroutines(min(runtime.NumCPU(), 6))
+	pl := pool.New().WithMaxGoroutines(min(runtime.NumCPU(), migrationWorkers))
 
 	for _, path := range legacy {
 		pl.Go(func() {
@@ -525,7 +531,7 @@ func (s *NZBStorage) migrateFile(path string) (bool, error) {
 
 	// Unique temp name so it can't collide with AddNZB's "<path>.tmp".
 	tmpName := name + ".v2tmp"
-	if writeFileErr := root.WriteFile(tmpName, out, 0o600); writeFileErr != nil {
+	if writeFileErr := root.WriteFile(tmpName, out, metaFileMode); writeFileErr != nil {
 		return false, fmt.Errorf("write temp: %w", writeFileErr)
 	}
 
@@ -554,7 +560,7 @@ func (s *NZBStorage) migrationMarkerExists() bool {
 }
 
 func (s *NZBStorage) writeMigrationMarker() {
-	if err := os.WriteFile(s.migrationMarkerPath(), []byte("v2\n"), 0o600); err != nil {
+	if err := os.WriteFile(s.migrationMarkerPath(), []byte("v2\n"), metaFileMode); err != nil {
 		s.logger.Warn().Err(err).Msg("Migration: failed to write completion marker")
 	}
 }

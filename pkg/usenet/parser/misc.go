@@ -26,7 +26,7 @@ func getRARVolumeOrder(filename string) int {
 	// Old-style naming: .rar, .r00, .r01, ...
 	if ext == ".rar" {
 		// Check for .partXX.rar pattern (new style)
-		if matches := rarPartNumberPattern.FindStringSubmatch(base); len(matches) == 2 {
+		if matches := rarPartNumberPattern.FindStringSubmatch(base); matches != nil {
 			num, _ := strconv.Atoi(matches[1])
 			return num // .part01.rar = 1, .part02.rar = 2
 		}
@@ -50,8 +50,11 @@ func getRARVolumeOrder(filename string) int {
 	}
 
 	// Unknown pattern, put at end
-	return 999999
+	return unknownVolumeOrder
 }
+
+// unknownVolumeOrder sorts unrecognised volume names last.
+const unknownVolumeOrder = 999999
 
 // getZIPVolumeOrder puts split volumes (.z01, .z02, ..., .z100) before the
 // terminal .zip file. Numeric comparison avoids lexicographic z100/z99 bugs.

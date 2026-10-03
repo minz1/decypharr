@@ -339,7 +339,7 @@ func (sr *StreamingReader) readAtPlain(ctx context.Context, cur *Cursor, p []byt
 		cur.queuedThrough.Store(-1)
 	}
 	if prevEnd < 0 && startSeg == 0 && endSeg < sr.segCount-1 {
-		sr.fetcher.QueueProbeRange(max(sr.segCount-2, 0), sr.segCount-1)
+		sr.fetcher.QueueProbeRange(max(sr.segCount-tailProbeSegments, 0), sr.segCount-1)
 	}
 
 	waitRequired := sr.fetcher.PrepareSegments(ctx, startSeg, endSeg)
@@ -382,6 +382,10 @@ func (sr *StreamingReader) readAtPlain(ctx context.Context, cur *Cursor, p []byt
 	}
 	return n, err
 }
+
+// tailProbeSegments are fetched with the first head read: players probe the
+// end of a file (MP4 moov, MKV cues) right after its start.
+const tailProbeSegments = 2
 
 // segmentReadyAttempts bounds the fetch/wait retry in ensureSegmentReady. A
 // segment is pinned for the duration of the read, so eviction should not be

@@ -134,14 +134,20 @@ type Config struct {
 	RetryDelay time.Duration
 }
 
+// Standalone reader defaults.
+const (
+	defaultMaxConnections = 8
+	defaultPrefetchAhead  = 8
+)
+
 // DefaultConfig returns a ReaderConfig with sensible defaults.
 func DefaultConfig() Config {
 	return Config{
-		MaxConnections:    8,
-		PrefetchAhead:     8,
+		MaxConnections:    defaultMaxConnections,
+		PrefetchAhead:     defaultPrefetchAhead,
 		BodyPipelineDepth: appconfig.DefaultBodyPipelineDepth,
-		DownloadTimeout:   60 * time.Second,
-		MaxRetries:        3,
+		DownloadTimeout:   defaultDownloadTimeout,
+		MaxRetries:        defaultMaxAttempts,
 		RetryDelay:        time.Second,
 		Retention:         RetentionWindow,
 	}

@@ -401,7 +401,7 @@ func (p *NZBParser) groupFiles(ctx context.Context, files []manifest.File) map[s
 // shares one Number. This preserves upload order for obfuscated archives whose
 // subject lines carry no [X/Y] file number.
 func numberByDocumentOrder(files []manifest.File) {
-	if len(files) < 2 {
+	if len(files) <= 1 {
 		return
 	}
 	for _, f := range files[1:] {

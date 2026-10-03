@@ -87,12 +87,19 @@ const (
 
 // memoryWindowSize keeps one read-ahead window forward and two behind playback.
 func memoryWindowSize(cfg Config, segments []SegmentMeta) int64 {
-	floor := int64(32 << 20)
+	floor := int64(minMemoryWindow)
 	if cfg.PrefetchAhead <= 0 {
-		floor = 8 << 20
+		floor = minProbeMemoryWindow
 	}
 	return max(3*int64(cfg.PrefetchAhead)*nominalSegmentBytes(segments), floor)
 }
+
+// Memory window floors: with read-ahead, and for probe-style readers that
+// disable it.
+const (
+	minMemoryWindow      = 32 << 20
+	minProbeMemoryWindow = 8 << 20
+)
 
 // typicalSegmentBytes is the usual decoded Usenet segment size, used when a
 // file's segment metadata carries none.
@@ -232,7 +239,7 @@ func computeOffsets(segments []SegmentMeta) []int64 {
 			offsets[i] = cumulative
 			size := seg.Bytes
 			if size <= 0 {
-				size = 750 * 1024
+				size = typicalSegmentBytes
 			}
 			cumulative += size
 		}
@@ -498,7 +505,7 @@ func (sc *SegmentCache) pickVictimLocked() int {
 		if sc.pinCounts[idx].Load() > 0 || sc.resident[idx].Load() == nil {
 			continue
 		}
-		mid := (sc.segOffsets[idx] + sc.segOffsets[idx+1]) / 2
+		mid := (sc.segOffsets[idx] + sc.segOffsets[idx+1]) >> 1
 		distance := mid - floor
 		if distance < 0 {
 			distance = -distance
@@ -951,7 +958,7 @@ func (sc *SegmentCache) SegmentsForRange(offset, length int64) (int, int) {
 func (sc *SegmentCache) binarySearchSegment(offset int64) int {
 	lo, hi := 0, sc.segCount
 	for lo < hi {
-		mid := (lo + hi) / 2
+		mid := int(uint(lo+hi) >> 1)
 		if sc.segOffsets[mid+1] <= offset {
 			lo = mid + 1
 		} else {
