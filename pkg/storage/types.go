@@ -531,7 +531,7 @@ func (e *Entry) DownloadPath(naming config.WebDavFolderNaming) string {
 	if naming == config.WebDavUseArrSubmittedName {
 		return filepath.Join(e.SavePath, e.GetFolder(naming))
 	}
-	return filepath.Join(e.SavePath, utils.RemoveExtension(e.Name))
+	return filepath.Join(e.SavePath, utils.PathElement(utils.RemoveExtension(e.Name), hashFolder(e)))
 }
 
 // SwitcherJob tracks the progress of a migration operation.
@@ -685,26 +685,32 @@ func (ct *CachedTorrent) ToManagedTorrent() *Entry {
 	return mt
 }
 
-// GetTorrentFolder returns the folder name for a torrent by debrid ID.
+// GetTorrentFolder returns the folder name for a torrent by debrid ID. The
+// names come from providers, so the result is always one path element.
 func GetTorrentFolder(folderNaming config.WebDavFolderNaming, entry *Entry) string {
 	var folder string
 	switch folderNaming {
 	case config.WebDavUseFileName:
-		folder = path.Clean(entry.Name)
+		folder = entry.Name
 	case config.WebDavUseOriginalName:
-		folder = path.Clean(entry.OriginalFilename)
+		folder = entry.OriginalFilename
 	case config.WebDavUseFileNameNoExt:
-		folder = path.Clean(utils.RemoveExtension(entry.Name))
+		folder = utils.RemoveExtension(entry.Name)
 	case config.WebDavUseOriginalNameNoExt:
-		folder = path.Clean(utils.RemoveExtension(entry.OriginalFilename))
+		folder = utils.RemoveExtension(entry.OriginalFilename)
 	case config.WebDavUseArrSubmittedName:
-		folder = utils.SafeFolderName(entry.ArrSubmittedName(), entry.InfoHash)
+		return utils.SafeFolderName(entry.ArrSubmittedName(), hashFolder(entry))
 	case config.WebdavUseHash:
-		folder = entry.InfoHash
+		return hashFolder(entry)
 	default:
-		folder = path.Clean(entry.Name)
+		folder = entry.Name
 	}
-	return folder
+	return utils.PathElement(folder, hashFolder(entry))
+}
+
+// hashFolder names an entry's folder by its infohash.
+func hashFolder(entry *Entry) string {
+	return utils.PathElement(entry.InfoHash, "_")
 }
 
 func (e *Entry) ArrSubmittedName() string {

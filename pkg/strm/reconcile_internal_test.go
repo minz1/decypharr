@@ -258,3 +258,35 @@ func assertSidecarRejected(t *testing.T, dest string, err error) {
 		t.Fatalf("partial temporary file remains: %v", statErr)
 	}
 }
+
+// Provider-supplied entry and file names never place a .strm file outside
+// the entry's folder.
+func TestStrmSyncKeepsProviderNamesInsideExport(t *testing.T) {
+	t.Parallel()
+	m := newTestReconciler(t)
+	cfg := m.config.Get()
+	root := t.TempDir()
+	cfg.Strm.Path = filepath.Join(root, "export")
+
+	parent := addStrmTestEntry(t, m, "aabbccddeeff00112233445566778899aabbccdd", "..", "parent.mkv")
+	sibling := addStrmTestEntry(t, m, "bbbbccddeeff00112233445566778899aabbccdd", "Show", "../sibling.mkv")
+	rep := &Report{}
+	m.syncEntry(t.Context(), parent, rep)
+	m.syncEntry(t.Context(), sibling, rep)
+
+	for _, escaped := range []string{
+		filepath.Join(root, "parent.strm"),
+		filepath.Join(cfg.Strm.Path, "sibling.strm"),
+	} {
+		if _, err := os.Stat(escaped); !os.IsNotExist(err) {
+			t.Errorf("%s was written outside its entry folder (stat: %v)", escaped, err)
+		}
+	}
+	inside := filepath.Join(cfg.Strm.Path, parent.InfoHash, "parent.strm")
+	if _, err := os.Stat(inside); err != nil {
+		t.Errorf("entry named %q was not exported under its infohash: %v", "..", err)
+	}
+	if len(rep.Errors) == 0 {
+		t.Error("the unsafe file name was not reported")
+	}
+}

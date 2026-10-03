@@ -71,7 +71,9 @@ func entryDir(cfg *config.Config, entry *storage.Entry) string {
 }
 
 // desired returns the .strm files and sidecar downloads an entry should have.
-func (s *Reconciler) desired(entry *storage.Entry) ([]strmTarget, []*storage.File) {
+// Files whose provider name is not a single path element are reported and
+// skipped: their path would leave the entry's folder.
+func (s *Reconciler) desired(entry *storage.Entry, rep *Report) ([]strmTarget, []*storage.File) {
 	cfg := s.config.Get()
 	base := BaseURL(cfg)
 	dir := entryDir(cfg, entry)
@@ -82,8 +84,13 @@ func (s *Reconciler) desired(entry *storage.Entry) ([]strmTarget, []*storage.Fil
 	for _, f := range entry.GetActiveFiles() {
 		switch {
 		case utils.IsVideoFile(f.Name):
+			path, err := fsutil.JoinName(dir, FileName(f.Name, cfg.Strm.KeepMediaExtension))
+			if err != nil {
+				rep.addError(fmt.Errorf("strm for %s: %w", entry.InfoHash, err))
+				continue
+			}
 			targets = append(targets, strmTarget{
-				path:    filepath.Join(dir, FileName(f.Name, cfg.Strm.KeepMediaExtension)),
+				path:    path,
 				content: FileURL(base, cfg.Strm.Secret, entry.InfoHash, f.ID, f.Name),
 			})
 		case cfg.Strm.SidecarsEnabled() && IsSidecar(f.Name) && f.Size > 0 && f.Size <= maxSidecar:
@@ -138,7 +145,7 @@ func (s *Reconciler) syncEntry(ctx context.Context, entry *storage.Entry, rep *R
 	}
 
 	rep.Entries++
-	targets, sidecars := s.desired(entry)
+	targets, sidecars := s.desired(entry, rep)
 	for _, t := range targets {
 		current, err := readStrm(t.path)
 		if err == nil && current == t.content {
@@ -210,11 +217,15 @@ func strmOwner(path string, d fs.DirEntry, walkErr error) (string, bool) {
 }
 
 func (s *Reconciler) syncSidecar(ctx context.Context, entry *storage.Entry, file *storage.File, rep *Report) {
-	dest := filepath.Join(entryDir(s.config.Get(), entry), file.Name)
-	if fi, err := os.Stat(dest); err == nil && fi.Size() == file.Size {
+	dest, err := fsutil.JoinName(entryDir(s.config.Get(), entry), file.Name)
+	if err != nil {
+		rep.addError(fmt.Errorf("sidecar for %s: %w", entry.InfoHash, err))
 		return
 	}
-	if err := s.downloadSidecar(ctx, entry, file, dest); err != nil {
+	if fi, statErr := os.Stat(dest); statErr == nil && fi.Size() == file.Size {
+		return
+	}
+	if err = s.downloadSidecar(ctx, entry, file, dest); err != nil {
 		rep.addError(fmt.Errorf("sidecar %s: %w", file.Name, err))
 		return
 	}
@@ -342,8 +353,11 @@ func (s *Reconciler) RemoveEntryAsync(entry *storage.Entry) {
 		// Sidecars carry no signature; remove them by name while we still
 		// know the entry's file list.
 		for _, f := range entry.Files {
-			if IsSidecar(f.Name) {
-				_ = os.Remove(filepath.Join(dir, f.Name))
+			if !IsSidecar(f.Name) {
+				continue
+			}
+			if path, err := fsutil.JoinName(dir, f.Name); err == nil {
+				_ = os.Remove(path)
 			}
 		}
 		pruneEmptyDirs(dir, cfg.Strm.Path)

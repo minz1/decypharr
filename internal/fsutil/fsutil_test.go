@@ -1,6 +1,7 @@
 package fsutil_test
 
 import (
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -58,5 +59,25 @@ func TestMkdirSharedWithoutSetgid(t *testing.T) {
 	// Idempotent on an existing directory.
 	if err = fsutil.MkdirShared(dir, 0o750); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestJoinNameKeepsNamesInsideDir(t *testing.T) {
+	t.Parallel()
+	dir := filepath.Join("srv", "media")
+	for _, name := range []string{"Movie (2023).mkv", "a..b", ".hidden", "name with spaces"} {
+		got, err := fsutil.JoinName(dir, name)
+		if err != nil || got != filepath.Join(dir, name) {
+			t.Errorf("JoinName(%q) = %q, %v", name, got, err)
+		}
+	}
+	unsafe := []string{"", ".", "..", "../escape", "sub/file", "/abs", "nul\x00byte"}
+	if runtime.GOOS == "windows" {
+		unsafe = append(unsafe, `sub\file`, "CON")
+	}
+	for _, name := range unsafe {
+		if got, err := fsutil.JoinName(dir, name); !errors.Is(err, fsutil.ErrUnsafeName) {
+			t.Errorf("JoinName(%q) = %q, %v; want ErrUnsafeName", name, got, err)
+		}
 	}
 }
