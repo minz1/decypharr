@@ -71,6 +71,7 @@ const (
 	RAR4FileFlagSolid       = 0x0010
 	RAR4FileFlagEncrypted   = 0x0004 // File data is encrypted
 	RAR4FileFlagHighSize    = 0x0100 // 64-bit file size (high 4 bytes follow after low 4 bytes)
+	RAR4FileFlagUnicode     = 0x0200 // Name holds a Unicode form (see decodeRAR4Name)
 	RAR4ArchiveFlagPassword = 0x0080 // Archive headers are encrypted
 
 	RAR4CompressionMethodStore = 0x30
@@ -804,8 +805,13 @@ func (p *RARParser) parseRAR4FileHeader(
 		unpackedSize = packedSize
 	}
 
+	name := string(nameBytes)
+	if header.Flags&RAR4FileFlagUnicode != 0 {
+		name = decodeRAR4Name(nameBytes)
+	}
+
 	return &RARFileEntry{
-		Name:             strings.ToValidUTF8(string(nameBytes), ""),
+		Name:             strings.ToValidUTF8(name, ""),
 		UncompressedSize: unpackedSize,
 		PackedSize:       packedSize,
 		DataOffset:       dataOffset,
