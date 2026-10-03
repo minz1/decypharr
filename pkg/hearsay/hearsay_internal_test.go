@@ -59,13 +59,13 @@ func TestZerologHandlerDemotesRoutineSyncTraffic(t *testing.T) {
 
 func testService(t *testing.T) *Service {
 	t.Helper()
-	config.SetConfigPath(t.TempDir())
 	cfg := &config.Config{
 		Debrids: []config.Debrid{
 			{Provider: "realdebrid", Name: "rd-main"},
 			{Provider: "torbox", Name: "tb"},
 		},
 	}
+	cfg.WithDir(t.TempDir())
 	cfg.Hearsay.AdviceMode = "active"
 	cfg.Usenet.Providers = []config.UsenetProvider{{Host: "news.example", Backbone: "omicron"}}
 	s, err := New(cfg, zerolog.Nop())
@@ -80,8 +80,9 @@ func testService(t *testing.T) *Service {
 }
 
 func TestDisabledIsInert(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
+	t.Parallel()
 	cfg := &config.Config{Debrids: []config.Debrid{{Provider: "realdebrid"}}}
+	cfg.WithDir(t.TempDir())
 	cfg.Hearsay.Disabled = true
 	s, err := New(cfg, zerolog.Nop())
 	if err != nil || s == nil || s.Status().Enabled {
@@ -102,8 +103,9 @@ func TestDisabledIsInert(t *testing.T) {
 }
 
 func TestNetworkPublisherShadowDefaults(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
+	t.Parallel()
 	cfg := &config.Config{Debrids: []config.Debrid{{Provider: "realdebrid"}}}
+	cfg.WithDir(t.TempDir())
 	s, err := New(cfg, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
@@ -119,8 +121,9 @@ func TestNetworkPublisherShadowDefaults(t *testing.T) {
 }
 
 func TestExplicitNetworkOptOut(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
+	t.Parallel()
 	cfg := &config.Config{Debrids: []config.Debrid{{Provider: "realdebrid"}}}
+	cfg.WithDir(t.TempDir())
 	cfg.Hearsay.Participate = new(false)
 	s, err := New(cfg, zerolog.Nop())
 	if err != nil {
@@ -134,6 +137,7 @@ func TestExplicitNetworkOptOut(t *testing.T) {
 }
 
 func TestSeededTorrentLimit(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name  string
 		limit int
@@ -143,11 +147,12 @@ func TestSeededTorrentLimit(t *testing.T) {
 		{name: "configured", limit: 64, want: 64},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			config.SetConfigPath(t.TempDir())
+			t.Parallel()
 			cfg := &config.Config{
 				Debrids: []config.Debrid{{Provider: "realdebrid"}},
 				Hearsay: config.Hearsay{MaxSeededTorrents: test.limit, Publish: new(false)},
 			}
+			cfg.WithDir(t.TempDir())
 			s, err := New(cfg, zerolog.Nop())
 			if err != nil {
 				t.Fatal(err)
@@ -171,8 +176,7 @@ func TestSeededTorrentLimit(t *testing.T) {
 }
 
 func TestTransportStatsCache(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 	s := testService(t)
 	node, err := transport.Listen(t.TempDir(), 0, 0)
 	if err != nil {
@@ -218,6 +222,7 @@ func TestTransportStatsCache(t *testing.T) {
 }
 
 func TestInvalidConfigurationDisablesHearsay(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		mutate func(*config.Hearsay)
@@ -229,8 +234,9 @@ func TestInvalidConfigurationDisablesHearsay(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			config.SetConfigPath(t.TempDir())
+			t.Parallel()
 			cfg := &config.Config{Debrids: []config.Debrid{{Provider: "realdebrid"}}}
+			cfg.WithDir(t.TempDir())
 			test.mutate(&cfg.Hearsay)
 			if service, err := New(cfg, zerolog.Nop()); err == nil || service != nil {
 				t.Fatalf("service, error = %v, %v", service, err)
@@ -244,8 +250,7 @@ func TestInvalidConfigurationDisablesHearsay(t *testing.T) {
 // still propagating must get another stat once the window passes, or
 // the gate prevents the check that would correct it.
 func TestNZBClaimedIncompleteExpires(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 	s := testService(t)
 	const subject = "2c6b6858d61da9543d4231a71db4b1c9264b06852c6b6858d61da9543d4231a7"
 
@@ -273,8 +278,7 @@ func TestNZBClaimedIncompleteExpires(t *testing.T) {
 }
 
 func TestActiveAdviceUsesLocalTruth(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 	s := testService(t)
 	const ih = "2c6b6858d61da9543d4231a71db4b1c9264b0685"
 	decision := s.EvaluateAdd("realdebrid", ih)
@@ -302,8 +306,9 @@ func TestActiveAdviceUsesLocalTruth(t *testing.T) {
 }
 
 func TestShadowAdviceMeasuresWithoutGating(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
+	t.Parallel()
 	cfg := &config.Config{Debrids: []config.Debrid{{Provider: "realdebrid"}}}
+	cfg.WithDir(t.TempDir())
 	s, err := New(cfg, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
@@ -323,8 +328,7 @@ func TestShadowAdviceMeasuresWithoutGating(t *testing.T) {
 }
 
 func TestActiveAdviceRequiresEarnedEvidence(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 	s := testService(t)
 	const ih = "2c6b6858d61da9543d4231a71db4b1c9264b0685"
 	negativeTraining := []string{
@@ -363,8 +367,7 @@ func TestActiveAdviceRequiresEarnedEvidence(t *testing.T) {
 }
 
 func TestObserveAndReport(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 	s := testService(t)
 	const ih = "2c6b6858d61da9543d4231a71db4b1c9264b0685"
 	s.ObserveTorrent("realdebrid", ih, true)
@@ -390,9 +393,10 @@ func TestObserveAndReport(t *testing.T) {
 // discovered must stop answering queries once the operator narrows to
 // an explicit set.
 func TestFollowDropsUnlistedFeeds(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
-	config.SetConfigPath(dir)
 	cfg := &config.Config{Debrids: []config.Debrid{{Provider: "realdebrid", Name: "rd"}}}
+	cfg.WithDir(dir)
 
 	// First run: no follow list, so a discovered feed is retained.
 	open, err := New(cfg, zerolog.Nop())

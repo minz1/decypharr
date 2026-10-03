@@ -8,27 +8,17 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/arr"
-	"github.com/sirrobot01/decypharr/pkg/manager"
+	"github.com/sirrobot01/decypharr/pkg/manager/managertest"
 )
 
 func newAuthenticationTestQBit(t *testing.T) *QBit {
 	t.Helper()
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
-	config.Get().UseAuth = false
-
-	mgr := manager.New()
-	t.Cleanup(func() {
-		if err := mgr.Stop(); err != nil {
-			t.Error(err)
-		}
-	})
-	return &QBit{manager: mgr}
+	mgr, store := managertest.New(t, func(cfg *config.Config) { cfg.UseAuth = false })
+	return &QBit{manager: mgr, config: store}
 }
 
-//nolint:paralleltest // mutates the process-wide config singleton
 func TestAuthenticateDoesNotOverwriteArrWithClientCredentials(t *testing.T) {
+	t.Parallel()
 	q := newAuthenticationTestQBit(t)
 	existing := arr.Arr{Name: "whisparr", Host: "http://whisparr:6969", Token: "arr-api-key"}
 	q.manager.Arr().AddOrUpdate(existing)
@@ -58,8 +48,8 @@ func TestAuthenticateDoesNotOverwriteArrWithClientCredentials(t *testing.T) {
 	}
 }
 
-//nolint:paralleltest // mutates the process-wide config singleton
 func TestAuthenticateDiscoversValidatedArrCredentials(t *testing.T) {
+	t.Parallel()
 	q := newAuthenticationTestQBit(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v3/system/status" || r.Header.Get("X-Api-Key") != "arr-api-key" {
@@ -86,10 +76,10 @@ func TestAuthenticateDiscoversValidatedArrCredentials(t *testing.T) {
 	}
 }
 
-//nolint:paralleltest // mutates the process-wide config singleton
 func TestPreferencesRequireAuthentication(t *testing.T) {
+	t.Parallel()
 	q := newAuthenticationTestQBit(t)
-	cfg := config.Get()
+	cfg := q.config.Get()
 	cfg.UseAuth = true
 	cfg.Auth = &config.Auth{APIToken: "api-token", TokenOnly: true}
 	routes := q.Routes()

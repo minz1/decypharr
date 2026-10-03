@@ -173,7 +173,7 @@ func (s *SABnzbd) handleListQueue(w http.ResponseWriter, r *http.Request) {
 
 	// Convert NZBs to queue slots
 	for index, e := range entries {
-		nzb := convertToSABnzbdNZB(e)
+		nzb := convertToSABnzbdNZB(e, s.settings.Get().FolderNaming)
 
 		// Calculate size values as strings (SABnzbd format)
 		sizeMB := float64(e.Size) / float64(mb)
@@ -294,7 +294,7 @@ func (s *SABnzbd) handleAddURL(w http.ResponseWriter, r *http.Request) {
 
 	urls := r.FormValue("name")
 
-	cfg := config.Get()
+	cfg := s.settings.Get()
 	action := cfg.DefaultDownloadAction
 	if r.FormValue("action") != "" {
 		action = config.DownloadAction(r.FormValue("action"))
@@ -372,7 +372,7 @@ func (s *SABnzbd) handleAddFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg := config.Get()
+	cfg := s.settings.Get()
 	action := cfg.DefaultDownloadAction
 	if r.FormValue("action") != "" {
 		action = config.DownloadAction(r.FormValue("action"))
@@ -522,6 +522,7 @@ func (s *SABnzbd) getHistory(ctx context.Context, nzoIDs []string) (History, err
 		Version: Version,
 		Paused:  false,
 	}
+	naming := s.settings.Get().FolderNaming
 	for _, item := range completed {
 		slot := HistorySlot{
 			Status:      mapStorageStateToSABStatus(item.State),
@@ -531,7 +532,7 @@ func (s *SABnzbd) getHistory(ctx context.Context, nzoIDs []string) (History, err
 			Category:    item.Category,
 			FailMessage: item.LastError,
 			Bytes:       item.Size,
-			Storage:     item.DownloadPath(),
+			Storage:     item.DownloadPath(naming),
 		}
 		slots = append(slots, slot)
 	}
@@ -545,7 +546,7 @@ func (s *SABnzbd) getHistory(ctx context.Context, nzoIDs []string) (History, err
 			Category:    item.Category,
 			FailMessage: item.LastError,
 			Bytes:       item.Size,
-			Storage:     item.DownloadPath(),
+			Storage:     item.DownloadPath(naming),
 		}
 		slots = append(slots, slot)
 	}
@@ -595,7 +596,7 @@ func (s *SABnzbd) addNZBFile(
 		return "", fmt.Errorf("NZB content is empty")
 	}
 
-	cfg := config.Get()
+	cfg := s.settings.Get()
 
 	importReq := manager.NewNZBRequest(
 		filename,

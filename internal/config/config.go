@@ -266,6 +266,8 @@ func (r RepairConfig) IsZero() bool {
 }
 
 type Config struct {
+	meta meta
+
 	SessionSecret string `json:"session_secret,omitempty"`
 
 	// server
@@ -335,17 +337,17 @@ type Config struct {
 
 // JSONFile is the path of config.json.
 func (c *Config) JSONFile() string {
-	return filepath.Join(GetMainPath(), "config.json")
+	return filepath.Join(c.meta.dir, "config.json")
 }
 func (c *Config) AuthFile() string {
-	return filepath.Join(GetMainPath(), "auth.json")
+	return filepath.Join(c.meta.dir, "auth.json")
 }
 
 func (c *Config) TorrentsFile() string {
-	return filepath.Join(GetMainPath(), "torrents.json")
+	return filepath.Join(c.meta.dir, "torrents.json")
 }
 
-func (c *Config) loadConfig() error {
+func (c *Config) load(lookup LookupEnv) error {
 	// Load the config file
 	// Read the JSON config file directly
 	configFile := c.JSONFile()
@@ -372,7 +374,9 @@ func (c *Config) loadConfig() error {
 	// Apply environment variable overrides first so setDefaults() (which,
 	// e.g., decides whether to eagerly load Auth based on UseAuth) sees the
 	// final values rather than whatever was persisted to disk.
-	c.applyEnvOverrides()
+	e := env{lookup: lookup}
+	c.meta.secretKey = e.get("SECRET_KEY")
+	c.applyEnvOverrides(e)
 
 	// Set defaults for any missing values
 	c.setDefaults()
@@ -384,7 +388,7 @@ func (c *Config) loadConfig() error {
 	}
 
 	// Save new signing secrets so signatures remain valid after a restart.
-	if !hadStrmSecret || !hadSessionSecret {
+	if (!hadStrmSecret || !hadSessionSecret) && !c.meta.readOnly {
 		return c.Save()
 	}
 
@@ -450,7 +454,7 @@ func (c *Config) GetMaxFileSize() int64 {
 }
 
 func (c *Config) SecretKey() string {
-	return cmp.Or(getEnv("SECRET_KEY"), c.SessionSecret)
+	return cmp.Or(c.meta.secretKey, c.SessionSecret)
 }
 
 // GetAuth returns a copy of the authentication settings.
@@ -478,10 +482,7 @@ func (c *Config) SaveAuth(auth *Auth) error {
 	if err != nil {
 		return err
 	}
-	if chmodErr := os.Chmod(c.AuthFile(), 0600); chmodErr != nil && !errors.Is(chmodErr, os.ErrNotExist) {
-		return chmodErr
-	}
-	if writeFileErr := os.WriteFile(c.AuthFile(), data, 0600); writeFileErr != nil {
+	if writeFileErr := c.writeFile(c.AuthFile(), data); writeFileErr != nil {
 		return writeFileErr
 	}
 	c.Auth = &updated
@@ -529,7 +530,7 @@ func (c *Config) migrateQBitTorrentToManager() {
 
 	// Set default download folder if not set
 	if c.DownloadFolder == "" {
-		c.DownloadFolder = filepath.Join(GetMainPath(), "downloads")
+		c.DownloadFolder = filepath.Join(c.meta.dir, "downloads")
 	}
 
 	// Set default categories if not set
@@ -781,10 +782,7 @@ func (c *Config) Save() error {
 	if err != nil {
 		return err
 	}
-	if chmodErr := os.Chmod(c.JSONFile(), 0600); chmodErr != nil && !errors.Is(chmodErr, os.ErrNotExist) {
-		return chmodErr
-	}
-	if writeFileErr := os.WriteFile(c.JSONFile(), data, 0600); writeFileErr != nil {
+	if writeFileErr := c.writeFile(c.JSONFile(), data); writeFileErr != nil {
 		fmt.Fprintf(os.Stderr, "Failed to write config file: %v\n", writeFileErr)
 		return writeFileErr
 	}
@@ -836,7 +834,7 @@ func clearHotFields(c *Config) {
 	// reconciler pass; a config change triggers a resweep, not a restart.
 	c.Strm = Strm{}
 
-	// Queue cleanup rules are read live via config.Get() inside CleanupQueue,
+	// Queue cleanup rules are read live from the config store inside CleanupQueue,
 	// so changes apply on the next cleanup cycle without a restart.
 	c.QueueCleanup = QueueCleanup{}
 
@@ -868,8 +866,10 @@ func (c *Config) RequiresRestart(n *Config) bool {
 
 func (c *Config) createConfig() error {
 	// Create the directory if it doesn't exist
-	if err := os.MkdirAll(GetMainPath(), 0o750); err != nil {
-		return fmt.Errorf("failed to create config directory: %w", err)
+	if !c.meta.readOnly {
+		if err := os.MkdirAll(c.meta.dir, 0o750); err != nil {
+			return fmt.Errorf("failed to create config directory: %w", err)
+		}
 	}
 	c.URLBase = "/"
 	c.Port = DefaultPort

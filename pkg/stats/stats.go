@@ -12,7 +12,6 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
-	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	debrid "github.com/sirrobot01/decypharr/pkg/debrid/common"
 	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
@@ -22,6 +21,7 @@ import (
 
 // Collector owns the cached stats snapshot and the HTTP handler.
 type Collector struct {
+	config *config.Store
 	mgr    *manager.Manager
 	logger zerolog.Logger
 
@@ -44,10 +44,11 @@ const (
 )
 
 // New creates a Collector and starts the background refresh goroutine.
-func New(mgr *manager.Manager) *Collector {
+func New(mgr *manager.Manager, cfg *config.Store, log zerolog.Logger) *Collector {
 	c := &Collector{
 		mgr:          mgr,
-		logger:       logger.New("stats"),
+		config:       cfg,
+		logger:       log,
 		profileCache: make(map[string]*debridTypes.Profile),
 		profileTTL:   profileTTL,
 	}
@@ -109,7 +110,7 @@ func (c *Collector) collect() *Snapshot {
 
 	uptime := c.mgr.Uptime()
 	startTime := c.mgr.StartTime()
-	cfg := config.Get()
+	cfg := c.config.Get()
 
 	snap := &Snapshot{}
 

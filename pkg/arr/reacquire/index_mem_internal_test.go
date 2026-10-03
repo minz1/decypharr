@@ -70,27 +70,33 @@ func heapAlloc() uint64 {
 	return stats.HeapAlloc
 }
 
-// TestIndexRetainedBytesPerBinding measures what the index holds once the
-// decoded source is released, which is what a start-up scan leaves behind.
-func TestIndexRetainedBytesPerBinding(t *testing.T) {
-	if testing.Short() {
-		t.Skip("allocates a library-sized index")
-	}
+// BenchmarkIndexRetainedBytesPerBinding measures what the index holds once
+// the decoded source is released, which is what a start-up scan leaves
+// behind. HeapAlloc is process-wide, so this runs as a benchmark (alone)
+// rather than beside parallel tests. It reports retained-B/binding and fails
+// when that exceeds maxIndexBytesPerBinding.
+func BenchmarkIndexRetainedBytesPerBinding(b *testing.B) {
 	const count = 100_000
 	fingerprint := (arr.Arr{Type: arr.Sonarr, Host: "http://sonarr.example:8989"}).Fingerprint()
 
-	baseline := heapAlloc()
-	bindings := libraryBindings(count, fingerprint)
-	index := NewIndex()
-	if err := index.ReplaceArrGeneration("sonarr", 1, bindings); err != nil {
-		t.Fatal(err)
+	var perBinding uint64
+	for b.Loop() {
+		b.StopTimer()
+		baseline := heapAlloc()
+		b.StartTimer()
+		bindings := libraryBindings(count, fingerprint)
+		index := NewIndex()
+		if err := index.ReplaceArrGeneration("sonarr", 1, bindings); err != nil {
+			b.Fatal(err)
+		}
+		b.StopTimer()
+		retained := heapAlloc() - baseline
+		runtime.KeepAlive(index)
+		b.StartTimer()
+		perBinding = retained / count
 	}
-	retained := heapAlloc() - baseline
-	runtime.KeepAlive(index)
-
-	perBinding := retained / count
-	t.Logf("retained %.1fMB for %d bindings (%dB each)", float64(retained)/(1<<20), count, perBinding)
+	b.ReportMetric(float64(perBinding), "retained-B/binding")
 	if perBinding > maxIndexBytesPerBinding {
-		t.Fatalf("index retains %dB per binding, over the %dB budget", perBinding, maxIndexBytesPerBinding)
+		b.Fatalf("index retains %dB per binding, over the %dB budget", perBinding, maxIndexBytesPerBinding)
 	}
 }

@@ -79,7 +79,11 @@ type Manager struct {
 	migrationJobs   *xsync.Map[string, *storage.SwitcherJob]
 	refreshInterval time.Duration
 
+	// config is the snapshot this generation was built from; store
+	// publishes the live one, for settings that apply without a restart.
 	config *config.Config
+	store  *config.Store
+	logs   *logger.Factory
 
 	// Processing workers
 	scheduler    gocron.Scheduler
@@ -143,18 +147,20 @@ type Manager struct {
 
 var _ repair.Backend = (*Manager)(nil)
 
-// New creates a new Manager instance.
-func New() *Manager {
-	cfg := config.Get()
-	_logger := logger.New("manager")
+// New builds the manager for one service generation from the configuration
+// published by store. A restart builds a new Manager from a new Store; Stop
+// releases everything this one opened.
+func New(store *config.Store, logs *logger.Factory) (*Manager, error) {
+	cfg := store.Get()
+	_logger := logs.New("manager")
 
-	strg, err := storage.NewStorage(filepath.Join(config.GetMainPath(), "db"))
+	strg, err := storage.NewStorage(filepath.Join(cfg.Dir(), "db"), storage.Options{
+		FolderNaming: func() config.WebDavFolderNaming { return store.Get().FolderNaming },
+		Logger:       logs.New("storage"),
+	})
 	if err != nil {
-		panic(fmt.Errorf("failed to create manager storage: %w", err))
+		return nil, fmt.Errorf("failed to create manager storage: %w", err)
 	}
-
-	// Initialize debrid registry
-	ctx := context.Background()
 
 	// Optimized transport for high-performance streaming with HTTP/2 multiplexing
 	// DNS resolver with caching
@@ -199,9 +205,9 @@ func New() *Manager {
 		logger:                 _logger,
 		migrationJobs:          xsync.NewMap[string, *storage.SwitcherJob](),
 		config:                 cfg,
-		arr:                    arr.New(),
-		queue:                  newQueue(strg, cfg.RemoveStalledAfter),
-		ctx:                    ctx,
+		store:                  store,
+		logs:                   logs,
+		arr:                    arr.New(store, logs.New("arr")),
 		ready:                  make(chan struct{}),
 		streamClient:           streamClient,
 		usenetTimeout:          usenetTimeout,
@@ -212,17 +218,17 @@ func New() *Manager {
 	}
 
 	instance.init()
+	return instance, nil
+}
 
-	// Create migrator
-	return instance
+// folderNaming is the live folder naming scheme.
+func (m *Manager) folderNaming() config.WebDavFolderNaming {
+	return m.store.Get().FolderNaming
 }
 
 func (m *Manager) init() {
-	m.downloadMu.Lock()
 	m.ctx, m.cancelDownloads = context.WithCancel(context.Background())
-	m.downloadsStopped = false
-	m.downloadMu.Unlock()
-	cfg := config.Get()
+	cfg := m.config
 	scheduler, err := gocron.NewScheduler(
 		gocron.WithLocation(time.Local),
 		gocron.WithGlobalJobOptions(gocron.WithTags("decypharr-manager")),
@@ -244,21 +250,11 @@ func (m *Manager) init() {
 		cetScheduler, _ = gocron.NewScheduler(gocron.WithGlobalJobOptions(gocron.WithTags("decypharr-cet")))
 	}
 
-	m.config = cfg
-
-	// Recreate queue with new config
-	m.queue = newQueue(m.storage, cfg.RemoveStalledAfter)
-
-	// Clear debrid clients so they get recreated with new config
-	m.clients = xsync.NewMap[string, debrid.Client]()
-
-	// Reset ready channel and syncTorrents.Once for the next start
-	m.ready = make(chan struct{})
-	m.readyOnce = sync.Once{}
+	m.queue = newQueue(m.storage, cfg.RemoveStalledAfter, m.folderNaming, m.logs.New("queue"))
 
 	m.scheduler = scheduler
 	m.cetScheduler = cetScheduler
-	m.migrator = migration.New(m.storage)
+	m.migrator = migration.New(m.storage, cfg.Dir(), m.logs.New("migrator"))
 	m.downloader = NewDownloadManager(m)
 
 	// Initialize HTTP pool for streaming
@@ -291,6 +287,7 @@ func (m *Manager) init() {
 	// Initialize strm reconciler
 	m.strm = strm.NewReconciler(
 		m.ctx,
+		m.store,
 		m.storage,
 		func(ctx context.Context, entry *storage.Entry, filename string) (io.ReadCloser, error) {
 			return m.OpenStreamUntracked(ctx, entry, filename, 0)
@@ -323,6 +320,8 @@ func (m *Manager) init() {
 		Usenet:        m.usenet,
 		Notifications: m.Notifications,
 		Hearsay:       m.hearsay,
+		Config:        m.store,
+		Logger:        m.logs.New("repair"),
 	})
 
 	// Initialize the unified active-download queue after all processors exist.
@@ -332,7 +331,7 @@ func (m *Manager) init() {
 func (m *Manager) initArrServices() {
 	service, err := reacquire.NewService(reacquire.ServiceOptions{
 		Arrs:      m.arr,
-		Directory: filepath.Join(config.GetMainPath(), "db"),
+		Directory: filepath.Join(m.config.Dir(), "db"),
 		Handler:   reacquire.NewHandler(m.arr, m),
 	})
 	if err != nil {
@@ -343,13 +342,18 @@ func (m *Manager) initArrServices() {
 		return
 	}
 	m.arrService = service
-	m.arrIndexer = reacquire.NewIndexer(m.arr, managedArrCatalog{storage: m.storage, logger: m.logger}, service,
-		filepath.Join(m.config.Mount.MountPath, EntryAllFolder))
+	m.arrIndexer = reacquire.NewIndexer(
+		m.arr,
+		managedArrCatalog{storage: m.storage, logger: m.logger, naming: m.folderNaming},
+		service,
+		filepath.Join(m.config.Mount.MountPath, EntryAllFolder),
+		m.logs.New("arr-indexer"),
+	)
 	m.SetArrRecovery(service)
 }
 
 func (m *Manager) initUsenet() {
-	usenetClient, err := usenet.New()
+	usenetClient, err := usenet.New(m.store, m.logs)
 	if err != nil {
 		m.logger.Warn().Msg("Usenet client not configured")
 		m.usenet = nil
@@ -367,12 +371,13 @@ func (m *Manager) initLinkService() {
 		func(entry *storage.Entry) error { return m.AddOrUpdate(entry, nil) },
 		m.streamClient,
 		m.config.Retries,
-		logger.New("link"),
+		m.folderNaming,
+		m.logs.New("link"),
 	)
 }
 
 func (m *Manager) initJobQueue() {
-	m.jobQueue = NewJobQueue(m.ctx, m.config.MaxActiveDownloads, m.processJob)
+	m.jobQueue = NewJobQueue(m.ctx, m.config.MaxActiveDownloads, m.processJob, m.logs.New("jobqueue"))
 	// Restore persisted active/queued downloads in the background. With large
 	// queues this re-parses thousands of NZBs over the network, and running it
 	// inline blocked manager construction — and therefore the HTTP server —
@@ -628,29 +633,6 @@ func (m *Manager) closeArrServices() {
 		}
 	}
 	m.SetArrRecovery(nil)
-}
-
-// Reset resets the manager with the new configuration
-// This is called after config changes (e.g., setup wizard) to apply new settings.
-func (m *Manager) Reset() error {
-	m.logger.Info().Msg("Resetting manager with new configuration")
-
-	// Stop resources before resetting
-	if err := m.Stop(); err != nil {
-		m.logger.Warn().Err(err).Msg("Failed to stop manager during reset")
-	}
-
-	// Reopen storage database (it was closed by Stop)
-	strg, err := storage.NewStorage(filepath.Join(config.GetMainPath(), "db"))
-	if err != nil {
-		return fmt.Errorf("failed to reopen storage after reset: %w", err)
-	}
-	m.storage = strg
-
-	// Reload configuration
-	m.init()
-	m.logger.Info().Msg("Manager reset complete")
-	return nil
 }
 
 func (m *Manager) GetStats() (map[string]any, error) {

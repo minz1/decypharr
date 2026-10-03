@@ -17,7 +17,6 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
-	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/internal/request"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/debrid/account"
@@ -35,6 +34,7 @@ type DebridLink struct {
 
 	autoExpiresLinksAfter time.Duration
 	logger                zerolog.Logger
+	options               types.ProviderOptions
 	config                config.Debrid
 
 	profile types.ProfileCache
@@ -51,8 +51,11 @@ const (
 	seedboxDone = 100
 )
 
-func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter) (*DebridLink, error) {
-	cfg := config.Get()
+func New(
+	dc config.Debrid,
+	ratelimits map[string]ratelimit.Limiter,
+	options types.ProviderOptions,
+) (*DebridLink, error) {
 	headers := map[string]string{
 		"Authorization": fmt.Sprintf("Bearer %s", dc.APIKey),
 		"Content-Type":  "application/json",
@@ -60,12 +63,12 @@ func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter) (*DebridLink
 	if dc.UserAgent != "" {
 		headers["User-Agent"] = dc.UserAgent
 	}
-	log := logger.New(dc.Name)
+	log := options.Logger
 
 	opts := []request.ClientOption{
 		request.WithHeaders(headers),
 		request.WithRateLimiter(ratelimits["main"]),
-		request.WithMaxRetries(cfg.Retries),
+		request.WithMaxRetries(options.Retries),
 		request.WithRetryableStatus(http.StatusTooManyRequests, http.StatusBadGateway),
 	}
 	if dc.Proxy != "" {
@@ -88,7 +91,8 @@ func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter) (*DebridLink
 	dbl := &DebridLink{
 		Host:                  "https://debrid-link.com/api/v2",
 		APIKey:                dc.APIKey,
-		accountsManager:       account.NewManager(dc, ratelimits["download"], log),
+		accountsManager:       account.NewManager(dc, options.Retries, ratelimits["download"], log),
+		options:               options,
 		DownloadUncached:      dc.DownloadUncached,
 		autoExpiresLinksAfter: autoExpiresLinksAfter,
 		client:                request.New(opts...),
@@ -191,9 +195,8 @@ func (dl *DebridLink) GetTorrent(torrentID string) (*types.Torrent, error) {
 		Files:            make(map[string]types.File, len(t.Files)),
 		InfoHash:         t.HashString,
 	}
-	cfg := config.Get()
 	for _, f := range t.Files {
-		if validateFileAllowedErr := cfg.ValidateFileAllowed(f.Name, f.Size); validateFileAllowedErr != nil {
+		if validateFileAllowedErr := dl.options.FileAllowed(f.Name, f.Size); validateFileAllowedErr != nil {
 			continue
 		}
 		file := types.File{
@@ -251,10 +254,9 @@ func (dl *DebridLink) UpdateTorrent(t *types.Torrent) error {
 		t.InfoHash = data.HashString
 	}
 	t.Added = time.Unix(data.Created, 0)
-	cfg := config.Get()
 	now := time.Now()
 	for _, f := range data.Files {
-		if validateFileAllowedErr := cfg.ValidateFileAllowed(f.Name, f.Size); validateFileAllowedErr != nil {
+		if validateFileAllowedErr := dl.options.FileAllowed(f.Name, f.Size); validateFileAllowedErr != nil {
 			continue
 		}
 		file := types.File{
@@ -578,10 +580,9 @@ func (dl *DebridLink) getTorrents(page, perPage int) ([]*types.Torrent, int, err
 			Debrid:           dl.config.Name,
 			Added:            time.Unix(t.Created, 0),
 		}
-		cfg := config.Get()
 		now := time.Now()
 		for _, f := range t.Files {
-			if validateFileAllowedErr := cfg.ValidateFileAllowed(f.Name, f.Size); validateFileAllowedErr != nil {
+			if validateFileAllowedErr := dl.options.FileAllowed(f.Name, f.Size); validateFileAllowedErr != nil {
 				continue
 			}
 			file := types.File{

@@ -37,10 +37,11 @@ func (c completedTorrentProvider) CheckStatus(*types.Torrent) (*types.Torrent, e
 	return c.torrent, nil
 }
 
-//nolint:paralleltest // subtests reset the config singleton
 func TestShutdownResumesInterruptedSymlinks(t *testing.T) {
-	for _, multiSeason := range []bool{false, true} { //nolint:paralleltest // subtests reset the config singleton
+	t.Parallel()
+	for _, multiSeason := range []bool{false, true} {
 		t.Run(map[bool]string{false: "single release", true: "season pack"}[multiSeason], func(t *testing.T) {
+			t.Parallel()
 			synctest.Test(t, func(t *testing.T) {
 				runShutdownResume(t, multiSeason)
 			})
@@ -101,10 +102,10 @@ func runShutdownResume(t *testing.T, multiSeason bool) {
 	if err != nil || !saved.IsComplete || saved.IsDownloading {
 		t.Fatalf("resumed entry = %#v, error = %v", saved, err)
 	}
-	downloadPath := saved.DownloadPath()
+	downloadPath := saved.DownloadPath("")
 	if multiSeason {
 		downloadPath = seasonDownloadPath(m, entry, "Show.S02E01.mkv")
-		if _, lstatErr := os.Lstat(filepath.Join(completedSeason.DownloadPath(), "Show.S01E01.mkv")); !os.IsNotExist(
+		if _, lstatErr := os.Lstat(filepath.Join(completedSeason.DownloadPath(""), "Show.S01E01.mkv")); !os.IsNotExist(
 			lstatErr,
 		) {
 			t.Fatalf("completed season was processed again: %v", lstatErr)
@@ -128,22 +129,33 @@ func runShutdownResume(t *testing.T, multiSeason bool) {
 
 func newShutdownTestManager(t *testing.T, dbPath string) *Manager {
 	t.Helper()
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
-	cfg := config.Get()
-	cfg.Mount.MountPath = t.TempDir()
-	cfg.SkipPreCache = true
-	store, err := storage.NewStorage(dbPath)
+	st := testConfigStore(t, func(cfg *config.Config) {
+		cfg.Mount.MountPath = t.TempDir()
+		cfg.SkipPreCache = true
+	})
+	cfg := st.Get()
+	store, err := storage.NewStorage(dbPath, storage.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	m := &Manager{
-		storage: store, config: cfg, ctx: ctx, cancelDownloads: cancel,
-		queue: newQueue(store, ""), arr: arr.New(), logger: zerolog.Nop(),
-		clients: xsync.NewMap[string, debrid.Client](), processingEntries: xsync.NewMap[string, struct{}](),
-		Notifications: notifications.New(&cfg.Notifications, zerolog.Nop()),
+		storage:         store,
+		config:          cfg,
+		store:           st,
+		ctx:             ctx,
+		cancelDownloads: cancel,
+		queue: newQueue(
+			store,
+			"",
+			nil,
+			zerolog.Nop(),
+		),
+		arr:               arr.New(config.NewStore(&config.Config{}), zerolog.Nop()),
+		logger:            zerolog.Nop(),
+		clients:           xsync.NewMap[string, debrid.Client](),
+		processingEntries: xsync.NewMap[string, struct{}](),
+		Notifications:     notifications.New(&cfg.Notifications, zerolog.Nop()),
 	}
 	m.initEntryCache()
 	m.downloader = NewDownloadManager(m)
@@ -163,7 +175,7 @@ func seedCompletedSeason(t *testing.T, m *Manager, entry *storage.Entry) *storag
 			continue
 		}
 		completed = season
-		season.MarkAsCompleted(season.DownloadPath())
+		season.MarkAsCompleted(season.DownloadPath(""))
 		if addErr := m.queue.Add(season); addErr != nil {
 			t.Fatal(addErr)
 		}
@@ -209,11 +221,11 @@ func interruptAndStop(t *testing.T, m *Manager, entry *storage.Entry, torrent *t
 // checks the interrupted entry is resumable.
 func reopenShutdownTestManager(t *testing.T, m *Manager, dbPath string, entry *storage.Entry) {
 	t.Helper()
-	store, err := storage.NewStorage(dbPath)
+	store, err := storage.NewStorage(dbPath, storage.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.storage, m.queue = store, newQueue(store, "")
+	m.storage, m.queue = store, newQueue(store, "", nil, zerolog.Nop())
 	m.ctx, m.cancelDownloads = context.WithCancel(t.Context())
 	m.downloadsStopped = false
 	t.Cleanup(func() { _ = m.Stop() })
@@ -232,7 +244,7 @@ func seasonDownloadPath(m *Manager, entry *storage.Entry, file string) string {
 	_, seasons := m.downloader.detectMultiSeason(entry)
 	for _, season := range convertToMultiSeason(entry, seasons) {
 		if season.Files[file] != nil {
-			return season.DownloadPath()
+			return season.DownloadPath("")
 		}
 	}
 	return ""

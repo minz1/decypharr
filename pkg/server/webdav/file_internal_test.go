@@ -5,7 +5,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/customerror"
 )
 
@@ -41,14 +42,15 @@ func TestResolveRange(t *testing.T) {
 	}
 }
 
-//nolint:paralleltest // mutates the process-wide config singleton
 func TestWriteStreamErrorPreservesTypedStatus(t *testing.T) {
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 
 	recorder := httptest.NewRecorder()
-	NewHandler(nil).writeStreamError("missing/article", customerror.NewArticleNotFoundError(nil), recorder)
+	NewHandler(
+		nil,
+		nil,
+		zerolog.Nop(),
+	).writeStreamError("missing/article", customerror.NewArticleNotFoundError(nil), recorder)
 
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("stream error status = %d, want %d", recorder.Code, http.StatusNotFound)

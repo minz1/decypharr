@@ -61,7 +61,7 @@ func (m *Manager) AddNewNZB(_ context.Context, req *ImportRequest) (string, erro
 		Tags:             []string{},
 	}
 
-	entry.ContentPath = entry.DownloadPath()
+	entry.ContentPath = entry.DownloadPath(m.folderNaming())
 	if addErr := m.queue.Add(entry); addErr != nil {
 		m.usenet.RemoveStagedNZB(stagedPath)
 		return "", fmt.Errorf("failed to add nzb to queue: %w", addErr)
@@ -324,7 +324,7 @@ func (m *Manager) syncNZBs(ctx context.Context) error {
 		}
 		req := NewNZBRequest(
 			pending.Name,
-			config.Get().DownloadFolder,
+			m.store.Get().DownloadFolder,
 			pending.Content,
 			m.arr.GetOrCreate(""),
 			config.DownloadActionNone,

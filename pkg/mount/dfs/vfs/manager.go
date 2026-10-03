@@ -26,10 +26,15 @@ type Manager struct {
 const getFileAttempts = 8
 
 // NewManager creates a new VFS manager.
-func NewManager(ctx context.Context, mgr *manager.Manager, config *config.FuseConfig) (*Manager, error) {
+func NewManager(
+	ctx context.Context,
+	mgr *manager.Manager,
+	config *config.FuseConfig,
+	logs *logger.Factory,
+) (*Manager, error) {
 	ctx, cancel := context.WithCancel(ctx)
 
-	cache, err := NewCache(ctx, mgr, config)
+	cache, err := NewCache(ctx, mgr, config, logs.New("dfs"))
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("failed to create cache: %w", err)
@@ -38,7 +43,7 @@ func NewManager(ctx context.Context, mgr *manager.Manager, config *config.FuseCo
 	m := &Manager{
 		manager: mgr,
 		cache:   cache,
-		logger:  logger.New("vfs"),
+		logger:  logs.New("vfs"),
 		ctx:     ctx,
 		cancel:  cancel,
 	}

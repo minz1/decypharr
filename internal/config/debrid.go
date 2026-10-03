@@ -90,12 +90,12 @@ func validateDebrids(debrids []Debrid) error {
 	return nil
 }
 
-func (c *Config) applyDebridEnvVars() {
+func (c *Config) applyDebridEnvVars(e env) {
 	// NAME creates a new entry; secret fields apply to existing entries by index
 	// so users can set only secrets in environmentFiles without repeating names.
 	for i := range maxEnvProviders {
 		prefix := fmt.Sprintf("DEBRIDS__%d__", i)
-		if val := getEnv(prefix + "NAME"); val != "" {
+		if val := e.get(prefix + "NAME"); val != "" {
 			c.Debrids = growTo(c.Debrids, i)
 			c.Debrids[i].Name = val
 		}
@@ -103,10 +103,10 @@ func (c *Config) applyDebridEnvVars() {
 			continue
 		}
 		debrid := &c.Debrids[i]
-		envString(prefix+"API_KEY", &debrid.APIKey)
-		envString(prefix+"FOLDER", &debrid.Folder)
-		envString(prefix+"PROVIDER", &debrid.Provider)
-		envString(prefix+"PROXY", &debrid.Proxy)
-		envIndexedList(prefix+"DOWNLOAD_API_KEYS__%d", maxEnvAPIKeys, &debrid.DownloadAPIKeys)
+		e.envString(prefix+"API_KEY", &debrid.APIKey)
+		e.envString(prefix+"FOLDER", &debrid.Folder)
+		e.envString(prefix+"PROVIDER", &debrid.Provider)
+		e.envString(prefix+"PROXY", &debrid.Proxy)
+		e.envIndexedList(prefix+"DOWNLOAD_API_KEYS__%d", maxEnvAPIKeys, &debrid.DownloadAPIKeys)
 	}
 }

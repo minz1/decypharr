@@ -7,15 +7,14 @@ import (
 
 	"github.com/sirrobot01/decypharr/pkg/debrid/common/commontest"
 
-	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/request"
 )
 
 func TestCheckFileHonorsCancellation(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 	for name, cancelBefore := range commontest.CancelCases() {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			commontest.AssertCancellation(t, cancelBefore, func(ctx context.Context, host string) error {
 				provider := &Torbox{Host: host, client: request.New(request.WithMaxRetries(0))}
 				if cancelBefore {

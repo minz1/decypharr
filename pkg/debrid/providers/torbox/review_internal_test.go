@@ -16,8 +16,7 @@ import (
 )
 
 func TestFetchDownloadLinkReportsProviderErrors(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 	var fail atomic.Bool
 	fail.Store(true)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -34,6 +33,7 @@ func TestFetchDownloadLinkReportsProviderErrors(t *testing.T) {
 	tb := testTorbox(server.URL)
 	tb.accountsManager = account.NewManager(
 		config.Debrid{Name: "torbox", DownloadAPIKeys: []string{"download-token"}},
+		0,
 		nil,
 		tb.logger,
 	)
@@ -52,8 +52,7 @@ func TestFetchDownloadLinkReportsProviderErrors(t *testing.T) {
 }
 
 func TestUpdateTorrentRejectsNullData(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, `{"success":false,"error":"NOT_FOUND","data":null}`)
 	}))
@@ -64,8 +63,7 @@ func TestUpdateTorrentRejectsNullData(t *testing.T) {
 }
 
 func TestCheckFileRefreshesStalePresence(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 	var loads atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("offset") != "0" {

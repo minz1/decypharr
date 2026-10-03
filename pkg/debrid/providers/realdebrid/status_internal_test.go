@@ -19,14 +19,7 @@ import (
 )
 
 func TestCheckStatusSelectsAllowedFilesAndMapsLinks(t *testing.T) {
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
-	if _, err := config.Update(
-		func(c *config.Config) error { c.AllowedExt = []string{"mkv"}; return nil },
-	); err != nil {
-		t.Fatal(err)
-	}
+	t.Parallel()
 	var gets, selections atomic.Int32
 	server := httptest.NewServer(selectionFlowHandler(t, &gets, &selections))
 	defer server.Close()
@@ -36,8 +29,9 @@ func TestCheckStatusSelectsAllowedFilesAndMapsLinks(t *testing.T) {
 			request.WithMaxRetries(0),
 			request.WithHeaders(map[string]string{"Authorization": "Bearer test-key"}),
 		),
-		config: config.Debrid{Name: "realdebrid"},
-		logger: zerolog.Nop(),
+		config:  config.Debrid{Name: "realdebrid"},
+		logger:  zerolog.Nop(),
+		options: mkvOnly(),
 	}
 	torrent, err := provider.CheckStatus(&types.Torrent{Id: "torrent-id"})
 	if err != nil {
@@ -67,14 +61,7 @@ func TestCheckStatusSelectsAllowedFilesAndMapsLinks(t *testing.T) {
 }
 
 func TestCheckStatusFailureAndUncachedContracts(t *testing.T) {
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
-	if _, err := config.Update(
-		func(c *config.Config) error { c.AllowedExt = []string{"mkv"}; return nil },
-	); err != nil {
-		t.Fatal(err)
-	}
+	t.Parallel()
 	for _, tc := range []struct {
 		name, state   string
 		selectStatus  int
@@ -98,9 +85,10 @@ func TestCheckStatusFailureAndUncachedContracts(t *testing.T) {
 			server := httptest.NewServer(singlePollHandler(t, tc.state, tc.selectStatus, &gets, &selects))
 			defer server.Close()
 			provider := &RealDebrid{
-				Host:   server.URL,
-				client: request.New(request.WithMaxRetries(0)),
-				logger: zerolog.Nop(),
+				Host:    server.URL,
+				client:  request.New(request.WithMaxRetries(0)),
+				logger:  zerolog.Nop(),
+				options: mkvOnly(),
 			}
 			result, err := provider.CheckStatus(&types.Torrent{Id: "id", DownloadUncached: tc.allowUncached})
 			assertError(t, err, tc.wantErr, tc.wantText)
@@ -206,4 +194,11 @@ func assertError(t *testing.T, err, wantErr error, wantText string) {
 	case err != nil:
 		t.Fatal(err)
 	}
+}
+
+// mkvOnly allows only .mkv files, the way an operator's allowed_file_types
+// would.
+func mkvOnly() types.ProviderOptions {
+	cfg := &config.Config{AllowedExt: []string{"mkv"}}
+	return types.ProviderOptions{ValidateFile: cfg.ValidateFileAllowed, Logger: zerolog.Nop()}
 }

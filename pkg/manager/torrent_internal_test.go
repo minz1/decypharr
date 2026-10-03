@@ -29,18 +29,17 @@ func (incompleteProvider) UpdateTorrent(*types.Torrent) error { return nil }
 
 // The link service dereferences the refresher's entry; an incomplete provider
 // torrent must hand back the stored entry, never (nil, nil).
-//
-//nolint:paralleltest // mutates the config singleton
 func TestRefreshTorrentIncompleteReturnsStoredEntry(t *testing.T) {
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
-	store, err := storage.NewStorage(t.TempDir())
+	t.Parallel()
+	store, err := storage.NewStorage(t.TempDir(), storage.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	m := &Manager{storage: store, clients: xsync.NewMap[string, debrid.Client](), logger: zerolog.Nop()}
+	m := withTestConfig(
+		t,
+		&Manager{storage: store, clients: xsync.NewMap[string, debrid.Client](), logger: zerolog.Nop()},
+	)
 	m.clients.Store("provider", incompleteProvider{})
 	entry := &storage.Entry{
 		InfoHash: "0123456789012345678901234567890123456789", Name: "release",
@@ -76,22 +75,25 @@ func (c *countingStatusProvider) CheckStatus(torrent *types.Torrent) (*types.Tor
 
 // A resumed job must not drive an entry the queue scheduler is already
 // processing, nor release the scheduler's in-flight claim.
-//
-//nolint:paralleltest // mutates the config singleton
 func TestResumeJobSkipsEntryAlreadyInFlight(t *testing.T) {
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
-	store, err := storage.NewStorage(t.TempDir())
+	t.Parallel()
+	store, err := storage.NewStorage(t.TempDir(), storage.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	client := &countingStatusProvider{}
-	m := &Manager{
-		queue: newQueue(store, ""), clients: xsync.NewMap[string, debrid.Client](), logger: zerolog.Nop(),
+	m := withTestConfig(t, &Manager{
+		queue: newQueue(
+			store,
+			"",
+			nil,
+			zerolog.Nop(),
+		),
+		clients:           xsync.NewMap[string, debrid.Client](),
+		logger:            zerolog.Nop(),
 		processingEntries: xsync.NewMap[string, struct{}](),
-	}
+	})
 	m.clients.Store("provider", client)
 	entry := &storage.Entry{
 		InfoHash: "0123456789012345678901234567890123456789", Name: "release",

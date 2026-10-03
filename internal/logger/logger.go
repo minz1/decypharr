@@ -2,15 +2,13 @@ package logger
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"github.com/rs/zerolog"
 	"gopkg.in/natefinch/lumberjack.v2"
-
-	"github.com/sirrobot01/decypharr/internal/config"
 )
 
 // Log file rotation policy.
@@ -20,110 +18,120 @@ const (
 	logMaxBackups = 10
 )
 
-// defaultLogger is the process-wide logger returned by Default.
-var defaultLogger = sync.OnceValue(func() zerolog.Logger { return New("decypharr") })
+// FileName is the main log file inside the logs directory.
+const FileName = "decypharr.log"
 
-// sharedRotatingLogFile returns the process-wide lumberjack writer. All
-// component loggers share one rotator so they don't race on the same file
-// (each *lumberjack.Logger runs its own mill goroutine and rotation cycle).
+// Dir returns the logs directory of the data folder configDir.
+func Dir(configDir string) string {
+	return filepath.Join(configDir, "logs")
+}
 
-var sharedRotatingLogFile = sync.OnceValue(func() *lumberjack.Logger {
+// OpenRotatingFile creates the logs directory of configDir and returns the
+// rotating writer for its main log file. The caller owns it: every Factory
+// writing to the same file must share it (each *lumberjack.Logger runs its
+// own rotation), and the caller closes it at exit.
+func OpenRotatingFile(configDir string) (*lumberjack.Logger, error) {
+	logsDir := Dir(configDir)
+	if err := os.MkdirAll(logsDir, 0o750); err != nil {
+		return nil, fmt.Errorf("create logs directory: %w", err)
+	}
 	return &lumberjack.Logger{
-		Filename:   filepath.Join(GetLogPath(), "decypharr.log"),
+		Filename:   filepath.Join(logsDir, FileName),
 		MaxSize:    logMaxSizeMB,
 		MaxAge:     logMaxAgeDays,
 		MaxBackups: logMaxBackups,
 		Compress:   true,
-	}
-})
-
-// GetLogPath returns <config dir>/logs, creating it if needed.
-func GetLogPath() string {
-	logsDir := filepath.Join(config.GetMainPath(), "logs")
-
-	if _, err := os.Stat(logsDir); os.IsNotExist(err) {
-		if mkdirAllErr := os.MkdirAll(logsDir, 0o750); mkdirAllErr != nil {
-			panic(fmt.Sprintf("Failed to create logs directory: %v", mkdirAllErr))
-		}
-	}
-
-	return logsDir
+	}, nil
 }
 
-// New returns a logger that tags messages with prefix and writes to stdout
-// and the rotating log file at the configured level.
-func New(prefix string) zerolog.Logger {
-	level := config.Get().LogLevel
+// Factory builds component loggers that share one level, console and file.
+// A nil *Factory builds disabled loggers, which suits tests.
+type Factory struct {
+	level   zerolog.Level
+	console io.Writer
+	file    io.Writer
+}
 
-	logFile := sharedRotatingLogFile()
+// NewFactory returns a Factory logging at level (debug, info, warn, error or
+// trace; anything else means info) to console with colors and to file
+// without. Either writer may be nil to skip it.
+func NewFactory(level string, console, file io.Writer) *Factory {
+	return &Factory{level: ParseLevel(level), console: console, file: file}
+}
 
-	consoleWriter := zerolog.ConsoleWriter{
-		Out:        os.Stdout,
-		TimeFormat: "2006-01-02 15:04:05",
-		NoColor:    false, // Set to true if you don't want colors
-		FormatLevel: func(i any) string {
-			var colorCode string
-			switch strings.ToLower(fmt.Sprintf("%s", i)) {
-			case "debug":
-				colorCode = "\033[36m"
-			case "info":
-				colorCode = "\033[32m"
-			case "warn":
-				colorCode = "\033[33m"
-			case "error":
-				colorCode = "\033[31m"
-			case "fatal":
-				colorCode = "\033[35m"
-			case "panic":
-				colorCode = "\033[41m"
-			default:
-				colorCode = "\033[37m" // White
-			}
-			return fmt.Sprintf("%s| %-6s|\033[0m", colorCode, strings.ToUpper(fmt.Sprintf("%s", i)))
-		},
-		FormatMessage: func(i any) string {
-			return fmt.Sprintf("[%s] %v", prefix, i)
-		},
+// Discard returns a Factory whose loggers write nothing.
+func Discard() *Factory { return nil }
+
+// ParseLevel maps a configured level name to a zerolog level; unknown names
+// mean info.
+func ParseLevel(level string) zerolog.Level {
+	switch strings.ToLower(level) {
+	case "debug":
+		return zerolog.DebugLevel
+	case "warn":
+		return zerolog.WarnLevel
+	case "error":
+		return zerolog.ErrorLevel
+	case "trace":
+		return zerolog.TraceLevel
+	default:
+		return zerolog.InfoLevel
 	}
+}
 
-	fileWriter := zerolog.ConsoleWriter{
-		Out:        logFile,
-		TimeFormat: "2006-01-02 15:04:05",
-		NoColor:    true, // No colors in file output
-		FormatLevel: func(i any) string {
-			return strings.ToUpper(fmt.Sprintf("| %-6s|", i))
-		},
-		FormatMessage: func(i any) string {
-			return fmt.Sprintf("[%s] %v", prefix, i)
-		},
+// New returns a logger that tags messages with prefix.
+func (f *Factory) New(prefix string) zerolog.Logger {
+	if f == nil {
+		return zerolog.Nop()
 	}
-
-	multi := zerolog.MultiLevelWriter(consoleWriter, fileWriter)
-
-	l := zerolog.New(multi).
+	formatMessage := func(i any) string {
+		return fmt.Sprintf("[%s] %v", prefix, i)
+	}
+	var writers []io.Writer
+	if f.console != nil {
+		writers = append(writers, zerolog.ConsoleWriter{
+			Out:           f.console,
+			TimeFormat:    "2006-01-02 15:04:05",
+			FormatLevel:   colorLevel,
+			FormatMessage: formatMessage,
+		})
+	}
+	if f.file != nil {
+		writers = append(writers, zerolog.ConsoleWriter{
+			Out:        f.file,
+			TimeFormat: "2006-01-02 15:04:05",
+			NoColor:    true, // No colors in file output
+			FormatLevel: func(i any) string {
+				return strings.ToUpper(fmt.Sprintf("| %-6s|", i))
+			},
+			FormatMessage: formatMessage,
+		})
+	}
+	return zerolog.New(zerolog.MultiLevelWriter(writers...)).
 		With().
 		Timestamp().
 		Logger().
-		Level(zerolog.InfoLevel)
-
-	// Set the log level
-	level = strings.ToLower(level)
-	switch level {
-	case "debug":
-		l = l.Level(zerolog.DebugLevel)
-	case "info":
-		l = l.Level(zerolog.InfoLevel)
-	case "warn":
-		l = l.Level(zerolog.WarnLevel)
-	case "error":
-		l = l.Level(zerolog.ErrorLevel)
-	case "trace":
-		l = l.Level(zerolog.TraceLevel)
-	}
-	return l
+		Level(f.level)
 }
 
-// Default returns the shared "decypharr" logger.
-func Default() zerolog.Logger {
-	return defaultLogger()
+// colorLevel renders the level column of console output.
+func colorLevel(i any) string {
+	var colorCode string
+	switch strings.ToLower(fmt.Sprintf("%s", i)) {
+	case "debug":
+		colorCode = "\033[36m"
+	case "info":
+		colorCode = "\033[32m"
+	case "warn":
+		colorCode = "\033[33m"
+	case "error":
+		colorCode = "\033[31m"
+	case "fatal":
+		colorCode = "\033[35m"
+	case "panic":
+		colorCode = "\033[41m"
+	default:
+		colorCode = "\033[37m" // White
+	}
+	return fmt.Sprintf("%s| %-6s|\033[0m", colorCode, strings.ToUpper(fmt.Sprintf("%s", i)))
 }

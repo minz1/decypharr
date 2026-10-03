@@ -18,7 +18,6 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
-	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/internal/request"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/debrid/account"
@@ -63,6 +62,7 @@ type RealDebrid struct {
 	repairClient          *request.Client
 	autoExpiresLinksAfter time.Duration
 	logger                zerolog.Logger
+	options               types.ProviderOptions
 
 	rarSemaphore chan struct{}
 	profile      types.ProfileCache
@@ -70,25 +70,27 @@ type RealDebrid struct {
 	retries      int
 }
 
-func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter) (*RealDebrid, error) {
+func New(
+	dc config.Debrid,
+	ratelimits map[string]ratelimit.Limiter,
+	options types.ProviderOptions,
+) (*RealDebrid, error) {
 	headers := map[string]string{
 		"Authorization": fmt.Sprintf("Bearer %s", dc.APIKey),
 	}
 	if dc.UserAgent != "" {
 		headers["User-Agent"] = dc.UserAgent
 	}
-	_log := logger.New(dc.Name)
+	_log := options.Logger
 
 	autoExpiresLinksAfter, err := utils.ParseDuration(dc.AutoExpireLinksAfter)
 	if autoExpiresLinksAfter == 0 || err != nil {
 		autoExpiresLinksAfter = defaultLinkExpiry
 	}
 
-	cfg := config.Get()
-
 	opts := []request.ClientOption{
 		request.WithHeaders(headers),
-		request.WithMaxRetries(cfg.Retries),
+		request.WithMaxRetries(options.Retries),
 		request.WithRateLimiter(ratelimits["main"]),
 		request.WithRetryableStatus(http.StatusTooManyRequests),
 		request.WithProxy(dc.Proxy),
@@ -106,14 +108,15 @@ func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter) (*RealDebrid
 	r := &RealDebrid{
 		Host:                  "https://api.real-debrid.com/rest/1.0",
 		APIKey:                dc.APIKey,
-		accountsManager:       account.NewManager(dc, ratelimits["download"], _log),
+		accountsManager:       account.NewManager(dc, options.Retries, ratelimits["download"], _log),
+		options:               options,
 		autoExpiresLinksAfter: autoExpiresLinksAfter,
 		client:                request.New(opts...),
 		repairClient:          request.New(repairOpts...),
-		logger:                logger.New(dc.Name),
+		logger:                _log,
 		rarSemaphore:          make(chan struct{}, maxConcurrentRarReads),
 		config:                dc,
-		retries:               cfg.Retries,
+		retries:               options.Retries,
 	}
 
 	go func() {
@@ -383,12 +386,11 @@ func (r *RealDebrid) handleRarArchive(
 
 func (r *RealDebrid) getTorrentFiles(t *types.Torrent, data torrentInfo) map[string]types.File {
 	files := make(map[string]types.File)
-	cfg := config.Get()
 	idx := 0
 
 	for _, f := range data.Files {
 		name := filepath.Base(f.Path)
-		if err := cfg.ValidateFileAllowed(name, f.Bytes); err != nil {
+		if err := r.options.FileAllowed(name, f.Bytes); err != nil {
 			continue
 		}
 

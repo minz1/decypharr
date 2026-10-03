@@ -8,29 +8,27 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/config"
-	"github.com/sirrobot01/decypharr/pkg/manager"
+	"github.com/sirrobot01/decypharr/pkg/manager/managertest"
 	"github.com/sirrobot01/decypharr/pkg/server/sabnzbd"
 )
 
 func newTestRoutes(t *testing.T) http.Handler {
 	t.Helper()
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
-	cfg := config.Get()
-	cfg.UseAuth = true
-	cfg.Auth = &config.Auth{APIToken: "test-token", TokenOnly: true}
-	cfg.Usenet.Providers = []config.UsenetProvider{
-		{Host: "news.example.test", Port: 563, Username: "user", Password: "provider-secret"},
-	}
-	mgr := manager.New()
-	t.Cleanup(func() { _ = mgr.Stop() })
-	return sabnzbd.New(mgr).Routes()
+	mgr, store := managertest.New(t, func(cfg *config.Config) {
+		cfg.UseAuth = true
+		cfg.Auth = &config.Auth{APIToken: "test-token", TokenOnly: true}
+		cfg.Usenet.Providers = []config.UsenetProvider{
+			{Host: "news.example.test", Port: 563, Username: "user", Password: "provider-secret"},
+		}
+	})
+	return sabnzbd.New(mgr, store, zerolog.Nop()).Routes()
 }
 
-//nolint:paralleltest // mutates the process-wide config singleton
 func TestGetConfigDoesNotExposeProviderPasswords(t *testing.T) {
+	t.Parallel()
 	routes := newTestRoutes(t)
 	w := httptest.NewRecorder()
 	routes.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/?mode=get_config&ma_password=test-token", nil))
@@ -45,8 +43,8 @@ func TestGetConfigDoesNotExposeProviderPasswords(t *testing.T) {
 	}
 }
 
-//nolint:paralleltest // mutates the process-wide config singleton
 func TestOversizedBodyIsRejectedBeforeAuth(t *testing.T) {
+	t.Parallel()
 	routes := newTestRoutes(t)
 	// Multipart file parts spill to temp files with no size limit of their
 	// own, so only the body cap bounds them. Stream the body to keep the

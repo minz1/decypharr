@@ -11,22 +11,12 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
-	"github.com/sirrobot01/decypharr/pkg/manager"
+	"github.com/sirrobot01/decypharr/pkg/manager/managertest"
 )
 
-//nolint:paralleltest // mutates the process-wide config singleton
 func TestHandleLoginAlwaysReturnsSID(t *testing.T) {
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
-	config.Get().UseAuth = false
-
-	mgr := manager.New()
-	t.Cleanup(func() {
-		if err := mgr.Stop(); err != nil {
-			t.Error(err)
-		}
-	})
+	t.Parallel()
+	mgr, store := managertest.New(t, func(cfg *config.Config) { cfg.UseAuth = false })
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(
@@ -35,7 +25,7 @@ func TestHandleLoginAlwaysReturnsSID(t *testing.T) {
 		strings.NewReader("username=homarr-user&password=homarr-password"),
 	)
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	(&QBit{manager: mgr}).handleLogin(recorder, request)
+	(&QBit{manager: mgr, config: store}).handleLogin(recorder, request)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("login status = %d, want %d", recorder.Code, http.StatusOK)
@@ -44,7 +34,7 @@ func TestHandleLoginAlwaysReturnsSID(t *testing.T) {
 	if len(cookies) != 1 || cookies[0].Name != "SID" || cookies[0].Value == "" {
 		t.Fatalf("login cookies = %#v, want one SID cookie", cookies)
 	}
-	username, password, err := extractFromSID(cookies[0].Value)
+	username, password, err := extractFromSID(store.Get().SecretKey(), cookies[0].Value)
 	if err != nil {
 		t.Fatalf("decode SID: %v", err)
 	}

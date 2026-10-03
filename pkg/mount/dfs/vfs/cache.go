@@ -143,7 +143,7 @@ type purgeRunSummary struct {
 }
 
 // NewCache creates a new sparse file cache.
-func NewCache(ctx context.Context, mgr Backend, config *dfsconfig.FuseConfig) (*Cache, error) {
+func NewCache(ctx context.Context, mgr Backend, config *dfsconfig.FuseConfig, log zerolog.Logger) (*Cache, error) {
 	if err := os.MkdirAll(config.CacheDir, 0o750); err != nil {
 		return nil, fmt.Errorf("failed to create cache dir: %w", err)
 	}
@@ -173,7 +173,7 @@ func NewCache(ctx context.Context, mgr Backend, config *dfsconfig.FuseConfig) (*
 		// much history behind it. The pool divides its budget across the open
 		// streams if they collectively ask for more.
 		streamMemory: max(streamMemoryReadAheads*config.ReadAheadSize, minStreamWindow),
-		logger:       logger.New("dfs"),
+		logger:       log,
 		items:        xsync.NewMap[string, *CacheItem](),
 		manager:      mgr,
 		ctx:          ctx,

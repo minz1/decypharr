@@ -91,6 +91,16 @@ func WithFetchScheduler(scheduler *reader.FetchScheduler) Option {
 // WithPools shares the service cache budgets with this filesystem.
 func WithPools(pools *reader.Pools) Option { return func(f *FS) { f.pools = pools } }
 
+// WithBodyPipelineDepth sets how many BODY commands each connection keeps in
+// flight (usenet.body_pipeline_depth).
+func WithBodyPipelineDepth(depth int) Option {
+	return func(f *FS) { f.bodyPipelineDepth = depth }
+}
+
+// WithDiskPath spills stream buffers to files under path (usenet.disk_path);
+// empty keeps them in memory.
+func WithDiskPath(path string) Option { return func(f *FS) { f.diskPath = path } }
+
 // NewFS creates a new filesystem backed by the provided connection nntpClient.
 // prefetchSize is the amount of data to prefetch ahead in bytes (e.g., 16*1024*1024 for 16MB).
 func NewFS(
@@ -106,19 +116,13 @@ func NewFS(
 		ctx = context.Background()
 	}
 
-	usenetConfig := config.Get().Usenet
-	retention := reader.RetentionWindow
-	if usenetConfig.UsesDiskBuffer() {
-		retention = reader.RetentionRewind
-	}
 	f := &FS{
 		ctx:               ctx,
 		client:            client,
 		maxConcurrent:     maxConcurrent,
 		prefetchSize:      prefetchSize,
-		bodyPipelineDepth: usenetConfig.BodyPipelineDepth,
-		diskPath:          usenetConfig.DiskPath,
-		retention:         retention,
+		bodyPipelineDepth: config.DefaultBodyPipelineDepth,
+		retention:         reader.RetentionWindow,
 		logger:            logger,
 		volumes:           xsync.NewMap[string, *types.Volume](),
 	}

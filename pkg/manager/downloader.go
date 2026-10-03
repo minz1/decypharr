@@ -143,13 +143,18 @@ func (d *Downloader) completeEntry(entry *storage.Entry) {
 
 func (d *Downloader) markAsCompleted(entry *storage.Entry) {
 	// Mark as completed
-	entry.MarkAsCompleted(entry.DownloadPath())
+	entry.MarkAsCompleted(entry.DownloadPath(d.manager.folderNaming()))
 	_ = d.manager.queue.Update(entry)
 }
 
 func (d *Downloader) notifyCompleted(entry *storage.Entry) {
 	// Send notification
-	msg := fmt.Sprintf("Download completed: %s [%s] -> %s", entry.Name, entry.Category, entry.DownloadPath())
+	msg := fmt.Sprintf(
+		"Download completed: %s [%s] -> %s",
+		entry.Name,
+		entry.Category,
+		entry.DownloadPath(d.manager.folderNaming()),
+	)
 	d.manager.Notifications.Notify(notifications.Event{
 		Type:    config.EventDownloadComplete,
 		Status:  "success",
@@ -193,7 +198,7 @@ func (d *Downloader) markAsError(entry *storage.Entry, err error) {
 // processSymlink creates symlinks for torrent files.
 func (d *Downloader) processSymlink(entry *storage.Entry, mountPath string) error {
 	files := entry.GetActiveFiles()
-	torrentSymlinkPath := entry.DownloadPath()
+	torrentSymlinkPath := entry.DownloadPath(d.manager.folderNaming())
 	d.logger.Info().
 		Str("mount_path", mountPath).
 		Msgf("Creating symlinks for %d files in %s", len(files), torrentSymlinkPath)
@@ -224,7 +229,7 @@ func (d *Downloader) processSymlink(entry *storage.Entry, mountPath string) erro
 	// Usenet parsing/probing deliberately avoids the streaming read-ahead
 	// setting. A large playback window can turn a small import probe into a
 	// substantial background download and hold an active slot unnecessarily.
-	if !entry.IsNZB() && !config.Get().SkipPreCache && len(filePaths) > 0 {
+	if !entry.IsNZB() && !d.manager.store.Get().SkipPreCache && len(filePaths) > 0 {
 		probeFiles := filePaths
 		if len(probeFiles) > MaxNZBPreCacheFiles {
 			probeFiles = probeFiles[:MaxNZBPreCacheFiles]
@@ -337,7 +342,7 @@ func (s *symlinkScan) link(name, fullPath string) error {
 	}
 	s.paths = append(s.paths, fileSymlinkPath)
 	delete(s.remaining, name)
-	s.d.logger.Info().Msgf("File is ready: %s/%s", s.entry.GetFolder(), file.Name)
+	s.d.logger.Info().Msgf("File is ready: %s/%s", s.entry.GetFolder(s.d.manager.folderNaming()), file.Name)
 	return nil
 }
 
@@ -524,7 +529,7 @@ func (d *Downloader) processTorrentDownload(entry *storage.Entry) error {
 	for _, file := range files {
 		totalSize += file.Size
 	}
-	downloadedFolder := entry.DownloadPath()
+	downloadedFolder := entry.DownloadPath(d.manager.folderNaming())
 	//nolint:gosec // the arr importing from this folder usually runs as another user
 	if err := os.MkdirAll(downloadedFolder, os.ModePerm); err != nil {
 		return fmt.Errorf("failed to create download directory: %s: %w", downloadedFolder, err)
@@ -646,7 +651,7 @@ func (d *Downloader) processUsenetDownload(entry *storage.Entry) error {
 	files := entry.GetActiveFiles()
 	d.logger.Info().Msgf("Downloading %d NZB files via usenet...", len(files))
 
-	downloadedFolder := entry.DownloadPath()
+	downloadedFolder := entry.DownloadPath(d.manager.folderNaming())
 	//nolint:gosec // the arr importing from this folder usually runs as another user
 	if err := os.MkdirAll(downloadedFolder, os.ModePerm); err != nil {
 		return fmt.Errorf("failed to create download directory: %s: %w", downloadedFolder, err)

@@ -36,23 +36,23 @@ func (h Hearsay) IsZero() bool {
 		h.MaxStorageBytes == 0 && h.MaxFeedsPerNamespace == 0 && h.MaxSeededTorrents == 0 && len(h.Follow) == 0
 }
 
-func (c *Config) applyHearsayEnvVars() {
-	envBool("HEARSAY__DISABLED", &c.Hearsay.Disabled)
-	envBoolPtr("HEARSAY__PARTICIPATE", &c.Hearsay.Participate)
-	envBoolPtr("HEARSAY__PUBLISH", &c.Hearsay.Publish)
-	if v := getEnv("HEARSAY__ADVICE_MODE"); v != "" {
+func (c *Config) applyHearsayEnvVars(e env) {
+	e.envBool("HEARSAY__DISABLED", &c.Hearsay.Disabled)
+	e.envBoolPtr("HEARSAY__PARTICIPATE", &c.Hearsay.Participate)
+	e.envBoolPtr("HEARSAY__PUBLISH", &c.Hearsay.Publish)
+	if v := e.get("HEARSAY__ADVICE_MODE"); v != "" {
 		c.Hearsay.AdviceMode = strings.ToLower(strings.TrimSpace(v))
 	}
-	envFloat("HEARSAY__MIN_SUPPORT", &c.Hearsay.MinSupport)
-	envFloat("HEARSAY__MIN_EVIDENCE", &c.Hearsay.MinEvidence)
-	envInt("HEARSAY__MIN_SOURCES", &c.Hearsay.MinSources)
-	envInt("HEARSAY__PORT", &c.Hearsay.Port)
-	envInt("HEARSAY__GOSSIP_PORT", &c.Hearsay.GossipPort)
-	envString("HEARSAY__INTERVAL", &c.Hearsay.Interval)
-	envInt64("HEARSAY__MAX_STORAGE_BYTES", &c.Hearsay.MaxStorageBytes)
-	envInt("HEARSAY__MAX_FEEDS_PER_NAMESPACE", &c.Hearsay.MaxFeedsPerNamespace)
-	envInt("HEARSAY__MAX_SEEDED_TORRENTS", &c.Hearsay.MaxSeededTorrents)
-	if v := getEnv("HEARSAY__FOLLOW"); v != "" {
+	e.envFloat("HEARSAY__MIN_SUPPORT", &c.Hearsay.MinSupport)
+	e.envFloat("HEARSAY__MIN_EVIDENCE", &c.Hearsay.MinEvidence)
+	e.envInt("HEARSAY__MIN_SOURCES", &c.Hearsay.MinSources)
+	e.envInt("HEARSAY__PORT", &c.Hearsay.Port)
+	e.envInt("HEARSAY__GOSSIP_PORT", &c.Hearsay.GossipPort)
+	e.envString("HEARSAY__INTERVAL", &c.Hearsay.Interval)
+	e.envInt64("HEARSAY__MAX_STORAGE_BYTES", &c.Hearsay.MaxStorageBytes)
+	e.envInt("HEARSAY__MAX_FEEDS_PER_NAMESPACE", &c.Hearsay.MaxFeedsPerNamespace)
+	e.envInt("HEARSAY__MAX_SEEDED_TORRENTS", &c.Hearsay.MaxSeededTorrents)
+	if v := e.get("HEARSAY__FOLLOW"); v != "" {
 		c.Hearsay.Follow = nil
 		for key := range strings.SplitSeq(v, ",") {
 			if key = strings.TrimSpace(key); key != "" {

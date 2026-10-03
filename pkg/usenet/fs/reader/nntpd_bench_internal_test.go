@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/nntp"
 	"github.com/sirrobot01/decypharr/internal/testutil/nntpd"
@@ -64,7 +66,7 @@ func newBenchStack(b *testing.B, cfg nntpd.Config) (*nntp.Client, []SegmentMeta)
 				MaxConnections: 8,
 			}},
 		},
-	})
+	}, zerolog.Nop())
 	if err != nil {
 		b.Fatal(err)
 	}

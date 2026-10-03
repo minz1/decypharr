@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/nntp"
 	"github.com/sirrobot01/decypharr/internal/testutil/nntpd"
@@ -48,7 +50,7 @@ func ppStack(t *testing.T, streams, segsPer int, rtt time.Duration) (*nntpd.Serv
 	host, port := srv.Addr()
 	client, err := nntp.NewClient(&config.Config{Usenet: config.Usenet{
 		Providers: []config.UsenetProvider{{Host: host, Port: port, MaxConnections: 32}},
-	}})
+	}}, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}

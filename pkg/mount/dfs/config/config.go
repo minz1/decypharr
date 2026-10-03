@@ -93,12 +93,6 @@ func DefaultFuseConfig() *FuseConfig {
 	}
 }
 
-// ParseFuseConfig converts config.DFS to internal FuseConfig.
-func ParseFuseConfig() *FuseConfig {
-	mainCfg := config.Get()
-	return Parse(mainCfg.Mount.DFS, mainCfg.Mount.MountPath, mainCfg.Retries)
-}
-
 // Parse converts the DFS section of the main config into a FuseConfig. Invalid
 // values keep their defaults and are reported on stderr.
 func Parse(cfg config.DFS, mountPath string, retries int) *FuseConfig {

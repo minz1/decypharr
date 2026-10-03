@@ -15,17 +15,22 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
-//nolint:paralleltest // resets the config singleton
 func TestRestoreLeavesActiveDownloadsOutsideSubmissionWorkers(t *testing.T) {
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
-	store, err := storage.NewStorage(filepath.Join(t.TempDir(), "db"))
+	t.Parallel()
+	store, err := storage.NewStorage(filepath.Join(t.TempDir(), "db"), storage.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	m := &Manager{queue: newQueue(store, ""), arr: arr.New(), logger: zerolog.Nop(), ctx: t.Context()}
+	m := withTestConfig(
+		t,
+		&Manager{
+			queue:  newQueue(store, "", nil, zerolog.Nop()),
+			arr:    arr.New(config.NewStore(&config.Config{}), zerolog.Nop()),
+			logger: zerolog.Nop(),
+			ctx:    t.Context(),
+		},
+	)
 	for i := range 4 {
 		status := debridTypes.TorrentStatusDownloading
 		if i == 3 {
@@ -45,7 +50,7 @@ func TestRestoreLeavesActiveDownloadsOutsideSubmissionWorkers(t *testing.T) {
 			m.processJob(ctx, job)
 		}
 		received <- job
-	})
+	}, zerolog.Nop())
 	t.Cleanup(m.jobQueue.Close)
 	m.restoreActiveDownloadJobs()
 	select {

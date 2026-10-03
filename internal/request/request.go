@@ -18,8 +18,6 @@ import (
 	"github.com/rs/zerolog"
 	"go.uber.org/ratelimit"
 	"golang.org/x/net/proxy"
-
-	"github.com/sirrobot01/decypharr/internal/logger"
 )
 
 // Client defaults.
@@ -232,7 +230,7 @@ func New(options ...ClientOption) *Client {
 			http.StatusServiceUnavailable:  {},
 			http.StatusGatewayTimeout:      {},
 		},
-		logger:  logger.New("request"),
+		logger:  zerolog.Nop(),
 		timeout: defaultTimeout,
 		proxy:   "",
 		headers: make(map[string]string),

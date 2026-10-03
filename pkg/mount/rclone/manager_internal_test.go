@@ -16,24 +16,27 @@ import (
 	"github.com/sirrobot01/decypharr/internal/rclone"
 )
 
-// useConfig points the process-wide config at a temp dir holding body.
-func useConfig(t *testing.T, body string) {
+// loadConfig loads a configuration from a temp dir holding body.
+func loadConfig(t *testing.T, body string) *config.Config {
 	t.Helper()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	config.SetConfigPath(dir)
-	config.Reset()
-	t.Cleanup(config.Reset)
+	cfg, err := config.Load(dir, config.MapEnv(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
 }
 
 // With WebDAV disabled NewManager returned a nil *Manager, which became a
 // non-nil MountManager that panicked on Start.
-func TestNewManagerWithWebDAVDisabledIsUsable(t *testing.T) { //nolint:paralleltest // mutates the config singleton
-	useConfig(t, `{"disable_webdav": true}`)
+func TestNewManagerWithWebDAVDisabledIsUsable(t *testing.T) {
+	t.Parallel()
+	cfg := loadConfig(t, `{"disable_webdav": true}`)
 
-	m := NewManager(nil)
+	m := NewManager(nil, cfg, zerolog.Nop())
 	if m == nil {
 		t.Fatal("NewManager returned nil")
 	}
@@ -47,8 +50,9 @@ func TestNewManagerWithWebDAVDisabledIsUsable(t *testing.T) { //nolint:parallelt
 
 // RecoverMount used to call Start, a no-op once the RC server runs, so a
 // failed health check left the mount down for good.
-func TestRecoverMountRemounts(t *testing.T) { //nolint:paralleltest // mutates the config singleton
-	useConfig(t, `{"mount": {"mount_path": "`+filepath.ToSlash(t.TempDir())+`"}}`)
+func TestRecoverMountRemounts(t *testing.T) {
+	t.Parallel()
+	cfg := loadConfig(t, `{"mount": {"mount_path": "`+filepath.ToSlash(t.TempDir())+`"}}`)
 
 	var mu sync.Mutex
 	var calls []string
@@ -64,6 +68,7 @@ func TestRecoverMountRemounts(t *testing.T) { //nolint:paralleltest // mutates t
 	t.Cleanup(cancel)
 	m := &Manager{
 		logger: zerolog.Nop(),
+		mount:  cfg.Mount,
 		ctx:    ctx,
 		cancel: cancel,
 		client: rclone.NewClient(srv.URL, "", "", zerolog.Nop()),

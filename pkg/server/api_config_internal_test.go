@@ -10,11 +10,11 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/arr"
-	"github.com/sirrobot01/decypharr/pkg/manager"
+	"github.com/sirrobot01/decypharr/pkg/manager/managertest"
 )
 
-//nolint:paralleltest // mutates the process-wide config singleton
 func TestMergeConfigUpdatePreservesOmittedFields(t *testing.T) {
+	t.Parallel()
 	current := config.Config{
 		Port:     "9000",
 		LogLevel: "info",
@@ -54,8 +54,8 @@ func TestMergeConfigUpdatePreservesOmittedFields(t *testing.T) {
 	}
 }
 
-//nolint:paralleltest // mutates the process-wide config singleton
 func TestMergeConfigUpdateMergesNestedObjects(t *testing.T) {
+	t.Parallel()
 	current := config.Config{
 		Mount: config.Mount{
 			Type:      config.MountTypeRclone,
@@ -76,8 +76,8 @@ func TestMergeConfigUpdateMergesNestedObjects(t *testing.T) {
 	}
 }
 
-//nolint:paralleltest // mutates the process-wide config singleton
 func TestMergeConfigUpdateAllowsExplicitClear(t *testing.T) {
+	t.Parallel()
 	current := config.Config{Debrids: []config.Debrid{{Name: "realdebrid", APIKey: "secret"}}}
 
 	merged, err := mergeConfigUpdate(&current, strings.NewReader(`{"debrids":[]}`))
@@ -90,17 +90,13 @@ func TestMergeConfigUpdateAllowsExplicitClear(t *testing.T) {
 	}
 }
 
-//nolint:paralleltest // mutates the process-wide config singleton
 func TestConfigHandlersUseSnapshots(t *testing.T) {
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
-	before := config.Get()
-	mgr := manager.New()
-	t.Cleanup(func() { _ = mgr.Stop() })
+	t.Parallel()
+	mgr, store := managertest.New(t, nil)
+	before := store.Get()
 	mgr.Arr().
 		AddOrUpdate(arr.Arr{Name: "manual", Host: "http://example.test", Token: "token", Source: arr.SourceManual})
-	server := &Server{manager: mgr}
+	server := &Server{manager: mgr, config: store}
 	response := httptest.NewRecorder()
 	server.handleGetConfig(response, httptest.NewRequest(http.MethodGet, "/api/config", nil))
 	if response.Code != http.StatusOK {
@@ -124,7 +120,7 @@ func TestConfigHandlersUseSnapshots(t *testing.T) {
 	if before.AppURL == "https://new.example.test" {
 		t.Fatal("POST changed the previous snapshot")
 	}
-	if config.Get().AppURL != "https://new.example.test" {
+	if store.Get().AppURL != "https://new.example.test" {
 		t.Fatal("POST did not publish the update")
 	}
 	var result struct {

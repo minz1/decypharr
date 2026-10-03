@@ -9,19 +9,18 @@ import (
 	"github.com/gorilla/sessions"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/pkg/manager/managertest"
 )
 
-//nolint:paralleltest // mutates the process-wide config singleton
 func TestCredentialChangesInvalidateBrowserSessions(t *testing.T) {
+	t.Parallel()
 	for _, change := range []string{"password", "token", "mode"} {
 		t.Run(change, func(t *testing.T) {
-			config.Reset()
-			config.SetConfigPath(t.TempDir())
-			t.Cleanup(config.Reset)
-			cfg := config.Get()
-			cfg.UseAuth = true
+			t.Parallel()
+			store := managertest.Store(t, func(cfg *config.Config) { cfg.UseAuth = true })
+			cfg := store.Get()
 			body := storeInitialCredentials(t, cfg, change)
-			s := &Server{cookie: sessions.NewCookieStore([]byte(cfg.SecretKey()))}
+			s := &Server{config: store, cookie: sessions.NewCookieStore([]byte(cfg.SecretKey()))}
 			request := httptest.NewRequest(http.MethodGet, "/api/test", nil)
 			request.AddCookie(loginCookie(t, s, body))
 			handler := s.authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

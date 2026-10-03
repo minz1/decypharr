@@ -26,7 +26,7 @@ func (q *QBit) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// Not Secure: Arr clients talk to decypharr over plain HTTP on the LAN.
 	cookie := &http.Cookie{ //nolint:gosec // G124: Secure would make HTTP clients drop the session
 		Name:     "SID",
-		Value:    createSID(username, password),
+		Value:    createSID(q.config.Get().SecretKey(), username, password),
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
@@ -44,7 +44,7 @@ func (q *QBit) handleWebAPIVersion(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (q *QBit) handlePreferences(w http.ResponseWriter, _ *http.Request) {
-	preferences := getAppPreferences()
+	preferences := getAppPreferences(q.config.Get().MaxActiveDownloads)
 
 	preferences.SavePath = q.downloadFolder
 	preferences.TempPath = filepath.Join(q.downloadFolder, "temp")
@@ -87,7 +87,7 @@ func (q *QBit) handleTorrentsInfo(w http.ResponseWriter, r *http.Request) {
 	}
 	qbitTorrents := make([]Torrent, len(torrents))
 	for i, t := range torrents {
-		qbitTorrents[i] = convertToQBitTorrentTorrent(t)
+		qbitTorrents[i] = convertToQBitTorrentTorrent(t, q.config.Get().FolderNaming)
 	}
 	utils.JSONResponse(w, qbitTorrents, http.StatusOK)
 }
@@ -116,7 +116,7 @@ func (q *QBit) handleTorrentsAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg := config.Get()
+	cfg := q.config.Get()
 	action := cfg.DefaultDownloadAction
 	if strings.EqualFold(r.FormValue("sequentialDownload"), "true") {
 		action = config.DownloadActionDownload

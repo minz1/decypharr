@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 )
 
@@ -102,7 +101,7 @@ func (q *QBit) categoryContext(next http.Handler) http.Handler {
 // Only a valid host and token will be added to the context/config. The rest are manual.
 func (q *QBit) authContext(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		username, password, err := getUsernameAndPassword(r)
+		username, password, err := q.getUsernameAndPassword(r)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusUnauthorized)
 			return
@@ -118,7 +117,7 @@ func (q *QBit) authContext(next http.Handler) http.Handler {
 	})
 }
 
-func getUsernameAndPassword(r *http.Request) (string, string, error) {
+func (q *QBit) getUsernameAndPassword(r *http.Request) (string, string, error) {
 	// Try to get from authorization header
 	username, password, err := decodeAuthHeader(r.Header.Get("Authorization"))
 	if err == nil && username != "" {
@@ -131,7 +130,7 @@ func getUsernameAndPassword(r *http.Request) (string, string, error) {
 		sid, err = r.Cookie("SID")
 	}
 	if err == nil {
-		username, password, err = extractFromSID(sid.Value)
+		username, password, err = extractFromSID(q.config.Get().SecretKey(), sid.Value)
 		if err != nil {
 			return "", "", err
 		}
@@ -140,7 +139,7 @@ func getUsernameAndPassword(r *http.Request) (string, string, error) {
 }
 
 func (q *QBit) authenticate(ctx context.Context, category, username, password string) (arr.Arr, error) {
-	cfg := config.Get()
+	cfg := q.config.Get()
 	instance, known := q.manager.Arr().Get(category)
 	if !known {
 		// Not in the registry yet: inherit download_uncached from a matching
@@ -154,7 +153,7 @@ func (q *QBit) authenticate(ctx context.Context, category, username, password st
 		}
 	}
 	if cfg.UseAuth {
-		if config.VerifyAuth(username, password) || config.VerifyToken(password) {
+		if q.config.Get().VerifyAuth(username, password) || q.config.Get().VerifyToken(password) {
 			return instance, nil
 		}
 		if known && instance.Source != arr.SourceAuto && username == instance.Host && password != "" &&
@@ -187,17 +186,16 @@ func (q *QBit) authenticate(ctx context.Context, category, username, password st
 	return instance, nil
 }
 
-func createSID(username, password string) string {
+func createSID(secretKey, username, password string) string {
 	// Create a verification hash
-	cfg := config.Get()
 	combined := fmt.Sprintf("%s|%s", username, password)
-	hash := sha256.Sum256([]byte(combined + cfg.SecretKey()))
+	hash := sha256.Sum256([]byte(combined + secretKey))
 	hashStr := hex.EncodeToString(hash[:])[:16] // First 16 chars
 	// Base64 encode
 	return base64.URLEncoding.EncodeToString(fmt.Appendf(nil, "%s|%s", combined, hashStr))
 }
 
-func extractFromSID(sid string) (string, string, error) {
+func extractFromSID(secretKey, sid string) (string, string, error) {
 	// Decode base64
 	decoded, err := base64.URLEncoding.DecodeString(sid)
 	if err != nil {
@@ -212,9 +210,8 @@ func extractFromSID(sid string) (string, string, error) {
 	}
 
 	// Verify hash
-	cfg := config.Get()
 	combined := fmt.Sprintf("%s|%s", username, password)
-	expectedHash := sha256.Sum256([]byte(combined + cfg.SecretKey()))
+	expectedHash := sha256.Sum256([]byte(combined + secretKey))
 	expectedHashStr := hex.EncodeToString(expectedHash[:])[:16]
 
 	if providedHash != expectedHashStr {

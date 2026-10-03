@@ -38,6 +38,8 @@ const (
 )
 
 type Service struct {
+	// dir holds the engine state and the swarm under the data folder.
+	dir         string
 	engine      *hearsaylib.Hearsay
 	log         zerolog.Logger
 	debrids     map[string]string
@@ -112,7 +114,8 @@ func New(cfg *config.Config, log zerolog.Logger) (*Service, error) {
 		key := strings.ToLower(strings.TrimSpace(f))
 		s.follow = append(s.follow, strings.TrimPrefix(key, "ed25519:"))
 	}
-	dir := filepath.Join(config.GetMainPath(), "hearsay")
+	dir := filepath.Join(cfg.Dir(), "hearsay")
+	s.dir = dir
 	engine, err := hearsaylib.New(dir, domains...)
 	if err != nil {
 		return nil, err
@@ -263,7 +266,7 @@ func (s *Service) Start(ctx context.Context) error {
 		return nil
 	}
 	node, err := transport.ListenWithConfig(transport.NodeConfig{
-		Dir:                  filepath.Join(config.GetMainPath(), "hearsay", "swarm"),
+		Dir:                  filepath.Join(s.dir, "swarm"),
 		Port:                 s.port,
 		GossipPort:           s.gossip,
 		MaxStorage:           s.maxStorage,

@@ -498,9 +498,10 @@ func (e *Entry) GetActiveFiles() []*File {
 	}
 	return files
 }
-func (e *Entry) GetFolder() string {
-	// CHeck if the mount folder is empty or .
-	return GetTorrentFolder(config.Get().FolderNaming, e)
+
+// GetFolder is the entry's folder name under the given naming scheme.
+func (e *Entry) GetFolder(naming config.WebDavFolderNaming) string {
+	return GetTorrentFolder(naming, e)
 }
 
 // IsValid checks if the torrent has essential fields.
@@ -524,10 +525,11 @@ func (e *Entry) IsValid() bool {
 	return activePlacement.IsValid()
 }
 
-// DownloadPath returns the expected download/symlink path for this entry.
-func (e *Entry) DownloadPath() string {
-	if config.Get().FolderNaming == config.WebDavUseArrSubmittedName {
-		return filepath.Join(e.SavePath, e.GetFolder())
+// DownloadPath returns the expected download/symlink path for this entry
+// under the given folder naming scheme.
+func (e *Entry) DownloadPath(naming config.WebDavFolderNaming) string {
+	if naming == config.WebDavUseArrSubmittedName {
+		return filepath.Join(e.SavePath, e.GetFolder(naming))
 	}
 	return filepath.Join(e.SavePath, utils.RemoveExtension(e.Name))
 }

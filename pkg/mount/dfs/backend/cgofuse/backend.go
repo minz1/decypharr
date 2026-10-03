@@ -10,7 +10,6 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/winfsp/cgofuse/fuse"
 
-	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/backend"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/config"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/vfs"
@@ -27,8 +26,7 @@ type Backend struct {
 }
 
 // NewBackend creates a new cgofuse backend.
-func NewBackend(vfs *vfs.Manager, config *config.FuseConfig) (backend.Backend, error) {
-	log := logger.New("cgofuse")
+func NewBackend(vfs *vfs.Manager, config *config.FuseConfig, log zerolog.Logger) (backend.Backend, error) {
 	return &Backend{
 		config: config,
 		logger: log,

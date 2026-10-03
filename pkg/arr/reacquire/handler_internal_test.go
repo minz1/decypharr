@@ -9,6 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
+
+	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 )
 
@@ -333,11 +336,11 @@ func testInstance(host string) arr.Arr {
 }
 
 func newTestHandler(host string) *arrHandler {
-	arrs := arr.New()
+	arrs := arr.New(config.NewStore(&config.Config{}), zerolog.Nop())
 	arrs.AddOrUpdate(testInstance(host))
 	return &arrHandler{arrs: arrs}
 }
 
 func newTestArrStorage() *arr.Service {
-	return arr.New()
+	return arr.New(config.NewStore(&config.Config{}), zerolog.Nop())
 }

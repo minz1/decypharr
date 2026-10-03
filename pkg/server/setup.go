@@ -23,7 +23,7 @@ type SetupWizardResponse struct {
 
 // SetupHandler renders the setup wizard page.
 func (s *Server) SetupHandler(w http.ResponseWriter, r *http.Request) {
-	cfg := config.Get()
+	cfg := s.config.Get()
 
 	if err := cfg.SetupComplete(); err == nil {
 		s.redirectTo(w, r, "/")
@@ -84,7 +84,7 @@ type SetupCompleteRequest struct {
 
 // setupCompleteHandler handles the complete setup in a single request.
 func (s *Server) setupCompleteHandler(w http.ResponseWriter, r *http.Request) {
-	cfg := config.Get()
+	cfg := s.config.Get()
 	// Prevent re-running setup once it has already been completed
 	if err := cfg.SetupComplete(); err == nil {
 		http.Error(w, "forbidden", http.StatusForbidden)
@@ -110,7 +110,7 @@ func (s *Server) setupCompleteHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	updated, err := config.Update(func(cfg *config.Config) error {
+	updated, err := s.config.Update(func(cfg *config.Config) error {
 		if err := cfg.SetupComplete(); err == nil {
 			return errors.New("setup is already complete")
 		}

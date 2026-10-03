@@ -51,9 +51,8 @@ type Backend struct {
 }
 
 // NewBackend creates a new hanwen backend.
-func NewBackend(vfs *vfs.Manager, config *config.FuseConfig) (backend.Backend, error) {
+func NewBackend(vfs *vfs.Manager, config *config.FuseConfig, log zerolog.Logger) (backend.Backend, error) {
 	now := time.Now()
-	log := logger.New("hanwen-backend")
 	// One shared rate-limited logger for the whole mount. Files/Dirs reference
 	// it instead of allocating their own xsync map per inode — dedup keys are
 	// already unique per inode so a shared map gives identical behaviour.

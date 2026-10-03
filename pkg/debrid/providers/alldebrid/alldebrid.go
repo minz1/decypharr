@@ -17,7 +17,6 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
-	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/internal/request"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/debrid/account"
@@ -47,23 +46,23 @@ type AllDebrid struct {
 	repairClient          *request.Client
 	profile               types.ProfileCache
 	logger                zerolog.Logger
+	options               types.ProviderOptions
 	config                config.Debrid
 }
 
-func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter) (*AllDebrid, error) {
-	cfg := config.Get()
+func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter, options types.ProviderOptions) (*AllDebrid, error) {
 	headers := map[string]string{
 		"Authorization": fmt.Sprintf("Bearer %s", dc.APIKey),
 	}
 	if dc.UserAgent != "" {
 		headers["User-Agent"] = dc.UserAgent
 	}
-	_log := logger.New(dc.Name)
+	_log := options.Logger
 
 	opts := []request.ClientOption{
 		request.WithHeaders(headers),
 		request.WithRateLimiter(ratelimits["main"]),
-		request.WithMaxRetries(cfg.Retries),
+		request.WithMaxRetries(options.Retries),
 		request.WithRetryableStatus(http.StatusTooManyRequests, http.StatusBadGateway),
 	}
 	if dc.Proxy != "" {
@@ -86,7 +85,8 @@ func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter) (*AllDebrid,
 	ad := &AllDebrid{
 		Host:                  "https://api.alldebrid.com/v4.1",
 		APIKey:                dc.APIKey,
-		accountsManager:       account.NewManager(dc, ratelimits["download"], _log),
+		accountsManager:       account.NewManager(dc, options.Retries, ratelimits["download"], _log),
+		options:               options,
 		autoExpiresLinksAfter: autoExpiresLinksAfter,
 		noPeerRetryBackoff:    defaultNoPeerRetryBackoff(),
 		client:                request.New(opts...),
@@ -238,8 +238,6 @@ func (ad *AllDebrid) flattenFiles(
 ) map[string]types.File {
 	result := make(map[string]types.File)
 
-	cfg := config.Get()
-
 	for _, f := range files {
 		currentPath := f.Name
 		if parentPath != "" {
@@ -258,7 +256,7 @@ func (ad *AllDebrid) flattenFiles(
 		} else {
 			fileName := filepath.Base(f.Name)
 
-			if err := cfg.ValidateFileAllowed(f.Name, f.Size); err != nil {
+			if err := ad.options.FileAllowed(f.Name, f.Size); err != nil {
 				continue
 			}
 
@@ -608,8 +606,6 @@ func (ad *AllDebrid) GetTorrents() ([]*types.Torrent, error) {
 		return torrents, fmt.Errorf("alldebrid API error: Status: %d", status)
 	}
 
-	cfg := config.Get()
-
 	for _, magnet := range res.Data.Magnets {
 		t := &types.Torrent{
 			Id:               strconv.Itoa(magnet.ID),
@@ -624,7 +620,7 @@ func (ad *AllDebrid) GetTorrents() ([]*types.Torrent, error) {
 			Added:            time.Unix(magnet.CompletionDate, 0),
 		}
 		for _, f := range magnet.Files {
-			if validateFileAllowedErr := cfg.ValidateFileAllowed(f.Name, f.Size); validateFileAllowedErr != nil {
+			if validateFileAllowedErr := ad.options.FileAllowed(f.Name, f.Size); validateFileAllowedErr != nil {
 				continue
 			}
 			file := types.File{

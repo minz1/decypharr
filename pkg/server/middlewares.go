@@ -20,7 +20,7 @@ const (
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Check if setup is needed
-		cfg := config.Get()
+		cfg := s.config.Get()
 		if !cfg.UseAuth {
 			next.ServeHTTP(w, r)
 			return
@@ -66,7 +66,7 @@ func (s *Server) isAuthenticated(r *http.Request) bool {
 	}
 	auth, _ := session.Values["authenticated"].(bool)
 	version, hasVersion := session.Values["auth_version"].(string)
-	currentAuth := config.Get().GetAuth()
+	currentAuth := s.config.Get().GetAuth()
 	return auth && hasVersion && currentAuth != nil && version == currentAuth.SessionVersion
 }
 
@@ -111,7 +111,7 @@ func (s *Server) sendJSONError(w http.ResponseWriter, message string, statusCode
 // setupRedirectMiddleware redirects to /setup if setup is not completed.
 func (s *Server) setupRedirectMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cfg := config.Get()
+		cfg := s.config.Get()
 
 		// Skip setup check for setup-related routes. /login stays reachable so
 		// an instance with stored credentials can authenticate to rerun setup.

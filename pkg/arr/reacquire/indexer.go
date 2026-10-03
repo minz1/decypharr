@@ -11,7 +11,6 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 )
 
@@ -80,13 +79,19 @@ const (
 // NewIndexer builds the indexer. managedRoot is the mount directory that holds
 // every entry folder; library symlinks that point outside it are not managed by
 // Decypharr and are skipped.
-func NewIndexer(arrs *arr.Service, catalog ManagedCatalog, writer bindingWriter, managedRoot string) *Indexer {
+func NewIndexer(
+	arrs *arr.Service,
+	catalog ManagedCatalog,
+	writer bindingWriter,
+	managedRoot string,
+	log zerolog.Logger,
+) *Indexer {
 	return &Indexer{
 		arrs:        arrs,
 		catalog:     catalog,
 		writer:      writer,
 		managedRoot: managedRoot,
-		logger:      logger.New("arr-indexer"),
+		logger:      log,
 		wake:        make(chan struct{}, 1),
 		pending:     make(map[string]struct{}),
 		covered:     make(map[string]uint64),

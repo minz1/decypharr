@@ -10,17 +10,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/manager"
+	"github.com/sirrobot01/decypharr/pkg/manager/managertest"
 )
 
-//nolint:paralleltest // mutates the process-wide config singleton
 func TestImportPreservesPreparationErrors(t *testing.T) {
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
-	mgr := manager.New()
-	t.Cleanup(func() { _ = mgr.Stop() })
+	t.Parallel()
+	mgr, store := managertest.New(t, nil)
 	unavailable := httptest.NewServer(http.NotFoundHandler())
 	defer unavailable.Close()
 	var body bytes.Buffer
@@ -44,7 +40,7 @@ func TestImportPreservesPreparationErrors(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/add", &body)
 	req.Header.Set("Content-Type", form.FormDataContentType())
 	response := httptest.NewRecorder()
-	(&Server{manager: mgr}).handleAddContent(response, req)
+	(&Server{manager: mgr, config: store}).handleAddContent(response, req)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}

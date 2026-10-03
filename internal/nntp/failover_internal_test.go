@@ -5,6 +5,8 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/testutil/nntpd"
 )
@@ -27,7 +29,7 @@ func TestFailoverAttributesMissingArticleToActualProvider(t *testing.T) {
 		{Host: host, Port: firstPort, MaxConnections: 1, Priority: 1, Backbone: "first"},
 		{Host: "localhost", Port: secondPort, MaxConnections: 1, Priority: 2, Backbone: "second"},
 	}
-	client, err := NewClient(&config.Config{Retries: 1, Usenet: config.Usenet{Providers: providers}})
+	client, err := NewClient(&config.Config{Retries: 1, Usenet: config.Usenet{Providers: providers}}, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,6 +72,7 @@ func TestFailoverHonorsSingleProviderRetryBudget(t *testing.T) {
 			Retries: 1,
 			Usenet:  config.Usenet{Providers: []config.UsenetProvider{{Host: host, Port: port, MaxConnections: 1}}},
 		},
+		zerolog.Nop(),
 	)
 	if err != nil {
 		t.Fatal(err)

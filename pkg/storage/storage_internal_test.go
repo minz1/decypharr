@@ -37,7 +37,7 @@ func TestStartupKeepsDowngradePath(t *testing.T) {
 		writeLegacyDB(t, filepath.Join(dir, name+".db"), 3)
 	}
 
-	s, err := NewStorage(dir)
+	s, err := NewStorage(dir, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestStartupKeepsDowngradePath(t *testing.T) {
 func TestStartupWithoutMigrationLeavesNoBackups(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	s, err := NewStorage(dir)
+	s, err := NewStorage(dir, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestStartupWithoutMigrationLeavesNoBackups(t *testing.T) {
 	}
 
 	// Reopening a fresh database must not migrate anything.
-	s, err = NewStorage(dir)
+	s, err = NewStorage(dir, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

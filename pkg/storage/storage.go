@@ -12,7 +12,7 @@ import (
 	"github.com/sirrobot01/appendstore"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/sirrobot01/decypharr/internal/logger"
+	"github.com/sirrobot01/decypharr/internal/config"
 )
 
 const (
@@ -42,6 +42,10 @@ type Storage struct {
 	repairRuns  *appendstore.Store
 	dir         string
 	logger      zerolog.Logger
+	naming      func() config.WebDavFolderNaming
+
+	// scanMu serializes the start of store scans; see forEach.
+	scanMu sync.Mutex
 
 	healthCountsMu      sync.Mutex
 	healthCounts        map[HealthStatus]int
@@ -86,13 +90,24 @@ func dropLegacyStores(baseDir string, log zerolog.Logger) {
 	}
 }
 
-func NewStorage(dbPath string) (*Storage, error) {
+// Options configures NewStorage.
+type Options struct {
+	// FolderNaming returns the folder naming scheme that names entries in
+	// the name index. It is read on every write, so a live configuration
+	// change applies to later writes. Nil means the default scheme.
+	FolderNaming func() config.WebDavFolderNaming
+	// Logger receives background-operation and migration messages.
+	Logger zerolog.Logger
+}
+
+// NewStorage opens (creating if needed) the stores under dbPath.
+func NewStorage(dbPath string, opts Options) (*Storage, error) {
 	dbPath = filepath.Clean(dbPath)
 	if err := os.MkdirAll(dbPath, 0o750); err != nil {
 		return nil, fmt.Errorf("failed to create db directory: %w", err)
 	}
 
-	log := logger.New("storage")
+	log := opts.Logger
 
 	dropLegacyStores(dbPath, log)
 
@@ -131,6 +146,7 @@ func NewStorage(dbPath string) (*Storage, error) {
 		repairRuns:  itemStores["repair_runs"],
 		dir:         dbPath,
 		logger:      log,
+		naming:      opts.FolderNaming,
 	}
 
 	if count, migrateMetadataErr := s.MigrateMetadata(); migrateMetadataErr != nil {
@@ -140,6 +156,14 @@ func NewStorage(dbPath string) (*Storage, error) {
 	}
 
 	return s, nil
+}
+
+// folderNaming is the naming scheme for the name index.
+func (s *Storage) folderNaming() config.WebDavFolderNaming {
+	if s.naming == nil {
+		return ""
+	}
+	return s.naming()
 }
 
 func (s *Storage) Close() error {

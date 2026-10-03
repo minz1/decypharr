@@ -23,6 +23,7 @@ const maxStrmRead = 1024
 // Reconciler maintains the STRM export tree and its sidecar files.
 // It removes stale files only when their URLs identify them as our exports.
 type Reconciler struct {
+	config     *config.Store
 	storage    *storage.Storage
 	ctx        context.Context
 	openStream func(context.Context, *storage.Entry, string) (io.ReadCloser, error)
@@ -30,14 +31,16 @@ type Reconciler struct {
 	sweepMu    sync.Mutex
 }
 
-// NewReconciler creates the export service with its storage and stream source.
+// NewReconciler creates the export service with its storage and stream
+// source. STRM settings are read live from cfg.
 func NewReconciler(
 	ctx context.Context,
+	cfg *config.Store,
 	store *storage.Storage,
 	openStream func(context.Context, *storage.Entry, string) (io.ReadCloser, error),
 	logger zerolog.Logger,
 ) *Reconciler {
-	return &Reconciler{ctx: ctx, storage: store, openStream: openStream,
+	return &Reconciler{ctx: ctx, config: cfg, storage: store, openStream: openStream,
 		logger: logger.With().Str("component", "strm").Logger()}
 }
 
@@ -63,12 +66,12 @@ type strmTarget struct {
 // entryDir returns the entry's folder inside the export tree; mirrors the
 // __all__ mount layout.
 func entryDir(cfg *config.Config, entry *storage.Entry) string {
-	return filepath.Join(cfg.Strm.Path, entry.GetFolder())
+	return filepath.Join(cfg.Strm.Path, entry.GetFolder(cfg.FolderNaming))
 }
 
 // desired returns the .strm files and sidecar downloads an entry should have.
 func (s *Reconciler) desired(entry *storage.Entry) ([]strmTarget, []*storage.File) {
-	cfg := config.Get()
+	cfg := s.config.Get()
 	base := BaseURL(cfg)
 	dir := entryDir(cfg, entry)
 	maxSidecar := cfg.Strm.SidecarMaxBytes()
@@ -89,11 +92,16 @@ func (s *Reconciler) desired(entry *storage.Entry) ([]strmTarget, []*storage.Fil
 	return targets, sidecars
 }
 
+// active reports whether STRM export is on. A nil Reconciler is inactive.
+func (s *Reconciler) active() bool {
+	return s != nil && s.config.Get().Strm.Active()
+}
+
 // SyncEntryAsync reconciles one entry's export folder in the background —
 // the post-download and entry-updated trigger. Only entries present in main
 // storage are exported; their URLs must resolve.
 func (s *Reconciler) SyncEntryAsync(entry *storage.Entry) {
-	if !config.Get().Strm.Active() {
+	if !s.active() {
 		return
 	}
 	go func() {
@@ -161,7 +169,7 @@ func (s *Reconciler) removeStale(entry *storage.Entry, targets []strmTarget, rep
 	for _, t := range targets {
 		keep[t.path] = struct{}{}
 	}
-	for _, path := range entryStrmFiles(entryDir(config.Get(), entry), entry.InfoHash) {
+	for _, path := range entryStrmFiles(entryDir(s.config.Get(), entry), entry.InfoHash) {
 		if _, ok := keep[path]; ok {
 			continue
 		}
@@ -201,7 +209,7 @@ func strmOwner(path string, d fs.DirEntry, walkErr error) (string, bool) {
 }
 
 func (s *Reconciler) syncSidecar(ctx context.Context, entry *storage.Entry, file *storage.File, rep *Report) {
-	dest := filepath.Join(entryDir(config.Get(), entry), file.Name)
+	dest := filepath.Join(entryDir(s.config.Get(), entry), file.Name)
 	if fi, err := os.Stat(dest); err == nil && fi.Size() == file.Size {
 		return
 	}
@@ -247,10 +255,10 @@ func (s *Reconciler) downloadSidecar(ctx context.Context, entry *storage.Entry, 
 // deleted entries, renamed files, stale folder names — is removed, pruning
 // directories that become empty.
 func (s *Reconciler) Sweep(ctx context.Context) (*Report, error) {
-	cfg := config.Get()
-	if !cfg.Strm.Active() {
+	if !s.active() {
 		return nil, fmt.Errorf("strm is disabled or has no path configured")
 	}
+	cfg := s.config.Get()
 
 	s.sweepMu.Lock()
 	defer s.sweepMu.Unlock()
@@ -295,7 +303,7 @@ func (s *Reconciler) Sweep(ctx context.Context) (*Report, error) {
 // SweepAsync runs a background sweep — the regenerate, config-change, and
 // startup trigger. A no-op while strm is disabled.
 func (s *Reconciler) SweepAsync(reason string) {
-	if !config.Get().Strm.Active() {
+	if !s.active() {
 		return
 	}
 	go func() {
@@ -320,10 +328,10 @@ func (s *Reconciler) SweepAsync(reason string) {
 // deleted, so its folder doesn't linger until the next sweep. Only files
 // carrying the entry's infohash are removed.
 func (s *Reconciler) RemoveEntryAsync(entry *storage.Entry) {
-	cfg := config.Get()
-	if !cfg.Strm.Active() {
+	if !s.active() {
 		return
 	}
+	cfg := s.config.Get()
 	go func() {
 		dir := entryDir(cfg, entry)
 		for _, path := range entryStrmFiles(dir, entry.InfoHash) {

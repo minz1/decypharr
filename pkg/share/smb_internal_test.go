@@ -5,6 +5,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/rs/zerolog"
 	"github.com/sirrobot01/facetfs/smb"
 
 	"github.com/sirrobot01/decypharr/internal/config"
@@ -34,9 +35,10 @@ func TestSingleUserAuthenticator(t *testing.T) {
 	}
 }
 
-func TestSMBRequiresCredentials(t *testing.T) { //nolint:paralleltest // mutates the config singleton
+func TestSMBRequiresCredentials(t *testing.T) {
+	t.Parallel()
 	mgr := testManager(t)
-	server := NewSMB(mgr, nil, config.SMB{Enabled: true, Username: "media"})
+	server := NewSMB(mgr, nil, config.SMB{Enabled: true, Username: "media"}, zerolog.Nop())
 	if err := server.Start(context.Background()); err == nil {
 		t.Fatal("expected an error without a password")
 	}

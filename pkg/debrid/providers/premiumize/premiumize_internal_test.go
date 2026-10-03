@@ -11,7 +11,7 @@ import (
 )
 
 func TestGetTorrentsAssignsStableUniqueHashesWithoutMagnetSources(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
+	t.Parallel()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/transfer/list", func(w http.ResponseWriter, _ *http.Request) {
@@ -72,8 +72,7 @@ func TestGetTorrentsAssignsStableUniqueHashesWithoutMagnetSources(t *testing.T) 
 }
 
 func TestTransferInfoHashPrefersRealHash(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 	const infoHash = "8d2b41ef6a4cd8f42c601c396c1caeebe2aed47d"
 	pm := &Premiumize{config: config.Debrid{Name: "premiumize-primary"}}
 	transfer := premiumizeTransfer{
@@ -87,8 +86,7 @@ func TestTransferInfoHashPrefersRealHash(t *testing.T) {
 }
 
 func TestAvailabilityRejectsIncompleteResponses(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, `{"status":"success","response":[true]}`)
 	}))

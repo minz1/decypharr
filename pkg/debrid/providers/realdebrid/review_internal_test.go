@@ -17,16 +17,16 @@ import (
 
 func testRealDebrid(host string) *RealDebrid {
 	return &RealDebrid{
-		Host:   host,
-		client: request.New(request.WithMaxRetries(0)),
-		config: config.Debrid{Name: "realdebrid"},
-		logger: zerolog.Nop(),
+		Host:    host,
+		client:  request.New(request.WithMaxRetries(0)),
+		config:  config.Debrid{Name: "realdebrid"},
+		logger:  zerolog.Nop(),
+		options: mkvOnly(),
 	}
 }
 
 func TestGetTorrentsPaginatesOnRawPageSize(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Query().Get("offset") {
 		case "":
@@ -49,8 +49,7 @@ func TestGetTorrentsPaginatesOnRawPageSize(t *testing.T) {
 
 // A 509 on file selection must still return the torrent so callers delete it.
 func TestCheckStatusReturnsTorrentOnSlotLimit(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			w.WriteHeader(statusTooManyActive)

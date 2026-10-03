@@ -243,7 +243,7 @@ func (s *Server) handleDeleteTorrents(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
 	arrStorage := s.manager.Arr()
-	cfg := *config.Get()
+	cfg := *s.config.Get()
 	cfg.Arrs = arrStorage.SyncToConfig()
 
 	// Create response with API token info
@@ -279,7 +279,7 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	var before config.Config
 	invalid := false
-	updated, err := config.Update(func(current *config.Config) error {
+	updated, err := s.config.Update(func(current *config.Config) error {
 		next, prepareErr := prepareConfigUpdate(current, body)
 		if prepareErr != nil {
 			invalid = true
@@ -400,7 +400,7 @@ func (s *Server) handlePreviewVirtualFolder(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *Server) handleStrmRegenerate(w http.ResponseWriter, _ *http.Request) {
-	if !config.Get().Strm.Active() {
+	if !s.config.Get().Strm.Active() {
 		http.Error(w, "STRM is disabled or has no path configured", http.StatusBadRequest)
 		return
 	}
@@ -409,7 +409,7 @@ func (s *Server) handleStrmRegenerate(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleGetRepairConfig(w http.ResponseWriter, _ *http.Request) {
-	utils.JSONResponse(w, config.Get().Repair, http.StatusOK)
+	utils.JSONResponse(w, s.config.Get().Repair, http.StatusOK)
 }
 
 func (s *Server) handleUpdateRepairConfig(w http.ResponseWriter, r *http.Request) {
@@ -428,7 +428,7 @@ func (s *Server) handleUpdateRepairConfig(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	cfg, err := config.Update(func(next *config.Config) error { next.Repair = req; return nil })
+	cfg, err := s.config.Update(func(next *config.Config) error { next.Repair = req; return nil })
 	if err != nil {
 		s.logger.Error().Err(err).Msg("Failed to save repair config")
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
@@ -857,7 +857,7 @@ func (s *Server) handleUpdateAuth(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	cfg, err := config.Update(func(next *config.Config) error {
+	cfg, err := s.config.Update(func(next *config.Config) error {
 		if setPassword {
 			return next.SetCredentials(req.Username, req.Password)
 		}

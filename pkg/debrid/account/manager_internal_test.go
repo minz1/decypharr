@@ -13,7 +13,6 @@ import (
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/rs/zerolog"
 
-	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/request"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
 )
@@ -103,14 +102,13 @@ func TestInvalidFetchedLinkIsNotCached(t *testing.T) {
 }
 
 func TestMeasureDownloadIsBoundedWhenRangeIgnored(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(make([]byte, 4*speedTestBytes)) // ignores Range, sends 200 with the whole body
 	}))
 	defer server.Close()
 	var logs bytes.Buffer
 	m, acc := newTestManager(&logs)
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
 	acc.httpClient = request.New(request.WithMaxRetries(0))
 	acc.storeLink(types.DownloadLink{Link: "file", DownloadLink: server.URL})
 	var result types.SpeedTestResult
