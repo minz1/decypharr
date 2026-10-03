@@ -29,6 +29,7 @@ import (
 type Downloader struct {
 	manager *Manager
 	logger  zerolog.Logger
+	seasons *seasonParser
 }
 
 const (
@@ -65,6 +66,7 @@ func NewDownloadManager(manager *Manager) *Downloader {
 	return &Downloader{
 		manager: manager,
 		logger:  manager.logger.With().Str("component", "downloader").Logger(),
+		seasons: newSeasonParser(),
 	}
 }
 
@@ -728,17 +730,17 @@ func (d *Downloader) detectMultiSeason(torrent *storage.Entry) (bool, []SeasonIn
 	files := torrent.GetActiveFiles()
 
 	// Find all seasons present in the files
-	seasonsFound := findAllSeasons(files)
+	seasonsFound := d.seasons.findAllSeasons(files)
 
 	// Check if this is actually a multi-season torrent
-	isMultiSeason := len(seasonsFound) > 1 || hasMultiSeasonIndicators(torrentName)
+	isMultiSeason := len(seasonsFound) > 1 || d.seasons.hasMultiSeasonIndicators(torrentName)
 
 	if !isMultiSeason {
 		return false, nil
 	}
 
 	// Group files by season
-	seasonGroups := groupFilesBySeason(files, seasonsFound)
+	seasonGroups := d.seasons.groupFilesBySeason(files, seasonsFound)
 
 	// Create SeasonInfo objects with proper naming
 	var seasons []SeasonInfo
@@ -748,7 +750,7 @@ func (d *Downloader) detectMultiSeason(torrent *storage.Entry) (bool, []SeasonIn
 		}
 
 		// Generate season-specific name preserving all metadata
-		seasonName := replaceMultiSeasonPattern(torrentName, seasonNum)
+		seasonName := d.seasons.replaceMultiSeasonPattern(torrentName, seasonNum)
 
 		seasons = append(seasons, SeasonInfo{
 			SeasonNumber: seasonNum,

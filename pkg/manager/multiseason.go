@@ -18,43 +18,49 @@ import (
 // seasonFormat renders a single season in a release name.
 const seasonFormat = "Season %02d"
 
-// Multi-season detection patterns, compiled once.
-//
-//nolint:gochecknoglobals // read-only precompiled regexp tables
-var (
-	// Pre-compiled patterns for multi-season replacement.
-	multiSeasonReplacements = []multiSeasonPattern{
-		// S01-08 -> S01 (or whatever target season)
-		{regexp.MustCompile(`(?i)S(\d{1,2})-\d{1,2}`), "S%02d"},
+// seasonParser recognizes season numbers and multi-season packs in release
+// and file names. Its patterns compile once, in newSeasonParser; the
+// Downloader owns one.
+type seasonParser struct {
+	// replacements rewrite a multi-season marker into one season's.
+	replacements []multiSeasonPattern
+	season       *regexp.Regexp
+	quality      *regexp.Regexp
+	indicators   []*regexp.Regexp
+}
 
-		// S01-S08 -> S01
-		{regexp.MustCompile(`(?i)S(\d{1,2})-S\d{1,2}`), "S%02d"},
+func newSeasonParser() *seasonParser {
+	return &seasonParser{
+		replacements: []multiSeasonPattern{
+			// S01-08 -> S01 (or whatever target season)
+			{regexp.MustCompile(`(?i)S(\d{1,2})-\d{1,2}`), "S%02d"},
 
-		// Season 1-8 -> Season 1
-		{regexp.MustCompile(`(?i)Season\.?\s*\d{1,2}-\d{1,2}`), seasonFormat},
+			// S01-S08 -> S01
+			{regexp.MustCompile(`(?i)S(\d{1,2})-S\d{1,2}`), "S%02d"},
 
-		// Seasons 1-8 -> Season 1
-		{regexp.MustCompile(`(?i)Seasons\.?\s*\d{1,2}-\d{1,2}`), seasonFormat},
+			// Season 1-8 -> Season 1
+			{regexp.MustCompile(`(?i)Season\.?\s*\d{1,2}-\d{1,2}`), seasonFormat},
 
-		// Complete Series -> Season X
-		{regexp.MustCompile(`(?i)Complete\.?Series`), seasonFormat},
+			// Seasons 1-8 -> Season 1
+			{regexp.MustCompile(`(?i)Seasons\.?\s*\d{1,2}-\d{1,2}`), seasonFormat},
 
-		// All Seasons -> Season X
-		{regexp.MustCompile(`(?i)All\.?Seasons?`), seasonFormat},
+			// Complete Series -> Season X
+			{regexp.MustCompile(`(?i)Complete\.?Series`), seasonFormat},
+
+			// All Seasons -> Season X
+			{regexp.MustCompile(`(?i)All\.?Seasons?`), seasonFormat},
+		},
+		season:  regexp.MustCompile(`(?i)(?:season\.?\s*|s)(\d{1,2})`),
+		quality: regexp.MustCompile(`(?i)\b(2160p|1080p|720p|BluRay|WEB-DL|HDTV|x264|x265|HEVC)`),
+		indicators: []*regexp.Regexp{
+			regexp.MustCompile(`(?i)complete\.?series`),
+			regexp.MustCompile(`(?i)all\.?seasons?`),
+			regexp.MustCompile(`(?i)season\.?\s*\d+\s*-\s*\d+`),
+			regexp.MustCompile(`(?i)s\d+\s*-\s*s?\d+`),
+			regexp.MustCompile(`(?i)seasons?\s*\d+\s*-\s*\d+`),
+		},
 	}
-
-	// Also pre-compile other patterns.
-	seasonPattern     = regexp.MustCompile(`(?i)(?:season\.?\s*|s)(\d{1,2})`)
-	qualityIndicators = regexp.MustCompile(`(?i)\b(2160p|1080p|720p|BluRay|WEB-DL|HDTV|x264|x265|HEVC)`)
-
-	multiSeasonIndicators = []*regexp.Regexp{
-		regexp.MustCompile(`(?i)complete\.?series`),
-		regexp.MustCompile(`(?i)all\.?seasons?`),
-		regexp.MustCompile(`(?i)season\.?\s*\d+\s*-\s*\d+`),
-		regexp.MustCompile(`(?i)s\d+\s*-\s*s?\d+`),
-		regexp.MustCompile(`(?i)seasons?\s*\d+\s*-\s*\d+`),
-	}
-)
+}
 
 type multiSeasonPattern struct {
 	pattern     *regexp.Regexp
@@ -116,11 +122,11 @@ func convertToMultiSeason(torrent *storage.Entry, seasons []SeasonInfo) []*stora
 	return seasonResults
 }
 
-func replaceMultiSeasonPattern(name string, targetSeason int) string {
+func (sp *seasonParser) replaceMultiSeasonPattern(name string, targetSeason int) string {
 	result := name
 
 	// Apply each pre-compiled pattern replacement
-	for _, msp := range multiSeasonReplacements {
+	for _, msp := range sp.replacements {
 		if msp.pattern.MatchString(result) {
 			replacement := fmt.Sprintf(msp.replacement, targetSeason)
 			result = msp.pattern.ReplaceAllString(result, replacement)
@@ -129,17 +135,17 @@ func replaceMultiSeasonPattern(name string, targetSeason int) string {
 	}
 
 	// If no multi-season pattern found, try to insert season info intelligently
-	return insertSeasonIntoName(result, targetSeason)
+	return sp.insertSeasonIntoName(result, targetSeason)
 }
 
-func insertSeasonIntoName(name string, seasonNum int) string {
+func (sp *seasonParser) insertSeasonIntoName(name string, seasonNum int) string {
 	// Check if season info already exists
-	if seasonPattern.MatchString(name) {
+	if sp.season.MatchString(name) {
 		return name // Already has season info, keep as is
 	}
 
 	// Try to find a good insertion point (before quality indicators)
-	if loc := qualityIndicators.FindStringIndex(name); loc != nil {
+	if loc := sp.quality.FindStringIndex(name); loc != nil {
 		// Insert season before quality info
 		before := strings.TrimSpace(name[:loc[0]])
 		after := name[loc[0]:]
@@ -150,18 +156,18 @@ func insertSeasonIntoName(name string, seasonNum int) string {
 	return fmt.Sprintf("%s S%02d", name, seasonNum)
 }
 
-func findAllSeasons(files []*storage.File) map[int]bool {
+func (sp *seasonParser) findAllSeasons(files []*storage.File) map[int]bool {
 	seasons := make(map[int]bool)
 
 	for _, file := range files {
 		// Check filename first
-		if season := extractSeason(file.Name); season > 0 {
+		if season := sp.extractSeason(file.Name); season > 0 {
 			seasons[season] = true
 			continue
 		}
 
 		// Check full path
-		if season := extractSeason(file.Path); season > 0 {
+		if season := sp.extractSeason(file.Path); season > 0 {
 			seasons[season] = true
 		}
 	}
@@ -170,8 +176,8 @@ func findAllSeasons(files []*storage.File) map[int]bool {
 }
 
 // extractSeason pulls season number from a string.
-func extractSeason(text string) int {
-	matches := seasonPattern.FindStringSubmatch(text)
+func (sp *seasonParser) extractSeason(text string) int {
+	matches := sp.season.FindStringSubmatch(text)
 	if len(matches) > 1 {
 		if num, err := strconv.Atoi(matches[1]); err == nil && num > 0 && num < 100 {
 			return num
@@ -180,8 +186,8 @@ func extractSeason(text string) int {
 	return 0
 }
 
-func hasMultiSeasonIndicators(torrentName string) bool {
-	for _, pattern := range multiSeasonIndicators {
+func (sp *seasonParser) hasMultiSeasonIndicators(torrentName string) bool {
+	for _, pattern := range sp.indicators {
 		if pattern.MatchString(torrentName) {
 			return true
 		}
@@ -190,7 +196,7 @@ func hasMultiSeasonIndicators(torrentName string) bool {
 }
 
 // groupFilesBySeason puts files into season buckets.
-func groupFilesBySeason(files []*storage.File, knownSeasons map[int]bool) map[int][]*storage.File {
+func (sp *seasonParser) groupFilesBySeason(files []*storage.File, knownSeasons map[int]bool) map[int][]*storage.File {
 	groups := make(map[int][]*storage.File)
 
 	// Initialize groups
@@ -200,9 +206,9 @@ func groupFilesBySeason(files []*storage.File, knownSeasons map[int]bool) map[in
 
 	for _, file := range files {
 		// Try to find season from filename or path
-		season := extractSeason(file.Name)
+		season := sp.extractSeason(file.Name)
 		if season == 0 {
-			season = extractSeason(file.Path)
+			season = sp.extractSeason(file.Path)
 		}
 
 		// If we found a season and it's known, add the file
@@ -210,7 +216,7 @@ func groupFilesBySeason(files []*storage.File, knownSeasons map[int]bool) map[in
 			groups[season] = append(groups[season], file)
 		} else {
 			// If no season found, try path-based inference
-			inferredSeason := inferSeasonFromPath(file.Path, knownSeasons)
+			inferredSeason := sp.inferSeasonFromPath(file.Path, knownSeasons)
 			if inferredSeason > 0 {
 				groups[inferredSeason] = append(groups[inferredSeason], file)
 			} else if len(knownSeasons) == 1 {
@@ -225,11 +231,11 @@ func groupFilesBySeason(files []*storage.File, knownSeasons map[int]bool) map[in
 	return groups
 }
 
-func inferSeasonFromPath(path string, knownSeasons map[int]bool) int {
+func (sp *seasonParser) inferSeasonFromPath(path string, knownSeasons map[int]bool) int {
 	pathParts := strings.SplitSeq(path, "/")
 
 	for part := range pathParts {
-		if season := extractSeason(part); season > 0 && knownSeasons[season] {
+		if season := sp.extractSeason(part); season > 0 && knownSeasons[season] {
 			return season
 		}
 	}

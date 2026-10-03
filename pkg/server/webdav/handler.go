@@ -2,6 +2,7 @@ package webdav
 
 import (
 	"net/http"
+	"sync"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -21,6 +22,12 @@ type Handler struct {
 	config  *config.Store
 	logger  *logger.RateLimitedLogger
 	manager *manager.Manager
+
+	// copyBufs holds the streamCopyBufSize buffers StreamResponse pipes
+	// sessions through; every session.Read costs a lock pass and watchdog
+	// arming, so copy granularity multiplies all of it. Empty means
+	// allocate.
+	copyBufs sync.Pool
 }
 
 // NewHandler builds the WebDAV and stream handlers. Auth settings are read
