@@ -722,7 +722,6 @@ func (d *Downloader) processUsenetDownload(entry *storage.Entry) error {
 			if err != nil {
 				return fmt.Errorf("failed to create file %s: %w", file.Name, err)
 			}
-			defer destFile.Close()
 
 			progressCallback := func(downloaded int64, speed int64) {
 				progressMu.Lock()
@@ -739,13 +738,9 @@ func (d *Downloader) processUsenetDownload(entry *storage.Entry) error {
 				_ = d.manager.queue.Update(entry)
 			}
 
-			if downloadErr := d.manager.usenet.Download(
-				d.manager.ctx,
-				entry.InfoHash,
-				file.Name,
-				destFile,
-				progressCallback,
-			); downloadErr != nil {
+			if downloadErr := writeAndClose(destFile, func(w io.Writer) error {
+				return d.manager.usenet.Download(d.manager.ctx, entry.InfoHash, file.Name, w, progressCallback)
+			}); downloadErr != nil {
 				_ = os.Remove(destPath)
 				return fmt.Errorf("failed to download %s: %w", file.Name, downloadErr)
 			}
@@ -763,6 +758,20 @@ func (d *Downloader) processUsenetDownload(entry *storage.Entry) error {
 
 	d.completeEntry(entry)
 	d.logger.Info().Msgf("Downloaded all NZB files for %s", entry.Name)
+	return nil
+}
+
+// writeAndClose fills f with write and closes it. A failed close fails the
+// file too: buffered data may not have reached the disk, so the file can be
+// truncated even though every write succeeded.
+func writeAndClose(f io.WriteCloser, write func(io.Writer) error) error {
+	if err := write(f); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close: %w", err)
+	}
 	return nil
 }
 
