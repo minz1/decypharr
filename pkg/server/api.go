@@ -365,7 +365,16 @@ func mergeConfigUpdate(current *config.Config, update io.Reader) (config.Config,
 	if err != nil {
 		return config.Config{}, fmt.Errorf("copy current config: %w", err)
 	}
-	if decodeErr := json.NewDecoder(update).Decode(merged); decodeErr != nil {
+	body, err := io.ReadAll(update)
+	if err != nil {
+		return config.Config{}, err
+	}
+	// encoding/json decodes an array into a slice's existing elements by
+	// index; line them up by name first (see prepareSuppliedSlices).
+	if prepareErr := prepareSuppliedSlices(reflect.ValueOf(merged).Elem(), body); prepareErr != nil {
+		return config.Config{}, prepareErr
+	}
+	if decodeErr := json.Unmarshal(body, merged); decodeErr != nil {
 		return config.Config{}, decodeErr
 	}
 	return *merged, nil
