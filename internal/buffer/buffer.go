@@ -119,6 +119,10 @@ type Buffer struct {
 	// away from it and the pool's disk backstop reclaims behind it.
 	readHead atomic.Int64
 
+	// readHook, when set by a test, runs in ReadAt after the closed check and
+	// before the lock is taken.
+	readHook func()
+
 	// punchable latches false once the filesystem refuses to release blocks;
 	// see punch.go.
 	punchable atomic.Bool
@@ -377,8 +381,16 @@ func (b *Buffer) ReadAt(p []byte, off int64) (int, error) {
 	end := off + int64(len(p))
 	fromDisk := false
 
+	if b.readHook != nil {
+		b.readHook()
+	}
 	b.mu.RLock()
 	defer b.mu.RUnlock()
+	// Close may have run since the check above; it releases the blocks but
+	// keeps the ranges, so presence alone would read freed or closed tiers.
+	if b.closed.Load() {
+		return 0, ErrClosed
+	}
 	if !b.ranges.present(off, int64(len(p))) {
 		return 0, ErrNotPresent
 	}
