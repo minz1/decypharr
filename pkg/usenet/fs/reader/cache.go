@@ -68,7 +68,7 @@ type SegmentCache struct {
 	closed atomic.Bool
 	logger zerolog.Logger
 
-	stats *ReaderStats
+	stats *Stats
 }
 
 type residentSegment struct {
@@ -87,15 +87,42 @@ const (
 
 // memoryWindowSize keeps one read-ahead window forward and two behind playback.
 func memoryWindowSize(cfg Config, segments []SegmentMeta) int64 {
-	floor := int64(32 << 20)
+	floor := int64(minMemoryWindow)
 	if cfg.PrefetchAhead <= 0 {
-		floor = 8 << 20
+		floor = minProbeMemoryWindow
 	}
-	segBytes := int64(750 * 1024) // typical usenet segment
+	return max(3*int64(cfg.PrefetchAhead)*nominalSegmentBytes(segments), floor)
+}
+
+// Memory window floors: with read-ahead, and for probe-style readers that
+// disable it.
+const (
+	minMemoryWindow      = 32 << 20
+	minProbeMemoryWindow = 8 << 20
+)
+
+// typicalSegmentBytes is the usual decoded Usenet segment size, used when a
+// file's segment metadata carries none.
+const typicalSegmentBytes = 750 * 1024
+
+// nominalSegmentBytes is the first segment's size, or the typical one.
+func nominalSegmentBytes(segments []SegmentMeta) int64 {
 	if len(segments) > 0 && segments[0].Bytes > 0 {
-		segBytes = segments[0].Bytes
+		return segments[0].Bytes
 	}
-	return max(3*int64(cfg.PrefetchAhead)*segBytes, floor)
+	return typicalSegmentBytes
+}
+
+// makeRewindDir creates this reader's private rewind directory: under base
+// when configured, else in the system temp dir.
+func makeRewindDir(base string) (string, error) {
+	if base == "" {
+		return os.MkdirTemp("", "usenet-cache-*")
+	}
+	if err := os.MkdirAll(base, 0o750); err != nil {
+		return "", err
+	}
+	return os.MkdirTemp(base, "cache-*")
 }
 
 // NewSegmentCache creates a bounded extent window or a sparse rewind tier.
@@ -103,7 +130,7 @@ func NewSegmentCache(
 	ctx context.Context,
 	segments []SegmentMeta,
 	config Config,
-	stats *ReaderStats,
+	stats *Stats,
 	logger zerolog.Logger,
 ) (*SegmentCache, error) {
 	ctx, cancel := context.WithCancel(ctx)
@@ -115,22 +142,13 @@ func NewSegmentCache(
 		totalSize = offsets[len(offsets)-1]
 	}
 
-	bufCfg := buffer.Config{}
-	diskPath := ""
 	memSize := memoryWindowSize(config, segments)
-	bufCfg.MemorySize = memSize
+	bufCfg := buffer.Config{MemorySize: memSize}
 	memoryMode := config.Retention != RetentionRewind
+	diskPath := ""
 	if !memoryMode {
 		var err error
-		diskPath = config.DiskPath
-		if diskPath == "" {
-			diskPath, err = os.MkdirTemp("", "usenet-cache-*")
-		} else {
-			if err = os.MkdirAll(diskPath, 0o755); err == nil {
-				diskPath, err = os.MkdirTemp(diskPath, "cache-*")
-			}
-		}
-		if err != nil {
+		if diskPath, err = makeRewindDir(config.DiskPath); err != nil {
 			cancel()
 			return nil, fmt.Errorf("create cache dir: %w", err)
 		}
@@ -138,6 +156,13 @@ func NewSegmentCache(
 		bufCfg.TotalSize = totalSize
 		bufCfg.ImmutableDisk = true
 	}
+	abort := func() {
+		cancel()
+		if diskPath != "" {
+			_ = os.RemoveAll(diskPath)
+		}
+	}
+
 	pools := config.Pools
 	ownsPools := pools == nil
 	if ownsPools {
@@ -146,21 +171,14 @@ func NewSegmentCache(
 	pools.mu.RLock()
 	defer pools.mu.RUnlock()
 	if pools.closed {
-		cancel()
-		if diskPath != "" {
-			_ = os.RemoveAll(diskPath)
-		}
+		abort()
 		return nil, buffer.ErrClosed
 	}
 	var buf *buffer.Buffer
 	if !memoryMode {
 		var err error
-		buf, err = pools.buffers.NewBuffer(bufCfg)
-		if err != nil {
-			cancel()
-			if diskPath != "" {
-				_ = os.RemoveAll(diskPath)
-			}
+		if buf, err = pools.buffers.NewBuffer(bufCfg); err != nil {
+			abort()
 			if ownsPools {
 				_ = pools.buffers.Close()
 			}
@@ -168,10 +186,7 @@ func NewSegmentCache(
 		}
 	}
 
-	segBytesHint := int64(750 * 1024)
-	if len(segments) > 0 && segments[0].Bytes > 0 {
-		segBytesHint = segments[0].Bytes
-	}
+	segBytesHint := nominalSegmentBytes(segments)
 
 	sc := &SegmentCache{
 		pools:        pools,
@@ -224,7 +239,7 @@ func computeOffsets(segments []SegmentMeta) []int64 {
 			offsets[i] = cumulative
 			size := seg.Bytes
 			if size <= 0 {
-				size = 750 * 1024
+				size = typicalSegmentBytes
 			}
 			cumulative += size
 		}
@@ -309,9 +324,9 @@ func (sc *SegmentCache) SegmentDataSize(segIdx int) int64 {
 	return size
 }
 
-// segmentWriter is the contract doFetch uses to stream a segment body into
+// SegmentWriter is the contract doFetch uses to stream a segment body into
 // the cache. Exactly one of Finalize/Discard is called per writer.
-type segmentWriter interface {
+type SegmentWriter interface {
 	Write(p []byte) (int, error)
 	DecodeBuffer() []byte
 	Adopt(decoded []byte) (int64, error)
@@ -322,7 +337,7 @@ type segmentWriter interface {
 // StreamWriter returns a buffer-backed writer for the segment. The writer
 // skips the yEnc dataStart header and caps writes at the segment's max
 // expected size.
-func (sc *SegmentCache) StreamWriter(segIdx int) segmentWriter {
+func (sc *SegmentCache) StreamWriter(segIdx int) SegmentWriter {
 	if segIdx < 0 || segIdx >= sc.segCount {
 		return nil
 	}
@@ -449,23 +464,7 @@ func (sc *SegmentCache) trimResidentTo(target int64) int64 {
 	var wake []int
 	sc.residentMu.Lock()
 	for sc.residentN.Load() > target {
-		victimPos := -1
-		var victimDistance int64 = -1
-		floor := sc.consumedFloor.Load()
-		for pos, idx := range sc.residentAt {
-			if sc.pinCounts[idx].Load() > 0 || sc.resident[idx].Load() == nil {
-				continue
-			}
-			mid := (sc.segOffsets[idx] + sc.segOffsets[idx+1]) / 2
-			distance := mid - floor
-			if distance < 0 {
-				distance = -distance
-			}
-			if distance > victimDistance {
-				victimDistance = distance
-				victimPos = pos
-			}
-		}
+		victimPos := sc.pickVictimLocked()
 		if victimPos < 0 {
 			break
 		}
@@ -493,6 +492,30 @@ func (sc *SegmentCache) trimResidentTo(target int64) int64 {
 		sc.wakeWaiters(idx)
 	}
 	return released
+}
+
+// pickVictimLocked returns the residentAt position of the unpinned resident
+// segment farthest from the consumed floor (-1 if none), so eviction steers
+// away from active playback. Caller holds residentMu.
+func (sc *SegmentCache) pickVictimLocked() int {
+	victimPos := -1
+	var victimDistance int64 = -1
+	floor := sc.consumedFloor.Load()
+	for pos, idx := range sc.residentAt {
+		if sc.pinCounts[idx].Load() > 0 || sc.resident[idx].Load() == nil {
+			continue
+		}
+		mid := (sc.segOffsets[idx] + sc.segOffsets[idx+1]) >> 1
+		distance := mid - floor
+		if distance < 0 {
+			distance = -distance
+		}
+		if distance > victimDistance {
+			victimDistance = distance
+			victimPos = pos
+		}
+	}
+	return victimPos
 }
 
 // bufferStreamWriter pipes decoded body bytes from NNTP into the buffer at
@@ -789,17 +812,8 @@ func (sc *SegmentCache) WaitForSegment(ctx context.Context, segIdx int) error {
 		ctx = context.Background()
 	}
 
-	state := SegmentState(sc.states[segIdx].Load())
-	switch state {
-	case StateOnDisk:
-		return nil
-	case StateEmpty:
-		return ErrSegmentEvicted
-	case StateFailed:
-		if err := sc.GetError(segIdx); err != nil {
-			return err
-		}
-		return fmt.Errorf("segment %d failed", segIdx)
+	if settled, err := sc.segmentSettled(segIdx); settled {
+		return err
 	}
 
 	shardIdx := segIdx & shardMask
@@ -820,17 +834,8 @@ func (sc *SegmentCache) WaitForSegment(ctx context.Context, segIdx int) error {
 	defer mu.Unlock()
 
 	for {
-		state = SegmentState(sc.states[segIdx].Load())
-		switch state {
-		case StateOnDisk:
-			return nil
-		case StateEmpty:
-			return ErrSegmentEvicted
-		case StateFailed:
-			if err := sc.GetError(segIdx); err != nil {
-				return err
-			}
-			return fmt.Errorf("segment %d failed", segIdx)
+		if settled, err := sc.segmentSettled(segIdx); settled {
+			return err
 		}
 
 		select {
@@ -843,6 +848,26 @@ func (sc *SegmentCache) WaitForSegment(ctx context.Context, segIdx int) error {
 
 		cond.Wait()
 	}
+}
+
+// segmentSettled reports whether a wait on segIdx is over and its result.
+// Empty settles with ErrSegmentEvicted because no producer exists to wake a
+// waiter; Fetching and Evicting have an active producer.
+func (sc *SegmentCache) segmentSettled(segIdx int) (bool, error) {
+	switch SegmentState(sc.states[segIdx].Load()) {
+	case StateOnDisk:
+		return true, nil
+	case StateEmpty:
+		return true, ErrSegmentEvicted
+	case StateFailed:
+		if err := sc.GetError(segIdx); err != nil {
+			return true, err
+		}
+		return true, fmt.Errorf("segment %d failed", segIdx)
+	case StateFetching, StateEvicting:
+		return false, nil
+	}
+	return false, nil
 }
 
 // WaitForEvictionRelease waits until an extent is fully unpublished.
@@ -933,7 +958,7 @@ func (sc *SegmentCache) SegmentsForRange(offset, length int64) (int, int) {
 func (sc *SegmentCache) binarySearchSegment(offset int64) int {
 	lo, hi := 0, sc.segCount
 	for lo < hi {
-		mid := (lo + hi) / 2
+		mid := int(uint(lo+hi) >> 1)
 		if sc.segOffsets[mid+1] <= offset {
 			lo = mid + 1
 		} else {

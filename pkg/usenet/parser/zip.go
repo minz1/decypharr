@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"path"
 	"path/filepath"
 	"sort"
@@ -29,6 +30,19 @@ const (
 	ZIPDeflateMethod = 8  // DEFLATE compression
 	ZIPBzip2Method   = 12 // BZIP2 compression
 	ZIPLzmaMethod    = 14 // LZMA compression
+
+	zipFlagEncrypted = 0x0001 // general-purpose bit 0
+
+	zipLocalHeaderSize      = 30 // fixed local file header before name/extra
+	zipEOCDSize             = 22 // end of central directory record without comment
+	zip64LocatorSize        = 20
+	zip64EOCDFixedSize      = 56
+	zipDirectoryBufferSize  = 64 << 10
+	zipEntryPrealloc        = int64(1024)
+	zipExtraRecordHeaderLen = 4 // id(2) + size(2)
+	zip64ExtraID            = 0x0001
+	zip64ValueLen           = 8
+	zip64DiskLen            = 4
 
 	// Default snippet sizes.
 	defaultZIPEndSnippetSize   = 256 * 1024 // 256KB from end for central directory
@@ -98,7 +112,7 @@ func (p *ZIPParser) Process(ctx context.Context, group *FileGroup, password stri
 		volumePosition += volume.Size
 	}
 
-	baseSegments, volumeInfos, _, err := buildBaseSegments(group)
+	baseSegments, volumeInfos, err := buildBaseSegments(group)
 	if err != nil {
 		return nil, err
 	}
@@ -113,53 +127,13 @@ func (p *ZIPParser) Process(ctx context.Context, group *FileGroup, password stri
 
 	var extracted []*storage.ExtractedFileInfo
 	for _, file := range archiveInfo.Files {
-		if file.IsDirectory {
-			continue
+		info, ok, extractErr := p.extractedFile(readerAt, file, volumeStarts)
+		if extractErr != nil {
+			return nil, extractErr
 		}
-
-		// Only process stored (uncompressed) files for streaming
-		if !file.IsStored {
-			continue
+		if ok {
+			extracted = append(extracted, info)
 		}
-
-		internal := NormalizeArchivePath(file.Name)
-		if internal == "" {
-			continue
-		}
-
-		name := utils.RemoveInvalidChars(filepath.Base(internal))
-		if name == "" {
-			name = path.Base(internal)
-		}
-
-		if file.UncompressedSize == 0 {
-			continue
-		}
-
-		// LocalHeaderOffset points at the local file header, NOT the payload.
-		// The payload starts after a 30-byte fixed header + filename + the
-		// LOCAL extra field, whose length frequently differs from the central
-		// directory's. Read the local header to get the exact data offset;
-		// without this the stream is shifted by the header length (garbage
-		// prefix + truncated tail) and the file won't play.
-		headerOffset, absoluteZIPHeaderOffsetErr := absoluteZIPHeaderOffset(file, volumeStarts)
-		if absoluteZIPHeaderOffsetErr != nil {
-			return nil, fmt.Errorf("resolve local header for %q: %w", internal, absoluteZIPHeaderOffsetErr)
-		}
-		dataOffset, absoluteZIPHeaderOffsetErr := p.calculateZIPDataOffset(readerAt, headerOffset)
-		if absoluteZIPHeaderOffsetErr != nil {
-			// Best effort: assume no local extra field (common for archives
-			// that only store extra data in the central directory).
-			dataOffset = headerOffset + 30 + int64(len(file.Name))
-		}
-
-		extracted = append(extracted, &storage.ExtractedFileInfo{
-			FileName:     name,
-			InternalPath: internal,
-			FileSize:     file.UncompressedSize,
-			DataOffset:   dataOffset,
-			IsStored:     file.IsStored,
-		})
 	}
 
 	if len(extracted) == 0 {
@@ -169,12 +143,64 @@ func (p *ZIPParser) Process(ctx context.Context, group *FileGroup, password stri
 	return buildExtractedArchiveFiles(group, password, storage.NZBFileTypeZip, baseSegments, volumeInfos, extracted)
 }
 
+// extractedFile maps one central-directory entry to its payload location; ok
+// is false for entries that cannot be streamed (directories, compressed or
+// empty files, unusable names).
+func (p *ZIPParser) extractedFile(
+	readerAt io.ReaderAt,
+	file *ZIPFileEntry,
+	volumeStarts []int64,
+) (*storage.ExtractedFileInfo, bool, error) {
+	// Only stored (uncompressed) files can be streamed.
+	if file.IsDirectory || !file.IsStored || file.UncompressedSize == 0 {
+		return nil, false, nil
+	}
+	internal := NormalizeArchivePath(file.Name)
+	if internal == "" {
+		return nil, false, nil
+	}
+	name := utils.RemoveInvalidChars(filepath.Base(internal))
+	if name == "" {
+		name = path.Base(internal)
+	}
+
+	// LocalHeaderOffset points at the local file header, NOT the payload.
+	// The payload starts after a 30-byte fixed header + filename + the
+	// LOCAL extra field, whose length frequently differs from the central
+	// directory's. Read the local header to get the exact data offset;
+	// without this the stream is shifted by the header length (garbage
+	// prefix + truncated tail) and the file won't play.
+	headerOffset, err := absoluteZIPHeaderOffset(file, volumeStarts)
+	if err != nil {
+		return nil, false, fmt.Errorf("resolve local header for %q: %w", internal, err)
+	}
+	dataOffset, ok := p.zipDataOffset(readerAt, headerOffset)
+	if !ok {
+		// Best effort: assume no local extra field (common for archives
+		// that only store extra data in the central directory).
+		dataOffset = headerOffset + zipLocalHeaderSize + int64(len(file.Name))
+	}
+	return &storage.ExtractedFileInfo{
+		FileName:     name,
+		InternalPath: internal,
+		FileSize:     file.UncompressedSize,
+		DataOffset:   dataOffset,
+		IsStored:     file.IsStored,
+	}, true, nil
+}
+
+// zipDataOffset reads the local header; ok is false when it is unreadable.
+func (p *ZIPParser) zipDataOffset(readerAt io.ReaderAt, headerOffset int64) (int64, bool) {
+	offset, err := p.calculateZIPDataOffset(readerAt, headerOffset)
+	return offset, err == nil
+}
+
 func (p *ZIPParser) parseArchiveReader(
 	readerAt io.ReaderAt,
 	archiveSize int64,
 	multiPart bool,
 ) (*ZIPArchiveInfo, error) {
-	if archiveSize < 22 {
+	if archiveSize < zipEOCDSize {
 		return nil, fmt.Errorf("ZIP archive is too small: %d bytes", archiveSize)
 	}
 	tailSize := min(archiveSize, int64(defaultZIPEndSnippetSize))
@@ -205,7 +231,7 @@ func (p *ZIPParser) parseArchiveReader(
 		)
 	}
 	section := io.NewSectionReader(readerAt, dirStart, centralDirSize)
-	files, err := p.parseCentralDirectoryReader(bufio.NewReaderSize(section, 64<<10), totalEntries)
+	files, err := p.parseCentralDirectoryReader(bufio.NewReaderSize(section, zipDirectoryBufferSize), totalEntries)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse central directory: %w", err)
 	}
@@ -246,7 +272,7 @@ func (p *ZIPParser) findEndOfCentralDirectory(data []byte) (*endOfCentralDirReco
 	// Prefer a record whose declared comment ends exactly at the archive end.
 	// A second compatibility pass accepts trailing bytes used by some tools.
 	for requireExactEnd := true; ; requireExactEnd = false {
-		for i := len(data) - 22; i >= 0; i-- {
+		for i := len(data) - zipEOCDSize; i >= 0; i-- {
 			if binary.LittleEndian.Uint32(data[i:]) != ZIPEndOfCentralDirSig {
 				continue
 			}
@@ -297,7 +323,7 @@ func zipCentralDirectoryMetadata(data []byte, eocd *endOfCentralDirRecord, eocdP
 }
 
 func (p *ZIPParser) parseCentralDirectoryReader(reader io.Reader, totalEntries int64) ([]*ZIPFileEntry, error) {
-	files := make([]*ZIPFileEntry, 0, min(totalEntries, int64(1024)))
+	files := make([]*ZIPFileEntry, 0, min(totalEntries, zipEntryPrealloc))
 	for i := range totalEntries {
 		file, err := p.parseCentralDirEntry(reader)
 		if err != nil {
@@ -323,11 +349,11 @@ func findZIP64EndOfCentralDirectory(data []byte, eocdPos int) (int64, int64, int
 	//  4: record size (8)        14: version needed (2)    32: total entries (8)
 	//                            16: disk number (4)       40: central dir size (8)
 	//                            20: central dir disk (4)  48: central dir offset (8)
-	end := eocdPos - 20 // record ends where the 20-byte ZIP64 EOCD locator starts
+	end := eocdPos - zip64LocatorSize // record ends where the ZIP64 EOCD locator starts
 	if end < 0 || end > len(data) {
 		end = eocdPos
 	}
-	for i := end - 56; i >= 0; i-- {
+	for i := end - zip64EOCDFixedSize; i >= 0; i-- {
 		if binary.LittleEndian.Uint32(data[i:]) != ZIPZIP64EndOfCentralDirSig {
 			continue
 		}
@@ -355,26 +381,7 @@ func (p *ZIPParser) parseCentralDirEntry(r io.Reader) (*ZIPFileEntry, error) {
 		return nil, fmt.Errorf("invalid central directory signature: 0x%08x", sig)
 	}
 
-	// Read header fields
-	var header struct {
-		VersionMadeBy      uint16
-		VersionNeeded      uint16
-		Flags              uint16
-		Method             uint16
-		ModTime            uint16
-		ModDate            uint16
-		CRC32              uint32
-		CompressedSize     uint32
-		UncompressedSize   uint32
-		FilenameLength     uint16
-		ExtraFieldLength   uint16
-		CommentLength      uint16
-		DiskNumberStart    uint16
-		InternalAttributes uint16
-		ExternalAttributes uint32
-		LocalHeaderOffset  uint32
-	}
-
+	var header zipCentralHeader
 	if err := binary.Read(r, binary.LittleEndian, &header); err != nil {
 		return nil, err
 	}
@@ -386,83 +393,26 @@ func (p *ZIPParser) parseCentralDirEntry(r io.Reader) (*ZIPFileEntry, error) {
 	}
 	filename := strings.ToValidUTF8(string(filenameBytes), "")
 
-	uncompressedSize := int64(header.UncompressedSize)
-	compressedSize := int64(header.CompressedSize)
-	localHeaderOffset := int64(header.LocalHeaderOffset)
-	diskNumberStart := int64(header.DiskNumberStart)
+	entry := &ZIPFileEntry{
+		Name:              filename,
+		UncompressedSize:  int64(header.UncompressedSize),
+		CompressedSize:    int64(header.CompressedSize),
+		Method:            header.Method,
+		LocalHeaderOffset: int64(header.LocalHeaderOffset),
+		DiskNumberStart:   int64(header.DiskNumberStart),
+		CRC32:             header.CRC32,
+		// Encrypted entries (general-purpose flag bit 0) hold ciphertext even
+		// when stored, so they are not streamable.
+		IsStored: header.Method == ZIPStoreMethod && header.Flags&zipFlagEncrypted == 0,
+	}
 
-	// Parse the extra field: for ZIP64 archives the 32-bit size/offset fields
-	// hold 0xFFFFFFFF sentinels and the real 64-bit values live in the ZIP64
-	// extra record (id 0x0001), in fixed order, present only for the fields
-	// that are saturated in the fixed header.
 	if header.ExtraFieldLength > 0 {
 		extra := make([]byte, header.ExtraFieldLength)
 		if _, err := io.ReadFull(r, extra); err != nil {
 			return nil, err
 		}
-		for len(extra) >= 4 {
-			id := binary.LittleEndian.Uint16(extra)
-			size := int(binary.LittleEndian.Uint16(extra[2:]))
-			extra = extra[4:]
-			if size > len(extra) {
-				return nil, fmt.Errorf(
-					"ZIP extra field 0x%04x declares %d bytes with only %d remaining",
-					id,
-					size,
-					len(extra),
-				)
-			}
-			if id == 0x0001 {
-				f := extra[:size]
-				take64 := func() (int64, error) {
-					if len(f) < 8 {
-						return 0, io.ErrUnexpectedEOF
-					}
-					value := binary.LittleEndian.Uint64(f)
-					f = f[8:]
-					if value > uint64(1<<63-1) {
-						return 0, fmt.Errorf("ZIP64 value %d overflows int64", value)
-					}
-					return int64(value), nil
-				}
-				take32 := func() (int64, error) {
-					if len(f) < 4 {
-						return 0, io.ErrUnexpectedEOF
-					}
-					value := binary.LittleEndian.Uint32(f)
-					f = f[4:]
-					return int64(value), nil
-				}
-				if header.UncompressedSize == 0xFFFFFFFF {
-					value, err := take64()
-					if err != nil {
-						return nil, fmt.Errorf("read ZIP64 uncompressed size: %w", err)
-					}
-					uncompressedSize = value
-				}
-				if header.CompressedSize == 0xFFFFFFFF {
-					value, err := take64()
-					if err != nil {
-						return nil, fmt.Errorf("read ZIP64 compressed size: %w", err)
-					}
-					compressedSize = value
-				}
-				if header.LocalHeaderOffset == 0xFFFFFFFF {
-					value, err := take64()
-					if err != nil {
-						return nil, fmt.Errorf("read ZIP64 local header offset: %w", err)
-					}
-					localHeaderOffset = value
-				}
-				if header.DiskNumberStart == 0xFFFF {
-					value, err := take32()
-					if err != nil {
-						return nil, fmt.Errorf("read ZIP64 start disk: %w", err)
-					}
-					diskNumberStart = value
-				}
-			}
-			extra = extra[size:]
+		if err := applyZIPExtraFields(entry, &header, extra); err != nil {
+			return nil, err
 		}
 	}
 
@@ -471,20 +421,89 @@ func (p *ZIPParser) parseCentralDirEntry(r io.Reader) (*ZIPFileEntry, error) {
 		return nil, err
 	}
 
-	// Check if directory
-	isDir := strings.HasSuffix(filename, "/") || uncompressedSize == 0
+	entry.IsDirectory = strings.HasSuffix(filename, "/") || entry.UncompressedSize == 0
+	return entry, nil
+}
 
-	return &ZIPFileEntry{
-		Name:              filename,
-		UncompressedSize:  uncompressedSize,
-		CompressedSize:    compressedSize,
-		Method:            header.Method,
-		IsStored:          header.Method == ZIPStoreMethod,
-		IsDirectory:       isDir,
-		LocalHeaderOffset: localHeaderOffset,
-		DiskNumberStart:   diskNumberStart,
-		CRC32:             header.CRC32,
-	}, nil
+// zipCentralHeader is the fixed part of a central directory entry after its
+// signature.
+type zipCentralHeader struct {
+	VersionMadeBy      uint16
+	VersionNeeded      uint16
+	Flags              uint16
+	Method             uint16
+	ModTime            uint16
+	ModDate            uint16
+	CRC32              uint32
+	CompressedSize     uint32
+	UncompressedSize   uint32
+	FilenameLength     uint16
+	ExtraFieldLength   uint16
+	CommentLength      uint16
+	DiskNumberStart    uint16
+	InternalAttributes uint16
+	ExternalAttributes uint32
+	LocalHeaderOffset  uint32
+}
+
+// applyZIPExtraFields walks the extra field records. For ZIP64 archives the
+// 32-bit size/offset fields hold saturated sentinels and the real values live
+// in the ZIP64 record (id 0x0001).
+func applyZIPExtraFields(entry *ZIPFileEntry, header *zipCentralHeader, extra []byte) error {
+	for len(extra) >= zipExtraRecordHeaderLen {
+		id := binary.LittleEndian.Uint16(extra)
+		size := int(binary.LittleEndian.Uint16(extra[2:]))
+		extra = extra[zipExtraRecordHeaderLen:]
+		if size > len(extra) {
+			return fmt.Errorf("ZIP extra field 0x%04x declares %d bytes with only %d remaining", id, size, len(extra))
+		}
+		if id == zip64ExtraID {
+			if err := applyZIP64Record(entry, header, extra[:size]); err != nil {
+				return err
+			}
+		}
+		extra = extra[size:]
+	}
+	return nil
+}
+
+// applyZIP64Record reads the 64-bit values, in fixed order, present only for
+// the fields saturated in the fixed header.
+func applyZIP64Record(entry *ZIPFileEntry, header *zipCentralHeader, record []byte) error {
+	take64 := func(name string, dst *int64) error {
+		if len(record) < zip64ValueLen {
+			return fmt.Errorf("read ZIP64 %s: %w", name, io.ErrUnexpectedEOF)
+		}
+		value := binary.LittleEndian.Uint64(record)
+		record = record[zip64ValueLen:]
+		if value > math.MaxInt64 {
+			return fmt.Errorf("read ZIP64 %s: ZIP64 value %d overflows int64", name, value)
+		}
+		*dst = int64(value)
+		return nil
+	}
+	if header.UncompressedSize == math.MaxUint32 {
+		if err := take64("uncompressed size", &entry.UncompressedSize); err != nil {
+			return err
+		}
+	}
+	if header.CompressedSize == math.MaxUint32 {
+		if err := take64("compressed size", &entry.CompressedSize); err != nil {
+			return err
+		}
+	}
+	if header.LocalHeaderOffset == math.MaxUint32 {
+		if err := take64("local header offset", &entry.LocalHeaderOffset); err != nil {
+			return err
+		}
+	}
+	if header.DiskNumberStart == math.MaxUint16 {
+		if len(record) < zip64DiskLen {
+			return fmt.Errorf("read ZIP64 start disk: %w", io.ErrUnexpectedEOF)
+		}
+		entry.DiskNumberStart = int64(binary.LittleEndian.Uint32(record))
+	}
+	return nil
 }
 
 func countStoredZIPFiles(files []*ZIPFileEntry) int {
@@ -528,7 +547,7 @@ func (p *ZIPParser) calculateZIPDataOffset(readerAt io.ReaderAt, headerOffset in
 	// 4-25: various fields
 	// 26-27: filename length (uint16)
 	// 28-29: extra field length (uint16)
-	headerData := make([]byte, 30)
+	headerData := make([]byte, zipLocalHeaderSize)
 
 	if _, err := readerAt.ReadAt(headerData, headerOffset); err != nil {
 		return 0, fmt.Errorf("failed to read local header: %w", err)

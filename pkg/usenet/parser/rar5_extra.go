@@ -40,38 +40,54 @@ func parseRAR5Extra(data []byte, password string) (rar5Encryption, error) {
 		if encryption.Encrypted {
 			return rar5Encryption{}, fmt.Errorf("duplicate RAR5 encryption record")
 		}
-		version, err := binary.ReadUvarint(record)
-		if err != nil || version != 0 {
-			return rar5Encryption{}, fmt.Errorf("invalid RAR5 encryption version")
+		if encryption, err = parseRAR5EncryptionRecord(record, password); err != nil {
+			return rar5Encryption{}, err
 		}
-		flags, err := binary.ReadUvarint(record)
-		if err != nil {
-			return rar5Encryption{}, fmt.Errorf("RAR5 encryption flags: %w", err)
+	}
+	return encryption, nil
+}
+
+// RAR5 file encryption record layout.
+const (
+	rar5SaltSize       = 16
+	rar5IVSize         = 16
+	rar5PwCheckSize    = 12
+	rar5FlagPwCheck    = 0x01
+	maxRAR5KDFExponent = 24 // limit key derivation to 2^24 rounds per file
+)
+
+// parseRAR5EncryptionRecord reads an encryption record after its type and
+// derives the file key when a password is given.
+func parseRAR5EncryptionRecord(record *bytes.Reader, password string) (rar5Encryption, error) {
+	version, err := binary.ReadUvarint(record)
+	if err != nil || version != 0 {
+		return rar5Encryption{}, fmt.Errorf("invalid RAR5 encryption version")
+	}
+	flags, err := binary.ReadUvarint(record)
+	if err != nil {
+		return rar5Encryption{}, fmt.Errorf("RAR5 encryption flags: %w", err)
+	}
+	kdf, err := record.ReadByte()
+	if err != nil || kdf > maxRAR5KDFExponent {
+		return rar5Encryption{}, fmt.Errorf("invalid RAR5 key derivation count")
+	}
+	var salt [rar5SaltSize]byte
+	if _, readFullErr := io.ReadFull(record, salt[:]); readFullErr != nil {
+		return rar5Encryption{}, fmt.Errorf("RAR5 salt: %w", readFullErr)
+	}
+	iv := make([]byte, rar5IVSize)
+	if _, readFullErr := io.ReadFull(record, iv); readFullErr != nil {
+		return rar5Encryption{}, fmt.Errorf("RAR5 IV: %w", readFullErr)
+	}
+	if flags&rar5FlagPwCheck != 0 {
+		var check [rar5PwCheckSize]byte
+		if _, readFullErr := io.ReadFull(record, check[:]); readFullErr != nil {
+			return rar5Encryption{}, fmt.Errorf("RAR5 password check: %w", readFullErr)
 		}
-		kdf, err := record.ReadByte()
-		// Limit key derivation to 2^24 rounds per file.
-		if err != nil || kdf > 24 {
-			return rar5Encryption{}, fmt.Errorf("invalid RAR5 key derivation count")
-		}
-		var salt [16]byte
-		if _, readFullErr := io.ReadFull(record, salt[:]); readFullErr != nil {
-			return rar5Encryption{}, fmt.Errorf("RAR5 salt: %w", readFullErr)
-		}
-		iv := make([]byte, 16)
-		if _, readFullErr := io.ReadFull(record, iv); readFullErr != nil {
-			return rar5Encryption{}, fmt.Errorf("RAR5 IV: %w", readFullErr)
-		}
-		if flags&1 != 0 {
-			var check [12]byte
-			if _, readFullErr := io.ReadFull(record, check[:]); readFullErr != nil {
-				return rar5Encryption{}, fmt.Errorf("RAR5 password check: %w", readFullErr)
-			}
-		}
-		encryption.Encrypted = true
-		encryption.IV = iv
-		if password != "" {
-			encryption.Key = crypto.DeriveKeys([]byte(password), salt[:], int(kdf)).Key
-		}
+	}
+	encryption := rar5Encryption{Encrypted: true, IV: iv}
+	if password != "" {
+		encryption.Key = crypto.DeriveKeys([]byte(password), salt[:], int(kdf)).Key
 	}
 	return encryption, nil
 }

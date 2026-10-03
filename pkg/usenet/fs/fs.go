@@ -18,7 +18,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/usenet/types"
 )
 
-// PrefetchableReaderAt extends io.ReaderAt with prefetch capability.
+// PrefetchableReaderAt extends [io.ReaderAt] with prefetch capability.
 // This allows callers to trigger segment downloads before starting reads.
 type PrefetchableReaderAt interface {
 	io.ReaderAt
@@ -32,11 +32,10 @@ type PrefetchableReaderAt interface {
 	OpenCursor() reader.ReadCursor
 }
 
-// FS implements fs.FS for RAR volumes backed by NNTP Segments.
-type FS struct {
+// readerSettings are the knobs every volume's streaming reader shares.
+type readerSettings struct {
 	pools             *reader.Pools
 	ctx               context.Context
-	volumes           *xsync.Map[string, *types.Volume]
 	client            *nntp.Client // Connection client for all readers
 	maxConcurrent     int          // Scheduler width for standalone readers
 	prefetchSize      int64        // Prefetch size in bytes
@@ -45,6 +44,37 @@ type FS struct {
 	retention         reader.Retention
 	scheduler         *reader.FetchScheduler
 	logger            zerolog.Logger
+}
+
+// newReader builds the (optionally decrypting) streaming reader for vol.
+func (s *readerSettings) newReader(vol *types.Volume) (*reader.StreamingReader, error) {
+	if s.client == nil {
+		return nil, fmt.Errorf("no connection client available for streaming reader")
+	}
+	segments := reader.VolumeToSegmentMeta(vol)
+	if len(segments) == 0 {
+		return nil, fmt.Errorf("no segments in volume %s", vol.Name)
+	}
+	options := []reader.Option{
+		reader.WithMaxConnections(s.maxConcurrent),
+		reader.WithPrefetchAhead(reader.PrefetchAheadSegments(s.prefetchSize, segments)),
+		reader.WithBodyPipelineDepth(s.bodyPipelineDepth),
+		reader.WithDiskPath(s.diskPath),
+		reader.WithRetention(s.retention),
+		reader.WithFetchScheduler(s.scheduler),
+		reader.WithPools(s.pools),
+	}
+	if encryption := reader.EncryptionFromVolume(vol); encryption.Enabled {
+		return reader.NewStreamingReaderWithEncryption(s.ctx, s.client, segments, encryption, options...)
+	}
+	return reader.NewStreamingReader(s.ctx, s.client, segments, options...)
+}
+
+// FS implements [fs.FS] for RAR volumes backed by NNTP Segments.
+type FS struct {
+	readerSettings
+
+	volumes *xsync.Map[string, *types.Volume]
 }
 
 // Option configures the filesystem.
@@ -83,7 +113,6 @@ func NewFS(
 	}
 	f := &FS{
 		ctx:               ctx,
-		volumes:           xsync.NewMap[string, *types.Volume](),
 		client:            client,
 		maxConcurrent:     maxConcurrent,
 		prefetchSize:      prefetchSize,
@@ -91,6 +120,7 @@ func NewFS(
 		diskPath:          usenetConfig.DiskPath,
 		retention:         retention,
 		logger:            logger,
+		volumes:           xsync.NewMap[string, *types.Volume](),
 	}
 
 	// Apply options
@@ -112,7 +142,7 @@ func (f *FS) registerVolume(vol *types.Volume) {
 	f.volumes.Store(key, vol)
 }
 
-// Open implements fs.FS to provide access to virtual RAR volumes.
+// Open implements [fs.FS] to provide access to virtual RAR volumes.
 func (f *FS) Open(name string) (fs.File, error) {
 	if name == "" {
 		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrInvalid}
@@ -131,18 +161,9 @@ func (f *FS) Open(name string) (fs.File, error) {
 	}
 
 	return &File{
-		info:              info,
-		ctx:               f.ctx,
-		manager:           f.client,
-		maxConcurrent:     f.maxConcurrent,
-		prefetchSize:      f.prefetchSize,
-		bodyPipelineDepth: f.bodyPipelineDepth,
-		diskPath:          f.diskPath,
-		retention:         f.retention,
-		scheduler:         f.scheduler,
-		pools:             f.pools,
-		logger:            f.logger,
-		volume:            vol,
+		readerSettings: f.readerSettings,
+		info:           info,
+		volume:         vol,
 	}, nil
 }
 
@@ -169,7 +190,7 @@ func (f *FS) CreateReaderAt() (io.ReaderAt, int64, func(), error) {
 	closers := make([]io.Closer, 0, volumeSize)
 
 	volumes := make([]*types.Volume, 0, volumeSize)
-	f.volumes.Range(func(key string, value *types.Volume) bool {
+	f.volumes.Range(func(_ string, value *types.Volume) bool {
 		volumes = append(volumes, value)
 		return true
 	})
@@ -228,60 +249,12 @@ func (f *FS) CreateReaderAtForVolume(vol *types.Volume) (PrefetchableReaderAt, i
 	return f.createNewReaderForVolume(vol)
 }
 
-// createNewReaderForVolume uses the new reader.StreamingReader with Pin/Unpin pattern.
-// This fixes the "chunk does not exist" race condition.
+// createNewReaderForVolume wraps the volume's streaming reader with its cleanup.
 func (f *FS) createNewReaderForVolume(vol *types.Volume) (PrefetchableReaderAt, int64, func(), error) {
-	// Convert segments to new reader format
-	segments := reader.VolumeToSegmentMeta(vol)
-	if len(segments) == 0 {
-		return nil, 0, nil, fmt.Errorf("no segments in volume %s", vol.Name)
-	}
-
-	// Build encryption config
-	encConfig := reader.EncryptionFromVolume(vol)
-
-	// Configure the new reader
-	readerConfig := reader.DefaultConfig()
-	readerConfig.MaxConnections = f.maxConcurrent
-	readerConfig.PrefetchAhead = reader.PrefetchAheadSegments(f.prefetchSize, segments)
-	readerConfig.BodyPipelineDepth = f.bodyPipelineDepth
-	readerConfig.DiskPath = f.diskPath
-	readerConfig.Retention = f.retention
-	readerConfig.Scheduler = f.scheduler
-	readerOptions := []reader.Option{
-		reader.WithMaxConnections(readerConfig.MaxConnections),
-		reader.WithPrefetchAhead(readerConfig.PrefetchAhead),
-		reader.WithBodyPipelineDepth(readerConfig.BodyPipelineDepth),
-		reader.WithDiskPath(readerConfig.DiskPath),
-		reader.WithRetention(readerConfig.Retention),
-		reader.WithFetchScheduler(readerConfig.Scheduler),
-		reader.WithPools(f.pools),
-	}
-	// Create the new streaming reader
-	var streamReader *reader.StreamingReader
-	var err error
-
-	if encConfig.Enabled {
-		streamReader, err = reader.NewStreamingReaderWithEncryption(
-			f.ctx,
-			f.client,
-			segments,
-			encConfig,
-			readerOptions...,
-		)
-	} else {
-		streamReader, err = reader.NewStreamingReader(
-			f.ctx,
-			f.client,
-			segments,
-			readerOptions...,
-		)
-	}
-
+	streamReader, err := f.newReader(vol)
 	if err != nil {
 		return nil, 0, nil, fmt.Errorf("failed to create new streaming reader for volume %s: %w", vol.Name, err)
 	}
-
 	cleanup := func() {
 		_ = streamReader.Close()
 	}

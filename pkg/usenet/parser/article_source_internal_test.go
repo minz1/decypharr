@@ -195,6 +195,7 @@ func TestArticleBrokerBoundsMetadataEntries(t *testing.T) {
 // decompressed buffer, so a retained id pins that NZB's whole segment map. The
 // broker outlives any single parse, so every key it keeps must be its own copy.
 func TestArticleBrokerDoesNotRetainAliasedMessageIDs(t *testing.T) {
+	t.Parallel()
 	const id = "aliased-segment@example"
 	backing := make([]byte, 1<<20)
 	for index := range backing {

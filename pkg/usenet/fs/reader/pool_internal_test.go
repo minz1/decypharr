@@ -10,6 +10,7 @@ import (
 )
 
 func TestPoolBudgetsBelongToEachRun(t *testing.T) {
+	t.Parallel()
 	var previous *Pools
 	for _, budget := range []int64{64 << 20, 8 << 20} {
 		pools := NewPools(budget)
@@ -26,16 +27,7 @@ func TestPoolBudgetsBelongToEachRun(t *testing.T) {
 		cfg.Pools = pools
 		for _, retention := range []Retention{RetentionWindow, RetentionRewind} {
 			cfg.Retention = retention
-			cache, err := NewSegmentCache(t.Context(), mkSegs(4, 1024), cfg, &ReaderStats{}, zerolog.Nop())
-			if err != nil {
-				t.Fatal(err)
-			}
-			if cache.pools != pools || cache.ownsPools {
-				t.Fatal("cache did not use shared service pools")
-			}
-			if closeErr := cache.Close(); closeErr != nil {
-				t.Fatal(closeErr)
-			}
+			checkCacheUsesSharedPools(t, cfg)
 		}
 		if err := pools.Close(); err != nil {
 			t.Fatal(err)
@@ -43,24 +35,32 @@ func TestPoolBudgetsBelongToEachRun(t *testing.T) {
 		if pools.extents.stats().Caches != 0 || pools.buffers.Stats().Buffers != 0 {
 			t.Fatal("closed run retains caches")
 		}
-		if _, err := NewSegmentCache(
-			t.Context(),
-			mkSegs(4, 1024),
-			cfg,
-			&ReaderStats{},
-			zerolog.Nop(),
-		); !errors.Is(
-			err,
-			buffer.ErrClosed,
-		) {
+		_, err := NewSegmentCache(t.Context(), mkSegs(4, 1024), cfg, &Stats{}, zerolog.Nop())
+		if !errors.Is(err, buffer.ErrClosed) {
 			t.Fatalf("old run accepted a cache: %v", err)
 		}
 		previous = pools
 	}
 }
 
+// checkCacheUsesSharedPools opens and closes a cache on cfg.Pools.
+func checkCacheUsesSharedPools(t *testing.T, cfg Config) {
+	t.Helper()
+	cache, err := NewSegmentCache(t.Context(), mkSegs(4, 1024), cfg, &Stats{}, zerolog.Nop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cache.pools != cfg.Pools || cache.ownsPools {
+		t.Fatal("cache did not use shared service pools")
+	}
+	if closeErr := cache.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+}
+
 func TestStandaloneCacheClosesItsPrivatePools(t *testing.T) {
-	cache, err := NewSegmentCache(t.Context(), mkSegs(4, 1024), DefaultConfig(), &ReaderStats{}, zerolog.Nop())
+	t.Parallel()
+	cache, err := NewSegmentCache(t.Context(), mkSegs(4, 1024), DefaultConfig(), &Stats{}, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}

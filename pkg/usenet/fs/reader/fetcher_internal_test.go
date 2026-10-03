@@ -32,7 +32,7 @@ func newTestFetcher(t *testing.T, segCount int) *SegmentFetcher {
 	cfg.DiskPath = t.TempDir()
 	cfg.MaxConnections = 1
 
-	stats := &ReaderStats{}
+	stats := &Stats{}
 	cache, err := NewSegmentCache(context.Background(), segs, cfg, stats, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewSegmentCache: %v", err)
@@ -45,6 +45,7 @@ func newTestFetcher(t *testing.T, segCount int) *SegmentFetcher {
 }
 
 func TestCancelPendingPrefetchDrainsQueue(t *testing.T) {
+	t.Parallel()
 	sf := newTestFetcher(t, 10)
 
 	for i := 2; i <= 5; i++ {
@@ -72,6 +73,7 @@ func TestCancelPendingPrefetchDrainsQueue(t *testing.T) {
 }
 
 func TestPrefetchRangePipelinesAndPublishesEverySegment(t *testing.T) {
+	t.Parallel()
 	const depth = 4
 	srv, cache, fetcher, stats := newPipelineTestFetcher(t, depth, func(int) bool { return true })
 
@@ -89,6 +91,7 @@ func TestPrefetchRangePipelinesAndPublishesEverySegment(t *testing.T) {
 }
 
 func TestPrefetchRangePublishesSuccessAfterMissingArticle(t *testing.T) {
+	t.Parallel()
 	const depth = 2
 	_, cache, fetcher, stats := newPipelineTestFetcher(t, depth, func(i int) bool { return i == 1 })
 
@@ -109,6 +112,7 @@ func TestPrefetchRangePublishesSuccessAfterMissingArticle(t *testing.T) {
 }
 
 func TestStreamBodyPipelinePlanPreservesParallelism(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name         string
 		workers      int
@@ -130,6 +134,7 @@ func TestStreamBodyPipelinePlanPreservesParallelism(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			sf := &SegmentFetcher{
 				config:    Config{BodyPipelineDepth: tt.depth},
 				scheduler: &FetchScheduler{workers: tt.workers},
@@ -145,7 +150,7 @@ func newPipelineTestFetcher(
 	t *testing.T,
 	depth int,
 	present func(int) bool,
-) (*nntpd.Server, *SegmentCache, *SegmentFetcher, *ReaderStats) {
+) (*nntpd.Server, *SegmentCache, *SegmentFetcher, *Stats) {
 	t.Helper()
 	srv, err := nntpd.New(nntpd.Config{RTT: 10 * time.Millisecond})
 	if err != nil {
@@ -186,7 +191,7 @@ func newPipelineTestFetcher(
 	cfg.MaxConnections = 2
 	cfg.BodyPipelineDepth = depth
 	cfg.DownloadTimeout = 5 * time.Second
-	stats := &ReaderStats{}
+	stats := &Stats{}
 	cache, err := NewSegmentCache(t.Context(), segments, cfg, stats, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
@@ -222,6 +227,7 @@ func waitForCondition(t *testing.T, condition func() bool) {
 }
 
 func TestEnsureSegmentsPropagatesPermanentFailure(t *testing.T) {
+	t.Parallel()
 	sf := newTestFetcher(t, 6)
 
 	notFound := &nntp.Error{Type: nntp.ErrorTypeArticleNotFound, Message: "gone"}
@@ -241,6 +247,7 @@ func TestEnsureSegmentsPropagatesPermanentFailure(t *testing.T) {
 }
 
 func TestSeekAbandonedWindow(t *testing.T) {
+	t.Parallel()
 	const ahead = 40
 	cases := []struct {
 		name             string
@@ -259,6 +266,7 @@ func TestSeekAbandonedWindow(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			a := ahead
 			if tc.name == "prefetch disabled" {
 				a = 0

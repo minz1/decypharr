@@ -19,6 +19,14 @@ type scheduledFetch struct {
 	drop func()
 }
 
+// Queue depths: a floor plus room per worker.
+const (
+	minDemandQueue         = 64
+	demandQueuePerWorker   = 16
+	minPrefetchQueue       = 256
+	prefetchQueuePerWorker = 32
+)
+
 // FetchScheduler bounds NNTP work across every reader sharing a client.
 // Foreground reads use the demand queue; speculative work uses prefetch.
 type FetchScheduler struct {
@@ -39,8 +47,8 @@ func NewFetchScheduler(workers int) *FetchScheduler {
 		workers = 0
 	}
 	s := &FetchScheduler{
-		demand:   make(chan scheduledFetch, max(64, workers*16)),
-		prefetch: make(chan scheduledFetch, max(256, workers*32)),
+		demand:   make(chan scheduledFetch, max(minDemandQueue, workers*demandQueuePerWorker)),
+		prefetch: make(chan scheduledFetch, max(minPrefetchQueue, workers*prefetchQueuePerWorker)),
 		stop:     make(chan struct{}),
 		workers:  workers,
 	}

@@ -14,6 +14,7 @@ import (
 )
 
 func TestMemoryWindowSize(t *testing.T) {
+	t.Parallel()
 	seg750 := []SegmentMeta{{Bytes: 750 * 1024}}
 	base := DefaultConfig()
 	cases := []struct {
@@ -29,6 +30,7 @@ func TestMemoryWindowSize(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			cfg := base
 			cfg.PrefetchAhead = tc.prefetch
 			if budget := memoryWindowSize(cfg, tc.segs); budget != tc.wantBudget {
@@ -39,6 +41,7 @@ func TestMemoryWindowSize(t *testing.T) {
 }
 
 func TestWindowRetentionDropsWhenOverBudget(t *testing.T) {
+	t.Parallel()
 	const segSize = 750 * 1024
 	const segCount = 16 // 12MB total against an 8MB window
 	segs := make([]SegmentMeta, segCount)
@@ -55,7 +58,7 @@ func TestWindowRetentionDropsWhenOverBudget(t *testing.T) {
 	cfg.DiskPath = t.TempDir()
 	cfg.PrefetchAhead = 0 // probe profile: 8MB window, so drops must fire
 
-	cache, err := NewSegmentCache(context.Background(), segs, cfg, &ReaderStats{}, zerolog.Nop())
+	cache, err := NewSegmentCache(context.Background(), segs, cfg, &Stats{}, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewSegmentCache: %v", err)
 	}
@@ -99,6 +102,7 @@ func TestWindowRetentionDropsWhenOverBudget(t *testing.T) {
 }
 
 func TestMemoryEvictionFollowsPlayback(t *testing.T) {
+	t.Parallel()
 	const segSize = 750 * 1024
 	const segCount = 20
 	segs := make([]SegmentMeta, segCount)
@@ -115,7 +119,7 @@ func TestMemoryEvictionFollowsPlayback(t *testing.T) {
 	cfg.DiskPath = t.TempDir()
 	cfg.PrefetchAhead = 0 // probe profile: 8MB window against ~14MB of segments
 
-	cache, err := NewSegmentCache(context.Background(), segs, cfg, &ReaderStats{}, zerolog.Nop())
+	cache, err := NewSegmentCache(context.Background(), segs, cfg, &Stats{}, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewSegmentCache: %v", err)
 	}
@@ -157,11 +161,12 @@ func putSegment(t *testing.T, sc *SegmentCache, segIdx int, data []byte) {
 }
 
 func TestMemoryWriterAdoptsDecodedExtent(t *testing.T) {
+	t.Parallel()
 	cache, err := NewSegmentCache(
 		context.Background(),
 		mkSegs(1, 64<<10),
 		DefaultConfig(),
-		&ReaderStats{},
+		&Stats{},
 		zerolog.Nop(),
 	)
 	if err != nil {
@@ -189,8 +194,9 @@ func TestMemoryWriterAdoptsDecodedExtent(t *testing.T) {
 }
 
 func TestDeliveryAcknowledgementReleasesCompleteSegments(t *testing.T) {
+	t.Parallel()
 	const segSize = int64(64 << 10)
-	stats := &ReaderStats{}
+	stats := &Stats{}
 	cfg := DefaultConfig()
 	cfg.Retention = RetentionDelivery
 	cache, err := NewSegmentCache(context.Background(), mkSegs(4, segSize), cfg, stats, zerolog.Nop())
@@ -226,10 +232,11 @@ func TestDeliveryAcknowledgementReleasesCompleteSegments(t *testing.T) {
 }
 
 func TestIdleDeliveryDropsResidentsAndLatePublishes(t *testing.T) {
+	t.Parallel()
 	const segSize = int64(64 << 10)
 	cfg := DefaultConfig()
 	cfg.Retention = RetentionDelivery
-	cache, err := NewSegmentCache(context.Background(), mkSegs(3, segSize), cfg, &ReaderStats{}, zerolog.Nop())
+	cache, err := NewSegmentCache(context.Background(), mkSegs(3, segSize), cfg, &Stats{}, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,85 +272,72 @@ func TestIdleDeliveryDropsResidentsAndLatePublishes(t *testing.T) {
 }
 
 func TestRetentionStorageTiers(t *testing.T) {
+	t.Parallel()
 	if DefaultConfig().Retention != RetentionWindow {
 		t.Fatal("window retention must be the default")
 	}
-	for _, memory := range []bool{true, false} {
-		name := "disk"
-		if memory {
-			name = "memory"
+	t.Run("memory", func(t *testing.T) {
+		t.Parallel()
+		cfg := DefaultConfig()
+		cfg.DiskPath = t.TempDir()
+		cfg.Retention = RetentionWindow
+		roundTripSegments(t, cfg, 8)
+		// Memory mode owns no file: the DiskPath dir stays empty.
+		entries, err := os.ReadDir(cfg.DiskPath)
+		if err != nil {
+			t.Fatal(err)
 		}
-		t.Run(name, func(t *testing.T) {
-			const segSize = 64 << 10
-			segCount := 8
-			if !memory {
-				segCount = 640
-			}
-			segs := make([]SegmentMeta, segCount)
-			for i := range segs {
-				segs[i] = SegmentMeta{
-					MessageID:   fmt.Sprintf("<seg%d@test>", i),
-					Number:      i + 1,
-					Bytes:       segSize,
-					StartOffset: int64(i) * segSize,
-					EndOffset:   int64(i+1)*segSize - 1,
-				}
-			}
-			cfg := DefaultConfig()
-			cfg.DiskPath = t.TempDir()
-			if memory {
-				cfg.Retention = RetentionWindow
-			} else {
-				cfg.Retention = RetentionRewind
-			}
+		if len(entries) != 0 {
+			t.Fatalf("memory mode created cache files: %v", entries)
+		}
+	})
+	t.Run("disk", func(t *testing.T) {
+		t.Parallel()
+		cfg := DefaultConfig()
+		cfg.DiskPath = t.TempDir()
+		cfg.Retention = RetentionRewind
+		roundTripSegments(t, cfg, 640)
+		matches, err := filepath.Glob(filepath.Join(cfg.DiskPath, "cache-*", "segments.bin"))
+		if err != nil || len(matches) != 1 {
+			t.Fatalf("locate segments.bin: %v (%d matches)", err, len(matches))
+		}
+		onDisk, err := os.ReadFile(matches[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(bytes.Trim(onDisk, "\x00")) == 0 {
+			t.Fatal("disk mode wrote nothing to segments.bin")
+		}
+	})
+}
 
-			cache, err := NewSegmentCache(context.Background(), segs, cfg, &ReaderStats{}, zerolog.Nop())
-			if err != nil {
-				t.Fatalf("NewSegmentCache: %v", err)
-			}
-			t.Cleanup(func() { _ = cache.Close() })
+// roundTripSegments stores segCount patterned segments through the production
+// write path and reads every one back.
+func roundTripSegments(t *testing.T, cfg Config, segCount int) {
+	t.Helper()
+	const segSize = 64 << 10
+	cache, err := NewSegmentCache(context.Background(), mkSegs(segCount, segSize), cfg, &Stats{}, zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewSegmentCache: %v", err)
+	}
+	t.Cleanup(func() { _ = cache.Close() })
 
-			data := make([]byte, segSize)
-			for i := range segCount {
-				for j := range data {
-					data[j] = byte(i + j)
-				}
-				putSegment(t, cache, i, data)
-			}
-			got := make([]byte, segSize)
-			for i := range segCount {
-				n, ok := cache.ReadRangeInto(i, 0, segSize, got)
-				if !ok || n != segSize {
-					t.Fatalf("ReadRangeInto(%d) = %d, %v", i, n, ok)
-				}
-				if got[0] != byte(i) || got[segSize-1] != byte(i+segSize-1) {
-					t.Fatalf("segment %d data mismatch", i)
-				}
-			}
-
-			if memory {
-				// Memory mode owns no file: the DiskPath dir stays empty.
-				entries, readDirErr := os.ReadDir(cfg.DiskPath)
-				if readDirErr != nil {
-					t.Fatal(readDirErr)
-				}
-				if len(entries) != 0 {
-					t.Fatalf("memory mode created cache files: %v", entries)
-				}
-				return
-			}
-			matches, err := filepath.Glob(filepath.Join(cfg.DiskPath, "cache-*", "segments.bin"))
-			if err != nil || len(matches) != 1 {
-				t.Fatalf("locate segments.bin: %v (%d matches)", err, len(matches))
-			}
-			onDisk, err := os.ReadFile(matches[0])
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(bytes.Trim(onDisk, "\x00")) == 0 {
-				t.Fatal("disk mode wrote nothing to segments.bin")
-			}
-		})
+	data := make([]byte, segSize)
+	for i := range segCount {
+		for j := range data {
+			data[j] = byte(i + j)
+		}
+		putSegment(t, cache, i, data)
+	}
+	got := make([]byte, segSize)
+	for i := range segCount {
+		n, ok := cache.ReadRangeInto(i, 0, segSize, got)
+		if !ok || n != segSize {
+			t.Fatalf("ReadRangeInto(%d) = %d, %v", i, n, ok)
+		}
+		if got[0] != byte(i) || got[segSize-1] != byte(i+segSize-1) {
+			t.Fatalf("segment %d data mismatch", i)
+		}
 	}
 }
 
@@ -367,12 +361,13 @@ func mkSegs(segCount int, segSize int64) []SegmentMeta {
 // no fetch behind it, so waiting on it waits forever. WaitForSegment must say
 // so instead of parking, leaving the caller to re-fetch.
 func TestWaitForSegmentReportsEvicted(t *testing.T) {
+	t.Parallel()
 	const segSize = 750 * 1024
 	segs := mkSegs(4, segSize)
 	cfg := DefaultConfig()
 	cfg.DiskPath = t.TempDir()
 
-	cache, err := NewSegmentCache(context.Background(), segs, cfg, &ReaderStats{}, zerolog.Nop())
+	cache, err := NewSegmentCache(context.Background(), segs, cfg, &Stats{}, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewSegmentCache: %v", err)
 	}
@@ -402,6 +397,7 @@ func TestWaitForSegmentReportsEvicted(t *testing.T) {
 // veto the pin was advisory, so a drop could pull the bytes out from under
 // the reader that had just ensured them.
 func TestPinnedSegmentsSurviveRAMPressure(t *testing.T) {
+	t.Parallel()
 	const segSize = 750 * 1024
 	const segCount = 16 // 12MB against an 8MB window: drops must fire
 	segs := mkSegs(segCount, segSize)
@@ -409,7 +405,7 @@ func TestPinnedSegmentsSurviveRAMPressure(t *testing.T) {
 	cfg.DiskPath = t.TempDir()
 	cfg.PrefetchAhead = 0 // probe profile: 8MB window
 
-	cache, err := NewSegmentCache(context.Background(), segs, cfg, &ReaderStats{}, zerolog.Nop())
+	cache, err := NewSegmentCache(context.Background(), segs, cfg, &Stats{}, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewSegmentCache: %v", err)
 	}
@@ -447,6 +443,7 @@ func TestPinnedSegmentsSurviveRAMPressure(t *testing.T) {
 // otherwise every stream downloads more than it can hold and re-fetches what
 // it just dropped.
 func TestMaxPrefetchSegmentsTracksFairShare(t *testing.T) {
+	t.Parallel()
 	const segSize = 750 * 1024
 	segs := mkSegs(64, segSize)
 	cfg := DefaultConfig()
@@ -455,7 +452,7 @@ func TestMaxPrefetchSegmentsTracksFairShare(t *testing.T) {
 	cfg.Pools = NewPools(64 << 20)
 	t.Cleanup(func() { _ = cfg.Pools.Close() })
 
-	first, err := NewSegmentCache(context.Background(), segs, cfg, &ReaderStats{}, zerolog.Nop())
+	first, err := NewSegmentCache(context.Background(), segs, cfg, &Stats{}, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewSegmentCache: %v", err)
 	}
@@ -464,7 +461,7 @@ func TestMaxPrefetchSegmentsTracksFairShare(t *testing.T) {
 
 	// Seven more streams open against the same pool.
 	for range 7 {
-		sc, newSegmentCacheErr := NewSegmentCache(context.Background(), segs, cfg, &ReaderStats{}, zerolog.Nop())
+		sc, newSegmentCacheErr := NewSegmentCache(context.Background(), segs, cfg, &Stats{}, zerolog.Nop())
 		if newSegmentCacheErr != nil {
 			t.Fatalf("NewSegmentCache: %v", newSegmentCacheErr)
 		}

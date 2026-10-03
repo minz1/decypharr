@@ -34,7 +34,7 @@ func TestRestartAppliesUsenetMemoryBudget(t *testing.T) {
 		for i := range segments {
 			segments[i].Bytes = 1 << 20
 		}
-		cache, err := reader.NewSegmentCache(t.Context(), segments, cfg, &reader.ReaderStats{}, zerolog.Nop())
+		cache, err := reader.NewSegmentCache(t.Context(), segments, cfg, &reader.Stats{}, zerolog.Nop())
 		if err != nil {
 			t.Fatal(err)
 		}

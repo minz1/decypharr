@@ -29,7 +29,7 @@ func newTestReader(t *testing.T, segCount int) *StreamingReader {
 	cfg.MaxConnections = 1
 	cfg.PrefetchAhead = 4
 
-	stats := &ReaderStats{}
+	stats := &Stats{}
 	cache, err := NewSegmentCache(context.Background(), segs, cfg, stats, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewSegmentCache: %v", err)
@@ -72,6 +72,7 @@ func prefillSegments(t *testing.T, sr *StreamingReader, indices ...int) {
 // regression: a probe cursor jumping to the tail must not drain the
 // sequential cursor's queued read-ahead.
 func TestCursorsDoNotCancelEachOthersPrefetch(t *testing.T) {
+	t.Parallel()
 	sr := newTestReader(t, 100)
 	// Only the segments the reads land on are cached; the segments the
 	// reader hints for prefetch stay Empty (hints for cached segments are
@@ -127,6 +128,7 @@ func TestCursorsDoNotCancelEachOthersPrefetch(t *testing.T) {
 // eviction cutoff past the playback position, and closing the probe cursor
 // releases its influence.
 func TestConsumedFloorTracksSlowestCursor(t *testing.T) {
+	t.Parallel()
 	sr := newTestReader(t, 100)
 	prefillSegments(t, sr, 0, 99)
 	play := sr.newCursor()

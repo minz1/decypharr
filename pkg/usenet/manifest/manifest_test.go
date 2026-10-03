@@ -1,4 +1,4 @@
-package manifest
+package manifest_test
 
 import (
 	"fmt"
@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/Tensai75/nzbparser"
+
+	"github.com/sirrobot01/decypharr/pkg/usenet/manifest"
 )
 
 func TestDecodePreservesCurrentNZBSemantics(t *testing.T) {
@@ -45,7 +47,7 @@ func TestDecodePreservesCurrentNZBSemantics(t *testing.T) {
   </file>
 </nzb>`
 
-	got, err := Decode(strings.NewReader(source))
+	got, err := manifest.Decode(strings.NewReader(source))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +55,7 @@ func TestDecodePreservesCurrentNZBSemantics(t *testing.T) {
 	if got.Metadata["title"] != "Fixture title" || got.Metadata["password"] != "secret" {
 		t.Fatalf("metadata = %#v", got.Metadata)
 	}
-	if got.Stats != (Statistics{TotalFiles: 2, AvailableSegments: 5, TotalSegments: 5, Bytes: 650}) {
+	if got.Stats != (manifest.Statistics{TotalFiles: 2, AvailableSegments: 5, TotalSegments: 5, Bytes: 650}) {
 		t.Fatalf("statistics = %#v", got.Stats)
 	}
 	if len(got.Files) != 2 {
@@ -88,10 +90,10 @@ func TestDecodePreservesCurrentNZBSemantics(t *testing.T) {
 func TestDecodeRejectsInvalidInput(t *testing.T) {
 	t.Parallel()
 
-	if _, err := Decode(nil); err == nil {
+	if _, err := manifest.Decode(nil); err == nil {
 		t.Fatal("nil reader succeeded")
 	}
-	if _, err := Decode(strings.NewReader("<nzb>")); err == nil {
+	if _, err := manifest.Decode(strings.NewReader("<nzb>")); err == nil {
 		t.Fatal("malformed XML succeeded")
 	}
 }
@@ -120,7 +122,8 @@ func TestDecodeMatchesLegacyContract(t *testing.T) {
 	}
 	for name, source := range fixtures {
 		t.Run(name, func(t *testing.T) {
-			got, err := Decode(strings.NewReader(source))
+			t.Parallel()
+			got, err := manifest.Decode(strings.NewReader(source))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -146,11 +149,12 @@ func TestDecodeMatchesLegacyCommittedCorpus(t *testing.T) {
 	}
 	for _, path := range paths {
 		t.Run(filepath.Base(path), func(t *testing.T) {
+			t.Parallel()
 			source, readFileErr := os.ReadFile(path)
 			if readFileErr != nil {
 				t.Fatal(readFileErr)
 			}
-			got, readFileErr := Decode(strings.NewReader(string(source)))
+			got, readFileErr := manifest.Decode(strings.NewReader(string(source)))
 			if readFileErr != nil {
 				t.Fatal(readFileErr)
 			}
@@ -195,7 +199,7 @@ func TestDecodeOrdersUnparsedSubjectsDeterministically(t *testing.T) {
 	source := builder.String()
 
 	for attempt := range 16 {
-		decoded, err := Decode(strings.NewReader(source))
+		decoded, err := manifest.Decode(strings.NewReader(source))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -244,7 +248,7 @@ func TestDecodeTrimsMessageIDWhitespace(t *testing.T) {
   </file>
 </nzb>`
 
-	decoded, err := Decode(strings.NewReader(source))
+	decoded, err := manifest.Decode(strings.NewReader(source))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,6 +272,7 @@ func TestDecodeTrimsMessageIDWhitespace(t *testing.T) {
 }
 
 func TestDecodeMatchesLegacyLocalCorpus(t *testing.T) {
+	t.Parallel()
 	paths, err := filepath.Glob(filepath.Join("..", "..", "..", "data", "usenet", "nzbs", "*.nzb"))
 	if err != nil {
 		t.Fatal(err)
@@ -277,11 +282,12 @@ func TestDecodeMatchesLegacyLocalCorpus(t *testing.T) {
 	}
 	for _, path := range paths {
 		t.Run(filepath.Base(path), func(t *testing.T) {
+			t.Parallel()
 			source, readFileErr := os.ReadFile(path)
 			if readFileErr != nil {
 				t.Fatal(readFileErr)
 			}
-			got, readFileErr := Decode(strings.NewReader(string(source)))
+			got, readFileErr := manifest.Decode(strings.NewReader(string(source)))
 			if readFileErr != nil {
 				t.Fatal(readFileErr)
 			}
@@ -293,17 +299,17 @@ func TestDecodeMatchesLegacyLocalCorpus(t *testing.T) {
 	}
 }
 
-func decodeLegacy(t *testing.T, source string) *Manifest {
+func decodeLegacy(t *testing.T, source string) *manifest.Manifest {
 	t.Helper()
 	legacy, err := nzbparser.Parse(strings.NewReader(source))
 	if err != nil {
 		t.Fatal(err)
 	}
-	result := &Manifest{
+	result := &manifest.Manifest{
 		Comment:  legacy.Comment,
 		Metadata: make(map[string]string, len(legacy.Meta)),
-		Files:    make([]File, len(legacy.Files)),
-		Stats: Statistics{
+		Files:    make([]manifest.File, len(legacy.Files)),
+		Stats: manifest.Statistics{
 			TotalFiles:        legacy.TotalFiles,
 			AvailableSegments: legacy.Segments,
 			TotalSegments:     legacy.TotalSegments,
@@ -312,9 +318,9 @@ func decodeLegacy(t *testing.T, source string) *Manifest {
 	}
 	maps.Copy(result.Metadata, legacy.Meta)
 	for fileIndex, legacyFile := range legacy.Files {
-		segments := make([]Segment, len(legacyFile.Segments))
+		segments := make([]manifest.Segment, len(legacyFile.Segments))
 		for segmentIndex, legacySegment := range legacyFile.Segments {
-			segments[segmentIndex] = Segment{
+			segments[segmentIndex] = manifest.Segment{
 				Bytes:  int64(legacySegment.Bytes),
 				Number: legacySegment.Number,
 				// The one deliberate divergence from the legacy parser: it
@@ -324,7 +330,7 @@ func decodeLegacy(t *testing.T, source string) *Manifest {
 				MessageID: strings.TrimSpace(legacySegment.Id),
 			}
 		}
-		result.Files[fileIndex] = File{
+		result.Files[fileIndex] = manifest.File{
 			Order:         fileIndex,
 			Groups:        append([]string(nil), legacyFile.Groups...),
 			Segments:      segments,
@@ -341,20 +347,16 @@ func decodeLegacy(t *testing.T, source string) *Manifest {
 	return result
 }
 
-var benchmarkResult *Manifest
-var legacyBenchmarkResult *nzbparser.Nzb
-
 func BenchmarkDecode(b *testing.B) {
 	source := generatedNZB(64, 128)
 	b.ReportAllocs()
 	b.SetBytes(int64(len(source)))
 
 	for b.Loop() {
-		decoded, err := Decode(strings.NewReader(source))
-		if err != nil {
+		// b.Loop keeps the result alive; no sink variable needed.
+		if _, err := manifest.Decode(strings.NewReader(source)); err != nil {
 			b.Fatal(err)
 		}
-		benchmarkResult = decoded
 	}
 }
 
@@ -364,11 +366,9 @@ func BenchmarkLegacyDecode(b *testing.B) {
 	b.SetBytes(int64(len(source)))
 
 	for b.Loop() {
-		decoded, err := nzbparser.Parse(strings.NewReader(source))
-		if err != nil {
+		if _, err := nzbparser.Parse(strings.NewReader(source)); err != nil {
 			b.Fatal(err)
 		}
-		legacyBenchmarkResult = decoded
 	}
 }
 

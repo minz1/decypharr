@@ -13,6 +13,7 @@ import (
 )
 
 func TestReadFilePrefixReusesObservedBodies(t *testing.T) {
+	t.Parallel()
 	backend := &fakeArticleBackend{bodySize: 8}
 	broker := newArticleBroker(backend, 2, 1<<20)
 	p := NewParserWithSource(broker, 2, zerolog.Nop())
@@ -47,6 +48,7 @@ func TestReadFilePrefixReusesObservedBodies(t *testing.T) {
 }
 
 func TestReadFilePrefixDefersTransformsAndRejectsGaps(t *testing.T) {
+	t.Parallel()
 	backend := &fakeArticleBackend{bodySize: 8}
 	p := NewParserWithSource(newArticleBroker(backend, 1, 1<<20), 1, zerolog.Nop())
 	encrypted := &storage.NZBFile{
@@ -71,6 +73,7 @@ func TestReadFilePrefixDefersTransformsAndRejectsGaps(t *testing.T) {
 // caller's slice in the process - those segments are shared with the stored
 // NZB file the caller is still holding.
 func TestReadFilePrefixLeavesCallerSegmentsAlone(t *testing.T) {
+	t.Parallel()
 	for _, testCase := range []struct {
 		name     string
 		segments []storage.NZBSegment
@@ -91,6 +94,7 @@ func TestReadFilePrefixLeavesCallerSegmentsAlone(t *testing.T) {
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
 			backend := &fakeArticleBackend{bodySize: 8}
 			p := NewParserWithSource(newArticleBroker(backend, 2, 1<<20), 2, zerolog.Nop())
 			file := &storage.NZBFile{

@@ -1,6 +1,7 @@
 package usenet
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"testing"
@@ -52,58 +53,48 @@ func buildCodecNZB() *storage.NZB {
 }
 
 func TestDecodeFileV2MatchesFullDecode(t *testing.T) {
-	data, err := encodeNZBV2(buildCodecNZB())
-	if err != nil {
-		t.Fatalf("encode: %v", err)
-	}
-	full, err := decodeNZBV2(data)
+	t.Parallel()
+	codec := testCodec(t)
+	data := codec.encodeNZBV2(buildCodecNZB())
+	full, err := codec.decodeNZBV2(data)
 	if err != nil {
 		t.Fatalf("full decode: %v", err)
 	}
 
 	for i := range full.Files {
 		want := full.Files[i]
-		got, decodeFileV2Err := decodeFileV2(data, want.Name)
-		if decodeFileV2Err != nil {
-			t.Fatalf("decodeFileV2(%q): %v", want.Name, decodeFileV2Err)
-		}
+		got, decodeFileV2Err := codec.decodeFileV2(data, want.Name)
 		if want.IsDeleted {
-			if got != nil {
-				t.Fatalf("decodeFileV2(%q) returned a deleted file", want.Name)
+			if !errors.Is(decodeFileV2Err, errFileNotFound) {
+				t.Fatalf("codec.decodeFileV2(%q) on a deleted file: %v", want.Name, decodeFileV2Err)
 			}
 			continue
 		}
-		if got == nil {
-			t.Fatalf("decodeFileV2(%q) returned nil", want.Name)
+		if decodeFileV2Err != nil {
+			t.Fatalf("codec.decodeFileV2(%q): %v", want.Name, decodeFileV2Err)
 		}
 		if !reflect.DeepEqual(*got, want) {
-			t.Fatalf("decodeFileV2(%q) mismatch:\n got %+v\nwant %+v", want.Name, *got, want)
+			t.Fatalf("codec.decodeFileV2(%q) mismatch:\n got %+v\nwant %+v", want.Name, *got, want)
 		}
 	}
 }
 
 func TestDecodeFileV2MissingFile(t *testing.T) {
-	data, err := encodeNZBV2(buildCodecNZB())
-	if err != nil {
-		t.Fatalf("encode: %v", err)
-	}
-	got, err := decodeFileV2(data, "not-here.mkv")
-	if err != nil {
-		t.Fatalf("decodeFileV2: %v", err)
-	}
-	if got != nil {
-		t.Fatalf("expected nil for a missing file, got %+v", *got)
+	t.Parallel()
+	codec := testCodec(t)
+	data := codec.encodeNZBV2(buildCodecNZB())
+	if _, err := codec.decodeFileV2(data, "not-here.mkv"); !errors.Is(err, errFileNotFound) {
+		t.Fatalf("decodeFileV2 error = %v, want errFileNotFound", err)
 	}
 }
 
 // The point of the single-file path: its message ids must be owned copies, not
 // views into the decompressed buffer that the full decode aliases.
 func TestDecodeFileV2CopiesMessageIDs(t *testing.T) {
-	data, err := encodeNZBV2(buildCodecNZB())
-	if err != nil {
-		t.Fatalf("encode: %v", err)
-	}
-	file, err := decodeFileV2(data, "file-4.mkv")
+	t.Parallel()
+	codec := testCodec(t)
+	data := codec.encodeNZBV2(buildCodecNZB())
+	file, err := codec.decodeFileV2(data, "file-4.mkv")
 	if err != nil {
 		t.Fatalf("decodeFileV2: %v", err)
 	}
@@ -114,7 +105,7 @@ func TestDecodeFileV2CopiesMessageIDs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("splitRegions: %v", err)
 	}
-	msgIDs, err := zstdDec.DecodeAll(mc, nil)
+	msgIDs, err := codec.dec.DecodeAll(mc, nil)
 	if err != nil {
 		t.Fatalf("decompress msg ids: %v", err)
 	}
@@ -126,4 +117,13 @@ func TestDecodeFileV2CopiesMessageIDs(t *testing.T) {
 			t.Fatalf("message id %q aliases the decompressed buffer", segment.MessageID)
 		}
 	}
+}
+
+func testCodec(t testing.TB) *nzbCodec {
+	t.Helper()
+	codec, err := newNZBCodec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return codec
 }

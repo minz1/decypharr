@@ -15,29 +15,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/nntp"
 )
 
-// decryptionBufPool stores *[]byte so Put does not box the slice header.
-var decryptionBufPool = sync.Pool{}
-
-func acquireDecryptionBuffer(size int) *[]byte {
-	v := decryptionBufPool.Get()
-	if v == nil {
-		buf := make([]byte, size)
-		return &buf
-	}
-	bufPtr := v.(*[]byte)
-	if cap(*bufPtr) < size {
-		buf := make([]byte, size)
-		return &buf
-	}
-	*bufPtr = (*bufPtr)[:size]
-	return bufPtr
-}
-
-func releaseDecryptionBuffer(buf *[]byte) {
-	decryptionBufPool.Put(buf)
-}
-
-// StreamingReader provides io.ReaderAt over NNTP segments with automatic
+// StreamingReader provides [io.ReaderAt] over NNTP segments with automatic
 // caching, prefetching, and error recovery.
 //
 // Key features:
@@ -62,8 +40,10 @@ type StreamingReader struct {
 	totalSize int64
 	segCount  int
 
-	// Encryption support
-	encryption EncryptionConfig
+	// Encryption support. decryptBufs stores *[]byte so Put does not box
+	// the slice header.
+	encryption  EncryptionConfig
+	decryptBufs sync.Pool
 
 	// Read position for io.Reader interface
 	readOffset atomic.Int64
@@ -83,7 +63,7 @@ type StreamingReader struct {
 	logger zerolog.Logger
 
 	// Stats
-	stats *ReaderStats
+	stats *Stats
 }
 
 // ReadCursor is one consumer's view of a shared StreamingReader, with its
@@ -116,6 +96,74 @@ type Cursor struct {
 	queuedThrough atomic.Int64
 
 	closed atomic.Bool
+}
+
+// NewStreamingReader creates a new streaming reader for NNTP segments.
+func NewStreamingReader(
+	ctx context.Context,
+	client *nntp.Client,
+	segments []SegmentMeta,
+	opts ...Option,
+) (*StreamingReader, error) {
+	if len(segments) == 0 {
+		return nil, fmt.Errorf("no segments provided")
+	}
+	if client == nil {
+		return nil, fmt.Errorf("NNTP client is required")
+	}
+
+	// Apply configuration options
+	config := DefaultConfig()
+	for _, opt := range opts {
+		opt(&config)
+	}
+	config.BodyPipelineDepth = appconfig.NormalizeBodyPipelineDepth(config.BodyPipelineDepth)
+
+	ctx, cancel := context.WithCancel(ctx)
+	logger := zerolog.Nop() // Use logger from config if available
+
+	stats := &Stats{}
+
+	// Create cache
+	cache, err := NewSegmentCache(ctx, segments, config, stats, logger)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("create cache: %w", err)
+	}
+
+	// Create fetcher
+	fetcher := NewSegmentFetcher(ctx, client, cache, config, stats, logger)
+
+	sr := &StreamingReader{
+		cache:     cache,
+		fetcher:   fetcher,
+		config:    config,
+		totalSize: cache.TotalSize(),
+		segCount:  cache.SegmentCount(),
+		cursors:   make(map[*Cursor]struct{}),
+		ctx:       ctx,
+		cancel:    cancel,
+		logger:    logger,
+		stats:     stats,
+	}
+
+	return sr, nil
+}
+
+// NewStreamingReaderWithEncryption creates an encrypted reader.
+func NewStreamingReaderWithEncryption(
+	ctx context.Context,
+	client *nntp.Client,
+	segments []SegmentMeta,
+	encConfig EncryptionConfig,
+	opts ...Option,
+) (*StreamingReader, error) {
+	sr, err := NewStreamingReader(ctx, client, segments, opts...)
+	if err != nil {
+		return nil, err
+	}
+	sr.encryption = encConfig
+	return sr, nil
 }
 
 // OpenCursor registers and returns a new cursor. Callers must Close it.
@@ -205,58 +253,6 @@ func (sr *StreamingReader) publishConsumedFloor() {
 	}
 }
 
-// NewStreamingReader creates a new streaming reader for NNTP segments.
-func NewStreamingReader(
-	ctx context.Context,
-	client *nntp.Client,
-	segments []SegmentMeta,
-	opts ...Option,
-) (*StreamingReader, error) {
-	if len(segments) == 0 {
-		return nil, fmt.Errorf("no segments provided")
-	}
-	if client == nil {
-		return nil, fmt.Errorf("NNTP client is required")
-	}
-
-	// Apply configuration options
-	config := DefaultConfig()
-	for _, opt := range opts {
-		opt(&config)
-	}
-	config.BodyPipelineDepth = appconfig.NormalizeBodyPipelineDepth(config.BodyPipelineDepth)
-
-	ctx, cancel := context.WithCancel(ctx)
-	logger := zerolog.Nop() // Use logger from config if available
-
-	stats := &ReaderStats{}
-
-	// Create cache
-	cache, err := NewSegmentCache(ctx, segments, config, stats, logger)
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("create cache: %w", err)
-	}
-
-	// Create fetcher
-	fetcher := NewSegmentFetcher(ctx, client, cache, config, stats, logger)
-
-	sr := &StreamingReader{
-		cache:     cache,
-		fetcher:   fetcher,
-		config:    config,
-		totalSize: cache.TotalSize(),
-		segCount:  cache.SegmentCount(),
-		cursors:   make(map[*Cursor]struct{}),
-		ctx:       ctx,
-		cancel:    cancel,
-		logger:    logger,
-		stats:     stats,
-	}
-
-	return sr, nil
-}
-
 // seekAbandonedWindow reports whether a read landing on [startSeg, endSeg]
 // after a previous read that ended at prevEnd constitutes a seek that
 // abandons the queued read-ahead window. Reads within one prefetch window of
@@ -271,23 +267,7 @@ func seekAbandonedWindow(prevEnd int64, startSeg, endSeg, ahead int) bool {
 	return int64(startSeg) > prevEnd+int64(ahead) || int64(endSeg) < prevEnd-int64(ahead)
 }
 
-// NewStreamingReaderWithEncryption creates an encrypted reader.
-func NewStreamingReaderWithEncryption(
-	ctx context.Context,
-	client *nntp.Client,
-	segments []SegmentMeta,
-	encConfig EncryptionConfig,
-	opts ...Option,
-) (*StreamingReader, error) {
-	sr, err := NewStreamingReader(ctx, client, segments, opts...)
-	if err != nil {
-		return nil, err
-	}
-	sr.encryption = encConfig
-	return sr, nil
-}
-
-// ReadAt implements io.ReaderAt with blocking semantics.
+// ReadAt implements [io.ReaderAt] with blocking semantics.
 // Blocks until the requested byte range is available.
 //
 // THE CRITICAL PATH: Uses Pin/Unpin to prevent the race condition.
@@ -359,7 +339,7 @@ func (sr *StreamingReader) readAtPlain(ctx context.Context, cur *Cursor, p []byt
 		cur.queuedThrough.Store(-1)
 	}
 	if prevEnd < 0 && startSeg == 0 && endSeg < sr.segCount-1 {
-		sr.fetcher.QueueProbeRange(max(sr.segCount-2, 0), sr.segCount-1)
+		sr.fetcher.QueueProbeRange(max(sr.segCount-tailProbeSegments, 0), sr.segCount-1)
 	}
 
 	waitRequired := sr.fetcher.PrepareSegments(ctx, startSeg, endSeg)
@@ -402,6 +382,10 @@ func (sr *StreamingReader) readAtPlain(ctx context.Context, cur *Cursor, p []byt
 	}
 	return n, err
 }
+
+// tailProbeSegments are fetched with the first head read: players probe the
+// end of a file (MP4 moov, MKV cues) right after its start.
+const tailProbeSegments = 2
 
 // segmentReadyAttempts bounds the fetch/wait retry in ensureSegmentReady. A
 // segment is pinned for the duration of the read, so eviction should not be
@@ -514,8 +498,8 @@ func (sr *StreamingReader) readAtEncrypted(ctx context.Context, cur *Cursor, p [
 	}
 
 	bufLen := alignedEnd - alignedStart
-	bufPtr := acquireDecryptionBuffer(int(bufLen))
-	defer releaseDecryptionBuffer(bufPtr)
+	bufPtr := sr.acquireDecryptionBuffer(int(bufLen))
+	defer sr.releaseDecryptionBuffer(bufPtr)
 	buf := *bufPtr
 
 	// Read aligned data
@@ -526,7 +510,7 @@ func (sr *StreamingReader) readAtEncrypted(ctx context.Context, cur *Cursor, p [
 		if remainder := decryptedLen % crypto.BlockSize; remainder != 0 {
 			// Pad with zeros for decryption
 			if int64(len(buf)) >= decryptedLen+(crypto.BlockSize-remainder) {
-				for i := range int64(crypto.BlockSize - remainder) {
+				for i := range crypto.BlockSize - remainder {
 					buf[decryptedLen+i] = 0
 				}
 				decryptedLen += crypto.BlockSize - remainder
@@ -546,18 +530,36 @@ func (sr *StreamingReader) readAtEncrypted(ctx context.Context, cur *Cursor, p [
 	// Copy requested data to p
 	validDataEnd := min(int64(n), reqEnd-alignedStart)
 
-	startOffset := off - alignedStart
-	if startOffset >= validDataEnd {
-		return 0, err
+	copied := 0
+	if startOffset := off - alignedStart; startOffset < validDataEnd {
+		copied = copy(p, buf[startOffset:validDataEnd])
 	}
-
-	copied := copy(p, buf[startOffset:validDataEnd])
-
-	if errors.Is(err, io.EOF) && copied == len(p) {
+	switch {
+	case copied == len(p):
 		return copied, nil
+	case err != nil:
+		return copied, err
+	case off+int64(copied) >= sr.totalSize:
+		// Block-aligned files end exactly on the aligned read, so the plain
+		// read saw no EOF; honour the io.ReaderAt short-read contract here.
+		return copied, io.EOF
+	default:
+		return copied, io.ErrUnexpectedEOF
 	}
+}
 
-	return copied, err
+func (sr *StreamingReader) acquireDecryptionBuffer(size int) *[]byte {
+	bufPtr, ok := sr.decryptBufs.Get().(*[]byte)
+	if !ok || cap(*bufPtr) < size {
+		buf := make([]byte, size)
+		return &buf
+	}
+	*bufPtr = (*bufPtr)[:size]
+	return bufPtr
+}
+
+func (sr *StreamingReader) releaseDecryptionBuffer(buf *[]byte) {
+	sr.decryptBufs.Put(buf)
 }
 
 // decryptInPlace decrypts data using AES-256-CBC.
@@ -637,7 +639,7 @@ func (sr *StreamingReader) ReleaseIdleDelivery() {
 	sr.fetcher.CancelPendingPrefetch()
 }
 
-// Read implements io.Reader using ReadAt with tracked position.
+// Read implements [io.Reader] using ReadAt with tracked position.
 func (sr *StreamingReader) Read(p []byte) (int, error) {
 	if sr.closed.Load() {
 		return 0, io.ErrClosedPipe
@@ -658,7 +660,7 @@ func (sr *StreamingReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// Seek implements io.Seeker.
+// Seek implements [io.Seeker].
 func (sr *StreamingReader) Seek(offset int64, whence int) (int64, error) {
 	if sr.closed.Load() {
 		return 0, io.ErrClosedPipe
