@@ -375,8 +375,11 @@ func (s *symlinkScan) link(name, fullPath string) error {
 	if !ok {
 		return nil
 	}
-	fileSymlinkPath := filepath.Join(s.symlinkDir, file.Name)
-	if err := os.Symlink(fullPath, fileSymlinkPath); err != nil && !os.IsExist(err) {
+	fileSymlinkPath, err := fsutil.JoinName(s.symlinkDir, file.Name)
+	if err != nil {
+		return fmt.Errorf("symlink for %s: %w", s.entry.InfoHash, err)
+	}
+	if err = os.Symlink(fullPath, fileSymlinkPath); err != nil && !os.IsExist(err) {
 		return fmt.Errorf("failed to create symlink %s -> %s: %w", fileSymlinkPath, fullPath, err)
 	}
 	s.paths = append(s.paths, fileSymlinkPath)
@@ -595,6 +598,7 @@ func (d *Downloader) processTorrentDownload(entry *storage.Entry) error {
 	type downloadTask struct {
 		file *storage.File
 		link string
+		dest string
 	}
 	var tasks []downloadTask
 	for _, file := range files {
@@ -606,7 +610,11 @@ func (d *Downloader) processTorrentDownload(entry *storage.Entry) error {
 			// completed.
 			return fmt.Errorf("resolve download link for %s: %w", file.Name, err)
 		}
-		tasks = append(tasks, downloadTask{file: file, link: downloadLink.DownloadLink})
+		dest, err := fsutil.JoinName(downloadedFolder, file.Name)
+		if err != nil {
+			return fmt.Errorf("download %s: %w", entry.InfoHash, err)
+		}
+		tasks = append(tasks, downloadTask{file: file, link: downloadLink.DownloadLink, dest: dest})
 	}
 
 	// If no valid download links were obtained, return error instead of panic
@@ -623,7 +631,7 @@ func (d *Downloader) processTorrentDownload(entry *storage.Entry) error {
 		p.Go(func() error {
 			if err := d.localDownloader(
 				task.link,
-				filepath.Join(downloadedFolder, task.file.Name),
+				task.dest,
 				task.file.ByteRange,
 				progressCallback,
 			); err != nil {
@@ -713,7 +721,10 @@ func (d *Downloader) processUsenetDownload(entry *storage.Entry) error {
 	p := pool.New().WithErrors().WithFirstError()
 	for _, file := range files {
 		p.Go(func() error {
-			destPath := filepath.Join(downloadedFolder, file.Name)
+			destPath, err := fsutil.JoinName(downloadedFolder, file.Name)
+			if err != nil {
+				return fmt.Errorf("download %s: %w", entry.InfoHash, err)
+			}
 			destFile, err := os.OpenFile(
 				destPath,
 				os.O_CREATE|os.O_WRONLY|os.O_TRUNC,

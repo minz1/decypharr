@@ -59,6 +59,22 @@ func RemoveInvalidChars(value string) string {
 	}, value)
 }
 
+// PathElement returns name as one path element: separators, NUL and other
+// control characters become "_", and an empty, "." or ".." result yields
+// fallback. Names that are already a single element come back unchanged.
+func PathElement(name, fallback string) string {
+	name = strings.Map(func(r rune) rune {
+		if r < 32 || r == 127 || r == '/' || r == filepath.Separator {
+			return '_'
+		}
+		return r
+	}, name)
+	if name == "" || name == "." || name == ".." {
+		return fallback
+	}
+	return name
+}
+
 // SafeFolderName turns value into a portable single folder name, or returns
 // fallback when nothing usable remains.
 func SafeFolderName(value, fallback string) string {
