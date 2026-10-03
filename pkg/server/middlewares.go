@@ -133,7 +133,7 @@ func (s *Server) setupRedirectMiddleware(next http.Handler) http.Handler {
 			if isAPI {
 				s.sendJSONError(
 					w,
-					fmt.Sprintf("[error] %s Setup wizard must be completed first. Please visit /setup", err),
+					fmt.Sprintf("[error] %s. Setup wizard must be completed first. Please visit /setup", err),
 					http.StatusServiceUnavailable,
 				)
 			} else {
