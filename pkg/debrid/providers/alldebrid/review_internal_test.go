@@ -27,9 +27,8 @@ func TestFetchedLinkUsesAccountToken(t *testing.T) {
 		config: config.Debrid{Name: "alldebrid"},
 		accountsManager: account.NewManager(
 			config.Debrid{Name: "alldebrid", DownloadAPIKeys: []string{"download-key"}},
-			0,
+			types.ProviderOptions{Logger: zerolog.Nop()},
 			nil,
-			zerolog.Nop(),
 		),
 	}
 	dl, err := ad.GetDownloadLink(t.Context(), "1", &types.File{Link: "https://alldebrid.example/f"})

@@ -84,6 +84,8 @@ type Manager struct {
 	config *config.Config
 	store  *config.Store
 	logs   *logger.Factory
+	// tlsConfig is the verified TLS base every outgoing client starts from.
+	tlsConfig *tls.Config
 
 	// Processing workers
 	scheduler    gocron.Scheduler
@@ -154,6 +156,12 @@ func New(store *config.Store, logs *logger.Factory) (*Manager, error) {
 	cfg := store.Get()
 	_logger := logs.New("manager")
 
+	// Verified TLS for every outgoing client: debrid APIs and CDNs, *arr.
+	tlsConfig, err := cfg.TLSClientConfig()
+	if err != nil {
+		return nil, err
+	}
+
 	strg, err := storage.NewStorage(filepath.Join(cfg.Dir(), "db"), storage.Options{
 		FolderNaming: func() config.WebDavFolderNaming { return store.Get().FolderNaming },
 		Logger:       logs.New("storage"),
@@ -169,13 +177,10 @@ func New(store *config.Store, logs *logger.Factory) (*Manager, error) {
 		KeepAlive: streamKeepAlive,
 	}
 
+	streamTLS := tlsConfig.Clone()
+	streamTLS.ClientSessionCache = tls.NewLRUClientSessionCache(streamTLSSessionCacheSize)
 	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{
-			//nolint:gosec // long-standing behavior for debrid CDN downloads; strict verification is a flagged follow-up
-			InsecureSkipVerify: true,
-			MinVersion:         tls.VersionTLS12,
-			ClientSessionCache: tls.NewLRUClientSessionCache(streamTLSSessionCacheSize),
-		},
+		TLSClientConfig:        streamTLS,
 		TLSHandshakeTimeout:    streamTLSHandshakeTimeout,
 		MaxIdleConns:           streamMaxIdleConns,
 		MaxIdleConnsPerHost:    streamMaxConnsPerHost,
@@ -207,7 +212,8 @@ func New(store *config.Store, logs *logger.Factory) (*Manager, error) {
 		config:                 cfg,
 		store:                  store,
 		logs:                   logs,
-		arr:                    arr.New(store, logs.New("arr")),
+		tlsConfig:              tlsConfig,
+		arr:                    arr.New(store, tlsConfig, logs.New("arr")),
 		ready:                  make(chan struct{}),
 		streamClient:           streamClient,
 		usenetTimeout:          usenetTimeout,

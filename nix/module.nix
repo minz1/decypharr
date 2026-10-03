@@ -79,6 +79,19 @@ in
       description = "Open the firewall for the decypharr port.";
     };
 
+    tlsCaFile = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        PEM bundle of extra certificate authorities trusted for outgoing TLS
+        (debrid, *arr, usenet), e.g. a LAN CA or a self-signed *arr
+        certificate. Certificates are always verified. A usenet provider whose
+        certificate names another host sets tls_server_name in its settings
+        entry instead. Maps to DECYPHARR_TLS_CA_FILE.
+      '';
+      example = "/etc/ssl/lan-ca.pem";
+    };
+
     environmentFiles = lib.mkOption {
       type = lib.types.listOf lib.types.path;
       default = [ ];
@@ -664,6 +677,8 @@ in
         Scalar options above take precedence via env vars (they override config.json).
 
         Put structured config here: mount type, debrids list, arrs list, usenet providers.
+        A usenet provider whose TLS certificate names a different host sets
+        `tls_server_name` to that name; certificates are always verified.
         Do NOT put secrets here — they end up in the Nix store.
         Use environmentFiles for API keys and tokens.
       '';
@@ -783,6 +798,7 @@ in
         DECYPHARR_NZB_USER_AGENT                     = cfg.nzbUserAgent;
         DECYPHARR_SHARED_DIR_MODE                    = cfg.sharedDirMode;
         DECYPHARR_SHARED_FILE_MODE                   = cfg.sharedFileMode;
+        DECYPHARR_TLS_CA_FILE                        = if cfg.tlsCaFile == null then "" else cfg.tlsCaFile;
         DECYPHARR_MOUNT__DFS__DISABLE_CACHE          = if cfg.dfs.disableCache then "true" else "false";
         DECYPHARR_MOUNT__DFS__CACHE_DIR              = cfg.dfs.cacheDir;
         DECYPHARR_MOUNT__DFS__DISK_CACHE_SIZE        = cfg.dfs.diskCacheSize;

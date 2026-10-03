@@ -151,7 +151,7 @@ func newShutdownTestManager(t *testing.T, dbPath string) *Manager {
 			nil,
 			zerolog.Nop(),
 		),
-		arr:               arr.New(config.NewStore(&config.Config{}), zerolog.Nop()),
+		arr:               arr.New(config.NewStore(&config.Config{}), nil, zerolog.Nop()),
 		logger:            zerolog.Nop(),
 		clients:           xsync.NewMap[string, debrid.Client](),
 		processingEntries: xsync.NewMap[string, struct{}](),

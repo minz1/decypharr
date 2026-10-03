@@ -75,6 +75,7 @@ func New(
 	}
 
 	opts := []request.ClientOption{
+		request.WithTLSConfig(options.TLSConfig),
 		request.WithHeaders(headers),
 		request.WithLogger(_log),
 		request.WithMaxRetries(options.Retries),
@@ -94,7 +95,7 @@ func New(
 		Host:                  defaultHost,
 		APIKey:                dc.APIKey,
 		client:                request.New(opts...),
-		accountsManager:       account.NewManager(dc, options.Retries, ratelimits["download"], _log),
+		accountsManager:       account.NewManager(dc, options, ratelimits["download"]),
 		autoExpiresLinksAfter: autoExpiresLinksAfter,
 		logger:                _log,
 		config:                dc,

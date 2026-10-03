@@ -103,6 +103,7 @@ func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter, options type
 
 	newClient := func(rateLimiter ratelimit.Limiter) *request.Client {
 		opts := []request.ClientOption{
+			request.WithTLSConfig(options.TLSConfig),
 			request.WithHeaders(headers),
 			request.WithRateLimiter(rateLimiter),
 			request.WithMaxRetries(options.Retries),
@@ -123,7 +124,7 @@ func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter, options type
 	tb := &Torbox{
 		Host:                  "https://api.torbox.app/v1",
 		APIKey:                dc.APIKey,
-		accountsManager:       account.NewManager(dc, options.Retries, submitRL, _log),
+		accountsManager:       account.NewManager(dc, options, submitRL),
 		options:               options,
 		config:                dc,
 		autoExpiresLinksAfter: autoExpiresLinksAfter,

@@ -26,7 +26,7 @@ func TestRestoreLeavesActiveDownloadsOutsideSubmissionWorkers(t *testing.T) {
 		t,
 		&Manager{
 			queue:  newQueue(store, "", nil, zerolog.Nop()),
-			arr:    arr.New(config.NewStore(&config.Config{}), zerolog.Nop()),
+			arr:    arr.New(config.NewStore(&config.Config{}), nil, zerolog.Nop()),
 			logger: zerolog.Nop(),
 			ctx:    t.Context(),
 		},

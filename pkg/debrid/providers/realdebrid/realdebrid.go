@@ -89,6 +89,7 @@ func New(
 	}
 
 	opts := []request.ClientOption{
+		request.WithTLSConfig(options.TLSConfig),
 		request.WithHeaders(headers),
 		request.WithMaxRetries(options.Retries),
 		request.WithRateLimiter(ratelimits["main"]),
@@ -97,6 +98,7 @@ func New(
 	}
 
 	repairOpts := []request.ClientOption{
+		request.WithTLSConfig(options.TLSConfig),
 		request.WithHeaders(headers),
 		request.WithLogger(_log),
 		request.WithMaxRetries(repairRetries),
@@ -108,7 +110,7 @@ func New(
 	r := &RealDebrid{
 		Host:                  "https://api.real-debrid.com/rest/1.0",
 		APIKey:                dc.APIKey,
-		accountsManager:       account.NewManager(dc, options.Retries, ratelimits["download"], _log),
+		accountsManager:       account.NewManager(dc, options, ratelimits["download"]),
 		options:               options,
 		autoExpiresLinksAfter: autoExpiresLinksAfter,
 		client:                request.New(opts...),
