@@ -369,8 +369,6 @@ func (m *Manager) folderInfohash(entry *FileInfo) (string, error) {
 	return firstFile.InfoHash, nil
 }
 
-
-
 func (m *Manager) RemoveTorrentFile(torrentName, filename string) error {
 	item, err := m.storage.GetEntryItem(torrentName)
 	if err != nil {
