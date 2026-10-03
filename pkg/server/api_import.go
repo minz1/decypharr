@@ -120,7 +120,7 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 	batch := &addBatch{results: make([]*manager.ImportRequest, 0)}
 
 	for _, u := range nonEmptyLines(r.FormValue("urls")) {
-		magnet, err := utils.GetMagnetFromUrl(u, opts.rmTrackerURLs)
+		magnet, err := utils.GetMagnetFromURL(u, opts.rmTrackerURLs)
 		if err != nil {
 			batch.failf("Failed to parse URL %s: %v", u, err)
 			continue
