@@ -21,36 +21,46 @@ func TestNoLintSuppressions(t *testing.T) {
 	t.Parallel()
 	fset := token.NewFileSet()
 	err := filepath.WalkDir(".", func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
+		switch {
+		case walkErr != nil:
 			return walkErr
-		}
-		if entry.IsDir() {
-			if name := entry.Name(); path != "." && (strings.HasPrefix(name, ".") || name == "node_modules") {
+		case entry.IsDir():
+			if skipDir(path, entry.Name()) {
 				return filepath.SkipDir
 			}
 			return nil
-		}
-		if filepath.Ext(path) != ".go" {
+		case filepath.Ext(path) != ".go":
 			return nil
 		}
-		src, readErr := os.ReadFile(path)
-		if readErr != nil {
-			return readErr
-		}
-		file, parseErr := parser.ParseFile(fset, path, src, parser.ParseComments)
-		if parseErr != nil {
-			return parseErr
-		}
-		for _, group := range file.Comments {
-			for _, comment := range group.List {
-				if strings.Contains(comment.Text, suppressionDirective) {
-					t.Errorf("%s: lint suppression %q; fix the finding instead", fset.Position(comment.Pos()), comment.Text)
-				}
-			}
-		}
-		return nil
+		return checkFile(t, fset, path)
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+// skipDir leaves out hidden directories (.git) and node_modules.
+func skipDir(path, name string) bool {
+	return path != "." && (strings.HasPrefix(name, ".") || name == "node_modules")
+}
+
+// checkFile reports every suppression comment in one Go file.
+func checkFile(t *testing.T, fset *token.FileSet, path string) error {
+	t.Helper()
+	src, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	file, err := parser.ParseFile(fset, path, src, parser.ParseComments)
+	if err != nil {
+		return err
+	}
+	for _, group := range file.Comments {
+		for _, comment := range group.List {
+			if strings.Contains(comment.Text, suppressionDirective) {
+				t.Errorf("%s: lint suppression %q; fix the finding instead", fset.Position(comment.Pos()), comment.Text)
+			}
+		}
+	}
+	return nil
 }
