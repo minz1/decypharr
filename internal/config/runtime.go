@@ -87,6 +87,7 @@ func (c *Config) Clone() (*Config, error) {
 		return nil, unmarshalErr
 	}
 	snapshot.meta = c.meta
+	snapshot.SessionSecret = c.SessionSecret
 	if c.Auth != nil {
 		snapshot.Auth = new(*c.Auth)
 	}

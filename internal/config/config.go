@@ -268,7 +268,10 @@ func (r RepairConfig) IsZero() bool {
 type Config struct {
 	meta meta
 
-	SessionSecret string `json:"session_secret,omitempty"`
+	// SessionSecret signs browser sessions and qBittorrent SIDs. It lives in
+	// secrets.json; config.json files from earlier versions still carry it
+	// and lose it on the next save.
+	SessionSecret Secret `json:"-"`
 
 	// server
 	BindAddress string `json:"bind_address,omitempty"`
@@ -374,8 +377,11 @@ func (c *Config) load(lookup LookupEnv) error {
 			return fmt.Errorf("error parsing config JSON: %w", unmarshalErr)
 		}
 	}
+	if secretsErr := c.readSecrets(data); secretsErr != nil {
+		return secretsErr
+	}
 	hadStrmSecret := c.Strm.Secret != ""
-	hadSessionSecret := c.SessionSecret != ""
+	hadSessionSecret := !c.SessionSecret.IsZero()
 
 	// Apply environment variable overrides first so setDefaults() (which,
 	// e.g., decides whether to eagerly load Auth based on UseAuth) sees the
@@ -463,7 +469,7 @@ func (c *Config) GetMaxFileSize() int64 {
 }
 
 func (c *Config) SecretKey() string {
-	return cmp.Or(c.meta.secretKey, c.SessionSecret)
+	return cmp.Or(c.meta.secretKey, c.SessionSecret.Reveal())
 }
 
 // GetAuth returns a copy of the authentication settings.
@@ -487,7 +493,7 @@ func (c *Config) SaveAuth(auth *Auth) error {
 	}
 	updated := *auth
 	updated.SessionVersion = rand.Text()
-	data, err := json.Marshal(&updated)
+	data, err := json.Marshal(authRecord(updated))
 	if err != nil {
 		return err
 	}
@@ -575,10 +581,10 @@ func (c *Config) migrateNotifications() {
 }
 
 func (c *Config) setDefaults() {
-	if c.SessionSecret == "" {
+	if c.SessionSecret.IsZero() {
 		var key [secretBytes]byte
 		_, _ = rand.Read(key[:])
-		c.SessionSecret = hex.EncodeToString(key[:])
+		c.SessionSecret = NewSecret(hex.EncodeToString(key[:]))
 	}
 	// Migrate deprecated fields to Manager (backward compatibility)
 	c.migrateQBitTorrentToManager()
@@ -792,6 +798,12 @@ func (c *Config) Save() error {
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
+	}
+	// Secrets first: config.json no longer carries the session secret, so
+	// it must be safe in secrets.json before an older config.json that
+	// still holds it is replaced.
+	if secretsErr := c.writeSecrets(); secretsErr != nil {
+		return secretsErr
 	}
 	if writeFileErr := c.writeFile(c.JSONFile(), data); writeFileErr != nil {
 		fmt.Fprintf(os.Stderr, "Failed to write config file: %v\n", writeFileErr)

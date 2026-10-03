@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -99,5 +100,17 @@ func TestSetupRedirectHonorsURLBase(t *testing.T) {
 		if w.Code != want {
 			t.Errorf("GET %s = %d %q, want %d", path, w.Code, w.Header().Get("Location"), want)
 		}
+	}
+}
+
+// The token-only setup response shows the generated token once.
+func TestSetupResponseCarriesTheAPIToken(t *testing.T) {
+	t.Parallel()
+	data, err := json.Marshal(SetupWizardResponse{Success: true, APIToken: "tok"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != `{"success":true,"api_token":"tok"}` {
+		t.Fatalf("response = %s", data)
 	}
 }
