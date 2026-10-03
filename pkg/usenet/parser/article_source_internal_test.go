@@ -2,10 +2,12 @@ package parser
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 	"unsafe"
 
@@ -245,4 +247,40 @@ func TestArticleBrokerDoesNotRetainAliasedMessageIDs(t *testing.T) {
 			t.Fatal("body LRU retains a key aliasing the caller's buffer")
 		}
 	}
+}
+
+// A caller that gives up must not fail the others waiting on the same
+// article: the shared fetch ran on the first caller's context.
+func TestBrokerFetchSurvivesFirstCallerCancel(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		backend := &fakeArticleBackend{release: make(chan struct{}), bodySize: 16}
+		broker := newArticleBroker(backend, 2, 1<<20)
+
+		firstCtx, cancelFirst := context.WithCancel(t.Context())
+		firstErr := make(chan error, 1)
+		go func() {
+			_, err := broker.load(firstCtx, "<article>")
+			firstErr <- err
+		}()
+		synctest.Wait()
+		secondErr := make(chan error, 1)
+		go func() {
+			_, err := broker.load(t.Context(), "<article>")
+			secondErr <- err
+		}()
+		synctest.Wait()
+
+		cancelFirst()
+		if err := <-firstErr; !errors.Is(err, context.Canceled) {
+			t.Fatalf("first caller err = %v", err)
+		}
+		close(backend.release)
+		if err := <-secondErr; err != nil {
+			t.Fatalf("second caller failed with the first caller's cancellation: %v", err)
+		}
+		if got := backend.fetches.Load(); got != 1 {
+			t.Fatalf("fetches = %d, want one shared fetch", got)
+		}
+	})
 }

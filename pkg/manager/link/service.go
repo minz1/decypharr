@@ -9,10 +9,10 @@ import (
 
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/rs/zerolog"
-	"golang.org/x/sync/singleflight"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
+	"github.com/sirrobot01/decypharr/internal/flight"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	debrid "github.com/sirrobot01/decypharr/pkg/debrid/common"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
@@ -35,7 +35,7 @@ type EntrySaver func(entry *storage.Entry) error
 type Service struct {
 	naming         func() config.WebDavFolderNaming
 	validated      *xsync.Map[string, error]
-	singleflight   singleflight.Group
+	flights        flight.Group[types.DownloadLink]
 	clients        *xsync.Map[string, debrid.Client]
 	entryRefresher EntryRefresher
 	repairer       EntryRepairer
@@ -81,24 +81,13 @@ func (s *Service) folder(entry *storage.Entry) string {
 // GetLink fetches and validates a download link for a file in an entry.
 // Links are cached at the account level; this service only tracks validation state.
 func (s *Service) GetLink(ctx context.Context, entry *storage.Entry, filename string) (types.DownloadLink, error) {
-	// Use singleflight to deduplicate concurrent requests for the same file
+	// Deduplicate concurrent requests for the same file. One caller giving
+	// up does not cancel the fetch for the others.
 	key := entry.InfoHash + ":" + filename
-	v, err, _ := s.singleflight.Do(key, func() (any, error) {
+	dl, _, err := s.flights.Do(ctx, key, func(ctx context.Context) (types.DownloadLink, error) {
 		return s.fetchAndValidate(ctx, entry, filename, 0)
 	})
-	return sharedLink(v, err)
-}
-
-// sharedLink unpacks a singleflight result.
-func sharedLink(v any, err error) (types.DownloadLink, error) {
-	if err != nil {
-		return types.DownloadLink{}, err
-	}
-	dl, ok := v.(types.DownloadLink)
-	if !ok {
-		return types.DownloadLink{}, fmt.Errorf("unexpected link result type %T", v)
-	}
-	return dl, nil
+	return dl, err
 }
 
 // Refresh invalidates a link that failed mid-stream and fetches a replacement.
@@ -114,10 +103,10 @@ func (s *Service) Refresh(
 		return types.DownloadLink{}, NewPermanentError(ErrEmptyLink, "empty_link")
 	}
 	key := entry.InfoHash + ":" + bad.Filename
-	v, err, _ := s.singleflight.Do(key, func() (any, error) {
+	dl, _, err := s.flights.Do(ctx, key, func(ctx context.Context) (types.DownloadLink, error) {
 		return s.invalidateAndRefetch(ctx, entry, bad, 0)
 	})
-	return sharedLink(v, err)
+	return dl, err
 }
 
 func (s *Service) getClient(provider string) (debrid.Client, error) {
