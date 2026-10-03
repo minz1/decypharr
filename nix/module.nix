@@ -176,7 +176,7 @@ in
     maxDownloads = lib.mkOption {
       type = lib.types.int;
       default = 0;
-      description = "Concurrent download limit (0 = unlimited). Maps to DECYPHARR_MAX_DOWNLOADS.";
+      description = "Concurrent download limit. 0 keeps max_active_downloads from the config (default 5); there is no unlimited setting. Maps to DECYPHARR_MAX_DOWNLOADS.";
     };
 
     skipPreCache = lib.mkOption {
@@ -361,12 +361,12 @@ in
           maxConcurrentNZB = lib.mkOption {
             type = lib.types.int;
             default = 0;
-            description = "NZBs processed in parallel (0 = use default of 2). Maps to DECYPHARR_USENET__MAX_CONCURRENT_NZB.";
+            description = "Has no effect: decypharr has no per-NZB processing limit (NZB jobs share maxDownloads). Kept so existing configurations still evaluate; setting it logs a warning.";
           };
           skipRepair = lib.mkOption {
             type = lib.types.bool;
             default = false;
-            description = "Skip par2 repair for usenet files. Maps to DECYPHARR_USENET__SKIP_REPAIR.";
+            description = "Has no effect: decypharr does not run par2 repair. Kept so existing configurations still evaluate; setting it logs a warning.";
           };
           socketReadBuffer = lib.mkOption {
             type = lib.types.str;
@@ -712,6 +712,12 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    warnings =
+      lib.optional (cfg.usenet.maxConcurrentNZB != 0)
+        "services.decypharr.usenet.maxConcurrentNZB has no effect: decypharr has no per-NZB processing limit."
+      ++ lib.optional cfg.usenet.skipRepair
+        "services.decypharr.usenet.skipRepair has no effect: decypharr does not run par2 repair.";
+
     # Merge rclone submodule options into settings.mount.rclone so they land
     # in config.json without requiring the user to duplicate them in settings.
     services.decypharr.settings = lib.mkMerge [
@@ -814,12 +820,8 @@ in
         DECYPHARR_MOUNT__DFS__GID                    = toString cfg.dfs.gid;
       } // lib.optionalAttrs (cfg.usenet.maxConnections != 0) {
         DECYPHARR_USENET__MAX_CONNECTIONS            = toString cfg.usenet.maxConnections;
-      } // lib.optionalAttrs (cfg.usenet.maxConcurrentNZB != 0) {
-        DECYPHARR_USENET__MAX_CONCURRENT_NZB         = toString cfg.usenet.maxConcurrentNZB;
       } // lib.optionalAttrs (cfg.usenet.availabilitySamplePercent != 0) {
         DECYPHARR_USENET__AVAILABILITY_SAMPLE_PERCENT = toString cfg.usenet.availabilitySamplePercent;
-      } // lib.optionalAttrs (cfg.usenet.skipRepair) {
-        DECYPHARR_USENET__SKIP_REPAIR                = "true";
       } // lib.optionalAttrs (cfg.usenet.importAvailabilitySamplePercent != 0) {
         DECYPHARR_USENET__IMPORT_AVAILABILITY_SAMPLE_PERCENT = toString cfg.usenet.importAvailabilitySamplePercent;
       } // lib.filterAttrs (_: v: v != "") {
