@@ -107,7 +107,7 @@ func (p *ZIPParser) Process(ctx context.Context, group *FileGroup, password stri
 		volumePosition += volume.Size
 	}
 
-	baseSegments, volumeInfos, _, err := buildBaseSegments(group)
+	baseSegments, volumeInfos, err := buildBaseSegments(group)
 	if err != nil {
 		return nil, err
 	}
