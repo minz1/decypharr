@@ -321,24 +321,9 @@ func New() (*Usenet, error) {
 	}
 
 	// Disk rewind files are session-scoped; clear any left by an interrupted run.
-	if streamsDir := strings.TrimSpace(usenetConfig.DiskPath); streamsDir != "" {
-		if mkdirAllErr := os.MkdirAll(streamsDir, 0o750); mkdirAllErr != nil {
-			_ = client.Close()
-			return nil, fmt.Errorf("create Usenet stream cache: %w", mkdirAllErr)
-		}
-		staleEntries, readDirErr := os.ReadDir(streamsDir)
-		if readDirErr != nil {
-			_ = client.Close()
-			return nil, fmt.Errorf("read Usenet stream cache: %w", readDirErr)
-		}
-		for _, entry := range staleEntries {
-			if strings.HasPrefix(entry.Name(), "cache-") {
-				if removeAllErr := os.RemoveAll(filepath.Join(streamsDir, entry.Name())); removeAllErr != nil {
-					_ = client.Close()
-					return nil, fmt.Errorf("clear stale Usenet stream cache %q: %w", entry.Name(), removeAllErr)
-				}
-			}
-		}
+	if clearErr := clearStaleStreamCache(strings.TrimSpace(usenetConfig.DiskPath)); clearErr != nil {
+		_ = client.Close()
+		return nil, clearErr
 	}
 
 	maxConns := usenetConfig.MaxConnections
@@ -381,6 +366,30 @@ func New() (*Usenet, error) {
 	})
 
 	return u, nil
+}
+
+// clearStaleStreamCache removes rewind files ("cache-*") left in dir by an
+// interrupted run. An empty dir means no disk cache is configured.
+func clearStaleStreamCache(dir string) error {
+	if dir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return fmt.Errorf("create Usenet stream cache: %w", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("read Usenet stream cache: %w", err)
+	}
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), "cache-") {
+			continue
+		}
+		if removeErr := os.RemoveAll(filepath.Join(dir, entry.Name())); removeErr != nil {
+			return fmt.Errorf("clear stale Usenet stream cache %q: %w", entry.Name(), removeErr)
+		}
+	}
+	return nil
 }
 
 // createEntry builds a standalone fs entry for one file. prefetchSize sets the
@@ -1036,58 +1045,50 @@ func (u *Usenet) Stream(ctx context.Context, nzoID, filename string, start, end 
 
 // safeCopyBuffer copies from src to dst using buf, with context checking and
 // validation of read counts to prevent panics from corrupted readers during shutdown.
-func safeCopyBuffer(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) (written int64, err error) {
+func safeCopyBuffer(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) (int64, error) {
 	if len(buf) == 0 {
 		buf = make([]byte, bufferSize)
 	}
-	bufLen := len(buf)
-
+	var written int64
 	for {
-		// Check context before each read
-		select {
-		case <-ctx.Done():
-			return written, ctx.Err()
-		default:
+		if err := ctx.Err(); err != nil {
+			return written, err
 		}
-
 		nr, er := src.Read(buf)
-
-		// Validate read count - this catches corrupted readers during shutdown
-		if nr < 0 {
-			return written, fmt.Errorf("reader returned negative count: %d", nr)
+		// A count outside the buffer would panic the slice below; corrupted
+		// readers during shutdown have produced them.
+		if nr < 0 || nr > len(buf) {
+			return written, fmt.Errorf("reader returned invalid count %d (buffer size %d)", nr, len(buf))
 		}
-		if nr > bufLen {
-			// Reader returned more bytes than buffer capacity - this would panic
-			// Return error instead of panicking
-			return written, fmt.Errorf("reader returned invalid count %d (buffer size %d)", nr, bufLen)
-		}
-
 		if nr > 0 {
-			nw, ew := dst.Write(buf[0:nr])
-			if nw < 0 || nw > nr {
-				nw = 0
-				if ew == nil {
-					ew = fmt.Errorf("invalid write count: %d", nw)
-				}
-			}
+			nw, ew := writeChunk(dst, buf[:nr])
 			written += int64(nw)
 			if ew != nil {
-				err = ew
-				break
-			}
-			if nr != nw {
-				err = io.ErrShortWrite
-				break
+				return written, ew
 			}
 		}
 		if er != nil {
-			if er != io.EOF {
-				err = er
+			if errors.Is(er, io.EOF) {
+				return written, nil
 			}
-			break
+			return written, er
 		}
 	}
-	return written, err
+}
+
+// writeChunk writes p and validates the count the writer reports.
+func writeChunk(dst io.Writer, p []byte) (int, error) {
+	nw, err := dst.Write(p)
+	if nw < 0 || nw > len(p) {
+		if err == nil {
+			err = fmt.Errorf("invalid write count: %d", nw)
+		}
+		return 0, err
+	}
+	if err == nil && nw != len(p) {
+		err = io.ErrShortWrite
+	}
+	return nw, err
 }
 
 // Touch validates that the first segment of a file is available via NNTP STAT.
@@ -1357,30 +1358,9 @@ func (u *Usenet) ClaimNewNZBs() ([]PendingNZB, error) {
 			continue
 		}
 
-		name := entry.Name()
-		claimedPath := filepath.Join(u.metadataDir, name)
-		if strings.HasSuffix(name, ".nzb.importing") {
-			name = strings.TrimSuffix(name, ".importing")
-		} else {
-			if filepath.Ext(name) != ".nzb" {
-				continue
-			}
-			path := filepath.Join(u.metadataDir, name)
-			if fileExists(path+".processed") || fileExists(path+".processing") || fileExists(path+".failed") {
-				continue
-			}
-			claimedPath = path + ".importing"
-			if renameErr := os.Rename(path, claimedPath); renameErr != nil {
-				if os.IsNotExist(renameErr) {
-					continue
-				}
-				// Skip this entry instead of aborting the whole scan. A single
-				// poison file (e.g. a name so long that appending ".importing"
-				// exceeds the filesystem limit) previously failed every refresh
-				// and permanently blocked all other pending NZBs.
-				u.logger.Error().Err(renameErr).Str("name", name).Msg("Failed to claim NZB; skipping")
-				continue
-			}
+		name, claimedPath, ok := u.claimNZB(entry.Name())
+		if !ok {
+			continue
 		}
 
 		content, readFileErr := os.ReadFile(claimedPath)
@@ -1395,6 +1375,35 @@ func (u *Usenet) ClaimNewNZBs() ([]PendingNZB, error) {
 		u.logger.Info().Int("count", len(pending)).Msg("Found new NZB files to queue")
 	}
 	return pending, nil
+}
+
+// claimNZB claims a watched entry by renaming it to "<name>.importing" so
+// the watcher skips it next scan. An entry already claimed by an earlier,
+// interrupted scan is reused. It returns the NZB name and the claimed path;
+// ok is false for entries that are not unmanaged NZBs or cannot be claimed.
+func (u *Usenet) claimNZB(entryName string) (string, string, bool) {
+	if strings.HasSuffix(entryName, ".nzb.importing") {
+		return strings.TrimSuffix(entryName, ".importing"), filepath.Join(u.metadataDir, entryName), true
+	}
+	if filepath.Ext(entryName) != ".nzb" {
+		return "", "", false
+	}
+	path := filepath.Join(u.metadataDir, entryName)
+	if fileExists(path+".processed") || fileExists(path+".processing") || fileExists(path+".failed") {
+		return "", "", false
+	}
+	claimedPath := path + ".importing"
+	if renameErr := os.Rename(path, claimedPath); renameErr != nil {
+		// Skip this entry instead of aborting the whole scan. A single
+		// poison file (e.g. a name so long that appending ".importing"
+		// exceeds the filesystem limit) previously failed every refresh
+		// and permanently blocked all other pending NZBs.
+		if !os.IsNotExist(renameErr) {
+			u.logger.Error().Err(renameErr).Str("name", entryName).Msg("Failed to claim NZB; skipping")
+		}
+		return "", "", false
+	}
+	return entryName, claimedPath, true
 }
 
 // RemoveClaimedNZB removes a watched source after it has been staged by the queue.
