@@ -84,11 +84,11 @@ func Decode(reader io.Reader) (*Manifest, error) {
 	decoder := xml.NewDecoder(reader)
 	decoder.CharsetReader = charset.NewReaderLabel
 	decoder.Strict = false
-	manifest := &Manifest{Metadata: make(map[string]string)}
-	fileBySubject := make(map[string]int)
-	rootSeen := false
-	rootClosed := false
-	depth := 0
+	state := &manifestDecoder{
+		xml:           decoder,
+		manifest:      &Manifest{Metadata: make(map[string]string)},
+		fileBySubject: make(map[string]int),
+	}
 
 	for {
 		token, err := decoder.Token()
@@ -98,63 +98,95 @@ func Decode(reader io.Reader) (*Manifest, error) {
 		if err != nil {
 			return nil, fmt.Errorf("decode NZB manifest: unable to parse NZB file: %w", err)
 		}
-
-		switch value := token.(type) {
-		case xml.StartElement:
-			if !rootSeen {
-				if value.Name.Local != "nzb" {
-					return nil, fmt.Errorf(
-						"decode NZB manifest: expected element type <nzb> but have <%s>",
-						value.Name.Local,
-					)
-				}
-				rootSeen = true
-				depth = 1
-				continue
-			}
-			if rootClosed {
-				return nil, fmt.Errorf("decode NZB manifest: unexpected element <%s> after </nzb>", value.Name.Local)
-			}
-			if depth == 1 && value.Name.Local == "file" {
-				var raw rawFile
-				if decodeElementErr := decoder.DecodeElement(&raw, &value); decodeElementErr != nil {
-					return nil, fmt.Errorf("decode NZB manifest: unable to parse NZB file: %w", decodeElementErr)
-				}
-				appendRawFile(manifest, fileBySubject, raw)
-				continue
-			}
-			if depth == 1 && value.Name.Local == "head" {
-				var head rawHead
-				if decodeElementErr := decoder.DecodeElement(&head, &value); decodeElementErr != nil {
-					return nil, fmt.Errorf("decode NZB manifest: unable to parse NZB metadata: %w", decodeElementErr)
-				}
-				for _, metadata := range head.Metadata {
-					manifest.Metadata[metadata.Type] = metadata.Value
-				}
-				continue
-			}
-			depth++
-		case xml.EndElement:
-			if rootSeen && depth == 1 && value.Name.Local == "nzb" {
-				rootClosed = true
-				depth = 0
-				continue
-			}
-			if depth > 0 {
-				depth--
-			}
-		case xml.Comment:
-			if rootSeen && !rootClosed && depth == 1 {
-				manifest.Comment += string(value)
-			}
+		if handleErr := state.handle(token); handleErr != nil {
+			return nil, handleErr
 		}
 	}
 
-	if !rootSeen || !rootClosed {
+	if !state.rootSeen || !state.rootClosed {
 		return nil, fmt.Errorf("decode NZB manifest: unable to parse NZB file: unexpected EOF")
 	}
-	finalize(manifest)
-	return manifest, nil
+	finalize(state.manifest)
+	return state.manifest, nil
+}
+
+// manifestDecoder tracks the streaming position within the <nzb> document.
+type manifestDecoder struct {
+	xml           *xml.Decoder
+	manifest      *Manifest
+	fileBySubject map[string]int
+	rootSeen      bool
+	rootClosed    bool
+	depth         int
+}
+
+func (d *manifestDecoder) handle(token xml.Token) error {
+	switch value := token.(type) {
+	case xml.StartElement:
+		return d.start(value)
+	case xml.EndElement:
+		d.end(value)
+	case xml.Comment:
+		if d.rootSeen && !d.rootClosed && d.depth == 1 {
+			d.manifest.Comment += string(value)
+		}
+	}
+	return nil
+}
+
+func (d *manifestDecoder) start(value xml.StartElement) error {
+	if !d.rootSeen {
+		if value.Name.Local != "nzb" {
+			return fmt.Errorf("decode NZB manifest: expected element type <nzb> but have <%s>", value.Name.Local)
+		}
+		d.rootSeen = true
+		d.depth = 1
+		return nil
+	}
+	if d.rootClosed {
+		return fmt.Errorf("decode NZB manifest: unexpected element <%s> after </nzb>", value.Name.Local)
+	}
+	if d.depth == 1 {
+		switch value.Name.Local {
+		case "file":
+			return d.decodeFile(&value)
+		case "head":
+			return d.decodeHead(&value)
+		}
+	}
+	d.depth++
+	return nil
+}
+
+func (d *manifestDecoder) end(value xml.EndElement) {
+	if d.rootSeen && d.depth == 1 && value.Name.Local == "nzb" {
+		d.rootClosed = true
+		d.depth = 0
+		return
+	}
+	if d.depth > 0 {
+		d.depth--
+	}
+}
+
+func (d *manifestDecoder) decodeFile(start *xml.StartElement) error {
+	var raw rawFile
+	if err := d.xml.DecodeElement(&raw, start); err != nil {
+		return fmt.Errorf("decode NZB manifest: unable to parse NZB file: %w", err)
+	}
+	appendRawFile(d.manifest, d.fileBySubject, raw)
+	return nil
+}
+
+func (d *manifestDecoder) decodeHead(start *xml.StartElement) error {
+	var head rawHead
+	if err := d.xml.DecodeElement(&head, start); err != nil {
+		return fmt.Errorf("decode NZB manifest: unable to parse NZB metadata: %w", err)
+	}
+	for _, metadata := range head.Metadata {
+		d.manifest.Metadata[metadata.Type] = metadata.Value
+	}
+	return nil
 }
 
 func appendRawFile(manifest *Manifest, fileBySubject map[string]int, raw rawFile) {

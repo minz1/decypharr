@@ -51,44 +51,26 @@ func (vf *File) Read(p []byte) (int, error) {
 		readLen = int(remaining)
 	}
 	n, readErr := vf.reader.Read(p[:readLen])
-	if n > 0 {
-		vf.pos.Add(int64(n))
-		remaining -= int64(n)
-		if remaining == 0 {
-			_ = vf.reader.Close()
-			vf.reader = nil
-		}
+	vf.pos.Add(int64(n))
+	atEOF := errors.Is(readErr, io.EOF)
+	if atEOF || vf.pos.Load() >= vf.volume.Size {
+		vf.closeSequentialReader()
 	}
-	if readErr != nil {
-		if errors.Is(readErr, io.EOF) {
-			if vf.reader != nil {
-				_ = vf.reader.Close()
-				vf.reader = nil
-			}
-			if n == 0 {
-				return 0, io.EOF
-			}
-			return n, io.EOF
-		}
+	switch {
+	case readErr != nil && !atEOF:
 		return n, readErr
-	}
-	if n == 0 {
-		return 0, io.EOF
-	}
-
-	// Check if we've reached the end of the Volume
-	if vf.pos.Load() >= vf.volume.Size {
-		if vf.reader != nil {
-			_ = vf.reader.Close()
-			vf.reader = nil
-		}
-	}
-	// Check if we've read all requested bytes
-	if int64(n) < int64(readLen) {
+	case atEOF || n < readLen:
 		return n, io.EOF
 	}
-
 	return n, nil
+}
+
+// closeSequentialReader drops the Read() reader; the next Read reopens at pos.
+func (vf *File) closeSequentialReader() {
+	if vf.reader != nil {
+		_ = vf.reader.Close()
+		vf.reader = nil
+	}
 }
 
 func (vf *File) ReadAt(p []byte, off int64) (int, error) {
@@ -176,10 +158,7 @@ func (vf *File) Seek(offset int64, whence int) (int64, error) {
 		newPos = vf.volume.Size
 	}
 	if newPos != vf.pos.Load() {
-		if vf.reader != nil {
-			_ = vf.reader.Close()
-			vf.reader = nil
-		}
+		vf.closeSequentialReader()
 	}
 	vf.pos.Store(newPos)
 	return vf.pos.Load(), nil
@@ -243,6 +222,9 @@ func (vf *File) Close() error {
 	return nil
 }
 
+// readOnlyMode is the permission bits of every virtual volume.
+const readOnlyMode fs.FileMode = 0o444
+
 type volumeInfo struct {
 	name string
 	size int64
@@ -250,7 +232,7 @@ type volumeInfo struct {
 
 func (vi volumeInfo) Name() string       { return vi.name }
 func (vi volumeInfo) Size() int64        { return vi.size }
-func (vi volumeInfo) Mode() fs.FileMode  { return 0444 }
+func (vi volumeInfo) Mode() fs.FileMode  { return readOnlyMode }
 func (vi volumeInfo) ModTime() time.Time { return time.Time{} }
 func (vi volumeInfo) IsDir() bool        { return false }
 func (vi volumeInfo) Sys() any           { return nil }
