@@ -46,78 +46,89 @@ func TestRAR5ExtraRecordBoundaries(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			result, err := parseRAR5Extra(test.data, "password")
-			if (err == nil) != test.valid {
-				t.Fatalf("result=%#v error=%v", result, err)
-			}
-			if !test.valid {
-				return
-			}
-			if result.Encrypted != test.encrypted {
-				t.Fatalf("encrypted = %v", result.Encrypted)
-			}
-			if test.encrypted {
-				if !bytes.Equal(result.IV, iv) {
-					t.Fatalf("IV = %x", result.IV)
-				}
-				if hex.EncodeToString(
-					result.Key,
-				) != "9e41dea5935137cf748669cbf242b3ea049d20e0add3db231dabc9840bc58a6a" {
-					t.Fatalf("key = %x", result.Key)
-				}
-			}
+			checkRAR5Extra(t, test.data, test.encrypted, test.valid, iv)
 		})
+	}
+}
+
+func checkRAR5Extra(t *testing.T, data []byte, encrypted, valid bool, iv []byte) {
+	t.Helper()
+	result, err := parseRAR5Extra(data, "password")
+	if (err == nil) != valid {
+		t.Fatalf("result=%#v error=%v", result, err)
+	}
+	if !valid {
+		return
+	}
+	if result.Encrypted != encrypted {
+		t.Fatalf("encrypted = %v", result.Encrypted)
+	}
+	if !encrypted {
+		return
+	}
+	if !bytes.Equal(result.IV, iv) {
+		t.Fatalf("IV = %x", result.IV)
+	}
+	if hex.EncodeToString(result.Key) != "9e41dea5935137cf748669cbf242b3ea049d20e0add3db231dabc9840bc58a6a" {
+		t.Fatalf("key = %x", result.Key)
 	}
 }
 
 func TestRAR5HeaderSizesAndCompression(t *testing.T) {
 	for _, name := range []string{"movie.mkv", "movies1.mkv", strings.Repeat("a", 130) + ".mkv"} {
 		for _, method := range []uint64{0, 1, 5} {
-			extra := append([]byte{2, 0x80, 1, 36, 1, 0, 0, 1}, make([]byte, 32)...) // Unknown type, then encryption.
-			var data []byte
-			for _, value := range []uint64{0, 100, 0, method << 7, 1, uint64(len(name))} {
-				data = binary.AppendUvarint(data, value)
-			}
-			data = append(data, name...)
-			data = append(data, extra...)
-			var content []byte
-			for _, value := range []uint64{RAR5HeaderTypeFile, RAR5HeaderFlagExtraArea | RAR5HeaderFlagDataArea, uint64(len(extra)), 100} {
-				content = binary.AppendUvarint(content, value)
-			}
-			content = append(content, data...)
-			raw := binary.AppendUvarint(make([]byte, 4), uint64(len(content)))
-			raw = append(raw, content...)
-			parser := &RARParser{}
-			reader := bytes.NewReader(append(bytes.Clone(raw), 0xaa))
-			header, size, packed, err := parser.readRAR5Header(reader)
-			if err != nil || size != len(raw) || packed != 100 || reader.Len() != 1 {
-				t.Fatalf("header size=%d packed=%d remaining=%d error=%v", size, packed, reader.Len(), err)
-			}
-			stream := &rarReader{ctx: t.Context(), currentSegmentData: append(bytes.Clone(raw), 0xaa)}
-			streamHeader, streamSize, _, err := parser.readRAR5Header(stream)
-			if err != nil || streamSize != size || !bytes.Equal(streamHeader.Data, header.Data) {
-				t.Fatalf("stream header size=%d error=%v", streamSize, err)
-			}
-			entry := parser.parseRAR5FileHeader(header.Data, header.ExtraSize, 0, "part.rar", int64(size), packed, "")
-			if entry == nil || entry.Name != name || entry.IsStored != (method == 0) || !entry.IsEncrypted ||
-				len(entry.EncryptionIV) != 16 ||
-				entry.EncryptionKey != nil {
-				t.Fatalf("method=%d entry=%#v", method, entry)
-			}
-			// Exercise encrypted headers at both one-byte and two-byte size fields.
-			key, iv := make([]byte, 32), make([]byte, 16)
-			padded := append(bytes.Clone(raw), make([]byte, (aes.BlockSize-len(raw)%aes.BlockSize)%aes.BlockSize)...)
-			block, err := aes.NewCipher(key)
-			if err != nil {
-				t.Fatal(err)
-			}
-			cipher.NewCBCEncrypter(block, iv).CryptBlocks(padded, padded)
-			stream = &rarReader{ctx: t.Context(), currentSegmentData: padded}
-			decrypted, encryptedSize, _, err := parser.readAndDecryptRAR5Header(stream, key, iv)
-			if err != nil || encryptedSize != len(padded) || !bytes.Equal(decrypted.Data, header.Data) ||
-				decrypted.ExtraSize != header.ExtraSize {
-				t.Fatalf("encrypted header size=%d error=%v", encryptedSize, err)
-			}
+			checkRAR5HeaderRoundTrip(t, name, method)
 		}
+	}
+}
+
+// checkRAR5HeaderRoundTrip builds a FILE header and checks every RAR5 header
+// reader (plain bytes, stream, AES-encrypted) agrees on it.
+func checkRAR5HeaderRoundTrip(t *testing.T, name string, method uint64) {
+	t.Helper()
+	extra := append([]byte{2, 0x80, 1, 36, 1, 0, 0, 1}, make([]byte, 32)...) // Unknown type, then encryption.
+	var data []byte
+	for _, value := range []uint64{0, 100, 0, method << 7, 1, uint64(len(name))} {
+		data = binary.AppendUvarint(data, value)
+	}
+	data = append(data, name...)
+	data = append(data, extra...)
+	var content []byte
+	for _, value := range []uint64{RAR5HeaderTypeFile, RAR5HeaderFlagExtraArea | RAR5HeaderFlagDataArea, uint64(len(extra)), 100} {
+		content = binary.AppendUvarint(content, value)
+	}
+	content = append(content, data...)
+	raw := binary.AppendUvarint(make([]byte, 4), uint64(len(content)))
+	raw = append(raw, content...)
+	parser := &RARParser{}
+	reader := bytes.NewReader(append(bytes.Clone(raw), 0xaa))
+	header, size, packed, err := parser.readRAR5Header(reader)
+	if err != nil || size != len(raw) || packed != 100 || reader.Len() != 1 {
+		t.Fatalf("header size=%d packed=%d remaining=%d error=%v", size, packed, reader.Len(), err)
+	}
+	stream := &rarReader{ctx: t.Context(), currentSegmentData: append(bytes.Clone(raw), 0xaa)}
+	streamHeader, streamSize, _, err := parser.readRAR5Header(stream)
+	if err != nil || streamSize != size || !bytes.Equal(streamHeader.Data, header.Data) {
+		t.Fatalf("stream header size=%d error=%v", streamSize, err)
+	}
+	entry := parser.parseRAR5FileHeader(header.Data, header.ExtraSize, 0, "part.rar", int64(size), packed, "")
+	if entry == nil || entry.Name != name || entry.IsStored != (method == 0) || !entry.IsEncrypted ||
+		len(entry.EncryptionIV) != 16 ||
+		entry.EncryptionKey != nil {
+		t.Fatalf("method=%d entry=%#v", method, entry)
+	}
+	// Exercise encrypted headers at both one-byte and two-byte size fields.
+	key, iv := make([]byte, 32), make([]byte, 16)
+	padded := append(bytes.Clone(raw), make([]byte, (aes.BlockSize-len(raw)%aes.BlockSize)%aes.BlockSize)...)
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cipher.NewCBCEncrypter(block, iv).CryptBlocks(padded, padded)
+	stream = &rarReader{ctx: t.Context(), currentSegmentData: padded}
+	decrypted, encryptedSize, _, err := parser.readAndDecryptRAR5Header(stream, key, iv)
+	if err != nil || encryptedSize != len(padded) || !bytes.Equal(decrypted.Data, header.Data) ||
+		decrypted.ExtraSize != header.ExtraSize {
+		t.Fatalf("encrypted header size=%d error=%v", encryptedSize, err)
 	}
 }
