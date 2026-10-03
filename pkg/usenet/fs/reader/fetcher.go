@@ -240,91 +240,16 @@ func (sf *SegmentFetcher) doFetchAttempt(ctx context.Context, segIdx int, worklo
 
 	// Try to mark as fetching (atomic transition Empty -> Fetching)
 	if !sf.cache.MarkFetching(segIdx) {
-		// Someone else is fetching or it's already cached
-		state := sf.cache.GetState(segIdx)
-		switch state {
-		case StateOnDisk:
-			return nil
-		case StateFailed:
-			return sf.cache.GetError(segIdx)
-		case StateFetching:
-			// Wait for the other fetcher. If it released the slot (cancel)
-			// or the segment was dropped right after it landed, the wait
-			// reports ErrSegmentEvicted rather than blocking on an event
-			// that is no longer coming — retry the fetch ourselves.
-			err := sf.cache.WaitForSegment(ctx, segIdx)
-			if errors.Is(err, ErrSegmentEvicted) {
-				return sf.doFetchAttempt(ctx, segIdx, workload, restarts+1)
-			}
-			return err
-		case StateEvicting:
-			if err := sf.cache.WaitForEvictionRelease(ctx, segIdx); err != nil {
-				return err
-			}
-			return sf.doFetchAttempt(ctx, segIdx, workload, restarts+1)
-		case StateEmpty:
-			// Freed between the claim attempt and the state read; claim again.
-			return sf.doFetchAttempt(ctx, segIdx, workload, restarts+1)
-		}
+		return sf.awaitOtherFetch(ctx, segIdx, workload, restarts)
 	}
 
-	messageID := seg.MessageID
-	timeout := sf.config.DownloadTimeout
-	if timeout <= 0 {
-		timeout = 60 * time.Second
-	}
-
-	downloadCtx, cancel := context.WithTimeout(ctx, timeout)
+	downloadCtx, cancel := context.WithTimeout(ctx, sf.downloadTimeout())
 	defer cancel()
 
 	// ExecuteWithFailover already retries across configured providers.
 	err := sf.client.ExecuteWithFailover(downloadCtx, workload, func(conn *nntp.Connection) error {
-		stopCancel := context.AfterFunc(downloadCtx, func() {
-			_ = conn.Close()
-		})
-		defer stopCancel()
-
-		writer := sf.cache.StreamWriter(segIdx)
-		if writer == nil {
-			return ErrCacheClosed
-		}
-
-		var n int64
-		var err error
-		if sf.cache.memoryMode {
-			var decoded []byte
-			decoded, err = conn.DecodeBodyWithBuffer(messageID, writer)
-			if err == nil {
-				n, err = writer.Adopt(decoded)
-			}
-		} else {
-			n, err = conn.StreamBody(messageID, writer)
-		}
-		if err != nil {
-			writer.Discard()
-			if ctxErr := downloadCtx.Err(); ctxErr != nil {
-				return ctxErr
-			}
-			return err
-		}
-		if ctxErr := downloadCtx.Err(); ctxErr != nil {
-			writer.Discard()
-			return ctxErr
-		}
-
-		// Treat zero-byte articles as missing — the article exists on the
-		// server but its body is empty/corrupted after yEnc decoding.
-		if n == 0 {
-			writer.Discard()
-			return errNoDecodedData()
-		}
-
-		// Commit (updates cache state to StateOnDisk).
-		writer.Finalize()
-
-		return nil
+		return sf.downloadSegment(downloadCtx, conn, segIdx, seg.MessageID)
 	})
-
 	if err != nil {
 		sf.stats.DownloadErrors.Add(1)
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -336,6 +261,94 @@ func (sf *SegmentFetcher) doFetchAttempt(ctx context.Context, segIdx int, worklo
 	}
 
 	sf.stats.Downloads.Add(1)
+	return nil
+}
+
+// awaitOtherFetch handles a lost Empty->Fetching claim: the segment is
+// cached, failed, or owned by another fetch or eviction.
+func (sf *SegmentFetcher) awaitOtherFetch(ctx context.Context, segIdx int, workload nntp.Workload, restarts int) error {
+	switch sf.cache.GetState(segIdx) {
+	case StateOnDisk:
+		return nil
+	case StateFailed:
+		return sf.cache.GetError(segIdx)
+	case StateFetching:
+		// Wait for the other fetcher. If it released the slot (cancel)
+		// or the segment was dropped right after it landed, the wait
+		// reports ErrSegmentEvicted rather than blocking on an event
+		// that is no longer coming — retry the fetch ourselves.
+		err := sf.cache.WaitForSegment(ctx, segIdx)
+		if errors.Is(err, ErrSegmentEvicted) {
+			return sf.doFetchAttempt(ctx, segIdx, workload, restarts+1)
+		}
+		return err
+	case StateEvicting:
+		if err := sf.cache.WaitForEvictionRelease(ctx, segIdx); err != nil {
+			return err
+		}
+		return sf.doFetchAttempt(ctx, segIdx, workload, restarts+1)
+	case StateEmpty:
+		// Freed between the claim attempt and the state read; claim again.
+	}
+	return sf.doFetchAttempt(ctx, segIdx, workload, restarts+1)
+}
+
+// defaultDownloadTimeout bounds one article download when unconfigured.
+const defaultDownloadTimeout = 60 * time.Second
+
+func (sf *SegmentFetcher) downloadTimeout() time.Duration {
+	if sf.config.DownloadTimeout <= 0 {
+		return defaultDownloadTimeout
+	}
+	return sf.config.DownloadTimeout
+}
+
+// downloadSegment decodes one article on conn straight into the cache. A
+// cancelled download closes the connection to unblock the read.
+func (sf *SegmentFetcher) downloadSegment(
+	downloadCtx context.Context,
+	conn *nntp.Connection,
+	segIdx int,
+	messageID string,
+) error {
+	stopCancel := context.AfterFunc(downloadCtx, func() {
+		_ = conn.Close()
+	})
+	defer stopCancel()
+
+	writer := sf.cache.StreamWriter(segIdx)
+	if writer == nil {
+		return ErrCacheClosed
+	}
+
+	var n int64
+	var err error
+	if sf.cache.memoryMode {
+		var decoded []byte
+		decoded, err = conn.DecodeBodyWithBuffer(messageID, writer)
+		if err == nil {
+			n, err = writer.Adopt(decoded)
+		}
+	} else {
+		n, err = conn.StreamBody(messageID, writer)
+	}
+	if ctxErr := downloadCtx.Err(); ctxErr != nil {
+		writer.Discard()
+		return ctxErr
+	}
+	if err != nil {
+		writer.Discard()
+		return err
+	}
+	// Treat zero-byte articles as missing — the article exists on the
+	// server but its body is empty/corrupted after yEnc decoding.
+	if n == 0 {
+		writer.Discard()
+		return errNoDecodedData()
+	}
+
+	// Commit (updates cache state to StateOnDisk).
+	writer.Finalize()
 	return nil
 }
 
@@ -420,24 +433,35 @@ func (sf *SegmentFetcher) queueSpeculative(segIdx int, priority fetchPriority) {
 	if state == StateOnDisk || state == StateFetching || !sf.markPrefetchQueued(segIdx) {
 		return
 	}
+	sf.submitSpeculative(priority, []int{segIdx}, func() { sf.prefetchOne(segIdx) })
+}
+
+// submitSpeculative queues run for segments whose dedup bits are claimed. A
+// task still queued when CancelPendingPrefetch bumps the generation becomes a
+// no-op; the cancel already cleared its bits.
+func (sf *SegmentFetcher) submitSpeculative(priority fetchPriority, segs []int, run func()) {
 	gen := sf.prefetchGen.Load()
-	if !sf.submit(sf.ctx, priority, func() {
+	release := func() {
+		if gen == sf.prefetchGen.Load() {
+			sf.clearPrefetchQueuedAll(segs)
+		}
+	}
+	accepted := sf.submit(sf.ctx, priority, func() {
 		if gen != sf.prefetchGen.Load() {
 			return
 		}
-		defer func() {
-			if gen == sf.prefetchGen.Load() {
-				sf.clearPrefetchQueued(segIdx)
-			}
-		}()
-		sf.prefetchOne(segIdx)
-	}, func() {
-		if gen == sf.prefetchGen.Load() {
-			sf.clearPrefetchQueued(segIdx)
-		}
-	}) {
+		defer release()
+		run()
+	}, release)
+	if !accepted {
+		sf.clearPrefetchQueuedAll(segs)
+		sf.stats.PrefetchMisses.Add(int64(len(segs)))
+	}
+}
+
+func (sf *SegmentFetcher) clearPrefetchQueuedAll(segs []int) {
+	for _, segIdx := range segs {
 		sf.clearPrefetchQueued(segIdx)
-		sf.stats.PrefetchMisses.Add(1)
 	}
 }
 
@@ -446,11 +470,7 @@ func (sf *SegmentFetcher) prefetchOne(segIdx int) {
 		sf.stats.PrefetchHits.Add(1)
 		return
 	}
-	timeout := sf.config.DownloadTimeout
-	if timeout <= 0 {
-		timeout = 60 * time.Second
-	}
-	fetchCtx, cancel := context.WithTimeout(sf.ctx, timeout)
+	fetchCtx, cancel := context.WithTimeout(sf.ctx, sf.downloadTimeout())
 	err := sf.fetchWithRetryDirect(fetchCtx, segIdx, nntp.WorkloadStreamPrefetch)
 	cancel()
 	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
@@ -459,44 +479,15 @@ func (sf *SegmentFetcher) prefetchOne(segIdx int) {
 }
 
 func (sf *SegmentFetcher) queueSpeculativeBatch(startSeg, endSeg int, priority fetchPriority) {
-	var batchStorage [appconfig.MaxBodyPipelineDepth]int
-	batchLen := 0
+	batch := make([]int, 0, appconfig.MaxBodyPipelineDepth)
 	for segIdx := startSeg; segIdx <= endSeg; segIdx++ {
 		state := sf.cache.GetState(segIdx)
-		if state == StateOnDisk || state == StateFetching || !sf.markPrefetchQueued(segIdx) {
-			continue
+		if state != StateOnDisk && state != StateFetching && sf.markPrefetchQueued(segIdx) {
+			batch = append(batch, segIdx)
 		}
-		batchStorage[batchLen] = segIdx
-		batchLen++
 	}
-	if batchLen == 0 {
-		return
-	}
-	batch := batchStorage[:batchLen]
-	gen := sf.prefetchGen.Load()
-	if !sf.submit(sf.ctx, priority, func() {
-		if gen != sf.prefetchGen.Load() {
-			return
-		}
-		defer func() {
-			if gen == sf.prefetchGen.Load() {
-				for _, segIdx := range batch {
-					sf.clearPrefetchQueued(segIdx)
-				}
-			}
-		}()
-		sf.prefetchBatch(batch)
-	}, func() {
-		if gen == sf.prefetchGen.Load() {
-			for _, segIdx := range batch {
-				sf.clearPrefetchQueued(segIdx)
-			}
-		}
-	}) {
-		for _, segIdx := range batch {
-			sf.clearPrefetchQueued(segIdx)
-		}
-		sf.stats.PrefetchMisses.Add(int64(len(batch)))
+	if len(batch) > 0 {
+		sf.submitSpeculative(priority, batch, func() { sf.prefetchBatch(batch) })
 	}
 }
 
@@ -543,175 +534,182 @@ func (sf *SegmentFetcher) finishPrefetchClaim(claim prefetchClaim, err error) {
 }
 
 func (sf *SegmentFetcher) fetchPrefetchBatch(ctx context.Context, segIndices []int) error {
-	var (
-		claims       []prefetchClaim
-		writers      []SegmentWriter
-		messageIDs   []string
-		destinations []nntp.BodyDestination
-		decoded      [][]byte
-		written      []int64
-		bodyErrors   []error
-		initialized  bool
-	)
+	pipeline := &prefetchPipeline{sf: sf}
 	err := sf.client.ExecuteWithFailover(ctx, nntp.WorkloadStreamPrefetch, func(conn *nntp.Connection) error {
-		if !initialized {
-			initialized = true
-			for _, segIdx := range segIndices {
-				claim, ok := sf.claimPrefetch(segIdx)
-				if !ok {
-					if sf.cache.GetState(segIdx) == StateOnDisk {
-						sf.stats.PrefetchHits.Add(1)
-					}
-					continue
-				}
-				claims = append(claims, claim)
-				segment := sf.cache.GetSegment(segIdx)
-				writer := sf.cache.StreamWriter(segIdx)
-				if segment == nil || writer == nil {
-					return ErrCacheClosed
-				}
-				writers = append(writers, writer)
-				messageIDs = append(messageIDs, segment.MessageID)
-				var destination nntp.BodyDestination
-				if sf.cache.memoryMode {
-					destination.BufferSource = writer
-				} else {
-					destination.Writer = writer
-				}
-				destinations = append(destinations, destination)
+		if !pipeline.initialized {
+			pipeline.initialized = true
+			if claimErr := pipeline.claim(segIndices); claimErr != nil {
+				return claimErr
 			}
 		}
-		if len(claims) == 0 {
+		if len(pipeline.claims) == 0 {
 			return nil
 		}
-		if bodyErrors == nil {
-			bodyErrors = make([]error, len(claims))
-		}
-		cancelFinished := make(chan struct{})
-		stopCancel := context.AfterFunc(ctx, func() {
-			defer close(cancelFinished)
-			_ = conn.Close()
-		})
-		results, decodeErr := conn.PipelineBodies(messageIDs, destinations)
-		if decoded == nil {
-			decoded = make([][]byte, len(claims))
-			written = make([]int64, len(claims))
-		}
-		for i, result := range results {
-			switch {
-			case len(result.Body) > 0:
-				decoded[i] = result.Body
-				bodyErrors[i] = nil
-				if result.Error == nil && destinations[i].Writer == nil {
-					if n, adoptErr := writers[i].Adopt(result.Body); adoptErr == nil && n > 0 {
-						// Failover must not overwrite storage already accepted by this writer.
-						written[i] = n
-						destinations[i].Skip = true
-						decoded[i] = nil
-					}
-				}
-			case result.Bytes > 0:
-				written[i] = result.Bytes
-				bodyErrors[i] = nil
-			case result.Error != nil:
-				bodyErrors[i] = result.Error
-			}
-		}
-		if !stopCancel() {
-			<-cancelFinished
-		}
-		return decodeErr
+		return pipeline.attempt(ctx, conn)
 	})
-	firstErr := err
-	for i, claim := range claims {
-		if i >= len(writers) || writers[i] == nil {
-			claimErr := err
-			if claimErr == nil {
-				claimErr = ErrCacheClosed
+	return pipeline.finish(err)
+}
+
+// prefetchPipeline is one pipelined BODY batch across provider failover.
+// Claims and writers are made on the first attempt; a later attempt (another
+// provider) re-requests the bodies but skips writers that already accepted
+// one, so failover never overwrites accepted storage.
+type prefetchPipeline struct {
+	sf           *SegmentFetcher
+	claims       []prefetchClaim
+	writers      []SegmentWriter
+	messageIDs   []string
+	destinations []nntp.BodyDestination
+	decoded      [][]byte
+	written      []int64
+	bodyErrors   []error
+	initialized  bool
+}
+
+// claim takes ownership of every segment not cached or fetched elsewhere.
+func (pp *prefetchPipeline) claim(segIndices []int) error {
+	sf := pp.sf
+	for _, segIdx := range segIndices {
+		claim, ok := sf.claimPrefetch(segIdx)
+		if !ok {
+			if sf.cache.GetState(segIdx) == StateOnDisk {
+				sf.stats.PrefetchHits.Add(1)
 			}
-			if firstErr == nil {
-				firstErr = claimErr
-			}
-			sf.finishPrefetchClaim(claim, claimErr)
 			continue
 		}
-		writer := writers[i]
-		var writeErr error
-		n := int64(0)
-		switch {
-		case i < len(written) && written[i] > 0:
-			n = written[i]
-		case i < len(decoded) && len(decoded[i]) > 0:
-			n, writeErr = writer.Adopt(decoded[i])
-		default:
-			if i < len(bodyErrors) {
-				writeErr = bodyErrors[i]
-			}
-			if writeErr == nil {
-				writeErr = err
-			}
-			if writeErr == nil {
-				writeErr = errNoDecodedData()
-			}
+		pp.claims = append(pp.claims, claim)
+		segment := sf.cache.GetSegment(segIdx)
+		writer := sf.cache.StreamWriter(segIdx)
+		if segment == nil || writer == nil {
+			return ErrCacheClosed
 		}
-		if writeErr == nil && n == 0 {
-			writeErr = errNoDecodedData()
-		}
-		if writeErr != nil {
-			writer.Discard()
-			if firstErr == nil {
-				firstErr = writeErr
-			}
+		pp.writers = append(pp.writers, writer)
+		pp.messageIDs = append(pp.messageIDs, segment.MessageID)
+		var destination nntp.BodyDestination
+		if sf.cache.memoryMode {
+			destination.BufferSource = writer
 		} else {
-			writer.Finalize()
+			destination.Writer = writer
 		}
-		sf.finishPrefetchClaim(claim, writeErr)
+		pp.destinations = append(pp.destinations, destination)
+	}
+	return nil
+}
+
+// attempt pipelines the bodies on one connection, closing it if ctx ends.
+func (pp *prefetchPipeline) attempt(ctx context.Context, conn *nntp.Connection) error {
+	if pp.bodyErrors == nil {
+		pp.bodyErrors = make([]error, len(pp.claims))
+		pp.decoded = make([][]byte, len(pp.claims))
+		pp.written = make([]int64, len(pp.claims))
+	}
+	cancelFinished := make(chan struct{})
+	stopCancel := context.AfterFunc(ctx, func() {
+		defer close(cancelFinished)
+		_ = conn.Close()
+	})
+	results, decodeErr := conn.PipelineBodies(pp.messageIDs, pp.destinations)
+	for i, result := range results {
+		pp.record(i, result)
+	}
+	if !stopCancel() {
+		<-cancelFinished
+	}
+	return decodeErr
+}
+
+// record keeps one body's outcome, adopting a decoded memory-mode body at
+// once so a failover attempt skips it.
+func (pp *prefetchPipeline) record(i int, result nntp.DecodedBodyResult) {
+	switch {
+	case len(result.Body) > 0:
+		pp.decoded[i] = result.Body
+		pp.bodyErrors[i] = nil
+		if result.Error != nil || pp.destinations[i].Writer != nil {
+			return
+		}
+		if n, adoptErr := pp.writers[i].Adopt(result.Body); adoptErr == nil && n > 0 {
+			pp.written[i] = n
+			pp.destinations[i].Skip = true
+			pp.decoded[i] = nil
+		}
+	case result.Bytes > 0:
+		pp.written[i] = result.Bytes
+		pp.bodyErrors[i] = nil
+	case result.Error != nil:
+		pp.bodyErrors[i] = result.Error
+	}
+}
+
+// finish commits or discards every claimed segment and returns the first
+// failure.
+func (pp *prefetchPipeline) finish(err error) error {
+	firstErr := err
+	for i, claim := range pp.claims {
+		claimErr := pp.settle(i, err)
+		if firstErr == nil {
+			firstErr = claimErr
+		}
+		pp.sf.finishPrefetchClaim(claim, claimErr)
 	}
 	return firstErr
 }
 
-func (sf *SegmentFetcher) prefetchBatch(segIndices []int) {
-	timeout := sf.config.DownloadTimeout
-	if timeout <= 0 {
-		timeout = 60 * time.Second
-	}
-	// Preserve the existing per-article timeout budget now that one task may
-	// stream multiple ordered bodies.
-	if count := int64(len(segIndices)); count > 1 {
-		if int64(timeout) > math.MaxInt64/count {
-			timeout = math.MaxInt64
-		} else {
-			timeout = time.Duration(int64(timeout) * count)
+// settle finalizes claim i's writer when it holds data, else discards it.
+func (pp *prefetchPipeline) settle(i int, err error) error {
+	if i >= len(pp.writers) || pp.writers[i] == nil {
+		if err == nil {
+			return ErrCacheClosed
 		}
+		return err
 	}
-	fetchCtx, cancel := context.WithTimeout(sf.ctx, timeout)
+	writer := pp.writers[i]
+	n, writeErr := pp.accepted(i, err)
+	if writeErr == nil && n == 0 {
+		writeErr = errNoDecodedData()
+	}
+	if writeErr != nil {
+		writer.Discard()
+		return writeErr
+	}
+	writer.Finalize()
+	return nil
+}
 
-	maxAttempts := sf.config.MaxRetries
-	if maxAttempts < 1 {
-		maxAttempts = 3
+// accepted returns the bytes claim i's writer holds, adopting a decoded body
+// still pending, or the error explaining why there are none.
+func (pp *prefetchPipeline) accepted(i int, err error) (int64, error) {
+	switch {
+	case i < len(pp.written) && pp.written[i] > 0:
+		return pp.written[i], nil
+	case i < len(pp.decoded) && len(pp.decoded[i]) > 0:
+		return pp.writers[i].Adopt(pp.decoded[i])
+	case i < len(pp.bodyErrors) && pp.bodyErrors[i] != nil:
+		return 0, pp.bodyErrors[i]
+	case err != nil:
+		return 0, err
 	}
+	return 0, errNoDecodedData()
+}
+
+func (sf *SegmentFetcher) prefetchBatch(segIndices []int) {
+	// Preserve the per-article timeout budget now that one task may stream
+	// multiple ordered bodies.
+	fetchCtx, cancel := context.WithTimeout(sf.ctx, scaledTimeout(sf.downloadTimeout(), len(segIndices)))
+	defer cancel()
+
 	var err error
-retryLoop:
-	for attempt := range maxAttempts {
+	for attempt := range sf.maxAttempts() {
 		if attempt > 0 {
-			select {
-			case <-fetchCtx.Done():
-				err = fetchCtx.Err()
-				break retryLoop
-			case <-time.After(sf.retryBackoff(attempt)):
+			if err = sf.backoff(fetchCtx, attempt); err != nil {
+				break
 			}
 		}
-		if err = sf.fetchPrefetchBatch(fetchCtx, segIndices); err == nil {
-			break
-		}
-		if nntp.IsArticleNotFoundError(err) || nntp.IsYencDecodeError(err) || fetchCtx.Err() != nil {
-			break
-		}
-		if nntp.IsAllProvidersFailed(err) && attempt >= 1 {
+		err = sf.fetchPrefetchBatch(fetchCtx, segIndices)
+		if !retryable(err, attempt) || fetchCtx.Err() != nil {
 			break
 		}
 	}
-	cancel()
 
 	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		sf.logger.Debug().Err(err).
@@ -719,6 +717,50 @@ retryLoop:
 			Int("segments", len(segIndices)).
 			Msg("prefetch pipeline failed")
 	}
+}
+
+// scaledTimeout multiplies timeout by n without overflowing.
+func scaledTimeout(timeout time.Duration, n int) time.Duration {
+	count := int64(max(n, 1))
+	if int64(timeout) > math.MaxInt64/count {
+		return math.MaxInt64
+	}
+	return time.Duration(int64(timeout) * count)
+}
+
+// defaultMaxAttempts is the retry budget when unconfigured.
+const defaultMaxAttempts = 3
+
+func (sf *SegmentFetcher) maxAttempts() int {
+	if sf.config.MaxRetries < 1 {
+		return defaultMaxAttempts
+	}
+	return sf.config.MaxRetries
+}
+
+// backoff waits before retry attempt, returning ctx's error if it ends first.
+func (sf *SegmentFetcher) backoff(ctx context.Context, attempt int) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-sf.ctx.Done():
+		return sf.ctx.Err()
+	case <-time.After(sf.retryBackoff(attempt)):
+		return nil
+	}
+}
+
+// retryable reports whether err after attempt deserves another try: not on
+// success or permanent errors, and — since the failover layer already
+// retried per provider — at most one outer pass after all providers failed.
+func retryable(err error, attempt int) bool {
+	switch {
+	case err == nil, nntp.IsArticleNotFoundError(err), nntp.IsYencDecodeError(err):
+		return false
+	case nntp.IsAllProvidersFailed(err):
+		return attempt < 1
+	}
+	return true
 }
 
 // EnsureSegments fetches all missing segments through the shared scheduler.
@@ -769,45 +811,24 @@ func (sf *SegmentFetcher) CancelPendingPrefetch() {
 }
 
 func (sf *SegmentFetcher) fetchWithRetryDirect(ctx context.Context, segIdx int, workload nntp.Workload) error {
-	maxAttempts := sf.config.MaxRetries
-	if maxAttempts < 1 {
-		maxAttempts = 3
-	}
-
-	var lastErr error
-	for attempt := range maxAttempts {
+	var err error
+	for attempt := range sf.maxAttempts() {
 		if attempt > 0 {
 			// Clear the failed state so the segment can be re-fetched, then
 			// back off briefly before retrying. ResetFailed is a CAS: if a
 			// concurrent reader fetched the segment meanwhile it stays OnDisk.
 			sf.cache.ResetFailed(segIdx)
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-sf.ctx.Done():
-				return sf.ctx.Err()
-			case <-time.After(sf.retryBackoff(attempt)):
+			if waitErr := sf.backoff(ctx, attempt); waitErr != nil {
+				return waitErr
 			}
 		}
-
-		err := sf.fetchDirect(ctx, segIdx, workload)
-		if err == nil {
-			return nil
-		}
-		lastErr = err
-
-		// Don't retry permanent errors or cancellations.
-		if nntp.IsArticleNotFoundError(err) || nntp.IsYencDecodeError(err) || ctx.Err() != nil || sf.ctx.Err() != nil {
-			return err
-		}
-		// The failover layer already retried per provider and across
-		// providers for this error; allow one outer pass for transient
-		// blips, then stop rather than multiplying the attempt budget.
-		if nntp.IsAllProvidersFailed(err) && attempt >= 1 {
+		err = sf.fetchDirect(ctx, segIdx, workload)
+		// Don't retry success, permanent errors or cancellations.
+		if !retryable(err, attempt) || ctx.Err() != nil || sf.ctx.Err() != nil {
 			return err
 		}
 	}
-	return lastErr
+	return err
 }
 
 // retryBackoff returns the delay before the given (1-indexed) retry attempt.
