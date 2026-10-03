@@ -3,6 +3,7 @@ package reader
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -106,39 +107,10 @@ func TestPlaybackUnderPoolPressure(t *testing.T) {
 			const playbackBytesPerSec = 5_000_000 // ~40 Mbps
 			ideal := time.Duration(float64(playBytes) / playbackBytesPerSec * float64(time.Second))
 
-			var wg sync.WaitGroup
-			worst := make([]time.Duration, tc.streams)
 			start := time.Now()
-			for s := range tc.streams {
-				wg.Go(func() {
-					p := make([]byte, 128*1024)
-					pace := time.Duration(float64(len(p)) / playbackBytesPerSec * float64(time.Second))
-					next := time.Now()
-					for off := int64(0); off < playBytes; off += int64(len(p)) {
-						next = next.Add(pace)
-						if d := time.Until(next); d > 0 {
-							time.Sleep(d)
-						}
-						t0 := time.Now()
-						if _, err := readers[s].ReadAt(p[:min(int64(len(p)), playBytes-off)], off); err != nil {
-							t.Errorf("stream %d read at %d: %v", s, off, err)
-							return
-						}
-						if d := time.Since(t0); d > worst[s] {
-							worst[s] = d
-						}
-					}
-				})
-			}
-			wg.Wait()
+			maxRead := playPaced(t, readers, playBytes, playbackBytesPerSec)
 			elapsed := time.Since(start)
 
-			var maxRead time.Duration
-			for _, w := range worst {
-				if w > maxRead {
-					maxRead = w
-				}
-			}
 			unique := int64(tc.streams * tc.segsPer / 2)
 			bodies := srv.Bodies.Load()
 			amplification := float64(bodies) / float64(unique)
@@ -158,3 +130,41 @@ func TestPlaybackUnderPoolPressure(t *testing.T) {
 		})
 	}
 }
+
+// playPaced plays playBytes of every reader concurrently at bytesPerSec and
+// returns the slowest single read.
+func playPaced(t *testing.T, readers []*StreamingReader, playBytes int64, bytesPerSec float64) time.Duration {
+	t.Helper()
+	var wg sync.WaitGroup
+	worst := make([]time.Duration, len(readers))
+	for s := range readers {
+		wg.Go(func() {
+			worst[s] = playStream(t, readers[s], s, playBytes, bytesPerSec)
+		})
+	}
+	wg.Wait()
+	return slices.Max(worst)
+}
+
+// playStream reads one stream in 128KB chunks at bytesPerSec and returns its
+// slowest read.
+func playStream(t *testing.T, reader *StreamingReader, stream int, playBytes int64, bytesPerSec float64) time.Duration {
+	p := make([]byte, ppChunkSize)
+	pace := time.Duration(float64(len(p)) / bytesPerSec * float64(time.Second))
+	next := time.Now()
+	var worst time.Duration
+	for off := int64(0); off < playBytes; off += int64(len(p)) {
+		next = next.Add(pace)
+		time.Sleep(time.Until(next))
+		t0 := time.Now()
+		if _, err := reader.ReadAt(p[:min(int64(len(p)), playBytes-off)], off); err != nil {
+			t.Errorf("stream %d read at %d: %v", stream, off, err)
+			return worst
+		}
+		worst = max(worst, time.Since(t0))
+	}
+	return worst
+}
+
+// ppChunkSize is the player read size.
+const ppChunkSize = 128 * 1024

@@ -272,86 +272,72 @@ func TestIdleDeliveryDropsResidentsAndLatePublishes(t *testing.T) {
 }
 
 func TestRetentionStorageTiers(t *testing.T) {
+	t.Parallel()
 	if DefaultConfig().Retention != RetentionWindow {
 		t.Fatal("window retention must be the default")
 	}
-	for _, memory := range []bool{true, false} {
-		name := "disk"
-		if memory {
-			name = "memory"
+	t.Run("memory", func(t *testing.T) {
+		t.Parallel()
+		cfg := DefaultConfig()
+		cfg.DiskPath = t.TempDir()
+		cfg.Retention = RetentionWindow
+		roundTripSegments(t, cfg, 8)
+		// Memory mode owns no file: the DiskPath dir stays empty.
+		entries, err := os.ReadDir(cfg.DiskPath)
+		if err != nil {
+			t.Fatal(err)
 		}
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			const segSize = 64 << 10
-			segCount := 8
-			if !memory {
-				segCount = 640
-			}
-			segs := make([]SegmentMeta, segCount)
-			for i := range segs {
-				segs[i] = SegmentMeta{
-					MessageID:   fmt.Sprintf("<seg%d@test>", i),
-					Number:      i + 1,
-					Bytes:       segSize,
-					StartOffset: int64(i) * segSize,
-					EndOffset:   int64(i+1)*segSize - 1,
-				}
-			}
-			cfg := DefaultConfig()
-			cfg.DiskPath = t.TempDir()
-			if memory {
-				cfg.Retention = RetentionWindow
-			} else {
-				cfg.Retention = RetentionRewind
-			}
+		if len(entries) != 0 {
+			t.Fatalf("memory mode created cache files: %v", entries)
+		}
+	})
+	t.Run("disk", func(t *testing.T) {
+		t.Parallel()
+		cfg := DefaultConfig()
+		cfg.DiskPath = t.TempDir()
+		cfg.Retention = RetentionRewind
+		roundTripSegments(t, cfg, 640)
+		matches, err := filepath.Glob(filepath.Join(cfg.DiskPath, "cache-*", "segments.bin"))
+		if err != nil || len(matches) != 1 {
+			t.Fatalf("locate segments.bin: %v (%d matches)", err, len(matches))
+		}
+		onDisk, err := os.ReadFile(matches[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(bytes.Trim(onDisk, "\x00")) == 0 {
+			t.Fatal("disk mode wrote nothing to segments.bin")
+		}
+	})
+}
 
-			cache, err := NewSegmentCache(context.Background(), segs, cfg, &Stats{}, zerolog.Nop())
-			if err != nil {
-				t.Fatalf("NewSegmentCache: %v", err)
-			}
-			t.Cleanup(func() { _ = cache.Close() })
+// roundTripSegments stores segCount patterned segments through the production
+// write path and reads every one back.
+func roundTripSegments(t *testing.T, cfg Config, segCount int) {
+	t.Helper()
+	const segSize = 64 << 10
+	cache, err := NewSegmentCache(context.Background(), mkSegs(segCount, segSize), cfg, &Stats{}, zerolog.Nop())
+	if err != nil {
+		t.Fatalf("NewSegmentCache: %v", err)
+	}
+	t.Cleanup(func() { _ = cache.Close() })
 
-			data := make([]byte, segSize)
-			for i := range segCount {
-				for j := range data {
-					data[j] = byte(i + j)
-				}
-				putSegment(t, cache, i, data)
-			}
-			got := make([]byte, segSize)
-			for i := range segCount {
-				n, ok := cache.ReadRangeInto(i, 0, segSize, got)
-				if !ok || n != segSize {
-					t.Fatalf("ReadRangeInto(%d) = %d, %v", i, n, ok)
-				}
-				if got[0] != byte(i) || got[segSize-1] != byte(i+segSize-1) {
-					t.Fatalf("segment %d data mismatch", i)
-				}
-			}
-
-			if memory {
-				// Memory mode owns no file: the DiskPath dir stays empty.
-				entries, readDirErr := os.ReadDir(cfg.DiskPath)
-				if readDirErr != nil {
-					t.Fatal(readDirErr)
-				}
-				if len(entries) != 0 {
-					t.Fatalf("memory mode created cache files: %v", entries)
-				}
-				return
-			}
-			matches, err := filepath.Glob(filepath.Join(cfg.DiskPath, "cache-*", "segments.bin"))
-			if err != nil || len(matches) != 1 {
-				t.Fatalf("locate segments.bin: %v (%d matches)", err, len(matches))
-			}
-			onDisk, err := os.ReadFile(matches[0])
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(bytes.Trim(onDisk, "\x00")) == 0 {
-				t.Fatal("disk mode wrote nothing to segments.bin")
-			}
-		})
+	data := make([]byte, segSize)
+	for i := range segCount {
+		for j := range data {
+			data[j] = byte(i + j)
+		}
+		putSegment(t, cache, i, data)
+	}
+	got := make([]byte, segSize)
+	for i := range segCount {
+		n, ok := cache.ReadRangeInto(i, 0, segSize, got)
+		if !ok || n != segSize {
+			t.Fatalf("ReadRangeInto(%d) = %d, %v", i, n, ok)
+		}
+		if got[0] != byte(i) || got[segSize-1] != byte(i+segSize-1) {
+			t.Fatalf("segment %d data mismatch", i)
+		}
 	}
 }
 
