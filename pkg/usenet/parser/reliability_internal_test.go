@@ -314,7 +314,7 @@ func TestArchiveBuildersRejectIncompleteVolume(t *testing.T) {
 	if _, err := buildArchiveVolumeDescriptors(group); err == nil {
 		t.Fatal("expected incomplete archive volume error")
 	}
-	if _, _, _, err := buildBaseSegments(group); err == nil {
+	if _, _, err := buildBaseSegments(group); err == nil {
 		t.Fatal("expected incomplete base segment error")
 	}
 }

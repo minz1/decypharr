@@ -171,7 +171,7 @@ func (p *RARParser) Process(ctx context.Context, group *FileGroup, password stri
 	filename = utils.RemoveInvalidChars(path.Base(filename))
 
 	// Build base segments and volume info
-	baseSegments, volumeInfos, _, err := buildBaseSegments(group)
+	baseSegments, volumeInfos, err := buildBaseSegments(group)
 	if err != nil {
 		return nil, err
 	}

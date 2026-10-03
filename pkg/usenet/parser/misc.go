@@ -137,93 +137,28 @@ func getNZBSegments(index int, file manifest.File, group *FileGroup) (int64, []s
 	// leaked segments with empty message-ids and offset 0 into the .meta
 	// files, the streaming reader (non-monotonic offset table breaks its
 	// binary search), and Download. Reject such files outright.
-	minSegNum, maxSegNum := file.Segments[0].Number, file.Segments[0].Number
-	for _, seg := range file.Segments {
-		if seg.Number < minSegNum {
-			minSegNum = seg.Number
-		}
-		if seg.Number > maxSegNum {
-			maxSegNum = seg.Number
-		}
-	}
-	if maxSegNum-minSegNum+1 != len(file.Segments) {
+	minSegNum, ok := contiguousSegmentNumbers(file.Segments)
+	if !ok {
 		return 0, nil
 	}
 
-	nzbSegments := make([]storage.NZBSegment, len(file.Segments))
-
-	currentOffset := int64(0)
-	metadata := *group.getMetadata()
-	partMeta := group.fileMeta[fileMetaKey(file)]
-	if partMeta.fileSize > 0 {
-		metadata.fileSize = partMeta.fileSize
-	}
-	if partMeta.segmentSize > 0 {
-		metadata.segmentSize = partMeta.segmentSize
-	}
-
-	fileSize := metadata.fileSize
-	isLegacyPositionalLast := metadata.lastFileKey == "" && index == len(group.Files)-1
-	isRecordedLast := metadata.lastFileKey != "" && metadata.lastFileKey == fileMetaKey(file)
-	if partMeta.fileSize <= 0 && (isLegacyPositionalLast || isRecordedLast) {
-		fileSize = metadata.lastFileSize
-	}
+	sizing := group.segmentSizing(index, file)
 	segmentGroup := ""
 	if len(file.Groups) > 0 {
 		segmentGroup = file.Groups[0]
 	}
 
+	nzbSegments := make([]storage.NZBSegment, len(file.Segments))
+	var currentOffset int64
 	for idx, segment := range file.Segments {
 		// A segment without a message id can never be fetched; it would also
 		// defeat the empty-slot duplicate check below.
 		if segment.MessageID == "" {
 			return 0, nil
 		}
-		segSize := metadata.segmentSize
-		if segSize <= 0 {
-			segSize = int64(float64(segment.Bytes) * 0.97)
-		}
-		if idx == len(file.Segments)-1 {
-			// Last segment may be smaller
-			// Last segment calculation
-			// Check if the file size metadata assumes a different file (e.g. mixed groups)
-			// Expected total size if all segments were full
-			fullSegsSize := metadata.segmentSize * int64(len(file.Segments)-1) // size of all previous segments
-
-			// If fileSize is inconsistent with the number of segments (too small or too large),
-			// fallback to estimation for this last segment.
-			// Threshold: if difference > 1.5 segments
-			isSizeMismatch := false
-			expectedTotal := fullSegsSize + metadata.segmentSize // rough estimate
-			diff := fileSize - expectedTotal
-			if diff < 0 {
-				diff = -diff
-			}
-			if diff > (metadata.segmentSize*3)/2 {
-				isSizeMismatch = true
-			}
-
-			if isSizeMismatch {
-				// Fallback: estimate from encoded bytes
-				segSize = int64(float64(segment.Bytes) * 0.97)
-			} else {
-				segSize = fileSize - fullSegsSize
-			}
-		}
-		if segSize <= 0 {
-			segSize = int64(float64(segment.Bytes) * 0.97)
-		}
+		segSize := sizing.sizeOf(idx, len(file.Segments), segment.Bytes)
 		if segSize <= 0 {
 			return 0, nil
-		}
-
-		seg := storage.NZBSegment{
-			Number:      segment.Number,
-			MessageID:   segment.MessageID,
-			Bytes:       segSize,
-			StartOffset: currentOffset,
-			EndOffset:   currentOffset + segSize - 1,
-			Group:       segmentGroup,
 		}
 
 		// Normalize to the range base so 0- and 1-indexed numbering both map
@@ -233,25 +168,105 @@ func getNZBSegments(index int, file manifest.File, group *FileGroup) (int64, []s
 		if nzbSegments[segIdx].MessageID != "" {
 			return 0, nil
 		}
-		nzbSegments[segIdx] = seg
+		nzbSegments[segIdx] = storage.NZBSegment{
+			Number:      segment.Number,
+			MessageID:   segment.MessageID,
+			Bytes:       segSize,
+			StartOffset: currentOffset,
+			EndOffset:   currentOffset + segSize - 1,
+			Group:       segmentGroup,
+		}
 		currentOffset += segSize
 	}
 	return currentOffset, nzbSegments
 }
 
-func buildBaseSegments(group *FileGroup) ([]storage.NZBSegment, []storage.ArchiveVolumeInfo, int64, error) {
+// contiguousSegmentNumbers returns the lowest segment number and whether the
+// count matches the number range.
+func contiguousSegmentNumbers(segments []manifest.Segment) (int, bool) {
+	minNum, maxNum := segments[0].Number, segments[0].Number
+	for _, seg := range segments {
+		minNum = min(minNum, seg.Number)
+		maxNum = max(maxNum, seg.Number)
+	}
+	return minNum, maxNum-minNum+1 == len(segments)
+}
+
+// yencDecodedRatio estimates decoded size from encoded bytes (~3% yEnc overhead).
+const yencDecodedRatio = 0.97
+
+func estimateDecodedSize(encoded int64) int64 {
+	return int64(float64(encoded) * yencDecodedRatio)
+}
+
+// segmentSizing holds the decoded sizes used to lay out one posted file.
+type segmentSizing struct {
+	segmentSize int64
+	fileSize    int64
+}
+
+// segmentSizing prefers per-file yEnc metadata over the group's; the last
+// file of a group uses the group's recorded last-file size.
+func (f *FileGroup) segmentSizing(index int, file manifest.File) segmentSizing {
+	metadata := *f.getMetadata()
+	key := fileMetaKey(file)
+	partMeta := f.fileMeta[key]
+	sizing := segmentSizing{segmentSize: metadata.segmentSize, fileSize: metadata.fileSize}
+	if partMeta.segmentSize > 0 {
+		sizing.segmentSize = partMeta.segmentSize
+	}
+	if partMeta.fileSize > 0 {
+		sizing.fileSize = partMeta.fileSize
+		return sizing
+	}
+	isLegacyPositionalLast := metadata.lastFileKey == "" && index == len(f.Files)-1
+	isRecordedLast := metadata.lastFileKey != "" && metadata.lastFileKey == key
+	if isLegacyPositionalLast || isRecordedLast {
+		sizing.fileSize = metadata.lastFileSize
+	}
+	return sizing
+}
+
+// sizeOf returns the decoded size of segment idx of count, falling back to an
+// estimate from its encoded bytes.
+func (s segmentSizing) sizeOf(idx, count int, encoded int64) int64 {
+	size := s.segmentSize
+	if idx == count-1 {
+		size = s.lastSegmentSize(count, encoded)
+	}
+	if size <= 0 {
+		size = estimateDecodedSize(encoded)
+	}
+	return size
+}
+
+// lastSegmentSize: the last segment may be smaller. When the file size is
+// inconsistent with the segment count by more than 1.5 segments (metadata
+// from a different file, e.g. mixed groups), estimate from encoded bytes.
+func (s segmentSizing) lastSegmentSize(count int, encoded int64) int64 {
+	fullSegsSize := s.segmentSize * int64(count-1)
+	diff := s.fileSize - (fullSegsSize + s.segmentSize)
+	if diff < 0 {
+		diff = -diff
+	}
+	if diff > s.segmentSize*3/2 {
+		return estimateDecodedSize(encoded)
+	}
+	return s.fileSize - fullSegsSize
+}
+
+func buildBaseSegments(group *FileGroup) ([]storage.NZBSegment, []storage.ArchiveVolumeInfo, error) {
 	if len(group.Files) == 0 {
-		return nil, nil, 0, fmt.Errorf("archive group %s has no raw files", group.BaseName)
+		return nil, nil, fmt.Errorf("archive group %s has no raw files", group.BaseName)
 	}
 
 	baseSegments := make([]storage.NZBSegment, 0)
 	volumeInfos := make([]storage.ArchiveVolumeInfo, 0, len(group.Files))
-	currentOffset := int64(0)
 
 	for idx, nzbFile := range group.Files {
 		totalSize, segments := getNZBSegments(idx, nzbFile, group)
 		if totalSize == 0 || len(segments) == 0 {
-			return nil, nil, 0, fmt.Errorf(
+			return nil, nil, fmt.Errorf(
 				"archive volume %q has incomplete or inconsistent segments",
 				nzbFile.Filename,
 			)
@@ -264,10 +279,9 @@ func buildBaseSegments(group *FileGroup) ([]storage.NZBSegment, []storage.Archiv
 			SegmentStart: start,
 			SegmentEnd:   len(baseSegments),
 		})
-		currentOffset += totalSize
 	}
 
-	return baseSegments, volumeInfos, currentOffset, nil
+	return baseSegments, volumeInfos, nil
 }
 
 func buildArchiveVolumeDescriptors(group *FileGroup) ([]*types.Volume, error) {
@@ -336,24 +350,12 @@ func buildExtractedArchiveFiles(
 		}
 		name = utils.RemoveInvalidChars(name)
 
-		// Use pre-sliced segments if available, otherwise slice based on offset
-		var segments []storage.NZBSegment
-		if len(info.Segments) > 0 {
-			// Use pre-computed segments (from RAR parser, etc.)
-			segments = info.Segments
-		} else if info.DataOffset > 0 || info.FileSize > 0 {
-			// Slice segments for this file's byte range
-			sliced, sliceErr := segmentIndex.slice(info.DataOffset, info.FileSize, true)
-			if sliceErr != nil || len(sliced) == 0 {
-				if sliceErr == nil {
-					sliceErr = fmt.Errorf("no source segments overlap the file range")
-				}
-				return nil, fmt.Errorf("map archived file %q to raw source: %w", info.InternalPath, sliceErr)
-			} else {
-				segments = sliced
+		// Pre-computed segments (from the RAR parser, etc.) take precedence.
+		segments := info.Segments
+		if len(segments) == 0 {
+			if segments, err = sliceArchivedFile(segmentIndex, info); err != nil {
+				return nil, err
 			}
-		} else {
-			return nil, fmt.Errorf("archived file %q has no source offset", info.InternalPath)
 		}
 
 		files = append(files, &storage.NZBFile{
@@ -371,6 +373,23 @@ func buildExtractedArchiveFiles(
 	return files, nil
 }
 
+// sliceArchivedFile maps a file's byte range onto the raw source segments.
+func sliceArchivedFile(index *segmentLayout, info *storage.ExtractedFileInfo) ([]storage.NZBSegment, error) {
+	if info.DataOffset <= 0 && info.FileSize <= 0 {
+		return nil, fmt.Errorf("archived file %q has no source offset", info.InternalPath)
+	}
+	sliced, err := index.slice(info.DataOffset, info.FileSize, true)
+	if err == nil && len(sliced) == 0 {
+		err = fmt.Errorf("no source segments overlap the file range")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("map archived file %q to raw source: %w", info.InternalPath, err)
+	}
+	return sliced, nil
+}
+
+// NormalizeArchivePath cleans an archive member path into a slash-separated
+// relative path ("" when nothing remains).
 func NormalizeArchivePath(name string) string {
 	trimmed := strings.TrimSpace(name)
 	trimmed = strings.TrimLeft(trimmed, "./")

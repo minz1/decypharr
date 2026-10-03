@@ -93,7 +93,7 @@ func (f *FileGroup) getMetadata() *fileAnalysisResult {
 	if reportedBytes <= 0 {
 		reportedBytes = 750000 // Default 750KB segment
 	}
-	metadata.segmentSize = int64(float64(reportedBytes) * 0.97)
+	metadata.segmentSize = estimateDecodedSize(reportedBytes)
 	if metadata.segmentSize <= 0 {
 		metadata.segmentSize = reportedBytes
 	}

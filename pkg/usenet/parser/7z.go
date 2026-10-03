@@ -47,7 +47,7 @@ func (p *SevenZParser) Process(ctx context.Context, group *FileGroup, password s
 		return nil, fmt.Errorf("no volumes built from group")
 	}
 
-	baseSegments, volumeInfos, _, err := buildBaseSegments(group)
+	baseSegments, volumeInfos, err := buildBaseSegments(group)
 	if err != nil {
 		return nil, err
 	}
