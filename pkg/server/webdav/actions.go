@@ -1,6 +1,7 @@
 package webdav
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"mime"
@@ -79,8 +80,9 @@ func (h *Handler) handleDownload(info *manager.FileInfo, w http.ResponseWriter, 
 		w.Header().
 			Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": info.Name()}))
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		//nolint:gosec // G705: decypharr-generated content, sent as an attachment with nosniff
-		_, _ = w.Write(info.Content())
+		// ServeContent keeps the Content-Type, ETag and attachment headers
+		// set above and adds Range and conditional-request handling.
+		http.ServeContent(w, r, info.Name(), info.ModTime(), bytes.NewReader(info.Content()))
 		return
 	}
 
