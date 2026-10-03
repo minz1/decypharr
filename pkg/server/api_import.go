@@ -133,8 +133,9 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 		}
 		batch.add(opts.torrent(magnet), fileHeader.Filename)
 	}
+	userAgent := utils.WithUserAgent(s.config.Get().NZBUserAgent)
 	for _, u := range nonEmptyLines(r.FormValue("nzbURLs")) {
-		filename, content, err := utils.DownloadFile(u, utils.WithHeader("User-Agent", s.nzbUserAgent))
+		filename, content, err := utils.DownloadFile(u, userAgent)
 		if err != nil {
 			batch.failf("Failed to fetch NZB from URL %s: %v", u, err)
 			continue

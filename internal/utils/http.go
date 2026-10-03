@@ -132,6 +132,16 @@ func WithHeader(key, value string) DownloadOptions {
 	}
 }
 
+// WithUserAgent sets the User-Agent header, unless ua is empty: an empty
+// header would make net/http send none at all.
+func WithUserAgent(ua string) DownloadOptions {
+	return func(r *http.Request) {
+		if ua != "" {
+			r.Header.Set("User-Agent", ua)
+		}
+	}
+}
+
 // downloadTimeout bounds a whole NZB or .torrent fetch, so a stalled indexer
 // cannot hang the importing request (and its connection) forever.
 const downloadTimeout = 5 * time.Minute
