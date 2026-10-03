@@ -242,13 +242,19 @@ func (r *byteReader) time() time.Time {
 // groupIndex reads a group-table index and checks it against the table.
 func (r *byteReader) groupIndex(groups int) int {
 	idx := r.uvarint()
-	if r.err == nil && (idx > math.MaxInt32 || int(idx) >= groups) {
-		r.failf("group index %d out of range", idx)
-	}
 	if r.err != nil {
 		return 0
 	}
-	return int(idx)
+	if idx > math.MaxInt32 {
+		r.failf("group index %d out of range", idx)
+		return 0
+	}
+	i := int(idx)
+	if i >= groups {
+		r.failf("group index %d out of range", i)
+		return 0
+	}
+	return i
 }
 
 // skipVarints advances past n varints.

@@ -129,7 +129,11 @@ func checkHeadSignature(name string, head []byte) error {
 	if headSignatureOK(head) {
 		return nil
 	}
-	return fmt.Errorf("head of %q matches no media container signature: %w", name, customerror.UsenetCorruptContentError)
+	return fmt.Errorf(
+		"head of %q matches no media container signature: %w",
+		name,
+		customerror.UsenetCorruptContentError,
+	)
 }
 
 // classifyHeadReadError maps a missing head article to UsenetSegmentMissingError.
