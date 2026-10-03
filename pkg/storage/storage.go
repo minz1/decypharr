@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sirrobot01/decypharr/internal/kvstore"
+
 	"github.com/rs/zerolog"
 	"github.com/sirrobot01/appendstore"
 	"google.golang.org/protobuf/proto"
@@ -35,28 +37,25 @@ func legacyStoreNames() []string {
 
 // Storage handles application persistence using appendstore.
 type Storage struct {
-	entries     *appendstore.Store
-	queue       *appendstore.Store
-	entryItems  *appendstore.Store
-	repairState *appendstore.Store
-	repairRuns  *appendstore.Store
+	entries     *kvstore.Store
+	queue       *kvstore.Store
+	entryItems  *kvstore.Store
+	repairState *kvstore.Store
+	repairRuns  *kvstore.Store
 	dir         string
 	logger      zerolog.Logger
 	naming      func() config.WebDavFolderNaming
-
-	// scanMu serializes the start of store scans; see forEach.
-	scanMu sync.Mutex
 
 	healthCountsMu      sync.Mutex
 	healthCounts        map[HealthStatus]int
 	healthCountsBuiltAt time.Time
 }
 
-func createItemStores(baseDir string, baseOptions appendstore.Options) (map[string]*appendstore.Store, error) {
-	items := make(map[string]*appendstore.Store)
+func createItemStores(baseDir string, baseOptions appendstore.Options) (map[string]*kvstore.Store, error) {
+	items := make(map[string]*kvstore.Store)
 	for _, name := range storeNames() {
 		path := filepath.Join(baseDir, name+".db")
-		store, err := appendstore.Open(path, baseOptions)
+		store, err := kvstore.Open(path, baseOptions)
 		if err != nil {
 			for _, it := range items {
 				_ = it.Close()
@@ -168,7 +167,7 @@ func (s *Storage) folderNaming() config.WebDavFolderNaming {
 
 func (s *Storage) Close() error {
 	var errs []error
-	stores := []*appendstore.Store{s.entries, s.queue, s.entryItems, s.repairState, s.repairRuns}
+	stores := []*kvstore.Store{s.entries, s.queue, s.entryItems, s.repairState, s.repairRuns}
 	for _, store := range stores {
 		if store == nil {
 			continue
@@ -186,7 +185,7 @@ func (s *Storage) Close() error {
 // DiskSize returns the total on-disk size of all stores (O(1), no filesystem walk).
 func (s *Storage) DiskSize() int64 {
 	var size int64
-	for _, store := range []*appendstore.Store{s.entries, s.queue, s.entryItems, s.repairState, s.repairRuns} {
+	for _, store := range []*kvstore.Store{s.entries, s.queue, s.entryItems, s.repairState, s.repairRuns} {
 		if store != nil {
 			size += store.DiskSize()
 		}

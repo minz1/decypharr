@@ -6,13 +6,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sirrobot01/decypharr/internal/kvstore"
+
 	"github.com/sirrobot01/appendstore"
 )
 
 // newQueueTestStorage returns a Storage backed only by a fresh queue store.
-func newQueueTestStorage(t *testing.T) (*Storage, *appendstore.Store) {
+func newQueueTestStorage(t *testing.T) (*Storage, *kvstore.Store) {
 	t.Helper()
-	queue, err := appendstore.Open(filepath.Join(t.TempDir(), "queue.db"), appendstore.Options{})
+	queue, err := kvstore.Open(filepath.Join(t.TempDir(), "queue.db"), appendstore.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,22 +70,22 @@ func TestQueueOperationsReportClosedStore(t *testing.T) {
 	// close it during their write.
 	operations := map[string]struct {
 		closeFirst bool
-		run        func(t *testing.T, s *Storage, queue *appendstore.Store) error
+		run        func(t *testing.T, s *Storage, queue *kvstore.Store) error
 	}{
-		"filter": {closeFirst: true, run: func(_ *testing.T, s *Storage, _ *appendstore.Store) error {
+		"filter": {closeFirst: true, run: func(_ *testing.T, s *Storage, _ *kvstore.Store) error {
 			_, err := s.FilterQueued(nil)
 			return err
 		}},
-		"delete": {closeFirst: true, run: func(_ *testing.T, s *Storage, _ *appendstore.Store) error {
+		"delete": {closeFirst: true, run: func(_ *testing.T, s *Storage, _ *kvstore.Store) error {
 			return s.DeleteWhereQueued(nil, nil)
 		}},
-		"update": {closeFirst: true, run: func(_ *testing.T, s *Storage, _ *appendstore.Store) error {
+		"update": {closeFirst: true, run: func(_ *testing.T, s *Storage, _ *kvstore.Store) error {
 			return s.UpdateWhereQueued(nil, func(*Entry) bool { return true })
 		}},
-		"delete write": {run: func(_ *testing.T, s *Storage, queue *appendstore.Store) error {
+		"delete write": {run: func(_ *testing.T, s *Storage, queue *kvstore.Store) error {
 			return s.DeleteWhereQueued(nil, func(*Entry) error { return queue.Close() })
 		}},
-		"update write": {run: func(t *testing.T, s *Storage, queue *appendstore.Store) error {
+		"update write": {run: func(t *testing.T, s *Storage, queue *kvstore.Store) error {
 			return s.UpdateWhereQueued(nil, func(*Entry) bool {
 				if closeErr := queue.Close(); closeErr != nil {
 					t.Fatal(closeErr)

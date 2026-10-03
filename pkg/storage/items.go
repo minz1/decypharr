@@ -58,7 +58,7 @@ func (s *Storage) GetEntryItem(name string) (*EntryItem, error) {
 
 // ForEachEntryItem iterates over entry items.
 func (s *Storage) ForEachEntryItem(fn func(*EntryItem) error) error {
-	return s.forEach(s.entryItems, func(key string, value []byte) error {
+	return s.entryItems.ForEach(func(key string, value []byte) error {
 		var pb EntryItemProto
 		if err := proto.Unmarshal(value, &pb); err != nil {
 			s.skipUndecodable("entry item", key, err)

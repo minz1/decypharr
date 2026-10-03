@@ -63,7 +63,7 @@ func (s *Storage) DeleteQueued(infohash string, cleanup func(*Entry) error) erro
 // FilterQueued returns matching entries. It returns an error if the scan fails.
 func (s *Storage) FilterQueued(filter func(*Entry) bool) ([]*Entry, error) {
 	var entries []*Entry
-	err := s.forEach(s.queue, func(key string, value []byte) error {
+	err := s.queue.ForEach(func(key string, value []byte) error {
 		var pb EntryProto
 		if err := proto.Unmarshal(value, &pb); err != nil {
 			return fmt.Errorf("decode queued entry %q: %w", key, err)
@@ -83,7 +83,7 @@ func (s *Storage) FilterQueued(filter func(*Entry) bool) ([]*Entry, error) {
 // CountQueuedByState counts queued entries without building full entry objects.
 func (s *Storage) CountQueuedByState(state TorrentState) int {
 	count := 0
-	_ = s.forEach(s.queue, func(_ string, value []byte) error {
+	_ = s.queue.ForEach(func(_ string, value []byte) error {
 		var pb EntryProto
 		if proto.Unmarshal(value, &pb) == nil && pb.GetState() == string(state) {
 			count++
