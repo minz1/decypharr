@@ -167,3 +167,17 @@ func TestLoadReadOnlyWritesNothing(t *testing.T) {
 		t.Fatal("Save succeeded on a read-only config")
 	}
 }
+
+func TestSharedModesFromEnvironment(t *testing.T) {
+	t.Parallel()
+	c, _ := loadFresh(t, map[string]string{
+		"DECYPHARR_SHARED_DIR_MODE":  "0775",
+		"DECYPHARR_SHARED_FILE_MODE": "0644",
+	})
+	if c.SharedDirModeValue() != 0o775 || c.SharedFileModeValue() != 0o644 {
+		t.Fatalf("modes = %v, %v", c.SharedDirModeValue(), c.SharedFileModeValue())
+	}
+	if _, err := Load(t.TempDir(), MapEnv(map[string]string{"DECYPHARR_SHARED_DIR_MODE": "rwxr-x"})); err == nil {
+		t.Fatal("an invalid mode loaded")
+	}
+}

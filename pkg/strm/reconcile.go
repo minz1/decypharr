@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/internal/fsutil"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
@@ -144,7 +145,7 @@ func (s *Reconciler) syncEntry(ctx context.Context, entry *storage.Entry, rep *R
 			rep.Verified++
 			continue
 		}
-		if writeStrmErr := writeStrm(t.path, t.content); writeStrmErr != nil {
+		if writeStrmErr := writeStrm(s.config.Get(), t.path, t.content); writeStrmErr != nil {
 			rep.addError(writeStrmErr)
 			continue
 		}
@@ -227,12 +228,13 @@ func (s *Reconciler) downloadSidecar(ctx context.Context, entry *storage.Entry, 
 	}
 	defer stream.Close()
 
-	//nolint:gosec // the export tree is read by media servers running as other users
-	if mkdirAllErr := os.MkdirAll(filepath.Dir(dest), 0o755); mkdirAllErr != nil {
-		return mkdirAllErr
+	// The export tree is read by media servers running as other users.
+	cfg := s.config.Get()
+	if mkdirErr := fsutil.MkdirShared(filepath.Dir(dest), cfg.SharedDirModeValue()); mkdirErr != nil {
+		return mkdirErr
 	}
 	tmp := dest + ".part"
-	f, err := os.Create(tmp)
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, cfg.SharedFileModeValue())
 	if err != nil {
 		return err
 	}
@@ -371,11 +373,11 @@ func readStrm(path string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
-func writeStrm(path, content string) error {
-	//nolint:gosec // the export tree is read by media servers running as other users
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+// writeStrm writes one .strm file with the shared modes: the export tree is
+// read by media servers running as other users.
+func writeStrm(cfg *config.Config, path, content string) error {
+	if err := fsutil.MkdirShared(filepath.Dir(path), cfg.SharedDirModeValue()); err != nil {
 		return err
 	}
-	//nolint:gosec // the export tree is read by media servers running as other users
-	return os.WriteFile(path, []byte(content), 0o644)
+	return os.WriteFile(path, []byte(content), cfg.SharedFileModeValue())
 }

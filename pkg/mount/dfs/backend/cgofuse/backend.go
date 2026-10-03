@@ -3,13 +3,13 @@ package cgofuse
 import (
 	"context"
 	"fmt"
-	"os"
 	"runtime"
 	"sync/atomic"
 
 	"github.com/rs/zerolog"
 	"github.com/winfsp/cgofuse/fuse"
 
+	"github.com/sirrobot01/decypharr/internal/fsutil"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/backend"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/config"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/vfs"
@@ -39,7 +39,7 @@ func NewBackend(vfs *vfs.Manager, config *config.FuseConfig, log zerolog.Logger)
 func (b *Backend) Mount(ctx context.Context) error {
 	// Create mount point if it doesn't exist (skip on Windows)
 	if runtime.GOOS != "windows" {
-		_ = os.MkdirAll(b.config.MountPath, 0o755) //nolint:gosec // G301: mountpoint is shared (allow_other)
+		_ = fsutil.MkdirShared(b.config.MountPath, b.config.MountDirMode)
 	}
 	if b.root == nil {
 		return fmt.Errorf("root node is not initialized")

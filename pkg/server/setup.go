@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/internal/fsutil"
 )
 
 // SetupWizardResponse represents the response from setup wizard.
@@ -169,8 +170,7 @@ func applySetup(cfg *config.Config, req *SetupCompleteRequest, hasDebrid, hasUse
 		return errors.New("download folder is required")
 	}
 	// Shared with the Arr containers that import from it.
-	//nolint:gosec // G301: media folder read by other users/containers
-	if err := os.MkdirAll(req.Download.DownloadFolder, 0o755); err != nil {
+	if err := fsutil.MkdirShared(req.Download.DownloadFolder, cfg.SharedDirModeValue()); err != nil {
 		return fmt.Errorf("failed to create download folder: %w", err)
 	}
 	cfg.DownloadFolder = req.Download.DownloadFolder

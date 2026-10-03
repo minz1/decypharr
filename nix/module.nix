@@ -35,12 +35,36 @@ in
       type = lib.types.str;
       default = "";
       description = ''
-        If set, the download folder is created as group-writable (0775) owned by
-        this group rather than 0750 decypharr:decypharr. Use when the download
-        directory is shared with other services (e.g. sonarr, radarr) via a
-        common media group.
+        If set, the download folder is created with sharedDirMode (setgid,
+        group-writable by default) owned by this group rather than 0750
+        decypharr:decypharr. Use when the download directory is shared with
+        other services (e.g. sonarr, radarr) via a common media group.
       '';
       example = "media";
+    };
+
+    sharedDirMode = lib.mkOption {
+      type = lib.types.strMatching "[0-7]{3,4}";
+      default = "2770";
+      description = ''
+        Octal mode for directories decypharr creates in trees it shares with
+        other services: download and symlink folders, the STRM export and
+        mount points. The default gives the owning group full access, others
+        none, and sets setgid so new files inherit the group. The service
+        umask still applies. Maps to DECYPHARR_SHARED_DIR_MODE.
+      '';
+      example = "2775";
+    };
+
+    sharedFileMode = lib.mkOption {
+      type = lib.types.strMatching "[0-7]{3,4}";
+      default = "0660";
+      description = ''
+        Octal mode for files decypharr writes into those trees (downloaded
+        files, .strm files and sidecars). The service umask still applies.
+        Maps to DECYPHARR_SHARED_FILE_MODE.
+      '';
+      example = "0664";
     };
 
     configDir = lib.mkOption {
@@ -722,7 +746,7 @@ in
     systemd.tmpfiles.rules = [
       "d ${cfg.dfs.cacheDir} 0750 ${cfg.user} ${cfg.group} -"
       (if cfg.mediaGroup != ""
-       then "d ${cfg.downloadFolder} 0775 ${cfg.user} ${cfg.mediaGroup} -"
+       then "d ${cfg.downloadFolder} ${cfg.sharedDirMode} ${cfg.user} ${cfg.mediaGroup} -"
        else "d ${cfg.downloadFolder} 0750 ${cfg.user} ${cfg.group} -")
     ];
 
@@ -757,6 +781,8 @@ in
         DECYPHARR_MAX_FILE_SIZE                      = cfg.maxFileSize;
         DECYPHARR_REMOVE_STALLED_AFTER               = cfg.removeStalledAfter;
         DECYPHARR_NZB_USER_AGENT                     = cfg.nzbUserAgent;
+        DECYPHARR_SHARED_DIR_MODE                    = cfg.sharedDirMode;
+        DECYPHARR_SHARED_FILE_MODE                   = cfg.sharedFileMode;
         DECYPHARR_MOUNT__DFS__DISABLE_CACHE          = if cfg.dfs.disableCache then "true" else "false";
         DECYPHARR_MOUNT__DFS__CACHE_DIR              = cfg.dfs.cacheDir;
         DECYPHARR_MOUNT__DFS__DISK_CACHE_SIZE        = cfg.dfs.diskCacheSize;

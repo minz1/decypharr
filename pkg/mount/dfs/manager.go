@@ -35,6 +35,7 @@ type Manager struct {
 // NewManager creates a new FUSE filesystem manager for the DFS settings in cfg.
 func NewManager(manager *manager.Manager, cfg *config.Config, logs *logger.Factory) *Manager {
 	fuseConfig := fuseconfig.Parse(cfg.Mount.DFS, cfg.Mount.MountPath, cfg.Retries)
+	fuseConfig.MountDirMode = cfg.SharedDirModeValue()
 
 	m := &Manager{
 		manager:            manager,

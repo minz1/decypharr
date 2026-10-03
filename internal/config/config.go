@@ -300,6 +300,12 @@ type Config struct {
 
 	DisableWebDav bool `json:"disable_webdav,omitempty"`
 
+	// SharedDirMode and SharedFileMode are octal modes for the trees other
+	// services use: download and symlink folders, the STRM export and mount
+	// points. Empty means DefaultSharedDirMode / DefaultSharedFileMode.
+	SharedDirMode  string `json:"shared_dir_mode,omitempty"`
+	SharedFileMode string `json:"shared_file_mode,omitempty"`
+
 	// Notifications configuration
 	Notifications Notifications `json:"notifications"`
 
@@ -385,6 +391,9 @@ func (c *Config) load(lookup LookupEnv) error {
 	// sets CacheDiskSize=0 and disables all cache enforcement; fail loudly instead.
 	if validateErr := c.Mount.DFS.Validate(); validateErr != nil {
 		return fmt.Errorf("configuration error: %w", validateErr)
+	}
+	if modesErr := c.validateModes(); modesErr != nil {
+		return fmt.Errorf("configuration error: %w", modesErr)
 	}
 
 	// Save new signing secrets so signatures remain valid after a restart.
@@ -668,6 +677,8 @@ func (c *Config) setServerDefaults() {
 	if c.LogLevel == "" {
 		c.LogLevel = DefaultLogLevel
 	}
+	c.SharedDirMode = cmp.Or(c.SharedDirMode, DefaultSharedDirMode)
+	c.SharedFileMode = cmp.Or(c.SharedFileMode, DefaultSharedFileMode)
 }
 
 func (c *Config) setRcloneMountDefaults() {

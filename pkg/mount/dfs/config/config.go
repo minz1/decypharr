@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"io/fs"
 	"math"
 	"os"
 	"time"
@@ -27,7 +28,10 @@ const (
 
 // FuseConfig holds the simplified configuration for the FUSE filesystem.
 type FuseConfig struct {
-	MountPath    string
+	MountPath string
+	// MountDirMode creates a missing mount point and its parents (the
+	// shared directory mode).
+	MountDirMode fs.FileMode
 	CacheDir     string
 	Client       string
 	DisableCache bool
@@ -74,6 +78,7 @@ type FuseConfig struct {
 // DefaultFuseConfig returns a streaming-optimized default configuration.
 func DefaultFuseConfig() *FuseConfig {
 	return &FuseConfig{
+		MountDirMode: (&config.Config{}).SharedDirModeValue(),
 		// Performance defaults optimized for streaming
 		DaemonTimeout:        defaultDaemonTimeout,
 		CacheExpiry:          defaultCacheExpiry,

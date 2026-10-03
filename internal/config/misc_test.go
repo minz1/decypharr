@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"io/fs"
 	"testing"
 
 	"github.com/sirrobot01/decypharr/internal/config"
@@ -70,5 +71,23 @@ func TestParseSize(t *testing.T) {
 				t.Fatalf("ParseSize(%q) = %d, want %d", tc.input, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestSharedModes(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{}
+	if got := cfg.SharedDirModeValue(); got != 0o770|fs.ModeSetgid {
+		t.Errorf("default dir mode = %v", got)
+	}
+	if got := cfg.SharedFileModeValue(); got != 0o660 {
+		t.Errorf("default file mode = %v", got)
+	}
+	cfg.SharedDirMode, cfg.SharedFileMode = "0o755", "644"
+	if got := cfg.SharedDirModeValue(); got != 0o755 {
+		t.Errorf("dir mode = %v, want 0755", got)
+	}
+	if got := cfg.SharedFileModeValue(); got != 0o644 {
+		t.Errorf("file mode = %v, want 0644", got)
 	}
 }
