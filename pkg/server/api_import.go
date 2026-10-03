@@ -161,7 +161,7 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 		if req.Magnet != nil {
 			err = s.manager.AddNewTorrent(ctx, req)
 		} else {
-			req.Id, err = s.manager.AddNewNZB(ctx, req)
+			req.ID, err = s.manager.AddNewNZB(ctx, req)
 		}
 		if err != nil {
 			s.logger.Error().Err(err).Str("source", task.source).Msg("Failed to import content")

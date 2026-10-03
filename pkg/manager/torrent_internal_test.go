@@ -20,7 +20,7 @@ type incompleteProvider struct {
 
 func (incompleteProvider) GetTorrent(id string) (*types.Torrent, error) {
 	return &types.Torrent{
-		Id: id, Debrid: "provider", InfoHash: "0123456789012345678901234567890123456789",
+		ID: id, Debrid: "provider", InfoHash: "0123456789012345678901234567890123456789",
 		Files: map[string]types.File{"video.mkv": {Name: "video.mkv"}},
 	}, nil
 }

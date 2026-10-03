@@ -184,7 +184,7 @@ func (dl *DebridLink) GetTorrent(torrentID string) (*types.Torrent, error) {
 	t := data[0]
 	name := utils.RemoveInvalidChars(t.Name)
 	torrent := &types.Torrent{
-		Id:               t.ID,
+		ID:               t.ID,
 		Name:             name,
 		Bytes:            t.TotalSize,
 		Status:           types.TorrentStatusDownloaded,
@@ -201,7 +201,7 @@ func (dl *DebridLink) GetTorrent(torrentID string) (*types.Torrent, error) {
 		}
 		file := types.File{
 			TorrentID: t.ID,
-			Id:        f.ID,
+			ID:        f.ID,
 			Name:      f.Name,
 			Size:      f.Size,
 			Path:      f.Name,
@@ -216,7 +216,7 @@ func (dl *DebridLink) GetTorrent(torrentID string) (*types.Torrent, error) {
 func (dl *DebridLink) UpdateTorrent(t *types.Torrent) error {
 	var res torrentInfo
 
-	httpStatus, err := dl.doGet("/seedbox/list", map[string]string{"ids": t.Id}, &res)
+	httpStatus, err := dl.doGet("/seedbox/list", map[string]string{"ids": t.ID}, &res)
 	if err != nil {
 		return err
 	}
@@ -241,7 +241,7 @@ func (dl *DebridLink) UpdateTorrent(t *types.Torrent) error {
 		status = types.TorrentStatusDownloaded
 	}
 	name := utils.RemoveInvalidChars(data.Name)
-	t.Id = data.ID
+	t.ID = data.ID
 	t.Name = name
 	t.Bytes = data.TotalSize
 	t.Progress = data.DownloadPercent
@@ -260,8 +260,8 @@ func (dl *DebridLink) UpdateTorrent(t *types.Torrent) error {
 			continue
 		}
 		file := types.File{
-			TorrentID: t.Id,
-			Id:        f.ID,
+			TorrentID: t.ID,
+			ID:        f.ID,
 			Name:      f.Name,
 			Size:      f.Size,
 			Path:      f.Name,
@@ -321,7 +321,7 @@ func (dl *DebridLink) SubmitMagnet(t *types.Torrent) (*types.Torrent, error) {
 	}
 	data := *res.Value
 	name := utils.RemoveInvalidChars(data.Name)
-	t.Id = data.ID
+	t.ID = data.ID
 	t.Name = name
 	t.Bytes = data.TotalSize
 	t.Progress = data.DownloadPercent
@@ -335,8 +335,8 @@ func (dl *DebridLink) SubmitMagnet(t *types.Torrent) (*types.Torrent, error) {
 	now := time.Now()
 	for _, f := range data.Files {
 		file := types.File{
-			TorrentID: t.Id,
-			Id:        f.ID,
+			TorrentID: t.ID,
+			ID:        f.ID,
 			Name:      f.Name,
 			Size:      f.Size,
 			Path:      f.Name,
@@ -569,7 +569,7 @@ func (dl *DebridLink) getTorrents(page, perPage int) ([]*types.Torrent, int, err
 			continue
 		}
 		torrent := &types.Torrent{
-			Id:               t.ID,
+			ID:               t.ID,
 			Name:             t.Name,
 			Bytes:            t.TotalSize,
 			Status:           types.TorrentStatusDownloaded,
@@ -586,8 +586,8 @@ func (dl *DebridLink) getTorrents(page, perPage int) ([]*types.Torrent, int, err
 				continue
 			}
 			file := types.File{
-				TorrentID: torrent.Id,
-				Id:        f.ID,
+				TorrentID: torrent.ID,
+				ID:        f.ID,
 				Name:      f.Name,
 				Size:      f.Size,
 				Path:      f.Name,

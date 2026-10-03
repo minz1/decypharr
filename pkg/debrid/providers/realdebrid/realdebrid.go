@@ -254,11 +254,11 @@ func (r *RealDebrid) getSelectedFiles(t *types.Torrent, data torrentInfo) (map[s
 	for _, f := range data.Files {
 		if f.Selected == 1 {
 			selectedFiles = append(selectedFiles, types.File{
-				TorrentID: t.Id,
+				TorrentID: t.ID,
 				Name:      filepath.Base(f.Path),
 				Path:      filepath.Base(f.Path),
 				Size:      f.Bytes,
-				Id:        strconv.Itoa(f.ID),
+				ID:        strconv.Itoa(f.ID),
 			})
 		}
 	}
@@ -290,8 +290,8 @@ func (r *RealDebrid) getSelectedFiles(t *types.Torrent, data torrentInfo) (map[s
 func (r *RealDebrid) handleRarFallback(t *types.Torrent, data torrentInfo) map[string]types.File {
 	files := make(map[string]types.File)
 	file := types.File{
-		TorrentID: t.Id,
-		Id:        "0",
+		TorrentID: t.ID,
+		ID:        "0",
 		Name:      t.Name + ".rar",
 		Size:      data.Bytes,
 		IsRar:     true,
@@ -325,8 +325,8 @@ func (r *RealDebrid) handleRarArchive(
 	}
 
 	r.logger.Info().Msgf("RAR file detected, unpacking: %s", t.Name)
-	linkFile := &types.File{TorrentID: t.Id, Link: data.Links[0]}
-	downloadLinkObj, err := r.GetDownloadLink(context.Background(), t.Id, linkFile)
+	linkFile := &types.File{TorrentID: t.ID, Link: data.Links[0]}
+	downloadLinkObj, err := r.GetDownloadLink(context.Background(), t.ID, linkFile)
 
 	if err != nil {
 		r.logger.Debug().
@@ -395,11 +395,11 @@ func (r *RealDebrid) getTorrentFiles(t *types.Torrent, data torrentInfo) map[str
 		}
 
 		file := types.File{
-			TorrentID: t.Id,
+			TorrentID: t.ID,
 			Name:      name,
 			Path:      name,
 			Size:      f.Bytes,
-			Id:        strconv.Itoa(f.ID),
+			ID:        strconv.Itoa(f.ID),
 		}
 		files[name] = file
 		idx++
@@ -460,7 +460,7 @@ func (r *RealDebrid) addTorrent(t *types.Torrent) (*types.Torrent, error) {
 		return nil, fmt.Errorf("unexpected status code: %d", status)
 	}
 
-	t.Id = data.ID
+	t.ID = data.ID
 	t.Debrid = r.config.Name
 	t.Added = time.Now()
 
@@ -478,7 +478,7 @@ func (r *RealDebrid) addMagnet(t *types.Torrent) (*types.Torrent, error) {
 
 	switch status {
 	case http.StatusOK, http.StatusCreated:
-		t.Id = data.ID
+		t.ID = data.ID
 		t.Debrid = r.config.Name
 		t.Added = time.Now()
 		return t, nil
@@ -509,7 +509,7 @@ func (r *RealDebrid) GetTorrent(torrentID string) (*types.Torrent, error) {
 			addedOn = time.Now()
 		}
 		t := &types.Torrent{
-			Id:               data.ID,
+			ID:               data.ID,
 			Name:             data.Filename,
 			Bytes:            data.Bytes,
 			Progress:         data.Progress,
@@ -551,7 +551,7 @@ func getStatus(status string) types.TorrentStatus {
 func (r *RealDebrid) UpdateTorrent(t *types.Torrent) error {
 	var data torrentInfo
 
-	status, err := r.doGet(context.Background(), fmt.Sprintf("/torrents/info/%s", t.Id), &data)
+	status, err := r.doGet(context.Background(), fmt.Sprintf("/torrents/info/%s", t.ID), &data)
 	if err != nil {
 		return err
 	}
@@ -588,7 +588,7 @@ func (r *RealDebrid) CheckStatus(t *types.Torrent) (*types.Torrent, error) {
 		time.Sleep(statusPollInterval)
 
 		var data torrentInfo
-		status, err := r.doGet(context.Background(), "/torrents/info/"+t.Id, &data)
+		status, err := r.doGet(context.Background(), "/torrents/info/"+t.ID, &data)
 		if err != nil {
 			r.logger.Info().Msgf("ERROR Checking file: %v", err)
 			return t, err
@@ -620,7 +620,7 @@ func (r *RealDebrid) CheckStatus(t *types.Torrent) (*types.Torrent, error) {
 			return t, nil
 		default:
 			r.logger.Warn().
-				Str("torrent_id", t.Id).
+				Str("torrent_id", t.ID).
 				Str("debrid_status", debridStatus).
 				Str("mapped_status", string(t.Status)).
 				Msg("Unexpected debrid status, treating as error")
@@ -656,12 +656,12 @@ func (r *RealDebrid) selectFiles(t *types.Torrent, data torrentInfo) error {
 	}
 	fileIDs := make([]string, 0, len(t.Files))
 	for _, f := range t.Files {
-		fileIDs = append(fileIDs, f.Id)
+		fileIDs = append(fileIDs, f.ID)
 	}
 
 	status, err := r.doPostForm(
 		context.Background(),
-		"/torrents/selectFiles/"+t.Id,
+		"/torrents/selectFiles/"+t.ID,
 		map[string]string{"files": strings.Join(fileIDs, ",")},
 		nil,
 	)
@@ -715,7 +715,7 @@ func (r *RealDebrid) GetFileDownloadLinks(t *types.Torrent) (map[string]types.Do
 	for _, f := range _files {
 		go func(file types.File) {
 			defer wg.Done()
-			link, err := r.GetDownloadLink(context.Background(), t.Id, &file)
+			link, err := r.GetDownloadLink(context.Background(), t.ID, &file)
 			if err != nil {
 				mu.Lock()
 				if firstErr == nil {
@@ -887,7 +887,7 @@ func (r *RealDebrid) getTorrents(offset int, limit int) (int, []*types.Torrent, 
 			continue
 		}
 		t := &types.Torrent{
-			Id:               t.ID,
+			ID:               t.ID,
 			Name:             t.Filename,
 			Bytes:            t.Bytes,
 			Progress:         t.Progress,

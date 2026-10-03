@@ -68,8 +68,8 @@ func TestAddNewNZBQueuesBeforeNetworkParsing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddNewNZB() error = %v", err)
 	}
-	if id != req.Id {
-		t.Fatalf("AddNewNZB() id = %q, want %q", id, req.Id)
+	if id != req.ID {
+		t.Fatalf("AddNewNZB() id = %q, want %q", id, req.ID)
 	}
 	if len(req.NZBContent) != 0 {
 		t.Fatal("queued request retained NZB content in memory")

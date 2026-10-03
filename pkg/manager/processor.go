@@ -271,7 +271,7 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 	}
 
 	debridTorrent := &debridTypes.Torrent{
-		Id:               placement.ID,
+		ID:               placement.ID,
 		InfoHash:         entry.InfoHash,
 		Magnet:           magnet,
 		Name:             magnet.Name,
@@ -288,8 +288,8 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 
 		// Delete from debrid on error
 		go func() {
-			if dbT != nil && dbT.Id != "" {
-				_ = client.DeleteTorrent(dbT.Id)
+			if dbT != nil && dbT.ID != "" {
+				_ = client.DeleteTorrent(dbT.ID)
 			}
 		}()
 		return
@@ -498,7 +498,7 @@ func (m *Manager) submitToProvider(
 		Msg("Processing torrent")
 
 	dbt, err := db.SubmitMagnet(debridTorrent)
-	if err != nil || dbt == nil || dbt.Id == "" {
+	if err != nil || dbt == nil || dbt.ID == "" {
 		if errors.Is(err, customerror.ErrTorrentBlocked) {
 			m.hearsay.RecordAdd(decision, false)
 		} else {
@@ -509,7 +509,7 @@ func (m *Manager) submitToProvider(
 		}
 		return nil, err
 	}
-	_logger.Info().Str("id", dbt.Id).Msgf("Entry: %s submitted to %s", dbt.Name, db.Config().Name)
+	_logger.Info().Str("id", dbt.ID).Msgf("Entry: %s submitted to %s", dbt.Name, db.Config().Name)
 
 	torrent, err := db.CheckStatus(dbt)
 	reported := errors.Is(err, customerror.ErrTorrentNotCached)
@@ -517,11 +517,11 @@ func (m *Manager) submitToProvider(
 		m.hearsay.RecordAdd(decision, false)
 	}
 	if err != nil {
-		if torrent != nil && torrent.Id != "" {
+		if torrent != nil && torrent.ID != "" {
 			// Delete the torrent if it was not downloaded
 			go func(id string) {
 				_ = db.DeleteTorrent(id)
-			}(torrent.Id)
+			}(torrent.ID)
 		}
 		if !reported {
 			m.hearsay.DiscardAdd(decision)

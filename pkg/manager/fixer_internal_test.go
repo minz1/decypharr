@@ -26,10 +26,10 @@ func (c *replacementProvider) Config() config.Debrid {
 }
 func (c *replacementProvider) SubmitMagnet(torrent *types.Torrent) (*types.Torrent, error) {
 	c.submissions++
-	torrent.Id = "new"
+	torrent.ID = "new"
 	torrent.Debrid = "remaining"
 	torrent.Status = types.TorrentStatusDownloaded
-	torrent.Files = map[string]types.File{"video.mkv": {Name: "video.mkv", Id: "file"}}
+	torrent.Files = map[string]types.File{"video.mkv": {Name: "video.mkv", ID: "file"}}
 	return torrent, nil
 }
 func (c *replacementProvider) CheckStatus(torrent *types.Torrent) (*types.Torrent, error) {

@@ -40,7 +40,7 @@ const (
 type ImportRequest struct {
 	Name             string                `json:"name"`
 	NZBContent       []byte                `json:"-"`
-	Id               string                `json:"id"` //nolint:revive,staticcheck // set by pkg/server; ID rename is a cross-area follow-up
+	ID               string                `json:"id"`
 	DownloadFolder   string                `json:"downloadFolder"`
 	SelectedDebrid   string                `json:"debrid"`
 	Magnet           *utils.Magnet         `json:"magnet"`
@@ -70,7 +70,7 @@ func NewTorrentRequest(
 	skipMultiSeason bool,
 ) *ImportRequest {
 	return &ImportRequest{
-		Id:               uuid.New().String(),
+		ID:               uuid.New().String(),
 		Status:           importStatusStarted,
 		DownloadFolder:   downloadFolder,
 		SelectedDebrid:   cmp.Or(arr.SelectedDebrid, debrid), // Use debrid from arr if available
@@ -95,7 +95,7 @@ func NewNZBRequest(
 ) *ImportRequest {
 	return &ImportRequest{
 		Name:            name,
-		Id:              uuid.New().String(),
+		ID:              uuid.New().String(),
 		Status:          importStatusStarted,
 		DownloadFolder:  downloadFolder,
 		SelectedDebrid:  usenetProvider, // NZB imports always use usenet

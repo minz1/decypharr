@@ -33,14 +33,14 @@ func (m *Manager) AddNewNZB(_ context.Context, req *ImportRequest) (string, erro
 		Str("category", req.Arr.Name).
 		Msg("Adding new NZB to usenet")
 
-	stagedPath, err := m.usenet.StageNZB(req.Id, req.NZBContent)
+	stagedPath, err := m.usenet.StageNZB(req.ID, req.NZBContent)
 	if err != nil {
 		return "", err
 	}
 	req.NZBContent = nil
 
 	entry := &storage.Entry{
-		InfoHash:         req.Id,
+		InfoHash:         req.ID,
 		Name:             req.Name,
 		OriginalFilename: req.Name,
 		Protocol:         config.ProtocolNZB,
@@ -77,7 +77,7 @@ func (m *Manager) AddNewNZB(_ context.Context, req *ImportRequest) (string, erro
 		_ = m.queue.Update(entry)
 		return "", fmt.Errorf("failed to queue NZB: %w", submitJobErr)
 	}
-	return req.Id, nil
+	return req.ID, nil
 }
 
 func (m *Manager) processNZBJob(ctx context.Context, job *Job) error {

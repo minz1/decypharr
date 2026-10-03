@@ -208,7 +208,7 @@ type File struct {
 
 // ProviderFile represents debrid-specific file information.
 type ProviderFile struct {
-	Id   string `msgpack:"id,omitempty"   json:"id,omitempty"`   // For TorBox-style providers (file_id)
+	ID   string `msgpack:"id,omitempty"   json:"id,omitempty"`   // For TorBox-style providers (file_id)
 	Link string `msgpack:"link,omitempty" json:"link,omitempty"` // For RealDebrid/AllDebrid-style providers (restricted URL)
 	Path string `msgpack:"path,omitempty" json:"path,omitempty"` // Path within the debrid's filesystem
 }
@@ -232,7 +232,7 @@ type ProviderEntry struct {
 // NeedsUpdate checks if this placement is stale compared to the remote torrent.
 // Returns true if the stored placement should be refreshed.
 func (p *ProviderEntry) NeedsUpdate(remote *debridTypes.Torrent) bool {
-	if p.ID != remote.Id {
+	if p.ID != remote.ID {
 		return true // Re-added on debrid with a different ID
 	}
 	if p.Status != remote.Status {
@@ -251,7 +251,7 @@ func (p *ProviderEntry) IsValid() bool {
 	}
 	// Check if all files have necessary info
 	for _, pf := range p.Files {
-		if pf.Id == "" || pf.Link == "" {
+		if pf.ID == "" || pf.Link == "" {
 			return false
 		}
 	}
@@ -283,7 +283,7 @@ func (e *Entry) AddUsenetProvider(metadata *NZB) *ProviderEntry {
 	}
 	for _, f := range metadata.Files {
 		providerEntry.Files[f.Name] = &ProviderFile{
-			Id:   f.Name,
+			ID:   f.Name,
 			Link: path.Join(e.MountPath, f.Name),
 			Path: path.Join(e.MountPath, f.Name),
 		}
@@ -301,7 +301,7 @@ func (e *Entry) AddTorrentProvider(debridTorrent *debridTypes.Torrent) *Provider
 
 	providerEntry := &ProviderEntry{
 		Provider: debridTorrent.Debrid,
-		ID:       debridTorrent.Id,
+		ID:       debridTorrent.ID,
 		AddedAt:  time.Now(),
 		Status:   debridTorrent.Status,
 		Files:    make(map[string]*ProviderFile),
@@ -309,7 +309,7 @@ func (e *Entry) AddTorrentProvider(debridTorrent *debridTypes.Torrent) *Provider
 
 	for _, f := range debridTorrent.GetFiles() {
 		providerEntry.Files[f.Name] = &ProviderFile{
-			Id:   f.Id,
+			ID:   f.ID,
 			Link: f.Link,
 			Path: f.Path,
 		}
@@ -667,7 +667,7 @@ func (ct *CachedTorrent) ToManagedTorrent() *Entry {
 		// Populate providerEntry files from cached torrent
 		for _, f := range ct.Files {
 			providerEntry.Files[f.Name] = &ProviderFile{
-				Id:   f.Id,
+				ID:   f.ID,
 				Link: f.Link,
 				Path: f.Path,
 			}

@@ -110,7 +110,7 @@ func (m *Manager) rebuildQueuedTorrentJob(entry *storage.Entry) (*Job, error) {
 		ImportTypeAPI,
 		entry.SkipMultiSeason,
 	)
-	req.Id = entry.InfoHash
+	req.ID = entry.InfoHash
 	job := NewJob(JobTypeTorrent, req)
 	job.ID = entry.InfoHash
 	job.Entry = entry
@@ -163,7 +163,7 @@ func (m *Manager) rebuildQueuedNZBJob(entry *storage.Entry) (*Job, error) {
 		ImportTypeSABnzbd,
 		entry.SkipMultiSeason,
 	)
-	req.Id = entry.InfoHash
+	req.ID = entry.InfoHash
 	job := NewJob(JobTypeNZB, req)
 	job.ID = entry.InfoHash
 	job.Entry = entry

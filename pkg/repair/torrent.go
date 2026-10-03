@@ -71,14 +71,14 @@ func (r *Service) probeTorrentFileByUnrestrict(
 		result.reason = "placement_file_not_found"
 		return result
 	}
-	if placementFile.Link == "" && placementFile.Id == "" {
+	if placementFile.Link == "" && placementFile.ID == "" {
 		result.broken = true
 		result.reason = "missing_provider_link"
 		return result
 	}
 
 	debridFile := &debridTypes.File{
-		Id:        placementFile.Id,
+		ID:        placementFile.ID,
 		Link:      placementFile.Link,
 		Path:      placementFile.Path,
 		Name:      file.Name,
@@ -209,5 +209,5 @@ func linkOf(entry *storage.Entry, name string) string {
 	if file == nil {
 		return ""
 	}
-	return cmp.Or(file.Link, file.Id)
+	return cmp.Or(file.Link, file.ID)
 }
