@@ -370,7 +370,7 @@ func mergeCachedPlacement(managed *storage.Entry, other *storage.CachedTorrent) 
 
 		// AddOrUpdate placement-specific file data
 		placement.Files[fileName] = &storage.ProviderFile{
-			Id:   file.Id,
+			ID:   file.ID,
 			Link: file.Link,
 			Path: file.Path,
 		}

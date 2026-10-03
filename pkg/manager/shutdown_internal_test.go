@@ -66,12 +66,12 @@ func runShutdownResume(t *testing.T, multiSeason bool) {
 		Providers:       map[string]*storage.ProviderEntry{},
 	}
 	torrent := &types.Torrent{
-		Id: "provider-id", Debrid: "provider", InfoHash: entry.InfoHash, Name: entry.Name,
+		ID: "provider-id", Debrid: "provider", InfoHash: entry.InfoHash, Name: entry.Name,
 		Status: types.TorrentStatusDownloaded, Progress: 100,
-		Files: map[string]types.File{"Show.S02E01.mkv": {Name: "Show.S02E01.mkv", Id: "2", Size: 5}},
+		Files: map[string]types.File{"Show.S02E01.mkv": {Name: "Show.S02E01.mkv", ID: "2", Size: 5}},
 	}
 	if multiSeason {
-		torrent.Files["Show.S01E01.mkv"] = types.File{Name: "Show.S01E01.mkv", Id: "1", Size: 5}
+		torrent.Files["Show.S01E01.mkv"] = types.File{Name: "Show.S01E01.mkv", ID: "1", Size: 5}
 	}
 	applyDebridTorrentToEntry(entry, torrent)
 	m.clients.Store("provider", completedTorrentProvider{torrent: torrent})

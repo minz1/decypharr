@@ -107,7 +107,7 @@ func TestGetTorrentsBypassesTorboxCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTorrents() error = %v", err)
 	}
-	if len(torrents) != 1 || torrents[0].Id != "17" {
+	if len(torrents) != 1 || torrents[0].ID != "17" {
 		t.Fatalf("GetTorrents() = %#v, want torrent 17", torrents)
 	}
 
@@ -166,7 +166,7 @@ func TestGetTorrentAcceptsObjectAndArrayResponses(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GetTorrent() error = %v", err)
 			}
-			if torrent.Id != "17" || torrent.InfoHash != "ABC" || len(torrent.Files) != 1 {
+			if torrent.ID != "17" || torrent.InfoHash != "ABC" || len(torrent.Files) != 1 {
 				t.Fatalf("GetTorrent() = %#v, want torrent 17 with one file", torrent)
 			}
 		})

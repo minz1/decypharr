@@ -282,7 +282,7 @@ func (tb *Torbox) SubmitMagnet(torrent *types.Torrent) (*types.Torrent, error) {
 	}
 	dt := *data.Data
 	torrentID := strconv.Itoa(dt.ID)
-	torrent.Id = torrentID
+	torrent.ID = torrentID
 	torrent.Debrid = tb.config.Name
 	torrent.Added = time.Now()
 
@@ -323,7 +323,7 @@ func (tb *Torbox) GetTorrent(torrentID string) (*types.Torrent, error) {
 		return nil, fmt.Errorf("error getting torrent")
 	}
 	t := &types.Torrent{
-		Id:               strconv.Itoa(data.ID),
+		ID:               strconv.Itoa(data.ID),
 		InfoHash:         data.Hash,
 		Name:             data.Name,
 		Bytes:            data.Size,
@@ -344,15 +344,15 @@ func (tb *Torbox) GetTorrent(torrentID string) (*types.Torrent, error) {
 		}
 
 		file := types.File{
-			TorrentID: t.Id,
-			Id:        strconv.Itoa(f.ID),
+			TorrentID: t.ID,
+			ID:        strconv.Itoa(f.ID),
 			Name:      fileName,
 			Size:      f.Size,
 			Path:      f.Name,
 		}
 
 		if data.DownloadFinished {
-			file.Link = fmt.Sprintf("torbox://%s/%d", t.Id, f.ID)
+			file.Link = fmt.Sprintf("torbox://%s/%d", t.ID, f.ID)
 		}
 
 		t.Files[fileName] = file
@@ -411,7 +411,7 @@ func (tb *Torbox) updateTorrentWithClient(client *request.Client, t *types.Torre
 		context.Background(),
 		client,
 		"/api/torrents/mylist",
-		map[string]string{"id": t.Id},
+		map[string]string{"id": t.ID},
 		&res,
 	)
 	if err != nil {
@@ -423,7 +423,7 @@ func (tb *Torbox) updateTorrentWithClient(client *request.Client, t *types.Torre
 	}
 	data := res.Data
 	if data == nil {
-		return fmt.Errorf("torbox API error: no data for torrent %s: %v %s", t.Id, res.Error, res.Detail)
+		return fmt.Errorf("torbox API error: no data for torrent %s: %v %s", t.ID, res.Error, res.Detail)
 	}
 	name := data.Name
 
@@ -450,15 +450,15 @@ func (tb *Torbox) updateTorrentWithClient(client *request.Client, t *types.Torre
 		}
 
 		file := types.File{
-			TorrentID: t.Id,
-			Id:        strconv.Itoa(f.ID),
+			TorrentID: t.ID,
+			ID:        strconv.Itoa(f.ID),
 			Name:      fileName,
 			Size:      f.Size,
 			Path:      fileName,
 		}
 
 		if data.DownloadFinished {
-			file.Link = fmt.Sprintf("torbox://%s/%s", t.Id, strconv.Itoa(f.ID))
+			file.Link = fmt.Sprintf("torbox://%s/%s", t.ID, strconv.Itoa(f.ID))
 		}
 
 		t.Files[fileName] = file
@@ -536,7 +536,7 @@ func (tb *Torbox) fetchDownloadLink(
 	status, err := tb.doGetWithClient(ctx, account.Client(), "/api/torrents/requestdl", map[string]string{
 		"token":      account.Token,
 		"torrent_id": id,
-		"file_id":    file.Id,
+		"file_id":    file.ID,
 	}, &res)
 	if err != nil {
 		return types.DownloadLink{}, err
@@ -558,7 +558,7 @@ func (tb *Torbox) fetchDownloadLink(
 		Link:         file.Link,
 		DownloadLink: *res.Data,
 		Debrid:       tb.config.Name,
-		ID:           file.Id,
+		ID:           file.ID,
 		Generated:    now,
 		ExpiresAt:    now.Add(tb.autoExpiresLinksAfter),
 	}
@@ -605,7 +605,7 @@ func (tb *Torbox) getTorrents(offset int) ([]*types.Torrent, error) {
 	torrents := make([]*types.Torrent, 0, len(*res.Data))
 	for _, data := range *res.Data {
 		t := &types.Torrent{
-			Id:               strconv.Itoa(data.ID),
+			ID:               strconv.Itoa(data.ID),
 			Name:             data.Name,
 			Bytes:            data.Size,
 			Progress:         data.Progress * percent,
@@ -629,15 +629,15 @@ func (tb *Torbox) getTorrents(offset int) ([]*types.Torrent, error) {
 				continue
 			}
 			file := types.File{
-				TorrentID: t.Id,
-				Id:        strconv.Itoa(f.ID),
+				TorrentID: t.ID,
+				ID:        strconv.Itoa(f.ID),
 				Name:      fileName,
 				Size:      f.Size,
 				Path:      f.Name,
 			}
 
 			if data.DownloadFinished {
-				file.Link = fmt.Sprintf("torbox://%s/%d", t.Id, f.ID)
+				file.Link = fmt.Sprintf("torbox://%s/%d", t.ID, f.ID)
 			}
 
 			t.Files[fileName] = file

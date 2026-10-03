@@ -33,7 +33,7 @@ func TestCheckStatusSelectsAllowedFilesAndMapsLinks(t *testing.T) {
 		logger:  zerolog.Nop(),
 		options: mkvOnly(),
 	}
-	torrent, err := provider.CheckStatus(&types.Torrent{Id: "torrent-id"})
+	torrent, err := provider.CheckStatus(&types.Torrent{ID: "torrent-id"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestCheckStatusSelectsAllowedFilesAndMapsLinks(t *testing.T) {
 		size           int64
 	}{{"first.mkv", "7", "https://example.test/first", 1000}, {"second.mkv", "9", "https://example.test/second", 2000}} {
 		file := torrent.Files[want.name]
-		if file.Id != want.id || file.Name != want.name || file.Link != want.link || file.Size != want.size ||
+		if file.ID != want.id || file.Name != want.name || file.Link != want.link || file.Size != want.size ||
 			file.TorrentID != "torrent-id" {
 			t.Errorf("file = %#v, want %#v", file, want)
 		}
@@ -90,7 +90,7 @@ func TestCheckStatusFailureAndUncachedContracts(t *testing.T) {
 				logger:  zerolog.Nop(),
 				options: mkvOnly(),
 			}
-			result, err := provider.CheckStatus(&types.Torrent{Id: "id", DownloadUncached: tc.allowUncached})
+			result, err := provider.CheckStatus(&types.Torrent{ID: "id", DownloadUncached: tc.allowUncached})
 			assertError(t, err, tc.wantErr, tc.wantText)
 			if tc.wantStatus != "" && (result == nil || result.Status != tc.wantStatus) {
 				t.Fatalf("result = %#v, want status %s", result, tc.wantStatus)

@@ -223,7 +223,7 @@ func (pm *Premiumize) addTorrent(t *types.Torrent) (*types.Torrent, error) {
 }
 
 func (pm *Premiumize) applySubmittedTorrent(t *types.Torrent, data transferCreateResponse) {
-	t.Id = data.ID
+	t.ID = data.ID
 	t.Debrid = pm.config.Name
 	t.Status = types.TorrentStatusQueued
 	if data.Name != "" {
@@ -274,7 +274,7 @@ func (pm *Premiumize) UpdateTorrent(t *types.Torrent) error {
 		return err
 	}
 	for _, tr := range transfers {
-		if tr.ID == t.Id {
+		if tr.ID == t.ID {
 			updated, transferToTorrentErr := pm.transferToTorrent(tr, t.InfoHash)
 			if transferToTorrentErr != nil {
 				return transferToTorrentErr
@@ -400,7 +400,7 @@ func (pm *Premiumize) transferToTorrent(tr premiumizeTransfer, fallbackInfoHash 
 		added = time.Time{}
 	}
 	return &types.Torrent{
-		Id:               tr.ID,
+		ID:               tr.ID,
 		InfoHash:         pm.transferInfoHash(tr, fallbackInfoHash),
 		Name:             name,
 		Filename:         name,
@@ -532,7 +532,7 @@ func (pm *Premiumize) addFile(
 	}
 	files[fileName] = types.File{
 		TorrentID: transferID,
-		Id:        id,
+		ID:        id,
 		Name:      fileName,
 		Path:      itemPath,
 		Size:      size,
@@ -554,8 +554,8 @@ func (pm *Premiumize) fetchDownloadLink(
 	link := file.Link
 	size := file.Size
 	filename := file.Name
-	if link == "" && file.Id != "" {
-		item, err := pm.itemDetails(ctx, file.Id)
+	if link == "" && file.ID != "" {
+		item, err := pm.itemDetails(ctx, file.ID)
 		if err != nil {
 			return types.DownloadLink{}, err
 		}
@@ -576,7 +576,7 @@ func (pm *Premiumize) fetchDownloadLink(
 		DownloadLink: link,
 		Generated:    now,
 		ExpiresAt:    now.Add(pm.autoExpiresLinksAfter),
-		ID:           file.Id,
+		ID:           file.ID,
 	}, nil
 }
 

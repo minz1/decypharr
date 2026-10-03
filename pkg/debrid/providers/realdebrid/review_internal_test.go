@@ -42,7 +42,7 @@ func TestGetTorrentsPaginatesOnRawPageSize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(torrents) != 2 || torrents[0].Id != "b" || torrents[1].Id != "c" {
+	if len(torrents) != 2 || torrents[0].ID != "b" || torrents[1].ID != "c" {
 		t.Fatalf("GetTorrents() returned %d torrents, want b and c", len(torrents))
 	}
 }
@@ -61,11 +61,11 @@ func TestCheckStatusReturnsTorrentOnSlotLimit(t *testing.T) {
 		)
 	}))
 	defer server.Close()
-	torrent, err := testRealDebrid(server.URL).CheckStatus(&types.Torrent{Id: "t"})
+	torrent, err := testRealDebrid(server.URL).CheckStatus(&types.Torrent{ID: "t"})
 	if !errors.Is(err, customerror.ErrTooManyActiveDownloads) {
 		t.Fatalf("CheckStatus() error = %v, want too many active downloads", err)
 	}
-	if torrent == nil || torrent.Id != "t" {
+	if torrent == nil || torrent.ID != "t" {
 		t.Fatalf("CheckStatus() torrent = %v, want the submitted torrent", torrent)
 	}
 }

@@ -77,7 +77,7 @@ func checkTorrent(t *testing.T, list bool, torrent *types.Torrent, files int) {
 		return
 	}
 	file := torrent.Files["movie.mkv"]
-	if file.Id != "file" || file.Link != "https://files.example/movie" || torrent.InfoHash != "hash" {
+	if file.ID != "file" || file.Link != "https://files.example/movie" || torrent.InfoHash != "hash" {
 		t.Fatalf("lost file identity: %#v", torrent)
 	}
 }

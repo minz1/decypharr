@@ -31,7 +31,7 @@ func TestCheckFileHonorsCancellation(t *testing.T) {
 			return newProvider(host).CheckFile(ctx, "hash", "file-id")
 		},
 		"download link": func(ctx context.Context, host string) error {
-			_, err := newProvider(host).GetDownloadLink(ctx, "id", &types.File{Id: "file-id"})
+			_, err := newProvider(host).GetDownloadLink(ctx, "id", &types.File{ID: "file-id"})
 			return err
 		},
 	}

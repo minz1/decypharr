@@ -50,7 +50,7 @@ func TestPaginationIgnoresFilteredEntries(t *testing.T) {
 	provider.Host = server.URL
 
 	torrents, err := provider.GetTorrents()
-	if err != nil || len(torrents) != 1 || torrents[0].Id != "b" {
+	if err != nil || len(torrents) != 1 || torrents[0].ID != "b" {
 		t.Fatalf("GetTorrents() = %d torrents, %v; want torrent b from page 1", len(torrents), err)
 	}
 	links, err := provider.fetchDownloadLinks(provider.accountsManager.Current())

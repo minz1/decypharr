@@ -241,7 +241,7 @@ func (m *Manager) processNewTorrents(provider string, newTorrents []*types.Torre
 				switch {
 				case errors.Is(err, errSyncSkipped):
 				case err != nil:
-					m.logger.Error().Err(err).Str("debrid", provider).Msgf("Failed to process torrent %s", t.Id)
+					m.logger.Error().Err(err).Str("debrid", provider).Msgf("Failed to process torrent %s", t.ID)
 				default:
 					batchChan <- mt
 				}

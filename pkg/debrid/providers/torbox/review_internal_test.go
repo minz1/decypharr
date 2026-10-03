@@ -37,7 +37,7 @@ func TestFetchDownloadLinkReportsProviderErrors(t *testing.T) {
 		nil,
 		tb.logger,
 	)
-	file := &types.File{Id: "1", Link: "torbox://17/1"}
+	file := &types.File{ID: "1", Link: "torbox://17/1"}
 	if _, err := tb.GetDownloadLink(t.Context(), "17", file); err == nil {
 		t.Fatal("provider error returned no error")
 	}
@@ -57,7 +57,7 @@ func TestUpdateTorrentRejectsNullData(t *testing.T) {
 		_, _ = fmt.Fprint(w, `{"success":false,"error":"NOT_FOUND","data":null}`)
 	}))
 	defer server.Close()
-	if err := testTorbox(server.URL).UpdateTorrent(&types.Torrent{Id: "17"}); err == nil {
+	if err := testTorbox(server.URL).UpdateTorrent(&types.Torrent{ID: "17"}); err == nil {
 		t.Fatal("UpdateTorrent() with null data returned no error")
 	}
 }

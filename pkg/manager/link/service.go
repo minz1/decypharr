@@ -295,7 +295,7 @@ func (s *Service) fetchLink(
 		return types.DownloadLink{}, err
 	}
 
-	if placementFile.Link == "" && placementFile.Id == "" {
+	if placementFile.Link == "" && placementFile.ID == "" {
 		return types.DownloadLink{}, NewPermanentError(
 			fmt.Errorf("file link is missing for %s in entry %s", filename, entry.Name),
 			"link_missing",
@@ -319,7 +319,7 @@ func (s *Service) fetchLink(
 	}
 
 	debridFile := &types.File{
-		Id:        placementFile.Id,
+		ID:        placementFile.ID,
 		Link:      placementFile.Link,
 		Path:      placementFile.Path,
 		Name:      file.Name,
@@ -392,7 +392,7 @@ func (s *Service) getPlacementFile(entry *storage.Entry, filename string) (*stor
 }
 
 func hasLocator(file *storage.ProviderFile) bool {
-	return file != nil && (file.Link != "" || file.Id != "")
+	return file != nil && (file.Link != "" || file.ID != "")
 }
 
 // refreshPlacementFile re-reads the entry from its provider and adopts the

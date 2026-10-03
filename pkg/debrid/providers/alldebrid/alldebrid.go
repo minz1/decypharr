@@ -186,7 +186,7 @@ func (ad *AllDebrid) addTorrentFile(torrent *types.Torrent) (*types.Torrent, err
 	if f.Error != nil {
 		return nil, fmt.Errorf("alldebrid file upload error: %s", f.Error.Message)
 	}
-	torrent.Id = strconv.Itoa(f.ID)
+	torrent.ID = strconv.Itoa(f.ID)
 	torrent.Added = time.Now()
 	return torrent, nil
 }
@@ -214,7 +214,7 @@ func (ad *AllDebrid) addMagnetLink(torrent *types.Torrent) (*types.Torrent, erro
 		return nil, fmt.Errorf("error adding torrent. No magnets returned")
 	}
 	magnet := magnets[0]
-	torrent.Id = strconv.Itoa(magnet.ID)
+	torrent.ID = strconv.Itoa(magnet.ID)
 	torrent.Added = time.Now()
 	return torrent, nil
 }
@@ -263,7 +263,7 @@ func (ad *AllDebrid) flattenFiles(
 			*index++
 			file := types.File{
 				TorrentID: torrentID,
-				Id:        strconv.Itoa(*index),
+				ID:        strconv.Itoa(*index),
 				Name:      fileName,
 				Size:      f.Size,
 				Path:      currentPath,
@@ -301,7 +301,7 @@ func (ad *AllDebrid) GetTorrent(torrentID string) (*types.Torrent, error) {
 	status := getAlldebridStatus(data.StatusCode)
 	name := data.Filename
 	t := &types.Torrent{
-		Id:               strconv.Itoa(data.ID),
+		ID:               strconv.Itoa(data.ID),
 		Name:             name,
 		Status:           status,
 		Filename:         name,
@@ -316,7 +316,7 @@ func (ad *AllDebrid) GetTorrent(torrentID string) (*types.Torrent, error) {
 	if status == types.TorrentStatusDownloaded {
 		t.Progress = 100
 		index := -1
-		files := ad.flattenFiles(t.Id, data.Files, "", &index)
+		files := ad.flattenFiles(t.ID, data.Files, "", &index)
 		t.Files = files
 	} else {
 		if data.Size > 0 {
@@ -334,7 +334,7 @@ func (ad *AllDebrid) updateTorrent(t *types.Torrent) (int, error) {
 		context.Background(),
 		ad.client,
 		"/magnet/status",
-		map[string]string{"id": t.Id},
+		map[string]string{"id": t.ID},
 		&res,
 	)
 	if err != nil {
@@ -345,7 +345,7 @@ func (ad *AllDebrid) updateTorrent(t *types.Torrent) (int, error) {
 		return 0, fmt.Errorf("alldebrid API error: Status: %d", httpStatus)
 	}
 
-	data, err := findMagnet(res.Data.Magnets, t.Id)
+	data, err := findMagnet(res.Data.Magnets, t.ID)
 	if err != nil {
 		return 0, err
 	}
@@ -365,7 +365,7 @@ func (ad *AllDebrid) updateTorrent(t *types.Torrent) (int, error) {
 	if status == types.TorrentStatusDownloaded {
 		t.Progress = 100
 		index := -1
-		files := ad.flattenFiles(t.Id, data.Files, "", &index)
+		files := ad.flattenFiles(t.ID, data.Files, "", &index)
 		t.Files = files
 	} else {
 		if data.Size > 0 {
@@ -430,14 +430,14 @@ func defaultNoPeerRetryBackoff() []time.Duration {
 
 func (ad *AllDebrid) restartNoPeerTorrent(torrent *types.Torrent) (int, error) {
 	ad.logger.Warn().
-		Str("torrent_id", torrent.Id).
+		Str("torrent_id", torrent.ID).
 		Str("name", torrent.Name).
 		Msg("AllDebrid reported status code 7; restarting magnet")
 
-	if err := ad.restartTorrent(torrent.Id); err != nil {
+	if err := ad.restartTorrent(torrent.ID); err != nil {
 		return allDebridNoPeerStatusCode, fmt.Errorf(
 			"restart AllDebrid torrent %s after status code 7: %w",
-			torrent.Id,
+			torrent.ID,
 			err,
 		)
 	}
@@ -452,13 +452,13 @@ func (ad *AllDebrid) restartNoPeerTorrent(torrent *types.Torrent) (int, error) {
 		if err != nil {
 			return allDebridNoPeerStatusCode, fmt.Errorf(
 				"check AllDebrid torrent %s after restart: %w",
-				torrent.Id,
+				torrent.ID,
 				err,
 			)
 		}
 		if statusCode != allDebridNoPeerStatusCode {
 			ad.logger.Info().
-				Str("torrent_id", torrent.Id).
+				Str("torrent_id", torrent.ID).
 				Int("status_code", statusCode).
 				Int("status_check", attempt+1).
 				Msg("AllDebrid torrent resumed after restart")
@@ -469,7 +469,7 @@ func (ad *AllDebrid) restartNoPeerTorrent(torrent *types.Torrent) (int, error) {
 	torrent.Status = types.TorrentStatusError
 	return allDebridNoPeerStatusCode, fmt.Errorf(
 		"AllDebrid torrent %s remained at status code 7 after restart and %d status checks",
-		torrent.Id,
+		torrent.ID,
 		len(backoff),
 	)
 }
@@ -608,7 +608,7 @@ func (ad *AllDebrid) GetTorrents() ([]*types.Torrent, error) {
 
 	for _, magnet := range res.Data.Magnets {
 		t := &types.Torrent{
-			Id:               strconv.Itoa(magnet.ID),
+			ID:               strconv.Itoa(magnet.ID),
 			Name:             magnet.Filename,
 			Bytes:            magnet.Size,
 			Status:           getAlldebridStatus(magnet.StatusCode),
@@ -624,7 +624,7 @@ func (ad *AllDebrid) GetTorrents() ([]*types.Torrent, error) {
 				continue
 			}
 			file := types.File{
-				TorrentID: t.Id,
+				TorrentID: t.ID,
 				Name:      f.Name,
 				Size:      f.Size,
 				Link:      f.Link,

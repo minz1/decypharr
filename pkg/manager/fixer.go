@@ -260,7 +260,7 @@ func (f *Fixer) MoveTorrent(entry *storage.Entry, debridName string, reinsert bo
 	f.adoptPlacement(entry, debridName, newDebridTorrent)
 
 	// Delete old entry from debrid if different ID
-	if oldID != "" && oldID != newDebridTorrent.Id {
+	if oldID != "" && oldID != newDebridTorrent.ID {
 		go func() {
 			_ = client.DeleteTorrent(oldID)
 		}()
@@ -306,7 +306,7 @@ func (f *Fixer) submitReplacement(client debrid.Client, entry *storage.Entry) (*
 	if err != nil {
 		return nil, fmt.Errorf("failed to submit magnet: %w", err)
 	}
-	if newDebridTorrent == nil || newDebridTorrent.Id == "" {
+	if newDebridTorrent == nil || newDebridTorrent.ID == "" {
 		return nil, fmt.Errorf("failed to submit magnet: empty entry")
 	}
 
@@ -316,8 +316,8 @@ func (f *Fixer) submitReplacement(client debrid.Client, entry *storage.Entry) (*
 		f.manager.hearsay.ReportAdd(client.Config().Provider, entry.InfoHash, false)
 	}
 	if err != nil {
-		if newDebridTorrent != nil && newDebridTorrent.Id != "" {
-			_ = client.DeleteTorrent(newDebridTorrent.Id)
+		if newDebridTorrent != nil && newDebridTorrent.ID != "" {
+			_ = client.DeleteTorrent(newDebridTorrent.ID)
 		}
 		return nil, fmt.Errorf("failed to check status: %w", err)
 	}
@@ -328,12 +328,12 @@ func (f *Fixer) submitReplacement(client debrid.Client, entry *storage.Entry) (*
 	)
 
 	if len(newDebridTorrent.Files) == 0 {
-		_ = client.DeleteTorrent(newDebridTorrent.Id)
+		_ = client.DeleteTorrent(newDebridTorrent.ID)
 		return nil, fmt.Errorf("no files in entry after re-insertion")
 	}
 	for _, file := range newDebridTorrent.GetFiles() {
-		if file.Link == "" && file.Id == "" {
-			_ = client.DeleteTorrent(newDebridTorrent.Id)
+		if file.Link == "" && file.ID == "" {
+			_ = client.DeleteTorrent(newDebridTorrent.ID)
 			return nil, fmt.Errorf("empty link/id for file %s", file.Name)
 		}
 	}

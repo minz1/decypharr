@@ -80,7 +80,7 @@ func TestGetTorrentSelectsRequestedMagnetFromArray(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTorrent() error = %v", err)
 	}
-	if torrent.Id != "2" || torrent.Name != "Release.mkv" || torrent.InfoHash != "ABC" {
+	if torrent.ID != "2" || torrent.Name != "Release.mkv" || torrent.InfoHash != "ABC" {
 		t.Fatalf("GetTorrent() = %#v, want requested magnet 2", torrent)
 	}
 }
@@ -152,7 +152,7 @@ func TestCheckStatusRestartsStatusSeven(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	ad := testAllDebrid(server.URL + "/v4.1")
-	torrent := &debridTypes.Torrent{Id: "42", DownloadUncached: true}
+	torrent := &debridTypes.Torrent{ID: "42", DownloadUncached: true}
 	got, err := ad.CheckStatus(torrent)
 	if err != nil {
 		t.Fatalf("CheckStatus() error = %v", err)
@@ -191,7 +191,7 @@ func TestCheckStatusBoundsStatusSevenRetries(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	ad := testAllDebrid(server.URL)
-	torrent := &debridTypes.Torrent{Id: "42", DownloadUncached: true}
+	torrent := &debridTypes.Torrent{ID: "42", DownloadUncached: true}
 	got, err := ad.CheckStatus(torrent)
 	if err == nil || !strings.Contains(err.Error(), "remained at status code 7") {
 		t.Fatalf("CheckStatus() error = %v, want bounded status code 7 error", err)
@@ -227,7 +227,7 @@ func TestCheckStatusDoesNotRestartTerminalStatus(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	ad := testAllDebrid(server.URL)
-	torrent := &debridTypes.Torrent{Id: "42", DownloadUncached: true}
+	torrent := &debridTypes.Torrent{ID: "42", DownloadUncached: true}
 	got, err := ad.CheckStatus(torrent)
 	if err == nil || !strings.Contains(err.Error(), "status code 10") {
 		t.Fatalf("CheckStatus() error = %v, want terminal status code 10 error", err)

@@ -40,7 +40,7 @@ type Job struct {
 func NewJob(jobType JobType, req *ImportRequest) *Job {
 	id := ""
 	if req != nil {
-		id = req.Id
+		id = req.ID
 	}
 	return &Job{
 		ID:        id,

@@ -62,7 +62,7 @@ func protoToFile(pb *FileProto) *File {
 
 func providerFileToProto(pf *ProviderFile) *ProviderFileProto {
 	return &ProviderFileProto{
-		Id:   pf.Id,
+		Id:   pf.ID,
 		Link: pf.Link,
 		Path: pf.Path,
 	}
@@ -70,7 +70,7 @@ func providerFileToProto(pf *ProviderFile) *ProviderFileProto {
 
 func protoToProviderFile(pb *ProviderFileProto) *ProviderFile {
 	return &ProviderFile{
-		Id:   pb.GetId(),
+		ID:   pb.GetId(),
 		Link: pb.GetLink(),
 		Path: pb.GetPath(),
 	}
