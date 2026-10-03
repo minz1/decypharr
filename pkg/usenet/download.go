@@ -61,11 +61,11 @@ func (u *Usenet) Download(
 	p := pool.New().WithContext(ctx).WithMaxGoroutines(workers)
 	for idx, segment := range file.Segments {
 		p.Go(func(ctx context.Context) error {
-			if err := ordered.err(); err != nil {
-				return err
+			if writeErr := ordered.err(); writeErr != nil {
+				return writeErr
 			}
-			if err := ctx.Err(); err != nil {
-				return err
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
 			}
 			// A failed segment is reported through results; other workers
 			// keep going until the writer records it.
@@ -78,8 +78,8 @@ func (u *Usenet) Download(
 	close(results)
 	writerWg.Wait()
 
-	if err := ordered.err(); err != nil {
-		return err
+	if writeErr := ordered.err(); writeErr != nil {
+		return writeErr
 	}
 	if fetchErr != nil {
 		return fetchErr
@@ -206,8 +206,7 @@ func (u *Usenet) downloadDecrypted(
 	defer cursor.Close()
 
 	dst := &progressWriter{w: writer, callback: progressCallback, start: time.Now()}
-	_, err = safeCopyBuffer(ctx, dst, newContextSectionReader(ctx, cursor, 0, size), nil)
-	return err
+	return safeCopyBuffer(ctx, dst, newContextSectionReader(ctx, cursor, 0, size), nil)
 }
 
 // progressWriter reports cumulative bytes and average throughput per write.

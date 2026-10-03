@@ -1026,7 +1026,7 @@ func (u *Usenet) Stream(ctx context.Context, nzoID, filename string, start, end 
 	defer u.releaseStreamBuffer(bufPtr)
 
 	// Use a safe copy loop that checks context and validates read counts
-	_, err = safeCopyBuffer(ctx, writer, section, *bufPtr)
+	err = safeCopyBuffer(ctx, writer, section, *bufPtr)
 
 	// Handle context cancellation explicitly
 	if err != nil && ctx.Err() != nil {
@@ -1045,50 +1045,46 @@ func (u *Usenet) Stream(ctx context.Context, nzoID, filename string, start, end 
 
 // safeCopyBuffer copies from src to dst using buf, with context checking and
 // validation of read counts to prevent panics from corrupted readers during shutdown.
-func safeCopyBuffer(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) (int64, error) {
+func safeCopyBuffer(ctx context.Context, dst io.Writer, src io.Reader, buf []byte) error {
 	if len(buf) == 0 {
 		buf = make([]byte, bufferSize)
 	}
-	var written int64
 	for {
 		if err := ctx.Err(); err != nil {
-			return written, err
+			return err
 		}
 		nr, er := src.Read(buf)
 		// A count outside the buffer would panic the slice below; corrupted
 		// readers during shutdown have produced them.
 		if nr < 0 || nr > len(buf) {
-			return written, fmt.Errorf("reader returned invalid count %d (buffer size %d)", nr, len(buf))
+			return fmt.Errorf("reader returned invalid count %d (buffer size %d)", nr, len(buf))
 		}
 		if nr > 0 {
-			nw, ew := writeChunk(dst, buf[:nr])
-			written += int64(nw)
-			if ew != nil {
-				return written, ew
+			if ew := writeChunk(dst, buf[:nr]); ew != nil {
+				return ew
 			}
 		}
 		if er != nil {
 			if errors.Is(er, io.EOF) {
-				return written, nil
+				return nil
 			}
-			return written, er
+			return er
 		}
 	}
 }
 
 // writeChunk writes p and validates the count the writer reports.
-func writeChunk(dst io.Writer, p []byte) (int, error) {
+func writeChunk(dst io.Writer, p []byte) error {
 	nw, err := dst.Write(p)
-	if nw < 0 || nw > len(p) {
-		if err == nil {
-			err = fmt.Errorf("invalid write count: %d", nw)
-		}
-		return 0, err
+	switch {
+	case err != nil:
+		return err
+	case nw < 0 || nw > len(p):
+		return fmt.Errorf("invalid write count: %d", nw)
+	case nw != len(p):
+		return io.ErrShortWrite
 	}
-	if err == nil && nw != len(p) {
-		err = io.ErrShortWrite
-	}
-	return nw, err
+	return nil
 }
 
 // Touch validates that the first segment of a file is available via NNTP STAT.
