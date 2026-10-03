@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"strconv"
 	"strings"
 	"sync/atomic"
 
@@ -19,68 +20,84 @@ func (m *Manager) initEntryCache() {
 type EntryCacheItem struct {
 	current  *FileInfo
 	children []FileInfo
+	// generation is the cache generation the item was built in. An item from
+	// an earlier generation predates an InvalidateAll and is never served.
+	generation uint64
 }
 
+// entryLoader builds the listing for one cache key.
+type entryLoader func(name string) (*FileInfo, []FileInfo)
+
 type EntryCache struct {
-	manager    *Manager
+	// timeSensitive reports views that must never be cached.
+	timeSensitive func(name string) bool
+	loadTorrent   entryLoader
+	loadGroup     entryLoader
+
 	entries    *xsync.Map[string, EntryCacheItem]
 	refreshing singleflight.Group
 	generation atomic.Uint64
 }
 
 func NewEntryCache(manager *Manager) *EntryCache {
+	return newEntryCache(
+		func(name string) bool { return manager.virtualFoldersSnapshot().IsTimeSensitive(name) },
+		manager.getTorrentChildren,
+		manager.getEntryChildren,
+	)
+}
+
+func newEntryCache(timeSensitive func(string) bool, loadTorrent, loadGroup entryLoader) *EntryCache {
 	return &EntryCache{
-		manager: manager,
-		entries: xsync.NewMap[string, EntryCacheItem](),
+		timeSensitive: timeSensitive,
+		loadTorrent:   loadTorrent,
+		loadGroup:     loadGroup,
+		entries:       xsync.NewMap[string, EntryCacheItem](),
 	}
 }
 
 func (e *EntryCache) Get(name string) (*FileInfo, []FileInfo) {
 	// Relative-time views change as the clock advances even when library
 	// metadata does not, so never retain their children in the entry cache.
-	if !strings.HasPrefix(name, torrentEntryCachePrefix) && e.manager.virtualFoldersSnapshot().IsTimeSensitive(name) {
-		return e.manager.getEntryChildren(name)
+	if !strings.HasPrefix(name, torrentEntryCachePrefix) && e.timeSensitive(name) {
+		return e.loadGroup(name)
 	}
+	generation := e.generation.Load()
 	item, ok := e.entries.Load(name)
-	if !ok {
-		item = e.refreshEntry(name)
+	if !ok || item.generation != generation {
+		item = e.refreshEntry(name, generation)
 	}
 	return item.current, item.children
 }
 
-func (e *EntryCache) refreshEntry(name string) EntryCacheItem {
-	result, _, _ := e.refreshing.Do(name, func() (any, error) {
-		return e._refreshEntry(name), nil
+// refreshEntry loads name once per generation: a Get that follows an
+// InvalidateAll never joins a load that started before it.
+func (e *EntryCache) refreshEntry(name string, generation uint64) EntryCacheItem {
+	key := strconv.FormatUint(generation, 10) + ":" + name
+	result, _, _ := e.refreshing.Do(key, func() (any, error) {
+		return e.load(name, generation), nil
 	})
 	item, _ := result.(EntryCacheItem) // always an EntryCacheItem; zero value on the impossible miss
 	return item
 }
 
-func (e *EntryCache) _refreshEntry(name string) EntryCacheItem {
-	generation := e.generation.Load()
-	if after, ok := strings.CutPrefix(name, torrentEntryCachePrefix); ok {
-		// This is a torrent folder
-		torrentName := after
-		current, children := e.manager.getTorrentChildren(torrentName)
-		item := EntryCacheItem{
-			current:  current,
-			children: children,
+func (e *EntryCache) load(name string, generation uint64) EntryCacheItem {
+	var item EntryCacheItem
+	if torrentName, ok := strings.CutPrefix(name, torrentEntryCachePrefix); ok {
+		item.current, item.children = e.loadTorrent(torrentName)
+	} else {
+		// This is a built-in, provider, or virtual folder.
+		item.current, item.children = e.loadGroup(name)
+	}
+	item.generation = generation
+	// Keep whichever item is newer. A load that outlived an InvalidateAll may
+	// still land here, but Get ignores it for its stale generation.
+	e.entries.Compute(name, func(old EntryCacheItem, loaded bool) (EntryCacheItem, xsync.ComputeOp) {
+		if loaded && old.generation > generation {
+			return old, xsync.CancelOp
 		}
-		if e.generation.Load() == generation {
-			e.entries.Store(name, item)
-		}
-		return item
-	}
-
-	// This is a built-in, provider, or virtual folder.
-	current, children := e.manager.getEntryChildren(name)
-	item := EntryCacheItem{
-		current:  current,
-		children: children,
-	}
-	if e.generation.Load() == generation {
-		e.entries.Store(name, item)
-	}
+		return item, xsync.UpdateOp
+	})
 	return item
 }
 
