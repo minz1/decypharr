@@ -24,28 +24,27 @@ import (
 const bodyBufInitialCap = 1 << 20
 
 // bodyBufPool reuses storage for decoded articles not retained by a caller.
-//
-//nolint:gochecknoglobals // a sync.Pool only pays off when shared by every connection
-var bodyBufPool = sync.Pool{
-	New: func() any {
-		b := make([]byte, 0, bodyBufInitialCap)
-		return &b
-	},
+// A Client owns one and shares it with its connections. A nil pool
+// allocates on get and drops on put.
+type bodyBufPool struct {
+	pool sync.Pool
 }
 
-func getBodyBuf() []byte {
-	if b, ok := bodyBufPool.Get().(*[]byte); ok {
-		return *b
+func (p *bodyBufPool) get() []byte {
+	if p != nil {
+		if b, ok := p.pool.Get().(*[]byte); ok {
+			return *b
+		}
 	}
 	return make([]byte, 0, bodyBufInitialCap)
 }
 
-func putBodyBuf(b []byte) {
-	if cap(b) == 0 {
+func (p *bodyBufPool) put(b []byte) {
+	if p == nil || cap(b) == 0 {
 		return
 	}
 	b = b[:0]
-	bodyBufPool.Put(&b)
+	p.pool.Put(&b)
 }
 
 // DecodedBodyCapacity matches the decoder's initial growth policy. Supplying
@@ -81,7 +80,7 @@ func (b *bodyReader) Read(p []byte) (int, error) {
 	if n > 0 {
 		b.reads++
 		if b.reads >= progressUpdateStride {
-			b.c.lastProgressNS.Store(nanotimeNow())
+			b.c.lastProgressNS.Store(b.c.clock.now())
 			b.reads = 0
 		}
 	}
@@ -99,7 +98,7 @@ func (c *Connection) nextBodyWithIdleDeadline(idle time.Duration) (nntpyenc.Body
 	// Arm the janitor for this decode; the connection itself is registered
 	// for its whole lifetime (see createConnection/Close). idleNS=0 on exit
 	// disarms.
-	c.lastProgressNS.Store(nanotimeNow())
+	c.lastProgressNS.Store(c.clock.now())
 	c.idleNS.Store(int64(idle))
 	defer c.idleNS.Store(0)
 
@@ -108,64 +107,111 @@ func (c *Connection) nextBodyWithIdleDeadline(idle time.Duration) (nntpyenc.Body
 		// The janitor sets idleNS to 0 after closing a stalled conn, but
 		// the race-free signal is "did we make progress within the
 		// deadline?". If not, format as a stall error.
-		if nanotimeNow()-c.lastProgressNS.Load() > int64(idle) {
+		if c.clock.now()-c.lastProgressNS.Load() > int64(idle) {
 			return res, fmt.Errorf("stream idle for %s: %w", idle, err)
 		}
 	}
 	return res, err
 }
 
-// nanotimeNow returns the monotonic clock in nanoseconds. Uses [time.Now]'s
-// monotonic reading via Sub(zero): one runtime.nanotime call, no wall-clock
-// overhead, no allocation.
-var nanotimeEpoch = time.Now() //nolint:gochecknoglobals // process-wide monotonic epoch
-
-func nanotimeNow() int64 {
-	return int64(time.Since(nanotimeEpoch))
+// monoClock reads a monotonic clock as nanoseconds since its epoch, cheap
+// enough to keep in atomics on hot paths: one runtime.nanotime call, no
+// allocation. A Client owns one and shares it with its pools and
+// connections, so their timestamps compare. The zero value (connections
+// built by hand in tests) falls back to wall-clock nanoseconds, which are
+// still consistent within that clock.
+type monoClock struct {
+	epoch time.Time
 }
 
-// bodyIdleJanitor sweeps connections currently in nextBodyWithIdleDeadline
-// and closes any whose last-progress timestamp is older than their idle
-// deadline. One goroutine per process, started lazily on first add().
-var bodyIdleJanitor = newBodyJanitor() //nolint:gochecknoglobals // one sweeper goroutine per process
+func newMonoClock() monoClock { return monoClock{epoch: time.Now()} }
 
-const bodyJanitorInterval = 5 * time.Second
+func (m monoClock) now() int64 {
+	if m.epoch.IsZero() {
+		return time.Now().UnixNano()
+	}
+	return int64(time.Since(m.epoch))
+}
 
+// bodyJanitor sweeps connections currently in nextBodyWithIdleDeadline and
+// closes any whose last-progress timestamp is older than their idle
+// deadline. A Client owns one; its goroutine starts on the first add and
+// stops at close. A nil janitor ignores registrations.
 type bodyJanitor struct {
 	mu      sync.Mutex
 	conns   map[*Connection]struct{}
-	started atomic.Bool
+	running bool
+	closed  bool
+	stop    chan struct{}
+	done    chan struct{}
 }
+
+const bodyJanitorInterval = 5 * time.Second
 
 func newBodyJanitor() *bodyJanitor {
-	return &bodyJanitor{conns: make(map[*Connection]struct{})}
-}
-
-func (j *bodyJanitor) ensureRunning() {
-	if !j.started.CompareAndSwap(false, true) {
-		return
+	return &bodyJanitor{
+		conns: make(map[*Connection]struct{}),
+		stop:  make(chan struct{}),
+		done:  make(chan struct{}),
 	}
-	go j.run()
 }
 
 func (j *bodyJanitor) add(c *Connection) {
-	j.ensureRunning()
+	if j == nil {
+		return
+	}
 	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.closed {
+		return
+	}
 	j.conns[c] = struct{}{}
-	j.mu.Unlock()
+	if !j.running {
+		j.running = true
+		go j.run()
+	}
 }
 
 func (j *bodyJanitor) remove(c *Connection) {
+	if j == nil {
+		return
+	}
 	j.mu.Lock()
 	delete(j.conns, c)
 	j.mu.Unlock()
 }
 
+// close stops the sweeper and waits for it. Later registrations are ignored.
+func (j *bodyJanitor) close() {
+	if j == nil {
+		return
+	}
+	j.mu.Lock()
+	if j.closed {
+		j.mu.Unlock()
+		return
+	}
+	j.closed = true
+	running := j.running
+	clear(j.conns)
+	close(j.stop)
+	j.mu.Unlock()
+	if running {
+		<-j.done
+	}
+}
+
 func (j *bodyJanitor) run() {
+	defer close(j.done)
 	tick := time.NewTicker(bodyJanitorInterval)
 	defer tick.Stop()
-	for range tick.C {
-		j.sweep()
+	for {
+		select {
+		case <-j.stop:
+			return
+		case <-tick.C:
+			j.sweep()
+		}
 	}
 }
 
@@ -173,7 +219,6 @@ func (j *bodyJanitor) run() {
 // progress within its idle deadline. Snapshot under the lock and act outside
 // it so a slow Close() can't hold up other registrations.
 func (j *bodyJanitor) sweep() {
-	now := nanotimeNow()
 	var stalled []*Connection
 	j.mu.Lock()
 	for c := range j.conns {
@@ -181,7 +226,7 @@ func (j *bodyJanitor) sweep() {
 		if idle <= 0 {
 			continue
 		}
-		if now-c.lastProgressNS.Load() > idle {
+		if c.clock.now()-c.lastProgressNS.Load() > idle {
 			stalled = append(stalled, c)
 		}
 	}
@@ -242,10 +287,15 @@ type Connection struct {
 	// while source reads make progress; idleNS is armed by
 	// nextBodyWithIdleDeadline and read by the shared janitor goroutine
 	// when sweeping for stalls. Stored in monotonic nanoseconds
-	// (nanotimeNow). idleNS 0 means this connection isn't currently in a
+	// (clock.now). idleNS 0 means this connection isn't currently in a
 	// body decode and the janitor should skip it.
 	lastProgressNS atomic.Int64
 	idleNS         atomic.Int64
+
+	// clock, bufs and janitor are the owning Client's (see Client).
+	clock   monoClock
+	bufs    *bodyBufPool
+	janitor *bodyJanitor
 
 	// writeTimeout bounds the next command write instead of the default
 	// HandshakeTimeout. ping sets it for the length of its DATE so a health
@@ -261,7 +311,7 @@ func (c *Connection) Close() error {
 	if c.closed.Swap(true) {
 		return nil
 	}
-	bodyIdleJanitor.remove(c)
+	c.janitor.remove(c)
 	return c.conn.Close()
 }
 
@@ -409,7 +459,7 @@ func (c *Connection) readResponseCode() (int, []byte, error) {
 // requestBody sends BODY and decodes the complete response through the
 // per-connection decoder: status line, yEnc payload, and ".\r\n" terminator
 // in one pass, with size and CRC verification. The returned Data buffer
-// comes from bodyBufPool and the caller owns it. On error the connection may
+// comes from the connection's body buffer pool and the caller owns it. On error the connection may
 // be mid-response and unusable; callers rely on the pool layer to discard
 // errored connections.
 func (c *Connection) requestBody(messageID string) (nntpyenc.BodyResult, error) {
@@ -446,7 +496,7 @@ func (c *Connection) readBodyBuffered(dst []byte, source BodyBuffer, pooled bool
 	res, err := c.nextBodyWithIdleDeadline(streamBodyTimeout)
 	if err != nil {
 		if pooled {
-			putBodyBuf(res.Data)
+			c.bufs.put(res.Data)
 		}
 		res.Data = nil
 		if res.StatusCode == 0 {
@@ -461,7 +511,7 @@ func (c *Connection) readBodyBuffered(dst []byte, source BodyBuffer, pooled bool
 	}
 	if res.StatusCode != codeBodyFollows {
 		if pooled {
-			putBodyBuf(res.Data)
+			c.bufs.put(res.Data)
 		}
 		res.Data = nil
 		return res, classifyNNTPError(res.StatusCode, res.Message)
@@ -484,7 +534,7 @@ func (c *Connection) nextBodyBuffer() []byte {
 		// scratch must never escape as a retained decoded result.
 		return []byte{}
 	}
-	return getBodyBuf()
+	return c.bufs.get()
 }
 
 func metadataFromResult(meta nntpyenc.DecoderMeta) *YencMetadata {
@@ -629,7 +679,7 @@ func (c *Connection) readPipelinedBody(dest BodyDestination) (DecodedBodyResult,
 	if writeErr == nil && n != len(res.Data) {
 		writeErr = io.ErrShortWrite
 	}
-	putBodyBuf(res.Data)
+	c.bufs.put(res.Data)
 	return DecodedBodyResult{Bytes: int64(n), Error: writeErr}, res.StatusCode
 }
 
@@ -661,7 +711,7 @@ func (c *Connection) writePipeline(command string, messageIDs []string, skip fun
 // escapes to the caller and is not recycled.
 func (c *Connection) GetDecodedBodyWithMetadata(messageID string) ([]byte, *YencMetadata, error) {
 	// The result escapes to a long-lived caller, so it must not take a 1 MiB
-	// scratch buffer out of bodyBufPool permanently. Let rapidyenc allocate
+	// scratch buffer out of the body buffer pool permanently. Let rapidyenc allocate
 	// storage sized for this article, just as DecodeBodyInto does when called
 	// with an empty destination.
 	res, err := c.requestBodyBuffered(messageID, nil, nil, false)
@@ -681,7 +731,7 @@ func (c *Connection) StreamBody(messageID string, w io.Writer) (int64, error) {
 		return 0, err
 	}
 	n, err := w.Write(res.Data)
-	putBodyBuf(res.Data)
+	c.bufs.put(res.Data)
 	return int64(n), err
 }
 

@@ -147,8 +147,8 @@ func TestDecodeBodyWithBufferNilSourceStaysCallerOwned(t *testing.T) {
 	if !bytes.Equal(data, payload) {
 		t.Errorf("decoded %d bytes, want the exact payload", len(data))
 	}
-	pooled := getBodyBuf()
-	defer putBodyBuf(pooled)
+	pooled := c.bufs.get()
+	defer c.bufs.put(pooled)
 	if cap(data) != 0 && backing(data) == backing(pooled) {
 		t.Error("decoded result aliases connection-pooled storage")
 	}

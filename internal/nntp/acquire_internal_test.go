@@ -71,7 +71,7 @@ func TestWaitForConnectionUnblocksOnRelease(t *testing.T) {
 
 	// The fictitious user returns a healthy connection to the pool.
 	pp.mu.Lock()
-	pp.conns = append(pp.conns, acquireConnectionEntry(conn, pp.config, time.Now()))
+	pp.conns = append(pp.conns, c.acquireConnectionEntry(conn, pp.config, time.Now()))
 	pp.mu.Unlock()
 	c.releaseSlot(pp)
 
@@ -186,20 +186,22 @@ func TestBodyJanitorClosesStalledConn(t *testing.T) {
 	stalledConn := newPipeConnection(t, true)
 	idleConn := newPipeConnection(t, true)
 
-	bodyIdleJanitor.add(stalledConn)
-	bodyIdleJanitor.add(idleConn)
-	defer bodyIdleJanitor.remove(stalledConn)
-	defer bodyIdleJanitor.remove(idleConn)
+	janitor := newBodyJanitor()
+	t.Cleanup(janitor.close)
+	janitor.add(stalledConn)
+	janitor.add(idleConn)
+	defer janitor.remove(stalledConn)
+	defer janitor.remove(idleConn)
 
 	// Armed with a tiny idle deadline and stale progress.
 	stalledConn.idleNS.Store(int64(time.Millisecond))
-	stalledConn.lastProgressNS.Store(nanotimeNow() - int64(time.Second))
+	stalledConn.lastProgressNS.Store(stalledConn.clock.now() - int64(time.Second))
 	// Disarmed (no body copy in flight) — must be left alone regardless of
 	// how old its progress mark is.
 	idleConn.idleNS.Store(0)
-	idleConn.lastProgressNS.Store(nanotimeNow() - int64(time.Hour))
+	idleConn.lastProgressNS.Store(idleConn.clock.now() - int64(time.Hour))
 
-	bodyIdleJanitor.sweep()
+	janitor.sweep()
 
 	// The stalled connection's socket must be closed (a read fails
 	// immediately instead of blocking).
