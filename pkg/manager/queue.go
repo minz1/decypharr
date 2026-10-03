@@ -129,7 +129,11 @@ func newQueue(
 
 	if removeStalledAfterStr != "" {
 		removeStalledAfter, err := utils.ParseDuration(removeStalledAfterStr)
-		if err == nil {
+		switch {
+		case err != nil:
+			log.Warn().Err(err).Str("remove_stalled_after", removeStalledAfterStr).
+				Msg("Invalid remove_stalled_after; stalled entries are kept")
+		case removeStalledAfter > 0:
 			q.removeStalledAfter = removeStalledAfter
 		}
 	}
@@ -203,7 +207,12 @@ func (q *Queue) DeleteWhere(
 	)
 }
 
+// DeleteStalled removes entries that made no progress for removeStalledAfter.
+// Without a valid positive duration it removes nothing.
 func (q *Queue) DeleteStalled() error {
+	if q.removeStalledAfter <= 0 {
+		return nil
+	}
 	cutoff := time.Now().Add(-q.removeStalledAfter)
 	return q.storage.DeleteWhereQueued(func(t *storage.Entry) bool {
 		if !t.AddedOn.Before(cutoff) {
