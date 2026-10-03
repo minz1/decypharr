@@ -133,3 +133,48 @@ func TestConfigHandlersUseSnapshots(t *testing.T) {
 		t.Fatal("live URL update restarted services")
 	}
 }
+
+// List items merge by name, not by index: an item keeps its own omitted
+// fields, never those of the item that used to sit at its index. Removing
+// the first debrid used to hand its API key to the one that moved up.
+func TestMergeConfigUpdateMatchesListItemsByName(t *testing.T) {
+	t.Parallel()
+	current := config.Config{
+		Debrids: []config.Debrid{
+			{Name: "realdebrid", APIKey: "rd-key", Workers: 4},
+			{Name: "torbox", APIKey: "tb-key", Workers: 8, DownloadAPIKeys: []string{"a", "b"}},
+		},
+		Mount: config.Mount{Type: config.MountTypeDFS, MountPath: "/mnt/decypharr"},
+		Usenet: config.Usenet{Providers: []config.UsenetProvider{
+			{Host: "news.a", Username: "a"},
+			{Host: "news.b", Username: "b", TLSServerName: "b.example"},
+		}},
+	}
+
+	body := `{"debrids":[{"name":"torbox","download_api_keys":["c"]},{"name":"alldebrid","api_key":"ad-key"}],` +
+		`"mount":{"type":"rclone"},"usenet":{"providers":[{"host":"news.b","username":"b2"}]}}`
+	merged, err := mergeConfigUpdate(&current, strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("merge config update: %v", err)
+	}
+	want := []config.Debrid{
+		{Name: "torbox", APIKey: "tb-key", Workers: 8, DownloadAPIKeys: []string{"c"}},
+		{Name: "alldebrid", APIKey: "ad-key"},
+	}
+	if !reflect.DeepEqual(merged.Debrids, want) {
+		t.Fatalf("debrids = %+v, want %+v", merged.Debrids, want)
+	}
+	if merged.Mount.MountPath != current.Mount.MountPath || merged.Mount.Type != config.MountTypeRclone {
+		t.Fatalf("mount = %#v, want the type updated and the path kept", merged.Mount)
+	}
+	// Providers have no name; they match by host. The UI does not send
+	// tls_server_name, so it must survive a save.
+	wantProviders := []config.UsenetProvider{{Host: "news.b", Username: "b2", TLSServerName: "b.example"}}
+	if !reflect.DeepEqual(merged.Usenet.Providers, wantProviders) {
+		t.Fatalf("providers = %+v, want %+v", merged.Usenet.Providers, wantProviders)
+	}
+	if current.Debrids[0].APIKey != "rd-key" ||
+		!reflect.DeepEqual(current.Debrids[1].DownloadAPIKeys, []string{"a", "b"}) {
+		t.Fatal("merge changed the current config")
+	}
+}
