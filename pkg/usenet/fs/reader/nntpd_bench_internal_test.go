@@ -188,11 +188,7 @@ func BenchmarkConfiguredBodyPipelineDepth(b *testing.B) {
 				}
 				b.StartTimer()
 
-				for off := int64(0); off < fileSize; off += int64(len(buf)) {
-					if _, readAtErr := sr.ReadAt(buf[:min(int64(len(buf)), fileSize-off)], off); readAtErr != nil {
-						b.Fatal(readAtErr)
-					}
-				}
+				readSequential(b, sr, buf, fileSize)
 
 				b.StopTimer()
 				if closeErr := sr.Close(); closeErr != nil {
@@ -241,48 +237,66 @@ func BenchmarkSeekLatency(b *testing.B) {
 		b.Run(fmt.Sprintf("rtt%dms", rtt/time.Millisecond), func(b *testing.B) {
 			for _, mode := range benchModes() {
 				b.Run(mode.name, func(b *testing.B) {
-					client, segs := newBenchStack(b, nntpd.Config{RTT: rtt})
-					buf := make([]byte, 64*1024)
-
-					var durations []time.Duration
-					var sr *StreamingReader
-					visited := benchSegs // force a fresh reader on first iteration
-
-					b.ReportAllocs()
-					b.ResetTimer()
-					for i := range b.N {
-						if visited == benchSegs {
-							b.StopTimer()
-							if sr != nil {
-								_ = sr.Close()
-							}
-							sr = newBenchReader(b, client, segs, mode.memory, b.TempDir())
-							visited = 0
-							b.StartTimer()
-						}
-						seg := benchSegs - 1 - (i % benchSegs)
-						start := time.Now()
-						if _, err := sr.ReadAt(buf, int64(seg)*benchSegSize); err != nil {
-							b.Fatal(err)
-						}
-						durations = append(durations, time.Since(start))
-						visited++
-					}
-					b.StopTimer()
-					if sr != nil {
-						_ = sr.Close()
-					}
-
-					slices.Sort(durations)
-					if len(durations) > 0 {
-						p50 := durations[len(durations)/2]
-						p99 := durations[len(durations)*99/100]
-						b.ReportMetric(float64(p50.Microseconds())/1000, "p50-ms")
-						b.ReportMetric(float64(p99.Microseconds())/1000, "p99-ms")
-					}
+					benchmarkSeekLatency(b, rtt, mode.memory)
 				})
 			}
 		})
+	}
+}
+
+func benchmarkSeekLatency(b *testing.B, rtt time.Duration, memory bool) {
+	client, segs := newBenchStack(b, nntpd.Config{RTT: rtt})
+	buf := make([]byte, 64*1024)
+
+	var durations []time.Duration
+	var sr *StreamingReader
+	visited := benchSegs // force a fresh reader on first iteration
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := range b.N {
+		if visited == benchSegs {
+			b.StopTimer()
+			if sr != nil {
+				_ = sr.Close()
+			}
+			sr = newBenchReader(b, client, segs, memory, b.TempDir())
+			visited = 0
+			b.StartTimer()
+		}
+		seg := benchSegs - 1 - (i % benchSegs)
+		start := time.Now()
+		if _, err := sr.ReadAt(buf, int64(seg)*benchSegSize); err != nil {
+			b.Fatal(err)
+		}
+		durations = append(durations, time.Since(start))
+		visited++
+	}
+	b.StopTimer()
+	if sr != nil {
+		_ = sr.Close()
+	}
+	reportPercentiles(b, durations)
+}
+
+// reportPercentiles reports p50/p99 of durations in milliseconds.
+func reportPercentiles(b *testing.B, durations []time.Duration) {
+	if len(durations) == 0 {
+		return
+	}
+	slices.Sort(durations)
+	p50 := durations[len(durations)/2]
+	p99 := durations[len(durations)*99/100]
+	b.ReportMetric(float64(p50.Microseconds())/1000, "p50-ms")
+	b.ReportMetric(float64(p99.Microseconds())/1000, "p99-ms")
+}
+
+// readSequential reads the whole file through buf.
+func readSequential(b *testing.B, sr *StreamingReader, buf []byte, fileSize int64) {
+	for off := int64(0); off < fileSize; off += int64(len(buf)) {
+		if _, err := sr.ReadAt(buf[:min(int64(len(buf)), fileSize-off)], off); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 
