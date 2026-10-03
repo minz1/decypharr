@@ -92,7 +92,7 @@ func (r *Service) probeTorrentFileByUnrestrict(
 		r.hearsay.ObserveTorrent(client.Config().Provider, file.InfoHash, true)
 		return result
 	}
-	if err == nil || errors.Is(err, debridTypes.EmptyDownloadLinkError) ||
+	if err == nil || errors.Is(err, debridTypes.ErrEmptyDownloadLink) ||
 		errors.Is(err, customerror.ErrHosterUnavailable) {
 		result.broken = true
 		if errors.Is(err, customerror.ErrHosterUnavailable) {

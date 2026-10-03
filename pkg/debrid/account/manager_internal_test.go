@@ -92,7 +92,7 @@ func TestInvalidFetchedLinkIsNotCached(t *testing.T) {
 		}
 		return dl, nil
 	}
-	if _, err := acc.GetDownloadLink(t.Context(), "id", file, fetcher); !errors.Is(err, types.EmptyDownloadLinkError) {
+	if _, err := acc.GetDownloadLink(t.Context(), "id", file, fetcher); !errors.Is(err, types.ErrEmptyDownloadLink) {
 		t.Fatalf("first fetch error = %v, want empty link", err)
 	}
 	dl, err := acc.GetDownloadLink(t.Context(), "id", file, fetcher)
