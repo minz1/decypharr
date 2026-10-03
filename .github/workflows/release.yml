@@ -12,7 +12,6 @@ permissions:
 env:
   REGISTRY_GHCR: ghcr.io/sirrobot01/decypharr
   REGISTRY_HUB: docker.io/cy01/blackhole
-  LDFLAGS_PKG: github.com/sirrobot01/decypharr/pkg/version
 
 jobs:
   # Determine release channel from tag
@@ -78,8 +77,10 @@ jobs:
           CHANNEL: ${{ needs.prepare.outputs.channel }}
         run: |
           mkdir -p dist
+          # Stamp the release into the embedded pkg/version/release.txt.
+          printf '%s %s\n' "${VERSION}" "${CHANNEL}" > pkg/version/release.txt
           go build -trimpath \
-            -ldflags="-s -w -X ${LDFLAGS_PKG}.Version=${VERSION} -X ${LDFLAGS_PKG}.Channel=${CHANNEL}" \
+            -ldflags="-s -w" \
             -o dist/decypharr
 
       - name: Package
@@ -116,8 +117,10 @@ jobs:
           CHANNEL: ${{ needs.prepare.outputs.channel }}
         run: |
           mkdir -p dist
+          # Stamp the release into the embedded pkg/version/release.txt.
+          printf '%s %s\n' "${VERSION}" "${CHANNEL}" > pkg/version/release.txt
           go build -trimpath \
-            -ldflags="-s -w -X ${LDFLAGS_PKG}.Version=${VERSION} -X ${LDFLAGS_PKG}.Channel=${CHANNEL}" \
+            -ldflags="-s -w" \
             -o dist/decypharr.exe
 
       - name: Package
@@ -162,8 +165,10 @@ jobs:
           CHANNEL: ${{ needs.prepare.outputs.channel }}
         run: |
           mkdir -p dist
+          # Stamp the release into the embedded pkg/version/release.txt.
+          printf '%s %s\n' "${VERSION}" "${CHANNEL}" > pkg/version/release.txt
           go build -trimpath \
-            -ldflags="-s -w -X ${LDFLAGS_PKG}.Version=${VERSION} -X ${LDFLAGS_PKG}.Channel=${CHANNEL}" \
+            -ldflags="-s -w" \
             -o dist/decypharr
 
       - name: Package
