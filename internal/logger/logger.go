@@ -21,7 +21,6 @@ const (
 )
 
 // defaultLogger is the process-wide logger returned by Default.
-
 var defaultLogger = sync.OnceValue(func() zerolog.Logger { return New("decypharr") })
 
 // sharedRotatingLogFile returns the process-wide lumberjack writer. All
