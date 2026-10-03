@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/logger"
@@ -17,14 +18,17 @@ const (
 )
 
 type Handler struct {
+	config  *config.Store
 	logger  *logger.RateLimitedLogger
 	manager *manager.Manager
 }
 
-func NewHandler(mgr *manager.Manager) *Handler {
-	log := logger.NewRateLimitedLogger(logger.WithLogger(logger.New("webdav")))
+// NewHandler builds the WebDAV and stream handlers. Auth settings are read
+// live from cfg.
+func NewHandler(mgr *manager.Manager, cfg *config.Store, log zerolog.Logger) *Handler {
 	h := &Handler{
-		logger:  log,
+		config:  cfg,
+		logger:  logger.NewRateLimitedLogger(logger.WithLogger(log)),
 		manager: mgr,
 	}
 	return h
@@ -68,7 +72,7 @@ func (h *Handler) Routes() chi.Router {
 }
 
 func (h *Handler) IsDisabled() bool {
-	cfg := config.Get()
+	cfg := h.config.Get()
 	return cfg.DisableWebDav
 }
 
@@ -156,14 +160,14 @@ func (h *Handler) commonMiddleware(next http.Handler) http.Handler {
 func (h *Handler) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Read the auth toggles live so changes apply without a restart.
-		cfg := config.Get()
+		cfg := h.config.Get()
 		if !cfg.UseAuth || !cfg.EnableWebdavAuth {
 			next.ServeHTTP(w, r)
 			return
 		}
 
 		username, password, ok := r.BasicAuth()
-		if !ok || !config.VerifyAuth(username, password) {
+		if !ok || !h.config.Get().VerifyAuth(username, password) {
 			w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return

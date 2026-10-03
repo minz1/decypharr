@@ -10,7 +10,6 @@ import (
 	"github.com/sirrobot01/facetfs/facetcache"
 
 	"github.com/sirrobot01/decypharr/internal/config"
-	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/pkg/manager"
 )
 
@@ -30,8 +29,7 @@ type Export struct {
 // NewExport builds the catalog filesystem and, unless disabled, the on-disk
 // read cache in front of it. ctx bounds the streaming sessions the cache
 // opens, so cancelling it unwinds them.
-func NewExport(ctx context.Context, mgr *manager.Manager, cfg config.ShareCache) (*Export, error) {
-	log := logger.New("share")
+func NewExport(ctx context.Context, mgr *manager.Manager, cfg config.ShareCache, log zerolog.Logger) (*Export, error) {
 	streams := &streamer{ctx: ctx, mgr: mgr}
 	catalog := newFilesystem(mgr, streams.open)
 

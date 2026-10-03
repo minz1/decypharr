@@ -10,6 +10,9 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/rs/zerolog"
+
+	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 )
 
@@ -199,7 +202,7 @@ func TestReconcileBuildsIndexFromSymlinks(t *testing.T) {
 	defer server.Close()
 
 	instance := arr.Arr{Name: "radarr", Host: server.URL, Token: "secret", Type: arr.Radarr}
-	arrs := arr.New()
+	arrs := arr.New(config.NewStore(&config.Config{}), zerolog.Nop())
 	arrs.AddOrUpdate(instance)
 	writer := new(recordingBindingWriter)
 	managed := []ManagedFile{{
@@ -470,7 +473,7 @@ func TestReconcileTargetedReadsOnlyTheEntrysMovie(t *testing.T) {
 	defer server.Close()
 
 	instance := arr.Arr{Name: "radarr", Host: server.URL, Token: "secret", Type: arr.Radarr}
-	arrs := arr.New()
+	arrs := arr.New(config.NewStore(&config.Config{}), zerolog.Nop())
 	arrs.AddOrUpdate(instance)
 	writer := new(recordingBindingWriter)
 	managed := []ManagedFile{{
@@ -521,7 +524,7 @@ func TestReconcileTargetedNeverWidensToTheWholeLibrary(t *testing.T) {
 	defer server.Close()
 
 	instance := arr.Arr{Name: "radarr", Host: server.URL, Token: "secret", Type: arr.Radarr}
-	arrs := arr.New()
+	arrs := arr.New(config.NewStore(&config.Config{}), zerolog.Nop())
 	arrs.AddOrUpdate(instance)
 	managed := []ManagedFile{{
 		EntryID:     "entry",
@@ -557,7 +560,7 @@ func TestExhaustedTargetedRequestsCoalesceArrRefresh(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
-	indexer := NewIndexer(nil, nil, nil, "")
+	indexer := NewIndexer(nil, nil, nil, "", zerolog.Nop())
 	indexer.ctx = ctx
 
 	finalAttempt := targetedIndexAttempts
@@ -577,7 +580,7 @@ func TestExhaustedTargetedRequestsCoalesceArrRefresh(t *testing.T) {
 
 func TestRefreshCoverageSkipsOnlyOlderTargetedRequests(t *testing.T) {
 	t.Parallel()
-	indexer := NewIndexer(nil, nil, nil, "")
+	indexer := NewIndexer(nil, nil, nil, "", zerolog.Nop())
 	indexer.markCovered("radarr", 10)
 
 	if !indexer.coveredByRefresh(indexRequest{arrName: "radarr", entryID: "old", version: 10}) {

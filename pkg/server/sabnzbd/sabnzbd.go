@@ -7,7 +7,6 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
-	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/manager"
 )
@@ -19,14 +18,15 @@ type SABnzbd struct {
 	manager           *manager.Manager
 	defaultCategories []string
 	config            *Config
+	settings          *config.Store // the application configuration
 }
 
 // defaultRefreshInterval applies when the configured one does not parse.
 const defaultRefreshInterval = 30 * time.Second
 
 // New builds the SABnzbd-compatible API over mgr.
-func New(manager *manager.Manager) *SABnzbd {
-	cfg := config.Get()
+func New(manager *manager.Manager, settings *config.Store, log zerolog.Logger) *SABnzbd {
+	cfg := settings.Get()
 	var defaultCategories []string
 	for _, cat := range cfg.Categories {
 		if cat != "" {
@@ -40,7 +40,8 @@ func New(manager *manager.Manager) *SABnzbd {
 	sb := &SABnzbd{
 		downloadFolder:    cfg.DownloadFolder,
 		refreshInterval:   refreshInterval,
-		logger:            logger.New("sabnzbd"),
+		logger:            log,
+		settings:          settings,
 		defaultCategories: defaultCategories,
 		manager:           manager,
 	}

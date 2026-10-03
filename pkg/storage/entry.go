@@ -27,7 +27,7 @@ func (s *Storage) AddOrUpdate(entry *Entry) error {
 		return fmt.Errorf("failed to marshal entry: %w", err)
 	}
 
-	if putErr := s.entries.Put(entry.InfoHash, data, entryPutOptions(entry)); putErr != nil {
+	if putErr := s.entries.Put(entry.InfoHash, data, s.entryPutOptions(entry)); putErr != nil {
 		return fmt.Errorf("save entry %q: %w", entry.InfoHash, putErr)
 	}
 	return s.updateEntryItem(entry)
@@ -113,7 +113,7 @@ func (s *Storage) Get(infohash string) (*Entry, error) {
 func (s *Storage) List(filter func(*Entry) bool) ([]*Entry, error) {
 	var entries []*Entry
 
-	err := s.entries.ForEach(func(key string, value []byte) error {
+	err := s.forEach(s.entries, func(key string, value []byte) error {
 		var pb EntryProto
 		if err := proto.Unmarshal(value, &pb); err != nil {
 			s.skipUndecodable("entry", key, err)
@@ -131,7 +131,7 @@ func (s *Storage) List(filter func(*Entry) bool) ([]*Entry, error) {
 
 // ForEach iterates over entries.
 func (s *Storage) ForEach(fn func(*Entry) error) error {
-	return s.entries.ForEach(func(key string, value []byte) error {
+	return s.forEach(s.entries, func(key string, value []byte) error {
 		var pb EntryProto
 		if err := proto.Unmarshal(value, &pb); err != nil {
 			s.skipUndecodable("entry", key, err)
@@ -152,7 +152,7 @@ func (s *Storage) ForEachBatch(batchSize int, fn func([]*Entry) error) error {
 	// fresh Entry (the one aliased field, Tags, is replaced by Reset->nil
 	// before the next Unmarshal, leaving the prior entry's slice untouched).
 	var pb EntryProto
-	err := s.entries.ForEach(func(key string, value []byte) error {
+	err := s.forEach(s.entries, func(key string, value []byte) error {
 		proto.Reset(&pb)
 		if err := proto.Unmarshal(value, &pb); err != nil {
 			s.skipUndecodable("entry", key, err)

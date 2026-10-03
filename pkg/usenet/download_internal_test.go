@@ -16,9 +16,7 @@ import (
 )
 
 func TestDownloadDecryptsEncryptedFiles(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	config.Reset()
-	t.Cleanup(config.Reset)
+	t.Parallel()
 
 	const segSize = 32 << 10
 	plain := nntpd.Pattern(0, 2*segSize)
@@ -56,7 +54,7 @@ func TestDownloadDecryptsEncryptedFiles(t *testing.T) {
 	host, port := srv.Addr()
 	client, err := nntp.NewClient(&config.Config{Usenet: config.Usenet{
 		Providers: []config.UsenetProvider{{Host: host, Port: port, MaxConnections: 4}},
-	}})
+	}}, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}

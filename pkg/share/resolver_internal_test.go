@@ -7,7 +7,8 @@ import (
 	"time"
 )
 
-func TestResolverAnswersLongPathsFromCatalog(t *testing.T) { //nolint:paralleltest // mutates the config singleton
+func TestResolverAnswersLongPathsFromCatalog(t *testing.T) {
+	t.Parallel()
 	mgr := testManager(t)
 	// A release-style name pushes every file path well past the long-handle
 	// threshold.
@@ -40,7 +41,8 @@ func TestResolverAnswersLongPathsFromCatalog(t *testing.T) { //nolint:parallelte
 	}
 }
 
-func TestResolverRateLimitsRebuilds(t *testing.T) { //nolint:paralleltest // mutates the config singleton
+func TestResolverRateLimitsRebuilds(t *testing.T) {
+	t.Parallel()
 	mgr := testManager(t)
 	r := newResolver(mgr)
 

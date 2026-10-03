@@ -137,11 +137,12 @@ func (r *Service) collectArrMediaCandidates(
 func (r *Service) managedArrFileIndex(arrName string) map[int64][]managedArrFile {
 	index := make(map[int64][]managedArrFile)
 	seen := make(map[string]struct{})
+	naming := r.folderNaming()
 	_ = r.storage.ForEach(func(entry *storage.Entry) error {
 		if entry == nil || !strings.EqualFold(strings.TrimSpace(entry.Category), strings.TrimSpace(arrName)) {
 			return nil
 		}
-		entryName := entry.GetFolder()
+		entryName := entry.GetFolder(naming)
 		for fileName, file := range entry.Files {
 			if entryName == "" || file == nil || file.Deleted || file.Size <= 0 {
 				continue

@@ -14,7 +14,6 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
-	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
@@ -113,12 +112,19 @@ type Queue struct {
 	storage            *storage.Storage
 	logger             zerolog.Logger
 	removeStalledAfter time.Duration
+	naming             func() config.WebDavFolderNaming
 }
 
-func newQueue(storage *storage.Storage, removeStalledAfterStr string) *Queue {
+func newQueue(
+	storage *storage.Storage,
+	removeStalledAfterStr string,
+	naming func() config.WebDavFolderNaming,
+	log zerolog.Logger,
+) *Queue {
 	q := &Queue{
 		storage: storage,
-		logger:  logger.New("queue"),
+		logger:  log,
+		naming:  naming,
 	}
 
 	if removeStalledAfterStr != "" {
@@ -151,7 +157,11 @@ func (q *Queue) deleteEntryFiles(entry *storage.Entry) error {
 			return fmt.Errorf("remove staged NZB %q: %w", entry.Magnet, err)
 		}
 	}
-	downloadedPath := entry.DownloadPath()
+	var naming config.WebDavFolderNaming
+	if q.naming != nil {
+		naming = q.naming()
+	}
+	downloadedPath := entry.DownloadPath(naming)
 	if downloadedPath == "" {
 		return nil
 	}

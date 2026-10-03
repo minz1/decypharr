@@ -17,12 +17,12 @@ const (
 	attributeAddedOn   = "added_on"
 )
 
-func entryPutOptions(entry *Entry) *appendstore.PutOptions {
+func (s *Storage) entryPutOptions(entry *Entry) *appendstore.PutOptions {
 	return &appendstore.PutOptions{Attributes: map[string]string{
 		attributeCategory:  entry.Category,
 		attributeProvider:  entry.ActiveProvider,
 		attributeStatus:    string(entry.Status),
-		attributeName:      entry.GetFolder(),
+		attributeName:      entry.GetFolder(s.folderNaming()),
 		attributeTotalSize: strconv.FormatInt(entry.Size, 10),
 		attributeProtocol:  string(entry.Protocol),
 		attributeBad:       strconv.FormatBool(entry.Bad),

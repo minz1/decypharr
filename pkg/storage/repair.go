@@ -109,7 +109,7 @@ func (s *Storage) GetRepairRun(id string) (*RepairRun, error) {
 // ListRepairRuns returns runs sorted newest-first.
 func (s *Storage) ListRepairRuns() ([]*RepairRun, error) {
 	runs := make([]*RepairRun, 0)
-	err := s.repairRuns.ForEach(func(key string, value []byte) error {
+	err := s.forEach(s.repairRuns, func(key string, value []byte) error {
 		var run RepairRun
 		if err := json.Unmarshal(value, &run); err != nil {
 			s.skipUndecodable("repair run", key, err)
@@ -309,7 +309,7 @@ func (s *Storage) GetEntryHealth(entryName string) (*EntryHealth, error) {
 }
 
 func (s *Storage) ForEachEntryHealth(fn func(*EntryHealth) error) error {
-	return s.repairState.ForEach(func(key string, value []byte) error {
+	return s.forEach(s.repairState, func(key string, value []byte) error {
 		var state EntryHealth
 		if err := json.Unmarshal(value, &state); err != nil {
 			s.skipUndecodable("entry health", key, err)

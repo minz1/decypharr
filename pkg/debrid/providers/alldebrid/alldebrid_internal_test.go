@@ -57,7 +57,7 @@ func TestMagnetsUnmarshalJSON(t *testing.T) {
 }
 
 func TestGetTorrentSelectsRequestedMagnetFromArray(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
+	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.URL.Query().Get("id"); got != "2" {
@@ -117,7 +117,7 @@ func TestAllDebridStatusClassification(t *testing.T) {
 }
 
 func TestCheckStatusRestartsStatusSeven(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
+	t.Parallel()
 
 	var statusChecks atomic.Int32
 	var restartCalls atomic.Int32
@@ -169,7 +169,7 @@ func TestCheckStatusRestartsStatusSeven(t *testing.T) {
 }
 
 func TestCheckStatusBoundsStatusSevenRetries(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
+	t.Parallel()
 
 	var statusChecks atomic.Int32
 	var restartCalls atomic.Int32
@@ -208,7 +208,7 @@ func TestCheckStatusBoundsStatusSevenRetries(t *testing.T) {
 }
 
 func TestCheckStatusDoesNotRestartTerminalStatus(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
+	t.Parallel()
 
 	var restartCalls atomic.Int32
 	mux := http.NewServeMux()

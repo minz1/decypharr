@@ -9,22 +9,21 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/arr/reacquire"
+	"github.com/sirrobot01/decypharr/pkg/manager/managertest"
 )
 
-//nolint:paralleltest // mutates the process-wide config singleton
 func TestArrReacquireRoutesRequireAuthentication(t *testing.T) {
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
-
-	cfg := config.Get()
-	cfg.DownloadFolder = t.TempDir()
-	cfg.Debrids = []config.Debrid{{Name: "realdebrid", APIKey: "key"}}
-	if err := cfg.SaveAuth(&config.Auth{APIToken: "token", TokenOnly: true}); err != nil {
+	t.Parallel()
+	downloads := t.TempDir()
+	store := managertest.Store(t, func(cfg *config.Config) {
+		cfg.DownloadFolder = downloads
+		cfg.Debrids = []config.Debrid{{Name: "realdebrid", APIKey: "key"}}
+	})
+	if err := store.Get().SaveAuth(&config.Auth{APIToken: "token", TokenOnly: true}); err != nil {
 		t.Fatal(err)
 	}
 
-	server := newTestServer(t)
+	server := newTestServer(t, store)
 	server.cookie = sessions.NewCookieStore([]byte("test-secret"))
 	handler := server.WebRoutes()
 	tests := []struct {
@@ -42,6 +41,7 @@ func TestArrReacquireRoutesRequireAuthentication(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.method+" "+test.path, func(t *testing.T) {
+			t.Parallel()
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, httptest.NewRequest(test.method, test.path, nil))
 			if response.Code != http.StatusUnauthorized {

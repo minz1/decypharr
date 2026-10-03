@@ -21,7 +21,6 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
-	"github.com/sirrobot01/decypharr/internal/logger"
 	nntpyenc "github.com/sirrobot01/decypharr/internal/nntp/yenc"
 	"github.com/sirrobot01/decypharr/internal/utils"
 )
@@ -270,7 +269,7 @@ func buildPools(providers []config.UsenetProvider) (map[string]*ProviderPool, []
 }
 
 // NewClient creates a new connection manager.
-func NewClient(cfg *config.Config) (*Client, error) {
+func NewClient(cfg *config.Config, log zerolog.Logger) (*Client, error) {
 	// Clone: sorting and normalizing below must not mutate the shared config,
 	// which other goroutines read concurrently.
 	providers := slices.Clone(cfg.Usenet.Providers)
@@ -299,7 +298,7 @@ func NewClient(cfg *config.Config) (*Client, error) {
 		orderedPools:     orderedPools,
 		providers:        providers,
 		retries:          cfg.Retries,
-		logger:           logger.New("nntp-client"),
+		logger:           log,
 		speedTestResults: xsync.NewMap[string, SpeedTestResult](),
 		sockReadBuf:      parseSockBuf(cfg.Usenet.SocketReadBuffer),
 		sockWriteBuf:     parseSockBuf(cfg.Usenet.SocketWriteBuffer),

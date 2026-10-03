@@ -4,6 +4,8 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/nntp"
 )
@@ -17,7 +19,7 @@ func TestNewClientLeavesConfigProvidersUntouched(t *testing.T) {
 		{Host: "a.example", Port: 563, MaxConnections: 1, Priority: 1},
 	}
 	want := slices.Clone(cfg.Usenet.Providers)
-	c, err := nntp.NewClient(cfg)
+	c, err := nntp.NewClient(cfg, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -13,8 +13,6 @@ import (
 	"strings"
 
 	"github.com/anacrolix/torrent/metainfo"
-
-	"github.com/sirrobot01/decypharr/internal/logger"
 )
 
 var (
@@ -38,38 +36,16 @@ func (m *Magnet) IsTorrent() bool {
 }
 
 // stripTrackersFromMagnet removes trackers from a magnet and returns a modified copy.
-func stripTrackersFromMagnet(mi metainfo.Magnet, fileType string) metainfo.Magnet {
-	originalTrackerCount := len(mi.Trackers)
-	if len(mi.Trackers) > 0 {
-		log := logger.Default()
-		mi.Trackers = nil
-		log.Printf("Removed %d tracker URLs from %s", originalTrackerCount, fileType)
-	}
+func stripTrackersFromMagnet(mi metainfo.Magnet) metainfo.Magnet {
+	mi.Trackers = nil
 	return mi
 }
 
 func GetMagnetFromFile(file io.Reader, filePath string, rmTrackerUrls bool) (*Magnet, error) {
-	var (
-		m         *Magnet
-		err       error
-		isTorrent = filepath.Ext(filePath) == ".torrent"
-	)
-	if isTorrent {
-		torrentData, readAllErr := io.ReadAll(file)
-		if readAllErr != nil {
-			return nil, readAllErr
-		}
-		m, readAllErr = GetMagnetFromBytes(torrentData, rmTrackerUrls)
-		if readAllErr != nil {
-			return nil, readAllErr
-		}
-	} else {
-		// .magnet file
-		magnetLink := ReadMagnetFile(file)
-		m, err = GetMagnetInfo(magnetLink, rmTrackerUrls)
-		if err != nil {
-			return nil, err
-		}
+	isTorrent := filepath.Ext(filePath) == ".torrent"
+	m, err := readMagnetUpload(file, isTorrent, rmTrackerUrls)
+	if err != nil {
+		return nil, err
 	}
 	uploadedName := strings.TrimSuffix(filepath.Base(filePath), filepath.Ext(filePath))
 	if isTorrent {
@@ -114,7 +90,7 @@ func GetMagnetFromBytes(torrentData []byte, rmTrackerUrls bool) (*Magnet, error)
 		Params:      url.Values{"ws": mi.UrlList},
 	}
 	if rmTrackerUrls {
-		magnetMeta = stripTrackersFromMagnet(magnetMeta, "torrent file")
+		magnetMeta = stripTrackersFromMagnet(magnetMeta)
 	}
 	magnet := &Magnet{
 		InfoHash: infoHash,
@@ -126,21 +102,36 @@ func GetMagnetFromBytes(torrentData []byte, rmTrackerUrls bool) (*Magnet, error)
 	return magnet, nil
 }
 
-func ReadMagnetFile(file io.Reader) string {
+// readMagnetUpload decodes an uploaded .torrent file, or the link in a
+// .magnet file.
+func readMagnetUpload(file io.Reader, isTorrent, rmTrackerUrls bool) (*Magnet, error) {
+	if isTorrent {
+		torrentData, err := io.ReadAll(file)
+		if err != nil {
+			return nil, err
+		}
+		return GetMagnetFromBytes(torrentData, rmTrackerUrls)
+	}
+	magnetLink, err := ReadMagnetFile(file)
+	if err != nil {
+		return nil, err
+	}
+	return GetMagnetInfo(magnetLink, rmTrackerUrls)
+}
+
+// ReadMagnetFile returns the first non-empty line of a .magnet file.
+func ReadMagnetFile(file io.Reader) (string, error) {
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		content := scanner.Text()
 		if content != "" {
-			return content
+			return content, nil
 		}
 	}
-
-	// Check for any errors during scanning
 	if err := scanner.Err(); err != nil {
-		log := logger.Default()
-		log.Println("Error reading file:", err)
+		return "", fmt.Errorf("read magnet file: %w", err)
 	}
-	return ""
+	return "", nil
 }
 
 // OpenMagnetHTTPURL downloads a .torrent file and converts it to a Magnet.
@@ -169,7 +160,7 @@ func GetMagnetInfo(magnetLink string, rmTrackerUrls bool) (*Magnet, error) {
 
 	// Strip all announce URLs if requested
 	if rmTrackerUrls {
-		mi = stripTrackersFromMagnet(mi, "magnet link")
+		mi = stripTrackersFromMagnet(mi)
 	}
 
 	btih := mi.InfoHash.HexString()

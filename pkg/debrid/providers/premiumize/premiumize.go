@@ -24,7 +24,6 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
-	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/internal/request"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/debrid/account"
@@ -55,9 +54,12 @@ type Premiumize struct {
 	validateFileAllowed   func(string, int64) error
 }
 
-func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter) (*Premiumize, error) {
-	cfg := config.Get()
-	_log := logger.New(dc.Name)
+func New(
+	dc config.Debrid,
+	ratelimits map[string]ratelimit.Limiter,
+	options types.ProviderOptions,
+) (*Premiumize, error) {
+	_log := options.Logger
 	headers := map[string]string{
 		"Authorization": fmt.Sprintf("Bearer %s", dc.APIKey),
 	}
@@ -75,7 +77,7 @@ func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter) (*Premiumize
 	opts := []request.ClientOption{
 		request.WithHeaders(headers),
 		request.WithLogger(_log),
-		request.WithMaxRetries(cfg.Retries),
+		request.WithMaxRetries(options.Retries),
 		request.WithRateLimiter(ratelimits["main"]),
 		request.WithRetryableStatus(
 			http.StatusTooManyRequests,
@@ -92,11 +94,11 @@ func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter) (*Premiumize
 		Host:                  defaultHost,
 		APIKey:                dc.APIKey,
 		client:                request.New(opts...),
-		accountsManager:       account.NewManager(dc, ratelimits["download"], _log),
+		accountsManager:       account.NewManager(dc, options.Retries, ratelimits["download"], _log),
 		autoExpiresLinksAfter: autoExpiresLinksAfter,
 		logger:                _log,
 		config:                dc,
-		validateFileAllowed:   func(name string, size int64) error { return config.Get().ValidateFileAllowed(name, size) },
+		validateFileAllowed:   options.ValidateFile,
 	}, nil
 }
 

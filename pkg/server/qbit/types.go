@@ -274,12 +274,11 @@ const defaultPreferencesJSON = `{
 	"web_ui_session_timeout": 3600
 }`
 
-func getAppPreferences() *AppPreferences {
+func getAppPreferences(maxActiveDownloads int) *AppPreferences {
 	preferences := &AppPreferences{}
 	if err := json.Unmarshal([]byte(defaultPreferencesJSON), preferences); err != nil {
 		panic("qbit: invalid defaultPreferencesJSON: " + err.Error()) // constant input; a test covers it
 	}
-	maxActiveDownloads := config.Get().MaxActiveDownloads
 	preferences.MaxActiveDownloads = maxActiveDownloads
 	preferences.MaxActiveTorrents = maxActiveDownloads
 	return preferences
@@ -328,12 +327,12 @@ type TorrentFile struct {
 const qbitInfiniteETA int64 = 8640000
 
 // ToQBitTorrent converts to QBitTorrent format for API compatibility.
-func convertToQBitTorrentTorrent(t *storage.Entry) Torrent {
+func convertToQBitTorrentTorrent(t *storage.Entry, naming config.WebDavFolderNaming) Torrent {
 	name := t.Name
 	contentPath := t.ContentPath
-	if config.Get().FolderNaming == config.WebDavUseArrSubmittedName {
-		name = t.GetFolder()
-		contentPath = t.DownloadPath()
+	if naming == config.WebDavUseArrSubmittedName {
+		name = t.GetFolder(naming)
+		contentPath = t.DownloadPath(naming)
 	}
 	amountLeft := max(int64(float64(t.Size)*(1-t.Progress)), 0)
 

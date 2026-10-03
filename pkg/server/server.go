@@ -47,6 +47,8 @@ const (
 )
 
 type Server struct {
+	config       *config.Store
+	logsDir      string
 	router       *chi.Mux
 	logger       zerolog.Logger
 	manager      *manager.Manager
@@ -58,14 +60,16 @@ type Server struct {
 	restartFunc  func()
 }
 
-func New(mgr *manager.Manager) *Server {
-	l := logger.New("http")
+// New builds the HTTP front end for one service generation. Settings that
+// apply without a restart are read live from store.
+func New(mgr *manager.Manager, store *config.Store, logs *logger.Factory) *Server {
+	l := logs.New("http")
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.StripSlashes)
 	r.Use(middleware.RedirectSlashes)
 
-	cfg := config.Get()
+	cfg := store.Get()
 
 	templates := template.Must(template.ParseFS(
 		content,
@@ -91,9 +95,11 @@ func New(mgr *manager.Manager) *Server {
 		SameSite: http.SameSiteLaxMode,
 	}
 
-	statsCollector := stats.New(mgr)
+	statsCollector := stats.New(mgr, store, logs.New("stats"))
 
 	s := &Server{
+		config:    store,
+		logsDir:   logger.Dir(cfg.Dir()),
 		logger:    l,
 		manager:   mgr,
 		stats:     statsCollector,
@@ -102,9 +108,9 @@ func New(mgr *manager.Manager) *Server {
 		urlBase:   cfg.URLBase,
 	}
 
-	qb := qbit.New(mgr)
-	sb := sabnzbd.New(mgr)
-	wd := webdav.NewHandler(mgr)
+	qb := qbit.New(mgr, store, logs.New("qbit"))
+	sb := sabnzbd.New(mgr, store, logs.New("sabnzbd"))
+	wd := webdav.NewHandler(mgr, store, logs.New("webdav"))
 
 	routes := make(map[string]http.Handler)
 	routes["/api/v2"] = qb.Routes()
@@ -166,7 +172,7 @@ func (s *Server) Restart() {
 }
 
 func (s *Server) Start(ctx context.Context) error {
-	cfg := config.Get()
+	cfg := s.config.Get()
 
 	// Start background stats collector
 	s.stats.Start(ctx)
@@ -191,7 +197,7 @@ func (s *Server) Start(ctx context.Context) error {
 }
 
 func (s *Server) getLogs(w http.ResponseWriter, _ *http.Request) {
-	logFile := filepath.Join(logger.GetLogPath(), "decypharr.log")
+	logFile := filepath.Join(s.logsDir, logger.FileName)
 
 	// Open and read the file
 	file, err := os.Open(logFile)
@@ -222,7 +228,7 @@ func (s *Server) getLogs(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) getRcloneLogs(w http.ResponseWriter, _ *http.Request) {
 	// Rclone logs resides in the same directory as the application logs
-	logFile := filepath.Join(logger.GetLogPath(), "rclone.log")
+	logFile := filepath.Join(s.logsDir, "rclone.log")
 	// Open and read the file
 	file, err := os.Open(logFile)
 	if err != nil {

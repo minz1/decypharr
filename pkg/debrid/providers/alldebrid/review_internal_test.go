@@ -16,8 +16,7 @@ import (
 // Links must carry the token of the account that unlocked them, or the
 // account manager cannot find the account to store or delete them.
 func TestFetchedLinkUsesAccountToken(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, `{"status":"success","data":{"link":"https://cdn.example.test/f","id":"x"}}`)
 	}))
@@ -28,6 +27,7 @@ func TestFetchedLinkUsesAccountToken(t *testing.T) {
 		config: config.Debrid{Name: "alldebrid"},
 		accountsManager: account.NewManager(
 			config.Debrid{Name: "alldebrid", DownloadAPIKeys: []string{"download-key"}},
+			0,
 			nil,
 			zerolog.Nop(),
 		),

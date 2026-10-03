@@ -75,7 +75,7 @@ func (o *addOptions) nzb(name string, content []byte) *manager.ImportRequest {
 }
 
 func (s *Server) parseAddOptions(r *http.Request) *addOptions {
-	cfg := config.Get()
+	cfg := s.config.Get()
 	arrName := r.FormValue("arr")
 	// A category with no configured Arr is a throwaway that only routes the
 	// download.

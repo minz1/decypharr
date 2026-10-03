@@ -34,26 +34,24 @@ func TestNeedsAuth(t *testing.T) {
 // The API token authenticates the HTTP API surfaces only. VerifyAuth backs
 // WebDAV, so it must keep rejecting the token no matter how it is presented.
 func TestVerifyTokenIsNotAPassword(t *testing.T) {
-	SetConfigPath(t.TempDir())
-	t.Cleanup(Reset)
-
-	c := Get()
+	t.Parallel()
+	c := New(t.TempDir())
 	c.UseAuth = true
 	if err := c.SaveAuth(&Auth{APIToken: "tok", TokenOnly: true}); err != nil {
 		t.Fatal(err)
 	}
 
-	if !VerifyToken("tok") {
+	if !c.VerifyToken("tok") {
 		t.Error("VerifyToken rejected the configured token")
 	}
 	for _, token := range []string{"", "wrong"} {
-		if VerifyToken(token) {
+		if c.VerifyToken(token) {
 			t.Errorf("VerifyToken(%q) accepted", token)
 		}
 	}
 
 	for _, cred := range [][2]string{{"", "tok"}, {"tok", "tok"}, {"admin", "tok"}} {
-		if VerifyAuth(cred[0], cred[1]) {
+		if c.VerifyAuth(cred[0], cred[1]) {
 			t.Errorf("VerifyAuth(%q, %q) accepted the API token", cred[0], cred[1])
 		}
 	}
@@ -62,17 +60,14 @@ func TestVerifyTokenIsNotAPassword(t *testing.T) {
 	if err := c.SaveAuth(&Auth{TokenOnly: true}); err != nil {
 		t.Fatal(err)
 	}
-	if VerifyToken("") || VerifyAuth("", "") {
+	if c.VerifyToken("") || c.VerifyAuth("", "") {
 		t.Error("an empty credential authenticated with no token configured")
 	}
 }
 
 func TestSetCredentials(t *testing.T) {
-	Reset()
-	SetConfigPath(t.TempDir())
-	t.Cleanup(Reset)
-
-	c := Get()
+	t.Parallel()
+	c := New(t.TempDir())
 	c.UseAuth = true
 	if err := c.SaveAuth(&Auth{APIToken: "tok", TokenOnly: true}); err != nil {
 		t.Fatal(err)
@@ -94,7 +89,7 @@ func TestSetCredentials(t *testing.T) {
 	if auth.APIToken != "tok" {
 		t.Errorf("APIToken = %q, want the existing token to be kept", auth.APIToken)
 	}
-	if !VerifyAuth("admin", "hunter2") {
+	if !c.VerifyAuth("admin", "hunter2") {
 		t.Error("the stored password does not verify")
 	}
 	if c.NeedsAuth() {

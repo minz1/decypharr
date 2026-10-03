@@ -54,7 +54,7 @@ func (h *Handler) StreamResponse(
 	}
 
 	owner := manager.RewindOwnerApplication
-	cfg := config.Get()
+	cfg := h.config.Get()
 	if cfg.Mount.Type == config.MountTypeRclone &&
 		strings.EqualFold(cfg.Mount.Rclone.VfsCacheMode, "full") &&
 		strings.HasPrefix(strings.ToLower(client), "rclone/") {

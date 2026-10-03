@@ -9,6 +9,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/pkg/manager"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/backend"
@@ -28,15 +29,17 @@ type Manager struct {
 	defaultBackendType backend.Type
 	config             *fuseconfig.FuseConfig
 	vfs                *vfs.Manager
+	logs               *logger.Factory
 }
 
-// NewManager creates a new  FUSE filesystem manager.
-func NewManager(manager *manager.Manager) *Manager {
-	fuseConfig := fuseconfig.ParseFuseConfig()
+// NewManager creates a new FUSE filesystem manager for the DFS settings in cfg.
+func NewManager(manager *manager.Manager, cfg *config.Config, logs *logger.Factory) *Manager {
+	fuseConfig := fuseconfig.Parse(cfg.Mount.DFS, cfg.Mount.MountPath, cfg.Retries)
 
 	m := &Manager{
 		manager:            manager,
-		logger:             logger.New("dfs"),
+		logs:               logs,
+		logger:             logs.New("dfs"),
 		defaultBackendType: backend.GetDefaultBackendType(),
 		config:             fuseConfig,
 	}
@@ -52,11 +55,11 @@ func (m *Manager) Start(ctx context.Context) error {
 		Str("backend", string(m.defaultBackendType)).
 		Msg("Starting DFS with backend")
 
-	vfsManager, err := vfs.NewManager(context.Background(), m.manager, m.config)
+	vfsManager, err := vfs.NewManager(context.Background(), m.manager, m.config, m.logs)
 	if err != nil {
 		return fmt.Errorf("failed to create VFS manager: %w", err)
 	}
-	bck, err := newBackend(m.defaultBackendType, vfsManager, m.config)
+	bck, err := newBackend(m.defaultBackendType, vfsManager, m.config, m.logs)
 	if err == nil {
 		err = bck.Mount(ctx)
 	}

@@ -17,19 +17,20 @@ import (
 
 func newTestReconciler(t *testing.T) *Reconciler {
 	t.Helper()
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	loaded, err := config.Load(t.TempDir(), config.MapEnv(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	strg, err := storage.NewStorage(filepath.Join(t.TempDir(), "db"))
+	strg, err := storage.NewStorage(filepath.Join(t.TempDir(), "db"), storage.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = strg.Close() })
 
-	m := NewReconciler(t.Context(), strg, nil, zerolog.Nop())
+	m := NewReconciler(t.Context(), config.NewStore(loaded), strg, nil, zerolog.Nop())
 
-	cfg := config.Get()
+	cfg := m.config.Get()
 	cfg.AppURL = "http://media.local:8282"
 	cfg.Strm.Enabled = true
 	cfg.Strm.Path = t.TempDir()
@@ -76,11 +77,10 @@ func mustRead(t *testing.T, path string) string {
 // Golden-tree: seed the export tree with current, stale, orphaned, and
 // foreign .strm files, then assert the sweep converges disk to the desired
 // state and leaves foreign files alone.
-//
-//nolint:paralleltest // resets the config singleton
 func TestStrmSweepGoldenTree(t *testing.T) {
+	t.Parallel()
 	m := newTestReconciler(t)
-	cfg := config.Get()
+	cfg := m.config.Get()
 
 	infohash := "aabbccddeeff00112233445566778899aabbccdd"
 	entry := addStrmTestEntry(t, m, infohash, "Movie.2023.1080p", "Movie.2023.1080p.mkv")
@@ -136,10 +136,10 @@ func TestStrmSweepGoldenTree(t *testing.T) {
 	}
 }
 
-//nolint:paralleltest // resets the config singleton
 func TestStrmSweepDisabled(t *testing.T) {
+	t.Parallel()
 	m := newTestReconciler(t)
-	config.Get().Strm.Enabled = false
+	m.config.Get().Strm.Enabled = false
 
 	if _, err := m.Sweep(context.Background()); err == nil {
 		t.Fatal("sweep must refuse to run while disabled")
@@ -147,18 +147,17 @@ func TestStrmSweepDisabled(t *testing.T) {
 }
 
 // A repair that renames a file (new file ID) must replace the old .
-//
-//nolint:paralleltest // resets the config singleton
 func TestStrmSyncEntryRemovesStaleAfterRename(t *testing.T) {
+	t.Parallel()
 	m := newTestReconciler(t)
-	cfg := config.Get()
+	cfg := m.config.Get()
 
 	infohash := "aabbccddeeff00112233445566778899aabbccdd"
 	entry := addStrmTestEntry(t, m, infohash, "Show.S01", "Show.S01E01.mkv")
 
 	rep := &Report{}
 	m.syncEntry(context.Background(), entry, rep)
-	oldPath := filepath.Join(cfg.Strm.Path, entry.GetFolder(), "Show.S01E01.strm")
+	oldPath := filepath.Join(cfg.Strm.Path, entry.GetFolder(cfg.FolderNaming), "Show.S01E01.strm")
 	if _, err := os.Stat(oldPath); err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +173,7 @@ func TestStrmSyncEntryRemovesStaleAfterRename(t *testing.T) {
 	if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
 		t.Error("stale .strm for renamed file not removed")
 	}
-	newPath := filepath.Join(cfg.Strm.Path, entry.GetFolder(), "Show.S01E01.Repack.strm")
+	newPath := filepath.Join(cfg.Strm.Path, entry.GetFolder(cfg.FolderNaming), "Show.S01E01.Repack.strm")
 	content := mustRead(t, newPath)
 	ih, id, ok := ParseURL(content)
 	if !ok || ih != infohash || id != entry.Files["Show.S01E01.Repack.mkv"].ID {
@@ -184,18 +183,17 @@ func TestStrmSyncEntryRemovesStaleAfterRename(t *testing.T) {
 
 // Deleting an entry removes its files from the export tree without waiting
 // for a sweep; the folder is pruned when empty.
-//
-//nolint:paralleltest // resets the config singleton
 func TestStrmRemoveEntry(t *testing.T) {
+	t.Parallel()
 	m := newTestReconciler(t)
-	cfg := config.Get()
+	cfg := m.config.Get()
 
 	infohash := "aabbccddeeff00112233445566778899aabbccdd"
 	entry := addStrmTestEntry(t, m, infohash, "Movie.2023", "Movie.2023.mkv")
 	rep := &Report{}
 	m.syncEntry(context.Background(), entry, rep)
 
-	dir := filepath.Join(cfg.Strm.Path, entry.GetFolder())
+	dir := filepath.Join(cfg.Strm.Path, entry.GetFolder(cfg.FolderNaming))
 	if _, err := os.Stat(filepath.Join(dir, "Movie.2023.strm")); err != nil {
 		t.Fatal(err)
 	}
@@ -212,10 +210,11 @@ func TestStrmRemoveEntry(t *testing.T) {
 	t.Fatalf("entry folder %s not removed", dir)
 }
 
-//nolint:paralleltest // subtests reset the config singleton
 func TestSidecarStreamIsCompleteBeforePublication(t *testing.T) {
+	t.Parallel()
 	for _, body := range []string{"complete", "short"} {
 		t.Run(body, func(t *testing.T) {
+			t.Parallel()
 			reconciler := newTestReconciler(t)
 			entry := &storage.Entry{InfoHash: "entry"}
 			file := &storage.File{Name: "movie.srt", Size: 8}

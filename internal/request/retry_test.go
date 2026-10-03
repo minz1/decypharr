@@ -7,17 +7,16 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/request"
 )
 
 const activeDownloadsLimit = `{"error":"active_downloads_limit"}`
 
 func TestRetryPolicyPreservesUnlistedProviderStatus(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 	for _, explicit := range []bool{false, true} {
 		t.Run(map[bool]string{false: "provider response", true: "configured retry"}[explicit], func(t *testing.T) {
+			t.Parallel()
 			checkRetryPolicy(t, explicit)
 		})
 	}

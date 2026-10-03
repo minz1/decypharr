@@ -11,6 +11,7 @@ import (
 	"github.com/rs/zerolog"
 	"golang.org/x/sync/singleflight"
 
+	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	debrid "github.com/sirrobot01/decypharr/pkg/debrid/common"
@@ -32,6 +33,7 @@ type EntrySaver func(entry *storage.Entry) error
 // Service handles download link fetching and validation.
 // It uses the account-level cache for storing links and only tracks validation state.
 type Service struct {
+	naming         func() config.WebDavFolderNaming
 	validated      *xsync.Map[string, error]
 	singleflight   singleflight.Group
 	clients        *xsync.Map[string, debrid.Client]
@@ -51,9 +53,11 @@ func New(
 	entrySaver EntrySaver,
 	httpClient *http.Client,
 	retries int,
+	naming func() config.WebDavFolderNaming,
 	logger zerolog.Logger,
 ) *Service {
 	return &Service{
+		naming:         naming,
 		validated:      xsync.NewMap[string, error](),
 		clients:        clients,
 		entryRefresher: entryRefresher,
@@ -63,6 +67,15 @@ func New(
 		retries:        retries,
 		logger:         logger,
 	}
+}
+
+// folder names entry in messages the way the mount does.
+func (s *Service) folder(entry *storage.Entry) string {
+	var naming config.WebDavFolderNaming
+	if s.naming != nil {
+		naming = s.naming()
+	}
+	return entry.GetFolder(naming)
 }
 
 // GetLink fetches and validates a download link for a file in an entry.
@@ -210,13 +223,13 @@ func (s *Service) handleBadLink(
 ) (types.DownloadLink, error) {
 	if errors.Is(err, customerror.HosterUnavailableError) {
 		if entry.Bad {
-			return types.DownloadLink{}, fmt.Errorf("can't repair %s since it's been marked as bad", entry.GetFolder())
+			return types.DownloadLink{}, fmt.Errorf("can't repair %s since it's been marked as bad", s.folder(entry))
 		}
 		if attempt >= MaxReinsertionAttempt {
 			s.markEntryBad(entry, dl.Filename, attempt, "hoster_unavailable")
 			return types.DownloadLink{}, fmt.Errorf(
 				"entry %s file %s still unresolvable after %d re-insertion attempts",
-				entry.GetFolder(),
+				s.folder(entry),
 				dl.Filename,
 				attempt,
 			)
@@ -229,7 +242,7 @@ func (s *Service) handleBadLink(
 			// Entry is still bad
 			return types.DownloadLink{}, fmt.Errorf(
 				"entry %s(%s) still bad after repair, un-repairable",
-				entry.GetFolder(),
+				s.folder(entry),
 				dl.Link,
 			)
 		}
@@ -324,13 +337,13 @@ func (s *Service) fetchLink(
 	if downloadLink.Empty() {
 		// Let's try to reinsert the entry
 		if entry.Bad {
-			return types.DownloadLink{}, fmt.Errorf("can't repair %s since it's been marked as bad", entry.GetFolder())
+			return types.DownloadLink{}, fmt.Errorf("can't repair %s since it's been marked as bad", s.folder(entry))
 		}
 		if attempt >= MaxReinsertionAttempt {
 			s.markEntryBad(entry, filename, attempt, "empty_link")
 			return types.DownloadLink{}, fmt.Errorf(
 				"entry %s file %s still resolves to an empty link after %d re-insertion attempts",
-				entry.GetFolder(),
+				s.folder(entry),
 				filename,
 				attempt,
 			)
@@ -343,7 +356,7 @@ func (s *Service) fetchLink(
 			// Entry is still bad
 			return types.DownloadLink{}, fmt.Errorf(
 				"entry %s(%s) still bad after repair, un-repairable",
-				entry.GetFolder(),
+				s.folder(entry),
 				downloadLink.Link,
 			)
 		}

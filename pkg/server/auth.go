@@ -9,7 +9,7 @@ import (
 )
 
 func (s *Server) skipAuthHandler(w http.ResponseWriter, r *http.Request) {
-	cfg := config.Get()
+	cfg := s.config.Get()
 	// Only allow skipping auth during initial setup (before setup is complete)
 	if err := cfg.SetupComplete(); err == nil {
 		http.Error(w, "forbidden", http.StatusForbidden)
@@ -19,7 +19,7 @@ func (s *Server) skipAuthHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "authentication required: log in first", http.StatusUnauthorized)
 		return
 	}
-	_, err := config.Update(func(next *config.Config) error {
+	_, err := s.config.Update(func(next *config.Config) error {
 		if err := next.SetupComplete(); err == nil {
 			return fmt.Errorf("setup is already complete")
 		}
@@ -55,7 +55,7 @@ func (s *Server) isValidAPIToken(r *http.Request) bool {
 		return false
 	}
 
-	return config.VerifyToken(token)
+	return s.config.Get().VerifyToken(token)
 }
 
 // refreshAPIToken generates a new API token and saves it.
@@ -64,7 +64,7 @@ func (s *Server) refreshAPIToken() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	_, err = config.Update(func(next *config.Config) error {
+	_, err = s.config.Update(func(next *config.Config) error {
 		auth := next.GetAuth()
 		if auth == nil {
 			return fmt.Errorf("authentication not configured")

@@ -12,10 +12,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/rs/zerolog"
 	"github.com/sirrobot01/facetfs/nfs4"
 
 	"github.com/sirrobot01/decypharr/internal/config"
-	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/pkg/manager"
 )
 
@@ -27,10 +27,13 @@ type NFSServer struct {
 	manager *manager.Manager
 	export  *Export
 	config  config.NFS
+	dataDir string
+	log     zerolog.Logger
 }
 
-func NewNFS(mgr *manager.Manager, export *Export, cfg config.NFS) *NFSServer {
-	return &NFSServer{manager: mgr, export: export, config: cfg}
+// NewNFS builds the NFS server. Its filehandle key lives under dataDir.
+func NewNFS(mgr *manager.Manager, export *Export, cfg config.NFS, dataDir string, log zerolog.Logger) *NFSServer {
+	return &NFSServer{manager: mgr, export: export, config: cfg, dataDir: dataDir, log: log}
 }
 
 func (s *NFSServer) Start(ctx context.Context) error {
@@ -47,12 +50,12 @@ func (s *NFSServer) Start(ctx context.Context) error {
 
 	// A fixed handle key keeps client filehandles valid across restarts; the
 	// resolver covers paths too long to embed in a handle.
-	key, err := loadHandleKey(filepath.Join(config.GetMainPath(), "nfs", "handle.key"))
+	key, err := loadHandleKey(filepath.Join(s.dataDir, "nfs", "handle.key"))
 	if err != nil {
 		return fmt.Errorf("load NFS handle key: %w", err)
 	}
 
-	log := logger.New("nfs")
+	log := s.log
 	server := &nfs4.Server{
 		// The export is shared with SMB and fronted by the on-disk cache, so
 		// a client seek or a scanner re-reading a header costs a disk hit

@@ -58,7 +58,7 @@ func (s *Storage) GetEntryItem(name string) (*EntryItem, error) {
 
 // ForEachEntryItem iterates over entry items.
 func (s *Storage) ForEachEntryItem(fn func(*EntryItem) error) error {
-	return s.entryItems.ForEach(func(key string, value []byte) error {
+	return s.forEach(s.entryItems, func(key string, value []byte) error {
 		var pb EntryItemProto
 		if err := proto.Unmarshal(value, &pb); err != nil {
 			s.skipUndecodable("entry item", key, err)
@@ -70,7 +70,7 @@ func (s *Storage) ForEachEntryItem(fn func(*EntryItem) error) error {
 
 // updateEntryItem updates the name index.
 func (s *Storage) updateEntryItem(entry *Entry) error {
-	name := entry.GetFolder()
+	name := entry.GetFolder(s.folderNaming())
 	if name == "" {
 		return nil
 	}
@@ -106,7 +106,7 @@ func (s *Storage) updateEntryItem(entry *Entry) error {
 
 // removeFromEntryItem removes an entry from the name index.
 func (s *Storage) removeFromEntryItem(entry *Entry) error {
-	name := entry.GetFolder()
+	name := entry.GetFolder(s.folderNaming())
 	if name == "" {
 		return nil
 	}

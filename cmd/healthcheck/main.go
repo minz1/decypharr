@@ -42,8 +42,13 @@ func healthy() bool {
 	flag.StringVar(&configPath, "config", "/data", "path to the data folder")
 	flag.BoolVar(&debug, "debug", false, "enable debug mode for detailed output")
 	flag.Parse()
-	config.SetConfigPath(configPath)
-	cfg := config.Get()
+	// Read-only: probing a container must never create or rewrite its
+	// config.json or auth.json.
+	cfg, err := config.LoadReadOnly(configPath, os.LookupEnv)
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "configuration error: %v\n", err)
+		return false
+	}
 	// GetReader port from environment variable or use default
 	port := cmp.Or(os.Getenv("QBIT_PORT"), cfg.Port)
 

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
@@ -38,7 +40,7 @@ func TestQueueDeleteRemovesFilesWhenRequested(t *testing.T) {
 func newQueueDeleteTest(t *testing.T) (*Queue, *storage.Entry, string) {
 	t.Helper()
 
-	store, err := storage.NewStorage(filepath.Join(t.TempDir(), "db"))
+	store, err := storage.NewStorage(filepath.Join(t.TempDir(), "db"), storage.Options{})
 	if err != nil {
 		t.Fatalf("create storage: %v", err)
 	}
@@ -54,7 +56,7 @@ func newQueueDeleteTest(t *testing.T) (*Queue, *storage.Entry, string) {
 		Name:     "Example.mkv",
 		SavePath: savePath,
 	}
-	downloadedPath := entry.DownloadPath()
+	downloadedPath := entry.DownloadPath("")
 	if mkdirAllErr := os.MkdirAll(downloadedPath, 0o755); mkdirAllErr != nil {
 		t.Fatalf("create downloaded path: %v", mkdirAllErr)
 	}
@@ -66,7 +68,7 @@ func newQueueDeleteTest(t *testing.T) (*Queue, *storage.Entry, string) {
 		t.Fatalf("create downloaded file: %v", writeFileErr)
 	}
 
-	queue := newQueue(store, "")
+	queue := newQueue(store, "", nil, zerolog.Nop())
 	if addErr := queue.Add(entry); addErr != nil {
 		t.Fatalf("add queued entry: %v", addErr)
 	}

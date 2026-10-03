@@ -34,7 +34,7 @@ func (m *Manager) mountWithRetry(ctx context.Context, maxRetries int) error {
 
 // performMount performs a single mount attempt.
 func (m *Manager) performMount(ctx context.Context) error {
-	cfg := config.Get().Mount
+	cfg := m.mount
 
 	// Create mount directory if not on windows
 	if runtime.GOOS != "windows" {
@@ -157,7 +157,7 @@ func (m *Manager) createConfig() error {
 
 // forceUnmount attempts to force unmount a path using system commands.
 func (m *Manager) forceUnmount(ctx context.Context) error {
-	mountPath := config.Get().Mount.MountPath
+	mountPath := m.mount.MountPath
 	methods := [][]string{
 		{"umount", mountPath},
 		{"umount", "-l", mountPath}, // lazy unmount

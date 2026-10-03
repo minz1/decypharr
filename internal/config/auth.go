@@ -8,12 +8,14 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-func VerifyAuth(username, password string) bool {
+// VerifyAuth reports whether username and password match the stored
+// credentials.
+func (c *Config) VerifyAuth(username, password string) bool {
 	// If you're storing hashed password, use bcrypt to compare
 	if username == "" {
 		return false
 	}
-	auth := Get().GetAuth()
+	auth := c.GetAuth()
 	if auth == nil {
 		return false
 	}
@@ -29,11 +31,11 @@ func VerifyAuth(username, password string) bool {
 // This is kept out of VerifyAuth on purpose. The token authenticates the HTTP
 // API surfaces (web API, qBittorrent, SABnzbd) only; WebDAV goes through
 // VerifyAuth and must never be unlocked by an API token.
-func VerifyToken(token string) bool {
+func (c *Config) VerifyToken(token string) bool {
 	if token == "" {
 		return false
 	}
-	auth := Get().GetAuth()
+	auth := c.GetAuth()
 	if auth == nil || auth.APIToken == "" {
 		return false
 	}

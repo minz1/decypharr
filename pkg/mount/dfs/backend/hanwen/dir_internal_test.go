@@ -14,6 +14,7 @@ import (
 	internalconfig "github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/pkg/manager"
+	"github.com/sirrobot01/decypharr/pkg/manager/managertest"
 	mountconfig "github.com/sirrobot01/decypharr/pkg/mount/dfs/config"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
@@ -61,7 +62,8 @@ func TestNewDirTracksCanonicalVirtualPath(t *testing.T) {
 	}
 }
 
-func TestRefreshExistingChildUpdatesRetainedInode(t *testing.T) { //nolint:paralleltest // mutates the config singleton
+func TestRefreshExistingChildUpdatesRetainedInode(t *testing.T) {
+	t.Parallel()
 	initial := testRemoteFileInfo(t, 128, time.Now().Add(-time.Hour))
 	replacement := testRemoteFileInfo(t, 256, time.Now())
 	root := NewDir(nil, "", LevelRoot, 0, &mountconfig.FuseConfig{}, zerolog.Nop(), logger.NewRateLimitedLogger())
@@ -131,7 +133,8 @@ func TestRefreshExistingChildUpdatesRetainedDirModTime(t *testing.T) {
 	}
 }
 
-func TestRefreshExistingChildRejectsKindMismatch(t *testing.T) { //nolint:paralleltest // mutates the config singleton
+func TestRefreshExistingChildRejectsKindMismatch(t *testing.T) {
+	t.Parallel()
 	initial := testRemoteFileInfo(t, 128, time.Now())
 	root := NewDir(nil, "", LevelRoot, 0, &mountconfig.FuseConfig{}, zerolog.Nop(), logger.NewRateLimitedLogger())
 	file := NewFile(nil, &mountconfig.FuseConfig{}, initial, logger.NewRateLimitedLogger())
@@ -180,15 +183,7 @@ func TestSetEntryOutUsesFileTimestampFallback(t *testing.T) {
 
 func testRemoteFileInfo(t *testing.T, size int64, addedOn time.Time) *manager.FileInfo {
 	t.Helper()
-	internalconfig.SetConfigPath(t.TempDir())
-	internalconfig.Reset()
-	managerInstance := manager.New()
-	t.Cleanup(func() {
-		if err := managerInstance.Stop(); err != nil {
-			t.Errorf("stop manager: %v", err)
-		}
-		internalconfig.Reset()
-	})
+	managerInstance, _ := managertest.New(t, nil)
 
 	entry := &storage.Entry{
 		Protocol: internalconfig.ProtocolTorrent,

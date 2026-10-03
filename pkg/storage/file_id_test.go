@@ -10,7 +10,7 @@ import (
 // provider responses — the .strm URLs written from them live for years.
 func TestFileIDsAreStableAcrossUpdates(t *testing.T) {
 	t.Parallel()
-	s, err := storage.NewStorage(t.TempDir())
+	s, err := storage.NewStorage(t.TempDir(), storage.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

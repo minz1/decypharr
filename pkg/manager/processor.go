@@ -46,7 +46,7 @@ func (m *Manager) addNewTorrent(ctx context.Context, importReq *ImportRequest) e
 		return fmt.Errorf("failed to submit torrent to debrid: %w", err)
 	}
 
-	torrent := newTorrentQueueEntry(importReq, debridTypes.TorrentStatusQueued)
+	torrent := newTorrentQueueEntry(importReq, debridTypes.TorrentStatusQueued, m.folderNaming())
 	torrent.DownloadUncached = debridTorrent.DownloadUncached
 	applyDebridTorrentToEntry(torrent, debridTorrent)
 
@@ -107,7 +107,7 @@ func (m *Manager) processTorrentJob(ctx context.Context, job *Job) error {
 }
 
 func (m *Manager) queueTorrentRetry(importReq *ImportRequest) error {
-	torrent := newTorrentQueueEntry(importReq, debridTypes.TorrentStatusQueued)
+	torrent := newTorrentQueueEntry(importReq, debridTypes.TorrentStatusQueued, m.folderNaming())
 	if err := m.queue.Add(torrent); err != nil {
 		return fmt.Errorf("failed to add torrent to queue: %w", err)
 	}
@@ -126,7 +126,11 @@ func (m *Manager) queueTorrentRetry(importReq *ImportRequest) error {
 	return nil
 }
 
-func newTorrentQueueEntry(importReq *ImportRequest, status debridTypes.TorrentStatus) *storage.Entry {
+func newTorrentQueueEntry(
+	importReq *ImportRequest,
+	status debridTypes.TorrentStatus,
+	naming config.WebDavFolderNaming,
+) *storage.Entry {
 	now := time.Now()
 	torrent := &storage.Entry{
 		InfoHash:         importReq.Magnet.InfoHash,
@@ -151,7 +155,7 @@ func newTorrentQueueEntry(importReq *ImportRequest, status debridTypes.TorrentSt
 		Files:            make(map[string]*storage.File),
 		Tags:             []string{},
 	}
-	torrent.ContentPath = torrent.DownloadPath()
+	torrent.ContentPath = torrent.DownloadPath(naming)
 	return torrent
 }
 
@@ -261,7 +265,7 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 		return
 	}
 
-	magnet, err := utils.GetMagnetInfo(entry.Magnet, config.Get().AlwaysRmTrackerUrls)
+	magnet, err := utils.GetMagnetInfo(entry.Magnet, m.store.Get().AlwaysRmTrackerUrls)
 	if err != nil {
 		magnet = utils.ConstructMagnet(entry.InfoHash, entry.Name)
 	}

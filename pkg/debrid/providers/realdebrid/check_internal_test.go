@@ -15,12 +15,12 @@ import (
 )
 
 func TestCheckFileHonorsCancellation(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 	newProvider := func(host string) *RealDebrid {
 		provider := &RealDebrid{Host: host, repairClient: request.New(request.WithMaxRetries(0))}
 		provider.accountsManager = account.NewManager(
 			config.Debrid{Name: "realdebrid", DownloadAPIKeys: []string{"token"}},
+			0,
 			nil,
 			zerolog.Nop(),
 		)
@@ -38,6 +38,7 @@ func TestCheckFileHonorsCancellation(t *testing.T) {
 	for operation, op := range operations {
 		for name, cancelBefore := range commontest.CancelCases() {
 			t.Run(operation+"/"+name, func(t *testing.T) {
+				t.Parallel()
 				commontest.AssertCancellation(t, cancelBefore, op)
 			})
 		}

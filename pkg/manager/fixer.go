@@ -9,7 +9,6 @@ import (
 
 	"github.com/puzpuzpuz/xsync/v4"
 
-	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	debrid "github.com/sirrobot01/decypharr/pkg/debrid/common"
@@ -73,7 +72,7 @@ const (
 // NewFixer creates a new Fixer instance.
 func NewFixer(manager *Manager) *Fixer {
 	// GetReader debrid order from config
-	cfg := config.Get()
+	cfg := manager.config
 	debridOrder := make([]string, 0, len(cfg.Debrids))
 	for _, d := range cfg.Debrids {
 		debridOrder = append(debridOrder, d.Name)
@@ -288,7 +287,7 @@ func activateExistingPlacement(entry *storage.Entry, debridName string) bool {
 // submitReplacement submits entry's magnet to client and returns the new
 // placement once every file has a link or ID; a failed placement is deleted.
 func (f *Fixer) submitReplacement(client debrid.Client, entry *storage.Entry) (*types.Torrent, error) {
-	magnet, err := utils.GetMagnetInfo(entry.Magnet, config.Get().AlwaysRmTrackerUrls)
+	magnet, err := utils.GetMagnetInfo(entry.Magnet, f.manager.store.Get().AlwaysRmTrackerUrls)
 	if err != nil {
 		magnet = utils.ConstructMagnet(entry.InfoHash, entry.Name)
 	}

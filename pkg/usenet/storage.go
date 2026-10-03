@@ -16,8 +16,6 @@ import (
 	"github.com/sourcegraph/conc/pool"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/sirrobot01/decypharr/internal/config"
-	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
@@ -55,9 +53,8 @@ type NZBStorage struct {
 	metaTotalBytes int64
 }
 
-// NewNZBStorage creates a new file-based NZB storage.
-func NewNZBStorage() (*NZBStorage, error) {
-	metaDir := filepath.Join(config.GetMainPath(), "usenet", metaDirName)
+// NewNZBStorage creates a file-based NZB storage in metaDir.
+func NewNZBStorage(metaDir string, log zerolog.Logger) (*NZBStorage, error) {
 	if err := os.MkdirAll(metaDir, 0o750); err != nil {
 		return nil, fmt.Errorf("failed to create meta directory: %w", err)
 	}
@@ -69,7 +66,7 @@ func NewNZBStorage() (*NZBStorage, error) {
 	s := &NZBStorage{
 		metaDir: metaDir,
 		codec:   codec,
-		logger:  logger.New("nzb-storage"),
+		logger:  log,
 	}
 
 	s.mu.Lock()

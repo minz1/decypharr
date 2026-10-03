@@ -47,6 +47,8 @@ const (
 type Manager struct {
 	cmd           *exec.Cmd
 	configDir     string
+	logsDir       string
+	mount         config.Mount
 	logger        zerolog.Logger
 	ctx           context.Context
 	cancel        context.CancelFunc
@@ -86,11 +88,9 @@ type RCResponse struct {
 // NewManager creates a new rclone RC manager. When WebDAV is disabled rclone
 // has nothing to mount, so it returns a no-op manager — never a nil *Manager,
 // which would become a non-nil interface that panics on first use.
-func NewManager(mgr *manager.Manager) manager.MountManager {
-	mainCfg := config.Get()
+func NewManager(mgr *manager.Manager, mainCfg *config.Config, _logger zerolog.Logger) manager.MountManager {
 	cfg := mainCfg.Mount
-	configDir := filepath.Join(config.GetMainPath(), "rclone")
-	_logger := logger.New("rclone")
+	configDir := filepath.Join(mainCfg.Dir(), "rclone")
 
 	if mainCfg.DisableWebDav {
 		_logger.Info().Msg("WebDAV support is disabled by configuration, can't use rclone with WebDAV features")
@@ -124,6 +124,8 @@ func NewManager(mgr *manager.Manager) manager.MountManager {
 
 	m := &Manager{
 		configDir:   configDir,
+		logsDir:     logger.Dir(mainCfg.Dir()),
+		mount:       cfg,
 		logger:      _logger,
 		ctx:         ctx,
 		cancel:      cancel,
@@ -137,13 +139,13 @@ func NewManager(mgr *manager.Manager) manager.MountManager {
 
 // Start starts the rclone RC server.
 func (m *Manager) Start(ctx context.Context) error {
-	cfg := config.Get().Mount
+	cfg := m.mount
 	if m.serverStarted.Load() {
 		return nil
 	}
 	// Use lumberjack for log rotation instead of rclone's --log-file
 	rotatingLog := &lumberjack.Logger{
-		Filename:   filepath.Join(logger.GetLogPath(), "rclone.log"),
+		Filename:   filepath.Join(m.logsDir, "rclone.log"),
 		MaxSize:    logMaxSizeMB,
 		MaxAge:     logMaxAgeDays,
 		MaxBackups: logMaxBackups,
@@ -154,7 +156,7 @@ func (m *Manager) Start(ctx context.Context) error {
 		"rcd",
 		"--rc-addr", ":" + cfg.Rclone.Port,
 		"--rc-no-auth", // We'll handle auth at the application level
-		"--config", filepath.Join(config.GetMainPath(), "rclone", "rclone.conf"),
+		"--config", filepath.Join(m.configDir, "rclone.conf"),
 		// No --log-file, we capture output directly
 	}
 

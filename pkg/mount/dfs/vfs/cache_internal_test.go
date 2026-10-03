@@ -294,7 +294,7 @@ func TestNewCacheAccountsPersistentUsageAtStartup(t *testing.T) {
 		CacheDir:             cacheDir,
 		CacheDiskSize:        100,
 		CacheCleanupInterval: time.Hour,
-	})
+	}, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}

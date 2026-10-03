@@ -16,7 +16,6 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/sourcegraph/conc/iter"
 
-	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/internal/nntp"
 	"github.com/sirrobot01/decypharr/internal/utils"
@@ -40,6 +39,7 @@ type NZBParser struct {
 	logger        zerolog.Logger
 	source        ArticleSource
 	maxConcurrent int // Max concurrent connections
+	fileFilter    func(name string, size int64) error
 }
 
 type fileAnalysisResult struct {
@@ -122,6 +122,22 @@ func NewParserWithSource(source ArticleSource, maxConcurrent int, logger zerolog
 		source:        source,
 		maxConcurrent: maxConcurrent,
 	}
+}
+
+// WithFileFilter sets the check that decides which parsed files are kept
+// (allowed extension, size limits, samples) and returns p. Without one every
+// file is kept.
+func (p *NZBParser) WithFileFilter(allowed func(name string, size int64) error) *NZBParser {
+	p.fileFilter = allowed
+	return p
+}
+
+// fileAllowed applies the file filter.
+func (p *NZBParser) fileAllowed(name string, size int64) error {
+	if p.fileFilter == nil {
+		return nil
+	}
+	return p.fileFilter(name, size)
 }
 
 // Metrics returns cumulative article observation metrics for this analyzer.
@@ -309,8 +325,6 @@ func (p *NZBParser) process(
 		return nil, fmt.Errorf("no valid files found in NZB")
 	}
 
-	cfg := config.Get()
-
 	// Change file name if there's only one file
 	hasOneFile := len(files) == 1
 	skippedFiles := 0
@@ -327,7 +341,7 @@ func (p *NZBParser) process(
 				file.Name = nzb.Name
 			}
 		}
-		if validateFileAllowedErr := cfg.ValidateFileAllowed(file.Name, file.Size); validateFileAllowedErr != nil {
+		if validateFileAllowedErr := p.fileAllowed(file.Name, file.Size); validateFileAllowedErr != nil {
 			skippedFiles++
 			skippedErr = validateFileAllowedErr
 			continue

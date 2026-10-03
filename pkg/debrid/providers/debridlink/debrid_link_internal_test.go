@@ -6,15 +6,14 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
 )
 
 func TestTorrentResponses(t *testing.T) {
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
-	config.Get().AllowedExt = []string{"mkv"}
+	t.Parallel()
 	for _, test := range []struct {
 		name      string
 		body      string
@@ -28,11 +27,12 @@ func TestTorrentResponses(t *testing.T) {
 		{"failed response", `{"success":false,"value":[]}`, 0, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			server := httptest.NewServer(
 				http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, test.body) }),
 			)
 			defer server.Close()
-			provider, err := New(config.Debrid{Name: "debridlink", APIKey: "token"}, nil)
+			provider, err := New(config.Debrid{Name: "debridlink", APIKey: "token"}, nil, mkvOnly())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -80,4 +80,11 @@ func checkTorrent(t *testing.T, list bool, torrent *types.Torrent, files int) {
 	if file.Id != "file" || file.Link != "https://files.example/movie" || torrent.InfoHash != "hash" {
 		t.Fatalf("lost file identity: %#v", torrent)
 	}
+}
+
+// mkvOnly allows only .mkv files, the way an operator's allowed_file_types
+// would.
+func mkvOnly() types.ProviderOptions {
+	cfg := &config.Config{AllowedExt: []string{"mkv"}}
+	return types.ProviderOptions{ValidateFile: cfg.ValidateFileAllowed, Logger: zerolog.Nop()}
 }

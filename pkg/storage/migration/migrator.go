@@ -12,8 +12,6 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/sirrobot01/decypharr/internal/config"
-	"github.com/sirrobot01/decypharr/internal/logger"
 	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
@@ -29,16 +27,16 @@ type Migrator struct {
 	ctx        context.Context
 }
 
-// New creates a new migrator.
-func New(storage *storage.Storage) *Migrator {
-	cacheDir := filepath.Join(config.GetMainPath(), "cache")
-	backupPath := filepath.Join(config.GetMainPath(), "backups")
+// New creates a migrator for the legacy cache files under dataDir.
+func New(storage *storage.Storage, dataDir string, log zerolog.Logger) *Migrator {
+	cacheDir := filepath.Join(dataDir, "cache")
+	backupPath := filepath.Join(dataDir, "backups")
 
 	return &Migrator{
 		storage:    storage,
 		cacheDir:   cacheDir,
 		backupPath: backupPath,
-		logger:     logger.New("migrator"),
+		logger:     log,
 	}
 }
 

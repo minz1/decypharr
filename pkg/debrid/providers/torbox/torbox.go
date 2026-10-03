@@ -22,7 +22,6 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
-	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/internal/request"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/debrid/account"
@@ -71,6 +70,7 @@ type Torbox struct {
 	client                *request.Client
 	submitClient          *request.Client
 	logger                zerolog.Logger
+	options               types.ProviderOptions
 	profile               types.ProfileCache
 	config                config.Debrid
 	downloadPresentMu     sync.Mutex
@@ -78,8 +78,7 @@ type Torbox struct {
 	downloadPresentAt     time.Time
 }
 
-func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter) (*Torbox, error) {
-	cfg := config.Get()
+func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter, options types.ProviderOptions) (*Torbox, error) {
 	headers := map[string]string{
 		"Authorization": fmt.Sprintf("Bearer %s", dc.APIKey),
 	}
@@ -88,7 +87,7 @@ func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter) (*Torbox, er
 	} else {
 		headers["User-Agent"] = fmt.Sprintf("Decypharr/%s (%s; %s)", version.GetInfo(), runtime.GOOS, runtime.GOARCH)
 	}
-	_log := logger.New(dc.Name)
+	_log := options.Logger
 
 	// TorBox enforces a hard cap of 300 req/min per API key, applied
 	// synchronously across all servers since v8.4 (Feb 2026, GAP-002).
@@ -106,7 +105,7 @@ func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter) (*Torbox, er
 		opts := []request.ClientOption{
 			request.WithHeaders(headers),
 			request.WithRateLimiter(rateLimiter),
-			request.WithMaxRetries(cfg.Retries),
+			request.WithMaxRetries(options.Retries),
 			request.WithRetryableStatus(http.StatusTooManyRequests, http.StatusBadGateway),
 			request.WithLogger(_log),
 		}
@@ -124,7 +123,8 @@ func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter) (*Torbox, er
 	tb := &Torbox{
 		Host:                  "https://api.torbox.app/v1",
 		APIKey:                dc.APIKey,
-		accountsManager:       account.NewManager(dc, submitRL, _log),
+		accountsManager:       account.NewManager(dc, options.Retries, submitRL, _log),
+		options:               options,
 		config:                dc,
 		autoExpiresLinksAfter: autoExpiresLinksAfter,
 		client:                newClient(mainRL),
@@ -337,11 +337,9 @@ func (tb *Torbox) GetTorrent(torrentID string) (*types.Torrent, error) {
 		Files:            make(map[string]types.File),
 		Added:            data.CreatedAt,
 	}
-	cfg := config.Get()
-
 	for _, f := range data.Files {
 		fileName := filepath.Base(f.Name)
-		if validateFileAllowedErr := cfg.ValidateFileAllowed(f.AbsolutePath, f.Size); validateFileAllowedErr != nil {
+		if validateFileAllowedErr := tb.options.FileAllowed(f.AbsolutePath, f.Size); validateFileAllowedErr != nil {
 			continue
 		}
 
@@ -444,12 +442,10 @@ func (tb *Torbox) updateTorrentWithClient(client *request.Client, t *types.Torre
 
 	t.Files = make(map[string]types.File)
 
-	cfg := config.Get()
-
 	for _, f := range data.Files {
 		fileName := filepath.Base(f.Name)
 
-		if validateFileAllowedErr := cfg.ValidateFileAllowed(f.AbsolutePath, f.Size); validateFileAllowedErr != nil {
+		if validateFileAllowedErr := tb.options.FileAllowed(f.AbsolutePath, f.Size); validateFileAllowedErr != nil {
 			continue
 		}
 
@@ -607,8 +603,6 @@ func (tb *Torbox) getTorrents(offset int) ([]*types.Torrent, error) {
 	}
 
 	torrents := make([]*types.Torrent, 0, len(*res.Data))
-	cfg := config.Get()
-
 	for _, data := range *res.Data {
 		t := &types.Torrent{
 			Id:               strconv.Itoa(data.ID),
@@ -628,7 +622,7 @@ func (tb *Torbox) getTorrents(offset int) ([]*types.Torrent, error) {
 
 		for _, f := range data.Files {
 			fileName := filepath.Base(f.Name)
-			if validateFileAllowedErr := cfg.ValidateFileAllowed(
+			if validateFileAllowedErr := tb.options.FileAllowed(
 				f.AbsolutePath,
 				f.Size,
 			); validateFileAllowedErr != nil {

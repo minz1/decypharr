@@ -63,7 +63,7 @@ func (f *FileInfo) Kind() string         { return f.kind }
 // GetTorrentMountPath returns the full mount path for a torrent
 // Returns the path based on the new unified mount structure.
 func (m *Manager) GetTorrentMountPath(torrent *storage.Entry) string {
-	return filepath.Join(m.config.Mount.MountPath, EntryAllFolder, torrent.GetFolder())
+	return filepath.Join(m.config.Mount.MountPath, EntryAllFolder, torrent.GetFolder(m.folderNaming()))
 }
 
 func (m *Manager) setMountPaths() {

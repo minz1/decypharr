@@ -7,6 +7,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/sirrobot01/appendstore"
 
+	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/arr/reacquire"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
@@ -17,6 +18,7 @@ const managedCatalogBatch = 256
 type managedArrCatalog struct {
 	storage *storage.Storage
 	logger  zerolog.Logger
+	naming  func() config.WebDavFolderNaming
 }
 
 // catalogSkips counts the files a scan left out of the catalog. A deleted file
@@ -53,7 +55,7 @@ func (c managedArrCatalog) ListManagedFiles(ctx context.Context, entryID string)
 				missingIDs = append(missingIDs, entry)
 				continue
 			}
-			files = append(files, entryManagedFiles(entry, &skips)...)
+			files = append(files, entryManagedFiles(entry, c.folderNaming(), &skips)...)
 		}
 		return nil
 	})
@@ -118,11 +120,23 @@ func (c managedArrCatalog) entryFiles(entry *storage.Entry, skips *catalogSkips)
 			return nil, err
 		}
 	}
-	return entryManagedFiles(entry, skips), nil
+	return entryManagedFiles(entry, c.folderNaming(), skips), nil
 }
 
-func entryManagedFiles(entry *storage.Entry, skips *catalogSkips) []reacquire.ManagedFile {
-	folder := entry.GetFolder()
+// folderNaming is the live folder naming scheme.
+func (c managedArrCatalog) folderNaming() config.WebDavFolderNaming {
+	if c.naming == nil {
+		return ""
+	}
+	return c.naming()
+}
+
+func entryManagedFiles(
+	entry *storage.Entry,
+	naming config.WebDavFolderNaming,
+	skips *catalogSkips,
+) []reacquire.ManagedFile {
+	folder := entry.GetFolder(naming)
 	files := make([]reacquire.ManagedFile, 0, len(entry.Files))
 	for fileName, file := range entry.Files {
 		if file == nil {

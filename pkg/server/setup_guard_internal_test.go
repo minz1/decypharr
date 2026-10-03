@@ -8,36 +8,33 @@ import (
 
 	"github.com/gorilla/sessions"
 
-	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/pkg/manager/managertest"
 )
 
 // A stored credential must survive setup becoming "incomplete" again (any
 // config edit that fails Validate, e.g. removing the last provider). Before
 // the guard, anyone could then POST /skip-auth to turn auth off, or
 // /api/setup/complete to overwrite the credentials.
-//
-//nolint:paralleltest // mutates the process-wide config singleton
 func TestSetupEndpointsProtectStoredCredentials(t *testing.T) {
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
-	cfg := config.Get()
+	t.Parallel()
+	store := managertest.Store(t, nil)
+	cfg := store.Get()
 	if err := cfg.SetCredentials("admin", "secret"); err != nil {
 		t.Fatal(err)
 	}
 	if cfg.SetupComplete() == nil {
 		t.Fatal("setup should be incomplete: no provider configured")
 	}
-	s := newTestServer(t)
+	s := newTestServer(t, store)
 	s.cookie = sessions.NewCookieStore([]byte("test-secret"))
 
 	w := httptest.NewRecorder()
 	s.skipAuthHandler(w, httptest.NewRequest(http.MethodPost, "/skip-auth", nil))
-	if w.Code != http.StatusUnauthorized || !config.Get().UseAuth {
+	if w.Code != http.StatusUnauthorized || !store.Get().UseAuth {
 		t.Fatalf(
 			"unauthenticated skip-auth = %d, UseAuth = %t; want 401 and auth still on",
 			w.Code,
-			config.Get().UseAuth,
+			store.Get().UseAuth,
 		)
 	}
 
@@ -45,7 +42,7 @@ func TestSetupEndpointsProtectStoredCredentials(t *testing.T) {
 	body := `{"auth":{"username":"evil","password":"evil"},"debrid":{"provider":"realdebrid","api_key":"k"},` +
 		`"download":{"download_folder":"` + t.TempDir() + `"}}`
 	s.setupCompleteHandler(w, httptest.NewRequest(http.MethodPost, "/api/setup/complete", strings.NewReader(body)))
-	if w.Code != http.StatusUnauthorized || !config.VerifyAuth("admin", "secret") {
+	if w.Code != http.StatusUnauthorized || !store.Get().VerifyAuth("admin", "secret") {
 		t.Fatalf("unauthenticated setup/complete = %d; want 401 and the old credentials intact", w.Code)
 	}
 
@@ -60,23 +57,20 @@ func TestSetupEndpointsProtectStoredCredentials(t *testing.T) {
 	req.AddCookie(cookies[0])
 	w = httptest.NewRecorder()
 	s.skipAuthHandler(w, req)
-	if w.Code != http.StatusSeeOther || config.Get().UseAuth {
-		t.Fatalf("authenticated skip-auth = %d, UseAuth = %t; want 303 and auth off", w.Code, config.Get().UseAuth)
+	if w.Code != http.StatusSeeOther || store.Get().UseAuth {
+		t.Fatalf("authenticated skip-auth = %d, UseAuth = %t; want 303 and auth off", w.Code, store.Get().UseAuth)
 	}
 }
 
 // /register (once closed) and /setup (once complete) redirected to "/",
 // escaping a reverse-proxy URL base.
-//
-//nolint:paralleltest // mutates the process-wide config singleton
 func TestPageRedirectsKeepURLBase(t *testing.T) {
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
-	if err := config.Get().SetCredentials("admin", "secret"); err != nil {
+	t.Parallel()
+	store := managertest.Store(t, nil)
+	if err := store.Get().SetCredentials("admin", "secret"); err != nil {
 		t.Fatal(err)
 	}
-	s := newTestServer(t)
+	s := newTestServer(t, store)
 	s.urlBase = "/decypharr/"
 	w := httptest.NewRecorder()
 	s.RegisterHandler(w, httptest.NewRequest(http.MethodGet, "/decypharr/register", nil))
@@ -87,13 +81,9 @@ func TestPageRedirectsKeepURLBase(t *testing.T) {
 
 // chi never rewrites r.URL.Path, so under a URL base the skip list never
 // matched and /base/setup redirected to itself forever.
-//
-//nolint:paralleltest // mutates the process-wide config singleton
 func TestSetupRedirectHonorsURLBase(t *testing.T) {
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
-	s := &Server{urlBase: "/decypharr/"}
+	t.Parallel()
+	s := &Server{urlBase: "/decypharr/", config: managertest.Store(t, nil)}
 	h := s.setupRedirectMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))

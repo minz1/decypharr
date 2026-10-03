@@ -11,7 +11,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/request"
 )
 
@@ -263,8 +262,7 @@ func BenchmarkDecodeJSONArray(b *testing.B) {
 }
 
 func TestDoJSONResponsePolicy(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 	for _, tc := range []struct {
 		name, body                 string
 		status                     int
@@ -279,6 +277,7 @@ func TestDoJSONResponsePolicy(t *testing.T) {
 		{name: "no result requested", body: "not JSON", status: 200, noResult: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(tc.status)
 				if tc.chunked {
