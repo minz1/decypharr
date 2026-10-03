@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/pkg/manager"
@@ -47,31 +49,39 @@ func Start(ctx context.Context, dataDir string) error {
 	}
 	defer func() { _ = logFile.Close() }()
 
+	reload := func() (*config.Config, error) { return config.Load(dataDir, os.LookupEnv) }
+	cfg, err := reload()
+	if err != nil {
+		return fmt.Errorf("configuration error: %w", err)
+	}
 	restartCh := make(chan struct{}, 1)
 	for {
-		restart, runErr := runOnce(ctx, dataDir, logFile, restartCh)
+		next, restart, runErr := runOnce(ctx, cfg, reload, logFile, restartCh)
 		if !restart {
 			return runErr
 		}
+		cfg = next
 	}
 }
 
-// runOnce loads the configuration, builds one generation of services under a
-// fresh child of ctx and waits. It reports restart=true after a requested
-// restart has torn the generation down; otherwise the process should exit
-// with the returned error.
-func runOnce(ctx context.Context, dataDir string, logFile io.Writer, restartCh chan struct{}) (bool, error) {
-	cfg, err := config.Load(dataDir, os.LookupEnv)
-	if err != nil {
-		return false, fmt.Errorf("configuration error: %w", err)
-	}
+// runOnce builds one generation of services from cfg under a fresh child of
+// ctx and waits. After a requested restart it reports restart=true with the
+// configuration for the next generation, loaded before this one was torn
+// down; otherwise the process should exit with the returned error.
+func runOnce(
+	ctx context.Context,
+	cfg *config.Config,
+	reload func() (*config.Config, error),
+	logFile io.Writer,
+	restartCh chan struct{},
+) (*config.Config, bool, error) {
 	store := config.NewStore(cfg)
 	logs := logger.NewFactory(cfg.LogLevel, os.Stdout, logFile)
 	_log := logs.New("decypharr")
 
 	mgr, err := manager.New(store, logs)
 	if err != nil {
-		return false, err
+		return nil, false, err
 	}
 
 	svcCtx, cancelSvc := context.WithCancel(ctx)
@@ -114,30 +124,65 @@ func runOnce(ctx context.Context, dataDir string, logFile io.Writer, restartCh c
 		serviceResult <- startServices(svcCtx, mgr, cancelSvc, srv, cfg, logs)
 	}()
 
-	select {
-	case <-ctx.Done():
-		cancelSvc()
+	end, next, svcErr := awaitEnd(ctx, restartCh, serviceResult, reload, _log)
+	cancelSvc()
+	switch end {
+	case endStopped:
 		<-serviceResult
 		_log.Info().Msg("Decypharr has been stopped gracefully.")
 		shutdown()
-		return false, nil
-
-	case <-restartCh:
-		cancelSvc()
+		return nil, false, nil
+	case endRestart:
 		_log.Info().Msg("Restarting Decypharr...")
 		<-serviceResult
 		// The next generation builds a new manager over the same database.
 		shutdown()
 		_log.Info().Msg("Decypharr has been restarted.")
-		return true, nil
-
-	case svcErr := <-serviceResult:
-		cancelSvc()
+		return next, true, nil
+	case endFailed:
 		if svcErr != nil {
 			_log.Error().Err(svcErr).Msg("Service stopped unexpectedly")
 		}
-		shutdown()
-		return false, svcErr
+	}
+	shutdown()
+	return nil, false, svcErr
+}
+
+// endKind is how a generation ends.
+type endKind int
+
+const (
+	endStopped endKind = iota // ctx was cancelled
+	endRestart                // a restart was requested and the next config loaded
+	endFailed                 // a service stopped on its own
+)
+
+// awaitEnd waits for the generation to end. A restart request first loads
+// the next generation's configuration; if that fails, the running generation
+// keeps serving instead of the process exiting with nothing running.
+func awaitEnd(
+	ctx context.Context,
+	restartCh <-chan struct{},
+	serviceResult <-chan error,
+	reload func() (*config.Config, error),
+	log zerolog.Logger,
+) (endKind, *config.Config, error) {
+	for {
+		select {
+		case <-ctx.Done():
+			return endStopped, nil, nil
+		case <-restartCh:
+			next, err := reload()
+			if err != nil {
+				log.Error().
+					Err(err).
+					Msg("Restart cancelled: the configuration does not load; the running services keep serving")
+				continue
+			}
+			return endRestart, next, nil
+		case err := <-serviceResult:
+			return endFailed, nil, err
+		}
 	}
 }
 
