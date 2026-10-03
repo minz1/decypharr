@@ -126,3 +126,33 @@ func TestCloseReleasesRetainedAndDeferredAllocations(t *testing.T) {
 		return p.Stats().MemoryAllocated == 0
 	})
 }
+
+// Each Pool owns its unmap worker: Close drains it and stops the goroutine,
+// and blocks released afterwards are unmapped inline, not leaked.
+func TestPoolCloseDrainsAndStopsUnmapper(t *testing.T) {
+	t.Parallel()
+	p := NewPool(PoolConfig{})
+	a := &blockAllocator{pool: p} // no reuse: every put is released
+	for range 4 {
+		a.put(a.get())
+	}
+	if err := p.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.Stats().MemoryAllocated; got != 0 {
+		t.Fatalf("closed pool still charges %d bytes", got)
+	}
+	p.unmap.mu.RLock()
+	done := p.unmap.done
+	p.unmap.mu.RUnlock()
+	select {
+	case <-done:
+	default:
+		t.Fatal("unmap worker still running after Close")
+	}
+
+	a.put(a.get())
+	if got := p.Stats().MemoryAllocated; got != 0 {
+		t.Fatalf("release after Close left %d bytes charged", got)
+	}
+}

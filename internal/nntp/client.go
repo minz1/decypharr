@@ -193,29 +193,6 @@ func (e *connectionEntry) lastActivity() time.Time {
 	return e.lastUsed
 }
 
-func (c *Client) acquireConnectionEntry(
-	conn *Connection,
-	provider config.UsenetProvider,
-	lastUsed time.Time,
-) *connectionEntry {
-	entry, ok := c.entries.Get().(*connectionEntry)
-	if !ok {
-		entry = &connectionEntry{}
-	}
-	entry.conn = conn
-	entry.provider = provider
-	entry.lastUsed = lastUsed
-	return entry
-}
-
-func (c *Client) releaseConnectionEntry(entry *connectionEntry) {
-	if entry == nil {
-		return
-	}
-	*entry = connectionEntry{}
-	c.entries.Put(entry)
-}
-
 // NNTP timeouts.
 //
 // defaultIdleTimeout is deliberately long: players read in bursts (fill their
@@ -339,6 +316,29 @@ func NewClient(cfg *config.Config, log zerolog.Logger) (*Client, error) {
 	// Start background reaper
 	go cm.reaper()
 	return cm, nil
+}
+
+func (c *Client) acquireConnectionEntry(
+	conn *Connection,
+	provider config.UsenetProvider,
+	lastUsed time.Time,
+) *connectionEntry {
+	entry, ok := c.entries.Get().(*connectionEntry)
+	if !ok {
+		entry = &connectionEntry{}
+	}
+	entry.conn = conn
+	entry.provider = provider
+	entry.lastUsed = lastUsed
+	return entry
+}
+
+func (c *Client) releaseConnectionEntry(entry *connectionEntry) {
+	if entry == nil {
+		return
+	}
+	*entry = connectionEntry{}
+	c.entries.Put(entry)
 }
 
 // setIdleTimeout applies a configured idle window and keeps the derived
