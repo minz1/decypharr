@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/sirrobot01/decypharr/internal/utils"
@@ -71,19 +72,37 @@ func TestTorrentSubmissionGateDoesNotCacheFailures(t *testing.T) {
 	}
 }
 
+// Concurrent callers for one key share a single submission and all receive
+// its result, whether it succeeded or failed.
 func TestTorrentSubmissionGateCoalescesConcurrentCalls(t *testing.T) {
 	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		outcome error
+	}{
+		{name: "success", outcome: nil},
+		{name: "failure", outcome: errors.New("provider rejected the torrent")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) { checkCoalescedSubmission(t, tc.outcome) })
+		})
+	}
+}
+
+func checkCoalescedSubmission(t *testing.T, outcome error) {
+	t.Helper()
 	gate := newTorrentSubmissionGate(time.Minute)
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var calls atomic.Int64
 
-	submit := func() error { //nolint:unparam // must match the submit signature gate.Do takes
+	submit := func() error {
 		if calls.Add(1) == 1 {
 			close(started)
 		}
 		<-release
-		return nil
+		return outcome
 	}
 
 	const workers = 20
@@ -95,13 +114,16 @@ func TestTorrentSubmissionGateCoalescesConcurrentCalls(t *testing.T) {
 		})
 	}
 	<-started
+	// Every caller has joined the in-flight submission before it finishes;
+	// a caller arriving after a failure would legitimately submit again.
+	synctest.Wait()
 	close(release)
 	wg.Wait()
 	close(errs)
 
 	for err := range errs {
-		if err != nil {
-			t.Fatal(err)
+		if !errors.Is(err, outcome) || (outcome == nil && err != nil) {
+			t.Fatalf("caller got %v, want the shared result %v", err, outcome)
 		}
 	}
 	if got := calls.Load(); got != 1 {
