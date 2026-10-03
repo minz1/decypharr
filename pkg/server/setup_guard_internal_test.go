@@ -9,6 +9,7 @@ import (
 
 	"github.com/gorilla/sessions"
 
+	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/manager/managertest"
 )
 
@@ -112,5 +113,45 @@ func TestSetupResponseCarriesTheAPIToken(t *testing.T) {
 	}
 	if string(data) != `{"success":true,"api_token":"tok"}` {
 		t.Fatalf("response = %s", data)
+	}
+}
+
+// The register page's Skip button works whenever that page is open (auth on,
+// no credential yet), including on an install whose setup is complete, and
+// stays closed once a credential exists.
+func TestSkipAuthFromRegisterPage(t *testing.T) {
+	t.Parallel()
+	store := managertest.Store(t, func(c *config.Config) {
+		c.UseAuth = true
+		c.Auth = nil
+		c.DownloadFolder = t.TempDir()
+		c.Debrids = []config.Debrid{{Name: "rd", Provider: "realdebrid", APIKey: "k"}}
+	})
+	if err := store.Get().SetupComplete(); err != nil {
+		t.Fatalf("setup should be complete: %v", err)
+	}
+	s := newTestServer(t, store)
+	s.cookie = sessions.NewCookieStore([]byte("test-secret"))
+
+	w := httptest.NewRecorder()
+	s.skipAuthHandler(w, httptest.NewRequest(http.MethodPost, "/skip-auth", nil))
+	if w.Code != http.StatusSeeOther || store.Get().UseAuth {
+		t.Fatalf(
+			"skip-auth from the register page = %d, UseAuth = %t; want 303 and auth off",
+			w.Code,
+			store.Get().UseAuth,
+		)
+	}
+
+	if _, err := store.Update(func(next *config.Config) error {
+		next.UseAuth = true
+		return next.SetCredentials("admin", "secret")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w = httptest.NewRecorder()
+	s.skipAuthHandler(w, httptest.NewRequest(http.MethodPost, "/skip-auth", nil))
+	if w.Code != http.StatusForbidden || !store.Get().UseAuth {
+		t.Fatalf("skip-auth with credentials = %d, UseAuth = %t; want 403 and auth on", w.Code, store.Get().UseAuth)
 	}
 }

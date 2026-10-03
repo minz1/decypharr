@@ -8,10 +8,16 @@ import (
 	"github.com/sirrobot01/decypharr/internal/config"
 )
 
+// maySkipAuth reports whether auth may be turned off without credentials:
+// while the register page is open (auth on, no credential yet), which is
+// where the Skip button lives, or before setup is complete.
+func maySkipAuth(cfg *config.Config) bool {
+	return cfg.NeedsAuth() || cfg.SetupComplete() != nil
+}
+
 func (s *Server) skipAuthHandler(w http.ResponseWriter, r *http.Request) {
 	cfg := s.config.Get()
-	// Only allow skipping auth during initial setup (before setup is complete)
-	if err := cfg.SetupComplete(); err == nil {
+	if !maySkipAuth(cfg) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
@@ -20,7 +26,7 @@ func (s *Server) skipAuthHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, err := s.config.Update(func(next *config.Config) error {
-		if err := next.SetupComplete(); err == nil {
+		if !maySkipAuth(next) {
 			return fmt.Errorf("setup is already complete")
 		}
 		next.UseAuth = false
