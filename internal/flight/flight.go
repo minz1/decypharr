@@ -21,8 +21,8 @@ type Group[T any] struct {
 }
 
 type call[T any] struct {
-	done    chan struct{}
-	cancel  context.CancelFunc
+	done    chan struct{} // closed when fn has returned
+	stop    chan struct{} // closed by the last waiter to give up
 	waiters int
 	val     T
 	err     error
@@ -31,21 +31,16 @@ type call[T any] struct {
 // Do returns the result of fn for key, running fn unless a call for key is
 // already in flight. shared reports whether the result came from a call
 // another caller started.
-func (g *Group[T]) Do(
-	ctx context.Context,
-	key string,
-	fn func(context.Context) (T, error),
-) (val T, shared bool, err error) {
+func (g *Group[T]) Do(ctx context.Context, key string, fn func(context.Context) (T, error)) (T, bool, error) {
 	g.mu.Lock()
 	if g.calls == nil {
 		g.calls = make(map[string]*call[T])
 	}
 	c, shared := g.calls[key]
 	if !shared {
-		flightCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-		c = &call[T]{done: make(chan struct{}), cancel: cancel}
+		c = &call[T]{done: make(chan struct{}), stop: make(chan struct{})}
 		g.calls[key] = c
-		go g.run(flightCtx, key, c, fn)
+		go g.run(context.WithoutCancel(ctx), key, c, fn)
 	}
 	c.waiters++
 	g.mu.Unlock()
@@ -60,9 +55,18 @@ func (g *Group[T]) Do(
 	}
 }
 
-func (g *Group[T]) run(ctx context.Context, key string, c *call[T], fn func(context.Context) (T, error)) {
+// run calls fn on a context that ends when every waiter has given up.
+func (g *Group[T]) run(base context.Context, key string, c *call[T], fn func(context.Context) (T, error)) {
 	defer close(c.done)
-	defer c.cancel()
+	ctx, cancel := context.WithCancel(base)
+	defer cancel()
+	go func() {
+		select {
+		case <-c.stop:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 	c.val, c.err = fn(ctx)
 	g.mu.Lock()
 	if g.calls[key] == c {
@@ -81,7 +85,7 @@ func (g *Group[T]) leave(key string, c *call[T]) {
 	if c.waiters > 0 {
 		return
 	}
-	c.cancel()
+	close(c.stop)
 	if g.calls[key] == c {
 		delete(g.calls, key)
 	}
