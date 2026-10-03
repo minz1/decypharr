@@ -66,7 +66,7 @@ func newTestPool(maxConns int) *ProviderPool {
 }
 
 func poolEntry(pp *ProviderPool, conn *Connection, idleFor time.Duration) *connectionEntry {
-	entry := acquireConnectionEntry(conn, pp.config, time.Now().Add(-idleFor))
+	entry := &connectionEntry{conn: conn, provider: pp.config, lastUsed: time.Now().Add(-idleFor)}
 	pp.conns = append(pp.conns, entry)
 	return entry
 }

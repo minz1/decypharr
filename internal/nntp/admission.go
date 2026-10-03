@@ -107,7 +107,7 @@ func newSlotWaiter(workload Workload, pools []*ProviderPool) *slotWaiter {
 
 func (c *Client) newQueuedWaiter(workload Workload, pools []*ProviderPool) *slotWaiter {
 	w := newSlotWaiter(workload, pools)
-	w.started = nanotimeNow()
+	w.started = c.clock.now()
 	c.admission[workload].queued.Add(1)
 	return w
 }
@@ -125,7 +125,7 @@ func (c *Client) finishWait(w *slotWaiter, outcome admissionOutcome) {
 	case admissionFailed:
 		metrics.failed.Add(1)
 	}
-	waitNS := uint64(max(nanotimeNow()-w.started, 0))
+	waitNS := uint64(max(c.clock.now()-w.started, 0))
 	metrics.waitTotalNS.Add(waitNS)
 	for previous := metrics.waitMaxNS.Load(); waitNS > previous; previous = metrics.waitMaxNS.Load() {
 		if metrics.waitMaxNS.CompareAndSwap(previous, waitNS) {
@@ -292,7 +292,7 @@ func (c *Client) handoffSlot(pp *ProviderPool) bool {
 func (c *Client) queueSnapshot() ([workloadCount]int, [workloadCount]uint64) {
 	c.waitMu.Lock()
 	defer c.waitMu.Unlock()
-	now := nanotimeNow()
+	now := c.clock.now()
 	var waiting [workloadCount]int
 	var oldestWaitNS [workloadCount]uint64
 	for workload := range workloadCount {

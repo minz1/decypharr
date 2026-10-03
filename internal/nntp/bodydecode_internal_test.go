@@ -50,6 +50,7 @@ func newBodyTestConn(t *testing.T) (*Connection, net.Conn) {
 		conn:   client,
 		reader: bufio.NewReaderSize(client, 128*1024),
 		writer: bufio.NewWriterSize(client, 4*1024),
+		bufs:   &bodyBufPool{},
 	}
 	c.bodyDec = nntpyenc.NewBodyDecoder(&bodyReader{c: c}, c.nextBodyBuffer)
 	return c, server
@@ -289,7 +290,7 @@ func TestRequestBodyDecodesAndReusesConnection(t *testing.T) {
 		if res.Meta.PartSize != int64(len(want)) {
 			t.Errorf("article %d PartSize = %d, want %d", i+1, res.Meta.PartSize, len(want))
 		}
-		putBodyBuf(res.Data)
+		c.bufs.put(res.Data)
 	}
 }
 
