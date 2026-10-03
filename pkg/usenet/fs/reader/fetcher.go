@@ -67,7 +67,7 @@ func NewSegmentFetcher(
 
 	maxConns := config.MaxConnections
 	if maxConns < 1 {
-		maxConns = 8
+		maxConns = defaultMaxConnections
 	}
 
 	sf := &SegmentFetcher{
@@ -78,7 +78,7 @@ func NewSegmentFetcher(
 		stats:    stats,
 		inFlight: make(map[int]*fetchPromise),
 		// A packed bitmap avoids per-segment goroutines and large bool arrays.
-		prefetchQueued: make([]atomic.Uint64, (cache.SegmentCount()+63)/64),
+		prefetchQueued: make([]atomic.Uint64, (cache.SegmentCount()+bitsPerWord-1)/bitsPerWord),
 		ctx:            ctx,
 		cancel:         cancel,
 	}
@@ -356,8 +356,8 @@ func (sf *SegmentFetcher) markPrefetchQueued(segIdx int) bool {
 	if segIdx < 0 || segIdx >= sf.cache.SegmentCount() {
 		return false
 	}
-	word := &sf.prefetchQueued[segIdx>>6]
-	mask := uint64(1) << uint(segIdx&63)
+	word := &sf.prefetchQueued[segIdx/bitsPerWord]
+	mask := uint64(1) << uint(segIdx%bitsPerWord)
 	for {
 		old := word.Load()
 		if old&mask != 0 {
@@ -373,8 +373,8 @@ func (sf *SegmentFetcher) clearPrefetchQueued(segIdx int) {
 	if segIdx < 0 || segIdx >= sf.cache.SegmentCount() {
 		return
 	}
-	word := &sf.prefetchQueued[segIdx>>6]
-	mask := uint64(1) << uint(segIdx&63)
+	word := &sf.prefetchQueued[segIdx/bitsPerWord]
+	mask := uint64(1) << uint(segIdx%bitsPerWord)
 	word.And(^mask)
 }
 
@@ -838,9 +838,7 @@ func (sf *SegmentFetcher) retryBackoff(attempt int) time.Duration {
 		base = time.Second
 	}
 	d := base << (attempt - 1)
-	if maxDelay := 5 * time.Second; d > maxDelay {
-		d = maxDelay
-	}
+	d = min(d, maxRetryBackoff)
 	return d
 }
 
@@ -868,6 +866,12 @@ func errNoDecodedData() error {
 		Message: "article produced no data after decoding",
 	}
 }
+
+// bitsPerWord is the width of one prefetch dedup bitmap word.
+const bitsPerWord = 64
+
+// maxRetryBackoff caps the exponential retry delay.
+const maxRetryBackoff = 5 * time.Second
 
 // Error types.
 var (

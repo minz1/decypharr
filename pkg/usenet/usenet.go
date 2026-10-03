@@ -29,6 +29,12 @@ import (
 
 const (
 	bufferSize = 256 * 1024 // 256KB buffer for streaming
+	// defaultReadAhead applies when the configured read-ahead is invalid.
+	defaultReadAhead = 16 << 20
+	// idleSweepInterval is how often idle readers are checked for teardown.
+	idleSweepInterval = 30 * time.Second
+	// preCacheEdgeBytes is warmed at each end of a file (~3 segments).
+	preCacheEdgeBytes = 2 << 20
 )
 
 func (u *Usenet) acquireStreamBuffer() *[]byte {
@@ -337,7 +343,7 @@ func New() (*Usenet, error) {
 
 	prefetchSize, err := config.ParseSize(usenetConfig.ReadAhead)
 	if err != nil {
-		prefetchSize = 16 * 1024 * 1024 // Default to 16MB
+		prefetchSize = defaultReadAhead
 	}
 
 	u := &Usenet{
@@ -511,7 +517,7 @@ func (u *Usenet) cleanupIdleFS() {
 	// buffering is only for active latency hiding; stale buffers should disappear
 	// quickly instead of behaving like a VFS cache.
 	const idleThreshold = int64(120) // 2 minutes idle
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(idleSweepInterval)
 	defer ticker.Stop()
 
 	for {
@@ -1131,8 +1137,8 @@ func (u *Usenet) PreCache(ctx context.Context, nzoID, filename string) error {
 	fileSize := entry.volumes[0].Size
 
 	// Calculate how much to read for head and tail
-	headSize := int64(2 * 1024 * 1024) // 2MB head (~3 segments)
-	tailSize := int64(2 * 1024 * 1024) // 2MB tail (~3 segments)
+	headSize := int64(preCacheEdgeBytes)
+	tailSize := int64(preCacheEdgeBytes)
 
 	if headSize > fileSize {
 		headSize = fileSize

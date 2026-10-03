@@ -377,8 +377,8 @@ func (p *RARParser) readAndDecryptRAR5Header(stream *rarReader, key, iv []byte) 
 		return nil, 0, 0, err
 	}
 
-	headerSize, sizeLen := parseVIntFromBuffer(block[rar5CRCSize:])
-	if sizeLen == 0 {
+	headerSize, sizeLen := binary.Uvarint(block[rar5CRCSize:]) // RAR5 vints are LEB128
+	if sizeLen <= 0 {
 		return nil, 0, 0, fmt.Errorf("encrypted header size vint is truncated")
 	}
 	if headerSize > maxRAR5HeaderSize {
@@ -489,20 +489,6 @@ func rar5Size(v uint64) (int64, error) {
 		return 0, fmt.Errorf("RAR5 size %d out of range", v)
 	}
 	return int64(v), nil
-}
-
-// parseVIntFromBuffer parses a vint from a byte slice without any Read calls
-// Returns (value, bytesConsumed) - bytesConsumed is 0 if buffer doesn't contain complete vint.
-func parseVIntFromBuffer(buf []byte) (uint64, int) {
-	var result uint64
-	for i := 0; i < len(buf) && i < 10; i++ {
-		b := buf[i]
-		result |= uint64(b&0x7F) << (uint(i) * 7)
-		if b&0x80 == 0 {
-			return result, i + 1
-		}
-	}
-	return 0, 0 // Incomplete vint
 }
 
 // readVIntFromReader reads a variable-length integer from a reader one byte
@@ -632,7 +618,7 @@ func (p *RARParser) readRAR4HeaderFromStream(stream io.Reader) (*rar4Header, err
 	}
 
 	// Validate header size - minimum is 7 bytes
-	if header.HeadSize < 7 {
+	if header.HeadSize < rar4BaseHeaderSize {
 		return nil, fmt.Errorf("invalid RAR4 header size: %d (minimum is 7)", header.HeadSize)
 	}
 

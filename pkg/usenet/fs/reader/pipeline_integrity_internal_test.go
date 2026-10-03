@@ -278,7 +278,12 @@ func serveGatedBackup(
 		return nil
 	case "idle":
 		size := int64(len(second))
-		_, err = fmt.Fprintf(conn, "222 0 %s body\r\n%s.\r\n", secondID, nntpd.Encode(second, "retry.bin", 2, 2*size, size))
+		_, err = fmt.Fprintf(
+			conn,
+			"222 0 %s body\r\n%s.\r\n",
+			secondID,
+			nntpd.Encode(second, "retry.bin", 2, 2*size, size),
+		)
 		return err
 	}
 	if _, err = reader.ReadByte(); err == nil {

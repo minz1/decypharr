@@ -84,6 +84,13 @@ const (
 	// rar4MinFileHeaderData is the fixed FILE_HEAD part after the base header:
 	// PACK_SIZE, UNP_SIZE, HOST_OS, FILE_CRC, FTIME, UNP_VER, METHOD, NAME_SIZE, ATTR.
 	rar4MinFileHeaderData = 25
+	rar4FileTimeSize      = 4
+	rar4AttributesSize    = 4
+	// highWordShift combines HIGH_*_SIZE words with the low 32 bits.
+	highWordShift = 32
+	// rar4MethodRawStream (0x81) is a compressed method whose files have been
+	// reported to play as raw streams.
+	rar4MethodRawStream = 0x81
 	// rar4HighPackSizeOffset locates HIGH_PACK_SIZE within header data.
 	rar4HighPackSizeOffset = rar4MinFileHeaderData
 )
@@ -707,7 +714,7 @@ func rar4DataSize(header *rar4Header) (int64, bool) {
 	if high > math.MaxInt32 {
 		return 0, false
 	}
-	return int64(high)<<32 | size, true
+	return int64(high)<<highWordShift | size, true
 }
 
 // parseRAR4FileHeader parses RAR 4.x file header.
@@ -739,7 +746,7 @@ func (p *RARParser) parseRAR4FileHeader(
 	_ = binary.Read(r, binary.LittleEndian, &crc32)
 
 	// Read file time (4 bytes)
-	_, _ = r.Seek(4, io.SeekCurrent)
+	_, _ = r.Seek(rar4FileTimeSize, io.SeekCurrent)
 
 	// Read RAR version (1 byte)
 	_, _ = r.Seek(1, io.SeekCurrent)
@@ -753,7 +760,7 @@ func (p *RARParser) parseRAR4FileHeader(
 	_ = binary.Read(r, binary.LittleEndian, &nameLength)
 
 	// Read file attributes (4 bytes)
-	_, _ = r.Seek(4, io.SeekCurrent)
+	_, _ = r.Seek(rar4AttributesSize, io.SeekCurrent)
 
 	// Handle HIGH_SIZE flag - read high 32 bits of sizes
 	var packedSize, unpackedSize int64
@@ -768,8 +775,8 @@ func (p *RARParser) parseRAR4FileHeader(
 			return nil // sizes beyond int64 are corrupt
 		}
 
-		packedSize = int64(packedSizeHigh)<<32 | int64(packedSizeLow)
-		unpackedSize = int64(unpackedSizeHigh)<<32 | int64(unpackedSizeLow)
+		packedSize = int64(packedSizeHigh)<<highWordShift | int64(packedSizeLow)
+		unpackedSize = int64(unpackedSizeHigh)<<highWordShift | int64(unpackedSizeLow)
 	} else {
 		packedSize = int64(packedSizeLow)
 		unpackedSize = int64(unpackedSizeLow)
@@ -791,7 +798,7 @@ func (p *RARParser) parseRAR4FileHeader(
 	// User report: Method 0x81 (Compressed) files play as raw streams, suggesting they are effectively stored
 	// or the player handles the compression. To support seeking, we must treat them as stored
 	// and ensure UncompressedSize matches PackedSize so we don't advertise data we can't serve.
-	isStored := method == RAR4CompressionMethodStore || method == 0x81
+	isStored := method == RAR4CompressionMethodStore || method == rar4MethodRawStream
 
 	if isStored && method != RAR4CompressionMethodStore {
 		unpackedSize = packedSize

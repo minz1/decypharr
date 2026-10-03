@@ -43,13 +43,19 @@ type nzbCodec struct {
 	dec *zstd.Decoder
 }
 
+// Encoder limits for small .meta blobs.
+const (
+	zstdEncoderConcurrency = 2
+	zstdWindowSize         = 1 << 20
+)
+
 // newNZBCodec caps encoder concurrency and window: .meta blobs are small, so
 // GOMAXPROCS encoder states each holding an 8MB history would be waste.
 func newNZBCodec() (*nzbCodec, error) {
 	enc, err := zstd.NewWriter(nil,
 		zstd.WithEncoderLevel(zstd.SpeedDefault),
-		zstd.WithEncoderConcurrency(2),
-		zstd.WithWindowSize(1<<20),
+		zstd.WithEncoderConcurrency(zstdEncoderConcurrency),
+		zstd.WithWindowSize(zstdWindowSize),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create zstd encoder: %w", err)
@@ -764,13 +770,13 @@ func sampleIndices(total, percent int) []int {
 		return out
 	}
 
-	targetCount := min(max((total*percent)/100, 2), total)
+	targetCount := min(max((total*percent)/percentScale, endpointSamples), total)
 
 	out := make([]int, 0, targetCount)
 	out = append(out, 0)
-	middleCount := targetCount - 2
+	middleCount := targetCount - endpointSamples
 	if middleCount > 0 {
-		mlen := total - 2
+		mlen := total - endpointSamples
 		step := float64(mlen) / float64(middleCount+1)
 		for i := range middleCount {
 			idx := int(step * float64(i+1))
@@ -783,6 +789,13 @@ func sampleIndices(total, percent int) []int {
 	out = append(out, total-1)
 	return out
 }
+
+// Sampling: percent is out of percentScale; the first and last segments
+// (endpointSamples) are always probed.
+const (
+	percentScale    = 100
+	endpointSamples = 2
+)
 
 // checkSegmentTotal rejects header segment counts the column region cannot
 // hold (each segment stores at least six one-byte varints) before they size

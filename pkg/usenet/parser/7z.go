@@ -176,7 +176,7 @@ func (p *SevenZParser) processRARFilesFromPositions(
 	})
 	// Detect RAR version from first volume (by logical order)
 	firstRAR := rarFiles[0]
-	versionBuf := make([]byte, 8)
+	versionBuf := make([]byte, len(RAR5Signature))
 	if _, err := readerAt.ReadAt(versionBuf, firstRAR.Offset); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("failed to read RAR signature: %w", err)
 	}

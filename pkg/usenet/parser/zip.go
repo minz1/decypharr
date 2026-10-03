@@ -34,7 +34,12 @@ const (
 	zipFlagEncrypted = 0x0001 // general-purpose bit 0
 
 	zipLocalHeaderSize      = 30 // fixed local file header before name/extra
-	zipExtraRecordHeaderLen = 4  // id(2) + size(2)
+	zipEOCDSize             = 22 // end of central directory record without comment
+	zip64LocatorSize        = 20
+	zip64EOCDFixedSize      = 56
+	zipDirectoryBufferSize  = 64 << 10
+	zipEntryPrealloc        = int64(1024)
+	zipExtraRecordHeaderLen = 4 // id(2) + size(2)
 	zip64ExtraID            = 0x0001
 	zip64ValueLen           = 8
 	zip64DiskLen            = 4
@@ -195,7 +200,7 @@ func (p *ZIPParser) parseArchiveReader(
 	archiveSize int64,
 	multiPart bool,
 ) (*ZIPArchiveInfo, error) {
-	if archiveSize < 22 {
+	if archiveSize < zipEOCDSize {
 		return nil, fmt.Errorf("ZIP archive is too small: %d bytes", archiveSize)
 	}
 	tailSize := min(archiveSize, int64(defaultZIPEndSnippetSize))
@@ -226,7 +231,7 @@ func (p *ZIPParser) parseArchiveReader(
 		)
 	}
 	section := io.NewSectionReader(readerAt, dirStart, centralDirSize)
-	files, err := p.parseCentralDirectoryReader(bufio.NewReaderSize(section, 64<<10), totalEntries)
+	files, err := p.parseCentralDirectoryReader(bufio.NewReaderSize(section, zipDirectoryBufferSize), totalEntries)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse central directory: %w", err)
 	}
@@ -267,7 +272,7 @@ func (p *ZIPParser) findEndOfCentralDirectory(data []byte) (*endOfCentralDirReco
 	// Prefer a record whose declared comment ends exactly at the archive end.
 	// A second compatibility pass accepts trailing bytes used by some tools.
 	for requireExactEnd := true; ; requireExactEnd = false {
-		for i := len(data) - 22; i >= 0; i-- {
+		for i := len(data) - zipEOCDSize; i >= 0; i-- {
 			if binary.LittleEndian.Uint32(data[i:]) != ZIPEndOfCentralDirSig {
 				continue
 			}
@@ -318,7 +323,7 @@ func zipCentralDirectoryMetadata(data []byte, eocd *endOfCentralDirRecord, eocdP
 }
 
 func (p *ZIPParser) parseCentralDirectoryReader(reader io.Reader, totalEntries int64) ([]*ZIPFileEntry, error) {
-	files := make([]*ZIPFileEntry, 0, min(totalEntries, int64(1024)))
+	files := make([]*ZIPFileEntry, 0, min(totalEntries, zipEntryPrealloc))
 	for i := range totalEntries {
 		file, err := p.parseCentralDirEntry(reader)
 		if err != nil {
@@ -344,11 +349,11 @@ func findZIP64EndOfCentralDirectory(data []byte, eocdPos int) (int64, int64, int
 	//  4: record size (8)        14: version needed (2)    32: total entries (8)
 	//                            16: disk number (4)       40: central dir size (8)
 	//                            20: central dir disk (4)  48: central dir offset (8)
-	end := eocdPos - 20 // record ends where the 20-byte ZIP64 EOCD locator starts
+	end := eocdPos - zip64LocatorSize // record ends where the ZIP64 EOCD locator starts
 	if end < 0 || end > len(data) {
 		end = eocdPos
 	}
-	for i := end - 56; i >= 0; i-- {
+	for i := end - zip64EOCDFixedSize; i >= 0; i-- {
 		if binary.LittleEndian.Uint32(data[i:]) != ZIPZIP64EndOfCentralDirSig {
 			continue
 		}
@@ -542,7 +547,7 @@ func (p *ZIPParser) calculateZIPDataOffset(readerAt io.ReaderAt, headerOffset in
 	// 4-25: various fields
 	// 26-27: filename length (uint16)
 	// 28-29: extra field length (uint16)
-	headerData := make([]byte, 30)
+	headerData := make([]byte, zipLocalHeaderSize)
 
 	if _, err := readerAt.ReadAt(headerData, headerOffset); err != nil {
 		return 0, fmt.Errorf("failed to read local header: %w", err)
