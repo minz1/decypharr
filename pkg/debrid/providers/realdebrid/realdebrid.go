@@ -1064,14 +1064,13 @@ func (r *RealDebrid) SyncAccounts() {
 
 func (r *RealDebrid) syncAccount(acc *account.Account) error {
 	if acc.Token == "" {
-		return fmt.Errorf("account %s has no token", acc.Username)
+		return fmt.Errorf("account %s has no token", acc.Username())
 	}
 	profile, err := r.getClientProfile(acc.Client())
 	if err != nil {
-		return fmt.Errorf("error syncing account %s: %w", acc.Username, err)
+		return fmt.Errorf("error syncing account %s: %w", acc.Username(), err)
 	}
-	acc.Username = profile.Username
-	acc.Expiration = profile.Expiration
+	acc.SetProfile(profile.Username, profile.Expiration)
 
 	var trafficData TrafficResponse
 	trafficStatus, err := r.doGetWithClient(

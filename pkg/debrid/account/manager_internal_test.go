@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -178,4 +179,27 @@ func isAll(err error, targets []error) bool {
 		}
 	}
 	return true
+}
+
+// Sync writes an account's profile while stats read it (run with -race).
+func TestAccountProfileIsSafeForConcurrentUse(t *testing.T) {
+	t.Parallel()
+	acc := &Account{}
+	expiry := time.Now().Add(time.Hour)
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for range 200 {
+			acc.SetProfile("user", expiry)
+		}
+	})
+	wg.Go(func() {
+		for range 200 {
+			_ = acc.Username()
+			_ = acc.Expiration()
+		}
+	})
+	wg.Wait()
+	if acc.Username() != "user" || !acc.Expiration().Equal(expiry) {
+		t.Fatalf("profile = %q, %v", acc.Username(), acc.Expiration())
+	}
 }

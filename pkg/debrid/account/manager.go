@@ -275,9 +275,9 @@ func (m *Manager) Stats() []map[string]any {
 			"order":        acc.Index,
 			"disabled":     acc.Disabled.Load(),
 			"token_masked": maskedToken,
-			"username":     acc.Username,
+			"username":     acc.Username(),
 			"traffic_used": acc.TrafficUsed.Load(),
-			"expiration":   acc.Expiration,
+			"expiration":   acc.Expiration(),
 			"links_count":  acc.DownloadLinksCount(),
 			"debrid":       acc.Debrid,
 		}
@@ -326,7 +326,7 @@ func (m *Manager) Sync(syncer SyncFunc) {
 				return
 			}
 			// Check if account has expired
-			if !acc.Expiration.IsZero() && time.Now().After(acc.Expiration) {
+			if expiration := acc.Expiration(); !expiration.IsZero() && time.Now().After(expiration) {
 				m.logger.Warn().
 					Str("debrid", m.debrid).
 					Str("account_token", utils.Mask(acc.Token)).
