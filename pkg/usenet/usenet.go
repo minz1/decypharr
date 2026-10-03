@@ -655,6 +655,21 @@ func (u *Usenet) Process(
 		_ = u.markAsFailed(nzb, err)
 		return nzb, fmt.Errorf("failed to process NZB archives: %w", err)
 	}
+	if finishErr := u.finish(ctx, updatedNZB); finishErr != nil {
+		return updatedNZB, finishErr
+	}
+
+	u.logger.Info().
+		Str("nzb_id", updatedNZB.ID).
+		Str("name", updatedNZB.Name).
+		Int("files", len(updatedNZB.Files)).
+		Msg("Successfully processed NZB archives (full parse)")
+	return updatedNZB, nil
+}
+
+// finish runs the availability and content gates on a processed NZB and
+// records the outcome: completed, or failed with the reason.
+func (u *Usenet) finish(ctx context.Context, nzb *storage.NZB) error {
 	// Post-parse availability gate: probe a sample of each content file's
 	// segments before declaring the NZB complete. Segments can go missing
 	// between the original parse and now; without this gate they slip through
@@ -662,9 +677,9 @@ func (u *Usenet) Process(
 	// errors are non-fatal here (CheckFileAvailability returns nil for those),
 	// so a provider hiccup won't wrongly fail an import — only a definitively
 	// missing segment (gone on every provider) fails the NZB.
-	if checkNZBAvailabilityErr := u.checkNZBAvailability(ctx, updatedNZB); checkNZBAvailabilityErr != nil {
-		_ = u.markAsFailed(updatedNZB, checkNZBAvailabilityErr)
-		return updatedNZB, fmt.Errorf("availability check failed: %w", checkNZBAvailabilityErr)
+	if checkNZBAvailabilityErr := u.checkNZBAvailability(ctx, nzb); checkNZBAvailabilityErr != nil {
+		_ = u.markAsFailed(nzb, checkNZBAvailabilityErr)
+		return fmt.Errorf("availability check failed: %w", checkNZBAvailabilityErr)
 	}
 
 	// Content gate: availability only proves the articles exist; it says
@@ -675,22 +690,23 @@ func (u *Usenet) Process(
 	// serving path and require a container signature, so a scrambled assembly
 	// fails here — and the arr grabs a replacement — instead of reaching the
 	// library as an unplayable file.
-	if verifyNZBContentErr := u.verifyNZBContent(ctx, updatedNZB); verifyNZBContentErr != nil {
-		_ = u.markAsFailed(updatedNZB, verifyNZBContentErr)
-		return updatedNZB, fmt.Errorf("content verification failed: %w", verifyNZBContentErr)
+	if verifyNZBContentErr := u.verifyNZBContent(ctx, nzb); verifyNZBContentErr != nil {
+		_ = u.markAsFailed(nzb, verifyNZBContentErr)
+		return fmt.Errorf("content verification failed: %w", verifyNZBContentErr)
 	}
 
-	// Mark as completed
-	if markAsCompletedErr := u.markAsCompleted(updatedNZB); markAsCompletedErr != nil {
-		return updatedNZB, fmt.Errorf("failed to mark NZB as completed: %w", markAsCompletedErr)
+	// Both gates pass over a cancelled context without checking anything,
+	// so an interrupted run proves nothing about the content: fail it, as a
+	// cancelled parse is failed, rather than complete it unverified.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		_ = u.markAsFailed(nzb, ctxErr)
+		return fmt.Errorf("processing interrupted: %w", ctxErr)
 	}
 
-	u.logger.Info().
-		Str("nzb_id", updatedNZB.ID).
-		Str("name", updatedNZB.Name).
-		Int("files", len(updatedNZB.Files)).
-		Msg("Successfully processed NZB archives (full parse)")
-	return updatedNZB, nil
+	if markAsCompletedErr := u.markAsCompleted(nzb); markAsCompletedErr != nil {
+		return fmt.Errorf("failed to mark NZB as completed: %w", markAsCompletedErr)
+	}
+	return nil
 }
 
 // checkAvailability samples each content file's segments (via the same
