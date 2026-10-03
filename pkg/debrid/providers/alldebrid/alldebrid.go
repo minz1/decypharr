@@ -388,7 +388,7 @@ func findMagnet(magnets Magnets, torrentID string) (magnetInfo, error) {
 		}
 	}
 
-	return magnetInfo{}, customerror.TorrentNotFoundError
+	return magnetInfo{}, customerror.ErrTorrentNotFound
 }
 
 func (ad *AllDebrid) CheckStatus(torrent *types.Torrent) (*types.Torrent, error) {
@@ -414,7 +414,7 @@ func (ad *AllDebrid) CheckStatus(torrent *types.Torrent) (*types.Torrent, error)
 		return torrent, nil
 	case types.TorrentStatusDownloading:
 		if !torrent.DownloadUncached {
-			return torrent, fmt.Errorf("torrent %s: %w", torrent.Name, customerror.TorrentNotCachedError)
+			return torrent, fmt.Errorf("torrent %s: %w", torrent.Name, customerror.ErrTorrentNotCached)
 		}
 		return torrent, nil
 	case types.TorrentStatusError:
@@ -687,7 +687,7 @@ func (ad *AllDebrid) CheckFile(ctx context.Context, _, link string) error {
 		return fmt.Errorf("alldebrid API error: expected one link info, got %d", len(data.Data.Infos))
 	}
 	if linkErr := data.Data.Infos[0].Error; linkErr != nil {
-		return fmt.Errorf("%w: %s: %s", customerror.HosterUnavailableError, linkErr.Code, linkErr.Message)
+		return fmt.Errorf("%w: %s: %s", customerror.ErrHosterUnavailable, linkErr.Code, linkErr.Message)
 	}
 	return nil
 }

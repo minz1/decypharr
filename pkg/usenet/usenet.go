@@ -794,7 +794,7 @@ func (u *Usenet) checkAvailability(ctx context.Context, fileName string, message
 			Int("missing_segments", notFoundCount).
 			Int("error_count", result.ErrorCount).
 			Msg("File is unavailable - one or more segments are missing")
-		return customerror.UsenetSegmentMissingError
+		return customerror.ErrUsenetSegmentMissing
 	}
 
 	return nil

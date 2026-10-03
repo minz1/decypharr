@@ -53,13 +53,13 @@ func TestWriteTorrentAddErrorPreservesSemantics(t *testing.T) {
 		permanent bool
 	}{
 		"blocked": {
-			err:       fmt.Errorf("submit: %w", customerror.TorrentBlockedError),
+			err:       fmt.Errorf("submit: %w", customerror.ErrTorrentBlocked),
 			status:    http.StatusUnavailableForLegalReasons,
 			code:      "torrent_blocked",
 			permanent: true,
 		},
 		"not cached": {
-			err:       fmt.Errorf("status: %w", customerror.TorrentNotCachedError),
+			err:       fmt.Errorf("status: %w", customerror.ErrTorrentNotCached),
 			status:    http.StatusNotFound,
 			code:      "torrent_not_cached",
 			retryable: true,

@@ -367,7 +367,7 @@ func (dl *DebridLink) CheckStatus(torrent *types.Torrent) (*types.Torrent, error
 	switch torrent.Status {
 	case types.TorrentStatusDownloading:
 		if !torrent.DownloadUncached {
-			return torrent, fmt.Errorf("torrent %s: %w", torrent.Name, customerror.TorrentNotCachedError)
+			return torrent, fmt.Errorf("torrent %s: %w", torrent.Name, customerror.ErrTorrentNotCached)
 		}
 		return torrent, nil
 	case types.TorrentStatusDownloaded:
@@ -626,7 +626,7 @@ func (dl *DebridLink) CheckFile(ctx context.Context, _, link string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
-		return customerror.HosterUnavailableError
+		return customerror.ErrHosterUnavailable
 	}
 	if !common.IsSuccess(resp.StatusCode) {
 		return fmt.Errorf("debridlink file check error: Status: %d", resp.StatusCode)

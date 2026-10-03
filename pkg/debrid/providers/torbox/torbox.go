@@ -487,7 +487,7 @@ func (tb *Torbox) CheckStatus(torrent *types.Torrent) (*types.Torrent, error) {
 		return torrent, nil
 	case types.TorrentStatusDownloading:
 		if !torrent.DownloadUncached {
-			return torrent, fmt.Errorf("torrent %s: %w", torrent.Name, customerror.TorrentNotCachedError)
+			return torrent, fmt.Errorf("torrent %s: %w", torrent.Name, customerror.ErrTorrentNotCached)
 		}
 		return torrent, nil
 	case types.TorrentStatusQueued, types.TorrentStatusError:
@@ -694,7 +694,7 @@ func (tb *Torbox) CheckFile(ctx context.Context, _, link string) error {
 		return err
 	}
 	if !present {
-		return customerror.HosterUnavailableError
+		return customerror.ErrHosterUnavailable
 	}
 	return nil
 }

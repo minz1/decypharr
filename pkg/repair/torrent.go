@@ -43,7 +43,7 @@ func (r *Service) probeTorrentFile(
 	if err := client.CheckFile(ctx, file.InfoHash, link); err == nil {
 		result.healthy = true
 		r.hearsay.ObserveTorrent(client.Config().Provider, file.InfoHash, true)
-	} else if errors.Is(err, customerror.HosterUnavailableError) {
+	} else if errors.Is(err, customerror.ErrHosterUnavailable) {
 		result.broken = true
 		result.reason = "hoster_unavailable"
 		r.hearsay.ObserveTorrent(client.Config().Provider, file.InfoHash, false)
@@ -93,9 +93,9 @@ func (r *Service) probeTorrentFileByUnrestrict(
 		return result
 	}
 	if err == nil || errors.Is(err, debridTypes.EmptyDownloadLinkError) ||
-		errors.Is(err, customerror.HosterUnavailableError) {
+		errors.Is(err, customerror.ErrHosterUnavailable) {
 		result.broken = true
-		if errors.Is(err, customerror.HosterUnavailableError) {
+		if errors.Is(err, customerror.ErrHosterUnavailable) {
 			result.reason = "hoster_unavailable"
 		} else {
 			result.reason = "empty_download_link"

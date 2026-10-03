@@ -37,7 +37,7 @@ func TestNZBProberReportsHealthyFile(t *testing.T) {
 func TestNZBProberReportsMissingFile(t *testing.T) {
 	t.Parallel()
 	client := stubNZBRepairClient{checkFile: func(context.Context, string, string) error {
-		return customerror.UsenetSegmentMissingError
+		return customerror.ErrUsenetSegmentMissing
 	}}
 	result := newNZBProber(client).probe(t.Context(), nzbProbeRequest{nzbID: "nzb", fileName: "movie.mkv"})
 	if !result.broken || result.reason != "usenet_segment_missing" {
@@ -52,7 +52,7 @@ func TestNZBProberVerifiesContentWhenRequested(t *testing.T) {
 		checkFile: func(context.Context, string, string) error { return nil },
 		verify: func(context.Context, string, string) error {
 			verified = true
-			return customerror.UsenetCorruptContentError
+			return customerror.ErrUsenetCorruptContent
 		},
 	}
 	result := newNZBProber(
