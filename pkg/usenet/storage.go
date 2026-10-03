@@ -16,6 +16,7 @@ import (
 	"github.com/sourcegraph/conc/pool"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/sirrobot01/decypharr/internal/fsutil"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
@@ -78,9 +79,13 @@ func NewNZBStorage(metaDir string, log zerolog.Logger) (*NZBStorage, error) {
 	return s, nil
 }
 
-// metaFilePath returns the path for a given NZB ID.
-func (s *NZBStorage) metaFilePath(id string) string {
-	return filepath.Join(s.metaDir, id+metaFileExtension)
+// metaFilePath returns the path for a given NZB ID. IDs reach here from API
+// callers, so one that is not a plain file name is refused.
+func (s *NZBStorage) metaFilePath(id string) (string, error) {
+	if id == "" {
+		return "", fmt.Errorf("nzb id is empty: %w", fsutil.ErrUnsafeName)
+	}
+	return fsutil.JoinName(s.metaDir, id+metaFileExtension)
 }
 
 // recalculateStatsLocked rebuilds cached stats by scanning metadata files.
@@ -126,7 +131,10 @@ func (s *NZBStorage) writeNZBLocked(nzb *storage.NZB) error {
 
 	data := s.codec.encodeNZBV2(nzb)
 
-	path := s.metaFilePath(nzb.ID)
+	path, err := s.metaFilePath(nzb.ID)
+	if err != nil {
+		return err
+	}
 	var oldSize int64
 	alreadyExists := false
 	if info, statErr := os.Stat(path); statErr == nil {
@@ -163,7 +171,10 @@ func (s *NZBStorage) GetNZB(id string) (*storage.NZB, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	path := s.metaFilePath(id)
+	path, err := s.metaFilePath(id)
+	if err != nil {
+		return nil, err
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -182,7 +193,10 @@ func (s *NZBStorage) GetNZBHeader(id string) (*storage.NZB, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	path := s.metaFilePath(id)
+	path, err := s.metaFilePath(id)
+	if err != nil {
+		return nil, err
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -207,7 +221,10 @@ func (s *NZBStorage) GetNZBFile(id, filename string) (*storage.NZBFile, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	path := s.metaFilePath(id)
+	path, err := s.metaFilePath(id)
+	if err != nil {
+		return nil, err
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -243,7 +260,10 @@ func (s *NZBStorage) SampleFileMessageIDs(id, filename string, percent int) ([]s
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	path := s.metaFilePath(id)
+	path, err := s.metaFilePath(id)
+	if err != nil {
+		return nil, err
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -292,7 +312,10 @@ func (s *NZBStorage) DeleteNZB(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	path := s.metaFilePath(id)
+	path, err := s.metaFilePath(id)
+	if err != nil {
+		return err
+	}
 	var oldSize int64
 	alreadyExists := false
 	if info, statErr := os.Stat(path); statErr == nil {
@@ -302,7 +325,7 @@ func (s *NZBStorage) DeleteNZB(id string) error {
 		return fmt.Errorf("failed to stat NZB meta file before delete: %w", statErr)
 	}
 
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+	if err = os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to delete NZB meta file: %w", err)
 	}
 
@@ -380,8 +403,11 @@ func (s *NZBStorage) GetAllNZBIDs() ([]string, error) {
 
 // Exists checks if an NZB exists in storage.
 func (s *NZBStorage) Exists(id string) bool {
-	path := s.metaFilePath(id)
-	_, err := os.Stat(path)
+	path, err := s.metaFilePath(id)
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(path)
 	return err == nil
 }
 
