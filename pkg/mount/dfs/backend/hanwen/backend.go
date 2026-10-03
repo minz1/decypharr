@@ -5,7 +5,6 @@ package hanwen
 import (
 	"context"
 	"fmt"
-	"os"
 	"runtime"
 	"runtime/debug"
 	"sync/atomic"
@@ -47,7 +46,17 @@ type Backend struct {
 	unmountFunc func(ctx context.Context)
 	root        *Dir
 	vfs         *vfs.Manager
-	unmounter   *unmount.Unmounter
+	unmounter   mountDetacher
+}
+
+// mountDetacher force-detaches a mount point (unmount.Unmounter).
+type mountDetacher interface {
+	Unmount(ctx context.Context, mountPath string) error
+}
+
+// fuseServer is the part of *fuse.Server teardown uses.
+type fuseServer interface {
+	Unmount() error
 }
 
 // NewBackend creates a new hanwen backend.
@@ -149,41 +158,34 @@ func (b *Backend) Mount(ctx context.Context) error {
 }
 
 // unmountServer closes the VFS manager and unmounts server, force-unmounting
-// when the regular unmount does not take or ctx expires first.
-func (b *Backend) unmountServer(ctx context.Context, server *fuse.Server) {
+// when the regular unmount fails or ctx expires first.
+func (b *Backend) unmountServer(ctx context.Context, server fuseServer) {
 	b.logger.Info().Msg("Unmounting filesystem")
 
-	// Create a channel to track completion
-	done := make(chan struct{})
-
+	done := make(chan error, 1)
 	go func() {
-		// Close VFS manager
 		if b.vfs != nil {
 			if err := b.vfs.Close(); err != nil {
 				b.logger.Warn().Err(err).Msg("Failed to close VFS")
 			}
 		}
-
-		_ = server.Unmount()
-		time.Sleep(1 * time.Second)
-
-		// Check if still mounted
-		if _, err := os.Stat(b.config.MountPath); err == nil {
-			b.logger.Warn().Msg("FUSE filesystem still mounted, attempting force unmount")
-			b.forceUnmount(ctx)
-		}
-
-		close(done)
+		// Unmount returns once the kernel has detached the mount and the
+		// serve loop has exited, or with the reason it could not.
+		done <- server.Unmount()
 	}()
 
-	// Wait for unmount to complete or context timeout
 	select {
-	case <-done:
-		b.logger.Info().Msg("Filesystem unmounted successfully")
+	case err := <-done:
+		if err == nil {
+			b.logger.Info().Msg("Filesystem unmounted successfully")
+			return
+		}
+		b.logger.Warn().Err(err).Msg("Unmount failed, forcing unmount")
 	case <-ctx.Done():
 		b.logger.Warn().Err(ctx.Err()).Msg("Unmount timed out, forcing unmount")
-		b.forceUnmount(ctx)
 	}
+	// ctx may already be done; the unmounter bounds its own attempts.
+	b.forceUnmount(context.WithoutCancel(ctx))
 }
 
 // mountOptions builds the go-fuse options for this mount.
