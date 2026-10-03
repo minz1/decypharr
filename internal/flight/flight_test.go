@@ -58,37 +58,47 @@ func TestCancelledCallerDoesNotFailOthers(t *testing.T) {
 	})
 }
 
-// When every caller gives up, the call is canceled and a new caller starts
-// a fresh one.
-func TestLastCallerCancelsTheCall(t *testing.T) {
+// A call every caller abandoned is not canceled: it runs to completion
+// (bounded by fn's own timeouts), and a caller arriving meanwhile shares it.
+func TestAbandonedCallRunsToCompletion(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		var g flight.Group[int]
-		stopped := make(chan struct{})
+		release := make(chan struct{})
 		var runs atomic.Int32
-		blocking := func(ctx context.Context) (int, error) {
+		fn := func(ctx context.Context) (int, error) {
 			runs.Add(1)
-			<-ctx.Done()
-			close(stopped)
-			return 0, ctx.Err()
+			select {
+			case <-release:
+				return 7, nil
+			case <-ctx.Done():
+				return 0, ctx.Err()
+			}
 		}
 		ctx, cancel := context.WithCancel(t.Context())
-		done := make(chan struct{})
+		done := make(chan error, 1)
 		go func() {
-			defer close(done)
-			_, _, _ = g.Do(ctx, "key", blocking)
+			_, _, err := g.Do(ctx, "key", fn)
+			done <- err
 		}()
 		synctest.Wait()
 		cancel()
-		<-done
-		<-stopped
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Fatalf("abandoning caller err = %v, want its cancellation", err)
+		}
 
-		val, shared, err := g.Do(t.Context(), "key", func(context.Context) (int, error) {
-			runs.Add(1)
-			return 7, nil
-		})
-		if err != nil || shared || val != 7 || runs.Load() != 2 {
-			t.Fatalf("fresh call: %d, shared %v, %v, runs %d", val, shared, err, runs.Load())
+		later := make(chan int, 1)
+		go func() {
+			val, _, err := g.Do(t.Context(), "key", fn)
+			if err != nil {
+				t.Errorf("later caller: %v", err)
+			}
+			later <- val
+		}()
+		synctest.Wait()
+		close(release)
+		if val := <-later; val != 7 || runs.Load() != 1 {
+			t.Fatalf("later caller got %d after %d runs, want the abandoned call's 7 from 1 run", val, runs.Load())
 		}
 	})
 }
