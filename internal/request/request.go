@@ -312,19 +312,43 @@ func New(options ...ClientOption) *Client {
 	return client
 }
 
+// ParseProxy parses a proxy URL: http://, https:// or socks5://, with a
+// host. A bare host:port means an HTTP proxy, as with curl.
+func ParseProxy(proxyURL string) (*url.URL, error) {
+	raw := strings.TrimSpace(proxyURL)
+	if !strings.Contains(raw, "://") {
+		raw = "http://" + raw
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("invalid proxy URL: %w", err)
+	}
+	switch parsed.Scheme {
+	case "http", "https", "socks5":
+	default:
+		return nil, fmt.Errorf("invalid proxy URL %q: scheme must be http, https or socks5", parsed.Redacted())
+	}
+	if parsed.Host == "" {
+		return nil, fmt.Errorf("invalid proxy URL %q: no host", parsed.Redacted())
+	}
+	return parsed, nil
+}
+
 // SetProxy configures transport for proxyURL: socks5:// dials through a
 // SOCKS5 proxy, anything else is an HTTP(S) proxy URL, and "" uses the
-// environment. An unparseable URL leaves the transport unchanged.
+// environment. An invalid URL fails every request with its parse error
+// rather than letting them bypass the configured proxy.
 func SetProxy(transport *http.Transport, proxyURL string) {
 	if proxyURL == "" {
 		transport.Proxy = http.ProxyFromEnvironment
 		return
 	}
-	parsed, err := url.Parse(proxyURL)
+	parsed, err := ParseProxy(proxyURL)
 	if err != nil {
+		failAllRequests(transport, err)
 		return
 	}
-	if !strings.HasPrefix(proxyURL, "socks5://") {
+	if parsed.Scheme != "socks5" {
 		transport.Proxy = http.ProxyURL(parsed)
 		return
 	}
@@ -336,6 +360,7 @@ func SetProxy(transport *http.Transport, proxyURL string) {
 	}
 	dialer, err := proxy.SOCKS5("tcp", parsed.Host, auth, proxy.Direct)
 	if err != nil {
+		failAllRequests(transport, fmt.Errorf("socks5 proxy: %w", err))
 		return
 	}
 	// The x/net SOCKS5 dialer implements ContextDialer; use it so request
@@ -347,4 +372,10 @@ func SetProxy(transport *http.Transport, proxyURL string) {
 	transport.DialContext = func(_ context.Context, network, addr string) (net.Conn, error) {
 		return dialer.Dial(network, addr)
 	}
+}
+
+// failAllRequests makes every request through transport fail with err.
+func failAllRequests(transport *http.Transport, err error) {
+	transport.Proxy = func(*http.Request) (*url.URL, error) { return nil, err }
+	transport.DialContext = func(context.Context, string, string) (net.Conn, error) { return nil, err }
 }

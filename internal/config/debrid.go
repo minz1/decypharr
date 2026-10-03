@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+
+	"github.com/sirrobot01/decypharr/internal/request"
 )
 
 type Debrid struct {
@@ -84,6 +86,11 @@ func validateDebrids(debrids []Debrid) error {
 		// Basic field validation
 		if debrid.APIKey == "" {
 			return errors.New("debrid api key is required")
+		}
+		if debrid.Proxy != "" {
+			if _, err := request.ParseProxy(debrid.Proxy); err != nil {
+				return fmt.Errorf("debrid %s: %w", debrid.Name, err)
+			}
 		}
 	}
 

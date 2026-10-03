@@ -124,3 +124,18 @@ func TestSessionSecretIsNotSerialized(t *testing.T) {
 		t.Fatalf("Clone lost the secret: %v", err)
 	}
 }
+
+// A debrid proxy that cannot be used is reported as a setup error, not left
+// to a silent direct connection.
+func TestLoadRejectsInvalidDebridProxy(t *testing.T) {
+	t.Parallel()
+	directory := t.TempDir()
+	body := `{"debrids":[{"name":"rd","provider":"realdebrid","api_key":"k","proxy":"http://[::1"}]}`
+	if err := os.WriteFile(filepath.Join(directory, "config.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := load(t, directory, nil)
+	if msg := cfg.SetupError(); !strings.Contains(msg, "proxy") {
+		t.Fatalf("SetupError = %q, want a proxy error", msg)
+	}
+}
