@@ -14,7 +14,7 @@ var ErrDownloadLinkNotFound = &Error{
 	Code:    "no_download_link",
 }
 
-var EmptyDownloadLinkError = &Error{
+var ErrEmptyDownloadLink = &Error{
 	Message: "Download link is empty",
 	Code:    "empty_download_link",
 }

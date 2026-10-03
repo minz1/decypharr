@@ -157,7 +157,7 @@ type DownloadLink struct {
 
 func (dl *DownloadLink) Valid() error {
 	if dl.Empty() {
-		return EmptyDownloadLinkError
+		return ErrEmptyDownloadLink
 	}
 
 	// Validate url format
