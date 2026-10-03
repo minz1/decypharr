@@ -62,21 +62,14 @@ func NewFactory(level string, console, file io.Writer) *Factory {
 // Discard returns a Factory whose loggers write nothing.
 func Discard() *Factory { return nil }
 
-// ParseLevel maps a configured level name to a zerolog level; unknown names
-// mean info.
+// ParseLevel maps a configured level name to a zerolog level; an empty or
+// unknown name means info.
 func ParseLevel(level string) zerolog.Level {
-	switch strings.ToLower(level) {
-	case "debug":
-		return zerolog.DebugLevel
-	case "warn":
-		return zerolog.WarnLevel
-	case "error":
-		return zerolog.ErrorLevel
-	case "trace":
-		return zerolog.TraceLevel
-	default:
+	parsed, err := zerolog.ParseLevel(strings.ToLower(level))
+	if err != nil || parsed == zerolog.NoLevel {
 		return zerolog.InfoLevel
 	}
+	return parsed
 }
 
 // New returns a logger that tags messages with prefix.
