@@ -34,6 +34,9 @@ func TestHandleLoginAlwaysReturnsSID(t *testing.T) {
 	if len(cookies) != 1 || cookies[0].Name != "SID" || cookies[0].Value == "" {
 		t.Fatalf("login cookies = %#v, want one SID cookie", cookies)
 	}
+	if !cookies[0].Secure || !cookies[0].HttpOnly {
+		t.Fatalf("SID cookie = %#v, want Secure and HttpOnly", cookies[0])
+	}
 	username, password, err := extractFromSID(store.Get().SecretKey(), cookies[0].Value)
 	if err != nil {
 		t.Fatalf("decode SID: %v", err)
