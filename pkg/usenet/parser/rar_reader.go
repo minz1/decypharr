@@ -276,8 +276,8 @@ func (p *RARParser) parseEncryptedRAR5Headers(
 		}
 		result.EncryptionIV = iv
 
-		encHeader, _, encDataSize, ok := p.nextEncryptedRAR5Header(stream, keys.Key, iv)
-		if !ok {
+		encHeader, _, encDataSize, decrypted := p.nextEncryptedRAR5Header(stream, keys.Key, iv)
+		if !decrypted {
 			return nil
 		}
 		if encHeader.Type == RAR5HeaderTypeFile {
@@ -510,7 +510,7 @@ func parseVIntFromBuffer(buf []byte) (uint64, int) {
 func readVIntFromReader(r io.Reader) (uint64, int, error) {
 	var buf [1]byte
 	var result uint64
-	for bytesRead := 0; bytesRead < maxVIntLen; bytesRead++ {
+	for bytesRead := range maxVIntLen {
 		n, err := r.Read(buf[:])
 		if err != nil {
 			return 0, bytesRead, err

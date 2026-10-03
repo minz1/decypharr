@@ -58,36 +58,42 @@ func newArticleReaderAt(
 		if volume == nil {
 			return nil, 0, fmt.Errorf("archive volume is nil")
 		}
-		volumeStart := position
-		for _, segment := range volume.Segments {
-			if segment.MessageID == "" {
-				return nil, 0, fmt.Errorf("archive volume %q has a segment without a message ID", volume.Name)
-			}
-			if segment.Bytes <= 0 {
-				return nil, 0, fmt.Errorf(
-					"archive volume %q has non-positive segment size %d",
-					volume.Name,
-					segment.Bytes,
-				)
-			}
-			end := position + segment.Bytes
-			if end < position {
-				return nil, 0, fmt.Errorf("archive volume %q size overflows int64", volume.Name)
-			}
-			spans = append(spans, articleSpan{start: position, end: end, segment: segment})
-			position = end
-		}
-		if got := position - volumeStart; got != volume.Size {
-			return nil, 0, fmt.Errorf(
-				"archive volume %q segment size %d does not match declared size %d",
-				volume.Name,
-				got,
-				volume.Size,
-			)
+		var err error
+		if spans, position, err = appendVolumeSpans(spans, volume, position); err != nil {
+			return nil, 0, err
 		}
 	}
 
 	return &articleReaderAt{ctx: ctx, source: source, spans: spans, size: position}, position, nil
+}
+
+// appendVolumeSpans appends the volume's segments as spans starting at
+// position and checks they add up to the declared volume size.
+func appendVolumeSpans(spans []articleSpan, volume *types.Volume, position int64) ([]articleSpan, int64, error) {
+	volumeStart := position
+	for _, segment := range volume.Segments {
+		if segment.MessageID == "" {
+			return nil, 0, fmt.Errorf("archive volume %q has a segment without a message ID", volume.Name)
+		}
+		if segment.Bytes <= 0 {
+			return nil, 0, fmt.Errorf("archive volume %q has non-positive segment size %d", volume.Name, segment.Bytes)
+		}
+		end := position + segment.Bytes
+		if end < position {
+			return nil, 0, fmt.Errorf("archive volume %q size overflows int64", volume.Name)
+		}
+		spans = append(spans, articleSpan{start: position, end: end, segment: segment})
+		position = end
+	}
+	if got := position - volumeStart; got != volume.Size {
+		return nil, 0, fmt.Errorf(
+			"archive volume %q segment size %d does not match declared size %d",
+			volume.Name,
+			got,
+			volume.Size,
+		)
+	}
+	return spans, position, nil
 }
 
 func (r *articleReaderAt) ReadAt(buffer []byte, offset int64) (int, error) {
