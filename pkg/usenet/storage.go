@@ -417,28 +417,9 @@ func (s *NZBStorage) MigrateLegacy() (int, error) {
 		return 0, nil
 	}
 
-	s.mu.RLock()
-	entries, err := os.ReadDir(s.metaDir)
-	s.mu.RUnlock()
+	legacy, err := s.legacyMetaFiles()
 	if err != nil {
-		return 0, fmt.Errorf("failed to read meta directory: %w", err)
-	}
-
-	// Cheap first-byte probe (lock-free) to collect only the legacy files.
-	var legacy []string
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != metaFileExtension {
-			continue
-		}
-		path := filepath.Join(s.metaDir, entry.Name())
-		v2, fileIsCodecV2Err := fileIsCodecV2(path)
-		if fileIsCodecV2Err != nil {
-			s.logger.Warn().Err(fileIsCodecV2Err).Str("file", entry.Name()).Msg("Migration: failed to probe file")
-			continue
-		}
-		if !v2 {
-			legacy = append(legacy, path)
-		}
+		return 0, err
 	}
 
 	if len(legacy) == 0 {
@@ -485,6 +466,33 @@ func (s *NZBStorage) MigrateLegacy() (int, error) {
 		Int64("failed", failed.Load()).
 		Msg("Migration: completed legacy NZB meta upgrade")
 	return int(migrated.Load()), nil
+}
+
+// legacyMetaFiles lists the meta files not yet in the v2 codec, using a cheap
+// lock-free first-byte probe.
+func (s *NZBStorage) legacyMetaFiles() ([]string, error) {
+	s.mu.RLock()
+	entries, err := os.ReadDir(s.metaDir)
+	s.mu.RUnlock()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read meta directory: %w", err)
+	}
+	var legacy []string
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != metaFileExtension {
+			continue
+		}
+		path := filepath.Join(s.metaDir, entry.Name())
+		v2, probeErr := fileIsCodecV2(path)
+		if probeErr != nil {
+			s.logger.Warn().Err(probeErr).Str("file", entry.Name()).Msg("Migration: failed to probe file")
+			continue
+		}
+		if !v2 {
+			legacy = append(legacy, path)
+		}
+	}
+	return legacy, nil
 }
 
 // migrateFile re-encodes one legacy proto meta file to v2. The expensive

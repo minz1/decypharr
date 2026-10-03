@@ -26,7 +26,7 @@ const verifyHeadBytes = 512
 // mislabeled (an MP4 posted as .mkv plays fine), so any recognized container
 // passes. Only a head that matches nothing is corrupt.
 func headSignatureOK(head []byte) bool {
-	if len(head) < 16 {
+	if len(head) < minHeadSignatureBytes {
 		return false
 	}
 	switch {
@@ -81,21 +81,7 @@ func (u *Usenet) VerifyFileHead(ctx context.Context, file *storage.NZBFile) erro
 		return nil // too small to classify; not worth failing a grab over
 	}
 	if u.analyzer != nil {
-		head, err := u.analyzer.ReadFilePrefix(ctx, file, verifyHeadBytes)
-		if err == nil {
-			if headSignatureOK(head) {
-				return nil
-			}
-			return fmt.Errorf(
-				"head of %q matches no media container signature: %w",
-				file.Name,
-				customerror.UsenetCorruptContentError,
-			)
-		}
-		if !errors.Is(err, parser.ErrPrefixReadUnsupported) {
-			if nntp.IsArticleNotFoundError(err) {
-				return fmt.Errorf("head article of %q missing: %w", file.Name, customerror.UsenetSegmentMissingError)
-			}
+		if handled, err := u.verifyHeadFromAnalyzer(ctx, file); handled {
 			return err
 		}
 	}
@@ -114,20 +100,44 @@ func (u *Usenet) VerifyFileHead(ctx context.Context, file *storage.NZBFile) erro
 
 	head := make([]byte, verifyHeadBytes)
 	n, err := cursor.ReadAtContext(ctx, head, 0)
-	if err != nil && n < 16 {
-		if nntp.IsArticleNotFoundError(err) {
-			return fmt.Errorf("head article of %q missing: %w", file.Name, customerror.UsenetSegmentMissingError)
-		}
-		return err
+	if err != nil && n < minHeadSignatureBytes {
+		return classifyHeadReadError(file.Name, err)
 	}
-	if headSignatureOK(head[:n]) {
+	return checkHeadSignature(file.Name, head[:n])
+}
+
+// minHeadSignatureBytes is the shortest head headSignatureOK can classify.
+const minHeadSignatureBytes = 16
+
+// verifyHeadFromAnalyzer checks the head through the analyzer's shared
+// article cache. handled is false when the file needs the full serving reader
+// (encrypted or compressed members).
+func (u *Usenet) verifyHeadFromAnalyzer(ctx context.Context, file *storage.NZBFile) (bool, error) {
+	head, err := u.analyzer.ReadFilePrefix(ctx, file, verifyHeadBytes)
+	switch {
+	case err == nil:
+		return true, checkHeadSignature(file.Name, head)
+	case errors.Is(err, parser.ErrPrefixReadUnsupported):
+		return false, nil
+	default:
+		return true, classifyHeadReadError(file.Name, err)
+	}
+}
+
+// checkHeadSignature fails a head that matches no media container.
+func checkHeadSignature(name string, head []byte) error {
+	if headSignatureOK(head) {
 		return nil
 	}
-	return fmt.Errorf(
-		"head of %q matches no media container signature: %w",
-		file.Name,
-		customerror.UsenetCorruptContentError,
-	)
+	return fmt.Errorf("head of %q matches no media container signature: %w", name, customerror.UsenetCorruptContentError)
+}
+
+// classifyHeadReadError maps a missing head article to UsenetSegmentMissingError.
+func classifyHeadReadError(name string, err error) error {
+	if nntp.IsArticleNotFoundError(err) {
+		return fmt.Errorf("head article of %q missing: %w", name, customerror.UsenetSegmentMissingError)
+	}
+	return err
 }
 
 // VerifyFile head-verifies one stored file of a completed NZB. Non-media
