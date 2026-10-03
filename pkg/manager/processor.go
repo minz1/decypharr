@@ -247,6 +247,13 @@ func (m *Manager) processQueuedNZB(entry *storage.Entry) {
 	}
 }
 
+// transientStatusError reports whether a status check failed for a reason
+// that may pass on its own (network errors, timeouts, provider 5xx, slot
+// limits). An uncached torrent is an outcome, not a transient failure.
+func transientStatusError(err error) bool {
+	return customerror.IsRetriableError(err) && !errors.Is(err, customerror.ErrTorrentNotCached)
+}
+
 func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 	defer m.processingEntries.Delete(entry.InfoHash)
 	placement := entry.GetActiveProvider()
@@ -281,6 +288,13 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 	}
 
 	dbT, err := client.CheckStatus(debridTorrent)
+	if err != nil && transientStatusError(err) {
+		// A network blip or provider hiccup: leave the entry as it is, so the
+		// next queue pass checks again, rather than failing it and deleting
+		// the provider's torrent.
+		m.logger.Warn().Err(err).Str("name", entry.Name).Msg("Status check failed; retrying on the next pass")
+		return
+	}
 	if err != nil {
 		m.logger.Error().Err(err).Str("name", entry.Name).Msg("Error checking status")
 		entry.MarkAsError(err)
