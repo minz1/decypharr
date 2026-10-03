@@ -3,11 +3,14 @@ package decypharr
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"runtime"
 	"runtime/debug"
 	"strconv"
 	"sync"
+
+	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/logger"
@@ -16,13 +19,16 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/mount/external"
 	"github.com/sirrobot01/decypharr/pkg/mount/rclone"
 	"github.com/sirrobot01/decypharr/pkg/server"
+	"github.com/sirrobot01/decypharr/pkg/server/webdav"
 	"github.com/sirrobot01/decypharr/pkg/share"
 	"github.com/sirrobot01/decypharr/pkg/version"
 )
 
-// Start runs decypharr until ctx is cancelled or a service fails, rebuilding
-// every service (with a fresh config) each time a restart is requested.
-func Start(ctx context.Context) error {
+// Start runs decypharr from the data folder dataDir until ctx is cancelled or
+// a service fails. Each generation loads the configuration and builds its own
+// object graph; a requested restart tears the generation down and starts the
+// next one from a fresh load.
+func Start(ctx context.Context, dataDir string) error {
 	if umaskStr := os.Getenv("UMASK"); umaskStr != "" {
 		umask, err := strconv.ParseInt(umaskStr, 8, 32)
 		if err != nil {
@@ -31,26 +37,55 @@ func Start(ctx context.Context) error {
 		SetUmask(int(umask))
 	}
 
+	// chi's method table is process state: register the WebDAV verbs once,
+	// before any generation builds its routers.
+	webdav.RegisterMethods()
+
+	// The rotating log file outlives generations: every component logger of
+	// every generation shares this one rotator.
+	logFile, err := logger.OpenRotatingFile(dataDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = logFile.Close() }()
+
+	reload := func() (*config.Config, error) { return config.Load(dataDir, os.LookupEnv) }
+	cfg, err := reload()
+	if err != nil {
+		return fmt.Errorf("configuration error: %w", err)
+	}
 	restartCh := make(chan struct{}, 1)
-	mgr := manager.New()
 	for {
-		restart, err := runOnce(ctx, mgr, restartCh)
+		next, restart, runErr := runOnce(ctx, cfg, reload, logFile, restartCh)
 		if !restart {
-			return err
+			return runErr
 		}
+		cfg = next
 	}
 }
 
-// runOnce starts all services under a fresh child of ctx and waits. It
-// reports restart=true after a requested restart has torn the services down
-// and reset the config and manager; otherwise the process should exit with
-// the returned error.
-func runOnce(ctx context.Context, mgr *manager.Manager, restartCh chan struct{}) (bool, error) {
+// runOnce builds one generation of services from cfg under a fresh child of
+// ctx and waits. After a requested restart it reports restart=true with the
+// configuration for the next generation, loaded before this one was torn
+// down; otherwise the process should exit with the returned error.
+func runOnce(
+	ctx context.Context,
+	cfg *config.Config,
+	reload func() (*config.Config, error),
+	logFile io.Writer,
+	restartCh chan struct{},
+) (*config.Config, bool, error) {
+	store := config.NewStore(cfg)
+	logs := logger.NewFactory(cfg.LogLevel, os.Stdout, logFile)
+	_log := logs.New("decypharr")
+
+	mgr, err := manager.New(store, logs)
+	if err != nil {
+		return nil, false, err
+	}
+
 	svcCtx, cancelSvc := context.WithCancel(ctx)
 	defer cancelSvc()
-
-	cfg := config.Get()
-	_log := logger.Default()
 
 	// ascii banner
 	fmt.Fprintf(os.Stdout, `
@@ -66,8 +101,8 @@ func runOnce(ctx context.Context, mgr *manager.Manager, restartCh chan struct{})
 `, version.GetInfo(), cfg.LogLevel)
 
 	// Initialize services
-	mgr.SetMountManager(createMountManager(mgr, cfg))
-	srv := server.New(mgr)
+	mgr.SetMountManager(createMountManager(mgr, cfg, logs))
+	srv := server.New(mgr, store, logs)
 	srv.SetRestartFunc(func() {
 		select {
 		case restartCh <- struct{}{}:
@@ -76,10 +111,9 @@ func runOnce(ctx context.Context, mgr *manager.Manager, restartCh chan struct{})
 	})
 
 	shutdown := func() {
-		config.Reset()
 		// Stop manager to cleanup all resources including mounts
-		if err := mgr.Stop(); err != nil {
-			_log.Warn().Err(err).Msg("Failed to stop manager during shutdown")
+		if stopErr := mgr.Stop(); stopErr != nil {
+			_log.Warn().Err(stopErr).Msg("Failed to stop manager during shutdown")
 		}
 		// refresh GC
 		runtime.GC()
@@ -87,49 +121,79 @@ func runOnce(ctx context.Context, mgr *manager.Manager, restartCh chan struct{})
 
 	serviceResult := make(chan error, 1)
 	go func() {
-		serviceResult <- startServices(svcCtx, mgr, cancelSvc, srv)
+		serviceResult <- startServices(svcCtx, mgr, cancelSvc, srv, cfg, logs)
 	}()
 
-	select {
-	case <-ctx.Done():
-		cancelSvc()
+	end, next, svcErr := awaitEnd(ctx, restartCh, serviceResult, reload, _log)
+	cancelSvc()
+	switch end {
+	case endStopped:
 		<-serviceResult
 		_log.Info().Msg("Decypharr has been stopped gracefully.")
 		shutdown()
-		return false, nil
-
-	case <-restartCh:
-		cancelSvc()
+		return nil, false, nil
+	case endRestart:
 		_log.Info().Msg("Restarting Decypharr...")
 		<-serviceResult
-		_log.Info().Msg("Decypharr has been restarted.")
-		config.Reset()
-		// Stop manager to reset ready channel and cleanup resources
-		if err := mgr.Reset(); err != nil {
-			_log.Warn().Err(err).Msg("Failed to reset manager")
-		}
-		// refresh GC
-		runtime.GC()
-		return true, nil
-
-	case err := <-serviceResult:
-		cancelSvc()
-		if err != nil {
-			_log.Error().Err(err).Msg("Service stopped unexpectedly")
-		}
+		// The next generation builds a new manager over the same database.
 		shutdown()
-		return false, err
+		_log.Info().Msg("Decypharr has been restarted.")
+		return next, true, nil
+	case endFailed:
+		if svcErr != nil {
+			_log.Error().Err(svcErr).Msg("Service stopped unexpectedly")
+		}
+	}
+	shutdown()
+	return nil, false, svcErr
+}
+
+// endKind is how a generation ends.
+type endKind int
+
+const (
+	endStopped endKind = iota // ctx was cancelled
+	endRestart                // a restart was requested and the next config loaded
+	endFailed                 // a service stopped on its own
+)
+
+// awaitEnd waits for the generation to end. A restart request first loads
+// the next generation's configuration; if that fails, the running generation
+// keeps serving instead of the process exiting with nothing running.
+func awaitEnd(
+	ctx context.Context,
+	restartCh <-chan struct{},
+	serviceResult <-chan error,
+	reload func() (*config.Config, error),
+	log zerolog.Logger,
+) (endKind, *config.Config, error) {
+	for {
+		select {
+		case <-ctx.Done():
+			return endStopped, nil, nil
+		case <-restartCh:
+			next, err := reload()
+			if err != nil {
+				log.Error().
+					Err(err).
+					Msg("Restart cancelled: the configuration does not load; the running services keep serving")
+				continue
+			}
+			return endRestart, next, nil
+		case err := <-serviceResult:
+			return endFailed, nil, err
+		}
 	}
 }
 
-func createMountManager(mgr *manager.Manager, cfg *config.Config) manager.MountManager {
+func createMountManager(mgr *manager.Manager, cfg *config.Config, logs *logger.Factory) manager.MountManager {
 	switch cfg.Mount.Type {
 	case config.MountTypeRclone:
-		return rclone.NewManager(mgr)
+		return rclone.NewManager(mgr, cfg, logs.New("rclone"))
 	case config.MountTypeDFS:
-		return dfs.NewManager(mgr)
+		return dfs.NewManager(mgr, cfg, logs)
 	case config.MountTypeExternalRclone:
-		return external.NewManager(mgr)
+		return external.NewManager(mgr, cfg, logs.New("external"))
 	case config.MountTypeNone:
 		return manager.NewStubMountManager()
 	default: // unset
@@ -142,6 +206,8 @@ func startServices(
 	manager *manager.Manager,
 	cancelSvc context.CancelFunc,
 	srv *server.Server,
+	cfg *config.Config,
+	logs *logger.Factory,
 ) error {
 	var wg sync.WaitGroup
 	// Only the first error is ever received. Sends never block, so a service
@@ -155,7 +221,7 @@ func startServices(
 		}
 	}
 
-	_log := logger.Default()
+	_log := logs.New("decypharr")
 
 	safeGo := func(f func() error) {
 		wg.Go(func() {
@@ -181,11 +247,10 @@ func startServices(
 	// NFS and SMB export the same catalog through one cache: a second cache
 	// over the same directory would delete the first one's files. Build it
 	// before anything starts so a bad cache directory fails immediately.
-	cfg := config.Get()
 	var export *share.Export
 	if cfg.NFS.Enabled || cfg.SMB.Enabled {
 		var err error
-		if export, err = share.NewExport(ctx, manager, cfg.ShareCache); err != nil {
+		if export, err = share.NewExport(ctx, manager, cfg.ShareCache, logs.New("share")); err != nil {
 			return err
 		}
 		defer func() {
@@ -205,14 +270,14 @@ func startServices(
 	})
 
 	if cfg.NFS.Enabled {
-		nfs := share.NewNFS(manager, export, cfg.NFS)
+		nfs := share.NewNFS(manager, export, cfg.NFS, cfg.Dir(), logs.New("nfs"))
 		safeGo(func() error {
 			return nfs.Start(ctx)
 		})
 	}
 
 	if cfg.SMB.Enabled {
-		smb := share.NewSMB(manager, export, cfg.SMB)
+		smb := share.NewSMB(manager, export, cfg.SMB, logs.New("smb"))
 		safeGo(func() error {
 			return smb.Start(ctx)
 		})

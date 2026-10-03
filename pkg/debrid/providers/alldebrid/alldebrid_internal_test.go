@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/internal/request"
@@ -57,7 +59,7 @@ func TestMagnetsUnmarshalJSON(t *testing.T) {
 }
 
 func TestGetTorrentSelectsRequestedMagnetFromArray(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
+	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.URL.Query().Get("id"); got != "2" {
@@ -73,14 +75,14 @@ func TestGetTorrentSelectsRequestedMagnetFromArray(t *testing.T) {
 
 	ad := &AllDebrid{
 		Host:   server.URL,
-		client: request.New(request.WithMaxRetries(0)),
+		client: request.New(zerolog.Nop(), nil, request.WithMaxRetries(0)),
 		config: config.Debrid{Name: "alldebrid"},
 	}
 	torrent, err := ad.GetTorrent("2")
 	if err != nil {
 		t.Fatalf("GetTorrent() error = %v", err)
 	}
-	if torrent.Id != "2" || torrent.Name != "Release.mkv" || torrent.InfoHash != "ABC" {
+	if torrent.ID != "2" || torrent.Name != "Release.mkv" || torrent.InfoHash != "ABC" {
 		t.Fatalf("GetTorrent() = %#v, want requested magnet 2", torrent)
 	}
 }
@@ -88,7 +90,7 @@ func TestGetTorrentSelectsRequestedMagnetFromArray(t *testing.T) {
 func TestFindMagnetReturnsNotFound(t *testing.T) {
 	t.Parallel()
 	_, err := findMagnet(Magnets{{ID: 1}}, "2")
-	if !errors.Is(err, customerror.TorrentNotFoundError) {
+	if !errors.Is(err, customerror.ErrTorrentNotFound) {
 		t.Fatalf("findMagnet() error = %v, want TorrentNotFoundError", err)
 	}
 }
@@ -117,7 +119,7 @@ func TestAllDebridStatusClassification(t *testing.T) {
 }
 
 func TestCheckStatusRestartsStatusSeven(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
+	t.Parallel()
 
 	var statusChecks atomic.Int32
 	var restartCalls atomic.Int32
@@ -152,7 +154,7 @@ func TestCheckStatusRestartsStatusSeven(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	ad := testAllDebrid(server.URL + "/v4.1")
-	torrent := &debridTypes.Torrent{Id: "42", DownloadUncached: true}
+	torrent := &debridTypes.Torrent{ID: "42", DownloadUncached: true}
 	got, err := ad.CheckStatus(torrent)
 	if err != nil {
 		t.Fatalf("CheckStatus() error = %v", err)
@@ -169,7 +171,7 @@ func TestCheckStatusRestartsStatusSeven(t *testing.T) {
 }
 
 func TestCheckStatusBoundsStatusSevenRetries(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
+	t.Parallel()
 
 	var statusChecks atomic.Int32
 	var restartCalls atomic.Int32
@@ -191,7 +193,7 @@ func TestCheckStatusBoundsStatusSevenRetries(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	ad := testAllDebrid(server.URL)
-	torrent := &debridTypes.Torrent{Id: "42", DownloadUncached: true}
+	torrent := &debridTypes.Torrent{ID: "42", DownloadUncached: true}
 	got, err := ad.CheckStatus(torrent)
 	if err == nil || !strings.Contains(err.Error(), "remained at status code 7") {
 		t.Fatalf("CheckStatus() error = %v, want bounded status code 7 error", err)
@@ -208,7 +210,7 @@ func TestCheckStatusBoundsStatusSevenRetries(t *testing.T) {
 }
 
 func TestCheckStatusDoesNotRestartTerminalStatus(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
+	t.Parallel()
 
 	var restartCalls atomic.Int32
 	mux := http.NewServeMux()
@@ -227,7 +229,7 @@ func TestCheckStatusDoesNotRestartTerminalStatus(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	ad := testAllDebrid(server.URL)
-	torrent := &debridTypes.Torrent{Id: "42", DownloadUncached: true}
+	torrent := &debridTypes.Torrent{ID: "42", DownloadUncached: true}
 	got, err := ad.CheckStatus(torrent)
 	if err == nil || !strings.Contains(err.Error(), "status code 10") {
 		t.Fatalf("CheckStatus() error = %v, want terminal status code 10 error", err)
@@ -243,7 +245,7 @@ func TestCheckStatusDoesNotRestartTerminalStatus(t *testing.T) {
 func testAllDebrid(host string) *AllDebrid {
 	return &AllDebrid{
 		Host:               host,
-		client:             request.New(request.WithMaxRetries(0)),
+		client:             request.New(zerolog.Nop(), nil, request.WithMaxRetries(0)),
 		config:             config.Debrid{Name: "alldebrid"},
 		noPeerRetryBackoff: []time.Duration{0, 0, 0},
 	}
@@ -254,5 +256,34 @@ func TestAvailabilityReportsUnsupported(t *testing.T) {
 	result, err := (&AllDebrid{}).IsAvailable([]string{"hash"})
 	if !errors.Is(err, debridTypes.ErrAvailabilityUnsupported) || result != nil {
 		t.Fatalf("IsAvailable = %v, %v", result, err)
+	}
+}
+
+// A synced torrent lists the files inside folders, as GetTorrent does.
+func TestGetTorrentsFlattensFolders(t *testing.T) {
+	t.Parallel()
+	const magnets = `{"status":"success","data":{"magnets":[{"id":7,"filename":"Show","statusCode":4,"hash":"H",` +
+		`"files":[{"n":"Show","e":[{"n":"Season 1","e":[{"n":"S01E01.mkv","s":10,"l":"https://l/1"}]},` +
+		`{"n":"S00E01.mkv","s":5,"l":"https://l/0"}]},{"n":"top.mkv","s":1,"l":"https://l/t"}]}]}}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, magnets)
+	}))
+	t.Cleanup(server.Close)
+
+	torrents, err := testAllDebrid(server.URL).GetTorrents()
+	if err != nil || len(torrents) != 1 {
+		t.Fatalf("GetTorrents() = %v, %v", torrents, err)
+	}
+	files := torrents[0].Files
+	for name, link := range map[string]string{
+		"S01E01.mkv": "https://l/1", "S00E01.mkv": "https://l/0", "top.mkv": "https://l/t",
+	} {
+		if files[name].Link != link {
+			t.Errorf("file %s = %+v, want link %s", name, files[name], link)
+		}
+	}
+	if len(files) != 3 {
+		t.Errorf("files = %v, want the three leaf files", files)
 	}
 }

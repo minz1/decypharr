@@ -40,10 +40,10 @@ type DiscordNotifier struct {
 }
 
 // NewDiscord creates a new Discord notifier with the specified webhook URL.
-func NewDiscord(webhookURL string) *DiscordNotifier {
+func NewDiscord(webhookURL string, client *http.Client) *DiscordNotifier {
 	return &DiscordNotifier{
 		webhookURL: webhookURL,
-		client:     &http.Client{},
+		client:     client,
 	}
 }
 

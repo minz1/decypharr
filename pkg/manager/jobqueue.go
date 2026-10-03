@@ -10,7 +10,6 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/sirrobot01/decypharr/internal/logger"
 	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 	"github.com/sirrobot01/decypharr/pkg/usenet/parser"
@@ -41,7 +40,7 @@ type Job struct {
 func NewJob(jobType JobType, req *ImportRequest) *Job {
 	id := ""
 	if req != nil {
-		id = req.Id
+		id = req.ID
 	}
 	return &Job{
 		ID:        id,
@@ -75,7 +74,12 @@ type JobQueue struct {
 const jobQueueInitialCapacity = 64
 
 // NewJobQueue creates a new unified job queue with the given number of workers.
-func NewJobQueue(ctx context.Context, maxWorkers int, processFunc func(ctx context.Context, job *Job)) *JobQueue {
+func NewJobQueue(
+	ctx context.Context,
+	maxWorkers int,
+	processFunc func(ctx context.Context, job *Job),
+	log zerolog.Logger,
+) *JobQueue {
 	if maxWorkers <= 0 {
 		maxWorkers = defaultFileDownloadWorkers
 	}
@@ -84,7 +88,7 @@ func NewJobQueue(ctx context.Context, maxWorkers int, processFunc func(ctx conte
 	q := &JobQueue{
 		jobs:        make([]*Job, 0, jobQueueInitialCapacity),
 		maxWorkers:  maxWorkers,
-		logger:      logger.New("jobqueue"),
+		logger:      log,
 		processFunc: processFunc,
 		ctx:         ctx,
 		cancel:      cancel,

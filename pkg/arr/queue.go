@@ -112,7 +112,7 @@ func (s *Service) CleanupQueue(ctx context.Context, name string) error {
 		return err
 	}
 
-	rules := config.Get().QueueCleanup.Rules
+	rules := s.config.Get().QueueCleanup.Rules
 	var blocklist, blocklistResearch []int
 	var manualImports []string
 	for _, item := range items {

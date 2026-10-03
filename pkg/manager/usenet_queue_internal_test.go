@@ -10,17 +10,18 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 	"github.com/sirrobot01/decypharr/pkg/usenet"
 )
 
-//nolint:paralleltest // mutates the config singleton
 func TestAddNewNZBQueuesBeforeNetworkParsing(t *testing.T) {
+	t.Parallel()
 	usenetClient := newUnreachableUsenet(t)
 
-	store, err := storage.NewStorage(filepath.Join(t.TempDir(), "db"))
+	store, err := storage.NewStorage(filepath.Join(t.TempDir(), "db"), storage.Options{})
 	if err != nil {
 		t.Fatalf("create storage: %v", err)
 	}
@@ -30,11 +31,11 @@ func TestAddNewNZBQueuesBeforeNetworkParsing(t *testing.T) {
 		}
 	})
 
-	m := &Manager{
+	m := withTestConfig(t, &Manager{
 		usenet: usenetClient,
-		queue:  newQueue(store, ""),
+		queue:  newQueue(store, "", nil, zerolog.Nop()),
 		logger: zerolog.Nop(),
-	}
+	})
 	received := make(chan *Job, 1)
 	release := make(chan struct{}, 1)
 	processed := make(chan struct{}, 1)
@@ -43,7 +44,7 @@ func TestAddNewNZBQueuesBeforeNetworkParsing(t *testing.T) {
 		<-release
 		m.processJob(ctx, job)
 		processed <- struct{}{}
-	})
+	}, zerolog.Nop())
 	t.Cleanup(m.jobQueue.Close)
 	t.Cleanup(func() {
 		select {
@@ -67,8 +68,8 @@ func TestAddNewNZBQueuesBeforeNetworkParsing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddNewNZB() error = %v", err)
 	}
-	if id != req.Id {
-		t.Fatalf("AddNewNZB() id = %q, want %q", id, req.Id)
+	if id != req.ID {
+		t.Fatalf("AddNewNZB() id = %q, want %q", id, req.ID)
 	}
 	if len(req.NZBContent) != 0 {
 		t.Fatal("queued request retained NZB content in memory")
@@ -113,24 +114,19 @@ func TestAddNewNZBQueuesBeforeNetworkParsing(t *testing.T) {
 // connections, so any network parse fails fast.
 func newUnreachableUsenet(t *testing.T) *usenet.Usenet {
 	t.Helper()
-	oldPath := config.GetMainPath()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(func() { config.SetConfigPath(oldPath) })
+	store := testConfigStore(t, func(cfg *config.Config) {
+		cfg.Usenet = config.Usenet{
+			Providers: []config.UsenetProvider{{
+				Host:           "127.0.0.1",
+				Port:           1,
+				MaxConnections: 1,
+			}},
+			MaxConnections:           1,
+			ProcessingMaxConnections: 1,
+		}
+	})
 
-	cfg := config.Get()
-	oldUsenet := cfg.Usenet
-	cfg.Usenet = config.Usenet{
-		Providers: []config.UsenetProvider{{
-			Host:           "127.0.0.1",
-			Port:           1,
-			MaxConnections: 1,
-		}},
-		MaxConnections:           1,
-		ProcessingMaxConnections: 1,
-	}
-	t.Cleanup(func() { cfg.Usenet = oldUsenet })
-
-	usenetClient, err := usenet.New()
+	usenetClient, err := usenet.New(store, logger.Discard())
 	if err != nil {
 		t.Fatalf("create usenet client: %v", err)
 	}

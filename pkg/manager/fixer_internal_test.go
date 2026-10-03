@@ -26,10 +26,10 @@ func (c *replacementProvider) Config() config.Debrid {
 }
 func (c *replacementProvider) SubmitMagnet(torrent *types.Torrent) (*types.Torrent, error) {
 	c.submissions++
-	torrent.Id = "new"
+	torrent.ID = "new"
 	torrent.Debrid = "remaining"
 	torrent.Status = types.TorrentStatusDownloaded
-	torrent.Files = map[string]types.File{"video.mkv": {Name: "video.mkv", Id: "file"}}
+	torrent.Files = map[string]types.File{"video.mkv": {Name: "video.mkv", ID: "file"}}
 	return torrent, nil
 }
 func (c *replacementProvider) CheckStatus(torrent *types.Torrent) (*types.Torrent, error) {
@@ -37,10 +37,11 @@ func (c *replacementProvider) CheckStatus(torrent *types.Torrent) (*types.Torren
 }
 func (c *replacementProvider) DeleteTorrent(string) error { c.deletions.Add(1); return nil }
 
-//nolint:paralleltest // subtests reset the config singleton
 func TestFixTorrentWithRemovedProvider(t *testing.T) {
-	for _, existing := range []bool{false, true} { //nolint:paralleltest // subtests reset the config singleton
+	t.Parallel()
+	for _, existing := range []bool{false, true} {
 		t.Run(map[bool]string{false: "submit replacement", true: "reuse placement"}[existing], func(t *testing.T) {
+			t.Parallel()
 			synctest.Test(t, func(t *testing.T) {
 				checkFixWithRemovedProvider(t, existing)
 			})
@@ -50,16 +51,16 @@ func TestFixTorrentWithRemovedProvider(t *testing.T) {
 
 func checkFixWithRemovedProvider(t *testing.T, existing bool) {
 	t.Helper()
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
-	store, err := storage.NewStorage(t.TempDir())
+	store, err := storage.NewStorage(t.TempDir(), storage.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	client := &replacementProvider{}
-	m := &Manager{storage: store, clients: xsync.NewMap[string, debrid.Client](), logger: zerolog.Nop()}
+	m := withTestConfig(
+		t,
+		&Manager{storage: store, clients: xsync.NewMap[string, debrid.Client](), logger: zerolog.Nop()},
+	)
 	m.clients.Store("remaining", client)
 	fixer := NewFixer(m)
 	fixer.providerOrder = []string{"remaining"}
@@ -109,7 +110,7 @@ func checkFixWithRemovedProvider(t *testing.T, existing bool) {
 func TestFixTorrentReleasesAllWaiters(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
-		fixer := NewFixer(&Manager{logger: zerolog.Nop()})
+		fixer := NewFixer(withTestConfig(t, &Manager{logger: zerolog.Nop()}))
 		entry := &storage.Entry{InfoHash: "hash", Name: "release", Protocol: config.ProtocolTorrent}
 		inFlight := &FixerRequest{InfoHash: entry.InfoHash, done: make(chan struct{})}
 		fixer.inFlightRepairs.Store(entry.InfoHash, inFlight)
@@ -138,7 +139,7 @@ func TestFixTorrentReleasesAllWaiters(t *testing.T) {
 
 func TestResetFailureStateClearsPerDebridFailures(t *testing.T) {
 	t.Parallel()
-	fixer := NewFixer(&Manager{logger: zerolog.Nop()})
+	fixer := NewFixer(withTestConfig(t, &Manager{logger: zerolog.Nop()}))
 	fixer.failedToReinsert.Store(failureKey("hash", "provider"), struct{}{})
 	fixer.failedToReinsert.Store("hash", struct{}{})
 	fixer.failedToReinsert.Store(failureKey("other", "provider"), struct{}{})

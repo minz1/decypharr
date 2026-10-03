@@ -16,8 +16,7 @@ import (
 )
 
 func TestFetchDownloadLinkReportsProviderErrors(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 	var fail atomic.Bool
 	fail.Store(true)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -34,10 +33,10 @@ func TestFetchDownloadLinkReportsProviderErrors(t *testing.T) {
 	tb := testTorbox(server.URL)
 	tb.accountsManager = account.NewManager(
 		config.Debrid{Name: "torbox", DownloadAPIKeys: []string{"download-token"}},
+		types.ProviderOptions{Logger: tb.logger},
 		nil,
-		tb.logger,
 	)
-	file := &types.File{Id: "1", Link: "torbox://17/1"}
+	file := &types.File{ID: "1", Link: "torbox://17/1"}
 	if _, err := tb.GetDownloadLink(t.Context(), "17", file); err == nil {
 		t.Fatal("provider error returned no error")
 	}
@@ -52,20 +51,18 @@ func TestFetchDownloadLinkReportsProviderErrors(t *testing.T) {
 }
 
 func TestUpdateTorrentRejectsNullData(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, `{"success":false,"error":"NOT_FOUND","data":null}`)
 	}))
 	defer server.Close()
-	if err := testTorbox(server.URL).UpdateTorrent(&types.Torrent{Id: "17"}); err == nil {
+	if err := testTorbox(server.URL).UpdateTorrent(&types.Torrent{ID: "17"}); err == nil {
 		t.Fatal("UpdateTorrent() with null data returned no error")
 	}
 }
 
 func TestCheckFileRefreshesStalePresence(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 	var loads atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("offset") != "0" {
@@ -83,7 +80,7 @@ func TestCheckFileRefreshesStalePresence(t *testing.T) {
 	}))
 	defer server.Close()
 	tb := testTorbox(server.URL)
-	if err := tb.CheckFile(t.Context(), "", "torbox://2/1"); !errors.Is(err, customerror.HosterUnavailableError) {
+	if err := tb.CheckFile(t.Context(), "", "torbox://2/1"); !errors.Is(err, customerror.ErrHosterUnavailable) {
 		t.Fatalf("unknown torrent: %v, want hoster unavailable", err)
 	}
 	tb.downloadPresentAt = time.Now().Add(-2 * downloadPresentTTL)

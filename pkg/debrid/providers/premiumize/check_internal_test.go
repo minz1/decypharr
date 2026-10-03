@@ -15,14 +15,13 @@ import (
 )
 
 func TestCheckFileHonorsCancellation(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 	newProvider := func(host string) *Premiumize {
-		provider := &Premiumize{Host: host, client: request.New(request.WithMaxRetries(0))}
+		provider := &Premiumize{Host: host, client: request.New(zerolog.Nop(), nil, request.WithMaxRetries(0))}
 		provider.accountsManager = account.NewManager(
 			config.Debrid{Name: "premiumize", DownloadAPIKeys: []string{"token"}},
+			types.ProviderOptions{Logger: zerolog.Nop()},
 			nil,
-			zerolog.Nop(),
 		)
 		return provider
 	}
@@ -31,13 +30,14 @@ func TestCheckFileHonorsCancellation(t *testing.T) {
 			return newProvider(host).CheckFile(ctx, "hash", "file-id")
 		},
 		"download link": func(ctx context.Context, host string) error {
-			_, err := newProvider(host).GetDownloadLink(ctx, "id", &types.File{Id: "file-id"})
+			_, err := newProvider(host).GetDownloadLink(ctx, "id", &types.File{ID: "file-id"})
 			return err
 		},
 	}
 	for operation, op := range operations {
 		for name, cancelBefore := range commontest.CancelCases() {
 			t.Run(operation+"/"+name, func(t *testing.T) {
+				t.Parallel()
 				commontest.AssertCancellation(t, cancelBefore, op)
 			})
 		}

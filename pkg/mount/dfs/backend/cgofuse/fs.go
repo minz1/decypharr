@@ -216,13 +216,19 @@ func (f *FS) CreateEx(_ string, _ uint32, _ *fuse.FileInfo_t) int {
 	return -fuse.EACCES
 }
 
+// openForWrite reports whether open flags ask for write access or to
+// create, truncate or append. The flags are the host's FUSE values
+// (fuse.O_*), which differ from package os's on Windows.
+func openForWrite(flags int) bool {
+	return flags&fuse.O_ACCMODE != fuse.O_RDONLY || flags&(fuse.O_APPEND|fuse.O_CREAT|fuse.O_TRUNC) != 0
+}
+
 // OpenEx opens a file with extended info (implements fuse.FileSystemOpenEx)
 // This allows setting DirectIO which is critical for media playback on Windows.
 func (f *FS) OpenEx(path string, fi *fuse.FileInfo_t) int {
 	fi.Fh = ^uint64(0)
 
-	// Check if read-only access
-	if fi.Flags&(os.O_WRONLY|os.O_RDWR|os.O_APPEND|os.O_CREATE|os.O_TRUNC) != 0 {
+	if openForWrite(fi.Flags) {
 		return -fuse.EACCES
 	}
 

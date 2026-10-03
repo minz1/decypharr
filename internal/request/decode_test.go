@@ -11,7 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/request"
 )
 
@@ -263,8 +264,7 @@ func BenchmarkDecodeJSONArray(b *testing.B) {
 }
 
 func TestDoJSONResponsePolicy(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 	for _, tc := range []struct {
 		name, body                 string
 		status                     int
@@ -279,6 +279,7 @@ func TestDoJSONResponsePolicy(t *testing.T) {
 		{name: "no result requested", body: "not JSON", status: 200, noResult: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(tc.status)
 				if tc.chunked {
@@ -298,7 +299,7 @@ func TestDoJSONResponsePolicy(t *testing.T) {
 			if tc.noResult {
 				out = nil
 			}
-			resp, err := request.New(request.WithMaxRetries(0)).DoJSON(req, out)
+			resp, err := request.New(zerolog.Nop(), nil, request.WithMaxRetries(0)).DoJSON(req, out)
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("error=%v, wantErr=%v", err, tc.wantErr)
 			}

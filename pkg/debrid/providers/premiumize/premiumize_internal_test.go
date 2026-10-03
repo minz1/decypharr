@@ -1,17 +1,22 @@
 package premiumize
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
+
+	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/request"
+	"github.com/sirrobot01/decypharr/pkg/debrid/types"
 )
 
 func TestGetTorrentsAssignsStableUniqueHashesWithoutMagnetSources(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
+	t.Parallel()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/transfer/list", func(w http.ResponseWriter, _ *http.Request) {
@@ -37,10 +42,10 @@ func TestGetTorrentsAssignsStableUniqueHashesWithoutMagnetSources(t *testing.T) 
 	t.Cleanup(server.Close)
 
 	pm := &Premiumize{
-		Host:                server.URL,
-		client:              request.New(request.WithMaxRetries(0)),
-		config:              config.Debrid{Name: "premiumize-primary"},
-		validateFileAllowed: func(string, int64) error { return nil },
+		Host:    server.URL,
+		client:  request.New(zerolog.Nop(), nil, request.WithMaxRetries(0)),
+		config:  config.Debrid{Name: "premiumize-primary"},
+		options: types.ProviderOptions{ValidateFile: func(string, int64) error { return nil }},
 	}
 
 	first, err := pm.GetTorrents()
@@ -72,8 +77,7 @@ func TestGetTorrentsAssignsStableUniqueHashesWithoutMagnetSources(t *testing.T) 
 }
 
 func TestTransferInfoHashPrefersRealHash(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 	const infoHash = "8d2b41ef6a4cd8f42c601c396c1caeebe2aed47d"
 	pm := &Premiumize{config: config.Debrid{Name: "premiumize-primary"}}
 	transfer := premiumizeTransfer{
@@ -87,15 +91,36 @@ func TestTransferInfoHashPrefersRealHash(t *testing.T) {
 }
 
 func TestAvailabilityRejectsIncompleteResponses(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, `{"status":"success","response":[true]}`)
 	}))
 	defer server.Close()
-	pm := &Premiumize{Host: server.URL, client: request.New(request.WithMaxRetries(0))}
+	pm := &Premiumize{Host: server.URL, client: request.New(zerolog.Nop(), nil, request.WithMaxRetries(0))}
 	result, err := pm.IsAvailable([]string{"first", "second"})
 	if err == nil || len(result) != 0 {
 		t.Fatalf("incomplete response = %v, %v", result, err)
+	}
+}
+
+// Transfer folder and file IDs decode whether the API sends them as
+// strings, numbers or null; a numeric ID used to fail the whole list.
+func TestTransferIDsAcceptNumbers(t *testing.T) {
+	t.Parallel()
+	var transfers []premiumizeTransfer
+	data := `[{"id":"a","folder_id":"f1","file_id":null},{"id":"b","folder_id":12345,"file_id":678}]`
+	if err := json.Unmarshal([]byte(data), &transfers); err != nil {
+		t.Fatal(err)
+	}
+	got := [][2]string{
+		{transfers[0].FolderID.String(), transfers[0].FileID.String()},
+		{transfers[1].FolderID.String(), transfers[1].FileID.String()},
+	}
+	if want := [][2]string{{"f1", ""}, {"12345", "678"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ids = %v, want %v", got, want)
+	}
+	var id nullableString
+	if err := json.Unmarshal([]byte(`{"x":1}`), &id); err == nil {
+		t.Fatal("an object decoded as an id")
 	}
 }

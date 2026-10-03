@@ -17,7 +17,6 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
-	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/internal/request"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/debrid/account"
@@ -47,23 +46,23 @@ type AllDebrid struct {
 	repairClient          *request.Client
 	profile               types.ProfileCache
 	logger                zerolog.Logger
+	options               types.ProviderOptions
 	config                config.Debrid
 }
 
-func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter) (*AllDebrid, error) {
-	cfg := config.Get()
+func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter, options types.ProviderOptions) (*AllDebrid, error) {
 	headers := map[string]string{
 		"Authorization": fmt.Sprintf("Bearer %s", dc.APIKey),
 	}
 	if dc.UserAgent != "" {
 		headers["User-Agent"] = dc.UserAgent
 	}
-	_log := logger.New(dc.Name)
+	_log := options.Logger
 
 	opts := []request.ClientOption{
 		request.WithHeaders(headers),
 		request.WithRateLimiter(ratelimits["main"]),
-		request.WithMaxRetries(cfg.Retries),
+		request.WithMaxRetries(options.Retries),
 		request.WithRetryableStatus(http.StatusTooManyRequests, http.StatusBadGateway),
 	}
 	if dc.Proxy != "" {
@@ -86,11 +85,12 @@ func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter) (*AllDebrid,
 	ad := &AllDebrid{
 		Host:                  "https://api.alldebrid.com/v4.1",
 		APIKey:                dc.APIKey,
-		accountsManager:       account.NewManager(dc, ratelimits["download"], _log),
+		accountsManager:       account.NewManager(dc, options, ratelimits["download"]),
+		options:               options,
 		autoExpiresLinksAfter: autoExpiresLinksAfter,
 		noPeerRetryBackoff:    defaultNoPeerRetryBackoff(),
-		client:                request.New(opts...),
-		repairClient:          request.New(repairOpts...),
+		client:                request.New(_log, options.TLSConfig, opts...),
+		repairClient:          request.New(_log, options.TLSConfig, repairOpts...),
 		logger:                _log,
 		config:                dc,
 	}
@@ -186,7 +186,7 @@ func (ad *AllDebrid) addTorrentFile(torrent *types.Torrent) (*types.Torrent, err
 	if f.Error != nil {
 		return nil, fmt.Errorf("alldebrid file upload error: %s", f.Error.Message)
 	}
-	torrent.Id = strconv.Itoa(f.ID)
+	torrent.ID = strconv.Itoa(f.ID)
 	torrent.Added = time.Now()
 	return torrent, nil
 }
@@ -214,7 +214,7 @@ func (ad *AllDebrid) addMagnetLink(torrent *types.Torrent) (*types.Torrent, erro
 		return nil, fmt.Errorf("error adding torrent. No magnets returned")
 	}
 	magnet := magnets[0]
-	torrent.Id = strconv.Itoa(magnet.ID)
+	torrent.ID = strconv.Itoa(magnet.ID)
 	torrent.Added = time.Now()
 	return torrent, nil
 }
@@ -238,8 +238,6 @@ func (ad *AllDebrid) flattenFiles(
 ) map[string]types.File {
 	result := make(map[string]types.File)
 
-	cfg := config.Get()
-
 	for _, f := range files {
 		currentPath := f.Name
 		if parentPath != "" {
@@ -258,14 +256,14 @@ func (ad *AllDebrid) flattenFiles(
 		} else {
 			fileName := filepath.Base(f.Name)
 
-			if err := cfg.ValidateFileAllowed(f.Name, f.Size); err != nil {
+			if err := ad.options.FileAllowed(f.Name, f.Size); err != nil {
 				continue
 			}
 
 			*index++
 			file := types.File{
 				TorrentID: torrentID,
-				Id:        strconv.Itoa(*index),
+				ID:        strconv.Itoa(*index),
 				Name:      fileName,
 				Size:      f.Size,
 				Path:      currentPath,
@@ -303,7 +301,7 @@ func (ad *AllDebrid) GetTorrent(torrentID string) (*types.Torrent, error) {
 	status := getAlldebridStatus(data.StatusCode)
 	name := data.Filename
 	t := &types.Torrent{
-		Id:               strconv.Itoa(data.ID),
+		ID:               strconv.Itoa(data.ID),
 		Name:             name,
 		Status:           status,
 		Filename:         name,
@@ -318,7 +316,7 @@ func (ad *AllDebrid) GetTorrent(torrentID string) (*types.Torrent, error) {
 	if status == types.TorrentStatusDownloaded {
 		t.Progress = 100
 		index := -1
-		files := ad.flattenFiles(t.Id, data.Files, "", &index)
+		files := ad.flattenFiles(t.ID, data.Files, "", &index)
 		t.Files = files
 	} else {
 		if data.Size > 0 {
@@ -336,7 +334,7 @@ func (ad *AllDebrid) updateTorrent(t *types.Torrent) (int, error) {
 		context.Background(),
 		ad.client,
 		"/magnet/status",
-		map[string]string{"id": t.Id},
+		map[string]string{"id": t.ID},
 		&res,
 	)
 	if err != nil {
@@ -347,7 +345,7 @@ func (ad *AllDebrid) updateTorrent(t *types.Torrent) (int, error) {
 		return 0, fmt.Errorf("alldebrid API error: Status: %d", httpStatus)
 	}
 
-	data, err := findMagnet(res.Data.Magnets, t.Id)
+	data, err := findMagnet(res.Data.Magnets, t.ID)
 	if err != nil {
 		return 0, err
 	}
@@ -367,7 +365,7 @@ func (ad *AllDebrid) updateTorrent(t *types.Torrent) (int, error) {
 	if status == types.TorrentStatusDownloaded {
 		t.Progress = 100
 		index := -1
-		files := ad.flattenFiles(t.Id, data.Files, "", &index)
+		files := ad.flattenFiles(t.ID, data.Files, "", &index)
 		t.Files = files
 	} else {
 		if data.Size > 0 {
@@ -390,7 +388,7 @@ func findMagnet(magnets Magnets, torrentID string) (magnetInfo, error) {
 		}
 	}
 
-	return magnetInfo{}, customerror.TorrentNotFoundError
+	return magnetInfo{}, customerror.ErrTorrentNotFound
 }
 
 func (ad *AllDebrid) CheckStatus(torrent *types.Torrent) (*types.Torrent, error) {
@@ -416,7 +414,7 @@ func (ad *AllDebrid) CheckStatus(torrent *types.Torrent) (*types.Torrent, error)
 		return torrent, nil
 	case types.TorrentStatusDownloading:
 		if !torrent.DownloadUncached {
-			return torrent, fmt.Errorf("torrent %s: %w", torrent.Name, customerror.TorrentNotCachedError)
+			return torrent, fmt.Errorf("torrent %s: %w", torrent.Name, customerror.ErrTorrentNotCached)
 		}
 		return torrent, nil
 	case types.TorrentStatusError:
@@ -432,14 +430,14 @@ func defaultNoPeerRetryBackoff() []time.Duration {
 
 func (ad *AllDebrid) restartNoPeerTorrent(torrent *types.Torrent) (int, error) {
 	ad.logger.Warn().
-		Str("torrent_id", torrent.Id).
+		Str("torrent_id", torrent.ID).
 		Str("name", torrent.Name).
 		Msg("AllDebrid reported status code 7; restarting magnet")
 
-	if err := ad.restartTorrent(torrent.Id); err != nil {
+	if err := ad.restartTorrent(torrent.ID); err != nil {
 		return allDebridNoPeerStatusCode, fmt.Errorf(
 			"restart AllDebrid torrent %s after status code 7: %w",
-			torrent.Id,
+			torrent.ID,
 			err,
 		)
 	}
@@ -454,13 +452,13 @@ func (ad *AllDebrid) restartNoPeerTorrent(torrent *types.Torrent) (int, error) {
 		if err != nil {
 			return allDebridNoPeerStatusCode, fmt.Errorf(
 				"check AllDebrid torrent %s after restart: %w",
-				torrent.Id,
+				torrent.ID,
 				err,
 			)
 		}
 		if statusCode != allDebridNoPeerStatusCode {
 			ad.logger.Info().
-				Str("torrent_id", torrent.Id).
+				Str("torrent_id", torrent.ID).
 				Int("status_code", statusCode).
 				Int("status_check", attempt+1).
 				Msg("AllDebrid torrent resumed after restart")
@@ -471,7 +469,7 @@ func (ad *AllDebrid) restartNoPeerTorrent(torrent *types.Torrent) (int, error) {
 	torrent.Status = types.TorrentStatusError
 	return allDebridNoPeerStatusCode, fmt.Errorf(
 		"AllDebrid torrent %s remained at status code 7 after restart and %d status checks",
-		torrent.Id,
+		torrent.ID,
 		len(backoff),
 	)
 }
@@ -608,33 +606,22 @@ func (ad *AllDebrid) GetTorrents() ([]*types.Torrent, error) {
 		return torrents, fmt.Errorf("alldebrid API error: Status: %d", status)
 	}
 
-	cfg := config.Get()
-
 	for _, magnet := range res.Data.Magnets {
 		t := &types.Torrent{
-			Id:               strconv.Itoa(magnet.ID),
+			ID:               strconv.Itoa(magnet.ID),
 			Name:             magnet.Filename,
 			Bytes:            magnet.Size,
 			Status:           getAlldebridStatus(magnet.StatusCode),
 			Filename:         magnet.Filename,
 			OriginalFilename: magnet.Filename,
-			Files:            make(map[string]types.File),
 			InfoHash:         magnet.Hash,
 			Debrid:           ad.config.Name,
 			Added:            time.Unix(magnet.CompletionDate, 0),
 		}
-		for _, f := range magnet.Files {
-			if validateFileAllowedErr := cfg.ValidateFileAllowed(f.Name, f.Size); validateFileAllowedErr != nil {
-				continue
-			}
-			file := types.File{
-				TorrentID: t.Id,
-				Name:      f.Name,
-				Size:      f.Size,
-				Link:      f.Link,
-			}
-			t.Files[file.Name] = file
-		}
+		// Folders nest their files in Elements; flatten them the way
+		// GetTorrent does so a synced torrent lists the same files.
+		index := -1
+		t.Files = ad.flattenFiles(t.ID, magnet.Files, "", &index)
 		torrents = append(torrents, t)
 	}
 
@@ -691,7 +678,7 @@ func (ad *AllDebrid) CheckFile(ctx context.Context, _, link string) error {
 		return fmt.Errorf("alldebrid API error: expected one link info, got %d", len(data.Data.Infos))
 	}
 	if linkErr := data.Data.Infos[0].Error; linkErr != nil {
-		return fmt.Errorf("%w: %s: %s", customerror.HosterUnavailableError, linkErr.Code, linkErr.Message)
+		return fmt.Errorf("%w: %s: %s", customerror.ErrHosterUnavailable, linkErr.Code, linkErr.Message)
 	}
 	return nil
 }

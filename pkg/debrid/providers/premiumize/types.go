@@ -2,6 +2,7 @@ package premiumize
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 )
 
@@ -106,16 +107,23 @@ type premiumizeItem struct {
 
 type nullableString string
 
+// UnmarshalJSON accepts a string, null, or a bare number: the API sends
+// some IDs as numbers.
 func (s *nullableString) UnmarshalJSON(data []byte) error {
 	if string(data) == "null" {
 		*s = ""
 		return nil
 	}
 	var v string
-	if err := json.Unmarshal(data, &v); err != nil {
-		return err
+	if err := json.Unmarshal(data, &v); err == nil {
+		*s = nullableString(v)
+		return nil
 	}
-	*s = nullableString(v)
+	var n json.Number
+	if err := json.Unmarshal(data, &n); err != nil {
+		return fmt.Errorf("premiumize: id %s is neither a string nor a number: %w", data, err)
+	}
+	*s = nullableString(n.String())
 	return nil
 }
 

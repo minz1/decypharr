@@ -9,11 +9,13 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/pkg/manager/managertest"
 )
 
-func newTestServer(t *testing.T) *Server {
+func newTestServer(t *testing.T, store *config.Store) *Server {
 	t.Helper()
 	return &Server{
+		config:  store,
 		urlBase: "/",
 		logger:  zerolog.Nop(),
 		templates: template.Must(template.ParseFS(
@@ -53,16 +55,13 @@ func serve(s *Server, method, path string, protected bool) *httptest.ResponseRec
 	return w
 }
 
-//nolint:paralleltest // mutates the process-wide config singleton
 func TestRegisterRedirects(t *testing.T) {
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
-
+	t.Parallel()
 	// A fresh install: createConfig writes a config with UseAuth on and nothing
 	// else, so auth is enabled before any credential exists.
-	cfg := config.Get()
-	s := newTestServer(t)
+	store := managertest.Store(t, nil)
+	cfg := store.Get()
+	s := newTestServer(t, store)
 
 	if !cfg.UseAuth {
 		t.Fatal("fresh install has UseAuth off, want on")

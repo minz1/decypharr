@@ -6,9 +6,10 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
-	"github.com/sirrobot01/decypharr/pkg/manager"
+	"github.com/sirrobot01/decypharr/pkg/manager/managertest"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 	"github.com/sirrobot01/decypharr/pkg/strm"
 )
@@ -17,14 +18,9 @@ const testInfohash = "aabbccddeeff00112233445566778899aabbccdd"
 
 // newStreamServer builds the stream routes against a real manager and
 // storage, without the readiness middleware (the manager is never started).
-func newStreamServer(t *testing.T) (*httptest.Server, *storage.Entry) {
+func newStreamServer(t *testing.T) (*httptest.Server, *storage.Entry, *config.Store) {
 	t.Helper()
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
-
-	m := manager.New()
-	t.Cleanup(func() { _ = m.Storage().Close() })
+	m, store := managertest.New(t, nil)
 
 	entry := &storage.Entry{
 		InfoHash: testInfohash,
@@ -37,13 +33,13 @@ func newStreamServer(t *testing.T) (*httptest.Server, *storage.Entry) {
 		t.Fatal(err)
 	}
 
-	h := NewHandler(m)
+	h := NewHandler(m, store, zerolog.Nop())
 	r := chi.NewRouter()
 	r.Get("/stream/{infohash}/{fileID}/{name}", h.handleStream)
 	r.Head("/stream/{infohash}/{fileID}/{name}", h.handleStream)
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
-	return srv, entry
+	return srv, entry, store
 }
 
 func streamURL(srv *httptest.Server, entry *storage.Entry, sig string) string {
@@ -55,9 +51,9 @@ func streamURL(srv *httptest.Server, entry *storage.Entry, sig string) string {
 	return u
 }
 
-//nolint:paralleltest // mutates the process-wide config singleton
 func TestStreamHeadServesFromStorageAlone(t *testing.T) {
-	srv, entry := newStreamServer(t)
+	t.Parallel()
+	srv, entry, _ := newStreamServer(t)
 
 	resp, err := http.Head(streamURL(srv, entry, ""))
 	if err != nil {
@@ -91,10 +87,10 @@ func TestStreamHeadServesFromStorageAlone(t *testing.T) {
 	}
 }
 
-//nolint:paralleltest // mutates the process-wide config singleton
 func TestStreamAuth(t *testing.T) {
-	srv, entry := newStreamServer(t)
-	cfg := config.Get()
+	t.Parallel()
+	srv, entry, store := newStreamServer(t)
+	cfg := store.Get()
 	cfg.UseAuth = true
 	cfg.EnableWebdavAuth = true
 
@@ -145,9 +141,9 @@ func TestStreamAuth(t *testing.T) {
 	}
 }
 
-//nolint:paralleltest // mutates the process-wide config singleton
 func TestStreamUnknownIdentity(t *testing.T) {
-	srv, entry := newStreamServer(t)
+	t.Parallel()
+	srv, entry, _ := newStreamServer(t)
 
 	resp, err := http.Head(srv.URL + "/stream/" + entry.InfoHash + "/ffffffffffffffff/x.mkv")
 	if err != nil {

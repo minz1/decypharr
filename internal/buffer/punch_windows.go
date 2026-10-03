@@ -41,14 +41,15 @@ func prepareSparse(f *os.File) error {
 
 // punchHole deallocates [offset, offset+length) via FSCTL_SET_ZERO_DATA. Only
 // safe on a sparse file — on a plain one it physically writes zeros. Buffer
-// gates this on prepareSparse having succeeded.
-func punchHole(f *os.File, offset, length int64) error {
+// gates this on prepareSparse having succeeded. Partial clusters are zeroed,
+// so the whole range is freed of data.
+func punchHole(f *os.File, offset, length int64) (Range, error) {
 	if f == nil || length <= 0 {
-		return nil
+		return Range{}, nil
 	}
 	sc, err := f.SyscallConn()
 	if err != nil {
-		return err
+		return Range{}, err
 	}
 	var opErr error
 	if err := sc.Control(func(fd uintptr) {
@@ -57,10 +58,13 @@ func punchHole(f *os.File, offset, length int64) error {
 		opErr = windows.DeviceIoControl(windows.Handle(fd), windows.FSCTL_SET_ZERO_DATA,
 			(*byte)(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info)), nil, 0, &n, nil)
 	}); err != nil {
-		return err
+		return Range{}, err
 	}
 	if errors.Is(opErr, windows.ERROR_INVALID_FUNCTION) || errors.Is(opErr, windows.ERROR_NOT_SUPPORTED) {
-		return errPunchUnsupported
+		return Range{}, errPunchUnsupported
 	}
-	return opErr
+	if opErr != nil {
+		return Range{}, opErr
+	}
+	return Range{Off: offset, Size: length}, nil
 }

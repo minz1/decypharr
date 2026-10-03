@@ -1,20 +1,24 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/arr"
-	"github.com/sirrobot01/decypharr/pkg/manager"
+	"github.com/sirrobot01/decypharr/pkg/manager/managertest"
 )
 
-//nolint:paralleltest // mutates the process-wide config singleton
 func TestMergeConfigUpdatePreservesOmittedFields(t *testing.T) {
+	t.Parallel()
 	current := config.Config{
 		Port:     "9000",
 		LogLevel: "info",
@@ -54,8 +58,8 @@ func TestMergeConfigUpdatePreservesOmittedFields(t *testing.T) {
 	}
 }
 
-//nolint:paralleltest // mutates the process-wide config singleton
 func TestMergeConfigUpdateMergesNestedObjects(t *testing.T) {
+	t.Parallel()
 	current := config.Config{
 		Mount: config.Mount{
 			Type:      config.MountTypeRclone,
@@ -76,8 +80,8 @@ func TestMergeConfigUpdateMergesNestedObjects(t *testing.T) {
 	}
 }
 
-//nolint:paralleltest // mutates the process-wide config singleton
 func TestMergeConfigUpdateAllowsExplicitClear(t *testing.T) {
+	t.Parallel()
 	current := config.Config{Debrids: []config.Debrid{{Name: "realdebrid", APIKey: "secret"}}}
 
 	merged, err := mergeConfigUpdate(&current, strings.NewReader(`{"debrids":[]}`))
@@ -90,17 +94,13 @@ func TestMergeConfigUpdateAllowsExplicitClear(t *testing.T) {
 	}
 }
 
-//nolint:paralleltest // mutates the process-wide config singleton
 func TestConfigHandlersUseSnapshots(t *testing.T) {
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
-	before := config.Get()
-	mgr := manager.New()
-	t.Cleanup(func() { _ = mgr.Stop() })
+	t.Parallel()
+	mgr, store := managertest.New(t, nil)
+	before := store.Get()
 	mgr.Arr().
 		AddOrUpdate(arr.Arr{Name: "manual", Host: "http://example.test", Token: "token", Source: arr.SourceManual})
-	server := &Server{manager: mgr}
+	server := &Server{manager: mgr, config: store}
 	response := httptest.NewRecorder()
 	server.handleGetConfig(response, httptest.NewRequest(http.MethodGet, "/api/config", nil))
 	if response.Code != http.StatusOK {
@@ -124,7 +124,7 @@ func TestConfigHandlersUseSnapshots(t *testing.T) {
 	if before.AppURL == "https://new.example.test" {
 		t.Fatal("POST changed the previous snapshot")
 	}
-	if config.Get().AppURL != "https://new.example.test" {
+	if store.Get().AppURL != "https://new.example.test" {
 		t.Fatal("POST did not publish the update")
 	}
 	var result struct {
@@ -135,5 +135,94 @@ func TestConfigHandlersUseSnapshots(t *testing.T) {
 	}
 	if result.Restarted {
 		t.Fatal("live URL update restarted services")
+	}
+}
+
+// List items merge by name, not by index: an item keeps its own omitted
+// fields, never those of the item that used to sit at its index. Removing
+// the first debrid used to hand its API key to the one that moved up.
+func TestMergeConfigUpdateMatchesListItemsByName(t *testing.T) {
+	t.Parallel()
+	current := config.Config{
+		Debrids: []config.Debrid{
+			{Name: "realdebrid", APIKey: "rd-key", Workers: 4},
+			{Name: "torbox", APIKey: "tb-key", Workers: 8, DownloadAPIKeys: []string{"a", "b"}},
+		},
+		Mount: config.Mount{Type: config.MountTypeDFS, MountPath: "/mnt/decypharr"},
+		Usenet: config.Usenet{Providers: []config.UsenetProvider{
+			{Host: "news.a", Username: "a"},
+			{Host: "news.b", Username: "b", TLSServerName: "b.example"},
+		}},
+	}
+
+	body := `{"debrids":[{"name":"torbox","download_api_keys":["c"]},{"name":"alldebrid","api_key":"ad-key"}],` +
+		`"mount":{"type":"rclone"},"usenet":{"providers":[{"host":"news.b","username":"b2"}]}}`
+	merged, err := mergeConfigUpdate(&current, strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("merge config update: %v", err)
+	}
+	want := []config.Debrid{
+		{Name: "torbox", APIKey: "tb-key", Workers: 8, DownloadAPIKeys: []string{"c"}},
+		{Name: "alldebrid", APIKey: "ad-key"},
+	}
+	if !reflect.DeepEqual(merged.Debrids, want) {
+		t.Fatalf("debrids = %+v, want %+v", merged.Debrids, want)
+	}
+	if merged.Mount.MountPath != current.Mount.MountPath || merged.Mount.Type != config.MountTypeRclone {
+		t.Fatalf("mount = %#v, want the type updated and the path kept", merged.Mount)
+	}
+	// Providers have no name; they match by host. The UI does not send
+	// tls_server_name, so it must survive a save.
+	wantProviders := []config.UsenetProvider{{Host: "news.b", Username: "b2", TLSServerName: "b.example"}}
+	if !reflect.DeepEqual(merged.Usenet.Providers, wantProviders) {
+		t.Fatalf("providers = %+v, want %+v", merged.Usenet.Providers, wantProviders)
+	}
+	if current.Debrids[0].APIKey != "rd-key" ||
+		!reflect.DeepEqual(current.Debrids[1].DownloadAPIKeys, []string{"a", "b"}) {
+		t.Fatal("merge changed the current config")
+	}
+}
+
+// A save that the next Load would refuse is rejected with a 400 and never
+// written: saving it used to crash every restart until config.json was
+// fixed by hand.
+func TestUpdateConfigRejectsUnloadableSettings(t *testing.T) {
+	t.Parallel()
+	for name, body := range map[string]string{
+		"bad shared mode":     `{"shared_dir_mode":"775x"}`,
+		"missing tls ca file": `{"tls_ca_file":"/nonexistent/ca.pem"}`,
+		"bad dfs size":        `{"mount":{"dfs":{"chunk_size":"lots"}}}`,
+		"bad debrid proxy":    `{"debrids":[{"name":"rd","provider":"realdebrid","api_key":"k","proxy":"http://[::1"}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			mgr, store := managertest.New(t, nil)
+			if err := store.Get().Save(); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(store.Get().JSONFile())
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := &Server{manager: mgr, config: store, logger: zerolog.Nop()}
+			response := httptest.NewRecorder()
+			server.handleUpdateConfig(
+				response,
+				httptest.NewRequest(http.MethodPost, "/api/config", strings.NewReader(body)),
+			)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d (%s), want 400", response.Code, response.Body.String())
+			}
+			after, err := os.ReadFile(store.Get().JSONFile())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(before, after) {
+				t.Fatal("the rejected settings were written to config.json")
+			}
+			if _, loadErr := config.Load(store.Get().Dir(), config.MapEnv(nil)); loadErr != nil {
+				t.Fatalf("config.json no longer loads: %v", loadErr)
+			}
+		})
 	}
 }

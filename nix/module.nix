@@ -35,12 +35,36 @@ in
       type = lib.types.str;
       default = "";
       description = ''
-        If set, the download folder is created as group-writable (0775) owned by
-        this group rather than 0750 decypharr:decypharr. Use when the download
-        directory is shared with other services (e.g. sonarr, radarr) via a
-        common media group.
+        If set, the download folder is created with sharedDirMode (setgid,
+        group-writable by default) owned by this group rather than 0750
+        decypharr:decypharr. Use when the download directory is shared with
+        other services (e.g. sonarr, radarr) via a common media group.
       '';
       example = "media";
+    };
+
+    sharedDirMode = lib.mkOption {
+      type = lib.types.strMatching "[0-7]{3,4}";
+      default = "2770";
+      description = ''
+        Octal mode for directories decypharr creates in trees it shares with
+        other services: download and symlink folders, the STRM export and
+        mount points. The default gives the owning group full access, others
+        none, and sets setgid so new files inherit the group. The service
+        umask still applies. Maps to DECYPHARR_SHARED_DIR_MODE.
+      '';
+      example = "2775";
+    };
+
+    sharedFileMode = lib.mkOption {
+      type = lib.types.strMatching "[0-7]{3,4}";
+      default = "0660";
+      description = ''
+        Octal mode for files decypharr writes into those trees (downloaded
+        files, .strm files and sidecars). The service umask still applies.
+        Maps to DECYPHARR_SHARED_FILE_MODE.
+      '';
+      example = "0664";
     };
 
     configDir = lib.mkOption {
@@ -53,6 +77,19 @@ in
       type = lib.types.bool;
       default = false;
       description = "Open the firewall for the decypharr port.";
+    };
+
+    tlsCaFile = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        PEM bundle of extra certificate authorities trusted for outgoing TLS
+        (debrid, *arr, usenet), e.g. a LAN CA or a self-signed *arr
+        certificate. Certificates are always verified. A usenet provider whose
+        certificate names another host sets tls_server_name in its settings
+        entry instead. Maps to DECYPHARR_TLS_CA_FILE.
+      '';
+      example = "/etc/ssl/lan-ca.pem";
     };
 
     environmentFiles = lib.mkOption {
@@ -139,7 +176,7 @@ in
     maxDownloads = lib.mkOption {
       type = lib.types.int;
       default = 0;
-      description = "Concurrent download limit (0 = unlimited). Maps to DECYPHARR_MAX_DOWNLOADS.";
+      description = "Concurrent download limit. 0 keeps max_active_downloads from the config (default 5); there is no unlimited setting. Maps to DECYPHARR_MAX_DOWNLOADS.";
     };
 
     skipPreCache = lib.mkOption {
@@ -324,12 +361,12 @@ in
           maxConcurrentNZB = lib.mkOption {
             type = lib.types.int;
             default = 0;
-            description = "NZBs processed in parallel (0 = use default of 2). Maps to DECYPHARR_USENET__MAX_CONCURRENT_NZB.";
+            description = "Has no effect: decypharr has no per-NZB processing limit (NZB jobs share maxDownloads). Kept so existing configurations still evaluate; setting it logs a warning.";
           };
           skipRepair = lib.mkOption {
             type = lib.types.bool;
             default = false;
-            description = "Skip par2 repair for usenet files. Maps to DECYPHARR_USENET__SKIP_REPAIR.";
+            description = "Has no effect: decypharr does not run par2 repair. Kept so existing configurations still evaluate; setting it logs a warning.";
           };
           socketReadBuffer = lib.mkOption {
             type = lib.types.str;
@@ -640,6 +677,8 @@ in
         Scalar options above take precedence via env vars (they override config.json).
 
         Put structured config here: mount type, debrids list, arrs list, usenet providers.
+        A usenet provider whose TLS certificate names a different host sets
+        `tls_server_name` to that name; certificates are always verified.
         Do NOT put secrets here — they end up in the Nix store.
         Use environmentFiles for API keys and tokens.
       '';
@@ -673,6 +712,12 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    warnings =
+      lib.optional (cfg.usenet.maxConcurrentNZB != 0)
+        "services.decypharr.usenet.maxConcurrentNZB has no effect: decypharr has no per-NZB processing limit."
+      ++ lib.optional cfg.usenet.skipRepair
+        "services.decypharr.usenet.skipRepair has no effect: decypharr does not run par2 repair.";
+
     # Merge rclone submodule options into settings.mount.rclone so they land
     # in config.json without requiring the user to duplicate them in settings.
     services.decypharr.settings = lib.mkMerge [
@@ -722,7 +767,7 @@ in
     systemd.tmpfiles.rules = [
       "d ${cfg.dfs.cacheDir} 0750 ${cfg.user} ${cfg.group} -"
       (if cfg.mediaGroup != ""
-       then "d ${cfg.downloadFolder} 0775 ${cfg.user} ${cfg.mediaGroup} -"
+       then "d ${cfg.downloadFolder} ${cfg.sharedDirMode} ${cfg.user} ${cfg.mediaGroup} -"
        else "d ${cfg.downloadFolder} 0750 ${cfg.user} ${cfg.group} -")
     ];
 
@@ -757,6 +802,9 @@ in
         DECYPHARR_MAX_FILE_SIZE                      = cfg.maxFileSize;
         DECYPHARR_REMOVE_STALLED_AFTER               = cfg.removeStalledAfter;
         DECYPHARR_NZB_USER_AGENT                     = cfg.nzbUserAgent;
+        DECYPHARR_SHARED_DIR_MODE                    = cfg.sharedDirMode;
+        DECYPHARR_SHARED_FILE_MODE                   = cfg.sharedFileMode;
+        DECYPHARR_TLS_CA_FILE                        = if cfg.tlsCaFile == null then "" else cfg.tlsCaFile;
         DECYPHARR_MOUNT__DFS__DISABLE_CACHE          = if cfg.dfs.disableCache then "true" else "false";
         DECYPHARR_MOUNT__DFS__CACHE_DIR              = cfg.dfs.cacheDir;
         DECYPHARR_MOUNT__DFS__DISK_CACHE_SIZE        = cfg.dfs.diskCacheSize;
@@ -772,12 +820,8 @@ in
         DECYPHARR_MOUNT__DFS__GID                    = toString cfg.dfs.gid;
       } // lib.optionalAttrs (cfg.usenet.maxConnections != 0) {
         DECYPHARR_USENET__MAX_CONNECTIONS            = toString cfg.usenet.maxConnections;
-      } // lib.optionalAttrs (cfg.usenet.maxConcurrentNZB != 0) {
-        DECYPHARR_USENET__MAX_CONCURRENT_NZB         = toString cfg.usenet.maxConcurrentNZB;
       } // lib.optionalAttrs (cfg.usenet.availabilitySamplePercent != 0) {
         DECYPHARR_USENET__AVAILABILITY_SAMPLE_PERCENT = toString cfg.usenet.availabilitySamplePercent;
-      } // lib.optionalAttrs (cfg.usenet.skipRepair) {
-        DECYPHARR_USENET__SKIP_REPAIR                = "true";
       } // lib.optionalAttrs (cfg.usenet.importAvailabilitySamplePercent != 0) {
         DECYPHARR_USENET__IMPORT_AVAILABILITY_SAMPLE_PERCENT = toString cfg.usenet.importAvailabilitySamplePercent;
       } // lib.filterAttrs (_: v: v != "") {

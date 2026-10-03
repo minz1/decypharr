@@ -9,8 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"golang.org/x/sync/singleflight"
-
+	"github.com/sirrobot01/decypharr/internal/flight"
 	"github.com/sirrobot01/decypharr/internal/nntp"
 )
 
@@ -99,7 +98,10 @@ type ArticleBroker struct {
 	slots      chan struct{}
 	bodyLimit  int64
 	entryLimit int
-	flights    singleflight.Group
+	// statFlights and bodyFlights deduplicate concurrent loads of one
+	// article; a caller giving up does not fail the others.
+	statFlights flight.Group[struct{}]
+	bodyFlights flight.Group[articleObservation]
 
 	mu        sync.Mutex
 	entries   map[string]*articleCacheEntry
@@ -182,32 +184,26 @@ func (b *ArticleBroker) Stat(ctx context.Context, messageID string) error {
 		return nil
 	}
 
-	result := b.flights.DoChan("stat\x00"+messageID, func() (any, error) {
+	_, shared, err := b.statFlights.Do(ctx, messageID, func(ctx context.Context) (struct{}, error) {
 		if b.IsAvailable(messageID) {
 			return struct{}{}, nil
 		}
 		if err := b.acquire(ctx); err != nil {
-			return nil, err
+			return struct{}{}, err
 		}
 		defer b.release()
 
 		b.networkStats.Add(1)
 		if err := b.backend.Stat(ctx, messageID); err != nil {
-			return nil, err
+			return struct{}{}, err
 		}
 		b.markAvailable(messageID)
 		return struct{}{}, nil
 	})
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case loaded := <-result:
-		if loaded.Shared {
-			b.sharedLoads.Add(1)
-		}
-		return loaded.Err
+	if shared {
+		b.sharedLoads.Add(1)
 	}
+	return err
 }
 
 // IsAvailable reports whether a successful BODY or STAT has already proved
@@ -254,44 +250,31 @@ func (b *ArticleBroker) load(ctx context.Context, messageID string) (articleObse
 		return articleObservation{body: body, metadata: metadata}, nil
 	}
 
-	result := b.flights.DoChan("body\x00"+messageID, func() (any, error) {
+	observation, shared, err := b.bodyFlights.Do(ctx, messageID, func(ctx context.Context) (articleObservation, error) {
 		if body, metadata, ok := b.cachedBody(messageID); ok {
 			return articleObservation{body: body, metadata: metadata}, nil
 		}
 		if err := b.acquire(ctx); err != nil {
-			return nil, err
+			return articleObservation{}, err
 		}
 		defer b.release()
 
 		b.networkBodies.Add(1)
 		body, metadata, err := b.backend.Fetch(ctx, messageID)
 		if err != nil {
-			return nil, err
+			return articleObservation{}, err
 		}
 		if metadata == nil {
-			return nil, fmt.Errorf("article %s returned no yEnc metadata", messageID)
+			return articleObservation{}, fmt.Errorf("article %s returned no yEnc metadata", messageID)
 		}
 		b.bytesFetched.Add(int64(len(body)))
 		b.store(messageID, body, metadata)
 		return articleObservation{body: body, metadata: *metadata}, nil
 	})
-
-	select {
-	case <-ctx.Done():
-		return articleObservation{}, ctx.Err()
-	case loaded := <-result:
-		if loaded.Shared {
-			b.sharedLoads.Add(1)
-		}
-		if loaded.Err != nil {
-			return articleObservation{}, loaded.Err
-		}
-		observation, ok := loaded.Val.(articleObservation)
-		if !ok {
-			return articleObservation{}, fmt.Errorf("unexpected article observation type %T", loaded.Val)
-		}
-		return observation, nil
+	if shared {
+		b.sharedLoads.Add(1)
 	}
+	return observation, err
 }
 
 func (b *ArticleBroker) cachedHeader(messageID string, maxSnippet int) (*nntp.YencMetadata, bool) {

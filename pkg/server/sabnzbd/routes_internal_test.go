@@ -12,33 +12,25 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/manager"
+	"github.com/sirrobot01/decypharr/pkg/manager/managertest"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
 // newContractRouter starts a manager with token-only auth ("test-token").
 func newContractRouter(t *testing.T) (*SABnzbd, http.Handler, *manager.Manager) {
 	t.Helper()
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
-	if _, err := config.Update(func(c *config.Config) error {
+	downloads := t.TempDir()
+	mgr, store := managertest.New(t, func(c *config.Config) {
 		c.UseAuth = true
 		c.Auth = &config.Auth{APIToken: "test-token", TokenOnly: true}
-		c.DownloadFolder = t.TempDir()
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	mgr := manager.New()
-	t.Cleanup(func() {
-		if err := mgr.Stop(); err != nil {
-			t.Error(err)
-		}
+		c.DownloadFolder = downloads
 	})
-	sab := New(mgr)
+	sab := New(mgr, store, zerolog.Nop())
 	return sab, sab.Routes(), mgr
 }
 
@@ -96,8 +88,8 @@ func checkQueueSlot(t *testing.T, body []byte) {
 	}
 }
 
-//nolint:paralleltest // mutates the process-wide config singleton
 func TestRouterQueueContracts(t *testing.T) {
+	t.Parallel()
 	_, router, mgr := newContractRouter(t)
 	addQueueFixtures(t, mgr)
 	for _, tc := range []struct {
@@ -112,6 +104,7 @@ func TestRouterQueueContracts(t *testing.T) {
 		{"missing token", http.MethodGet, "category", "", 401},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			values := url.Values{"mode": {"queue"}, tc.key: {"tv"}, "ma_password": {tc.token}}
 			response := httptest.NewRecorder()
 			router.ServeHTTP(response, sabRequest(tc.method, values))
@@ -125,8 +118,8 @@ func TestRouterQueueContracts(t *testing.T) {
 	}
 }
 
-//nolint:paralleltest // mutates the process-wide config singleton
 func TestRouterUnknownMode(t *testing.T) {
+	t.Parallel()
 	_, router, _ := newContractRouter(t)
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/?mode=unknown&ma_password=test-token", nil))
@@ -135,8 +128,8 @@ func TestRouterUnknownMode(t *testing.T) {
 	}
 }
 
-//nolint:paralleltest // mutates the process-wide config singleton
 func TestRouterAuthenticatedArrSurvivesModeParsing(t *testing.T) {
+	t.Parallel()
 	sab, _, mgr := newContractRouter(t)
 	uncached := true
 	mgr.Arr().AddOrUpdate(arr.Arr{
@@ -206,10 +199,10 @@ func stageDeleteFiles(t *testing.T, entry *storage.Entry, blockRemoval bool) {
 	} else {
 		mustWrite(t, entry.Magnet, "staged")
 	}
-	if err := os.MkdirAll(entry.DownloadPath(), 0o700); err != nil {
+	if err := os.MkdirAll(entry.DownloadPath(""), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	mustWrite(t, filepath.Join(entry.DownloadPath(), "movie.mkv"), "movie")
+	mustWrite(t, filepath.Join(entry.DownloadPath(""), "movie.mkv"), "movie")
 }
 
 func mustMkdir(t *testing.T, path string) {
@@ -234,7 +227,7 @@ func checkDeleted(t *testing.T, mgr *manager.Manager, entries []*storage.Entry, 
 		if deleted && err == nil || !deleted && err != nil {
 			t.Errorf("entry %s, deleted=%v, error=%v", entry.InfoHash, deleted, err)
 		}
-		for _, path := range []string{entry.Magnet, entry.DownloadPath()} {
+		for _, path := range []string{entry.Magnet, entry.DownloadPath("")} {
 			_, statErr := os.Stat(path)
 			if deleted && !errors.Is(statErr, os.ErrNotExist) || !deleted && statErr != nil {
 				t.Errorf("path %s, deleted=%v, error=%v", path, deleted, statErr)
@@ -243,9 +236,8 @@ func checkDeleted(t *testing.T, mgr *manager.Manager, entries []*storage.Entry, 
 	}
 }
 
-//nolint:paralleltest // mutates the process-wide config singleton
 func TestRouterQueueDelete(t *testing.T) {
-	_, router, mgr := newContractRouter(t)
+	t.Parallel()
 	for _, tc := range []struct {
 		name, value, method string
 		wantStatus          int
@@ -260,6 +252,10 @@ func TestRouterQueueDelete(t *testing.T) {
 		{"failed category", "failed", http.MethodGet, 200, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			// Each case gets its own queue: "failed" deletes every failed
+			// entry, including another case's fixtures.
+			_, router, mgr := newContractRouter(t)
 			entries := addDeleteFixtures(t, mgr, tc.name)
 			values := url.Values{
 				"mode":        {"queue"},
@@ -285,5 +281,29 @@ func TestRouterQueueDelete(t *testing.T) {
 			}
 			checkDeleted(t, mgr, entries, tc.wantDeleted)
 		})
+	}
+}
+
+// An NZB fetched by URL is requested with the configured nzb_user_agent;
+// indexers often refuse Go's default.
+func TestAddNZBURLSendsConfiguredUserAgent(t *testing.T) {
+	t.Parallel()
+	gotAgent := make(chan string, 1)
+	indexer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAgent <- r.UserAgent()
+		http.Error(w, "gone", http.StatusNotFound)
+	}))
+	t.Cleanup(indexer.Close)
+
+	mgr, store := managertest.New(t, func(c *config.Config) {
+		c.NZBUserAgent = "decypharr-test/1.0"
+		c.DownloadFolder = t.TempDir()
+	})
+	sab := New(mgr, store, zerolog.Nop())
+	if _, err := sab.addNZBURL(t.Context(), indexer.URL+"/get.nzb", arr.Arr{Name: "sonarr"}, ""); err == nil {
+		t.Fatal("a 404 NZB was accepted")
+	}
+	if agent := <-gotAgent; agent != "decypharr-test/1.0" {
+		t.Fatalf("User-Agent = %q, want the configured nzb_user_agent", agent)
 	}
 }

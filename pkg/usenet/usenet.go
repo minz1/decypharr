@@ -251,7 +251,10 @@ type Usenet struct {
 	analyzer                 *parser.NZBParser
 	fetchScheduler           *reader.FetchScheduler
 	logger                   zerolog.Logger
+	config                   *config.Store
+	streamSettings           config.Usenet // fixed at creation: buffers and pipelining
 	metadataDir              string
+	markers                  *os.Root    // metadataDir, for NZB marker files
 	nzbStorage               *NZBStorage // File-based NZB metadata storage
 	maxConnections           int         // Provider-wide streaming scheduler width
 	processingMaxConnections int         // Connections allocated per file for parsing and NZB downloads
@@ -284,30 +287,38 @@ func fsKey(nzoID, filename string) string {
 	return string(buf)
 }
 
-func configuredRetention() Retention {
-	if config.Get().Usenet.UsesDiskBuffer() {
+// configuredRetention is the stream retention the usenet settings ask for:
+// rewind files when a disk buffer is configured, a memory window otherwise.
+func configuredRetention(cfg config.Usenet) Retention {
+	if cfg.UsesDiskBuffer() {
 		return RetentionRewind
 	}
 	return RetentionWindow
 }
 
-// New creates a new usenet instance.
-func New() (*Usenet, error) {
-	cfg := config.Get()
+// New creates the usenet service for the configuration published by store.
+// Availability sampling is read live; everything else is fixed at creation.
+func New(store *config.Store, logs *logger.Factory) (*Usenet, error) {
+	cfg := store.Get()
 	usenetConfig := cfg.Usenet
 	if len(usenetConfig.Providers) == 0 {
 		return nil, fmt.Errorf("no usenet providers configured")
 	}
-	_logger := logger.New("usenet")
+	_logger := logs.New("usenet")
 
-	metadataDir := filepath.Join(config.GetMainPath(), "usenet", "nzbs")
+	metadataDir := filepath.Join(cfg.Dir(), "usenet", "nzbs")
 	if err := os.MkdirAll(metadataDir, 0o750); err != nil {
 		return nil, fmt.Errorf("failed to create metadata dir: %w", err)
 	}
+	markers, err := os.OpenRoot(metadataDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open metadata dir: %w", err)
+	}
 
 	// Create file-based NZB storage
-	nzbStorage, err := NewNZBStorage()
+	nzbStorage, err := NewNZBStorage(filepath.Join(cfg.Dir(), "usenet", metaDirName), logs.New("nzb-storage"))
 	if err != nil {
+		_ = markers.Close()
 		return nil, fmt.Errorf("failed to create NZB storage: %w", err)
 	}
 
@@ -321,14 +332,16 @@ func New() (*Usenet, error) {
 	}()
 
 	// Create NNTP client with retry configuration
-	client, err := nntp.NewClient(cfg)
+	client, err := nntp.NewClient(cfg, logs.New("nntp-client"))
 	if err != nil {
+		_ = markers.Close()
 		return nil, err
 	}
 
 	// Disk rewind files are session-scoped; clear any left by an interrupted run.
 	if clearErr := clearStaleStreamCache(strings.TrimSpace(usenetConfig.DiskPath)); clearErr != nil {
 		_ = client.Close()
+		_ = markers.Close()
 		return nil, clearErr
 	}
 
@@ -354,7 +367,12 @@ func New() (*Usenet, error) {
 			client,
 			processingMaxConns,
 			_logger.With().Str("component", "parser").Logger(),
-		),
+		).WithFileFilter(func(name string, size int64) error {
+			return store.Get().ValidateFileAllowed(name, size)
+		}),
+		config:                   store,
+		streamSettings:           usenetConfig,
+		markers:                  markers,
 		fetchScheduler:           reader.NewFetchScheduler(maxConns),
 		logger:                   _logger,
 		metadataDir:              metadataDir,
@@ -419,6 +437,8 @@ func (u *Usenet) createEntry(file *storage.NZBFile, prefetchSize int64, retentio
 		fs.WithRetention(retention),
 		fs.WithFetchScheduler(u.fetchScheduler),
 		fs.WithPools(u.bufferPools),
+		fs.WithBodyPipelineDepth(u.streamSettings.BodyPipelineDepth),
+		fs.WithDiskPath(u.streamSettings.DiskPath),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create usenet FS: %w", err)
@@ -604,7 +624,7 @@ func (u *Usenet) ParseWithID(
 	}
 
 	if addNZBErr := u.nzbStorage.AddNZB(nzb); addNZBErr != nil {
-		_ = os.Remove(nzbPath + ".processing")
+		u.removeProcessingMarker(nzbPath)
 		_ = os.Remove(nzbPath)
 		return nil, nil, fmt.Errorf("failed to save NZB to storage: %w", addNZBErr)
 	}
@@ -635,6 +655,21 @@ func (u *Usenet) Process(
 		_ = u.markAsFailed(nzb, err)
 		return nzb, fmt.Errorf("failed to process NZB archives: %w", err)
 	}
+	if finishErr := u.finish(ctx, updatedNZB); finishErr != nil {
+		return updatedNZB, finishErr
+	}
+
+	u.logger.Info().
+		Str("nzb_id", updatedNZB.ID).
+		Str("name", updatedNZB.Name).
+		Int("files", len(updatedNZB.Files)).
+		Msg("Successfully processed NZB archives (full parse)")
+	return updatedNZB, nil
+}
+
+// finish runs the availability and content gates on a processed NZB and
+// records the outcome: completed, or failed with the reason.
+func (u *Usenet) finish(ctx context.Context, nzb *storage.NZB) error {
 	// Post-parse availability gate: probe a sample of each content file's
 	// segments before declaring the NZB complete. Segments can go missing
 	// between the original parse and now; without this gate they slip through
@@ -642,9 +677,9 @@ func (u *Usenet) Process(
 	// errors are non-fatal here (CheckFileAvailability returns nil for those),
 	// so a provider hiccup won't wrongly fail an import — only a definitively
 	// missing segment (gone on every provider) fails the NZB.
-	if checkNZBAvailabilityErr := u.checkNZBAvailability(ctx, updatedNZB); checkNZBAvailabilityErr != nil {
-		_ = u.markAsFailed(updatedNZB, checkNZBAvailabilityErr)
-		return updatedNZB, fmt.Errorf("availability check failed: %w", checkNZBAvailabilityErr)
+	if checkNZBAvailabilityErr := u.checkNZBAvailability(ctx, nzb); checkNZBAvailabilityErr != nil {
+		_ = u.markAsFailed(nzb, checkNZBAvailabilityErr)
+		return fmt.Errorf("availability check failed: %w", checkNZBAvailabilityErr)
 	}
 
 	// Content gate: availability only proves the articles exist; it says
@@ -655,22 +690,23 @@ func (u *Usenet) Process(
 	// serving path and require a container signature, so a scrambled assembly
 	// fails here — and the arr grabs a replacement — instead of reaching the
 	// library as an unplayable file.
-	if verifyNZBContentErr := u.verifyNZBContent(ctx, updatedNZB); verifyNZBContentErr != nil {
-		_ = u.markAsFailed(updatedNZB, verifyNZBContentErr)
-		return updatedNZB, fmt.Errorf("content verification failed: %w", verifyNZBContentErr)
+	if verifyNZBContentErr := u.verifyNZBContent(ctx, nzb); verifyNZBContentErr != nil {
+		_ = u.markAsFailed(nzb, verifyNZBContentErr)
+		return fmt.Errorf("content verification failed: %w", verifyNZBContentErr)
 	}
 
-	// Mark as completed
-	if markAsCompletedErr := u.markAsCompleted(updatedNZB); markAsCompletedErr != nil {
-		return updatedNZB, fmt.Errorf("failed to mark NZB as completed: %w", markAsCompletedErr)
+	// Both gates pass over a cancelled context without checking anything,
+	// so an interrupted run proves nothing about the content: fail it, as a
+	// cancelled parse is failed, rather than complete it unverified.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		_ = u.markAsFailed(nzb, ctxErr)
+		return fmt.Errorf("processing interrupted: %w", ctxErr)
 	}
 
-	u.logger.Info().
-		Str("nzb_id", updatedNZB.ID).
-		Str("name", updatedNZB.Name).
-		Int("files", len(updatedNZB.Files)).
-		Msg("Successfully processed NZB archives (full parse)")
-	return updatedNZB, nil
+	if markAsCompletedErr := u.markAsCompleted(nzb); markAsCompletedErr != nil {
+		return fmt.Errorf("failed to mark NZB as completed: %w", markAsCompletedErr)
+	}
+	return nil
 }
 
 // checkAvailability samples each content file's segments (via the same
@@ -682,7 +718,7 @@ func (u *Usenet) Process(
 // CheckFileAvailability, so they do not fail the NZB. It returns on the first
 // definitively-missing file (fail fast).
 func (u *Usenet) checkNZBAvailability(ctx context.Context, nzb *storage.NZB) error {
-	samplePercent := config.Get().Usenet.ImportAvailabilitySamplePercent
+	samplePercent := u.config.Get().Usenet.ImportAvailabilitySamplePercent
 	for i := range nzb.Files {
 		file := &nzb.Files[i]
 		if file.IsDeleted || len(file.Segments) == 0 {
@@ -716,7 +752,7 @@ func (u *Usenet) CheckFile(ctx context.Context, nzoID, filename string) error {
 	// Repair/availability probes only need a sample of one file's message ids.
 	// Decode just those (no numeric columns, no NZBSegment structs, no other
 	// files) so a full sweep doesn't hold whole segment maps in memory.
-	samplePercent := config.Get().Usenet.AvailabilitySamplePercent
+	samplePercent := u.config.Get().Usenet.AvailabilitySamplePercent
 	messageIDs, err := u.nzbStorage.SampleFileMessageIDs(nzoID, filename, samplePercent)
 	if err != nil {
 		return fmt.Errorf("failed to sample file segments: %w", err)
@@ -774,7 +810,7 @@ func (u *Usenet) checkAvailability(ctx context.Context, fileName string, message
 			Int("missing_segments", notFoundCount).
 			Int("error_count", result.ErrorCount).
 			Msg("File is unavailable - one or more segments are missing")
-		return customerror.UsenetSegmentMissingError
+		return customerror.ErrUsenetSegmentMissing
 	}
 
 	return nil
@@ -834,6 +870,9 @@ func (u *Usenet) Close() error {
 				u.logger.Warn().Err(err).Msg("Failed to close NNTP client")
 			}
 		}
+		if u.markers != nil {
+			closeErr = errors.Join(closeErr, u.markers.Close())
+		}
 		u.logger.Info().Msg("Usenet closed")
 	})
 	return closeErr
@@ -888,7 +927,7 @@ type FileHandle struct {
 // handle must be Closed; it pins the underlying fs entry (and its reader)
 // while open.
 func (u *Usenet) OpenFile(ctx context.Context, nzoID, filename string) (*FileHandle, error) {
-	return u.OpenFileWithRetention(ctx, nzoID, filename, configuredRetention())
+	return u.OpenFileWithRetention(ctx, nzoID, filename, configuredRetention(u.streamSettings))
 }
 
 func (u *Usenet) OpenFileWithRetention(
@@ -977,7 +1016,7 @@ func (u *Usenet) Stream(ctx context.Context, nzoID, filename string, start, end 
 
 	// Use getOrCreateEntry to get both entry and key in one call,
 	// avoiding redundant key computation in releaseFS.
-	ufsEntry, key, err := u.getOrCreateEntry(ctx, nzoID, filename, configuredRetention())
+	ufsEntry, key, err := u.getOrCreateEntry(ctx, nzoID, filename, configuredRetention(u.streamSettings))
 	if err != nil {
 		return fmt.Errorf("failed to get or create file system: %w", err)
 	}
@@ -1124,7 +1163,7 @@ func (u *Usenet) Touch(ctx context.Context, nzoID, filename string) error {
 // Uses the shared entry/reader so the cache is available for Stream calls.
 func (u *Usenet) PreCache(ctx context.Context, nzoID, filename string) error {
 	// Use shared entry (same as Stream)
-	entry, key, err := u.getOrCreateEntry(ctx, nzoID, filename, configuredRetention())
+	entry, key, err := u.getOrCreateEntry(ctx, nzoID, filename, configuredRetention(u.streamSettings))
 	if err != nil {
 		return fmt.Errorf("failed to get or create entry: %w", err)
 	}
@@ -1264,10 +1303,39 @@ func (u *Usenet) RemoveStagedNZB(path string) {
 	}
 }
 
+// markerFileMode is the mode of NZB marker files: private to the service.
+const markerFileMode os.FileMode = 0o600
+
+// processingMarker names the ".processing" marker of an NZB source file,
+// relative to the metadata directory. ok is false when the NZB has no source
+// file there; markers never resolve anywhere else (an empty path would
+// otherwise name a file in the working directory).
+func (u *Usenet) processingMarker(nzbPath string) (string, bool) {
+	if nzbPath == "" {
+		return "", false
+	}
+	rel, err := filepath.Rel(u.metadataDir, nzbPath)
+	if err != nil || !filepath.IsLocal(rel) {
+		return "", false
+	}
+	return rel + ".processing", true
+}
+
+// removeProcessingMarker deletes the ".processing" marker of an NZB source
+// file, if it has one.
+func (u *Usenet) removeProcessingMarker(nzbPath string) {
+	if name, ok := u.processingMarker(nzbPath); ok {
+		_ = u.markers.Remove(name)
+	}
+}
+
 func (u *Usenet) markAsProcessing(nzb *storage.NZB) error {
 	// Mark as processing by creating a marker file with the NZB ID
-	markerPath := nzb.Path + ".processing"
-	if err := os.WriteFile(markerPath, []byte(nzb.ID), 0o600); err != nil {
+	name, ok := u.processingMarker(nzb.Path)
+	if !ok {
+		return fmt.Errorf("NZB source %q is outside the metadata directory", nzb.Path)
+	}
+	if err := u.markers.WriteFile(name, []byte(nzb.ID), markerFileMode); err != nil {
 		return fmt.Errorf("failed to create processing marker: %w", err)
 	}
 	return nil
@@ -1280,7 +1348,7 @@ func (u *Usenet) markAsCompleted(nzb *storage.NZB) error {
 		if err := os.Remove(nzb.Path); err != nil && !os.IsNotExist(err) {
 			u.logger.Warn().Err(err).Str("path", nzb.Path).Msg("Failed to delete NZB source file after completion")
 		}
-		_ = os.Remove(nzb.Path + ".processing")
+		u.removeProcessingMarker(nzb.Path)
 		nzb.Path = ""
 	}
 
@@ -1299,10 +1367,9 @@ func (u *Usenet) markAsFailed(nzb *storage.NZB, err error) error {
 	}
 
 	// Remove the processing marker and the nzb file itself, as it's
-	// considered failed. Without a path there is nothing to remove (a bare
-	// ".processing" would name a file in the working directory).
+	// considered failed. Without a path there is nothing to remove.
 	if nzb.Path != "" {
-		_ = os.Remove(nzb.Path + ".processing")
+		u.removeProcessingMarker(nzb.Path)
 		if removeErr := os.Remove(nzb.Path); removeErr != nil && !os.IsNotExist(removeErr) {
 			u.logger.Warn().
 				Err(removeErr).

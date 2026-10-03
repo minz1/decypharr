@@ -12,7 +12,7 @@ import (
 // newIndexedTestStorage opens a store holding one entry in folder "folder".
 func newIndexedTestStorage(t *testing.T) (*Storage, *Entry) {
 	t.Helper()
-	s, err := NewStorage(t.TempDir())
+	s, err := NewStorage(t.TempDir(), Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

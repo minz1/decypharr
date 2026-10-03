@@ -266,7 +266,12 @@ func (r RepairConfig) IsZero() bool {
 }
 
 type Config struct {
-	SessionSecret string `json:"session_secret,omitempty"`
+	meta meta
+
+	// SessionSecret signs browser sessions and qBittorrent SIDs. It lives in
+	// secrets.json; config.json files from earlier versions still carry it
+	// and lose it on the next save.
+	SessionSecret Secret `json:"-"`
 
 	// server
 	BindAddress string `json:"bind_address,omitempty"`
@@ -297,6 +302,17 @@ type Config struct {
 	Auth               *Auth    `json:"-"`
 
 	DisableWebDav bool `json:"disable_webdav,omitempty"`
+
+	// SharedDirMode and SharedFileMode are octal modes for the trees other
+	// services use: download and symlink folders, the STRM export and mount
+	// points. Empty means DefaultSharedDirMode / DefaultSharedFileMode.
+	SharedDirMode  string `json:"shared_dir_mode,omitempty"`
+	SharedFileMode string `json:"shared_file_mode,omitempty"`
+
+	// TLSCAFile is a PEM bundle of extra certificate authorities trusted for
+	// outgoing TLS (debrid, *arr, usenet), e.g. a LAN CA or a self-signed
+	// *arr certificate. Certificates are always verified.
+	TLSCAFile string `json:"tls_ca_file,omitempty"`
 
 	// Notifications configuration
 	Notifications Notifications `json:"notifications"`
@@ -335,17 +351,17 @@ type Config struct {
 
 // JSONFile is the path of config.json.
 func (c *Config) JSONFile() string {
-	return filepath.Join(GetMainPath(), "config.json")
+	return filepath.Join(c.meta.dir, "config.json")
 }
 func (c *Config) AuthFile() string {
-	return filepath.Join(GetMainPath(), "auth.json")
+	return filepath.Join(c.meta.dir, "auth.json")
 }
 
 func (c *Config) TorrentsFile() string {
-	return filepath.Join(GetMainPath(), "torrents.json")
+	return filepath.Join(c.meta.dir, "torrents.json")
 }
 
-func (c *Config) loadConfig() error {
+func (c *Config) load(lookup LookupEnv) error {
 	// Load the config file
 	// Read the JSON config file directly
 	configFile := c.JSONFile()
@@ -366,29 +382,49 @@ func (c *Config) loadConfig() error {
 			return fmt.Errorf("error parsing config JSON: %w", unmarshalErr)
 		}
 	}
+	if secretsErr := c.readSecrets(data); secretsErr != nil {
+		return secretsErr
+	}
 	hadStrmSecret := c.Strm.Secret != ""
-	hadSessionSecret := c.SessionSecret != ""
+	hadSessionSecret := !c.SessionSecret.IsZero()
 
 	// Apply environment variable overrides first so setDefaults() (which,
 	// e.g., decides whether to eagerly load Auth based on UseAuth) sees the
 	// final values rather than whatever was persisted to disk.
-	c.applyEnvOverrides()
+	e := env{lookup: lookup}
+	c.meta.secretKey = e.get("SECRET_KEY")
+	c.applyEnvOverrides(e)
 
 	// Set defaults for any missing values
 	c.setDefaults()
 
-	// Hard-fail on invalid DFS size/duration strings. A wrong value silently
-	// sets CacheDiskSize=0 and disables all cache enforcement; fail loudly instead.
-	if validateErr := c.Mount.DFS.Validate(); validateErr != nil {
-		return fmt.Errorf("configuration error: %w", validateErr)
+	if checkErr := c.CheckLoadable(); checkErr != nil {
+		return fmt.Errorf("configuration error: %w", checkErr)
 	}
 
 	// Save new signing secrets so signatures remain valid after a restart.
-	if !hadStrmSecret || !hadSessionSecret {
+	if (!hadStrmSecret || !hadSessionSecret) && !c.meta.readOnly {
 		return c.Save()
 	}
 
 	return nil
+}
+
+// CheckLoadable runs the checks Load enforces, so a configuration that
+// fails them is never saved: an invalid DFS size or duration (which would
+// silently disable cache enforcement), shared mode, TLS CA file or debrid
+// proxy. It also parses the shared modes. Errors name the field.
+func (c *Config) CheckLoadable() error {
+	if err := c.Mount.DFS.Validate(); err != nil {
+		return err
+	}
+	if err := c.parseModes(); err != nil {
+		return err
+	}
+	if _, err := c.TLSClientConfig(); err != nil {
+		return err
+	}
+	return validateDebridProxies(c.Debrids)
 }
 
 func (c *Config) Validate() error {
@@ -450,7 +486,7 @@ func (c *Config) GetMaxFileSize() int64 {
 }
 
 func (c *Config) SecretKey() string {
-	return cmp.Or(getEnv("SECRET_KEY"), c.SessionSecret)
+	return cmp.Or(c.meta.secretKey, c.SessionSecret.Reveal())
 }
 
 // GetAuth returns a copy of the authentication settings.
@@ -474,14 +510,11 @@ func (c *Config) SaveAuth(auth *Auth) error {
 	}
 	updated := *auth
 	updated.SessionVersion = rand.Text()
-	data, err := json.Marshal(&updated)
+	data, err := json.Marshal(authRecord(updated))
 	if err != nil {
 		return err
 	}
-	if chmodErr := os.Chmod(c.AuthFile(), 0600); chmodErr != nil && !errors.Is(chmodErr, os.ErrNotExist) {
-		return chmodErr
-	}
-	if writeFileErr := os.WriteFile(c.AuthFile(), data, 0600); writeFileErr != nil {
+	if writeFileErr := c.writeFile(c.AuthFile(), data); writeFileErr != nil {
 		return writeFileErr
 	}
 	c.Auth = &updated
@@ -529,7 +562,7 @@ func (c *Config) migrateQBitTorrentToManager() {
 
 	// Set default download folder if not set
 	if c.DownloadFolder == "" {
-		c.DownloadFolder = filepath.Join(GetMainPath(), "downloads")
+		c.DownloadFolder = filepath.Join(c.meta.dir, "downloads")
 	}
 
 	// Set default categories if not set
@@ -565,10 +598,10 @@ func (c *Config) migrateNotifications() {
 }
 
 func (c *Config) setDefaults() {
-	if c.SessionSecret == "" {
+	if c.SessionSecret.IsZero() {
 		var key [secretBytes]byte
 		_, _ = rand.Read(key[:])
-		c.SessionSecret = hex.EncodeToString(key[:])
+		c.SessionSecret = NewSecret(hex.EncodeToString(key[:]))
 	}
 	// Migrate deprecated fields to Manager (backward compatibility)
 	c.migrateQBitTorrentToManager()
@@ -667,6 +700,8 @@ func (c *Config) setServerDefaults() {
 	if c.LogLevel == "" {
 		c.LogLevel = DefaultLogLevel
 	}
+	c.SharedDirMode = cmp.Or(c.SharedDirMode, DefaultSharedDirMode)
+	c.SharedFileMode = cmp.Or(c.SharedFileMode, DefaultSharedFileMode)
 }
 
 func (c *Config) setRcloneMountDefaults() {
@@ -781,10 +816,13 @@ func (c *Config) Save() error {
 	if err != nil {
 		return err
 	}
-	if chmodErr := os.Chmod(c.JSONFile(), 0600); chmodErr != nil && !errors.Is(chmodErr, os.ErrNotExist) {
-		return chmodErr
+	// Secrets first: config.json no longer carries the session secret, so
+	// it must be safe in secrets.json before an older config.json that
+	// still holds it is replaced.
+	if secretsErr := c.writeSecrets(); secretsErr != nil {
+		return secretsErr
 	}
-	if writeFileErr := os.WriteFile(c.JSONFile(), data, 0600); writeFileErr != nil {
+	if writeFileErr := c.writeFile(c.JSONFile(), data); writeFileErr != nil {
 		fmt.Fprintf(os.Stderr, "Failed to write config file: %v\n", writeFileErr)
 		return writeFileErr
 	}
@@ -836,7 +874,7 @@ func clearHotFields(c *Config) {
 	// reconciler pass; a config change triggers a resweep, not a restart.
 	c.Strm = Strm{}
 
-	// Queue cleanup rules are read live via config.Get() inside CleanupQueue,
+	// Queue cleanup rules are read live from the config store inside CleanupQueue,
 	// so changes apply on the next cleanup cycle without a restart.
 	c.QueueCleanup = QueueCleanup{}
 
@@ -868,8 +906,10 @@ func (c *Config) RequiresRestart(n *Config) bool {
 
 func (c *Config) createConfig() error {
 	// Create the directory if it doesn't exist
-	if err := os.MkdirAll(GetMainPath(), 0o750); err != nil {
-		return fmt.Errorf("failed to create config directory: %w", err)
+	if !c.meta.readOnly {
+		if err := os.MkdirAll(c.meta.dir, 0o750); err != nil {
+			return fmt.Errorf("failed to create config directory: %w", err)
+		}
 	}
 	c.URLBase = "/"
 	c.Port = DefaultPort

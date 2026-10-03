@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/sirrobot01/decypharr/internal/kvstore"
+
 	"github.com/sirrobot01/appendstore"
 )
 
 type JobRepository struct {
 	mu    sync.RWMutex
-	store *appendstore.Store
+	store *kvstore.Store
 }
 
 func OpenReacquireJobRepository(path string) (*JobRepository, error) {

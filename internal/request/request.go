@@ -18,8 +18,6 @@ import (
 	"github.com/rs/zerolog"
 	"go.uber.org/ratelimit"
 	"golang.org/x/net/proxy"
-
-	"github.com/sirrobot01/decypharr/internal/logger"
 )
 
 // Client defaults.
@@ -49,7 +47,7 @@ type Client struct {
 	headersMu       sync.RWMutex
 	maxRetries      int
 	timeout         time.Duration
-	skipTLSVerify   bool
+	tlsConfig       *tls.Config
 	retryableStatus map[int]struct{}
 	logger          zerolog.Logger
 	proxy           string
@@ -90,13 +88,6 @@ func (c *Client) SetHeader(key, value string) {
 	c.headersMu.Lock()
 	c.headers[key] = value
 	c.headersMu.Unlock()
-}
-
-// WithLogger sets the client's logger.
-func WithLogger(logger zerolog.Logger) ClientOption {
-	return func(c *Client) {
-		c.logger = logger
-	}
 }
 
 // WithRetryableStatus adds status codes that should trigger a retry.
@@ -220,11 +211,16 @@ func retryAfter(resp *http.Response) (time.Duration, bool) {
 	return 0, false
 }
 
-// New creates a new HTTP client with the specified options.
-func New(options ...ClientOption) *Client {
+// New creates an HTTP client. logger receives the client's own diagnostics;
+// tlsConfig is the verified TLS base for HTTPS (the configured CA file);
+// nil means the system roots. Both are required so no caller forgets them.
+func New(logger zerolog.Logger, tlsConfig *tls.Config, options ...ClientOption) *Client {
+	if tlsConfig == nil {
+		tlsConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	}
 	client := &Client{
-		maxRetries:    defaultMaxRetries,
-		skipTLSVerify: true,
+		maxRetries: defaultMaxRetries,
+		tlsConfig:  tlsConfig.Clone(),
 		retryableStatus: map[int]struct{}{
 			http.StatusTooManyRequests:     {},
 			http.StatusInternalServerError: {},
@@ -232,7 +228,7 @@ func New(options ...ClientOption) *Client {
 			http.StatusServiceUnavailable:  {},
 			http.StatusGatewayTimeout:      {},
 		},
-		logger:  logger.New("request"),
+		logger:  logger,
 		timeout: defaultTimeout,
 		proxy:   "",
 		headers: make(map[string]string),
@@ -253,11 +249,7 @@ func New(options ...ClientOption) *Client {
 	// Check if transport was set by WithTransport option
 	if client.httpClient.Transport == nil {
 		transport := &http.Transport{
-			TLSClientConfig: &tls.Config{
-				// Always true today: Arr instances on the LAN commonly use
-				// self-signed certificates. See the review report follow-up.
-				InsecureSkipVerify: client.skipTLSVerify,
-			},
+			TLSClientConfig: client.tlsConfig,
 			DialContext: (&net.Dialer{
 				Timeout:   dialTimeout,
 				KeepAlive: dialKeepAlive,
@@ -308,19 +300,46 @@ func New(options ...ClientOption) *Client {
 	return client
 }
 
+// ParseProxy parses a proxy URL: http://, https://, socks5:// or socks5h://
+// (the schemes net/http supports), with a host. A bare host:port means an
+// HTTP proxy, as with curl.
+func ParseProxy(proxyURL string) (*url.URL, error) {
+	raw := strings.TrimSpace(proxyURL)
+	if !strings.Contains(raw, "://") {
+		raw = "http://" + raw
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("invalid proxy URL: %w", err)
+	}
+	switch parsed.Scheme {
+	case "http", "https", "socks5", "socks5h":
+	default:
+		return nil, fmt.Errorf("invalid proxy URL %q: scheme must be http, https, socks5 or socks5h", parsed.Redacted())
+	}
+	if parsed.Host == "" {
+		return nil, fmt.Errorf("invalid proxy URL %q: no host", parsed.Redacted())
+	}
+	return parsed, nil
+}
+
 // SetProxy configures transport for proxyURL: socks5:// dials through a
 // SOCKS5 proxy, anything else is an HTTP(S) proxy URL, and "" uses the
-// environment. An unparseable URL leaves the transport unchanged.
+// environment. An invalid URL fails every request with its parse error
+// rather than letting them bypass the configured proxy.
 func SetProxy(transport *http.Transport, proxyURL string) {
 	if proxyURL == "" {
 		transport.Proxy = http.ProxyFromEnvironment
 		return
 	}
-	parsed, err := url.Parse(proxyURL)
+	parsed, err := ParseProxy(proxyURL)
 	if err != nil {
+		failAllRequests(transport, err)
 		return
 	}
-	if !strings.HasPrefix(proxyURL, "socks5://") {
+	// x/net's SOCKS5 dialer passes host names to the proxy to resolve, so it
+	// serves socks5h too.
+	if parsed.Scheme != "socks5" && parsed.Scheme != "socks5h" {
 		transport.Proxy = http.ProxyURL(parsed)
 		return
 	}
@@ -332,6 +351,7 @@ func SetProxy(transport *http.Transport, proxyURL string) {
 	}
 	dialer, err := proxy.SOCKS5("tcp", parsed.Host, auth, proxy.Direct)
 	if err != nil {
+		failAllRequests(transport, fmt.Errorf("socks5 proxy: %w", err))
 		return
 	}
 	// The x/net SOCKS5 dialer implements ContextDialer; use it so request
@@ -343,4 +363,10 @@ func SetProxy(transport *http.Transport, proxyURL string) {
 	transport.DialContext = func(_ context.Context, network, addr string) (net.Conn, error) {
 		return dialer.Dial(network, addr)
 	}
+}
+
+// failAllRequests makes every request through transport fail with err.
+func failAllRequests(transport *http.Transport, err error) {
+	transport.Proxy = func(*http.Request) (*url.URL, error) { return nil, err }
+	transport.DialContext = func(context.Context, string, string) (net.Conn, error) { return nil, err }
 }

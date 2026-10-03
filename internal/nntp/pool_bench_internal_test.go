@@ -53,7 +53,7 @@ func newBenchPool(b *testing.B, host string, maxConns int) (*ProviderPool, confi
 			writer: bufio.NewWriter(clientSide),
 		}
 		b.Cleanup(func() { _ = conn.Close(); _ = serverSide.Close() })
-		pp.conns = append(pp.conns, acquireConnectionEntry(conn, provider, time.Now()))
+		pp.conns = append(pp.conns, &connectionEntry{conn: conn, provider: provider, lastUsed: time.Now()})
 	}
 	return pp, provider
 }

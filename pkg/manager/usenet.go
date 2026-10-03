@@ -33,14 +33,14 @@ func (m *Manager) AddNewNZB(_ context.Context, req *ImportRequest) (string, erro
 		Str("category", req.Arr.Name).
 		Msg("Adding new NZB to usenet")
 
-	stagedPath, err := m.usenet.StageNZB(req.Id, req.NZBContent)
+	stagedPath, err := m.usenet.StageNZB(req.ID, req.NZBContent)
 	if err != nil {
 		return "", err
 	}
 	req.NZBContent = nil
 
 	entry := &storage.Entry{
-		InfoHash:         req.Id,
+		InfoHash:         req.ID,
 		Name:             req.Name,
 		OriginalFilename: req.Name,
 		Protocol:         config.ProtocolNZB,
@@ -61,7 +61,7 @@ func (m *Manager) AddNewNZB(_ context.Context, req *ImportRequest) (string, erro
 		Tags:             []string{},
 	}
 
-	entry.ContentPath = entry.DownloadPath()
+	entry.ContentPath = entry.DownloadPath(m.folderNaming())
 	if addErr := m.queue.Add(entry); addErr != nil {
 		m.usenet.RemoveStagedNZB(stagedPath)
 		return "", fmt.Errorf("failed to add nzb to queue: %w", addErr)
@@ -77,7 +77,7 @@ func (m *Manager) AddNewNZB(_ context.Context, req *ImportRequest) (string, erro
 		_ = m.queue.Update(entry)
 		return "", fmt.Errorf("failed to queue NZB: %w", submitJobErr)
 	}
-	return req.Id, nil
+	return req.ID, nil
 }
 
 func (m *Manager) processNZBJob(ctx context.Context, job *Job) error {
@@ -124,7 +124,7 @@ func (m *Manager) parseQueuedNZB(ctx context.Context, job *Job) error {
 		// A missing article at the parse stage is a definitive
 		// availability result: record and share it before failing the
 		// queued entry, so the arr can move to another release.
-		if m.hearsay != nil && errors.Is(err, customerror.UsenetSegmentMissingError) {
+		if m.hearsay != nil && errors.Is(err, customerror.ErrUsenetSegmentMissing) {
 			m.hearsay.ReportNZB(hearsay.NZBSubjectFromGroups(groups), false)
 		}
 		return fmt.Errorf("usenet parse failed: %w", err)
@@ -208,7 +208,7 @@ func (m *Manager) processNewNzb(
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 			return fmt.Errorf("usenet processing timed out after %s: %w", m.usenetTimeout, err)
 		}
-		if errors.Is(err, customerror.UsenetSegmentMissingError) {
+		if errors.Is(err, customerror.ErrUsenetSegmentMissing) {
 			m.hearsay.ReportNZB(hearsaySubject, false)
 		}
 		return fmt.Errorf("failed to process nzb: %w", err)
@@ -324,7 +324,7 @@ func (m *Manager) syncNZBs(ctx context.Context) error {
 		}
 		req := NewNZBRequest(
 			pending.Name,
-			config.Get().DownloadFolder,
+			m.store.Get().DownloadFolder,
 			pending.Content,
 			m.arr.GetOrCreate(""),
 			config.DownloadActionNone,

@@ -9,7 +9,6 @@ import (
 
 	"github.com/puzpuzpuz/xsync/v4"
 
-	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	debrid "github.com/sirrobot01/decypharr/pkg/debrid/common"
@@ -73,7 +72,7 @@ const (
 // NewFixer creates a new Fixer instance.
 func NewFixer(manager *Manager) *Fixer {
 	// GetReader debrid order from config
-	cfg := config.Get()
+	cfg := manager.config
 	debridOrder := make([]string, 0, len(cfg.Debrids))
 	for _, d := range cfg.Debrids {
 		debridOrder = append(debridOrder, d.Name)
@@ -261,7 +260,7 @@ func (f *Fixer) MoveTorrent(entry *storage.Entry, debridName string, reinsert bo
 	f.adoptPlacement(entry, debridName, newDebridTorrent)
 
 	// Delete old entry from debrid if different ID
-	if oldID != "" && oldID != newDebridTorrent.Id {
+	if oldID != "" && oldID != newDebridTorrent.ID {
 		go func() {
 			_ = client.DeleteTorrent(oldID)
 		}()
@@ -288,7 +287,7 @@ func activateExistingPlacement(entry *storage.Entry, debridName string) bool {
 // submitReplacement submits entry's magnet to client and returns the new
 // placement once every file has a link or ID; a failed placement is deleted.
 func (f *Fixer) submitReplacement(client debrid.Client, entry *storage.Entry) (*types.Torrent, error) {
-	magnet, err := utils.GetMagnetInfo(entry.Magnet, config.Get().AlwaysRmTrackerUrls)
+	magnet, err := utils.GetMagnetInfo(entry.Magnet, f.manager.store.Get().AlwaysRmTrackerUrls)
 	if err != nil {
 		magnet = utils.ConstructMagnet(entry.InfoHash, entry.Name)
 	}
@@ -307,18 +306,18 @@ func (f *Fixer) submitReplacement(client debrid.Client, entry *storage.Entry) (*
 	if err != nil {
 		return nil, fmt.Errorf("failed to submit magnet: %w", err)
 	}
-	if newDebridTorrent == nil || newDebridTorrent.Id == "" {
+	if newDebridTorrent == nil || newDebridTorrent.ID == "" {
 		return nil, fmt.Errorf("failed to submit magnet: empty entry")
 	}
 
 	newDebridTorrent.DownloadUncached = false
 	newDebridTorrent, err = client.CheckStatus(newDebridTorrent)
-	if errors.Is(err, customerror.TorrentNotCachedError) {
+	if errors.Is(err, customerror.ErrTorrentNotCached) {
 		f.manager.hearsay.ReportAdd(client.Config().Provider, entry.InfoHash, false)
 	}
 	if err != nil {
-		if newDebridTorrent != nil && newDebridTorrent.Id != "" {
-			_ = client.DeleteTorrent(newDebridTorrent.Id)
+		if newDebridTorrent != nil && newDebridTorrent.ID != "" {
+			_ = client.DeleteTorrent(newDebridTorrent.ID)
 		}
 		return nil, fmt.Errorf("failed to check status: %w", err)
 	}
@@ -329,12 +328,12 @@ func (f *Fixer) submitReplacement(client debrid.Client, entry *storage.Entry) (*
 	)
 
 	if len(newDebridTorrent.Files) == 0 {
-		_ = client.DeleteTorrent(newDebridTorrent.Id)
+		_ = client.DeleteTorrent(newDebridTorrent.ID)
 		return nil, fmt.Errorf("no files in entry after re-insertion")
 	}
 	for _, file := range newDebridTorrent.GetFiles() {
-		if file.Link == "" && file.Id == "" {
-			_ = client.DeleteTorrent(newDebridTorrent.Id)
+		if file.Link == "" && file.ID == "" {
+			_ = client.DeleteTorrent(newDebridTorrent.ID)
 			return nil, fmt.Errorf("empty link/id for file %s", file.Name)
 		}
 	}

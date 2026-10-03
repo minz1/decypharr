@@ -75,7 +75,7 @@ func (o *addOptions) nzb(name string, content []byte) *manager.ImportRequest {
 }
 
 func (s *Server) parseAddOptions(r *http.Request) *addOptions {
-	cfg := config.Get()
+	cfg := s.config.Get()
 	arrName := r.FormValue("arr")
 	// A category with no configured Arr is a throwaway that only routes the
 	// download.
@@ -109,9 +109,7 @@ func nonEmptyLines(text string) []string {
 }
 
 func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, maxAddBody)
-	//nolint:gosec // G120: body capped by MaxBytesReader above
-	if err := r.ParseMultipartForm(multipartMemory); err != nil {
+	if err := utils.ParseBoundedMultipartForm(w, r, maxAddBody, multipartMemory); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -120,7 +118,7 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 	batch := &addBatch{results: make([]*manager.ImportRequest, 0)}
 
 	for _, u := range nonEmptyLines(r.FormValue("urls")) {
-		magnet, err := utils.GetMagnetFromUrl(u, opts.rmTrackerURLs)
+		magnet, err := utils.GetMagnetFromURL(s.manager.FetchClient(), u, opts.rmTrackerURLs)
 		if err != nil {
 			batch.failf("Failed to parse URL %s: %v", u, err)
 			continue
@@ -135,8 +133,9 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 		}
 		batch.add(opts.torrent(magnet), fileHeader.Filename)
 	}
+	userAgent := utils.WithUserAgent(s.config.Get().NZBUserAgent)
 	for _, u := range nonEmptyLines(r.FormValue("nzbURLs")) {
-		filename, content, err := utils.DownloadFile(u, utils.WithHeader("User-Agent", s.nzbUserAgent))
+		filename, content, err := utils.DownloadFile(s.manager.FetchClient(), u, userAgent)
 		if err != nil {
 			batch.failf("Failed to fetch NZB from URL %s: %v", u, err)
 			continue
@@ -161,7 +160,7 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 		if req.Magnet != nil {
 			err = s.manager.AddNewTorrent(ctx, req)
 		} else {
-			req.Id, err = s.manager.AddNewNZB(ctx, req)
+			req.ID, err = s.manager.AddNewNZB(ctx, req)
 		}
 		if err != nil {
 			s.logger.Error().Err(err).Str("source", task.source).Msg("Failed to import content")

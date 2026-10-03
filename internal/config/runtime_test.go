@@ -10,15 +10,24 @@ import (
 	"github.com/sirrobot01/decypharr/internal/config"
 )
 
+// newStore loads a fresh installation in a temporary directory.
+func newStore(t *testing.T) *config.Store {
+	t.Helper()
+	cfg, err := config.Load(t.TempDir(), config.MapEnv(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return config.NewStore(cfg)
+}
+
 func TestUpdatePublishesIndependentSnapshots(t *testing.T) {
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
-	before := config.Get()
+	t.Parallel()
+	store := newStore(t)
+	before := store.Get()
 	beforeCategories := slices.Clone(before.Categories)
 	beforeToken := before.GetAuth().APIToken
 	var edited *config.Config
-	after, err := config.Update(func(next *config.Config) error {
+	after, err := store.Update(func(next *config.Config) error {
 		edited = next
 		next.Categories = append(next.Categories, "added")
 		next.Auth.APIToken = "updated"
@@ -40,18 +49,20 @@ func TestUpdatePublishesIndependentSnapshots(t *testing.T) {
 	if after.GetAuth().APIToken != "updated" {
 		t.Fatal("GetAuth exposes mutable credentials")
 	}
+	if after.Dir() != before.Dir() {
+		t.Fatalf("published snapshot moved to %q from %q", after.Dir(), before.Dir())
+	}
 }
 
 func TestConcurrentConfigUpdatesKeepAllChanges(t *testing.T) {
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
-	before := config.Get()
+	t.Parallel()
+	store := newStore(t)
+	before := store.Get()
 	initialCount := len(before.Categories)
 	var wg sync.WaitGroup
 	for i := range 12 {
 		wg.Go(func() {
-			_, err := config.Update(
+			_, err := store.Update(
 				func(next *config.Config) error {
 					next.Categories = append(next.Categories, strconv.Itoa(i))
 					return nil
@@ -63,14 +74,14 @@ func TestConcurrentConfigUpdatesKeepAllChanges(t *testing.T) {
 		})
 		wg.Go(func() {
 			for range 100 {
-				current := config.Get()
+				current := store.Get()
 				_ = slices.Clone(current.Categories)
 				_ = current.GetAuth()
 			}
 		})
 	}
 	wg.Wait()
-	if got := len(config.Get().Categories); got != initialCount+12 {
+	if got := len(store.Get().Categories); got != initialCount+12 {
 		t.Fatalf("categories=%d, want %d", got, initialCount+12)
 	}
 	if len(before.Categories) != initialCount {
@@ -79,22 +90,21 @@ func TestConcurrentConfigUpdatesKeepAllChanges(t *testing.T) {
 }
 
 func TestFailedSaveDoesNotPublishConfig(t *testing.T) {
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
-	before := config.Get()
+	t.Parallel()
+	store := newStore(t)
+	before := store.Get()
 	if err := os.Remove(before.JSONFile()); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Mkdir(before.JSONFile(), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := config.Update(
+	if _, err := store.Update(
 		func(next *config.Config) error { next.AppURL = "https://changed.test"; return nil },
 	); err == nil {
 		t.Fatal("save to a directory succeeded")
 	}
-	if config.Get() != before {
+	if store.Get() != before {
 		t.Fatal("failed save published a new snapshot")
 	}
 }

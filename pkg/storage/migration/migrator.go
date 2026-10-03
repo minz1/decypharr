@@ -3,6 +3,7 @@ package migration
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,8 +13,6 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/sirrobot01/decypharr/internal/config"
-	"github.com/sirrobot01/decypharr/internal/logger"
 	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
@@ -27,27 +26,36 @@ type Migrator struct {
 	mu         sync.RWMutex
 	cancelFunc context.CancelFunc
 	ctx        context.Context
+	// beforeEach, when set by a test, runs before each torrent migrates.
+	beforeEach func()
 }
 
-// New creates a new migrator.
-func New(storage *storage.Storage) *Migrator {
-	cacheDir := filepath.Join(config.GetMainPath(), "cache")
-	backupPath := filepath.Join(config.GetMainPath(), "backups")
+// New creates a migrator for the legacy cache files under dataDir.
+func New(storage *storage.Storage, dataDir string, log zerolog.Logger) *Migrator {
+	cacheDir := filepath.Join(dataDir, "cache")
+	backupPath := filepath.Join(dataDir, "backups")
 
 	return &Migrator{
 		storage:    storage,
 		cacheDir:   cacheDir,
 		backupPath: backupPath,
-		logger:     logger.New("migrator"),
+		logger:     log,
 	}
 }
 
-// Start starts the migration process from cache files.
+// Start migrates the cache files and returns when the migration ends or
+// Stop cancels it. mu is not held while it runs, so Stop can.
 func (m *Migrator) Start() error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	if m.cancelFunc != nil {
+		m.mu.Unlock()
+		return errors.New("migration is already running")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.ctx, m.cancelFunc = ctx, cancel
+	m.mu.Unlock()
+	defer m.finish(ctx)
 
-	// Load cache torrents
 	cachedTorrents, err := m.loadCacheTorrents()
 	if err != nil {
 		return fmt.Errorf("failed to load cache torrents: %w", err)
@@ -68,14 +76,18 @@ func (m *Migrator) Start() error {
 		return fmt.Errorf("failed to save migration status: %w", saveMigrationStatusErr)
 	}
 
-	// Start migration in background
-	ctx, cancel := context.WithCancel(context.Background())
-	m.ctx = ctx
-	m.cancelFunc = cancel
-
 	m.runMigration(ctx, cachedTorrents)
-
 	return nil
+}
+
+// finish unregisters the run begun with ctx, unless Stop already did.
+func (m *Migrator) finish(ctx context.Context) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.ctx == ctx && m.cancelFunc != nil {
+		m.cancelFunc()
+		m.cancelFunc = nil
+	}
 }
 
 // Stop stops the migration process.
@@ -149,6 +161,9 @@ func (m *Migrator) runMigration(ctx context.Context, cachedTorrents map[string][
 	status, _ := m.storage.GetMigrationStatus()
 
 	for infohash, cachedList := range cachedTorrents {
+		if m.beforeEach != nil {
+			m.beforeEach()
+		}
 		select {
 		case <-ctx.Done():
 			m.logger.Info().Msg("Migration stopped by user")
@@ -372,7 +387,7 @@ func mergeCachedPlacement(managed *storage.Entry, other *storage.CachedTorrent) 
 
 		// AddOrUpdate placement-specific file data
 		placement.Files[fileName] = &storage.ProviderFile{
-			Id:   file.Id,
+			ID:   file.ID,
 			Link: file.Link,
 			Path: file.Path,
 		}

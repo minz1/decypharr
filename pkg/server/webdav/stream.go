@@ -24,7 +24,7 @@ func (h *Handler) StreamRoutes() chi.Router {
 }
 
 func (h *Handler) handleStream(w http.ResponseWriter, r *http.Request) {
-	cfg := config.Get()
+	cfg := h.config.Get()
 	infohash := chi.URLParam(r, "infohash")
 	fileID := chi.URLParam(r, "fileID")
 
@@ -33,7 +33,7 @@ func (h *Handler) handleStream(w http.ResponseWriter, r *http.Request) {
 	// are always written, so enabling auth later breaks nothing.
 	if cfg.UseAuth && cfg.EnableWebdavAuth &&
 		!strm.Verify(cfg.Strm.Secret, infohash, fileID, r.URL.Query().Get("s")) {
-		if user, pass, ok := r.BasicAuth(); !ok || !config.VerifyAuth(user, pass) {
+		if user, pass, ok := r.BasicAuth(); !ok || !h.config.Get().VerifyAuth(user, pass) {
 			w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return

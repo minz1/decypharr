@@ -22,7 +22,6 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
-	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/internal/request"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/debrid/account"
@@ -71,6 +70,7 @@ type Torbox struct {
 	client                *request.Client
 	submitClient          *request.Client
 	logger                zerolog.Logger
+	options               types.ProviderOptions
 	profile               types.ProfileCache
 	config                config.Debrid
 	downloadPresentMu     sync.Mutex
@@ -78,8 +78,7 @@ type Torbox struct {
 	downloadPresentAt     time.Time
 }
 
-func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter) (*Torbox, error) {
-	cfg := config.Get()
+func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter, options types.ProviderOptions) (*Torbox, error) {
 	headers := map[string]string{
 		"Authorization": fmt.Sprintf("Bearer %s", dc.APIKey),
 	}
@@ -88,7 +87,7 @@ func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter) (*Torbox, er
 	} else {
 		headers["User-Agent"] = fmt.Sprintf("Decypharr/%s (%s; %s)", version.GetInfo(), runtime.GOOS, runtime.GOARCH)
 	}
-	_log := logger.New(dc.Name)
+	_log := options.Logger
 
 	// TorBox enforces a hard cap of 300 req/min per API key, applied
 	// synchronously across all servers since v8.4 (Feb 2026, GAP-002).
@@ -106,14 +105,13 @@ func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter) (*Torbox, er
 		opts := []request.ClientOption{
 			request.WithHeaders(headers),
 			request.WithRateLimiter(rateLimiter),
-			request.WithMaxRetries(cfg.Retries),
+			request.WithMaxRetries(options.Retries),
 			request.WithRetryableStatus(http.StatusTooManyRequests, http.StatusBadGateway),
-			request.WithLogger(_log),
 		}
 		if dc.Proxy != "" {
 			opts = append(opts, request.WithProxy(dc.Proxy))
 		}
-		return request.New(opts...)
+		return request.New(_log, options.TLSConfig, opts...)
 	}
 
 	autoExpiresLinksAfter, err := utils.ParseDuration(dc.AutoExpireLinksAfter)
@@ -124,7 +122,8 @@ func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter) (*Torbox, er
 	tb := &Torbox{
 		Host:                  "https://api.torbox.app/v1",
 		APIKey:                dc.APIKey,
-		accountsManager:       account.NewManager(dc, submitRL, _log),
+		accountsManager:       account.NewManager(dc, options, submitRL),
+		options:               options,
 		config:                dc,
 		autoExpiresLinksAfter: autoExpiresLinksAfter,
 		client:                newClient(mainRL),
@@ -282,7 +281,7 @@ func (tb *Torbox) SubmitMagnet(torrent *types.Torrent) (*types.Torrent, error) {
 	}
 	dt := *data.Data
 	torrentID := strconv.Itoa(dt.ID)
-	torrent.Id = torrentID
+	torrent.ID = torrentID
 	torrent.Debrid = tb.config.Name
 	torrent.Added = time.Now()
 
@@ -323,7 +322,7 @@ func (tb *Torbox) GetTorrent(torrentID string) (*types.Torrent, error) {
 		return nil, fmt.Errorf("error getting torrent")
 	}
 	t := &types.Torrent{
-		Id:               strconv.Itoa(data.ID),
+		ID:               strconv.Itoa(data.ID),
 		InfoHash:         data.Hash,
 		Name:             data.Name,
 		Bytes:            data.Size,
@@ -337,24 +336,22 @@ func (tb *Torbox) GetTorrent(torrentID string) (*types.Torrent, error) {
 		Files:            make(map[string]types.File),
 		Added:            data.CreatedAt,
 	}
-	cfg := config.Get()
-
 	for _, f := range data.Files {
 		fileName := filepath.Base(f.Name)
-		if validateFileAllowedErr := cfg.ValidateFileAllowed(f.AbsolutePath, f.Size); validateFileAllowedErr != nil {
+		if validateFileAllowedErr := tb.options.FileAllowed(f.AbsolutePath, f.Size); validateFileAllowedErr != nil {
 			continue
 		}
 
 		file := types.File{
-			TorrentID: t.Id,
-			Id:        strconv.Itoa(f.ID),
+			TorrentID: t.ID,
+			ID:        strconv.Itoa(f.ID),
 			Name:      fileName,
 			Size:      f.Size,
 			Path:      f.Name,
 		}
 
 		if data.DownloadFinished {
-			file.Link = fmt.Sprintf("torbox://%s/%d", t.Id, f.ID)
+			file.Link = fmt.Sprintf("torbox://%s/%d", t.ID, f.ID)
 		}
 
 		t.Files[fileName] = file
@@ -413,7 +410,7 @@ func (tb *Torbox) updateTorrentWithClient(client *request.Client, t *types.Torre
 		context.Background(),
 		client,
 		"/api/torrents/mylist",
-		map[string]string{"id": t.Id},
+		map[string]string{"id": t.ID},
 		&res,
 	)
 	if err != nil {
@@ -425,7 +422,7 @@ func (tb *Torbox) updateTorrentWithClient(client *request.Client, t *types.Torre
 	}
 	data := res.Data
 	if data == nil {
-		return fmt.Errorf("torbox API error: no data for torrent %s: %v %s", t.Id, res.Error, res.Detail)
+		return fmt.Errorf("torbox API error: no data for torrent %s: %v %s", t.ID, res.Error, res.Detail)
 	}
 	name := data.Name
 
@@ -444,25 +441,23 @@ func (tb *Torbox) updateTorrentWithClient(client *request.Client, t *types.Torre
 
 	t.Files = make(map[string]types.File)
 
-	cfg := config.Get()
-
 	for _, f := range data.Files {
 		fileName := filepath.Base(f.Name)
 
-		if validateFileAllowedErr := cfg.ValidateFileAllowed(f.AbsolutePath, f.Size); validateFileAllowedErr != nil {
+		if validateFileAllowedErr := tb.options.FileAllowed(f.AbsolutePath, f.Size); validateFileAllowedErr != nil {
 			continue
 		}
 
 		file := types.File{
-			TorrentID: t.Id,
-			Id:        strconv.Itoa(f.ID),
+			TorrentID: t.ID,
+			ID:        strconv.Itoa(f.ID),
 			Name:      fileName,
 			Size:      f.Size,
 			Path:      fileName,
 		}
 
 		if data.DownloadFinished {
-			file.Link = fmt.Sprintf("torbox://%s/%s", t.Id, strconv.Itoa(f.ID))
+			file.Link = fmt.Sprintf("torbox://%s/%s", t.ID, strconv.Itoa(f.ID))
 		}
 
 		t.Files[fileName] = file
@@ -491,7 +486,7 @@ func (tb *Torbox) CheckStatus(torrent *types.Torrent) (*types.Torrent, error) {
 		return torrent, nil
 	case types.TorrentStatusDownloading:
 		if !torrent.DownloadUncached {
-			return torrent, fmt.Errorf("torrent %s: %w", torrent.Name, customerror.TorrentNotCachedError)
+			return torrent, fmt.Errorf("torrent %s: %w", torrent.Name, customerror.ErrTorrentNotCached)
 		}
 		return torrent, nil
 	case types.TorrentStatusQueued, types.TorrentStatusError:
@@ -540,7 +535,7 @@ func (tb *Torbox) fetchDownloadLink(
 	status, err := tb.doGetWithClient(ctx, account.Client(), "/api/torrents/requestdl", map[string]string{
 		"token":      account.Token,
 		"torrent_id": id,
-		"file_id":    file.Id,
+		"file_id":    file.ID,
 	}, &res)
 	if err != nil {
 		return types.DownloadLink{}, err
@@ -562,7 +557,7 @@ func (tb *Torbox) fetchDownloadLink(
 		Link:         file.Link,
 		DownloadLink: *res.Data,
 		Debrid:       tb.config.Name,
-		ID:           file.Id,
+		ID:           file.ID,
 		Generated:    now,
 		ExpiresAt:    now.Add(tb.autoExpiresLinksAfter),
 	}
@@ -607,11 +602,9 @@ func (tb *Torbox) getTorrents(offset int) ([]*types.Torrent, error) {
 	}
 
 	torrents := make([]*types.Torrent, 0, len(*res.Data))
-	cfg := config.Get()
-
 	for _, data := range *res.Data {
 		t := &types.Torrent{
-			Id:               strconv.Itoa(data.ID),
+			ID:               strconv.Itoa(data.ID),
 			Name:             data.Name,
 			Bytes:            data.Size,
 			Progress:         data.Progress * percent,
@@ -628,22 +621,22 @@ func (tb *Torbox) getTorrents(offset int) ([]*types.Torrent, error) {
 
 		for _, f := range data.Files {
 			fileName := filepath.Base(f.Name)
-			if validateFileAllowedErr := cfg.ValidateFileAllowed(
+			if validateFileAllowedErr := tb.options.FileAllowed(
 				f.AbsolutePath,
 				f.Size,
 			); validateFileAllowedErr != nil {
 				continue
 			}
 			file := types.File{
-				TorrentID: t.Id,
-				Id:        strconv.Itoa(f.ID),
+				TorrentID: t.ID,
+				ID:        strconv.Itoa(f.ID),
 				Name:      fileName,
 				Size:      f.Size,
 				Path:      f.Name,
 			}
 
 			if data.DownloadFinished {
-				file.Link = fmt.Sprintf("torbox://%s/%d", t.Id, f.ID)
+				file.Link = fmt.Sprintf("torbox://%s/%d", t.ID, f.ID)
 			}
 
 			t.Files[fileName] = file
@@ -700,7 +693,7 @@ func (tb *Torbox) CheckFile(ctx context.Context, _, link string) error {
 		return err
 	}
 	if !present {
-		return customerror.HosterUnavailableError
+		return customerror.ErrHosterUnavailable
 	}
 	return nil
 }

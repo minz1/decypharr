@@ -24,7 +24,6 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
-	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/internal/request"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/debrid/account"
@@ -52,12 +51,15 @@ type Premiumize struct {
 	logger                zerolog.Logger
 	config                config.Debrid
 	profile               types.ProfileCache
-	validateFileAllowed   func(string, int64) error
+	options               types.ProviderOptions
 }
 
-func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter) (*Premiumize, error) {
-	cfg := config.Get()
-	_log := logger.New(dc.Name)
+func New(
+	dc config.Debrid,
+	ratelimits map[string]ratelimit.Limiter,
+	options types.ProviderOptions,
+) (*Premiumize, error) {
+	_log := options.Logger
 	headers := map[string]string{
 		"Authorization": fmt.Sprintf("Bearer %s", dc.APIKey),
 	}
@@ -74,8 +76,7 @@ func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter) (*Premiumize
 
 	opts := []request.ClientOption{
 		request.WithHeaders(headers),
-		request.WithLogger(_log),
-		request.WithMaxRetries(cfg.Retries),
+		request.WithMaxRetries(options.Retries),
 		request.WithRateLimiter(ratelimits["main"]),
 		request.WithRetryableStatus(
 			http.StatusTooManyRequests,
@@ -91,12 +92,12 @@ func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter) (*Premiumize
 	return &Premiumize{
 		Host:                  defaultHost,
 		APIKey:                dc.APIKey,
-		client:                request.New(opts...),
-		accountsManager:       account.NewManager(dc, ratelimits["download"], _log),
+		client:                request.New(_log, options.TLSConfig, opts...),
+		accountsManager:       account.NewManager(dc, options, ratelimits["download"]),
 		autoExpiresLinksAfter: autoExpiresLinksAfter,
 		logger:                _log,
 		config:                dc,
-		validateFileAllowed:   func(name string, size int64) error { return config.Get().ValidateFileAllowed(name, size) },
+		options:               options,
 	}, nil
 }
 
@@ -221,7 +222,7 @@ func (pm *Premiumize) addTorrent(t *types.Torrent) (*types.Torrent, error) {
 }
 
 func (pm *Premiumize) applySubmittedTorrent(t *types.Torrent, data transferCreateResponse) {
-	t.Id = data.ID
+	t.ID = data.ID
 	t.Debrid = pm.config.Name
 	t.Status = types.TorrentStatusQueued
 	if data.Name != "" {
@@ -246,7 +247,7 @@ func (pm *Premiumize) UpdateAndReturnTorrent(t *types.Torrent) (*types.Torrent, 
 	}
 	if t.Status == types.TorrentStatusDownloading || t.Status == types.TorrentStatusQueued {
 		if !t.DownloadUncached {
-			return t, fmt.Errorf("torrent %s: %w", t.Name, customerror.TorrentNotCachedError)
+			return t, fmt.Errorf("torrent %s: %w", t.Name, customerror.ErrTorrentNotCached)
 		}
 		return t, nil
 	}
@@ -263,7 +264,7 @@ func (pm *Premiumize) GetTorrent(torrentID string) (*types.Torrent, error) {
 			return pm.transferToTorrent(tr, "")
 		}
 	}
-	return nil, customerror.TorrentNotFoundError
+	return nil, customerror.ErrTorrentNotFound
 }
 
 func (pm *Premiumize) UpdateTorrent(t *types.Torrent) error {
@@ -272,7 +273,7 @@ func (pm *Premiumize) UpdateTorrent(t *types.Torrent) error {
 		return err
 	}
 	for _, tr := range transfers {
-		if tr.ID == t.Id {
+		if tr.ID == t.ID {
 			updated, transferToTorrentErr := pm.transferToTorrent(tr, t.InfoHash)
 			if transferToTorrentErr != nil {
 				return transferToTorrentErr
@@ -291,7 +292,7 @@ func (pm *Premiumize) UpdateTorrent(t *types.Torrent) error {
 			return nil
 		}
 	}
-	return customerror.TorrentNotFoundError
+	return customerror.ErrTorrentNotFound
 }
 
 func (pm *Premiumize) DeleteTorrent(torrentID string) error {
@@ -398,7 +399,7 @@ func (pm *Premiumize) transferToTorrent(tr premiumizeTransfer, fallbackInfoHash 
 		added = time.Time{}
 	}
 	return &types.Torrent{
-		Id:               tr.ID,
+		ID:               tr.ID,
 		InfoHash:         pm.transferInfoHash(tr, fallbackInfoHash),
 		Name:             name,
 		Filename:         name,
@@ -517,11 +518,7 @@ func (pm *Premiumize) addFile(
 	if itemPath == "" {
 		itemPath = name
 	}
-	if pm.validateFileAllowed != nil {
-		if err := pm.validateFileAllowed(itemPath, size); err != nil {
-			return
-		}
-	} else if filepath.Ext(itemPath) == "" {
+	if pm.options.FileAllowed(itemPath, size) != nil {
 		return
 	}
 	fileName := filepath.Base(itemPath)
@@ -530,7 +527,7 @@ func (pm *Premiumize) addFile(
 	}
 	files[fileName] = types.File{
 		TorrentID: transferID,
-		Id:        id,
+		ID:        id,
 		Name:      fileName,
 		Path:      itemPath,
 		Size:      size,
@@ -552,8 +549,8 @@ func (pm *Premiumize) fetchDownloadLink(
 	link := file.Link
 	size := file.Size
 	filename := file.Name
-	if link == "" && file.Id != "" {
-		item, err := pm.itemDetails(ctx, file.Id)
+	if link == "" && file.ID != "" {
+		item, err := pm.itemDetails(ctx, file.ID)
 		if err != nil {
 			return types.DownloadLink{}, err
 		}
@@ -562,7 +559,7 @@ func (pm *Premiumize) fetchDownloadLink(
 		filename = item.Name
 	}
 	if link == "" {
-		return types.DownloadLink{}, customerror.HosterUnavailableError
+		return types.DownloadLink{}, customerror.ErrHosterUnavailable
 	}
 	now := time.Now()
 	return types.DownloadLink{
@@ -574,7 +571,7 @@ func (pm *Premiumize) fetchDownloadLink(
 		DownloadLink: link,
 		Generated:    now,
 		ExpiresAt:    now.Add(pm.autoExpiresLinksAfter),
-		ID:           file.Id,
+		ID:           file.ID,
 	}, nil
 }
 
@@ -596,7 +593,7 @@ func (pm *Premiumize) CheckFile(ctx context.Context, _, fileID string) error {
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
-			return customerror.HosterUnavailableError
+			return customerror.ErrHosterUnavailable
 		}
 		if resp.StatusCode >= http.StatusBadRequest {
 			return fmt.Errorf("premiumize link check failed: Status: %d", resp.StatusCode)
@@ -604,7 +601,7 @@ func (pm *Premiumize) CheckFile(ctx context.Context, _, fileID string) error {
 		return nil
 	}
 	if fileID == "" {
-		return customerror.HosterUnavailableError
+		return customerror.ErrHosterUnavailable
 	}
 	if _, err := pm.itemDetails(ctx, fileID); err != nil {
 		return err
@@ -681,8 +678,7 @@ func (pm *Premiumize) syncAccount(acc *account.Account) error {
 	if err != nil {
 		return err
 	}
-	acc.Username = profile.Username
-	acc.Expiration = profile.Expiration
+	acc.SetProfile(profile.Username, profile.Expiration)
 	return nil
 }
 

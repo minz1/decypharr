@@ -56,3 +56,22 @@ func TestSafeFolderName(t *testing.T) {
 		})
 	}
 }
+
+func TestPathElement(t *testing.T) {
+	t.Parallel()
+	tests := map[string]string{
+		"Movie: Part 1 (2023)": "Movie: Part 1 (2023)",
+		"a..b":                 "a..b",
+		"../escape":            ".._escape",
+		"sub/dir":              "sub_dir",
+		"tab\there":            "tab_here",
+		"":                     "fallback",
+		".":                    "fallback",
+		"..":                   "fallback",
+	}
+	for in, want := range tests {
+		if got := utils.PathElement(in, "fallback"); got != want {
+			t.Errorf("PathElement(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

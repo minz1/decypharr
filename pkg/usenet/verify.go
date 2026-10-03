@@ -132,14 +132,14 @@ func checkHeadSignature(name string, head []byte) error {
 	return fmt.Errorf(
 		"head of %q matches no media container signature: %w",
 		name,
-		customerror.UsenetCorruptContentError,
+		customerror.ErrUsenetCorruptContent,
 	)
 }
 
 // classifyHeadReadError maps a missing head article to UsenetSegmentMissingError.
 func classifyHeadReadError(name string, err error) error {
 	if nntp.IsArticleNotFoundError(err) {
-		return fmt.Errorf("head article of %q missing: %w", name, customerror.UsenetSegmentMissingError)
+		return fmt.Errorf("head article of %q missing: %w", name, customerror.ErrUsenetSegmentMissing)
 	}
 	return err
 }
@@ -180,8 +180,8 @@ func (u *Usenet) verifyNZBContent(ctx context.Context, nzb *storage.NZB) error {
 		if err == nil {
 			continue
 		}
-		if errors.Is(err, customerror.UsenetCorruptContentError) ||
-			errors.Is(err, customerror.UsenetSegmentMissingError) {
+		if errors.Is(err, customerror.ErrUsenetCorruptContent) ||
+			errors.Is(err, customerror.ErrUsenetSegmentMissing) {
 			u.logger.Warn().
 				Err(err).
 				Str("nzb_id", nzb.ID).

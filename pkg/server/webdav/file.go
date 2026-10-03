@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
@@ -16,16 +15,6 @@ import (
 )
 
 const streamCopyBufSize = 1 << 20
-
-// streamCopyBufPool holds the copy buffers StreamResponse pipes sessions
-// through; every session.Read costs a lock pass and watchdog arming, so
-// copy granularity multiplies all of it.
-var streamCopyBufPool = sync.Pool{ //nolint:gochecknoglobals // process-wide buffer pool shared by all handlers
-	New: func() any {
-		b := make([]byte, streamCopyBufSize)
-		return &b
-	},
-}
 
 func (h *Handler) StreamResponse(
 	entry *storage.Entry,
@@ -54,7 +43,7 @@ func (h *Handler) StreamResponse(
 	}
 
 	owner := manager.RewindOwnerApplication
-	cfg := config.Get()
+	cfg := h.config.Get()
 	if cfg.Mount.Type == config.MountTypeRclone &&
 		strings.EqualFold(cfg.Mount.Rclone.VfsCacheMode, "full") &&
 		strings.HasPrefix(strings.ToLower(client), "rclone/") {
@@ -85,13 +74,13 @@ func (h *Handler) StreamResponse(
 
 	// The wrapper struct hides w's ReaderFrom so io.CopyBuffer uses the
 	// pooled buffer instead of net/http's 32KB one.
-	bufPtr, ok := streamCopyBufPool.Get().(*[]byte)
+	bufPtr, ok := h.copyBufs.Get().(*[]byte)
 	if !ok {
 		buf := make([]byte, streamCopyBufSize)
 		bufPtr = &buf
 	}
 	_, err = io.CopyBuffer(struct{ io.Writer }{w}, io.LimitReader(stream, length), *bufPtr)
-	streamCopyBufPool.Put(bufPtr)
+	h.copyBufs.Put(bufPtr)
 	if err != nil {
 		return customerror.NewError(err, http.StatusInternalServerError, "server.internal_error", false, true)
 	}

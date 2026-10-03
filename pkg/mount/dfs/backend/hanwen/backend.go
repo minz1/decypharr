@@ -5,8 +5,6 @@ package hanwen
 import (
 	"context"
 	"fmt"
-	"os"
-	"os/exec"
 	"runtime"
 	"runtime/debug"
 	"sync/atomic"
@@ -16,10 +14,12 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/rs/zerolog"
 
+	"github.com/sirrobot01/decypharr/internal/fsutil"
 	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/backend"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/config"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/vfs"
+	"github.com/sirrobot01/decypharr/pkg/mount/unmount"
 )
 
 const (
@@ -31,10 +31,8 @@ const (
 
 	// maxWrite is the largest FUSE request payload negotiated with the kernel.
 	maxWrite = 1 << 20
-	// forceUnmountTimeout bounds the whole chain of umount fallbacks.
-	forceUnmountTimeout = 10 * time.Second
-	dirPerm             = 0o755
-	filePerm            = 0o644
+	dirPerm  = 0o755
+	filePerm = 0o644
 	// statBlockSize is the unit of the Blocks attribute.
 	statBlockSize = 512
 )
@@ -48,22 +46,33 @@ type Backend struct {
 	unmountFunc func(ctx context.Context)
 	root        *Dir
 	vfs         *vfs.Manager
+	unmounter   mountDetacher
+}
+
+// mountDetacher force-detaches a mount point (unmount.Unmounter).
+type mountDetacher interface {
+	Unmount(ctx context.Context, mountPath string) error
+}
+
+// fuseServer is the part of *fuse.Server teardown uses.
+type fuseServer interface {
+	Unmount() error
 }
 
 // NewBackend creates a new hanwen backend.
-func NewBackend(vfs *vfs.Manager, config *config.FuseConfig) (backend.Backend, error) {
+func NewBackend(vfs *vfs.Manager, config *config.FuseConfig, log zerolog.Logger) (backend.Backend, error) {
 	now := time.Now()
-	log := logger.New("hanwen-backend")
 	// One shared rate-limited logger for the whole mount. Files/Dirs reference
 	// it instead of allocating their own xsync map per inode — dedup keys are
 	// already unique per inode so a shared map gives identical behaviour.
 	rl := logger.NewRateLimitedLogger(logger.WithLogger(log))
 	root := NewDir(vfs, "", LevelRoot, unixSeconds(now), config, log, rl)
 	return &Backend{
-		config: config,
-		logger: log,
-		root:   root,
-		vfs:    vfs,
+		config:    config,
+		logger:    log,
+		root:      root,
+		vfs:       vfs,
+		unmounter: unmount.New(log),
 	}, nil
 }
 
@@ -78,7 +87,7 @@ func (b *Backend) Mount(ctx context.Context) error {
 		return fmt.Errorf("VFS manager is not initialized")
 	}
 
-	_ = os.MkdirAll(b.config.MountPath, 0o755) //nolint:gosec // G301: mountpoint is shared (allow_other)
+	_ = fsutil.MkdirShared(b.config.MountPath, b.config.MountDirMode)
 	// Try to unmount if already mounted
 	b.forceUnmount(ctx)
 
@@ -149,41 +158,34 @@ func (b *Backend) Mount(ctx context.Context) error {
 }
 
 // unmountServer closes the VFS manager and unmounts server, force-unmounting
-// when the regular unmount does not take or ctx expires first.
-func (b *Backend) unmountServer(ctx context.Context, server *fuse.Server) {
+// when the regular unmount fails or ctx expires first.
+func (b *Backend) unmountServer(ctx context.Context, server fuseServer) {
 	b.logger.Info().Msg("Unmounting filesystem")
 
-	// Create a channel to track completion
-	done := make(chan struct{})
-
+	done := make(chan error, 1)
 	go func() {
-		// Close VFS manager
 		if b.vfs != nil {
 			if err := b.vfs.Close(); err != nil {
 				b.logger.Warn().Err(err).Msg("Failed to close VFS")
 			}
 		}
-
-		_ = server.Unmount()
-		time.Sleep(1 * time.Second)
-
-		// Check if still mounted
-		if _, err := os.Stat(b.config.MountPath); err == nil {
-			b.logger.Warn().Msg("FUSE filesystem still mounted, attempting force unmount")
-			b.forceUnmount(ctx)
-		}
-
-		close(done)
+		// Unmount returns once the kernel has detached the mount and the
+		// serve loop has exited, or with the reason it could not.
+		done <- server.Unmount()
 	}()
 
-	// Wait for unmount to complete or context timeout
 	select {
-	case <-done:
-		b.logger.Info().Msg("Filesystem unmounted successfully")
+	case err := <-done:
+		if err == nil {
+			b.logger.Info().Msg("Filesystem unmounted successfully")
+			return
+		}
+		b.logger.Warn().Err(err).Msg("Unmount failed, forcing unmount")
 	case <-ctx.Done():
 		b.logger.Warn().Err(ctx.Err()).Msg("Unmount timed out, forcing unmount")
-		b.forceUnmount(ctx)
 	}
+	// ctx may already be done; the unmounter bounds its own attempts.
+	b.forceUnmount(context.WithoutCancel(ctx))
 }
 
 // mountOptions builds the go-fuse options for this mount.
@@ -281,35 +283,10 @@ func (b *Backend) Refresh(dir string) {
 	}
 }
 
-// forceUnmount attempts to force unmount a path using system commands.
+// forceUnmount detaches the mount point without the FUSE server, for a
+// stale mount or one whose server did not come up.
 func (b *Backend) forceUnmount(ctx context.Context) {
-	methods := [][]string{
-		{"umount", b.config.MountPath},
-		{"umount", "-l", b.config.MountPath}, // lazy unmount
-		{"fusermount", "-uz", b.config.MountPath},
-		{"fusermount3", "-uz", b.config.MountPath},
+	if err := b.unmounter.Unmount(ctx, b.config.MountPath); err != nil {
+		b.logger.Debug().Err(err).Msg("Force unmount did not detach the mount point")
 	}
-
-	ctx, cancel := context.WithTimeout(ctx, forceUnmountTimeout)
-	defer cancel()
-
-	for _, method := range methods {
-		if err := b.tryUnmountCommand(ctx, method...); err == nil {
-			return
-		}
-		if ctx.Err() != nil {
-			b.logger.Warn().Err(ctx.Err()).Msg("Unmount command timed out")
-			return
-		}
-	}
-}
-
-// tryUnmountCommand tries to run an unmount command.
-func (b *Backend) tryUnmountCommand(ctx context.Context, args ...string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("no command provided")
-	}
-
-	cmd := exec.CommandContext(ctx, args[0], args[1:]...) //nolint:gosec // G204: fixed umount commands, no shell
-	return cmd.Run()
 }

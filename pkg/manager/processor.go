@@ -46,7 +46,7 @@ func (m *Manager) addNewTorrent(ctx context.Context, importReq *ImportRequest) e
 		return fmt.Errorf("failed to submit torrent to debrid: %w", err)
 	}
 
-	torrent := newTorrentQueueEntry(importReq, debridTypes.TorrentStatusQueued)
+	torrent := newTorrentQueueEntry(importReq, debridTypes.TorrentStatusQueued, m.folderNaming())
 	torrent.DownloadUncached = debridTorrent.DownloadUncached
 	applyDebridTorrentToEntry(torrent, debridTorrent)
 
@@ -107,7 +107,7 @@ func (m *Manager) processTorrentJob(ctx context.Context, job *Job) error {
 }
 
 func (m *Manager) queueTorrentRetry(importReq *ImportRequest) error {
-	torrent := newTorrentQueueEntry(importReq, debridTypes.TorrentStatusQueued)
+	torrent := newTorrentQueueEntry(importReq, debridTypes.TorrentStatusQueued, m.folderNaming())
 	if err := m.queue.Add(torrent); err != nil {
 		return fmt.Errorf("failed to add torrent to queue: %w", err)
 	}
@@ -126,7 +126,11 @@ func (m *Manager) queueTorrentRetry(importReq *ImportRequest) error {
 	return nil
 }
 
-func newTorrentQueueEntry(importReq *ImportRequest, status debridTypes.TorrentStatus) *storage.Entry {
+func newTorrentQueueEntry(
+	importReq *ImportRequest,
+	status debridTypes.TorrentStatus,
+	naming config.WebDavFolderNaming,
+) *storage.Entry {
 	now := time.Now()
 	torrent := &storage.Entry{
 		InfoHash:         importReq.Magnet.InfoHash,
@@ -151,7 +155,7 @@ func newTorrentQueueEntry(importReq *ImportRequest, status debridTypes.TorrentSt
 		Files:            make(map[string]*storage.File),
 		Tags:             []string{},
 	}
-	torrent.ContentPath = torrent.DownloadPath()
+	torrent.ContentPath = torrent.DownloadPath(naming)
 	return torrent
 }
 
@@ -243,6 +247,13 @@ func (m *Manager) processQueuedNZB(entry *storage.Entry) {
 	}
 }
 
+// transientStatusError reports whether a status check failed for a reason
+// that may pass on its own (network errors, timeouts, provider 5xx, slot
+// limits). An uncached torrent is an outcome, not a transient failure.
+func transientStatusError(err error) bool {
+	return customerror.IsRetriableError(err) && !errors.Is(err, customerror.ErrTorrentNotCached)
+}
+
 func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 	defer m.processingEntries.Delete(entry.InfoHash)
 	placement := entry.GetActiveProvider()
@@ -261,13 +272,13 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 		return
 	}
 
-	magnet, err := utils.GetMagnetInfo(entry.Magnet, config.Get().AlwaysRmTrackerUrls)
+	magnet, err := utils.GetMagnetInfo(entry.Magnet, m.store.Get().AlwaysRmTrackerUrls)
 	if err != nil {
 		magnet = utils.ConstructMagnet(entry.InfoHash, entry.Name)
 	}
 
 	debridTorrent := &debridTypes.Torrent{
-		Id:               placement.ID,
+		ID:               placement.ID,
 		InfoHash:         entry.InfoHash,
 		Magnet:           magnet,
 		Name:             magnet.Name,
@@ -277,6 +288,13 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 	}
 
 	dbT, err := client.CheckStatus(debridTorrent)
+	if err != nil && transientStatusError(err) {
+		// A network blip or provider hiccup: leave the entry as it is, so the
+		// next queue pass checks again, rather than failing it and deleting
+		// the provider's torrent.
+		m.logger.Warn().Err(err).Str("name", entry.Name).Msg("Status check failed; retrying on the next pass")
+		return
+	}
 	if err != nil {
 		m.logger.Error().Err(err).Str("name", entry.Name).Msg("Error checking status")
 		entry.MarkAsError(err)
@@ -284,8 +302,8 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 
 		// Delete from debrid on error
 		go func() {
-			if dbT != nil && dbT.Id != "" {
-				_ = client.DeleteTorrent(dbT.Id)
+			if dbT != nil && dbT.ID != "" {
+				_ = client.DeleteTorrent(dbT.ID)
 			}
 		}()
 		return
@@ -494,8 +512,8 @@ func (m *Manager) submitToProvider(
 		Msg("Processing torrent")
 
 	dbt, err := db.SubmitMagnet(debridTorrent)
-	if err != nil || dbt == nil || dbt.Id == "" {
-		if errors.Is(err, customerror.TorrentBlockedError) {
+	if err != nil || dbt == nil || dbt.ID == "" {
+		if errors.Is(err, customerror.ErrTorrentBlocked) {
 			m.hearsay.RecordAdd(decision, false)
 		} else {
 			m.hearsay.DiscardAdd(decision)
@@ -505,19 +523,19 @@ func (m *Manager) submitToProvider(
 		}
 		return nil, err
 	}
-	_logger.Info().Str("id", dbt.Id).Msgf("Entry: %s submitted to %s", dbt.Name, db.Config().Name)
+	_logger.Info().Str("id", dbt.ID).Msgf("Entry: %s submitted to %s", dbt.Name, db.Config().Name)
 
 	torrent, err := db.CheckStatus(dbt)
-	reported := errors.Is(err, customerror.TorrentNotCachedError)
+	reported := errors.Is(err, customerror.ErrTorrentNotCached)
 	if reported {
 		m.hearsay.RecordAdd(decision, false)
 	}
 	if err != nil {
-		if torrent != nil && torrent.Id != "" {
+		if torrent != nil && torrent.ID != "" {
 			// Delete the torrent if it was not downloaded
 			go func(id string) {
 				_ = db.DeleteTorrent(id)
-			}(torrent.Id)
+			}(torrent.ID)
 		}
 		if !reported {
 			m.hearsay.DiscardAdd(decision)

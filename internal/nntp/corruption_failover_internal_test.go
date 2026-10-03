@@ -5,6 +5,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/testutil/nntpd"
 )
@@ -47,7 +49,7 @@ func TestExecuteWithFailoverTriesAnotherBackboneAfterYencCorruption(t *testing.T
 	client, err := NewClient(&config.Config{Usenet: config.Usenet{Providers: []config.UsenetProvider{
 		{Host: badHost, Port: badPort, MaxConnections: 1, Priority: 1, Backbone: "bad-copy"},
 		{Host: goodHost, Port: goodPort, MaxConnections: 1, Priority: 2, Backbone: "good-copy"},
-	}}})
+	}}}, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}

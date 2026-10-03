@@ -182,25 +182,25 @@ type Mount struct {
 	ExternalRclone ExternalRclone `json:"external_rclone"`
 }
 
-func (c *Config) applyMountEnvVars() {
+func (c *Config) applyMountEnvVars(e env) {
 	// DFS settings
-	envString("MOUNT__DFS__CACHE_DIR", &c.Mount.DFS.CacheDir)
-	envString("MOUNT__DFS__CHUNK_SIZE", &c.Mount.DFS.ChunkSize)
-	envString("MOUNT__DFS__READ_AHEAD_SIZE", &c.Mount.DFS.ReadAheadSize)
-	envString("MOUNT__DFS__CACHE_EXPIRY", &c.Mount.DFS.CacheExpiry)
-	envString("MOUNT__DFS__DISK_CACHE_SIZE", &c.Mount.DFS.DiskCacheSize)
-	envBool("MOUNT__DFS__DISABLE_CACHE", &c.Mount.DFS.DisableCache)
-	envString("MOUNT__DFS__CACHE_CLEANUP_INTERVAL", &c.Mount.DFS.CacheCleanupInterval)
-	envString("MOUNT__DFS__DAEMON_TIMEOUT", &c.Mount.DFS.DaemonTimeout)
-	envInt("MOUNT__DFS__FUSE_MAX_BACKGROUND", &c.Mount.DFS.FuseMaxBackground)
-	envString("MOUNT__DFS__FUSE_MAX_READ_AHEAD", &c.Mount.DFS.FuseMaxReadAhead)
-	envUint32("MOUNT__DFS__UID", &c.Mount.DFS.UID)
-	envUint32("MOUNT__DFS__GID", &c.Mount.DFS.GID)
-	envString("MOUNT__DFS__UMASK", &c.Mount.DFS.Umask)
+	e.envString("MOUNT__DFS__CACHE_DIR", &c.Mount.DFS.CacheDir)
+	e.envString("MOUNT__DFS__CHUNK_SIZE", &c.Mount.DFS.ChunkSize)
+	e.envString("MOUNT__DFS__READ_AHEAD_SIZE", &c.Mount.DFS.ReadAheadSize)
+	e.envString("MOUNT__DFS__CACHE_EXPIRY", &c.Mount.DFS.CacheExpiry)
+	e.envString("MOUNT__DFS__DISK_CACHE_SIZE", &c.Mount.DFS.DiskCacheSize)
+	e.envBool("MOUNT__DFS__DISABLE_CACHE", &c.Mount.DFS.DisableCache)
+	e.envString("MOUNT__DFS__CACHE_CLEANUP_INTERVAL", &c.Mount.DFS.CacheCleanupInterval)
+	e.envString("MOUNT__DFS__DAEMON_TIMEOUT", &c.Mount.DFS.DaemonTimeout)
+	e.envInt("MOUNT__DFS__FUSE_MAX_BACKGROUND", &c.Mount.DFS.FuseMaxBackground)
+	e.envString("MOUNT__DFS__FUSE_MAX_READ_AHEAD", &c.Mount.DFS.FuseMaxReadAhead)
+	e.envUint32("MOUNT__DFS__UID", &c.Mount.DFS.UID)
+	e.envUint32("MOUNT__DFS__GID", &c.Mount.DFS.GID)
+	e.envString("MOUNT__DFS__UMASK", &c.Mount.DFS.Umask)
 	// Rclone settings
-	envString("RCLONE__RC_PORT", &c.Mount.Rclone.Port)
-	envString("RCLONE__LOG_LEVEL", &c.Mount.Rclone.LogLevel)
-	envString("RCLONE__VFS_CACHE_MODE", &c.Mount.Rclone.VfsCacheMode)
-	envString("RCLONE__CACHE_DIR", &c.Mount.Rclone.CacheDir)
-	envInt("RCLONE__TRANSFERS", &c.Mount.Rclone.Transfers)
+	e.envString("RCLONE__RC_PORT", &c.Mount.Rclone.Port)
+	e.envString("RCLONE__LOG_LEVEL", &c.Mount.Rclone.LogLevel)
+	e.envString("RCLONE__VFS_CACHE_MODE", &c.Mount.Rclone.VfsCacheMode)
+	e.envString("RCLONE__CACHE_DIR", &c.Mount.Rclone.CacheDir)
+	e.envInt("RCLONE__TRANSFERS", &c.Mount.Rclone.Transfers)
 }

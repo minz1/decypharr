@@ -41,14 +41,15 @@ const (
 	statusRetryableNonStandard = 447
 )
 
-func NewManager(debridConf config.Debrid, downloadRL ratelimit.Limiter, logger zerolog.Logger) *Manager {
+// NewManager builds the download accounts of one debrid provider, using the
+// provider's retry count, TLS settings and logger.
+func NewManager(debridConf config.Debrid, options types.ProviderOptions, downloadRL ratelimit.Limiter) *Manager {
+	logger := options.Logger
 	m := &Manager{
 		debrid:   debridConf.Name,
 		accounts: xsync.NewMap[string, *Account](),
 		logger:   logger,
 	}
-	cfg := config.Get()
-
 	var firstAccount *Account
 	for idx, token := range debridConf.DownloadAPIKeys {
 		if token == "" {
@@ -62,7 +63,7 @@ func NewManager(debridConf config.Debrid, downloadRL ratelimit.Limiter, logger z
 		opts := []request.ClientOption{
 			request.WithRateLimiter(downloadRL),
 			request.WithHeaders(headers),
-			request.WithMaxRetries(cfg.Retries),
+			request.WithMaxRetries(options.Retries),
 			request.WithRetryableStatus(http.StatusTooManyRequests, http.StatusBadGateway, statusRetryableNonStandard),
 		}
 		if debridConf.Proxy != "" {
@@ -74,7 +75,7 @@ func NewManager(debridConf config.Debrid, downloadRL ratelimit.Limiter, logger z
 			Token:      token,
 			Index:      idx,
 			links:      xsync.NewMap[string, types.DownloadLink](),
-			httpClient: request.New(opts...),
+			httpClient: request.New(logger, options.TLSConfig, opts...),
 		}
 		m.accounts.Store(token, account)
 		if firstAccount == nil {
@@ -273,9 +274,9 @@ func (m *Manager) Stats() []map[string]any {
 			"order":        acc.Index,
 			"disabled":     acc.Disabled.Load(),
 			"token_masked": maskedToken,
-			"username":     acc.Username,
+			"username":     acc.Username(),
 			"traffic_used": acc.TrafficUsed.Load(),
-			"expiration":   acc.Expiration,
+			"expiration":   acc.Expiration(),
 			"links_count":  acc.DownloadLinksCount(),
 			"debrid":       acc.Debrid,
 		}
@@ -324,7 +325,7 @@ func (m *Manager) Sync(syncer SyncFunc) {
 				return
 			}
 			// Check if account has expired
-			if !acc.Expiration.IsZero() && time.Now().After(acc.Expiration) {
+			if expiration := acc.Expiration(); !expiration.IsZero() && time.Now().After(expiration) {
 				m.logger.Warn().
 					Str("debrid", m.debrid).
 					Str("account_token", utils.Mask(acc.Token)).

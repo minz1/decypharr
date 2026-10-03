@@ -19,7 +19,7 @@ import (
 )
 
 func TestSubmissionRequestsUseDedicatedClient(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
+	t.Parallel()
 
 	var (
 		mu    sync.Mutex
@@ -46,11 +46,11 @@ func TestSubmissionRequestsUseDedicatedClient(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	tb := testTorbox(server.URL)
-	tb.client = request.New(
+	tb.client = request.New(zerolog.Nop(), nil,
 		request.WithHeaders(map[string]string{"X-Lane": "main"}),
 		request.WithMaxRetries(0),
 	)
-	tb.submitClient = request.New(
+	tb.submitClient = request.New(zerolog.Nop(), nil,
 		request.WithHeaders(map[string]string{"X-Lane": "submit"}),
 		request.WithMaxRetries(0),
 	)
@@ -74,7 +74,7 @@ func TestSubmissionRequestsUseDedicatedClient(t *testing.T) {
 }
 
 func TestGetTorrentsBypassesTorboxCache(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
+	t.Parallel()
 
 	var (
 		mu      sync.Mutex
@@ -107,7 +107,7 @@ func TestGetTorrentsBypassesTorboxCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTorrents() error = %v", err)
 	}
-	if len(torrents) != 1 || torrents[0].Id != "17" {
+	if len(torrents) != 1 || torrents[0].ID != "17" {
 		t.Fatalf("GetTorrents() = %#v, want torrent 17", torrents)
 	}
 
@@ -119,8 +119,7 @@ func TestGetTorrentsBypassesTorboxCache(t *testing.T) {
 }
 
 func TestGetTorrentsReturnsPaginationErrors(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("offset") == "0" {
 			w.Header().Set("Content-Type", "application/json")
@@ -148,8 +147,7 @@ func TestGetTorrentsReturnsPaginationErrors(t *testing.T) {
 }
 
 func TestGetTorrentAcceptsObjectAndArrayResponses(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 	tests := map[string]string{
 		"object": `{"success":true,"data":{"id":17,"name":"Release.mkv","size":100,"progress":1,"download_state":"completed","download_finished":true,"created_at":"2026-01-02T03:04:05Z","hash":"ABC","files":[{"id":1,"name":"Release.mkv","absolute_path":"Release.mkv","size":100}]}}`,
 		"array":  `{"success":true,"data":[{"id":17,"name":"Release.mkv","size":100,"progress":1,"download_state":"completed","download_finished":true,"created_at":"2026-01-02T03:04:05Z","hash":"ABC","files":[{"id":1,"name":"Release.mkv","absolute_path":"Release.mkv","size":100}]}]}`,
@@ -157,6 +155,7 @@ func TestGetTorrentAcceptsObjectAndArrayResponses(t *testing.T) {
 
 	for name, body := range tests {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				_, _ = fmt.Fprint(w, body)
@@ -167,7 +166,7 @@ func TestGetTorrentAcceptsObjectAndArrayResponses(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GetTorrent() error = %v", err)
 			}
-			if torrent.Id != "17" || torrent.InfoHash != "ABC" || len(torrent.Files) != 1 {
+			if torrent.ID != "17" || torrent.InfoHash != "ABC" || len(torrent.Files) != 1 {
 				t.Fatalf("GetTorrent() = %#v, want torrent 17 with one file", torrent)
 			}
 		})
@@ -175,8 +174,7 @@ func TestGetTorrentAcceptsObjectAndArrayResponses(t *testing.T) {
 }
 
 func TestDeleteTorrentUsesControlEndpoint(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			t.Errorf("method = %s, want POST", r.Method)
@@ -208,15 +206,14 @@ func TestDeleteTorrentUsesControlEndpoint(t *testing.T) {
 func testTorbox(host string) *Torbox {
 	return &Torbox{
 		Host:   host,
-		client: request.New(request.WithMaxRetries(0)),
+		client: request.New(zerolog.Nop(), nil, request.WithMaxRetries(0)),
 		logger: zerolog.Nop(),
 		config: config.Debrid{Name: "torbox"},
 	}
 }
 
 func TestAvailabilityPreservesKeysAndReportsIncompleteBatches(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls++

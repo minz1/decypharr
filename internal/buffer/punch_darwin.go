@@ -23,15 +23,17 @@ func prepareSparse(*os.File) error { return nil }
 
 // punchHole deallocates [offset, offset+length) via fcntl(F_PUNCHHOLE), which
 // requires block-aligned ranges. The range is trimmed inward so the unaligned
-// edges are left on disk rather than taking neighbouring live data with them.
-func punchHole(f *os.File, offset, length int64) error {
+// edges are left on disk rather than taking neighbouring live data with them;
+// the result is the aligned part actually freed.
+func punchHole(f *os.File, offset, length int64) (Range, error) {
 	if f == nil || length <= 0 {
-		return nil
+		return Range{}, nil
 	}
 	sc, err := f.SyscallConn()
 	if err != nil {
-		return err
+		return Range{}, err
 	}
+	var freed Range
 	var opErr error
 	if err := sc.Control(func(fd uintptr) {
 		var st unix.Statfs_t
@@ -52,12 +54,14 @@ func punchHole(f *os.File, offset, length int64) error {
 		if _, _, errno := unix.Syscall(unix.SYS_FCNTL, fd,
 			uintptr(unix.F_PUNCHHOLE), uintptr(unsafe.Pointer(&arg))); errno != 0 {
 			opErr = errno
+			return
 		}
+		freed = Range{Off: start, Size: end - start}
 	}); err != nil {
-		return err
+		return Range{}, err
 	}
 	if errors.Is(opErr, unix.ENOTSUP) || errors.Is(opErr, unix.ENOTTY) || errors.Is(opErr, unix.EINVAL) {
-		return errPunchUnsupported
+		return Range{}, errPunchUnsupported
 	}
-	return opErr
+	return freed, opErr
 }

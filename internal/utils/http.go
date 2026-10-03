@@ -2,12 +2,14 @@ package utils
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"mime"
 	"net/http"
 	"net/url"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -131,13 +133,44 @@ func WithHeader(key, value string) DownloadOptions {
 	}
 }
 
+// WithUserAgent sets the User-Agent header, unless ua is empty: an empty
+// header would make net/http send none at all.
+func WithUserAgent(ua string) DownloadOptions {
+	return func(r *http.Request) {
+		if ua != "" {
+			r.Header.Set("User-Agent", ua)
+		}
+	}
+}
+
 // downloadTimeout bounds a whole NZB or .torrent fetch, so a stalled indexer
 // cannot hang the importing request (and its connection) forever.
 const downloadTimeout = 5 * time.Minute
 
-// fetch GETs rawURL with a bounded client and returns the response only for
-// 200 OK. The caller closes the body.
-func fetch(rawURL string, options ...DownloadOptions) (*http.Response, error) {
+// NewHTTPClient returns a client with net/http's default transport settings
+// (proxy environment, dial and idle timeouts) whose TLS verification uses
+// tlsConfig, the configured CA file; nil means the system roots.
+func NewHTTPClient(tlsConfig *tls.Config, timeout time.Duration) *http.Client {
+	var transport *http.Transport
+	if defaults, ok := http.DefaultTransport.(*http.Transport); ok {
+		transport = defaults.Clone()
+	} else {
+		transport = &http.Transport{Proxy: http.ProxyFromEnvironment}
+	}
+	if tlsConfig != nil {
+		transport.TLSClientConfig = tlsConfig.Clone()
+	}
+	return &http.Client{Timeout: timeout, Transport: transport}
+}
+
+// NewDownloadClient returns the client for NZB and .torrent downloads.
+func NewDownloadClient(tlsConfig *tls.Config) *http.Client {
+	return NewHTTPClient(tlsConfig, downloadTimeout)
+}
+
+// fetchWith GETs rawURL with client and returns the response only for 200
+// OK. The caller closes the body.
+func fetchWith(client *http.Client, rawURL string, options ...DownloadOptions) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -146,7 +179,6 @@ func fetch(rawURL string, options ...DownloadOptions) (*http.Response, error) {
 		opt(req)
 	}
 
-	client := &http.Client{Timeout: downloadTimeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -158,9 +190,10 @@ func fetch(rawURL string, options ...DownloadOptions) (*http.Response, error) {
 	return resp, nil
 }
 
-// DownloadFile fetches url and returns the server-suggested filename and body.
-func DownloadFile(url string, options ...DownloadOptions) (string, []byte, error) {
-	resp, err := fetch(url, options...)
+// DownloadFile fetches url with client and returns the server-suggested
+// filename and body.
+func DownloadFile(client *http.Client, url string, options ...DownloadOptions) (string, []byte, error) {
+	resp, err := fetchWith(client, url, options...)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to download file: %w", err)
 	}
@@ -176,25 +209,37 @@ func DownloadFile(url string, options ...DownloadOptions) (string, []byte, error
 	return filename, data, nil
 }
 
+// getFilenameFromResponse returns the file name the server suggests for
+// resp, or one from the URL path. Either is a suggestion of a name, never a
+// path (RFC 6266 section 4.3), so only its last element is kept.
 func getFilenameFromResponse(resp *http.Response, originalURL string) string {
-	// 1. Try Content-Disposition header
-	if filename := filenameFromDisposition(resp.Header.Get("Content-Disposition")); filename != "" {
-		return filename
+	filename := filenameFromDisposition(resp.Header.Get("Content-Disposition"))
+	if filename == "" {
+		filename = filenameFromURL(originalURL)
 	}
+	return lastElement(filename, "downloaded_file")
+}
 
-	// 2. Fall back to URL path
-	if parsedURL, err := url.Parse(originalURL); err == nil {
-		if filename := filepath.Base(parsedURL.Path); filename != "." && filename != "/" {
-			// URL decode the filename
-			if decoded, queryUnescapeErr := url.QueryUnescape(filename); queryUnescapeErr == nil {
-				return decoded
-			}
-			return filename
-		}
+func filenameFromURL(originalURL string) string {
+	parsedURL, err := url.Parse(originalURL)
+	if err != nil {
+		return ""
 	}
+	filename := path.Base(parsedURL.Path)
+	if decoded, queryUnescapeErr := url.QueryUnescape(filename); queryUnescapeErr == nil {
+		return decoded
+	}
+	return filename
+}
 
-	// 3. Default filename
-	return "downloaded_file"
+// lastElement keeps the part of name after its last slash or backslash, as
+// one path element, or returns fallback when nothing usable remains.
+func lastElement(name, fallback string) string {
+	name = path.Base(strings.ReplaceAll(name, `\`, "/"))
+	if name == "/" {
+		return fallback
+	}
+	return PathElement(name, fallback)
 }
 
 // filenameFromDisposition returns the filename a Content-Disposition header

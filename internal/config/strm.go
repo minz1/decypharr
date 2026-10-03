@@ -46,6 +46,14 @@ func (s Strm) Active() bool {
 	return s.Enabled && s.Path != ""
 }
 
+// Equal reports whether s and o configure the export the same way; an unset
+// DownloadSidecars equals its default.
+func (s Strm) Equal(o Strm) bool {
+	return s.Enabled == o.Enabled && s.Path == o.Path && s.Secret == o.Secret &&
+		s.DeliveryMode == o.DeliveryMode && s.KeepMediaExtension == o.KeepMediaExtension &&
+		s.SidecarsEnabled() == o.SidecarsEnabled() && s.SidecarMaxSize == o.SidecarMaxSize
+}
+
 func (s Strm) SidecarsEnabled() bool {
 	return s.DownloadSidecars == nil || *s.DownloadSidecars
 }

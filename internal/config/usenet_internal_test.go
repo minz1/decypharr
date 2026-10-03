@@ -59,10 +59,9 @@ func TestUsenetDiskPathSelectsBufferStorage(t *testing.T) {
 }
 
 func TestApplyUsenetEnvVarsDiskPath(t *testing.T) {
-	t.Setenv("DECYPHARR_USENET__DISK_PATH", "/cache/usenet")
-
+	t.Parallel()
 	var c Config
-	c.applyUsenetEnvVars()
+	c.applyUsenetEnvVars(env{lookup: MapEnv(map[string]string{"DECYPHARR_USENET__DISK_PATH": "/cache/usenet"})})
 	if c.Usenet.DiskPath != "/cache/usenet" {
 		t.Fatalf("environment disk path = %q, want /cache/usenet", c.Usenet.DiskPath)
 	}
@@ -94,15 +93,15 @@ func TestNormalizeBodyPipelineDepth(t *testing.T) {
 }
 
 func TestUsenetBodyPipelineDepthDefaultAndEnvironment(t *testing.T) {
+	t.Parallel()
 	var defaults Config
 	defaults.updateUsenetConfig()
 	if got := defaults.Usenet.BodyPipelineDepth; got != DefaultBodyPipelineDepth {
 		t.Fatalf("default BODY pipeline depth = %d, want %d", got, DefaultBodyPipelineDepth)
 	}
 
-	t.Setenv("DECYPHARR_USENET__BODY_PIPELINE_DEPTH", "4")
 	var fromEnv Config
-	fromEnv.applyUsenetEnvVars()
+	fromEnv.applyUsenetEnvVars(env{lookup: MapEnv(map[string]string{"DECYPHARR_USENET__BODY_PIPELINE_DEPTH": "4"})})
 	if got := fromEnv.Usenet.BodyPipelineDepth; got != 4 {
 		t.Fatalf("environment BODY pipeline depth = %d, want 4", got)
 	}

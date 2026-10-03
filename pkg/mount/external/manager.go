@@ -7,7 +7,6 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
-	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/internal/rclone"
 	"github.com/sirrobot01/decypharr/pkg/manager"
 )
@@ -21,13 +20,12 @@ type Manager struct {
 
 // NewManager creates a new external rclone manager
 // This does nothing, just a placeholder to satisfy the interface.
-func NewManager(manager *manager.Manager) *Manager {
-	_logger := logger.New("external")
-	cfg := config.Get()
+func NewManager(manager *manager.Manager, cfg *config.Config, _logger zerolog.Logger) *Manager {
 	rcloneClient := rclone.NewClient(
 		cfg.Mount.ExternalRclone.RCUrl,
 		cfg.Mount.ExternalRclone.RCUsername,
 		cfg.Mount.ExternalRclone.RCPassword,
+		manager.TLSConfig(),
 		_logger,
 	)
 	m := &Manager{

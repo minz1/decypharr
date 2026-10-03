@@ -1,6 +1,8 @@
 package config_test
 
 import (
+	"io/fs"
+	"reflect"
 	"testing"
 
 	"github.com/sirrobot01/decypharr/internal/config"
@@ -70,5 +72,51 @@ func TestParseSize(t *testing.T) {
 				t.Fatalf("ParseSize(%q) = %d, want %d", tc.input, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestSharedModes(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{}
+	if got := cfg.SharedDirModeValue(); got != 0o770|fs.ModeSetgid {
+		t.Errorf("default dir mode = %v", got)
+	}
+	if got := cfg.SharedFileModeValue(); got != 0o660 {
+		t.Errorf("default file mode = %v", got)
+	}
+	cfg.SharedDirMode, cfg.SharedFileMode = "0o755", "644"
+	if err := cfg.CheckLoadable(); err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.SharedDirModeValue(); got != 0o755 {
+		t.Errorf("dir mode = %v, want 0755", got)
+	}
+	if got := cfg.SharedFileModeValue(); got != 0o644 {
+		t.Errorf("file mode = %v, want 0644", got)
+	}
+}
+
+// Strm.Equal compares every field, so a change to any of them re-runs the
+// STRM sweep; a field added later must be added to Equal too.
+func TestStrmEqualCoversEveryField(t *testing.T) {
+	t.Parallel()
+	base := config.Strm{}
+	typ := reflect.TypeFor[config.Strm]()
+	for i := range typ.NumField() {
+		changed := base
+		field := reflect.ValueOf(&changed).Elem().Field(i)
+		switch field.Interface().(type) {
+		case bool:
+			field.SetBool(true)
+		case string:
+			field.SetString("x")
+		case *bool: // not the default
+			field.Set(reflect.ValueOf(new(false)))
+		default:
+			t.Fatalf("field %s: unhandled type %s", typ.Field(i).Name, field.Type())
+		}
+		if base.Equal(changed) {
+			t.Errorf("Strm.Equal ignores %s", typ.Field(i).Name)
+		}
 	}
 }

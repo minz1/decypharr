@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/internal/fsutil"
 )
 
 // SetupWizardResponse represents the response from setup wizard.
@@ -21,9 +22,16 @@ type SetupWizardResponse struct {
 	APIToken string `json:"api_token,omitempty"`
 }
 
+// MarshalJSON encodes the response with its API token: the token-only setup
+// response is where the generated token is shown, once, on purpose.
+func (r SetupWizardResponse) MarshalJSON() ([]byte, error) {
+	type plain SetupWizardResponse
+	return json.Marshal(plain(r))
+}
+
 // SetupHandler renders the setup wizard page.
 func (s *Server) SetupHandler(w http.ResponseWriter, r *http.Request) {
-	cfg := config.Get()
+	cfg := s.config.Get()
 
 	if err := cfg.SetupComplete(); err == nil {
 		s.redirectTo(w, r, "/")
@@ -44,7 +52,6 @@ func (s *Server) sendSetupError(w http.ResponseWriter, message string, err error
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusBadRequest)
-	//nolint:gosec // G117: the API token is shown once, on purpose, after token-only setup
 	_ = json.NewEncoder(w).Encode(response)
 }
 
@@ -84,7 +91,7 @@ type SetupCompleteRequest struct {
 
 // setupCompleteHandler handles the complete setup in a single request.
 func (s *Server) setupCompleteHandler(w http.ResponseWriter, r *http.Request) {
-	cfg := config.Get()
+	cfg := s.config.Get()
 	// Prevent re-running setup once it has already been completed
 	if err := cfg.SetupComplete(); err == nil {
 		http.Error(w, "forbidden", http.StatusForbidden)
@@ -110,7 +117,7 @@ func (s *Server) setupCompleteHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	updated, err := config.Update(func(cfg *config.Config) error {
+	updated, err := s.config.Update(func(cfg *config.Config) error {
 		if err := cfg.SetupComplete(); err == nil {
 			return errors.New("setup is already complete")
 		}
@@ -135,7 +142,6 @@ func (s *Server) setupCompleteHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	//nolint:gosec // G117: the API token is shown once, on purpose, after token-only setup
 	_ = json.NewEncoder(w).Encode(response)
 }
 
@@ -169,8 +175,7 @@ func applySetup(cfg *config.Config, req *SetupCompleteRequest, hasDebrid, hasUse
 		return errors.New("download folder is required")
 	}
 	// Shared with the Arr containers that import from it.
-	//nolint:gosec // G301: media folder read by other users/containers
-	if err := os.MkdirAll(req.Download.DownloadFolder, 0o755); err != nil {
+	if err := fsutil.MkdirShared(req.Download.DownloadFolder, cfg.SharedDirModeValue()); err != nil {
 		return fmt.Errorf("failed to create download folder: %w", err)
 	}
 	cfg.DownloadFolder = req.Download.DownloadFolder

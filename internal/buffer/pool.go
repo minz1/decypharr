@@ -32,6 +32,7 @@ type Pool struct {
 	stopCh      chan struct{}
 	wg          sync.WaitGroup
 	closed      atomic.Bool
+	unmap       unmapper
 
 	statsPunches   atomic.Int64
 	statsReclaimed atomic.Int64
@@ -197,6 +198,8 @@ func (p *Pool) Close() error {
 			firstErr = err
 		}
 	}
+	// The buffers' blocks are queued; unmap them before returning.
+	p.unmap.close()
 	return firstErr
 }
 

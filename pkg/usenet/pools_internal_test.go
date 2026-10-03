@@ -6,26 +6,30 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/pkg/usenet/fs/reader"
 )
 
 func TestRestartAppliesUsenetMemoryBudget(t *testing.T) {
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
+	loaded, err := config.Load(t.TempDir(), config.MapEnv(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := config.NewStore(loaded)
 	var firstDepth int
 	var firstPools *reader.Pools
 	for _, budget := range []string{"64MB", "8MB"} {
-		if _, err := config.Update(func(cfg *config.Config) error {
+		if _, updateErr := store.Update(func(cfg *config.Config) error {
 			cfg.Usenet.Providers = []config.UsenetProvider{{Host: "127.0.0.1", Port: 1, MaxConnections: 1}}
 			cfg.Usenet.BufferMemory = budget
 			return nil
-		}); err != nil {
-			t.Fatal(err)
+		}); updateErr != nil {
+			t.Fatal(updateErr)
 		}
-		service, err := New()
-		if err != nil {
-			t.Fatal(err)
+		service, newErr := New(store, logger.Discard())
+		if newErr != nil {
+			t.Fatal(newErr)
 		}
 		t.Cleanup(func() { _ = service.Close() })
 		cfg := reader.DefaultConfig()
@@ -34,9 +38,9 @@ func TestRestartAppliesUsenetMemoryBudget(t *testing.T) {
 		for i := range segments {
 			segments[i].Bytes = 1 << 20
 		}
-		cache, err := reader.NewSegmentCache(t.Context(), segments, cfg, &reader.Stats{}, zerolog.Nop())
-		if err != nil {
-			t.Fatal(err)
+		cache, cacheErr := reader.NewSegmentCache(t.Context(), segments, cfg, &reader.Stats{}, zerolog.Nop())
+		if cacheErr != nil {
+			t.Fatal(cacheErr)
 		}
 		t.Cleanup(func() { _ = cache.Close() })
 		depth := cache.MaxPrefetchSegments()

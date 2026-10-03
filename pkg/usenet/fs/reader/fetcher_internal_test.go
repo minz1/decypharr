@@ -180,7 +180,7 @@ func newPipelineTestFetcher(
 	host, port := srv.Addr()
 	client, err := nntp.NewClient(&config.Config{Usenet: config.Usenet{Providers: []config.UsenetProvider{{
 		Host: host, Port: port, MaxConnections: 2,
-	}}}})
+	}}}}, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}
