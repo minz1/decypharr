@@ -51,7 +51,7 @@ type Premiumize struct {
 	logger                zerolog.Logger
 	config                config.Debrid
 	profile               types.ProfileCache
-	validateFileAllowed   func(string, int64) error
+	options               types.ProviderOptions
 }
 
 func New(
@@ -97,7 +97,7 @@ func New(
 		autoExpiresLinksAfter: autoExpiresLinksAfter,
 		logger:                _log,
 		config:                dc,
-		validateFileAllowed:   options.ValidateFile,
+		options:               options,
 	}, nil
 }
 
@@ -518,11 +518,7 @@ func (pm *Premiumize) addFile(
 	if itemPath == "" {
 		itemPath = name
 	}
-	if pm.validateFileAllowed != nil {
-		if err := pm.validateFileAllowed(itemPath, size); err != nil {
-			return
-		}
-	} else if filepath.Ext(itemPath) == "" {
+	if pm.options.FileAllowed(itemPath, size) != nil {
 		return
 	}
 	fileName := filepath.Base(itemPath)

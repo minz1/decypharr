@@ -12,6 +12,7 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/request"
+	"github.com/sirrobot01/decypharr/pkg/debrid/types"
 )
 
 func TestGetTorrentsAssignsStableUniqueHashesWithoutMagnetSources(t *testing.T) {
@@ -41,10 +42,10 @@ func TestGetTorrentsAssignsStableUniqueHashesWithoutMagnetSources(t *testing.T) 
 	t.Cleanup(server.Close)
 
 	pm := &Premiumize{
-		Host:                server.URL,
-		client:              request.New(zerolog.Nop(), nil, request.WithMaxRetries(0)),
-		config:              config.Debrid{Name: "premiumize-primary"},
-		validateFileAllowed: func(string, int64) error { return nil },
+		Host:    server.URL,
+		client:  request.New(zerolog.Nop(), nil, request.WithMaxRetries(0)),
+		config:  config.Debrid{Name: "premiumize-primary"},
+		options: types.ProviderOptions{ValidateFile: func(string, int64) error { return nil }},
 	}
 
 	first, err := pm.GetTorrents()
