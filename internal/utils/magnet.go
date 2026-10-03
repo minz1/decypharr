@@ -58,8 +58,8 @@ func GetMagnetFromFile(file io.Reader, filePath string, rmTrackerUrls bool) (*Ma
 	return m, nil
 }
 
-// GetMagnetFromUrl resolves a magnet link, or downloads a .torrent over HTTP(S).
-func GetMagnetFromUrl(url string, rmTrackerUrls bool) (*Magnet, error) {
+// GetMagnetFromURL resolves a magnet link, or downloads a .torrent over HTTP(S).
+func GetMagnetFromURL(url string, rmTrackerUrls bool) (*Magnet, error) {
 	if strings.HasPrefix(url, "magnet:") {
 		return GetMagnetInfo(url, rmTrackerUrls)
 	} else if strings.HasPrefix(url, "http") {
