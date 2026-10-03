@@ -11,7 +11,6 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
-	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -345,7 +344,7 @@ func prepareConfigUpdate(current *config.Config, body []byte) (config.Config, er
 // applyLiveConfig pushes a saved config that needs no restart into the
 // running services. Only a virtual-folder failure is reported.
 func (s *Server) applyLiveConfig(before, updated *config.Config) error {
-	if before.AppURL != updated.AppURL || !reflect.DeepEqual(before.Strm, updated.Strm) {
+	if before.AppURL != updated.AppURL || !before.Strm.Equal(updated.Strm) {
 		s.manager.Strm().SweepAsync("config_change")
 	}
 	if err := s.manager.ApplyVirtualFolders(updated.VirtualFolders); err != nil {
@@ -372,15 +371,75 @@ func mergeConfigUpdate(current *config.Config, update io.Reader) (config.Config,
 	if err != nil {
 		return config.Config{}, err
 	}
-	// encoding/json decodes an array into a slice's existing elements by
-	// index; line them up by name first (see prepareSuppliedSlices).
-	if prepareErr := prepareSuppliedSlices(reflect.ValueOf(merged).Elem(), body); prepareErr != nil {
-		return config.Config{}, prepareErr
-	}
 	if decodeErr := json.Unmarshal(body, merged); decodeErr != nil {
 		return config.Config{}, decodeErr
 	}
+	// encoding/json decodes an array into a slice's existing elements by
+	// index, so an item that moved would keep fields it omits from the item
+	// that used to be there. Merge the keyed lists by key instead.
+	var lists struct {
+		Debrids json.RawMessage `json:"debrids"`
+		Arrs    json.RawMessage `json:"arrs"`
+		Usenet  struct {
+			Providers json.RawMessage `json:"providers"`
+		} `json:"usenet"`
+	}
+	if decodeErr := json.Unmarshal(body, &lists); decodeErr != nil {
+		return config.Config{}, decodeErr
+	}
+	// Items are decoded over copies of the old ones; take them from a deep
+	// copy so their nested lists never alias the published snapshot.
+	base, err := current.Clone()
+	if err != nil {
+		return config.Config{}, fmt.Errorf("copy current config: %w", err)
+	}
+	if merged.Debrids, err = mergeKeyed(base.Debrids, lists.Debrids, merged.Debrids,
+		func(d config.Debrid) string { return d.Name }); err != nil {
+		return config.Config{}, err
+	}
+	if merged.Arrs, err = mergeKeyed(base.Arrs, lists.Arrs, merged.Arrs,
+		func(a config.Arr) string { return a.Name }); err != nil {
+		return config.Config{}, err
+	}
+	if merged.Usenet.Providers, err = mergeKeyed(base.Usenet.Providers, lists.Usenet.Providers,
+		merged.Usenet.Providers, func(p config.UsenetProvider) string { return p.Host }); err != nil {
+		return config.Config{}, err
+	}
 	return *merged, nil
+}
+
+// mergeKeyed merges the JSON array raw onto old by key: each item starts
+// from a copy of the old element with the same key (a new key starts empty)
+// and the item's fields are decoded over it, so fields it omits keep that
+// element's values. When raw is absent the list is unchanged (decoded).
+func mergeKeyed[T any](old []T, raw json.RawMessage, decoded []T, key func(T) string) ([]T, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return decoded, nil
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil, err
+	}
+	used := make([]bool, len(old))
+	merged := make([]T, len(items))
+	for i, item := range items {
+		var probe T
+		if err := json.Unmarshal(item, &probe); err != nil {
+			return nil, err
+		}
+		if k := key(probe); k != "" {
+			for j := range old {
+				if !used[j] && key(old[j]) == k {
+					merged[i], used[j] = old[j], true
+					break
+				}
+			}
+		}
+		if err := json.Unmarshal(item, &merged[i]); err != nil {
+			return nil, err
+		}
+	}
+	return merged, nil
 }
 
 func (s *Server) handlePreviewVirtualFolder(w http.ResponseWriter, r *http.Request) {
