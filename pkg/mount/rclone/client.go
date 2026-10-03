@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"runtime"
 	"strconv"
 	"time"
@@ -13,9 +12,6 @@ import (
 	"github.com/sirrobot01/decypharr/internal/retry"
 	"github.com/sirrobot01/decypharr/internal/utils"
 )
-
-// forceUnmountTimeout bounds the whole chain of umount fallbacks.
-const forceUnmountTimeout = 10 * time.Second
 
 // mountWithRetry attempts to mount with retry logic using avast/retry-go.
 func (m *Manager) mountWithRetry(ctx context.Context, maxRetries int) error {
@@ -155,39 +151,14 @@ func (m *Manager) createConfig() error {
 	return nil
 }
 
-// forceUnmount attempts to force unmount a path using system commands.
+// forceUnmount detaches the mount point without rclone's help, for a mount
+// whose rclone is gone or no longer answers.
 func (m *Manager) forceUnmount(ctx context.Context) error {
-	mountPath := m.mount.MountPath
-	methods := [][]string{
-		{"umount", mountPath},
-		{"umount", "-l", mountPath}, // lazy unmount
-		{"fusermount", "-uz", mountPath},
-		{"fusermount3", "-uz", mountPath},
+	if err := m.unmounter.Unmount(ctx, m.mount.MountPath); err != nil {
+		return err
 	}
-
-	ctx, cancel := context.WithTimeout(ctx, forceUnmountTimeout)
-	defer cancel()
-
-	for _, method := range methods {
-		if err := m.tryUnmountCommand(ctx, method...); err == nil {
-			m.logger.Info().
-				Strs("command", method).
-				Msg("Successfully unmounted using system command")
-			return nil
-		}
-	}
-
-	return fmt.Errorf("all force unmount attempts failed for %s", mountPath)
-}
-
-// tryUnmountCommand tries to run an unmount command.
-func (m *Manager) tryUnmountCommand(ctx context.Context, args ...string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("no command provided")
-	}
-
-	cmd := exec.CommandContext(ctx, args[0], args[1:]...) //nolint:gosec // G204: fixed umount commands, no shell
-	return cmd.Run()
+	m.logger.Info().Str("path", m.mount.MountPath).Msg("Force-unmounted the mount point")
+	return nil
 }
 
 // mountOptions builds rclone's mountOpt from the config.
