@@ -104,7 +104,7 @@ type byteReader struct {
 	err error
 }
 
-func (r *byteReader) fail(format string, args ...any) {
+func (r *byteReader) failf(format string, args ...any) {
 	if r.err == nil {
 		r.err = fmt.Errorf("nzbcodec: "+format, args...)
 	}
@@ -116,7 +116,7 @@ func (r *byteReader) uvarint() uint64 {
 	}
 	v, n := binary.Uvarint(r.buf[r.pos:])
 	if n <= 0 {
-		r.fail("bad uvarint at %d", r.pos)
+		r.failf("bad uvarint at %d", r.pos)
 		return 0
 	}
 	r.pos += n
@@ -129,7 +129,7 @@ func (r *byteReader) varint() int64 {
 	}
 	v, n := binary.Varint(r.buf[r.pos:])
 	if n <= 0 {
-		r.fail("bad varint at %d", r.pos)
+		r.failf("bad varint at %d", r.pos)
 		return 0
 	}
 	r.pos += n
@@ -146,7 +146,7 @@ func (r *byteReader) count() int {
 	}
 	remaining := len(r.buf) - r.pos
 	if remaining < 0 || n > math.MaxInt32 || int(n) > remaining {
-		r.fail("count %d exceeds %d remaining bytes at %d", n, remaining, r.pos)
+		r.failf("count %d exceeds %d remaining bytes at %d", n, remaining, r.pos)
 		return 0
 	}
 	return int(n)
@@ -157,7 +157,7 @@ func (r *byteReader) count() int {
 func (r *byteReader) segmentCount() int {
 	n := r.uvarint()
 	if n > math.MaxInt32 {
-		r.fail("segment count %d out of range", n)
+		r.failf("segment count %d out of range", n)
 		return 0
 	}
 	return int(n)
@@ -201,7 +201,7 @@ func (r *byteReader) boolean() bool {
 		return false
 	}
 	if r.pos >= len(r.buf) {
-		r.fail("bool out of range")
+		r.failf("bool out of range")
 		return false
 	}
 	b := r.buf[r.pos]
@@ -214,7 +214,7 @@ func (r *byteReader) f64() float64 {
 		return 0
 	}
 	if len(r.buf)-r.pos < float64Size {
-		r.fail("float out of range")
+		r.failf("float out of range")
 		return 0
 	}
 	v := binary.LittleEndian.Uint64(r.buf[r.pos:])
@@ -242,8 +242,8 @@ func (r *byteReader) time() time.Time {
 // groupIndex reads a group-table index and checks it against the table.
 func (r *byteReader) groupIndex(groups int) int {
 	idx := r.uvarint()
-	if r.err == nil && idx >= uint64(groups) {
-		r.fail("group index %d out of range", idx)
+	if r.err == nil && (idx > math.MaxInt32 || int(idx) >= groups) {
+		r.failf("group index %d out of range", idx)
 	}
 	if r.err != nil {
 		return 0
@@ -687,36 +687,36 @@ func (c *nzbCodec) decodeFileV2(data []byte, filename string) (*storage.NZBFile,
 // only the sampled ids so the large decompressed buffer is freed immediately.
 // This is the low-memory path used by repair availability probes.
 //
-// It returns (nil, -1, nil) when the file is not found or has no segments.
-func (c *nzbCodec) decodeFileMessageIDsSampled(data []byte, filename string, percent int) ([]string, int, error) {
+// It returns (nil, nil) when the file is not found or has no segments.
+func (c *nzbCodec) decodeFileMessageIDsSampled(data []byte, filename string, percent int) ([]string, error) {
 	hc, _, mc, err := splitRegions(data)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	header, err := c.dec.DecodeAll(hc, nil)
 	if err != nil {
-		return nil, 0, fmt.Errorf("nzbcodec: decompress header: %w", err)
+		return nil, fmt.Errorf("nzbcodec: decompress header: %w", err)
 	}
 	nzb, counts, err := decodeHeader(header)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	target, before, found := fileWindow(nzb, counts, filename)
 	if !found {
-		return nil, -1, nil
+		return nil, nil
 	}
 	segCount := counts[target]
 	if segCount == 0 {
-		return nil, 0, nil
+		return nil, nil
 	}
 
 	msgIDs, err := c.dec.DecodeAll(mc, nil)
 	if err != nil {
-		return nil, 0, fmt.Errorf("nzbcodec: decompress msg ids: %w", err)
+		return nil, fmt.Errorf("nzbcodec: decompress msg ids: %w", err)
 	}
 	// Every id has at least a one-byte length prefix.
 	if before+segCount > len(msgIDs) {
-		return nil, 0, fmt.Errorf("nzbcodec: %d message ids cannot fit %d bytes", before+segCount, len(msgIDs))
+		return nil, fmt.Errorf("nzbcodec: %d message ids cannot fit %d bytes", before+segCount, len(msgIDs))
 	}
 
 	want := sampleIndices(segCount, percent)
@@ -738,9 +738,9 @@ func (c *nzbCodec) decodeFileMessageIDsSampled(data []byte, filename string, per
 		}
 	}
 	if mr.err != nil {
-		return nil, 0, mr.err
+		return nil, mr.err
 	}
-	return out, segCount, nil
+	return out, nil
 }
 
 // sampleIndices returns the segment indices to probe for availability: always

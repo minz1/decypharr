@@ -18,7 +18,7 @@ func decodeAllPaths(t *testing.T, blob []byte) {
 	if _, err := codec.decodeFileV2(blob, "movie.mkv"); err == nil {
 		t.Error("decodeFileV2 accepted a corrupt blob")
 	}
-	if _, _, err := codec.decodeFileMessageIDsSampled(blob, "movie.mkv", 100); err == nil {
+	if _, err := codec.decodeFileMessageIDsSampled(blob, "movie.mkv", 100); err == nil {
 		t.Error("decodeFileMessageIDsSampled accepted a corrupt blob")
 	}
 }

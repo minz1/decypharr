@@ -250,8 +250,7 @@ func (s *NZBStorage) SampleFileMessageIDs(id, filename string, percent int) ([]s
 	}
 
 	if isCodecV2(data) {
-		ids, _, decodeFileMessageIDsSampledErr := s.codec.decodeFileMessageIDsSampled(data, filename, percent)
-		return ids, decodeFileMessageIDsSampledErr
+		return s.codec.decodeFileMessageIDsSampled(data, filename, percent)
 	}
 
 	// Legacy proto: full decode then sample in memory.
