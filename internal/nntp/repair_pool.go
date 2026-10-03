@@ -31,8 +31,9 @@ type RepairPool struct {
 	quit    chan struct{}
 	once    sync.Once
 	// submitMu orders Submit against Stop: Submit enqueues under RLock, and
-	// Stop's Lock/Unlock barrier guarantees no task lands after its drain.
+	// Stop sets closed under Lock, so no task lands after its drain.
 	submitMu sync.RWMutex
+	closed   bool // guarded by submitMu
 }
 
 // repairTask describes one bounded STAT batch.
@@ -144,6 +145,9 @@ func (p *RepairPool) Submit(ctx context.Context, msgIDs []string, done func([]St
 	task := repairTask{ctx: ctx, messageIDs: msgIDs, done: done}
 	p.submitMu.RLock()
 	defer p.submitMu.RUnlock()
+	if p.closed {
+		return errRepairPoolClosed
+	}
 	// quit takes priority: once Stop closes it, refuse new work even if
 	// the buffered tasks channel still has room.
 	select {
@@ -170,10 +174,13 @@ func (p *RepairPool) Stop() {
 		return
 	}
 	p.once.Do(func() { close(p.quit) })
-	// Barrier: a Submit that raced past the quit check finishes its send
-	// before this returns, and every later Submit sees quit closed.
+	// Closing quit releases any Submit blocked on a full queue. Taking the
+	// write lock then waits out every Submit still inside its read lock (one
+	// that raced past the quit check finishes its send), and closed makes
+	// every later Submit refuse, so the drain below sees all accepted tasks.
 	p.submitMu.Lock()
-	p.submitMu.Unlock() //nolint:staticcheck // SA2001: empty critical section is the barrier
+	p.closed = true
+	p.submitMu.Unlock()
 	p.wg.Wait()
 	for {
 		select {
