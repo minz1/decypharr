@@ -347,3 +347,27 @@ func TestIdleTimeoutWaitsForStoppedDownloaders(t *testing.T) {
 		}
 	})
 }
+
+// A waiter failed by an open circuit always gets an error: nil would tell
+// it the range is ready.
+func TestKickWaitersNeverFailsWithNil(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	dls := &Downloaders{ctx: ctx, cancel: cancel, item: newTestItem(t, testMiB)}
+	dls.circuitOpen.Store(true) // open, with no error recorded
+	errChan := make(chan error, 1)
+	dls.waiters = []waiter{{r: ranges.Range{Pos: 0, Size: 1}, errChan: errChan}}
+	dls.waiterCount.Store(1)
+
+	dls.kickWaiters()
+
+	select {
+	case err := <-errChan:
+		if err == nil {
+			t.Fatal("waiter for a missing range was told it is ready")
+		}
+	default:
+		t.Fatal("waiter was not failed while the circuit is open")
+	}
+}
