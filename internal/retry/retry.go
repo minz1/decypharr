@@ -56,7 +56,6 @@ func DelayType(dt DelayMode) Option {
 }
 
 // RetryIf provides a predicate to decide if an error is retryable.
-
 func RetryIf(fn func(error) bool) Option {
 	return func(cfg *config) {
 		cfg.retryIf = fn
