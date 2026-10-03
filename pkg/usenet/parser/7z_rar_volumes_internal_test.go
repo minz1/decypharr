@@ -3,9 +3,13 @@ package parser
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/javi11/sevenzip"
 	"github.com/rs/zerolog"
@@ -79,4 +83,94 @@ func summarize(b []byte) string {
 		i = j
 	}
 	return s.String()
+}
+
+// countingReaderAt records which offsets were read and how many reads ran at
+// once.
+type countingReaderAt struct {
+	data     []byte
+	mu       sync.Mutex
+	inFlight int
+	peak     int
+	offsets  []int64
+}
+
+func (c *countingReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	c.mu.Lock()
+	c.inFlight++
+	c.peak = max(c.peak, c.inFlight)
+	c.offsets = append(c.offsets, off)
+	c.mu.Unlock()
+	time.Sleep(time.Millisecond) // an article fetch
+	c.mu.Lock()
+	c.inFlight--
+	c.mu.Unlock()
+	if off >= int64(len(c.data)) {
+		return 0, io.EOF
+	}
+	n := copy(p, c.data[off:])
+	if n < len(p) {
+		return n, io.EOF
+	}
+	return n, nil
+}
+
+// rar4VolumeSet lays out volumes .rar, .r00, ... of one stored file; every
+// volume ends with an end block, flagged "next volume" on all but the last.
+func rar4VolumeSet(count int) ([]sevenzip.FileInfo, []byte) {
+	var blob []byte
+	var infos []sevenzip.FileInfo
+	for i := range count {
+		volume := rar4Volume(bytes.Repeat([]byte{byte('A' + i)}, 10), uint32(10*count))
+		var endFlags uint16
+		if i < count-1 {
+			endFlags = rar4EndFlagNextVolume
+		}
+		volume = append(volume, rar4Block(RAR4HeaderTypeEnd, endFlags, nil)...)
+		name := "movie.rar"
+		if i > 0 {
+			name = fmt.Sprintf("movie.r%02d", i-1)
+		}
+		infos = append(infos, sevenzip.FileInfo{Name: name, Offset: int64(len(blob)), Size: uint64(len(volume))})
+		blob = append(blob, volume...)
+	}
+	return infos, blob
+}
+
+// Volume heads are fetched in parallel, up to the parser's concurrency; the
+// scan used to fetch them one by one.
+func TestEmbeddedRARHeadsAreFetchedConcurrently(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		infos, blob := rar4VolumeSet(12)
+		reader := &countingReaderAt{data: blob}
+		p := NewSevenZParser(nil, 4, zerolog.Nop())
+		files := p.scanEmbeddedRARHeaders(infos, reader, RARVersion4, "")
+		if len(files) != 12 {
+			t.Fatalf("parsed %d volume parts, want 12", len(files))
+		}
+		if reader.peak != 4 {
+			t.Fatalf("at most %d heads were fetched at once, want 4", reader.peak)
+		}
+	})
+}
+
+// The scan stops at the volume whose end-of-archive header says no volume
+// follows.
+func TestEmbeddedRARScanStopsAtLastVolume(t *testing.T) {
+	t.Parallel()
+	infos, blob := rar4VolumeSet(2)
+	// A stray third volume after the archive's last one.
+	stray, _ := rar4VolumeSet(1)
+	stray[0].Name, stray[0].Offset = "movie.r01", int64(len(blob))
+	infos = append(infos, stray[0])
+	reader := &countingReaderAt{data: append(blob, blob[:stray[0].Size]...)}
+
+	p := NewSevenZParser(nil, 1, zerolog.Nop())
+	p.scanEmbeddedRARHeaders(infos, reader, RARVersion4, "")
+	for _, off := range reader.offsets {
+		if off >= stray[0].Offset {
+			t.Fatalf("read the head at %d, past the archive's last volume", off)
+		}
+	}
 }
