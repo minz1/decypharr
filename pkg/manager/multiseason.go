@@ -253,8 +253,8 @@ func getSortedSeasons(seasons map[int]bool) []int {
 	return result
 }
 
-// seasonHashBytes keeps season IDs at 32 hex digits, the shape of the
-// md5-derived IDs earlier versions persisted.
+// seasonHashBytes truncates season IDs to 32 hex digits. IDs are persisted
+// and reported to the arrs, so the length must not change.
 const seasonHashBytes = 16
 
 // generateSeasonHash derives a season entry's ID from its pack's infohash and
