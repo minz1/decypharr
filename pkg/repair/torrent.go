@@ -43,7 +43,7 @@ func (r *Service) probeTorrentFile(
 	if err := client.CheckFile(ctx, file.InfoHash, link); err == nil {
 		result.healthy = true
 		r.hearsay.ObserveTorrent(client.Config().Provider, file.InfoHash, true)
-	} else if errors.Is(err, customerror.HosterUnavailableError) {
+	} else if errors.Is(err, customerror.ErrHosterUnavailable) {
 		result.broken = true
 		result.reason = "hoster_unavailable"
 		r.hearsay.ObserveTorrent(client.Config().Provider, file.InfoHash, false)
@@ -71,14 +71,14 @@ func (r *Service) probeTorrentFileByUnrestrict(
 		result.reason = "placement_file_not_found"
 		return result
 	}
-	if placementFile.Link == "" && placementFile.Id == "" {
+	if placementFile.Link == "" && placementFile.ID == "" {
 		result.broken = true
 		result.reason = "missing_provider_link"
 		return result
 	}
 
 	debridFile := &debridTypes.File{
-		Id:        placementFile.Id,
+		ID:        placementFile.ID,
 		Link:      placementFile.Link,
 		Path:      placementFile.Path,
 		Name:      file.Name,
@@ -92,10 +92,10 @@ func (r *Service) probeTorrentFileByUnrestrict(
 		r.hearsay.ObserveTorrent(client.Config().Provider, file.InfoHash, true)
 		return result
 	}
-	if err == nil || errors.Is(err, debridTypes.EmptyDownloadLinkError) ||
-		errors.Is(err, customerror.HosterUnavailableError) {
+	if err == nil || errors.Is(err, debridTypes.ErrEmptyDownloadLink) ||
+		errors.Is(err, customerror.ErrHosterUnavailable) {
 		result.broken = true
-		if errors.Is(err, customerror.HosterUnavailableError) {
+		if errors.Is(err, customerror.ErrHosterUnavailable) {
 			result.reason = "hoster_unavailable"
 		} else {
 			result.reason = "empty_download_link"
@@ -209,5 +209,5 @@ func linkOf(entry *storage.Entry, name string) string {
 	if file == nil {
 		return ""
 	}
-	return cmp.Or(file.Link, file.Id)
+	return cmp.Or(file.Link, file.ID)
 }

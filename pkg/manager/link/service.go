@@ -9,9 +9,10 @@ import (
 
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/rs/zerolog"
-	"golang.org/x/sync/singleflight"
 
+	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
+	"github.com/sirrobot01/decypharr/internal/flight"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	debrid "github.com/sirrobot01/decypharr/pkg/debrid/common"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
@@ -32,8 +33,9 @@ type EntrySaver func(entry *storage.Entry) error
 // Service handles download link fetching and validation.
 // It uses the account-level cache for storing links and only tracks validation state.
 type Service struct {
+	naming         func() config.WebDavFolderNaming
 	validated      *xsync.Map[string, error]
-	singleflight   singleflight.Group
+	flights        flight.Group[types.DownloadLink]
 	clients        *xsync.Map[string, debrid.Client]
 	entryRefresher EntryRefresher
 	repairer       EntryRepairer
@@ -51,9 +53,11 @@ func New(
 	entrySaver EntrySaver,
 	httpClient *http.Client,
 	retries int,
+	naming func() config.WebDavFolderNaming,
 	logger zerolog.Logger,
 ) *Service {
 	return &Service{
+		naming:         naming,
 		validated:      xsync.NewMap[string, error](),
 		clients:        clients,
 		entryRefresher: entryRefresher,
@@ -65,27 +69,25 @@ func New(
 	}
 }
 
+// folder names entry in messages the way the mount does.
+func (s *Service) folder(entry *storage.Entry) string {
+	var naming config.WebDavFolderNaming
+	if s.naming != nil {
+		naming = s.naming()
+	}
+	return entry.GetFolder(naming)
+}
+
 // GetLink fetches and validates a download link for a file in an entry.
 // Links are cached at the account level; this service only tracks validation state.
 func (s *Service) GetLink(ctx context.Context, entry *storage.Entry, filename string) (types.DownloadLink, error) {
-	// Use singleflight to deduplicate concurrent requests for the same file
+	// Deduplicate concurrent requests for the same file. One caller giving
+	// up does not cancel the fetch for the others.
 	key := entry.InfoHash + ":" + filename
-	v, err, _ := s.singleflight.Do(key, func() (any, error) {
+	dl, _, err := s.flights.Do(ctx, key, func(ctx context.Context) (types.DownloadLink, error) {
 		return s.fetchAndValidate(ctx, entry, filename, 0)
 	})
-	return sharedLink(v, err)
-}
-
-// sharedLink unpacks a singleflight result.
-func sharedLink(v any, err error) (types.DownloadLink, error) {
-	if err != nil {
-		return types.DownloadLink{}, err
-	}
-	dl, ok := v.(types.DownloadLink)
-	if !ok {
-		return types.DownloadLink{}, fmt.Errorf("unexpected link result type %T", v)
-	}
-	return dl, nil
+	return dl, err
 }
 
 // Refresh invalidates a link that failed mid-stream and fetches a replacement.
@@ -101,10 +103,10 @@ func (s *Service) Refresh(
 		return types.DownloadLink{}, NewPermanentError(ErrEmptyLink, "empty_link")
 	}
 	key := entry.InfoHash + ":" + bad.Filename
-	v, err, _ := s.singleflight.Do(key, func() (any, error) {
+	dl, _, err := s.flights.Do(ctx, key, func(ctx context.Context) (types.DownloadLink, error) {
 		return s.invalidateAndRefetch(ctx, entry, bad, 0)
 	})
-	return sharedLink(v, err)
+	return dl, err
 }
 
 func (s *Service) getClient(provider string) (debrid.Client, error) {
@@ -208,15 +210,15 @@ func (s *Service) handleBadLink(
 	dl types.DownloadLink,
 	attempt int,
 ) (types.DownloadLink, error) {
-	if errors.Is(err, customerror.HosterUnavailableError) {
+	if errors.Is(err, customerror.ErrHosterUnavailable) {
 		if entry.Bad {
-			return types.DownloadLink{}, fmt.Errorf("can't repair %s since it's been marked as bad", entry.GetFolder())
+			return types.DownloadLink{}, fmt.Errorf("can't repair %s since it's been marked as bad", s.folder(entry))
 		}
 		if attempt >= MaxReinsertionAttempt {
 			s.markEntryBad(entry, dl.Filename, attempt, "hoster_unavailable")
 			return types.DownloadLink{}, fmt.Errorf(
 				"entry %s file %s still unresolvable after %d re-insertion attempts",
-				entry.GetFolder(),
+				s.folder(entry),
 				dl.Filename,
 				attempt,
 			)
@@ -229,7 +231,7 @@ func (s *Service) handleBadLink(
 			// Entry is still bad
 			return types.DownloadLink{}, fmt.Errorf(
 				"entry %s(%s) still bad after repair, un-repairable",
-				entry.GetFolder(),
+				s.folder(entry),
 				dl.Link,
 			)
 		}
@@ -277,36 +279,38 @@ func (s *Service) fetchLink(
 		)
 	}
 
-	placementFile, err := s.getPlacementFile(entry, filename)
+	// A refresh hands back a newer entry. It is used for this fetch only:
+	// the caller's entry is shared with concurrent readers and stays as is.
+	current, placementFile, err := s.getPlacementFile(entry, filename)
 	if err != nil {
 		return types.DownloadLink{}, err
 	}
 
-	if placementFile.Link == "" && placementFile.Id == "" {
+	if placementFile.Link == "" && placementFile.ID == "" {
 		return types.DownloadLink{}, NewPermanentError(
 			fmt.Errorf("file link is missing for %s in entry %s", filename, entry.Name),
 			"link_missing",
 		)
 	}
 
-	client, err := s.getClient(entry.ActiveProvider)
+	client, err := s.getClient(current.ActiveProvider)
 	if err != nil {
 		return types.DownloadLink{}, NewPermanentError(
-			fmt.Errorf("debrid client not found: %s", entry.ActiveProvider),
+			fmt.Errorf("debrid client not found: %s", current.ActiveProvider),
 			"client_not_found",
 		)
 	}
 
-	placement := entry.Providers[entry.ActiveProvider]
+	placement := current.Providers[current.ActiveProvider]
 	if placement == nil {
 		return types.DownloadLink{}, NewPermanentError(
-			fmt.Errorf("no placement found for debrid %s with infohash %s", entry.ActiveProvider, entry.InfoHash),
+			fmt.Errorf("no placement found for debrid %s with infohash %s", current.ActiveProvider, current.InfoHash),
 			"placement_not_found",
 		)
 	}
 
 	debridFile := &types.File{
-		Id:        placementFile.Id,
+		ID:        placementFile.ID,
 		Link:      placementFile.Link,
 		Path:      placementFile.Path,
 		Name:      file.Name,
@@ -324,13 +328,13 @@ func (s *Service) fetchLink(
 	if downloadLink.Empty() {
 		// Let's try to reinsert the entry
 		if entry.Bad {
-			return types.DownloadLink{}, fmt.Errorf("can't repair %s since it's been marked as bad", entry.GetFolder())
+			return types.DownloadLink{}, fmt.Errorf("can't repair %s since it's been marked as bad", s.folder(entry))
 		}
 		if attempt >= MaxReinsertionAttempt {
 			s.markEntryBad(entry, filename, attempt, "empty_link")
 			return types.DownloadLink{}, fmt.Errorf(
 				"entry %s file %s still resolves to an empty link after %d re-insertion attempts",
-				entry.GetFolder(),
+				s.folder(entry),
 				filename,
 				attempt,
 			)
@@ -343,7 +347,7 @@ func (s *Service) fetchLink(
 			// Entry is still bad
 			return types.DownloadLink{}, fmt.Errorf(
 				"entry %s(%s) still bad after repair, un-repairable",
-				entry.GetFolder(),
+				s.folder(entry),
 				downloadLink.Link,
 			)
 		}
@@ -354,11 +358,15 @@ func (s *Service) fetchLink(
 	return downloadLink, nil
 }
 
-// getPlacementFile retrieves the placement file with refresh fallback.
-func (s *Service) getPlacementFile(entry *storage.Entry, filename string) (*storage.ProviderFile, error) {
+// getPlacementFile retrieves the placement file with refresh fallback. It
+// returns the entry the file belongs to: entry itself, or the refreshed copy.
+func (s *Service) getPlacementFile(
+	entry *storage.Entry,
+	filename string,
+) (*storage.Entry, *storage.ProviderFile, error) {
 	_, ok := entry.Files[filename]
 	if !ok {
-		return nil, NewPermanentError(
+		return nil, nil, NewPermanentError(
 			fmt.Errorf("file %s not found in entry", filename),
 			"file_not_found",
 		)
@@ -366,27 +374,31 @@ func (s *Service) getPlacementFile(entry *storage.Entry, filename string) (*stor
 
 	placement := entry.Providers[entry.ActiveProvider]
 	if placement == nil {
-		return nil, NewPermanentError(
+		return nil, nil, NewPermanentError(
 			fmt.Errorf("no placement found for debrid %s with infohash %s", entry.ActiveProvider, entry.InfoHash),
 			"placement_not_found",
 		)
 	}
 
 	if placementFile := placement.Files[filename]; hasLocator(placementFile) {
-		return placementFile, nil
+		return entry, placementFile, nil
 	}
 	return s.refreshPlacementFile(entry, filename)
 }
 
 func hasLocator(file *storage.ProviderFile) bool {
-	return file != nil && (file.Link != "" || file.Id != "")
+	return file != nil && (file.Link != "" || file.ID != "")
 }
 
-// refreshPlacementFile re-reads the entry from its provider and adopts the
-// refreshed entry when it now carries a locator for filename.
-func (s *Service) refreshPlacementFile(entry *storage.Entry, filename string) (*storage.ProviderFile, error) {
+// refreshPlacementFile re-reads the entry from its provider and returns the
+// refreshed entry when it now carries a locator for filename. entry is never
+// written: callers share it with other readers.
+func (s *Service) refreshPlacementFile(
+	entry *storage.Entry,
+	filename string,
+) (*storage.Entry, *storage.ProviderFile, error) {
 	if s.entryRefresher == nil {
-		return nil, NewPermanentError(
+		return nil, nil, NewPermanentError(
 			fmt.Errorf("file %s not available and no refresher configured", filename),
 			"no_refresher",
 		)
@@ -394,14 +406,14 @@ func (s *Service) refreshPlacementFile(entry *storage.Entry, filename string) (*
 
 	refreshed, err := s.entryRefresher(entry.InfoHash)
 	if err != nil {
-		return nil, NewRefetchableError(
+		return nil, nil, NewRefetchableError(
 			fmt.Errorf("failed to refresh entry: %w", err),
 			"refresh_failed",
 		)
 	}
 
 	if refreshed.Files[filename] == nil {
-		return nil, NewPermanentError(
+		return nil, nil, NewPermanentError(
 			fmt.Errorf("file disappeared after refresh"),
 			"file_disappeared",
 		)
@@ -409,7 +421,7 @@ func (s *Service) refreshPlacementFile(entry *storage.Entry, filename string) (*
 
 	placement := refreshed.Providers[entry.ActiveProvider]
 	if placement == nil {
-		return nil, NewPermanentError(
+		return nil, nil, NewPermanentError(
 			fmt.Errorf("placement disappeared after refresh for debrid %s", entry.ActiveProvider),
 			"placement_disappeared",
 		)
@@ -417,14 +429,13 @@ func (s *Service) refreshPlacementFile(entry *storage.Entry, filename string) (*
 
 	placementFile := placement.Files[filename]
 	if !hasLocator(placementFile) {
-		return nil, NewPermanentError(
+		return nil, nil, NewPermanentError(
 			fmt.Errorf("file %s not available after refresh", filename),
 			"file_not_available",
 		)
 	}
 
-	*entry = *refreshed
-	return placementFile, nil
+	return refreshed, placementFile, nil
 }
 
 // validateLink validates a download link by making a HEAD request.
@@ -489,7 +500,7 @@ func (s *Service) disableLinkAccount(link types.DownloadLink, linkErr *Error) er
 	s.logger.Warn().
 		Str("debrid", link.Debrid).
 		Str("token", utils.Mask(account.Token)).
-		Str("account", utils.Mask(account.Username)).
+		Str("account", utils.Mask(account.Username())).
 		Str("reason", linkErr.Code).
 		Msg("Disabled account due to error")
 	return nil

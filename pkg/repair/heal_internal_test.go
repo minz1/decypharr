@@ -8,6 +8,9 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/rs/zerolog"
+
+	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/arr/reacquire"
 	"github.com/sirrobot01/decypharr/pkg/storage"
@@ -151,7 +154,7 @@ func TestHealBrokenEntryCountsQueueAndIdentityFailures(t *testing.T) {
 
 func newRepairTestStorage(t *testing.T) *storage.Storage {
 	t.Helper()
-	store, err := storage.NewStorage(t.TempDir())
+	store, err := storage.NewStorage(t.TempDir(), storage.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +165,7 @@ func newRepairTestStorage(t *testing.T) *storage.Storage {
 func TestHealBrokenEntrySkipsArrsWithoutReacquisition(t *testing.T) {
 	t.Parallel()
 	store := newRepairTestStorage(t)
-	registry := arr.New()
+	registry := arr.New(config.NewStore(&config.Config{}), nil, zerolog.Nop())
 	registry.AddOrUpdate(arr.Arr{Name: "lidarr", Host: "http://lidarr.test", Token: "token"})
 
 	reacquirer := &fakeReacquirer{reacquire: func(reacquire.Request) (*reacquire.Job, error) {
@@ -208,7 +211,7 @@ func TestHealBrokenEntryQueuesUnindexedLibraryFile(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	store := newRepairTestStorage(t)
-	registry := arr.New()
+	registry := arr.New(config.NewStore(&config.Config{}), nil, zerolog.Nop())
 	registry.AddOrUpdate(arr.Arr{Name: "sonarr", Host: server.URL, Token: "token"})
 	reacquirer := &fakeReacquirer{library: func(reacquire.LibraryRequest) (*reacquire.Job, error) {
 		return &reacquire.Job{ID: "library-job"}, nil

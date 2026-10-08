@@ -63,7 +63,7 @@ func (f *FileInfo) Kind() string         { return f.kind }
 // GetTorrentMountPath returns the full mount path for a torrent
 // Returns the path based on the new unified mount structure.
 func (m *Manager) GetTorrentMountPath(torrent *storage.Entry) string {
-	return filepath.Join(m.config.Mount.MountPath, EntryAllFolder, torrent.GetFolder())
+	return filepath.Join(m.config.Mount.MountPath, EntryAllFolder, torrent.GetFolder(m.folderNaming()))
 }
 
 func (m *Manager) setMountPaths() {
@@ -367,16 +367,6 @@ func (m *Manager) folderInfohash(entry *FileInfo) (string, error) {
 		return "", fmt.Errorf("failed to get first file of torrent %s: %w", entry.name, err)
 	}
 	return firstFile.InfoHash, nil
-}
-
-func (m *Manager) CopyEntry(entry *FileInfo, _ string, _ bool) error {
-	if entry == nil {
-		return fmt.Errorf("entry is nil")
-	}
-	if !entry.CanDelete() {
-		return fmt.Errorf("entry %s cannot be copied", entry.name)
-	}
-	return fmt.Errorf("copying entries is not supported yet")
 }
 
 func (m *Manager) RemoveTorrentFile(torrentName, filename string) error {

@@ -17,16 +17,16 @@ import (
 
 func testRealDebrid(host string) *RealDebrid {
 	return &RealDebrid{
-		Host:   host,
-		client: request.New(request.WithMaxRetries(0)),
-		config: config.Debrid{Name: "realdebrid"},
-		logger: zerolog.Nop(),
+		Host:    host,
+		client:  request.New(zerolog.Nop(), nil, request.WithMaxRetries(0)),
+		config:  config.Debrid{Name: "realdebrid"},
+		logger:  zerolog.Nop(),
+		options: mkvOnly(),
 	}
 }
 
 func TestGetTorrentsPaginatesOnRawPageSize(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Query().Get("offset") {
 		case "":
@@ -42,15 +42,14 @@ func TestGetTorrentsPaginatesOnRawPageSize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(torrents) != 2 || torrents[0].Id != "b" || torrents[1].Id != "c" {
+	if len(torrents) != 2 || torrents[0].ID != "b" || torrents[1].ID != "c" {
 		t.Fatalf("GetTorrents() returned %d torrents, want b and c", len(torrents))
 	}
 }
 
 // A 509 on file selection must still return the torrent so callers delete it.
 func TestCheckStatusReturnsTorrentOnSlotLimit(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			w.WriteHeader(statusTooManyActive)
@@ -62,11 +61,11 @@ func TestCheckStatusReturnsTorrentOnSlotLimit(t *testing.T) {
 		)
 	}))
 	defer server.Close()
-	torrent, err := testRealDebrid(server.URL).CheckStatus(&types.Torrent{Id: "t"})
-	if !errors.Is(err, customerror.TooManyActiveDownloadsError) {
+	torrent, err := testRealDebrid(server.URL).CheckStatus(&types.Torrent{ID: "t"})
+	if !errors.Is(err, customerror.ErrTooManyActiveDownloads) {
 		t.Fatalf("CheckStatus() error = %v, want too many active downloads", err)
 	}
-	if torrent == nil || torrent.Id != "t" {
+	if torrent == nil || torrent.ID != "t" {
 		t.Fatalf("CheckStatus() torrent = %v, want the submitted torrent", torrent)
 	}
 }

@@ -32,8 +32,7 @@ func (m *Manager) ProviderClient(name string) debrid.Client {
 }
 
 func (m *Manager) initDebridClients() {
-	cfg := config.Get()
-	for _, dc := range cfg.Debrids {
+	for _, dc := range m.config.Debrids {
 		client, err := m.createClient(dc)
 		if err != nil {
 			m.logger.Error().Err(err).Str("debrid", dc.Name).Msg("Failed to create debrid client")
@@ -58,17 +57,26 @@ func (m *Manager) createClient(dc config.Debrid) (debrid.Client, error) {
 	rateLimits["repair"] = repairRL
 	rateLimits["download"] = downloadRL
 
+	options := types.ProviderOptions{
+		Retries: m.config.Retries,
+		ValidateFile: func(name string, size int64) error {
+			return m.store.Get().ValidateFileAllowed(name, size)
+		},
+		Logger:    m.logs.New(dc.Name),
+		TLSConfig: m.tlsConfig,
+	}
+
 	switch dc.Provider {
 	case "realdebrid":
-		client, err = realdebrid.New(dc, rateLimits)
+		client, err = realdebrid.New(dc, rateLimits, options)
 	case "alldebrid":
-		client, err = alldebrid.New(dc, rateLimits)
+		client, err = alldebrid.New(dc, rateLimits, options)
 	case "torbox":
-		client, err = torbox.New(dc, rateLimits)
+		client, err = torbox.New(dc, rateLimits, options)
 	case "debridlink":
-		client, err = debridlink.New(dc, rateLimits)
+		client, err = debridlink.New(dc, rateLimits, options)
 	case "premiumize":
-		client, err = premiumize.New(dc, rateLimits)
+		client, err = premiumize.New(dc, rateLimits, options)
 	default:
 		return nil, ErrUnsupportedDebridProvider
 	}

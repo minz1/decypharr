@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/sirrobot01/decypharr/cmd/decypharr"
-	"github.com/sirrobot01/decypharr/internal/config"
 )
 
 // pprofReadHeaderTimeout bounds slow clients on the opt-in pprof listener.
@@ -54,9 +53,6 @@ func run() error {
 		configPath = filepath.Join(home, ".decypharr")
 	}
 
-	config.SetConfigPath(configPath)
-	config.Get()
-
 	// Buffer pools are owned by their subsystems: the DFS cache (vfs.NewCache)
 	// and the usenet reader each create a buffer.Pool with their own configured
 	// RAM budget and disk limit.
@@ -70,7 +66,7 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	return decypharr.Start(ctx)
+	return decypharr.Start(ctx, configPath)
 }
 
 // servePprof exposes the profiling endpoints on their own mux, so they are

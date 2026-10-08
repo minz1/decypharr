@@ -144,6 +144,15 @@ func (r *rarReader) loadNextSegment() error {
 		if err != nil {
 			return fmt.Errorf("failed to fetch segment: %w", err)
 		}
+		// Offsets are computed from declared segment sizes, and Skip steps
+		// over whole segments by them. A body shorter than declared would
+		// let Read fall out of step with both, so it is zero-filled to its
+		// declared size.
+		if int64(len(data)) < segment.Bytes {
+			padded := make([]byte, segment.Bytes)
+			copy(padded, data)
+			data = padded
+		}
 
 		r.currentSegmentData = data
 		r.currentSegmentOffset = 0

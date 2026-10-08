@@ -160,7 +160,7 @@ func TestHandoffFIFO(t *testing.T) {
 	// A's put.
 	conn := newPipeConnection(t, true)
 	pp.mu.Lock()
-	pp.conns = append(pp.conns, acquireConnectionEntry(conn, pp.config, time.Now()))
+	pp.conns = append(pp.conns, c.acquireConnectionEntry(conn, pp.config, time.Now()))
 	pp.mu.Unlock()
 	c.releaseSlot(pp)
 
@@ -354,7 +354,7 @@ func TestSameHostProvidersGetDistinctPools(t *testing.T) {
 		{Host: "news.example.com", Port: 563, Username: "alice", MaxConnections: 3, Priority: 1},
 		{Host: "news.example.com", Port: 563, Username: "bob", MaxConnections: 7, Priority: 2},
 	}
-	pools, orderedPools := buildPools(providers)
+	pools, orderedPools := buildPools(providers, newMonoClock())
 	c := &Client{
 		pools:          pools,
 		orderedPools:   orderedPools,

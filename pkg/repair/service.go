@@ -10,7 +10,6 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
-	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/arr/reacquire"
@@ -86,6 +85,10 @@ type Dependencies struct {
 	Usenet        *usenet.Usenet
 	Notifications *notifications.Service
 	Hearsay       *hearsay.Service
+	// Config publishes the repair settings, which are read live. Nil means
+	// the zero settings.
+	Config *config.Store
+	Logger zerolog.Logger
 }
 
 // Service checks entry health and coordinates repairs.
@@ -98,6 +101,7 @@ type Service struct {
 	usenet        *usenet.Usenet
 	notifications *notifications.Service
 	hearsay       *hearsay.Service
+	config        *config.Store
 	logger        zerolog.Logger
 
 	mu             sync.Mutex
@@ -126,12 +130,26 @@ func New(deps Dependencies) *Service {
 		usenet:        deps.Usenet,
 		notifications: deps.Notifications,
 		hearsay:       deps.Hearsay,
-		logger:        logger.New("repair"),
+		config:        deps.Config,
+		logger:        deps.Logger,
 		parentCtx:     context.Background(),
 	}
 }
 
-func (r *Service) cfg() config.RepairConfig { return config.Get().Repair }
+// folderNaming is the live folder naming scheme.
+func (r *Service) folderNaming() config.WebDavFolderNaming {
+	if r.config == nil {
+		return ""
+	}
+	return r.config.Get().FolderNaming
+}
+
+func (r *Service) cfg() config.RepairConfig {
+	if r.config == nil {
+		return config.RepairConfig{}
+	}
+	return r.config.Get().Repair
+}
 
 func normalizeRepairProtocolScope(scope string) string {
 	switch strings.ToLower(strings.TrimSpace(scope)) {

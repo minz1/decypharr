@@ -132,12 +132,10 @@ var (
 )
 
 // HTTP error sentinels.
-//
-//nolint:errname // Err404 is referenced from internal/customerror tests; renaming is a cross-area follow-up
 var (
-	Err404 = errors.New("HTTP 404 Not Found")
-	Err429 = errors.New("HTTP 429 Too Many Requests")
-	Err503 = errors.New("HTTP 503 Service Unavailable")
+	ErrHTTP404 = errors.New("HTTP 404 Not Found")
+	ErrHTTP429 = errors.New("HTTP 429 Too Many Requests")
+	ErrHTTP503 = errors.New("HTTP 503 Service Unavailable")
 )
 
 // ErrorCodeToLinkError converts an error code string to a LinkError with appropriate category.
@@ -156,11 +154,11 @@ func ErrorCodeToLinkError(code string) *Error {
 	case "401", "unauthorized":
 		return NewPermanentError(ErrUnauthorized, code)
 	case "404":
-		return NewPermanentError(Err404, code)
+		return NewPermanentError(ErrHTTP404, code)
 	case "429":
-		return NewRetryableError(Err429, code)
+		return NewRetryableError(ErrHTTP429, code)
 	case "503", "read_pxy_timeout":
-		return NewRetryableError(Err503, code)
+		return NewRetryableError(ErrHTTP503, code)
 	default:
 		return NewPermanentError(fmt.Errorf("unknown error code: %s", code), code)
 	}
@@ -191,11 +189,11 @@ func ClassifyStreamStatus(status int, header http.Header) *Error {
 		status == http.StatusForbidden || status == http.StatusGone:
 		return NewRefetchableError(fmt.Errorf("HTTP %d: link rejected", status), strconv.Itoa(status))
 	case status == http.StatusNotFound:
-		return NewRefetchableError(Err404, "404")
+		return NewRefetchableError(ErrHTTP404, "404")
 	case status == http.StatusRequestedRangeNotSatisfiable:
 		return NewPermanentError(errors.New("HTTP 416: requested range not satisfiable"), "416")
 	case status == http.StatusTooManyRequests:
-		e := NewLinkError(Err429, CategoryThrottled, "429")
+		e := NewLinkError(ErrHTTP429, CategoryThrottled, "429")
 		e.RetryAfter = parseRetryAfter(header.Get("Retry-After"))
 		return e
 	case status >= http.StatusInternalServerError:

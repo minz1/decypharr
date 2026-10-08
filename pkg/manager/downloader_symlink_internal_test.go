@@ -7,13 +7,11 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
-//nolint:paralleltest // sets the config singleton's path
 func TestCreateSymlinksSkipsMatchingDirectoryName(t *testing.T) {
-	config.SetConfigPath(t.TempDir())
+	t.Parallel()
 	mountPath := t.TempDir()
 	symlinkDir := t.TempDir()
 	fileName := "release.mkv"
@@ -27,7 +25,7 @@ func TestCreateSymlinksSkipsMatchingDirectoryName(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	d := &Downloader{logger: zerolog.Nop()}
+	d := &Downloader{logger: zerolog.Nop(), manager: withTestConfig(t, &Manager{})}
 	entry := &storage.Entry{Name: "release"}
 	files := []*storage.File{{Name: fileName}}
 

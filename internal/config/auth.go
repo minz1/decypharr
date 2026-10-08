@@ -2,18 +2,32 @@ package config
 
 import (
 	"crypto/subtle"
+	"encoding/json"
 	"errors"
 	"fmt"
 
 	"golang.org/x/crypto/bcrypt"
 )
 
-func VerifyAuth(username, password string) bool {
+// authRecord is the auth.json layout: the same fields as Auth. Its
+// MarshalJSON is the one place the password hash and API token are encoded,
+// for the 0600 auth.json written by SaveAuth.
+type authRecord Auth
+
+// MarshalJSON writes the credentials in clear, for auth.json only.
+func (r authRecord) MarshalJSON() ([]byte, error) {
+	type plain Auth
+	return json.Marshal(plain(r))
+}
+
+// VerifyAuth reports whether username and password match the stored
+// credentials.
+func (c *Config) VerifyAuth(username, password string) bool {
 	// If you're storing hashed password, use bcrypt to compare
 	if username == "" {
 		return false
 	}
-	auth := Get().GetAuth()
+	auth := c.GetAuth()
 	if auth == nil {
 		return false
 	}
@@ -29,11 +43,11 @@ func VerifyAuth(username, password string) bool {
 // This is kept out of VerifyAuth on purpose. The token authenticates the HTTP
 // API surfaces (web API, qBittorrent, SABnzbd) only; WebDAV goes through
 // VerifyAuth and must never be unlocked by an API token.
-func VerifyToken(token string) bool {
+func (c *Config) VerifyToken(token string) bool {
 	if token == "" {
 		return false
 	}
-	auth := Get().GetAuth()
+	auth := c.GetAuth()
 	if auth == nil || auth.APIToken == "" {
 		return false
 	}

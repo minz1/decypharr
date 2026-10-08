@@ -51,8 +51,8 @@ func TestShareCacheUnsetValuesAreZero(t *testing.T) {
 }
 
 func TestShareCacheDirDefault(t *testing.T) {
-	SetConfigPath(t.TempDir())
-	t.Cleanup(Reset)
+	t.Parallel()
+	dir := t.TempDir()
 	on := true
 
 	c := &Config{ShareCache: ShareCache{Enabled: &on}}
@@ -68,9 +68,11 @@ func TestShareCacheDirDefault(t *testing.T) {
 		t.Fatalf("cache is off, but a cache dir was set: %q", c.ShareCache.Dir)
 	}
 
-	c = &Config{NFS: NFS{Enabled: true}, ShareCache: ShareCache{Enabled: &on}}
+	c = New(dir)
+	c.NFS.Enabled = true
+	c.ShareCache.Enabled = &on
 	c.setShareCacheDefaults()
-	if want := filepath.Join(GetMainPath(), "share-cache"); c.ShareCache.Dir != want {
+	if want := filepath.Join(dir, "share-cache"); c.ShareCache.Dir != want {
 		t.Fatalf("cache dir = %q, want %q", c.ShareCache.Dir, want)
 	}
 

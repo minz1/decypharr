@@ -9,7 +9,6 @@ import (
 
 	"github.com/sourcegraph/conc/pool"
 
-	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/utils"
 )
 
@@ -40,7 +39,7 @@ func (m *Manager) InvalidateEntryCache() {
 }
 
 func (m *Manager) RefreshMount() error {
-	dirs := strings.FieldsFunc(config.Get().RefreshDirs, func(r rune) bool {
+	dirs := strings.FieldsFunc(m.store.Get().RefreshDirs, func(r rune) bool {
 		return r == ',' || r == '&'
 	})
 	if len(dirs) == 0 {

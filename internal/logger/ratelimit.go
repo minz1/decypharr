@@ -33,7 +33,7 @@ func WithLogger(logger zerolog.Logger) Options {
 
 func NewRateLimitedLogger(opts ...Options) *RateLimitedLogger {
 	r := &RateLimitedLogger{
-		logger:   Default(),
+		logger:   zerolog.Nop(),
 		window:   1 * time.Minute,
 		seen:     xsync.NewMap[string, time.Time](),
 		maxItems: defaultMaxItems,

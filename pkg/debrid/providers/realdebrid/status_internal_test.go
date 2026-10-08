@@ -19,27 +19,21 @@ import (
 )
 
 func TestCheckStatusSelectsAllowedFilesAndMapsLinks(t *testing.T) {
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
-	if _, err := config.Update(
-		func(c *config.Config) error { c.AllowedExt = []string{"mkv"}; return nil },
-	); err != nil {
-		t.Fatal(err)
-	}
+	t.Parallel()
 	var gets, selections atomic.Int32
 	server := httptest.NewServer(selectionFlowHandler(t, &gets, &selections))
 	defer server.Close()
 	provider := &RealDebrid{
 		Host: server.URL,
-		client: request.New(
+		client: request.New(zerolog.Nop(), nil,
 			request.WithMaxRetries(0),
 			request.WithHeaders(map[string]string{"Authorization": "Bearer test-key"}),
 		),
-		config: config.Debrid{Name: "realdebrid"},
-		logger: zerolog.Nop(),
+		config:  config.Debrid{Name: "realdebrid"},
+		logger:  zerolog.Nop(),
+		options: mkvOnly(),
 	}
-	torrent, err := provider.CheckStatus(&types.Torrent{Id: "torrent-id"})
+	torrent, err := provider.CheckStatus(&types.Torrent{ID: "torrent-id"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +53,7 @@ func TestCheckStatusSelectsAllowedFilesAndMapsLinks(t *testing.T) {
 		size           int64
 	}{{"first.mkv", "7", "https://example.test/first", 1000}, {"second.mkv", "9", "https://example.test/second", 2000}} {
 		file := torrent.Files[want.name]
-		if file.Id != want.id || file.Name != want.name || file.Link != want.link || file.Size != want.size ||
+		if file.ID != want.id || file.Name != want.name || file.Link != want.link || file.Size != want.size ||
 			file.TorrentID != "torrent-id" {
 			t.Errorf("file = %#v, want %#v", file, want)
 		}
@@ -67,14 +61,7 @@ func TestCheckStatusSelectsAllowedFilesAndMapsLinks(t *testing.T) {
 }
 
 func TestCheckStatusFailureAndUncachedContracts(t *testing.T) {
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
-	if _, err := config.Update(
-		func(c *config.Config) error { c.AllowedExt = []string{"mkv"}; return nil },
-	); err != nil {
-		t.Fatal(err)
-	}
+	t.Parallel()
 	for _, tc := range []struct {
 		name, state   string
 		selectStatus  int
@@ -83,9 +70,9 @@ func TestCheckStatusFailureAndUncachedContracts(t *testing.T) {
 		wantErr       error
 		wantText      string
 	}{
-		{name: "selection limit", state: "waiting_files_selection", selectStatus: 509, wantErr: customerror.TooManyActiveDownloadsError},
+		{name: "selection limit", state: "waiting_files_selection", selectStatus: 509, wantErr: customerror.ErrTooManyActiveDownloads},
 		{name: "selection rejected", state: "waiting_files_selection", selectStatus: 400, wantStatus: types.TorrentStatusDownloading, wantText: "Status: 400"},
-		{name: "uncached rejected", state: "downloading", wantStatus: types.TorrentStatusDownloading, wantErr: customerror.TorrentNotCachedError},
+		{name: "uncached rejected", state: "downloading", wantStatus: types.TorrentStatusDownloading, wantErr: customerror.ErrTorrentNotCached},
 		{name: "uncached allowed", state: "queued", allowUncached: true, wantStatus: types.TorrentStatusDownloading},
 		{name: "magnet error", state: "magnet_error", wantStatus: types.TorrentStatusError, wantText: "magnet_error"},
 		{name: "virus", state: "virus", wantStatus: types.TorrentStatusError, wantText: "virus"},
@@ -98,11 +85,12 @@ func TestCheckStatusFailureAndUncachedContracts(t *testing.T) {
 			server := httptest.NewServer(singlePollHandler(t, tc.state, tc.selectStatus, &gets, &selects))
 			defer server.Close()
 			provider := &RealDebrid{
-				Host:   server.URL,
-				client: request.New(request.WithMaxRetries(0)),
-				logger: zerolog.Nop(),
+				Host:    server.URL,
+				client:  request.New(zerolog.Nop(), nil, request.WithMaxRetries(0)),
+				logger:  zerolog.Nop(),
+				options: mkvOnly(),
 			}
-			result, err := provider.CheckStatus(&types.Torrent{Id: "id", DownloadUncached: tc.allowUncached})
+			result, err := provider.CheckStatus(&types.Torrent{ID: "id", DownloadUncached: tc.allowUncached})
 			assertError(t, err, tc.wantErr, tc.wantText)
 			if tc.wantStatus != "" && (result == nil || result.Status != tc.wantStatus) {
 				t.Fatalf("result = %#v, want status %s", result, tc.wantStatus)
@@ -206,4 +194,11 @@ func assertError(t *testing.T, err, wantErr error, wantText string) {
 	case err != nil:
 		t.Fatal(err)
 	}
+}
+
+// mkvOnly allows only .mkv files, the way an operator's allowed_file_types
+// would.
+func mkvOnly() types.ProviderOptions {
+	cfg := &config.Config{AllowedExt: []string{"mkv"}}
+	return types.ProviderOptions{ValidateFile: cfg.ValidateFileAllowed, Logger: zerolog.Nop()}
 }

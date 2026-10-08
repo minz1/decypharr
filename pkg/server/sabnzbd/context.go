@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 )
 
@@ -85,7 +84,7 @@ func (s *SABnzbd) authContext(next http.Handler) http.Handler {
 }
 
 func (s *SABnzbd) authenticate(ctx context.Context, category, username, password string) (arr.Arr, error) {
-	cfg := config.Get()
+	cfg := s.settings.Get()
 	instance, known := s.manager.Arr().Get(category)
 	if !known {
 		// Not in the registry yet: inherit download_uncached from a matching
@@ -99,7 +98,7 @@ func (s *SABnzbd) authenticate(ctx context.Context, category, username, password
 		}
 	}
 	if cfg.UseAuth {
-		if config.VerifyAuth(username, password) || config.VerifyToken(password) {
+		if s.settings.Get().VerifyAuth(username, password) || s.settings.Get().VerifyToken(password) {
 			return instance, nil
 		}
 		if known && instance.Source != arr.SourceAuto && username == instance.Host && password != "" &&

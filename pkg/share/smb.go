@@ -8,10 +8,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/rs/zerolog"
 	"github.com/sirrobot01/facetfs/smb"
 
 	"github.com/sirrobot01/decypharr/internal/config"
-	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/pkg/manager"
 )
 
@@ -21,10 +21,11 @@ type SMBServer struct {
 	manager *manager.Manager
 	export  *Export
 	config  config.SMB
+	log     zerolog.Logger
 }
 
-func NewSMB(mgr *manager.Manager, export *Export, cfg config.SMB) *SMBServer {
-	return &SMBServer{manager: mgr, export: export, config: cfg}
+func NewSMB(mgr *manager.Manager, export *Export, cfg config.SMB, log zerolog.Logger) *SMBServer {
+	return &SMBServer{manager: mgr, export: export, config: cfg, log: log}
 }
 
 func (s *SMBServer) Start(ctx context.Context) error {
@@ -46,7 +47,7 @@ func (s *SMBServer) Start(ctx context.Context) error {
 	// SMB reconnects re-open files by path, so unlike NFS there is no handle
 	// key or resolver to persist. Reads go through the same cached export NFS
 	// serves.
-	log := logger.New("smb")
+	log := s.log
 	server := &smb.Server{
 		FileSystem: s.export.FileSystem(),
 		Authenticator: &singleUser{

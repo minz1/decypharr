@@ -81,7 +81,7 @@ func TestPersistedNZBUsesDFSCacheAndTracksStream(t *testing.T) {
 	cfg.CacheDir = cacheDir
 	cfg.CacheCleanupInterval = time.Hour
 
-	cache, err := NewCache(context.Background(), backend, cfg)
+	cache, err := NewCache(context.Background(), backend, cfg, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}

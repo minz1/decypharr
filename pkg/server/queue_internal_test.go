@@ -5,25 +5,30 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/pkg/manager"
+	"github.com/sirrobot01/decypharr/pkg/manager/managertest"
 	"github.com/sirrobot01/decypharr/pkg/server/qbit"
 	"github.com/sirrobot01/decypharr/pkg/server/sabnzbd"
 )
 
-//nolint:paralleltest // mutates the process-wide config singleton
 func TestQueueReadFailuresReachHTTPClients(t *testing.T) {
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
-	config.Get().UseAuth = false
-	mgr := manager.New()
-	t.Cleanup(func() { _ = mgr.Stop() })
-	server := &Server{manager: mgr}
-	qbitRoutes := qbit.New(mgr).Routes()
-	sabRoutes := sabnzbd.New(mgr).Routes()
-	if err := mgr.Storage().Close(); err != nil {
+	t.Parallel()
+	store := managertest.Store(t, func(cfg *config.Config) { cfg.UseAuth = false })
+	mgr, err := manager.New(store, logger.Discard())
+	if err != nil {
 		t.Fatal(err)
+	}
+	// Stop fails on the storage closed below; that is the point of the test.
+	t.Cleanup(func() { _ = mgr.Stop() })
+	server := &Server{manager: mgr, config: store}
+	qbitRoutes := qbit.New(mgr, store, zerolog.Nop()).Routes()
+	sabRoutes := sabnzbd.New(mgr, store, zerolog.Nop()).Routes()
+	if closeErr := mgr.Storage().Close(); closeErr != nil {
+		t.Fatal(closeErr)
 	}
 	for _, tc := range []struct {
 		name, path string
@@ -35,6 +40,7 @@ func TestQueueReadFailuresReachHTTPClients(t *testing.T) {
 		{"sab history", "/api/?mode=history", sabRoutes},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			response := httptest.NewRecorder()
 			tc.handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, tc.path, nil))
 			if response.Code != http.StatusInternalServerError {

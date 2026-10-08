@@ -89,6 +89,6 @@ func (c *Config) setShareCacheDefaults() {
 		return
 	}
 	if c.ShareCache.Dir == "" {
-		c.ShareCache.Dir = filepath.Join(GetMainPath(), "share-cache")
+		c.ShareCache.Dir = filepath.Join(c.meta.dir, "share-cache")
 	}
 }

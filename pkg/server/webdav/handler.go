@@ -2,9 +2,11 @@ package webdav
 
 import (
 	"net/http"
+	"sync"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/logger"
@@ -17,14 +19,23 @@ const (
 )
 
 type Handler struct {
+	config  *config.Store
 	logger  *logger.RateLimitedLogger
 	manager *manager.Manager
+
+	// copyBufs holds the streamCopyBufSize buffers StreamResponse pipes
+	// sessions through; every session.Read costs a lock pass and watchdog
+	// arming, so copy granularity multiplies all of it. Empty means
+	// allocate.
+	copyBufs sync.Pool
 }
 
-func NewHandler(mgr *manager.Manager) *Handler {
-	log := logger.NewRateLimitedLogger(logger.WithLogger(logger.New("webdav")))
+// NewHandler builds the WebDAV and stream handlers. Auth settings are read
+// live from cfg.
+func NewHandler(mgr *manager.Manager, cfg *config.Store, log zerolog.Logger) *Handler {
 	h := &Handler{
-		logger:  log,
+		config:  cfg,
+		logger:  logger.NewRateLimitedLogger(logger.WithLogger(log)),
 		manager: mgr,
 	}
 	return h
@@ -44,12 +55,18 @@ func (h *Handler) readinessMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// Routes returns the WebDAV router.
-func (h *Handler) Routes() chi.Router {
-	// chi rejects unknown methods; registration is idempotent.
+// RegisterMethods teaches chi the WebDAV verbs; chi answers 405 to methods
+// it does not know. chi keeps its method table in package state, so this
+// runs once per process, before any router is built or serves (see
+// cmd/decypharr), never while routers are in use.
+func RegisterMethods() {
 	for _, method := range []string{"PROPFIND", "PROPPATCH", "MKCOL", "COPY", "MOVE", "LOCK", "UNLOCK"} {
 		chi.RegisterMethod(method)
 	}
+}
+
+// Routes returns the WebDAV router. RegisterMethods must have run.
+func (h *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
 	r.Use(h.readinessMiddleware)
 	r.Use(h.commonMiddleware)
@@ -68,7 +85,7 @@ func (h *Handler) Routes() chi.Router {
 }
 
 func (h *Handler) IsDisabled() bool {
-	cfg := config.Get()
+	cfg := h.config.Get()
 	return cfg.DisableWebDav
 }
 
@@ -96,7 +113,7 @@ func (h *Handler) handler(
 	case http.MethodOptions:
 		h.handleOptions(w)
 	case "COPY", "MOVE":
-		// manager.CopyEntry has never been implemented; answer honestly
+		// Copying and moving entries is not supported; answer honestly
 		// instead of a 500.
 		http.Error(w, "Not Implemented", http.StatusNotImplemented)
 	default:
@@ -156,14 +173,14 @@ func (h *Handler) commonMiddleware(next http.Handler) http.Handler {
 func (h *Handler) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Read the auth toggles live so changes apply without a restart.
-		cfg := config.Get()
+		cfg := h.config.Get()
 		if !cfg.UseAuth || !cfg.EnableWebdavAuth {
 			next.ServeHTTP(w, r)
 			return
 		}
 
 		username, password, ok := r.BasicAuth()
-		if !ok || !config.VerifyAuth(username, password) {
+		if !ok || !h.config.Get().VerifyAuth(username, password) {
 			w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return

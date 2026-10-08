@@ -10,26 +10,23 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/config"
-	"github.com/sirrobot01/decypharr/pkg/manager"
+	"github.com/sirrobot01/decypharr/pkg/manager/managertest"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
 func newQueueTestQBit(t *testing.T, hashes ...string) *QBit {
 	t.Helper()
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
-	config.Get().UseAuth = false
-	mgr := manager.New()
-	t.Cleanup(func() { _ = mgr.Stop() })
+	mgr, store := managertest.New(t, func(cfg *config.Config) { cfg.UseAuth = false })
 	for _, hash := range hashes {
 		entry := &storage.Entry{InfoHash: hash, Name: hash, Category: "sonarr", Protocol: config.ProtocolTorrent}
 		if err := mgr.Queue().Add(entry); err != nil {
 			t.Fatal(err)
 		}
 	}
-	return New(mgr)
+	return New(mgr, store, zerolog.Nop())
 }
 
 func postForm(handler http.Handler, path string, form url.Values) *httptest.ResponseRecorder {
@@ -42,9 +39,8 @@ func postForm(handler http.Handler, path string, form url.Values) *httptest.Resp
 
 // Before the fix setCategory ignored the hashes and recategorized every
 // queued entry, and a pipe-separated hash list was treated as one hash.
-//
-//nolint:paralleltest // mutates the process-wide config singleton
 func TestSetCategoryOnlyTouchesRequestedHashes(t *testing.T) {
+	t.Parallel()
 	q := newQueueTestQBit(t, "aaa", "bbb", "ccc")
 	w := postForm(q.Routes(), "/torrents/setCategory", url.Values{"hashes": {"aaa|bbb"}, "category": {"radarr"}})
 	if w.Code != http.StatusOK {
@@ -70,14 +66,13 @@ func TestSetCategoryOnlyTouchesRequestedHashes(t *testing.T) {
 }
 
 // Arr clients hit these concurrently; run with -race.
-//
-//nolint:paralleltest // mutates the process-wide config singleton
 func TestCategoriesAndTagsAreConcurrencySafe(t *testing.T) {
+	t.Parallel()
 	q := newQueueTestQBit(t)
 	// Spare capacity: an aliased append would write into the config's array.
 	cfgCategories := append(make([]string, 0, 64), "sonarr")
-	config.Get().Categories = cfgCategories
-	routes := New(q.manager).Routes()
+	q.config.Get().Categories = cfgCategories
+	routes := New(q.manager, q.config, zerolog.Nop()).Routes()
 	var wg sync.WaitGroup
 	for range 8 {
 		wg.Go(func() {
@@ -96,9 +91,8 @@ func TestCategoriesAndTagsAreConcurrencySafe(t *testing.T) {
 // categoryContext parses multipart forms before authentication; file parts
 // spill to temp files with no limit of their own, so only the body cap bounds
 // them. Pre-fix the whole body was consumed and the trailing field honored.
-//
-//nolint:paralleltest // mutates the process-wide config singleton
 func TestOversizedBodyIsNotConsumed(t *testing.T) {
+	t.Parallel()
 	q := newQueueTestQBit(t)
 	pr, pw := io.Pipe()
 	mw := multipart.NewWriter(pw)

@@ -14,7 +14,6 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
-	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
@@ -41,7 +40,7 @@ const (
 type ImportRequest struct {
 	Name             string                `json:"name"`
 	NZBContent       []byte                `json:"-"`
-	Id               string                `json:"id"` //nolint:revive,staticcheck // set by pkg/server; ID rename is a cross-area follow-up
+	ID               string                `json:"id"`
 	DownloadFolder   string                `json:"downloadFolder"`
 	SelectedDebrid   string                `json:"debrid"`
 	Magnet           *utils.Magnet         `json:"magnet"`
@@ -71,7 +70,7 @@ func NewTorrentRequest(
 	skipMultiSeason bool,
 ) *ImportRequest {
 	return &ImportRequest{
-		Id:               uuid.New().String(),
+		ID:               uuid.New().String(),
 		Status:           importStatusStarted,
 		DownloadFolder:   downloadFolder,
 		SelectedDebrid:   cmp.Or(arr.SelectedDebrid, debrid), // Use debrid from arr if available
@@ -96,7 +95,7 @@ func NewNZBRequest(
 ) *ImportRequest {
 	return &ImportRequest{
 		Name:            name,
-		Id:              uuid.New().String(),
+		ID:              uuid.New().String(),
 		Status:          importStatusStarted,
 		DownloadFolder:  downloadFolder,
 		SelectedDebrid:  usenetProvider, // NZB imports always use usenet
@@ -113,17 +112,28 @@ type Queue struct {
 	storage            *storage.Storage
 	logger             zerolog.Logger
 	removeStalledAfter time.Duration
+	naming             func() config.WebDavFolderNaming
 }
 
-func newQueue(storage *storage.Storage, removeStalledAfterStr string) *Queue {
+func newQueue(
+	storage *storage.Storage,
+	removeStalledAfterStr string,
+	naming func() config.WebDavFolderNaming,
+	log zerolog.Logger,
+) *Queue {
 	q := &Queue{
 		storage: storage,
-		logger:  logger.New("queue"),
+		logger:  log,
+		naming:  naming,
 	}
 
 	if removeStalledAfterStr != "" {
 		removeStalledAfter, err := utils.ParseDuration(removeStalledAfterStr)
-		if err == nil {
+		switch {
+		case err != nil:
+			log.Warn().Err(err).Str("remove_stalled_after", removeStalledAfterStr).
+				Msg("Invalid remove_stalled_after; stalled entries are kept")
+		case removeStalledAfter > 0:
 			q.removeStalledAfter = removeStalledAfter
 		}
 	}
@@ -151,7 +161,11 @@ func (q *Queue) deleteEntryFiles(entry *storage.Entry) error {
 			return fmt.Errorf("remove staged NZB %q: %w", entry.Magnet, err)
 		}
 	}
-	downloadedPath := entry.DownloadPath()
+	var naming config.WebDavFolderNaming
+	if q.naming != nil {
+		naming = q.naming()
+	}
+	downloadedPath := entry.DownloadPath(naming)
 	if downloadedPath == "" {
 		return nil
 	}
@@ -193,7 +207,12 @@ func (q *Queue) DeleteWhere(
 	)
 }
 
+// DeleteStalled removes entries that made no progress for removeStalledAfter.
+// Without a valid positive duration it removes nothing.
 func (q *Queue) DeleteStalled() error {
+	if q.removeStalledAfter <= 0 {
+		return nil
+	}
 	cutoff := time.Now().Add(-q.removeStalledAfter)
 	return q.storage.DeleteWhereQueued(func(t *storage.Entry) bool {
 		if !t.AddedOn.Before(cutoff) {

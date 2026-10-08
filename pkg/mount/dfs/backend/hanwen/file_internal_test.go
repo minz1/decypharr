@@ -36,7 +36,8 @@ func TestNewFileChoosesStableFallbackTime(t *testing.T) {
 	}
 }
 
-func TestHandleKeepsMetadataSnapshot(t *testing.T) { //nolint:paralleltest // mutates the config singleton
+func TestHandleKeepsMetadataSnapshot(t *testing.T) {
+	t.Parallel()
 	initial := testRemoteFileInfo(t, 128, time.Now().Add(-time.Hour))
 	replacement := testRemoteFileInfo(t, 256, time.Now())
 	file := NewFile(nil, &config.FuseConfig{}, initial, logger.NewRateLimitedLogger())
@@ -52,7 +53,8 @@ func TestHandleKeepsMetadataSnapshot(t *testing.T) { //nolint:paralleltest // mu
 	}
 }
 
-func TestFileMetadataRefreshIsRaceSafe(t *testing.T) { //nolint:paralleltest // mutates the config singleton
+func TestFileMetadataRefreshIsRaceSafe(t *testing.T) {
+	t.Parallel()
 	first := testRemoteFileInfo(t, 128, time.Now().Add(-time.Hour))
 	second := testRemoteFileInfo(t, 256, time.Now())
 	file := NewFile(nil, &config.FuseConfig{}, first, logger.NewRateLimitedLogger())

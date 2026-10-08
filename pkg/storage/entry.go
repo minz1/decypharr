@@ -27,7 +27,7 @@ func (s *Storage) AddOrUpdate(entry *Entry) error {
 		return fmt.Errorf("failed to marshal entry: %w", err)
 	}
 
-	if putErr := s.entries.Put(entry.InfoHash, data, entryPutOptions(entry)); putErr != nil {
+	if putErr := s.entries.Put(entry.InfoHash, data, s.entryPutOptions(entry)); putErr != nil {
 		return fmt.Errorf("save entry %q: %w", entry.InfoHash, putErr)
 	}
 	return s.updateEntryItem(entry)

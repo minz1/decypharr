@@ -13,24 +13,28 @@ import (
 func prepareSparse(*os.File) error { return nil }
 
 // punchHole deallocates [offset, offset+length). KEEP_SIZE preserves the
-// logical size so fixed per-offset write addresses stay valid.
-func punchHole(f *os.File, offset, length int64) error {
+// logical size so fixed per-offset write addresses stay valid. Partial blocks
+// at the edges are zeroed, so the whole range is freed of data.
+func punchHole(f *os.File, offset, length int64) (Range, error) {
 	if f == nil || length <= 0 {
-		return nil
+		return Range{}, nil
 	}
 	sc, err := f.SyscallConn()
 	if err != nil {
-		return err
+		return Range{}, err
 	}
 	var opErr error
 	if controlErr := sc.Control(func(fd uintptr) {
 		opErr = unix.Fallocate(int(fd),
 			unix.FALLOC_FL_PUNCH_HOLE|unix.FALLOC_FL_KEEP_SIZE, offset, length)
 	}); controlErr != nil {
-		return controlErr
+		return Range{}, controlErr
 	}
 	if errors.Is(opErr, unix.EOPNOTSUPP) || errors.Is(opErr, unix.ENOTSUP) {
-		return errPunchUnsupported
+		return Range{}, errPunchUnsupported
 	}
-	return opErr
+	if opErr != nil {
+		return Range{}, opErr
+	}
+	return Range{Off: offset, Size: length}, nil
 }

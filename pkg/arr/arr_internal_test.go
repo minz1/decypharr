@@ -3,13 +3,15 @@ package arr
 import (
 	"testing"
 
+	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 )
 
 func TestSyncFromConfigAppliesValidHost(t *testing.T) {
 	t.Parallel()
 
-	arrs := New()
+	arrs := New(config.NewStore(&config.Config{}), nil, zerolog.Nop())
 	arrs.AddOrUpdate(Arr{Name: "whisparr", Host: "http://old.example", Token: "old-token", Source: SourceAuto})
 	arrs.SyncFromConfig([]config.Arr{{
 		Name:   "whisparr",
@@ -27,7 +29,7 @@ func TestSyncFromConfigAppliesValidHost(t *testing.T) {
 func TestSyncFromConfigPreservesResolvedHostForInvalidUpdate(t *testing.T) {
 	t.Parallel()
 
-	arrs := New()
+	arrs := New(config.NewStore(&config.Config{}), nil, zerolog.Nop())
 	arrs.AddOrUpdate(Arr{Name: "whisparr", Host: "http://resolved.example", Token: "old-token", Source: SourceAuto})
 	arrs.SyncFromConfig([]config.Arr{{
 		Name:   "whisparr",

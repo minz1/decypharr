@@ -16,7 +16,7 @@ const maxJSONBody = 1 << 20
 // LoginHandler serves the login page and exchanges credentials (or, in
 // token-only mode, the API token) for a session cookie.
 func (s *Server) LoginHandler(w http.ResponseWriter, r *http.Request) {
-	cfg := config.Get()
+	cfg := s.config.Get()
 	if cfg.NeedsAuth() {
 		s.redirectTo(w, r, "/register")
 		return
@@ -44,12 +44,12 @@ func (s *Server) LoginHandler(w http.ResponseWriter, r *http.Request) {
 	if auth != nil {
 		sessionVersion = auth.SessionVersion
 	}
-	ok := config.VerifyAuth(credentials.Username, credentials.Password)
+	ok := s.config.Get().VerifyAuth(credentials.Username, credentials.Password)
 	if !ok && tokenOnly {
 		// Token-only mode has no password, so the API token takes its place.
 		// This is the only way into the UI; without it the mode would lock the
 		// user out of their own instance.
-		ok = config.VerifyToken(credentials.Password)
+		ok = s.config.Get().VerifyToken(credentials.Password)
 		username = "token"
 	}
 	if !ok {
@@ -69,7 +69,7 @@ func (s *Server) LoginHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) RegisterHandler(w http.ResponseWriter, r *http.Request) {
-	cfg := config.Get()
+	cfg := s.config.Get()
 
 	// Registration exists only to set the first credential. Once auth is
 	// configured — including token-only mode, which never has a password — it
@@ -97,7 +97,7 @@ func (s *Server) RegisterHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	updated, err := config.Update(func(next *config.Config) error {
+	updated, err := s.config.Update(func(next *config.Config) error {
 		if !next.NeedsAuth() {
 			return fmt.Errorf("registration is closed")
 		}
@@ -124,7 +124,7 @@ func (s *Server) RegisterHandler(w http.ResponseWriter, r *http.Request) {
 // renderPage executes templateName with the fields every page reads plus
 // extra. Templates that do not show the setup banner ignore SetupError.
 func (s *Server) renderPage(w http.ResponseWriter, templateName, page, title string, extra map[string]any) {
-	cfg := config.Get()
+	cfg := s.config.Get()
 	data := map[string]any{
 		"URLBase":    cfg.URLBase,
 		"Page":       page,
@@ -144,7 +144,7 @@ func (s *Server) IndexHandler(w http.ResponseWriter, _ *http.Request) {
 
 // DownloadHandler renders the add-content page.
 func (s *Server) DownloadHandler(w http.ResponseWriter, _ *http.Request) {
-	cfg := config.Get()
+	cfg := s.config.Get()
 	debrids := make([]string, 0, len(cfg.Debrids))
 	for _, d := range cfg.Debrids {
 		debrids = append(debrids, d.Name)

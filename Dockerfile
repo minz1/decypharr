@@ -25,6 +25,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 COPY . .
 
+# Stamp the release into the embedded pkg/version/release.txt.
+RUN printf '%s %s\n' "${VERSION}" "${CHANNEL}" > pkg/version/release.txt
+
 # Build main binary — xx-go sets CC/CXX/GOOS/GOARCH automatically.
 # Use native libutp to avoid large Go allocations during peer connection setup.
 # The final image includes its C++ runtime dependencies.
@@ -32,7 +35,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=1 \
     xx-go build -trimpath \
-    -ldflags="-w -s -X github.com/sirrobot01/decypharr/pkg/version.Version=${VERSION} -X github.com/sirrobot01/decypharr/pkg/version.Channel=${CHANNEL}" \
+    -ldflags="-w -s" \
     -o /decypharr && \
     xx-verify /decypharr
 

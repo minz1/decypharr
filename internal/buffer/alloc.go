@@ -2,28 +2,83 @@ package buffer
 
 import "sync"
 
-// Background unmapper. munmap is a TLB-shootdown syscall; on Linux it can stall
-// for tens of microseconds and, worse, the eviction path calls put() while the
-// owning Buffer holds its exclusive lock (dropBlockLocked runs under b.mu).
-// Running the syscall there stalls every waiting reader — the tail-latency
-// regression vs the old [sync.Pool], whose Put never syscalls. Handing overflow
-// blocks to a shared goroutine keeps the lock holder off the syscall: the pages
-// are still released promptly (the queue drains continuously), only the *timing*
-// moves off the critical path, so deterministic RAM release is preserved.
-var unmapCh = startUnmapper() //nolint:gochecknoglobals // process-wide unmap worker shared by every Pool
+// unmapper is a Pool's background unmap worker. munmap is a TLB-shootdown
+// syscall; on Linux it can stall for tens of microseconds and, worse, the
+// eviction path calls put() while the owning Buffer holds its exclusive lock
+// (dropBlockLocked runs under b.mu). Running the syscall there stalls every
+// waiting reader — the tail-latency regression vs the old [sync.Pool], whose
+// Put never syscalls. Handing overflow blocks to the pool's goroutine keeps
+// the lock holder off the syscall: the pages are still released promptly
+// (the queue drains continuously), only the *timing* moves off the critical
+// path, so deterministic RAM release is preserved.
+//
+// The goroutine starts with the first release and stops at Pool.Close, after
+// draining what is queued; later releases run inline. The zero value is
+// ready to use.
+type unmapper struct {
+	mu     sync.RWMutex
+	ch     chan blockRelease
+	closed bool
+	done   chan struct{}
+}
 
 // unmapQueueDepth bounds pending background releases before put falls back to
 // an inline unmap.
 const unmapQueueDepth = 256
 
-func startUnmapper() chan blockRelease {
-	ch := make(chan blockRelease, unmapQueueDepth)
-	go func() {
+// release queues r for the worker, or releases it inline when the queue is
+// full or the worker has stopped.
+func (u *unmapper) release(r blockRelease) {
+	u.mu.RLock()
+	if u.ch == nil && !u.closed {
+		u.mu.RUnlock()
+		u.start()
+		u.mu.RLock()
+	}
+	if !u.closed {
+		select {
+		case u.ch <- r:
+			u.mu.RUnlock()
+			return
+		default:
+		}
+	}
+	u.mu.RUnlock()
+	r.release()
+}
+
+func (u *unmapper) start() {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.ch != nil || u.closed {
+		return
+	}
+	u.ch = make(chan blockRelease, unmapQueueDepth)
+	u.done = make(chan struct{})
+	go func(ch <-chan blockRelease, done chan<- struct{}) {
+		defer close(done)
 		for r := range ch {
 			r.release()
 		}
-	}()
-	return ch
+	}(u.ch, u.done)
+}
+
+// close drains the queue and stops the worker.
+func (u *unmapper) close() {
+	u.mu.Lock()
+	if u.closed {
+		u.mu.Unlock()
+		return
+	}
+	u.closed = true
+	ch, done := u.ch, u.done
+	if ch != nil {
+		close(ch)
+	}
+	u.mu.Unlock()
+	if done != nil {
+		<-done
+	}
 }
 
 // blockRelease keeps an allocation charged until its release completes.
@@ -38,17 +93,13 @@ func (r blockRelease) release() {
 }
 
 // releaseBlock unmaps p off the caller's goroutine when possible, falling back
-// to an inline unmap only if the queue is saturated (rare churn burst).
+// to an inline unmap only if the queue is saturated (rare churn burst) or the
+// pool is closed.
 func releaseBlock(p *[]byte, pool *Pool) {
 	if p == nil {
 		return
 	}
-	r := blockRelease{data: p, pool: pool}
-	select {
-	case unmapCh <- r:
-	default:
-		r.release()
-	}
+	pool.unmap.release(blockRelease{data: p, pool: pool})
 }
 
 // maxReuseBlocks caps how many freed blocks a blockAllocator keeps on hand

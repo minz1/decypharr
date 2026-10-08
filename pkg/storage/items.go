@@ -70,7 +70,7 @@ func (s *Storage) ForEachEntryItem(fn func(*EntryItem) error) error {
 
 // updateEntryItem updates the name index.
 func (s *Storage) updateEntryItem(entry *Entry) error {
-	name := entry.GetFolder()
+	name := entry.GetFolder(s.folderNaming())
 	if name == "" {
 		return nil
 	}
@@ -106,7 +106,7 @@ func (s *Storage) updateEntryItem(entry *Entry) error {
 
 // removeFromEntryItem removes an entry from the name index.
 func (s *Storage) removeFromEntryItem(entry *Entry) error {
-	name := entry.GetFolder()
+	name := entry.GetFolder(s.folderNaming())
 	if name == "" {
 		return nil
 	}

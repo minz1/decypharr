@@ -8,7 +8,7 @@ import (
 
 func TestCountEntryHealthByStatusSeesMutations(t *testing.T) {
 	t.Parallel()
-	store, err := storage.NewStorage(t.TempDir())
+	store, err := storage.NewStorage(t.TempDir(), storage.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

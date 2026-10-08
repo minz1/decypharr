@@ -5,16 +5,16 @@ import (
 	"bytes"
 	"encoding/base32"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"path/filepath"
 	"regexp"
 	"strings"
 
 	"github.com/anacrolix/torrent/metainfo"
-
-	"github.com/sirrobot01/decypharr/internal/logger"
 )
 
 var (
@@ -38,38 +38,16 @@ func (m *Magnet) IsTorrent() bool {
 }
 
 // stripTrackersFromMagnet removes trackers from a magnet and returns a modified copy.
-func stripTrackersFromMagnet(mi metainfo.Magnet, fileType string) metainfo.Magnet {
-	originalTrackerCount := len(mi.Trackers)
-	if len(mi.Trackers) > 0 {
-		log := logger.Default()
-		mi.Trackers = nil
-		log.Printf("Removed %d tracker URLs from %s", originalTrackerCount, fileType)
-	}
+func stripTrackersFromMagnet(mi metainfo.Magnet) metainfo.Magnet {
+	mi.Trackers = nil
 	return mi
 }
 
 func GetMagnetFromFile(file io.Reader, filePath string, rmTrackerUrls bool) (*Magnet, error) {
-	var (
-		m         *Magnet
-		err       error
-		isTorrent = filepath.Ext(filePath) == ".torrent"
-	)
-	if isTorrent {
-		torrentData, readAllErr := io.ReadAll(file)
-		if readAllErr != nil {
-			return nil, readAllErr
-		}
-		m, readAllErr = GetMagnetFromBytes(torrentData, rmTrackerUrls)
-		if readAllErr != nil {
-			return nil, readAllErr
-		}
-	} else {
-		// .magnet file
-		magnetLink := ReadMagnetFile(file)
-		m, err = GetMagnetInfo(magnetLink, rmTrackerUrls)
-		if err != nil {
-			return nil, err
-		}
+	isTorrent := filepath.Ext(filePath) == ".torrent"
+	m, err := readMagnetUpload(file, isTorrent, rmTrackerUrls)
+	if err != nil {
+		return nil, err
 	}
 	uploadedName := strings.TrimSuffix(filepath.Base(filePath), filepath.Ext(filePath))
 	if isTorrent {
@@ -82,12 +60,13 @@ func GetMagnetFromFile(file io.Reader, filePath string, rmTrackerUrls bool) (*Ma
 	return m, nil
 }
 
-// GetMagnetFromUrl resolves a magnet link, or downloads a .torrent over HTTP(S).
-func GetMagnetFromUrl(url string, rmTrackerUrls bool) (*Magnet, error) {
+// GetMagnetFromURL resolves a magnet link, or downloads a .torrent over
+// HTTP(S) with client.
+func GetMagnetFromURL(client *http.Client, url string, rmTrackerUrls bool) (*Magnet, error) {
 	if strings.HasPrefix(url, "magnet:") {
 		return GetMagnetInfo(url, rmTrackerUrls)
 	} else if strings.HasPrefix(url, "http") {
-		return OpenMagnetHTTPURL(url, rmTrackerUrls)
+		return OpenMagnetHTTPURL(client, url, rmTrackerUrls)
 	}
 	return nil, fmt.Errorf("invalid url")
 }
@@ -114,7 +93,7 @@ func GetMagnetFromBytes(torrentData []byte, rmTrackerUrls bool) (*Magnet, error)
 		Params:      url.Values{"ws": mi.UrlList},
 	}
 	if rmTrackerUrls {
-		magnetMeta = stripTrackersFromMagnet(magnetMeta, "torrent file")
+		magnetMeta = stripTrackersFromMagnet(magnetMeta)
 	}
 	magnet := &Magnet{
 		InfoHash: infoHash,
@@ -126,26 +105,57 @@ func GetMagnetFromBytes(torrentData []byte, rmTrackerUrls bool) (*Magnet, error)
 	return magnet, nil
 }
 
-func ReadMagnetFile(file io.Reader) string {
+// readMagnetUpload decodes an uploaded .torrent file, or the link in a
+// .magnet file.
+func readMagnetUpload(file io.Reader, isTorrent, rmTrackerUrls bool) (*Magnet, error) {
+	if isTorrent {
+		torrentData, err := io.ReadAll(file)
+		if err != nil {
+			return nil, err
+		}
+		return GetMagnetFromBytes(torrentData, rmTrackerUrls)
+	}
+	magnetLink, err := ReadMagnetFile(file)
+	if err != nil {
+		return nil, err
+	}
+	return GetMagnetInfo(magnetLink, rmTrackerUrls)
+}
+
+// ReadMagnetFile returns the first non-empty line of a .magnet file.
+func ReadMagnetFile(file io.Reader) (string, error) {
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		content := scanner.Text()
 		if content != "" {
-			return content
+			return content, nil
 		}
 	}
-
-	// Check for any errors during scanning
 	if err := scanner.Err(); err != nil {
-		log := logger.Default()
-		log.Println("Error reading file:", err)
+		return "", fmt.Errorf("read magnet file: %w", err)
 	}
-	return ""
+	return "", nil
 }
 
-// OpenMagnetHTTPURL downloads a .torrent file and converts it to a Magnet.
-func OpenMagnetHTTPURL(magnetLink string, rmTrackerUrls bool) (*Magnet, error) {
-	resp, err := fetch(magnetLink)
+// OpenMagnetHTTPURL downloads a .torrent file with client and converts it
+// to a Magnet.
+func OpenMagnetHTTPURL(client *http.Client, magnetLink string, rmTrackerUrls bool) (*Magnet, error) {
+	// Indexers often answer a torrent URL with a redirect to a magnet link,
+	// which an HTTP client cannot follow: stop there and use the link.
+	stopAtMagnet := *client
+	stopAtMagnet.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if strings.EqualFold(req.URL.Scheme, "magnet") && req.Response != nil {
+			return &magnetRedirectError{link: req.Response.Header.Get("Location")}
+		}
+		if len(via) >= maxRedirects {
+			return fmt.Errorf("stopped after %d redirects", maxRedirects)
+		}
+		return nil
+	}
+	resp, err := fetchWith(&stopAtMagnet, magnetLink)
+	if redirect, ok := errors.AsType[*magnetRedirectError](err); ok {
+		return GetMagnetInfo(redirect.link, rmTrackerUrls)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("error making GET request: %w", err)
 	}
@@ -156,6 +166,16 @@ func OpenMagnetHTTPURL(magnetLink string, rmTrackerUrls bool) (*Magnet, error) {
 	}
 	return GetMagnetFromBytes(torrentData, rmTrackerUrls)
 }
+
+// maxRedirects matches net/http's default redirect limit.
+const maxRedirects = 10
+
+// magnetRedirectError stops a torrent download that redirected to a magnet link.
+type magnetRedirectError struct {
+	link string
+}
+
+func (m *magnetRedirectError) Error() string { return "redirected to a magnet link" }
 
 func GetMagnetInfo(magnetLink string, rmTrackerUrls bool) (*Magnet, error) {
 	if magnetLink == "" {
@@ -169,7 +189,7 @@ func GetMagnetInfo(magnetLink string, rmTrackerUrls bool) (*Magnet, error) {
 
 	// Strip all announce URLs if requested
 	if rmTrackerUrls {
-		mi = stripTrackersFromMagnet(mi, "magnet link")
+		mi = stripTrackersFromMagnet(mi)
 	}
 
 	btih := mi.InfoHash.HexString()

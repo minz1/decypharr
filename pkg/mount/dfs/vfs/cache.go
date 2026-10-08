@@ -21,6 +21,7 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"github.com/sirrobot01/decypharr/internal/buffer"
+	"github.com/sirrobot01/decypharr/internal/fsutil"
 	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	dfsconfig "github.com/sirrobot01/decypharr/pkg/mount/dfs/config"
@@ -143,7 +144,7 @@ type purgeRunSummary struct {
 }
 
 // NewCache creates a new sparse file cache.
-func NewCache(ctx context.Context, mgr Backend, config *dfsconfig.FuseConfig) (*Cache, error) {
+func NewCache(ctx context.Context, mgr Backend, config *dfsconfig.FuseConfig, log zerolog.Logger) (*Cache, error) {
 	if err := os.MkdirAll(config.CacheDir, 0o750); err != nil {
 		return nil, fmt.Errorf("failed to create cache dir: %w", err)
 	}
@@ -173,7 +174,7 @@ func NewCache(ctx context.Context, mgr Backend, config *dfsconfig.FuseConfig) (*
 		// much history behind it. The pool divides its budget across the open
 		// streams if they collectively ask for more.
 		streamMemory: max(streamMemoryReadAheads*config.ReadAheadSize, minStreamWindow),
-		logger:       logger.New("dfs"),
+		logger:       log,
 		items:        xsync.NewMap[string, *CacheItem](),
 		manager:      mgr,
 		ctx:          ctx,
@@ -520,13 +521,18 @@ func (c *Cache) newItem(key, entryName, filename string, fileSize int64) (*Cache
 	_logger := c.logger.With().Str("entry", entryName).Str("filename", filename).Logger()
 	log := logger.NewRateLimitedLogger(logger.WithLogger(_logger))
 
-	itemDir := filepath.Join(c.config.CacheDir, entryName)
+	itemDir, err := fsutil.JoinName(c.config.CacheDir, entryName)
+	if err != nil {
+		return nil, fmt.Errorf("cache dir: %w", err)
+	}
+	cachePath, err := fsutil.JoinName(itemDir, filename)
+	if err != nil {
+		return nil, fmt.Errorf("cache file: %w", err)
+	}
+	metaPath := cachePath + ".json"
 	if mkdirAllErr := os.MkdirAll(itemDir, 0o750); mkdirAllErr != nil {
 		return nil, fmt.Errorf("failed to create item dir: %w", mkdirAllErr)
 	}
-
-	cachePath := filepath.Join(itemDir, filename)
-	metaPath := filepath.Join(itemDir, filename+".json")
 
 	// Load existing metadata before constructing the buffer so its range
 	// tracker is seeded with anything the prior session persisted.

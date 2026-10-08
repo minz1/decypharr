@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+
+	"github.com/sirrobot01/decypharr/internal/request"
 )
 
 type Debrid struct {
@@ -75,6 +77,20 @@ func (c *Config) updateDebrid(d Debrid) Debrid {
 	return d
 }
 
+// validateDebridProxies rejects a debrid proxy URL that cannot be used:
+// requests would otherwise fail, or bypass the proxy.
+func validateDebridProxies(debrids []Debrid) error {
+	for i, debrid := range debrids {
+		if debrid.Proxy == "" {
+			continue
+		}
+		if _, err := request.ParseProxy(debrid.Proxy); err != nil {
+			return fmt.Errorf("debrids[%d].proxy (%s): %w", i, debrid.Name, err)
+		}
+	}
+	return nil
+}
+
 func validateDebrids(debrids []Debrid) error {
 	if len(debrids) == 0 {
 		return nil
@@ -90,12 +106,12 @@ func validateDebrids(debrids []Debrid) error {
 	return nil
 }
 
-func (c *Config) applyDebridEnvVars() {
+func (c *Config) applyDebridEnvVars(e env) {
 	// NAME creates a new entry; secret fields apply to existing entries by index
 	// so users can set only secrets in environmentFiles without repeating names.
 	for i := range maxEnvProviders {
 		prefix := fmt.Sprintf("DEBRIDS__%d__", i)
-		if val := getEnv(prefix + "NAME"); val != "" {
+		if val := e.get(prefix + "NAME"); val != "" {
 			c.Debrids = growTo(c.Debrids, i)
 			c.Debrids[i].Name = val
 		}
@@ -103,10 +119,10 @@ func (c *Config) applyDebridEnvVars() {
 			continue
 		}
 		debrid := &c.Debrids[i]
-		envString(prefix+"API_KEY", &debrid.APIKey)
-		envString(prefix+"FOLDER", &debrid.Folder)
-		envString(prefix+"PROVIDER", &debrid.Provider)
-		envString(prefix+"PROXY", &debrid.Proxy)
-		envIndexedList(prefix+"DOWNLOAD_API_KEYS__%d", maxEnvAPIKeys, &debrid.DownloadAPIKeys)
+		e.envString(prefix+"API_KEY", &debrid.APIKey)
+		e.envString(prefix+"FOLDER", &debrid.Folder)
+		e.envString(prefix+"PROVIDER", &debrid.Provider)
+		e.envString(prefix+"PROXY", &debrid.Proxy)
+		e.envIndexedList(prefix+"DOWNLOAD_API_KEYS__%d", maxEnvAPIKeys, &debrid.DownloadAPIKeys)
 	}
 }

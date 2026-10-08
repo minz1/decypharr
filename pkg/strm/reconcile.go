@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/internal/fsutil"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
@@ -23,6 +24,7 @@ const maxStrmRead = 1024
 // Reconciler maintains the STRM export tree and its sidecar files.
 // It removes stale files only when their URLs identify them as our exports.
 type Reconciler struct {
+	config     *config.Store
 	storage    *storage.Storage
 	ctx        context.Context
 	openStream func(context.Context, *storage.Entry, string) (io.ReadCloser, error)
@@ -30,14 +32,16 @@ type Reconciler struct {
 	sweepMu    sync.Mutex
 }
 
-// NewReconciler creates the export service with its storage and stream source.
+// NewReconciler creates the export service with its storage and stream
+// source. STRM settings are read live from cfg.
 func NewReconciler(
 	ctx context.Context,
+	cfg *config.Store,
 	store *storage.Storage,
 	openStream func(context.Context, *storage.Entry, string) (io.ReadCloser, error),
 	logger zerolog.Logger,
 ) *Reconciler {
-	return &Reconciler{ctx: ctx, storage: store, openStream: openStream,
+	return &Reconciler{ctx: ctx, config: cfg, storage: store, openStream: openStream,
 		logger: logger.With().Str("component", "strm").Logger()}
 }
 
@@ -63,12 +67,14 @@ type strmTarget struct {
 // entryDir returns the entry's folder inside the export tree; mirrors the
 // __all__ mount layout.
 func entryDir(cfg *config.Config, entry *storage.Entry) string {
-	return filepath.Join(cfg.Strm.Path, entry.GetFolder())
+	return filepath.Join(cfg.Strm.Path, entry.GetFolder(cfg.FolderNaming))
 }
 
 // desired returns the .strm files and sidecar downloads an entry should have.
-func (s *Reconciler) desired(entry *storage.Entry) ([]strmTarget, []*storage.File) {
-	cfg := config.Get()
+// Files whose provider name is not a single path element are reported and
+// skipped: their path would leave the entry's folder.
+func (s *Reconciler) desired(entry *storage.Entry, rep *Report) ([]strmTarget, []*storage.File) {
+	cfg := s.config.Get()
 	base := BaseURL(cfg)
 	dir := entryDir(cfg, entry)
 	maxSidecar := cfg.Strm.SidecarMaxBytes()
@@ -78,8 +84,13 @@ func (s *Reconciler) desired(entry *storage.Entry) ([]strmTarget, []*storage.Fil
 	for _, f := range entry.GetActiveFiles() {
 		switch {
 		case utils.IsVideoFile(f.Name):
+			path, err := fsutil.JoinName(dir, FileName(f.Name, cfg.Strm.KeepMediaExtension))
+			if err != nil {
+				rep.addError(fmt.Errorf("strm for %s: %w", entry.InfoHash, err))
+				continue
+			}
 			targets = append(targets, strmTarget{
-				path:    filepath.Join(dir, FileName(f.Name, cfg.Strm.KeepMediaExtension)),
+				path:    path,
 				content: FileURL(base, cfg.Strm.Secret, entry.InfoHash, f.ID, f.Name),
 			})
 		case cfg.Strm.SidecarsEnabled() && IsSidecar(f.Name) && f.Size > 0 && f.Size <= maxSidecar:
@@ -89,11 +100,16 @@ func (s *Reconciler) desired(entry *storage.Entry) ([]strmTarget, []*storage.Fil
 	return targets, sidecars
 }
 
+// active reports whether STRM export is on. A nil Reconciler is inactive.
+func (s *Reconciler) active() bool {
+	return s != nil && s.config.Get().Strm.Active()
+}
+
 // SyncEntryAsync reconciles one entry's export folder in the background —
 // the post-download and entry-updated trigger. Only entries present in main
 // storage are exported; their URLs must resolve.
 func (s *Reconciler) SyncEntryAsync(entry *storage.Entry) {
-	if !config.Get().Strm.Active() {
+	if !s.active() {
 		return
 	}
 	go func() {
@@ -129,14 +145,14 @@ func (s *Reconciler) syncEntry(ctx context.Context, entry *storage.Entry, rep *R
 	}
 
 	rep.Entries++
-	targets, sidecars := s.desired(entry)
+	targets, sidecars := s.desired(entry, rep)
 	for _, t := range targets {
 		current, err := readStrm(t.path)
 		if err == nil && current == t.content {
 			rep.Verified++
 			continue
 		}
-		if writeStrmErr := writeStrm(t.path, t.content); writeStrmErr != nil {
+		if writeStrmErr := writeStrm(s.config.Get(), t.path, t.content); writeStrmErr != nil {
 			rep.addError(writeStrmErr)
 			continue
 		}
@@ -161,7 +177,7 @@ func (s *Reconciler) removeStale(entry *storage.Entry, targets []strmTarget, rep
 	for _, t := range targets {
 		keep[t.path] = struct{}{}
 	}
-	for _, path := range entryStrmFiles(entryDir(config.Get(), entry), entry.InfoHash) {
+	for _, path := range entryStrmFiles(entryDir(s.config.Get(), entry), entry.InfoHash) {
 		if _, ok := keep[path]; ok {
 			continue
 		}
@@ -201,11 +217,15 @@ func strmOwner(path string, d fs.DirEntry, walkErr error) (string, bool) {
 }
 
 func (s *Reconciler) syncSidecar(ctx context.Context, entry *storage.Entry, file *storage.File, rep *Report) {
-	dest := filepath.Join(entryDir(config.Get(), entry), file.Name)
-	if fi, err := os.Stat(dest); err == nil && fi.Size() == file.Size {
+	dest, err := fsutil.JoinName(entryDir(s.config.Get(), entry), file.Name)
+	if err != nil {
+		rep.addError(fmt.Errorf("sidecar for %s: %w", entry.InfoHash, err))
 		return
 	}
-	if err := s.downloadSidecar(ctx, entry, file, dest); err != nil {
+	if fi, statErr := os.Stat(dest); statErr == nil && fi.Size() == file.Size {
+		return
+	}
+	if err = s.downloadSidecar(ctx, entry, file, dest); err != nil {
 		rep.addError(fmt.Errorf("sidecar %s: %w", file.Name, err))
 		return
 	}
@@ -219,12 +239,13 @@ func (s *Reconciler) downloadSidecar(ctx context.Context, entry *storage.Entry, 
 	}
 	defer stream.Close()
 
-	//nolint:gosec // the export tree is read by media servers running as other users
-	if mkdirAllErr := os.MkdirAll(filepath.Dir(dest), 0o755); mkdirAllErr != nil {
-		return mkdirAllErr
+	// The export tree is read by media servers running as other users.
+	cfg := s.config.Get()
+	if mkdirErr := fsutil.MkdirShared(filepath.Dir(dest), cfg.SharedDirModeValue()); mkdirErr != nil {
+		return mkdirErr
 	}
 	tmp := dest + ".part"
-	f, err := os.Create(tmp)
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, cfg.SharedFileModeValue())
 	if err != nil {
 		return err
 	}
@@ -247,10 +268,10 @@ func (s *Reconciler) downloadSidecar(ctx context.Context, entry *storage.Entry, 
 // deleted entries, renamed files, stale folder names — is removed, pruning
 // directories that become empty.
 func (s *Reconciler) Sweep(ctx context.Context) (*Report, error) {
-	cfg := config.Get()
-	if !cfg.Strm.Active() {
+	if !s.active() {
 		return nil, fmt.Errorf("strm is disabled or has no path configured")
 	}
+	cfg := s.config.Get()
 
 	s.sweepMu.Lock()
 	defer s.sweepMu.Unlock()
@@ -295,7 +316,7 @@ func (s *Reconciler) Sweep(ctx context.Context) (*Report, error) {
 // SweepAsync runs a background sweep — the regenerate, config-change, and
 // startup trigger. A no-op while strm is disabled.
 func (s *Reconciler) SweepAsync(reason string) {
-	if !config.Get().Strm.Active() {
+	if !s.active() {
 		return
 	}
 	go func() {
@@ -320,10 +341,10 @@ func (s *Reconciler) SweepAsync(reason string) {
 // deleted, so its folder doesn't linger until the next sweep. Only files
 // carrying the entry's infohash are removed.
 func (s *Reconciler) RemoveEntryAsync(entry *storage.Entry) {
-	cfg := config.Get()
-	if !cfg.Strm.Active() {
+	if !s.active() {
 		return
 	}
+	cfg := s.config.Get()
 	go func() {
 		dir := entryDir(cfg, entry)
 		for _, path := range entryStrmFiles(dir, entry.InfoHash) {
@@ -332,8 +353,11 @@ func (s *Reconciler) RemoveEntryAsync(entry *storage.Entry) {
 		// Sidecars carry no signature; remove them by name while we still
 		// know the entry's file list.
 		for _, f := range entry.Files {
-			if IsSidecar(f.Name) {
-				_ = os.Remove(filepath.Join(dir, f.Name))
+			if !IsSidecar(f.Name) {
+				continue
+			}
+			if path, err := fsutil.JoinName(dir, f.Name); err == nil {
+				_ = os.Remove(path)
 			}
 		}
 		pruneEmptyDirs(dir, cfg.Strm.Path)
@@ -363,11 +387,11 @@ func readStrm(path string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
-func writeStrm(path, content string) error {
-	//nolint:gosec // the export tree is read by media servers running as other users
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+// writeStrm writes one .strm file with the shared modes: the export tree is
+// read by media servers running as other users.
+func writeStrm(cfg *config.Config, path, content string) error {
+	if err := fsutil.MkdirShared(filepath.Dir(path), cfg.SharedDirModeValue()); err != nil {
 		return err
 	}
-	//nolint:gosec // the export tree is read by media servers running as other users
-	return os.WriteFile(path, []byte(content), 0o644)
+	return os.WriteFile(path, []byte(content), cfg.SharedFileModeValue())
 }

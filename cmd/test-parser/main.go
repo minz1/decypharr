@@ -80,9 +80,11 @@ func run(args []string, w io.Writer, log zerolog.Logger) error {
 }
 
 func parseAndProcess(w io.Writer, log zerolog.Logger, nzbFile string, content []byte) error {
-	config.SetConfigPath("data/")
-	cfg := config.Get()
-	client, err := nntp.NewClient(cfg)
+	cfg, err := config.Load("data/", os.LookupEnv)
+	if err != nil {
+		return fmt.Errorf("load configuration: %w", err)
+	}
+	client, err := nntp.NewClient(cfg, log)
 	if err != nil {
 		return fmt.Errorf("create NNTP client: %w", err)
 	}
@@ -99,7 +101,7 @@ func parseAndProcess(w io.Writer, log zerolog.Logger, nzbFile string, content []
 	if maxConcurrent <= 0 {
 		maxConcurrent = defaultMaxConcurrent
 	}
-	p := parser.NewParser(client, maxConcurrent, log)
+	p := parser.NewParser(client, maxConcurrent, log).WithFileFilter(cfg.ValidateFileAllowed)
 	parseStarted := time.Now()
 	nzb, groups, err := p.Parse(context.Background(), nzbFile, content)
 	if err != nil {

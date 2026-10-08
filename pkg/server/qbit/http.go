@@ -23,11 +23,15 @@ func (q *QBit) handleLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
-	// Not Secure: Arr clients talk to decypharr over plain HTTP on the LAN.
-	cookie := &http.Cookie{ //nolint:gosec // G124: Secure would make HTTP clients drop the session
+	// The SID carries the credentials, so it is Secure: browsers and strict
+	// cookie jars only return it over HTTPS. The *arr download clients parse
+	// Set-Cookie themselves and send SID back over plain HTTP too; any other
+	// client on plain HTTP can authenticate each request with Basic auth.
+	cookie := &http.Cookie{
 		Name:     "SID",
-		Value:    createSID(username, password),
+		Value:    createSID(q.config.Get().SecretKey(), username, password),
 		Path:     "/",
+		Secure:   true,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	}
@@ -44,7 +48,7 @@ func (q *QBit) handleWebAPIVersion(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (q *QBit) handlePreferences(w http.ResponseWriter, _ *http.Request) {
-	preferences := getAppPreferences()
+	preferences := getAppPreferences(q.config.Get().MaxActiveDownloads)
 
 	preferences.SavePath = q.downloadFolder
 	preferences.TempPath = filepath.Join(q.downloadFolder, "temp")
@@ -87,20 +91,20 @@ func (q *QBit) handleTorrentsInfo(w http.ResponseWriter, r *http.Request) {
 	}
 	qbitTorrents := make([]Torrent, len(torrents))
 	for i, t := range torrents {
-		qbitTorrents[i] = convertToQBitTorrentTorrent(t)
+		qbitTorrents[i] = convertToQBitTorrentTorrent(t, q.config.Get().FolderNaming)
 	}
 	utils.JSONResponse(w, qbitTorrents, http.StatusOK)
 }
 
 // multipartMemory is how much of a multipart form is held in memory before
-// spilling to temp files; the body itself is capped by Routes.
+// spilling to temp files; the body itself is capped at maxRequestBody.
 const multipartMemory = 32 << 20
 
-func parseAddForm(r *http.Request) error {
+func parseAddForm(w http.ResponseWriter, r *http.Request) error {
 	contentType := r.Header.Get("Content-Type")
 	switch {
 	case strings.Contains(contentType, "multipart/form-data"):
-		return r.ParseMultipartForm(multipartMemory) //nolint:gosec // G120: body capped by Routes' MaxBytesReader
+		return utils.ParseBoundedMultipartForm(w, r, maxRequestBody, multipartMemory)
 	case strings.Contains(contentType, "application/x-www-form-urlencoded"):
 		return r.ParseForm()
 	default:
@@ -110,13 +114,13 @@ func parseAddForm(r *http.Request) error {
 
 func (q *QBit) handleTorrentsAdd(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	if err := parseAddForm(r); err != nil {
+	if err := parseAddForm(w, r); err != nil {
 		q.logger.Error().Err(err).Msg("Error parsing torrent add form")
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	cfg := config.Get()
+	cfg := q.config.Get()
 	action := cfg.DefaultDownloadAction
 	if strings.EqualFold(r.FormValue("sequentialDownload"), "true") {
 		action = config.DownloadActionDownload

@@ -2,6 +2,7 @@ package rar
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -12,17 +13,19 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/retry"
+	"github.com/sirrobot01/decypharr/internal/utils"
 )
 
 // httpTimeout bounds each HEAD or ranged GET against the archive URL.
 const httpTimeout = 60 * time.Second
 
 // NewHTTPFile opens url for random access, retrying network failures up to
-// maxRetries times. Requests are bound to ctx.
-func NewHTTPFile(ctx context.Context, url string, maxRetries int) (*HTTPFile, error) {
+// maxRetries times. Requests are bound to ctx and verified against
+// tlsConfig (nil: the system roots).
+func NewHTTPFile(ctx context.Context, tlsConfig *tls.Config, url string, maxRetries int) (*HTTPFile, error) {
 	file := &HTTPFile{
 		URL:        url,
-		client:     &http.Client{Timeout: httpTimeout},
+		client:     utils.NewHTTPClient(tlsConfig, httpTimeout),
 		MaxRetries: maxRetries,
 	}
 	size, err := file.getFileSize(ctx)

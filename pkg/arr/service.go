@@ -3,6 +3,7 @@ package arr
 import (
 	"cmp"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"maps"
 	"slices"
@@ -12,7 +13,6 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"github.com/sirrobot01/decypharr/internal/config"
-	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/internal/request"
 	"github.com/sirrobot01/decypharr/internal/utils"
 )
@@ -22,6 +22,7 @@ type Service struct {
 	mu   sync.RWMutex
 	arrs map[string]Arr
 
+	config   *config.Store
 	client   *request.Client
 	mutation *request.Client
 	logger   zerolog.Logger
@@ -31,23 +32,29 @@ type Service struct {
 // readRetries is how many times the shared client retries an Arr read.
 const readRetries = 5
 
-// New builds the service from the configured Arr instances.
-func New() *Service {
+// New builds the service from the Arr instances configured in cfg. The
+// instance list and queue cleanup rules are read live from cfg.
+func New(cfg *config.Store, tlsConfig *tls.Config, log zerolog.Logger) *Service {
 	service := &Service{
 		arrs:   make(map[string]Arr),
-		logger: logger.New("arr"),
+		config: cfg,
+		logger: log,
 		client: request.New(
+			log,
+			tlsConfig,
 			request.WithTimeout(0),
 			request.WithMaxRetries(readRetries),
 		),
 		// Mutations are not retried: a repeated blocklist or search is a second
 		// user-visible action, not a second read.
 		mutation: request.New(
+			log,
+			tlsConfig,
 			request.WithTimeout(0),
 			request.WithMaxRetries(0),
 		),
 	}
-	for _, configured := range config.Get().Arrs {
+	for _, configured := range cfg.Get().Arrs {
 		instance := fromConfig(configured)
 		if !instance.Reachable() || utils.ValidateURL(instance.Host) != nil {
 			continue
@@ -130,7 +137,7 @@ func (s *Service) SyncFromConfig(configured []config.Arr) {
 
 func (s *Service) SyncToConfig() []config.Arr {
 	merged := make(map[string]config.Arr)
-	for _, c := range config.Get().Arrs {
+	for _, c := range s.config.Get().Arrs {
 		if c.Host == "" || c.Token == "" {
 			continue
 		}

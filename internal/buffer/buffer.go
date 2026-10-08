@@ -119,6 +119,12 @@ type Buffer struct {
 	// away from it and the pool's disk backstop reclaims behind it.
 	readHead atomic.Int64
 
+	// readHook, when set by a test, runs in ReadAt after the closed check and
+	// before the lock is taken.
+	readHook func()
+	// punch, when set by a test, replaces punchHole.
+	punch func(f *os.File, off, length int64) (Range, error)
+
 	// punchable latches false once the filesystem refuses to release blocks;
 	// see punch.go.
 	punchable atomic.Bool
@@ -377,8 +383,16 @@ func (b *Buffer) ReadAt(p []byte, off int64) (int, error) {
 	end := off + int64(len(p))
 	fromDisk := false
 
+	if b.readHook != nil {
+		b.readHook()
+	}
 	b.mu.RLock()
 	defer b.mu.RUnlock()
+	// Close may have run since the check above; it releases the blocks but
+	// keeps the ranges, so presence alone would read freed or closed tiers.
+	if b.closed.Load() {
+		return 0, ErrClosed
+	}
 	if !b.ranges.present(off, int64(len(p))) {
 		return 0, ErrNotPresent
 	}
@@ -483,9 +497,11 @@ func (b *Buffer) discard(off, length int64, requireReclaim bool) int64 {
 		b.mu.Unlock()
 		return 0
 	}
-	err := punchHole(b.file, off, length)
+	freed, err := b.punchRange(off, length)
 	if err == nil {
-		removed := b.removeDisk(off, length)
+		// Only the freed part leaves the disk accounting: darwin keeps the
+		// unaligned edges allocated.
+		removed := b.removeDisk(freed.Off, freed.Size)
 		adviseDontNeed(b.file, off, length)
 		b.fileMu.Unlock()
 		b.mu.Unlock()
@@ -510,6 +526,15 @@ func (b *Buffer) discard(off, length int64, requireReclaim bool) int64 {
 	}
 	b.mu.Unlock()
 	return 0
+}
+
+// punchRange releases [off, off+length) from the disk tier and returns the
+// part actually freed.
+func (b *Buffer) punchRange(off, length int64) (Range, error) {
+	if b.punch != nil {
+		return b.punch(b.file, off, length)
+	}
+	return punchHole(b.file, off, length)
 }
 
 // dropRangeLocked unpublishes [off, off+length) and releases the resident

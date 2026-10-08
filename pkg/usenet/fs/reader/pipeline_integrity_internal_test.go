@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/nntp"
 	nntpyenc "github.com/sirrobot01/decypharr/internal/nntp/yenc"
@@ -26,7 +28,7 @@ func newPipelineIntegrityReader(
 	segments []SegmentMeta,
 ) *StreamingReader {
 	t.Helper()
-	client, err := nntp.NewClient(&config.Config{Usenet: config.Usenet{Providers: providers}})
+	client, err := nntp.NewClient(&config.Config{Usenet: config.Usenet{Providers: providers}}, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}

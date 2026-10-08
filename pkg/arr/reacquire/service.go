@@ -228,6 +228,11 @@ func newestBindingRows(bindings []Binding) []Binding {
 	return result
 }
 
+// Generation is the newest generation stored for arrName.
+func (s *Service) Generation(arrName string) uint64 {
+	return s.index.Generation(arrName)
+}
+
 func (s *Service) ReplaceArrGeneration(arrName string, generation uint64, bindings []Binding) error {
 	release, err := s.beginOperation()
 	if err != nil {

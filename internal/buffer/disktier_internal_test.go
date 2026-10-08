@@ -3,6 +3,7 @@ package buffer
 import (
 	"bytes"
 	"errors"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -369,5 +370,32 @@ func TestNoDiskTierLosesEvictedBytes(t *testing.T) {
 		if b.HasRange(r.Off, r.Size) {
 			t.Fatalf("range %d+%d reported evicted but still present", r.Off, r.Size)
 		}
+	}
+}
+
+// A punch that frees less than asked (darwin keeps unaligned edges) leaves
+// the unfreed bytes in the disk accounting: they are still allocated.
+func TestDiscardAccountsOnlyFreedBytes(t *testing.T) {
+	t.Parallel()
+	p := newTestPool(t, PoolConfig{})
+	b := newTestBuffer(t, p, Config{DiskPath: tempDisk(t), TotalSize: blockSize})
+	data := make([]byte, 128<<10)
+	mustWrite(t, b, data, 0)
+	if err := b.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if !b.punchable.Load() {
+		t.Skip("hole punching unavailable here")
+	}
+	const edge = 4096
+	b.punch = func(f *os.File, off, length int64) (Range, error) {
+		freed := Range{Off: off + edge, Size: length - 2*edge}
+		_, err := punchHole(f, freed.Off, freed.Size)
+		return freed, err
+	}
+	before := p.Stats().DiskInUse
+	mustDiscard(t, b, 0, int64(len(data)))
+	if freed := before - p.Stats().DiskInUse; freed != int64(len(data))-2*edge {
+		t.Fatalf("disk accounting dropped %d bytes, want the %d actually freed", freed, int64(len(data))-2*edge)
 	}
 }

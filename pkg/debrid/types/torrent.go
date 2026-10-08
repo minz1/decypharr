@@ -10,7 +10,7 @@ import (
 )
 
 type Torrent struct {
-	Id               string          `json:"id"`
+	ID               string          `json:"id"`
 	InfoHash         string          `json:"info_hash"`
 	Name             string          `json:"name"`
 	Filename         string          `json:"filename"`
@@ -50,7 +50,7 @@ func (t *Torrent) Copy() *Torrent {
 	maps.Copy(newFiles, t.Files)
 
 	return &Torrent{
-		Id:               t.Id,
+		ID:               t.ID,
 		InfoHash:         t.InfoHash,
 		Name:             t.Name,
 		Filename:         t.Filename,
@@ -90,7 +90,7 @@ func (t *Torrent) GetFiles() []File {
 
 type File struct {
 	TorrentID    string       `json:"torrent_id"`
-	Id           string       `json:"id"`
+	ID           string       `json:"id"`
 	Name         string       `json:"name"`
 	Size         int64        `json:"size"`
 	IsRar        bool         `json:"is_rar"`
@@ -157,7 +157,7 @@ type DownloadLink struct {
 
 func (dl *DownloadLink) Valid() error {
 	if dl.Empty() {
-		return EmptyDownloadLinkError
+		return ErrEmptyDownloadLink
 	}
 
 	// Validate url format

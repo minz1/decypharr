@@ -47,29 +47,54 @@ func (u *Usenet) Download(
 	}
 
 	workers := max(u.processingMaxConnections, 1)
+	downloaded, err := downloadSegments(ctx, file.Segments, workers, writer, progressCallback, u.fetchDownloadSegment)
+	if err != nil {
+		return err
+	}
+
+	u.logger.Info().
+		Str("file", filename).
+		Int64("bytes", downloaded).
+		Msg("Download complete")
+	return nil
+}
+
+const (
+	// downloadResultsPerWorker sizes the result buffer per fetch worker.
+	downloadResultsPerWorker = 2
+	// downloadWindowPerWorker bounds how far fetching may run ahead of the
+	// next segment to write, per worker. Out-of-order segments wait in RAM,
+	// so this caps a download's memory however slow one segment is.
+	downloadWindowPerWorker = 4
+)
+
+type segmentFetcher func(ctx context.Context, idx int, seg storage.NZBSegment) segmentResult
+
+// downloadSegments fetches segments with workers in parallel and writes them
+// to writer in order. It returns the bytes written.
+func downloadSegments(
+	ctx context.Context,
+	segments []storage.NZBSegment,
+	workers int,
+	writer io.Writer,
+	progressCallback ProgressCallback,
+	fetch segmentFetcher,
+) (int64, error) {
 	// Buffered so fetching can run ahead of the in-order writer.
 	results := make(chan segmentResult, workers*downloadResultsPerWorker)
-	ordered := &orderedSegmentWriter{
-		w:        writer,
-		pending:  make(map[int][]byte),
-		progress: progressCallback,
-		workers:  int64(workers),
-	}
+	ordered := newOrderedSegmentWriter(writer, progressCallback, workers, workers*downloadWindowPerWorker)
 	var writerWg sync.WaitGroup
 	writerWg.Go(func() { ordered.run(results) })
 
 	p := pool.New().WithContext(ctx).WithMaxGoroutines(workers)
-	for idx, segment := range file.Segments {
+	for idx, segment := range segments {
 		p.Go(func(ctx context.Context) error {
-			if writeErr := ordered.err(); writeErr != nil {
-				return writeErr
-			}
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return ctxErr
+			if waitErr := ordered.waitTurn(ctx, idx); waitErr != nil {
+				return waitErr
 			}
 			// A failed segment is reported through results; other workers
 			// keep going until the writer records it.
-			results <- u.fetchDownloadSegment(ctx, idx, segment)
+			results <- fetch(ctx, idx, segment)
 			return nil
 		})
 	}
@@ -79,21 +104,10 @@ func (u *Usenet) Download(
 	writerWg.Wait()
 
 	if writeErr := ordered.err(); writeErr != nil {
-		return writeErr
+		return ordered.downloaded, writeErr
 	}
-	if fetchErr != nil {
-		return fetchErr
-	}
-
-	u.logger.Info().
-		Str("file", filename).
-		Int64("bytes", ordered.downloaded).
-		Msg("Download complete")
-	return nil
+	return ordered.downloaded, fetchErr
 }
-
-// downloadResultsPerWorker sizes the result buffer per fetch worker.
-const downloadResultsPerWorker = 2
 
 // fetchDownloadSegment fetches one segment through provider failover and
 // trims it to the bytes this file uses.
@@ -121,19 +135,33 @@ func (u *Usenet) fetchDownloadSegment(ctx context.Context, idx int, seg storage.
 }
 
 // orderedSegmentWriter writes fetched segments in index order, holding
-// out-of-order arrivals until their predecessors land.
+// out-of-order arrivals until their predecessors land. Fetchers wait their
+// turn so at most window segments are fetched past the next one to write.
 type orderedSegmentWriter struct {
 	w        io.Writer
 	pending  map[int][]byte
-	next     int
 	progress ProgressCallback
 	workers  int64
+	window   int
 
 	written    int64 // segments written; owned by run
 	downloaded int64 // bytes written; read after run returns
 
 	mu       sync.Mutex
+	next     int           // next segment to write
+	advanced chan struct{} // closed when next moves or an error is set
 	firstErr error
+}
+
+func newOrderedSegmentWriter(w io.Writer, progress ProgressCallback, workers, window int) *orderedSegmentWriter {
+	return &orderedSegmentWriter{
+		w:        w,
+		pending:  make(map[int][]byte),
+		progress: progress,
+		workers:  int64(workers),
+		window:   max(window, 1),
+		advanced: make(chan struct{}),
+	}
 }
 
 func (o *orderedSegmentWriter) err() error {
@@ -147,6 +175,36 @@ func (o *orderedSegmentWriter) setErr(err error) {
 	defer o.mu.Unlock()
 	if o.firstErr == nil {
 		o.firstErr = err
+		o.wakeLocked()
+	}
+}
+
+// wakeLocked releases every waitTurn caller to re-check. Caller holds o.mu.
+func (o *orderedSegmentWriter) wakeLocked() {
+	close(o.advanced)
+	o.advanced = make(chan struct{})
+}
+
+// waitTurn blocks until segment idx is within the window past the next
+// segment to write. It returns the first write or fetch error, or ctx's.
+func (o *orderedSegmentWriter) waitTurn(ctx context.Context, idx int) error {
+	for {
+		o.mu.Lock()
+		next, err, advanced := o.next, o.firstErr, o.advanced
+		o.mu.Unlock()
+		if err != nil {
+			return err
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		if idx < next+o.window {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+		case <-advanced:
+		}
 	}
 }
 
@@ -163,20 +221,27 @@ func (o *orderedSegmentWriter) run(results <-chan segmentResult) {
 
 // flush writes every consecutive pending segment starting at next.
 func (o *orderedSegmentWriter) flush() {
+	o.mu.Lock()
+	next := o.next
+	o.mu.Unlock()
 	for {
-		data, ok := o.pending[o.next]
+		data, ok := o.pending[next]
 		if !ok {
 			return
 		}
-		delete(o.pending, o.next)
+		delete(o.pending, next)
 		n, err := o.w.Write(data)
 		if err != nil {
-			o.setErr(fmt.Errorf("write failed at segment %d: %w", o.next, err))
+			o.setErr(fmt.Errorf("write failed at segment %d: %w", next, err))
 			return
 		}
 		o.written++
 		o.downloaded += int64(n)
-		o.next++
+		next++
+		o.mu.Lock()
+		o.next = next
+		o.wakeLocked()
+		o.mu.Unlock()
 		if o.progress != nil {
 			// Rough speed estimate: assume ~1s per segment batch.
 			o.progress(o.downloaded, o.downloaded/max(1, o.written)*o.workers)

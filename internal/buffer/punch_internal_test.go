@@ -36,7 +36,7 @@ func TestPunchHoleReclaims(t *testing.T) {
 	}
 	before := allocatedBlocks(t, path)
 
-	if punchHoleErr := punchHole(f, 0, size); punchHoleErr != nil {
+	if _, punchHoleErr := punchHole(f, 0, size); punchHoleErr != nil {
 		t.Skipf("punch unsupported here: %v", punchHoleErr)
 	}
 	if syncErr := f.Sync(); syncErr != nil {

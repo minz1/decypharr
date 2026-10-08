@@ -36,7 +36,7 @@ func TestProbeContentAvailabilityReportsAllMissingContent(t *testing.T) {
 		calls = append(calls, messageID)
 		return missing
 	})
-	if !errors.Is(err, customerror.UsenetSegmentMissingError) {
+	if !errors.Is(err, customerror.ErrUsenetSegmentMissing) {
 		t.Fatalf("all-missing availability error = %v", err)
 	}
 	if want := []string{"a@example", "b@example"}; !slices.Equal(calls, want) {
@@ -201,9 +201,7 @@ func TestContentDetectionInfersExtensionForObfuscatedMedia(t *testing.T) {
 }
 
 func TestExtensionlessObfuscatedMediaProducesLogicalFile(t *testing.T) {
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	_ = config.Get()
+	t.Parallel()
 
 	server, err := nntpd.New(nntpd.Config{})
 	if err != nil {
@@ -220,7 +218,7 @@ func TestExtensionlessObfuscatedMediaProducesLogicalFile(t *testing.T) {
 	host, port := server.Addr()
 	client, err := nntp.NewClient(&config.Config{Usenet: config.Usenet{
 		Providers: []config.UsenetProvider{{Host: host, Port: port, MaxConnections: 2}},
-	}})
+	}}, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}

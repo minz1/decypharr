@@ -20,6 +20,7 @@ import (
 	"github.com/sourcegraph/conc/pool"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/internal/fsutil"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/manager/link"
 	"github.com/sirrobot01/decypharr/pkg/notifications"
@@ -29,6 +30,7 @@ import (
 type Downloader struct {
 	manager *Manager
 	logger  zerolog.Logger
+	seasons *seasonParser
 }
 
 const (
@@ -65,6 +67,7 @@ func NewDownloadManager(manager *Manager) *Downloader {
 	return &Downloader{
 		manager: manager,
 		logger:  manager.logger.With().Str("component", "downloader").Logger(),
+		seasons: newSeasonParser(),
 	}
 }
 
@@ -96,7 +99,9 @@ func (d *Downloader) download(torrent *storage.Entry) error {
 // downloadSeasons fans a season pack out into one entry per season and
 // processes each that is not already complete.
 func (d *Downloader) downloadSeasons(torrent *storage.Entry, seasons []SeasonInfo, mountPath string) error {
-	for _, result := range convertToMultiSeason(torrent, seasons) {
+	results := convertToMultiSeason(torrent, seasons)
+	d.adoptEarlierSeasonIDs(torrent, results)
+	for _, result := range results {
 		if saved, err := d.manager.queue.GetTorrent(result.InfoHash); err == nil && saved.IsComplete {
 			continue
 		}
@@ -115,6 +120,57 @@ func (d *Downloader) downloadSeasons(torrent *storage.Entry, seasons []SeasonInf
 	// it leaves the downloading queue instead of getting re-processed.
 	d.completeEntry(torrent)
 	return nil
+}
+
+// adoptEarlierSeasonIDs gives each season the ID of the queue entry an
+// earlier fan-out of the same pack created for it, so a resumed pack updates
+// those entries instead of duplicating them, whatever scheme derived their
+// IDs (earlier versions used md5). Season entries are recognized by name and
+// by files that belong to the pack.
+func (d *Downloader) adoptEarlierSeasonIDs(pack *storage.Entry, seasons []*storage.Entry) {
+	queued, err := d.manager.storage.FilterQueuedByFolder(seasonFolders(seasons), func(entry *storage.Entry) bool {
+		return entry.InfoHash != pack.InfoHash && fromPack(entry, pack.InfoHash)
+	})
+	if err != nil {
+		d.logger.Warn().Err(err).Msg("Failed to list the queue for earlier season entries")
+		return
+	}
+	earlier := make(map[string]string, len(seasons))
+	for _, entry := range queued {
+		earlier[entry.Name] = entry.InfoHash
+	}
+	for _, season := range seasons {
+		if id, ok := earlier[season.Name]; ok {
+			season.InfoHash = id
+		}
+	}
+}
+
+// seasonFolders lists the folder names a season entry could have been
+// stored under: one per name-based folder naming, as the setting may have
+// changed since.
+func seasonFolders(seasons []*storage.Entry) map[string]struct{} {
+	namings := []config.WebDavFolderNaming{
+		config.WebDavUseFileName, config.WebDavUseOriginalName, config.WebDavUseFileNameNoExt,
+		config.WebDavUseOriginalNameNoExt, config.WebDavUseArrSubmittedName,
+	}
+	folders := make(map[string]struct{}, len(seasons)*len(namings))
+	for _, season := range seasons {
+		for _, naming := range namings {
+			folders[season.GetFolder(naming)] = struct{}{}
+		}
+	}
+	return folders
+}
+
+// fromPack reports whether entry's files come from the pack packHash.
+func fromPack(entry *storage.Entry, packHash string) bool {
+	for _, file := range entry.Files {
+		if file != nil && file.InfoHash == packHash {
+			return true
+		}
+	}
+	return false
 }
 
 func (d *Downloader) process(entry *storage.Entry, mountPath string) error {
@@ -143,13 +199,18 @@ func (d *Downloader) completeEntry(entry *storage.Entry) {
 
 func (d *Downloader) markAsCompleted(entry *storage.Entry) {
 	// Mark as completed
-	entry.MarkAsCompleted(entry.DownloadPath())
+	entry.MarkAsCompleted(entry.DownloadPath(d.manager.folderNaming()))
 	_ = d.manager.queue.Update(entry)
 }
 
 func (d *Downloader) notifyCompleted(entry *storage.Entry) {
 	// Send notification
-	msg := fmt.Sprintf("Download completed: %s [%s] -> %s", entry.Name, entry.Category, entry.DownloadPath())
+	msg := fmt.Sprintf(
+		"Download completed: %s [%s] -> %s",
+		entry.Name,
+		entry.Category,
+		entry.DownloadPath(d.manager.folderNaming()),
+	)
 	d.manager.Notifications.Notify(notifications.Event{
 		Type:    config.EventDownloadComplete,
 		Status:  "success",
@@ -193,14 +254,14 @@ func (d *Downloader) markAsError(entry *storage.Entry, err error) {
 // processSymlink creates symlinks for torrent files.
 func (d *Downloader) processSymlink(entry *storage.Entry, mountPath string) error {
 	files := entry.GetActiveFiles()
-	torrentSymlinkPath := entry.DownloadPath()
+	torrentSymlinkPath := entry.DownloadPath(d.manager.folderNaming())
 	d.logger.Info().
 		Str("mount_path", mountPath).
 		Msgf("Creating symlinks for %d files in %s", len(files), torrentSymlinkPath)
 
 	// Create symlink directory
-	//nolint:gosec // the arr importing from this folder usually runs as another user
-	err := os.MkdirAll(torrentSymlinkPath, os.ModePerm)
+	// The arr importing from this folder usually runs as another user.
+	err := fsutil.MkdirShared(torrentSymlinkPath, d.manager.config.SharedDirModeValue())
 	if err != nil {
 		return fmt.Errorf("failed to create directory: %s: %w", torrentSymlinkPath, err)
 	}
@@ -224,7 +285,7 @@ func (d *Downloader) processSymlink(entry *storage.Entry, mountPath string) erro
 	// Usenet parsing/probing deliberately avoids the streaming read-ahead
 	// setting. A large playback window can turn a small import probe into a
 	// substantial background download and hold an active slot unnecessarily.
-	if !entry.IsNZB() && !config.Get().SkipPreCache && len(filePaths) > 0 {
+	if !entry.IsNZB() && !d.manager.store.Get().SkipPreCache && len(filePaths) > 0 {
 		probeFiles := filePaths
 		if len(probeFiles) > MaxNZBPreCacheFiles {
 			probeFiles = probeFiles[:MaxNZBPreCacheFiles]
@@ -331,13 +392,16 @@ func (s *symlinkScan) link(name, fullPath string) error {
 	if !ok {
 		return nil
 	}
-	fileSymlinkPath := filepath.Join(s.symlinkDir, file.Name)
-	if err := os.Symlink(fullPath, fileSymlinkPath); err != nil && !os.IsExist(err) {
+	fileSymlinkPath, err := fsutil.JoinName(s.symlinkDir, file.Name)
+	if err != nil {
+		return fmt.Errorf("symlink for %s: %w", s.entry.InfoHash, err)
+	}
+	if err = os.Symlink(fullPath, fileSymlinkPath); err != nil && !os.IsExist(err) {
 		return fmt.Errorf("failed to create symlink %s -> %s: %w", fileSymlinkPath, fullPath, err)
 	}
 	s.paths = append(s.paths, fileSymlinkPath)
 	delete(s.remaining, name)
-	s.d.logger.Info().Msgf("File is ready: %s/%s", s.entry.GetFolder(), file.Name)
+	s.d.logger.Info().Msgf("File is ready: %s/%s", s.entry.GetFolder(s.d.manager.folderNaming()), file.Name)
 	return nil
 }
 
@@ -524,9 +588,9 @@ func (d *Downloader) processTorrentDownload(entry *storage.Entry) error {
 	for _, file := range files {
 		totalSize += file.Size
 	}
-	downloadedFolder := entry.DownloadPath()
-	//nolint:gosec // the arr importing from this folder usually runs as another user
-	if err := os.MkdirAll(downloadedFolder, os.ModePerm); err != nil {
+	downloadedFolder := entry.DownloadPath(d.manager.folderNaming())
+	// The arr importing from this folder usually runs as another user.
+	if err := fsutil.MkdirShared(downloadedFolder, d.manager.config.SharedDirModeValue()); err != nil {
 		return fmt.Errorf("failed to create download directory: %s: %w", downloadedFolder, err)
 	}
 	entry.SizeDownloaded = 0
@@ -551,6 +615,7 @@ func (d *Downloader) processTorrentDownload(entry *storage.Entry) error {
 	type downloadTask struct {
 		file *storage.File
 		link string
+		dest string
 	}
 	var tasks []downloadTask
 	for _, file := range files {
@@ -562,7 +627,11 @@ func (d *Downloader) processTorrentDownload(entry *storage.Entry) error {
 			// completed.
 			return fmt.Errorf("resolve download link for %s: %w", file.Name, err)
 		}
-		tasks = append(tasks, downloadTask{file: file, link: downloadLink.DownloadLink})
+		dest, err := fsutil.JoinName(downloadedFolder, file.Name)
+		if err != nil {
+			return fmt.Errorf("download %s: %w", entry.InfoHash, err)
+		}
+		tasks = append(tasks, downloadTask{file: file, link: downloadLink.DownloadLink, dest: dest})
 	}
 
 	// If no valid download links were obtained, return error instead of panic
@@ -579,7 +648,7 @@ func (d *Downloader) processTorrentDownload(entry *storage.Entry) error {
 		p.Go(func() error {
 			if err := d.localDownloader(
 				task.link,
-				filepath.Join(downloadedFolder, task.file.Name),
+				task.dest,
 				task.file.ByteRange,
 				progressCallback,
 			); err != nil {
@@ -646,9 +715,9 @@ func (d *Downloader) processUsenetDownload(entry *storage.Entry) error {
 	files := entry.GetActiveFiles()
 	d.logger.Info().Msgf("Downloading %d NZB files via usenet...", len(files))
 
-	downloadedFolder := entry.DownloadPath()
-	//nolint:gosec // the arr importing from this folder usually runs as another user
-	if err := os.MkdirAll(downloadedFolder, os.ModePerm); err != nil {
+	downloadedFolder := entry.DownloadPath(d.manager.folderNaming())
+	// The arr importing from this folder usually runs as another user.
+	if err := fsutil.MkdirShared(downloadedFolder, d.manager.config.SharedDirModeValue()); err != nil {
 		return fmt.Errorf("failed to create download directory: %s: %w", downloadedFolder, err)
 	}
 
@@ -669,12 +738,18 @@ func (d *Downloader) processUsenetDownload(entry *storage.Entry) error {
 	p := pool.New().WithErrors().WithFirstError()
 	for _, file := range files {
 		p.Go(func() error {
-			destPath := filepath.Join(downloadedFolder, file.Name)
-			destFile, err := os.Create(destPath)
+			destPath, err := fsutil.JoinName(downloadedFolder, file.Name)
+			if err != nil {
+				return fmt.Errorf("download %s: %w", entry.InfoHash, err)
+			}
+			destFile, err := os.OpenFile(
+				destPath,
+				os.O_CREATE|os.O_WRONLY|os.O_TRUNC,
+				d.manager.config.SharedFileModeValue(),
+			)
 			if err != nil {
 				return fmt.Errorf("failed to create file %s: %w", file.Name, err)
 			}
-			defer destFile.Close()
 
 			progressCallback := func(downloaded int64, speed int64) {
 				progressMu.Lock()
@@ -691,13 +766,9 @@ func (d *Downloader) processUsenetDownload(entry *storage.Entry) error {
 				_ = d.manager.queue.Update(entry)
 			}
 
-			if downloadErr := d.manager.usenet.Download(
-				d.manager.ctx,
-				entry.InfoHash,
-				file.Name,
-				destFile,
-				progressCallback,
-			); downloadErr != nil {
+			if downloadErr := writeAndClose(destFile, func(w io.Writer) error {
+				return d.manager.usenet.Download(d.manager.ctx, entry.InfoHash, file.Name, w, progressCallback)
+			}); downloadErr != nil {
 				_ = os.Remove(destPath)
 				return fmt.Errorf("failed to download %s: %w", file.Name, downloadErr)
 			}
@@ -718,22 +789,36 @@ func (d *Downloader) processUsenetDownload(entry *storage.Entry) error {
 	return nil
 }
 
+// writeAndClose fills f with write and closes it. A failed close fails the
+// file too: buffered data may not have reached the disk, so the file can be
+// truncated even though every write succeeded.
+func writeAndClose(f io.WriteCloser, write func(io.Writer) error) error {
+	if err := write(f); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close: %w", err)
+	}
+	return nil
+}
+
 func (d *Downloader) detectMultiSeason(torrent *storage.Entry) (bool, []SeasonInfo) {
 	torrentName := torrent.Name
 	files := torrent.GetActiveFiles()
 
 	// Find all seasons present in the files
-	seasonsFound := findAllSeasons(files)
+	seasonsFound := d.seasons.findAllSeasons(files)
 
 	// Check if this is actually a multi-season torrent
-	isMultiSeason := len(seasonsFound) > 1 || hasMultiSeasonIndicators(torrentName)
+	isMultiSeason := len(seasonsFound) > 1 || d.seasons.hasMultiSeasonIndicators(torrentName)
 
 	if !isMultiSeason {
 		return false, nil
 	}
 
 	// Group files by season
-	seasonGroups := groupFilesBySeason(files, seasonsFound)
+	seasonGroups := d.seasons.groupFilesBySeason(files, seasonsFound)
 
 	// Create SeasonInfo objects with proper naming
 	var seasons []SeasonInfo
@@ -743,7 +828,7 @@ func (d *Downloader) detectMultiSeason(torrent *storage.Entry) (bool, []SeasonIn
 		}
 
 		// Generate season-specific name preserving all metadata
-		seasonName := replaceMultiSeasonPattern(torrentName, seasonNum)
+		seasonName := d.seasons.replaceMultiSeasonPattern(torrentName, seasonNum)
 
 		seasons = append(seasons, SeasonInfo{
 			SeasonNumber: seasonNum,
@@ -815,21 +900,9 @@ func (d *Downloader) localDownloadAttempt(
 	progressCallback func(int64, int64),
 ) error {
 	startTime := time.Now()
-	requestedRange := "full"
-	req, err := grab.NewRequest(filename, downloadURL)
+	req, requestedRange, err := d.newGrabRequest(downloadURL, filename, byterange)
 	if err != nil {
 		return err
-	}
-	req = req.WithContext(d.operationContext())
-	req.BufferSize = localDownloadBufferSize
-	req.HTTPRequest.Header.Set("User-Agent", "Decypharr[QBitTorrent]")
-	req.HTTPRequest.Header.Set("Accept", "*/*")
-	req.HTTPRequest.Header.Set("Accept-Encoding", "identity")
-
-	if byterange != nil {
-		requestedRange = fmt.Sprintf("bytes=%d-%d", byterange[0], byterange[1])
-		req.NoResume = true
-		req.HTTPRequest.Header.Set("Range", requestedRange)
 	}
 
 	client := grab.NewClient()
@@ -873,6 +946,37 @@ func (d *Downloader) localDownloadAttempt(
 			return nil
 		}
 	}
+}
+
+// newGrabRequest prepares the download of downloadURL (or its byterange) to
+// filename and returns it with the range it requests.
+func (d *Downloader) newGrabRequest(
+	downloadURL, filename string,
+	byterange *[2]int64,
+) (*grab.Request, string, error) {
+	// grab creates the file with mode 0666; create it first with the shared
+	// mode, like every other file the arr imports. grab resumes from (or, for
+	// a byte range, truncates) the empty file and keeps its mode.
+	if err := fsutil.CreateShared(filename, d.manager.config.SharedFileModeValue()); err != nil {
+		return nil, "", fmt.Errorf("create %s: %w", filename, err)
+	}
+	req, err := grab.NewRequest(filename, downloadURL)
+	if err != nil {
+		return nil, "", err
+	}
+	req = req.WithContext(d.operationContext())
+	req.BufferSize = localDownloadBufferSize
+	req.HTTPRequest.Header.Set("User-Agent", "Decypharr[QBitTorrent]")
+	req.HTTPRequest.Header.Set("Accept", "*/*")
+	req.HTTPRequest.Header.Set("Accept-Encoding", "identity")
+
+	requestedRange := "full"
+	if byterange != nil {
+		requestedRange = fmt.Sprintf("bytes=%d-%d", byterange[0], byterange[1])
+		req.NoResume = true
+		req.HTTPRequest.Header.Set("Range", requestedRange)
+	}
+	return req, requestedRange, nil
 }
 
 func isRetryableDownloadError(err error) bool {

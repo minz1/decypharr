@@ -93,7 +93,7 @@ func (m *Manager) rebuildQueuedTorrentJob(entry *storage.Entry) (*Job, error) {
 		}, nil
 	}
 
-	magnet, err := utils.GetMagnetInfo(entry.Magnet, config.Get().AlwaysRmTrackerUrls)
+	magnet, err := utils.GetMagnetInfo(entry.Magnet, m.store.Get().AlwaysRmTrackerUrls)
 	if err != nil {
 		magnet = utils.ConstructMagnet(entry.InfoHash, entry.Name)
 	}
@@ -101,7 +101,7 @@ func (m *Manager) rebuildQueuedTorrentJob(entry *storage.Entry) (*Job, error) {
 	downloadUncached := entry.DownloadUncached
 	req := NewTorrentRequest(
 		entry.ActiveProvider,
-		downloadFolderForEntry(config.Get().DownloadFolder, entry),
+		downloadFolderForEntry(m.store.Get().DownloadFolder, entry),
 		magnet,
 		m.arr.GetOrCreate(entry.Category),
 		entry.Action,
@@ -110,7 +110,7 @@ func (m *Manager) rebuildQueuedTorrentJob(entry *storage.Entry) (*Job, error) {
 		ImportTypeAPI,
 		entry.SkipMultiSeason,
 	)
-	req.Id = entry.InfoHash
+	req.ID = entry.InfoHash
 	job := NewJob(JobTypeTorrent, req)
 	job.ID = entry.InfoHash
 	job.Entry = entry
@@ -155,7 +155,7 @@ func (m *Manager) rebuildQueuedNZBJob(entry *storage.Entry) (*Job, error) {
 
 	req := NewNZBRequest(
 		meta.Name,
-		downloadFolderForEntry(config.Get().DownloadFolder, entry),
+		downloadFolderForEntry(m.store.Get().DownloadFolder, entry),
 		content,
 		m.arr.GetOrCreate(entry.Category),
 		entry.Action,
@@ -163,7 +163,7 @@ func (m *Manager) rebuildQueuedNZBJob(entry *storage.Entry) (*Job, error) {
 		ImportTypeSABnzbd,
 		entry.SkipMultiSeason,
 	)
-	req.Id = entry.InfoHash
+	req.ID = entry.InfoHash
 	job := NewJob(JobTypeNZB, req)
 	job.ID = entry.InfoHash
 	job.Entry = entry

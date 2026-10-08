@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/sirrobot01/decypharr/internal/config"
 	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
@@ -221,7 +222,7 @@ const (
 )
 
 // convertToSABnzbdNZB converts a storage.Entry to SABnzbd NZB format.
-func convertToSABnzbdNZB(e *storage.Entry) NZB {
+func convertToSABnzbdNZB(e *storage.Entry, naming config.WebDavFolderNaming) NZB {
 	// Calculate MB values
 	sizeMB := e.Size / mb
 	mbLeft := int64(float64(e.Size) * (1 - e.Progress) / float64(mb))
@@ -259,12 +260,12 @@ func convertToSABnzbdNZB(e *storage.Entry) NZB {
 		Category:     e.Category,
 		Priority:     PriorityNormal,
 		SavePath:     e.SavePath,
-		ContentPath:  e.DownloadPath(),
+		ContentPath:  e.DownloadPath(naming),
 		Script:       scriptNone,
 		AddedOn:      e.CreatedAt.Unix(),
 		CompletedOn:  completedOn,
 		FailMessage:  e.LastError,
-		Storage:      e.DownloadPath(),
+		Storage:      e.DownloadPath(naming),
 		Files:        getNZBFiles(e),
 		AvgAge:       "0d", // We don't track article age
 		Downloaded:   downloaded,

@@ -2,6 +2,7 @@ package account
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -18,9 +19,13 @@ type Account struct {
 	Disabled    atomic.Bool                            `json:"disabled"`
 	Token       string                                 `json:"token"`
 	TrafficUsed atomic.Int64                           `json:"traffic_used"` // Traffic used in bytes
-	Username    string                                 `json:"username"`     // Username for the account
 	httpClient  *request.Client
-	Expiration  time.Time `json:"expiration"`
+
+	// profileMu guards username and expiration: account sync writes them
+	// while stats and expiry checks read them.
+	profileMu  sync.RWMutex
+	username   string
+	expiration time.Time
 
 	// Account reactivation tracking
 	DisableCount atomic.Int32 `json:"disable_count"`
@@ -31,6 +36,28 @@ func (a *Account) Equals(other *Account) bool {
 		return false
 	}
 	return a.Token == other.Token && a.Debrid == other.Debrid
+}
+
+// SetProfile records the account's username and expiry, as reported by the
+// provider.
+func (a *Account) SetProfile(username string, expiration time.Time) {
+	a.profileMu.Lock()
+	defer a.profileMu.Unlock()
+	a.username, a.expiration = username, expiration
+}
+
+// Username is the account's username, empty until the first sync.
+func (a *Account) Username() string {
+	a.profileMu.RLock()
+	defer a.profileMu.RUnlock()
+	return a.username
+}
+
+// Expiration is when the account's subscription ends, zero if unknown.
+func (a *Account) Expiration() time.Time {
+	a.profileMu.RLock()
+	defer a.profileMu.RUnlock()
+	return a.expiration
 }
 
 func (a *Account) Client() *request.Client {

@@ -7,13 +7,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/rs/zerolog"
 
-	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/request"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
 )
@@ -93,7 +93,7 @@ func TestInvalidFetchedLinkIsNotCached(t *testing.T) {
 		}
 		return dl, nil
 	}
-	if _, err := acc.GetDownloadLink(t.Context(), "id", file, fetcher); !errors.Is(err, types.EmptyDownloadLinkError) {
+	if _, err := acc.GetDownloadLink(t.Context(), "id", file, fetcher); !errors.Is(err, types.ErrEmptyDownloadLink) {
 		t.Fatalf("first fetch error = %v, want empty link", err)
 	}
 	dl, err := acc.GetDownloadLink(t.Context(), "id", file, fetcher)
@@ -103,15 +103,14 @@ func TestInvalidFetchedLinkIsNotCached(t *testing.T) {
 }
 
 func TestMeasureDownloadIsBoundedWhenRangeIgnored(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(make([]byte, 4*speedTestBytes)) // ignores Range, sends 200 with the whole body
 	}))
 	defer server.Close()
 	var logs bytes.Buffer
 	m, acc := newTestManager(&logs)
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
-	acc.httpClient = request.New(request.WithMaxRetries(0))
+	acc.httpClient = request.New(zerolog.Nop(), nil, request.WithMaxRetries(0))
 	acc.storeLink(types.DownloadLink{Link: "file", DownloadLink: server.URL})
 	var result types.SpeedTestResult
 	m.MeasureDownload(t.Context(), &result)
@@ -180,4 +179,27 @@ func isAll(err error, targets []error) bool {
 		}
 	}
 	return true
+}
+
+// Sync writes an account's profile while stats read it (run with -race).
+func TestAccountProfileIsSafeForConcurrentUse(t *testing.T) {
+	t.Parallel()
+	acc := &Account{}
+	expiry := time.Now().Add(time.Hour)
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for range 200 {
+			acc.SetProfile("user", expiry)
+		}
+	})
+	wg.Go(func() {
+		for range 200 {
+			_ = acc.Username()
+			_ = acc.Expiration()
+		}
+	})
+	wg.Wait()
+	if acc.Username() != "user" || !acc.Expiration().Equal(expiry) {
+		t.Fatalf("profile = %q, %v", acc.Username(), acc.Expiration())
+	}
 }

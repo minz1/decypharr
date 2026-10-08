@@ -21,7 +21,6 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
-	"github.com/sirrobot01/decypharr/internal/logger"
 	nntpyenc "github.com/sirrobot01/decypharr/internal/nntp/yenc"
 	"github.com/sirrobot01/decypharr/internal/utils"
 )
@@ -46,7 +45,8 @@ type ProviderPool struct {
 	// when no eligible provider is warm, dials proceed regardless, so
 	// single-provider setups keep their fail-fast behavior.
 	dialFailStreak    atomic.Int32
-	dialCooldownUntil atomic.Int64 // nanotimeNow deadline; 0 = no cooldown
+	dialCooldownUntil atomic.Int64 // clock.now deadline; 0 = no cooldown
+	clock             monoClock    // the owning Client's
 }
 
 // maxDialCooldown caps the exponential dial backoff. Kept short relative to
@@ -59,13 +59,13 @@ const maxDialBackoffShift = 4
 
 func (pp *ProviderPool) inDialCooldown() bool {
 	until := pp.dialCooldownUntil.Load()
-	return until != 0 && nanotimeNow() < until
+	return until != 0 && pp.clock.now() < until
 }
 
 func (pp *ProviderPool) noteDialFailure() {
 	streak := pp.dialFailStreak.Add(1)
 	backoff := min(time.Second<<min(streak-1, maxDialBackoffShift), maxDialCooldown)
-	pp.dialCooldownUntil.Store(nanotimeNow() + int64(backoff))
+	pp.dialCooldownUntil.Store(pp.clock.now() + int64(backoff))
 }
 
 func (pp *ProviderPool) noteDialSuccess() {
@@ -105,6 +105,18 @@ type Client struct {
 	orderedPools []*ProviderPool
 	providers    []config.UsenetProvider
 	logger       zerolog.Logger
+
+	// Owned by this client and shared by its pools and connections: the
+	// monotonic clock their timestamps use, the decoded-body buffers, the
+	// pooled idle-connection entries and the stalled-body janitor.
+	clock   monoClock
+	bufs    *bodyBufPool
+	entries sync.Pool
+	janitor *bodyJanitor
+
+	// tlsBase is the verified TLS configuration SSL providers specialize
+	// with their server name (config.ProviderTLSConfig).
+	tlsBase *tls.Config
 
 	retries int // Number of retries per provider for transient errors
 
@@ -185,32 +197,6 @@ func (e *connectionEntry) lastActivity() time.Time {
 	return e.lastUsed
 }
 
-//nolint:gochecknoglobals // a sync.Pool only pays off when shared by every Client
-var connectionEntryPool = sync.Pool{
-	New: func() any {
-		return &connectionEntry{}
-	},
-}
-
-func acquireConnectionEntry(conn *Connection, provider config.UsenetProvider, lastUsed time.Time) *connectionEntry {
-	entry, ok := connectionEntryPool.Get().(*connectionEntry)
-	if !ok {
-		entry = &connectionEntry{}
-	}
-	entry.conn = conn
-	entry.provider = provider
-	entry.lastUsed = lastUsed
-	return entry
-}
-
-func releaseConnectionEntry(entry *connectionEntry) {
-	if entry == nil {
-		return
-	}
-	*entry = connectionEntry{}
-	connectionEntryPool.Put(entry)
-}
-
 // NNTP timeouts.
 //
 // defaultIdleTimeout is deliberately long: players read in bursts (fill their
@@ -253,7 +239,7 @@ const (
 // provider ID (host:port/username), never bare host: dual-account setups
 // list the same host twice, and host keying silently merged them into one
 // pool with one account's connection cap.
-func buildPools(providers []config.UsenetProvider) (map[string]*ProviderPool, []*ProviderPool) {
+func buildPools(providers []config.UsenetProvider, clock monoClock) (map[string]*ProviderPool, []*ProviderPool) {
 	pools := make(map[string]*ProviderPool, len(providers))
 	ordered := make([]*ProviderPool, len(providers))
 	for i, p := range providers {
@@ -262,6 +248,7 @@ func buildPools(providers []config.UsenetProvider) (map[string]*ProviderPool, []
 			slots:  make(chan struct{}, p.MaxConnections),
 			max:    p.MaxConnections,
 			config: p,
+			clock:  clock,
 		}
 		pools[p.ID()] = pp
 		ordered[i] = pp
@@ -270,7 +257,7 @@ func buildPools(providers []config.UsenetProvider) (map[string]*ProviderPool, []
 }
 
 // NewClient creates a new connection manager.
-func NewClient(cfg *config.Config) (*Client, error) {
+func NewClient(cfg *config.Config, log zerolog.Logger) (*Client, error) {
 	// Clone: sorting and normalizing below must not mutate the shared config,
 	// which other goroutines read concurrently.
 	providers := slices.Clone(cfg.Usenet.Providers)
@@ -293,13 +280,22 @@ func NewClient(cfg *config.Config) (*Client, error) {
 		providers[i].Backbone = normalizeBackbone(providers[i].Backbone)
 	}
 
-	pools, orderedPools := buildPools(providers)
+	clock := newMonoClock()
+	tlsBase, tlsErr := cfg.TLSClientConfig()
+	if tlsErr != nil {
+		return nil, tlsErr
+	}
+	pools, orderedPools := buildPools(providers, clock)
 	cm := &Client{
+		tlsBase:          tlsBase,
+		clock:            clock,
+		bufs:             &bodyBufPool{},
+		janitor:          newBodyJanitor(),
 		pools:            pools,
 		orderedPools:     orderedPools,
 		providers:        providers,
 		retries:          cfg.Retries,
-		logger:           logger.New("nntp-client"),
+		logger:           log,
 		speedTestResults: xsync.NewMap[string, SpeedTestResult](),
 		sockReadBuf:      parseSockBuf(cfg.Usenet.SocketReadBuffer),
 		sockWriteBuf:     parseSockBuf(cfg.Usenet.SocketWriteBuffer),
@@ -329,6 +325,29 @@ func NewClient(cfg *config.Config) (*Client, error) {
 	// Start background reaper
 	go cm.reaper()
 	return cm, nil
+}
+
+func (c *Client) acquireConnectionEntry(
+	conn *Connection,
+	provider config.UsenetProvider,
+	lastUsed time.Time,
+) *connectionEntry {
+	entry, ok := c.entries.Get().(*connectionEntry)
+	if !ok {
+		entry = &connectionEntry{}
+	}
+	entry.conn = conn
+	entry.provider = provider
+	entry.lastUsed = lastUsed
+	return entry
+}
+
+func (c *Client) releaseConnectionEntry(entry *connectionEntry) {
+	if entry == nil {
+		return
+	}
+	*entry = connectionEntry{}
+	c.entries.Put(entry)
 }
 
 // setIdleTimeout applies a configured idle window and keeps the derived
@@ -373,7 +392,7 @@ func (c *Client) put(conn *Connection, provider config.UsenetProvider) {
 		return
 	}
 
-	entry := acquireConnectionEntry(conn, provider, time.Now())
+	entry := c.acquireConnectionEntry(conn, provider, time.Now())
 
 	pp.mu.Lock()
 	// Cap stack size (shouldn't happen with semaphore, but be safe)
@@ -435,7 +454,7 @@ func (c *Client) flushIdle(pp *ProviderPool) {
 	pp.mu.Unlock()
 	for _, entry := range drained {
 		conn := entry.conn
-		releaseConnectionEntry(entry)
+		c.releaseConnectionEntry(entry)
 		_ = conn.Close()
 	}
 }
@@ -804,7 +823,7 @@ func (c *Client) getOrCreateFromPool(
 			now := time.Now()
 			if c.isIdleExpired(entry.lastUsed, now) {
 				conn := entry.conn
-				releaseConnectionEntry(entry)
+				c.releaseConnectionEntry(entry)
 				_ = conn.Close()
 				continue
 			}
@@ -813,14 +832,14 @@ func (c *Client) getOrCreateFromPool(
 			healthy, pingTimedOut := c.checkEntryHealth(entry)
 			if healthy {
 				conn := entry.conn
-				releaseConnectionEntry(entry)
+				c.releaseConnectionEntry(entry)
 				conn.pool = pp                         // already set at creation; kept authoritative
 				pp.activeConns.Store(conn, struct{}{}) // Register as active (checked-out)
 				return conn, nil
 			}
 			// Unhealthy - close and try next pooled connection
 			conn := entry.conn
-			releaseConnectionEntry(entry)
+			c.releaseConnectionEntry(entry)
 			_ = conn.Close()
 			if pingTimedOut {
 				// The freshest pooled connection timed out its verify ping:
@@ -923,14 +942,9 @@ func (c *Client) createConnection(ctx context.Context, provider config.UsenetPro
 	// TLS if enabled
 	if provider.SSL {
 		// Dial with TLS directly if possible, or Dial then Wrap
-		tlsConfig := &tls.Config{
-			ServerName: provider.Host,
-			// Existing behavior: many usenet resellers present certificates
-			// that do not match the configured host. Verification needs a
-			// per-provider config toggle before it can be enabled.
-			InsecureSkipVerify: true, //nolint:gosec // G402: see above; tracked as a follow-up
-			MinVersion:         tls.VersionTLS12,
-		}
+		// Certificates are verified. A reseller whose certificate does not
+		// name the configured host sets the provider's tls_server_name.
+		tlsConfig := config.ProviderTLSConfig(c.tlsBase, provider)
 		// Use tls.Dialer for simpler timeout handling
 		tlsDialer := &tls.Dialer{
 			NetDialer: dialer,
@@ -972,6 +986,9 @@ func (c *Client) createConnection(ctx context.Context, provider config.UsenetPro
 		username: provider.Username,
 		password: provider.Password,
 		logger:   c.logger.With().Str("host", provider.Host).Logger(),
+		clock:    c.clock,
+		bufs:     c.bufs,
+		janitor:  c.janitor,
 	}
 	// bodyReader follows conn.reader, so this stays valid across the
 	// STARTTLS reader swap.
@@ -1009,7 +1026,7 @@ func (c *Client) createConnection(ctx context.Context, provider config.UsenetPro
 
 	// Registered with the body-idle janitor for the connection's lifetime;
 	// idleNS=0 disarms it whenever no body copy is in flight.
-	bodyIdleJanitor.add(conn)
+	c.janitor.add(conn)
 
 	return conn, nil
 }
@@ -1077,7 +1094,7 @@ func (c *Client) reapIdleConnections() {
 
 		for _, entry := range toClose {
 			conn := entry.conn
-			releaseConnectionEntry(entry)
+			c.releaseConnectionEntry(entry)
 			_ = conn.Close()
 		}
 		// Ping outside the pool lock, in parallel, so slot-held time stays
@@ -1188,7 +1205,7 @@ func (c *Client) keepAliveBatch(pp *ProviderPool, toPing []*connectionEntry, now
 func (c *Client) keepAlive(pp *ProviderPool, entry *connectionEntry, now time.Time, st *keepaliveState) error {
 	discard := func() {
 		conn := entry.conn
-		releaseConnectionEntry(entry)
+		c.releaseConnectionEntry(entry)
 		_ = conn.Close()
 		c.releaseSlot(pp)
 	}
@@ -1662,7 +1679,7 @@ func (c *Client) Close() error {
 		// Close idle connections
 		for _, entry := range pp.conns {
 			_ = entry.conn.Close()
-			releaseConnectionEntry(entry)
+			c.releaseConnectionEntry(entry)
 			totalClosed++
 		}
 		pp.conns = nil
@@ -1684,6 +1701,7 @@ func (c *Client) Close() error {
 	// connections we just force-closed, which makes them return with
 	// errors and exit cleanly.
 	c.repairPool.Stop()
+	c.janitor.close()
 
 	c.logger.Info().
 		Int("total_closed", totalClosed).

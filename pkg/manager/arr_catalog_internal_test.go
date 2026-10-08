@@ -6,20 +6,15 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
 // Entries synced from a provider carry no category. They are still symlinked
 // into an Arr library, so the catalog must return their files.
-//
-//nolint:paralleltest // resets the config singleton
 func TestListManagedFilesIgnoresEntryCategory(t *testing.T) {
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 
-	store, err := storage.NewStorage(filepath.Join(t.TempDir(), "db"))
+	store, err := storage.NewStorage(filepath.Join(t.TempDir(), "db"), storage.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,12 +59,8 @@ func TestListManagedFilesIgnoresEntryCategory(t *testing.T) {
 
 // A file with no ID cannot be indexed or reacquired, so the scan must count it
 // rather than drop it silently.
-//
-//nolint:paralleltest // resets the config singleton
 func TestEntryManagedFilesCountsSkips(t *testing.T) {
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 
 	entry := &storage.Entry{
 		InfoHash: "aabbccddeeff00112233445566778899aabbccdd",
@@ -83,7 +74,7 @@ func TestEntryManagedFilesCountsSkips(t *testing.T) {
 	}
 
 	var skips catalogSkips
-	files := entryManagedFiles(entry, &skips)
+	files := entryManagedFiles(entry, "", &skips)
 	if len(files) != 1 || files[0].FileName != "kept.mkv" {
 		t.Fatalf("files = %#v", files)
 	}

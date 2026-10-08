@@ -30,7 +30,11 @@ type UsenetProvider struct {
 	Backbone       string `json:"backbone,omitempty"`        // Shared article backbone identifier used for failover decisions
 	MaxConnections int    `json:"max_connections,omitempty"` // Max connections for this provider (default: 10)
 	SSL            bool   `json:"ssl,omitempty"`             // Use SSL/TLS for the connection
-	Priority       int    `json:"priority,omitempty"`        // Priority for this provider (lower = higher priority)
+	// TLSServerName is the name the provider's certificate is verified
+	// against, for resellers whose certificate does not name the host
+	// configured above. Empty means Host.
+	TLSServerName string `json:"tls_server_name,omitempty"`
+	Priority      int    `json:"priority,omitempty"` // Priority for this provider (lower = higher priority)
 	// Backup marks this provider as a fallback tier. Backups are only
 	// consulted when every non-backup ("primary") provider is excluded
 	// — e.g. all primaries returned article-not-found or had connection
@@ -216,11 +220,11 @@ func validateUsenet(providers []UsenetProvider) error {
 	return nil
 }
 
-func (c *Config) applyUsenetEnvVars() {
+func (c *Config) applyUsenetEnvVars(e env) {
 	// Per-stream configuration. MAX_CONNECTIONS also sets the processing limit
 	// unless PROCESSING_MAX_CONNECTIONS is given explicitly.
-	processingMaxConns := getEnv("USENET__PROCESSING_MAX_CONNECTIONS")
-	if maxConns := getEnv("USENET__MAX_CONNECTIONS"); maxConns != "" {
+	processingMaxConns := e.get("USENET__PROCESSING_MAX_CONNECTIONS")
+	if maxConns := e.get("USENET__MAX_CONNECTIONS"); maxConns != "" {
 		if v, err := strconv.Atoi(maxConns); err == nil {
 			c.Usenet.MaxConnections = v
 			if processingMaxConns == "" {
@@ -228,28 +232,28 @@ func (c *Config) applyUsenetEnvVars() {
 			}
 		}
 	}
-	envInt("USENET__PROCESSING_MAX_CONNECTIONS", &c.Usenet.ProcessingMaxConnections)
+	e.envInt("USENET__PROCESSING_MAX_CONNECTIONS", &c.Usenet.ProcessingMaxConnections)
 
-	envString("USENET__READ_AHEAD", &c.Usenet.ReadAhead)
-	if pipelineDepth := getEnv("USENET__BODY_PIPELINE_DEPTH"); pipelineDepth != "" {
+	e.envString("USENET__READ_AHEAD", &c.Usenet.ReadAhead)
+	if pipelineDepth := e.get("USENET__BODY_PIPELINE_DEPTH"); pipelineDepth != "" {
 		if v, err := strconv.Atoi(pipelineDepth); err == nil {
 			c.Usenet.BodyPipelineDepth = NormalizeBodyPipelineDepth(v)
 		}
 	}
-	envString("USENET__STREAM_BACKUP_WAIT", &c.Usenet.StreamBackupWait)
-	envString("USENET__SOCKET_READ_BUFFER", &c.Usenet.SocketReadBuffer)
-	envString("USENET__SOCKET_WRITE_BUFFER", &c.Usenet.SocketWriteBuffer)
-	envString("USENET__PROCESSING_TIMEOUT", &c.Usenet.ProcessingTimeout)
-	envInt("USENET__AVAILABILITY_SAMPLE_PERCENT", &c.Usenet.AvailabilitySamplePercent)
-	envInt("USENET__IMPORT_AVAILABILITY_SAMPLE_PERCENT", &c.Usenet.ImportAvailabilitySamplePercent)
-	envString("USENET__DISK_PATH", &c.Usenet.DiskPath)
+	e.envString("USENET__STREAM_BACKUP_WAIT", &c.Usenet.StreamBackupWait)
+	e.envString("USENET__SOCKET_READ_BUFFER", &c.Usenet.SocketReadBuffer)
+	e.envString("USENET__SOCKET_WRITE_BUFFER", &c.Usenet.SocketWriteBuffer)
+	e.envString("USENET__PROCESSING_TIMEOUT", &c.Usenet.ProcessingTimeout)
+	e.envInt("USENET__AVAILABILITY_SAMPLE_PERCENT", &c.Usenet.AvailabilitySamplePercent)
+	e.envInt("USENET__IMPORT_AVAILABILITY_SAMPLE_PERCENT", &c.Usenet.ImportAvailabilitySamplePercent)
+	e.envString("USENET__DISK_PATH", &c.Usenet.DiskPath)
 
 	// Usenet providers array. HOST creates a new entry; credentials apply to
 	// existing entries by index so users can set only secrets in
 	// environmentFiles without repeating host.
 	for i := range maxEnvProviders {
 		prefix := fmt.Sprintf("USENET__PROVIDERS__%d__", i)
-		if val := getEnv(prefix + "HOST"); val != "" {
+		if val := e.get(prefix + "HOST"); val != "" {
 			c.Usenet.Providers = growTo(c.Usenet.Providers, i)
 			c.Usenet.Providers[i].Host = val
 		}
@@ -257,13 +261,14 @@ func (c *Config) applyUsenetEnvVars() {
 			continue
 		}
 		provider := &c.Usenet.Providers[i]
-		envInt(prefix+"PORT", &provider.Port)
-		envString(prefix+"USERNAME", &provider.Username)
-		envString(prefix+"PASSWORD", &provider.Password)
-		envString(prefix+"BACKBONE", &provider.Backbone)
-		envInt(prefix+"MAX_CONNECTIONS", &provider.MaxConnections)
-		envBool(prefix+"SSL", &provider.SSL)
-		envInt(prefix+"PRIORITY", &provider.Priority)
-		envBool(prefix+"BACKUP", &provider.Backup)
+		e.envInt(prefix+"PORT", &provider.Port)
+		e.envString(prefix+"USERNAME", &provider.Username)
+		e.envString(prefix+"PASSWORD", &provider.Password)
+		e.envString(prefix+"BACKBONE", &provider.Backbone)
+		e.envInt(prefix+"MAX_CONNECTIONS", &provider.MaxConnections)
+		e.envBool(prefix+"SSL", &provider.SSL)
+		e.envString(prefix+"TLS_SERVER_NAME", &provider.TLSServerName)
+		e.envInt(prefix+"PRIORITY", &provider.Priority)
+		e.envBool(prefix+"BACKUP", &provider.Backup)
 	}
 }

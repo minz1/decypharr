@@ -12,21 +12,14 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/manager"
+	"github.com/sirrobot01/decypharr/pkg/manager/managertest"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
 func testManager(t *testing.T) *manager.Manager {
 	t.Helper()
-	config.SetConfigPath(t.TempDir())
-	config.Reset()
-	cfg := config.Get()
-	cfg.FolderNaming = config.WebDavUseFileName
-	mgr := manager.New()
-	t.Cleanup(func() {
-		if err := mgr.Stop(); err != nil {
-			t.Error(err)
-		}
-		config.Reset()
+	mgr, _ := managertest.New(t, func(cfg *config.Config) {
+		cfg.FolderNaming = config.WebDavUseFileName
 	})
 	return mgr
 }
@@ -68,7 +61,8 @@ func readdir(t *testing.T, fsys *filesystem, name string) []fs.FileInfo {
 	return entries
 }
 
-func TestFilesystemBuildsNestedFileTree(t *testing.T) { //nolint:paralleltest // mutates the config singleton
+func TestFilesystemBuildsNestedFileTree(t *testing.T) {
+	t.Parallel()
 	mgr := testManager(t)
 	addEntry(t, mgr, "Example Show", map[string]int64{
 		"Season 01/Episode 01.mkv": 100,
@@ -97,7 +91,8 @@ func TestFilesystemBuildsNestedFileTree(t *testing.T) { //nolint:paralleltest //
 	}
 }
 
-func TestFilesystemIsReadOnly(t *testing.T) { //nolint:paralleltest // mutates the config singleton
+func TestFilesystemIsReadOnly(t *testing.T) {
+	t.Parallel()
 	mgr := testManager(t)
 	addEntry(t, mgr, "Example Show", map[string]int64{"a.mkv": 1})
 	fsys := newFilesystem(mgr, nil)
@@ -119,7 +114,8 @@ func TestFilesystemIsReadOnly(t *testing.T) { //nolint:paralleltest // mutates t
 	}
 }
 
-func TestFilesystemErrorSentinels(t *testing.T) { //nolint:paralleltest // mutates the config singleton
+func TestFilesystemErrorSentinels(t *testing.T) {
+	t.Parallel()
 	mgr := testManager(t)
 	addEntry(t, mgr, "Example Show", map[string]int64{"a.mkv": 1})
 	fsys := newFilesystem(mgr, nil)
@@ -133,7 +129,8 @@ func TestFilesystemErrorSentinels(t *testing.T) { //nolint:paralleltest // mutat
 	}
 }
 
-func TestDirFileReaddirPaging(t *testing.T) { //nolint:paralleltest // mutates the config singleton
+func TestDirFileReaddirPaging(t *testing.T) {
+	t.Parallel()
 	mgr := testManager(t)
 	addEntry(t, mgr, "Example Show", map[string]int64{
 		"e1.mkv": 1, "e2.mkv": 2, "e3.mkv": 3,

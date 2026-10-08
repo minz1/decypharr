@@ -657,3 +657,38 @@ func TestSoleStreamRespectsPoolBudget(t *testing.T) {
 		t.Fatalf("single stream held %d bytes against a %d budget", got, budget)
 	}
 }
+
+// A ReadAt that passed its closed check before Close ran reports ErrClosed,
+// not the torn-down state Close leaves (blocks released, ranges kept, file
+// closed).
+func TestReadAtRacingCloseReportsClosed(t *testing.T) {
+	t.Parallel()
+	bothModes(t, func(t *testing.T, cfg Config) {
+		p := newTestPool(t, PoolConfig{})
+		b := newTestBuffer(t, p, cfg)
+		data := make([]byte, 64<<10)
+		fillPattern(data, 0)
+		if _, err := b.WriteAt(data, 0); err != nil {
+			t.Fatal(err)
+		}
+
+		checked, closed := make(chan struct{}), make(chan struct{})
+		b.readHook = func() {
+			close(checked)
+			<-closed
+		}
+		result := make(chan error, 1)
+		go func() {
+			_, err := b.ReadAt(make([]byte, len(data)), 0)
+			result <- err
+		}()
+		<-checked
+		if err := b.Close(); err != nil {
+			t.Fatal(err)
+		}
+		close(closed)
+		if err := <-result; !errors.Is(err, ErrClosed) {
+			t.Fatalf("ReadAt across Close = %v, want ErrClosed", err)
+		}
+	})
+}

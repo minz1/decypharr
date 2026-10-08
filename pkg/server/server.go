@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -47,25 +48,28 @@ const (
 )
 
 type Server struct {
-	router       *chi.Mux
-	logger       zerolog.Logger
-	manager      *manager.Manager
-	stats        *stats.Collector
-	cookie       *sessions.CookieStore
-	templates    *template.Template
-	nzbUserAgent string
-	urlBase      string
-	restartFunc  func()
+	config      *config.Store
+	logsDir     string
+	router      *chi.Mux
+	logger      zerolog.Logger
+	manager     *manager.Manager
+	stats       *stats.Collector
+	cookie      *sessions.CookieStore
+	templates   *template.Template
+	urlBase     string
+	restartFunc func()
 }
 
-func New(mgr *manager.Manager) *Server {
-	l := logger.New("http")
+// New builds the HTTP front end for one service generation. Settings that
+// apply without a restart are read live from store.
+func New(mgr *manager.Manager, store *config.Store, logs *logger.Factory) *Server {
+	l := logs.New("http")
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.StripSlashes)
 	r.Use(middleware.RedirectSlashes)
 
-	cfg := config.Get()
+	cfg := store.Get()
 
 	templates := template.Must(template.ParseFS(
 		content,
@@ -91,9 +95,11 @@ func New(mgr *manager.Manager) *Server {
 		SameSite: http.SameSiteLaxMode,
 	}
 
-	statsCollector := stats.New(mgr)
+	statsCollector := stats.New(mgr, store, logs.New("stats"))
 
 	s := &Server{
+		config:    store,
+		logsDir:   logger.Dir(cfg.Dir()),
 		logger:    l,
 		manager:   mgr,
 		stats:     statsCollector,
@@ -102,9 +108,9 @@ func New(mgr *manager.Manager) *Server {
 		urlBase:   cfg.URLBase,
 	}
 
-	qb := qbit.New(mgr)
-	sb := sabnzbd.New(mgr)
-	wd := webdav.NewHandler(mgr)
+	qb := qbit.New(mgr, store, logs.New("qbit"))
+	sb := sabnzbd.New(mgr, store, logs.New("sabnzbd"))
+	wd := webdav.NewHandler(mgr, store, logs.New("webdav"))
 
 	routes := make(map[string]http.Handler)
 	routes["/api/v2"] = qb.Routes()
@@ -165,33 +171,46 @@ func (s *Server) Restart() {
 	}
 }
 
+// Start serves HTTP until ctx is done. It returns an error when the
+// listener cannot be opened or the server fails, so the process does not
+// keep running without its web UI and APIs.
 func (s *Server) Start(ctx context.Context) error {
-	cfg := config.Get()
+	cfg := s.config.Get()
+
+	addr := net.JoinHostPort(cfg.BindAddress, cfg.Port)
+	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", addr)
+	if err != nil {
+		return fmt.Errorf("http server: %w", err)
+	}
 
 	// Start background stats collector
 	s.stats.Start(ctx)
 
-	addr := fmt.Sprintf("%s:%s", cfg.BindAddress, cfg.Port)
-	s.logger.Info().Msgf("Starting server on %s%s", addr, cfg.URLBase)
+	s.logger.Info().Msgf("Starting server on %s%s", listener.Addr(), cfg.URLBase)
 	srv := &http.Server{
-		Addr:              addr,
 		Handler:           s.router,
 		ReadHeaderTimeout: readHeaderTimeout,
 	}
 
+	serveErr := make(chan error, 1)
 	go func() {
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			s.logger.Error().Err(err).Msgf("Error starting server")
-		}
+		serveErr <- srv.Serve(listener)
 	}()
 
-	<-ctx.Done()
-	s.logger.Info().Msg("Shutting down gracefully...")
-	return srv.Shutdown(context.Background())
+	select {
+	case err = <-serveErr:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return fmt.Errorf("http server: %w", err)
+	case <-ctx.Done():
+		s.logger.Info().Msg("Shutting down gracefully...")
+		return srv.Shutdown(context.WithoutCancel(ctx))
+	}
 }
 
 func (s *Server) getLogs(w http.ResponseWriter, _ *http.Request) {
-	logFile := filepath.Join(logger.GetLogPath(), "decypharr.log")
+	logFile := filepath.Join(s.logsDir, logger.FileName)
 
 	// Open and read the file
 	file, err := os.Open(logFile)
@@ -222,7 +241,7 @@ func (s *Server) getLogs(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) getRcloneLogs(w http.ResponseWriter, _ *http.Request) {
 	// Rclone logs resides in the same directory as the application logs
-	logFile := filepath.Join(logger.GetLogPath(), "rclone.log")
+	logFile := filepath.Join(s.logsDir, "rclone.log")
 	// Open and read the file
 	file, err := os.Open(logFile)
 	if err != nil {

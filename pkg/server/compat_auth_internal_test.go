@@ -8,9 +8,11 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/arr"
-	"github.com/sirrobot01/decypharr/pkg/manager"
+	"github.com/sirrobot01/decypharr/pkg/manager/managertest"
 	"github.com/sirrobot01/decypharr/pkg/server/qbit"
 	"github.com/sirrobot01/decypharr/pkg/server/sabnzbd"
 )
@@ -31,19 +33,11 @@ func compatAuthRequest(protocol, category, username, password string) *http.Requ
 	return req
 }
 
-//nolint:paralleltest // mutates the process-wide config singleton
 func TestCompatibilityAPIsAuthenticateBeforeProbing(t *testing.T) {
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
-	cfg := config.Get()
-	cfg.UseAuth = true
-	cfg.Auth = &config.Auth{APIToken: "server-token", TokenOnly: true}
-	mgr := manager.New()
-	t.Cleanup(func() {
-		if err := mgr.Stop(); err != nil {
-			t.Error(err)
-		}
+	t.Parallel()
+	mgr, store := managertest.New(t, func(cfg *config.Config) {
+		cfg.UseAuth = true
+		cfg.Auth = &config.Auth{APIToken: "server-token", TokenOnly: true}
 	})
 
 	var probes atomic.Int64
@@ -59,10 +53,11 @@ func TestCompatibilityAPIsAuthenticateBeforeProbing(t *testing.T) {
 		name    string
 		handler http.Handler
 	}{
-		{name: "qbit", handler: qbit.New(mgr).Routes()},
-		{name: "sabnzbd", handler: sabnzbd.New(mgr).Routes()},
+		{name: "qbit", handler: qbit.New(mgr, store, zerolog.Nop()).Routes()},
+		{name: "sabnzbd", handler: sabnzbd.New(mgr, store, zerolog.Nop()).Routes()},
 	} {
 		t.Run(protocol.name, func(t *testing.T) {
+			t.Parallel()
 			for _, tc := range []struct {
 				name, category, username, password string
 				wantStatus                         int
@@ -75,6 +70,7 @@ func TestCompatibilityAPIsAuthenticateBeforeProbing(t *testing.T) {
 				{"local token", "manual", "", "server-token", http.StatusOK},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
+					t.Parallel()
 					response := httptest.NewRecorder()
 					protocol.handler.ServeHTTP(
 						response,
@@ -91,7 +87,10 @@ func TestCompatibilityAPIsAuthenticateBeforeProbing(t *testing.T) {
 		})
 	}
 	response := httptest.NewRecorder()
-	(&Server{manager: mgr}).handleGetConfig(response, httptest.NewRequest(http.MethodGet, "/api/config", nil))
+	(&Server{manager: mgr, config: store}).handleGetConfig(
+		response,
+		httptest.NewRequest(http.MethodGet, "/api/config", nil),
+	)
 	var publicConfig map[string]json.RawMessage
 	if err := json.Unmarshal(response.Body.Bytes(), &publicConfig); err != nil {
 		t.Fatal(err)

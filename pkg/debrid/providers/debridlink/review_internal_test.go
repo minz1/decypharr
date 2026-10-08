@@ -9,13 +9,12 @@ import (
 	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/pkg/debrid/types"
 )
 
 // Pagination must follow the provider's raw page size, not the filtered result.
 func TestPaginationIgnoresFilteredEntries(t *testing.T) {
-	config.Reset()
-	config.SetConfigPath(t.TempDir())
-	t.Cleanup(config.Reset)
+	t.Parallel()
 	const perPage = 100
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		page := r.URL.Query().Get("page")
@@ -40,14 +39,18 @@ func TestPaginationIgnoresFilteredEntries(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	provider, err := New(config.Debrid{Name: "debridlink", APIKey: "token", DownloadAPIKeys: []string{"token"}}, nil)
+	provider, err := New(
+		config.Debrid{Name: "debridlink", APIKey: "token", DownloadAPIKeys: []string{"token"}},
+		nil,
+		types.ProviderOptions{},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	provider.Host = server.URL
 
 	torrents, err := provider.GetTorrents()
-	if err != nil || len(torrents) != 1 || torrents[0].Id != "b" {
+	if err != nil || len(torrents) != 1 || torrents[0].ID != "b" {
 		t.Fatalf("GetTorrents() = %d torrents, %v; want torrent b from page 1", len(torrents), err)
 	}
 	links, err := provider.fetchDownloadLinks(provider.accountsManager.Current())

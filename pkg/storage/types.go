@@ -208,7 +208,7 @@ type File struct {
 
 // ProviderFile represents debrid-specific file information.
 type ProviderFile struct {
-	Id   string `msgpack:"id,omitempty"   json:"id,omitempty"`   // For TorBox-style providers (file_id)
+	ID   string `msgpack:"id,omitempty"   json:"id,omitempty"`   // For TorBox-style providers (file_id)
 	Link string `msgpack:"link,omitempty" json:"link,omitempty"` // For RealDebrid/AllDebrid-style providers (restricted URL)
 	Path string `msgpack:"path,omitempty" json:"path,omitempty"` // Path within the debrid's filesystem
 }
@@ -232,7 +232,7 @@ type ProviderEntry struct {
 // NeedsUpdate checks if this placement is stale compared to the remote torrent.
 // Returns true if the stored placement should be refreshed.
 func (p *ProviderEntry) NeedsUpdate(remote *debridTypes.Torrent) bool {
-	if p.ID != remote.Id {
+	if p.ID != remote.ID {
 		return true // Re-added on debrid with a different ID
 	}
 	if p.Status != remote.Status {
@@ -251,7 +251,7 @@ func (p *ProviderEntry) IsValid() bool {
 	}
 	// Check if all files have necessary info
 	for _, pf := range p.Files {
-		if pf.Id == "" || pf.Link == "" {
+		if pf.ID == "" || pf.Link == "" {
 			return false
 		}
 	}
@@ -275,7 +275,7 @@ func (e *Entry) AddUsenetProvider(metadata *NZB) *ProviderEntry {
 		e.Providers = make(map[string]*ProviderEntry)
 	}
 	providerEntry := &ProviderEntry{
-		Provider: "usenet",
+		Provider: UsenetProvider,
 		ID:       metadata.ID,
 		AddedAt:  time.Now(),
 		Status:   debridTypes.TorrentStatusDownloaded,
@@ -283,14 +283,28 @@ func (e *Entry) AddUsenetProvider(metadata *NZB) *ProviderEntry {
 	}
 	for _, f := range metadata.Files {
 		providerEntry.Files[f.Name] = &ProviderFile{
-			Id:   f.Name,
+			ID:   f.Name,
 			Link: path.Join(e.MountPath, f.Name),
 			Path: path.Join(e.MountPath, f.Name),
 		}
-		e.Providers[f.Name] = providerEntry
 	}
-	e.Providers["usenet"] = providerEntry
+	dropStrayUsenetPlacements(e.Providers)
+	e.Providers[UsenetProvider] = providerEntry
 	return providerEntry
+}
+
+// UsenetProvider is the placement key and provider name of usenet entries.
+const UsenetProvider = "usenet"
+
+// dropStrayUsenetPlacements removes usenet placements stored under a key
+// other than UsenetProvider. Earlier versions also stored the placement
+// under every file's name; those copies are not providers.
+func dropStrayUsenetPlacements(providers map[string]*ProviderEntry) {
+	for key, placement := range providers {
+		if key != UsenetProvider && placement != nil && placement.Provider == UsenetProvider {
+			delete(providers, key)
+		}
+	}
 }
 
 // AddTorrentProvider adds or updates a providerEntry for a debrid.
@@ -301,7 +315,7 @@ func (e *Entry) AddTorrentProvider(debridTorrent *debridTypes.Torrent) *Provider
 
 	providerEntry := &ProviderEntry{
 		Provider: debridTorrent.Debrid,
-		ID:       debridTorrent.Id,
+		ID:       debridTorrent.ID,
 		AddedAt:  time.Now(),
 		Status:   debridTorrent.Status,
 		Files:    make(map[string]*ProviderFile),
@@ -309,7 +323,7 @@ func (e *Entry) AddTorrentProvider(debridTorrent *debridTypes.Torrent) *Provider
 
 	for _, f := range debridTorrent.GetFiles() {
 		providerEntry.Files[f.Name] = &ProviderFile{
-			Id:   f.Id,
+			ID:   f.ID,
 			Link: f.Link,
 			Path: f.Path,
 		}
@@ -498,9 +512,10 @@ func (e *Entry) GetActiveFiles() []*File {
 	}
 	return files
 }
-func (e *Entry) GetFolder() string {
-	// CHeck if the mount folder is empty or .
-	return GetTorrentFolder(config.Get().FolderNaming, e)
+
+// GetFolder is the entry's folder name under the given naming scheme.
+func (e *Entry) GetFolder(naming config.WebDavFolderNaming) string {
+	return GetTorrentFolder(naming, e)
 }
 
 // IsValid checks if the torrent has essential fields.
@@ -524,12 +539,13 @@ func (e *Entry) IsValid() bool {
 	return activePlacement.IsValid()
 }
 
-// DownloadPath returns the expected download/symlink path for this entry.
-func (e *Entry) DownloadPath() string {
-	if config.Get().FolderNaming == config.WebDavUseArrSubmittedName {
-		return filepath.Join(e.SavePath, e.GetFolder())
+// DownloadPath returns the expected download/symlink path for this entry
+// under the given folder naming scheme.
+func (e *Entry) DownloadPath(naming config.WebDavFolderNaming) string {
+	if naming == config.WebDavUseArrSubmittedName {
+		return filepath.Join(e.SavePath, e.GetFolder(naming))
 	}
-	return filepath.Join(e.SavePath, utils.RemoveExtension(e.Name))
+	return filepath.Join(e.SavePath, utils.PathElement(utils.RemoveExtension(e.Name), hashFolder(e)))
 }
 
 // SwitcherJob tracks the progress of a migration operation.
@@ -665,7 +681,7 @@ func (ct *CachedTorrent) ToManagedTorrent() *Entry {
 		// Populate providerEntry files from cached torrent
 		for _, f := range ct.Files {
 			providerEntry.Files[f.Name] = &ProviderFile{
-				Id:   f.Id,
+				ID:   f.ID,
 				Link: f.Link,
 				Path: f.Path,
 			}
@@ -683,26 +699,32 @@ func (ct *CachedTorrent) ToManagedTorrent() *Entry {
 	return mt
 }
 
-// GetTorrentFolder returns the folder name for a torrent by debrid ID.
+// GetTorrentFolder returns the folder name for a torrent by debrid ID. The
+// names come from providers, so the result is always one path element.
 func GetTorrentFolder(folderNaming config.WebDavFolderNaming, entry *Entry) string {
 	var folder string
 	switch folderNaming {
 	case config.WebDavUseFileName:
-		folder = path.Clean(entry.Name)
+		folder = entry.Name
 	case config.WebDavUseOriginalName:
-		folder = path.Clean(entry.OriginalFilename)
+		folder = entry.OriginalFilename
 	case config.WebDavUseFileNameNoExt:
-		folder = path.Clean(utils.RemoveExtension(entry.Name))
+		folder = utils.RemoveExtension(entry.Name)
 	case config.WebDavUseOriginalNameNoExt:
-		folder = path.Clean(utils.RemoveExtension(entry.OriginalFilename))
+		folder = utils.RemoveExtension(entry.OriginalFilename)
 	case config.WebDavUseArrSubmittedName:
-		folder = utils.SafeFolderName(entry.ArrSubmittedName(), entry.InfoHash)
+		return utils.SafeFolderName(entry.ArrSubmittedName(), hashFolder(entry))
 	case config.WebdavUseHash:
-		folder = entry.InfoHash
+		return hashFolder(entry)
 	default:
-		folder = path.Clean(entry.Name)
+		folder = entry.Name
 	}
-	return folder
+	return utils.PathElement(folder, hashFolder(entry))
+}
+
+// hashFolder names an entry's folder by its infohash.
+func hashFolder(entry *Entry) string {
+	return utils.PathElement(entry.InfoHash, "_")
 }
 
 func (e *Entry) ArrSubmittedName() string {
