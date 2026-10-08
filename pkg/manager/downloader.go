@@ -100,7 +100,6 @@ func (d *Downloader) download(torrent *storage.Entry) error {
 // processes each that is not already complete.
 func (d *Downloader) downloadSeasons(torrent *storage.Entry, seasons []SeasonInfo, mountPath string) error {
 	results := convertToMultiSeason(torrent, seasons)
-	d.adoptEarlierSeasonIDs(torrent, results)
 	for _, result := range results {
 		if saved, err := d.manager.queue.GetTorrent(result.InfoHash); err == nil && saved.IsComplete {
 			continue
@@ -120,57 +119,6 @@ func (d *Downloader) downloadSeasons(torrent *storage.Entry, seasons []SeasonInf
 	// it leaves the downloading queue instead of getting re-processed.
 	d.completeEntry(torrent)
 	return nil
-}
-
-// adoptEarlierSeasonIDs gives each season the ID of the queue entry an
-// earlier fan-out of the same pack created for it, so a resumed pack updates
-// those entries instead of duplicating them, whatever scheme derived their
-// IDs (earlier versions used md5). Season entries are recognized by name and
-// by files that belong to the pack.
-func (d *Downloader) adoptEarlierSeasonIDs(pack *storage.Entry, seasons []*storage.Entry) {
-	queued, err := d.manager.storage.FilterQueuedByFolder(seasonFolders(seasons), func(entry *storage.Entry) bool {
-		return entry.InfoHash != pack.InfoHash && fromPack(entry, pack.InfoHash)
-	})
-	if err != nil {
-		d.logger.Warn().Err(err).Msg("Failed to list the queue for earlier season entries")
-		return
-	}
-	earlier := make(map[string]string, len(seasons))
-	for _, entry := range queued {
-		earlier[entry.Name] = entry.InfoHash
-	}
-	for _, season := range seasons {
-		if id, ok := earlier[season.Name]; ok {
-			season.InfoHash = id
-		}
-	}
-}
-
-// seasonFolders lists the folder names a season entry could have been
-// stored under: one per name-based folder naming, as the setting may have
-// changed since.
-func seasonFolders(seasons []*storage.Entry) map[string]struct{} {
-	namings := []config.WebDavFolderNaming{
-		config.WebDavUseFileName, config.WebDavUseOriginalName, config.WebDavUseFileNameNoExt,
-		config.WebDavUseOriginalNameNoExt, config.WebDavUseArrSubmittedName,
-	}
-	folders := make(map[string]struct{}, len(seasons)*len(namings))
-	for _, season := range seasons {
-		for _, naming := range namings {
-			folders[season.GetFolder(naming)] = struct{}{}
-		}
-	}
-	return folders
-}
-
-// fromPack reports whether entry's files come from the pack packHash.
-func fromPack(entry *storage.Entry, packHash string) bool {
-	for _, file := range entry.Files {
-		if file != nil && file.InfoHash == packHash {
-			return true
-		}
-	}
-	return false
 }
 
 func (d *Downloader) process(entry *storage.Entry, mountPath string) error {

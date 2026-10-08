@@ -9,7 +9,6 @@ import (
 	"github.com/sirrobot01/decypharr/internal/kvstore"
 
 	"github.com/sirrobot01/appendstore"
-	"google.golang.org/protobuf/proto"
 )
 
 // newQueueTestStorage returns a Storage backed only by a fresh queue store.
@@ -138,54 +137,4 @@ func TestQueueCleanupFailureRetainsEntry(t *testing.T) {
 	if _, getQueuedErr := s.GetQueued("delete"); !errors.Is(getQueuedErr, appendstore.ErrKeyNotFound) {
 		t.Fatalf("successful entry remains: %v", getQueuedErr)
 	}
-}
-
-// Only entries whose folder could match are decoded: a queued record that
-// cannot be a candidate is skipped by its metadata, even if its value is
-// unreadable. The season-pack fan-out used to decode the whole queue.
-func TestFilterQueuedByFolderDecodesOnlyCandidates(t *testing.T) {
-	t.Parallel()
-	s, err := NewStorage(filepath.Join(t.TempDir(), "db"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-
-	candidate := &Entry{InfoHash: strings.Repeat("a", 40), Name: "Show S01"}
-	if addErr := s.AddQueue(candidate); addErr != nil {
-		t.Fatal(addErr)
-	}
-	// Written under hash naming: its folder is its ID, so it stays a candidate.
-	hashNamed := &Entry{InfoHash: strings.Repeat("b", 32), Name: "Show S02"}
-	if putErr := s.queue.Put(hashNamed.InfoHash, mustMarshalEntry(t, hashNamed),
-		&appendstore.PutOptions{Attributes: map[string]string{attributeName: hashNamed.InfoHash}}); putErr != nil {
-		t.Fatal(putErr)
-	}
-	// Another show with an unreadable value: never decoded.
-	if putErr := s.queue.Put("other", []byte("not a protobuf \xff\xff"),
-		&appendstore.PutOptions{Attributes: map[string]string{attributeName: "Other Show"}}); putErr != nil {
-		t.Fatal(putErr)
-	}
-
-	folders := map[string]struct{}{"Show S01": {}}
-	entries, err := s.FilterQueuedByFolder(folders, nil)
-	if err != nil {
-		t.Fatalf("FilterQueuedByFolder decoded a non-candidate: %v", err)
-	}
-	got := make(map[string]bool, len(entries))
-	for _, entry := range entries {
-		got[entry.Name] = true
-	}
-	if len(entries) != 2 || !got["Show S01"] || !got["Show S02"] {
-		t.Fatalf("entries = %v, want Show S01 and the hash-named Show S02", got)
-	}
-}
-
-func mustMarshalEntry(t *testing.T, entry *Entry) []byte {
-	t.Helper()
-	data, err := proto.Marshal(EntryToProto(entry))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return data
 }

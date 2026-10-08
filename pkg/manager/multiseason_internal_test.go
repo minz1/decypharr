@@ -1,12 +1,6 @@
 package manager
 
-import (
-	"path/filepath"
-	"testing"
-
-	"github.com/sirrobot01/decypharr/internal/config"
-	"github.com/sirrobot01/decypharr/pkg/storage"
-)
+import "testing"
 
 func TestSeasonParserPatterns(t *testing.T) {
 	t.Parallel()
@@ -41,50 +35,5 @@ func TestGenerateSeasonHashIsStable(t *testing.T) {
 	}
 	if first == generateSeasonHash("0123456789012345678901234567890123456789", 2) {
 		t.Fatal("two seasons share an ID")
-	}
-}
-
-// A pack fanned out by an earlier version has season entries whose IDs came
-// from another hash. Resuming it must reuse those entries, not add copies.
-func TestSeasonFanOutReusesEarlierSeasonIDs(t *testing.T) {
-	t.Parallel()
-	m := newShutdownTestManager(t, filepath.Join(t.TempDir(), "db"))
-	pack := &storage.Entry{
-		InfoHash: "0123456789012345678901234567890123456789",
-		Name:     "Show.S01-S02",
-		Protocol: config.ProtocolTorrent,
-		Files: map[string]*storage.File{
-			"Show.S01E01.mkv": {Name: "Show.S01E01.mkv", Size: 5, InfoHash: "0123456789012345678901234567890123456789"},
-			"Show.S02E01.mkv": {Name: "Show.S02E01.mkv", Size: 5, InfoHash: "0123456789012345678901234567890123456789"},
-		},
-		Providers: map[string]*storage.ProviderEntry{},
-	}
-	found, seasons := m.downloader.detectMultiSeason(pack)
-	if !found {
-		t.Fatal("season pack was not detected")
-	}
-	results := convertToMultiSeason(pack, seasons)
-	const legacyID = "0f1e2d3c4b5a69788796a5b4c3d2e1f0" // an md5-era season ID
-	var legacyName string
-	for _, season := range results {
-		if season.Files["Show.S01E01.mkv"] != nil {
-			legacy := *season
-			legacy.InfoHash = legacyID
-			legacyName = legacy.Name
-			if err := m.queue.Add(&legacy); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-
-	results = convertToMultiSeason(pack, seasons)
-	m.downloader.adoptEarlierSeasonIDs(pack, results)
-	for _, season := range results {
-		switch {
-		case season.Name == legacyName && season.InfoHash != legacyID:
-			t.Fatalf("season %q got ID %q, want the earlier %q", season.Name, season.InfoHash, legacyID)
-		case season.Name != legacyName && season.InfoHash == legacyID:
-			t.Fatalf("season %q took another season's ID", season.Name)
-		}
 	}
 }

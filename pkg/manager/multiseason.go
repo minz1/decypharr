@@ -258,8 +258,8 @@ func getSortedSeasons(seasons map[int]bool) []int {
 const seasonHashBytes = 16
 
 // generateSeasonHash derives a season entry's ID from its pack's infohash and
-// season number. Entries persisted by earlier versions carry an md5-derived
-// ID; downloadSeasons finds those by pack and name instead of re-deriving.
+// season number. Versions before the SHA-256 switch derived it with md5, so a
+// pack still fanning out across that upgrade gets new season entries.
 func generateSeasonHash(originalHash string, seasonNumber int) string {
 	sum := sha256.Sum256(fmt.Appendf(nil, "%s-%d", originalHash, seasonNumber))
 	return hex.EncodeToString(sum[:seasonHashBytes])

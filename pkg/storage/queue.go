@@ -1,13 +1,11 @@
 package storage
 
 import (
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/sirrobot01/appendstore"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -81,55 +79,6 @@ func (s *Storage) FilterQueued(filter func(*Entry) bool) ([]*Entry, error) {
 	}
 	return entries, nil
 }
-
-// FilterQueuedByFolder is FilterQueued for entries whose folder name is one
-// of folders. The folder is read from each entry's metadata, so only
-// candidates are decoded. An entry stored without a folder, or with a hash
-// folder (written under hash naming), cannot be ruled out and is decoded too.
-func (s *Storage) FilterQueuedByFolder(folders map[string]struct{}, filter func(*Entry) bool) ([]*Entry, error) {
-	var keys []string
-	err := s.queue.ForEachMetadata(func(key string, meta *appendstore.Metadata) error {
-		folder := meta.Attribute(attributeName)
-		if _, ok := folders[folder]; ok || folder == "" || isHashFolder(folder) {
-			keys = append(keys, key)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("scan queue metadata: %w", err)
-	}
-	var entries []*Entry
-	for _, key := range keys {
-		entry, getErr := s.GetQueued(key)
-		if errors.Is(getErr, appendstore.ErrKeyNotFound) {
-			continue // removed since the metadata scan
-		}
-		if getErr != nil {
-			return nil, getErr
-		}
-		if filter == nil || filter(entry) {
-			entries = append(entries, entry)
-		}
-	}
-	return entries, nil
-}
-
-// isHashFolder reports whether folder looks like an entry ID: 32 or 40 hex
-// digits, the folder name under hash naming.
-func isHashFolder(folder string) bool {
-	if len(folder) != md5HexLen && len(folder) != sha1HexLen {
-		return false
-	}
-	_, err := hex.DecodeString(folder)
-	return err == nil
-}
-
-// Entry ID lengths: season IDs and NZB IDs are 32 hex digits, torrent info
-// hashes 40.
-const (
-	md5HexLen  = 32
-	sha1HexLen = 40
-)
 
 // CountQueuedByState counts queued entries without building full entry objects.
 func (s *Storage) CountQueuedByState(state TorrentState) int {
