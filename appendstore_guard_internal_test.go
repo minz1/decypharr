@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"io/fs"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -46,4 +47,10 @@ func TestAppendstoreOpenedThroughKVStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+// skipDir leaves out hidden directories (.git), node_modules and the root
+// vendor directory (nix's buildGoModule fills it before the tests run).
+func skipDir(path, name string) bool {
+	return path != "." && (strings.HasPrefix(name, ".") || name == "node_modules" || path == "vendor")
 }
