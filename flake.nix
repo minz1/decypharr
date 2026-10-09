@@ -16,7 +16,7 @@
             pname = "decypharr";
             version = "2.3-minz";
             src = ./.;
-            vendorHash = "sha256-i366xOw3Ff4YCFRUV3fs7LzG2HX2F1MTmjFOz7vomX0=";
+            vendorHash = "sha256-MSHI4p4Ky9BMuO3hLysLPcG/w2cXEBnua7RtrMTUif8=";
             subPackages = [ "." ];
             ldflags = [ "-s" "-w" ];
             nativeBuildInputs = [ pkgs.pkg-config pkgs.makeBinaryWrapper ];
