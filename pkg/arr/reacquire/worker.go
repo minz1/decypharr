@@ -47,6 +47,49 @@ func (s *Service) Reacquire(request Request) (*Job, error) {
 	return s.enqueue(request, binding)
 }
 
+// FailDownload queues a job that fails the Arr's grab of downloadID, for a
+// download the Arr never imported. downloadID must be the form the Arr stored.
+func (s *Service) FailDownload(arrName, downloadID, entryID string) (*Job, error) {
+	if arrName == "" || downloadID == "" || entryID == "" {
+		return nil, errors.New("arr name, download ID and entry ID are required")
+	}
+	release, err := s.beginOperation()
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
+	key := jobKey{arrName: arrName, downloadID: downloadID}
+	s.jobsMu.Lock()
+	if id, exists := s.activeReacquisitions[key]; exists {
+		job := cloneJob(s.jobs[id])
+		s.jobsMu.Unlock()
+		return &job, nil
+	}
+	now := s.now()
+	job := Job{
+		ID:         uuid.New().String(),
+		Status:     StatusQueued,
+		Cause:      CauseRepair,
+		Strategy:   StrategyDownloadFailed,
+		ArrName:    arrName,
+		EntryID:    entryID,
+		DownloadID: downloadID,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	if saveErr := s.jobRepository.Save(job); saveErr != nil {
+		s.jobsMu.Unlock()
+		return nil, saveErr
+	}
+	s.jobs[job.ID] = cloneJob(job)
+	s.activeReacquisitions[key] = job.ID
+	s.jobsMu.Unlock()
+
+	s.signal()
+	return &job, nil
+}
+
 func (s *Service) enqueue(request Request, binding Binding) (*Job, error) {
 	key := keyForBinding(binding)
 

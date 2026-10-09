@@ -103,6 +103,9 @@ const (
 	StrategyHistoryFailed   Strategy = "history_failed"
 	StrategyInteractiveBest Strategy = "interactive_best"
 	StrategyCommandSearch   Strategy = "command_search"
+	// StrategyDownloadFailed only fails the grab of a download the Arr never
+	// imported. It has no library files, so it deletes and searches nothing.
+	StrategyDownloadFailed Strategy = "download_failed"
 )
 
 func (strategy Strategy) normalized() Strategy {
@@ -114,7 +117,8 @@ func (strategy Strategy) normalized() Strategy {
 
 func (strategy Strategy) valid() bool {
 	strategy = strategy.normalized()
-	return strategy == StrategyHistoryFailed || strategy == StrategyInteractiveBest || strategy == StrategyCommandSearch
+	return strategy == StrategyHistoryFailed || strategy == StrategyInteractiveBest ||
+		strategy == StrategyCommandSearch || strategy == StrategyDownloadFailed
 }
 
 type Status string

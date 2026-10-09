@@ -25,6 +25,9 @@ func NewHandler(arrs *arr.Service, invalidator Invalidator) Handler {
 }
 
 func (handler *arrHandler) Reacquire(ctx context.Context, job Job, progress JobProgress) error {
+	if job.Strategy == StrategyDownloadFailed {
+		return handler.failDownload(ctx, job, progress)
+	}
 	plan, err := handler.prepare(ctx, job)
 	if err != nil {
 		return err
@@ -51,6 +54,26 @@ func (handler *arrHandler) Reacquire(ctx context.Context, job Job, progress JobP
 		}
 	}
 	return progress.Update(waitingStatus, nil)
+}
+
+// failDownload fails the grab of a download that has no library files. It
+// reuses the exact-failure journal, so a retry never fails the grab twice.
+func (handler *arrHandler) failDownload(ctx context.Context, job Job, progress JobProgress) error {
+	if handler == nil || handler.arrs == nil {
+		return fmt.Errorf("arr reacquirer is not configured")
+	}
+	instance, ok := handler.arrs.Get(job.ArrName)
+	if !ok {
+		return fmt.Errorf("arr %q is not configured", job.ArrName)
+	}
+	failure, err := handler.prepareExactDownloadFailure(ctx, instance, job.DownloadID)
+	if err != nil {
+		return err
+	}
+	if !failure.found {
+		return fmt.Errorf("no grab history for download %q", job.DownloadID)
+	}
+	return handler.executeExactDownloadFailure(ctx, instance, &job, failure, progress)
 }
 
 // reacquirePlan is what Reacquire verified before it touches the Arr.
@@ -127,6 +150,8 @@ func (handler *arrHandler) runStrategy(
 			return "", err
 		}
 		return handler.grabBestRelease(ctx, plan.instance, job, plan.bindings, progress)
+	case StrategyDownloadFailed:
+		return "", fmt.Errorf("strategy %q has no plan", job.Strategy)
 	default:
 		return "", fmt.Errorf("unsupported reacquire strategy %q", job.Strategy)
 	}

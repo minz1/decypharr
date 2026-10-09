@@ -128,12 +128,18 @@ func validateJob(job Job) error {
 		return fmt.Errorf("invalid job strategy %q", job.Strategy)
 	case job.ArrName == "":
 		return errors.New("arr name is required")
-	case job.EntryID == "" || job.FileID == "":
-		return errors.New("entry ID and file ID are required")
+	case job.EntryID == "":
+		return errors.New("entry ID is required")
+	case job.FileID == "" && job.Strategy != StrategyDownloadFailed:
+		return errors.New("file ID is required")
 	case job.CreatedAt.IsZero() || job.UpdatedAt.IsZero():
 		return errors.New("job timestamps are required")
 	}
-	if len(job.Bindings) == 0 {
+	if job.Strategy == StrategyDownloadFailed {
+		if job.DownloadID == "" {
+			return errors.New("download ID is required")
+		}
+	} else if len(job.Bindings) == 0 {
 		return errors.New("job bindings are required")
 	}
 	for _, binding := range job.Bindings {
