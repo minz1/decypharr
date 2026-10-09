@@ -399,7 +399,7 @@ func (c *Config) load(lookup LookupEnv) error {
 	c.setDefaults()
 
 	if checkErr := c.CheckLoadable(); checkErr != nil {
-		return fmt.Errorf("configuration error: %w", checkErr)
+		return checkErr
 	}
 
 	// Save new signing secrets so signatures remain valid after a restart.

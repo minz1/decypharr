@@ -139,6 +139,10 @@ func TestLoadRejectsInvalidDebridProxy(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "debrids[0].proxy") {
 		t.Fatalf("Load = %v, want a debrids[0].proxy error", err)
 	}
+	// The binaries prefix load errors themselves; Load adding it too doubled it.
+	if strings.HasPrefix(err.Error(), "configuration error") {
+		t.Fatalf("Load = %q, want no configuration error prefix", err)
+	}
 	cfg := config.New(directory)
 	cfg.Debrids = []config.Debrid{{Name: "rd", APIKey: "k", Proxy: "http://[::1"}}
 	cfg.DownloadFolder = directory
