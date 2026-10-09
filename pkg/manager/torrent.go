@@ -94,15 +94,18 @@ func (m *Manager) doRefreshTorrents(_ context.Context, provider string, debridCl
 		}
 	}
 
+	previousMisses, _ := m.providerMisses.Load(provider)
+
 	// Detect changes by streaming through cached entries
-	changes, err := m.detectTorrentChanges(provider, remoteTorrentsByHash)
+	changes, err := m.detectTorrentChanges(provider, remoteTorrentsByHash, previousMisses)
 	if err != nil {
 		return err
 	}
 	newTorrents, torrentsToUpdate := changes.fetch, changes.update
 
 	// Handle deletions
-	m.handleTorrentDeletions(changes.delete)
+	m.handleTorrentDeletions(provider, changes.delete)
+	m.providerMisses.Store(provider, changes.misses)
 
 	// Batch update torrents with changed placements (run concurrently)
 	var updateWg sync.WaitGroup
@@ -133,12 +136,16 @@ func (m *Manager) doRefreshTorrents(_ context.Context, provider string, debridCl
 type torrentChanges struct {
 	fetch  []*types.Torrent // new or changed on the provider; re-fetched in full
 	update []*storage.Entry // lost this provider but keep others
-	delete []string         // lost their last provider
+	delete []*storage.Entry // lost their last provider
+	// misses are the infohashes this listing lacks although the entry is
+	// placed on the provider. A placement is dropped only on a second
+	// consecutive miss, so one partial listing never acts.
+	misses map[string]struct{}
 }
 
 // classify records how entry changes given the provider's current listing
 // of it (nil when the provider no longer lists it).
-func (c *torrentChanges) classify(provider string, entry *storage.Entry, current *types.Torrent) {
+func (c *torrentChanges) classify(provider string, entry *storage.Entry, current *types.Torrent, missedBefore bool) {
 	placement, onProvider := entry.Providers[provider]
 	switch {
 	case !onProvider:
@@ -146,9 +153,16 @@ func (c *torrentChanges) classify(provider string, entry *storage.Entry, current
 			c.fetch = append(c.fetch, current)
 		}
 	case current == nil:
+		if c.misses == nil {
+			c.misses = make(map[string]struct{})
+		}
+		c.misses[entry.InfoHash] = struct{}{}
+		if !missedBefore {
+			return
+		}
 		entry.RemoveProvider(provider, nil)
 		if len(entry.Providers) == 0 {
-			c.delete = append(c.delete, entry.InfoHash)
+			c.delete = append(c.delete, entry)
 		} else {
 			c.update = append(c.update, entry)
 		}
@@ -163,6 +177,7 @@ func (c *torrentChanges) classify(provider string, entry *storage.Entry, current
 func (m *Manager) detectTorrentChanges(
 	provider string,
 	remoteTorrentsByHash map[string]*types.Torrent,
+	previousMisses map[string]struct{},
 ) (torrentChanges, error) {
 	var changes torrentChanges
 	cachedInfoHashes := make(map[string]bool, len(remoteTorrentsByHash))
@@ -170,7 +185,8 @@ func (m *Manager) detectTorrentChanges(
 	err := m.storage.ForEachBatch(refreshBatchSize, func(batch []*storage.Entry) error {
 		for _, entry := range batch {
 			cachedInfoHashes[entry.InfoHash] = true
-			changes.classify(provider, entry, remoteTorrentsByHash[entry.InfoHash])
+			_, missedBefore := previousMisses[entry.InfoHash]
+			changes.classify(provider, entry, remoteTorrentsByHash[entry.InfoHash], missedBefore)
 		}
 		return nil
 	})
@@ -189,27 +205,27 @@ func (m *Manager) detectTorrentChanges(
 }
 
 // handleTorrentDeletions processes torrent deletions concurrently.
-func (m *Manager) handleTorrentDeletions(torrentsToDelete []string) {
+func (m *Manager) handleTorrentDeletions(_ string, torrentsToDelete []*storage.Entry) {
 	if len(torrentsToDelete) == 0 {
 		return
 	}
 
 	var deleteWg sync.WaitGroup
-	deleteChan := make(chan string, len(torrentsToDelete))
+	deleteChan := make(chan *storage.Entry, len(torrentsToDelete))
 
 	deleteWorkers := min(refreshDeleteWorkers, len(torrentsToDelete))
 	for range deleteWorkers {
 		deleteWg.Go(func() {
-			for infohash := range deleteChan {
-				if err := m.storage.Delete(infohash); err != nil {
-					m.logger.Error().Err(err).Str("infohash", infohash).Msg("Failed to delete torrent")
+			for entry := range deleteChan {
+				if err := m.storage.Delete(entry.InfoHash); err != nil {
+					m.logger.Error().Err(err).Str("infohash", entry.InfoHash).Msg("Failed to delete torrent")
 				}
 			}
 		})
 	}
 
-	for _, infohash := range torrentsToDelete {
-		deleteChan <- infohash
+	for _, entry := range torrentsToDelete {
+		deleteChan <- entry
 	}
 	close(deleteChan)
 	deleteWg.Wait()

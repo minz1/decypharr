@@ -123,6 +123,9 @@ type Manager struct {
 	// Active streams tracking
 	activeStreams *xsync.Map[string, *ActiveStream]
 
+	// providerMisses holds each provider's previous-sync misses (infohashes).
+	providerMisses *xsync.Map[string, map[string]struct{}]
+
 	// In-flight queue-processor dispatches, keyed by InfoHash, to prevent
 	// duplicate goroutines from processing the same entry when the scheduler
 	// re-fires before the previous pass has updated the queue row.
@@ -222,6 +225,7 @@ func New(store *config.Store, logs *logger.Factory) (*Manager, error) {
 		usenetTimeout:          usenetTimeout,
 		debridSpeedTestResults: xsync.NewMap[string, debridTypes.SpeedTestResult](),
 		activeStreams:          xsync.NewMap[string, *ActiveStream](),
+		providerMisses:         xsync.NewMap[string, map[string]struct{}](),
 		processingEntries:      xsync.NewMap[string, struct{}](),
 		torrentSubmissions:     newTorrentSubmissionGate(torrentSubmissionDedupWindow),
 	}
