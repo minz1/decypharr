@@ -8,17 +8,10 @@ import (
 )
 
 func (m *Manager) InvalidateReacquire(ctx context.Context, job reacquire.Job) error {
-	entryIDs := make(map[string]struct{}, len(job.Bindings))
-	for _, binding := range job.Bindings {
-		if binding.EntryID != "" {
-			entryIDs[binding.EntryID] = struct{}{}
-		}
+	if job.Strategy == reacquire.StrategyDownloadFailed {
+		return m.removeFailedDownloadRecord(job.EntryID)
 	}
-	if len(entryIDs) == 0 && job.EntryID != "" {
-		entryIDs[job.EntryID] = struct{}{}
-	}
-
-	for entryID := range entryIDs {
+	for entryID := range invalidatedEntryIDs(job) {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -41,4 +34,29 @@ func (m *Manager) InvalidateReacquire(ctx context.Context, job reacquire.Job) er
 		}
 	}
 	return nil
+}
+
+// removeFailedDownloadRecord drops the queue record of a download whose grab
+// the Arr has failed. The entry is already gone; the record is all the Arr
+// still tracks, and removing it is what a client-side delete would do.
+func (m *Manager) removeFailedDownloadRecord(entryID string) error {
+	if entryID == "" || !m.queue.Contains(entryID) {
+		return nil
+	}
+	return m.queue.Delete(entryID, true, nil)
+}
+
+// invalidatedEntryIDs is the set of managed entries a reacquire job replaces:
+// its bindings' entries, or the job's own entry when it has no bindings.
+func invalidatedEntryIDs(job reacquire.Job) map[string]struct{} {
+	entryIDs := make(map[string]struct{}, len(job.Bindings))
+	for _, binding := range job.Bindings {
+		if binding.EntryID != "" {
+			entryIDs[binding.EntryID] = struct{}{}
+		}
+	}
+	if len(entryIDs) == 0 && job.EntryID != "" {
+		entryIDs[job.EntryID] = struct{}{}
+	}
+	return entryIDs
 }

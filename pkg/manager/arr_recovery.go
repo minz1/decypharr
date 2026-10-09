@@ -111,6 +111,41 @@ func (m *Manager) setStreamReacquireJob(entryID, fileID, jobID string) {
 func (m *Manager) recoverDroppedEntry(provider string, entry *storage.Entry) error {
 	// Read the service once: SetArrRecovery(nil) may run at shutdown.
 	recovery := m.recoveryService()
+	if imported, err := m.reacquireDroppedFiles(provider, entry, recovery); imported {
+		return err
+	}
+
+	record, err := m.Queue().GetTorrent(entry.InfoHash)
+	if errors.Is(err, appendstore.ErrKeyNotFound) || (err == nil && record == nil) {
+		m.logger.Info().Str("debrid", provider).Str("infohash", entry.InfoHash).Str("name", entry.Name).
+			Msg("Debrid dropped a torrent with no queue record; nothing to recover")
+		return nil
+	}
+	if err != nil {
+		m.logger.Warn().Err(err).Str("infohash", entry.InfoHash).Msg("Failed to read queue record of dropped entry")
+		return err
+	}
+	if instance, ok := m.Arr().Get(record.Category); ok {
+		if recovery == nil {
+			return fmt.Errorf("arr recovery service is not running")
+		}
+		if failErr := m.failDroppedGrab(provider, entry, recovery, instance.Name); failErr != nil {
+			return failErr
+		}
+	}
+	if record.State == storage.EntryStateError {
+		return nil
+	}
+	record.MarkAsError(fmt.Errorf("%s no longer lists this torrent", provider))
+	if updateErr := m.Queue().Update(record); updateErr != nil {
+		return fmt.Errorf("mark dropped entry as errored: %w", updateErr)
+	}
+	return nil
+}
+
+// reacquireDroppedFiles queues a reacquisition for each of a dropped entry's
+// files the Arr imported. It reports whether any was imported.
+func (m *Manager) reacquireDroppedFiles(provider string, entry *storage.Entry, recovery ArrRecovery) (bool, error) {
 	imported := false
 	var reacquireErr error
 	for _, file := range entry.Files {
@@ -129,33 +164,25 @@ func (m *Manager) recoverDroppedEntry(provider string, entry *storage.Entry) err
 			reacquireErr = errors.Join(reacquireErr, fmt.Errorf("reacquire file %s: %w", file.ID, err))
 		}
 	}
-	if imported {
-		return reacquireErr
+	if imported && reacquireErr == nil {
+		m.logger.Info().Str("debrid", provider).Str("infohash", entry.InfoHash).Str("name", entry.Name).
+			Msg("Debrid dropped an imported torrent; reacquiring its files")
 	}
+	return imported, reacquireErr
+}
 
-	record, err := m.Queue().GetTorrent(entry.InfoHash)
-	if errors.Is(err, appendstore.ErrKeyNotFound) || (err == nil && record == nil) {
-		return nil
-	}
+// failDroppedGrab queues the job that fails a never-imported download's grab
+// in arrName. Sonarr and Radarr store qBittorrent download IDs uppercased.
+func (m *Manager) failDroppedGrab(provider string, entry *storage.Entry, recovery ArrRecovery, arrName string) error {
+	job, err := recovery.FailDownload(arrName, strings.ToUpper(entry.InfoHash), entry.InfoHash)
 	if err != nil {
-		m.logger.Warn().Err(err).Str("infohash", entry.InfoHash).Msg("Failed to read queue record of dropped entry")
-		return err
+		return fmt.Errorf("fail dropped download in %s: %w", arrName, err)
 	}
-	if instance, ok := m.Arr().Get(record.Category); ok {
-		if recovery == nil {
-			return fmt.Errorf("arr recovery service is not running")
-		}
-		downloadID := strings.ToUpper(entry.InfoHash)
-		if _, failErr := recovery.FailDownload(instance.Name, downloadID, entry.InfoHash); failErr != nil {
-			return fmt.Errorf("fail dropped download in %s: %w", instance.Name, failErr)
-		}
+	event := m.logger.Info().Str("debrid", provider).Str("infohash", entry.InfoHash).
+		Str("name", entry.Name).Str("arr", arrName)
+	if job != nil {
+		event = event.Str("job", job.ID)
 	}
-	if record.State == storage.EntryStateError {
-		return nil
-	}
-	record.MarkAsError(fmt.Errorf("%s no longer lists this torrent", provider))
-	if updateErr := m.Queue().Update(record); updateErr != nil {
-		return fmt.Errorf("mark dropped entry as errored: %w", updateErr)
-	}
+	event.Msg("Debrid dropped a torrent; failing its grab in the Arr")
 	return nil
 }

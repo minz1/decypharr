@@ -1,6 +1,7 @@
 package reacquire
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -190,5 +191,43 @@ func TestSettleJobRetriesFailedLookupUntilDeadline(t *testing.T) {
 	stopped, _ := service.Job(started.ID)
 	if stopped.Status != StatusNeedsAttention {
 		t.Fatalf("after the deadline: status %q, want %q", stopped.Status, StatusNeedsAttention)
+	}
+}
+
+type recordingInvalidator struct{ jobs []Job }
+
+func (r *recordingInvalidator) InvalidateReacquire(_ context.Context, job Job) error {
+	r.jobs = append(r.jobs, job)
+	return nil
+}
+
+// After the Arr confirms the failed grab, the download's own queue record has
+// nothing left to report: the job hands it to the invalidator so the Arr's
+// queue stops tracking it. A job that finds no grab leaves it alone.
+func TestFailDownloadInvalidatesOnlyAfterFailingTheGrab(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		grab bool
+		want int
+	}{"grab failed": {grab: true, want: 1}, "no grab": {grab: false, want: 0}} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var failCalls atomic.Int64
+			server := failDownloadArr(t, tc.grab, false, &failCalls)
+			registry := newTestArrStorage()
+			registry.AddOrUpdate(arr.Arr{Name: "sonarr", Host: server.URL, Token: "secret", Type: arr.Sonarr})
+			invalidator := &recordingInvalidator{}
+			handler, _ := NewHandler(registry, invalidator).(*arrHandler)
+			job := Job{
+				ArrName:    "sonarr",
+				DownloadID: "DOWNLOADID",
+				EntryID:    "downloadid",
+				Strategy:   StrategyDownloadFailed,
+			}
+			_ = handler.failDownload(t.Context(), job, &recordedProgress{})
+			if got := len(invalidator.jobs); got != tc.want {
+				t.Fatalf("invalidations = %d, want %d", got, tc.want)
+			}
+		})
 	}
 }

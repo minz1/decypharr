@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"bytes"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -237,5 +238,39 @@ func TestFailedReacquireKeepsImportedEntry(t *testing.T) {
 
 	if _, err := m.storage.Get(droppedHash); err != nil {
 		t.Fatalf("imported entry deleted despite failed reacquire: %v", err)
+	}
+}
+
+// Once its grab is failed in the Arr, a dropped download's queue record is
+// removed so the Arr stops tracking a download that no longer exists.
+func TestInvalidateDownloadFailedRemovesQueueRecord(t *testing.T) {
+	t.Parallel()
+	m, entry := newDroppedTestManager(t, &fakeArrRecovery{})
+	job := reacquire.Job{Strategy: reacquire.StrategyDownloadFailed, EntryID: entry.InfoHash}
+
+	if err := m.InvalidateReacquire(t.Context(), job); err != nil {
+		t.Fatal(err)
+	}
+	if m.queue.Contains(entry.InfoHash) {
+		t.Fatal("queue record still present after the grab was failed")
+	}
+	if err := m.InvalidateReacquire(t.Context(), job); err != nil {
+		t.Fatalf("second invalidation of a removed record: %v", err)
+	}
+}
+
+// Each confirmed drop leaves one INFO line naming the job that fails its grab.
+func TestDroppedEntryLogsTheRecoveryJob(t *testing.T) {
+	t.Parallel()
+	m, entry := newDroppedTestManager(t, &fakeArrRecovery{})
+	var logs bytes.Buffer
+	m.logger = zerolog.New(&logs)
+	if err := m.recoverDroppedEntry("torbox", entry); err != nil {
+		t.Fatal(err)
+	}
+	line := logs.String()
+	if !strings.Contains(line, "failing its grab in the Arr") || !strings.Contains(line, `"job":"fail-1"`) ||
+		!strings.Contains(line, `"level":"info"`) {
+		t.Fatalf("drop log = %s", line)
 	}
 }

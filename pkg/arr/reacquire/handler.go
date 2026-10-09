@@ -73,7 +73,15 @@ func (handler *arrHandler) failDownload(ctx context.Context, job Job, progress J
 	if !failure.found {
 		return fmt.Errorf("no grab history for download %q", job.DownloadID)
 	}
-	return handler.executeExactDownloadFailure(ctx, instance, &job, failure, progress)
+	if failErr := handler.executeExactDownloadFailure(ctx, instance, &job, failure, progress); failErr != nil {
+		return failErr
+	}
+	// The Arr records the failure in history but keeps tracking the download
+	// while the client still lists it; the invalidator drops that record.
+	if handler.invalidator != nil {
+		return handler.invalidator.InvalidateReacquire(ctx, job)
+	}
+	return nil
 }
 
 // reacquirePlan is what Reacquire verified before it touches the Arr.
