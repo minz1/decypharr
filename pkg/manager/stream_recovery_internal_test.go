@@ -26,6 +26,15 @@ type fakeArrRecovery struct {
 	finished  chan struct{}
 	requestMu sync.Mutex
 	request   reacquire.Request
+	failMu    sync.Mutex
+	fails     [][3]string
+}
+
+func (f *fakeArrRecovery) FailDownload(arrName, downloadID, entryID string) (*reacquire.Job, error) {
+	f.failMu.Lock()
+	f.fails = append(f.fails, [3]string{arrName, downloadID, entryID})
+	f.failMu.Unlock()
+	return &reacquire.Job{ID: "fail-1"}, nil
 }
 
 func (f *fakeArrRecovery) Lookup(entryID, fileID string) (reacquire.Binding, bool) {

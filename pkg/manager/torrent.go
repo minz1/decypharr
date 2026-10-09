@@ -205,7 +205,7 @@ func (m *Manager) detectTorrentChanges(
 }
 
 // handleTorrentDeletions processes torrent deletions concurrently.
-func (m *Manager) handleTorrentDeletions(_ string, torrentsToDelete []*storage.Entry) {
+func (m *Manager) handleTorrentDeletions(provider string, torrentsToDelete []*storage.Entry) {
 	if len(torrentsToDelete) == 0 {
 		return
 	}
@@ -217,6 +217,7 @@ func (m *Manager) handleTorrentDeletions(_ string, torrentsToDelete []*storage.E
 	for range deleteWorkers {
 		deleteWg.Go(func() {
 			for entry := range deleteChan {
+				m.recoverDroppedEntry(provider, entry)
 				if err := m.storage.Delete(entry.InfoHash); err != nil {
 					m.logger.Error().Err(err).Str("infohash", entry.InfoHash).Msg("Failed to delete torrent")
 				}

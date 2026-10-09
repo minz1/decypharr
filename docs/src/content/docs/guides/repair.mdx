@@ -266,6 +266,10 @@ Lower `workers`, lengthen `schedule`, or set `auto_repair: false` to run detect-
 
 Open its detail panel from Browse to see the broken-file list and reason. For Arr-sourced entries, trigger fixes through the Arr integration without waiting for the next sweep.
 
+### Dropped downloads
+
+When a debrid stops listing a torrent in two consecutive syncs, decypharr fails the grab in Sonarr/Radarr, which blocklists that release and searches again if redownload of failed downloads is enabled. Files that were already imported are reacquired instead. Meanwhile the download shows as `error` in the queue.
+
 ## Migration from v1
 
 The job-based repair system (`repair_jobs`, `repair_keys`, the **Add Job** UI) has been removed. On first boot of the new system the legacy buckets are dropped, and existing recurring schedules do **not** carry over — re-enable repair once with the new config.
