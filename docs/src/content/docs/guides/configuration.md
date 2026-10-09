@@ -532,6 +532,11 @@ left untouched. Changes apply on the next cleanup cycle — **no restart require
 | `invalid_local_path` | Invalid local path (needs a Remote Path Mapping)        | `""` (ignore)        |
 | `not_grabbed`        | Not grabbed by the Arr / no category                    | `""` (ignore)        |
 
+Catalog rules skip downloads the Arr's own failed download handling has picked up
+(`trackedDownloadState` `failedPending` or `failed`): the Arr already blocklists those and, when
+redownload of failed downloads is enabled, searches again. `failed_download` still acts on failed
+downloads the Arr never grabbed. Custom rules still apply to every download.
+
 For catalog rules you only set `action`; the match text is fixed. **Custom rules** use a
 `match` field instead of an `id` — a case-insensitive substring tested against the queue
 item's status message text (e.g. `"stalled with no connections"`).

@@ -151,12 +151,15 @@ func (s *Service) CleanupQueue(ctx context.Context, name string) error {
 
 // resolveQueueAction picks what to do with one queue item. Only failed items
 // and those flagged warning or error are considered, and the first matching
-// rule wins.
+// rule wins. Catalog rules skip items the Arr's own failed download handling
+// already blocklists and re-searches.
 func resolveQueueAction(item QueueSchema, rules []config.QueueCleanupRule) QueueAction {
 	status := strings.ToLower(item.TrackedDownloadStatus)
 	if !strings.EqualFold(item.Status, "failed") && status != "warning" && status != "error" {
 		return QueueActionNone
 	}
+	arrFailed := strings.EqualFold(item.TrackedDownloadState, "failedPending") ||
+		strings.EqualFold(item.TrackedDownloadState, "failed")
 
 	var builder strings.Builder
 	for _, message := range item.StatusMessages {
@@ -171,6 +174,7 @@ func resolveQueueAction(item QueueSchema, rules []config.QueueCleanupRule) Queue
 		matched := false
 		if rule.ID != "" {
 			matched, _ = matchCatalogRule(rule.ID, item, text)
+			matched = matched && !arrFailed
 		} else if needle := strings.ToLower(strings.TrimSpace(rule.Match)); needle != "" {
 			matched = strings.Contains(text, needle)
 		}
