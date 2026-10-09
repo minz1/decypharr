@@ -41,10 +41,19 @@ func getArrFromContext(ctx context.Context) arr.Arr {
 	return instance
 }
 
+// decodeAuthHeader reads an Authorization header: Basic credentials, or a
+// Bearer API key (returned as the password, with no username). A missing
+// header yields empty credentials and no error.
 func decodeAuthHeader(header string) (string, string, error) {
-	_, encodedToken, ok := strings.Cut(header, " ")
+	scheme, encodedToken, ok := strings.Cut(header, " ")
 	if !ok || strings.Contains(encodedToken, " ") {
 		return "", "", nil
+	}
+	if strings.EqualFold(scheme, "Bearer") {
+		return "", encodedToken, nil
+	}
+	if !strings.EqualFold(scheme, "Basic") {
+		return "", "", fmt.Errorf("unsupported authorization scheme %q", scheme)
 	}
 
 	bytes, err := base64.StdEncoding.DecodeString(encodedToken)
@@ -121,8 +130,8 @@ func (q *QBit) authContext(next http.Handler) http.Handler {
 func (q *QBit) getUsernameAndPassword(r *http.Request) (string, string, error) {
 	// Try to get from authorization header
 	username, password, err := decodeAuthHeader(r.Header.Get("Authorization"))
-	if err == nil && username != "" {
-		return username, password, err
+	if err == nil && password != "" {
+		return username, password, nil
 	}
 	// Try to get from cookie
 	sid, err := r.Cookie("sid")
@@ -157,8 +166,7 @@ func (q *QBit) authenticate(ctx context.Context, category, username, password st
 		if q.config.Get().VerifyAuth(username, password) || q.config.Get().VerifyToken(password) {
 			return instance, nil
 		}
-		if known && instance.Source != arr.SourceAuto && username == instance.Host && password != "" &&
-			subtle.ConstantTimeCompare([]byte(password), []byte(instance.Token)) == 1 {
+		if q.arrCredentialsMatch(category, instance, username, password) {
 			return instance, nil
 		}
 		return arr.Arr{}, fmt.Errorf("unauthorized: invalid credentials")
@@ -185,6 +193,29 @@ func (q *QBit) authenticate(ctx context.Context, category, username, password st
 		q.manager.Arr().AddOrUpdate(instance)
 	}
 	return instance, nil
+}
+
+// arrCredentialsMatch reports whether username and password are a configured
+// arr's host and API key, or its API key alone when username is empty (a
+// Bearer API key). A request that names a category must carry that
+// category's arr credentials; one that names none, such as login and
+// app/preferences, accepts any configured arr's. Arrs registered from client
+// credentials are never trusted.
+func (q *QBit) arrCredentialsMatch(category string, instance arr.Arr, username, password string) bool {
+	if password == "" {
+		return false
+	}
+	candidates := []arr.Arr{instance}
+	if category == "" {
+		candidates = q.manager.Arr().All()
+	}
+	for _, candidate := range candidates {
+		if candidate.Source != arr.SourceAuto && (username == "" || username == candidate.Host) &&
+			subtle.ConstantTimeCompare([]byte(password), []byte(candidate.Token)) == 1 {
+			return true
+		}
+	}
+	return false
 }
 
 func createSID(secretKey, username, password string) string {

@@ -38,6 +38,10 @@ Configuration is stored in `config.json`. Most settings can be managed via the W
 
 Password is bcrypt-hashed. API token is auto-generated.
 
+The qBittorrent API (`/api/v2`) accepts the API token or an arr's API key as
+`Authorization: Bearer <key>`, or an arr's host and API key as the username and
+password. A request that names a category must use that category's arr key.
+
 ### Token-only authentication
 
 Set `token_only` in `auth.json` to use the API token as the only credential:

@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/sirrobot01/decypharr/internal/config"
@@ -155,11 +157,14 @@ func TestDecodeAuthHeader(t *testing.T) {
 			mustNotPanic: true,
 		},
 		{
-			// "Bearer xyz" splits to ["Bearer", "xyz"] (len == 2, so it doesn't
-			// take the early-return path). "xyz" then fails base64 decoding
-			// because the length isn't a multiple of 4 — surfaces as decode err.
-			name:    "non-Basic scheme (token not valid base64)",
-			header:  "Bearer xyz",
+			// qBittorrent API keys, as Sonarr and Radarr send them.
+			name:     "Bearer token",
+			header:   "Bearer sonarr-key",
+			wantPass: "sonarr-key",
+		},
+		{
+			name:    "unsupported scheme",
+			header:  "Token " + base64.StdEncoding.EncodeToString([]byte("alice:hunter2")),
 			wantErr: true,
 		},
 		{
@@ -185,5 +190,112 @@ func TestDecodeAuthHeader(t *testing.T) {
 				t.Errorf("pass mismatch: got %q want %q", pass, tt.wantPass)
 			}
 		})
+	}
+}
+
+// newUseAuthTestQBit returns a QBit with authentication on, decypharr API
+// token "api-token", a configured sonarr and radarr, and an arr registered
+// automatically from client credentials.
+func newUseAuthTestQBit(t *testing.T) *QBit {
+	t.Helper()
+	q := newAuthenticationTestQBit(t)
+	cfg := q.config.Get()
+	cfg.UseAuth = true
+	cfg.Auth = &config.Auth{APIToken: "api-token", TokenOnly: true}
+	q.manager.Arr().
+		AddOrUpdate(arr.Arr{Name: "sonarr", Host: "http://sonarr:8989", Token: "sonarr-key", Source: arr.SourceManual})
+	q.manager.Arr().
+		AddOrUpdate(arr.Arr{Name: "radarr", Host: "http://radarr:7878", Token: "radarr-key", Source: arr.SourceManual})
+	q.manager.Arr().
+		AddOrUpdate(arr.Arr{Name: "lidarr", Host: "http://lidarr:8686", Token: "lidarr-key", Source: arr.SourceAuto})
+	return q
+}
+
+// With auth on, an arr authenticates with its own host and API key (Basic or
+// SID) or with its API key alone (a Bearer API key). Requests that name a
+// category must carry that category's arr credentials; requests without one,
+// such as login and app/preferences, accept any configured arr's. Arrs registered from client credentials are never trusted.
+func TestAuthenticateArrCredentialsWithAuthOn(t *testing.T) {
+	t.Parallel()
+	q := newUseAuthTestQBit(t)
+	tests := []struct {
+		name, category, username, password string
+		ok                                 bool
+	}{
+		{"bearer key for its category", "sonarr", "", "sonarr-key", true},
+		{"bearer key without a category", "", "", "sonarr-key", true},
+		{"bearer key for an unknown category", "tv", "", "sonarr-key", false},
+		{"bearer key for another arr's category", "radarr", "", "sonarr-key", false},
+		{"bearer decypharr API token", "radarr", "", "api-token", true},
+		{"bearer unknown key", "", "", "nope", false},
+		{"bearer key of an auto-registered arr", "", "", "lidarr-key", false},
+		{"host and key for its category", "sonarr", "http://sonarr:8989", "sonarr-key", true},
+		{"host and key without a category", "", "http://sonarr:8989", "sonarr-key", true},
+		{"host with another arr's key", "", "http://sonarr:8989", "radarr-key", false},
+		{"empty key", "", "", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := q.authenticate(t.Context(), tt.category, tt.username, tt.password)
+			if (err == nil) != tt.ok {
+				t.Fatalf(
+					"authenticate(%q, %q, %q) err = %v, want ok %t",
+					tt.category,
+					tt.username,
+					tt.password,
+					err,
+					tt.ok,
+				)
+			}
+		})
+	}
+}
+
+// Sonarr and Radarr with a qBittorrent API key set send no username or
+// password, only "Authorization: Bearer <key>", and call category-less
+// endpoints such as app/preferences when testing the client.
+func TestBearerAPIKeyReachesAuthenticatedRoutes(t *testing.T) {
+	t.Parallel()
+	q := newUseAuthTestQBit(t)
+	routes := q.Routes()
+	for header, want := range map[string]int{
+		"Bearer sonarr-key": http.StatusOK,
+		"Bearer api-token":  http.StatusOK,
+		"Bearer wrong":      http.StatusUnauthorized,
+		"":                  http.StatusUnauthorized,
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/app/preferences", nil)
+		if header != "" {
+			req.Header.Set("Authorization", header)
+		}
+		response := httptest.NewRecorder()
+		routes.ServeHTTP(response, req)
+		if response.Code != want {
+			t.Fatalf("Authorization %q: status = %d, want %d", header, response.Code, want)
+		}
+	}
+}
+
+// Sonarr and Radarr log in with their host and API key and no category, then
+// send the SID cookie on every request, including category-less ones.
+func TestArrLoginWithoutCategoryMintsUsableSID(t *testing.T) {
+	t.Parallel()
+	routes := newUseAuthTestQBit(t).Routes()
+	form := url.Values{"username": {"http://sonarr:8989"}, "password": {"sonarr-key"}}
+	login := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(form.Encode()))
+	login.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	loginResponse := httptest.NewRecorder()
+	routes.ServeHTTP(loginResponse, login)
+	cookies := loginResponse.Result().Cookies()
+	if loginResponse.Code != http.StatusOK || len(cookies) != 1 {
+		t.Fatalf("login: status = %d, cookies = %d, want 200 and a SID", loginResponse.Code, len(cookies))
+	}
+	req := httptest.NewRequest(http.MethodGet, "/app/preferences", nil)
+	req.AddCookie(cookies[0])
+	response := httptest.NewRecorder()
+	routes.ServeHTTP(response, req)
+	if response.Code != http.StatusOK {
+		t.Fatalf("app/preferences with the SID: status = %d, want 200", response.Code)
 	}
 }
