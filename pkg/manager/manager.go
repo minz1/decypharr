@@ -126,7 +126,7 @@ type Manager struct {
 	// providerMisses holds each provider's previous-sync misses (infohashes).
 	providerMisses *xsync.Map[string, map[string]struct{}]
 	// dropHookFailures counts failed Arr recoveries per provider and infohash.
-	dropHookFailures sync.Map // string -> map[string]int
+	dropHookFailures *xsync.Map[string, map[string]int]
 
 	// In-flight queue-processor dispatches, keyed by InfoHash, to prevent
 	// duplicate goroutines from processing the same entry when the scheduler
@@ -228,6 +228,7 @@ func New(store *config.Store, logs *logger.Factory) (*Manager, error) {
 		debridSpeedTestResults: xsync.NewMap[string, debridTypes.SpeedTestResult](),
 		activeStreams:          xsync.NewMap[string, *ActiveStream](),
 		providerMisses:         xsync.NewMap[string, map[string]struct{}](),
+		dropHookFailures:       xsync.NewMap[string, map[string]int](),
 		processingEntries:      xsync.NewMap[string, struct{}](),
 		torrentSubmissions:     newTorrentSubmissionGate(torrentSubmissionDedupWindow),
 	}

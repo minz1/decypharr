@@ -321,7 +321,14 @@ func (tb *Torbox) GetTorrent(torrentID string) (*types.Torrent, error) {
 		return nil, fmt.Errorf("torbox API error: Status: %d", status)
 	}
 	if !res.Success {
-		return nil, fmt.Errorf("torbox API error: %s", torboxErrorText(&res))
+		reason := "unsuccessful response"
+		switch {
+		case res.Detail != "":
+			reason = res.Detail
+		case res.Error != nil:
+			reason = fmt.Sprint(res.Error)
+		}
+		return nil, fmt.Errorf("torbox API error: %s", reason)
 	}
 	data := res.Data
 	if data == nil {
@@ -823,15 +830,4 @@ func (tb *Torbox) SpeedTest(ctx context.Context) types.SpeedTestResult {
 
 func (tb *Torbox) SupportsCheck() bool {
 	return true
-}
-
-// torboxErrorText is the API's own explanation of an unsuccessful response.
-func torboxErrorText(res *InfoResponse) string {
-	switch {
-	case res.Detail != "":
-		return res.Detail
-	case res.Error != nil:
-		return fmt.Sprint(res.Error)
-	}
-	return "unsuccessful response"
 }

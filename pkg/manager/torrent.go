@@ -247,8 +247,8 @@ func listedAbsence(provider string, entry *storage.Entry, listedIDs map[string]s
 // than not-found means the provider is unhealthy and ends the lookups. An
 // entry whose recovery keeps failing goes behind the others.
 func (m *Manager) confirmDrops(provider string, client debrid.Client, changes *torrentChanges) {
-	loaded, _ := m.dropHookFailures.LoadOrStore(provider, map[string]int{})
-	failed, _ := loaded.(map[string]int) // always this type; refreshSG serialises per provider
+	// refreshSG serialises syncs per provider, so this map needs no lock.
+	failed, _ := m.dropHookFailures.LoadOrStore(provider, map[string]int{})
 	slices.SortStableFunc(changes.confirm, func(a, b *storage.Entry) int {
 		return cmp.Compare(failed[a.InfoHash], failed[b.InfoHash])
 	})
@@ -263,8 +263,12 @@ func (m *Manager) confirmDrops(provider string, client debrid.Client, changes *t
 	applied := 0
 	for i, entry := range changes.confirm {
 		if i == maxDropLookupsPerSync || applied == maxDropRecoveriesPerSync {
+			msg := "Dropped-torrent recovery cap reached"
+			if i == maxDropLookupsPerSync {
+				msg = "Dropped-torrent lookup cap reached"
+			}
 			m.logger.Warn().Str("debrid", provider).Int("applied", applied).
-				Int("deferred", len(changes.confirm)-i).Msg("Dropped-torrent recovery cap reached")
+				Int("deferred", len(changes.confirm)-i).Msg(msg)
 			return
 		}
 		id := entry.Providers[provider].ID
@@ -283,8 +287,9 @@ func (m *Manager) confirmDrops(provider string, client debrid.Client, changes *t
 			delete(changes.misses, entry.InfoHash)
 			applied++
 		default:
-			m.logger.Debug().Err(err).Str("debrid", provider).Str("id", id).
-				Msg("Could not confirm a dropped torrent; will retry")
+			m.logger.Warn().Err(err).Str("debrid", provider).Str("id", id).
+				Int("deferred", len(changes.confirm)-i).
+				Msg("Could not confirm dropped torrents; will retry next sync")
 			return
 		}
 	}

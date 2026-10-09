@@ -296,24 +296,45 @@ func TestRefreshStopsLookupsOnProviderError(t *testing.T) {
 
 func TestRefreshFailingHooksDoNotStarveOthers(t *testing.T) {
 	t.Parallel()
+	// More failing entries than one sync's lookup budget sit ahead of the
+	// good ones in storage order, so only the failure-count ordering lets the
+	// good ones through.
 	bad := map[string]bool{}
-	for i := range 12 {
+	for i := range 25 {
 		bad[fmt.Sprintf("hash-%02d", i)] = true
 	}
 	fake := &fakeArrRecovery{failWhen: func(entryID string) bool { return bad[entryID] }}
 	m, _ := newDroppedTestManager(t, fake)
-	addPlaced(t, m, 15)
+	addPlaced(t, m, 28)
 	client := &fakeListing{torrents: []*types.Torrent{otherListed()}, lookup: goneLookup}
 
-	syncTimes(t, m, client, 4)
+	syncTimes(t, m, client, 3)
 
-	for i := 12; i < 15; i++ {
+	for i := 25; i < 28; i++ {
 		if stored(m, fmt.Sprintf("hash-%02d", i)) {
 			t.Fatalf("good entry hash-%02d starved by failing hooks", i)
 		}
 	}
 	if !stored(m, "hash-00") {
 		t.Fatal("failing entry was deleted")
+	}
+}
+
+func TestRefreshForgetsHookFailuresOnceListedAgain(t *testing.T) {
+	t.Parallel()
+	fake := &fakeArrRecovery{failErr: errors.New("arr unreachable")}
+	m, _ := newDroppedTestManager(t, fake)
+	addPlaced(t, m, 1)
+	client := &fakeListing{torrents: []*types.Torrent{otherListed()}, lookup: goneLookup}
+
+	syncTimes(t, m, client, 2)
+	if failed, _ := m.dropHookFailures.Load("rd"); failed["hash-00"] != 1 {
+		t.Fatalf("hook failures = %v, want hash-00 counted once", failed)
+	}
+	client.torrents = append(client.torrents, &types.Torrent{ID: "id-00", InfoHash: "hash-00"})
+	syncTimes(t, m, client, 1)
+	if failed, _ := m.dropHookFailures.Load("rd"); len(failed) != 0 {
+		t.Fatalf("hook failures = %v, want none once the torrent is listed again", failed)
 	}
 }
 
