@@ -125,6 +125,8 @@ type Manager struct {
 
 	// providerMisses holds each provider's previous-sync misses (infohashes).
 	providerMisses *xsync.Map[string, map[string]struct{}]
+	// dropHookFailures counts failed Arr recoveries per provider and infohash.
+	dropHookFailures sync.Map // string -> map[string]int
 
 	// In-flight queue-processor dispatches, keyed by InfoHash, to prevent
 	// duplicate goroutines from processing the same entry when the scheduler

@@ -2,6 +2,7 @@ package manager
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -29,6 +30,9 @@ type fakeArrRecovery struct {
 	failMu    sync.Mutex
 	fails     [][3]string
 	failErr   error
+	// failWhen, when set, fails FailDownload for the entry IDs it accepts.
+	failWhen     func(entryID string) bool
+	reacquireErr error
 }
 
 func (f *fakeArrRecovery) FailDownload(arrName, downloadID, entryID string) (*reacquire.Job, error) {
@@ -37,6 +41,9 @@ func (f *fakeArrRecovery) FailDownload(arrName, downloadID, entryID string) (*re
 	f.failMu.Unlock()
 	if f.failErr != nil {
 		return nil, f.failErr
+	}
+	if f.failWhen != nil && f.failWhen(entryID) {
+		return nil, errors.New("arr unreachable")
 	}
 	return &reacquire.Job{ID: "fail-1"}, nil
 }
@@ -59,6 +66,9 @@ func (f *fakeArrRecovery) Reacquire(request reacquire.Request) (*reacquire.Job, 
 	}
 	if f.finished != nil {
 		close(f.finished)
+	}
+	if f.reacquireErr != nil {
+		return nil, f.reacquireErr
 	}
 	return &reacquire.Job{ID: "reacquire-1"}, nil
 }

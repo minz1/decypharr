@@ -1,9 +1,11 @@
 package manager
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"maps"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -49,8 +51,11 @@ const (
 	// maxDropRecoveriesPerSync bounds the confirmed drops applied per provider
 	// per sync, so a mass prune spreads over several syncs.
 	maxDropRecoveriesPerSync = 10
-	refreshWorkChanBuffer    = 100
-	refreshBatchChanBuffer   = 50
+	// maxDropLookupsPerSync bounds the GetTorrent calls per provider per sync,
+	// whatever their outcome.
+	maxDropLookupsPerSync  = 20
+	refreshWorkChanBuffer  = 100
+	refreshBatchChanBuffer = 50
 )
 
 // errSyncSkipped reports a provider torrent that cannot be synced yet: its
@@ -89,7 +94,9 @@ func (m *Manager) doRefreshTorrents(_ context.Context, provider string, debridCl
 
 	// Build map of current remote by infohash
 	remoteTorrentsByHash := make(map[string]*types.Torrent, len(remote))
+	listedIDs := make(map[string]struct{}, len(remote))
 	for _, t := range remote {
+		listedIDs[t.ID] = struct{}{}
 		old, exists := remoteTorrentsByHash[t.InfoHash]
 		if !exists {
 			remoteTorrentsByHash[t.InfoHash] = t
@@ -104,10 +111,6 @@ func (m *Manager) doRefreshTorrents(_ context.Context, provider string, debridCl
 	// exist, so it proves nothing about absences.
 	limit := debridClient.Config().Limit
 	truncated := limit > 0 && len(remote) >= limit
-	listedIDs := make(map[string]struct{}, len(remote))
-	for _, t := range remote {
-		listedIDs[t.ID] = struct{}{}
-	}
 
 	// Detect changes by streaming through cached entries
 	changes, err := m.detectTorrentChanges(provider, remoteTorrentsByHash, listedIDs, previousMisses, truncated)
@@ -117,10 +120,6 @@ func (m *Manager) doRefreshTorrents(_ context.Context, provider string, debridCl
 	m.confirmDrops(provider, debridClient, &changes)
 	newTorrents, torrentsToUpdate := changes.fetch, changes.update
 
-	// Handle deletions; an entry whose recovery failed stays a miss and is retried.
-	for _, entry := range m.handleTorrentDeletions(provider, changes.delete) {
-		changes.markMiss(entry.InfoHash)
-	}
 	m.providerMisses.Store(provider, changes.misses)
 
 	// Batch update torrents with changed placements (run concurrently)
@@ -152,7 +151,6 @@ func (m *Manager) doRefreshTorrents(_ context.Context, provider string, debridCl
 type torrentChanges struct {
 	fetch  []*types.Torrent // new or changed on the provider; re-fetched in full
 	update []*storage.Entry // lost this provider but keep others
-	delete []*storage.Entry // lost their last provider
 	// confirm are entries missing for the second consecutive listing; each
 	// is dropped only once the provider reports the torrent gone.
 	confirm []*storage.Entry
@@ -243,12 +241,28 @@ func listedAbsence(provider string, entry *storage.Entry, listedIDs map[string]s
 
 // confirmDrops resolves the entries missing for two consecutive listings by
 // asking the provider about each placement directly. Only a not-found answer
-// drops the placement, at most maxDropRecoveriesPerSync per call; the rest,
-// and any lookup that failed, stay misses and are retried next sync.
+// drops the placement. At most maxDropLookupsPerSync lookups run per call and
+// at most maxDropRecoveriesPerSync drops succeed; the rest stay misses for a
+// later sync, as do entries whose Arr recovery failed. A lookup error other
+// than not-found means the provider is unhealthy and ends the lookups. An
+// entry whose recovery keeps failing goes behind the others.
 func (m *Manager) confirmDrops(provider string, client debrid.Client, changes *torrentChanges) {
+	loaded, _ := m.dropHookFailures.LoadOrStore(provider, map[string]int{})
+	failed := loaded.(map[string]int) // only ever stores that type; refreshSG serialises per provider
+	slices.SortStableFunc(changes.confirm, func(a, b *storage.Entry) int {
+		return cmp.Compare(failed[a.InfoHash], failed[b.InfoHash])
+	})
+	defer func() {
+		for hash := range failed {
+			if _, miss := changes.misses[hash]; !miss {
+				delete(failed, hash)
+			}
+		}
+	}()
+
 	applied := 0
 	for i, entry := range changes.confirm {
-		if applied == maxDropRecoveriesPerSync {
+		if i == maxDropLookupsPerSync || applied == maxDropRecoveriesPerSync {
 			m.logger.Warn().Str("debrid", provider).Int("applied", applied).
 				Int("deferred", len(changes.confirm)-i).Msg("Dropped-torrent recovery cap reached")
 			return
@@ -259,17 +273,19 @@ func (m *Manager) confirmDrops(provider string, client debrid.Client, changes *t
 		case err == nil:
 			delete(changes.misses, entry.InfoHash)
 		case errors.Is(err, customerror.ErrTorrentNotFound):
-			delete(changes.misses, entry.InfoHash)
 			entry.RemoveProvider(provider, nil)
-			if len(entry.Providers) == 0 {
-				changes.delete = append(changes.delete, entry)
-			} else {
+			if len(entry.Providers) > 0 {
 				changes.update = append(changes.update, entry)
+			} else if len(m.handleTorrentDeletions(provider, []*storage.Entry{entry})) > 0 {
+				failed[entry.InfoHash]++
+				continue
 			}
+			delete(changes.misses, entry.InfoHash)
 			applied++
 		default:
 			m.logger.Debug().Err(err).Str("debrid", provider).Str("id", id).
 				Msg("Could not confirm a dropped torrent; will retry")
+			return
 		}
 	}
 }

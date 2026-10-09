@@ -27,7 +27,7 @@ func TestDropNeedsTwoConsecutiveMisses(t *testing.T) {
 	var c torrentChanges
 	e := dropEntry("A")
 	c.classify("A", e, nil, false)
-	if len(c.delete) != 0 || len(c.update) != 0 {
+	if len(c.update) != 0 {
 		t.Fatalf("first miss acted: %+v", c)
 	}
 	if _, ok := c.misses["h1"]; !ok {
@@ -38,7 +38,7 @@ func TestDropNeedsTwoConsecutiveMisses(t *testing.T) {
 	}
 	var c2 torrentChanges
 	c2.classify("A", e, nil, true)
-	if len(c2.confirm) != 1 || c2.confirm[0] != e || len(c2.delete) != 0 {
+	if len(c2.confirm) != 1 || c2.confirm[0] != e {
 		t.Fatalf("second miss is not a confirmation candidate: %+v", c2)
 	}
 	if _, ok := e.Providers["A"]; !ok {
@@ -56,7 +56,7 @@ func TestMultiProviderDropNeedsTwoMisses(t *testing.T) {
 	}
 	var c2 torrentChanges
 	c2.classify("A", e, nil, true)
-	if len(c2.confirm) != 1 || len(c2.update) != 0 || len(c2.delete) != 0 || e.Providers["A"] == nil {
+	if len(c2.confirm) != 1 || len(c2.update) != 0 || e.Providers["A"] == nil {
 		t.Fatalf("second miss: %+v", c2)
 	}
 }
@@ -260,5 +260,96 @@ func TestRefreshCapsDropRecoveries(t *testing.T) {
 	syncTimes(t, m, client, 1)
 	if len(fake.fails) != 15 || stored(m, "hash-00") {
 		t.Fatalf("deferred drops not applied next sync: fails=%d", len(fake.fails))
+	}
+}
+
+func foundLookup(id string) (*types.Torrent, error) { return &types.Torrent{ID: id}, nil }
+
+func TestRefreshBoundsLookupsPerSync(t *testing.T) {
+	t.Parallel()
+	m, _ := newDroppedTestManager(t, &fakeArrRecovery{})
+	addPlaced(t, m, 50)
+	client := &fakeListing{torrents: []*types.Torrent{otherListed()}, lookup: foundLookup}
+
+	syncTimes(t, m, client, 2)
+
+	if got := client.lookups(); got > maxDropLookupsPerSync {
+		t.Fatalf("lookups=%d, want at most %d", got, maxDropLookupsPerSync)
+	}
+}
+
+func TestRefreshStopsLookupsOnProviderError(t *testing.T) {
+	t.Parallel()
+	m, _ := newDroppedTestManager(t, &fakeArrRecovery{})
+	addPlaced(t, m, 5)
+	client := &fakeListing{
+		torrents: []*types.Torrent{otherListed()},
+		lookup:   func(string) (*types.Torrent, error) { return nil, errors.New("rate limited") },
+	}
+
+	syncTimes(t, m, client, 2)
+
+	if got := client.lookups(); got != 1 {
+		t.Fatalf("lookups=%d, want 1", got)
+	}
+}
+
+func TestRefreshFailingHooksDoNotStarveOthers(t *testing.T) {
+	t.Parallel()
+	bad := map[string]bool{}
+	for i := range 12 {
+		bad[fmt.Sprintf("hash-%02d", i)] = true
+	}
+	fake := &fakeArrRecovery{failWhen: func(entryID string) bool { return bad[entryID] }}
+	m, _ := newDroppedTestManager(t, fake)
+	addPlaced(t, m, 15)
+	client := &fakeListing{torrents: []*types.Torrent{otherListed()}, lookup: goneLookup}
+
+	syncTimes(t, m, client, 4)
+
+	for i := 12; i < 15; i++ {
+		if stored(m, fmt.Sprintf("hash-%02d", i)) {
+			t.Fatalf("good entry hash-%02d starved by failing hooks", i)
+		}
+	}
+	if !stored(m, "hash-00") {
+		t.Fatal("failing entry was deleted")
+	}
+}
+
+func TestRefreshRetriesFailedRecoveryNextSync(t *testing.T) {
+	t.Parallel()
+	fake := &fakeArrRecovery{failErr: errors.New("arr unreachable")}
+	m, _ := newDroppedTestManager(t, fake)
+	addPlaced(t, m, 1)
+	client := &fakeListing{torrents: []*types.Torrent{otherListed()}, lookup: goneLookup}
+
+	syncTimes(t, m, client, 2)
+	if !stored(m, "hash-00") {
+		t.Fatal("entry deleted despite failed hook")
+	}
+	fake.failErr = nil
+	syncTimes(t, m, client, 1)
+	if stored(m, "hash-00") {
+		t.Fatal("entry not deleted after the hook recovered")
+	}
+}
+
+func TestTruncatedSyncLeavesMissesUnchanged(t *testing.T) {
+	t.Parallel()
+	m, _ := newDroppedTestManager(t, &fakeArrRecovery{})
+	addPlaced(t, m, 1)
+	client := &fakeListing{torrents: []*types.Torrent{otherListed()}, lookup: foundLookup}
+
+	syncTimes(t, m, client, 1) // miss recorded
+	client.limit = 1           // truncated: otherListed alone hits the limit
+	syncTimes(t, m, client, 1)
+	if client.lookups() != 0 {
+		t.Fatalf("truncated sync looked up: %d", client.lookups())
+	}
+	client.limit = 0
+	syncTimes(t, m, client, 1)
+	if client.lookups() != 1 {
+		t.Fatalf("full sync after truncation lookups=%d, want 1", client.lookups())
 	}
 }

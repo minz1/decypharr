@@ -199,3 +199,42 @@ func TestHandleTorrentDeletionsRunsHookBeforeDelete(t *testing.T) {
 		t.Fatalf("FailDownload calls=%d, want 1", len(fake.fails))
 	}
 }
+
+func TestFailedHookKeepsStoredPlacement(t *testing.T) {
+	t.Parallel()
+	fake := &fakeArrRecovery{failErr: errors.New("arr unreachable")}
+	m, entry := newDroppedTestManager(t, fake)
+	entry.Providers = map[string]*storage.ProviderEntry{"realdebrid": {Provider: "realdebrid", ID: "rd-1"}}
+	if err := m.storage.AddOrUpdate(entry); err != nil {
+		t.Fatal(err)
+	}
+
+	m.handleTorrentDeletions("realdebrid", []*storage.Entry{entry})
+
+	got, err := m.storage.Get(droppedHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := got.Providers["realdebrid"]; p == nil || p.ID != "rd-1" {
+		t.Fatalf("stored placement lost: %+v", got.Providers)
+	}
+}
+
+func TestFailedReacquireKeepsImportedEntry(t *testing.T) {
+	t.Parallel()
+	fake := &fakeArrRecovery{
+		binding:      reacquire.Binding{EntryID: droppedHash, EntryFileID: "file-1"},
+		started:      make(chan struct{}),
+		reacquireErr: errors.New("queue unreadable"),
+	}
+	m, entry := newDroppedTestManager(t, fake)
+	if err := m.storage.AddOrUpdate(entry); err != nil {
+		t.Fatal(err)
+	}
+
+	m.handleTorrentDeletions("realdebrid", []*storage.Entry{entry})
+
+	if _, err := m.storage.Get(droppedHash); err != nil {
+		t.Fatalf("imported entry deleted despite failed reacquire: %v", err)
+	}
+}
