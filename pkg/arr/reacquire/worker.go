@@ -327,7 +327,7 @@ func (s *Service) settleJob(id string, err error, progress *serviceJobProgress) 
 	if err != nil && !deadline.IsZero() && !s.now().Before(deadline) {
 		return s.stopReconciliation(id, fmt.Errorf("arr reconciliation deadline expired: %w", err))
 	}
-	if errors.Is(err, arr.ErrMutationOutcomeUnknown) {
+	if errors.Is(err, arr.ErrMutationOutcomeUnknown) || errors.Is(err, errArrUnavailable) {
 		delay := retryDelay(current, err)
 		if !deadline.IsZero() {
 			delay = min(delay, deadline.Sub(s.now()))

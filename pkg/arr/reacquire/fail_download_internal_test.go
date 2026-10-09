@@ -1,12 +1,14 @@
 package reacquire
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/sirrobot01/decypharr/pkg/arr"
 )
@@ -139,5 +141,54 @@ func TestDownloadFailedJobRoundTrips(t *testing.T) {
 	other.Strategy = StrategyHistoryFailed
 	if validateErr := validateJob(other); validateErr == nil {
 		t.Fatal("bindingless job with another strategy accepted")
+	}
+}
+
+// A history lookup that fails before any mutation is sent marks the job
+// retryable rather than failed: the Arr may only be restarting.
+func TestFailDownloadLookupErrorIsRetryable(t *testing.T) {
+	t.Parallel()
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	t.Cleanup(down.Close)
+	registry := newTestArrStorage()
+	registry.AddOrUpdate(arr.Arr{Name: "sonarr", Host: down.URL, Token: "secret", Type: arr.Sonarr})
+	handler, _ := NewHandler(registry, nil).(*arrHandler)
+	job := Job{ArrName: "sonarr", DownloadID: "DOWNLOADID", Strategy: StrategyDownloadFailed}
+	err := handler.failDownload(t.Context(), job, nil)
+	if !errors.Is(err, errArrUnavailable) {
+		t.Fatalf("failDownload error = %v, want errArrUnavailable", err)
+	}
+}
+
+// settleJob requeues an unavailable-Arr failure until the reconciliation
+// deadline, then stops for an operator instead of failing silently.
+func TestSettleJobRetriesUnavailableArrUntilDeadline(t *testing.T) {
+	t.Parallel()
+	service := startFailDownloadService(t, "")
+	queued, err := service.FailDownload("sonarr", "DOWNLOADID", "entry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := service.updateJob(queued.ID, StatusResolving, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	progress := &serviceJobProgress{service: service, jobID: started.ID}
+	lookupErr := fmt.Errorf("%w: connection refused", errArrUnavailable)
+
+	service.settleJob(started.ID, lookupErr, progress)
+	retried, _ := service.Job(started.ID)
+	if retried.Status != StatusQueued || retried.RetryAt.IsZero() {
+		t.Fatalf("after a lookup failure: status %q retryAt %v, want queued with a retry time",
+			retried.Status, retried.RetryAt)
+	}
+
+	service.now = func() time.Time { return started.StartedAt.Add(reconciliationTimeout + time.Minute) }
+	service.settleJob(started.ID, lookupErr, progress)
+	stopped, _ := service.Job(started.ID)
+	if stopped.Status != StatusNeedsAttention {
+		t.Fatalf("after the deadline: status %q, want %q", stopped.Status, StatusNeedsAttention)
 	}
 }

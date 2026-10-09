@@ -18,6 +18,9 @@ var (
 	ErrJobNotTerminal    = errors.New("only completed reacquire jobs can be deleted")
 	ErrServiceNotStarted = errors.New("arr service not started")
 	ErrServiceClosed     = errors.New("arr service closed")
+	// errArrUnavailable marks a read from the Arr that failed before any
+	// mutation was sent. The job is retried until its reconciliation deadline.
+	errArrUnavailable = errors.New("arr unavailable")
 )
 
 type Confidence string

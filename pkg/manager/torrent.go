@@ -277,22 +277,34 @@ func (m *Manager) confirmDrops(provider string, client debrid.Client, changes *t
 		case err == nil:
 			delete(changes.misses, entry.InfoHash)
 		case errors.Is(err, customerror.ErrTorrentNotFound):
-			entry.RemoveProvider(provider, nil)
-			if len(entry.Providers) > 0 {
-				changes.update = append(changes.update, entry)
-			} else if len(m.handleTorrentDeletions(provider, []*storage.Entry{entry})) > 0 {
+			if !m.applyDrop(provider, entry, changes) {
 				failed[entry.InfoHash]++
 				continue
 			}
 			delete(changes.misses, entry.InfoHash)
 			applied++
 		default:
+			if errors.Is(err, context.Canceled) {
+				return
+			}
 			m.logger.Warn().Err(err).Str("debrid", provider).Str("id", id).
 				Int("deferred", len(changes.confirm)-i).
 				Msg("Could not confirm dropped torrents; will retry next sync")
 			return
 		}
 	}
+}
+
+// applyDrop removes a confirmed-gone placement. An entry left on other
+// providers is updated; one with no provider left is deleted after its Arr
+// recovery. It reports false when that recovery failed and the entry was kept.
+func (m *Manager) applyDrop(provider string, entry *storage.Entry, changes *torrentChanges) bool {
+	entry.RemoveProvider(provider, nil)
+	if len(entry.Providers) > 0 {
+		changes.update = append(changes.update, entry)
+		return true
+	}
+	return len(m.handleTorrentDeletions(provider, []*storage.Entry{entry})) == 0
 }
 
 // handleTorrentDeletions processes torrent deletions concurrently and returns
