@@ -2,6 +2,7 @@ package torbox
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/internal/request"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
@@ -241,5 +243,38 @@ func TestAvailabilityPreservesKeysAndReportsIncompleteBatches(t *testing.T) {
 	}
 	if _, checked := result["unchecked"]; checked {
 		t.Fatal("failed batch reported a result")
+	}
+}
+
+func TestGetTorrentReportsGoneAsNotFound(t *testing.T) {
+	t.Parallel()
+	for name, respond := range map[string]func(http.ResponseWriter){
+		"404":      func(w http.ResponseWriter) { w.WriteHeader(http.StatusNotFound) },
+		"no data":  func(w http.ResponseWriter) { _, _ = fmt.Fprint(w, `{"success":true,"data":null}`) },
+		"no match": func(w http.ResponseWriter) { _, _ = fmt.Fprint(w, `{"success":false,"data":null}`) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				respond(w)
+			}))
+			t.Cleanup(server.Close)
+			if _, err := testTorbox(server.URL).GetTorrent("17"); !errors.Is(err, customerror.ErrTorrentNotFound) {
+				t.Fatalf("err=%v, want ErrTorrentNotFound", err)
+			}
+		})
+	}
+}
+
+func TestGetTorrentKeepsOtherFailures(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(server.Close)
+	_, err := testTorbox(server.URL).GetTorrent("17")
+	if err == nil || errors.Is(err, customerror.ErrTorrentNotFound) {
+		t.Fatalf("err=%v, want a non-not-found error", err)
 	}
 }

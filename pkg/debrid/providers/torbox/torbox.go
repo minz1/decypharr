@@ -314,12 +314,15 @@ func (tb *Torbox) GetTorrent(torrentID string) (*types.Torrent, error) {
 		return nil, err
 	}
 
+	if status == http.StatusNotFound {
+		return nil, customerror.ErrTorrentNotFound
+	}
 	if !common.IsSuccess(status) {
 		return nil, fmt.Errorf("torbox API error: Status: %d", status)
 	}
 	data := res.Data
 	if data == nil {
-		return nil, fmt.Errorf("error getting torrent")
+		return nil, customerror.ErrTorrentNotFound
 	}
 	t := &types.Torrent{
 		ID:               strconv.Itoa(data.ID),

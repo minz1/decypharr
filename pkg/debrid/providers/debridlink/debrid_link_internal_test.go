@@ -1,6 +1,7 @@
 package debridlink
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
 )
 
@@ -87,4 +89,35 @@ func checkTorrent(t *testing.T, list bool, torrent *types.Torrent, files int) {
 func mkvOnly() types.ProviderOptions {
 	cfg := &config.Config{AllowedExt: []string{"mkv"}}
 	return types.ProviderOptions{ValidateFile: cfg.ValidateFileAllowed, Logger: zerolog.Nop()}
+}
+
+func TestGetTorrentReportsGoneAsNotFound(t *testing.T) {
+	t.Parallel()
+	for name, test := range map[string]struct {
+		status int
+		body   string
+		gone   bool
+	}{
+		"404":          {http.StatusNotFound, ``, true},
+		"empty list":   {http.StatusOK, `{"success":true,"value":[]}`, true},
+		"server error": {http.StatusInternalServerError, ``, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(test.status)
+				fmt.Fprint(w, test.body)
+			}))
+			defer server.Close()
+			provider, err := New(config.Debrid{Name: "debridlink", APIKey: "token"}, nil, mkvOnly())
+			if err != nil {
+				t.Fatal(err)
+			}
+			provider.Host = server.URL
+			_, err = provider.GetTorrent("torrent")
+			if got := errors.Is(err, customerror.ErrTorrentNotFound); got != test.gone || err == nil {
+				t.Fatalf("err=%v, want not-found=%v", err, test.gone)
+			}
+		})
+	}
 }

@@ -170,17 +170,19 @@ func (dl *DebridLink) GetTorrent(torrentID string) (*types.Torrent, error) {
 		return nil, err
 	}
 
+	if httpStatus == http.StatusNotFound {
+		return nil, customerror.ErrTorrentNotFound
+	}
 	if !common.IsSuccess(httpStatus) {
 		return nil, fmt.Errorf("debridlink API error: Status: %d", httpStatus)
 	}
-	if !res.Success || res.Value == nil {
+	if !res.Success {
 		return nil, fmt.Errorf("error getting torrent")
 	}
-	data := *res.Value
-
-	if len(data) == 0 {
-		return nil, fmt.Errorf("torrent not found")
+	if res.Value == nil || len(*res.Value) == 0 {
+		return nil, customerror.ErrTorrentNotFound
 	}
+	data := *res.Value
 	t := data[0]
 	name := utils.RemoveInvalidChars(t.Name)
 	torrent := &types.Torrent{
