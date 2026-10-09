@@ -14,6 +14,14 @@ type Backend interface {
 	GetEntryByName(entryName, filename string) (*storage.Entry, error)
 	TrackStream(entry *storage.Entry, filename, client string) string
 	UntrackStream(streamID string)
+	// OpenStream opens a tracked stream, as direct (uncached) reads do.
+	OpenStream(
+		ctx context.Context,
+		entry *storage.Entry,
+		filename string,
+		offset int64,
+		client string,
+	) (manager.StreamReader, error)
 	OpenStreamUntrackedForCache(
 		ctx context.Context,
 		entry *storage.Entry,

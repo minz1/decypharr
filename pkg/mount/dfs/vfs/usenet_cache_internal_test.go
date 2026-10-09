@@ -43,6 +43,16 @@ func (b *persistedNZBBackend) UntrackStream(string) {
 	b.active.Add(-1)
 }
 
+func (b *persistedNZBBackend) OpenStream(
+	ctx context.Context,
+	entry *storage.Entry,
+	filename string,
+	offset int64,
+	_ string,
+) (manager.StreamReader, error) {
+	return b.OpenStreamUntrackedForCache(ctx, entry, filename, offset)
+}
+
 func (b *persistedNZBBackend) OpenStreamUntrackedForCache(
 	context.Context,
 	*storage.Entry,

@@ -2,9 +2,11 @@ package vfs
 
 import (
 	"context"
+	"errors"
 	"io"
 	"io/fs"
 	"sync/atomic"
+	"syscall"
 )
 
 // File is the read interface exposed to FUSE backends. Both the disk-cached
@@ -20,6 +22,10 @@ type StreamingFile struct {
 	item     *CacheItem
 	fileSize int64
 	closed   atomic.Bool
+	// direct serves this handle's reads once the cache went over budget
+	// under it. GetFile only picks the direct path at open time, and the
+	// kernel never reopens a live handle.
+	direct atomic.Pointer[DirectStreamFile]
 }
 
 // NewStreamingFile creates a new streaming file handle. It returns nil when
@@ -64,12 +70,43 @@ func (f *StreamingFile) ReadAtContext(ctx context.Context, p []byte, off int64) 
 		p = p[:readSize]
 	}
 
-	n, err := f.item.ReadAtContext(ctx, p, off)
+	var n int
+	var err error
+	if direct := f.direct.Load(); direct != nil {
+		n, err = direct.ReadAtContext(ctx, p, off)
+	} else {
+		n, err = f.item.ReadAtContext(ctx, p, off)
+		if errors.Is(err, syscall.ENOSPC) {
+			// The cache stopped taking writes (over budget or disk full):
+			// this read and every later one stream directly.
+			// ponytail: the item keeps its open reference until Close, so its
+			// cached bytes stay unevictable while this handle streams directly.
+			if f.direct.CompareAndSwap(nil, f.newDirect()) {
+				f.item.cache.logger.Info().
+					Str("file", f.item.key).
+					Msg("cache refused writes mid-read, serving direct")
+			}
+			n, err = f.direct.Load().ReadAtContext(ctx, p, off)
+		}
+	}
 
 	if n < int(readSize) && err == nil {
 		err = io.EOF
 	}
 	return n, err
+}
+
+// newDirect builds the direct-network reader for this handle's file, the
+// same reader GetFile opens when the cache is already over budget.
+func (f *StreamingFile) newDirect() *DirectStreamFile {
+	cache := f.item.cache
+	return &DirectStreamFile{
+		src:      cache.manager,
+		entry:    f.item.entry,
+		filename: f.item.filename,
+		size:     f.fileSize,
+		retries:  cache.config.Retries,
+	}
 }
 
 // Size returns the file size.
