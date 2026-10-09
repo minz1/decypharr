@@ -3,10 +3,12 @@ package arr
 import (
 	"cmp"
 	"context"
+	"crypto/subtle"
 	"crypto/tls"
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/rs/zerolog"
@@ -69,6 +71,41 @@ func (s *Service) Get(name string) (Arr, bool) {
 	defer s.mu.RUnlock()
 	instance, ok := s.arrs[name]
 	return instance, ok
+}
+
+// MatchCredentials checks saved Arr credentials without a network request.
+// An empty category matches any Arr, which lets a client log in before it
+// sends its category. An empty host matches on the API key alone (a Bearer
+// key). An Arr registered from client credentials is never trusted unless the
+// same credentials are also saved in the config.
+func (s *Service) MatchCredentials(category, host, token string) (Arr, bool) {
+	if token == "" {
+		return Arr{}, false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for name, instance := range s.arrs {
+		if category != "" && name != category {
+			continue
+		}
+		if (host != "" && host != instance.Host) ||
+			subtle.ConstantTimeCompare([]byte(token), []byte(instance.Token)) != 1 {
+			continue
+		}
+		if instance.Source != SourceAuto || s.savedCredentials(name, instance.Host, token) {
+			return instance, true
+		}
+	}
+	return Arr{}, false
+}
+
+// savedCredentials reports whether the config holds name with this host and
+// token. Caller must hold s.mu.
+func (s *Service) savedCredentials(name, host, token string) bool {
+	return slices.ContainsFunc(s.config.Get().Arrs, func(configured config.Arr) bool {
+		return configured.Name == name && configured.Host == host &&
+			subtle.ConstantTimeCompare([]byte(token), []byte(strings.TrimSpace(configured.Token))) == 1
+	})
 }
 
 // GetOrCreate returns a placeholder for a category with no configured Arr, so

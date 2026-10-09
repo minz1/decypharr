@@ -3,7 +3,6 @@ package qbit
 import (
 	"context"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -166,8 +165,8 @@ func (q *QBit) authenticate(ctx context.Context, category, username, password st
 		if q.config.Get().VerifyAuth(username, password) || q.config.Get().VerifyToken(password) {
 			return instance, nil
 		}
-		if q.arrCredentialsMatch(category, instance, username, password) {
-			return instance, nil
+		if matched, ok := q.manager.Arr().MatchCredentials(category, username, password); ok {
+			return matched, nil
 		}
 		return arr.Arr{}, fmt.Errorf("unauthorized: invalid credentials")
 	}
@@ -193,29 +192,6 @@ func (q *QBit) authenticate(ctx context.Context, category, username, password st
 		q.manager.Arr().AddOrUpdate(instance)
 	}
 	return instance, nil
-}
-
-// arrCredentialsMatch reports whether username and password are a configured
-// arr's host and API key, or its API key alone when username is empty (a
-// Bearer API key). A request that names a category must carry that
-// category's arr credentials; one that names none, such as login and
-// app/preferences, accepts any configured arr's. Arrs registered from client
-// credentials are never trusted.
-func (q *QBit) arrCredentialsMatch(category string, instance arr.Arr, username, password string) bool {
-	if password == "" {
-		return false
-	}
-	candidates := []arr.Arr{instance}
-	if category == "" {
-		candidates = q.manager.Arr().All()
-	}
-	for _, candidate := range candidates {
-		if candidate.Source != arr.SourceAuto && (username == "" || username == candidate.Host) &&
-			subtle.ConstantTimeCompare([]byte(password), []byte(candidate.Token)) == 1 {
-			return true
-		}
-	}
-	return false
 }
 
 func createSID(secretKey, username, password string) string {
