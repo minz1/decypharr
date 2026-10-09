@@ -68,7 +68,7 @@ func (handler *arrHandler) failDownload(ctx context.Context, job Job, progress J
 	}
 	failure, err := handler.prepareExactDownloadFailure(ctx, instance, job.DownloadID)
 	if err != nil {
-		return fmt.Errorf("%w: %w", errArrUnavailable, err)
+		return fmt.Errorf("%w: %w", errArrLookup, err)
 	}
 	if !failure.found {
 		return fmt.Errorf("no grab history for download %q", job.DownloadID)

@@ -157,14 +157,14 @@ func TestFailDownloadLookupErrorIsRetryable(t *testing.T) {
 	handler, _ := NewHandler(registry, nil).(*arrHandler)
 	job := Job{ArrName: "sonarr", DownloadID: "DOWNLOADID", Strategy: StrategyDownloadFailed}
 	err := handler.failDownload(t.Context(), job, nil)
-	if !errors.Is(err, errArrUnavailable) {
-		t.Fatalf("failDownload error = %v, want errArrUnavailable", err)
+	if !errors.Is(err, errArrLookup) {
+		t.Fatalf("failDownload error = %v, want errArrLookup", err)
 	}
 }
 
 // settleJob requeues an unavailable-Arr failure until the reconciliation
 // deadline, then stops for an operator instead of failing silently.
-func TestSettleJobRetriesUnavailableArrUntilDeadline(t *testing.T) {
+func TestSettleJobRetriesFailedLookupUntilDeadline(t *testing.T) {
 	t.Parallel()
 	service := startFailDownloadService(t, "")
 	queued, err := service.FailDownload("sonarr", "DOWNLOADID", "entry")
@@ -176,13 +176,13 @@ func TestSettleJobRetriesUnavailableArrUntilDeadline(t *testing.T) {
 		t.Fatal(err)
 	}
 	progress := &serviceJobProgress{service: service, jobID: started.ID}
-	lookupErr := fmt.Errorf("%w: connection refused", errArrUnavailable)
+	lookupErr := fmt.Errorf("%w: connection refused", errArrLookup)
 
 	service.settleJob(started.ID, lookupErr, progress)
 	retried, _ := service.Job(started.ID)
-	if retried.Status != StatusQueued || retried.RetryAt.IsZero() {
-		t.Fatalf("after a lookup failure: status %q retryAt %v, want queued with a retry time",
-			retried.Status, retried.RetryAt)
+	if retried.Status != StatusQueued || retried.RetryAt.Before(started.UpdatedAt.Add(retryMaxDelay)) {
+		t.Fatalf("after a lookup failure: status %q retryAt %v, want queued at least %v later",
+			retried.Status, retried.RetryAt, retryMaxDelay)
 	}
 
 	service.now = func() time.Time { return started.StartedAt.Add(reconciliationTimeout + time.Minute) }

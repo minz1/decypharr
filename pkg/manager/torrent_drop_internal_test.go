@@ -1,11 +1,15 @@
 package manager
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
+
+	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
@@ -372,5 +376,34 @@ func TestTruncatedSyncLeavesMissesUnchanged(t *testing.T) {
 	syncTimes(t, m, client, 1)
 	if client.lookups() != 1 {
 		t.Fatalf("full sync after truncation lookups=%d, want 1", client.lookups())
+	}
+}
+
+// A sync cancelled mid-confirmation stops quietly; any other lookup error is
+// worth a warning, since it means the provider is unhealthy.
+func TestConfirmDropsWarnsOnlyForProviderErrors(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		err  error
+		warn bool
+	}{
+		"cancelled":      {err: context.Canceled},
+		"provider error": {err: errors.New("torbox API error: Status: 500"), warn: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			m, _ := newDroppedTestManager(t, &fakeArrRecovery{})
+			var logs bytes.Buffer
+			m.logger = zerolog.New(&logs)
+			addPlaced(t, m, 1)
+			client := &fakeListing{
+				torrents: []*types.Torrent{otherListed()},
+				lookup:   func(string) (*types.Torrent, error) { return nil, tc.err },
+			}
+			syncTimes(t, m, client, 2)
+			if warned := strings.Contains(logs.String(), "Could not confirm dropped torrents"); warned != tc.warn {
+				t.Fatalf("warned = %t, want %t; logs: %s", warned, tc.warn, logs.String())
+			}
+		})
 	}
 }

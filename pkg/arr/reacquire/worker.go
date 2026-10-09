@@ -327,8 +327,13 @@ func (s *Service) settleJob(id string, err error, progress *serviceJobProgress) 
 	if err != nil && !deadline.IsZero() && !s.now().Before(deadline) {
 		return s.stopReconciliation(id, fmt.Errorf("arr reconciliation deadline expired: %w", err))
 	}
-	if errors.Is(err, arr.ErrMutationOutcomeUnknown) || errors.Is(err, errArrUnavailable) {
+	if errors.Is(err, arr.ErrMutationOutcomeUnknown) || errors.Is(err, errArrLookup) {
 		delay := retryDelay(current, err)
+		if errors.Is(err, errArrLookup) {
+			// No mutation attempts grow the delay, and a permanent error such
+			// as a bad token is not backed off by the client: pace it.
+			delay = retryMaxDelay
+		}
 		if !deadline.IsZero() {
 			delay = min(delay, deadline.Sub(s.now()))
 		}
