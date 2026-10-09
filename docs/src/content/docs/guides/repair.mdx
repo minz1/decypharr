@@ -272,7 +272,9 @@ A drop is confirmed only when the debrid stops listing a torrent in two consecut
 
 This means deleting torrents yourself on the debrid side now makes Sonarr/Radarr reacquire imported files and blocklist the release.
 
-Recoveries are capped at 10 per provider per sync, so a large prune is spread over several syncs. If the Arr is unreachable, the recovery is retried on the next sync.
+Recoveries are capped at 10 per provider per sync, so a large prune is spread over several syncs. A recovery that can't be queued (the reacquire service isn't running, or the queue record can't be read) is retried on the next sync. Once queued, the job's result shows in the reacquire jobs list.
+
+With a Real-Debrid `limit` at or below your torrent count, every listing is truncated and drop detection is off for that debrid.
 
 ## Migration from v1
 
