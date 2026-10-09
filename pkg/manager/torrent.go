@@ -3,11 +3,13 @@ package manager
 import (
 	"context"
 	"errors"
+	"maps"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	debrid "github.com/sirrobot01/decypharr/pkg/debrid/common"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
@@ -44,6 +46,9 @@ const (
 	// refreshTorrentsPerWorker scales refresh workers with the batch size.
 	refreshTorrentsPerWorker = 10
 	refreshDeleteWorkers     = 10
+	// maxDropRecoveriesPerSync bounds the confirmed drops applied per provider
+	// per sync, so a mass prune spreads over several syncs.
+	maxDropRecoveriesPerSync = 10
 	refreshWorkChanBuffer    = 100
 	refreshBatchChanBuffer   = 50
 )
@@ -95,16 +100,27 @@ func (m *Manager) doRefreshTorrents(_ context.Context, provider string, debridCl
 	}
 
 	previousMisses, _ := m.providerMisses.Load(provider)
+	// A listing cut off at the configured limit omits torrents that still
+	// exist, so it proves nothing about absences.
+	limit := debridClient.Config().Limit
+	truncated := limit > 0 && len(remote) >= limit
+	listedIDs := make(map[string]struct{}, len(remote))
+	for _, t := range remote {
+		listedIDs[t.ID] = struct{}{}
+	}
 
 	// Detect changes by streaming through cached entries
-	changes, err := m.detectTorrentChanges(provider, remoteTorrentsByHash, previousMisses)
+	changes, err := m.detectTorrentChanges(provider, remoteTorrentsByHash, listedIDs, previousMisses, truncated)
 	if err != nil {
 		return err
 	}
+	m.confirmDrops(provider, debridClient, &changes)
 	newTorrents, torrentsToUpdate := changes.fetch, changes.update
 
-	// Handle deletions
-	m.handleTorrentDeletions(provider, changes.delete)
+	// Handle deletions; an entry whose recovery failed stays a miss and is retried.
+	for _, entry := range m.handleTorrentDeletions(provider, changes.delete) {
+		changes.markMiss(entry.InfoHash)
+	}
 	m.providerMisses.Store(provider, changes.misses)
 
 	// Batch update torrents with changed placements (run concurrently)
@@ -137,10 +153,19 @@ type torrentChanges struct {
 	fetch  []*types.Torrent // new or changed on the provider; re-fetched in full
 	update []*storage.Entry // lost this provider but keep others
 	delete []*storage.Entry // lost their last provider
+	// confirm are entries missing for the second consecutive listing; each
+	// is dropped only once the provider reports the torrent gone.
+	confirm []*storage.Entry
 	// misses are the infohashes this listing lacks although the entry is
-	// placed on the provider. A placement is dropped only on a second
-	// consecutive miss, so one partial listing never acts.
+	// placed on the provider.
 	misses map[string]struct{}
+}
+
+func (c *torrentChanges) markMiss(infoHash string) {
+	if c.misses == nil {
+		c.misses = make(map[string]struct{})
+	}
+	c.misses[infoHash] = struct{}{}
 }
 
 // classify records how entry changes given the provider's current listing
@@ -153,18 +178,9 @@ func (c *torrentChanges) classify(provider string, entry *storage.Entry, current
 			c.fetch = append(c.fetch, current)
 		}
 	case current == nil:
-		if c.misses == nil {
-			c.misses = make(map[string]struct{})
-		}
-		c.misses[entry.InfoHash] = struct{}{}
-		if !missedBefore {
-			return
-		}
-		entry.RemoveProvider(provider, nil)
-		if len(entry.Providers) == 0 {
-			c.delete = append(c.delete, entry)
-		} else {
-			c.update = append(c.update, entry)
+		c.markMiss(entry.InfoHash)
+		if missedBefore {
+			c.confirm = append(c.confirm, entry)
 		}
 	case placement.NeedsUpdate(current):
 		// The listing lacks full metadata (files, downloadedAt), so re-fetch;
@@ -177,7 +193,9 @@ func (c *torrentChanges) classify(provider string, entry *storage.Entry, current
 func (m *Manager) detectTorrentChanges(
 	provider string,
 	remoteTorrentsByHash map[string]*types.Torrent,
+	listedIDs map[string]struct{},
 	previousMisses map[string]struct{},
+	truncated bool,
 ) (torrentChanges, error) {
 	var changes torrentChanges
 	cachedInfoHashes := make(map[string]bool, len(remoteTorrentsByHash))
@@ -185,14 +203,21 @@ func (m *Manager) detectTorrentChanges(
 	err := m.storage.ForEachBatch(refreshBatchSize, func(batch []*storage.Entry) error {
 		for _, entry := range batch {
 			cachedInfoHashes[entry.InfoHash] = true
+			current := remoteTorrentsByHash[entry.InfoHash]
+			if current == nil && listedAbsence(provider, entry, listedIDs, truncated) {
+				continue
+			}
 			_, missedBefore := previousMisses[entry.InfoHash]
-			changes.classify(provider, entry, remoteTorrentsByHash[entry.InfoHash], missedBefore)
+			changes.classify(provider, entry, current, missedBefore)
 		}
 		return nil
 	})
 	if err != nil {
 		m.logger.Error().Err(err).Msg("Failed to stream cached remote")
 		return torrentChanges{}, err
+	}
+	if truncated {
+		changes.misses = maps.Clone(previousMisses)
 	}
 
 	// Check for brand new torrents (not in cache at all)
@@ -204,12 +229,62 @@ func (m *Manager) detectTorrentChanges(
 	return changes, nil
 }
 
-// handleTorrentDeletions processes torrent deletions concurrently.
-func (m *Manager) handleTorrentDeletions(provider string, torrentsToDelete []*storage.Entry) {
+// listedAbsence reports whether an entry's missing hash says nothing about
+// its placement: the listing was truncated, or it lists the placement's ID
+// under another hash (Premiumize's synthetic ones).
+func listedAbsence(provider string, entry *storage.Entry, listedIDs map[string]struct{}, truncated bool) bool {
+	placement, onProvider := entry.Providers[provider]
+	if !onProvider {
+		return false
+	}
+	_, listed := listedIDs[placement.ID]
+	return truncated || listed
+}
+
+// confirmDrops resolves the entries missing for two consecutive listings by
+// asking the provider about each placement directly. Only a not-found answer
+// drops the placement, at most maxDropRecoveriesPerSync per call; the rest,
+// and any lookup that failed, stay misses and are retried next sync.
+func (m *Manager) confirmDrops(provider string, client debrid.Client, changes *torrentChanges) {
+	applied := 0
+	for i, entry := range changes.confirm {
+		if applied == maxDropRecoveriesPerSync {
+			m.logger.Warn().Str("debrid", provider).Int("applied", applied).
+				Int("deferred", len(changes.confirm)-i).Msg("Dropped-torrent recovery cap reached")
+			return
+		}
+		id := entry.Providers[provider].ID
+		_, err := client.GetTorrent(id)
+		switch {
+		case err == nil:
+			delete(changes.misses, entry.InfoHash)
+		case errors.Is(err, customerror.ErrTorrentNotFound):
+			delete(changes.misses, entry.InfoHash)
+			entry.RemoveProvider(provider, nil)
+			if len(entry.Providers) == 0 {
+				changes.delete = append(changes.delete, entry)
+			} else {
+				changes.update = append(changes.update, entry)
+			}
+			applied++
+		default:
+			m.logger.Debug().Err(err).Str("debrid", provider).Str("id", id).
+				Msg("Could not confirm a dropped torrent; will retry")
+		}
+	}
+}
+
+// handleTorrentDeletions processes torrent deletions concurrently and returns
+// the entries it kept because Arr recovery failed.
+func (m *Manager) handleTorrentDeletions(provider string, torrentsToDelete []*storage.Entry) []*storage.Entry {
 	if len(torrentsToDelete) == 0 {
-		return
+		return nil
 	}
 
+	var (
+		mu     sync.Mutex
+		failed []*storage.Entry
+	)
 	var deleteWg sync.WaitGroup
 	deleteChan := make(chan *storage.Entry, len(torrentsToDelete))
 
@@ -217,7 +292,14 @@ func (m *Manager) handleTorrentDeletions(provider string, torrentsToDelete []*st
 	for range deleteWorkers {
 		deleteWg.Go(func() {
 			for entry := range deleteChan {
-				m.recoverDroppedEntry(provider, entry)
+				if err := m.recoverDroppedEntry(provider, entry); err != nil {
+					m.logger.Error().Err(err).Str("infohash", entry.InfoHash).
+						Msg("Dropped torrent kept; Arr recovery will retry")
+					mu.Lock()
+					failed = append(failed, entry)
+					mu.Unlock()
+					continue
+				}
 				if err := m.storage.Delete(entry.InfoHash); err != nil {
 					m.logger.Error().Err(err).Str("infohash", entry.InfoHash).Msg("Failed to delete torrent")
 				}
@@ -230,6 +312,7 @@ func (m *Manager) handleTorrentDeletions(provider string, torrentsToDelete []*st
 	}
 	close(deleteChan)
 	deleteWg.Wait()
+	return failed
 }
 
 // processNewTorrents processes new torrents with worker pool and batch writing.

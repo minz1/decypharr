@@ -1,10 +1,12 @@
 package manager
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
 
+	"github.com/sirrobot01/appendstore"
 	"github.com/sirrobot01/decypharr/pkg/arr/reacquire"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
@@ -95,49 +97,52 @@ func (m *Manager) setStreamReacquireJob(entryID, fileID, jobID string) {
 
 // recoverDroppedEntry makes the Arr react to an entry whose debrid placement
 // was confirmed gone. Imported files are reacquired; a download the Arr is
-// still tracking is marked errored and its grab failed, so the Arr blocklists
-// the release instead of retrying a dangling import forever.
-func (m *Manager) recoverDroppedEntry(provider string, entry *storage.Entry) {
-	recovery := m.recoveryService()
+// still tracking has its grab failed, so the Arr blocklists the release
+// instead of retrying a dangling import forever. An error means recovery is
+// incomplete and must be retried; every step is safe to repeat.
+func (m *Manager) recoverDroppedEntry(provider string, entry *storage.Entry) error {
 	imported := false
-	if recovery != nil {
-		for _, file := range entry.Files {
-			if _, ok := m.lookupArrBinding(entry.InfoHash, file.ID); !ok {
-				continue
-			}
-			imported = true
-			if _, err := recovery.Reacquire(reacquire.Request{
-				EntryID: entry.InfoHash,
-				FileID:  file.ID,
-				Cause:   reacquire.CauseRepair,
-			}); err != nil {
-				m.logger.Error().Err(err).Str("infohash", entry.InfoHash).Str("file_id", file.ID).
-					Msg("Failed to queue Arr reacquisition for dropped entry")
-			}
+	var reacquireErr error
+	for _, file := range entry.Files {
+		if _, ok := m.lookupArrBinding(entry.InfoHash, file.ID); !ok {
+			continue
+		}
+		imported = true
+		if _, err := m.recoveryService().Reacquire(reacquire.Request{
+			EntryID: entry.InfoHash,
+			FileID:  file.ID,
+			Cause:   reacquire.CauseRepair,
+		}); err != nil {
+			reacquireErr = errors.Join(reacquireErr, fmt.Errorf("reacquire file %s: %w", file.ID, err))
 		}
 	}
 	if imported {
-		return
+		return reacquireErr
 	}
 
 	record, err := m.Queue().GetTorrent(entry.InfoHash)
-	if err != nil || record == nil || record.State == storage.EntryStateError {
-		return
+	if errors.Is(err, appendstore.ErrKeyNotFound) || (err == nil && record == nil) {
+		return nil
+	}
+	if err != nil {
+		m.logger.Warn().Err(err).Str("infohash", entry.InfoHash).Msg("Failed to read queue record of dropped entry")
+		return err
+	}
+	if instance, ok := m.Arr().Get(record.Category); ok {
+		recovery := m.recoveryService()
+		if recovery == nil {
+			return fmt.Errorf("arr recovery service is not running")
+		}
+		if _, failErr := recovery.FailDownload(instance.Name, strings.ToUpper(entry.InfoHash), entry.InfoHash); failErr != nil {
+			return fmt.Errorf("fail dropped download in %s: %w", instance.Name, failErr)
+		}
+	}
+	if record.State == storage.EntryStateError {
+		return nil
 	}
 	record.MarkAsError(fmt.Errorf("%s no longer lists this torrent", provider))
 	if updateErr := m.Queue().Update(record); updateErr != nil {
-		m.logger.Error().Err(updateErr).Str("infohash", entry.InfoHash).Msg("Failed to mark dropped entry as errored")
+		return fmt.Errorf("mark dropped entry as errored: %w", updateErr)
 	}
-	if recovery == nil {
-		return
-	}
-	instance, ok := m.Arr().Get(record.Category)
-	if !ok {
-		return
-	}
-	downloadID := strings.ToUpper(entry.InfoHash)
-	if _, failErr := recovery.FailDownload(instance.Name, downloadID, entry.InfoHash); failErr != nil {
-		m.logger.Error().Err(failErr).Str("infohash", entry.InfoHash).Str("arr", instance.Name).
-			Msg("Failed to fail dropped download in Arr")
-	}
+	return nil
 }

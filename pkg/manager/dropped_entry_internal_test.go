@@ -1,15 +1,18 @@
 package manager
 
 import (
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/arr/reacquire"
+	debrid "github.com/sirrobot01/decypharr/pkg/debrid/common"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
@@ -26,10 +29,12 @@ func newDroppedTestManager(t *testing.T, recovery ArrRecovery) (*Manager, *stora
 		{Name: "sonarr", Host: "http://localhost:8989", Token: "x"},
 	}})
 	m := &Manager{
-		storage: store,
-		queue:   newQueue(store, "", nil, zerolog.Nop()),
-		arr:     arr.New(cfg, nil, zerolog.Nop()),
-		logger:  zerolog.Nop(),
+		clients:        xsync.NewMap[string, debrid.Client](),
+		providerMisses: xsync.NewMap[string, map[string]struct{}](),
+		storage:        store,
+		queue:          newQueue(store, "", nil, zerolog.Nop()),
+		arr:            arr.New(cfg, nil, zerolog.Nop()),
+		logger:         zerolog.Nop(),
 	}
 	if recovery != nil {
 		m.SetArrRecovery(recovery)
@@ -55,7 +60,9 @@ func TestDroppedImportedEntryReacquiresBoundFiles(t *testing.T) {
 	}
 	m, entry := newDroppedTestManager(t, fake)
 
-	m.recoverDroppedEntry("realdebrid", entry)
+	if err := m.recoverDroppedEntry("realdebrid", entry); err != nil {
+		t.Fatal(err)
+	}
 
 	if fake.calls.Load() != 1 || fake.request.Cause != reacquire.CauseRepair {
 		t.Fatalf("reacquire calls=%d request=%+v", fake.calls.Load(), fake.request)
@@ -74,7 +81,9 @@ func TestDroppedUnimportedEntryFailsGrab(t *testing.T) {
 	fake := &fakeArrRecovery{}
 	m, entry := newDroppedTestManager(t, fake)
 
-	m.recoverDroppedEntry("realdebrid", entry)
+	if err := m.recoverDroppedEntry("realdebrid", entry); err != nil {
+		t.Fatal(err)
+	}
 
 	record, err := m.Queue().GetTorrent(droppedHash)
 	if err != nil {
@@ -95,24 +104,81 @@ func TestDroppedEntryIsHandledOnce(t *testing.T) {
 	fake := &fakeArrRecovery{}
 	m, entry := newDroppedTestManager(t, fake)
 
-	m.recoverDroppedEntry("realdebrid", entry)
-	m.recoverDroppedEntry("realdebrid", entry)
+	for range 2 {
+		if err := m.recoverDroppedEntry("realdebrid", entry); err != nil {
+			t.Fatal(err)
+		}
+	}
 
-	if len(fake.fails) != 1 {
-		t.Fatalf("FailDownload calls=%d, want 1", len(fake.fails))
+	record, err := m.Queue().GetTorrent(droppedHash)
+	if err != nil || record.ErrorCount != 1 {
+		t.Fatalf("record=%v err=%v, want ErrorCount 1", record, err)
 	}
 }
 
 func TestDroppedEntryWithoutRecovery(t *testing.T) {
 	t.Parallel()
 	m, entry := newDroppedTestManager(t, nil)
-	m.SetArrRecovery(nil)
 
-	m.recoverDroppedEntry("realdebrid", entry)
-
+	if err := m.recoverDroppedEntry("realdebrid", entry); err == nil {
+		t.Fatal("want error when an Arr exists but the recovery service is not running")
+	}
 	record, err := m.Queue().GetTorrent(droppedHash)
+	if err != nil || record.State == storage.EntryStateError {
+		t.Fatalf("record=%v err=%v", record, err)
+	}
+}
+
+func TestDroppedEntryKeptWhenFailDownloadErrors(t *testing.T) {
+	t.Parallel()
+	fake := &fakeArrRecovery{failErr: errors.New("arr unreachable")}
+	m, entry := newDroppedTestManager(t, fake)
+	if err := m.storage.AddOrUpdate(entry); err != nil {
+		t.Fatal(err)
+	}
+
+	for want := 1; want <= 2; want++ {
+		m.handleTorrentDeletions("realdebrid", []*storage.Entry{entry})
+		if _, err := m.storage.Get(droppedHash); err != nil {
+			t.Fatalf("attempt %d: entry deleted despite failed recovery: %v", want, err)
+		}
+		if len(fake.fails) != want {
+			t.Fatalf("attempt %d: FailDownload calls=%d", want, len(fake.fails))
+		}
+		record, err := m.Queue().GetTorrent(droppedHash)
+		if err != nil || record.State == storage.EntryStateError {
+			t.Fatalf("attempt %d: record marked errored: %v %v", want, record, err)
+		}
+	}
+}
+
+func TestDroppedEntryWithoutConfiguredArr(t *testing.T) {
+	t.Parallel()
+	fake := &fakeArrRecovery{}
+	m, entry := newDroppedTestManager(t, fake)
+	record, err := m.Queue().GetTorrent(droppedHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Category = "lidarr"
+	if updateErr := m.Queue().Update(record); updateErr != nil {
+		t.Fatal(updateErr)
+	}
+	if addErr := m.storage.AddOrUpdate(entry); addErr != nil {
+		t.Fatal(addErr)
+	}
+
+	m.handleTorrentDeletions("realdebrid", []*storage.Entry{entry})
+
+	record, err = m.Queue().GetTorrent(droppedHash)
 	if err != nil || record.State != storage.EntryStateError {
 		t.Fatalf("record=%v err=%v", record, err)
+	}
+	if len(fake.fails) != 0 {
+		t.Fatalf("unexpected FailDownload: %v", fake.fails)
+	}
+	if _, getErr := m.storage.Get(droppedHash); getErr == nil {
+		t.Fatal("entry was not deleted")
 	}
 }
 
