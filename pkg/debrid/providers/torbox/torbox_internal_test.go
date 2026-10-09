@@ -251,7 +251,6 @@ func TestGetTorrentReportsGoneAsNotFound(t *testing.T) {
 	for name, respond := range map[string]func(http.ResponseWriter){
 		"404":      func(w http.ResponseWriter) { w.WriteHeader(http.StatusNotFound) },
 		"no data":  func(w http.ResponseWriter) { _, _ = fmt.Fprint(w, `{"success":true,"data":null}`) },
-		"no match": func(w http.ResponseWriter) { _, _ = fmt.Fprint(w, `{"success":false,"data":null}`) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -262,6 +261,27 @@ func TestGetTorrentReportsGoneAsNotFound(t *testing.T) {
 			t.Cleanup(server.Close)
 			if _, err := testTorbox(server.URL).GetTorrent("17"); !errors.Is(err, customerror.ErrTorrentNotFound) {
 				t.Fatalf("err=%v, want ErrTorrentNotFound", err)
+			}
+		})
+	}
+}
+
+func TestGetTorrentUnsuccessfulResponseIsNotNotFound(t *testing.T) {
+	t.Parallel()
+	for name, body := range map[string]string{
+		"success false": `{"success":false,"data":null,"detail":"rate limited"}`,
+		"empty body":    ``,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = fmt.Fprint(w, body)
+			}))
+			t.Cleanup(server.Close)
+			_, err := testTorbox(server.URL).GetTorrent("17")
+			if err == nil || errors.Is(err, customerror.ErrTorrentNotFound) {
+				t.Fatalf("err=%v, want a non-not-found error", err)
 			}
 		})
 	}

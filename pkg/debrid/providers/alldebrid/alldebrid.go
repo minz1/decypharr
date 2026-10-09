@@ -294,6 +294,12 @@ func (ad *AllDebrid) GetTorrent(torrentID string) (*types.Torrent, error) {
 		return nil, fmt.Errorf("alldebrid API error: Status: %d", httpStatus)
 	}
 
+	if res.Status != statusSuccess {
+		if res.Error != nil {
+			return nil, fmt.Errorf("alldebrid API error: %s: %s", res.Error.Code, res.Error.Message)
+		}
+		return nil, fmt.Errorf("alldebrid API error: status %q", res.Status)
+	}
 	data, err := findMagnet(res.Data.Magnets, torrentID)
 	if err != nil {
 		return nil, err

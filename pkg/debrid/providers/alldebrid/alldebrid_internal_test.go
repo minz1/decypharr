@@ -87,6 +87,35 @@ func TestGetTorrentSelectsRequestedMagnetFromArray(t *testing.T) {
 	}
 }
 
+func TestGetTorrentNotFoundOnlyOnSuccessEnvelope(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		body     string
+		notFound bool
+	}{
+		"error envelope": {`{"status":"error","error":{"code":"AUTH_BAD_APIKEY","message":"bad key"}}`, false},
+		"no match":       {`{"status":"success","data":{"magnets":[{"id":1,"filename":"Other.mkv","statusCode":1}]}}`, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = fmt.Fprint(w, tc.body)
+			}))
+			t.Cleanup(server.Close)
+			ad := &AllDebrid{
+				Host:   server.URL,
+				client: request.New(zerolog.Nop(), nil, request.WithMaxRetries(0)),
+				config: config.Debrid{Name: "alldebrid"},
+			}
+			_, err := ad.GetTorrent("2")
+			if err == nil || errors.Is(err, customerror.ErrTorrentNotFound) != tc.notFound {
+				t.Fatalf("err=%v, want not-found=%v", err, tc.notFound)
+			}
+		})
+	}
+}
+
 func TestFindMagnetReturnsNotFound(t *testing.T) {
 	t.Parallel()
 	_, err := findMagnet(Magnets{{ID: 1}}, "2")
