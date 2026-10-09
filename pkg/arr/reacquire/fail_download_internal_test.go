@@ -18,21 +18,14 @@ func failDownloadArr(t *testing.T, grab, alreadyFailed bool, failCalls *atomic.I
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		switch {
 		case request.Method == http.MethodGet && request.URL.Path == "/api/v3/history":
-			records := ""
+			var records []string
 			if grab {
-				records = `{"id":42,"downloadId":"DOWNLOADID","eventType":"grabbed"}`
+				records = append(records, `{"id":42,"downloadId":"DOWNLOADID","eventType":"grabbed"}`)
 			}
 			if alreadyFailed {
-				records += `,{"id":43,"downloadId":"DOWNLOADID","eventType":"downloadFailed"}`
+				records = append(records, `{"id":43,"downloadId":"DOWNLOADID","eventType":"downloadFailed"}`)
 			}
-			if records != "" && records[0] == ',' {
-				records = records[1:]
-			}
-			n := 0
-			if records != "" {
-				n = 1 + btoi(alreadyFailed && grab)
-			}
-			_, _ = fmt.Fprintf(w, `{"page":1,"totalRecords":%d,"records":[%s]}`, n, records)
+			_, _ = fmt.Fprintf(w, `{"page":1,"totalRecords":%d,"records":[%s]}`, len(records), strings.Join(records, ","))
 		case request.Method == http.MethodPost && request.URL.Path == "/api/v3/history/failed/42":
 			failCalls.Add(1)
 			w.WriteHeader(http.StatusOK)
@@ -44,32 +37,17 @@ func failDownloadArr(t *testing.T, grab, alreadyFailed bool, failCalls *atomic.I
 	return server
 }
 
-func btoi(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
-}
-
+// startFailDownloadService serves jobs against host; an empty host installs
+// no handler, so queued jobs stay queued.
 func startFailDownloadService(t *testing.T, host string) *Service {
 	t.Helper()
-	registry := newTestArrStorage()
-	registry.AddOrUpdate(arr.Arr{Name: "sonarr", Host: host, Token: "secret", Type: arr.Sonarr})
-	service, err := NewService(ServiceOptions{Directory: t.TempDir(), Handler: NewHandler(registry, nil)})
-	if err != nil {
-		t.Fatal(err)
+	options := ServiceOptions{Directory: t.TempDir()}
+	if host != "" {
+		registry := newTestArrStorage()
+		registry.AddOrUpdate(arr.Arr{Name: "sonarr", Host: host, Token: "secret", Type: arr.Sonarr})
+		options.Handler = NewHandler(registry, nil)
 	}
-	t.Cleanup(func() { _ = service.Close() })
-	if startErr := service.Start(t.Context()); startErr != nil {
-		t.Fatal(startErr)
-	}
-	return service
-}
-
-// startIdleService has no handler, so queued jobs stay queued.
-func startIdleService(t *testing.T) *Service {
-	t.Helper()
-	service, err := NewService(ServiceOptions{Directory: t.TempDir()})
+	service, err := NewService(options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +102,7 @@ func TestFailDownloadWithoutGrabFails(t *testing.T) {
 
 func TestFailDownloadDeduplicates(t *testing.T) {
 	t.Parallel()
-	service := startIdleService(t)
+	service := startFailDownloadService(t, "")
 	first, err := service.FailDownload("sonarr", "ABC", "abc")
 	if err != nil {
 		t.Fatal(err)
@@ -143,7 +121,7 @@ func TestFailDownloadDeduplicates(t *testing.T) {
 
 func TestDownloadFailedJobRoundTrips(t *testing.T) {
 	t.Parallel()
-	service := startIdleService(t)
+	service := startFailDownloadService(t, "")
 	job, err := service.FailDownload("sonarr", "ABC", "abc")
 	if err != nil {
 		t.Fatal(err)

@@ -268,7 +268,11 @@ Open its detail panel from Browse to see the broken-file list and reason. For Ar
 
 ### Dropped downloads
 
-When a debrid stops listing a torrent in two consecutive syncs, decypharr fails the grab in Sonarr/Radarr, which blocklists that release and searches again if redownload of failed downloads is enabled. Files that were already imported are reacquired instead. Meanwhile the download shows as `error` in the queue.
+A drop is confirmed only when the debrid stops listing a torrent in two consecutive syncs and a direct lookup of that torrent then reports it gone. Once confirmed, decypharr fails the grab in Sonarr/Radarr, which blocklists that release and searches again if redownload of failed downloads is enabled. Files that were already imported are reacquired instead. Meanwhile the download shows as `error` in the queue. The grab is failed even when the Arr's completed download handling is off.
+
+This means deleting torrents yourself on the debrid side now makes Sonarr/Radarr reacquire imported files and blocklist the release.
+
+Recoveries are capped at 10 per provider per sync, so a large prune is spread over several syncs. If the Arr is unreachable, the recovery is retried on the next sync.
 
 ## Migration from v1
 

@@ -59,86 +59,81 @@ func (s *Service) FailDownload(arrName, downloadID, entryID string) (*Job, error
 	}
 	defer release()
 
-	key := jobKey{arrName: arrName, downloadID: downloadID}
-	s.jobsMu.Lock()
-	if id, exists := s.activeReacquisitions[key]; exists {
-		job := cloneJob(s.jobs[id])
-		s.jobsMu.Unlock()
-		return &job, nil
-	}
-	now := s.now()
-	job := Job{
-		ID:         uuid.New().String(),
-		Status:     StatusQueued,
-		Cause:      CauseRepair,
-		Strategy:   StrategyDownloadFailed,
-		ArrName:    arrName,
-		EntryID:    entryID,
-		DownloadID: downloadID,
-		CreatedAt:  now,
-		UpdatedAt:  now,
-	}
-	if saveErr := s.jobRepository.Save(job); saveErr != nil {
-		s.jobsMu.Unlock()
-		return nil, saveErr
-	}
-	s.jobs[job.ID] = cloneJob(job)
-	s.activeReacquisitions[key] = job.ID
-	s.jobsMu.Unlock()
-
-	s.signal()
-	return &job, nil
+	return s.queueJob(jobKey{arrName: arrName, downloadID: downloadID}, nil, func(now time.Time) Job {
+		return Job{
+			ID:         uuid.New().String(),
+			Status:     StatusQueued,
+			Cause:      CauseRepair,
+			Strategy:   StrategyDownloadFailed,
+			ArrName:    arrName,
+			EntryID:    entryID,
+			DownloadID: downloadID,
+			CreatedAt:  now,
+			UpdatedAt:  now,
+		}
+	})
 }
 
 func (s *Service) enqueue(request Request, binding Binding) (*Job, error) {
-	key := keyForBinding(binding)
+	// An unindexed file can become indexed while its replacement is pending.
+	// Keep both request paths attached to the existing job.
+	attached := func() (Job, bool) {
+		for _, id := range s.activeReacquisitions {
+			active := s.jobs[id]
+			for _, existing := range active.Bindings {
+				if existing.ArrName == binding.ArrName && existing.ArrFileID == binding.ArrFileID &&
+					existing.ArrInstanceFingerprint == binding.ArrInstanceFingerprint {
+					return cloneJob(active), true
+				}
+			}
+		}
+		return Job{}, false
+	}
+	return s.queueJob(keyForBinding(binding), attached, func(now time.Time) Job {
+		var bindings []Binding
+		if binding.DownloadID != "" {
+			bindings = s.index.ByDownloadID(binding.ArrName, binding.DownloadID)
+		}
+		bindings = slices.DeleteFunc(bindings, func(binding Binding) bool {
+			return !binding.AuthorizesMutation()
+		})
+		if len(bindings) == 0 {
+			bindings = []Binding{binding}
+		}
+		return Job{
+			ID:         uuid.New().String(),
+			Status:     StatusQueued,
+			Cause:      request.Cause,
+			Strategy:   request.Strategy,
+			ArrName:    binding.ArrName,
+			ArrType:    binding.ArrType,
+			EntryID:    request.EntryID,
+			FileID:     request.FileID,
+			DownloadID: binding.DownloadID,
+			Bindings:   bindings,
+			CreatedAt:  now,
+			UpdatedAt:  now,
+		}
+	})
+}
 
+// queueJob returns the active job for key (or the one attached reports),
+// otherwise saves and indexes the job build returns and wakes the worker.
+// attached and build run under jobsMu.
+func (s *Service) queueJob(key jobKey, attached func() (Job, bool), build func(now time.Time) Job) (*Job, error) {
 	s.jobsMu.Lock()
 	if id, exists := s.activeReacquisitions[key]; exists {
 		job := cloneJob(s.jobs[id])
 		s.jobsMu.Unlock()
 		return &job, nil
 	}
-
-	// An unindexed file can become indexed while its replacement is pending.
-	// Keep both request paths attached to the existing job.
-	for _, id := range s.activeReacquisitions {
-		active := s.jobs[id]
-		for _, existing := range active.Bindings {
-			if existing.ArrName == binding.ArrName && existing.ArrFileID == binding.ArrFileID &&
-				existing.ArrInstanceFingerprint == binding.ArrInstanceFingerprint {
-				job := cloneJob(active)
-				s.jobsMu.Unlock()
-				return &job, nil
-			}
+	if attached != nil {
+		if job, ok := attached(); ok {
+			s.jobsMu.Unlock()
+			return &job, nil
 		}
 	}
-
-	var bindings []Binding
-	if binding.DownloadID != "" {
-		bindings = s.index.ByDownloadID(binding.ArrName, binding.DownloadID)
-	}
-	bindings = slices.DeleteFunc(bindings, func(binding Binding) bool {
-		return !binding.AuthorizesMutation()
-	})
-	if len(bindings) == 0 {
-		bindings = []Binding{binding}
-	}
-	now := s.now()
-	job := Job{
-		ID:         uuid.New().String(),
-		Status:     StatusQueued,
-		Cause:      request.Cause,
-		Strategy:   request.Strategy,
-		ArrName:    binding.ArrName,
-		ArrType:    binding.ArrType,
-		EntryID:    request.EntryID,
-		FileID:     request.FileID,
-		DownloadID: binding.DownloadID,
-		Bindings:   bindings,
-		CreatedAt:  now,
-		UpdatedAt:  now,
-	}
+	job := build(s.now())
 	if err := s.jobRepository.Save(job); err != nil {
 		s.jobsMu.Unlock()
 		return nil, err
