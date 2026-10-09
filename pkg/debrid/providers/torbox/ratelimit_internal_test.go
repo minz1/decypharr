@@ -74,9 +74,10 @@ func TestLanesShareOneLimiterWhenDownloadKeyIsTheMainKey(t *testing.T) {
 	}
 }
 
-// A genuinely separate download key has its own budget at TorBox, so splitting
-// the buckets is correct and must not be collapsed.
-func TestLanesKeepSeparateLimitersForDistinctDownloadKey(t *testing.T) {
+// The list and submit clients both authenticate with the main key, so both
+// spend the main key's budget even when separate download keys exist; only
+// the download accounts for those other keys use the download bucket.
+func TestLanesUseMainLimiterWithDistinctDownloadKey(t *testing.T) {
 	t.Parallel()
 	main := &countingLimiter{}
 	download := &countingLimiter{}
@@ -88,11 +89,11 @@ func TestLanesKeepSeparateLimitersForDistinctDownloadKey(t *testing.T) {
 
 	spendBothLanes(t, dc, map[string]ratelimit.Limiter{"main": main, "download": download})
 
-	if got := main.takes.Load(); got != 1 {
-		t.Errorf("main limiter takes = %d, want 1", got)
+	if got := main.takes.Load(); got != 2 {
+		t.Errorf("main limiter takes = %d, want 2 (both lanes send the main key)", got)
 	}
-	if got := download.takes.Load(); got != 1 {
-		t.Errorf("download limiter takes = %d, want 1 (distinct key has its own budget)", got)
+	if got := download.takes.Load(); got != 0 {
+		t.Errorf("download limiter takes = %d, want 0", got)
 	}
 }
 

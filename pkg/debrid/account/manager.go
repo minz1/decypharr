@@ -44,6 +44,16 @@ const (
 // NewManager builds the download accounts of one debrid provider, using the
 // provider's retry count, TLS settings and logger.
 func NewManager(debridConf config.Debrid, options types.ProviderOptions, downloadRL ratelimit.Limiter) *Manager {
+	return NewManagerWithLimiters(debridConf, options, func(string) ratelimit.Limiter { return downloadRL })
+}
+
+// NewManagerWithLimiters is NewManager for a provider whose rate limit counts
+// per API key: limiterFor picks each download account's limiter by its token.
+func NewManagerWithLimiters(
+	debridConf config.Debrid,
+	options types.ProviderOptions,
+	limiterFor func(token string) ratelimit.Limiter,
+) *Manager {
 	logger := options.Logger
 	m := &Manager{
 		debrid:   debridConf.Name,
@@ -61,7 +71,7 @@ func NewManager(debridConf config.Debrid, options types.ProviderOptions, downloa
 
 		// Create request client with equivalent options
 		opts := []request.ClientOption{
-			request.WithRateLimiter(downloadRL),
+			request.WithRateLimiter(limiterFor(token)),
 			request.WithHeaders(headers),
 			request.WithMaxRetries(options.Retries),
 			request.WithRetryableStatus(http.StatusTooManyRequests, http.StatusBadGateway, statusRetryableNonStandard),

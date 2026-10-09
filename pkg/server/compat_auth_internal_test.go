@@ -207,3 +207,16 @@ func TestSABnzbdAPIKey(t *testing.T) {
 		}
 	}
 }
+
+// SABnzbd always sends the Arr's URL as ma_username, so an arr key without a
+// host is not a credential there, unlike a qBittorrent Bearer key.
+func TestSABnzbdRejectsArrKeyWithoutHost(t *testing.T) {
+	t.Parallel()
+	f := newCompatAuthFixture(t)
+	routes := sabnzbd.New(f.mgr, f.store, zerolog.Nop()).Routes()
+	response := httptest.NewRecorder()
+	routes.ServeHTTP(response, compatAuthRequest("sabnzbd", "manual", "", "arr-token"))
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusUnauthorized)
+	}
+}

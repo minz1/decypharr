@@ -96,17 +96,27 @@ func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter, options type
 	if mainRL == nil {
 		mainRL = ratelimit.New(requestsPerMinute, ratelimit.Per(time.Minute), ratelimit.WithSlack(burstRequests))
 	}
-	// The cap counts per key, not per workload, so list traffic and submit
-	// traffic authenticated with the same key have to share one bucket. Giving
-	// each its own would let a refresh sweep and an import burst together emit
-	// twice the configured limit against a single key and earn the 429s the
-	// limiter exists to prevent.
-	submitRL := mainRL
+	// The cap counts per key, not per workload. The list and submit clients
+	// both send the main key, so they share its bucket, as does a download
+	// account using the main key. Only download accounts on other keys spend
+	// the download bucket. Separate buckets for one key would let a refresh
+	// sweep and an import burst together emit twice the limit against it.
+	var downloadRL ratelimit.Limiter
 	if !onlyUsesKey(dc.DownloadAPIKeys, dc.APIKey) {
-		submitRL = ratelimits["download"]
-		if submitRL == nil {
-			submitRL = ratelimit.New(requestsPerMinute, ratelimit.Per(time.Minute), ratelimit.WithSlack(burstRequests))
+		downloadRL = ratelimits["download"]
+		if downloadRL == nil {
+			downloadRL = ratelimit.New(
+				requestsPerMinute,
+				ratelimit.Per(time.Minute),
+				ratelimit.WithSlack(burstRequests),
+			)
 		}
+	}
+	limiterFor := func(token string) ratelimit.Limiter {
+		if token == dc.APIKey || downloadRL == nil {
+			return mainRL
+		}
+		return downloadRL
 	}
 
 	newClient := func(rateLimiter ratelimit.Limiter) *request.Client {
@@ -130,12 +140,12 @@ func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter, options type
 	tb := &Torbox{
 		Host:                  "https://api.torbox.app/v1",
 		APIKey:                dc.APIKey,
-		accountsManager:       account.NewManager(dc, options, submitRL),
+		accountsManager:       account.NewManagerWithLimiters(dc, options, limiterFor),
 		options:               options,
 		config:                dc,
 		autoExpiresLinksAfter: autoExpiresLinksAfter,
 		client:                newClient(mainRL),
-		submitClient:          newClient(submitRL),
+		submitClient:          newClient(mainRL),
 		logger:                _log,
 	}
 	return tb, nil

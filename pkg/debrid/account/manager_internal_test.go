@@ -8,12 +8,15 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/rs/zerolog"
+	"go.uber.org/ratelimit"
 
+	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/request"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
 )
@@ -201,5 +204,41 @@ func TestAccountProfileIsSafeForConcurrentUse(t *testing.T) {
 	wg.Wait()
 	if acc.Username() != "user" || !acc.Expiration().Equal(expiry) {
 		t.Fatalf("profile = %q, %v", acc.Username(), acc.Expiration())
+	}
+}
+
+type countingLimiter struct{ takes atomic.Int64 }
+
+func (l *countingLimiter) Take() time.Time {
+	l.takes.Add(1)
+	return time.Now()
+}
+
+// Each download account spends the bucket of the key it authenticates with.
+func TestNewManagerWithLimitersPicksLimiterPerKey(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	t.Cleanup(server.Close)
+	main, download := &countingLimiter{}, &countingLimiter{}
+	dc := config.Debrid{Name: "torbox", APIKey: "key-1", DownloadAPIKeys: []string{"key-1", "key-2"}}
+	m := NewManagerWithLimiters(dc, types.ProviderOptions{Logger: zerolog.Nop()}, func(token string) ratelimit.Limiter {
+		if token == dc.APIKey {
+			return main
+		}
+		return download
+	})
+	for _, token := range dc.DownloadAPIKeys {
+		acc, ok := m.accounts.Load(token)
+		if !ok {
+			t.Fatalf("no account for %s", token)
+		}
+		resp, err := acc.httpClient.Get(server.URL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+	}
+	if main.takes.Load() != 1 || download.takes.Load() != 1 {
+		t.Fatalf("takes main=%d download=%d, want 1 and 1", main.takes.Load(), download.takes.Load())
 	}
 }

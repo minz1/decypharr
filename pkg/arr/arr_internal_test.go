@@ -58,3 +58,21 @@ func TestArrInstanceFingerprintCanonicalizesHost(t *testing.T) {
 		t.Fatal("different Arr instances produced the same fingerprint")
 	}
 }
+
+// An Arr registered from client credentials is trusted only when the config
+// saves the same name, host and token; a different saved token is no match.
+func TestMatchCredentialsTrustsAutoArrOnlyWithSavedToken(t *testing.T) {
+	t.Parallel()
+	saved := config.Arr{Name: "sonarr", Host: "http://sonarr.invalid", Token: "saved-token", Source: string(SourceAuto)}
+	arrs := New(config.NewStore(&config.Config{Arrs: []config.Arr{saved}}), nil, zerolog.Nop())
+
+	arrs.AddOrUpdate(Arr{Name: "sonarr", Host: saved.Host, Token: "client-token", Source: SourceAuto})
+	if _, ok := arrs.MatchCredentials("sonarr", saved.Host, "client-token"); ok {
+		t.Fatal("matched an auto Arr whose token differs from the saved one")
+	}
+
+	arrs.AddOrUpdate(Arr{Name: "sonarr", Host: saved.Host, Token: "saved-token", Source: SourceAuto})
+	if _, ok := arrs.MatchCredentials("sonarr", saved.Host, "saved-token"); !ok {
+		t.Fatal("did not match an auto Arr whose credentials are saved")
+	}
+}
