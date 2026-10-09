@@ -249,8 +249,8 @@ func TestAvailabilityPreservesKeysAndReportsIncompleteBatches(t *testing.T) {
 func TestGetTorrentReportsGoneAsNotFound(t *testing.T) {
 	t.Parallel()
 	for name, respond := range map[string]func(http.ResponseWriter){
-		"404":      func(w http.ResponseWriter) { w.WriteHeader(http.StatusNotFound) },
-		"no data":  func(w http.ResponseWriter) { _, _ = fmt.Fprint(w, `{"success":true,"data":null}`) },
+		"404":     func(w http.ResponseWriter) { w.WriteHeader(http.StatusNotFound) },
+		"no data": func(w http.ResponseWriter) { _, _ = fmt.Fprint(w, `{"success":true,"data":null}`) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

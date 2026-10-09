@@ -248,7 +248,7 @@ func listedAbsence(provider string, entry *storage.Entry, listedIDs map[string]s
 // entry whose recovery keeps failing goes behind the others.
 func (m *Manager) confirmDrops(provider string, client debrid.Client, changes *torrentChanges) {
 	loaded, _ := m.dropHookFailures.LoadOrStore(provider, map[string]int{})
-	failed := loaded.(map[string]int) // only ever stores that type; refreshSG serialises per provider
+	failed, _ := loaded.(map[string]int) // always this type; refreshSG serialises per provider
 	slices.SortStableFunc(changes.confirm, func(a, b *storage.Entry) int {
 		return cmp.Compare(failed[a.InfoHash], failed[b.InfoHash])
 	})
