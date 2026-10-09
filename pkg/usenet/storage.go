@@ -16,6 +16,7 @@ import (
 	"github.com/sourcegraph/conc/pool"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/internal/fsutil"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
@@ -86,6 +87,36 @@ func (s *NZBStorage) metaFilePath(id string) (string, error) {
 		return "", fmt.Errorf("nzb id is empty: %w", fsutil.ErrUnsafeName)
 	}
 	return fsutil.JoinName(s.metaDir, id+metaFileExtension)
+}
+
+// readMetaLocked reads an NZB's meta blob. A manifest that is absent while the
+// meta directory itself is present is reported as ErrUsenetManifestMissing so
+// repair can treat the entry as broken. The directory check matters: an
+// unmounted data dir makes every ReadFile return ENOENT, and without it a
+// missing mount would mark the whole library permanently broken.
+// Caller must hold s.mu.
+func (s *NZBStorage) readMetaLocked(id string) ([]byte, error) {
+	path, err := s.metaFilePath(id)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path)
+	if err == nil {
+		return data, nil
+	}
+	if os.IsNotExist(err) {
+		if _, dirErr := os.Stat(s.metaDir); dirErr != nil {
+			return nil, fmt.Errorf("meta directory unavailable: %w", dirErr)
+		}
+		return nil, fmt.Errorf("nzb not found: %s: %w", id, customerror.ErrUsenetManifestMissing)
+	}
+	return nil, fmt.Errorf("failed to read NZB meta file: %w", err)
+}
+
+// invalidManifest marks a decode failure as permanent: the bytes on disk do not
+// parse, so every later probe of this entry fails the same way.
+func invalidManifest(id string, err error) error {
+	return fmt.Errorf("decode NZB meta %s: %w: %w", id, err, customerror.ErrUsenetManifestInvalid)
 }
 
 // recalculateStatsLocked rebuilds cached stats by scanning metadata files.
@@ -171,16 +202,9 @@ func (s *NZBStorage) GetNZB(id string) (*storage.NZB, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	path, err := s.metaFilePath(id)
+	data, err := s.readMetaLocked(id)
 	if err != nil {
 		return nil, err
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("nzb not found: %s", id)
-		}
-		return nil, fmt.Errorf("failed to read NZB meta file: %w", err)
 	}
 
 	return s.codec.decodeNZB(data)
@@ -193,16 +217,9 @@ func (s *NZBStorage) GetNZBHeader(id string) (*storage.NZB, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	path, err := s.metaFilePath(id)
+	data, err := s.readMetaLocked(id)
 	if err != nil {
 		return nil, err
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("nzb not found: %s", id)
-		}
-		return nil, fmt.Errorf("failed to read NZB meta file: %w", err)
 	}
 
 	if isCodecV2(data) {
@@ -221,25 +238,22 @@ func (s *NZBStorage) GetNZBFile(id, filename string) (*storage.NZBFile, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	path, err := s.metaFilePath(id)
+	data, err := s.readMetaLocked(id)
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("nzb not found: %s", id)
-		}
-		return nil, fmt.Errorf("failed to read NZB meta file: %w", err)
-	}
 
 	if isCodecV2(data) {
-		return s.codec.decodeFileV2(data, filename)
+		file, decodeErr := s.codec.decodeFileV2(data, filename)
+		if decodeErr != nil {
+			return nil, invalidManifest(id, decodeErr)
+		}
+		return file, nil
 	}
 
 	nzb, err := s.codec.decodeNZB(data)
 	if err != nil {
-		return nil, err
+		return nil, invalidManifest(id, err)
 	}
 	for i := range nzb.Files {
 		if nzb.Files[i].Name == filename && !nzb.Files[i].IsDeleted {
@@ -260,26 +274,23 @@ func (s *NZBStorage) SampleFileMessageIDs(id, filename string, percent int) ([]s
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	path, err := s.metaFilePath(id)
+	data, err := s.readMetaLocked(id)
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("nzb not found: %s", id)
-		}
-		return nil, fmt.Errorf("failed to read NZB meta file: %w", err)
-	}
 
 	if isCodecV2(data) {
-		return s.codec.decodeFileMessageIDsSampled(data, filename, percent)
+		ids, decodeErr := s.codec.decodeFileMessageIDsSampled(data, filename, percent)
+		if decodeErr != nil {
+			return nil, invalidManifest(id, decodeErr)
+		}
+		return ids, nil
 	}
 
 	// Legacy proto: full decode then sample in memory.
 	nzb, err := s.codec.decodeNZB(data)
 	if err != nil {
-		return nil, err
+		return nil, invalidManifest(id, err)
 	}
 	f := nzb.GetFileByName(filename)
 	if f == nil || len(f.Segments) == 0 {

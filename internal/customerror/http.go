@@ -27,6 +27,24 @@ var ErrUsenetCorruptContent = &Error{
 	Code:       "usenet_corrupt_content",
 }
 
+// ErrUsenetManifestMissing is a local, deterministic failure: the .meta
+// manifest and the segment map the file needs are gone, so re-probing returns
+// the same error forever. Repair treats it (and ErrUsenetManifestInvalid) as
+// broken rather than deferring it, otherwise the entry stays unrepairable while
+// the arr still counts the file as downloaded.
+var ErrUsenetManifestMissing = &Error{
+	statusCode: http.StatusNotFound,
+	err:        errors.New("usenet metadata manifest is missing"),
+	Code:       "usenet_manifest_missing",
+}
+
+// ErrUsenetManifestInvalid marks a .meta manifest whose bytes do not decode.
+var ErrUsenetManifestInvalid = &Error{
+	statusCode: http.StatusUnprocessableEntity,
+	err:        errors.New("usenet metadata manifest is invalid"),
+	Code:       "usenet_manifest_invalid",
+}
+
 var ErrTrafficExceeded = &Error{
 	statusCode: http.StatusServiceUnavailable,
 	err:        errors.New("traffic limit exceeded"),

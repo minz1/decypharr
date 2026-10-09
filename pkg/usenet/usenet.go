@@ -758,7 +758,7 @@ func (u *Usenet) CheckFile(ctx context.Context, nzoID, filename string) error {
 		return fmt.Errorf("failed to sample file segments: %w", err)
 	}
 	if len(messageIDs) == 0 {
-		return fmt.Errorf("file has no Segments: %s", filename)
+		return fmt.Errorf("file has no Segments: %s: %w", filename, customerror.ErrUsenetManifestInvalid)
 	}
 	err = u.checkAvailability(ctx, filename, messageIDs)
 	return err
@@ -881,7 +881,7 @@ func (u *Usenet) Close() error {
 func (u *Usenet) getFile(nzoID, filename string) (*storage.NZBFile, error) {
 	file, err := u.nzbStorage.GetNZBFile(nzoID, filename)
 	if errors.Is(err, errFileNotFound) {
-		return nil, fmt.Errorf("file %s not found in NZB %s", filename, nzoID)
+		return nil, fmt.Errorf("file %s not found in NZB %s: %w", filename, nzoID, customerror.ErrUsenetManifestInvalid)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("metadata load failed: %w", err)
