@@ -73,6 +73,7 @@ func TestReappearingTorrentResetsMiss(t *testing.T) {
 // fakeListing is a provider whose listing and per-ID lookup are scripted.
 type fakeListing struct {
 	debrid.Client
+
 	limit    int
 	torrents []*types.Torrent
 

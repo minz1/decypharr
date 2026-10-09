@@ -25,7 +25,8 @@ func failDownloadArr(t *testing.T, grab, alreadyFailed bool, failCalls *atomic.I
 			if alreadyFailed {
 				records = append(records, `{"id":43,"downloadId":"DOWNLOADID","eventType":"downloadFailed"}`)
 			}
-			_, _ = fmt.Fprintf(w, `{"page":1,"totalRecords":%d,"records":[%s]}`, len(records), strings.Join(records, ","))
+			_, _ = fmt.Fprintf(w, `{"page":1,"totalRecords":%d,"records":[%s]}`,
+				len(records), strings.Join(records, ","))
 		case request.Method == http.MethodPost && request.URL.Path == "/api/v3/history/failed/42":
 			failCalls.Add(1)
 			w.WriteHeader(http.StatusOK)

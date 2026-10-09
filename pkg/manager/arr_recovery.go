@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/sirrobot01/appendstore"
+
 	"github.com/sirrobot01/decypharr/pkg/arr/reacquire"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
@@ -133,7 +134,8 @@ func (m *Manager) recoverDroppedEntry(provider string, entry *storage.Entry) err
 		if recovery == nil {
 			return fmt.Errorf("arr recovery service is not running")
 		}
-		if _, failErr := recovery.FailDownload(instance.Name, strings.ToUpper(entry.InfoHash), entry.InfoHash); failErr != nil {
+		downloadID := strings.ToUpper(entry.InfoHash)
+		if _, failErr := recovery.FailDownload(instance.Name, downloadID, entry.InfoHash); failErr != nil {
 			return fmt.Errorf("fail dropped download in %s: %w", instance.Name, failErr)
 		}
 	}
