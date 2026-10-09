@@ -102,14 +102,19 @@ func (m *Manager) setStreamReacquireJob(entryID, fileID, jobID string) {
 // instead of retrying a dangling import forever. An error means recovery is
 // incomplete and must be retried; every step is safe to repeat.
 func (m *Manager) recoverDroppedEntry(provider string, entry *storage.Entry) error {
+	// Read the service once: SetArrRecovery(nil) may run at shutdown.
+	recovery := m.recoveryService()
 	imported := false
 	var reacquireErr error
 	for _, file := range entry.Files {
-		if _, ok := m.lookupArrBinding(entry.InfoHash, file.ID); !ok {
+		if recovery == nil || entry.InfoHash == "" || file.ID == "" {
+			continue
+		}
+		if _, ok := recovery.Lookup(entry.InfoHash, file.ID); !ok {
 			continue
 		}
 		imported = true
-		if _, err := m.recoveryService().Reacquire(reacquire.Request{
+		if _, err := recovery.Reacquire(reacquire.Request{
 			EntryID: entry.InfoHash,
 			FileID:  file.ID,
 			Cause:   reacquire.CauseRepair,
@@ -130,7 +135,6 @@ func (m *Manager) recoverDroppedEntry(provider string, entry *storage.Entry) err
 		return err
 	}
 	if instance, ok := m.Arr().Get(record.Category); ok {
-		recovery := m.recoveryService()
 		if recovery == nil {
 			return fmt.Errorf("arr recovery service is not running")
 		}
