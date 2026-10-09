@@ -125,22 +125,22 @@ func (m *Manager) recoverDroppedEntry(provider string, entry *storage.Entry) err
 		m.logger.Warn().Err(err).Str("infohash", entry.InfoHash).Msg("Failed to read queue record of dropped entry")
 		return err
 	}
-	if instance, ok := m.Arr().Get(record.Category); ok {
-		if recovery == nil {
-			return fmt.Errorf("arr recovery service is not running")
-		}
-		if failErr := m.failDroppedGrab(provider, entry, recovery, instance.Name); failErr != nil {
-			return failErr
+	// Mark the record before queuing the job: the job removes the record once
+	// the grab is failed, and a later write would bring it back.
+	if record.State != storage.EntryStateError {
+		record.MarkAsError(fmt.Errorf("%s no longer lists this torrent", provider))
+		if updateErr := m.Queue().Update(record); updateErr != nil {
+			return fmt.Errorf("mark dropped entry as errored: %w", updateErr)
 		}
 	}
-	if record.State == storage.EntryStateError {
+	instance, ok := m.Arr().Get(record.Category)
+	if !ok {
 		return nil
 	}
-	record.MarkAsError(fmt.Errorf("%s no longer lists this torrent", provider))
-	if updateErr := m.Queue().Update(record); updateErr != nil {
-		return fmt.Errorf("mark dropped entry as errored: %w", updateErr)
+	if recovery == nil {
+		return fmt.Errorf("arr recovery service is not running")
 	}
-	return nil
+	return m.failDroppedGrab(provider, entry, recovery, instance.Name)
 }
 
 // reacquireDroppedFiles queues a reacquisition for each of a dropped entry's

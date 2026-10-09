@@ -125,8 +125,10 @@ func TestDroppedEntryWithoutRecovery(t *testing.T) {
 	if err := m.recoverDroppedEntry("realdebrid", entry); err == nil {
 		t.Fatal("want error when an Arr exists but the recovery service is not running")
 	}
+	// The torrent is gone either way: the record shows it, and the entry is
+	// kept so the next sync retries the Arr recovery.
 	record, err := m.Queue().GetTorrent(droppedHash)
-	if err != nil || record.State == storage.EntryStateError {
+	if err != nil || record.State != storage.EntryStateError {
 		t.Fatalf("record=%v err=%v", record, err)
 	}
 }
@@ -148,8 +150,8 @@ func TestDroppedEntryKeptWhenFailDownloadErrors(t *testing.T) {
 			t.Fatalf("attempt %d: FailDownload calls=%d", want, len(fake.fails))
 		}
 		record, err := m.Queue().GetTorrent(droppedHash)
-		if err != nil || record.State == storage.EntryStateError {
-			t.Fatalf("attempt %d: record marked errored: %v %v", want, record, err)
+		if err != nil || record.State != storage.EntryStateError {
+			t.Fatalf("attempt %d: record not marked errored: %v %v", want, record, err)
 		}
 	}
 }
@@ -272,5 +274,37 @@ func TestDroppedEntryLogsTheRecoveryJob(t *testing.T) {
 	if !strings.Contains(line, "failing its grab in the Arr") || !strings.Contains(line, `"job":"fail-1"`) ||
 		!strings.Contains(line, `"level":"info"`) {
 		t.Fatalf("drop log = %s", line)
+	}
+}
+
+// The download_failed job removes the queue record once the grab is failed.
+// It may finish before recoverDroppedEntry returns, so the errored record has
+// to be written before the job is queued, or that write brings it back.
+func TestDroppedEntryRecordStaysRemovedByAFastJob(t *testing.T) {
+	t.Parallel()
+	fake := &fakeArrRecovery{}
+	m, entry := newDroppedTestManager(t, fake)
+	fake.onFail = func(entryID string) {
+		if err := m.queue.Delete(entryID, false, nil); err != nil {
+			t.Error(err)
+		}
+	}
+	if err := m.recoverDroppedEntry("torbox", entry); err != nil {
+		t.Fatal(err)
+	}
+	if m.queue.Contains(entry.InfoHash) {
+		t.Fatal("queue record resurrected after the job removed it")
+	}
+}
+
+func TestInvalidateDownloadFailedWithoutEntryIDIsNoOp(t *testing.T) {
+	t.Parallel()
+	m, entry := newDroppedTestManager(t, &fakeArrRecovery{})
+	job := reacquire.Job{Strategy: reacquire.StrategyDownloadFailed}
+	if err := m.InvalidateReacquire(t.Context(), job); err != nil {
+		t.Fatal(err)
+	}
+	if !m.queue.Contains(entry.InfoHash) {
+		t.Fatal("an invalidation without an entry ID removed a record")
 	}
 }

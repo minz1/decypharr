@@ -32,7 +32,10 @@ type fakeArrRecovery struct {
 	fails     [][3]string
 	failErr   error
 	// failWhen, when set, fails FailDownload for the entry IDs it accepts.
-	failWhen     func(entryID string) bool
+	failWhen func(entryID string) bool
+	// onFail, when set, runs inside FailDownload, standing in for a job that
+	// completes before FailDownload returns.
+	onFail       func(entryID string)
 	reacquireErr error
 }
 
@@ -45,6 +48,9 @@ func (f *fakeArrRecovery) FailDownload(arrName, downloadID, entryID string) (*re
 	}
 	if f.failWhen != nil && f.failWhen(entryID) {
 		return nil, errors.New("arr unreachable")
+	}
+	if f.onFail != nil {
+		f.onFail(entryID)
 	}
 	return &reacquire.Job{ID: "fail-1"}, nil
 }

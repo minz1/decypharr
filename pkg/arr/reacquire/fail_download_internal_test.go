@@ -207,13 +207,17 @@ func (r *recordingInvalidator) InvalidateReacquire(_ context.Context, job Job) e
 func TestFailDownloadInvalidatesOnlyAfterFailingTheGrab(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		grab bool
-		want int
-	}{"grab failed": {grab: true, want: 1}, "no grab": {grab: false, want: 0}} {
+		grab, alreadyFailed bool
+		want                int
+	}{
+		"grab failed":         {grab: true, want: 1},
+		"grab already failed": {grab: true, alreadyFailed: true, want: 1},
+		"no grab":             {want: 0},
+	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			var failCalls atomic.Int64
-			server := failDownloadArr(t, tc.grab, false, &failCalls)
+			server := failDownloadArr(t, tc.grab, tc.alreadyFailed, &failCalls)
 			registry := newTestArrStorage()
 			registry.AddOrUpdate(arr.Arr{Name: "sonarr", Host: server.URL, Token: "secret", Type: arr.Sonarr})
 			invalidator := &recordingInvalidator{}
