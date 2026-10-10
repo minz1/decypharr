@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/rs/zerolog"
@@ -34,7 +33,7 @@ type EntrySaver func(entry *storage.Entry) error
 // It uses the account-level cache for storing links and only tracks validation state.
 type Service struct {
 	naming         func() config.WebDavFolderNaming
-	validated      *xsync.Map[string, error]
+	validated      *xsync.Map[string, struct{}]
 	flights        flight.Group[types.DownloadLink]
 	clients        *xsync.Map[string, debrid.Client]
 	entryRefresher EntryRefresher
@@ -58,7 +57,7 @@ func New(
 ) *Service {
 	return &Service{
 		naming:         naming,
-		validated:      xsync.NewMap[string, error](),
+		validated:      xsync.NewMap[string, struct{}](),
 		clients:        clients,
 		entryRefresher: entryRefresher,
 		repairer:       entryReinsert,
@@ -135,17 +134,8 @@ func (s *Service) fetchAndValidate(
 		return s.handleBadLink(ctx, err, entry, link, attempt)
 	}
 
-	// Is link already validated
-	// Check if we've already validated this link
-	if validationErr, exists := s.validated.Load(link.DownloadLink); exists {
-		if validationErr == nil {
-			return link, nil // Already validated successfully
-		}
-		// Previous validation failed - check if we should retry
-		if linkErr := GetLinkError(validationErr); linkErr != nil && linkErr.ShouldRefetch() {
-			return s.invalidateAndRefetch(ctx, entry, link, attempt)
-		}
-		return types.DownloadLink{}, validationErr
+	if _, ok := s.validated.Load(link.DownloadLink); ok {
+		return link, nil
 	}
 
 	// Validate the link
@@ -156,18 +146,19 @@ func (s *Service) fetchAndValidate(
 		}
 	}
 
-	// Store validation result
+	// Only a passing link is remembered. A failure is checked again on the
+	// next read: remembering it would fail the file until a restart, even
+	// after the provider starts serving it.
+	if validationErr != nil {
+		return types.DownloadLink{}, validationErr
+	}
 	// Keys are full download URLs and links rotate on refresh/expiry, so cap
 	// the map; resetting merely costs a re-validation per link.
 	if s.validated.Size() > maxValidatedEntries {
 		s.validated.Clear()
 	}
-	s.validated.Store(link.DownloadLink, validationErr)
-
-	if validationErr == nil {
-		return link, nil
-	}
-	return types.DownloadLink{}, validationErr
+	s.validated.Store(link.DownloadLink, struct{}{})
+	return link, nil
 }
 
 // retryInvalidLink reacts to a failed validation: swap accounts, or fetch a
@@ -468,12 +459,13 @@ func (s *Service) validateLink(ctx context.Context, link *types.DownloadLink) er
 		return nil
 	}
 
-	errorCode := resp.Header.Get("X-Error")
-	if errorCode == "" {
-		errorCode = strconv.Itoa(resp.StatusCode)
+	// X-Error carries a provider error code. A bare status comes from the
+	// CDN edge and means what it means when streaming: a 404 or auth-shaped
+	// 4xx is a rotated or not-yet-served link, worth fetching again.
+	if errorCode := resp.Header.Get("X-Error"); errorCode != "" {
+		return ErrorCodeToLinkError(errorCode)
 	}
-
-	return ErrorCodeToLinkError(errorCode)
+	return ClassifyStreamStatus(resp.StatusCode, resp.Header)
 }
 
 // disableLinkAccount handles errors that require disabling an account.

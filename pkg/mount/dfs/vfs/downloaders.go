@@ -1000,6 +1000,9 @@ func (dls *Downloaders) openCircuitLocked() {
 	if dls.circuitOpen.Load() {
 		return // Already open
 	}
+	// The one line a failing file logs at info: reads it serves fail until
+	// the cooldown ends, and the per-error lines above are debug.
+	dls.item.logger.Warn().Err(dls.lastErr).Msg("DFS reads failing; pausing downloads for this file")
 	dls.circuitOpen.Store(true)
 	dls.circuitOpenAt.Store(time.Now().UnixNano())
 	dls.item.cache.circuitBreakers.Add(1)

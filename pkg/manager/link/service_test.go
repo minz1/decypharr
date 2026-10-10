@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/puzpuzpuz/xsync/v4"
@@ -93,5 +94,57 @@ func TestRefreshDoesNotOverwriteSharedEntry(t *testing.T) {
 		if file.ID != "" {
 			t.Fatalf("shared entry file %s was overwritten with locator %q", name, file.ID)
 		}
+	}
+}
+
+// headServer answers HEAD on every link with first, then 200 OK.
+func headServer(t *testing.T, first int) *httptest.Server {
+	t.Helper()
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(first)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+func (c *linkClient) DeleteLink(types.DownloadLink) error { return nil }
+
+func newHeadService(server *httptest.Server) *link.Service {
+	clients := xsync.NewMap[string, debrid.Client]()
+	clients.Store("fake", &linkClient{url: server.URL})
+	return link.New(clients, nil, nil, nil, server.Client(), 0, nil, zerolog.Nop())
+}
+
+// A bare 400 or 404 on the validation HEAD comes from the CDN: the link
+// rotated or isn't served yet (TorBox answers 400 right after an instant
+// "downloaded"). As on the streaming path, fetch the link again instead of
+// failing the file for good.
+func TestGetLinkRefetchesOnCDNReject(t *testing.T) {
+	t.Parallel()
+	for _, status := range []int{http.StatusBadRequest, http.StatusNotFound} {
+		service := newHeadService(headServer(t, status))
+		if _, err := service.GetLink(t.Context(), testEntry(true), "a.mkv"); err != nil {
+			t.Errorf("GetLink after a CDN %d: %v", status, err)
+		}
+	}
+}
+
+// A failed validation is not remembered: the next read checks the link
+// again, so one bad HEAD cannot fail the file until a restart.
+func TestGetLinkRevalidatesAfterFailure(t *testing.T) {
+	t.Parallel()
+	service := newHeadService(headServer(t, http.StatusMethodNotAllowed))
+	entry := testEntry(true)
+
+	if _, err := service.GetLink(t.Context(), entry, "a.mkv"); err == nil {
+		t.Fatal("first GetLink passed a 405 HEAD")
+	}
+	if _, err := service.GetLink(t.Context(), entry, "a.mkv"); err != nil {
+		t.Fatalf("second GetLink still fails after the link recovered: %v", err)
 	}
 }
