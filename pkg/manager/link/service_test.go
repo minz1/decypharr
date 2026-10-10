@@ -156,3 +156,26 @@ func TestGetLinkRechecksFailureAfterTTL(t *testing.T) {
 		t.Fatalf("GetLink after the window still fails though the link recovered: %v", err)
 	}
 }
+
+// A CDN that keeps rejecting a link costs one refetch, not one per read:
+// the replacement is checked once and its failure reused like any other.
+func TestGetLinkRemembersARejectedReplacement(t *testing.T) {
+	t.Parallel()
+	var heads atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		heads.Add(1)
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	t.Cleanup(server.Close)
+	service := newHeadService(server)
+	entry := testEntry(true)
+
+	for range 3 {
+		if _, err := service.GetLink(t.Context(), entry, "a.mkv"); err == nil {
+			t.Fatal("GetLink passed a link the CDN rejects")
+		}
+	}
+	if got := heads.Load(); got != 2 {
+		t.Fatalf("HEADs = %d, want 2 (original + replacement, then the cached failure)", got)
+	}
+}

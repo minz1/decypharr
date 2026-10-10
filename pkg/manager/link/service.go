@@ -164,19 +164,23 @@ func (s *Service) fetchAndValidate(
 		}
 	}
 
-	// A failure is reused only for failureTTL: remembering it for good
-	// would fail the file until a restart, even after the provider starts
-	// serving it.
+	s.remember(link.DownloadLink, validationErr)
+	if validationErr != nil {
+		return types.DownloadLink{}, validationErr
+	}
+	return link, nil
+}
+
+// remember records a link check. A failure is reused only for failureTTL:
+// remembering it for good would fail the file until a restart, even after
+// the provider starts serving it.
+func (s *Service) remember(url string, err error) {
 	// Keys are full download URLs and links rotate on refresh/expiry, so cap
 	// the map; resetting merely costs a re-validation per link.
 	if s.validated.Size() > maxValidatedEntries {
 		s.validated.Clear()
 	}
-	s.validated.Store(link.DownloadLink, validation{err: validationErr, at: time.Now()})
-	if validationErr != nil {
-		return types.DownloadLink{}, validationErr
-	}
-	return link, nil
+	s.validated.Store(url, validation{err: err, at: time.Now()})
 }
 
 // retryInvalidLink reacts to a failed validation: swap accounts, or fetch a
@@ -206,7 +210,17 @@ func (s *Service) retryInvalidLink(
 		return dl, true, err
 	case linkErr.ShouldRefetch() || linkErr.ShouldRetry():
 		dl, err := s.invalidateAndRefetch(ctx, entry, link, attempt)
-		return dl, true, err
+		if err != nil {
+			return dl, true, err
+		}
+		// Check the replacement once and remember the outcome, so a link the
+		// CDN keeps rejecting costs one refetch per failureTTL, not one per read.
+		checkErr := s.validateLink(ctx, &dl)
+		s.remember(dl.DownloadLink, checkErr)
+		if checkErr != nil {
+			return types.DownloadLink{}, true, checkErr
+		}
+		return dl, true, nil
 	default:
 		return types.DownloadLink{}, false, nil
 	}
