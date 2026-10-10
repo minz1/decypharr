@@ -29,6 +29,8 @@ type Service struct {
 	mutation *request.Client
 	logger   zerolog.Logger
 	cleanups singleflight.Group
+	// cleanupFailing holds the arrs whose last queue cleanup failed. Guarded by mu.
+	cleanupFailing map[string]bool
 }
 
 // readRetries is how many times the shared client retries an Arr read.
@@ -38,9 +40,10 @@ const readRetries = 5
 // instance list and queue cleanup rules are read live from cfg.
 func New(cfg *config.Store, tlsConfig *tls.Config, log zerolog.Logger) *Service {
 	service := &Service{
-		arrs:   make(map[string]Arr),
-		config: cfg,
-		logger: log,
+		arrs:           make(map[string]Arr),
+		cleanupFailing: make(map[string]bool),
+		config:         cfg,
+		logger:         log,
 		client: request.New(
 			log,
 			tlsConfig,
@@ -236,12 +239,36 @@ func (s *Service) CleanupQueues(ctx context.Context) {
 			_, err, _ := s.cleanups.Do(instance.Name, func() (any, error) {
 				return nil, s.CleanupQueue(ctx, instance.Name)
 			})
-			if err != nil {
-				s.logger.Error().Err(err).Str("arr", instance.Name).Msg("Failed to clean up arr queue")
-			}
+			s.reportCleanup(instance.Name, err)
 		})
 	}
 	wg.Wait()
+}
+
+// reportCleanup logs a cleanup outcome when an arr's state changes. Cleanup
+// runs every 10s, so an arr that stays down would otherwise log an error on
+// every tick.
+func (s *Service) reportCleanup(name string, err error) {
+	s.mu.Lock()
+	wasFailing := s.cleanupFailing[name]
+	if err != nil {
+		s.cleanupFailing[name] = true
+	} else {
+		delete(s.cleanupFailing, name)
+	}
+	s.mu.Unlock()
+
+	switch {
+	case err != nil && !wasFailing:
+		s.logger.Error().
+			Err(err).
+			Str("arr", name).
+			Msg("Failed to clean up arr queue; retrying quietly until it recovers")
+	case err != nil:
+		s.logger.Debug().Err(err).Str("arr", name).Msg("Arr queue cleanup still failing")
+	case wasFailing:
+		s.logger.Info().Str("arr", name).Msg("Arr queue cleanup recovered")
+	}
 }
 
 func (s *Service) instance(name string) (Arr, error) {
