@@ -63,8 +63,9 @@ func TestOpenHandleSurvivesCacheCrossingBudget(t *testing.T) {
 	}
 	backend := &bytesBackend{
 		entry: &storage.Entry{
-			Name:  entryName,
-			Files: map[string]*storage.File{filename: {Name: filename, Size: fileSize}},
+			InfoHash: "hash",
+			Name:     entryName,
+			Files:    map[string]*storage.File{filename: {Name: filename, Size: fileSize}},
 		},
 		content: content,
 	}
@@ -79,7 +80,7 @@ func TestOpenHandleSurvivesCacheCrossingBudget(t *testing.T) {
 	cache.logger = zerolog.Nop()
 	t.Cleanup(func() { _ = cache.Close() })
 
-	item, err := cache.GetItem(entryName, filename, fileSize)
+	item, err := cache.GetItem(backend.entry, filename, fileSize)
 	if err != nil {
 		t.Fatal(err)
 	}

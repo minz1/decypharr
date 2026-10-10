@@ -76,7 +76,7 @@ func TestPersistedNZBUsesDFSCacheAndTracksStream(t *testing.T) {
 	for i := range want {
 		want[i] = byte(i*17 + 3)
 	}
-	seedPersistedItem(t, cacheDir, entryName, filename, want)
+	seedPersistedItem(t, cacheDir, "cached-nzb", filename, want)
 
 	entry := &storage.Entry{
 		Name:     entryName,
@@ -98,7 +98,7 @@ func TestPersistedNZBUsesDFSCacheAndTracksStream(t *testing.T) {
 	cache.logger = zerolog.Nop()
 	t.Cleanup(func() { _ = cache.Close() })
 
-	item, err := cache.GetItem(entryName, filename, fileSize)
+	item, err := cache.GetItem(entry, filename, fileSize)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -202,9 +202,15 @@ func NewCache(ctx context.Context, mgr Backend, config *dfsconfig.FuseConfig, lo
 	return c, nil
 }
 
-// GetItem returns or creates a cache item for the given file.
-func (c *Cache) GetItem(entryName, filename string, fileSize int64) (*CacheItem, error) {
-	key := buildCacheKey(entryName, filename)
+// GetItem returns or creates a cache item for the given file of entry. Items
+// are keyed by the entry's infohash, not its name: a release grabbed again
+// under the same name (and often the same size) is a different entry with
+// different bytes, and must not be served from its predecessor's cache.
+func (c *Cache) GetItem(entry *storage.Entry, filename string, fileSize int64) (*CacheItem, error) {
+	if entry == nil || entry.InfoHash == "" {
+		return nil, fmt.Errorf("cache item %s: entry has no infohash", filename)
+	}
+	key := buildCacheKey(entry.InfoHash, filename)
 
 	// Fast path: already exists and isn't being torn down by the janitor.
 	if item, ok := c.items.Load(key); ok && !item.isClaimed() {
@@ -232,7 +238,7 @@ func (c *Cache) GetItem(entryName, filename string, fileSize int64) (*CacheItem,
 		// directory between MkdirAll and opening its data file.
 		c.cleanupMu.Lock()
 		defer c.cleanupMu.Unlock()
-		item, err := c.newItem(key, entryName, filename, fileSize)
+		item, err := c.newItem(key, entry, filename, fileSize)
 		if err != nil {
 			return nil, err
 		}
@@ -509,19 +515,15 @@ func (c *Cache) storeDiskStats(candidates []candidateEntry, removed map[string]s
 }
 
 // newItem creates a new cache item. The underlying byte storage is a
-// buffer.Buffer over a sparse file at <CacheDir>/<entryName>/<filename>;
+// buffer.Buffer over a sparse file at <CacheDir>/<infohash>/<filename>;
 // the buffer is seeded with any ranges from previously-persisted metadata
 // so a re-opened item can serve its cached bytes immediately without
 // re-downloading.
-func (c *Cache) newItem(key, entryName, filename string, fileSize int64) (*CacheItem, error) {
-	entry, err := c.manager.GetEntryByName(entryName, filename)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get storage entry: %w", err)
-	}
-	_logger := c.logger.With().Str("entry", entryName).Str("filename", filename).Logger()
+func (c *Cache) newItem(key string, entry *storage.Entry, filename string, fileSize int64) (*CacheItem, error) {
+	_logger := c.logger.With().Str("entry", entry.Name).Str("filename", filename).Logger()
 	log := logger.NewRateLimitedLogger(logger.WithLogger(_logger))
 
-	itemDir, err := fsutil.JoinName(c.config.CacheDir, entryName)
+	itemDir, err := fsutil.JoinName(c.config.CacheDir, entry.InfoHash)
 	if err != nil {
 		return nil, fmt.Errorf("cache dir: %w", err)
 	}

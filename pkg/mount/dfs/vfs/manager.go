@@ -59,14 +59,14 @@ func (m *Manager) GetManager() *manager.Manager {
 // it returns a DirectStreamFile that fetches directly from the network without
 // writing to disk, so reads degrade gracefully rather than failing with EIO.
 func (m *Manager) GetFile(info *manager.FileInfo) (File, error) {
+	entry, err := m.manager.GetEntryByName(info.Parent(), info.Name())
+	if err != nil {
+		return nil, fmt.Errorf("resolve entry for %s/%s: %w", info.Parent(), info.Name(), err)
+	}
 	// Cache disabled or over eviction threshold: bypass disk caching entirely.
 	// The existing CacheItem (if any) stays alive until its last handle is
 	// released; this handle just skips it and streams directly.
 	if m.cache.config.DisableCache || m.cache.IsOverBudget() {
-		entry, err := m.manager.GetEntryByName(info.Parent(), info.Name())
-		if err != nil {
-			return nil, fmt.Errorf("cache full, direct stream unavailable: %w", err)
-		}
 		m.logger.Info().
 			Str("entry", info.Parent()).
 			Str("file", info.Name()).
@@ -80,9 +80,9 @@ func (m *Manager) GetFile(info *manager.FileInfo) (File, error) {
 	// item out, so a retry gets a fresh one. The claim/delete pair is
 	// near-instantaneous, so the loop is bounded in practice.
 	for range getFileAttempts {
-		item, err := m.cache.GetItem(info.Parent(), info.Name(), info.Size())
-		if err != nil {
-			return nil, fmt.Errorf("failed to get cache item: %w", err)
+		item, getItemErr := m.cache.GetItem(entry, info.Name(), info.Size())
+		if getItemErr != nil {
+			return nil, fmt.Errorf("failed to get cache item: %w", getItemErr)
 		}
 		if sf := NewStreamingFile(item); sf != nil {
 			return sf, nil
@@ -90,7 +90,7 @@ func (m *Manager) GetFile(info *manager.FileInfo) (File, error) {
 	}
 	return nil, fmt.Errorf(
 		"file %s: cache item kept being torn down; giving up",
-		buildCacheKey(info.Parent(), info.Name()),
+		buildCacheKey(entry.InfoHash, info.Name()),
 	)
 }
 
