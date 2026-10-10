@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/rs/zerolog"
@@ -20,6 +21,10 @@ import (
 
 const (
 	MaxReinsertionAttempt = 3
+	// failedValidationTTL is how long a failed link check is reused. It
+	// spares the CDN and the debrid API a check per read on a dead file,
+	// and is short so a link the provider starts serving recovers quickly.
+	failedValidationTTL = 30 * time.Second
 	// maxValidatedEntries caps the validated-link memo map (see GetLink).
 	maxValidatedEntries = 8192
 )
@@ -33,7 +38,7 @@ type EntrySaver func(entry *storage.Entry) error
 // It uses the account-level cache for storing links and only tracks validation state.
 type Service struct {
 	naming         func() config.WebDavFolderNaming
-	validated      *xsync.Map[string, struct{}]
+	validated      *xsync.Map[string, validation]
 	flights        flight.Group[types.DownloadLink]
 	clients        *xsync.Map[string, debrid.Client]
 	entryRefresher EntryRefresher
@@ -41,7 +46,14 @@ type Service struct {
 	entrySaver     EntrySaver
 	httpClient     *http.Client
 	retries        int
+	failureTTL     time.Duration
 	logger         zerolog.Logger
+}
+
+// validation is a remembered link check: err is nil for a passing link.
+type validation struct {
+	err error
+	at  time.Time
 }
 
 // New creates a new LinkService.
@@ -57,7 +69,8 @@ func New(
 ) *Service {
 	return &Service{
 		naming:         naming,
-		validated:      xsync.NewMap[string, struct{}](),
+		validated:      xsync.NewMap[string, validation](),
+		failureTTL:     failedValidationTTL,
 		clients:        clients,
 		entryRefresher: entryRefresher,
 		repairer:       entryReinsert,
@@ -134,8 +147,13 @@ func (s *Service) fetchAndValidate(
 		return s.handleBadLink(ctx, err, entry, link, attempt)
 	}
 
-	if _, ok := s.validated.Load(link.DownloadLink); ok {
-		return link, nil
+	if v, ok := s.validated.Load(link.DownloadLink); ok {
+		if v.err == nil {
+			return link, nil
+		}
+		if time.Since(v.at) < s.failureTTL {
+			return types.DownloadLink{}, v.err
+		}
 	}
 
 	// Validate the link
@@ -146,18 +164,18 @@ func (s *Service) fetchAndValidate(
 		}
 	}
 
-	// Only a passing link is remembered. A failure is checked again on the
-	// next read: remembering it would fail the file until a restart, even
-	// after the provider starts serving it.
-	if validationErr != nil {
-		return types.DownloadLink{}, validationErr
-	}
+	// A failure is reused only for failureTTL: remembering it for good
+	// would fail the file until a restart, even after the provider starts
+	// serving it.
 	// Keys are full download URLs and links rotate on refresh/expiry, so cap
 	// the map; resetting merely costs a re-validation per link.
 	if s.validated.Size() > maxValidatedEntries {
 		s.validated.Clear()
 	}
-	s.validated.Store(link.DownloadLink, struct{}{})
+	s.validated.Store(link.DownloadLink, validation{err: validationErr, at: time.Now()})
+	if validationErr != nil {
+		return types.DownloadLink{}, validationErr
+	}
 	return link, nil
 }
 

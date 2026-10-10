@@ -97,8 +97,9 @@ func TestRefreshDoesNotOverwriteSharedEntry(t *testing.T) {
 	}
 }
 
-// headServer answers HEAD on every link with first, then 200 OK.
-func headServer(t *testing.T, first int) *httptest.Server {
+// headServer answers HEAD on every link with first, then 200 OK, and
+// counts the requests.
+func headServer(t *testing.T, first int) (*httptest.Server, *atomic.Int32) {
 	t.Helper()
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -109,7 +110,7 @@ func headServer(t *testing.T, first int) *httptest.Server {
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(server.Close)
-	return server
+	return server, &calls
 }
 
 func (c *linkClient) DeleteLink(types.DownloadLink) error { return nil }
@@ -127,24 +128,31 @@ func newHeadService(server *httptest.Server) *link.Service {
 func TestGetLinkRefetchesOnCDNReject(t *testing.T) {
 	t.Parallel()
 	for _, status := range []int{http.StatusBadRequest, http.StatusNotFound} {
-		service := newHeadService(headServer(t, status))
+		server, _ := headServer(t, status)
+		service := newHeadService(server)
 		if _, err := service.GetLink(t.Context(), testEntry(true), "a.mkv"); err != nil {
 			t.Errorf("GetLink after a CDN %d: %v", status, err)
 		}
 	}
 }
 
-// A failed validation is not remembered: the next read checks the link
-// again, so one bad HEAD cannot fail the file until a restart.
-func TestGetLinkRevalidatesAfterFailure(t *testing.T) {
+// A failed validation is remembered only briefly: repeat reads inside the
+// window don't hit the CDN again, and after it the link is checked afresh,
+// so one bad HEAD cannot fail the file until a restart.
+func TestGetLinkRechecksFailureAfterTTL(t *testing.T) {
 	t.Parallel()
-	service := newHeadService(headServer(t, http.StatusMethodNotAllowed))
+	server, heads := headServer(t, http.StatusMethodNotAllowed)
+	service := newHeadService(server)
 	entry := testEntry(true)
 
 	if _, err := service.GetLink(t.Context(), entry, "a.mkv"); err == nil {
 		t.Fatal("first GetLink passed a 405 HEAD")
 	}
+	if _, err := service.GetLink(t.Context(), entry, "a.mkv"); err == nil || heads.Load() != 1 {
+		t.Fatalf("repeat inside the window: err=%v, HEADs=%d, want the cached failure and 1 HEAD", err, heads.Load())
+	}
+	link.SetFailureTTL(service, 0)
 	if _, err := service.GetLink(t.Context(), entry, "a.mkv"); err != nil {
-		t.Fatalf("second GetLink still fails after the link recovered: %v", err)
+		t.Fatalf("GetLink after the window still fails though the link recovered: %v", err)
 	}
 }
