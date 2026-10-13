@@ -1,9 +1,12 @@
 package arr
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -272,16 +275,62 @@ func TestCleanupQueueLedgerIsPerArr(t *testing.T) {
 	wantLookups(t, radarr, 1)
 }
 
-func TestCleanupQueueSuccessClearsFailureCount(t *testing.T) {
+func TestCleanupQueueBacksOffAcceptedImportsThatStayQueued(t *testing.T) {
 	t.Parallel()
 
 	fake := newCleanupServer(t, stuckRecords(matchedByIDTitle))
+	fake.succeed.Store(true)
 	service := cleanupTestService(&fakeClock{now: time.Unix(1000, 0)}, map[string]*cleanupServer{"arr": fake})
 
-	runCleanup(t, service, "arr", maxImportAttempts-1)
-	fake.succeed.Store(true)
+	runCleanup(t, service, "arr", maxImportAttempts+3)
+	wantLookups(t, fake, maxImportAttempts)
+}
+
+func TestCleanupQueueLedgerSeparatesNestedArrNames(t *testing.T) {
+	t.Parallel()
+
+	parent := newCleanupServer(t, stuckRecords(matchedByIDTitle))
+	child := newCleanupServer(t, stuckRecords(matchedByIDTitle))
+	service := cleanupTestService(
+		&fakeClock{now: time.Unix(1000, 0)},
+		map[string]*cleanupServer{"tv": parent, "tv/anime": child},
+	)
+
+	runCleanup(t, service, "tv/anime", maxImportAttempts)
+	runCleanup(t, service, "tv", 1)
+	runCleanup(t, service, "tv/anime", 1)
+	wantLookups(t, child, maxImportAttempts)
+}
+
+func TestCleanupQueueLogsErrorsThenOneWarnPerRetry(t *testing.T) {
+	t.Parallel()
+
+	fake := newCleanupServer(t, stuckRecords(matchedByIDTitle))
+	clock := &fakeClock{now: time.Unix(1000, 0)}
+	service := cleanupTestService(clock, map[string]*cleanupServer{"arr": fake})
+	var logs bytes.Buffer
+	service.logger = zerolog.New(&logs)
+
+	runCleanup(t, service, "arr", maxImportAttempts+2)
+	clock.advance(importRetryDelay)
 	runCleanup(t, service, "arr", 1)
-	fake.succeed.Store(false)
-	runCleanup(t, service, "arr", maxImportAttempts)
-	wantLookups(t, fake, 2*maxImportAttempts)
+
+	var levels []string
+	for line := range strings.Lines(logs.String()) {
+		var entry struct {
+			Level      string `json:"level"`
+			DownloadID string `json:"download_id"`
+		}
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatal(err)
+		}
+		if entry.DownloadID != "hash" {
+			t.Errorf("log line without download_id: %s", line)
+		}
+		levels = append(levels, entry.Level)
+	}
+	want := []string{"error", "error", "error", "error", "warn", "warn"}
+	if !slices.Equal(levels, want) {
+		t.Fatalf("log levels = %v, want %v", levels, want)
+	}
 }

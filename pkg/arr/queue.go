@@ -155,60 +155,43 @@ func (s *Service) CleanupQueue(ctx context.Context, name string) error {
 			s.logger.Error().Err(removeQueueItemsErr).Str("arr", name).Msg("Queue cleanup: blocklist failed")
 		}
 	}
+	s.mu.RLock()
+	previous := s.importFailures[name]
+	s.mu.RUnlock()
+	next := make(map[string]importFailure, len(importStatuses))
 	for downloadID, status := range importStatuses {
-		s.retryImport(ctx, name, downloadID, status)
+		next[downloadID] = s.retryImport(ctx, name, downloadID, status, previous[downloadID])
 	}
-	s.pruneImportFailures(name, importStatuses)
+	s.mu.Lock()
+	s.importFailures[name] = next
+	s.mu.Unlock()
 	return nil
 }
 
-// retryImport runs one manual import unless the ledger has backed it off.
-func (s *Service) retryImport(ctx context.Context, name, downloadID, status string) {
-	key := name + "/" + downloadID
-	s.mu.Lock()
-	failure, tracked := s.importFailures[key]
-	if tracked && failure.status != status {
-		delete(s.importFailures, key)
-		failure = importFailure{}
+// retryImport runs one import unless backed off; accepted imports count too, as the item may still be stuck.
+func (s *Service) retryImport(
+	ctx context.Context, name, downloadID, status string, failure importFailure,
+) importFailure {
+	if failure.status != status {
+		failure = importFailure{status: status}
 	}
-	s.mu.Unlock()
 	if s.now().Before(failure.retryAt) {
-		return
+		return failure
 	}
 
 	importErr := s.ManualImport(ctx, name, downloadID)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if importErr == nil {
-		delete(s.importFailures, key)
-		return
-	}
-	failure.status = status
 	failure.attempts++
 	if failure.attempts < maxImportAttempts {
-		s.importFailures[key] = failure
-		s.logger.Error().Err(importErr).Str("arr", name).Int("attempt", failure.attempts).
-			Msg("Queue cleanup: manual import failed")
-		return
+		if importErr != nil {
+			s.logger.Error().Err(importErr).Str("arr", name).Str("download_id", downloadID).
+				Int("attempt", failure.attempts).Msg("Queue cleanup: manual import failed")
+		}
+		return failure
 	}
 	failure.retryAt = s.now().Add(importRetryDelay)
-	s.importFailures[key] = failure
 	s.logger.Warn().Err(importErr).Str("arr", name).Str("download_id", downloadID).Int("attempts", failure.attempts).
 		Msg("Queue cleanup: manual import keeps failing; retrying in 1h, needs manual intervention")
-}
-
-// pruneImportFailures drops this arr's ledger entries that are no longer import candidates.
-func (s *Service) pruneImportFailures(name string, candidates map[string]string) {
-	prefix := name + "/"
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for key := range s.importFailures {
-		if downloadID, ours := strings.CutPrefix(key, prefix); ours {
-			if _, current := candidates[downloadID]; !current {
-				delete(s.importFailures, key)
-			}
-		}
-	}
+	return failure
 }
 
 // resolveQueueAction picks what to do with one queue item. Only failed items
