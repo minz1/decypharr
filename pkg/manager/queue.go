@@ -108,7 +108,7 @@ func NewNZBRequest(
 	}
 }
 
-// skipMultiSeason reports whether to keep a multi-season pack whole; only manual adds fan out, because an arr tracks the hash it grabbed and can't import per-season entries.
+// skipMultiSeason keeps packs whole unless added by hand: an arr can only import the hash it grabbed.
 func (r *ImportRequest) skipMultiSeason() bool {
 	return r.Type != ImportTypeAPI || r.SkipMultiSeason
 }

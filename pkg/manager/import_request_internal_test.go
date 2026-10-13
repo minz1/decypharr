@@ -1,6 +1,12 @@
 package manager
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/sirrobot01/decypharr/internal/utils"
+	"github.com/sirrobot01/decypharr/pkg/arr"
+	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
+)
 
 func TestImportRequestSkipMultiSeason(t *testing.T) {
 	t.Parallel()
@@ -26,5 +32,18 @@ func TestImportRequestSkipMultiSeason(t *testing.T) {
 				t.Fatalf("skipMultiSeason() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestNewTorrentQueueEntryKeepsArrPacksWhole(t *testing.T) {
+	t.Parallel()
+
+	req := &ImportRequest{
+		Type:   ImportTypeQBit,
+		Magnet: &utils.Magnet{Name: "Show S01-S04", InfoHash: "abc"},
+		Arr:    arr.Arr{Name: "sonarr"},
+	}
+	if entry := newTorrentQueueEntry(req, debridTypes.TorrentStatusQueued, ""); !entry.SkipMultiSeason {
+		t.Fatal("qbit entry SkipMultiSeason = false, want true")
 	}
 }
