@@ -131,7 +131,7 @@ func TestManualImportPreservesArrMetadata(t *testing.T) {
 			server := newManualImportServer(t, tc.arrType, tc.path, tc.identity, tc.quality, wantQuality, &posts)
 			t.Cleanup(server.Close)
 			s := testService(Arr{Host: server.URL, Token: "secret", Type: tc.arrType})
-			if err := s.ManualImport(t.Context(), "arr", "download-1"); err != nil {
+			if _, err := s.ManualImport(t.Context(), "arr", "download-1"); err != nil {
 				t.Fatal(err)
 			}
 			if got := posts.Load(); got != 1 {
@@ -169,7 +169,7 @@ func TestManualImportRejectsIncompleteCandidates(t *testing.T) {
 			}))
 			t.Cleanup(server.Close)
 			s := testService(Arr{Host: server.URL, Token: "secret", Type: Radarr})
-			err := s.ManualImport(t.Context(), "arr", "download-1")
+			_, err := s.ManualImport(t.Context(), "arr", "download-1")
 			if err == nil || !strings.Contains(err.Error(), tc.wantError) {
 				t.Fatalf("ManualImport error = %v, want %q", err, tc.wantError)
 			}
@@ -223,7 +223,7 @@ func TestManualImportSubmitsOnlyUnrejectedCandidates(t *testing.T) {
 	server := newRejectionServer(t, "["+cleanCandidate+","+rejectedCandidate+"]", &submitted, &posts)
 	t.Cleanup(server.Close)
 	s := testService(Arr{Host: server.URL, Token: "secret", Type: Sonarr})
-	if err := s.ManualImport(t.Context(), "arr", "download-1"); err != nil {
+	if _, err := s.ManualImport(t.Context(), "arr", "download-1"); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(submitted, [][]string{{"/d/A.mkv"}}) {
@@ -238,7 +238,7 @@ func TestManualImportAllRejectedReturnsError(t *testing.T) {
 	server := newRejectionServer(t, "["+rejectedCandidate+","+rejectedCandidate+"]", &submitted, &posts)
 	t.Cleanup(server.Close)
 	s := testService(Arr{Host: server.URL, Token: "secret", Type: Sonarr})
-	err := s.ManualImport(t.Context(), "arr", "download-1")
+	_, err := s.ManualImport(t.Context(), "arr", "download-1")
 	if err == nil || !strings.Contains(err.Error(), "all 2 candidates rejected") ||
 		!strings.Contains(err.Error(), "Not an upgrade") {
 		t.Fatalf("ManualImport error = %v", err)
@@ -258,7 +258,7 @@ func TestManualImportSkipsRejectedRadarrCandidateBeforeMovieCheck(t *testing.T) 
 	server := newRejectionServer(t, "["+unknownMovie+","+knownMovie+"]", &submitted, &posts)
 	t.Cleanup(server.Close)
 	s := testService(Arr{Host: server.URL, Token: "secret", Type: Radarr})
-	if err := s.ManualImport(t.Context(), "arr", "download-1"); err != nil {
+	if _, err := s.ManualImport(t.Context(), "arr", "download-1"); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(submitted, [][]string{{"/d/A.mkv"}}) {

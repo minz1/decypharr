@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strconv"
 	"time"
 )
 
@@ -20,6 +21,7 @@ type Command struct {
 	Name        string      `json:"name"`
 	CommandName string      `json:"commandName"`
 	Status      string      `json:"status"`
+	Message     string      `json:"message,omitempty"`
 	Queued      time.Time   `json:"queued,omitzero"`
 	Body        CommandBody `json:"body"`
 }
@@ -202,6 +204,26 @@ func (s *Service) Commands(ctx context.Context, name string) ([]Command, error) 
 		return nil, fmt.Errorf("list arr commands: %w", expectStatusErr)
 	}
 	return commands, nil
+}
+
+// CommandStatus reads one arr command; found is false when the arr no longer knows it (e.g. after a restart).
+func (s *Service) CommandStatus(ctx context.Context, name string, id int) (Command, bool, error) {
+	instance, err := s.instance(name)
+	if err != nil {
+		return Command{}, false, err
+	}
+	var command Command
+	resp, err := s.get(ctx, instance, "api/v3/command/"+strconv.Itoa(id), &command)
+	if resp != nil && resp.StatusCode == http.StatusNotFound {
+		return Command{}, false, nil
+	}
+	if err != nil {
+		return Command{}, false, fmt.Errorf("arr command %d: %w", id, err)
+	}
+	if expectStatusErr := expectStatus(resp, http.StatusOK); expectStatusErr != nil {
+		return Command{}, false, fmt.Errorf("arr command %d: %w", id, expectStatusErr)
+	}
+	return command, true, nil
 }
 
 func (s *Service) command(ctx context.Context, instance Arr, payload any) (Command, error) {

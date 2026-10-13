@@ -67,24 +67,24 @@ type ManualImportFile struct {
 	} `json:"rejections"`
 }
 
-// ManualImport asks the Arr to import a finished download it did not pick up.
-func (s *Service) ManualImport(ctx context.Context, name, downloadID string) error {
+// ManualImport asks the Arr to import a finished download it did not pick up and returns the queued command.
+func (s *Service) ManualImport(ctx context.Context, name, downloadID string) (Command, error) {
 	instance, err := s.instance(name)
 	if err != nil {
-		return err
+		return Command{}, err
 	}
 
 	var candidates []ImportResponseSchema
 	query := url.Values{"downloadId": {downloadID}}
 	resp, err := s.get(ctx, instance, "api/v3/manualimport?"+query.Encode(), &candidates)
 	if err != nil {
-		return fmt.Errorf("manual import lookup: %w", err)
+		return Command{}, fmt.Errorf("manual import lookup: %w", err)
 	}
 	if expectStatusErr := expectStatus(resp, http.StatusOK); expectStatusErr != nil {
-		return fmt.Errorf("manual import lookup: %w", expectStatusErr)
+		return Command{}, fmt.Errorf("manual import lookup: %w", expectStatusErr)
 	}
 	if len(candidates) == 0 {
-		return fmt.Errorf("manual import: no files found for download %q", downloadID)
+		return Command{}, fmt.Errorf("manual import: no files found for download %q", downloadID)
 	}
 
 	files := make([]ManualImportFile, 0, len(candidates))
@@ -93,10 +93,10 @@ func (s *Service) ManualImport(ctx context.Context, name, downloadID string) err
 			continue
 		}
 		if instance.Type == Radarr && candidate.Movie.ID <= 0 {
-			return fmt.Errorf("manual import: no movie matched for %q", candidate.Path)
+			return Command{}, fmt.Errorf("manual import: no movie matched for %q", candidate.Path)
 		}
 		if len(candidate.Quality) == 0 || string(candidate.Quality) == "null" {
-			return fmt.Errorf("manual import: no quality returned for %q", candidate.Path)
+			return Command{}, fmt.Errorf("manual import: no quality returned for %q", candidate.Path)
 		}
 		episodeIDs := make([]int, 0, len(candidate.Episodes))
 		for _, episode := range candidate.Episodes {
@@ -122,19 +122,19 @@ func (s *Service) ManualImport(ctx context.Context, name, downloadID string) err
 	}
 
 	if len(files) == 0 {
-		return fmt.Errorf(
+		return Command{}, fmt.Errorf(
 			"manual import: all %d candidates rejected for download %q (%s)",
 			len(candidates), downloadID, candidates[0].Rejections[0].Reason,
 		)
 	}
 
-	_, err = s.command(ctx, instance, struct {
+	command, err := s.command(ctx, instance, struct {
 		Name       string             `json:"name"`
 		Files      []ManualImportFile `json:"files"`
 		ImportMode string             `json:"importMode"`
 	}{Name: "ManualImport", Files: files, ImportMode: "copy"})
 	if err != nil {
-		return fmt.Errorf("manual import: %w", err)
+		return Command{}, fmt.Errorf("manual import: %w", err)
 	}
-	return nil
+	return command, nil
 }

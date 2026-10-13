@@ -3,6 +3,7 @@ package arr
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -81,6 +82,9 @@ type cleanupServer struct {
 	fail    atomic.Bool
 	succeed atomic.Bool
 	lookups atomic.Int64
+	// commandStatus is what GET /api/v3/command/1 reports; "" answers 404 and "error" answers 401.
+	commandStatus atomic.Pointer[string]
+	statusChecks  atomic.Int64
 }
 
 func newCleanupServer(t *testing.T, records []QueueSchema) *cleanupServer {
@@ -109,6 +113,20 @@ func newCleanupServer(t *testing.T, records []QueueSchema) *cleanupServer {
 		case "/api/v3/command":
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(`{"id":1,"status":"queued"}`))
+		case "/api/v3/command/1":
+			fake.statusChecks.Add(1)
+			status := ""
+			if current := fake.commandStatus.Load(); current != nil {
+				status = *current
+			}
+			switch status {
+			case "":
+				http.NotFound(w, r)
+			case "error":
+				http.Error(w, "no", http.StatusUnauthorized)
+			default:
+				_, _ = fmt.Fprintf(w, `{"id":1,"status":%q,"message":"Import failed"}`, status)
+			}
 		default:
 			http.NotFound(w, r)
 		}
@@ -203,7 +221,10 @@ func TestCleanupQueueBacksOffAfterMaxAttempts(t *testing.T) {
 	runCleanup(t, service, "arr", 3)
 	wantLookups(t, fake, maxImportAttempts)
 
-	clock.advance(importRetryDelay)
+	clock.advance(importRetryDelay - time.Second)
+	runCleanup(t, service, "arr", 1)
+	wantLookups(t, fake, maxImportAttempts)
+	clock.advance(time.Second)
 	runCleanup(t, service, "arr", 3)
 	wantLookups(t, fake, maxImportAttempts+1)
 
@@ -275,15 +296,58 @@ func TestCleanupQueueLedgerIsPerArr(t *testing.T) {
 	wantLookups(t, radarr, 1)
 }
 
-func TestCleanupQueueBacksOffAcceptedImportsThatStayQueued(t *testing.T) {
-	t.Parallel()
-
+func acceptingCleanup(t *testing.T, commandStatus string) (*cleanupServer, *Service) {
+	t.Helper()
 	fake := newCleanupServer(t, stuckRecords(matchedByIDTitle))
 	fake.succeed.Store(true)
-	service := cleanupTestService(&fakeClock{now: time.Unix(1000, 0)}, map[string]*cleanupServer{"arr": fake})
+	fake.commandStatus.Store(&commandStatus)
+	return fake, cleanupTestService(&fakeClock{now: time.Unix(1000, 0)}, map[string]*cleanupServer{"arr": fake})
+}
 
-	runCleanup(t, service, "arr", maxImportAttempts+3)
+func TestCleanupQueueWaitsWhileImportCommandRuns(t *testing.T) {
+	t.Parallel()
+
+	fake, service := acceptingCleanup(t, "started")
+	runCleanup(t, service, "arr", 5)
+	wantLookups(t, fake, 1)
+	if got := fake.statusChecks.Load(); got != 4 {
+		t.Fatalf("command status checks = %d, want 4", got)
+	}
+}
+
+func TestCleanupQueueCountsFinishedCommandWhenItemStaysQueued(t *testing.T) {
+	t.Parallel()
+
+	fake, service := acceptingCleanup(t, "completed")
+	runCleanup(t, service, "arr", 2*maxImportAttempts+3)
 	wantLookups(t, fake, maxImportAttempts)
+}
+
+func TestCleanupQueueTreatsUnknownCommandAsFinished(t *testing.T) {
+	t.Parallel()
+
+	fake, service := acceptingCleanup(t, "")
+	runCleanup(t, service, "arr", 3)
+	wantLookups(t, fake, 2)
+}
+
+func TestCleanupQueueKeepsWaitingWhenCommandLookupFails(t *testing.T) {
+	t.Parallel()
+
+	fake, service := acceptingCleanup(t, "error")
+	runCleanup(t, service, "arr", 4)
+	wantLookups(t, fake, 1)
+}
+
+func TestCleanupQueueKeepsCommandAcrossStatusChange(t *testing.T) {
+	t.Parallel()
+
+	fake, service := acceptingCleanup(t, "started")
+	runCleanup(t, service, "arr", 1)
+	changed := stuckRecords("Title mismatch; automatic import is not possible")
+	fake.records.Store(&changed)
+	runCleanup(t, service, "arr", 2)
+	wantLookups(t, fake, 1)
 }
 
 func TestCleanupQueueLedgerSeparatesNestedArrNames(t *testing.T) {

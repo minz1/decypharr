@@ -112,9 +112,10 @@ const (
 )
 
 type importFailure struct {
-	attempts int
-	status   string
-	retryAt  time.Time
+	attempts  int
+	status    string
+	retryAt   time.Time
+	commandID int // the arr's in-flight ManualImport command, 0 when none
 }
 
 // CleanupQueue applies the configured cleanup rules to one instance's queue.
@@ -168,24 +169,48 @@ func (s *Service) CleanupQueue(ctx context.Context, name string) error {
 	return nil
 }
 
-// retryImport runs one import unless backed off; accepted imports count too, as the item may still be stuck.
+// retryImport advances one stuck import: it waits on an in-flight arr command, else submits a new one unless backed off.
 func (s *Service) retryImport(
 	ctx context.Context, name, downloadID, status string, failure importFailure,
 ) importFailure {
 	if failure.status != status {
-		failure = importFailure{status: status}
+		failure = importFailure{status: status, commandID: failure.commandID}
+	}
+	if failure.commandID != 0 {
+		command, found, err := s.CommandStatus(ctx, name, failure.commandID)
+		if err != nil || (found && (command.Status == "queued" || command.Status == "started")) {
+			return failure
+		}
+		failure.commandID = 0
+		finished := fmt.Errorf("manual import command no longer known to the arr; item still queued")
+		if found {
+			finished = fmt.Errorf("manual import command %s, item still queued: %s", command.Status, command.Message)
+		}
+		return s.recordImportFailure(name, downloadID, failure, finished)
 	}
 	if s.now().Before(failure.retryAt) {
 		return failure
 	}
 
-	importErr := s.ManualImport(ctx, name, downloadID)
+	command, err := s.ManualImport(ctx, name, downloadID)
+	if err == nil && command.ID == 0 {
+		err = fmt.Errorf("manual import: arr returned no command id")
+	}
+	if err != nil {
+		return s.recordImportFailure(name, downloadID, failure, err)
+	}
+	failure.commandID = command.ID
+	s.logger.Info().Str("arr", name).Str("download_id", downloadID).Int("command_id", command.ID).
+		Msg("Queue cleanup: manual import submitted")
+	return failure
+}
+
+// recordImportFailure counts one failed import and backs it off after maxImportAttempts.
+func (s *Service) recordImportFailure(name, downloadID string, failure importFailure, importErr error) importFailure {
 	failure.attempts++
 	if failure.attempts < maxImportAttempts {
-		if importErr != nil {
-			s.logger.Error().Err(importErr).Str("arr", name).Str("download_id", downloadID).
-				Int("attempt", failure.attempts).Msg("Queue cleanup: manual import failed")
-		}
+		s.logger.Error().Err(importErr).Str("arr", name).Str("download_id", downloadID).
+			Int("attempt", failure.attempts).Msg("Queue cleanup: manual import failed")
 		return failure
 	}
 	failure.retryAt = s.now().Add(importRetryDelay)
