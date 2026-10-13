@@ -108,6 +108,11 @@ func NewNZBRequest(
 	}
 }
 
+// skipMultiSeason reports whether to keep a multi-season pack whole; only manual adds fan out, because an arr tracks the hash it grabbed and can't import per-season entries.
+func (r *ImportRequest) skipMultiSeason() bool {
+	return r.Type != ImportTypeAPI || r.SkipMultiSeason
+}
+
 type Queue struct {
 	storage            *storage.Storage
 	logger             zerolog.Logger

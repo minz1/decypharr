@@ -52,7 +52,7 @@ func (m *Manager) AddNewNZB(_ context.Context, req *ImportRequest) (string, erro
 		Progress:         0,
 		Action:           req.Action,
 		CallbackURL:      req.CallBackURL,
-		SkipMultiSeason:  req.SkipMultiSeason,
+		SkipMultiSeason:  req.skipMultiSeason(),
 		CreatedAt:        time.Now(),
 		UpdatedAt:        time.Now(),
 		AddedOn:          time.Now(),
