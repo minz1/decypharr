@@ -61,10 +61,6 @@ type ManualImportFile struct {
 	CustomFormatScore int    `json:"customFormatScore"`
 	IndexerFlags      int    `json:"indexerFlags"`
 	ReleaseType       string `json:"releaseType,omitempty"`
-	Rejections        []struct {
-		Reason string `json:"reason"`
-		Type   string `json:"type"`
-	} `json:"rejections"`
 }
 
 // ManualImport asks the Arr to import a finished download it did not pick up and returns the queued command.
@@ -117,7 +113,6 @@ func (s *Service) ManualImport(ctx context.Context, name, downloadID string) (Co
 			CustomFormatScore: candidate.CustomFormatScore,
 			IndexerFlags:      candidate.IndexerFlags,
 			ReleaseType:       candidate.ReleaseType,
-			Rejections:        candidate.Rejections,
 		})
 	}
 

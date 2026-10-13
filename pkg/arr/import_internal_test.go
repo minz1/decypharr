@@ -180,14 +180,13 @@ func TestManualImportRejectsIncompleteCandidates(t *testing.T) {
 	}
 }
 
-func newRejectionServer(t *testing.T, candidates string, submitted *[][]string, posts *atomic.Int64) *httptest.Server {
+func newRejectionServer(t *testing.T, candidates string, submitted *[][]string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/v3/manualimport":
 			_, _ = fmt.Fprint(w, candidates)
 		case "POST /api/v3/command":
-			posts.Add(1)
 			var command struct {
 				Files []struct {
 					Path string `json:"path"`
@@ -219,8 +218,7 @@ const (
 func TestManualImportSubmitsOnlyUnrejectedCandidates(t *testing.T) {
 	t.Parallel()
 	var submitted [][]string
-	var posts atomic.Int64
-	server := newRejectionServer(t, "["+cleanCandidate+","+rejectedCandidate+"]", &submitted, &posts)
+	server := newRejectionServer(t, "["+cleanCandidate+","+rejectedCandidate+"]", &submitted)
 	t.Cleanup(server.Close)
 	s := testService(Arr{Host: server.URL, Token: "secret", Type: Sonarr})
 	if _, err := s.ManualImport(t.Context(), "arr", "download-1"); err != nil {
@@ -234,8 +232,7 @@ func TestManualImportSubmitsOnlyUnrejectedCandidates(t *testing.T) {
 func TestManualImportAllRejectedReturnsError(t *testing.T) {
 	t.Parallel()
 	var submitted [][]string
-	var posts atomic.Int64
-	server := newRejectionServer(t, "["+rejectedCandidate+","+rejectedCandidate+"]", &submitted, &posts)
+	server := newRejectionServer(t, "["+rejectedCandidate+","+rejectedCandidate+"]", &submitted)
 	t.Cleanup(server.Close)
 	s := testService(Arr{Host: server.URL, Token: "secret", Type: Sonarr})
 	_, err := s.ManualImport(t.Context(), "arr", "download-1")
@@ -243,19 +240,18 @@ func TestManualImportAllRejectedReturnsError(t *testing.T) {
 		!strings.Contains(err.Error(), "Not an upgrade") {
 		t.Fatalf("ManualImport error = %v", err)
 	}
-	if got := posts.Load(); got != 0 {
-		t.Fatalf("command submissions = %d, want 0", got)
+	if len(submitted) != 0 {
+		t.Fatalf("command submissions = %d, want 0", len(submitted))
 	}
 }
 
 func TestManualImportSkipsRejectedRadarrCandidateBeforeMovieCheck(t *testing.T) {
 	t.Parallel()
 	var submitted [][]string
-	var posts atomic.Int64
 	unknownMovie := `{"path":"/d/B.mkv","movie":{"id":0},"quality":{"quality":{"id":3}},` +
 		`"rejections":[{"reason":"Unknown Movie","type":"permanent"}]}`
 	knownMovie := `{"path":"/d/A.mkv","movie":{"id":42},"quality":{"quality":{"id":3}}}`
-	server := newRejectionServer(t, "["+unknownMovie+","+knownMovie+"]", &submitted, &posts)
+	server := newRejectionServer(t, "["+unknownMovie+","+knownMovie+"]", &submitted)
 	t.Cleanup(server.Close)
 	s := testService(Arr{Host: server.URL, Token: "secret", Type: Radarr})
 	if _, err := s.ManualImport(t.Context(), "arr", "download-1"); err != nil {
