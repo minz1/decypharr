@@ -608,7 +608,7 @@ func (s *SABnzbd) addNZBFile(
 		action,
 		cfg.Notifications.CallbackURL,
 		manager.ImportTypeSABnzbd,
-		cfg.SkipMultiSeason,
+		false,
 	)
 	id, err := s.manager.AddNewNZB(ctx, importReq)
 	if err != nil {

@@ -145,7 +145,6 @@ func (q *QBit) handleTorrentsAdd(w http.ResponseWriter, r *http.Request) {
 					action,
 					callbackURL,
 					rmTrackerUrls,
-					cfg.SkipMultiSeason,
 				)
 			})
 		}
@@ -161,7 +160,6 @@ func (q *QBit) handleTorrentsAdd(w http.ResponseWriter, r *http.Request) {
 					action,
 					callbackURL,
 					rmTrackerUrls,
-					cfg.SkipMultiSeason,
 				)
 			})
 		}

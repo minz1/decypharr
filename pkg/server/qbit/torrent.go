@@ -23,7 +23,7 @@ func (q *QBit) addMagnet(
 	debrid string,
 	action config.DownloadAction,
 	callbackURL string,
-	rmTrackerUrls, skipMultiSeason bool,
+	rmTrackerUrls bool,
 ) error {
 	magnet, err := utils.GetMagnetFromURL(q.manager.FetchClient(), url, rmTrackerUrls)
 	if err != nil {
@@ -40,7 +40,7 @@ func (q *QBit) addMagnet(
 		arr.DownloadUncached,
 		callbackURL,
 		manager.ImportTypeQBit,
-		skipMultiSeason,
+		false,
 	)
 
 	err = q.manager.AddNewTorrent(ctx, importReq)
@@ -57,7 +57,7 @@ func (q *QBit) addTorrent(
 	debrid string,
 	action config.DownloadAction,
 	callbackURL string,
-	rmTrackerUrls, skipMultiSeason bool,
+	rmTrackerUrls bool,
 ) error {
 	file, err := fileHeader.Open()
 	if err != nil {
@@ -79,7 +79,7 @@ func (q *QBit) addTorrent(
 		arr.DownloadUncached,
 		callbackURL,
 		manager.ImportTypeQBit,
-		skipMultiSeason,
+		false,
 	)
 	err = q.manager.AddNewTorrent(ctx, importReq)
 	if err != nil {

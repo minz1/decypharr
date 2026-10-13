@@ -327,7 +327,6 @@ type Config struct {
 	RefreshInterval       string                   `json:"refresh_interval,omitempty"`
 	MaxActiveDownloads    int                      `json:"max_active_downloads,omitempty"`
 	SkipPreCache          bool                     `json:"skip_pre_cache,omitempty"`
-	SkipMultiSeason       bool                     `json:"skip_multi_season,omitempty"`
 	AlwaysRmTrackerUrls   bool                     `json:"always_rm_tracker_urls,omitempty"`
 	Categories            []string                 `json:"categories,omitempty"`
 	FolderNaming          WebDavFolderNaming       `json:"folder_naming,omitempty"`
@@ -859,7 +858,6 @@ func clearHotFields(c *Config) {
 	c.NZBUserAgent = ""
 	c.DownloadFolder = ""
 	c.SkipPreCache = false
-	c.SkipMultiSeason = false
 	c.AlwaysRmTrackerUrls = false
 	c.Categories = nil
 	c.FolderNaming = ""
