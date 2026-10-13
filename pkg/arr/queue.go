@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 )
@@ -105,6 +106,17 @@ func (s *Service) Queue(ctx context.Context, name string) ([]QueueSchema, error)
 	}
 }
 
+const (
+	maxImportAttempts = 5
+	importRetryDelay  = time.Hour
+)
+
+type importFailure struct {
+	attempts int
+	status   string
+	retryAt  time.Time
+}
+
 // CleanupQueue applies the configured cleanup rules to one instance's queue.
 func (s *Service) CleanupQueue(ctx context.Context, name string) error {
 	items, err := s.Queue(ctx, name)
@@ -114,7 +126,7 @@ func (s *Service) CleanupQueue(ctx context.Context, name string) error {
 
 	rules := s.config.Get().QueueCleanup.Rules
 	var blocklist, blocklistResearch []int
-	var manualImports []string
+	importStatuses := make(map[string]string)
 	for _, item := range items {
 		switch resolveQueueAction(item, rules) {
 		case QueueActionBlocklist:
@@ -122,7 +134,9 @@ func (s *Service) CleanupQueue(ctx context.Context, name string) error {
 		case QueueActionBlocklistResearch:
 			blocklistResearch = append(blocklistResearch, item.ID)
 		case QueueActionImport:
-			manualImports = append(manualImports, item.DownloadID)
+			if _, seen := importStatuses[item.DownloadID]; !seen {
+				importStatuses[item.DownloadID] = statusText(item)
+			}
 		case QueueActionNone:
 			// Nothing to do.
 		}
@@ -141,12 +155,60 @@ func (s *Service) CleanupQueue(ctx context.Context, name string) error {
 			s.logger.Error().Err(removeQueueItemsErr).Str("arr", name).Msg("Queue cleanup: blocklist failed")
 		}
 	}
-	for _, downloadID := range manualImports {
-		if manualImportErr := s.ManualImport(ctx, name, downloadID); manualImportErr != nil {
-			s.logger.Error().Err(manualImportErr).Str("arr", name).Msg("Queue cleanup: manual import failed")
+	for downloadID, status := range importStatuses {
+		s.retryImport(ctx, name, downloadID, status)
+	}
+	s.pruneImportFailures(name, importStatuses)
+	return nil
+}
+
+// retryImport runs one manual import unless the ledger has backed it off.
+func (s *Service) retryImport(ctx context.Context, name, downloadID, status string) {
+	key := name + "/" + downloadID
+	s.mu.Lock()
+	failure, tracked := s.importFailures[key]
+	if tracked && failure.status != status {
+		delete(s.importFailures, key)
+		failure = importFailure{}
+	}
+	s.mu.Unlock()
+	if s.now().Before(failure.retryAt) {
+		return
+	}
+
+	importErr := s.ManualImport(ctx, name, downloadID)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if importErr == nil {
+		delete(s.importFailures, key)
+		return
+	}
+	failure.status = status
+	failure.attempts++
+	if failure.attempts < maxImportAttempts {
+		s.importFailures[key] = failure
+		s.logger.Error().Err(importErr).Str("arr", name).Int("attempt", failure.attempts).
+			Msg("Queue cleanup: manual import failed")
+		return
+	}
+	failure.retryAt = s.now().Add(importRetryDelay)
+	s.importFailures[key] = failure
+	s.logger.Warn().Err(importErr).Str("arr", name).Str("download_id", downloadID).Int("attempts", failure.attempts).
+		Msg("Queue cleanup: manual import keeps failing; retrying in 1h, needs manual intervention")
+}
+
+// pruneImportFailures drops this arr's ledger entries that are no longer import candidates.
+func (s *Service) pruneImportFailures(name string, candidates map[string]string) {
+	prefix := name + "/"
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key := range s.importFailures {
+		if downloadID, ours := strings.CutPrefix(key, prefix); ours {
+			if _, current := candidates[downloadID]; !current {
+				delete(s.importFailures, key)
+			}
 		}
 	}
-	return nil
 }
 
 // resolveQueueAction picks what to do with one queue item. Only failed items
@@ -161,14 +223,7 @@ func resolveQueueAction(item QueueSchema, rules []config.QueueCleanupRule) Queue
 	arrFailed := strings.EqualFold(item.TrackedDownloadState, "failedPending") ||
 		strings.EqualFold(item.TrackedDownloadState, "failed")
 
-	var builder strings.Builder
-	for _, message := range item.StatusMessages {
-		builder.WriteString(message.Title)
-		builder.WriteByte(' ')
-		builder.WriteString(strings.Join(message.Messages, " "))
-		builder.WriteByte(' ')
-	}
-	text := strings.ToLower(builder.String())
+	text := statusText(item)
 
 	for _, rule := range rules {
 		matched := false
@@ -191,6 +246,18 @@ func resolveQueueAction(item QueueSchema, rules []config.QueueCleanupRule) Queue
 		}
 	}
 	return QueueActionNone
+}
+
+// statusText is the lowercased join of a queue item's status message titles and messages.
+func statusText(item QueueSchema) string {
+	var builder strings.Builder
+	for _, message := range item.StatusMessages {
+		builder.WriteString(message.Title)
+		builder.WriteByte(' ')
+		builder.WriteString(strings.Join(message.Messages, " "))
+		builder.WriteByte(' ')
+	}
+	return strings.ToLower(builder.String())
 }
 
 // removeQueueItems blocklists and removes queue items. skipRedownload keeps the

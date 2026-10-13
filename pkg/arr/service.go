@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/rs/zerolog"
 	"golang.org/x/sync/singleflight"
@@ -31,6 +32,9 @@ type Service struct {
 	cleanups singleflight.Group
 	// cleanupFailing holds the arrs whose last queue cleanup failed. Guarded by mu.
 	cleanupFailing map[string]bool
+	// importFailures tracks stuck manual imports by "<arr>/<downloadID>". Guarded by mu.
+	importFailures map[string]importFailure
+	now            func() time.Time
 }
 
 // readRetries is how many times the shared client retries an Arr read.
@@ -42,6 +46,8 @@ func New(cfg *config.Store, tlsConfig *tls.Config, log zerolog.Logger) *Service 
 	service := &Service{
 		arrs:           make(map[string]Arr),
 		cleanupFailing: make(map[string]bool),
+		importFailures: make(map[string]importFailure),
+		now:            time.Now,
 		config:         cfg,
 		logger:         log,
 		client: request.New(
