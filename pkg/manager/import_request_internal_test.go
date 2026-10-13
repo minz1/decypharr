@@ -47,3 +47,12 @@ func TestNewTorrentQueueEntryKeepsArrPacksWhole(t *testing.T) {
 		t.Fatal("qbit entry SkipMultiSeason = false, want true")
 	}
 }
+
+func TestNewNZBQueueEntryKeepsArrPacksWhole(t *testing.T) {
+	t.Parallel()
+
+	req := &ImportRequest{ID: "nzb-1", Name: "Show S01-S04", Type: ImportTypeSABnzbd, Arr: arr.Arr{Name: "sonarr"}}
+	if entry := newNZBQueueEntry(req, "/staged/nzb-1.nzb"); !entry.SkipMultiSeason {
+		t.Fatal("sabnzbd entry SkipMultiSeason = false, want true")
+	}
+}

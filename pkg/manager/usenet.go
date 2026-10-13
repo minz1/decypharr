@@ -39,27 +39,7 @@ func (m *Manager) AddNewNZB(_ context.Context, req *ImportRequest) (string, erro
 	}
 	req.NZBContent = nil
 
-	entry := &storage.Entry{
-		InfoHash:         req.ID,
-		Name:             req.Name,
-		OriginalFilename: req.Name,
-		Protocol:         config.ProtocolNZB,
-		Magnet:           stagedPath,
-		Category:         req.Arr.Name,
-		SavePath:         filepath.Join(req.DownloadFolder, req.Arr.Name),
-		Status:           debridTypes.TorrentStatusQueued,
-		State:            storage.EntryStateDownloading,
-		Progress:         0,
-		Action:           req.Action,
-		CallbackURL:      req.CallBackURL,
-		SkipMultiSeason:  req.skipMultiSeason(),
-		CreatedAt:        time.Now(),
-		UpdatedAt:        time.Now(),
-		AddedOn:          time.Now(),
-		Providers:        make(map[string]*storage.ProviderEntry),
-		Files:            make(map[string]*storage.File),
-		Tags:             []string{},
-	}
+	entry := newNZBQueueEntry(req, stagedPath)
 
 	entry.ContentPath = entry.DownloadPath(m.folderNaming())
 	if addErr := m.queue.Add(entry); addErr != nil {
@@ -339,4 +319,29 @@ func (m *Manager) syncNZBs(ctx context.Context) error {
 		m.usenet.RemoveClaimedNZB(pending.Path)
 	}
 	return nil
+}
+
+// newNZBQueueEntry builds the queue entry for a staged NZB import.
+func newNZBQueueEntry(req *ImportRequest, stagedPath string) *storage.Entry {
+	return &storage.Entry{
+		InfoHash:         req.ID,
+		Name:             req.Name,
+		OriginalFilename: req.Name,
+		Protocol:         config.ProtocolNZB,
+		Magnet:           stagedPath,
+		Category:         req.Arr.Name,
+		SavePath:         filepath.Join(req.DownloadFolder, req.Arr.Name),
+		Status:           debridTypes.TorrentStatusQueued,
+		State:            storage.EntryStateDownloading,
+		Progress:         0,
+		Action:           req.Action,
+		CallbackURL:      req.CallBackURL,
+		SkipMultiSeason:  req.skipMultiSeason(),
+		CreatedAt:        time.Now(),
+		UpdatedAt:        time.Now(),
+		AddedOn:          time.Now(),
+		Providers:        make(map[string]*storage.ProviderEntry),
+		Files:            make(map[string]*storage.File),
+		Tags:             []string{},
+	}
 }
