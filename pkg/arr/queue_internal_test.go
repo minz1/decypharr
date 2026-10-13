@@ -350,6 +350,30 @@ func TestCleanupQueueKeepsCommandAcrossStatusChange(t *testing.T) {
 	wantLookups(t, fake, 1)
 }
 
+func TestCleanupQueueWarnsHourlyAboutAStuckCommand(t *testing.T) {
+	t.Parallel()
+
+	fake := newCleanupServer(t, stuckRecords(matchedByIDTitle))
+	fake.succeed.Store(true)
+	started := "started"
+	fake.commandStatus.Store(&started)
+	clock := &fakeClock{now: time.Unix(1000, 0)}
+	service := cleanupTestService(clock, map[string]*cleanupServer{"arr": fake})
+	var logs bytes.Buffer
+	service.logger = zerolog.New(&logs).Level(zerolog.WarnLevel)
+
+	runCleanup(t, service, "arr", 3)
+	clock.advance(importRetryDelay)
+	runCleanup(t, service, "arr", 3)
+	clock.advance(importRetryDelay)
+	runCleanup(t, service, "arr", 1)
+
+	wantLookups(t, fake, 1)
+	if got := strings.Count(logs.String(), `"command_id":1`); got != 2 {
+		t.Fatalf("stuck-command warnings = %d, want 2; logs:\n%s", got, logs.String())
+	}
+}
+
 func TestCleanupQueueLedgerSeparatesNestedArrNames(t *testing.T) {
 	t.Parallel()
 

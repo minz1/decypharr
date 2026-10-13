@@ -115,7 +115,8 @@ type importFailure struct {
 	attempts  int
 	status    string
 	retryAt   time.Time
-	commandID int // the arr's in-flight ManualImport command, 0 when none
+	commandID int       // the arr's in-flight ManualImport command, 0 when none
+	waitSince time.Time // when the in-flight command was submitted or last reported stuck
 }
 
 // CleanupQueue applies the configured cleanup rules to one instance's queue.
@@ -178,14 +179,26 @@ func (s *Service) retryImport(
 	}
 	if failure.commandID != 0 {
 		command, found, err := s.CommandStatus(ctx, name, failure.commandID)
-		if err != nil || (found && (command.Status == "queued" || command.Status == "started")) {
+		running := found &&
+			(strings.EqualFold(command.Status, "queued") || strings.EqualFold(command.Status, "started"))
+		if err != nil || running {
+			if s.now().Sub(failure.waitSince) >= importRetryDelay {
+				failure.waitSince = s.now()
+				s.logger.Warn().Err(err).Str("arr", name).Str("download_id", downloadID).
+					Int("command_id", failure.commandID).Str("command_status", command.Status).
+					Msg("Queue cleanup: manual import command still unfinished after 1h, needs manual intervention")
+			}
 			return failure
 		}
-		failure.commandID = 0
-		finished := fmt.Errorf("manual import command no longer known to the arr; item still queued")
+		finished := fmt.Errorf(
+			"manual import command %d no longer known to the arr; item still queued",
+			failure.commandID,
+		)
 		if found {
-			finished = fmt.Errorf("manual import command %s, item still queued: %s", command.Status, command.Message)
+			finished = fmt.Errorf("manual import command %d %s, item still queued: %s",
+				failure.commandID, command.Status, command.Message)
 		}
+		failure.commandID = 0
 		return s.recordImportFailure(name, downloadID, failure, finished)
 	}
 	if s.now().Before(failure.retryAt) {
@@ -200,6 +213,7 @@ func (s *Service) retryImport(
 		return s.recordImportFailure(name, downloadID, failure, err)
 	}
 	failure.commandID = command.ID
+	failure.waitSince = s.now()
 	s.logger.Info().Str("arr", name).Str("download_id", downloadID).Int("command_id", command.ID).
 		Msg("Queue cleanup: manual import submitted")
 	return failure
