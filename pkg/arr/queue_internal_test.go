@@ -76,6 +76,7 @@ type cleanupServer struct {
 
 	records atomic.Pointer[[]QueueSchema]
 	fail    atomic.Bool
+	succeed atomic.Bool
 	lookups atomic.Int64
 }
 
@@ -97,7 +98,14 @@ func newCleanupServer(t *testing.T, records []QueueSchema) *cleanupServer {
 			_, _ = w.Write(body)
 		case "/api/v3/manualimport":
 			fake.lookups.Add(1)
+			if fake.succeed.Load() {
+				_, _ = w.Write([]byte(`[{"path":"/d/A.mkv","series":{"id":7},"quality":{"quality":{"id":3}}}]`))
+				return
+			}
 			_, _ = w.Write([]byte(`[]`))
+		case "/api/v3/command":
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id":1,"status":"queued"}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -262,4 +270,18 @@ func TestCleanupQueueLedgerIsPerArr(t *testing.T) {
 	wantLookups(t, sonarr, maxImportAttempts)
 	runCleanup(t, service, "radarr", 1)
 	wantLookups(t, radarr, 1)
+}
+
+func TestCleanupQueueSuccessClearsFailureCount(t *testing.T) {
+	t.Parallel()
+
+	fake := newCleanupServer(t, stuckRecords(matchedByIDTitle))
+	service := cleanupTestService(&fakeClock{now: time.Unix(1000, 0)}, map[string]*cleanupServer{"arr": fake})
+
+	runCleanup(t, service, "arr", maxImportAttempts-1)
+	fake.succeed.Store(true)
+	runCleanup(t, service, "arr", 1)
+	fake.succeed.Store(false)
+	runCleanup(t, service, "arr", maxImportAttempts)
+	wantLookups(t, fake, 2*maxImportAttempts)
 }
