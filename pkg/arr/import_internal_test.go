@@ -247,3 +247,21 @@ func TestManualImportAllRejectedReturnsError(t *testing.T) {
 		t.Fatalf("command submissions = %d, want 0", got)
 	}
 }
+
+func TestManualImportSkipsRejectedRadarrCandidateBeforeMovieCheck(t *testing.T) {
+	t.Parallel()
+	var submitted [][]string
+	var posts atomic.Int64
+	unknownMovie := `{"path":"/d/B.mkv","movie":{"id":0},"quality":{"quality":{"id":3}},` +
+		`"rejections":[{"reason":"Unknown Movie","type":"permanent"}]}`
+	knownMovie := `{"path":"/d/A.mkv","movie":{"id":42},"quality":{"quality":{"id":3}}}`
+	server := newRejectionServer(t, "["+unknownMovie+","+knownMovie+"]", &submitted, &posts)
+	t.Cleanup(server.Close)
+	s := testService(Arr{Host: server.URL, Token: "secret", Type: Radarr})
+	if err := s.ManualImport(t.Context(), "arr", "download-1"); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(submitted, [][]string{{"/d/A.mkv"}}) {
+		t.Fatalf("submitted = %v, want only /d/A.mkv", submitted)
+	}
+}
