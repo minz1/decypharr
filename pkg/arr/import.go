@@ -89,6 +89,9 @@ func (s *Service) ManualImport(ctx context.Context, name, downloadID string) err
 
 	files := make([]ManualImportFile, 0, len(candidates))
 	for _, candidate := range candidates {
+		if len(candidate.Rejections) > 0 {
+			continue
+		}
 		if instance.Type == Radarr && candidate.Movie.ID <= 0 {
 			return fmt.Errorf("manual import: no movie matched for %q", candidate.Path)
 		}
@@ -116,6 +119,13 @@ func (s *Service) ManualImport(ctx context.Context, name, downloadID string) err
 			ReleaseType:       candidate.ReleaseType,
 			Rejections:        candidate.Rejections,
 		})
+	}
+
+	if len(files) == 0 {
+		return fmt.Errorf(
+			"manual import: all %d candidates rejected for download %q (%s)",
+			len(candidates), downloadID, candidates[0].Rejections[0].Reason,
+		)
 	}
 
 	_, err = s.command(ctx, instance, struct {

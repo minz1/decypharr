@@ -179,3 +179,71 @@ func TestManualImportRejectsIncompleteCandidates(t *testing.T) {
 		})
 	}
 }
+
+func newRejectionServer(t *testing.T, candidates string, submitted *[][]string, posts *atomic.Int64) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/v3/manualimport":
+			_, _ = fmt.Fprint(w, candidates)
+		case "POST /api/v3/command":
+			posts.Add(1)
+			var command struct {
+				Files []struct {
+					Path string `json:"path"`
+				} `json:"files"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&command); err != nil {
+				t.Error(err)
+			}
+			paths := make([]string, 0, len(command.Files))
+			for _, f := range command.Files {
+				paths = append(paths, f.Path)
+			}
+			*submitted = append(*submitted, paths)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = fmt.Fprint(w, `{"id":31,"status":"queued"}`)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+			http.NotFound(w, r)
+		}
+	}))
+}
+
+const (
+	cleanCandidate    = `{"path":"/d/A.mkv","series":{"id":7},"episodes":[{"id":1}],"quality":{"quality":{"id":3}}}`
+	rejectedCandidate = `{"path":"/d/B.mkv","series":{"id":7},"episodes":[{"id":2}],"quality":{"quality":{"id":3}},` +
+		`"rejections":[{"reason":"Not an upgrade","type":"permanent"}]}`
+)
+
+func TestManualImportSubmitsOnlyUnrejectedCandidates(t *testing.T) {
+	t.Parallel()
+	var submitted [][]string
+	var posts atomic.Int64
+	server := newRejectionServer(t, "["+cleanCandidate+","+rejectedCandidate+"]", &submitted, &posts)
+	t.Cleanup(server.Close)
+	s := testService(Arr{Host: server.URL, Token: "secret", Type: Sonarr})
+	if err := s.ManualImport(t.Context(), "arr", "download-1"); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(submitted, [][]string{{"/d/A.mkv"}}) {
+		t.Fatalf("submitted = %v, want only /d/A.mkv in one command", submitted)
+	}
+}
+
+func TestManualImportAllRejectedReturnsError(t *testing.T) {
+	t.Parallel()
+	var submitted [][]string
+	var posts atomic.Int64
+	server := newRejectionServer(t, "["+rejectedCandidate+","+rejectedCandidate+"]", &submitted, &posts)
+	t.Cleanup(server.Close)
+	s := testService(Arr{Host: server.URL, Token: "secret", Type: Sonarr})
+	err := s.ManualImport(t.Context(), "arr", "download-1")
+	if err == nil || !strings.Contains(err.Error(), "all 2 candidates rejected") ||
+		!strings.Contains(err.Error(), "Not an upgrade") {
+		t.Fatalf("ManualImport error = %v", err)
+	}
+	if got := posts.Load(); got != 0 {
+		t.Fatalf("command submissions = %d, want 0", got)
+	}
+}
