@@ -103,6 +103,16 @@ func (m *Manager) addDebridJobs(ctx context.Context, debridName string, debridCl
 		debridClient.SyncAccounts)
 }
 
+func (m *Manager) schedulePrune(ctx context.Context) {
+	cfg := m.store.Get()
+	if !cfg.Prune.Enabled {
+		return
+	}
+	m.scheduleEvery(ctx, m.scheduler, cfg.Prune.Schedule, "prune", func() {
+		_, _ = m.RunPrune(ctx, PruneOptions{})
+	})
+}
+
 func (m *Manager) StartWorker(ctx context.Context) error {
 	// Stop any existing jobs before starting new ones
 	m.scheduler.RemoveByTags("decypharr")
@@ -123,6 +133,8 @@ func (m *Manager) StartWorker(ctx context.Context) error {
 		m.linkService.Clear()
 		m.logger.Debug().Msg("Cleared link service cache")
 	})
+
+	m.schedulePrune(ctx)
 
 	// Arr monitoring job
 	m.scheduleEvery(ctx, m.scheduler, "10s", "arr-monitoring", func() { m.arr.CleanupQueues(ctx) })

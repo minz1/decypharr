@@ -631,7 +631,7 @@ func TestPruneCancelDuringDeleteReturnsErrorWithoutSummary(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	h.provider.onDelete = func(string) { cancel() }
 
-	_, err := h.m.RunPrune(ctx)
+	_, err := h.m.RunPrune(ctx, PruneOptions{})
 
 	if !errors.Is(err, context.Canceled) || strings.Count(h.logs.String(), "prune finished") != before {
 		t.Fatalf("err=%v logs=%s", err, h.logs.String())

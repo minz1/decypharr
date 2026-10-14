@@ -39,8 +39,11 @@ type fakeArrRecovery struct {
 	reacquireErr error
 
 	jobs            []reacquire.Job
+	notReady        bool
 	deletedBindings [][2]string
 }
+
+func (f *fakeArrRecovery) Ready() bool { return !f.notReady }
 
 func (f *fakeArrRecovery) Jobs() []reacquire.Job { return f.jobs }
 

@@ -19,6 +19,7 @@ type ArrRecovery interface {
 	FailDownload(arrName, downloadID, entryID string) (*reacquire.Job, error)
 	Jobs() []reacquire.Job
 	DeleteBinding(entryID, fileID string) error
+	Ready() bool
 }
 
 var _ ArrRecovery = (*reacquire.Service)(nil)

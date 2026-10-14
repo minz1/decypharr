@@ -26,20 +26,34 @@ const (
 
 var ErrPruneDisabled = errors.New("prune is disabled")
 
+type PruneOptions struct {
+	AcceptBaseline bool
+}
+
 type PruneCandidate struct {
-	InfoHash, Name, Provider, Excluded string // Excluded: "" | "manual" | "queued" | "incomplete" | "reacquire"
-	Size                               int64
-	UnreferencedSince, EligibleAt      time.Time
+	InfoHash          string    `json:"info_hash"`
+	Name              string    `json:"name"`
+	Provider          string    `json:"provider"`
+	Excluded          string    `json:"excluded"` // "" | "manual" | "queued" | "incomplete" | "reacquire" | "bound"
+	Size              int64     `json:"size"`
+	UnreferencedSince time.Time `json:"unreferenced_since,omitzero"`
+	EligibleAt        time.Time `json:"eligible_at,omitzero"`
 }
 
 type PruneReport struct {
-	StartedAt                                                         time.Time
-	Mode                                                              config.PruneMode
-	Aborted                                                           string // "" when the run completed
-	Links, Referenced, Dangling, NewlyUnreferenced, MissingReferenced int
-	Candidates                                                        []PruneCandidate // all unreferenced entries, eligible or not
-	Deleted, Failed                                                   int
-	BytesFreed                                                        int64
+	StartedAt         time.Time        `json:"started_at,omitzero"`
+	Mode              config.PruneMode `json:"mode"`
+	Aborted           string           `json:"aborted"` // "" when the run completed
+	AcceptedBaseline  bool             `json:"accepted_baseline"`
+	Links             int              `json:"links"`
+	Referenced        int              `json:"referenced"`
+	Dangling          int              `json:"dangling"`
+	NewlyUnreferenced int              `json:"newly_unreferenced"`
+	MissingReferenced int              `json:"missing_referenced"`
+	Candidates        []PruneCandidate `json:"candidates"` // all unreferenced entries, eligible or not
+	Deleted           int              `json:"deleted"`
+	Failed            int              `json:"failed"`
+	BytesFreed        int64            `json:"bytes_freed"`
 }
 
 const maxScanGap = 48 * time.Hour
@@ -63,7 +77,7 @@ func (m *Manager) LastPruneReport() PruneReport {
 	return r
 }
 
-func (m *Manager) RunPrune(ctx context.Context) (PruneReport, error) {
+func (m *Manager) RunPrune(ctx context.Context, opts PruneOptions) (PruneReport, error) {
 	m.pruneMu.Lock()
 	defer m.pruneMu.Unlock()
 
@@ -73,7 +87,7 @@ func (m *Manager) RunPrune(ctx context.Context) (PruneReport, error) {
 	}
 	now := m.clockNow()
 	report := PruneReport{StartedAt: now, Mode: cfg.Prune.Mode}
-	err := m.pruneRun(ctx, cfg, now, &report)
+	err := m.pruneRun(ctx, cfg, now, opts, &report)
 	if err != nil && ctx.Err() != nil {
 		return report, err
 	}
@@ -112,7 +126,9 @@ func (m *Manager) logPruneSummary(r PruneReport) {
 		Msg("prune finished")
 }
 
-func (m *Manager) pruneRun(ctx context.Context, cfg *config.Config, now time.Time, report *PruneReport) error {
+func (m *Manager) pruneRun(
+	ctx context.Context, cfg *config.Config, now time.Time, opts PruneOptions, report *PruneReport,
+) error {
 	prune := cfg.Prune
 	grace := prune.GraceDuration()
 	if grace <= 0 {
@@ -123,7 +139,7 @@ func (m *Manager) pruneRun(ctx context.Context, cfg *config.Config, now time.Tim
 		return fmt.Errorf("reference scan: %w", err)
 	}
 	report.Links, report.Referenced, report.Dangling = scan.Links, len(scan.Referenced), scan.Dangling
-	if err = m.pruneSafetyChecks(scan); err != nil {
+	if err = m.pruneSafetyChecks(scan, opts, report); err != nil {
 		return err
 	}
 	restart, gap, err := m.pruneScanGap(now, grace)
@@ -164,7 +180,7 @@ func (m *Manager) pruneRun(ctx context.Context, cfg *config.Config, now time.Tim
 	return ctx.Err()
 }
 
-func (m *Manager) pruneSafetyChecks(scan referenceScan) error {
+func (m *Manager) pruneSafetyChecks(scan referenceScan, opts PruneOptions, report *PruneReport) error {
 	referenced := len(scan.Referenced)
 	if referenced == 0 {
 		return errors.New("scan resolved 0 references")
@@ -174,6 +190,11 @@ func (m *Manager) pruneSafetyChecks(scan referenceScan) error {
 		return fmt.Errorf("read last referenced count: %w", err)
 	}
 	if ok && referenced*10 < last*9 {
+		if opts.AcceptBaseline {
+			report.AcceptedBaseline = true
+			m.logger.Warn().Int("old", last).Int("new", referenced).Msg("prune baseline accepted")
+			return nil
+		}
 		return fmt.Errorf("referenced count %d is below 90%% of the last scan's %d", referenced, last)
 	}
 	return nil
@@ -406,6 +427,9 @@ func (m *Manager) reacquiringEntries() (map[string]struct{}, error) {
 	recovery := m.recoveryService()
 	if recovery == nil && m.arr != nil && len(m.arr.All()) > 0 {
 		return nil, errors.New("arr recovery unavailable")
+	}
+	if recovery != nil && !recovery.Ready() {
+		return nil, errors.New("arr recovery not ready")
 	}
 	if recovery != nil {
 		for _, job := range recovery.Jobs() {

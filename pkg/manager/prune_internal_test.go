@@ -16,6 +16,7 @@ import (
 	"github.com/sirrobot01/appendstore"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/internal/kvstore"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/arr/reacquire"
 	debrid "github.com/sirrobot01/decypharr/pkg/debrid/common"
@@ -83,7 +84,7 @@ func (h *pruneHarness) corruptStore(t *testing.T, file, key string, value []byte
 	if err := h.m.storage.Close(); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := appendstore.Open(filepath.Join(h.dbDir, file), appendstore.Options{})
+	raw, err := kvstore.Open(filepath.Join(h.dbDir, file), appendstore.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +147,7 @@ func (h *pruneHarness) unreference(t *testing.T, e *storage.Entry) {
 
 func (h *pruneHarness) run(t *testing.T) PruneReport {
 	t.Helper()
-	r, err := h.m.RunPrune(context.Background())
+	r, err := h.m.RunPrune(context.Background(), PruneOptions{})
 	if err != nil {
 		t.Fatalf("RunPrune: %v (report %+v)", err, r)
 	}
@@ -361,7 +362,7 @@ func TestPruneAbortsWithoutLedgerWrites(t *testing.T) {
 		t.Parallel()
 		h, _ := setupAbortHarness(t, 2)
 		h.setPrune(t, func(p *config.Prune) { p.Roots = []string{filepath.Join(h.root, "missing")} })
-		r, _ := h.m.RunPrune(context.Background())
+		r, _ := h.m.RunPrune(context.Background(), PruneOptions{})
 		assertAborted(t, h, r)
 	})
 	t.Run("zero references", func(t *testing.T) {
@@ -370,7 +371,7 @@ func TestPruneAbortsWithoutLedgerWrites(t *testing.T) {
 		for _, e := range es {
 			h.unreference(t, e)
 		}
-		r, _ := h.m.RunPrune(context.Background())
+		r, _ := h.m.RunPrune(context.Background(), PruneOptions{})
 		assertAborted(t, h, r)
 		if _, ok, _ := h.m.storage.LastReferencedCount(); ok {
 			t.Fatal("last count written")
@@ -382,7 +383,7 @@ func TestPruneAbortsWithoutLedgerWrites(t *testing.T) {
 		if err := h.m.storage.SetLastReferencedCount(100); err != nil {
 			t.Fatal(err)
 		}
-		r, _ := h.m.RunPrune(context.Background())
+		r, _ := h.m.RunPrune(context.Background(), PruneOptions{})
 		assertAborted(t, h, r)
 		if n, _, _ := h.m.storage.LastReferencedCount(); n != 100 {
 			t.Fatalf("last count changed to %d", n)
@@ -415,7 +416,7 @@ func TestPruneAbortsOnLedgerReadError(t *testing.T) {
 	h.provider.reset()
 	h.corruptLedger(t, "bbbb")
 
-	r, err := h.m.RunPrune(context.Background())
+	r, err := h.m.RunPrune(context.Background(), PruneOptions{})
 
 	if err == nil || r.Aborted == "" || len(h.handed()) != 0 || r.Deleted != 0 {
 		t.Fatalf("err=%v report=%+v handed=%v", err, r, h.handed())
@@ -490,7 +491,7 @@ func TestPruneDisabledIsRejected(t *testing.T) {
 	h.addEntry(t, "bbbb", nil)
 	h.setPrune(t, func(p *config.Prune) { p.Enabled = false })
 
-	_, err := h.m.RunPrune(context.Background())
+	_, err := h.m.RunPrune(context.Background(), PruneOptions{})
 
 	if err == nil || len(h.ledger(t)) != 0 || len(h.handed()) != 0 {
 		t.Fatalf("err=%v ledger=%v", err, h.ledger(t))
@@ -683,7 +684,7 @@ func TestPruneCancelledRunLeavesNoTrace(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := h.m.RunPrune(ctx)
+	_, err := h.m.RunPrune(ctx, PruneOptions{})
 
 	if err == nil {
 		t.Fatal("cancelled run returned no error")
@@ -758,7 +759,7 @@ func TestPruneArrRecoveryRequiredWhenArrsConfigured(t *testing.T) {
 		}), nil, zerolog.Nop())
 		h.m.SetArrRecovery(nil)
 
-		r, err := h.m.RunPrune(context.Background())
+		r, err := h.m.RunPrune(context.Background(), PruneOptions{})
 
 		if err == nil || r.Aborted != "arr recovery unavailable" || len(h.ledger(t)) != 0 {
 			t.Fatalf("err=%v report=%+v", err, r)
@@ -772,6 +773,65 @@ func TestPruneArrRecoveryRequiredWhenArrsConfigured(t *testing.T) {
 			t.Fatalf("report %+v", r)
 		}
 	})
+}
+
+func TestPruneAcceptBaseline(t *testing.T) {
+	t.Parallel()
+	t.Run("accept baseline bypasses only the ninety percent check", func(t *testing.T) {
+		t.Parallel()
+		h, _ := setupAbortHarness(t, 89)
+		if err := h.m.storage.SetLastReferencedCount(100); err != nil {
+			t.Fatal(err)
+		}
+		r, err := h.m.RunPrune(context.Background(), PruneOptions{AcceptBaseline: true})
+		if err != nil || r.Aborted != "" || !r.AcceptedBaseline {
+			t.Fatalf("err=%v report=%+v", err, r)
+		}
+		if n, _, _ := h.m.storage.LastReferencedCount(); n != 89 {
+			t.Fatalf("last count %d", n)
+		}
+		if !strings.Contains(h.logs.String(), `"message":"prune baseline accepted"`) {
+			t.Fatalf("no baseline log: %s", h.logs.String())
+		}
+	})
+	t.Run("accept baseline not flagged when check passes", func(t *testing.T) {
+		t.Parallel()
+		h, _ := setupAbortHarness(t, 90)
+		if err := h.m.storage.SetLastReferencedCount(100); err != nil {
+			t.Fatal(err)
+		}
+		r, err := h.m.RunPrune(context.Background(), PruneOptions{AcceptBaseline: true})
+		if err != nil || r.AcceptedBaseline || strings.Contains(h.logs.String(), "baseline accepted") {
+			t.Fatalf("err=%v report=%+v", err, r)
+		}
+	})
+	t.Run("accept baseline still aborts on zero references", func(t *testing.T) {
+		t.Parallel()
+		h, es := setupAbortHarness(t, 2)
+		for _, e := range es {
+			h.unreference(t, e)
+		}
+		r, err := h.m.RunPrune(context.Background(), PruneOptions{AcceptBaseline: true})
+		if err == nil || r.Aborted == "" || r.AcceptedBaseline {
+			t.Fatalf("err=%v report=%+v", err, r)
+		}
+	})
+}
+
+func TestPruneArrRecoveryMustBeReady(t *testing.T) {
+	t.Parallel()
+	h := scanGapHarness(t)
+	h.fake.notReady = true
+
+	r, err := h.m.RunPrune(context.Background(), PruneOptions{})
+
+	if err == nil || r.Aborted != "arr recovery not ready" || len(h.ledger(t)) != 0 {
+		t.Fatalf("err=%v report=%+v", err, r)
+	}
+	h.fake.notReady = false
+	if r = h.run(t); r.Aborted != "" {
+		t.Fatalf("report %+v", r)
+	}
 }
 
 func TestPruneMissingReferencedEntries(t *testing.T) {
@@ -795,7 +855,7 @@ func TestPruneMissingReferencedEntries(t *testing.T) {
 			}
 			h.addEntry(t, "orph", nil)
 
-			r, _ := h.m.RunPrune(context.Background())
+			r, _ := h.m.RunPrune(context.Background(), PruneOptions{})
 
 			if tc.abort {
 				assertAborted(t, h, r)

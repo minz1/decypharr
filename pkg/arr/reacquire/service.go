@@ -309,3 +309,9 @@ func (s *Service) signal() {
 	default:
 	}
 }
+
+func (s *Service) Ready() bool {
+	s.lifecycleMu.RLock()
+	defer s.lifecycleMu.RUnlock()
+	return s.started && !s.closed
+}
