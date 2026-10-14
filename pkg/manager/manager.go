@@ -75,6 +75,12 @@ type Manager struct {
 	arrRecovery            ArrRecovery
 	reacquireNotifications sync.Map
 
+	pruneMu       sync.Mutex
+	pruneNow      func() time.Time
+	pruneEntriesF func(context.Context, []PruneCandidate) (int, int, int64)
+	pruneReportMu sync.Mutex
+	lastPrune     PruneReport
+
 	// Migration jobs tracking
 	migrationJobs   *xsync.Map[string, *storage.SwitcherJob]
 	refreshInterval time.Duration

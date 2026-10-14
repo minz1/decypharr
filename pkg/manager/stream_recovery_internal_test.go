@@ -37,6 +37,18 @@ type fakeArrRecovery struct {
 	// completes before FailDownload returns.
 	onFail       func(entryID string)
 	reacquireErr error
+
+	jobs            []reacquire.Job
+	deletedBindings [][2]string
+}
+
+func (f *fakeArrRecovery) Jobs() []reacquire.Job { return f.jobs }
+
+func (f *fakeArrRecovery) DeleteBinding(entryID, fileID string) error {
+	f.failMu.Lock()
+	defer f.failMu.Unlock()
+	f.deletedBindings = append(f.deletedBindings, [2]string{entryID, fileID})
+	return nil
 }
 
 func (f *fakeArrRecovery) FailDownload(arrName, downloadID, entryID string) (*reacquire.Job, error) {
