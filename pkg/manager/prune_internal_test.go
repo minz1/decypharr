@@ -148,6 +148,23 @@ func (h *pruneHarness) run(t *testing.T) PruneReport {
 	return r
 }
 
+func (h *pruneHarness) age(t *testing.T, d time.Duration) {
+	t.Helper()
+	for d > 24*time.Hour {
+		h.now = h.now.Add(24 * time.Hour)
+		d -= 24 * time.Hour
+		h.run(t)
+	}
+	h.now = h.now.Add(d)
+}
+
+func (h *pruneHarness) edit(t *testing.T, fn func(*config.Config)) {
+	t.Helper()
+	next := *h.m.store.Get()
+	fn(&next)
+	h.m.store = config.NewStore(&next)
+}
+
 func (h *pruneHarness) ledger(t *testing.T) map[string]time.Time {
 	t.Helper()
 	l, err := h.m.storage.UnreferencedSince()
@@ -222,7 +239,7 @@ func TestPruneEligibleAfterGrace(t *testing.T) {
 			h.run(t)
 			h.handed = nil
 
-			h.now = h.now.Add(tc.wait)
+			h.age(t, tc.wait)
 			r := h.run(t)
 
 			if got := candidate(t, r, "bbbb").eligible(h.now); got != tc.want {
@@ -281,7 +298,7 @@ func TestPruneExclusions(t *testing.T) {
 		{EntryID: "rea2", Status: reacquire.StatusFailed},
 	}
 	h.run(t)
-	h.now = h.now.Add(pruneGrace)
+	h.age(t, pruneGrace)
 	r := h.run(t)
 
 	want := map[string]string{
@@ -298,9 +315,12 @@ func TestPruneExclusions(t *testing.T) {
 	if !slices.Equal(got, []string{"free", "rea2"}) {
 		t.Fatalf("eligible %v", got)
 	}
+	if len(h.handed) != 2 {
+		t.Fatalf("handed %v", h.handed)
+	}
 	handed := []string{h.handed[0].InfoHash, h.handed[1].InfoHash}
 	slices.Sort(handed)
-	if len(h.handed) != 2 || !slices.Equal(handed, []string{"free", "rea2"}) {
+	if !slices.Equal(handed, []string{"free", "rea2"}) {
 		t.Fatalf("handed %v", h.handed)
 	}
 }
@@ -392,7 +412,7 @@ func TestPruneAbortsOnLedgerReadError(t *testing.T) {
 	h.reference(t, keep)
 	h.addEntry(t, "bbbb", nil)
 	h.run(t)
-	h.now = h.now.Add(pruneGrace)
+	h.age(t, pruneGrace)
 	h.handed = nil
 	h.corruptLedger(t, "bbbb")
 
@@ -413,7 +433,7 @@ func TestPruneReportModeDeletesNothing(t *testing.T) {
 	h.reference(t, keep)
 	h.addEntry(t, "bbbb", nil)
 	h.run(t)
-	h.now = h.now.Add(pruneGrace)
+	h.age(t, pruneGrace)
 
 	r := h.run(t)
 
@@ -450,7 +470,7 @@ func TestPruneReadsModePerRun(t *testing.T) {
 	h.reference(t, keep)
 	h.addEntry(t, "bbbb", nil)
 	h.run(t)
-	h.now = h.now.Add(pruneGrace)
+	h.age(t, pruneGrace)
 
 	r := h.run(t)
 	if r.Mode != config.PruneModeReport || len(h.handed) != 0 {
@@ -502,6 +522,9 @@ func TestPruneMaxPerRunOrdering(t *testing.T) {
 	if err := h.m.storage.SetLastReferencedCount(1); err != nil {
 		t.Fatal(err)
 	}
+	if err := h.m.storage.SetLastScan(h.now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
 	h.setPrune(t, func(p *config.Prune) { p.MaxPerRun = 2 })
 
 	r := h.run(t)
@@ -527,5 +550,241 @@ func TestPruneLastReportIsACopy(t *testing.T) {
 
 	if h.m.LastPruneReport().Candidates[0].InfoHash != "bbbb" {
 		t.Fatal("LastPruneReport shares its slice")
+	}
+}
+
+func (h *pruneHarness) seedStamped(t *testing.T, scanAgo time.Duration) {
+	t.Helper()
+	if err := h.m.storage.SetUnreferencedSince("bbbb", h.now.Add(-10*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if scanAgo > 0 {
+		if err := h.m.storage.SetLastScan(h.now.Add(-scanAgo)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func scanGapHarness(t *testing.T) *pruneHarness {
+	t.Helper()
+	h := newPruneHarness(t, config.PruneModeDelete)
+	h.reference(t, h.addEntry(t, "aaaa", nil))
+	h.addEntry(t, "bbbb", nil)
+	return h
+}
+
+func TestPruneScanGapRestartsClocks(t *testing.T) {
+	t.Parallel()
+	h := scanGapHarness(t)
+	h.seedStamped(t, 72*time.Hour)
+
+	r := h.run(t)
+
+	c := candidate(t, r, "bbbb")
+	if !c.UnreferencedSince.Equal(h.now) || c.eligible(h.now) || r.NewlyUnreferenced != 1 || len(h.handed) != 0 {
+		t.Fatalf("candidate %+v report %+v", c, r)
+	}
+	if !h.ledger(t)["bbbb"].Equal(h.now) {
+		t.Fatalf("ledger %v", h.ledger(t))
+	}
+	if !strings.Contains(h.logs.String(), `"message":"prune clocks restarted"`) {
+		t.Fatalf("no restart log: %s", h.logs.String())
+	}
+	if ls, ok, _ := h.m.storage.LastScan(); !ok || !ls.Equal(h.now) {
+		t.Fatalf("last scan %v %v", ls, ok)
+	}
+}
+
+func TestPruneShortScanGapKeepsStamps(t *testing.T) {
+	t.Parallel()
+	h := scanGapHarness(t)
+	h.seedStamped(t, 47*time.Hour)
+
+	r := h.run(t)
+
+	if c := candidate(t, r, "bbbb"); !c.eligible(h.now) || r.NewlyUnreferenced != 0 || len(h.handed) != 1 {
+		t.Fatalf("candidate %+v report %+v", c, r)
+	}
+}
+
+func TestPruneMissingLastScanWithLedgerRestarts(t *testing.T) {
+	t.Parallel()
+	h := scanGapHarness(t)
+	h.seedStamped(t, 0)
+
+	r := h.run(t)
+
+	if c := candidate(t, r, "bbbb"); !c.UnreferencedSince.Equal(h.now) || c.eligible(h.now) {
+		t.Fatalf("candidate %+v", c)
+	}
+}
+
+func TestPruneClockBackwardsAborts(t *testing.T) {
+	t.Parallel()
+	h := scanGapHarness(t)
+	h.seedStamped(t, -time.Hour)
+	if err := h.m.storage.SetLastScan(h.now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	before := h.ledger(t)
+
+	r, err := h.m.RunPrune(context.Background())
+
+	if err == nil || r.Aborted != "clock went backwards" || len(h.handed) != 0 {
+		t.Fatalf("err=%v report=%+v", err, r)
+	}
+	if got := h.ledger(t); !got["bbbb"].Equal(before["bbbb"]) || len(got) != 1 {
+		t.Fatalf("ledger changed: %v", got)
+	}
+	if ls, _, _ := h.m.storage.LastScan(); !ls.Equal(h.now.Add(time.Hour)) {
+		t.Fatalf("last scan changed: %v", ls)
+	}
+	if !strings.Contains(h.logs.String(), `"message":"prune aborted"`) {
+		t.Fatalf("no abort log: %s", h.logs.String())
+	}
+}
+
+func TestPruneCancelledRunLeavesNoTrace(t *testing.T) {
+	t.Parallel()
+	h := scanGapHarness(t)
+	h.run(t)
+	good := h.m.LastPruneReport()
+	scan0, _, _ := h.m.storage.LastScan()
+	h.now = h.now.Add(time.Hour)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := h.m.RunPrune(ctx)
+
+	if err == nil {
+		t.Fatal("cancelled run returned no error")
+	}
+	if strings.Contains(h.logs.String(), "prune aborted") {
+		t.Fatalf("cancel logged as abort: %s", h.logs.String())
+	}
+	if scan1, _, _ := h.m.storage.LastScan(); !scan1.Equal(scan0) {
+		t.Fatalf("last scan moved %v -> %v", scan0, scan1)
+	}
+	if got := h.m.LastPruneReport(); !got.StartedAt.Equal(good.StartedAt) {
+		t.Fatalf("last report replaced: %+v", got)
+	}
+}
+
+func TestPruneIgnoresMigrationStatusRecord(t *testing.T) {
+	t.Parallel()
+	h := scanGapHarness(t)
+	if err := h.m.storage.SaveMigrationStatus(&storage.SystemMigrationStatus{}); err != nil {
+		t.Fatal(err)
+	}
+
+	r := h.run(t)
+
+	if r.Aborted != "" || len(r.Candidates) != 1 || r.Candidates[0].InfoHash != "bbbb" {
+		t.Fatalf("report %+v", r)
+	}
+	if _, ok := h.ledger(t)[""]; ok || len(h.ledger(t)) != 1 {
+		t.Fatalf("ledger %v", h.ledger(t))
+	}
+}
+
+func TestPruneExcludedEntriesAreNotStamped(t *testing.T) {
+	t.Parallel()
+	h := scanGapHarness(t)
+	inc := h.addEntry(t, "inc1", func(e *storage.Entry) { e.IsComplete = false })
+
+	h.run(t)
+	h.age(t, 8*24*time.Hour)
+	r := h.run(t)
+
+	c := candidate(t, r, "inc1")
+	if c.Excluded != pruneExcludedIncomplete || !c.UnreferencedSince.IsZero() || !c.EligibleAt.IsZero() {
+		t.Fatalf("candidate %+v", c)
+	}
+	if _, ok := h.ledger(t)["inc1"]; ok {
+		t.Fatal("excluded entry stamped")
+	}
+
+	inc.IsComplete = true
+	if err := h.m.storage.AddOrUpdate(inc); err != nil {
+		t.Fatal(err)
+	}
+	r = h.run(t)
+	c = candidate(t, r, "inc1")
+	if !c.UnreferencedSince.Equal(h.now) || c.eligible(h.now) {
+		t.Fatalf("after completing: %+v", c)
+	}
+	h.age(t, pruneGrace)
+	if r = h.run(t); !candidate(t, r, "inc1").eligible(h.now) {
+		t.Fatalf("not eligible a grace later: %+v", r.Candidates)
+	}
+}
+
+func TestPruneArrRecoveryRequiredWhenArrsConfigured(t *testing.T) {
+	t.Parallel()
+	t.Run("arrs configured", func(t *testing.T) {
+		t.Parallel()
+		h := scanGapHarness(t)
+		h.edit(t, func(c *config.Config) { c.Arrs = []config.Arr{{Name: "sonarr"}} })
+		h.m.SetArrRecovery(nil)
+
+		r, err := h.m.RunPrune(context.Background())
+
+		if err == nil || r.Aborted != "arr recovery unavailable" || len(h.ledger(t)) != 0 {
+			t.Fatalf("err=%v report=%+v", err, r)
+		}
+	})
+	t.Run("no arrs", func(t *testing.T) {
+		t.Parallel()
+		h := scanGapHarness(t)
+		h.m.SetArrRecovery(nil)
+		if r := h.run(t); r.Aborted != "" {
+			t.Fatalf("report %+v", r)
+		}
+	})
+}
+
+func TestPruneMissingReferencedEntries(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		missing int
+		abort   bool
+	}{{1, false}, {2, false}, {3, true}} {
+		t.Run(fmt.Sprintf("%d of 200", tc.missing), func(t *testing.T) {
+			t.Parallel()
+			h := newPruneHarness(t, config.PruneModeDelete)
+			for i := range 200 {
+				hash := fmt.Sprintf("h%03d", i)
+				ghost := i < tc.missing
+				e := h.addEntry(t, hash, func(e *storage.Entry) {
+					if ghost {
+						e.Files["a.mkv"].InfoHash = "ghost" + hash
+					}
+				})
+				h.reference(t, e)
+			}
+			h.addEntry(t, "orph", nil)
+
+			r, _ := h.m.RunPrune(context.Background())
+
+			if tc.abort {
+				assertAborted(t, h, r)
+				return
+			}
+			if r.Aborted != "" || r.MissingReferenced != tc.missing {
+				t.Fatalf("report %+v", r)
+			}
+		})
+	}
+}
+
+func TestPruneStoredReportDoesNotShareReturnedSlice(t *testing.T) {
+	t.Parallel()
+	h := scanGapHarness(t)
+
+	r := h.run(t)
+	r.Candidates[0].InfoHash = "mutated"
+
+	if h.m.LastPruneReport().Candidates[0].InfoHash != "bbbb" {
+		t.Fatal("stored report shares the returned backing array")
 	}
 }

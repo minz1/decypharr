@@ -104,3 +104,22 @@ func TestUnreferencedSinceCorruptValue(t *testing.T) {
 		t.Fatalf("want nil map, got %v", got)
 	}
 }
+
+func TestLastScan(t *testing.T) {
+	t.Parallel()
+	s := openTestStorage(t, t.TempDir())
+	defer s.Close()
+	if _, ok, err := s.LastScan(); err != nil || ok {
+		t.Fatalf("unset: ok=%v err=%v", ok, err)
+	}
+	when := time.Unix(1_800_000_000, 0)
+	if err := s.SetLastScan(when); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := s.LastScan(); err != nil || !ok || !got.Equal(when) {
+		t.Fatalf("set: %v %v %v", got, ok, err)
+	}
+	if got, err := s.UnreferencedSince(); err != nil || len(got) != 0 {
+		t.Fatalf("scan time leaked into ledger: %v %v", got, err)
+	}
+}

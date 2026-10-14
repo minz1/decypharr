@@ -13,6 +13,8 @@ import (
 
 const lastReferencedKey = "\x00last_referenced"
 
+const lastScanKey = "\x00last_scan"
+
 const ledgerValueSize = 8
 
 func encodeInt64(v int64) ([]byte, error) {
@@ -90,4 +92,27 @@ func (s *Storage) SetLastReferencedCount(n int) error {
 		return err
 	}
 	return s.prune.Put(lastReferencedKey, b, nil)
+}
+
+func (s *Storage) LastScan() (time.Time, bool, error) {
+	data, err := s.prune.Get(lastScanKey)
+	if errors.Is(err, appendstore.ErrKeyNotFound) {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	secs, err := decodeInt64(lastScanKey, data)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return time.Unix(secs, 0), true, nil
+}
+
+func (s *Storage) SetLastScan(t time.Time) error {
+	b, err := encodeInt64(t.Unix())
+	if err != nil {
+		return err
+	}
+	return s.prune.Put(lastScanKey, b, nil)
 }
