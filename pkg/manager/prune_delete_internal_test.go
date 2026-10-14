@@ -490,27 +490,6 @@ func TestPruneEndToEndDeletesOnlyUnreferencedNonManual(t *testing.T) {
 	}
 }
 
-func TestPruneKeepsEntryWhosePlacementChangedSinceSnapshot(t *testing.T) {
-	t.Parallel()
-	h := newPruneHarness(t, config.PruneModeDelete)
-	e := h.addEntry(t, "aaaa", nil)
-	cs := h.cands(t, "aaaa")
-	st, err := h.m.pruneHolders()
-	if err != nil {
-		t.Fatal(err)
-	}
-	e.Providers["torbox"].ID = "moved"
-	if err = h.m.storage.AddOrUpdate(e); err != nil {
-		t.Fatal(err)
-	}
-
-	outcome, _ := h.m.pruneOne(cs[0], st)
-
-	if outcome != pruneFailed || !h.has("aaaa") || len(h.provider.deletedIDs()) != 0 {
-		t.Fatalf("outcome=%v calls=%v", outcome, h.provider.deletedIDs())
-	}
-}
-
 func TestPruneUnplacedEntryIsDeletedWithoutProviderCall(t *testing.T) {
 	t.Parallel()
 	h := newPruneHarness(t, config.PruneModeDelete)
@@ -556,13 +535,9 @@ func TestPruneCoHolderAddedAfterSnapshotStopsProviderDelete(t *testing.T) {
 	h := newPruneHarness(t, config.PruneModeDelete)
 	h.addEntry(t, "aaaa", shareID("42"))
 	cs := h.cands(t, "aaaa")
-	st, err := h.m.pruneHolders()
-	if err != nil {
-		t.Fatal(err)
-	}
 	h.addEntry(t, "late", shareID("42"))
 
-	outcome, size := h.m.pruneOne(cs[0], st)
+	outcome, size := h.m.pruneOne(cs[0])
 
 	if outcome != pruneDeleted || size != 0 || h.has("aaaa") || !h.has("late") || len(h.provider.deletedIDs()) != 0 {
 		t.Fatalf("outcome=%v size=%d calls=%v", outcome, size, h.provider.deletedIDs())
@@ -688,5 +663,43 @@ func TestPruneMultiProviderPartialFailureRetriesViaNotFound(t *testing.T) {
 	deleted, failed, _ = h.m.pruneEntries(context.Background(), h.cands(t, "aaaa"))
 	if deleted != 1 || failed != 0 || h.has("aaaa") {
 		t.Fatalf("second run deleted=%d failed=%d", deleted, failed)
+	}
+}
+
+func TestPruneSplitFamilySharingOnePlacementCallsProviderOnce(t *testing.T) {
+	t.Parallel()
+	h := newPruneHarness(t, config.PruneModeDelete)
+	h.addEntry(t, "par", shareID("42"))
+	h.addEntry(t, "ch1", shareID("42"))
+	h.addEntry(t, "ch2", shareID("42"))
+
+	deleted, failed, freed := h.m.pruneEntries(context.Background(), h.cands(t, "par", "ch1", "ch2"))
+
+	if deleted != 3 || failed != 0 || freed != 100 || len(h.provider.deletedIDs()) != 1 {
+		t.Fatalf("deleted=%d failed=%d freed=%d calls=%v", deleted, failed, freed, h.provider.deletedIDs())
+	}
+	if h.has("par") || h.has("ch1") || h.has("ch2") {
+		t.Fatal("family member survived")
+	}
+}
+
+func TestPruneFailureCountDroppedOnceEntryLeavesCandidates(t *testing.T) {
+	t.Parallel()
+	h := newPruneHarness(t, config.PruneModeDelete)
+	h.reference(t, h.addEntry(t, "keep", nil))
+	e := h.addEntry(t, "bbbb", nil)
+	h.run(t)
+	h.age(t, pruneGrace)
+	h.provider.deleteErr = func(string) error { return errors.New("500") }
+	h.provider.lookup = func(id string) (*types.Torrent, error) { return &types.Torrent{ID: id}, nil }
+	if r := h.run(t); r.Failed != 1 || h.m.pruneFails["bbbb"] != 1 {
+		t.Fatalf("report %+v fails %v", r, h.m.pruneFails)
+	}
+	h.reference(t, e)
+
+	h.run(t)
+
+	if _, ok := h.m.pruneFails["bbbb"]; ok {
+		t.Fatalf("stale failure count: %v", h.m.pruneFails)
 	}
 }

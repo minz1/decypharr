@@ -14,9 +14,7 @@ import (
 
 const pruneDay = 24 * time.Hour
 
-type placementKey struct{ provider, id string }
-
-type pruneHolders map[placementKey]map[string]struct{}
+var errPlacementHeld = errors.New("placement held by another entry")
 
 type pruneOutcome int
 
@@ -27,15 +25,7 @@ const (
 	pruneStorageFailed
 )
 
-func (m *Manager) pruneFailureCount(hash string) int {
-	m.pruneFailMu.Lock()
-	defer m.pruneFailMu.Unlock()
-	return m.pruneFails[hash]
-}
-
 func (m *Manager) recordPruneOutcome(hash string, outcome pruneOutcome) {
-	m.pruneFailMu.Lock()
-	defer m.pruneFailMu.Unlock()
 	if outcome != pruneFailed && outcome != pruneStorageFailed {
 		delete(m.pruneFails, hash)
 		return
@@ -50,16 +40,11 @@ func (m *Manager) pruneEntries(ctx context.Context, eligible []PruneCandidate) (
 	var deleted, failed int
 	var freed int64
 	defer func() { m.finishPruneBatch(deleted) }()
-	holders, err := m.pruneHolders()
-	if err != nil {
-		m.logger.Error().Err(err).Msg("prune delete skipped: cannot establish placement holders")
-		return 0, len(eligible), 0
-	}
 	for _, c := range eligible {
 		if ctx.Err() != nil {
 			break
 		}
-		outcome, size := m.pruneOne(c, holders)
+		outcome, size := m.pruneOne(c)
 		m.recordPruneOutcome(c.InfoHash, outcome)
 		switch outcome {
 		case pruneDeleted:
@@ -85,28 +70,7 @@ func (m *Manager) finishPruneBatch(deleted int) {
 	}
 }
 
-func (m *Manager) pruneHolders() (pruneHolders, error) {
-	holders := pruneHolders{}
-	err := m.storage.ForEachStrict(func(e *storage.Entry) error {
-		for name, p := range e.Providers {
-			if p == nil || p.ID == "" {
-				continue
-			}
-			key := placementKey{name, p.ID}
-			if holders[key] == nil {
-				holders[key] = map[string]struct{}{}
-			}
-			holders[key][e.InfoHash] = struct{}{}
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("list entries: %w", err)
-	}
-	return holders, nil
-}
-
-func (m *Manager) pruneOne(c PruneCandidate, holders pruneHolders) (pruneOutcome, int64) {
+func (m *Manager) pruneOne(c PruneCandidate) (pruneOutcome, int64) {
 	log := m.logger.With().Str("infohash", c.InfoHash).Logger()
 	e, err := m.storage.Get(c.InfoHash)
 	if errors.Is(err, appendstore.ErrKeyNotFound) {
@@ -125,7 +89,7 @@ func (m *Manager) pruneOne(c PruneCandidate, holders pruneHolders) (pruneOutcome
 	if reason := m.pruneExclusion(e, reacquiring); reason != "" {
 		return pruneSkipped, 0
 	}
-	removed, err := m.pruneRemovePlacements(e, holders)
+	removed, err := m.pruneRemovePlacements(e)
 	if err != nil {
 		log.Warn().Err(err).Msg("prune: provider removal failed, keeping entry")
 		return pruneFailed, 0
@@ -141,11 +105,6 @@ func (m *Manager) pruneOne(c PruneCandidate, holders pruneHolders) (pruneOutcome
 		m.strm.RemoveEntryAsync(e)
 	}
 	m.clearPruneKey(c.InfoHash)
-	for name, p := range e.Providers {
-		if p != nil {
-			delete(holders[placementKey{name, p.ID}], e.InfoHash)
-		}
-	}
 	log.Info().
 		Str("name", e.Name).
 		Str("provider", c.Provider).
@@ -164,17 +123,10 @@ func (m *Manager) clearPruneKey(hash string) {
 	}
 }
 
-func (m *Manager) pruneRemovePlacements(e *storage.Entry, holders pruneHolders) (bool, error) {
+func (m *Manager) pruneRemovePlacements(e *storage.Entry) (bool, error) {
 	removed := false
 	for name, p := range e.Providers {
 		if p == nil || p.ID == "" {
-			continue
-		}
-		set := holders[placementKey{name, p.ID}]
-		if _, self := set[e.InfoHash]; !self {
-			return removed, fmt.Errorf("placement %s/%s is not in the holder snapshot", name, p.ID)
-		}
-		if len(set) > 1 {
 			continue
 		}
 		ran, err := m.removePlacement(name, p.ID, e.InfoHash)
@@ -187,14 +139,16 @@ func (m *Manager) pruneRemovePlacements(e *storage.Entry, holders pruneHolders) 
 }
 
 func (m *Manager) placementHeldElsewhere(provider, id, self string) (bool, error) {
-	held := false
 	err := m.storage.ForEachStrict(func(e *storage.Entry) error {
 		if p := e.Providers[provider]; e.InfoHash != self && p != nil && p.ID == id {
-			held = true
+			return errPlacementHeld
 		}
 		return nil
 	})
-	return held, err
+	if errors.Is(err, errPlacementHeld) {
+		return true, nil
+	}
+	return false, err
 }
 
 func (m *Manager) removePlacement(provider, id, self string) (bool, error) {

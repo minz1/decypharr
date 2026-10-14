@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -383,8 +384,16 @@ func (m *Manager) pickEligible(candidates []PruneCandidate, now time.Time, limit
 			eligible = append(eligible, c)
 		}
 	}
+	current := make(map[string]struct{}, len(candidates))
+	for _, c := range candidates {
+		current[c.InfoHash] = struct{}{}
+	}
+	maps.DeleteFunc(m.pruneFails, func(hash string, _ int) bool {
+		_, ok := current[hash]
+		return !ok
+	})
 	slices.SortStableFunc(eligible, func(a, b PruneCandidate) int {
-		return cmp.Compare(m.pruneFailureCount(a.InfoHash), m.pruneFailureCount(b.InfoHash))
+		return cmp.Compare(m.pruneFails[a.InfoHash], m.pruneFails[b.InfoHash])
 	})
 	if len(eligible) > limit {
 		eligible = eligible[:limit]
