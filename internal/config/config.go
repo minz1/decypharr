@@ -339,6 +339,7 @@ type Config struct {
 	SkipAutoMove bool   `json:"skip_auto_move,omitempty"`
 
 	Repair RepairConfig `json:"repair,omitzero"`
+	Prune  Prune        `json:"prune,omitzero"`
 
 	Strm Strm `json:"strm,omitzero"`
 
@@ -448,7 +449,7 @@ func (c *Config) Validate() error {
 		return err
 	}
 
-	return nil
+	return c.Prune.validate(c.Strm.Enabled)
 }
 
 // GenerateAPIToken creates a new random API token.
@@ -650,6 +651,7 @@ func (c *Config) setDefaults() {
 	c.setShareCacheDefaults()
 
 	c.applyRepairDefaults()
+	c.applyPruneDefaults()
 	c.setStrmDefaults()
 }
 
