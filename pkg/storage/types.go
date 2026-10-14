@@ -88,6 +88,7 @@ type Entry struct {
 	DownloadUncached bool                  `msgpack:"download_uncached,omitempty" json:"download_uncached,omitempty"` // Force uncached download
 	CallbackURL      string                `msgpack:"callback_url,omitempty"      json:"callback_url,omitempty"`      // Callback URL for completion
 	SkipMultiSeason  bool                  `msgpack:"skip_multi_season,omitempty" json:"skip_multi_season,omitempty"` // Skip multi-season detection
+	Manual           bool                  `msgpack:"manual,omitempty"            json:"manual,omitempty"`            // Added through the API
 
 	// Error tracking
 	LastError     string     `msgpack:"last_error,omitempty"      json:"last_error,omitempty"`      // Last error message

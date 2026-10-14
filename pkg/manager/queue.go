@@ -49,6 +49,7 @@ type ImportRequest struct {
 	DownloadUncached *bool                 `json:"downloadUncached"`
 	CallBackURL      string                `json:"callBackURL"`
 	SkipMultiSeason  bool                  `json:"skip_multi_season"`
+	Manual           bool                  `json:"manual"`
 
 	Status      string    `json:"status"`
 	CompletedAt time.Time `json:"completedAt"`

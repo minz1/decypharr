@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sirrobot01/decypharr/internal/utils"
+	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/manager"
 	"github.com/sirrobot01/decypharr/pkg/manager/managertest"
 )
@@ -57,5 +59,17 @@ func TestImportPreservesPreparationErrors(t *testing.T) {
 			strings.Contains(results[i].Error, "<nil>") {
 			t.Errorf("result %d lost the source error: %+v", i, results[i])
 		}
+	}
+}
+
+func TestAddOptionsRequestsAreManual(t *testing.T) {
+	t.Parallel()
+	opts := &addOptions{instance: arr.Arr{Name: "sonarr"}}
+	magnet := &utils.Magnet{Name: "Show", InfoHash: "abc"}
+	if !opts.torrent(magnet).Manual {
+		t.Fatal("torrent request is not Manual")
+	}
+	if !opts.nzb("n", []byte("x")).Manual {
+		t.Fatal("nzb request is not Manual")
 	}
 }

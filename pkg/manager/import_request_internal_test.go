@@ -56,3 +56,32 @@ func TestNewNZBQueueEntryKeepsArrPacksWhole(t *testing.T) {
 		t.Fatal("sabnzbd entry SkipMultiSeason = false, want true")
 	}
 }
+
+func TestQueueEntriesCarryManual(t *testing.T) {
+	t.Parallel()
+
+	magnet := &utils.Magnet{Name: "Show", InfoHash: "abc"}
+	tests := []struct {
+		name   string
+		typ    ImportType
+		manual bool
+	}{
+		{"api manual", ImportTypeAPI, true},
+		{"qbit", ImportTypeQBit, false},
+		{"sabnzbd", ImportTypeSABnzbd, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			torrentReq := &ImportRequest{Type: tt.typ, Manual: tt.manual, Magnet: magnet}
+			torrentEntry := newTorrentQueueEntry(torrentReq, debridTypes.TorrentStatusDownloading, "")
+			if torrentEntry.Manual != tt.manual {
+				t.Fatalf("torrent entry Manual = %v, want %v", torrentEntry.Manual, tt.manual)
+			}
+			nzbReq := &ImportRequest{ID: "nzb-1", Name: "Show", Type: tt.typ, Manual: tt.manual}
+			if got := newNZBQueueEntry(nzbReq, "/x").Manual; got != tt.manual {
+				t.Fatalf("nzb entry Manual = %v, want %v", got, tt.manual)
+			}
+		})
+	}
+}

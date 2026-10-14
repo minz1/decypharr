@@ -164,6 +164,7 @@ func EntryToProto(e *Entry) *EntryProto {
 		DownloadUncached: e.DownloadUncached,
 		CallbackUrl:      e.CallbackURL,
 		SkipMultiSeason:  e.SkipMultiSeason,
+		Manual:           e.Manual,
 		LastError:        e.LastError,
 		ErrorCount:       clampInt32(e.ErrorCount),
 	}
@@ -232,6 +233,7 @@ func ProtoToEntry(pb *EntryProto) *Entry {
 		DownloadUncached: pb.GetDownloadUncached(),
 		CallbackURL:      pb.GetCallbackUrl(),
 		SkipMultiSeason:  pb.GetSkipMultiSeason(),
+		Manual:           pb.GetManual(),
 		LastError:        pb.GetLastError(),
 		ErrorCount:       int(pb.GetErrorCount()),
 	}

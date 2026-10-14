@@ -148,6 +148,7 @@ func newTorrentQueueEntry(
 		Action:           importReq.Action,
 		CallbackURL:      importReq.CallBackURL,
 		SkipMultiSeason:  importReq.skipMultiSeason(),
+		Manual:           importReq.Manual,
 		CreatedAt:        now,
 		UpdatedAt:        now,
 		AddedOn:          now,

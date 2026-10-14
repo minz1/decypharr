@@ -11,6 +11,7 @@ import (
 // shares the same infohash. This preserves placements, files, and tags from
 // the existing entry that the incoming entry may not know about.
 func HandleExistingEntryMerge(existing, incoming *Entry) *Entry {
+	incoming.Manual = incoming.Manual || existing.Manual
 	if incoming.Protocol == config.ProtocolNZB {
 		return incoming
 	}

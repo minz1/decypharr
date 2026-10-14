@@ -114,3 +114,14 @@ func TestUsenetEntryHasOnePlacement(t *testing.T) {
 		t.Fatalf("loaded providers = %v, want only %q", loaded.Providers, storage.UsenetProvider)
 	}
 }
+
+func TestEntryProtoRoundTripsManual(t *testing.T) {
+	t.Parallel()
+	got := storage.ProtoToEntry(storage.EntryToProto(&storage.Entry{InfoHash: "h", Manual: true}))
+	if !got.Manual {
+		t.Fatal("Manual lost in proto round trip")
+	}
+	if storage.ProtoToEntry(&storage.EntryProto{}).Manual {
+		t.Fatal("record without field 40 decoded Manual=true")
+	}
+}

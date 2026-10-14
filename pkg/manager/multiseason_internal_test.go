@@ -77,3 +77,21 @@ func TestSeasonFanOutIDsAreDerivedFromPackAndSeason(t *testing.T) {
 		}
 	}
 }
+
+func TestSeasonSplitChildrenInheritManual(t *testing.T) {
+	t.Parallel()
+	pack := &storage.Entry{InfoHash: "pack", Name: "Show.S01-S02", Manual: true}
+	seasons := []SeasonInfo{
+		{SeasonNumber: 1, InfoHash: "s1", Name: "Show.S01"},
+		{SeasonNumber: 2, InfoHash: "s2", Name: "Show.S02"},
+	}
+	children := convertToMultiSeason(pack, seasons)
+	if len(children) != 2 {
+		t.Fatalf("children = %d, want 2", len(children))
+	}
+	for _, child := range children {
+		if !child.Manual {
+			t.Fatalf("child %s lost Manual", child.InfoHash)
+		}
+	}
+}

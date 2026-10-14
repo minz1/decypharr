@@ -337,6 +337,7 @@ func newNZBQueueEntry(req *ImportRequest, stagedPath string) *storage.Entry {
 		Action:           req.Action,
 		CallbackURL:      req.CallBackURL,
 		SkipMultiSeason:  req.skipMultiSeason(),
+		Manual:           req.Manual,
 		CreatedAt:        time.Now(),
 		UpdatedAt:        time.Now(),
 		AddedOn:          time.Now(),

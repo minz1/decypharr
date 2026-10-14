@@ -71,3 +71,24 @@ func TestRestoreLeavesActiveDownloadsOutsideSubmissionWorkers(t *testing.T) {
 		}
 	}
 }
+
+func TestRebuiltQueuedJobKeepsManual(t *testing.T) {
+	t.Parallel()
+	m := withTestConfig(t, &Manager{
+		arr:    arr.New(config.NewStore(&config.Config{}), nil, zerolog.Nop()),
+		logger: zerolog.Nop(),
+	})
+	for _, manual := range []bool{true, false} {
+		entry := &storage.Entry{
+			InfoHash: fmt.Sprintf("%040d", 1), Name: "entry", Protocol: config.ProtocolTorrent,
+			Manual: manual, Status: debridTypes.TorrentStatusQueued,
+		}
+		job, err := m.rebuildQueuedTorrentJob(entry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if job.Request.Manual != manual {
+			t.Fatalf("torrent rebuild Manual = %v, want %v", job.Request.Manual, manual)
+		}
+	}
+}

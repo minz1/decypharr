@@ -108,6 +108,7 @@ func convertToMultiSeason(torrent *storage.Entry, seasons []SeasonInfo) []*stora
 			Status:           debridTypes.TorrentStatusDownloading,
 			ActiveProvider:   torrent.ActiveProvider,
 			Action:           torrent.Action,
+			Manual:           torrent.Manual,
 			CreatedAt:        time.Now(),
 			UpdatedAt:        time.Now(),
 			AddedOn:          time.Now(),

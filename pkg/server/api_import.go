@@ -65,13 +65,17 @@ type addOptions struct {
 }
 
 func (o *addOptions) torrent(magnet *utils.Magnet) *manager.ImportRequest {
-	return manager.NewTorrentRequest(o.debrid, o.downloadFolder, magnet, o.instance, o.action,
+	req := manager.NewTorrentRequest(o.debrid, o.downloadFolder, magnet, o.instance, o.action,
 		o.downloadUncached, o.callbackURL, manager.ImportTypeAPI, o.skipMultiSeason)
+	req.Manual = true
+	return req
 }
 
 func (o *addOptions) nzb(name string, content []byte) *manager.ImportRequest {
-	return manager.NewNZBRequest(name, o.downloadFolder, content, o.instance, o.action,
+	req := manager.NewNZBRequest(name, o.downloadFolder, content, o.instance, o.action,
 		o.callbackURL, manager.ImportTypeAPI, o.skipMultiSeason)
+	req.Manual = true
+	return req
 }
 
 func (s *Server) parseAddOptions(r *http.Request) *addOptions {
