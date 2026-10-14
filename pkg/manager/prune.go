@@ -12,6 +12,7 @@ import (
 	"github.com/sirrobot01/appendstore"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
@@ -346,7 +347,7 @@ func (m *Manager) pruneExclusion(e *storage.Entry, reacquiring map[string]struct
 		return pruneExcludedManual
 	case m.pruneQueued(e.InfoHash):
 		return pruneExcludedQueued
-	case !e.IsComplete || e.State == storage.EntryStateDownloading:
+	case e.Status == debridTypes.TorrentStatusQueued || e.Status == debridTypes.TorrentStatusDownloading:
 		return pruneExcludedIncomplete
 	}
 	if _, ok := reacquiring[e.InfoHash]; ok {

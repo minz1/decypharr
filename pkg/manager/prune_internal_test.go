@@ -21,6 +21,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/arr/reacquire"
 	debrid "github.com/sirrobot01/decypharr/pkg/debrid/common"
+	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
@@ -116,8 +117,8 @@ func (h *pruneHarness) addEntry(t *testing.T, hash string, edit func(*storage.En
 		InfoHash:       hash,
 		Name:           "Show." + hash,
 		Size:           100,
-		State:          storage.EntryStatePausedUP,
-		IsComplete:     true,
+		State:          storage.EntryStateDownloading,
+		Status:         debridTypes.TorrentStatusDownloaded,
 		ActiveProvider: "torbox",
 		Providers:      map[string]*storage.ProviderEntry{"torbox": {Provider: "torbox", ID: "id-" + hash}},
 		Files: map[string]*storage.File{
@@ -286,8 +287,10 @@ func TestPruneExclusions(t *testing.T) {
 	h.reference(t, keep)
 	h.addEntry(t, "man1", func(e *storage.Entry) { e.Manual = true })
 	h.addEntry(t, "que1", nil)
-	h.addEntry(t, "inc1", func(e *storage.Entry) { e.IsComplete = false })
-	h.addEntry(t, "dow1", func(e *storage.Entry) { e.State = storage.EntryStateDownloading })
+	h.addEntry(t, "inc1", func(e *storage.Entry) { e.Status = debridTypes.TorrentStatusQueued })
+	h.addEntry(t, "dow1", func(e *storage.Entry) { e.Status = debridTypes.TorrentStatusDownloading })
+	h.addEntry(t, "err1", func(e *storage.Entry) { e.Status = debridTypes.TorrentStatusError })
+	h.addEntry(t, "syn1", func(e *storage.Entry) { e.IsComplete, e.State = true, "" })
 	h.addEntry(t, "rea1", nil)
 	h.addEntry(t, "rea2", nil)
 	h.addEntry(t, "free", nil)
@@ -304,7 +307,7 @@ func TestPruneExclusions(t *testing.T) {
 
 	want := map[string]string{
 		"man1": "manual", "que1": "queued", "inc1": "incomplete", "dow1": "incomplete",
-		"rea1": "reacquire", "rea2": "", "free": "",
+		"rea1": "reacquire", "rea2": "", "free": "", "err1": "", "syn1": "",
 	}
 	for hash, reason := range want {
 		if got := candidate(t, r, hash).Excluded; got != reason {
@@ -313,15 +316,15 @@ func TestPruneExclusions(t *testing.T) {
 	}
 	got := eligibleHashes(h, r)
 	slices.Sort(got)
-	if !slices.Equal(got, []string{"free", "rea2"}) {
+	if !slices.Equal(got, []string{"err1", "free", "rea2", "syn1"}) {
 		t.Fatalf("eligible %v", got)
 	}
-	if len(h.handed()) != 2 {
+	if len(h.handed()) != 4 {
 		t.Fatalf("handed %v", h.handed())
 	}
 	handed := h.handed()
 	slices.Sort(handed)
-	if !slices.Equal(handed, []string{"free", "rea2"}) {
+	if !slices.Equal(handed, []string{"err1", "free", "rea2", "syn1"}) {
 		t.Fatalf("handed %v", h.handed())
 	}
 }
@@ -721,7 +724,7 @@ func TestPruneIgnoresMigrationStatusRecord(t *testing.T) {
 func TestPruneExcludedEntriesAreNotStamped(t *testing.T) {
 	t.Parallel()
 	h := scanGapHarness(t)
-	inc := h.addEntry(t, "inc1", func(e *storage.Entry) { e.IsComplete = false })
+	inc := h.addEntry(t, "inc1", func(e *storage.Entry) { e.Status = debridTypes.TorrentStatusDownloading })
 
 	h.run(t)
 	h.age(t, 8*24*time.Hour)
@@ -735,7 +738,7 @@ func TestPruneExcludedEntriesAreNotStamped(t *testing.T) {
 		t.Fatal("excluded entry stamped")
 	}
 
-	inc.IsComplete = true
+	inc.Status = debridTypes.TorrentStatusDownloaded
 	if err := h.m.storage.AddOrUpdate(inc); err != nil {
 		t.Fatal(err)
 	}
