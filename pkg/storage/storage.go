@@ -26,7 +26,7 @@ const (
 
 // storeNames lists the databases NewStorage opens, one file each.
 func storeNames() []string {
-	return []string{"entries", "queue", "items", "repair_state", "repair_runs"}
+	return []string{"entries", "queue", "items", "repair_state", "repair_runs", "prune"}
 }
 
 // legacyStoreNames are buckets from the v1 repair system. They are removed
@@ -42,6 +42,7 @@ type Storage struct {
 	entryItems  *kvstore.Store
 	repairState *kvstore.Store
 	repairRuns  *kvstore.Store
+	prune       *kvstore.Store
 	dir         string
 	logger      zerolog.Logger
 	naming      func() config.WebDavFolderNaming
@@ -143,6 +144,7 @@ func NewStorage(dbPath string, opts Options) (*Storage, error) {
 		entryItems:  itemStores["items"],
 		repairState: itemStores["repair_state"],
 		repairRuns:  itemStores["repair_runs"],
+		prune:       itemStores["prune"],
 		dir:         dbPath,
 		logger:      log,
 		naming:      opts.FolderNaming,
@@ -167,7 +169,7 @@ func (s *Storage) folderNaming() config.WebDavFolderNaming {
 
 func (s *Storage) Close() error {
 	var errs []error
-	stores := []*kvstore.Store{s.entries, s.queue, s.entryItems, s.repairState, s.repairRuns}
+	stores := []*kvstore.Store{s.entries, s.queue, s.entryItems, s.repairState, s.repairRuns, s.prune}
 	for _, store := range stores {
 		if store == nil {
 			continue
@@ -185,7 +187,7 @@ func (s *Storage) Close() error {
 // DiskSize returns the total on-disk size of all stores (O(1), no filesystem walk).
 func (s *Storage) DiskSize() int64 {
 	var size int64
-	for _, store := range []*kvstore.Store{s.entries, s.queue, s.entryItems, s.repairState, s.repairRuns} {
+	for _, store := range []*kvstore.Store{s.entries, s.queue, s.entryItems, s.repairState, s.repairRuns, s.prune} {
 		if store != nil {
 			size += store.DiskSize()
 		}
