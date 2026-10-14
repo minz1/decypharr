@@ -18,7 +18,6 @@ type ArrRecovery interface {
 	Reacquire(reacquire.Request) (*reacquire.Job, error)
 	FailDownload(arrName, downloadID, entryID string) (*reacquire.Job, error)
 	Jobs() []reacquire.Job
-	DeleteBinding(entryID, fileID string) error
 	Ready() bool
 }
 

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/sirrobot01/appendstore"
@@ -327,7 +326,7 @@ func pruneCandidates(
 		c := PruneCandidate{
 			InfoHash: hash,
 			Name:     e.Name,
-			Provider: pruneProvider(e),
+			Provider: e.ActiveProvider,
 			Excluded: excluded[hash],
 			Size:     e.Size,
 		}
@@ -388,18 +387,6 @@ func referencedEntries(entries map[string]*storage.Entry, scan referenceScan) ma
 func (m *Manager) pruneQueued(infohash string) bool {
 	_, err := m.Queue().GetTorrent(infohash)
 	return !errors.Is(err, appendstore.ErrKeyNotFound)
-}
-
-func pruneProvider(e *storage.Entry) string {
-	if e.ActiveProvider != "" {
-		return e.ActiveProvider
-	}
-	names := make([]string, 0, len(e.Providers))
-	for name := range e.Providers {
-		names = append(names, name)
-	}
-	slices.Sort(names)
-	return strings.Join(names, ",")
 }
 
 func compareCandidates(a, b PruneCandidate) int {

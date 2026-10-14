@@ -38,21 +38,13 @@ type fakeArrRecovery struct {
 	onFail       func(entryID string)
 	reacquireErr error
 
-	jobs            []reacquire.Job
-	notReady        bool
-	deletedBindings [][2]string
+	jobs     []reacquire.Job
+	notReady bool
 }
 
 func (f *fakeArrRecovery) Ready() bool { return !f.notReady }
 
 func (f *fakeArrRecovery) Jobs() []reacquire.Job { return f.jobs }
-
-func (f *fakeArrRecovery) DeleteBinding(entryID, fileID string) error {
-	f.failMu.Lock()
-	defer f.failMu.Unlock()
-	f.deletedBindings = append(f.deletedBindings, [2]string{entryID, fileID})
-	return nil
-}
 
 func (f *fakeArrRecovery) FailDownload(arrName, downloadID, entryID string) (*reacquire.Job, error) {
 	f.failMu.Lock()

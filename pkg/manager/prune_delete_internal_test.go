@@ -145,9 +145,6 @@ func TestPruneDeletesPlacementThenRecord(t *testing.T) {
 	if h.has("aaaa") || h.ledgerHas(t, "aaaa") {
 		t.Fatal("entry or ledger key survived")
 	}
-	if len(h.fake.deletedBindings) != 0 {
-		t.Fatalf("bindings touched: %v", h.fake.deletedBindings)
-	}
 }
 
 func TestPruneSharedPlacementWaitsForLastHolder(t *testing.T) {

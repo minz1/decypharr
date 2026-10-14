@@ -97,7 +97,7 @@ func (r *referenceScan) addLink(link, mount string, lookup lookupFunc) error {
 }
 
 func (r *referenceScan) addMountTarget(link, target, mount string, lookup lookupFunc) error {
-	rest, ok := strings.CutPrefix(target, filepath.Join(mount, "__all__")+"/")
+	rest, ok := strings.CutPrefix(target, filepath.Join(mount, EntryAllFolder)+"/")
 	folder, file, found := strings.Cut(rest, "/")
 	if !ok || !found || folder == "" || file == "" || strings.Contains(file, "/") {
 		return fmt.Errorf("unparseable link into mount: %s -> %s", link, target)

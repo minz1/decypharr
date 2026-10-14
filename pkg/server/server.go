@@ -53,7 +53,6 @@ type Server struct {
 	router      *chi.Mux
 	logger      zerolog.Logger
 	manager     *manager.Manager
-	prune       pruner
 	stats       *stats.Collector
 	cookie      *sessions.CookieStore
 	templates   *template.Template
@@ -103,7 +102,6 @@ func New(mgr *manager.Manager, store *config.Store, logs *logger.Factory) *Serve
 		logsDir:   logger.Dir(cfg.Dir()),
 		logger:    l,
 		manager:   mgr,
-		prune:     mgr,
 		stats:     statsCollector,
 		cookie:    cookieStore,
 		templates: templates,

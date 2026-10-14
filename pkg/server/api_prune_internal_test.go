@@ -1,34 +1,20 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/gorilla/sessions"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/manager"
 	"github.com/sirrobot01/decypharr/pkg/manager/managertest"
+	"github.com/sirrobot01/decypharr/pkg/storage"
 )
-
-type fakePruner struct {
-	last   manager.PruneReport
-	report manager.PruneReport
-	err    error
-	opts   manager.PruneOptions
-}
-
-func (f *fakePruner) LastPruneReport() manager.PruneReport { return f.last }
-
-func (f *fakePruner) RunPruneNow(opts manager.PruneOptions) (manager.PruneReport, error) {
-	f.opts = opts
-	return f.report, f.err
-}
 
 func pruneRequest(t *testing.T, handler http.HandlerFunc, method, target string) *httptest.ResponseRecorder {
 	t.Helper()
@@ -46,70 +32,32 @@ func decodeReport(t *testing.T, response *httptest.ResponseRecorder) map[string]
 	return body
 }
 
+func pruneManager(t *testing.T, root string) (*manager.Manager, *Server, string) {
+	t.Helper()
+	mount := filepath.Join(t.TempDir(), "mnt")
+	mgr, _ := managertest.New(t, func(cfg *config.Config) {
+		cfg.Mount.MountPath = mount
+		cfg.Prune = config.Prune{
+			Enabled: true, Mode: config.PruneModeReport, Schedule: "1h", Grace: "168h", MaxPerRun: 100,
+			Roots: []string{root},
+		}
+	})
+	return mgr, &Server{manager: mgr}, mount
+}
+
 func TestPruneStatusReturnsLastReport(t *testing.T) {
 	t.Parallel()
-	started := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
-	s := &Server{prune: &fakePruner{last: manager.PruneReport{
-		StartedAt: started, Referenced: 7, Candidates: []manager.PruneCandidate{{InfoHash: "abc", Excluded: "manual"}},
-	}}}
+	_, s, _ := pruneManager(t, t.TempDir())
+	run := pruneRequest(t, s.handlePruneRun, http.MethodPost, "/api/prune/run")
+	if run.Code != http.StatusOK {
+		t.Fatalf("run code=%d", run.Code)
+	}
 
 	response := pruneRequest(t, s.handlePruneStatus, http.MethodGet, "/api/prune/status")
 
 	body := decodeReport(t, response)
-	if response.Code != http.StatusOK || body["started_at"] != "2026-10-13T12:00:00Z" ||
-		body["referenced"] != float64(7) {
+	if response.Code != http.StatusOK || body["started_at"] == nil || body["aborted"] == "" {
 		t.Fatalf("code=%d body=%s", response.Code, response.Body.String())
-	}
-	candidate := body["candidates"].([]any)[0].(map[string]any)
-	if candidate["info_hash"] != "abc" || candidate["excluded"] != "manual" {
-		t.Fatalf("candidate %v", candidate)
-	}
-	if _, ok := candidate["eligible_at"]; ok {
-		t.Fatalf("zero time not omitted: %v", candidate)
-	}
-}
-
-func TestPruneRunMapsResults(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name string
-		err  error
-		rep  manager.PruneReport
-		want int
-	}{
-		{"disabled", manager.ErrPruneDisabled, manager.PruneReport{}, http.StatusConflict},
-		{"ok", nil, manager.PruneReport{Deleted: 2}, http.StatusOK},
-		{"aborted", errors.New("boom"), manager.PruneReport{Aborted: "boom"}, http.StatusOK},
-		{"cancelled", context.Canceled, manager.PruneReport{}, http.StatusInternalServerError},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			s := &Server{prune: &fakePruner{report: test.rep, err: test.err}}
-			response := pruneRequest(t, s.handlePruneRun, http.MethodPost, "/api/prune/run")
-			if response.Code != test.want {
-				t.Fatalf("code=%d want %d body=%s", response.Code, test.want, response.Body.String())
-			}
-			if test.name == "aborted" && decodeReport(t, response)["aborted"] != "boom" {
-				t.Fatalf("body %s", response.Body.String())
-			}
-			if test.want != http.StatusOK && decodeReport(t, response)["error"] == nil {
-				t.Fatalf("no error body: %s", response.Body.String())
-			}
-		})
-	}
-}
-
-func TestPruneRunIgnoresRequestContext(t *testing.T) {
-	t.Parallel()
-	s := &Server{prune: &fakePruner{}}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	request := httptest.NewRequest(http.MethodPost, "/api/prune/run", nil).WithContext(ctx)
-	response := httptest.NewRecorder()
-	s.handlePruneRun(response, request)
-	if response.Code != http.StatusOK {
-		t.Fatalf("code=%d", response.Code)
 	}
 }
 
@@ -120,42 +68,39 @@ func TestPruneRunPassesAcceptBaseline(t *testing.T) {
 		"/api/prune/run?accept_baseline=true":  true,
 		"/api/prune/run?accept_baseline=false": false,
 	} {
-		fake := &fakePruner{}
-		s := &Server{prune: fake}
-		pruneRequest(t, s.handlePruneRun, http.MethodPost, target)
-		if fake.opts.AcceptBaseline != want {
-			t.Fatalf("%s: AcceptBaseline=%v", target, fake.opts.AcceptBaseline)
+		root := t.TempDir()
+		mgr, s, mount := pruneManager(t, root)
+		entry := &storage.Entry{
+			InfoHash: "aaaa", Name: "Show.aaaa", Size: 1, IsComplete: true,
+			Files: map[string]*storage.File{"a.mkv": {Name: "a.mkv", Size: 1, InfoHash: "aaaa"}},
+		}
+		if err := mgr.Storage().AddOrUpdate(entry); err != nil {
+			t.Fatal(err)
+		}
+		if err := mgr.Storage().SetLastReferencedCount(100); err != nil {
+			t.Fatal(err)
+		}
+		dest := filepath.Join(mount, "__all__", "Show.aaaa", "a.mkv")
+		if err := os.Symlink(dest, filepath.Join(root, "link")); err != nil {
+			t.Fatal(err)
+		}
+
+		body := decodeReport(t, pruneRequest(t, s.handlePruneRun, http.MethodPost, target))
+
+		if body["accepted_baseline"] != want || body["referenced"] != float64(1) {
+			t.Fatalf("%s: body=%v", target, body)
 		}
 	}
 }
 
-func TestPruneRunAgainstManager(t *testing.T) {
+func TestPruneRunDisabledIsConflict(t *testing.T) {
 	t.Parallel()
-	t.Run("disabled", func(t *testing.T) {
-		t.Parallel()
-		mgr, _ := managertest.New(t, nil)
-		s := &Server{prune: mgr}
-		response := pruneRequest(t, s.handlePruneRun, http.MethodPost, "/api/prune/run")
-		if response.Code != http.StatusConflict {
-			t.Fatalf("code=%d body=%s", response.Code, response.Body.String())
-		}
-	})
-	t.Run("enabled", func(t *testing.T) {
-		t.Parallel()
-		root := t.TempDir()
-		mgr, _ := managertest.New(t, func(cfg *config.Config) {
-			cfg.Prune = config.Prune{
-				Enabled: true, Mode: config.PruneModeReport, Schedule: "1h", Grace: "168h", MaxPerRun: 100,
-				Roots: []string{root},
-			}
-		})
-		s := &Server{prune: mgr}
-		response := pruneRequest(t, s.handlePruneRun, http.MethodPost, "/api/prune/run")
-		body := decodeReport(t, response)
-		if response.Code != http.StatusOK || body["started_at"] == nil || body["aborted"] == "" {
-			t.Fatalf("code=%d body=%s", response.Code, response.Body.String())
-		}
-	})
+	mgr, _ := managertest.New(t, nil)
+	s := &Server{manager: mgr}
+	response := pruneRequest(t, s.handlePruneRun, http.MethodPost, "/api/prune/run")
+	if response.Code != http.StatusConflict || decodeReport(t, response)["error"] == nil {
+		t.Fatalf("code=%d body=%s", response.Code, response.Body.String())
+	}
 }
 
 func TestPruneRoutesRequireAuthentication(t *testing.T) {

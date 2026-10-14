@@ -55,11 +55,7 @@ func (s *Storage) UnreferencedSince() (map[string]time.Time, error) {
 }
 
 func (s *Storage) SetUnreferencedSince(infohash string, t time.Time) error {
-	b, err := encodeInt64(t.Unix())
-	if err != nil {
-		return err
-	}
-	return s.prune.Put(infohash, b, nil)
+	return s.setInt64(infohash, t.Unix())
 }
 
 func (s *Storage) ClearUnreferencedSince(infohashes ...string) error {
@@ -71,48 +67,43 @@ func (s *Storage) ClearUnreferencedSince(infohashes ...string) error {
 	return nil
 }
 
-func (s *Storage) LastReferencedCount() (int, bool, error) {
-	data, err := s.prune.Get(lastReferencedKey)
+func (s *Storage) getInt64(key string) (int64, bool, error) {
+	data, err := s.prune.Get(key)
 	if errors.Is(err, appendstore.ErrKeyNotFound) {
 		return 0, false, nil
 	}
 	if err != nil {
 		return 0, false, err
 	}
-	n, err := decodeInt64(lastReferencedKey, data)
-	if err != nil {
-		return 0, false, err
-	}
-	return int(n), true, nil
+	v, err := decodeInt64(key, data)
+	return v, err == nil, err
 }
 
-func (s *Storage) SetLastReferencedCount(n int) error {
-	b, err := encodeInt64(int64(n))
+func (s *Storage) setInt64(key string, v int64) error {
+	b, err := encodeInt64(v)
 	if err != nil {
 		return err
 	}
-	return s.prune.Put(lastReferencedKey, b, nil)
+	return s.prune.Put(key, b, nil)
+}
+
+func (s *Storage) LastReferencedCount() (int, bool, error) {
+	n, ok, err := s.getInt64(lastReferencedKey)
+	return int(n), ok, err
+}
+
+func (s *Storage) SetLastReferencedCount(n int) error {
+	return s.setInt64(lastReferencedKey, int64(n))
 }
 
 func (s *Storage) LastScan() (time.Time, bool, error) {
-	data, err := s.prune.Get(lastScanKey)
-	if errors.Is(err, appendstore.ErrKeyNotFound) {
-		return time.Time{}, false, nil
-	}
-	if err != nil {
-		return time.Time{}, false, err
-	}
-	secs, err := decodeInt64(lastScanKey, data)
-	if err != nil {
+	secs, ok, err := s.getInt64(lastScanKey)
+	if !ok {
 		return time.Time{}, false, err
 	}
 	return time.Unix(secs, 0), true, nil
 }
 
 func (s *Storage) SetLastScan(t time.Time) error {
-	b, err := encodeInt64(t.Unix())
-	if err != nil {
-		return err
-	}
-	return s.prune.Put(lastScanKey, b, nil)
+	return s.setInt64(lastScanKey, t.Unix())
 }
