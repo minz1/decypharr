@@ -65,6 +65,7 @@ func newPruneHarness(t *testing.T, mode config.PruneMode) *pruneHarness {
 		logger:   zerolog.New(h.logs),
 		pruneNow: func() time.Time { return h.now },
 	}
+	h.m.entry = newEntryCache(func(string) bool { return false }, nil, nil)
 	h.provider = &fakePruneProvider{}
 	h.m.clients.Store("torbox", h.provider)
 	h.m.SetArrRecovery(h.fake)
@@ -820,3 +821,57 @@ func TestPruneStoredReportDoesNotShareReturnedSlice(t *testing.T) {
 }
 
 func (h *pruneHarness) handed() []string { return h.provider.deletedHashes() }
+
+func TestPruneSplitChildrenAndParentAreReferencedThroughChildFolders(t *testing.T) {
+	t.Parallel()
+	h := newPruneHarness(t, config.PruneModeReport)
+	h.reference(t, h.addEntry(t, "keep", nil))
+	h.addEntry(t, "par", nil)
+	for _, hash := range []string{"ch1", "ch2"} {
+		child := h.addEntry(t, hash, func(e *storage.Entry) {
+			e.Files["a.mkv"].InfoHash = "par"
+		})
+		h.reference(t, child)
+	}
+	h.run(t)
+	h.age(t, 2*24*time.Hour)
+
+	r := h.run(t)
+
+	if len(r.Candidates) != 0 || len(h.ledger(t)) != 0 {
+		t.Fatalf("candidates %+v ledger %v", r.Candidates, h.ledger(t))
+	}
+}
+
+func TestPruneHiddenSameNameDuplicateStaysPrunable(t *testing.T) {
+	t.Parallel()
+	h := newPruneHarness(t, config.PruneModeReport)
+	h.reference(t, h.addEntry(t, "keep", nil))
+	h.addEntry(t, "dupo", func(e *storage.Entry) { e.Name = "Same.Name" })
+	newer := h.addEntry(t, "dupn", func(e *storage.Entry) {
+		e.Name = "Same.Name"
+		e.Files["a.mkv"].AddedOn = h.now.Add(time.Hour)
+	})
+	h.reference(t, newer)
+
+	r := h.run(t)
+
+	if _, ok := h.ledger(t)["dupo"]; !ok || h.ledgerHas(t, "dupn") || len(r.Candidates) != 1 {
+		t.Fatalf("candidates %+v ledger %v", r.Candidates, h.ledger(t))
+	}
+}
+
+func TestReferencedEntriesIgnoresDeletedFiles(t *testing.T) {
+	t.Parallel()
+	entries := map[string]*storage.Entry{
+		"live": {Files: map[string]*storage.File{"a": {InfoHash: "par"}}},
+		"dead": {Files: map[string]*storage.File{"a": {InfoHash: "par", Deleted: true}}},
+	}
+	got := referencedEntries(entries, referenceScan{Referenced: map[string]struct{}{"par": {}}})
+	if _, ok := got["live"]; !ok {
+		t.Fatal("live child not referenced")
+	}
+	if _, ok := got["dead"]; ok {
+		t.Fatal("deleted file counted as a reference")
+	}
+}

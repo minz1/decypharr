@@ -79,6 +79,8 @@ type Manager struct {
 	pruneNow      func() time.Time
 	removeUsenet  func(id string) error
 	pruneReportMu sync.Mutex
+	pruneFailMu   sync.Mutex
+	pruneFails    map[string]int
 	lastPrune     PruneReport
 
 	// Migration jobs tracking

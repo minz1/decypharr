@@ -20,6 +20,7 @@ const (
 	pruneExcludedQueued     = "queued"
 	pruneExcludedIncomplete = "incomplete"
 	pruneExcludedReacquire  = "reacquire"
+	pruneExcludedBound      = "bound"
 )
 
 var ErrPruneDisabled = errors.New("prune is disabled")
@@ -139,26 +140,27 @@ func (m *Manager) pruneRun(ctx context.Context, cfg *config.Config, now time.Tim
 	if restart && len(ledger) > 0 {
 		m.logger.Info().Dur("gap", gap).Msg("prune clocks restarted")
 	}
-	excluded, err := m.pruneExclusions(entries, scan)
+	referenced := referencedEntries(entries, scan)
+	excluded, err := m.pruneExclusions(entries, referenced)
 	if err != nil {
 		return err
 	}
 	if err = ctx.Err(); err != nil {
 		return err
 	}
-	if err = m.updateLedger(ctx, scan, entries, excluded, restart, ledger, now, report); err != nil {
+	if err = m.updateLedger(ctx, scan, referenced, entries, excluded, restart, ledger, now, report); err != nil {
 		return err
 	}
-	report.Candidates = pruneCandidates(entries, ledger, excluded, scan, grace)
+	report.Candidates = pruneCandidates(entries, ledger, excluded, referenced, grace)
 	if prune.Mode != config.PruneModeDelete {
 		return nil
 	}
-	eligible := pickEligible(report.Candidates, now, prune.MaxPerRun)
+	eligible := m.pickEligible(report.Candidates, now, prune.MaxPerRun)
 	if len(eligible) == 0 {
 		return nil
 	}
 	report.Deleted, report.Failed, report.BytesFreed = m.pruneEntries(ctx, eligible)
-	return nil
+	return ctx.Err()
 }
 
 func (m *Manager) pruneSafetyChecks(scan referenceScan) error {
@@ -217,7 +219,7 @@ func (m *Manager) pruneInventory() (map[string]*storage.Entry, map[string]time.T
 }
 
 func (m *Manager) pruneExclusions(
-	entries map[string]*storage.Entry, scan referenceScan,
+	entries map[string]*storage.Entry, referenced map[string]struct{},
 ) (map[string]string, error) {
 	reacquiring, err := m.reacquiringEntries()
 	if err != nil {
@@ -225,7 +227,7 @@ func (m *Manager) pruneExclusions(
 	}
 	excluded := map[string]string{}
 	for hash, e := range entries {
-		if _, referenced := scan.Referenced[hash]; referenced {
+		if _, ok := referenced[hash]; ok {
 			continue
 		}
 		if reason := m.pruneExclusion(e, reacquiring); reason != "" {
@@ -236,12 +238,13 @@ func (m *Manager) pruneExclusions(
 }
 
 func (m *Manager) updateLedger(
-	ctx context.Context, scan referenceScan, entries map[string]*storage.Entry, excluded map[string]string,
+	ctx context.Context, scan referenceScan, refd map[string]struct{},
+	entries map[string]*storage.Entry, excluded map[string]string,
 	restart bool, ledger map[string]time.Time, now time.Time, report *PruneReport,
 ) error {
 	var stale []string
 	for hash := range ledger {
-		_, referenced := scan.Referenced[hash]
+		_, referenced := refd[hash]
 		_, present := entries[hash]
 		_, isExcluded := excluded[hash]
 		if referenced || !present || isExcluded {
@@ -262,7 +265,7 @@ func (m *Manager) updateLedger(
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		_, referenced := scan.Referenced[hash]
+		_, referenced := refd[hash]
 		_, isExcluded := excluded[hash]
 		if _, stamped := ledger[hash]; referenced || isExcluded || stamped {
 			continue
@@ -284,11 +287,11 @@ func (m *Manager) updateLedger(
 
 func pruneCandidates(
 	entries map[string]*storage.Entry, ledger map[string]time.Time, excluded map[string]string,
-	scan referenceScan, grace time.Duration,
+	referenced map[string]struct{}, grace time.Duration,
 ) []PruneCandidate {
 	var out []PruneCandidate
 	for hash, e := range entries {
-		if _, referenced := scan.Referenced[hash]; referenced {
+		if _, ok := referenced[hash]; ok {
 			continue
 		}
 		c := PruneCandidate{
@@ -320,7 +323,36 @@ func (m *Manager) pruneExclusion(e *storage.Entry, reacquiring map[string]struct
 	if _, ok := reacquiring[e.InfoHash]; ok {
 		return pruneExcludedReacquire
 	}
+	if m.pruneBound(e) {
+		return pruneExcludedBound
+	}
 	return ""
+}
+
+func (m *Manager) pruneBound(e *storage.Entry) bool {
+	for _, f := range e.Files {
+		if _, ok := m.lookupArrBinding(e.InfoHash, f.ID); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func referencedEntries(entries map[string]*storage.Entry, scan referenceScan) map[string]struct{} {
+	out := make(map[string]struct{}, len(scan.Referenced))
+	for hash, e := range entries {
+		if _, ok := scan.Referenced[hash]; ok {
+			out[hash] = struct{}{}
+			continue
+		}
+		for _, f := range e.Files {
+			if _, ok := scan.Referenced[f.InfoHash]; ok && !f.Deleted && f.InfoHash != "" {
+				out[hash] = struct{}{}
+				break
+			}
+		}
+	}
+	return out
 }
 
 func (m *Manager) pruneQueued(infohash string) bool {
@@ -344,13 +376,16 @@ func compareCandidates(a, b PruneCandidate) int {
 	return cmp.Or(a.UnreferencedSince.Compare(b.UnreferencedSince), cmp.Compare(a.InfoHash, b.InfoHash))
 }
 
-func pickEligible(candidates []PruneCandidate, now time.Time, limit int) []PruneCandidate {
+func (m *Manager) pickEligible(candidates []PruneCandidate, now time.Time, limit int) []PruneCandidate {
 	var eligible []PruneCandidate
 	for _, c := range candidates {
 		if c.eligible(now) {
 			eligible = append(eligible, c)
 		}
 	}
+	slices.SortStableFunc(eligible, func(a, b PruneCandidate) int {
+		return cmp.Compare(m.pruneFailureCount(a.InfoHash), m.pruneFailureCount(b.InfoHash))
+	})
 	if len(eligible) > limit {
 		eligible = eligible[:limit]
 	}

@@ -35,9 +35,6 @@ type MountManager interface {
 
 // InvalidateEntryCache clears cached entries. Reads rebuild them on demand.
 func (m *Manager) InvalidateEntryCache() {
-	if m.entry == nil {
-		return
-	}
 	m.entry.InvalidateAll()
 }
 

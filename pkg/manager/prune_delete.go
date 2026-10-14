@@ -16,6 +16,8 @@ const pruneDay = 24 * time.Hour
 
 type placementKey struct{ provider, id string }
 
+type pruneHolders map[placementKey]map[string]struct{}
+
 type pruneOutcome int
 
 const (
@@ -25,15 +27,30 @@ const (
 	pruneStorageFailed
 )
 
-type pruneState struct {
-	holders     map[placementKey]map[string]struct{}
-	reacquiring map[string]struct{}
+func (m *Manager) pruneFailureCount(hash string) int {
+	m.pruneFailMu.Lock()
+	defer m.pruneFailMu.Unlock()
+	return m.pruneFails[hash]
+}
+
+func (m *Manager) recordPruneOutcome(hash string, outcome pruneOutcome) {
+	m.pruneFailMu.Lock()
+	defer m.pruneFailMu.Unlock()
+	if outcome != pruneFailed && outcome != pruneStorageFailed {
+		delete(m.pruneFails, hash)
+		return
+	}
+	if m.pruneFails == nil {
+		m.pruneFails = map[string]int{}
+	}
+	m.pruneFails[hash]++
 }
 
 func (m *Manager) pruneEntries(ctx context.Context, eligible []PruneCandidate) (int, int, int64) {
 	var deleted, failed int
 	var freed int64
-	st, err := m.newPruneState()
+	defer func() { m.finishPruneBatch(deleted) }()
+	holders, err := m.pruneHolders()
 	if err != nil {
 		m.logger.Error().Err(err).Msg("prune delete skipped: cannot establish placement holders")
 		return 0, len(eligible), 0
@@ -42,7 +59,8 @@ func (m *Manager) pruneEntries(ctx context.Context, eligible []PruneCandidate) (
 		if ctx.Err() != nil {
 			break
 		}
-		outcome, size := m.pruneOne(c, st)
+		outcome, size := m.pruneOne(c, holders)
+		m.recordPruneOutcome(c.InfoHash, outcome)
 		switch outcome {
 		case pruneDeleted:
 			deleted++
@@ -50,32 +68,26 @@ func (m *Manager) pruneEntries(ctx context.Context, eligible []PruneCandidate) (
 		case pruneFailed:
 			failed++
 		case pruneStorageFailed:
-			failed++
-			return m.finishPruneBatch(deleted), failed, freed
+			return deleted, failed + 1, freed
 		case pruneSkipped:
 		}
 	}
-	return m.finishPruneBatch(deleted), failed, freed
+	return deleted, failed, freed
 }
 
-func (m *Manager) finishPruneBatch(deleted int) int {
+func (m *Manager) finishPruneBatch(deleted int) {
 	if deleted == 0 {
-		return 0
+		return
 	}
 	m.InvalidateEntryCache()
 	if err := m.RefreshMount(); err != nil {
 		m.logger.Error().Err(err).Msg("Mount refresh after prune failed")
 	}
-	return deleted
 }
 
-func (m *Manager) newPruneState() (*pruneState, error) {
-	reacquiring, err := m.reacquiringEntries()
-	if err != nil {
-		return nil, err
-	}
-	holders := map[placementKey]map[string]struct{}{}
-	err = m.storage.ForEachStrict(func(e *storage.Entry) error {
+func (m *Manager) pruneHolders() (pruneHolders, error) {
+	holders := pruneHolders{}
+	err := m.storage.ForEachStrict(func(e *storage.Entry) error {
 		for name, p := range e.Providers {
 			if p == nil || p.ID == "" {
 				continue
@@ -91,46 +103,47 @@ func (m *Manager) newPruneState() (*pruneState, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list entries: %w", err)
 	}
-	return &pruneState{holders: holders, reacquiring: reacquiring}, nil
+	return holders, nil
 }
 
-func (m *Manager) pruneOne(c PruneCandidate, st *pruneState) (pruneOutcome, int64) {
+func (m *Manager) pruneOne(c PruneCandidate, holders pruneHolders) (pruneOutcome, int64) {
 	log := m.logger.With().Str("infohash", c.InfoHash).Logger()
 	e, err := m.storage.Get(c.InfoHash)
 	if errors.Is(err, appendstore.ErrKeyNotFound) {
-		if clearErr := m.storage.ClearUnreferencedSince(c.InfoHash); clearErr != nil {
-			log.Warn().Err(clearErr).Msg("prune: clear ledger key of vanished entry failed")
-		}
+		m.clearPruneKey(c.InfoHash)
 		return pruneSkipped, 0
 	}
 	if err != nil {
 		log.Warn().Err(err).Msg("prune: read entry failed, keeping it")
 		return pruneFailed, 0
 	}
-	if reason := m.pruneExclusion(e, st.reacquiring); reason != "" {
-		return pruneSkipped, 0
-	}
-	if err = m.pruneDeleteBindings(e); err != nil {
-		log.Warn().Err(err).Msg("prune: delete arr binding failed, keeping entry")
+	reacquiring, err := m.reacquiringEntries()
+	if err != nil {
+		log.Warn().Err(err).Msg("prune: cannot check reacquire jobs, keeping entry")
 		return pruneFailed, 0
 	}
-	if err = m.pruneRemovePlacements(e, st); err != nil {
+	if reason := m.pruneExclusion(e, reacquiring); reason != "" {
+		return pruneSkipped, 0
+	}
+	removed, err := m.pruneRemovePlacements(e, holders)
+	if err != nil {
 		log.Warn().Err(err).Msg("prune: provider removal failed, keeping entry")
 		return pruneFailed, 0
 	}
-	if err = m.storage.Delete(e.InfoHash); err != nil {
+	if err = m.storage.Delete(e.InfoHash); errors.Is(err, appendstore.ErrKeyNotFound) {
+		m.clearPruneKey(c.InfoHash)
+		return pruneSkipped, 0
+	} else if err != nil {
 		log.Error().Err(err).Msg("prune: providers removed but storage delete failed, stopping batch")
 		return pruneStorageFailed, 0
 	}
 	if m.strm != nil {
 		m.strm.RemoveEntryAsync(e)
 	}
-	if err = m.storage.ClearUnreferencedSince(e.InfoHash); err != nil {
-		log.Warn().Err(err).Msg("prune: clear ledger key failed")
-	}
+	m.clearPruneKey(c.InfoHash)
 	for name, p := range e.Providers {
 		if p != nil {
-			delete(st.holders[placementKey{name, p.ID}], e.InfoHash)
+			delete(holders[placementKey{name, p.ID}], e.InfoHash)
 		}
 	}
 	log.Info().
@@ -139,63 +152,77 @@ func (m *Manager) pruneOne(c PruneCandidate, st *pruneState) (pruneOutcome, int6
 		Int64("size", e.Size).
 		Int("unreferenced_days", int(m.clockNow().Sub(c.UnreferencedSince)/pruneDay)).
 		Msg("prune deleted entry")
+	if !removed {
+		return pruneDeleted, 0
+	}
 	return pruneDeleted, e.Size
 }
 
-func (m *Manager) pruneDeleteBindings(e *storage.Entry) error {
-	recovery := m.recoveryService()
-	if recovery == nil {
-		return nil
+func (m *Manager) clearPruneKey(hash string) {
+	if err := m.storage.ClearUnreferencedSince(hash); err != nil {
+		m.logger.Warn().Err(err).Str("infohash", hash).Msg("prune: clear ledger key failed")
 	}
-	for _, f := range e.Files {
-		if _, ok := recovery.Lookup(e.InfoHash, f.ID); !ok {
-			continue
-		}
-		if err := recovery.DeleteBinding(e.InfoHash, f.ID); err != nil {
-			return fmt.Errorf("file %s: %w", f.ID, err)
-		}
-	}
-	return nil
 }
 
-func (m *Manager) pruneRemovePlacements(e *storage.Entry, st *pruneState) error {
+func (m *Manager) pruneRemovePlacements(e *storage.Entry, holders pruneHolders) (bool, error) {
+	removed := false
 	for name, p := range e.Providers {
 		if p == nil || p.ID == "" {
 			continue
 		}
-		holders := st.holders[placementKey{name, p.ID}]
-		if _, self := holders[e.InfoHash]; !self {
-			return fmt.Errorf("placement %s/%s is not in the holder snapshot", name, p.ID)
+		set := holders[placementKey{name, p.ID}]
+		if _, self := set[e.InfoHash]; !self {
+			return removed, fmt.Errorf("placement %s/%s is not in the holder snapshot", name, p.ID)
 		}
-		if len(holders) > 1 {
+		if len(set) > 1 {
 			continue
 		}
-		if err := m.removePlacement(name, p.ID); err != nil {
-			return fmt.Errorf("%s/%s: %w", name, p.ID, err)
+		ran, err := m.removePlacement(name, p.ID, e.InfoHash)
+		if err != nil {
+			return removed, fmt.Errorf("%s/%s: %w", name, p.ID, err)
 		}
+		removed = removed || ran
 	}
-	return nil
+	return removed, nil
 }
 
-func (m *Manager) removePlacement(provider, id string) error {
+func (m *Manager) placementHeldElsewhere(provider, id, self string) (bool, error) {
+	held := false
+	err := m.storage.ForEachStrict(func(e *storage.Entry) error {
+		if p := e.Providers[provider]; e.InfoHash != self && p != nil && p.ID == id {
+			held = true
+		}
+		return nil
+	})
+	return held, err
+}
+
+func (m *Manager) removePlacement(provider, id, self string) (bool, error) {
 	lock := m.providerLock(provider)
 	lock.Lock()
 	defer lock.Unlock()
+	held, err := m.placementHeldElsewhere(provider, id, self)
+	if err != nil {
+		return false, fmt.Errorf("recount holders: %w", err)
+	}
+	if held {
+		return false, nil
+	}
 	if provider == usenetProvider {
-		return m.removeUsenetPlacement(id)
+		return true, m.removeUsenetPlacement(id)
 	}
 	client := m.ProviderClient(provider)
 	if client == nil {
-		return errors.New("provider not configured")
+		return false, errors.New("provider not configured")
 	}
 	delErr := client.DeleteTorrent(id)
 	if delErr == nil {
-		return nil
+		return true, nil
 	}
 	if _, getErr := client.GetTorrent(id); errors.Is(getErr, customerror.ErrTorrentNotFound) {
-		return nil
+		return true, nil
 	}
-	return delErr
+	return false, delErr
 }
 
 func (m *Manager) removeUsenetPlacement(id string) error {

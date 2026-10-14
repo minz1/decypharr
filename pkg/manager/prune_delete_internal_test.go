@@ -131,15 +131,7 @@ func shareID(id string) func(*storage.Entry) {
 func TestPruneDeletesPlacementThenRecord(t *testing.T) {
 	t.Parallel()
 	h := newPruneHarness(t, config.PruneModeDelete)
-	e := h.addEntry(t, "aaaa", nil)
-	h.fake.binding = reacquire.Binding{EntryID: "aaaa", EntryFileID: e.Files["a.mkv"].ID}
-	h.provider.onDelete = func(string) {
-		h.fake.failMu.Lock()
-		defer h.fake.failMu.Unlock()
-		if len(h.fake.deletedBindings) != 1 {
-			t.Error("provider called before the arr binding was deleted")
-		}
-	}
+	h.addEntry(t, "aaaa", nil)
 	cs := h.cands(t, "aaaa")
 
 	deleted, failed, freed := h.m.pruneEntries(context.Background(), cs)
@@ -153,8 +145,8 @@ func TestPruneDeletesPlacementThenRecord(t *testing.T) {
 	if h.has("aaaa") || h.ledgerHas(t, "aaaa") {
 		t.Fatal("entry or ledger key survived")
 	}
-	if len(h.fake.deletedBindings) != 1 || h.fake.deletedBindings[0] != [2]string{"aaaa", e.Files["a.mkv"].ID} {
-		t.Fatalf("bindings %v", h.fake.deletedBindings)
+	if len(h.fake.deletedBindings) != 0 {
+		t.Fatalf("bindings touched: %v", h.fake.deletedBindings)
 	}
 }
 
@@ -180,10 +172,10 @@ func TestPruneSharedPlacementInOneBatchDeletesOnce(t *testing.T) {
 	h.addEntry(t, "aaaa", shareID("42"))
 	h.addEntry(t, "bbbb", shareID("42"))
 
-	deleted, failed, _ := h.m.pruneEntries(context.Background(), h.cands(t, "aaaa", "bbbb"))
+	deleted, failed, freed := h.m.pruneEntries(context.Background(), h.cands(t, "aaaa", "bbbb"))
 
-	if deleted != 2 || failed != 0 || len(h.provider.deletedIDs()) != 1 {
-		t.Fatalf("deleted=%d failed=%d calls=%v", deleted, failed, h.provider.deletedIDs())
+	if deleted != 2 || failed != 0 || freed != 100 || len(h.provider.deletedIDs()) != 1 {
+		t.Fatalf("deleted=%d failed=%d freed=%d calls=%v", deleted, failed, freed, h.provider.deletedIDs())
 	}
 }
 
@@ -503,7 +495,7 @@ func TestPruneKeepsEntryWhosePlacementChangedSinceSnapshot(t *testing.T) {
 	h := newPruneHarness(t, config.PruneModeDelete)
 	e := h.addEntry(t, "aaaa", nil)
 	cs := h.cands(t, "aaaa")
-	st, err := h.m.newPruneState()
+	st, err := h.m.pruneHolders()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -528,5 +520,173 @@ func TestPruneUnplacedEntryIsDeletedWithoutProviderCall(t *testing.T) {
 
 	if deleted != 1 || failed != 0 || len(h.provider.deletedIDs()) != 0 {
 		t.Fatalf("deleted=%d failed=%d calls=%v", deleted, failed, h.provider.deletedIDs())
+	}
+}
+
+func TestPruneBoundEntryIsExcludedAndNotStamped(t *testing.T) {
+	t.Parallel()
+	h := newPruneHarness(t, config.PruneModeReport)
+	h.reference(t, h.addEntry(t, "keep", nil))
+	e := h.addEntry(t, "bbbb", nil)
+	h.fake.binding = reacquire.Binding{EntryID: "bbbb", EntryFileID: e.Files["a.mkv"].ID}
+
+	r := h.run(t)
+
+	if candidate(t, r, "bbbb").Excluded != "bound" || h.ledgerHas(t, "bbbb") {
+		t.Fatalf("candidates %+v ledger %v", r.Candidates, h.ledger(t))
+	}
+}
+
+func TestPruneBindingAppearingBeforeDeleteIsSkipped(t *testing.T) {
+	t.Parallel()
+	h := newPruneHarness(t, config.PruneModeDelete)
+	e := h.addEntry(t, "aaaa", nil)
+	cs := h.cands(t, "aaaa")
+	h.fake.binding = reacquire.Binding{EntryID: "aaaa", EntryFileID: e.Files["a.mkv"].ID}
+
+	deleted, failed, _ := h.m.pruneEntries(context.Background(), cs)
+
+	if deleted != 0 || failed != 0 || !h.has("aaaa") || len(h.provider.deletedIDs()) != 0 {
+		t.Fatalf("deleted=%d failed=%d", deleted, failed)
+	}
+}
+
+func TestPruneCoHolderAddedAfterSnapshotStopsProviderDelete(t *testing.T) {
+	t.Parallel()
+	h := newPruneHarness(t, config.PruneModeDelete)
+	h.addEntry(t, "aaaa", shareID("42"))
+	cs := h.cands(t, "aaaa")
+	st, err := h.m.pruneHolders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.addEntry(t, "late", shareID("42"))
+
+	outcome, size := h.m.pruneOne(cs[0], st)
+
+	if outcome != pruneDeleted || size != 0 || h.has("aaaa") || !h.has("late") || len(h.provider.deletedIDs()) != 0 {
+		t.Fatalf("outcome=%v size=%d calls=%v", outcome, size, h.provider.deletedIDs())
+	}
+}
+
+func TestPruneStorageDeleteNotFoundIsSkippedAndBatchContinues(t *testing.T) {
+	t.Parallel()
+	h := newPruneHarness(t, config.PruneModeDelete)
+	h.addEntry(t, "aaaa", nil)
+	h.addEntry(t, "bbbb", nil)
+	cs := h.cands(t, "aaaa", "bbbb")
+	h.provider.onDelete = func(id string) {
+		if id == "id-aaaa" {
+			_ = h.m.storage.Delete("aaaa")
+		}
+	}
+
+	deleted, failed, _ := h.m.pruneEntries(context.Background(), cs)
+
+	if deleted != 1 || failed != 0 || h.has("bbbb") || h.ledgerHas(t, "aaaa") {
+		t.Fatalf("deleted=%d failed=%d", deleted, failed)
+	}
+	if strings.Contains(h.logs.String(), `"level":"error"`) {
+		t.Fatalf("error logged: %s", h.logs.String())
+	}
+}
+
+func TestPruneFailingEntriesDoNotStarveNewerOnes(t *testing.T) {
+	t.Parallel()
+	h := newPruneHarness(t, config.PruneModeDelete)
+	h.reference(t, h.addEntry(t, "keep", nil))
+	for _, hash := range []string{"f1", "f2", "g"} {
+		h.addEntry(t, hash, nil)
+	}
+	for hash, ago := range map[string]time.Duration{"f1": 10 * 24 * time.Hour, "f2": 10 * 24 * time.Hour, "g": 8 * 24 * time.Hour} {
+		if err := h.m.storage.SetUnreferencedSince(hash, h.now.Add(-ago)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := h.m.storage.SetLastReferencedCount(1); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.m.storage.SetLastScan(h.now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	h.setPrune(t, func(p *config.Prune) { p.MaxPerRun = 2 })
+	h.provider.deleteErr = func(id string) error {
+		if id == "id-g" {
+			return nil
+		}
+		return errors.New("500")
+	}
+	h.provider.lookup = func(id string) (*types.Torrent, error) { return &types.Torrent{ID: id}, nil }
+
+	first := h.run(t)
+	h.now = h.now.Add(time.Hour)
+	second := h.run(t)
+
+	if first.Failed != 2 || first.Deleted != 0 || second.Deleted != 1 || h.has("g") {
+		t.Fatalf("first %+v second %+v", first, second)
+	}
+}
+
+func TestPruneReacquireJobCreatedMidBatchSkipsEntry(t *testing.T) {
+	t.Parallel()
+	h := newPruneHarness(t, config.PruneModeDelete)
+	h.addEntry(t, "aaaa", nil)
+	h.addEntry(t, "bbbb", nil)
+	cs := h.cands(t, "aaaa", "bbbb")
+	h.provider.onDelete = func(string) {
+		h.fake.jobs = append(h.fake.jobs, reacquire.Job{EntryID: "bbbb", Status: reacquire.StatusSearching})
+	}
+
+	deleted, failed, _ := h.m.pruneEntries(context.Background(), cs)
+
+	if deleted != 1 || failed != 0 || h.has("aaaa") || !h.has("bbbb") {
+		t.Fatalf("deleted=%d failed=%d", deleted, failed)
+	}
+}
+
+func TestPruneCancelDuringDeleteReturnsErrorWithoutSummary(t *testing.T) {
+	t.Parallel()
+	h := newPruneHarness(t, config.PruneModeReport)
+	h.reference(t, h.addEntry(t, "keep", nil))
+	h.addEntry(t, "aaaa", nil)
+	h.run(t)
+	h.age(t, pruneGrace)
+	h.setPrune(t, func(p *config.Prune) { p.Mode = config.PruneModeDelete })
+	before, prior := strings.Count(h.logs.String(), "prune finished"), h.m.LastPruneReport()
+	ctx, cancel := context.WithCancel(context.Background())
+	h.provider.onDelete = func(string) { cancel() }
+
+	_, err := h.m.RunPrune(ctx)
+
+	if !errors.Is(err, context.Canceled) || strings.Count(h.logs.String(), "prune finished") != before {
+		t.Fatalf("err=%v logs=%s", err, h.logs.String())
+	}
+	if !h.m.LastPruneReport().StartedAt.Equal(prior.StartedAt) {
+		t.Fatalf("cancelled run was recorded: %+v", h.m.LastPruneReport())
+	}
+}
+
+func TestPruneMultiProviderPartialFailureRetriesViaNotFound(t *testing.T) {
+	t.Parallel()
+	h := newPruneHarness(t, config.PruneModeDelete)
+	h.addEntry(t, "aaaa", func(e *storage.Entry) {
+		e.Providers["rd"] = &storage.ProviderEntry{Provider: "rd", ID: "rd-1"}
+	})
+	rd := &fakePruneProvider{
+		deleteErr: func(string) error { return errors.New("500") },
+		lookup:    func(id string) (*types.Torrent, error) { return &types.Torrent{ID: id}, nil },
+	}
+	h.m.clients.Store("rd", rd)
+
+	deleted, failed, _ := h.m.pruneEntries(context.Background(), h.cands(t, "aaaa"))
+	if deleted != 0 || failed != 1 || !h.has("aaaa") {
+		t.Fatalf("first run deleted=%d failed=%d", deleted, failed)
+	}
+	rd.deleteErr, rd.lookup = nil, nil
+	h.provider.deleteErr = func(string) error { return errors.New("404") }
+
+	deleted, failed, _ = h.m.pruneEntries(context.Background(), h.cands(t, "aaaa"))
+	if deleted != 1 || failed != 0 || h.has("aaaa") {
+		t.Fatalf("second run deleted=%d failed=%d", deleted, failed)
 	}
 }
