@@ -226,3 +226,18 @@ func TestUpdateConfigRejectsUnloadableSettings(t *testing.T) {
 		})
 	}
 }
+
+func TestMergeConfigUpdatePreservesPrune(t *testing.T) {
+	t.Parallel()
+	current := config.Config{Prune: config.Prune{
+		Enabled: true, Mode: config.PruneModeDelete, Schedule: "1h", Grace: "168h",
+		MaxPerRun: 50, Roots: []string{"/data/library"},
+	}}
+	merged, err := mergeConfigUpdate(&current, strings.NewReader(`{"log_level":"debug"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(merged.Prune, current.Prune) {
+		t.Fatalf("prune not preserved: %#v", merged.Prune)
+	}
+}

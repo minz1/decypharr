@@ -8,6 +8,8 @@ import (
 	"github.com/sirrobot01/decypharr/internal/utils"
 )
 
+const minPruneGrace = time.Hour
+
 type PruneMode string
 
 const (
@@ -65,8 +67,15 @@ func (p Prune) validate(strmEnabled bool) error {
 	if _, err := utils.ConvertToJobDef(p.Schedule); err != nil {
 		return fmt.Errorf("prune schedule: %w", err)
 	}
-	if _, err := utils.ParseDuration(p.Grace); err != nil {
+	if d, err := utils.ParseDuration(p.Schedule); err == nil && d <= 0 {
+		return fmt.Errorf("prune schedule %q must be positive", p.Schedule)
+	}
+	grace, err := utils.ParseDuration(p.Grace)
+	if err != nil {
 		return fmt.Errorf("prune grace: %w", err)
+	}
+	if grace < minPruneGrace {
+		return fmt.Errorf("prune grace %q must be at least %s", p.Grace, minPruneGrace)
 	}
 	if p.MaxPerRun < 1 {
 		return fmt.Errorf("prune max_per_run must be at least 1")
@@ -75,8 +84,8 @@ func (p Prune) validate(strmEnabled bool) error {
 		return fmt.Errorf("prune requires at least one root")
 	}
 	for _, r := range p.Roots {
-		if !filepath.IsAbs(r) {
-			return fmt.Errorf("prune root %q must be an absolute path", r)
+		if !filepath.IsAbs(r) || filepath.Clean(r) != r || r == "/" {
+			return fmt.Errorf("prune root %q must be a clean absolute path other than /", r)
 		}
 	}
 	return nil

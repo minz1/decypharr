@@ -424,7 +424,10 @@ func (c *Config) CheckLoadable() error {
 	if _, err := c.TLSClientConfig(); err != nil {
 		return err
 	}
-	return validateDebridProxies(c.Debrids)
+	if err := validateDebridProxies(c.Debrids); err != nil {
+		return err
+	}
+	return c.Prune.validate(c.Strm.Enabled)
 }
 
 func (c *Config) Validate() error {
@@ -449,7 +452,7 @@ func (c *Config) Validate() error {
 		return err
 	}
 
-	return c.Prune.validate(c.Strm.Enabled)
+	return nil
 }
 
 // GenerateAPIToken creates a new random API token.

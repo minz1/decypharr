@@ -40,6 +40,17 @@ func TestPruneValidate(t *testing.T) {
 		{"bad grace", func(p *Prune) { p.Grace = "soon" }, false, true},
 		{"bad schedule", func(p *Prune) { p.Schedule = "bogus" }, false, true},
 		{"negative max", func(p *Prune) { p.MaxPerRun = -1 }, false, true},
+		{"zero max", func(p *Prune) { p.MaxPerRun = 0 }, false, true},
+		{"zero grace", func(p *Prune) { p.Grace = "0s" }, false, true},
+		{"negative grace", func(p *Prune) { p.Grace = "-5h" }, false, true},
+		{"short grace", func(p *Prune) { p.Grace = "59m" }, false, true},
+		{"min grace", func(p *Prune) { p.Grace = "1h" }, false, false},
+		{"zero schedule", func(p *Prune) { p.Schedule = "0s" }, false, true},
+		{"negative schedule", func(p *Prune) { p.Schedule = "-1h" }, false, true},
+		{"cron schedule", func(p *Prune) { p.Schedule = "0 3 * * *" }, false, false},
+		{"root slash", func(p *Prune) { p.Roots = []string{"/"} }, false, true},
+		{"root dotdot", func(p *Prune) { p.Roots = []string{"/data/../etc"} }, false, true},
+		{"root trailing slash", func(p *Prune) { p.Roots = []string{"/data/library/"} }, false, true},
 		{"strm enabled", func(*Prune) {}, true, true},
 		{"disabled no roots", func(p *Prune) { p.Enabled = false; p.Roots = nil }, true, false},
 	}
@@ -78,5 +89,18 @@ func TestPruneJSONRoundTrip(t *testing.T) {
 	}
 	if !bytes.Equal(out, in) {
 		t.Fatalf("section changed:\n got %s\nwant %s", out, in)
+	}
+}
+
+func TestPruneCheckLoadable(t *testing.T) {
+	t.Parallel()
+	bad := &Config{Prune: Prune{Enabled: true, Roots: []string{"data/library"}}}
+	bad.applyPruneDefaults()
+	if err := bad.CheckLoadable(); err == nil {
+		t.Fatal("enabled prune with a relative root must fail CheckLoadable")
+	}
+	off := &Config{Prune: Prune{Mode: "purge", Grace: "soon", Roots: []string{"x"}}}
+	if err := off.CheckLoadable(); err != nil {
+		t.Fatalf("disabled prune must not block loading: %v", err)
 	}
 }

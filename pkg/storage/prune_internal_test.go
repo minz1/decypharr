@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -85,5 +86,21 @@ func TestLastReferencedCount(t *testing.T) {
 	got, err := s.UnreferencedSince()
 	if err != nil || len(got) != 0 {
 		t.Fatalf("count leaked into ledger: %v %v", got, err)
+	}
+}
+
+func TestUnreferencedSinceCorruptValue(t *testing.T) {
+	t.Parallel()
+	s := openTestStorage(t, t.TempDir())
+	defer s.Close()
+	if err := s.prune.Put("badhash", []byte{1, 2, 3}, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.UnreferencedSince()
+	if err == nil || !strings.Contains(err.Error(), "badhash") {
+		t.Fatalf("want error naming the key, got %v", err)
+	}
+	if got != nil {
+		t.Fatalf("want nil map, got %v", got)
 	}
 }
