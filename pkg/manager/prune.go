@@ -124,7 +124,7 @@ func (m *Manager) pruneRun(ctx context.Context, cfg *config.Config, now time.Tim
 	if err = m.pruneSafetyChecks(scan); err != nil {
 		return err
 	}
-	restart, gap, err := m.pruneScanGap(now)
+	restart, gap, err := m.pruneScanGap(now, grace)
 	if err != nil {
 		return err
 	}
@@ -139,14 +139,14 @@ func (m *Manager) pruneRun(ctx context.Context, cfg *config.Config, now time.Tim
 	if restart && len(ledger) > 0 {
 		m.logger.Info().Dur("gap", gap).Msg("prune clocks restarted")
 	}
-	excluded, err := m.pruneExclusions(cfg, entries, scan)
+	excluded, err := m.pruneExclusions(entries, scan)
 	if err != nil {
 		return err
 	}
 	if err = ctx.Err(); err != nil {
 		return err
 	}
-	if err = m.updateLedger(ctx, ledgerUpdate{scan, entries, excluded, restart}, ledger, now, report); err != nil {
+	if err = m.updateLedger(ctx, scan, entries, excluded, restart, ledger, now, report); err != nil {
 		return err
 	}
 	report.Candidates = pruneCandidates(entries, ledger, excluded, scan, grace)
@@ -180,7 +180,7 @@ func (m *Manager) pruneSafetyChecks(scan referenceScan) error {
 	return nil
 }
 
-func (m *Manager) pruneScanGap(now time.Time) (bool, time.Duration, error) {
+func (m *Manager) pruneScanGap(now time.Time, grace time.Duration) (bool, time.Duration, error) {
 	last, ok, err := m.storage.LastScan()
 	if err != nil {
 		return false, 0, fmt.Errorf("read last scan time: %w", err)
@@ -188,11 +188,8 @@ func (m *Manager) pruneScanGap(now time.Time) (bool, time.Duration, error) {
 	if !ok {
 		return true, 0, nil
 	}
-	if now.Before(last) {
-		return false, 0, errors.New("clock went backwards")
-	}
 	gap := now.Sub(last)
-	return gap > maxScanGap, gap, nil
+	return gap < 0 || gap > min(maxScanGap, grace), gap, nil
 }
 
 func missingReferenced(scan referenceScan, entries map[string]*storage.Entry) int {
@@ -212,7 +209,7 @@ func (m *Manager) pruneInventory() (map[string]*storage.Entry, map[string]time.T
 	}
 	entries := map[string]*storage.Entry{}
 	err = m.storage.ForEach(func(e *storage.Entry) error {
-		if e.InfoHash != "" && !strings.HasPrefix(e.InfoHash, "__") {
+		if e.InfoHash != "" {
 			entries[e.InfoHash] = e
 		}
 		return nil
@@ -224,11 +221,11 @@ func (m *Manager) pruneInventory() (map[string]*storage.Entry, map[string]time.T
 }
 
 func (m *Manager) pruneExclusions(
-	cfg *config.Config, entries map[string]*storage.Entry, scan referenceScan,
+	entries map[string]*storage.Entry, scan referenceScan,
 ) (map[string]string, error) {
 	reacquiring := map[string]struct{}{}
 	recovery := m.recoveryService()
-	if recovery == nil && len(cfg.Arrs) > 0 {
+	if recovery == nil && m.arr != nil && len(m.arr.All()) > 0 {
 		return nil, errors.New("arr recovery unavailable")
 	}
 	if recovery != nil {
@@ -250,22 +247,16 @@ func (m *Manager) pruneExclusions(
 	return excluded, nil
 }
 
-type ledgerUpdate struct {
-	scan     referenceScan
-	entries  map[string]*storage.Entry
-	excluded map[string]string
-	restart  bool
-}
-
 func (m *Manager) updateLedger(
-	ctx context.Context, u ledgerUpdate, ledger map[string]time.Time, now time.Time, report *PruneReport,
+	ctx context.Context, scan referenceScan, entries map[string]*storage.Entry, excluded map[string]string,
+	restart bool, ledger map[string]time.Time, now time.Time, report *PruneReport,
 ) error {
 	var stale []string
 	for hash := range ledger {
-		_, referenced := u.scan.Referenced[hash]
-		_, present := u.entries[hash]
-		_, excluded := u.excluded[hash]
-		if referenced || !present || excluded {
+		_, referenced := scan.Referenced[hash]
+		_, present := entries[hash]
+		_, isExcluded := excluded[hash]
+		if referenced || !present || isExcluded {
 			stale = append(stale, hash)
 		}
 	}
@@ -275,17 +266,17 @@ func (m *Manager) updateLedger(
 	for _, hash := range stale {
 		delete(ledger, hash)
 	}
-	if u.restart {
+	if restart {
 		clear(ledger)
 	}
 	stamp := time.Unix(now.Unix(), 0)
-	for hash := range u.entries {
+	for hash := range entries {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		_, referenced := u.scan.Referenced[hash]
-		_, excluded := u.excluded[hash]
-		if _, stamped := ledger[hash]; referenced || excluded || stamped {
+		_, referenced := scan.Referenced[hash]
+		_, isExcluded := excluded[hash]
+		if _, stamped := ledger[hash]; referenced || isExcluded || stamped {
 			continue
 		}
 		if err := m.storage.SetUnreferencedSince(hash, stamp); err != nil {
@@ -294,7 +285,7 @@ func (m *Manager) updateLedger(
 		ledger[hash] = stamp
 		report.NewlyUnreferenced++
 	}
-	if err := m.storage.SetLastReferencedCount(len(u.scan.Referenced)); err != nil {
+	if err := m.storage.SetLastReferencedCount(len(scan.Referenced)); err != nil {
 		return fmt.Errorf("record referenced count: %w", err)
 	}
 	if err := m.storage.SetLastScan(now); err != nil {

@@ -16,6 +16,7 @@ import (
 	"github.com/sirrobot01/appendstore"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/arr/reacquire"
 	debrid "github.com/sirrobot01/decypharr/pkg/debrid/common"
 	"github.com/sirrobot01/decypharr/pkg/storage"
@@ -156,13 +157,6 @@ func (h *pruneHarness) age(t *testing.T, d time.Duration) {
 		h.run(t)
 	}
 	h.now = h.now.Add(d)
-}
-
-func (h *pruneHarness) edit(t *testing.T, fn func(*config.Config)) {
-	t.Helper()
-	next := *h.m.store.Get()
-	fn(&next)
-	h.m.store = config.NewStore(&next)
 }
 
 func (h *pruneHarness) ledger(t *testing.T) map[string]time.Time {
@@ -619,28 +613,58 @@ func TestPruneMissingLastScanWithLedgerRestarts(t *testing.T) {
 	}
 }
 
-func TestPruneClockBackwardsAborts(t *testing.T) {
+func TestPruneClockBackwardsRestartsClocks(t *testing.T) {
 	t.Parallel()
 	h := scanGapHarness(t)
 	h.seedStamped(t, -time.Hour)
 	if err := h.m.storage.SetLastScan(h.now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	before := h.ledger(t)
 
-	r, err := h.m.RunPrune(context.Background())
+	r := h.run(t)
 
-	if err == nil || r.Aborted != "clock went backwards" || len(h.handed) != 0 {
-		t.Fatalf("err=%v report=%+v", err, r)
+	c := candidate(t, r, "bbbb")
+	if r.Aborted != "" || !c.UnreferencedSince.Equal(h.now) || c.eligible(h.now) || len(h.handed) != 0 {
+		t.Fatalf("candidate %+v report %+v", c, r)
 	}
-	if got := h.ledger(t); !got["bbbb"].Equal(before["bbbb"]) || len(got) != 1 {
-		t.Fatalf("ledger changed: %v", got)
+	if ls, _, _ := h.m.storage.LastScan(); !ls.Equal(h.now) {
+		t.Fatalf("last scan %v", ls)
 	}
-	if ls, _, _ := h.m.storage.LastScan(); !ls.Equal(h.now.Add(time.Hour)) {
-		t.Fatalf("last scan changed: %v", ls)
+	if !strings.Contains(h.logs.String(), `"message":"prune clocks restarted"`) {
+		t.Fatalf("no restart log: %s", h.logs.String())
 	}
-	if !strings.Contains(h.logs.String(), `"message":"prune aborted"`) {
-		t.Fatalf("no abort log: %s", h.logs.String())
+}
+
+func TestPruneGapBeyondShortGraceRestarts(t *testing.T) {
+	t.Parallel()
+	h := scanGapHarness(t)
+	h.setPrune(t, func(p *config.Prune) { p.Grace = "24h" })
+	h.seedStamped(t, 30*time.Hour)
+
+	r := h.run(t)
+
+	if c := candidate(t, r, "bbbb"); !c.UnreferencedSince.Equal(h.now) || c.eligible(h.now) || len(h.handed) != 0 {
+		t.Fatalf("candidate %+v", c)
+	}
+}
+
+func TestPruneReleasedExclusionStartsGraceFresh(t *testing.T) {
+	t.Parallel()
+	h := scanGapHarness(t)
+	h.setPrune(t, func(p *config.Prune) { p.Mode = config.PruneModeReport })
+	h.run(t)
+	h.fake.jobs = []reacquire.Job{{EntryID: "bbbb", Status: reacquire.StatusSearching}}
+	h.age(t, 8*24*time.Hour)
+	if r := h.run(t); candidate(t, r, "bbbb").Excluded != pruneExcludedReacquire {
+		t.Fatalf("not excluded: %+v", r.Candidates)
+	}
+
+	h.fake.jobs[0].Status = reacquire.StatusReady
+	r := h.run(t)
+
+	c := candidate(t, r, "bbbb")
+	if !c.UnreferencedSince.Equal(h.now) || c.eligible(h.now) {
+		t.Fatalf("candidate %+v", c)
 	}
 }
 
@@ -724,7 +748,9 @@ func TestPruneArrRecoveryRequiredWhenArrsConfigured(t *testing.T) {
 	t.Run("arrs configured", func(t *testing.T) {
 		t.Parallel()
 		h := scanGapHarness(t)
-		h.edit(t, func(c *config.Config) { c.Arrs = []config.Arr{{Name: "sonarr"}} })
+		h.m.arr = arr.New(config.NewStore(&config.Config{
+			Arrs: []config.Arr{{Name: "sonarr", Host: "http://localhost:8989", Token: "x"}},
+		}), nil, zerolog.Nop())
 		h.m.SetArrRecovery(nil)
 
 		r, err := h.m.RunPrune(context.Background())

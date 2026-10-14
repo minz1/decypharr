@@ -8,7 +8,10 @@ import (
 	"github.com/sirrobot01/decypharr/internal/utils"
 )
 
-const minPruneGrace = time.Hour
+const (
+	minPruneGrace    = time.Hour
+	maxPruneInterval = 24 * time.Hour
+)
 
 type PruneMode string
 
@@ -69,6 +72,8 @@ func (p Prune) validate(strmEnabled bool) error {
 	}
 	if d, err := utils.ParseDuration(p.Schedule); err == nil && d <= 0 {
 		return fmt.Errorf("prune schedule %q must be positive", p.Schedule)
+	} else if err == nil && d > maxPruneInterval {
+		return fmt.Errorf("prune schedule %q must not exceed %s", p.Schedule, maxPruneInterval)
 	}
 	grace, err := utils.ParseDuration(p.Grace)
 	if err != nil {
