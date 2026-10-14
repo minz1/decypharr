@@ -197,3 +197,28 @@ func assertFolderItem(t *testing.T, s *Storage, folder string, want bool) {
 		t.Fatalf("folder item survived: %v %+v", err, item)
 	}
 }
+
+func TestDeleteEntryNeverMatchesEmptyFileHashes(t *testing.T) {
+	t.Parallel()
+	s, err := NewStorage(t.TempDir(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	old := time.Unix(1_000, 0)
+	for _, e := range []*Entry{
+		{InfoHash: "new", Name: "folder", Files: map[string]*File{"a.mkv": {Name: "a.mkv", Size: 2, AddedOn: old.Add(time.Hour)}}},
+		{InfoHash: "old", Name: "folder", Files: map[string]*File{"a.mkv": {Name: "a.mkv", Size: 1, AddedOn: old}}},
+	} {
+		if err = s.AddOrUpdate(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = s.Delete("old"); err != nil {
+		t.Fatal(err)
+	}
+	item, err := s.GetEntryItem("folder")
+	if err != nil || item.Files["a.mkv"] == nil || item.Files["a.mkv"].Size != 2 {
+		t.Fatalf("visible file lost: %v %+v", err, item)
+	}
+}

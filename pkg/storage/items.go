@@ -118,7 +118,7 @@ func (s *Storage) removeFromEntryItem(entry *Entry) error {
 		return fmt.Errorf("read name index %q before deletion: %w", name, err)
 	}
 	for fileName, own := range entry.Files {
-		if f, exists := item.Files[fileName]; exists && f.InfoHash == own.InfoHash {
+		if f, exists := item.Files[fileName]; exists && own.InfoHash != "" && f.InfoHash == own.InfoHash {
 			delete(item.Files, fileName)
 		}
 	}
