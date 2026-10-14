@@ -66,3 +66,26 @@ func TestNestedScanDoesNotDeadlock(t *testing.T) {
 		t.Fatalf("nested scan saw %d entries, want 1", inner)
 	}
 }
+
+func TestForEachStrictFailsOnUndecodableRecord(t *testing.T) {
+	t.Parallel()
+	s, err := NewStorage(filepath.Join(t.TempDir(), "db"), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	if addErr := s.AddOrUpdate(&Entry{InfoHash: fmt.Sprintf("%040d", 1), Name: "entry"}); addErr != nil {
+		t.Fatal(addErr)
+	}
+	if putErr := s.entries.Put("junk", []byte{0x0a, 0x05, 0x01}, nil); putErr != nil {
+		t.Fatal(putErr)
+	}
+
+	lenient := 0
+	if scanErr := s.ForEach(func(*Entry) error { lenient++; return nil }); scanErr != nil || lenient != 1 {
+		t.Fatalf("ForEach: err=%v seen=%d", scanErr, lenient)
+	}
+	if scanErr := s.ForEachStrict(func(*Entry) error { return nil }); scanErr == nil {
+		t.Fatal("ForEachStrict accepted an undecodable record")
+	}
+}

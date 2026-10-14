@@ -81,6 +81,10 @@ func (m *Manager) refreshTorrents(ctx context.Context, provider string, debridCl
 
 // doRefreshTorrents performs the actual refresh logic.
 func (m *Manager) doRefreshTorrents(_ context.Context, provider string, debridClient debrid.Client) error {
+	lock := m.providerLock(provider)
+	lock.Lock()
+	defer lock.Unlock()
+
 	remote, err := debridClient.GetTorrents()
 	if err != nil {
 		m.logger.Error().Err(err).Str("debrid", provider).Msg("Failed to get remote")

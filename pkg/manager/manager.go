@@ -77,7 +77,7 @@ type Manager struct {
 
 	pruneMu       sync.Mutex
 	pruneNow      func() time.Time
-	pruneEntriesF func(context.Context, []PruneCandidate) (int, int, int64)
+	removeUsenet  func(id string) error
 	pruneReportMu sync.Mutex
 	lastPrune     PruneReport
 
@@ -101,8 +101,9 @@ type Manager struct {
 	queue        *Queue
 
 	// downloading
-	refreshSG   singleflight.Group
-	linkService *link.Service
+	refreshSG     singleflight.Group
+	providerLocks sync.Map
+	linkService   *link.Service
 
 	// repair
 	fixer *Fixer
@@ -816,4 +817,10 @@ func (m *Manager) SubmitJob(job *Job) error {
 		return fmt.Errorf("active download queue not initialized")
 	}
 	return m.jobQueue.Submit(job)
+}
+
+func (m *Manager) providerLock(name string) *sync.Mutex {
+	v, _ := m.providerLocks.LoadOrStore(name, &sync.Mutex{})
+	lock, _ := v.(*sync.Mutex)
+	return lock
 }

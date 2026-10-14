@@ -157,11 +157,7 @@ func (m *Manager) pruneRun(ctx context.Context, cfg *config.Config, now time.Tim
 	if len(eligible) == 0 {
 		return nil
 	}
-	deleteFn := m.pruneEntries
-	if m.pruneEntriesF != nil {
-		deleteFn = m.pruneEntriesF
-	}
-	report.Deleted, report.Failed, report.BytesFreed = deleteFn(ctx, eligible)
+	report.Deleted, report.Failed, report.BytesFreed = m.pruneEntries(ctx, eligible)
 	return nil
 }
 
@@ -223,17 +219,9 @@ func (m *Manager) pruneInventory() (map[string]*storage.Entry, map[string]time.T
 func (m *Manager) pruneExclusions(
 	entries map[string]*storage.Entry, scan referenceScan,
 ) (map[string]string, error) {
-	reacquiring := map[string]struct{}{}
-	recovery := m.recoveryService()
-	if recovery == nil && m.arr != nil && len(m.arr.All()) > 0 {
-		return nil, errors.New("arr recovery unavailable")
-	}
-	if recovery != nil {
-		for _, job := range recovery.Jobs() {
-			if !job.Status.Terminal() {
-				reacquiring[job.EntryID] = struct{}{}
-			}
-		}
+	reacquiring, err := m.reacquiringEntries()
+	if err != nil {
+		return nil, err
 	}
 	excluded := map[string]string{}
 	for hash, e := range entries {
@@ -369,6 +357,18 @@ func pickEligible(candidates []PruneCandidate, now time.Time, limit int) []Prune
 	return eligible
 }
 
-func (m *Manager) pruneEntries(context.Context, []PruneCandidate) (int, int, int64) {
-	return 0, 0, 0
+func (m *Manager) reacquiringEntries() (map[string]struct{}, error) {
+	reacquiring := map[string]struct{}{}
+	recovery := m.recoveryService()
+	if recovery == nil && m.arr != nil && len(m.arr.All()) > 0 {
+		return nil, errors.New("arr recovery unavailable")
+	}
+	if recovery != nil {
+		for _, job := range recovery.Jobs() {
+			if !job.Status.Terminal() {
+				reacquiring[job.EntryID] = struct{}{}
+			}
+		}
+	}
+	return reacquiring, nil
 }

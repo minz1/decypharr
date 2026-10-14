@@ -141,6 +141,17 @@ func (s *Storage) ForEach(fn func(*Entry) error) error {
 	})
 }
 
+// ForEachStrict is ForEach but fails on a record that cannot be decoded.
+func (s *Storage) ForEachStrict(fn func(*Entry) error) error {
+	return s.entries.ForEach(func(key string, value []byte) error {
+		var pb EntryProto
+		if err := proto.Unmarshal(value, &pb); err != nil {
+			return fmt.Errorf("decode entry %q: %w", key, err)
+		}
+		return fn(ProtoToEntry(&pb))
+	})
+}
+
 // ForEachBatch iterates over entries in batches.
 func (s *Storage) ForEachBatch(batchSize int, fn func([]*Entry) error) error {
 	batch := make([]*Entry, 0, batchSize)

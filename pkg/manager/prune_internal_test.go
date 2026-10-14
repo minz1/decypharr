@@ -25,14 +25,14 @@ import (
 const pruneGrace = 168 * time.Hour
 
 type pruneHarness struct {
-	m      *Manager
-	root   string
-	mount  string
-	now    time.Time
-	logs   *bytes.Buffer
-	fake   *fakeArrRecovery
-	handed []PruneCandidate
-	dbDir  string
+	m        *Manager
+	root     string
+	mount    string
+	now      time.Time
+	logs     *bytes.Buffer
+	fake     *fakeArrRecovery
+	provider *fakePruneProvider
+	dbDir    string
 }
 
 func newPruneHarness(t *testing.T, mode config.PruneMode) *pruneHarness {
@@ -64,11 +64,9 @@ func newPruneHarness(t *testing.T, mode config.PruneMode) *pruneHarness {
 		store:    cfg,
 		logger:   zerolog.New(h.logs),
 		pruneNow: func() time.Time { return h.now },
-		pruneEntriesF: func(_ context.Context, eligible []PruneCandidate) (int, int, int64) {
-			h.handed = slices.Clone(eligible)
-			return 0, 0, 0
-		},
 	}
+	h.provider = &fakePruneProvider{}
+	h.m.clients.Store("torbox", h.provider)
 	h.m.SetArrRecovery(h.fake)
 	t.Cleanup(func() { _ = h.m.storage.Close() })
 	return h
@@ -76,14 +74,19 @@ func newPruneHarness(t *testing.T, mode config.PruneMode) *pruneHarness {
 
 func (h *pruneHarness) corruptLedger(t *testing.T, key string) {
 	t.Helper()
+	h.corruptStore(t, "prune.db", key, []byte{1, 2, 3})
+}
+
+func (h *pruneHarness) corruptStore(t *testing.T, file, key string, value []byte) {
+	t.Helper()
 	if err := h.m.storage.Close(); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := appendstore.Open(filepath.Join(h.dbDir, "prune.db"), appendstore.Options{})
+	raw, err := appendstore.Open(filepath.Join(h.dbDir, file), appendstore.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = raw.Put(key, []byte{1, 2, 3}, nil); err != nil {
+	if err = raw.Put(key, value, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err = raw.Close(); err != nil {
@@ -208,8 +211,8 @@ func TestPruneFirstScanStartsClock(t *testing.T) {
 	if got := h.ledger(t); len(got) != 1 || !got["bbbb"].Equal(h.now) {
 		t.Fatalf("ledger %v", got)
 	}
-	if len(eligibleHashes(h, r)) != 0 || len(h.handed) != 0 {
-		t.Fatalf("nothing may be eligible on the first scan: %v %v", r.Candidates, h.handed)
+	if len(eligibleHashes(h, r)) != 0 || len(h.handed()) != 0 {
+		t.Fatalf("nothing may be eligible on the first scan: %v %v", r.Candidates, h.handed())
 	}
 }
 
@@ -226,21 +229,22 @@ func TestPruneEligibleAfterGrace(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			h := newPruneHarness(t, config.PruneModeDelete)
+			h := newPruneHarness(t, config.PruneModeReport)
 			keep := h.addEntry(t, "aaaa", nil)
 			h.reference(t, keep)
 			h.addEntry(t, "bbbb", nil)
 			h.run(t)
-			h.handed = nil
+			h.provider.reset()
 
 			h.age(t, tc.wait)
+			h.setPrune(t, func(p *config.Prune) { p.Mode = config.PruneModeDelete })
 			r := h.run(t)
 
 			if got := candidate(t, r, "bbbb").eligible(h.now); got != tc.want {
 				t.Fatalf("eligible=%v want %v", got, tc.want)
 			}
-			if (len(h.handed) == 1) != tc.want {
-				t.Fatalf("handed %v want eligible=%v", h.handed, tc.want)
+			if (len(h.handed()) == 1) != tc.want {
+				t.Fatalf("handed %v want eligible=%v", h.handed(), tc.want)
 			}
 		})
 	}
@@ -309,13 +313,13 @@ func TestPruneExclusions(t *testing.T) {
 	if !slices.Equal(got, []string{"free", "rea2"}) {
 		t.Fatalf("eligible %v", got)
 	}
-	if len(h.handed) != 2 {
-		t.Fatalf("handed %v", h.handed)
+	if len(h.handed()) != 2 {
+		t.Fatalf("handed %v", h.handed())
 	}
-	handed := []string{h.handed[0].InfoHash, h.handed[1].InfoHash}
+	handed := h.handed()
 	slices.Sort(handed)
 	if !slices.Equal(handed, []string{"free", "rea2"}) {
-		t.Fatalf("handed %v", h.handed)
+		t.Fatalf("handed %v", h.handed())
 	}
 }
 
@@ -340,8 +344,8 @@ func assertAborted(t *testing.T, h *pruneHarness, r PruneReport) {
 	if got := h.ledger(t); len(got) != 0 {
 		t.Fatalf("ledger written: %v", got)
 	}
-	if len(h.handed) != 0 || r.Deleted != 0 {
-		t.Fatalf("deleted despite abort: %v", h.handed)
+	if len(h.handed()) != 0 || r.Deleted != 0 {
+		t.Fatalf("deleted despite abort: %v", h.handed())
 	}
 	out := h.logs.String()
 	if strings.Count(out, `"message":"prune aborted"`) != 1 ||
@@ -407,13 +411,13 @@ func TestPruneAbortsOnLedgerReadError(t *testing.T) {
 	h.addEntry(t, "bbbb", nil)
 	h.run(t)
 	h.age(t, pruneGrace)
-	h.handed = nil
+	h.provider.reset()
 	h.corruptLedger(t, "bbbb")
 
 	r, err := h.m.RunPrune(context.Background())
 
-	if err == nil || r.Aborted == "" || len(h.handed) != 0 || r.Deleted != 0 {
-		t.Fatalf("err=%v report=%+v handed=%v", err, r, h.handed)
+	if err == nil || r.Aborted == "" || len(h.handed()) != 0 || r.Deleted != 0 {
+		t.Fatalf("err=%v report=%+v handed=%v", err, r, h.handed())
 	}
 	if !strings.Contains(h.logs.String(), `"message":"prune aborted"`) {
 		t.Fatalf("no abort log: %s", h.logs.String())
@@ -431,8 +435,8 @@ func TestPruneReportModeDeletesNothing(t *testing.T) {
 
 	r := h.run(t)
 
-	if len(eligibleHashes(h, r)) != 1 || r.Deleted != 0 || len(h.handed) != 0 {
-		t.Fatalf("report %+v handed %v", r, h.handed)
+	if len(eligibleHashes(h, r)) != 1 || r.Deleted != 0 || len(h.handed()) != 0 {
+		t.Fatalf("report %+v handed %v", r, h.handed())
 	}
 	if _, err := h.m.storage.Get("bbbb"); err != nil {
 		t.Fatalf("entry gone: %v", err)
@@ -467,14 +471,14 @@ func TestPruneReadsModePerRun(t *testing.T) {
 	h.age(t, pruneGrace)
 
 	r := h.run(t)
-	if r.Mode != config.PruneModeReport || len(h.handed) != 0 {
-		t.Fatalf("report mode: %+v handed %v", r, h.handed)
+	if r.Mode != config.PruneModeReport || len(h.handed()) != 0 {
+		t.Fatalf("report mode: %+v handed %v", r, h.handed())
 	}
 
 	h.setPrune(t, func(p *config.Prune) { p.Mode = config.PruneModeDelete })
 	r = h.run(t)
-	if r.Mode != config.PruneModeDelete || len(h.handed) != 1 || h.handed[0].InfoHash != "bbbb" {
-		t.Fatalf("delete mode: %+v handed %v", r, h.handed)
+	if r.Mode != config.PruneModeDelete || len(h.handed()) != 1 || h.handed()[0] != "bbbb" {
+		t.Fatalf("delete mode: %+v handed %v", r, h.handed())
 	}
 }
 
@@ -487,7 +491,7 @@ func TestPruneDisabledIsRejected(t *testing.T) {
 
 	_, err := h.m.RunPrune(context.Background())
 
-	if err == nil || len(h.ledger(t)) != 0 || len(h.handed) != 0 {
+	if err == nil || len(h.ledger(t)) != 0 || len(h.handed()) != 0 {
 		t.Fatalf("err=%v ledger=%v", err, h.ledger(t))
 	}
 	if _, ok, _ := h.m.storage.LastReferencedCount(); ok {
@@ -526,8 +530,8 @@ func TestPruneMaxPerRunOrdering(t *testing.T) {
 	if len(eligibleHashes(h, r)) != 5 {
 		t.Fatalf("want 5 eligible: %+v", r.Candidates)
 	}
-	if len(h.handed) != 2 || h.handed[0].InfoHash != "e1" || h.handed[1].InfoHash != "e2" {
-		t.Fatalf("handed %v", h.handed)
+	if len(h.handed()) != 2 || h.handed()[0] != "e1" || h.handed()[1] != "e2" {
+		t.Fatalf("handed %v", h.handed())
 	}
 }
 
@@ -575,7 +579,7 @@ func TestPruneScanGapRestartsClocks(t *testing.T) {
 	r := h.run(t)
 
 	c := candidate(t, r, "bbbb")
-	if !c.UnreferencedSince.Equal(h.now) || c.eligible(h.now) || r.NewlyUnreferenced != 1 || len(h.handed) != 0 {
+	if !c.UnreferencedSince.Equal(h.now) || c.eligible(h.now) || r.NewlyUnreferenced != 1 || len(h.handed()) != 0 {
 		t.Fatalf("candidate %+v report %+v", c, r)
 	}
 	if !h.ledger(t)["bbbb"].Equal(h.now) {
@@ -596,7 +600,7 @@ func TestPruneShortScanGapKeepsStamps(t *testing.T) {
 
 	r := h.run(t)
 
-	if c := candidate(t, r, "bbbb"); !c.eligible(h.now) || r.NewlyUnreferenced != 0 || len(h.handed) != 1 {
+	if c := candidate(t, r, "bbbb"); !c.eligible(h.now) || r.NewlyUnreferenced != 0 || len(h.handed()) != 1 {
 		t.Fatalf("candidate %+v report %+v", c, r)
 	}
 }
@@ -624,7 +628,7 @@ func TestPruneClockBackwardsRestartsClocks(t *testing.T) {
 	r := h.run(t)
 
 	c := candidate(t, r, "bbbb")
-	if r.Aborted != "" || !c.UnreferencedSince.Equal(h.now) || c.eligible(h.now) || len(h.handed) != 0 {
+	if r.Aborted != "" || !c.UnreferencedSince.Equal(h.now) || c.eligible(h.now) || len(h.handed()) != 0 {
 		t.Fatalf("candidate %+v report %+v", c, r)
 	}
 	if ls, _, _ := h.m.storage.LastScan(); !ls.Equal(h.now) {
@@ -643,7 +647,7 @@ func TestPruneGapBeyondShortGraceRestarts(t *testing.T) {
 
 	r := h.run(t)
 
-	if c := candidate(t, r, "bbbb"); !c.UnreferencedSince.Equal(h.now) || c.eligible(h.now) || len(h.handed) != 0 {
+	if c := candidate(t, r, "bbbb"); !c.UnreferencedSince.Equal(h.now) || c.eligible(h.now) || len(h.handed()) != 0 {
 		t.Fatalf("candidate %+v", c)
 	}
 }
@@ -814,3 +818,5 @@ func TestPruneStoredReportDoesNotShareReturnedSlice(t *testing.T) {
 		t.Fatal("stored report shares the returned backing array")
 	}
 }
+
+func (h *pruneHarness) handed() []string { return h.provider.deletedHashes() }
