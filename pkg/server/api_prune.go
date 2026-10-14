@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"errors"
 	"net/http"
 
@@ -11,7 +10,7 @@ import (
 
 type pruner interface {
 	LastPruneReport() manager.PruneReport
-	RunPrune(ctx context.Context, opts manager.PruneOptions) (manager.PruneReport, error)
+	RunPruneNow(opts manager.PruneOptions) (manager.PruneReport, error)
 }
 
 func (s *Server) handlePruneStatus(w http.ResponseWriter, _ *http.Request) {
@@ -20,7 +19,7 @@ func (s *Server) handlePruneStatus(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handlePruneRun(w http.ResponseWriter, r *http.Request) {
 	opts := manager.PruneOptions{AcceptBaseline: r.URL.Query().Get("accept_baseline") == "true"}
-	report, err := s.prune.RunPrune(r.Context(), opts)
+	report, err := s.prune.RunPruneNow(opts)
 	switch {
 	case errors.Is(err, manager.ErrPruneDisabled):
 		s.sendJSONError(w, err.Error(), http.StatusConflict)

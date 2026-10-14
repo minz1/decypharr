@@ -77,6 +77,14 @@ func (m *Manager) LastPruneReport() PruneReport {
 	return r
 }
 
+func (m *Manager) RunPruneNow(opts PruneOptions) (PruneReport, error) {
+	ctx := m.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return m.RunPrune(ctx, opts)
+}
+
 func (m *Manager) RunPrune(ctx context.Context, opts PruneOptions) (PruneReport, error) {
 	m.pruneMu.Lock()
 	defer m.pruneMu.Unlock()

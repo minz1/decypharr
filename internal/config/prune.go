@@ -82,6 +82,9 @@ func (p Prune) validate(strmEnabled bool) error {
 	if grace < minPruneGrace {
 		return fmt.Errorf("prune grace %q must be at least %s", p.Grace, minPruneGrace)
 	}
+	if interval, intervalErr := utils.ParseDuration(p.Schedule); intervalErr == nil && grace < 2*interval {
+		return fmt.Errorf("prune grace %q must be at least twice the schedule %q", p.Grace, p.Schedule)
+	}
 	if p.MaxPerRun < 1 {
 		return fmt.Errorf("prune max_per_run must be at least 1")
 	}

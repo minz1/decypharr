@@ -3,6 +3,7 @@ package manager
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -933,5 +934,22 @@ func TestReferencedEntriesIgnoresDeletedFiles(t *testing.T) {
 	}
 	if _, ok := got["dead"]; ok {
 		t.Fatal("deleted file counted as a reference")
+	}
+}
+
+func TestRunPruneNowUsesManagerContext(t *testing.T) {
+	t.Parallel()
+	h := newPruneHarness(t, config.PruneModeReport)
+	e := h.addEntry(t, "aaaa", nil)
+	h.reference(t, e)
+	ctx, cancel := context.WithCancel(context.Background())
+	h.m.ctx = ctx
+
+	if r, err := h.m.RunPruneNow(PruneOptions{}); err != nil || r.StartedAt.IsZero() {
+		t.Fatalf("err=%v report=%+v", err, r)
+	}
+	cancel()
+	if _, err := h.m.RunPruneNow(PruneOptions{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v", err)
 	}
 }

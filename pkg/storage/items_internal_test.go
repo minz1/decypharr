@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sirrobot01/appendstore"
 )
@@ -128,5 +129,71 @@ func TestEntryMutationReportsHealthFailure(t *testing.T) {
 				t.Fatalf("index changed after health failure: %v, %v", item, err)
 			}
 		})
+	}
+}
+
+func TestDeleteEntryKeepsOtherEntriesFiles(t *testing.T) {
+	t.Parallel()
+	old := time.Unix(1_000, 0)
+	cases := map[string]struct {
+		deleted, other *Entry
+		wantFolder     string
+		wantItem       bool
+	}{
+		"split child removes its folder item": {
+			deleted: &Entry{InfoHash: "child", Name: "child-folder", Files: map[string]*File{
+				"a.mkv": {Name: "a.mkv", InfoHash: "parent", Size: 1, AddedOn: old},
+			}},
+			wantFolder: "child-folder",
+		},
+		"hidden duplicate leaves the visible item": {
+			deleted: &Entry{InfoHash: "old", Name: "folder", Files: map[string]*File{
+				"a.mkv": {Name: "a.mkv", InfoHash: "old", Size: 1, AddedOn: old},
+			}},
+			other: &Entry{InfoHash: "new", Name: "folder", Files: map[string]*File{
+				"a.mkv": {Name: "a.mkv", InfoHash: "new", Size: 2, AddedOn: old.Add(time.Hour)},
+			}},
+			wantFolder: "folder",
+			wantItem:   true,
+		},
+		"normal entry removes its folder item": {
+			deleted: &Entry{InfoHash: "solo", Name: "folder", Files: map[string]*File{
+				"a.mkv": {Name: "a.mkv", InfoHash: "solo", Size: 1, AddedOn: old},
+			}},
+			wantFolder: "folder",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s, err := NewStorage(t.TempDir(), Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = s.Close() })
+			for _, e := range []*Entry{tc.other, tc.deleted} {
+				if e == nil {
+					continue
+				}
+				if err = s.AddOrUpdate(e); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err = s.Delete(tc.deleted.InfoHash); err != nil {
+				t.Fatal(err)
+			}
+			assertFolderItem(t, s, tc.wantFolder, tc.wantItem)
+		})
+	}
+}
+
+func assertFolderItem(t *testing.T, s *Storage, folder string, want bool) {
+	t.Helper()
+	item, err := s.GetEntryItem(folder)
+	switch {
+	case want && (err != nil || item.Files["a.mkv"].InfoHash != "new"):
+		t.Fatalf("visible item lost: %v %+v", err, item)
+	case !want && !errors.Is(err, appendstore.ErrKeyNotFound):
+		t.Fatalf("folder item survived: %v %+v", err, item)
 	}
 }

@@ -25,7 +25,7 @@ type fakePruner struct {
 
 func (f *fakePruner) LastPruneReport() manager.PruneReport { return f.last }
 
-func (f *fakePruner) RunPrune(_ context.Context, opts manager.PruneOptions) (manager.PruneReport, error) {
+func (f *fakePruner) RunPruneNow(opts manager.PruneOptions) (manager.PruneReport, error) {
 	f.opts = opts
 	return f.report, f.err
 }
@@ -97,6 +97,19 @@ func TestPruneRunMapsResults(t *testing.T) {
 				t.Fatalf("no error body: %s", response.Body.String())
 			}
 		})
+	}
+}
+
+func TestPruneRunIgnoresRequestContext(t *testing.T) {
+	t.Parallel()
+	s := &Server{prune: &fakePruner{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	request := httptest.NewRequest(http.MethodPost, "/api/prune/run", nil).WithContext(ctx)
+	response := httptest.NewRecorder()
+	s.handlePruneRun(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("code=%d", response.Code)
 	}
 }
 
