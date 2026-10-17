@@ -62,20 +62,23 @@ const (
 // torrents added after the first load are not reported as missing.
 const downloadPresentTTL = 10 * time.Minute
 
+const downloadPresentMissRefresh = 30 * time.Second
+
 type Torbox struct {
-	Host                  string `json:"host"`
-	APIKey                string
-	accountsManager       *account.Manager
-	autoExpiresLinksAfter time.Duration
-	client                *request.Client
-	submitClient          *request.Client
-	logger                zerolog.Logger
-	options               types.ProviderOptions
-	profile               types.ProfileCache
-	config                config.Debrid
-	downloadPresentMu     sync.Mutex
-	downloadPresent       map[string]bool // torrent ID -> download_present; nil until loaded
-	downloadPresentAt     time.Time
+	Host                   string `json:"host"`
+	APIKey                 string
+	accountsManager        *account.Manager
+	autoExpiresLinksAfter  time.Duration
+	client                 *request.Client
+	submitClient           *request.Client
+	logger                 zerolog.Logger
+	options                types.ProviderOptions
+	profile                types.ProfileCache
+	config                 config.Debrid
+	downloadPresentMu      sync.Mutex
+	downloadPresent        map[string]bool // torrent ID -> download_present; nil until loaded
+	downloadPresentAt      time.Time
+	downloadPresentTriedAt time.Time
 }
 
 func New(dc config.Debrid, ratelimits map[string]ratelimit.Limiter, options types.ProviderOptions) (*Torbox, error) {
@@ -721,6 +724,7 @@ func (tb *Torbox) CheckFile(ctx context.Context, _, link string) error {
 		return err
 	}
 	if tb.downloadPresent == nil || time.Since(tb.downloadPresentAt) > downloadPresentTTL {
+		tb.downloadPresentTriedAt = time.Now()
 		loaded, err := tb.loadDownloadPresent(ctx)
 		if err != nil {
 			tb.downloadPresentMu.Unlock()
@@ -729,6 +733,16 @@ func (tb *Torbox) CheckFile(ctx context.Context, _, link string) error {
 		tb.downloadPresent, tb.downloadPresentAt = loaded, time.Now()
 	}
 	present := tb.downloadPresent[torrentID]
+	if !present && time.Since(tb.downloadPresentTriedAt) > downloadPresentMissRefresh {
+		tb.downloadPresentTriedAt = time.Now()
+		loaded, err := tb.loadDownloadPresent(ctx)
+		if err != nil {
+			tb.downloadPresentMu.Unlock()
+			return err
+		}
+		tb.downloadPresent, tb.downloadPresentAt = loaded, time.Now()
+		present = loaded[torrentID]
+	}
 	tb.downloadPresentMu.Unlock()
 
 	if err := ctx.Err(); err != nil {

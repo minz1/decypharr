@@ -88,3 +88,74 @@ func TestCheckFileRefreshesStalePresence(t *testing.T) {
 		t.Fatalf("torrent added after first load: %v, want present", err)
 	}
 }
+
+func TestCheckFileRefreshesOnMissAfterFloor(t *testing.T) {
+	t.Parallel()
+	var loads atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("offset") != "0" {
+			_, _ = fmt.Fprint(w, `{"success":true,"data":[]}`)
+			return
+		}
+		if loads.Add(1) == 1 {
+			_, _ = fmt.Fprint(w, `{"success":true,"data":[{"id":1,"download_present":true}]}`)
+			return
+		}
+		_, _ = fmt.Fprint(
+			w,
+			`{"success":true,"data":[{"id":1,"download_present":true},{"id":2,"download_present":true}]}`,
+		)
+	}))
+	defer server.Close()
+	tb := testTorbox(server.URL)
+	for step := 1; step <= 2; step++ {
+		if err := tb.CheckFile(t.Context(), "", "torbox://2/1"); !errors.Is(err, customerror.ErrHosterUnavailable) {
+			t.Fatalf("step %d: %v, want hoster unavailable", step, err)
+		}
+		if got := loads.Load(); got != 1 {
+			t.Fatalf("step %d: loads = %d, want 1", step, got)
+		}
+	}
+	tb.downloadPresentAt = time.Now().Add(-31 * time.Second)
+	tb.downloadPresentTriedAt = tb.downloadPresentAt
+	if err := tb.CheckFile(t.Context(), "", "torbox://2/1"); err != nil {
+		t.Fatalf("miss after floor: %v, want present", err)
+	}
+	if got := loads.Load(); got != 2 {
+		t.Fatalf("loads = %d, want 2", got)
+	}
+}
+
+func TestCheckFileMissRefreshFailureWaitsOutFloor(t *testing.T) {
+	t.Parallel()
+	var loads atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("offset") != "0" {
+			_, _ = fmt.Fprint(w, `{"success":true,"data":[]}`)
+			return
+		}
+		if loads.Add(1) == 1 {
+			_, _ = fmt.Fprint(w, `{"success":true,"data":[{"id":1,"download_present":true}]}`)
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer server.Close()
+	tb := testTorbox(server.URL)
+	if err := tb.CheckFile(t.Context(), "", "torbox://2/1"); !errors.Is(err, customerror.ErrHosterUnavailable) {
+		t.Fatalf("first miss: %v, want hoster unavailable", err)
+	}
+	tb.downloadPresentAt = time.Now().Add(-31 * time.Second)
+	tb.downloadPresentTriedAt = tb.downloadPresentAt
+	refreshErr := tb.CheckFile(t.Context(), "", "torbox://2/1")
+	if refreshErr == nil || errors.Is(refreshErr, customerror.ErrHosterUnavailable) {
+		t.Fatalf("failed refresh: %v, want the load error", refreshErr)
+	}
+	failedLoads := loads.Load()
+	if err := tb.CheckFile(t.Context(), "", "torbox://2/1"); !errors.Is(err, customerror.ErrHosterUnavailable) {
+		t.Fatalf("miss inside floor after failure: %v, want hoster unavailable", err)
+	}
+	if got := loads.Load(); got != failedLoads {
+		t.Fatalf("loads = %d after a failed refresh, want %d", got, failedLoads)
+	}
+}
