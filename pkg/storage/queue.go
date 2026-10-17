@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sirrobot01/appendstore"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -42,11 +43,14 @@ func (s *Storage) GetQueued(infohash string) (*Entry, error) {
 	return ProtoToEntry(&pb), nil
 }
 
-// DeleteQueued removes an entry only after its cleanup succeeds.
+// DeleteQueued removes an entry only after its cleanup succeeds; a missing entry is already deleted.
 func (s *Storage) DeleteQueued(infohash string, cleanup func(*Entry) error) error {
 	key := strings.ToLower(infohash)
 	if cleanup != nil {
 		entry, err := s.GetQueued(key)
+		if errors.Is(err, appendstore.ErrKeyNotFound) {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -54,7 +58,7 @@ func (s *Storage) DeleteQueued(infohash string, cleanup func(*Entry) error) erro
 			return fmt.Errorf("clean up queued entry %q: %w", key, cleanupErr)
 		}
 	}
-	if err := s.queue.Delete(key); err != nil {
+	if err := s.queue.Delete(key); err != nil && !errors.Is(err, appendstore.ErrKeyNotFound) {
 		return fmt.Errorf("delete queued entry %q: %w", key, err)
 	}
 	return nil

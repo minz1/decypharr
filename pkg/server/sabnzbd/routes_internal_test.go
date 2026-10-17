@@ -246,7 +246,7 @@ func TestRouterQueueDelete(t *testing.T) {
 		{"one", "target", http.MethodGet, 200, true},
 		{"form deletion", "target", http.MethodPost, 200, true},
 		{"partial", "target,missing", http.MethodGet, 200, true},
-		{"all missing", "missing", http.MethodGet, 500, false},
+		{"all missing", "missing", http.MethodGet, 200, false},
 		{"empty", "", http.MethodGet, 400, false},
 		{"cleanup failure", "target", http.MethodGet, 500, false},
 		{"failed category", "failed", http.MethodGet, 200, true},
@@ -275,9 +275,6 @@ func TestRouterQueueDelete(t *testing.T) {
 			}
 			if got.Status != (tc.wantStatus == 200) {
 				t.Fatalf("response = %#v", got)
-			}
-			if tc.name == "partial" && !strings.Contains(got.Error, "missing") {
-				t.Errorf("partial failure is absent: %#v", got)
 			}
 			checkDeleted(t, mgr, entries, tc.wantDeleted)
 		})
