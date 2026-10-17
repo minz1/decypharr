@@ -119,3 +119,22 @@ func (zeros) Read(p []byte) (int, error) {
 	clear(p)
 	return len(p), nil
 }
+
+// Arrs remove completed items by hash; a hash decypharr already dropped must not fail the call.
+func TestDeleteUnknownHashSucceeds(t *testing.T) {
+	t.Parallel()
+	for _, deleteFiles := range []string{"true", "false"} {
+		t.Run("deleteFiles="+deleteFiles, func(t *testing.T) {
+			t.Parallel()
+			q := newQueueTestQBit(t, "aaa")
+			form := url.Values{"hashes": {"gone|aaa"}, "deleteFiles": {deleteFiles}}
+			w := postForm(q.Routes(), "/torrents/delete", form)
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+			}
+			if _, err := q.manager.Queue().GetTorrent("aaa"); err == nil {
+				t.Fatal("known hash was not deleted")
+			}
+		})
+	}
+}
