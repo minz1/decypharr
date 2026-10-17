@@ -3,52 +3,79 @@ package manager
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
-func TestCreateSymlinksSkipsMatchingDirectoryName(t *testing.T) {
+func symlinkTestDownloader(t *testing.T) *Downloader {
+	t.Helper()
+	return &Downloader{
+		logger:           zerolog.Nop(),
+		manager:          withTestConfig(t, &Manager{}),
+		mountWaitTimeout: 5 * time.Second,
+	}
+}
+
+func TestCreateSymlinksLinksFileThatAppearsLater(t *testing.T) {
 	t.Parallel()
 	mountPath := t.TempDir()
 	symlinkDir := t.TempDir()
-	fileName := "release.mkv"
+	target := filepath.Join(mountPath, "release.mkv")
+	timer := time.AfterFunc(300*time.Millisecond, func() {
+		_ = os.WriteFile(target, []byte("media"), 0o644)
+	})
+	defer timer.Stop()
 
-	nestedDir := filepath.Join(mountPath, fileName)
-	if err := os.Mkdir(nestedDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	wantTarget := filepath.Join(nestedDir, fileName)
-	if err := os.WriteFile(wantTarget, []byte("media"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	d := &Downloader{logger: zerolog.Nop(), manager: withTestConfig(t, &Manager{})}
-	entry := &storage.Entry{Name: "release"}
-	files := []*storage.File{{Name: fileName}}
-
-	paths, err := d.createSymlinksWhenMountFilesAppear(entry, files, mountPath, symlinkDir)
+	paths, err := symlinkTestDownloader(t).createSymlinksWhenMountFilesAppear(
+		&storage.Entry{Name: "release"}, []*storage.File{{Name: "release.mkv"}}, mountPath, symlinkDir)
 	if err != nil {
 		t.Fatalf("create symlinks: %v", err)
 	}
 	if len(paths) != 1 {
 		t.Fatalf("created %d symlinks, want 1", len(paths))
 	}
+	got, err := os.Readlink(paths[0])
+	if err != nil || got != target {
+		t.Fatalf("symlink target = %q (err %v), want %q", got, err, target)
+	}
+}
 
-	gotTarget, err := os.Readlink(paths[0])
-	if err != nil {
-		t.Fatalf("read symlink: %v", err)
+func TestCreateSymlinksTimesOutWhenFileNeverAppears(t *testing.T) {
+	t.Parallel()
+	d := symlinkTestDownloader(t)
+	d.mountWaitTimeout = 300 * time.Millisecond
+	_, err := d.createSymlinksWhenMountFilesAppear(
+		&storage.Entry{Name: "release"}, []*storage.File{{Name: "release.mkv"}}, t.TempDir(), t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "timeout waiting for mount files") {
+		t.Fatalf("err = %v, want mount-files timeout", err)
 	}
-	if gotTarget != wantTarget {
-		t.Fatalf("symlink target = %q, want nested file %q", gotTarget, wantTarget)
+}
+
+func TestCreateSymlinksIgnoresDirectoryWithFileName(t *testing.T) {
+	t.Parallel()
+	mountPath := t.TempDir()
+	symlinkDir := t.TempDir()
+	nested := filepath.Join(mountPath, "release.mkv")
+	if err := os.Mkdir(nested, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	info, err := os.Stat(paths[0])
-	if err != nil {
-		t.Fatalf("stat symlink target: %v", err)
+	if err := os.WriteFile(filepath.Join(nested, "release.mkv"), []byte("media"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if info.IsDir() {
-		t.Fatal("symlink target is a directory, want file")
+
+	d := symlinkTestDownloader(t)
+	d.mountWaitTimeout = 300 * time.Millisecond
+	paths, err := d.createSymlinksWhenMountFilesAppear(
+		&storage.Entry{Name: "release"}, []*storage.File{{Name: "release.mkv"}}, mountPath, symlinkDir)
+	if err == nil || !strings.Contains(err.Error(), "timeout waiting for mount files") {
+		t.Fatalf("err = %v, paths = %v, want mount-files timeout", err, paths)
+	}
+	if entries, _ := os.ReadDir(symlinkDir); len(entries) != 0 {
+		t.Fatalf("symlinkDir has %d entries, want 0", len(entries))
 	}
 }

@@ -31,6 +31,8 @@ type Downloader struct {
 	manager *Manager
 	logger  zerolog.Logger
 	seasons *seasonParser
+
+	mountWaitTimeout time.Duration
 }
 
 const (
@@ -259,37 +261,48 @@ func (d *Downloader) createSymlinksWhenMountFilesAppear(
 	mountPath string,
 	symlinkDir string,
 ) ([]string, error) {
-	scan := &symlinkScan{
-		d:          d,
-		entry:      entry,
-		symlinkDir: symlinkDir,
-		remaining:  make(map[string]*storage.File, len(files)),
+	remaining, linksErr := newMountLinks(files, mountPath, symlinkDir)
+	if linksErr != nil {
+		return nil, fmt.Errorf("link %s: %w", entry.InfoHash, linksErr)
 	}
-	for _, file := range files {
-		scan.remaining[file.Name] = file
-	}
-	scan.paths = make([]string, 0, len(scan.remaining))
+	paths := make([]string, 0, len(remaining))
 
-	deadline := time.Now().Add(symlinkMountWaitTimeout)
+	timeout := d.mountWaitTimeout
+	if timeout == 0 {
+		timeout = symlinkMountWaitTimeout
+	}
+	deadline := time.Now().Add(timeout)
 	delay := symlinkScanInitialInterval
-	for attempt := 1; len(scan.remaining) > 0; attempt++ {
-		scan.scanErr = nil
-		if err := scan.walk(mountPath); err != nil {
-			return nil, err
+	for attempt := 1; len(remaining) > 0; attempt++ {
+		var lastErr error
+		for name, link := range remaining {
+			if err := mountFileReady(link.mountFile); err != nil {
+				lastErr = err
+				continue
+			}
+			if err := os.Symlink(link.mountFile, link.symlinkPath); err != nil && !os.IsExist(err) {
+				return nil, fmt.Errorf("failed to create symlink %s -> %s: %w", link.symlinkPath, link.mountFile, err)
+			}
+			paths = append(paths, link.symlinkPath)
+			delete(remaining, name)
+			d.logger.Info().Msgf("File is ready: %s/%s", entry.GetFolder(d.manager.folderNaming()), name)
 		}
-		if len(scan.remaining) == 0 {
+		if len(remaining) == 0 {
 			break
 		}
 		if time.Now().After(deadline) {
-			return nil, scan.timeoutError()
+			return nil, fmt.Errorf(
+				"timeout waiting for mount files: %d files still pending (%s): last error: %w",
+				len(remaining), strings.Join(pendingMountFileNames(remaining, symlinkLogSampleSize), ", "), lastErr,
+			)
 		}
 		if shouldLogSymlinkWaitAttempt(attempt) {
 			d.logger.Debug().
-				Err(scan.scanErr).
+				Err(lastErr).
 				Str("entry", entry.Name).
 				Str("mount_path", mountPath).
-				Int("pending", len(scan.remaining)).
-				Strs("sample", pendingMountFileNames(scan.remaining, symlinkLogSampleSize)).
+				Int("pending", len(remaining)).
+				Strs("sample", pendingMountFileNames(remaining, symlinkLogSampleSize)).
 				Msg("Waiting for mount files before creating symlinks")
 		}
 		if err := d.sleepUntilNextSymlinkAttempt(delay, deadline); err != nil {
@@ -297,71 +310,40 @@ func (d *Downloader) createSymlinksWhenMountFilesAppear(
 		}
 		delay = nextSymlinkBackoff(delay, symlinkScanMaxInterval)
 	}
-	return scan.paths, nil
+	return paths, nil
 }
 
-// symlinkScan links an entry's files into symlinkDir as they appear anywhere
-// under the mount.
-type symlinkScan struct {
-	d          *Downloader
-	entry      *storage.Entry
-	symlinkDir string
-	remaining  map[string]*storage.File
-	paths      []string
-	// scanErr is the first unreadable directory of the current pass.
-	scanErr error
+type mountLink struct {
+	mountFile   string
+	symlinkPath string
 }
 
-func (s *symlinkScan) walk(dirPath string) error {
-	entries, err := os.ReadDir(dirPath)
-	if err != nil {
-		if s.scanErr == nil {
-			s.scanErr = err
+func newMountLinks(files []*storage.File, mountPath, symlinkDir string) (map[string]mountLink, error) {
+	links := make(map[string]mountLink, len(files))
+	for _, file := range files {
+		mountFile, err := fsutil.JoinName(mountPath, file.Name)
+		if err != nil {
+			return nil, err
 		}
-		return nil // retried on the next pass
+		symlinkPath, err := fsutil.JoinName(symlinkDir, file.Name)
+		if err != nil {
+			return nil, err
+		}
+		links[file.Name] = mountLink{mountFile: mountFile, symlinkPath: symlinkPath}
 	}
-	for _, item := range entries {
-		fullPath := filepath.Join(dirPath, item.Name())
-		if item.IsDir() {
-			if walkErr := s.walk(fullPath); walkErr != nil {
-				return walkErr
-			}
-			continue
-		}
-		if linkErr := s.link(item.Name(), fullPath); linkErr != nil {
-			return linkErr
-		}
+	return links, nil
+}
+
+// mountFileReady reports why path is not yet a linkable file, or nil.
+func mountFileReady(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return fmt.Errorf("%s is a directory", path)
 	}
 	return nil
-}
-
-func (s *symlinkScan) link(name, fullPath string) error {
-	file, ok := s.remaining[name]
-	if !ok {
-		return nil
-	}
-	fileSymlinkPath, err := fsutil.JoinName(s.symlinkDir, file.Name)
-	if err != nil {
-		return fmt.Errorf("symlink for %s: %w", s.entry.InfoHash, err)
-	}
-	if err = os.Symlink(fullPath, fileSymlinkPath); err != nil && !os.IsExist(err) {
-		return fmt.Errorf("failed to create symlink %s -> %s: %w", fileSymlinkPath, fullPath, err)
-	}
-	s.paths = append(s.paths, fileSymlinkPath)
-	delete(s.remaining, name)
-	s.d.logger.Info().Msgf("File is ready: %s/%s", s.entry.GetFolder(s.d.manager.folderNaming()), file.Name)
-	return nil
-}
-
-func (s *symlinkScan) timeoutError() error {
-	pending := strings.Join(pendingMountFileNames(s.remaining, symlinkLogSampleSize), ", ")
-	if s.scanErr != nil {
-		return fmt.Errorf(
-			"timeout waiting for mount files: %d files still pending (%s): last scan error: %w",
-			len(s.remaining), pending, s.scanErr,
-		)
-	}
-	return fmt.Errorf("timeout waiting for mount files: %d files still pending (%s)", len(s.remaining), pending)
 }
 
 func (d *Downloader) waitForSymlinkFilesReady(filePaths []string, timeout time.Duration) error {
@@ -478,7 +460,7 @@ func shouldLogSymlinkWaitAttempt(attempt int) bool {
 	return attempt == 1 || attempt%symlinkLogEveryAttempts == 0
 }
 
-func pendingMountFileNames(files map[string]*storage.File, limit int) []string {
+func pendingMountFileNames(files map[string]mountLink, limit int) []string {
 	names := make([]string, 0, len(files))
 	for name := range files {
 		names = append(names, name)
