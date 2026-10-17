@@ -102,13 +102,6 @@ func getZIPVolumeOrder(filename string) int {
 	return int(^uint(0)>>1) - 1
 }
 
-func wrapNZBFile(f *storage.NZBFile) ([]*storage.NZBFile, error) {
-	if f == nil {
-		return nil, fmt.Errorf("nzb file is nil")
-	}
-	return []*storage.NZBFile{f}, nil
-}
-
 // fileMetaKey returns a stable key for associating per-file metadata.
 func fileMetaKey(file manifest.File) string {
 	if len(file.Segments) > 0 {
@@ -155,9 +148,9 @@ func determineExtension(group *FileGroup) string {
 	return ""
 }
 
-func getNZBSegments(index int, file manifest.File, group *FileGroup) (int64, []storage.NZBSegment) {
+func getNZBSegments(index int, file manifest.File, group *FileGroup) (int64, []storage.NZBSegment, error) {
 	if len(file.Segments) == 0 {
-		return 0, nil
+		return 0, nil, fmt.Errorf("file %q has no segments", file.Filename)
 	}
 
 	sort.Slice(file.Segments, func(i, j int) bool {
@@ -172,7 +165,7 @@ func getNZBSegments(index int, file manifest.File, group *FileGroup) (int64, []s
 	// binary search), and Download. Reject such files outright.
 	minSegNum, ok := contiguousSegmentNumbers(file.Segments)
 	if !ok {
-		return 0, nil
+		return 0, nil, fmt.Errorf("file %q segment numbers are not contiguous", file.Filename)
 	}
 
 	sizing := group.segmentSizing(index, file)
@@ -187,11 +180,11 @@ func getNZBSegments(index int, file manifest.File, group *FileGroup) (int64, []s
 		// A segment without a message id can never be fetched; it would also
 		// defeat the empty-slot duplicate check below.
 		if segment.MessageID == "" {
-			return 0, nil
+			return 0, nil, fmt.Errorf("file %q segment %d has no message id", file.Filename, segment.Number)
 		}
 		segSize := sizing.sizeOf(idx, len(file.Segments), segment.Bytes)
 		if segSize <= 0 {
-			return 0, nil
+			return 0, nil, fmt.Errorf("file %q segment %d has non-positive size", file.Filename, segment.Number)
 		}
 
 		// Normalize to the range base so 0- and 1-indexed numbering both map
@@ -199,7 +192,7 @@ func getNZBSegments(index int, file manifest.File, group *FileGroup) (int64, []s
 		// passed on count alone while another slot stays empty — reject.
 		segIdx := segment.Number - minSegNum
 		if nzbSegments[segIdx].MessageID != "" {
-			return 0, nil
+			return 0, nil, fmt.Errorf("file %q has duplicate segment number %d", file.Filename, segment.Number)
 		}
 		nzbSegments[segIdx] = storage.NZBSegment{
 			Number:      segment.Number,
@@ -211,7 +204,7 @@ func getNZBSegments(index int, file manifest.File, group *FileGroup) (int64, []s
 		}
 		currentOffset += segSize
 	}
-	return currentOffset, nzbSegments
+	return currentOffset, nzbSegments, nil
 }
 
 // contiguousSegmentNumbers returns the lowest segment number and whether the
@@ -297,12 +290,9 @@ func buildBaseSegments(group *FileGroup) ([]storage.NZBSegment, []storage.Archiv
 	volumeInfos := make([]storage.ArchiveVolumeInfo, 0, len(group.Files))
 
 	for idx, nzbFile := range group.Files {
-		totalSize, segments := getNZBSegments(idx, nzbFile, group)
-		if totalSize == 0 || len(segments) == 0 {
-			return nil, nil, fmt.Errorf(
-				"archive volume %q has incomplete or inconsistent segments",
-				nzbFile.Filename,
-			)
+		totalSize, segments, err := getNZBSegments(idx, nzbFile, group)
+		if err != nil {
+			return nil, nil, fmt.Errorf("archive volume: %w", err)
 		}
 		start := len(baseSegments)
 		baseSegments = append(baseSegments, segments...)
@@ -329,9 +319,9 @@ func buildArchiveVolumeDescriptors(group *FileGroup) ([]*types.Volume, error) {
 			return nil, fmt.Errorf("archive volume %q has no segments", nzbFile.Filename)
 		}
 
-		totalSize, volumeSegments := getNZBSegments(idx, nzbFile, group)
-		if totalSize == 0 || len(volumeSegments) == 0 {
-			return nil, fmt.Errorf("archive volume %q has incomplete or inconsistent segments", nzbFile.Filename)
+		totalSize, volumeSegments, err := getNZBSegments(idx, nzbFile, group)
+		if err != nil {
+			return nil, fmt.Errorf("archive volume: %w", err)
 		}
 
 		volumeName := nzbFile.Filename

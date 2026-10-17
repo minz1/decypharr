@@ -82,7 +82,7 @@ func TestEnrichSizesLastArchiveVolumeFromItsOwnHeader(t *testing.T) {
 			if last.Filename != tc.names[2] {
 				t.Fatalf("last volume is %s, want %s", last.Filename, tc.names[2])
 			}
-			got, _ := getNZBSegments(len(group.Files)-1, last, group)
+			got, _, _ := getNZBSegments(len(group.Files)-1, last, group)
 			if want := int64(sizingArticle + sizingTail); got != want {
 				t.Fatalf("last volume %s sized %d, yEnc says %d", last.Filename, got, want)
 			}

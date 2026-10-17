@@ -882,7 +882,11 @@ func (p *NZBParser) processFileGroup(
 
 	switch group.Type {
 	case storage.NZBFileTypeMedia:
-		return wrapNZBFile(p.processMediaFile(group, password))
+		file, err := p.processMediaFile(group, password)
+		if err != nil {
+			return nil, err
+		}
+		return []*storage.NZBFile{file}, nil
 	case storage.NZBFileTypeRar:
 		rarParser := NewRARParser(p.source, p.maxConcurrent, p.logger)
 		return rarParser.Process(ctx, group, password)
@@ -1017,9 +1021,9 @@ func (p *NZBParser) recordFileMetadata(group *FileGroup, file manifest.File, dat
 }
 
 // Process regular media files.
-func (p *NZBParser) processMediaFile(group *FileGroup, password string) *storage.NZBFile {
+func (p *NZBParser) processMediaFile(group *FileGroup, password string) (*storage.NZBFile, error) {
 	if len(group.Files) == 0 {
-		return nil
+		return nil, fmt.Errorf("media group has no files")
 	}
 
 	// Sort files for consistent ordering
@@ -1033,7 +1037,8 @@ func (p *NZBParser) processMediaFile(group *FileGroup, password string) *storage
 		ext = filepath.Ext(group.ActualFilename)
 	}
 	if ext == "" {
-		return nil
+		return nil, fmt.Errorf("media group has no extension (file %q, yEnc name %q)",
+			group.Files[0].Filename, group.ActualFilename)
 	}
 
 	name := group.BaseName + ext
@@ -1048,16 +1053,12 @@ func (p *NZBParser) processMediaFile(group *FileGroup, password string) *storage
 
 	currentOffset := int64(0)
 	for index, nzbFile := range group.Files {
-		totalSize, segments := getNZBSegments(index, nzbFile, group)
-		if len(segments) == 0 && len(nzbFile.Segments) > 0 {
-			// getNZBSegments rejected the sub-file (missing/duplicate segment
-			// numbers). Silently dropping it would splice a hole into the
-			// middle of the merged stream; fail the whole file instead.
-			p.logger.Warn().
-				Str("group", group.BaseName).
-				Str("file", nzbFile.Filename).
-				Msg("Incomplete or inconsistent segment numbering; rejecting media file")
-			return nil
+		if len(nzbFile.Segments) == 0 {
+			continue
+		}
+		totalSize, segments, err := getNZBSegments(index, nzbFile, group)
+		if err != nil {
+			return nil, err
 		}
 		// getNZBSegments describes offsets within one raw posted file. A
 		// logical media group can concatenate multiple posted files, so rebase
@@ -1070,7 +1071,7 @@ func (p *NZBParser) processMediaFile(group *FileGroup, password string) *storage
 		currentOffset += totalSize
 	}
 	file.Size = currentOffset
-	return file
+	return file, nil
 }
 
 func (p *NZBParser) inspectFileByContent(ctx context.Context, file manifest.File) (contentResult, error) {

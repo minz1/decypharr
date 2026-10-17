@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -276,9 +277,9 @@ func TestProcessMediaRebasesLogicalOffsets(t *testing.T) {
 		metadata: &fileAnalysisResult{fileSize: 4, lastFileSize: 3, segmentSize: 4},
 		Groups:   map[string]struct{}{"alt.test": {}},
 	}
-	file := (&NZBParser{logger: zerolog.Nop()}).processMediaFile(group, "")
-	if file == nil || len(file.Segments) != 2 {
-		t.Fatalf("processed file = %#v", file)
+	file, err := (&NZBParser{logger: zerolog.Nop()}).processMediaFile(group, "")
+	if err != nil || len(file.Segments) != 2 {
+		t.Fatalf("processed file = %#v, err = %v", file, err)
 	}
 	if got := [2]int64{file.Segments[0].StartOffset, file.Segments[0].EndOffset}; got != [2]int64{0, 3} {
 		t.Fatalf("first logical range = %v", got)
@@ -384,5 +385,60 @@ func TestProcessFileGroupsUsesManifestOrderAndSortedGroups(t *testing.T) {
 	}
 	if want := []string{"a", "z"}; !slices.Equal(files[0].Groups, want) || !slices.Equal(files[1].Groups, want) {
 		t.Fatalf("logical newsgroups = %v / %v, want %v", files[0].Groups, files[1].Groups, want)
+	}
+}
+
+func TestProcessMediaFileReportsCause(t *testing.T) {
+	t.Parallel()
+	seg := func(n int, id string, b int64) manifest.Segment {
+		return manifest.Segment{Number: n, MessageID: id, Bytes: b}
+	}
+	media := func(segs ...manifest.Segment) []manifest.File {
+		return []manifest.File{{Filename: "movie.mkv", Number: 1, Segments: segs}}
+	}
+	extensionless := []manifest.File{{Filename: "movie", Segments: []manifest.Segment{seg(1, "a", 5)}}}
+	tests := []struct {
+		name   string
+		files  []manifest.File
+		actual string
+		want   string
+		meta   *fileAnalysisResult
+	}{
+		{"empty group", nil, "", `has no files`, nil},
+		{"no extension", extensionless, "", `has no extension (file "movie"`, nil},
+		{
+			"segment gap", media(seg(1, "a", 5), seg(3, "b", 5)),
+			"movie.mkv", `file "movie.mkv" segment numbers are not contiguous`, nil,
+		},
+		{
+			"duplicate segment", media(seg(1, "a", 5), seg(1, "b", 5), seg(3, "c", 5)),
+			"movie.mkv", `file "movie.mkv" has duplicate segment number 1`, nil,
+		},
+		{
+			"empty message id", media(seg(1, "a", 5), seg(2, "", 5)),
+			"movie.mkv", `file "movie.mkv" segment 2 has no message id`, nil,
+		},
+		{
+			"zero-byte segment", media(seg(1, "a", 5), seg(2, "b", 0)),
+			"movie.mkv", `file "movie.mkv" segment 2 has non-positive size`,
+			&fileAnalysisResult{fileSize: 1, segmentSize: 1},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			group := &FileGroup{
+				BaseName:       "movie",
+				ActualFilename: tc.actual,
+				Type:           storage.NZBFileTypeMedia,
+				Files:          tc.files,
+				Groups:         map[string]struct{}{"alt.test": {}},
+				metadata:       tc.meta,
+			}
+			_, err := (&NZBParser{logger: zerolog.Nop()}).processMediaFile(group, "")
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want containing %q", err, tc.want)
+			}
+		})
 	}
 }
