@@ -298,3 +298,41 @@ func TestGetTorrentKeepsOtherFailures(t *testing.T) {
 		t.Fatalf("err=%v, want a non-not-found error", err)
 	}
 }
+
+// TorBox explains a rejected add only in its error body; N2 needs that text to tell a block from a bad request.
+func TestSubmitMagnetReportsTorBoxErrorBody(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		status int
+		body   string
+		want   string
+	}{
+		"json error": {
+			http.StatusBadRequest,
+			`{"success":false,"error":"SOME_ERROR","detail":"Some explanation.","data":null}`,
+			"torbox API error: Status: 400: SOME_ERROR: Some explanation.",
+		},
+		"ok without data": {
+			http.StatusOK,
+			`{"success":false,"error":"SOME_ERROR","detail":"Some explanation.","data":null}`,
+			"error adding torrent: SOME_ERROR: Some explanation.",
+		},
+		"ok empty body":     {http.StatusOK, ``, "error adding torrent"},
+		"ok malformed body": {http.StatusOK, `{"success":`, "unexpected EOF"},
+		"non-json body":     {http.StatusForbidden, `<html>forbidden</html>`, "torbox API error: Status: 403"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = fmt.Fprint(w, tc.body)
+			}))
+			t.Cleanup(server.Close)
+			torrent := &types.Torrent{Magnet: &utils.Magnet{Link: "magnet:?xt=urn:btih:ABC"}}
+			_, err := testTorbox(server.URL).SubmitMagnet(torrent)
+			if err == nil || err.Error() != tc.want {
+				t.Fatalf("SubmitMagnet() error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}

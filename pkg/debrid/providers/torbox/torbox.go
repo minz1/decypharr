@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -63,6 +64,8 @@ const (
 const downloadPresentTTL = 10 * time.Minute
 
 const downloadPresentMissRefresh = 30 * time.Second
+
+const maxFormResponseBytes = 1 << 20
 
 type Torbox struct {
 	Host                   string `json:"host"`
@@ -231,7 +234,26 @@ func (tb *Torbox) doPostFormWithClient(
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	return common.DoJSON(client, req, result)
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	resp.Body = io.NopCloser(io.LimitReader(resp.Body, maxFormResponseBytes))
+	// TorBox explains a rejected request in the body, so decode it whatever the status.
+	decodeErr := request.DecodeJSON(resp, result)
+	if common.IsSuccess(resp.StatusCode) && decodeErr != nil && !errors.Is(decodeErr, io.EOF) {
+		return resp.StatusCode, decodeErr
+	}
+	return resp.StatusCode, nil
+}
+
+// apiReason formats TorBox's error and detail fields as a message suffix, or "" when both are empty.
+func apiReason(apiErr any, detail string) string {
+	if apiErr == nil && detail == "" {
+		return ""
+	}
+	return fmt.Sprintf(": %v: %s", apiErr, detail)
 }
 
 // doPostJSON performs a POST request with a JSON body.
@@ -306,10 +328,10 @@ func (tb *Torbox) SubmitMagnet(torrent *types.Torrent) (*types.Torrent, error) {
 	}
 
 	if !common.IsSuccess(status) {
-		return nil, fmt.Errorf("torbox API error: Status: %d", status)
+		return nil, fmt.Errorf("torbox API error: Status: %d%s", status, apiReason(data.Error, data.Detail))
 	}
 	if data.Data == nil {
-		return nil, fmt.Errorf("error adding torrent")
+		return nil, fmt.Errorf("error adding torrent%s", apiReason(data.Error, data.Detail))
 	}
 	dt := *data.Data
 	torrentID := strconv.Itoa(dt.ID)
