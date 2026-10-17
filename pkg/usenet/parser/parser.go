@@ -900,12 +900,7 @@ func (p *NZBParser) processFileGroup(
 }
 
 func (p *NZBParser) enrichGroupWithFileInfo(ctx context.Context, group *FileGroup) error {
-	sort.Slice(group.Files, func(i, j int) bool {
-		if group.Files[i].Number != group.Files[j].Number {
-			return group.Files[i].Number < group.Files[j].Number
-		}
-		return group.Files[i].Filename < group.Files[j].Filename
-	})
+	sortGroupFiles(group)
 
 	firstFile := group.Files[0]
 	// Find the file with the most segments to use as the reference for segment size

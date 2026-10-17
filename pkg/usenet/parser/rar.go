@@ -162,17 +162,7 @@ func (p *RARParser) Process(ctx context.Context, group *FileGroup, password stri
 		return nil, fmt.Errorf("no files")
 	}
 
-	// Sort RAR files by volume order (.rar first, then .r00, .r01, etc.)
-	// For obfuscated filenames that all get the same sort key, fall back to
-	// NZB file Number (upload order) which preserves the original volume sequence.
-	sort.Slice(group.Files, func(i, j int) bool {
-		oi := getRARVolumeOrder(group.Files[i].Filename)
-		oj := getRARVolumeOrder(group.Files[j].Filename)
-		if oi != oj {
-			return oi < oj
-		}
-		return group.Files[i].Number < group.Files[j].Number
-	})
+	sortGroupFiles(group)
 
 	volumes, err := buildArchiveVolumeDescriptors(group)
 	if err != nil {

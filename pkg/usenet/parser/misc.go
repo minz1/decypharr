@@ -1,9 +1,11 @@
 package parser
 
 import (
+	"cmp"
 	"fmt"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -51,6 +53,34 @@ func getRARVolumeOrder(filename string) int {
 
 	// Unknown pattern, put at end
 	return unknownVolumeOrder
+}
+
+// sortGroupFiles orders archives by volume so the last file is the real final volume.
+func sortGroupFiles(group *FileGroup) {
+	var compare func(a, b manifest.File) int
+	switch group.Type {
+	case storage.NZBFileTypeRar:
+		compare = func(a, b manifest.File) int {
+			return cmp.Or(
+				cmp.Compare(getRARVolumeOrder(a.Filename), getRARVolumeOrder(b.Filename)),
+				cmp.Compare(a.Number, b.Number),
+			)
+		}
+	case storage.NZBFileTypeZip:
+		compare = func(a, b manifest.File) int {
+			return cmp.Or(
+				cmp.Compare(getZIPVolumeOrder(a.Filename), getZIPVolumeOrder(b.Filename)),
+				strings.Compare(a.Filename, b.Filename),
+			)
+		}
+	case storage.NZBFileTypeSevenZip:
+		compare = func(a, b manifest.File) int { return strings.Compare(a.Filename, b.Filename) }
+	case storage.NZBFileTypeMedia, storage.NZBFileTypeIgnore, storage.NZBFileTypeUnknown:
+		compare = func(a, b manifest.File) int {
+			return cmp.Or(cmp.Compare(a.Number, b.Number), strings.Compare(a.Filename, b.Filename))
+		}
+	}
+	slices.SortFunc(group.Files, compare)
 }
 
 // unknownVolumeOrder sorts unrecognised volume names last.
