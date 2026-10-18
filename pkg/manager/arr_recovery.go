@@ -142,7 +142,7 @@ func (m *Manager) recoverDroppedEntry(provider string, entry *storage.Entry) err
 	if recovery == nil {
 		return fmt.Errorf("arr recovery service is not running")
 	}
-	return m.failDroppedGrab(provider, entry, recovery, instance.Name)
+	return m.failGrab(entry, recovery, instance.Name, provider+" dropped the torrent")
 }
 
 // reacquireDroppedFiles queues a reacquisition for each of a dropped entry's
@@ -173,18 +173,17 @@ func (m *Manager) reacquireDroppedFiles(provider string, entry *storage.Entry, r
 	return imported, reacquireErr
 }
 
-// failDroppedGrab queues the job that fails a never-imported download's grab
-// in arrName. Sonarr and Radarr store qBittorrent download IDs uppercased.
-func (m *Manager) failDroppedGrab(provider string, entry *storage.Entry, recovery ArrRecovery, arrName string) error {
+// failGrab queues the job that fails a never-imported download's grab in
+// arrName. Sonarr and Radarr store qBittorrent download IDs uppercased.
+func (m *Manager) failGrab(entry *storage.Entry, recovery ArrRecovery, arrName, reason string) error {
 	job, err := recovery.FailDownload(arrName, strings.ToUpper(entry.InfoHash), entry.InfoHash)
 	if err != nil {
-		return fmt.Errorf("fail dropped download in %s: %w", arrName, err)
+		return fmt.Errorf("fail download in %s: %w", arrName, err)
 	}
-	event := m.logger.Info().Str("debrid", provider).Str("infohash", entry.InfoHash).
-		Str("name", entry.Name).Str("arr", arrName)
+	event := m.logger.Info().Str("infohash", entry.InfoHash).Str("name", entry.Name).Str("arr", arrName)
 	if job != nil {
 		event = event.Str("job", job.ID)
 	}
-	event.Msg("Debrid dropped a torrent; failing its grab in the Arr")
+	event.Msg(reason + "; failing its grab in the Arr")
 	return nil
 }

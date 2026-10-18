@@ -127,10 +127,14 @@ type failingStatusProvider struct {
 	debrid.Client
 
 	err     error
+	status  types.TorrentStatus
 	deleted atomic.Int64
 }
 
 func (f *failingStatusProvider) CheckStatus(torrent *types.Torrent) (*types.Torrent, error) {
+	if f.status != "" {
+		torrent.Status = f.status
+	}
 	return torrent, f.err
 }
 

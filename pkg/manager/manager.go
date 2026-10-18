@@ -468,6 +468,22 @@ func (m *Manager) failEntry(entry *storage.Entry, err error) {
 	m.refreshArr(entry)
 }
 
+// failBadRelease fails entry and, for an arr's torrent, its grab: the arr treats qBit "error" as a warning and never re-searches.
+func (m *Manager) failBadRelease(entry *storage.Entry, err error) {
+	m.failEntry(entry, err)
+	if !entry.IsTorrent() || entry.Manual {
+		return
+	}
+	instance, ok := m.Arr().Get(entry.Category)
+	recovery := m.recoveryService()
+	if !ok || recovery == nil {
+		return
+	}
+	if grabErr := m.failGrab(entry, recovery, instance.Name, "Provider rejected the torrent"); grabErr != nil {
+		m.logger.Warn().Err(grabErr).Str("name", entry.Name).Msg("Failed to fail the grab in the Arr")
+	}
+}
+
 // handleJobError requeues a job the provider throttled, or fails its entry.
 func (m *Manager) handleJobError(job *Job, err error) {
 	if isTooManyActiveDownloads(err) {

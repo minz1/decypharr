@@ -289,7 +289,11 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 	}
 	if err != nil {
 		m.logger.Error().Err(err).Str("name", entry.Name).Msg("Error checking status")
-		m.failEntry(entry, err)
+		if releaseIsDead(dbT, err) {
+			m.failBadRelease(entry, err)
+		} else {
+			m.failEntry(entry, err)
+		}
 
 		// Delete from debrid on error
 		go func() {
@@ -304,7 +308,7 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 
 	if debridTorrent == nil {
 		m.logger.Error().Str("name", entry.Name).Msg("Provider entry not found")
-		m.failEntry(entry, fmt.Errorf("debrid entry not found"))
+		m.failBadRelease(entry, fmt.Errorf("debrid entry not found"))
 		return
 	}
 
@@ -314,7 +318,7 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 			Str("name", debridTorrent.Name).
 			Str("status", string(debridTorrent.Status)).
 			Msg("Entry in error state")
-		m.failEntry(entry, fmt.Errorf("entry in error state on debrid: %s", debridTorrent.Debrid))
+		m.failBadRelease(entry, fmt.Errorf("entry in error state on debrid: %s", debridTorrent.Debrid))
 		return
 	}
 
@@ -535,4 +539,10 @@ func (m *Manager) submitToProvider(
 	}
 	m.hearsay.RecordAdd(decision, torrent.Status == debridTypes.TorrentStatusDownloaded)
 	return torrent, nil
+}
+
+// releaseIsDead reports a status-check failure the provider pins on the torrent itself, not on decypharr or the account.
+func releaseIsDead(torrent *debridTypes.Torrent, err error) bool {
+	return errors.Is(err, customerror.ErrTorrentNotFound) ||
+		(torrent != nil && torrent.Status == debridTypes.TorrentStatusError)
 }
