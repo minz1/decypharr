@@ -53,8 +53,7 @@ func (m *Manager) AddNewNZB(_ context.Context, req *ImportRequest) (string, erro
 	job.Entry = entry
 	if submitJobErr := m.SubmitJob(job); submitJobErr != nil {
 		m.usenet.RemoveStagedNZB(stagedPath)
-		entry.MarkAsError(submitJobErr)
-		_ = m.queue.Update(entry)
+		m.failEntry(entry, submitJobErr)
 		return "", fmt.Errorf("failed to queue NZB: %w", submitJobErr)
 	}
 	return req.ID, nil

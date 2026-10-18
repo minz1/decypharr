@@ -59,8 +59,7 @@ func (m *Manager) addNewTorrent(ctx context.Context, importReq *ImportRequest) e
 	job.Entry = torrent
 	job.DebridTorrent = debridTorrent
 	if submitJobErr := m.SubmitJob(job); submitJobErr != nil {
-		torrent.MarkAsError(submitJobErr)
-		_ = m.queue.Update(torrent)
+		m.failEntry(torrent, submitJobErr)
 		return fmt.Errorf("failed to queue torrent: %w", submitJobErr)
 	}
 	return nil
@@ -119,8 +118,7 @@ func (m *Manager) queueTorrentRetry(importReq *ImportRequest) error {
 	job.ID = torrent.InfoHash
 	job.Entry = torrent
 	if err := m.SubmitJob(job); err != nil {
-		torrent.MarkAsError(err)
-		_ = m.queue.Update(torrent)
+		m.failEntry(torrent, err)
 		return fmt.Errorf("failed to queue torrent: %w", err)
 	}
 	return nil
@@ -214,21 +212,18 @@ func (m *Manager) processQueuedNZB(entry *storage.Entry) {
 	metadata, err := m.usenet.GetNZBHeader(entry.InfoHash)
 	if err != nil {
 		m.logger.Error().Err(err).Str("name", entry.Name).Msg("Error getting NZB metadata")
-		entry.MarkAsError(err)
-		_ = m.queue.Update(entry)
+		m.failEntry(entry, err)
 		return
 	}
 	if metadata == nil {
 		m.logger.Error().Str("name", entry.Name).Msg("NZB metadata not found")
-		entry.MarkAsError(fmt.Errorf("nzb metadata not found"))
-		_ = m.queue.Update(entry)
+		m.failEntry(entry, fmt.Errorf("nzb metadata not found"))
 		return
 	}
 	switch metadata.Status {
 	case usenet.NZBStatusFailed:
 		m.logger.Error().Str("name", entry.Name).Msg("NZB processing failed")
-		entry.MarkAsError(fmt.Errorf("nzb processing failed"))
-		_ = m.queue.Update(entry)
+		m.failEntry(entry, fmt.Errorf("nzb processing failed"))
 		return
 	case usenet.NZBStatusParsing, usenet.NZBStatusDownloading:
 		// Still processing, skip for now
@@ -236,14 +231,12 @@ func (m *Manager) processQueuedNZB(entry *storage.Entry) {
 	case usenet.NZBStatusCompleted:
 		if processNZBErr := m.processNZB(entry, metadata); processNZBErr != nil {
 			m.logger.Error().Err(processNZBErr).Str("name", entry.Name).Msg("Error processing queued NZB")
-			entry.MarkAsError(processNZBErr)
-			_ = m.queue.Update(entry)
+			m.failEntry(entry, processNZBErr)
 			return
 		}
 	default:
 		m.logger.Error().Str("name", entry.Name).Msgf("Unknown NZB status: %s", metadata.Status)
-		entry.MarkAsError(fmt.Errorf("unknown nzb status: %s", metadata.Status))
-		_ = m.queue.Update(entry)
+		m.failEntry(entry, fmt.Errorf("unknown nzb status: %s", metadata.Status))
 		return
 	}
 }
@@ -260,16 +253,14 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 	placement := entry.GetActiveProvider()
 	if placement == nil {
 		m.logger.Error().Str("name", entry.Name).Msg("No active placement found for queued entry")
-		entry.MarkAsError(fmt.Errorf("no active placement found"))
-		_ = m.queue.Update(entry)
+		m.failEntry(entry, fmt.Errorf("no active placement found"))
 		return
 	}
 
 	client := m.ProviderClient(entry.ActiveProvider)
 	if client == nil {
 		m.logger.Error().Str("debrid", entry.ActiveProvider).Msg("Provider client not found")
-		entry.MarkAsError(fmt.Errorf("debrid client not found: %s", entry.ActiveProvider))
-		_ = m.queue.Update(entry)
+		m.failEntry(entry, fmt.Errorf("debrid client not found: %s", entry.ActiveProvider))
 		return
 	}
 
@@ -298,8 +289,7 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 	}
 	if err != nil {
 		m.logger.Error().Err(err).Str("name", entry.Name).Msg("Error checking status")
-		entry.MarkAsError(err)
-		_ = m.queue.Update(entry)
+		m.failEntry(entry, err)
 
 		// Delete from debrid on error
 		go func() {
@@ -314,8 +304,7 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 
 	if debridTorrent == nil {
 		m.logger.Error().Str("name", entry.Name).Msg("Provider entry not found")
-		entry.MarkAsError(fmt.Errorf("debrid entry not found"))
-		_ = m.queue.Update(entry)
+		m.failEntry(entry, fmt.Errorf("debrid entry not found"))
 		return
 	}
 
@@ -325,8 +314,7 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 			Str("name", debridTorrent.Name).
 			Str("status", string(debridTorrent.Status)).
 			Msg("Entry in error state")
-		entry.MarkAsError(fmt.Errorf("entry in error state on debrid: %s", debridTorrent.Debrid))
-		_ = m.queue.Update(entry)
+		m.failEntry(entry, fmt.Errorf("entry in error state on debrid: %s", debridTorrent.Debrid))
 		return
 	}
 
@@ -366,8 +354,7 @@ func (m *Manager) processAction(entry *storage.Entry) {
 	// Now add entry to the main storage
 	if err := m.AddOrUpdate(entry, nil); err != nil {
 		m.logger.Error().Err(err).Str("name", entry.Name).Msg("Failed to persist completed download")
-		entry.MarkAsError(err)
-		_ = m.queue.Update(entry)
+		m.failEntry(entry, err)
 		return
 	}
 	m.InvalidateEntryCache()
@@ -387,8 +374,7 @@ func (m *Manager) processAction(entry *storage.Entry) {
 			Err(err).
 			Str("name", entry.Name).
 			Msg("Error running post-download action")
-		entry.MarkAsError(err)
-		_ = m.queue.Update(entry)
+		m.failEntry(entry, err)
 		return
 	}
 }

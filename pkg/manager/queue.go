@@ -213,30 +213,41 @@ func (q *Queue) DeleteWhere(
 	)
 }
 
+// failedEntryRetention is the least time a failed entry stays in history: a backfilling arr can skip refreshes for hours.
+const failedEntryRetention = 24 * time.Hour
+
 // DeleteStalled removes entries that made no progress for removeStalledAfter.
 // Without a valid positive duration it removes nothing.
 func (q *Queue) DeleteStalled() error {
 	if q.removeStalledAfter <= 0 {
 		return nil
 	}
-	cutoff := time.Now().Add(-q.removeStalledAfter)
+	now := time.Now()
 	return q.storage.DeleteWhereQueued(func(t *storage.Entry) bool {
-		if !t.AddedOn.Before(cutoff) {
-			return false
+		stalled, reason := q.stalled(t, now)
+		if stalled {
+			q.logger.Info().Str("id", t.InfoHash).Str("name", t.Name).Str("reason", reason).
+				Msg("Removing stalled entry")
 		}
-		if t.Status == debridTypes.TorrentStatusQueued {
-			return false
-		}
-		// Torrent entries: not downloading, no seeders, no progress
-		if t.Status != debridTypes.TorrentStatusDownloading && t.Seeders == 0 && t.Progress == 0 {
-			return true
-		}
-		// NZB entries stuck in error state with no progress
-		if t.State == storage.EntryStateError && t.Progress == 0 {
-			return true
-		}
-		return false
+		return stalled
 	}, nil)
+}
+
+// stalled reports whether the sweep should remove t, and why.
+func (q *Queue) stalled(t *storage.Entry, now time.Time) (bool, string) {
+	if t.State == storage.EntryStateError {
+		failedAt := t.AddedOn
+		if t.LastErrorTime != nil {
+			failedAt = *t.LastErrorTime
+		}
+		retention := max(q.removeStalledAfter, failedEntryRetention)
+		return t.Progress == 0 && failedAt.Before(now.Add(-retention)), "failed " + retention.String() + " ago"
+	}
+	if !t.AddedOn.Before(now.Add(-q.removeStalledAfter)) || t.Status == debridTypes.TorrentStatusQueued {
+		return false, ""
+	}
+	return t.Status != debridTypes.TorrentStatusDownloading && t.Seeders == 0 && t.Progress == 0,
+		"no progress or seeders"
 }
 
 func (q *Queue) Update(torrent *storage.Entry) error {

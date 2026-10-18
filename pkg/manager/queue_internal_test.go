@@ -8,6 +8,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/sirrobot01/decypharr/internal/config"
 	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
@@ -102,6 +103,53 @@ func TestDeleteStalledNeedsAValidDuration(t *testing.T) {
 			}
 			if _, getErr := q.GetTorrent(stalled.InfoHash); (getErr == nil) != wantKept {
 				t.Fatalf("remove_stalled_after %q: kept = %v, want %v", setting, getErr == nil, wantKept)
+			}
+		})
+	}
+}
+
+// A failed entry must stay visible long enough for the arr to read it from history;
+// timing the sweep from the add hid late failures, and the arr never re-searched.
+func TestDeleteStalledTimesFailuresFromTheFailure(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	cases := []struct {
+		name     string
+		protocol config.Protocol
+		failed   time.Duration
+		added    time.Duration
+		wantKept bool
+	}{
+		{"nzb added long ago, failed recently", config.ProtocolNZB, time.Hour, 30 * time.Hour, true},
+		{"nzb failed just now", config.ProtocolNZB, time.Minute, 0, true},
+		{"nzb failed hours ago, inside floor", config.ProtocolNZB, 5 * time.Hour, 0, true},
+		{"nzb failed past floor", config.ProtocolNZB, 25 * time.Hour, 0, false},
+		{"torrent failed just now", config.ProtocolTorrent, time.Minute, 0, true},
+		{"torrent failed past floor", config.ProtocolTorrent, 25 * time.Hour, 0, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store, err := storage.NewStorage(filepath.Join(t.TempDir(), "db"), storage.Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			q := newQueue(store, "10m", nil, zerolog.Nop())
+			failedAt := now.Add(-tc.failed)
+			entry := &storage.Entry{
+				InfoHash: "0123456789012345678901234567890123456789", Name: "failed", Protocol: tc.protocol,
+				AddedOn: now.Add(-max(tc.added, tc.failed+11*time.Minute)),
+				State:   storage.EntryStateError, Status: debridTypes.TorrentStatusError, LastErrorTime: &failedAt,
+			}
+			if addErr := q.Add(entry); addErr != nil {
+				t.Fatal(addErr)
+			}
+			if deleteErr := q.DeleteStalled(); deleteErr != nil {
+				t.Fatal(deleteErr)
+			}
+			if _, getErr := q.GetTorrent(entry.InfoHash); (getErr == nil) != tc.wantKept {
+				t.Fatalf("kept = %v, want %v", getErr == nil, tc.wantKept)
 			}
 		})
 	}

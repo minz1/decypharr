@@ -143,7 +143,7 @@ func (d *Downloader) completeEntry(entry *storage.Entry) {
 	d.markAsCompleted(entry)
 	d.manager.strm.SyncEntryAsync(entry)
 	d.notifyCompleted(entry)
-	d.triggerArrRefresh(entry)
+	d.manager.refreshArr(entry)
 	d.manager.ReindexArrEntry(entry.Category, entry.InfoHash)
 }
 
@@ -169,14 +169,15 @@ func (d *Downloader) notifyCompleted(entry *storage.Entry) {
 	})
 }
 
-func (d *Downloader) triggerArrRefresh(entry *storage.Entry) {
+// refreshArr asks the entry's arr to re-read its download client, so it acts on a finish or failure now.
+func (m *Manager) refreshArr(entry *storage.Entry) {
 	go func() {
-		instance := d.manager.arr.GetOrCreate(entry.Category)
+		instance := m.arr.GetOrCreate(entry.Category)
 		if !instance.Reachable() {
 			return
 		}
-		if err := d.manager.arr.RefreshMonitoredDownloads(context.Background(), instance.Name); err != nil {
-			d.logger.Debug().
+		if err := m.arr.RefreshMonitoredDownloads(context.Background(), instance.Name); err != nil {
+			m.logger.Debug().
 				Err(err).
 				Str("arr", instance.Name).
 				Str("entry", entry.Name).
@@ -187,8 +188,7 @@ func (d *Downloader) triggerArrRefresh(entry *storage.Entry) {
 
 func (d *Downloader) markAsError(entry *storage.Entry, err error) {
 	d.logger.Error().Err(err).Str("name", entry.Name).Msg("Failed to process action")
-	entry.MarkAsError(err)
-	_ = d.manager.queue.Update(entry)
+	d.manager.failEntry(entry, err)
 
 	// Send error notification
 	msg := fmt.Sprintf("Download failed: %s [%s] - %s", entry.Name, entry.Category, err.Error())

@@ -461,6 +461,13 @@ func (m *Manager) processJob(ctx context.Context, job *Job) {
 	// submitted. processQueuedEntries drives the entry from here.
 }
 
+// failEntry records err on entry and tells its arr, so it sees the failure before the sweep removes it.
+func (m *Manager) failEntry(entry *storage.Entry, err error) {
+	entry.MarkAsError(err)
+	_ = m.queue.Update(entry)
+	m.refreshArr(entry)
+}
+
 // handleJobError requeues a job the provider throttled, or fails its entry.
 func (m *Manager) handleJobError(job *Job, err error) {
 	if isTooManyActiveDownloads(err) {
@@ -473,8 +480,7 @@ func (m *Manager) handleJobError(job *Job, err error) {
 	}
 	m.logger.Error().Err(err).Str("job_id", job.ID).Str("type", string(job.Type)).Msg("Active download failed")
 	if job.Entry != nil {
-		job.Entry.MarkAsError(err)
-		_ = m.queue.Update(job.Entry)
+		m.failEntry(job.Entry, err)
 	}
 }
 

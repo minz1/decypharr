@@ -49,8 +49,7 @@ func (m *Manager) restoreEntry(entry *storage.Entry) bool {
 		if m.ctx.Err() != nil {
 			return false
 		}
-		entry.MarkAsError(rebuildErr)
-		_ = m.queue.Update(entry)
+		m.failEntry(entry, rebuildErr)
 		return true
 	}
 	if job.DebridTorrent == nil && job.NZBMeta == nil {
@@ -61,8 +60,7 @@ func (m *Manager) restoreEntry(entry *storage.Entry) bool {
 		if m.ctx.Err() != nil {
 			return false
 		}
-		entry.MarkAsError(submitErr)
-		_ = m.queue.Update(entry)
+		m.failEntry(entry, submitErr)
 	}
 	return true
 }
