@@ -222,8 +222,8 @@ func (q *Queue) DeleteWhere(
 	)
 }
 
-// failedEntryRetention is the least time a failed entry stays in history: a backfilling arr can skip refreshes for hours.
-const failedEntryRetention = 24 * time.Hour
+// failedNZBRetention is the least time a failed NZB stays in SAB history: a backfilling arr can skip refreshes for hours.
+const failedNZBRetention = 24 * time.Hour
 
 // DeleteStalled removes entries that made no progress for removeStalledAfter.
 // Without a valid positive duration it removes nothing.
@@ -249,7 +249,10 @@ func (q *Queue) stalled(t *storage.Entry, now time.Time) (bool, string) {
 		if t.LastErrorTime != nil {
 			failedAt = *t.LastErrorTime
 		}
-		retention := max(q.removeStalledAfter, failedEntryRetention)
+		retention := q.removeStalledAfter
+		if t.IsNZB() {
+			retention = max(retention, failedNZBRetention)
+		}
 		return t.Progress == 0 && failedAt.Before(now.Add(-retention)), "failed " + retention.String() + " ago"
 	}
 	if !t.AddedOn.Before(now.Add(-q.removeStalledAfter)) || t.Status == debridTypes.TorrentStatusQueued {

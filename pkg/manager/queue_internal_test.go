@@ -125,6 +125,7 @@ func TestDeleteStalledTimesFailuresFromTheFailure(t *testing.T) {
 		{"nzb failed hours ago, inside floor", config.ProtocolNZB, 5 * time.Hour, 0, true},
 		{"nzb failed past floor", config.ProtocolNZB, 25 * time.Hour, 0, false},
 		{"torrent failed just now", config.ProtocolTorrent, time.Minute, 0, true},
+		{"torrent failed past setting", config.ProtocolTorrent, time.Hour, 0, false},
 		{"torrent failed past floor", config.ProtocolTorrent, 25 * time.Hour, 0, false},
 	}
 	for _, tc := range cases {
