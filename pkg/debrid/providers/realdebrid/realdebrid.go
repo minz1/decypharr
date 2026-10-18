@@ -592,6 +592,9 @@ func (r *RealDebrid) CheckStatus(t *types.Torrent) (*types.Torrent, error) {
 			r.logger.Info().Msgf("ERROR Checking file: %v", err)
 			return t, err
 		}
+		if status == http.StatusNotFound {
+			return t, fmt.Errorf("torrent %s: %w", t.Name, customerror.ErrTorrentNotFound)
+		}
 		if status != http.StatusOK {
 			return t, fmt.Errorf("realdebrid API error: Status: %d", status)
 		}

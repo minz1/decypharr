@@ -69,3 +69,16 @@ func TestCheckStatusReturnsTorrentOnSlotLimit(t *testing.T) {
 		t.Fatalf("CheckStatus() torrent = %v, want the submitted torrent", torrent)
 	}
 }
+
+// RD answers 404 for a torrent it dropped; that must read as gone so the grab is failed, not as an opaque API error.
+func TestCheckStatusReportsDroppedTorrentAsNotFound(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+	_, err := testRealDebrid(server.URL).CheckStatus(&types.Torrent{ID: "L2DZNJEZU2RZU", Name: "release"})
+	if !errors.Is(err, customerror.ErrTorrentNotFound) {
+		t.Fatalf("CheckStatus() error = %v, want ErrTorrentNotFound", err)
+	}
+}
