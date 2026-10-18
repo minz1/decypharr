@@ -162,8 +162,7 @@ func newTorrentQueueEntry(
 const percentScale = 100.0
 
 func isTooManyActiveDownloads(err error) bool {
-	customErr, ok := errors.AsType[*customerror.Error](err)
-	return ok && customErr.Code == "too_many_active_downloads"
+	return errors.Is(err, customerror.ErrTooManyActiveDownloads)
 }
 
 func (m *Manager) processQueuedEntries() {

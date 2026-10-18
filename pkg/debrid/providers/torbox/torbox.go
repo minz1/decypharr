@@ -334,12 +334,49 @@ func (tb *Torbox) SubmitMagnet(torrent *types.Torrent) (*types.Torrent, error) {
 		return nil, fmt.Errorf("error adding torrent%s", apiReason(data.Error, data.Detail))
 	}
 	dt := *data.Data
+	if dt.ID == 0 {
+		if !tb.withdrawQueued(torrent.InfoHash) {
+			reason := apiReason(data.Error, data.Detail)
+			return nil, fmt.Errorf("torbox returned no torrent id for %s%s", torrent.Name, reason)
+		}
+		return nil, fmt.Errorf(
+			"torbox queued %s instead of starting it: %w", torrent.Name, customerror.ErrTooManyActiveDownloads,
+		)
+	}
 	torrentID := strconv.Itoa(dt.ID)
 	torrent.ID = torrentID
 	torrent.Debrid = tb.config.Name
 	torrent.Added = time.Now()
 
 	return torrent, nil
+}
+
+// withdrawQueued removes hash from TorBox's queue and reports whether it was queued there.
+func (tb *Torbox) withdrawQueued(hash string) bool {
+	var queued APIResponse[[]struct {
+		ID   int    `json:"id"`
+		Hash string `json:"hash"`
+	}]
+	params := map[string]string{"type": "torrent", "bypass_cache": queryTrue}
+	status, err := tb.doGet("/api/queued/getqueued", params, &queued)
+	if err != nil || !common.IsSuccess(status) || queued.Data == nil {
+		tb.logger.Warn().Err(err).Int("status", status).Str("hash", hash).Msg("Failed to list TorBox's queue")
+		return false
+	}
+	for _, item := range *queued.Data {
+		if !strings.EqualFold(item.Hash, hash) {
+			continue
+		}
+		payload := map[string]any{"queued_id": item.ID, "operation": "delete"}
+		status, err = tb.doPostJSON(context.Background(), "/api/queued/controlqueued", payload, nil)
+		if err != nil || !common.IsSuccess(status) {
+			tb.logger.Warn().Err(err).Int("status", status).Str("hash", hash).
+				Msg("Failed to withdraw a queued TorBox add")
+		}
+		return true
+	}
+	tb.logger.Warn().Str("hash", hash).Msg("TorBox returned no torrent id and has no queued add for it")
+	return false
 }
 
 func (tb *Torbox) getTorboxStatus(status string, finished bool) types.TorrentStatus {

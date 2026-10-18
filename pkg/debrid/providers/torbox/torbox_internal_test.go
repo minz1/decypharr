@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -334,5 +335,60 @@ func TestSubmitMagnetReportsTorBoxErrorBody(t *testing.T) {
 				t.Fatalf("SubmitMagnet() error = %v, want %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// TorBox queues an add when its slots are full and returns no torrent_id; it must be withdrawn, not stored as id 0.
+func TestSubmitMagnetWithdrawsAQueuedAdd(t *testing.T) {
+	t.Parallel()
+	var deleted []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/torrents/createtorrent":
+			_, _ = fmt.Fprint(w, `{"success":true,"detail":"queued","data":{"queued_id":55,"hash":"abc"}}`)
+		case "/api/queued/getqueued":
+			if r.URL.Query().Get("bypass_cache") != queryTrue {
+				http.Error(w, "cached list", http.StatusTeapot)
+				return
+			}
+			_, _ = fmt.Fprint(w, `{"success":true,"data":[{"id":54,"hash":"other"},{"id":55,"hash":"ABC"}]}`)
+		case "/api/queued/controlqueued":
+			body, _ := io.ReadAll(r.Body)
+			deleted = append(deleted, string(body))
+			_, _ = fmt.Fprint(w, `{"success":true}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	torrent := &types.Torrent{InfoHash: "abc", Name: "release", Magnet: &utils.Magnet{Link: "magnet:?xt=urn:btih:abc"}}
+	_, err := testTorbox(server.URL).SubmitMagnet(torrent)
+	if !errors.Is(err, customerror.ErrTooManyActiveDownloads) {
+		t.Fatalf("SubmitMagnet() error = %v, want ErrTooManyActiveDownloads", err)
+	}
+	if len(deleted) != 1 || !strings.Contains(deleted[0], `"queued_id":55`) ||
+		!strings.Contains(deleted[0], `"operation":"delete"`) {
+		t.Fatalf("controlqueued bodies = %v, want one delete of queued id 55", deleted)
+	}
+}
+
+// An add without a torrent_id that TorBox did not queue is an error, not a full provider retried forever.
+func TestSubmitMagnetWithoutIDOrQueueEntryFails(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/torrents/createtorrent":
+			_, _ = fmt.Fprint(w, `{"success":true,"data":{"hash":"abc"}}`)
+		case "/api/queued/getqueued":
+			_, _ = fmt.Fprint(w, `{"success":true,"data":[]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	torrent := &types.Torrent{InfoHash: "abc", Name: "release", Magnet: &utils.Magnet{Link: "magnet:?xt=urn:btih:abc"}}
+	_, err := testTorbox(server.URL).SubmitMagnet(torrent)
+	if err == nil || errors.Is(err, customerror.ErrTooManyActiveDownloads) {
+		t.Fatalf("SubmitMagnet() error = %v, want a plain failure", err)
 	}
 }

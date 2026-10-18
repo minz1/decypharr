@@ -2,6 +2,7 @@ package manager
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -34,5 +35,17 @@ func TestThrottledJobCountsItsRetries(t *testing.T) {
 	}
 	if job.ThrottledRetries != 3 {
 		t.Fatalf("ThrottledRetries = %d, want 3", job.ThrottledRetries)
+	}
+}
+
+// RD is tried first on media-0: its "blocked" must not hide TorBox's full slots behind it.
+func TestThrottleSeenBehindAnotherProviderError(t *testing.T) {
+	t.Parallel()
+	err := fmt.Errorf("failed to process torrent: %w", errors.Join(
+		fmt.Errorf("realdebrid: %w", customerror.ErrTorrentBlocked),
+		fmt.Errorf("torbox queued it: %w", customerror.ErrTooManyActiveDownloads),
+	))
+	if !isTooManyActiveDownloads(err) {
+		t.Fatalf("isTooManyActiveDownloads(%v) = false, want true", err)
 	}
 }
