@@ -74,7 +74,8 @@ func (handler *arrHandler) failDownload(ctx context.Context, job Job, progress J
 		return fmt.Errorf("no grab history for download %q", job.DownloadID)
 	}
 	if !failure.alreadyFailed {
-		imported, importedErr := handler.arrs.DownloadImported(ctx, instance.Name, job.DownloadID)
+		grabID := failure.grabRecord.ID
+		imported, importedErr := handler.arrs.DownloadImported(ctx, instance.Name, job.DownloadID, grabID)
 		if importedErr != nil {
 			return fmt.Errorf("%w: %w", errArrLookup, importedErr)
 		}
@@ -219,7 +220,7 @@ func (handler *arrHandler) prepareExactDownloadFailure(
 	if downloadID == "" {
 		return exactDownloadFailure{}, nil
 	}
-	failedRecord, alreadyFailed, err := handler.arrs.FailedHistory(ctx, instance.Name, downloadID)
+	failedRecord, _, err := handler.arrs.FailedHistory(ctx, instance.Name, downloadID)
 	if err != nil {
 		return exactDownloadFailure{}, err
 	}
@@ -227,7 +228,7 @@ func (handler *arrHandler) prepareExactDownloadFailure(
 	if err != nil {
 		return exactDownloadFailure{}, err
 	}
-	if alreadyFailed {
+	if failureCoversGrab(failedRecord, record) {
 		return exactDownloadFailure{
 			found:         true,
 			grabFound:     found,
@@ -252,6 +253,11 @@ func autoRedownloadsFailure(config arr.DownloadClientConfig, failure exactDownlo
 	}
 	releaseSource, _ := failure.grabRecord.DataValue("releaseSource")
 	return !strings.EqualFold(releaseSource, "InteractiveSearch") || config.AutoRedownloadFailedFromInteractiveSearch
+}
+
+// failureCoversGrab reports whether a failed-download record answers the latest grab; a missing record has ID 0.
+func failureCoversGrab(failed, grab arr.HistoryRecord) bool {
+	return failed.ID > grab.ID
 }
 
 func (handler *arrHandler) executeExactDownloadFailure(
@@ -284,11 +290,11 @@ func (handler *arrHandler) executeExactDownloadFailure(
 		return confirmMutation(job, progress, StatusBlocklisting, mutation, failure.failedID)
 	}
 	lookup := func(Mutation) (int, bool, error) {
-		record, found, failedHistoryErr := handler.arrs.FailedHistory(ctx, instance.Name, failure.downloadID)
+		record, _, failedHistoryErr := handler.arrs.FailedHistory(ctx, instance.Name, failure.downloadID)
 		if failedHistoryErr != nil {
 			return 0, false, fmt.Errorf("reconcile failed-download history: %w", failedHistoryErr)
 		}
-		return record.ID, found, nil
+		return record.ID, failureCoversGrab(record, failure.grabRecord), nil
 	}
 	done, err := reconcileAttempted(job, progress, StatusBlocklisting, mutation, lookup)
 	if err != nil || done {

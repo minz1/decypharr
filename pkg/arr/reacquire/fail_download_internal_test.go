@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -275,5 +276,76 @@ func TestFailDownloadSkipsImportedDownload(t *testing.T) {
 	}
 	if len(invalidator.jobs) != 0 {
 		t.Fatalf("invalidated %v, want none: the queue record backs imported files", invalidator.jobs)
+	}
+}
+
+// A dead hash grabbed again after an earlier failure must be failed again; the old failure covers only the old grab.
+func TestFailDownloadFailsARegrabOfAFailedHash(t *testing.T) {
+	t.Parallel()
+	var (
+		mu     sync.Mutex
+		failed []string
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v3/history":
+			records := `{"id":50,"downloadId":"DOWNLOADID","eventType":"grabbed"},` +
+				`{"id":43,"downloadId":"DOWNLOADID","eventType":"downloadFailed"},` +
+				`{"id":42,"downloadId":"DOWNLOADID","eventType":"grabbed"}`
+			if len(failed) > 0 {
+				records = `{"id":51,"downloadId":"DOWNLOADID","eventType":"downloadFailed"},` + records
+			}
+			total := strings.Count(records, `"id"`)
+			_, _ = fmt.Fprintf(w, `{"page":1,"totalRecords":%d,"records":[%s]}`, total, records)
+		case request.Method == http.MethodPost && strings.HasPrefix(request.URL.Path, "/api/v3/history/failed/"):
+			failed = append(failed, strings.TrimPrefix(request.URL.Path, "/api/v3/history/failed/"))
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, request)
+		}
+	}))
+	t.Cleanup(server.Close)
+	service := startFailDownloadService(t, server.URL)
+	job, err := service.FailDownload("sonarr", "DOWNLOADID", "entry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForJobStatus(t, service, job.ID, StatusReady)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(failed) != 1 || failed[0] != "50" {
+		t.Fatalf("failed history ids = %v, want the re-grab 50", failed)
+	}
+}
+
+// An import from an earlier grab of the same hash does not protect a dead re-grab.
+func TestFailDownloadIgnoresAnImportFromAnOlderGrab(t *testing.T) {
+	t.Parallel()
+	var failCalls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v3/history":
+			_, _ = fmt.Fprint(w, `{"page":1,"totalRecords":3,"records":[`+
+				`{"id":60,"downloadId":"DOWNLOADID","eventType":"grabbed"},`+
+				`{"id":44,"downloadId":"DOWNLOADID","eventType":"downloadFolderImported"},`+
+				`{"id":42,"downloadId":"DOWNLOADID","eventType":"grabbed"}]}`)
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v3/history/failed/60":
+			failCalls.Add(1)
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, request)
+		}
+	}))
+	t.Cleanup(server.Close)
+	service := startFailDownloadService(t, server.URL)
+	job, err := service.FailDownload("sonarr", "DOWNLOADID", "entry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForJobStatus(t, service, job.ID, StatusReady)
+	if got := failCalls.Load(); got != 1 {
+		t.Fatalf("FailHistory calls on the re-grab = %d, want 1", got)
 	}
 }

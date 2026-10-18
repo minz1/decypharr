@@ -105,9 +105,10 @@ func (s *Service) GrabHistory(ctx context.Context, name, downloadID string) (His
 	return s.firstHistory(ctx, name, downloadID, EventGrabbed)
 }
 
-// DownloadImported reports whether the arr imported anything from a download.
-func (s *Service) DownloadImported(ctx context.Context, name, downloadID string) (bool, error) {
-	_, imported, err := s.firstHistory(ctx, name, downloadID, EventDownloadFolderImported)
+// DownloadImported reports whether the arr imported anything from a download after history record afterID.
+func (s *Service) DownloadImported(ctx context.Context, name, downloadID string, afterID int) (bool, error) {
+	record, found, err := s.firstHistory(ctx, name, downloadID, EventDownloadFolderImported)
+	imported := found && record.ID > afterID
 	if imported {
 		s.logger.Info().Str("arr", name).Str("download_id", downloadID).
 			Msg("The Arr imported this download")
