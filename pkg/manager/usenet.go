@@ -52,7 +52,6 @@ func (m *Manager) AddNewNZB(_ context.Context, req *ImportRequest) (string, erro
 	job.ID = entry.InfoHash
 	job.Entry = entry
 	if submitJobErr := m.SubmitJob(job); submitJobErr != nil {
-		m.usenet.RemoveStagedNZB(stagedPath)
 		m.failEntry(entry, submitJobErr)
 		return "", fmt.Errorf("failed to queue NZB: %w", submitJobErr)
 	}

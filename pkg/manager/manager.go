@@ -470,6 +470,11 @@ func throttledRetryDelay(retries int) time.Duration {
 
 // failEntry records err on entry and tells its arr, so it sees the failure before the sweep removes it.
 func (m *Manager) failEntry(entry *storage.Entry, err error) {
+	if removeErr := removeStagedNZB(entry); removeErr != nil {
+		m.logger.Warn().Err(removeErr).Str("name", entry.Name).Msg("Failed to remove the failed job's staged NZB")
+	} else if entry.IsNZB() {
+		entry.Magnet = ""
+	}
 	entry.MarkAsError(err)
 	_ = m.queue.Update(entry)
 	if entry.IsNZB() && m.usenet != nil {

@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -81,5 +82,31 @@ func TestFailEntryReleasesParsedNZB(t *testing.T) {
 	header, getErr := usenetClient.GetNZBHeader("nzb-1")
 	if getErr != nil || header.Status != usenet.NZBStatusFailed {
 		t.Fatalf("usenet record = %+v, %v; want failed", header, getErr)
+	}
+}
+
+// Nothing re-reads a failed job's staged NZB, so it goes at the failure instead of lingering through the 24h hold.
+func TestFailEntryDropsStagedNZB(t *testing.T) {
+	t.Parallel()
+	store, err := storage.NewStorage(filepath.Join(t.TempDir(), "db"), storage.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	staged := filepath.Join(t.TempDir(), "job.queued")
+	if writeErr := os.WriteFile(staged, []byte("<nzb/>"), 0o600); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	queue := newQueue(store, "", nil, zerolog.Nop())
+	m := withTestConfig(t, &Manager{queue: queue, logger: zerolog.Nop()})
+	entry := &storage.Entry{InfoHash: "job", Name: "release", Protocol: config.ProtocolNZB, Magnet: staged}
+
+	m.failEntry(entry, errors.New("usenet parse failed"))
+
+	if _, statErr := os.Stat(staged); !os.IsNotExist(statErr) {
+		t.Fatalf("staged NZB still on disk after the failure: %v", statErr)
+	}
+	if entry.Magnet != "" {
+		t.Fatalf("Magnet = %q, want cleared", entry.Magnet)
 	}
 }
