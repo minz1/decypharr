@@ -89,6 +89,8 @@ func (m *Manager) submitStreamReacquire(entryID, fileID string) {
 		if job == nil {
 			return
 		}
+		m.logger.Info().Str("entry_id", entryID).Str("file_id", fileID).Str("job", job.ID).
+			Msg("Stream failed; queued an Arr reacquisition")
 		m.setStreamReacquireJob(entryID, fileID, job.ID)
 	}()
 }

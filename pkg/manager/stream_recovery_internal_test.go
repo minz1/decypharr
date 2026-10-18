@@ -1,8 +1,10 @@
 package manager
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -10,6 +12,7 @@ import (
 	"time"
 
 	"github.com/puzpuzpuz/xsync/v4"
+	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
@@ -319,3 +322,24 @@ func TestStreamReacquireWaitsForArrBinding(t *testing.T) {
 }
 
 var _ DirectReader = missingArticleReader{}
+
+// A stream failure deletes the arr's file and fails its grab; it must leave a trace naming what it reacquires.
+func TestStreamReacquireIsLogged(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		var logs bytes.Buffer
+		recovery := &fakeArrRecovery{
+			started: make(chan struct{}),
+			binding: reacquire.Binding{ArrName: "sonarr", EntryID: "nzb-1", EntryFileID: "file-1"},
+		}
+		m := &Manager{logger: zerolog.New(&logs), activeStreams: xsync.NewMap[string, *ActiveStream]()}
+		m.SetArrRecovery(recovery)
+		m.submitStreamReacquire("nzb-1", "file-1")
+		synctest.Wait()
+		for _, want := range []string{`"level":"info"`, "nzb-1", "file-1", "reacquire-1"} {
+			if !strings.Contains(logs.String(), want) {
+				t.Fatalf("log = %s, want it to contain %s", logs.String(), want)
+			}
+		}
+	})
+}
