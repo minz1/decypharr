@@ -58,6 +58,7 @@ type contentResult struct {
 	segmentSize     int64 // decoded size of a segment (from yEnc), if available
 	partNumber      int64 // yEnc part number, if available
 	partBegin       int64 // yEnc begin offset, if available
+	notFound        bool  // every probed article was missing
 }
 
 type filePartMeta struct {
@@ -229,12 +230,18 @@ func (p *NZBParser) parse(
 		Password: raw.Metadata["password"],
 	}
 	// Group files by base Name and type
-	fileGroups := p.groupFiles(ctx, raw.Files)
+	fileGroups, allMissing := p.groupFiles(ctx, raw.Files)
 	if ctx.Err() != nil {
 		return nil, nil, fmt.Errorf("parse interrupted while identifying files: %w", ctx.Err())
 	}
 
 	if len(fileGroups) == 0 {
+		if allMissing {
+			return nil, nil, fmt.Errorf(
+				"%w: no sampled content article is available",
+				customerror.ErrUsenetSegmentMissing,
+			)
+		}
 		return nil, nil, fmt.Errorf("no valid file groups found in NZB")
 	}
 
@@ -369,7 +376,8 @@ func (p *NZBParser) process(
 	return nzb, nil
 }
 
-func (p *NZBParser) groupFiles(ctx context.Context, files []manifest.File) map[string]*FileGroup {
+// groupFiles also reports whether files needed content detection and every one of them had only missing articles.
+func (p *NZBParser) groupFiles(ctx context.Context, files []manifest.File) (map[string]*FileGroup, bool) {
 	numberByDocumentOrder(files)
 
 	var unknownFiles []manifest.File
@@ -397,9 +405,11 @@ func (p *NZBParser) groupFiles(ctx context.Context, files []manifest.File) map[s
 	}
 
 	unknownResults := p.batchDetectContentTypes(ctx, unknownFiles)
+	allMissing := len(unknownResults) > 0
 
 	// Only detected, supported content proceeds to logical grouping.
 	for _, result := range unknownResults {
+		allMissing = allMissing && result.notFound
 		if result.fileType != storage.NZBFileTypeUnknown && result.fileType != storage.NZBFileTypeIgnore {
 			allFiles = append(allFiles, result)
 		}
@@ -411,7 +421,7 @@ func (p *NZBParser) groupFiles(ctx context.Context, files []manifest.File) map[s
 	// each RAR volume gets its own group. This merges them back together.
 	groups = p.mergeObfuscatedRarGroups(groups)
 
-	return groups
+	return groups, allMissing
 }
 
 // numberByDocumentOrder assigns XML document order as Number when every file
@@ -573,6 +583,7 @@ func (p *NZBParser) batchDetectContentTypes(ctx context.Context, unknownFiles []
 	mapped := mapper.Map(unknownFiles, func(f *manifest.File) contentResult {
 		result, err := p.inspectFileByContent(ctx, *f)
 		if err != nil {
+			result.notFound = nntp.IsArticleNotFoundError(err)
 			p.logger.Trace().
 				Err(err).
 				Str("file", f.Filename).
