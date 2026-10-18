@@ -367,7 +367,7 @@ func (tb *Torbox) withdrawQueued(hash string) bool {
 		if !strings.EqualFold(item.Hash, hash) {
 			continue
 		}
-		payload := map[string]any{"queued_id": item.ID, "operation": "delete"}
+		payload := map[string]any{"queued_id": item.ID, "operation": "delete", "type": "torrent"}
 		status, err = tb.doPostJSON(context.Background(), "/api/queued/controlqueued", payload, nil)
 		if err != nil || !common.IsSuccess(status) {
 			tb.logger.Warn().Err(err).Int("status", status).Str("hash", hash).

@@ -367,7 +367,7 @@ func TestSubmitMagnetWithdrawsAQueuedAdd(t *testing.T) {
 		t.Fatalf("SubmitMagnet() error = %v, want ErrTooManyActiveDownloads", err)
 	}
 	if len(deleted) != 1 || !strings.Contains(deleted[0], `"queued_id":55`) ||
-		!strings.Contains(deleted[0], `"operation":"delete"`) {
+		!strings.Contains(deleted[0], `"operation":"delete"`) || !strings.Contains(deleted[0], `"type":"torrent"`) {
 		t.Fatalf("controlqueued bodies = %v, want one delete of queued id 55", deleted)
 	}
 }
