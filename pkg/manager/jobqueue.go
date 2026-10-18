@@ -34,6 +34,8 @@ type Job struct {
 	Entry          *storage.Entry               // Entry created during processing
 	ResumeExisting bool                         // Continue an already persisted provider placement
 	CreatedAt      time.Time
+	// ThrottledRetries counts retries after the provider's active-download cap.
+	ThrottledRetries int
 }
 
 // NewJob creates a new job.

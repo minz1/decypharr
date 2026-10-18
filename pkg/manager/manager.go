@@ -52,9 +52,11 @@ const (
 
 	defaultUsenetTimeout   = 10 * time.Minute
 	defaultRefreshInterval = 15 * time.Minute
-	// tooManyDownloadsRetryDelay is how long a job waits after the provider
-	// reports its active-download limit.
+	// tooManyDownloadsRetryDelay is the first wait after the provider reports its active-download limit.
 	tooManyDownloadsRetryDelay = 30 * time.Second
+	maxThrottledRetryDelay     = 10 * time.Minute
+	// maxThrottledDoublings keeps the backoff shift small; 30s doubled 5 times is past the cap.
+	maxThrottledDoublings = 5
 )
 
 // Manager handles unified torrent management - replaces wire.Store completely.
@@ -461,6 +463,11 @@ func (m *Manager) processJob(ctx context.Context, job *Job) {
 	// submitted. processQueuedEntries drives the entry from here.
 }
 
+// throttledRetryDelay doubles the wait after each active-download cap hit, up to maxThrottledRetryDelay.
+func throttledRetryDelay(retries int) time.Duration {
+	return min(tooManyDownloadsRetryDelay<<min(retries, maxThrottledDoublings), maxThrottledRetryDelay)
+}
+
 // failEntry records err on entry and tells its arr, so it sees the failure before the sweep removes it.
 func (m *Manager) failEntry(entry *storage.Entry, err error) {
 	entry.MarkAsError(err)
@@ -491,7 +498,9 @@ func (m *Manager) handleJobError(job *Job, err error) {
 			job.Entry.Status = debridTypes.TorrentStatusQueued
 			_ = m.queue.Update(job.Entry)
 		}
-		m.jobQueue.Retry(job, tooManyDownloadsRetryDelay)
+		delay := throttledRetryDelay(job.ThrottledRetries)
+		job.ThrottledRetries++
+		m.jobQueue.Retry(job, delay)
 		return
 	}
 	m.logger.Error().Err(err).Str("job_id", job.ID).Str("type", string(job.Type)).Msg("Active download failed")
