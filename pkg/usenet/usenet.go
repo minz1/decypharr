@@ -1380,6 +1380,21 @@ func (u *Usenet) markAsFailed(nzb *storage.NZB, err error) error {
 	return nil
 }
 
+// Fail marks an NZB still parsing as failed and drops its source file and marker; any other NZB has nothing to release.
+func (u *Usenet) Fail(id string, cause error) error {
+	nzb, err := u.nzbStorage.GetNZBHeader(id)
+	if errors.Is(err, customerror.ErrUsenetManifestMissing) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read NZB %s: %w", id, err)
+	}
+	if nzb.Status != NZBStatusParsing {
+		return nil
+	}
+	return u.markAsFailed(nzb, cause)
+}
+
 func (u *Usenet) Delete(nzoID string) error {
 	nzb, err := u.nzbStorage.GetNZBHeader(nzoID)
 	if err != nil {

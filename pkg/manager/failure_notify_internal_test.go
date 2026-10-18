@@ -15,6 +15,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/storage"
+	"github.com/sirrobot01/decypharr/pkg/usenet"
 )
 
 // A failed download must reach the arr now: it only fails a grab it sees in
@@ -55,5 +56,30 @@ func TestFailedJobAsksArrToRefreshDownloads(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("arr was not asked to refresh its downloads after the failure")
+	}
+}
+
+// Every failure path must release a parsed NZB's usenet side, not only processing failures.
+func TestFailEntryReleasesParsedNZB(t *testing.T) {
+	t.Parallel()
+	usenetClient := newUnreachableUsenet(t)
+	parsing := &storage.NZB{ID: "nzb-1", Status: usenet.NZBStatusParsing}
+	if addErr := usenetClient.NZBStorage().AddNZB(parsing); addErr != nil {
+		t.Fatal(addErr)
+	}
+	store, err := storage.NewStorage(filepath.Join(t.TempDir(), "db"), storage.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	queue := newQueue(store, "", nil, zerolog.Nop())
+	m := withTestConfig(t, &Manager{usenet: usenetClient, queue: queue, logger: zerolog.Nop()})
+	entry := &storage.Entry{InfoHash: "nzb-1", Name: "release", Protocol: config.ProtocolNZB}
+
+	m.failEntry(entry, errors.New("nzb rejected: hearsay claims segments missing"))
+
+	header, getErr := usenetClient.GetNZBHeader("nzb-1")
+	if getErr != nil || header.Status != usenet.NZBStatusFailed {
+		t.Fatalf("usenet record = %+v, %v; want failed", header, getErr)
 	}
 }

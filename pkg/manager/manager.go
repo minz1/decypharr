@@ -472,6 +472,11 @@ func throttledRetryDelay(retries int) time.Duration {
 func (m *Manager) failEntry(entry *storage.Entry, err error) {
 	entry.MarkAsError(err)
 	_ = m.queue.Update(entry)
+	if entry.IsNZB() && m.usenet != nil {
+		if releaseErr := m.usenet.Fail(entry.InfoHash, err); releaseErr != nil {
+			m.logger.Warn().Err(releaseErr).Str("name", entry.Name).Msg("Failed to release the failed NZB")
+		}
+	}
 	m.refreshArr(entry)
 }
 
