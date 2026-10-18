@@ -154,3 +154,32 @@ func TestDeleteStalledTimesFailuresFromTheFailure(t *testing.T) {
 		})
 	}
 }
+
+// The sweep dropped failed NZB entries without their staged file, leaking one .queued file per failure.
+func TestDeleteStalledRemovesStagedNZB(t *testing.T) {
+	t.Parallel()
+	store, err := storage.NewStorage(filepath.Join(t.TempDir(), "db"), storage.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	staged := filepath.Join(t.TempDir(), "job.queued")
+	if writeErr := os.WriteFile(staged, []byte("<nzb/>"), 0o600); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	failedAt := time.Now().Add(-25 * time.Hour)
+	q := newQueue(store, "10m", nil, zerolog.Nop())
+	entry := &storage.Entry{
+		InfoHash: "job", Name: "failed", Protocol: config.ProtocolNZB, Magnet: staged,
+		AddedOn: failedAt, State: storage.EntryStateError, LastErrorTime: &failedAt,
+	}
+	if addErr := q.Add(entry); addErr != nil {
+		t.Fatal(addErr)
+	}
+	if deleteErr := q.DeleteStalled(); deleteErr != nil {
+		t.Fatal(deleteErr)
+	}
+	if _, statErr := os.Stat(staged); !os.IsNotExist(statErr) {
+		t.Fatalf("staged NZB still on disk after the sweep: %v", statErr)
+	}
+}

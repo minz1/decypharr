@@ -161,11 +161,20 @@ func (q *Queue) Contains(infohash string) bool {
 	return err == nil
 }
 
+// removeStagedNZB deletes an NZB entry's staged source file, if any.
+func removeStagedNZB(entry *storage.Entry) error {
+	if !entry.IsNZB() || entry.Magnet == "" {
+		return nil
+	}
+	if err := os.Remove(entry.Magnet); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove staged NZB %q: %w", entry.Magnet, err)
+	}
+	return nil
+}
+
 func (q *Queue) deleteEntryFiles(entry *storage.Entry) error {
-	if entry.IsNZB() && entry.Magnet != "" {
-		if err := os.Remove(entry.Magnet); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove staged NZB %q: %w", entry.Magnet, err)
-		}
+	if err := removeStagedNZB(entry); err != nil {
+		return err
 	}
 	var naming config.WebDavFolderNaming
 	if q.naming != nil {
@@ -230,7 +239,7 @@ func (q *Queue) DeleteStalled() error {
 				Msg("Removing stalled entry")
 		}
 		return stalled
-	}, nil)
+	}, removeStagedNZB)
 }
 
 // stalled reports whether the sweep should remove t, and why.
