@@ -422,3 +422,35 @@ func TestCleanupQueueLogsErrorsThenOneWarnPerRetry(t *testing.T) {
 		t.Fatalf("log levels = %v, want %v", levels, want)
 	}
 }
+
+// A cleanup blocklist is a "Manually marked as failed" in the arr; it must name what it removed.
+func TestCleanupQueueLogsEachBlocklistedItem(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/queue":
+			_, _ = w.Write([]byte(`{"page":1,"pageSize":200,"totalRecords":1,"records":[{"id":9,` +
+				`"title":"Show.S01E14","downloadId":"7C8A7C56","status":"failed",` +
+				`"trackedDownloadStatus":"warning","trackedDownloadState":"downloading"}]}`))
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/v3/queue/bulk":
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	var logs bytes.Buffer
+	cfg := config.NewStore(&config.Config{QueueCleanup: config.QueueCleanup{Rules: config.DefaultQueueCleanupRules()}})
+	service := New(cfg, nil, zerolog.New(&logs))
+	service.arrs["sonarr"] = Arr{Name: "sonarr", Host: server.URL, Token: "secret", Type: Sonarr}
+
+	if err := service.CleanupQueue(t.Context(), "sonarr"); err != nil {
+		t.Fatal(err)
+	}
+	line := logs.String()
+	for _, want := range []string{`"level":"info"`, "Show.S01E14", "7C8A7C56", "blacklist_research"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("cleanup log = %s, want it to contain %s", line, want)
+		}
+	}
+}

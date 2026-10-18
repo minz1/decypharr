@@ -127,14 +127,14 @@ func (s *Service) CleanupQueue(ctx context.Context, name string) error {
 	}
 
 	rules := s.config.Get().QueueCleanup.Rules
-	var blocklist, blocklistResearch []int
+	var blocklist, blocklistResearch []QueueSchema
 	importStatuses := make(map[string]string)
 	for _, item := range items {
 		switch resolveQueueAction(item, rules) {
 		case QueueActionBlocklist:
-			blocklist = append(blocklist, item.ID)
+			blocklist = append(blocklist, item)
 		case QueueActionBlocklistResearch:
-			blocklistResearch = append(blocklistResearch, item.ID)
+			blocklistResearch = append(blocklistResearch, item)
 		case QueueActionImport:
 			if _, seen := importStatuses[item.DownloadID]; !seen {
 				importStatuses[item.DownloadID] = statusText(item)
@@ -144,19 +144,8 @@ func (s *Service) CleanupQueue(ctx context.Context, name string) error {
 		}
 	}
 
-	if len(blocklistResearch) > 0 {
-		if removeQueueItemsErr := s.removeQueueItems(ctx, name, blocklistResearch, false); removeQueueItemsErr != nil {
-			s.logger.Error().
-				Err(removeQueueItemsErr).
-				Str("arr", name).
-				Msg("Queue cleanup: blocklist and research failed")
-		}
-	}
-	if len(blocklist) > 0 {
-		if removeQueueItemsErr := s.removeQueueItems(ctx, name, blocklist, true); removeQueueItemsErr != nil {
-			s.logger.Error().Err(removeQueueItemsErr).Str("arr", name).Msg("Queue cleanup: blocklist failed")
-		}
-	}
+	s.blocklistQueueItems(ctx, name, blocklistResearch, QueueActionBlocklistResearch)
+	s.blocklistQueueItems(ctx, name, blocklist, QueueActionBlocklist)
 	s.mu.RLock()
 	previous := s.importFailures[name]
 	s.mu.RUnlock()
@@ -284,6 +273,25 @@ func statusText(item QueueSchema) string {
 
 // removeQueueItems blocklists and removes queue items. skipRedownload keeps the
 // Arr from searching for a replacement.
+// blocklistQueueItems removes items from the arr's queue with a blocklist, then names each one it removed.
+func (s *Service) blocklistQueueItems(ctx context.Context, name string, items []QueueSchema, action QueueAction) {
+	if len(items) == 0 {
+		return
+	}
+	ids := make([]int, len(items))
+	for i, item := range items {
+		ids[i] = item.ID
+	}
+	if err := s.removeQueueItems(ctx, name, ids, action == QueueActionBlocklist); err != nil {
+		s.logger.Error().Err(err).Str("arr", name).Str("action", string(action)).Msg("Queue cleanup: blocklist failed")
+		return
+	}
+	for _, item := range items {
+		s.logger.Info().Str("arr", name).Str("title", item.Title).Str("download_id", item.DownloadID).
+			Str("action", string(action)).Str("status", statusText(item)).Msg("Queue cleanup: blocklisted")
+	}
+}
+
 func (s *Service) removeQueueItems(ctx context.Context, name string, ids []int, skipRedownload bool) error {
 	instance, err := s.instance(name)
 	if err != nil {
