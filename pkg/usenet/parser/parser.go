@@ -230,6 +230,9 @@ func (p *NZBParser) parse(
 	}
 	// Group files by base Name and type
 	fileGroups := p.groupFiles(ctx, raw.Files)
+	if ctx.Err() != nil {
+		return nil, nil, fmt.Errorf("parse interrupted while identifying files: %w", ctx.Err())
+	}
 
 	if len(fileGroups) == 0 {
 		return nil, nil, fmt.Errorf("no valid file groups found in NZB")
