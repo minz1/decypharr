@@ -11,8 +11,9 @@ import (
 )
 
 const (
-	EventGrabbed        = "grabbed"
-	EventDownloadFailed = "downloadFailed"
+	EventGrabbed                = "grabbed"
+	EventDownloadFailed         = "downloadFailed"
+	EventDownloadFolderImported = "downloadFolderImported"
 
 	eventTypeGrabbed   = 1
 	historyPageSize    = 100
@@ -104,6 +105,16 @@ func (s *Service) GrabHistory(ctx context.Context, name, downloadID string) (His
 	return s.firstHistory(ctx, name, downloadID, EventGrabbed)
 }
 
+// DownloadImported reports whether the arr imported anything from a download.
+func (s *Service) DownloadImported(ctx context.Context, name, downloadID string) (bool, error) {
+	_, imported, err := s.firstHistory(ctx, name, downloadID, EventDownloadFolderImported)
+	if imported {
+		s.logger.Info().Str("arr", name).Str("download_id", downloadID).
+			Msg("The Arr imported this download")
+	}
+	return imported, err
+}
+
 // FailedHistory returns the download-failed record for a download, which is
 // how a blocklist already applied is recognised.
 func (s *Service) FailedHistory(ctx context.Context, name, downloadID string) (HistoryRecord, bool, error) {
@@ -190,7 +201,7 @@ func (s *Service) GrabHistorySince(ctx context.Context, name string, since time.
 
 // FailHistory marks a grab as failed. The Arr blocklists the release and, when
 // its own redownload is enabled, searches for a replacement.
-func (s *Service) FailHistory(ctx context.Context, name string, historyID int) error {
+func (s *Service) FailHistory(ctx context.Context, name string, historyID int, downloadID string) error {
 	instance, err := s.instance(name)
 	if err != nil {
 		return err
@@ -210,6 +221,8 @@ func (s *Service) FailHistory(ctx context.Context, name string, historyID int) e
 	if expectSuccessErr := expectSuccess(resp); expectSuccessErr != nil {
 		return fmt.Errorf("fail history %d: %w", historyID, expectSuccessErr)
 	}
+	s.logger.Info().Str("arr", name).Str("download_id", downloadID).Int("history_id", historyID).
+		Msg("Marked the grab failed in the Arr")
 	return nil
 }
 

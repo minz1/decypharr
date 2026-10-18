@@ -122,7 +122,7 @@ func TestMarkHistoryFailedCtxValidatesStatus(t *testing.T) {
 	defer server.Close()
 
 	s := testService(Arr{Host: server.URL, Token: "secret", Type: Radarr})
-	if err := s.FailHistory(t.Context(), "arr", 42); err == nil {
+	if err := s.FailHistory(t.Context(), "arr", 42, "ABC"); err == nil {
 		t.Fatal("expected non-success status error")
 	}
 }

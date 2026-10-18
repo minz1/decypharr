@@ -235,3 +235,45 @@ func TestFailDownloadInvalidatesOnlyAfterFailingTheGrab(t *testing.T) {
 		})
 	}
 }
+
+// Failing a grab is for downloads that never reached the library; one the arr imported must be left alone.
+func TestFailDownloadSkipsImportedDownload(t *testing.T) {
+	t.Parallel()
+	var failCalls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v3/history":
+			_, _ = fmt.Fprint(w, `{"page":1,"totalRecords":2,"records":[`+
+				`{"id":44,"downloadId":"DOWNLOADID","eventType":"downloadFolderImported"},`+
+				`{"id":42,"downloadId":"DOWNLOADID","eventType":"grabbed"}]}`)
+		case request.Method == http.MethodPost && strings.HasPrefix(request.URL.Path, "/api/v3/history/failed/"):
+			failCalls.Add(1)
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, request)
+		}
+	}))
+	t.Cleanup(server.Close)
+	registry := newTestArrStorage()
+	registry.AddOrUpdate(arr.Arr{Name: "sonarr", Host: server.URL, Token: "secret", Type: arr.Sonarr})
+	invalidator := &recordingInvalidator{}
+	service, err := NewService(ServiceOptions{Directory: t.TempDir(), Handler: NewHandler(registry, invalidator)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = service.Close() })
+	if startErr := service.Start(t.Context()); startErr != nil {
+		t.Fatal(startErr)
+	}
+	job, err := service.FailDownload("sonarr", "DOWNLOADID", "entry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForJobStatus(t, service, job.ID, StatusReady)
+	if got := failCalls.Load(); got != 0 {
+		t.Fatalf("FailHistory calls = %d, want 0 for an imported download", got)
+	}
+	if len(invalidator.jobs) != 0 {
+		t.Fatalf("invalidated %v, want none: the queue record backs imported files", invalidator.jobs)
+	}
+}

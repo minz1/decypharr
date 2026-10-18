@@ -73,6 +73,15 @@ func (handler *arrHandler) failDownload(ctx context.Context, job Job, progress J
 	if !failure.found {
 		return fmt.Errorf("no grab history for download %q", job.DownloadID)
 	}
+	if !failure.alreadyFailed {
+		imported, importedErr := handler.arrs.DownloadImported(ctx, instance.Name, job.DownloadID)
+		if importedErr != nil {
+			return fmt.Errorf("%w: %w", errArrLookup, importedErr)
+		}
+		if imported {
+			return nil
+		}
+	}
 	if failErr := handler.executeExactDownloadFailure(ctx, instance, &job, failure, progress); failErr != nil {
 		return failErr
 	}
@@ -289,7 +298,7 @@ func (handler *arrHandler) executeExactDownloadFailure(
 	if err != nil {
 		return err
 	}
-	dispatchErr := handler.arrs.FailHistory(ctx, instance.Name, mutation.HistoryID)
+	dispatchErr := handler.arrs.FailHistory(ctx, instance.Name, mutation.HistoryID, failure.downloadID)
 	return settleDispatch(job, progress, StatusBlocklisting, mutation, dispatchErr, mutation.HistoryID, lookup)
 }
 
