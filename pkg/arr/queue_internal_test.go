@@ -454,3 +454,20 @@ func TestCleanupQueueLogsEachBlocklistedItem(t *testing.T) {
 		}
 	}
 }
+
+// An imported download is never blocklisted; a partial pack the arr blocked keeps the owner's blocklist policy.
+func TestResolveQueueActionLeavesImportedDownloads(t *testing.T) {
+	t.Parallel()
+	for state, want := range map[string]QueueAction{
+		"imported": QueueActionNone, "importing": QueueActionNone, "importBlocked": QueueActionBlocklistResearch,
+	} {
+		item := QueueSchema{Status: "completed", TrackedDownloadStatus: "warning", TrackedDownloadState: state}
+		item.StatusMessages = append(item.StatusMessages, struct {
+			Title    string   `json:"title"`
+			Messages []string `json:"messages"`
+		}{Title: "One or more episodes expected in this release were not imported or missing from the release"})
+		if got := resolveQueueAction(item, config.DefaultQueueCleanupRules()); got != want {
+			t.Errorf("state %s: resolveQueueAction() = %q, want %q", state, got, want)
+		}
+	}
+}

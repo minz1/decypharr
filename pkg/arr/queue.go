@@ -231,6 +231,9 @@ func resolveQueueAction(item QueueSchema, rules []config.QueueCleanupRule) Queue
 	if !strings.EqualFold(item.Status, "failed") && status != "warning" && status != "error" {
 		return QueueActionNone
 	}
+	if state := strings.ToLower(item.TrackedDownloadState); state == "importing" || state == "imported" {
+		return QueueActionNone
+	}
 	arrFailed := strings.EqualFold(item.TrackedDownloadState, "failedPending") ||
 		strings.EqualFold(item.TrackedDownloadState, "failed")
 
