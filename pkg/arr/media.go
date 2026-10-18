@@ -118,6 +118,12 @@ func (s *Service) DeleteLibraryFile(ctx context.Context, name string, fileID int
 	if err != nil {
 		return err
 	}
+	var monitored []int
+	if instance.Type == Sonarr {
+		if monitored, err = s.monitoredEpisodesOfFile(ctx, instance, fileID); err != nil {
+			return err
+		}
+	}
 
 	resp, err := s.mutate(ctx, instance, http.MethodDelete, fmt.Sprintf("api/v3/%s/%d", resource, fileID), nil, nil)
 	if err != nil {
@@ -129,7 +135,45 @@ func (s *Service) DeleteLibraryFile(ctx context.Context, name string, fileID int
 	if expectSuccessErr := expectSuccess(resp); expectSuccessErr != nil {
 		return fmt.Errorf("delete %s %d: %w", resource, fileID, expectSuccessErr)
 	}
+	if monitorErr := s.monitorEpisodes(ctx, instance, monitored); monitorErr != nil {
+		s.logger.Error().Err(monitorErr).Str("arr", name).Ints("episode_ids", monitored).Int("file_id", fileID).
+			Msg("Deleted an episode file but could not re-monitor its episodes; monitor them in the Arr")
+	}
 	return nil
+}
+
+// monitoredEpisodesOfFile lists the monitored episodes an episode file covers; Sonarr may unmonitor them on delete.
+func (s *Service) monitoredEpisodesOfFile(ctx context.Context, instance Arr, fileID int) ([]int, error) {
+	var monitored []int
+	endpoint := fmt.Sprintf("api/v3/episode?episodeFileId=%d", fileID)
+	resp, err := s.getDecoded(ctx, instance, endpoint, arrayResponseDecoder(func(episode sonarrEpisode) error {
+		if episode.Monitored {
+			monitored = append(monitored, episode.ID)
+		}
+		return nil
+	}))
+	if err != nil {
+		return nil, fmt.Errorf("list episodes of file %d: %w", fileID, err)
+	}
+	if expectStatusErr := expectStatus(resp, http.StatusOK); expectStatusErr != nil {
+		return nil, fmt.Errorf("list episodes of file %d: %w", fileID, expectStatusErr)
+	}
+	return monitored, nil
+}
+
+func (s *Service) monitorEpisodes(ctx context.Context, instance Arr, episodeIDs []int) error {
+	if len(episodeIDs) == 0 {
+		return nil
+	}
+	payload := struct {
+		EpisodeIDs []int `json:"episodeIds"`
+		Monitored  bool  `json:"monitored"`
+	}{EpisodeIDs: episodeIDs, Monitored: true}
+	resp, err := s.mutate(ctx, instance, http.MethodPut, "api/v3/episode/monitor", payload, nil)
+	if err != nil {
+		return err
+	}
+	return expectSuccess(resp)
 }
 
 func (s *Service) SearchEpisodes(ctx context.Context, name string, episodeIDs []int) (Command, error) {

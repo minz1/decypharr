@@ -4,6 +4,7 @@ import (
 	stdjson "encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -19,7 +20,6 @@ func TestDeleteManagedFile(t *testing.T) {
 		statusCode int
 		wantErr    bool
 	}{
-		{name: "sonarr", arrType: Sonarr, path: "/api/v3/episodefile/17", statusCode: http.StatusNoContent},
 		{name: "radarr missing is idempotent", arrType: Radarr, path: "/api/v3/moviefile/17", statusCode: http.StatusNotFound},
 		{name: "failure", arrType: Radarr, path: "/api/v3/moviefile/17", statusCode: http.StatusBadRequest, wantErr: true},
 	} {
@@ -165,5 +165,57 @@ func TestMediaEscapesMediaID(t *testing.T) {
 	s := testService(Arr{Host: server.URL, Token: "secret", Type: Radarr})
 	if _, err := s.Media(t.Context(), "arr", mediaID); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Sonarr may unmonitor an episode whose file is deleted; a reacquire puts back the ones that were monitored.
+func TestDeleteLibraryFileKeepsSonarrEpisodesMonitored(t *testing.T) {
+	t.Parallel()
+	var monitorBodies []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/episode" && r.URL.Query().Get("episodeFileId") == "17":
+			_, _ = fmt.Fprint(w, `[{"id":1,"episodeFileId":17,"monitored":true},`+
+				`{"id":2,"episodeFileId":17,"monitored":false}]`)
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/v3/episodefile/17":
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v3/episode/monitor":
+			body, _ := io.ReadAll(r.Body)
+			monitorBodies = append(monitorBodies, string(body))
+			w.WriteHeader(http.StatusAccepted)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	s := testService(Arr{Host: server.URL, Token: "secret", Type: Sonarr})
+	if err := s.DeleteLibraryFile(t.Context(), "arr", 17); err != nil {
+		t.Fatal(err)
+	}
+	if len(monitorBodies) != 1 || monitorBodies[0] != `{"episodeIds":[1],"monitored":true}` {
+		t.Fatalf("monitor requests = %v, want episode 1 re-monitored", monitorBodies)
+	}
+}
+
+// A failed re-monitor must not fail the reacquire: the file is already gone and the grab still needs failing.
+func TestDeleteLibraryFileContinuesWhenRemonitorFails(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/episode":
+			_, _ = fmt.Fprint(w, `[{"id":1,"episodeFileId":17,"monitored":true}]`)
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/v3/episodefile/17":
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	defer server.Close()
+
+	s := testService(Arr{Host: server.URL, Token: "secret", Type: Sonarr})
+	if err := s.DeleteLibraryFile(t.Context(), "arr", 17); err != nil {
+		t.Fatalf("DeleteLibraryFile() = %v, want nil after the file was deleted", err)
 	}
 }

@@ -38,8 +38,9 @@ type sonarrEpisodeFile struct {
 }
 
 type sonarrEpisode struct {
-	ID            int `json:"id"`
-	EpisodeFileID int `json:"episodeFileId"`
+	ID            int  `json:"id"`
+	EpisodeFileID int  `json:"episodeFileId"`
+	Monitored     bool `json:"monitored"`
 }
 
 type radarrMovie struct {
