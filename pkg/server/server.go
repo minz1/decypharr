@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -43,6 +44,7 @@ const (
 	// readHeaderTimeout bounds slow-header (slowloris) clients; bodies and
 	// long streams are unaffected.
 	readHeaderTimeout = 30 * time.Second
+	shutdownGrace     = 10 * time.Second
 )
 
 type Server struct {
@@ -56,6 +58,8 @@ type Server struct {
 	templates   *template.Template
 	urlBase     string
 	restartFunc func()
+	// shutdownGrace is how long in-flight requests get to finish before open streams are closed.
+	shutdownGrace time.Duration
 }
 
 // New builds the HTTP front end for one service generation. Settings that
@@ -104,6 +108,8 @@ func New(mgr *manager.Manager, store *config.Store, logs *logger.Factory) *Serve
 		cookie:    cookieStore,
 		templates: templates,
 		urlBase:   cfg.URLBase,
+
+		shutdownGrace: shutdownGrace,
 	}
 
 	qb := qbit.New(mgr, store, logs.New("qbit"))
@@ -185,8 +191,12 @@ func (s *Server) Start(ctx context.Context) error {
 	s.stats.Start(ctx)
 
 	s.logger.Info().Msgf("Starting server on %s%s", listener.Addr(), cfg.URLBase)
+	requests, cancelRequests := context.WithCancel(context.WithoutCancel(ctx))
+	defer cancelRequests()
+	var handlers handlerTracker
 	srv := &http.Server{
-		Handler:           s.router,
+		Handler:           handlers.wrap(s.router),
+		BaseContext:       func(net.Listener) context.Context { return requests },
 		ReadHeaderTimeout: readHeaderTimeout,
 	}
 
@@ -203,8 +213,47 @@ func (s *Server) Start(ctx context.Context) error {
 		return fmt.Errorf("http server: %w", err)
 	case <-ctx.Done():
 		s.logger.Info().Msg("Shutting down gracefully...")
-		return srv.Shutdown(context.WithoutCancel(ctx))
+		graceCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.shutdownGrace)
+		defer cancel()
+		if err = srv.Shutdown(graceCtx); !errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		s.logger.Warn().Dur("grace", s.shutdownGrace).
+			Msg("Closing requests still open after the shutdown grace period")
+		cancelRequests()
+		err = srv.Close()
+		handlers.wait()
+		return err
 	}
+}
+
+// handlerTracker lets Start wait out handlers that outlive a forced close, so nothing they use is stopped under them.
+type handlerTracker struct {
+	mu       sync.Mutex
+	stopping bool
+	running  sync.WaitGroup
+}
+
+func (h *handlerTracker) wrap(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.mu.Lock()
+		if h.stopping {
+			h.mu.Unlock()
+			http.Error(w, "server is stopping", http.StatusServiceUnavailable)
+			return
+		}
+		h.running.Add(1)
+		h.mu.Unlock()
+		defer h.running.Done()
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (h *handlerTracker) wait() {
+	h.mu.Lock()
+	h.stopping = true
+	h.mu.Unlock()
+	h.running.Wait()
 }
 
 func (s *Server) getLogs(w http.ResponseWriter, _ *http.Request) {

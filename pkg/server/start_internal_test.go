@@ -131,3 +131,51 @@ func getWhenListening(t *testing.T, url string) string {
 		return string(b)
 	}
 }
+
+// An open stream cannot hold a restart or stop: after the grace period Start closes it.
+func TestStartClosesStreamsThatOutliveShutdownGrace(t *testing.T) {
+	t.Parallel()
+	free, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := free.Addr().String()
+	_, port, _ := net.SplitHostPort(addr)
+	_ = free.Close()
+
+	mgr, store := managertest.New(t, func(cfg *config.Config) {
+		cfg.BindAddress = "127.0.0.1"
+		cfg.Port = port
+	})
+	srv := New(mgr, store, logger.Discard())
+	srv.shutdownGrace = 100 * time.Millisecond
+	ctx, cancel := context.WithCancel(t.Context())
+	srv.router = chi.NewRouter()
+	exited := make(chan struct{})
+	srv.router.Get("/", func(w http.ResponseWriter, r *http.Request) {
+		defer close(exited)
+		cancel()
+		_, _ = io.WriteString(w, "streaming")
+		http.NewResponseController(w).Flush()
+		<-r.Context().Done()
+		time.Sleep(100 * time.Millisecond)
+	})
+	done := make(chan error, 1)
+	go func() { done <- srv.Start(ctx) }()
+	go getWhenListening(t, "http://"+addr+"/")
+
+	<-ctx.Done()
+	select {
+	case err = <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("an open stream held Start past the shutdown grace period")
+	}
+	select {
+	case <-exited:
+	default:
+		t.Fatal("Start returned while a closed stream's handler was still running")
+	}
+}
