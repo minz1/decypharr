@@ -40,8 +40,6 @@ var imagesEmbed embed.FS
 // Server is the HTTP front end: web UI, JSON API and the compat APIs.
 const (
 	sessionMaxAge = 7 * 24 * time.Hour
-	// restartDelay lets the triggering response flush before services stop.
-	restartDelay = 200 * time.Millisecond
 	// readHeaderTimeout bounds slow-header (slowloris) clients; bodies and
 	// long streams are unaffected.
 	readHeaderTimeout = 30 * time.Second
@@ -165,7 +163,6 @@ func (s *Server) SetRestartFunc(restartFunc func()) {
 
 func (s *Server) Restart() {
 	if s.restartFunc != nil {
-		time.Sleep(restartDelay)
 		s.restartFunc()
 	} else {
 		s.logger.Warn().Msg("Restart function not set")
