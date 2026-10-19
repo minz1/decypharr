@@ -38,6 +38,13 @@ func (r *Service) Start(ctx context.Context) error {
 		return fmt.Errorf("invalid repair schedule %q: %w", cfg.Schedule, err)
 	}
 
+	options := []gocron.JobOption{gocron.WithTags(repairSchedulerTag)}
+	if r.storage != nil {
+		runs, _ := r.storage.ListRepairRuns()
+		if startAt, anchored := sweepStartAt(cfg.Schedule, runs, time.Now()); anchored {
+			options = append(options, gocron.WithStartAt(gocron.WithStartDateTime(startAt)))
+		}
+	}
 	r.scheduler.RemoveByTags(repairSchedulerTag)
 	if _, newJobErr := r.scheduler.NewJob(jd,
 		gocron.NewTask(func() {
@@ -45,7 +52,7 @@ func (r *Service) Start(ctx context.Context) error {
 				r.logger.Warn().Err(runSweepErr).Msg("Scheduled repair sweep skipped")
 			}
 		}),
-		gocron.WithTags(repairSchedulerTag),
+		options...,
 	); newJobErr != nil {
 		return fmt.Errorf("failed to register repair sweep: %w", newJobErr)
 	}
@@ -71,6 +78,31 @@ func (r *Service) Start(ctx context.Context) error {
 		r.logger.Info().Str("stop_schedule", stopSchedule).Msg("Repair sweep stop schedule registered")
 	}
 	return nil
+}
+
+const (
+	interruptedByRestart = "interrupted by restart"
+	// sweepStartupGrace lets the initial provider sync and Arr indexing finish before an overdue sweep.
+	sweepStartupGrace = 10 * time.Minute
+)
+
+// sweepStartAt anchors an interval schedule to the last sweep, so a restart does not push the next one back.
+func sweepStartAt(schedule string, runs []*storage.RepairRun, now time.Time) (time.Time, bool) {
+	interval, err := utils.ParseDuration(strings.TrimSpace(schedule))
+	if err != nil || interval <= 0 {
+		return time.Time{}, false
+	}
+	for _, run := range runs {
+		if run == nil || run.Trigger != storage.RepairTriggerScheduled || run.CancelReason == interruptedByRestart {
+			continue
+		}
+		next := run.StartedAt.Add(interval)
+		if grace := now.Add(sweepStartupGrace); next.Before(grace) {
+			next = grace
+		}
+		return next, true
+	}
+	return time.Time{}, false
 }
 
 // Stop cancels active repair work and removes its schedules.
@@ -261,7 +293,7 @@ func (r *Service) cancelOrphanRuns() {
 			run.Status = storage.RepairRunCancelled
 			run.Stage = storage.RepairStageDone
 			run.CompletedAt = now
-			run.CancelReason = "interrupted by restart"
+			run.CancelReason = interruptedByRestart
 			if saveRepairRunErr := s.SaveRepairRun(run); saveRepairRunErr != nil {
 				r.logger.Warn().
 					Err(saveRepairRunErr).
