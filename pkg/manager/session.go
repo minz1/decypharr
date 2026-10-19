@@ -771,7 +771,7 @@ func (m *Manager) openSession(
 				return m.usenet.OpenFileWithRetention(ctx, nzoID, filename, retention)
 			},
 			onArticleNotFound: func() {
-				m.submitStreamReacquire(entry.InfoHash, file.ID)
+				m.submitStreamReacquire(entry.InfoHash, file.ID, filename)
 			},
 		}
 	} else {

@@ -749,19 +749,36 @@ func (u *Usenet) checkNZBAvailability(ctx context.Context, nzb *storage.NZB) err
 // gated by the NNTP client's repair bank so concurrent probes don't starve
 // streaming traffic.
 func (u *Usenet) CheckFile(ctx context.Context, nzoID, filename string) error {
+	messageIDs, err := u.fileMessageIDs(nzoID, filename, u.config.Get().Usenet.AvailabilitySamplePercent)
+	if err != nil {
+		return err
+	}
+	return u.checkAvailability(ctx, filename, messageIDs)
+}
+
+// CheckWholeFile STATs every article of one file, including ones seen at import: a stream just failed on one of them.
+func (u *Usenet) CheckWholeFile(ctx context.Context, nzoID, filename string) error {
+	messageIDs, err := u.fileMessageIDs(nzoID, filename, wholeFilePercent)
+	if err != nil {
+		return err
+	}
+	return u.statAvailability(ctx, filename, messageIDs)
+}
+
+const wholeFilePercent = 100
+
+func (u *Usenet) fileMessageIDs(nzoID, filename string, samplePercent int) ([]string, error) {
 	// Repair/availability probes only need a sample of one file's message ids.
 	// Decode just those (no numeric columns, no NZBSegment structs, no other
 	// files) so a full sweep doesn't hold whole segment maps in memory.
-	samplePercent := u.config.Get().Usenet.AvailabilitySamplePercent
 	messageIDs, err := u.nzbStorage.SampleFileMessageIDs(nzoID, filename, samplePercent)
 	if err != nil {
-		return fmt.Errorf("failed to sample file segments: %w", err)
+		return nil, fmt.Errorf("failed to sample file segments: %w", err)
 	}
 	if len(messageIDs) == 0 {
-		return fmt.Errorf("file has no Segments: %s: %w", filename, customerror.ErrUsenetManifestInvalid)
+		return nil, fmt.Errorf("file has no Segments: %s: %w", filename, customerror.ErrUsenetManifestInvalid)
 	}
-	err = u.checkAvailability(ctx, filename, messageIDs)
-	return err
+	return messageIDs, nil
 }
 
 func (u *Usenet) CheckFileAvailability(ctx context.Context, file *storage.NZBFile, samplePercent int) error {
@@ -772,10 +789,10 @@ func (u *Usenet) CheckFileAvailability(ctx context.Context, file *storage.NZBFil
 // gates each worker through its internal repair bank so concurrent availability
 // checks don't starve streaming connections.
 func (u *Usenet) checkAvailability(ctx context.Context, fileName string, messageIDs []string) error {
-	if len(messageIDs) == 0 {
-		return nil
-	}
-	messageIDs = u.analyzer.FilterUnobserved(messageIDs)
+	return u.statAvailability(ctx, fileName, u.analyzer.FilterUnobserved(messageIDs))
+}
+
+func (u *Usenet) statAvailability(ctx context.Context, fileName string, messageIDs []string) error {
 	if len(messageIDs) == 0 {
 		return nil
 	}

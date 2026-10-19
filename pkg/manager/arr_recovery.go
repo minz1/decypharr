@@ -1,13 +1,16 @@
 package manager
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/sirrobot01/appendstore"
 
+	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/pkg/arr/reacquire"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
@@ -54,7 +57,7 @@ func (m *Manager) lookupArrBinding(entryID, fileID string) (reacquire.Binding, b
 	return binding, ok
 }
 
-func (m *Manager) submitStreamReacquire(entryID, fileID string) {
+func (m *Manager) submitStreamReacquire(entryID, fileID, filename string) {
 	recovery := m.recoveryService()
 	if recovery == nil || entryID == "" || fileID == "" {
 		return
@@ -71,6 +74,9 @@ func (m *Manager) submitStreamReacquire(entryID, fileID string) {
 
 	go func() {
 		defer m.reacquireNotifications.Delete(target)
+		if !m.streamFailureConfirmed(entryID, filename) {
+			return
+		}
 		job, err := recovery.Reacquire(reacquire.Request{
 			EntryID: entryID,
 			FileID:  fileID,
@@ -188,4 +194,32 @@ func (m *Manager) failGrab(entry *storage.Entry, recovery ArrRecovery, arrName, 
 	}
 	event.Msg(reason + "; failing its grab in the Arr")
 	return nil
+}
+
+// streamCheckTimeout bounds the full article check that confirms a stream failure before the file is replaced.
+const streamCheckTimeout = 3 * time.Minute
+
+// streamFailureConfirmed checks every article of the file, so a player blip or a scan never replaces a good file.
+func (m *Manager) streamFailureConfirmed(entryID, filename string) bool {
+	check := m.checkStreamFile
+	if check == nil {
+		if m.usenet == nil {
+			return false
+		}
+		check = m.usenet.CheckWholeFile
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), streamCheckTimeout)
+	defer cancel()
+	err := check(ctx, entryID, filename)
+	if errors.Is(err, customerror.ErrUsenetSegmentMissing) || errors.Is(err, customerror.ErrUsenetManifestMissing) ||
+		errors.Is(err, customerror.ErrUsenetManifestInvalid) {
+		return true
+	}
+	event := m.logger.Info().Err(err).Str("entry_id", entryID).Str("file", filename)
+	if ctx.Err() != nil {
+		event.Msg("Stream failed but the article check did not finish; not reacquiring")
+		return false
+	}
+	event.Msg("Stream failed but a full article check found nothing missing; not reacquiring")
+	return false
 }

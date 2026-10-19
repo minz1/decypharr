@@ -222,7 +222,7 @@ func TestUsenetArticleNotFoundQueuesOneNonBlockingReacquire(t *testing.T) {
 		release:  make(chan struct{}),
 		finished: make(chan struct{}),
 	}
-	m := &Manager{activeStreams: xsync.NewMap[string, *ActiveStream]()}
+	m := &Manager{activeStreams: xsync.NewMap[string, *ActiveStream](), checkStreamFile: confirmBroken}
 	m.SetArrRecovery(recovery)
 
 	newStream := func(opens *atomic.Int64) *session {
@@ -233,7 +233,7 @@ func TestUsenetArticleNotFoundQueuesOneNonBlockingReacquire(t *testing.T) {
 				return missingArticleReader{}, nil
 			},
 			onArticleNotFound: func() {
-				m.submitStreamReacquire("nzb-1", "file-1")
+				m.submitStreamReacquire("nzb-1", "file-1", "a.mkv")
 			},
 		}
 		stream := newSession(t.Context(), transport, 4096, 0)
@@ -301,11 +301,11 @@ func TestStreamReacquireWaitsForArrBinding(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		recovery := &fakeArrRecovery{started: make(chan struct{})}
-		m := &Manager{}
+		m := &Manager{checkStreamFile: confirmBroken}
 		m.SetArrRecovery(recovery)
 
 		for range 10 {
-			m.submitStreamReacquire("nzb-1", "file-1")
+			m.submitStreamReacquire("nzb-1", "file-1", "a.mkv")
 			synctest.Wait()
 		}
 		if got := recovery.calls.Load(); got != 0 {
@@ -313,7 +313,7 @@ func TestStreamReacquireWaitsForArrBinding(t *testing.T) {
 		}
 
 		recovery.binding = reacquire.Binding{EntryID: "nzb-1", EntryFileID: "file-1"}
-		m.submitStreamReacquire("nzb-1", "file-1")
+		m.submitStreamReacquire("nzb-1", "file-1", "a.mkv")
 		synctest.Wait()
 		if got := recovery.calls.Load(); got != 1 {
 			t.Fatalf("reacquire calls after indexing = %d, want 1", got)
@@ -332,9 +332,13 @@ func TestStreamReacquireIsLogged(t *testing.T) {
 			started: make(chan struct{}),
 			binding: reacquire.Binding{ArrName: "sonarr", EntryID: "nzb-1", EntryFileID: "file-1"},
 		}
-		m := &Manager{logger: zerolog.New(&logs), activeStreams: xsync.NewMap[string, *ActiveStream]()}
+		m := &Manager{
+			logger:          zerolog.New(&logs),
+			activeStreams:   xsync.NewMap[string, *ActiveStream](),
+			checkStreamFile: confirmBroken,
+		}
 		m.SetArrRecovery(recovery)
-		m.submitStreamReacquire("nzb-1", "file-1")
+		m.submitStreamReacquire("nzb-1", "file-1", "a.mkv")
 		synctest.Wait()
 		for _, want := range []string{`"level":"info"`, "nzb-1", "file-1", "reacquire-1"} {
 			if !strings.Contains(logs.String(), want) {
@@ -342,4 +346,48 @@ func TestStreamReacquireIsLogged(t *testing.T) {
 			}
 		}
 	})
+}
+
+func confirmBroken(context.Context, string, string) error { return customerror.ErrUsenetSegmentMissing }
+
+// A stream failure only replaces the file once a full article check confirms it is broken; a scan or a blip must not.
+func TestStreamReacquireOnlyAfterTheCheckConfirmsBreakage(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		check    error
+		wantCall bool
+	}{
+		"confirmed broken": {customerror.ErrUsenetSegmentMissing, true},
+		"manifest missing": {customerror.ErrUsenetManifestMissing, true},
+		"manifest invalid": {customerror.ErrUsenetManifestInvalid, true},
+		"healthy":          {nil, false},
+		"check failed":     {errors.New("connection refused"), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				var checked []string
+				recovery := &fakeArrRecovery{
+					started: make(chan struct{}),
+					binding: reacquire.Binding{ArrName: "sonarr", EntryID: "nzb-1", EntryFileID: "file-1"},
+				}
+				m := &Manager{
+					activeStreams: xsync.NewMap[string, *ActiveStream](),
+					checkStreamFile: func(_ context.Context, nzoID, filename string) error {
+						checked = append(checked, nzoID+"/"+filename)
+						return tc.check
+					},
+				}
+				m.SetArrRecovery(recovery)
+				m.submitStreamReacquire("nzb-1", "file-1", "a.mkv")
+				synctest.Wait()
+				if len(checked) != 1 || checked[0] != "nzb-1/a.mkv" {
+					t.Fatalf("checked = %v, want nzb-1/a.mkv once", checked)
+				}
+				if got := recovery.calls.Load() == 1; got != tc.wantCall {
+					t.Fatalf("reacquire calls = %d, want reacquired = %v", recovery.calls.Load(), tc.wantCall)
+				}
+			})
+		})
+	}
 }

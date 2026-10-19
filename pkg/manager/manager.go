@@ -77,12 +77,14 @@ type Manager struct {
 	arrRecovery            ArrRecovery
 	reacquireNotifications sync.Map
 
-	pruneMu       sync.Mutex
-	pruneNow      func() time.Time
-	removeUsenet  func(id string) error
-	pruneReportMu sync.Mutex
-	pruneFails    map[string]int
-	lastPrune     PruneReport
+	pruneMu      sync.Mutex
+	pruneNow     func() time.Time
+	removeUsenet func(id string) error
+	// checkStreamFile confirms a stream failure; nil uses the usenet client's full article check.
+	checkStreamFile func(ctx context.Context, nzoID, filename string) error
+	pruneReportMu   sync.Mutex
+	pruneFails      map[string]int
+	lastPrune       PruneReport
 
 	// Migration jobs tracking
 	migrationJobs   *xsync.Map[string, *storage.SwitcherJob]
