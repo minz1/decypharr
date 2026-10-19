@@ -152,6 +152,7 @@ func New(mgr *manager.Manager, store *config.Store, logs *logger.Factory) *Serve
 
 			// Webhooks
 			r.Post("/webhooks/tautulli", s.handleTautulli)
+			r.Post("/webhooks/arr/{name}", s.handleArrWebhook)
 		})
 	})
 	s.router = r

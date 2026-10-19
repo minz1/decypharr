@@ -3,8 +3,11 @@ package server
 import (
 	"cmp"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
+
+	"github.com/go-chi/chi/v5"
 
 	"github.com/sirrobot01/decypharr/pkg/repair"
 )
@@ -66,4 +69,47 @@ func (s *Server) handleTautulli(w http.ResponseWriter, r *http.Request) {
 			Msg("Tautulli webhook: media recheck triggered")
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+// handleArrWebhook binds an arr import to its decypharr entry as soon as the arr reports it.
+func (s *Server) handleArrWebhook(w http.ResponseWriter, r *http.Request) {
+	arrName := chi.URLParam(r, "name")
+	if instance, ok := s.manager.Arr().Get(arrName); !ok || !instance.ImportWebhook {
+		http.Error(w, "import webhook is not enabled for this arr", http.StatusNotFound)
+		return
+	}
+	entryID, err := arrImportEntry(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to parse webhook body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if entryID == "" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if entry, getErr := s.manager.Storage().Get(entryID); getErr != nil || entry == nil {
+		s.logger.Debug().Str("arr", arrName).Str("download_id", entryID).
+			Msg("Arr imported a download decypharr does not own")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	queued := s.manager.ReindexArrEntry(arrName, entryID)
+	s.logger.Info().Str("arr", arrName).Str("entry_id", entryID).Bool("queued", queued).
+		Msg("Arr imported a download; indexing it")
+	w.WriteHeader(http.StatusAccepted)
+}
+
+// arrImportEntry returns the entry an arr's import webhook names, or "" for any other event.
+func arrImportEntry(body io.Reader) (string, error) {
+	var payload struct {
+		EventType  string `json:"eventType"`
+		DownloadID string `json:"downloadId"`
+	}
+	if err := json.NewDecoder(body).Decode(&payload); err != nil {
+		return "", err
+	}
+	if payload.EventType != "Download" {
+		return "", nil
+	}
+	return strings.ToLower(strings.TrimSpace(payload.DownloadID)), nil
 }

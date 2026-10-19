@@ -570,8 +570,8 @@ func TestExhaustedTargetedRequestsCoalesceArrRefresh(t *testing.T) {
 	indexer.ctx = ctx
 
 	finalAttempt := targetedIndexAttempts
-	indexer.retryTargeted(ctx, indexRequest{arrName: "radarr", entryID: "one", attempt: finalAttempt})
-	indexer.retryTargeted(ctx, indexRequest{arrName: "radarr", entryID: "two", attempt: finalAttempt})
+	indexer.retryTargeted(ctx, indexRequest{arrName: "radarr", entryID: "one", attempt: finalAttempt}, false)
+	indexer.retryTargeted(ctx, indexRequest{arrName: "radarr", entryID: "two", attempt: finalAttempt}, false)
 
 	indexer.mu.Lock()
 	queue := slices.Clone(indexer.queue)
@@ -622,5 +622,58 @@ func TestReconcileGenerationOutrunsStoredGeneration(t *testing.T) {
 	}
 	if writer.generation <= stored {
 		t.Fatalf("generation %d is not newer than the stored %d", writer.generation, stored)
+	}
+}
+
+// With the arr's import webhook the timer only catches instant imports and one late one; without it nothing changes.
+func TestImportWaitSchedule(t *testing.T) {
+	t.Parallel()
+	webhook := []time.Duration{time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Minute}
+	timer := []time.Duration{time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second}
+	for range targetedIndexAttempts - len(timer) {
+		timer = append(timer, targetedIndexSteadyDelay)
+	}
+	for name, want := range map[bool][]time.Duration{true: webhook, false: timer} {
+		for attempt, delay := range want {
+			if got, ok := importWaitDelay(name, attempt); !ok || got != delay {
+				t.Errorf("webhook=%v: importWaitDelay(%d) = %s, %v; want %s", name, attempt, got, ok, delay)
+			}
+		}
+		if _, ok := importWaitDelay(name, len(want)); ok {
+			t.Errorf("webhook=%v: still waiting after %d attempts; want the full refresh", name, len(want))
+		}
+	}
+}
+
+// With the webhook on, an entry still unmatched after the late wait goes to the full refresh; without it the timer keeps polling.
+func TestUnmatchedEntryAfterLateWait(t *testing.T) {
+	t.Parallel()
+	for _, webhook := range []bool{true, false} {
+		t.Run(fmt.Sprintf("webhook=%v", webhook), func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = fmt.Fprint(w, `{"page":1,"pageSize":100,"totalRecords":0,"records":[]}`)
+			}))
+			t.Cleanup(server.Close)
+			arrs := arr.New(config.NewStore(&config.Config{}), nil, zerolog.Nop())
+			arrs.AddOrUpdate(arr.Arr{
+				Name: "radarr", Host: server.URL, Token: "secret", Type: arr.Radarr, ImportWebhook: webhook,
+			})
+			managed := []ManagedFile{{EntryID: "entry", EntryFolder: "Movie", FileID: "file", FileName: "movie.mkv"}}
+			writer := new(recordingBindingWriter)
+			indexer := NewIndexer(arrs, fixedManagedCatalog(managed), writer, t.TempDir(), zerolog.Nop())
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(cancel)
+			indexer.ctx = ctx
+
+			indexer.handle(ctx, indexRequest{arrName: "radarr", entryID: "entry", attempt: importRampAttempts + 1})
+
+			indexer.mu.Lock()
+			queue := slices.Clone(indexer.queue)
+			indexer.mu.Unlock()
+			if refreshed := len(queue) == 1 && queue[0].entryID == ""; refreshed != webhook {
+				t.Errorf("queue = %#v; want full refresh only with the webhook", queue)
+			}
+		})
 	}
 }

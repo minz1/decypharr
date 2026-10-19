@@ -42,7 +42,10 @@ func (s *Server) skipAuthHandler(w http.ResponseWriter, r *http.Request) {
 
 // isValidAPIToken checks if the request contains a valid API token.
 func (s *Server) isValidAPIToken(r *http.Request) bool {
-	// Check Authorization header for Bearer token
+	// Arr webhooks can only send basic auth: the token is the password, the username is ignored.
+	if _, password, ok := r.BasicAuth(); ok {
+		return s.config.Get().VerifyToken(password)
+	}
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
 		return false

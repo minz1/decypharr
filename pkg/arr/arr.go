@@ -40,6 +40,7 @@ type Arr struct {
 	DownloadUncached *bool  `json:"download_uncached"`
 	SelectedDebrid   string `json:"selected_debrid,omitempty"`
 	Source           Source `json:"source,omitempty"`
+	ImportWebhook    bool   `json:"import_webhook,omitempty"`
 }
 
 // Reachable reports whether the instance carries enough to be called.
@@ -112,6 +113,7 @@ func fromConfig(c config.Arr) Arr {
 		DownloadUncached: c.DownloadUncached,
 		SelectedDebrid:   c.SelectedDebrid,
 		Source:           Source(c.Source),
+		ImportWebhook:    c.ImportWebhook,
 	}
 }
 
@@ -124,6 +126,7 @@ func (a Arr) toConfig() config.Arr {
 		DownloadUncached: a.DownloadUncached,
 		SelectedDebrid:   a.SelectedDebrid,
 		Source:           string(a.Source),
+		ImportWebhook:    a.ImportWebhook,
 	}
 }
 

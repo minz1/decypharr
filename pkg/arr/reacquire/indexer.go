@@ -242,7 +242,7 @@ func (i *Indexer) handle(ctx context.Context, request indexRequest) {
 			return
 		}
 		if err == nil {
-			i.retryTargeted(ctx, request)
+			i.retryTargeted(ctx, request, instance.ImportWebhook)
 			return
 		}
 	}
@@ -251,7 +251,7 @@ func (i *Indexer) handle(ctx context.Context, request indexRequest) {
 		Str("arr", request.arrName).
 		Str("entry_id", request.entryID).
 		Msg("Targeted Arr index attempt failed")
-	i.retryTargeted(ctx, request)
+	i.retryTargeted(ctx, request, false)
 }
 
 // handleRefresh reconciles every Sonarr and Radarr instance against one read of
@@ -411,15 +411,38 @@ func (i *Indexer) targetedMediaIDs(ctx context.Context, instance arr.Arr, manage
 	return ids
 }
 
-// retryTargeted waits for the Arr to import the entry, then indexes it again.
-func (i *Indexer) retryTargeted(ctx context.Context, request indexRequest) {
+// retryTargeted waits for the Arr to import the entry, then indexes it again; the import webhook normally ends the wait sooner.
+func (i *Indexer) retryTargeted(ctx context.Context, request indexRequest, webhook bool) {
 	if ctx.Err() != nil {
 		return
 	}
-	if !i.retryBackoff(ctx, request) {
+	delay, ok := importWaitDelay(webhook, request.attempt)
+	if !ok {
 		i.enqueue(indexRequest{arrName: request.arrName})
+		return
+	}
+	i.retry(ctx, request, delay)
+}
+
+// importWaitDelay with the webhook catches instant imports, then gives the webhook half an hour; without it, polls as before.
+func importWaitDelay(webhook bool, attempt int) (time.Duration, bool) {
+	if !webhook {
+		return targetedIndexDelay(attempt), attempt < targetedIndexAttempts
+	}
+	switch {
+	case attempt < importRampAttempts:
+		return targetedIndexDelay(attempt), true
+	case attempt == importRampAttempts:
+		return lateImportWait, true
+	default:
+		return 0, false
 	}
 }
+
+const (
+	importRampAttempts = 4
+	lateImportWait     = 30 * time.Minute
+)
 
 func (i *Indexer) reconcile(
 	ctx context.Context,
@@ -486,12 +509,10 @@ func targetedIndexDelay(attempt int) time.Duration {
 	return targetedIndexSteadyDelay
 }
 
-// retryBackoff schedules request's next attempt. It reports false when the
-// backoff is exhausted or the indexer is stopping.
-func (i *Indexer) retryBackoff(ctx context.Context, request indexRequest) bool {
+// retryBackoff schedules request's next attempt unless the backoff is exhausted or the indexer is stopping.
+func (i *Indexer) retryBackoff(ctx context.Context, request indexRequest) {
 	if request.attempt >= targetedIndexAttempts || ctx.Err() != nil {
-		return false
+		return
 	}
 	i.retry(ctx, request, targetedIndexDelay(request.attempt))
-	return true
 }

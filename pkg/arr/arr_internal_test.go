@@ -76,3 +76,16 @@ func TestMatchCredentialsTrustsAutoArrOnlyWithSavedToken(t *testing.T) {
 		t.Fatal("did not match an auto Arr whose credentials are saved")
 	}
 }
+
+// The import-webhook opt-in must survive the config round trip, or saving settings silently turns it off.
+func TestImportWebhookSurvivesConfigRoundTrip(t *testing.T) {
+	t.Parallel()
+	instance := fromConfig(config.Arr{Name: "sonarr", Host: "http://sonarr", Token: "t", ImportWebhook: true})
+	if !instance.ImportWebhook || !instance.toConfig().ImportWebhook {
+		t.Fatalf("import_webhook lost: instance %v, config %v",
+			instance.ImportWebhook, instance.toConfig().ImportWebhook)
+	}
+	if (config.Arr{ImportWebhook: true}).IsZero() {
+		t.Fatal("an arr with only import_webhook set counts as zero")
+	}
+}
