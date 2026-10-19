@@ -81,7 +81,9 @@ type cleanupServer struct {
 	records atomic.Pointer[[]QueueSchema]
 	fail    atomic.Bool
 	succeed atomic.Bool
-	lookups atomic.Int64
+	// rejectAll makes every manual import candidate rejected by the arr.
+	rejectAll atomic.Bool
+	lookups   atomic.Int64
 	// commandStatus is what GET /api/v3/command/1 reports; "" answers 404 and "error" answers 401.
 	commandStatus atomic.Pointer[string]
 	statusChecks  atomic.Int64
@@ -105,6 +107,10 @@ func newCleanupServer(t *testing.T, records []QueueSchema) *cleanupServer {
 			_, _ = w.Write(body)
 		case "/api/v3/manualimport":
 			fake.lookups.Add(1)
+			if fake.rejectAll.Load() {
+				_, _ = w.Write([]byte(`[` + rejectedCandidate + `]`))
+				return
+			}
 			if fake.succeed.Load() {
 				_, _ = w.Write([]byte(`[{"path":"/d/A.mkv","series":{"id":7},"quality":{"quality":{"id":3}}}]`))
 				return
@@ -470,4 +476,44 @@ func TestResolveQueueActionLeavesImportedDownloads(t *testing.T) {
 			t.Errorf("state %s: resolveQueueAction() = %q, want %q", state, got, want)
 		}
 	}
+}
+
+// When the arr rejects every file, retrying soon cannot help: one warning, then a daily recheck.
+func TestCleanupQueueBacksOffADayWhenEveryFileIsRejected(t *testing.T) {
+	t.Parallel()
+
+	fake := newCleanupServer(t, stuckRecords(matchedByIDTitle))
+	fake.rejectAll.Store(true)
+	clock := &fakeClock{now: time.Unix(1000, 0)}
+	service := cleanupTestService(clock, map[string]*cleanupServer{"arr": fake})
+	var logs bytes.Buffer
+	service.logger = zerolog.New(&logs).Level(zerolog.WarnLevel)
+
+	runCleanup(t, service, "arr", maxImportAttempts+1)
+	wantLookups(t, fake, 1)
+	clock.advance(importRejectedDelay - time.Minute)
+	runCleanup(t, service, "arr", 1)
+	wantLookups(t, fake, 1)
+	clock.advance(time.Minute)
+	runCleanup(t, service, "arr", maxImportAttempts+1)
+	wantLookups(t, fake, 2)
+	if got := strings.Count(logs.String(), "Not an upgrade"); got != 2 {
+		t.Fatalf("rejection warnings = %d, want 2 (one per lookup); logs:\n%s", got, logs.String())
+	}
+}
+
+// A changed queue status means the arr's view moved, so the daily backoff gives way to an immediate retry.
+func TestCleanupQueueRetriesRejectedImportWhenStatusChanges(t *testing.T) {
+	t.Parallel()
+
+	fake := newCleanupServer(t, stuckRecords(matchedByIDTitle))
+	fake.rejectAll.Store(true)
+	service := cleanupTestService(&fakeClock{now: time.Unix(1000, 0)}, map[string]*cleanupServer{"arr": fake})
+
+	runCleanup(t, service, "arr", 2)
+	wantLookups(t, fake, 1)
+	changed := stuckRecords("Title mismatch; automatic import is not possible")
+	fake.records.Store(&changed)
+	runCleanup(t, service, "arr", 1)
+	wantLookups(t, fake, 2)
 }

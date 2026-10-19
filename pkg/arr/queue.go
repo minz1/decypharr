@@ -2,6 +2,7 @@ package arr
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -107,8 +108,9 @@ func (s *Service) Queue(ctx context.Context, name string) ([]QueueSchema, error)
 }
 
 const (
-	maxImportAttempts = 5
-	importRetryDelay  = time.Hour
+	maxImportAttempts   = 5
+	importRetryDelay    = time.Hour
+	importRejectedDelay = 24 * time.Hour
 )
 
 type importFailure struct {
@@ -210,6 +212,13 @@ func (s *Service) retryImport(
 
 // recordImportFailure counts one failed import and backs it off after maxImportAttempts.
 func (s *Service) recordImportFailure(name, downloadID string, failure importFailure, importErr error) importFailure {
+	if errors.Is(importErr, errAllCandidatesRejected) {
+		failure.retryAt = s.now().Add(importRejectedDelay)
+		s.logger.Warn().Err(importErr).Str("arr", name).Str("download_id", downloadID).
+			Dur("retry_in", importRejectedDelay).
+			Msg("Queue cleanup: the arr rejects every file of this download; needs manual intervention")
+		return failure
+	}
 	failure.attempts++
 	if failure.attempts < maxImportAttempts {
 		s.logger.Error().Err(importErr).Str("arr", name).Str("download_id", downloadID).

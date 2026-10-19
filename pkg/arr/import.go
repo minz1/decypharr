@@ -3,6 +3,7 @@ package arr
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -63,6 +64,9 @@ type ManualImportFile struct {
 	ReleaseType       string `json:"releaseType,omitempty"`
 }
 
+// errAllCandidatesRejected means the arr refused every file of a download, so retrying soon cannot help.
+var errAllCandidatesRejected = errors.New("the arr rejected every file")
+
 // ManualImport asks the Arr to import a finished download it did not pick up and returns the queued command.
 func (s *Service) ManualImport(ctx context.Context, name, downloadID string) (Command, error) {
 	instance, err := s.instance(name)
@@ -118,8 +122,8 @@ func (s *Service) ManualImport(ctx context.Context, name, downloadID string) (Co
 
 	if len(files) == 0 {
 		return Command{}, fmt.Errorf(
-			"manual import: all %d candidates rejected for download %q (%s)",
-			len(candidates), downloadID, candidates[0].Rejections[0].Reason,
+			"manual import: all %d candidates rejected for download %q (%s): %w",
+			len(candidates), downloadID, candidates[0].Rejections[0].Reason, errAllCandidatesRejected,
 		)
 	}
 
