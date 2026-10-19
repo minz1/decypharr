@@ -3,7 +3,9 @@
 package yenc
 
 import (
+	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 
 	"github.com/mnightingale/rapidyenc"
@@ -63,6 +65,8 @@ type BodyResult struct {
 	// response. StatusCode 0 means the status line was never read.
 	StatusCode int
 	Message    string
+	// RestoredLeadingDot reports that Data had its stripped leading '.' restored.
+	RestoredLeadingDot bool
 }
 
 // BodyDecoder decodes complete NNTP responses (status line included) from a
@@ -98,10 +102,17 @@ func (d *BodyDecoder) Next() (BodyResult, error) {
 	if err == nil && m.Format == rapidyenc.FormatUnknown && (m.StatusCode == 220 || m.StatusCode == 222) {
 		err = fmt.Errorf("article body has no yEnc data: %w", ErrDataMissing)
 	}
+	restored := false
+	if errors.Is(err, ErrDataCorruption) {
+		if resp.Data, restored = restoreLeadingDot(resp.Data, m); restored {
+			err = nil
+		}
+	}
 	return BodyResult{
-		Data:       resp.Data,
-		StatusCode: m.StatusCode,
-		Message:    m.Message,
+		RestoredLeadingDot: restored,
+		Data:               resp.Data,
+		StatusCode:         m.StatusCode,
+		Message:            m.Message,
 		Meta: DecoderMeta{
 			FileName:   m.FileName,
 			FileSize:   m.FileSize,
@@ -111,4 +122,21 @@ func (d *BodyDecoder) Next() (BodyResult, error) {
 			PartSize:   m.PartSize,
 		},
 	}, err
+}
+
+// dotByte is the decoded byte whose yEnc encoding is '.'.
+const dotByte = '.' - 42
+
+// restoreLeadingDot re-adds a first-line '.' the poster left unstuffed, when that makes the declared size and CRC match.
+func restoreLeadingDot(data []byte, m rapidyenc.ResponseMeta) ([]byte, bool) {
+	if m.ExpectedCRC == 0 || int64(len(data))+1 != m.PartSize {
+		return data, false
+	}
+	if crc32.Update(crc32.ChecksumIEEE([]byte{dotByte}), crc32.IEEETable, data) != m.ExpectedCRC {
+		return data, false
+	}
+	data = append(data, 0)
+	copy(data[1:], data[:len(data)-1])
+	data[0] = dotByte
+	return data, true
 }

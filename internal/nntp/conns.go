@@ -507,7 +507,12 @@ func (c *Connection) readBodyBuffered(dst []byte, source BodyBuffer, pooled bool
 			// taxonomy the segment fetcher applies to zero-byte bodies.
 			return res, &Error{Type: ErrorTypeArticleNotFound, Code: res.StatusCode, Message: err.Error()}
 		}
-		return res, classifyTransferError("streaming yenc decode failed", err)
+		where := fmt.Sprintf("%s, %q part %d", c.address, res.Meta.FileName, res.Meta.PartNumber)
+		return res, classifyTransferError("streaming yenc decode failed ("+where+")", err)
+	}
+	if res.RestoredLeadingDot {
+		c.logger.Info().Str("provider", c.address).Str("file", res.Meta.FileName).Int64("part", res.Meta.PartNumber).
+			Msg("Restored the leading '.' a poster failed to dot-stuff; the article's CRC confirms it")
 	}
 	if res.StatusCode != codeBodyFollows {
 		if pooled {

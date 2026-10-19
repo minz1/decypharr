@@ -270,3 +270,47 @@ func TestBodyDecoder_DataFunc(t *testing.T) {
 		t.Error("decoder did not decode into the supplied buffer")
 	}
 }
+
+// A poster that skips dot-stuffing on the first body line loses that '.' on every backbone; the pcrc32 proves it.
+func TestBodyDecoder_RestoresStrippedLeadingDot(t *testing.T) {
+	t.Parallel()
+	original := append([]byte{'.' - 42}, bytes.Repeat([]byte("payload-"), 100)...)
+	for name, encoded := range map[string]string{
+		"multipart":  yencEncode(original, "dot.part50.rar", 21, 1, int64(len(original))),
+		"singlepart": yencEncode(original, "dot.bin", 0, 0, 0),
+	} {
+		for form, wire := range map[string]string{"stored without the dot": "\r\n", "unstuffed dot on the wire": "\r\n."} {
+			res, err := decodeResponse(t, bodyResponse(strings.Replace(encoded, "\r\n=n", wire, 1)))
+			if err != nil {
+				t.Fatalf("%s, %s: %v", name, form, err)
+			}
+			if !bytes.Equal(res.Data, original) || !res.RestoredLeadingDot {
+				t.Fatalf("%s, %s: decoded %d bytes (restored=%v), want the %d original bytes",
+					name, form, len(res.Data), res.RestoredLeadingDot, len(original))
+			}
+		}
+	}
+}
+
+// A short article stays corrupt unless a leading '.' gives exactly its declared CRC and size.
+func TestBodyDecoder_ShortArticleWithoutDotStaysCorrupt(t *testing.T) {
+	t.Parallel()
+	original := append([]byte{'.' - 42}, bytes.Repeat([]byte("payload-"), 100)...)
+	stripped := strings.Replace(yencEncode(original, "x.bin", 1, 1, int64(len(original))), "\r\n=n", "\r\n", 1)
+	flipped := []byte(stripped)
+	body := bytes.Index(flipped, []byte("\r\n=ypart"))
+	body += bytes.Index(flipped[body+2:], []byte("\r\n")) + 4
+	flipped[body+10] ^= 0x01
+
+	short := yencEncode(original[1:], "y.bin", 0, 0, 0)
+	declared := fmt.Sprintf("size=%d", len(original)+5)
+	wrongSize := strings.ReplaceAll(short, fmt.Sprintf("size=%d", len(original)-1), declared)
+	wrongSize = strings.Replace(wrongSize, fmt.Sprintf("pcrc32=%08x", crc32.ChecksumIEEE(original[1:])),
+		fmt.Sprintf("pcrc32=%08x", crc32.ChecksumIEEE(original)), 1)
+
+	for name, encoded := range map[string]string{"crc mismatch": string(flipped), "size mismatch": wrongSize} {
+		if _, err := decodeResponse(t, bodyResponse(encoded)); !errors.Is(err, yenc.ErrDataCorruption) {
+			t.Fatalf("%s: err = %v, want data corruption", name, err)
+		}
+	}
+}
