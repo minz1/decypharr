@@ -517,3 +517,53 @@ func TestCleanupQueueRetriesRejectedImportWhenStatusChanges(t *testing.T) {
 	runCleanup(t, service, "arr", 1)
 	wantLookups(t, fake, 2)
 }
+
+// The arr removes and re-searches a whole download per bulk delete, so only a download whose every episode has a file skips the re-search.
+func TestCleanupQueueResearchesOnlyDownloadsWithMissingEpisodes(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	deletes := make(map[string][]int)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/queue":
+			record := `"status":"completed","trackedDownloadStatus":"warning","trackedDownloadState":"importBlocked",` +
+				`"statusMessages":[{"title":"One or more episodes expected in this release were not imported or missing from the release"}]`
+			_, _ = fmt.Fprintf(w, `{"page":1,"pageSize":200,"totalRecords":4,"records":[`+
+				`{"id":1,"downloadId":"onDisk","episodeHasFile":true,%[1]s},`+
+				`{"id":2,"downloadId":"onDisk","episodeHasFile":true,%[1]s},`+
+				`{"id":3,"downloadId":"partial","episodeHasFile":true,%[1]s},`+
+				`{"id":4,"downloadId":"partial","episodeHasFile":false,%[1]s}]}`, record)
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/v3/queue/bulk":
+			var body struct {
+				IDs []int `json:"ids"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			mu.Lock()
+			skip := r.URL.Query().Get("skipRedownload")
+			deletes[skip] = append(deletes[skip], body.IDs...)
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	cfg := config.NewStore(&config.Config{QueueCleanup: config.QueueCleanup{Rules: config.DefaultQueueCleanupRules()}})
+	service := New(cfg, nil, zerolog.Nop())
+	service.arrs["sonarr"] = Arr{Name: "sonarr", Host: server.URL, Token: "secret", Type: Sonarr}
+
+	if err := service.CleanupQueue(t.Context(), "sonarr"); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if got := deletes["true"]; !slices.Equal(got, []int{1, 2}) {
+		t.Errorf("skipRedownload=true ids = %v, want [1 2]", got)
+	}
+	if got := deletes["false"]; !slices.Equal(got, []int{3, 4}) {
+		t.Errorf("skipRedownload=false ids = %v, want [3 4]", got)
+	}
+}

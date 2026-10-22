@@ -131,12 +131,23 @@ func (s *Service) CleanupQueue(ctx context.Context, name string) error {
 	rules := s.config.Get().QueueCleanup.Rules
 	var blocklist, blocklistResearch []QueueSchema
 	importStatuses := make(map[string]string)
+	// The arr re-searches every episode of a download, so one without a file keeps the whole download's re-search.
+	missingEpisodes := make(map[string]bool)
+	for _, item := range items {
+		if !item.EpisodeHasFile {
+			missingEpisodes[item.DownloadID] = true
+		}
+	}
 	for _, item := range items {
 		switch resolveQueueAction(item, rules) {
 		case QueueActionBlocklist:
 			blocklist = append(blocklist, item)
 		case QueueActionBlocklistResearch:
-			blocklistResearch = append(blocklistResearch, item)
+			if missingEpisodes[item.DownloadID] {
+				blocklistResearch = append(blocklistResearch, item)
+			} else {
+				blocklist = append(blocklist, item)
+			}
 		case QueueActionImport:
 			if _, seen := importStatuses[item.DownloadID]; !seen {
 				importStatuses[item.DownloadID] = statusText(item)
