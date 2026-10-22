@@ -518,52 +518,115 @@ func TestCleanupQueueRetriesRejectedImportWhenStatusChanges(t *testing.T) {
 	wantLookups(t, fake, 2)
 }
 
-// The arr removes and re-searches a whole download per bulk delete, so only a download whose every episode has a file skips the re-search.
-func TestCleanupQueueResearchesOnlyDownloadsWithMissingEpisodes(t *testing.T) {
-	t.Parallel()
-	var mu sync.Mutex
-	deletes := make(map[string][]int)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/queue":
-			record := `"status":"completed","trackedDownloadStatus":"warning","trackedDownloadState":"importBlocked",` +
-				`"statusMessages":[{"title":"One or more episodes expected in this release were not imported or missing from the release"}]`
-			_, _ = fmt.Fprintf(w, `{"page":1,"pageSize":200,"totalRecords":4,"records":[`+
-				`{"id":1,"downloadId":"onDisk","episodeHasFile":true,%[1]s},`+
-				`{"id":2,"downloadId":"onDisk","episodeHasFile":true,%[1]s},`+
-				`{"id":3,"downloadId":"partial","episodeHasFile":true,%[1]s},`+
-				`{"id":4,"downloadId":"partial","episodeHasFile":false,%[1]s}]}`, record)
-		case r.Method == http.MethodDelete && r.URL.Path == "/api/v3/queue/bulk":
-			var body struct {
-				IDs []int `json:"ids"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			mu.Lock()
-			skip := r.URL.Query().Get("skipRedownload")
-			deletes[skip] = append(deletes[skip], body.IDs...)
-			mu.Unlock()
-			w.WriteHeader(http.StatusOK)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(server.Close)
-	cfg := config.NewStore(&config.Config{QueueCleanup: config.QueueCleanup{Rules: config.DefaultQueueCleanupRules()}})
-	service := New(cfg, nil, zerolog.Nop())
-	service.arrs["sonarr"] = Arr{Name: "sonarr", Host: server.URL, Token: "secret", Type: Sonarr}
+// searchMissingArr records the bulk deletes per skipRedownload value and the EpisodeSearch commands it is sent.
+type searchMissingArr struct {
+	blocklistFails bool
+	appName        string // what api/v3/system/status reports; "" answers 404
+	mu             sync.Mutex
+	deletes        map[string][]int
+	searches       [][]int
+}
 
-	if err := service.CleanupQueue(t.Context(), "sonarr"); err != nil {
-		t.Fatal(err)
+func (a *searchMissingArr) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		IDs        []int  `json:"ids"`
+		Name       string `json:"name"`
+		EpisodeIDs []int  `json:"episodeIds"`
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	if got := deletes["true"]; !slices.Equal(got, []int{1, 2}) {
-		t.Errorf("skipRedownload=true ids = %v, want [1 2]", got)
+	switch {
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v3/queue":
+		record := `"status":"completed","trackedDownloadStatus":"warning","trackedDownloadState":"importBlocked",` +
+			`"statusMessages":[{"title":"One or more episodes expected in this release were not imported or missing from the release"}]`
+		_, _ = fmt.Fprintf(w, `{"page":1,"pageSize":200,"totalRecords":5,"records":[`+
+			`{"id":1,"episodeId":11,"downloadId":"onDisk","episodeHasFile":true,%[1]s},`+
+			`{"id":2,"episodeId":12,"downloadId":"onDisk","episodeHasFile":true,%[1]s},`+
+			`{"id":3,"episodeId":13,"downloadId":"partial","episodeHasFile":true,%[1]s},`+
+			`{"id":4,"episodeId":14,"downloadId":"partial","episodeHasFile":false,%[1]s},`+
+			`{"id":5,"downloadId":"unmapped","episodeHasFile":false,%[1]s}]}`, record)
+		return
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v3/system/status" && a.appName != "":
+		_, _ = fmt.Fprintf(w, `{"appName":%q}`, a.appName)
+		return
+	case r.Method == http.MethodDelete && r.URL.Path == "/api/v3/queue/bulk",
+		r.Method == http.MethodPost && r.URL.Path == "/api/v3/command":
+	default:
+		http.NotFound(w, r)
+		return
 	}
-	if got := deletes["false"]; !slices.Equal(got, []int{3, 4}) {
-		t.Errorf("skipRedownload=false ids = %v, want [3 4]", got)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if r.Method == http.MethodPost {
+		if body.Name != "EpisodeSearch" {
+			http.Error(w, "unexpected command "+body.Name, http.StatusBadRequest)
+			return
+		}
+		a.searches = append(a.searches, body.EpisodeIDs)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":1,"status":"queued"}`))
+		return
+	}
+	skip := r.URL.Query().Get("skipRedownload")
+	if a.blocklistFails && skip == "true" {
+		http.Error(w, "no", http.StatusInternalServerError)
+		return
+	}
+	a.deletes[skip] = append(a.deletes[skip], body.IDs...)
+	w.WriteHeader(http.StatusOK)
+}
+
+// A mapped Sonarr download is blocklisted without the arr's re-search, which would cover every episode of
+// the download; decypharr then searches only the episodes without a file. An unmapped record, or an
+// instance not known to be Sonarr, keeps the arr's.
+func TestCleanupQueueSearchesOnlyEpisodesWithoutFiles(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name           string
+		kind           Type
+		appName        string
+		blocklistFails bool
+		arrSearch      []int
+		skipped        []int
+		searches       [][]int
+	}{
+		{name: "sonarr", kind: Sonarr, arrSearch: []int{5}, skipped: []int{1, 2, 3, 4}, searches: [][]int{{14}}},
+		{name: "blocklist fails", kind: Sonarr, blocklistFails: true, arrSearch: []int{5}},
+		{
+			name: "probed sonarr", kind: Others, appName: "Sonarr",
+			arrSearch: []int{5}, skipped: []int{1, 2, 3, 4}, searches: [][]int{{14}},
+		},
+		{name: "unknown type", kind: Others, arrSearch: []int{1, 2, 3, 4, 5}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			fake := &searchMissingArr{
+				blocklistFails: tt.blocklistFails, appName: tt.appName, deletes: make(map[string][]int),
+			}
+			server := httptest.NewServer(fake)
+			t.Cleanup(server.Close)
+			rules := config.DefaultQueueCleanupRules()
+			cfg := config.NewStore(&config.Config{QueueCleanup: config.QueueCleanup{Rules: rules}})
+			service := New(cfg, nil, zerolog.Nop())
+			service.arrs["tv"] = Arr{Name: "tv", Host: server.URL, Token: "secret", Type: tt.kind}
+
+			if err := service.CleanupQueue(t.Context(), "tv"); err != nil {
+				t.Fatal(err)
+			}
+			fake.mu.Lock()
+			defer fake.mu.Unlock()
+			if got := fake.deletes["false"]; !slices.Equal(got, tt.arrSearch) {
+				t.Errorf("skipRedownload=false ids = %v, want %v", got, tt.arrSearch)
+			}
+			if got := fake.deletes["true"]; !slices.Equal(got, tt.skipped) {
+				t.Errorf("skipRedownload=true ids = %v, want %v", got, tt.skipped)
+			}
+			if !slices.EqualFunc(fake.searches, tt.searches, slices.Equal) {
+				t.Errorf("episode searches = %v, want %v", fake.searches, tt.searches)
+			}
+		})
 	}
 }

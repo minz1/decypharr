@@ -129,25 +129,14 @@ func (s *Service) CleanupQueue(ctx context.Context, name string) error {
 	}
 
 	rules := s.config.Get().QueueCleanup.Rules
-	var blocklist, blocklistResearch []QueueSchema
+	var blocklist, blocklistResearch, blocklistSearchMissing []QueueSchema
 	importStatuses := make(map[string]string)
-	// The arr re-searches every episode of a download, so one without a file keeps the whole download's re-search.
-	missingEpisodes := make(map[string]bool)
-	for _, item := range items {
-		if !item.EpisodeHasFile {
-			missingEpisodes[item.DownloadID] = true
-		}
-	}
 	for _, item := range items {
 		switch resolveQueueAction(item, rules) {
 		case QueueActionBlocklist:
 			blocklist = append(blocklist, item)
 		case QueueActionBlocklistResearch:
-			if missingEpisodes[item.DownloadID] {
-				blocklistResearch = append(blocklistResearch, item)
-			} else {
-				blocklist = append(blocklist, item)
-			}
+			blocklistResearch = append(blocklistResearch, item)
 		case QueueActionImport:
 			if _, seen := importStatuses[item.DownloadID]; !seen {
 				importStatuses[item.DownloadID] = statusText(item)
@@ -157,8 +146,14 @@ func (s *Service) CleanupQueue(ctx context.Context, name string) error {
 		}
 	}
 
-	s.blocklistQueueItems(ctx, name, blocklistResearch, QueueActionBlocklistResearch)
-	s.blocklistQueueItems(ctx, name, blocklist, QueueActionBlocklist)
+	if len(blocklistResearch) > 0 && s.ResolveType(ctx, name) == Sonarr {
+		blocklistResearch, blocklistSearchMissing = splitMappedDownloads(blocklistResearch)
+	}
+	s.blocklistQueueItems(ctx, name, blocklistResearch, QueueActionBlocklistResearch, false)
+	if s.blocklistQueueItems(ctx, name, blocklistSearchMissing, QueueActionBlocklistResearch, true) {
+		s.searchEpisodesWithoutFiles(ctx, name, blocklistSearchMissing)
+	}
+	s.blocklistQueueItems(ctx, name, blocklist, QueueActionBlocklist, true)
 	s.mu.RLock()
 	previous := s.importFailures[name]
 	s.mu.RUnlock()
@@ -294,25 +289,66 @@ func statusText(item QueueSchema) string {
 	return strings.ToLower(builder.String())
 }
 
-// removeQueueItems blocklists and removes queue items. skipRedownload keeps the
-// Arr from searching for a replacement.
-// blocklistQueueItems removes items from the arr's queue with a blocklist, then names each one it removed.
-func (s *Service) blocklistQueueItems(ctx context.Context, name string, items []QueueSchema, action QueueAction) {
+// splitMappedDownloads separates the downloads with a record lacking an episode from those whose every record has one.
+// The arr's re-search covers every episode of a download, so only a fully mapped one can be searched episode by episode.
+func splitMappedDownloads(items []QueueSchema) ([]QueueSchema, []QueueSchema) {
+	var unmapped, mapped []QueueSchema
+	hasUnmapped := make(map[string]bool)
+	for _, item := range items {
+		if item.EpisodeID == 0 {
+			hasUnmapped[item.DownloadID] = true
+		}
+	}
+	for _, item := range items {
+		if hasUnmapped[item.DownloadID] {
+			unmapped = append(unmapped, item)
+		} else {
+			mapped = append(mapped, item)
+		}
+	}
+	return unmapped, mapped
+}
+
+// blocklistQueueItems removes items from the arr's queue with a blocklist, names each one it removed, and reports whether it did.
+func (s *Service) blocklistQueueItems(
+	ctx context.Context, name string, items []QueueSchema, action QueueAction, skipRedownload bool,
+) bool {
 	if len(items) == 0 {
-		return
+		return false
 	}
 	ids := make([]int, len(items))
 	for i, item := range items {
 		ids[i] = item.ID
 	}
-	if err := s.removeQueueItems(ctx, name, ids, action == QueueActionBlocklist); err != nil {
+	if err := s.removeQueueItems(ctx, name, ids, skipRedownload); err != nil {
 		s.logger.Error().Err(err).Str("arr", name).Str("action", string(action)).Msg("Queue cleanup: blocklist failed")
-		return
+		return false
 	}
 	for _, item := range items {
 		s.logger.Info().Str("arr", name).Str("title", item.Title).Str("download_id", item.DownloadID).
 			Str("action", string(action)).Str("status", statusText(item)).Msg("Queue cleanup: blocklisted")
 	}
+	return true
+}
+
+// searchEpisodesWithoutFiles sends one EpisodeSearch for the removed items' episodes that have no file.
+func (s *Service) searchEpisodesWithoutFiles(ctx context.Context, name string, items []QueueSchema) {
+	var episodeIDs []int
+	for _, item := range items {
+		if !item.EpisodeHasFile {
+			episodeIDs = append(episodeIDs, item.EpisodeID)
+		}
+	}
+	if len(episodeIDs) == 0 {
+		return
+	}
+	if _, err := s.SearchEpisodes(ctx, name, episodeIDs); err != nil {
+		s.logger.Error().Err(err).Str("arr", name).Ints("episode_ids", episodeIDs).
+			Msg("Queue cleanup: episode search failed")
+		return
+	}
+	s.logger.Info().Str("arr", name).Ints("episode_ids", episodeIDs).
+		Msg("Queue cleanup: searched episodes without a file")
 }
 
 func (s *Service) removeQueueItems(ctx context.Context, name string, ids []int, skipRedownload bool) error {
