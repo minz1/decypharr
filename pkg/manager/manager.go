@@ -3,6 +3,7 @@ package manager
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -510,9 +511,13 @@ func (m *Manager) handleJobError(job *Job, err error) {
 			job.Entry.Status = debridTypes.TorrentStatusQueued
 			_ = m.queue.Update(job.Entry)
 		}
+		var providers []string
+		if throttled, ok := errors.AsType[*throttledError](err); ok {
+			providers = throttled.providers
+		}
 		delay := throttledRetryDelay(job.ThrottledRetries)
 		job.ThrottledRetries++
-		m.jobQueue.Retry(job, delay)
+		m.jobQueue.WaitForSlot(job, providers, delay)
 		return
 	}
 	m.logger.Error().Err(err).Str("job_id", job.ID).Str("type", string(job.Type)).Msg("Active download failed")
@@ -861,6 +866,13 @@ func (m *Manager) SubmitJob(job *Job) error {
 		return fmt.Errorf("active download queue not initialized")
 	}
 	return m.jobQueue.Submit(job)
+}
+
+// slotFreed wakes a job throttled by provider: an active download there finished, failed or was removed.
+func (m *Manager) slotFreed(provider string) {
+	if m.jobQueue != nil {
+		m.jobQueue.SlotFreed(provider)
+	}
 }
 
 func (m *Manager) providerLock(name string) *sync.Mutex {

@@ -41,7 +41,7 @@ func (m *Manager) addNewTorrent(ctx context.Context, importReq *ImportRequest) e
 	if err != nil {
 		if isTooManyActiveDownloads(err) {
 			m.logger.Warn().Msgf("Too many active downloads, marking as queued: %s", importReq.Magnet.Name)
-			return m.queueTorrentRetry(importReq)
+			return m.queueTorrentRetry(importReq, err)
 		}
 		return fmt.Errorf("failed to submit torrent to debrid: %w", err)
 	}
@@ -105,7 +105,7 @@ func (m *Manager) processTorrentJob(ctx context.Context, job *Job) error {
 	return nil
 }
 
-func (m *Manager) queueTorrentRetry(importReq *ImportRequest) error {
+func (m *Manager) queueTorrentRetry(importReq *ImportRequest, throttled error) error {
 	torrent := newTorrentQueueEntry(importReq, debridTypes.TorrentStatusQueued, m.folderNaming())
 	if err := m.queue.Add(torrent); err != nil {
 		return fmt.Errorf("failed to add torrent to queue: %w", err)
@@ -117,10 +117,12 @@ func (m *Manager) queueTorrentRetry(importReq *ImportRequest) error {
 	job := NewJob(JobTypeTorrent, importReq)
 	job.ID = torrent.InfoHash
 	job.Entry = torrent
-	if err := m.SubmitJob(job); err != nil {
+	if m.jobQueue == nil {
+		err := fmt.Errorf("active download queue not initialized")
 		m.failEntry(torrent, err)
 		return fmt.Errorf("failed to queue torrent: %w", err)
 	}
+	m.handleJobError(job, throttled)
 	return nil
 }
 
@@ -285,6 +287,10 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 		// the provider's torrent.
 		m.logger.Warn().Err(err).Str("name", entry.Name).Msg("Status check failed; retrying on the next pass")
 		return
+	}
+	if err != nil || dbT == nil || dbT.Status == debridTypes.TorrentStatusError ||
+		dbT.Status == debridTypes.TorrentStatusDownloaded {
+		m.slotFreed(entry.ActiveProvider)
 	}
 	if err != nil {
 		m.logger.Error().Err(err).Str("name", entry.Name).Msg("Error checking status")
@@ -454,11 +460,15 @@ func (m *Manager) SendToDebrid(_ context.Context, importRequest *ImportRequest) 
 	}
 
 	errs := make([]error, 0, len(clients))
+	var throttled []string
 
 	for _, db := range clients {
 		torrent, err := m.submitToProvider(db, debridTorrent, importRequest)
 		if err != nil {
 			errs = append(errs, err)
+			if isTooManyActiveDownloads(err) {
+				throttled = append(throttled, db.Config().Name)
+			}
 			continue
 		}
 		return torrent, nil
@@ -466,9 +476,21 @@ func (m *Manager) SendToDebrid(_ context.Context, importRequest *ImportRequest) 
 	if len(errs) == 0 {
 		return nil, fmt.Errorf("failed to process torrent: no clients available")
 	}
-	joinedErrors := errors.Join(errs...)
-	return nil, fmt.Errorf("failed to process torrent: %w", joinedErrors)
+	joinedErrors := fmt.Errorf("failed to process torrent: %w", errors.Join(errs...))
+	if len(throttled) > 0 {
+		return nil, &throttledError{providers: throttled, err: joinedErrors}
+	}
+	return nil, joinedErrors
 }
+
+// throttledError names the providers whose active-download cap refused a submit.
+type throttledError struct {
+	providers []string
+	err       error
+}
+
+func (e *throttledError) Error() string { return e.err.Error() }
+func (e *throttledError) Unwrap() error { return e.err }
 
 // submitToProvider submits the magnet to one provider and checks it landed,
 // recording the cache outcome with hearsay.

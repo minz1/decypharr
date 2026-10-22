@@ -19,7 +19,13 @@ func (m *Manager) RemoveFromProvider(providerEntry *storage.ProviderEntry) error
 	if client == nil {
 		return nil
 	}
-	return client.DeleteTorrent(providerEntry.ID)
+	if err := client.DeleteTorrent(providerEntry.ID); err != nil {
+		return err
+	}
+	if providerEntry.Progress < 1 {
+		m.slotFreed(providerEntry.Provider)
+	}
+	return nil
 }
 
 func (m *Manager) RemoveTorrentPlacements(t *storage.Entry) {

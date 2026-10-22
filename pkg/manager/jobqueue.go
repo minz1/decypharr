@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"runtime/debug"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -60,6 +61,8 @@ type JobQueue struct {
 	cond   *sync.Cond
 	jobs   []*Job
 	closed bool
+	// waiters are throttled jobs, oldest job first.
+	waiters []*slotWaiter
 
 	maxWorkers int
 	logger     zerolog.Logger
@@ -70,6 +73,12 @@ type JobQueue struct {
 	processFunc func(ctx context.Context, job *Job)
 	ctx         context.Context
 	cancel      context.CancelFunc
+}
+
+type slotWaiter struct {
+	createdAt time.Time
+	providers []string
+	wake      chan struct{}
 }
 
 // jobQueueInitialCapacity presizes the pending-job slice.
@@ -138,20 +147,46 @@ func (q *JobQueue) ActiveCount() int {
 	return int(q.active.Load())
 }
 
-// Retry submits a job again after a delay without holding an active slot.
-func (q *JobQueue) Retry(job *Job, delay time.Duration) {
+// WaitForSlot submits a throttled job again once SlotFreed names one of its providers, or after delay at the latest.
+// shortcut: a slot freed between the provider's refusal and this call wakes nobody; the job waits out delay.
+func (q *JobQueue) WaitForSlot(job *Job, providers []string, delay time.Duration) {
+	w := &slotWaiter{createdAt: job.CreatedAt, providers: providers, wake: make(chan struct{})}
+	q.mu.Lock()
+	// A job throttled again keeps its place among the jobs that were throttled after it.
+	i := slices.IndexFunc(q.waiters, func(other *slotWaiter) bool { return other.createdAt.After(w.createdAt) })
+	if i < 0 {
+		i = len(q.waiters)
+	}
+	q.waiters = slices.Insert(q.waiters, i, w)
+	q.mu.Unlock()
 	go func() {
 		timer := time.NewTimer(delay)
 		defer timer.Stop()
 		select {
 		case <-q.ctx.Done():
 			return
+		case <-w.wake:
 		case <-timer.C:
-			if err := q.Submit(job); err != nil {
-				q.logger.Debug().Err(err).Str("job_id", job.ID).Msg("Failed to retry job")
-			}
+			q.mu.Lock()
+			q.waiters = slices.DeleteFunc(q.waiters, func(other *slotWaiter) bool { return other == w })
+			q.mu.Unlock()
+		}
+		if err := q.Submit(job); err != nil {
+			q.logger.Debug().Err(err).Str("job_id", job.ID).Msg("Failed to retry job")
 		}
 	}()
+}
+
+// SlotFreed wakes the longest-waiting job throttled by provider.
+func (q *JobQueue) SlotFreed(provider string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	i := slices.IndexFunc(q.waiters, func(w *slotWaiter) bool { return slices.Contains(w.providers, provider) })
+	if i < 0 {
+		return
+	}
+	close(q.waiters[i].wake)
+	q.waiters = slices.Delete(q.waiters, i, i+1)
 }
 
 // Close signals all workers to stop and waits for them to finish.
