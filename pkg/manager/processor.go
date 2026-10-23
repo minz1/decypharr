@@ -343,7 +343,7 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 	}
 }
 
-// releaseLeftSlot wakes a job waiting on provider once the placement finished or failed there, and records which.
+// releaseLeftSlot wakes a job waiting on provider once the placement finished or failed there, and marks a failed one.
 func (m *Manager) releaseLeftSlot(
 	provider string,
 	placement *storage.ProviderEntry,
@@ -355,11 +355,9 @@ func (m *Manager) releaseLeftSlot(
 		return
 	}
 	m.slotFreed(provider)
-	if err != nil || dbT == nil {
+	if err != nil || dbT == nil || dbT.Status == debridTypes.TorrentStatusError {
 		placement.Status = debridTypes.TorrentStatusError
-		return
 	}
-	placement.Status = dbT.Status
 }
 
 func (m *Manager) processAction(entry *storage.Entry) {

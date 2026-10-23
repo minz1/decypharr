@@ -301,32 +301,31 @@ func TestTorrentThrottledAtAddWaitsForASlot(t *testing.T) {
 // A woken job the same provider throttles again waits once more and leaves the next waiter alone.
 func TestWokenJobThrottledAgainWaitsAndPassesNothingOn(t *testing.T) {
 	t.Parallel()
-	m, _ := newDroppedTestManager(t, nil)
-	m = withTestConfig(t, m)
-	m.processingEntries = xsync.NewMap[string, struct{}]()
-	provider := &throttlingProvider{name: "torbox", err: customerror.ErrTooManyActiveDownloads}
-	m.clients.Store("torbox", provider)
-	m.jobQueue = NewJobQueue(t.Context(), 1, m.processJob, zerolog.Nop())
-	t.Cleanup(m.jobQueue.Close)
-	for _, hash := range []string{"first", "second"} {
-		req := &ImportRequest{
-			Magnet:         &utils.Magnet{InfoHash: hash, Name: hash},
-			Arr:            arr.Arr{Name: "sonarr"},
-			DownloadFolder: t.TempDir(),
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := newDroppedTestManager(t, nil)
+		m = withTestConfig(t, m)
+		m.processingEntries = xsync.NewMap[string, struct{}]()
+		provider := &throttlingProvider{name: "torbox", err: customerror.ErrTooManyActiveDownloads}
+		m.clients.Store("torbox", provider)
+		m.jobQueue = NewJobQueue(t.Context(), 1, m.processJob, zerolog.Nop())
+		t.Cleanup(m.jobQueue.Close)
+		for _, hash := range []string{"first", "second"} {
+			req := &ImportRequest{
+				Magnet:         &utils.Magnet{InfoHash: hash, Name: hash},
+				Arr:            arr.Arr{Name: "sonarr"},
+				DownloadFolder: t.TempDir(),
+			}
+			if err := m.addNewTorrent(t.Context(), req); err != nil {
+				t.Fatal(err)
+			}
 		}
-		if err := m.addNewTorrent(t.Context(), req); err != nil {
-			t.Fatal(err)
+		synctest.Wait()
+		m.slotFreed("torbox")
+		synctest.Wait()
+		if got, waiting := provider.submits.Load(), waitingJobs(m.jobQueue); got != 3 || waiting != 2 {
+			t.Fatalf("after one freed slot: submits = %d, waiting = %d; want 3, 2", got, waiting)
 		}
-	}
-	m.slotFreed("torbox")
-	deadline := time.Now().Add(2 * time.Second)
-	for (provider.submits.Load() < 3 || waitingJobs(m.jobQueue) < 2) && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	time.Sleep(100 * time.Millisecond)
-	if got, waiting := provider.submits.Load(), waitingJobs(m.jobQueue); got != 3 || waiting != 2 {
-		t.Fatalf("after one freed slot: submits = %d, waiting = %d; want 3, 2", got, waiting)
-	}
+	})
 }
 
 func TestWokenJobKnowsWhichProvidersSlotWokeIt(t *testing.T) {
@@ -459,8 +458,13 @@ func TestCompletedTorrentWakesAJobWaitingOnItsProvider(t *testing.T) {
 		ActiveProvider: "provider",
 		State:          storage.EntryStateDownloading,
 		Action:         config.DownloadActionNone,
-		Providers:      map[string]*storage.ProviderEntry{"provider": {Provider: "provider", ID: "id"}},
-		Files:          map[string]*storage.File{},
+		Providers: map[string]*storage.ProviderEntry{"provider": {
+			Provider: "provider",
+			ID:       "id",
+			Status:   types.TorrentStatusDownloading,
+			Files:    map[string]*storage.ProviderFile{"a.mkv": {ID: "1"}},
+		}},
+		Files: map[string]*storage.File{},
 	}
 	if err := m.queue.Add(entry); err != nil {
 		t.Fatal(err)
@@ -476,10 +480,8 @@ func TestCompletedTorrentWakesAJobWaitingOnItsProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = m.RemoveFromProvider(stored.Providers["provider"]); err != nil {
-		t.Fatal(err)
-	}
-	if waitingJobs(m.jobQueue) != 1 {
-		t.Fatal("deleting a download its provider reported finished below 100% woke a second job")
+	// The add-time files carry no links; only a sync re-fetch fills them in.
+	if !stored.Providers["provider"].NeedsUpdate(&types.Torrent{ID: "id", Status: types.TorrentStatusDownloaded}) {
+		t.Fatal("the stored placement looks current, so sync never re-fetches its links")
 	}
 }
