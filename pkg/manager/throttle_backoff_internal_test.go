@@ -7,6 +7,7 @@ import (
 	"maps"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -136,6 +137,44 @@ func TestWaitingJobRetriesAfterItsBackoffWithoutAWake(t *testing.T) {
 		synctest.Wait()
 		if got := drained(ran); !slices.Equal(got, []string{"later"}) {
 			t.Fatalf("a freed slot after the retry ran %v, want [later]", got)
+		}
+	})
+}
+
+// A backoff timer firing as a slot frees must not swallow the slot: the timed-out job carries it, or the next waiter gets it.
+func TestTimerWakeRacingSlotFreedLosesNoSlot(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		type run struct{ id, wokenBy string }
+		ran := make(chan run, 4)
+		q := NewJobQueue(
+			t.Context(),
+			1,
+			func(_ context.Context, job *Job) { ran <- run{job.ID, job.wokenBy} },
+			zerolog.Nop(),
+		)
+		defer q.Close()
+		for range 200 {
+			q.WaitForSlot(&Job{ID: "timed"}, []string{"realdebrid"}, time.Minute)
+			q.WaitForSlot(&Job{ID: "next"}, []string{"realdebrid"}, time.Hour)
+			time.Sleep(time.Minute)
+			q.SlotFreed("realdebrid")
+			synctest.Wait()
+			var got []run
+			for len(ran) > 0 {
+				got = append(got, <-ran)
+			}
+			slices.SortFunc(got, func(a, b run) int { return strings.Compare(a.id, b.id) })
+			carried := slices.Equal(got, []run{{"timed", "realdebrid"}})
+			passed := slices.Equal(got, []run{{"next", "realdebrid"}, {"timed", ""}})
+			if !carried && !passed {
+				t.Fatalf("ran %v: the freed slot was lost", got)
+			}
+			if carried {
+				q.SlotFreed("realdebrid")
+				synctest.Wait()
+				<-ran
+			}
 		}
 	})
 }
@@ -430,21 +469,40 @@ func TestErroredTorrentWakesOneJobNotTwo(t *testing.T) {
 	}
 }
 
-func TestPruningAPlacementWakesNoJob(t *testing.T) {
+func TestPruningAPlacementWakesAJobOnlyWhenItFreedASlot(t *testing.T) {
 	t.Parallel()
-	m, _ := newDroppedTestManager(t, nil)
-	m.clients.Store("provider", &failingStatusProvider{})
-	m.jobQueue, _ = startRecordingQueue(t)
-	m.jobQueue.WaitForSlot(&Job{ID: "next"}, []string{"provider"}, time.Hour)
-	e := &storage.Entry{
-		InfoHash:  "pruned",
-		Providers: map[string]*storage.ProviderEntry{"provider": {Provider: "provider", ID: "id", Progress: 0.4}},
-	}
-	if _, err := m.pruneRemovePlacements(e); err != nil {
-		t.Fatal(err)
-	}
-	if waitingJobs(m.jobQueue) != 1 {
-		t.Fatal("pruning a stored entry, which holds no active-download slot, woke a job")
+	alreadyGone := func(string) error { return errors.New("delete failed") }
+	for _, tc := range []struct {
+		name      string
+		placement storage.ProviderEntry
+		deleteErr func(string) error
+		wantWoken int
+	}{
+		{"mid download", storage.ProviderEntry{Progress: 0.4, Status: types.TorrentStatusDownloading}, nil, 1},
+		{"downloaded", storage.ProviderEntry{Progress: 1, Status: types.TorrentStatusDownloaded}, nil, 0},
+		{"errored", storage.ProviderEntry{Progress: 0.4, Status: types.TorrentStatusError}, nil, 0},
+		{"already gone from the provider", storage.ProviderEntry{Progress: 0.4}, alreadyGone, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m, _ := newDroppedTestManager(t, nil)
+			notFound := func(string) (*types.Torrent, error) { return nil, customerror.ErrTorrentNotFound }
+			m.clients.Store("provider", &fakePruneProvider{deleteErr: tc.deleteErr, lookup: notFound})
+			m.jobQueue, _ = startRecordingQueue(t)
+			m.jobQueue.WaitForSlot(&Job{ID: "next"}, []string{"provider"}, time.Hour)
+			placement := tc.placement
+			placement.Provider, placement.ID = "provider", "id"
+			e := &storage.Entry{
+				InfoHash:  "pruned",
+				Providers: map[string]*storage.ProviderEntry{"provider": &placement},
+			}
+			if _, err := m.pruneRemovePlacements(e); err != nil {
+				t.Fatal(err)
+			}
+			if got := 1 - waitingJobs(m.jobQueue); got != tc.wantWoken {
+				t.Fatalf("woken jobs = %d, want %d", got, tc.wantWoken)
+			}
+		})
 	}
 }
 

@@ -129,7 +129,7 @@ func (m *Manager) pruneRemovePlacements(e *storage.Entry) (bool, error) {
 		if p == nil || p.ID == "" {
 			continue
 		}
-		ran, err := m.removePlacement(name, p.ID, e.InfoHash)
+		ran, err := m.removePlacement(name, p, e.InfoHash)
 		if err != nil {
 			return removed, fmt.Errorf("%s/%s: %w", name, p.ID, err)
 		}
@@ -151,7 +151,8 @@ func (m *Manager) placementHeldElsewhere(provider, id, self string) (bool, error
 	return false, err
 }
 
-func (m *Manager) removePlacement(provider, id, self string) (bool, error) {
+func (m *Manager) removePlacement(provider string, p *storage.ProviderEntry, self string) (bool, error) {
+	id := p.ID
 	lock := m.providerLock(provider)
 	lock.Lock()
 	defer lock.Unlock()
@@ -171,6 +172,9 @@ func (m *Manager) removePlacement(provider, id, self string) (bool, error) {
 	}
 	delErr := client.DeleteTorrent(id)
 	if delErr == nil {
+		if p.HoldsSlot() {
+			m.slotFreed(provider)
+		}
 		return true, nil
 	}
 	if _, getErr := client.GetTorrent(id); errors.Is(getErr, customerror.ErrTorrentNotFound) {
