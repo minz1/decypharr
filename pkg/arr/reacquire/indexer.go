@@ -156,15 +156,11 @@ func (i *Indexer) ReindexEntry(arrName, entryID string) bool {
 	if arrName == "" || entryID == "" {
 		return false
 	}
-	request := indexRequest{
+	return i.enqueue(indexRequest{
 		arrName: arrName,
 		entryID: entryID,
 		version: i.requestSequence.Add(1),
-	}
-	i.mu.Lock()
-	i.stopWaitLocked(request.key())
-	i.mu.Unlock()
-	return i.enqueue(request)
+	})
 }
 
 func (i *Indexer) enqueue(request indexRequest) bool {
@@ -248,6 +244,9 @@ func (i *Indexer) handle(ctx context.Context, request indexRequest) {
 		var stats matchStats
 		stats, err = i.reconcile(ctx, instance, request, managed)
 		if err == nil && stats.matched() > 0 {
+			i.mu.Lock()
+			i.stopWaitLocked(request.key())
+			i.mu.Unlock()
 			return
 		}
 		if err == nil {
@@ -499,18 +498,21 @@ func (i *Indexer) nextGeneration(arrName string) uint64 {
 	return max(clock, i.writer.Generation(arrName)+1)
 }
 
-// retry enqueues request again after delay, unless a newer request for the same key supersedes it first.
+// retry enqueues request again after delay. A targeted wait ends early when a newer wait or a match for its entry
+// supersedes it.
 func (i *Indexer) retry(ctx context.Context, request indexRequest, delay time.Duration) {
 	request.attempt++
 	key := request.key()
 	stop := make(chan struct{})
-	i.mu.Lock()
-	i.stopWaitLocked(key)
-	if i.waits == nil {
-		i.waits = make(map[string]chan struct{})
+	if request.entryID != "" {
+		i.mu.Lock()
+		i.stopWaitLocked(key)
+		if i.waits == nil {
+			i.waits = make(map[string]chan struct{})
+		}
+		i.waits[key] = stop
+		i.mu.Unlock()
 	}
-	i.waits[key] = stop
-	i.mu.Unlock()
 	i.wg.Go(func() {
 		timer := time.NewTimer(delay)
 		defer timer.Stop()
@@ -518,17 +520,25 @@ func (i *Indexer) retry(ctx context.Context, request indexRequest, delay time.Du
 		case <-ctx.Done():
 		case <-stop:
 		case <-timer.C:
-			i.mu.Lock()
-			current := i.waits[key] == stop
-			if current {
-				delete(i.waits, key)
-			}
-			i.mu.Unlock()
-			if current {
+			if i.endWait(request, stop) {
 				i.enqueue(request)
 			}
 		}
 	})
+}
+
+// endWait reports whether stop is still request's pending wait, and clears it.
+func (i *Indexer) endWait(request indexRequest, stop chan struct{}) bool {
+	if request.entryID == "" {
+		return true
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	current := i.waits[request.key()] == stop
+	if current {
+		delete(i.waits, request.key())
+	}
+	return current
 }
 
 // stopWaitLocked ends the retry pending for key. The caller holds i.mu.

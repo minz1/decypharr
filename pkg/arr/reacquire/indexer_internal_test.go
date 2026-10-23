@@ -863,29 +863,83 @@ func TestFailedTargetedAttemptRetriesOnThePollSchedule(t *testing.T) {
 	}
 }
 
-// The webhook's own request supersedes the outer bound still pending for the same entry.
-func TestReindexEntryEndsThePendingWait(t *testing.T) {
+// A match ends the outer bound still pending for the entry, whichever of the two requests registered it.
+func TestMatchedEntryEndsItsPendingWait(t *testing.T) {
 	t.Parallel()
-	synctest.Test(t, func(t *testing.T) {
-		ctx, cancel := context.WithCancel(t.Context())
-		defer cancel()
-		indexer := NewIndexer(nil, nil, nil, "", zerolog.Nop())
-		indexer.ctx = ctx
+	dir := t.TempDir()
+	libraryPath := filepath.Join(dir, "library", "Movie.mkv")
+	if err := os.MkdirAll(filepath.Dir(libraryPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "managed", "Movie.Release", "movie.mkv"), libraryPath); err != nil {
+		t.Fatal(err)
+	}
+	server := exactHistoryRadarr(t, "download", libraryPath)
+	arrs := arr.New(config.NewStore(&config.Config{}), nil, zerolog.Nop())
+	arrs.AddOrUpdate(arr.Arr{Name: "radarr", Host: server.URL, Token: "secret", Type: arr.Radarr, ImportWebhook: true})
+	managed := []ManagedFile{{
+		EntryID: "entry", EntryFolder: "Movie.Release", FileID: "file", FileName: "movie.mkv", DownloadID: "download",
+	}}
+	writer := new(recordingBindingWriter)
+	indexer := NewIndexer(arrs, fixedManagedCatalog(managed), writer, filepath.Join(dir, "managed"), zerolog.Nop())
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(func() { cancel(); indexer.wg.Wait() })
+	indexer.ctx = ctx
 
-		indexer.retryTargeted(ctx, indexRequest{arrName: "radarr", entryID: "entry"}, true, nil)
-		if !indexer.ReindexEntry("radarr", "entry") {
-			t.Fatal("ReindexEntry refused the webhook's request")
-		}
-		if request, ok := indexer.nextRequest(); !ok || request.lateWaited {
-			t.Fatalf("request = %#v, %v; want the webhook's request", request, ok)
-		}
+	request := indexRequest{arrName: "radarr", entryID: "entry"}
+	indexer.retryTargeted(ctx, request, true, nil)
+	indexer.mu.Lock()
+	stop := indexer.waits[request.key()]
+	indexer.mu.Unlock()
 
-		time.Sleep(lateImportWait)
-		synctest.Wait()
-		if request, ok := indexer.nextRequest(); ok {
-			t.Fatalf("request = %#v; want the superseded wait dropped", request)
-		}
-		cancel()
-		indexer.wg.Wait()
-	})
+	indexer.handle(ctx, request)
+	if len(writer.upserts) != 1 {
+		t.Fatalf("upserts = %#v; want the entry matched", writer.upserts)
+	}
+	select {
+	case <-stop:
+	default:
+		t.Fatal("the pending wait is still running after the match")
+	}
+}
+
+// A newer wait for an entry replaces the older one; refresh retries never replace each other.
+func TestOnlyTargetedWaitsSupersede(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		request  indexRequest
+		attempts []int
+	}{
+		{name: "targeted", request: indexRequest{arrName: "radarr", entryID: "entry"}, attempts: []int{9}},
+		{name: "arr refresh", request: indexRequest{arrName: "radarr"}, attempts: []int{1, 9}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				indexer := NewIndexer(nil, nil, nil, "", zerolog.Nop())
+				indexer.ctx = ctx
+
+				older, newer := tc.request, tc.request
+				newer.attempt = 8
+				indexer.retry(ctx, older, time.Second)
+				indexer.retry(ctx, newer, 2*time.Second)
+				var got []int
+				for range 2 {
+					time.Sleep(time.Second)
+					synctest.Wait()
+					if request, ok := indexer.nextRequest(); ok {
+						got = append(got, request.attempt)
+					}
+				}
+				if !slices.Equal(got, tc.attempts) {
+					t.Errorf("attempts fired = %v; want %v", got, tc.attempts)
+				}
+				cancel()
+				indexer.wg.Wait()
+			})
+		})
+	}
 }

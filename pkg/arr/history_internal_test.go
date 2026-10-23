@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"testing"
 )
@@ -124,5 +125,32 @@ func TestMarkHistoryFailedCtxValidatesStatus(t *testing.T) {
 	s := testService(Arr{Host: server.URL, Token: "secret", Type: Radarr})
 	if err := s.FailHistory(t.Context(), "arr", 42, "ABC"); err == nil {
 		t.Fatal("expected non-success status error")
+	}
+}
+
+// A torrent ID the arr holds records for is not queried again as given, even when none is of the requested event.
+func TestDownloadHistoryFallsBackOnlyForAnUnknownID(t *testing.T) {
+	t.Parallel()
+	var queried []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := r.URL.Query().Get("downloadId")
+		queried = append(queried, id)
+		w.Header().Set("Content-Type", "application/json")
+		if id != "ABCDEF" {
+			_, _ = fmt.Fprint(w, `{"page":1,"pageSize":100,"totalRecords":0,"records":[]}`)
+			return
+		}
+		_, _ = fmt.Fprint(w, `{"page":1,"pageSize":100,"totalRecords":1,`+
+			`"records":[{"id":21,"downloadId":"ABCDEF","eventType":"grabbed"}]}`)
+	}))
+	defer server.Close()
+
+	s := testService(Arr{Host: server.URL, Token: "secret", Type: Sonarr})
+	records, err := s.DownloadHistory(t.Context(), "arr", "abcdef", EventDownloadFolderImported)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 0 || !slices.Equal(queried, []string{"ABCDEF"}) {
+		t.Fatalf("records = %#v, queried = %v; want none, from one query in the stored form", records, queried)
 	}
 }
