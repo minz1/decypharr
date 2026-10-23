@@ -339,8 +339,22 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 	_ = m.queue.Update(entry)
 	// Check if done or failed
 	if debridTorrent.Status == debridTypes.TorrentStatusDownloaded {
+		refreshFinishedPlacement(entry, debridTorrent)
 		m.processAction(entry)
 	}
+}
+
+// refreshFinishedPlacement stores the finished torrent's placement, as sync would, once every file has a link.
+func refreshFinishedPlacement(entry *storage.Entry, finished *debridTypes.Torrent) {
+	old := entry.GetActiveProvider()
+	if old == nil || finished.Debrid != entry.ActiveProvider || !isComplete(finished.Files) {
+		return
+	}
+	placement := entry.AddTorrentProvider(finished)
+	placement.AddedAt = old.AddedAt
+	placement.Progress = 1
+	now := time.Now()
+	placement.DownloadedAt = &now
 }
 
 // releaseLeftSlot wakes a job waiting on provider once the placement finished or failed there, and marks a failed one.
