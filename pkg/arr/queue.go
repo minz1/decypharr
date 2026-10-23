@@ -113,6 +113,7 @@ const (
 	importRetryDelay    = time.Hour
 	importRejectedDelay = 24 * time.Hour
 	searchGiveUpAfter   = time.Hour
+	searchRetryDelay    = time.Minute
 	commandClockSkew    = 2 * time.Second
 )
 
@@ -393,18 +394,19 @@ func (s *Service) planEpisodeSearch(
 	return blocklisted, searched, arrDecides
 }
 
-// pendingSearch is a blocklisted queue record whose episode search is still owed, when it was first owed, and when a
-// search for it was last sent with an unknown outcome.
+// pendingSearch is a blocklisted queue record whose episode search is still owed, when it was first owed, when a
+// search for it was last sent with an unknown outcome, and when it may next be tried.
 type pendingSearch struct {
-	item   QueueSchema
-	since  time.Time
-	sentAt time.Time
+	item    QueueSchema
+	since   time.Time
+	sentAt  time.Time
+	retryAt time.Time
 }
 
 // searchPendingEpisodes adds the searched downloads' episodes without a file to the arr's pending searches and
 // sends those this tick removed or that have left the queue. A pending record seen in this tick's queue is dropped
-// first, since the cleanup rules have just judged it again. What the arr refuses stays pending, for up to an hour; a
-// search whose outcome is unknown is resent only if the arr's command list does not show it.
+// first, since the cleanup rules have just judged it again. What the arr refuses stays pending, retried each minute
+// for up to an hour; a search whose outcome is unknown is resent only if the arr's command list does not show it.
 // shortcut: a record gone from the queue counts as removed by our blocklist, though a user, the arr or a page shift
 // in Queue() may have caused it; pending also keeps EpisodeHasFile from blocklist time. Both risk one extra search;
 // check FailedHistory and the episode's file before searching an unconfirmed removal if that shows up live.
@@ -428,10 +430,10 @@ func (s *Service) searchPendingEpisodes(ctx context.Context, name string, items,
 		if s.now().Sub(search.since) >= searchGiveUpAfter {
 			delete(pending, id)
 			s.logger.Warn().Str("arr", name).Int("episode_id", search.item.EpisodeID).
-				Msg("Queue cleanup: episode search still refused after 1h, giving up; needs manual intervention")
+				Msg("Queue cleanup: episode search not done after 1h, giving up; needs manual intervention")
 			continue
 		}
-		if !hasQueueID(items, id) || hasQueueID(removed, id) {
+		if (!hasQueueID(items, id) || hasQueueID(removed, id)) && !s.now().Before(search.retryAt) {
 			due = append(due, search)
 		}
 	}
@@ -452,6 +454,12 @@ func (s *Service) searchPendingEpisodes(ctx context.Context, name string, items,
 		if search, ok := pending[item.ID]; ok {
 			search.sentAt = sentAt
 			pending[item.ID] = search
+		}
+	}
+	for _, tried := range due {
+		if search, ok := pending[tried.item.ID]; ok {
+			search.retryAt = sentAt.Add(searchRetryDelay)
+			pending[tried.item.ID] = search
 		}
 	}
 	s.mu.Unlock()

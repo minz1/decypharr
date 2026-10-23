@@ -1,6 +1,7 @@
 package arr
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -335,16 +337,19 @@ func TestCleanupQueueSearchFollowsSonarrRedownloadSettings(t *testing.T) {
 	}
 }
 
-// A search the arr refused after the blocklist went through is retried on the next tick, once.
+// A search the arr refused after the blocklist went through is retried a minute later, once.
 func TestCleanupQueueRetriesAFailedSearch(t *testing.T) {
 	t.Parallel()
 	fake := newResearchArr(missingRecord(1, 11, "a", false), missingRecord(2, 12, "a", true))
 	fake.searchFails = true
 	service := researchService(t, fake, Sonarr)
+	clock := &fakeClock{now: time.Date(2026, 10, 22, 0, 0, 0, 0, time.UTC)}
+	service.now = clock.Now
 	runCleanup(t, service, "tv", 1)
 	fake.check(t, researchWant{skipped: []int{1, 2}})
 
 	fake.update(func(a *researchArr) { a.searchFails = false })
+	clock.advance(searchRetryDelay)
 	runCleanup(t, service, "tv", 2)
 	fake.check(t, researchWant{skipped: []int{1, 2}, searches: [][]int{{11}}})
 }
@@ -465,6 +470,7 @@ func TestCleanupQueueResendsASearchOfUnknownOutcomeOnlyIfLost(t *testing.T) {
 			fake.update(func(a *researchArr) {
 				a.searchHangsUp, a.searchLost, a.commandsFail = false, false, tc.commandsFail
 			})
+			clock.advance(searchRetryDelay)
 			runCleanup(t, service, "tv", 2)
 
 			wantCommands := 1
@@ -508,4 +514,49 @@ func TestCleanupQueueGivesUpOnASearchRefusedForAnHour(t *testing.T) {
 			t.Errorf("search commands sent = %d, want 2", a.commands)
 		}
 	})
+}
+
+// A refused search waits a minute before it is sent again, not every tick.
+func TestCleanupQueueBacksOffARefusedSearch(t *testing.T) {
+	t.Parallel()
+	fake := newResearchArr(missingRecord(1, 11, "a", false))
+	fake.searchFails = true
+	service := researchService(t, fake, Sonarr)
+	clock := &fakeClock{now: time.Date(2026, 10, 22, 0, 0, 0, 0, time.UTC)}
+	service.now = clock.Now
+	runCleanup(t, service, "tv", 1)
+	clock.advance(10 * time.Second)
+	runCleanup(t, service, "tv", 1)
+	clock.advance(50 * time.Second)
+	runCleanup(t, service, "tv", 1)
+
+	fake.update(func(a *researchArr) {
+		if a.commands != 2 {
+			t.Errorf("search commands sent = %d, want 2", a.commands)
+		}
+	})
+}
+
+// A search held for an hour because the arr's command list stayed unreadable is given up without claiming the
+// arr refused it.
+func TestCleanupQueueGivesUpOnAHeldSearchNeutrally(t *testing.T) {
+	t.Parallel()
+	fake := newResearchArr(missingRecord(1, 11, "a", false))
+	fake.searchHangsUp, fake.searchLost = true, true
+	service := researchService(t, fake, Sonarr)
+	clock := &fakeClock{now: time.Date(2026, 10, 22, 0, 0, 0, 0, time.UTC)}
+	service.now = clock.Now
+	var logs bytes.Buffer
+	service.logger = zerolog.New(&logs).Level(zerolog.WarnLevel)
+	runCleanup(t, service, "tv", 1)
+	fake.update(func(a *researchArr) { a.searchHangsUp, a.searchLost, a.commandsFail = false, false, true })
+	clock.advance(30 * time.Minute)
+	runCleanup(t, service, "tv", 1)
+	clock.advance(30 * time.Minute)
+	runCleanup(t, service, "tv", 1)
+
+	got := logs.String()
+	if !strings.Contains(got, "episode search not done after 1h") || strings.Contains(got, "still refused") {
+		t.Fatalf("give-up log = %s, want a neutral give-up", got)
+	}
 }
