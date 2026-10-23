@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -14,6 +15,15 @@ type DownloadClientConfig struct {
 	EnableCompletedDownloadHandling           bool `json:"enableCompletedDownloadHandling"`
 	AutoRedownloadFailed                      bool `json:"autoRedownloadFailed"`
 	AutoRedownloadFailedFromInteractiveSearch bool `json:"autoRedownloadFailedFromInteractiveSearch"`
+}
+
+// RedownloadsFailed reports whether the arr re-searches by itself when the download of grab fails.
+func (c DownloadClientConfig) RedownloadsFailed(grab HistoryRecord) bool {
+	if !c.AutoRedownloadFailed {
+		return false
+	}
+	releaseSource, _ := grab.DataValue("releaseSource")
+	return !strings.EqualFold(releaseSource, "InteractiveSearch") || c.AutoRedownloadFailedFromInteractiveSearch
 }
 
 type Command struct {

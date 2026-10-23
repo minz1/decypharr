@@ -34,7 +34,9 @@ type Service struct {
 	cleanupFailing map[string]bool
 	// importFailures tracks stuck manual imports per arr, then downloadID. Guarded by mu.
 	importFailures map[string]map[string]importFailure
-	now            func() time.Time
+	// pendingSearches holds, per arr then queue record ID, the blocklisted records whose episode search is still owed. Guarded by mu.
+	pendingSearches map[string]map[int]pendingSearch
+	now             func() time.Time
 }
 
 // readRetries is how many times the shared client retries an Arr read.
@@ -44,12 +46,13 @@ const readRetries = 5
 // instance list and queue cleanup rules are read live from cfg.
 func New(cfg *config.Store, tlsConfig *tls.Config, log zerolog.Logger) *Service {
 	service := &Service{
-		arrs:           make(map[string]Arr),
-		cleanupFailing: make(map[string]bool),
-		importFailures: make(map[string]map[string]importFailure),
-		now:            time.Now,
-		config:         cfg,
-		logger:         log,
+		arrs:            make(map[string]Arr),
+		cleanupFailing:  make(map[string]bool),
+		importFailures:  make(map[string]map[string]importFailure),
+		pendingSearches: make(map[string]map[int]pendingSearch),
+		now:             time.Now,
+		config:          cfg,
+		logger:          log,
 		client: request.New(
 			log,
 			tlsConfig,

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -146,13 +147,23 @@ func (s *Service) CleanupQueue(ctx context.Context, name string) error {
 		}
 	}
 
+	var searched []QueueSchema
 	if len(blocklistResearch) > 0 && s.ResolveType(ctx, name) == Sonarr {
+		var arrDecides []QueueSchema
 		blocklistResearch, blocklistSearchMissing = splitMappedDownloads(blocklistResearch)
+		blocklistSearchMissing, searched, arrDecides = s.planEpisodeSearch(ctx, name, blocklistSearchMissing)
+		blocklistResearch = append(blocklistResearch, arrDecides...)
 	}
 	s.blocklistQueueItems(ctx, name, blocklistResearch, QueueActionBlocklistResearch, false)
+	queued := items
 	if s.blocklistQueueItems(ctx, name, blocklistSearchMissing, QueueActionBlocklistResearch, true) {
-		s.searchEpisodesWithoutFiles(ctx, name, blocklistSearchMissing)
+		queued = slices.DeleteFunc(slices.Clone(items), func(item QueueSchema) bool {
+			return slices.ContainsFunc(blocklistSearchMissing, func(removed QueueSchema) bool {
+				return removed.ID == item.ID
+			})
+		})
 	}
+	s.searchPendingEpisodes(ctx, name, items, searched, queued)
 	s.blocklistQueueItems(ctx, name, blocklist, QueueActionBlocklist, true)
 	s.mu.RLock()
 	previous := s.importFailures[name]
@@ -331,24 +342,171 @@ func (s *Service) blocklistQueueItems(
 	return true
 }
 
-// searchEpisodesWithoutFiles sends one EpisodeSearch for the removed items' episodes that have no file.
-func (s *Service) searchEpisodesWithoutFiles(ctx context.Context, name string, items []QueueSchema) {
-	var episodeIDs []int
+// planEpisodeSearch splits fully mapped downloads by who searches for their missing episodes, as Sonarr's
+// failed-download settings would: blocklisted holds every download decypharr blocklists without the arr's
+// re-search, searched the ones of those it searches itself, and arrDecides the ones whose settings or grab
+// history it could not read, which keep the arr's own re-search.
+func (s *Service) planEpisodeSearch(
+	ctx context.Context, name string, items []QueueSchema,
+) ([]QueueSchema, []QueueSchema, []QueueSchema) {
+	if len(items) == 0 {
+		return nil, nil, nil
+	}
+	settings, err := s.DownloadClientConfig(ctx, name)
+	if err != nil {
+		s.logger.Warn().Err(err).Str("arr", name).
+			Msg("Queue cleanup: download client settings unreadable, the arr re-searches")
+		return nil, nil, items
+	}
+	if !settings.AutoRedownloadFailed {
+		return items, nil, nil
+	}
+	var blocklisted, searched, arrDecides []QueueSchema
+	redownloads := make(map[string]bool)
+	unreadable := make(map[string]bool)
 	for _, item := range items {
-		if !item.EpisodeHasFile {
-			episodeIDs = append(episodeIDs, item.EpisodeID)
+		downloadID := item.DownloadID
+		if _, seen := redownloads[downloadID]; seen || unreadable[downloadID] {
+			continue
+		}
+		if settings.AutoRedownloadFailedFromInteractiveSearch {
+			redownloads[downloadID] = true
+			continue
+		}
+		grab, _, grabErr := s.GrabHistory(ctx, name, downloadID)
+		if grabErr != nil {
+			s.logger.Warn().Err(grabErr).Str("arr", name).Str("download_id", downloadID).
+				Msg("Queue cleanup: grab history unreadable, the arr re-searches")
+			unreadable[downloadID] = true
+			continue
+		}
+		redownloads[downloadID] = settings.RedownloadsFailed(grab)
+	}
+	for _, item := range items {
+		if unreadable[item.DownloadID] {
+			arrDecides = append(arrDecides, item)
+			continue
+		}
+		blocklisted = append(blocklisted, item)
+		if redownloads[item.DownloadID] {
+			searched = append(searched, item)
 		}
 	}
-	if len(episodeIDs) == 0 {
+	return blocklisted, searched, arrDecides
+}
+
+// pendingSearch is a blocklisted queue record whose episode search is still owed, and when it was first owed.
+type pendingSearch struct {
+	item  QueueSchema
+	since time.Time
+}
+
+// searchPendingEpisodes adds the searched downloads' episodes without a file to the arr's pending searches and
+// sends those whose record has left the queue. A pending record seen in this tick's queue is dropped first, since
+// the cleanup rules have just judged it again. What the arr refuses stays pending for the next tick, for up to an hour.
+func (s *Service) searchPendingEpisodes(ctx context.Context, name string, items, searched, queued []QueueSchema) {
+	s.mu.Lock()
+	pending := s.pendingSearches[name]
+	if pending == nil {
+		pending = make(map[int]pendingSearch)
+		s.pendingSearches[name] = pending
+	}
+	for _, item := range items {
+		delete(pending, item.ID)
+	}
+	for _, item := range searched {
+		if !item.EpisodeHasFile {
+			pending[item.ID] = pendingSearch{item: item, since: s.now()}
+		}
+	}
+	due := make([]QueueSchema, 0, len(pending))
+	for id, search := range pending {
+		if s.now().Sub(search.since) >= importRetryDelay {
+			delete(pending, id)
+			s.logger.Warn().Str("arr", name).Int("episode_id", search.item.EpisodeID).
+				Msg("Queue cleanup: episode search still refused after 1h, giving up; needs manual intervention")
+			continue
+		}
+		if !slices.ContainsFunc(queued, func(other QueueSchema) bool { return other.ID == id }) {
+			due = append(due, search.item)
+		}
+	}
+	s.mu.Unlock()
+	if len(due) == 0 {
 		return
+	}
+
+	slices.SortFunc(due, func(a, b QueueSchema) int { return a.EpisodeID - b.EpisodeID })
+	done := s.searchEpisodes(ctx, name, due)
+	s.mu.Lock()
+	for _, item := range done {
+		delete(pending, item.ID)
+	}
+	s.mu.Unlock()
+}
+
+// searchEpisodes sends one SeasonSearch per season whose every episode is in items, as Sonarr's own re-search
+// does, and one EpisodeSearch for the rest. It returns the items whose search the arr accepted.
+func (s *Service) searchEpisodes(ctx context.Context, name string, items []QueueSchema) []QueueSchema {
+	type season struct{ series, number int }
+	bySeason := make(map[season][]QueueSchema)
+	var seasons []season
+	for _, item := range items {
+		key := season{item.SeriesID, item.SeasonNumber}
+		if _, seen := bySeason[key]; !seen {
+			seasons = append(seasons, key)
+		}
+		bySeason[key] = append(bySeason[key], item)
+	}
+
+	var done, episodes []QueueSchema
+	for _, key := range seasons {
+		group := bySeason[key]
+		if !s.coversSeason(ctx, name, key.series, key.number, group) {
+			episodes = append(episodes, group...)
+			continue
+		}
+		if _, err := s.SearchSeason(ctx, name, key.series, key.number); err != nil {
+			s.logger.Error().Err(err).Str("arr", name).Int("series_id", key.series).Int("season", key.number).
+				Msg("Queue cleanup: season search failed, retrying next tick")
+			continue
+		}
+		s.logger.Info().Str("arr", name).Int("series_id", key.series).Int("season", key.number).
+			Msg("Queue cleanup: searched a season without any file")
+		done = append(done, group...)
+	}
+	if len(episodes) == 0 {
+		return done
+	}
+
+	episodeIDs := make([]int, len(episodes))
+	for i, item := range episodes {
+		episodeIDs[i] = item.EpisodeID
 	}
 	if _, err := s.SearchEpisodes(ctx, name, episodeIDs); err != nil {
 		s.logger.Error().Err(err).Str("arr", name).Ints("episode_ids", episodeIDs).
-			Msg("Queue cleanup: episode search failed")
-		return
+			Msg("Queue cleanup: episode search failed, retrying next tick")
+		return done
 	}
 	s.logger.Info().Str("arr", name).Ints("episode_ids", episodeIDs).
 		Msg("Queue cleanup: searched episodes without a file")
+	return append(done, episodes...)
+}
+
+// coversSeason reports whether group holds more than one episode and every episode the arr lists for the season.
+func (s *Service) coversSeason(ctx context.Context, name string, seriesID, seasonNumber int, group []QueueSchema) bool {
+	if len(group) < 2 || seriesID <= 0 {
+		return false
+	}
+	seasonIDs, err := s.seasonEpisodeIDs(ctx, name, seriesID, seasonNumber)
+	if err != nil {
+		s.logger.Warn().Err(err).Str("arr", name).Int("series_id", seriesID).Int("season", seasonNumber).
+			Msg("Queue cleanup: season episodes unreadable, searching episode by episode")
+		return false
+	}
+	return len(seasonIDs) > 0 && !slices.ContainsFunc(seasonIDs, func(id int) bool {
+		return !slices.ContainsFunc(group, func(item QueueSchema) bool { return item.EpisodeID == id })
+	})
 }
 
 func (s *Service) removeQueueItems(ctx context.Context, name string, ids []int, skipRedownload bool) error {

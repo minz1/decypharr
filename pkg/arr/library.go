@@ -275,3 +275,26 @@ func (s *Service) LibraryFilesForMedia(ctx context.Context, name string, mediaID
 	}
 	return slices.Concat(byMedia...), nil
 }
+
+// seasonEpisodeIDs lists the IDs of every episode the arr has for one season of a series.
+func (s *Service) seasonEpisodeIDs(ctx context.Context, name string, seriesID, seasonNumber int) ([]int, error) {
+	instance, err := s.instanceOfType(name, Sonarr)
+	if err != nil {
+		return nil, err
+	}
+	var ids []int
+	endpoint := fmt.Sprintf("api/v3/episode?seriesId=%d&seasonNumber=%d", seriesID, seasonNumber)
+	resp, err := s.getDecoded(ctx, instance, endpoint, arrayResponseDecoder(func(episode sonarrEpisode) error {
+		if episode.ID > 0 {
+			ids = append(ids, episode.ID)
+		}
+		return nil
+	}))
+	if err != nil {
+		return nil, fmt.Errorf("list episodes for series %d season %d: %w", seriesID, seasonNumber, err)
+	}
+	if expectStatusErr := expectStatus(resp, http.StatusOK); expectStatusErr != nil {
+		return nil, fmt.Errorf("list episodes for series %d season %d: %w", seriesID, seasonNumber, expectStatusErr)
+	}
+	return ids, nil
+}

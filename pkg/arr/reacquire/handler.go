@@ -248,11 +248,7 @@ func (handler *arrHandler) prepareExactDownloadFailure(
 }
 
 func autoRedownloadsFailure(config arr.DownloadClientConfig, failure exactDownloadFailure) bool {
-	if !config.AutoRedownloadFailed {
-		return false
-	}
-	releaseSource, _ := failure.grabRecord.DataValue("releaseSource")
-	return !strings.EqualFold(releaseSource, "InteractiveSearch") || config.AutoRedownloadFailedFromInteractiveSearch
+	return config.RedownloadsFailed(failure.grabRecord)
 }
 
 // failureCoversGrab reports whether a failed-download record answers the latest grab; a missing record has ID 0.

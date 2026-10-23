@@ -1,0 +1,372 @@
+package arr
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"slices"
+	"strconv"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/rs/zerolog"
+
+	"github.com/sirrobot01/decypharr/internal/config"
+)
+
+type seasonKey struct{ series, season int }
+
+// researchArr is a Sonarr that serves a mutable queue, its download client settings, grab history and season
+// episode lists, and records the bulk deletes per skipRedownload value and the search commands it is sent.
+type researchArr struct {
+	appName string // what api/v3/system/status reports; "" answers 404
+
+	mu             sync.Mutex
+	records        []QueueSchema
+	settings       *DownloadClientConfig // nil answers 401
+	interactive    map[string]bool       // downloadID → grabbed by interactive search
+	historyFails   map[string]bool
+	seasons        map[seasonKey][]int
+	blocklistFails bool
+	removeBefore   int // ids a failing bulk delete still removes
+	searchFails    bool
+	commands       int
+	deletes        map[string][]int
+	searches       [][]int
+	seasonSearches []seasonKey
+}
+
+func newResearchArr(records ...QueueSchema) *researchArr {
+	return &researchArr{
+		records:     slices.Clone(records),
+		settings:    &DownloadClientConfig{AutoRedownloadFailed: true, AutoRedownloadFailedFromInteractiveSearch: true},
+		interactive: make(map[string]bool), historyFails: make(map[string]bool),
+		seasons: make(map[seasonKey][]int), deletes: make(map[string][]int),
+	}
+}
+
+func (a *researchArr) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	query := r.URL.Query()
+	switch {
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v3/queue":
+		body, _ := json.Marshal(QueueResponseScheme{
+			Page: 1, PageSize: 200, TotalRecords: len(a.records), Records: a.records,
+		})
+		_, _ = w.Write(body)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v3/system/status" && a.appName != "":
+		_, _ = fmt.Fprintf(w, `{"appName":%q}`, a.appName)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v3/config/downloadclient":
+		if a.settings == nil {
+			http.Error(w, "no", http.StatusUnauthorized)
+			return
+		}
+		body, _ := json.Marshal(a.settings)
+		_, _ = w.Write(body)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v3/history":
+		downloadID := query.Get("downloadId")
+		if a.historyFails[downloadID] {
+			http.Error(w, "no", http.StatusUnauthorized)
+			return
+		}
+		source := "Search"
+		if a.interactive[downloadID] {
+			source = "InteractiveSearch"
+		}
+		_, _ = fmt.Fprintf(w, `{"page":1,"totalRecords":1,"records":[`+
+			`{"id":1,"downloadId":%q,"eventType":"grabbed","data":{"releaseSource":%q}}]}`, downloadID, source)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v3/episode":
+		series, _ := strconv.Atoi(query.Get("seriesId"))
+		season, _ := strconv.Atoi(query.Get("seasonNumber"))
+		episodes := make([]map[string]int, 0)
+		for _, id := range a.seasons[seasonKey{series, season}] {
+			episodes = append(episodes, map[string]int{"id": id, "seasonNumber": season})
+		}
+		body, _ := json.Marshal(episodes)
+		_, _ = w.Write(body)
+	case r.Method == http.MethodDelete && r.URL.Path == "/api/v3/queue/bulk":
+		a.bulkDelete(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/api/v3/command":
+		a.command(w, r)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func (a *researchArr) bulkDelete(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		IDs []int `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	skip := r.URL.Query().Get("skipRedownload")
+	removed := body.IDs
+	if a.blocklistFails && skip == "true" {
+		removed = body.IDs[:min(a.removeBefore, len(body.IDs))]
+	}
+	a.records = slices.DeleteFunc(a.records, func(record QueueSchema) bool {
+		return slices.Contains(removed, record.ID)
+	})
+	if a.blocklistFails && skip == "true" {
+		http.Error(w, "no", http.StatusInternalServerError)
+		return
+	}
+	a.deletes[skip] = append(a.deletes[skip], body.IDs...)
+	w.WriteHeader(http.StatusOK)
+}
+
+func (a *researchArr) command(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name         string `json:"name"`
+		EpisodeIDs   []int  `json:"episodeIds"`
+		SeriesID     int    `json:"seriesId"`
+		SeasonNumber int    `json:"seasonNumber"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	a.commands++
+	if a.searchFails {
+		http.Error(w, "no", http.StatusServiceUnavailable)
+		return
+	}
+	switch body.Name {
+	case "EpisodeSearch":
+		a.searches = append(a.searches, body.EpisodeIDs)
+	case "SeasonSearch":
+		a.seasonSearches = append(a.seasonSearches, seasonKey{body.SeriesID, body.SeasonNumber})
+	default:
+		http.Error(w, "unexpected command "+body.Name, http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
+	_, _ = w.Write([]byte(`{"id":1,"status":"queued"}`))
+}
+
+func (a *researchArr) update(change func(a *researchArr)) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	change(a)
+}
+
+// missingRecord is a queue record of series 7 season 1 that the episodes_missing rule blocklists and re-searches.
+func missingRecord(id, episodeID int, downloadID string, hasFile bool) QueueSchema {
+	record := QueueSchema{
+		ID: id, EpisodeID: episodeID, SeriesID: 7, SeasonNumber: 1, DownloadID: downloadID, EpisodeHasFile: hasFile,
+		Status: "completed", TrackedDownloadStatus: "warning", TrackedDownloadState: "importBlocked",
+	}
+	record.StatusMessages = append(record.StatusMessages, struct {
+		Title    string   `json:"title"`
+		Messages []string `json:"messages"`
+	}{Title: "One or more episodes expected in this release were not imported or missing from the release"})
+	return record
+}
+
+func researchService(t *testing.T, fake *researchArr, kind Type) *Service {
+	t.Helper()
+	server := httptest.NewServer(fake)
+	t.Cleanup(server.Close)
+	cfg := config.NewStore(&config.Config{QueueCleanup: config.QueueCleanup{Rules: config.DefaultQueueCleanupRules()}})
+	service := New(cfg, nil, zerolog.Nop())
+	service.arrs["tv"] = Arr{Name: "tv", Host: server.URL, Token: "secret", Type: kind}
+	return service
+}
+
+type researchWant struct {
+	arrSearch      []int
+	skipped        []int
+	searches       [][]int
+	seasonSearches []seasonKey
+}
+
+func (a *researchArr) check(t *testing.T, want researchWant) {
+	t.Helper()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if got := a.deletes["false"]; !slices.Equal(got, want.arrSearch) {
+		t.Errorf("skipRedownload=false ids = %v, want %v", got, want.arrSearch)
+	}
+	if got := a.deletes["true"]; !slices.Equal(got, want.skipped) {
+		t.Errorf("skipRedownload=true ids = %v, want %v", got, want.skipped)
+	}
+	if !slices.EqualFunc(a.searches, want.searches, slices.Equal) {
+		t.Errorf("episode searches = %v, want %v", a.searches, want.searches)
+	}
+	if !slices.Equal(a.seasonSearches, want.seasonSearches) {
+		t.Errorf("season searches = %v, want %v", a.seasonSearches, want.seasonSearches)
+	}
+}
+
+func mixedQueue() []QueueSchema {
+	unmapped := missingRecord(5, 0, "mixed", false)
+	unmapped.SeriesID = 0
+	return []QueueSchema{
+		missingRecord(1, 11, "onDisk", true), missingRecord(2, 12, "onDisk", true),
+		missingRecord(3, 13, "partial", true), missingRecord(4, 14, "partial", false),
+		unmapped, missingRecord(6, 16, "mixed", false),
+	}
+}
+
+// A mapped Sonarr download is blocklisted without the arr's re-search, which would cover every episode of
+// the download; decypharr then searches only the episodes without a file. A download with an unmapped record,
+// or an instance not known to be Sonarr, keeps the arr's.
+func TestCleanupQueueSearchesOnlyEpisodesWithoutFiles(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		kind    Type
+		appName string
+		want    researchWant
+	}{
+		{name: "sonarr", kind: Sonarr, want: researchWant{
+			arrSearch: []int{5, 6}, skipped: []int{1, 2, 3, 4}, searches: [][]int{{14}},
+		}},
+		{name: "probed sonarr", kind: Others, appName: "Sonarr", want: researchWant{
+			arrSearch: []int{5, 6}, skipped: []int{1, 2, 3, 4}, searches: [][]int{{14}},
+		}},
+		{name: "unknown type", kind: Others, want: researchWant{arrSearch: []int{1, 2, 3, 4, 5, 6}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			fake := newResearchArr(mixedQueue()...)
+			fake.appName = tt.appName
+			runCleanup(t, researchService(t, fake, tt.kind), "tv", 1)
+			fake.check(t, tt.want)
+		})
+	}
+}
+
+// decypharr's search follows Sonarr's own failed-download settings; what it cannot read, Sonarr decides.
+func TestCleanupQueueSearchFollowsSonarrRedownloadSettings(t *testing.T) {
+	t.Parallel()
+	queue := []QueueSchema{
+		missingRecord(1, 11, "auto", false), missingRecord(2, 12, "picked", false), missingRecord(3, 13, "lost", false),
+	}
+	tests := []struct {
+		name   string
+		change func(a *researchArr)
+		want   researchWant
+	}{
+		{name: "redownload off", change: func(a *researchArr) { a.settings.AutoRedownloadFailed = false },
+			want: researchWant{skipped: []int{1, 2, 3}}},
+		{name: "interactive grab not redownloaded", change: func(a *researchArr) {
+			a.settings.AutoRedownloadFailedFromInteractiveSearch = false
+			a.interactive["picked"] = true
+		}, want: researchWant{skipped: []int{1, 2, 3}, searches: [][]int{{11, 13}}}},
+		{name: "interactive grab redownloaded", change: func(a *researchArr) { a.interactive["picked"] = true },
+			want: researchWant{skipped: []int{1, 2, 3}, searches: [][]int{{11, 12, 13}}}},
+		{name: "settings unreadable", change: func(a *researchArr) { a.settings = nil },
+			want: researchWant{arrSearch: []int{1, 2, 3}}},
+		{name: "grab history unreadable", change: func(a *researchArr) {
+			a.settings.AutoRedownloadFailedFromInteractiveSearch = false
+			a.historyFails["lost"] = true
+		}, want: researchWant{arrSearch: []int{3}, skipped: []int{1, 2}, searches: [][]int{{11, 12}}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			fake := newResearchArr(queue...)
+			fake.update(tt.change)
+			runCleanup(t, researchService(t, fake, Sonarr), "tv", 1)
+			fake.check(t, tt.want)
+		})
+	}
+}
+
+// A search the arr refused after the blocklist went through is retried on the next tick, once.
+func TestCleanupQueueRetriesAFailedSearch(t *testing.T) {
+	t.Parallel()
+	fake := newResearchArr(missingRecord(1, 11, "a", false), missingRecord(2, 12, "a", true))
+	fake.searchFails = true
+	service := researchService(t, fake, Sonarr)
+	runCleanup(t, service, "tv", 1)
+	fake.check(t, researchWant{skipped: []int{1, 2}})
+
+	fake.update(func(a *researchArr) { a.searchFails = false })
+	runCleanup(t, service, "tv", 2)
+	fake.check(t, researchWant{skipped: []int{1, 2}, searches: [][]int{{11}}})
+}
+
+// When a bulk delete fails part way, the downloads it removed are searched next tick; those still queued go
+// through the cleanup rules again.
+func TestCleanupQueueSearchesDownloadsAPartialBlocklistRemoved(t *testing.T) {
+	t.Parallel()
+	fake := newResearchArr(missingRecord(1, 11, "gone", false), missingRecord(2, 12, "stays", false))
+	fake.blocklistFails, fake.removeBefore = true, 1
+	service := researchService(t, fake, Sonarr)
+	runCleanup(t, service, "tv", 1)
+	fake.check(t, researchWant{})
+
+	fake.update(func(a *researchArr) { a.blocklistFails = false })
+	runCleanup(t, service, "tv", 1)
+	fake.check(t, researchWant{skipped: []int{2}, searches: [][]int{{11, 12}}})
+}
+
+// A pending search whose record is back in the queue untouched by the rules is dropped, not searched.
+func TestCleanupQueueDropsPendingSearchForARecordStillQueued(t *testing.T) {
+	t.Parallel()
+	fake := newResearchArr(missingRecord(1, 11, "a", false))
+	fake.blocklistFails = true
+	service := researchService(t, fake, Sonarr)
+	runCleanup(t, service, "tv", 1)
+
+	fake.update(func(a *researchArr) {
+		a.blocklistFails = false
+		a.records[0].TrackedDownloadState = "importing"
+	})
+	runCleanup(t, service, "tv", 1)
+	fake.update(func(a *researchArr) { a.records = nil })
+	runCleanup(t, service, "tv", 1)
+	fake.check(t, researchWant{})
+}
+
+// Every episode of a season missing gets one SeasonSearch, as Sonarr's own re-search would send; a partly missing
+// season keeps the EpisodeSearch.
+func TestCleanupQueueSearchesAWhollyMissingSeasonAsOne(t *testing.T) {
+	t.Parallel()
+	season2 := func(record QueueSchema) QueueSchema {
+		record.SeasonNumber = 2
+		return record
+	}
+	fake := newResearchArr(
+		missingRecord(1, 11, "pack1", false), missingRecord(2, 12, "pack1", false),
+		season2(missingRecord(3, 21, "pack2", false)), season2(missingRecord(4, 22, "pack2", true)),
+	)
+	fake.seasons[seasonKey{7, 1}] = []int{11, 12}
+	fake.seasons[seasonKey{7, 2}] = []int{21, 22}
+	runCleanup(t, researchService(t, fake, Sonarr), "tv", 1)
+	fake.check(t, researchWant{
+		skipped: []int{1, 2, 3, 4}, searches: [][]int{{21}}, seasonSearches: []seasonKey{{7, 1}},
+	})
+}
+
+// A search the arr keeps refusing is given up after an hour instead of being retried every tick.
+func TestCleanupQueueGivesUpOnASearchRefusedForAnHour(t *testing.T) {
+	t.Parallel()
+	fake := newResearchArr(missingRecord(1, 11, "a", false))
+	fake.searchFails = true
+	service := researchService(t, fake, Sonarr)
+	clock := &fakeClock{now: time.Date(2026, 10, 22, 0, 0, 0, 0, time.UTC)}
+	service.now = clock.Now
+	runCleanup(t, service, "tv", 1)
+	clock.advance(time.Hour - time.Second)
+	runCleanup(t, service, "tv", 1)
+	clock.advance(time.Second)
+	runCleanup(t, service, "tv", 1)
+	fake.update(func(a *researchArr) { a.searchFails = false })
+	runCleanup(t, service, "tv", 1)
+
+	fake.check(t, researchWant{skipped: []int{1}})
+	fake.update(func(a *researchArr) {
+		if a.commands != 2 {
+			t.Errorf("search commands sent = %d, want 2", a.commands)
+		}
+	})
+}
