@@ -46,6 +46,8 @@ type indexRequest struct {
 	entryID string
 	attempt int
 	version uint64
+	// lateWaited marks a request that already spent the webhook's outer bound.
+	lateWaited bool
 }
 
 type Indexer struct {
@@ -388,9 +390,14 @@ func (i *Indexer) targetedMediaIDs(ctx context.Context, instance arr.Arr, manage
 		}
 	}
 
+	// The webhook can arrive before the arr writes the import to history, so only the history poll waits for it.
+	eventType := arr.EventDownloadFolderImported
+	if instance.ImportWebhook {
+		eventType = ""
+	}
 	var ids []int
 	for _, downloadID := range downloads {
-		records, err := i.arrs.DownloadHistory(ctx, instance.Name, downloadID, "")
+		records, err := i.arrs.DownloadHistory(ctx, instance.Name, downloadID, eventType)
 		if err != nil {
 			i.logger.Debug().Err(err).
 				Str("arr", instance.Name).
@@ -416,33 +423,26 @@ func (i *Indexer) retryTargeted(ctx context.Context, request indexRequest, webho
 	if ctx.Err() != nil {
 		return
 	}
-	delay, ok := importWaitDelay(webhook, request.attempt)
+	delay, ok := importWaitDelay(webhook, request)
 	if !ok {
+		i.logger.Info().Str("arr", request.arrName).Str("entry_id", request.entryID).Bool("import_webhook", webhook).
+			Msg("Arr import not indexed before the wait ran out; refreshing the whole Arr")
 		i.enqueue(indexRequest{arrName: request.arrName})
 		return
 	}
+	request.lateWaited = request.lateWaited || webhook
 	i.retry(ctx, request, delay)
 }
 
-// importWaitDelay with the webhook catches instant imports, then gives the webhook half an hour; without it, polls as before.
-func importWaitDelay(webhook bool, attempt int) (time.Duration, bool) {
-	if !webhook {
-		return targetedIndexDelay(attempt), attempt < targetedIndexAttempts
+// importWaitDelay with the webhook is one outer bound on waiting for it; without it, the history poll's schedule.
+func importWaitDelay(webhook bool, request indexRequest) (time.Duration, bool) {
+	if webhook {
+		return lateImportWait, !request.lateWaited
 	}
-	switch {
-	case attempt < importRampAttempts:
-		return targetedIndexDelay(attempt), true
-	case attempt == importRampAttempts:
-		return lateImportWait, true
-	default:
-		return 0, false
-	}
+	return targetedIndexDelay(request.attempt), request.attempt < targetedIndexAttempts
 }
 
-const (
-	importRampAttempts = 4
-	lateImportWait     = 30 * time.Minute
-)
+const lateImportWait = 30 * time.Minute
 
 func (i *Indexer) reconcile(
 	ctx context.Context,

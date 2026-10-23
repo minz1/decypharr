@@ -1,6 +1,7 @@
 package reacquire
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
@@ -8,7 +9,10 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -448,71 +452,6 @@ func TestMatchLibraryFilesSeparatesUnknownEntryFromUnknownFile(t *testing.T) {
 	}
 }
 
-func TestReconcileTargetedReadsOnlyTheEntrysMovie(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	target := filepath.Join(dir, "managed", "Movie.Release", "movie.mkv")
-	libraryPath := filepath.Join(dir, "library", "Movie.mkv")
-	if err := os.MkdirAll(filepath.Dir(libraryPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(target, libraryPath); err != nil {
-		t.Fatal(err)
-	}
-
-	var paths []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		paths = append(paths, request.URL.Path)
-		switch request.URL.Path {
-		case "/api/v3/history":
-			_, _ = fmt.Fprint(
-				w,
-				`{"page":1,"pageSize":100,"totalRecords":1,"records":[{"id":1,"downloadId":"download","eventType":"grabbed","movieId":9}]}`,
-			)
-		case "/api/v3/movie/9":
-			_, _ = fmt.Fprintf(w, `{"id":9,"movieFile":{"id":42,"movieId":9,"path":%q}}`, libraryPath)
-		default:
-			t.Errorf("unexpected request to %q", request.URL.Path)
-			http.NotFound(w, request)
-		}
-	}))
-	defer server.Close()
-
-	instance := arr.Arr{Name: "radarr", Host: server.URL, Token: "secret", Type: arr.Radarr}
-	arrs := arr.New(config.NewStore(&config.Config{}), nil, zerolog.Nop())
-	arrs.AddOrUpdate(instance)
-	writer := new(recordingBindingWriter)
-	managed := []ManagedFile{{
-		EntryID:     "entry",
-		EntryName:   "Movie Release",
-		EntryFolder: "Movie.Release",
-		FileID:      "file",
-		FileName:    "movie.mkv",
-		DownloadID:  "download",
-	}}
-	indexer := &Indexer{
-		arrs:        arrs,
-		catalog:     fixedManagedCatalog(managed),
-		writer:      writer,
-		managedRoot: filepath.Join(dir, "managed"),
-	}
-
-	request := indexRequest{arrName: "radarr", entryID: "entry"}
-	stats, err := indexer.reconcile(t.Context(), instance, request, managed)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stats.matched() != 1 {
-		t.Fatalf("stats = %#v", stats)
-	}
-	if len(writer.upserts) != 1 {
-		t.Fatalf("upserts = %#v", writer.upserts)
-	}
-	if slices.Contains(paths, "/api/v3/movie") {
-		t.Fatalf("listed the whole library: %v", paths)
-	}
-}
-
 func TestReconcileTargetedNeverWidensToTheWholeLibrary(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -625,31 +564,38 @@ func TestReconcileGenerationOutrunsStoredGeneration(t *testing.T) {
 	}
 }
 
-// With the arr's import webhook the timer only catches instant imports and one late one; without it nothing changes.
+// With the arr's import webhook the only timer is one outer bound; without it the history poll keeps its schedule.
 func TestImportWaitSchedule(t *testing.T) {
 	t.Parallel()
-	webhook := []time.Duration{time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Minute}
+	webhook := []time.Duration{30 * time.Minute}
 	timer := []time.Duration{time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second}
 	for range targetedIndexAttempts - len(timer) {
 		timer = append(timer, targetedIndexSteadyDelay)
 	}
 	for name, want := range map[bool][]time.Duration{true: webhook, false: timer} {
 		for attempt, delay := range want {
-			if got, ok := importWaitDelay(name, attempt); !ok || got != delay {
+			if got, ok := importWaitDelay(name, indexRequest{attempt: attempt}); !ok || got != delay {
 				t.Errorf("webhook=%v: importWaitDelay(%d) = %s, %v; want %s", name, attempt, got, ok, delay)
 			}
 		}
-		if _, ok := importWaitDelay(name, len(want)); ok {
+		if _, ok := importWaitDelay(name, indexRequest{attempt: len(want), lateWaited: name}); ok {
 			t.Errorf("webhook=%v: still waiting after %d attempts; want the full refresh", name, len(want))
 		}
 	}
 }
 
-// With the webhook on, an entry still unmatched after the late wait goes to the full refresh; without it the timer keeps polling.
+// With the webhook on, an entry still unmatched after the late wait goes to the full refresh; without it the timer
+// keeps polling. A retry after a failed attempt has not spent the late wait yet.
 func TestUnmatchedEntryAfterLateWait(t *testing.T) {
 	t.Parallel()
-	for _, webhook := range []bool{true, false} {
-		t.Run(fmt.Sprintf("webhook=%v", webhook), func(t *testing.T) {
+	for _, tc := range []struct {
+		webhook, lateWaited, wantRefresh bool
+	}{
+		{webhook: true, lateWaited: true, wantRefresh: true},
+		{webhook: true, lateWaited: false, wantRefresh: false},
+		{webhook: false, lateWaited: false, wantRefresh: false},
+	} {
+		t.Run(fmt.Sprintf("webhook=%v/lateWaited=%v", tc.webhook, tc.lateWaited), func(t *testing.T) {
 			t.Parallel()
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				_, _ = fmt.Fprint(w, `{"page":1,"pageSize":100,"totalRecords":0,"records":[]}`)
@@ -657,23 +603,134 @@ func TestUnmatchedEntryAfterLateWait(t *testing.T) {
 			t.Cleanup(server.Close)
 			arrs := arr.New(config.NewStore(&config.Config{}), nil, zerolog.Nop())
 			arrs.AddOrUpdate(arr.Arr{
-				Name: "radarr", Host: server.URL, Token: "secret", Type: arr.Radarr, ImportWebhook: webhook,
+				Name: "radarr", Host: server.URL, Token: "secret", Type: arr.Radarr, ImportWebhook: tc.webhook,
 			})
 			managed := []ManagedFile{{EntryID: "entry", EntryFolder: "Movie", FileID: "file", FileName: "movie.mkv"}}
 			writer := new(recordingBindingWriter)
-			indexer := NewIndexer(arrs, fixedManagedCatalog(managed), writer, t.TempDir(), zerolog.Nop())
+			var logs bytes.Buffer
+			indexer := NewIndexer(arrs, fixedManagedCatalog(managed), writer, t.TempDir(), zerolog.New(&logs))
 			ctx, cancel := context.WithCancel(t.Context())
 			t.Cleanup(cancel)
 			indexer.ctx = ctx
 
-			indexer.handle(ctx, indexRequest{arrName: "radarr", entryID: "entry", attempt: importRampAttempts + 1})
+			indexer.handle(
+				ctx,
+				indexRequest{arrName: "radarr", entryID: "entry", attempt: 1, lateWaited: tc.lateWaited},
+			)
 
 			indexer.mu.Lock()
 			queue := slices.Clone(indexer.queue)
 			indexer.mu.Unlock()
-			if refreshed := len(queue) == 1 && queue[0].entryID == ""; refreshed != webhook {
-				t.Errorf("queue = %#v; want full refresh only with the webhook", queue)
+			if refreshed := len(queue) == 1 && queue[0].entryID == ""; refreshed != tc.wantRefresh {
+				t.Errorf("queue = %#v; want full refresh = %v", queue, tc.wantRefresh)
+			}
+			if tripped := strings.Contains(logs.String(), "wait ran out"); tripped != tc.wantRefresh {
+				t.Errorf("logs = %s; want the trip logged = %v", logs.String(), tc.wantRefresh)
 			}
 		})
 	}
+}
+
+// Without the webhook a targeted attempt reads the library only once history records the import; with it, the
+// webhook is the signal and may arrive before the arr writes its history.
+func TestTargetedIndexWaitsForTheImportInHistory(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		webhook   bool
+		event     string
+		wantMatch bool
+	}{
+		{webhook: false, event: "grabbed", wantMatch: false},
+		{webhook: false, event: "downloadFolderImported", wantMatch: true},
+		{webhook: true, event: "grabbed", wantMatch: true},
+	} {
+		t.Run(fmt.Sprintf("webhook=%v/%s", tc.webhook, tc.event), func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			libraryPath := filepath.Join(dir, "library", "Movie.mkv")
+			if err := os.MkdirAll(filepath.Dir(libraryPath), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(filepath.Join(dir, "managed", "Movie.Release", "movie.mkv"), libraryPath); err != nil {
+				t.Fatal(err)
+			}
+			var movieReads atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				switch request.URL.Path {
+				case "/api/v3/history":
+					_, _ = fmt.Fprintf(w, `{"page":1,"pageSize":100,"totalRecords":1,`+
+						`"records":[{"id":1,"downloadId":"download","eventType":%q,"movieId":9}]}`, tc.event)
+				case "/api/v3/movie/9":
+					movieReads.Add(1)
+					_, _ = fmt.Fprintf(w, `{"id":9,"movieFile":{"id":42,"movieId":9,"path":%q}}`, libraryPath)
+				default:
+					t.Errorf("unexpected request to %q", request.URL.Path)
+					http.NotFound(w, request)
+				}
+			}))
+			t.Cleanup(server.Close)
+
+			instance := arr.Arr{
+				Name: "radarr", Host: server.URL, Token: "secret", Type: arr.Radarr, ImportWebhook: tc.webhook,
+			}
+			arrs := arr.New(config.NewStore(&config.Config{}), nil, zerolog.Nop())
+			arrs.AddOrUpdate(instance)
+			managed := []ManagedFile{
+				{
+					EntryID:     "entry",
+					EntryFolder: "Movie.Release",
+					FileID:      "file",
+					FileName:    "movie.mkv",
+					DownloadID:  "download",
+				},
+			}
+			writer := new(recordingBindingWriter)
+			indexer := &Indexer{
+				arrs:        arrs,
+				catalog:     fixedManagedCatalog(managed),
+				writer:      writer,
+				managedRoot: filepath.Join(dir, "managed"),
+			}
+
+			stats, err := indexer.reconcile(
+				t.Context(),
+				instance,
+				indexRequest{arrName: "radarr", entryID: "entry"},
+				managed,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := [3]bool{stats.matched() == 1, movieReads.Load() > 0, len(writer.upserts) == 1}
+			if want := [3]bool{tc.wantMatch, tc.wantMatch, tc.wantMatch}; got != want {
+				t.Errorf("matched, library read, binding written = %v; want %v", got, want)
+			}
+		})
+	}
+}
+
+// The webhook's outer bound is spent once: the request it wakes goes to the full refresh if it still misses.
+func TestWebhookWaitRunsOutOnce(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		indexer := NewIndexer(nil, nil, nil, "", zerolog.Nop())
+		indexer.ctx = ctx
+
+		indexer.retryTargeted(ctx, indexRequest{arrName: "radarr", entryID: "entry"}, true)
+		time.Sleep(lateImportWait)
+		synctest.Wait()
+		request, ok := indexer.nextRequest()
+		if !ok || !request.lateWaited {
+			t.Fatalf("request after the wait = %#v, %v; want the entry, marked as having waited", request, ok)
+		}
+
+		indexer.retryTargeted(ctx, request, true)
+		if refresh, queued := indexer.nextRequest(); !queued || refresh.entryID != "" {
+			t.Fatalf("request = %#v, %v; want the full refresh", refresh, queued)
+		}
+		cancel()
+		indexer.wg.Wait()
+	})
 }
