@@ -184,7 +184,7 @@ func (handler *arrHandler) failHistory(
 	config arr.DownloadClientConfig,
 	progress JobProgress,
 ) (Status, error) {
-	if !failure.found {
+	if !failure.found || (hasSearchMutation(*job) && autoRedownloadsFailure(config, failure)) {
 		return handler.searchBindings(ctx, instance, job, bindings, progress)
 	}
 	if err := handler.executeExactDownloadFailure(ctx, instance, job, failure, progress); err != nil {

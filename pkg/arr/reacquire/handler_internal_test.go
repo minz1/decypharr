@@ -331,6 +331,112 @@ func TestPreexistingFailedHistoryUsesExplicitSearch(t *testing.T) {
 	}
 }
 
+// A resumed history_failed job that already searched blocklists only when the
+// Arr would not search again on its own.
+func TestResumedSearchBlocklistsOnlyWithoutArrRedownload(t *testing.T) {
+	t.Parallel()
+	for _, autoRedownload := range []bool{true, false} {
+		t.Run(fmt.Sprintf("auto_redownload=%v", autoRedownload), func(t *testing.T) {
+			t.Parallel()
+			assertResumedSearch(t, autoRedownload)
+		})
+	}
+}
+
+func assertResumedSearch(t *testing.T, autoRedownload bool) {
+	t.Helper()
+	queued := time.Now().UTC().Add(-time.Minute)
+	server, blocklisted, searched := newSearchedMovieArr(t, queued)
+
+	search := Mutation{
+		Key:              mutationKey(MutationMovieSearch, "9"),
+		Kind:             MutationMovieSearch,
+		State:            MutationIntent,
+		CommandName:      "MoviesSearch",
+		MovieIDs:         []int{9},
+		IntentAt:         queued.Add(-time.Second),
+		LastDispatchedAt: queued,
+		Attempts:         1,
+	}
+	job := Job{Mutations: []Mutation{search}}
+	status, err := newTestHandler(server.URL).failHistory(
+		t.Context(),
+		testInstance(server.URL),
+		&job,
+		[]Binding{{ArrType: arr.Radarr, MovieID: 9}},
+		exactDownloadFailure{found: true, grabFound: true, downloadID: "download-1", historyID: 17},
+		arr.DownloadClientConfig{AutoRedownloadFailed: autoRedownload},
+		&recordedProgress{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != StatusWaitingForGrab {
+		t.Fatalf("status = %q", status)
+	}
+	wantBlocklists := int64(1)
+	if autoRedownload {
+		wantBlocklists = 0
+	}
+	if blocklisted.Load() != wantBlocklists || searched.Load() != 0 {
+		t.Fatalf(
+			"blocklisted = %d, searched = %d, want %d and 0",
+			blocklisted.Load(),
+			searched.Load(),
+			wantBlocklists,
+		)
+	}
+	if _, found := mutationOfKind(job, MutationHistoryFailed); found != !autoRedownload {
+		t.Fatalf("blocklist journaled = %v", found)
+	}
+	confirmed, _ := mutationForKey(job, search.Key)
+	if confirmed.State != MutationConfirmed || confirmed.ReceiptID != 71 {
+		t.Fatalf("search mutation = %#v", confirmed)
+	}
+}
+
+// newSearchedMovieArr serves an Arr whose command list already shows the
+// MoviesSearch for movie 9, counting blocklist and search POSTs.
+func newSearchedMovieArr(t *testing.T, queued time.Time) (*httptest.Server, *atomic.Int64, *atomic.Int64) {
+	t.Helper()
+	blocklisted, searched := &atomic.Int64{}, &atomic.Int64{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v3/history/failed/17":
+			blocklisted.Add(1)
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v3/command":
+			searched.Add(1)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = fmt.Fprint(w, `{"id":72,"name":"MoviesSearch","status":"queued"}`)
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v3/command":
+			_, _ = fmt.Fprintf(
+				w,
+				`[{"id":71,"name":"MoviesSearch","queued":%q,"body":{"name":"MoviesSearch","movieIds":[9]}}]`,
+				queued.Format(time.RFC3339Nano),
+			)
+		default:
+			http.NotFound(w, request)
+		}
+	}))
+	t.Cleanup(server.Close)
+	return server, blocklisted, searched
+}
+
+func TestHasSearchMutationOnlyForSearches(t *testing.T) {
+	t.Parallel()
+	for kind, want := range map[MutationKind]bool{
+		MutationEpisodeSearch: true,
+		MutationSeasonSearch:  true,
+		MutationMovieSearch:   true,
+		MutationHistoryFailed: false,
+		MutationReleaseGrab:   false,
+	} {
+		if got := hasSearchMutation(Job{Mutations: []Mutation{{Kind: kind}}}); got != want {
+			t.Errorf("hasSearchMutation(%s) = %v, want %v", kind, got, want)
+		}
+	}
+}
+
 func testInstance(host string) arr.Arr {
 	return arr.Arr{Name: "movies", Host: host, Token: "secret", Type: arr.Radarr}
 }
