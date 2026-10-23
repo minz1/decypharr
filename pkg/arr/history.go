@@ -63,9 +63,9 @@ func (r HistoryRecord) DataValue(key string) (string, bool) {
 	return "", false
 }
 
-// HistoryDownloadID is a download ID in the form the arr stores it: a torrent infohash uppercased, anything else as given.
+// HistoryDownloadID is a download ID in the form the arr stores it: a hex ID (torrent or season entry) uppercased, anything else as given.
 func HistoryDownloadID(downloadID string) string {
-	if _, err := hex.DecodeString(downloadID); err == nil && len(downloadID) == 40 {
+	if _, err := hex.DecodeString(downloadID); err == nil {
 		return strings.ToUpper(downloadID)
 	}
 	return downloadID

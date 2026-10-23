@@ -735,11 +735,12 @@ func TestWebhookWaitRunsOutOnce(t *testing.T) {
 	})
 }
 
-// The arr's history filter is exact: torrents are stored by uppercased infohash, usenet IDs as given.
+// The arr's history filter is exact: hex IDs (torrents, season entries) are stored uppercased, usenet IDs as given.
 func TestTargetedIndexQueriesHistoryByTheArrsDownloadID(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ name, managed, stored string }{
 		{name: "torrent", managed: "8eae87348844aabbccddeeff0011223344556677", stored: "8EAE87348844AABBCCDDEEFF0011223344556677"},
+		{name: "season", managed: "0a1b2c3d4e5f60718293a4b5c6d7e8f9", stored: "0A1B2C3D4E5F60718293A4B5C6D7E8F9"},
 		{name: "usenet", managed: "9fdb8e00-5a38-4c1e-9d3b-0a1b2c3d4e5f", stored: "9fdb8e00-5a38-4c1e-9d3b-0a1b2c3d4e5f"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
