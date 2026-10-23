@@ -335,7 +335,12 @@ func TestWokenJobThatDoesNotUseTheSlotPassesItOn(t *testing.T) {
 		err      error
 		wantWake bool
 	}{
-		"placed on that provider":    {&Job{wokenBy: "torbox", DebridTorrent: &types.Torrent{Debrid: "torbox"}}, nil, false},
+		"placed on that provider": {&Job{wokenBy: "torbox", DebridTorrent: &types.Torrent{Debrid: "torbox"}}, nil, false},
+		"placed there already cached": {
+			&Job{wokenBy: "torbox", DebridTorrent: &types.Torrent{Debrid: "torbox", Status: types.TorrentStatusDownloaded}},
+			nil,
+			true,
+		},
 		"placed on another provider": {&Job{wokenBy: "torbox", DebridTorrent: &types.Torrent{Debrid: "realdebrid"}}, nil, true},
 		"removed from the queue":     {&Job{wokenBy: "torbox"}, nil, true},
 		"throttled there again":      {&Job{wokenBy: "torbox"}, throttledOn("realdebrid", "torbox"), false},
@@ -382,7 +387,11 @@ func TestErroredTorrentWakesOneJobNotTwo(t *testing.T) {
 	m.jobQueue.WaitForSlot(&Job{ID: "first"}, []string{"provider"}, time.Hour)
 	m.jobQueue.WaitForSlot(&Job{ID: "second"}, []string{"provider"}, time.Hour)
 	m.processQueuedTorrent(entry)
-	if err := m.RemoveFromProvider(entry.Providers["provider"]); err != nil {
+	saved, err := m.queue.GetTorrent(entry.InfoHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = m.RemoveFromProvider(saved.Providers["provider"]); err != nil {
 		t.Fatal(err)
 	}
 	if got := waitingJobs(m.jobQueue); got != 1 {
@@ -434,5 +443,30 @@ func TestCompletedTorrentWakesAJobWaitingOnItsProvider(t *testing.T) {
 	m.processQueuedTorrent(entry)
 	if waitingJobs(m.jobQueue) != 0 {
 		t.Fatal("a completed download woke no job waiting on its provider")
+	}
+}
+
+func TestPruningAPlacementHeldByAnotherEntryWakesNoJob(t *testing.T) {
+	t.Parallel()
+	m, _ := newDroppedTestManager(t, nil)
+	m.clients.Store("provider", &failingStatusProvider{})
+	holder := &storage.Entry{
+		InfoHash:  "holder",
+		Providers: map[string]*storage.ProviderEntry{"provider": {Provider: "provider", ID: "id"}},
+	}
+	if err := m.storage.AddOrUpdate(holder); err != nil {
+		t.Fatal(err)
+	}
+	m.jobQueue, _ = startRecordingQueue(t)
+	m.jobQueue.WaitForSlot(&Job{ID: "next"}, []string{"provider"}, time.Hour)
+	e := &storage.Entry{
+		InfoHash:  "pruned",
+		Providers: map[string]*storage.ProviderEntry{"provider": {Provider: "provider", ID: "id", Progress: 0.4}},
+	}
+	if _, err := m.pruneRemovePlacements(e); err != nil {
+		t.Fatal(err)
+	}
+	if waitingJobs(m.jobQueue) != 1 {
+		t.Fatal("a placement another entry still holds woke a job")
 	}
 }

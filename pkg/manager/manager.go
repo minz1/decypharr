@@ -884,7 +884,8 @@ func (m *Manager) passOnUnusedSlot(job *Job, provider string, err error) {
 	if provider == "" {
 		return
 	}
-	if err == nil && job.DebridTorrent != nil && job.DebridTorrent.Debrid == provider {
+	if err == nil && job.DebridTorrent != nil && job.DebridTorrent.Debrid == provider &&
+		job.DebridTorrent.Status != debridTypes.TorrentStatusDownloaded {
 		return
 	}
 	if throttled, ok := errors.AsType[*throttledError](err); ok && slices.Contains(throttled.providers, provider) {
