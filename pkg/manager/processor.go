@@ -274,6 +274,7 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 
 	debridTorrent := &debridTypes.Torrent{
 		ID:               placement.ID,
+		Debrid:           entry.ActiveProvider,
 		InfoHash:         entry.InfoHash,
 		Magnet:           magnet,
 		Name:             magnet.Name,
@@ -339,15 +340,15 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 	_ = m.queue.Update(entry)
 	// Check if done or failed
 	if debridTorrent.Status == debridTypes.TorrentStatusDownloaded {
-		refreshFinishedPlacement(entry, debridTorrent)
+		refreshFinishedPlacement(entry, placement, debridTorrent)
 		m.processAction(entry)
 	}
 }
 
 // refreshFinishedPlacement stores the finished torrent's placement, as sync would, once every file has a link.
-func refreshFinishedPlacement(entry *storage.Entry, finished *debridTypes.Torrent) {
-	old := entry.GetActiveProvider()
-	if old == nil || finished.Debrid != entry.ActiveProvider || !isComplete(finished.Files) {
+// An entry with no files yet is left for sync, the only place that fills them in.
+func refreshFinishedPlacement(entry *storage.Entry, old *storage.ProviderEntry, finished *debridTypes.Torrent) {
+	if len(entry.Files) == 0 || finished.Debrid != entry.ActiveProvider || !isComplete(finished.Files) {
 		return
 	}
 	placement := entry.AddTorrentProvider(finished)
