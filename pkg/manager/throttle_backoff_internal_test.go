@@ -447,7 +447,7 @@ func TestPruningAPlacementWakesNoJob(t *testing.T) {
 	}
 }
 
-func TestCompletedTorrentWakesAJobWaitingOnItsProvider(t *testing.T) {
+func TestCompletedQueuedTorrentWakesOneJobAndStaysDueForSync(t *testing.T) {
 	t.Parallel()
 	m := newShutdownTestManager(t, filepath.Join(t.TempDir(), "db"))
 	m.clients.Store("provider", &failingStatusProvider{status: types.TorrentStatusDownloaded})
