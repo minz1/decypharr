@@ -238,3 +238,35 @@ func TestDirectStreamFile_RetriesTruncatedBody(t *testing.T) {
 		t.Fatalf("read %v, want %v", buf, content[8:40])
 	}
 }
+
+func TestDirectStreamFile_FailsWhenEveryBodyIsTruncated(t *testing.T) {
+	t.Parallel()
+	const fileSize = 64
+	content := make([]byte, fileSize)
+
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var start, end int64
+		_, _ = fmt.Sscanf(r.Header.Get("Range"), "bytes=%d-%d", &start, &end)
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write(content[start : start+10])
+	}))
+	defer srv.Close()
+
+	f := &DirectStreamFile{
+		src:      &fakeStreamSource{content: content, srv: srv},
+		entry:    &storage.Entry{Files: map[string]*storage.File{"test.bin": {Name: "test.bin", Size: fileSize}}},
+		filename: "test.bin",
+		size:     fileSize,
+		retries:  2,
+	}
+
+	n, err := f.ReadAtContext(context.Background(), make([]byte, 32), 8)
+	if n != 0 || !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("ReadAtContext = (%d, %v), want (0, %v)", n, err, io.ErrUnexpectedEOF)
+	}
+	if calls != 3 {
+		t.Fatalf("server saw %d requests, want 3", calls)
+	}
+}
