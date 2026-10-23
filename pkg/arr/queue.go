@@ -112,6 +112,8 @@ const (
 	maxImportAttempts   = 5
 	importRetryDelay    = time.Hour
 	importRejectedDelay = 24 * time.Hour
+	searchGiveUpAfter   = time.Hour
+	commandClockSkew    = 2 * time.Second
 )
 
 type importFailure struct {
@@ -155,15 +157,11 @@ func (s *Service) CleanupQueue(ctx context.Context, name string) error {
 		blocklistResearch = append(blocklistResearch, arrDecides...)
 	}
 	s.blocklistQueueItems(ctx, name, blocklistResearch, QueueActionBlocklistResearch, false)
-	queued := items
+	var removed []QueueSchema
 	if s.blocklistQueueItems(ctx, name, blocklistSearchMissing, QueueActionBlocklistResearch, true) {
-		queued = slices.DeleteFunc(slices.Clone(items), func(item QueueSchema) bool {
-			return slices.ContainsFunc(blocklistSearchMissing, func(removed QueueSchema) bool {
-				return removed.ID == item.ID
-			})
-		})
+		removed = blocklistSearchMissing
 	}
-	s.searchPendingEpisodes(ctx, name, items, searched, queued)
+	s.searchPendingEpisodes(ctx, name, items, searched, removed)
 	s.blocklistQueueItems(ctx, name, blocklist, QueueActionBlocklist, true)
 	s.mu.RLock()
 	previous := s.importFailures[name]
@@ -395,16 +393,22 @@ func (s *Service) planEpisodeSearch(
 	return blocklisted, searched, arrDecides
 }
 
-// pendingSearch is a blocklisted queue record whose episode search is still owed, and when it was first owed.
+// pendingSearch is a blocklisted queue record whose episode search is still owed, when it was first owed, and when a
+// search for it was last sent with an unknown outcome.
 type pendingSearch struct {
-	item  QueueSchema
-	since time.Time
+	item   QueueSchema
+	since  time.Time
+	sentAt time.Time
 }
 
 // searchPendingEpisodes adds the searched downloads' episodes without a file to the arr's pending searches and
-// sends those whose record has left the queue. A pending record seen in this tick's queue is dropped first, since
-// the cleanup rules have just judged it again. What the arr refuses stays pending for the next tick, for up to an hour.
-func (s *Service) searchPendingEpisodes(ctx context.Context, name string, items, searched, queued []QueueSchema) {
+// sends those this tick removed or that have left the queue. A pending record seen in this tick's queue is dropped
+// first, since the cleanup rules have just judged it again. What the arr refuses stays pending, for up to an hour; a
+// search whose outcome is unknown is resent only if the arr's command list does not show it.
+// shortcut: a record gone from the queue counts as removed by our blocklist, though a user, the arr or a page shift
+// in Queue() may have caused it; pending also keeps EpisodeHasFile from blocklist time. Both risk one extra search;
+// check FailedHistory and the episode's file before searching an unconfirmed removal if that shows up live.
+func (s *Service) searchPendingEpisodes(ctx context.Context, name string, items, searched, removed []QueueSchema) {
 	s.mu.Lock()
 	pending := s.pendingSearches[name]
 	if pending == nil {
@@ -419,16 +423,16 @@ func (s *Service) searchPendingEpisodes(ctx context.Context, name string, items,
 			pending[item.ID] = pendingSearch{item: item, since: s.now()}
 		}
 	}
-	due := make([]QueueSchema, 0, len(pending))
+	due := make([]pendingSearch, 0, len(pending))
 	for id, search := range pending {
-		if s.now().Sub(search.since) >= importRetryDelay {
+		if s.now().Sub(search.since) >= searchGiveUpAfter {
 			delete(pending, id)
 			s.logger.Warn().Str("arr", name).Int("episode_id", search.item.EpisodeID).
 				Msg("Queue cleanup: episode search still refused after 1h, giving up; needs manual intervention")
 			continue
 		}
-		if !slices.ContainsFunc(queued, func(other QueueSchema) bool { return other.ID == id }) {
-			due = append(due, search.item)
+		if !hasQueueID(items, id) || hasQueueID(removed, id) {
+			due = append(due, search)
 		}
 	}
 	s.mu.Unlock()
@@ -436,18 +440,78 @@ func (s *Service) searchPendingEpisodes(ctx context.Context, name string, items,
 		return
 	}
 
-	slices.SortFunc(due, func(a, b QueueSchema) int { return a.EpisodeID - b.EpisodeID })
-	done := s.searchEpisodes(ctx, name, due)
+	items, confirmed := s.unsentSearches(ctx, name, due)
+	slices.SortFunc(items, func(a, b QueueSchema) int { return a.EpisodeID - b.EpisodeID })
+	sentAt := s.now()
+	done, unknown := s.searchEpisodes(ctx, name, items)
 	s.mu.Lock()
-	for _, item := range done {
+	for _, item := range slices.Concat(confirmed, done) {
 		delete(pending, item.ID)
+	}
+	for _, item := range unknown {
+		if search, ok := pending[item.ID]; ok {
+			search.sentAt = sentAt
+			pending[item.ID] = search
+		}
 	}
 	s.mu.Unlock()
 }
 
+// unsentSearches returns the due items to search now and those the arr's command list shows were already received.
+// An item whose earlier search had an unknown outcome waits while the command list can't be read.
+// shortcut: a held item can be resent if the arr drops the finished command meanwhile; persist command ids if seen.
+func (s *Service) unsentSearches(ctx context.Context, name string, due []pendingSearch) ([]QueueSchema, []QueueSchema) {
+	var send, confirmed []QueueSchema
+	var commands []Command
+	var commandsErr error
+	listed := false
+	for _, search := range due {
+		if search.sentAt.IsZero() {
+			send = append(send, search.item)
+			continue
+		}
+		if !listed {
+			commands, commandsErr = s.Commands(ctx, name)
+			listed = true
+			if commandsErr != nil {
+				s.logger.Warn().Err(commandsErr).Str("arr", name).
+					Msg("Queue cleanup: arr commands unreadable, holding searches of unknown outcome")
+			}
+		}
+		switch {
+		case commandsErr != nil:
+		case slices.ContainsFunc(commands, func(command Command) bool { return searchReceived(command, search) }):
+			confirmed = append(confirmed, search.item)
+		default:
+			send = append(send, search.item)
+		}
+	}
+	return send, confirmed
+}
+
+// searchReceived reports whether command is a search the arr queued for search's episode since it was sent.
+func searchReceived(command Command, search pendingSearch) bool {
+	if command.Queued.Before(search.sentAt.Add(-commandClockSkew)) {
+		return false
+	}
+	switch {
+	case strings.EqualFold(command.Body.Name, "EpisodeSearch"):
+		return slices.Contains(command.Body.EpisodeIDs, search.item.EpisodeID)
+	case strings.EqualFold(command.Body.Name, "SeasonSearch"):
+		return command.Body.SeriesID == search.item.SeriesID && command.Body.SeasonNumber == search.item.SeasonNumber
+	default:
+		return false
+	}
+}
+
+func hasQueueID(items []QueueSchema, id int) bool {
+	return slices.ContainsFunc(items, func(item QueueSchema) bool { return item.ID == id })
+}
+
 // searchEpisodes sends one SeasonSearch per season whose every episode is in items, as Sonarr's own re-search
-// does, and one EpisodeSearch for the rest. It returns the items whose search the arr accepted.
-func (s *Service) searchEpisodes(ctx context.Context, name string, items []QueueSchema) []QueueSchema {
+// does, and one EpisodeSearch for the rest. It returns the items whose search the arr accepted, and those whose
+// search it may have received.
+func (s *Service) searchEpisodes(ctx context.Context, name string, items []QueueSchema) ([]QueueSchema, []QueueSchema) {
 	type season struct{ series, number int }
 	bySeason := make(map[season][]QueueSchema)
 	var seasons []season
@@ -459,7 +523,7 @@ func (s *Service) searchEpisodes(ctx context.Context, name string, items []Queue
 		bySeason[key] = append(bySeason[key], item)
 	}
 
-	var done, episodes []QueueSchema
+	var done, unknown, episodes []QueueSchema
 	for _, key := range seasons {
 		group := bySeason[key]
 		if !s.coversSeason(ctx, name, key.series, key.number, group) {
@@ -467,8 +531,11 @@ func (s *Service) searchEpisodes(ctx context.Context, name string, items []Queue
 			continue
 		}
 		if _, err := s.SearchSeason(ctx, name, key.series, key.number); err != nil {
+			if errors.Is(err, ErrMutationOutcomeUnknown) {
+				unknown = append(unknown, group...)
+			}
 			s.logger.Error().Err(err).Str("arr", name).Int("series_id", key.series).Int("season", key.number).
-				Msg("Queue cleanup: season search failed, retrying next tick")
+				Msg("Queue cleanup: season search failed")
 			continue
 		}
 		s.logger.Info().Str("arr", name).Int("series_id", key.series).Int("season", key.number).
@@ -476,7 +543,7 @@ func (s *Service) searchEpisodes(ctx context.Context, name string, items []Queue
 		done = append(done, group...)
 	}
 	if len(episodes) == 0 {
-		return done
+		return done, unknown
 	}
 
 	episodeIDs := make([]int, len(episodes))
@@ -484,13 +551,16 @@ func (s *Service) searchEpisodes(ctx context.Context, name string, items []Queue
 		episodeIDs[i] = item.EpisodeID
 	}
 	if _, err := s.SearchEpisodes(ctx, name, episodeIDs); err != nil {
+		if errors.Is(err, ErrMutationOutcomeUnknown) {
+			unknown = append(unknown, episodes...)
+		}
 		s.logger.Error().Err(err).Str("arr", name).Ints("episode_ids", episodeIDs).
-			Msg("Queue cleanup: episode search failed, retrying next tick")
-		return done
+			Msg("Queue cleanup: episode search failed")
+		return done, unknown
 	}
 	s.logger.Info().Str("arr", name).Ints("episode_ids", episodeIDs).
 		Msg("Queue cleanup: searched episodes without a file")
-	return append(done, episodes...)
+	return append(done, episodes...), unknown
 }
 
 // coversSeason reports whether group holds more than one episode and every episode the arr lists for the season.

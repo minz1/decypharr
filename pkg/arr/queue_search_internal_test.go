@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strconv"
 	"sync"
@@ -28,6 +29,14 @@ type researchArr struct {
 	settings       *DownloadClientConfig // nil answers 401
 	interactive    map[string]bool       // downloadID → grabbed by interactive search
 	historyFails   map[string]bool
+	noGrab         map[string]bool
+	episodeFails   bool
+	searchHangsUp  bool // the connection drops after the command is read
+	searchLost     bool // with searchHangsUp, the arr never queues it
+	received       []Command
+	commandsFail   bool
+	clock          *fakeClock // when set, stamps received commands and is advanced by replyDelay before a hang-up
+	replyDelay     time.Duration
 	seasons        map[seasonKey][]int
 	blocklistFails bool
 	removeBefore   int // ids a failing bulk delete still removes
@@ -42,7 +51,7 @@ func newResearchArr(records ...QueueSchema) *researchArr {
 	return &researchArr{
 		records:     slices.Clone(records),
 		settings:    &DownloadClientConfig{AutoRedownloadFailed: true, AutoRedownloadFailedFromInteractiveSearch: true},
-		interactive: make(map[string]bool), historyFails: make(map[string]bool),
+		interactive: make(map[string]bool), historyFails: make(map[string]bool), noGrab: make(map[string]bool),
 		seasons: make(map[seasonKey][]int), deletes: make(map[string][]int),
 	}
 }
@@ -67,33 +76,56 @@ func (a *researchArr) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		body, _ := json.Marshal(a.settings)
 		_, _ = w.Write(body)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v3/history":
-		downloadID := query.Get("downloadId")
-		if a.historyFails[downloadID] {
+		a.history(w, query)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v3/episode":
+		a.episodes(w, query)
+	case r.Method == http.MethodDelete && r.URL.Path == "/api/v3/queue/bulk":
+		a.bulkDelete(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v3/command":
+		if a.commandsFail {
 			http.Error(w, "no", http.StatusUnauthorized)
 			return
 		}
-		source := "Search"
-		if a.interactive[downloadID] {
-			source = "InteractiveSearch"
-		}
-		_, _ = fmt.Fprintf(w, `{"page":1,"totalRecords":1,"records":[`+
-			`{"id":1,"downloadId":%q,"eventType":"grabbed","data":{"releaseSource":%q}}]}`, downloadID, source)
-	case r.Method == http.MethodGet && r.URL.Path == "/api/v3/episode":
-		series, _ := strconv.Atoi(query.Get("seriesId"))
-		season, _ := strconv.Atoi(query.Get("seasonNumber"))
-		episodes := make([]map[string]int, 0)
-		for _, id := range a.seasons[seasonKey{series, season}] {
-			episodes = append(episodes, map[string]int{"id": id, "seasonNumber": season})
-		}
-		body, _ := json.Marshal(episodes)
+		body, _ := json.Marshal(a.received)
 		_, _ = w.Write(body)
-	case r.Method == http.MethodDelete && r.URL.Path == "/api/v3/queue/bulk":
-		a.bulkDelete(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/v3/command":
 		a.command(w, r)
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+func (a *researchArr) history(w http.ResponseWriter, query url.Values) {
+	downloadID := query.Get("downloadId")
+	if a.historyFails[downloadID] {
+		http.Error(w, "no", http.StatusUnauthorized)
+		return
+	}
+	if a.noGrab[downloadID] {
+		_, _ = w.Write([]byte(`{"page":1,"totalRecords":0,"records":[]}`))
+		return
+	}
+	source := "Search"
+	if a.interactive[downloadID] {
+		source = "InteractiveSearch"
+	}
+	_, _ = fmt.Fprintf(w, `{"page":1,"totalRecords":1,"records":[`+
+		`{"id":1,"downloadId":%q,"eventType":"grabbed","data":{"releaseSource":%q}}]}`, downloadID, source)
+}
+
+func (a *researchArr) episodes(w http.ResponseWriter, query url.Values) {
+	if a.episodeFails {
+		http.Error(w, "no", http.StatusUnauthorized)
+		return
+	}
+	series, _ := strconv.Atoi(query.Get("seriesId"))
+	season, _ := strconv.Atoi(query.Get("seasonNumber"))
+	episodes := make([]map[string]int, 0)
+	for _, id := range a.seasons[seasonKey{series, season}] {
+		episodes = append(episodes, map[string]int{"id": id, "seasonNumber": season})
+	}
+	body, _ := json.Marshal(episodes)
+	_, _ = w.Write(body)
 }
 
 func (a *researchArr) bulkDelete(w http.ResponseWriter, r *http.Request) {
@@ -132,6 +164,25 @@ func (a *researchArr) command(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.commands++
+	if !a.searchFails && !a.searchLost {
+		queued := time.Now()
+		if a.clock != nil {
+			queued = a.clock.Now()
+		}
+		a.received = append(a.received, Command{Queued: queued, Body: CommandBody{
+			Name: body.Name, EpisodeIDs: body.EpisodeIDs, SeriesID: body.SeriesID, SeasonNumber: body.SeasonNumber,
+		}})
+	}
+	if a.searchHangsUp {
+		if a.clock != nil {
+			a.clock.advance(a.replyDelay)
+		}
+		hijacked, _, err := w.(http.Hijacker).Hijack()
+		if err == nil {
+			_ = hijacked.Close()
+		}
+		return
+	}
 	if a.searchFails {
 		http.Error(w, "no", http.StatusServiceUnavailable)
 		return
@@ -262,6 +313,10 @@ func TestCleanupQueueSearchFollowsSonarrRedownloadSettings(t *testing.T) {
 		}, want: researchWant{skipped: []int{1, 2, 3}, searches: [][]int{{11, 13}}}},
 		{name: "interactive grab redownloaded", change: func(a *researchArr) { a.interactive["picked"] = true },
 			want: researchWant{skipped: []int{1, 2, 3}, searches: [][]int{{11, 12, 13}}}},
+		{name: "no grab history", change: func(a *researchArr) {
+			a.settings.AutoRedownloadFailedFromInteractiveSearch = false
+			a.noGrab["picked"] = true
+		}, want: researchWant{skipped: []int{1, 2, 3}, searches: [][]int{{11, 12, 13}}}},
 		{name: "settings unreadable", change: func(a *researchArr) { a.settings = nil },
 			want: researchWant{arrSearch: []int{1, 2, 3}}},
 		{name: "grab history unreadable", change: func(a *researchArr) {
@@ -328,23 +383,107 @@ func TestCleanupQueueDropsPendingSearchForARecordStillQueued(t *testing.T) {
 }
 
 // Every episode of a season missing gets one SeasonSearch, as Sonarr's own re-search would send; a partly missing
-// season keeps the EpisodeSearch.
+// season, or one whose episodes the arr can't list, keeps the EpisodeSearch.
 func TestCleanupQueueSearchesAWhollyMissingSeasonAsOne(t *testing.T) {
 	t.Parallel()
-	season2 := func(record QueueSchema) QueueSchema {
-		record.SeasonNumber = 2
+	inSeason := func(number int, record QueueSchema) QueueSchema {
+		record.SeasonNumber = number
 		return record
 	}
-	fake := newResearchArr(
+	queue := []QueueSchema{
 		missingRecord(1, 11, "pack1", false), missingRecord(2, 12, "pack1", false),
-		season2(missingRecord(3, 21, "pack2", false)), season2(missingRecord(4, 22, "pack2", true)),
-	)
-	fake.seasons[seasonKey{7, 1}] = []int{11, 12}
-	fake.seasons[seasonKey{7, 2}] = []int{21, 22}
-	runCleanup(t, researchService(t, fake, Sonarr), "tv", 1)
-	fake.check(t, researchWant{
-		skipped: []int{1, 2, 3, 4}, searches: [][]int{{21}}, seasonSearches: []seasonKey{{7, 1}},
-	})
+		inSeason(2, missingRecord(3, 21, "pack2", false)), inSeason(2, missingRecord(4, 22, "pack2", true)),
+		inSeason(3, missingRecord(5, 31, "pack3", false)), inSeason(3, missingRecord(6, 32, "pack3", false)),
+	}
+	tests := []struct {
+		name         string
+		episodeFails bool
+		want         researchWant
+	}{
+		{name: "season listed", want: researchWant{
+			skipped: []int{1, 2, 3, 4, 5, 6}, searches: [][]int{{21, 31, 32}}, seasonSearches: []seasonKey{{7, 1}},
+		}},
+		{name: "season unlisted", episodeFails: true, want: researchWant{
+			skipped: []int{1, 2, 3, 4, 5, 6}, searches: [][]int{{11, 12, 21, 31, 32}},
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			fake := newResearchArr(queue...)
+			fake.episodeFails = tt.episodeFails
+			fake.seasons[seasonKey{7, 1}] = []int{11, 12}
+			fake.seasons[seasonKey{7, 2}] = []int{21, 22}
+			fake.seasons[seasonKey{7, 3}] = []int{31, 32, 33}
+			runCleanup(t, researchService(t, fake, Sonarr), "tv", 1)
+			fake.check(t, tt.want)
+		})
+	}
+}
+
+// A search whose response never came is sent again only if the arr's command list shows no search for it queued
+// since it was sent.
+func TestCleanupQueueResendsASearchOfUnknownOutcomeOnlyIfLost(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name         string
+		season       bool
+		lost         bool
+		commandsFail bool
+		replyDelay   time.Duration
+		wantResent   bool
+	}{
+		{name: "queued", wantResent: false},
+		{name: "queued, reply timed out", replyDelay: 30 * time.Second, wantResent: false},
+		{name: "lost", lost: true, wantResent: true},
+		{name: "command list unreadable", lost: true, commandsFail: true, wantResent: false},
+		{name: "season queued", season: true, wantResent: false},
+		{name: "season lost", season: true, lost: true, wantResent: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			records := []QueueSchema{missingRecord(1, 11, "a", false)}
+			want := researchWant{skipped: []int{1}}
+			if tc.season {
+				records = append(records, missingRecord(2, 12, "a", false))
+				want.skipped = []int{1, 2}
+			}
+			fake := newResearchArr(records...)
+			fake.seasons[seasonKey{7, 1}] = []int{11, 12}
+			clock := &fakeClock{now: time.Date(2026, 10, 22, 0, 0, 0, 0, time.UTC)}
+			fake.clock, fake.replyDelay = clock, tc.replyDelay
+			earlier := clock.Now().Add(-time.Minute)
+			fake.received = []Command{
+				{Queued: clock.Now(), Body: CommandBody{Name: "EpisodeSearch", EpisodeIDs: []int{99}}},
+				{Queued: earlier, Body: CommandBody{Name: "EpisodeSearch", EpisodeIDs: []int{11, 12}}},
+				{Queued: earlier, Body: CommandBody{Name: "SeasonSearch", SeriesID: 7, SeasonNumber: 1}},
+			}
+			fake.searchHangsUp, fake.searchLost = true, tc.lost
+			service := researchService(t, fake, Sonarr)
+			service.now = clock.Now
+			runCleanup(t, service, "tv", 1)
+			fake.update(func(a *researchArr) {
+				a.searchHangsUp, a.searchLost, a.commandsFail = false, false, tc.commandsFail
+			})
+			runCleanup(t, service, "tv", 2)
+
+			wantCommands := 1
+			if tc.wantResent {
+				wantCommands = 2
+				if tc.season {
+					want.seasonSearches = []seasonKey{{7, 1}}
+				} else {
+					want.searches = [][]int{{11}}
+				}
+			}
+			fake.check(t, want)
+			fake.update(func(a *researchArr) {
+				if a.commands != wantCommands {
+					t.Errorf("search commands sent = %d, want %d", a.commands, wantCommands)
+				}
+			})
+		})
+	}
 }
 
 // A search the arr keeps refusing is given up after an hour instead of being retried every tick.
