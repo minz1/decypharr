@@ -385,9 +385,8 @@ func (i *Indexer) libraryFor(
 func (i *Indexer) targetedMediaIDs(ctx context.Context, instance arr.Arr, managed []ManagedFile) []int {
 	var downloads []string
 	for _, file := range managed {
-		downloadID := arr.HistoryDownloadID(file.DownloadID)
-		if downloadID != "" && !slices.Contains(downloads, downloadID) {
-			downloads = append(downloads, downloadID)
+		if file.DownloadID != "" && !slices.Contains(downloads, file.DownloadID) {
+			downloads = append(downloads, file.DownloadID)
 		}
 	}
 

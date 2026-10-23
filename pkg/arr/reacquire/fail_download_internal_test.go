@@ -349,3 +349,45 @@ func TestFailDownloadIgnoresAnImportFromAnOlderGrab(t *testing.T) {
 		t.Fatalf("FailHistory calls on the re-grab = %d, want 1", got)
 	}
 }
+
+func TestFailDownloadQueriesHistoryInTheArrsStoredForm(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct{ name, jobID, storedID string }{
+		{name: "torrent infohash stored uppercase", jobID: "8eae8734c0ffee00c0ffee00c0ffee00c0ff8844", storedID: "8EAE8734C0FFEE00C0FFEE00C0FFEE00C0FF8844"},
+		{name: "usenet id stored as given", jobID: "9fdb8e00-5a38-4c3e-9d1a-0123456789ab", storedID: "9fdb8e00-5a38-4c3e-9d1a-0123456789ab"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			var failCalls atomic.Int64
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				switch {
+				case request.Method == http.MethodGet && request.URL.Path == "/api/v3/history":
+					if request.URL.Query().Get("downloadId") != test.storedID {
+						_, _ = fmt.Fprint(w, `{"page":1,"totalRecords":0,"records":[]}`)
+						return
+					}
+					_, _ = fmt.Fprintf(w,
+						`{"page":1,"totalRecords":1,"records":[{"id":42,"downloadId":%q,"eventType":"grabbed"}]}`,
+						test.storedID)
+				case request.Method == http.MethodPost && request.URL.Path == "/api/v3/history/failed/42":
+					failCalls.Add(1)
+					w.WriteHeader(http.StatusOK)
+				default:
+					http.NotFound(w, request)
+				}
+			}))
+			t.Cleanup(server.Close)
+
+			registry := newTestArrStorage()
+			registry.AddOrUpdate(arr.Arr{Name: "sonarr", Host: server.URL, Token: "secret", Type: arr.Sonarr})
+			handler := NewHandler(registry, nil).(*arrHandler)
+			job := Job{ArrName: "sonarr", ArrType: arr.Sonarr, DownloadID: test.jobID}
+			if err := handler.failDownload(t.Context(), job, &recordedProgress{}); err != nil {
+				t.Fatal(err)
+			}
+			if got := failCalls.Load(); got != 1 {
+				t.Fatalf("FailHistory calls = %d, want 1", got)
+			}
+		})
+	}
+}

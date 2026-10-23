@@ -72,13 +72,13 @@ func HistoryDownloadID(downloadID string) string {
 }
 
 // DownloadHistory returns every record for one download, newest first. An empty
-// eventType returns all of them.
+// eventType returns all of them. The ID is matched in the form the arr stores it.
 func (s *Service) DownloadHistory(ctx context.Context, name, downloadID, eventType string) ([]HistoryRecord, error) {
 	instance, err := s.instance(name)
 	if err != nil {
 		return nil, err
 	}
-	downloadID = strings.TrimSpace(downloadID)
+	downloadID = HistoryDownloadID(strings.TrimSpace(downloadID))
 	if downloadID == "" {
 		return nil, fmt.Errorf("history lookup: download ID is required")
 	}
