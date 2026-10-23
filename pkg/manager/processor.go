@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"
@@ -477,10 +479,21 @@ func (m *Manager) SendToDebrid(_ context.Context, importRequest *ImportRequest) 
 		return nil, fmt.Errorf("failed to process torrent: no clients available")
 	}
 	joinedErrors := fmt.Errorf("failed to process torrent: %w", errors.Join(errs...))
+	// The release is refused for good only if every provider refused it for good.
+	if slices.ContainsFunc(errs, isPermanentRefusal) &&
+		slices.ContainsFunc(errs, func(err error) bool { return !isPermanentRefusal(err) }) {
+		joinedErrors = customerror.NewError(joinedErrors, http.StatusBadGateway, "provider_error", false, false).
+			Retryable()
+	}
 	if len(throttled) > 0 {
 		return nil, &throttledError{providers: throttled, err: joinedErrors}
 	}
 	return nil, joinedErrors
+}
+
+func isPermanentRefusal(err error) bool {
+	typed, ok := errors.AsType[*customerror.Error](err)
+	return ok && typed.IsPermanent()
 }
 
 // throttledError names the providers whose active-download cap refused a submit.
