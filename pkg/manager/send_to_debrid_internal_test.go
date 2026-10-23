@@ -2,6 +2,7 @@ package manager
 
 import (
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/puzpuzpuz/xsync/v4"
@@ -20,6 +21,7 @@ func TestJoinedAddErrorIsPermanentOnlyWhenEveryProviderRefusedForGood(t *testing
 		errs          map[string]error
 		wantCode      string
 		wantPermanent bool
+		wantThrottled []string
 	}{
 		"blocked and transient": {
 			errs:     map[string]error{"realdebrid": customerror.ErrTorrentBlocked, "torbox": transient},
@@ -28,6 +30,13 @@ func TestJoinedAddErrorIsPermanentOnlyWhenEveryProviderRefusedForGood(t *testing
 		"blocked and not cached": {
 			errs:     map[string]error{"realdebrid": customerror.ErrTorrentBlocked, "torbox": customerror.ErrTorrentNotCached},
 			wantCode: "provider_error",
+		},
+		"blocked and too many active downloads": {
+			errs: map[string]error{
+				"realdebrid": customerror.ErrTorrentBlocked, "torbox": customerror.ErrTooManyActiveDownloads,
+			},
+			wantCode:      "provider_error",
+			wantThrottled: []string{"torbox"},
 		},
 		"blocked everywhere": {
 			errs: map[string]error{
@@ -57,6 +66,12 @@ func TestJoinedAddErrorIsPermanentOnlyWhenEveryProviderRefusedForGood(t *testing
 				typed.IsRetryable() == tc.wantPermanent {
 				t.Fatalf("classified %q permanent=%t retryable=%t, want %q permanent=%t",
 					typed.Code, typed.IsPermanent(), typed.IsRetryable(), tc.wantCode, tc.wantPermanent)
+			}
+			throttled, _ := errors.AsType[*throttledError](err)
+			if tc.wantThrottled != nil && (!isTooManyActiveDownloads(err) || throttled == nil ||
+				!slices.Equal(throttled.providers, tc.wantThrottled)) {
+				t.Fatalf("throttled = %v (too many active %t), want providers %v",
+					throttled, isTooManyActiveDownloads(err), tc.wantThrottled)
 			}
 		})
 	}

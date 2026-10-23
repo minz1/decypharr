@@ -74,6 +74,15 @@ func TestWriteTorrentAddErrorPreservesSemantics(t *testing.T) {
 			code:      "invalid_magnet",
 			permanent: true,
 		},
+		"blocked on one provider, transient on another": {
+			err: customerror.NewError(fmt.Errorf("failed to process torrent: %w", errors.Join(
+				fmt.Errorf("realdebrid: %w", customerror.ErrTorrentBlocked),
+				errors.New("torbox: giving up after 4 attempt(s)"),
+			)), http.StatusBadGateway, "provider_error", false, false).Retryable(),
+			status:    http.StatusBadGateway,
+			code:      "provider_error",
+			retryable: true,
+		},
 		"provider failure": {
 			err:       errors.New("connection reset"),
 			status:    http.StatusBadGateway,
