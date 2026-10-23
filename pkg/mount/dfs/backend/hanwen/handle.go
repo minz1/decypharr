@@ -62,21 +62,24 @@ func (fh *Handle) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadRe
 	defer cancel()
 
 	n, err := fh.streamFile.ReadAtContext(readCtx, dest, off)
-	if err != nil && !skippableError(err) {
-		switch {
-		case errors.Is(err, syscall.EBADF):
-			return nil, syscall.EBADF
-		case errors.Is(err, io.EOF):
-			return fuse.ReadResultData(dest[:n]), 0
-		case errors.Is(err, context.DeadlineExceeded):
-			return nil, syscall.ETIMEDOUT
-		case errors.Is(err, context.Canceled):
-			return nil, syscall.EINTR
-		default:
-			return nil, syscall.EIO
-		}
+	// The kernel takes a short read as EOF and zero-fills the pages, so a short read inside the file must be an errno.
+	if n == len(dest) || off+int64(n) >= fh.streamFile.Size() {
+		return fuse.ReadResultData(dest[:n]), 0
 	}
-	return fuse.ReadResultData(dest[:n]), 0
+	switch {
+	case errors.Is(err, syscall.EBADF):
+		return nil, syscall.EBADF
+	case errors.Is(err, context.Canceled):
+		return nil, syscall.EINTR
+	}
+	if err == nil {
+		err = io.ErrUnexpectedEOF
+	}
+	fh.logger.Warn().Err(err).Int64("offset", off).Int("read", n).Int("want", len(dest)).Msg("FUSE read failed")
+	if errors.Is(err, context.DeadlineExceeded) {
+		return nil, syscall.ETIMEDOUT
+	}
+	return nil, syscall.EIO
 }
 
 // readFromStaticContent handles static content.

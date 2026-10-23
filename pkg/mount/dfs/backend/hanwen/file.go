@@ -4,9 +4,7 @@ package hanwen
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -127,11 +125,4 @@ func (f *File) Open(_ context.Context, _ uint32) (fs.FileHandle, uint32, syscall
 		logger:     f.logger,
 	}
 	return fh, 0, 0
-}
-
-func skippableError(err error) bool {
-	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, context.Canceled) {
-		return true
-	}
-	return false
 }
