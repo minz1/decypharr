@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -206,10 +207,7 @@ func TestQueuedTorrentLeavingItsProviderSlotWakesAWaitingJob(t *testing.T) {
 			m.jobQueue, _ = startRecordingQueue(t)
 			m.jobQueue.WaitForSlot(&Job{ID: "waiting"}, []string{"provider"}, time.Hour)
 			m.processQueuedTorrent(entry)
-			m.jobQueue.mu.Lock()
-			woke := len(m.jobQueue.waiters) == 0
-			m.jobQueue.mu.Unlock()
-			if woke != tc.wantWake {
+			if woke := waitingJobs(m.jobQueue) == 0; woke != tc.wantWake {
 				t.Fatalf("woke a waiting job = %v, want %v", woke, tc.wantWake)
 			}
 		})
@@ -297,5 +295,144 @@ func TestTorrentThrottledAtAddWaitsForASlot(t *testing.T) {
 	}
 	if got := provider.submits.Load(); got != 2 {
 		t.Fatalf("submits after a slot freed = %d, want 2", got)
+	}
+}
+
+func TestWokenJobKnowsWhichProvidersSlotWokeIt(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		ran := make(chan string, 2)
+		record := func(_ context.Context, job *Job) { ran <- job.ID + "=" + job.wokenBy }
+		q := NewJobQueue(t.Context(), 1, record, zerolog.Nop())
+		t.Cleanup(q.Close)
+		q.WaitForSlot(&Job{ID: "woken"}, []string{"torbox", "realdebrid"}, time.Hour)
+		q.WaitForSlot(&Job{ID: "timed"}, []string{"torbox"}, time.Minute)
+		q.SlotFreed("realdebrid")
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		got := drained(ran)
+		slices.Sort(got)
+		if want := []string{"timed=", "woken=realdebrid"}; !slices.Equal(got, want) {
+			t.Fatalf("ran %v, want %v", got, want)
+		}
+	})
+}
+
+func waitingJobs(q *JobQueue) int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return len(q.waiters)
+}
+
+// A woken job that doesn't take the freed slot hands it to the next job waiting on that provider.
+func TestWokenJobThatDoesNotUseTheSlotPassesItOn(t *testing.T) {
+	t.Parallel()
+	throttledOn := func(providers ...string) error {
+		return &throttledError{providers: providers, err: customerror.ErrTooManyActiveDownloads}
+	}
+	for name, tc := range map[string]struct {
+		job      *Job
+		err      error
+		wantWake bool
+	}{
+		"placed on that provider":    {&Job{wokenBy: "torbox", DebridTorrent: &types.Torrent{Debrid: "torbox"}}, nil, false},
+		"placed on another provider": {&Job{wokenBy: "torbox", DebridTorrent: &types.Torrent{Debrid: "realdebrid"}}, nil, true},
+		"removed from the queue":     {&Job{wokenBy: "torbox"}, nil, true},
+		"throttled there again":      {&Job{wokenBy: "torbox"}, throttledOn("realdebrid", "torbox"), false},
+		"throttled elsewhere only":   {&Job{wokenBy: "torbox"}, throttledOn("realdebrid"), true},
+		"failed otherwise":           {&Job{wokenBy: "torbox"}, errors.New("boom"), true},
+		"not woken by a slot":        {&Job{}, errors.New("boom"), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			m := &Manager{logger: zerolog.Nop()}
+			m.jobQueue, _ = startRecordingQueue(t)
+			m.jobQueue.WaitForSlot(&Job{ID: "next"}, []string{"torbox"}, time.Hour)
+			m.passOnUnusedSlot(tc.job, tc.job.wokenBy, tc.err)
+			if woke := waitingJobs(m.jobQueue) == 0; woke != tc.wantWake {
+				t.Fatalf("woke the next job = %v, want %v", woke, tc.wantWake)
+			}
+		})
+	}
+}
+
+func TestWokenJobRemovedFromTheQueuePassesItsSlotOn(t *testing.T) {
+	t.Parallel()
+	m, _ := newDroppedTestManager(t, nil)
+	m.jobQueue, _ = startRecordingQueue(t)
+	m.jobQueue.WaitForSlot(&Job{ID: "next"}, []string{"torbox"}, time.Hour)
+	job := &Job{ID: "gone", Type: JobTypeTorrent, Entry: &storage.Entry{InfoHash: "gone"}, wokenBy: "torbox"}
+	m.processJob(t.Context(), job)
+	if waitingJobs(m.jobQueue) != 0 {
+		t.Fatal("the next job waiting on torbox is still waiting")
+	}
+}
+
+// An errored torrent freed its slot when it failed; deleting it later frees nothing more.
+func TestErroredTorrentWakesOneJobNotTwo(t *testing.T) {
+	t.Parallel()
+	m, entry := newDroppedTestManager(t, &fakeArrRecovery{})
+	m.processingEntries = xsync.NewMap[string, struct{}]()
+	m.store = testConfigStore(t, nil)
+	m.clients.Store("provider", &failingStatusProvider{status: types.TorrentStatusError})
+	entry.ActiveProvider = "provider"
+	entry.State = storage.EntryStateDownloading
+	entry.Providers = map[string]*storage.ProviderEntry{"provider": {Provider: "provider", ID: "id", Progress: 0.4}}
+	m.jobQueue, _ = startRecordingQueue(t)
+	m.jobQueue.WaitForSlot(&Job{ID: "first"}, []string{"provider"}, time.Hour)
+	m.jobQueue.WaitForSlot(&Job{ID: "second"}, []string{"provider"}, time.Hour)
+	m.processQueuedTorrent(entry)
+	if err := m.RemoveFromProvider(entry.Providers["provider"]); err != nil {
+		t.Fatal(err)
+	}
+	if got := waitingJobs(m.jobQueue); got != 1 {
+		t.Fatalf("waiting jobs = %d, want 1", got)
+	}
+}
+
+func TestPruningAnUnfinishedPlacementWakesAJobWaitingOnItsProvider(t *testing.T) {
+	t.Parallel()
+	for progress, wantWake := range map[float64]bool{0.4: true, 1: false} {
+		m, _ := newDroppedTestManager(t, nil)
+		m.clients.Store("provider", &failingStatusProvider{})
+		m.jobQueue, _ = startRecordingQueue(t)
+		m.jobQueue.WaitForSlot(&Job{ID: "next"}, []string{"provider"}, time.Hour)
+		e := &storage.Entry{
+			InfoHash: "pruned",
+			Providers: map[string]*storage.ProviderEntry{
+				"provider": {Provider: "provider", ID: "id", Progress: progress},
+			},
+		}
+		if _, err := m.pruneRemovePlacements(e); err != nil {
+			t.Fatal(err)
+		}
+		if woke := waitingJobs(m.jobQueue) == 0; woke != wantWake {
+			t.Fatalf("progress %v: woke = %v, want %v", progress, woke, wantWake)
+		}
+	}
+}
+
+func TestCompletedTorrentWakesAJobWaitingOnItsProvider(t *testing.T) {
+	t.Parallel()
+	m := newShutdownTestManager(t, filepath.Join(t.TempDir(), "db"))
+	m.clients.Store("provider", &failingStatusProvider{status: types.TorrentStatusDownloaded})
+	entry := &storage.Entry{
+		InfoHash:       "done",
+		Name:           "done",
+		Protocol:       config.ProtocolTorrent,
+		ActiveProvider: "provider",
+		State:          storage.EntryStateDownloading,
+		Action:         config.DownloadActionNone,
+		Providers:      map[string]*storage.ProviderEntry{"provider": {Provider: "provider", ID: "id"}},
+		Files:          map[string]*storage.File{},
+	}
+	if err := m.queue.Add(entry); err != nil {
+		t.Fatal(err)
+	}
+	m.jobQueue, _ = startRecordingQueue(t)
+	m.jobQueue.WaitForSlot(&Job{ID: "next"}, []string{"provider"}, time.Hour)
+	m.processQueuedTorrent(entry)
+	if waitingJobs(m.jobQueue) != 0 {
+		t.Fatal("a completed download woke no job waiting on its provider")
 	}
 }

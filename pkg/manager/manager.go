@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -446,6 +447,8 @@ func (m *Manager) processJob(ctx context.Context, job *Job) {
 		return
 	}
 
+	wokenBy := job.wokenBy
+	job.wokenBy = ""
 	var err error
 	switch job.Type {
 	case JobTypeTorrent:
@@ -456,6 +459,7 @@ func (m *Manager) processJob(ctx context.Context, job *Job) {
 		err = fmt.Errorf("unknown job type: %s", job.Type)
 	}
 
+	m.passOnUnusedSlot(job, wokenBy, err)
 	if err != nil && ctx.Err() == nil {
 		m.handleJobError(job, err)
 	}
@@ -873,6 +877,20 @@ func (m *Manager) slotFreed(provider string) {
 	if m.jobQueue != nil {
 		m.jobQueue.SlotFreed(provider)
 	}
+}
+
+// passOnUnusedSlot wakes the next job waiting on provider when the job a freed slot there woke did not take it.
+func (m *Manager) passOnUnusedSlot(job *Job, provider string, err error) {
+	if provider == "" {
+		return
+	}
+	if err == nil && job.DebridTorrent != nil && job.DebridTorrent.Debrid == provider {
+		return
+	}
+	if throttled, ok := errors.AsType[*throttledError](err); ok && slices.Contains(throttled.providers, provider) {
+		return
+	}
+	m.slotFreed(provider)
 }
 
 func (m *Manager) providerLock(name string) *sync.Mutex {

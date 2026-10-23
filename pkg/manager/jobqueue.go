@@ -37,6 +37,8 @@ type Job struct {
 	CreatedAt      time.Time
 	// ThrottledRetries counts retries after the provider's active-download cap.
 	ThrottledRetries int
+	// wokenBy is the provider whose freed slot resubmitted the job, if one did.
+	wokenBy string
 }
 
 // NewJob creates a new job.
@@ -79,6 +81,7 @@ type slotWaiter struct {
 	createdAt time.Time
 	providers []string
 	wake      chan struct{}
+	freedBy   string
 }
 
 // jobQueueInitialCapacity presizes the pending-job slice.
@@ -171,6 +174,9 @@ func (q *JobQueue) WaitForSlot(job *Job, providers []string, delay time.Duration
 			q.waiters = slices.DeleteFunc(q.waiters, func(other *slotWaiter) bool { return other == w })
 			q.mu.Unlock()
 		}
+		q.mu.Lock()
+		job.wokenBy = w.freedBy
+		q.mu.Unlock()
 		if err := q.Submit(job); err != nil {
 			q.logger.Debug().Err(err).Str("job_id", job.ID).Msg("Failed to retry job")
 		}
@@ -185,6 +191,7 @@ func (q *JobQueue) SlotFreed(provider string) {
 	if i < 0 {
 		return
 	}
+	q.waiters[i].freedBy = provider
 	close(q.waiters[i].wake)
 	q.waiters = slices.Delete(q.waiters, i, i+1)
 }

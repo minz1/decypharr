@@ -230,6 +230,12 @@ type ProviderEntry struct {
 	DownloadedAt *time.Time `msgpack:"downloaded_at,omitempty" json:"downloaded_at,omitempty"` // When download completed on debrid
 }
 
+// HoldsSlot reports whether the placement may still count against its provider's active-download cap.
+func (p *ProviderEntry) HoldsSlot() bool {
+	return p.Progress < 1 && p.Status != debridTypes.TorrentStatusError &&
+		p.Status != debridTypes.TorrentStatusDownloaded
+}
+
 // NeedsUpdate checks if this placement is stale compared to the remote torrent.
 // Returns true if the stored placement should be refreshed.
 func (p *ProviderEntry) NeedsUpdate(remote *debridTypes.Torrent) bool {

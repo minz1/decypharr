@@ -22,7 +22,7 @@ func (m *Manager) RemoveFromProvider(providerEntry *storage.ProviderEntry) error
 	if err := client.DeleteTorrent(providerEntry.ID); err != nil {
 		return err
 	}
-	if providerEntry.Progress < 1 {
+	if providerEntry.HoldsSlot() {
 		m.slotFreed(providerEntry.Provider)
 	}
 	return nil

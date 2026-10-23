@@ -290,10 +290,7 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 		m.logger.Warn().Err(err).Str("name", entry.Name).Msg("Status check failed; retrying on the next pass")
 		return
 	}
-	if err != nil || dbT == nil || dbT.Status == debridTypes.TorrentStatusError ||
-		dbT.Status == debridTypes.TorrentStatusDownloaded {
-		m.slotFreed(entry.ActiveProvider)
-	}
+	m.releaseLeftSlot(entry.ActiveProvider, placement, dbT, err)
 	if err != nil {
 		m.logger.Error().Err(err).Str("name", entry.Name).Msg("Error checking status")
 		if releaseIsDead(dbT, err) {
@@ -343,6 +340,23 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 	// Check if done or failed
 	if debridTorrent.Status == debridTypes.TorrentStatusDownloaded {
 		m.processAction(entry)
+	}
+}
+
+// releaseLeftSlot wakes a job waiting on provider once the placement finished or failed there, and marks a failed one.
+func (m *Manager) releaseLeftSlot(
+	provider string,
+	placement *storage.ProviderEntry,
+	dbT *debridTypes.Torrent,
+	err error,
+) {
+	if err == nil && dbT != nil && dbT.Status != debridTypes.TorrentStatusError &&
+		dbT.Status != debridTypes.TorrentStatusDownloaded {
+		return
+	}
+	m.slotFreed(provider)
+	if err != nil || dbT == nil || dbT.Status == debridTypes.TorrentStatusError {
+		placement.Status = debridTypes.TorrentStatusError
 	}
 }
 
