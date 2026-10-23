@@ -199,3 +199,42 @@ func TestDirectStreamFile_RetriesOnTransientFailure(t *testing.T) {
 		t.Fatalf("expected at least 2 calls (1 failure + 1 success), got %d", calls)
 	}
 }
+
+func TestDirectStreamFile_RetriesTruncatedBody(t *testing.T) {
+	t.Parallel()
+	const fileSize = 64
+	content := make([]byte, fileSize)
+	for i := range content {
+		content[i] = byte(i + 1)
+	}
+
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var start, end int64
+		_, _ = fmt.Sscanf(r.Header.Get("Range"), "bytes=%d-%d", &start, &end)
+		w.WriteHeader(http.StatusPartialContent)
+		if calls == 1 {
+			end = start + 9
+		}
+		_, _ = w.Write(content[start : end+1])
+	}))
+	defer srv.Close()
+
+	f := &DirectStreamFile{
+		src:      &fakeStreamSource{content: content, srv: srv},
+		entry:    &storage.Entry{Files: map[string]*storage.File{"test.bin": {Name: "test.bin", Size: fileSize}}},
+		filename: "test.bin",
+		size:     fileSize,
+		retries:  2,
+	}
+
+	buf := make([]byte, 32)
+	n, err := f.ReadAtContext(context.Background(), buf, 8)
+	if err != nil || n != len(buf) {
+		t.Fatalf("ReadAtContext = (%d, %v), want (%d, nil)", n, err, len(buf))
+	}
+	if !bytes.Equal(buf, content[8:40]) {
+		t.Fatalf("read %v, want %v", buf, content[8:40])
+	}
+}

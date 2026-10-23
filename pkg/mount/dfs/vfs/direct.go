@@ -2,7 +2,6 @@ package vfs
 
 import (
 	"context"
-	"errors"
 	"io"
 	"sync/atomic"
 	"time"
@@ -92,7 +91,7 @@ func (f *DirectStreamFile) ReadAtContext(ctx context.Context, p []byte, off int6
 		}
 		n, err := io.ReadFull(reader, p)
 		_ = reader.Close()
-		if err == nil || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		if err == nil {
 			return n, nil
 		}
 		lastErr = err
