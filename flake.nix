@@ -24,7 +24,8 @@
             postInstall = ''
               wrapProgram $out/bin/decypharr \
                 --prefix PATH : /run/wrappers/bin \
-                --suffix PATH : ${lib.makeBinPath [ pkgs.rclone ]}
+                --suffix PATH : ${lib.makeBinPath [ pkgs.rclone ]} \
+                --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath [ pkgs.fuse ]}
             '';
             meta = with lib; {
               description = "Debrid mock qBittorrent with stable FUSE inodes";
