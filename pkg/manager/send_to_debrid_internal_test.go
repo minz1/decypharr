@@ -53,9 +53,10 @@ func TestJoinedAddErrorIsPermanentOnlyWhenEveryProviderRefusedForGood(t *testing
 			if !ok {
 				t.Fatalf("err = %v, want a classified error", err)
 			}
-			if typed.Code != tc.wantCode || typed.IsPermanent() != tc.wantPermanent {
-				t.Fatalf("classified %q permanent=%t, want %q permanent=%t",
-					typed.Code, typed.IsPermanent(), tc.wantCode, tc.wantPermanent)
+			if typed.Code != tc.wantCode || typed.IsPermanent() != tc.wantPermanent ||
+				typed.IsRetryable() == tc.wantPermanent {
+				t.Fatalf("classified %q permanent=%t retryable=%t, want %q permanent=%t",
+					typed.Code, typed.IsPermanent(), typed.IsRetryable(), tc.wantCode, tc.wantPermanent)
 			}
 		})
 	}
