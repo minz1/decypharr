@@ -3,11 +3,16 @@
 package hanwen
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"syscall"
 	"testing"
+	"time"
+
+	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/logger"
 )
@@ -54,10 +59,12 @@ func TestHandleReadReportsFailedReadsInsideTheFile(t *testing.T) {
 		{"full read", 0, 1024, nil, 0, 1024},
 		{"read ending at end of file", 8192 - 512, 512, io.EOF, 0, 512},
 	}
+	info := testRemoteFileInfo(t, 8192, time.Now())
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			fh := &Handle{
+				info:       info,
 				streamFile: &fakeStream{size: 8192, n: tc.n, err: tc.err},
 				logger:     logger.NewRateLimitedLogger().Rate("test"),
 			}
@@ -73,5 +80,21 @@ func TestHandleReadReportsFailedReadsInsideTheFile(t *testing.T) {
 				t.Fatalf("read %d bytes, want %d", len(data), tc.wantBytes)
 			}
 		})
+	}
+}
+
+func TestHandleReadFailureLogNamesTheFile(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	fh := &Handle{
+		info:       testRemoteFileInfo(t, 8192, time.Now()),
+		streamFile: &fakeStream{size: 8192, n: 0, err: io.ErrUnexpectedEOF},
+		logger:     logger.NewRateLimitedLogger(logger.WithLogger(zerolog.New(&out))).Rate("test"),
+	}
+	if _, errno := fh.Read(context.Background(), make([]byte, 1024), 0); errno != syscall.EIO {
+		t.Fatalf("errno = %v, want EIO", errno)
+	}
+	if !strings.Contains(out.String(), `"file":"test-entry/video.mkv"`) {
+		t.Fatalf("log line does not name the file: %s", out.String())
 	}
 }

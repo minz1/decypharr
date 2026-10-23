@@ -66,16 +66,19 @@ func (fh *Handle) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadRe
 	if n == len(dest) || off+int64(n) >= fh.streamFile.Size() {
 		return fuse.ReadResultData(dest[:n]), 0
 	}
-	switch {
-	case errors.Is(err, syscall.EBADF):
-		return nil, syscall.EBADF
-	case errors.Is(err, context.Canceled):
+	if errors.Is(err, context.Canceled) {
 		return nil, syscall.EINTR
 	}
 	if err == nil {
 		err = io.ErrUnexpectedEOF
 	}
-	fh.logger.Warn().Err(err).Int64("offset", off).Int("read", n).Int("want", len(dest)).Msg("FUSE read failed")
+	fh.logger.Warn().
+		Err(err).
+		Str("file", fh.info.Parent()+"/"+fh.info.Name()).
+		Int64("offset", off).
+		Int("read", n).
+		Int("want", len(dest)).
+		Msg("FUSE read failed")
 	if errors.Is(err, context.DeadlineExceeded) {
 		return nil, syscall.ETIMEDOUT
 	}
