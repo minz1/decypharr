@@ -9,15 +9,18 @@ New logic is TDD: the regression test fails before the fix and passes after (mut
 Final item: the full gate on `minz`, plus `git status` clean and `minz` == `origin/minz`.
 
 ## May happen mid-run
-- Commits on `minz` (the run branch; nixfiles locks github:minz1/decypharr/minz, so no merge step).
-  Style: `<pkg>: <what>`, one subject line, no Co-Authored-By trailer.
-- `git push origin minz`, fast-forward only, after the item's gate and the Opus reviewer pass. Never force-push.
-- One pushed item per deploy. After a push, post on the board:
-  `decypharr-N → nixfiles: <sha>, what changed, what to verify live`.
-  Do not push the next item until `ack decypharr-N` appears in nixfiles.md (exit WAIT 20 meanwhile).
-  `ack decypharr-N` = deployed, `just admin health` clean, immediate checks passed. Live behaviour arrives later as
+- Commits on local `minz` (the run branch). Style: `<pkg>: <what>`, one subject line, no Co-Authored-By trailer.
+- Ship one item (or one `ship:` group) per post, after its gate, `nix build .#default` and the Opus reviewer pass:
+  `git push origin <sha>:refs/heads/ship/decypharr-N`, then post
+  `<UTC> decypharr-N → nixfiles: <sha> (ship/decypharr-N, item <n>): what changed, what to verify live`.
+  nixfiles deploys exactly that sha. The next ship waits for `ack decypharr-N` (exit `WAIT ack decypharr-N`).
+- After `ack decypharr-N`: `git push origin <sha>:refs/heads/minz` (fast-forward only, the acked sha, never local
+  `minz` when it is ahead). A `reject`/`nack` never touches origin/minz.
+- `ack decypharr-N` = deployed, `just admin health` clean, immediate checks passed. Live behaviour arrives later as
   `watch decypharr-N: <result>`; nothing waits for a watch line.
-- Never edit ~/projects/nixfiles. No tags, no releases, no deploys from here.
+- Run each push exactly as written above, one per call, no `nix develop -c` wrapper, no pipes or chains.
+- Never force-push, delete a remote ref or push any other ref. Never edit ~/projects/nixfiles. No tags, no releases,
+  no deploys from here.
 
 ## Reviewer stand-in
 Before every push: the `reviewer` agent with `model: opus` on the commit range being pushed, plus its ponytail-review pass.
@@ -48,5 +51,19 @@ Open mandate: decypharr correctness (imports, streams, queue/blocklist decisions
 - ~/projects/nixfiles/docs/decypharr-timeouts-roadmap.md: "Unsure" section (read only; don't edit)
 - the nixfiles board file: live findings it reports from Loki/arr APIs
 - failing or flaky tests, `go test -race` on touched packages
-Out: anything the plan's Parking lot names, settings UI, upstream merges, lint-only sweeps, refactors with no
+Out: anything the plan's Parking lot names, settings UI and upstream merges beyond the plan's items, lint-only sweeps, refactors with no
 behaviour fix. Each new item needs evidence (a log line, a failing test, a live report) and a check.
+
+## Long commands
+- `go test ./...` and `nix build .#default` can take several minutes: give the Bash call `timeout: 600000`.
+  If a run still times out, launch it detached (`setsid … </dev/null >"$log" 2>&1 & echo $!`) and exit `WAIT 30 pid=<pid>`.
+
+## Shared tool locks
+- golangci-lint takes a machine-wide lock; another run may hold it. On its "parallel golangci-lint is running"
+  message, wait a minute and retry (up to 10 times) instead of failing the item.
+
+## Peers
+- decypharr produces, nixfiles serves it (nixfiles' plan has `serves: decypharr`) on the shared board.
+- nixfiles deploys the posted sha (ship/decypharr-N) to minz-media-0, one deploy per ack, and owns the live reads.
+- Pacing: at most one decypharr post waiting for an ack; `ahead-cap: 2` lets one more item be committed meanwhile.
+- nixfiles' deploys stall ~30 min on the attic copy: an ack within ~1h is normal, `ack-timeout` covers worse.
