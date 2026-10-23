@@ -133,9 +133,6 @@ func (m *Manager) pruneRemovePlacements(e *storage.Entry) (bool, error) {
 		if err != nil {
 			return removed, fmt.Errorf("%s/%s: %w", name, p.ID, err)
 		}
-		if ran && p.HoldsSlot() {
-			m.slotFreed(name)
-		}
 		removed = removed || ran
 	}
 	return removed, nil
