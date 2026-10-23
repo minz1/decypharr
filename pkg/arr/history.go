@@ -2,6 +2,7 @@ package arr
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -60,6 +61,14 @@ func (r HistoryRecord) DataValue(key string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// HistoryDownloadID is a download ID in the form the arr stores it: a torrent infohash uppercased, anything else as given.
+func HistoryDownloadID(downloadID string) string {
+	if _, err := hex.DecodeString(downloadID); err == nil && len(downloadID) == 40 {
+		return strings.ToUpper(downloadID)
+	}
+	return downloadID
 }
 
 // DownloadHistory returns every record for one download, newest first. An empty

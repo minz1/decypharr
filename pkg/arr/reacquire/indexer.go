@@ -385,8 +385,9 @@ func (i *Indexer) libraryFor(
 func (i *Indexer) targetedMediaIDs(ctx context.Context, instance arr.Arr, managed []ManagedFile) []int {
 	var downloads []string
 	for _, file := range managed {
-		if file.DownloadID != "" && !slices.Contains(downloads, file.DownloadID) {
-			downloads = append(downloads, file.DownloadID)
+		downloadID := arr.HistoryDownloadID(file.DownloadID)
+		if downloadID != "" && !slices.Contains(downloads, downloadID) {
+			downloads = append(downloads, downloadID)
 		}
 	}
 
@@ -425,7 +426,11 @@ func (i *Indexer) retryTargeted(ctx context.Context, request indexRequest, webho
 	}
 	delay, ok := importWaitDelay(webhook, request)
 	if !ok {
-		i.logger.Info().Str("arr", request.arrName).Str("entry_id", request.entryID).Bool("import_webhook", webhook).
+		event := i.logger.Info()
+		if webhook {
+			event = i.logger.Warn()
+		}
+		event.Str("arr", request.arrName).Str("entry_id", request.entryID).Bool("import_webhook", webhook).
 			Msg("Arr import not indexed before the wait ran out; refreshing the whole Arr")
 		i.enqueue(indexRequest{arrName: request.arrName})
 		return

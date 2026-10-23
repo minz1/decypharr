@@ -734,3 +734,72 @@ func TestWebhookWaitRunsOutOnce(t *testing.T) {
 		indexer.wg.Wait()
 	})
 }
+
+// The arr's history filter is exact: torrents are stored by uppercased infohash, usenet IDs as given.
+func TestTargetedIndexQueriesHistoryByTheArrsDownloadID(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, managed, stored string }{
+		{name: "torrent", managed: "8eae87348844aabbccddeeff0011223344556677", stored: "8EAE87348844AABBCCDDEEFF0011223344556677"},
+		{name: "usenet", managed: "9fdb8e00-5a38-4c1e-9d3b-0a1b2c3d4e5f", stored: "9fdb8e00-5a38-4c1e-9d3b-0a1b2c3d4e5f"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			libraryPath := filepath.Join(dir, "library", "Movie.mkv")
+			if err := os.MkdirAll(filepath.Dir(libraryPath), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(filepath.Join(dir, "managed", "Movie.Release", "movie.mkv"), libraryPath); err != nil {
+				t.Fatal(err)
+			}
+			server := exactHistoryRadarr(t, tc.stored, libraryPath)
+
+			instance := arr.Arr{Name: "radarr", Host: server.URL, Token: "secret", Type: arr.Radarr}
+			arrs := arr.New(config.NewStore(&config.Config{}), nil, zerolog.Nop())
+			arrs.AddOrUpdate(instance)
+			managed := []ManagedFile{{
+				EntryID:     "entry",
+				EntryFolder: "Movie.Release",
+				FileID:      "file",
+				FileName:    "movie.mkv",
+				DownloadID:  tc.managed,
+			}}
+			indexer := &Indexer{
+				arrs:        arrs,
+				catalog:     fixedManagedCatalog(managed),
+				writer:      new(recordingBindingWriter),
+				managedRoot: filepath.Join(dir, "managed"),
+			}
+
+			request := indexRequest{arrName: "radarr", entryID: "entry"}
+			stats, err := indexer.reconcile(t.Context(), instance, request, managed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stats.matched() != 1 {
+				t.Fatalf("stats = %#v, want the entry matched via history", stats)
+			}
+		})
+	}
+}
+
+// exactHistoryRadarr answers history only for downloadID exactly, like the arr's case-sensitive filter.
+func exactHistoryRadarr(t *testing.T, downloadID, libraryPath string) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.URL.Path == "/api/v3/history" && request.URL.Query().Get("downloadId") == downloadID:
+			_, _ = fmt.Fprintf(w, `{"page":1,"pageSize":100,"totalRecords":1,`+
+				`"records":[{"id":1,"downloadId":%q,"eventType":"downloadFolderImported","movieId":9}]}`, downloadID)
+		case request.URL.Path == "/api/v3/history":
+			_, _ = fmt.Fprint(w, `{"page":1,"pageSize":100,"totalRecords":0,"records":[]}`)
+		case request.URL.Path == "/api/v3/movie/9":
+			_, _ = fmt.Fprintf(w, `{"id":9,"movieFile":{"id":42,"movieId":9,"path":%q}}`, libraryPath)
+		default:
+			t.Errorf("unexpected request to %q", request.URL.Path)
+			http.NotFound(w, request)
+		}
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
