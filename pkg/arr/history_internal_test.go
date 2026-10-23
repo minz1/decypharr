@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strconv"
-	"strings"
 	"testing"
 )
 
@@ -179,7 +178,8 @@ func TestDownloadHistoryFindsAUsenetHexIDAsGiven(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(records) != 1 || records[0].ID != 22 || !slices.Equal(queried, []string{strings.ToUpper(id), id}) {
+	if len(records) != 1 || records[0].ID != 22 ||
+		!slices.Equal(queried, []string{"0123456789ABCDEF0123456789ABCDEF", id}) {
 		t.Fatalf("records = %#v, queried = %v; want record 22, from the stored form then the ID as given",
 			records, queried)
 	}
