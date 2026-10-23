@@ -62,7 +62,7 @@ type Entry struct {
 	State TorrentState `msgpack:"state" json:"state"` // This is for QBitTorrent compatibility
 	// Provider State (from active providerEntry)
 	Status   debridTypes.TorrentStatus `msgpack:"status"   json:"status"`   // downloaded, downloading, queued, error
-	Progress float64                   `msgpack:"progress" json:"progress"` // Download progress (0-100)
+	Progress float64                   `msgpack:"progress" json:"progress"` // Download progress (0..1)
 	Speed    int64                     `msgpack:"speed"    json:"speed"`    // Download speed
 	Seeders  int                       `msgpack:"seeders"  json:"seeders"`  // Number of seeders
 
@@ -221,7 +221,7 @@ type ProviderEntry struct {
 	AddedAt   time.Time                 `msgpack:"added_at"             json:"added_at"`             // When added to this debrid
 	RemovedAt *time.Time                `msgpack:"removed_at,omitempty" json:"removed_at,omitempty"` // When removed (if archived)
 	Status    debridTypes.TorrentStatus `msgpack:"status"               json:"status"`               // ProviderEntry status
-	Progress  float64                   `msgpack:"progress"             json:"progress"`             // Download progress on this debrid (0-100)
+	Progress  float64                   `msgpack:"progress"             json:"progress"`             // Download progress on this debrid (0..1)
 
 	// Provider-specific file information
 	Files map[string]*ProviderFile `msgpack:"files" json:"files"` // filename -> debrid-specific file info

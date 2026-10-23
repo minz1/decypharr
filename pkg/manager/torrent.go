@@ -507,7 +507,7 @@ func (m *Manager) processSyncTorrent(t *types.Torrent) (*storage.Entry, error) {
 
 	// AddOrUpdate or update placement
 	placement := mt.AddTorrentProvider(t)
-	placement.Progress = t.Progress
+	placement.Progress = t.Progress / percentScale
 	if t.Status == types.TorrentStatusDownloaded {
 		downloadedAt := addedOn
 		placement.DownloadedAt = &downloadedAt
@@ -553,7 +553,7 @@ func newSyncedEntry(t *types.Torrent, addedOn time.Time) *storage.Entry {
 		Providers:        make(map[string]*storage.ProviderEntry),
 		Files:            make(map[string]*storage.File),
 		Status:           t.Status,
-		Progress:         t.Progress,
+		Progress:         t.Progress / percentScale,
 		Speed:            t.Speed,
 		Seeders:          t.Seeders,
 		IsComplete:       len(t.Files) > 0,
