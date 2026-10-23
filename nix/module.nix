@@ -244,9 +244,9 @@ in
     };
 
     fuseBackend = lib.mkOption {
-      type = lib.types.enum [ "hanwen" "cgofuse" ];
+      type = lib.types.enum [ "hanwen" "cgo" ];
       default = "hanwen";
-      description = "FUSE backend to use. Maps to DFS_FUSE_BACKEND (no DECYPHARR_ prefix).";
+      description = "FUSE backend to use; \"cgo\" selects the cgofuse library. Maps to DFS_FUSE_BACKEND (no DECYPHARR_ prefix).";
     };
 
     enablePprof = lib.mkOption {
