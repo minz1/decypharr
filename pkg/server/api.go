@@ -17,6 +17,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/sirrobot01/hearsay/transport"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/repair"
@@ -322,6 +324,12 @@ func prepareConfigUpdate(current *config.Config, body []byte) (config.Config, er
 	next.MigrateVirtualFolders()
 	if validateErr := next.ValidateVirtualFolders(); validateErr != nil {
 		return config.Config{}, fmt.Errorf("invalid virtual folders: %w", validateErr)
+	}
+	if _, blockErr := transport.ParseBlockedPeers(
+		next.Hearsay.BlockPrivatePeers,
+		next.Hearsay.Blocklist,
+	); blockErr != nil {
+		return config.Config{}, fmt.Errorf("invalid hearsay blocklist: %w", blockErr)
 	}
 	next.Auth = current.Auth
 	next.SessionSecret = current.SessionSecret

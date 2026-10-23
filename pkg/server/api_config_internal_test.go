@@ -189,10 +189,11 @@ func TestMergeConfigUpdateMatchesListItemsByName(t *testing.T) {
 func TestUpdateConfigRejectsUnloadableSettings(t *testing.T) {
 	t.Parallel()
 	for name, body := range map[string]string{
-		"bad shared mode":     `{"shared_dir_mode":"775x"}`,
-		"missing tls ca file": `{"tls_ca_file":"/nonexistent/ca.pem"}`,
-		"bad dfs size":        `{"mount":{"dfs":{"chunk_size":"lots"}}}`,
-		"bad debrid proxy":    `{"debrids":[{"name":"rd","provider":"realdebrid","api_key":"k","proxy":"http://[::1"}]}`,
+		"bad shared mode":       `{"shared_dir_mode":"775x"}`,
+		"missing tls ca file":   `{"tls_ca_file":"/nonexistent/ca.pem"}`,
+		"bad dfs size":          `{"mount":{"dfs":{"chunk_size":"lots"}}}`,
+		"bad debrid proxy":      `{"debrids":[{"name":"rd","provider":"realdebrid","api_key":"k","proxy":"http://[::1"}]}`,
+		"bad hearsay blocklist": `{"hearsay":{"blocklist":["10.0.0.1"]}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

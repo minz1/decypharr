@@ -20,7 +20,7 @@ require (
 	github.com/rs/zerolog v1.35.1
 	github.com/sirrobot01/appendstore v0.6.0
 	github.com/sirrobot01/facetfs v0.7.0
-	github.com/sirrobot01/hearsay v0.6.3
+	github.com/sirrobot01/hearsay v0.6.4
 	github.com/sourcegraph/conc v0.3.0
 	github.com/winfsp/cgofuse v1.6.0
 	go.uber.org/ratelimit v0.3.1

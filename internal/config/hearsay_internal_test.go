@@ -16,6 +16,9 @@ func TestHearsayIsZero(t *testing.T) {
 	if (Hearsay{MaxSeededTorrents: 64}).IsZero() {
 		t.Fatal("explicit seeded torrent limit should not be zero")
 	}
+	if (Hearsay{BlockPrivatePeers: true}).IsZero() || (Hearsay{Blocklist: []string{"203.0.113.0/24"}}).IsZero() {
+		t.Fatal("peer blocklist settings should not be zero")
+	}
 }
 
 func TestHearsaySeededTorrentLimitRoundTrip(t *testing.T) {
@@ -33,6 +36,17 @@ func TestHearsaySeededTorrentLimitRoundTrip(t *testing.T) {
 		if decoded.Hearsay.MaxSeededTorrents != limit {
 			t.Fatalf("seeded torrent limit = %d, want %d: %s", decoded.Hearsay.MaxSeededTorrents, limit, raw)
 		}
+	}
+}
+
+func TestHearsayPeerBlocklistRequiresRestart(t *testing.T) {
+	t.Parallel()
+	before := &Config{}
+	if !before.RequiresRestart(&Config{Hearsay: Hearsay{BlockPrivatePeers: true}}) {
+		t.Fatal("private peer blocking change did not require restart")
+	}
+	if !before.RequiresRestart(&Config{Hearsay: Hearsay{Blocklist: []string{"203.0.113.0/24"}}}) {
+		t.Fatal("peer blocklist change did not require restart")
 	}
 }
 
@@ -91,6 +105,8 @@ func TestHearsayEnvironment(t *testing.T) {
 		"DECYPHARR_HEARSAY__MAX_FEEDS_PER_NAMESPACE": "32",
 		"DECYPHARR_HEARSAY__MAX_SEEDED_TORRENTS":     "64",
 		"DECYPHARR_HEARSAY__FOLLOW":                  "ed25519:aa, ed25519:bb",
+		"DECYPHARR_HEARSAY__BLOCK_PRIVATE_PEERS":     "true",
+		"DECYPHARR_HEARSAY__BLOCKLIST":               "203.0.113.0/24, ,198.51.100.0/24",
 	}
 
 	var cfg Config
@@ -107,6 +123,9 @@ func TestHearsayEnvironment(t *testing.T) {
 	}
 	if len(h.Follow) != 2 || h.Follow[1] != "ed25519:bb" {
 		t.Fatalf("follow = %v", h.Follow)
+	}
+	if !h.BlockPrivatePeers || len(h.Blocklist) != 2 || h.Blocklist[1] != "198.51.100.0/24" {
+		t.Fatalf("peer blocklist = %v, %v", h.BlockPrivatePeers, h.Blocklist)
 	}
 }
 
