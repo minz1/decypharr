@@ -345,11 +345,13 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 	}
 }
 
-// refreshFinishedPlacement stores the finished torrent's placement, as sync would, once every file has a link.
-// An entry with no files yet is left for sync, the only place that fills them in.
+// refreshFinishedPlacement stores the finished placement, and the entry's files if it had none, once every file has a link.
 func refreshFinishedPlacement(entry *storage.Entry, old *storage.ProviderEntry, finished *debridTypes.Torrent) {
-	if len(entry.Files) == 0 || finished.Debrid != entry.ActiveProvider || !isComplete(finished.Files) {
+	if finished.Debrid != entry.ActiveProvider || !isComplete(finished.Files) {
 		return
+	}
+	if len(entry.Files) == 0 {
+		addEntryFiles(entry, finished)
 	}
 	placement := entry.AddTorrentProvider(finished)
 	placement.AddedAt = old.AddedAt
@@ -447,17 +449,7 @@ func applyDebridTorrentToEntry(torrent *storage.Entry, debridTorrent *debridType
 	torrent.OriginalFilename = debridTorrent.OriginalFilename
 	torrent.UpdatedAt = time.Now()
 
-	for _, file := range debridTorrent.Files {
-		tFile := &storage.File{
-			Name:      file.Name,
-			Size:      file.Size,
-			ByteRange: file.ByteRange,
-			Deleted:   file.Deleted,
-			InfoHash:  torrent.InfoHash,
-			AddedOn:   torrent.AddedOn,
-		}
-		torrent.Files[file.Name] = tFile
-	}
+	addEntryFiles(torrent, debridTorrent)
 
 	if debridTorrent.Status != debridTypes.TorrentStatusDownloaded {
 		return
@@ -466,6 +458,19 @@ func applyDebridTorrentToEntry(torrent *storage.Entry, debridTorrent *debridType
 		now := time.Now()
 		placement.DownloadedAt = &now
 		placement.Progress = 1.0
+	}
+}
+
+func addEntryFiles(entry *storage.Entry, debridTorrent *debridTypes.Torrent) {
+	for _, file := range debridTorrent.Files {
+		entry.Files[file.Name] = &storage.File{
+			Name:      file.Name,
+			Size:      file.Size,
+			ByteRange: file.ByteRange,
+			Deleted:   file.Deleted,
+			InfoHash:  entry.InfoHash,
+			AddedOn:   entry.AddedOn,
+		}
 	}
 }
 

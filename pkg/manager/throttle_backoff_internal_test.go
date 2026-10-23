@@ -515,7 +515,7 @@ func finishQueuedTorrent(
 	provider *finishingProvider,
 	entryFiles map[string]*storage.File,
 	added time.Time,
-) *storage.Entry {
+) (*Manager, *storage.Entry) {
 	t.Helper()
 	m := newShutdownTestManager(t, filepath.Join(t.TempDir(), "db"))
 	m.clients.Store("provider", provider)
@@ -544,7 +544,7 @@ func finishQueuedTorrent(
 	if err != nil {
 		t.Fatal(err)
 	}
-	return stored
+	return m, stored
 }
 
 func addTimeFiles() map[string]*storage.File {
@@ -555,7 +555,12 @@ func addTimeFiles() map[string]*storage.File {
 func TestFinishedQueuedTorrentStoresItsLinksBeforeTheArrImports(t *testing.T) {
 	t.Parallel()
 	added := time.Now().Add(-time.Hour).Truncate(time.Second)
-	stored := finishQueuedTorrent(t, &finishingProvider{files: linkedFiles()}, addTimeFiles(), added)
+	entryFiles := addTimeFiles()
+	entryFiles["b.mkv"].Deleted = true
+	_, stored := finishQueuedTorrent(t, &finishingProvider{files: linkedFiles()}, entryFiles, added)
+	if !stored.Files["b.mkv"].Deleted {
+		t.Fatal("the finished torrent overwrote files the entry already knew")
+	}
 	placement := stored.Providers["provider"]
 	if placement.Files["a.mkv"].Link != "https://rd/a" || placement.Files["b.mkv"].Link != "https://rd/b" {
 		t.Fatalf("stored placement files = %+v, want the finished torrent's links", placement.Files)
@@ -582,9 +587,11 @@ func TestFinishedQueuedTorrentLeftForSync(t *testing.T) {
 			}},
 			entryFiles: addTimeFiles(),
 		},
-		// Uncached AllDebrid/Premiumize adds know no files; only sync fills the entry's.
-		"an entry without files": {
-			provider:   &finishingProvider{files: linkedFiles()},
+		// TorBox reports "completed" before DownloadFinished, when its files carry no torbox:// links yet.
+		"an entry without files whose torrent has no links": {
+			provider: &finishingProvider{files: map[string]types.File{
+				"a.mkv": {TorrentID: "id", ID: "1", Name: "a.mkv", Path: "a.mkv", Size: 1},
+			}},
 			entryFiles: map[string]*storage.File{},
 		},
 		"another provider's torrent": {
@@ -594,10 +601,18 @@ func TestFinishedQueuedTorrentLeftForSync(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			stored := finishQueuedTorrent(t, tc.provider, tc.entryFiles, time.Now())
+			knownFiles := len(tc.entryFiles)
+			_, stored := finishQueuedTorrent(t, tc.provider, tc.entryFiles, time.Now())
 			if len(stored.Providers) != 1 {
 				got := slices.Collect(maps.Keys(stored.Providers))
 				t.Fatalf("placements = %v, want only the queued provider's", got)
+			}
+			if len(stored.Files) != knownFiles {
+				t.Fatalf(
+					"entry files = %v, want the entry's own %d",
+					slices.Collect(maps.Keys(stored.Files)),
+					knownFiles,
+				)
 			}
 			placement := stored.Providers["provider"]
 			if !placement.NeedsUpdate(&types.Torrent{ID: "id", Status: types.TorrentStatusDownloaded}) {
@@ -607,5 +622,99 @@ func TestFinishedQueuedTorrentLeftForSync(t *testing.T) {
 				t.Fatalf("stored placement files = %+v, want the add-time files kept", placement.Files)
 			}
 		})
+	}
+}
+
+// Uncached adds (AllDebrid, Premiumize, RD magnet_conversion, TorBox metaDL) know no files until they finish.
+func TestFinishedQueuedTorrentFillsAnEntryWithoutFiles(t *testing.T) {
+	t.Parallel()
+	for name, files := range map[string]map[string]types.File{
+		"realdebrid": {
+			"a.mkv": {TorrentID: "id", ID: "1", Name: "a.mkv", Path: "a.mkv", Size: 1, Link: "https://rd/a"},
+			"b.mkv": {TorrentID: "id", ID: "2", Name: "b.mkv", Path: "b.mkv", Size: 2, Link: "https://rd/b"},
+		},
+		"alldebrid": {
+			"a.mkv": {TorrentID: "id", ID: "1", Name: "a.mkv", Path: "Pack/a.mkv", Size: 1, Link: "https://ad/a"},
+		},
+		"premiumize": {
+			"a.mkv":     {TorrentID: "id", ID: "1", Name: "a.mkv", Path: "a.mkv", Size: 1, Link: "https://pm/a"},
+			"Sub/a.mkv": {TorrentID: "id", ID: "2", Name: "Sub/a.mkv", Path: "Sub/a.mkv", Size: 2, Link: "https://pm/b"},
+		},
+		"debridlink": {
+			"a.mkv": {TorrentID: "id", ID: "1", Name: "a.mkv", Path: "a.mkv", Size: 1, Link: "https://dl/a",
+				Generated: time.Now()},
+		},
+		"torbox download finished": {
+			"a.mkv": {TorrentID: "id", ID: "1", Name: "a.mkv", Path: "a.mkv", Size: 1, Link: "torbox://id/1"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, stored := finishQueuedTorrent(
+				t,
+				&finishingProvider{files: files},
+				map[string]*storage.File{},
+				time.Now(),
+			)
+			if len(stored.Files) != len(files) {
+				t.Fatalf(
+					"entry files = %v, want the finished torrent's %d",
+					slices.Collect(maps.Keys(stored.Files)),
+					len(files),
+				)
+			}
+			placement := stored.Providers["provider"]
+			for fileName, f := range files {
+				got := stored.Files[fileName]
+				if got == nil || got.Name != f.Name || got.Size != f.Size || got.InfoHash != stored.InfoHash {
+					t.Fatalf("entry file %q = %+v, want name %q size %d", fileName, got, f.Name, f.Size)
+				}
+				if placement.Files[fileName] == nil || placement.Files[fileName].Link != f.Link {
+					t.Fatalf("placement file %q = %+v, want link %q", fileName, placement.Files[fileName], f.Link)
+				}
+			}
+		})
+	}
+}
+
+func TestFinishedSeasonPackWithoutEntryFilesIsDetected(t *testing.T) {
+	t.Parallel()
+	m, stored := finishQueuedTorrent(t, &finishingProvider{files: map[string]types.File{
+		"Show.S01E01.mkv": {ID: "1", Name: "Show.S01E01.mkv", Size: 1, Link: "https://rd/1"},
+		"Show.S02E01.mkv": {ID: "2", Name: "Show.S02E01.mkv", Size: 1, Link: "https://rd/2"},
+	}}, map[string]*storage.File{}, time.Now())
+	if found, seasons := m.downloader.detectMultiSeason(stored); !found || len(seasons) != 2 {
+		t.Fatalf("detected %t with %d seasons, want the finished pack's 2", found, len(seasons))
+	}
+}
+
+// Real-Debrid's link sync re-fetches a placement only while it lacks links; one stored at finish keeps them.
+func TestSyncKeepsTheLinksStoredAtFinish(t *testing.T) {
+	t.Parallel()
+	m, stored := finishQueuedTorrent(
+		t,
+		&finishingProvider{files: linkedFiles()},
+		map[string]*storage.File{},
+		time.Now(),
+	)
+	listed := &types.Torrent{
+		InfoHash: stored.InfoHash, Name: stored.Name, Debrid: "provider", ID: "id",
+		Status: types.TorrentStatusDownloaded, Progress: 100, Files: linkedFiles(),
+	}
+	if stored.Providers["provider"].NeedsUpdate(listed) {
+		t.Fatal("sync would re-fetch a placement that already holds every link")
+	}
+	synced, err := m.processSyncTorrent(listed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	placement := synced.Providers["provider"]
+	if len(synced.Files) != 2 || placement.Files["a.mkv"].Link != "https://rd/a" ||
+		placement.Files["b.mkv"].Link != "https://rd/b" {
+		t.Fatalf(
+			"after sync: entry files %v, placement files %+v",
+			slices.Collect(maps.Keys(synced.Files)),
+			placement.Files,
+		)
 	}
 }
