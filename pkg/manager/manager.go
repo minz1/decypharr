@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-co-op/gocron/v2"
@@ -146,6 +147,9 @@ type Manager struct {
 	// duplicate goroutines from processing the same entry when the scheduler
 	// re-fires before the previous pass has updated the queue row.
 	processingEntries *xsync.Map[string, struct{}]
+
+	// Set once restoreActiveDownloadJobs has resubmitted the persisted queue.
+	queueRestored atomic.Bool
 
 	// Suppresses repeated provider submissions for the same torrent after an
 	// Arr import/re-grab loop. The queue itself handles duplicates while an
@@ -870,6 +874,12 @@ func (m *Manager) SubmitJob(job *Job) error {
 		return fmt.Errorf("active download queue not initialized")
 	}
 	return m.jobQueue.Submit(job)
+}
+
+// awaitsJob reports whether a queued entry may still get a job: before the restore, while the job queue holds one,
+// or during shutdown (the next start restores it). Holds goes first: shutdown cancels before it releases holds.
+func (m *Manager) awaitsJob(infoHash string) bool {
+	return !m.queueRestored.Load() || m.jobQueue.Holds(infoHash) || m.ctx.Err() != nil
 }
 
 // slotFreed wakes a job throttled by provider: an active download there finished, failed or was removed.

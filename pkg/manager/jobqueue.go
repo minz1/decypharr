@@ -65,6 +65,8 @@ type JobQueue struct {
 	closed bool
 	// waiters are throttled jobs, oldest job first.
 	waiters []*slotWaiter
+	// held counts, per job ID, the places that will still run the job: pending, waiting for a slot or running.
+	held map[string]int
 
 	maxWorkers int
 	logger     zerolog.Logger
@@ -101,6 +103,7 @@ func NewJobQueue(
 	ctx, cancel := context.WithCancel(ctx)
 	q := &JobQueue{
 		jobs:        make([]*Job, 0, jobQueueInitialCapacity),
+		held:        make(map[string]int),
 		maxWorkers:  maxWorkers,
 		logger:      log,
 		processFunc: processFunc,
@@ -129,6 +132,7 @@ func (q *JobQueue) Submit(job *Job) error {
 	}
 
 	q.jobs = append(q.jobs, job)
+	q.held[job.ID]++
 	q.cond.Signal() // Wake one waiting worker
 	q.logger.Debug().
 		Str("id", job.ID).
@@ -161,8 +165,10 @@ func (q *JobQueue) WaitForSlot(job *Job, providers []string, delay time.Duration
 		i = len(q.waiters)
 	}
 	q.waiters = slices.Insert(q.waiters, i, w)
+	q.held[job.ID]++
 	q.mu.Unlock()
 	go func() {
+		defer q.release(job.ID)
 		timer := time.NewTimer(delay)
 		defer timer.Stop()
 		select {
@@ -228,6 +234,7 @@ func (q *JobQueue) worker(id int) {
 		q.active.Add(1)
 		q.runJob(job)
 		q.active.Add(-1)
+		q.release(job.ID)
 	}
 }
 
@@ -277,6 +284,7 @@ func (q *JobQueue) DeleteJob(jobID string) bool {
 	for i, job := range q.jobs {
 		if job.ID == jobID {
 			q.jobs = append(q.jobs[:i], q.jobs[i+1:]...)
+			q.dropHold(jobID)
 			return true
 		}
 	}
@@ -312,4 +320,24 @@ func (q *JobQueue) PendingCount(jobType JobType) int {
 		}
 	}
 	return count
+}
+
+// Holds reports whether the queue will still run a job with this ID: pending, waiting for a slot or running.
+func (q *JobQueue) Holds(jobID string) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.held[jobID] > 0
+}
+
+func (q *JobQueue) release(jobID string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.dropHold(jobID)
+}
+
+// dropHold needs q.mu.
+func (q *JobQueue) dropHold(jobID string) {
+	if q.held[jobID]--; q.held[jobID] <= 0 {
+		delete(q.held, jobID)
+	}
 }

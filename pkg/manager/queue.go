@@ -241,14 +241,15 @@ func (q *Queue) DeleteWhere(
 const failedNZBRetention = 24 * time.Hour
 
 // DeleteStalled removes entries that made no progress for removeStalledAfter.
+// A queued entry counts as stalled once pending says no job will run it.
 // Without a valid positive duration it removes nothing.
-func (q *Queue) DeleteStalled() error {
+func (q *Queue) DeleteStalled(pending func(infoHash string) bool) error {
 	if q.removeStalledAfter <= 0 {
 		return nil
 	}
 	now := time.Now()
 	return q.storage.DeleteWhereQueued(func(t *storage.Entry) bool {
-		stalled, reason := q.stalled(t, now)
+		stalled, reason := q.stalled(t, now, pending)
 		if stalled {
 			q.logger.Info().Str("id", t.InfoHash).Str("name", t.Name).Str("reason", reason).
 				Msg("Removing stalled entry")
@@ -261,7 +262,7 @@ func (q *Queue) DeleteStalled() error {
 }
 
 // stalled reports whether the sweep should remove t, and why.
-func (q *Queue) stalled(t *storage.Entry, now time.Time) (bool, string) {
+func (q *Queue) stalled(t *storage.Entry, now time.Time, pending func(infoHash string) bool) (bool, string) {
 	if t.State == storage.EntryStateError {
 		failedAt := t.AddedOn
 		if t.LastErrorTime != nil {
@@ -273,8 +274,11 @@ func (q *Queue) stalled(t *storage.Entry, now time.Time) (bool, string) {
 		}
 		return t.Progress == 0 && failedAt.Before(now.Add(-retention)), "failed " + retention.String() + " ago"
 	}
-	if !t.AddedOn.Before(now.Add(-q.removeStalledAfter)) || t.Status == debridTypes.TorrentStatusQueued {
+	if !t.AddedOn.Before(now.Add(-q.removeStalledAfter)) {
 		return false, ""
+	}
+	if t.Status == debridTypes.TorrentStatusQueued {
+		return !pending(t.InfoHash), "queued with no job"
 	}
 	return t.Status != debridTypes.TorrentStatusDownloading && t.Seeders == 0 && t.Progress == 0,
 		"no progress or seeders"

@@ -101,7 +101,7 @@ func TestDeleteStalledNeedsAValidDuration(t *testing.T) {
 			if addErr := q.Add(stalled); addErr != nil {
 				t.Fatal(addErr)
 			}
-			if deleteErr := q.DeleteStalled(); deleteErr != nil {
+			if deleteErr := q.DeleteStalled(noJob); deleteErr != nil {
 				t.Fatal(deleteErr)
 			}
 			if _, getErr := q.GetTorrent(stalled.InfoHash); (getErr == nil) != wantKept {
@@ -149,7 +149,7 @@ func TestDeleteStalledTimesFailuresFromTheFailure(t *testing.T) {
 			if addErr := q.Add(entry); addErr != nil {
 				t.Fatal(addErr)
 			}
-			if deleteErr := q.DeleteStalled(); deleteErr != nil {
+			if deleteErr := q.DeleteStalled(noJob); deleteErr != nil {
 				t.Fatal(deleteErr)
 			}
 			if _, getErr := q.GetTorrent(entry.InfoHash); (getErr == nil) != tc.wantKept {
@@ -181,7 +181,7 @@ func TestDeleteStalledRemovesStagedNZB(t *testing.T) {
 		t.Fatal(addErr)
 	}
 	action := runningAction(t, q, entry.InfoHash)
-	if deleteErr := q.DeleteStalled(); deleteErr != nil {
+	if deleteErr := q.DeleteStalled(noJob); deleteErr != nil {
 		t.Fatal(deleteErr)
 	}
 	if _, statErr := os.Stat(staged); !os.IsNotExist(statErr) {
@@ -212,3 +212,44 @@ func runningAction(t *testing.T, q *Queue, infohash string) context.Context {
 	q.running.Store(strings.ToLower(infohash), cancel)
 	return ctx
 }
+
+// A queued entry whose job is gone never leaves the queue; one whose job still waits must stay.
+func TestDeleteStalledRemovesQueuedEntriesWithNoJob(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		added    time.Duration
+		pending  bool
+		wantKept bool
+	}{
+		{"no job past the timeout", 2 * time.Hour, false, false},
+		{"job still pending", 2 * time.Hour, true, true},
+		{"no job inside the timeout", time.Minute, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store, err := storage.NewStorage(filepath.Join(t.TempDir(), "db"), storage.Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			q := newQueue(store, "1h", nil, zerolog.Nop())
+			entry := &storage.Entry{
+				InfoHash: "0123456789012345678901234567890123456789", Name: "queued",
+				AddedOn: time.Now().Add(-tc.added), State: storage.EntryStateDownloading,
+				Status: debridTypes.TorrentStatusQueued,
+			}
+			if addErr := q.Add(entry); addErr != nil {
+				t.Fatal(addErr)
+			}
+			if deleteErr := q.DeleteStalled(func(string) bool { return tc.pending }); deleteErr != nil {
+				t.Fatal(deleteErr)
+			}
+			if _, getErr := q.GetTorrent(entry.InfoHash); (getErr == nil) != tc.wantKept {
+				t.Fatalf("kept = %v, want %v", getErr == nil, tc.wantKept)
+			}
+		})
+	}
+}
+
+func noJob(string) bool { return false }

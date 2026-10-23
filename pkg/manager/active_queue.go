@@ -29,6 +29,7 @@ func (m *Manager) restoreActiveDownloadJobs() {
 			return
 		}
 	}
+	m.queueRestored.Store(true)
 }
 
 // restoreEntry resubmits one interrupted entry. It returns false once
