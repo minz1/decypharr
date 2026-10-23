@@ -20,6 +20,8 @@ const (
 	eventTypeGrabbed   = 1
 	historyPageSize    = 100
 	latestGrabPageSize = 50
+	// seasonIDLength matches pkg/manager seasonHashBytes: torrent infohashes are 40 or 64 hex digits.
+	seasonIDLength = 32
 )
 
 // newestHistoryQuery asks for one page of history, newest record first.
@@ -86,8 +88,8 @@ func (s *Service) DownloadHistory(ctx context.Context, name, downloadID, eventTy
 
 	stored := HistoryDownloadID(downloadID)
 	records, err := s.historyForDownload(ctx, instance, stored)
-	if err == nil && len(records) == 0 && stored != downloadID {
-		// A usenet season entry's ID is hex like a torrent's, but the arr keeps usenet IDs as given.
+	if err == nil && len(records) == 0 && stored != downloadID && len(downloadID) == seasonIDLength {
+		// A usenet season entry's ID is hex like a torrent season's, but the arr keeps usenet IDs as given.
 		records, err = s.historyForDownload(ctx, instance, downloadID)
 	}
 	if err != nil || eventType == "" {

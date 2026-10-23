@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -131,26 +132,28 @@ func TestMarkHistoryFailedCtxValidatesStatus(t *testing.T) {
 // A torrent ID the arr holds records for is not queried again as given, even when none is of the requested event.
 func TestDownloadHistoryFallsBackOnlyForAnUnknownID(t *testing.T) {
 	t.Parallel()
+	const id = "0123456789abcdef0123456789abcdef"
+	stored := strings.ToUpper(id)
 	var queried []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id := r.URL.Query().Get("downloadId")
-		queried = append(queried, id)
+		got := r.URL.Query().Get("downloadId")
+		queried = append(queried, got)
 		w.Header().Set("Content-Type", "application/json")
-		if id != "ABCDEF" {
+		if got != stored {
 			_, _ = fmt.Fprint(w, `{"page":1,"pageSize":100,"totalRecords":0,"records":[]}`)
 			return
 		}
-		_, _ = fmt.Fprint(w, `{"page":1,"pageSize":100,"totalRecords":1,`+
-			`"records":[{"id":21,"downloadId":"ABCDEF","eventType":"grabbed"}]}`)
+		_, _ = fmt.Fprintf(w, `{"page":1,"pageSize":100,"totalRecords":1,`+
+			`"records":[{"id":21,"downloadId":%q,"eventType":"grabbed"}]}`, stored)
 	}))
 	defer server.Close()
 
 	s := testService(Arr{Host: server.URL, Token: "secret", Type: Sonarr})
-	records, err := s.DownloadHistory(t.Context(), "arr", "abcdef", EventDownloadFolderImported)
+	records, err := s.DownloadHistory(t.Context(), "arr", id, EventDownloadFolderImported)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(records) != 0 || !slices.Equal(queried, []string{"ABCDEF"}) {
+	if len(records) != 0 || !slices.Equal(queried, []string{stored}) {
 		t.Fatalf("records = %#v, queried = %v; want none, from one query in the stored form", records, queried)
 	}
 }
@@ -182,5 +185,31 @@ func TestDownloadHistoryFindsAUsenetHexIDAsGiven(t *testing.T) {
 		!slices.Equal(queried, []string{"0123456789ABCDEF0123456789ABCDEF", id}) {
 		t.Fatalf("records = %#v, queried = %v; want record 22, from the stored form then the ID as given",
 			records, queried)
+	}
+}
+
+// A torrent infohash is always stored uppercased, so one with no history yet costs one GET per poll, not two.
+func TestDownloadHistoryQueriesAnUnknownInfohashOnce(t *testing.T) {
+	t.Parallel()
+	for _, hash := range []string{
+		"0123456789abcdef0123456789abcdef01234567",
+		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+	} {
+		var queried []string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			queried = append(queried, r.URL.Query().Get("downloadId"))
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{"page":1,"pageSize":100,"totalRecords":0,"records":[]}`)
+		}))
+
+		s := testService(Arr{Host: server.URL, Token: "secret", Type: Sonarr})
+		records, err := s.DownloadHistory(t.Context(), "arr", hash, "")
+		server.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(records) != 0 || !slices.Equal(queried, []string{strings.ToUpper(hash)}) {
+			t.Fatalf("records = %#v, queried = %v; want none, from one query in the stored form", records, queried)
+		}
 	}
 }
