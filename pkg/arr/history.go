@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -63,7 +64,7 @@ func (r HistoryRecord) DataValue(key string) (string, bool) {
 	return "", false
 }
 
-// HistoryDownloadID is a download ID in the form the arr stores it: a hex ID (torrent or season entry) uppercased, anything else as given.
+// HistoryDownloadID is the form the arr stores a torrent ID in: a hex ID uppercased, anything else as given.
 func HistoryDownloadID(downloadID string) string {
 	if _, err := hex.DecodeString(downloadID); err == nil {
 		return strings.ToUpper(downloadID)
@@ -78,11 +79,27 @@ func (s *Service) DownloadHistory(ctx context.Context, name, downloadID, eventTy
 	if err != nil {
 		return nil, err
 	}
-	downloadID = HistoryDownloadID(strings.TrimSpace(downloadID))
+	downloadID = strings.TrimSpace(downloadID)
 	if downloadID == "" {
 		return nil, fmt.Errorf("history lookup: download ID is required")
 	}
 
+	stored := HistoryDownloadID(downloadID)
+	records, err := s.historyForDownload(ctx, instance, stored)
+	if err == nil && len(records) == 0 && stored != downloadID {
+		// A usenet season entry's ID is hex like a torrent's, but the arr keeps usenet IDs as given.
+		records, err = s.historyForDownload(ctx, instance, downloadID)
+	}
+	if err != nil || eventType == "" {
+		return records, err
+	}
+	return slices.DeleteFunc(records, func(record HistoryRecord) bool {
+		return !strings.EqualFold(record.EventType, eventType)
+	}), nil
+}
+
+// historyForDownload returns every record the arr holds under exactly downloadID, newest first.
+func (s *Service) historyForDownload(ctx context.Context, instance Arr, downloadID string) ([]HistoryRecord, error) {
 	records := make([]HistoryRecord, 0)
 	fetched := 0
 	for page := 1; ; page++ {
@@ -95,10 +112,7 @@ func (s *Service) DownloadHistory(ctx context.Context, name, downloadID, eventTy
 
 		fetched += len(history.Records)
 		for _, record := range history.Records {
-			if record.DownloadID != downloadID {
-				continue
-			}
-			if eventType == "" || strings.EqualFold(record.EventType, eventType) {
+			if record.DownloadID == downloadID {
 				records = append(records, record)
 			}
 		}

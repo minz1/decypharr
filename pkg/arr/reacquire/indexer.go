@@ -50,6 +50,8 @@ type indexRequest struct {
 	lateWaited bool
 }
 
+func (r indexRequest) key() string { return r.arrName + "\x00" + r.entryID }
+
 type Indexer struct {
 	arrs        *arr.Service
 	catalog     ManagedCatalog
@@ -61,6 +63,7 @@ type Indexer struct {
 	queue              []indexRequest
 	pending            map[string]struct{}
 	covered            map[string]uint64
+	waits              map[string]chan struct{}
 	mu                 sync.Mutex
 	ctx                context.Context
 	cancel             context.CancelFunc
@@ -153,18 +156,22 @@ func (i *Indexer) ReindexEntry(arrName, entryID string) bool {
 	if arrName == "" || entryID == "" {
 		return false
 	}
-	return i.enqueue(indexRequest{
+	request := indexRequest{
 		arrName: arrName,
 		entryID: entryID,
 		version: i.requestSequence.Add(1),
-	})
+	}
+	i.mu.Lock()
+	i.stopWaitLocked(request.key())
+	i.mu.Unlock()
+	return i.enqueue(request)
 }
 
 func (i *Indexer) enqueue(request indexRequest) bool {
 	if i == nil || i.closed.Load() {
 		return false
 	}
-	key := request.arrName + "\x00" + request.entryID
+	key := request.key()
 	i.mu.Lock()
 	if i.ctx == nil || i.ctx.Err() != nil {
 		i.mu.Unlock()
@@ -214,7 +221,7 @@ func (i *Indexer) nextRequest() (indexRequest, bool) {
 	request := i.queue[0]
 	i.queue[0] = indexRequest{}
 	i.queue = i.queue[1:]
-	delete(i.pending, request.arrName+"\x00"+request.entryID)
+	delete(i.pending, request.key())
 	return request, true
 }
 
@@ -244,7 +251,7 @@ func (i *Indexer) handle(ctx context.Context, request indexRequest) {
 			return
 		}
 		if err == nil {
-			i.retryTargeted(ctx, request, instance.ImportWebhook)
+			i.retryTargeted(ctx, request, instance.ImportWebhook, nil)
 			return
 		}
 	}
@@ -253,7 +260,7 @@ func (i *Indexer) handle(ctx context.Context, request indexRequest) {
 		Str("arr", request.arrName).
 		Str("entry_id", request.entryID).
 		Msg("Targeted Arr index attempt failed")
-	i.retryTargeted(ctx, request, false)
+	i.retryTargeted(ctx, request, instance.ImportWebhook, err)
 }
 
 // handleRefresh reconciles every Sonarr and Radarr instance against one read of
@@ -419,11 +426,13 @@ func (i *Indexer) targetedMediaIDs(ctx context.Context, instance arr.Arr, manage
 }
 
 // retryTargeted waits for the Arr to import the entry, then indexes it again; the import webhook normally ends the wait sooner.
-func (i *Indexer) retryTargeted(ctx context.Context, request indexRequest, webhook bool) {
+// A failed attempt retries on the poll schedule even with the webhook, which may already have come.
+func (i *Indexer) retryTargeted(ctx context.Context, request indexRequest, webhook bool, attemptErr error) {
 	if ctx.Err() != nil {
 		return
 	}
-	delay, ok := importWaitDelay(webhook, request)
+	waitForWebhook := webhook && attemptErr == nil
+	delay, ok := importWaitDelay(waitForWebhook, request)
 	if !ok {
 		event := i.logger.Info()
 		if webhook {
@@ -434,7 +443,7 @@ func (i *Indexer) retryTargeted(ctx context.Context, request indexRequest, webho
 		i.enqueue(indexRequest{arrName: request.arrName})
 		return
 	}
-	request.lateWaited = request.lateWaited || webhook
+	request.lateWaited = request.lateWaited || waitForWebhook
 	i.retry(ctx, request, delay)
 }
 
@@ -490,17 +499,44 @@ func (i *Indexer) nextGeneration(arrName string) uint64 {
 	return max(clock, i.writer.Generation(arrName)+1)
 }
 
+// retry enqueues request again after delay, unless a newer request for the same key supersedes it first.
 func (i *Indexer) retry(ctx context.Context, request indexRequest, delay time.Duration) {
 	request.attempt++
+	key := request.key()
+	stop := make(chan struct{})
+	i.mu.Lock()
+	i.stopWaitLocked(key)
+	if i.waits == nil {
+		i.waits = make(map[string]chan struct{})
+	}
+	i.waits[key] = stop
+	i.mu.Unlock()
 	i.wg.Go(func() {
 		timer := time.NewTimer(delay)
 		defer timer.Stop()
 		select {
 		case <-ctx.Done():
+		case <-stop:
 		case <-timer.C:
-			i.enqueue(request)
+			i.mu.Lock()
+			current := i.waits[key] == stop
+			if current {
+				delete(i.waits, key)
+			}
+			i.mu.Unlock()
+			if current {
+				i.enqueue(request)
+			}
 		}
 	})
+}
+
+// stopWaitLocked ends the retry pending for key. The caller holds i.mu.
+func (i *Indexer) stopWaitLocked(key string) {
+	if stop, ok := i.waits[key]; ok {
+		close(stop)
+		delete(i.waits, key)
+	}
 }
 
 // targetedIndexDelay is the wait before retry number attempt: a quick ramp

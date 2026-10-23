@@ -3,6 +3,7 @@ package reacquire
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -242,6 +243,12 @@ func TestReconcileBuildsIndexFromSymlinks(t *testing.T) {
 }
 
 type fixedManagedCatalog []ManagedFile
+
+type failingManagedCatalog struct{}
+
+func (failingManagedCatalog) ListManagedFiles(context.Context, string) ([]ManagedFile, error) {
+	return nil, errors.New("catalog unavailable")
+}
 
 func (c fixedManagedCatalog) ListManagedFiles(context.Context, string) ([]ManagedFile, error) {
 	return c, nil
@@ -509,8 +516,8 @@ func TestExhaustedTargetedRequestsCoalesceArrRefresh(t *testing.T) {
 	indexer.ctx = ctx
 
 	finalAttempt := targetedIndexAttempts
-	indexer.retryTargeted(ctx, indexRequest{arrName: "radarr", entryID: "one", attempt: finalAttempt}, false)
-	indexer.retryTargeted(ctx, indexRequest{arrName: "radarr", entryID: "two", attempt: finalAttempt}, false)
+	indexer.retryTargeted(ctx, indexRequest{arrName: "radarr", entryID: "one", attempt: finalAttempt}, false, nil)
+	indexer.retryTargeted(ctx, indexRequest{arrName: "radarr", entryID: "two", attempt: finalAttempt}, false, nil)
 
 	indexer.mu.Lock()
 	queue := slices.Clone(indexer.queue)
@@ -718,7 +725,7 @@ func TestWebhookWaitRunsOutOnce(t *testing.T) {
 		indexer := NewIndexer(nil, nil, nil, "", zerolog.Nop())
 		indexer.ctx = ctx
 
-		indexer.retryTargeted(ctx, indexRequest{arrName: "radarr", entryID: "entry"}, true)
+		indexer.retryTargeted(ctx, indexRequest{arrName: "radarr", entryID: "entry"}, true, nil)
 		time.Sleep(lateImportWait)
 		synctest.Wait()
 		request, ok := indexer.nextRequest()
@@ -726,7 +733,7 @@ func TestWebhookWaitRunsOutOnce(t *testing.T) {
 			t.Fatalf("request after the wait = %#v, %v; want the entry, marked as having waited", request, ok)
 		}
 
-		indexer.retryTargeted(ctx, request, true)
+		indexer.retryTargeted(ctx, request, true, nil)
 		if refresh, queued := indexer.nextRequest(); !queued || refresh.entryID != "" {
 			t.Fatalf("request = %#v, %v; want the full refresh", refresh, queued)
 		}
@@ -735,13 +742,15 @@ func TestWebhookWaitRunsOutOnce(t *testing.T) {
 	})
 }
 
-// The arr's history filter is exact: hex IDs (torrents, season entries) are stored uppercased, usenet IDs as given.
+// The arr's history filter is exact: torrent IDs (infohashes, season entries) are stored uppercased, usenet IDs as
+// given, and a usenet season entry's ID is hex like a torrent's.
 func TestTargetedIndexQueriesHistoryByTheArrsDownloadID(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ name, managed, stored string }{
 		{name: "torrent", managed: "8eae87348844aabbccddeeff0011223344556677", stored: "8EAE87348844AABBCCDDEEFF0011223344556677"},
 		{name: "season", managed: "0a1b2c3d4e5f60718293a4b5c6d7e8f9", stored: "0A1B2C3D4E5F60718293A4B5C6D7E8F9"},
 		{name: "usenet", managed: "9fdb8e00-5a38-4c1e-9d3b-0a1b2c3d4e5f", stored: "9fdb8e00-5a38-4c1e-9d3b-0a1b2c3d4e5f"},
+		{name: "usenet season", managed: "0a1b2c3d4e5f60718293a4b5c6d7e8f9", stored: "0a1b2c3d4e5f60718293a4b5c6d7e8f9"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -803,4 +812,80 @@ func exactHistoryRadarr(t *testing.T, downloadID, libraryPath string) *httptest.
 	}))
 	t.Cleanup(server.Close)
 	return server
+}
+
+// A failed attempt retries on the poll schedule even with the webhook, whose outer bound it has not spent, and logs
+// the arr's real webhook setting when the retries run out.
+func TestFailedTargetedAttemptRetriesOnThePollSchedule(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name        string
+		request     indexRequest
+		wantRefresh bool
+	}{
+		{name: "retries left after the late wait", request: indexRequest{attempt: 1, lateWaited: true}},
+		{name: "retries run out", request: indexRequest{attempt: targetedIndexAttempts}, wantRefresh: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			arrs := arr.New(config.NewStore(&config.Config{}), nil, zerolog.Nop())
+			arrs.AddOrUpdate(arr.Arr{
+				Name: "radarr", Host: "http://arr.invalid", Token: "secret", Type: arr.Radarr, ImportWebhook: true,
+			})
+			var logs bytes.Buffer
+			writer := new(recordingBindingWriter)
+			indexer := NewIndexer(arrs, failingManagedCatalog{}, writer, t.TempDir(), zerolog.New(&logs))
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(func() { cancel(); indexer.wg.Wait() })
+			indexer.ctx = ctx
+
+			request := tc.request
+			request.arrName, request.entryID = "radarr", "entry"
+			indexer.handle(ctx, request)
+
+			if !strings.Contains(logs.String(), "attempt failed") {
+				t.Fatalf("logs = %s; want the failed attempt", logs.String())
+			}
+			indexer.mu.Lock()
+			queue := slices.Clone(indexer.queue)
+			indexer.mu.Unlock()
+			if refreshed := len(queue) == 1 && queue[0].entryID == ""; refreshed != tc.wantRefresh {
+				t.Errorf("queue = %#v; want full refresh = %v", queue, tc.wantRefresh)
+			}
+			tripped := strings.Contains(logs.String(), "wait ran out")
+			if tripped != tc.wantRefresh {
+				t.Errorf("logs = %s; want the trip logged = %v", logs.String(), tc.wantRefresh)
+			}
+			if tripped && !strings.Contains(logs.String(), `"import_webhook":true`) {
+				t.Errorf("logs = %s; want import_webhook=true", logs.String())
+			}
+		})
+	}
+}
+
+// The webhook's own request supersedes the outer bound still pending for the same entry.
+func TestReindexEntryEndsThePendingWait(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		indexer := NewIndexer(nil, nil, nil, "", zerolog.Nop())
+		indexer.ctx = ctx
+
+		indexer.retryTargeted(ctx, indexRequest{arrName: "radarr", entryID: "entry"}, true, nil)
+		if !indexer.ReindexEntry("radarr", "entry") {
+			t.Fatal("ReindexEntry refused the webhook's request")
+		}
+		if request, ok := indexer.nextRequest(); !ok || request.lateWaited {
+			t.Fatalf("request = %#v, %v; want the webhook's request", request, ok)
+		}
+
+		time.Sleep(lateImportWait)
+		synctest.Wait()
+		if request, ok := indexer.nextRequest(); ok {
+			t.Fatalf("request = %#v; want the superseded wait dropped", request)
+		}
+		cancel()
+		indexer.wg.Wait()
+	})
 }
