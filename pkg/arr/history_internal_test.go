@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -152,5 +153,34 @@ func TestDownloadHistoryFallsBackOnlyForAnUnknownID(t *testing.T) {
 	}
 	if len(records) != 0 || !slices.Equal(queried, []string{"ABCDEF"}) {
 		t.Fatalf("records = %#v, queried = %v; want none, from one query in the stored form", records, queried)
+	}
+}
+
+// A usenet season ID is hex like a torrent's, but the arr keeps it as given, so it is found only on the second query.
+func TestDownloadHistoryFindsAUsenetHexIDAsGiven(t *testing.T) {
+	t.Parallel()
+	const id = "0123456789abcdef0123456789abcdef"
+	var queried []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got := r.URL.Query().Get("downloadId")
+		queried = append(queried, got)
+		w.Header().Set("Content-Type", "application/json")
+		if got != id {
+			_, _ = fmt.Fprint(w, `{"page":1,"pageSize":100,"totalRecords":0,"records":[]}`)
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"page":1,"pageSize":100,"totalRecords":1,`+
+			`"records":[{"id":22,"downloadId":%q,"eventType":"grabbed"}]}`, id)
+	}))
+	defer server.Close()
+
+	s := testService(Arr{Host: server.URL, Token: "secret", Type: Sonarr})
+	records, err := s.DownloadHistory(t.Context(), "arr", id, EventGrabbed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].ID != 22 || !slices.Equal(queried, []string{strings.ToUpper(id), id}) {
+		t.Fatalf("records = %#v, queried = %v; want record 22, from the stored form then the ID as given",
+			records, queried)
 	}
 }
