@@ -171,7 +171,7 @@ func (s *Service) LatestGrabID(ctx context.Context, name string, mediaID int) (i
 		query.Set("episodeId", strconv.Itoa(mediaID))
 	case Radarr:
 		query.Set("movieIds", strconv.Itoa(mediaID))
-	case Lidarr, Readarr, Others:
+	case Lidarr, Readarr, Prowlarr, Others:
 		fallthrough
 	default:
 		return 0, "", nil

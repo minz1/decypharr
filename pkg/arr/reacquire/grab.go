@@ -106,7 +106,7 @@ func (handler *arrHandler) searchReplacementReleases(
 			return nil, fmt.Errorf("movie binding has no movie ID")
 		}
 		releases, err = handler.arrs.MovieReleases(ctx, instance.Name, movieIDs[0])
-	case arr.Lidarr, arr.Readarr, arr.Others:
+	case arr.Lidarr, arr.Readarr, arr.Prowlarr, arr.Others:
 		fallthrough
 	default:
 		return nil, fmt.Errorf("interactive search unsupported for arr type %q", instance.Type)
@@ -140,7 +140,7 @@ func releaseMutation(bindings []Binding, release arr.Release) (Mutation, error) 
 			return Mutation{}, fmt.Errorf("interactive Radarr reacquisition cannot be reconciled without a movie ID")
 		}
 		mutation.MovieIDs = []int{movieIDs[0]}
-	case arr.Lidarr, arr.Readarr, arr.Others:
+	case arr.Lidarr, arr.Readarr, arr.Prowlarr, arr.Others:
 		fallthrough
 	default:
 		return Mutation{}, fmt.Errorf("interactive search unsupported for arr type %q", bindings[0].ArrType)

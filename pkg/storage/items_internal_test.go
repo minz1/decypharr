@@ -156,6 +156,16 @@ func TestDeleteEntryKeepsOtherEntriesFiles(t *testing.T) {
 			wantFolder: "folder",
 			wantItem:   true,
 		},
+		"visible duplicate hands the folder to the hidden one": {
+			deleted: &Entry{InfoHash: "newest", Name: "folder", Files: map[string]*File{
+				"a.mkv": {Name: "a.mkv", InfoHash: "newest", Size: 3, AddedOn: old.Add(2 * time.Hour)},
+			}},
+			other: &Entry{InfoHash: "new", Name: "folder", Files: map[string]*File{
+				"a.mkv": {Name: "a.mkv", InfoHash: "new", Size: 2, AddedOn: old},
+			}},
+			wantFolder: "folder",
+			wantItem:   true,
+		},
 		"normal entry removes its folder item": {
 			deleted: &Entry{InfoHash: "solo", Name: "folder", Files: map[string]*File{
 				"a.mkv": {Name: "a.mkv", InfoHash: "solo", Size: 1, AddedOn: old},

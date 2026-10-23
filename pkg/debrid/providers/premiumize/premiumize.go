@@ -549,7 +549,7 @@ func (pm *Premiumize) fetchDownloadLink(
 	link := file.Link
 	size := file.Size
 	filename := file.Name
-	if link == "" && file.ID != "" {
+	if file.ID != "" {
 		item, err := pm.itemDetails(ctx, file.ID)
 		if err != nil {
 			return types.DownloadLink{}, err
@@ -567,7 +567,7 @@ func (pm *Premiumize) fetchDownloadLink(
 		Token:        acc.Token,
 		Filename:     filename,
 		Size:         size,
-		Link:         link,
+		Link:         cmp.Or(file.Link, link),
 		DownloadLink: link,
 		Generated:    now,
 		ExpiresAt:    now.Add(pm.autoExpiresLinksAfter),

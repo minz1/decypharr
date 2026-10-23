@@ -306,7 +306,7 @@ func arrKindFromType(kind arr.Type) storage.ArrKind {
 		return storage.ArrKindLidarr
 	case arr.Readarr:
 		return storage.ArrKindReadarr
-	case arr.Others:
+	case arr.Prowlarr, arr.Others:
 		return storage.ArrKindOther
 	default:
 		return storage.ArrKindOther

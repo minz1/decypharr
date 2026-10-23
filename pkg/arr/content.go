@@ -155,7 +155,7 @@ func (s *Service) SearchMissing(ctx context.Context, name string, files []Conten
 			err = s.searchSonarrSeasons(ctx, instance, batch)
 		case Radarr:
 			err = s.searchRadarrMovies(ctx, instance, batch)
-		case Lidarr, Readarr, Others:
+		case Lidarr, Readarr, Prowlarr, Others:
 			fallthrough
 		default:
 			return fmt.Errorf("%w: %s", ErrUnsupportedType, instance.Type)

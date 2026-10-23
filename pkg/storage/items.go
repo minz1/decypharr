@@ -3,6 +3,7 @@ package storage
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/sirrobot01/appendstore"
 	"google.golang.org/protobuf/proto"
@@ -122,6 +123,7 @@ func (s *Storage) removeFromEntryItem(entry *Entry) error {
 			delete(item.Files, fileName)
 		}
 	}
+	s.keepSharedFiles(item, name, entry.InfoHash)
 	if len(item.Files) == 0 {
 		if deleteEntryHealthErr := s.DeleteEntryHealth(name); deleteEntryHealthErr != nil {
 			return deleteEntryHealthErr
@@ -133,4 +135,26 @@ func (s *Storage) removeFromEntryItem(entry *Entry) error {
 	}
 	item.Size = item.GetSize()
 	return s.UpdateItem(item)
+}
+
+// keepSharedFiles refills item with the files of other entries that render the same folder.
+func (s *Storage) keepSharedFiles(item *EntryItem, name, deletedHash string) {
+	var others []string
+	_ = s.entries.ForEachMetadata(func(key string, meta *appendstore.Metadata) error {
+		if !strings.EqualFold(key, deletedHash) && meta.Attribute(attributeName) == name {
+			others = append(others, key)
+		}
+		return nil
+	})
+	for _, key := range others {
+		other, err := s.Get(key)
+		if err != nil {
+			continue
+		}
+		for fileName, file := range other.Files {
+			if _, exists := item.Files[fileName]; !exists {
+				item.Files[fileName] = file
+			}
+		}
+	}
 }

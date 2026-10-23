@@ -2,6 +2,7 @@ package torbox
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -330,11 +331,18 @@ func (tb *Torbox) SubmitMagnet(torrent *types.Torrent) (*types.Torrent, error) {
 	if !common.IsSuccess(status) {
 		return nil, fmt.Errorf("torbox API error: Status: %d%s", status, apiReason(data.Error, data.Detail))
 	}
-	if data.Data == nil {
+	if len(data.Data) == 0 {
 		return nil, fmt.Errorf("error adding torrent%s", apiReason(data.Error, data.Detail))
 	}
-	dt := *data.Data
-	if dt.ID == 0 {
+	// An array response can list several torrents; take the one for this hash.
+	var id int
+	for _, added := range data.Data {
+		if len(data.Data) == 1 || strings.EqualFold(added.Hash, torrent.InfoHash) {
+			id = cmp.Or(added.TorrentID, added.ID)
+			break
+		}
+	}
+	if id == 0 {
 		if !tb.withdrawQueued(torrent.InfoHash) {
 			reason := apiReason(data.Error, data.Detail)
 			return nil, fmt.Errorf("torbox returned no torrent id for %s%s", torrent.Name, reason)
@@ -343,8 +351,7 @@ func (tb *Torbox) SubmitMagnet(torrent *types.Torrent) (*types.Torrent, error) {
 			"torbox queued %s instead of starting it: %w", torrent.Name, customerror.ErrTooManyActiveDownloads,
 		)
 	}
-	torrentID := strconv.Itoa(dt.ID)
-	torrent.ID = torrentID
+	torrent.ID = strconv.Itoa(id)
 	torrent.Debrid = tb.config.Name
 	torrent.Added = time.Now()
 
@@ -388,7 +395,7 @@ func (tb *Torbox) getTorboxStatus(status string, finished bool) types.TorrentSta
 	switch status {
 	case "paused", "downloading", "checkingResumeData", "metaDL", "pausedUP",
 		"queuedUP", "checkingUP", "forcedUP", "allocating", "pausedDL",
-		"queuedDL", "checkingDL", "forcedDL", "moving", "incomplete":
+		"queuedDL", "checkingDL", "forcedDL", "moving", "incomplete", "queued":
 		return types.TorrentStatusDownloading
 	case "completed", "cached", "uploading", "downloaded":
 		return types.TorrentStatusDownloaded

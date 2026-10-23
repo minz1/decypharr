@@ -32,7 +32,7 @@ func TestCreateSymlinksLinksFileThatAppearsLater(t *testing.T) {
 	defer timer.Stop()
 
 	paths, err := symlinkTestDownloader(t).createSymlinksWhenMountFilesAppear(
-		&storage.Entry{Name: "release"}, []*storage.File{{Name: "release.mkv"}}, mountPath, symlinkDir)
+		t.Context(), &storage.Entry{Name: "release"}, []*storage.File{{Name: "release.mkv"}}, mountPath, symlinkDir)
 	if err != nil {
 		t.Fatalf("create symlinks: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestCreateSymlinksTimesOutWhenFileNeverAppears(t *testing.T) {
 	d := symlinkTestDownloader(t)
 	d.mountWaitTimeout = 300 * time.Millisecond
 	_, err := d.createSymlinksWhenMountFilesAppear(
-		&storage.Entry{Name: "release"}, []*storage.File{{Name: "release.mkv"}}, t.TempDir(), t.TempDir())
+		t.Context(), &storage.Entry{Name: "release"}, []*storage.File{{Name: "release.mkv"}}, t.TempDir(), t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "timeout waiting for mount files") {
 		t.Fatalf("err = %v, want mount-files timeout", err)
 	}
@@ -71,7 +71,7 @@ func TestCreateSymlinksIgnoresDirectoryWithFileName(t *testing.T) {
 	d := symlinkTestDownloader(t)
 	d.mountWaitTimeout = 300 * time.Millisecond
 	paths, err := d.createSymlinksWhenMountFilesAppear(
-		&storage.Entry{Name: "release"}, []*storage.File{{Name: "release.mkv"}}, mountPath, symlinkDir)
+		t.Context(), &storage.Entry{Name: "release"}, []*storage.File{{Name: "release.mkv"}}, mountPath, symlinkDir)
 	if err == nil || !strings.Contains(err.Error(), "timeout waiting for mount files") {
 		t.Fatalf("err = %v, paths = %v, want mount-files timeout", err, paths)
 	}

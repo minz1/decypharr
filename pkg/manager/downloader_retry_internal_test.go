@@ -42,7 +42,7 @@ func TestLocalDownloaderRetriesServiceUnavailable(t *testing.T) {
 		}),
 		logger: zerolog.Nop(),
 	}
-	if err := d.localDownloader(server.URL, destination, nil, func(delta, _ int64) {
+	if err := d.localDownloader(t.Context(), server.URL, destination, nil, func(delta, _ int64) {
 		downloaded.Add(delta)
 	}); err != nil {
 		t.Fatalf("localDownloader() error = %v", err)
@@ -117,9 +117,9 @@ func TestLocalDownloaderResumesAfterUnexpectedEOF(t *testing.T) {
 		}),
 		logger: zerolog.Nop(),
 	}
-	if err := d.localDownloader("https://cdn.example/release.mkv", destination, nil, func(delta, _ int64) {
-		downloaded.Add(delta)
-	}); err != nil {
+	progress := func(delta, _ int64) { downloaded.Add(delta) }
+	url := "https://cdn.example/release.mkv"
+	if err := d.localDownloader(t.Context(), url, destination, nil, progress); err != nil {
 		t.Fatalf("localDownloader() error = %v", err)
 	}
 
@@ -168,7 +168,7 @@ func TestLocalDownloaderUsesSharedFileMode(t *testing.T) {
 	m := withTestConfig(t, &Manager{ctx: t.Context(), streamClient: server.Client()})
 	d := &Downloader{manager: m, logger: zerolog.Nop()}
 	destination := filepath.Join(dir, "release.mkv")
-	if err := d.localDownloader(server.URL, destination, nil, nil); err != nil {
+	if err := d.localDownloader(t.Context(), server.URL, destination, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 

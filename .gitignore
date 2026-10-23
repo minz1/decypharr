@@ -30,3 +30,5 @@ result-*
 *.pprof
 *.prof
 .autopilot/runs/
+.codex/
+.claude/

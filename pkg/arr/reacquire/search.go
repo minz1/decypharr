@@ -86,7 +86,7 @@ func searchMutation(instance arr.Arr, bindings []Binding) (Mutation, error) {
 			CommandName: "MoviesSearch",
 			MovieIDs:    movieIDs,
 		}, nil
-	case arr.Lidarr, arr.Readarr, arr.Others:
+	case arr.Lidarr, arr.Readarr, arr.Prowlarr, arr.Others:
 		fallthrough
 	default:
 		return Mutation{}, fmt.Errorf("search unsupported for arr type %q", instance.Type)

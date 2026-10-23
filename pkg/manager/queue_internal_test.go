@@ -1,8 +1,11 @@
 package manager
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -177,10 +180,35 @@ func TestDeleteStalledRemovesStagedNZB(t *testing.T) {
 	if addErr := q.Add(entry); addErr != nil {
 		t.Fatal(addErr)
 	}
+	action := runningAction(t, q, entry.InfoHash)
 	if deleteErr := q.DeleteStalled(); deleteErr != nil {
 		t.Fatal(deleteErr)
 	}
 	if _, statErr := os.Stat(staged); !os.IsNotExist(statErr) {
 		t.Fatalf("staged NZB still on disk after the sweep: %v", statErr)
 	}
+	if !errors.Is(context.Cause(action), errEntryDeleted) {
+		t.Fatalf("post-download action cause = %v, want errEntryDeleted", context.Cause(action))
+	}
+}
+
+// Deleting an entry cancels its post-download action, so the action cannot write the entry back.
+func TestQueueDeleteStopsRunningAction(t *testing.T) {
+	t.Parallel()
+	queue, entry, _ := newQueueDeleteTest(t)
+	action := runningAction(t, queue, strings.ToUpper(entry.InfoHash))
+	if err := queue.Delete(entry.InfoHash, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(context.Cause(action), errEntryDeleted) {
+		t.Fatalf("post-download action cause = %v, want errEntryDeleted", context.Cause(action))
+	}
+}
+
+func runningAction(t *testing.T, q *Queue, infohash string) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithCancelCause(t.Context())
+	t.Cleanup(func() { cancel(nil) })
+	q.running.Store(strings.ToLower(infohash), cancel)
+	return ctx
 }

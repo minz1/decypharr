@@ -392,3 +392,30 @@ func TestSubmitMagnetWithoutIDOrQueueEntryFails(t *testing.T) {
 		t.Fatalf("SubmitMagnet() error = %v, want a plain failure", err)
 	}
 }
+
+func TestSubmitMagnetAcceptsObjectAndArrayResponses(t *testing.T) {
+	t.Parallel()
+	for name, body := range map[string]string{
+		"object": `{"success":true,"data":{"torrent_id":17,"hash":"abc"}}`,
+		"array":  `{"success":true,"data":[{"id":9,"hash":"other"},{"id":17,"hash":"ABC"}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = fmt.Fprint(w, body)
+			}))
+			t.Cleanup(server.Close)
+			torrent, err := testTorbox(server.URL).SubmitMagnet(&types.Torrent{
+				InfoHash: "abc",
+				Magnet:   &utils.Magnet{Link: "magnet:?xt=urn:btih:abc"},
+			})
+			if err != nil {
+				t.Fatalf("SubmitMagnet() error = %v", err)
+			}
+			if torrent.ID != "17" {
+				t.Fatalf("SubmitMagnet() id = %q, want 17", torrent.ID)
+			}
+		})
+	}
+}

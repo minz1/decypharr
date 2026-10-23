@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"
@@ -277,7 +278,8 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 		Debrid:           entry.ActiveProvider,
 		InfoHash:         entry.InfoHash,
 		Magnet:           magnet,
-		Name:             magnet.Name,
+		Name:             entry.Name,
+		OriginalFilename: entry.OriginalFilename,
 		Size:             entry.Size,
 		Files:            make(map[string]debridTypes.File),
 		DownloadUncached: entry.DownloadUncached,
@@ -378,6 +380,14 @@ func (m *Manager) releaseLeftSlot(
 }
 
 func (m *Manager) processAction(entry *storage.Entry) {
+	key := strings.ToLower(entry.InfoHash)
+	ctx, cancel := context.WithCancelCause(m.downloader.operationContext())
+	m.queue.running.Store(key, cancel)
+	defer func() {
+		m.queue.running.Delete(key)
+		cancel(nil)
+	}()
+
 	entry.Status = debridTypes.TorrentStatusDownloaded
 	entry.UpdatedAt = time.Now()
 	_ = m.queue.Update(entry)
@@ -403,8 +413,12 @@ func (m *Manager) processAction(entry *storage.Entry) {
 	if err := m.RefreshMount(); err != nil {
 		m.logger.Error().Err(err).Msg("Mount refresh failed")
 	}
-	err := m.downloader.download(entry)
+	err := m.downloader.download(ctx, entry)
 	if err != nil {
+		if errors.Is(context.Cause(ctx), errEntryDeleted) {
+			m.logger.Info().Str("name", entry.Name).Msg("Entry deleted, stopped its post-download action")
+			return
+		}
 		if errors.Is(err, context.Canceled) && m.ctx.Err() != nil {
 			entry.IsDownloading = false
 			if updateErr := m.queue.Update(entry); updateErr != nil {
