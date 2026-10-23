@@ -15,6 +15,7 @@ import (
 	"github.com/winfsp/cgofuse/fuse"
 
 	"github.com/sirrobot01/decypharr/internal/customerror"
+	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/pkg/manager"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/config"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/vfs"
@@ -40,20 +41,22 @@ const (
 type FS struct {
 	fuse.FileSystemBase // Embed base for default implementations
 
-	vfs    *vfs.Manager
-	config *config.FuseConfig
-	logger zerolog.Logger
+	vfs     *vfs.Manager
+	config  *config.FuseConfig
+	logger  zerolog.Logger
+	readLog *logger.RateLimitedLogger
 
 	// Handle management
 	handles *HandleManager
 }
 
 // NewFS creates a new cgofuse filesystem.
-func NewFS(vfsManager *vfs.Manager, config *config.FuseConfig, logger zerolog.Logger) *FS {
+func NewFS(vfsManager *vfs.Manager, config *config.FuseConfig, log zerolog.Logger) *FS {
 	return &FS{
 		vfs:     vfsManager,
 		config:  config,
-		logger:  logger,
+		logger:  log,
+		readLog: logger.NewRateLimitedLogger(logger.WithLogger(log)),
 		handles: NewHandleManager(),
 	}
 }
@@ -271,7 +274,7 @@ func (f *FS) Open(path string, flags int) (int, uint64) {
 }
 
 // Read reads from a file.
-func (f *FS) Read(_ string, buff []byte, off int64, fh uint64) int {
+func (f *FS) Read(path string, buff []byte, off int64, fh uint64) int {
 	handle := f.handles.Get(fh)
 	if handle == nil {
 		return -fuse.EBADF
@@ -306,23 +309,29 @@ func (f *FS) Read(_ string, buff []byte, off int64, fh uint64) int {
 	defer cancel()
 
 	n, err := handle.reader.ReadAtContext(readCtx, buff[:size], off)
-	if err != nil && n == 0 {
-		switch {
-		case errors.Is(err, syscall.EBADF):
-			return -fuse.EBADF
-		case errors.Is(err, io.EOF):
-			// EOF is not an error for FUSE Read
-			return 0
-		case errors.Is(err, context.DeadlineExceeded):
-			return -fuse.ETIMEDOUT
-		case errors.Is(err, context.Canceled):
-			return -fuse.EINTR
-		default:
-			return -fuse.EIO
-		}
+	// The kernel takes a short read as EOF and zero-fills the pages, so a short read inside the file must be an errno.
+	if n == size {
+		return n
 	}
-
-	return n
+	switch {
+	case errors.Is(err, syscall.EBADF):
+		return -fuse.EBADF
+	case errors.Is(err, context.Canceled):
+		return -fuse.EINTR
+	case err == nil:
+		err = io.ErrUnexpectedEOF
+	}
+	f.readLog.Rate(path).Warn().
+		Err(err).
+		Str("file", path).
+		Int64("offset", off).
+		Int("read", n).
+		Int("want", size).
+		Msg("FUSE read failed")
+	if errors.Is(err, context.DeadlineExceeded) {
+		return -fuse.ETIMEDOUT
+	}
+	return -fuse.EIO
 }
 
 // Release closes a file handle.
