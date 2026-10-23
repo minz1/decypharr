@@ -8,6 +8,22 @@ If the disk fills ("no space left"), `go clean -cache` and rerun; never commit o
 New logic is TDD: the regression test fails before the fix and passes after (mutation-check it).
 Final item: the full gate on `minz`, plus `git status` clean and `minz` == `origin/minz`.
 
+## Workflow
+New work (a new feature, endpoint, UI section, config-visible behaviour or fork divergence; not fixes of ack
+findings, bumps, merges, tests-only or one-line fixes):
+1. superpowers:brainstorming → spec at `docs/notes/specs/YYYY-MM-DD-<topic>-design.md` (docs/notes/ is excluded
+   locally; docs/ itself is the public site, never put specs there). No owner is present: answer its questions from
+   the plan, ~/.claude/plans/decypharr-roadmap.md and the handoffs, and record each decision in the spec. A decision
+   only the owner can make (naming, a new option, a security trade-off, behaviour the plan doesn't settle) goes to
+   `## Owner` and parks the item.
+2. `reviewer` with `model: opus` on the spec. Apply its findings; BLOCK blocks the item.
+3. superpowers:writing-plans → `docs/notes/plans/YYYY-MM-DD-<topic>.md`, executed inline. `reviewer` with
+   `model: opus` on the plan, same rules.
+4. Implement with superpowers:test-driven-development; the reviewer stand-in below still applies before shipping.
+Fixes, bumps and merges: a short spec in log.md (what, why, the test that fails first), reviewed with the code.
+Always: load superpowers:systematic-debugging before changing anything to fix a failed check, a reject/nack or a
+wrong live result; load superpowers:verification-before-completion before marking an item `[c]`/`[x]` or posting.
+
 ## May happen mid-run
 - Commits on local `minz` (the run branch). Style: `<pkg>: <what>`, one subject line, no Co-Authored-By trailer.
 - Ship one item (or one `ship:` group) per post, after its gate, `nix build .#default` and the Opus reviewer pass:
