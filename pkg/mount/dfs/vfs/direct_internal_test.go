@@ -8,9 +8,12 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"testing/iotest"
 
 	"github.com/sirrobot01/decypharr/pkg/manager"
+	"github.com/sirrobot01/decypharr/pkg/manager/link"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
@@ -268,5 +271,37 @@ func TestDirectStreamFile_FailsWhenEveryBodyIsTruncated(t *testing.T) {
 	}
 	if calls != 3 {
 		t.Fatalf("server saw %d requests, want 3", calls)
+	}
+}
+
+// permanentSource fails every open (or first read) with a permanent error.
+type permanentSource struct {
+	onRead bool
+	opens  atomic.Int32
+}
+
+var errEntryBad = link.NewPermanentError(errors.New("marked as bad"), "entry_bad")
+
+func (s *permanentSource) OpenStream(
+	context.Context, *storage.Entry, string, int64, string,
+) (manager.StreamReader, error) {
+	s.opens.Add(1)
+	if s.onRead {
+		return &fakeStreamReader{body: io.NopCloser(iotest.ErrReader(errEntryBad))}, nil
+	}
+	return nil, errEntryBad
+}
+
+func TestDirectStreamFileDoesNotRetryPermanentErrors(t *testing.T) {
+	t.Parallel()
+	for _, onRead := range []bool{false, true} {
+		src := &permanentSource{onRead: onRead}
+		f := &DirectStreamFile{src: src, filename: "test.bin", size: 1024, retries: 3}
+		if _, err := f.ReadAtContext(t.Context(), make([]byte, 16), 0); !errors.Is(err, errEntryBad) {
+			t.Fatalf("onRead=%v: err = %v, want the permanent error", onRead, err)
+		}
+		if got := src.opens.Load(); got != 1 {
+			t.Errorf("onRead=%v: %d opens, want 1 (no retry of a permanent error)", onRead, got)
+		}
 	}
 }

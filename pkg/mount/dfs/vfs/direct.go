@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/pkg/manager"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
@@ -85,14 +86,16 @@ func (f *DirectStreamFile) ReadAtContext(ctx context.Context, p []byte, off int6
 		}
 
 		reader, err := f.src.OpenStream(ctx, f.entry, f.filename, off, "DFS-direct")
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		n, err := io.ReadFull(reader, p)
-		_ = reader.Close()
 		if err == nil {
-			return n, nil
+			var n int
+			n, err = io.ReadFull(reader, p)
+			_ = reader.Close()
+			if err == nil {
+				return n, nil
+			}
+		}
+		if customerror.IsPermanentError(err) {
+			return 0, err
 		}
 		lastErr = err
 	}
