@@ -3,7 +3,9 @@ package manager
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,6 +15,8 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/storage"
+	"github.com/sirrobot01/decypharr/pkg/usenet"
+	"github.com/sirrobot01/decypharr/pkg/usenet/parser"
 )
 
 func TestRestoreLeavesActiveDownloadsOutsideSubmissionWorkers(t *testing.T) {
@@ -220,4 +224,96 @@ func newRestoreTestManager(t *testing.T) *Manager {
 	m.jobQueue = NewJobQueue(t.Context(), 1, func(context.Context, *Job) {}, zerolog.Nop())
 	t.Cleanup(m.jobQueue.Close)
 	return m
+}
+
+// A restart during a busy batch must not blocklist a release whose restore parse ran out of time.
+func TestRestoreRequeuesAnNZBWhoseParseRanOutOfTime(t *testing.T) {
+	t.Parallel()
+	m := newRestoreTestManager(t)
+	m.jobQueue.Close()
+	m.usenet = newUnreachableUsenet(t)
+	m.usenetTimeout = 20 * time.Millisecond
+	m.parseRequeueDelay = 20 * time.Millisecond
+	type parseCall struct{ name, category string }
+	calls := make(chan parseCall, 8)
+	var n atomic.Int32
+	m.parseNZBFunc = func(ctx context.Context, _, name string, _ []byte, category string) (*storage.NZB, map[string]*parser.FileGroup, error) {
+		select {
+		case calls <- parseCall{name, category}:
+		default:
+		}
+		if n.Add(1) < 3 {
+			<-ctx.Done()
+			return nil, nil, ctx.Err()
+		}
+		return &storage.NZB{Name: name}, nil, nil
+	}
+	m.jobQueue = NewJobQueue(t.Context(), 1, m.processJob, zerolog.Nop())
+	t.Cleanup(m.jobQueue.Close)
+	staged := filepath.Join(t.TempDir(), "obf.nzb")
+	if err := os.WriteFile(staged, []byte("<nzb/>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hash := "nzb-restored"
+	if err := m.queue.Add(&storage.Entry{
+		InfoHash: hash, Name: "obf", OriginalFilename: "Show.S01.1080p", Category: "sonarr",
+		Protocol: config.ProtocolNZB, State: storage.EntryStateDownloading, Status: debridTypes.TorrentStatusQueued,
+		Magnet: staged, SavePath: t.TempDir(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m.restoreActiveDownloadJobs(m.restoreSnapshot())
+
+	for range 3 {
+		select {
+		case got := <-calls:
+			if got != (parseCall{"Show.S01.1080p", "sonarr"}) {
+				t.Fatalf("parse got %+v, want the entry's original name and category", got)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("the requeued parse never ran")
+		}
+	}
+	eventually(t, "the requeued job to finish", func() bool { return !m.jobQueue.Holds(hash) })
+	if entry, err := m.queue.GetTorrent(hash); err != nil || entry.ActiveProvider != usenetProvider {
+		t.Fatalf("entry = %+v, %v: want it parsed by the requeued job", entry, err)
+	}
+}
+
+// Without a staged NZB the requeued job would have nothing to parse, so a re-processing restore fails at once.
+func TestRestoreFailsAReprocessedNZBWhoseParseRanOutOfTime(t *testing.T) {
+	t.Parallel()
+	m := newRestoreTestManager(t)
+	m.usenet = newUnreachableUsenet(t)
+	m.usenetTimeout = 20 * time.Millisecond
+	m.parseRequeueDelay = time.Hour
+	var calls atomic.Int32
+	m.parseNZBFunc = func(ctx context.Context, _, _ string, _ []byte, _ string) (*storage.NZB, map[string]*parser.FileGroup, error) {
+		calls.Add(1)
+		<-ctx.Done()
+		return nil, nil, ctx.Err()
+	}
+	saved := filepath.Join(t.TempDir(), "saved.nzb")
+	if err := os.WriteFile(saved, []byte("<nzb/>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hash := "nzb-reprocessed"
+	header := &storage.NZB{ID: hash, Status: usenet.NZBStatusDownloading, Path: saved}
+	if err := m.usenet.NZBStorage().AddNZB(header); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.queue.Add(&storage.Entry{
+		InfoHash: hash, Name: "Show.S01", Category: "sonarr", Protocol: config.ProtocolNZB,
+		State: storage.EntryStateDownloading, Status: debridTypes.TorrentStatusDownloading,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m.restoreActiveDownloadJobs(m.restoreSnapshot())
+
+	entry, err := m.queue.GetTorrent(hash)
+	if err != nil || entry.State != storage.EntryStateError || calls.Load() != 2 || m.jobQueue.Holds(hash) {
+		t.Fatalf("entry = %+v, %v after %d calls: want it failed by the restore", entry, err, calls.Load())
+	}
 }

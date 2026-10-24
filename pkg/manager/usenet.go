@@ -334,6 +334,24 @@ func newNZBQueueEntry(req *ImportRequest, stagedPath string) *storage.Entry {
 	}
 }
 
+// errParseBudget marks a parse round that ended only because its time ran out; the job is requeued.
+var errParseBudget = errors.New("NZB parse ran out of time")
+
+// requeueParse retries a job's parse after a backoff that doubles each round.
+func (m *Manager) requeueParse(job *Job, err error) {
+	delay := m.parseRequeueDelay << job.ParseRounds
+	job.ParseRounds++
+	m.logger.Warn().
+		Err(err).
+		Str("name", job.Entry.Name).
+		Str("id", job.ID).
+		Int("round", job.ParseRounds).
+		Int("of", parseRounds).
+		Dur("delay", delay).
+		Msg("NZB parse ran out of time; requeued")
+	m.jobQueue.WaitForSlot(job, nil, delay)
+}
+
 // parseNZB parses an NZB's articles under the usenet budget, with one more
 // budget when only the first ran out and the entry is still queued.
 func (m *Manager) parseNZB(
@@ -353,7 +371,10 @@ func (m *Manager) parseNZB(
 			errors.Is(parseCtx.Err(), context.DeadlineExceeded) &&
 			ctx.Err() == nil
 		cancel()
-		if err == nil || !budgetRanOut || attempt == 2 || !m.queue.Contains(id) {
+		if budgetRanOut && attempt == 2 {
+			return meta, groups, fmt.Errorf("%w: %w", errParseBudget, err)
+		}
+		if err == nil || !budgetRanOut || !m.queue.Contains(id) {
 			return meta, groups, err
 		}
 		m.logger.Warn().

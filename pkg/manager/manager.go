@@ -56,6 +56,9 @@ const (
 
 	defaultUsenetTimeout   = 10 * time.Minute
 	defaultRefreshInterval = 15 * time.Minute
+	// parseRounds is how many parse rounds that run out of time a grab gets before it fails.
+	parseRounds              = 3
+	defaultParseRequeueDelay = 5 * time.Minute
 	// tooManyDownloadsRetryDelay is the first wait after the provider reports its active-download limit.
 	tooManyDownloadsRetryDelay = 30 * time.Second
 	maxThrottledRetryDelay     = 10 * time.Minute
@@ -127,8 +130,9 @@ type Manager struct {
 	virtualFolders   *virtualfolders.Folders
 	mountManager     MountManager
 
-	startTime     time.Time
-	usenetTimeout time.Duration
+	startTime         time.Time
+	usenetTimeout     time.Duration
+	parseRequeueDelay time.Duration
 
 	rootInfo   *FileInfo
 	entry      *EntryCache
@@ -246,6 +250,7 @@ func New(store *config.Store, logs *logger.Factory) (*Manager, error) {
 		ready:                  make(chan struct{}),
 		streamClient:           streamClient,
 		usenetTimeout:          usenetTimeout,
+		parseRequeueDelay:      defaultParseRequeueDelay,
 		debridSpeedTestResults: xsync.NewMap[string, debridTypes.SpeedTestResult](),
 		activeStreams:          xsync.NewMap[string, *ActiveStream](),
 		providerMisses:         xsync.NewMap[string, map[string]struct{}](),
@@ -514,10 +519,16 @@ func (m *Manager) failBadRelease(entry *storage.Entry, err error) {
 	}
 }
 
-// handleJobError requeues a job the provider throttled, or fails its entry.
+// handleJobError drops a job whose entry was deleted, requeues one the provider throttled or whose parse ran out of
+// time, or fails its entry.
 func (m *Manager) handleJobError(job *Job, err error) {
 	// A delete raced the job; failing it would re-create the record.
 	if job.Entry != nil && !m.queue.Contains(job.Entry.InfoHash) {
+		m.logger.Debug().
+			Err(err).
+			Str("job_id", job.ID).
+			Str("name", job.Entry.Name).
+			Msg("Dropped the failed job of a deleted entry")
 		return
 	}
 	if isTooManyActiveDownloads(err) {
@@ -533,6 +544,13 @@ func (m *Manager) handleJobError(job *Job, err error) {
 		job.ThrottledRetries++
 		m.jobQueue.WaitForSlot(job, providers, delay)
 		return
+	}
+	if errors.Is(err, errParseBudget) {
+		if job.ParseRounds+1 < parseRounds {
+			m.requeueParse(job, err)
+			return
+		}
+		err = fmt.Errorf("gave up after %d parse rounds: %w", parseRounds, err)
 	}
 	event := m.logger.Error().Err(err).Str("job_id", job.ID).Str("type", string(job.Type))
 	if job.Entry != nil {

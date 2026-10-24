@@ -37,6 +37,8 @@ type Job struct {
 	CreatedAt      time.Time
 	// ThrottledRetries counts retries after the provider's active-download cap.
 	ThrottledRetries int
+	// ParseRounds counts NZB parse rounds that ran out of time.
+	ParseRounds int
 	// wokenBy is the provider whose freed slot resubmitted the job, if one did.
 	wokenBy string
 }
@@ -155,6 +157,7 @@ func (q *JobQueue) ActiveCount() int {
 }
 
 // WaitForSlot submits a throttled job again once SlotFreed names one of its providers, or after delay at the latest.
+// With no providers the job is submitted again after delay.
 // shortcut: a slot freed between the provider's refusal and this call wakes nobody; the job waits out delay.
 func (q *JobQueue) WaitForSlot(job *Job, providers []string, delay time.Duration) {
 	w := &slotWaiter{createdAt: job.CreatedAt, providers: providers, wake: make(chan struct{})}

@@ -72,6 +72,10 @@ func (m *Manager) restoreEntry(entry *storage.Entry, interrupted bool) bool {
 	if !m.queue.Contains(entry.InfoHash) {
 		return true
 	}
+	if errors.Is(rebuildErr, errParseBudget) && entry.Magnet != "" {
+		m.requeueParse(m.nzbJobForEntry(entry, nil), rebuildErr)
+		return true
+	}
 	if rebuildErr != nil {
 		m.failEntry(entry, rebuildErr)
 		return true
@@ -174,8 +178,19 @@ func (m *Manager) rebuildQueuedNZBJob(entry *storage.Entry) (*Job, error) {
 	entry.ActiveProvider = usenetProvider
 	_ = entry.AddUsenetProvider(meta)
 
+	job := m.nzbJobForEntry(entry, content)
+	job.NZBMeta = meta
+	job.NZBGroups = groups
+	return job, nil
+}
+
+func (m *Manager) nzbJobForEntry(entry *storage.Entry, content []byte) *Job {
+	name := entry.OriginalFilename
+	if name == "" {
+		name = entry.Name
+	}
 	req := NewNZBRequest(
-		meta.Name,
+		name,
 		downloadFolderForEntry(m.store.Get().DownloadFolder, entry),
 		content,
 		m.arr.GetOrCreate(entry.Category),
@@ -189,9 +204,7 @@ func (m *Manager) rebuildQueuedNZBJob(entry *storage.Entry) (*Job, error) {
 	job := NewJob(JobTypeNZB, req)
 	job.ID = entry.InfoHash
 	job.Entry = entry
-	job.NZBMeta = meta
-	job.NZBGroups = groups
-	return job, nil
+	return job
 }
 
 func downloadFolderForEntry(fallback string, entry *storage.Entry) string {
