@@ -162,14 +162,6 @@ func mutationOfKind(job Job, kind MutationKind) (Mutation, bool) {
 	return Mutation{}, false
 }
 
-// hasSearchMutation reports that an earlier pass chose to search; a blocklist is not retried after it.
-func hasSearchMutation(job Job) bool {
-	return slices.ContainsFunc(job.Mutations, func(mutation Mutation) bool {
-		return mutation.Kind == MutationEpisodeSearch || mutation.Kind == MutationSeasonSearch ||
-			mutation.Kind == MutationMovieSearch
-	})
-}
-
 func setMutation(job *Job, mutation Mutation) {
 	for i := range job.Mutations {
 		if job.Mutations[i].Key == mutation.Key {
