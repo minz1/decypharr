@@ -274,7 +274,7 @@ func (q *Queue) stalled(t *storage.Entry, now time.Time, pending func(infoHash s
 		}
 		return t.Progress == 0 && failedAt.Before(now.Add(-retention)), "failed " + retention.String() + " ago"
 	}
-	if !t.AddedOn.Before(now.Add(-q.removeStalledAfter)) {
+	if t.IsDownloading || !t.AddedOn.Before(now.Add(-q.removeStalledAfter)) {
 		return false, ""
 	}
 	if t.Status == debridTypes.TorrentStatusQueued {

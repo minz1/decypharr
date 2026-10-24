@@ -253,3 +253,44 @@ func TestDeleteStalledRemovesQueuedEntriesWithNoJob(t *testing.T) {
 }
 
 func noJob(string) bool { return false }
+
+// A local download resets Progress to 0 when it starts; the sweep used to take it for a stalled entry and cancel it.
+func TestDeleteStalledKeepsARunningLocalDownload(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name        string
+		downloading bool
+		wantKept    bool
+	}{
+		{"download just started", true, true},
+		{"nothing running", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store, err := storage.NewStorage(filepath.Join(t.TempDir(), "db"), storage.Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			q := newQueue(store, "1h", nil, zerolog.Nop())
+			entry := &storage.Entry{
+				InfoHash: "0123456789012345678901234567890123456789", Name: "downloading",
+				AddedOn: time.Now().Add(-2 * time.Hour), State: storage.EntryStateDownloading,
+				Status: debridTypes.TorrentStatusDownloaded, IsDownloading: tc.downloading,
+			}
+			if addErr := q.Add(entry); addErr != nil {
+				t.Fatal(addErr)
+			}
+			action := runningAction(t, q, entry.InfoHash)
+			if deleteErr := q.DeleteStalled(noJob); deleteErr != nil {
+				t.Fatal(deleteErr)
+			}
+			if _, getErr := q.GetTorrent(entry.InfoHash); (getErr == nil) != tc.wantKept {
+				t.Fatalf("kept = %v, want %v", getErr == nil, tc.wantKept)
+			}
+			if tc.wantKept && action.Err() != nil {
+				t.Fatal("the running download was cancelled")
+			}
+		})
+	}
+}
