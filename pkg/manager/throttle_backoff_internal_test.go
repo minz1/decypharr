@@ -776,3 +776,94 @@ func TestSyncKeepsTheLinksStoredAtFinish(t *testing.T) {
 		)
 	}
 }
+
+// A grab the arr removes mid download must not keep a provider slot nobody polls or wakes on.
+func TestDeletingAQueuedTorrentStopsOnlyItsProviderDownload(t *testing.T) {
+	t.Parallel()
+	downloading := storage.ProviderEntry{Progress: 0.4, Status: types.TorrentStatusDownloading}
+	for _, tc := range []struct {
+		name        string
+		placement   *storage.ProviderEntry
+		protocol    config.Protocol
+		libraryID   string
+		complete    bool
+		wantDeleted []string
+	}{
+		{"downloading", &downloading, config.ProtocolTorrent, "", false, []string{"id"}},
+		{"downloaded", &storage.ProviderEntry{Progress: 1, Status: types.TorrentStatusDownloaded}, config.ProtocolTorrent, "", false, nil},
+		{"errored", &storage.ProviderEntry{Progress: 0.4, Status: types.TorrentStatusError}, config.ProtocolTorrent, "", false, nil},
+		{"waiting for a slot", nil, config.ProtocolTorrent, "", false, nil},
+		{"shared with a library entry", &downloading, config.ProtocolTorrent, "id", false, nil},
+		{"library entry on another torrent", &downloading, config.ProtocolTorrent, "other", false, []string{"id"}},
+		{"nzb", &downloading, config.ProtocolNZB, "", false, nil},
+		{"completed with a stale placement", &downloading, config.ProtocolTorrent, "", true, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m, _ := newDroppedTestManager(t, nil)
+			fake := &fakePruneProvider{}
+			m.clients.Store("provider", fake)
+			m.jobQueue, _ = startRecordingQueue(t)
+			m.jobQueue.WaitForSlot(&Job{ID: "next"}, []string{"provider"}, time.Hour)
+			addRemovedGrab(t, m, tc.placement, tc.protocol, tc.libraryID, tc.complete)
+			if err := m.queue.Delete("grab", true, m.StopProviderDownload); err != nil {
+				t.Fatal(err)
+			}
+			if m.queue.Contains("grab") {
+				t.Fatal("queue entry kept")
+			}
+			if got := fake.deletedIDs(); !slices.Equal(got, tc.wantDeleted) {
+				t.Fatalf("deleted provider torrents = %v, want %v", got, tc.wantDeleted)
+			}
+			if got, want := 1-waitingJobs(m.jobQueue), len(tc.wantDeleted); got != want {
+				t.Fatalf("woken jobs = %d, want %d", got, want)
+			}
+		})
+	}
+}
+
+func addRemovedGrab(
+	t *testing.T,
+	m *Manager,
+	placement *storage.ProviderEntry,
+	protocol config.Protocol,
+	libraryID string,
+	complete bool,
+) {
+	t.Helper()
+	e := &storage.Entry{
+		InfoHash:   "grab",
+		Name:       "grab",
+		Category:   "sonarr",
+		Protocol:   protocol,
+		State:      storage.EntryStateDownloading,
+		Status:     types.TorrentStatusDownloading,
+		Providers:  map[string]*storage.ProviderEntry{},
+		IsComplete: complete,
+	}
+	if placement != nil {
+		p := *placement
+		p.Provider, p.ID = "provider", "id"
+		e.ActiveProvider = "provider"
+		e.Providers["provider"] = &p
+	}
+	if err := m.queue.Add(e); err != nil {
+		t.Fatal(err)
+	}
+	if libraryID == "" {
+		return
+	}
+	lib := &storage.Entry{
+		InfoHash:       "grab",
+		Name:           "grab",
+		Protocol:       config.ProtocolTorrent,
+		State:          storage.EntryStatePausedUP,
+		ActiveProvider: "provider",
+		Providers: map[string]*storage.ProviderEntry{"provider": {
+			Provider: "provider", ID: libraryID, Progress: 1, Status: types.TorrentStatusDownloaded,
+		}},
+	}
+	if err := m.storage.AddOrUpdate(lib); err != nil {
+		t.Fatal(err)
+	}
+}
