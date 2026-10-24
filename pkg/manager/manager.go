@@ -516,6 +516,10 @@ func (m *Manager) failBadRelease(entry *storage.Entry, err error) {
 
 // handleJobError requeues a job the provider throttled, or fails its entry.
 func (m *Manager) handleJobError(job *Job, err error) {
+	// A delete raced the job; failing it would re-create the record.
+	if job.Entry != nil && !m.queue.Contains(job.Entry.InfoHash) {
+		return
+	}
 	if isTooManyActiveDownloads(err) {
 		if job.Entry != nil {
 			job.Entry.Status = debridTypes.TorrentStatusQueued

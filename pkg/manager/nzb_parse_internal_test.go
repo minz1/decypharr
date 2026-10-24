@@ -158,3 +158,22 @@ func TestActiveDownloadFailureLogNamesTheEntry(t *testing.T) {
 		t.Fatalf("failure log = %s, want the entry name", logs.String())
 	}
 }
+
+// A delete that lands while the job runs must not come back as a failed record the arr already removed.
+func TestJobErrorForADeletedEntryWritesNothingBack(t *testing.T) {
+	t.Parallel()
+	m := withTestConfig(t, newParseRetryManager(t, nil))
+	entry, err := m.queue.GetTorrent("nzb-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = m.queue.Delete("nzb-1", false, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	m.handleJobError(&Job{ID: "nzb-1", Type: JobTypeNZB, Entry: entry}, errors.New("usenet parse failed"))
+
+	if m.queue.Contains("nzb-1") {
+		t.Fatal("the failure re-created the deleted entry")
+	}
+}
