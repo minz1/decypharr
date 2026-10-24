@@ -3,6 +3,10 @@ package storage
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -230,5 +234,167 @@ func TestDeleteEntryNeverMatchesEmptyFileHashes(t *testing.T) {
 	item, err := s.GetEntryItem("folder")
 	if err != nil || item.Files["a.mkv"] == nil || item.Files["a.mkv"].Size != 2 {
 		t.Fatalf("visible file lost: %v %+v", err, item)
+	}
+}
+
+// newSharedFolderStorage stores entries that all render folder "folder", in order.
+func newSharedFolderStorage(t *testing.T, entries ...*Entry) *Storage {
+	t.Helper()
+	s, err := NewStorage(t.TempDir(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	for _, e := range entries {
+		if err = s.AddOrUpdate(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return s
+}
+
+func sharedEntry(hash string, size int64, addedOn time.Time) *Entry {
+	return &Entry{InfoHash: hash, Name: "folder", Files: map[string]*File{
+		"a.mkv": {Name: "a.mkv", InfoHash: hash, Size: size, AddedOn: addedOn},
+	}}
+}
+
+func TestDeleteRefillsSharedFolderWithNewestCopy(t *testing.T) {
+	t.Parallel()
+	old := time.Unix(1_000, 0)
+	var entries []*Entry
+	for i := range 5 {
+		entries = append(
+			entries,
+			sharedEntry(fmt.Sprintf("a-older%d", i), int64(i+1), old.Add(time.Duration(i)*time.Minute)),
+		)
+	}
+	entries = append(
+		entries,
+		sharedEntry("z-newest-left", 50, old.Add(time.Hour)),
+		sharedEntry("deleted", 99, old.Add(2*time.Hour)),
+	)
+	s := newSharedFolderStorage(t, entries...)
+
+	if err := s.Delete("deleted"); err != nil {
+		t.Fatal(err)
+	}
+	item, err := s.GetEntryItem("folder")
+	if err != nil || item.Files["a.mkv"].InfoHash != "z-newest-left" || item.Size != 50 {
+		t.Fatalf("folder item = %+v, %v; want the newest remaining copy", item, err)
+	}
+}
+
+func TestDeleteReportsUnreadableSharedEntry(t *testing.T) {
+	t.Parallel()
+	old := time.Unix(1_000, 0)
+	s := newSharedFolderStorage(
+		t,
+		sharedEntry("unreadable-sibling", 1, old),
+		sharedEntry("deleted", 2, old.Add(time.Hour)),
+	)
+	corruptStoredRecord(t, filepath.Join(s.dir, "entries.db"), "unreadable-sibling")
+
+	err := s.Delete("deleted")
+	if err == nil || !strings.Contains(err.Error(), "unreadable-sibling") {
+		t.Fatalf("error = %v, want the unreadable sibling named", err)
+	}
+	if _, getErr := s.Get("deleted"); getErr != nil {
+		t.Fatalf("entry removed despite the failed index update: %v", getErr)
+	}
+	if item, getErr := s.GetEntryItem("folder"); getErr != nil || item.Files["a.mkv"].InfoHash != "deleted" {
+		t.Fatalf("folder item changed: %+v, %v", item, getErr)
+	}
+}
+
+func TestDeleteSkipsUndecodableSharedEntry(t *testing.T) {
+	t.Parallel()
+	s := newSharedFolderStorage(t, sharedEntry("deleted", 2, time.Unix(1_000, 0)))
+	if err := s.entries.Put(
+		"undecodable",
+		[]byte{0xff},
+		s.entryPutOptions(&Entry{InfoHash: "undecodable", Name: "folder"}),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.Delete("deleted"); err != nil {
+		t.Fatalf("delete blocked by an undecodable sibling: %v", err)
+	}
+	if _, err := s.GetEntryItem("folder"); !errors.Is(err, appendstore.ErrKeyNotFound) {
+		t.Fatalf("folder item survived: %v", err)
+	}
+}
+
+func TestRemoveFromEntryItemReportsEntryListFailure(t *testing.T) {
+	t.Parallel()
+	s := newSharedFolderStorage(t, sharedEntry("deleted", 2, time.Unix(1_000, 0)))
+	entry, err := s.Get("deleted")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closeErr := s.entries.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+
+	if err = s.removeFromEntryItem(entry); !errors.Is(err, appendstore.ErrStoreClosed) {
+		t.Fatalf("error = %v, want ErrStoreClosed", err)
+	}
+	if item, getErr := s.GetEntryItem("folder"); getErr != nil || item.Files["a.mkv"] == nil {
+		t.Fatalf("folder item changed: %+v, %v", item, getErr)
+	}
+}
+
+// corruptStoredRecord flips a byte inside the stored record that holds marker, so its checksum fails.
+func corruptStoredRecord(t *testing.T, storePath, marker string) {
+	t.Helper()
+	found := false
+	walkErr := filepath.WalkDir(storePath, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		at := bytes.LastIndex(data, []byte(marker))
+		if at < 0 {
+			return nil
+		}
+		found = true
+		f, openErr := os.OpenFile(path, os.O_WRONLY, 0)
+		if openErr != nil {
+			return openErr
+		}
+		defer f.Close()
+		_, writeErr := f.WriteAt([]byte{data[at] ^ 0xff}, int64(at))
+		return writeErr
+	})
+	if walkErr != nil || !found {
+		t.Fatalf("corrupt %q in %s: found=%v, %v", marker, storePath, found, walkErr)
+	}
+}
+
+func TestDeleteLeavesUnownedTiedFileAlone(t *testing.T) {
+	t.Parallel()
+	tie := time.Unix(1_000, 0)
+	b := sharedEntry("b", 10, tie)
+	c := sharedEntry("c", 20, tie)
+	d := &Entry{InfoHash: "d", Name: "folder", Files: map[string]*File{
+		"b.mkv": {Name: "b.mkv", InfoHash: "d", Size: 5, AddedOn: tie},
+	}}
+	s := newSharedFolderStorage(t, b, c, d)
+	before, err := s.GetEntryItem("folder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := before.Files["a.mkv"].InfoHash
+
+	if err = s.Delete("d"); err != nil {
+		t.Fatal(err)
+	}
+	item, err := s.GetEntryItem("folder")
+	if err != nil || item.Files["a.mkv"].InfoHash != want || item.Files["b.mkv"] != nil {
+		t.Fatalf("folder item = %+v, %v; want a.mkv from %q and no b.mkv", item, err, want)
 	}
 }

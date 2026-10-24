@@ -83,12 +83,7 @@ func (s *Storage) updateEntryItem(entry *Entry) error {
 	if item == nil {
 		item = &EntryItem{Name: name, Files: make(map[string]*File)}
 	}
-	for fileName, file := range entry.Files {
-		if existing, ok := item.Files[fileName]; !ok || file.AddedOn.After(existing.AddedOn) ||
-			(file.AddedOn.Equal(existing.AddedOn) && file.Size != existing.Size) {
-			item.Files[fileName] = file
-		}
-	}
+	mergeNewerFiles(item, entry.Files)
 	item.Size = item.GetSize()
 	data, err := proto.Marshal(EntryItemToProto(item))
 	if err != nil {
@@ -123,7 +118,9 @@ func (s *Storage) removeFromEntryItem(entry *Entry) error {
 			delete(item.Files, fileName)
 		}
 	}
-	s.keepSharedFiles(item, name, entry.InfoHash)
+	if keepErr := s.keepSharedFiles(item, name, entry.InfoHash); keepErr != nil {
+		return keepErr
+	}
 	if len(item.Files) == 0 {
 		if deleteEntryHealthErr := s.DeleteEntryHealth(name); deleteEntryHealthErr != nil {
 			return deleteEntryHealthErr
@@ -138,23 +135,46 @@ func (s *Storage) removeFromEntryItem(entry *Entry) error {
 }
 
 // keepSharedFiles refills item with the files of other entries that render the same folder.
-func (s *Storage) keepSharedFiles(item *EntryItem, name, deletedHash string) {
+func (s *Storage) keepSharedFiles(item *EntryItem, name, deletedHash string) error {
 	var others []string
-	_ = s.entries.ForEachMetadata(func(key string, meta *appendstore.Metadata) error {
+	listErr := s.entries.ForEachMetadata(func(key string, meta *appendstore.Metadata) error {
 		if !strings.EqualFold(key, deletedHash) && meta.Attribute(attributeName) == name {
 			others = append(others, key)
 		}
 		return nil
 	})
+	if listErr != nil {
+		return fmt.Errorf("list entries sharing name index %q: %w", name, listErr)
+	}
+	refill := &EntryItem{Files: make(map[string]*File)}
 	for _, key := range others {
 		other, err := s.Get(key)
-		if err != nil {
+		if errors.Is(err, appendstore.ErrKeyNotFound) {
 			continue
 		}
-		for fileName, file := range other.Files {
-			if _, exists := item.Files[fileName]; !exists {
-				item.Files[fileName] = file
-			}
+		if errors.Is(err, proto.Error) {
+			s.skipUndecodable("entry", key, err)
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("read entry %q sharing name index %q: %w", key, name, err)
+		}
+		mergeNewerFiles(refill, other.Files)
+	}
+	for fileName, file := range refill.Files {
+		if _, exists := item.Files[fileName]; !exists {
+			item.Files[fileName] = file
+		}
+	}
+	return nil
+}
+
+// mergeNewerFiles adds files to item, replacing a same-named file only with a newer copy.
+func mergeNewerFiles(item *EntryItem, files map[string]*File) {
+	for fileName, file := range files {
+		if existing, ok := item.Files[fileName]; !ok || file.AddedOn.After(existing.AddedOn) ||
+			(file.AddedOn.Equal(existing.AddedOn) && file.Size != existing.Size) {
+			item.Files[fileName] = file
 		}
 	}
 }
