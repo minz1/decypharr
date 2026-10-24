@@ -208,6 +208,46 @@
                                 </div>
                             </div>
 
+                            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                                <div>
+                                    <label class="label" for="retries">
+                                        <span class="font-medium">Retries</span>
+                                    </label>
+                                    <input type="number" class="input w-full" id="retries" name="retries" min="0"
+                                           placeholder="3">
+                                    <span class="text-sm opacity-70">Consecutive errors before switching debrid; also the
+                                        retry count for debrid, usenet and DFS reads. 0 means 3</span>
+                                </div>
+                                <div>
+                                    <label class="label" for="tls_ca_file">
+                                        <span class="font-medium">Extra CA File</span>
+                                    </label>
+                                    <input type="text" class="input w-full" id="tls_ca_file" name="tls_ca_file"
+                                           placeholder="/etc/ssl/lan-ca.pem">
+                                    <span class="text-sm opacity-70">Path on the server to a PEM bundle of extra CAs
+                                        trusted for outgoing TLS (debrid, arrs, usenet). Certificates are always
+                                        verified</span>
+                                </div>
+                                <div>
+                                    <label class="label" for="shared_dir_mode">
+                                        <span class="font-medium">Shared Folder Mode</span>
+                                    </label>
+                                    <input type="text" class="input w-full" id="shared_dir_mode" name="shared_dir_mode"
+                                           placeholder="2770">
+                                    <span class="text-sm opacity-70">Octal mode for folders other services use
+                                        (downloads, symlinks, STRM, mount points). Empty means 2770</span>
+                                </div>
+                                <div>
+                                    <label class="label" for="shared_file_mode">
+                                        <span class="font-medium">Shared File Mode</span>
+                                    </label>
+                                    <input type="text" class="input w-full" id="shared_file_mode" name="shared_file_mode"
+                                           placeholder="0660">
+                                    <span class="text-sm opacity-70">Octal mode for files in those trees. Empty means
+                                        0660</span>
+                                </div>
+                            </div>
+
                             <div class="grid grid-cols-1 lg:grid-cols-1 gap-4">
                                 <div>
                                     <label class="label" for="allowedExtensions">
@@ -313,6 +353,24 @@
                                 <input type="text" class="input w-full" id="nzbUserAgent"
                                        name="nzb_user_agent" placeholder="SABnzbd/3.0.0">
                                 <span class="text-sm opacity-70">User-Agent used when fetching NZB files</span>
+                            </div>
+                            <div>
+                                <label class="label" for="categories">
+                                    <span class="font-medium">Categories</span>
+                                </label>
+                                <input type="text" class="input w-full" id="categories" name="categories"
+                                       placeholder="sonarr, radarr">
+                                <span class="text-sm opacity-70">qBittorrent/SABnzbd categories offered to the arrs. Empty means sonarr, radarr</span>
+                            </div>
+                            <div>
+                                <label class="label cursor-pointer justify-start gap-3">
+                                    <input type="checkbox" class="checkbox checkbox-primary"
+                                           name="allow_samples" id="allow_samples">
+                                    <div>
+                                        <span class="font-medium">Allow Samples</span>
+                                        <div class="label-text-alt">Keep sample files instead of filtering them out</div>
+                                    </div>
+                                </label>
                             </div>
                             <div>
                                 <label class="label cursor-pointer justify-start gap-3">
@@ -752,6 +810,37 @@
                                                     across all open streams (e.g., 512MB, 1GB). Ignored when
                                                     buffering to disk</span>
                                             </div>
+                                            <div>
+                                                <label class="label" for="usenet.socket_read_buffer">
+                                                    <span class="font-medium">Socket Read Buffer</span>
+                                                </label>
+                                                <input type="text" class="input w-full"
+                                                       name="usenet.socket_read_buffer" id="usenet.socket_read_buffer"
+                                                       placeholder="4MB">
+                                                <span class="text-sm opacity-70">Per-connection TCP receive buffer. 0
+                                                    leaves it to the OS; default 4MB</span>
+                                            </div>
+                                            <div>
+                                                <label class="label" for="usenet.socket_write_buffer">
+                                                    <span class="font-medium">Socket Write Buffer</span>
+                                                </label>
+                                                <input type="text" class="input w-full"
+                                                       name="usenet.socket_write_buffer" id="usenet.socket_write_buffer"
+                                                       placeholder="1MB">
+                                                <span class="text-sm opacity-70">Per-connection TCP send buffer. 0
+                                                    leaves it to the OS; default 1MB</span>
+                                            </div>
+                                            <div>
+                                                <label class="label" for="usenet.stream_backup_wait">
+                                                    <span class="font-medium">Stream Backup Wait</span>
+                                                </label>
+                                                <input type="text" class="input w-full"
+                                                       name="usenet.stream_backup_wait" id="usenet.stream_backup_wait"
+                                                       placeholder="0">
+                                                <span class="text-sm opacity-70">Lets an urgent playback read spill to
+                                                    backup providers after waiting this long for a primary slot. Empty
+                                                    or 0 keeps backups for completion only</span>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
@@ -1042,6 +1131,49 @@
                                                 <input type="text" class="input w-full" name="mount.dfs.umask"
                                                        id="mount.dfs.umask" placeholder="0022">
                                                 <span class="text-sm opacity-70">File permissions mask</span>
+                                            </div>
+
+                                            <div>
+                                                <label class="label" for="mount.dfs.drop_behind_margin">
+                                                    <span class="font-medium">Drop Behind Margin</span>
+                                                </label>
+                                                <input type="text" class="input w-full" name="mount.dfs.drop_behind_margin"
+                                                       id="mount.dfs.drop_behind_margin" placeholder="256MB">
+                                                <span class="text-sm opacity-70">Drop the page cache for streamed data
+                                                    this far behind the read head. Empty or 0 disables. Linux
+                                                    only</span>
+                                            </div>
+
+                                            <div>
+                                                <label class="label" for="mount.dfs.fuse_max_background">
+                                                    <span class="font-medium">FUSE Max Background</span>
+                                                </label>
+                                                <input type="number" class="input w-full" name="mount.dfs.fuse_max_background"
+                                                       id="mount.dfs.fuse_max_background" placeholder="64" min="0">
+                                                <span class="text-sm opacity-70">FUSE max background requests (Linux).
+                                                    0 means 64</span>
+                                            </div>
+
+                                            <div>
+                                                <label class="label" for="mount.dfs.fuse_max_read_ahead">
+                                                    <span class="font-medium">FUSE Max Read Ahead</span>
+                                                </label>
+                                                <input type="text" class="input w-full" name="mount.dfs.fuse_max_read_ahead"
+                                                       id="mount.dfs.fuse_max_read_ahead" placeholder="1MB">
+                                                <span class="text-sm opacity-70">FUSE max read-ahead (Linux). Empty
+                                                    means 1MB</span>
+                                            </div>
+
+                                            <div>
+                                                <label class="label cursor-pointer justify-start gap-3">
+                                                    <input type="checkbox" class="checkbox checkbox-primary"
+                                                           name="mount.dfs.disable_cache" id="mount.dfs.disable_cache">
+                                                    <div>
+                                                        <span class="font-medium">Disable Cache</span>
+                                                        <div class="label-text-alt">Stream everything directly; no disk
+                                                            cache writes</div>
+                                                    </div>
+                                                </label>
                                             </div>
                                         </div>
                                     </div>

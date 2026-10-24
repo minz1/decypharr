@@ -278,7 +278,8 @@ class ConfigManager {
         const fields = [
             'log_level', 'url_base', 'bind_address', 'port',
             'min_file_size', 'max_file_size', 'folder_naming',
-            'refresh_dirs', 'disable_webdav', 'app_url'
+            'refresh_dirs', 'disable_webdav', 'app_url',
+            'retries', 'tls_ca_file', 'shared_dir_mode', 'shared_file_mode'
         ];
 
         fields.forEach(field => {
@@ -303,7 +304,7 @@ class ConfigManager {
         const fields = [
             'remove_stalled_after', 'nzb_user_agent', 'download_folder',
             'refresh_interval', 'max_active_downloads', 'skip_pre_cache',
-            'always_rm_tracker_urls', 'default_download_action'
+            'always_rm_tracker_urls', 'default_download_action', 'allow_samples'
         ];
 
         fields.forEach(field => {
@@ -316,6 +317,10 @@ class ConfigManager {
                 }
             }
         });
+
+        if (Array.isArray(config.categories)) {
+            document.querySelector('[name="categories"]').value = config.categories.join(', ');
+        }
     }
 
     populateStrmSettings(strmConfig) {
@@ -479,7 +484,7 @@ class ConfigManager {
             'vfs_cache_poll_interval', 'vfs_read_chunk_size', 'vfs_read_chunk_size_limit', 'buffer_size', 'bw_limit',
             'uid', 'gid', 'vfs_read_ahead', 'attr_timeout', 'dir_cache_time', 'poll_interval', 'umask',
             'no_modtime', 'no_checksum', 'log_level', 'vfs_cache_min_free_space', 'vfs_fast_fingerprint', 'vfs_read_chunk_streams',
-            'async_read', 'use_mmap'
+            'async_read', 'use_mmap', 'vfs_disk_space_total'
         ];
 
         fields.forEach(field => {
@@ -500,7 +505,8 @@ class ConfigManager {
         const fields = [
             'cache_dir', 'disk_cache_size', 'buffer_memory', 'cache_expiry', 'cache_cleanup_interval',
             'chunk_size', 'read_ahead_size', 'daemon_timeout',
-            'uid', 'gid', 'umask'
+            'uid', 'gid', 'umask',
+            'disable_cache', 'drop_behind_margin', 'fuse_max_background', 'fuse_max_read_ahead'
         ];
 
         fields.forEach(field => {
@@ -735,6 +741,15 @@ class ConfigManager {
                                        name="debrid[${index}].priority" id="debrid[${index}].priority" 
                                        placeholder="0" value="0">
                                 <span class="text-sm opacity-70">Lower numbers are tried first</span>
+                            </div>
+                            <div>
+                                <label class="label" for="debrid[${index}].limit">
+                                    <span class=" font-medium">Torrent List Limit</span>
+                                </label>
+                                <input type="number" class="input w-full" min="0"
+                                       name="debrid[${index}].limit" id="debrid[${index}].limit"
+                                       placeholder="0">
+                                <span class="text-sm opacity-70">Real-Debrid only: most torrents to list from the account. Leave 0 on other providers: a listing that reaches the limit is treated as cut off, so removed torrents are not dropped</span>
                             </div>
                         </div>
                     </div>
@@ -1248,6 +1263,15 @@ class ConfigManager {
                         </div>
 
                         <div class="rounded-box bg-base-200/50 px-3 py-2">
+                            <label class="label cursor-pointer justify-start gap-2 p-0"
+                                   title="This arr calls /webhooks/arr/{name} on import, so imports are handled at once instead of on the next poll">
+                                <input type="checkbox" class="checkbox checkbox-sm checkbox-primary"
+                                       name="arr[${index}].import_webhook" id="arr[${index}].import_webhook">
+                                <span class="text-sm leading-tight">Import Webhook</span>
+                            </label>
+                        </div>
+
+                        <div class="rounded-box bg-base-200/50 px-3 py-2">
                             <label class="label p-0 pb-1" for="arr[${index}].download_uncached">
                                 <span class="text-sm leading-tight">Uncached Torrents</span>
                             </label>
@@ -1429,6 +1453,13 @@ class ConfigManager {
             folder_naming: document.querySelector('[name="folder_naming"]')?.value || "",
             disable_webdav: document.querySelector('[name="disable_webdav"]').checked,
             refresh_dirs: document.querySelector('[name="refresh_dirs"]')?.value || "",
+            retries: parseInt(document.querySelector('[name="retries"]').value, 10) || 0,
+            tls_ca_file: document.querySelector('[name="tls_ca_file"]').value,
+            shared_dir_mode: document.querySelector('[name="shared_dir_mode"]').value,
+            shared_file_mode: document.querySelector('[name="shared_file_mode"]').value,
+            allow_samples: document.querySelector('[name="allow_samples"]').checked,
+            categories: document.querySelector('[name="categories"]').value
+                .split(',').map(c => c.trim()).filter(Boolean),
             virtual_folders: this.collectVirtualFolders(),
 
             // Debrid configurations
@@ -1517,7 +1548,8 @@ class ConfigManager {
                 // Backup is optional and defaults false — old form versions
                 // (or missing inputs after a hot-reload) shouldn't accidentally
                 // turn a primary into a backup.
-                backup: backupInput ? backupInput.checked : false
+                backup: backupInput ? backupInput.checked : false,
+                tls_server_name: getField('tls_server_name')?.value ?? ''
             };
 
             if (provider.host && provider.username && provider.password) {
@@ -1539,7 +1571,10 @@ class ConfigManager {
             availability_sample_percent: parseInt(document.querySelector('[name="usenet.availability_sample_percent"]')?.value) || 10,
             import_availability_sample_percent: parseInt(document.querySelector('[name="usenet.import_availability_sample_percent"]')?.value) || 1,
             disk_path: document.querySelector('[name="usenet.disk_path"]')?.value.trim() || "",
-			buffer_memory: document.querySelector('[name="usenet.buffer_memory"]')?.value || ""
+			buffer_memory: document.querySelector('[name="usenet.buffer_memory"]')?.value || "",
+            socket_read_buffer: document.querySelector('[name="usenet.socket_read_buffer"]')?.value ?? '',
+            socket_write_buffer: document.querySelector('[name="usenet.socket_write_buffer"]')?.value ?? '',
+            stream_backup_wait: document.querySelector('[name="usenet.stream_backup_wait"]')?.value ?? ''
         };
     }
 
@@ -1587,7 +1622,8 @@ class ConfigManager {
                 download_uncached: downloadUncachedInput.checked,
                 unpack_rar: unpackRarInput.checked,
                 add_samples: addSamplesInput.checked,
-                user_agent: userAgentInput.value
+                user_agent: userAgentInput.value,
+                limit: parseInt(getField('limit')?.value, 10) || 0
             };
 
             // Handle download API keys
@@ -1624,6 +1660,7 @@ class ConfigManager {
             const downloadUncachedInput = getField('download_uncached');
             const selectedDebridInput = getField('selected_debrid');
             const sourceInput = getField('source');
+            const importWebhookInput = getField('import_webhook');
 
             if (!nameInput || !hostInput || !tokenInput || !skipRepairInput || !downloadUncachedInput || !selectedDebridInput || !sourceInput) {
                 return;
@@ -1635,7 +1672,8 @@ class ConfigManager {
                 token: tokenInput.value,
                 skip_repair: skipRepairInput.checked,
                 selected_debrid: selectedDebridInput.value,
-                source: sourceInput.value
+                source: sourceInput.value,
+                import_webhook: importWebhookInput ? importWebhookInput.checked : false
             };
 
             if (downloadUncachedInput.value !== '') {
@@ -1818,6 +1856,7 @@ class ConfigManager {
             vfs_read_chunk_size: getElementValue('vfs_read_chunk_size', ''),
             vfs_read_chunk_size_limit: getElementValue('vfs_read_chunk_size_limit', 'off'),
             vfs_cache_min_free_space: getElementValue('vfs_cache_min_free_space', ''),
+            vfs_disk_space_total: getElementValue('vfs_disk_space_total'),
             vfs_fast_fingerprint: getElementValue('vfs_fast_fingerprint', false),
             vfs_read_chunk_streams: getElementValue('vfs_read_chunk_streams', 0),
             use_mmap: getElementValue('use_mmap', false),
@@ -1861,6 +1900,10 @@ class ConfigManager {
             uid: getElementValue('uid', 0),
             gid: getElementValue('gid', 0),
             umask: getElementValue('umask'),
+            disable_cache: getElementValue('disable_cache', false),
+            drop_behind_margin: getElementValue('drop_behind_margin'),
+            fuse_max_background: getElementValue('fuse_max_background', 0),
+            fuse_max_read_ahead: getElementValue('fuse_max_read_ahead'),
         };
     }
 
@@ -2392,7 +2435,10 @@ class ConfigManager {
             'availability_sample_percent': usenet.availability_sample_percent,
             'import_availability_sample_percent': usenet.import_availability_sample_percent,
             'disk_path': usenet.disk_path,
-            'buffer_memory': usenet.buffer_memory
+            'buffer_memory': usenet.buffer_memory,
+            'socket_read_buffer': usenet.socket_read_buffer,
+            'socket_write_buffer': usenet.socket_write_buffer,
+            'stream_backup_wait': usenet.stream_backup_wait
         };
 
         Object.entries(streamFields).forEach(([id, value]) => {
@@ -2505,6 +2551,15 @@ class ConfigManager {
                                id="usenet_provider_${index}_backbone"
                                placeholder="Omicron">
                         <span class="text-sm opacity-70">Optional shared article backbone for smarter 430 failover</span>
+                    </div>
+                    <div>
+                        <label class="label" for="usenet_provider_${index}_tls_server_name">
+                            <span class="font-medium">TLS Server Name</span>
+                        </label>
+                        <input type="text" class="input w-full"
+                               name="usenet.providers[${index}].tls_server_name"
+                               id="usenet_provider_${index}_tls_server_name">
+                        <span class="text-sm opacity-70">Certificate name to verify when it differs from the host (resellers). Empty means the host</span>
                     </div>
 
                     <div>
