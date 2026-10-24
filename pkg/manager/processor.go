@@ -286,6 +286,9 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 	}
 
 	dbT, err := client.CheckStatus(debridTorrent)
+	if !m.queue.Contains(entry.InfoHash) {
+		return // removed while the status check ran
+	}
 	if err != nil && transientStatusError(err) {
 		// A network blip or provider hiccup: leave the entry as it is, so the
 		// next queue pass checks again, rather than failing it and deleting

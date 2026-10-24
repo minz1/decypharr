@@ -193,3 +193,60 @@ func TestQueuedTorrentSurvivesTransientStatusErrors(t *testing.T) {
 		})
 	}
 }
+
+type removedDuringPollProvider struct {
+	debrid.Client
+
+	onCheck func()
+	err     error
+}
+
+func (p *removedDuringPollProvider) CheckStatus(torrent *types.Torrent) (*types.Torrent, error) {
+	p.onCheck()
+	torrent.Status = types.TorrentStatusDownloading
+	return torrent, p.err
+}
+
+func (*removedDuringPollProvider) DeleteTorrent(string) error { return nil }
+
+// An entry the arr removes while its status check is in flight stays removed: no error record, no failed grab.
+func TestQueuedTorrentRemovedDuringStatusCheckStaysRemoved(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"provider torrent already deleted", customerror.ErrTorrentNotFound},
+		{"still downloading", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store, err := storage.NewStorage(t.TempDir(), storage.Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			m := withTestConfig(t, &Manager{
+				queue: newQueue(store, "", nil, zerolog.Nop()), clients: xsync.NewMap[string, debrid.Client](),
+				logger: zerolog.Nop(), processingEntries: xsync.NewMap[string, struct{}](),
+			})
+			entry := &storage.Entry{
+				InfoHash: "0123456789012345678901234567890123456789", Name: "release", Manual: true,
+				Protocol: config.ProtocolTorrent, ActiveProvider: "provider", State: storage.EntryStateDownloading,
+				Providers: map[string]*storage.ProviderEntry{"provider": {Provider: "provider", ID: "id"}},
+			}
+			m.clients.Store("provider", &removedDuringPollProvider{err: tc.err, onCheck: func() {
+				if deleteErr := m.queue.Delete(entry.InfoHash, false, nil); deleteErr != nil {
+					t.Error(deleteErr)
+				}
+			}})
+			if addErr := m.queue.Add(entry); addErr != nil {
+				t.Fatal(addErr)
+			}
+			m.processQueuedTorrent(entry)
+			if m.queue.Contains(entry.InfoHash) {
+				t.Fatal("the removed entry was written back")
+			}
+		})
+	}
+}
