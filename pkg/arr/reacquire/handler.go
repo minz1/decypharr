@@ -142,7 +142,7 @@ func (handler *arrHandler) prepare(ctx context.Context, job Job) (reacquirePlan,
 		if !plan.failure.grabFound {
 			return reacquirePlan{}, fmt.Errorf("interactive reacquisition requires exact grab history")
 		}
-		if autoRedownloadsFailure(downloadConfig, plan.failure) {
+		if downloadConfig.RedownloadsFailed(plan.failure.grabRecord) {
 			return reacquirePlan{}, fmt.Errorf(
 				"interactive reacquisition requires automatic failed-download redownload to be disabled",
 			)
@@ -196,7 +196,7 @@ func (handler *arrHandler) failHistory(
 			return handler.searchBindings(ctx, instance, job, bindings, progress)
 		}
 	}
-	if !autoRedownloadsFailure(config, failure) {
+	if !config.RedownloadsFailed(failure.grabRecord) {
 		return handler.searchBindings(ctx, instance, job, bindings, progress)
 	}
 	return StatusWaitingForGrab, nil
@@ -245,10 +245,6 @@ func (handler *arrHandler) prepareExactDownloadFailure(
 		historyID:  record.ID,
 		grabRecord: record,
 	}, nil
-}
-
-func autoRedownloadsFailure(config arr.DownloadClientConfig, failure exactDownloadFailure) bool {
-	return config.RedownloadsFailed(failure.grabRecord)
 }
 
 // failureCoversGrab reports whether a failed-download record answers the latest grab; a missing record has ID 0.

@@ -201,8 +201,8 @@ func TestAutoRedownloadsFailureHonorsInteractiveSourceConfig(t *testing.T) {
 			failure := exactDownloadFailure{
 				grabRecord: arr.HistoryRecord{Data: map[string]string{"releaseSource": test.source}},
 			}
-			if got := autoRedownloadsFailure(test.config, failure); got != test.want {
-				t.Fatalf("autoRedownloadsFailure() = %v, want %v", got, test.want)
+			if got := test.config.RedownloadsFailed(failure.grabRecord); got != test.want {
+				t.Fatalf("RedownloadsFailed() = %v, want %v", got, test.want)
 			}
 		})
 	}
