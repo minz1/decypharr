@@ -37,6 +37,7 @@ type researchArr struct {
 	searchLost     bool // with searchHangsUp, the arr never queues it
 	received       []Command
 	commandsFail   bool
+	commandReads   int
 	clock          *fakeClock // when set, stamps received commands and is advanced by replyDelay before a hang-up
 	replyDelay     time.Duration
 	seasons        map[seasonKey][]int
@@ -84,6 +85,7 @@ func (a *researchArr) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodDelete && r.URL.Path == "/api/v3/queue/bulk":
 		a.bulkDelete(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v3/command":
+		a.commandReads++
 		if a.commandsFail {
 			http.Error(w, "no", http.StatusUnauthorized)
 			return
@@ -559,4 +561,30 @@ func TestCleanupQueueGivesUpOnAHeldSearchNeutrally(t *testing.T) {
 	if !strings.Contains(got, "episode search not done after 1h") || strings.Contains(got, "still refused") {
 		t.Fatalf("give-up log = %s, want a neutral give-up", got)
 	}
+}
+
+// A search of unknown outcome held while the arr's command list is unreadable reads that list at most once per
+// retry delay, not every tick.
+func TestCleanupQueueReadsCommandsForAHeldSearchOncePerRetryDelay(t *testing.T) {
+	t.Parallel()
+	fake := newResearchArr(missingRecord(1, 11, "a", false))
+	fake.searchHangsUp, fake.searchLost = true, true
+	service := researchService(t, fake, Sonarr)
+	clock := &fakeClock{now: time.Date(2026, 10, 22, 0, 0, 0, 0, time.UTC)}
+	service.now = clock.Now
+	runCleanup(t, service, "tv", 1)
+	fake.update(func(a *researchArr) { a.searchHangsUp, a.searchLost, a.commandsFail = false, false, true })
+	for _, step := range []time.Duration{20 * time.Second, 20 * time.Second, 20 * time.Second, 30 * time.Second, 30 * time.Second} {
+		clock.advance(step)
+		runCleanup(t, service, "tv", 2)
+	}
+
+	fake.update(func(a *researchArr) {
+		if a.commandReads != 2 {
+			t.Errorf("command list reads = %d, want 2", a.commandReads)
+		}
+		if a.commands != 1 {
+			t.Errorf("search commands sent = %d, want 1", a.commands)
+		}
+	})
 }
