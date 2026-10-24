@@ -296,7 +296,7 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 		m.logger.Warn().Err(err).Str("name", entry.Name).Msg("Status check failed; retrying on the next pass")
 		return
 	}
-	m.releaseLeftSlot(entry.ActiveProvider, placement, dbT, err)
+	m.releaseLeftSlot(entry, placement, dbT, err)
 	if err != nil {
 		m.logger.Error().Err(err).Str("name", entry.Name).Msg("Error checking status")
 		if releaseIsDead(dbT, err) {
@@ -345,9 +345,27 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 	_ = m.queue.Update(entry)
 	// Check if done or failed
 	if debridTorrent.Status == debridTypes.TorrentStatusDownloaded {
-		refreshFinishedPlacement(entry, placement, debridTorrent)
-		m.processAction(entry)
+		m.finishDownloaded(entry, placement, debridTorrent)
 	}
+}
+
+// finishDownloaded runs the action once the entry can take the finished torrent's files; the next poll retries until then.
+func (m *Manager) finishDownloaded(
+	entry *storage.Entry,
+	placement *storage.ProviderEntry,
+	finished *debridTypes.Torrent,
+) {
+	if awaitingLinks(entry, finished) {
+		m.logger.Debug().Str("name", entry.Name).Msg("Downloaded, waiting for file links before the action")
+		return
+	}
+	refreshFinishedPlacement(entry, placement, finished)
+	m.processAction(entry)
+}
+
+// awaitingLinks reports a downloaded torrent whose files the entry can't take yet: it knows none and some lack a link.
+func awaitingLinks(entry *storage.Entry, finished *debridTypes.Torrent) bool {
+	return len(entry.Files) == 0 && len(finished.Files) > 0 && !isComplete(finished.Files)
 }
 
 // refreshFinishedPlacement stores the finished placement, and the entry's files if it had none, once every file has a link.
@@ -365,18 +383,18 @@ func refreshFinishedPlacement(entry *storage.Entry, old *storage.ProviderEntry, 
 	placement.DownloadedAt = &now
 }
 
-// releaseLeftSlot wakes a job waiting on provider once the placement finished or failed there, and marks a failed one.
+// releaseLeftSlot wakes a job waiting on the entry's provider once the placement finished or failed there, and marks a failed one.
 func (m *Manager) releaseLeftSlot(
-	provider string,
+	entry *storage.Entry,
 	placement *storage.ProviderEntry,
 	dbT *debridTypes.Torrent,
 	err error,
 ) {
 	failed := err != nil || dbT == nil || dbT.Status == debridTypes.TorrentStatusError
-	if !failed && dbT.Status != debridTypes.TorrentStatusDownloaded {
+	if !failed && (dbT.Status != debridTypes.TorrentStatusDownloaded || awaitingLinks(entry, dbT)) {
 		return
 	}
-	m.slotFreed(provider)
+	m.slotFreed(entry.ActiveProvider)
 	if failed {
 		placement.Status = debridTypes.TorrentStatusError
 	}

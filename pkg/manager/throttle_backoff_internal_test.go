@@ -645,13 +645,6 @@ func TestFinishedQueuedTorrentLeftForSync(t *testing.T) {
 			}},
 			entryFiles: addTimeFiles(),
 		},
-		// TorBox reports "completed" before DownloadFinished, when its files carry no torbox:// links yet.
-		"an entry without files whose torrent has no links": {
-			provider: &finishingProvider{files: map[string]types.File{
-				"a.mkv": {TorrentID: "id", ID: "1", Name: "a.mkv", Path: "a.mkv", Size: 1},
-			}},
-			entryFiles: map[string]*storage.File{},
-		},
 		"another provider's torrent": {
 			provider:   &finishingProvider{debrid: "other", files: linkedFiles()},
 			entryFiles: addTimeFiles(),
@@ -680,6 +673,72 @@ func TestFinishedQueuedTorrentLeftForSync(t *testing.T) {
 				t.Fatalf("stored placement files = %+v, want the add-time files kept", placement.Files)
 			}
 		})
+	}
+}
+
+// TorBox reports "completed" before DownloadFinished, when its files carry no torbox:// links yet.
+func TestFinishedTorrentWithoutLinksWaitsForThemBeforeTheAction(t *testing.T) {
+	t.Parallel()
+	m := newShutdownTestManager(t, filepath.Join(t.TempDir(), "db"))
+	provider := &finishingProvider{files: map[string]types.File{
+		"a.mkv": {TorrentID: "id", ID: "1", Name: "a.mkv", Path: "a.mkv", Size: 1},
+	}}
+	m.clients.Store("provider", provider)
+	entry := &storage.Entry{
+		InfoHash:       "done",
+		Name:           "done",
+		Protocol:       config.ProtocolTorrent,
+		ActiveProvider: "provider",
+		Status:         types.TorrentStatusDownloading,
+		State:          storage.EntryStateDownloading,
+		Action:         config.DownloadActionNone,
+		Providers: map[string]*storage.ProviderEntry{"provider": {
+			Provider: "provider",
+			ID:       "id",
+			Status:   types.TorrentStatusDownloading,
+		}},
+		Files: map[string]*storage.File{},
+	}
+	if err := m.queue.Add(entry); err != nil {
+		t.Fatal(err)
+	}
+	m.jobQueue, _ = startRecordingQueue(t)
+	m.jobQueue.WaitForSlot(&Job{ID: "next"}, []string{"provider"}, time.Hour)
+
+	m.processQueuedTorrent(entry)
+	if _, err := m.storage.Get(entry.InfoHash); err == nil {
+		t.Fatal("the action ran before the finished torrent's files had links")
+	}
+	queued, err := m.queue.GetTorrent(entry.InfoHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queued.State != storage.EntryStateDownloading || queued.Status != types.TorrentStatusDownloading ||
+		queued.IsDownloading {
+		t.Fatalf("queued entry = state %s status %s downloading %t, want it left for the next poll",
+			queued.State, queued.Status, queued.IsDownloading)
+	}
+	if waitingJobs(m.jobQueue) != 1 {
+		t.Fatal("a slot was announced before the placement finished")
+	}
+
+	provider.files = map[string]types.File{
+		"a.mkv": {TorrentID: "id", ID: "1", Name: "a.mkv", Path: "a.mkv", Size: 1, Link: "torbox://id/1"},
+	}
+	m.processQueuedTorrent(queued)
+	stored, err := m.storage.Get(entry.InfoHash)
+	if err != nil {
+		t.Fatalf("the action did not run once the links appeared: %v", err)
+	}
+	if len(stored.Files) != 1 || stored.Providers["provider"].Files["a.mkv"].Link != "torbox://id/1" {
+		t.Fatalf(
+			"stored files %v, placement %+v",
+			slices.Collect(maps.Keys(stored.Files)),
+			stored.Providers["provider"],
+		)
+	}
+	if waitingJobs(m.jobQueue) != 0 {
+		t.Fatal("the finished placement did not wake the job waiting on its provider")
 	}
 }
 
