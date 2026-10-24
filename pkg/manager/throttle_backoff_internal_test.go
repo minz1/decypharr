@@ -423,7 +423,7 @@ func TestWokenJobThatDoesNotUseTheSlotPassesItOn(t *testing.T) {
 			m := &Manager{logger: zerolog.Nop()}
 			m.jobQueue, _ = startRecordingQueue(t)
 			m.jobQueue.WaitForSlot(&Job{ID: "next"}, []string{"torbox"}, time.Hour)
-			m.passOnUnusedSlot(tc.job, tc.job.wokenBy, tc.err)
+			m.passOnUnusedSlot(tc.job, tc.err)
 			if woke := waitingJobs(m.jobQueue) == 0; woke != tc.wantWake {
 				t.Fatalf("woke the next job = %v, want %v", woke, tc.wantWake)
 			}

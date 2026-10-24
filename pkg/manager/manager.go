@@ -451,8 +451,6 @@ func (m *Manager) processJob(ctx context.Context, job *Job) {
 		return
 	}
 
-	wokenBy := job.wokenBy
-	job.wokenBy = ""
 	var err error
 	switch job.Type {
 	case JobTypeTorrent:
@@ -463,7 +461,7 @@ func (m *Manager) processJob(ctx context.Context, job *Job) {
 		err = fmt.Errorf("unknown job type: %s", job.Type)
 	}
 
-	m.passOnUnusedSlot(job, wokenBy, err)
+	m.passOnUnusedSlot(job, err)
 	if err != nil && ctx.Err() == nil {
 		m.handleJobError(job, err)
 	}
@@ -889,8 +887,9 @@ func (m *Manager) slotFreed(provider string) {
 	}
 }
 
-// passOnUnusedSlot wakes the next job waiting on provider when the job a freed slot there woke did not take it.
-func (m *Manager) passOnUnusedSlot(job *Job, provider string, err error) {
+// passOnUnusedSlot wakes the next job waiting on the provider whose freed slot woke job, if job did not take it.
+func (m *Manager) passOnUnusedSlot(job *Job, err error) {
+	provider := job.wokenBy
 	if provider == "" {
 		return
 	}
