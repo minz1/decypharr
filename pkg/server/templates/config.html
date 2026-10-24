@@ -215,8 +215,8 @@
                                     </label>
                                     <input type="number" class="input w-full" id="retries" name="retries" min="0"
                                            placeholder="3">
-                                    <span class="text-sm opacity-70">Consecutive errors before switching debrid; also the
-                                        retry count for debrid, usenet and DFS reads. 0 means 3</span>
+                                    <span class="text-sm opacity-70">Retry count for debrid API calls, usenet and DFS reads.
+                                        0 means 3</span>
                                 </div>
                                 <div>
                                     <label class="label" for="tls_ca_file">
@@ -225,7 +225,7 @@
                                     <input type="text" class="input w-full" id="tls_ca_file" name="tls_ca_file"
                                            placeholder="/etc/ssl/lan-ca.pem">
                                     <span class="text-sm opacity-70">Path on the server to a PEM bundle of extra CAs
-                                        trusted for outgoing TLS (debrid, arrs, usenet). Certificates are always
+                                        trusted for all outgoing TLS. Certificates are always
                                         verified</span>
                                 </div>
                                 <div>
@@ -360,7 +360,7 @@
                                 </label>
                                 <input type="text" class="input w-full" id="categories" name="categories"
                                        placeholder="sonarr, radarr">
-                                <span class="text-sm opacity-70">qBittorrent/SABnzbd categories offered to the arrs. Empty means sonarr, radarr</span>
+                                <span class="text-sm opacity-70">qBittorrent/SABnzbd categories offered to the arrs. Empty means sonarr, radarr. Applies after a restart</span>
                             </div>
                             <div>
                                 <label class="label cursor-pointer justify-start gap-3">
