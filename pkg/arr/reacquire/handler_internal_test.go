@@ -719,6 +719,28 @@ func TestSettledEarlierBlocklistCoversTheCurrentGrab(t *testing.T) {
 	}
 }
 
+// A history outage before the first blocklist is sent leaves the job to retry, not failed for good.
+func TestBlocklistLookupOutageIsRetried(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if strings.HasPrefix(request.URL.Path, "/api/v3/history/failed/") {
+			t.Errorf("blocklist sent during a history outage")
+		}
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	t.Cleanup(server.Close)
+	job := Job{}
+	err := newTestHandler(server.URL).executeExactDownloadFailure(
+		t.Context(), testInstance(server.URL), &job, exactDownloadFailure{
+			found: true, grabFound: true, downloadID: "download-1", historyID: 12,
+			grabRecord: arr.HistoryRecord{ID: 12},
+		}, &recordedProgress{},
+	)
+	if !errors.Is(err, arr.ErrMutationOutcomeUnknown) {
+		t.Fatalf("err = %v, want an unknown outcome the worker retries", err)
+	}
+}
+
 func TestRegrabSearchSettlesOnlySearches(t *testing.T) {
 	t.Parallel()
 	queued := time.Now().UTC().Add(-time.Minute)

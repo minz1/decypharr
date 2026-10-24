@@ -360,19 +360,16 @@ func (handler *arrHandler) sendBlocklist(
 		}
 		return record.ID, failureCoversGrab(record, grab), nil
 	}
-	if mutation.Attempts == 0 {
-		// An earlier blocklist of the same download fails this grab too.
-		receiptID, covered, err := lookup(mutation)
-		if err != nil {
-			return err
-		}
-		if covered {
-			return confirmMutation(job, progress, StatusBlocklisting, mutation, receiptID)
-		}
+	// Looked up even before the first send: an earlier blocklist of the same download fails this grab too.
+	receiptID, covered, err := lookup(mutation)
+	if err != nil {
+		return unavailableMutationReconciliation(mutation, err)
 	}
-	done, err := reconcileAttempted(job, progress, StatusBlocklisting, mutation, lookup)
-	if err != nil || done {
-		return err
+	if covered {
+		return confirmMutation(job, progress, StatusBlocklisting, mutation, receiptID)
+	}
+	if redispatchErr := mutationRedispatchError(mutation); redispatchErr != nil {
+		return redispatchErr
 	}
 	mutation, err = recordMutationAttempt(job, progress, StatusBlocklisting, mutation)
 	if err != nil {
