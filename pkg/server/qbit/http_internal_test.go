@@ -6,12 +6,20 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
+	debrid "github.com/sirrobot01/decypharr/pkg/debrid/common"
+	"github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/manager/managertest"
+	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
 func TestHandleLoginAlwaysReturnsSID(t *testing.T) {
@@ -118,5 +126,79 @@ func TestWriteTorrentAddErrorPreservesSemantics(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+type refusingProvider struct {
+	debrid.Client
+
+	name    string
+	err     error
+	submits atomic.Int64
+}
+
+func (p *refusingProvider) Config() config.Debrid {
+	return config.Debrid{Name: p.name, Provider: p.name}
+}
+func (p *refusingProvider) Logger() zerolog.Logger     { return zerolog.Nop() }
+func (p *refusingProvider) DeleteTorrent(string) error { return nil }
+func (p *refusingProvider) SubmitMagnet(*types.Torrent) (*types.Torrent, error) {
+	p.submits.Add(1)
+	return nil, p.err
+}
+
+// An add RealDebrid blocks while TorBox is at its active-download cap is accepted as queued and retried when a
+// TorBox slot frees, not when a RealDebrid one does.
+func TestAddBlockedOnOneProviderThrottledOnAnotherIsQueued(t *testing.T) {
+	t.Parallel()
+	mgr, store := managertest.New(t, func(cfg *config.Config) { cfg.UseAuth = false })
+	realDebrid := &refusingProvider{name: "realdebrid", err: customerror.ErrTorrentBlocked}
+	torBox := &refusingProvider{
+		name: "torbox", err: fmt.Errorf("torbox queued it: %w", customerror.ErrTooManyActiveDownloads),
+	}
+	mgr.Clients().Store(realDebrid.name, realDebrid)
+	mgr.Clients().Store(torBox.name, torBox)
+	routes := New(mgr, store, zerolog.Nop()).Routes()
+
+	const hash = "0123456789abcdef0123456789abcdef01234567"
+	form := url.Values{"urls": {"magnet:?xt=urn:btih:" + hash + "&dn=release"}, "category": {"sonarr"}}
+	if w := postForm(routes, "/torrents/add", form); w.Code != http.StatusOK {
+		t.Fatalf("add status = %d: %s", w.Code, w.Body.String())
+	}
+	if realDebrid.submits.Load() != 1 || torBox.submits.Load() != 1 {
+		t.Fatalf("submits realdebrid=%d torbox=%d, want 1 each", realDebrid.submits.Load(), torBox.submits.Load())
+	}
+
+	w := httptest.NewRecorder()
+	routes.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/torrents/info", nil))
+	var listed []Torrent
+	if err := json.Unmarshal(w.Body.Bytes(), &listed); err != nil || len(listed) != 1 {
+		t.Fatalf("decode %q: %v", w.Body.String(), err)
+	}
+	if listed[0].Hash != hash || listed[0].State != "queuedDL" {
+		t.Fatalf("listed %s in state %q, want %s queuedDL", listed[0].Hash, listed[0].State, hash)
+	}
+
+	slot := func(provider string) *storage.ProviderEntry {
+		return &storage.ProviderEntry{Provider: provider, ID: "other", Status: types.TorrentStatusDownloading}
+	}
+	if err := mgr.RemoveFromProvider(slot(realDebrid.name)); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	if got := torBox.submits.Load(); got != 1 {
+		t.Fatalf("a freed realdebrid slot resubmitted the add (torbox submits = %d)", got)
+	}
+	if err := mgr.RemoveFromProvider(slot(torBox.name)); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); torBox.submits.Load() < 2; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("a freed torbox slot did not resubmit the add")
+		}
+	}
+	entry, err := mgr.Queue().GetTorrent(hash)
+	if err != nil || entry.Status != types.TorrentStatusQueued {
+		t.Fatalf("entry after the retry = %+v, %v; want still queued", entry, err)
 	}
 }
