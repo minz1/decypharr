@@ -15,6 +15,7 @@ type LibraryRequest struct {
 	ArrFileID   int
 	LibraryPath string
 	Cause       Cause
+	Strategy    Strategy
 }
 
 // ReacquireLibraryFile verifies an unindexed file before it queues replacement.
@@ -27,8 +28,8 @@ func (s *Service) ReacquireLibraryFile(ctx context.Context, request LibraryReque
 	if s.arrs == nil {
 		return nil, errors.New("arr registry is unavailable")
 	}
-	if request.ArrFileID <= 0 || request.LibraryPath == "" || !request.Cause.valid() {
-		return nil, errors.New("arr file ID, library path, and cause are required")
+	if request.ArrFileID <= 0 || request.LibraryPath == "" || !request.Cause.valid() || !request.Strategy.valid() {
+		return nil, errors.New("arr file ID, library path, cause and a valid strategy are required")
 	}
 	instance, ok := s.arrs.Get(request.ArrName)
 	if !ok {
@@ -39,7 +40,7 @@ func (s *Service) ReacquireLibraryFile(ctx context.Context, request LibraryReque
 			return nil, ErrBindingUnsafe
 		}
 		return s.enqueue(Request{EntryID: binding.EntryID, FileID: binding.EntryFileID,
-			Cause: request.Cause, Strategy: StrategyHistoryFailed}, binding)
+			Cause: request.Cause, Strategy: request.Strategy.normalized()}, binding)
 	}
 	fileID := strconv.Itoa(request.ArrFileID)
 	entryID := "arr-library:" + instance.Fingerprint() + ":" + fileID

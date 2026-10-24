@@ -340,3 +340,62 @@ func assertImportTimeoutOutcome(
 		t.Fatalf("persisted status = %s, want %s", saved.Status, want)
 	}
 }
+
+func TestBoundLibraryRequestKeepsItsStrategy(t *testing.T) {
+	t.Parallel()
+	registry := arr.New(config.NewStore(&config.Config{}), nil, zerolog.Nop())
+	registry.AddOrUpdate(arr.Arr{Name: "movies", Type: arr.Radarr, Host: "http://127.0.0.1:1", Token: "token"})
+	instance, _ := registry.Get("movies")
+	tests := []struct {
+		name     string
+		strategy Strategy
+		want     Strategy
+	}{
+		{name: "command search", strategy: StrategyCommandSearch, want: StrategyCommandSearch},
+		{name: "empty", want: StrategyHistoryFailed},
+		{name: "invalid", strategy: "bogus"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			service := startTestService(t, t.TempDir(), registry)
+			binding := Binding{
+				ArrName: instance.Name, ArrType: instance.Type, ArrInstanceFingerprint: instance.Fingerprint(),
+				EntryID: "managed-entry", EntryFileID: "file", DownloadID: "download",
+				ArrFileID: 42, LibraryPath: "/library/movie.mkv", MovieID: 9, Confidence: ConfidenceExactPath,
+			}
+			if err := service.UpsertBinding(binding); err != nil {
+				t.Fatal(err)
+			}
+			job, err := service.ReacquireLibraryFile(t.Context(), LibraryRequest{
+				ArrName: "movies", ArrFileID: 42, LibraryPath: "/library/movie.mkv", Cause: CauseRepair,
+				Strategy: tt.strategy,
+			})
+			if tt.want == "" {
+				if err == nil || len(service.Jobs()) != 0 {
+					t.Fatalf("invalid strategy: job=%v err=%v jobs=%d", job, err, len(service.Jobs()))
+				}
+				return
+			}
+			if err != nil || job.Strategy != tt.want {
+				t.Fatalf("job=%v err=%v, want strategy %q", job, err, tt.want)
+			}
+		})
+	}
+}
+
+func TestUnboundLibraryRequestRejectsInvalidStrategy(t *testing.T) {
+	t.Parallel()
+	fake := &fakeRadarrLibrary{}
+	server := httptest.NewServer(fake)
+	defer server.Close()
+	registry := arr.New(config.NewStore(&config.Config{}), nil, zerolog.Nop())
+	registry.AddOrUpdate(arr.Arr{Name: "movies", Type: arr.Radarr, Host: server.URL, Token: "token"})
+	service := startTestService(t, t.TempDir(), registry)
+	job, err := service.ReacquireLibraryFile(t.Context(), LibraryRequest{
+		ArrName: "movies", ArrFileID: 42, LibraryPath: "/library/movie.mkv", Cause: CauseRepair, Strategy: "bogus",
+	})
+	if err == nil || len(service.Jobs()) != 0 {
+		t.Fatalf("job=%v err=%v jobs=%d", job, err, len(service.Jobs()))
+	}
+}
