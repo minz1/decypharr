@@ -1,6 +1,7 @@
 package qbit
 
 import (
+	"encoding/json"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -136,5 +137,31 @@ func TestDeleteUnknownHashSucceeds(t *testing.T) {
 				t.Fatal("known hash was not deleted")
 			}
 		})
+	}
+}
+
+// Entries synced before progress moved to 0..1 kept the providers' 0-100 scale.
+func TestTorrentsInfoReportsPercentScaleProgressAsFraction(t *testing.T) {
+	t.Parallel()
+	mgr, store := managertest.New(t, func(cfg *config.Config) { cfg.UseAuth = false })
+	entry := &storage.Entry{
+		InfoHash: "old",
+		Name:     "old",
+		Category: "sonarr",
+		Protocol: config.ProtocolTorrent,
+		Progress: 100,
+		Size:     10,
+	}
+	if err := mgr.Queue().Add(entry); err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	New(mgr, store, zerolog.Nop()).Routes().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/torrents/info", nil))
+	var got []Torrent
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || len(got) != 1 {
+		t.Fatalf("decode %q: %v", w.Body.String(), err)
+	}
+	if got[0].Progress != 1 || got[0].AmountLeft != 0 {
+		t.Fatalf("progress = %v, amount left = %d, want 1 and 0", got[0].Progress, got[0].AmountLeft)
 	}
 }

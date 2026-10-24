@@ -155,3 +155,65 @@ func TestDeleteQueuedMissingEntryIsAlreadyDeleted(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadedProgressIsAFraction(t *testing.T) {
+	t.Parallel()
+	legacy := (&CachedTorrent{InfoHash: "legacy", Debrid: "rd", ID: "rd-1", Progress: 100}).ToManagedTorrent()
+	tests := []struct {
+		name         string
+		entry        *Entry
+		want         float64
+		wantProvider float64
+	}{
+		{
+			"percent scale",
+			&Entry{
+				InfoHash:  "percent",
+				Progress:  100,
+				Providers: map[string]*ProviderEntry{"rd": {Provider: "rd", Progress: 42}},
+			},
+			1,
+			0.42,
+		},
+		{
+			"fraction unchanged",
+			&Entry{
+				InfoHash:  "fraction",
+				Progress:  0.42,
+				Providers: map[string]*ProviderEntry{"rd": {Provider: "rd", Progress: 0.42}},
+			},
+			0.42,
+			0.42,
+		},
+		{
+			"exactly one",
+			&Entry{
+				InfoHash:  "one",
+				Progress:  1,
+				Providers: map[string]*ProviderEntry{"rd": {Provider: "rd", Progress: 1}},
+			},
+			1,
+			1,
+		},
+		{"legacy migration copy", legacy, 1, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			s, _ := newQueueTestStorage(t)
+			if err := s.AddQueue(tt.entry); err != nil {
+				t.Fatal(err)
+			}
+			got, err := s.GetQueued(tt.entry.InfoHash)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Progress != tt.want {
+				t.Fatalf("entry progress = %v, want %v", got.Progress, tt.want)
+			}
+			if p := got.Providers["rd"].Progress; p != tt.wantProvider {
+				t.Fatalf("provider progress = %v, want %v", p, tt.wantProvider)
+			}
+		})
+	}
+}

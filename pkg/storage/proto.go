@@ -110,7 +110,7 @@ func protoToProviderEntry(pb *ProviderEntryProto) *ProviderEntry {
 		Provider: pb.GetProvider(),
 		ID:       pb.GetId(),
 		Status:   debridTypes.TorrentStatus(pb.GetStatus()),
-		Progress: pb.GetProgress(),
+		Progress: progressFraction(pb.GetProgress()),
 		Files:    make(map[string]*ProviderFile),
 	}
 	if pb.GetAddedAtUnix() != 0 {
@@ -203,6 +203,16 @@ func EntryToProto(e *Entry) *EntryProto {
 	return pb
 }
 
+// legacyPercentScale is the providers' 0-100 progress that entries stored before progress moved to 0..1 kept.
+const legacyPercentScale = 100.0
+
+func progressFraction(p float64) float64 {
+	if p > 1 {
+		return p / legacyPercentScale
+	}
+	return p
+}
+
 func ProtoToEntry(pb *EntryProto) *Entry {
 	e := &Entry{
 		Protocol:         config.Protocol(pb.GetProtocol()),
@@ -219,7 +229,7 @@ func ProtoToEntry(pb *EntryProto) *Entry {
 		Files:            make(map[string]*File),
 		State:            TorrentState(pb.GetState()),
 		Status:           debridTypes.TorrentStatus(pb.GetStatus()),
-		Progress:         pb.GetProgress(),
+		Progress:         progressFraction(pb.GetProgress()),
 		Speed:            pb.GetSpeed(),
 		Seeders:          int(pb.GetSeeders()),
 		IsComplete:       pb.GetIsComplete(),
