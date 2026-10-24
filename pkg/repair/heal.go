@@ -48,12 +48,7 @@ func (r *Service) healBrokenEntry(
 		return nil
 	}
 
-	blocklist := make(map[string]bool)
-	for _, broken := range files {
-		if strategyForReason(broken.Reason) == reacquire.StrategyHistoryFailed {
-			blocklist[broken.InfoHash] = true
-		}
-	}
+	blocklist := blocklistedReleases(files)
 	initiated := 0
 	failed := 0
 	var unhealed []storage.BrokenFile
@@ -70,23 +65,16 @@ func (r *Service) healBrokenEntry(
 			strategy = reacquire.StrategyHistoryFailed
 		}
 		job, err := r.reacquireBrokenFile(ctx, broken, strategy)
-		switch err {
-		case nil:
-			initiated++
-			r.logger.Info().
-				Str("arr", broken.ArrName).
-				Str("entry_id", broken.InfoHash).
-				Str("file", broken.FileName).
-				Str("job_id", job.ID).
-				Msg("Repair: queued Arr reacquisition")
-		default:
-			failed++
-			r.logger.Warn().Err(err).
-				Str("arr", broken.ArrName).
-				Str("entry_id", broken.InfoHash).
-				Str("file", broken.FileName).
-				Msg("Repair: failed to queue Arr reacquisition")
+		if err != nil && ctx != nil && ctx.Err() != nil {
+			unhealed = files[i:]
+			break
 		}
+		r.logReacquire(broken, job, err)
+		if err != nil {
+			failed++
+			continue
+		}
+		initiated++
 	}
 
 	if initiated == 0 && failed == 0 {
@@ -100,6 +88,34 @@ func (r *Service) healBrokenEntry(
 	r.saveRun(run)
 	statsMu.Unlock()
 	return unhealed
+}
+
+// blocklistedReleases returns the InfoHashes with a release-content failure among files.
+func blocklistedReleases(files []storage.BrokenFile) map[string]bool {
+	blocklist := make(map[string]bool)
+	for _, broken := range files {
+		if strategyForReason(broken.Reason) == reacquire.StrategyHistoryFailed {
+			blocklist[broken.InfoHash] = true
+		}
+	}
+	return blocklist
+}
+
+func (r *Service) logReacquire(broken storage.BrokenFile, job *reacquire.Job, err error) {
+	if err != nil {
+		r.logger.Warn().Err(err).
+			Str("arr", broken.ArrName).
+			Str("entry_id", broken.InfoHash).
+			Str("file", broken.FileName).
+			Msg("Repair: failed to queue Arr reacquisition")
+		return
+	}
+	r.logger.Info().
+		Str("arr", broken.ArrName).
+		Str("entry_id", broken.InfoHash).
+		Str("file", broken.FileName).
+		Str("job_id", job.ID).
+		Msg("Repair: queued Arr reacquisition")
 }
 
 // Reasons for a failure in the release's own content.

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -27,6 +28,7 @@ type sweepFixture struct {
 	store      *storage.Storage
 	service    *Service
 	reacquirer *fakeReacquirer
+	backend    *removedProviderBackend
 	entry      *storage.Entry
 	run        *storage.RepairRun
 }
@@ -53,7 +55,8 @@ func newSweepFixture(t *testing.T, fileNames ...string) *sweepFixture {
 	backend := &removedProviderBackend{reinsert: func(*storage.Entry) error { return errors.New("no replacement") }}
 	service := New(Dependencies{Storage: store, Backend: backend, Reacquirer: reacquirer})
 	return &sweepFixture{
-		store: store, service: service, reacquirer: reacquirer, entry: entry, run: &storage.RepairRun{ID: "run"},
+		store: store, service: service, reacquirer: reacquirer, backend: backend, entry: entry,
+		run: &storage.RepairRun{ID: "run"},
 	}
 }
 
@@ -78,6 +81,37 @@ func (f *sweepFixture) probe(ctx context.Context, t *testing.T, confirm bool) ma
 		t.Fatal(err)
 	}
 	return candidates
+}
+
+// serveRadarr serves one Radarr movie per entry file, each a symlink into the entry.
+func (f *sweepFixture) serveRadarr(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	var movies []string
+	for name := range f.entry.Files {
+		link := filepath.Join(dir, name)
+		if err := os.Symlink(filepath.Join("/mnt/decypharr", f.entry.Name, name), link); err != nil {
+			t.Fatal(err)
+		}
+		id := len(movies) + 1
+		movies = append(movies, fmt.Sprintf(`{"id":%d,"title":%q,"movieFile":{"id":%d,"path":%q}}`, id, name, id, link))
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v3/movie" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = fmt.Fprintf(w, "[%s]", strings.Join(movies, ","))
+	}))
+	t.Cleanup(server.Close)
+	registry := arr.New(config.NewStore(&config.Config{}), nil, zerolog.Nop())
+	registry.AddOrUpdate(arr.Arr{Name: "radarr", Host: server.URL, Token: "token", Type: arr.Radarr})
+	f.service.arrs = registry
+}
+
+func (f *sweepFixture) sweep(ctx context.Context, stop *repairStopState) {
+	autoRepair := true
+	f.service.executeSweep(ctx, &storage.RepairRun{ID: "sweep"}, RunOptions{AutoRepair: &autoRepair}, stop)
 }
 
 func (f *sweepFixture) setStoredStatus(t *testing.T, status storage.HealthStatus) {
@@ -105,6 +139,51 @@ func TestSweepReacquiresOnSecondBrokenProbe(t *testing.T) {
 	f.probe(t.Context(), t, true)
 	if len(f.reacquirer.requests) != 1 || f.reacquirer.requests[0].FileID != "id-video.mkv" {
 		t.Fatalf("second broken probe requests = %#v", f.reacquirer.requests)
+	}
+}
+
+func TestScheduledSweepConfirmsBeforeReacquiring(t *testing.T) {
+	t.Parallel()
+	f := newSweepFixture(t, "a.mkv", "b.mkv")
+	f.serveRadarr(t)
+	f.sweep(t.Context(), nil)
+	if len(f.reacquirer.requests) != 0 {
+		t.Fatalf("first sweep queued %#v", f.reacquirer.requests)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	f.reacquirer.reacquire = func(reacquire.Request) (*reacquire.Job, error) {
+		cancel()
+		return &reacquire.Job{ID: "job"}, nil
+	}
+	stop := &repairStopState{}
+	stop.set()
+	f.sweep(ctx, stop)
+	if len(f.reacquirer.requests) != 2 || f.reacquirer.requests[0].FileID == f.reacquirer.requests[1].FileID {
+		t.Fatalf("stopped second sweep requests = %#v, want both files once", f.reacquirer.requests)
+	}
+}
+
+func TestSweepConfirmsAfterCrashRestore(t *testing.T) {
+	t.Parallel()
+	f := newSweepFixture(t, "video.mkv")
+	f.probe(t.Context(), t, true)
+	var crashed *storage.EntryHealth
+	f.backend.reinsert = func(*storage.Entry) error {
+		crashed, _ = f.store.GetEntryHealth(f.entry.Name)
+		return errors.New("no replacement")
+	}
+	f.probe(t.Context(), t, true)
+	if crashed == nil || crashed.Status != storage.HealthRepairing {
+		t.Fatalf("mid-probe health = %#v, want repairing", crashed)
+	}
+	if err := f.store.SaveEntryHealth(crashed); err != nil {
+		t.Fatal(err)
+	}
+	f.service.revertStuckHealths()
+	f.probe(t.Context(), t, true)
+	if len(f.reacquirer.requests) != 2 {
+		t.Fatalf("requests = %d, want one per confirming probe", len(f.reacquirer.requests))
 	}
 }
 
@@ -155,21 +234,7 @@ func TestRecheckHealsFirstBrokenProbe(t *testing.T) {
 func TestRecheckEntryWithFixHealsFirstBrokenProbe(t *testing.T) {
 	t.Parallel()
 	f := newSweepFixture(t, "video.mkv")
-	link := filepath.Join(t.TempDir(), "video.mkv")
-	if err := os.Symlink(filepath.Join("/mnt/decypharr", f.entry.Name, "video.mkv"), link); err != nil {
-		t.Fatal(err)
-	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v3/movie" {
-			http.NotFound(w, r)
-			return
-		}
-		_, _ = fmt.Fprintf(w, `[{"id":9,"title":"Movie","movieFile":{"id":7,"path":%q}}]`, link)
-	}))
-	t.Cleanup(server.Close)
-	registry := arr.New(config.NewStore(&config.Config{}), nil, zerolog.Nop())
-	registry.AddOrUpdate(arr.Arr{Name: "radarr", Host: server.URL, Token: "token", Type: arr.Radarr})
-	f.service.arrs = registry
+	f.serveRadarr(t)
 	if _, err := f.service.RecheckEntry(t.Context(), f.entry.Name, true); err != nil {
 		t.Fatal(err)
 	}
@@ -181,37 +246,63 @@ func TestRecheckEntryWithFixHealsFirstBrokenProbe(t *testing.T) {
 
 func TestStoppedSweepFinishesOnlyCutHeals(t *testing.T) {
 	t.Parallel()
-	for _, cut := range []bool{false, true} {
-		t.Run(map[bool]string{false: "inline heal complete", true: "inline heal cut"}[cut], func(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		cut, cutCall  bool
+		inline, total int
+	}{
+		{name: "inline heal complete", inline: 2, total: 2},
+		{name: "inline heal cut", cut: true, inline: 1, total: 2},
+		{name: "reacquire call cut", cut: true, cutCall: true, inline: 1, total: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			f := newSweepFixture(t, "a.mkv", "b.mkv")
 			f.probe(t.Context(), t, true)
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			f.reacquirer.reacquire = func(reacquire.Request) (*reacquire.Job, error) {
-				if cut {
-					cancel()
-				}
-				return &reacquire.Job{ID: "job"}, nil
+			if tc.cut {
+				f.reacquirer.reacquire = cutFirstReacquire(f.reacquirer, cancel, tc.cutCall)
 			}
 			candidates := f.probe(ctx, t, true)
-			inline := len(f.reacquirer.requests)
-			if want := map[bool]int{false: 2, true: 1}[cut]; inline != want {
-				t.Fatalf("inline requests = %d, want %d", inline, want)
+			if inline := len(f.reacquirer.requests); inline != tc.inline {
+				t.Fatalf("inline requests = %d, want %d", inline, tc.inline)
 			}
 			cancel()
 			stop := &repairStopState{}
 			stop.set()
 			f.service.finishCancelledRepairSweep(ctx, f.run, stop, true, "stopped", candidates)
-			if len(f.reacquirer.requests) != 2 {
-				t.Fatalf("requests after finish = %#v, want both files once", f.reacquirer.requests)
+			if len(f.reacquirer.requests) != tc.total || len(fileIDs(f.reacquirer.requests)) != 2 {
+				t.Fatalf("requests after finish = %#v, want %d covering both files", f.reacquirer.requests, tc.total)
 			}
-			if f.reacquirer.requests[0].FileID == f.reacquirer.requests[1].FileID {
-				t.Fatalf("file queued twice: %#v", f.reacquirer.requests)
-			}
-			if f.run.Stats.Repaired != 2 {
-				t.Fatalf("repaired = %d, want 2", f.run.Stats.Repaired)
+			if f.run.Stats.Repaired != 2 || f.run.Stats.RepairFailed != 0 {
+				t.Fatalf("stats = %#v, want 2 repaired and none failed", f.run.Stats)
 			}
 		})
+	}
+}
+
+func fileIDs(requests []reacquire.Request) map[string]bool {
+	ids := make(map[string]bool, len(requests))
+	for _, request := range requests {
+		ids[request.FileID] = true
+	}
+	return ids
+}
+
+// cutFirstReacquire cancels the run during the first reacquire call, failing that call when failCall is set.
+func cutFirstReacquire(
+	fake *fakeReacquirer,
+	cancel context.CancelFunc,
+	failCall bool,
+) func(reacquire.Request) (*reacquire.Job, error) {
+	return func(reacquire.Request) (*reacquire.Job, error) {
+		if len(fake.requests) == 1 {
+			cancel()
+			if failCall {
+				return nil, context.Canceled
+			}
+		}
+		return &reacquire.Job{ID: "job"}, nil
 	}
 }
