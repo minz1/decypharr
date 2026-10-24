@@ -125,8 +125,7 @@ func (d *Downloader) downloadSeasons(
 	}
 	// Parent has been fanned out into season entries; mark it complete so
 	// it leaves the downloading queue instead of getting re-processed.
-	d.completeEntry(torrent)
-	return nil
+	return d.completeEntry(ctx, torrent)
 }
 
 // removeSeasonOfDeletedPack drops a season the pack's delete cut short; a folder shared with the pack is the pack's.
@@ -148,7 +147,9 @@ func (d *Downloader) process(ctx context.Context, entry *storage.Entry, mountPat
 	case config.DownloadActionSymlink:
 		return d.processSymlink(ctx, entry, mountPath)
 	case config.DownloadActionNone:
-		d.completeEntry(entry)
+		if err := d.completeEntry(ctx, entry); err != nil {
+			return err
+		}
 		// Remove entry from queue
 		_ = d.manager.queue.Delete(entry.InfoHash, true, nil)
 		return nil
@@ -157,12 +158,17 @@ func (d *Downloader) process(ctx context.Context, entry *storage.Entry, mountPat
 	}
 }
 
-func (d *Downloader) completeEntry(entry *storage.Entry) {
+// completeEntry marks entry completed and tells the arr, unless its action was cancelled (a delete must not re-save it).
+func (d *Downloader) completeEntry(ctx context.Context, entry *storage.Entry) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	d.markAsCompleted(entry)
 	d.manager.strm.SyncEntryAsync(entry)
 	d.notifyCompleted(entry)
 	d.manager.refreshArr(entry)
 	d.manager.ReindexArrEntry(entry.Category, entry.InfoHash)
+	return nil
 }
 
 func (d *Downloader) markAsCompleted(entry *storage.Entry) {
@@ -240,7 +246,7 @@ func (d *Downloader) processSymlink(ctx context.Context, entry *storage.Entry, m
 	}
 
 	entry.IsDownloading = true
-	_ = d.manager.queue.Update(entry)
+	d.saveProgress(ctx, entry)
 
 	if waitForSymlinkFilesReadyErr := d.waitForSymlinkFilesReady(
 		ctx,
@@ -260,7 +266,7 @@ func (d *Downloader) processSymlink(ctx context.Context, entry *storage.Entry, m
 			probeFiles = probeFiles[:MaxNZBPreCacheFiles]
 		}
 		d.logger.Debug().Int("files", len(probeFiles)).Msgf("Warming cache for %s", entry.Name)
-		if warmFileCacheErr := d.manager.WarmFileCache(probeFiles); warmFileCacheErr != nil {
+		if warmFileCacheErr := d.manager.WarmFileCache(ctx, probeFiles); warmFileCacheErr != nil {
 			d.logger.Error().Msgf("Failed to warm cache: %s", warmFileCacheErr)
 		} else {
 			d.logger.Debug().
@@ -269,9 +275,7 @@ func (d *Downloader) processSymlink(ctx context.Context, entry *storage.Entry, m
 		}
 	}
 
-	d.completeEntry(entry)
-
-	return nil
+	return d.completeEntry(ctx, entry)
 }
 
 func (d *Downloader) createSymlinksWhenMountFilesAppear(
@@ -613,9 +617,8 @@ func (d *Downloader) processTorrentDownload(ctx context.Context, entry *storage.
 	if err := p.Wait(); err != nil {
 		return fmt.Errorf("download failed: %w", err)
 	}
-	d.completeEntry(entry)
 	d.logger.Info().Msgf("Downloaded all files for %s", entry.Name)
-	return nil
+	return d.completeEntry(ctx, entry)
 }
 
 // resolveLinkWithRetry fetches a download link, retrying transient failures
@@ -686,7 +689,7 @@ func (d *Downloader) processUsenetDownload(ctx context.Context, entry *storage.E
 	entry.SizeDownloaded = 0
 	entry.Progress = 0
 	entry.IsDownloading = true
-	_ = d.manager.queue.Update(entry)
+	d.saveProgress(ctx, entry)
 
 	var progressMu sync.Mutex
 	// Track per-file progress so we can compute the global total across all files
@@ -741,9 +744,8 @@ func (d *Downloader) processUsenetDownload(ctx context.Context, entry *storage.E
 		return fmt.Errorf("NZB download failed: %w", err)
 	}
 
-	d.completeEntry(entry)
 	d.logger.Info().Msgf("Downloaded all NZB files for %s", entry.Name)
-	return nil
+	return d.completeEntry(ctx, entry)
 }
 
 // writeAndClose fills f with write and closes it. A failed close fails the

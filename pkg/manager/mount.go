@@ -58,7 +58,7 @@ func (m *Manager) RefreshMount() error {
 // the mount is fast. This replaces spawning ffprobe: the read pattern is
 // deterministic, needs no external binary, and warms the exact bytes a
 // downstream probe seeks to (see cacheWarmHeadSize/cacheWarmTailSize).
-func (m *Manager) WarmFileCache(filePaths []string) error {
+func (m *Manager) WarmFileCache(ctx context.Context, filePaths []string) error {
 	if len(filePaths) == 0 {
 		return nil
 	}
@@ -71,9 +71,9 @@ func (m *Manager) WarmFileCache(filePaths []string) error {
 			continue
 		}
 		p.Go(func() {
-			ctx, cancel := context.WithTimeout(context.Background(), CacheWarmTimeout)
+			fileCtx, cancel := context.WithTimeout(ctx, CacheWarmTimeout)
 			defer cancel()
-			if err := m.warmOneFile(ctx, fp); err != nil {
+			if err := m.warmOneFile(fileCtx, fp); err != nil {
 				// Log error but continue
 				m.logger.Warn().
 					Err(err).
