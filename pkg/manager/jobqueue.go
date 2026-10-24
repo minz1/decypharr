@@ -176,11 +176,9 @@ func (q *JobQueue) WaitForSlot(job *Job, providers []string, delay time.Duration
 			return
 		case <-w.wake:
 		case <-timer.C:
-			q.mu.Lock()
-			q.waiters = slices.DeleteFunc(q.waiters, func(other *slotWaiter) bool { return other == w })
-			q.mu.Unlock()
 		}
 		q.mu.Lock()
+		q.waiters = slices.DeleteFunc(q.waiters, func(other *slotWaiter) bool { return other == w })
 		job.wokenBy = w.freedBy
 		q.mu.Unlock()
 		if err := q.Submit(job); err != nil {
