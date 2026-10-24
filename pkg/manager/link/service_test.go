@@ -11,6 +11,8 @@ import (
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/rs/zerolog"
 
+	"github.com/sirrobot01/decypharr/internal/customerror"
+
 	debrid "github.com/sirrobot01/decypharr/pkg/debrid/common"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/manager/link"
@@ -177,5 +179,36 @@ func TestGetLinkRemembersARejectedReplacement(t *testing.T) {
 	}
 	if got := heads.Load(); got != 2 {
 		t.Fatalf("HEADs = %d, want 2 (original + replacement, then the cached failure)", got)
+	}
+}
+
+// failingClient answers every link request with err, or an empty link.
+type failingClient struct {
+	debrid.Client
+
+	err error
+}
+
+func (c *failingClient) GetDownloadLink(context.Context, string, *types.File) (types.DownloadLink, error) {
+	return types.DownloadLink{}, c.err
+}
+
+// A read of an entry marked bad fails for good, so streams don't retry it.
+func TestGetLinkOnBadEntryIsPermanent(t *testing.T) {
+	t.Parallel()
+	for name, clientErr := range map[string]error{
+		"hoster unavailable": customerror.ErrHosterUnavailable,
+		"empty link":         nil,
+	} {
+		clients := xsync.NewMap[string, debrid.Client]()
+		clients.Store("fake", &failingClient{err: clientErr})
+		service := link.New(clients, nil, nil, nil, http.DefaultClient, 0, nil, zerolog.Nop())
+		entry := testEntry(true)
+		entry.Bad = true
+
+		_, err := service.GetLink(t.Context(), entry, "a.mkv")
+		if linkErr := link.GetLinkError(err); linkErr == nil || !linkErr.IsPermanent() {
+			t.Errorf("%s: GetLink on a bad entry = %v, want a permanent link error", name, err)
+		}
 	}
 }

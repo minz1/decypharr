@@ -235,7 +235,8 @@ func (s *Service) handleBadLink(
 ) (types.DownloadLink, error) {
 	if errors.Is(err, customerror.ErrHosterUnavailable) {
 		if entry.Bad {
-			return types.DownloadLink{}, fmt.Errorf("can't repair %s since it's been marked as bad", s.folder(entry))
+			return types.DownloadLink{}, NewPermanentError(
+				fmt.Errorf("can't repair %s since it's been marked as bad", s.folder(entry)), "entry_bad")
 		}
 		if attempt >= MaxReinsertionAttempt {
 			s.markEntryBad(entry, dl.Filename, attempt, "hoster_unavailable")
@@ -351,7 +352,8 @@ func (s *Service) fetchLink(
 	if downloadLink.Empty() {
 		// Let's try to reinsert the entry
 		if entry.Bad {
-			return types.DownloadLink{}, fmt.Errorf("can't repair %s since it's been marked as bad", s.folder(entry))
+			return types.DownloadLink{}, NewPermanentError(
+				fmt.Errorf("can't repair %s since it's been marked as bad", s.folder(entry)), "entry_bad")
 		}
 		if attempt >= MaxReinsertionAttempt {
 			s.markEntryBad(entry, filename, attempt, "empty_link")
