@@ -25,9 +25,9 @@ func (handler *arrHandler) searchBindings(
 		return "", err
 	}
 	if regrab := latestRegrabFailure(*job); regrab > 0 {
-		// Earlier rounds' searches are settled first, so none stays an attempted intent.
+		// Earlier rounds' searches are settled first, so none stays an intent.
 		for _, earlier := range slices.Clone(job.Mutations) {
-			if earlier.Kind != mutation.Kind || earlier.Attempts == 0 {
+			if earlier.Kind != mutation.Kind {
 				continue
 			}
 			if sendErr := handler.sendSearch(ctx, instance, job, progress, earlier); sendErr != nil {

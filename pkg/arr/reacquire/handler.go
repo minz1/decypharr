@@ -191,8 +191,7 @@ func (handler *arrHandler) failHistory(
 		return "", err
 	}
 	if failure.alreadyFailed {
-		regrab := mutationKey(MutationHistoryFailed, failure.downloadID, strconv.Itoa(failure.grabRecord.ID))
-		mutation, ok := mutationForKey(*job, regrab)
+		mutation, ok := mutationForKey(*job, regrabKey(failure))
 		if !ok {
 			mutation, _ = mutationForKey(*job, mutationKey(MutationHistoryFailed, failure.downloadID))
 		}
@@ -269,20 +268,17 @@ func (handler *arrHandler) executeExactDownloadFailure(
 	if err := progress.Update(StatusBlocklisting, nil); err != nil {
 		return err
 	}
+	key, err := handler.blocklistKey(ctx, instance, job, progress, failure)
+	if err != nil {
+		return err
+	}
 	mutation := Mutation{
-		Key:        mutationKey(MutationHistoryFailed, failure.downloadID),
+		Key:        key,
 		Kind:       MutationHistoryFailed,
 		DownloadID: failure.downloadID,
 		HistoryID:  failure.historyID,
 	}
-	if first, ok := mutationForKey(*job, mutation.Key); ok && first.State == MutationConfirmed {
-		// The Arr grabbed the failed download again: that grab is blocklisted too.
-		regrab := mutationKey(MutationHistoryFailed, failure.downloadID, strconv.Itoa(failure.grabRecord.ID))
-		if _, started := mutationForKey(*job, regrab); started || !failure.alreadyFailed {
-			mutation.Key = regrab
-		}
-	}
-	mutation, err := ensureMutationIntent(job, progress, StatusBlocklisting, mutation)
+	mutation, err = ensureMutationIntent(job, progress, StatusBlocklisting, mutation)
 	if err != nil {
 		return err
 	}
@@ -292,12 +288,72 @@ func (handler *arrHandler) executeExactDownloadFailure(
 	if failure.alreadyFailed {
 		return confirmMutation(job, progress, StatusBlocklisting, mutation, failure.failedID)
 	}
+	return handler.sendBlocklist(ctx, instance, job, progress, mutation)
+}
+
+// blocklistKey journals the first blocklist of a download, then one per grab
+// the Arr makes of it again, up to maxMutationAttempts more.
+func (handler *arrHandler) blocklistKey(
+	ctx context.Context,
+	instance arr.Arr,
+	job *Job,
+	progress JobProgress,
+	failure exactDownloadFailure,
+) (string, error) {
+	first := mutationKey(MutationHistoryFailed, failure.downloadID)
+	if blocklisted, ok := mutationForKey(*job, first); !ok || blocklisted.State != MutationConfirmed {
+		return first, nil
+	}
+	regrab := regrabKey(failure)
+	_, started := mutationForKey(*job, regrab)
+	switch {
+	case started:
+	case failure.alreadyFailed:
+		return first, nil
+	case regrabRounds(*job, failure.downloadID) >= maxMutationAttempts:
+		return "", fmt.Errorf("arr grabbed failed download %q again after %d blocklists; giving up",
+			failure.downloadID, maxMutationAttempts+1)
+	}
+	return regrab, handler.settleEarlierBlocklists(ctx, instance, job, progress, failure.downloadID, regrab)
+}
+
+// settleEarlierBlocklists confirms or sends again every earlier blocklist of
+// downloadID before the job moves on to the grab under key current.
+func (handler *arrHandler) settleEarlierBlocklists(
+	ctx context.Context,
+	instance arr.Arr,
+	job *Job,
+	progress JobProgress,
+	downloadID string,
+	current string,
+) error {
+	for _, earlier := range slices.Clone(job.Mutations) {
+		if earlier.Kind != MutationHistoryFailed || earlier.DownloadID != downloadID ||
+			earlier.Key == current || earlier.State == MutationConfirmed {
+			continue
+		}
+		if err := handler.sendBlocklist(ctx, instance, job, progress, earlier); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// sendBlocklist marks the grab mutation.HistoryID failed unless the Arr already shows it.
+func (handler *arrHandler) sendBlocklist(
+	ctx context.Context,
+	instance arr.Arr,
+	job *Job,
+	progress JobProgress,
+	mutation Mutation,
+) error {
+	grab := arr.HistoryRecord{ID: mutation.HistoryID}
 	lookup := func(Mutation) (int, bool, error) {
-		record, _, failedHistoryErr := handler.arrs.FailedHistory(ctx, instance.Name, failure.downloadID)
+		record, _, failedHistoryErr := handler.arrs.FailedHistory(ctx, instance.Name, mutation.DownloadID)
 		if failedHistoryErr != nil {
 			return 0, false, fmt.Errorf("reconcile failed-download history: %w", failedHistoryErr)
 		}
-		return record.ID, failureCoversGrab(record, failure.grabRecord), nil
+		return record.ID, failureCoversGrab(record, grab), nil
 	}
 	done, err := reconcileAttempted(job, progress, StatusBlocklisting, mutation, lookup)
 	if err != nil || done {
@@ -307,8 +363,25 @@ func (handler *arrHandler) executeExactDownloadFailure(
 	if err != nil {
 		return err
 	}
-	dispatchErr := handler.arrs.FailHistory(ctx, instance.Name, mutation.HistoryID, failure.downloadID)
+	dispatchErr := handler.arrs.FailHistory(ctx, instance.Name, mutation.HistoryID, mutation.DownloadID)
 	return settleDispatch(job, progress, StatusBlocklisting, mutation, dispatchErr, mutation.HistoryID, lookup)
+}
+
+// regrabKey journals the blocklist of the Arr's latest grab of a download it grabbed again.
+func regrabKey(failure exactDownloadFailure) string {
+	return mutationKey(MutationHistoryFailed, failure.downloadID, strconv.Itoa(failure.grabRecord.ID))
+}
+
+// regrabRounds counts the blocklists of downloadID after its first.
+func regrabRounds(job Job, downloadID string) int {
+	first := mutationKey(MutationHistoryFailed, downloadID)
+	rounds := 0
+	for _, mutation := range job.Mutations {
+		if mutation.Kind == MutationHistoryFailed && mutation.DownloadID == downloadID && mutation.Key != first {
+			rounds++
+		}
+	}
+	return rounds
 }
 
 func mutationBindings(job Job) ([]Binding, error) {

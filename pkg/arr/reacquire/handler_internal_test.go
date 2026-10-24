@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -465,9 +466,10 @@ func TestResumedHistoryFailedBlocklistsEachGrabOnce(t *testing.T) {
 		wantSearches   int64
 		wantConfirmed  string
 		wantReceipt    int
+		keepsIntent    bool
 	}{
 		"searched then re-grabbed": {
-			journal: []Mutation{search}, failure: regrabbed, autoRedownload: true, wantBlocklists: 1,
+			journal: []Mutation{search}, failure: regrabbed, autoRedownload: true, wantBlocklists: 1, keepsIntent: true,
 		},
 		"re-grabbed after a confirmed blocklist": {
 			journal: []Mutation{blocklist, searched}, failure: regrabbed, autoRedownload: true, wantBlocklists: 1,
@@ -496,7 +498,12 @@ func TestResumedHistoryFailedBlocklistsEachGrabOnce(t *testing.T) {
 			wantConfirmed: regrabSearch.Key, wantReceipt: 71,
 		},
 		"re-grabbed after an earlier search never sent": {
-			journal: []Mutation{blocklist, searchUnsent}, failure: regrabbed, wantBlocklists: 1, wantSearches: 1,
+			journal: []Mutation{blocklist, searchUnsent}, failure: regrabbed, wantBlocklists: 1, wantSearches: 2,
+			wantConfirmed: search.Key, wantReceipt: 72,
+		},
+		"grabbed a third time while the re-grab blocklist is unsettled": {
+			journal: []Mutation{blocklist, searched, regrabAttempted}, failure: thirdGrab, autoRedownload: true,
+			wantBlocklists: 2, wantConfirmed: regrabBlocklist.Key, wantReceipt: 17,
 		},
 		"re-grabbed while the first blocklist is unsettled": {
 			journal: []Mutation{blocklistAttempted}, failure: regrabbed, autoRedownload: true, wantBlocklists: 1,
@@ -534,7 +541,40 @@ func TestResumedHistoryFailedBlocklistsEachGrabOnce(t *testing.T) {
 				(confirmed.State != MutationConfirmed || confirmed.ReceiptID != tc.wantReceipt) {
 				t.Fatalf("%s = %+v, want confirmed by %d", tc.wantConfirmed, confirmed, tc.wantReceipt)
 			}
+			if deadline := job.reconciliationDeadline(); !tc.keepsIntent && !deadline.IsZero() {
+				t.Fatalf("journal %+v keeps an intent, deadline %v", job.Mutations, deadline)
+			}
 		})
+	}
+}
+
+func TestDownloadGrabbedAgainAfterEveryRoundFailsTheJob(t *testing.T) {
+	t.Parallel()
+	queued := time.Now().UTC().Add(-time.Minute)
+	journal := []Mutation{}
+	for _, grab := range []int{12, 17, 30, 40} {
+		key := mutationKey(MutationHistoryFailed, "download-1", strconv.Itoa(grab))
+		if grab == 12 {
+			key = mutationKey(MutationHistoryFailed, "download-1")
+		}
+		journal = append(journal, Mutation{
+			Key: key, Kind: MutationHistoryFailed, State: MutationConfirmed, DownloadID: "download-1",
+			HistoryID: grab, IntentAt: queued, LastDispatchedAt: queued, Attempts: 1, ReceiptID: grab,
+			ConfirmedAt: queued,
+		})
+	}
+	server, blocklisted, _ := newSearchedMovieArr(t, queued)
+	job := Job{Mutations: journal}
+	err := newTestHandler(server.URL).executeExactDownloadFailure(
+		t.Context(), testInstance(server.URL), &job, exactDownloadFailure{
+			found: true, grabFound: true, downloadID: "download-1", historyID: 50,
+			grabRecord: arr.HistoryRecord{ID: 50},
+		}, &recordedProgress{},
+	)
+	if err == nil || errors.Is(err, arr.ErrMutationOutcomeUnknown) ||
+		blocklisted.Load() != 0 || len(job.Mutations) != 4 {
+		t.Fatalf("err = %v, blocklisted = %d, journal = %d, want a plain error and nothing sent", err,
+			blocklisted.Load(), len(job.Mutations))
 	}
 }
 
