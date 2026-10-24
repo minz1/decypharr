@@ -2,10 +2,13 @@ package manager
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+
+	"github.com/sirrobot01/appendstore"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/utils"
@@ -14,8 +17,13 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/usenet"
 )
 
-func (m *Manager) restoreActiveDownloadJobs() {
-	entries, err := m.queue.ListFilter("", config.ProtocolAll, storage.EntryStateDownloading, nil, "", false)
+// restoreSnapshot lists the entries a restore resubmits. Take it before the API serves, or a new add is
+// restored as well and gets a second job.
+func (m *Manager) restoreSnapshot() ([]*storage.Entry, error) {
+	return m.queue.ListFilter("", config.ProtocolAll, storage.EntryStateDownloading, nil, "", false)
+}
+
+func (m *Manager) restoreActiveDownloadJobs(entries []*storage.Entry, err error) {
 	if err != nil {
 		m.logger.Error().Err(err).Msg("Failed to restore the download queue")
 		return
@@ -24,18 +32,30 @@ func (m *Manager) restoreActiveDownloadJobs() {
 
 	// Clear flags left by interrupted local processing. Active downloads remain
 	// in storage for processQueuedEntries. Only unfinished imports need workers.
-	for _, entry := range entries {
-		if m.ctx.Err() != nil || !m.restoreEntry(entry) {
+	for _, snapshot := range entries {
+		if m.ctx.Err() != nil {
+			return
+		}
+		// Read before Holds: an add between queue.Add and SubmitJob is then usually holding already.
+		entry, getErr := m.queue.GetTorrent(snapshot.InfoHash)
+		if getErr != nil && !errors.Is(getErr, appendstore.ErrKeyNotFound) {
+			m.logger.Error().Err(getErr).Str("entry_id", snapshot.InfoHash).Msg("Failed to read restored download")
+		}
+		// Deleted, or re-added with its own job, since the snapshot.
+		if getErr != nil || m.jobQueue.Holds(entry.InfoHash) {
+			continue
+		}
+		if !m.restoreEntry(entry, snapshot.IsDownloading) {
 			return
 		}
 	}
 	m.queueRestored.Store(true)
 }
 
-// restoreEntry resubmits one interrupted entry. It returns false once
-// shutdown has started and the restore should stop.
-func (m *Manager) restoreEntry(entry *storage.Entry) bool {
-	if entry.IsDownloading {
+// restoreEntry resubmits one interrupted entry. interrupted is the flag the previous run left; a flag set
+// since then belongs to a live download. It returns false once shutdown has started and the restore should stop.
+func (m *Manager) restoreEntry(entry *storage.Entry, interrupted bool) bool {
+	if interrupted && entry.IsDownloading {
 		entry.IsDownloading = false
 		if updateErr := m.queue.Update(entry); updateErr != nil {
 			m.logger.Error().Err(updateErr).Str("entry_id", entry.InfoHash).Msg("Failed to reset restored download")
@@ -46,10 +66,14 @@ func (m *Manager) restoreEntry(entry *storage.Entry) bool {
 		return true
 	}
 	job, rebuildErr := m.rebuildQueuedJob(entry)
+	if rebuildErr != nil && m.ctx.Err() != nil {
+		return false
+	}
+	// An NZB re-parse can take minutes; the arr may have deleted the entry meanwhile.
+	if !m.queue.Contains(entry.InfoHash) {
+		return true
+	}
 	if rebuildErr != nil {
-		if m.ctx.Err() != nil {
-			return false
-		}
 		m.failEntry(entry, rebuildErr)
 		return true
 	}

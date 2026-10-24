@@ -94,7 +94,7 @@ func runShutdownResume(t *testing.T, multiSeason bool) {
 			t.Fatal(writeFileErr)
 		}
 	}
-	m.restoreActiveDownloadJobs()
+	m.restoreActiveDownloadJobs(m.restoreSnapshot())
 	m.processQueuedEntries()
 	m.downloadTasks.Wait()
 	synctest.Wait()
@@ -119,7 +119,7 @@ func runShutdownResume(t *testing.T, multiSeason bool) {
 	if removeErr := os.Remove(linkPath); removeErr != nil {
 		t.Fatal(removeErr)
 	}
-	m.restoreActiveDownloadJobs()
+	m.restoreActiveDownloadJobs(m.restoreSnapshot())
 	m.processQueuedEntries()
 	m.downloadTasks.Wait()
 	if _, lstatErr := os.Lstat(linkPath); !os.IsNotExist(lstatErr) {
@@ -228,6 +228,7 @@ func reopenShutdownTestManager(t *testing.T, m *Manager, dbPath string, entry *s
 	m.storage, m.queue = store, newQueue(store, "", nil, zerolog.Nop())
 	m.ctx, m.cancelDownloads = context.WithCancel(t.Context())
 	m.downloadsStopped = false
+	m.jobQueue = NewJobQueue(m.ctx, 1, m.processJob, zerolog.Nop())
 	t.Cleanup(func() { _ = m.Stop() })
 	saved, err := m.queue.GetTorrent(entry.InfoHash)
 	if err != nil {

@@ -52,7 +52,7 @@ func TestRestoreLeavesActiveDownloadsOutsideSubmissionWorkers(t *testing.T) {
 		received <- job
 	}, zerolog.Nop())
 	t.Cleanup(m.jobQueue.Close)
-	m.restoreActiveDownloadJobs()
+	m.restoreActiveDownloadJobs(m.restoreSnapshot())
 	select {
 	case job := <-received:
 		if job.ID != fmt.Sprintf("%040d", 3) || job.Request == nil {
@@ -91,4 +91,133 @@ func TestRebuiltQueuedJobKeepsManual(t *testing.T) {
 			t.Fatalf("torrent rebuild Manual = %v, want %v", job.Request.Manual, manual)
 		}
 	}
+}
+
+// The restore runs while the API serves: it acts on the stored entry, not its snapshot copy.
+func TestRestoreSkipsEntriesChangedSinceTheSnapshot(t *testing.T) {
+	t.Parallel()
+	store, err := storage.NewStorage(filepath.Join(t.TempDir(), "db"), storage.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	m := withTestConfig(t, &Manager{
+		queue:  newQueue(store, "", nil, zerolog.Nop()),
+		arr:    arr.New(config.NewStore(&config.Config{}), nil, zerolog.Nop()),
+		logger: zerolog.Nop(),
+		ctx:    t.Context(),
+	})
+	deleted, held, changed := fmt.Sprintf("%040d", 1), fmt.Sprintf("%040d", 2), fmt.Sprintf("%040d", 3)
+	for _, hash := range []string{deleted, held, changed} {
+		addRestoreTestEntry(t, m, hash)
+	}
+	snapshot, err := m.restoreSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	running, release := make(chan struct{}), make(chan struct{})
+	m.jobQueue = NewJobQueue(t.Context(), 1, func(context.Context, *Job) {
+		running <- struct{}{}
+		<-release
+	}, zerolog.Nop())
+	t.Cleanup(m.jobQueue.Close)
+	t.Cleanup(func() { close(release) })
+	if submitErr := m.jobQueue.Submit(&Job{ID: held}); submitErr != nil {
+		t.Fatal(submitErr)
+	}
+	<-running
+	if deleteErr := m.queue.Delete(deleted, false, nil); deleteErr != nil {
+		t.Fatal(deleteErr)
+	}
+	renameStored(t, m, held, "fresh")
+	renameStored(t, m, changed, "fresh")
+
+	m.restoreActiveDownloadJobs(snapshot, nil)
+
+	if m.queue.Contains(deleted) || m.jobQueue.FindJob(deleted) != nil {
+		t.Fatal("a deleted entry was written back or resubmitted")
+	}
+	if m.jobQueue.FindJob(held) != nil {
+		t.Fatal("an entry with a job was submitted again")
+	}
+	job := m.jobQueue.FindJob(changed)
+	if job == nil || job.Entry.Name != "fresh" {
+		t.Fatalf("changed entry job = %#v, want one built from the stored entry", job)
+	}
+	for _, hash := range []string{held, changed} {
+		if entry, getErr := m.queue.GetTorrent(hash); getErr != nil || entry.Name != "fresh" {
+			t.Fatalf("entry %s = %#v, error = %v: the snapshot copy was written back", hash, entry, getErr)
+		}
+	}
+}
+
+func addRestoreTestEntry(t *testing.T, m *Manager, hash string) {
+	t.Helper()
+	if err := m.queue.Add(&storage.Entry{
+		InfoHash: hash, Name: "snapshot", Protocol: config.ProtocolTorrent, State: storage.EntryStateDownloading,
+		Status: debridTypes.TorrentStatusQueued, IsDownloading: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func renameStored(t *testing.T, m *Manager, hash, name string) {
+	t.Helper()
+	entry, err := m.queue.GetTorrent(hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry.Name = name
+	if updateErr := m.queue.Update(entry); updateErr != nil {
+		t.Fatal(updateErr)
+	}
+}
+
+// A flag set after the snapshot belongs to a live download; only the previous run's flag is reset.
+func TestRestoreKeepsAFlagSetSinceTheSnapshot(t *testing.T) {
+	t.Parallel()
+	m := newRestoreTestManager(t)
+	hash := fmt.Sprintf("%040d", 1)
+	if err := m.queue.Add(&storage.Entry{
+		InfoHash: hash, Name: "live", Protocol: config.ProtocolTorrent, State: storage.EntryStateDownloading,
+		Status: debridTypes.TorrentStatusDownloading,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := m.restoreSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := m.queue.GetTorrent(hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	live.IsDownloading = true
+	if updateErr := m.queue.Update(live); updateErr != nil {
+		t.Fatal(updateErr)
+	}
+
+	m.restoreActiveDownloadJobs(snapshot, nil)
+
+	if saved, getErr := m.queue.GetTorrent(hash); getErr != nil || !saved.IsDownloading {
+		t.Fatalf("live entry = %#v, error = %v: the restore reset a running download", saved, getErr)
+	}
+}
+
+func newRestoreTestManager(t *testing.T) *Manager {
+	t.Helper()
+	store, err := storage.NewStorage(filepath.Join(t.TempDir(), "db"), storage.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	m := withTestConfig(t, &Manager{
+		queue:  newQueue(store, "", nil, zerolog.Nop()),
+		arr:    arr.New(config.NewStore(&config.Config{}), nil, zerolog.Nop()),
+		logger: zerolog.Nop(),
+		ctx:    t.Context(),
+	})
+	m.jobQueue = NewJobQueue(t.Context(), 1, func(context.Context, *Job) {}, zerolog.Nop())
+	t.Cleanup(m.jobQueue.Close)
+	return m
 }

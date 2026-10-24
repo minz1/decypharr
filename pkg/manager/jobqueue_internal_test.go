@@ -130,7 +130,7 @@ func TestOnlyAFullRestoreMarksTheQueueRestored(t *testing.T) {
 				t.Cleanup(func() { _ = store.Close() })
 			}
 			m := &Manager{queue: newQueue(store, "", nil, zerolog.Nop()), logger: zerolog.Nop(), ctx: t.Context()}
-			m.restoreActiveDownloadJobs()
+			m.restoreActiveDownloadJobs(m.restoreSnapshot())
 			if m.queueRestored.Load() == closed {
 				t.Fatalf("queueRestored = %v after a %s", m.queueRestored.Load(), name)
 			}

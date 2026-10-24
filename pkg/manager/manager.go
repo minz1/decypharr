@@ -424,13 +424,14 @@ func (m *Manager) initJobQueue() {
 	// for 60-90 minutes on big libraries, during which every arr reported
 	// "download client unavailable". Backgrounding lets the API serve and the
 	// worker pool drain immediately while the restore catches up.
+	entries, err := m.restoreSnapshot()
 	m.startDownloadTask(func() {
 		defer func() {
 			if r := recover(); r != nil {
 				m.logger.Error().Interface("panic", r).Msg("Recovered from panic while restoring active downloads")
 			}
 		}()
-		m.restoreActiveDownloadJobs()
+		m.restoreActiveDownloadJobs(entries, err)
 	})
 }
 
