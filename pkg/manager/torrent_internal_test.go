@@ -2,9 +2,11 @@ package manager
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/rs/zerolog"
@@ -248,5 +250,87 @@ func TestQueuedTorrentRemovedDuringStatusCheckStaysRemoved(t *testing.T) {
 				t.Fatal("the removed entry was written back")
 			}
 		})
+	}
+}
+
+// deletedDuringPollProvider answers a status check only once its torrent is deleted, then holds the delete until the poll returns.
+type deletedDuringPollProvider struct {
+	debrid.Client
+
+	checking, gone, pollDone chan struct{}
+	failed                   func() bool
+	pollFailed               atomic.Bool
+}
+
+func (p *deletedDuringPollProvider) CheckStatus(*types.Torrent) (*types.Torrent, error) {
+	close(p.checking)
+	select {
+	case <-p.gone:
+		return nil, customerror.ErrTorrentNotFound
+	case <-time.After(5 * time.Second):
+		return nil, errors.New("the provider torrent was never deleted")
+	}
+}
+
+func (p *deletedDuringPollProvider) DeleteTorrent(string) error {
+	close(p.gone)
+	<-p.pollDone
+	p.pollFailed.Store(p.failed())
+	return nil
+}
+
+// A removed download's provider torrent goes only after its queue record, so a poll seeing it gone does not fail the release.
+func TestRemoveQueuedDuringStatusCheckFailsNothing(t *testing.T) {
+	t.Parallel()
+	store, err := storage.NewStorage(t.TempDir(), storage.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	m := withTestConfig(t, &Manager{
+		storage: store, queue: newQueue(store, "", nil, zerolog.Nop()), clients: xsync.NewMap[string, debrid.Client](),
+		logger: zerolog.Nop(), processingEntries: xsync.NewMap[string, struct{}](),
+	})
+	entry := &storage.Entry{
+		InfoHash: "0123456789012345678901234567890123456789", Name: "release", Manual: true,
+		Protocol: config.ProtocolTorrent, ActiveProvider: "provider", State: storage.EntryStateDownloading,
+		Status: types.TorrentStatusDownloading,
+		Providers: map[string]*storage.ProviderEntry{"provider": {
+			Provider: "provider", ID: "id", Status: types.TorrentStatusDownloading,
+		}},
+	}
+	provider := &deletedDuringPollProvider{
+		checking: make(chan struct{}), gone: make(chan struct{}), pollDone: make(chan struct{}),
+		failed: func() bool {
+			saved, getErr := m.queue.GetTorrent(entry.InfoHash)
+			return getErr == nil && saved.State == storage.EntryStateError
+		},
+	}
+	m.clients.Store("provider", provider)
+	if addErr := m.queue.Add(entry); addErr != nil {
+		t.Fatal(addErr)
+	}
+	go func() {
+		defer close(provider.pollDone)
+		m.processQueuedTorrent(entry)
+	}()
+	wait := func(ch chan struct{}, what string) {
+		select {
+		case <-ch:
+		case <-time.After(10 * time.Second):
+			t.Fatal(what)
+		}
+	}
+	wait(provider.checking, "the poll never checked the provider")
+	if removeErr := m.RemoveQueued(entry.InfoHash, false); removeErr != nil {
+		t.Fatal(removeErr)
+	}
+	wait(provider.pollDone, "the poll never returned")
+	wait(provider.gone, "the removal never deleted the provider torrent")
+	if provider.pollFailed.Load() {
+		t.Fatal("the poll failed the release whose provider torrent the removal deleted")
+	}
+	if m.queue.Contains(entry.InfoHash) {
+		t.Fatal("the removed entry was written back")
 	}
 }

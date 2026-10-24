@@ -806,7 +806,7 @@ func TestDeletingAQueuedTorrentStopsOnlyItsProviderDownload(t *testing.T) {
 			m.jobQueue, _ = startRecordingQueue(t)
 			m.jobQueue.WaitForSlot(&Job{ID: "next"}, []string{"provider"}, time.Hour)
 			addRemovedGrab(t, m, tc.placement, tc.protocol, tc.libraryID, tc.complete)
-			if err := m.queue.Delete("grab", true, m.StopProviderDownload); err != nil {
+			if err := m.RemoveQueued("grab", true); err != nil {
 				t.Fatal(err)
 			}
 			if m.queue.Contains("grab") {

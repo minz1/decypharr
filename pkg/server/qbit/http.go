@@ -213,7 +213,7 @@ func (q *QBit) handleTorrentsDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, hash := range hashes {
-		if err := q.manager.Queue().Delete(hash, deleteFiles, q.manager.StopProviderDownload); err != nil {
+		if err := q.manager.RemoveQueued(hash, deleteFiles); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
