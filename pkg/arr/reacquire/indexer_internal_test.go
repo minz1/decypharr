@@ -516,8 +516,8 @@ func TestExhaustedTargetedRequestsCoalesceArrRefresh(t *testing.T) {
 	indexer.ctx = ctx
 
 	finalAttempt := targetedIndexAttempts
-	indexer.retryTargeted(ctx, indexRequest{arrName: "radarr", entryID: "one", attempt: finalAttempt}, false, nil)
-	indexer.retryTargeted(ctx, indexRequest{arrName: "radarr", entryID: "two", attempt: finalAttempt}, false, nil)
+	indexer.retryTargeted(ctx, indexRequest{arrName: "radarr", entryID: "one", attempt: finalAttempt}, false, false)
+	indexer.retryTargeted(ctx, indexRequest{arrName: "radarr", entryID: "two", attempt: finalAttempt}, false, false)
 
 	indexer.mu.Lock()
 	queue := slices.Clone(indexer.queue)
@@ -725,7 +725,7 @@ func TestWebhookWaitRunsOutOnce(t *testing.T) {
 		indexer := NewIndexer(nil, nil, nil, "", zerolog.Nop())
 		indexer.ctx = ctx
 
-		indexer.retryTargeted(ctx, indexRequest{arrName: "radarr", entryID: "entry"}, true, nil)
+		indexer.retryTargeted(ctx, indexRequest{arrName: "radarr", entryID: "entry"}, true, false)
 		time.Sleep(lateImportWait)
 		synctest.Wait()
 		request, ok := indexer.nextRequest()
@@ -733,7 +733,7 @@ func TestWebhookWaitRunsOutOnce(t *testing.T) {
 			t.Fatalf("request after the wait = %#v, %v; want the entry, marked as having waited", request, ok)
 		}
 
-		indexer.retryTargeted(ctx, request, true, nil)
+		indexer.retryTargeted(ctx, request, true, false)
 		if refresh, queued := indexer.nextRequest(); !queued || refresh.entryID != "" {
 			t.Fatalf("request = %#v, %v; want the full refresh", refresh, queued)
 		}
@@ -887,7 +887,7 @@ func TestMatchedEntryEndsItsPendingWait(t *testing.T) {
 	indexer.ctx = ctx
 
 	request := indexRequest{arrName: "radarr", entryID: "entry"}
-	indexer.retryTargeted(ctx, request, true, nil)
+	indexer.retryTargeted(ctx, request, true, false)
 	indexer.mu.Lock()
 	stop := indexer.waits[request.key()]
 	indexer.mu.Unlock()

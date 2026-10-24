@@ -250,7 +250,7 @@ func (i *Indexer) handle(ctx context.Context, request indexRequest) {
 			return
 		}
 		if err == nil {
-			i.retryTargeted(ctx, request, instance.ImportWebhook, nil)
+			i.retryTargeted(ctx, request, instance.ImportWebhook, false)
 			return
 		}
 	}
@@ -259,7 +259,7 @@ func (i *Indexer) handle(ctx context.Context, request indexRequest) {
 		Str("arr", request.arrName).
 		Str("entry_id", request.entryID).
 		Msg("Targeted Arr index attempt failed")
-	i.retryTargeted(ctx, request, instance.ImportWebhook, err)
+	i.retryTargeted(ctx, request, instance.ImportWebhook, true)
 }
 
 // handleRefresh reconciles every Sonarr and Radarr instance against one read of
@@ -426,11 +426,11 @@ func (i *Indexer) targetedMediaIDs(ctx context.Context, instance arr.Arr, manage
 
 // retryTargeted waits for the Arr to import the entry, then indexes it again; the import webhook normally ends the wait sooner.
 // A failed attempt retries on the poll schedule even with the webhook, which may already have come.
-func (i *Indexer) retryTargeted(ctx context.Context, request indexRequest, webhook bool, attemptErr error) {
+func (i *Indexer) retryTargeted(ctx context.Context, request indexRequest, webhook, failed bool) {
 	if ctx.Err() != nil {
 		return
 	}
-	waitForWebhook := webhook && attemptErr == nil
+	waitForWebhook := webhook && !failed
 	delay, ok := importWaitDelay(waitForWebhook, request)
 	if !ok {
 		event := i.logger.Info()
