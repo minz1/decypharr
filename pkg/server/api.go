@@ -311,11 +311,36 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		)
 		return
 	}
-	utils.JSONResponse(w, map[string]any{keyStatus: keySuccess, "restarted": restarted}, http.StatusOK)
+	response := map[string]any{keyStatus: keySuccess, "restarted": restarted}
+	if warnings := webdavAuthWarnings(updated); len(warnings) > 0 {
+		response["warnings"] = warnings
+		s.logger.Warn().Strs("warnings", warnings).Msg("WebDAV auth locks out its clients")
+	}
+	utils.JSONResponse(w, response, http.StatusOK)
 }
 
-// prepareConfigUpdate merges body onto current and validates it. Auth and
-// secrets are never taken from the request.
+func webdavAuthWarnings(cfg *config.Config) []string {
+	if !cfg.UseAuth || !cfg.EnableWebdavAuth {
+		return nil
+	}
+	var warnings []string
+	if auth := cfg.GetAuth(); auth != nil && auth.TokenOnly {
+		warnings = append(
+			warnings,
+			"WebDAV auth is on but token-only auth has no credential WebDAV accepts — turn it off, or WebDAV clients will be rejected",
+		)
+	}
+	if cfg.Mount.Type == config.MountTypeRclone {
+		warnings = append(
+			warnings,
+			"WebDAV auth is on but the built-in rclone mount connects without credentials — it will be rejected",
+		)
+	}
+	return warnings
+}
+
+// prepareConfigUpdate merges body onto current and validates it.
+// Credentials, use_auth and secrets are never taken from the request.
 func prepareConfigUpdate(current *config.Config, body []byte) (config.Config, error) {
 	next, err := mergeConfigUpdate(current, bytes.NewReader(body))
 	if err != nil {
@@ -334,7 +359,6 @@ func prepareConfigUpdate(current *config.Config, body []byte) (config.Config, er
 	next.Auth = current.Auth
 	next.SessionSecret = current.SessionSecret
 	next.UseAuth = current.UseAuth
-	next.EnableWebdavAuth = current.EnableWebdavAuth
 	next.Strm.Secret = cmp.Or(next.Strm.Secret, current.Strm.Secret)
 	validArrs := make([]config.Arr, 0, len(next.Arrs))
 	for _, a := range next.Arrs {
@@ -950,16 +974,18 @@ func (s *Server) handleUpdateAuth(w http.ResponseWriter, r *http.Request) {
 	if disable {
 		message = "Authentication disabled successfully"
 	}
-	response := map[string]string{keyMessage: message}
+	response := map[string]any{}
 	if req.TokenOnly {
-		response[keyMessage] = "Token-only authentication enabled"
+		message = "Token-only authentication enabled"
 		if auth := cfg.GetAuth(); auth != nil {
 			response["token"] = auth.APIToken
 		}
-		if cfg.EnableWebdavAuth {
-			response[keyMessage] += ". WebDAV auth is still enabled but has no credential to accept — turn it off, or WebDAV clients will be rejected"
-			s.logger.Warn().Msg("Token-only auth enabled while WebDAV auth is on")
-		}
 	}
+	if warnings := webdavAuthWarnings(cfg); len(warnings) > 0 {
+		message += ". " + strings.Join(warnings, ". ")
+		response["warnings"] = warnings
+		s.logger.Warn().Strs("warnings", warnings).Msg("WebDAV auth locks out its clients")
+	}
+	response[keyMessage] = message
 	utils.JSONResponse(w, response, http.StatusOK)
 }
