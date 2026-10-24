@@ -190,12 +190,10 @@ func (handler *arrHandler) failHistory(
 	if err := handler.executeExactDownloadFailure(ctx, instance, job, failure, progress); err != nil {
 		return "", err
 	}
-	if failure.alreadyFailed {
-		mutation, ok := mutationForKey(*job, regrabKey(failure))
-		if !ok {
-			mutation, _ = mutationForKey(*job, mutationKey(MutationHistoryFailed, failure.downloadID))
-		}
-		if mutation.Attempts == 0 {
+	if _, regrabbed := mutationForKey(*job, regrabKey(failure)); failure.alreadyFailed && !regrabbed {
+		// A failure the Arr recorded before the job got no redownload search the job can see.
+		first, _ := mutationForKey(*job, mutationKey(MutationHistoryFailed, failure.downloadID))
+		if first.Attempts == 0 {
 			return handler.searchBindings(ctx, instance, job, bindings, progress)
 		}
 	}
@@ -237,6 +235,7 @@ func (handler *arrHandler) prepareExactDownloadFailure(
 			grabFound:     found,
 			alreadyFailed: true,
 			downloadID:    downloadID,
+			historyID:     record.ID,
 			failedID:      failedRecord.ID,
 			grabRecord:    record,
 		}, nil
@@ -308,7 +307,7 @@ func (handler *arrHandler) blocklistKey(
 	_, started := mutationForKey(*job, regrab)
 	switch {
 	case started:
-	case failure.alreadyFailed:
+	case failure.alreadyFailed && grabJournaled(*job, failure):
 		return first, nil
 	case regrabRounds(*job, failure.downloadID) >= maxMutationAttempts:
 		return "", fmt.Errorf("arr grabbed failed download %q again after %d blocklists; giving up",
@@ -370,6 +369,15 @@ func (handler *arrHandler) sendBlocklist(
 // regrabKey journals the blocklist of the Arr's latest grab of a download it grabbed again.
 func regrabKey(failure exactDownloadFailure) string {
 	return mutationKey(MutationHistoryFailed, failure.downloadID, strconv.Itoa(failure.grabRecord.ID))
+}
+
+// grabJournaled reports whether the job journaled a blocklist of failure's grab
+// or a newer one; a blocklist without a grab ID, from older binaries, covers every grab.
+func grabJournaled(job Job, failure exactDownloadFailure) bool {
+	return slices.ContainsFunc(job.Mutations, func(mutation Mutation) bool {
+		return mutation.Kind == MutationHistoryFailed && mutation.DownloadID == failure.downloadID &&
+			(mutation.HistoryID == 0 || mutation.HistoryID >= failure.grabRecord.ID)
+	})
 }
 
 // regrabRounds counts the blocklists of downloadID after its first.

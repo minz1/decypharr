@@ -24,7 +24,7 @@ func (handler *arrHandler) searchBindings(
 	if err != nil {
 		return "", err
 	}
-	if regrab := latestRegrabFailure(*job); regrab > 0 {
+	if round := searchRound(*job); round > 0 {
 		// Earlier rounds' searches are settled first, so none stays an intent.
 		for _, earlier := range slices.Clone(job.Mutations) {
 			if earlier.Kind != mutation.Kind {
@@ -34,7 +34,7 @@ func (handler *arrHandler) searchBindings(
 				return "", sendErr
 			}
 		}
-		mutation.Key += ":regrab-" + strconv.Itoa(regrab)
+		mutation.Key += ":round-" + strconv.Itoa(round)
 	}
 	mutation, err = ensureMutationIntent(job, progress, StatusSearching, mutation)
 	if err != nil {
@@ -70,17 +70,22 @@ func (handler *arrHandler) sendSearch(
 	return settleDispatch(job, progress, StatusSearching, mutation, dispatchErr, command.ID, lookup)
 }
 
-// latestRegrabFailure is the newest grab of the job's download the Arr made
-// again after its first blocklist and the job blocklisted too, 0 if none.
-func latestRegrabFailure(job Job) int {
-	latest := 0
+// searchRound counts the blocklists journaled after the job's first search:
+// each needs a search of its own, 0 if none.
+func searchRound(job Job) int {
+	searched, round := false, 0
 	for _, mutation := range job.Mutations {
-		first := mutationKey(MutationHistoryFailed, mutation.DownloadID)
-		if mutation.Kind == MutationHistoryFailed && mutation.Key != first {
-			latest = max(latest, mutation.HistoryID)
+		switch mutation.Kind {
+		case MutationEpisodeSearch, MutationSeasonSearch, MutationMovieSearch:
+			searched = true
+		case MutationHistoryFailed:
+			if searched {
+				round++
+			}
+		case MutationReleaseGrab:
 		}
 	}
-	return latest
+	return round
 }
 
 // commandReceipt finds a search command in the Arr's command list.

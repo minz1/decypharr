@@ -437,11 +437,13 @@ func TestResumedHistoryFailedBlocklistsEachGrabOnce(t *testing.T) {
 	regrabAttempted := regrabBlocklist
 	regrabAttempted.State, regrabAttempted.ReceiptID, regrabAttempted.ConfirmedAt = MutationIntent, 0, time.Time{}
 	regrabSearch := searched
-	regrabSearch.Key = mutationKey(MutationMovieSearch, "9", "regrab-17")
+	regrabSearch.Key = mutationKey(MutationMovieSearch, "9", "round-1")
 	regrabSearchAttempted := search
 	regrabSearchAttempted.Key = regrabSearch.Key
 	blocklistSelfFailed := blocklist
 	blocklistSelfFailed.Attempts = 0
+	legacySelfFailed := blocklistSelfFailed
+	legacySelfFailed.HistoryID = 0
 	thirdGrab := exactDownloadFailure{
 		found: true, grabFound: true, downloadID: "download-1", historyID: 30,
 		grabRecord: arr.HistoryRecord{ID: 30},
@@ -455,8 +457,12 @@ func TestResumedHistoryFailedBlocklistsEachGrabOnce(t *testing.T) {
 		grabRecord: arr.HistoryRecord{ID: 17},
 	}
 	regrabFailed := exactDownloadFailure{
-		found: true, grabFound: true, alreadyFailed: true, downloadID: "download-1", failedID: 18,
+		found: true, grabFound: true, alreadyFailed: true, downloadID: "download-1", historyID: 17, failedID: 18,
 		grabRecord: arr.HistoryRecord{ID: 17},
+	}
+	firstGrab := exactDownloadFailure{
+		found: true, grabFound: true, downloadID: "download-1", historyID: 12,
+		grabRecord: arr.HistoryRecord{ID: 12},
 	}
 	for name, tc := range map[string]struct {
 		journal        []Mutation
@@ -509,10 +515,27 @@ func TestResumedHistoryFailedBlocklistsEachGrabOnce(t *testing.T) {
 			journal: []Mutation{blocklistAttempted}, failure: regrabbed, autoRedownload: true, wantBlocklists: 1,
 			wantConfirmed: blocklist.Key, wantReceipt: 12,
 		},
+		"searched before the first blocklist, no auto redownload": {
+			journal: []Mutation{searched}, failure: firstGrab, wantBlocklists: 1, wantSearches: 1,
+		},
+		"re-grab the Arr failed itself, no auto redownload": {
+			journal: []Mutation{blocklist, searched}, failure: regrabFailed, wantSearches: 1,
+			wantConfirmed: regrabBlocklist.Key, wantReceipt: 18,
+		},
+		"re-grab the Arr failed itself": {
+			journal: []Mutation{blocklist, searched}, failure: regrabFailed, autoRedownload: true,
+			wantConfirmed: regrabBlocklist.Key, wantReceipt: 18,
+		},
+		"resumed on an Arr-recorded first failure an older binary journaled": {
+			journal: []Mutation{legacySelfFailed, searched}, failure: exactDownloadFailure{
+				found: true, grabFound: true, alreadyFailed: true, downloadID: "download-1", historyID: 12,
+				failedID: 13, grabRecord: arr.HistoryRecord{ID: 12},
+			},
+		},
 		"already blocklisted": {
 			journal: []Mutation{blocklist, searched}, failure: exactDownloadFailure{
-				found: true, grabFound: true, alreadyFailed: true, downloadID: "download-1", failedID: 13,
-				grabRecord: arr.HistoryRecord{ID: 12},
+				found: true, grabFound: true, alreadyFailed: true, downloadID: "download-1", historyID: 12,
+				failedID: 13, grabRecord: arr.HistoryRecord{ID: 12},
 			},
 		},
 	} {
@@ -545,6 +568,23 @@ func TestResumedHistoryFailedBlocklistsEachGrabOnce(t *testing.T) {
 				t.Fatalf("journal %+v keeps an intent, deadline %v", job.Mutations, deadline)
 			}
 		})
+	}
+}
+
+// A grab the Arr already failed keeps its grab ID, so a later re-grab is told apart from it.
+func TestAlreadyFailedGrabKeepsItsHistoryID(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `{"page":1,"totalRecords":2,"records":[`+
+			`{"id":18,"downloadId":"download-1","eventType":"downloadFailed"},`+
+			`{"id":17,"downloadId":"download-1","eventType":"grabbed"}]}`)
+	}))
+	t.Cleanup(server.Close)
+	failure, err := newTestHandler(server.URL).prepareExactDownloadFailure(
+		t.Context(), testInstance(server.URL), "download-1",
+	)
+	if err != nil || !failure.alreadyFailed || failure.historyID != 17 || failure.failedID != 18 {
+		t.Fatalf("failure = %+v, err = %v, want already failed grab 17 by record 18", failure, err)
 	}
 }
 
