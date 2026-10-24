@@ -158,10 +158,7 @@ func (s *Service) CleanupQueue(ctx context.Context, name string) error {
 		blocklistResearch = append(blocklistResearch, arrDecides...)
 	}
 	s.blocklistQueueItems(ctx, name, blocklistResearch, QueueActionBlocklistResearch, false)
-	var removed []QueueSchema
-	if s.blocklistQueueItems(ctx, name, blocklistSearchMissing, QueueActionBlocklistResearch, true) {
-		removed = blocklistSearchMissing
-	}
+	removed := s.blocklistQueueItems(ctx, name, blocklistSearchMissing, QueueActionBlocklistResearch, true)
 	s.searchPendingEpisodes(ctx, name, items, searched, removed)
 	s.blocklistQueueItems(ctx, name, blocklist, QueueActionBlocklist, true)
 	s.mu.RLock()
@@ -410,7 +407,7 @@ type pendingSearch struct {
 // shortcut: a record gone from the queue counts as removed by our blocklist, though a user, the arr or a page shift
 // in Queue() may have caused it; pending also keeps EpisodeHasFile from blocklist time. Both risk one extra search;
 // check FailedHistory and the episode's file before searching an unconfirmed removal if that shows up live.
-func (s *Service) searchPendingEpisodes(ctx context.Context, name string, items, searched, removed []QueueSchema) {
+func (s *Service) searchPendingEpisodes(ctx context.Context, name string, items, searched []QueueSchema, removed bool) {
 	s.mu.Lock()
 	pending := s.pendingSearches[name]
 	if pending == nil {
@@ -433,7 +430,7 @@ func (s *Service) searchPendingEpisodes(ctx context.Context, name string, items,
 				Msg("Queue cleanup: episode search not done after 1h, giving up; needs manual intervention")
 			continue
 		}
-		if (!hasQueueID(items, id) || hasQueueID(removed, id)) && !s.now().Before(search.retryAt) {
+		if (!hasQueueID(items, id) || removed) && !s.now().Before(search.retryAt) {
 			due = append(due, search)
 		}
 	}
