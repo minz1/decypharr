@@ -396,6 +396,26 @@ func (s *Service) updateJobDurable(id string, status Status, mutate func(*Job)) 
 	return s.updateJobWithDurability(id, status, mutate, true)
 }
 
+// rebindJob queues a waiting job again with more bindings to replace.
+func (s *Service) rebindJob(id string, bindings []Binding) error {
+	s.jobsMu.Lock()
+	defer s.jobsMu.Unlock()
+	original, ok := s.jobs[id]
+	if !ok || !original.Status.waiting() {
+		return fmt.Errorf("reacquire job %q is not waiting", id)
+	}
+	job := cloneJob(original)
+	job.Bindings = append(job.Bindings, bindings...)
+	job.Status = StatusQueued
+	job.LastError = "arr grabbed the failed download again; failing that grab too"
+	job.UpdatedAt = s.now()
+	if err := s.jobRepository.SaveDurable(job); err != nil {
+		return err
+	}
+	s.jobs[id] = job
+	return nil
+}
+
 func (s *Service) updateJobWithDurability(
 	id string,
 	status Status,

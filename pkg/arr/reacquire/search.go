@@ -3,6 +3,7 @@ package reacquire
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 
 	"github.com/sirrobot01/decypharr/pkg/arr"
@@ -23,32 +24,63 @@ func (handler *arrHandler) searchBindings(
 	if err != nil {
 		return "", err
 	}
+	if regrab := latestRegrabFailure(*job); regrab > 0 {
+		// Earlier rounds' searches are settled first, so none stays an attempted intent.
+		for _, earlier := range slices.Clone(job.Mutations) {
+			if earlier.Kind != mutation.Kind || earlier.Attempts == 0 {
+				continue
+			}
+			if sendErr := handler.sendSearch(ctx, instance, job, progress, earlier); sendErr != nil {
+				return "", sendErr
+			}
+		}
+		mutation.Key += ":regrab-" + strconv.Itoa(regrab)
+	}
 	mutation, err = ensureMutationIntent(job, progress, StatusSearching, mutation)
 	if err != nil {
 		return "", err
 	}
+	if sendErr := handler.sendSearch(ctx, instance, job, progress, mutation); sendErr != nil {
+		return "", sendErr
+	}
+	return StatusWaitingForGrab, nil
+}
+
+// sendSearch dispatches a journaled search unless the Arr already shows it.
+func (handler *arrHandler) sendSearch(
+	ctx context.Context,
+	instance arr.Arr,
+	job *Job,
+	progress JobProgress,
+	mutation Mutation,
+) error {
 	if mutation.State == MutationConfirmed {
-		return StatusWaitingForGrab, nil
+		return nil
 	}
 	lookup := handler.commandReceipt(ctx, instance)
 	done, err := reconcileAttempted(job, progress, StatusSearching, mutation, lookup)
-	if err != nil {
-		return "", err
-	}
-	if done {
-		return StatusWaitingForGrab, nil
+	if err != nil || done {
+		return err
 	}
 	mutation, err = recordMutationAttempt(job, progress, StatusSearching, mutation)
 	if err != nil {
-		return "", err
+		return err
 	}
 	command, dispatchErr := handler.dispatchSearchCommand(ctx, instance, mutation)
-	if settleErr := settleDispatch(
-		job, progress, StatusSearching, mutation, dispatchErr, command.ID, lookup,
-	); settleErr != nil {
-		return "", settleErr
+	return settleDispatch(job, progress, StatusSearching, mutation, dispatchErr, command.ID, lookup)
+}
+
+// latestRegrabFailure is the newest grab of the job's download the Arr made
+// again after its first blocklist and the job blocklisted too, 0 if none.
+func latestRegrabFailure(job Job) int {
+	latest := 0
+	for _, mutation := range job.Mutations {
+		first := mutationKey(MutationHistoryFailed, mutation.DownloadID)
+		if mutation.Kind == MutationHistoryFailed && mutation.Key != first {
+			latest = max(latest, mutation.HistoryID)
+		}
 	}
-	return StatusWaitingForGrab, nil
+	return latest
 }
 
 // commandReceipt finds a search command in the Arr's command list.

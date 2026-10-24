@@ -113,9 +113,36 @@ func (s *Service) reconcileImportedJobs(ctx context.Context) {
 		if !ok {
 			continue
 		}
-		if s.jobReplaced(ctx, instance, job, checked) {
-			_, _ = s.updateJobDurable(job.ID, StatusReady, func(job *Job) { job.LastError = "" })
+		if !s.jobReplaced(ctx, instance, job, checked) {
+			continue
 		}
+		if job.Strategy == StrategyHistoryFailed {
+			failure, err := (&arrHandler{arrs: s.arrs}).prepareExactDownloadFailure(ctx, instance, job.DownloadID)
+			if err != nil {
+				continue
+			}
+			if failure.found && !failure.alreadyFailed {
+				s.requeueReturnedDownload(job)
+				continue
+			}
+		}
+		_, _ = s.updateJobDurable(job.ID, StatusReady, func(job *Job) { job.LastError = "" })
+	}
+}
+
+// requeueReturnedDownload runs job again for the files the Arr imported from
+// its own download after failing it. Until the index binds them it waits; the
+// worker's ticker wakes the worker after reconciling.
+func (s *Service) requeueReturnedDownload(job Job) {
+	var returned []Binding
+	for _, binding := range s.index.ByDownloadID(job.ArrName, job.DownloadID) {
+		bound := slices.ContainsFunc(job.Bindings, func(old Binding) bool { return old.ArrFileID == binding.ArrFileID })
+		if !bound && binding.AuthorizesMutation() {
+			returned = append(returned, binding)
+		}
+	}
+	if len(returned) > 0 {
+		_ = s.rebindJob(job.ID, returned)
 	}
 }
 

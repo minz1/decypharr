@@ -191,7 +191,11 @@ func (handler *arrHandler) failHistory(
 		return "", err
 	}
 	if failure.alreadyFailed {
-		mutation, _ := mutationForKey(*job, mutationKey(MutationHistoryFailed, failure.downloadID))
+		regrab := mutationKey(MutationHistoryFailed, failure.downloadID, strconv.Itoa(failure.grabRecord.ID))
+		mutation, ok := mutationForKey(*job, regrab)
+		if !ok {
+			mutation, _ = mutationForKey(*job, mutationKey(MutationHistoryFailed, failure.downloadID))
+		}
 		if mutation.Attempts == 0 {
 			return handler.searchBindings(ctx, instance, job, bindings, progress)
 		}
@@ -270,6 +274,13 @@ func (handler *arrHandler) executeExactDownloadFailure(
 		Kind:       MutationHistoryFailed,
 		DownloadID: failure.downloadID,
 		HistoryID:  failure.historyID,
+	}
+	if first, ok := mutationForKey(*job, mutation.Key); ok && first.State == MutationConfirmed {
+		// The Arr grabbed the failed download again: that grab is blocklisted too.
+		regrab := mutationKey(MutationHistoryFailed, failure.downloadID, strconv.Itoa(failure.grabRecord.ID))
+		if _, started := mutationForKey(*job, regrab); started || !failure.alreadyFailed {
+			mutation.Key = regrab
+		}
 	}
 	mutation, err := ensureMutationIntent(job, progress, StatusBlocklisting, mutation)
 	if err != nil {

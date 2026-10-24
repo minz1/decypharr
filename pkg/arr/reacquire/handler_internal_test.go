@@ -400,9 +400,10 @@ func TestPreexistingFailedHistoryUsesExplicitSearch(t *testing.T) {
 	}
 }
 
-// A resumed history_failed job blocklists a download ID once: a re-grab of the
-// same release after an earlier search is blocklisted, a confirmed one is not again.
-func TestResumedHistoryFailedBlocklistsADownloadOnce(t *testing.T) {
+// A history_failed job blocklists each grab of its download ID once: a re-grab
+// of the same release after its search is blocklisted and searched for again
+// when the Arr does not redownload by itself; a resumed job does neither twice.
+func TestResumedHistoryFailedBlocklistsEachGrabOnce(t *testing.T) {
 	t.Parallel()
 	queued := time.Now().UTC().Add(-time.Minute)
 	search := Mutation{
@@ -415,6 +416,8 @@ func TestResumedHistoryFailedBlocklistsADownloadOnce(t *testing.T) {
 		LastDispatchedAt: queued,
 		Attempts:         1,
 	}
+	searched := search
+	searched.State, searched.ReceiptID, searched.ConfirmedAt = MutationConfirmed, 71, queued
 	blocklist := Mutation{
 		Key:              mutationKey(MutationHistoryFailed, "download-1"),
 		Kind:             MutationHistoryFailed,
@@ -427,34 +430,133 @@ func TestResumedHistoryFailedBlocklistsADownloadOnce(t *testing.T) {
 		ReceiptID:        13,
 		ConfirmedAt:      queued.Add(-time.Minute),
 	}
+	regrabBlocklist := blocklist
+	regrabBlocklist.Key, regrabBlocklist.HistoryID, regrabBlocklist.ReceiptID =
+		mutationKey(MutationHistoryFailed, "download-1", "17"), 17, 18
+	regrabAttempted := regrabBlocklist
+	regrabAttempted.State, regrabAttempted.ReceiptID, regrabAttempted.ConfirmedAt = MutationIntent, 0, time.Time{}
+	regrabSearch := searched
+	regrabSearch.Key = mutationKey(MutationMovieSearch, "9", "regrab-17")
+	regrabSearchAttempted := search
+	regrabSearchAttempted.Key = regrabSearch.Key
+	blocklistSelfFailed := blocklist
+	blocklistSelfFailed.Attempts = 0
+	thirdGrab := exactDownloadFailure{
+		found: true, grabFound: true, downloadID: "download-1", historyID: 30,
+		grabRecord: arr.HistoryRecord{ID: 30},
+	}
+	searchUnsent := search
+	searchUnsent.Attempts, searchUnsent.LastDispatchedAt = 0, time.Time{}
+	blocklistAttempted := blocklist
+	blocklistAttempted.State, blocklistAttempted.ReceiptID, blocklistAttempted.ConfirmedAt = MutationIntent, 0, time.Time{}
+	regrabbed := exactDownloadFailure{
+		found: true, grabFound: true, downloadID: "download-1", historyID: 17,
+		grabRecord: arr.HistoryRecord{ID: 17},
+	}
+	regrabFailed := exactDownloadFailure{
+		found: true, grabFound: true, alreadyFailed: true, downloadID: "download-1", failedID: 18,
+		grabRecord: arr.HistoryRecord{ID: 17},
+	}
 	for name, tc := range map[string]struct {
 		journal        []Mutation
+		failure        exactDownloadFailure
+		autoRedownload bool
 		wantBlocklists int64
+		wantSearches   int64
+		wantConfirmed  string
+		wantReceipt    int
 	}{
-		"searched then re-grabbed": {journal: []Mutation{search}, wantBlocklists: 1},
-		"already blocklisted":      {journal: []Mutation{blocklist, search}, wantBlocklists: 0},
+		"searched then re-grabbed": {
+			journal: []Mutation{search}, failure: regrabbed, autoRedownload: true, wantBlocklists: 1,
+		},
+		"re-grabbed after a confirmed blocklist": {
+			journal: []Mutation{blocklist, searched}, failure: regrabbed, autoRedownload: true, wantBlocklists: 1,
+		},
+		"re-grabbed after a confirmed blocklist, no auto redownload": {
+			journal: []Mutation{blocklist, searched}, failure: regrabbed, wantBlocklists: 1, wantSearches: 1,
+		},
+		"resumed after the re-grab round": {
+			journal: []Mutation{blocklist, searched, regrabBlocklist, regrabSearch}, failure: regrabFailed,
+		},
+		"resumed after a re-grab blocklist the Arr recorded": {
+			journal: []Mutation{blocklist, searched, regrabAttempted}, failure: regrabFailed, wantSearches: 1,
+			wantConfirmed: regrabBlocklist.Key, wantReceipt: 18,
+		},
+		"re-grabbed while the earlier search is unsettled": {
+			journal: []Mutation{blocklist, search}, failure: regrabbed, wantBlocklists: 1, wantSearches: 1,
+			wantConfirmed: search.Key, wantReceipt: 71,
+		},
+		"resumed after a re-grab blocklist, first failure by the Arr": {
+			journal: []Mutation{blocklistSelfFailed, searched, regrabAttempted}, failure: regrabFailed,
+			autoRedownload: true, wantConfirmed: regrabBlocklist.Key, wantReceipt: 18,
+		},
+		"grabbed a third time while the re-grab search is unsettled": {
+			journal: []Mutation{blocklist, searched, regrabBlocklist, regrabSearchAttempted},
+			failure: thirdGrab, wantBlocklists: 1, wantSearches: 1,
+			wantConfirmed: regrabSearch.Key, wantReceipt: 71,
+		},
+		"re-grabbed after an earlier search never sent": {
+			journal: []Mutation{blocklist, searchUnsent}, failure: regrabbed, wantBlocklists: 1, wantSearches: 1,
+		},
+		"re-grabbed while the first blocklist is unsettled": {
+			journal: []Mutation{blocklistAttempted}, failure: regrabbed, autoRedownload: true, wantBlocklists: 1,
+			wantConfirmed: blocklist.Key, wantReceipt: 12,
+		},
+		"already blocklisted": {
+			journal: []Mutation{blocklist, searched}, failure: exactDownloadFailure{
+				found: true, grabFound: true, alreadyFailed: true, downloadID: "download-1", failedID: 13,
+				grabRecord: arr.HistoryRecord{ID: 12},
+			},
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			server, blocklisted, searched := newSearchedMovieArr(t, queued)
+			server, blocklisted, searches := newSearchedMovieArr(t, queued)
 			job := Job{Mutations: tc.journal}
 			status, err := newTestHandler(server.URL).failHistory(
 				t.Context(),
 				testInstance(server.URL),
 				&job,
 				[]Binding{{ArrType: arr.Radarr, MovieID: 9}},
-				exactDownloadFailure{found: true, grabFound: true, downloadID: "download-1", historyID: 17},
-				arr.DownloadClientConfig{AutoRedownloadFailed: true},
+				tc.failure,
+				arr.DownloadClientConfig{AutoRedownloadFailed: tc.autoRedownload},
 				&recordedProgress{},
 			)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if status != StatusWaitingForGrab || blocklisted.Load() != tc.wantBlocklists || searched.Load() != 0 {
-				t.Fatalf("status = %q, blocklisted = %d, searched = %d, want %d blocklists",
-					status, blocklisted.Load(), searched.Load(), tc.wantBlocklists)
+			if status != StatusWaitingForGrab || blocklisted.Load() != tc.wantBlocklists ||
+				searches.Load() != tc.wantSearches {
+				t.Fatalf("status = %q, blocklisted = %d, searched = %d, want %d blocklists, %d searches",
+					status, blocklisted.Load(), searches.Load(), tc.wantBlocklists, tc.wantSearches)
+			}
+			if confirmed, _ := mutationForKey(job, tc.wantConfirmed); tc.wantConfirmed != "" &&
+				(confirmed.State != MutationConfirmed || confirmed.ReceiptID != tc.wantReceipt) {
+				t.Fatalf("%s = %+v, want confirmed by %d", tc.wantConfirmed, confirmed, tc.wantReceipt)
 			}
 		})
+	}
+}
+
+func TestRegrabSearchSettlesOnlySearches(t *testing.T) {
+	t.Parallel()
+	queued := time.Now().UTC().Add(-time.Minute)
+	unsettled := Mutation{
+		Key: mutationKey(MutationHistoryFailed, "download-1", "30"), Kind: MutationHistoryFailed,
+		State: MutationIntent, DownloadID: "download-1", HistoryID: 30,
+		IntentAt: queued, LastDispatchedAt: queued, Attempts: 1,
+	}
+	server, blocklisted, searches := newSearchedMovieArr(t, queued)
+	job := Job{Mutations: []Mutation{unsettled}}
+	status, err := newTestHandler(server.URL).searchBindings(
+		t.Context(), testInstance(server.URL), &job, []Binding{{ArrType: arr.Radarr, MovieID: 9}}, &recordedProgress{},
+	)
+	if err != nil || status != StatusWaitingForGrab || blocklisted.Load() != 0 || searches.Load() != 1 {
+		t.Fatalf("status = %q, err = %v, blocklisted = %d, searched = %d", status, err, blocklisted.Load(),
+			searches.Load())
+	}
+	if got, _ := mutationForKey(job, unsettled.Key); got.State != MutationIntent || got.Attempts != 1 {
+		t.Fatalf("blocklist = %+v, want it left as it was", got)
 	}
 }
 

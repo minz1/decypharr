@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -154,6 +155,7 @@ type importedJobCase struct {
 	changedInstance bool
 	unauthorized    bool
 	sameDownload    bool
+	history         string
 }
 
 // serveImportedJobCase answers the read-only library requests for tc and
@@ -165,14 +167,19 @@ func serveImportedJobCase(t *testing.T, tc importedJobCase, requests *atomic.Int
 		if r.Method != http.MethodGet {
 			t.Error("confirmation sent a mutation")
 		}
-		if tc.unauthorized {
+		if tc.unauthorized || r.URL.Path == "/api/v3/history" && tc.history == "unauthorized" {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
+		}
+		history := tc.history
+		if history == "" {
+			history = `{"page":1,"totalRecords":0,"records":[]}`
 		}
 		body := map[string]string{
 			"/api/v3/movie/9":     tc.movie,
 			"/api/v3/episodefile": tc.files,
 			"/api/v3/episode":     tc.episodes,
+			"/api/v3/history":     history,
 		}
 		response, ok := body[r.URL.Path]
 		if !ok {
@@ -180,7 +187,10 @@ func serveImportedJobCase(t *testing.T, tc importedJobCase, requests *atomic.Int
 			http.NotFound(w, r)
 			return
 		}
-		if r.URL.Path != "/api/v3/movie/9" && r.URL.Query().Get("seriesId") != "9" {
+		if r.URL.Path == "/api/v3/history" && r.URL.Query().Get("downloadId") != "same-download" {
+			t.Error("wrong download ID")
+		}
+		if r.URL.Path != "/api/v3/movie/9" && r.URL.Path != "/api/v3/history" && r.URL.Query().Get("seriesId") != "9" {
 			t.Error("wrong series ID")
 		}
 		fmt.Fprint(w, response)
@@ -226,15 +236,20 @@ func waitingImportJob(tc importedJobCase, instance arr.Arr, now time.Time) (Job,
 	}, bindings[0]
 }
 
-// wantImportRequests is how many library reads judging tc should take.
+// wantImportRequests is how many reads judging tc should take: the library,
+// then the download's failed and grab history once it looks replaced.
 func wantImportRequests(tc importedJobCase) int64 {
+	var history int64
+	if tc.ready {
+		history = 2
+	}
 	switch {
 	case tc.changedInstance:
 		return 0
 	case tc.kind == arr.Sonarr:
-		return 2
+		return 2 + history
 	default:
-		return 1
+		return 1 + history
 	}
 }
 
@@ -262,6 +277,124 @@ func TestReconcileImportedManagedJobs(t *testing.T) {
 			t.Parallel()
 			runImportedJobCase(t, tc)
 		})
+	}
+}
+
+// A waiting history_failed job whose download the Arr grabbed again after the
+// failure, and imported, is the bad release back: the job is requeued with the
+// re-imported file bound, not marked ready. An index that still binds only the
+// replaced file keeps it waiting; a re-grab the Arr already failed counts as a replacement.
+func TestReconcileRequeuesAJobWhoseDownloadCameBack(t *testing.T) {
+	t.Parallel()
+	const regrabbed = `{"page":1,"totalRecords":2,"records":[` +
+		`{"id":50,"eventType":"grabbed","downloadId":"same-download"},` +
+		`{"id":40,"eventType":"downloadFailed","downloadId":"same-download"}]}`
+	const regrabFailed = `{"page":1,"totalRecords":3,"records":[` +
+		`{"id":51,"eventType":"downloadFailed","downloadId":"same-download"},` +
+		`{"id":50,"eventType":"grabbed","downloadId":"same-download"},` +
+		`{"id":40,"eventType":"downloadFailed","downloadId":"same-download"}]}`
+	for _, tc := range []returnedDownloadCase{
+		{name: "re-grabbed and indexed", history: regrabbed, indexed: true, want: StatusQueued, wantRequests: 3},
+		{name: "re-grabbed, not indexed yet", history: regrabbed, want: StatusWaitingForImport, wantRequests: 3},
+		{name: "re-grab already failed", history: regrabFailed, indexed: true, want: StatusReady, wantRequests: 3},
+		{name: "history unreadable", history: "unauthorized", indexed: true, want: StatusWaitingForImport,
+			wantRequests: 2},
+		{name: "re-grabbed, heuristic binding", history: regrabbed, indexed: true, heuristic: true,
+			want: StatusWaitingForImport, wantRequests: 3},
+		{name: "command search job", history: regrabbed, indexed: true, strategy: StrategyCommandSearch,
+			want: StatusReady, wantRequests: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			runReturnedDownloadCase(t, tc)
+		})
+	}
+}
+
+type returnedDownloadCase struct {
+	name         string
+	history      string
+	indexed      bool
+	heuristic    bool
+	strategy     Strategy
+	want         Status
+	wantRequests int64
+}
+
+// runReturnedDownloadCase reconciles a waiting movie job whose Arr now holds
+// file 44, with tc's download history and file 44 bound in the index or not.
+func runReturnedDownloadCase(t *testing.T, tc returnedDownloadCase) {
+	t.Helper()
+	var requests atomic.Int64
+	server := serveImportedJobCase(t, importedJobCase{
+		kind:    arr.Radarr,
+		movie:   `{"id":9,"movieFile":{"id":44,"movieId":9,"path":"/library/new.mkv"}}`,
+		history: tc.history,
+	}, &requests)
+	instance := arr.Arr{Name: "library", Type: arr.Radarr, Host: server.URL, Token: "token"}
+	registry := arr.New(config.NewStore(&config.Config{}), nil, zerolog.Nop())
+	registry.AddOrUpdate(instance)
+	service, err := NewService(ServiceOptions{Directory: t.TempDir(), Arrs: registry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = service.Close() })
+	job, binding := waitingImportJob(importedJobCase{kind: arr.Radarr}, instance, time.Now())
+	if tc.strategy != "" {
+		job.Strategy = tc.strategy
+	}
+	if saveErr := service.jobRepository.Save(job); saveErr != nil {
+		t.Fatal(saveErr)
+	}
+	if startErr := service.Start(t.Context()); startErr != nil {
+		t.Fatal(startErr)
+	}
+	if tc.indexed {
+		binding.ArrFileID, binding.LibraryPath = 44, "/library/new.mkv"
+	}
+	if tc.heuristic {
+		binding.Confidence = ConfidenceHeuristic
+	}
+	if upsertErr := service.UpsertBinding(binding); upsertErr != nil {
+		t.Fatal(upsertErr)
+	}
+	service.reconcileImportedJobs(t.Context())
+	updated, _ := service.Job(job.ID)
+	if updated.Status != tc.want {
+		t.Fatalf("status = %s, want %s (last error %q)", updated.Status, tc.want, updated.LastError)
+	}
+	if got := requests.Load(); got != tc.wantRequests {
+		t.Fatalf("requests = %d, want %d", got, tc.wantRequests)
+	}
+	if tc.want != StatusQueued {
+		return
+	}
+	files := make([]int, 0, len(updated.Bindings))
+	for _, bound := range updated.Bindings {
+		files = append(files, bound.ArrFileID)
+	}
+	if !slices.Equal(files, []int{42, 44}) || updated.LastError == "" {
+		t.Fatalf("bound files = %v, last error = %q", files, updated.LastError)
+	}
+}
+
+func TestRebindLeavesAJobThatIsNoLongerWaiting(t *testing.T) {
+	t.Parallel()
+	instance := arr.Arr{Name: "library", Type: arr.Radarr, Host: "http://arr.invalid", Token: "token"}
+	service, err := NewService(ServiceOptions{Directory: t.TempDir(), Arrs: newTestArrStorage()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = service.Close() })
+	job, binding := waitingImportJob(importedJobCase{kind: arr.Radarr}, instance, time.Now())
+	job.Status = StatusReady
+	service.jobs[job.ID] = job
+	binding.ArrFileID = 44
+	if rebindErr := service.rebindJob(job.ID, []Binding{binding}); rebindErr == nil {
+		t.Fatal("rebindJob succeeded on a ready job")
+	}
+	if got, _ := service.Job(job.ID); got.Status != StatusReady || len(got.Bindings) != 1 {
+		t.Fatalf("job = %s with %d bindings, want ready with 1", got.Status, len(got.Bindings))
 	}
 }
 
