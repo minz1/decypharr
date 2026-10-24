@@ -115,7 +115,7 @@ func TestRestoreSkipsEntriesChangedSinceTheSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	running, release := make(chan struct{}), make(chan struct{})
+	running, release := make(chan struct{}, 1), make(chan struct{})
 	m.jobQueue = NewJobQueue(t.Context(), 1, func(context.Context, *Job) {
 		running <- struct{}{}
 		<-release
