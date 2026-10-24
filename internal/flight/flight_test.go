@@ -102,3 +102,23 @@ func TestAbandonedCallRunsToCompletion(t *testing.T) {
 		}
 	})
 }
+
+// A caller that has already given up starts no work: an NZB parse past its
+// deadline would otherwise queue a detached fetch for every remaining file.
+func TestDoneCallerStartsNothing(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		var g flight.Group[int]
+		var runs atomic.Int32
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		_, _, err := g.Do(ctx, "key", func(context.Context) (int, error) {
+			runs.Add(1)
+			return 1, nil
+		})
+		synctest.Wait()
+		if !errors.Is(err, context.Canceled) || runs.Load() != 0 {
+			t.Fatalf("err = %v after %d runs, want its cancellation and no run", err, runs.Load())
+		}
+	})
+}

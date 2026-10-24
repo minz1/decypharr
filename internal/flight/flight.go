@@ -23,8 +23,12 @@ type Group[T any] struct {
 
 // Do returns the result of fn for key, running fn unless a call for key is
 // already in flight. shared reports whether the result was shared with
-// other callers.
+// other callers. A caller whose ctx has already ended starts nothing.
 func (g *Group[T]) Do(ctx context.Context, key string, fn func(context.Context) (T, error)) (T, bool, error) {
+	if err := ctx.Err(); err != nil {
+		var zero T
+		return zero, false, err
+	}
 	detached := context.WithoutCancel(ctx)
 	results := g.group.DoChan(key, func() (any, error) { return fn(detached) })
 	select {
