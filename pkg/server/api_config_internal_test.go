@@ -230,6 +230,49 @@ func TestUpdateConfigRejectsUnloadableSettings(t *testing.T) {
 	}
 }
 
+func TestUpdateConfigPruneWithStrmNamesStrm(t *testing.T) {
+	t.Parallel()
+	mgr, store := managertest.New(t, nil)
+	if err := store.Get().Save(); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(store.Get().JSONFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{manager: mgr, config: store, logger: zerolog.Nop()}
+	response := httptest.NewRecorder()
+	body := `{"strm":{"enabled":true},"prune":{"enabled":true,"roots":["/data"]}}`
+	server.handleUpdateConfig(response, httptest.NewRequest(http.MethodPost, "/api/config", strings.NewReader(body)))
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "together with STRM") {
+		t.Fatalf("status = %d (%s), want 400 naming STRM", response.Code, response.Body.String())
+	}
+	after, err := os.ReadFile(store.Get().JSONFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("the rejected settings were written to config.json")
+	}
+}
+
+func TestUpdateConfigUntouchedPruneKeepsReport(t *testing.T) {
+	t.Parallel()
+	mgr, store := managertest.New(t, nil)
+	if err := store.Get().Save(); err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{manager: mgr, config: store, logger: zerolog.Nop()}
+	body := []byte(`{"prune":{"enabled":false,"mode":"report","schedule":"1h","grace":"168h",` +
+		`"max_per_run":100,"roots":[]}}`)
+	if postConfig(t, server, body) {
+		t.Fatal("an untouched prune section restarted services")
+	}
+	if got := store.Get().Prune; got.Mode != config.PruneModeReport || got.Enabled || len(got.Roots) != 0 {
+		t.Fatalf("prune = %#v, want the disabled report defaults", got)
+	}
+}
+
 func TestMergeConfigUpdatePreservesPrune(t *testing.T) {
 	t.Parallel()
 	current := config.Config{Prune: config.Prune{

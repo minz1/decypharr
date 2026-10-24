@@ -61,6 +61,12 @@
                         </button>
                         <button type="button"
                                 class="tab-button cursor-pointer flex items-center gap-2 py-3 px-1 border-b-2 border-transparent text-base-content/70 hover:text-base-content hover:border-base-300 font-medium text-sm transition-colors"
+                                data-tab="prune">
+                            <i class="bi bi-trash3 text-lg"></i>
+                            <span>Prune</span>
+                        </button>
+                        <button type="button"
+                                class="tab-button cursor-pointer flex items-center gap-2 py-3 px-1 border-b-2 border-transparent text-base-content/70 hover:text-base-content hover:border-base-300 font-medium text-sm transition-colors"
                                 data-tab="hearsay">
                             <i class="bi bi-broadcast text-lg"></i>
                             <span>Hearsay</span>
@@ -1916,6 +1922,95 @@ fe80::/10</textarea>
                                        id="repair.verify_content" name="repair.verify_content">
                                 <span class="label-text font-medium">Verify NZB content</span>
                             </label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="tab-content hidden" data-tab-content="prune">
+                    <div class="space-y-6">
+                        <div class="alert alert-info">
+                            <i class="bi bi-info-circle text-lg"></i>
+                            <div class="text-sm">
+                                Prune finds debrid and usenet entries that no symlink under the library roots points
+                                to. Report mode only lists them. Delete mode removes entries that stayed unreferenced
+                                for the grace period, up to max per run on each scheduled run. Prune can't be enabled
+                                while STRM is on.
+                            </div>
+                        </div>
+
+                        <div>
+                            <label class="label cursor-pointer justify-start gap-3">
+                                <input type="checkbox" class="checkbox checkbox-lg checkbox-primary"
+                                       id="prune.enabled" name="prune.enabled">
+                                <div>
+                                    <span class="label-text font-medium text-lg">Enable Prune</span>
+                                    <div class="label-text-alt">Changing prune settings restarts services.</div>
+                                </div>
+                            </label>
+                        </div>
+
+                        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                            <div>
+                                <label class="label" for="prune.mode">
+                                    <span class="font-medium">Mode</span>
+                                </label>
+                                <select class="select w-full" name="prune.mode" id="prune.mode">
+                                    <option value="report">Report only (deletes nothing)</option>
+                                    <option value="delete">Delete</option>
+                                </select>
+                                <span class="label-text-alt opacity-70">Saving with delete mode on asks for a confirmation.</span>
+                            </div>
+
+                            <div>
+                                <label class="label" for="prune.schedule">
+                                    <span class="font-medium">Schedule</span>
+                                </label>
+                                <input type="text" class="input w-full" name="prune.schedule" id="prune.schedule"
+                                       placeholder="1h">
+                                <span class="label-text-alt opacity-70">Interval up to 24h, a time like 04:00, or a cron expression.</span>
+                            </div>
+
+                            <div>
+                                <label class="label" for="prune.grace">
+                                    <span class="font-medium">Grace</span>
+                                </label>
+                                <input type="text" class="input w-full" name="prune.grace" id="prune.grace"
+                                       placeholder="168h">
+                                <span class="label-text-alt opacity-70">How long an entry must stay unreferenced. At least 1h and at least twice the schedule.</span>
+                            </div>
+
+                            <div>
+                                <label class="label" for="prune.max_per_run">
+                                    <span class="font-medium">Max per run</span>
+                                </label>
+                                <input type="number" min="1" class="input w-full" name="prune.max_per_run"
+                                       id="prune.max_per_run" placeholder="100">
+                                <span class="label-text-alt opacity-70">Most entries one run deletes.</span>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label class="label" for="prune.roots">
+                                <span class="font-medium">Library roots</span>
+                            </label>
+                            <textarea class="textarea w-full font-mono" rows="3" name="prune.roots" id="prune.roots"
+                                      placeholder="/data/library"></textarea>
+                            <span class="label-text-alt opacity-70">One absolute path per line. Symlinks under these
+                                folders count as references. At least one is required when enabled.</span>
+                        </div>
+
+                        <div class="card bg-base-200">
+                            <div class="card-body gap-4">
+                                <div class="flex flex-wrap items-center justify-between gap-2">
+                                    <h3 class="card-title text-base">Last run</h3>
+                                    <button type="button" class="btn btn-outline" id="pruneRunBtn">Run now</button>
+                                </div>
+                                <p class="text-sm opacity-70">Run now uses the saved settings. If a run aborts because
+                                    far fewer library links were found than last time, every run aborts until that drop
+                                    is accepted with <code>POST /api/prune/run?accept_baseline=true</code> and the API
+                                    token. In delete mode that run deletes without a confirmation.</p>
+                                <div id="pruneStatus" aria-live="polite"></div>
+                            </div>
                         </div>
                     </div>
                 </div>

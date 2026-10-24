@@ -29,6 +29,7 @@ class ConfigManager {
     init() {
         this.bindEvents();
         this.loadConfiguration();
+        this.loadPruneStatus();
         this.setupMagnetHandler();
         this.checkIncompleteConfig();
     }
@@ -59,6 +60,9 @@ class ConfigManager {
 
         const strmRegenerateBtn = document.getElementById('strmRegenerateBtn');
         if (strmRegenerateBtn) strmRegenerateBtn.addEventListener('click', () => this.regenerateStrm());
+
+        const pruneRunBtn = document.getElementById('pruneRunBtn');
+        if (pruneRunBtn) pruneRunBtn.addEventListener('click', () => this.runPruneNow());
     }
 
     // Display labels for the built-in queue-cleanup catalog. IDs MUST match
@@ -150,6 +154,8 @@ class ConfigManager {
         // Load repair config
         this.populateRepairSettings(config.repair, config.arrs);
 
+        this.populatePruneSettings(config.prune);
+
         // Load hearsay config
         this.populateHearsaySettings(config.hearsay);
     }
@@ -197,6 +203,152 @@ class ConfigManager {
             blocklist: ($('hearsay.blocklist')?.value || '')
                 .split('\n').map((cidr) => cidr.trim()).filter(Boolean),
         };
+    }
+
+    populatePruneSettings(prune) {
+        const $ = (id) => document.getElementById(id);
+        const p = prune || {};
+        if ($('prune.enabled')) $('prune.enabled').checked = !!p.enabled;
+        if ($('prune.mode')) $('prune.mode').value = p.mode === 'delete' ? 'delete' : 'report';
+        if ($('prune.schedule')) $('prune.schedule').value = p.schedule || '';
+        if ($('prune.grace')) $('prune.grace').value = p.grace || '';
+        if ($('prune.max_per_run')) $('prune.max_per_run').value = p.max_per_run || '';
+        if ($('prune.roots')) $('prune.roots').value = (p.roots || []).join('\n');
+        this.loadedPrune = this.collectPruneConfig();
+    }
+
+    collectPruneConfig() {
+        const $ = (id) => document.getElementById(id);
+        return {
+            enabled: $('prune.enabled')?.checked ?? false,
+            mode: $('prune.mode')?.value || 'report',
+            schedule: $('prune.schedule')?.value.trim() || '',
+            grace: $('prune.grace')?.value.trim() || '',
+            max_per_run: parseInt($('prune.max_per_run')?.value, 10) || 0,
+            roots: ($('prune.roots')?.value || '')
+                .split('\n').map((root) => root.trim()).filter(Boolean),
+        };
+    }
+
+    // Omitted sections are kept by the server, so an untouched (or stale) tab never rewrites prune.
+    prunePayload() {
+        const prune = this.collectPruneConfig();
+        return JSON.stringify(prune) === JSON.stringify(this.loadedPrune) ? undefined : prune;
+    }
+
+    confirmPruneDelete(prune) {
+        if (!prune || !prune.enabled || prune.mode !== 'delete') return true;
+        return window.confirm(
+            `Save prune in delete mode?\n\nFrom the next scheduled run on, each run deletes up to ` +
+            `${prune.max_per_run || 'the default number of'} entries that no library symlink has pointed to ` +
+            `for ${prune.grace || 'the default grace period'}.`
+        );
+    }
+
+    async pruneError(response) {
+        const text = await response.text();
+        try {
+            return JSON.parse(text).error || text;
+        } catch (_) {
+            return text;
+        }
+    }
+
+    async loadPruneStatus() {
+        try {
+            const response = await window.decypharrUtils.fetcher('/api/prune/status');
+            if (!response.ok) throw new Error(await this.pruneError(response));
+            this.renderPruneStatus(await response.json());
+        } catch (error) {
+            window.decypharrUtils.createToast(`Could not load the prune status: ${error.message}`, 'error');
+        }
+    }
+
+    async runPruneNow() {
+        const utils = window.decypharrUtils;
+        const btn = document.getElementById('pruneRunBtn');
+        btn.disabled = true;
+        try {
+            let saved;
+            try {
+                const response = await utils.fetcher('/api/config');
+                if (!response.ok) throw new Error(await this.pruneError(response));
+                saved = (await response.json()).prune || {};
+            } catch (error) {
+                utils.createToast(`Could not read the saved prune settings: ${error.message}`, 'error');
+                return;
+            }
+            if (saved.enabled && saved.mode === 'delete' && !window.confirm(
+                `Run prune now in delete mode? It deletes up to ${saved.max_per_run} eligible entries.`
+            )) return;
+
+            try {
+                const response = await utils.fetcher('/api/prune/run', {method: 'POST'});
+                if (response.status === 409) {
+                    utils.createToast('Prune is disabled: enable it and save first', 'warning');
+                } else if (!response.ok) {
+                    utils.createToast(`Prune run failed: ${await this.pruneError(response)}`, 'error');
+                } else {
+                    const report = await response.json();
+                    this.renderPruneStatus(report);
+                    if (report.aborted) utils.createToast(`Prune run aborted: ${report.aborted}`, 'warning');
+                    else utils.createToast('Prune run finished', 'success');
+                }
+            } catch (error) {
+                utils.createToast(`Prune run: ${error.message}. The run may still be in progress; reload the status.`, 'warning');
+            }
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    renderPruneStatus(report) {
+        const container = document.getElementById('pruneStatus');
+        if (!container) return;
+        const utils = window.decypharrUtils;
+        const esc = (value) => utils.escapeHtml(String(value ?? ''));
+        const when = (stamp) => (stamp ? new Date(stamp).toLocaleString() : '');
+        if (!report || !report.started_at) {
+            container.innerHTML = '<p class="text-sm opacity-70">No run since decypharr started.</p>';
+            return;
+        }
+
+        const started = Date.parse(report.started_at);
+        const eligible = (c) => !c.excluded && Date.parse(c.eligible_at) <= started;
+        const tier = (c) => (eligible(c) ? 0 : c.excluded ? 2 : 1);
+        const at = (c) => Date.parse(c.eligible_at) || 0;
+        const candidates = [...(report.candidates || [])].sort((a, b) => tier(a) - tier(b) || at(a) - at(b));
+        const counts = [
+            ['Links', report.links], ['Referenced', report.referenced], ['Dangling', report.dangling],
+            ['Newly unreferenced', report.newly_unreferenced], ['Missing referenced', report.missing_referenced],
+            ['Candidates', candidates.length], ['Eligible', candidates.filter(eligible).length],
+            ['Deleted', report.deleted], ['Failed', report.failed],
+            ['Freed', utils.formatBytes(report.bytes_freed)],
+        ];
+        const rows = candidates.slice(0, 100).map((c) => `
+            <tr>
+                <td class="break-all">${esc(c.name)}</td>
+                <td>${esc(c.provider)}</td>
+                <td>${esc(utils.formatBytes(c.size))}</td>
+                <td>${esc(when(c.unreferenced_since))}</td>
+                <td>${c.excluded ? `Excluded: ${esc(c.excluded)}` : esc(when(c.eligible_at))}</td>
+            </tr>`).join('');
+
+        container.innerHTML = `
+            <p class="text-sm">Started ${esc(when(report.started_at))}, mode ${esc(report.mode)}${report.accepted_baseline ? ', baseline accepted' : ''}</p>
+            ${report.aborted ? `<div class="alert alert-warning text-sm mt-2">Aborted: ${esc(report.aborted)}</div>` : ''}
+            <dl class="grid grid-cols-2 sm:grid-cols-5 gap-2 text-sm mt-2">
+                ${counts.map(([label, value]) => `<div><dt class="opacity-70">${esc(label)}</dt><dd class="font-medium">${esc(value)}</dd></div>`).join('')}
+            </dl>
+            ${rows ? `
+            <div class="overflow-x-auto mt-2">
+                <table class="table table-sm">
+                    <thead><tr><th>Name</th><th>Provider</th><th>Size</th><th>Unreferenced since</th><th>Eligible at</th></tr></thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            </div>` : ''}
+            ${candidates.length > 100 ? `<p class="text-sm opacity-70 mt-2">and ${candidates.length - 100} more</p>` : ''}
+        `;
     }
 
     populateRepairSettings(repair, arrs) {
@@ -1314,6 +1466,11 @@ class ConfigManager {
 
             document.getElementById('virtualFolderValidationSummary')?.classList.add('hidden');
 
+            if (!this.confirmPruneDelete(config.prune)) {
+                this.refs.loadingOverlay.classList.add('hidden');
+                return;
+            }
+
             const response = await window.decypharrUtils.fetcher('/api/config', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -1324,6 +1481,7 @@ class ConfigManager {
                 const errorText = await response.text();
                 throw new Error(errorText || 'Failed to save configuration');
             }
+            if (config.prune) this.loadedPrune = config.prune;
 
             let restarted = true;
             let warnings = [];
@@ -1489,6 +1647,8 @@ class ConfigManager {
 
             // Collect repair config
             repair: this.collectRepairConfig(),
+
+            prune: this.prunePayload(),
 
             // Collect STRM config
             strm: this.collectStrmConfig(),

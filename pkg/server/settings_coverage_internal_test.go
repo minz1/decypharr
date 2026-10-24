@@ -37,6 +37,7 @@ func newSettingsCoverage() settingsCoverage {
 			},
 			"hearsay.":               {[]string{"populateHearsaySettings"}, "collectHearsayConfig"},
 			"repair.":                {[]string{"populateRepairSettings"}, "collectRepairConfig"},
+			"prune.":                 {[]string{"populatePruneSettings"}, "collectPruneConfig"},
 			"notifications.":         {[]string{"populateNotificationSettings"}, "collectNotificationsConfig"},
 			"mount.":                 {[]string{"populateMountSettings"}, "collectMountConfig"},
 			"mount.rclone.":          {[]string{"populateRcloneSettings"}, "collectRcloneConfig"},
@@ -82,7 +83,6 @@ func newSettingsCoverage() settingsCoverage {
 			"mount.rclone.mount_path":   "not read by the code",
 			"skip_auto_move":            "not read by the code",
 			"debrids[].workers":         "not read by the code",
-			"prune.":                    "phase 3",
 		},
 	}
 }
