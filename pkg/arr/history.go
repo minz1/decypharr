@@ -66,8 +66,8 @@ func (r HistoryRecord) DataValue(key string) (string, bool) {
 	return "", false
 }
 
-// HistoryDownloadID is the form the arr stores a torrent ID in: a hex ID uppercased, anything else as given.
-func HistoryDownloadID(downloadID string) string {
+// historyDownloadID is the form the arr stores a torrent ID in: a hex ID uppercased, anything else as given.
+func historyDownloadID(downloadID string) string {
 	if _, err := hex.DecodeString(downloadID); err == nil {
 		return strings.ToUpper(downloadID)
 	}
@@ -86,7 +86,7 @@ func (s *Service) DownloadHistory(ctx context.Context, name, downloadID, eventTy
 		return nil, fmt.Errorf("history lookup: download ID is required")
 	}
 
-	stored := HistoryDownloadID(downloadID)
+	stored := historyDownloadID(downloadID)
 	records, err := s.historyForDownload(ctx, instance, stored)
 	if err == nil && len(records) == 0 && stored != downloadID && len(downloadID) == seasonIDLength {
 		// A usenet season entry's ID is hex like a torrent season's, but the arr keeps usenet IDs as given.
