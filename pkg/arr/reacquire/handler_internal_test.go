@@ -741,6 +741,45 @@ func TestBlocklistLookupOutageIsRetried(t *testing.T) {
 	}
 }
 
+// An Arr read that fails in prepare is retried like any lookup, so an outage after files were deleted never fails the job.
+func TestPrepareArrReadFailureIsALookupError(t *testing.T) {
+	t.Parallel()
+	for name, failing := range map[string]string{
+		"download client config": "/api/v3/config/downloadclient",
+		"grab history":           "/api/v3/history",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				switch request.URL.Path {
+				case failing:
+					w.WriteHeader(http.StatusBadRequest)
+				case "/api/v3/config/downloadclient":
+					_, _ = fmt.Fprint(w, `{"enableCompletedDownloadHandling":true,"autoRedownloadFailed":true}`)
+				default:
+					http.NotFound(w, request)
+				}
+			}))
+			t.Cleanup(server.Close)
+			registry := newTestArrStorage()
+			instance := arr.Arr{Name: "movies", Host: server.URL, Token: "secret", Type: arr.Radarr}
+			registry.AddOrUpdate(instance)
+			job := Job{
+				ArrName: "movies", ArrType: arr.Radarr, DownloadID: "download-1", Strategy: StrategyHistoryFailed,
+				Bindings: []Binding{{
+					ArrName: "movies", ArrType: arr.Radarr, ArrInstanceFingerprint: instance.Fingerprint(),
+					DownloadID: "download-1", ArrFileID: 42, MovieID: 9, Confidence: ConfidenceExactPath,
+					LibraryPath: "/library/movie.mkv",
+				}},
+			}
+			_, err := (&arrHandler{arrs: registry}).prepare(t.Context(), job)
+			if !errors.Is(err, errArrLookup) {
+				t.Fatalf("err = %v, want a lookup error the worker retries", err)
+			}
+		})
+	}
+}
+
 func TestRegrabSearchSettlesOnlySearches(t *testing.T) {
 	t.Parallel()
 	queued := time.Now().UTC().Add(-time.Minute)

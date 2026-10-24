@@ -124,7 +124,7 @@ func (handler *arrHandler) prepare(ctx context.Context, job Job) (reacquirePlan,
 	}
 	downloadConfig, err := handler.arrs.DownloadClientConfig(ctx, instance.Name)
 	if err != nil {
-		return reacquirePlan{}, err
+		return reacquirePlan{}, fmt.Errorf("%w: %w", errArrLookup, err)
 	}
 	if !downloadConfig.EnableCompletedDownloadHandling {
 		return reacquirePlan{}, fmt.Errorf("arr completed download handling is disabled")
@@ -136,7 +136,7 @@ func (handler *arrHandler) prepare(ctx context.Context, job Job) (reacquirePlan,
 	}
 	plan.failure, err = handler.prepareExactDownloadFailure(ctx, instance, job.DownloadID)
 	if err != nil {
-		return reacquirePlan{}, err
+		return reacquirePlan{}, fmt.Errorf("%w: %w", errArrLookup, err)
 	}
 	if plan.failure.found {
 		if _, giveUpErr := blocklistKey(job, plan.failure); giveUpErr != nil {
