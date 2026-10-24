@@ -245,16 +245,114 @@ func TestMergeConfigUpdatePreservesPrune(t *testing.T) {
 	}
 }
 
-func TestUpdateConfigSettingsPagePhase1Fields(t *testing.T) {
-	t.Parallel()
+func writeTestCA(t *testing.T) string {
+	t.Helper()
 	tlsServer := httptest.NewTLSServer(http.NotFoundHandler())
-	caFile := filepath.Join(t.TempDir(), "ca.pem")
 	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: tlsServer.Certificate().Raw})
 	tlsServer.Close()
+	caFile := filepath.Join(t.TempDir(), "ca.pem")
 	if err := os.WriteFile(caFile, pemBytes, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	return caFile
+}
 
+func postConfig(t *testing.T, server *Server, body []byte) bool {
+	t.Helper()
+	response := httptest.NewRecorder()
+	server.handleUpdateConfig(response, httptest.NewRequest(http.MethodPost, "/api/config", bytes.NewReader(body)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s), want 200", response.Code, response.Body.String())
+	}
+	var result struct {
+		Restarted bool `json:"restarted"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	return result.Restarted
+}
+
+func readConfigJSON(t *testing.T, path string) map[string]any {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed map[string]any
+	if err = json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	return parsed
+}
+
+func phase1Payload(t *testing.T, caFile string) []byte {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{
+		"allow_samples":    true,
+		"categories":       []string{"tv", "movies"},
+		"retries":          5,
+		"shared_dir_mode":  "2775",
+		"shared_file_mode": "0664",
+		"tls_ca_file":      caFile,
+		"debrids": []any{map[string]any{
+			"name": "rd", "provider": "realdebrid", "api_key": "k", "limit": 500,
+		}},
+		"arrs": []any{map[string]any{
+			"name": "sonarr", "host": "http://sonarr:8989", "token": "t", "import_webhook": false,
+		}},
+		"usenet": map[string]any{
+			"stream_backup_wait":  "2s",
+			"socket_read_buffer":  "8MB",
+			"socket_write_buffer": "0",
+			"providers": []any{map[string]any{
+				"host": "news.example", "port": 563, "username": "u", "password": "p",
+				"tls_server_name": "news.reseller.example",
+			}},
+		},
+		"mount": map[string]any{
+			"dfs": map[string]any{
+				"disable_cache":       true,
+				"drop_behind_margin":  "256MB",
+				"fuse_max_background": 32,
+				"fuse_max_read_ahead": "512KB",
+			},
+			"rclone": map[string]any{"vfs_disk_space_total": "1G"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+func phase1Checks(got *config.Config, caFile string) map[string][2]any {
+	return map[string][2]any{
+		"allow_samples":         {got.AllowSamples, true},
+		"categories":            {got.Categories, []string{"tv", "movies"}},
+		"retries":               {got.Retries, 5},
+		"shared_dir_mode":       {got.SharedDirMode, "2775"},
+		"shared_file_mode":      {got.SharedFileMode, "0664"},
+		"tls_ca_file":           {got.TLSCAFile, caFile},
+		"debrids[].limit":       {len(got.Debrids) == 1 && got.Debrids[0].Limit == 500, true},
+		"arrs[].import_webhook": {len(got.Arrs) == 1 && !got.Arrs[0].ImportWebhook, true},
+		"usenet.providers[].tls_server_name": {
+			len(got.Usenet.Providers) == 1 && got.Usenet.Providers[0].TLSServerName == "news.reseller.example", true,
+		},
+		"usenet.stream_backup_wait":         {got.Usenet.StreamBackupWait, "2s"},
+		"usenet.socket_read_buffer":         {got.Usenet.SocketReadBuffer, "8MB"},
+		"usenet.socket_write_buffer":        {got.Usenet.SocketWriteBuffer, "0"},
+		"mount.dfs.disable_cache":           {got.Mount.DFS.DisableCache, true},
+		"mount.dfs.drop_behind_margin":      {got.Mount.DFS.DropBehindMargin, "256MB"},
+		"mount.dfs.fuse_max_background":     {got.Mount.DFS.FuseMaxBackground, 32},
+		"mount.dfs.fuse_max_read_ahead":     {got.Mount.DFS.FuseMaxReadAhead, "512KB"},
+		"mount.rclone.vfs_disk_space_total": {got.Mount.Rclone.VfsDiskSpaceTotal, "1G"},
+	}
+}
+
+func TestUpdateConfigSettingsPagePhase1Fields(t *testing.T) {
+	t.Parallel()
+	caFile := writeTestCA(t)
 	mgr, store := managertest.New(t, func(c *config.Config) {
 		c.Debrids = []config.Debrid{{Name: "rd", Provider: "realdebrid", APIKey: "k"}}
 		c.Arrs = []config.Arr{{Name: "sonarr", Host: "http://sonarr:8989", Token: "t", ImportWebhook: true}}
@@ -264,112 +362,28 @@ func TestUpdateConfigSettingsPagePhase1Fields(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := &Server{manager: mgr, config: store, logger: zerolog.Nop()}
-	post := func(t *testing.T, body []byte) bool {
-		t.Helper()
-		response := httptest.NewRecorder()
-		server.handleUpdateConfig(response, httptest.NewRequest(http.MethodPost, "/api/config", bytes.NewReader(body)))
-		if response.Code != http.StatusOK {
-			t.Fatalf("status = %d (%s), want 200", response.Code, response.Body.String())
-		}
-		var result struct {
-			Restarted bool `json:"restarted"`
-		}
-		if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
-			t.Fatal(err)
-		}
-		return result.Restarted
+
+	postConfig(t, server, phase1Payload(t, caFile))
+	got, err := config.Load(store.Get().Dir(), config.MapEnv(nil))
+	if err != nil {
+		t.Fatal(err)
 	}
-	readConfig := func(t *testing.T) map[string]any {
-		t.Helper()
-		raw, err := os.ReadFile(store.Get().JSONFile())
-		if err != nil {
-			t.Fatal(err)
+	for path, c := range phase1Checks(got, caFile) {
+		if !reflect.DeepEqual(c[0], c[1]) {
+			t.Errorf("edit: %s = %v, want %v", path, c[0], c[1])
 		}
-		var parsed map[string]any
-		if err := json.Unmarshal(raw, &parsed); err != nil {
-			t.Fatal(err)
-		}
-		return parsed
 	}
 
-	t.Run("edit", func(t *testing.T) {
-		body, err := json.Marshal(map[string]any{
-			"allow_samples":    true,
-			"categories":       []string{"tv", "movies"},
-			"retries":          5,
-			"shared_dir_mode":  "2775",
-			"shared_file_mode": "0664",
-			"tls_ca_file":      caFile,
-			"debrids":          []any{map[string]any{"name": "rd", "provider": "realdebrid", "api_key": "k", "limit": 500}},
-			"arrs": []any{map[string]any{
-				"name": "sonarr", "host": "http://sonarr:8989", "token": "t", "import_webhook": false,
-			}},
-			"usenet": map[string]any{
-				"stream_backup_wait":  "2s",
-				"socket_read_buffer":  "8MB",
-				"socket_write_buffer": "0",
-				"providers": []any{map[string]any{
-					"host": "news.example", "port": 563, "username": "u", "password": "p",
-					"tls_server_name": "news.reseller.example",
-				}},
-			},
-			"mount": map[string]any{
-				"dfs": map[string]any{
-					"disable_cache":       true,
-					"drop_behind_margin":  "256MB",
-					"fuse_max_background": 32,
-					"fuse_max_read_ahead": "512KB",
-				},
-				"rclone": map[string]any{"vfs_disk_space_total": "1G"},
-			},
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		post(t, body)
-
-		got, err := config.Load(store.Get().Dir(), config.MapEnv(nil))
-		if err != nil {
-			t.Fatal(err)
-		}
-		checks := map[string][2]any{
-			"allow_samples":                      {got.AllowSamples, true},
-			"categories":                         {got.Categories, []string{"tv", "movies"}},
-			"retries":                            {got.Retries, 5},
-			"shared_dir_mode":                    {got.SharedDirMode, "2775"},
-			"shared_file_mode":                   {got.SharedFileMode, "0664"},
-			"tls_ca_file":                        {got.TLSCAFile, caFile},
-			"debrids[].limit":                    {len(got.Debrids) == 1 && got.Debrids[0].Limit == 500, true},
-			"arrs[].import_webhook":              {len(got.Arrs) == 1 && !got.Arrs[0].ImportWebhook, true},
-			"usenet.stream_backup_wait":          {got.Usenet.StreamBackupWait, "2s"},
-			"usenet.socket_read_buffer":          {got.Usenet.SocketReadBuffer, "8MB"},
-			"usenet.socket_write_buffer":         {got.Usenet.SocketWriteBuffer, "0"},
-			"usenet.providers[].tls_server_name": {len(got.Usenet.Providers) == 1 && got.Usenet.Providers[0].TLSServerName == "news.reseller.example", true},
-			"mount.dfs.disable_cache":            {got.Mount.DFS.DisableCache, true},
-			"mount.dfs.drop_behind_margin":       {got.Mount.DFS.DropBehindMargin, "256MB"},
-			"mount.dfs.fuse_max_background":      {got.Mount.DFS.FuseMaxBackground, 32},
-			"mount.dfs.fuse_max_read_ahead":      {got.Mount.DFS.FuseMaxReadAhead, "512KB"},
-			"mount.rclone.vfs_disk_space_total":  {got.Mount.Rclone.VfsDiskSpaceTotal, "1G"},
-		}
-		for path, c := range checks {
-			if !reflect.DeepEqual(c[0], c[1]) {
-				t.Errorf("%s = %v, want %v", path, c[0], c[1])
-			}
-		}
-	})
-
-	t.Run("no edit", func(t *testing.T) {
-		response := httptest.NewRecorder()
-		server.handleGetConfig(response, httptest.NewRequest(http.MethodGet, "/api/config", nil))
-		if response.Code != http.StatusOK {
-			t.Fatalf("GET status = %d", response.Code)
-		}
-		before := readConfig(t)
-		if post(t, response.Body.Bytes()) {
-			t.Error("a save of the unchanged settings restarted services")
-		}
-		if after := readConfig(t); !reflect.DeepEqual(before, after) {
-			t.Errorf("config.json changed on a save with no edits:\nbefore %v\nafter  %v", before, after)
-		}
-	})
+	response := httptest.NewRecorder()
+	server.handleGetConfig(response, httptest.NewRequest(http.MethodGet, "/api/config", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET status = %d", response.Code)
+	}
+	before := readConfigJSON(t, store.Get().JSONFile())
+	if postConfig(t, server, response.Body.Bytes()) {
+		t.Error("a save of the unchanged settings restarted services")
+	}
+	if after := readConfigJSON(t, store.Get().JSONFile()); !reflect.DeepEqual(before, after) {
+		t.Errorf("config.json changed on a save with no edits:\nbefore %v\nafter  %v", before, after)
+	}
 }

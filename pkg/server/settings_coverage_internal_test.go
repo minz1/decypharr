@@ -17,70 +17,80 @@ type settingsSection struct {
 	collect  string
 }
 
-var settingsSections = map[string]settingsSection{
-	"":                       {[]string{"populateForm", "populateGeneralSettings", "populateDownloadSettings"}, "collectFormData"},
-	"hearsay.":               {[]string{"populateHearsaySettings"}, "collectHearsayConfig"},
-	"repair.":                {[]string{"populateRepairSettings"}, "collectRepairConfig"},
-	"notifications.":         {[]string{"populateNotificationSettings"}, "collectNotificationsConfig"},
-	"mount.":                 {[]string{"populateMountSettings"}, "collectMountConfig"},
-	"mount.rclone.":          {[]string{"populateRcloneSettings"}, "collectRcloneConfig"},
-	"mount.dfs.":             {[]string{"populateDFSSettings"}, "collectDFSConfig"},
-	"mount.external_rclone.": {[]string{"populateExternalRcloneSettings"}, "collectExternalRclone"},
-	"nfs.":                   {[]string{"populateNFSSettings"}, "collectNFSConfig"},
-	"smb.":                   {[]string{"populateSMBSettings"}, "collectSMBConfig"},
-	"share_cache.":           {[]string{"populateShareCacheSettings"}, "collectShareCacheConfig"},
-	"usenet.":                {[]string{"populateUsenetSettings"}, "collectUsenetConfig"},
-	"debrids[].":             {nil, "collectDebridConfigs"},
-	"arrs[].":                {nil, "collectArrConfigs"},
-	"usenet.providers[].":    {nil, "collectUsenetConfig"},
+type settingsCoverage struct {
+	sections  map[string]settingsSection
+	listNames [][2]string
+	// Keys ending in "." match a whole subtree; the value is the text the page must contain.
+	aliases    map[string]func(path string) string
+	exclusions map[string]string
 }
 
-var settingsListNames = [][2]string{
-	{"debrids[].", "debrid[${index}]."},
-	{"arrs[].", "arr[${index}]."},
-	{"usenet.providers[].", "usenet.providers[${index}]."},
-}
-
-// Keys ending in "." match a whole subtree; the value is the text the page must contain.
-var settingsAliases = map[string]func(path string) string{
-	"strm.":                  func(p string) string { return `name="strm_` + strings.TrimPrefix(p, "strm.") + `"` },
-	"hearsay.disabled":       func(string) string { return `name="hearsay.enabled"` },
-	"notifications.events":   func(string) string { return `name="notifications.events[]"` },
-	"repair.arrs":            func(string) string { return `id="repair.arrs"` },
-	"virtual_folders[].":     func(string) string { return "collectVirtualFolders(" },
-	"queue_cleanup.rules[].": func(string) string { return "collectQueueCleanup(" },
-}
-
-var settingsExclusions = map[string]string{
-	"qbittorrent.":              "deprecated",
-	"rclone.":                   "deprecated",
-	"discord_webhook_url":       "deprecated",
-	"callback_url":              "deprecated",
-	"custom_folders":            "deprecated",
-	"debrids[].folder":          "deprecated",
-	"debrids[].folder_naming":   "deprecated",
-	"debrids[].rc_url":          "deprecated",
-	"debrids[].rc_user":         "deprecated",
-	"debrids[].rc_pass":         "deprecated",
-	"debrids[].rc_refresh_dirs": "deprecated",
-	"debrids[].directories":     "deprecated",
-	"use_auth":                  "managed elsewhere",
-	"strm.secret":               "managed elsewhere",
-	"mount.rclone.enabled":      "not read by the code",
-	"mount.rclone.mount_path":   "not read by the code",
-	"skip_auto_move":            "not read by the code",
-	"debrids[].workers":         "not read by the code",
-	"enable_webdav_auth":        "phase 2",
-	"prune.":                    "phase 3",
+func newSettingsCoverage() settingsCoverage {
+	return settingsCoverage{
+		sections: map[string]settingsSection{
+			"": {
+				[]string{"populateForm", "populateGeneralSettings", "populateDownloadSettings"},
+				"collectFormData",
+			},
+			"hearsay.":               {[]string{"populateHearsaySettings"}, "collectHearsayConfig"},
+			"repair.":                {[]string{"populateRepairSettings"}, "collectRepairConfig"},
+			"notifications.":         {[]string{"populateNotificationSettings"}, "collectNotificationsConfig"},
+			"mount.":                 {[]string{"populateMountSettings"}, "collectMountConfig"},
+			"mount.rclone.":          {[]string{"populateRcloneSettings"}, "collectRcloneConfig"},
+			"mount.dfs.":             {[]string{"populateDFSSettings"}, "collectDFSConfig"},
+			"mount.external_rclone.": {[]string{"populateExternalRcloneSettings"}, "collectExternalRclone"},
+			"nfs.":                   {[]string{"populateNFSSettings"}, "collectNFSConfig"},
+			"smb.":                   {[]string{"populateSMBSettings"}, "collectSMBConfig"},
+			"share_cache.":           {[]string{"populateShareCacheSettings"}, "collectShareCacheConfig"},
+			"usenet.":                {[]string{"populateUsenetSettings"}, "collectUsenetConfig"},
+			"debrids[].":             {nil, "collectDebridConfigs"},
+			"arrs[].":                {nil, "collectArrConfigs"},
+			"usenet.providers[].":    {nil, "collectUsenetConfig"},
+		},
+		listNames: [][2]string{
+			{"debrids[].", "debrid[${index}]."},
+			{"arrs[].", "arr[${index}]."},
+			{"usenet.providers[].", "usenet.providers[${index}]."},
+		},
+		aliases: map[string]func(path string) string{
+			"strm.":                  func(p string) string { return `name="strm_` + strings.TrimPrefix(p, "strm.") + `"` },
+			"hearsay.disabled":       func(string) string { return `name="hearsay.enabled"` },
+			"notifications.events":   func(string) string { return `name="notifications.events[]"` },
+			"repair.arrs":            func(string) string { return `id="repair.arrs"` },
+			"virtual_folders[].":     func(string) string { return "collectVirtualFolders(" },
+			"queue_cleanup.rules[].": func(string) string { return "collectQueueCleanup(" },
+		},
+		exclusions: map[string]string{
+			"qbittorrent.":              "deprecated",
+			"rclone.":                   "deprecated",
+			"discord_webhook_url":       "deprecated",
+			"callback_url":              "deprecated",
+			"custom_folders":            "deprecated",
+			"debrids[].folder":          "deprecated",
+			"debrids[].folder_naming":   "deprecated",
+			"debrids[].rc_url":          "deprecated",
+			"debrids[].rc_user":         "deprecated",
+			"debrids[].rc_pass":         "deprecated",
+			"debrids[].rc_refresh_dirs": "deprecated",
+			"debrids[].directories":     "deprecated",
+			"use_auth":                  "managed elsewhere",
+			"strm.secret":               "managed elsewhere",
+			"mount.rclone.enabled":      "not read by the code",
+			"mount.rclone.mount_path":   "not read by the code",
+			"skip_auto_move":            "not read by the code",
+			"debrids[].workers":         "not read by the code",
+			"enable_webdav_auth":        "phase 2",
+			"prune.":                    "phase 3",
+		},
+	}
 }
 
 func configPaths(t reflect.Type, prefix string, out *[]string) error {
-	for i := range t.NumField() {
-		f := t.Field(i)
+	for f := range t.Fields() {
 		if !f.IsExported() {
 			continue
 		}
-		tag := strings.Split(f.Tag.Get("json"), ",")[0]
+		tag, _, _ := strings.Cut(f.Tag.Get("json"), ",")
 		if tag == "-" {
 			continue
 		}
@@ -123,7 +133,7 @@ func jsMethodBody(src, name string) (string, bool) {
 	return body, true
 }
 
-func matchKey(m map[string]string, path string) (string, bool) {
+func matchKey[V any](m map[string]V, path string) (string, bool) {
 	for k := range m {
 		if k == path || (strings.HasSuffix(k, ".") && strings.HasPrefix(path, k)) {
 			return k, true
@@ -132,12 +142,10 @@ func matchKey(m map[string]string, path string) (string, bool) {
 	return "", false
 }
 
-func TestSettingsPageCoversConfig(t *testing.T) {
-	var paths []string
-	if err := configPaths(reflect.TypeFor[config.Config](), "", &paths); err != nil {
-		t.Fatal(err)
-	}
+type settingsPage struct{ html, js, build string }
 
+func readSettingsPage(t *testing.T) settingsPage {
+	t.Helper()
 	read := func(name string) string {
 		b, err := os.ReadFile(name)
 		if err != nil {
@@ -145,12 +153,25 @@ func TestSettingsPageCoversConfig(t *testing.T) {
 		}
 		return regexp.MustCompile(`\$\{[^}]*\}`).ReplaceAllLiteralString(string(b), "${index}")
 	}
-	html := read("templates/config.html")
-	js := read("assets/js/config.js")
-	build := read("assets/build/js/config.js")
+	return settingsPage{
+		html:  read("templates/config.html"),
+		js:    read("assets/js/config.js"),
+		build: read("assets/build/js/config.js"),
+	}
+}
 
-	prefixes := make([]string, 0, len(settingsSections))
-	for p, s := range settingsSections {
+func (p settingsPage) shows(text string) bool {
+	return strings.Contains(p.html, text) || (strings.Contains(p.js, text) && strings.Contains(p.build, text))
+}
+
+func (p settingsPage) mentions(text string) bool {
+	return strings.Contains(p.html, text) || strings.Contains(p.js, text) || strings.Contains(p.build, text)
+}
+
+func (c settingsCoverage) sortedPrefixes(t *testing.T, js string) []string {
+	t.Helper()
+	prefixes := make([]string, 0, len(c.sections))
+	for p, s := range c.sections {
 		prefixes = append(prefixes, p)
 		for _, m := range append(s.populate, s.collect) {
 			if _, ok := jsMethodBody(js, m); !ok {
@@ -159,88 +180,98 @@ func TestSettingsPageCoversConfig(t *testing.T) {
 		}
 	}
 	sort.Slice(prefixes, func(i, j int) bool { return len(prefixes[i]) > len(prefixes[j]) })
+	return prefixes
+}
 
-	aliasKeys := make(map[string]string, len(settingsAliases))
-	for k := range settingsAliases {
-		aliasKeys[k] = k
+func (c settingsCoverage) formRef(path string) string {
+	for _, l := range c.listNames {
+		path = strings.Replace(path, l[0], l[1], 1)
 	}
-	usedExclusions := map[string]bool{}
-	usedAliases := map[string]bool{}
+	return `name="` + path + `"`
+}
 
-	for _, path := range paths {
-		formName := path
-		for _, l := range settingsListNames {
-			formName = strings.Replace(formName, l[0], l[1], 1)
+func (c settingsCoverage) checkControl(t *testing.T, page settingsPage, prefixes []string, path string) {
+	t.Helper()
+	ref := c.formRef(path)
+	if !page.shows(ref) {
+		if strings.Contains(page.js, ref) {
+			t.Errorf("%s: %s in config.js but not in the build; run node scripts/minify-js.js", path, ref)
+		} else {
+			t.Errorf("%s: no control %s", path, ref)
 		}
-		ref := `name="` + formName + `"`
-		inSrc, inBuild := strings.Contains(js, ref), strings.Contains(build, ref)
-		named := strings.Contains(html, ref) || (inSrc && inBuild)
+		return
+	}
 
-		if k, ok := matchKey(settingsExclusions, path); ok {
+	var prefix string
+	for _, p := range prefixes {
+		if strings.HasPrefix(path, p) {
+			prefix = p
+			break
+		}
+	}
+	leaf := strings.TrimPrefix(path, prefix)
+	if strings.Contains(leaf, ".") {
+		t.Errorf("%s: no section in settingsCoverage.sections", path)
+		return
+	}
+	sec := c.sections[prefix]
+	q := regexp.QuoteMeta(leaf)
+	collectBody, _ := jsMethodBody(page.js, sec.collect)
+	if !regexp.MustCompile(`\b` + q + `['"]?\s*:|\.` + q + `\s*=`).MatchString(collectBody) {
+		t.Errorf("%s: %s does not send %s", path, sec.collect, leaf)
+	}
+	if sec.populate != nil && !populates(page.js, sec.populate, leaf) {
+		t.Errorf("%s: %v never fill %s", path, sec.populate, leaf)
+	}
+}
+
+func populates(js string, methods []string, leaf string) bool {
+	word := regexp.MustCompile(`\b` + regexp.QuoteMeta(leaf) + `\b`)
+	for _, m := range methods {
+		if body, _ := jsMethodBody(js, m); word.MatchString(body) {
+			return true
+		}
+	}
+	return false
+}
+
+func reportUnused[V any](t *testing.T, kind string, m map[string]V, used map[string]bool) {
+	t.Helper()
+	for k := range m {
+		if !used[k] {
+			t.Errorf("%s: %s matches no config path", k, kind)
+		}
+	}
+}
+
+func TestSettingsPageCoversConfig(t *testing.T) {
+	t.Parallel()
+	var paths []string
+	if err := configPaths(reflect.TypeFor[config.Config](), "", &paths); err != nil {
+		t.Fatal(err)
+	}
+	page := readSettingsPage(t)
+	cov := newSettingsCoverage()
+	prefixes := cov.sortedPrefixes(t, page.js)
+
+	usedExclusions, usedAliases := map[string]bool{}, map[string]bool{}
+	for _, path := range paths {
+		if k, ok := matchKey(cov.exclusions, path); ok {
 			usedExclusions[k] = true
-			if strings.Contains(html, ref) || inSrc || inBuild {
-				t.Errorf("%s: excluded (%s) but the page has a control for it", path, settingsExclusions[k])
+			if page.mentions(cov.formRef(path)) {
+				t.Errorf("%s: excluded (%s) but the page has a control for it", path, cov.exclusions[k])
 			}
 			continue
 		}
-		if k, ok := matchKey(aliasKeys, path); ok {
+		if k, ok := matchKey(cov.aliases, path); ok {
 			usedAliases[k] = true
-			want := settingsAliases[k](path)
-			if !strings.Contains(html, want) && !(strings.Contains(js, want) && strings.Contains(build, want)) {
+			if want := cov.aliases[k](path); !page.shows(want) {
 				t.Errorf("%s: page lacks %s", path, want)
 			}
 			continue
 		}
-		if !named {
-			switch {
-			case inSrc:
-				t.Errorf("%s: %s in config.js but not in the build; run node scripts/minify-js.js", path, ref)
-			default:
-				t.Errorf("%s: no control %s", path, ref)
-			}
-			continue
-		}
-
-		var prefix string
-		for _, p := range prefixes {
-			if strings.HasPrefix(path, p) {
-				prefix = p
-				break
-			}
-		}
-		leaf := strings.TrimPrefix(path, prefix)
-		if strings.Contains(leaf, ".") {
-			t.Errorf("%s: no section in settingsSections", path)
-			continue
-		}
-		sec := settingsSections[prefix]
-		q := regexp.QuoteMeta(leaf)
-		collectBody, _ := jsMethodBody(js, sec.collect)
-		if !regexp.MustCompile(`\b` + q + `['"]?\s*:|\.` + q + `\s*=`).MatchString(collectBody) {
-			t.Errorf("%s: %s does not send %s", path, sec.collect, leaf)
-		}
-		if sec.populate == nil {
-			continue
-		}
-		word := regexp.MustCompile(`\b` + q + `\b`)
-		populated := false
-		for _, m := range sec.populate {
-			body, _ := jsMethodBody(js, m)
-			populated = populated || word.MatchString(body)
-		}
-		if !populated {
-			t.Errorf("%s: %v never fill %s", path, sec.populate, leaf)
-		}
+		cov.checkControl(t, page, prefixes, path)
 	}
-
-	for k := range settingsExclusions {
-		if !usedExclusions[k] {
-			t.Errorf("%s: exclusion matches no config path", k)
-		}
-	}
-	for k := range settingsAliases {
-		if !usedAliases[k] {
-			t.Errorf("%s: alias matches no config path", k)
-		}
-	}
+	reportUnused(t, "exclusion", cov.exclusions, usedExclusions)
+	reportUnused(t, "alias", cov.aliases, usedAliases)
 }
