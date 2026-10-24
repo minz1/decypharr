@@ -89,6 +89,9 @@ func runShutdownResume(t *testing.T, multiSeason bool) {
 
 	interruptAndStop(t, m, entry, torrent)
 	reopenShutdownTestManager(t, m, dbPath, entry)
+	if multiSeason && !m.queue.Contains(seasonHolding(t, m, entry, "Show.S02E01.mkv").InfoHash) {
+		t.Fatal("shutdown removed the in-flight season")
+	}
 	for name := range torrent.Files {
 		if writeFileErr := os.WriteFile(filepath.Join(mountPath, name), []byte("media"), 0o644); writeFileErr != nil {
 			t.Fatal(writeFileErr)
@@ -104,7 +107,7 @@ func runShutdownResume(t *testing.T, multiSeason bool) {
 	}
 	downloadPath := saved.DownloadPath("")
 	if multiSeason {
-		downloadPath = seasonDownloadPath(m, entry, "Show.S02E01.mkv")
+		downloadPath = seasonDownloadPath(t, m, entry, "Show.S02E01.mkv")
 		if _, lstatErr := os.Lstat(filepath.Join(completedSeason.DownloadPath(""), "Show.S01E01.mkv")); !os.IsNotExist(
 			lstatErr,
 		) {
@@ -241,12 +244,20 @@ func reopenShutdownTestManager(t *testing.T, m *Manager, dbPath string, entry *s
 }
 
 // seasonDownloadPath returns the download path of the season holding file.
-func seasonDownloadPath(m *Manager, entry *storage.Entry, file string) string {
+func seasonDownloadPath(t *testing.T, m *Manager, entry *storage.Entry, file string) string {
+	t.Helper()
+	return seasonHolding(t, m, entry, file).DownloadPath("")
+}
+
+// seasonHolding returns the season entry of the pack that holds file.
+func seasonHolding(t *testing.T, m *Manager, entry *storage.Entry, file string) *storage.Entry {
+	t.Helper()
 	_, seasons := m.downloader.detectMultiSeason(entry)
 	for _, season := range convertToMultiSeason(entry, seasons) {
 		if season.Files[file] != nil {
-			return season.DownloadPath("")
+			return season
 		}
 	}
-	return ""
+	t.Fatalf("no season holds %s", file)
+	return nil
 }

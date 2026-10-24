@@ -117,6 +117,7 @@ func (d *Downloader) downloadSeasons(
 		}
 		if err := d.process(ctx, result, mountPath); err != nil {
 			if ctx.Err() != nil {
+				d.removeSeasonOfDeletedPack(ctx, torrent, result)
 				return err
 			}
 			d.markAsError(result, err)
@@ -126,6 +127,18 @@ func (d *Downloader) downloadSeasons(
 	// it leaves the downloading queue instead of getting re-processed.
 	d.completeEntry(torrent)
 	return nil
+}
+
+// removeSeasonOfDeletedPack drops a season the pack's delete cut short; a folder shared with the pack is the pack's.
+func (d *Downloader) removeSeasonOfDeletedPack(ctx context.Context, pack, season *storage.Entry) {
+	if !errors.Is(context.Cause(ctx), errEntryDeleted) {
+		return
+	}
+	naming := d.manager.folderNaming()
+	ownFolder := season.DownloadPath(naming) != pack.DownloadPath(naming)
+	if err := d.manager.queue.Delete(season.InfoHash, ownFolder, nil); err != nil {
+		d.logger.Error().Err(err).Str("name", season.Name).Msg("Failed to remove season of a deleted pack")
+	}
 }
 
 func (d *Downloader) process(ctx context.Context, entry *storage.Entry, mountPath string) error {
