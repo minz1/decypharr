@@ -309,7 +309,7 @@ func (f *FS) Read(path string, buff []byte, off int64, fh uint64) int {
 	defer cancel()
 
 	n, err := handle.reader.ReadAtContext(readCtx, buff[:size], off)
-	// The kernel takes a short read as EOF and zero-fills the pages, so a short read inside the file must be an errno.
+	// With DirectIo the reader gets a short read as is and takes it as EOF, so a short read inside the file must be an errno.
 	if n == size {
 		return n
 	}
