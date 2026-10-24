@@ -1,10 +1,13 @@
 package server
 
 import (
+	"encoding"
+	"encoding/json"
 	"fmt"
 	"os"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -53,7 +56,7 @@ func newSettingsCoverage() settingsCoverage {
 			{"usenet.providers[].", "usenet.providers[${index}]."},
 		},
 		aliases: map[string]func(path string) string{
-			"strm.":                  func(p string) string { return `name="strm_` + strings.TrimPrefix(p, "strm.") + `"` },
+			"strm.":                  func(p string) string { return ` name="strm_` + strings.TrimPrefix(p, "strm.") + `"` },
 			"hearsay.disabled":       func(string) string { return `name="hearsay.enabled"` },
 			"notifications.events":   func(string) string { return `name="notifications.events[]"` },
 			"repair.arrs":            func(string) string { return `id="repair.arrs"` },
@@ -85,7 +88,24 @@ func newSettingsCoverage() settingsCoverage {
 	}
 }
 
-func configPaths(t reflect.Type, prefix string, out *[]string) error {
+type configLeaf struct {
+	path    string
+	numeric bool
+}
+
+func isJSONNumber(t reflect.Type) bool {
+	p := reflect.PointerTo(t)
+	if p.Implements(reflect.TypeFor[json.Unmarshaler]()) || p.Implements(reflect.TypeFor[encoding.TextUnmarshaler]()) {
+		return false
+	}
+	return slices.Contains([]reflect.Kind{
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64,
+	}, t.Kind())
+}
+
+func configPaths(t reflect.Type, prefix string, out *[]configLeaf) error {
 	for f := range t.Fields() {
 		if !f.IsExported() {
 			continue
@@ -109,7 +129,7 @@ func configPaths(t reflect.Type, prefix string, out *[]string) error {
 		case ft.Kind() == reflect.Slice && ft.Elem().Kind() == reflect.Struct:
 			err = configPaths(ft.Elem(), p+"[].", out)
 		default:
-			*out = append(*out, p)
+			*out = append(*out, configLeaf{path: p, numeric: isJSONNumber(ft)})
 		}
 		if err != nil {
 			return err
@@ -187,17 +207,44 @@ func (c settingsCoverage) formRef(path string) string {
 	for _, l := range c.listNames {
 		path = strings.Replace(path, l[0], l[1], 1)
 	}
-	return `name="` + path + `"`
+	return ` name="` + path + `"`
 }
 
-func (c settingsCoverage) checkControl(t *testing.T, page settingsPage, prefixes []string, path string) {
+func controlTag(text, ref string) string {
+	i := strings.Index(text, ref)
+	if i < 0 {
+		return ""
+	}
+	start := strings.LastIndex(text[:i], "<")
+	end := strings.Index(text[i:], ">")
+	if start < 0 || end < 0 {
+		return ""
+	}
+	return text[start : i+end]
+}
+
+// sendsNumber: a JSON string for a numeric field fails the whole save with a 400.
+func sendsNumber(page settingsPage, collectBody, leaf, ref string) bool {
+	q := regexp.QuoteMeta(leaf)
+	line := regexp.MustCompile(`(?m)^.*(\b` + q + `['"]?\s*:|\.` + q + `\s*=).*$`).FindString(collectBody)
+	for _, numeric := range []string{"parseInt(", "parseFloat(", "Number", "Math."} {
+		if strings.Contains(line, numeric) {
+			return true
+		}
+	}
+	tag := controlTag(page.html, ref) + controlTag(page.js, ref)
+	return strings.Contains(line, "getElementValue(") && strings.Contains(tag, `type="number"`)
+}
+
+func (c settingsCoverage) checkControl(t *testing.T, page settingsPage, prefixes []string, leafInfo configLeaf) {
 	t.Helper()
+	path := leafInfo.path
 	ref := c.formRef(path)
 	if !page.shows(ref) {
 		if strings.Contains(page.js, ref) {
-			t.Errorf("%s: %s in config.js but not in the build; run node scripts/minify-js.js", path, ref)
+			t.Errorf("%s:%s in config.js but not in the build; run node scripts/minify-js.js", path, ref)
 		} else {
-			t.Errorf("%s: no control %s", path, ref)
+			t.Errorf("%s: no control%s", path, ref)
 		}
 		return
 	}
@@ -219,6 +266,8 @@ func (c settingsCoverage) checkControl(t *testing.T, page settingsPage, prefixes
 	collectBody, _ := jsMethodBody(page.js, sec.collect)
 	if !regexp.MustCompile(`\b` + q + `['"]?\s*:|\.` + q + `\s*=`).MatchString(collectBody) {
 		t.Errorf("%s: %s does not send %s", path, sec.collect, leaf)
+	} else if leafInfo.numeric && !sendsNumber(page, collectBody, leaf, ref) {
+		t.Errorf("%s: %s sends %s without parseInt or a number input", path, sec.collect, leaf)
 	}
 	if sec.populate != nil && !populates(page.js, sec.populate, leaf) {
 		t.Errorf("%s: %v never fill %s", path, sec.populate, leaf)
@@ -246,7 +295,7 @@ func reportUnused[V any](t *testing.T, kind string, m map[string]V, used map[str
 
 func TestSettingsPageCoversConfig(t *testing.T) {
 	t.Parallel()
-	var paths []string
+	var paths []configLeaf
 	if err := configPaths(reflect.TypeFor[config.Config](), "", &paths); err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +304,8 @@ func TestSettingsPageCoversConfig(t *testing.T) {
 	prefixes := cov.sortedPrefixes(t, page.js)
 
 	usedExclusions, usedAliases := map[string]bool{}, map[string]bool{}
-	for _, path := range paths {
+	for _, leaf := range paths {
+		path := leaf.path
 		if k, ok := matchKey(cov.exclusions, path); ok {
 			usedExclusions[k] = true
 			if page.mentions(cov.formRef(path)) {
@@ -270,7 +320,7 @@ func TestSettingsPageCoversConfig(t *testing.T) {
 			}
 			continue
 		}
-		cov.checkControl(t, page, prefixes, path)
+		cov.checkControl(t, page, prefixes, leaf)
 	}
 	reportUnused(t, "exclusion", cov.exclusions, usedExclusions)
 	reportUnused(t, "alias", cov.aliases, usedAliases)
