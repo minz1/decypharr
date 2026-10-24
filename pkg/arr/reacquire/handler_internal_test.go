@@ -96,6 +96,74 @@ func TestReacquireHandlerFailsExactDownloadAndWaitsForArr(t *testing.T) {
 	}
 }
 
+// The arr keeps a torrent's download ID uppercased; a job holding the lowercase infohash still finds and fails its grab.
+func TestReacquireHandlerFailsAnUppercaseTorrentGrab(t *testing.T) {
+	t.Parallel()
+	const infohash = "0123456789abcdef0123456789abcdef01234567"
+	stored := strings.ToUpper(infohash)
+	var failed atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v3/moviefile/42":
+			_, _ = fmt.Fprint(w, `{"id":42,"movieId":9,"path":"/library/movie.mkv"}`)
+		case request.Method == http.MethodDelete && request.URL.Path == "/api/v3/moviefile/42":
+			w.WriteHeader(http.StatusAccepted)
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v3/config/downloadclient":
+			_, _ = fmt.Fprint(w, `{"enableCompletedDownloadHandling":true,"autoRedownloadFailed":true}`)
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v3/history":
+			if request.URL.Query().Get("downloadId") != stored {
+				_, _ = fmt.Fprint(w, `{"page":1,"totalRecords":0,"records":[]}`)
+				return
+			}
+			_, _ = fmt.Fprintf(
+				w,
+				`{"page":1,"totalRecords":1,"records":[{"id":7,"downloadId":%q,"eventType":"grabbed"}]}`,
+				stored,
+			)
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v3/history/failed/7":
+			failed.Store(true)
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, request)
+		}
+	}))
+	defer server.Close()
+
+	registry := newTestArrStorage()
+	instance := arr.Arr{Name: "movies", Host: server.URL, Token: "secret", Type: arr.Radarr}
+	registry.AddOrUpdate(instance)
+	progress := &recordedProgress{}
+	job := Job{
+		ArrName:    "movies",
+		ArrType:    arr.Radarr,
+		EntryID:    "entry-1",
+		FileID:     "file-1",
+		DownloadID: infohash,
+		Strategy:   StrategyHistoryFailed,
+		Bindings: []Binding{{
+			ArrName:                "movies",
+			ArrType:                arr.Radarr,
+			ArrInstanceFingerprint: instance.Fingerprint(),
+			EntryID:                "entry-1",
+			EntryFileID:            "file-1",
+			DownloadID:             infohash,
+			ArrFileID:              42,
+			LibraryPath:            "/library/movie.mkv",
+			MovieID:                9,
+			Confidence:             ConfidenceExactPath,
+		}},
+	}
+	if err := NewHandler(registry, nil).Reacquire(t.Context(), job, progress); err != nil {
+		t.Fatal(err)
+	}
+	if !failed.Load() {
+		t.Fatal("uppercase grab was not marked failed")
+	}
+	if got := progress.statuses[len(progress.statuses)-1]; got != StatusWaitingForGrab {
+		t.Fatalf("last status = %q, want %q", got, StatusWaitingForGrab)
+	}
+}
+
 func TestReacquireHandlerRefusesStaleArrFileIdentity(t *testing.T) {
 	t.Parallel()
 	var deleted atomic.Bool
