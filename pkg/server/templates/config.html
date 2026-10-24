@@ -550,6 +550,23 @@
                             <p class="text-sm text-base-content/70">Use this token for API authentication instead of
                                 session cookies. Perfect for automation and scripts.</p>
                         </div>
+                        <div class="space-y-4">
+                            <h4 class="font-semibold text-base">WebDAV</h4>
+                            <div>
+                                <label class="label cursor-pointer justify-start gap-3">
+                                    <input type="checkbox" class="checkbox checkbox-primary"
+                                           name="enable_webdav_auth" id="enable_webdav_auth">
+                                    <div>
+                                        <span class="label-text font-medium">Require authentication for WebDAV</span>
+                                        <div class="label-text-alt">WebDAV clients log in with the username and
+                                            password above; the API token is never accepted. Applies only while web
+                                            authentication is on. Saved with Save. A DECYPHARR_ENABLE_WEBDAV_AUTH
+                                            environment variable (the NixOS module always sets it) overrides this at
+                                            the next start.</div>
+                                    </div>
+                                </label>
+                            </div>
+                        </div>
                     </div>
                     </div>
 
@@ -2413,7 +2430,7 @@ fe80::/10</textarea>
             }
 
             const data = await response.json();
-            window.decypharrUtils.createToast(data.message, 'success');
+            window.decypharrUtils.createToast(data.message, data.warnings ? 'warning' : 'success');
 
             if (data.token) {
                 document.getElementById('api-token-display').value = data.token;

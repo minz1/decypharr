@@ -278,7 +278,7 @@ class ConfigManager {
         const fields = [
             'log_level', 'url_base', 'bind_address', 'port',
             'min_file_size', 'max_file_size', 'folder_naming',
-            'refresh_dirs', 'disable_webdav', 'app_url',
+            'refresh_dirs', 'disable_webdav', 'enable_webdav_auth', 'app_url',
             'retries', 'tls_ca_file', 'shared_dir_mode', 'shared_file_mode'
         ];
 
@@ -1326,19 +1326,22 @@ class ConfigManager {
             }
 
             let restarted = true;
+            let warnings = [];
             try {
                 const result = await response.json();
                 restarted = result.restarted !== false;
+                warnings = result.warnings || [];
             } catch (_) {
                 // Older backends return no body; assume a restart happened.
             }
+            warnings.forEach(w => window.decypharrUtils.createToast(w, 'warning'));
 
             if (restarted) {
                 window.decypharrUtils.createToast('Configuration saved successfully! Services are restarting...', 'success');
                 // Reload page after a delay to allow services to restart
                 setTimeout(() => {
                     window.location.reload();
-                }, 2000);
+                }, warnings.length ? 10000 : 2000);
             } else {
                 // Applied live — no restart, no disruptive reload.
                 window.decypharrUtils.createToast('Configuration saved and applied.', 'success');
@@ -1452,6 +1455,7 @@ class ConfigManager {
             always_rm_tracker_urls: document.querySelector('[name="always_rm_tracker_urls"]').checked,
             folder_naming: document.querySelector('[name="folder_naming"]')?.value || "",
             disable_webdav: document.querySelector('[name="disable_webdav"]').checked,
+            enable_webdav_auth: document.querySelector('[name="enable_webdav_auth"]').checked,
             refresh_dirs: document.querySelector('[name="refresh_dirs"]')?.value || "",
             retries: parseInt(document.querySelector('[name="retries"]').value, 10) || 0,
             tls_ca_file: document.querySelector('[name="tls_ca_file"]').value,
