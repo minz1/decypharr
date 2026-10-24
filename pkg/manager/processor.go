@@ -372,12 +372,12 @@ func (m *Manager) releaseLeftSlot(
 	dbT *debridTypes.Torrent,
 	err error,
 ) {
-	if err == nil && dbT != nil && dbT.Status != debridTypes.TorrentStatusError &&
-		dbT.Status != debridTypes.TorrentStatusDownloaded {
+	failed := err != nil || dbT == nil || dbT.Status == debridTypes.TorrentStatusError
+	if !failed && dbT.Status != debridTypes.TorrentStatusDownloaded {
 		return
 	}
 	m.slotFreed(provider)
-	if err != nil || dbT == nil || dbT.Status == debridTypes.TorrentStatusError {
+	if failed {
 		placement.Status = debridTypes.TorrentStatusError
 	}
 }
