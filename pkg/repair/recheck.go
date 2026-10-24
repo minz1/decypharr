@@ -40,7 +40,7 @@ func (r *Service) RecheckEntry(ctx context.Context, entryName string, fix bool) 
 		}
 		heal := newErrorCache()
 		nzb := r.nzbProber()
-		final := r.probeEntry(ctx, runID, c, heal, nzb, RunOptions{}, fix)
+		final, _ := r.probeEntry(ctx, runID, c, heal, nzb, RunOptions{}, fix)
 		if final == nil {
 			return
 		}
@@ -118,7 +118,7 @@ func (r *Service) executeRecheckMedia(
 
 	heal := newErrorCache()
 	mediaNames := slices.Sorted(maps.Keys(candidates))
-	err := r.probeAndHealCandidates(ctx, run, candidates, mediaNames, heal, RunOptions{}, fix)
+	err := r.probeAndHealCandidates(ctx, run, candidates, mediaNames, heal, RunOptions{}, fix, false)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			r.finalizeRun(run, storage.RepairRunCancelled, "", "context cancelled during probing")

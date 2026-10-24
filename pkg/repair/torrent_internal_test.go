@@ -65,7 +65,7 @@ func TestProbeEntryWithRemovedProvider(t *testing.T) {
 			}}
 			service := New(Dependencies{Storage: store, Backend: backend})
 			candidate := &candidate{name: entry.Name, item: &storage.EntryItem{Name: entry.Name, Files: entry.Files}}
-			health := service.probeEntry(
+			health, _ := service.probeEntry(
 				t.Context(),
 				"run",
 				candidate,

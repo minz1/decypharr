@@ -17,6 +17,9 @@ type candidate struct {
 	arrName    string
 	arrKind    storage.ArrKind
 	contentMap map[string]arr.ContentFile
+	// health and unhealed hold confirmed files a cancelled sweep did not reach.
+	health   *storage.EntryHealth
+	unhealed []storage.BrokenFile
 }
 
 func (r *Service) enumerateCandidates(ctx context.Context, cfg config.RepairConfig) (map[string]*candidate, error) {

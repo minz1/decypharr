@@ -71,7 +71,7 @@ You can force a recheck on any one entry from the Browse UI or the API. This wor
 | `strategy`                | `per_entry` (stop after first broken file in an entry) or `per_file` (probe all files).  | `per_entry` |
 | `recheck_interval`        | How long a healthy entry's check stays fresh before it becomes a candidate again.        | `168h`      |
 | `arrs`                    | Optional filter when `source=arr`. Empty list means all eligible Arrs.                   | `[]`        |
-| `auto_repair`             | When `true`, broken Arr-managed files are deleted through Arr and searched again. When `false`, the sweep is detect-only. | `false` |
+| `auto_repair`             | When `true`, Arr-managed files that two probes in a row found broken are replaced through Arr (see [Workflow](#workflow)). When `false`, the sweep is detect-only. | `false` |
 | `verify_content`          | During NZB probes, also read each media file's head through the streaming stack and check for a valid container signature. Finds files whose articles exist but were assembled wrong. Downloads one article per file probed. | `false` |
 | `notify_on_complete`      | Send a notification when a sweep finishes.                                               | `false`     |
 | `nntp_connection_percent` | Percentage of NNTP connections the probe is allowed to use. Avoids starving downloads.   | `20`        |
@@ -84,7 +84,7 @@ You can force a recheck on any one entry from the Browse UI or the API. This wor
 - The repair sweep is cancelled at the next firing of `stop_schedule`, mid-probe if necessary. Entries not yet probed are left as they were before this repair sweep (their existing health and `next_check_due_at` are untouched, so they're picked up again on the next scheduled run).
 - The run is recorded as `completed` (not `cancelled`), with `cancel_reason` noting it was stopped by schedule.
 - What happens to entries this repair sweep *did* manage to probe and found broken is controlled by `auto_repair`, same as any other repair sweep:
-  - `auto_repair: true` uses Arr delete + re-search for eligible broken files.
+  - `auto_repair: true` replaces the eligible files this repair sweep confirmed broken, as described in [Workflow](#workflow).
   - `auto_repair: false` leaves them recorded as broken without triggering Arr repair.
 
 #### Multi-day coverage
@@ -119,7 +119,9 @@ If a full repair sweep would take 2 days at 9 hours/day but `recheck_interval` i
 3. For each candidate, the entry is marked `repairing` and probed by a worker.
 4. NZB probes sample the configured percentage of distinct content articles. With `verify_content` enabled, they also read each media file's head and validate its container signature.
 5. Definitive missing or corrupt content marks the file broken. Connection and provider errors remain `unknown` and never trigger replacement.
-6. With `auto_repair` enabled, eligible broken files are deleted through Arr and a missing-item search is triggered.
+6. With `auto_repair` enabled, a sweep replaces a file only when the entry's previous probe found that same file broken too, so a single bad probe (during a provider outage, say) never replaces anything. A broken entry is always due, so the confirming probe is usually the next sweep. A recheck with `fix` (`/api/repair/health/{name}/check`, `/api/repair/recheck/media`) and `/api/repair/fix` act on the first broken probe.
+   - When the release itself is bad (dead hoster link, empty download link, missing or corrupt Usenet articles), decypharr fails the grab in Arr, which blocklists the release and searches again.
+   - When the cause is on decypharr's side (the provider is gone from the config, the placement has no links, the local NZB manifest is missing or invalid), the file and decypharr's entry are deleted and Arr searches again, without a blocklist.
 7. The entry health and run progress are persisted as the sweep proceeds.
 
 Background NNTP probes share the configured `nntp_connection_percent` pool so active streams retain capacity.
@@ -240,7 +242,7 @@ Probes against debrid providers respect a separate rate limit so they don't star
 For Usenet probing, `nntp_connection_percent` (above) caps the share of NNTP connections the health checker uses.
 
 :::caution
-With `auto_repair: true`, a sweep deletes the broken Arr file records and triggers a search for replacements. Verification of those re-acquires happens later — the Arr import is asynchronous and the badge flips to `healthy` once the replacement file is in place.
+With `auto_repair: true`, a sweep deletes the Arr file records it confirmed broken, blocklists bad releases, and triggers a search for replacements. Turning `auto_repair` off later doesn't undo deletions or blocklist entries. Verification of those re-acquires happens later — the Arr import is asynchronous and the badge flips to `healthy` once the replacement file is in place.
 :::
 
 ## Troubleshooting

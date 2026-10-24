@@ -3,6 +3,8 @@ package repair
 import (
 	"context"
 	"errors"
+	"maps"
+	"slices"
 	"sync"
 
 	"golang.org/x/sync/errgroup"
@@ -69,10 +71,10 @@ func (r *Service) executeSweep(
 		Msg("Sweep: probing")
 
 	heal := newErrorCache()
-	err = r.probeAndHealCandidates(ctx, run, due, names, heal, opts, autoRepair)
+	err = r.probeAndHealCandidates(ctx, run, due, names, heal, opts, autoRepair, true)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
-			r.finishCancelledRepairSweep(ctx, run, stopState, autoRepair, "context cancelled during probing", names)
+			r.finishCancelledRepairSweep(ctx, run, stopState, autoRepair, "context cancelled during probing", due)
 			return
 		}
 		log.Error().Err(err).Msg("Sweep: probing failed")
@@ -80,7 +82,7 @@ func (r *Service) executeSweep(
 		return
 	}
 	if ctx.Err() != nil {
-		r.finishCancelledRepairSweep(ctx, run, stopState, autoRepair, "context cancelled after probing", names)
+		r.finishCancelledRepairSweep(ctx, run, stopState, autoRepair, "context cancelled after probing", due)
 		return
 	}
 
@@ -100,7 +102,7 @@ func (r *Service) finishCancelledRepairSweep(
 	stopState *repairStopState,
 	autoRepair bool,
 	reason string,
-	names []string,
+	candidates map[string]*candidate,
 ) {
 	stopped := stopState != nil && stopState.get()
 	if !stopped {
@@ -111,15 +113,18 @@ func (r *Service) finishCancelledRepairSweep(
 	log := r.logger.With().Str("run_id", run.ID).Logger()
 	log.Info().Bool("auto_repair", autoRepair).Msg("Repair sweep: stop schedule fired; finishing run")
 
-	if autoRepair && len(names) > 0 {
+	pending := slices.DeleteFunc(slices.Collect(maps.Values(candidates)), func(c *candidate) bool {
+		return len(c.unhealed) == 0
+	})
+	if autoRepair && len(pending) > 0 {
 		repairCtx, cancel := context.WithTimeout(detachedRepairContext(ctx, r.parentCtx), repairStopFinalRepairTimeout)
 		defer cancel()
 
-		healths, _ := r.collectBrokenHealths(names, true)
-		if healths.Size() > 0 {
-			run.Stage = storage.RepairStageRepairing
-			r.saveRun(run)
-			r.repairBroken(repairCtx, run, healths)
+		run.Stage = storage.RepairStageRepairing
+		r.saveRun(run)
+		var statsMu sync.Mutex
+		for _, c := range pending {
+			r.healBrokenEntry(repairCtx, run, &statsMu, c.health, c.unhealed)
 		}
 	}
 
@@ -145,6 +150,7 @@ func (r *Service) probeAndHealCandidates(
 	heal *errorCache,
 	opts RunOptions,
 	autoRepair bool,
+	confirm bool,
 ) error {
 	var runMu sync.Mutex
 
@@ -162,7 +168,7 @@ func (r *Service) probeAndHealCandidates(
 				return gctx.Err()
 			}
 
-			h := r.probeEntry(gctx, run.ID, c, heal, nzb, opts, autoRepair)
+			h, confirmed := r.probeEntry(gctx, run.ID, c, heal, nzb, opts, autoRepair)
 			if h == nil {
 				c.item = nil
 				c.contentMap = nil
@@ -170,7 +176,11 @@ func (r *Service) probeAndHealCandidates(
 			}
 
 			if autoRepair && h.Status == storage.HealthBroken {
-				r.healBrokenEntry(gctx, run, &runMu, h, h.BrokenFiles)
+				files := h.BrokenFiles
+				if confirm {
+					files = confirmed
+				}
+				c.health, c.unhealed = h, r.healBrokenEntry(gctx, run, &runMu, h, files)
 			}
 
 			runMu.Lock()

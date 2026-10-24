@@ -43,9 +43,9 @@ func (r *Service) healBrokenEntry(
 	statsMu *sync.Mutex,
 	health *storage.EntryHealth,
 	files []storage.BrokenFile,
-) {
+) []storage.BrokenFile {
 	if health == nil || health.Status != storage.HealthBroken {
-		return
+		return nil
 	}
 
 	blocklist := make(map[string]bool)
@@ -56,8 +56,10 @@ func (r *Service) healBrokenEntry(
 	}
 	initiated := 0
 	failed := 0
-	for _, broken := range files {
+	var unhealed []storage.BrokenFile
+	for i, broken := range files {
 		if ctx != nil && ctx.Err() != nil {
+			unhealed = files[i:]
 			break
 		}
 		if broken.ArrName == "" || !r.reacquirable(broken) {
@@ -88,7 +90,7 @@ func (r *Service) healBrokenEntry(
 	}
 
 	if initiated == 0 && failed == 0 {
-		return
+		return unhealed
 	}
 	health.LastRepairAt = time.Now()
 	r.saveHealth(health)
@@ -97,6 +99,7 @@ func (r *Service) healBrokenEntry(
 	run.Stats.RepairFailed += failed
 	r.saveRun(run)
 	statsMu.Unlock()
+	return unhealed
 }
 
 // Reasons for a failure in the release's own content.

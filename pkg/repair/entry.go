@@ -2,6 +2,7 @@ package repair
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -17,12 +18,12 @@ func (r *Service) probeEntry(
 	nzb *nzbProber,
 	opts RunOptions,
 	autoRepair bool,
-) *storage.EntryHealth {
+) (*storage.EntryHealth, []storage.BrokenFile) {
 	s := r.storage
 	if c.item == nil {
 		item, err := s.GetEntryItem(c.name)
 		if err != nil || item == nil || len(item.Files) == 0 {
-			return nil
+			return nil, nil
 		}
 		c.item = item
 	}
@@ -32,6 +33,7 @@ func (r *Service) probeEntry(
 		h = &storage.EntryHealth{EntryName: c.name}
 	}
 	previous := h.Status
+	stored := h.BrokenFiles
 
 	h.PreviousStatus = previous
 	h.Status = storage.HealthRepairing
@@ -75,7 +77,22 @@ func (r *Service) probeEntry(
 		// rollupStatus never produces these.
 	}
 	r.saveHealth(h)
-	return h
+	return h, confirmedBroken(previous, stored, broken)
+}
+
+// confirmedBroken returns the files in broken that were also in stored while the entry was broken.
+func confirmedBroken(previous storage.HealthStatus, stored, broken []storage.BrokenFile) []storage.BrokenFile {
+	if previous != storage.HealthBroken {
+		return nil
+	}
+	key := func(file storage.BrokenFile) string { return file.InfoHash + "\x00" + file.FileName }
+	confirmable := make(map[string]bool, len(stored))
+	for _, file := range stored {
+		confirmable[key(file)] = true
+	}
+	return slices.DeleteFunc(slices.Clone(broken), func(file storage.BrokenFile) bool {
+		return !confirmable[key(file)]
+	})
 }
 
 func firstDeferredReason(results []fileResult) string {
