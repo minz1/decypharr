@@ -37,6 +37,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/storage/migration"
 	"github.com/sirrobot01/decypharr/pkg/strm"
 	"github.com/sirrobot01/decypharr/pkg/usenet"
+	"github.com/sirrobot01/decypharr/pkg/usenet/parser"
 	"github.com/sirrobot01/decypharr/pkg/version"
 )
 
@@ -85,9 +86,11 @@ type Manager struct {
 	removeUsenet func(id string) error
 	// checkStreamFile confirms a stream failure; nil uses the usenet client's full article check.
 	checkStreamFile func(ctx context.Context, nzoID, filename string) error
-	pruneReportMu   sync.Mutex
-	pruneFails      map[string]int
-	lastPrune       PruneReport
+	// parseNZBFunc parses an NZB's articles; nil uses the usenet client.
+	parseNZBFunc  func(ctx context.Context, id, name string, content []byte, category string) (*storage.NZB, map[string]*parser.FileGroup, error)
+	pruneReportMu sync.Mutex
+	pruneFails    map[string]int
+	lastPrune     PruneReport
 
 	// Migration jobs tracking
 	migrationJobs   *xsync.Map[string, *storage.SwitcherJob]
@@ -527,7 +530,11 @@ func (m *Manager) handleJobError(job *Job, err error) {
 		m.jobQueue.WaitForSlot(job, providers, delay)
 		return
 	}
-	m.logger.Error().Err(err).Str("job_id", job.ID).Str("type", string(job.Type)).Msg("Active download failed")
+	event := m.logger.Error().Err(err).Str("job_id", job.ID).Str("type", string(job.Type))
+	if job.Entry != nil {
+		event = event.Str("name", job.Entry.Name)
+	}
+	event.Msg("Active download failed")
 	if job.Entry != nil {
 		m.failEntry(job.Entry, err)
 	}

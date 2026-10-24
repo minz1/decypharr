@@ -1,7 +1,6 @@
 package manager
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -158,9 +157,7 @@ func (m *Manager) rebuildQueuedNZBJob(entry *storage.Entry) (*Job, error) {
 	if name == "" {
 		name = entry.Name
 	}
-	ctx, cancel := context.WithTimeout(m.ctx, m.usenetTimeout)
-	defer cancel()
-	meta, groups, err := m.usenet.ParseWithID(ctx, entry.InfoHash, name, content, entry.Category)
+	meta, groups, err := m.parseNZB(m.ctx, entry.InfoHash, name, content, entry.Category)
 	if err != nil {
 		return nil, fmt.Errorf("usenet parse failed: %w", err)
 	}

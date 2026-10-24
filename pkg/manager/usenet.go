@@ -86,18 +86,7 @@ func (m *Manager) parseQueuedNZB(ctx context.Context, job *Job) error {
 	if err != nil {
 		return fmt.Errorf("read staged NZB: %w", err)
 	}
-	// Parsing stats segments over NNTP. It ran on the bare queue context,
-	// so a degraded provider held the worker slot with no upper bound;
-	// give it the same budget the processing stage gets.
-	parseCtx, cancelParse := context.WithTimeout(ctx, m.usenetTimeout)
-	meta, groups, err := m.usenet.ParseWithID(
-		parseCtx,
-		job.Entry.InfoHash,
-		job.Request.Name,
-		content,
-		job.Request.Arr.Name,
-	)
-	cancelParse()
+	meta, groups, err := m.parseNZB(ctx, job.Entry.InfoHash, job.Request.Name, content, job.Request.Arr.Name)
 	if err != nil {
 		// A missing article at the parse stage is a definitive
 		// availability result: record and share it before failing the
@@ -342,5 +331,36 @@ func newNZBQueueEntry(req *ImportRequest, stagedPath string) *storage.Entry {
 		Providers:        make(map[string]*storage.ProviderEntry),
 		Files:            make(map[string]*storage.File),
 		Tags:             []string{},
+	}
+}
+
+// parseNZB parses an NZB's articles under the usenet budget, with one more
+// budget when only the first ran out and the entry is still queued.
+func (m *Manager) parseNZB(
+	ctx context.Context,
+	id, name string,
+	content []byte,
+	category string,
+) (*storage.NZB, map[string]*parser.FileGroup, error) {
+	parse := m.parseNZBFunc
+	if parse == nil {
+		parse = m.usenet.ParseWithID
+	}
+	for attempt := 1; ; attempt++ {
+		parseCtx, cancel := context.WithTimeout(ctx, m.usenetTimeout)
+		meta, groups, err := parse(parseCtx, id, name, content, category)
+		budgetRanOut := errors.Is(err, context.DeadlineExceeded) &&
+			errors.Is(parseCtx.Err(), context.DeadlineExceeded) &&
+			ctx.Err() == nil
+		cancel()
+		if err == nil || !budgetRanOut || attempt == 2 || !m.queue.Contains(id) {
+			return meta, groups, err
+		}
+		m.logger.Warn().
+			Err(err).
+			Str("name", name).
+			Str("id", id).
+			Dur("timeout", m.usenetTimeout).
+			Msg("NZB parse ran out of time; retrying once")
 	}
 }
