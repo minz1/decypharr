@@ -170,7 +170,7 @@ func (r *Service) probeAndHealCandidates(
 			}
 
 			if autoRepair && h.Status == storage.HealthBroken {
-				r.healBrokenEntry(gctx, run, &runMu, h)
+				r.healBrokenEntry(gctx, run, &runMu, h, h.BrokenFiles)
 			}
 
 			runMu.Lock()

@@ -49,7 +49,7 @@ func (r *Service) RecheckEntry(ctx context.Context, entryName string, fix bool) 
 		}
 		pseudo := &storage.RepairRun{ID: runID, Stats: storage.RepairRunStats{}}
 		var statsMu sync.Mutex
-		r.healBrokenEntry(ctx, pseudo, &statsMu, final)
+		r.healBrokenEntry(ctx, pseudo, &statsMu, final, final.BrokenFiles)
 	})
 
 	if h == nil {

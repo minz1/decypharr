@@ -32,7 +32,7 @@ func (r *Service) repairBroken(
 		if ctx != nil && ctx.Err() != nil {
 			return false
 		}
-		r.healBrokenEntry(ctx, run, &statsMu, health)
+		r.healBrokenEntry(ctx, run, &statsMu, health, health.BrokenFiles)
 		return true
 	})
 }
@@ -42,21 +42,32 @@ func (r *Service) healBrokenEntry(
 	run *storage.RepairRun,
 	statsMu *sync.Mutex,
 	health *storage.EntryHealth,
+	files []storage.BrokenFile,
 ) {
 	if health == nil || health.Status != storage.HealthBroken {
 		return
 	}
 
+	blocklist := make(map[string]bool)
+	for _, broken := range files {
+		if strategyForReason(broken.Reason) == reacquire.StrategyHistoryFailed {
+			blocklist[broken.InfoHash] = true
+		}
+	}
 	initiated := 0
 	failed := 0
-	for _, broken := range health.BrokenFiles {
+	for _, broken := range files {
 		if ctx != nil && ctx.Err() != nil {
 			break
 		}
 		if broken.ArrName == "" || !r.reacquirable(broken) {
 			continue
 		}
-		job, err := r.reacquireBrokenFile(ctx, broken)
+		strategy := reacquire.StrategyCommandSearch
+		if blocklist[broken.InfoHash] {
+			strategy = reacquire.StrategyHistoryFailed
+		}
+		job, err := r.reacquireBrokenFile(ctx, broken, strategy)
 		switch err {
 		case nil:
 			initiated++
@@ -88,6 +99,23 @@ func (r *Service) healBrokenEntry(
 	statsMu.Unlock()
 }
 
+// Reasons for a failure in the release's own content.
+const (
+	reasonHosterUnavailable    = "hoster_unavailable"
+	reasonEmptyDownloadLink    = "empty_download_link"
+	reasonUsenetSegmentMissing = "usenet_segment_missing"
+	reasonUsenetCorruptContent = "usenet_corrupt_content"
+)
+
+func strategyForReason(reason string) reacquire.Strategy {
+	switch reason {
+	case reasonHosterUnavailable, reasonEmptyDownloadLink, reasonUsenetSegmentMissing, reasonUsenetCorruptContent:
+		return reacquire.StrategyHistoryFailed
+	default:
+		return reacquire.StrategyCommandSearch
+	}
+}
+
 func (r *Service) arrInstance(name string) (arr.Arr, bool) {
 	if r.arrs == nil {
 		return arr.Arr{}, false
@@ -106,7 +134,11 @@ func (r *Service) reacquirable(broken storage.BrokenFile) bool {
 	return kind == "" || kind == storage.ArrKindSonarr || kind == storage.ArrKindRadarr
 }
 
-func (r *Service) reacquireBrokenFile(ctx context.Context, broken storage.BrokenFile) (*reacquire.Job, error) {
+func (r *Service) reacquireBrokenFile(
+	ctx context.Context,
+	broken storage.BrokenFile,
+	strategy reacquire.Strategy,
+) (*reacquire.Job, error) {
 	if r.reacquirer == nil {
 		return nil, errReacquirerUnavailable
 	}
@@ -114,13 +146,13 @@ func (r *Service) reacquireBrokenFile(ctx context.Context, broken storage.Broken
 	var job *reacquire.Job
 	if err == nil {
 		job, err = r.reacquirer.Reacquire(reacquire.Request{
-			EntryID: entryID, FileID: fileID, Cause: reacquire.CauseRepair, Strategy: reacquire.StrategyHistoryFailed,
+			EntryID: entryID, FileID: fileID, Cause: reacquire.CauseRepair, Strategy: strategy,
 		})
 	}
 	if errors.Is(err, reacquire.ErrBindingNotFound) || errors.Is(err, errUnmappedBrokenFile) {
 		job, err = r.reacquirer.ReacquireLibraryFile(ctx, reacquire.LibraryRequest{
 			ArrName: broken.ArrName, ArrFileID: broken.ArrFileID, LibraryPath: broken.SourcePath,
-			Cause: reacquire.CauseRepair,
+			Cause: reacquire.CauseRepair, Strategy: strategy,
 		})
 	}
 	if err != nil {

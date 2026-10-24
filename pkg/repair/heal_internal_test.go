@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync"
 	"testing"
 
@@ -73,11 +74,12 @@ func TestHealBrokenEntryQueuesStableFileIdentity(t *testing.T) {
 			FileName:  fileName,
 			InfoHash:  entryID,
 			ArrName:   "radarr",
+			Reason:    "hoster_unavailable",
 		}},
 	}
 
 	var statsMu sync.Mutex
-	service.healBrokenEntry(t.Context(), run, &statsMu, health)
+	service.healBrokenEntry(t.Context(), run, &statsMu, health, health.BrokenFiles)
 
 	if len(reacquirer.requests) != 1 {
 		t.Fatalf("reacquire requests = %d, want 1", len(reacquirer.requests))
@@ -139,7 +141,7 @@ func TestHealBrokenEntryCountsQueueAndIdentityFailures(t *testing.T) {
 	}
 
 	var statsMu sync.Mutex
-	service.healBrokenEntry(t.Context(), run, &statsMu, health)
+	service.healBrokenEntry(t.Context(), run, &statsMu, health, health.BrokenFiles)
 
 	if len(reacquirer.requests) != 1 {
 		t.Fatalf("reacquire requests = %d, want only the safely resolved file", len(reacquirer.requests))
@@ -187,7 +189,7 @@ func TestHealBrokenEntrySkipsArrsWithoutReacquisition(t *testing.T) {
 	}
 
 	var statsMu sync.Mutex
-	service.healBrokenEntry(t.Context(), run, &statsMu, health)
+	service.healBrokenEntry(t.Context(), run, &statsMu, health, health.BrokenFiles)
 
 	if len(reacquirer.requests) != 0 {
 		t.Fatalf("reacquire requests = %d, want none for a non-Sonarr/Radarr arr", len(reacquirer.requests))
@@ -227,7 +229,7 @@ func TestHealBrokenEntryQueuesUnindexedLibraryFile(t *testing.T) {
 			ArrFileID: 4242, EpisodeID: 7, SourcePath: "/library/Episode.mkv"}},
 	}
 	var statsMu sync.Mutex
-	service.healBrokenEntry(t.Context(), run, &statsMu, health)
+	service.healBrokenEntry(t.Context(), run, &statsMu, health, health.BrokenFiles)
 	if mutations != 0 {
 		t.Fatal("repair sent direct Arr mutations")
 	}
@@ -266,6 +268,7 @@ func TestHealBrokenEntryDoesNotBypassUnsafeOrUnavailableReacquisition(t *testing
 					ArrName:    "radarr",
 					SourcePath: "/library/movie.mkv",
 				},
+				reacquire.StrategyHistoryFailed,
 			)
 			if !errors.Is(err, cause) || len(reacquirer.libraryRequests) != 0 {
 				t.Fatalf("error = %v, fallback calls = %d", err, len(reacquirer.libraryRequests))
@@ -281,8 +284,138 @@ func TestNewTreatsNilReacquireServiceAsUnavailable(t *testing.T) {
 	if service.reacquirer != nil {
 		t.Fatal("typed-nil reacquire service must not be kept as a Reacquirer")
 	}
-	_, err := service.reacquireBrokenFile(t.Context(), storage.BrokenFile{})
+	_, err := service.reacquireBrokenFile(t.Context(), storage.BrokenFile{}, reacquire.StrategyCommandSearch)
 	if !errors.Is(err, errReacquirerUnavailable) {
 		t.Fatalf("error = %v, want %v", err, errReacquirerUnavailable)
+	}
+}
+
+func TestStrategyForReason(t *testing.T) {
+	t.Parallel()
+	for reason, want := range map[string]reacquire.Strategy{
+		"hoster_unavailable":        reacquire.StrategyHistoryFailed,
+		"empty_download_link":       reacquire.StrategyHistoryFailed,
+		"usenet_segment_missing":    reacquire.StrategyHistoryFailed,
+		"usenet_corrupt_content":    reacquire.StrategyHistoryFailed,
+		"provider_client_not_found": reacquire.StrategyCommandSearch,
+		"missing_provider_link":     reacquire.StrategyCommandSearch,
+		"usenet_manifest_missing":   reacquire.StrategyCommandSearch,
+		"usenet_manifest_invalid":   reacquire.StrategyCommandSearch,
+		"":                          reacquire.StrategyCommandSearch,
+		"other":                     reacquire.StrategyCommandSearch,
+	} {
+		if got := strategyForReason(reason); got != want {
+			t.Errorf("strategyForReason(%q) = %q, want %q", reason, got, want)
+		}
+	}
+}
+
+// healReasons heals one broken file per reason, all of release "release-1",
+// and returns the strategies queued, in file order.
+func healReasons(t *testing.T, reasons ...string) []reacquire.Strategy {
+	t.Helper()
+	store := newRepairTestStorage(t)
+	const entryID = "release-1"
+	entry := &storage.Entry{InfoHash: entryID, Name: "Series.Release", Files: map[string]*storage.File{}}
+	var files []storage.BrokenFile
+	for i, reason := range reasons {
+		name := string(rune('a'+i)) + ".mkv"
+		entry.Files[name] = &storage.File{ID: "id-" + name, Name: name, InfoHash: entryID}
+		files = append(files, storage.BrokenFile{FileName: name, InfoHash: entryID, ArrName: "sonarr", Reason: reason})
+	}
+	if err := store.AddOrUpdate(entry); err != nil {
+		t.Fatal(err)
+	}
+	reacquirer := &fakeReacquirer{reacquire: func(reacquire.Request) (*reacquire.Job, error) {
+		return &reacquire.Job{ID: "job"}, nil
+	}}
+	service := New(Dependencies{Storage: store, Reacquirer: reacquirer})
+	health := &storage.EntryHealth{EntryName: entry.Name, Status: storage.HealthBroken, BrokenFiles: files}
+	var statsMu sync.Mutex
+	service.healBrokenEntry(t.Context(), &storage.RepairRun{ID: "run"}, &statsMu, health, files)
+	strategies := make([]reacquire.Strategy, 0, len(reacquirer.requests))
+	for _, request := range reacquirer.requests {
+		strategies = append(strategies, request.Strategy)
+	}
+	return strategies
+}
+
+func TestHealBrokenEntryBlocklistsOnlyReleaseContentFailures(t *testing.T) {
+	t.Parallel()
+	history, search := reacquire.StrategyHistoryFailed, reacquire.StrategyCommandSearch
+	tests := []struct {
+		name    string
+		reasons []string
+		want    []reacquire.Strategy
+	}{
+		{name: "decypharr side", reasons: []string{"provider_client_not_found"}, want: []reacquire.Strategy{search}},
+		{name: "release content", reasons: []string{"hoster_unavailable"}, want: []reacquire.Strategy{history}},
+		{
+			name:    "mixed, content last",
+			reasons: []string{"missing_provider_link", "hoster_unavailable"},
+			want:    []reacquire.Strategy{history, history},
+		},
+		{
+			name:    "mixed, content first",
+			reasons: []string{"hoster_unavailable", "missing_provider_link"},
+			want:    []reacquire.Strategy{history, history},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := healReasons(t, tt.reasons...); !slices.Equal(got, tt.want) {
+				t.Fatalf("strategies = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHealBrokenEntryOnlyHealsGivenFiles(t *testing.T) {
+	t.Parallel()
+	store := newRepairTestStorage(t)
+	entry := &storage.Entry{InfoHash: "release-2", Name: "Movie", Files: map[string]*storage.File{
+		"a.mkv": {ID: "id-a", Name: "a.mkv", InfoHash: "release-2"},
+		"b.mkv": {ID: "id-b", Name: "b.mkv", InfoHash: "release-2"},
+	}}
+	if err := store.AddOrUpdate(entry); err != nil {
+		t.Fatal(err)
+	}
+	reacquirer := &fakeReacquirer{reacquire: func(reacquire.Request) (*reacquire.Job, error) {
+		return &reacquire.Job{ID: "job"}, nil
+	}}
+	service := New(Dependencies{Storage: store, Reacquirer: reacquirer})
+	broken := []storage.BrokenFile{
+		{FileName: "a.mkv", InfoHash: "release-2", ArrName: "radarr", Reason: "hoster_unavailable"},
+		{FileName: "b.mkv", InfoHash: "release-2", ArrName: "radarr", Reason: "hoster_unavailable"},
+	}
+	health := &storage.EntryHealth{EntryName: entry.Name, Status: storage.HealthBroken, BrokenFiles: broken}
+	var statsMu sync.Mutex
+	service.healBrokenEntry(t.Context(), &storage.RepairRun{ID: "run"}, &statsMu, health, broken[1:])
+	if len(reacquirer.requests) != 1 || reacquirer.requests[0].FileID != "id-b" {
+		t.Fatalf("requests = %#v, want only id-b", reacquirer.requests)
+	}
+	if len(health.BrokenFiles) != 2 {
+		t.Fatalf("stored broken files = %d, want 2", len(health.BrokenFiles))
+	}
+}
+
+func TestLibraryFallbackCarriesStrategy(t *testing.T) {
+	t.Parallel()
+	reacquirer := &fakeReacquirer{
+		reacquire: func(reacquire.Request) (*reacquire.Job, error) { return nil, reacquire.ErrBindingNotFound },
+		library:   func(reacquire.LibraryRequest) (*reacquire.Job, error) { return &reacquire.Job{ID: "job"}, nil },
+	}
+	service := New(Dependencies{Storage: newRepairTestStorage(t), Reacquirer: reacquirer})
+	broken := []storage.BrokenFile{{
+		FileName: "gone.mkv", InfoHash: "missing-entry", ArrName: "radarr", ArrFileID: 7,
+		SourcePath: "/library/gone.mkv", Reason: "usenet_manifest_missing",
+	}}
+	health := &storage.EntryHealth{EntryName: "gone", Status: storage.HealthBroken, BrokenFiles: broken}
+	var statsMu sync.Mutex
+	service.healBrokenEntry(t.Context(), &storage.RepairRun{ID: "run"}, &statsMu, health, broken)
+	if len(reacquirer.libraryRequests) != 1 ||
+		reacquirer.libraryRequests[0].Strategy != reacquire.StrategyCommandSearch {
+		t.Fatalf("library requests = %#v", reacquirer.libraryRequests)
 	}
 }

@@ -60,10 +60,10 @@ func (p *nzbProber) probe(ctx context.Context, request nzbProbeRequest) fileResu
 	switch {
 	case errors.Is(probeErr, customerror.ErrUsenetSegmentMissing):
 		result.broken = true
-		result.reason = "usenet_segment_missing"
+		result.reason = reasonUsenetSegmentMissing
 	case errors.Is(probeErr, customerror.ErrUsenetCorruptContent):
 		result.broken = true
-		result.reason = "usenet_corrupt_content"
+		result.reason = reasonUsenetCorruptContent
 	// A missing or invalid local manifest never recovers on its own: the probe
 	// returns the same error every sweep, so deferring leaves the entry stuck
 	// as unknown while the arr still counts the file as downloaded. Treat it as

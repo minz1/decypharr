@@ -45,7 +45,7 @@ func (r *Service) probeTorrentFile(
 		r.hearsay.ObserveTorrent(client.Config().Provider, file.InfoHash, true)
 	} else if errors.Is(err, customerror.ErrHosterUnavailable) {
 		result.broken = true
-		result.reason = "hoster_unavailable"
+		result.reason = reasonHosterUnavailable
 		r.hearsay.ObserveTorrent(client.Config().Provider, file.InfoHash, false)
 	} else {
 		result.reason = "provider_probe_error"
@@ -96,9 +96,9 @@ func (r *Service) probeTorrentFileByUnrestrict(
 		errors.Is(err, customerror.ErrHosterUnavailable) {
 		result.broken = true
 		if errors.Is(err, customerror.ErrHosterUnavailable) {
-			result.reason = "hoster_unavailable"
+			result.reason = reasonHosterUnavailable
 		} else {
-			result.reason = "empty_download_link"
+			result.reason = reasonEmptyDownloadLink
 		}
 		r.hearsay.ObserveTorrent(client.Config().Provider, file.InfoHash, false)
 		return result
