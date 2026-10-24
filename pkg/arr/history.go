@@ -1,6 +1,7 @@
 package arr
 
 import (
+	"cmp"
 	"context"
 	"encoding/hex"
 	"fmt"
@@ -127,12 +128,12 @@ func (s *Service) historyForDownload(ctx context.Context, instance Arr, download
 
 // GrabHistory returns the record of the grab that produced a download.
 func (s *Service) GrabHistory(ctx context.Context, name, downloadID string) (HistoryRecord, bool, error) {
-	return s.firstHistory(ctx, name, downloadID, EventGrabbed)
+	return s.latestHistory(ctx, name, downloadID, EventGrabbed)
 }
 
 // DownloadImported reports whether the arr imported anything from a download after history record afterID.
 func (s *Service) DownloadImported(ctx context.Context, name, downloadID string, afterID int) (bool, error) {
-	record, found, err := s.firstHistory(ctx, name, downloadID, EventDownloadFolderImported)
+	record, found, err := s.latestHistory(ctx, name, downloadID, EventDownloadFolderImported)
 	imported := found && record.ID > afterID
 	if imported {
 		s.logger.Info().Str("arr", name).Str("download_id", downloadID).
@@ -144,15 +145,16 @@ func (s *Service) DownloadImported(ctx context.Context, name, downloadID string,
 // FailedHistory returns the download-failed record for a download, which is
 // how a blocklist already applied is recognised.
 func (s *Service) FailedHistory(ctx context.Context, name, downloadID string) (HistoryRecord, bool, error) {
-	return s.firstHistory(ctx, name, downloadID, EventDownloadFailed)
+	return s.latestHistory(ctx, name, downloadID, EventDownloadFailed)
 }
 
-func (s *Service) firstHistory(ctx context.Context, name, downloadID, eventType string) (HistoryRecord, bool, error) {
+// latestHistory returns the highest-ID record: records written in the same second come back in any order.
+func (s *Service) latestHistory(ctx context.Context, name, downloadID, eventType string) (HistoryRecord, bool, error) {
 	records, err := s.DownloadHistory(ctx, name, downloadID, eventType)
 	if err != nil || len(records) == 0 {
 		return HistoryRecord{}, false, err
 	}
-	return records[0], true, nil
+	return slices.MaxFunc(records, func(a, b HistoryRecord) int { return cmp.Compare(a.ID, b.ID) }), true, nil
 }
 
 // LatestGrabID returns the most recent grab record for one episode or movie.

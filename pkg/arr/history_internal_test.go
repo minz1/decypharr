@@ -113,6 +113,23 @@ func TestHistoryByDownloadIDPaginatesAndFiltersEvent(t *testing.T) {
 	}
 }
 
+// Grabs written in the same second can come back in any order; the latest is the highest ID.
+func TestGrabHistoryReturnsTheHighestID(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `{"page":1,"totalRecords":2,"records":[`+
+			`{"id":17,"downloadId":"download-1","eventType":"grabbed"},`+
+			`{"id":30,"downloadId":"download-1","eventType":"grabbed"}]}`)
+	}))
+	defer server.Close()
+
+	s := testService(Arr{Host: server.URL, Token: "secret", Type: Sonarr})
+	record, found, err := s.GrabHistory(t.Context(), "arr", "download-1")
+	if err != nil || !found || record.ID != 30 {
+		t.Fatalf("record = %#v, found = %v, err = %v, want grab 30", record, found, err)
+	}
+}
+
 func TestMarkHistoryFailedCtxValidatesStatus(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

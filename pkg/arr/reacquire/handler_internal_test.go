@@ -618,6 +618,107 @@ func TestDownloadGrabbedAgainAfterEveryRoundFailsTheJob(t *testing.T) {
 	}
 }
 
+// A job that gives up on a download grabbed once too often leaves the library file alone.
+func TestGivingUpOnARegrabDeletesNoFile(t *testing.T) {
+	t.Parallel()
+	queued := time.Now().UTC().Add(-time.Minute)
+	var deleted atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v3/moviefile/42":
+			_, _ = fmt.Fprint(w, `{"id":42,"movieId":9,"path":"/library/movie.mkv"}`)
+		case request.Method == http.MethodDelete && request.URL.Path == "/api/v3/moviefile/42":
+			deleted.Store(true)
+			w.WriteHeader(http.StatusAccepted)
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v3/config/downloadclient":
+			_, _ = fmt.Fprint(w, `{"enableCompletedDownloadHandling":true,"autoRedownloadFailed":true}`)
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v3/history":
+			_, _ = fmt.Fprint(w,
+				`{"page":1,"totalRecords":1,"records":[{"id":50,"downloadId":"download-1","eventType":"grabbed"}]}`)
+		default:
+			http.NotFound(w, request)
+		}
+	}))
+	defer server.Close()
+
+	registry := newTestArrStorage()
+	instance := arr.Arr{Name: "movies", Host: server.URL, Token: "secret", Type: arr.Radarr}
+	registry.AddOrUpdate(instance)
+	job := Job{
+		ArrName: "movies", ArrType: arr.Radarr, EntryID: "entry-1", FileID: "file-1", DownloadID: "download-1",
+		Strategy: StrategyHistoryFailed,
+		Bindings: []Binding{{
+			ArrName: "movies", ArrType: arr.Radarr, ArrInstanceFingerprint: instance.Fingerprint(),
+			EntryID: "entry-1", EntryFileID: "file-1", DownloadID: "download-1", ArrFileID: 42,
+			LibraryPath: "/library/movie.mkv", MovieID: 9, Confidence: ConfidenceExactPath,
+		}},
+	}
+	for _, grab := range []int{12, 17, 30, 40} {
+		key := mutationKey(MutationHistoryFailed, "download-1", strconv.Itoa(grab))
+		if grab == 12 {
+			key = mutationKey(MutationHistoryFailed, "download-1")
+		}
+		job.Mutations = append(job.Mutations, Mutation{
+			Key: key, Kind: MutationHistoryFailed, State: MutationConfirmed, DownloadID: "download-1",
+			HistoryID: grab, IntentAt: queued, LastDispatchedAt: queued, Attempts: 1, ReceiptID: grab,
+			ConfirmedAt: queued,
+		})
+	}
+	if err := NewHandler(registry, nil).Reacquire(t.Context(), job, &recordedProgress{}); err == nil {
+		t.Fatal("Reacquire succeeded, want it to give up")
+	}
+	if deleted.Load() {
+		t.Fatal("library file was deleted before giving up")
+	}
+}
+
+// An earlier blocklist sent again fails every grab of the download, so the current one is not sent twice.
+func TestSettledEarlierBlocklistCoversTheCurrentGrab(t *testing.T) {
+	t.Parallel()
+	queued := time.Now().UTC().Add(-time.Minute)
+	var blocklisted atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodPost && strings.HasPrefix(request.URL.Path, "/api/v3/history/failed/"):
+			blocklisted.Add(1)
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v3/history":
+			if blocklisted.Load() == 0 {
+				_, _ = fmt.Fprint(w, `{"page":1,"totalRecords":0,"records":[]}`)
+				return
+			}
+			_, _ = fmt.Fprint(w, `{"page":1,"totalRecords":1,"records":[`+
+				`{"id":31,"downloadId":"download-1","eventType":"downloadFailed"}]}`)
+		default:
+			http.NotFound(w, request)
+		}
+	}))
+	t.Cleanup(server.Close)
+	first := Mutation{
+		Key: mutationKey(MutationHistoryFailed, "download-1"), Kind: MutationHistoryFailed,
+		State: MutationConfirmed, DownloadID: "download-1", HistoryID: 12, IntentAt: queued,
+		LastDispatchedAt: queued, Attempts: 1, ReceiptID: 13, ConfirmedAt: queued,
+	}
+	unsettled := Mutation{
+		Key: mutationKey(MutationHistoryFailed, "download-1", "17"), Kind: MutationHistoryFailed,
+		State: MutationIntent, DownloadID: "download-1", HistoryID: 17, IntentAt: queued,
+		LastDispatchedAt: queued.Add(-time.Minute), Attempts: 1,
+	}
+	job := Job{Mutations: []Mutation{first, unsettled}}
+	err := newTestHandler(server.URL).executeExactDownloadFailure(
+		t.Context(), testInstance(server.URL), &job, exactDownloadFailure{
+			found: true, grabFound: true, downloadID: "download-1", historyID: 30,
+			grabRecord: arr.HistoryRecord{ID: 30},
+		}, &recordedProgress{},
+	)
+	if err != nil || blocklisted.Load() != 1 {
+		t.Fatalf("err = %v, blocklisted = %d, want one blocklist", err, blocklisted.Load())
+	}
+	current, _ := mutationForKey(job, mutationKey(MutationHistoryFailed, "download-1", "30"))
+	if current.State != MutationConfirmed || current.ReceiptID != 31 || current.Attempts != 0 {
+		t.Fatalf("current blocklist = %+v, want confirmed by record 31 without a send", current)
+	}
+}
+
 func TestRegrabSearchSettlesOnlySearches(t *testing.T) {
 	t.Parallel()
 	queued := time.Now().UTC().Add(-time.Minute)
