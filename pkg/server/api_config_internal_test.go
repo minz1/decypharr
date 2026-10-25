@@ -140,6 +140,36 @@ func TestConfigHandlersUseSnapshots(t *testing.T) {
 	}
 }
 
+func TestUpdateConfigKeepsAuthAndSessionSecret(t *testing.T) {
+	t.Parallel()
+	mgr, store := managertest.New(t, func(cfg *config.Config) {
+		cfg.Auth = &config.Auth{Username: "owner", Password: "hash", APIToken: "token"}
+	})
+	before := store.Get()
+	server := &Server{manager: mgr, config: store, logger: zerolog.Nop()}
+	response := httptest.NewRecorder()
+	server.handleUpdateConfig(response, httptest.NewRequest(http.MethodPost, "/api/config", strings.NewReader(`{
+		"app_url": "https://new.example.test",
+		"auth": {"username": "intruder", "password": "x", "api_token": "stolen"},
+		"Auth": {"username": "intruder", "password": "x", "api_token": "stolen"},
+		"session_secret": "attacker-secret",
+		"SessionSecret": {"value": "attacker-secret"}
+	}`)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("POST status=%d body=%s", response.Code, response.Body.String())
+	}
+	after := store.Get()
+	if after.AppURL != "https://new.example.test" {
+		t.Fatal("POST did not publish the update")
+	}
+	if after.Auth == nil || *after.Auth != *before.Auth {
+		t.Fatalf("auth = %+v, want %+v", after.Auth, before.Auth)
+	}
+	if after.SessionSecret.IsZero() || after.SessionSecret != before.SessionSecret {
+		t.Fatal("POST replaced the session secret")
+	}
+}
+
 // List items merge by name, not by index: an item keeps its own omitted
 // fields, never those of the item that used to sit at its index. Removing
 // the first debrid used to hand its API key to the one that moved up.
