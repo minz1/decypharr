@@ -111,7 +111,9 @@ func TestFailedSaveDoesNotPublishConfig(t *testing.T) {
 
 func TestStartupSettingsRequireRestart(t *testing.T) {
 	t.Parallel()
-	for _, field := range []string{"workers", "retries", "schedule", "notifications"} {
+	for _, field := range []string{
+		"workers", "retries", "schedule", "notifications", "categories", "download_folder", "always_rm_tracker_urls",
+	} {
 		t.Run(field, func(t *testing.T) {
 			t.Parallel()
 			before := &config.Config{}
@@ -125,6 +127,12 @@ func TestStartupSettingsRequireRestart(t *testing.T) {
 				after.RefreshInterval = "5m"
 			case "notifications":
 				after.Notifications.Enabled = true
+			case "categories":
+				after.Categories = []string{"anime"}
+			case "download_folder":
+				after.DownloadFolder = "/downloads/new"
+			case "always_rm_tracker_urls":
+				after.AlwaysRmTrackerUrls = true
 			}
 			if !before.RequiresRestart(&after) {
 				t.Fatal("startup setting did not require restart")

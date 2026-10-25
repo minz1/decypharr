@@ -863,10 +863,7 @@ func clearHotFields(c *Config) {
 	c.MinFileSize = ""
 	c.MaxFileSize = ""
 	c.NZBUserAgent = ""
-	c.DownloadFolder = ""
 	c.SkipPreCache = false
-	c.AlwaysRmTrackerUrls = false
-	c.Categories = nil
 	c.FolderNaming = ""
 	c.CustomFolders = nil
 	c.VirtualFolders = nil
