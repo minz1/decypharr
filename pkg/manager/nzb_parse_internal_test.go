@@ -101,6 +101,11 @@ func TestParseNZBDoesNotRetry(t *testing.T) {
 				return nil, nil, customerror.ErrUsenetSegmentMissing
 			}
 		},
+		"an operation's own deadline": func(t *testing.T, _ *Manager) (context.Context, parseFunc) {
+			return t.Context(), func(context.Context, string, string, []byte, string) (*storage.NZB, map[string]*parser.FileGroup, error) {
+				return nil, nil, context.DeadlineExceeded
+			}
+		},
 		"caller cancelled": func(t *testing.T, _ *Manager) (context.Context, parseFunc) {
 			ctx, cancel := context.WithCancel(t.Context())
 			return ctx, func(ctx context.Context, _, _ string, _ []byte, _ string) (*storage.NZB, map[string]*parser.FileGroup, error) {

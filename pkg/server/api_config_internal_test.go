@@ -435,6 +435,7 @@ func TestUpdateConfigSettingsPagePhase1Fields(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := &Server{manager: mgr, config: store, logger: zerolog.Nop()}
+	saveWithoutEdits(t, server, store, "fresh config")
 
 	postConfig(t, server, phase1Payload(t, caFile))
 	got, err := config.Load(store.Get().Dir(), config.MapEnv(nil))
@@ -446,17 +447,22 @@ func TestUpdateConfigSettingsPagePhase1Fields(t *testing.T) {
 			t.Errorf("edit: %s = %v, want %v", path, c[0], c[1])
 		}
 	}
+	saveWithoutEdits(t, server, store, "after the edit")
+}
 
+// saveWithoutEdits posts the settings the page loaded back unchanged and checks config.json kept every value.
+func saveWithoutEdits(t *testing.T, server *Server, store *config.Store, step string) {
+	t.Helper()
 	response := httptest.NewRecorder()
 	server.handleGetConfig(response, httptest.NewRequest(http.MethodGet, "/api/config", nil))
 	if response.Code != http.StatusOK {
-		t.Fatalf("GET status = %d", response.Code)
+		t.Fatalf("%s: GET status = %d", step, response.Code)
 	}
 	before := readConfigJSON(t, store.Get().JSONFile())
 	if postConfig(t, server, response.Body.Bytes()) {
-		t.Error("a save of the unchanged settings restarted services")
+		t.Errorf("%s: a save of the unchanged settings restarted services", step)
 	}
 	if after := readConfigJSON(t, store.Get().JSONFile()); !reflect.DeepEqual(before, after) {
-		t.Errorf("config.json changed on a save with no edits:\nbefore %v\nafter  %v", before, after)
+		t.Errorf("%s: config.json changed on a save with no edits:\nbefore %v\nafter  %v", step, before, after)
 	}
 }
