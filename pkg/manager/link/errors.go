@@ -196,7 +196,8 @@ func ClassifyStreamStatus(status int, header http.Header) *Error {
 		e := NewLinkError(ErrHTTP429, CategoryThrottled, "429")
 		e.RetryAfter = parseRetryAfter(header.Get("Retry-After"))
 		return e
-	case status >= http.StatusInternalServerError:
+	case status >= http.StatusInternalServerError || status == http.StatusRequestTimeout ||
+		status == http.StatusMisdirectedRequest || status == http.StatusTooEarly:
 		return NewRetryableError(fmt.Errorf("HTTP %d", status), strconv.Itoa(status))
 	default:
 		return NewPermanentError(fmt.Errorf("unexpected HTTP status %d", status), strconv.Itoa(status))

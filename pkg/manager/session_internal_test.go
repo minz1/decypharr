@@ -39,6 +39,8 @@ type fakeCDN struct {
 	cutAfter atomic.Int64
 	// throttleOnce serves a single 429 with Retry-After: 1.
 	throttleOnce atomic.Bool
+	// statusOnce, when set, serves that status once.
+	statusOnce atomic.Int64
 	// stallOnce writes 10 bytes then blocks until the client disconnects.
 	stallOnce atomic.Bool
 	// validToken, when set, 403s any request whose ?tok= differs.
@@ -71,6 +73,10 @@ func (c *fakeCDN) handler(w http.ResponseWriter, r *http.Request) {
 	}
 	if want := c.validToken.Load().(string); want != "" && r.URL.Query().Get("tok") != want {
 		http.Error(w, "expired token", http.StatusForbidden)
+		return
+	}
+	if status := c.statusOnce.Swap(0); status != 0 {
+		http.Error(w, "edge hiccup", int(status))
 		return
 	}
 	if c.throttleOnce.CompareAndSwap(true, false) {
@@ -234,6 +240,26 @@ func TestSessionHonorsRetryAfter(t *testing.T) {
 	}
 	if refreshes.Load() != 0 {
 		t.Fatal("429 must not refresh the link")
+	}
+}
+
+func TestSessionResumesPastOneMisdirectedRequest(t *testing.T) {
+	t.Parallel()
+	data := testPattern(4 << 10)
+	cdn := newFakeCDN(data)
+	server := startCDN(t, cdn)
+	cdn.statusOnce.Store(http.StatusMisdirectedRequest)
+
+	var url atomic.Value
+	url.Store(cdn.url(server, ""))
+	s := newTestSession(t, testTransport(server.Client(), &url, nil, nil), int64(len(data)))
+
+	got, err := io.ReadAll(s)
+	if err != nil {
+		t.Fatalf("read failed on one 421: %v", err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Fatal("byte mismatch")
 	}
 }
 

@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"testing/iotest"
 
@@ -303,5 +305,37 @@ func TestDirectStreamFileDoesNotRetryPermanentErrors(t *testing.T) {
 		if got := src.opens.Load(); got != 1 {
 			t.Errorf("onRead=%v: %d opens, want 1 (no retry of a permanent error)", onRead, got)
 		}
+	}
+}
+
+// failingSource fails every open with err.
+type failingSource struct {
+	err   error
+	opens atomic.Int32
+}
+
+func (s *failingSource) OpenStream(
+	context.Context, *storage.Entry, string, int64, string,
+) (manager.StreamReader, error) {
+	s.opens.Add(1)
+	return nil, s.err
+}
+
+func TestDirectStreamFileRetriesUntypedErrorWithPortLikeStatus(t *testing.T) {
+	t.Parallel()
+	reset := &net.OpError{
+		Op:     "read",
+		Net:    "tcp",
+		Source: &net.TCPAddr{IP: net.IPv4(192, 0, 2, 10), Port: 40412},
+		Addr:   &net.TCPAddr{IP: net.IPv4(203, 0, 113, 7), Port: 443},
+		Err:    syscall.ECONNRESET,
+	}
+	src := &failingSource{err: reset}
+	f := &DirectStreamFile{src: src, filename: "test.bin", size: 1024, retries: 2}
+	if _, err := f.ReadAtContext(t.Context(), make([]byte, 16), 0); !errors.Is(err, syscall.ECONNRESET) {
+		t.Fatalf("err = %v, want the connection reset", err)
+	}
+	if got := src.opens.Load(); got != 3 {
+		t.Errorf("%d opens of %q, want 3 (a reset is transient)", got, reset)
 	}
 }
