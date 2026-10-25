@@ -5,13 +5,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/rs/zerolog"
+	"github.com/sirrobot01/appendstore"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/internal/kvstore"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/storage"
@@ -315,5 +319,71 @@ func TestRestoreFailsAReprocessedNZBWhoseParseRanOutOfTime(t *testing.T) {
 	entry, err := m.queue.GetTorrent(hash)
 	if err != nil || entry.State != storage.EntryStateError || calls.Load() != 2 || m.jobQueue.Holds(hash) {
 		t.Fatalf("entry = %+v, %v after %d calls: want it failed by the restore", entry, err, calls.Load())
+	}
+}
+
+// A restored entry whose reset cannot be saved still gets its job; the job's own writes clear the flag.
+func TestRestoreResubmitsAnEntryWhoseResetCannotBeSaved(t *testing.T) {
+	t.Parallel()
+	dir := filepath.Join(t.TempDir(), "db")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hash := fmt.Sprintf("%040d", 1)
+	// The oversized name fits a raw record but not the attributes every queue write adds.
+	data, err := proto.Marshal(storage.EntryToProto(&storage.Entry{
+		InfoHash: hash, Name: strings.Repeat("n", 16<<20), Category: "radarr", Protocol: config.ProtocolTorrent,
+		State: storage.EntryStateDownloading, Status: debridTypes.TorrentStatusQueued, IsDownloading: true,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := kvstore.Open(filepath.Join(dir, "queue.db"), appendstore.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = raw.Put(hash, data, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err = raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.NewStorage(dir, storage.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	m := withTestConfig(t, &Manager{
+		queue:  newQueue(store, "", nil, zerolog.Nop()),
+		logger: zerolog.Nop(),
+		ctx:    t.Context(),
+	})
+	m.jobQueue = NewJobQueue(t.Context(), 1, func(ctx context.Context, _ *Job) { <-ctx.Done() }, zerolog.Nop())
+	t.Cleanup(m.jobQueue.Close)
+
+	m.restoreActiveDownloadJobs(m.restoreSnapshot())
+
+	if !m.jobQueue.Holds(hash) {
+		t.Fatal("an entry whose reset could not be saved got no job")
+	}
+}
+
+// An entry the restore cannot read may still be Queued; the "queued with no job" sweep must not remove it.
+func TestRestoreReadErrorKeepsTheQueuedSweepOff(t *testing.T) {
+	t.Parallel()
+	m := newRestoreTestManager(t)
+	addRestoreTestEntry(t, m, fmt.Sprintf("%040d", 1))
+	snapshot, err := m.restoreSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closeErr := m.queue.storage.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+
+	m.restoreActiveDownloadJobs(snapshot, nil)
+
+	if m.queueRestored.Load() {
+		t.Fatal("queueRestored = true after an entry could not be read")
 	}
 }
