@@ -17,6 +17,7 @@ func newTestServer(t *testing.T, store *config.Store) *Server {
 	return &Server{
 		config:  store,
 		urlBase: "/",
+		assets:  loadAssetManifest(),
 		logger:  zerolog.Nop(),
 		templates: template.Must(template.ParseFS(
 			content,

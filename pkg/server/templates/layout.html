@@ -6,14 +6,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Decypharr - {{.Title}}</title>
 
-    <link href="{{.URLBase}}assets/css/styles.css" rel="stylesheet" type="text/css"/>
+    <link href="{{.URLBase}}assets/css/styles.css?v={{.AssetVersion}}" rel="stylesheet" type="text/css"/>
 
-    <link rel="apple-touch-icon" sizes="180x180" href="{{.URLBase}}images/favicon/apple-touch-icon.png">
-    <link rel="icon" type="image/png" sizes="32x32" href="{{.URLBase}}images/favicon/favicon-32x32.png">
-    <link rel="icon" type="image/png" sizes="16x16" href="{{.URLBase}}images/favicon/favicon-16x16.png">
-    <link rel="manifest" href="{{.URLBase}}images/favicon/site.webmanifest">
+    <link rel="apple-touch-icon" sizes="180x180" href="{{.URLBase}}images/favicon/apple-touch-icon.png?v={{.AssetVersion}}">
+    <link rel="icon" type="image/png" sizes="32x32" href="{{.URLBase}}images/favicon/favicon-32x32.png?v={{.AssetVersion}}">
+    <link rel="icon" type="image/png" sizes="16x16" href="{{.URLBase}}images/favicon/favicon-16x16.png?v={{.AssetVersion}}">
+    <link rel="manifest" href="{{.URLBase}}images/favicon/site.webmanifest?v={{.AssetVersion}}">
 
-    <link rel="preload" href="{{.URLBase}}assets/js/common.js" as="script">
+    <link rel="preload" href="{{.URLBase}}assets/js/common.js?v={{.AssetVersion}}" as="script">
 
     <script>
         // Early theme detection to prevent FOUC
@@ -66,7 +66,7 @@
             </ul>
         </div>
         <a class="btn btn-ghost px-1 text-xl font-bold text-primary group sm:px-4" href="{{.URLBase}}">
-            <img src="{{.URLBase}}images/logo.png" alt="Decypharr Logo" class="w-8 h-8 inline-block sm:mr-2">
+            <img src="{{.URLBase}}images/logo.png?v={{.AssetVersion}}" alt="Decypharr Logo" class="w-8 h-8 inline-block sm:mr-2">
             <span class="hidden sm:inline bg-clip-text">Decypharr</span>
         </a>
     </div>
@@ -186,23 +186,22 @@
     </aside>
 </footer>
 
-<script src="{{.URLBase}}assets/js/jquery-3.7.1.min.js"></script>
-<script src="{{.URLBase}}assets/js/common.js"></script>
+<script src="{{.URLBase}}assets/js/common.js?v={{.AssetVersion}}"></script>
 
 {{ if eq .Page "index" }}
-<script src="{{.URLBase}}assets/js/dashboard.js"></script>
+<script src="{{.URLBase}}assets/js/dashboard.js?v={{.AssetVersion}}"></script>
 {{ else if eq .Page "browse" }}
-<script src="{{.URLBase}}assets/js/browse.js"></script>
+<script src="{{.URLBase}}assets/js/browse.js?v={{.AssetVersion}}"></script>
 {{ else if eq .Page "download" }}
-<script src="{{.URLBase}}assets/js/download.js"></script>
+<script src="{{.URLBase}}assets/js/download.js?v={{.AssetVersion}}"></script>
 {{ else if eq .Page "repair" }}
-<script src="{{.URLBase}}assets/js/repair.js"></script>
+<script src="{{.URLBase}}assets/js/repair.js?v={{.AssetVersion}}"></script>
 {{ else if eq .Page "reacquire" }}
-<script src="{{.URLBase}}assets/js/reacquire.js"></script>
+<script src="{{.URLBase}}assets/js/reacquire.js?v={{.AssetVersion}}"></script>
 {{ else if eq .Page "config" }}
-<script src="{{.URLBase}}assets/js/config.js"></script>
+<script src="{{.URLBase}}assets/js/config.js?v={{.AssetVersion}}"></script>
 {{ else if eq .Page "setup" }}
-<script src="{{.URLBase}}assets/js/setup.js"></script>
+<script src="{{.URLBase}}assets/js/setup.js?v={{.AssetVersion}}"></script>
 {{ end }}
 </body>
 </html>

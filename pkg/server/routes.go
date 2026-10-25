@@ -5,7 +5,10 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 )
+
+const gzipLevel = 5
 
 func (s *Server) WebRoutes() http.Handler {
 	r := chi.NewRouter()
@@ -16,32 +19,34 @@ func (s *Server) WebRoutes() http.Handler {
 	// Static assets - always public
 	staticFS, _ := fs.Sub(assetsEmbed, "assets/build")
 	imagesFS, _ := fs.Sub(imagesEmbed, "assets/images")
-	r.Handle("/assets/*", http.StripPrefix(s.urlBase+"assets/", http.FileServer(http.FS(staticFS))))
-	r.Handle("/images/*", http.StripPrefix(s.urlBase+"images/", http.FileServer(http.FS(imagesFS))))
+	assetGzip := middleware.Compress(gzipLevel, "text/css", "text/javascript", "application/javascript")
+	pageGzip := middleware.Compress(gzipLevel, "text/html")
+	r.With(assetGzip).Handle("/assets/*", http.StripPrefix(s.urlBase+"assets/", s.assets.handler("/assets", staticFS)))
+	r.Handle("/images/*", http.StripPrefix(s.urlBase+"images/", s.assets.handler("/images", imagesFS)))
 
 	// Public routes - no auth needed
 	r.Get("/version", s.handleGetVersion)
-	r.Get("/login", s.LoginHandler)
+	r.With(pageGzip).Get("/login", s.LoginHandler)
 	r.Post("/login", s.LoginHandler)
-	r.Get("/register", s.RegisterHandler)
+	r.With(pageGzip).Get("/register", s.RegisterHandler)
 	r.Post("/register", s.RegisterHandler)
 	r.Post("/skip-auth", s.skipAuthHandler)
 
 	// Setup wizard - public, no auth required
-	r.Get("/setup", s.SetupHandler)
+	r.With(pageGzip).Get("/setup", s.SetupHandler)
 	r.Post("/api/setup/complete", s.setupCompleteHandler)
 
 	// Protected routes - require auth
 	r.Group(func(r chi.Router) {
 		r.Use(s.authMiddleware)
 		// Web pages
-		r.Get("/", s.IndexHandler)
-		r.Get("/browse", s.BrowseHandler)
-		r.Get("/download", s.DownloadHandler)
-		r.Get("/repair", s.RepairHandler)
-		r.Get("/repair/reacquire", s.ReacquireHandler)
-		r.Get("/stats", s.StatsHandler)
-		r.Get("/settings", s.ConfigHandler)
+		r.With(pageGzip).Get("/", s.IndexHandler)
+		r.With(pageGzip).Get("/browse", s.BrowseHandler)
+		r.With(pageGzip).Get("/download", s.DownloadHandler)
+		r.With(pageGzip).Get("/repair", s.RepairHandler)
+		r.With(pageGzip).Get("/repair/reacquire", s.ReacquireHandler)
+		r.With(pageGzip).Get("/stats", s.StatsHandler)
+		r.With(pageGzip).Get("/settings", s.ConfigHandler)
 
 		// API routes
 		r.Route("/api", func(r chi.Router) {

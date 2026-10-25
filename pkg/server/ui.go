@@ -126,12 +126,14 @@ func (s *Server) RegisterHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) renderPage(w http.ResponseWriter, templateName, page, title string, extra map[string]any) {
 	cfg := s.config.Get()
 	data := map[string]any{
-		"URLBase":    cfg.URLBase,
-		"Page":       page,
-		"Title":      title,
-		"SetupError": cfg.SetupError(),
+		"URLBase":      cfg.URLBase,
+		"AssetVersion": s.assets.version,
+		"Page":         page,
+		"Title":        title,
+		"SetupError":   cfg.SetupError(),
 	}
 	maps.Copy(data, extra)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := s.templates.ExecuteTemplate(w, templateName, data); err != nil {
 		s.logger.Warn().Err(err).Str("page", page).Msg("error rendering template")
 	}

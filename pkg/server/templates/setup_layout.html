@@ -6,12 +6,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Decypharr - Setup Wizard</title>
 
-    <link href="{{.URLBase}}assets/css/styles.css" rel="stylesheet" type="text/css"/>
+    <link href="{{.URLBase}}assets/css/styles.css?v={{.AssetVersion}}" rel="stylesheet" type="text/css"/>
 
-    <link rel="apple-touch-icon" sizes="180x180" href="{{.URLBase}}images/favicon/apple-touch-icon.png">
-    <link rel="icon" type="image/png" sizes="32x32" href="{{.URLBase}}images/favicon/favicon-32x32.png">
-    <link rel="icon" type="image/png" sizes="16x16" href="{{.URLBase}}images/favicon/favicon-16x16.png">
-    <link rel="manifest" href="{{.URLBase}}images/favicon/site.webmanifest">
+    <link rel="apple-touch-icon" sizes="180x180" href="{{.URLBase}}images/favicon/apple-touch-icon.png?v={{.AssetVersion}}">
+    <link rel="icon" type="image/png" sizes="32x32" href="{{.URLBase}}images/favicon/favicon-32x32.png?v={{.AssetVersion}}">
+    <link rel="icon" type="image/png" sizes="16x16" href="{{.URLBase}}images/favicon/favicon-16x16.png?v={{.AssetVersion}}">
+    <link rel="manifest" href="{{.URLBase}}images/favicon/site.webmanifest?v={{.AssetVersion}}">
 
     <script>
         // Early theme detection to prevent FOUC
@@ -35,9 +35,8 @@
 
 {{ template "setup" . }}
 
-<script src="{{.URLBase}}assets/js/jquery-3.7.1.min.js"></script>
-<script src="{{.URLBase}}assets/js/common.js"></script>
-<script src="{{.URLBase}}assets/js/setup.js"></script>
+<script src="{{.URLBase}}assets/js/common.js?v={{.AssetVersion}}"></script>
+<script src="{{.URLBase}}assets/js/setup.js?v={{.AssetVersion}}"></script>
 </body>
 </html>
 {{ end }}

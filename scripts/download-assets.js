@@ -44,10 +44,6 @@ const downloads = [
     {
         url: 'https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.2/font/fonts/bootstrap-icons.woff2',
         path: path.join(buildDir.fonts, 'bootstrap-icons.woff2')
-    },
-    {
-        url: 'https://code.jquery.com/jquery-3.7.1.min.js',
-        path: path.join(buildDir.js, 'jquery-3.7.1.min.js')
     }
 ];
 

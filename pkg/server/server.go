@@ -56,6 +56,7 @@ type Server struct {
 	stats       *stats.Collector
 	cookie      *sessions.CookieStore
 	templates   *template.Template
+	assets      assetManifest
 	urlBase     string
 	restartFunc func()
 	// shutdownGrace is how long in-flight requests get to finish before open streams are closed.
@@ -107,6 +108,7 @@ func New(mgr *manager.Manager, store *config.Store, logs *logger.Factory) *Serve
 		stats:     statsCollector,
 		cookie:    cookieStore,
 		templates: templates,
+		assets:    loadAssetManifest(),
 		urlBase:   cfg.URLBase,
 
 		shutdownGrace: shutdownGrace,
