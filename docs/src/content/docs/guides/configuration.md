@@ -537,6 +537,11 @@ Catalog rules skip downloads the Arr's own failed download handling has picked u
 redownload of failed downloads is enabled, searches again. `failed_download` still acts on failed
 downloads the Arr never grabbed. Custom rules still apply to every download.
 
+`episodes_missing` leaves a finished season pack alone. Sonarr shows the same warning when the only
+files left over are no upgrade over episodes you already have, so when every episode of the download
+already has a file, decypharr just removes the row from the queue. Nothing is blocklisted and the
+download stays in decypharr, so the episodes it imported keep working.
+
 For catalog rules you only set `action`; the match text is fixed. **Custom rules** use a
 `match` field instead of an `id` — a case-insensitive substring tested against the queue
 item's status message text (e.g. `"stalled with no connections"`).

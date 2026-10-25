@@ -21,6 +21,8 @@ const (
 	QueueActionImport            QueueAction = "import"
 	QueueActionBlocklist         QueueAction = "blacklist"
 	QueueActionBlocklistResearch QueueAction = "blacklist_research"
+	// QueueActionRemoveLeftover is internal, never a config value: remove the row without a blocklist.
+	QueueActionRemoveLeftover QueueAction = "remove_leftover"
 )
 
 type QueueResponseScheme struct {
@@ -133,10 +135,13 @@ func (s *Service) CleanupQueue(ctx context.Context, name string) error {
 	}
 
 	rules := s.config.Get().QueueCleanup.Rules
-	var blocklist, blocklistResearch, blocklistSearchMissing []QueueSchema
+	complete := completeDownloads(items)
+	var blocklist, blocklistResearch, blocklistSearchMissing, leftovers []QueueSchema
 	importStatuses := make(map[string]string)
 	for _, item := range items {
-		switch resolveQueueAction(item, rules) {
+		switch resolveQueueAction(item, rules, complete[item.DownloadID]) {
+		case QueueActionRemoveLeftover:
+			leftovers = append(leftovers, item)
 		case QueueActionBlocklist:
 			blocklist = append(blocklist, item)
 		case QueueActionBlocklistResearch:
@@ -161,6 +166,7 @@ func (s *Service) CleanupQueue(ctx context.Context, name string) error {
 	removed := s.blocklistQueueItems(ctx, name, blocklistSearchMissing, QueueActionBlocklistResearch, true)
 	s.searchPendingEpisodes(ctx, name, items, searched, removed)
 	s.blocklistQueueItems(ctx, name, blocklist, QueueActionBlocklist, true)
+	s.removeLeftovers(ctx, name, leftovers)
 	s.mu.RLock()
 	previous := s.importFailures[name]
 	s.mu.RUnlock()
@@ -248,7 +254,7 @@ func (s *Service) recordImportFailure(name, downloadID string, failure importFai
 // and those flagged warning or error are considered, and the first matching
 // rule wins. Catalog rules skip items the Arr's own failed download handling
 // already blocklists and re-searches.
-func resolveQueueAction(item QueueSchema, rules []config.QueueCleanupRule) QueueAction {
+func resolveQueueAction(item QueueSchema, rules []config.QueueCleanupRule, complete bool) QueueAction {
 	status := strings.ToLower(item.TrackedDownloadStatus)
 	if !strings.EqualFold(item.Status, "failed") && status != "warning" && status != "error" {
 		return QueueActionNone
@@ -273,15 +279,34 @@ func resolveQueueAction(item QueueSchema, rules []config.QueueCleanupRule) Queue
 			continue
 		}
 		switch QueueAction(rule.Action) {
-		case QueueActionImport, QueueActionBlocklist, QueueActionBlocklistResearch:
+		case QueueActionBlocklist, QueueActionBlocklistResearch:
+			if complete && rule.ID == "episodes_missing" {
+				return QueueActionRemoveLeftover
+			}
 			return QueueAction(rule.Action)
-		case QueueActionNone:
+		case QueueActionImport:
+			return QueueAction(rule.Action)
+		case QueueActionNone, QueueActionRemoveLeftover:
 			fallthrough
 		default:
 			return QueueActionNone
 		}
 	}
 	return QueueActionNone
+}
+
+// completeDownloads holds the download IDs whose every queue record has its episode on disk.
+func completeDownloads(items []QueueSchema) map[string]bool {
+	complete := make(map[string]bool)
+	for _, item := range items {
+		if item.DownloadID == "" {
+			continue
+		}
+		if has, seen := complete[item.DownloadID]; !seen || has {
+			complete[item.DownloadID] = item.EpisodeHasFile
+		}
+	}
+	return complete
 }
 
 // statusText is the lowercased join of a queue item's status message titles and messages.
@@ -327,7 +352,7 @@ func (s *Service) blocklistQueueItems(
 	for i, item := range items {
 		ids[i] = item.ID
 	}
-	if err := s.removeQueueItems(ctx, name, ids, skipRedownload); err != nil {
+	if err := s.removeQueueItems(ctx, name, ids, true, skipRedownload); err != nil {
 		s.logger.Error().Err(err).Str("arr", name).Str("action", string(action)).Msg("Queue cleanup: blocklist failed")
 		return false
 	}
@@ -336,6 +361,25 @@ func (s *Service) blocklistQueueItems(
 			Str("action", string(action)).Str("status", statusText(item)).Msg("Queue cleanup: blocklisted")
 	}
 	return true
+}
+
+// removeLeftovers removes the rows of packs that did their job, keeping the release and the client's copy.
+func (s *Service) removeLeftovers(ctx context.Context, name string, items []QueueSchema) {
+	if len(items) == 0 {
+		return
+	}
+	ids := make([]int, len(items))
+	for i, item := range items {
+		ids[i] = item.ID
+	}
+	if err := s.removeQueueItems(ctx, name, ids, false, false); err != nil {
+		s.logger.Error().Err(err).Str("arr", name).Msg("Queue cleanup: leftover removal failed")
+		return
+	}
+	for _, item := range items {
+		s.logger.Info().Str("arr", name).Str("title", item.Title).Str("download_id", item.DownloadID).
+			Str("status", statusText(item)).Msg("Queue cleanup: removed leftover row, every episode has a file")
+	}
 }
 
 // planEpisodeSearch splits fully mapped downloads by who searches for their missing episodes, as Sonarr's
@@ -584,14 +628,15 @@ func (s *Service) coversSeason(ctx context.Context, name string, seriesID, seaso
 	})
 }
 
-func (s *Service) removeQueueItems(ctx context.Context, name string, ids []int, skipRedownload bool) error {
+// removeQueueItems removes rows from the arr's queue; a blocklisting removal also drops the client's copy.
+func (s *Service) removeQueueItems(ctx context.Context, name string, ids []int, blocklist, skipRedownload bool) error {
 	instance, err := s.instance(name)
 	if err != nil {
 		return err
 	}
 	query := url.Values{
-		"removeFromClient": {"true"},
-		"blocklist":        {"true"},
+		"removeFromClient": {strconv.FormatBool(blocklist)},
+		"blocklist":        {strconv.FormatBool(blocklist)},
 		"skipRedownload":   {strconv.FormatBool(skipRedownload)},
 		"changeCategory":   {"false"},
 	}

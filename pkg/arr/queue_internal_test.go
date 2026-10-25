@@ -35,7 +35,7 @@ func TestResolveQueueActionFailedDownloadLeavesArrHandledItems(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			item := QueueSchema{Status: "failed", TrackedDownloadState: test.state}
-			if got := resolveQueueAction(item, config.DefaultQueueCleanupRules()); got != test.want {
+			if got := resolveQueueAction(item, config.DefaultQueueCleanupRules(), false); got != test.want {
 				t.Fatalf("resolveQueueAction() = %q, want %q", got, test.want)
 			}
 		})
@@ -52,7 +52,7 @@ func TestResolveQueueActionCustomRuleStillMatchesArrHandledItems(t *testing.T) {
 	}{Title: "Failed download detected"})
 	rules := []config.QueueCleanupRule{{Match: "failed download", Action: string(QueueActionBlocklist)}}
 
-	if got := resolveQueueAction(item, rules); got != QueueActionBlocklist {
+	if got := resolveQueueAction(item, rules, false); got != QueueActionBlocklist {
 		t.Fatalf("resolveQueueAction() = %q, want %q", got, QueueActionBlocklist)
 	}
 }
@@ -68,7 +68,7 @@ func TestResolveQueueActionCatalogLeavesArrHandledItems(t *testing.T) {
 				Title    string   `json:"title"`
 				Messages []string `json:"messages"`
 			}{Title: title})
-			if got := resolveQueueAction(item, config.DefaultQueueCleanupRules()); got != QueueActionNone {
+			if got := resolveQueueAction(item, config.DefaultQueueCleanupRules(), false); got != QueueActionNone {
 				t.Fatalf("resolveQueueAction() = %q, want none", got)
 			}
 		})
@@ -472,7 +472,7 @@ func TestResolveQueueActionLeavesImportedDownloads(t *testing.T) {
 			Title    string   `json:"title"`
 			Messages []string `json:"messages"`
 		}{Title: "One or more episodes expected in this release were not imported or missing from the release"})
-		if got := resolveQueueAction(item, config.DefaultQueueCleanupRules()); got != want {
+		if got := resolveQueueAction(item, config.DefaultQueueCleanupRules(), false); got != want {
 			t.Errorf("state %s: resolveQueueAction() = %q, want %q", state, got, want)
 		}
 	}
@@ -516,4 +516,74 @@ func TestCleanupQueueRetriesRejectedImportWhenStatusChanges(t *testing.T) {
 	fake.records.Store(&changed)
 	runCleanup(t, service, "arr", 1)
 	wantLookups(t, fake, 2)
+}
+
+// A pack whose every episode has a file did its job: episodes_missing removes its leftover row instead of blocklisting.
+func TestResolveQueueActionRemovesCompletePackLeftovers(t *testing.T) {
+	t.Parallel()
+	defaults := config.DefaultQueueCleanupRules()
+	disabled := config.DefaultQueueCleanupRules()
+	for i := range disabled {
+		if disabled[i].ID == "episodes_missing" {
+			disabled[i].Action = ""
+		}
+	}
+	plain := config.DefaultQueueCleanupRules()
+	internal := config.DefaultQueueCleanupRules()
+	for i := range plain {
+		if plain[i].ID == "episodes_missing" {
+			plain[i].Action = string(QueueActionBlocklist)
+			internal[i].Action = string(QueueActionRemoveLeftover)
+		}
+	}
+	customFirst := append(
+		[]config.QueueCleanupRule{{Match: "not imported", Action: string(QueueActionBlocklist)}},
+		defaults...)
+	tests := []struct {
+		name     string
+		state    string
+		rules    []config.QueueCleanupRule
+		complete bool
+		want     QueueAction
+	}{
+		{
+			name:     "complete pack",
+			state:    "importBlocked",
+			rules:    defaults,
+			complete: true,
+			want:     QueueActionRemoveLeftover,
+		},
+		{name: "incomplete pack", state: "importBlocked", rules: defaults, want: QueueActionBlocklistResearch},
+		{name: "still importing", state: "importing", rules: defaults, complete: true, want: QueueActionNone},
+		{
+			name:     "custom rule first",
+			state:    "importBlocked",
+			rules:    customFirst,
+			complete: true,
+			want:     QueueActionBlocklist,
+		},
+		{name: "rule disabled", state: "importBlocked", rules: disabled, complete: true, want: QueueActionNone},
+		{
+			name:     "plain blacklist",
+			state:    "importBlocked",
+			rules:    plain,
+			complete: true,
+			want:     QueueActionRemoveLeftover,
+		},
+		{name: "internal action in config", state: "importBlocked", rules: internal, complete: true,
+			want: QueueActionNone},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			item := QueueSchema{Status: "completed", TrackedDownloadStatus: "warning", TrackedDownloadState: tt.state}
+			item.StatusMessages = append(item.StatusMessages, struct {
+				Title    string   `json:"title"`
+				Messages []string `json:"messages"`
+			}{Title: "One or more episodes expected in this release were not imported or missing from the release"})
+			if got := resolveQueueAction(item, tt.rules, tt.complete); got != tt.want {
+				t.Fatalf("resolveQueueAction() = %q, want %q", got, tt.want)
+			}
+		})
+	}
 }

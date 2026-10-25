@@ -46,6 +46,8 @@ type researchArr struct {
 	searchFails    bool
 	commands       int
 	deletes        map[string][]int
+	leftovers      []int    // ids removed with blocklist=false
+	leftoverFlags  []string // removeFromClient,skipRedownload of each leftover delete
 	searches       [][]int
 	seasonSearches []seasonKey
 }
@@ -140,7 +142,18 @@ func (a *researchArr) bulkDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	skip := r.URL.Query().Get("skipRedownload")
+	query := r.URL.Query()
+	skip := query.Get("skipRedownload")
+	if query.Get("blocklist") == "false" {
+		a.records = slices.DeleteFunc(
+			a.records,
+			func(record QueueSchema) bool { return slices.Contains(body.IDs, record.ID) },
+		)
+		a.leftovers = append(a.leftovers, body.IDs...)
+		a.leftoverFlags = append(a.leftoverFlags, query.Get("removeFromClient")+","+skip)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 	removed := body.IDs
 	if a.blocklistFails && skip == "true" {
 		removed = body.IDs[:min(a.removeBefore, len(body.IDs))]
@@ -234,6 +247,7 @@ func researchService(t *testing.T, fake *researchArr, kind Type) *Service {
 }
 
 type researchWant struct {
+	leftovers      []int
 	arrSearch      []int
 	skipped        []int
 	searches       [][]int
@@ -244,6 +258,14 @@ func (a *researchArr) check(t *testing.T, want researchWant) {
 	t.Helper()
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if !slices.Equal(a.leftovers, want.leftovers) {
+		t.Errorf("leftover ids = %v, want %v", a.leftovers, want.leftovers)
+	}
+	for _, flags := range a.leftoverFlags {
+		if flags != "false,false" {
+			t.Errorf("leftover delete removeFromClient,skipRedownload = %s, want false,false", flags)
+		}
+	}
 	if got := a.deletes["false"]; !slices.Equal(got, want.arrSearch) {
 		t.Errorf("skipRedownload=false ids = %v, want %v", got, want.arrSearch)
 	}
@@ -280,12 +302,12 @@ func TestCleanupQueueSearchesOnlyEpisodesWithoutFiles(t *testing.T) {
 		want    researchWant
 	}{
 		{name: "sonarr", kind: Sonarr, want: researchWant{
-			arrSearch: []int{5, 6}, skipped: []int{1, 2, 3, 4}, searches: [][]int{{14}},
+			leftovers: []int{1, 2}, arrSearch: []int{5, 6}, skipped: []int{3, 4}, searches: [][]int{{14}},
 		}},
 		{name: "probed sonarr", kind: Others, appName: "Sonarr", want: researchWant{
-			arrSearch: []int{5, 6}, skipped: []int{1, 2, 3, 4}, searches: [][]int{{14}},
+			leftovers: []int{1, 2}, arrSearch: []int{5, 6}, skipped: []int{3, 4}, searches: [][]int{{14}},
 		}},
-		{name: "unknown type", kind: Others, want: researchWant{arrSearch: []int{1, 2, 3, 4, 5, 6}}},
+		{name: "unknown type", kind: Others, want: researchWant{leftovers: []int{1, 2}, arrSearch: []int{3, 4, 5, 6}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -333,6 +355,37 @@ func TestCleanupQueueSearchFollowsSonarrRedownloadSettings(t *testing.T) {
 			t.Parallel()
 			fake := newResearchArr(queue...)
 			fake.update(tt.change)
+			runCleanup(t, researchService(t, fake, Sonarr), "tv", 1)
+			fake.check(t, tt.want)
+		})
+	}
+}
+
+// A pack whose every episode has a file did its job: its leftover row is removed without a blocklist or a search.
+func TestCleanupQueueRemovesCompletePackLeftovers(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		records []QueueSchema
+		want    researchWant
+	}{
+		{name: "complete pack across two records",
+			records: []QueueSchema{missingRecord(1, 11, "p", true), missingRecord(2, 12, "p", true)},
+			want:    researchWant{leftovers: []int{1, 2}}},
+		{name: "one episode missing",
+			records: []QueueSchema{missingRecord(1, 11, "p", true), missingRecord(2, 12, "p", false)},
+			want:    researchWant{skipped: []int{1, 2}, searches: [][]int{{12}}}},
+		{name: "missing episode listed first",
+			records: []QueueSchema{missingRecord(1, 11, "p", false), missingRecord(2, 12, "p", true)},
+			want:    researchWant{skipped: []int{1, 2}, searches: [][]int{{11}}}},
+		{name: "empty download id",
+			records: []QueueSchema{missingRecord(1, 11, "", true)},
+			want:    researchWant{skipped: []int{1}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			fake := newResearchArr(tt.records...)
 			runCleanup(t, researchService(t, fake, Sonarr), "tv", 1)
 			fake.check(t, tt.want)
 		})
