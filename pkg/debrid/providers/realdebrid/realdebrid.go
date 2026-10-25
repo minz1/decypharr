@@ -3,6 +3,7 @@ package realdebrid
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -812,15 +813,16 @@ func (r *RealDebrid) fetchDownloadLink(
 		case errTrafficExhausted, errTooManyRequests, errFairUsageLimit:
 			return emptyLink, customerror.ErrTrafficExceeded
 		default:
-			return emptyLink, fmt.Errorf(
+			return emptyLink, customerror.NewProviderStatusError(fmt.Errorf(
 				"realdebrid API error: Status: %d || Code: %d",
 				status,
 				errResp.ErrorCode,
-			)
+			), status)
 		}
 	}
 	if data.Download == "" {
-		return emptyLink, fmt.Errorf("realdebrid API error: download link not found")
+		return emptyLink, customerror.NewProviderStatusError(
+			errors.New("realdebrid API error: download link not found"), http.StatusNotFound)
 	}
 	now := time.Now()
 	dl := types.DownloadLink{

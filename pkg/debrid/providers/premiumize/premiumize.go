@@ -131,7 +131,8 @@ func (pm *Premiumize) do(req *http.Request, out any) error {
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("premiumize API error: Status: %d || Body: %s", resp.StatusCode, string(body))
+		return customerror.NewProviderStatusError(
+			fmt.Errorf("premiumize API error: Status: %d || Body: %s", resp.StatusCode, string(body)), resp.StatusCode)
 	}
 
 	if len(bytes.TrimSpace(body)) == 0 || out == nil {

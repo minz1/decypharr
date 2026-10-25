@@ -2,12 +2,14 @@ package vfs
 
 import (
 	"context"
+	"errors"
 	"io"
 	"sync/atomic"
 	"time"
 
 	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/pkg/manager"
+	"github.com/sirrobot01/decypharr/pkg/manager/link"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
@@ -94,10 +96,18 @@ func (f *DirectStreamFile) ReadAtContext(ctx context.Context, p []byte, off int6
 				return n, nil
 			}
 		}
-		if customerror.IsPermanentError(err) {
+		if isPermanentReadError(err) {
 			return 0, err
 		}
 		lastErr = err
 	}
 	return 0, lastErr
+}
+
+func isPermanentReadError(err error) bool {
+	if customErr, ok := errors.AsType[*customerror.Error](err); ok && customErr.IsPermanent() {
+		return true
+	}
+	lerr := link.GetLinkError(err)
+	return lerr != nil && lerr.IsPermanent()
 }

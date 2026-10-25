@@ -564,7 +564,8 @@ func (ad *AllDebrid) fetchDownloadLink(
 	}
 
 	if !common.IsSuccess(status) {
-		return types.DownloadLink{}, fmt.Errorf("alldebrid API error: Status: %d", status)
+		return types.DownloadLink{}, customerror.NewProviderStatusError(
+			fmt.Errorf("alldebrid API error: Status: %d", status), status)
 	}
 
 	if data.Error != nil {

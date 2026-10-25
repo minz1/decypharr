@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"syscall"
 )
@@ -55,6 +56,21 @@ func NewArticleNotFoundError(err error) *Error {
 		statusCode: http.StatusNotFound,
 		Code:       usenetArticleNotFoundCode,
 	}).Permanent()
+}
+
+// NewProviderStatusError wraps a provider API failure: 401/403/404/410 are permanent, 408/429/5xx retryable. decypharr answers 502.
+func NewProviderStatusError(err error, providerStatus int) *Error {
+	e := &Error{err: err, statusCode: http.StatusBadGateway, Code: strconv.Itoa(providerStatus)}
+	switch {
+	case providerStatus == http.StatusUnauthorized, providerStatus == http.StatusForbidden,
+		providerStatus == http.StatusNotFound, providerStatus == http.StatusGone:
+		return e.Permanent()
+	case providerStatus == http.StatusRequestTimeout, providerStatus == http.StatusTooManyRequests,
+		providerStatus >= http.StatusInternalServerError:
+		return e.Retryable()
+	default:
+		return e
+	}
 }
 
 func (e *Error) Error() string {

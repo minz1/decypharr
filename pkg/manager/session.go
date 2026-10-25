@@ -494,6 +494,9 @@ func (t *httpTransport) open(ctx context.Context, pos int64) (io.ReadCloser, err
 }
 
 func (t *httpTransport) recover(ctx context.Context, err error, attempt int) error {
+	if customErr, ok := errors.AsType[*customerror.Error](err); ok && customErr.IsPermanent() {
+		return err
+	}
 	lerr := link.GetLinkError(err)
 	if lerr == nil {
 		lerr = link.ClassifyTransportError(err)
@@ -747,7 +750,17 @@ func (m *Manager) openSession(
 ) (*session, string, string, error) {
 	file, ok := entry.Files[filename]
 	if !ok {
-		return nil, "", "", fmt.Errorf("file %s not found in entry %s", filename, entry.Name)
+		return nil, "", "", customerror.NewError(
+			fmt.Errorf(
+				"file %s not found in entry %s",
+				filename,
+				entry.Name,
+			),
+			http.StatusNotFound,
+			"file_not_found",
+			false,
+			false,
+		).Permanent()
 	}
 	if file.Size <= 0 {
 		return nil, "", "", fmt.Errorf("file %s has invalid size %d", filename, file.Size)

@@ -16,8 +16,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/manager/link"
+	"github.com/sirrobot01/decypharr/pkg/storage"
 	"github.com/sirrobot01/decypharr/pkg/usenet"
 )
 
@@ -648,4 +650,45 @@ func (t *scriptedTransport) open(ctx context.Context, pos int64) (io.ReadCloser,
 
 func (t *scriptedTransport) recover(ctx context.Context, err error, attempt int) error {
 	return t.recoverFn(ctx, err, attempt)
+}
+
+// A file the entry does not have will not appear on a retry, so the read stops at once.
+func TestOpenSessionMissingFileIsPermanent(t *testing.T) {
+	t.Parallel()
+	m := &Manager{}
+	_, _, _, err := m.openSession(
+		t.Context(),
+		&storage.Entry{Name: "release", Files: map[string]*storage.File{}},
+		"gone.mkv",
+		0,
+		RewindOwnerApplication,
+	)
+	var typed *customerror.Error
+	if !errors.As(err, &typed) || !typed.IsPermanent() {
+		t.Fatalf("openSession error = %v, want a permanent typed error", err)
+	}
+}
+
+// A provider's 404 for the link is final: the session asks once, not once per resume.
+func TestSessionStopsOnPermanentProviderError(t *testing.T) {
+	t.Parallel()
+	var asks atomic.Int32
+	gone := customerror.NewProviderStatusError(errors.New("realdebrid API error: Status: 404"), 404)
+	tr := &httpTransport{
+		client: http.DefaultClient,
+		getLink: func(context.Context) (types.DownloadLink, error) {
+			asks.Add(1)
+			return types.DownloadLink{}, gone
+		},
+		refresh: func(context.Context, types.DownloadLink) (types.DownloadLink, error) {
+			asks.Add(1)
+			return types.DownloadLink{}, gone
+		},
+	}
+	if err := newTestSession(t, tr, 1024).Prime(); err == nil {
+		t.Fatal("expected Prime to surface the provider error")
+	}
+	if got := asks.Load(); got != 1 {
+		t.Fatalf("link requests = %d, want 1", got)
+	}
 }
