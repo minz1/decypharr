@@ -96,6 +96,10 @@ func TestUpdateConfigWarnsAboutWebdavAuth(t *testing.T) {
 		"web auth off":           {seed: []func(*config.Config){rclone, func(c *config.Config) { c.UseAuth = false }}, on: true},
 		"webdav auth off":        {seed: []func(*config.Config){withCredentials, rclone}},
 		"credentials, no rclone": {seed: []func(*config.Config){withCredentials}, on: true},
+		"webdav disabled": {
+			seed: []func(*config.Config){withCredentials, rclone, func(c *config.Config) { c.DisableWebDav = true }},
+			on:   true,
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

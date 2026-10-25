@@ -322,7 +322,7 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func webdavAuthWarnings(cfg *config.Config) []string {
-	if !cfg.UseAuth || !cfg.EnableWebdavAuth {
+	if cfg.DisableWebDav || !cfg.UseAuth || !cfg.EnableWebdavAuth {
 		return nil
 	}
 	var warnings []string
