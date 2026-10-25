@@ -3,6 +3,7 @@ package manager
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -13,6 +14,8 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
+	"github.com/sirrobot01/decypharr/internal/utils"
+	"github.com/sirrobot01/decypharr/pkg/arr"
 	debrid "github.com/sirrobot01/decypharr/pkg/debrid/common"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/storage"
@@ -332,5 +335,86 @@ func TestRemoveQueuedDuringStatusCheckFailsNothing(t *testing.T) {
 	}
 	if m.queue.Contains(entry.InfoHash) {
 		t.Fatal("the removed entry was written back")
+	}
+}
+
+type removedDuringSubmitProvider struct {
+	*fakePruneProvider
+
+	submitted func()
+}
+
+func (*removedDuringSubmitProvider) Config() config.Debrid {
+	return config.Debrid{Name: "provider", Provider: "provider"}
+}
+func (*removedDuringSubmitProvider) Logger() zerolog.Logger { return zerolog.Nop() }
+func (p *removedDuringSubmitProvider) SubmitMagnet(t *types.Torrent) (*types.Torrent, error) {
+	p.submitted()
+	return &types.Torrent{
+		ID: "provider-id", Debrid: "provider", InfoHash: t.InfoHash, Name: t.Name,
+		Status: types.TorrentStatusDownloading, Files: map[string]types.File{},
+	}, nil
+}
+func (*removedDuringSubmitProvider) CheckStatus(t *types.Torrent) (*types.Torrent, error) {
+	return t, nil
+}
+
+// An entry the arr removes while its submit is in flight is not re-created, and the provider torrent goes with it.
+func TestTorrentRemovedDuringSubmitLeavesNothing(t *testing.T) {
+	t.Parallel()
+	m, _ := newDroppedTestManager(t, nil)
+	hash := "0123456789012345678901234567890123456789"
+	fake := &removedDuringSubmitProvider{fakePruneProvider: &fakePruneProvider{}, submitted: func() {
+		if err := m.RemoveQueued(hash, false); err != nil {
+			t.Error(err)
+		}
+	}}
+	m.clients.Store("provider", fake)
+	entry := &storage.Entry{
+		InfoHash: hash, Name: "release", Category: "sonarr", Protocol: config.ProtocolTorrent,
+		State: storage.EntryStateDownloading, Status: types.TorrentStatusQueued,
+		Files: map[string]*storage.File{}, Providers: map[string]*storage.ProviderEntry{},
+	}
+	if err := m.queue.Add(entry); err != nil {
+		t.Fatal(err)
+	}
+	req := &ImportRequest{Magnet: &utils.Magnet{InfoHash: hash, Name: "release"}, Arr: arr.Arr{Name: "sonarr"}}
+
+	if err := m.processTorrentJob(
+		t.Context(),
+		&Job{ID: hash, Type: JobTypeTorrent, Entry: entry, Request: req},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if m.queue.Contains(hash) {
+		t.Fatal("an entry removed during its submit was written back")
+	}
+	if got := fake.deletedIDs(); !slices.Equal(got, []string{"provider-id"}) {
+		t.Fatalf("deleted provider torrents = %v, want the one just added", got)
+	}
+}
+
+// A post-download action that finishes after the arr removed its entry does not save it back as completed.
+func TestCompleteEntryLeavesARemovedEntryRemoved(t *testing.T) {
+	t.Parallel()
+	m := newShutdownTestManager(t, t.TempDir())
+	entry := &storage.Entry{
+		InfoHash: "0123456789012345678901234567890123456789", Name: "release", Protocol: config.ProtocolTorrent,
+		State: storage.EntryStateDownloading, Status: types.TorrentStatusDownloaded,
+	}
+	if err := m.queue.Add(entry); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.queue.Delete(entry.InfoHash, false, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := m.downloader.completeEntry(t.Context(), entry); err != nil {
+		t.Fatal(err)
+	}
+
+	if m.queue.Contains(entry.InfoHash) {
+		t.Fatal("a removed entry was saved back as completed")
 	}
 }

@@ -163,6 +163,9 @@ func (d *Downloader) completeEntry(ctx context.Context, entry *storage.Entry) er
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if !d.manager.queue.Contains(entry.InfoHash) {
+		return nil
+	}
 	d.markAsCompleted(entry)
 	d.manager.strm.SyncEntryAsync(entry)
 	d.notifyCompleted(entry)

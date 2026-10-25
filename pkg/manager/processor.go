@@ -96,6 +96,11 @@ func (m *Manager) processTorrentJob(ctx context.Context, job *Job) error {
 		if err != nil {
 			return fmt.Errorf("failed to submit torrent to debrid: %w", err)
 		}
+		if !m.queue.Contains(job.Entry.InfoHash) {
+			applyDebridTorrentToEntry(job.Entry, debridTorrent)
+			m.stopProviderDownload(job.Entry)
+			return nil
+		}
 		job.DebridTorrent = debridTorrent
 	}
 
