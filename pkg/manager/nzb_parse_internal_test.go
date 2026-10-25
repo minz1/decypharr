@@ -12,11 +12,15 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	"github.com/sirrobot01/appendstore"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
+	"github.com/sirrobot01/decypharr/internal/kvstore"
 	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
+	"github.com/sirrobot01/decypharr/pkg/hearsay"
 	"github.com/sirrobot01/decypharr/pkg/storage"
+	"github.com/sirrobot01/decypharr/pkg/usenet/manifest"
 	"github.com/sirrobot01/decypharr/pkg/usenet/parser"
 )
 
@@ -382,5 +386,94 @@ func TestDeleteDuringParseRoundLeavesNothing(t *testing.T) {
 	noCallWithin(t, calls, 50*time.Millisecond)
 	if m.queue.Contains("nzb-1") {
 		t.Fatal("the failure re-created the deleted entry")
+	}
+}
+
+// Only a missing record means the arr deleted the entry; a record that fails to read still gets the job's failure.
+func TestJobErrorForAnUnreadableEntryStillFailsIt(t *testing.T) {
+	t.Parallel()
+	dir := filepath.Join(t.TempDir(), "db")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := kvstore.Open(filepath.Join(dir, "queue.db"), appendstore.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = raw.Put("nzb-1", []byte{0xff}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err = raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.NewStorage(dir, storage.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	m := withTestConfig(t, &Manager{queue: newQueue(store, "", nil, zerolog.Nop()), logger: zerolog.Nop()})
+	entry := &storage.Entry{InfoHash: "nzb-1", Name: "Show.S01", Protocol: config.ProtocolNZB}
+
+	m.handleJobError(&Job{ID: "nzb-1", Type: JobTypeNZB, Entry: entry}, errors.New("usenet parse failed"))
+
+	if saved, getErr := m.queue.GetTorrent("nzb-1"); getErr != nil || saved.State != storage.EntryStateError {
+		t.Fatalf("entry = %+v, %v: the job failure was dropped", saved, getErr)
+	}
+}
+
+// Hearsay's verdict that the segments are gone is final: the entry fails at once instead of parsing again.
+func TestHearsayIncompleteNZBFailsAtOnce(t *testing.T) {
+	t.Parallel()
+	groups := map[string]*parser.FileGroup{"a": {
+		BaseName: "a",
+		Files:    []manifest.File{{Segments: []manifest.Segment{{Number: 1, MessageID: "a@example"}}}},
+	}}
+	var calls atomic.Int32
+	m := withTestConfig(t, newParseRetryManager(
+		t,
+		func(context.Context, string, string, []byte, string) (*storage.NZB, map[string]*parser.FileGroup, error) {
+			calls.Add(1)
+			return &storage.NZB{Name: "Show.S01"}, groups, nil
+		},
+	))
+	cfg := &config.Config{}
+	cfg.WithDir(t.TempDir())
+	cfg.Hearsay.AdviceMode = "active"
+	cfg.Usenet.Providers = []config.UsenetProvider{{Host: "news.example", Backbone: "omicron"}}
+	service, err := hearsay.New(cfg, zerolog.Nop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(service.Close)
+	service.ReportNZB(hearsay.NZBSubjectFromGroups(groups), false)
+	m.hearsay = service
+	m.usenet = newUnreachableUsenet(t)
+	m.parseRequeueDelay = time.Hour
+	m.jobQueue = NewJobQueue(t.Context(), 1, m.processJob, zerolog.Nop())
+	t.Cleanup(m.jobQueue.Close)
+	staged := filepath.Join(t.TempDir(), "Show.S01.nzb")
+	if err = os.WriteFile(staged, []byte("<nzb/>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	entry := storedEntry(t, m)
+	entry.Magnet = staged
+	if err = m.queue.Update(entry); err != nil {
+		t.Fatal(err)
+	}
+	job := NewJob(JobTypeNZB, &ImportRequest{ID: "nzb-1", Name: "Show.S01", Arr: m.arr.GetOrCreate("sonarr")})
+	job.Entry = entry
+
+	m.processJob(t.Context(), job)
+
+	saved := storedEntry(t, m)
+	if saved.State != storage.EntryStateError || !strings.Contains(saved.LastError, "hearsay") {
+		t.Fatalf("entry state %q, last error %q, want it failed on hearsay's verdict", saved.State, saved.LastError)
+	}
+	if calls.Load() != 1 || waitingJobs(m.jobQueue) != 0 || m.jobQueue.Holds("nzb-1") {
+		t.Fatalf(
+			"parsed %d times, %d waiting: a hearsay-incomplete NZB was requeued",
+			calls.Load(),
+			waitingJobs(m.jobQueue),
+		)
 	}
 }

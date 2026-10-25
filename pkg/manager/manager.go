@@ -19,6 +19,7 @@ import (
 	"github.com/go-co-op/gocron/v2"
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/rs/zerolog"
+	"github.com/sirrobot01/appendstore"
 	"golang.org/x/sync/singleflight"
 
 	"github.com/sirrobot01/decypharr/internal/config"
@@ -523,13 +524,15 @@ func (m *Manager) failBadRelease(entry *storage.Entry, err error) {
 // time, or fails its entry.
 func (m *Manager) handleJobError(job *Job, err error) {
 	// A delete raced the job; failing it would re-create the record.
-	if job.Entry != nil && !m.queue.Contains(job.Entry.InfoHash) {
-		m.logger.Debug().
-			Err(err).
-			Str("job_id", job.ID).
-			Str("name", job.Entry.Name).
-			Msg("Dropped the failed job of a deleted entry")
-		return
+	if job.Entry != nil {
+		if _, getErr := m.queue.GetTorrent(job.Entry.InfoHash); errors.Is(getErr, appendstore.ErrKeyNotFound) {
+			m.logger.Debug().
+				Err(err).
+				Str("job_id", job.ID).
+				Str("name", job.Entry.Name).
+				Msg("Dropped the failed job of a deleted entry")
+			return
+		}
 	}
 	if isTooManyActiveDownloads(err) {
 		if job.Entry != nil {
