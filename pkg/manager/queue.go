@@ -14,6 +14,7 @@ import (
 
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/rs/zerolog"
+	"github.com/sirrobot01/appendstore"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/utils"
@@ -161,10 +162,10 @@ func (q *Queue) GetTorrent(infohash string) (*storage.Entry, error) {
 	return q.storage.GetQueued(infohash)
 }
 
-// Contains reports whether infohash is still in the download queue.
+// Contains reports whether infohash is still in the download queue; a record that fails to read is still there.
 func (q *Queue) Contains(infohash string) bool {
 	_, err := q.GetTorrent(infohash)
-	return err == nil
+	return !errors.Is(err, appendstore.ErrKeyNotFound)
 }
 
 // removeStagedNZB deletes an NZB entry's staged source file, if any.
