@@ -152,7 +152,7 @@ func (s *Storage) keepSharedFiles(item *EntryItem, name, deletedHash string) err
 		if errors.Is(err, appendstore.ErrKeyNotFound) {
 			continue
 		}
-		if errors.Is(err, proto.Error) {
+		if errors.Is(err, proto.Error) || errors.Is(err, appendstore.ErrCorruptedData) {
 			s.skipUndecodable("entry", key, err)
 			continue
 		}

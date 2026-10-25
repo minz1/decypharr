@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/sirrobot01/appendstore"
 )
 
@@ -285,25 +286,33 @@ func TestDeleteRefillsSharedFolderWithNewestCopy(t *testing.T) {
 	}
 }
 
-func TestDeleteReportsUnreadableSharedEntry(t *testing.T) {
+func TestDeleteSkipsCorruptedSharedEntry(t *testing.T) {
 	t.Parallel()
+	var logs bytes.Buffer
+	s, err := NewStorage(t.TempDir(), Options{Logger: zerolog.New(&logs)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
 	old := time.Unix(1_000, 0)
-	s := newSharedFolderStorage(
-		t,
-		sharedEntry("unreadable-sibling", 1, old),
-		sharedEntry("deleted", 2, old.Add(time.Hour)),
-	)
+	for _, e := range []*Entry{sharedEntry("unreadable-sibling", 1, old), sharedEntry("deleted", 2, old.Add(time.Hour))} {
+		if err = s.AddOrUpdate(e); err != nil {
+			t.Fatal(err)
+		}
+	}
 	corruptStoredRecord(t, filepath.Join(s.dir, "entries.db"), "unreadable-sibling")
 
-	err := s.Delete("deleted")
-	if err == nil || !strings.Contains(err.Error(), "unreadable-sibling") {
-		t.Fatalf("error = %v, want the unreadable sibling named", err)
+	if err = s.Delete("deleted"); err != nil {
+		t.Fatalf("delete blocked by a corrupted sibling: %v", err)
 	}
-	if _, getErr := s.Get("deleted"); getErr != nil {
-		t.Fatalf("entry removed despite the failed index update: %v", getErr)
+	if _, getErr := s.Get("deleted"); !errors.Is(getErr, appendstore.ErrKeyNotFound) {
+		t.Fatalf("entry survived the delete: %v", getErr)
 	}
-	if item, getErr := s.GetEntryItem("folder"); getErr != nil || item.Files["a.mkv"].InfoHash != "deleted" {
-		t.Fatalf("folder item changed: %+v, %v", item, getErr)
+	if _, itemErr := s.GetEntryItem("folder"); !errors.Is(itemErr, appendstore.ErrKeyNotFound) {
+		t.Fatalf("folder item survived: %v", itemErr)
+	}
+	if !strings.Contains(logs.String(), `"level":"warn"`) || !strings.Contains(logs.String(), "unreadable-sibling") {
+		t.Fatalf("logs = %q, want a warning naming the corrupted sibling", logs.String())
 	}
 }
 
