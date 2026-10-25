@@ -115,7 +115,7 @@ cases['collectFormData sends prune only when changed'] = () => {
     same(m.collectFormData().prune, {...deletePrune, grace: '24h'});
     const fresh = page();
     for (const key of Object.keys(m)) if (typeof m[key] === 'function') fresh.m[key] = m[key];
-    assert.ok('prune' in JSON.parse(JSON.stringify(fresh.m.collectFormData())), 'prune not sent without a baseline');
+    assert.ok(!('prune' in JSON.parse(JSON.stringify(fresh.m.collectFormData()))), 'prune sent without a baseline');
 };
 
 cases['confirmPruneDelete asks for every sent enabled delete prune'] = () => {

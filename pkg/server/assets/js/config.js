@@ -232,6 +232,7 @@ class ConfigManager {
 
     // Omitted sections are kept by the server, so an untouched (or stale) tab never rewrites prune.
     prunePayload() {
+        if (!this.loadedPrune) return undefined;
         const prune = this.collectPruneConfig();
         return JSON.stringify(prune) === JSON.stringify(this.loadedPrune) ? undefined : prune;
     }
