@@ -39,6 +39,7 @@ func (m *Manager) restoreActiveDownloadJobs(entries []*storage.Entry, err error)
 		entry, getErr := m.queue.GetTorrent(snapshot.InfoHash)
 		if getErr != nil && !errors.Is(getErr, appendstore.ErrKeyNotFound) {
 			m.logger.Error().Err(getErr).Str("entry_id", snapshot.InfoHash).Msg("Failed to read restored download")
+			return
 		}
 		// Deleted, or re-added with its own job, since the snapshot.
 		if getErr != nil || m.jobQueue.Holds(entry.InfoHash) {
@@ -58,6 +59,7 @@ func (m *Manager) restoreEntry(entry *storage.Entry, interrupted bool) bool {
 		entry.IsDownloading = false
 		if updateErr := m.queue.Update(entry); updateErr != nil {
 			m.logger.Error().Err(updateErr).Str("entry_id", entry.InfoHash).Msg("Failed to reset restored download")
+			m.failEntry(entry, updateErr)
 			return true
 		}
 	}
@@ -70,6 +72,7 @@ func (m *Manager) restoreEntry(entry *storage.Entry, interrupted bool) bool {
 	}
 	// An NZB re-parse can take minutes; the arr may have deleted the entry meanwhile.
 	if !m.queue.Contains(entry.InfoHash) {
+		m.dropDeletedNZB(entry, job)
 		return true
 	}
 	if errors.Is(rebuildErr, errParseBudget) && entry.Magnet != "" {
@@ -91,6 +94,19 @@ func (m *Manager) restoreEntry(entry *storage.Entry, interrupted bool) bool {
 		m.failEntry(entry, submitErr)
 	}
 	return true
+}
+
+// dropDeletedNZB removes what a re-parse saved for an entry deleted meanwhile.
+func (m *Manager) dropDeletedNZB(entry *storage.Entry, job *Job) {
+	if job == nil || job.NZBMeta == nil {
+		return
+	}
+	if failErr := m.usenet.Fail(entry.InfoHash, errEntryDeleted); failErr != nil {
+		m.logger.Warn().Err(failErr).Str("name", entry.Name).Msg("Failed to release the deleted NZB")
+	}
+	if deleteErr := m.usenet.Delete(entry.InfoHash); deleteErr != nil {
+		m.logger.Warn().Err(deleteErr).Str("name", entry.Name).Msg("Failed to delete the deleted NZB")
+	}
 }
 
 func (m *Manager) nzbNeedsReprocessing(entry *storage.Entry) bool {
