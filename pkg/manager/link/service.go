@@ -32,7 +32,9 @@ const (
 // EntryRefresher is a function that refreshes an entry by infohash.
 type EntryRefresher func(infohash string) (*storage.Entry, error)
 type EntryRepairer func(ctx context.Context, entry *storage.Entry) error
-type EntrySaver func(entry *storage.Entry) error
+
+// EntryGiveUp takes an entry no re-insertion could fix.
+type EntryGiveUp func(entry *storage.Entry)
 
 // Service handles download link fetching and validation.
 // It uses the account-level cache for storing links and only tracks validation state.
@@ -43,7 +45,7 @@ type Service struct {
 	clients        *xsync.Map[string, debrid.Client]
 	entryRefresher EntryRefresher
 	repairer       EntryRepairer
-	entrySaver     EntrySaver
+	giveUp         EntryGiveUp
 	httpClient     *http.Client
 	retries        int
 	failureTTL     time.Duration
@@ -61,7 +63,7 @@ func New(
 	clients *xsync.Map[string, debrid.Client],
 	entryRefresher EntryRefresher,
 	entryReinsert EntryRepairer,
-	entrySaver EntrySaver,
+	giveUp EntryGiveUp,
 	httpClient *http.Client,
 	retries int,
 	naming func() config.WebDavFolderNaming,
@@ -74,7 +76,7 @@ func New(
 		clients:        clients,
 		entryRefresher: entryRefresher,
 		repairer:       entryReinsert,
-		entrySaver:     entrySaver,
+		giveUp:         giveUp,
 		httpClient:     httpClient,
 		retries:        retries,
 		logger:         logger,
@@ -266,18 +268,10 @@ func (s *Service) handleBadLink(
 	return dl, err
 }
 
-// markEntryBad sets entry.Bad and persists it so subsequent GetLink calls
-// for the same entry short-circuit instead of triggering another re-insertion
-// cycle. Logged once per call.
+// markEntryBad hands the entry to giveUp, which marks it bad so later reads skip re-insertion.
 func (s *Service) markEntryBad(entry *storage.Entry, filename string, attempt int, reason string) {
-	entry.Bad = true
-	if s.entrySaver != nil {
-		if err := s.entrySaver(entry); err != nil {
-			s.logger.Warn().
-				Err(err).
-				Str("infohash", entry.InfoHash).
-				Msg("Failed to persist Bad flag after exhausting re-insertion attempts")
-		}
+	if s.giveUp != nil {
+		s.giveUp(entry)
 	}
 	s.logger.Warn().
 		Str("infohash", entry.InfoHash).

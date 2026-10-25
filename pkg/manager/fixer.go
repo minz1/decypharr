@@ -201,16 +201,7 @@ func (f *Fixer) runRepair(
 		Msg("All re-insertion attempts failed")
 
 	f.failedToReinsert.Store(entry.InfoHash, struct{}{})
-
-	// Mark entry as bad
-	entry.Bad = true
-	entry.UpdatedAt = time.Now()
-	_ = f.manager.AddOrUpdate(entry, func(_ *storage.Entry) {
-		f.manager.InvalidateEntryCache()
-		if err := f.manager.RefreshMount(); err != nil {
-			f.manager.logger.Error().Err(err).Msg("Mount refresh failed")
-		}
-	})
+	f.manager.giveUpOnEntry(entry)
 
 	result := &FixResult{
 		Success:       false,

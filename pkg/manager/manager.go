@@ -416,7 +416,7 @@ func (m *Manager) initLinkService() {
 		m.clients,
 		m.refreshTorrent,
 		m.ReinsertEntry,
-		func(entry *storage.Entry) error { return m.AddOrUpdate(entry, nil) },
+		m.giveUpOnEntry,
 		m.streamClient,
 		m.config.Retries,
 		m.folderNaming,

@@ -212,3 +212,43 @@ func TestGetLinkOnBadEntryIsPermanent(t *testing.T) {
 		}
 	}
 }
+
+// emptyLinkClient answers every link request with an empty link.
+type emptyLinkClient struct {
+	debrid.Client
+}
+
+func (emptyLinkClient) GetDownloadLink(context.Context, string, *types.File) (types.DownloadLink, error) {
+	return types.DownloadLink{}, nil
+}
+
+// A bad entry whose provider serves the file again reads normally: nothing else may clear Bad.
+func TestGetLinkOfBadEntryReadsOnceProviderRecovers(t *testing.T) {
+	t.Parallel()
+	server, _ := headServer(t, http.StatusOK)
+	entry := testEntry(true)
+	entry.Bad = true
+
+	if _, err := newHeadService(server).GetLink(t.Context(), entry, "a.mkv"); err != nil {
+		t.Fatalf("GetLink on a recovered bad entry = %v, want a link", err)
+	}
+}
+
+// Running out of re-insertion attempts hands the entry to the give-up callback once.
+func TestGivingUpOnEmptyLinksCallsGiveUp(t *testing.T) {
+	t.Parallel()
+	clients := xsync.NewMap[string, debrid.Client]()
+	clients.Store("fake", emptyLinkClient{})
+	repaired := func(context.Context, *storage.Entry) error { return nil }
+	var gaveUp []*storage.Entry
+	giveUp := func(entry *storage.Entry) { gaveUp = append(gaveUp, entry) }
+	service := link.New(clients, nil, repaired, giveUp, http.DefaultClient, 0, nil, zerolog.Nop())
+	entry := testEntry(true)
+
+	if _, err := service.GetLink(t.Context(), entry, "a.mkv"); err == nil {
+		t.Fatal("GetLink with only empty links succeeded")
+	}
+	if len(gaveUp) != 1 || gaveUp[0] != entry {
+		t.Fatalf("give-up calls = %d, want 1 with the entry", len(gaveUp))
+	}
+}

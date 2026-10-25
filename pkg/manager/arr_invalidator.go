@@ -36,9 +36,7 @@ func (m *Manager) InvalidateReacquire(ctx context.Context, job reacquire.Job) er
 	return nil
 }
 
-// removeFailedDownloadRecord drops the queue record of a download whose grab
-// the Arr has failed. The entry is already gone; the record is all the Arr
-// still tracks, and removing it is what a client-side delete would do.
+// removeFailedDownloadRecord drops the queue record of a download whose grab the Arr failed, as a client delete would.
 func (m *Manager) removeFailedDownloadRecord(entryID string) error {
 	if entryID == "" || !m.queue.Contains(entryID) {
 		return nil

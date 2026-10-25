@@ -11,6 +11,7 @@ import (
 	"github.com/sirrobot01/appendstore"
 
 	"github.com/sirrobot01/decypharr/internal/customerror"
+	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/arr/reacquire"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
@@ -222,4 +223,49 @@ func (m *Manager) streamFailureConfirmed(entryID, filename string) bool {
 	}
 	event.Msg("Stream failed but a full article check found nothing missing; not reacquiring")
 	return false
+}
+
+// giveUpOnEntry marks an entry no provider can serve as bad and fails its grab while the arr still waits on it.
+func (m *Manager) giveUpOnEntry(entry *storage.Entry) {
+	entry.Bad = true
+	if err := m.AddOrUpdate(entry, func(_ *storage.Entry) {
+		m.InvalidateEntryCache()
+		if err := m.RefreshMount(); err != nil {
+			m.logger.Error().Err(err).Msg("Mount refresh failed")
+		}
+	}); err != nil {
+		m.logger.Warn().Err(err).Str("infohash", entry.InfoHash).Msg("Failed to persist the bad flag")
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		m.failGrabIfQueued(ctx, entry)
+	}()
+}
+
+// failGrabIfQueued fails an arr torrent's grab only while the arr still queues it; imported files stay with repair.
+func (m *Manager) failGrabIfQueued(ctx context.Context, entry *storage.Entry) {
+	if !entry.IsTorrent() || entry.Manual {
+		return
+	}
+	instance, ok := m.Arr().Get(entry.Category)
+	recovery := m.recoveryService()
+	if !ok || recovery == nil {
+		return
+	}
+	records, err := m.Arr().Queue(ctx, instance.Name)
+	if err != nil {
+		m.logger.Warn().Err(err).Str("arr", instance.Name).Str("infohash", entry.InfoHash).
+			Msg("Arr queue unreadable; leaving the grab of a bad entry")
+		return
+	}
+	queued := slices.ContainsFunc(records, func(record arr.QueueSchema) bool {
+		return strings.EqualFold(record.DownloadID, entry.InfoHash)
+	})
+	if !queued {
+		return
+	}
+	if grabErr := m.failGrab(entry, recovery, instance.Name, "No provider can serve the torrent"); grabErr != nil {
+		m.logger.Warn().Err(grabErr).Str("name", entry.Name).Msg("Failed to fail the grab in the Arr")
+	}
 }
