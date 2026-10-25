@@ -146,11 +146,35 @@ cases['the delete confirm names the mode, max_per_run and grace'] = () => {
 
 async function save(answer) {
     const p = page({'POST /api/config': respond(200, {restarted: false})}, [answer]);
+    p.m.loaded = true;
     p.m.collectFormData = () => ({prune: deletePrune});
     p.m.validateConfiguration = () => ({valid: true, errors: []});
     await p.m.saveConfiguration({preventDefault() {}});
     return p;
 }
+
+async function saveAfterLoad(getConfig) {
+    const p = page({'GET /api/config': getConfig, 'POST /api/config': respond(200, {restarted: false})});
+    p.m.populateForm = () => {};
+    await p.m.loadConfiguration();
+    p.m.collectFormData = () => ({});
+    p.m.validateConfiguration = () => ({valid: true, errors: []});
+    await p.m.saveConfiguration({preventDefault() {}});
+    return p;
+}
+
+cases['a save after a failed config load posts nothing'] = async () => {
+    for (const getConfig of [respond(500, 'down'), new Error('offline')]) {
+        const {requests, toasts} = await saveAfterLoad(getConfig);
+        same(requests.map((r) => r.key), ['GET /api/config']);
+        assert.ok(toasts.some((t) => t.type === 'error' && /reload/i.test(t.message)), 'no reload hint');
+    }
+};
+
+cases['a save after a successful config load posts'] = async () => {
+    const {requests} = await saveAfterLoad(respond(200, {}));
+    same(requests.map((r) => r.key), ['GET /api/config', 'POST /api/config']);
+};
 
 cases['a cancelled delete confirm posts nothing'] = async () => {
     const {m, requests, confirms} = await save(false);

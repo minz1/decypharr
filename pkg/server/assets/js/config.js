@@ -102,7 +102,7 @@ class ConfigManager {
 
             const config = await response.json();
             this.populateForm(config);
-
+            this.loaded = true;
         } catch (error) {
             console.error('Error loading configuration:', error);
             window.decypharrUtils.createToast('Error loading configuration', 'error');
@@ -1443,6 +1443,11 @@ class ConfigManager {
 
     async saveConfiguration(e) {
         e.preventDefault();
+        // A form that never loaded would save blanks over every setting.
+        if (!this.loaded) {
+            window.decypharrUtils.createToast("Settings didn't load. Reload the page before saving.", 'error');
+            return;
+        }
 
         // Show loading overlay
         this.refs.loadingOverlay.classList.remove('hidden');
