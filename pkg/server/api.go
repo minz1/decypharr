@@ -191,8 +191,7 @@ func sortQueuedTorrents(torrents []*storage.Entry, sortBy, sortOrder string) {
 	sort.Slice(torrents, less)
 }
 
-// queueDeleteCleanup returns the per-entry hook for queue deletes: with
-// removeFromDebrid it also removes the entry (and its provider placement).
+// queueDeleteCleanup removes, with removeFromDebrid, the queue record and then every provider placement of an entry.
 func (s *Server) queueDeleteCleanup(removeFromDebrid bool) func(*storage.Entry) error {
 	if !removeFromDebrid {
 		return nil
@@ -201,7 +200,10 @@ func (s *Server) queueDeleteCleanup(removeFromDebrid bool) func(*storage.Entry) 
 		if exists, _ := s.manager.EntryExists(t.InfoHash); exists {
 			return s.manager.DeleteEntry(t.InfoHash, true)
 		}
-		go s.manager.RemoveTorrentPlacements(t)
+		if err := s.manager.Queue().Delete(t.InfoHash, false, nil); err != nil {
+			return err
+		}
+		s.manager.RemoveTorrentPlacements(t)
 		return nil
 	}
 }
