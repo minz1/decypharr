@@ -19,6 +19,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
       ../pnpm-workspace.yaml
       ../vite.config.ts
       ../vitest.config.ts
+      ../vitest.global-setup.ts
       ../tsconfig.json
       ../tsconfig.node.json
       ../.oxlintrc.json
@@ -34,7 +35,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     inherit (finalAttrs) pname version src;
     inherit pnpm;
     fetcherVersion = 4;
-    hash = "sha256-iU/+kbdMHr/1GwLLR8PEzfzLDc3GYokVxzF60g9X7go=";
+    hash = "sha256-LeJfCYXbbCxAXT9EuHQSAa/R53+7pR/5IFT5brXNcRc=";
   };
 
   nativeBuildInputs = [

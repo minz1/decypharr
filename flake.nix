@@ -56,11 +56,28 @@
             buildPhase = command;
             installPhase = "touch $out";
           });
-        in {
+        in rec {
           typecheck = uiCheck "typecheck" [ pkgs.typescript ] "pnpm typecheck";
           lint = uiCheck "lint" [ pkgs.oxlint ] "pnpm lint";
           fmt = uiCheck "fmt" [ pkgs.oxfmt ] "pnpm fmt:check";
-          test = uiCheck "test" [ ] "pnpm test";
+          # Vitest's wiring tests read pages rendered by TestRenderUIFixtures.
+          test = uiCheck "test" [ ] ''
+            mkdir -p pkg/server/testdata/rendered
+            cp ${ui-fixtures}/*.html pkg/server/testdata/rendered/
+            pnpm vitest
+          '';
+          ui-fixtures = self.packages.${system}.default.overrideAttrs (old: {
+            pname = "decypharr-ui-fixtures";
+            doCheck = false;
+            buildPhase = ''
+              runHook preBuild
+              mkdir -p $out
+              UI_FIXTURES_DIR=$out go test ./pkg/server -run '^TestRenderUIFixtures$' -count=1
+              runHook postBuild
+            '';
+            installPhase = "true";
+            postInstall = "";
+          });
           inherit frontend;
           package = self.packages.${system}.default;
           # pkg/server's tests against the built UI: manifest entry names and the minified settings scripts.
