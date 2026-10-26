@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "description": "Media management tool",
+  "type": "module",
   "packageManager": "pnpm@12.9.0",
   "scripts": {
     "build": "vite build && node scripts/minify-js.js",

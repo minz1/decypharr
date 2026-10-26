@@ -1,9 +1,8 @@
-'use strict';
 // Usage: node prune_harness.js <js dir> <config.html>
-const assert = require('assert');
-const fs = require('fs');
-const path = require('path');
-const vm = require('vm');
+import assert from 'node:assert';
+import fs from 'node:fs';
+import path from 'node:path';
+import vm from 'node:vm';
 
 const [jsDir, htmlPath] = process.argv.slice(2);
 const pageIds = new Set([...fs.readFileSync(htmlPath, 'utf8').matchAll(/\sid="([^"$]+)"/g)].map((m) => m[1]));

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
-const fs = require('fs');
-const path = require('path');
-const {minify} = require('terser');
+import fs from 'node:fs';
+import path from 'node:path';
+import {minify} from 'terser';
 
 const sourceDir = './pkg/server/assets/js';
 const buildDir = './pkg/server/assets/build/js';
@@ -116,4 +116,4 @@ async function minifyAllJS() {
     }
 }
 
-minifyAllJS();
+await minifyAllJS();
