@@ -12,6 +12,7 @@
     {
       packages = forAllSystems (system:
         let pkgs = nixpkgs.legacyPackages.${system}; in {
+          frontend = pkgs.callPackage ./nix/frontend.nix { };
           default = pkgs.buildGo127Module {
             pname = "decypharr";
             version = "2.3-minz";
@@ -34,6 +35,24 @@
               platforms = [ "x86_64-linux" "aarch64-linux" ];
               mainProgram = "decypharr";
             };
+          };
+        }
+      );
+
+      devShells = forAllSystems (system:
+        let pkgs = nixpkgs.legacyPackages.${system}; in {
+          default = pkgs.mkShell {
+            packages = with pkgs; [
+              go_1_27
+              golangci-lint
+              nodejs_24
+              pnpm_12
+              typescript
+              oxlint
+              tsgolint
+              oxfmt
+              djlint
+            ];
           };
         }
       );
