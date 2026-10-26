@@ -173,8 +173,10 @@ describe("the dashboard's context menu", () => {
       hidden: true,
     });
   });
+});
 
-  it("deletes from the menu", async () => {
+describe("deleting from the dashboard's context menu", () => {
+  it("deletes the row's torrent", async () => {
     const requests = await bootDashboard(deletesOK);
     await waitForRows(2);
     openMenu();
@@ -183,6 +185,19 @@ describe("the dashboard's context menu", () => {
     await waitForToast();
     expect(requests[1]).toStrictEqual({
       url: "/api/torrents/sonarr/aaaaaaaaaaaa?removeFromDebrid=false",
+      method: "DELETE",
+    });
+  });
+
+  it("removes the row's torrent from the provider", async () => {
+    const requests = await bootDashboard(deletesOK);
+    await waitForRows(2);
+    openMenu();
+    element('#torrentContextMenu [data-action="delete-debrid"]', HTMLElement).click();
+    await answerConfirm("ok");
+    await waitForToast();
+    expect(requests[1]).toStrictEqual({
+      url: "/api/torrents/sonarr/aaaaaaaaaaaa?removeFromDebrid=true",
       method: "DELETE",
     });
   });
