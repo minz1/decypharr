@@ -1,21 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { answerConfirm } from "#ui/lib/testing/confirm";
 import {
-  XSS,
-  answerConfirm,
   bootDashboard,
   change,
-  check,
-  element,
   lastURL,
   page,
   rowControl,
-  toastText,
   torrent,
   twoTorrents,
   waitForRows,
-  waitForToast,
 } from "#ui/lib/testing/dashboard";
+import { check, element } from "#ui/lib/testing/dom";
+import { toasts, waitForAnyToast } from "#ui/lib/testing/toast";
+import { XSS } from "#ui/lib/testing/xss";
 
 const threePages = (): Response => page([torrent("aaaaaaaaaaaa", "One"), torrent("bbbbbbbbbbbb", "Two")], 3);
 
@@ -94,8 +92,8 @@ describe("deleting one torrent", () => {
     await waitForRows(2);
     rowControl(1, '[data-action="delete-debrid"]', HTMLButtonElement).click();
     const asked = await answerConfirm("ok");
-    await waitForToast();
-    expect({ asked, request: requests[1], toasts: toastText() }).toStrictEqual({
+    await waitForAnyToast();
+    expect({ asked, request: requests[1], toasts: toasts() }).toStrictEqual({
       asked: "Are you sure you want to delete this torrent?",
       request: { url: "/api/torrents/radarr/bbbbbbbbbbbb?removeFromDebrid=true", method: "DELETE" },
       toasts: ["Item deleted successfully"],
@@ -116,8 +114,8 @@ describe("deleting one torrent", () => {
     await waitForRows(2);
     rowControl(0, '[data-action="delete"]', HTMLButtonElement).click();
     await answerConfirm("ok");
-    await waitForToast();
-    expect(toastText()).toStrictEqual(["Failed to delete entry"]);
+    await waitForAnyToast();
+    expect(toasts()).toStrictEqual(["Failed to delete entry"]);
   });
 });
 
@@ -140,8 +138,8 @@ describe("the dashboard's selection", () => {
     check(element("#selectAll", HTMLInputElement));
     element("#batchDeleteBtn", HTMLButtonElement).click();
     const asked = await answerConfirm("ok");
-    await waitForToast();
-    expect({ asked, request: requests[1], toasts: toastText() }).toStrictEqual({
+    await waitForAnyToast();
+    expect({ asked, request: requests[1], toasts: toasts() }).toStrictEqual({
       asked: "Delete 2 selected items?",
       request: { url: "/api/torrents?hashes=aaaaaaaaaaaa,bbbbbbbbbbbb&removeFromDebrid=false", method: "DELETE" },
       toasts: ["Deleted 2 items successfully"],
@@ -166,8 +164,8 @@ describe("the dashboard's context menu", () => {
     const copied = stubClipboard();
     const menu = openMenu();
     element('#torrentContextMenu [data-action="copy-magnet"]', HTMLElement).click();
-    await waitForToast();
-    expect({ copied, toasts: toastText(), hidden: menu.classList.contains("hidden") }).toStrictEqual({
+    await waitForAnyToast();
+    expect({ copied, toasts: toasts(), hidden: menu.classList.contains("hidden") }).toStrictEqual({
       copied: ["magnet:?xt=urn:btih:aaaaaaaaaaaa"],
       toasts: ["Magnet link copied to clipboard"],
       hidden: true,
@@ -182,7 +180,7 @@ describe("deleting from the dashboard's context menu", () => {
     openMenu();
     element('#torrentContextMenu [data-action="delete"]', HTMLElement).click();
     await answerConfirm("ok");
-    await waitForToast();
+    await waitForAnyToast();
     expect(requests[1]).toStrictEqual({
       url: "/api/torrents/sonarr/aaaaaaaaaaaa?removeFromDebrid=false",
       method: "DELETE",
@@ -195,7 +193,7 @@ describe("deleting from the dashboard's context menu", () => {
     openMenu();
     element('#torrentContextMenu [data-action="delete-debrid"]', HTMLElement).click();
     await answerConfirm("ok");
-    await waitForToast();
+    await waitForAnyToast();
     expect(requests[1]).toStrictEqual({
       url: "/api/torrents/sonarr/aaaaaaaaaaaa?removeFromDebrid=true",
       method: "DELETE",

@@ -1,15 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { stubFormAPI } from "#ui/lib/testing/api";
 import { loadFixture } from "#ui/lib/testing/fixture";
-
-interface Request {
-  url: string;
-  method: string;
-  fields: [string, FormDataEntryValue][];
-}
+import { toasts, waitForAnyToast } from "#ui/lib/testing/toast";
 
 interface Booted {
-  requests: Request[];
+  requests: ReturnType<typeof stubFormAPI>;
   navigations: string[];
 }
 
@@ -21,13 +17,8 @@ const bootRegister = async (
   vi.resetModules();
   loadFixture(fixture);
   prepare?.();
-  const requests: Request[] = [];
+  const requests = stubFormAPI(respond);
   const navigations: string[] = [];
-  vi.stubGlobal("fetch", async (url: string, init: RequestInit): Promise<Response> => {
-    const fields = init.body instanceof FormData ? [...init.body.entries()] : [];
-    requests.push({ url, method: init.method ?? "GET", fields });
-    return respond();
-  });
   vi.spyOn(globalThis.location, "assign").mockImplementation((url: string | URL) => {
     navigations.push(String(url));
   });
@@ -60,17 +51,6 @@ const submit = (): void => {
 
 const skip = (): void => {
   document.querySelector<HTMLButtonElement>("#skipAuthBtn")?.click();
-};
-
-const errorToasts = (): string[] =>
-  [...document.querySelectorAll(".toast-container .alert-error [data-toast-message]")].map(
-    (toast) => toast.textContent,
-  );
-
-const waitForToast = async (): Promise<void> => {
-  await vi.waitFor(() => {
-    expect(errorToasts().length).toBeGreaterThan(0);
-  });
 };
 
 describe("registering", () => {
@@ -118,7 +98,7 @@ describe("a registration in flight", () => {
       disabled: true,
     });
     pending.resolve(new Response("taken", { status: 400 }));
-    await waitForToast();
+    await waitForAnyToast("error");
     expect({ disabled: save?.disabled, label: save?.textContent }).toStrictEqual({ disabled: false, label: "Save" });
   });
 });
@@ -128,8 +108,8 @@ describe("a registration that does not go through", () => {
     const booted = await bootRegister("register", reply("", 200));
     fill("admin", "secret", "other");
     submit();
-    await waitForToast();
-    expect({ toasts: errorToasts(), requests: booted.requests }).toStrictEqual({
+    await waitForAnyToast("error");
+    expect({ toasts: toasts("error"), requests: booted.requests }).toStrictEqual({
       toasts: ["Passwords do not match!"],
       requests: [],
     });
@@ -139,9 +119,9 @@ describe("a registration that does not go through", () => {
     const booted = await bootRegister("register", reply("<img src=x onerror=alert(1)>", 400));
     fill("admin", "secret", "secret");
     submit();
-    await waitForToast();
+    await waitForAnyToast("error");
     expect({
-      toasts: errorToasts(),
+      toasts: toasts("error"),
       images: document.querySelectorAll(".toast-container img").length,
       navigations: booted.navigations,
     }).toStrictEqual({ toasts: ["<img src=x onerror=alert(1)>"], images: 0, navigations: [] });
@@ -151,16 +131,16 @@ describe("a registration that does not go through", () => {
     await bootRegister("register", reply("", 400));
     fill("admin", "secret", "secret");
     submit();
-    await waitForToast();
-    expect(errorToasts()).toStrictEqual(["Registration failed"]);
+    await waitForAnyToast("error");
+    expect(toasts("error")).toStrictEqual(["Registration failed"]);
   });
 
   it("reports a request that never reached the server", async () => {
     await bootRegister("register", async () => Promise.reject(new Error("offline")));
     fill("admin", "secret", "secret");
     submit();
-    await waitForToast();
-    expect(errorToasts()).toStrictEqual(["Registration failed: offline"]);
+    await waitForAnyToast("error");
+    expect(toasts("error")).toStrictEqual(["Registration failed: offline"]);
   });
 });
 
@@ -177,8 +157,8 @@ describe("skipping authentication", () => {
   it("reports a refused skip and stays", async () => {
     const booted = await bootRegister("register", reply("nope", 500));
     skip();
-    await waitForToast();
-    expect({ toasts: errorToasts(), navigations: booted.navigations }).toStrictEqual({
+    await waitForAnyToast("error");
+    expect({ toasts: toasts("error"), navigations: booted.navigations }).toStrictEqual({
       toasts: ["Error: Failed to skip authentication"],
       navigations: [],
     });
@@ -187,8 +167,8 @@ describe("skipping authentication", () => {
   it("reports a skip that never reached the server", async () => {
     await bootRegister("register", async () => Promise.reject(new Error("offline")));
     skip();
-    await waitForToast();
-    expect(errorToasts()).toStrictEqual(["Error: offline"]);
+    await waitForAnyToast("error");
+    expect(toasts("error")).toStrictEqual(["Error: offline"]);
   });
 });
 
@@ -197,7 +177,7 @@ describe("a template out of step with the page", () => {
     await bootRegister("register", reply("", 200), () => {
       document.querySelector("#skipAuthBtn")?.remove();
     });
-    await waitForToast();
-    expect(errorToasts()).toStrictEqual(["register: missing #skipAuthBtn"]);
+    await waitForAnyToast("error");
+    expect(toasts("error")).toStrictEqual(["register: missing #skipAuthBtn"]);
   });
 });

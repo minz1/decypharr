@@ -1,4 +1,6 @@
-import { expect, vi } from "vitest";
+import { vi } from "vitest";
+
+import { element, settle } from "#ui/lib/testing/dom";
 
 interface RecordedRequest {
   url: string;
@@ -6,22 +8,45 @@ interface RecordedRequest {
   body: string;
 }
 
-type Routes = Readonly<Record<string, () => Response>>;
+interface FormRequest {
+  url: string;
+  method: string;
+  fields: [string, FormDataEntryValue][];
+}
+
+type Answer = Error | (() => Response | Promise<Response>);
+
+type Routes = Readonly<Record<string, Answer>>;
+
+type Fallback = (url: string, method: string) => Response | Promise<Response>;
 
 const BASE_PREFIX = "/decypharr";
-
-const realSetTimeout = globalThis.setTimeout;
 
 const routeKey = (method: string, url: string): string =>
   `${method} ${url.startsWith(`${BASE_PREFIX}/`) ? url.slice(BASE_PREFIX.length) : url}`;
 
-const stubAPI = (routes: Routes): RecordedRequest[] => {
+const noRoute: Fallback = () => new Response("no route", { status: 404 });
+
+const stubAPI = (routes: Routes, fallback: Fallback = noRoute): RecordedRequest[] => {
   const requests: RecordedRequest[] = [];
-  vi.stubGlobal("fetch", (url: string, init: RequestInit = {}): Response => {
+  vi.stubGlobal("fetch", async (url: string, init: RequestInit = {}): Promise<Response> => {
     const method = init.method ?? "GET";
     requests.push({ url, method, body: typeof init.body === "string" ? init.body : "" });
     const route = routes[routeKey(method, url)];
-    return route === undefined ? new Response("no route", { status: 404 }) : route();
+    if (route instanceof Error) {
+      throw route;
+    }
+    return route === undefined ? fallback(url, method) : route();
+  });
+  return requests;
+};
+
+const stubFormAPI = (respond: () => Response | Promise<Response>): FormRequest[] => {
+  const requests: FormRequest[] = [];
+  vi.stubGlobal("fetch", async (url: string, init: RequestInit = {}): Promise<Response> => {
+    const fields = init.body instanceof FormData ? [...init.body.entries()] : [];
+    requests.push({ url, method: init.method ?? "GET", fields });
+    return respond();
   });
   return requests;
 };
@@ -38,31 +63,10 @@ const sequence = (...responses: readonly (() => Response)[]): (() => Response) =
   };
 };
 
-const settle = async (): Promise<void> => {
-  const tick = { done: false };
-  realSetTimeout(() => {
-    tick.done = true;
-  }, 0);
-  await vi.waitFor(() => {
-    expect(tick.done).toBe(true);
-  });
-};
-
-const element = <Wanted extends HTMLElement>(selector: string, type: abstract new () => Wanted): Wanted => {
-  const found = document.querySelector(selector);
-  if (!(found instanceof type)) {
-    throw new TypeError(`no ${selector}`);
-  }
-  return found;
-};
-
 const click = async (selector: string): Promise<void> => {
   element(selector, HTMLElement).click();
   await settle();
 };
-
-const toasts = (type: "error" | "info" | "success" | "warning"): string[] =>
-  [...document.querySelectorAll(`.toast-container .alert-${type}`)].map((toast) => toast.textContent.trim());
 
 const mutations = (requests: readonly RecordedRequest[]): RecordedRequest[] =>
   requests.filter((request) => request.method !== "GET");
@@ -75,5 +79,5 @@ const stubReload = (): { count: number } => {
   return reloads;
 };
 
-export type { RecordedRequest, Routes };
-export { click, element, mutations, sequence, settle, stubAPI, stubReload, toasts };
+export type { Answer, FormRequest, RecordedRequest, Routes };
+export { click, mutations, sequence, stubAPI, stubFormAPI, stubReload };

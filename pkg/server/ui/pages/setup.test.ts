@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { element } from "#ui/lib/testing/dom";
 import { loadFixture } from "#ui/lib/testing/fixture";
 import {
   bootSetup,
   choose,
   click,
-  element,
   errorToasts,
   fill,
   fillUsenet,
@@ -34,9 +34,9 @@ describe("opening the wizard", () => {
     expect({
       requests: booted.requests.map((request) => request.url),
       steps: visibleSteps(),
-      label: element("setup-progress-label", HTMLElement).textContent,
-      name: element("setup-progress-name", HTMLElement).textContent,
-      progress: element("setup-progress", HTMLProgressElement).value,
+      label: element("#setup-progress-label", HTMLElement).textContent,
+      name: element("#setup-progress-name", HTMLElement).textContent,
+      progress: element("#setup-progress", HTMLProgressElement).value,
       marked: marked(),
     }).toStrictEqual({
       requests: ["/decypharr/api/config"],
@@ -59,10 +59,10 @@ describe("opening the wizard", () => {
     });
     expect([
       value("auth-username"),
-      element("debrid-provider", HTMLSelectElement).value,
+      element("#debrid-provider", HTMLSelectElement).value,
       value("debrid-api-key"),
       value("download-folder"),
-      element("mount-type-rclone", HTMLInputElement).checked,
+      element("#mount-type-rclone", HTMLInputElement).checked,
       value("mount-path"),
       value("rclone-buffer-size"),
     ]).toStrictEqual(["admin", "torbox", "key", "/downloads", true, "/mnt/rclone", "64M"]);
@@ -113,7 +113,7 @@ describe("moving through the steps", () => {
     await bootSetup();
     click("skip-auth-btn");
     click("skip-debrid-btn");
-    const third = { steps: visibleSteps(), label: element("setup-progress-label", HTMLElement).textContent };
+    const third = { steps: visibleSteps(), label: element("#setup-progress-label", HTMLElement).textContent };
     const thirdMarked = marked().length;
     click("usenet-back-btn");
     click("debrid-back-btn");
@@ -153,7 +153,7 @@ describe("the wizard's guards", () => {
     passDownloadAndMount();
     expect({
       steps: visibleSteps(),
-      usenet: element("overview-usenet", HTMLElement).textContent.replaceAll(/\s+/gu, " ").trim(),
+      usenet: element("#overview-usenet", HTMLElement).textContent.replaceAll(/\s+/gu, " ").trim(),
       images: document.querySelectorAll("#step-6 img").length,
     }).toStrictEqual({
       steps: ["step-6"],

@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { click, element, mutations, settle, toasts } from "#ui/lib/testing/api";
+import { click, mutations } from "#ui/lib/testing/api";
+import { answerConfirm } from "#ui/lib/testing/confirm";
+import { element, settle } from "#ui/lib/testing/dom";
 import { bootReacquire, job } from "#ui/lib/testing/reacquire";
-import { answerConfirm } from "#ui/lib/testing/repair";
+import { toasts } from "#ui/lib/testing/toast";
 
 const MANY = Array.from({ length: 25 }, (_unused, index) => job(`j${String(index).padStart(2, "0")}`, "ready"));
 

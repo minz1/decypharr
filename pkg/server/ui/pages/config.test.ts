@@ -4,7 +4,6 @@ import { JSON_NULL } from "#ui/lib/common/json";
 import { assembleSettings, collectSections, populateSections } from "#ui/lib/config/sections";
 import {
   bootSettings,
-  find,
   hasKey,
   isHidden,
   posts,
@@ -13,12 +12,13 @@ import {
   settingsLoaded,
   shownToasts,
   submitSettings,
-  toastTexts,
   waitForToast,
 } from "#ui/lib/testing/config";
+import { element } from "#ui/lib/testing/dom";
 import { loadFixture } from "#ui/lib/testing/fixture";
 import { legacyNoEditSave } from "#ui/lib/testing/legacy-save";
 import { roundTripMismatches } from "#ui/lib/testing/round-trip";
+import { labelledToasts } from "#ui/lib/testing/toast";
 
 const xss = "<img src=x onerror=alert(1)>";
 const reportPrune = { enabled: true, mode: "report", schedule: "1h", grace: "72h", max_per_run: 5, roots: ["/data"] };
@@ -44,7 +44,7 @@ const hostileConfig = {
 const switchPruneToDelete = async (answers: readonly boolean[]): Promise<Awaited<ReturnType<typeof bootSettings>>> => {
   const page = await bootSettings({ routes: { "GET api/config": serving({ prune: reportPrune }) }, answers });
   await settingsLoaded();
-  find('[id="prune.mode"]', HTMLSelectElement).value = "delete";
+  element('[id="prune.mode"]', HTMLSelectElement).value = "delete";
   submitSettings();
   return page;
 };
@@ -144,7 +144,7 @@ describe("the save reply", () => {
     await settingsLoaded();
     submitSettings();
     await waitForToast("alert-success Configuration saved and applied.");
-    expect({ toasts: toastTexts(), overlay: isHidden("#loadingOverlay") }).toStrictEqual({
+    expect({ toasts: labelledToasts(), overlay: isHidden("#loadingOverlay") }).toStrictEqual({
       toasts: ["alert-warning WebDAV auth locks out", "alert-success Configuration saved and applied."],
       overlay: true,
     });
@@ -156,7 +156,7 @@ describe("saving prune in delete mode", () => {
     const { requests, confirms } = await switchPruneToDelete([false]);
     await vi.waitFor(() => {
       expect(confirms).toHaveLength(1);
-      expect([...find("#loadingOverlay", HTMLElement).classList]).toContain("hidden");
+      expect([...element("#loadingOverlay", HTMLElement).classList]).toContain("hidden");
     });
     expect({ posts: posts(requests, "api/config"), overlay: isHidden("#loadingOverlay") }).toStrictEqual({
       posts: [],
@@ -185,7 +185,7 @@ describe("the review focus cases", () => {
     await waitForToast("alert-success Configuration saved and applied.");
     expect({
       posts: posts(requests, "api/config").length,
-      enabled: !find('#configForm button[type="submit"]', HTMLButtonElement).disabled,
+      enabled: !element('#configForm button[type="submit"]', HTMLButtonElement).disabled,
     }).toStrictEqual({ posts: 1, enabled: true });
   });
 
@@ -193,10 +193,10 @@ describe("the review focus cases", () => {
     await bootSettings({ routes: { "GET api/config": serving(hostileConfig) } });
     await settingsLoaded();
     expect({
-      images: find("#configForm", HTMLFormElement).querySelectorAll("img").length,
-      title: find("[data-vf-title]", HTMLElement).textContent,
-      option: find('[name="arr[0].selected_debrid"]', HTMLSelectElement).value,
-      repairArr: find('[id="repair.arrs"] [data-arr-name]', HTMLElement).textContent,
+      images: element("#configForm", HTMLFormElement).querySelectorAll("img").length,
+      title: element("[data-vf-title]", HTMLElement).textContent,
+      option: element('[name="arr[0].selected_debrid"]', HTMLSelectElement).value,
+      repairArr: element('[id="repair.arrs"] [data-arr-name]', HTMLElement).textContent,
     }).toStrictEqual({ images: 0, title: xss, option: xss, repairArr: xss });
   });
 

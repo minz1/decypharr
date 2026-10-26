@@ -1,16 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  XSS,
-  bootDashboard,
-  cellText,
-  element,
-  page,
-  toastText,
-  twoTorrents,
-  waitForRows,
-  waitForToast,
-} from "#ui/lib/testing/dashboard";
+import { bootDashboard, cellText, page, twoTorrents, waitForRows } from "#ui/lib/testing/dashboard";
+import { element } from "#ui/lib/testing/dom";
+import { toasts, waitForAnyToast } from "#ui/lib/testing/toast";
+import { XSS } from "#ui/lib/testing/xss";
 
 const hangs = async (): Promise<Response> => Promise.withResolvers<Response>().promise;
 
@@ -63,8 +56,8 @@ describe("loading the dashboard", () => {
 
   it("reports a failed load as a toast and re-enables refresh", async () => {
     await bootDashboard(() => new Response("queue unavailable", { status: 500 }));
-    await waitForToast();
-    expect({ toasts: toastText(), refresh: element("#refreshBtn", HTMLButtonElement).disabled }).toStrictEqual({
+    await waitForAnyToast();
+    expect({ toasts: toasts(), refresh: element("#refreshBtn", HTMLButtonElement).disabled }).toStrictEqual({
       toasts: ["Error loading items: Failed to fetch items"],
       refresh: false,
     });
@@ -72,8 +65,8 @@ describe("loading the dashboard", () => {
 
   it("reports a malformed response as a toast", async () => {
     await bootDashboard(() => new Response("{not json", { status: 200 }));
-    await waitForToast();
-    expect(toastText()).toStrictEqual(["Error loading items: response is not JSON"]);
+    await waitForAnyToast();
+    expect(toasts()).toStrictEqual(["Error loading items: response is not JSON"]);
   });
 
   it("names a missing element in a toast", async () => {
@@ -82,8 +75,8 @@ describe("loading the dashboard", () => {
         document.querySelector("#refreshBtn")?.remove();
       },
     });
-    await waitForToast();
-    expect(toastText()).toStrictEqual(["dashboard: missing #refreshBtn"]);
+    await waitForAnyToast();
+    expect(toasts()).toStrictEqual(["dashboard: missing #refreshBtn"]);
   });
 });
 

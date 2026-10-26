@@ -1,21 +1,19 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  answerConfirm,
   bootBrowse,
   browseCalls,
-  check,
-  element,
   folder,
   item,
   library,
   listing,
   rowControl,
   stubOpen,
-  toastText,
   waitForName,
-  waitForToast,
 } from "#ui/lib/testing/browse";
+import { answerConfirm } from "#ui/lib/testing/confirm";
+import { check, element } from "#ui/lib/testing/dom";
+import { toasts, waitForAnyToast } from "#ui/lib/testing/toast";
 
 const mixed = (): Response => listing([item("Show", "def"), folder("rd", "provider")]);
 
@@ -78,7 +76,7 @@ describe("bulk actions", () => {
     const opened = stubOpen();
     check(element("#selectAllCheckbox", HTMLInputElement));
     element("#bulkDownloadBtn", HTMLButtonElement).click();
-    expect({ opened, toasts: toastText() }).toStrictEqual({
+    expect({ opened, toasts: toasts() }).toStrictEqual({
       opened: ["_blank /api/browse/download/Show/a.mkv", "_blank /api/browse/download/Show/b.mkv"],
       toasts: ["Downloading 2 file(s)"],
     });
@@ -91,11 +89,11 @@ describe("bulk actions", () => {
     element("#bulkDeleteBtn", HTMLButtonElement).click();
     element("#bulkDeleteBtn", HTMLButtonElement).click();
     const asked = await answerConfirm("ok");
-    await waitForToast();
+    await waitForAnyToast();
     expect({
       asked,
       deletes: requests.filter((request) => request.method === "DELETE"),
-      toasts: toastText(),
+      toasts: toasts(),
     }).toStrictEqual({
       asked:
         "Permanently delete 2 original item(s)?\n\n<img src=x onerror=alert(1)>\nShow\n\nThis removes them from every library and virtual folder, and removes their provider placements. This cannot be undone from Decypharr.",
@@ -109,7 +107,7 @@ describe("bulk actions", () => {
     await waitForName("Show");
     check(element("#selectAllCheckbox", HTMLInputElement));
     element("#bulkDownloadBtn", HTMLButtonElement).click();
-    expect(toastText()).toStrictEqual(["No files selected for download"]);
+    expect(toasts()).toStrictEqual(["No files selected for download"]);
   });
 });
 
@@ -132,7 +130,7 @@ describe("the context menu", () => {
     openMenu(1);
     element("#contextDelete button", HTMLButtonElement).click();
     await answerConfirm("ok");
-    await waitForToast();
+    await waitForAnyToast();
     expect({
       calls: browseCalls(requests)[1],
       hidden: element("#contextMenu", HTMLElement).classList.contains("hidden"),

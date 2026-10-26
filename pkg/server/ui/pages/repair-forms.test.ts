@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { click, element, mutations, settle, stubReload, toasts } from "#ui/lib/testing/api";
-import { XSS, answerConfirm, bootRepair } from "#ui/lib/testing/repair";
+import { click, mutations, stubReload } from "#ui/lib/testing/api";
+import { answerConfirm } from "#ui/lib/testing/confirm";
+import { element, settle } from "#ui/lib/testing/dom";
+import { bootRepair } from "#ui/lib/testing/repair";
+import { toasts } from "#ui/lib/testing/toast";
+import { XSS } from "#ui/lib/testing/xss";
 
 const submitRecheck = async (mediaId: string): Promise<void> => {
   element("#recheckMediaId", HTMLInputElement).value = mediaId;

@@ -1,7 +1,10 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 
-import { click, element, mutations, settle, toasts } from "#ui/lib/testing/api";
-import { XSS, binding, bootReacquire } from "#ui/lib/testing/reacquire";
+import { click, mutations } from "#ui/lib/testing/api";
+import { element, settle } from "#ui/lib/testing/dom";
+import { binding, bootReacquire } from "#ui/lib/testing/reacquire";
+import { toasts } from "#ui/lib/testing/toast";
+import { XSS } from "#ui/lib/testing/xss";
 
 type Routes = Parameters<typeof bootReacquire>[0];
 

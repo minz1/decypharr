@@ -1,19 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  XSS,
-  bootStats,
-  click,
-  dfsMount,
-  element,
-  json,
-  loaded,
-  settle,
-  statsRoute,
-  text,
-  textOf,
-  toasts,
-} from "#ui/lib/testing/stats";
+import { element, settle } from "#ui/lib/testing/dom";
+import { bootStats, click, dfsMount, json, loaded, statsRoute, text, textOf } from "#ui/lib/testing/stats";
+import { toasts } from "#ui/lib/testing/toast";
+import { XSS } from "#ui/lib/testing/xss";
 
 const cleanupResult = { status: "success", cache: { cleanup_freed_bytes: 2048, cleanup_removed_items: 3 } };
 const purgeResult = { status: "success", cache: { purge_freed_bytes: 1_048_576, purge_removed_items: 7 } };
@@ -22,7 +12,7 @@ const requests = (sent: { method: string; url: string }[]): string[] =>
   sent.map((request) => `${request.method} ${request.url}`);
 
 const dialog = (): HTMLDialogElement => {
-  const found = element("#purge-cache-modal");
+  const found = element("#purge-cache-modal", HTMLElement);
   if (!(found instanceof HTMLDialogElement)) {
     throw new TypeError("no purge dialog");
   }
@@ -80,7 +70,10 @@ describe("running a cache cleanup", () => {
 const CLEANUP = '#mount-content [data-action="cache-cleanup"]';
 const PURGE = '#mount-content [data-action="cache-purge"]';
 
-const buttonState = (selector: string): [boolean, string] => [element(selector).matches(":disabled"), textOf(selector)];
+const buttonState = (selector: string): [boolean, string] => [
+  element(selector, HTMLElement).matches(":disabled"),
+  textOf(selector),
+];
 
 describe("a cache action in flight", () => {
   it("disables the cleanup button so a second click, even on its spinner, posts nothing", async () => {
@@ -213,7 +206,7 @@ describe("the rclone mount", () => {
     await loaded();
     expect({
       badges: [textOf("#mount-type"), textOf("#mount-status")],
-      logs: element("#rclone-logs-btn").style.display,
+      logs: element("#rclone-logs-btn", HTMLElement).style.display,
       version: textOf("#mount-content [data-field=version]"),
       transfers: textOf("#mount-content h3"),
       transfer: [textOf("#mount-content h4"), textOf("#mount-content [data-field=percent]")],

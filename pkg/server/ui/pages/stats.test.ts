@@ -1,17 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  bootStats,
-  click,
-  element,
-  loaded,
-  pageHost,
-  statsRoute,
-  text,
-  textOf,
-  toasts,
-  XSS,
-} from "#ui/lib/testing/stats";
+import { element } from "#ui/lib/testing/dom";
+import { bootStats, click, loaded, pageHost, statsRoute, text, textOf } from "#ui/lib/testing/stats";
+import { toasts } from "#ui/lib/testing/toast";
+import { XSS } from "#ui/lib/testing/xss";
 
 describe("loading the stats page", () => {
   it("fetches the stats once and shows them", async () => {
@@ -19,8 +11,8 @@ describe("loading the stats page", () => {
     await loaded();
     expect(sent.map((request) => `${request.method} ${request.url}`)).toStrictEqual(["GET /debug/stats"]);
     expect({
-      loading: element("#loading-stats").style.display,
-      error: element("#error-stats").style.display,
+      loading: element("#loading-stats", HTMLElement).style.display,
+      error: element("#error-stats", HTMLElement).style.display,
       uptime: textOf("#uptime"),
       memory: textOf("#memory-used"),
       queue: textOf("#queue-pending"),
@@ -61,9 +53,9 @@ describe("a failed stats load", () => {
   it("shows the status in the error panel", async () => {
     await bootStats({ "GET /debug/stats": text("boom", 500, "Internal Server Error") });
     await vi.waitFor(() => {
-      expect(element("#error-stats").style.display).toBe("flex");
+      expect(element("#error-stats", HTMLElement).style.display).toBe("flex");
     });
-    expect([textOf("#error-message"), element("#stats-content").style.display]).toStrictEqual([
+    expect([textOf("#error-message"), element("#stats-content", HTMLElement).style.display]).toStrictEqual([
       "HTTP 500: Internal Server Error",
       "none",
     ]);
@@ -89,7 +81,7 @@ describe("a failed stats load", () => {
 
   it("reports a missing element as a toast naming it", async () => {
     await bootStats(statsRoute(), "stats", () => {
-      element("#refresh-stats").remove();
+      element("#refresh-stats", HTMLElement).remove();
     });
     await vi.waitFor(() => {
       expect(toasts()).toStrictEqual(["stats: missing #refresh-stats"]);

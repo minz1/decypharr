@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import { element } from "#ui/lib/testing/dom";
 import {
   bootDownload,
   dropEvent,
-  element,
   giveFiles,
   input,
   names,
@@ -28,7 +28,7 @@ const added = (statuses: readonly string[]): Respond =>
 const submitMagnet = async (respond: Respond): Promise<string[]> => {
   await bootDownload({ respond });
   textArea("magnetURI").value = "magnet:?xt=1";
-  element("submitDownload", HTMLButtonElement).click();
+  element("#submitDownload", HTMLButtonElement).click();
   const shown = await waitForToasts(1);
   expect(document.querySelector("#submitDownload:not([disabled])")).not.toBeNull();
   return shown;
@@ -65,7 +65,7 @@ describe("adding torrents", () => {
 
   it("asks for something to add without posting", async () => {
     const requests = await bootDownload();
-    element("submitDownload", HTMLButtonElement).click();
+    element("#submitDownload", HTMLButtonElement).click();
     expect([await waitForToasts(1), requests]).toStrictEqual([
       ["alert-warning: Please provide at least one torrent or NZB"],
       [],
@@ -80,7 +80,7 @@ describe("adding NZBs", () => {
     textArea("nzbURL").value = "https://x/1.nzb\n https://x/2.nzb ";
     giveFiles("nzbFile", [nzb]);
     select("debrid").value = "torbox";
-    element("submitDownload", HTMLButtonElement).click();
+    element("#submitDownload", HTMLButtonElement).click();
     await waitForToasts(1);
     expect(
       requests.map((request) => [request.url, request.fields.filter(([name]) => name !== "rmTrackerUrls")]),
@@ -140,7 +140,7 @@ describe("opening the page", () => {
       stored: { downloadCategory: "radarr", downloadAction: "none", downloadUncached: "true", downloadFolder: "/x" },
     });
     const loaded = [input("arr").value, select("downloadAction").value, input("downloadFolder").value];
-    const uncached = element("downloadUncached", HTMLInputElement).checked;
+    const uncached = element("#downloadUncached", HTMLInputElement).checked;
     input("downloadFolder").value = "/y";
     input("downloadFolder").dispatchEvent(new Event("change", { bubbles: true }));
     expect([
@@ -178,7 +178,7 @@ describe("choosing files", () => {
     const torrents = giveFiles("torrentFiles", []);
     const nzbs = giveFiles("nzbFile", []);
     const drop = dropEvent([new File(["t"], "a.torrent"), new File(["n"], "b.nzb"), new File(["n"], "c.nzb")]);
-    element("downloadForm", HTMLFormElement).dispatchEvent(drop);
+    element("#downloadForm", HTMLFormElement).dispatchEvent(drop);
     expect([names(torrents.files), names(nzbs.files), drop.defaultPrevented]).toStrictEqual([
       ["a.torrent"],
       ["b.nzb"],
@@ -190,7 +190,7 @@ describe("choosing files", () => {
 describe("dragging over the form", () => {
   it("highlights the form while something is dragged over it", async () => {
     await bootDownload();
-    const form = element("downloadForm", HTMLFormElement);
+    const form = element("#downloadForm", HTMLFormElement);
     const after = (name: string): string => {
       form.dispatchEvent(new Event(name, { bubbles: true, cancelable: true }));
       return `${name}:${HIGHLIGHT.filter((highlight) => form.classList.contains(highlight)).length}`;
@@ -204,7 +204,7 @@ describe("dragging over the form", () => {
 
   it("drops the highlight and refuses other files", async () => {
     await bootDownload();
-    const form = element("downloadForm", HTMLFormElement);
+    const form = element("#downloadForm", HTMLFormElement);
     form.dispatchEvent(new Event("dragover", { bubbles: true, cancelable: true }));
     form.dispatchEvent(dropEvent([new File(["o"], "e.txt")]));
     expect([HIGHLIGHT.filter((name) => form.classList.contains(name)), await waitForToasts(1)]).toStrictEqual([

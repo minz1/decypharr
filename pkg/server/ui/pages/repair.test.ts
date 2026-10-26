@@ -1,8 +1,11 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 
-import { element, sequence, stubAPI, toasts } from "#ui/lib/testing/api";
+import { sequence, stubAPI } from "#ui/lib/testing/api";
+import { element } from "#ui/lib/testing/dom";
 import { loadFixture } from "#ui/lib/testing/fixture";
-import { IDLE_STATUS, XSS, bootRepair } from "#ui/lib/testing/repair";
+import { IDLE_STATUS, bootRepair } from "#ui/lib/testing/repair";
+import { toasts } from "#ui/lib/testing/toast";
+import { XSS } from "#ui/lib/testing/xss";
 
 const LOADS = ["GET /api/arrs", "GET /api/repair/config", "GET /api/repair/runs", "GET /api/repair/status"];
 

@@ -1,7 +1,11 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 
-import { click, element, mutations, stubReload, toasts } from "#ui/lib/testing/api";
-import { XSS, answerConfirm, bootRepair, brokenEntry } from "#ui/lib/testing/repair";
+import { click, mutations, stubReload } from "#ui/lib/testing/api";
+import { answerConfirm } from "#ui/lib/testing/confirm";
+import { element } from "#ui/lib/testing/dom";
+import { bootRepair, brokenEntry } from "#ui/lib/testing/repair";
+import { toasts } from "#ui/lib/testing/toast";
+import { XSS } from "#ui/lib/testing/xss";
 
 type Routes = Parameters<typeof bootRepair>[0];
 

@@ -4,7 +4,6 @@ import {
   bootSettings,
   click,
   fill,
-  find,
   isHidden,
   posts,
   respond,
@@ -12,8 +11,9 @@ import {
   shownToasts,
   waitForToast,
 } from "#ui/lib/testing/config";
+import { element } from "#ui/lib/testing/dom";
 
-const input = (id: string): HTMLInputElement => find(`#${id}`, HTMLInputElement);
+const input = (id: string): HTMLInputElement => element(`#${id}`, HTMLInputElement);
 
 const loaded = async (
   options?: Parameters<typeof bootSettings>[0],
@@ -79,7 +79,7 @@ describe("the API token", () => {
     await loaded({ routes: { "POST api/refresh-token": () => respond(500, "nope") } });
     click("#refresh-token-btn");
     await waitForToast("alert-error Failed to refresh token: Failed to refresh token");
-    expect({ disabled: find("#refresh-token-btn", HTMLButtonElement).disabled }).toStrictEqual({ disabled: false });
+    expect({ disabled: element("#refresh-token-btn", HTMLButtonElement).disabled }).toStrictEqual({ disabled: false });
   });
 
   it("refuses to copy a missing token and copies a present one", async () => {
@@ -96,9 +96,9 @@ describe("the credentials", () => {
     await loaded();
     fill("#auth-password", "a");
     fill("#auth-password-confirm", "b");
-    const mismatch = find("#password-match-indicator", HTMLElement).className;
+    const mismatch = element("#password-match-indicator", HTMLElement).className;
     fill("#auth-password-confirm", "a");
-    expect([mismatch, find("#password-match-indicator", HTMLElement).textContent]).toStrictEqual([
+    expect([mismatch, element("#password-match-indicator", HTMLElement).textContent]).toStrictEqual([
       "label-text-alt text-error",
       "✓ Passwords match",
     ]);
@@ -143,7 +143,7 @@ describe("the magnet handler", () => {
     await bootSettings({ fixture: "config@base" });
     click("#registerMagnetLink");
     await waitForToast("alert-success Magnet link handler registered successfully");
-    const button = find("#registerMagnetLink", HTMLButtonElement);
+    const button = element("#registerMagnetLink", HTMLButtonElement);
     expect([handlers, localStorage.getItem("magnetHandler"), button.textContent, button.disabled]).toStrictEqual([
       [`magnet ${globalThis.location.origin}/decypharr/download?magnet=%s`],
       "true",

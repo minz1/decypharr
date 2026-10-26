@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { click, element, mutations, stubReload, toasts } from "#ui/lib/testing/api";
-import { answerConfirm, bootRepair } from "#ui/lib/testing/repair";
+import { click, mutations, stubReload } from "#ui/lib/testing/api";
+import { answerConfirm } from "#ui/lib/testing/confirm";
+import { element } from "#ui/lib/testing/dom";
+import { bootRepair } from "#ui/lib/testing/repair";
+import { toasts } from "#ui/lib/testing/toast";
 
 const RUN_BODY =
   '{"ignore_last_checked":true,"auto_repair":true,"unrestrict_link":true,"verify_content":false,"protocol":"nzb"}';

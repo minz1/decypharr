@@ -1,17 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  XSS,
-  bootStats,
-  debridEntry,
-  element,
-  json,
-  loaded,
-  pageHost,
-  statsRoute,
-  text,
-  textOf,
-} from "#ui/lib/testing/stats";
+import { element } from "#ui/lib/testing/dom";
+import { bootStats, debridEntry, json, loaded, pageHost, statsRoute, text, textOf } from "#ui/lib/testing/stats";
+import { XSS } from "#ui/lib/testing/xss";
 
 const nntpResult = { provider: "news:563/kim", protocol: "nntp", latency_ms: 42, tested_at: "2026-10-26T07:00:00Z" };
 const debridResult = {
@@ -25,7 +16,7 @@ const debridResult = {
 const tested = `Tested: ${new Date("2026-10-26T07:00:00Z").toLocaleTimeString()}`;
 
 const button = (selector: string): HTMLButtonElement => {
-  const found = element(selector);
+  const found = element(selector, HTMLElement);
   if (!(found instanceof HTMLButtonElement)) {
     throw new TypeError(`no button ${selector}`);
   }
@@ -47,11 +38,11 @@ describe("testing an NNTP server's speed", () => {
     await loaded();
     button(NNTP).click();
     button(NNTP).click();
-    element(`${NNTP} .loading`).click();
+    element(`${NNTP} .loading`, HTMLElement).click();
     expect({
       disabled: button(NNTP).disabled,
       label: textOf(NNTP),
-      spinner: element(NNTP).querySelector(".loading-xs") !== null,
+      spinner: element(NNTP, HTMLElement).querySelector(".loading-xs") !== null,
     }).toStrictEqual({
       disabled: true,
       label: "Testing...",
@@ -97,7 +88,7 @@ describe("testing a debrid provider's speed", () => {
     await loaded();
     button(DEBRID).click();
     button(DEBRID).click();
-    element(`${DEBRID} .loading`).click();
+    element(`${DEBRID} .loading`, HTMLElement).click();
     expect({
       disabled: button(DEBRID).disabled,
       label: textOf(DEBRID),
@@ -131,7 +122,7 @@ describe("copying a connection command", () => {
     });
     await bootStats(statsRoute());
     await loaded();
-    const copy = element('#smb-details [data-action="copy"]');
+    const copy = element('#smb-details [data-action="copy"]', HTMLElement);
     copy.click();
     await vi.waitFor(() => {
       expect(copy.querySelector(".bi-check-lg")).not.toBeNull();

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { loadFixture } from "#ui/lib/testing/fixture";
+import { toasts } from "#ui/lib/testing/toast";
 
 const loadLayout = async (fixture: string, theme = ""): Promise<string[]> => {
   vi.resetModules();
@@ -17,11 +18,6 @@ const loadLayout = async (fixture: string, theme = ""): Promise<string[]> => {
   await import("#ui/pages/layout");
   return urls;
 };
-
-const toastTexts = (): string[] =>
-  [...document.querySelectorAll(".toast-container .alert-error [data-toast-message]")].map(
-    (toast) => toast.textContent,
-  );
 
 const press = (key: string, ctrlKey: boolean): void => {
   document.dispatchEvent(new KeyboardEvent("keydown", { key, ctrlKey, bubbles: true }));
@@ -61,7 +57,7 @@ describe("the global listeners", () => {
   it("toast a global error with the toast template", async () => {
     await loadLayout("index");
     globalThis.dispatchEvent(new ErrorEvent("error", { error: new Error("<img src=x onerror=alert(1)>") }));
-    expect(new Set(toastTexts())).toStrictEqual(new Set(["Unexpected error: <img src=x onerror=alert(1)>"]));
+    expect(new Set(toasts("error"))).toStrictEqual(new Set(["Unexpected error: <img src=x onerror=alert(1)>"]));
     expect(document.querySelectorAll(".toast-container img")).toHaveLength(0);
   });
 });

@@ -1,21 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { stubAPI } from "#ui/lib/testing/api";
 import { loadFixture } from "#ui/lib/testing/fixture";
+import { toasts } from "#ui/lib/testing/toast";
 
-interface Request {
-  url: string;
-  method: string;
-  body: string;
-}
-
-const bootLogin = async (fixture: string, response: Response): Promise<Request[]> => {
+const bootLogin = async (fixture: string, response: Response): Promise<ReturnType<typeof stubAPI>> => {
   vi.resetModules();
   loadFixture(fixture);
-  const requests: Request[] = [];
-  vi.stubGlobal("fetch", async (url: string, init: RequestInit): Promise<Response> => {
-    requests.push({ url, method: init.method ?? "GET", body: typeof init.body === "string" ? init.body : "" });
-    return Promise.resolve(response);
-  });
+  const requests = stubAPI({}, () => response);
   await import("#ui/pages/login");
   return requests;
 };
@@ -35,9 +27,6 @@ const submit = async (username: string, password: string): Promise<void> => {
   });
 };
 
-const toastText = (): string[] =>
-  [...document.querySelectorAll(".toast-container .alert")].map((toast) => toast.textContent.trim());
-
 describe("the login page", () => {
   it("posts the credentials once to /login", async () => {
     const requests = await bootLogin("login", new Response("", { status: 200 }));
@@ -56,7 +45,7 @@ describe("the login page", () => {
   it("shows the server's refusal as text", async () => {
     await bootLogin("login", new Response("<b>Invalid credentials</b>", { status: 401 }));
     await submit("admin", "wrong");
-    expect({ toasts: toastText(), bold: document.querySelectorAll(".toast-container b").length }).toStrictEqual({
+    expect({ toasts: toasts(), bold: document.querySelectorAll(".toast-container b").length }).toStrictEqual({
       toasts: ["<b>Invalid credentials</b>"],
       bold: 0,
     });

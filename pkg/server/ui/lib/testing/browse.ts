@@ -1,12 +1,8 @@
 import { expect, onTestFinished, vi } from "vitest";
 
+import { stubAPI } from "#ui/lib/testing/api";
 import { loadFixture } from "#ui/lib/testing/fixture";
-
-interface Request {
-  url: string;
-  method: string;
-  body: string;
-}
+import { XSS } from "#ui/lib/testing/xss";
 
 type Responder = (url: string, method: string) => Response | Promise<Response>;
 
@@ -16,7 +12,6 @@ interface BootOptions {
   prepare?: () => void;
 }
 
-const XSS = "<img src=x onerror=alert(1)>";
 const FILE_SIZE = 2048;
 
 const folder = (name: string, kind: string): Record<string, unknown> => ({
@@ -71,7 +66,7 @@ const library = (url: string, method: string): Response => {
   return listing([folder("__all__", "system"), folder("Kids", "virtual")]);
 };
 
-const bootBrowse = async (respond: Responder, options: BootOptions = {}): Promise<Request[]> => {
+const bootBrowse = async (respond: Responder, options: BootOptions = {}): Promise<ReturnType<typeof stubAPI>> => {
   vi.resetModules();
   vi.useFakeTimers();
   onTestFinished(() => {
@@ -80,31 +75,9 @@ const bootBrowse = async (respond: Responder, options: BootOptions = {}): Promis
   loadFixture(options.fixture ?? "browse");
   globalThis.history.replaceState({}, "", options.location ?? "/browse");
   options.prepare?.();
-  const requests: Request[] = [];
-  vi.stubGlobal("fetch", async (url: string, init: RequestInit): Promise<Response> => {
-    const method = init.method ?? "GET";
-    requests.push({ url, method, body: typeof init.body === "string" ? init.body : "" });
-    return respond(url, method);
-  });
+  const requests = stubAPI({}, respond);
   await import("#ui/pages/browse");
   return requests;
-};
-
-const toastText = (): string[] =>
-  [...document.querySelectorAll(".toast-container .alert")].map((toast) => toast.textContent.trim());
-
-const waitForToast = async (): Promise<void> => {
-  await vi.waitFor(() => {
-    expect(toastText().length).toBeGreaterThan(0);
-  });
-};
-
-const element = <Wanted extends Element>(selector: string, type: abstract new () => Wanted): Wanted => {
-  const found = document.querySelector(selector);
-  if (!(found instanceof type)) {
-    throw new TypeError(`the fixture has no ${selector}`);
-  }
-  return found;
 };
 
 const rows = (): HTMLTableRowElement[] => [...document.querySelectorAll<HTMLTableRowElement>("#fileBrowserList tr")];
@@ -134,21 +107,6 @@ const openFolder = async (index: number, expected: string): Promise<void> => {
   await waitForName(expected);
 };
 
-const check = (box: HTMLInputElement, checked = true): void => {
-  box.checked = checked;
-  box.dispatchEvent(new Event("change", { bubbles: true }));
-};
-
-const answerConfirm = async (answer: "ok" | "cancel"): Promise<string> => {
-  const dialog = element("#confirmDialog", HTMLDialogElement);
-  await vi.waitFor(() => {
-    expect(dialog.open).toBe(true);
-  });
-  const text = element("#confirmDialogMessage", HTMLElement).textContent;
-  element(`#confirmDialog [data-answer="${answer}"]`, HTMLButtonElement).click();
-  return text;
-};
-
 const stubOpen = (): string[] => {
   const opened: string[] = [];
   vi.stubGlobal("open", (url: string, target: string) => {
@@ -157,19 +115,14 @@ const stubOpen = (): string[] => {
   return opened;
 };
 
-const browseCalls = (requests: readonly Request[]): string[] =>
+const browseCalls = (requests: ReturnType<typeof stubAPI>): string[] =>
   requests
     .filter((request) => request.url.includes("/api/browse"))
     .map((request) => `${request.method} ${request.url}`);
 
-export type { Request };
 export {
-  XSS,
-  answerConfirm,
   bootBrowse,
   browseCalls,
-  check,
-  element,
   file,
   folder,
   item,
@@ -180,7 +133,5 @@ export {
   rowText,
   rows,
   stubOpen,
-  toastText,
   waitForName,
-  waitForToast,
 };

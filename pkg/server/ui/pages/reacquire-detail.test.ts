@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { click, element, mutations, toasts } from "#ui/lib/testing/api";
-import { XSS, bootReacquire, job } from "#ui/lib/testing/reacquire";
-import { answerConfirm } from "#ui/lib/testing/repair";
+import { click, mutations } from "#ui/lib/testing/api";
+import { answerConfirm } from "#ui/lib/testing/confirm";
+import { element } from "#ui/lib/testing/dom";
+import { bootReacquire, job } from "#ui/lib/testing/reacquire";
+import { toasts } from "#ui/lib/testing/toast";
+import { XSS } from "#ui/lib/testing/xss";
 
 const DETAILED = job("a/1", "needs_attention", {
   arrName: "Sonarr 4K",

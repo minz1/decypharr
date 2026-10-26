@@ -1,17 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { element } from "#ui/lib/testing/dom";
 import {
   REDIRECT_WAIT,
   bootSetup,
   click,
-  element,
   hidden,
   posted,
   postedBodies,
   shownError,
   value,
-  walkTokenOnly,
   walkToOverview,
+  walkTokenOnly,
 } from "#ui/lib/testing/setup";
 
 type Respond = () => Promise<Response>;
@@ -64,7 +64,7 @@ describe("finishing the setup", () => {
       expect(shownError()).toBe(error);
     });
     expect([
-      element("finish-btn", HTMLButtonElement).disabled,
+      element("#finish-btn", HTMLButtonElement).disabled,
       hidden("finish-btn-text"),
       hidden("finish-btn-loading"),
     ]).toStrictEqual([false, false, true]);

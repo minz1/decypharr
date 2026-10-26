@@ -1,21 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  XSS,
-  answerConfirm,
   bootBrowse,
   browseCalls,
-  element,
+  item,
   library,
   listing,
-  item,
   openFolder,
   rowControl,
   stubOpen,
-  toastText,
   waitForName,
-  waitForToast,
 } from "#ui/lib/testing/browse";
+import { answerConfirm } from "#ui/lib/testing/confirm";
+import { element } from "#ui/lib/testing/dom";
+import { toasts, waitForAnyToast } from "#ui/lib/testing/toast";
+import { XSS } from "#ui/lib/testing/xss";
 
 const twoPages = (): Response => listing([item("One", "a")], { total: 25, total_pages: 2 });
 
@@ -131,8 +130,8 @@ describe("an entry's actions", () => {
     await waitForName(XSS);
     rowControl(0, '[data-action="delete"]', HTMLButtonElement).click();
     const asked = await answerConfirm("ok");
-    await waitForToast();
-    expect({ asked, call: browseCalls(requests)[1], toasts: toastText() }).toStrictEqual({
+    await waitForAnyToast();
+    expect({ asked, call: browseCalls(requests)[1], toasts: toasts() }).toStrictEqual({
       asked: `Permanently delete the original item "${XSS}"?\n\nThis removes it from every library and virtual folder, and removes its placement from the provider. This cannot be undone from Decypharr.`,
       call: "DELETE /api/browse/torrents/abc",
       toasts: ["Item deleted successfully"],
@@ -144,11 +143,11 @@ describe("an entry's actions", () => {
     await waitForName("Show");
     rowControl(1, '[data-action="recheck"]', HTMLButtonElement).click();
     await vi.waitFor(() => {
-      expect(toastText()).toHaveLength(2);
+      expect(toasts()).toHaveLength(2);
     });
     expect({
       call: requests.filter((request) => request.method === "POST").map((request) => request.url),
-      toasts: toastText(),
+      toasts: toasts(),
       warning: document.querySelectorAll(".toast-container .alert-warning").length,
       badge: rowControl(1, '[data-field="health"] span', HTMLElement).textContent,
     }).toStrictEqual({
@@ -164,8 +163,8 @@ describe("an entry's actions", () => {
     await waitForName("Show");
     rowControl(1, '[data-action="recheck"]', HTMLButtonElement).click();
     await vi.waitFor(() => {
-      expect(toastText()).toHaveLength(2);
+      expect(toasts()).toHaveLength(2);
     });
-    expect(toastText()[1]).toBe("Recheck failed: checker offline");
+    expect(toasts()[1]).toBe("Recheck failed: checker offline");
   });
 });

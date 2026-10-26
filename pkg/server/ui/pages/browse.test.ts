@@ -1,19 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  XSS,
   bootBrowse,
   browseCalls,
-  element,
   library,
   listing,
   rowControl,
   rowText,
   rows,
-  toastText,
   waitForName,
-  waitForToast,
 } from "#ui/lib/testing/browse";
+import { element } from "#ui/lib/testing/dom";
+import { toasts, waitForAnyToast } from "#ui/lib/testing/toast";
+import { XSS } from "#ui/lib/testing/xss";
 
 const slowFolder =
   (first: Promise<Response>) =>
@@ -90,14 +89,14 @@ describe("a library folder", () => {
 describe("loading a folder", () => {
   it("reports a failed load as a toast", async () => {
     await bootBrowse(() => new Response("broken", { status: 500 }));
-    await waitForToast();
-    expect(toastText()).toStrictEqual(["Failed to load directory"]);
+    await waitForAnyToast();
+    expect(toasts()).toStrictEqual(["Failed to load directory"]);
   });
 
   it("reports a malformed response as a toast", async () => {
     await bootBrowse(() => new Response("{not json"));
-    await waitForToast();
-    expect(toastText()).toStrictEqual(["Failed to load directory"]);
+    await waitForAnyToast();
+    expect(toasts()).toStrictEqual(["Failed to load directory"]);
   });
 
   it("names a missing element in a toast", async () => {
@@ -106,8 +105,8 @@ describe("loading a folder", () => {
         document.querySelector("#fileBrowserList")?.remove();
       },
     });
-    await waitForToast();
-    expect(toastText()).toStrictEqual(["browse: missing #fileBrowserList"]);
+    await waitForAnyToast();
+    expect(toasts()).toStrictEqual(["browse: missing #fileBrowserList"]);
   });
 
   it("explains an empty virtual folder", async () => {

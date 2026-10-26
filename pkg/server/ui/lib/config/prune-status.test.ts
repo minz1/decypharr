@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { loadPruneStatus, renderPruneStatus, runPruneNow } from "#ui/lib/config/prune-status";
 import { loadFixture } from "#ui/lib/testing/fixture";
+import { labelledToasts } from "#ui/lib/testing/toast";
 
 type Route = Response | Error | (() => Response);
 
@@ -53,11 +54,6 @@ const run = async (routes: Readonly<Record<string, Route>>, answers: readonly bo
   });
   return { requests, confirms, button };
 };
-
-const toasts = (): string[] =>
-  [...document.querySelectorAll(".toast-container .alert")].map(
-    (toast) => `${[...toast.classList].find((name) => name.startsWith("alert-")) ?? ""} ${toast.textContent.trim()}`,
-  );
 
 const render = (value: unknown): Element => {
   loadFixture("config");
@@ -154,7 +150,7 @@ describe("a failed prune run", () => {
     ["malformed", new Response("{"), "alert-error Could not read the saved prune settings: response is not JSON"],
   ])("run now aborts when the config read fails: %s", async (_name, failure, toast) => {
     const { requests, button } = await run({ "GET /api/config": failure });
-    expect({ requests, toasts: toasts(), disabled: button.disabled }).toStrictEqual({
+    expect({ requests, toasts: labelledToasts(), disabled: button.disabled }).toStrictEqual({
       requests: ["GET /api/config"],
       toasts: [toast],
       disabled: false,
@@ -181,7 +177,7 @@ describe("a failed prune run", () => {
     ],
   ])("run now reports the server errors: %s", async (_name, answer, toast) => {
     const { button } = await run({ ...reportConfig, "POST /api/prune/run": answer });
-    expect({ toasts: toasts(), disabled: button.disabled }).toStrictEqual({ toasts: [toast], disabled: false });
+    expect({ toasts: labelledToasts(), disabled: button.disabled }).toStrictEqual({ toasts: [toast], disabled: false });
   });
 });
 
@@ -218,7 +214,7 @@ describe("the prune status text", () => {
     loadFixture("config");
     serve({ "GET /api/prune/status": json(500, { error: "status broke" }) });
     await loadPruneStatus(document);
-    expect(toasts()).toStrictEqual(["alert-error Could not load the prune status: status broke"]);
+    expect(labelledToasts()).toStrictEqual(["alert-error Could not load the prune status: status broke"]);
   });
 });
 

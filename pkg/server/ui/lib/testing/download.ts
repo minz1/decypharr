@@ -1,14 +1,11 @@
 import { expect, vi } from "vitest";
 
+import { stubFormAPI } from "#ui/lib/testing/api";
+import { element } from "#ui/lib/testing/dom";
 import { loadFixture } from "#ui/lib/testing/fixture";
+import { shownToasts } from "#ui/lib/testing/toast";
 
 type Respond = () => Promise<Response>;
-
-interface Request {
-  url: string;
-  method: string;
-  fields: [string, FormDataEntryValue][];
-}
 
 interface Boot {
   fixture?: string;
@@ -28,32 +25,19 @@ const prepareState = (boot: Boot): void => {
   boot.prepare?.();
 };
 
-const bootDownload = async (boot: Boot = {}): Promise<Request[]> => {
+const bootDownload = async (boot: Boot = {}): Promise<ReturnType<typeof stubFormAPI>> => {
   vi.resetModules();
   prepareState(boot);
-  const requests: Request[] = [];
-  vi.stubGlobal("fetch", async (url: string, init: RequestInit): Promise<Response> => {
-    const fields = init.body instanceof FormData ? [...init.body.entries()] : [];
-    requests.push({ url, method: init.method ?? "GET", fields });
-    return boot.respond?.() ?? Response.json([{ status: "queued" }]);
-  });
+  const requests = stubFormAPI(async () => boot.respond?.() ?? Response.json([{ status: "queued" }]));
   await import("#ui/pages/download");
   return requests;
 };
 
-const element = <Wanted extends HTMLElement>(id: string, type: abstract new () => Wanted): Wanted => {
-  const found = document.querySelector(`#${id}`);
-  if (!(found instanceof type)) {
-    throw new TypeError(`the download fixture has no #${id}`);
-  }
-  return found;
-};
+const textArea = (id: string): HTMLTextAreaElement => element(`#${id}`, HTMLTextAreaElement);
 
-const textArea = (id: string): HTMLTextAreaElement => element(id, HTMLTextAreaElement);
+const input = (id: string): HTMLInputElement => element(`#${id}`, HTMLInputElement);
 
-const input = (id: string): HTMLInputElement => element(id, HTMLInputElement);
-
-const select = (id: string): HTMLSelectElement => element(id, HTMLSelectElement);
+const select = (id: string): HTMLSelectElement => element(`#${id}`, HTMLSelectElement);
 
 const names = (files: FileList | null): string[] => [...(files ?? [])].map((file) => file.name);
 
@@ -72,7 +56,7 @@ const dropEvent = (files: readonly File[]): Event => {
 };
 
 const giveFiles = (id: string, files: readonly File[]): HTMLInputElement => {
-  const target = element(id, HTMLInputElement);
+  const target = element(`#${id}`, HTMLInputElement);
   let current = fileList(files);
   Object.defineProperty(target, "files", {
     get: () => current,
@@ -83,20 +67,16 @@ const giveFiles = (id: string, files: readonly File[]): HTMLInputElement => {
   return target;
 };
 
-const submitTwice = async (requests: Request[]): Promise<void> => {
-  element("submitDownload", HTMLButtonElement).click();
-  element("submitDownload", HTMLButtonElement).click();
+const submitTwice = async (requests: ReturnType<typeof stubFormAPI>): Promise<void> => {
+  element("#submitDownload", HTMLButtonElement).click();
+  element("#submitDownload", HTMLButtonElement).click();
   await vi.waitFor(() => {
     expect(document.querySelector("#submitDownload:not([disabled])")).not.toBeNull();
   });
   expect(requests.length).toBeLessThanOrEqual(1);
 };
 
-const toasts = (): string[] =>
-  [...document.querySelectorAll(".toast-container .alert")].map((toast) => {
-    const kind = [...toast.classList].find((name) => name.startsWith("alert-")) ?? "";
-    return `${kind}: ${toast.querySelector("[data-toast-message]")?.textContent ?? ""}`;
-  });
+const toasts = (): string[] => shownToasts().map((toast) => `alert-${toast.type}: ${toast.message}`);
 
 const waitForToasts = async (count: number): Promise<string[]> => {
   await vi.waitFor(() => {
@@ -108,7 +88,6 @@ const waitForToasts = async (count: number): Promise<string[]> => {
 export {
   bootDownload,
   dropEvent,
-  element,
   fileList,
   giveFiles,
   input,

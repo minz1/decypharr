@@ -1,24 +1,21 @@
 import { expect, inject, onTestFinished, vi } from "vitest";
 
+import { stubAPI } from "#ui/lib/testing/api";
+import { element } from "#ui/lib/testing/dom";
 import { loadFixture } from "#ui/lib/testing/fixture";
+import { labelledToasts } from "#ui/lib/testing/toast";
 
-interface Request {
-  url: string;
-  method: string;
-  body: string;
-}
-
-type Answer = Error | (() => Promise<Response> | Response);
+type Request = ReturnType<typeof stubAPI>[number];
 
 interface BootOptions {
   fixture?: string;
-  routes?: Readonly<Record<string, Answer>>;
+  routes?: Parameters<typeof stubAPI>[0];
   answers?: readonly boolean[];
   before?: () => void;
 }
 
 interface Page {
-  requests: Request[];
+  requests: ReturnType<typeof stubAPI>;
   confirms: string[];
 }
 
@@ -28,46 +25,27 @@ const HTTP_NOT_FOUND = 404;
 const respond = (status: number, body: unknown): Response =>
   typeof body === "string" ? new Response(body, { status }) : Response.json(body, { status });
 
-const routeKey = (method: string, url: string): string => `${method} ${url.replace(/^\/(?:decypharr\/)?/u, "")}`;
-
-const defaultRoutes = (fixture: string): Record<string, Answer> => ({
+const defaultRoutes = (fixture: string): Parameters<typeof stubAPI>[0] => ({
   "GET api/config": () => respond(HTTP_OK, inject("configResponses")[fixture]),
   "GET api/prune/status": () => respond(HTTP_OK, '{"mode":"report","candidates":null}'),
   "POST api/config": () => respond(HTTP_OK, { status: "success", restarted: false }),
 });
 
-const stubFetch = (routes: Readonly<Record<string, Answer>>): Request[] => {
-  const requests: Request[] = [];
-  vi.stubGlobal("fetch", async (url: string, init: RequestInit = {}): Promise<Response> => {
-    const method = init.method ?? "GET";
-    requests.push({ url, method, body: typeof init.body === "string" ? init.body : "" });
-    const route = routes[routeKey(method, url)];
-    if (route instanceof Error) {
-      throw route;
-    }
-    return route === undefined ? respond(HTTP_NOT_FOUND, "not found") : route();
-  });
-  return requests;
-};
-
-const find = <Wanted extends Element>(selector: string, type: abstract new () => Wanted): Wanted => {
-  const found = document.querySelector(selector);
-  if (!(found instanceof type)) {
-    throw new TypeError(`the settings page has no ${selector}`);
-  }
-  return found;
-};
+const stubFetch = (routes: Parameters<typeof stubAPI>[0]): Request[] =>
+  stubAPI(Object.fromEntries(Object.entries(routes).map(([key, answer]) => [key.replace(" ", " /"), answer])), () =>
+    respond(HTTP_NOT_FOUND, "not found"),
+  );
 
 const answerConfirms = (answers: readonly boolean[]): string[] => {
   const confirms: string[] = [];
-  const dialog = find("#confirmDialog", HTMLDialogElement);
+  const dialog = element("#confirmDialog", HTMLDialogElement);
   const observer = new MutationObserver(() => {
     if (!dialog.open) {
       return;
     }
-    confirms.push(find("#confirmDialogMessage", HTMLElement).textContent);
+    confirms.push(element("#confirmDialogMessage", HTMLElement).textContent);
     const answer = (answers[confirms.length - 1] ?? false) ? "ok" : "cancel";
-    find(`#confirmDialog [data-answer="${answer}"]`, HTMLButtonElement).click();
+    element(`#confirmDialog [data-answer="${answer}"]`, HTMLButtonElement).click();
   });
   observer.observe(dialog, { attributeFilter: ["open"] });
   onTestFinished(() => {
@@ -93,20 +71,15 @@ const settingsLoaded = async (): Promise<void> => {
   });
 };
 
-const toastTexts = (): string[] =>
-  [...document.querySelectorAll(".toast-container .alert")].map(
-    (toast) => `${[...toast.classList].find((name) => name.startsWith("alert-")) ?? ""} ${toast.textContent.trim()}`,
-  );
-
 const waitForToast = async (text: string): Promise<void> => {
   await vi.waitFor(() => {
-    expect(toastTexts()).toContain(text);
+    expect(labelledToasts()).toContain(text);
   });
 };
 
 const shownToasts = async (text: string): Promise<string[]> => {
   await waitForToast(text);
-  return toastTexts();
+  return labelledToasts();
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -118,14 +91,14 @@ const lastItem = (value: unknown): unknown => (Array.isArray(value) ? value.at(-
 
 const hasKey = (value: unknown, key: string): boolean => isRecord(value) && Object.hasOwn(value, key);
 
-const isHidden = (selector: string): boolean => find(selector, HTMLElement).classList.contains("hidden");
+const isHidden = (selector: string): boolean => element(selector, HTMLElement).classList.contains("hidden");
 
 const click = (selector: string): void => {
-  find(selector, HTMLElement).click();
+  element(selector, HTMLElement).click();
 };
 
 const fill = (selector: string, value: string): void => {
-  const field = find(selector, HTMLElement);
+  const field = element(selector, HTMLElement);
   if (field instanceof HTMLInputElement || field instanceof HTMLSelectElement || field instanceof HTMLTextAreaElement) {
     field.value = value;
     field.dispatchEvent(new Event("input", { bubbles: true }));
@@ -134,7 +107,7 @@ const fill = (selector: string, value: string): void => {
 };
 
 const submitSettings = (): void => {
-  find("#configForm", HTMLFormElement).dispatchEvent(new Event("submit", { cancelable: true }));
+  element("#configForm", HTMLFormElement).dispatchEvent(new Event("submit", { cancelable: true }));
 };
 
 const posts = (requests: readonly Request[], path: string): Request[] =>
@@ -156,7 +129,6 @@ export {
   bootSettings,
   click,
   fill,
-  find,
   hasKey,
   isHidden,
   lastItem,
@@ -167,6 +139,5 @@ export {
   savedBody,
   settingsLoaded,
   submitSettings,
-  toastTexts,
   waitForToast,
 };

@@ -5,7 +5,6 @@ import {
   bootSettings,
   click,
   fill,
-  find,
   isHidden,
   lastItem,
   member,
@@ -16,6 +15,7 @@ import {
   submitSettings,
   waitForToast,
 } from "#ui/lib/testing/config";
+import { element } from "#ui/lib/testing/dom";
 
 type Page = Awaited<ReturnType<typeof bootSettings>>;
 
@@ -33,7 +33,7 @@ const conditionRows = (): string[][] =>
 
 const exists = (selector: string): boolean => document.querySelector(selector) !== null;
 
-const status = (): string => find("#virtualFolderEditorStatus", HTMLElement).textContent;
+const status = (): string => element("#virtualFolderEditorStatus", HTMLElement).textContent;
 
 const loaded = async (options?: Parameters<typeof bootSettings>[0]): Promise<Page> => {
   const page = await bootSettings(options);
@@ -82,10 +82,10 @@ describe("debrid cards", () => {
     await loaded();
     click("#addDebridBtn");
     fill('[name="debrid[1].name"]', "torbox-main");
-    find('[name="debrid[1].name"]', HTMLInputElement).dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    element('[name="debrid[1].name"]', HTMLInputElement).dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
     expect({
       titles: texts(".debrid-config [data-card-title]"),
-      labelFor: find('.debrid-config[data-index="1"] label', HTMLLabelElement).htmlFor,
+      labelFor: element('.debrid-config[data-index="1"] label', HTMLLabelElement).htmlFor,
       options: values('[name="arr[0].selected_debrid"] option'),
     }).toStrictEqual({
       titles: ["Debrid #1", "Debrid #2"],
@@ -133,12 +133,12 @@ describe("arr and usenet cards", () => {
       expect({ card: exists(".arr-config") }).toStrictEqual({ card: true });
     });
     expect({
-      border: find(".arr-config", HTMLElement).classList.contains("border-info"),
+      border: element(".arr-config", HTMLElement).classList.contains("border-info"),
       badge: exists(".arr-config [data-auto-badge]"),
       remove: exists('.arr-config [data-action="remove-arr"]'),
-      readonly: find('[name="arr[0].name"]', HTMLInputElement).readOnly,
-      toggle: find(".arr-config .password-toggle-btn", HTMLButtonElement).disabled,
-      uncached: find('[name="arr[0].download_uncached"]', HTMLSelectElement).value,
+      readonly: element('[name="arr[0].name"]', HTMLInputElement).readOnly,
+      toggle: element(".arr-config .password-toggle-btn", HTMLButtonElement).disabled,
+      uncached: element('[name="arr[0].download_uncached"]', HTMLSelectElement).value,
     }).toStrictEqual({ border: true, badge: true, remove: false, readonly: true, toggle: true, uncached: "false" });
   });
 });
@@ -147,13 +147,15 @@ describe("adding virtual folders", () => {
   it("adds a folder with one blank condition and names it as it is typed", async () => {
     await loaded();
     click("#addVirtualFolderBtn");
-    const before = [find("[data-vf-title]", HTMLElement).textContent, status(), exists("[data-vf-empty-state]")];
+    const before = [element("[data-vf-title]", HTMLElement).textContent, status(), exists("[data-vf-empty-state]")];
     fill("[data-vf-name]", "4K Movies");
-    expect({ before, after: find("[data-vf-title]", HTMLElement).textContent, rows: conditionRows() }).toStrictEqual({
-      before: ["New virtual folder 1", "Added New virtual folder 1.", false],
-      after: "4K Movies",
-      rows: [["0", "entry_name"]],
-    });
+    expect({ before, after: element("[data-vf-title]", HTMLElement).textContent, rows: conditionRows() }).toStrictEqual(
+      {
+        before: ["New virtual folder 1", "Added New virtual folder 1.", false],
+        after: "4K Movies",
+        rows: [["0", "entry_name"]],
+      },
+    );
   });
 
   it("fills the blank condition with a sample, then adds one after it", async () => {
@@ -179,7 +181,7 @@ describe("editing virtual folder conditions", () => {
     fill("[data-vf-value]", "keep me");
     fill("[data-vf-field]", "file_count");
     const changed = [
-      find("[data-vf-value]", HTMLInputElement).type,
+      element("[data-vf-value]", HTMLInputElement).type,
       values("[data-vf-value]"),
       values("[data-vf-operator]"),
     ];

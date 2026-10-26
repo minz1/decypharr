@@ -1,11 +1,10 @@
 import { expect, onTestFinished, vi } from "vitest";
 
-import { settle, stubAPI } from "#ui/lib/testing/api";
+import { stubAPI } from "#ui/lib/testing/api";
+import { settle } from "#ui/lib/testing/dom";
 import { loadFixture } from "#ui/lib/testing/fixture";
 
 type Routes = Parameters<typeof stubAPI>[0];
-
-const XSS = "<img src=x onerror=alert(1)>";
 
 const job = (id: string, status: string, fields: Record<string, unknown> = {}): Record<string, unknown> => ({
   id,
@@ -63,4 +62,4 @@ const bootReacquire = async (routes: Routes = {}, fixture = "reacquire"): Promis
   return requests;
 };
 
-export { SUMMARY, XSS, binding, bootReacquire, job };
+export { SUMMARY, binding, bootReacquire, job };

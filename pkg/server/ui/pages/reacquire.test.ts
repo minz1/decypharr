@@ -1,8 +1,11 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 
-import { element, stubAPI, toasts } from "#ui/lib/testing/api";
+import { stubAPI } from "#ui/lib/testing/api";
+import { element } from "#ui/lib/testing/dom";
 import { loadFixture } from "#ui/lib/testing/fixture";
-import { XSS, bootReacquire, job } from "#ui/lib/testing/reacquire";
+import { bootReacquire, job } from "#ui/lib/testing/reacquire";
+import { toasts } from "#ui/lib/testing/toast";
+import { XSS } from "#ui/lib/testing/xss";
 
 const text = (selector: string): string => element(selector, HTMLElement).textContent.trim();
 

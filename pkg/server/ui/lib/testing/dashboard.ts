@@ -1,6 +1,8 @@
 import { expect, onTestFinished, vi } from "vitest";
 
+import { element } from "#ui/lib/testing/dom";
 import { loadFixture } from "#ui/lib/testing/fixture";
+import { XSS } from "#ui/lib/testing/xss";
 
 interface Request {
   url: string;
@@ -14,7 +16,6 @@ interface BootOptions {
   prepare?: () => void;
 }
 
-const XSS = "<img src=x onerror=alert(1)>";
 const GIB = 1_073_741_824;
 const HALF = 0.5;
 const SPEED = 2048;
@@ -54,23 +55,6 @@ const bootDashboard = async (respond: Responder, options: BootOptions = {}): Pro
   return requests;
 };
 
-const toastText = (): string[] =>
-  [...document.querySelectorAll(".toast-container .alert")].map((toast) => toast.textContent.trim());
-
-const waitForToast = async (): Promise<void> => {
-  await vi.waitFor(() => {
-    expect(toastText().length).toBeGreaterThan(0);
-  });
-};
-
-const element = <Wanted extends Element>(selector: string, type: abstract new () => Wanted): Wanted => {
-  const found = document.querySelector(selector);
-  if (!(found instanceof type)) {
-    throw new TypeError(`the fixture has no ${selector}`);
-  }
-  return found;
-};
-
 const rows = (): HTMLTableRowElement[] => [...document.querySelectorAll<HTMLTableRowElement>("#torrentsList tr")];
 
 const rowControl = <Wanted extends Element>(
@@ -102,43 +86,7 @@ const change = (selector: string, value: string): void => {
   field.dispatchEvent(new Event(field instanceof HTMLInputElement ? "input" : "change", { bubbles: true }));
 };
 
-const check = (box: HTMLInputElement): void => {
-  box.checked = true;
-  box.dispatchEvent(new Event("change", { bubbles: true }));
-};
-
-const confirmText = async (): Promise<string> => {
-  const dialog = element("#confirmDialog", HTMLDialogElement);
-  await vi.waitFor(() => {
-    expect(dialog.open).toBe(true);
-  });
-  return element("#confirmDialogMessage", HTMLElement).textContent;
-};
-
-const answerConfirm = async (answer: "ok" | "cancel"): Promise<string> => {
-  const text = await confirmText();
-  element(`#confirmDialog [data-answer="${answer}"]`, HTMLButtonElement).click();
-  return text;
-};
-
 const lastURL = (requests: readonly Request[]): string => requests.at(-1)?.url ?? "";
 
 export type { Request };
-export {
-  XSS,
-  answerConfirm,
-  bootDashboard,
-  cellText,
-  change,
-  check,
-  element,
-  lastURL,
-  page,
-  rowControl,
-  rows,
-  toastText,
-  torrent,
-  twoTorrents,
-  waitForRows,
-  waitForToast,
-};
+export { bootDashboard, cellText, change, lastURL, page, rowControl, rows, torrent, twoTorrents, waitForRows };

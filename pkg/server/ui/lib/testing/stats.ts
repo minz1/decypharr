@@ -1,6 +1,8 @@
 import { expect, onTestFinished, vi } from "vitest";
 
+import { element } from "#ui/lib/testing/dom";
 import { loadFixture } from "#ui/lib/testing/fixture";
+import { XSS } from "#ui/lib/testing/xss";
 
 interface Sent {
   url: string;
@@ -11,12 +13,10 @@ interface Sent {
 
 type Routes = Record<string, () => Response | Promise<Response>>;
 
-const XSS = "<img src=x onerror=alert(1)>";
 const MS_PER_SECOND = 1000;
 const STREAM_AGE_SECONDS = 5;
 const OK = 200;
 const NOT_FOUND = 404;
-const SETTLE_MS = 50;
 
 const debridEntry = {
   profile: { name: XSS, username: XSS, points: 10, type: "premium", expiration: "2027-01-31T00:00:00Z" },
@@ -122,57 +122,22 @@ const bootStats = async (routes: Routes, fixture = "stats", prepare?: () => void
   return sent;
 };
 
-const element = (selector: string): HTMLElement => {
-  const found = document.querySelector(selector);
-  if (!(found instanceof HTMLElement)) {
-    throw new TypeError(`no ${selector}`);
-  }
-  return found;
-};
-
-const textOf = (selector: string): string => element(selector).textContent.replaceAll(/\s+/gu, " ").trim();
-
-const toasts = (): string[] =>
-  [...document.querySelectorAll(".toast-container .alert")].map((toast) =>
-    toast.textContent.replaceAll(/\s+/gu, " ").trim(),
-  );
+const textOf = (selector: string): string => element(selector, HTMLElement).textContent.replaceAll(/\s+/gu, " ").trim();
 
 const loaded = async (): Promise<void> => {
   await vi.waitFor(
     () => {
-      expect(element("#stats-content").style.display).toBe("block");
+      expect(element("#stats-content", HTMLElement).style.display).toBe("block");
     },
     { interval: 1 },
   );
 };
 
 const click = (selector: string): void => {
-  element(selector).click();
-};
-
-const settle = async (): Promise<void> => {
-  const { promise, resolve } = Promise.withResolvers<undefined>();
-  setTimeout(resolve, SETTLE_MS);
-  await promise;
+  element(selector, HTMLElement).click();
 };
 
 const pageHost = (): string => (globalThis.location.hostname === "" ? "SERVER_IP" : globalThis.location.hostname);
 
 export type { Routes, Sent };
-export {
-  XSS,
-  bootStats,
-  click,
-  debridEntry,
-  dfsMount,
-  element,
-  json,
-  loaded,
-  pageHost,
-  settle,
-  stats,
-  statsRoute,
-  text,
-  textOf,
-  toasts,
-};
+export { bootStats, click, debridEntry, dfsMount, json, loaded, pageHost, stats, statsRoute, text, textOf };
