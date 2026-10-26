@@ -10,7 +10,7 @@ import {
   twoTorrents,
   waitForRows,
   waitForToast,
-} from "#ui/lib/dashboard/testing";
+} from "#ui/lib/testing/dashboard";
 
 const hangs = async (): Promise<Response> => Promise.withResolvers<Response>().promise;
 

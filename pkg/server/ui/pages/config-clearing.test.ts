@@ -1,7 +1,7 @@
 import { describe, expect, inject, it } from "vitest";
 
 import { asArray, asRecord } from "#ui/lib/common/json";
-import { bootSettings, fill, respond, savedBody, settingsLoaded, submitSettings } from "#ui/lib/testing/config-page";
+import { bootSettings, fill, respond, savedBody, settingsLoaded, submitSettings } from "#ui/lib/testing/config";
 
 const firstItem = (config: Record<string, unknown>, list: string): Record<string, unknown> =>
   asRecord(asArray(config[list], list)[0], `${list}[0]`);

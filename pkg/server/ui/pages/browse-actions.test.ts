@@ -15,7 +15,7 @@ import {
   toastText,
   waitForName,
   waitForToast,
-} from "#ui/lib/browse/testing";
+} from "#ui/lib/testing/browse";
 
 const twoPages = (): Response => listing([item("One", "a")], { total: 25, total_pages: 2 });
 

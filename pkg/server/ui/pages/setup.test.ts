@@ -14,7 +14,7 @@ import {
   shownError,
   value,
   visibleSteps,
-} from "#ui/lib/testing/setup-page";
+} from "#ui/lib/testing/setup";
 
 type Respond = () => Promise<Response>;
 

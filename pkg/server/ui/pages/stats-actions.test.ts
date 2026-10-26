@@ -13,7 +13,7 @@ import {
   text,
   textOf,
   toasts,
-} from "#ui/lib/stats/testing";
+} from "#ui/lib/testing/stats";
 
 const cleanupResult = { status: "success", cache: { cleanup_freed_bytes: 2048, cleanup_removed_items: 3 } };
 const purgeResult = { status: "success", cache: { purge_freed_bytes: 1_048_576, purge_removed_items: 7 } };

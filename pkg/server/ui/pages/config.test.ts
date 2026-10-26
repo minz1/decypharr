@@ -15,7 +15,7 @@ import {
   submitSettings,
   toastTexts,
   waitForToast,
-} from "#ui/lib/testing/config-page";
+} from "#ui/lib/testing/config";
 import { loadFixture } from "#ui/lib/testing/fixture";
 import { legacyNoEditSave } from "#ui/lib/testing/legacy-save";
 import { roundTripMismatches } from "#ui/lib/testing/round-trip";

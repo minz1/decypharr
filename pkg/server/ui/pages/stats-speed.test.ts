@@ -11,7 +11,7 @@ import {
   statsRoute,
   text,
   textOf,
-} from "#ui/lib/stats/testing";
+} from "#ui/lib/testing/stats";
 
 const nntpResult = { provider: "news:563/kim", protocol: "nntp", latency_ms: 42, tested_at: "2026-10-26T07:00:00Z" };
 const debridResult = {

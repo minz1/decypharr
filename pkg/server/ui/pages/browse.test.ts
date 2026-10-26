@@ -13,7 +13,7 @@ import {
   toastText,
   waitForName,
   waitForToast,
-} from "#ui/lib/browse/testing";
+} from "#ui/lib/testing/browse";
 
 const slowFolder =
   (first: Promise<Response>) =>

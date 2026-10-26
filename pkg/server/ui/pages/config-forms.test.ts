@@ -15,7 +15,7 @@ import {
   settingsLoaded,
   submitSettings,
   waitForToast,
-} from "#ui/lib/testing/config-page";
+} from "#ui/lib/testing/config";
 
 type Page = Awaited<ReturnType<typeof bootSettings>>;
 

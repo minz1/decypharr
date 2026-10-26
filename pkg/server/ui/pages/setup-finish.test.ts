@@ -12,7 +12,7 @@ import {
   value,
   walkTokenOnly,
   walkToOverview,
-} from "#ui/lib/testing/setup-page";
+} from "#ui/lib/testing/setup";
 
 type Respond = () => Promise<Response>;
 

@@ -11,7 +11,7 @@ import {
   settingsLoaded,
   shownToasts,
   waitForToast,
-} from "#ui/lib/testing/config-page";
+} from "#ui/lib/testing/config";
 
 const input = (id: string): HTMLInputElement => find(`#${id}`, HTMLInputElement);
 

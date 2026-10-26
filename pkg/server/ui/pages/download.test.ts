@@ -11,7 +11,7 @@ import {
   submitTwice,
   textArea,
   waitForToasts,
-} from "#ui/lib/testing/download-page";
+} from "#ui/lib/testing/download";
 
 const HIGHLIGHT = ["border-primary", "border-2", "border-dashed", "bg-primary/5"];
 

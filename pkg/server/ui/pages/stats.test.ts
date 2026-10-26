@@ -11,7 +11,7 @@ import {
   textOf,
   toasts,
   XSS,
-} from "#ui/lib/stats/testing";
+} from "#ui/lib/testing/stats";
 
 describe("loading the stats page", () => {
   it("fetches the stats once and shows them", async () => {

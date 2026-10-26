@@ -15,7 +15,7 @@ import {
   twoTorrents,
   waitForRows,
   waitForToast,
-} from "#ui/lib/dashboard/testing";
+} from "#ui/lib/testing/dashboard";
 
 const threePages = (): Response => page([torrent("aaaaaaaaaaaa", "One"), torrent("bbbbbbbbbbbb", "Two")], 3);
 
