@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import type { TestProject } from "vitest/node";
@@ -10,14 +10,27 @@ const fixturesDir = (): string => {
   return fromEnv ?? path.resolve("pkg/server/testdata/rendered");
 };
 
+const fixturesMissing = (): Error => {
+  const missing = new Error("UI fixtures missing: run pnpm fixtures");
+  // Vitest 5.0.5 fails to source-map a global setup's stack and prints that failure instead of the message.
+  missing.stack = missing.message;
+  return missing;
+};
+
+const readFixtureJSON = (name: string): unknown => {
+  const file = path.join(fixturesDir(), name);
+  if (!existsSync(file)) {
+    throw fixturesMissing();
+  }
+  const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
+  return parsed;
+};
+
 const provideFixtures = (provide: TestProject["provide"]): void => {
   const dir = fixturesDir();
   const names = existsSync(dir) ? readdirSync(dir).filter((name) => name.endsWith(".html")) : [];
   if (names.length === 0) {
-    const missing = new Error("UI fixtures missing: run pnpm fixtures");
-    // Vitest 5.0.5 fails to source-map a global setup's stack and prints that failure instead of the message.
-    missing.stack = missing.message;
-    throw missing;
+    throw fixturesMissing();
   }
   provide(
     "fixtures",
@@ -51,9 +64,29 @@ const provideIcons = (provide: TestProject["provide"]): void => {
   provide("iconCSS", readFileSync("node_modules/bootstrap-icons/font/bootstrap-icons.css", "utf8"));
 };
 
+const provideConfigSample = (provide: TestProject["provide"]): void => {
+  provide("configSample", readFixtureJSON("config-sample.json"));
+  provide("configExclusions", readFixtureJSON("config-exclusions.json"));
+  provide("configResponses", {
+    config: readFixtureJSON("config.json"),
+    "config@base": readFixtureJSON("config@base.json"),
+  });
+};
+
+const provideLegacyConfig = (provide: TestProject["provide"]): void => {
+  const dir = path.resolve("node_modules/.cache/decypharr");
+  mkdirSync(dir, { recursive: true });
+  const module = path.join(dir, "legacy-config.mjs");
+  const source = readFileSync("pkg/server/assets/js/config.js", "utf8");
+  writeFileSync(module, `${source}\nexport { ConfigManager };\n`);
+  provide("legacyConfigModule", module);
+};
+
 const setup: GlobalSetup = ({ provide }) => {
   provideFixtures(provide);
   provideIcons(provide);
+  provideConfigSample(provide);
+  provideLegacyConfig(provide);
 };
 
 export { setup };

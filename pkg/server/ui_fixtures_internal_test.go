@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -27,8 +28,9 @@ type fixturePage struct {
 	handle func(s *Server) http.HandlerFunc
 }
 
-// renderFixtures renders every page, in the store states that reach it, under urlBase.
-func renderFixtures(t *testing.T, urlBase string) map[string]string {
+// renderFixtures renders every page, in the store states that reach it, under urlBase, and the settings page's
+// GET /api/config response for the last state.
+func renderFixtures(t *testing.T, urlBase string) (map[string]string, []byte) {
 	t.Helper()
 	store := managertest.Store(t, func(cfg *config.Config) { cfg.URLBase = urlBase })
 	s := &Server{config: store, urlBase: urlBase, logger: zerolog.New(failWriter{t}).Level(zerolog.WarnLevel)}
@@ -64,18 +66,37 @@ func renderFixtures(t *testing.T, urlBase string) map[string]string {
 	} {
 		render(page)
 	}
+	cfg := *store.Get()
+	response, err := json.Marshal(configResponse(cfg, cfg.Arrs))
+	if err != nil {
+		t.Fatal(err)
+	}
 	update(t, store, func(cfg *config.Config) error {
 		cfg.Debrids = append(cfg.Debrids, config.Debrid{Provider: "torbox", Name: "torbox", APIKey: "key"})
 		cfg.AlwaysRmTrackerUrls = true
 		return nil
 	})
 	render(fixturePage{"download-options", func(s *Server) http.HandlerFunc { return s.DownloadHandler }})
-	return pages
+	return pages, response
 }
 
 func update(t *testing.T, store *config.Store, edit func(*config.Config) error) {
 	t.Helper()
 	if _, err := store.Update(edit); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// writeFixture writes body as name in dir, if dir is set.
+func writeFixture(t *testing.T, dir, name string, body []byte) {
+	t.Helper()
+	if dir == "" {
+		return
+	}
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), body, 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -88,16 +109,13 @@ func TestRenderUIFixtures(t *testing.T) {
 		t.Fatalf("UI_FIXTURES_DIR must be absolute, got %q", dir)
 	}
 	for suffix, urlBase := range map[string]string{"": "/", "@base": "/decypharr/"} {
-		for name, html := range renderFixtures(t, urlBase) {
-			if dir == "" {
-				continue
-			}
-			if err := os.MkdirAll(dir, 0o750); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(dir, name+suffix+".html"), []byte(html), 0o600); err != nil {
-				t.Fatal(err)
-			}
+		pages, response := renderFixtures(t, urlBase)
+		for name, html := range pages {
+			writeFixture(t, dir, name+suffix+".html", []byte(html))
 		}
+		writeFixture(t, dir, "config"+suffix+".json", response)
+	}
+	for name, body := range configSampleFiles(t) {
+		writeFixture(t, dir, name, body)
 	}
 }

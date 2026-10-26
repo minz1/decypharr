@@ -5,6 +5,10 @@ declare module "vitest" {
     fixtures: Record<string, string>;
     iconClasses: string[];
     iconCSS: string;
+    configSample: unknown;
+    configExclusions: unknown;
+    configResponses: Record<string, unknown>;
+    legacyConfigModule: string;
   }
 }
 
