@@ -25,7 +25,8 @@ func repoFiles(t *testing.T, dir string, keep func(rel string) bool) []string {
 		}
 		rel = filepath.ToSlash(rel)
 		if d.IsDir() {
-			if d.Name() == "node_modules" || rel == "pkg/server/assets/build" {
+			hidden := rel != "." && strings.HasPrefix(d.Name(), ".")
+			if hidden || d.Name() == "node_modules" || rel == "docs" || rel == "pkg/server/assets/build" {
 				return filepath.SkipDir
 			}
 			return nil
@@ -85,22 +86,39 @@ func TestNoSuppressions(t *testing.T) {
 		"oxlint-disable", "eslint-disable", "@ts-ignore", "@ts-expect-error", "@ts-nocheck",
 		"djlint:off", "ignorePatterns",
 	}
+	// Only in the root configs: CLI flags and keys that skip files or rules.
+	configBanned := []string{"--ignore", "--allow", " -A ", "--disable", `"ignore"`, `"exclude"`}
 	files := suppressionScope(t)
 	if len(files) == 0 {
 		t.Fatal("scanned no files")
 	}
 	for _, rel := range files {
-		reportBanned(t, rel, banned)
+		if strings.Contains(rel, "/") {
+			reportBanned(t, rel, banned)
+		} else {
+			reportBanned(t, rel, slices.Concat(banned, configBanned))
+		}
+	}
+	for _, ignoreFile := range []string{".eslintignore", ".oxlintignore", ".prettierignore", ".oxfmtignore"} {
+		if _, err := os.Stat(filepath.Join(repoRoot, ignoreFile)); err == nil {
+			t.Errorf("%s: ignore files are banned; fix the finding, or turn the rule off in config with a reason",
+				ignoreFile)
+		}
 	}
 }
 
-// hasInlineScript reports a <script> that carries code: no src, and not a data block.
+// hasInlineScript reports a <script> that carries code (no src, not a data block), an on* handler or a javascript: URL.
 func hasInlineScript(html string) bool {
-	tag := regexp.MustCompile(`(?is)<script\b([^>]*)>(.*?)</script>`)
-	data := regexp.MustCompile(`(?i)\btype\s*=\s*["']?(application/json|speculationrules)`)
+	handler := regexp.MustCompile(`(?is)<[a-z][^>]*\s(on[a-z]+\s*=|href\s*=\s*["']?\s*javascript:)`)
+	if handler.MatchString(html) {
+		return true
+	}
+	tag := regexp.MustCompile(`(?is)<script\b([^>]*)>(.*?)</script\s*>`)
+	src := regexp.MustCompile(`(?i)(?:^|\s)src\s*=`)
+	data := regexp.MustCompile(`(?i)(?:^|\s)type\s*=\s*["']?(application/json|speculationrules)\b`)
 	for _, m := range tag.FindAllStringSubmatch(html, -1) {
 		attrs, body := m[1], m[2]
-		if strings.Contains(strings.ToLower(attrs), "src=") || data.MatchString(attrs) {
+		if src.MatchString(attrs) || data.MatchString(attrs) {
 			continue
 		}
 		if strings.TrimSpace(body) != "" {
@@ -110,12 +128,35 @@ func hasInlineScript(html string) bool {
 	return false
 }
 
+func TestHasInlineScript(t *testing.T) {
+	t.Parallel()
+	for html, want := range map[string]bool{
+		`<script>x()</script>`:                      true,
+		`<SCRIPT>x()</SCRIPT>`:                      true,
+		"<script\n  type=\"module\"\n>x()</script>": true,
+		`<script>x()</script >`:                     true,
+		`<script data-src="a">x()</script>`:         true,
+		`<script type="text/javascript" data-type="application/json">x()</script>`: true,
+		`<button class="btn" onclick="x()">Go</button>`:                            true,
+		`<a href="javascript:x()">Go</a>`:                                          true,
+		`<script src="a.js"></script>`:                                             false,
+		`<script type="application/json">{"a":1}</script>`:                         false,
+		`<script type="speculationrules">{}</script>`:                              false,
+		`<script>  </script>`:                                                      false,
+		`<div data-onclick="x">someone = 1</div>`:                                  false,
+	} {
+		if got := hasInlineScript(html); got != want {
+			t.Errorf("hasInlineScript(%q) = %v, want %v", html, got, want)
+		}
+	}
+}
+
 func TestLegacyJSRatchet(t *testing.T) {
 	t.Parallel()
 	isJS := func(rel string) bool {
 		return slices.Contains([]string{".js", ".mjs", ".cjs"}, filepath.Ext(rel))
 	}
-	found := slices.Concat(repoFiles(t, "pkg/server", isJS), repoFiles(t, "scripts", isJS))
+	found := repoFiles(t, ".", isJS)
 	for _, rel := range repoFiles(t, "pkg/server/templates", func(rel string) bool { return filepath.Ext(rel) == ".html" }) {
 		src, err := os.ReadFile(filepath.Join(repoRoot, rel))
 		if err != nil {
