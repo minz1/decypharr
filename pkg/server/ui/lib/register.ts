@@ -1,3 +1,4 @@
+import { setButtonLoading } from "#ui/lib/common/button";
 import { fetcher } from "#ui/lib/common/http";
 import { createToast } from "#ui/lib/common/toast";
 import { joinURL } from "#ui/lib/common/url";
@@ -13,6 +14,7 @@ interface RegisterElements {
   username: HTMLInputElement;
   password: HTMLInputElement;
   confirmPassword: HTMLInputElement;
+  save: HTMLButtonElement;
   skip: HTMLButtonElement;
 }
 
@@ -61,19 +63,31 @@ const skipAuth = async (deps: RegisterDeps): Promise<void> => {
   }
 };
 
+const submitRegistration = async (elements: RegisterElements, deps: RegisterDeps): Promise<void> => {
+  if (elements.save.disabled) {
+    return;
+  }
+  const registration = {
+    username: elements.username.value,
+    password: elements.password.value,
+    confirmPassword: elements.confirmPassword.value,
+  };
+  if (registration.password !== registration.confirmPassword) {
+    createToast("Passwords do not match!", "error");
+    return;
+  }
+  setButtonLoading(elements.save, true);
+  try {
+    await register(registration, deps);
+  } finally {
+    setButtonLoading(elements.save, false);
+  }
+};
+
 const bindRegisterPage = (elements: RegisterElements, deps: RegisterDeps): void => {
   elements.form.addEventListener("submit", (event) => {
     event.preventDefault();
-    const registration = {
-      username: elements.username.value,
-      password: elements.password.value,
-      confirmPassword: elements.confirmPassword.value,
-    };
-    if (registration.password !== registration.confirmPassword) {
-      createToast("Passwords do not match!", "error");
-      return;
-    }
-    void register(registration, deps);
+    void submitRegistration(elements, deps);
   });
   elements.skip.addEventListener("click", () => {
     void skipAuth(deps);

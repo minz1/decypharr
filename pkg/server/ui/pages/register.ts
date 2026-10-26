@@ -9,6 +9,7 @@ bootPage("register", () => {
       username: byId("username", HTMLInputElement),
       password: byId("password", HTMLInputElement),
       confirmPassword: byId("confirmPassword", HTMLInputElement),
+      save: byId("saveAuthBtn", HTMLButtonElement),
       skip: byId("skipAuthBtn", HTMLButtonElement),
     },
     {

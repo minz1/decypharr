@@ -105,6 +105,24 @@ describe("registering", () => {
   });
 });
 
+describe("a registration in flight", () => {
+  it("disables Save so a second submit posts nothing", async () => {
+    const pending = Promise.withResolvers<Response>();
+    const booted = await bootRegister("register", async () => pending.promise);
+    fill("admin", "secret", "secret");
+    submit();
+    submit();
+    const save = document.querySelector<HTMLButtonElement>("#saveAuthBtn");
+    expect({ requests: booted.requests.length, disabled: save?.disabled }).toStrictEqual({
+      requests: 1,
+      disabled: true,
+    });
+    pending.resolve(new Response("taken", { status: 400 }));
+    await waitForToast();
+    expect({ disabled: save?.disabled, label: save?.textContent }).toStrictEqual({ disabled: false, label: "Save" });
+  });
+});
+
 describe("a registration that does not go through", () => {
   it("blocks a mismatched confirmation without posting", async () => {
     const booted = await bootRegister("register", reply("", 200));
