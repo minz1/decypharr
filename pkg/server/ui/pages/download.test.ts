@@ -124,6 +124,12 @@ describe("the server's answer", () => {
 });
 
 describe("opening the page", () => {
+  it("keeps tracker removal checked and locked when the config forces it", async () => {
+    await bootDownload({ fixture: "download-options", stored: { rmTrackerUrls: "false" } });
+    const box = input("rmTrackerUrls");
+    expect([box.checked, box.disabled]).toStrictEqual([true, true]);
+  });
+
   it("shows the configured download folder when none is saved", async () => {
     await bootDownload({ fixture: "download@base" });
     expect(input("downloadFolder").value).toBe("/downloads");

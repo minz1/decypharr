@@ -162,10 +162,10 @@ func (s *Server) DownloadHandler(w http.ResponseWriter, _ *http.Request) {
 		debrids = append(debrids, d.Name)
 	}
 	s.renderPage(w, "layout", "download", "Download", map[string]any{
-		"Debrids":                 debrids,
-		"HasMultiDebrid":          len(debrids) > 1,
-		"DownloadFolder":          cfg.DownloadFolder,
-		"alwaysRemoveTrackerURLS": cfg.AlwaysRmTrackerUrls,
+		"Debrids":             debrids,
+		"HasMultiDebrid":      len(debrids) > 1,
+		"DownloadFolder":      cfg.DownloadFolder,
+		"AlwaysRmTrackerUrls": cfg.AlwaysRmTrackerUrls,
 	})
 }
 

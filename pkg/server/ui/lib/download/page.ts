@@ -46,7 +46,9 @@ const applyOptions = (elements: DownloadElements, defaultFolder: string): void =
   elements.arr.value = options.category;
   elements.downloadAction.value = options.action;
   elements.downloadUncached.checked = options.uncached;
-  elements.rmTrackerUrls.checked = options.rmTrackerUrls;
+  if (!elements.rmTrackerUrls.disabled) {
+    elements.rmTrackerUrls.checked = options.rmTrackerUrls;
+  }
   elements.downloadFolder.value = options.folder;
 };
 
