@@ -18,6 +18,8 @@ stdenvNoCC.mkDerivation (finalAttrs: {
       ../pnpm-lock.yaml
       ../pnpm-workspace.yaml
       ../vite.config.ts
+      ../tsconfig.json
+      ../tsconfig.node.json
       ../scripts/minify-js.js
       ../pkg/server/ui
       ../pkg/server/assets/js

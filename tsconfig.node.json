@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // Build configs run in Node, which vite's types bring in; they need no DOM.
+    "lib": ["es2024"]
+  },
+  "include": ["vite.config.ts", "vitest.config.ts"]
+}

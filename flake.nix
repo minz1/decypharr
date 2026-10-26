@@ -42,6 +42,23 @@
         }
       );
 
+      # Each UI gate runs one command over the frontend's source and pinned node_modules.
+      checks = forAllSystems (system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+          frontend = self.packages.${system}.frontend;
+          uiCheck = name: tools: command: frontend.overrideAttrs (old: {
+            pname = "decypharr-${name}";
+            pnpmDeps = frontend.pnpmDeps;
+            nativeBuildInputs = old.nativeBuildInputs ++ tools;
+            buildPhase = command;
+            installPhase = "touch $out";
+          });
+        in {
+          typecheck = uiCheck "typecheck" [ pkgs.typescript ] "pnpm typecheck";
+        }
+      );
+
       devShells = forAllSystems (system:
         let pkgs = nixpkgs.legacyPackages.${system}; in {
           default = pkgs.mkShell {
