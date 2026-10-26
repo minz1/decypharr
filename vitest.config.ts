@@ -7,5 +7,7 @@ export default defineConfig({
     environmentOptions: { happyDOM: { settings: { handleDisabledFileLoadingAsSuccess: true } } },
     globalSetup: ["vitest.global-setup.ts"],
     include: ["pkg/server/ui/**/*.test.ts"],
+    restoreMocks: true,
+    unstubGlobals: true,
   },
 });

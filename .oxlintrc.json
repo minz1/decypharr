@@ -52,7 +52,13 @@
     // Key order carries meaning (fetch's method/headers/body, config grouped by topic); sorting prevents no bug.
     "eslint/sort-keys": "off",
     // typescript/require-await replaces it and accepts an async function that returns a promise explicitly.
-    "eslint/require-await": "off"
+    "eslint/require-await": "off",
+    // TypeScript models absence as undefined (optional properties, Map.get, find); unicorn/no-null bans the alternative.
+    "eslint/no-undefined": "off",
+    // 0, 1 and -1 are identities, not magic values.
+    "eslint/no-magic-numbers": ["error", { "ignore": [-1, 0, 1] }],
+    // Object spread is native at the ES2024 target, and eslint/prefer-object-spread asks for it.
+    "oxc/no-rest-spread-properties": "off"
   },
   "overrides": [
     {

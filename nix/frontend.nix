@@ -21,6 +21,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
       ../vitest.config.ts
       ../vitest.global-setup.ts
       ../tsconfig.json
+      ../tsconfig.app.json
       ../tsconfig.node.json
       ../.oxlintrc.json
       ../.oxfmtrc.json

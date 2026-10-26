@@ -1,0 +1,56 @@
+{
+  "compilerOptions": {
+    // The strict family: null checks, no implicit any, strict function types and the rest.
+    "strict": true,
+    // An index or array read may be missing, so it is typed `T | undefined`.
+    "noUncheckedIndexedAccess": true,
+    // An optional property can be absent, but is never explicitly `undefined` unless its type says so.
+    "exactOptionalPropertyTypes": true,
+    // Keys from an index signature must be read as obj["key"], so typos in declared names stay errors.
+    "noPropertyAccessFromIndexSignature": true,
+    // Overriding a base-class method needs the `override` keyword.
+    "noImplicitOverride": true,
+    // Every code path of a function that returns a value must return one.
+    "noImplicitReturns": true,
+    // A non-empty switch case can't fall through into the next one.
+    "noFallthroughCasesInSwitch": true,
+    // Unused variables and imports are errors, not warnings.
+    "noUnusedLocals": true,
+    // Unused parameters are errors; prefix one with _ only where a callback signature demands it.
+    "noUnusedParameters": true,
+    // Code after return/throw is an error.
+    "allowUnreachableCode": false,
+    // Unused labels are an error.
+    "allowUnusedLabels": false,
+    // `import "x"` for side effects must resolve to a real module.
+    "noUncheckedSideEffectImports": true,
+    // Dependency type declarations are checked too, so a broken one can't hide.
+    "skipLibCheck": false,
+    // Only syntax a type stripper can erase: no enums, namespaces or parameter properties.
+    "erasableSyntaxOnly": true,
+    // Type-only imports must say `import type`, so the bundler drops exactly what tsc drops.
+    "verbatimModuleSyntax": true,
+    // Each file must compile on its own, as Vite (Rolldown) compiles them.
+    "isolatedModules": true,
+    // Every file is a module, so nothing leaks into the global scope by accident.
+    "moduleDetection": "force",
+    // An import's case must match the file name, as on Linux.
+    "forceConsistentCasingInFileNames": true,
+    // The standard library types come from TypeScript, not from a @typescript/lib-* package.
+    "libReplacement": false,
+    // The browsers that load the UI run ES2024.
+    "target": "es2024",
+    // ES2024 plus the DOM; no Node globals in browser code.
+    "lib": ["es2024", "dom", "dom.iterable"],
+    // Imports are left as written for the bundler to resolve.
+    "module": "preserve",
+    // Resolve imports the way Vite does.
+    "moduleResolution": "bundler",
+    // No @types package is included implicitly; each one is opted into.
+    "types": [],
+    // tsc only type-checks; Vite builds.
+    "noEmit": true
+  },
+  // Browser code only: the build configs pull in Node's types, so they live in tsconfig.node.json.
+  "include": ["pkg/server/ui"]
+}
