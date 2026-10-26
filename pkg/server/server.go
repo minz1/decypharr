@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
@@ -38,6 +39,38 @@ var assetsEmbed embed.FS
 //go:embed assets/images/*
 var imagesEmbed embed.FS
 
+func embeddedStatic() fs.FS { return mustSub(assetsEmbed, "assets/build") }
+
+func embeddedImages() fs.FS { return mustSub(imagesEmbed, "assets/images") }
+
+func mustSub(fsys fs.FS, dir string) fs.FS {
+	sub, err := fs.Sub(fsys, dir)
+	if err != nil {
+		panic(err)
+	}
+	return sub
+}
+
+func parseTemplates(funcs template.FuncMap) *template.Template {
+	t := template.Must(template.New("").Funcs(funcs).ParseFS(
+		content,
+		"templates/layout.html",
+		"templates/setup_layout.html",
+		"templates/index.html",
+		"templates/download.html",
+		"templates/repair.html",
+		"templates/reacquire.html",
+		"templates/repair_tabs.html",
+		"templates/stats.html",
+		"templates/config.html",
+		"templates/browse.html",
+		"templates/login.html",
+		"templates/register.html",
+		"templates/setup.html",
+	))
+	return template.Must(t.Parse(viteTagsTemplate))
+}
+
 // Server is the HTTP front end: web UI, JSON API and the compat APIs.
 const (
 	sessionMaxAge = 7 * 24 * time.Hour
@@ -56,6 +89,7 @@ type Server struct {
 	stats       *stats.Collector
 	cookie      *sessions.CookieStore
 	templates   *template.Template
+	static      fs.FS
 	assets      assetManifest
 	urlBase     string
 	restartFunc func()
@@ -74,22 +108,12 @@ func New(mgr *manager.Manager, store *config.Store, logs *logger.Factory) *Serve
 
 	cfg := store.Get()
 
-	templates := template.Must(template.ParseFS(
-		content,
-		"templates/layout.html",
-		"templates/setup_layout.html",
-		"templates/index.html",
-		"templates/download.html",
-		"templates/repair.html",
-		"templates/reacquire.html",
-		"templates/repair_tabs.html",
-		"templates/stats.html",
-		"templates/config.html",
-		"templates/browse.html",
-		"templates/login.html",
-		"templates/register.html",
-		"templates/setup.html",
-	))
+	static := embeddedStatic()
+	vite, err := loadViteManifest(static)
+	if err != nil && !errors.Is(err, errUINotBuilt) {
+		panic(err)
+	}
+	templates := parseTemplates(vite.funcs(cfg.URLBase))
 	cookieStore := sessions.NewCookieStore([]byte(cfg.SecretKey()))
 	cookieStore.Options = &sessions.Options{
 		Path:     "/",
@@ -108,7 +132,8 @@ func New(mgr *manager.Manager, store *config.Store, logs *logger.Factory) *Serve
 		stats:     statsCollector,
 		cookie:    cookieStore,
 		templates: templates,
-		assets:    loadAssetManifest(),
+		static:    static,
+		assets:    loadAssetManifest(static),
 		urlBase:   cfg.URLBase,
 
 		shutdownGrace: shutdownGrace,

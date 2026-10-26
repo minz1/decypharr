@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"net/http"
 	"path"
+	"strings"
 )
 
 type assetManifest struct {
@@ -13,19 +14,15 @@ type assetManifest struct {
 	etags   map[string]string
 }
 
-func loadAssetManifest() assetManifest {
+func loadAssetManifest(static fs.FS) assetManifest {
 	all := sha256.New()
 	etags := map[string]string{}
 	for _, tree := range []struct {
 		prefix string
-		embed  fs.FS
-		dir    string
-	}{{"/assets", assetsEmbed, "assets/build"}, {"/images", imagesEmbed, "assets/images"}} {
-		root, err := fs.Sub(tree.embed, tree.dir)
-		if err != nil {
-			panic(err)
-		}
-		err = fs.WalkDir(root, ".", func(name string, d fs.DirEntry, err error) error {
+		root   fs.FS
+	}{{"/assets", static}, {"/images", embeddedImages()}} {
+		root := tree.root
+		err := fs.WalkDir(root, ".", func(name string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() {
 				return err
 			}
@@ -51,10 +48,16 @@ func (m assetManifest) handler(prefix string, files fs.FS) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// A partial body would be gzipped under a plain Content-Range; assets are small, serve them whole.
 		r.Header.Del("Range")
-		if etag, ok := m.etags[prefix+path.Clean("/"+r.URL.Path)]; ok {
+		name := prefix + path.Clean("/"+r.URL.Path)
+		if strings.HasPrefix(name, "/assets/vite/.vite/") {
+			http.NotFound(w, r)
+			return
+		}
+		if etag, ok := m.etags[name]; ok {
 			w.Header().Set("ETag", etag)
 		}
-		if r.URL.Query().Get("v") == m.version {
+		// Vite output names carry their content hash, so they never change under one URL.
+		if r.URL.Query().Get("v") == m.version || strings.HasPrefix(name, "/assets/vite/") {
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		} else {
 			w.Header().Set("Cache-Control", "no-cache")

@@ -1,7 +1,6 @@
 package server
 
 import (
-	"io/fs"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -17,12 +16,10 @@ func (s *Server) WebRoutes() http.Handler {
 	r.Use(s.setupRedirectMiddleware)
 
 	// Static assets - always public
-	staticFS, _ := fs.Sub(assetsEmbed, "assets/build")
-	imagesFS, _ := fs.Sub(imagesEmbed, "assets/images")
 	assetGzip := middleware.Compress(gzipLevel, "text/css", "text/javascript", "application/javascript")
 	pageGzip := middleware.Compress(gzipLevel, "text/html")
-	r.With(assetGzip).Handle("/assets/*", http.StripPrefix(s.urlBase+"assets/", s.assets.handler("/assets", staticFS)))
-	r.Handle("/images/*", http.StripPrefix(s.urlBase+"images/", s.assets.handler("/images", imagesFS)))
+	r.With(assetGzip).Handle("/assets/*", http.StripPrefix(s.urlBase+"assets/", s.assets.handler("/assets", s.static)))
+	r.Handle("/images/*", http.StripPrefix(s.urlBase+"images/", s.assets.handler("/images", embeddedImages())))
 
 	// Public routes - no auth needed
 	r.Get("/version", s.handleGetVersion)

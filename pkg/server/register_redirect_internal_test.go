@@ -1,7 +1,6 @@
 package server
 
 import (
-	"html/template"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -15,24 +14,12 @@ import (
 func newTestServer(t *testing.T, store *config.Store) *Server {
 	t.Helper()
 	return &Server{
-		config:  store,
-		urlBase: "/",
-		assets:  loadAssetManifest(),
-		logger:  zerolog.Nop(),
-		templates: template.Must(template.ParseFS(
-			content,
-			"templates/layout.html",
-			"templates/setup_layout.html",
-			"templates/index.html",
-			"templates/download.html",
-			"templates/repair.html",
-			"templates/stats.html",
-			"templates/config.html",
-			"templates/browse.html",
-			"templates/login.html",
-			"templates/register.html",
-			"templates/setup.html",
-		)),
+		config:    store,
+		urlBase:   "/",
+		static:    embeddedStatic(),
+		assets:    loadAssetManifest(embeddedStatic()),
+		logger:    zerolog.Nop(),
+		templates: parseTemplates(viteManifest(nil).funcs("/")),
 	}
 }
 

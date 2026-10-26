@@ -1,0 +1,22 @@
+{
+  "pkg/server/ui/styles.css": {
+    "file": "assets/styles-AAAA.css",
+    "src": "pkg/server/ui/styles.css",
+    "isEntry": true
+  },
+  "pkg/server/ui/pages/login.ts": {
+    "file": "assets/login-BBBB.js",
+    "src": "pkg/server/ui/pages/login.ts",
+    "isEntry": true,
+    "imports": ["_shared-CCCC.js", "_other-DDDD.js"],
+    "css": ["assets/login-EEEE.css"]
+  },
+  "_shared-CCCC.js": {
+    "file": "assets/shared-CCCC.js",
+    "css": ["assets/shared-FFFF.css"]
+  },
+  "_other-DDDD.js": {
+    "file": "assets/other-DDDD.js",
+    "imports": ["_shared-CCCC.js"]
+  }
+}
