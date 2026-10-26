@@ -36,3 +36,4 @@ result-*
 
 pkg/server/assets/build/*
 !pkg/server/assets/build/.placeholder
+pkg/server/testdata/rendered/

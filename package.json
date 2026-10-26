@@ -13,10 +13,12 @@
     "build:watch": "vite build --watch",
     "dev": "pnpm build && air",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.node.json",
-    "lint": "oxlint --type-aware --deny-warnings -c .oxlintrc.json pkg/server/ui vite.config.ts vitest.config.ts",
-    "fmt": "oxfmt pkg/server/ui vite.config.ts vitest.config.ts package.json pnpm-workspace.yaml tsconfig.json tsconfig.node.json .oxlintrc.json .oxfmtrc.json",
-    "fmt:check": "oxfmt --check pkg/server/ui vite.config.ts vitest.config.ts package.json pnpm-workspace.yaml tsconfig.json tsconfig.node.json .oxlintrc.json .oxfmtrc.json",
-    "test": "vitest run",
+    "lint": "oxlint --type-aware --deny-warnings -c .oxlintrc.json pkg/server/ui vite.config.ts vitest.config.ts vitest.global-setup.ts",
+    "fmt": "oxfmt pkg/server/ui vite.config.ts vitest.config.ts vitest.global-setup.ts package.json pnpm-workspace.yaml tsconfig.json tsconfig.node.json .oxlintrc.json .oxfmtrc.json",
+    "fmt:check": "oxfmt --check pkg/server/ui vite.config.ts vitest.config.ts vitest.global-setup.ts package.json pnpm-workspace.yaml tsconfig.json tsconfig.node.json .oxlintrc.json .oxfmtrc.json",
+    "fixtures": "UI_FIXTURES_DIR=$PWD/pkg/server/testdata/rendered go test ./pkg/server -run '^TestRenderUIFixtures$' -count=1",
+    "vitest": "vitest run",
+    "test": "pnpm fixtures && pnpm vitest",
     "check": "pnpm typecheck && pnpm lint && pnpm fmt:check && pnpm test"
   },
   "devDependencies": {

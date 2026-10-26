@@ -1,15 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-const LAYOUT = `<div class="toast-container"></div>
-  <template id="toast-template"><div class="alert"><span data-toast-message></span></div></template>
-  <header class="navbar">
-    <div class="navbar-start"><div class="dropdown">
-      <div role="button" tabindex="0">menu</div><ul class="dropdown-content"><li><a href="#x">x</a></li></ul>
-    </div></div>
-    <input type="checkbox" id="themeToggle">
-    <div id="version-badge">Loading...</div>
-  </header>
-  <dialog id="open-modal" class="modal" open><p>modal</p></dialog>`;
+import { loadFixture } from "#ui/lib/testing/fixture";
 
 const BRIDGE_MEMBERS = [
   "closeToast",
@@ -23,28 +14,42 @@ const BRIDGE_MEMBERS = [
   "setButtonLoading",
 ];
 
-const loadLayout = async (urlBase: string, theme = ""): Promise<void> => {
+const loadLayout = async (fixture: string, theme = ""): Promise<string[]> => {
   vi.resetModules();
   localStorage.clear();
   if (theme !== "") {
     localStorage.setItem("theme", theme);
   }
-  document.head.innerHTML = `<meta name="decypharr-url-base" content="${urlBase}">`;
-  document.body.innerHTML = LAYOUT;
-  vi.stubGlobal("fetch", async (): Promise<Response> =>
-    Promise.resolve(Response.json({ version: "1.2.3", channel: "beta" })),
-  );
+  loadFixture(fixture);
+  const urls: string[] = [];
+  vi.stubGlobal("fetch", async (url: string): Promise<Response> => {
+    urls.push(url);
+    return Promise.resolve(Response.json({ version: "1.2.3", channel: "beta" }));
+  });
   await import("#ui/pages/layout");
+  return urls;
 };
 
-const toastTexts = (): (string | null)[] =>
-  [...document.querySelectorAll(".toast-container .alert-error")].map((toast) => toast.textContent);
+const toastTexts = (): string[] =>
+  [...document.querySelectorAll(".toast-container .alert-error [data-toast-message]")].map(
+    (toast) => toast.textContent,
+  );
+
+const press = (key: string, ctrlKey: boolean): void => {
+  document.dispatchEvent(new KeyboardEvent("keydown", { key, ctrlKey, bubbles: true }));
+};
 
 describe("the legacy bridge", () => {
-  it("is in place as soon as the layout module has run", async () => {
-    await loadLayout("/decypharr/");
-    expect(globalThis.urlBase).toBe("/decypharr/");
-    expect(Object.keys(globalThis.decypharrUtils).toSorted()).toStrictEqual(BRIDGE_MEMBERS);
+  it.each([
+    ["index", "/"],
+    ["index@base", "/decypharr/"],
+    ["setup@base", "/decypharr/"],
+  ])("is in place on %s as soon as the layout module has run", async (fixture, urlBase) => {
+    await loadLayout(fixture);
+    expect(globalThis.urlBase).toBe(urlBase);
+    expect(Object.keys(globalThis.decypharrUtils).toSorted((left, right) => left.localeCompare(right))).toStrictEqual(
+      BRIDGE_MEMBERS,
+    );
     expect(Object.values(globalThis.decypharrUtils).map((member) => typeof member)).toStrictEqual(
       BRIDGE_MEMBERS.map(() => "function"),
     );
@@ -53,17 +58,16 @@ describe("the legacy bridge", () => {
 
 describe("the theme toggle", () => {
   it("flips data-theme and stores it", async () => {
-    await loadLayout("/");
-    const toggle = document.querySelector<HTMLInputElement>("#themeToggle");
+    await loadLayout("index");
     const before = document.documentElement.dataset["theme"];
-    toggle?.click();
+    document.querySelector<HTMLInputElement>("#themeToggle")?.click();
     const after = document.documentElement.dataset["theme"];
     expect(new Set([before, after])).toStrictEqual(new Set(["dark", "light"]));
     expect(localStorage.getItem("theme")).toBe(after);
   });
 
   it.each(["light", "dark"])("starts from the stored %s theme", async (theme) => {
-    await loadLayout("/", theme);
+    await loadLayout("index", theme);
     expect({
       theme: document.documentElement.dataset["theme"],
       checked: document.querySelector<HTMLInputElement>("#themeToggle")?.checked,
@@ -71,28 +75,44 @@ describe("the theme toggle", () => {
   });
 });
 
-describe("the global listeners", () => {
-  it("close an open dialog on Escape", async () => {
-    await loadLayout("/");
-    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    expect(document.querySelectorAll("#open-modal[open]")).toHaveLength(0);
+describe("the keyboard", () => {
+  it("opens the shortcut help on ctrl + /, and Escape closes it", async () => {
+    await loadLayout("index");
+    press("/", true);
+    const opened = document.querySelectorAll("body > dialog.modal[open]").length;
+    press("Escape", false);
+    expect(opened).toBeGreaterThan(0);
+    expect(document.querySelectorAll("body > dialog.modal[open]")).toHaveLength(0);
   });
+});
 
-  it("toast a global error", async () => {
-    await loadLayout("/");
-    globalThis.dispatchEvent(new ErrorEvent("error", { error: new Error("boom") }));
-    expect(new Set(toastTexts())).toStrictEqual(new Set(["Unexpected error: boom"]));
+describe("the global listeners", () => {
+  it("toast a global error with the toast template", async () => {
+    await loadLayout("index");
+    globalThis.dispatchEvent(new ErrorEvent("error", { error: new Error("<img src=x onerror=alert(1)>") }));
+    expect(new Set(toastTexts())).toStrictEqual(new Set(["Unexpected error: <img src=x onerror=alert(1)>"]));
+    expect(document.querySelectorAll(".toast-container img")).toHaveLength(0);
   });
 });
 
 describe("the version badge", () => {
-  it("links the release and marks a beta", async () => {
-    await loadLayout("/");
+  it.each([
+    ["index", "/version"],
+    ["index@base", "/decypharr/version"],
+  ])("on %s links the release from %s and marks a beta", async (fixture, url) => {
+    const urls = await loadLayout(fixture);
     await vi.waitFor(() => {
       expect(document.querySelector("#version-badge a")?.textContent).toBe("beta-1.2.3");
     });
     const badge = document.querySelector("#version-badge");
-    expect(badge?.querySelector("a")?.href).toBe("https://github.com/sirrobot01/decypharr/releases/tag/v1.2.3");
-    expect(badge?.className).toContain("badge-warning");
+    expect({
+      urls,
+      href: badge?.querySelector("a")?.href,
+      beta: badge?.classList.contains("badge-warning"),
+    }).toStrictEqual({
+      urls: [url],
+      href: "https://github.com/sirrobot01/decypharr/releases/tag/v1.2.3",
+      beta: true,
+    });
   });
 });
