@@ -52,23 +52,7 @@ func mustSub(fsys fs.FS, dir string) fs.FS {
 }
 
 func parseTemplates(funcs template.FuncMap) *template.Template {
-	t := template.Must(template.New("").Funcs(funcs).ParseFS(
-		content,
-		"templates/layout.html",
-		"templates/setup_layout.html",
-		"templates/index.html",
-		"templates/download.html",
-		"templates/repair.html",
-		"templates/reacquire.html",
-		"templates/repair_tabs.html",
-		"templates/stats.html",
-		"templates/config.html",
-		"templates/browse.html",
-		"templates/login.html",
-		"templates/register.html",
-		"templates/setup.html",
-		"templates/theme_script.html",
-	))
+	t := template.Must(template.New("").Funcs(funcs).ParseFS(content, "templates/*.html"))
 	return template.Must(t.Parse(viteTagsTemplate))
 }
 
