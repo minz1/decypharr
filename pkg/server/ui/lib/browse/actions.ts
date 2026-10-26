@@ -11,13 +11,12 @@ import {
 } from "#ui/lib/browse/model";
 import type { BrowseLocation, Browser, Entry, Health } from "#ui/lib/browse/types";
 import { renderBrowser, renderHealthBadges, renderSelection, renderSortIndicators } from "#ui/lib/browse/view";
+import { describeError } from "#ui/lib/common/errors";
 import { fetcher } from "#ui/lib/common/http";
 import { readJSON } from "#ui/lib/common/json";
 import { createToast } from "#ui/lib/common/toast";
 import { joinURL, readURLBase } from "#ui/lib/common/url";
 import { askConfirm } from "#ui/lib/confirm";
-
-const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 const isAbort = (error: unknown): boolean =>
   (error instanceof DOMException || error instanceof Error) && error.name === "AbortError";
@@ -218,7 +217,7 @@ const recheckEntry = async (browser: Browser, name: string): Promise<void> => {
     renderHealthBadges(browser.refs, browser.state);
     createToast(`Health: ${health.status}`, health.status === "broken" ? "warning" : "success");
   } catch (error) {
-    createToast(`Recheck failed: ${messageOf(error)}`, "error");
+    createToast(`Recheck failed: ${describeError(error)}`, "error");
   }
 };
 

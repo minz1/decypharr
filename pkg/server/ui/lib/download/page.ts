@@ -1,4 +1,5 @@
 import { setButtonLoading } from "#ui/lib/common/button";
+import { describeError } from "#ui/lib/common/errors";
 import { fetcher } from "#ui/lib/common/http";
 import { asRecord, optStr, readJSON } from "#ui/lib/common/json";
 import { createToast } from "#ui/lib/common/toast";
@@ -28,8 +29,6 @@ interface DownloadElements {
 
 const UNKNOWN_ERROR = "Unknown error";
 const HIGHLIGHT = ["border-primary", "border-2", "border-dashed", "bg-primary/5"];
-
-const describeError = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 const filesOf = (input: HTMLInputElement): File[] => [...(input.files ?? [])];
 

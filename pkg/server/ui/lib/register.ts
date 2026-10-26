@@ -1,4 +1,5 @@
 import { setButtonLoading } from "#ui/lib/common/button";
+import { describeError } from "#ui/lib/common/errors";
 import { fetcher } from "#ui/lib/common/http";
 import { createToast } from "#ui/lib/common/toast";
 import { joinURL } from "#ui/lib/common/url";
@@ -22,8 +23,6 @@ interface RegisterDeps {
   navigate: (url: string) => void;
   urlBase: string;
 }
-
-const describeError = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 const registrationForm = (registration: Registration): FormData => {
   const form = new FormData();

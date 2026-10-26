@@ -1,9 +1,8 @@
 import { onAction } from "#ui/lib/common/dom";
-import { fetcher } from "#ui/lib/common/http";
-import { asRecord, optStr, readJSON } from "#ui/lib/common/json";
+import { describeError } from "#ui/lib/common/errors";
 import { createToast } from "#ui/lib/common/toast";
 import { joinURL } from "#ui/lib/common/url";
-import { parseSetupConfig } from "#ui/lib/setup/config";
+import { FINISH_FAILED, completeSetup, fetchConfig, readSetupConfig } from "#ui/lib/setup/api";
 import { setupOverview } from "#ui/lib/setup/overview";
 import {
   STEP_ORDER,
@@ -14,7 +13,6 @@ import {
   readDownloadStep,
   readMountStep,
   readUsenetStep,
-  setupPayload,
 } from "#ui/lib/setup/steps";
 import type { SetupState, StepName, StepOutcome } from "#ui/lib/setup/types";
 import { fillFields, setFinishBusy, setupView, showError, showOverview, showStep } from "#ui/lib/setup/view";
@@ -35,10 +33,7 @@ interface Wizard {
 type StateKey = keyof SetupState;
 
 const REDIRECT_DELAY_MS = 1500;
-const FINISH_FAILED = "Failed to complete setup";
 const PROVIDER_REQUIRED = "Please configure at least one Debrid or Usenet provider before continuing.";
-
-const describeError = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 const stepAfter = (step: StepName): StepName => STEP_ORDER[STEP_ORDER.indexOf(step) + 1] ?? "overview";
 
@@ -117,33 +112,6 @@ const toggleMountOptions = (view: SetupView): void => {
   view.panel("rclone-options").classList.toggle("hidden", hidden);
 };
 
-const parsedRefusal = (body: string): string => {
-  const refusal = asRecord(JSON.parse(body), "response");
-  return optStr(refusal, "error") ?? FINISH_FAILED;
-};
-
-const refusalMessage = async (response: Response): Promise<string> => {
-  const body = await response.text();
-  try {
-    return parsedRefusal(body);
-  } catch {
-    return FINISH_FAILED;
-  }
-};
-
-const completeSetup = async (wizard: Wizard): Promise<string> => {
-  const response = await fetcher("/api/setup/complete", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(setupPayload(wizard.state)),
-  });
-  if (!response.ok) {
-    throw new Error(await refusalMessage(response));
-  }
-  const result = asRecord(await readJSON(response), "response");
-  return optStr(result, "api_token") ?? "";
-};
-
 const goHomeSoon = (wizard: Wizard): void => {
   createToast("Setup completed successfully! Redirecting...", "success");
   setTimeout(() => {
@@ -167,7 +135,7 @@ const showToken = (wizard: Wizard, token: string): void => {
 
 const submit = async (wizard: Wizard): Promise<void> => {
   try {
-    const token = await completeSetup(wizard);
+    const token = await completeSetup(wizard.state);
     if (token === "") {
       goHomeSoon(wizard);
     } else {
@@ -240,21 +208,13 @@ const bindWizard = (wizard: Wizard): void => {
   });
 };
 
-const fetchConfig = async (): Promise<Response | undefined> => {
-  try {
-    return await fetcher("/api/config");
-  } catch {
-    return undefined;
-  }
-};
-
 const loadConfig = async (view: SetupView): Promise<void> => {
   const response = await fetchConfig();
   if (response?.ok !== true) {
     return;
   }
   try {
-    fillFields(view, parseSetupConfig(await readJSON(response)));
+    fillFields(view, await readSetupConfig(response));
   } catch (error) {
     createToast(`Failed to load config: ${describeError(error)}`, "error");
   }

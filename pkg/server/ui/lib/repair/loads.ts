@@ -1,3 +1,4 @@
+import { describeError } from "#ui/lib/common/errors";
 import { createToast } from "#ui/lib/common/toast";
 import {
   getJSON,
@@ -8,7 +9,6 @@ import {
   parseRuns,
 } from "#ui/lib/repair/api";
 import { BROKEN_PAGE_SIZE, brokenView, renderBrokenPage } from "#ui/lib/repair/broken";
-import { describeError } from "#ui/lib/repair/dom";
 import { clampPage, sortBroken } from "#ui/lib/repair/format";
 import { historyView, renderHistory } from "#ui/lib/repair/history";
 import { clearModalView, fillArrOptions, recheckView, runModalView } from "#ui/lib/repair/modals";

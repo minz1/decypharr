@@ -1,3 +1,4 @@
+import { describeError } from "#ui/lib/common/errors";
 import { fetcher } from "#ui/lib/common/http";
 import { readJSON } from "#ui/lib/common/json";
 import { createToast } from "#ui/lib/common/toast";
@@ -9,8 +10,6 @@ import { renderDashboard, renderSelection, renderTorrents } from "#ui/lib/dashbo
 const REFRESH_MS = 10_000;
 const MENU_WIDTH_PX = 200;
 const MENU_HEIGHT_PX = 150;
-
-const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 const fetchPage = async (state: DashboardState): Promise<void> => {
   const response = await fetcher(torrentsURL(state));
@@ -28,7 +27,7 @@ const loadTorrents = async (dashboard: Dashboard): Promise<void> => {
     await fetchPage(state);
     renderDashboard(refs, state);
   } catch (error) {
-    createToast(`Error loading items: ${messageOf(error)}`, "error");
+    createToast(`Error loading items: ${describeError(error)}`, "error");
   } finally {
     refs.refreshBtn.disabled = false;
   }

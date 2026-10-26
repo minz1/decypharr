@@ -1,4 +1,5 @@
 import { cloneTemplate } from "#ui/lib/common/dom";
+import { describeError } from "#ui/lib/common/errors";
 import { formatBytes } from "#ui/lib/common/format";
 import { fetcher } from "#ui/lib/common/http";
 import { asArray, asRecord, optNum, optStr } from "#ui/lib/common/json";
@@ -72,7 +73,7 @@ const showMatches = (doc: Document, result: Element, value: unknown): void => {
 
 const showFailure = (doc: Document, result: Element, error: unknown): void => {
   const view = cloneTemplate("config-vf-preview-failed", doc);
-  setText(view.querySelector("p"), `Could not preview: ${error instanceof Error ? error.message : String(error)}`);
+  setText(view.querySelector("p"), `Could not preview: ${describeError(error)}`);
   result.replaceChildren(view);
 };
 

@@ -1,3 +1,4 @@
+import { describeError } from "#ui/lib/common/errors";
 import { fetcher } from "#ui/lib/common/http";
 import { asRecord, optBool, optStr } from "#ui/lib/common/json";
 import { createToast } from "#ui/lib/common/toast";
@@ -45,7 +46,7 @@ const regenerateStrm = async (button: HTMLButtonElement): Promise<void> => {
     }
     createToast("STRM regeneration started in the background", "success");
   } catch (error) {
-    createToast(`STRM regenerate failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+    createToast(`STRM regenerate failed: ${describeError(error)}`, "error");
   } finally {
     button.disabled = false;
   }

@@ -1,3 +1,4 @@
+import { describeError } from "#ui/lib/common/errors";
 import { createToast } from "#ui/lib/common/toast";
 
 type ActionHandler = (target: HTMLElement, event: Event) => void;
@@ -37,8 +38,6 @@ const onAction = (
     }
   });
 };
-
-const describeError = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 const bootPage = (name: string, start: () => void | Promise<void>): void => {
   const run = async (): Promise<void> => {

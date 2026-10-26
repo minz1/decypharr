@@ -1,14 +1,13 @@
 import { setButtonLoading } from "#ui/lib/common/button";
 import { copyToClipboard } from "#ui/lib/common/clipboard";
 import { byId } from "#ui/lib/common/dom";
+import { describeError } from "#ui/lib/common/errors";
 import { fetcher } from "#ui/lib/common/http";
 import { asRecord, optBool, optStr, readJSON, str } from "#ui/lib/common/json";
 import { createToast } from "#ui/lib/common/toast";
 import { orDefault, withId } from "#ui/lib/config/form";
 
 const CREDENTIAL_FIELDS = ["auth-username", "auth-password", "auth-password-confirm"] as const;
-
-const describe = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 const input = (doc: Document, id: string): HTMLInputElement => byId(id, HTMLInputElement, doc);
 
@@ -79,7 +78,7 @@ const refreshAPIToken = async (doc: Document): Promise<void> => {
     input(doc, "api-token-display").value = str(data, "token");
     createToast(orDefault(optStr(data, "message"), "Token refreshed successfully"), "success");
   } catch (error) {
-    createToast(`Failed to refresh token: ${describe(error)}`, "error");
+    createToast(`Failed to refresh token: ${describeError(error)}`, "error");
   } finally {
     setButtonLoading(button, false);
   }
@@ -135,7 +134,7 @@ const updateAuthSettings = async (doc: Document): Promise<void> => {
   try {
     applyAuth(doc, await sendAuth(doc));
   } catch (error) {
-    createToast(`Failed to update authentication: ${describe(error)}`, "error");
+    createToast(`Failed to update authentication: ${describeError(error)}`, "error");
   } finally {
     setButtonLoading(button, false);
   }

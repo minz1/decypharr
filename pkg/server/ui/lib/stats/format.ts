@@ -28,8 +28,6 @@ const formatUptime = (seconds: number): string => {
 
 const formatPercent = (ratio: number): string => `${(ratio * PERCENT).toFixed(1)}%`;
 
-const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
-
 const orElse = (value: string, fallback: string): string => (value === "" ? fallback : value);
 
-export { PERCENT, errorMessage, formatNumber, formatPercent, formatUptime, orElse };
+export { PERCENT, formatNumber, formatPercent, formatUptime, orElse };

@@ -1,3 +1,4 @@
+import { describeError } from "#ui/lib/common/errors";
 import { fetcher } from "#ui/lib/common/http";
 import { readJSON } from "#ui/lib/common/json";
 import { createToast } from "#ui/lib/common/toast";
@@ -28,8 +29,6 @@ interface SaveResult {
 
 const RELOAD_DELAY_MS = 2000;
 const WARNING_RELOAD_DELAY_MS = 10_000;
-
-const describe = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 const loadConfiguration = async (doc: Document, state: PageState): Promise<void> => {
   try {
@@ -131,7 +130,7 @@ const saveLoaded = async (doc: Document, deps: SaveDeps): Promise<void> => {
   try {
     await submitSettings(doc, deps);
   } catch (error) {
-    createToast(`Error saving configuration: ${describe(error)}`, "error");
+    createToast(`Error saving configuration: ${describeError(error)}`, "error");
     deps.overlay.classList.add("hidden");
   }
 };

@@ -1,3 +1,4 @@
+import { describeError } from "#ui/lib/common/errors";
 import { fetcher } from "#ui/lib/common/http";
 import { createToast } from "#ui/lib/common/toast";
 import {
@@ -11,7 +12,6 @@ import {
   runRequest,
 } from "#ui/lib/repair/api";
 import { confirmAction } from "#ui/lib/repair/confirm";
-import { describeError } from "#ui/lib/repair/dom";
 import { loadBroken, loadHistory, loadStatus } from "#ui/lib/repair/loads";
 import { readRunOptions, resetClearModal, resetRunModal, showError, showRecheckFailure } from "#ui/lib/repair/modals";
 import { renderClearCounts } from "#ui/lib/repair/status";

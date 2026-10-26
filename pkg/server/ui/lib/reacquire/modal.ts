@@ -1,10 +1,10 @@
+import { describeError } from "#ui/lib/common/errors";
 import { fetcher } from "#ui/lib/common/http";
 import { createToast } from "#ui/lib/common/toast";
 import { errorDetail, reacquireRequest } from "#ui/lib/reacquire/api";
 import { loadJobs, searchBindings } from "#ui/lib/reacquire/loads";
 import { markBinding } from "#ui/lib/reacquire/search";
 import type { ReacquirePage } from "#ui/lib/reacquire/types";
-import { describeError } from "#ui/lib/repair/dom";
 
 const openReacquireModal = (page: ReacquirePage): void => {
   const { modal } = page;

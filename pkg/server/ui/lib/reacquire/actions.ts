@@ -1,3 +1,4 @@
+import { describeError } from "#ui/lib/common/errors";
 import { fetcher } from "#ui/lib/common/http";
 import { createToast } from "#ui/lib/common/toast";
 import { deleteJobsRequest, deletedCount, errorDetail } from "#ui/lib/reacquire/api";
@@ -7,7 +8,6 @@ import { currentPage, renderSelection } from "#ui/lib/reacquire/jobs";
 import { loadIndex, loadJobs, showJobs } from "#ui/lib/reacquire/loads";
 import type { Job, ReacquirePage } from "#ui/lib/reacquire/types";
 import { confirmAction } from "#ui/lib/repair/confirm";
-import { describeError } from "#ui/lib/repair/dom";
 
 const INDEX_REREAD_MS = 3000;
 const ACKNOWLEDGE_QUESTION =

@@ -1,4 +1,5 @@
 import { cloneTemplate } from "#ui/lib/common/dom";
+import { describeError } from "#ui/lib/common/errors";
 import { formatBytes } from "#ui/lib/common/format";
 import { fetcher } from "#ui/lib/common/http";
 import { asArray, asRecord, optBool, optNum, optStr, readJSON } from "#ui/lib/common/json";
@@ -185,13 +186,11 @@ const readPruneJSON = async (response: Response): Promise<unknown> => {
   return readJSON(response);
 };
 
-const describe = (error: unknown): string => (error instanceof Error ? error.message : String(error));
-
 const loadPruneStatus = async (doc: Document): Promise<void> => {
   try {
     renderPruneStatus(doc, await readPruneJSON(await fetcher("/api/prune/status")));
   } catch (error) {
-    createToast(`Could not load the prune status: ${describe(error)}`, "error");
+    createToast(`Could not load the prune status: ${describeError(error)}`, "error");
   }
 };
 
@@ -201,7 +200,7 @@ const savedPruneSettings = async (): Promise<Record<string, unknown> | undefined
     const { prune } = config;
     return prune === undefined || prune === null ? {} : asRecord(prune, "prune");
   } catch (error) {
-    createToast(`Could not read the saved prune settings: ${describe(error)}`, "error");
+    createToast(`Could not read the saved prune settings: ${describeError(error)}`, "error");
     return undefined;
   }
 };
@@ -238,7 +237,7 @@ const postRun = async (doc: Document): Promise<void> => {
   try {
     await reportRun(doc, await fetcher("/api/prune/run", { method: "POST" }));
   } catch (error) {
-    createToast(`Prune run: ${describe(error)}. The run may still be in progress; reload the status.`, "warning");
+    createToast(`Prune run: ${describeError(error)}. The run may still be in progress; reload the status.`, "warning");
   }
 };
 

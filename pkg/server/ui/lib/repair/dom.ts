@@ -20,6 +20,4 @@ const cloneRows = (id: string): DocumentFragment => {
   return rows;
 };
 
-const describeError = (error: unknown): string => (error instanceof Error ? error.message : String(error));
-
-export { cloneRows, describeError, field, fillFields };
+export { cloneRows, field, fillFields };

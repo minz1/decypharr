@@ -1,10 +1,11 @@
 import { setButtonLoading } from "#ui/lib/common/button";
+import { describeError } from "#ui/lib/common/errors";
 import { formatBytes } from "#ui/lib/common/format";
 import { fetcher } from "#ui/lib/common/http";
 import { asRecord, readJSON } from "#ui/lib/common/json";
 import { createToast } from "#ui/lib/common/toast";
 import type { PurgeDialog } from "#ui/lib/stats/elements";
-import { errorMessage, formatNumber } from "#ui/lib/stats/format";
+import { formatNumber } from "#ui/lib/stats/format";
 import { count, recordOrEmpty } from "#ui/lib/stats/read";
 
 interface CleanupResult {
@@ -110,7 +111,7 @@ const runCacheCleanup = async (button: HTMLButtonElement, reload: () => void): P
     createToast(toast.message, toast.type);
     reload();
   } catch (error) {
-    createToast(`Cache cleanup failed: ${errorMessage(error)}`, "error");
+    createToast(`Cache cleanup failed: ${describeError(error)}`, "error");
   }
 };
 
@@ -167,7 +168,7 @@ const runCachePurge = async (button: HTMLButtonElement, dialog: PurgeDialog, rel
     createToast(toast.message, toast.type);
     reload();
   } catch (error) {
-    createToast(`Cache purge failed: ${errorMessage(error)}`, "error");
+    createToast(`Cache purge failed: ${describeError(error)}`, "error");
   }
 };
 

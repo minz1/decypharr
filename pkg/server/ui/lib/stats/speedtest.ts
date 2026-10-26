@@ -1,8 +1,8 @@
 import { cloneTemplate } from "#ui/lib/common/dom";
+import { describeError } from "#ui/lib/common/errors";
 import { fetcher } from "#ui/lib/common/http";
 import { asRecord, readJSON } from "#ui/lib/common/json";
 import { cloneElement, field } from "#ui/lib/stats/dom";
-import { errorMessage } from "#ui/lib/stats/format";
 import { count, text } from "#ui/lib/stats/read";
 
 type Protocol = "nntp" | "debrid";
@@ -127,7 +127,7 @@ const runSpeedTest = async (
     const result = await requestSpeedTest(protocol, button.dataset["provider"] ?? "");
     slot.replaceChildren(result.error === "" ? show(result) : speedError(result.error));
   } catch (error) {
-    slot.replaceChildren(speedError(errorMessage(error)));
+    slot.replaceChildren(speedError(describeError(error)));
   } finally {
     button.disabled = false;
     button.textContent = "Test Speed";
