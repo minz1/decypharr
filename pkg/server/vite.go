@@ -63,17 +63,9 @@ type viteTags struct {
 
 func (m viteManifest) funcs(urlBase string) template.FuncMap {
 	return template.FuncMap{
-		"viteCSS":   func(entry string) (viteTags, error) { return m.cssTags(urlBase, entry) },
-		"viteEntry": func(entry string) (viteTags, error) { return m.entryTags(urlBase, entry) },
+		"viteCSS":   func(entry string) (viteTags, error) { return m.tags(urlBase, entry, ".css") },
+		"viteEntry": func(entry string) (viteTags, error) { return m.tags(urlBase, entry, ".js") },
 	}
-}
-
-func (m viteManifest) cssTags(urlBase, entry string) (viteTags, error) {
-	return m.tags(urlBase, entry, ".css")
-}
-
-func (m viteManifest) entryTags(urlBase, entry string) (viteTags, error) {
-	return m.tags(urlBase, entry, ".js")
 }
 
 // tags follows Vite's backend-integration order: CSS, imported chunks' CSS, the entry, modulepreloads.

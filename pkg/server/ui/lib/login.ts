@@ -47,4 +47,3 @@ const bindLoginForm = (form: HTMLFormElement, deps: LoginDeps): void => {
 };
 
 export { bindLoginForm };
-export type { LoginDeps };

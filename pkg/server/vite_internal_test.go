@@ -61,7 +61,7 @@ func TestEntryTagsOrder(t *testing.T) {
 		`<link rel="modulepreload" href="/x/assets/vite/assets/shared-CCCC.js">` +
 		`<link rel="modulepreload" href="/x/assets/vite/assets/other-DDDD.js">`
 	if got != want {
-		t.Fatalf("entryTags:\n got %s\nwant %s", got, want)
+		t.Fatalf("viteEntry:\n got %s\nwant %s", got, want)
 	}
 }
 
@@ -75,11 +75,11 @@ func TestCSSTags(t *testing.T) {
 	if want := `<link rel="stylesheet" href="/assets/vite/assets/styles-AAAA.css">`; got != want {
 		t.Fatalf("viteCSS = %s, want %s", got, want)
 	}
-	if _, cssErr := m.cssTags("/", "pkg/server/ui/pages/login.ts"); cssErr == nil {
-		t.Fatal("cssTags accepted a script entry")
+	if _, cssErr := m.tags("/", "pkg/server/ui/pages/login.ts", ".css"); cssErr == nil {
+		t.Fatal("viteCSS accepted a script entry")
 	}
-	if _, entryErr := m.entryTags("/", "pkg/server/ui/styles.css"); entryErr == nil {
-		t.Fatal("entryTags accepted a CSS entry")
+	if _, entryErr := m.tags("/", "pkg/server/ui/styles.css", ".js"); entryErr == nil {
+		t.Fatal("viteEntry accepted a CSS entry")
 	}
 }
 

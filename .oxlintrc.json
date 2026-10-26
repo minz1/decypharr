@@ -68,7 +68,7 @@
       "rules": {
         // Tests import describe/it/expect explicitly, so no global test types are needed (tsconfig "types": []).
         "vitest/no-importing-vitest-globals": "off",
-        // vitest.config.ts sets one testTimeout for every test.
+        // Vitest's default 5 s timeout applies to every test.
         "vitest/require-test-timeout": "off",
         // Every assertion is awaited in the test body, so counting them duplicates the test.
         "vitest/prefer-expect-assertions": "off",

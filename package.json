@@ -11,7 +11,6 @@
   "scripts": {
     "build": "vite build && node scripts/minify-js.js",
     "build:watch": "vite build --watch",
-    "minify-js": "node scripts/minify-js.js",
     "dev": "pnpm build && air",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.node.json",
     "lint": "oxlint --type-aware --deny-warnings -c .oxlintrc.json pkg/server/ui vite.config.ts vitest.config.ts",
