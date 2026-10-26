@@ -27,8 +27,35 @@ const provideFixtures = (provide: TestProject["provide"]): void => {
   );
 };
 
+const ICON_SOURCES = [
+  { dir: "pkg/server/templates", ext: ".html" },
+  { dir: "pkg/server/ui", ext: ".ts" },
+  { dir: "pkg/server/assets/js", ext: ".js" },
+];
+
+const sourceFiles = (dir: string, ext: string): string[] =>
+  existsSync(dir)
+    ? readdirSync(dir, { recursive: true, encoding: "utf8" })
+        .filter((name) => name.endsWith(ext) && !name.endsWith(".test.ts"))
+        .map((name) => path.join(dir, name))
+    : [];
+
+const provideIcons = (provide: TestProject["provide"]): void => {
+  const used = new Set<string>();
+  for (const { dir, ext } of ICON_SOURCES) {
+    for (const file of sourceFiles(dir, ext)) {
+      for (const [iconClass] of readFileSync(file, "utf8").matchAll(/\bbi-[a-z0-9-]+/gu)) {
+        used.add(iconClass);
+      }
+    }
+  }
+  provide("iconClasses", [...used]);
+  provide("iconCSS", readFileSync("node_modules/bootstrap-icons/font/bootstrap-icons.css", "utf8"));
+};
+
 const setup: GlobalSetup = ({ provide }) => {
   provideFixtures(provide);
+  provideIcons(provide);
 };
 
 export { setup };

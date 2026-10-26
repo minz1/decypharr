@@ -170,8 +170,8 @@ importers:
         specifier: ^4.3.3
         version: 4.3.3(vite@8.3.5(@types/node@26.6.5)(jiti@2.7.0)(terser@5.51.2))
       bootstrap-icons:
-        specifier: 1.11.2
-        version: 1.11.2
+        specifier: 1.13.2
+        version: 1.13.2
       daisyui:
         specifier: ^5.7.46
         version: 5.7.50
@@ -449,8 +449,8 @@ packages:
     resolution: {integrity: sha512-Izi8RQcffqCeNVgFigKli1ssklIbpHnCYc6AknXGYoB6grJqyeby7jv12JUQgmTAnIDnbck1uxksT4dzN3PWBA==}
     engines: {node: '>=12'}
 
-  bootstrap-icons@1.11.2:
-    resolution: {integrity: sha512-TgdiPv+IM9tgDb+dsxrnGIyocsk85d2M7T0qIgkvPedZeoZfyeG/j+yiAE4uHCEayKef2RP05ahQ0/e9Sv75Wg==}
+  bootstrap-icons@1.13.2:
+    resolution: {integrity: sha512-fAU1Ly3dH7hwRg+CB8EZ0Vl0fF80zgXHeUVJyfUOKzoURr+TbwISbCW5tKUoQLERaWYG2emTCybcPbD96hdD1A==}
 
   buffer-from@1.1.2:
     resolution: {integrity: sha512-E+XQCRwSbaaiChtv6k6Dwgc+bx+Bs6vuKJHHl5kox/BaKbhiXzqQOwK4cO22yElGp2OCmjwVhT3HmxgyPGnJfQ==}
@@ -1018,7 +1018,7 @@ snapshots:
 
   assertion-error@2.0.1: {}
 
-  bootstrap-icons@1.11.2: {}
+  bootstrap-icons@1.13.2: {}
 
   buffer-from@1.1.2: {}
 
