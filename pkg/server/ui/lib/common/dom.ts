@@ -50,4 +50,26 @@ const bootPage = (name: string, start: () => void | Promise<void>): void => {
   void run();
 };
 
-export { bootPage, byId, cloneTemplate, onAction };
+const field = (root: ParentNode, name: string): HTMLElement => {
+  const found = root.querySelector(`[data-field="${name}"]`);
+  if (!(found instanceof HTMLElement)) {
+    throw new TypeError(`missing [data-field="${name}"]`);
+  }
+  return found;
+};
+
+const cloneRow = (id: string): HTMLTableRowElement => {
+  const row = cloneTemplate(id).querySelector("tr");
+  if (row === null) {
+    throw new TypeError(`template #${id} has no row`);
+  }
+  return row;
+};
+
+const onClick = (button: HTMLButtonElement, action: () => unknown): void => {
+  button.addEventListener("click", () => {
+    void action();
+  });
+};
+
+export { bootPage, byId, cloneRow, cloneTemplate, field, onAction, onClick };

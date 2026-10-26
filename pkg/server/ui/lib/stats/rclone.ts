@@ -1,9 +1,9 @@
 import { cloneTemplate } from "#ui/lib/common/dom";
-import { formatBytes, formatDuration, formatSpeed } from "#ui/lib/common/format";
-import { asRecord } from "#ui/lib/common/json";
+import { formatBytes, formatDuration, formatSpeed, orElse } from "#ui/lib/common/format";
+import { asRecord, numOrZero, strOrEmpty } from "#ui/lib/common/json";
 import { cloneElement, field, setFields } from "#ui/lib/stats/dom";
-import { PERCENT, orElse } from "#ui/lib/stats/format";
-import { count, listOrEmpty, optRecord, text } from "#ui/lib/stats/read";
+import { PERCENT } from "#ui/lib/stats/format";
+import { listOrEmpty, optRecord } from "#ui/lib/stats/read";
 
 interface Transfer {
   name: string;
@@ -52,24 +52,24 @@ interface RcloneView {
 const parseTransfer = (value: unknown): Transfer => {
   const record = asRecord(value, "transferring");
   return {
-    name: text(record, "name"),
-    bytes: count(record, "bytes"),
-    size: count(record, "size"),
-    speed: count(record, "speed"),
-    eta: count(record, "eta"),
+    name: strOrEmpty(record, "name"),
+    bytes: numOrZero(record, "bytes"),
+    size: numOrZero(record, "size"),
+    speed: numOrZero(record, "speed"),
+    eta: numOrZero(record, "eta"),
   };
 };
 
 const parseCore = (core: Record<string, unknown> | undefined): RcloneStats["core"] =>
   core && {
-    bytes: count(core, "bytes"),
-    speed: count(core, "speed"),
-    transfers: count(core, "transfers"),
-    errors: count(core, "errors"),
-    checks: count(core, "checks"),
-    totalChecks: count(core, "totalChecks"),
-    elapsedTime: count(core, "elapsedTime"),
-    transferTime: count(core, "transferTime"),
+    bytes: numOrZero(core, "bytes"),
+    speed: numOrZero(core, "speed"),
+    transfers: numOrZero(core, "transfers"),
+    errors: numOrZero(core, "errors"),
+    checks: numOrZero(core, "checks"),
+    totalChecks: numOrZero(core, "totalChecks"),
+    elapsedTime: numOrZero(core, "elapsedTime"),
+    transferTime: numOrZero(core, "transferTime"),
     transferring: listOrEmpty(core, "transferring").map((transfer) => parseTransfer(transfer)),
   };
 
@@ -78,10 +78,17 @@ const parseRclone = (detail: Record<string, unknown>): RcloneStats => {
   const memory = optRecord(detail, "memory");
   const bandwidth = optRecord(detail, "bandwidth");
   return {
-    version: version && { version: text(version, "version"), arch: text(version, "arch"), os: text(version, "os") },
+    version: version && {
+      version: strOrEmpty(version, "version"),
+      arch: strOrEmpty(version, "arch"),
+      os: strOrEmpty(version, "os"),
+    },
     core: parseCore(optRecord(detail, "core")),
-    memory: memory && { sys: count(memory, "Sys"), totalAlloc: count(memory, "TotalAlloc") },
-    bandwidth: bandwidth && { bytesPerSecond: count(bandwidth, "bytesPerSecond"), rate: text(bandwidth, "rate") },
+    memory: memory && { sys: numOrZero(memory, "Sys"), totalAlloc: numOrZero(memory, "TotalAlloc") },
+    bandwidth: bandwidth && {
+      bytesPerSecond: numOrZero(bandwidth, "bytesPerSecond"),
+      rate: strOrEmpty(bandwidth, "rate"),
+    },
   };
 };
 

@@ -1,8 +1,8 @@
-import { formatBytes } from "#ui/lib/common/format";
-import { asArray, asRecord, num, optBool, str } from "#ui/lib/common/json";
+import { formatBytes, orElse } from "#ui/lib/common/format";
+import { asArray, asRecord, num, numOrZero, optBool, str, strOrEmpty } from "#ui/lib/common/json";
 import { cloneElement, emptyMessage, field, setFields } from "#ui/lib/stats/dom";
-import { formatNumber, orElse } from "#ui/lib/stats/format";
-import { count, listOrEmpty, optRecord, recordOrEmpty, text } from "#ui/lib/stats/read";
+import { formatNumber } from "#ui/lib/stats/format";
+import { listOrEmpty, optRecord, recordOrEmpty } from "#ui/lib/stats/read";
 import { debridSpeed, parseSpeedTest } from "#ui/lib/stats/speedtest";
 
 interface Account {
@@ -49,9 +49,9 @@ const parseAccount = (value: unknown): Account => {
     order: num(record, "order"),
     disabled: optBool(record, "disabled") ?? false,
     inUse: optBool(record, "in_use") ?? false,
-    username: text(record, "username"),
-    trafficUsed: count(record, "traffic_used"),
-    expiration: text(record, "expiration"),
+    username: strOrEmpty(record, "username"),
+    trafficUsed: numOrZero(record, "traffic_used"),
+    expiration: strOrEmpty(record, "expiration"),
   };
 };
 
@@ -66,13 +66,13 @@ const parseDebrid = (value: unknown): DebridStats => {
   const library = recordOrEmpty(record, "library");
   return {
     name: str(profile, "name"),
-    username: text(profile, "username"),
-    points: count(profile, "points"),
-    type: text(profile, "type"),
-    expiration: text(profile, "expiration"),
-    total: count(library, "total"),
-    bad: count(library, "bad"),
-    activeLinks: count(library, "active_links"),
+    username: strOrEmpty(profile, "username"),
+    points: numOrZero(profile, "points"),
+    type: strOrEmpty(profile, "type"),
+    expiration: strOrEmpty(profile, "expiration"),
+    total: numOrZero(library, "total"),
+    bad: numOrZero(library, "bad"),
+    activeLinks: numOrZero(library, "active_links"),
     accounts: listOrEmpty(record, "accounts").map((account) => parseAccount(account)),
     speedTest: storedSpeedTest(optRecord(record, "speed_test_result")),
   };

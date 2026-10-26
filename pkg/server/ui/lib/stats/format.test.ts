@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatNumber, formatPercent, formatUptime, orElse } from "#ui/lib/stats/format";
+import { formatNumber, formatPercent, formatUptime } from "#ui/lib/stats/format";
 
 describe("formatting an uptime", () => {
   it.each([
@@ -31,11 +31,5 @@ describe("formatting a ratio as a percentage", () => {
     [1, "100.0%"],
   ])("formats %d as %j", (ratio, want) => {
     expect(formatPercent(ratio)).toBe(want);
-  });
-});
-
-describe("falling back from an empty string", () => {
-  it("keeps a non-empty value and replaces an empty one", () => {
-    expect([orElse("x", "-"), orElse("", "-")]).toStrictEqual(["x", "-"]);
   });
 });

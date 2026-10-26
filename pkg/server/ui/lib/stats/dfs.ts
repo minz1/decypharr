@@ -1,9 +1,8 @@
 import { cloneTemplate } from "#ui/lib/common/dom";
-import { formatBytes, formatSpeed } from "#ui/lib/common/format";
-import { optNum } from "#ui/lib/common/json";
+import { formatBytes, formatSpeed, orElse } from "#ui/lib/common/format";
+import { numOrZero, optNum, strOrEmpty } from "#ui/lib/common/json";
 import { field, setFields } from "#ui/lib/stats/dom";
-import { PERCENT, formatNumber, orElse } from "#ui/lib/stats/format";
-import { count, text } from "#ui/lib/stats/read";
+import { PERCENT, formatNumber } from "#ui/lib/stats/format";
 
 interface DFSStats {
   activeFiles: number;
@@ -54,23 +53,23 @@ const GOOD_HIT_RATE = 0.8;
 const FAIR_HIT_RATE = 0.5;
 
 const parseDFS = (detail: Record<string, unknown>): DFSStats => ({
-  activeFiles: count(detail, "active_files"),
-  totalFiles: count(detail, "total_files"),
-  cacheType: text(detail, "cache_type"),
-  items: count(detail, "cache_item_count"),
-  activeItems: count(detail, "cache_active_item_count"),
-  totalSize: count(detail, "cache_total_size"),
-  maxSize: count(detail, "cache_max_size"),
+  activeFiles: numOrZero(detail, "active_files"),
+  totalFiles: numOrZero(detail, "total_files"),
+  cacheType: strOrEmpty(detail, "cache_type"),
+  items: numOrZero(detail, "cache_item_count"),
+  activeItems: numOrZero(detail, "cache_active_item_count"),
+  totalSize: numOrZero(detail, "cache_total_size"),
+  maxSize: numOrZero(detail, "cache_max_size"),
   utilization: optNum(detail, "cache_utilization"),
-  activeDownloads: count(detail, "cache_active_downloads"),
-  downloadSpeed: count(detail, "cache_download_speed"),
-  totalDownloaded: count(detail, "cache_total_downloaded"),
-  hits: count(detail, "cache_cache_hits"),
-  misses: count(detail, "cache_cache_misses"),
-  hitRate: count(detail, "cache_cache_hit_rate"),
-  circuitBreakers: count(detail, "cache_circuit_breakers"),
-  bufferAllocated: count(detail, "cache_buffer_memory_allocated"),
-  bufferInUse: count(detail, "cache_buffer_memory_in_use"),
+  activeDownloads: numOrZero(detail, "cache_active_downloads"),
+  downloadSpeed: numOrZero(detail, "cache_download_speed"),
+  totalDownloaded: numOrZero(detail, "cache_total_downloaded"),
+  hits: numOrZero(detail, "cache_cache_hits"),
+  misses: numOrZero(detail, "cache_cache_misses"),
+  hitRate: numOrZero(detail, "cache_cache_hit_rate"),
+  circuitBreakers: numOrZero(detail, "cache_circuit_breakers"),
+  bufferAllocated: numOrZero(detail, "cache_buffer_memory_allocated"),
+  bufferInUse: numOrZero(detail, "cache_buffer_memory_in_use"),
 });
 
 const usageClass = (percent: number): string => {

@@ -1,9 +1,8 @@
 import { cloneTemplate } from "#ui/lib/common/dom";
 import { describeError } from "#ui/lib/common/errors";
 import { fetcher } from "#ui/lib/common/http";
-import { asRecord, readJSON } from "#ui/lib/common/json";
+import { asRecord, numOrZero, readJSON, strOrEmpty } from "#ui/lib/common/json";
 import { cloneElement, field } from "#ui/lib/stats/dom";
-import { count, text } from "#ui/lib/stats/read";
 
 type Protocol = "nntp" | "debrid";
 
@@ -25,10 +24,10 @@ const BITS_PER_BYTE = 8;
 const parseSpeedTest = (value: unknown): SpeedTestResult => {
   const record = asRecord(value, "speed test");
   return {
-    error: text(record, "error"),
-    latencyMs: count(record, "latency_ms"),
-    speedMbps: count(record, "speed_mbps"),
-    testedAt: text(record, "tested_at"),
+    error: strOrEmpty(record, "error"),
+    latencyMs: numOrZero(record, "latency_ms"),
+    speedMbps: numOrZero(record, "speed_mbps"),
+    testedAt: strOrEmpty(record, "tested_at"),
   };
 };
 

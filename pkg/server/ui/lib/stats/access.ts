@@ -1,9 +1,9 @@
 import { byId } from "#ui/lib/common/dom";
-import { optBool } from "#ui/lib/common/json";
+import { orElse } from "#ui/lib/common/format";
+import { numOrZero, optBool, strOrEmpty } from "#ui/lib/common/json";
 import { cloneElement, field } from "#ui/lib/stats/dom";
 import type { PageLocation, Server, ServerCard } from "#ui/lib/stats/elements";
-import { orElse } from "#ui/lib/stats/format";
-import { count, recordOrEmpty, text } from "#ui/lib/stats/read";
+import { recordOrEmpty } from "#ui/lib/stats/read";
 
 interface AccessStats {
   webdav: { enabled: boolean; path: string; port: string; authRequired: boolean };
@@ -44,16 +44,16 @@ const parseAccess = (record: Record<string, unknown>): AccessStats => {
   return {
     webdav: {
       enabled: enabled(webdav),
-      path: text(webdav, "path"),
-      port: text(webdav, "port"),
+      path: strOrEmpty(webdav, "path"),
+      port: strOrEmpty(webdav, "port"),
       authRequired: optBool(webdav, "auth_required") ?? false,
     },
-    nfs: { enabled: enabled(nfs), port: count(nfs, "port") },
+    nfs: { enabled: enabled(nfs), port: numOrZero(nfs, "port") },
     smb: {
       enabled: enabled(smb),
-      port: count(smb, "port"),
-      shareName: text(smb, "share_name"),
-      username: text(smb, "username"),
+      port: numOrZero(smb, "port"),
+      shareName: strOrEmpty(smb, "share_name"),
+      username: strOrEmpty(smb, "username"),
     },
   };
 };

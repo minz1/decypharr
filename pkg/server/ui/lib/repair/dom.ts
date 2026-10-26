@@ -1,12 +1,4 @@
-import { cloneTemplate } from "#ui/lib/common/dom";
-
-const field = (root: ParentNode, name: string): HTMLElement => {
-  const found = root.querySelector(`[data-field="${name}"]`);
-  if (!(found instanceof HTMLElement)) {
-    throw new TypeError(`missing [data-field="${name}"]`);
-  }
-  return found;
-};
+import { cloneTemplate, field } from "#ui/lib/common/dom";
 
 const fillFields = (root: ParentNode, texts: Readonly<Record<string, string>>): void => {
   for (const [name, text] of Object.entries(texts)) {
@@ -20,4 +12,4 @@ const cloneRows = (id: string): DocumentFragment => {
   return rows;
 };
 
-export { cloneRows, field, fillFields };
+export { cloneRows, fillFields };

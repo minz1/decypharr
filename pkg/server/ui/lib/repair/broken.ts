@@ -1,5 +1,5 @@
-import { byId, cloneTemplate } from "#ui/lib/common/dom";
-import { cloneRows, field, fillFields } from "#ui/lib/repair/dom";
+import { byId, cloneTemplate, field } from "#ui/lib/common/dom";
+import { cloneRows, fillFields } from "#ui/lib/repair/dom";
 import { brokenFileIds, formatFileSize, formatTimestamp, pageButtons, pageCount } from "#ui/lib/repair/format";
 import type { BrokenFile, BrokenView, EntryHealth } from "#ui/lib/repair/types";
 

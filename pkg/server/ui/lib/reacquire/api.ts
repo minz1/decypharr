@@ -1,5 +1,4 @@
-import { fetcher } from "#ui/lib/common/http";
-import { asArray, asRecord, optNum, optStr, readJSON } from "#ui/lib/common/json";
+import { asArray, asRecord, numOrZero, optNum, strOrEmpty } from "#ui/lib/common/json";
 import type { Binding, IndexSummary, Job, Mutation } from "#ui/lib/reacquire/types";
 
 type JSONRecord = Record<string, unknown>;
@@ -7,55 +6,49 @@ type JSONRecord = Record<string, unknown>;
 const listOrEmpty = (value: unknown, path: string): readonly unknown[] =>
   value === null || value === undefined ? [] : asArray(value, path);
 
-const text = (record: JSONRecord, key: string): string => optStr(record, key) ?? "";
-
-const count = (record: JSONRecord, key: string): number => optNum(record, key) ?? 0;
-
-const getJSON = async (endpoint: string): Promise<unknown> => readJSON(await fetcher(endpoint));
-
 const parseBinding = (value: unknown): Binding => {
   const binding = asRecord(value, "binding");
   return {
-    arrName: text(binding, "arrName"),
-    arrType: text(binding, "arrType"),
-    entryId: text(binding, "entryId"),
-    entryName: text(binding, "entryName"),
-    entryFileId: text(binding, "entryFileId"),
-    entryFileName: text(binding, "entryFileName"),
-    arrFileId: count(binding, "arrFileId"),
-    seriesId: count(binding, "seriesId"),
+    arrName: strOrEmpty(binding, "arrName"),
+    arrType: strOrEmpty(binding, "arrType"),
+    entryId: strOrEmpty(binding, "entryId"),
+    entryName: strOrEmpty(binding, "entryName"),
+    entryFileId: strOrEmpty(binding, "entryFileId"),
+    entryFileName: strOrEmpty(binding, "entryFileName"),
+    arrFileId: numOrZero(binding, "arrFileId"),
+    seriesId: numOrZero(binding, "seriesId"),
     seasonNumber: optNum(binding, "seasonNumber"),
-    movieId: count(binding, "movieId"),
-    confidence: text(binding, "confidence"),
+    movieId: numOrZero(binding, "movieId"),
+    confidence: strOrEmpty(binding, "confidence"),
   };
 };
 
 const parseMutation = (value: unknown): Mutation => {
   const mutation = asRecord(value, "mutation");
   return {
-    kind: text(mutation, "kind"),
-    state: text(mutation, "state"),
-    attempts: count(mutation, "attempts"),
-    confirmedAt: text(mutation, "confirmedAt"),
+    kind: strOrEmpty(mutation, "kind"),
+    state: strOrEmpty(mutation, "state"),
+    attempts: numOrZero(mutation, "attempts"),
+    confirmedAt: strOrEmpty(mutation, "confirmedAt"),
   };
 };
 
 const parseJob = (value: unknown): Job => {
   const job = asRecord(value, "job");
   return {
-    id: text(job, "id"),
-    status: text(job, "status"),
-    cause: text(job, "cause"),
-    strategy: text(job, "strategy"),
-    arrName: text(job, "arrName"),
-    arrType: text(job, "arrType"),
-    fileId: text(job, "fileId"),
-    downloadId: text(job, "downloadId"),
-    replacementDownloadId: text(job, "replacementDownloadId"),
-    lastError: text(job, "lastError"),
-    createdAt: text(job, "createdAt"),
-    updatedAt: text(job, "updatedAt"),
-    completedAt: text(job, "completedAt"),
+    id: strOrEmpty(job, "id"),
+    status: strOrEmpty(job, "status"),
+    cause: strOrEmpty(job, "cause"),
+    strategy: strOrEmpty(job, "strategy"),
+    arrName: strOrEmpty(job, "arrName"),
+    arrType: strOrEmpty(job, "arrType"),
+    fileId: strOrEmpty(job, "fileId"),
+    downloadId: strOrEmpty(job, "downloadId"),
+    replacementDownloadId: strOrEmpty(job, "replacementDownloadId"),
+    lastError: strOrEmpty(job, "lastError"),
+    createdAt: strOrEmpty(job, "createdAt"),
+    updatedAt: strOrEmpty(job, "updatedAt"),
+    completedAt: strOrEmpty(job, "completedAt"),
     bindings: listOrEmpty(job["bindings"], "bindings").map((item) => parseBinding(item)),
     mutations: listOrEmpty(job["mutations"], "mutations").map((item) => parseMutation(item)),
   };
@@ -68,11 +61,11 @@ const parseBindings = (value: unknown): Binding[] => listOrEmpty(value, "binding
 const parseSummary = (value: unknown): IndexSummary => {
   const summary = asRecord(value, "summary");
   return {
-    arrName: text(summary, "arrName"),
-    arrType: text(summary, "arrType"),
-    bindings: count(summary, "bindings"),
-    actionable: count(summary, "actionable"),
-    updatedAt: text(summary, "updatedAt"),
+    arrName: strOrEmpty(summary, "arrName"),
+    arrType: strOrEmpty(summary, "arrType"),
+    bindings: numOrZero(summary, "bindings"),
+    actionable: numOrZero(summary, "actionable"),
+    updatedAt: strOrEmpty(summary, "updatedAt"),
   };
 };
 
@@ -134,7 +127,6 @@ export {
   deleteJobsRequest,
   deletedCount,
   errorDetail,
-  getJSON,
   parseBindings,
   parseIndex,
   parseJobs,

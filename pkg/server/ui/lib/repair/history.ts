@@ -1,5 +1,5 @@
-import { byId } from "#ui/lib/common/dom";
-import { cloneRows, field, fillFields } from "#ui/lib/repair/dom";
+import { byId, field } from "#ui/lib/common/dom";
+import { cloneRows, fillFields } from "#ui/lib/repair/dom";
 import { formatRunDuration, formatTimestamp, runBadgeClass } from "#ui/lib/repair/format";
 import type { HistoryView, RepairRun } from "#ui/lib/repair/types";
 

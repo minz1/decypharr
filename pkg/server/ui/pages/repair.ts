@@ -1,4 +1,4 @@
-import { bootPage, byId, onAction } from "#ui/lib/common/dom";
+import { bootPage, byId, onAction, onClick } from "#ui/lib/common/dom";
 import {
   clearHistory,
   clearState,
@@ -15,12 +15,6 @@ import {
 import { toggleBrokenRow } from "#ui/lib/repair/broken";
 import { goToBrokenPage, loadAll, loadHistory, repairPage } from "#ui/lib/repair/loads";
 import type { RepairPage } from "#ui/lib/repair/types";
-
-const onClick = (button: HTMLButtonElement, action: () => unknown): void => {
-  button.addEventListener("click", () => {
-    void action();
-  });
-};
 
 const onSubmit = (form: HTMLFormElement, submit: () => Promise<void>): void => {
   form.addEventListener("submit", (event) => {

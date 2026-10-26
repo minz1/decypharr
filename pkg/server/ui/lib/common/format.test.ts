@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { debounce, formatBytes, formatDuration, formatSpeed } from "#ui/lib/common/format";
+import { debounce, formatBytes, formatDuration, formatSpeed, orElse } from "#ui/lib/common/format";
 
 describe("formatting bytes", () => {
   it.each([
@@ -66,5 +66,15 @@ describe("debouncing", () => {
     vi.advanceTimersByTime(100);
     vi.useRealTimers();
     expect(seen).toStrictEqual(["b"]);
+  });
+});
+
+describe("falling back from an empty string", () => {
+  it("keeps a non-empty value and replaces an empty one", () => {
+    expect([orElse("x", "-"), orElse("", "-")]).toStrictEqual(["x", "-"]);
+  });
+
+  it("keeps a value that is only whitespace", () => {
+    expect(orElse(" ", "-")).toBe(" ");
   });
 });

@@ -70,4 +70,27 @@ const optNum = (record: Record<string, unknown>, key: string): number | undefine
 
 const optBool = (record: Record<string, unknown>, key: string): boolean | undefined => optional(bool, record, key);
 
-export { JSON_NULL, ShapeError, asArray, asRecord, bool, num, optBool, optNum, optStr, readJSON, str };
+const strOrEmpty = (record: Record<string, unknown>, key: string): string => optStr(record, key) ?? "";
+
+const numOrZero = (record: Record<string, unknown>, key: string): number => optNum(record, key) ?? 0;
+
+const optList = (record: Record<string, unknown>, key: string): readonly unknown[] =>
+  record[key] === undefined || record[key] === null ? [] : asArray(record[key], key);
+
+export {
+  JSON_NULL,
+  ShapeError,
+  asArray,
+  asRecord,
+  bool,
+  isRecord,
+  num,
+  numOrZero,
+  optBool,
+  optList,
+  optNum,
+  optStr,
+  readJSON,
+  str,
+  strOrEmpty,
+};

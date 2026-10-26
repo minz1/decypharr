@@ -1,5 +1,6 @@
 import { byId } from "#ui/lib/common/dom";
-import { bindingsEndpoint, getJSON, parseBindings, parseIndex, parseJobs } from "#ui/lib/reacquire/api";
+import { getJSON } from "#ui/lib/common/http";
+import { bindingsEndpoint, parseBindings, parseIndex, parseJobs } from "#ui/lib/reacquire/api";
 import { DEFAULT_PAGE_SIZE, isTerminal, isWorking } from "#ui/lib/reacquire/format";
 import { jobsView, renderCounts, renderJobs } from "#ui/lib/reacquire/jobs";
 import {

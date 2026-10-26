@@ -1,8 +1,6 @@
+import { isRecord } from "#ui/lib/common/json";
 import { RESERVED_FOLDER_NAMES, validateFolder } from "#ui/lib/config/vf-model";
 import type { Folder } from "#ui/lib/config/vf-types";
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 
 const records = (value: unknown): Record<string, unknown>[] =>
   Array.isArray(value) ? value.filter((item) => isRecord(item)) : [];

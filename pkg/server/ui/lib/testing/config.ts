@@ -1,5 +1,6 @@
 import { expect, inject, onTestFinished, vi } from "vitest";
 
+import { isRecord } from "#ui/lib/common/json";
 import { stubAPI } from "#ui/lib/testing/api";
 import { element } from "#ui/lib/testing/dom";
 import { loadFixture } from "#ui/lib/testing/fixture";
@@ -81,9 +82,6 @@ const shownToasts = async (text: string): Promise<string[]> => {
   await waitForToast(text);
   return labelledToasts();
 };
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 
 const member = (value: unknown, key: string): unknown => (isRecord(value) ? value[key] : undefined);
 

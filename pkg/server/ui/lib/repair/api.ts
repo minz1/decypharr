@@ -1,5 +1,4 @@
-import { fetcher } from "#ui/lib/common/http";
-import { asArray, asRecord, num, optBool, optNum, optStr, readJSON } from "#ui/lib/common/json";
+import { asArray, asRecord, num, numOrZero, optBool, optNum, optStr, strOrEmpty } from "#ui/lib/common/json";
 import type {
   ActiveRun,
   BrokenFile,
@@ -19,10 +18,6 @@ const listOrEmpty = (value: unknown, path: string): readonly unknown[] => (value
 const recordOrEmpty = (value: unknown, path: string): JSONRecord =>
   value === null || value === undefined ? {} : asRecord(value, path);
 
-const text = (record: JSONRecord, key: string): string => optStr(record, key) ?? "";
-
-const count = (record: JSONRecord, key: string): number => optNum(record, key) ?? 0;
-
 const parseRepairConfig = (value: unknown): RepairConfig => {
   const config = recordOrEmpty(value, "repair config");
   return {
@@ -34,14 +29,14 @@ const parseRepairConfig = (value: unknown): RepairConfig => {
 const parseStats = (value: unknown): RunStats => {
   const stats = recordOrEmpty(value, "stats");
   return {
-    candidates: count(stats, "candidates"),
-    skippedFresh: count(stats, "skipped_fresh"),
-    probed: count(stats, "probed"),
-    healthy: count(stats, "healthy"),
-    broken: count(stats, "broken"),
-    repaired: count(stats, "repaired"),
-    cleared: count(stats, "cleared"),
-    repairFailed: count(stats, "repair_failed"),
+    candidates: numOrZero(stats, "candidates"),
+    skippedFresh: numOrZero(stats, "skipped_fresh"),
+    probed: numOrZero(stats, "probed"),
+    healthy: numOrZero(stats, "healthy"),
+    broken: numOrZero(stats, "broken"),
+    repaired: numOrZero(stats, "repaired"),
+    cleared: numOrZero(stats, "cleared"),
+    repairFailed: numOrZero(stats, "repair_failed"),
   };
 };
 
@@ -51,9 +46,9 @@ const parseActiveRun = (value: unknown): ActiveRun | undefined => {
   }
   const run = asRecord(value, "active_run");
   return {
-    id: text(run, "id"),
-    stage: text(run, "stage"),
-    startedAt: text(run, "started_at"),
+    id: strOrEmpty(run, "id"),
+    stage: strOrEmpty(run, "stage"),
+    startedAt: strOrEmpty(run, "started_at"),
     stats: parseStats(run["stats"]),
   };
 };
@@ -76,12 +71,12 @@ const parseRepairStatus = (value: unknown): RepairStatus => {
 const parseRun = (value: unknown): RepairRun => {
   const run = asRecord(value, "run");
   return {
-    trigger: text(run, "trigger"),
-    status: text(run, "status"),
-    startedAt: text(run, "started_at"),
-    completedAt: text(run, "completed_at"),
+    trigger: strOrEmpty(run, "trigger"),
+    status: strOrEmpty(run, "status"),
+    startedAt: strOrEmpty(run, "started_at"),
+    completedAt: strOrEmpty(run, "completed_at"),
     stats: parseStats(run["stats"]),
-    error: text(run, "error"),
+    error: strOrEmpty(run, "error"),
   };
 };
 
@@ -90,14 +85,14 @@ const parseRuns = (value: unknown): RepairRun[] => listOrEmpty(value, "runs").ma
 const parseBrokenFile = (value: unknown): BrokenFile => {
   const file = asRecord(value, "broken file");
   return {
-    fileName: text(file, "file_name"),
-    reason: text(file, "reason"),
-    size: count(file, "size"),
-    arrName: text(file, "arr_name"),
-    arrKind: text(file, "arr_kind"),
-    mediaId: count(file, "media_id"),
-    episodeId: count(file, "episode_id"),
-    arrFileId: count(file, "arr_file_id"),
+    fileName: strOrEmpty(file, "file_name"),
+    reason: strOrEmpty(file, "reason"),
+    size: numOrZero(file, "size"),
+    arrName: strOrEmpty(file, "arr_name"),
+    arrKind: strOrEmpty(file, "arr_kind"),
+    mediaId: numOrZero(file, "media_id"),
+    episodeId: numOrZero(file, "episode_id"),
+    arrFileId: numOrZero(file, "arr_file_id"),
   };
 };
 
@@ -107,14 +102,14 @@ const parseEntry = (value: unknown): EntryHealth => {
     entry["broken_files"] === undefined ? [] : listOrEmpty(entry["broken_files"], "broken_files")
   ).map((item) => parseBrokenFile(item));
   return {
-    entryName: text(entry, "entry_name"),
-    protocol: text(entry, "protocol"),
-    fileCount: count(entry, "file_count"),
+    entryName: strOrEmpty(entry, "entry_name"),
+    protocol: strOrEmpty(entry, "protocol"),
+    fileCount: numOrZero(entry, "file_count"),
     brokenCount: optNum(entry, "broken_count") ?? brokenFiles.length,
-    failureReason: text(entry, "failure_reason"),
-    lastCheckedAt: text(entry, "last_checked_at"),
-    lastFailedAt: text(entry, "last_failed_at"),
-    lastRepairAt: text(entry, "last_repair_at"),
+    failureReason: strOrEmpty(entry, "failure_reason"),
+    lastCheckedAt: strOrEmpty(entry, "last_checked_at"),
+    lastFailedAt: strOrEmpty(entry, "last_failed_at"),
+    lastRepairAt: strOrEmpty(entry, "last_repair_at"),
     brokenFiles,
   };
 };
@@ -125,7 +120,7 @@ const arrName = (value: unknown): string => {
   if (typeof value !== "object" || value === null) {
     return "";
   }
-  return text(asRecord(value, "arr"), "name");
+  return strOrEmpty(asRecord(value, "arr"), "name");
 };
 
 const parseArrNames = (value: unknown): string[] =>
@@ -156,8 +151,6 @@ const clearStateRequest = (statuses: readonly string[]): RequestInit => postJSON
 
 const recheckMediaRequest = (recheck: RecheckMedia): RequestInit =>
   postJSON({ arr: recheck.arr, media_id: recheck.mediaId, fix: recheck.fix });
-
-const getJSON = async (endpoint: string): Promise<unknown> => readJSON(await fetcher(endpoint));
 
 const parseLoosely = (body: string): unknown => {
   try {
@@ -203,7 +196,6 @@ export {
   failureMessage,
   fixAllRequest,
   fixOneRequest,
-  getJSON,
   parseArrNames,
   parseEntries,
   parseRepairConfig,

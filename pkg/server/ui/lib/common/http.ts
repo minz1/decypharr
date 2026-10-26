@@ -1,3 +1,4 @@
+import { readJSON } from "#ui/lib/common/json";
 import { joinURL, readURLBase } from "#ui/lib/common/url";
 
 const fetcher = async (endpoint: string, init: RequestInit = {}): Promise<Response> => {
@@ -8,4 +9,6 @@ const fetcher = async (endpoint: string, init: RequestInit = {}): Promise<Respon
   return fetch(joinURL(readURLBase(document), endpoint), { ...init, headers });
 };
 
-export { fetcher };
+const getJSON = async (endpoint: string): Promise<unknown> => readJSON(await fetcher(endpoint));
+
+export { fetcher, getJSON };

@@ -1,9 +1,9 @@
-import { optBool } from "#ui/lib/common/json";
+import { optBool, strOrEmpty } from "#ui/lib/common/json";
 import { dfsView, parseDFS, renderDFS } from "#ui/lib/stats/dfs";
 import { emptyMessage } from "#ui/lib/stats/dom";
 import type { MountElements } from "#ui/lib/stats/elements";
 import { parseRclone, rcloneView, renderRclone } from "#ui/lib/stats/rclone";
-import { recordOrEmpty, text } from "#ui/lib/stats/read";
+import { recordOrEmpty } from "#ui/lib/stats/read";
 
 type MountKind = "None" | "Rclone" | "DFS" | "External";
 
@@ -24,7 +24,7 @@ interface MountState {
 }
 
 const kindOf = (mount: Record<string, unknown>): MountKind => {
-  const type = text(mount, "type");
+  const type = strOrEmpty(mount, "type");
   const enabled = optBool(mount, "enabled") ?? false;
   if (type === "rclone" && enabled) {
     return "Rclone";

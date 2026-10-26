@@ -1,4 +1,4 @@
-import { bootPage, byId, onAction } from "#ui/lib/common/dom";
+import { bootPage, byId, onAction, onClick } from "#ui/lib/common/dom";
 import { debounce } from "#ui/lib/common/format";
 import {
   changeFilter,
@@ -16,12 +16,6 @@ import { openReacquireModal, selectBinding, submitReacquire } from "#ui/lib/reac
 import type { ReacquirePage } from "#ui/lib/reacquire/types";
 
 const SEARCH_DEBOUNCE_MS = 250;
-
-const onClick = (button: HTMLButtonElement, action: () => unknown): void => {
-  button.addEventListener("click", () => {
-    void action();
-  });
-};
 
 const bindJobs = (page: ReacquirePage): void => {
   const { jobs } = page;

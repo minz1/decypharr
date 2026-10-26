@@ -1,7 +1,7 @@
-import { byId, cloneTemplate } from "#ui/lib/common/dom";
+import { byId, cloneTemplate, field } from "#ui/lib/common/dom";
 import { arrKind, bindingMedia, formatTime } from "#ui/lib/reacquire/format";
 import type { Binding, IndexSummary, ReacquireModalView } from "#ui/lib/reacquire/types";
-import { cloneRows, field, fillFields } from "#ui/lib/repair/dom";
+import { cloneRows, fillFields } from "#ui/lib/repair/dom";
 
 const reacquireModalView = (doc: Document): ReacquireModalView => ({
   modal: byId("reacquireModal", HTMLDialogElement, doc),

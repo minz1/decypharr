@@ -2,11 +2,11 @@ import { setButtonLoading } from "#ui/lib/common/button";
 import { describeError } from "#ui/lib/common/errors";
 import { formatBytes } from "#ui/lib/common/format";
 import { fetcher } from "#ui/lib/common/http";
-import { asRecord, readJSON } from "#ui/lib/common/json";
+import { asRecord, numOrZero, readJSON } from "#ui/lib/common/json";
 import { createToast } from "#ui/lib/common/toast";
 import type { PurgeDialog } from "#ui/lib/stats/elements";
 import { formatNumber } from "#ui/lib/stats/format";
-import { count, recordOrEmpty } from "#ui/lib/stats/read";
+import { recordOrEmpty } from "#ui/lib/stats/read";
 
 interface CleanupResult {
   warnings: number;
@@ -35,19 +35,19 @@ const cacheOf = (value: unknown, path: string): Record<string, unknown> =>
 const parseCleanup = (value: unknown): CleanupResult => {
   const cache = cacheOf(value, "cleanup");
   return {
-    warnings: count(cache, "cleanup_warning_count"),
-    freedBytes: count(cache, "cleanup_freed_bytes"),
-    removedItems: count(cache, "cleanup_removed_items"),
+    warnings: numOrZero(cache, "cleanup_warning_count"),
+    freedBytes: numOrZero(cache, "cleanup_freed_bytes"),
+    removedItems: numOrZero(cache, "cleanup_removed_items"),
   };
 };
 
 const parsePurge = (value: unknown): PurgeResult => {
   const cache = cacheOf(value, "purge");
   return {
-    warnings: count(cache, "purge_warning_count"),
-    freedBytes: count(cache, "purge_freed_bytes"),
-    removedItems: count(cache, "purge_removed_items"),
-    skippedBusyItems: count(cache, "purge_skipped_busy_items"),
+    warnings: numOrZero(cache, "purge_warning_count"),
+    freedBytes: numOrZero(cache, "purge_freed_bytes"),
+    removedItems: numOrZero(cache, "purge_removed_items"),
+    skippedBusyItems: numOrZero(cache, "purge_skipped_busy_items"),
   };
 };
 

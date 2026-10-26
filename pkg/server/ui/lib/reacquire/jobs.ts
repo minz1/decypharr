@@ -1,4 +1,4 @@
-import { byId, cloneTemplate } from "#ui/lib/common/dom";
+import { byId, cloneTemplate, field } from "#ui/lib/common/dom";
 import { statusBadge } from "#ui/lib/reacquire/badge";
 import {
   COUNT_TILES,
@@ -13,7 +13,7 @@ import {
   statusLine,
 } from "#ui/lib/reacquire/format";
 import type { Job, JobsPage, JobsView, PageControl, ReacquireState } from "#ui/lib/reacquire/types";
-import { cloneRows, field, fillFields } from "#ui/lib/repair/dom";
+import { cloneRows, fillFields } from "#ui/lib/repair/dom";
 
 const jobsView = (doc: Document): JobsView => ({
   statusLine: byId("reacquireStatusLine", HTMLElement, doc),

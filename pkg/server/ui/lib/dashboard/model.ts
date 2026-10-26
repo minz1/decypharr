@@ -1,5 +1,5 @@
 import { formatSpeed } from "#ui/lib/common/format";
-import { asArray, asRecord, num, optNum, optStr, str } from "#ui/lib/common/json";
+import { asRecord, num, optList, optNum, optStr, str } from "#ui/lib/common/json";
 import type { Badge, DashboardState, ProtocolBadge, Torrent, TorrentPage } from "#ui/lib/dashboard/types";
 
 const PER_PAGE = 20;
@@ -19,9 +19,6 @@ const PROTOCOL_BADGES: Readonly<Record<string, ProtocolBadge>> = {
   torrent: { className: "badge-accent", icon: "bi-magnet", text: "Torrent" },
   nzb: { className: "badge-secondary", icon: "bi-newspaper", text: "Usenet" },
 };
-
-const optList = (record: Record<string, unknown>, key: string): readonly unknown[] =>
-  record[key] === undefined || record[key] === null ? [] : asArray(record[key], key);
 
 const parseTorrent = (value: unknown): Torrent => {
   const record = asRecord(value, "torrent");

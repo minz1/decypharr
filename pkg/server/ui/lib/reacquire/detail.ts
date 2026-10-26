@@ -1,8 +1,8 @@
-import { cloneTemplate } from "#ui/lib/common/dom";
+import { cloneTemplate, field } from "#ui/lib/common/dom";
 import { statusBadge } from "#ui/lib/reacquire/badge";
 import { arrKind, formatTime } from "#ui/lib/reacquire/format";
 import type { Binding, Job, Mutation } from "#ui/lib/reacquire/types";
-import { cloneRows, field, fillFields } from "#ui/lib/repair/dom";
+import { cloneRows, fillFields } from "#ui/lib/repair/dom";
 
 type DetailValue = Node | string;
 

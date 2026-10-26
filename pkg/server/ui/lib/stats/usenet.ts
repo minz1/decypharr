@@ -1,8 +1,8 @@
-import { formatBytes } from "#ui/lib/common/format";
-import { asRecord, optBool, str } from "#ui/lib/common/json";
+import { formatBytes, orElse } from "#ui/lib/common/format";
+import { asRecord, numOrZero, optBool, str, strOrEmpty } from "#ui/lib/common/json";
 import { cloneElement, emptyMessage, field, setFields } from "#ui/lib/stats/dom";
-import { PERCENT, formatNumber, orElse } from "#ui/lib/stats/format";
-import { count, listOrEmpty, optRecord, recordOrEmpty, text } from "#ui/lib/stats/read";
+import { PERCENT, formatNumber } from "#ui/lib/stats/format";
+import { listOrEmpty, optRecord, recordOrEmpty } from "#ui/lib/stats/read";
 import { parseSpeedTest, withText } from "#ui/lib/stats/speedtest";
 
 interface Provider {
@@ -44,13 +44,13 @@ const parseProvider = (value: unknown): Provider => {
   const record = asRecord(value, "providers");
   const speedTest = optRecord(record, "speed_test");
   return {
-    id: text(record, "id"),
+    id: strOrEmpty(record, "id"),
     host: str(record, "host"),
-    username: text(record, "username"),
+    username: strOrEmpty(record, "username"),
     ssl: optBool(record, "ssl") ?? false,
-    maxConnections: Math.max(count(record, "max_connections"), 0),
-    active: Math.max(count(record, "active"), 0),
-    idle: Math.max(count(record, "idle"), 0),
+    maxConnections: Math.max(numOrZero(record, "max_connections"), 0),
+    active: Math.max(numOrZero(record, "active"), 0),
+    idle: Math.max(numOrZero(record, "idle"), 0),
     speedTest: speedTest && parseSpeedTest(speedTest),
   };
 };
@@ -62,13 +62,13 @@ const parseUsenet = (record?: Record<string, unknown>): UsenetStats | undefined 
   const pool = recordOrEmpty(record, "pool");
   const buffers = recordOrEmpty(record, "buffers");
   return {
-    maxConnections: count(pool, "max_connections"),
-    active: count(pool, "active"),
-    idle: count(pool, "idle"),
-    totalCreated: count(pool, "total_created"),
-    memoryAllocated: count(buffers, "memory_allocated"),
-    memoryInUse: count(buffers, "memory_in_use"),
-    cachedBodyBytes: count(recordOrEmpty(record, "analyzer"), "CachedBodyBytes"),
+    maxConnections: numOrZero(pool, "max_connections"),
+    active: numOrZero(pool, "active"),
+    idle: numOrZero(pool, "idle"),
+    totalCreated: numOrZero(pool, "total_created"),
+    memoryAllocated: numOrZero(buffers, "memory_allocated"),
+    memoryInUse: numOrZero(buffers, "memory_in_use"),
+    cachedBodyBytes: numOrZero(recordOrEmpty(record, "analyzer"), "CachedBodyBytes"),
     providers: listOrEmpty(record, "providers").map((provider) => parseProvider(provider)),
   };
 };

@@ -46,4 +46,6 @@ const debounce = <Args extends unknown[]>(
   };
 };
 
-export { debounce, formatBytes, formatDuration, formatSpeed };
+const orElse = (value: string, fallback: string): string => (value === "" ? fallback : value);
+
+export { debounce, formatBytes, formatDuration, formatSpeed, orElse };

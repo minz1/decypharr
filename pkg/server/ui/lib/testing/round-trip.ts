@@ -1,9 +1,6 @@
-import { asRecord, str } from "#ui/lib/common/json";
+import { asRecord, isRecord, str } from "#ui/lib/common/json";
 
 type Leaves = Map<string, unknown[]>;
-
-const isObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 
 const addLeaf = (leaves: Leaves, path: string, value: unknown): void => {
   const values = leaves.get(path) ?? [];
@@ -12,13 +9,13 @@ const addLeaf = (leaves: Leaves, path: string, value: unknown): void => {
 };
 
 const collectLeaves = (value: unknown, path: string, leaves: Leaves): void => {
-  if (isObject(value)) {
+  if (isRecord(value)) {
     for (const [key, item] of Object.entries(value)) {
       collectLeaves(item, path === "" ? key : `${path}.${key}`, leaves);
     }
     return;
   }
-  if (Array.isArray(value) && value.length > 0 && value.every((item) => isObject(item))) {
+  if (Array.isArray(value) && value.length > 0 && value.every((item) => isRecord(item))) {
     for (const item of value) {
       collectLeaves(item, `${path}[]`, leaves);
     }

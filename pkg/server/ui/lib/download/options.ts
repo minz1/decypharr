@@ -1,3 +1,5 @@
+import { orElse } from "#ui/lib/common/format";
+
 interface DownloadOptions {
   category: string;
   action: string;
@@ -18,14 +20,12 @@ const DEFAULT_ACTION = "symlink";
 
 const storedText = (storage: Storage, key: string): string => storage.getItem(key) ?? "";
 
-const orDefault = (value: string, fallback: string): string => (value === "" ? fallback : value);
-
 const loadDownloadOptions = (storage: Storage, defaultFolder: string): DownloadOptions => ({
   category: storedText(storage, KEYS.category),
-  action: orDefault(storedText(storage, KEYS.action), DEFAULT_ACTION),
+  action: orElse(storedText(storage, KEYS.action), DEFAULT_ACTION),
   uncached: storage.getItem(KEYS.uncached) === "true",
   rmTrackerUrls: storage.getItem(KEYS.rmTrackerUrls) === "true",
-  folder: orDefault(storedText(storage, KEYS.folder), defaultFolder),
+  folder: orElse(storedText(storage, KEYS.folder), defaultFolder),
 });
 
 const saveDownloadOptions = (storage: Storage, options: DownloadOptions, saveRmTracker: boolean): void => {

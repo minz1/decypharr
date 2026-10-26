@@ -9,7 +9,7 @@ import type {
   SortKey,
   SortOrder,
 } from "#ui/lib/browse/types";
-import { asArray, asRecord, optBool, optNum, optStr, str } from "#ui/lib/common/json";
+import { asRecord, optBool, optList, optNum, optStr, str } from "#ui/lib/common/json";
 
 const PER_PAGE = 20;
 const GO_ZERO_TIME = "0001-01-01T00:00:00Z";
@@ -42,9 +42,6 @@ const KIND_BADGES: Readonly<Record<string, { classes: readonly string[]; text: s
   provider: { classes: ["badge-secondary", "badge-outline"], text: "Provider" },
   system: { classes: ["badge-ghost"], text: "Library" },
 };
-
-const optList = (record: Record<string, unknown>, key: string): readonly unknown[] =>
-  record[key] === undefined || record[key] === null ? [] : asArray(record[key], key);
 
 const parseEntry = (value: unknown): Entry => {
   const record = asRecord(value, "entry");

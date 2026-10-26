@@ -1,5 +1,4 @@
-import { byId, cloneTemplate } from "#ui/lib/common/dom";
-import { field } from "#ui/lib/repair/dom";
+import { byId, cloneTemplate, field } from "#ui/lib/common/dom";
 import { formatTimestamp, healthColor } from "#ui/lib/repair/format";
 import type { RepairStatus, RunStats, StatusView } from "#ui/lib/repair/types";
 

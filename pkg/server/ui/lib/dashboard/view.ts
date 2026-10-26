@@ -1,26 +1,10 @@
-import { cloneTemplate } from "#ui/lib/common/dom";
+import { cloneRow, field } from "#ui/lib/common/dom";
 import { formatBytes } from "#ui/lib/common/format";
 import { pageItems, renderPageItems, showingText } from "#ui/lib/common/pagination";
 import { progressColor, progressPercent, protocolBadge, stateBadge, torrentSpeed } from "#ui/lib/dashboard/model";
 import type { DashboardRefs, DashboardState, Torrent } from "#ui/lib/dashboard/types";
 
 const HASH_PREFIX = 8;
-
-const cloneRow = (id: string): HTMLTableRowElement => {
-  const row = cloneTemplate(id).querySelector("tr");
-  if (row === null) {
-    throw new TypeError(`template #${id} has no row`);
-  }
-  return row;
-};
-
-const field = (root: ParentNode, name: string): HTMLElement => {
-  const found = root.querySelector(`[data-field="${name}"]`);
-  if (!(found instanceof HTMLElement)) {
-    throw new TypeError(`missing [data-field="${name}"]`);
-  }
-  return found;
-};
 
 const fillBadgeCell = (cell: HTMLElement, text: string): void => {
   if (text === "") {

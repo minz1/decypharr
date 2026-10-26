@@ -1,8 +1,8 @@
 import { byId } from "#ui/lib/common/dom";
-import { formatBytes } from "#ui/lib/common/format";
-import { asRecord, num, optBool } from "#ui/lib/common/json";
-import { formatNumber, formatPercent, formatUptime, orElse } from "#ui/lib/stats/format";
-import { count, listOrEmpty, optRecord, recordOrEmpty, text } from "#ui/lib/stats/read";
+import { formatBytes, orElse } from "#ui/lib/common/format";
+import { asRecord, num, numOrZero, optBool, strOrEmpty } from "#ui/lib/common/json";
+import { formatNumber, formatPercent, formatUptime } from "#ui/lib/stats/format";
+import { listOrEmpty, optRecord, recordOrEmpty } from "#ui/lib/stats/read";
 
 interface SystemStats {
   uptimeSeconds: number;
@@ -91,29 +91,29 @@ type OverviewId = (typeof OVERVIEW_IDS)[number];
 type Entry = readonly [OverviewId, string];
 
 const parseSystem = (record: Record<string, unknown>): SystemStats => ({
-  uptimeSeconds: count(record, "uptime_seconds"),
-  startTime: text(record, "start_time"),
-  processRSS: text(record, "process_rss_mb"),
-  memoryUsed: text(record, "memory_used"),
-  heapAlloc: text(record, "heap_alloc_mb"),
-  heapReleased: text(record, "heap_released_mb"),
-  goroutines: count(record, "goroutines"),
-  gcCycles: count(record, "gc_cycles"),
-  numCPU: count(record, "num_cpu"),
-  arch: text(record, "arch"),
-  os: text(record, "os"),
-  goVersion: text(record, "go_version"),
+  uptimeSeconds: numOrZero(record, "uptime_seconds"),
+  startTime: strOrEmpty(record, "start_time"),
+  processRSS: strOrEmpty(record, "process_rss_mb"),
+  memoryUsed: strOrEmpty(record, "memory_used"),
+  heapAlloc: strOrEmpty(record, "heap_alloc_mb"),
+  heapReleased: strOrEmpty(record, "heap_released_mb"),
+  goroutines: numOrZero(record, "goroutines"),
+  gcCycles: numOrZero(record, "gc_cycles"),
+  numCPU: numOrZero(record, "num_cpu"),
+  arch: strOrEmpty(record, "arch"),
+  os: strOrEmpty(record, "os"),
+  goVersion: strOrEmpty(record, "go_version"),
 });
 
 const parseStorage = (record: Record<string, unknown> | undefined): StorageStats | undefined =>
-  record && { dbSize: count(record, "db_size"), totalEntries: count(record, "total_entries") };
+  record && { dbSize: numOrZero(record, "db_size"), totalEntries: numOrZero(record, "total_entries") };
 
 const parseRepair = (record: Record<string, unknown> | undefined): RepairStats | undefined =>
   record && {
-    active: count(record, "active_jobs"),
-    pending: count(record, "pending_jobs"),
-    completed: count(record, "completed_jobs"),
-    failed: count(record, "failed_jobs"),
+    active: numOrZero(record, "active_jobs"),
+    pending: numOrZero(record, "pending_jobs"),
+    completed: numOrZero(record, "completed_jobs"),
+    failed: numOrZero(record, "failed_jobs"),
   };
 
 const sumValues = (record: Record<string, unknown>): number => {
@@ -129,7 +129,7 @@ const sumField = (items: readonly unknown[], path: string, keys: readonly string
   for (const item of items) {
     const record = asRecord(item, path);
     for (const key of keys) {
-      total += count(record, key);
+      total += numOrZero(record, key);
     }
   }
   return total;
@@ -142,8 +142,8 @@ const parseHearsay = (record: Record<string, unknown>): HearsayStats => {
     enabled: optBool(record, "enabled") ?? false,
     participate: optBool(record, "participate") ?? false,
     publish: optBool(record, "publish") ?? false,
-    adviceMode: text(record, "advice_mode"),
-    identity: text(record, "identity"),
+    adviceMode: strOrEmpty(record, "advice_mode"),
+    identity: strOrEmpty(record, "identity"),
     feeds: sumValues(recordOrEmpty(record, "feeds")),
     peers: sumField(torrents, "torrents", ["active_peers"]),
     evaluations: sumField(advice, "advice", ["evaluations"]),
@@ -158,7 +158,7 @@ const parseOverview = (stats: Record<string, unknown>): Overview => {
   return {
     system: parseSystem(recordOrEmpty(stats, "system")),
     storage: parseStorage(optRecord(stats, "storage")),
-    queuePending: queue && count(queue, "pending"),
+    queuePending: queue && numOrZero(queue, "pending"),
     repair: parseRepair(optRecord(stats, "repair")),
     hearsay: parseHearsay(recordOrEmpty(stats, "hearsay")),
   };

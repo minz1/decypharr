@@ -1,5 +1,5 @@
 import { cloneTemplate } from "#ui/lib/common/dom";
-import { asArray, optStr } from "#ui/lib/common/json";
+import { asArray, isRecord, optStr } from "#ui/lib/common/json";
 
 const CATALOG = [
   { id: "failed_download", label: "Failed download" },
@@ -53,9 +53,6 @@ const catalogRow = (doc: Document, entry: (typeof CATALOG)[number], action: stri
   selectAction(row, action);
   return row;
 };
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 
 const readRules = (value: unknown): { actions: Map<string, string>; custom: CustomRule[] } => {
   const rules = isRecord(value) && Array.isArray(value["rules"]) ? asArray(value["rules"], "queue_cleanup.rules") : [];

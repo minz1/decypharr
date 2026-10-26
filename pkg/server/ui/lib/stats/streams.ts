@@ -1,9 +1,9 @@
 import { formatBytes } from "#ui/lib/common/format";
-import { asRecord, num, str } from "#ui/lib/common/json";
+import { asRecord, num, numOrZero, str, strOrEmpty } from "#ui/lib/common/json";
 import { cloneElement, emptyMessage, field, setFields } from "#ui/lib/stats/dom";
 import type { StreamsElements } from "#ui/lib/stats/elements";
 import { formatUptime } from "#ui/lib/stats/format";
-import { count, listOrEmpty, text } from "#ui/lib/stats/read";
+import { listOrEmpty } from "#ui/lib/stats/read";
 
 interface Stream {
   entryName: string;
@@ -41,10 +41,10 @@ const parseStream = (value: unknown): Stream => {
     entryName: str(record, "entry_name"),
     fileName: str(record, "file_name"),
     fileSize: num(record, "file_size"),
-    source: text(record, "source"),
+    source: strOrEmpty(record, "source"),
     startedAt: num(record, "started_at"),
-    debrid: text(record, "debrid"),
-    client: text(record, "client"),
+    debrid: strOrEmpty(record, "debrid"),
+    client: strOrEmpty(record, "client"),
   };
 };
 
@@ -52,7 +52,10 @@ const parseStreams = (record?: Record<string, unknown>): StreamStats => {
   if (!record) {
     return { count: 0, streams: [] };
   }
-  return { count: count(record, "count"), streams: listOrEmpty(record, "streams").map((item) => parseStream(item)) };
+  return {
+    count: numOrZero(record, "count"),
+    streams: listOrEmpty(record, "streams").map((item) => parseStream(item)),
+  };
 };
 
 const streamBadges = (total: number): { count: string; cardClass: string; tabClass: string } => {

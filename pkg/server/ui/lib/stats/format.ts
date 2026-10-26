@@ -28,6 +28,4 @@ const formatUptime = (seconds: number): string => {
 
 const formatPercent = (ratio: number): string => `${(ratio * PERCENT).toFixed(1)}%`;
 
-const orElse = (value: string, fallback: string): string => (value === "" ? fallback : value);
-
-export { PERCENT, formatNumber, formatPercent, formatUptime, orElse };
+export { PERCENT, formatNumber, formatPercent, formatUptime };
