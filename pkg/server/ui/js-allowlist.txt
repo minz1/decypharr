@@ -6,7 +6,6 @@ pkg/server/assets/js/setup.js: legacy, converts in spec 4
 pkg/server/templates/config.html: legacy, converts in spec 4
 pkg/server/templates/download.html: legacy, converts in spec 4
 pkg/server/templates/reacquire.html: legacy, converts in spec 4
-pkg/server/templates/register.html: legacy, converts in spec 4
 pkg/server/templates/repair.html: legacy, converts in spec 4
 pkg/server/templates/setup.html: legacy, converts in spec 4
 pkg/server/templates/stats.html: legacy, converts in spec 4
