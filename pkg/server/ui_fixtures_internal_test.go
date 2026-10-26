@@ -101,6 +101,43 @@ func writeFixture(t *testing.T, dir, name string, body []byte) {
 	}
 }
 
+// clearFixtures removes the fixtures an earlier run wrote, so a renamed page leaves none behind.
+func clearFixtures(t *testing.T, dir string) {
+	t.Helper()
+	if dir == "" {
+		return
+	}
+	for _, pattern := range []string{"*.html", "*.json"} {
+		stale, err := filepath.Glob(filepath.Join(dir, pattern))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, file := range stale {
+			if removeErr := os.Remove(file); removeErr != nil {
+				t.Fatal(removeErr)
+			}
+		}
+	}
+}
+
+func TestClearFixturesRemovesEarlierOutput(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	for _, name := range []string{"gone.html", "gone.json", "keep.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	clearFixtures(t, dir)
+	left, err := filepath.Glob(filepath.Join(dir, "*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 1 || filepath.Base(left[0]) != "keep.txt" {
+		t.Fatalf("left %v, want only keep.txt", left)
+	}
+}
+
 // TestRenderUIFixtures renders each page from the real templates; with UI_FIXTURES_DIR set it writes them for Vitest.
 func TestRenderUIFixtures(t *testing.T) {
 	t.Parallel()
@@ -108,6 +145,7 @@ func TestRenderUIFixtures(t *testing.T) {
 	if dir != "" && !filepath.IsAbs(dir) {
 		t.Fatalf("UI_FIXTURES_DIR must be absolute, got %q", dir)
 	}
+	clearFixtures(t, dir)
 	for suffix, urlBase := range map[string]string{"": "/", "@base": "/decypharr/"} {
 		pages, response := renderFixtures(t, urlBase)
 		for name, html := range pages {
