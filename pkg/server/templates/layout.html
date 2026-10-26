@@ -214,9 +214,7 @@
                     </a>
                 </aside>
             </footer>
-            {{ if eq .Page "repair" }}
-                <script src="{{.URLBase}}assets/js/repair.js?v={{.AssetVersion}}"></script>
-            {{ else if eq .Page "reacquire" }}
+            {{ if eq .Page "reacquire" }}
                 <script src="{{.URLBase}}assets/js/reacquire.js?v={{.AssetVersion}}"></script>
             {{ else if eq .Page "config" }}
                 <script src="{{.URLBase}}assets/js/config.js?v={{.AssetVersion}}"></script>

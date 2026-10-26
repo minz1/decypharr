@@ -267,7 +267,7 @@
                 <div class="modal-action mt-0 grid grid-cols-2 gap-2 bg-base-200/40 px-4 py-4 sm:flex sm:px-6">
                     <button type="button"
                             class="btn btn-ghost w-full sm:w-auto"
-                            onclick="document.getElementById('runRepairModal').close()">Cancel</button>
+                            id="runRepairCancelBtn">Cancel</button>
                     <button type="submit"
                             class="btn btn-primary w-full sm:w-auto"
                             id="runRepairSubmitBtn">
@@ -339,7 +339,7 @@
                 <div class="modal-action grid grid-cols-2 gap-2 sm:flex">
                     <button type="button"
                             class="btn btn-ghost w-full sm:w-auto"
-                            onclick="document.getElementById('clearStateModal').close()">Cancel</button>
+                            id="clearStateCancelBtn">Cancel</button>
                     <button type="submit"
                             class="btn btn-warning w-full sm:w-auto"
                             id="clearStateSubmitBtn">
@@ -399,9 +399,107 @@
             <button>close</button>
         </form>
     </dialog>
-    <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        window.repairManager = new RepairManager();
-    });
-    </script>
+    {{ template "repair_confirm" }}
+    <template id="repair-health-card">
+        <div class="stat bg-base-200 rounded-box p-3">
+            <div class="stat-title text-xs capitalize" data-field="label"></div>
+            <div class="stat-value text-lg" data-field="value"></div>
+        </div>
+    </template>
+    <template id="repair-run-stat">
+        <div class="bg-base-100 rounded p-2">
+            <div class="text-[10px] opacity-60 uppercase" data-field="label"></div>
+            <div class="font-mono" data-field="value"></div>
+        </div>
+    </template>
+    <template id="repair-history-row">
+        <table>
+            <tbody>
+                <tr>
+                    <td class="font-mono text-sm" data-field="started"></td>
+                    <td data-field="trigger"></td>
+                    <td>
+                        <span class="badge" data-field="status"></span>
+                    </td>
+                    <td data-field="probed"></td>
+                    <td data-field="broken"></td>
+                    <td data-field="repaired"></td>
+                    <td data-field="cleared"></td>
+                    <td data-field="duration"></td>
+                    <td class="text-xs text-error" data-field="error"></td>
+                </tr>
+            </tbody>
+        </table>
+    </template>
+    <template id="repair-broken-row">
+        <table>
+            <tbody>
+                <tr class="cursor-pointer hover:bg-base-200" data-action="toggle-broken">
+                    <td class="w-8">
+                        <i class="bi bi-chevron-right transition-transform" data-field="caret"></i>
+                    </td>
+                    <td class="font-mono text-sm break-all" data-field="name"></td>
+                    <td>
+                        <span class="badge badge-ghost badge-sm" data-field="protocol"></span>
+                    </td>
+                    <td data-field="files"></td>
+                    <td class="text-error font-medium" data-field="broken"></td>
+                    <td class="text-xs" data-field="reason"></td>
+                    <td class="text-xs" data-field="checked"></td>
+                    <td class="text-xs" data-field="repaired"></td>
+                    <td class="text-right whitespace-nowrap">
+                        <button class="btn btn-xs btn-outline"
+                                data-action="recheck-entry"
+                                data-field="recheck">
+                            <i class="bi bi-search-heart"></i>
+                        </button>
+                        <button class="btn btn-xs btn-error btn-outline"
+                                data-action="fix-entry"
+                                data-field="fix">
+                            <i class="bi bi-bandaid"></i>
+                        </button>
+                    </td>
+                </tr>
+                <tr class="hidden" data-field="detail">
+                    <td colspan="9" class="bg-base-200/40 p-0">
+                        <div class="p-4 space-y-2" data-field="detail-body"></div>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    </template>
+    <template id="repair-broken-files">
+        <div class="overflow-x-auto">
+            <table class="table table-xs">
+                <thead>
+                    <tr>
+                        <th>File</th>
+                        <th>Reason</th>
+                        <th>Size</th>
+                        <th>Arr</th>
+                        <th>Ids</th>
+                    </tr>
+                </thead>
+                <tbody data-field="rows">
+                </tbody>
+            </table>
+        </div>
+    </template>
+    <template id="repair-broken-file-row">
+        <table>
+            <tbody>
+                <tr>
+                    <td class="font-mono text-xs break-all" data-field="name"></td>
+                    <td class="text-xs" data-field="reason"></td>
+                    <td class="text-xs" data-field="size"></td>
+                    <td class="text-xs" data-field="arr"></td>
+                    <td data-field="ids"></td>
+                </tr>
+            </tbody>
+        </table>
+    </template>
+    <template id="repair-page-button">
+        <button class="join-item btn btn-sm" data-action="broken-page"></button>
+    </template>
+    {{ template "vite" (viteEntry "pkg/server/ui/pages/repair.ts") }}
 {{ end }}

@@ -12,3 +12,17 @@
         </a>
     </div>
 {{ end }}
+{{ define "repair_confirm" }}
+    <dialog id="repairConfirmModal" class="modal">
+        <div class="modal-box max-w-md">
+            <p class="whitespace-pre-line" id="repairConfirmMessage"></p>
+            <form method="dialog" class="modal-action">
+                <button type="submit" value="cancel" class="btn btn-ghost">Cancel</button>
+                <button type="submit" value="ok" class="btn btn-primary" id="repairConfirmOk">OK</button>
+            </form>
+        </div>
+        <form method="dialog" class="modal-backdrop">
+            <button type="submit" value="cancel">close</button>
+        </form>
+    </dialog>
+{{ end }}
