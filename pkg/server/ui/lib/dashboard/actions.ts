@@ -1,8 +1,8 @@
+import { askConfirm } from "#ui/lib/common/confirm";
 import { describeError } from "#ui/lib/common/errors";
 import { fetcher } from "#ui/lib/common/http";
 import { readJSON } from "#ui/lib/common/json";
 import { createToast } from "#ui/lib/common/toast";
-import { askConfirm } from "#ui/lib/confirm";
 import { deleteSelectedURL, deleteTorrentURL, parseTorrentPage, torrentsURL } from "#ui/lib/dashboard/model";
 import type { Dashboard, DashboardState, MenuTorrent } from "#ui/lib/dashboard/types";
 import { renderDashboard, renderSelection, renderTorrents } from "#ui/lib/dashboard/view";

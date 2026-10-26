@@ -32,6 +32,7 @@ const askConfirm = async (message: string): Promise<boolean> => {
   listenForAnswer(dialog, resolve);
   dialog.returnValue = "";
   dialog.showModal();
+  dialog.querySelector<HTMLElement>('[data-answer="cancel"]')?.focus();
   return promise;
 };
 
