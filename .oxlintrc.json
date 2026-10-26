@@ -56,10 +56,12 @@
   },
   "overrides": [
     {
-      "files": ["vite.config.ts", "vitest.config.ts"],
+      "files": ["vite.config.ts", "vitest.config.ts", "vitest.global-setup.ts"],
       "rules": {
         // Vite and Vitest read their config from the default export.
-        "import/no-default-export": "off"
+        "import/no-default-export": "off",
+        // Build and test setup run in Node, not the browser, and read the file system.
+        "import/no-nodejs-modules": "off"
       }
     },
     {
