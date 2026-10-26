@@ -2,18 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 
 import { loadFixture } from "#ui/lib/testing/fixture";
 
-const BRIDGE_MEMBERS = [
-  "closeToast",
-  "copyToClipboard",
-  "createToast",
-  "escapeHtml",
-  "fetcher",
-  "formatBytes",
-  "formatDuration",
-  "joinURL",
-  "setButtonLoading",
-];
-
 const loadLayout = async (fixture: string, theme = ""): Promise<string[]> => {
   vi.resetModules();
   localStorage.clear();
@@ -38,23 +26,6 @@ const toastTexts = (): string[] =>
 const press = (key: string, ctrlKey: boolean): void => {
   document.dispatchEvent(new KeyboardEvent("keydown", { key, ctrlKey, bubbles: true }));
 };
-
-describe("the legacy bridge", () => {
-  it.each([
-    ["index", "/"],
-    ["index@base", "/decypharr/"],
-    ["setup@base", "/decypharr/"],
-  ])("is in place on %s as soon as the layout module has run", async (fixture, urlBase) => {
-    await loadLayout(fixture);
-    expect(globalThis.urlBase).toBe(urlBase);
-    expect(Object.keys(globalThis.decypharrUtils).toSorted((left, right) => left.localeCompare(right))).toStrictEqual(
-      BRIDGE_MEMBERS,
-    );
-    expect(Object.values(globalThis.decypharrUtils).map((member) => typeof member)).toStrictEqual(
-      BRIDGE_MEMBERS.map(() => "function"),
-    );
-  });
-});
 
 describe("the theme toggle", () => {
   it("flips data-theme and stores it", async () => {

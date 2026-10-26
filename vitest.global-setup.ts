@@ -41,7 +41,6 @@ const provideFixtures = (provide: TestProject["provide"]): void => {
 const ICON_SOURCES = [
   { dir: "pkg/server/templates", ext: ".html" },
   { dir: "pkg/server/ui", ext: ".ts" },
-  { dir: "pkg/server/assets/js", ext: ".js" },
 ];
 
 const sourceFiles = (dir: string, ext: string): string[] =>

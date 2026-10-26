@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/sirrobot01/decypharr/pkg/manager/managertest"
 )
@@ -29,10 +30,24 @@ func getAsset(h http.Handler, target string, header map[string]string) *httptest
 	return w
 }
 
+// viteCSSAsset is the stylesheet testStatic builds for pkg/server/ui/styles.css.
+const viteCSSAsset = "/assets/vite/assets/styles-TEST.css"
+
+func TestLegacyScriptPathIsGone(t *testing.T) {
+	t.Parallel()
+	static := testStatic(t)
+	static["js/anything.js"] = &fstest.MapFile{Data: []byte("console.log('legacy');\n")}
+	s := newTestServer(t, managertest.Store(t, nil))
+	s.loadUI(static)
+	if w := getAsset(s.WebRoutes(), "/assets/js/anything.js", nil); w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", w.Code)
+	}
+}
+
 func TestAssetWithCurrentVersionIsImmutable(t *testing.T) {
 	t.Parallel()
 	h, version := assetServer(t)
-	w := getAsset(h, "/assets/js/common.js?v="+version, nil)
+	w := getAsset(h, "/images/favicon/favicon.ico?v="+version, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d", w.Code)
 	}
@@ -44,7 +59,7 @@ func TestAssetWithCurrentVersionIsImmutable(t *testing.T) {
 func TestAssetWithoutVersionRevalidates(t *testing.T) {
 	t.Parallel()
 	h, _ := assetServer(t)
-	for _, target := range []string{"/assets/js/common.js", "/assets/js/common.js?v=stale"} {
+	for _, target := range []string{"/images/logo.png", "/images/logo.png?v=stale"} {
 		w := getAsset(h, target, nil)
 		etag := w.Header().Get("ETag")
 		if w.Code != http.StatusOK || w.Header().Get("Cache-Control") != "no-cache" || etag == "" {
@@ -60,8 +75,8 @@ func TestAssetWithoutVersionRevalidates(t *testing.T) {
 func TestAssetIsGzipped(t *testing.T) {
 	t.Parallel()
 	h, _ := assetServer(t)
-	plain := getAsset(h, "/assets/js/common.js", nil)
-	w := getAsset(h, "/assets/js/common.js", map[string]string{"Accept-Encoding": "gzip"})
+	plain := getAsset(h, viteCSSAsset, nil)
+	w := getAsset(h, viteCSSAsset, map[string]string{"Accept-Encoding": "gzip"})
 	if w.Header().Get("Content-Encoding") != "gzip" {
 		t.Fatalf("Content-Encoding = %q", w.Header().Get("Content-Encoding"))
 	}
@@ -137,7 +152,7 @@ func TestImageWithCurrentVersionIsImmutable(t *testing.T) {
 func TestMissingAssetIsNotCachedForever(t *testing.T) {
 	t.Parallel()
 	h, version := assetServer(t)
-	w := getAsset(h, "/assets/js/missing.js?v="+version, nil)
+	w := getAsset(h, "/images/missing.png?v="+version, nil)
 	if w.Code != http.StatusNotFound || strings.Contains(w.Header().Get("Cache-Control"), "immutable") {
 		t.Fatalf("status = %d, Cache-Control = %q", w.Code, w.Header().Get("Cache-Control"))
 	}
@@ -147,8 +162,8 @@ func TestMissingAssetIsNotCachedForever(t *testing.T) {
 func TestAssetIgnoresRange(t *testing.T) {
 	t.Parallel()
 	h, version := assetServer(t)
-	full := getAsset(h, "/assets/js/common.js?v="+version, nil)
-	w := getAsset(h, "/assets/js/common.js?v="+version, map[string]string{"Range": "bytes=0-9"})
+	full := getAsset(h, "/images/logo.png?v="+version, nil)
+	w := getAsset(h, "/images/logo.png?v="+version, map[string]string{"Range": "bytes=0-9"})
 	if w.Code != http.StatusOK || w.Body.Len() != full.Body.Len() {
 		t.Fatalf("status = %d, %d bytes, want 200 and %d bytes", w.Code, w.Body.Len(), full.Body.Len())
 	}

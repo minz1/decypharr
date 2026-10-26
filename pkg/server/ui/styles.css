@@ -3,7 +3,6 @@
 @import "tailwindcss" source(none);
 @source ".";
 @source "../templates";
-@source "../assets/js";
 
 @plugin "daisyui" {
   themes:

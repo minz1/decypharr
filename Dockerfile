@@ -8,9 +8,7 @@ RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY vite.config.ts ./
-COPY scripts/minify-js.js scripts/
 COPY pkg/server/ui pkg/server/ui
-COPY pkg/server/assets/js pkg/server/assets/js
 COPY pkg/server/templates pkg/server/templates
 RUN pnpm build
 

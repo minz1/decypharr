@@ -1,2 +1,1 @@
 pkg/server/templates/theme_script.html: early theme script, runs before first paint (cannot be a module)
-scripts/minify-js.js: legacy, converts in spec 4

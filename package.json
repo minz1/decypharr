@@ -5,11 +5,10 @@
   "description": "Media management tool",
   "type": "module",
   "imports": {
-    "#ui/globals": "./pkg/server/ui/globals.d.ts",
     "#ui/*": "./pkg/server/ui/*.ts"
   },
   "scripts": {
-    "build": "vite build && node scripts/minify-js.js",
+    "build": "vite build",
     "build:watch": "vite build --watch",
     "dev": "pnpm build && air",
     "typecheck": "tsc -p tsconfig.app.json && tsc -p tsconfig.node.json",
@@ -27,7 +26,6 @@
     "daisyui": "^5.7.46",
     "happy-dom": "^21.0.4",
     "tailwindcss": "^4.3.3",
-    "terser": "^5.51.2",
     "vite": "^8.3.5",
     "vitest": "^5.0.5"
   },

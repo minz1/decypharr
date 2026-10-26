@@ -304,7 +304,15 @@ func TestLegacyJSRatchet(t *testing.T) {
 		}
 	}
 
-	listed, _ := readJSAllowlist(t)
+	raw, err := os.ReadFile(filepath.Join(repoRoot, jsAllowlist))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const themeOnly = "pkg/server/templates/theme_script.html: early theme script, runs before first paint (cannot be a module)\n"
+	if string(raw) != themeOnly {
+		t.Errorf("%s = %q, want only the theme script line %q", jsAllowlist, raw, themeOnly)
+	}
+	listed, _ := parseJSAllowlist(string(raw))
 	for _, rel := range found {
 		if !slices.Contains(listed, rel) {
 			t.Errorf("%s: new JavaScript; write it in TypeScript under pkg/server/ui", rel)

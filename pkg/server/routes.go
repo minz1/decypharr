@@ -18,7 +18,8 @@ func (s *Server) WebRoutes() http.Handler {
 	// Static assets - always public
 	assetGzip := middleware.Compress(gzipLevel, "text/css", "text/javascript", "application/javascript")
 	pageGzip := middleware.Compress(gzipLevel, "text/html")
-	r.With(assetGzip).Handle("/assets/*", http.StripPrefix(s.urlBase+"assets/", s.assets.handler("/assets", s.static)))
+	r.With(assetGzip).Handle("/assets/vite/*",
+		http.StripPrefix(s.urlBase+"assets/vite/", s.assets.handler("/assets/vite", mustSub(s.static, "vite"))))
 	r.Handle("/images/*", http.StripPrefix(s.urlBase+"images/", s.assets.handler("/images", embeddedImages())))
 
 	// Public routes - no auth needed

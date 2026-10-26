@@ -181,9 +181,6 @@ importers:
       tailwindcss:
         specifier: ^4.3.3
         version: 4.3.3
-      terser:
-        specifier: ^5.51.2
-        version: 5.51.2
       vite:
         specifier: ^8.3.5
         version: 8.3.5(@types/node@26.6.5)(jiti@2.7.0)(terser@5.51.2)
@@ -859,6 +856,7 @@ snapshots:
     dependencies:
       '@jridgewell/gen-mapping': 0.3.13
       '@jridgewell/trace-mapping': 0.3.31
+    optional: true
 
   '@jridgewell/sourcemap-codec@1.6.0': {}
 
@@ -1014,13 +1012,15 @@ snapshots:
 
   '@vitest/spy@5.0.5': {}
 
-  acorn@8.19.0: {}
+  acorn@8.19.0:
+    optional: true
 
   assertion-error@2.0.1: {}
 
   bootstrap-icons@1.13.2: {}
 
-  buffer-from@1.1.2: {}
+  buffer-from@1.1.2:
+    optional: true
 
   buffer-image-size@0.6.4:
     dependencies:
@@ -1028,7 +1028,8 @@ snapshots:
 
   chai@6.3.0: {}
 
-  commander@2.20.3: {}
+  commander@2.20.3:
+    optional: true
 
   daisyui@5.7.50: {}
 
@@ -1220,8 +1221,10 @@ snapshots:
     dependencies:
       buffer-from: 1.1.2
       source-map: 0.6.1
+    optional: true
 
-  source-map@0.6.1: {}
+  source-map@0.6.1:
+    optional: true
 
   std-env@4.3.0: {}
 
@@ -1235,6 +1238,7 @@ snapshots:
       acorn: 8.19.0
       commander: 2.20.3
       source-map-support: 0.5.21
+    optional: true
 
   tinybench@6.2.2: {}
 

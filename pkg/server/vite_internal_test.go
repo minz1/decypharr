@@ -25,7 +25,6 @@ func testStatic(t *testing.T) fstest.MapFS {
 	manifest := templateViteManifest(t)
 	static := fstest.MapFS{
 		"vite/.vite/manifest.json": {Data: manifest},
-		"js/common.js":             {Data: []byte(strings.Repeat("console.log('common');\n", 20))},
 	}
 	var m viteManifest
 	if err := json.Unmarshal(manifest, &m); err != nil {
@@ -201,7 +200,7 @@ func TestViteFilesAreImmutable(t *testing.T) {
 			t.Fatalf("%s: status = %d, want 404", target, m.Code)
 		}
 	}
-	for _, dir := range []string{"/assets/vite/assets/", "/assets/vite/assets", "/assets/vite/", "/assets/js/?v=" + version} {
+	for _, dir := range []string{"/assets/vite/assets/", "/assets/vite/assets", "/assets/vite/", "/images/favicon/?v=" + version} {
 		d := getAsset(h, dir, nil)
 		if strings.Contains(d.Header().Get("Cache-Control"), "immutable") {
 			t.Fatalf("%s: directory cached as immutable (status %d)", dir, d.Code)
