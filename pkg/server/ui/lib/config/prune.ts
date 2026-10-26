@@ -59,7 +59,10 @@ const savedPrune = (doc: Document, prune: PruneSettings | undefined): void => {
   }
 };
 
-const confirmPruneDelete = (prune: PruneSettings | undefined, confirm: (message: string) => boolean): boolean => {
+const confirmPruneDelete = async (
+  prune: PruneSettings | undefined,
+  confirm: (message: string) => Promise<boolean>,
+): Promise<boolean> => {
   if (prune === undefined || !prune.enabled || prune.mode !== "delete") {
     return true;
   }

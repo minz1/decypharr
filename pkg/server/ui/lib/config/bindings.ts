@@ -20,7 +20,7 @@ import {
   removeFolder,
 } from "#ui/lib/config/virtual-folders";
 
-type Confirm = (message: string) => boolean;
+type Confirm = (message: string) => Promise<boolean>;
 
 const onClick = (doc: Document, id: string, action: () => unknown): void => {
   byId(id, HTMLButtonElement, doc).addEventListener("click", () => {
@@ -72,9 +72,7 @@ const bindFolders = (doc: Document, confirm: Confirm): void => {
   }
   onAction(folders, "click", {
     "remove-folder": (target) => {
-      withFolder(target, (card) => {
-        removeFolder(doc, card, confirm);
-      });
+      withFolder(target, async (card) => removeFolder(doc, card, confirm));
     },
     "add-condition": (target) => {
       addCondition(doc, folderId(target));

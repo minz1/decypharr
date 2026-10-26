@@ -47,9 +47,9 @@ const run = async (routes: Readonly<Record<string, Route>>, answers: readonly bo
   const requests = serve(routes);
   const confirms: string[] = [];
   const button = pruneButton();
-  await runPruneNow(document, button, (message) => {
+  await runPruneNow(document, button, async (message) => {
     confirms.push(message);
-    return answers[confirms.length - 1] ?? false;
+    return Promise.resolve(answers[confirms.length - 1] ?? false);
   });
   return { requests, confirms, button };
 };

@@ -9,7 +9,7 @@ const answer = (value: string): void => {
 
 const dialog = (): HTMLDialogElement | null => document.querySelector("#confirmDialog");
 
-const CONFIRMING_PAGES = ["index", "browse", "repair", "reacquire"];
+const CONFIRMING_PAGES = ["index", "browse", "repair", "reacquire", "config"];
 
 describe("the confirm dialog", () => {
   it.each(CONFIRMING_PAGES)(

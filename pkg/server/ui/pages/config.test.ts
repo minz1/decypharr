@@ -156,6 +156,7 @@ describe("saving prune in delete mode", () => {
     const { requests, confirms } = await switchPruneToDelete([false]);
     await vi.waitFor(() => {
       expect(confirms).toHaveLength(1);
+      expect([...find("#loadingOverlay", HTMLElement).classList]).toContain("hidden");
     });
     expect({ posts: posts(requests, "api/config"), overlay: isHidden("#loadingOverlay") }).toStrictEqual({
       posts: [],

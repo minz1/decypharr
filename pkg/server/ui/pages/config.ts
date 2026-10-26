@@ -1,3 +1,4 @@
+import { askConfirm } from "#ui/lib/common/confirm";
 import { bootPage, byId } from "#ui/lib/common/dom";
 import { bindAddButtons, bindAuth, bindCards, bindFolders, onClick } from "#ui/lib/config/bindings";
 import { registerMagnetHandler, showMagnetHandler } from "#ui/lib/config/magnet";
@@ -7,9 +8,6 @@ import { regenerateStrm } from "#ui/lib/config/strm";
 import { bindTabs } from "#ui/lib/config/tabs";
 
 const state = { loaded: false, saving: false };
-
-// The page keeps the browser's confirmation dialogs; lib code receives them as a dependency.
-const confirmWithUser = globalThis.confirm.bind(globalThis);
 
 const bindSave = (): void => {
   const overlay = byId("loadingOverlay", HTMLElement);
@@ -24,7 +22,7 @@ const bindSave = (): void => {
       state,
       overlay,
       button,
-      confirm: confirmWithUser,
+      confirm: askConfirm,
       reload: () => {
         globalThis.location.reload();
       },
@@ -35,7 +33,7 @@ const bindSave = (): void => {
 const bindActions = (): void => {
   onClick(document, "strmRegenerateBtn", async () => regenerateStrm(byId("strmRegenerateBtn", HTMLButtonElement)));
   onClick(document, "pruneRunBtn", async () =>
-    runPruneNow(document, byId("pruneRunBtn", HTMLButtonElement), confirmWithUser),
+    runPruneNow(document, byId("pruneRunBtn", HTMLButtonElement), askConfirm),
   );
   onClick(document, "registerMagnetLink", () => {
     registerMagnetHandler(document);
@@ -45,7 +43,7 @@ const bindActions = (): void => {
 const bindPage = (): void => {
   bindSave();
   bindCards(document);
-  bindFolders(document, confirmWithUser);
+  bindFolders(document, askConfirm);
   bindAddButtons(document);
   bindActions();
   bindAuth(document);

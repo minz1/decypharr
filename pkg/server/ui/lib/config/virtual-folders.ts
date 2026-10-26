@@ -244,9 +244,13 @@ const handleFolderInput = (doc: Document, event: Event): void => {
   invalidatePreview(card);
 };
 
-const removeFolder = (doc: Document, card: HTMLElement, confirm: (message: string) => boolean): void => {
+const removeFolder = async (
+  doc: Document,
+  card: HTMLElement,
+  confirm: (message: string) => Promise<boolean>,
+): Promise<void> => {
   const name = orDefault(controlValue(card, "[data-vf-name]")?.trim(), "this virtual folder");
-  if (!confirm(`Remove "${name}"?\n\nThis removes only the filtered view. Your media will not be deleted.`)) {
+  if (!(await confirm(`Remove "${name}"?\n\nThis removes only the filtered view. Your media will not be deleted.`))) {
     return;
   }
   card.remove();

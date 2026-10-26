@@ -205,7 +205,10 @@ const savedPruneSettings = async (): Promise<Record<string, unknown> | undefined
   }
 };
 
-const confirmsRun = (saved: Record<string, unknown>, confirm: (message: string) => boolean): boolean =>
+const confirmsRun = async (
+  saved: Record<string, unknown>,
+  confirm: (message: string) => Promise<boolean>,
+): Promise<boolean> =>
   optBool(saved, "enabled") !== true ||
   optStr(saved, "mode") !== "delete" ||
   confirm(`Run prune now in delete mode? It deletes up to ${String(optNum(saved, "max_per_run"))} eligible entries.`);
@@ -244,12 +247,12 @@ const postRun = async (doc: Document): Promise<void> => {
 const runPruneNow = async (
   doc: Document,
   button: HTMLButtonElement,
-  confirm: (message: string) => boolean,
+  confirm: (message: string) => Promise<boolean>,
 ): Promise<void> => {
   button.disabled = true;
   try {
     const saved = await savedPruneSettings();
-    if (saved !== undefined && confirmsRun(saved, confirm)) {
+    if (saved !== undefined && (await confirmsRun(saved, confirm))) {
       await postRun(doc);
     }
   } finally {

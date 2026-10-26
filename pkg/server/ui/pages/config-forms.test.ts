@@ -195,8 +195,14 @@ describe("editing virtual folder conditions", () => {
     const { confirms } = await loaded({ answers: [false, true] });
     click("#addVirtualFolderBtn");
     click('[data-action="remove-folder"]');
+    await vi.waitFor(() => {
+      expect(confirms).toHaveLength(1);
+    });
     const kept = exists("[data-virtual-folder]");
     click('[data-action="remove-folder"]');
+    await vi.waitFor(() => {
+      expect(document.querySelector("[data-vf-empty-state]")).not.toBeNull();
+    });
     expect({ kept, confirms: confirms.length, empty: exists("[data-vf-empty-state]"), status: status() }).toStrictEqual(
       {
         kept: true,

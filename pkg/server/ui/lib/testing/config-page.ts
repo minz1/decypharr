@@ -1,4 +1,4 @@
-import { expect, inject, vi } from "vitest";
+import { expect, inject, onTestFinished, vi } from "vitest";
 
 import { loadFixture } from "#ui/lib/testing/fixture";
 
@@ -50,11 +50,28 @@ const stubFetch = (routes: Readonly<Record<string, Answer>>): Request[] => {
   return requests;
 };
 
-const stubConfirm = (answers: readonly boolean[]): string[] => {
+const find = <Wanted extends Element>(selector: string, type: abstract new () => Wanted): Wanted => {
+  const found = document.querySelector(selector);
+  if (!(found instanceof type)) {
+    throw new TypeError(`the settings page has no ${selector}`);
+  }
+  return found;
+};
+
+const answerConfirms = (answers: readonly boolean[]): string[] => {
   const confirms: string[] = [];
-  vi.stubGlobal("confirm", (message: string): boolean => {
-    confirms.push(message);
-    return answers[confirms.length - 1] ?? false;
+  const dialog = find("#confirmDialog", HTMLDialogElement);
+  const observer = new MutationObserver(() => {
+    if (!dialog.open) {
+      return;
+    }
+    confirms.push(find("#confirmDialogMessage", HTMLElement).textContent);
+    const answer = (answers[confirms.length - 1] ?? false) ? "ok" : "cancel";
+    find(`#confirmDialog [data-answer="${answer}"]`, HTMLButtonElement).click();
+  });
+  observer.observe(dialog, { attributeFilter: ["open"] });
+  onTestFinished(() => {
+    observer.disconnect();
   });
   return confirms;
 };
@@ -65,7 +82,7 @@ const bootSettings = async (options: BootOptions = {}): Promise<Page> => {
   loadFixture(fixture);
   options.before?.();
   const requests = stubFetch({ ...defaultRoutes(fixture), ...options.routes });
-  const confirms = stubConfirm(options.answers ?? []);
+  const confirms = answerConfirms(options.answers ?? []);
   await import("#ui/pages/config");
   return { requests, confirms };
 };
@@ -100,14 +117,6 @@ const member = (value: unknown, key: string): unknown => (isRecord(value) ? valu
 const lastItem = (value: unknown): unknown => (Array.isArray(value) ? value.at(-1) : undefined);
 
 const hasKey = (value: unknown, key: string): boolean => isRecord(value) && Object.hasOwn(value, key);
-
-const find = <Wanted extends Element>(selector: string, type: abstract new () => Wanted): Wanted => {
-  const found = document.querySelector(selector);
-  if (!(found instanceof type)) {
-    throw new TypeError(`the settings page has no ${selector}`);
-  }
-  return found;
-};
 
 const isHidden = (selector: string): boolean => find(selector, HTMLElement).classList.contains("hidden");
 

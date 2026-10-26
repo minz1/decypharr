@@ -18,7 +18,7 @@ interface SaveDeps {
   state: PageState;
   overlay: HTMLElement;
   button: HTMLButtonElement;
-  confirm: (message: string) => boolean;
+  confirm: (message: string) => Promise<boolean>;
   reload: () => void;
 }
 
@@ -116,7 +116,7 @@ const submitSettings = async (doc: Document, deps: SaveDeps): Promise<void> => {
   const prune = prunePayload(doc);
   const body = assembleSettings(collectSections(doc).set("prune", prune));
   checkSettings(doc, body);
-  if (!confirmPruneDelete(prune, deps.confirm)) {
+  if (!(await confirmPruneDelete(prune, deps.confirm))) {
     deps.overlay.classList.add("hidden");
     return;
   }

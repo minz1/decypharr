@@ -32,13 +32,13 @@ const setValue = (doc: Document, id: string, value: string): void => {
   field.value = value;
 };
 
-const asks = (baseline: PruneSettings, sent?: PruneSettings): boolean => {
+const asks = async (baseline: PruneSettings, sent?: PruneSettings): Promise<boolean> => {
   const doc = freshPage();
   populatePrune(doc, baseline);
   const confirms: string[] = [];
-  confirmPruneDelete(sent, (message) => {
+  await confirmPruneDelete(sent, async (message) => {
     confirms.push(message);
-    return true;
+    return Promise.resolve(true);
   });
   return confirms.length === 1;
 };
@@ -85,17 +85,17 @@ describe("prune settings", () => {
 });
 
 describe("confirming prune in delete mode", () => {
-  it("confirmPruneDelete asks for every sent enabled delete prune", () => {
+  it("confirmPruneDelete asks for every sent enabled delete prune", async () => {
     const reportPrune = { ...deletePrune, mode: "report" };
     expect({
-      notSent: asks(deletePrune),
-      switchToDelete: asks(reportPrune, deletePrune),
-      enableWithDeleteStored: asks({ ...deletePrune, enabled: false }, deletePrune),
-      shorterGrace: asks(deletePrune, { ...deletePrune, grace: "24h" }),
-      higherMaxPerRun: asks(deletePrune, { ...deletePrune, max_per_run: 50 }),
-      rootRemoved: asks(deletePrune, { ...deletePrune, roots: ["/data/a"] }),
-      disabledDelete: asks(deletePrune, { ...deletePrune, enabled: false }),
-      enabledReport: asks(deletePrune, reportPrune),
+      notSent: await asks(deletePrune),
+      switchToDelete: await asks(reportPrune, deletePrune),
+      enableWithDeleteStored: await asks({ ...deletePrune, enabled: false }, deletePrune),
+      shorterGrace: await asks(deletePrune, { ...deletePrune, grace: "24h" }),
+      higherMaxPerRun: await asks(deletePrune, { ...deletePrune, max_per_run: 50 }),
+      rootRemoved: await asks(deletePrune, { ...deletePrune, roots: ["/data/a"] }),
+      disabledDelete: await asks(deletePrune, { ...deletePrune, enabled: false }),
+      enabledReport: await asks(deletePrune, reportPrune),
     }).toStrictEqual({
       notSent: false,
       switchToDelete: true,
@@ -108,11 +108,11 @@ describe("confirming prune in delete mode", () => {
     });
   });
 
-  it("the delete confirm names the mode, max_per_run and grace", () => {
+  it("the delete confirm names the mode, max_per_run and grace", async () => {
     const messages: string[] = [];
-    const answer = confirmPruneDelete(deletePrune, (message) => {
+    const answer = await confirmPruneDelete(deletePrune, async (message) => {
       messages.push(message);
-      return false;
+      return Promise.resolve(false);
     });
     expect({ answer, messages }).toStrictEqual({
       answer: false,
@@ -123,9 +123,11 @@ describe("confirming prune in delete mode", () => {
     });
   });
 
-  it("the delete confirm falls back to the defaults it names", () => {
+  it("the delete confirm falls back to the defaults it names", async () => {
     const messages: string[] = [];
-    confirmPruneDelete({ ...deletePrune, max_per_run: 0, grace: "" }, (message) => messages.push(message) > 0);
+    await confirmPruneDelete({ ...deletePrune, max_per_run: 0, grace: "" }, async (message) =>
+      Promise.resolve(messages.push(message) > 0),
+    );
     expect(messages).toStrictEqual([
       "Save prune in delete mode?\n\nFrom the next scheduled run on, each run deletes up to the default number of " +
         "entries that no library symlink has pointed to for the default grace period.",
