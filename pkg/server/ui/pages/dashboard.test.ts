@@ -111,3 +111,16 @@ describe("refreshing the dashboard", () => {
     expect([loaded, requests.length]).toStrictEqual([1, 2]);
   });
 });
+
+describe("polling while hidden", () => {
+  it("skips the poll while the page is hidden and resumes when it shows", async () => {
+    const requests = await bootDashboard(twoTorrents);
+    await waitForRows(2);
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    await vi.advanceTimersByTimeAsync(10_000);
+    const hidden = requests.length;
+    visibility.mockReturnValue("visible");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect([hidden, requests.length]).toStrictEqual([1, 2]);
+  });
+});

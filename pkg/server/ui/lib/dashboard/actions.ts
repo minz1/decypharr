@@ -154,7 +154,9 @@ const runContextAction = async (dashboard: Dashboard, action: string): Promise<v
 
 const startAutoRefresh = (dashboard: Dashboard): void => {
   setInterval(() => {
-    void loadTorrents(dashboard);
+    if (document.visibilityState !== "hidden") {
+      void loadTorrents(dashboard);
+    }
   }, REFRESH_MS);
 };
 
