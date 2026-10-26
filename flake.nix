@@ -58,6 +58,19 @@
           typecheck = uiCheck "typecheck" [ pkgs.typescript ] "pnpm typecheck";
           lint = uiCheck "lint" [ pkgs.oxlint ] "pnpm lint";
           fmt = uiCheck "fmt" [ pkgs.oxfmt ] "pnpm fmt:check";
+          templates = pkgs.runCommand "decypharr-templates" {
+            nativeBuildInputs = [ pkgs.djlint ];
+            src = lib.fileset.toSource {
+              root = ./.;
+              fileset = lib.fileset.unions [ ./.djlintrc ./pkg/server/templates ];
+            };
+          } ''
+            export HOME=$TMPDIR
+            cd $src
+            djlint pkg/server/templates --lint
+            djlint pkg/server/templates --check
+            touch $out
+          '';
         }
       );
 

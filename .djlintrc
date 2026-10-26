@@ -1,0 +1,6 @@
+{
+  "profile": "golang",
+  "max_line_length": 120,
+  "format_js": false,
+  "format_css": false
+}
