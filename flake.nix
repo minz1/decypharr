@@ -12,7 +12,7 @@
     {
       packages = forAllSystems (system:
         let pkgs = nixpkgs.legacyPackages.${system}; in rec {
-          frontend = pkgs.callPackage ./nix/frontend.nix { };
+          frontend = pkgs.callPackage ./nix/frontend.nix { nodejs = pkgs.nodejs_24; pnpm = pkgs.pnpm_12; };
           default = pkgs.buildGo127Module {
             pname = "decypharr";
             version = "2.3-minz";
@@ -25,6 +25,8 @@
             preBuild = ''
               cp -r --no-preserve=mode ${frontend}/. pkg/server/assets/build/
             '';
+            # The vendored-modules fetch needs no UI build.
+            overrideModAttrs = _: { preBuild = ""; };
             postInstall = ''
               wrapProgram $out/bin/decypharr \
                 --prefix PATH : /run/wrappers/bin \
