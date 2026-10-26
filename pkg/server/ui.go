@@ -164,7 +164,7 @@ func (s *Server) DownloadHandler(w http.ResponseWriter, _ *http.Request) {
 	s.renderPage(w, "layout", "download", "Download", map[string]any{
 		"Debrids":                 debrids,
 		"HasMultiDebrid":          len(debrids) > 1,
-		"downloadFolder":          cfg.DownloadFolder,
+		"DownloadFolder":          cfg.DownloadFolder,
 		"alwaysRemoveTrackerURLS": cfg.AlwaysRmTrackerUrls,
 	})
 }

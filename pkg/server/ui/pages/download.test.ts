@@ -50,7 +50,7 @@ describe("adding torrents", () => {
           ["urls", "magnet:?xt=1"],
           ["files", torrent],
           ["arr", "sonarr"],
-          ["downloadFolder", ""],
+          ["downloadFolder", "/downloads"],
           ["action", "symlink"],
           ["downloadUncached", "false"],
           ["rmTrackerUrls", "false"],
@@ -91,7 +91,7 @@ describe("adding NZBs", () => {
           ["nzbURLs", "https://x/1.nzb\nhttps://x/2.nzb"],
           ["nzbFiles", nzb],
           ["arr", ""],
-          ["downloadFolder", ""],
+          ["downloadFolder", "/downloads"],
           ["action", "symlink"],
           ["downloadUncached", "false"],
           ["debrid", "torbox"],
@@ -124,6 +124,11 @@ describe("the server's answer", () => {
 });
 
 describe("opening the page", () => {
+  it("shows the configured download folder when none is saved", async () => {
+    await bootDownload({ fixture: "download@base" });
+    expect(input("downloadFolder").value).toBe("/downloads");
+  });
+
   it("fills the form from the saved options and saves them again on change", async () => {
     await bootDownload({
       stored: { downloadCategory: "radarr", downloadAction: "none", downloadUncached: "true", downloadFolder: "/x" },
