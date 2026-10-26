@@ -1,0 +1,6 @@
+{
+  "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxfmt/configuration_schema.json",
+  "printWidth": 120,
+  "sortImports": true,
+  "sortTailwindcss": { "stylesheet": "pkg/server/ui/styles.css" }
+}

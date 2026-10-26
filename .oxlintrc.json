@@ -1,0 +1,68 @@
+{
+  "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
+  // Setting plugins replaces the default set, so eslint (the core rules) is listed too.
+  "plugins": ["eslint", "typescript", "unicorn", "oxc", "import", "promise"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error",
+    "pedantic": "error",
+    "perf": "error",
+    "style": "error",
+    "restriction": "error",
+    // Unstable rules that change between releases.
+    "nursery": "off"
+  },
+  "options": {
+    "typeAware": true,
+    "denyWarnings": true,
+    "reportUnusedDisableDirectives": "error",
+    // Only oxlint's own directives exist here, and the toolchain test bans those too.
+    "respectEslintDisableDirectives": false
+  },
+  "rules": {
+    "typescript/ban-ts-comment": [
+      "error",
+      { "ts-check": true, "ts-expect-error": true, "ts-ignore": true, "ts-nocheck": true }
+    ],
+    "typescript/no-explicit-any": "error",
+    "typescript/no-non-null-assertion": "error",
+    "typescript/no-floating-promises": "error",
+    "typescript/no-misused-promises": "error",
+    "typescript/strict-boolean-expressions": "error",
+    "typescript/no-unsafe-argument": "error",
+    "typescript/no-unsafe-assignment": "error",
+    "typescript/no-unsafe-call": "error",
+    "typescript/no-unsafe-member-access": "error",
+    "typescript/no-unsafe-return": "error",
+    "eslint/no-void": ["error", { "allowAsStatement": true }],
+    "eslint/one-var": ["error", "never"],
+    // Named exports only (import/no-default-export), so these two can't hold.
+    "import/no-named-export": "off",
+    "import/prefer-default-export": "off",
+    // oxfmt's sortImports orders imports by module path; this rule sorts by local name and would fight it.
+    "eslint/sort-imports": "off",
+    // async/await is the readable way to sequence fetches; the promise rules above guard its misuse.
+    "oxc/no-async-await": "off",
+    // The target is ES2024, and ?. is the null-safe access strict null checks call for.
+    "oxc/no-optional-chaining": "off",
+    // A single ternary is idiomatic; no-nested-ternary still bans the unreadable case.
+    "eslint/no-ternary": "off",
+    // DOM and fetch types (elements, events, RequestInit) are mutable by design, so every handler fails it.
+    "typescript/prefer-readonly-parameter-types": "off",
+    // Key order carries meaning (fetch's method/headers/body, config grouped by topic); sorting prevents no bug.
+    "eslint/sort-keys": "off"
+  },
+  "overrides": [
+    {
+      "files": ["vite.config.ts", "vitest.config.ts"],
+      "rules": {
+        // Vite and Vitest read their config from the default export.
+        "import/no-default-export": "off"
+      }
+    },
+    {
+      "files": ["**/*.test.ts"],
+      "plugins": ["vitest"]
+    }
+  ]
+}

@@ -4,13 +4,15 @@
   "private": true,
   "description": "Media management tool",
   "type": "module",
-  "packageManager": "pnpm@12.9.0",
   "scripts": {
     "build": "vite build && node scripts/minify-js.js",
     "build:watch": "vite build --watch",
     "minify-js": "node scripts/minify-js.js",
     "dev": "pnpm build && air",
-    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.node.json"
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.node.json",
+    "lint": "oxlint --type-aware --deny-warnings -c .oxlintrc.json pkg/server/ui vite.config.ts",
+    "fmt": "oxfmt pkg/server/ui vite.config.ts package.json pnpm-workspace.yaml tsconfig.json tsconfig.node.json .oxlintrc.json .oxfmtrc.json",
+    "fmt:check": "oxfmt --check pkg/server/ui vite.config.ts package.json pnpm-workspace.yaml tsconfig.json tsconfig.node.json .oxlintrc.json .oxfmtrc.json"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
@@ -21,5 +23,6 @@
     "terser": "^5.51.2",
     "vite": "^8.3.5",
     "vitest": "^5.0.5"
-  }
+  },
+  "packageManager": "pnpm@12.9.0"
 }

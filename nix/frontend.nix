@@ -20,6 +20,8 @@ stdenvNoCC.mkDerivation (finalAttrs: {
       ../vite.config.ts
       ../tsconfig.json
       ../tsconfig.node.json
+      ../.oxlintrc.json
+      ../.oxfmtrc.json
       ../scripts/minify-js.js
       ../pkg/server/ui
       ../pkg/server/assets/js

@@ -56,6 +56,8 @@
           });
         in {
           typecheck = uiCheck "typecheck" [ pkgs.typescript ] "pnpm typecheck";
+          lint = uiCheck "lint" [ pkgs.oxlint ] "pnpm lint";
+          fmt = uiCheck "fmt" [ pkgs.oxfmt ] "pnpm fmt:check";
         }
       );
 
