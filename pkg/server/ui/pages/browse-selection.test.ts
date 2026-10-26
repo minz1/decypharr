@@ -6,13 +6,18 @@ import {
   browseCalls,
   check,
   element,
+  folder,
+  item,
   library,
+  listing,
   rowControl,
   stubOpen,
   toastText,
   waitForName,
   waitForToast,
 } from "#ui/lib/browse/testing";
+
+const mixed = (): Response => listing([item("Show", "def"), folder("rd", "provider")]);
 
 const bar = (): { hidden: boolean; count: string } => ({
   hidden: element("#bulkActionsBar", HTMLElement).classList.contains("hidden"),
@@ -50,6 +55,19 @@ describe("selecting entries", () => {
       cleared: { hidden: true, count: "0" },
       checked: 0,
     });
+  });
+});
+
+describe("select all", () => {
+  it("leaves the boxes of entries without actions unticked", async () => {
+    await bootBrowse(mixed);
+    await waitForName("rd");
+    check(element("#selectAllCheckbox", HTMLInputElement));
+    expect(
+      [...document.querySelectorAll<HTMLInputElement>(".entry-checkbox")].map(
+        (box) => `${box.disabled} ${box.checked}`,
+      ),
+    ).toStrictEqual(["false true", "true false"]);
   });
 });
 

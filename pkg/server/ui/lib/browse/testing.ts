@@ -171,6 +171,7 @@ export {
   check,
   element,
   file,
+  folder,
   item,
   library,
   listing,

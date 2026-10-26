@@ -148,7 +148,7 @@ const selectAll = (browser: Browser, checked: boolean): void => {
     }
   }
   for (const box of entryCheckboxes(browser)) {
-    box.checked = checked;
+    box.checked = checked && !box.disabled;
   }
   renderSelection(browser.refs, browser.state);
 };
