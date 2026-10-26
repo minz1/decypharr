@@ -34,7 +34,7 @@ const parseTorrent = (value: unknown): Torrent => {
     category: optStr(record, "category") ?? "",
     protocol: optStr(record, "protocol") ?? "",
     activeProvider: optStr(record, "active_provider") ?? "",
-    numSeeds: optNum(record, "num_seeds") ?? 0,
+    numSeeds: optNum(record, "num_seeds") ?? optNum(record, "seeders") ?? 0,
     state: optStr(record, "state") ?? "",
   };
 };

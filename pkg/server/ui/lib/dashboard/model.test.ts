@@ -64,6 +64,12 @@ describe("the torrent page parser", () => {
     const [parsed] = parseTorrentPage({ torrents: [{ ...withoutSpeed, dlspeed: 7, num_seeds: 4 }] }).torrents;
     expect({ speed: parsed?.speed, seeds: parsed?.numSeeds }).toStrictEqual({ speed: 7, seeds: 4 });
   });
+});
+
+describe("the torrent page parser's fields", () => {
+  it("reads the seeders the queue API sends", () => {
+    expect(parseTorrentPage({ torrents: [{ ...torrent, seeders: 7 }] }).torrents[0]?.numSeeds).toBe(7);
+  });
 
   it("rejects a torrent without a hash", () => {
     expect(() => parseTorrentPage({ torrents: [{ name: "x" }] })).toThrow("info_hash: expected a string");
