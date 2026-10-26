@@ -2,7 +2,7 @@ import type { setButtonLoading } from "#ui/lib/common/button";
 import type { copyToClipboard } from "#ui/lib/common/clipboard";
 import type { formatBytes, formatDuration } from "#ui/lib/common/format";
 import type { fetcher } from "#ui/lib/common/http";
-import type { closeToast, createToast } from "#ui/lib/common/toast";
+import type { closeToast } from "#ui/lib/common/toast";
 import type { joinURL } from "#ui/lib/common/url";
 
 declare global {
@@ -12,7 +12,7 @@ declare global {
 
 export interface DecypharrUtils {
   fetcher: typeof fetcher;
-  createToast: typeof createToast;
+  createToast: (message: unknown, type?: unknown, durationMs?: unknown) => string;
   closeToast: typeof closeToast;
   setButtonLoading: typeof setButtonLoading;
   escapeHtml: (text: string) => string;

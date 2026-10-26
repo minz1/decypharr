@@ -44,7 +44,12 @@ describe("errors nobody caught", () => {
     page("");
     globalThis.dispatchEvent(Object.assign(new Event("unhandledrejection"), { reason: new Error("no") }));
     globalThis.dispatchEvent(Object.assign(new Event("unhandledrejection"), { reason: "text" }));
-    expect(toasts()).toStrictEqual(["alert-error Promise rejected: no", "alert-error Promise rejected: Unknown error"]);
+    globalThis.dispatchEvent(Object.assign(new Event("unhandledrejection"), { reason: { message: "plain" } }));
+    expect(toasts()).toStrictEqual([
+      "alert-error Promise rejected: no",
+      "alert-error Promise rejected: Unknown error",
+      "alert-error Promise rejected: plain",
+    ]);
   });
 });
 

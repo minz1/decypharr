@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { escapeHtml } from "#ui/lib/common/legacy-bridge";
+import { escapeHtml, legacyToast } from "#ui/lib/common/legacy-bridge";
 
 describe("escaping HTML for legacy pages", () => {
   it("escapes the five special characters", () => {
@@ -11,5 +11,20 @@ describe("escaping HTML for legacy pages", () => {
 
   it.each(["null", '""', "0"])("turns %s into an empty string, as common.js did", (json) => {
     expect(escapeHtml(JSON.parse(json))).toBe("");
+  });
+});
+
+const shown = (): string[] =>
+  [...document.querySelectorAll(".toast-container .alert")].map((toast) => `${toast.className} ${toast.textContent}`);
+
+describe("toasts from legacy pages", () => {
+  it("coerce what untyped callers pass, as common.js did", () => {
+    document.body.replaceChildren();
+    legacyToast(new Error("boom"), "nope", 0);
+    legacyToast(JSON.parse("null"));
+    expect(shown()).toStrictEqual([
+      "alert mb-2 max-w-full shadow-lg alert-success Error: boom",
+      "alert mb-2 max-w-full shadow-lg alert-success ",
+    ]);
   });
 });

@@ -2,8 +2,20 @@ import { createToast } from "#ui/lib/common/toast";
 
 const INVALID_MS = 3000;
 
-const reasonOf = (reason: unknown): string =>
-  reason instanceof Error && reason.message !== "" ? reason.message : "Unknown error";
+const messageOf = (reason: unknown): string => {
+  if (reason instanceof Error) {
+    return reason.message;
+  }
+  if (typeof reason === "object" && reason !== null && "message" in reason && typeof reason.message === "string") {
+    return reason.message;
+  }
+  return "";
+};
+
+const reasonOf = (reason: unknown): string => {
+  const message = messageOf(reason);
+  return message === "" ? "Unknown error" : message;
+};
 
 const closeOpenMenus = (doc: Document): void => {
   for (const modal of doc.querySelectorAll(".modal[open]")) {

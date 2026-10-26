@@ -16,11 +16,34 @@ const ENTITIES: Readonly<Record<string, string>> = {
 const escapeHtml = (text: unknown): string =>
   typeof text === "string" ? text.replaceAll(/[&<>"']/gu, (char) => ENTITIES[char] ?? char) : "";
 
+const TOAST_TYPES = ["success", "error", "warning", "info"] as const;
+
+const isToastType = (type: unknown): type is (typeof TOAST_TYPES)[number] =>
+  TOAST_TYPES.some((known) => known === type);
+
+const textOf = (message: unknown): string => {
+  if (typeof message === "string") {
+    return message;
+  }
+  if (message instanceof Error) {
+    return message.toString();
+  }
+  return "";
+};
+
+const legacyToast = (message: unknown, type?: unknown, durationMs?: unknown): string => {
+  const text = textOf(message);
+  const kind = isToastType(type) ? type : "success";
+  return typeof durationMs === "number" && durationMs > 0
+    ? createToast(text, kind, durationMs)
+    : createToast(text, kind);
+};
+
 const installBridge = (): void => {
   globalThis.urlBase = readURLBase(document);
   globalThis.decypharrUtils = {
     fetcher,
-    createToast,
+    createToast: legacyToast,
     closeToast,
     setButtonLoading,
     escapeHtml,
@@ -31,4 +54,4 @@ const installBridge = (): void => {
   };
 };
 
-export { escapeHtml, installBridge };
+export { escapeHtml, installBridge, legacyToast };
