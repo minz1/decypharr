@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { DecypharrUtils } from "#ui/globals";
+import type { setButtonLoading } from "#ui/lib/common/button";
+import type { fetcher } from "#ui/lib/common/http";
+import type { createToast } from "#ui/lib/common/toast";
 import { bindLoginForm } from "#ui/lib/login";
 
 interface Recorder {
-  utils: DecypharrUtils;
+  utils: { fetcher: typeof fetcher; createToast: typeof createToast; setButtonLoading: typeof setButtonLoading };
   requests: { url: string; init: RequestInit | undefined }[];
   toasts: { message: string; type: string }[];
   loading: { submit: boolean; isLoading: boolean }[];
@@ -22,7 +24,8 @@ const record = (response: Response): Recorder => {
         return Promise.resolve(response);
       },
       createToast: (message, type) => {
-        toasts.push({ message, type });
+        toasts.push({ message, type: type ?? "success" });
+        return `toast-${toasts.length}`;
       },
       setButtonLoading: (button, isLoading) => {
         loading.push({ submit: button?.type === "submit", isLoading });

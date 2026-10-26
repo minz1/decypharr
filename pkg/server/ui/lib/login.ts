@@ -1,7 +1,15 @@
-import type { DecypharrUtils } from "#ui/globals";
+import type { setButtonLoading } from "#ui/lib/common/button";
+import type { fetcher } from "#ui/lib/common/http";
+import type { createToast } from "#ui/lib/common/toast";
+
+interface LoginUtils {
+  fetcher: typeof fetcher;
+  createToast: typeof createToast;
+  setButtonLoading: typeof setButtonLoading;
+}
 
 interface LoginDeps {
-  utils: DecypharrUtils;
+  utils: LoginUtils;
   redirect: (url: string) => void;
   urlBase: string;
 }

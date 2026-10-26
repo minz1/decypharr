@@ -2,6 +2,7 @@ package server
 
 import (
 	"compress/gzip"
+	"encoding/json"
 	"errors"
 	"html/template"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path"
 	"regexp"
 	"strings"
 	"testing"
@@ -20,16 +22,64 @@ import (
 // testStatic stands in for assets/build, so tests don't depend on whether the UI was built.
 func testStatic(t *testing.T) fstest.MapFS {
 	t.Helper()
-	manifest, err := os.ReadFile("testdata/vite/.vite/manifest.json")
+	manifest := templateViteManifest(t)
+	static := fstest.MapFS{
+		"vite/.vite/manifest.json": {Data: manifest},
+		"js/common.js":             {Data: []byte(strings.Repeat("console.log('common');\n", 20))},
+	}
+	var m viteManifest
+	if err := json.Unmarshal(manifest, &m); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range m {
+		static["vite/"+c.File] = &fstest.MapFile{Data: []byte(strings.Repeat("/* "+c.File+" */\n", 20))}
+	}
+	return static
+}
+
+const viteRefPattern = `(viteEntry|viteCSS) "([^"]+)"`
+
+// templateViteRefs returns each viteEntry or viteCSS call in templates/*.html as {template, func, entry}.
+func templateViteRefs(t *testing.T) [][3]string {
+	t.Helper()
+	ref := regexp.MustCompile(viteRefPattern)
+	entries, err := fs.ReadDir(content, "templates")
 	if err != nil {
 		t.Fatal(err)
 	}
-	return fstest.MapFS{
-		"vite/.vite/manifest.json":    {Data: manifest},
-		"vite/assets/styles-AAAA.css": {Data: []byte(strings.Repeat("body { color: red; }\n", 20))},
-		"vite/assets/login-BBBB.js":   {Data: []byte(strings.Repeat("console.log('login');\n", 20))},
-		"js/common.js":                {Data: []byte(strings.Repeat("console.log('common');\n", 20))},
+	var refs [][3]string
+	for _, e := range entries {
+		src, readErr := fs.ReadFile(content, "templates/"+e.Name())
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		for _, match := range ref.FindAllStringSubmatch(string(src), -1) {
+			refs = append(refs, [3]string{e.Name(), match[1], match[2]})
+		}
 	}
+	return refs
+}
+
+// templateViteManifest is a manifest with an entry for every name the templates pass to viteEntry or viteCSS.
+func templateViteManifest(t *testing.T) []byte {
+	t.Helper()
+	type chunk struct {
+		File    string `json:"file"`
+		Src     string `json:"src"`
+		IsEntry bool   `json:"isEntry"`
+	}
+	ext := map[string]string{"viteEntry": ".js", "viteCSS": ".css"}
+	manifest := map[string]chunk{}
+	for _, ref := range templateViteRefs(t) {
+		name := ref[2]
+		base := strings.TrimSuffix(path.Base(name), path.Ext(name))
+		manifest[name] = chunk{File: "assets/" + base + "-TEST" + ext[ref[1]], Src: name, IsEntry: true}
+	}
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
 
 func fixtureManifest(t *testing.T) viteManifest {
@@ -108,20 +158,9 @@ func TestTemplatesNameKnownEntries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref := regexp.MustCompile(`(viteEntry|viteCSS) "([^"]+)"`)
-	entries, err := fs.ReadDir(content, "templates")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, e := range entries {
-		src, readErr := fs.ReadFile(content, "templates/"+e.Name())
-		if readErr != nil {
-			t.Fatal(readErr)
-		}
-		for _, match := range ref.FindAllStringSubmatch(string(src), -1) {
-			if _, ok := m[match[2]]; !ok {
-				t.Errorf("%s: %s %q is not in the Vite manifest", e.Name(), match[1], match[2])
-			}
+	for _, ref := range templateViteRefs(t) {
+		if _, ok := m[ref[2]]; !ok {
+			t.Errorf("%s: %s %q is not in the Vite manifest", ref[0], ref[1], ref[2])
 		}
 	}
 }
@@ -191,7 +230,7 @@ func TestLayoutsLinkViteCSS(t *testing.T) {
 		w := httptest.NewRecorder()
 		s.renderPage(w, layout, "index", "Queues", nil)
 		page := w.Body.String()
-		if !strings.Contains(page, `<link rel="stylesheet" href="/assets/vite/assets/styles-AAAA.css">`) {
+		if !strings.Contains(page, `<link rel="stylesheet" href="/assets/vite/assets/styles-TEST.css">`) {
 			t.Errorf("%s does not link the Vite stylesheet:\n%s", layout, page)
 		}
 		if strings.Contains(page, "assets/css/styles.css") {
