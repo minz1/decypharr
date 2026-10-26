@@ -1,0 +1,14 @@
+{{ define "confirm_dialog" }}
+    <dialog id="confirmDialog" class="modal">
+        <div class="modal-box">
+            <p class="whitespace-pre-line" id="confirmDialogMessage"></p>
+            <div class="modal-action">
+                <button type="button" class="btn btn-ghost" data-answer="cancel">Cancel</button>
+                <button type="button" class="btn btn-error" data-answer="ok">OK</button>
+            </div>
+        </div>
+        <form method="dialog" class="modal-backdrop">
+            <button>close</button>
+        </form>
+    </dialog>
+{{ end }}

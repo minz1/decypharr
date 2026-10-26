@@ -164,9 +164,77 @@
             </a>
         </li>
     </ul>
-    <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        window.dashboard = new TorrentDashboard();
-    });
-    </script>
+    <template id="dashboard-row">
+        <table>
+            <tbody>
+                <tr class="hover">
+                    <td>
+                        <label class="cursor-pointer">
+                            <input type="checkbox"
+                                   class="checkbox checkbox-sm checkbox-primary torrent-select">
+                        </label>
+                    </td>
+                    <td>
+                        <div class="flex flex-col">
+                            <span class="font-medium" data-field="name"></span>
+                            <span class="text-xs text-base-content/60 font-mono" data-field="hash"></span>
+                        </div>
+                    </td>
+                    <td>
+                        <span class="badge badge-ghost" data-field="size"></span>
+                    </td>
+                    <td>
+                        <div class="flex items-center gap-2">
+                            <progress class="progress w-20" max="100" data-field="progress"></progress>
+                            <span class="text-xs font-medium" data-field="percent"></span>
+                        </div>
+                    </td>
+                    <td>
+                        <span class="text-sm" data-field="speed"></span>
+                    </td>
+                    <td data-field="category">
+                        <span class="badge badge-sm badge-outline"></span>
+                    </td>
+                    <td>
+                        <span class="badge badge-sm" data-field="protocol"><i class="mr-1"></i></span>
+                    </td>
+                    <td data-field="provider">
+                        <span class="badge badge-sm badge-primary"></span>
+                    </td>
+                    <td>
+                        <span class="text-sm" data-field="seeds"></span>
+                    </td>
+                    <td>
+                        <span class="badge badge-sm" data-field="state"></span>
+                    </td>
+                    <td>
+                        <button class="btn btn-ghost btn-xs text-error"
+                                title="Delete Torrent"
+                                data-action="delete">
+                            <i class="bi bi-trash"></i>
+                        </button>
+                        <button class="btn btn-ghost btn-xs text-error"
+                                title="Delete from Provider"
+                                data-action="delete-debrid">
+                            <i class="bi bi-cloud-slash"></i>
+                        </button>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    </template>
+    <template id="dashboard-page-previous">
+        <button class="join-item btn btn-sm" data-action="page">«</button>
+    </template>
+    <template id="dashboard-page-number">
+        <button class="join-item btn btn-sm" data-action="page"></button>
+    </template>
+    <template id="dashboard-page-gap">
+        <button class="join-item btn btn-sm btn-disabled">...</button>
+    </template>
+    <template id="dashboard-page-next">
+        <button class="join-item btn btn-sm" data-action="page">»</button>
+    </template>
+    {{ template "confirm_dialog" }}
+    {{ template "vite" (viteEntry "pkg/server/ui/pages/dashboard.ts") }}
 {{ end }}
