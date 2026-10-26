@@ -1,6 +1,7 @@
+import { cloneTemplate } from "#ui/lib/common/dom";
 import { formatBytes, formatSpeed } from "#ui/lib/common/format";
 import { optNum } from "#ui/lib/common/json";
-import { cloneElement, field, setFields } from "#ui/lib/stats/dom";
+import { field, setFields } from "#ui/lib/stats/dom";
 import { PERCENT, formatNumber, orElse } from "#ui/lib/stats/format";
 import { count, text } from "#ui/lib/stats/read";
 
@@ -151,7 +152,7 @@ const downloadingBadge = (): HTMLSpanElement => {
   return span;
 };
 
-const renderHealth = (panel: HTMLElement, view: Health): void => {
+const renderHealth = (panel: ParentNode, view: Health): void => {
   addClass(panel, "health", view.className);
   field(panel, "health-icon").classList.add(view.icon);
   field(panel, "health-label").textContent = view.label;
@@ -167,7 +168,7 @@ const setPurgeTarget = (button: HTMLElement, target: PurgeTarget): void => {
 };
 
 const renderDFS = (content: HTMLElement, view: DFSView): void => {
-  const panel = cloneElement("stats-dfs");
+  const panel = cloneTemplate("stats-dfs");
   setFields(panel, view.texts);
   field(panel, "downloads-state").replaceChildren(view.downloading ? downloadingBadge() : "Idle");
   addClass(panel, "hit-rate", view.hitRateClass);
