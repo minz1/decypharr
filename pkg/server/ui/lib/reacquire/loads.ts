@@ -92,6 +92,8 @@ const loadIndex = async (page: ReacquirePage): Promise<void> => {
 };
 
 const searchBindings = async (page: ReacquirePage): Promise<void> => {
+  page.state.chosen = undefined;
+  page.modal.submit.disabled = true;
   const endpoint = bindingsEndpoint(page.modal.query.value, page.modal.arr.value);
   try {
     const bindings = parseBindings(await getJSON(endpoint));

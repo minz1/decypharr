@@ -75,6 +75,26 @@ describe("the binding index", () => {
   });
 });
 
+describe("a new search", () => {
+  it("forgets the chosen file when a new search replaces the list", async () => {
+    const requests = await openModal({ "GET /api/arr/bindings?arr=Sonarr+4K": () => Response.json(BINDINGS) });
+    await click("#bindingResults tr td:nth-child(2)");
+    const arr = element("#reacquireArr", HTMLSelectElement);
+    arr.value = "Sonarr 4K";
+    arr.dispatchEvent(new Event("change"));
+    await vi.waitFor(() => {
+      expect(requests.at(-1)?.url).toBe("/api/arr/bindings?arr=Sonarr+4K");
+    });
+    await settle();
+    element("#reacquireSubmit", HTMLButtonElement).click();
+    await settle();
+    expect({
+      disabled: element("#reacquireSubmit", HTMLButtonElement).disabled,
+      posted: mutations(requests),
+    }).toStrictEqual({ disabled: true, posted: [] });
+  });
+});
+
 describe("searching the binding index", () => {
   it("lists the bindings as text when the modal opens", async () => {
     const requests = await openModal();
