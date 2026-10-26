@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -62,7 +63,7 @@ func suppressionScope(t *testing.T) []string {
 	return files
 }
 
-func reportBanned(t *testing.T, rel string, banned []string) {
+func reportBanned(t *testing.T, rel string, banned []string, why string) {
 	t.Helper()
 	src, err := os.ReadFile(filepath.Join(repoRoot, rel))
 	if err != nil {
@@ -73,8 +74,7 @@ func reportBanned(t *testing.T, rel string, banned []string) {
 		line++
 		for _, b := range banned {
 			if strings.Contains(text, b) {
-				t.Errorf("%s:%d: %s is banned; fix the finding, or turn the rule off in config with a reason",
-					rel, line, b)
+				t.Errorf("%s:%d: %s is banned; %s", rel, line, b, why)
 			}
 		}
 	}
@@ -88,15 +88,16 @@ func TestNoSuppressions(t *testing.T) {
 	}
 	// Only in the root configs: CLI flags and keys that skip files or rules.
 	configBanned := []string{"--ignore", "--allow", " -A ", "--disable", `"ignore"`, `"exclude"`}
+	why := "fix the finding, or turn the rule off in config with a reason"
 	files := suppressionScope(t)
 	if len(files) == 0 {
 		t.Fatal("scanned no files")
 	}
 	for _, rel := range files {
 		if strings.Contains(rel, "/") {
-			reportBanned(t, rel, banned)
+			reportBanned(t, rel, banned, why)
 		} else {
-			reportBanned(t, rel, slices.Concat(banned, configBanned))
+			reportBanned(t, rel, slices.Concat(banned, configBanned), why)
 		}
 	}
 	for _, ignoreFile := range []string{".eslintignore", ".oxlintignore", ".prettierignore", ".oxfmtignore"} {
@@ -151,6 +152,82 @@ func TestHasInlineScript(t *testing.T) {
 	}
 }
 
+const jsAllowlist = "pkg/server/ui/js-allowlist.txt"
+
+func parseJSAllowlist(raw string) ([]string, []string) {
+	var paths, problems []string
+	line := 0
+	for text := range strings.Lines(raw) {
+		line++
+		entry := strings.TrimSpace(text)
+		if entry == "" {
+			continue
+		}
+		path, _, ok := strings.Cut(entry, ": ")
+		if !ok || strings.TrimSpace(path) == "" {
+			problems = append(problems, fmt.Sprintf("%s:%d: %q is not \"<path>: <reason>\"", jsAllowlist, line, entry))
+			continue
+		}
+		paths = append(paths, strings.TrimSpace(path))
+	}
+	return paths, problems
+}
+
+func readJSAllowlist(t *testing.T) ([]string, []string) {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(repoRoot, jsAllowlist))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parseJSAllowlist(string(raw))
+}
+
+func TestParseJSAllowlist(t *testing.T) {
+	t.Parallel()
+	for raw, want := range map[string]int{
+		"a.js: legacy\n\nb.html: early theme\n": 0,
+		"a.js\n":                                1,
+		"a.js:\n":                               1,
+		"a.js:   \n":                            1,
+		": reason\n":                            1,
+		"a.js:reason\n":                         1,
+		"a.js: ok\nb.js\n":                      1,
+	} {
+		if _, problems := parseJSAllowlist(raw); len(problems) != want {
+			t.Errorf("parseJSAllowlist(%q) problems = %q, want %d", raw, problems, want)
+		}
+	}
+}
+
+func TestJSAllowlistLinesHaveReasons(t *testing.T) {
+	t.Parallel()
+	paths, problems := readJSAllowlist(t)
+	for _, p := range problems {
+		t.Error(p)
+	}
+	if len(paths) == 0 {
+		t.Fatalf("%s lists nothing", jsAllowlist)
+	}
+}
+
+func TestNoHTMLStringAPIs(t *testing.T) {
+	t.Parallel()
+	banned := []string{
+		"innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "createContextualFragment",
+		"setHTMLUnsafe", "parseHTMLUnsafe", "DOMParser", "srcdoc",
+	}
+	files := repoFiles(t, "pkg/server/ui", func(rel string) bool {
+		return filepath.Ext(rel) == ".ts" && !strings.HasSuffix(rel, ".test.ts") &&
+			rel != "pkg/server/ui/lib/testing/fixture.ts"
+	})
+	if len(files) == 0 {
+		t.Fatal("scanned no files")
+	}
+	for _, rel := range files {
+		reportBanned(t, rel, banned, "build markup from a <template> and set text with textContent")
+	}
+}
+
 func TestLegacyJSRatchet(t *testing.T) {
 	t.Parallel()
 	isJS := func(rel string) bool {
@@ -167,16 +244,7 @@ func TestLegacyJSRatchet(t *testing.T) {
 		}
 	}
 
-	raw, err := os.ReadFile(filepath.Join(repoRoot, "pkg/server/ui/legacy-js.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var listed []string
-	for line := range strings.Lines(string(raw)) {
-		if entry := strings.TrimSpace(line); entry != "" {
-			listed = append(listed, entry)
-		}
-	}
+	listed, _ := readJSAllowlist(t)
 	for _, rel := range found {
 		if !slices.Contains(listed, rel) {
 			t.Errorf("%s: new JavaScript; write it in TypeScript under pkg/server/ui", rel)
@@ -184,7 +252,7 @@ func TestLegacyJSRatchet(t *testing.T) {
 	}
 	for _, rel := range listed {
 		if !slices.Contains(found, rel) {
-			t.Errorf("%s: listed in pkg/server/ui/legacy-js.txt but no longer JavaScript; remove the line", rel)
+			t.Errorf("%s: listed in %s but no longer JavaScript; remove the line", rel, jsAllowlist)
 		}
 	}
 }
