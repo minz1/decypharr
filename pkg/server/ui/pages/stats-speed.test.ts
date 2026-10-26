@@ -47,6 +47,7 @@ describe("testing an NNTP server's speed", () => {
     await loaded();
     button(NNTP).click();
     button(NNTP).click();
+    element(`${NNTP} .loading`).click();
     expect({
       disabled: button(NNTP).disabled,
       label: textOf(NNTP),
@@ -96,6 +97,7 @@ describe("testing a debrid provider's speed", () => {
     await loaded();
     button(DEBRID).click();
     button(DEBRID).click();
+    element(`${DEBRID} .loading`).click();
     expect({
       disabled: button(DEBRID).disabled,
       label: textOf(DEBRID),

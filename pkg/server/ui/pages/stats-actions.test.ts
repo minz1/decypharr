@@ -77,6 +77,45 @@ describe("running a cache cleanup", () => {
   });
 });
 
+const CLEANUP = '#mount-content [data-action="cache-cleanup"]';
+const PURGE = '#mount-content [data-action="cache-purge"]';
+
+const buttonState = (selector: string): [boolean, string] => [element(selector).matches(":disabled"), textOf(selector)];
+
+describe("a cache action in flight", () => {
+  it("disables the cleanup button so a second click, even on its spinner, posts nothing", async () => {
+    const reply = Promise.withResolvers<Response>();
+    const sent = await bootStats({ ...statsRoute(), "POST /api/mount/cache/cleanup": async () => reply.promise });
+    await loaded();
+    for (const target of [CLEANUP, CLEANUP, `${CLEANUP} .loading`]) {
+      click(target);
+    }
+    await settle();
+    expect([buttonState(CLEANUP), requests(sent)]).toStrictEqual([
+      [true, "Processing..."],
+      ["GET /debug/stats", "POST /api/mount/cache/cleanup"],
+    ]);
+    reply.resolve(new Response("Mount is not ready", { status: 503 }));
+    await vi.waitFor(() => {
+      expect(toasts()).toStrictEqual(["Cache cleanup failed: Mount is not ready"]);
+    });
+    expect(buttonState(CLEANUP)).toStrictEqual([false, "Run Cleanup"]);
+  });
+
+  it("disables the purge button while the purge runs", async () => {
+    const reply = Promise.withResolvers<Response>();
+    await openPurge({ "POST /api/mount/cache/purge": async () => reply.promise });
+    click("#confirm-purge-cache");
+    await settle();
+    expect(buttonState(PURGE)).toStrictEqual([true, "Processing..."]);
+    reply.resolve(new Response("", { status: 500 }));
+    await vi.waitFor(() => {
+      expect(toasts()).toStrictEqual(["Cache purge failed: HTTP 500"]);
+    });
+    expect(buttonState(PURGE)).toStrictEqual([false, "Purge Cache"]);
+  });
+});
+
 describe("purging the cache", () => {
   it("asks first, showing what will be purged", async () => {
     const sent = await openPurge({});

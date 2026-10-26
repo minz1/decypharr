@@ -119,7 +119,7 @@ const runSpeedTest = async (
   show: (result: SpeedTestResult) => Node,
 ): Promise<void> => {
   const slot = resultSlot(button);
-  if (!slot) {
+  if (!slot || button.disabled) {
     return;
   }
   showTesting(button, slot, protocol);

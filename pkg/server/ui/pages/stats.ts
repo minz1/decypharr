@@ -41,11 +41,15 @@ const findPurgeDialog = (): PurgeDialog => ({
 
 const bindPanelActions = (elements: StatsElements, purgeDialog: PurgeDialog, reload: () => void): void => {
   onAction(elements.mount.content, "click", {
-    "cache-cleanup": () => {
-      void runCacheCleanup(reload);
+    "cache-cleanup": (button) => {
+      if (button instanceof HTMLButtonElement) {
+        void runCacheCleanup(button, reload);
+      }
     },
     "cache-purge": (button) => {
-      void runCachePurge(button, purgeDialog, reload);
+      if (button instanceof HTMLButtonElement) {
+        void runCachePurge(button, purgeDialog, reload);
+      }
     },
   });
   onAction(elements.debrids, "click", {

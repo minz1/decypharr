@@ -1,3 +1,4 @@
+import { setButtonLoading } from "#ui/lib/common/button";
 import { formatBytes } from "#ui/lib/common/format";
 import { fetcher } from "#ui/lib/common/http";
 import { asRecord, readJSON } from "#ui/lib/common/json";
@@ -91,9 +92,21 @@ const postCacheAction = async (endpoint: string): Promise<unknown> => {
   return readJSON(response);
 };
 
-const runCacheCleanup = async (reload: () => void): Promise<void> => {
+const postWhileBusy = async (button: HTMLButtonElement, endpoint: string): Promise<unknown> => {
+  setButtonLoading(button, true);
   try {
-    const toast = cleanupToast(parseCleanup(await postCacheAction("/api/mount/cache/cleanup")));
+    return await postCacheAction(endpoint);
+  } finally {
+    setButtonLoading(button, false);
+  }
+};
+
+const runCacheCleanup = async (button: HTMLButtonElement, reload: () => void): Promise<void> => {
+  if (button.disabled) {
+    return;
+  }
+  try {
+    const toast = cleanupToast(parseCleanup(await postWhileBusy(button, "/api/mount/cache/cleanup")));
     createToast(toast.message, toast.type);
     reload();
   } catch (error) {
@@ -145,12 +158,12 @@ const confirmCachePurge = async (dialog: PurgeDialog, target: PurgeTarget): Prom
   return answer;
 };
 
-const runCachePurge = async (button: HTMLElement, dialog: PurgeDialog, reload: () => void): Promise<void> => {
-  if (!(await confirmCachePurge(dialog, purgeTarget(button)))) {
+const runCachePurge = async (button: HTMLButtonElement, dialog: PurgeDialog, reload: () => void): Promise<void> => {
+  if (button.disabled || !(await confirmCachePurge(dialog, purgeTarget(button)))) {
     return;
   }
   try {
-    const toast = purgeToast(parsePurge(await postCacheAction("/api/mount/cache/purge")));
+    const toast = purgeToast(parsePurge(await postWhileBusy(button, "/api/mount/cache/purge")));
     createToast(toast.message, toast.type);
     reload();
   } catch (error) {
