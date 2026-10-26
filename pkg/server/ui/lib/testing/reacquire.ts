@@ -1,4 +1,4 @@
-import { expect, vi } from "vitest";
+import { expect, onTestFinished, vi } from "vitest";
 
 import { settle, stubAPI } from "#ui/lib/testing/api";
 import { loadFixture } from "#ui/lib/testing/fixture";
@@ -46,6 +46,13 @@ const LOAD_REQUESTS = Object.keys(REACQUIRE_ROUTES).length;
 
 const bootReacquire = async (routes: Routes = {}, fixture = "reacquire"): Promise<ReturnType<typeof stubAPI>> => {
   vi.resetModules();
+  if (!vi.isFakeTimers()) {
+    // Real poll timers would outlive the test and call the next test's fetch stub.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+  }
   loadFixture(fixture);
   const requests = stubAPI({ ...REACQUIRE_ROUTES, ...routes });
   await import("#ui/pages/reacquire");
