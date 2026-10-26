@@ -201,6 +201,12 @@ describe("the health badge", () => {
   });
 });
 
+describe("the health badge's last check", () => {
+  it("reads Go's zero time as never checked", () => {
+    expect(healthBadge({ status: "unknown", lastCheckedAt: "0001-01-01T00:00:00Z" }).title).toBe("never checked");
+  });
+});
+
 describe("the breadcrumb trail", () => {
   it("lists each level with its decoded name", () => {
     expect(breadcrumbs("/__all__/A%20B")).toStrictEqual([

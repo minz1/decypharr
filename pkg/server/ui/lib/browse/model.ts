@@ -12,6 +12,7 @@ import type {
 import { asArray, asRecord, optBool, optNum, optStr, str } from "#ui/lib/common/json";
 
 const PER_PAGE = 20;
+const GO_ZERO_TIME = "0001-01-01T00:00:00Z";
 const MAX_API_LEVELS = 3;
 const DOWNLOAD_LEVELS = 3;
 const SORT_KEYS: readonly SortKey[] = ["name", "size", "mod_time", "active_debrid"];
@@ -183,7 +184,9 @@ const healthBadge = (health?: Health): HealthBadge => {
     className: HEALTH_CLASSES[health.status] ?? "badge-ghost",
     text: health.status === "" ? "unknown" : health.status,
     title:
-      health.lastCheckedAt === "" ? "never checked" : `last checked ${new Date(health.lastCheckedAt).toLocaleString()}`,
+      health.lastCheckedAt === "" || health.lastCheckedAt === GO_ZERO_TIME
+        ? "never checked"
+        : `last checked ${new Date(health.lastCheckedAt).toLocaleString()}`,
   };
 };
 
