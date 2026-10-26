@@ -88,7 +88,7 @@ const bindModal = (page: ReacquirePage): void => {
 
 bootPage("reacquire", async () => {
   const page = reacquirePage(document);
-  byId("repairConfirmModal", HTMLDialogElement);
+  byId("confirmDialog", HTMLDialogElement);
   bindJobs(page);
   bindJobRows(page);
   bindModal(page);

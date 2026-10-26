@@ -1,3 +1,4 @@
+import { askConfirm } from "#ui/lib/common/confirm";
 import { describeError } from "#ui/lib/common/errors";
 import { fetcher } from "#ui/lib/common/http";
 import { createToast } from "#ui/lib/common/toast";
@@ -7,7 +8,6 @@ import { DEFAULT_PAGE_SIZE, filterJobs, isTerminal, jobsPage } from "#ui/lib/rea
 import { currentPage, renderSelection } from "#ui/lib/reacquire/jobs";
 import { loadIndex, loadJobs, showJobs } from "#ui/lib/reacquire/loads";
 import type { Job, ReacquirePage } from "#ui/lib/reacquire/types";
-import { confirmAction } from "#ui/lib/repair/confirm";
 
 const INDEX_REREAD_MS = 3000;
 const ACKNOWLEDGE_QUESTION =
@@ -111,7 +111,7 @@ const deleteSelectedJobs = async (page: ReacquirePage): Promise<void> => {
     createToast("No completed jobs are selected", "warning");
     return;
   }
-  if (!(await confirmAction(deletionQuestion(ids.length)))) {
+  if (!(await askConfirm(deletionQuestion(ids.length)))) {
     return;
   }
   await deleteJobs(page, ids);
@@ -133,7 +133,7 @@ const postAcknowledge = async (page: ReacquirePage, job: Job, button: HTMLButton
 };
 
 const acknowledge = async (page: ReacquirePage, job: Job, button: HTMLButtonElement): Promise<void> => {
-  if (!(await confirmAction(ACKNOWLEDGE_QUESTION))) {
+  if (!(await askConfirm(ACKNOWLEDGE_QUESTION))) {
     return;
   }
   button.disabled = true;

@@ -1,3 +1,4 @@
+import { askConfirm } from "#ui/lib/common/confirm";
 import { describeError } from "#ui/lib/common/errors";
 import { fetcher } from "#ui/lib/common/http";
 import { createToast } from "#ui/lib/common/toast";
@@ -11,7 +12,6 @@ import {
   recheckMediaRequest,
   runRequest,
 } from "#ui/lib/repair/api";
-import { confirmAction } from "#ui/lib/repair/confirm";
 import { loadBroken, loadHistory, loadStatus } from "#ui/lib/repair/loads";
 import { readRunOptions, resetClearModal, resetRunModal, showError, showRecheckFailure } from "#ui/lib/repair/modals";
 import { renderClearCounts } from "#ui/lib/repair/status";
@@ -68,7 +68,7 @@ const runNow = async (page: RepairPage): Promise<void> => {
 };
 
 const fixBroken = async (page: RepairPage): Promise<void> => {
-  if (!(await confirmAction("Send delete + re-search for every currently broken entry to its Arr?"))) {
+  if (!(await askConfirm("Send delete + re-search for every currently broken entry to its Arr?"))) {
     return;
   }
   page.status.fixBroken.disabled = true;
@@ -116,7 +116,7 @@ const stopRun = async (page: RepairPage): Promise<void> => {
 };
 
 const clearHistory = async (page: RepairPage): Promise<void> => {
-  if (!(await confirmAction("Clear all run history?"))) {
+  if (!(await askConfirm("Clear all run history?"))) {
     return;
   }
   try {
@@ -167,7 +167,7 @@ const recheckEntry = async (page: RepairPage, name: string): Promise<void> => {
 };
 
 const fixEntry = async (name: string): Promise<void> => {
-  if (!(await confirmAction(`Send delete + re-search for "${name}" to its Arr?`))) {
+  if (!(await askConfirm(`Send delete + re-search for "${name}" to its Arr?`))) {
     return;
   }
   try {

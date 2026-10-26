@@ -78,7 +78,7 @@ const bindBroken = (page: RepairPage): void => {
 
 bootPage("repair", async () => {
   const page = repairPage(document);
-  byId("repairConfirmModal", HTMLDialogElement);
+  byId("confirmDialog", HTMLDialogElement);
   bindStatus(page);
   bindForms(page);
   bindBroken(page);

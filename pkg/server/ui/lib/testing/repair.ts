@@ -48,12 +48,12 @@ const brokenEntry = (name: string, failedAt = ""): Record<string, unknown> => ({
 });
 
 const answerConfirm = async (answer: "cancel" | "ok"): Promise<string> => {
-  const dialog = element("#repairConfirmModal", HTMLDialogElement);
+  const dialog = element("#confirmDialog", HTMLDialogElement);
   await vi.waitFor(() => {
     expect(dialog.open).toBe(true);
   });
-  const message = element("#repairConfirmMessage", HTMLElement).textContent;
-  element(`#repairConfirmModal .modal-action button[value="${answer}"]`, HTMLButtonElement).click();
+  const message = element("#confirmDialogMessage", HTMLElement).textContent;
+  element(`#confirmDialog [data-answer="${answer}"]`, HTMLButtonElement).click();
   await settle();
   return message;
 };
