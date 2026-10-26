@@ -126,15 +126,20 @@ func runOnce(
 
 	end, next, svcErr := awaitEnd(ctx, restartCh, serviceResult, reload, _log)
 	cancelSvc()
+	drainServices := func() {
+		if stopErr := <-serviceResult; stopErr != nil {
+			_log.Warn().Err(stopErr).Msg("A service returned an error while stopping")
+		}
+	}
 	switch end {
 	case endStopped:
-		<-serviceResult
+		drainServices()
 		_log.Info().Msg("Decypharr has been stopped gracefully.")
 		shutdown()
 		return nil, false, nil
 	case endRestart:
 		_log.Info().Msg("Restarting Decypharr...")
-		<-serviceResult
+		drainServices()
 		// The next generation builds a new manager over the same database.
 		shutdown()
 		_log.Info().Msg("Decypharr has been restarted.")
