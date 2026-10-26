@@ -27,7 +27,6 @@ stdenvNoCC.mkDerivation (finalAttrs: {
       ../.oxfmtrc.json
       ../scripts/minify-js.js
       ../pkg/server/ui
-      ../pkg/server/assets/js
       ../pkg/server/templates
     ];
   };
@@ -54,7 +53,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
   installPhase = ''
     runHook preInstall
     mkdir -p $out
-    cp -r pkg/server/assets/build/vite pkg/server/assets/build/js $out/
+    cp -r pkg/server/assets/build/vite $out/
     runHook postInstall
   '';
 })

@@ -63,7 +63,7 @@
           # Vitest's wiring tests read pages rendered by TestRenderUIFixtures.
           test = uiCheck "test" [ ] ''
             mkdir -p pkg/server/testdata/rendered
-            cp ${ui-fixtures}/*.html pkg/server/testdata/rendered/
+            cp ${ui-fixtures}/* pkg/server/testdata/rendered/
             pnpm vitest
           '';
           ui-fixtures = self.packages.${system}.default.overrideAttrs (old: {
@@ -80,11 +80,10 @@
           });
           inherit frontend;
           package = self.packages.${system}.default;
-          # pkg/server's tests against the built UI: manifest entry names and the minified settings scripts.
+          # pkg/server's tests against the built UI: manifest entry names.
           go-ui = self.packages.${system}.default.overrideAttrs (old: {
             pname = "decypharr-go-ui";
             subPackages = [ "pkg/server" ];
-            nativeCheckInputs = (old.nativeCheckInputs or [ ]) ++ [ pkgs.nodejs ];
             postInstall = "";
           });
           templates = pkgs.runCommand "decypharr-templates" {
