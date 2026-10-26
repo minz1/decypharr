@@ -221,9 +221,7 @@
                 </label>
                 <div id="reacquireError" class="alert alert-error py-2 text-sm hidden"></div>
                 <div class="modal-action">
-                    <button type="button"
-                            class="btn btn-ghost btn-sm"
-                            onclick="document.getElementById('reacquireModal').close()">Cancel</button>
+                    <button type="button" class="btn btn-ghost btn-sm" id="reacquireCancelBtn">Cancel</button>
                     <button type="submit"
                             id="reacquireSubmit"
                             class="btn btn-primary btn-sm"
@@ -237,9 +235,181 @@
             <button>close</button>
         </form>
     </dialog>
-    <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        window.reacquireManager = new ReacquireManager();
-    });
-    </script>
+    {{ template "repair_confirm" }}
+    <template id="reacquire-count-tile">
+        <div class="bg-base-200/60 rounded-lg px-3 py-2">
+            <div class="text-[10px] uppercase tracking-wide opacity-60">
+                <i class="bi mr-1" data-field="icon"></i><span data-field="label"></span>
+            </div>
+            <div class="text-xl font-semibold mt-1" data-field="value"></div>
+        </div>
+    </template>
+    <template id="reacquire-status-badge">
+        <span class="badge badge-sm gap-1 whitespace-nowrap"><i class="bi"></i></span>
+    </template>
+    <template id="reacquire-job-row">
+        <table>
+            <tbody>
+                <tr>
+                    <td>
+                        <input type="checkbox"
+                               class="checkbox checkbox-sm checkbox-primary job-checkbox"
+                               data-action="select-job"
+                               data-field="select">
+                    </td>
+                    <td data-field="status"></td>
+                    <td class="max-w-xs">
+                        <div class="truncate font-medium" data-field="file"></div>
+                        <div class="truncate text-xs opacity-60" data-field="entry"></div>
+                    </td>
+                    <td>
+                        <div class="text-sm" data-field="arr"></div>
+                        <div class="text-xs opacity-60" data-field="arr-type"></div>
+                    </td>
+                    <td>
+                        <span class="badge badge-ghost badge-sm" data-field="cause"></span>
+                    </td>
+                    <td class="text-xs whitespace-nowrap" data-field="updated"></td>
+                    <td class="text-right">
+                        <button class="btn btn-ghost btn-xs job-detail-btn"
+                                data-action="show-job"
+                                data-field="detail">
+                            <i class="bi bi-eye"></i>
+                        </button>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    </template>
+    <template id="reacquire-empty-jobs">
+        <table>
+            <tbody>
+                <tr>
+                    <td colspan="7" class="text-center py-8 opacity-60" data-field="message"></td>
+                </tr>
+            </tbody>
+        </table>
+    </template>
+    <template id="reacquire-page-button">
+        <button class="join-item btn btn-sm" data-action="jobs-page"></button>
+    </template>
+    <template id="reacquire-job-detail">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2"
+             data-field="grid"></div>
+        <div class="alert alert-error py-2" data-field="error">
+            <i class="bi bi-exclamation-octagon"></i>
+            <span class="text-xs break-all" data-field="message"></span>
+        </div>
+        <div data-field="files">
+            <div class="text-xs uppercase tracking-wide opacity-60 mb-1">Files</div>
+            <table class="table table-xs">
+                <thead>
+                    <tr>
+                        <th>File</th>
+                        <th>Arr file</th>
+                        <th>Match</th>
+                    </tr>
+                </thead>
+                <tbody data-field="rows">
+                </tbody>
+            </table>
+        </div>
+        <div data-field="actions">
+            <div class="text-xs uppercase tracking-wide opacity-60 mb-1">Arr actions</div>
+            <table class="table table-xs">
+                <thead>
+                    <tr>
+                        <th>Action</th>
+                        <th>State</th>
+                        <th>Attempts</th>
+                        <th>Confirmed</th>
+                    </tr>
+                </thead>
+                <tbody data-field="rows">
+                </tbody>
+            </table>
+        </div>
+    </template>
+    <template id="reacquire-detail-row">
+        <div class="flex justify-between gap-3 border-b border-base-200 py-1">
+            <span class="text-xs opacity-60" data-field="label"></span>
+            <span class="text-sm text-right break-all" data-field="value"></span>
+        </div>
+    </template>
+    <template id="reacquire-detail-binding">
+        <table>
+            <tbody>
+                <tr>
+                    <td class="text-xs" data-field="file"></td>
+                    <td class="text-xs" data-field="arr-file"></td>
+                    <td class="text-xs" data-field="match"></td>
+                </tr>
+            </tbody>
+        </table>
+    </template>
+    <template id="reacquire-detail-mutation">
+        <table>
+            <tbody>
+                <tr>
+                    <td class="text-xs" data-field="kind"></td>
+                    <td>
+                        <span class="badge badge-xs" data-field="state"></span>
+                    </td>
+                    <td class="text-xs" data-field="attempts"></td>
+                    <td class="text-xs" data-field="confirmed"></td>
+                </tr>
+            </tbody>
+        </table>
+    </template>
+    <template id="reacquire-index-card">
+        <div class="bg-base-200/60 rounded-lg px-4 py-3">
+            <div class="flex items-center justify-between gap-2">
+                <span class="font-medium truncate" data-field="name"></span>
+                <span class="badge badge-outline badge-sm" data-field="type"></span>
+            </div>
+            <div class="mt-2 flex items-baseline gap-2">
+                <span class="text-2xl font-semibold" data-field="bindings"></span>
+                <span class="text-xs opacity-60">files bound</span>
+            </div>
+            <div class="text-xs opacity-60 mt-1" data-field="actionable"></div>
+        </div>
+    </template>
+    <template id="reacquire-index-empty">
+        <div class="text-sm opacity-60 sm:col-span-2 lg:col-span-3">
+            Nothing is indexed yet. Only Sonarr and Radarr instances are indexed; rebuild once they hold imported
+            files.
+        </div>
+    </template>
+    <template id="reacquire-binding-row">
+        <table>
+            <tbody>
+                <tr class="hover cursor-pointer"
+                    data-action="select-binding"
+                    data-field="row">
+                    <td>
+                        <input type="radio"
+                               name="binding"
+                               class="radio radio-xs radio-primary"
+                               data-field="radio">
+                    </td>
+                    <td class="max-w-sm">
+                        <div class="truncate text-xs font-medium" data-field="file"></div>
+                        <div class="truncate text-[11px] opacity-60" data-field="entry"></div>
+                    </td>
+                    <td class="text-xs" data-field="arr"></td>
+                    <td class="text-xs opacity-70" data-field="media"></td>
+                </tr>
+            </tbody>
+        </table>
+    </template>
+    <template id="reacquire-binding-message">
+        <table>
+            <tbody>
+                <tr>
+                    <td colspan="4" class="text-center py-6 opacity-60" data-field="message"></td>
+                </tr>
+            </tbody>
+        </table>
+    </template>
+    {{ template "vite" (viteEntry "pkg/server/ui/pages/reacquire.ts") }}
 {{ end }}

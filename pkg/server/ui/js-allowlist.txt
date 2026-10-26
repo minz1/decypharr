@@ -1,7 +1,5 @@
 pkg/server/assets/js/config.js: legacy, converts in spec 4
-pkg/server/assets/js/reacquire.js: legacy, converts in spec 4
 pkg/server/templates/config.html: legacy, converts in spec 4
-pkg/server/templates/reacquire.html: legacy, converts in spec 4
 pkg/server/templates/theme_script.html: early theme script, runs before first paint (cannot be a module)
 pkg/server/testdata/prune_harness.js: legacy, converts in spec 4
 scripts/minify-js.js: legacy, converts in spec 4
