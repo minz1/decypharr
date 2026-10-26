@@ -5,8 +5,7 @@ const fetcher = async (endpoint: string, init: RequestInit = {}): Promise<Respon
   for (const [name, value] of new Headers(init.headers)) {
     headers.set(name, value);
   }
-  const options: RequestInit = {};
-  return fetch(joinURL(readURLBase(document), endpoint), Object.assign(options, init, { headers }));
+  return fetch(joinURL(readURLBase(document), endpoint), { ...init, headers });
 };
 
 export { fetcher };

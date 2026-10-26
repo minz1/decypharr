@@ -59,8 +59,7 @@ const bool = (record: Record<string, unknown>, key: string): boolean => {
 type Reader<Value> = (record: Record<string, unknown>, key: string) => Value;
 
 const optional = <Value>(read: Reader<Value>, record: Record<string, unknown>, key: string): Value | undefined =>
-  // The lint config bans undefined, void 0 and a bare return; an empty array's pop() is undefined.
-  Object.hasOwn(record, key) && record[key] !== null ? read(record, key) : Array.of<Value>().pop();
+  Object.hasOwn(record, key) && record[key] !== null ? read(record, key) : undefined;
 
 const optStr = (record: Record<string, unknown>, key: string): string | undefined => optional(str, record, key);
 

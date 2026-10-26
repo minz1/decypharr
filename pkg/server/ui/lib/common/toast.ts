@@ -19,9 +19,8 @@ const CONTAINER_CLASSES = [
   "sm:right-4",
   "sm:w-auto",
 ];
-const ID_STEP = 1;
 
-const counter = { last: 0 };
+let lastId = 0;
 
 const toastContainer = (): Element => {
   const existing = document.querySelector(".toast-container");
@@ -82,8 +81,8 @@ const buildToast = (id: string, type: ToastType, message: string): Element => {
 };
 
 const createToast = (message: string, type: ToastType = "success", durationMs = DURATIONS_MS[type]): string => {
-  counter.last += ID_STEP;
-  const id = `toast-${Date.now()}-${counter.last}`;
+  lastId += 1;
+  const id = `toast-${Date.now()}-${lastId}`;
   toastContainer().append(buildToast(id, type, message));
   setTimeout(() => {
     closeToast(id);

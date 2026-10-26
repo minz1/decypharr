@@ -1,5 +1,4 @@
 const BYTE_UNITS = ["B", "KB", "MB", "GB", "TB", "PB"] as const;
-const LAST_BYTE_UNIT = BYTE_UNITS.indexOf("PB");
 const KIBI = 1024;
 const BYTE_DECIMALS = 2;
 const DURATION_UNITS = [
@@ -9,13 +8,12 @@ const DURATION_UNITS = [
   { label: "s", seconds: 1 },
 ] as const;
 const DURATION_PARTS = 2;
-const MIN_COUNT = 1;
 
 const formatBytes = (bytes: number): string => {
   if (!bytes) {
     return "0 B";
   }
-  const exponent = Math.min(Math.floor(Math.log(bytes) / Math.log(KIBI)), LAST_BYTE_UNIT);
+  const exponent = Math.min(Math.floor(Math.log(bytes) / Math.log(KIBI)), BYTE_UNITS.length - 1);
   return `${Number((bytes / KIBI ** exponent).toFixed(BYTE_DECIMALS))} ${BYTE_UNITS[exponent] ?? "B"}`;
 };
 
@@ -26,7 +24,7 @@ const formatDuration = (seconds: number): string => {
   let remaining = seconds;
   for (const unit of DURATION_UNITS) {
     const count = Math.floor(remaining / unit.seconds);
-    if (count >= MIN_COUNT) {
+    if (count > 0) {
       parts.push(`${count}${unit.label}`);
       remaining %= unit.seconds;
     }
@@ -39,10 +37,10 @@ const debounce = <Args extends unknown[]>(
   action: (...args: Args) => void,
   waitMs: number,
 ): ((...args: Args) => void) => {
-  const pending: { timer?: ReturnType<typeof setTimeout> } = {};
+  let timer: ReturnType<typeof setTimeout> | undefined = undefined;
   return (...args: Args): void => {
-    clearTimeout(pending.timer);
-    pending.timer = setTimeout(() => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
       action(...args);
     }, waitMs);
   };

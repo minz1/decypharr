@@ -3,7 +3,7 @@ const readURLBase = (doc: Document): string =>
 
 const joinURL = (base: string, path: string): string => {
   const head = base.endsWith("/") ? base : `${base}/`;
-  const tail = path.startsWith("/") ? path.slice("/".length) : path;
+  const tail = path.startsWith("/") ? path.slice(1) : path;
   return `${head}${tail}`;
 };
 
