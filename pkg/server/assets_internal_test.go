@@ -32,7 +32,7 @@ func getAsset(h http.Handler, target string, header map[string]string) *httptest
 func TestAssetWithCurrentVersionIsImmutable(t *testing.T) {
 	t.Parallel()
 	h, version := assetServer(t)
-	w := getAsset(h, "/assets/css/styles.css?v="+version, nil)
+	w := getAsset(h, "/assets/js/common.js?v="+version, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d", w.Code)
 	}
@@ -44,7 +44,7 @@ func TestAssetWithCurrentVersionIsImmutable(t *testing.T) {
 func TestAssetWithoutVersionRevalidates(t *testing.T) {
 	t.Parallel()
 	h, _ := assetServer(t)
-	for _, target := range []string{"/assets/css/styles.css", "/assets/css/styles.css?v=stale"} {
+	for _, target := range []string{"/assets/js/common.js", "/assets/js/common.js?v=stale"} {
 		w := getAsset(h, target, nil)
 		etag := w.Header().Get("ETag")
 		if w.Code != http.StatusOK || w.Header().Get("Cache-Control") != "no-cache" || etag == "" {
@@ -60,8 +60,8 @@ func TestAssetWithoutVersionRevalidates(t *testing.T) {
 func TestAssetIsGzipped(t *testing.T) {
 	t.Parallel()
 	h, _ := assetServer(t)
-	plain := getAsset(h, "/assets/css/styles.css", nil)
-	w := getAsset(h, "/assets/css/styles.css", map[string]string{"Accept-Encoding": "gzip"})
+	plain := getAsset(h, "/assets/js/common.js", nil)
+	w := getAsset(h, "/assets/js/common.js", map[string]string{"Accept-Encoding": "gzip"})
 	if w.Header().Get("Content-Encoding") != "gzip" {
 		t.Fatalf("Content-Encoding = %q", w.Header().Get("Content-Encoding"))
 	}
@@ -147,8 +147,8 @@ func TestMissingAssetIsNotCachedForever(t *testing.T) {
 func TestAssetIgnoresRange(t *testing.T) {
 	t.Parallel()
 	h, version := assetServer(t)
-	full := getAsset(h, "/assets/css/styles.css?v="+version, nil)
-	w := getAsset(h, "/assets/css/styles.css?v="+version, map[string]string{"Range": "bytes=0-9"})
+	full := getAsset(h, "/assets/js/common.js?v="+version, nil)
+	w := getAsset(h, "/assets/js/common.js?v="+version, map[string]string{"Range": "bytes=0-9"})
 	if w.Code != http.StatusOK || w.Body.Len() != full.Body.Len() {
 		t.Fatalf("status = %d, %d bytes, want 200 and %d bytes", w.Code, w.Body.Len(), full.Body.Len())
 	}

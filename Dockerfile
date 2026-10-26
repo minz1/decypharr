@@ -1,6 +1,19 @@
 # xx provides cross-compilation toolchains for CGO builds
 FROM --platform=$BUILDPLATFORM tonistiigi/xx AS xx
 
+# Stage 0: Build the web UI. Debian, not Alpine: pnpm-workspace.yaml only fetches glibc native binaries.
+FROM --platform=$BUILDPLATFORM node:24-slim AS frontend
+WORKDIR /app
+RUN corepack enable
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY vite.config.ts ./
+COPY scripts/minify-js.js scripts/
+COPY pkg/server/ui pkg/server/ui
+COPY pkg/server/assets/js pkg/server/assets/js
+COPY pkg/server/templates pkg/server/templates
+RUN pnpm build
+
 # Stage 1: Build binaries — pinned to BUILDPLATFORM so Go runs natively (fast)
 FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS builder
 
@@ -24,6 +37,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download -x
 
 COPY . .
+COPY --from=frontend /app/pkg/server/assets/build pkg/server/assets/build
 
 # Stamp the release into the embedded pkg/version/release.txt.
 RUN printf '%s %s\n' "${VERSION}" "${CHANNEL}" > pkg/version/release.txt

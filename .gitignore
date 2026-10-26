@@ -33,3 +33,6 @@ result-*
 .autopilot/rules.md
 .codex/
 .claude/
+
+pkg/server/assets/build/*
+!pkg/server/assets/build/.placeholder

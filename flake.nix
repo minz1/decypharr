@@ -11,7 +11,7 @@
     in
     {
       packages = forAllSystems (system:
-        let pkgs = nixpkgs.legacyPackages.${system}; in {
+        let pkgs = nixpkgs.legacyPackages.${system}; in rec {
           frontend = pkgs.callPackage ./nix/frontend.nix { };
           default = pkgs.buildGo127Module {
             pname = "decypharr";
@@ -22,6 +22,9 @@
             ldflags = [ "-s" "-w" ];
             nativeBuildInputs = [ pkgs.pkg-config pkgs.makeBinaryWrapper ];
             buildInputs = [ pkgs.fuse ];
+            preBuild = ''
+              cp -r --no-preserve=mode ${frontend}/. pkg/server/assets/build/
+            '';
             postInstall = ''
               wrapProgram $out/bin/decypharr \
                 --prefix PATH : /run/wrappers/bin \

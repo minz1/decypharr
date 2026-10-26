@@ -36,6 +36,18 @@ func loadViteManifest(fsys fs.FS) (viteManifest, error) {
 	return m, nil
 }
 
+// loadUI points the server at a built asset tree; a tree without a manifest serves the "not built" page.
+func (s *Server) loadUI(static fs.FS) {
+	vite, err := loadViteManifest(static)
+	if err != nil && !errors.Is(err, errUINotBuilt) {
+		panic(err)
+	}
+	s.static = static
+	s.vite = vite
+	s.assets = loadAssetManifest(static)
+	s.templates = parseTemplates(vite.funcs(s.urlBase))
+}
+
 // viteTagsTemplate renders a viteCSS or viteEntry result, so html/template escapes every URL.
 const viteTagsTemplate = `{{define "vite"}}` +
 	`{{range .CSS}}<link rel="stylesheet" href="{{.}}">{{end}}` +

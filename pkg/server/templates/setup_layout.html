@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Decypharr - Setup Wizard</title>
 
-    <link href="{{.URLBase}}assets/css/styles.css?v={{.AssetVersion}}" rel="stylesheet" type="text/css"/>
+    {{template "vite" (viteCSS "pkg/server/ui/styles.css")}}
 
     <link rel="apple-touch-icon" sizes="180x180" href="{{.URLBase}}images/favicon/apple-touch-icon.png?v={{.AssetVersion}}">
     <link rel="icon" type="image/png" sizes="32x32" href="{{.URLBase}}images/favicon/favicon-32x32.png?v={{.AssetVersion}}">

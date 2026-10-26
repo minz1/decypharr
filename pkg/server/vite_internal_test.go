@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"regexp"
 	"strings"
@@ -15,6 +16,21 @@ import (
 
 	"github.com/sirrobot01/decypharr/pkg/manager/managertest"
 )
+
+// testStatic stands in for assets/build, so tests don't depend on whether the UI was built.
+func testStatic(t *testing.T) fstest.MapFS {
+	t.Helper()
+	manifest, err := os.ReadFile("testdata/vite/.vite/manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fstest.MapFS{
+		"vite/.vite/manifest.json":    {Data: manifest},
+		"vite/assets/styles-AAAA.css": {Data: []byte(strings.Repeat("body { color: red; }\n", 20))},
+		"vite/assets/login-BBBB.js":   {Data: []byte(strings.Repeat("console.log('login');\n", 20))},
+		"js/common.js":                {Data: []byte(strings.Repeat("console.log('common');\n", 20))},
+	}
+}
 
 func fixtureManifest(t *testing.T) viteManifest {
 	t.Helper()
@@ -142,5 +158,35 @@ func TestViteFilesAreImmutable(t *testing.T) {
 	}
 	if m := getAsset(h, "/assets/vite/.vite/manifest.json", nil); m.Code != http.StatusNotFound {
 		t.Fatalf("manifest status = %d, want 404", m.Code)
+	}
+}
+
+func TestPageWithoutBuildSaysSo(t *testing.T) {
+	t.Parallel()
+	s := newTestServer(t, managertest.Store(t, nil))
+	s.loadUI(fstest.MapFS{".placeholder": {}})
+	h := s.WebRoutes()
+	w := getAsset(h, "/setup", nil)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "UI assets not built") {
+		t.Fatalf("/setup: status %d, body %q", w.Code, w.Body.String())
+	}
+	if v := getAsset(h, "/version", nil); v.Code != http.StatusOK {
+		t.Fatalf("/version: status %d", v.Code)
+	}
+}
+
+func TestLayoutsLinkViteCSS(t *testing.T) {
+	t.Parallel()
+	s := newTestServer(t, managertest.Store(t, nil))
+	for _, layout := range []string{"layout", "setup_layout"} {
+		w := httptest.NewRecorder()
+		s.renderPage(w, layout, "index", "Queues", nil)
+		page := w.Body.String()
+		if !strings.Contains(page, `<link rel="stylesheet" href="/assets/vite/assets/styles-AAAA.css">`) {
+			t.Errorf("%s does not link the Vite stylesheet:\n%s", layout, page)
+		}
+		if strings.Contains(page, "assets/css/styles.css") {
+			t.Errorf("%s still links the legacy stylesheet", layout)
+		}
 	}
 }

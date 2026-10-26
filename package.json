@@ -6,8 +6,8 @@
   "packageManager": "pnpm@12.9.0",
   "scripts": {
     "build": "vite build && node scripts/minify-js.js",
+    "build:watch": "vite build --watch",
     "minify-js": "node scripts/minify-js.js",
-    "download-assets": "node scripts/download-assets.js",
     "dev": "pnpm build && air"
   },
   "devDependencies": {

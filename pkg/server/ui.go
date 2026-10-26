@@ -3,6 +3,8 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"html/template"
+	"io"
 	"maps"
 	"net/http"
 
@@ -124,6 +126,14 @@ func (s *Server) RegisterHandler(w http.ResponseWriter, r *http.Request) {
 // renderPage executes templateName with the fields every page reads plus
 // extra. Templates that do not show the setup banner ignore SetupError.
 func (s *Server) renderPage(w http.ResponseWriter, templateName, page, title string, extra map[string]any) {
+	if s.vite == nil {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		msg := template.HTMLEscapeString(errUINotBuilt.Error())
+		if _, err := io.WriteString(w, "<!doctype html><title>decypharr</title><p>"+msg+"</p>"); err != nil {
+			s.logger.Warn().Err(err).Msg("error writing the UI-not-built page")
+		}
+		return
+	}
 	cfg := s.config.Get()
 	data := map[string]any{
 		"URLBase":      cfg.URLBase,

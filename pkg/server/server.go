@@ -33,7 +33,7 @@ import (
 //go:embed templates/*
 var content embed.FS
 
-//go:embed assets/build/*
+//go:embed all:assets/build
 var assetsEmbed embed.FS
 
 //go:embed assets/images/*
@@ -90,6 +90,7 @@ type Server struct {
 	cookie      *sessions.CookieStore
 	templates   *template.Template
 	static      fs.FS
+	vite        viteManifest
 	assets      assetManifest
 	urlBase     string
 	restartFunc func()
@@ -108,12 +109,6 @@ func New(mgr *manager.Manager, store *config.Store, logs *logger.Factory) *Serve
 
 	cfg := store.Get()
 
-	static := embeddedStatic()
-	vite, err := loadViteManifest(static)
-	if err != nil && !errors.Is(err, errUINotBuilt) {
-		panic(err)
-	}
-	templates := parseTemplates(vite.funcs(cfg.URLBase))
 	cookieStore := sessions.NewCookieStore([]byte(cfg.SecretKey()))
 	cookieStore.Options = &sessions.Options{
 		Path:     "/",
@@ -125,18 +120,19 @@ func New(mgr *manager.Manager, store *config.Store, logs *logger.Factory) *Serve
 	statsCollector := stats.New(mgr, store, logs.New("stats"))
 
 	s := &Server{
-		config:    store,
-		logsDir:   logger.Dir(cfg.Dir()),
-		logger:    l,
-		manager:   mgr,
-		stats:     statsCollector,
-		cookie:    cookieStore,
-		templates: templates,
-		static:    static,
-		assets:    loadAssetManifest(static),
-		urlBase:   cfg.URLBase,
+		config:  store,
+		logsDir: logger.Dir(cfg.Dir()),
+		logger:  l,
+		manager: mgr,
+		stats:   statsCollector,
+		cookie:  cookieStore,
+		urlBase: cfg.URLBase,
 
 		shutdownGrace: shutdownGrace,
+	}
+	s.loadUI(embeddedStatic())
+	if s.vite == nil {
+		l.Warn().Msg(errUINotBuilt.Error())
 	}
 
 	qb := qbit.New(mgr, store, logs.New("qbit"))

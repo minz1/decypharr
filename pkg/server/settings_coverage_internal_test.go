@@ -161,7 +161,7 @@ func matchKey[V any](m map[string]V, path string) (string, bool) {
 	return "", false
 }
 
-type settingsPage struct{ html, js, build string }
+type settingsPage struct{ html, js string }
 
 func readSettingsPage(t *testing.T) settingsPage {
 	t.Helper()
@@ -173,18 +173,13 @@ func readSettingsPage(t *testing.T) settingsPage {
 		return regexp.MustCompile(`\$\{[^}]*\}`).ReplaceAllLiteralString(string(b), "${index}")
 	}
 	return settingsPage{
-		html:  read("templates/config.html"),
-		js:    read("assets/js/config.js"),
-		build: read("assets/build/js/config.js"),
+		html: read("templates/config.html"),
+		js:   read("assets/js/config.js"),
 	}
 }
 
 func (p settingsPage) shows(text string) bool {
-	return strings.Contains(p.html, text) || (strings.Contains(p.js, text) && strings.Contains(p.build, text))
-}
-
-func (p settingsPage) mentions(text string) bool {
-	return strings.Contains(p.html, text) || strings.Contains(p.js, text) || strings.Contains(p.build, text)
+	return strings.Contains(p.html, text) || strings.Contains(p.js, text)
 }
 
 func (c settingsCoverage) sortedPrefixes(t *testing.T, js string) []string {
@@ -307,7 +302,7 @@ func TestSettingsPageCoversConfig(t *testing.T) {
 		path := leaf.path
 		if k, ok := matchKey(cov.exclusions, path); ok {
 			usedExclusions[k] = true
-			if page.mentions(cov.formRef(path)) {
+			if page.shows(cov.formRef(path)) {
 				t.Errorf("%s: excluded (%s) but the page has a control for it", path, cov.exclusions[k])
 			}
 			continue

@@ -13,14 +13,9 @@ import (
 
 func newTestServer(t *testing.T, store *config.Store) *Server {
 	t.Helper()
-	return &Server{
-		config:    store,
-		urlBase:   "/",
-		static:    embeddedStatic(),
-		assets:    loadAssetManifest(embeddedStatic()),
-		logger:    zerolog.Nop(),
-		templates: parseTemplates(viteManifest(nil).funcs("/")),
-	}
+	s := &Server{config: store, urlBase: "/", logger: zerolog.Nop()}
+	s.loadUI(testStatic(t))
+	return s
 }
 
 // serve runs one request through the middleware chain the router actually
