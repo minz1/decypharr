@@ -10,7 +10,7 @@ export default defineConfig({
     emptyOutDir: true,
     sourcemap: "hidden",
     rolldownOptions: {
-      input: ["pkg/server/ui/styles.css"],
+      input: ["pkg/server/ui/styles.css", "pkg/server/ui/pages/login.ts"],
     },
   },
 });

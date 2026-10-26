@@ -58,6 +58,7 @@
           typecheck = uiCheck "typecheck" [ pkgs.typescript ] "pnpm typecheck";
           lint = uiCheck "lint" [ pkgs.oxlint ] "pnpm lint";
           fmt = uiCheck "fmt" [ pkgs.oxfmt ] "pnpm fmt:check";
+          test = uiCheck "test" [ ] "pnpm test";
           templates = pkgs.runCommand "decypharr-templates" {
             nativeBuildInputs = [ pkgs.djlint ];
             src = lib.fileset.toSource {

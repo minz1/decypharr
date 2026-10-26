@@ -4,15 +4,21 @@
   "private": true,
   "description": "Media management tool",
   "type": "module",
+  "imports": {
+    "#ui/globals": "./pkg/server/ui/globals.d.ts",
+    "#ui/*": "./pkg/server/ui/*.ts"
+  },
   "scripts": {
     "build": "vite build && node scripts/minify-js.js",
     "build:watch": "vite build --watch",
     "minify-js": "node scripts/minify-js.js",
     "dev": "pnpm build && air",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.node.json",
-    "lint": "oxlint --type-aware --deny-warnings -c .oxlintrc.json pkg/server/ui vite.config.ts",
-    "fmt": "oxfmt pkg/server/ui vite.config.ts package.json pnpm-workspace.yaml tsconfig.json tsconfig.node.json .oxlintrc.json .oxfmtrc.json",
-    "fmt:check": "oxfmt --check pkg/server/ui vite.config.ts package.json pnpm-workspace.yaml tsconfig.json tsconfig.node.json .oxlintrc.json .oxfmtrc.json"
+    "lint": "oxlint --type-aware --deny-warnings -c .oxlintrc.json pkg/server/ui vite.config.ts vitest.config.ts",
+    "fmt": "oxfmt pkg/server/ui vite.config.ts vitest.config.ts package.json pnpm-workspace.yaml tsconfig.json tsconfig.node.json .oxlintrc.json .oxfmtrc.json",
+    "fmt:check": "oxfmt --check pkg/server/ui vite.config.ts vitest.config.ts package.json pnpm-workspace.yaml tsconfig.json tsconfig.node.json .oxlintrc.json .oxfmtrc.json",
+    "test": "vitest run",
+    "check": "pnpm typecheck && pnpm lint && pnpm fmt:check && pnpm test"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",

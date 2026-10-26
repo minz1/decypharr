@@ -11,7 +11,6 @@ pkg/server/templates/config.html
 pkg/server/templates/download.html
 pkg/server/templates/index.html
 pkg/server/templates/layout.html
-pkg/server/templates/login.html
 pkg/server/templates/reacquire.html
 pkg/server/templates/register.html
 pkg/server/templates/repair.html

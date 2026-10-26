@@ -18,6 +18,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
       ../pnpm-lock.yaml
       ../pnpm-workspace.yaml
       ../vite.config.ts
+      ../vitest.config.ts
       ../tsconfig.json
       ../tsconfig.node.json
       ../.oxlintrc.json

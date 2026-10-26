@@ -50,7 +50,9 @@
     // DOM and fetch types (elements, events, RequestInit) are mutable by design, so every handler fails it.
     "typescript/prefer-readonly-parameter-types": "off",
     // Key order carries meaning (fetch's method/headers/body, config grouped by topic); sorting prevents no bug.
-    "eslint/sort-keys": "off"
+    "eslint/sort-keys": "off",
+    // typescript/require-await replaces it and accepts an async function that returns a promise explicitly.
+    "eslint/require-await": "off"
   },
   "overrides": [
     {
@@ -62,7 +64,19 @@
     },
     {
       "files": ["**/*.test.ts"],
-      "plugins": ["vitest"]
+      "plugins": ["vitest"],
+      "rules": {
+        // Tests import describe/it/expect explicitly, so no global test types are needed (tsconfig "types": []).
+        "vitest/no-importing-vitest-globals": "off",
+        // vitest.config.ts sets one testTimeout for every test.
+        "vitest/require-test-timeout": "off",
+        // Every assertion is awaited in the test body, so counting them duplicates the test.
+        "vitest/prefer-expect-assertions": "off",
+        // Literal inputs and expected values are what a test checks; naming each one hides it.
+        "eslint/no-magic-numbers": "off",
+        // Fakes resolve at once: promise-function-async plus require-await leave `async () => Promise.resolve(x)`.
+        "unicorn/no-useless-promise-resolve-reject": "off"
+      }
     }
   ]
 }

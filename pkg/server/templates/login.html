@@ -46,43 +46,5 @@
             </div>
         </div>
     </div>
-    <script>
-    document.getElementById('loginForm').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        let loginBtn = document.querySelector('#loginForm button[type="submit"]');
-
-        const usernameField = document.getElementById('username');
-        const formData = {
-            username: usernameField ? usernameField.value : '',
-            password: document.getElementById('password').value
-        };
-
-        try {
-            const response = await window.decypharrUtils.fetcher('/login', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(formData)
-            });
-
-            if (response.ok) {
-                window.decypharrUtils.createToast('Login successful! Redirecting...', 'success');
-
-                // Redirect after a short delay
-                setTimeout(() => {
-                    window.location.href = window.urlBase || '/';
-                }, 1000);
-            } else {
-                const errorText = await response.text();
-                throw new Error(errorText || 'Invalid credentials');
-            }
-        } catch (error) {
-            console.error('Login error:', error);
-            window.decypharrUtils.createToast(error.message || 'Login failed. Please try again.', 'error');
-        } finally {
-            window.decypharrUtils.setButtonLoading(loginBtn, false);
-        }
-    });
-    </script>
+    {{ template "vite" (viteEntry "pkg/server/ui/pages/login.ts") }}
 {{ end }}
