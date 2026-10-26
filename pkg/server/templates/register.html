@@ -1,37 +1,48 @@
 {{ define "register" }}
-<div class="flex w-full items-center justify-center bg-base-200">
-    <div class="card w-full max-w-md bg-base-100 shadow-xl">
-        <div class="card-body">
-            <h2 class="card-title justify-center mb-6">First Time Auth Setup</h2>
-            <form id="authForm" class="space-y-4">
-                <div>
-                    <label class="label" for="username">
-                        <span>Username</span>
-                    </label>
-                    <input type="text" class="input w-full" id="username" name="username" required>
-                </div>
-                <div>
-                    <label class="label" for="password">
-                        <span>Password</span>
-                    </label>
-                    <input type="password" class="input w-full" id="password" name="password" required>
-                </div>
-                <div>
-                    <label class="label" for="confirmPassword">
-                        <span>Confirm Password</span>
-                    </label>
-                    <input type="password" class="input w-full" id="confirmPassword" name="confirmPassword" required>
-                </div>
-                <div class="mt-6 space-y-2">
-                    <button type="submit" class="btn btn-primary w-full">Save</button>
-                    <button type="button" id="skipAuthBtn" class="btn btn-secondary w-full">Skip</button>
-                </div>
-            </form>
+    <div class="flex w-full items-center justify-center bg-base-200">
+        <div class="card w-full max-w-md bg-base-100 shadow-xl">
+            <div class="card-body">
+                <h2 class="card-title justify-center mb-6">First Time Auth Setup</h2>
+                <form id="authForm" class="space-y-4">
+                    <div>
+                        <label class="label" for="username">
+                            <span>Username</span>
+                        </label>
+                        <input type="text"
+                               class="input w-full"
+                               id="username"
+                               name="username"
+                               required>
+                    </div>
+                    <div>
+                        <label class="label" for="password">
+                            <span>Password</span>
+                        </label>
+                        <input type="password"
+                               class="input w-full"
+                               id="password"
+                               name="password"
+                               required>
+                    </div>
+                    <div>
+                        <label class="label" for="confirmPassword">
+                            <span>Confirm Password</span>
+                        </label>
+                        <input type="password"
+                               class="input w-full"
+                               id="confirmPassword"
+                               name="confirmPassword"
+                               required>
+                    </div>
+                    <div class="mt-6 space-y-2">
+                        <button type="submit" class="btn btn-primary w-full">Save</button>
+                        <button type="button" id="skipAuthBtn" class="btn btn-secondary w-full">Skip</button>
+                    </div>
+                </form>
+            </div>
         </div>
     </div>
-</div>
-
-<script>
+    <script>
     document.addEventListener('DOMContentLoaded', function () {
         const authForm = document.getElementById('authForm');
         const skipAuthBtn = document.getElementById('skipAuthBtn');
@@ -88,5 +99,5 @@
                 });
         });
     });
-</script>
+    </script>
 {{ end }}

@@ -1,5 +1,5 @@
 {{ define "stats" }}
-<style>
+    <style>
     #mount-content .mount-stat-section-title {
         color: color-mix(in oklab, var(--color-base-content) 58%, transparent);
         font-size: 0.72rem;
@@ -108,387 +108,385 @@
             border-top: 1px dashed color-mix(in oklab, var(--color-base-content) 12%, transparent);
         }
     }
-</style>
-<div class="container mx-auto">
-    <div class="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div class="flex items-center gap-3">
-            <h1 class="text-2xl font-bold text-primary sm:text-3xl">System Statistics</h1>
-        </div>
-        <button id="refresh-stats" class="btn btn-outline btn-sm w-full sm:w-auto">
-            <i class="bi bi-arrow-clockwise"></i>
-            Refresh
-        </button>
-    </div>
-
-    <div id="loading-stats" class="text-center py-12">
-        <div class="loading loading-spinner loading-lg text-primary"></div>
-        <p class="mt-4 text-base-content/70">Loading system statistics...</p>
-    </div>
-
-    <div id="stats-content" class="hidden">
-        <!-- Tab Navigation -->
-        <div class="mb-6 overflow-x-auto">
-            <div role="tablist" class="tabs tabs-boxed min-w-max flex-nowrap">
-            <a role="tab" class="tab tab-active" data-tab="overview">
-                <i class="bi bi-speedometer2 mr-2"></i>Overview
-            </a>
-            <a role="tab" class="tab" data-tab="streams">
-                <i class="bi bi-broadcast mr-2"></i>Streams
-                <span class="badge badge-sm ml-2" id="streams-tab-count">0</span>
-            </a>
-            <a role="tab" class="tab" data-tab="debrid">
-                <i class="bi bi-cloud-arrow-down mr-2"></i>Debrid
-            </a>
-            <a role="tab" class="tab" data-tab="usenet">
-                <i class="bi bi-newspaper mr-2"></i>Usenet
-            </a>
-            <a role="tab" class="tab" data-tab="mount">
-                <i class="bi bi-hdd-stack mr-2"></i>Mount
-            </a>
+    </style>
+    <div class="container mx-auto">
+        <div class="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div class="flex items-center gap-3">
+                <h1 class="text-2xl font-bold text-primary sm:text-3xl">System Statistics</h1>
             </div>
+            <button id="refresh-stats" class="btn btn-outline btn-sm w-full sm:w-auto">
+                <i class="bi bi-arrow-clockwise"></i>
+                Refresh
+            </button>
         </div>
-
-        <!-- Overview Tab -->
-        <div id="tab-overview" class="tab-content">
-            <div class="card bg-base-100 shadow-xl">
-                <div class="card-header p-6 pb-3">
-                    <h2 class="card-title text-xl">
-                        <i class="bi bi-cpu text-info"></i>
-                        System Overview
-                    </h2>
-                </div>
-                <div class="card-body p-6 pt-3">
-                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-                        <div class="stat">
-                            <div class="stat-figure text-primary">
-                                <i class="bi bi-clock-history text-2xl"></i>
-                            </div>
-                            <div class="stat-title">Uptime</div>
-                            <div class="stat-value text-primary" id="uptime">-</div>
-                            <div class="stat-desc" id="start-time">Started: -</div>
-                        </div>
-                        <div class="stat">
-                            <div class="stat-figure text-info">
-                                <i class="bi bi-memory text-2xl"></i>
-                            </div>
-                            <div class="stat-title" id="memory-label">Go Runtime Memory</div>
-                            <div class="stat-value text-info" id="memory-used">-</div>
-                            <div class="stat-desc" id="heap-alloc">Heap: -</div>
-                            <div class="stat-desc" id="runtime-memory">Go runtime: -</div>
-                        </div>
-                        <div class="stat">
-                            <div class="stat-figure text-success">
-                                <i class="bi bi-diagram-3 text-2xl"></i>
-                            </div>
-                            <div class="stat-title">Goroutines</div>
-                            <div class="stat-value text-success" id="goroutines">-</div>
-                            <div class="stat-desc" id="gc-cycles">GC: - cycles</div>
-                        </div>
-                        <div class="stat">
-                            <div class="stat-figure text-warning">
-                                <i class="bi bi-cpu text-2xl"></i>
-                            </div>
-                            <div class="stat-title">CPU Cores</div>
-                            <div class="stat-value text-warning" id="num-cpu">-</div>
-                            <div class="stat-desc" id="arch">-</div>
-                        </div>
-                        <div class="stat">
-                            <div class="stat-figure text-accent">
-                                <i class="bi bi-info-circle text-2xl"></i>
-                            </div>
-                            <div class="stat-title">System</div>
-                            <div class="stat-value text-accent" id="os">-</div>
-                            <div class="stat-desc" id="go-version">-</div>
-                        </div>
-                    </div>
+        <div id="loading-stats" class="text-center py-12">
+            <div class="loading loading-spinner loading-lg text-primary"></div>
+            <p class="mt-4 text-base-content/70">Loading system statistics...</p>
+        </div>
+        <div id="stats-content" class="hidden">
+            <!-- Tab Navigation -->
+            <div class="mb-6 overflow-x-auto">
+                <div role="tablist" class="tabs tabs-boxed min-w-max flex-nowrap">
+                    <a role="tab" class="tab tab-active" data-tab="overview">
+                        <i class="bi bi-speedometer2 mr-2"></i>Overview
+                    </a>
+                    <a role="tab" class="tab" data-tab="streams">
+                        <i class="bi bi-broadcast mr-2"></i>Streams
+                        <span class="badge badge-sm ml-2" id="streams-tab-count">0</span>
+                    </a>
+                    <a role="tab" class="tab" data-tab="debrid">
+                        <i class="bi bi-cloud-arrow-down mr-2"></i>Debrid
+                    </a>
+                    <a role="tab" class="tab" data-tab="usenet">
+                        <i class="bi bi-newspaper mr-2"></i>Usenet
+                    </a>
+                    <a role="tab" class="tab" data-tab="mount">
+                        <i class="bi bi-hdd-stack mr-2"></i>Mount
+                    </a>
                 </div>
             </div>
-
-            <!-- Library Stats Section -->
-            <div class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-2 gap-6 mt-6">
-                <!-- Storage Stats -->
+            <!-- Overview Tab -->
+            <div id="tab-overview" class="tab-content">
                 <div class="card bg-base-100 shadow-xl">
-                    <div class="card-body p-4">
-                        <h3 class="card-title text-base">
-                            <i class="bi bi-database text-primary"></i>
-                            Storage
-                        </h3>
-                        <div class="grid grid-cols-2 gap-2 mt-2">
-                            <div>
-                                <div class="text-xs text-base-content/70">Database</div>
-                                <div class="font-bold text-primary" id="db-size">-</div>
+                    <div class="card-header p-6 pb-3">
+                        <h2 class="card-title text-xl">
+                            <i class="bi bi-cpu text-info"></i>
+                            System Overview
+                        </h2>
+                    </div>
+                    <div class="card-body p-6 pt-3">
+                        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+                            <div class="stat">
+                                <div class="stat-figure text-primary">
+                                    <i class="bi bi-clock-history text-2xl"></i>
+                                </div>
+                                <div class="stat-title">Uptime</div>
+                                <div class="stat-value text-primary" id="uptime">-</div>
+                                <div class="stat-desc" id="start-time">Started: -</div>
                             </div>
-                            <div>
-                                <div class="text-xs text-base-content/70">Entries</div>
-                                <div class="font-bold text-info" id="total-entries">-</div>
+                            <div class="stat">
+                                <div class="stat-figure text-info">
+                                    <i class="bi bi-memory text-2xl"></i>
+                                </div>
+                                <div class="stat-title" id="memory-label">Go Runtime Memory</div>
+                                <div class="stat-value text-info" id="memory-used">-</div>
+                                <div class="stat-desc" id="heap-alloc">Heap: -</div>
+                                <div class="stat-desc" id="runtime-memory">Go runtime: -</div>
+                            </div>
+                            <div class="stat">
+                                <div class="stat-figure text-success">
+                                    <i class="bi bi-diagram-3 text-2xl"></i>
+                                </div>
+                                <div class="stat-title">Goroutines</div>
+                                <div class="stat-value text-success" id="goroutines">-</div>
+                                <div class="stat-desc" id="gc-cycles">GC: - cycles</div>
+                            </div>
+                            <div class="stat">
+                                <div class="stat-figure text-warning">
+                                    <i class="bi bi-cpu text-2xl"></i>
+                                </div>
+                                <div class="stat-title">CPU Cores</div>
+                                <div class="stat-value text-warning" id="num-cpu">-</div>
+                                <div class="stat-desc" id="arch">-</div>
+                            </div>
+                            <div class="stat">
+                                <div class="stat-figure text-accent">
+                                    <i class="bi bi-info-circle text-2xl"></i>
+                                </div>
+                                <div class="stat-title">System</div>
+                                <div class="stat-value text-accent" id="os">-</div>
+                                <div class="stat-desc" id="go-version">-</div>
                             </div>
                         </div>
                     </div>
                 </div>
-
-                <!-- Queue Stats -->
-                <div class="card bg-base-100 shadow-xl">
-                    <div class="card-body p-4">
-                        <h3 class="card-title text-base">
-                            <i class="bi bi-hourglass-split text-warning"></i>
-                            Queue
-                        </h3>
-                        <div class="mt-2">
-                            <div class="text-xs text-base-content/70">Pending</div>
-                            <div class="font-bold text-warning text-xl" id="queue-pending">-</div>
+                <!-- Library Stats Section -->
+                <div class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-2 gap-6 mt-6">
+                    <!-- Storage Stats -->
+                    <div class="card bg-base-100 shadow-xl">
+                        <div class="card-body p-4">
+                            <h3 class="card-title text-base">
+                                <i class="bi bi-database text-primary"></i>
+                                Storage
+                            </h3>
+                            <div class="grid grid-cols-2 gap-2 mt-2">
+                                <div>
+                                    <div class="text-xs text-base-content/70">Database</div>
+                                    <div class="font-bold text-primary" id="db-size">-</div>
+                                </div>
+                                <div>
+                                    <div class="text-xs text-base-content/70">Entries</div>
+                                    <div class="font-bold text-info" id="total-entries">-</div>
+                                </div>
+                            </div>
                         </div>
                     </div>
-                </div>
-
-                <!-- Repair Stats -->
-                <div class="card bg-base-100 shadow-xl">
-                    <div class="card-body p-4">
-                        <h3 class="card-title text-base">
-                            <i class="bi bi-wrench text-secondary"></i>
-                            Repair Jobs
-                        </h3>
-                        <div class="grid grid-cols-2 gap-2 mt-2">
-                            <div>
-                                <div class="text-xs text-base-content/70">Active</div>
-                                <div class="font-bold text-info" id="repair-active">-</div>
-                            </div>
-                            <div>
+                    <!-- Queue Stats -->
+                    <div class="card bg-base-100 shadow-xl">
+                        <div class="card-body p-4">
+                            <h3 class="card-title text-base">
+                                <i class="bi bi-hourglass-split text-warning"></i>
+                                Queue
+                            </h3>
+                            <div class="mt-2">
                                 <div class="text-xs text-base-content/70">Pending</div>
-                                <div class="font-bold text-warning" id="repair-pending">-</div>
+                                <div class="font-bold text-warning text-xl" id="queue-pending">-</div>
                             </div>
-                            <div>
-                                <div class="text-xs text-base-content/70">Completed</div>
-                                <div class="font-bold text-success" id="repair-completed">-</div>
+                        </div>
+                    </div>
+                    <!-- Repair Stats -->
+                    <div class="card bg-base-100 shadow-xl">
+                        <div class="card-body p-4">
+                            <h3 class="card-title text-base">
+                                <i class="bi bi-wrench text-secondary"></i>
+                                Repair Jobs
+                            </h3>
+                            <div class="grid grid-cols-2 gap-2 mt-2">
+                                <div>
+                                    <div class="text-xs text-base-content/70">Active</div>
+                                    <div class="font-bold text-info" id="repair-active">-</div>
+                                </div>
+                                <div>
+                                    <div class="text-xs text-base-content/70">Pending</div>
+                                    <div class="font-bold text-warning" id="repair-pending">-</div>
+                                </div>
+                                <div>
+                                    <div class="text-xs text-base-content/70">Completed</div>
+                                    <div class="font-bold text-success" id="repair-completed">-</div>
+                                </div>
+                                <div>
+                                    <div class="text-xs text-base-content/70">Failed</div>
+                                    <div class="font-bold text-error" id="repair-failed">-</div>
+                                </div>
                             </div>
-                            <div>
-                                <div class="text-xs text-base-content/70">Failed</div>
-                                <div class="font-bold text-error" id="repair-failed">-</div>
+                        </div>
+                    </div>
+                    <!-- Hearsay Stats -->
+                    <div class="card bg-base-100 shadow-xl">
+                        <div class="card-body p-4">
+                            <h3 class="card-title text-base">
+                                <i class="bi bi-broadcast text-primary"></i>
+                                Hearsay
+                                <span class="tooltip tooltip-left ml-auto"
+                                      data-tip="Off, Local, Receive or Sharing — then the advice mode.">
+                                    <span class="badge badge-ghost badge-sm" id="hearsay-state">-</span>
+                                </span>
+                            </h3>
+                            <div class="grid grid-cols-2 gap-2 mt-2">
+                                <div>
+                                    <div class="text-xs text-base-content/70 flex items-center gap-1">
+                                        Sources found
+                                        <span class="tooltip"
+                                              data-tip="Peer feeds you follow, across all namespaces.">
+                                            <i class="bi bi-info-circle"></i>
+                                        </span>
+                                    </div>
+                                    <div class="font-bold text-info" id="hearsay-feeds">-</div>
+                                </div>
+                                <div>
+                                    <div class="text-xs text-base-content/70 flex items-center gap-1">
+                                        Connected peers
+                                        <span class="tooltip"
+                                              data-tip="Peers you are swapping data with right now.">
+                                            <i class="bi bi-info-circle"></i>
+                                        </span>
+                                    </div>
+                                    <div class="font-bold text-success" id="hearsay-peers">-</div>
+                                </div>
+                                <div>
+                                    <div class="text-xs text-base-content/70 flex items-center gap-1">
+                                        Advice coverage
+                                        <span class="tooltip"
+                                              data-tip="Share of lookups a peer already had an answer for.">
+                                            <i class="bi bi-info-circle"></i>
+                                        </span>
+                                    </div>
+                                    <div class="font-bold text-info" id="hearsay-coverage">-</div>
+                                </div>
+                                <div>
+                                    <div class="text-xs text-base-content/70 flex items-center gap-1">
+                                        Verified accuracy
+                                        <span class="tooltip"
+                                              data-tip="Share of checked answers that proved right.">
+                                            <i class="bi bi-info-circle"></i>
+                                        </span>
+                                    </div>
+                                    <div class="font-bold text-success" id="hearsay-accuracy">-</div>
+                                </div>
                             </div>
+                            <div class="text-xs text-base-content/70 mt-2 font-mono truncate"
+                                 id="hearsay-identity"
+                                 title="Your public key. Share it so others can follow you."></div>
                         </div>
                     </div>
                 </div>
-
-                <!-- Hearsay Stats -->
-                <div class="card bg-base-100 shadow-xl">
-                    <div class="card-body p-4">
-                        <h3 class="card-title text-base">
-                            <i class="bi bi-broadcast text-primary"></i>
-                            Hearsay
-                            <span class="tooltip tooltip-left ml-auto"
-                                  data-tip="Off, Local, Receive or Sharing — then the advice mode.">
-                                <span class="badge badge-ghost badge-sm" id="hearsay-state">-</span>
-                            </span>
-                        </h3>
-                        <div class="grid grid-cols-2 gap-2 mt-2">
-                            <div>
-                                <div class="text-xs text-base-content/70 flex items-center gap-1">
-                                    Sources found
-                                    <span class="tooltip" data-tip="Peer feeds you follow, across all namespaces.">
-                                        <i class="bi bi-info-circle"></i>
-                                    </span>
-                                </div>
-                                <div class="font-bold text-info" id="hearsay-feeds">-</div>
-                            </div>
-                            <div>
-                                <div class="text-xs text-base-content/70 flex items-center gap-1">
-                                    Connected peers
-                                    <span class="tooltip" data-tip="Peers you are swapping data with right now.">
-                                        <i class="bi bi-info-circle"></i>
-                                    </span>
-                                </div>
-                                <div class="font-bold text-success" id="hearsay-peers">-</div>
-                            </div>
-                            <div>
-                                <div class="text-xs text-base-content/70 flex items-center gap-1">
-                                    Advice coverage
-                                    <span class="tooltip" data-tip="Share of lookups a peer already had an answer for.">
-                                        <i class="bi bi-info-circle"></i>
-                                    </span>
-                                </div>
-                                <div class="font-bold text-info" id="hearsay-coverage">-</div>
-                            </div>
-                            <div>
-                                <div class="text-xs text-base-content/70 flex items-center gap-1">
-                                    Verified accuracy
-                                    <span class="tooltip" data-tip="Share of checked answers that proved right.">
-                                        <i class="bi bi-info-circle"></i>
-                                    </span>
-                                </div>
-                                <div class="font-bold text-success" id="hearsay-accuracy">-</div>
-                            </div>
-                        </div>
-                        <div class="text-xs text-base-content/70 mt-2 font-mono truncate" id="hearsay-identity"
-                             title="Your public key. Share it so others can follow you."></div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Connect / Access Servers -->
-            <div class="card bg-base-100 shadow-xl mt-6" id="access-card">
-                <div class="card-header p-6 pb-3">
-                    <h2 class="card-title text-xl">
-                        <i class="bi bi-hdd-network mr-2 text-info"></i>
-                        Connect to Your Library
-                    </h2>
-                    <p class="text-sm text-base-content/70">Mount or browse your library from other devices over
-                        WebDAV, NFS, or SMB. Hosts below use the address you're viewing this page from.</p>
-                </div>
-                <div class="card-body p-6 pt-3 grid grid-cols-1 lg:grid-cols-3 gap-4">
-                    <div class="border border-base-300 rounded-lg p-4">
-                        <div class="flex items-center justify-between mb-3">
-                            <h3 class="font-semibold"><i class="bi bi-folder-symlink mr-1 text-primary"></i>WebDAV</h3>
-                            <span class="badge badge-ghost" id="webdav-status">-</span>
-                        </div>
-                        <div id="webdav-details" class="text-sm space-y-2 text-base-content/50">Loading…</div>
-                    </div>
-                    <div class="border border-base-300 rounded-lg p-4">
-                        <div class="flex items-center justify-between mb-3">
-                            <h3 class="font-semibold"><i class="bi bi-hdd-network mr-1 text-primary"></i>NFSv4</h3>
-                            <span class="badge badge-ghost" id="nfs-status">-</span>
-                        </div>
-                        <div id="nfs-details" class="text-sm space-y-2 text-base-content/50">Loading…</div>
-                    </div>
-                    <div class="border border-base-300 rounded-lg p-4">
-                        <div class="flex items-center justify-between mb-3">
-                            <h3 class="font-semibold"><i class="bi bi-pc-display mr-1 text-primary"></i>SMB</h3>
-                            <span class="badge badge-ghost" id="smb-status">-</span>
-                        </div>
-                        <div id="smb-details" class="text-sm space-y-2 text-base-content/50">Loading…</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Streams Tab -->
-        <div id="tab-streams" class="tab-content hidden">
-            <div class="card bg-base-100 shadow-xl" id="streams-card">
-                <div class="card-header p-6 pb-3">
-                    <div class="card-title flex-col items-start gap-3 text-xl sm:flex-row sm:items-center sm:justify-between">
-                        <h2>
-                            <i class="bi bi-broadcast text-success"></i>
-                            Active Streams
+                <!-- Connect / Access Servers -->
+                <div class="card bg-base-100 shadow-xl mt-6" id="access-card">
+                    <div class="card-header p-6 pb-3">
+                        <h2 class="card-title text-xl">
+                            <i class="bi bi-hdd-network mr-2 text-info"></i>
+                            Connect to Your Library
                         </h2>
-                        <div class="badge badge-success" id="streams-count">0</div>
+                        <p class="text-sm text-base-content/70">
+                            Mount or browse your library from other devices over
+                            WebDAV, NFS, or SMB. Hosts below use the address you're viewing this page from.
+                        </p>
                     </div>
-                </div>
-                <div class="card-body p-6 pt-3" id="streams-content">
-                    <p class="text-base-content/70">No active streams</p>
-                </div>
-            </div>
-        </div>
-
-        <!-- Debrid Tab -->
-        <div id="tab-debrid" class="tab-content hidden">
-            <div class="card bg-base-100 shadow-xl" id="debrid-card">
-                <div class="card-header p-6 pb-3">
-                    <h2 class="card-title text-xl">
-                        <i class="bi bi-cloud-arrow-down text-secondary"></i>
-                        Debrid Providers
-                    </h2>
-                </div>
-                <div class="card-body p-6 pt-3" id="debrid-content">
-                    <p class="text-base-content/70">Loading debrid providers...</p>
-                </div>
-            </div>
-        </div>
-
-        <!-- Usenet Tab -->
-        <div id="tab-usenet" class="tab-content hidden">
-            <div class="card bg-base-100 shadow-xl" id="usenet-card">
-                <div class="card-header p-6 pb-3">
-                    <h2 class="card-title text-xl">
-                        <i class="bi bi-newspaper text-accent"></i>
-                        Usenet Providers
-                    </h2>
-                </div>
-                <div class="card-body p-6 pt-3" id="usenet-content">
-                    <p class="text-base-content/70">Loading usenet providers...</p>
-                </div>
-            </div>
-        </div>
-
-        <!-- Mount Tab -->
-        <div id="tab-mount" class="tab-content hidden">
-            <div class="card bg-base-100 shadow-xl" id="mount-card">
-                <div class="card-header p-6 pb-3">
-                    <div class="card-title flex-col items-start gap-3 text-xl sm:flex-row sm:items-center sm:justify-between">
-                        <h2>
-                            <i class="bi bi-hdd-stack text-primary"></i>
-                            Mount Statistics
-                        </h2>
-                        <div class="flex w-full gap-2 sm:w-auto">
-                            <a href="{{.URLBase}}debug/logs/rclone" class="btn btn-sm btn-outline w-full sm:w-auto" target="_blank"
-                               id="rclone-logs-btn">
-                                <i class="bi bi-arrow-right"></i>
-                                View Logs
-                            </a>
+                    <div class="card-body p-6 pt-3 grid grid-cols-1 lg:grid-cols-3 gap-4">
+                        <div class="border border-base-300 rounded-lg p-4">
+                            <div class="flex items-center justify-between mb-3">
+                                <h3 class="font-semibold"><i class="bi bi-folder-symlink mr-1 text-primary"></i>WebDAV</h3>
+                                <span class="badge badge-ghost" id="webdav-status">-</span>
+                            </div>
+                            <div id="webdav-details" class="text-sm space-y-2 text-base-content/50">Loading…</div>
+                        </div>
+                        <div class="border border-base-300 rounded-lg p-4">
+                            <div class="flex items-center justify-between mb-3">
+                                <h3 class="font-semibold"><i class="bi bi-hdd-network mr-1 text-primary"></i>NFSv4</h3>
+                                <span class="badge badge-ghost" id="nfs-status">-</span>
+                            </div>
+                            <div id="nfs-details" class="text-sm space-y-2 text-base-content/50">Loading…</div>
+                        </div>
+                        <div class="border border-base-300 rounded-lg p-4">
+                            <div class="flex items-center justify-between mb-3">
+                                <h3 class="font-semibold"><i class="bi bi-pc-display mr-1 text-primary"></i>SMB</h3>
+                                <span class="badge badge-ghost" id="smb-status">-</span>
+                            </div>
+                            <div id="smb-details" class="text-sm space-y-2 text-base-content/50">Loading…</div>
                         </div>
                     </div>
-                    <div class="flex gap-2">
-                        <div class="badge" id="mount-type">Unknown</div>
-                        <div class="badge" id="mount-status">Unknown</div>
+                </div>
+            </div>
+            <!-- Streams Tab -->
+            <div id="tab-streams" class="tab-content hidden">
+                <div class="card bg-base-100 shadow-xl" id="streams-card">
+                    <div class="card-header p-6 pb-3">
+                        <div class="card-title flex-col items-start gap-3 text-xl sm:flex-row sm:items-center sm:justify-between">
+                            <h2>
+                                <i class="bi bi-broadcast text-success"></i>
+                                Active Streams
+                            </h2>
+                            <div class="badge badge-success" id="streams-count">0</div>
+                        </div>
+                    </div>
+                    <div class="card-body p-6 pt-3" id="streams-content">
+                        <p class="text-base-content/70">No active streams</p>
                     </div>
                 </div>
-                <div class="card-body p-6 pt-3" id="mount-content">
+            </div>
+            <!-- Debrid Tab -->
+            <div id="tab-debrid" class="tab-content hidden">
+                <div class="card bg-base-100 shadow-xl" id="debrid-card">
+                    <div class="card-header p-6 pb-3">
+                        <h2 class="card-title text-xl">
+                            <i class="bi bi-cloud-arrow-down text-secondary"></i>
+                            Debrid Providers
+                        </h2>
+                    </div>
+                    <div class="card-body p-6 pt-3" id="debrid-content">
+                        <p class="text-base-content/70">Loading debrid providers...</p>
+                    </div>
+                </div>
+            </div>
+            <!-- Usenet Tab -->
+            <div id="tab-usenet" class="tab-content hidden">
+                <div class="card bg-base-100 shadow-xl" id="usenet-card">
+                    <div class="card-header p-6 pb-3">
+                        <h2 class="card-title text-xl">
+                            <i class="bi bi-newspaper text-accent"></i>
+                            Usenet Providers
+                        </h2>
+                    </div>
+                    <div class="card-body p-6 pt-3" id="usenet-content">
+                        <p class="text-base-content/70">Loading usenet providers...</p>
+                    </div>
+                </div>
+            </div>
+            <!-- Mount Tab -->
+            <div id="tab-mount" class="tab-content hidden">
+                <div class="card bg-base-100 shadow-xl" id="mount-card">
+                    <div class="card-header p-6 pb-3">
+                        <div class="card-title flex-col items-start gap-3 text-xl sm:flex-row sm:items-center sm:justify-between">
+                            <h2>
+                                <i class="bi bi-hdd-stack text-primary"></i>
+                                Mount Statistics
+                            </h2>
+                            <div class="flex w-full gap-2 sm:w-auto">
+                                <a href="{{.URLBase}}debug/logs/rclone"
+                                   class="btn btn-sm btn-outline w-full sm:w-auto"
+                                   target="_blank"
+                                   id="rclone-logs-btn">
+                                    <i class="bi bi-arrow-right"></i>
+                                    View Logs
+                                </a>
+                            </div>
+                        </div>
+                        <div class="flex gap-2">
+                            <div class="badge" id="mount-type">Unknown</div>
+                            <div class="badge" id="mount-status">Unknown</div>
+                        </div>
+                    </div>
+                    <div class="card-body p-6 pt-3" id="mount-content"></div>
                 </div>
             </div>
         </div>
-    </div>
-
-    <div id="error-stats" class="alert alert-error hidden">
-        <i class="bi bi-exclamation-triangle-fill"></i>
-        <span id="error-message">Failed to load statistics</span>
-        <button id="retry-stats" class="btn btn-sm btn-outline">
-            <i class="bi bi-arrow-clockwise"></i>
-            Retry
-        </button>
-    </div>
-</div>
-
-<dialog id="purge-cache-modal" class="modal">
-    <div class="modal-box max-w-lg">
-        <form method="dialog">
-            <button class="btn btn-sm btn-circle btn-ghost absolute right-3 top-3" aria-label="Close">
-                <i class="bi bi-x-lg"></i>
+        <div id="error-stats" class="alert alert-error hidden">
+            <i class="bi bi-exclamation-triangle-fill"></i>
+            <span id="error-message">Failed to load statistics</span>
+            <button id="retry-stats" class="btn btn-sm btn-outline">
+                <i class="bi bi-arrow-clockwise"></i>
+                Retry
             </button>
+        </div>
+    </div>
+    <dialog id="purge-cache-modal" class="modal">
+        <div class="modal-box max-w-lg">
+            <form method="dialog">
+                <button class="btn btn-sm btn-circle btn-ghost absolute right-3 top-3"
+                        aria-label="Close">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </form>
+            <h3 class="font-bold text-lg flex items-center gap-2 mb-3">
+                <i class="bi bi-trash3 text-error"></i>
+                Purge DFS Cache
+            </h3>
+            <p class="text-sm text-base-content/70 mb-4">
+                This removes cached disk files that are not currently open or streaming. Active files will be skipped.
+            </p>
+            <div class="purge-cache-summary rounded-lg bg-base-200/50 p-4">
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <div class="text-xs text-base-content/60">Cached Files</div>
+                        <div class="font-bold text-info text-xl" id="purge-cache-files">0</div>
+                    </div>
+                    <div>
+                        <div class="text-xs text-base-content/60">Disk Used</div>
+                        <div class="font-bold text-warning text-xl" id="purge-cache-disk-used">0 B</div>
+                    </div>
+                </div>
+            </div>
+            <div class="alert alert-warning mt-4">
+                <i class="bi bi-exclamation-triangle"></i>
+                <span>Cached files may need to be downloaded again after purging.</span>
+            </div>
+            <div class="modal-action grid grid-cols-2 gap-2 sm:flex">
+                <button type="button"
+                        class="btn btn-ghost w-full sm:w-auto"
+                        id="cancel-purge-cache">Cancel</button>
+                <button type="button"
+                        class="btn btn-error w-full sm:w-auto"
+                        id="confirm-purge-cache">
+                    <i class="bi bi-trash3"></i>
+                    Purge Cache
+                </button>
+            </div>
+        </div>
+        <form method="dialog" class="modal-backdrop">
+            <button>close</button>
         </form>
-        <h3 class="font-bold text-lg flex items-center gap-2 mb-3">
-            <i class="bi bi-trash3 text-error"></i>
-            Purge DFS Cache
-        </h3>
-        <p class="text-sm text-base-content/70 mb-4">
-            This removes cached disk files that are not currently open or streaming. Active files will be skipped.
-        </p>
-        <div class="purge-cache-summary rounded-lg bg-base-200/50 p-4">
-            <div class="grid grid-cols-2 gap-4">
-                <div>
-                    <div class="text-xs text-base-content/60">Cached Files</div>
-                    <div class="font-bold text-info text-xl" id="purge-cache-files">0</div>
-                </div>
-                <div>
-                    <div class="text-xs text-base-content/60">Disk Used</div>
-                    <div class="font-bold text-warning text-xl" id="purge-cache-disk-used">0 B</div>
-                </div>
-            </div>
-        </div>
-        <div class="alert alert-warning mt-4">
-            <i class="bi bi-exclamation-triangle"></i>
-            <span>Cached files may need to be downloaded again after purging.</span>
-        </div>
-        <div class="modal-action grid grid-cols-2 gap-2 sm:flex">
-            <button type="button" class="btn btn-ghost w-full sm:w-auto" id="cancel-purge-cache">Cancel</button>
-            <button type="button" class="btn btn-error w-full sm:w-auto" id="confirm-purge-cache">
-                <i class="bi bi-trash3"></i>
-                Purge Cache
-            </button>
-        </div>
-    </div>
-    <form method="dialog" class="modal-backdrop">
-        <button>close</button>
-    </form>
-</dialog>
-
-<script>
+    </dialog>
+    <script>
     document.addEventListener('DOMContentLoaded', function () {
         const loadingEl = document.getElementById('loading-stats');
         const contentEl = document.getElementById('stats-content');
@@ -690,12 +688,7 @@
                             <i class="bi bi-play-circle"></i>
                             Run Cleanup
                         </button>
-                        <button type="button"
-                                class="btn btn-outline btn-sm mount-cache-action-btn"
-                                data-purge-cache
-                                data-cache-items="${cacheItems}"
-                                data-cache-size="${cacheTotalSize}"
-                                data-cache-max="${cacheMaxSize}">
+                        <button type="button" class="btn btn-outline btn-sm mount-cache-action-btn" data-purge-cache data-cache-items="${cacheItems}" data-cache-size="${cacheTotalSize}" data-cache-max="${cacheMaxSize}">
                             <i class="bi bi-trash3"></i>
                             Purge Cache
                         </button>
@@ -1103,10 +1096,7 @@
                                 </div>
                                 <div class="text-left sm:text-right">
                                     <div class="flex flex-wrap items-center gap-2 sm:justify-end">
-                                        <button
-                                            class="btn btn-xs btn-ghost debrid-speed-test-btn"
-                                            data-provider="${profile.name}"
-                                            onclick="runDebridSpeedTest('${profile.name}');">
+                                        <button class="btn btn-xs btn-ghost debrid-speed-test-btn" data-provider="${profile.name}" onclick="runDebridSpeedTest('${profile.name}');">
                                             Test Speed
                                         </button>
                                         <div class="text-sm font-mono">${formatNumber(profile.points || 0)} points</div>
@@ -1242,10 +1232,8 @@
                                 <span class="text-xs font-mono">${utilizationPercent.toFixed(1)}%</span>
                             </div>
                             <div class="w-full bg-base-300 rounded-full h-4 relative overflow-hidden">
-                                <div class="absolute h-full bg-success transition-all duration-300"
-                                     style="width: ${activePercent}%"></div>
-                                <div class="absolute h-full bg-primary/80 transition-all duration-300"
-                                     style="left: ${activePercent}%; width: ${idlePercent}%"></div>
+                                <div class="absolute h-full bg-success transition-all duration-300" style="width: ${activePercent}%"></div>
+                                <div class="absolute h-full bg-primary/80 transition-all duration-300" style="left: ${activePercent}%; width: ${idlePercent}%"></div>
                             </div>
                             <div class="flex gap-4 mt-2 text-xs flex-wrap">
                                 <span class="flex items-center gap-1">
@@ -1308,11 +1296,7 @@
                                 </div>
                                 <div class="flex flex-col items-end gap-1">
                                     ${speedResultHtml}
-                                    <button
-                                        class="btn btn-xs btn-ghost speed-test-btn"
-                                        data-provider="${provider.id || provider.host}"
-                                        title="Run Speed Test"
-                                        onclick="runSpeedTest('${provider.id || provider.host}');">
+                                    <button class="btn btn-xs btn-ghost speed-test-btn" data-provider="${provider.id || provider.host}" title="Run Speed Test" onclick="runSpeedTest('${provider.id || provider.host}');">
                                         Test Speed
                                     </button>
                                 </div>
@@ -1323,10 +1307,8 @@
                                     <span class="font-mono">${providerUtilizationPercent.toFixed(1)}%</span>
                                 </div>
                                 <div class="w-full bg-base-300 rounded-full h-2 relative overflow-hidden">
-                                    <div class="absolute h-full bg-success transition-all duration-300"
-                                         style="width: ${providerActivePercent}%"></div>
-                                    <div class="absolute h-full bg-primary/80 transition-all duration-300"
-                                         style="left: ${providerActivePercent}%; width: ${providerIdlePercent}%"></div>
+                                    <div class="absolute h-full bg-success transition-all duration-300" style="width: ${providerActivePercent}%"></div>
+                                    <div class="absolute h-full bg-primary/80 transition-all duration-300" style="left: ${providerActivePercent}%; width: ${providerIdlePercent}%"></div>
                                 </div>
                                 <div class="flex gap-3 mt-1 text-xs text-base-content/70 flex-wrap">
                                     <span class="flex items-center gap-1">
@@ -1470,8 +1452,7 @@
                     <div class="text-xs text-base-content/60">${label}</div>
                     <div class="flex items-center gap-2">
                         <code class="flex-1 break-all bg-base-200 rounded px-2 py-1 text-xs">${value}</code>
-                        <button class="btn btn-ghost btn-xs" title="Copy"
-                                onclick="copyText(this, &quot;${safe}&quot;)"><i class="bi bi-clipboard"></i></button>
+                        <button class="btn btn-ghost btn-xs" title="Copy" onclick="copyText(this, &quot;${safe}&quot;)"><i class="bi bi-clipboard"></i></button>
                     </div>
                 </div>`;
         }
@@ -1678,5 +1659,5 @@
         // Initial load
         loadStats();
     });
-</script>
+    </script>
 {{ end }}

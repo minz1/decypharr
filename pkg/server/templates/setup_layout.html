@@ -1,20 +1,27 @@
 {{ define "setup_layout" }}
-<!DOCTYPE html>
-<html lang="en" data-theme="dark">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Decypharr, a debrid and usenet download manager for the arrs">
-    <title>Decypharr - Setup Wizard</title>
-
-    {{template "vite" (viteCSS "pkg/server/ui/styles.css")}}
-
-    <link rel="apple-touch-icon" sizes="180x180" href="{{.URLBase}}images/favicon/apple-touch-icon.png?v={{.AssetVersion}}">
-    <link rel="icon" type="image/png" sizes="32x32" href="{{.URLBase}}images/favicon/favicon-32x32.png?v={{.AssetVersion}}">
-    <link rel="icon" type="image/png" sizes="16x16" href="{{.URLBase}}images/favicon/favicon-16x16.png?v={{.AssetVersion}}">
-    <link rel="manifest" href="{{.URLBase}}images/favicon/site.webmanifest?v={{.AssetVersion}}">
-
-    <script>
+    <!DOCTYPE html>
+    <html lang="en" data-theme="dark">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <meta name="description"
+                  content="Decypharr, a debrid and usenet download manager for the arrs">
+            <title>Decypharr - Setup Wizard</title>
+            {{template "vite" (viteCSS "pkg/server/ui/styles.css")}}
+            <link rel="apple-touch-icon"
+                  sizes="180x180"
+                  href="{{.URLBase}}images/favicon/apple-touch-icon.png?v={{.AssetVersion}}">
+            <link rel="icon"
+                  type="image/png"
+                  sizes="32x32"
+                  href="{{.URLBase}}images/favicon/favicon-32x32.png?v={{.AssetVersion}}">
+            <link rel="icon"
+                  type="image/png"
+                  sizes="16x16"
+                  href="{{.URLBase}}images/favicon/favicon-16x16.png?v={{.AssetVersion}}">
+            <link rel="manifest"
+                  href="{{.URLBase}}images/favicon/site.webmanifest?v={{.AssetVersion}}">
+            <script>
         // Early theme detection to prevent FOUC
         (function () {
             const savedTheme = localStorage.getItem('theme');
@@ -29,15 +36,13 @@
 
         // Set global URL base
         window.urlBase = "{{.URLBase}}";
-    </script>
-</head>
-<body class="min-h-screen bg-base-200">
-<div class="toast-container fixed inset-x-3 bottom-3 z-50 space-y-2 sm:left-auto sm:right-4 sm:w-auto"></div>
-
-{{ template "setup" . }}
-
-<script src="{{.URLBase}}assets/js/common.js?v={{.AssetVersion}}"></script>
-<script src="{{.URLBase}}assets/js/setup.js?v={{.AssetVersion}}"></script>
-</body>
-</html>
+            </script>
+        </head>
+        <body class="min-h-screen bg-base-200">
+            <div class="toast-container fixed inset-x-3 bottom-3 z-50 space-y-2 sm:left-auto sm:right-4 sm:w-auto"></div>
+            {{ template "setup" . }}
+            <script src="{{.URLBase}}assets/js/common.js?v={{.AssetVersion}}"></script>
+            <script src="{{.URLBase}}assets/js/setup.js?v={{.AssetVersion}}"></script>
+        </body>
+    </html>
 {{ end }}
