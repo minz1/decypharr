@@ -8,7 +8,7 @@
                         <div class="breadcrumbs text-sm">
                             <ul id="breadcrumbNav">
                                 <li>
-                                    <a href="{{.URLBase}}browse" data-path="/">
+                                    <a href="{{.URLBase}}browse" data-path="/" data-action="navigate">
                                         <i class="bi bi-house-door"></i> Home
                                     </a>
                                 </li>
@@ -175,9 +175,92 @@
             </li>
         </div>
     </div>
-    <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        window.fileBrowser = new FileBrowser();
-    });
-    </script>
+    <template id="browse-crumb">
+        <li>
+            <a data-action="navigate"></a>
+        </li>
+    </template>
+    <template id="browse-row">
+        <table>
+            <tbody>
+                <tr class="group hover:bg-base-200 transition-colors">
+                    <td>
+                        <label data-field="select-label">
+                            <span class="sr-only" data-field="select-text"></span>
+                            <input type="checkbox"
+                                   class="checkbox checkbox-sm checkbox-primary entry-checkbox"
+                                   data-field="select">
+                        </label>
+                    </td>
+                    <td>
+                        <i class="bi" aria-hidden="true" data-field="icon"></i>
+                    </td>
+                    <td>
+                        <button type="button"
+                                class="text-left hover:text-primary transition-colors"
+                                data-action="open"
+                                data-field="open">
+                            <span class="font-medium" data-field="name"></span>
+                        </button>
+                        <span class="ml-2" data-field="kind"><span class="badge badge-sm"></span></span>
+                    </td>
+                    <td data-field="size"></td>
+                    <td class="text-xs text-base-content/70" data-field="modified"></td>
+                    <td data-field="provider">
+                        <span data-field="provider-name"></span>
+                    </td>
+                    <td data-field="health">
+                        <span class="badge badge-sm"></span>
+                    </td>
+                    <td data-field="actions">
+                        <div class="dropdown dropdown-end">
+                            <button type="button"
+                                    tabindex="0"
+                                    class="btn btn-ghost btn-xs"
+                                    data-field="menu-button">
+                                <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
+                            </button>
+                            <ul tabindex="0"
+                                class="dropdown-content menu p-2 shadow bg-base-200 rounded-box w-56 z-50"
+                                aria-label="Actions">
+                                <li data-field="download">
+                                    <button type="button" data-action="download">
+                                        <i class="bi bi-download" aria-hidden="true"></i> Download
+                                    </button>
+                                </li>
+                                <li data-field="recheck">
+                                    <button type="button" data-action="recheck">
+                                        <i class="bi bi-search-heart" aria-hidden="true"></i> Recheck health
+                                    </button>
+                                </li>
+                                <li data-field="delete">
+                                    <button type="button" class="text-error" data-action="delete">
+                                        <i class="bi bi-trash" aria-hidden="true"></i> Delete original item
+                                    </button>
+                                </li>
+                            </ul>
+                        </div>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    </template>
+    <template id="browse-page-previous">
+        <button class="join-item btn btn-sm" data-action="page">
+            <i class="bi bi-chevron-left"></i>
+        </button>
+    </template>
+    <template id="browse-page-number">
+        <button class="join-item btn btn-sm" data-action="page"></button>
+    </template>
+    <template id="browse-page-gap">
+        <button class="join-item btn btn-sm btn-disabled" disabled>...</button>
+    </template>
+    <template id="browse-page-next">
+        <button class="join-item btn btn-sm" data-action="page">
+            <i class="bi bi-chevron-right"></i>
+        </button>
+    </template>
+    {{ template "confirm_dialog" }}
+    {{ template "vite" (viteEntry "pkg/server/ui/pages/browse.ts") }}
 {{ end }}
