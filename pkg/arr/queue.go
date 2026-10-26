@@ -117,6 +117,7 @@ const (
 	searchGiveUpAfter   = time.Hour
 	searchRetryDelay    = time.Minute
 	commandClockSkew    = 2 * time.Second
+	episodeReadBatch    = 100 // episode IDs per api/v3/episode request, to keep the URL short
 )
 
 type importFailure struct {
@@ -135,6 +136,9 @@ func (s *Service) CleanupQueue(ctx context.Context, name string) error {
 	}
 
 	rules := s.config.Get().QueueCleanup.Rules
+	if refreshErr := s.refreshEpisodeFiles(ctx, name, items, rules); refreshErr != nil {
+		return refreshErr
+	}
 	complete := completeDownloads(items)
 	var blocklist, blocklistResearch, blocklistSearchMissing, leftovers []QueueSchema
 	importStatuses := make(map[string]string)
@@ -295,6 +299,132 @@ func resolveQueueAction(item QueueSchema, rules []config.QueueCleanupRule, compl
 	return QueueActionNone
 }
 
+// refreshEpisodeFiles sets episodeHasFile from Sonarr's episodes for the records a blocklist rule acts on, then
+// rechecks the episodes still owed a search. The queue's own value can't be used: Sonarr freezes it when a download
+// completes, so the episodes a pack has just imported read as missing. A failed read of the queue's episodes fails
+// the tick, so nothing is decided on the frozen value.
+func (s *Service) refreshEpisodeFiles(
+	ctx context.Context,
+	name string,
+	items []QueueSchema,
+	rules []config.QueueCleanupRule,
+) error {
+	var ids []int
+	for _, item := range items {
+		action := resolveQueueAction(item, rules, false)
+		if item.EpisodeID > 0 && (action == QueueActionBlocklist || action == QueueActionBlocklistResearch) {
+			ids = append(ids, item.EpisodeID)
+		}
+	}
+	s.mu.RLock()
+	owed := len(s.pendingSearches[name]) > 0
+	s.mu.RUnlock()
+	if len(ids) == 0 && !owed || s.ResolveType(ctx, name) != Sonarr {
+		return nil
+	}
+	if len(ids) > 0 {
+		slices.Sort(ids)
+		files, err := s.episodeFiles(ctx, name, slices.Compact(ids))
+		if err != nil {
+			return err
+		}
+		for i := range items {
+			if hasFile, ok := files[items[i].EpisodeID]; ok {
+				items[i].EpisodeHasFile = hasFile
+			}
+		}
+	}
+	s.recheckPendingSearches(ctx, name)
+	return nil
+}
+
+// recheckPendingSearches drops a due owed search whose episode has a file now or no longer exists, and holds one it
+// can't read for a minute. Each episode is read on its own: Sonarr fails a batch read naming a deleted episode.
+func (s *Service) recheckPendingSearches(ctx context.Context, name string) {
+	s.mu.RLock()
+	records := make(map[int][]int)
+	for id, search := range s.pendingSearches[name] {
+		if !s.now().Before(search.retryAt) {
+			records[search.item.EpisodeID] = append(records[search.item.EpisodeID], id)
+		}
+	}
+	s.mu.RUnlock()
+	for episodeID, ids := range records {
+		hasFile, exists, err := s.episodeFile(ctx, name, episodeID)
+		s.mu.Lock()
+		pending := s.pendingSearches[name]
+		for _, id := range ids {
+			search, ok := pending[id]
+			switch {
+			case !ok:
+			case err != nil:
+				if held := s.now().Add(searchRetryDelay); search.retryAt.Before(held) {
+					search.retryAt = held
+					pending[id] = search
+				}
+			case hasFile || !exists:
+				delete(pending, id)
+			}
+		}
+		s.mu.Unlock()
+		switch {
+		case err != nil:
+			s.logger.Debug().Err(err).Str("arr", name).Int("episode_id", episodeID).
+				Msg("Queue cleanup: owed episode search held, the episode could not be read")
+		case hasFile || !exists:
+			s.logger.Debug().Str("arr", name).Int("episode_id", episodeID).Bool("deleted", !exists).
+				Msg("Queue cleanup: owed episode search dropped, the episode has a file or was deleted")
+		}
+	}
+}
+
+// episodeFile reads one episode: whether it has a file, and whether it still exists.
+func (s *Service) episodeFile(ctx context.Context, name string, episodeID int) (bool, bool, error) {
+	instance, err := s.instance(name)
+	if err != nil {
+		return false, false, err
+	}
+	var episode sonarrEpisode
+	resp, err := s.get(ctx, instance, fmt.Sprintf("api/v3/episode/%d", episodeID), &episode)
+	if err != nil {
+		return false, false, fmt.Errorf("read episode %d: %w", episodeID, err)
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return false, false, nil
+	}
+	if expectStatusErr := expectStatus(resp, http.StatusOK); expectStatusErr != nil {
+		return false, false, fmt.Errorf("read episode %d: %w", episodeID, expectStatusErr)
+	}
+	return episode.EpisodeFileID > 0, true, nil
+}
+
+// episodeFiles reports, per episode ID, whether the episode has a file now.
+func (s *Service) episodeFiles(ctx context.Context, name string, episodeIDs []int) (map[int]bool, error) {
+	instance, err := s.instance(name)
+	if err != nil {
+		return nil, err
+	}
+	files := make(map[int]bool, len(episodeIDs))
+	for chunk := range slices.Chunk(episodeIDs, episodeReadBatch) {
+		query := url.Values{}
+		for _, id := range chunk {
+			query.Add("episodeIds", strconv.Itoa(id))
+		}
+		resp, getErr := s.getDecoded(ctx, instance, "api/v3/episode?"+query.Encode(),
+			arrayResponseDecoder(func(episode sonarrEpisode) error {
+				files[episode.ID] = episode.EpisodeFileID > 0
+				return nil
+			}))
+		if getErr != nil {
+			return nil, fmt.Errorf("read episode files: %w", getErr)
+		}
+		if expectStatusErr := expectStatus(resp, http.StatusOK); expectStatusErr != nil {
+			return nil, fmt.Errorf("read episode files: %w", expectStatusErr)
+		}
+	}
+	return files, nil
+}
+
 // completeDownloads holds the download IDs whose every queue record has its episode on disk.
 func completeDownloads(items []QueueSchema) map[string]bool {
 	complete := make(map[string]bool)
@@ -449,8 +579,8 @@ type pendingSearch struct {
 // first, since the cleanup rules have just judged it again. What the arr refuses stays pending, retried each minute
 // for up to an hour; a search whose outcome is unknown is resent only if the arr's command list does not show it.
 // shortcut: a record gone from the queue counts as removed by our blocklist, though a user, the arr or a page shift
-// in Queue() may have caused it; pending also keeps EpisodeHasFile from blocklist time. Both risk one extra search;
-// check FailedHistory and the episode's file before searching an unconfirmed removal if that shows up live.
+// in Queue() may have caused it. That risks one extra search, for an episode still without a file
+// (refreshEpisodeFiles drops the rest); check FailedHistory before searching an unconfirmed removal if it shows up live.
 func (s *Service) searchPendingEpisodes(ctx context.Context, name string, items, searched []QueueSchema, removed bool) {
 	s.mu.Lock()
 	pending := s.pendingSearches[name]

@@ -33,6 +33,11 @@ type researchArr struct {
 	historyFails   map[string]bool
 	noGrab         map[string]bool
 	episodeFails   bool
+	files          map[int]bool // episodeID → has a file now; unset falls back to the queue record's episodeHasFile
+	gone           map[int]bool // deleted episodes: a batch read naming one fails, as Sonarr's does
+	fileReadFails  bool         // batch reads fail
+	oneReadFails   bool         // single-episode reads fail
+	fileReads      int
 	searchHangsUp  bool // the connection drops after the command is read
 	searchLost     bool // with searchHangsUp, the arr never queues it
 	received       []Command
@@ -84,6 +89,8 @@ func (a *researchArr) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		a.history(w, query)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v3/episode":
 		a.episodes(w, query)
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v3/episode/"):
+		a.episode(w, strings.TrimPrefix(r.URL.Path, "/api/v3/episode/"))
 	case r.Method == http.MethodDelete && r.URL.Path == "/api/v3/queue/bulk":
 		a.bulkDelete(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v3/command":
@@ -120,6 +127,10 @@ func (a *researchArr) history(w http.ResponseWriter, query url.Values) {
 }
 
 func (a *researchArr) episodes(w http.ResponseWriter, query url.Values) {
+	if ids := query["episodeIds"]; len(ids) > 0 {
+		a.episodeFiles(w, ids)
+		return
+	}
 	if a.episodeFails {
 		http.Error(w, "no", http.StatusUnauthorized)
 		return
@@ -132,6 +143,55 @@ func (a *researchArr) episodes(w http.ResponseWriter, query url.Values) {
 	}
 	body, _ := json.Marshal(episodes)
 	_, _ = w.Write(body)
+}
+
+func (a *researchArr) episodeFile(id int) map[string]int {
+	hasFile, set := a.files[id]
+	if !set {
+		for _, record := range a.records {
+			if record.EpisodeID == id {
+				hasFile = record.EpisodeHasFile
+			}
+		}
+	}
+	fileID := 0
+	if hasFile {
+		fileID = 100 + id
+	}
+	return map[string]int{"id": id, "episodeFileId": fileID}
+}
+
+func (a *researchArr) episodeFiles(w http.ResponseWriter, ids []string) {
+	a.fileReads++
+	if a.fileReadFails {
+		http.Error(w, "no", http.StatusUnauthorized)
+		return
+	}
+	episodes := make([]map[string]int, 0, len(ids))
+	for _, raw := range ids {
+		id, _ := strconv.Atoi(raw)
+		if a.gone[id] {
+			http.Error(w, "Expected query to return rows", http.StatusInternalServerError)
+			return
+		}
+		episodes = append(episodes, a.episodeFile(id))
+	}
+	body, _ := json.Marshal(episodes)
+	_, _ = w.Write(body)
+}
+
+func (a *researchArr) episode(w http.ResponseWriter, raw string) {
+	a.fileReads++
+	id, _ := strconv.Atoi(raw)
+	switch {
+	case a.oneReadFails:
+		http.Error(w, "no", http.StatusUnauthorized)
+	case a.gone[id]:
+		http.NotFound(w, nil)
+	default:
+		body, _ := json.Marshal(a.episodeFile(id))
+		_, _ = w.Write(body)
+	}
 }
 
 func (a *researchArr) bulkDelete(w http.ResponseWriter, r *http.Request) {
@@ -638,6 +698,161 @@ func TestCleanupQueueReadsCommandsForAHeldSearchOncePerRetryDelay(t *testing.T) 
 		}
 		if a.commands != 1 {
 			t.Errorf("search commands sent = %d, want 1", a.commands)
+		}
+	})
+}
+
+// Sonarr freezes a completed download's episodeHasFile, so a pack that filled missing episodes still reports them
+// without a file after the import. The cleanup reads each episode's current file before it decides or searches.
+func TestCleanupQueueReadsEpisodeFilesFresh(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		records []QueueSchema
+		files   map[int]bool
+		want    researchWant
+	}{
+		{name: "pack filled the missing episode",
+			records: []QueueSchema{missingRecord(1, 11, "p", false), missingRecord(2, 12, "p", true)},
+			files:   map[int]bool{11: true},
+			want:    researchWant{leftovers: []int{1, 2}}},
+		{name: "only the still-missing episode is searched",
+			records: []QueueSchema{missingRecord(1, 11, "p", false), missingRecord(2, 12, "p", false)},
+			files:   map[int]bool{11: true},
+			want:    researchWant{skipped: []int{1, 2}, searches: [][]int{{12}}}},
+		{name: "a file the queue reports was deleted",
+			records: []QueueSchema{missingRecord(1, 11, "p", true), missingRecord(2, 12, "p", true)},
+			files:   map[int]bool{12: false},
+			want:    researchWant{skipped: []int{1, 2}, searches: [][]int{{12}}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			fake := newResearchArr(tt.records...)
+			fake.files = tt.files
+			runCleanup(t, researchService(t, fake, Sonarr), "tv", 1)
+			fake.check(t, tt.want)
+		})
+	}
+}
+
+// Without the current episode files the cleanup can't tell a finished pack from a broken one, so it acts on
+// nothing that tick rather than blocklist on the queue's frozen value.
+func TestCleanupQueueSkipsTheTickWhenEpisodeFilesAreUnreadable(t *testing.T) {
+	t.Parallel()
+	fake := newResearchArr(missingRecord(1, 11, "p", false), missingRecord(2, 12, "p", true))
+	fake.fileReadFails = true
+	service := researchService(t, fake, Sonarr)
+	if err := service.CleanupQueue(t.Context(), "tv"); err == nil {
+		t.Fatal("CleanupQueue() = nil, want the episode read error")
+	}
+	fake.check(t, researchWant{})
+
+	fake.update(func(a *researchArr) { a.fileReadFails = false })
+	runCleanup(t, service, "tv", 1)
+	fake.check(t, researchWant{skipped: []int{1, 2}, searches: [][]int{{11}}})
+}
+
+// A search owed for an episode that has since got a file is dropped instead of sent.
+func TestCleanupQueueDropsAPendingSearchOnceTheEpisodeHasAFile(t *testing.T) {
+	t.Parallel()
+	fake := newResearchArr(missingRecord(1, 11, "a", false), missingRecord(2, 12, "a", true))
+	fake.searchFails = true
+	service := researchService(t, fake, Sonarr)
+	clock := &fakeClock{now: time.Date(2026, 10, 22, 0, 0, 0, 0, time.UTC)}
+	service.now = clock.Now
+	runCleanup(t, service, "tv", 1)
+	fake.check(t, researchWant{skipped: []int{1, 2}})
+
+	fake.update(func(a *researchArr) {
+		a.searchFails = false
+		a.files = map[int]bool{11: true}
+	})
+	clock.advance(searchRetryDelay)
+	runCleanup(t, service, "tv", 2)
+	fake.check(t, researchWant{skipped: []int{1, 2}})
+}
+
+// A queue with nothing for a blocklist rule and no owed search costs no episode read.
+func TestCleanupQueueReadsNoEpisodesWhenNothingIsBlocklisted(t *testing.T) {
+	t.Parallel()
+	record := missingRecord(1, 11, "p", false)
+	record.StatusMessages = nil
+	record.TrackedDownloadStatus = "ok"
+	fake := newResearchArr(record)
+	runCleanup(t, researchService(t, fake, Sonarr), "tv", 1)
+	fake.update(func(a *researchArr) {
+		if a.fileReads != 0 {
+			t.Errorf("episode file reads = %d, want 0", a.fileReads)
+		}
+	})
+}
+
+// An owed search can outlive its episode. Sonarr fails a batch read naming a deleted episode, so owed searches are
+// read one at a time: a deleted episode drops its search, and the rest of the cleanup carries on.
+func TestCleanupQueueDropsAnOwedSearchWhoseEpisodeWasDeleted(t *testing.T) {
+	t.Parallel()
+	fake := newResearchArr(missingRecord(1, 11, "a", false), missingRecord(2, 12, "a", true))
+	fake.searchFails = true
+	service := researchService(t, fake, Sonarr)
+	clock := &fakeClock{now: time.Date(2026, 10, 22, 0, 0, 0, 0, time.UTC)}
+	service.now = clock.Now
+	runCleanup(t, service, "tv", 1)
+
+	fake.update(func(a *researchArr) {
+		a.searchFails = false
+		a.gone = map[int]bool{11: true}
+		a.records = []QueueSchema{missingRecord(3, 21, "b", true), missingRecord(4, 22, "b", true)}
+	})
+	clock.advance(searchRetryDelay)
+	runCleanup(t, service, "tv", 2)
+	fake.check(t, researchWant{leftovers: []int{3, 4}, skipped: []int{1, 2}})
+}
+
+// An owed search whose episode can't be read waits a minute; the tick's other work goes ahead.
+func TestCleanupQueueHoldsAnOwedSearchItCannotRead(t *testing.T) {
+	t.Parallel()
+	fake := newResearchArr(missingRecord(1, 11, "a", false), missingRecord(2, 12, "a", true))
+	fake.searchFails = true
+	service := researchService(t, fake, Sonarr)
+	clock := &fakeClock{now: time.Date(2026, 10, 22, 0, 0, 0, 0, time.UTC)}
+	service.now = clock.Now
+	runCleanup(t, service, "tv", 1)
+
+	fake.update(func(a *researchArr) {
+		a.searchFails = false
+		a.oneReadFails = true
+		a.records = []QueueSchema{missingRecord(3, 21, "b", true), missingRecord(4, 22, "b", true)}
+	})
+	clock.advance(searchRetryDelay)
+	runCleanup(t, service, "tv", 1)
+	fake.check(t, researchWant{leftovers: []int{3, 4}, skipped: []int{1, 2}})
+
+	var reads int
+	fake.update(func(a *researchArr) { reads = a.fileReads })
+	runCleanup(t, service, "tv", 1)
+	fake.update(func(a *researchArr) {
+		if a.fileReads != reads {
+			t.Errorf("a held search was read again before it was due: %d reads, want %d", a.fileReads, reads)
+		}
+	})
+
+	fake.update(func(a *researchArr) { a.oneReadFails = false })
+	clock.advance(searchRetryDelay)
+	runCleanup(t, service, "tv", 1)
+	fake.check(t, researchWant{leftovers: []int{3, 4}, skipped: []int{1, 2}, searches: [][]int{{11}}})
+}
+
+// Only Sonarr serves episodes; another arr whose queue rows carry episode IDs is cleaned up as before.
+func TestCleanupQueueReadsEpisodesOnlyFromSonarr(t *testing.T) {
+	t.Parallel()
+	fake := newResearchArr(missingRecord(1, 11, "p", false), missingRecord(2, 12, "p", true))
+	fake.files = map[int]bool{11: true}
+	runCleanup(t, researchService(t, fake, Others), "tv", 1)
+	fake.check(t, researchWant{arrSearch: []int{1, 2}})
+	fake.update(func(a *researchArr) {
+		if a.fileReads != 0 {
+			t.Errorf("episode reads = %d, want 0", a.fileReads)
 		}
 	})
 }
