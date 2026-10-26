@@ -87,7 +87,7 @@ func TestNoSuppressions(t *testing.T) {
 		"djlint:off", "ignorePatterns",
 	}
 	// Only in the root configs: CLI flags and keys that skip files or rules.
-	configBanned := []string{"--ignore", "--allow", " -A ", "--disable", `"ignore"`, `"exclude"`}
+	configBanned := []string{"--ignore", "--allow", " -A ", "--disable", `"ignorePatterns"`, `"exclude"`}
 	why := "fix the finding, or turn the rule off in config with a reason"
 	files := suppressionScope(t)
 	if len(files) == 0 {
