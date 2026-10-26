@@ -104,6 +104,10 @@ async function minifyAllJS() {
             }
         }
 
+        if (processedFiles < jsFiles.length) {
+            process.exitCode = 1;
+        }
+
         if (processedFiles > 0) {
             const totalReduction = ((totalOriginal - totalMinified) / totalOriginal * 100).toFixed(1);
             console.log(`\nSuccessfully minified ${processedFiles}/${jsFiles.length} JavaScript file(s)`);
