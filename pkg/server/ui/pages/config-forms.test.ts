@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { JSON_NULL } from "#ui/lib/common/json";
 import {
   bootSettings,
   click,
@@ -73,6 +74,7 @@ const sentArr = {
   selected_debrid: "",
   source: "",
   import_webhook: false,
+  download_uncached: JSON_NULL,
 };
 
 describe("debrid cards", () => {

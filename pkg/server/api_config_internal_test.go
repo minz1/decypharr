@@ -497,3 +497,22 @@ func TestConfigResponseCarriesArrsAndAuth(t *testing.T) {
 		t.Fatal("configResponse changed the caller's config")
 	}
 }
+
+func TestMergeConfigUpdateClearsWhatTheSettingsPageEmpties(t *testing.T) {
+	t.Parallel()
+	inherit := true
+	current := config.Config{
+		Debrids: []config.Debrid{{Name: "torbox", APIKey: "tb-key", DownloadAPIKeys: []string{"a", "b"}}},
+		Arrs:    []config.Arr{{Name: "sonarr", Host: "http://sonarr", DownloadUncached: &inherit}},
+	}
+	body := `{"debrids":[{"name":"torbox","download_api_keys":[]}],` +
+		`"arrs":[{"name":"sonarr","host":"http://sonarr","download_uncached":null}]}`
+	merged, err := mergeConfigUpdate(&current, strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("merge config update: %v", err)
+	}
+	if len(merged.Debrids[0].DownloadAPIKeys) != 0 || merged.Arrs[0].DownloadUncached != nil {
+		t.Fatalf("download_api_keys = %v, download_uncached = %v; want both cleared",
+			merged.Debrids[0].DownloadAPIKeys, merged.Arrs[0].DownloadUncached)
+	}
+}

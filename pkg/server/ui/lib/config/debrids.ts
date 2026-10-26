@@ -119,13 +119,10 @@ const debridFrom = (card: Element): Record<string, unknown> | undefined => {
     add_samples: checkedOf(field("add_samples")),
     user_agent: text("user_agent"),
     limit: intOr(field("limit")?.value, 0),
-    download_api_keys:
-      keys.trim() === ""
-        ? undefined
-        : keys
-            .split("\n")
-            .map((key) => key.trim())
-            .filter((key) => key !== ""),
+    download_api_keys: keys
+      .split("\n")
+      .map((key) => key.trim())
+      .filter((key) => key !== ""),
     torrents_refresh_interval: text("torrents_refresh_interval"),
     download_links_refresh_interval: text("download_links_refresh_interval"),
     auto_expire_links_after: text("auto_expire_links_after"),

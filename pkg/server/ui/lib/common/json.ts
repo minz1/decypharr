@@ -1,3 +1,6 @@
+// JSON's null, for a request field that must clear a stored value; unicorn/no-null bans the literal.
+const JSON_NULL: unknown = JSON.parse("null");
+
 class ShapeError extends Error {
   public override readonly name = "ShapeError";
 }
@@ -67,4 +70,4 @@ const optNum = (record: Record<string, unknown>, key: string): number | undefine
 
 const optBool = (record: Record<string, unknown>, key: string): boolean | undefined => optional(bool, record, key);
 
-export { ShapeError, asArray, asRecord, bool, num, optBool, optNum, optStr, readJSON, str };
+export { JSON_NULL, ShapeError, asArray, asRecord, bool, num, optBool, optNum, optStr, readJSON, str };

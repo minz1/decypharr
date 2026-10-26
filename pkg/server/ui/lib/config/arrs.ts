@@ -1,5 +1,5 @@
 import { byId } from "#ui/lib/common/dom";
-import { asArray, asRecord, optStr } from "#ui/lib/common/json";
+import { JSON_NULL, asArray, asRecord, optStr } from "#ui/lib/common/json";
 import { appendCard, cardIndex, nextIndex } from "#ui/lib/config/cards";
 import { fillDebridOptions } from "#ui/lib/config/debrids";
 import { assign, checkedOf, named } from "#ui/lib/config/form";
@@ -96,7 +96,7 @@ const arrFrom = (card: Element): Record<string, unknown> | undefined => {
     selected_debrid: field("selected_debrid")?.value,
     source: field("source")?.value,
     import_webhook: checkedOf(field("import_webhook")) ?? false,
-    download_uncached: uncached === "" ? undefined : uncached === "true",
+    download_uncached: uncached === "" ? JSON_NULL : uncached === "true",
   };
 };
 

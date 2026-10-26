@@ -1,5 +1,6 @@
 import { describe, expect, inject, it, onTestFinished, vi } from "vitest";
 
+import { JSON_NULL } from "#ui/lib/common/json";
 import { assembleSettings, collectSections, populateSections } from "#ui/lib/config/sections";
 import {
   bootSettings,
@@ -68,14 +69,16 @@ describe("the settings sections", () => {
 });
 
 describe("saving loaded settings", () => {
-  it("a save after a successful config load posts what config.js posted", async () => {
+  it("a save after a successful config load posts what config.js posted, plus each arr's inherit choice", async () => {
     const { requests } = await bootSettings();
     await settingsLoaded();
     submitSettings();
     await savedBody(requests);
-    expect(posts(requests, "api/config").map((request) => request.body)).toStrictEqual([
-      JSON.stringify(legacyNoEditSave),
-    ]);
+    const expected = {
+      ...legacyNoEditSave,
+      arrs: legacyNoEditSave.arrs.map((arr) => Object.assign(structuredClone(arr), { download_uncached: JSON_NULL })),
+    };
+    expect(posts(requests, "api/config").map((request) => request.body)).toStrictEqual([JSON.stringify(expected)]);
   });
 
   it("sends every request under the URL base", async () => {
