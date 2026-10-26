@@ -49,15 +49,16 @@ func (m assetManifest) handler(prefix string, files fs.FS) http.Handler {
 		// A partial body would be gzipped under a plain Content-Range; assets are small, serve them whole.
 		r.Header.Del("Range")
 		name := prefix + path.Clean("/"+r.URL.Path)
-		if strings.HasPrefix(name, "/assets/vite/.vite/") {
+		if name == "/assets/vite/.vite" || strings.HasPrefix(name, "/assets/vite/.vite/") {
 			http.NotFound(w, r)
 			return
 		}
-		if etag, ok := m.etags[name]; ok {
+		etag, isFile := m.etags[name]
+		if isFile {
 			w.Header().Set("ETag", etag)
 		}
-		// Vite output names carry their content hash, so they never change under one URL.
-		if r.URL.Query().Get("v") == m.version || strings.HasPrefix(name, "/assets/vite/") {
+		// Vite output names carry their content hash, so they never change under one URL; directories do.
+		if isFile && (r.URL.Query().Get("v") == m.version || strings.HasPrefix(name, "/assets/vite/")) {
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		} else {
 			w.Header().Set("Cache-Control", "no-cache")

@@ -135,6 +135,7 @@ func TestViteFilesAreImmutable(t *testing.T) {
 		"vite/.vite/manifest.json":  {Data: []byte(`{}`)},
 	}
 	s.assets = loadAssetManifest(s.static)
+	version := s.assets.version
 	h := s.WebRoutes()
 
 	w := getAsset(h, "/assets/vite/assets/login-BBBB.js", map[string]string{"Accept-Encoding": "gzip"})
@@ -156,8 +157,16 @@ func TestViteFilesAreImmutable(t *testing.T) {
 	if missing.Code != http.StatusNotFound || strings.Contains(missing.Header().Get("Cache-Control"), "immutable") {
 		t.Fatalf("missing file: status = %d, Cache-Control = %q", missing.Code, missing.Header().Get("Cache-Control"))
 	}
-	if m := getAsset(h, "/assets/vite/.vite/manifest.json", nil); m.Code != http.StatusNotFound {
-		t.Fatalf("manifest status = %d, want 404", m.Code)
+	for _, target := range []string{"/assets/vite/.vite/manifest.json", "/assets/vite/.vite/", "/assets/vite/.vite"} {
+		if m := getAsset(h, target, nil); m.Code != http.StatusNotFound {
+			t.Fatalf("%s: status = %d, want 404", target, m.Code)
+		}
+	}
+	for _, dir := range []string{"/assets/vite/assets/", "/assets/vite/assets", "/assets/vite/", "/assets/js/?v=" + version} {
+		d := getAsset(h, dir, nil)
+		if strings.Contains(d.Header().Get("Cache-Control"), "immutable") {
+			t.Fatalf("%s: directory cached as immutable (status %d)", dir, d.Code)
+		}
 	}
 }
 
@@ -167,7 +176,7 @@ func TestPageWithoutBuildSaysSo(t *testing.T) {
 	s.loadUI(fstest.MapFS{".placeholder": {}})
 	h := s.WebRoutes()
 	w := getAsset(h, "/setup", nil)
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "UI assets not built") {
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "UI assets not built") {
 		t.Fatalf("/setup: status %d, body %q", w.Code, w.Body.String())
 	}
 	if v := getAsset(h, "/version", nil); v.Code != http.StatusOK {
@@ -188,5 +197,16 @@ func TestLayoutsLinkViteCSS(t *testing.T) {
 		if strings.Contains(page, "assets/css/styles.css") {
 			t.Errorf("%s still links the legacy stylesheet", layout)
 		}
+	}
+}
+
+// A submit before the login module loads must not put the password in the URL.
+func TestLoginFormPosts(t *testing.T) {
+	t.Parallel()
+	s := newTestServer(t, managertest.Store(t, nil))
+	w := httptest.NewRecorder()
+	s.renderPage(w, "layout", "login", "Login", map[string]any{"TokenOnly": false})
+	if !strings.Contains(w.Body.String(), `<form id="loginForm" method="post"`) {
+		t.Fatal("the login form does not declare method=post")
 	}
 }

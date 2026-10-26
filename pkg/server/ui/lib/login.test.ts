@@ -7,14 +7,14 @@ interface Recorder {
   utils: DecypharrUtils;
   requests: { url: string; init: RequestInit | undefined }[];
   toasts: { message: string; type: string }[];
-  loading: boolean[];
+  loading: { submit: boolean; isLoading: boolean }[];
   redirects: string[];
 }
 
 const record = (response: Response): Recorder => {
   const requests: Recorder["requests"] = [];
   const toasts: Recorder["toasts"] = [];
-  const loading: boolean[] = [];
+  const loading: Recorder["loading"] = [];
   return {
     utils: {
       fetcher: async (url, init) => {
@@ -24,8 +24,8 @@ const record = (response: Response): Recorder => {
       createToast: (message, type) => {
         toasts.push({ message, type });
       },
-      setButtonLoading: (_button, isLoading) => {
-        loading.push(isLoading);
+      setButtonLoading: (button, isLoading) => {
+        loading.push({ submit: button?.type === "submit", isLoading });
       },
     },
     requests,
@@ -88,7 +88,7 @@ describe("a successful login", () => {
     expect(rec.redirects).toStrictEqual([]);
     await vi.advanceTimersByTimeAsync(1);
     expect(rec.redirects).toStrictEqual(["/x/"]);
-    expect(rec.loading).toStrictEqual([false]);
+    expect(rec.loading).toStrictEqual([{ submit: true, isLoading: false }]);
   });
 
   it("redirects to / when urlBase is empty", async () => {
@@ -106,7 +106,7 @@ describe("a rejected login", () => {
     await vi.advanceTimersByTimeAsync(1000);
     expect(rec.toasts).toStrictEqual([{ message: "bad", type: "error" }]);
     expect(rec.redirects).toStrictEqual([]);
-    expect(rec.loading).toStrictEqual([false]);
+    expect(rec.loading).toStrictEqual([{ submit: true, isLoading: false }]);
   });
 
   it("falls back to Invalid credentials when the server sends no text", async () => {
@@ -120,6 +120,6 @@ describe("a rejected login", () => {
     rec.utils.fetcher = async (): Promise<Response> => Promise.reject(new Error("offline"));
     await submit(rec, loginForm(true), "/");
     expect(rec.toasts).toStrictEqual([{ message: "offline", type: "error" }]);
-    expect(rec.loading).toStrictEqual([false]);
+    expect(rec.loading).toStrictEqual([{ submit: true, isLoading: false }]);
   });
 });
