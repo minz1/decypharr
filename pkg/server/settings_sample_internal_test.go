@@ -1,15 +1,101 @@
 package server
 
 import (
+	"encoding"
 	"encoding/json"
 	"fmt"
 	"maps"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 )
+
+// settingsExclusions lists the config leaves the settings page leaves alone, with the reason; keys ending in "." match
+// a whole subtree.
+func settingsExclusions() map[string]string {
+	return map[string]string{
+		"qbittorrent.":              "deprecated",
+		"rclone.":                   "deprecated",
+		"discord_webhook_url":       "deprecated",
+		"callback_url":              "deprecated",
+		"custom_folders":            "deprecated",
+		"debrids[].folder":          "deprecated",
+		"debrids[].folder_naming":   "deprecated",
+		"debrids[].rc_url":          "deprecated",
+		"debrids[].rc_user":         "deprecated",
+		"debrids[].rc_pass":         "deprecated",
+		"debrids[].rc_refresh_dirs": "deprecated",
+		"debrids[].directories":     "deprecated",
+		"use_auth":                  "managed elsewhere",
+		"strm.secret":               "managed elsewhere",
+		"mount.rclone.enabled":      "not read by the code",
+		"mount.rclone.mount_path":   "not read by the code",
+		"skip_auto_move":            "not read by the code",
+		"debrids[].workers":         "not read by the code",
+	}
+}
+
+type configLeaf struct {
+	path    string
+	numeric bool
+}
+
+func isJSONNumber(t reflect.Type) bool {
+	p := reflect.PointerTo(t)
+	if p.Implements(reflect.TypeFor[json.Unmarshaler]()) || p.Implements(reflect.TypeFor[encoding.TextUnmarshaler]()) {
+		return false
+	}
+	return slices.Contains([]reflect.Kind{
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64,
+	}, t.Kind())
+}
+
+func configPaths(t reflect.Type, prefix string, out *[]configLeaf) error {
+	for f := range t.Fields() {
+		if !f.IsExported() {
+			continue
+		}
+		tag, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+		if tag == "-" {
+			continue
+		}
+		if tag == "" {
+			return fmt.Errorf("%s%s: exported field without a json name", prefix, f.Name)
+		}
+		p := prefix + tag
+		ft := f.Type
+		if ft.Kind() == reflect.Pointer {
+			ft = ft.Elem()
+		}
+		var err error
+		switch {
+		case ft.Kind() == reflect.Struct:
+			err = configPaths(ft, p+".", out)
+		case ft.Kind() == reflect.Slice && ft.Elem().Kind() == reflect.Struct:
+			err = configPaths(ft.Elem(), p+"[].", out)
+		default:
+			*out = append(*out, configLeaf{path: p, numeric: isJSONNumber(ft)})
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func matchKey[V any](m map[string]V, path string) (string, bool) {
+	for k := range m {
+		if k == path || (strings.HasSuffix(k, ".") && strings.HasPrefix(path, k)) {
+			return k, true
+		}
+	}
+	return "", false
+}
 
 // sampleChoices holds a valid non-default value for each leaf the page shows as a choice, a number or checked.
 func sampleChoices() map[string]any {
@@ -182,7 +268,7 @@ func configSampleFiles(t *testing.T) map[string][]byte {
 	if err != nil {
 		t.Fatal(err)
 	}
-	exclusions := maps.Clone(newSettingsCoverage().exclusions)
+	exclusions := maps.Clone(settingsExclusions())
 	maps.Copy(exclusions, sampleResponseExclusions())
 	excluded, err := json.MarshalIndent(exclusions, "", "  ")
 	if err != nil {
@@ -226,9 +312,17 @@ func TestConfigSampleSetsEveryLeaf(t *testing.T) {
 	if err := configPaths(reflect.TypeFor[config.Config](), "", &leaves); err != nil {
 		t.Fatal(err)
 	}
+	used := map[string]bool{}
 	for _, leaf := range leaves {
-		if _, excluded := matchKey(newSettingsCoverage().exclusions, leaf.path); !excluded && !paths[leaf.path] {
+		key, excluded := matchKey(settingsExclusions(), leaf.path)
+		used[key] = excluded
+		if !excluded && !paths[leaf.path] {
 			t.Errorf("%s: missing from the sample", leaf.path)
+		}
+	}
+	for key := range settingsExclusions() {
+		if !used[key] {
+			t.Errorf("%s: exclusion matches no config path", key)
 		}
 	}
 }

@@ -1,0 +1,718 @@
+{{ define "config_templates" }}
+    <template id="config-debrid">
+        <div class="card bg-base-100 border border-base-300 shadow-sm debrid-config">
+            <div class="card-body">
+                <div class="mb-4 flex items-start justify-between gap-3">
+                    <h3 class="card-title text-lg">
+                        <i class="bi bi-cloud mr-2 text-secondary"></i>
+                        <span data-card-title></span>
+                    </h3>
+                    <button type="button"
+                            class="btn btn-error btn-sm"
+                            data-action="remove-debrid">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                </div>
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <div>
+                        <label class="label" data-label-for="name">
+                            <span class=" font-medium">Service Type</span>
+                        </label>
+                        <select class="select w-full" data-field="provider" required>
+                            <option value="realdebrid">Real Debrid</option>
+                            <option value="alldebrid">AllDebrid</option>
+                            <option value="debridlink">Debrid Link</option>
+                            <option value="torbox">Torbox</option>
+                            <option value="premiumize">Premiumize</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="label" data-label-for="name">
+                            <span class=" font-medium">Name</span>
+                        </label>
+                        <input type="text"
+                               class="input w-full"
+                               data-field="name"
+                               data-action="debrid-name"
+                               placeholder="realdebrid">
+                        <span class="text-sm opacity-70">A unique name for this debrid account</span>
+                    </div>
+                    <div>
+                        <label class="label" data-label-for="api_key">
+                            <span class=" font-medium">API Key</span>
+                        </label>
+                        <div class="password-toggle-container">
+                            <input type="password"
+                                   class="input input-has-toggle"
+                                   data-field="api_key"
+                                   required>
+                            <button type="button" class="password-toggle-btn">
+                                <i class="bi bi-eye" data-icon-for="api_key"></i>
+                            </button>
+                        </div>
+                        <span class="text-sm opacity-70">API key for the debrid service</span>
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <div class="flex flex-col">
+                        <div class="fieldset flex-1">
+                            <label class="label" data-label-for="download_api_keys">
+                                <span class=" font-medium">Download API Keys</span>
+                            </label>
+                            <div class="password-toggle-container">
+                                <textarea class="textarea has-toggle font-mono h-full min-h-[200px]"
+                                          data-field="download_api_keys"
+                                          placeholder="Multiple API keys for download (one per line). If empty, main API key will be used."></textarea>
+                                <button type="button" class="password-toggle-btn textarea-toggle">
+                                    <i class="bi bi-eye" data-icon-for="download_api_keys"></i>
+                                </button>
+                            </div>
+                            <span class="text-sm opacity-70">Multiple API keys for downloads - leave empty to use main API key</span>
+                        </div>
+                    </div>
+                    <div class="space-y-4">
+                        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                            <div>
+                                <label class="label" data-label-for="rate_limit">
+                                    <span class=" font-medium">Rate Limit</span>
+                                </label>
+                                <input type="text"
+                                       class="input w-full"
+                                       data-field="rate_limit"
+                                       placeholder="250/minute"
+                                       value="250/minute">
+                                <span class="text-sm opacity-70">API rate limit for this service</span>
+                            </div>
+                            <div>
+                                <label class="label" data-label-for="repair_rate_limit">
+                                    <span class=" font-medium">Repair Rate Limit</span>
+                                </label>
+                                <input type="text"
+                                       class="input w-full"
+                                       data-field="repair_rate_limit"
+                                       placeholder="100/minute">
+                                <span class="text-sm opacity-70">API rate limit for repair operations</span>
+                            </div>
+                            <div>
+                                <label class="label" data-label-for="download_rate_limit">
+                                    <span class=" font-medium">Download Rate Limit</span>
+                                </label>
+                                <input type="text"
+                                       class="input w-full"
+                                       data-field="download_rate_limit"
+                                       placeholder="150/minute">
+                                <span class="text-sm opacity-70">API rate limit for download operations</span>
+                            </div>
+                            <div>
+                                <label class="label" data-label-for="proxy">
+                                    <span class=" font-medium">Proxy</span>
+                                </label>
+                                <input type="text"
+                                       class="input w-full"
+                                       data-field="proxy"
+                                       placeholder="socks4, socks5, https proxy">
+                                <span class="text-sm opacity-70">This proxy is used for this debrid account</span>
+                            </div>
+                            <div>
+                                <label class="label" data-label-for="user_agent">
+                                    <span class=" font-medium">Custom User Agent</span>
+                                </label>
+                                <input type="text"
+                                       class="input w-full"
+                                       data-field="user_agent"
+                                       placeholder="Decypharr/1.0">
+                                <span class="text-sm opacity-70">Custom User Agent for this debrid</span>
+                            </div>
+                            <div>
+                                <label class="label" data-label-for="minimum_free_slot">
+                                    <span class=" font-medium">Minimum Free Slot</span>
+                                </label>
+                                <input type="number"
+                                       class="input w-full"
+                                       data-field="minimum_free_slot"
+                                       placeholder="1"
+                                       value="1">
+                                <span class="text-sm opacity-70">Minimum free slot for this debrid</span>
+                            </div>
+                            <div>
+                                <label class="label" data-label-for="priority">
+                                    <span class=" font-medium">Priority</span>
+                                </label>
+                                <input type="number"
+                                       class="input w-full"
+                                       data-field="priority"
+                                       placeholder="0"
+                                       value="0">
+                                <span class="text-sm opacity-70">Lower numbers are tried first</span>
+                            </div>
+                            <div>
+                                <label class="label" data-label-for="limit">
+                                    <span class=" font-medium">Torrent List Limit</span>
+                                </label>
+                                <input type="number"
+                                       class="input w-full"
+                                       min="0"
+                                       data-field="limit"
+                                       placeholder="0">
+                                <span class="text-sm opacity-70">Real-Debrid only: most torrents to list from the account. Leave 0 on other providers: a listing that reaches the limit is treated as cut off, so removed torrents are not dropped</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <div>
+                        <label class="label" data-label-for="torrents_refresh_interval">
+                            <span class=" font-medium">Torrents Refresh Interval</span>
+                        </label>
+                        <input type="text"
+                               class="input webdav-field"
+                               data-field="torrents_refresh_interval"
+                               placeholder="10m"
+                               value="10m">
+                        <span class="text-sm opacity-70">How often to refresh torrents list</span>
+                    </div>
+                    <div>
+                        <label class="label" data-label-for="download_links_refresh_interval">
+                            <span class=" font-medium">Links Refresh Interval</span>
+                        </label>
+                        <input type="text"
+                               class="input webdav-field"
+                               data-field="download_links_refresh_interval"
+                               placeholder="40m"
+                               value="40m">
+                        <span class="text-sm opacity-70">How often to refresh download links</span>
+                    </div>
+                    <div>
+                        <label class="label" data-label-for="auto_expire_links_after">
+                            <span class=" font-medium">Links Expiry</span>
+                        </label>
+                        <input type="text"
+                               class="input webdav-field"
+                               data-field="auto_expire_links_after"
+                               placeholder="3d"
+                               value="3d">
+                        <span class="text-sm opacity-70">Automatically expire links after this duration</span>
+                    </div>
+                </div>
+                <div class="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    <div>
+                        <label class="label cursor-pointer justify-start gap-2">
+                            <input type="checkbox"
+                                   class="checkbox checkbox-primary"
+                                   data-field="download_uncached">
+                            <div>
+                                <span class="font-medium">Download Uncached</span>
+                                <div class="label-text-alt">Download uncached files</div>
+                            </div>
+                        </label>
+                    </div>
+                    <div>
+                        <label class="label cursor-pointer justify-start gap-2">
+                            <input type="checkbox"
+                                   class="checkbox checkbox-primary"
+                                   data-field="add_samples">
+                            <div>
+                                <span class=" font-medium">Add Samples</span>
+                                <div class="label-text-alt">Include sample files</div>
+                            </div>
+                        </label>
+                    </div>
+                    <div>
+                        <label class="label cursor-pointer justify-start gap-2">
+                            <input type="checkbox"
+                                   class="checkbox checkbox-primary"
+                                   data-field="unpack_rar">
+                            <div>
+                                <span class="font-medium">Unpack RAR</span>
+                                <div class="label-text-alt">Preprocess RAR files</div>
+                            </div>
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </template>
+    <template id="config-arr">
+        <div class="card bg-base-100 border border-base-300 shadow-sm arr-config">
+            <div class="card-body p-4 gap-4">
+                <div class="flex items-start justify-between gap-3">
+                    <h3 class="card-title text-base leading-tight min-w-0">
+                        <i class="bi bi-collection text-warning shrink-0"></i>
+                        <span class="min-w-0 break-words" data-card-title></span>
+                        <span class="badge badge-info badge-sm shrink-0" data-auto-badge>Auto-detected</span>
+                    </h3>
+                    <button type="button"
+                            class="btn btn-error btn-sm btn-square shrink-0"
+                            data-action="remove-arr">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                </div>
+                <input type="hidden" data-field="source" value="">
+                <div class="grid grid-cols-1 gap-3">
+                    <div>
+                        <label class="label" data-label-for="name">
+                            <span class="font-medium">Service Name</span>
+                        </label>
+                        <input type="text"
+                               class="input"
+                               data-field="name"
+                               required
+                               placeholder="sonarr, radarr, etc.">
+                    </div>
+                    <div>
+                        <label class="label" data-label-for="host">
+                            <span class="font-medium">Host URL</span>
+                        </label>
+                        <input type="url"
+                               class="input"
+                               data-field="host"
+                               required
+                               placeholder="http://localhost:8989">
+                    </div>
+                    <div>
+                        <label class="label" data-label-for="token">
+                            <span class="font-medium">API Token</span>
+                        </label>
+                        <div class="password-toggle-container">
+                            <input type="password"
+                                   class="input input-has-toggle"
+                                   data-field="token"
+                                   required>
+                            <button type="button" class="password-toggle-btn">
+                                <i class="bi bi-eye" data-icon-for="token"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="label" data-label-for="selected_debrid">
+                            <span class="font-medium">Preferred Provider(debrid)</span>
+                        </label>
+                        <select class="select w-full" data-field="selected_debrid"></select>
+                        <span class="text-sm opacity-70">Which debrid service this Arr should prefer</span>
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    <div class="rounded-box bg-base-200/50 px-3 py-2">
+                        <label class="label cursor-pointer justify-start gap-2 p-0">
+                            <input type="checkbox"
+                                   class="checkbox checkbox-sm checkbox-primary"
+                                   data-field="skip_repair">
+                            <span class="text-sm leading-tight">Skip Repair</span>
+                        </label>
+                    </div>
+                    <div class="rounded-box bg-base-200/50 px-3 py-2">
+                        <label class="label cursor-pointer justify-start gap-2 p-0"
+                               title="This arr calls /webhooks/arr/{name} on import, so imports are handled at once instead of on the next poll">
+                            <input type="checkbox"
+                                   class="checkbox checkbox-sm checkbox-primary"
+                                   data-field="import_webhook">
+                            <span class="text-sm leading-tight">Import Webhook</span>
+                        </label>
+                    </div>
+                    <div class="rounded-box bg-base-200/50 px-3 py-2">
+                        <label class="label p-0 pb-1" data-label-for="download_uncached">
+                            <span class="text-sm leading-tight">Uncached Torrents</span>
+                        </label>
+                        <select class="select select-sm w-full" data-field="download_uncached">
+                            <option value="">Inherit provider setting</option>
+                            <option value="true">Allow for this Arr</option>
+                            <option value="false">Require cached for this Arr</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </template>
+    <template id="config-usenet-provider">
+        <div class="card bg-base-200 border border-base-300 usenet-provider">
+            <div class="card-body">
+                <div class="mb-4 flex items-start justify-between gap-3">
+                    <h4 class="font-bold text-lg">
+                        <i class="bi bi-server mr-2"></i>
+                        <span data-card-title></span>
+                    </h4>
+                    <button type="button"
+                            class="btn btn-error btn-sm"
+                            data-action="remove-provider">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                </div>
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <div>
+                        <label class="label" data-label-for="host">
+                            <span class="font-medium">Server Host</span>
+                        </label>
+                        <input type="text"
+                               class="input w-full"
+                               data-field="host"
+                               placeholder="news.usenetexpress.com"
+                               required>
+                        <span class="text-sm opacity-70">NNTP server hostname</span>
+                    </div>
+                    <div>
+                        <label class="label" data-label-for="username">
+                            <span class="font-medium">Username</span>
+                        </label>
+                        <input type="text"
+                               class="input w-full"
+                               data-field="username"
+                               autocomplete="off">
+                        <span class="text-sm opacity-70">NNTP username</span>
+                    </div>
+                    <div>
+                        <label class="label" data-label-for="password">
+                            <span class="font-medium">Password</span>
+                        </label>
+                        <div class="password-toggle-container">
+                            <input type="password"
+                                   class="input input-has-toggle"
+                                   data-field="password"
+                                   autocomplete="new-password">
+                            <button type="button" class="password-toggle-btn">
+                                <i class="bi bi-eye" data-icon-for="password"></i>
+                            </button>
+                        </div>
+                        <span class="text-sm opacity-70">NNTP password</span>
+                    </div>
+                    <div>
+                        <label class="label" data-label-for="port">
+                            <span class="font-medium">Port</span>
+                        </label>
+                        <input type="number"
+                               class="input w-full"
+                               data-field="port"
+                               placeholder="119"
+                               min="1"
+                               max="65535"
+                               value="119">
+                        <span class="text-sm opacity-70">NNTP port (563 for SSL, 119 for plain)</span>
+                    </div>
+                    <div>
+                        <label class="label" data-label-for="backbone">
+                            <span class="font-medium">Backbone</span>
+                        </label>
+                        <input type="text"
+                               class="input w-full"
+                               data-field="backbone"
+                               placeholder="Omicron">
+                        <span class="text-sm opacity-70">Optional shared article backbone for smarter 430 failover</span>
+                    </div>
+                    <div>
+                        <label class="label" data-label-for="tls_server_name">
+                            <span class="font-medium">TLS Server Name</span>
+                        </label>
+                        <input type="text" class="input w-full" data-field="tls_server_name">
+                        <span class="text-sm opacity-70">Certificate name to verify when it differs from the host (resellers). Empty means the host</span>
+                    </div>
+                    <div>
+                        <label class="label" data-label-for="max_connections">
+                            <span class="font-medium">Max Connections</span>
+                        </label>
+                        <input type="number" class="input w-full" data-field="max_connections">
+                        <span class="text-sm opacity-70">Max connections for this provider</span>
+                    </div>
+                    <div>
+                        <label class="label" data-label-for="priority">
+                            <span class="font-medium">Priority</span>
+                        </label>
+                        <input type="number" class="input w-full" data-field="priority">
+                        <span class="text-sm opacity-70">Priority for this provider (lower number = higher priority)</span>
+                    </div>
+                </div>
+                <div class="flex flex-wrap gap-4 mt-4">
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox"
+                               class="checkbox checkbox-primary checkbox-sm"
+                               data-field="ssl">
+                        <span class="text-sm">Use SSL</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer"
+                           title="Only used when every non-backup provider is excluded (article not found, connection errors). Not used just because primary pools are busy — requests wait for a primary slot instead. Use this for block providers you only want to bill for completion.">
+                        <input type="checkbox"
+                               class="checkbox checkbox-warning checkbox-sm"
+                               data-field="backup">
+                        <span class="text-sm">Backup provider (fallback only)</span>
+                    </label>
+                </div>
+            </div>
+        </div>
+    </template>
+    <template id="config-repair-arr">
+        <label class="flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2 hover:bg-base-200">
+            <input class="checkbox checkbox-primary checkbox-sm"
+                   type="checkbox"
+                   name="repair.arrs[]">
+            <span class="min-w-0 truncate text-sm" data-arr-name></span>
+        </label>
+    </template>
+    <template id="config-repair-arrs-empty">
+        <p class="px-3 py-2 text-sm opacity-60">No eligible Arrs configured.</p>
+    </template>
+    <template id="config-queue-catalog-row">
+        <div class="grid grid-cols-1 md:grid-cols-5 gap-2 md:items-center px-3 py-3 even:bg-base-200/40">
+            <span class="md:col-span-3 text-sm leading-snug min-w-0" data-rule-label></span>
+            <select class="md:col-span-2 select select-sm w-full queue-cleanup-action">
+                <option value="">Ignore (leave in queue)</option>
+                <option value="import">Force import</option>
+                <option value="blacklist">Blacklist only</option>
+                <option value="blacklist_research">Blacklist + research</option>
+            </select>
+        </div>
+    </template>
+    <template id="config-queue-custom-row">
+        <div class="grid grid-cols-1 md:grid-cols-12 gap-2 queue-cleanup-custom-row">
+            <input type="text"
+                   class="md:col-span-7 input input-sm w-full min-w-0 queue-cleanup-match"
+                   placeholder="text in status message, e.g. stalled">
+            <select class="md:col-span-4 select select-sm w-full queue-cleanup-action">
+                <option value="">Ignore (leave in queue)</option>
+                <option value="import">Force import</option>
+                <option value="blacklist">Blacklist only</option>
+                <option value="blacklist_research">Blacklist + research</option>
+            </select>
+            <button type="button"
+                    class="md:col-span-1 btn btn-sm btn-square btn-ghost text-error queue-cleanup-remove"
+                    aria-label="Remove custom queue cleanup rule"
+                    title="Remove rule"
+                    data-action="remove-rule">
+                <i class="bi bi-trash"></i>
+            </button>
+        </div>
+    </template>
+    <template id="config-prune-empty">
+        <p class="text-sm opacity-70">No run since decypharr started.</p>
+    </template>
+    <template id="config-prune-report">
+        <p class="text-sm" data-prune-started></p>
+        <div class="alert alert-warning text-sm mt-2" data-prune-aborted></div>
+        <dl class="grid grid-cols-2 sm:grid-cols-5 gap-2 text-sm mt-2"
+            data-prune-counts>
+        </dl>
+        <div class="overflow-x-auto mt-2" data-prune-table>
+            <table class="table table-sm">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Provider</th>
+                        <th>Size</th>
+                        <th>Unreferenced since</th>
+                        <th>Eligible at</th>
+                    </tr>
+                </thead>
+                <tbody data-prune-rows>
+                </tbody>
+            </table>
+        </div>
+        <p class="text-sm opacity-70 mt-2" data-prune-more></p>
+    </template>
+    <template id="config-prune-count">
+        <div>
+            <dt class="opacity-70"></dt>
+            <dd class="font-medium">
+            </dd>
+        </div>
+    </template>
+    <template id="config-prune-row">
+        <table>
+            <tbody>
+                <tr>
+                    <td class="break-all"></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                </tr>
+            </tbody>
+        </table>
+    </template>
+    <template id="config-vf-folder">
+        <article class="card bg-base-100 shadow-sm border border-base-300"
+                 data-virtual-folder
+                 data-vf-labelledby="title">
+            <div class="card-body p-4 sm:p-6 gap-5">
+                <div class="flex items-start justify-between gap-4">
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-info">Filtered library view</p>
+                        <h4 class="mt-1 text-lg font-semibold" data-vf-title data-vf-id="title"></h4>
+                    </div>
+                    <button type="button"
+                            class="btn btn-ghost btn-sm btn-square"
+                            title="Remove virtual folder"
+                            data-action="remove-folder">
+                        <i class="bi bi-x-lg" aria-hidden="true"></i>
+                    </button>
+                </div>
+                <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                    <div>
+                        <label class="label" data-vf-for="name">
+                            <span class="label-text font-medium">Folder name</span>
+                        </label>
+                        <input type="text"
+                               class="input input-bordered w-full"
+                               data-vf-name
+                               data-vf-id="name"
+                               data-vf-describedby="name_help"
+                               placeholder="e.g., 4K Movies"
+                               aria-required="true"
+                               autocomplete="off">
+                        <p class="mt-1 text-xs text-base-content/65" data-vf-id="name_help">
+                            Appears at the top level of Browse, mounts, and shares.
+                        </p>
+                    </div>
+                    <div>
+                        <label class="label" data-vf-for="match">
+                            <span class="label-text font-medium">An item should match</span>
+                        </label>
+                        <select class="select select-bordered w-full"
+                                data-vf-match
+                                data-vf-id="match">
+                            <option value="all">All conditions</option>
+                            <option value="any">Any condition</option>
+                        </select>
+                        <p class="mt-1 text-xs text-base-content/65">This choice is explicit—there are no hidden combinations.</p>
+                    </div>
+                </div>
+                <label class="label cursor-pointer justify-start gap-3 rounded-box bg-base-200 px-4 py-3">
+                    <input type="checkbox"
+                           class="checkbox checkbox-sm checkbox-info"
+                           data-vf-include-bad>
+                    <span><span class="font-medium">Include unhealthy items</span><span class="block text-xs text-base-content/65">Off by default so broken or unavailable entries stay out of this view.</span></span>
+                </label>
+                <fieldset class="space-y-3">
+                    <legend class="sr-only"></legend>
+                    <div class="rounded-box bg-base-200/70 p-4">
+                        <p class="text-sm font-semibold" data-vf-id="samples_label">Quick examples</p>
+                        <p class="mt-1 text-xs text-base-content/65" data-vf-id="samples_help">
+                            Choose one to fill an unused condition or add a new editable condition.
+                        </p>
+                        <div class="mt-3 flex flex-wrap gap-2"
+                             role="group"
+                             data-vf-samples
+                             data-vf-labelledby="samples_label"
+                             data-vf-describedby="samples_help"></div>
+                    </div>
+                    <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                            <p class="font-semibold" aria-hidden="true">Conditions</p>
+                            <p class="text-xs text-base-content/65">Text matching ignores capitalization unless you opt in per condition.</p>
+                        </div>
+                        <button type="button"
+                                class="btn btn-sm btn-outline btn-info"
+                                data-action="add-condition">
+                            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add condition
+                        </button>
+                    </div>
+                    <div class="space-y-3" data-vf-conditions data-vf-id="conditions"></div>
+                </fieldset>
+                <div class="flex flex-col gap-3 border-t border-base-300 pt-4 sm:flex-row sm:items-center sm:justify-between">
+                    <p class="text-xs text-base-content/65">
+                        <i class="bi bi-shield-check mr-1" aria-hidden="true"></i>Removing this folder removes only the view, never the media.
+                    </p>
+                    <button type="button"
+                            class="btn btn-sm btn-secondary"
+                            data-vf-preview-button
+                            data-action="preview">
+                        <i class="bi bi-eye" aria-hidden="true"></i> Preview matches
+                    </button>
+                </div>
+                <div class="hidden rounded-box bg-base-200 p-4 text-sm"
+                     data-vf-preview-result
+                     role="status"
+                     aria-live="polite"></div>
+            </div>
+        </article>
+    </template>
+    <template id="config-vf-condition">
+        <div class="rounded-box border border-base-300 bg-base-100 p-4"
+             data-vf-condition>
+            <div class="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto] lg:items-end">
+                <div>
+                    <label class="label py-1" data-vf-for="field">
+                        <span class="label-text font-medium">What to check</span>
+                    </label>
+                    <select class="select select-bordered w-full" data-vf-field></select>
+                </div>
+                <div>
+                    <label class="label py-1" data-vf-for="operator">
+                        <span class="label-text font-medium">Rule</span>
+                    </label>
+                    <select class="select select-bordered w-full" data-vf-operator></select>
+                </div>
+                <div data-vf-value-slot>
+                    <label class="label py-1" data-vf-for="value">
+                        <span class="label-text font-medium">Value</span>
+                    </label>
+                </div>
+                <button type="button"
+                        class="btn btn-ghost btn-square text-error"
+                        aria-label="Remove this condition"
+                        title="Remove condition"
+                        data-action="remove-condition">
+                    <i class="bi bi-trash" aria-hidden="true"></i>
+                </button>
+            </div>
+            <div class="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <p class="text-xs text-base-content/65" data-vf-field-help></p>
+                <label class="label cursor-pointer justify-start gap-2 p-0 text-xs"
+                       data-vf-case-wrap>
+                    <input type="checkbox" class="checkbox checkbox-xs" data-vf-case>
+                    Match capitalization exactly
+                </label>
+            </div>
+        </div>
+    </template>
+    <template id="config-vf-value-select">
+        <select class="select select-bordered w-full vf-condition-value"
+                data-vf-value
+                aria-required="true"></select>
+    </template>
+    <template id="config-vf-value-input">
+        <input class="input input-bordered w-full vf-condition-value"
+               data-vf-value
+               aria-required="true"
+               autocomplete="off">
+    </template>
+    <template id="config-vf-sample">
+        <button type="button"
+                class="btn btn-sm btn-outline bg-base-100"
+                data-action="apply-sample"></button>
+    </template>
+    <template id="config-vf-empty">
+        <div class="rounded-box border border-dashed border-base-300 bg-base-100 p-8 text-center"
+             data-vf-empty-state>
+            <i class="bi bi-folder-plus text-3xl text-base-content/40"
+               aria-hidden="true"></i>
+            <p class="mt-3 font-medium">No virtual folders yet</p>
+            <p class="mt-1 text-sm text-base-content/65">
+                Add one to create a focused view such as 4K, Recently Added, or a provider-specific library.
+            </p>
+        </div>
+    </template>
+    <template id="config-vf-no-conditions">
+        <div class="rounded-box border border-dashed border-base-300 p-4 text-sm text-base-content/70"
+             data-vf-no-conditions>No conditions yet. This view will show every healthy item.</div>
+    </template>
+    <template id="config-vf-error">
+        <li></li>
+    </template>
+    <template id="config-vf-preview-errors">
+        <p class="font-medium text-error">Fix this folder before previewing:</p>
+        <ul class="mt-2 list-disc pl-5">
+        </ul>
+    </template>
+    <template id="config-vf-preview-matches">
+        <p class="font-semibold" data-total></p>
+        <p class="mt-1 text-xs text-base-content/65" data-examples>A few examples:</p>
+        <ul class="mt-2 space-y-1" data-samples>
+        </ul>
+        <p class="mt-1 text-base-content/65" data-none>No current item matches these conditions.</p>
+    </template>
+    <template id="config-vf-preview-item">
+        <li class="flex flex-wrap justify-between gap-2">
+            <span data-name></span><span class="text-xs text-base-content/60" data-meta></span>
+        </li>
+    </template>
+    <template id="config-vf-preview-failed">
+        <p class="text-error"></p>
+    </template>
+{{ end }}

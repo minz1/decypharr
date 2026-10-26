@@ -8,7 +8,6 @@ declare module "vitest" {
     configSample: unknown;
     configExclusions: unknown;
     configResponses: Record<string, unknown>;
-    legacyConfigModule: string;
   }
 }
 

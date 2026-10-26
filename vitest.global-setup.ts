@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 
 import type { TestProject } from "vitest/node";
@@ -73,20 +73,10 @@ const provideConfigSample = (provide: TestProject["provide"]): void => {
   });
 };
 
-const provideLegacyConfig = (provide: TestProject["provide"]): void => {
-  const dir = path.resolve("node_modules/.cache/decypharr");
-  mkdirSync(dir, { recursive: true });
-  const module = path.join(dir, "legacy-config.mjs");
-  const source = readFileSync("pkg/server/assets/js/config.js", "utf8");
-  writeFileSync(module, `${source}\nexport { ConfigManager };\n`);
-  provide("legacyConfigModule", module);
-};
-
 const setup: GlobalSetup = ({ provide }) => {
   provideFixtures(provide);
   provideIcons(provide);
   provideConfigSample(provide);
-  provideLegacyConfig(provide);
 };
 
 export { setup };
