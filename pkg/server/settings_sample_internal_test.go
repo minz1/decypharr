@@ -109,6 +109,7 @@ func sampleChoices() map[string]any {
 		"mount.type":                              "rclone",
 		"mount.rclone.log_level":                  "ERROR",
 		"mount.rclone.vfs_cache_mode":             "full",
+		"mount.rclone.async_read":                 false,
 		"repair.source":                           "managed",
 		"repair.strategy":                         "per_file",
 		"prune.mode":                              "delete",
