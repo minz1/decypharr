@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { pageItems, showingText } from "#ui/lib/pagination";
+import { pageItems, showingText } from "#ui/lib/common/pagination";
 
 const summary = (current: number, totalPages: number): string[] =>
   pageItems(current, totalPages).map((item) => {

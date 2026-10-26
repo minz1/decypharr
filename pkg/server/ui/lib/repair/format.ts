@@ -1,3 +1,4 @@
+import { pageItems } from "#ui/lib/common/pagination";
 import type { BrokenFile, EntryHealth, PageButton } from "#ui/lib/repair/types";
 
 const HEALTH_COLORS: Readonly<Record<string, string>> = {
@@ -20,8 +21,6 @@ const KIBI = 1024;
 const WHOLE_SIZE_FROM = 10;
 const MS_PER_SECOND = 1000;
 const SECONDS_PER_MINUTE = 60;
-const PAGE_WINDOW = 2;
-const GAP_DISTANCE = 3;
 
 const lookup = (table: Readonly<Record<string, string>>, key: string, fallback: string): string =>
   Object.hasOwn(table, key) ? (table[key] ?? fallback) : fallback;
@@ -90,23 +89,15 @@ const pageCount = (items: number, pageSize: number): number => Math.max(1, Math.
 const clampPage = (page: number, items: number, pageSize: number): number =>
   Math.max(1, Math.min(page, pageCount(items, pageSize)));
 
-const numberButton = (number: number, page: number, totalPages: number): PageButton | undefined => {
-  if (number === 1 || number === totalPages || Math.abs(number - page) <= PAGE_WINDOW) {
-    return { label: String(number), target: number, active: number === page, disabled: false };
-  }
-  if (Math.abs(number - page) === GAP_DISTANCE) {
-    return { label: "…", target: undefined, active: false, disabled: true };
-  }
-  return undefined;
-};
+const ARROW_LABELS: Readonly<Record<string, string>> = { previous: "«", next: "»", gap: "…" };
 
-const pageButtons = (page: number, totalPages: number): PageButton[] => [
-  { label: "«", target: page - 1, active: false, disabled: page === 1 },
-  ...Array.from({ length: totalPages }, (_unused, index) => numberButton(index + 1, page, totalPages)).filter(
-    (button) => button !== undefined,
-  ),
-  { label: "»", target: page + 1, active: false, disabled: page === totalPages },
-];
+const pageButtons = (page: number, totalPages: number): PageButton[] =>
+  pageItems(page, totalPages).map(({ kind, page: target, active, disabled }) => ({
+    label: ARROW_LABELS[kind] ?? String(target),
+    target: kind === "gap" ? undefined : target,
+    active,
+    disabled,
+  }));
 
 export {
   brokenFileIds,

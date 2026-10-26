@@ -1,3 +1,4 @@
+import { pageItems } from "#ui/lib/common/pagination";
 import type { Binding, Job, JobsPage, PageControl, StatusMeta } from "#ui/lib/reacquire/types";
 
 const ACTIVE = new Set(["queued", "resolving", "invalidating", "blocklisting", "searching"]);
@@ -33,7 +34,6 @@ const SECONDS_PER_MINUTE = 60;
 const SECONDS_PER_HOUR = 3600;
 const SECONDS_PER_DAY = 86_400;
 const EARLIEST_YEAR = 2000;
-const PAGE_WINDOW = 2;
 const DEFAULT_PAGE_SIZE = 10;
 
 const isTerminal = (status: string): boolean => TERMINAL.has(status);
@@ -111,29 +111,13 @@ const jobsPage = (filtered: readonly Job[], page: number, pageSize: number): Job
   return { jobs: filtered.slice(offset, offset + pageSize), total: filtered.length, totalPages, offset, page: current };
 };
 
-const pageNumbers = (page: number, totalPages: number): number[] => {
-  const numbers = new Set([1, totalPages]);
-  for (let number = page - PAGE_WINDOW; number <= page + PAGE_WINDOW; number += 1) {
-    if (number > 0 && number <= totalPages) {
-      numbers.add(number);
-    }
-  }
-  return [...numbers].toSorted((left, right) => left - right);
-};
-
-const pageControls = (page: number, totalPages: number): PageControl[] => {
-  const controls: PageControl[] = [{ kind: "previous", page: page - 1, current: false, disabled: page === 1 }];
-  let previous = 0;
-  for (const number of pageNumbers(page, totalPages)) {
-    if (previous > 0 && number > previous + 1) {
-      controls.push({ kind: "gap", page: 0, current: false, disabled: true });
-    }
-    controls.push({ kind: "page", page: number, current: number === page, disabled: false });
-    previous = number;
-  }
-  controls.push({ kind: "next", page: page + 1, current: false, disabled: page === totalPages });
-  return controls;
-};
+const pageControls = (page: number, totalPages: number): PageControl[] =>
+  pageItems(page, totalPages).map(({ kind, page: target, active, disabled }) => ({
+    kind,
+    page: kind === "gap" ? 0 : target,
+    current: active,
+    disabled,
+  }));
 
 const bindingMedia = (binding: Binding): string =>
   binding.movieId === 0

@@ -10,8 +10,8 @@ import {
 import type { BrowseRefs, BrowseState, Entry, Health } from "#ui/lib/browse/types";
 import { cloneTemplate } from "#ui/lib/common/dom";
 import { formatBytes } from "#ui/lib/common/format";
+import { pageItems, renderPageItems, showingText } from "#ui/lib/common/pagination";
 import { joinURL, readURLBase } from "#ui/lib/common/url";
-import { pageItems, renderPageItems, showingText } from "#ui/lib/pagination";
 
 const field = (root: ParentNode, name: string): HTMLElement => {
   const found = root.querySelector(`[data-field="${name}"]`);

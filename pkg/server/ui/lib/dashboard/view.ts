@@ -1,8 +1,8 @@
 import { cloneTemplate } from "#ui/lib/common/dom";
 import { formatBytes } from "#ui/lib/common/format";
+import { pageItems, renderPageItems, showingText } from "#ui/lib/common/pagination";
 import { progressColor, progressPercent, protocolBadge, stateBadge, torrentSpeed } from "#ui/lib/dashboard/model";
 import type { DashboardRefs, DashboardState, Torrent } from "#ui/lib/dashboard/types";
-import { pageItems, renderPageItems, showingText } from "#ui/lib/pagination";
 
 const HASH_PREFIX = 8;
 
