@@ -15,6 +15,7 @@
             <div class="card-body">
                 <form id="downloadForm"
                       enctype="multipart/form-data"
+                      data-download-folder="{{ .DownloadFolder }}"
                       class="min-w-0 space-y-6">
                     <div class="flex flex-col gap-4">
                         <div class="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-stretch">
@@ -162,10 +163,5 @@
             </div>
         </div>
     </div>
-    <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        let downloadFolder = "{{ .DownloadFolder }}" || '';
-        window.downloadManager = new DownloadManager(downloadFolder);
-    });
-    </script>
+    {{ template "vite" (viteEntry "pkg/server/ui/pages/download.ts") }}
 {{ end }}

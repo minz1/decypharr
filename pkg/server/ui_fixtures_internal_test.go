@@ -64,6 +64,12 @@ func renderFixtures(t *testing.T, urlBase string) map[string]string {
 	} {
 		render(page)
 	}
+	update(t, store, func(cfg *config.Config) error {
+		cfg.Debrids = append(cfg.Debrids, config.Debrid{Provider: "torbox", Name: "torbox", APIKey: "key"})
+		cfg.AlwaysRmTrackerUrls = true
+		return nil
+	})
+	render(fixturePage{"download-options", func(s *Server) http.HandlerFunc { return s.DownloadHandler }})
 	return pages
 }
 
