@@ -10,11 +10,13 @@ import { textItem } from "#ui/lib/config/vf-preview";
 
 interface PageState {
   loaded: boolean;
+  saving: boolean;
 }
 
 interface SaveDeps {
   state: PageState;
   overlay: HTMLElement;
+  button: HTMLButtonElement;
   confirm: (message: string) => boolean;
   reload: () => void;
 }
@@ -124,17 +126,37 @@ const submitSettings = async (doc: Document, deps: SaveDeps): Promise<void> => {
   reportSaved(await readSaveResult(response), deps);
 };
 
-const saveConfiguration = async (doc: Document, deps: SaveDeps): Promise<void> => {
-  if (!deps.state.loaded) {
-    createToast("Settings didn't load. Reload the page before saving.", "error");
-    return;
-  }
+const saveLoaded = async (doc: Document, deps: SaveDeps): Promise<void> => {
   deps.overlay.classList.remove("hidden");
   try {
     await submitSettings(doc, deps);
   } catch (error) {
     createToast(`Error saving configuration: ${describe(error)}`, "error");
     deps.overlay.classList.add("hidden");
+  }
+};
+
+const setSaving = (deps: SaveDeps, saving: boolean): void => {
+  deps.state.saving = saving;
+  deps.button.disabled = saving;
+};
+
+const saveOnce = async (doc: Document, deps: SaveDeps): Promise<void> => {
+  setSaving(deps, true);
+  try {
+    await saveLoaded(doc, deps);
+  } finally {
+    setSaving(deps, false);
+  }
+};
+
+const saveConfiguration = async (doc: Document, deps: SaveDeps): Promise<void> => {
+  if (!deps.state.loaded) {
+    createToast("Settings didn't load. Reload the page before saving.", "error");
+    return;
+  }
+  if (!deps.state.saving) {
+    await saveOnce(doc, deps);
   }
 };
 

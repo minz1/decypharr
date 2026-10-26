@@ -173,6 +173,18 @@ describe("saving prune in delete mode", () => {
 });
 
 describe("the review focus cases", () => {
+  it("posts once when save is submitted twice", async () => {
+    const { requests } = await bootSettings();
+    await settingsLoaded();
+    submitSettings();
+    submitSettings();
+    await waitForToast("alert-success Configuration saved and applied.");
+    expect({
+      posts: posts(requests, "api/config").length,
+      enabled: !find('#configForm button[type="submit"]', HTMLButtonElement).disabled,
+    }).toStrictEqual({ posts: 1, enabled: true });
+  });
+
   it("renders user-controlled names as text", async () => {
     await bootSettings({ routes: { "GET api/config": serving(hostileConfig) } });
     await settingsLoaded();

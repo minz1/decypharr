@@ -6,18 +6,24 @@ import { loadConfiguration, saveConfiguration, warnIncomplete } from "#ui/lib/co
 import { regenerateStrm } from "#ui/lib/config/strm";
 import { bindTabs } from "#ui/lib/config/tabs";
 
-const state = { loaded: false };
+const state = { loaded: false, saving: false };
 
 // The page keeps the browser's confirmation dialogs; lib code receives them as a dependency.
 const confirmWithUser = globalThis.confirm.bind(globalThis);
 
 const bindSave = (): void => {
   const overlay = byId("loadingOverlay", HTMLElement);
-  byId("configForm", HTMLFormElement).addEventListener("submit", (event) => {
+  const form = byId("configForm", HTMLFormElement);
+  const button = form.querySelector('button[type="submit"]');
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new TypeError('missing #configForm button[type="submit"]');
+  }
+  form.addEventListener("submit", (event) => {
     event.preventDefault();
     void saveConfiguration(document, {
       state,
       overlay,
+      button,
       confirm: confirmWithUser,
       reload: () => {
         globalThis.location.reload();
