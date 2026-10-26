@@ -110,7 +110,9 @@ func TestNoSuppressions(t *testing.T) {
 
 // hasInlineScript reports a <script> that carries code (no src, not a data block), an on* handler or a javascript: URL.
 func hasInlineScript(html string) bool {
-	handler := regexp.MustCompile(`(?is)<[a-z][^>]*\s(on[a-z]+\s*=|href\s*=\s*["']?\s*javascript:)`)
+	handler := regexp.MustCompile(
+		`(?is)<[a-z][^>]*\s(on[a-z]+\s*=|(?:href|src|action|formaction)\s*=\s*["']?\s*javascript:)`,
+	)
 	if handler.MatchString(html) {
 		return true
 	}
@@ -140,6 +142,9 @@ func TestHasInlineScript(t *testing.T) {
 		`<script type="text/javascript" data-type="application/json">x()</script>`: true,
 		`<button class="btn" onclick="x()">Go</button>`:                            true,
 		`<a href="javascript:x()">Go</a>`:                                          true,
+		`<iframe src="javascript:x()"></iframe>`:                                   true,
+		`<form action=" javascript:x()"></form>`:                                   true,
+		`<button formaction='javascript:x()'>Go</button>`:                          true,
 		`<script src="a.js"></script>`:                                             false,
 		`<script type="application/json">{"a":1}</script>`:                         false,
 		`<script type="speculationrules">{}</script>`:                              false,
