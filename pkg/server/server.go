@@ -67,6 +67,7 @@ func parseTemplates(funcs template.FuncMap) *template.Template {
 		"templates/login.html",
 		"templates/register.html",
 		"templates/setup.html",
+		"templates/theme_script.html",
 	))
 	return template.Must(t.Parse(viteTagsTemplate))
 }

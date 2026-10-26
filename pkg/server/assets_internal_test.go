@@ -91,7 +91,7 @@ func TestPageReferencesVersionedAssets(t *testing.T) {
 		t.Fatal(err)
 	}
 	page := string(body)
-	if !strings.Contains(page, "assets/js/common.js?v="+version) {
+	if !strings.Contains(page, "images/favicon/favicon-32x32.png?v="+version) {
 		t.Fatalf("page does not reference versioned assets:\n%s", page)
 	}
 	if strings.Contains(strings.ToLower(page), "jquery") {

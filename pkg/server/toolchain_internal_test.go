@@ -154,6 +154,66 @@ func TestHasInlineScript(t *testing.T) {
 
 const jsAllowlist = "pkg/server/ui/js-allowlist.txt"
 
+func TestThemeScriptStaysStatic(t *testing.T) {
+	t.Parallel()
+	const rel = "pkg/server/templates/theme_script.html"
+	src, err := os.ReadFile(filepath.Join(repoRoot, rel))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if problem := themeScriptProblem(string(src)); problem != "" {
+		t.Errorf("%s: %s; it runs before first paint, so it holds the theme logic and nothing else", rel, problem)
+	}
+	if listed, _ := readJSAllowlist(t); !slices.Contains(listed, rel) {
+		t.Errorf("%s is not in %s", rel, jsAllowlist)
+	}
+}
+
+// themeScriptProblem says why src is not a single static inline script wrapped in its define block, or "".
+func themeScriptProblem(src string) string {
+	body, defined := strings.CutPrefix(strings.TrimSpace(src), `{{ define "theme_script" }}`)
+	body, ended := strings.CutSuffix(body, "{{ end }}")
+	if !defined || !ended {
+		return `it is not one {{ define "theme_script" }} ... {{ end }} block`
+	}
+	if strings.Contains(body, "{{") {
+		return "it holds a template action"
+	}
+	scripts := regexp.MustCompile(`(?is)<script\b`).FindAllStringIndex(body, -1)
+	if len(scripts) != 1 {
+		return fmt.Sprintf("it holds %d <script> elements, want 1", len(scripts))
+	}
+	script := regexp.MustCompile(`(?is)^\s*<script>(.*?)</script\s*>\s*$`).FindStringSubmatch(body)
+	if script == nil || strings.TrimSpace(script[1]) == "" {
+		return "it is not one bare <script> element with code"
+	}
+	if hasInlineScript(strings.Replace(body, script[0], "", 1)) {
+		return "it holds a handler attribute or javascript: URL"
+	}
+	return ""
+}
+
+func TestThemeScriptProblem(t *testing.T) {
+	t.Parallel()
+	wrap := func(body string) string { return "{{ define \"theme_script\" }}\n" + body + "\n{{ end }}\n" }
+	for src, want := range map[string]bool{
+		wrap("<script>theme()</script>"):                          true,
+		wrap("<script>theme()</script>\n<script>more()</script>"): false,
+		wrap(`<script>window.urlBase = "{{.URLBase}}"</script>`):  false,
+		wrap(`<script>theme()</script><div onclick="x()"></div>`): false,
+		wrap(`<script src="a.js"></script>`):                      false,
+		wrap(`<script type="module">theme()</script>`):            false,
+		wrap(""):                              false,
+		"<script>theme()</script>":            false,
+		"<script>theme()</script>\n{{ end }}": false,
+		wrap("<script>theme()</script>") + `{{ define "x" }}{{ end }}`: false,
+	} {
+		if got := themeScriptProblem(src) == ""; got != want {
+			t.Errorf("themeScriptProblem(%q) = %q, want ok = %v", src, themeScriptProblem(src), want)
+		}
+	}
+}
+
 func parseJSAllowlist(raw string) ([]string, []string) {
 	var paths, problems []string
 	line := 0

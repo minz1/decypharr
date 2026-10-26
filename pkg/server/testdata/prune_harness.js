@@ -4,6 +4,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 
+import {formatBytes, formatDuration} from '#ui/lib/common/format';
+import {escapeHtml} from '#ui/lib/common/legacy-bridge';
+
 const [jsDir, htmlPath] = process.argv.slice(2);
 const pageIds = new Set([...fs.readFileSync(htmlPath, 'utf8').matchAll(/\sid="([^"$]+)"/g)].map((m) => m[1]));
 
@@ -22,11 +25,8 @@ const ctx = vm.createContext({
     console, setTimeout, clearTimeout, URLSearchParams, FormData: class {},
     window: stub, document: stub, fetch: stub, navigator: stub, localStorage: stub, CustomEvent: stub,
 });
-for (const file of ['common.js', 'config.js']) {
-    vm.runInContext(fs.readFileSync(path.join(jsDir, file), 'utf8'), ctx, {filename: file});
-}
+vm.runInContext(fs.readFileSync(path.join(jsDir, 'config.js'), 'utf8'), ctx, {filename: 'config.js'});
 const ConfigManager = vm.runInContext('ConfigManager', ctx);
-const DecypharrUtils = vm.runInContext('DecypharrUtils', ctx);
 
 class FakeElement {
     constructor() {
@@ -61,7 +61,7 @@ function page(routes = {}, answers = []) {
         },
         querySelector: () => new FakeElement(),
     };
-    const utils = Object.create(DecypharrUtils.prototype);
+    const utils = {escapeHtml, formatBytes, formatDuration};
     utils.fetcher = async (url, options = {}) => {
         const key = `${options.method || 'GET'} ${url}`;
         requests.push({key, body: options.body});
