@@ -466,3 +466,34 @@ func saveWithoutEdits(t *testing.T, server *Server, store *config.Store, step st
 		t.Errorf("%s: config.json changed on a save with no edits:\nbefore %v\nafter  %v", step, before, after)
 	}
 }
+
+func TestConfigResponseCarriesArrsAndAuth(t *testing.T) {
+	t.Parallel()
+	cfg := config.Config{
+		LogLevel: "debug",
+		UseAuth:  true,
+		Auth:     &config.Auth{Username: "admin", APIToken: "token", TokenOnly: true},
+		Arrs:     []config.Arr{{Name: "stale"}},
+	}
+	body, err := json.Marshal(configResponse(cfg, []config.Arr{{Name: "sonarr", Host: "http://sonarr:8989"}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		LogLevel      string       `json:"log_level"`
+		Arrs          []config.Arr `json:"arrs"`
+		APIToken      string       `json:"api_token"`
+		AuthUsername  string       `json:"auth_username"`
+		AuthTokenOnly bool         `json:"auth_token_only"`
+	}
+	if unmarshalErr := json.Unmarshal(body, &got); unmarshalErr != nil {
+		t.Fatal(unmarshalErr)
+	}
+	if got.LogLevel != "debug" || len(got.Arrs) != 1 || got.Arrs[0].Name != "sonarr" ||
+		got.APIToken != "token" || got.AuthUsername != "admin" || !got.AuthTokenOnly {
+		t.Fatalf("configResponse = %s", body)
+	}
+	if cfg.Arrs[0].Name != "stale" {
+		t.Fatal("configResponse changed the caller's config")
+	}
+}

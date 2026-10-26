@@ -244,33 +244,27 @@ func (s *Server) handleDeleteTorrents(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func (s *Server) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
-	arrStorage := s.manager.Arr()
-	cfg := *s.config.Get()
-	cfg.Arrs = arrStorage.SyncToConfig()
+type configResponseBody struct {
+	*config.Config
 
-	// Create response with API token info
-	type ConfigResponse struct {
-		*config.Config
+	APIToken      string `json:"api_token,omitempty"`
+	AuthUsername  string `json:"auth_username,omitempty"`
+	AuthTokenOnly bool   `json:"auth_token_only"`
+}
 
-		APIToken      string `json:"api_token,omitempty"`
-		AuthUsername  string `json:"auth_username,omitempty"`
-		AuthTokenOnly bool   `json:"auth_token_only"`
-	}
-
-	response := &ConfigResponse{Config: &cfg}
-
-	// AddOrUpdate API token and auth information
-	auth := cfg.GetAuth()
-	if auth != nil {
-		if auth.APIToken != "" {
-			response.APIToken = auth.APIToken
-		}
+func configResponse(cfg config.Config, arrs []config.Arr) configResponseBody {
+	cfg.Arrs = arrs
+	response := configResponseBody{Config: &cfg}
+	if auth := cfg.GetAuth(); auth != nil {
+		response.APIToken = auth.APIToken
 		response.AuthUsername = auth.Username
 		response.AuthTokenOnly = auth.TokenOnly
 	}
+	return response
+}
 
-	utils.JSONResponse(w, response, http.StatusOK)
+func (s *Server) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
+	utils.JSONResponse(w, configResponse(*s.config.Get(), s.manager.Arr().SyncToConfig()), http.StatusOK)
 }
 
 func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
