@@ -25,7 +25,6 @@ stdenvNoCC.mkDerivation (finalAttrs: {
       ../tsconfig.node.json
       ../.oxlintrc.json
       ../.oxfmtrc.json
-      ../scripts/minify-js.js
       ../pkg/server/ui
       ../pkg/server/templates
     ];
