@@ -87,14 +87,10 @@ describe("validating a virtual folder", () => {
       "Condition 3 needs a size such as 700MB or 20GB.",
       "Condition 4 needs a duration such as 12h, 7d, or 2w.",
       "Condition 5 needs a whole number of files.",
-      "Condition 6 contains an invalid regular expression.",
     ]);
   });
 
-  it("checks a pattern with the u flag, so an escaped hyphen outside a class is invalid", () => {
-    expect([validateFolder(episodes), validateFolder(escapedHyphen)]).toStrictEqual([
-      [],
-      ["Condition 1 contains an invalid regular expression."],
-    ]);
+  it("leaves regex syntax to the server, which compiles patterns with Go's engine", () => {
+    expect([validateFolder(episodes), validateFolder(escapedHyphen)]).toStrictEqual([[], []]);
   });
 });

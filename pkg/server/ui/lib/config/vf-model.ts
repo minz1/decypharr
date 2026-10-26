@@ -171,16 +171,6 @@ const refreshedCondition = (current: Condition, previousField: string, providers
   return next;
 };
 
-const REGEX_OPERATORS = new Set(["matches_regex", "not_matches_regex"]);
-
-const isValidRegex = (pattern: string): boolean => {
-  try {
-    return new RegExp(pattern, "u") instanceof RegExp;
-  } catch {
-    return false;
-  }
-};
-
 const conditionErrors = (given: Condition, index: number): string[] => {
   const label = `Condition ${index + 1}`;
   const checks: [boolean, string][] = [
@@ -197,10 +187,6 @@ const conditionErrors = (given: Condition, index: number): string[] => {
     [
       given.field === "file_count" && given.value !== "" && !WHOLE_NUMBER.test(given.value),
       `${label} needs a whole number of files.`,
-    ],
-    [
-      REGEX_OPERATORS.has(given.operator) && given.value !== "" && !isValidRegex(given.value),
-      `${label} contains an invalid regular expression.`,
     ],
   ];
   return checks.filter(([failed]) => failed).map(([, message]) => message);
