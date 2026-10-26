@@ -1,5 +1,6 @@
 {{ define "setup" }}
-    <div class="flex min-h-screen items-center justify-center bg-base-200 p-2 sm:p-4">
+    <div id="setup-wizard"
+         class="flex min-h-screen items-center justify-center bg-base-200 p-2 sm:p-4">
         <div class="card w-full min-w-0 max-w-4xl overflow-hidden bg-base-100 shadow-xl">
             <div class="card-body min-w-0 p-4 sm:p-8">
                 <div class="flex justify-between items-center mb-4">
@@ -80,9 +81,18 @@
                         </div>
                     </form>
                     <div class="mt-6 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                        <button type="button" class="btn btn-ghost w-full" id="token-only-btn">Use API Token Only</button>
-                        <button type="button" class="btn btn-ghost w-full" id="skip-auth-btn">Skip Authentication</button>
-                        <button type="button" class="btn btn-primary w-full" id="auth-next-btn">Next</button>
+                        <button type="button"
+                                class="btn btn-ghost w-full"
+                                id="token-only-btn"
+                                data-action="token-only">Use API Token Only</button>
+                        <button type="button"
+                                class="btn btn-ghost w-full"
+                                id="skip-auth-btn"
+                                data-action="skip-auth">Skip Authentication</button>
+                        <button type="button"
+                                class="btn btn-primary w-full"
+                                id="auth-next-btn"
+                                data-action="auth-next">Next</button>
                     </div>
                 </div>
                 <!-- Step 2: Provider Account -->
@@ -128,14 +138,18 @@
                     <div class="mt-6 flex flex-col gap-2 sm:flex-row sm:justify-between">
                         <button type="button"
                                 class="btn btn-ghost w-full sm:w-auto"
-                                id="debrid-back-btn">Back</button>
+                                id="debrid-back-btn"
+                                data-action="go-to"
+                                data-step="auth">Back</button>
                         <div class="grid grid-cols-2 gap-2 sm:flex">
                             <button type="button"
                                     class="btn btn-ghost w-full sm:w-auto"
-                                    id="skip-debrid-btn">Skip Debrid</button>
+                                    id="skip-debrid-btn"
+                                    data-action="skip-debrid">Skip Debrid</button>
                             <button type="button"
                                     class="btn btn-primary w-full sm:w-auto"
-                                    id="debrid-next-btn">Next</button>
+                                    id="debrid-next-btn"
+                                    data-action="debrid-next">Next</button>
                         </div>
                     </div>
                 </div>
@@ -238,14 +252,18 @@
                     <div class="mt-6 flex flex-col gap-2 sm:flex-row sm:justify-between">
                         <button type="button"
                                 class="btn btn-ghost w-full sm:w-auto"
-                                id="usenet-back-btn">Back</button>
+                                id="usenet-back-btn"
+                                data-action="go-to"
+                                data-step="debrid">Back</button>
                         <div class="grid grid-cols-2 gap-2 sm:flex">
                             <button type="button"
                                     class="btn btn-ghost w-full sm:w-auto"
-                                    id="skip-usenet-btn">Skip Usenet</button>
+                                    id="skip-usenet-btn"
+                                    data-action="skip-usenet">Skip Usenet</button>
                             <button type="button"
                                     class="btn btn-primary w-full sm:w-auto"
-                                    id="usenet-next-btn">Next</button>
+                                    id="usenet-next-btn"
+                                    data-action="usenet-next">Next</button>
                         </div>
                     </div>
                 </div>
@@ -273,8 +291,15 @@
                         </div>
                     </form>
                     <div class="mt-6 grid grid-cols-2 gap-2">
-                        <button type="button" class="btn btn-ghost w-full" id="download-back-btn">Back</button>
-                        <button type="button" class="btn btn-primary w-full" id="download-next-btn">Next</button>
+                        <button type="button"
+                                class="btn btn-ghost w-full"
+                                id="download-back-btn"
+                                data-action="go-to"
+                                data-step="usenet">Back</button>
+                        <button type="button"
+                                class="btn btn-primary w-full"
+                                id="download-next-btn"
+                                data-action="download-next">Next</button>
                     </div>
                 </div>
                 <!-- Step 5: Mount System -->
@@ -296,6 +321,7 @@
                                            value="dfs"
                                            class="radio"
                                            id="mount-type-dfs"
+                                           data-action="mount-type"
                                            checked>
                                     <span class="label-text">DFS (Decypharr File System)</span>
                                 </label>
@@ -304,7 +330,8 @@
                                            name="mount_type"
                                            value="rclone"
                                            class="radio"
-                                           id="mount-type-rclone">
+                                           id="mount-type-rclone"
+                                           data-action="mount-type">
                                     <span class="label-text">Rclone</span>
                                 </label>
                                 <label class="label cursor-pointer gap-2">
@@ -312,7 +339,8 @@
                                            name="mount_type"
                                            value="external_rclone"
                                            class="radio"
-                                           id="mount-type-external">
+                                           id="mount-type-external"
+                                           data-action="mount-type">
                                     <span class="label-text">External Mount</span>
                                 </label>
                                 <label class="label cursor-pointer gap-2">
@@ -320,7 +348,8 @@
                                            name="mount_type"
                                            value="none"
                                            class="radio"
-                                           id="mount-type-none">
+                                           id="mount-type-none"
+                                           data-action="mount-type">
                                     <span class="label-text">No Mount</span>
                                 </label>
                             </div>
@@ -369,8 +398,15 @@
                         </div>
                     </form>
                     <div class="mt-6 grid grid-cols-2 gap-2">
-                        <button type="button" class="btn btn-ghost w-full" id="mount-back-btn">Back</button>
-                        <button type="button" class="btn btn-primary w-full" id="mount-next-btn">Next</button>
+                        <button type="button"
+                                class="btn btn-ghost w-full"
+                                id="mount-back-btn"
+                                data-action="go-to"
+                                data-step="download">Back</button>
+                        <button type="button"
+                                class="btn btn-primary w-full"
+                                id="mount-next-btn"
+                                data-action="mount-next">Next</button>
                     </div>
                 </div>
                 <!-- Step 6: Overview -->
@@ -425,8 +461,15 @@
                         <span>The application will restart after you click finish to apply these changes.</span>
                     </div>
                     <div class="mt-6 grid grid-cols-2 gap-2">
-                        <button type="button" class="btn btn-ghost w-full" id="overview-back-btn">Back</button>
-                        <button type="button" class="btn btn-primary w-full" id="finish-btn">
+                        <button type="button"
+                                class="btn btn-ghost w-full"
+                                id="overview-back-btn"
+                                data-action="go-to"
+                                data-step="mount">Back</button>
+                        <button type="button"
+                                class="btn btn-primary w-full"
+                                id="finish-btn"
+                                data-action="finish">
                             <span id="finish-btn-text">Finish Setup</span>
                             <span id="finish-btn-loading"
                                   class="loading loading-spinner loading-sm hidden"></span>
@@ -435,10 +478,30 @@
                 </div>
             </div>
         </div>
+        <template id="setup-overview-line">
+            <p>
+                <strong data-field="label"></strong>
+            </p>
+        </template>
+        <dialog id="setup-token-dialog" class="modal">
+            <div class="modal-box">
+                <p>
+                    Save your API token now. It is your only credential, and it is also your password on the login
+                    page.
+                </p>
+                <input type="text"
+                       class="input input-bordered mt-4 w-full font-mono"
+                       id="setup-token-value"
+                       aria-label="API token"
+                       readonly>
+                <div class="modal-action">
+                    <button type="button"
+                            class="btn btn-primary"
+                            id="setup-token-done"
+                            data-action="close-token">OK</button>
+                </div>
+            </div>
+        </dialog>
     </div>
-    <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        window.setupWizard = new SetupWizard();
-    });
-    </script>
+    {{ template "vite" (viteEntry "pkg/server/ui/pages/setup.ts") }}
 {{ end }}
