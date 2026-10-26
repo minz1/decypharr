@@ -59,6 +59,15 @@
           lint = uiCheck "lint" [ pkgs.oxlint ] "pnpm lint";
           fmt = uiCheck "fmt" [ pkgs.oxfmt ] "pnpm fmt:check";
           test = uiCheck "test" [ ] "pnpm test";
+          inherit frontend;
+          package = self.packages.${system}.default;
+          # pkg/server's tests against the built UI: manifest entry names and the minified settings scripts.
+          go-ui = self.packages.${system}.default.overrideAttrs (old: {
+            pname = "decypharr-go-ui";
+            subPackages = [ "pkg/server" ];
+            nativeCheckInputs = (old.nativeCheckInputs or [ ]) ++ [ pkgs.nodejs ];
+            postInstall = "";
+          });
           templates = pkgs.runCommand "decypharr-templates" {
             nativeBuildInputs = [ pkgs.djlint ];
             src = lib.fileset.toSource {
