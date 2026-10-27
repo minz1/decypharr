@@ -516,3 +516,31 @@ func TestMergeConfigUpdateClearsWhatTheSettingsPageEmpties(t *testing.T) {
 			merged.Debrids[0].DownloadAPIKeys, merged.Arrs[0].DownloadUncached)
 	}
 }
+
+// A new STRM secret sent through the settings save lands in secrets.json, never config.json.
+func TestUpdateConfigRotatesStrmSecretIntoSecretsFile(t *testing.T) {
+	t.Parallel()
+	mgr, store := managertest.New(t, nil)
+	server := &Server{manager: mgr, config: store, logger: zerolog.Nop()}
+	response := httptest.NewRecorder()
+	server.handleUpdateConfig(response, httptest.NewRequest(http.MethodPost, "/api/config",
+		strings.NewReader(`{"strm":{"secret":"rotated-strm-key"}}`)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("POST status=%d body=%s", response.Code, response.Body.String())
+	}
+	if got := store.Get().Strm.Secret; got != "rotated-strm-key" {
+		t.Fatalf("Strm.Secret = %q, want the rotated key", got)
+	}
+	data, err := os.ReadFile(store.Get().JSONFile())
+	if err != nil || strings.Contains(string(data), "rotated-strm-key") {
+		t.Fatalf("config.json holds the STRM secret: %s, %v", data, err)
+	}
+	secrets, err := os.ReadFile(store.Get().SecretsFile())
+	if err != nil || !strings.Contains(string(secrets), "rotated-strm-key") {
+		t.Fatalf("secrets.json = %q, %v", secrets, err)
+	}
+	reloaded, err := config.Load(store.Get().Dir(), config.MapEnv(nil))
+	if err != nil || reloaded.Strm.Secret != "rotated-strm-key" {
+		t.Fatalf("reloaded Strm.Secret = %v, %v", reloaded, err)
+	}
+}

@@ -32,16 +32,17 @@ func TestSessionSecretPersistsAcrossLoads(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	first := load(t, directory, nil).SecretKey()
+	cfg := load(t, directory, nil)
+	first := cfg.SecretKey()
 	if len(first) < 32 {
 		t.Fatalf("session key length = %d, want at least 32", len(first))
 	}
-	info, err := os.Stat(filepath.Join(directory, "config.json"))
+	info, err := os.Stat(cfg.SecretsFile())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
-		t.Fatalf("config permissions = %o, want 600", info.Mode().Perm())
+		t.Fatalf("secrets permissions = %o, want 600", info.Mode().Perm())
 	}
 	if load(t, directory, nil).SecretKey() != first {
 		t.Fatal("session key changed after loading the same installation")
@@ -101,6 +102,69 @@ func TestSessionSecretMigratesToSecretsFile(t *testing.T) {
 	}
 	if got := load(t, directory, nil).SecretKey(); got != "legacy-session-key" {
 		t.Fatalf("after migration SecretKey() = %q", got)
+	}
+}
+
+// A config.json without a STRM secret gets one in secrets.json and is not rewritten.
+func TestStrmSecretGeneratedIntoSecretsFile(t *testing.T) {
+	t.Parallel()
+	directory := t.TempDir()
+	original := []byte(`{"port":"1234"}`)
+	if err := os.WriteFile(filepath.Join(directory, "config.json"), original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := load(t, directory, nil)
+	if cfg.Strm.Secret == "" {
+		t.Fatal("no STRM secret generated")
+	}
+	data, err := os.ReadFile(filepath.Join(directory, "config.json"))
+	if err != nil || !bytes.Equal(data, original) {
+		t.Fatalf("config.json = %s, %v; want it unchanged", data, err)
+	}
+	secrets, err := os.ReadFile(cfg.SecretsFile())
+	if err != nil || !strings.Contains(string(secrets), cfg.Strm.Secret) {
+		t.Fatalf("secrets.json = %q, %v; want the STRM secret", secrets, err)
+	}
+	if info, statErr := os.Stat(cfg.SecretsFile()); statErr != nil ||
+		(runtime.GOOS != "windows" && info.Mode().Perm() != 0o600) {
+		t.Fatalf("secrets.json mode: %v, %v", info, statErr)
+	}
+	if got := load(t, directory, nil).Strm.Secret; got != cfg.Strm.Secret {
+		t.Fatalf("STRM secret after reload = %q, want %q", got, cfg.Strm.Secret)
+	}
+	if data, _ = os.ReadFile(filepath.Join(directory, "config.json")); !bytes.Equal(data, original) {
+		t.Fatalf("second load rewrote config.json: %s", data)
+	}
+}
+
+// Earlier versions kept the STRM secret in config.json. It keeps working and moves to secrets.json on the next save.
+func TestStrmSecretMigratesToSecretsFile(t *testing.T) {
+	t.Parallel()
+	directory := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(directory, "config.json"),
+		[]byte(`{"strm":{"secret":"legacy-strm-key"}}`),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	cfg := load(t, directory, nil)
+	if cfg.Strm.Secret != "legacy-strm-key" {
+		t.Fatalf("Strm.Secret = %q, want the legacy key", cfg.Strm.Secret)
+	}
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(directory, "config.json"))
+	if err != nil || strings.Contains(string(data), "legacy-strm-key") {
+		t.Fatalf("config.json still holds the STRM secret: %s, %v", data, err)
+	}
+	secrets, err := os.ReadFile(cfg.SecretsFile())
+	if err != nil || !strings.Contains(string(secrets), "legacy-strm-key") {
+		t.Fatalf("secrets.json = %q, %v", secrets, err)
+	}
+	if got := load(t, directory, nil).Strm.Secret; got != "legacy-strm-key" {
+		t.Fatalf("after migration Strm.Secret = %q", got)
 	}
 }
 

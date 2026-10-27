@@ -22,7 +22,8 @@ type Strm struct {
 	// to match the library.
 	Path string `json:"path,omitempty"`
 	// Secret signs stream URLs (HMAC-SHA256). Generated on first load if
-	// empty. Rotating it invalidates every written .strm; regenerate after.
+	// empty and kept in secrets.json. Rotating it invalidates every written
+	// .strm; regenerate after.
 	Secret string `json:"secret,omitempty"`
 	// DeliveryMode is how /stream serves bytes: "proxy" (default) streams
 	// through decypharr, "redirect" 302s to the provider link when possible.

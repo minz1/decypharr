@@ -406,7 +406,10 @@ func (c *Config) load(lookup LookupEnv) error {
 
 	// Save new signing secrets so signatures remain valid after a restart.
 	if (!hadStrmSecret || !hadSessionSecret) && !c.meta.readOnly {
-		return c.Save()
+		if errors.Is(err, os.ErrNotExist) {
+			return c.Save()
+		}
+		return c.writeSecrets()
 	}
 
 	return nil
@@ -818,11 +821,13 @@ func (c *Config) applyRepairDefaults() {
 
 func (c *Config) Save() error {
 	c.setDefaults()
-	data, err := json.MarshalIndent(c, "", "  ")
+	file := *c
+	file.Strm.Secret = ""
+	data, err := json.MarshalIndent(&file, "", "  ")
 	if err != nil {
 		return err
 	}
-	// Secrets first: config.json no longer carries the session secret, so
+	// Secrets first: config.json no longer carries the signing secrets, so
 	// it must be safe in secrets.json before an older config.json that
 	// still holds it is replaced.
 	if secretsErr := c.writeSecrets(); secretsErr != nil {
