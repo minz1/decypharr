@@ -66,7 +66,6 @@ describe("the settings sections", () => {
     const collected = assembleSettings(collectSections(document));
     expect(roundTripMismatches(inject("configSample"), collected, inject("configExclusions"))).toStrictEqual([]);
   });
-
 });
 
 const onlyTrue = (value: unknown, path: string, flag: string): unknown => {
@@ -88,6 +87,10 @@ const exclusions = readExclusions(inject("configExclusions"));
 const flags = [...leavesOf(inject("configSample"))]
   .filter(([path, values]) => !isExcluded(exclusions, path) && values.some((value) => typeof value === "boolean"))
   .map(([path]) => path);
+const trueFlags = (body: unknown): string[] =>
+  [...leavesOf(body)]
+    .filter(([path, values]) => !isExcluded(exclusions, path) && values.includes(true))
+    .map(([path]) => path);
 
 describe("each settings checkbox", () => {
   it("covers the sample's flags", () => {
@@ -97,10 +100,8 @@ describe("each settings checkbox", () => {
   it.each(flags)("%s alone saves as the only true flag", (flag) => {
     loadFixture("config");
     populateSections(document, onlyTrue(inject("configSample"), "", flag));
-    const sent = [...leavesOf(assembleSettings(collectSections(document)))]
-      .filter(([path, values]) => !isExcluded(exclusions, path) && values.includes(true))
-      .map(([path]) => path);
-    expect(sent).toStrictEqual([flag]);
+    const body = assembleSettings(collectSections(document));
+    expect(trueFlags(body)).toStrictEqual([flag]);
   });
 });
 
