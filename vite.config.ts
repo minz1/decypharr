@@ -17,7 +17,7 @@ export default defineConfig({
     manifest: true,
     outDir: "pkg/server/assets/build/vite",
     emptyOutDir: true,
-    sourcemap: "hidden",
+    sourcemap: false,
     rolldownOptions: {
       input: ["pkg/server/ui/styles.css", ...pages],
     },
