@@ -28,14 +28,15 @@ type fixturePage struct {
 	handle func(s *Server) http.HandlerFunc
 }
 
-// renderFixtures renders every page, in the store states that reach it, under urlBase, and the settings page's
-// GET /api/config response for the last state.
-func renderFixtures(t *testing.T, urlBase string) (map[string]string, []byte) {
+// renderFixtures renders every page, in the store states that reach it, under urlBase, with its headers, and the
+// settings page's GET /api/config response for the last state.
+func renderFixtures(t *testing.T, urlBase string) (map[string]string, map[string]http.Header, []byte) {
 	t.Helper()
 	store := managertest.Store(t, func(cfg *config.Config) { cfg.URLBase = urlBase })
 	s := &Server{config: store, urlBase: urlBase, logger: zerolog.New(failWriter{t}).Level(zerolog.WarnLevel)}
 	s.loadUI(testStatic(t))
 	pages := map[string]string{}
+	headers := map[string]http.Header{}
 	render := func(page fixturePage) {
 		w := httptest.NewRecorder()
 		page.handle(s)(w, httptest.NewRequest(http.MethodGet, urlBase+page.name, nil))
@@ -44,6 +45,7 @@ func renderFixtures(t *testing.T, urlBase string) (map[string]string, []byte) {
 			t.Fatalf("%s at %s: status %d, want 200 and a whole page:\n%s", page.name, urlBase, w.Code, body)
 		}
 		pages[page.name] = body
+		headers[page.name] = w.Header()
 	}
 	render(fixturePage{"setup", func(s *Server) http.HandlerFunc { return s.SetupHandler }})
 	update(t, store, func(cfg *config.Config) error {
@@ -77,7 +79,7 @@ func renderFixtures(t *testing.T, urlBase string) (map[string]string, []byte) {
 		return nil
 	})
 	render(fixturePage{"download-options", func(s *Server) http.HandlerFunc { return s.DownloadHandler }})
-	return pages, response
+	return pages, headers, response
 }
 
 func update(t *testing.T, store *config.Store, edit func(*config.Config) error) {
@@ -147,7 +149,7 @@ func TestRenderUIFixtures(t *testing.T) {
 	}
 	clearFixtures(t, dir)
 	for suffix, urlBase := range map[string]string{"": "/", "@base": "/decypharr/"} {
-		pages, response := renderFixtures(t, urlBase)
+		pages, _, response := renderFixtures(t, urlBase)
 		for name, html := range pages {
 			writeFixture(t, dir, name+suffix+".html", []byte(html))
 		}
