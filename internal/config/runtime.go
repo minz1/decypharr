@@ -31,7 +31,8 @@ type meta struct {
 	// readOnly forbids every write to the data folder (see LoadReadOnly).
 	readOnly bool
 	// modes are the shared modes parsed by CheckLoadable.
-	modes sharedModes
+	modes        sharedModes
+	envOverrides []envOverride
 }
 
 // errReadOnly is returned by writes on a Config loaded with LoadReadOnly.

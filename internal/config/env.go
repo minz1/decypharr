@@ -1,7 +1,12 @@
 package config
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"maps"
+	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -154,6 +159,154 @@ func (c *Config) applyEnvOverrides(e env) {
 	c.applyUsenetEnvVars(e)
 	c.applyHearsayEnvVars(e)
 	c.applyArrEnvVars(e)
+}
+
+type envOverride struct {
+	path   []any // object keys and array indices
+	value  any
+	file   any
+	inFile bool
+}
+
+// trackEnvOverrides records where c differs from fileOnly once both have defaults, catching values derived from env.
+func (c *Config) trackEnvOverrides(fileOnly *Config) error {
+	file, err := jsonTree(fileOnly)
+	if err != nil {
+		return err
+	}
+	fileOnly.meta.readOnly = true
+	fileOnly.setDefaults()
+	base, err := jsonTree(fileOnly)
+	if err != nil {
+		return err
+	}
+	effective, err := jsonTree(c)
+	if err != nil {
+		return err
+	}
+	c.meta.envOverrides = changedLeaves(nil, base, true, effective, nil)
+	for i := range c.meta.envOverrides {
+		override := &c.meta.envOverrides[i]
+		override.file, override.inFile = leafAt(file, override.path)
+	}
+	return nil
+}
+
+func leafAt(tree any, path []any) (any, bool) {
+	for _, step := range path {
+		switch node := tree.(type) {
+		case map[string]any:
+			key, _ := step.(string)
+			value, ok := node[key]
+			if !ok {
+				return nil, false
+			}
+			tree = value
+		case []any:
+			i, ok := step.(int)
+			if !ok || i >= len(node) {
+				return nil, false
+			}
+			tree = node[i]
+		default:
+			return nil, false
+		}
+	}
+	return tree, true
+}
+
+func (c *Config) fileJSON() ([]byte, error) {
+	file := *c
+	file.Strm.Secret = ""
+	if len(c.meta.envOverrides) == 0 {
+		return json.MarshalIndent(&file, "", "  ")
+	}
+	tree, err := jsonTree(&file)
+	if err != nil {
+		return nil, err
+	}
+	for _, override := range slices.Backward(c.meta.envOverrides) {
+		tree, _ = override.restore(tree, override.path)
+	}
+	data, err := json.Marshal(tree)
+	if err != nil {
+		return nil, err
+	}
+	var restored Config
+	if unmarshalErr := json.Unmarshal(data, &restored); unmarshalErr != nil {
+		return nil, unmarshalErr
+	}
+	return json.MarshalIndent(&restored, "", "  ")
+}
+
+// restore leaves a value the user changed alone; false means remove the leaf.
+func (o envOverride) restore(node any, path []any) (any, bool) {
+	if len(path) == 0 {
+		if !reflect.DeepEqual(node, o.value) {
+			return node, true
+		}
+		return o.file, o.inFile
+	}
+	switch n := node.(type) {
+	case map[string]any:
+		key, _ := path[0].(string)
+		if child, ok := n[key]; ok {
+			if value, keep := o.restore(child, path[1:]); keep {
+				n[key] = value
+			} else {
+				delete(n, key)
+			}
+		}
+	case []any:
+		if i, ok := path[0].(int); ok && i < len(n) {
+			value, keep := o.restore(n[i], path[1:])
+			if !keep {
+				return slices.Delete(n, i, i+1), true
+			}
+			n[i] = value
+		}
+	}
+	return node, true
+}
+
+func changedLeaves(path []any, before any, inBefore bool, after any, out []envOverride) []envOverride {
+	switch a := after.(type) {
+	case map[string]any:
+		b, _ := before.(map[string]any)
+		for _, key := range slices.Sorted(maps.Keys(a)) {
+			value, ok := b[key]
+			out = changedLeaves(append(path, key), value, ok, a[key], out)
+		}
+		return out
+	case []any:
+		b, _ := before.([]any)
+		for i, item := range a {
+			var value any
+			if i < len(b) {
+				value = b[i]
+			}
+			out = changedLeaves(append(path, i), value, i < len(b), item, out)
+		}
+		return out
+	}
+	if inBefore && reflect.DeepEqual(before, after) {
+		return out
+	}
+	return append(out, envOverride{path: slices.Clone(path), value: after})
+}
+
+func jsonTree(v any) (any, error) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var tree any
+	if err = decoder.Decode(&tree); err != nil {
+		return nil, err
+	}
+	return tree, nil
 }
 
 func (c *Config) applyManagerEnvVars(e env) {

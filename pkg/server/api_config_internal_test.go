@@ -544,3 +544,84 @@ func TestUpdateConfigRotatesStrmSecretIntoSecretsFile(t *testing.T) {
 		t.Fatalf("reloaded Strm.Secret = %v, %v", reloaded, err)
 	}
 }
+
+// A settings save sends back the env values it was shown; config.json keeps its own values instead.
+func TestUpdateConfigKeepsEnvOverridesOutOfConfigFile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	file := `{"arrs":[{"name":"sonarr","host":"http://sonarr:8989","token":"file-arr-token"}],` +
+		`"debrids":[{"name":"realdebrid","provider":"realdebrid"}]}`
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(file), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(dir, config.MapEnv(map[string]string{
+		"DECYPHARR_ARRS__0__TOKEN":      "env-arr-token",
+		"DECYPHARR_DEBRIDS__0__API_KEY": "env-debrid-key",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := config.NewStore(cfg)
+	body := `{"log_level":"debug",` +
+		`"arrs":[{"name":"sonarr","host":"http://sonarr:8989","token":"env-arr-token"}],` +
+		`"debrids":[{"name":"realdebrid","provider":"realdebrid","api_key":"env-debrid-key"}]}`
+	updated, err := store.Update(func(current *config.Config) error {
+		next, prepareErr := prepareConfigUpdate(current, []byte(body))
+		*current = next
+		return prepareErr
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Arrs[0].Token != "env-arr-token" || updated.Debrids[0].APIKey != "env-debrid-key" {
+		t.Fatalf("running config lost the env values: %+v %+v", updated.Arrs, updated.Debrids)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved config.Config
+	if unmarshalErr := json.Unmarshal(data, &saved); unmarshalErr != nil {
+		t.Fatal(unmarshalErr)
+	}
+	if saved.LogLevel != "debug" {
+		t.Fatalf("log_level = %q, want the edit saved", saved.LogLevel)
+	}
+	if saved.Arrs[0].Token != "file-arr-token" || saved.Debrids[0].APIKey != "" {
+		t.Fatalf("config.json arrs=%+v debrids=%+v, want the file's own values", saved.Arrs, saved.Debrids)
+	}
+}
+
+// Removing the env-overridden arr shifts the list; the arr that moves up keeps its own token.
+func TestUpdateConfigEnvOverrideFollowsItsArr(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	file := `{"arrs":[{"name":"sonarr","host":"http://sonarr:8989","token":"file-sonarr-token"},` +
+		`{"name":"radarr","host":"http://radarr:7878","token":"file-radarr-token"}]}`
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(file), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(dir, config.MapEnv(map[string]string{"DECYPHARR_ARRS__0__TOKEN": "env-sonarr-token"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"arrs":[{"name":"radarr","host":"http://radarr:7878","token":"file-radarr-token"}]}`
+	if _, err = config.NewStore(cfg).Update(func(current *config.Config) error {
+		next, prepareErr := prepareConfigUpdate(current, []byte(body))
+		*current = next
+		return prepareErr
+	}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved config.Config
+	if unmarshalErr := json.Unmarshal(data, &saved); unmarshalErr != nil {
+		t.Fatal(unmarshalErr)
+	}
+	if len(saved.Arrs) != 1 || saved.Arrs[0].Name != "radarr" || saved.Arrs[0].Token != "file-radarr-token" {
+		t.Fatalf("config.json arrs = %+v, want radarr with its own token", saved.Arrs)
+	}
+}

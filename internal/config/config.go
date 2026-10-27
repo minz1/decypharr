@@ -395,10 +395,17 @@ func (c *Config) load(lookup LookupEnv) error {
 	// final values rather than whatever was persisted to disk.
 	e := env{lookup: lookup}
 	c.meta.secretKey = e.get("SECRET_KEY")
+	fileOnly, cloneErr := c.Clone()
+	if cloneErr != nil {
+		return cloneErr
+	}
 	c.applyEnvOverrides(e)
 
 	// Set defaults for any missing values
 	c.setDefaults()
+	if envErr := c.trackEnvOverrides(fileOnly); envErr != nil {
+		return envErr
+	}
 
 	if checkErr := c.CheckLoadable(); checkErr != nil {
 		return checkErr
@@ -821,9 +828,7 @@ func (c *Config) applyRepairDefaults() {
 
 func (c *Config) Save() error {
 	c.setDefaults()
-	file := *c
-	file.Strm.Secret = ""
-	data, err := json.MarshalIndent(&file, "", "  ")
+	data, err := c.fileJSON()
 	if err != nil {
 		return err
 	}
