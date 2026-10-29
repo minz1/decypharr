@@ -92,3 +92,18 @@ func TestClearDisprovedMarksLogsKeptMark(t *testing.T) {
 		}
 	}
 }
+
+// Recheck-and-fix on a missing-provider entry is the owner acting on purpose, so it reacquires as before.
+func TestRecheckEntryWithFixActsOnAMissingProvider(t *testing.T) {
+	t.Parallel()
+	f := newSweepFixture(t, "video.mkv")
+	f.backend.client = nil
+	f.serveRadarr(t)
+	if _, err := f.service.RecheckEntry(t.Context(), f.entry.Name, true); err != nil {
+		t.Fatal(err)
+	}
+	f.service.runWG.Wait()
+	if len(f.reacquirer.requests) != 1 || f.reacquirer.requests[0].FileID != "id-video.mkv" {
+		t.Fatalf("requests = %#v, want one for video.mkv", f.reacquirer.requests)
+	}
+}

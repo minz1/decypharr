@@ -68,7 +68,7 @@ func (p *nzbProber) probe(ctx context.Context, request nzbProbeRequest) fileResu
 	// returns the same error every sweep, so deferring leaves the entry stuck
 	// as unknown while the arr still counts the file as downloaded. Treat it as
 	// broken so auto-repair can replace the release. Transient NNTP and
-	// filesystem failures stay deferred below.
+	// filesystem failures stay unknown below.
 	case errors.Is(probeErr, customerror.ErrUsenetManifestMissing):
 		result.broken = true
 		result.reason = "usenet_manifest_missing"

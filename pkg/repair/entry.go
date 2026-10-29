@@ -203,14 +203,7 @@ func (r *Service) clearDisprovedMarks(ctx context.Context, results []fileResult)
 
 // firstUnpassedReason names why the first live file (by name) failed the fresh read check, or "" when all passed.
 func firstUnpassedReason(entry *storage.Entry, files map[string]fileResult) string {
-	names := make([]string, 0, len(entry.Files))
-	for name, file := range entry.Files {
-		if file != nil && !file.Deleted {
-			names = append(names, name)
-		}
-	}
-	slices.Sort(names)
-	for _, name := range names {
+	for _, name := range orderedFilenames(&storage.EntryItem{Files: entry.Files}) {
 		result, probed := files[name]
 		switch {
 		case !probed:
