@@ -1,6 +1,10 @@
 package manager
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -102,6 +106,49 @@ func checkFixWithRemovedProvider(t *testing.T, existing bool) {
 	}
 	if loaded.Providers["removed"].ID != "old" {
 		t.Fatal("source placement changed")
+	}
+}
+
+// refusingProvider refuses every submit with its own error.
+type refusingProvider struct {
+	replacementProvider
+
+	err error
+}
+
+func (c *refusingProvider) SubmitMagnet(*types.Torrent) (*types.Torrent, error) { return nil, c.err }
+
+func TestRunRepairLogsEveryAttempt(t *testing.T) {
+	t.Parallel()
+	store, err := storage.NewStorage(t.TempDir(), storage.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	var logs bytes.Buffer
+	m := withTestConfig(t, &Manager{
+		storage: store, clients: xsync.NewMap[string, debrid.Client](), logger: zerolog.New(&logs),
+		entry: newEntryCache(func(string) bool { return false }, nil, nil), ctx: t.Context(),
+		confirmBroken: func(context.Context, *storage.Entry) bool { return false },
+	})
+	m.clients.Store("first", &refusingProvider{err: errors.New("first refused")})
+	m.clients.Store("second", &refusingProvider{err: errors.New("second refused")})
+	fixer := NewFixer(m)
+	fixer.providerOrder = []string{"first", "second"}
+	entry := &storage.Entry{
+		InfoHash: "0123456789012345678901234567890123456789", Name: "release",
+		Protocol: config.ProtocolTorrent, ActiveProvider: "removed",
+	}
+	if result, fixErr := fixer.FixTorrent(t.Context(), entry, false); fixErr == nil || result.Success {
+		t.Fatalf("repair = %#v, error = %v; want a failure", result, fixErr)
+	}
+	for _, want := range []string{"first", "first refused", "second", "second refused"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Fatalf("log = %s; want it to name %q", logs.String(), want)
+		}
+	}
+	if got := strings.Count(logs.String(), "re-insert attempt failed"); got != 2 {
+		t.Fatalf("attempt lines = %d, want 2", got)
 	}
 }
 

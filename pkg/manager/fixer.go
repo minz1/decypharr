@@ -187,6 +187,12 @@ func (f *Fixer) runRepair(
 		}
 
 		lastErr = err
+		f.manager.logger.Warn().
+			Err(err).
+			Str("debrid", debridName).
+			Str("infohash", entry.InfoHash).
+			Str("name", entry.Name).
+			Msg("re-insert attempt failed")
 		f.failedToReinsert.Store(failureKey(entry.InfoHash, debridName), struct{}{})
 	}
 	if lastErr == nil {

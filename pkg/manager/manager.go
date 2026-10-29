@@ -59,6 +59,7 @@ const (
 	// parseRounds is how many parse rounds that run out of time a grab gets before it fails.
 	parseRounds              = 3
 	defaultParseRequeueDelay = 5 * time.Minute
+	defaultBadRecheckDelay   = 10 * time.Minute
 	// tooManyDownloadsRetryDelay is the first wait after the provider reports its active-download limit.
 	tooManyDownloadsRetryDelay = 30 * time.Second
 	maxThrottledRetryDelay     = 10 * time.Minute
@@ -89,6 +90,10 @@ type Manager struct {
 	removeUsenet func(id string) error
 	// checkStreamFile confirms a stream failure; nil uses the usenet client's full article check.
 	checkStreamFile func(ctx context.Context, nzoID, filename string) error
+	// confirmBroken checks an entry's active placement before a give-up marks it; nil uses the repair service.
+	confirmBroken func(ctx context.Context, entry *storage.Entry) bool
+	// badRecheckDelay is how long a give-up waits before its second check decides the arr grab.
+	badRecheckDelay time.Duration
 	// parseNZBFunc parses an NZB's articles; nil uses the usenet client.
 	parseNZBFunc  func(ctx context.Context, id, name string, content []byte, category string) (*storage.NZB, map[string]*parser.FileGroup, error)
 	pruneReportMu sync.Mutex
@@ -251,6 +256,7 @@ func New(store *config.Store, logs *logger.Factory) (*Manager, error) {
 		streamClient:           streamClient,
 		usenetTimeout:          usenetTimeout,
 		parseRequeueDelay:      defaultParseRequeueDelay,
+		badRecheckDelay:        defaultBadRecheckDelay,
 		debridSpeedTestResults: xsync.NewMap[string, debridTypes.SpeedTestResult](),
 		activeStreams:          xsync.NewMap[string, *ActiveStream](),
 		providerMisses:         xsync.NewMap[string, map[string]struct{}](),

@@ -259,17 +259,59 @@ func (m *Manager) ClearBad(_ context.Context, infohash string) error {
 	return nil
 }
 
-// giveUpOnEntry marks an entry no provider can serve as bad and fails its grab while the arr still waits on it.
+// confirmCheckTimeout bounds each fresh read check of an entry's active placement.
+const confirmCheckTimeout = time.Minute
+
+// entryBroken reports whether the entry's active placement fails a fresh read check.
+func (m *Manager) entryBroken(entry *storage.Entry) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), confirmCheckTimeout)
+	defer cancel()
+	if m.confirmBroken != nil {
+		return m.confirmBroken(ctx, entry)
+	}
+	return m.repair.ConfirmBroken(ctx, entry)
+}
+
+// giveUpOnEntry marks a confirmed-broken entry bad; the arr grab waits for a second check, as a blocklist is final.
 func (m *Manager) giveUpOnEntry(entry *storage.Entry) {
+	if !m.entryBroken(entry) {
+		m.logger.Warn().Str("infohash", entry.InfoHash).Str("name", entry.Name).
+			Msg("not marking bad: active placement still serves links or the check was inconclusive")
+		return
+	}
 	entry.Bad = true
 	if err := m.AddOrUpdate(entry, func(*storage.Entry) { m.refreshAfterSave() }); err != nil {
 		m.logger.Warn().Err(err).Str("infohash", entry.InfoHash).Msg("Failed to persist the bad flag")
 	}
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		defer cancel()
-		m.failGrabIfQueued(ctx, entry)
-	}()
+	if entry.IsTorrent() {
+		if err := m.storage.MarkEntryDirty(entry.GetFolder(m.folderNaming()), config.ProtocolTorrent,
+			"marked_bad"); err != nil {
+			m.logger.Warn().Err(err).Str("infohash", entry.InfoHash).Msg("Failed to queue the bad entry for a recheck")
+		}
+	}
+	go m.recheckBadEntry(entry.InfoHash)
+}
+
+// recheckBadEntry decides the arr grab of a freshly marked entry after badRecheckDelay.
+func (m *Manager) recheckBadEntry(infohash string) {
+	select {
+	case <-time.After(m.badRecheckDelay):
+	case <-m.ctx.Done():
+		return
+	}
+	entry, err := m.GetEntry(infohash)
+	if err != nil || entry == nil || !entry.Bad {
+		return
+	}
+	if !m.entryBroken(entry) {
+		if clearErr := m.ClearBad(m.ctx, infohash); clearErr != nil {
+			m.logger.Warn().Err(clearErr).Str("infohash", infohash).Msg("Failed to clear a disproved bad mark")
+		}
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	m.failGrabIfQueued(ctx, entry)
 }
 
 // failGrabIfQueued fails an arr torrent's grab only while the arr still queues it; imported files stay with repair.
