@@ -587,3 +587,46 @@ func TestResolveQueueActionRemovesCompletePackLeftovers(t *testing.T) {
 		})
 	}
 }
+
+// Sonarr prints the missing-episodes header also when the only leftovers are files that are no upgrade.
+func TestMatchCatalogRuleEpisodesMissingIgnoresNonUpgradeLeftovers(t *testing.T) {
+	t.Parallel()
+	type file struct{ name, message string }
+	tests := []struct {
+		name  string
+		files []file
+		want  bool
+	}{
+		{name: "quality revision leftover", want: false, files: []file{
+			{"Show.S01E03.mkv", "Not a quality revision upgrade for existing episode file(s)"},
+		}},
+		{name: "lower quality leftover", want: false, files: []file{
+			{"Show.S01E05.mkv", "Not an upgrade for existing episode file(s). Existing quality: WEBDL-1080p. " +
+				"New Quality HDTV-1080p."},
+		}},
+		{name: "every kind of leftover", want: false, files: []file{
+			{"Show.S01E01.mkv", "Not a custom format upgrade for existing episode file(s)"},
+			{"Show.S01E02.mkv", "not an upgrade for existing episode file(s)"},
+		}},
+		{name: "leftover and missing episode", want: true, files: []file{
+			{"Show.S01E03.mkv", "Not a quality revision upgrade for existing episode file(s)"},
+			{"Show.S01E04.mkv", "Unable to determine if file is a sample"},
+		}},
+		{name: "no per-file messages", want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			item := missingRecord(1, 11, "HASH", false)
+			for _, f := range tt.files {
+				item.StatusMessages = append(item.StatusMessages, struct {
+					Title    string   `json:"title"`
+					Messages []string `json:"messages"`
+				}{Title: f.name, Messages: []string{f.message}})
+			}
+			if got, known := matchCatalogRule("episodes_missing", item, statusText(item)); !known || got != tt.want {
+				t.Fatalf("matchCatalogRule() = %v, %v, want %v, true", got, known, tt.want)
+			}
+		})
+	}
+}

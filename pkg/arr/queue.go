@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -73,7 +74,8 @@ func matchCatalogRule(id string, item QueueSchema, text string) (bool, bool) {
 	case "no_eligible_files":
 		return strings.Contains(text, "no files found are eligible"), true
 	case "episodes_missing":
-		return strings.Contains(text, "not imported or missing from the release"), true
+		return strings.Contains(text, "not imported or missing from the release") &&
+			!onlyNonUpgradeLeftovers(item), true
 	case "file_empty":
 		return strings.Contains(text, "file is empty"), true
 	case "invalid_local_path":
@@ -83,6 +85,23 @@ func matchCatalogRule(id string, item QueueSchema, text string) (bool, bool) {
 	default:
 		return false, false
 	}
+}
+
+var nonUpgradeLeftover = regexp.MustCompile(
+	`(?i)not (a custom format upgrade|an upgrade|a quality revision upgrade) for existing episode file\(s\)`)
+
+// onlyNonUpgradeLeftovers reports whether item has per-file messages and each says the file is no upgrade.
+func onlyNonUpgradeLeftovers(item QueueSchema) bool {
+	seen := false
+	for _, status := range item.StatusMessages {
+		for _, message := range status.Messages {
+			if !nonUpgradeLeftover.MatchString(message) {
+				return false
+			}
+			seen = true
+		}
+	}
+	return seen
 }
 
 func (s *Service) Queue(ctx context.Context, name string) ([]QueueSchema, error) {
