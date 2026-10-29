@@ -79,8 +79,7 @@ func freshLink(name string) debridTypes.DownloadLink {
 	}
 }
 
-func oldLink(name string) debridTypes.DownloadLink {
-	link := freshLink(name)
+func aged(link debridTypes.DownloadLink) debridTypes.DownloadLink {
 	link.Generated = time.Now().Add(-time.Hour)
 	return link
 }
@@ -188,11 +187,11 @@ func TestFreshProbeRefetchesCachedLink(t *testing.T) {
 	}{
 		{name: "dead on refetch", second: linkResult{err: customerror.ErrHosterUnavailable}, want: true},
 		{name: "fine on refetch", second: linkResult{link: freshLink("a.mkv")}, want: false},
-		{name: "still old on refetch", second: linkResult{link: oldLink("a.mkv")}, want: false},
+		{name: "still old on refetch", second: linkResult{link: aged(freshLink("a.mkv"))}, want: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			client := newLinkClient(map[string][]linkResult{"a.mkv": {{link: oldLink("a.mkv")}, tc.second}})
+			client := newLinkClient(map[string][]linkResult{"a.mkv": {{link: aged(freshLink("a.mkv"))}, tc.second}})
 			if got := confirmService(t, client).ConfirmBroken(t.Context(), confirmEntry("a.mkv")); got != tc.want {
 				t.Fatalf("ConfirmBroken = %v, want %v", got, tc.want)
 			}
@@ -206,7 +205,7 @@ func TestFreshProbeRefetchesCachedLink(t *testing.T) {
 func TestProbeUsesFreshUnrestrictForMarkedEntries(t *testing.T) {
 	t.Parallel()
 	for _, bad := range []bool{true, false} {
-		client := newLinkClient(map[string][]linkResult{"a.mkv": {{link: oldLink("a.mkv")}}})
+		client := newLinkClient(map[string][]linkResult{"a.mkv": {{link: aged(freshLink("a.mkv"))}}})
 		service := confirmService(t, client)
 		entry := confirmEntry("a.mkv")
 		entry.Bad = bad
@@ -233,5 +232,52 @@ func TestUnrestrictProbeTorrentNotFoundIsBroken(t *testing.T) {
 		fileResult{name: "a.mkv", infoHash: confirmHash}, client, false)
 	if !result.broken || result.reason != "torrent_not_found" {
 		t.Fatalf("result = %+v, want broken with reason torrent_not_found", result)
+	}
+}
+
+// cachingClient serves links through a real account cache, as providers do, over linkClient's queue.
+type cachingClient struct {
+	*linkClient
+}
+
+func (c cachingClient) GetDownloadLink(
+	ctx context.Context,
+	id string,
+	file *debridTypes.File,
+) (debridTypes.DownloadLink, error) {
+	return c.accounts.GetDownloadLink(
+		ctx,
+		id,
+		file,
+		func(ctx context.Context, acc *account.Account, id string, file *debridTypes.File) (debridTypes.DownloadLink, error) {
+			link, err := c.linkClient.GetDownloadLink(ctx, id, file)
+			link.Token = acc.Token
+			return link, err
+		},
+	)
+}
+
+// With a real cache, the old link must be evicted, or the refetch returns it again and a dead file looks unclear.
+func TestFreshProbeEvictsFromTheAccountCache(t *testing.T) {
+	t.Parallel()
+	inner := newLinkClient(map[string][]linkResult{
+		"a.mkv": {{link: aged(freshLink("a.mkv"))}, {err: customerror.ErrHosterUnavailable}},
+	})
+	inner.accounts = account.NewManager(
+		config.Debrid{Name: "torbox", DownloadAPIKeys: []string{"download-token"}}, debridTypes.ProviderOptions{}, nil)
+	client := cachingClient{inner}
+	entry := confirmEntry("a.mkv")
+	if _, err := client.GetDownloadLink(
+		t.Context(),
+		"rd-id",
+		&debridTypes.File{Name: "a.mkv", Link: "https://rd/a.mkv"},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if !confirmService(t, client).ConfirmBroken(t.Context(), entry) {
+		t.Fatal("ConfirmBroken = false, want the cached old link evicted and the dead refetch seen")
+	}
+	if inner.fetches != 2 {
+		t.Fatalf("provider fetches = %d, want 2 (warm-up, then the refetch after eviction)", inner.fetches)
 	}
 }
