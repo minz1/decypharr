@@ -122,9 +122,16 @@ func (s *Server) RegisterHandler(w http.ResponseWriter, r *http.Request) {
 	s.redirectTo(w, r, "/")
 }
 
+// contentSecurityPolicy allows the theme script and the stats page's style by hash; CSS draws data: SVGs.
+const contentSecurityPolicy = "default-src 'self'; " +
+	"script-src 'self' 'sha256-01xsU0dqV+cmVYGrUQHAF29hdQFie95LQmBhnjSTcp4='; " +
+	"style-src 'self' 'sha256-tdyUXDYQc9m6efEuqUFQb99MlYDANmSbioNg4pn1cpw='; " +
+	"img-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
+
 // renderPage executes templateName with the fields every page reads plus
 // extra. Templates that do not show the setup banner ignore SetupError.
 func (s *Server) renderPage(w http.ResponseWriter, templateName, page, title string, extra map[string]any) {
+	w.Header().Set("Content-Security-Policy", contentSecurityPolicy)
 	if s.vite == nil {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusServiceUnavailable)
