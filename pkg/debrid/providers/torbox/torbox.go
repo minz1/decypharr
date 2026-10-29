@@ -405,6 +405,10 @@ func (tb *Torbox) getTorboxStatus(status string, finished bool) types.TorrentSta
 }
 
 func (tb *Torbox) GetTorrent(torrentID string) (*types.Torrent, error) {
+	// TorBox ignores a non-positive id and lists everything, so such a placement is simply gone.
+	if id, err := strconv.Atoi(torrentID); err != nil || id <= 0 {
+		return nil, customerror.ErrTorrentNotFound
+	}
 	var res InfoResponse
 
 	status, err := tb.doGet("/api/torrents/mylist", map[string]string{"id": torrentID}, &res)

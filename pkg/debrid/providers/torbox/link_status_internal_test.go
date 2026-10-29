@@ -87,3 +87,18 @@ func TestDownloadLinkServerFaultStaysUntyped(t *testing.T) {
 		}
 	}
 }
+
+// TorBox ids start at 1, so an id of 0 (a placement saved before the zero-id guard) is a torrent that cannot exist.
+func TestGetTorrentWithoutARealIDIsNotFound(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected TorBox call %s", r.URL)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+	for _, id := range []string{"0", "-3", ""} {
+		if _, err := testTorbox(server.URL).GetTorrent(id); !errors.Is(err, customerror.ErrTorrentNotFound) {
+			t.Errorf("GetTorrent(%q) error = %v, want ErrTorrentNotFound", id, err)
+		}
+	}
+}
