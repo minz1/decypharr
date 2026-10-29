@@ -345,10 +345,9 @@ rm /path/to/config.json  # Binary
 
 ### High CPU/Memory usage
 
-1. Reduce concurrent workers:
+1. Reduce repair workers:
    ```json
    {
-     "debrids": [{"workers": 25}],
      "repair": {"workers": 1}
    }
    ```

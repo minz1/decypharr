@@ -96,7 +96,6 @@ Array of Debrid services:
       "api_key": "YOUR_API_KEY",
       "download_uncached": false,
       "rate_limit": "200/minute",
-      "workers": 50,
       "minimum_free_slot": 0,
       "priority": 0,
       "limit": 100,

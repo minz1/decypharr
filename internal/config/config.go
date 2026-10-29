@@ -336,9 +336,8 @@ type Config struct {
 	VirtualFolders        []VirtualFolder          `json:"virtual_folders,omitempty"`
 	DefaultDownloadAction DownloadAction           `json:"default_download_action,omitempty"`
 
-	RefreshDirs  string `json:"refresh_dirs,omitempty"`
-	Retries      int    `json:"retries,omitempty"`
-	SkipAutoMove bool   `json:"skip_auto_move,omitempty"`
+	RefreshDirs string `json:"refresh_dirs,omitempty"`
+	Retries     int    `json:"retries,omitempty"`
 
 	Repair RepairConfig `json:"repair,omitzero"`
 	Prune  Prune        `json:"prune,omitzero"`
@@ -885,7 +884,6 @@ func clearHotFields(c *Config) {
 	c.VirtualFolders = nil
 	c.DefaultDownloadAction = ""
 	c.RefreshDirs = ""
-	c.SkipAutoMove = false
 	c.Repair = RepairConfig{}
 
 	// STRM settings are read live on every URL build, stream request, and

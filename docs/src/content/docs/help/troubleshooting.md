@@ -202,8 +202,7 @@ Reduce request rate:
 {
   "debrids": [
     {
-      "rate_limit": "100/minute",
-      "workers": 25
+      "rate_limit": "100/minute"
     }
   ]
 }
@@ -353,11 +352,10 @@ docker stats decypharr
 
 **Solutions:**
 
-1. Reduce workers:
+1. Reduce repair workers:
    ```json
    {
-     "debrids": [{"workers": 25}],
-     "repair": {"workers": 1, "enabled": false}
+     "repair": {"workers": 1}
    }
    ```
 2. Temporarily disable repair

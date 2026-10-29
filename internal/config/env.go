@@ -468,7 +468,6 @@ func (c *Config) applyManagerEnvVars(e env) {
 	e.envString("REMOVE_STALLED_AFTER", &c.RemoveStalledAfter)
 	e.envBool("ENABLE_WEBDAV_AUTH", &c.EnableWebdavAuth)
 	e.envInt("RETRIES", &c.Retries)
-	e.envBool("SKIP_AUTO_MOVE", &c.SkipAutoMove)
 	e.envIndexedList("CATEGORIES__%d", maxEnvListItems, &c.Categories)
 	e.envIndexedList("ALLOWED_FILE_TYPES__%d", maxEnvListItems, &c.AllowedExt)
 	e.envString("NZB_USER_AGENT", &c.NZBUserAgent)

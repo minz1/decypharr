@@ -3,7 +3,6 @@ package config
 import (
 	"errors"
 	"fmt"
-	"runtime"
 
 	"github.com/sirrobot01/decypharr/internal/request"
 )
@@ -24,7 +23,6 @@ type Debrid struct {
 	Limit                        int      `json:"limit,omitempty"`             // Maximum number of total torrents
 	TorrentsRefreshInterval      string   `json:"torrents_refresh_interval,omitempty"`
 	DownloadLinksRefreshInterval string   `json:"download_links_refresh_interval,omitempty"`
-	Workers                      int      `json:"workers,omitempty"`
 	AutoExpireLinksAfter         string   `json:"auto_expire_links_after,omitempty"`
 	UserAgent                    string   `json:"user_agent,omitempty"`
 
@@ -40,13 +38,7 @@ type Debrid struct {
 	Directories map[string]WebdavDirectories `json:"directories,omitempty"` // Deprecated. Use global setting instead.
 }
 
-// workersPerCPU sizes the default debrid worker pool, split across providers.
-const workersPerCPU = 50
-
 func (c *Config) updateDebrid(d Debrid) Debrid {
-	workers := runtime.NumCPU() * workersPerCPU
-	perDebrid := workers / len(c.Debrids)
-
 	if d.Provider == "" {
 		d.Provider = d.Name
 	}
@@ -66,9 +58,6 @@ func (c *Config) updateDebrid(d Debrid) Debrid {
 	}
 	if d.DownloadLinksRefreshInterval == "" {
 		d.DownloadLinksRefreshInterval = DefaultDownloadsRefreshInterval
-	}
-	if d.Workers == 0 {
-		d.Workers = perDebrid
 	}
 	if d.AutoExpireLinksAfter == "" {
 		d.AutoExpireLinksAfter = DefaultAutoExpireLinksAfter

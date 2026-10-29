@@ -33,8 +33,6 @@ func settingsExclusions() map[string]string {
 		"strm.secret":               "managed elsewhere",
 		"mount.rclone.enabled":      "not read by the code",
 		"mount.rclone.mount_path":   "not read by the code",
-		"skip_auto_move":            "not read by the code",
-		"debrids[].workers":         "not read by the code",
 	}
 }
 

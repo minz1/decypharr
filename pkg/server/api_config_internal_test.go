@@ -177,8 +177,8 @@ func TestMergeConfigUpdateMatchesListItemsByName(t *testing.T) {
 	t.Parallel()
 	current := config.Config{
 		Debrids: []config.Debrid{
-			{Name: "realdebrid", APIKey: "rd-key", Workers: 4},
-			{Name: "torbox", APIKey: "tb-key", Workers: 8, DownloadAPIKeys: []string{"a", "b"}},
+			{Name: "realdebrid", APIKey: "rd-key"},
+			{Name: "torbox", APIKey: "tb-key", DownloadAPIKeys: []string{"a", "b"}},
 		},
 		Mount: config.Mount{Type: config.MountTypeDFS, MountPath: "/mnt/decypharr"},
 		Usenet: config.Usenet{Providers: []config.UsenetProvider{
@@ -194,7 +194,7 @@ func TestMergeConfigUpdateMatchesListItemsByName(t *testing.T) {
 		t.Fatalf("merge config update: %v", err)
 	}
 	want := []config.Debrid{
-		{Name: "torbox", APIKey: "tb-key", Workers: 8, DownloadAPIKeys: []string{"c"}},
+		{Name: "torbox", APIKey: "tb-key", DownloadAPIKeys: []string{"c"}},
 		{Name: "alldebrid", APIKey: "ad-key"},
 	}
 	if !reflect.DeepEqual(merged.Debrids, want) {

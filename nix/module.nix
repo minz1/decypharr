@@ -185,12 +185,6 @@ in
       description = "Skip pre-caching files after adding. Maps to DECYPHARR_SKIP_PRE_CACHE.";
     };
 
-    skipAutoMove = lib.mkOption {
-      type = lib.types.bool;
-      default = false;
-      description = "Skip automatically moving completed downloads. Maps to DECYPHARR_SKIP_AUTO_MOVE.";
-    };
-
     alwaysRmTrackerUrls = lib.mkOption {
       type = lib.types.bool;
       default = false;
@@ -795,7 +789,6 @@ in
         DECYPHARR_REFRESH_INTERVAL                   = cfg.refreshInterval;
         DECYPHARR_MAX_DOWNLOADS                      = toString cfg.maxDownloads;
         DECYPHARR_SKIP_PRE_CACHE                     = if cfg.skipPreCache then "true" else "false";
-        DECYPHARR_SKIP_AUTO_MOVE                     = if cfg.skipAutoMove then "true" else "false";
         DECYPHARR_ALWAYS_RM_TRACKER_URLS             = if cfg.alwaysRmTrackerUrls then "true" else "false";
         DECYPHARR_RETRIES                            = toString cfg.retries;
         DECYPHARR_MIN_FILE_SIZE                      = cfg.minFileSize;
