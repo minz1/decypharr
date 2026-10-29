@@ -652,12 +652,19 @@ func (tb *Torbox) fetchDownloadLink(
 		return types.DownloadLink{}, err
 	}
 	if !common.IsSuccess(status) {
-		return types.DownloadLink{}, customerror.NewProviderStatusError(
-			fmt.Errorf("torbox API error: Status: %d", status),
-			status,
-		)
+		statusErr := customerror.NewProviderStatusError(fmt.Errorf("torbox API error: Status: %d", status), status)
+		if status == http.StatusNotFound {
+			return types.DownloadLink{}, fmt.Errorf("%w: %w", statusErr, customerror.ErrTorrentNotFound)
+		}
+		return types.DownloadLink{}, statusErr
 	}
 	if res.Data == nil || *res.Data == "" {
+		switch {
+		case res.Error == "ITEM_NOT_FOUND":
+			return types.DownloadLink{}, fmt.Errorf("torbox: %s: %w", res.Detail, customerror.ErrTorrentNotFound)
+		case res.Success:
+			return types.DownloadLink{}, fmt.Errorf("%w: torbox", types.ErrEmptyDownloadLink)
+		}
 		return types.DownloadLink{}, fmt.Errorf("torbox API error: no download link: %v %s", res.Error, res.Detail)
 	}
 
