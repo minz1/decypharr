@@ -180,7 +180,7 @@ func (r *Service) clearDisprovedMarks(ctx context.Context, results []fileResult)
 		if healthyFiles[result.infoHash] == nil {
 			healthyFiles[result.infoHash] = make(map[string]bool)
 		}
-		healthyFiles[result.infoHash][result.name] = result.healthy
+		healthyFiles[result.infoHash][result.name] = result.healthy && result.fresh
 	}
 	for infoHash, files := range healthyFiles {
 		entry, err := r.storage.Get(infoHash)

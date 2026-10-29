@@ -102,6 +102,7 @@ func (r *Service) probeTorrentFileByUnrestrict(
 	}
 	if err == nil && !downloadLink.Empty() {
 		result.healthy = true
+		result.fresh = fresh
 		r.hearsay.ObserveTorrent(client.Config().Provider, file.InfoHash, true)
 		return result
 	}

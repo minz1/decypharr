@@ -22,7 +22,7 @@ func clearService(t *testing.T, entries ...*storage.Entry) (*Service, *clientBac
 }
 
 func healthy(hash, name string) fileResult {
-	return fileResult{name: name, infoHash: hash, protocol: config.ProtocolTorrent, healthy: true}
+	return fileResult{name: name, infoHash: hash, protocol: config.ProtocolTorrent, healthy: true, fresh: true}
 }
 
 func markedEntry(hash string, names ...string) *storage.Entry {
@@ -109,5 +109,17 @@ func TestProbeEntryLeavesUnmarkedAlone(t *testing.T) {
 	entry.Bad = false
 	if backend := probeOnce(t, entry); len(backend.cleared) != 0 {
 		t.Fatalf("ClearBad calls = %v, want none", backend.cleared)
+	}
+}
+
+// A light CheckFile pass never clears a mark: only the fresh read check that set it may.
+func TestClearDisprovedMarksNeedsFreshResults(t *testing.T) {
+	t.Parallel()
+	light := healthy(confirmHash, "a.mkv")
+	light.fresh = false
+	service, backend := clearService(t, markedEntry(confirmHash, "a.mkv"))
+	service.clearDisprovedMarks(t.Context(), []fileResult{light})
+	if len(backend.cleared) != 0 {
+		t.Fatalf("ClearBad calls = %v, want none from a light probe", backend.cleared)
 	}
 }
