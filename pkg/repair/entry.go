@@ -34,6 +34,7 @@ func (r *Service) probeEntry(
 	}
 	previous := h.Status
 	stored := h.BrokenFiles
+	markedBefore := h.Dirty && h.DirtyReason == MarkedBadReason
 
 	h.PreviousStatus = previous
 	h.Status = storage.HealthRepairing
@@ -60,6 +61,7 @@ func (r *Service) probeEntry(
 	h.NextCheckDueAt = h.LastCheckedAt.Add(r.recheckInterval())
 	h.Dirty = false
 	h.DirtyReason = ""
+	r.keepMarkedBadRecheck(h, markedBefore)
 	h.ActiveRunID = ""
 	h.PreviousStatus = ""
 	if proto := firstProtocol(results); proto != "" {
@@ -200,4 +202,15 @@ func allFilesHealthy(entry *storage.Entry, healthyFiles map[string]bool) bool {
 		}
 	}
 	return true
+}
+
+// keepMarkedBadRecheck keeps a recheck that a give-up queued during this probe (not one it consumed) past its save.
+func (r *Service) keepMarkedBadRecheck(h *storage.EntryHealth, markedBefore bool) {
+	if markedBefore {
+		return
+	}
+	latest, _ := r.storage.GetEntryHealth(h.EntryName)
+	if latest != nil && latest.Dirty && latest.DirtyReason == MarkedBadReason {
+		h.Dirty, h.DirtyReason, h.NextCheckDueAt = true, MarkedBadReason, time.Time{}
+	}
 }

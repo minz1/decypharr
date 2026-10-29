@@ -1,6 +1,8 @@
 package repair
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/sirrobot01/decypharr/internal/config"
@@ -121,5 +123,37 @@ func TestClearDisprovedMarksNeedsFreshResults(t *testing.T) {
 	service.clearDisprovedMarks(t.Context(), []fileResult{light})
 	if len(backend.cleared) != 0 {
 		t.Fatalf("ClearBad calls = %v, want none from a light probe", backend.cleared)
+	}
+}
+
+// givingUpBackend fails every re-insert the way a give-up does: it queues the folder for a marked_bad recheck.
+type givingUpBackend struct {
+	clientBackend
+
+	store *storage.Storage
+}
+
+func (b *givingUpBackend) ReinsertEntry(_ context.Context, entry *storage.Entry) error {
+	if err := b.store.MarkEntryDirty(entry.Name, config.ProtocolTorrent, MarkedBadReason); err != nil {
+		return err
+	}
+	return errors.New("every provider refused")
+}
+
+// A give-up during the sweep's own auto-heal keeps its recheck; the sweep's final save must not wipe it.
+func TestProbeEntryKeepsMarkedBadRecheckFromAutoHeal(t *testing.T) {
+	t.Parallel()
+	store := newRepairTestStorage(t)
+	entry := confirmEntry("a.mkv")
+	if err := store.AddOrUpdate(entry); err != nil {
+		t.Fatal(err)
+	}
+	service := New(Dependencies{Storage: store, Backend: &givingUpBackend{store: store}})
+	item := &storage.EntryItem{Name: entry.Name, Files: entry.Files}
+	service.probeEntry(t.Context(), "run", &candidate{name: entry.Name, item: item}, newErrorCache(), nil,
+		RunOptions{}, true)
+	health, err := store.GetEntryHealth(entry.Name)
+	if err != nil || !health.Dirty || health.DirtyReason != MarkedBadReason {
+		t.Fatalf("health = %+v, %v; want the marked_bad recheck kept", health, err)
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/arr/reacquire"
+	"github.com/sirrobot01/decypharr/pkg/repair"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
@@ -247,7 +248,11 @@ func (m *Manager) ClearBad(_ context.Context, infohash string) error {
 		return nil
 	}
 	if _, inFlight := m.fixer.inFlightRepairs.Load(infohash); inFlight {
-		return m.storage.MarkEntryDirty(entry.GetFolder(m.folderNaming()), config.ProtocolTorrent, "marked_bad")
+		return m.storage.MarkEntryDirty(
+			entry.GetFolder(m.folderNaming()),
+			config.ProtocolTorrent,
+			repair.MarkedBadReason,
+		)
 	}
 	entry.Bad = false
 	entry.UpdatedAt = time.Now()
@@ -285,7 +290,7 @@ func (m *Manager) giveUpOnEntry(entry *storage.Entry) {
 	}
 	if entry.IsTorrent() {
 		if err := m.storage.MarkEntryDirty(entry.GetFolder(m.folderNaming()), config.ProtocolTorrent,
-			"marked_bad"); err != nil {
+			repair.MarkedBadReason); err != nil {
 			m.logger.Warn().Err(err).Str("infohash", entry.InfoHash).Msg("Failed to queue the bad entry for a recheck")
 		}
 	}

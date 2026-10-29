@@ -6,6 +6,9 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
+// MarkedBadReason is the dirty reason that queues a freshly marked entry for a recheck.
+const MarkedBadReason = "marked_bad"
+
 // ConfirmBroken reports whether a live file of the active placement fails a fresh read check; inconclusive is false.
 func (r *Service) ConfirmBroken(ctx context.Context, entry *storage.Entry) bool {
 	if !entry.IsTorrent() {
