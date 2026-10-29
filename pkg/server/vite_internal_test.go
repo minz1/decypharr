@@ -164,6 +164,22 @@ func TestTemplatesNameKnownEntries(t *testing.T) {
 	}
 }
 
+// Source maps are not shipped: nothing reads them and they would only grow the binary.
+func TestEmbeddedBuildHasNoSourceMaps(t *testing.T) {
+	t.Parallel()
+	static := embeddedStatic()
+	if _, err := loadViteManifest(static); errors.Is(err, errUINotBuilt) {
+		t.Skip("UI not built; the nix build runs this against the real bundle")
+	}
+	sourceMaps, err := fs.Glob(static, "vite/assets/*.map")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sourceMaps) > 0 {
+		t.Errorf("the embedded build ships %d source maps, e.g. %s", len(sourceMaps), sourceMaps[0])
+	}
+}
+
 func TestViteFilesAreImmutable(t *testing.T) {
 	t.Parallel()
 	js := strings.Repeat("console.log('decypharr');\n", 20)
