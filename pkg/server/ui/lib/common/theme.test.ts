@@ -36,14 +36,14 @@ describe("the theme on load", () => {
     expect(state()).toStrictEqual({ theme: "light", stored: "light", checked: false });
   });
 
-  it("follows the system when nothing is stored, and stores it", () => {
+  it("follows the system when nothing is stored, and stores nothing", () => {
     page("", true);
-    expect(state()).toStrictEqual({ theme: "dark", stored: "dark", checked: true });
+    expect(state()).toStrictEqual({ theme: "dark", stored: "", checked: true });
   });
 
   it("is light when the system is not dark", () => {
     page("", false);
-    expect(state()).toStrictEqual({ theme: "light", stored: "light", checked: false });
+    expect(state()).toStrictEqual({ theme: "light", stored: "", checked: false });
   });
 });
 
@@ -52,6 +52,14 @@ describe("the theme toggle", () => {
     page("dark", true);
     document.querySelector<HTMLInputElement>("#themeToggle")?.click();
     expect(state()).toStrictEqual({ theme: "light", stored: "light", checked: false });
+  });
+
+  it("is used on the next load", () => {
+    page("", false);
+    document.querySelector<HTMLInputElement>("#themeToggle")?.click();
+    document.body.innerHTML = '<input type="checkbox" id="themeToggle">';
+    setupThemeToggle(document);
+    expect(state()).toStrictEqual({ theme: "dark", stored: "dark", checked: true });
   });
 
   it("is optional", () => {
@@ -71,5 +79,12 @@ describe("a system theme change", () => {
     localStorage.clear();
     systemChange(list, false);
     expect({ kept, followed: state().theme }).toStrictEqual({ kept: "dark", followed: "light" });
+  });
+
+  it("keeps following the system after it is followed", () => {
+    const list = page("", false);
+    systemChange(list, true);
+    systemChange(list, false);
+    expect(state()).toStrictEqual({ theme: "light", stored: "", checked: false });
   });
 });
