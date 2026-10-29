@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
@@ -27,8 +28,8 @@ func (r *Service) probeTorrentFile(
 		result.reason = "provider_client_not_found"
 		return result
 	}
-	if opts.UnrestrictLink {
-		return r.probeTorrentFileByUnrestrict(ctx, entry, file, name, result, client)
+	if entry.Bad || opts.UnrestrictLink {
+		return r.probeTorrentFileByUnrestrict(ctx, entry, file, name, result, client, entry.Bad)
 	}
 	if !client.SupportsCheck() {
 		result.reason = "provider_check_unsupported"
@@ -60,7 +61,9 @@ func (r *Service) probeTorrentFileByUnrestrict(
 	name string,
 	result fileResult,
 	client debrid.Client,
+	fresh bool,
 ) fileResult {
+	started := time.Now()
 	placement := entry.GetActiveProvider()
 	if placement == nil {
 		result.reason = "placement_not_found"
@@ -87,17 +90,30 @@ func (r *Service) probeTorrentFileByUnrestrict(
 		Deleted:   file.Deleted,
 	}
 	downloadLink, err := client.GetDownloadLink(ctx, placement.ID, debridFile)
+	if fresh && err == nil && !downloadLink.Empty() && downloadLink.Generated.Before(started) {
+		if acc, accErr := client.AccountManager().GetAccount(downloadLink.Token); accErr == nil && acc != nil {
+			_ = acc.DeleteLink(downloadLink, nil)
+		}
+		downloadLink, err = client.GetDownloadLink(ctx, placement.ID, debridFile)
+		if err == nil && !downloadLink.Empty() && downloadLink.Generated.Before(started) {
+			result.reason = "cached_link"
+			return result
+		}
+	}
 	if err == nil && !downloadLink.Empty() {
 		result.healthy = true
 		r.hearsay.ObserveTorrent(client.Config().Provider, file.InfoHash, true)
 		return result
 	}
 	if err == nil || errors.Is(err, debridTypes.ErrEmptyDownloadLink) ||
-		errors.Is(err, customerror.ErrHosterUnavailable) {
+		errors.Is(err, customerror.ErrHosterUnavailable) || errors.Is(err, customerror.ErrTorrentNotFound) {
 		result.broken = true
-		if errors.Is(err, customerror.ErrHosterUnavailable) {
+		switch {
+		case errors.Is(err, customerror.ErrHosterUnavailable):
 			result.reason = reasonHosterUnavailable
-		} else {
+		case errors.Is(err, customerror.ErrTorrentNotFound):
+			result.reason = "torrent_not_found"
+		default:
 			result.reason = reasonEmptyDownloadLink
 		}
 		r.hearsay.ObserveTorrent(client.Config().Provider, file.InfoHash, false)
