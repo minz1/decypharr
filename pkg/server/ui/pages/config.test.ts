@@ -17,7 +17,7 @@ import {
 import { element } from "#ui/lib/testing/dom";
 import { loadFixture } from "#ui/lib/testing/fixture";
 import { legacyNoEditSave } from "#ui/lib/testing/legacy-save";
-import { roundTripMismatches } from "#ui/lib/testing/round-trip";
+import { isExcluded, leavesOf, readExclusions, roundTripMismatches } from "#ui/lib/testing/round-trip";
 import { labelledToasts } from "#ui/lib/testing/toast";
 
 const xss = "<img src=x onerror=alert(1)>";
@@ -65,6 +65,43 @@ describe("the settings sections", () => {
     populateSections(document, inject("configSample"));
     const collected = assembleSettings(collectSections(document));
     expect(roundTripMismatches(inject("configSample"), collected, inject("configExclusions"))).toStrictEqual([]);
+  });
+});
+
+const onlyTrue = (value: unknown, path: string, flag: string): unknown => {
+  if (typeof value === "boolean") {
+    return path === flag;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => onlyTrue(item, `${path}[]`, flag));
+  }
+  if (typeof value === "object" && value !== null) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, onlyTrue(item, path === "" ? key : `${path}.${key}`, flag)]),
+    );
+  }
+  return value;
+};
+
+const exclusions = readExclusions(inject("configExclusions"));
+const flags = [...leavesOf(inject("configSample"))]
+  .filter(([path, values]) => !isExcluded(exclusions, path) && values.some((value) => typeof value === "boolean"))
+  .map(([path]) => path);
+const trueFlags = (body: unknown): string[] =>
+  [...leavesOf(body)]
+    .filter(([path, values]) => !isExcluded(exclusions, path) && values.includes(true))
+    .map(([path]) => path);
+
+describe("each settings checkbox", () => {
+  it("covers the sample's flags", () => {
+    expect(flags.length).toBeGreaterThan(0);
+  });
+
+  it.each(flags)("%s alone saves as the only true flag", (flag) => {
+    loadFixture("config");
+    populateSections(document, onlyTrue(inject("configSample"), "", flag));
+    const body = assembleSettings(collectSections(document));
+    expect(trueFlags(body)).toStrictEqual([flag]);
   });
 });
 

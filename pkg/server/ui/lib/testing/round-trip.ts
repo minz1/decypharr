@@ -70,4 +70,4 @@ const roundTripMismatches = (sample: unknown, collected: unknown, exclusionMap: 
   return [...missed, ...echoed];
 };
 
-export { roundTripMismatches };
+export { isExcluded, leavesOf, readExclusions, roundTripMismatches };
