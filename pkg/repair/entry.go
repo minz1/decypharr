@@ -46,6 +46,7 @@ func (r *Service) probeEntry(
 	if autoRepair {
 		r.autoHealResults(ctx, results, heal)
 	}
+	r.clearDisprovedMarks(ctx, results)
 
 	broken := r.brokenFiles(c, results)
 	final := rollupStatus(results)
@@ -167,4 +168,36 @@ func (r *Service) probeFile(
 		})
 	}
 	return r.probeTorrentFile(ctx, entry, file, name, res, opts)
+}
+
+// clearDisprovedMarks lifts the bad mark of each torrent whose live files all passed the read check.
+func (r *Service) clearDisprovedMarks(ctx context.Context, results []fileResult) {
+	healthyFiles := make(map[string]map[string]bool)
+	for _, result := range results {
+		if result.infoHash == "" {
+			continue
+		}
+		if healthyFiles[result.infoHash] == nil {
+			healthyFiles[result.infoHash] = make(map[string]bool)
+		}
+		healthyFiles[result.infoHash][result.name] = result.healthy
+	}
+	for infoHash, files := range healthyFiles {
+		entry, err := r.storage.Get(infoHash)
+		if err != nil || entry == nil || !entry.Bad || !entry.IsTorrent() || !allFilesHealthy(entry, files) {
+			continue
+		}
+		if clearErr := r.backend.ClearBad(ctx, infoHash); clearErr != nil {
+			r.logger.Warn().Err(clearErr).Str("infohash", infoHash).Msg("clearing a disproved bad mark failed")
+		}
+	}
+}
+
+func allFilesHealthy(entry *storage.Entry, healthyFiles map[string]bool) bool {
+	for name, file := range entry.Files {
+		if file != nil && !file.Deleted && !healthyFiles[name] {
+			return false
+		}
+	}
+	return true
 }
