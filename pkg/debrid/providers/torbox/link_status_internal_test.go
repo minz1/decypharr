@@ -100,5 +100,8 @@ func TestGetTorrentWithoutARealIDIsNotFound(t *testing.T) {
 		if _, err := testTorbox(server.URL).GetTorrent(id); !errors.Is(err, customerror.ErrTorrentNotFound) {
 			t.Errorf("GetTorrent(%q) error = %v, want ErrTorrentNotFound", id, err)
 		}
+		if err := testTorbox(server.URL).DeleteTorrent(id); !errors.Is(err, customerror.ErrTorrentNotFound) {
+			t.Errorf("DeleteTorrent(%q) error = %v, want ErrTorrentNotFound", id, err)
+		}
 	}
 }

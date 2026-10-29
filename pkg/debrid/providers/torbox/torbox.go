@@ -611,8 +611,8 @@ func (tb *Torbox) CheckStatus(torrent *types.Torrent) (*types.Torrent, error) {
 
 func (tb *Torbox) DeleteTorrent(torrentID string) error {
 	id, err := strconv.Atoi(torrentID)
-	if err != nil {
-		return fmt.Errorf("invalid TorBox torrent id %q: %w", torrentID, err)
+	if err != nil || id <= 0 {
+		return customerror.ErrTorrentNotFound
 	}
 	payload := struct {
 		TorrentID int    `json:"torrent_id"`
