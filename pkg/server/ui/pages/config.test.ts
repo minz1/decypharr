@@ -4,6 +4,8 @@ import { JSON_NULL } from "#ui/lib/common/json";
 import { assembleSettings, collectSections, populateSections } from "#ui/lib/config/sections";
 import {
   bootSettings,
+  click,
+  fill,
   hasKey,
   isHidden,
   posts,
@@ -57,6 +59,13 @@ const secondSave = async (requests: Awaited<ReturnType<typeof bootSettings>>["re
   });
   const second: unknown = JSON.parse(posts(requests, "api/config")[1]?.body ?? "{}");
   return second;
+};
+
+const editOneOfEachType = (): void => {
+  fill('[name="retries"]', "7");
+  click('[name="allow_samples"]');
+  fill('[name="tls_ca_file"]', "/etc/ssl/lan-ca.pem");
+  fill('[name="categories"]', "tv, movies");
 };
 
 describe("the settings sections", () => {
@@ -116,6 +125,22 @@ describe("saving loaded settings", () => {
       arrs: legacyNoEditSave.arrs.map((arr) => Object.assign(structuredClone(arr), { download_uncached: JSON_NULL })),
     };
     expect(posts(requests, "api/config").map((request) => request.body)).toStrictEqual([JSON.stringify(expected)]);
+  });
+
+  it("saves an edited number, checkbox, text and list as edited", async () => {
+    const loaded = { retries: 3, allow_samples: false, tls_ca_file: "", categories: ["sonarr"] };
+    const { requests } = await bootSettings({ routes: { "GET api/config": serving(loaded) } });
+    await settingsLoaded();
+    editOneOfEachType();
+    submitSettings();
+    const body = await savedBody(requests);
+    const saved = Object.fromEntries(Object.keys(loaded).map((key) => [key, body[key]]));
+    expect(saved).toStrictEqual({
+      retries: 7,
+      allow_samples: true,
+      tls_ca_file: "/etc/ssl/lan-ca.pem",
+      categories: ["tv", "movies"],
+    });
   });
 
   it("sends every request under the URL base", async () => {
