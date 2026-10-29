@@ -20,7 +20,6 @@ type fileResult struct {
 	healthy  bool
 	fresh    bool // healthy by a fresh read check, the only kind that may clear a bad mark
 	broken   bool
-	deferred bool
 	reason   string
 }
 

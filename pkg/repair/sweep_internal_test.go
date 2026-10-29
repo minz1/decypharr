@@ -22,8 +22,8 @@ import (
 
 const sweepEntryHash = "0123456789012345678901234567890123456789"
 
-// sweepFixture is one arr-mapped torrent entry whose only provider is gone,
-// so every probe finds its files broken (provider_client_not_found).
+// sweepFixture is one arr-mapped torrent entry whose provider has no links for
+// its files, so every probe finds them broken (missing_provider_link).
 type sweepFixture struct {
 	store      *storage.Storage
 	service    *Service
@@ -52,7 +52,10 @@ func newSweepFixture(t *testing.T, fileNames ...string) *sweepFixture {
 	reacquirer := &fakeReacquirer{reacquire: func(reacquire.Request) (*reacquire.Job, error) {
 		return &reacquire.Job{ID: "job"}, nil
 	}}
-	backend := &removedProviderBackend{reinsert: func(*storage.Entry) error { return errors.New("no replacement") }}
+	backend := &removedProviderBackend{
+		reinsert: func(*storage.Entry) error { return errors.New("no replacement") },
+		client:   newLinkClient(nil),
+	}
 	service := New(Dependencies{Storage: store, Backend: backend, Reacquirer: reacquirer})
 	return &sweepFixture{
 		store: store, service: service, reacquirer: reacquirer, backend: backend, entry: entry,

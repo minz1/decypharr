@@ -16,7 +16,7 @@ func (r *Service) ConfirmBroken(ctx context.Context, entry *storage.Entry) bool 
 	}
 	client := r.backend.ProviderClient(entry.ActiveProvider)
 	if client == nil {
-		return true
+		return false
 	}
 	for name, file := range entry.Files {
 		if file == nil || file.Deleted {

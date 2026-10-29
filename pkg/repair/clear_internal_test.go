@@ -145,10 +145,13 @@ func TestProbeEntryKeepsMarkedBadRecheckFromAutoHeal(t *testing.T) {
 	t.Parallel()
 	store := newRepairTestStorage(t)
 	entry := confirmEntry("a.mkv")
+	entry.Providers["rd"].Files["a.mkv"].Link = ""
 	if err := store.AddOrUpdate(entry); err != nil {
 		t.Fatal(err)
 	}
-	service := New(Dependencies{Storage: store, Backend: &givingUpBackend{store: store}})
+	backend := &givingUpBackend{store: store}
+	backend.client = newLinkClient(nil)
+	service := New(Dependencies{Storage: store, Backend: backend})
 	item := &storage.EntryItem{Name: entry.Name, Files: entry.Files}
 	service.probeEntry(t.Context(), "run", &candidate{name: entry.Name, item: item}, newErrorCache(), nil,
 		RunOptions{}, true)

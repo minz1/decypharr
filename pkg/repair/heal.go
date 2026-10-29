@@ -126,6 +126,9 @@ const (
 	reasonUsenetCorruptContent = "usenet_corrupt_content"
 )
 
+// reasonProviderClientNotFound is a provider missing from the manager: decypharr's side, never the release's.
+const reasonProviderClientNotFound = "provider_client_not_found"
+
 func strategyForReason(reason string) reacquire.Strategy {
 	switch reason {
 	case reasonHosterUnavailable, reasonEmptyDownloadLink, reasonUsenetSegmentMissing, reasonUsenetCorruptContent:

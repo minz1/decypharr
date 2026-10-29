@@ -15,9 +15,10 @@ type removedProviderBackend struct {
 	Backend
 
 	reinsert func(*storage.Entry) error
+	client   debrid.Client // nil: the provider is missing
 }
 
-func (b *removedProviderBackend) ProviderClient(string) debrid.Client { return nil }
+func (b *removedProviderBackend) ProviderClient(string) debrid.Client { return b.client }
 func (b *removedProviderBackend) ReinsertEntry(_ context.Context, entry *storage.Entry) error {
 	return b.reinsert(entry)
 }
@@ -83,8 +84,8 @@ func TestProbeEntryWithRemovedProvider(t *testing.T) {
 }
 
 // assertRemovedProviderOutcome checks the probe result, and what was saved,
-// for an entry whose active provider is gone: broken unless a replacement
-// placement was activated.
+// for an entry whose active provider is gone: unknown with the reason, never
+// broken (no reacquire), unless a replacement placement was activated.
 func assertRemovedProviderOutcome(
 	t *testing.T,
 	store *storage.Storage,
@@ -93,16 +94,16 @@ func assertRemovedProviderOutcome(
 	replacement bool,
 ) {
 	t.Helper()
-	want := storage.HealthBroken
+	want := storage.HealthUnknown
 	if replacement {
 		want = storage.HealthHealthy
 	}
 	if health.Status != want {
 		t.Fatalf("health = %s, want %s", health.Status, want)
 	}
-	if want == storage.HealthBroken &&
-		(health.FailureReason != "provider_client_not_found" || health.BrokenCount != 1) {
-		t.Fatalf("broken health = %#v", health)
+	if want == storage.HealthUnknown &&
+		(health.FailureReason != "provider_client_not_found" || health.BrokenCount != 0) {
+		t.Fatalf("unknown health = %#v", health)
 	}
 	saved, err := store.GetEntryHealth(entry.Name)
 	if err != nil || saved.Status != want {

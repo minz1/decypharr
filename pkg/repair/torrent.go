@@ -24,8 +24,8 @@ func (r *Service) probeTorrentFile(
 ) fileResult {
 	client := r.backend.ProviderClient(entry.ActiveProvider)
 	if client == nil {
-		result.broken = true
-		result.reason = "provider_client_not_found"
+		result.broken = opts.MissingProviderIsBroken
+		result.reason = reasonProviderClientNotFound
 		return result
 	}
 	if entry.Bad || opts.UnrestrictLink {
@@ -127,7 +127,8 @@ func (r *Service) probeTorrentFileByUnrestrict(
 func (r *Service) autoHealResults(ctx context.Context, results []fileResult, heal *errorCache) {
 	byHash := make(map[string][]int)
 	for i, result := range results {
-		if result.broken && result.protocol == config.ProtocolTorrent && result.infoHash != "" {
+		if (result.broken || result.reason == reasonProviderClientNotFound) &&
+			result.protocol == config.ProtocolTorrent && result.infoHash != "" {
 			byHash[result.infoHash] = append(byHash[result.infoHash], i)
 		}
 	}
@@ -190,22 +191,16 @@ func rollupStatus(results []fileResult) storage.HealthStatus {
 	if len(results) == 0 {
 		return storage.HealthUnknown
 	}
-	healthy := false
-	deferred := false
+	status := storage.HealthHealthy
 	for _, result := range results {
 		if result.broken {
 			return storage.HealthBroken
 		}
-		healthy = healthy || result.healthy
-		deferred = deferred || result.deferred
+		if !result.healthy {
+			status = storage.HealthUnknown
+		}
 	}
-	if deferred {
-		return storage.HealthUnknown
-	}
-	if healthy {
-		return storage.HealthHealthy
-	}
-	return storage.HealthUnknown
+	return status
 }
 
 func firstProtocol(results []fileResult) config.Protocol {

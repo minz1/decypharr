@@ -147,7 +147,7 @@ func TestConfirmBroken(t *testing.T) {
 		{name: "outage then hoster unavailable", links: map[string][]linkResult{
 			"a.mkv": fail(statusErr(503)), "b.mkv": fail(customerror.ErrHosterUnavailable),
 		}, want: true},
-		{name: "no client", none: true, want: true},
+		{name: "no client is inconclusive", none: true, want: false},
 		{name: "nzb entry", nzb: true, want: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

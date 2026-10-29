@@ -1,6 +1,7 @@
 package repair
 
 import (
+	"cmp"
 	"context"
 	"slices"
 	"time"
@@ -75,7 +76,7 @@ func (r *Service) probeEntry(
 		h.LastFailedAt = h.LastCheckedAt
 		h.FailureReason = topReason(broken)
 	case storage.HealthUnknown:
-		h.FailureReason = firstDeferredReason(results)
+		h.FailureReason = firstFailureReason(results)
 	case storage.HealthRepairing, storage.HealthUnsupported, storage.HealthStale:
 		// rollupStatus never produces these.
 	}
@@ -98,9 +99,9 @@ func confirmedBroken(previous storage.HealthStatus, stored, broken []storage.Bro
 	})
 }
 
-func firstDeferredReason(results []fileResult) string {
+func firstFailureReason(results []fileResult) string {
 	for _, result := range results {
-		if result.deferred && result.reason != "" {
+		if !result.healthy && result.reason != "" {
 			return result.reason
 		}
 	}
@@ -174,19 +175,24 @@ func (r *Service) probeFile(
 
 // clearDisprovedMarks lifts the bad mark of each torrent whose live files all passed the read check.
 func (r *Service) clearDisprovedMarks(ctx context.Context, results []fileResult) {
-	healthyFiles := make(map[string]map[string]bool)
+	byHash := make(map[string]map[string]fileResult)
 	for _, result := range results {
 		if result.infoHash == "" {
 			continue
 		}
-		if healthyFiles[result.infoHash] == nil {
-			healthyFiles[result.infoHash] = make(map[string]bool)
+		if byHash[result.infoHash] == nil {
+			byHash[result.infoHash] = make(map[string]fileResult)
 		}
-		healthyFiles[result.infoHash][result.name] = result.healthy && result.fresh
+		byHash[result.infoHash][result.name] = result
 	}
-	for infoHash, files := range healthyFiles {
+	for infoHash, files := range byHash {
 		entry, err := r.storage.Get(infoHash)
-		if err != nil || entry == nil || !entry.Bad || !entry.IsTorrent() || !allFilesHealthy(entry, files) {
+		if err != nil || entry == nil || !entry.Bad || !entry.IsTorrent() {
+			continue
+		}
+		if reason := firstUnpassedReason(entry, files); reason != "" {
+			r.logger.Info().Str("infohash", infoHash).Str("name", entry.Name).Str("reason", reason).
+				Msg("bad mark kept")
 			continue
 		}
 		if clearErr := r.backend.ClearBad(ctx, infoHash); clearErr != nil {
@@ -195,13 +201,25 @@ func (r *Service) clearDisprovedMarks(ctx context.Context, results []fileResult)
 	}
 }
 
-func allFilesHealthy(entry *storage.Entry, healthyFiles map[string]bool) bool {
+// firstUnpassedReason names why the first live file (by name) failed the fresh read check, or "" when all passed.
+func firstUnpassedReason(entry *storage.Entry, files map[string]fileResult) string {
+	names := make([]string, 0, len(entry.Files))
 	for name, file := range entry.Files {
-		if file != nil && !file.Deleted && !healthyFiles[name] {
-			return false
+		if file != nil && !file.Deleted {
+			names = append(names, name)
 		}
 	}
-	return true
+	slices.Sort(names)
+	for _, name := range names {
+		result, probed := files[name]
+		switch {
+		case !probed:
+			return "file_not_probed"
+		case !result.healthy || !result.fresh:
+			return cmp.Or(result.reason, "not_freshly_checked")
+		}
+	}
+	return ""
 }
 
 // keepMarkedBadRecheck keeps a recheck that a give-up queued during this probe (not one it consumed) past its save.

@@ -42,6 +42,8 @@ type RunOptions struct {
 	// configured repair.verify_content setting.
 	VerifyContent *bool
 	ProtocolScope string
+	// MissingProviderIsBroken lets an owner-started recheck act on a provider missing from config; sweeps never do.
+	MissingProviderIsBroken bool
 }
 
 type ClearStateResult struct {

@@ -40,7 +40,7 @@ func (r *Service) RecheckEntry(ctx context.Context, entryName string, fix bool) 
 		}
 		heal := newErrorCache()
 		nzb := r.nzbProber()
-		final, _ := r.probeEntry(ctx, runID, c, heal, nzb, RunOptions{}, fix)
+		final, _ := r.probeEntry(ctx, runID, c, heal, nzb, RunOptions{MissingProviderIsBroken: true}, fix)
 		if final == nil {
 			return
 		}

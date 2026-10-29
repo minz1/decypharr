@@ -76,7 +76,6 @@ func (p *nzbProber) probe(ctx context.Context, request nzbProbeRequest) fileResu
 		result.broken = true
 		result.reason = "usenet_manifest_invalid"
 	default:
-		result.deferred = true
 		result.reason = "usenet_probe_error"
 	}
 	return result

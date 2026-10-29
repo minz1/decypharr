@@ -30,7 +30,7 @@ func TestNZBProberReportsHealthyFile(t *testing.T) {
 	t.Parallel()
 	client := stubNZBRepairClient{checkFile: func(context.Context, string, string) error { return nil }}
 	result := newNZBProber(client).probe(t.Context(), nzbProbeRequest{nzbID: "nzb", fileName: "movie.mkv"})
-	if !result.healthy || result.broken || result.deferred {
+	if !result.healthy || result.broken {
 		t.Fatalf("result = %+v", result)
 	}
 }
@@ -69,7 +69,7 @@ func TestNZBProberDefersOperationalFailure(t *testing.T) {
 	wantErr := errors.New("provider unavailable")
 	client := stubNZBRepairClient{checkFile: func(context.Context, string, string) error { return wantErr }}
 	result := newNZBProber(client).probe(t.Context(), nzbProbeRequest{nzbID: "nzb", fileName: "movie.mkv"})
-	if result.healthy || result.broken || !result.deferred || result.reason != "usenet_probe_error" {
+	if result.healthy || result.broken || result.reason != "usenet_probe_error" {
 		t.Fatalf("result = %+v", result)
 	}
 }
@@ -78,7 +78,7 @@ func TestRollupStatusKeepsUnresolvedEntryUnknown(t *testing.T) {
 	t.Parallel()
 	results := []fileResult{
 		{name: "healthy.mkv", healthy: true},
-		{name: "unresolved.mkv", deferred: true, reason: "usenet_probe_error"},
+		{name: "unresolved.mkv", reason: "usenet_probe_error"},
 	}
 	if got := rollupStatus(results); got != storage.HealthUnknown {
 		t.Fatalf("status = %q, want unknown", got)
@@ -134,7 +134,7 @@ func TestNZBProberBreaksOnManifestFailures(t *testing.T) {
 				checkFile: func(context.Context, string, string) error { return test.probeErr },
 			}
 			result := newNZBProber(client).probe(t.Context(), nzbProbeRequest{nzbID: "nzb", fileName: "movie.mkv"})
-			if !result.broken || result.deferred || result.reason != test.wantReason {
+			if !result.broken || result.reason != test.wantReason {
 				t.Fatalf("result = %+v, want broken with reason %q", result, test.wantReason)
 			}
 		})
