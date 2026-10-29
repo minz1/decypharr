@@ -85,27 +85,19 @@ describe("prune settings", () => {
 });
 
 describe("confirming prune in delete mode", () => {
-  it("confirmPruneDelete asks for every sent enabled delete prune", async () => {
-    const reportPrune = { ...deletePrune, mode: "report" };
-    expect({
-      notSent: await asks(deletePrune),
-      switchToDelete: await asks(reportPrune, deletePrune),
-      enableWithDeleteStored: await asks({ ...deletePrune, enabled: false }, deletePrune),
-      shorterGrace: await asks(deletePrune, { ...deletePrune, grace: "24h" }),
-      higherMaxPerRun: await asks(deletePrune, { ...deletePrune, max_per_run: 50 }),
-      rootRemoved: await asks(deletePrune, { ...deletePrune, roots: ["/data/a"] }),
-      disabledDelete: await asks(deletePrune, { ...deletePrune, enabled: false }),
-      enabledReport: await asks(deletePrune, reportPrune),
-    }).toStrictEqual({
-      notSent: false,
-      switchToDelete: true,
-      enableWithDeleteStored: true,
-      shorterGrace: true,
-      higherMaxPerRun: true,
-      rootRemoved: true,
-      disabledDelete: false,
-      enabledReport: false,
-    });
+  const reportPrune = { ...deletePrune, mode: "report" };
+
+  it.each([
+    { name: "not sent", baseline: deletePrune, sent: undefined, want: false },
+    { name: "switch to delete", baseline: reportPrune, sent: deletePrune, want: true },
+    { name: "enable with delete stored", baseline: { ...deletePrune, enabled: false }, sent: deletePrune, want: true },
+    { name: "shorter grace", baseline: deletePrune, sent: { ...deletePrune, grace: "24h" }, want: true },
+    { name: "higher max_per_run", baseline: deletePrune, sent: { ...deletePrune, max_per_run: 50 }, want: true },
+    { name: "root removed", baseline: deletePrune, sent: { ...deletePrune, roots: ["/data/a"] }, want: true },
+    { name: "disabled delete", baseline: deletePrune, sent: { ...deletePrune, enabled: false }, want: false },
+    { name: "enabled report", baseline: deletePrune, sent: reportPrune, want: false },
+  ])("confirmPruneDelete asks on $name: $want", async ({ baseline, sent, want }) => {
+    await expect(asks(baseline, sent)).resolves.toBe(want);
   });
 
   it("the delete confirm names the mode, max_per_run and grace", async () => {
