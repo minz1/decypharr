@@ -48,7 +48,7 @@ var windowsReservedFolderName = regexp.MustCompile(`(?i)^(?:CON|PRN|AUX|NUL|COM[
 // legacyFilterOrder is the order legacy custom_folders filters migrate in.
 func legacyFilterOrder() []string {
 	return []string{
-		"name", "category",
+		nameField, "category",
 		"include", "exclude",
 		"starts_with", "ends_with", "not_starts_with", "not_ends_with",
 		"exact_match", "not_exact_match",
@@ -139,7 +139,7 @@ func NormalizeVirtualFolder(folder *VirtualFolder) {
 func legacyVirtualFolderCondition(filterType, value string) VirtualFolderCondition {
 	c := VirtualFolderCondition{Value: value}
 	switch filterType {
-	case "name":
+	case nameField:
 		c.Field = VirtualFolderFieldEntryName
 		c.Operator, c.Value = legacyTextOperator(value)
 	case "category":

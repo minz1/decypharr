@@ -395,20 +395,32 @@ func (c *Config) load(lookup LookupEnv) error {
 	// final values rather than whatever was persisted to disk.
 	e := env{lookup: lookup}
 	c.meta.secretKey = e.get("SECRET_KEY")
+	fileOnly, cloneErr := c.Clone()
+	if cloneErr != nil {
+		return cloneErr
+	}
 	c.applyEnvOverrides(e)
 
 	// Set defaults for any missing values
 	c.setDefaults()
+	if envErr := c.trackEnvOverrides(fileOnly); envErr != nil {
+		return envErr
+	}
 
 	if checkErr := c.CheckLoadable(); checkErr != nil {
 		return checkErr
 	}
 
-	// Save new signing secrets so signatures remain valid after a restart.
-	if (!hadStrmSecret || !hadSessionSecret) && !c.meta.readOnly {
+	if c.meta.readOnly {
+		return nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
 		return c.Save()
 	}
-
+	// Save new signing secrets so signatures remain valid after a restart.
+	if !hadStrmSecret || !hadSessionSecret {
+		return c.writeSecrets()
+	}
 	return nil
 }
 
@@ -515,7 +527,11 @@ func (c *Config) SaveAuth(auth *Auth) error {
 	}
 	updated := *auth
 	updated.SessionVersion = rand.Text()
-	data, err := json.Marshal(authRecord(updated))
+	record := authRecord(updated)
+	if c.meta.envAPIToken != "" && record.APIToken == c.meta.envAPIToken {
+		record.APIToken = c.meta.fileAPIToken
+	}
+	data, err := json.Marshal(record)
 	if err != nil {
 		return err
 	}
@@ -818,11 +834,11 @@ func (c *Config) applyRepairDefaults() {
 
 func (c *Config) Save() error {
 	c.setDefaults()
-	data, err := json.MarshalIndent(c, "", "  ")
+	data, err := c.fileJSON()
 	if err != nil {
 		return err
 	}
-	// Secrets first: config.json no longer carries the session secret, so
+	// Secrets first: config.json no longer carries the signing secrets, so
 	// it must be safe in secrets.json before an older config.json that
 	// still holds it is replaced.
 	if secretsErr := c.writeSecrets(); secretsErr != nil {

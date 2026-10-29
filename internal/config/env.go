@@ -1,7 +1,12 @@
 package config
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"maps"
+	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -156,6 +161,295 @@ func (c *Config) applyEnvOverrides(e env) {
 	c.applyArrEnvVars(e)
 }
 
+type envOverride struct {
+	path   []any // object keys, array indices, and listKey for an entry of a keyed list
+	value  any
+	file   any
+	inFile bool
+}
+
+// listKey names the nth entry with key in a keyed list, so an override follows its entry when the list changes.
+type listKey struct {
+	key string
+	nth int
+}
+
+const nameField = "name"
+
+// keyField names the field the settings save matches entries of list by (pkg/server mergeKeyed).
+func keyField(list string) (string, bool) {
+	switch list {
+	case "arrs", "debrids":
+		return nameField, true
+	case "usenet.providers":
+		return "host", true
+	}
+	return "", false
+}
+
+// trackEnvOverrides records where c differs from fileOnly once both have defaults, catching values derived from env.
+func (c *Config) trackEnvOverrides(fileOnly *Config) error {
+	file, err := jsonTree(fileOnly)
+	if err != nil {
+		return err
+	}
+	fileOnly.meta.readOnly = true
+	fileOnly.setDefaults()
+	base, err := jsonTree(fileOnly)
+	if err != nil {
+		return err
+	}
+	effective, err := jsonTree(c)
+	if err != nil {
+		return err
+	}
+	c.meta.envOverrides = changedLeaves(nil, base, true, effective, nil)
+	for i := range c.meta.envOverrides {
+		override := &c.meta.envOverrides[i]
+		override.file, override.inFile = leafAt(file, override.path)
+		override.path = keyedPath(effective, override.path)
+	}
+	return nil
+}
+
+func entryKey(entry any, field string) string {
+	fields, _ := entry.(map[string]any)
+	key, _ := fields[field].(string)
+	return key
+}
+
+// keyFieldAt returns the key field of the keyed list a path prefix of object keys names, if any.
+func keyFieldAt(prefix []any) (string, bool) {
+	parts := make([]string, 0, len(prefix))
+	for _, step := range prefix {
+		part, ok := step.(string)
+		if !ok {
+			return "", false
+		}
+		parts = append(parts, part)
+	}
+	return keyField(strings.Join(parts, "."))
+}
+
+// keyedPath swaps the index of a keyed-list entry in path for the entry's key.
+func keyedPath(tree any, path []any) []any {
+	keyed := slices.Clone(path)
+	for i := range path {
+		if field, ok := keyFieldAt(path[:i]); ok {
+			items, _ := leafAt(tree, path[:i])
+			entries, _ := items.([]any)
+			index, _ := path[i].(int)
+			if key := entryKey(entries[index], field); key != "" {
+				keyed[i] = listKey{key: key, nth: countKey(entries[:index], field, key)}
+			}
+		}
+	}
+	return keyed
+}
+
+// concretePath finds each keyed entry of path in tree; false when one is gone.
+func concretePath(tree any, path []any) ([]any, bool) {
+	concrete := slices.Clone(path)
+	for i, step := range path {
+		key, ok := step.(listKey)
+		if !ok {
+			continue
+		}
+		field, _ := keyFieldAt(path[:i])
+		items, _ := leafAt(tree, path[:i])
+		entries, _ := items.([]any)
+		found := -1
+		for index, entry := range entries {
+			if entryKey(entry, field) == key.key && countKey(entries[:index], field, key.key) == key.nth {
+				found = index
+				break
+			}
+		}
+		if found < 0 {
+			return nil, false
+		}
+		concrete[i] = found
+	}
+	return concrete, true
+}
+
+func countKey(entries []any, field, key string) int {
+	count := 0
+	for _, entry := range entries {
+		if entryKey(entry, field) == key {
+			count++
+		}
+	}
+	return count
+}
+
+// isSecret reports whether path is a secret field, which never keeps an env value in config.json.
+func isSecret(path []any) bool {
+	var parts []string
+	for _, step := range path {
+		if part, ok := step.(string); ok {
+			parts = append(parts, part)
+		}
+	}
+	switch strings.Join(parts, ".") {
+	case "arrs.token", "debrids.api_key", "debrids.download_api_keys", "debrids.proxy", "usenet.providers.password":
+		return true
+	}
+	return false
+}
+
+// dropValue removes value from every leaf path reaches, taking every entry of each list on the way.
+func dropValue(node any, path []any, value any) any {
+	switch n := node.(type) {
+	case map[string]any:
+		key, _ := path[0].(string)
+		child, ok := n[key]
+		switch {
+		case !ok:
+		case len(path) == 1 && reflect.DeepEqual(child, value):
+			delete(n, key)
+		case len(path) > 1:
+			n[key] = dropValue(child, path[1:], value)
+		}
+	case []any:
+		if len(path) == 1 {
+			return slices.DeleteFunc(n, func(item any) bool { return reflect.DeepEqual(item, value) })
+		}
+		for i := range n {
+			n[i] = dropValue(n[i], path[1:], value)
+		}
+	}
+	return node
+}
+
+func leafAt(tree any, path []any) (any, bool) {
+	for _, step := range path {
+		switch node := tree.(type) {
+		case map[string]any:
+			key, _ := step.(string)
+			value, ok := node[key]
+			if !ok {
+				return nil, false
+			}
+			tree = value
+		case []any:
+			i, ok := step.(int)
+			if !ok || i >= len(node) {
+				return nil, false
+			}
+			tree = node[i]
+		default:
+			return nil, false
+		}
+	}
+	return tree, true
+}
+
+func (c *Config) fileJSON() ([]byte, error) {
+	file := *c
+	file.Strm.Secret = ""
+	if len(c.meta.envOverrides) == 0 {
+		return json.MarshalIndent(&file, "", "  ")
+	}
+	tree, err := jsonTree(&file)
+	if err != nil {
+		return nil, err
+	}
+	paths := make([][]any, len(c.meta.envOverrides))
+	for i, override := range c.meta.envOverrides {
+		paths[i], _ = concretePath(tree, override.path)
+	}
+	for i, override := range slices.Backward(c.meta.envOverrides) {
+		if paths[i] != nil {
+			tree, _ = override.restore(tree, paths[i])
+		}
+	}
+	for _, override := range c.meta.envOverrides {
+		if isSecret(override.path) {
+			tree = dropValue(tree, override.path, override.value)
+		}
+	}
+	data, err := json.Marshal(tree)
+	if err != nil {
+		return nil, err
+	}
+	var restored Config
+	if unmarshalErr := json.Unmarshal(data, &restored); unmarshalErr != nil {
+		return nil, unmarshalErr
+	}
+	return json.MarshalIndent(&restored, "", "  ")
+}
+
+// restore leaves a value the user changed alone; false means remove the leaf.
+func (o envOverride) restore(node any, path []any) (any, bool) {
+	if len(path) == 0 {
+		if !reflect.DeepEqual(node, o.value) {
+			return node, true
+		}
+		return o.file, o.inFile
+	}
+	switch n := node.(type) {
+	case map[string]any:
+		key, _ := path[0].(string)
+		if child, ok := n[key]; ok {
+			if value, keep := o.restore(child, path[1:]); keep {
+				n[key] = value
+			} else {
+				delete(n, key)
+			}
+		}
+	case []any:
+		if i, ok := path[0].(int); ok && i < len(n) {
+			value, keep := o.restore(n[i], path[1:])
+			if !keep {
+				return slices.Delete(n, i, i+1), true
+			}
+			n[i] = value
+		}
+	}
+	return node, true
+}
+
+func changedLeaves(path []any, before any, inBefore bool, after any, out []envOverride) []envOverride {
+	switch a := after.(type) {
+	case map[string]any:
+		b, _ := before.(map[string]any)
+		for _, key := range slices.Sorted(maps.Keys(a)) {
+			value, ok := b[key]
+			out = changedLeaves(append(path, key), value, ok, a[key], out)
+		}
+		return out
+	case []any:
+		b, _ := before.([]any)
+		for i, item := range a {
+			var value any
+			if i < len(b) {
+				value = b[i]
+			}
+			out = changedLeaves(append(path, i), value, i < len(b), item, out)
+		}
+		return out
+	}
+	if inBefore && reflect.DeepEqual(before, after) {
+		return out
+	}
+	return append(out, envOverride{path: slices.Clone(path), value: after})
+}
+
+func jsonTree(v any) (any, error) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var tree any
+	if err = decoder.Decode(&tree); err != nil {
+		return nil, err
+	}
+	return tree, nil
+}
+
 func (c *Config) applyManagerEnvVars(e env) {
 	e.envString("DOWNLOAD_FOLDER", &c.DownloadFolder)
 	e.envString("REFRESH_INTERVAL", &c.RefreshInterval)
@@ -221,6 +515,7 @@ func (c *Config) applyAuthEnvVars(e env) {
 		c.Auth.TokenOnly = parseBool(tokenOnly)
 	}
 	if apiToken != "" {
+		c.meta.fileAPIToken, c.meta.envAPIToken = c.Auth.APIToken, apiToken
 		c.Auth.APIToken = apiToken
 	}
 	// setDefaults mints the token, but it ran before these overrides. Mint one

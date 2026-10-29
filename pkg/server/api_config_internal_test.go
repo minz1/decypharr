@@ -516,3 +516,268 @@ func TestMergeConfigUpdateClearsWhatTheSettingsPageEmpties(t *testing.T) {
 			merged.Debrids[0].DownloadAPIKeys, merged.Arrs[0].DownloadUncached)
 	}
 }
+
+// A new STRM secret sent through the settings save lands in secrets.json, never config.json.
+func TestUpdateConfigRotatesStrmSecretIntoSecretsFile(t *testing.T) {
+	t.Parallel()
+	mgr, store := managertest.New(t, nil)
+	server := &Server{manager: mgr, config: store, logger: zerolog.Nop()}
+	response := httptest.NewRecorder()
+	server.handleUpdateConfig(response, httptest.NewRequest(http.MethodPost, "/api/config",
+		strings.NewReader(`{"strm":{"secret":"rotated-strm-key"}}`)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("POST status=%d body=%s", response.Code, response.Body.String())
+	}
+	if got := store.Get().Strm.Secret; got != "rotated-strm-key" {
+		t.Fatalf("Strm.Secret = %q, want the rotated key", got)
+	}
+	data, err := os.ReadFile(store.Get().JSONFile())
+	if err != nil || strings.Contains(string(data), "rotated-strm-key") {
+		t.Fatalf("config.json holds the STRM secret: %s, %v", data, err)
+	}
+	secrets, err := os.ReadFile(store.Get().SecretsFile())
+	if err != nil || !strings.Contains(string(secrets), "rotated-strm-key") {
+		t.Fatalf("secrets.json = %q, %v", secrets, err)
+	}
+	reloaded, err := config.Load(store.Get().Dir(), config.MapEnv(nil))
+	if err != nil || reloaded.Strm.Secret != "rotated-strm-key" {
+		t.Fatalf("reloaded Strm.Secret = %v, %v", reloaded, err)
+	}
+}
+
+// A settings save sends back the env values it was shown; config.json keeps its own values instead.
+func TestUpdateConfigKeepsEnvOverridesOutOfConfigFile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	file := `{"arrs":[{"name":"sonarr","host":"http://sonarr:8989","token":"file-arr-token"}],` +
+		`"debrids":[{"name":"realdebrid","provider":"realdebrid"}]}`
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(file), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(dir, config.MapEnv(map[string]string{
+		"DECYPHARR_ARRS__0__TOKEN":      "env-arr-token",
+		"DECYPHARR_DEBRIDS__0__API_KEY": "env-debrid-key",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := config.NewStore(cfg)
+	body := `{"log_level":"debug",` +
+		`"arrs":[{"name":"sonarr","host":"http://sonarr:8989","token":"env-arr-token"}],` +
+		`"debrids":[{"name":"realdebrid","provider":"realdebrid","api_key":"env-debrid-key"}]}`
+	updated, err := store.Update(func(current *config.Config) error {
+		next, prepareErr := prepareConfigUpdate(current, []byte(body))
+		*current = next
+		return prepareErr
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Arrs[0].Token != "env-arr-token" || updated.Debrids[0].APIKey != "env-debrid-key" {
+		t.Fatalf("running config lost the env values: %+v %+v", updated.Arrs, updated.Debrids)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved config.Config
+	if unmarshalErr := json.Unmarshal(data, &saved); unmarshalErr != nil {
+		t.Fatal(unmarshalErr)
+	}
+	if saved.LogLevel != "debug" {
+		t.Fatalf("log_level = %q, want the edit saved", saved.LogLevel)
+	}
+	if saved.Arrs[0].Token != "file-arr-token" || saved.Debrids[0].APIKey != "" {
+		t.Fatalf("config.json arrs=%+v debrids=%+v, want the file's own values", saved.Arrs, saved.Debrids)
+	}
+}
+
+// Removing the env-overridden arr shifts the list; the arr that moves up keeps its own token.
+func TestUpdateConfigEnvOverrideFollowsItsArr(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	file := `{"arrs":[{"name":"sonarr","host":"http://sonarr:8989","token":"file-sonarr-token"},` +
+		`{"name":"radarr","host":"http://radarr:7878","token":"file-radarr-token"}]}`
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(file), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(dir, config.MapEnv(map[string]string{"DECYPHARR_ARRS__0__TOKEN": "env-sonarr-token"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"arrs":[{"name":"radarr","host":"http://radarr:7878","token":"file-radarr-token"}]}`
+	if _, err = config.NewStore(cfg).Update(func(current *config.Config) error {
+		next, prepareErr := prepareConfigUpdate(current, []byte(body))
+		*current = next
+		return prepareErr
+	}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved config.Config
+	if unmarshalErr := json.Unmarshal(data, &saved); unmarshalErr != nil {
+		t.Fatal(unmarshalErr)
+	}
+	if len(saved.Arrs) != 1 || saved.Arrs[0].Name != "radarr" || saved.Arrs[0].Token != "file-radarr-token" {
+		t.Fatalf("config.json arrs = %+v, want radarr with its own token", saved.Arrs)
+	}
+}
+
+// Settings saves that move, drop, add or rename list entries never write an env value to config.json.
+func TestUpdateConfigKeepsEnvOverridesOutAfterListChanges(t *testing.T) {
+	t.Parallel()
+	const (
+		sonarr = `{"name":"sonarr","host":"http://sonarr:8989","token":"file-s"}`
+		radarr = `{"name":"radarr","host":"http://radarr:7878","token":"file-r"}`
+	)
+	tests := []struct {
+		name, file, body string
+		env              map[string]string
+		absent, present  []string
+	}{
+		{
+			name: "deleted arr before an env token", file: `{"arrs":[` + sonarr + `,` + radarr + `]}`,
+			env:    map[string]string{"DECYPHARR_ARRS__1__TOKEN": "ENV-R"},
+			body:   `{"arrs":[{"name":"radarr","host":"http://radarr:7878","token":"ENV-R"}]}`,
+			absent: []string{"ENV-R", "file-s"}, present: []string{`"file-r"`},
+		},
+		{
+			name: "unrelated save drops a token-less arr",
+			file: `{"arrs":[{"name":"sonarr","host":"http://sonarr:8989"},` + radarr + `]}`,
+			env:  map[string]string{"DECYPHARR_ARRS__1__TOKEN": "ENV-R"}, body: `{"log_level":"debug"}`,
+			absent: []string{"ENV-R"}, present: []string{`"file-r"`},
+		},
+		{
+			name: "reordered arrs", file: `{"arrs":[` + sonarr + `,` + radarr + `]}`,
+			env: map[string]string{"DECYPHARR_ARRS__0__TOKEN": "ENV-S", "DECYPHARR_ARRS__1__TOKEN": "ENV-R"},
+			body: `{"arrs":[{"name":"radarr","host":"http://radarr:7878","token":"ENV-R"},` +
+				`{"name":"sonarr","host":"http://sonarr:8989","token":"ENV-S"}]}`,
+			absent: []string{"ENV-R", "ENV-S"}, present: []string{`"file-r"`, `"file-s"`},
+		},
+		{
+			name: "arr inserted before an env token", file: `{"arrs":[` + radarr + `]}`,
+			env: map[string]string{"DECYPHARR_ARRS__0__TOKEN": "ENV-R"},
+			body: `{"arrs":[{"name":"lidarr","host":"http://lidarr:8686","token":"new-l"},` +
+				`{"name":"radarr","host":"http://radarr:7878","token":"ENV-R"}]}`,
+			absent: []string{"ENV-R"}, present: []string{`"new-l"`, `"file-r"`},
+		},
+		{
+			name: "renamed arr", file: `{"arrs":[` + radarr + `]}`,
+			env:    map[string]string{"DECYPHARR_ARRS__0__TOKEN": "ENV-R"},
+			body:   `{"arrs":[{"name":"radarr4k","host":"http://radarr:7878","token":"ENV-R"}]}`,
+			absent: []string{"ENV-R"},
+		},
+		{
+			name: "renamed debrid with an env proxy password",
+			file: `{"debrids":[{"name":"realdebrid","provider":"realdebrid","api_key":"file-rd"}]}`,
+			env:  map[string]string{"DECYPHARR_DEBRIDS__0__PROXY": "http://puser:ENV-PROXYPASS@proxy:3128"},
+			body: `{"debrids":[{"name":"RD","provider":"realdebrid","api_key":"file-rd",` +
+				`"proxy":"http://puser:ENV-PROXYPASS@proxy:3128"}]}`,
+			absent: []string{"ENV-PROXYPASS"}, present: []string{`"file-rd"`},
+		},
+		{
+			name: "deleted debrid before an env key",
+			file: `{"debrids":[{"name":"realdebrid","provider":"realdebrid","api_key":"file-rd"},` +
+				`{"name":"torbox","provider":"torbox"}]}`,
+			env:    map[string]string{"DECYPHARR_DEBRIDS__1__API_KEY": "ENV-TB"},
+			body:   `{"debrids":[{"name":"torbox","provider":"torbox","api_key":"ENV-TB","download_api_keys":["ENV-TB"]}]}`,
+			absent: []string{"ENV-TB", "file-rd"},
+		},
+		{
+			name: "deleted usenet provider sharing an env password",
+			file: `{"usenet":{"providers":[{"host":"h0","username":"u","password":"file-p0"},` +
+				`{"host":"h1","username":"u","password":"file-p1"}]}}`,
+			env: map[string]string{
+				"DECYPHARR_USENET__PROVIDERS__0__PASSWORD": "ENV-P",
+				"DECYPHARR_USENET__PROVIDERS__1__PASSWORD": "ENV-P",
+			},
+			body:   `{"usenet":{"providers":[{"host":"h1","username":"u","password":"ENV-P"}]}}`,
+			absent: []string{"ENV-P", "file-p0"}, present: []string{`"file-p1"`},
+		},
+		{
+			name: "env password on the second account of one usenet host",
+			file: `{"usenet":{"providers":[{"host":"news.x","username":"a","password":"file-a"},` +
+				`{"host":"news.x","username":"b","password":"file-b"}]}}`,
+			env:  map[string]string{"DECYPHARR_USENET__PROVIDERS__1__PASSWORD": "ENV-B"},
+			body: `{"log_level":"debug"}`, absent: []string{"ENV-B"}, present: []string{`"file-a"`, `"file-b"`},
+		},
+		{
+			name:    "env key on the second debrid of one name",
+			file:    `{"debrids":[{"name":"torbox","provider":"torbox","api_key":"file-1"},{"name":"torbox","provider":"torbox"}]}`,
+			env:     map[string]string{"DECYPHARR_DEBRIDS__1__API_KEY": "ENV-2"},
+			body:    `{"log_level":"debug"}`,
+			absent:  []string{"ENV-2"},
+			present: []string{`"file-1"`},
+		},
+		{
+			name: "deleted env download key",
+			file: `{"debrids":[{"name":"torbox","provider":"torbox","api_key":"file-k"}]}`,
+			env: map[string]string{
+				"DECYPHARR_DEBRIDS__0__DOWNLOAD_API_KEYS__0": "ENV-DL0",
+				"DECYPHARR_DEBRIDS__0__DOWNLOAD_API_KEYS__1": "ENV-DL1",
+			},
+			body:    `{"debrids":[{"name":"torbox","provider":"torbox","api_key":"file-k","download_api_keys":["ENV-DL1"]}]}`,
+			absent:  []string{"ENV-DL0", "ENV-DL1"},
+			present: []string{`"file-k"`},
+		},
+		{
+			name: "unnamed debrid moving up",
+			file: `{"debrids":[{"name":"torbox","provider":"torbox","api_key":"file-tb"},{"provider":"realdebrid"}]}`,
+			env:  map[string]string{"DECYPHARR_DEBRIDS__1__API_KEY": "ENV-RD"},
+			body: `{"debrids":[{"provider":"realdebrid","api_key":"ENV-RD"}]}`, absent: []string{"ENV-RD"},
+		},
+		{
+			name: "env-tokened arr renamed onto a deleted arr's name", file: `{"arrs":[` + sonarr + `,` + radarr + `]}`,
+			env:    map[string]string{"DECYPHARR_ARRS__0__TOKEN": "ENV-S"},
+			body:   `{"arrs":[{"name":"radarr","host":"http://sonarr:8989","token":"ENV-S"}]}`,
+			absent: []string{"ENV-S"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			data := savedTwice(t, tt.file, tt.body, tt.env)
+			for _, value := range tt.absent {
+				if strings.Contains(data, value) {
+					t.Errorf("config.json holds %q:\n%s", value, data)
+				}
+			}
+			for _, value := range tt.present {
+				if !strings.Contains(data, value) {
+					t.Errorf("config.json lost %s:\n%s", value, data)
+				}
+			}
+		})
+	}
+}
+
+// savedTwice loads file with env, applies the settings save body twice and returns config.json.
+func savedTwice(t *testing.T, file, body string, env map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(file), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(dir, config.MapEnv(env))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := config.NewStore(cfg)
+	for range 2 {
+		if _, err = store.Update(func(current *config.Config) error {
+			next, prepareErr := prepareConfigUpdate(current, []byte(body))
+			*current = next
+			return prepareErr
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}

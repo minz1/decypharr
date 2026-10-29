@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -179,5 +180,115 @@ func TestSharedModesFromEnvironment(t *testing.T) {
 	}
 	if _, err := Load(t.TempDir(), MapEnv(map[string]string{"DECYPHARR_SHARED_DIR_MODE": "rwxr-x"})); err == nil {
 		t.Fatal("an invalid mode loaded")
+	}
+}
+
+// Environment overrides apply in memory only: Save writes config.json's own values, or leaves the field out.
+func TestSaveNeverWritesEnvOverrides(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	file := `{"arrs":[{"name":"sonarr","host":"http://sonarr:8989","token":"file-arr-token"}],` +
+		`"debrids":[{"name":"realdebrid","provider":"realdebrid"}],` +
+		`"usenet":{"providers":[{"host":"news.example","username":"user","password":"file-usenet-pass"}]}}`
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(file), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	vars := map[string]string{
+		"DECYPHARR_ARRS__0__TOKEN":                 "env-arr-token",
+		"DECYPHARR_ARRS__1__NAME":                  "radarr",
+		"DECYPHARR_ARRS__1__TOKEN":                 "env-radarr-token",
+		"DECYPHARR_DEBRIDS__0__API_KEY":            "env-debrid-key",
+		"DECYPHARR_USENET__PROVIDERS__0__PASSWORD": "env-usenet-pass",
+	}
+	c, err := Load(dir, MapEnv(vars))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Arrs[0].Token != "env-arr-token" || c.Arrs[1].Token != "env-radarr-token" ||
+		c.Debrids[0].APIKey != "env-debrid-key" || c.Usenet.Providers[0].Password != "env-usenet-pass" {
+		t.Fatalf("env overrides not in effect: %+v %+v %+v", c.Arrs, c.Debrids, c.Usenet.Providers)
+	}
+	if saveErr := c.Save(); saveErr != nil {
+		t.Fatal(saveErr)
+	}
+	if c.Arrs[0].Token != "env-arr-token" || c.Debrids[0].APIKey != "env-debrid-key" {
+		t.Fatal("Save changed the running configuration")
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leaked := range []string{"env-arr-token", "env-radarr-token", "env-debrid-key", "env-usenet-pass"} {
+		if strings.Contains(string(data), leaked) {
+			t.Errorf("config.json holds %s", leaked)
+		}
+	}
+	for _, kept := range []string{"file-arr-token", "file-usenet-pass"} {
+		if !strings.Contains(string(data), kept) {
+			t.Errorf("config.json lost %s", kept)
+		}
+	}
+	reloaded, err := Load(dir, MapEnv(vars))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Arrs[1].Name != "radarr" || reloaded.Arrs[1].Token != "env-radarr-token" ||
+		reloaded.Debrids[0].APIKey != "env-debrid-key" {
+		t.Fatalf("reload lost the env overrides: %+v %+v", reloaded.Arrs, reloaded.Debrids)
+	}
+}
+
+// The first run writes config.json without the environment's secrets.
+func TestFirstRunSaveSkipsEnvOverrides(t *testing.T) {
+	t.Parallel()
+	c, dir := loadFresh(t, map[string]string{
+		"DECYPHARR_DEBRIDS__0__NAME":    "realdebrid",
+		"DECYPHARR_DEBRIDS__0__API_KEY": "env-debrid-key",
+	})
+	if c.Debrids[0].APIKey != "env-debrid-key" {
+		t.Fatalf("Debrids = %+v", c.Debrids)
+	}
+	if data, _ := os.ReadFile(filepath.Join(dir, "config.json")); strings.Contains(string(data), "env-debrid-key") {
+		t.Fatalf("config.json holds the env API key: %s", data)
+	}
+}
+
+func TestFirstRunWritesConfigWhenSecretsExist(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	secrets := `{"session_secret":"kept-session-secret","strm_secret":"kept-strm-secret"}`
+	if err := os.WriteFile(filepath.Join(dir, "secrets.json"), []byte(secrets), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(dir, MapEnv(nil)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "config.json")); err != nil {
+		t.Fatalf("config.json not written on first run: %v", err)
+	}
+}
+
+func TestEnvAPITokenStaysOutOfAuthFile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "auth.json"), []byte(`{"api_token":"file-token"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(dir, MapEnv(map[string]string{"DECYPHARR_USE_AUTH": "true", "DECYPHARR_API_TOKEN": "env-token"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = c.SetCredentials("admin", "a-password"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "auth.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "env-token") || !strings.Contains(string(data), "file-token") {
+		t.Fatalf("auth.json = %s, want the file's own token", data)
+	}
+	if !c.VerifyToken("env-token") {
+		t.Fatal("env API token no longer verifies")
 	}
 }

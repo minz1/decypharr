@@ -45,21 +45,23 @@ func (c *Config) SecretsFile() string {
 // these secrets are encoded with their values, for the 0600 secrets file.
 type secretsRecord struct {
 	sessionSecret Secret
+	strmSecret    string
 }
 
 // secretsJSON is the on-disk form of secretsRecord.
 type secretsJSON struct {
 	SessionSecret string `json:"session_secret,omitempty"`
+	StrmSecret    string `json:"strm_secret,omitempty"`
 }
 
 // MarshalJSON writes the secrets in clear, for secrets.json only.
 func (r secretsRecord) MarshalJSON() ([]byte, error) {
-	return json.Marshal(secretsJSON{SessionSecret: r.sessionSecret.Reveal()})
+	return json.Marshal(secretsJSON{SessionSecret: r.sessionSecret.Reveal(), StrmSecret: r.strmSecret})
 }
 
 // readSecrets loads secrets.json into c. Earlier versions kept the session
-// secret in config.json (raw is its content); it is read from there when
-// secrets.json does not have it, and Save moves it.
+// and STRM secrets in config.json (raw is its content); they are read from
+// there when secrets.json does not have them, and Save moves them.
 func (c *Config) readSecrets(raw []byte) error {
 	var legacy secretsJSON
 	if len(raw) > 0 {
@@ -83,12 +85,15 @@ func (c *Config) readSecrets(raw []byte) error {
 	} else if secret = legacy.SessionSecret; secret != "" {
 		c.SessionSecret = NewSecret(secret)
 	}
+	if stored.StrmSecret != "" {
+		c.Strm.Secret = stored.StrmSecret
+	}
 	return nil
 }
 
 // writeSecrets saves the secrets to secrets.json (0600).
 func (c *Config) writeSecrets() error {
-	data, err := json.MarshalIndent(secretsRecord{sessionSecret: c.SessionSecret}, "", "  ")
+	data, err := json.MarshalIndent(secretsRecord{sessionSecret: c.SessionSecret, strmSecret: c.Strm.Secret}, "", "  ")
 	if err != nil {
 		return err
 	}
