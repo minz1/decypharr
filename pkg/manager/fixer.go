@@ -221,9 +221,13 @@ func (f *Fixer) MoveTorrent(entry *storage.Entry, debridName string, reinsert bo
 		return false, fmt.Errorf("entry %s cannot be moved", entry.Name)
 	}
 
+	wasBad := entry.Bad
 	defer func() {
-		// Save to storage
-		_ = f.manager.AddOrUpdate(entry, nil) // No need to refresh mounts
+		var refresh func(*storage.Entry)
+		if wasBad && !entry.Bad {
+			refresh = func(*storage.Entry) { f.manager.refreshAfterSave() }
+		}
+		_ = f.manager.AddOrUpdate(entry, refresh)
 	}()
 
 	client := f.manager.ProviderClient(debridName)

@@ -69,6 +69,7 @@ type Backend interface {
 	ReinsertEntry(context.Context, *storage.Entry) error
 	RemoveTorrentFile(string, string) error
 	DeleteEntry(string, bool) error
+	ClearBad(ctx context.Context, infohash string) error
 }
 
 type Reacquirer interface {

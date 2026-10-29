@@ -10,6 +10,7 @@ import (
 
 	"github.com/sirrobot01/appendstore"
 
+	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/arr/reacquire"
@@ -225,15 +226,43 @@ func (m *Manager) streamFailureConfirmed(entryID, filename string) bool {
 	return false
 }
 
+// refreshAfterSave shows a changed bad mark in the library: entries hidden or listed by Bad are rebuilt.
+func (m *Manager) refreshAfterSave() {
+	m.InvalidateEntryCache()
+	if err := m.RefreshMount(); err != nil {
+		m.logger.Error().Err(err).Msg("Mount refresh failed")
+	}
+}
+
+// ClearBad lifts a bad mark that a fresh read check disproved; a repair in flight defers it to the next sweep.
+func (m *Manager) ClearBad(_ context.Context, infohash string) error {
+	entry, err := m.GetEntry(infohash)
+	if errors.Is(err, appendstore.ErrKeyNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !entry.Bad {
+		return nil
+	}
+	if _, inFlight := m.fixer.inFlightRepairs.Load(infohash); inFlight {
+		return m.storage.MarkEntryDirty(entry.GetFolder(m.folderNaming()), config.ProtocolTorrent, "marked_bad")
+	}
+	entry.Bad = false
+	entry.UpdatedAt = time.Now()
+	if err = m.AddOrUpdate(entry, func(*storage.Entry) { m.refreshAfterSave() }); err != nil {
+		return err
+	}
+	m.fixer.ResetFailureState(infohash)
+	m.logger.Info().Str("infohash", infohash).Str("name", entry.Name).Msg("cleared bad mark: files pass the read check")
+	return nil
+}
+
 // giveUpOnEntry marks an entry no provider can serve as bad and fails its grab while the arr still waits on it.
 func (m *Manager) giveUpOnEntry(entry *storage.Entry) {
 	entry.Bad = true
-	if err := m.AddOrUpdate(entry, func(_ *storage.Entry) {
-		m.InvalidateEntryCache()
-		if err := m.RefreshMount(); err != nil {
-			m.logger.Error().Err(err).Msg("Mount refresh failed")
-		}
-	}); err != nil {
+	if err := m.AddOrUpdate(entry, func(*storage.Entry) { m.refreshAfterSave() }); err != nil {
 		m.logger.Warn().Err(err).Str("infohash", entry.InfoHash).Msg("Failed to persist the bad flag")
 	}
 	go func() {

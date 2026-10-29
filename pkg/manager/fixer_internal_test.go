@@ -105,6 +105,47 @@ func checkFixWithRemovedProvider(t *testing.T, existing bool) {
 	}
 }
 
+// A re-insert that clears a bad mark shows the entry again; one on an unmarked entry refreshes nothing.
+func TestMoveTorrentRefreshesWhenClearingBad(t *testing.T) {
+	t.Parallel()
+	for _, bad := range []bool{true, false} {
+		synctest.Test(t, func(t *testing.T) {
+			store, err := storage.NewStorage(t.TempDir(), storage.Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			mount := &countingMount{}
+			m := withTestConfig(t, &Manager{
+				storage: store, clients: xsync.NewMap[string, debrid.Client](), logger: zerolog.Nop(),
+				mountManager: mount, entry: newEntryCache(func(string) bool { return false }, nil, nil),
+			})
+			m.clients.Store("remaining", &replacementProvider{})
+			fixer := NewFixer(m)
+			fixer.providerOrder = []string{"remaining"}
+			entry := &storage.Entry{
+				InfoHash: "0123456789012345678901234567890123456789", Name: "release",
+				Protocol: config.ProtocolTorrent, ActiveProvider: "removed", Bad: bad,
+				Providers: map[string]*storage.ProviderEntry{
+					"removed":   {Provider: "removed", ID: "old", Status: types.TorrentStatusDownloaded},
+					"remaining": {Provider: "remaining", ID: "new", Status: types.TorrentStatusDownloaded},
+				},
+			}
+			if result, fixErr := fixer.FixTorrent(t.Context(), entry, false); fixErr != nil || !result.Success {
+				t.Fatalf("repair = %#v, error = %v", result, fixErr)
+			}
+			synctest.Wait()
+			loaded, err := store.Get(entry.InfoHash)
+			if err != nil || loaded.Bad {
+				t.Fatalf("saved entry = %+v, %v; want not bad", loaded, err)
+			}
+			if want := map[bool]int{true: 1, false: 0}[bad]; mount.count() != want {
+				t.Fatalf("bad = %v: mount refreshes = %d, want %d", bad, mount.count(), want)
+			}
+		})
+	}
+}
+
 // Every caller that joins an in-flight repair must receive its result; a
 // single-slot result channel used to release only one of them.
 func TestFixTorrentReleasesAllWaiters(t *testing.T) {

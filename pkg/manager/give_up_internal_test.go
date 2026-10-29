@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -49,7 +50,82 @@ func newGiveUpTestManager(t *testing.T, fakeArr *queueArr, recovery ArrRecovery)
 		{Name: "sonarr", Host: server.URL, Token: "x"},
 	}}), nil, zerolog.Nop())
 	entry.Protocol = config.ProtocolTorrent
+	m = withTestConfig(t, m)
+	m.entry = newEntryCache(func(string) bool { return false }, nil, nil)
+	m.fixer = NewFixer(m)
+	m.mountManager = &countingMount{}
+	m.ctx = t.Context()
 	return m, entry
+}
+
+func refreshes(m *Manager) int { return m.mountManager.(*countingMount).count() }
+
+func saveBad(t *testing.T, m *Manager, entry *storage.Entry, bad bool) {
+	t.Helper()
+	entry.Bad = bad
+	if err := m.storage.AddOrUpdate(entry); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestClearBadClearsAndPersists(t *testing.T) {
+	t.Parallel()
+	m, entry := newGiveUpTestManager(t, &queueArr{}, &fakeArrRecovery{})
+	saveBad(t, m, entry, true)
+	m.fixer.failedToReinsert.Store(failureKey(droppedHash, "x"), struct{}{})
+	synctest.Test(t, func(t *testing.T) {
+		if err := m.ClearBad(t.Context(), droppedHash); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+	})
+	stored, err := m.storage.Get(droppedHash)
+	if err != nil || stored.Bad {
+		t.Fatalf("stored = %+v, %v; want the mark cleared", stored, err)
+	}
+	if m.fixer.IsFailedToReinsert(droppedHash, "x") {
+		t.Fatal("failure key survived the clear")
+	}
+	if got := refreshes(m); got != 1 {
+		t.Fatalf("mount refreshes = %d, want 1", got)
+	}
+}
+
+func TestClearBadIgnoresUnmarkedMissingAndInFlight(t *testing.T) {
+	t.Parallel()
+	m, entry := newGiveUpTestManager(t, &queueArr{}, &fakeArrRecovery{})
+	saveBad(t, m, entry, false)
+	before, _ := m.storage.Get(droppedHash)
+	synctest.Test(t, func(t *testing.T) {
+		if err := m.ClearBad(t.Context(), droppedHash); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.ClearBad(t.Context(), "ffffffffffffffffffffffffffffffffffffffff"); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+	})
+	after, _ := m.storage.Get(droppedHash)
+	if !after.UpdatedAt.Equal(before.UpdatedAt) || refreshes(m) != 0 {
+		t.Fatalf("unmarked entry was saved again (%v → %v) or refreshed %d times", before.UpdatedAt, after.UpdatedAt,
+			refreshes(m))
+	}
+
+	saveBad(t, m, entry, true)
+	m.fixer.inFlightRepairs.Store(droppedHash, &FixerRequest{done: make(chan struct{})})
+	if err := m.ClearBad(t.Context(), droppedHash); err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := m.storage.Get(droppedHash)
+	health, err := m.storage.GetEntryHealth(entry.GetFolder(m.folderNaming()))
+	if !stored.Bad || err != nil || !health.Dirty || health.DirtyReason != "marked_bad" {
+		t.Fatalf(
+			"in flight: bad = %v, health = %+v, %v; want still marked and the folder dirty",
+			stored.Bad,
+			health,
+			err,
+		)
+	}
 }
 
 func TestFailGrabIfQueued(t *testing.T) {
