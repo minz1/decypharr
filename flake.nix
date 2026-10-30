@@ -21,7 +21,13 @@
             subPackages = [ "." ];
             ldflags = [ "-s" "-w" ];
             nativeBuildInputs = [ pkgs.pkg-config pkgs.makeBinaryWrapper ];
-            buildInputs = [ pkgs.fuse ];
+            buildInputs = [ pkgs.fuse3 ];
+            tags = [ "fuse3" ];
+            postConfigure = ''
+              substituteInPlace vendor/github.com/winfsp/cgofuse/fuse/host_cgo.go \
+                --replace-fail "fuse.h" "fuse3/fuse.h" \
+                --replace-fail '"libfuse3.so.3"' '"${lib.getLib pkgs.fuse3}/lib/libfuse3.so.4"'
+            '';
             preBuild = ''
               cp -r --no-preserve=mode ${frontend}/. pkg/server/assets/build/
             '';
@@ -31,7 +37,7 @@
               wrapProgram $out/bin/decypharr \
                 --prefix PATH : /run/wrappers/bin \
                 --suffix PATH : ${lib.makeBinPath [ pkgs.rclone ]} \
-                --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath [ pkgs.fuse ]}
+                --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath [ pkgs.fuse3 ]}
             '';
             meta = with lib; {
               description = "Debrid mock qBittorrent with stable FUSE inodes";
@@ -116,6 +122,8 @@
               oxfmt
               djlint
             ];
+            GOFLAGS = "-tags=fuse3";
+            CGO_CFLAGS = "-I${pkgs.fuse3.dev}/include/fuse3";
           };
         }
       );
