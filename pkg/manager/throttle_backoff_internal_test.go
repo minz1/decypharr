@@ -1,7 +1,9 @@
 package manager
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -788,6 +790,33 @@ func TestFinishedTorrentWithoutLinksPastTheBoundFails(t *testing.T) {
 				t.Fatal("a later poll restarted the wait for links")
 			}
 		})
+	}
+}
+
+func TestLinksWaitWarnLogsTheElapsedWait(t *testing.T) {
+	t.Parallel()
+	waited := linksWaitLimit + 2*time.Hour
+	finishedAt := time.Now().Add(-waited)
+	m, _, entry := queueTorrentAwaitingLinks(t, &finishedAt)
+	var logs bytes.Buffer
+	m.logger = zerolog.New(&logs)
+
+	m.processQueuedTorrent(entry)
+
+	var line struct {
+		Waited float64 `json:"waited"`
+	}
+	warn := slices.IndexFunc(strings.Split(logs.String(), "\n"), func(l string) bool {
+		return strings.Contains(l, `"level":"warn"`)
+	})
+	if warn < 0 {
+		t.Fatalf("no Warn logged: %q", logs.String())
+	}
+	if err := json.Unmarshal([]byte(strings.Split(logs.String(), "\n")[warn]), &line); err != nil {
+		t.Fatal(err)
+	}
+	if got := time.Duration(line.Waited * float64(time.Millisecond)); got < waited || got > waited+time.Minute {
+		t.Fatalf("logged waited = %s, want the elapsed %s", got, waited)
 	}
 }
 

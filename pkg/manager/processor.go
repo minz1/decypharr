@@ -375,11 +375,13 @@ func (m *Manager) awaitLinks(entry *storage.Entry, placement *storage.ProviderEn
 		placement.DownloadedAt = &now
 		_ = m.queue.Update(entry)
 	}
-	if time.Since(*placement.DownloadedAt) <= linksWaitLimit {
+	waited := time.Since(*placement.DownloadedAt)
+	if waited <= linksWaitLimit {
 		m.logger.Debug().Str("name", entry.Name).Msg("Downloaded, waiting for file links before the action")
 		return
 	}
-	m.logger.Warn().Str("name", entry.Name).Str("debrid", entry.ActiveProvider).Dur("waited", linksWaitLimit).
+	m.logger.Warn().Str("name", entry.Name).Str("debrid", entry.ActiveProvider).
+		Dur("waited", waited.Truncate(time.Second)).
 		Msg("Downloaded but the provider never gave file links; failing the grab")
 	placement.Status = debridTypes.TorrentStatusError
 	m.slotFreed(entry.ActiveProvider)
