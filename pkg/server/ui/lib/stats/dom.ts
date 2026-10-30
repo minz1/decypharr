@@ -3,7 +3,7 @@ import { cloneTemplate } from "#ui/lib/common/dom";
 const field = (root: ParentNode, name: string): HTMLElement => {
   const found = root.querySelector(`[data-field="${name}"]`);
   if (!(found instanceof HTMLElement)) {
-    throw new Error(`missing [data-field="${name}"]`);
+    throw new TypeError(`missing [data-field="${name}"]`);
   }
   return found;
 };
@@ -17,7 +17,7 @@ const setFields = (root: ParentNode, texts: Readonly<Record<string, string>>): v
 const cloneElement = (id: string): HTMLElement => {
   const element = cloneTemplate(id).firstElementChild;
   if (!(element instanceof HTMLElement)) {
-    throw new Error(`empty template #${id}`);
+    throw new TypeError(`empty template #${id}`);
   }
   return element;
 };

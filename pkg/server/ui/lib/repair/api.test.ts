@@ -213,7 +213,7 @@ describe("the requests", () => {
     expect(fixOneRequest('Show "1"')).toStrictEqual({
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: '{"names":["Show \\"1\\""]}',
+      body: String.raw`{"names":["Show \"1\""]}`,
     });
   });
 

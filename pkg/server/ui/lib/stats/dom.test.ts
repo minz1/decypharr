@@ -22,7 +22,7 @@ describe("filling fields", () => {
 
   it("throws naming a missing field", () => {
     page();
-    expect(() => field(document.body, "absent")).toThrow(new Error('missing [data-field="absent"]'));
+    expect(() => field(document.body, "absent")).toThrow(new TypeError('missing [data-field="absent"]'));
   });
 });
 
@@ -35,6 +35,6 @@ describe("cloning a template's element", () => {
 
   it("throws when the template holds no element", () => {
     page();
-    expect(() => cloneElement("blank")).toThrow(new Error("empty template #blank"));
+    expect(() => cloneElement("blank")).toThrow(new TypeError("empty template #blank"));
   });
 });

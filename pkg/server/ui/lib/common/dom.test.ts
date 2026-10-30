@@ -44,12 +44,12 @@ describe("looking up an element", () => {
 
   it("throws naming the id when it is missing", () => {
     page();
-    expect(() => byId("absent", HTMLElement)).toThrow(new Error("missing #absent"));
+    expect(() => byId("absent", HTMLElement)).toThrow(new TypeError("missing #absent"));
   });
 
   it("throws naming the id when the element has another type", () => {
     page();
-    expect(() => byId("go", HTMLInputElement)).toThrow(new Error("missing #go"));
+    expect(() => byId("go", HTMLInputElement)).toThrow(new TypeError("missing #go"));
   });
 
   it("looks in the given document", () => {
@@ -57,7 +57,7 @@ describe("looking up an element", () => {
     const doc = document.implementation.createHTMLDocument();
     doc.body.innerHTML = '<p id="elsewhere"></p>';
     expect(byId("elsewhere", HTMLParagraphElement, doc).tagName).toBe("P");
-    expect(() => byId("elsewhere", HTMLElement)).toThrow(new Error("missing #elsewhere"));
+    expect(() => byId("elsewhere", HTMLElement)).toThrow(new TypeError("missing #elsewhere"));
   });
 
   it("finds an id that needs escaping in a selector", () => {
@@ -78,12 +78,12 @@ describe("cloning a template", () => {
 
   it("throws naming the template when it is missing", () => {
     page();
-    expect(() => cloneTemplate("absent")).toThrow(new Error("missing template #absent"));
+    expect(() => cloneTemplate("absent")).toThrow(new TypeError("missing template #absent"));
   });
 
   it("throws when the id is not a template", () => {
     page();
-    expect(() => cloneTemplate("list")).toThrow(new Error("missing template #list"));
+    expect(() => cloneTemplate("list")).toThrow(new TypeError("missing template #list"));
   });
 });
 

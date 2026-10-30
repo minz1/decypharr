@@ -10,7 +10,7 @@ const byId = <Wanted extends HTMLElement>(
 ): Wanted => {
   const found = root.querySelector(`#${CSS.escape(id)}`);
   if (!(found instanceof type)) {
-    throw new Error(`missing #${id}`);
+    throw new TypeError(`missing #${id}`);
   }
   return found;
 };
@@ -18,7 +18,7 @@ const byId = <Wanted extends HTMLElement>(
 const cloneTemplate = (id: string, root: Document = document): DocumentFragment => {
   const template = root.querySelector(`#${CSS.escape(id)}`);
   if (!(template instanceof HTMLTemplateElement)) {
-    throw new Error(`missing template #${id}`);
+    throw new TypeError(`missing template #${id}`);
   }
   return root.importNode(template.content, true);
 };
