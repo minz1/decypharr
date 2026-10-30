@@ -679,31 +679,7 @@ func TestFinishedQueuedTorrentLeftForSync(t *testing.T) {
 // TorBox reports "completed" before DownloadFinished, when its files carry no torbox:// links yet.
 func TestFinishedTorrentWithoutLinksWaitsForThemBeforeTheAction(t *testing.T) {
 	t.Parallel()
-	m := newShutdownTestManager(t, filepath.Join(t.TempDir(), "db"))
-	provider := &finishingProvider{files: map[string]types.File{
-		"a.mkv": {TorrentID: "id", ID: "1", Name: "a.mkv", Path: "a.mkv", Size: 1},
-	}}
-	m.clients.Store("provider", provider)
-	entry := &storage.Entry{
-		InfoHash:       "done",
-		Name:           "done",
-		Protocol:       config.ProtocolTorrent,
-		ActiveProvider: "provider",
-		Status:         types.TorrentStatusDownloading,
-		State:          storage.EntryStateDownloading,
-		Action:         config.DownloadActionNone,
-		Providers: map[string]*storage.ProviderEntry{"provider": {
-			Provider: "provider",
-			ID:       "id",
-			Status:   types.TorrentStatusDownloading,
-		}},
-		Files: map[string]*storage.File{},
-	}
-	if err := m.queue.Add(entry); err != nil {
-		t.Fatal(err)
-	}
-	m.jobQueue, _ = startRecordingQueue(t)
-	m.jobQueue.WaitForSlot(&Job{ID: "next"}, []string{"provider"}, time.Hour)
+	m, provider, entry := queueTorrentAwaitingLinks(t, nil)
 
 	m.processQueuedTorrent(entry)
 	if _, err := m.storage.Get(entry.InfoHash); err == nil {
@@ -720,6 +696,9 @@ func TestFinishedTorrentWithoutLinksWaitsForThemBeforeTheAction(t *testing.T) {
 	}
 	if waitingJobs(m.jobQueue) != 1 {
 		t.Fatal("a slot was announced before the placement finished")
+	}
+	if queued.Providers["provider"].DownloadedAt == nil {
+		t.Fatal("the wait for links kept no start time, so it can never be bounded")
 	}
 
 	provider.files = map[string]types.File{
@@ -739,6 +718,76 @@ func TestFinishedTorrentWithoutLinksWaitsForThemBeforeTheAction(t *testing.T) {
 	}
 	if waitingJobs(m.jobQueue) != 0 {
 		t.Fatal("the finished placement did not wake the job waiting on its provider")
+	}
+}
+
+func queueTorrentAwaitingLinks(
+	t *testing.T,
+	downloadedAt *time.Time,
+) (*Manager, *finishingProvider, *storage.Entry) {
+	t.Helper()
+	m := newShutdownTestManager(t, filepath.Join(t.TempDir(), "db"))
+	provider := &finishingProvider{files: map[string]types.File{
+		"a.mkv": {TorrentID: "id", ID: "1", Name: "a.mkv", Path: "a.mkv", Size: 1},
+	}}
+	m.clients.Store("provider", provider)
+	entry := &storage.Entry{
+		InfoHash:       "done",
+		Name:           "done",
+		Protocol:       config.ProtocolTorrent,
+		ActiveProvider: "provider",
+		Status:         types.TorrentStatusDownloading,
+		State:          storage.EntryStateDownloading,
+		Action:         config.DownloadActionNone,
+		Providers: map[string]*storage.ProviderEntry{"provider": {
+			Provider:     "provider",
+			ID:           "id",
+			Status:       types.TorrentStatusDownloading,
+			DownloadedAt: downloadedAt,
+		}},
+		Files: map[string]*storage.File{},
+	}
+	if err := m.queue.Add(entry); err != nil {
+		t.Fatal(err)
+	}
+	m.jobQueue, _ = startRecordingQueue(t)
+	m.jobQueue.WaitForSlot(&Job{ID: "next"}, []string{"provider"}, time.Hour)
+	return m, provider, entry
+}
+
+// A provider that never fills the links left the row at 100% downloading forever and the arr never re-searched.
+func TestFinishedTorrentWithoutLinksPastTheBoundFails(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		waited time.Duration
+		fails  bool
+	}{
+		"within the bound": {waited: linksWaitLimit - time.Hour},
+		"past the bound":   {waited: linksWaitLimit + time.Minute, fails: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			finishedAt := time.Now().Add(-tc.waited).Truncate(time.Second)
+			m, _, entry := queueTorrentAwaitingLinks(t, &finishedAt)
+
+			m.processQueuedTorrent(entry)
+			if _, err := m.storage.Get(entry.InfoHash); err == nil {
+				t.Fatal("the action ran without the finished torrent's links")
+			}
+			queued, err := m.queue.GetTorrent(entry.InfoHash)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if failed := queued.State == storage.EntryStateError; failed != tc.fails {
+				t.Fatalf("entry state %s (%s), want failed=%t", queued.State, queued.LastError, tc.fails)
+			}
+			if woken := waitingJobs(m.jobQueue) == 0; woken != tc.fails {
+				t.Fatalf("waiting job woken=%t, want %t", woken, tc.fails)
+			}
+			if !tc.fails && !queued.Providers["provider"].DownloadedAt.Equal(finishedAt) {
+				t.Fatal("a later poll restarted the wait for links")
+			}
+		})
 	}
 }
 

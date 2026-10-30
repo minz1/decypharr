@@ -361,12 +361,33 @@ func (m *Manager) finishDownloaded(
 	finished *debridTypes.Torrent,
 ) {
 	if awaitingLinks(entry, finished) {
-		m.logger.Debug().Str("name", entry.Name).Msg("Downloaded, waiting for file links before the action")
+		m.awaitLinks(entry, placement)
 		return
 	}
 	refreshFinishedPlacement(entry, placement, finished)
 	m.processAction(entry)
 }
+
+// awaitLinks leaves the entry for the next poll, or fails its grab once the provider has gone linksWaitLimit without links.
+func (m *Manager) awaitLinks(entry *storage.Entry, placement *storage.ProviderEntry) {
+	if placement.DownloadedAt == nil {
+		now := time.Now()
+		placement.DownloadedAt = &now
+		_ = m.queue.Update(entry)
+	}
+	if time.Since(*placement.DownloadedAt) <= linksWaitLimit {
+		m.logger.Debug().Str("name", entry.Name).Msg("Downloaded, waiting for file links before the action")
+		return
+	}
+	m.logger.Warn().Str("name", entry.Name).Str("debrid", entry.ActiveProvider).Dur("waited", linksWaitLimit).
+		Msg("Downloaded but the provider never gave file links; failing the grab")
+	placement.Status = debridTypes.TorrentStatusError
+	m.slotFreed(entry.ActiveProvider)
+	m.failBadRelease(entry, fmt.Errorf("provider gave no file links %s after the download finished", linksWaitLimit))
+}
+
+// linksWaitLimit is how long a finished torrent may go without file links before its grab fails.
+const linksWaitLimit = 6 * time.Hour
 
 // awaitingLinks reports a downloaded torrent whose files the entry can't take yet: it knows none and some lack a link.
 func awaitingLinks(entry *storage.Entry, finished *debridTypes.Torrent) bool {
