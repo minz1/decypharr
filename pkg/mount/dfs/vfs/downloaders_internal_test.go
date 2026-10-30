@@ -3,10 +3,17 @@ package vfs
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
+	"syscall"
 	"testing"
 	"testing/synctest"
 	"time"
 
+	"github.com/rs/zerolog"
+
+	"github.com/sirrobot01/decypharr/internal/logger"
+	"github.com/sirrobot01/decypharr/pkg/manager/link"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/vfs/ranges"
 )
 
@@ -369,5 +376,35 @@ func TestKickWaitersNeverFailsWithNil(t *testing.T) {
 		}
 	default:
 		t.Fatal("waiter was not failed while the circuit is open")
+	}
+}
+
+// A coincidental "404" in an untyped error (here a port) must not fast-trip the breaker; a typed permanent error must.
+func TestCountErrorsFastTripsOnlyOnTypedPermanentErrors(t *testing.T) {
+	t.Parallel()
+	reset := &net.OpError{
+		Op:     "read",
+		Net:    "tcp",
+		Source: &net.TCPAddr{IP: net.IPv4(192, 0, 2, 10), Port: 40412},
+		Err:    syscall.ECONNRESET,
+	}
+	for _, tc := range []struct {
+		name string
+		err  error
+		trip bool
+	}{
+		{"untyped reset from port 40412", reset, false},
+		{"untyped not found", errors.New("stream: not found"), false},
+		{"typed permanent link error", link.NewPermanentError(link.ErrHTTP404, "404"), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			log := logger.NewRateLimitedLogger(logger.WithLogger(zerolog.Nop())).Rate(tc.name)
+			dls := &Downloaders{item: &CacheItem{cache: &Cache{}, logger: log}}
+			dls.countErrors(0, fmt.Errorf("stream chunk: %w", tc.err))
+			if got := dls.isCircuitOpen(); got != tc.trip {
+				t.Errorf("breaker open = %v after one %q, want %v", got, tc.err, tc.trip)
+			}
+		})
 	}
 }

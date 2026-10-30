@@ -99,7 +99,7 @@ func IsRetriableError(err error) bool {
 }
 
 // IsPermanentError returns true if the error should NOT be retried.
-// These are typically 4xx HTTP errors or explicit access denials.
+// Only typed errors count: a message can carry "404" or "gone" in a port, URL or filename.
 func IsPermanentError(err error) bool {
 	if err == nil {
 		return false
@@ -116,28 +116,6 @@ func IsPermanentError(err error) bool {
 		IsRetryable() bool
 	}](err); ok {
 		return !r.IsRetryable()
-	}
-
-	permanentErrorStrings := []string{
-		"404",
-		"not found",
-		"403",
-		"forbidden",
-		"401",
-		"unauthorized",
-		"402",
-		"payment required",
-		"410",
-		"gone",
-		"invalid api key",
-		"file not exist",
-		"no such file",
-	}
-	errStr := strings.ToLower(err.Error())
-	for _, pattern := range permanentErrorStrings {
-		if strings.Contains(errStr, pattern) {
-			return true
-		}
 	}
 
 	return false

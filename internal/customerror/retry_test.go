@@ -3,7 +3,9 @@ package customerror_test
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"syscall"
 	"testing"
 
 	"github.com/sirrobot01/decypharr/internal/customerror"
@@ -22,7 +24,12 @@ func TestRetryClassificationUsesWrappedMetadata(t *testing.T) {
 		{"permanent timeout", link.NewPermanentError(errors.New("i/o timeout"), ""), false, true},
 		{"custom permanent", customerror.NewError(errors.New("broken pipe"), http.StatusInternalServerError, "", false, false).Permanent(), false, true},
 		{"custom retryable", customerror.NewSilentError(errors.New("not found")).Retryable(), true, false},
-		{"plain not found", errors.New("not found"), false, true},
+		{"plain not found", errors.New("not found"), false, false},
+		{"reset from port 40412", &net.OpError{
+			Op: "read", Net: "tcp",
+			Source: &net.TCPAddr{IP: net.IPv4(192, 0, 2, 10), Port: 40412},
+			Err:    syscall.ECONNRESET,
+		}, true, false},
 		{"plain timeout", errors.New("i/o timeout"), true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
