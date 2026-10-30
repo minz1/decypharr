@@ -127,6 +127,22 @@ func TestGiveUpSkipsWhenPlacementServes(t *testing.T) {
 	}
 }
 
+func TestGiveUpWithoutProviderClientLogsNoWarn(t *testing.T) {
+	t.Parallel()
+	m, entry := newGiveUpTestManager(t, &queueArr{}, &fakeArrRecovery{})
+	entry.ActiveProvider = "gone"
+	saveBad(t, m, entry, false)
+	var logs bytes.Buffer
+	m.logger = zerolog.New(&logs).Level(zerolog.DebugLevel)
+	m.confirmBroken = func(context.Context, *storage.Entry) bool { return false }
+
+	m.giveUpOnEntry(entry)
+
+	if strings.Contains(logs.String(), `"level":"warn"`) || !strings.Contains(logs.String(), "no client") {
+		t.Fatalf("log = %q, want a Debug no-client line and no Warn", logs.String())
+	}
+}
+
 func TestGiveUpMarksThenFailsGrabAfterSecondCheck(t *testing.T) {
 	t.Parallel()
 	fake := &fakeArrRecovery{}

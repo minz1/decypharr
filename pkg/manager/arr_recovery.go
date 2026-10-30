@@ -280,8 +280,13 @@ func (m *Manager) entryBroken(entry *storage.Entry) bool {
 // giveUpOnEntry marks a confirmed-broken entry bad; the arr grab waits for a second check, as a blocklist is final.
 func (m *Manager) giveUpOnEntry(entry *storage.Entry) {
 	if !m.entryBroken(entry) {
-		m.logger.Warn().Str("infohash", entry.InfoHash).Str("name", entry.Name).
-			Msg("not marking bad: active placement still serves links or the check was inconclusive")
+		event := m.logger.Warn()
+		msg := "not marking bad: active placement still serves links or the check was inconclusive"
+		if entry.ActiveProvider != "" && m.ProviderClient(entry.ActiveProvider) == nil {
+			event = m.logger.Debug().Str("provider", entry.ActiveProvider)
+			msg = "not marking bad: the active provider has no client, so the placement cannot be checked"
+		}
+		event.Str("infohash", entry.InfoHash).Str("name", entry.Name).Msg(msg)
 		return
 	}
 	entry.Bad = true
