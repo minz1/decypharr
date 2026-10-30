@@ -59,7 +59,11 @@ func (s *Service) FailDownload(arrName, downloadID, entryID string) (*Job, error
 	}
 	defer release()
 
-	return s.queueJob(jobKey{arrName: arrName, downloadID: downloadID}, nil, func(now time.Time) Job {
+	key := jobKey{arrName: arrName, downloadID: downloadID}
+	if job, requeued, requeueErr := s.requeueWaitingJob(key); requeued || requeueErr != nil {
+		return job, requeueErr
+	}
+	return s.queueJob(key, nil, func(now time.Time) Job {
 		return Job{
 			ID:         uuid.New().String(),
 			Status:     StatusQueued,
@@ -72,6 +76,24 @@ func (s *Service) FailDownload(arrName, downloadID, entryID string) (*Job, error
 			UpdatedAt:  now,
 		}
 	})
+}
+
+// requeueWaitingJob runs a waiting HistoryFailed job for key again: the Arr
+// grabbed its failed download again, and a rerun fails that grab too.
+func (s *Service) requeueWaitingJob(key jobKey) (*Job, bool, error) {
+	s.jobsMu.RLock()
+	id := s.activeReacquisitions[key]
+	job, ok := s.jobs[id]
+	s.jobsMu.RUnlock()
+	if !ok || job.Strategy != StrategyHistoryFailed || !job.Status.waiting() {
+		return nil, false, nil
+	}
+	if err := s.rebindJob(id, nil); err != nil {
+		return nil, true, err
+	}
+	s.signal()
+	requeued, _ := s.Job(id)
+	return &requeued, true, nil
 }
 
 func (s *Service) enqueue(request Request, binding Binding) (*Job, error) {

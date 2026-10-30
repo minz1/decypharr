@@ -391,3 +391,66 @@ func TestFailDownloadQueriesHistoryInTheArrsStoredForm(t *testing.T) {
 		})
 	}
 }
+
+// A provider rejecting the Arr's re-grab of a download a waiting job already failed reruns that job, so the re-grab
+// is failed too instead of idling to the waiting timeout.
+func TestFailDownloadRerunsAWaitingJobForTheDownload(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		strategy Strategy
+		reruns   bool
+	}{
+		{strategy: StrategyHistoryFailed, reruns: true},
+		{strategy: StrategyCommandSearch},
+	} {
+		t.Run(string(tc.strategy), func(t *testing.T) {
+			t.Parallel()
+			runWaitingJobFailDownload(t, tc.strategy, tc.reruns)
+		})
+	}
+}
+
+// runWaitingJobFailDownload fails the download of a waiting job with strategy and checks whether it reruns.
+func runWaitingJobFailDownload(t *testing.T, strategy Strategy, reruns bool) {
+	t.Helper()
+	ran := make(chan string, 1)
+	handler := reconciliationHandler(func(_ context.Context, job Job, progress JobProgress) error {
+		ran <- job.ID
+		return progress.Update(StatusWaitingForGrab, nil)
+	})
+	instance := arr.Arr{Name: "sonarr", Type: arr.Sonarr, Host: "http://arr.invalid", Token: "token"}
+	service, err := NewService(ServiceOptions{Directory: t.TempDir(), Handler: handler})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = service.Close() })
+	waiting, _ := waitingImportJob(importedJobCase{kind: arr.Sonarr}, instance, time.Now())
+	waiting.Strategy = strategy
+	waiting.CreatedAt, waiting.UpdatedAt = time.Now(), time.Now()
+	if saveErr := service.jobRepository.Save(waiting); saveErr != nil {
+		t.Fatal(saveErr)
+	}
+	if startErr := service.Start(t.Context()); startErr != nil {
+		t.Fatal(startErr)
+	}
+	job, err := service.FailDownload("sonarr", waiting.DownloadID, "entry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.ID != waiting.ID {
+		t.Fatalf("FailDownload returned job %q, want the waiting job %q", job.ID, waiting.ID)
+	}
+	select {
+	case id := <-ran:
+		if !reruns {
+			t.Fatalf("job %q reran", id)
+		}
+	case <-time.After(200 * time.Millisecond):
+		if reruns {
+			t.Fatal("waiting job did not rerun")
+		}
+		if got, _ := service.Job(waiting.ID); got.Status != StatusWaitingForImport {
+			t.Fatalf("status = %s, want it still waiting for import", got.Status)
+		}
+	}
+}
