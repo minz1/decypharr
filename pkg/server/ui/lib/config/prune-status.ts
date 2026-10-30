@@ -190,7 +190,8 @@ const loadPruneStatus = async (doc: Document): Promise<void> => {
   try {
     renderPruneStatus(doc, await readPruneJSON(await fetcher("/api/prune/status")));
   } catch (error) {
-    createToast(`Could not load the prune status: ${describeError(error)}`, "error");
+    const container = doc.querySelector("#pruneStatus");
+    container?.replaceChildren(`Could not load the prune status: ${describeError(error)}`);
   }
 };
 

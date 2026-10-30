@@ -210,11 +210,14 @@ describe("the prune status text", () => {
     );
   });
 
-  it("loads the status and reports a failure as a toast", async () => {
+  it("loads the status and writes a failure into the panel, not a toast", async () => {
     loadFixture("config");
     serve({ "GET /api/prune/status": json(500, { error: "status broke" }) });
     await loadPruneStatus(document);
-    expect(labelledToasts()).toStrictEqual(["alert-error Could not load the prune status: status broke"]);
+    expect(document.querySelector("#pruneStatus")?.textContent.trim()).toBe(
+      "Could not load the prune status: status broke",
+    );
+    expect(labelledToasts()).toStrictEqual([]);
   });
 });
 
