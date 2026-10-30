@@ -83,12 +83,14 @@ func (s *Service) FailDownload(arrName, downloadID, entryID string) (*Job, error
 func (s *Service) requeueWaitingJob(key jobKey) (*Job, bool, error) {
 	s.jobsMu.RLock()
 	id := s.activeReacquisitions[key]
-	job, ok := s.jobs[id]
+	strategy := s.jobs[id].Strategy
 	s.jobsMu.RUnlock()
-	if !ok || job.Strategy != StrategyHistoryFailed || !job.Status.waiting() {
+	if strategy != StrategyHistoryFailed {
 		return nil, false, nil
 	}
-	if err := s.rebindJob(id, nil); err != nil {
+	if err := s.rebindJob(id, nil); errors.Is(err, errNotWaiting) {
+		return nil, false, nil
+	} else if err != nil {
 		return nil, true, err
 	}
 	s.signal()
@@ -418,13 +420,15 @@ func (s *Service) updateJobDurable(id string, status Status, mutate func(*Job)) 
 	return s.updateJobWithDurability(id, status, mutate, true)
 }
 
+var errNotWaiting = errors.New("reacquire job is not waiting")
+
 // rebindJob queues a waiting job again with more bindings to replace.
 func (s *Service) rebindJob(id string, bindings []Binding) error {
 	s.jobsMu.Lock()
 	defer s.jobsMu.Unlock()
 	original, ok := s.jobs[id]
 	if !ok || !original.Status.waiting() {
-		return fmt.Errorf("reacquire job %q is not waiting", id)
+		return fmt.Errorf("reacquire job %q: %w", id, errNotWaiting)
 	}
 	job := cloneJob(original)
 	job.Bindings = append(job.Bindings, bindings...)

@@ -454,3 +454,41 @@ func runWaitingJobFailDownload(t *testing.T, strategy Strategy, reruns bool) {
 		}
 	}
 }
+
+func TestFailDownloadReturnsARunningHistoryFailedJob(t *testing.T) {
+	t.Parallel()
+	running, finish := make(chan struct{}), make(chan struct{})
+	handler := reconciliationHandler(func(_ context.Context, _ Job, progress JobProgress) error {
+		close(running)
+		<-finish
+		return progress.Update(StatusWaitingForGrab, nil)
+	})
+	instance := arr.Arr{Name: "sonarr", Type: arr.Sonarr, Host: "http://arr.invalid", Token: "token"}
+	service, err := NewService(ServiceOptions{Directory: t.TempDir(), Handler: handler})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = service.Close() })
+	t.Cleanup(func() { close(finish) })
+	job, _ := waitingImportJob(importedJobCase{kind: arr.Sonarr}, instance, time.Now())
+	job.Status = StatusQueued
+	job.CreatedAt, job.UpdatedAt = time.Now(), time.Now()
+	if saveErr := service.jobRepository.Save(job); saveErr != nil {
+		t.Fatal(saveErr)
+	}
+	if startErr := service.Start(t.Context()); startErr != nil {
+		t.Fatal(startErr)
+	}
+	select {
+	case <-running:
+	case <-time.After(5 * time.Second):
+		t.Fatal("job never started")
+	}
+	got, err := service.FailDownload("sonarr", job.DownloadID, "entry")
+	if err != nil {
+		t.Fatalf("FailDownload on a running job: %v", err)
+	}
+	if got.ID != job.ID {
+		t.Fatalf("FailDownload returned job %q, want the running job %q", got.ID, job.ID)
+	}
+}
