@@ -160,10 +160,15 @@ func (s *Service) Clear() {
 	clear(s.arrs)
 }
 
-func (s *Service) SyncFromConfig(configured []config.Arr) {
+// SyncFromConfig applies a save; an Arr in previous but not in configured was removed by it.
+func (s *Service) SyncFromConfig(previous, configured []config.Arr) {
 	updated := make(map[string]Arr, len(configured))
 	for _, c := range configured {
 		updated[c.Name] = fromConfig(c)
+	}
+	removed := make(map[string]bool, len(previous))
+	for _, c := range previous {
+		removed[c.Name] = true
 	}
 
 	s.mu.Lock()
@@ -171,7 +176,9 @@ func (s *Service) SyncFromConfig(configured []config.Arr) {
 	for name, current := range s.arrs {
 		instance, ok := updated[name]
 		if !ok {
-			updated[name] = current
+			if !removed[name] {
+				updated[name] = current
+			}
 			continue
 		}
 		// Keep the resolved host only when the configured one is unusable.

@@ -140,6 +140,22 @@ func TestConfigHandlersUseSnapshots(t *testing.T) {
 	}
 }
 
+func TestUpdateConfigRemovingArrAppliesWithoutRestart(t *testing.T) {
+	t.Parallel()
+	mgr, store := managertest.New(t, nil)
+	server := &Server{manager: mgr, config: store}
+	postConfig(t, server, []byte(`{"arrs":[{"name":"sonarr","host":"http://sonarr.test","token":"token"}]}`))
+	if _, ok := mgr.Arr().Get("sonarr"); !ok {
+		t.Fatal("saved Arr was not registered")
+	}
+	if postConfig(t, server, []byte(`{"arrs":[]}`)) {
+		t.Fatal("removing an Arr restarted services")
+	}
+	if got, ok := mgr.Arr().Get("sonarr"); ok {
+		t.Fatalf("removed Arr still registered without a restart: %#v", got)
+	}
+}
+
 func TestUpdateConfigKeepsAuthAndSessionSecret(t *testing.T) {
 	t.Parallel()
 	mgr, store := managertest.New(t, func(cfg *config.Config) {

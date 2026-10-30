@@ -13,7 +13,7 @@ func TestSyncFromConfigAppliesValidHost(t *testing.T) {
 
 	arrs := New(config.NewStore(&config.Config{}), nil, zerolog.Nop())
 	arrs.AddOrUpdate(Arr{Name: "whisparr", Host: "http://old.example", Token: "old-token", Source: SourceAuto})
-	arrs.SyncFromConfig([]config.Arr{{
+	arrs.SyncFromConfig(nil, []config.Arr{{
 		Name:   "whisparr",
 		Host:   "http://new.example",
 		Token:  "new-token",
@@ -31,7 +31,7 @@ func TestSyncFromConfigPreservesResolvedHostForInvalidUpdate(t *testing.T) {
 
 	arrs := New(config.NewStore(&config.Config{}), nil, zerolog.Nop())
 	arrs.AddOrUpdate(Arr{Name: "whisparr", Host: "http://resolved.example", Token: "old-token", Source: SourceAuto})
-	arrs.SyncFromConfig([]config.Arr{{
+	arrs.SyncFromConfig(nil, []config.Arr{{
 		Name:   "whisparr",
 		Host:   "not-a-url",
 		Token:  "new-token",
@@ -41,6 +41,25 @@ func TestSyncFromConfigPreservesResolvedHostForInvalidUpdate(t *testing.T) {
 	got, ok := arrs.Get("whisparr")
 	if !ok || got.Host != "http://resolved.example" || got.Token != "new-token" {
 		t.Fatalf("synced Arr = %#v", got)
+	}
+}
+
+func TestSyncFromConfigDropsArrRemovedFromConfig(t *testing.T) {
+	t.Parallel()
+
+	saved := []config.Arr{{Name: "sonarr", Host: "http://sonarr.example", Token: "sonarr-token"}}
+	arrs := New(config.NewStore(&config.Config{Arrs: saved}), nil, zerolog.Nop())
+	arrs.AddOrUpdate(Arr{Name: "whisparr", Host: "http://whisparr.example", Token: "w-token", Source: SourceAuto})
+	arrs.SyncFromConfig(saved, nil)
+
+	if got, ok := arrs.Get("sonarr"); ok {
+		t.Fatalf("removed Arr still registered: %#v", got)
+	}
+	if _, ok := arrs.MatchCredentials("sonarr", "", "sonarr-token"); ok {
+		t.Fatal("removed Arr's credentials still match")
+	}
+	if _, ok := arrs.Get("whisparr"); !ok {
+		t.Fatal("auto-registered Arr that was never saved was dropped")
 	}
 }
 

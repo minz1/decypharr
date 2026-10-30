@@ -294,7 +294,7 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), status)
 		return
 	}
-	s.manager.Arr().SyncFromConfig(updated.Arrs)
+	s.manager.Arr().SyncFromConfig(before.Arrs, updated.Arrs)
 	restarted := before.RequiresRestart(updated)
 	if restarted {
 		go s.Restart()
