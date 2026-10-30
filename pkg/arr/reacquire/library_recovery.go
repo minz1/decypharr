@@ -131,8 +131,8 @@ func (s *Service) reconcileImportedJobs(ctx context.Context) {
 }
 
 // requeueReturnedDownload runs job again for the files the Arr imported from
-// its own download after failing it. Until the index binds them it waits; the
-// worker's ticker wakes the worker after reconciling.
+// its own download after failing it. Until the index binds them it waits,
+// saying why; the worker's ticker wakes the worker after reconciling.
 func (s *Service) requeueReturnedDownload(job Job) {
 	var returned []Binding
 	for _, binding := range s.index.ByDownloadID(job.ArrName, job.DownloadID) {
@@ -143,6 +143,25 @@ func (s *Service) requeueReturnedDownload(job Job) {
 	}
 	if len(returned) > 0 {
 		_ = s.rebindJob(job.ID, returned)
+		return
+	}
+	s.noteWaiting(job.ID, "replacement imported, but the Arr grabbed the failed download again; "+
+		"waiting until that grab imports or fails")
+}
+
+// noteWaiting records why a waiting job still waits without restarting its
+// timeout.
+func (s *Service) noteWaiting(id, reason string) {
+	s.jobsMu.Lock()
+	defer s.jobsMu.Unlock()
+	job, ok := s.jobs[id]
+	if !ok || !job.Status.waiting() || job.LastError == reason {
+		return
+	}
+	job = cloneJob(job)
+	job.LastError = reason
+	if s.jobRepository.Save(job) == nil {
+		s.jobs[id] = job
 	}
 }
 

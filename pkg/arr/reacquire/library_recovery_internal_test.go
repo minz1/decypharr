@@ -283,7 +283,8 @@ func TestReconcileImportedManagedJobs(t *testing.T) {
 // A waiting history_failed job whose download the Arr grabbed again after the
 // failure, and imported, is the bad release back: the job is requeued with the
 // re-imported file bound, not marked ready. An index that still binds only the
-// replaced file keeps it waiting; a re-grab the Arr already failed counts as a replacement.
+// replaced file keeps it waiting, saying why without restarting its timeout; a
+// re-grab the Arr already failed counts as a replacement.
 func TestReconcileRequeuesAJobWhoseDownloadCameBack(t *testing.T) {
 	t.Parallel()
 	const regrabbed = `{"page":1,"totalRecords":2,"records":[` +
@@ -295,12 +296,13 @@ func TestReconcileRequeuesAJobWhoseDownloadCameBack(t *testing.T) {
 		`{"id":40,"eventType":"downloadFailed","downloadId":"same-download"}]}`
 	for _, tc := range []returnedDownloadCase{
 		{name: "re-grabbed and indexed", history: regrabbed, indexed: true, want: StatusQueued, wantRequests: 3},
-		{name: "re-grabbed, not indexed yet", history: regrabbed, want: StatusWaitingForImport, wantRequests: 3},
+		{name: "re-grabbed, not indexed yet", history: regrabbed, want: StatusWaitingForImport, wantRequests: 3,
+			noted: true},
 		{name: "re-grab already failed", history: regrabFailed, indexed: true, want: StatusReady, wantRequests: 3},
 		{name: "history unreadable", history: "unauthorized", indexed: true, want: StatusWaitingForImport,
 			wantRequests: 2},
 		{name: "re-grabbed, heuristic binding", history: regrabbed, indexed: true, heuristic: true,
-			want: StatusWaitingForImport, wantRequests: 3},
+			want: StatusWaitingForImport, wantRequests: 3, noted: true},
 		{name: "command search job", history: regrabbed, indexed: true, strategy: StrategyCommandSearch,
 			want: StatusReady, wantRequests: 1},
 	} {
@@ -316,6 +318,7 @@ type returnedDownloadCase struct {
 	history      string
 	indexed      bool
 	heuristic    bool
+	noted        bool
 	strategy     Strategy
 	want         Status
 	wantRequests int64
@@ -366,6 +369,12 @@ func runReturnedDownloadCase(t *testing.T, tc returnedDownloadCase) {
 	if got := requests.Load(); got != tc.wantRequests {
 		t.Fatalf("requests = %d, want %d", got, tc.wantRequests)
 	}
+	if tc.want == StatusWaitingForImport {
+		if noted := updated.LastError != ""; noted != tc.noted || !updated.UpdatedAt.Equal(job.UpdatedAt) {
+			t.Fatalf("last error = %q, updated at moved %v, want noted %v and unmoved",
+				updated.LastError, updated.UpdatedAt.Sub(job.UpdatedAt), tc.noted)
+		}
+	}
 	if tc.want != StatusQueued {
 		return
 	}
@@ -395,6 +404,23 @@ func TestRebindLeavesAJobThatIsNoLongerWaiting(t *testing.T) {
 	}
 	if got, _ := service.Job(job.ID); got.Status != StatusReady || len(got.Bindings) != 1 {
 		t.Fatalf("job = %s with %d bindings, want ready with 1", got.Status, len(got.Bindings))
+	}
+}
+
+func TestNoteWaitingLeavesAJobThatIsNoLongerWaiting(t *testing.T) {
+	t.Parallel()
+	instance := arr.Arr{Name: "library", Type: arr.Radarr, Host: "http://arr.invalid", Token: "token"}
+	service, err := NewService(ServiceOptions{Directory: t.TempDir(), Arrs: newTestArrStorage()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = service.Close() })
+	job, _ := waitingImportJob(importedJobCase{kind: arr.Radarr}, instance, time.Now())
+	job.Status = StatusQueued
+	service.jobs[job.ID] = job
+	service.noteWaiting(job.ID, "still waiting")
+	if got, _ := service.Job(job.ID); got.LastError != "" {
+		t.Fatalf("queued job noted %q", got.LastError)
 	}
 }
 
