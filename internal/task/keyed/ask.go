@@ -82,6 +82,7 @@ func (r *Runner[K, M, S]) Ask(ctx context.Context, key K, msg M) (any, error) {
 // child I/O gets the "unknown" error at its timeout, and the caller (an API
 // handler returning 503) retries; commands must be idempotent for that.
 func (fx *Effects[K, M]) Reply(value any) {
+	fx.live()
 	if fx.replied {
 		return
 	}
