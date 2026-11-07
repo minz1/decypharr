@@ -15,6 +15,9 @@ import (
 // way the bucket fails means the provider, not the releases, is the problem; every other failure to read them
 // leaves the question open. A probe that runs out of time ends inconclusive, which only ever holds, and is logged.
 func (r *Service) canaryProbe(ctx context.Context, bucket Bucket, settings config.BreakerSettings) canaryOutcome {
+	if ctx.Err() != nil {
+		return canaryInconclusive
+	}
 	names := r.canaryEntries(bucket, settings)
 	if len(names) == 0 {
 		return canaryNone
