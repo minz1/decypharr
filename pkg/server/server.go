@@ -65,7 +65,10 @@ const (
 	readHeaderTimeout = 30 * time.Second
 	// shutdownGrace is the share of the stop budget that in-flight requests
 	// get to finish before the streams still open are closed.
-	shutdownGrace = 8 * time.Second
+	shutdownGrace = 5 * time.Second
+	// httpSlice is the server's share of the generation's stop budget for the whole drain, grace period and
+	// handler wait together, so the manager keeps the rest of it.
+	httpSlice = 8 * time.Second
 	// defaultStopBudget bounds the shutdown of a server that was not given the
 	// generation's stop context.
 	defaultStopBudget = 25 * time.Second
@@ -91,6 +94,8 @@ type Server struct {
 	stopCtx func() context.Context
 	// shutdownGrace is how long in-flight requests get to finish before open streams are closed.
 	shutdownGrace time.Duration
+	// drainSlice bounds the whole drain: the grace period and the wait for handlers after the forced close.
+	drainSlice time.Duration
 }
 
 // New builds the HTTP front end for one service generation. Settings that
@@ -124,6 +129,7 @@ func New(mgr *manager.Manager, store *config.Store, logs *logger.Factory) *Serve
 		urlBase: cfg.URLBase,
 
 		shutdownGrace: shutdownGrace,
+		drainSlice:    httpSlice,
 	}
 	s.loadUI(embeddedStatic())
 	if s.vite == nil {
@@ -266,8 +272,8 @@ func (s *Server) Start(g *task.Group) error {
 
 // shutdown drains srv: in-flight requests get the grace period, then the
 // streams still open are closed and their handlers waited for. Both waits are
-// bounded by the stop context, so the server never outlasts the generation's
-// drain deadline.
+// bounded by the server's slice of the stop context (drainSlice), which the stop
+// context bounds in turn, so the manager keeps the rest of the budget.
 func (s *Server) shutdown(
 	ctx context.Context,
 	srv *http.Server,
@@ -277,7 +283,9 @@ func (s *Server) shutdown(
 	s.logger.Info().Msg("Shutting down gracefully...")
 	stop, release := s.stopContext(ctx)
 	defer release()
-	graceCtx, cancel := context.WithTimeout(stop, s.shutdownGrace)
+	drain, cancelDrain := context.WithTimeout(stop, s.drainSlice)
+	defer cancelDrain()
+	graceCtx, cancel := context.WithTimeout(drain, s.shutdownGrace)
 	defer cancel()
 	err := srv.Shutdown(graceCtx)
 	if !errors.Is(err, context.DeadlineExceeded) {
@@ -287,8 +295,8 @@ func (s *Server) shutdown(
 		Msg("Closing requests still open after the shutdown grace period")
 	cancelRequests()
 	closeErr := srv.Close()
-	if waitErr := handlers.wait(stop); waitErr != nil {
-		return errors.Join(closeErr, fmt.Errorf("handlers still running at the stop deadline: %w", waitErr))
+	if waitErr := handlers.wait(drain); waitErr != nil {
+		return errors.Join(closeErr, fmt.Errorf("handlers still running at the end of the drain: %w", waitErr))
 	}
 	return closeErr
 }
