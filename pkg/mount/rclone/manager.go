@@ -179,7 +179,7 @@ func (m *Manager) wire() {
 	m.view.Store(&mountView{state: mountWaiting})
 }
 
-// Start starts the rcd owner and the monitor on children of g. It returns
+// Start starts the rcd owner and the mount supervisor on children of g. It returns
 // before rcd answers; IsReady says when it does.
 func (m *Manager) Start(g *task.Group) error {
 	m.mu.Lock()
