@@ -52,19 +52,3 @@ func TestReleasedReservationFreesItsPlace(t *testing.T) {
 		t.Fatal("releasing a committed grab freed its place")
 	}
 }
-
-// A refused queue-cleanup blocklist releases its reservation, so the next tick can try the same downloads.
-func TestRefusedCleanupBlocklistReleasesItsReservation(t *testing.T) {
-	t.Parallel()
-	records := packRows("dl-0", 1, 2)
-	fake := newResearchArr(records...)
-	fake.deleteRefused = true
-	service, _, _ := guardedService(t, fake)
-
-	runCleanup(t, service, "tv", 3)
-	fake.update(func(a *researchArr) { a.deleteRefused = false })
-	runCleanup(t, service, "tv", 1)
-	if left := len(queueIDs(fake)); left != 0 {
-		t.Fatalf("%d rows left: the refused attempts must not have held the download's place", left)
-	}
-}

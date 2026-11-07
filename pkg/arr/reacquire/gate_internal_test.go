@@ -83,6 +83,26 @@ func TestAVetoCreatesNoJob(t *testing.T) {
 	}
 }
 
+// If the job cannot be saved after the gate admitted, nothing was created, so the admission is given back.
+func TestAFailedSaveRefundsTheAdmission(t *testing.T) {
+	t.Parallel()
+	service, binding := gateService(t)
+	if err := service.jobRepository.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var gate countingGate
+	_, err := service.Reacquire(Request{
+		EntryID: binding.EntryID, FileID: binding.EntryFileID, Cause: CauseStream, Gate: gate.gate(),
+	})
+	if err == nil {
+		t.Fatal("a job was created although it could not be saved")
+	}
+	if gate.admits.Load() != 1 || gate.refunds.Load() != 1 || len(service.Jobs()) != 0 {
+		t.Fatalf("admits %d refunds %d jobs %d, want the admission refunded and no job",
+			gate.admits.Load(), gate.refunds.Load(), len(service.Jobs()))
+	}
+}
+
 // A job that appears while the gate decides is returned, and the admission is given back.
 func TestAJobThatAppearsWhileTheGateDecidesRefundsIt(t *testing.T) {
 	t.Parallel()
