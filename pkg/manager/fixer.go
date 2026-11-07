@@ -254,7 +254,7 @@ func (f *Fixer) MoveTorrent(entry *storage.Entry, debridName string, reinsert bo
 		old = *source
 	}
 
-	newDebridTorrent, err := f.submitReplacement(client, entry)
+	newDebridTorrent, err := f.submitReplacement(client, debridName, entry)
 	if err != nil {
 		return false, err
 	}
@@ -291,7 +291,11 @@ func activateExistingPlacement(entry *storage.Entry, debridName string) bool {
 
 // submitReplacement submits entry's magnet to client and returns the new
 // placement once every file has a link or ID; a failed placement is deleted.
-func (f *Fixer) submitReplacement(client debrid.Client, entry *storage.Entry) (*types.Torrent, error) {
+func (f *Fixer) submitReplacement(
+	client debrid.Client,
+	debridName string,
+	entry *storage.Entry,
+) (*types.Torrent, error) {
 	magnet, err := utils.GetMagnetInfo(entry.Magnet, f.manager.store.Get().AlwaysRmTrackerUrls)
 	if err != nil {
 		magnet = utils.ConstructMagnet(entry.InfoHash, entry.Name)
@@ -322,7 +326,7 @@ func (f *Fixer) submitReplacement(client debrid.Client, entry *storage.Entry) (*
 	}
 	if err != nil {
 		if newDebridTorrent != nil && newDebridTorrent.ID != "" {
-			_ = client.DeleteTorrent(newDebridTorrent.ID)
+			f.manager.discardSubmitted(debridName, newDebridTorrent.ID, entry.InfoHash)
 		}
 		return nil, fmt.Errorf("failed to check status: %w", err)
 	}
@@ -333,12 +337,12 @@ func (f *Fixer) submitReplacement(client debrid.Client, entry *storage.Entry) (*
 	)
 
 	if len(newDebridTorrent.Files) == 0 {
-		_ = client.DeleteTorrent(newDebridTorrent.ID)
+		f.manager.discardSubmitted(debridName, newDebridTorrent.ID, entry.InfoHash)
 		return nil, fmt.Errorf("no files in entry after re-insertion")
 	}
 	for _, file := range newDebridTorrent.GetFiles() {
 		if file.Link == "" && file.ID == "" {
-			_ = client.DeleteTorrent(newDebridTorrent.ID)
+			f.manager.discardSubmitted(debridName, newDebridTorrent.ID, entry.InfoHash)
 			return nil, fmt.Errorf("empty link/id for file %s", file.Name)
 		}
 	}

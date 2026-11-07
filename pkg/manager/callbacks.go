@@ -24,6 +24,20 @@ func (m *Manager) RemoveFromProvider(providerEntry *storage.ProviderEntry, self 
 	return err
 }
 
+// discardSubmitted deletes a torrent that was just added at a provider and given up on, for the entry self. A
+// provider answers an add of a magnet it already holds with the existing torrent's ID, so the torrent may be one
+// another entry holds; it is released, not deleted outright. The caller has accounted for any slot the add held.
+func (m *Manager) discardSubmitted(provider, id, self string) {
+	if id == "" {
+		return
+	}
+	placement := &storage.ProviderEntry{Provider: provider, ID: id, Progress: 1}
+	if _, err := m.releasePlacement(provider, placement, self); err != nil {
+		m.logger.Warn().Err(err).Str("provider", provider).Str("id", id).
+			Msg("Failed to delete a provider torrent that was given up on")
+	}
+}
+
 // startPlacementRun starts a provider deletion that Stop waits for. It reports false, and runs nothing, once
 // Stop has closed the runs: a deletion after that would read a storage that is closing.
 func (m *Manager) startPlacementRun(run func()) bool {

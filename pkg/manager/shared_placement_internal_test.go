@@ -2,6 +2,7 @@ package manager
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -235,6 +236,71 @@ func TestDeleteEntryAfterStopDoesNotRunPlacementRemoval(t *testing.T) {
 	}
 	h.m.placementRuns.Wait()
 	requireDeleted(t, h)
+}
+
+// duplicateAddProvider answers every add with the ID of a torrent it already holds, as a provider does for a
+// magnet that is already in the account, and then fails the status check.
+type duplicateAddProvider struct {
+	debrid.Client
+
+	id string
+}
+
+func (c *duplicateAddProvider) Config() config.Debrid {
+	return config.Debrid{Name: "torbox", Provider: "torbox"}
+}
+
+func (c *duplicateAddProvider) SubmitMagnet(torrent *types.Torrent) (*types.Torrent, error) {
+	torrent.ID = c.id
+	return torrent, nil
+}
+
+func (c *duplicateAddProvider) CheckStatus(torrent *types.Torrent) (*types.Torrent, error) {
+	return torrent, errors.New("status check failed")
+}
+
+// A torrent a failed add or status check discards may be one another entry holds: the provider answers a duplicate
+// add with the existing ID.
+func TestDiscardingASubmittedTorrentKeepsOneACoHolderUses(t *testing.T) {
+	t.Parallel()
+	for _, held := range []bool{true, false} {
+		h := newPruneHarness(t, config.PruneModeDelete)
+		h.mount2(t)
+		if held {
+			h.addEntry(t, "holder", shareID("dup"))
+		}
+
+		h.m.discardSubmitted("torbox", "dup", "self")
+		if held {
+			requireDeleted(t, h)
+		} else {
+			requireDeleted(t, h, "dup")
+		}
+	}
+}
+
+func TestFixerReplacementThatFailsItsStatusCheckKeepsASharedTorrent(t *testing.T) {
+	t.Parallel()
+	for _, held := range []bool{true, false} {
+		h := newPruneHarness(t, config.PruneModeDelete)
+		h.mount2(t)
+		if held {
+			h.addEntry(t, "holder", shareID("dup"))
+		}
+		h.m.config = h.m.store.Get()
+		client := &duplicateAddProvider{Client: h.provider, id: "dup"}
+		h.m.clients.Store("torbox", client)
+		entry := &storage.Entry{InfoHash: "0123456789012345678901234567890123456789", Name: "release"}
+
+		if _, err := NewFixer(h.m).submitReplacement(client, "torbox", entry); err == nil {
+			t.Fatal("submitReplacement() = nil, want the status check failure")
+		}
+		if held {
+			requireDeleted(t, h)
+		} else {
+			requireDeleted(t, h, "dup")
+		}
+	}
 }
 
 // A queued entry that holds the provider torrent counts as a holder.
