@@ -477,11 +477,11 @@ func (m *Manager) stopRepair() error {
 	return nil
 }
 
-func (m *Manager) startMountManager(ctx context.Context) error {
+func (m *Manager) startMountManager(_ context.Context) error {
 	if m.mountManager == nil {
 		return nil
 	}
-	return m.mountManager.Start(ctx)
+	return m.mountManager.Start(m.mountSvc.group)
 }
 
 func (m *Manager) stopMountManager() error {

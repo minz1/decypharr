@@ -14,6 +14,7 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/rclone"
+	"github.com/sirrobot01/decypharr/internal/task"
 )
 
 // loadConfig loads a configuration from a temp dir holding body.
@@ -40,7 +41,7 @@ func TestNewManagerWithWebDAVDisabledIsUsable(t *testing.T) {
 	if m == nil {
 		t.Fatal("NewManager returned nil")
 	}
-	if err := m.Start(context.Background()); err != nil {
+	if err := m.Start(task.NewRoot(t.Context(), "test", zerolog.Nop())); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	if err := m.Stop(); err != nil {
