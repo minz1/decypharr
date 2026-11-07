@@ -69,6 +69,16 @@ var ErrTorrentNotCached = (&Error{
 	Code:       "torrent_not_cached",
 }).Retryable()
 
+// ErrProviderStatusTimeout means the provider never reached a decisive state
+// (still converting a magnet, links not visible yet) within the polling budget.
+// It says nothing about whether the release is cached, so it must not be
+// confused with ErrTorrentNotCached.
+var ErrProviderStatusTimeout = (&Error{
+	statusCode: http.StatusGatewayTimeout,
+	err:        errors.New("provider did not finish processing the torrent in time"),
+	Code:       "provider_status_timeout",
+}).Retryable()
+
 var ErrTorrentBlocked = (&Error{
 	statusCode: http.StatusUnavailableForLegalReasons,
 	err:        errors.New("torrent blocked for legal reasons"),

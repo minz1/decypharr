@@ -296,7 +296,7 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 	if !m.queue.Contains(entry.InfoHash) {
 		return // removed while the status check ran
 	}
-	if err != nil && transientStatusError(err) {
+	if err != nil && transientStatusError(err) && !statusWaitExhausted(placement, err) {
 		// A network blip or provider hiccup: leave the entry as it is, so the
 		// next queue pass checks again, rather than failing it and deleting
 		// the provider's torrent.
@@ -388,6 +388,20 @@ func (m *Manager) awaitLinks(entry *storage.Entry, placement *storage.ProviderEn
 	placement.Status = debridTypes.TorrentStatusError
 	m.slotFreed(entry.ActiveProvider)
 	m.failBadRelease(entry, fmt.Errorf("provider gave no file links %s after the download finished", linksWaitLimit))
+}
+
+// maxProviderPendingTime is how long a placement may wait on a provider that has
+// not finished converting or linking its torrent (ErrProviderStatusTimeout)
+// before the entry fails. A magnet with no seeders never leaves conversion, so
+// the wait needs a wall-clock bound; the failure carries no verdict on the release.
+const maxProviderPendingTime = 6 * time.Hour
+
+// statusWaitExhausted reports a provider-pending status error that has outlasted
+// maxProviderPendingTime since the placement was added.
+func statusWaitExhausted(placement *storage.ProviderEntry, err error) bool {
+	return errors.Is(err, customerror.ErrProviderStatusTimeout) &&
+		!placement.AddedAt.IsZero() &&
+		time.Since(placement.AddedAt) > maxProviderPendingTime
 }
 
 // linksWaitLimit is how long a finished torrent may go without file links before its grab fails.

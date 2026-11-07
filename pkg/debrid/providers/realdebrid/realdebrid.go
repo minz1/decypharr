@@ -2,6 +2,7 @@ package realdebrid
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -39,7 +40,11 @@ const (
 	availabilityBatchSize = 200
 	// statusPollInterval is the delay before each CheckStatus poll.
 	statusPollInterval = 2 * time.Second
+	// maxConversionPolls bounds how long CheckStatus waits for Real-Debrid to turn
+	// a magnet into a torrent (about six minutes at the default interval).
+	maxConversionPolls = 180
 
+	statusMagnetConversion      = "magnet_conversion"
 	statusDownloaded            = "downloaded"
 	statusWaitingFilesSelection = "waiting_files_selection"
 
@@ -69,6 +74,10 @@ type RealDebrid struct {
 	profile      types.ProfileCache
 	config       config.Debrid
 	retries      int
+
+	// CheckStatus polling knobs; zero values select the defaults.
+	pollInterval       time.Duration
+	maxConversionPolls int
 }
 
 func New(
@@ -584,8 +593,11 @@ func (r *RealDebrid) UpdateTorrent(t *types.Torrent) error {
 // CheckStatus polls the torrent, selecting its allowed files when Real-Debrid
 // waits for a selection, until it is downloaded, still downloading or failed.
 func (r *RealDebrid) CheckStatus(t *types.Torrent) (*types.Torrent, error) {
+	interval := cmp.Or(r.pollInterval, statusPollInterval)
+	maxConverting := cmp.Or(r.maxConversionPolls, maxConversionPolls)
+	converting := 0
 	for {
-		time.Sleep(statusPollInterval)
+		time.Sleep(interval)
 
 		var data torrentInfo
 		status, err := r.doGet(context.Background(), "/torrents/info/"+t.ID, &data)
@@ -604,18 +616,24 @@ func (r *RealDebrid) CheckStatus(t *types.Torrent) (*types.Torrent, error) {
 		r.applyStatus(t, data)
 
 		switch {
+		case debridStatus == statusMagnetConversion:
+			// Real-Debrid is still resolving the magnet; it has not said anything
+			// about the cache yet, so keep polling (bounded).
+			converting++
+			if converting > maxConverting {
+				return t, fmt.Errorf(
+					"torrent %s still converting after %d polls: %w",
+					t.Name,
+					maxConverting,
+					customerror.ErrProviderStatusTimeout,
+				)
+			}
 		case debridStatus == statusWaitingFilesSelection:
 			if selectErr := r.selectFiles(t, data); selectErr != nil {
 				return t, selectErr
 			}
 		case debridStatus == statusDownloaded:
-			t.Status = types.TorrentStatusDownloaded
-			t.Files, err = r.getSelectedFiles(t, data)
-			if err != nil {
-				return t, err
-			}
-			r.logger.Info().Msgf("Torrent: %s downloaded to RD", t.Name)
-			return t, nil
+			return r.finishDownloaded(t, data)
 		case t.Status == types.TorrentStatusDownloading:
 			if !t.DownloadUncached {
 				return t, fmt.Errorf("torrent %s: %w", t.Name, customerror.ErrTorrentNotCached)
@@ -630,6 +648,18 @@ func (r *RealDebrid) CheckStatus(t *types.Torrent) (*types.Torrent, error) {
 			return t, fmt.Errorf("torrent: %s has error status: %s", t.Name, debridStatus)
 		}
 	}
+}
+
+// finishDownloaded records a downloaded torrent's selected files on t.
+func (r *RealDebrid) finishDownloaded(t *types.Torrent, data torrentInfo) (*types.Torrent, error) {
+	t.Status = types.TorrentStatusDownloaded
+	files, err := r.getSelectedFiles(t, data)
+	if err != nil {
+		return t, err
+	}
+	t.Files = files
+	r.logger.Info().Msgf("Torrent: %s downloaded to RD", t.Name)
+	return t, nil
 }
 
 // applyStatus copies polled torrent state onto t.
