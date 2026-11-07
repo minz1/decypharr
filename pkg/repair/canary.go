@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
@@ -40,6 +41,22 @@ func (r *Service) canaryProbe(ctx context.Context, bucket Bucket, settings confi
 		}
 	}
 	return outcome
+}
+
+// QueueCanary is the canary of queue cleanup's blocklist guard: it probes recently good entries of the provider and
+// reports whether they still read. Any provider failure counts, whatever its class.
+func (r *Service) QueueCanary(ctx context.Context, provider string) arr.CanaryVerdict {
+	switch r.canaryProbe(ctx, Bucket{Provider: provider, Class: ClassOther}, r.breakerSettings()) {
+	case canaryPass:
+		return arr.CanaryPass
+	case canaryFail:
+		return arr.CanaryFail
+	case canaryInconclusive:
+		return arr.CanaryInconclusive
+	case canaryNone:
+		return arr.CanaryNone
+	}
+	return arr.CanaryInconclusive
 }
 
 // canaryMatches reports whether a canary file failing with class seen is the bucket's own failure. A bucket for

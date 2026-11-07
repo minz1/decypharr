@@ -55,6 +55,11 @@ type QueueSchema struct {
 	OutputPath                          string `json:"outputPath"`
 	EpisodeHasFile                      bool   `json:"episodeHasFile"`
 	ID                                  int    `json:"id"`
+
+	// rule and provider are set by queue cleanup on a row it means to blocklist: the cleanup rule that matched and
+	// the provider the download is judged under. They are never on the wire.
+	rule     string
+	provider string
 }
 
 // matchCatalogRule applies the built-in cleanup rule id, a
@@ -162,12 +167,15 @@ func (s *Service) CleanupQueue(ctx context.Context, name string) error {
 	var blocklist, blocklistResearch, blocklistSearchMissing, leftovers []QueueSchema
 	importStatuses := make(map[string]string)
 	for _, item := range items {
-		switch resolveQueueAction(item, rules, complete[item.DownloadID]) {
+		action, rule := resolveQueueRule(item, rules, complete[item.DownloadID])
+		switch action {
 		case QueueActionRemoveLeftover:
 			leftovers = append(leftovers, item)
 		case QueueActionBlocklist:
+			item.rule, item.provider = rule, s.guard.guardProvider(item)
 			blocklist = append(blocklist, item)
 		case QueueActionBlocklistResearch:
+			item.rule, item.provider = rule, s.guard.guardProvider(item)
 			blocklistResearch = append(blocklistResearch, item)
 		case QueueActionImport:
 			if _, seen := importStatuses[item.DownloadID]; !seen {
@@ -177,6 +185,10 @@ func (s *Service) CleanupQueue(ctx context.Context, name string) error {
 			// Nothing to do.
 		}
 	}
+
+	// Only so many distinct downloads are blocklisted per window. What is held stays in the queue, before anything is
+	// planned for it, so a held download owes no search and is judged again next tick.
+	blocklistResearch, blocklist = s.holdExcessBlocklists(ctx, name, blocklistResearch, blocklist)
 
 	var searched []QueueSchema
 	if len(blocklistResearch) > 0 && s.ResolveType(ctx, name) == Sonarr {
@@ -284,12 +296,19 @@ func (s *Service) recordImportFailure(name, downloadID string, failure importFai
 // rule wins. Catalog rules skip items the Arr's own failed download handling
 // already blocklists and re-searches.
 func resolveQueueAction(item QueueSchema, rules []config.QueueCleanupRule, complete bool) QueueAction {
+	action, _ := resolveQueueRule(item, rules, complete)
+	return action
+}
+
+// resolveQueueRule is resolveQueueAction that also names the rule it matched: the catalog ID, or the match text of
+// a custom rule.
+func resolveQueueRule(item QueueSchema, rules []config.QueueCleanupRule, complete bool) (QueueAction, string) {
 	status := strings.ToLower(item.TrackedDownloadStatus)
 	if !strings.EqualFold(item.Status, "failed") && status != "warning" && status != "error" {
-		return QueueActionNone
+		return QueueActionNone, ""
 	}
 	if state := strings.ToLower(item.TrackedDownloadState); state == "importing" || state == "imported" {
-		return QueueActionNone
+		return QueueActionNone, ""
 	}
 	arrFailed := strings.EqualFold(item.TrackedDownloadState, "failedPending") ||
 		strings.EqualFold(item.TrackedDownloadState, "failed")
@@ -307,21 +326,25 @@ func resolveQueueAction(item QueueSchema, rules []config.QueueCleanupRule, compl
 		if !matched {
 			continue
 		}
+		ruleKey := rule.ID
+		if ruleKey == "" {
+			ruleKey = "match:" + strings.ToLower(strings.TrimSpace(rule.Match))
+		}
 		switch QueueAction(rule.Action) {
 		case QueueActionBlocklist, QueueActionBlocklistResearch:
 			if complete && rule.ID == "episodes_missing" {
-				return QueueActionRemoveLeftover
+				return QueueActionRemoveLeftover, ruleKey
 			}
-			return QueueAction(rule.Action)
+			return QueueAction(rule.Action), ruleKey
 		case QueueActionImport:
-			return QueueAction(rule.Action)
+			return QueueAction(rule.Action), ruleKey
 		case QueueActionNone, QueueActionRemoveLeftover:
 			fallthrough
 		default:
-			return QueueActionNone
+			return QueueActionNone, ruleKey
 		}
 	}
-	return QueueActionNone
+	return QueueActionNone, ""
 }
 
 // refreshEpisodeFiles sets episodeHasFile from Sonarr's episodes for the records a blocklist rule acts on, then
@@ -520,10 +543,13 @@ func (s *Service) blocklistQueueItems(
 	if err := s.removeQueueItems(ctx, name, ids, true, skipRedownload); err != nil {
 		s.logger.Error().Err(err).Str("arr", name).Str("action", string(action)).Msg("Queue cleanup: blocklist failed")
 		if errors.Is(err, ErrMutationOutcomeUnknown) {
+			// It may have been sent, so it counts toward the window.
+			s.guard.commit(name, items, s.now())
 			return removalUnknown
 		}
 		return removalRefused
 	}
+	s.guard.commit(name, items, s.now())
 	for _, item := range items {
 		s.logger.Info().Str("arr", name).Str("title", item.Title).Str("download_id", item.DownloadID).
 			Str("action", string(action)).Str("status", statusText(item)).Msg("Queue cleanup: blocklisted")

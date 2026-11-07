@@ -39,6 +39,8 @@ type Service struct {
 	// ledger keeps pendingSearches on disk, nil when no data directory was given.
 	ledger *searchLedger
 	now    func() time.Time
+	// guard limits how fast queue cleanup blocklists downloads.
+	guard *queueGuard
 }
 
 // readRetries is how many times the shared client retries an Arr read.
@@ -53,6 +55,7 @@ func New(cfg *config.Store, tlsConfig *tls.Config, log zerolog.Logger) *Service 
 		importFailures:  make(map[string]map[string]importFailure),
 		pendingSearches: make(map[string]map[int]pendingSearch),
 		now:             time.Now,
+		guard:           newQueueGuard(),
 		config:          cfg,
 		logger:          log,
 		client: request.New(

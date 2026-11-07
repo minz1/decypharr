@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"time"
 )
 
 type (
@@ -87,7 +88,38 @@ func (a Arr) IsZero() bool {
 // Sonarr/Radarr queue warnings/errors to an action.
 type QueueCleanup struct {
 	Rules []QueueCleanupRule `json:"rules,omitempty"`
+
+	// BlocklistPerBucket is how many distinct downloads one arr, rule and provider may have blocklisted per
+	// BlocklistWindow before the rest are held (default 20).
+	BlocklistPerBucket int `json:"blocklist_per_bucket,omitempty"`
+	// BlocklistPerArr caps the distinct downloads one arr may have blocklisted per BlocklistWindow (default 100).
+	BlocklistPerArr int `json:"blocklist_per_arr,omitempty"`
+	// BlocklistWindow is the rolling window of both limits (default 1h).
+	BlocklistWindow string `json:"blocklist_window,omitempty"`
 }
+
+// BlocklistLimits are the resolved limits on how fast queue cleanup may blocklist downloads.
+type BlocklistLimits struct {
+	PerBucket int
+	PerArr    int
+	Window    time.Duration
+}
+
+// BlocklistLimits resolves the limits, substituting the default for every zero or invalid value.
+func (q QueueCleanup) BlocklistLimits() BlocklistLimits {
+	return BlocklistLimits{
+		PerBucket: positiveOr(q.BlocklistPerBucket, defaultBlocklistPerBucket),
+		PerArr:    positiveOr(q.BlocklistPerArr, defaultBlocklistPerArr),
+		Window:    repairDuration(q.BlocklistWindow, defaultBlocklistWindow),
+	}
+}
+
+// Defaults of the queue-cleanup blocklist limits.
+const (
+	defaultBlocklistPerBucket = 20
+	defaultBlocklistPerArr    = 100
+	defaultBlocklistWindow    = time.Hour
+)
 
 // QueueCleanupRule maps a queue issue to a cleanup action.
 //

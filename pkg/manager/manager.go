@@ -377,6 +377,7 @@ func (m *Manager) init() {
 		Config:        m.store,
 		Logger:        m.logs.New("repair"),
 	})
+	m.arr.SetQueueGuardHooks(m.queueGuardHooks())
 
 	// Initialize the unified active-download queue after all processors exist.
 	m.initJobQueue()
