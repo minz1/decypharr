@@ -80,6 +80,11 @@ var ErrProviderStatusTimeout = (&Error{
 	Code:       "provider_status_timeout",
 }).Retryable()
 
+// ErrMagnetNotConverted marks a provider-pending wait on a magnet the provider has not converted yet. It is always
+// joined with ErrProviderStatusTimeout, so it is retriable, but the wait it allows is shorter: a magnet that never
+// converts has no seeders, and the provider drops it on its own a little later.
+var ErrMagnetNotConverted = errors.New("magnet not converted yet")
+
 // StatusWaitStopped is the error of a status poll that was cut short because the
 // application is stopping. It is both a pending status (no verdict on the
 // release) and the cause that stopped the wait.

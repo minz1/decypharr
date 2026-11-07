@@ -626,9 +626,10 @@ func (r *RealDebrid) CheckStatus(t *types.Torrent) (*types.Torrent, error) {
 			converting++
 			if converting > maxConverting {
 				return t, fmt.Errorf(
-					"torrent %s still converting after %d polls: %w",
+					"torrent %s still converting after %d polls: %w: %w",
 					t.Name,
 					maxConverting,
+					customerror.ErrMagnetNotConverted,
 					customerror.ErrProviderStatusTimeout,
 				)
 			}

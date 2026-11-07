@@ -2,6 +2,7 @@ package manager
 
 import (
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -155,6 +156,54 @@ func TestSubmitToProviderStatusTimeoutQueuesTheTorrent(t *testing.T) {
 			time.Sleep(20 * time.Millisecond)
 			if provider.deleted.Load() != 0 {
 				t.Fatal("a pending torrent was deleted at the provider")
+			}
+		})
+	}
+}
+
+// notConverted is the error Real-Debrid returns while it is still converting a magnet.
+func notConverted() error {
+	return fmt.Errorf("torrent x still converting: %w: %w", customerror.ErrMagnetNotConverted,
+		customerror.ErrProviderStatusTimeout)
+}
+
+// A magnet the provider has not converted within maxConversionWait has no seeders: its grab fails in the Arr, so the
+// Arr searches another release, and the provider's torrent is deleted. Other pending waits keep the longer bound.
+func TestUnconvertedMagnetFailsItsGrabAfterTheConversionWait(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		err      error
+		age      time.Duration
+		wantFail bool
+	}{
+		"converting past the wait":        {notConverted(), maxConversionWait + time.Minute, true},
+		"converting within the wait":      {notConverted(), maxConversionWait - time.Minute, false},
+		"other pending wait past it":      {customerror.ErrProviderStatusTimeout, maxConversionWait + time.Minute, false},
+		"other pending wait past its own": {customerror.ErrProviderStatusTimeout, maxProviderPendingTime + time.Minute, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			fake := &fakeArrRecovery{}
+			m, entry := newDroppedTestManager(t, fake)
+			m.processingEntries = xsync.NewMap[string, struct{}]()
+			m.store = testConfigStore(t, nil)
+			provider := &failingStatusProvider{err: tc.err}
+			m.clients.Store("provider", provider)
+			entry.Protocol, entry.ActiveProvider, entry.State = config.ProtocolTorrent, "provider", storage.EntryStateDownloading
+			entry.Providers = map[string]*storage.ProviderEntry{
+				"provider": {Provider: "provider", ID: "id", AddedAt: time.Now().Add(-tc.age)},
+			}
+
+			m.processQueuedTorrent(entry)
+
+			if got := len(fake.fails) == 1; got != tc.wantFail {
+				t.Fatalf("FailDownload calls = %v, want failed = %v", fake.fails, tc.wantFail)
+			}
+			if tc.wantFail {
+				assertErrored(t, m)
+				if !waitDeleted(provider) {
+					t.Fatal("the unconverted magnet was not deleted at the provider")
+				}
 			}
 		})
 	}

@@ -24,6 +24,7 @@ type convertingCase struct {
 	wantSelects   int32
 	wantStatus    types.TorrentStatus
 	wantErr       error
+	alsoErr       error // a second sentinel the error must also match
 	notErr        error
 }
 
@@ -73,6 +74,7 @@ func TestCheckStatusKeepsPollingWhileMagnetConverts(t *testing.T) {
 			wantGets:   4,
 			wantStatus: types.TorrentStatusDownloading,
 			wantErr:    customerror.ErrProviderStatusTimeout,
+			alsoErr:    customerror.ErrMagnetNotConverted, // the manager gives conversion its own, shorter wait
 			notErr:     customerror.ErrTorrentNotCached,
 		},
 	} {
@@ -97,6 +99,9 @@ func (tc convertingCase) run(t *testing.T) {
 	}
 	result, err := provider.CheckStatus(&types.Torrent{ID: "id", DownloadUncached: tc.allowUncached})
 	assertError(t, err, tc.wantErr, "")
+	if tc.alsoErr != nil && !errors.Is(err, tc.alsoErr) {
+		t.Fatalf("error = %v, want it to match %v too", err, tc.alsoErr)
+	}
 	if tc.notErr != nil && errors.Is(err, tc.notErr) {
 		t.Fatalf("error = %v must not be %v", err, tc.notErr)
 	}

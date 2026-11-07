@@ -418,12 +418,18 @@ func (m *Manager) awaitLinks(entry *storage.Entry, placement *storage.ProviderEn
 }
 
 // maxProviderPendingTime is how long a placement may wait on a provider that has
-// not finished converting or linking its torrent (ErrProviderStatusTimeout)
-// before the entry fails. A magnet with no seeders never leaves conversion, so
-// the wait needs a wall-clock bound; the failure carries no verdict on the release.
+// not finished processing its torrent (ErrProviderStatusTimeout), links not
+// visible yet for one, before the entry fails. The failure carries no verdict on
+// the release. A magnet still converting has the shorter maxConversionWait.
 const maxProviderPendingTime = 6 * time.Hour
 
+// maxConversionWait is how long a magnet may stay unconverted (ErrMagnetNotConverted).
+// One that never converts has no seeders, and Real-Debrid drops it at about 3h on its
+// own; failing it first, as a dead release, lets the Arr search another one sooner.
+const maxConversionWait = 2 * time.Hour
+
 // statusWaitExhausted reports a provider-pending status error that has outlasted
+// its wait: maxConversionWait for a magnet still converting, else
 // maxProviderPendingTime. The wait is measured from the placement, else from the
 // entry; when neither knows its age the first timeout is recorded as its start.
 func (m *Manager) statusWaitExhausted(entry *storage.Entry, placement *storage.ProviderEntry, err error) bool {
@@ -436,7 +442,11 @@ func (m *Manager) statusWaitExhausted(entry *storage.Entry, placement *storage.P
 		_ = m.queue.Update(entry)
 		return false
 	}
-	return time.Since(start) > maxProviderPendingTime
+	limit := maxProviderPendingTime
+	if errors.Is(err, customerror.ErrMagnetNotConverted) {
+		limit = maxConversionWait
+	}
+	return time.Since(start) > limit
 }
 
 // linksWaitLimit is how long a finished torrent may go without file links before its grab fails.
@@ -762,7 +772,9 @@ func (m *Manager) submitToProvider(
 }
 
 // releaseIsDead reports a status-check failure the provider pins on the torrent itself, not on decypharr or the account.
+// A magnet that never converted (it reaches here only once maxConversionWait is spent) has no seeders: it is dead too.
 func releaseIsDead(torrent *debridTypes.Torrent, err error) bool {
 	return errors.Is(err, customerror.ErrTorrentNotFound) ||
+		errors.Is(err, customerror.ErrMagnetNotConverted) ||
 		(torrent != nil && torrent.Status == debridTypes.TorrentStatusError)
 }
