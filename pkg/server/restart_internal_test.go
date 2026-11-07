@@ -18,6 +18,8 @@ type saveReply struct {
 	Restarted bool     `json:"restarted"`
 	Restart   string   `json:"restart"`
 	Warnings  []string `json:"warnings"`
+
+	RestartError string `json:"restart_error"`
 }
 
 func saveConfig(t *testing.T, server *Server, body string) (*httptest.ResponseRecorder, saveReply) {
@@ -90,8 +92,8 @@ func TestRestartThatCannotBeRequestedIsReportedAndRetried(t *testing.T) {
 	mgr, store := managertest.New(t, nil)
 	server := &Server{manager: mgr, config: store, logger: zerolog.Nop()}
 	response, reply := saveConfig(t, server, `{"port":"9191"}`)
-	if response.Code != http.StatusOK || reply.Restarted || reply.Restart != "failed" || len(reply.Warnings) == 0 {
-		t.Fatalf("status = %d, reply = %+v; want 200, restart=failed and a warning", response.Code, reply)
+	if response.Code != http.StatusOK || reply.Restarted || reply.Restart != "failed" || reply.RestartError == "" {
+		t.Fatalf("status = %d, reply = %+v; want 200, restart=failed and its cause", response.Code, reply)
 	}
 	if store.Pending() != config.PendingFailed {
 		t.Fatalf("pending = %v, want failed", store.Pending())
