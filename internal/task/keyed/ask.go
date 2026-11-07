@@ -69,6 +69,12 @@ func (r *Runner[K, M, S]) Ask(ctx context.Context, key K, msg M) (any, error) {
 // delivered when Handle returns, so the handler has finished changing its
 // state by then. A message that was not sent with Ask ignores it, and so does
 // every call after the first.
+//
+// Reply works only inside Handle, so a command cannot answer after the I/O of
+// a child task: the actor answers with what it knows (accepted, in progress)
+// and reports the outcome some other way. An Ask whose answer depends on
+// child I/O gets the "unknown" error at its timeout, and the caller (an API
+// handler returning 503) retries; commands must be idempotent for that.
 func (fx *Effects[K, M]) Reply(value any) {
 	if fx.replied {
 		return
