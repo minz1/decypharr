@@ -67,7 +67,7 @@ func (r *Service) executeSweep(
 		Msg("Sweep: probing")
 
 	heal := newErrorCache()
-	policy := healPolicy{confirm: true}
+	policy := healPolicy{confirm: true, sweep: true}
 	batch, err := r.probeCandidates(ctx, run, due, names, heal, opts, autoRepair, policy)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -128,7 +128,7 @@ func (r *Service) finishCancelledRepairSweep(
 		run.Stage = storage.RepairStageRepairing
 		r.saveRun(run)
 		// The final heal is judged by the breaker like any other: a stop does not lift the outage rule.
-		r.healBatch(repairCtx, run, batch, healPolicy{confirm: true})
+		r.healBatch(repairCtx, run, batch, healPolicy{confirm: true, sweep: true})
 	}
 
 	run.CancelReason = ""

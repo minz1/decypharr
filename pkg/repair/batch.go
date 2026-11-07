@@ -20,6 +20,10 @@ type healPolicy struct {
 	confirm bool
 	// force lets an operator heal past the breaker. The heals still count toward the caps.
 	force bool
+	// sweep marks the policy of a sweep rather than of a recheck or a fix.
+	sweep bool
+	// caller names who forced, for the log.
+	caller string
 }
 
 // probedEntry is a probed entry whose broken files are waiting for a heal decision.
@@ -39,26 +43,40 @@ type probeBatch struct {
 	entries map[string]*probedEntry
 	// probed counts the entries probed per provider this run.
 	probed map[string]int
+	// samples are, per provider, the entries probed that were not held and how many of them were broken.
+	samples map[string]sweepSample
 	// scaled says the probed counts describe the run; without them (persisted rows fixed by an operator) only
 	// the count of confirmed entries is judged.
 	scaled bool
-	usage  *runUsage
+	// sweep marks a batch from a sweep, whose samples may stand in for a canary that had nothing to probe.
+	sweep bool
+	usage *runUsage
 }
 
 func newProbeBatch(scaled bool) *probeBatch {
 	return &probeBatch{
 		entries: make(map[string]*probedEntry),
 		probed:  make(map[string]int),
+		samples: make(map[string]sweepSample),
 		scaled:  scaled,
 		usage:   newRunUsage(),
 	}
 }
 
-func (b *probeBatch) noteProbed(providers []string) {
+func (b *probeBatch) noteProbed(result *probeResult) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	for _, provider := range providers {
+	for _, provider := range result.providers {
 		b.probed[provider]++
+		if result.wasHeld {
+			continue // a held entry is suspect, not a sample of a working provider
+		}
+		sample := b.samples[provider]
+		sample.probed++
+		if result.health.Status == storage.HealthBroken {
+			sample.broken++
+		}
+		b.samples[provider] = sample
 	}
 }
 
@@ -161,6 +179,7 @@ func (r *Service) healBatch(ctx context.Context, run *storage.RepairRun, batch *
 			}
 			if policy.force {
 				r.breaker.recordForced(items, batch.usage)
+				r.releaseForced(items, policy.caller)
 			} else if !r.breaker.tryAdmit(items, batch.usage) {
 				capped++
 				entry.pending = nil
@@ -246,7 +265,11 @@ func (r *Service) judgeBuckets(
 			probed = batch.probed[bucket.Provider]
 		}
 		confirmed := len(subjects[bucket])
-		out := r.breaker.evaluate(ctx, bucket, bucketInput{runID: runID, confirmed: confirmed, probed: probed})
+		in := bucketInput{runID: runID, confirmed: confirmed, probed: probed}
+		if batch.sweep {
+			in.sample = batch.samples[bucket.Provider]
+		}
+		out := r.breaker.evaluate(ctx, bucket, in)
 		plan[bucket] = out
 		if out.newlyTripped {
 			r.announceTrip(runID, bucket, out.hold, confirmed, probed)

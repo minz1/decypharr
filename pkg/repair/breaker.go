@@ -122,7 +122,18 @@ const (
 	holdTripped            holdReason = "tripped"
 	holdCanaryFailed       holdReason = "canary_failed"
 	holdCanaryInconclusive holdReason = "canary_inconclusive"
+	// holdNoCanary holds a tripped bucket that has nothing recently good to probe: only a later sweep that samples
+	// the provider, or an operator force, releases it.
+	holdNoCanary holdReason = "no_canary"
 )
+
+// hint says what a bucket held for this reason is waiting for.
+func (r holdReason) hint() string {
+	if r == holdNoCanary {
+		return "waiting for a sweep or force"
+	}
+	return ""
+}
 
 type canaryOutcome int
 
@@ -170,6 +181,25 @@ type bucketInput struct {
 	confirmed int
 	// probed is the entries probed on the bucket's provider this run, negative when no probe set the scale.
 	probed int
+	// sample is what the sweep found among the provider's entries that were not already held.
+	sample sweepSample
+}
+
+// sweepSample is the entries a sweep probed on a provider that were not held by the breaker, and how many were
+// broken. A large enough clean sample is evidence the provider works, standing in for a canary that had nothing
+// recently good to probe.
+type sweepSample struct {
+	probed, broken int
+}
+
+const (
+	sampleMinimum       = 3
+	sampleBrokenPercent = 10
+)
+
+// passes reports a sample of at least sampleMinimum entries with fewer than sampleBrokenPercent percent broken.
+func (s sweepSample) passes() bool {
+	return s.probed >= sampleMinimum && s.broken*100 < s.probed*sampleBrokenPercent
 }
 
 type bucketOutcome struct {
@@ -378,6 +408,11 @@ func (b *breaker) canaryStepLocked(
 	case canaryInconclusive:
 		return bucketOutcome{hold: holdCanaryInconclusive}, false
 	case canaryNone, canaryPass:
+		if releasing && outcome == canaryNone && !(in.runID != "" && in.sample.passes()) {
+			// Nothing to probe is no evidence of recovery: the clock alone never releases the bucket.
+			bk.reason = holdNoCanary
+			return bucketOutcome{hold: holdNoCanary}, false
+		}
 		if releasing {
 			if err := bk.transition(breakerReleasing, now, in.runID, holdNone); err != nil {
 				return bucketOutcome{hold: holdTripped}, false
@@ -387,6 +422,19 @@ func (b *breaker) canaryStepLocked(
 		return bucketOutcome{}, false
 	}
 	return bucketOutcome{hold: holdCanaryInconclusive}, false
+}
+
+// forceRelease closes a tripped bucket on an operator's say-so. It reports whether the bucket was open.
+func (b *breaker) forceRelease(key Bucket) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	bk := b.buckets[key]
+	if bk == nil || bk.state != breakerTripped {
+		return false
+	}
+	now := b.now()
+	return bk.transition(breakerReleasing, now, "", holdNone) == nil &&
+		bk.transition(breakerClosed, now, "", holdNone) == nil
 }
 
 // settle closes every bucket that was releasing: its held entries have had their chance to drain.
@@ -470,6 +518,8 @@ type BucketStatus struct {
 	State    string    `json:"state"`
 	Since    time.Time `json:"since,omitzero"`
 	Reason   string    `json:"reason,omitempty"`
+	// Hint says what a held bucket is waiting for, when that is not obvious.
+	Hint string `json:"hint,omitempty"`
 }
 
 // status lists the buckets that are not closed.
@@ -487,6 +537,7 @@ func (b *breaker) status() []BucketStatus {
 			State:    string(bk.state),
 			Since:    bk.since,
 			Reason:   string(bk.reason),
+			Hint:     bk.reason.hint(),
 		})
 	}
 	slices.SortFunc(out, func(a, c BucketStatus) int {

@@ -44,6 +44,7 @@ func (r *Service) probeCandidates(
 ) (*probeBatch, error) {
 	var runMu sync.Mutex
 	batch := newProbeBatch(true)
+	batch.sweep = policy.sweep
 
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(max(1, r.workers()))
@@ -66,7 +67,7 @@ func (r *Service) probeCandidates(
 				return nil
 			}
 			h := result.health
-			batch.noteProbed(result.providers)
+			batch.noteProbed(result)
 
 			if autoRepair && h.Status == storage.HealthBroken {
 				files := h.BrokenFiles

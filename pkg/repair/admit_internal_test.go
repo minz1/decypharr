@@ -1,6 +1,7 @@
 package repair
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -49,6 +50,7 @@ func TestAdmitTripsAtTenDistinctEntriesAndReturnsAHeldError(t *testing.T) {
 func TestAdmitReleasesATrippedBucketAfterTheHoldWithAPassingCanary(t *testing.T) {
 	t.Parallel()
 	service, clock := newAdmitService(t)
+	service.breaker.canary = func(context.Context, Bucket, config.BreakerSettings) canaryOutcome { return canaryPass }
 	for i := range 10 {
 		_ = service.Admit(
 			t.Context(),
@@ -61,14 +63,14 @@ func TestAdmitReleasesATrippedBucketAfterTheHoldWithAPassingCanary(t *testing.T)
 	}
 	clock.Advance(61 * time.Minute) // the window and the hold have both run out
 	if err := service.Admit(t.Context(), one); err != nil {
-		t.Fatalf("admit after the hold = %v, want released (no recently good entry means no signal)", err)
+		t.Fatalf("admit after the hold = %v, want released by the passing canary", err)
 	}
 	if len(service.BreakerStatus()) != 0 {
 		t.Fatalf("bucket still open: %+v", service.BreakerStatus())
 	}
 }
 
-func TestAdmitForceBypassesTheBreakerButCounts(t *testing.T) {
+func TestAdmitForceBypassesAndReleasesTheBreakerAndCounts(t *testing.T) {
 	t.Parallel()
 	service, _ := newAdmitService(t)
 	for i := range 12 {
@@ -81,8 +83,8 @@ func TestAdmitForceBypassesTheBreakerButCounts(t *testing.T) {
 	if err := service.Admit(t.Context(), forced); err != nil {
 		t.Fatalf("forced admit = %v", err)
 	}
-	if len(service.BreakerStatus()) != 1 {
-		t.Fatalf("force must leave the bucket tripped: %+v", service.BreakerStatus())
+	if len(service.BreakerStatus()) != 0 {
+		t.Fatalf("a forced heal is the operator's evidence and releases the bucket: %+v", service.BreakerStatus())
 	}
 }
 

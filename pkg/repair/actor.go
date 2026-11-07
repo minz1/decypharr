@@ -35,5 +35,5 @@ func (o RecheckOptions) policy() healPolicy {
 	if o.Source == SourceWebhook {
 		return healPolicy{confirm: true}
 	}
-	return healPolicy{force: o.Force}
+	return healPolicy{force: o.Force, caller: o.Caller}
 }

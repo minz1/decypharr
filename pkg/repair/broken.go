@@ -94,7 +94,7 @@ func (r *Service) FixBroken(ctx context.Context, names []string, opts FixOptions
 		r.logger.Info().Str("caller", opts.Caller).Int("entries", healths.Size()).
 			Msg("Repair: operator forced a fix past the breaker")
 	}
-	policy := healPolicy{force: opts.Force}
+	policy := healPolicy{force: opts.Force, caller: opts.Caller}
 	return r.startBrokenRun(ctx, healths, brokenRunSource("fix-broken", wantedCount), "repair",
 		func(runCtx context.Context, run *storage.RepairRun, h *xsync.Map[string, *storage.EntryHealth]) {
 			r.repairBroken(runCtx, run, h, policy)

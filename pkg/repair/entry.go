@@ -76,6 +76,7 @@ func (r *Service) probeEntry(
 		health:    h,
 		confirmed: confirmedBroken(previous, stored, broken, runID, now, r.breakerSettings().ConfirmGap),
 		providers: distinctProviders(results),
+		wasHeld:   previous == storage.HealthHeld,
 	}
 }
 
@@ -102,6 +103,8 @@ type probeResult struct {
 	confirmed []storage.BrokenFile
 	// providers are the distinct providers of every file probed, the scale the breaker judges a bucket against.
 	providers []string
+	// wasHeld says the entry was held by the breaker before this probe, so it is no sample of a healthy provider.
+	wasHeld bool
 }
 
 func distinctProviders(results []fileResult) []string {

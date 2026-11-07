@@ -76,7 +76,7 @@ func (r *Service) RecheckEntry(
 			files = result.confirmed
 		}
 		batch := newProbeBatch(true)
-		batch.noteProbed(result.providers)
+		batch.noteProbed(result)
 		batch.add(result.health, files)
 		r.healBatch(ctx, &storage.RepairRun{ID: runID}, batch, policy)
 	})
