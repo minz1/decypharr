@@ -18,7 +18,8 @@ type slowStartMount struct {
 	record  func(string)
 }
 
-func (m slowStartMount) Start(ctx context.Context) error {
+func (m slowStartMount) Start(g *task.Group) error {
+	ctx := g.Context()
 	close(m.started)
 	<-ctx.Done()
 	m.record("start returned")

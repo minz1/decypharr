@@ -11,6 +11,7 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/logger"
+	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/pkg/manager"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/backend"
 	fuseconfig "github.com/sirrobot01/decypharr/pkg/mount/dfs/config"
@@ -48,7 +49,8 @@ func NewManager(manager *manager.Manager, cfg *config.Config, logs *logger.Facto
 }
 
 // Start starts the FUSE filesystem manager.
-func (m *Manager) Start(ctx context.Context) error {
+func (m *Manager) Start(g *task.Group) error {
+	ctx := g.Context()
 	// Create VFS manager
 
 	m.logger.Info().

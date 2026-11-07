@@ -8,6 +8,7 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/rclone"
+	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/pkg/manager"
 )
 
@@ -37,7 +38,7 @@ func NewManager(manager *manager.Manager, cfg *config.Config, _logger zerolog.Lo
 	return m
 }
 
-func (m *Manager) Start(_ context.Context) error {
+func (m *Manager) Start(_ *task.Group) error {
 	if !m.webdavEnabled {
 		return fmt.Errorf("webdav is not enabled")
 	}

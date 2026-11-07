@@ -21,6 +21,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/internal/rclone"
+	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/pkg/manager"
 	"github.com/sirrobot01/decypharr/pkg/mount/unmount"
 )
@@ -144,7 +145,8 @@ func NewManager(mgr *manager.Manager, mainCfg *config.Config, _logger zerolog.Lo
 }
 
 // Start starts the rclone RC server.
-func (m *Manager) Start(ctx context.Context) error {
+func (m *Manager) Start(g *task.Group) error {
+	ctx := g.Context()
 	cfg := m.mount
 	if m.serverStarted.Load() {
 		return nil

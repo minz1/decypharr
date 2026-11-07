@@ -9,6 +9,7 @@ import (
 
 	"github.com/sourcegraph/conc/pool"
 
+	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/internal/utils"
 )
 
@@ -25,7 +26,7 @@ const (
 )
 
 type MountManager interface {
-	Start(ctx context.Context) error
+	Start(g *task.Group) error
 	Stop() error
 	Stats() map[string]any
 	IsReady() bool
@@ -157,7 +158,7 @@ func NewStubMountManager() MountManager {
 	return &stubMountManager{}
 }
 
-func (s *stubMountManager) Start(_ context.Context) error {
+func (s *stubMountManager) Start(_ *task.Group) error {
 	return nil
 }
 func (s *stubMountManager) Stop() error {
