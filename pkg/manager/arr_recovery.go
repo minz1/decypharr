@@ -80,6 +80,11 @@ func (m *Manager) submitStreamReacquire(entryID, fileID, filename string) {
 		if !m.streamFailureConfirmed(entryID, filename) {
 			return
 		}
+		if err := m.admitHeal(entryID, "", repair.ClassUsenetSegment); err != nil {
+			m.logger.Warn().Err(err).Str("entry_id", entryID).Str("file_id", fileID).
+				Msg("Stream failed but the repair breaker is not admitting heals; not reacquiring")
+			return
+		}
 		job, err := recovery.Reacquire(reacquire.Request{
 			EntryID: entryID,
 			FileID:  fileID,
@@ -172,6 +177,11 @@ func (m *Manager) reacquireDroppedFiles(provider string, entry *storage.Entry, r
 			continue
 		}
 		imported = true
+		// A held heal is returned as an error, so the dropped entry is kept and retried on the next sync.
+		if err := m.admitHeal(entry.InfoHash, provider, repair.ClassDropped); err != nil {
+			reacquireErr = errors.Join(reacquireErr, fmt.Errorf("reacquire file %s: %w", file.ID, err))
+			continue
+		}
 		if _, err := recovery.Reacquire(reacquire.Request{
 			EntryID: entry.InfoHash,
 			FileID:  file.ID,
@@ -187,6 +197,22 @@ func (m *Manager) reacquireDroppedFiles(provider string, entry *storage.Entry, r
 			Msg("Debrid dropped an imported torrent; reacquiring its files")
 	}
 	return imported, reacquireErr
+}
+
+// admitHeal asks the repair breaker whether a reacquisition may delete an Arr file for entryID. An empty provider
+// is the entry's own. Without a repair service there is no breaker to ask.
+func (m *Manager) admitHeal(entryID, provider string, class repair.Class) error {
+	if m.repair == nil {
+		return nil
+	}
+	if provider == "" {
+		provider = m.repair.ProviderFor(entryID)
+	}
+	ctx := m.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return m.repair.Admit(ctx, repair.HealRequest{Provider: provider, Class: class, Subject: entryID})
 }
 
 // failGrab queues the job that fails a never-imported download's grab in
