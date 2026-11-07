@@ -51,6 +51,26 @@ type managerRig struct {
 	spawnErr error
 	// closes counts closeLog calls.
 	closes atomic.Int64
+	// fail maps an RC command to the HTTP status it answers with, guarded by mu.
+	fail map[string]int
+	// mountGate, when set before start, holds every mount/mount call until it is closed.
+	mountGate chan struct{}
+}
+
+// failRC makes the RC command cmd answer with status.
+func (r *managerRig) failRC(cmd string, status int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.fail == nil {
+		r.fail = make(map[string]int)
+	}
+	r.fail[cmd] = status
+}
+
+func (r *managerRig) failStatus(cmd string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.fail[cmd]
 }
 
 func newManagerRig(t *testing.T) *managerRig {
@@ -78,7 +98,15 @@ func newManagerRig(t *testing.T) *managerRig {
 }
 
 func (r *managerRig) serveRC(w http.ResponseWriter, req *http.Request) {
-	r.record("rc:" + strings.TrimPrefix(req.URL.Path, "/"))
+	cmd := strings.TrimPrefix(req.URL.Path, "/")
+	r.record("rc:" + cmd)
+	if cmd == "mount/mount" && r.mountGate != nil {
+		<-r.mountGate
+	}
+	if status := r.failStatus(cmd); status != 0 {
+		http.Error(w, "failed", status)
+		return
+	}
 	_, _ = w.Write([]byte("{}"))
 }
 
@@ -118,10 +146,10 @@ func (r *managerRig) index(event string) int {
 	return slices.Index(r.events, event)
 }
 
-func (r *managerRig) proc(i int) *fakeProc {
+func (r *managerRig) proc() *fakeProc {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.procs[i]
+	return r.procs[0]
 }
 
 func (r *managerRig) start() {
@@ -252,7 +280,7 @@ func TestRemountAfterRcdExit(t *testing.T) {
 			t.Fatalf("mount calls = %d, want 1", got)
 		}
 
-		r.proc(0).exit()
+		r.proc().exit()
 		synctest.Wait()
 		if r.m.IsMounted() {
 			t.Fatal("mount still marked mounted after rcd exited")
@@ -354,7 +382,7 @@ func TestStopAfterExitStillUnmountsViaRC(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		r := newManagerRig(t)
 		r.start()
-		r.proc(0).exit()
+		r.proc().exit()
 		synctest.Wait()
 		// The next Ready finds a recovery running, so the mount stays marked down.
 		r.m.recovering.Store(true)
@@ -443,4 +471,68 @@ func TestRealRcdProcessIsReaped(t *testing.T) {
 	if waitErr := proc.Wait(); waitErr != nil {
 		t.Fatalf("Wait = %v, want a clean exit", waitErr)
 	}
+}
+
+// rcd died and the owner waits out the backoff: the dead rcd's mount is still
+// there, and the stop must clear it.
+func TestStopDuringBackoffUnmounts(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		r := newManagerRig(t)
+		r.start()
+		r.proc().exit()
+		synctest.Wait()
+		r.wantState(rcdRestarting)
+
+		if err := r.m.Stop(); err != nil {
+			t.Fatal(err)
+		}
+		if got := r.count("rc:mount/unmount"); got != 1 {
+			t.Fatalf("unmount calls = %d, want 1; events: %v", got, r.events)
+		}
+		r.wantState(rcdStopped)
+	})
+}
+
+// A crash loop ends in Failed with the last mount still in place.
+func TestStopAfterCrashLoopUnmounts(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		r := newManagerRig(t)
+		r.start()
+		r.spawnErr = errors.New("rclone crashes")
+		r.proc().exit()
+		synctest.Wait()
+		<-time.After(5 * time.Minute)
+		synctest.Wait()
+		r.wantState(rcdFailed)
+
+		if err := r.m.Stop(); err != nil {
+			t.Fatal(err)
+		}
+		if got := r.count("rc:mount/unmount"); got != 1 {
+			t.Fatalf("unmount calls = %d, want 1; events: %v", got, r.events)
+		}
+	})
+}
+
+// Against a dead rcd the RC unmount fails; the stop must still finish inside the unmount budget.
+func TestStopWithDeadRCFinishesWithinBudget(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		r := newManagerRig(t)
+		r.start()
+		r.proc().exit()
+		synctest.Wait()
+		r.failRC("mount/unmount", http.StatusInternalServerError)
+
+		began := time.Now()
+		if err := r.m.Stop(); err != nil {
+			t.Fatal(err)
+		}
+		if took := time.Since(began); took > rcdUnmountBudget+time.Second {
+			t.Fatalf("Stop took %v, want within the %v unmount budget", took, rcdUnmountBudget)
+		}
+		r.wantState(rcdStopped)
+	})
 }
