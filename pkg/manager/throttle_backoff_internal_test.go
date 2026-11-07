@@ -41,9 +41,8 @@ func TestThrottledRetryBacksOff(t *testing.T) {
 
 func TestThrottledJobCountsItsRetries(t *testing.T) {
 	t.Parallel()
-	m := withTestConfig(t, &Manager{logger: zerolog.Nop()})
-	m.jobQueue = NewJobQueue(t.Context(), 1, func(context.Context, *Job) {}, zerolog.Nop())
-	t.Cleanup(m.jobQueue.Close)
+	m := withTestConfig(t, &Manager{work: testGroup(t), logger: zerolog.Nop()})
+	m.jobQueue = NewJobQueue(m.work, 1, func(context.Context, *Job) {}, zerolog.Nop())
 	job := &Job{ID: "job", Type: JobTypeTorrent}
 	for range 3 {
 		m.handleJobError(job, fmt.Errorf("submit: %w", customerror.ErrTooManyActiveDownloads))
@@ -68,8 +67,7 @@ func TestThrottleSeenBehindAnotherProviderError(t *testing.T) {
 func startRecordingQueue(t *testing.T) (*JobQueue, chan string) {
 	t.Helper()
 	ran := make(chan string, 8)
-	q := NewJobQueue(t.Context(), 1, func(_ context.Context, job *Job) { ran <- job.ID }, zerolog.Nop())
-	t.Cleanup(q.Close)
+	q := NewJobQueue(testGroup(t), 1, func(_ context.Context, job *Job) { ran <- job.ID }, zerolog.Nop())
 	return q, ran
 }
 
@@ -150,12 +148,11 @@ func TestTimerWakeRacingSlotFreedLosesNoSlot(t *testing.T) {
 		type run struct{ id, wokenBy string }
 		ran := make(chan run, 4)
 		q := NewJobQueue(
-			t.Context(),
+			testGroup(t),
 			1,
 			func(_ context.Context, job *Job) { ran <- run{job.ID, job.wokenBy} },
 			zerolog.Nop(),
 		)
-		defer q.Close()
 		for range 200 {
 			q.WaitForSlot(&Job{ID: "timed"}, []string{"realdebrid"}, time.Minute)
 			q.WaitForSlot(&Job{ID: "next"}, []string{"realdebrid"}, time.Hour)
@@ -202,7 +199,10 @@ func (p *throttlingProvider) SubmitMagnet(*types.Torrent) (*types.Torrent, error
 func TestThrottledSubmitWaitsOnTheProviderThatThrottledIt(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
-		m := withTestConfig(t, &Manager{logger: zerolog.Nop(), clients: xsync.NewMap[string, debrid.Client]()})
+		m := withTestConfig(
+			t,
+			&Manager{work: testGroup(t), logger: zerolog.Nop(), clients: xsync.NewMap[string, debrid.Client]()},
+		)
 		m.clients.Store("realdebrid", &throttlingProvider{name: "realdebrid", err: customerror.ErrTorrentBlocked})
 		m.clients.Store("torbox", &throttlingProvider{
 			name: "torbox", err: fmt.Errorf("torbox queued it: %w", customerror.ErrTooManyActiveDownloads),
@@ -261,7 +261,10 @@ func TestRemovingAPlacementWakesAJobWaitingOnItsProvider(t *testing.T) {
 	t.Parallel()
 	for progress, want := range map[float64][]string{0.4: {"waiting"}, 1: nil} {
 		synctest.Test(t, func(t *testing.T) {
-			m := withTestConfig(t, &Manager{logger: zerolog.Nop(), clients: xsync.NewMap[string, debrid.Client]()})
+			m := withTestConfig(
+				t,
+				&Manager{work: testGroup(t), logger: zerolog.Nop(), clients: xsync.NewMap[string, debrid.Client]()},
+			)
 			m.clients.Store("provider", &failingStatusProvider{})
 			var ran chan string
 			m.jobQueue, ran = startRecordingQueue(t)
@@ -306,8 +309,7 @@ func TestTorrentThrottledAtAddWaitsForASlot(t *testing.T) {
 	m.processingEntries = xsync.NewMap[string, struct{}]()
 	provider := &throttlingProvider{name: "torbox", err: customerror.ErrTooManyActiveDownloads}
 	m.clients.Store("torbox", provider)
-	m.jobQueue = NewJobQueue(t.Context(), 1, m.processJob, zerolog.Nop())
-	t.Cleanup(m.jobQueue.Close)
+	m.jobQueue = NewJobQueue(m.work, 1, m.processJob, zerolog.Nop())
 	req := &ImportRequest{
 		Magnet: &utils.Magnet{
 			InfoHash: "hash",
@@ -349,8 +351,7 @@ func TestWokenJobThrottledAgainWaitsAndPassesNothingOn(t *testing.T) {
 		m.processingEntries = xsync.NewMap[string, struct{}]()
 		provider := &throttlingProvider{name: "torbox", err: customerror.ErrTooManyActiveDownloads}
 		m.clients.Store("torbox", provider)
-		m.jobQueue = NewJobQueue(t.Context(), 1, m.processJob, zerolog.Nop())
-		t.Cleanup(m.jobQueue.Close)
+		m.jobQueue = NewJobQueue(m.work, 1, m.processJob, zerolog.Nop())
 		for _, hash := range []string{"first", "second"} {
 			req := &ImportRequest{
 				Magnet:         &utils.Magnet{InfoHash: hash, Name: hash},
@@ -375,8 +376,7 @@ func TestWokenJobKnowsWhichProvidersSlotWokeIt(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ran := make(chan string, 2)
 		record := func(_ context.Context, job *Job) { ran <- job.ID + "=" + job.wokenBy }
-		q := NewJobQueue(t.Context(), 1, record, zerolog.Nop())
-		t.Cleanup(q.Close)
+		q := NewJobQueue(testGroup(t), 1, record, zerolog.Nop())
 		q.WaitForSlot(&Job{ID: "woken"}, []string{"torbox", "realdebrid"}, time.Hour)
 		q.WaitForSlot(&Job{ID: "timed"}, []string{"torbox"}, time.Minute)
 		q.SlotFreed("realdebrid")
@@ -422,7 +422,7 @@ func TestWokenJobThatDoesNotUseTheSlotPassesItOn(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			m := &Manager{logger: zerolog.Nop()}
+			m := &Manager{work: testGroup(t), logger: zerolog.Nop()}
 			m.jobQueue, _ = startRecordingQueue(t)
 			m.jobQueue.WaitForSlot(&Job{ID: "next"}, []string{"torbox"}, time.Hour)
 			m.passOnUnusedSlot(tc.job, tc.err)

@@ -61,6 +61,7 @@ func newPruneHarness(t *testing.T, mode config.PruneMode) *pruneHarness {
 		},
 	})
 	h.m = &Manager{
+		work:     testGroup(t),
 		clients:  xsync.NewMap[string, debrid.Client](),
 		storage:  store,
 		queue:    newQueue(store, "", nil, zerolog.Nop()),
@@ -685,7 +686,7 @@ func TestPruneCancelledRunLeavesNoTrace(t *testing.T) {
 	good := h.m.LastPruneReport()
 	scan0, _, _ := h.m.storage.LastScan()
 	h.now = h.now.Add(time.Hour)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	_, err := h.m.RunPrune(ctx, PruneOptions{})
@@ -945,13 +946,14 @@ func TestRunPruneNowUsesManagerContext(t *testing.T) {
 	h := newPruneHarness(t, config.PruneModeReport)
 	e := h.addEntry(t, "aaaa", nil)
 	h.reference(t, e)
-	ctx, cancel := context.WithCancel(context.Background())
-	h.m.ctx = ctx
+	h.m.work = testGroup(t)
 
 	if r, err := h.m.RunPruneNow(PruneOptions{}); err != nil || r.StartedAt.IsZero() {
 		t.Fatalf("err=%v report=%+v", err, r)
 	}
-	cancel()
+	if err := h.m.work.Stop(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := h.m.RunPruneNow(PruneOptions{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("err=%v", err)
 	}

@@ -188,7 +188,7 @@ func TestLookupServedEntryUsesNewestFile(t *testing.T) {
 			t.Fatal(addErr)
 		}
 	}
-	m := &Manager{storage: store}
+	m := &Manager{work: testGroup(t), storage: store}
 	folder := (&storage.Entry{InfoHash: "new", Name: "Show"}).GetFolder("")
 	if h, ok, lerr := m.lookupServedEntry(folder, "a.mkv"); lerr != nil || !ok || h != "new" {
 		t.Fatalf("got %q %v %v, want new", h, ok, lerr)

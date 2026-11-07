@@ -31,14 +31,16 @@ func newClaimTestManager(t *testing.T) (*Manager, *atomic.Int32) {
 		}
 	}))
 	m.downloader = NewDownloadManager(m)
-	t.Cleanup(func() { _ = m.Stop() })
 	return m, &starts
 }
 
 // endActions cancels the in-flight actions and waits for them to return.
-func endActions(m *Manager) {
-	m.cancelDownloads()
-	m.downloadTasks.Wait()
+func endActions(t *testing.T, m *Manager) {
+	t.Helper()
+	if err := m.work.Stop(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	waitWorkIdle(t, m)
 }
 
 // newClaimTestEntry queues a finished single-release torrent whose files never
@@ -118,7 +120,7 @@ func TestActionStartHoldsTheClaimUntilTheActionReturns(t *testing.T) {
 			t.Fatal("the running action does not hold the entry's claim")
 		}
 
-		endActions(m)
+		endActions(t, m)
 		if _, claimed := m.processingEntries.Load(claimTestHash); claimed {
 			t.Fatal("the claim outlived its action")
 		}
@@ -213,7 +215,7 @@ func TestQueuedTorrentPollRunsTheActionOnceUnderItsClaim(t *testing.T) {
 		if got := starts.Load(); got != 1 {
 			t.Fatalf("a hand-off or poll started a second action: starts = %d", got)
 		}
-		endActions(m)
+		endActions(t, m)
 		if _, claimed := m.processingEntries.Load(claimTestHash); claimed {
 			t.Fatal("the claim outlived the poll")
 		}
@@ -404,7 +406,7 @@ func TestQueuedNZBPollRunsTheActionUnderItsClaim(t *testing.T) {
 		}
 
 		m.processingEntries.Store(claimTestHash, struct{}{})
-		m.startDownloadTask(func() { m.processQueuedNZB(entry) })
+		_ = m.runWork("poll", func() { m.processQueuedNZB(entry) })
 		synctest.Wait()
 
 		if got := starts.Load(); got != 1 {
@@ -413,7 +415,7 @@ func TestQueuedNZBPollRunsTheActionUnderItsClaim(t *testing.T) {
 		if _, claimed := m.processingEntries.Load(claimTestHash); !claimed {
 			t.Fatal("the poll gave up its claim while the action runs")
 		}
-		endActions(m)
+		endActions(t, m)
 		if _, claimed := m.processingEntries.Load(claimTestHash); claimed {
 			t.Fatal("the claim outlived the poll")
 		}

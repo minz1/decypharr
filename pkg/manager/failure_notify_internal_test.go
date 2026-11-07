@@ -41,8 +41,7 @@ func TestFailedJobAsksArrToRefreshDownloads(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 	m := withTestConfig(t, &Manager{queue: newQueue(store, "", nil, zerolog.Nop()), logger: zerolog.Nop()})
 	m.arr.AddOrUpdate(arr.Arr{Name: "radarr", Host: server.URL, Token: "token", Type: arr.Radarr})
-	m.jobQueue = NewJobQueue(t.Context(), 1, m.processJob, zerolog.Nop())
-	t.Cleanup(m.jobQueue.Close)
+	m.jobQueue = NewJobQueue(m.work, 1, m.processJob, zerolog.Nop())
 
 	entry := &storage.Entry{InfoHash: "abc", Name: "Movie", Category: "radarr", Protocol: config.ProtocolNZB}
 	if addErr := m.queue.Add(entry); addErr != nil {

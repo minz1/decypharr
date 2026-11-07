@@ -39,13 +39,12 @@ func TestAddNewNZBQueuesBeforeNetworkParsing(t *testing.T) {
 	received := make(chan *Job, 1)
 	release := make(chan struct{}, 1)
 	processed := make(chan struct{}, 1)
-	m.jobQueue = NewJobQueue(t.Context(), 1, func(ctx context.Context, job *Job) {
+	m.jobQueue = NewJobQueue(m.work, 1, func(ctx context.Context, job *Job) {
 		received <- job
 		<-release
 		m.processJob(ctx, job)
 		processed <- struct{}{}
 	}, zerolog.Nop())
-	t.Cleanup(m.jobQueue.Close)
 	t.Cleanup(func() {
 		select {
 		case release <- struct{}{}:

@@ -2,6 +2,7 @@ package manager
 
 import (
 	"context"
+	"errors"
 
 	"github.com/go-co-op/gocron/v2"
 
@@ -12,10 +13,15 @@ import (
 
 // runInitialCalls performs any initial calls of worker functions
 // for example, call the processQueuedEntries function once.
-func (m *Manager) runInitialCalls(ctx context.Context) {
-	go m.refreshDownloadLinks(ctx)
-	m.startDownloadTask(m.processQueuedEntries)
-	go m.syncAccounts()
+func (m *Manager) runInitialCalls() error {
+	return errors.Join(
+		m.work.Go("refresh-download-links", func(ctx context.Context) error {
+			m.refreshDownloadLinks(ctx)
+			return nil
+		}),
+		m.runWork("process-queued-entries", m.processQueuedEntries),
+		m.runWork("sync-accounts", m.syncAccounts),
+	)
 }
 
 func (m *Manager) syncAccounts() {
@@ -113,13 +119,10 @@ func (m *Manager) schedulePrune(ctx context.Context) {
 	})
 }
 
-func (m *Manager) StartWorker(ctx context.Context) error {
-	// Stop any existing jobs before starting new ones
-	m.scheduler.RemoveByTags("decypharr")
-
-	// Call the initial calls
-	m.runInitialCalls(ctx)
-
+// startScheduler registers the manager's recurring jobs and starts the
+// schedulers. It runs as the scheduler service's task: ctx ends when the
+// service stops, which also cancels the jobs that are still running.
+func (m *Manager) startScheduler(ctx context.Context) error {
 	m.addQueueProcessorJob(ctx)
 	m.clients.Range(func(debridName string, debridClient debrid.Client) bool {
 		if debridClient != nil {
@@ -141,13 +144,6 @@ func (m *Manager) StartWorker(ctx context.Context) error {
 		m.arr.CleanupQueues(ctx)
 		m.retryHeldGrabs(ctx)
 	})
-
-	// Register the health checker sweep with the scheduler if enabled.
-	if m.repair != nil {
-		if err := m.repair.Start(ctx); err != nil {
-			m.logger.Warn().Err(err).Msg("Failed to start repair service")
-		}
-	}
 
 	// Start the scheduler
 	m.scheduler.Start()

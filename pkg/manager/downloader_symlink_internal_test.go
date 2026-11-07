@@ -88,7 +88,6 @@ func TestCreateSymlinksIgnoresDirectoryWithFileName(t *testing.T) {
 func TestDeleteDuringSymlinkActionLeavesNoEntry(t *testing.T) {
 	t.Parallel()
 	m := newShutdownTestManager(t, t.TempDir())
-	t.Cleanup(func() { _ = m.Stop() })
 	entry := &storage.Entry{
 		InfoHash:       "0123456789012345678901234567890123456789",
 		Name:           "Show.S01E01",
@@ -128,7 +127,7 @@ func TestDeleteDuringSymlinkActionLeavesNoEntry(t *testing.T) {
 func TestWarmFileCacheStopsWhenCancelled(t *testing.T) {
 	t.Parallel()
 	var logs bytes.Buffer
-	m := &Manager{logger: zerolog.New(&logs)}
+	m := &Manager{work: testGroup(t), logger: zerolog.New(&logs)}
 	path := filepath.Join(t.TempDir(), "release.mkv")
 	if err := os.WriteFile(path, []byte("media"), 0o644); err != nil {
 		t.Fatal(err)
@@ -148,7 +147,6 @@ func TestWarmFileCacheStopsWhenCancelled(t *testing.T) {
 func TestDeleteBeforeUsenetDownloadLeavesNoEntry(t *testing.T) {
 	t.Parallel()
 	m := newShutdownTestManager(t, t.TempDir())
-	t.Cleanup(func() { _ = m.Stop() })
 	m.usenet = newUnreachableUsenet(t)
 	entry := &storage.Entry{
 		InfoHash: "0123456789012345678901234567890123456789",

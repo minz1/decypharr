@@ -37,7 +37,7 @@ func TestLocalDownloaderRetriesServiceUnavailable(t *testing.T) {
 	var downloaded atomic.Int64
 	d := &Downloader{
 		manager: withTestConfig(t, &Manager{
-			ctx:          t.Context(),
+			work:         testGroup(t),
 			streamClient: server.Client(),
 		}),
 		logger: zerolog.Nop(),
@@ -112,7 +112,7 @@ func TestLocalDownloaderResumesAfterUnexpectedEOF(t *testing.T) {
 	var downloaded atomic.Int64
 	d := &Downloader{
 		manager: withTestConfig(t, &Manager{
-			ctx:          t.Context(),
+			work:         testGroup(t),
 			streamClient: client,
 		}),
 		logger: zerolog.Nop(),
@@ -165,7 +165,7 @@ func TestLocalDownloaderUsesSharedFileMode(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	dir := t.TempDir()
-	m := withTestConfig(t, &Manager{ctx: t.Context(), streamClient: server.Client()})
+	m := withTestConfig(t, &Manager{streamClient: server.Client()})
 	d := &Downloader{manager: m, logger: zerolog.Nop()}
 	destination := filepath.Join(dir, "release.mkv")
 	if err := d.localDownloader(t.Context(), server.URL, destination, nil, nil); err != nil {

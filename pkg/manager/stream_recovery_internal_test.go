@@ -108,7 +108,7 @@ func TestActiveStreamIncludesArrBinding(t *testing.T) {
 			EpisodeIDs:   []int{101, 102},
 		},
 	}
-	m := &Manager{activeStreams: xsync.NewMap[string, *ActiveStream]()}
+	m := &Manager{work: testGroup(t), activeStreams: xsync.NewMap[string, *ActiveStream]()}
 	m.SetArrRecovery(recovery)
 	entry := &storage.Entry{
 		Protocol: config.ProtocolNZB,
@@ -155,7 +155,7 @@ func TestActiveStreamIncludesArrBinding(t *testing.T) {
 // other visible until it closes too.
 func TestActiveStreamSurvivesConcurrentReaderClose(t *testing.T) {
 	t.Parallel()
-	m := &Manager{activeStreams: xsync.NewMap[string, *ActiveStream]()}
+	m := &Manager{work: testGroup(t), activeStreams: xsync.NewMap[string, *ActiveStream]()}
 	entry := &storage.Entry{
 		Protocol: config.ProtocolTorrent,
 		InfoHash: "hash",
@@ -227,7 +227,11 @@ func TestUsenetArticleNotFoundQueuesOneNonBlockingReacquire(t *testing.T) {
 		release:  make(chan struct{}),
 		finished: make(chan struct{}),
 	}
-	m := &Manager{activeStreams: xsync.NewMap[string, *ActiveStream](), checkStreamFile: confirmBroken}
+	m := &Manager{
+		work:            testGroup(t),
+		activeStreams:   xsync.NewMap[string, *ActiveStream](),
+		checkStreamFile: confirmBroken,
+	}
 	m.SetArrRecovery(recovery)
 
 	newStream := func(opens *atomic.Int64) *session {
@@ -307,7 +311,7 @@ func TestStreamReacquireWaitsForArrBinding(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		recovery := &fakeArrRecovery{started: make(chan struct{})}
-		m := &Manager{checkStreamFile: confirmBroken}
+		m := &Manager{work: testGroup(t), checkStreamFile: confirmBroken}
 		m.SetArrRecovery(recovery)
 
 		for range 10 {
@@ -339,6 +343,7 @@ func TestStreamReacquireIsLogged(t *testing.T) {
 			binding: reacquire.Binding{ArrName: "sonarr", EntryID: "nzb-1", EntryFileID: "file-1"},
 		}
 		m := &Manager{
+			work:            testGroup(t),
 			logger:          zerolog.New(&logs),
 			activeStreams:   xsync.NewMap[string, *ActiveStream](),
 			checkStreamFile: confirmBroken,
@@ -378,6 +383,7 @@ func TestStreamReacquireOnlyAfterTheCheckConfirmsBreakage(t *testing.T) {
 					binding: reacquire.Binding{ArrName: "sonarr", EntryID: "nzb-1", EntryFileID: "file-1"},
 				}
 				m := &Manager{
+					work:          testGroup(t),
 					activeStreams: xsync.NewMap[string, *ActiveStream](),
 					checkStreamFile: func(_ context.Context, nzoID, filename string) error {
 						checked = append(checked, nzoID+"/"+filename)

@@ -75,10 +75,10 @@ func (m *Manager) submitStreamReacquire(entryID, fileID, filename string) {
 		return
 	}
 
-	go func() {
+	if err := m.work.Go("stream-reacquire", func(ctx context.Context) error {
 		defer m.reacquireNotifications.Delete(target)
-		if !m.streamFailureConfirmed(entryID, filename) {
-			return
+		if !m.streamFailureConfirmed(ctx, entryID, filename) {
+			return nil
 		}
 		job, err := recovery.Reacquire(reacquire.Request{
 			EntryID: entryID,
@@ -92,26 +92,29 @@ func (m *Manager) submitStreamReacquire(entryID, fileID, filename string) {
 		})
 		if err != nil {
 			if errors.Is(err, reacquire.ErrBindingNotFound) {
-				return
+				return nil
 			}
 			if errors.Is(err, repair.ErrHealHeld) || errors.Is(err, repair.ErrHealCapped) {
 				m.logger.Warn().Err(err).Str("entry_id", entryID).Str("file_id", fileID).
 					Msg("Stream failed but the repair breaker is not admitting heals; not reacquiring")
-				return
+				return nil
 			}
 			m.logger.Error().Err(err).
 				Str("entry_id", entryID).
 				Str("file_id", fileID).
 				Msg("Failed to queue Arr reacquisition")
-			return
+			return nil
 		}
 		if job == nil {
-			return
+			return nil
 		}
 		m.logger.Info().Str("entry_id", entryID).Str("file_id", fileID).Str("job", job.ID).
 			Msg("Stream failed; queued an Arr reacquisition")
 		m.setStreamReacquireJob(entryID, fileID, job.ID)
-	}()
+		return nil
+	}); err != nil {
+		m.reacquireNotifications.Delete(target) // stopping: the next failed stream asks again
+	}
 }
 
 func (m *Manager) setStreamReacquireJob(entryID, fileID, jobID string) {
@@ -175,10 +178,8 @@ func (m *Manager) admitHeal(entryID, provider string, class repair.Class, units 
 	if provider == "" {
 		provider = m.repair.ProviderFor(entryID)
 	}
-	ctx := m.ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	// The gate that asks has no context of its own; the work group's ends the admission when the manager stops.
+	ctx := m.work.Context()
 	return m.repair.Admit(ctx, repair.HealRequest{Provider: provider, Class: class, Subject: entryID, Units: units})
 }
 
@@ -193,10 +194,7 @@ func (m *Manager) failGrab(entry *storage.Entry, recovery ArrRecovery, arrName, 
 		provider = string(config.ProtocolTorrent)
 	}
 	downloadID := strings.ToUpper(entry.InfoHash)
-	ctx := m.ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx := m.work.Context()
 	if err := m.arr.AdmitFailGrab(ctx, arrName, downloadID, provider); err != nil {
 		return err
 	}
@@ -218,7 +216,7 @@ func (m *Manager) failGrab(entry *storage.Entry, recovery ArrRecovery, arrName, 
 const streamCheckTimeout = 3 * time.Minute
 
 // streamFailureConfirmed checks every article of the file, so a player blip or a scan never replaces a good file.
-func (m *Manager) streamFailureConfirmed(entryID, filename string) bool {
+func (m *Manager) streamFailureConfirmed(parent context.Context, entryID, filename string) bool {
 	check := m.checkStreamFile
 	if check == nil {
 		if m.usenet == nil {
@@ -226,7 +224,7 @@ func (m *Manager) streamFailureConfirmed(entryID, filename string) bool {
 		}
 		check = m.usenet.CheckWholeFile
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), streamCheckTimeout)
+	ctx, cancel := context.WithTimeout(parent, streamCheckTimeout)
 	defer cancel()
 	err := check(ctx, entryID, filename)
 	if errors.Is(err, customerror.ErrUsenetSegmentMissing) || errors.Is(err, customerror.ErrUsenetManifestMissing) ||
@@ -283,8 +281,8 @@ func (m *Manager) ClearBad(_ context.Context, infohash string) error {
 const confirmCheckTimeout = time.Minute
 
 // entryBroken reports whether the entry's active placement fails a fresh read check.
-func (m *Manager) entryBroken(entry *storage.Entry) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), confirmCheckTimeout)
+func (m *Manager) entryBroken(parent context.Context, entry *storage.Entry) bool {
+	ctx, cancel := context.WithTimeout(parent, confirmCheckTimeout)
 	defer cancel()
 	if m.confirmBroken != nil {
 		return m.confirmBroken(ctx, entry)
@@ -294,7 +292,7 @@ func (m *Manager) entryBroken(entry *storage.Entry) bool {
 
 // giveUpOnEntry marks a confirmed-broken entry bad; the arr grab waits for a second check, as a blocklist is final.
 func (m *Manager) giveUpOnEntry(entry *storage.Entry) {
-	if !m.entryBroken(entry) {
+	if !m.entryBroken(m.work.Context(), entry) {
 		event := m.logger.Warn()
 		msg := "not marking bad: active placement still serves links or the check was inconclusive"
 		if entry.ActiveProvider != "" && m.ProviderClient(entry.ActiveProvider) == nil {
@@ -314,29 +312,33 @@ func (m *Manager) giveUpOnEntry(entry *storage.Entry) {
 			m.logger.Warn().Err(err).Str("infohash", entry.InfoHash).Msg("Failed to queue the bad entry for a recheck")
 		}
 	}
-	go m.recheckBadEntry(entry.InfoHash)
+	// A stopping manager drops the recheck: the mark stays, and the next repair sweep revisits it.
+	_ = m.work.Go("recheck-bad-entry", func(ctx context.Context) error {
+		m.recheckBadEntry(ctx, entry.InfoHash)
+		return nil
+	})
 }
 
 // recheckBadEntry decides the arr grab of a freshly marked entry after badRecheckDelay.
-func (m *Manager) recheckBadEntry(infohash string) {
+func (m *Manager) recheckBadEntry(ctx context.Context, infohash string) {
 	select {
 	case <-time.After(m.badRecheckDelay):
-	case <-m.ctx.Done():
+	case <-ctx.Done():
 		return
 	}
 	entry, err := m.GetEntry(infohash)
 	if err != nil || entry == nil || !entry.Bad {
 		return
 	}
-	if !m.entryBroken(entry) {
-		if clearErr := m.ClearBad(m.ctx, infohash); clearErr != nil {
+	if !m.entryBroken(ctx, entry) {
+		if clearErr := m.ClearBad(ctx, infohash); clearErr != nil {
 			m.logger.Warn().Err(clearErr).Str("infohash", infohash).Msg("Failed to clear a disproved bad mark")
 		}
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	failCtx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	m.failGrabIfQueued(ctx, entry)
+	m.failGrabIfQueued(failCtx, entry)
 }
 
 // failGrabIfQueued fails an arr torrent's grab only while the arr still queues it; imported files stay with repair.

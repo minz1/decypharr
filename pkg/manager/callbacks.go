@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"context"
 	"errors"
 
 	"github.com/sirrobot01/appendstore"
@@ -38,28 +39,20 @@ func (m *Manager) discardSubmitted(provider, id, self string) {
 	}
 }
 
-// startPlacementRun starts a provider deletion that Stop waits for. It reports false, and runs nothing, once
-// Stop has closed the runs: a deletion after that would read a storage that is closing. The refusal is logged with
-// the entry and the provider, since the provider torrent is left behind.
+// startPlacementRun starts a provider deletion as a task of the manager's work group, which Stop waits for. It
+// reports false, and runs nothing, once the group has closed: a deletion after that would read a storage that is
+// closing. The refusal is logged with the entry and the provider, since the provider torrent is left behind.
 func (m *Manager) startPlacementRun(entry, provider string, run func()) bool {
-	m.placementMu.Lock()
-	defer m.placementMu.Unlock()
-	if m.placementsClosed {
-		m.logger.Warn().Str("name", entry).Str("provider", provider).
+	err := m.work.Go("placement-run", func(context.Context) error {
+		run()
+		return nil
+	})
+	if err != nil {
+		m.logger.Warn().Err(err).Str("name", entry).Str("provider", provider).
 			Msg("Manager is stopping; a provider torrent was not deleted and may be left behind")
 		return false
 	}
-	m.placementRuns.Go(run)
 	return true
-}
-
-// closePlacementRuns refuses new provider deletions and waits for those in flight. Starting and closing share a
-// lock, so no run is added after the wait begins.
-func (m *Manager) closePlacementRuns() {
-	m.placementMu.Lock()
-	m.placementsClosed = true
-	m.placementMu.Unlock()
-	m.placementRuns.Wait()
 }
 
 // dropSourcePlacement takes the placements an entry has on provider away from it and deletes them there.

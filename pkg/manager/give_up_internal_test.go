@@ -57,7 +57,6 @@ func newGiveUpTestManager(t *testing.T, fakeArr *queueArr, recovery ArrRecovery)
 	m.entry = newEntryCache(func(string) bool { return false }, nil, nil)
 	m.fixer = NewFixer(m)
 	m.mountManager = &countingMount{}
-	m.ctx = t.Context()
 	m.confirmBroken = func(context.Context, *storage.Entry) bool { return true }
 	return m, entry
 }
@@ -167,9 +166,7 @@ func TestGiveUpWaitsBeforeTheSecondCheck(t *testing.T) {
 	t.Parallel()
 	m, entry, checks := newWaitTestManager(t, true, true)
 	synctest.Test(t, func(t *testing.T) {
-		var cancel context.CancelFunc
-		m.ctx, cancel = context.WithCancel(t.Context())
-		defer cancel()
+		m.work = testGroup(t)
 		m.giveUpOnEntry(entry)
 		synctest.Wait()
 		if checks.count() != 1 {
@@ -205,9 +202,7 @@ func TestGiveUpClearsWhenSecondCheckPasses(t *testing.T) {
 	t.Parallel()
 	m, entry, checks := newWaitTestManager(t, true, false)
 	synctest.Test(t, func(t *testing.T) {
-		var cancel context.CancelFunc
-		m.ctx, cancel = context.WithCancel(t.Context())
-		defer cancel()
+		m.work = testGroup(t)
 		m.giveUpOnEntry(entry)
 		time.Sleep(10 * time.Minute)
 		synctest.Wait()
@@ -228,16 +223,16 @@ func TestGiveUpSkipsSecondCheckWhenEntryChanges(t *testing.T) {
 			t.Parallel()
 			m, entry, checks := newWaitTestManager(t, true)
 			synctest.Test(t, func(t *testing.T) {
-				var cancel context.CancelFunc
-				m.ctx, cancel = context.WithCancel(t.Context())
-				defer cancel()
+				m.work = testGroup(t)
 				m.giveUpOnEntry(entry)
 				synctest.Wait()
 				if err := change(m); err != nil {
 					t.Fatal(err)
 				}
 				if name == "stopped" {
-					cancel()
+					if err := m.work.Stop(t.Context()); err != nil {
+						t.Fatal(err)
+					}
 				}
 				time.Sleep(10 * time.Minute)
 				synctest.Wait()
@@ -265,6 +260,7 @@ func TestClearBadClearsAndPersists(t *testing.T) {
 	saveBad(t, m, entry, true)
 	m.fixer.failedToReinsert.Store(failureKey(droppedHash, "x"), struct{}{})
 	synctest.Test(t, func(t *testing.T) {
+		m.work = testGroup(t)
 		if err := m.ClearBad(t.Context(), droppedHash); err != nil {
 			t.Fatal(err)
 		}
@@ -288,6 +284,7 @@ func TestClearBadIgnoresUnmarkedMissingAndInFlight(t *testing.T) {
 	saveBad(t, m, entry, false)
 	before, _ := m.storage.Get(droppedHash)
 	synctest.Test(t, func(t *testing.T) {
+		m.work = testGroup(t)
 		if err := m.ClearBad(t.Context(), droppedHash); err != nil {
 			t.Fatal(err)
 		}
