@@ -119,6 +119,8 @@ type session struct {
 	resumes atomic.Int64
 	onRead  func(resumes int64)
 	onClose func()
+	// releaseOnce runs onClose once, whichever of Close and the end of the session's context comes first.
+	releaseOnce sync.Once
 }
 
 func noopCancel() {}
@@ -358,10 +360,26 @@ func (s *session) Close() error {
 		s.stall.Stop()
 	}
 	s.mu.Unlock()
-	if s.onClose != nil {
-		s.onClose()
-	}
+	s.release()
 	return nil
+}
+
+// release runs onClose once.
+func (s *session) release() {
+	s.releaseOnce.Do(func() {
+		if s.onClose != nil {
+			s.onClose()
+		}
+	})
+}
+
+// bindClose makes onClose run when the session ends, by Close or by its
+// context: a parent that is cancelled without a Close still unregisters the
+// stream. onClose is short and does not block, which is what lets it run
+// from the context's callback instead of a task of its own.
+func (s *session) bindClose(onClose func()) {
+	s.onClose = onClose
+	context.AfterFunc(s.ctx, s.release)
 }
 
 func (s *session) connectLocked() error {
@@ -685,7 +703,7 @@ func (m *Manager) OpenStreamWithRewindOwner(
 	}
 	streamID := m.registerStream(entry, filename, entry.Files[filename], source, debrid, client)
 	s.onRead = func(resumes int64) { m.touchStream(streamID, resumes) }
-	s.onClose = func() { m.unregisterStream(streamID) }
+	s.bindClose(func() { m.unregisterStream(streamID) })
 	return s, nil
 }
 
