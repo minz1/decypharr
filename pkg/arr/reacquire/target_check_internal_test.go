@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -97,6 +98,25 @@ func TestLibraryTargetCheckAllowsAMovedFolderOnlyIfNoOtherEntryOwnsIt(t *testing
 	want.OwnedElsewhere = func(folder, name string) bool { return folder == "Old.Folder" && name == "ep1.mkv" }
 	if err := CheckLibraryTarget(moved, rig.root, want); !errors.Is(err, ErrOperatorRequired) {
 		t.Fatalf("another entry's folder = %v, want refused", err)
+	}
+}
+
+// A library link that no longer exists is reported as gone, not as unreadable.
+func TestLibraryTargetCheckSaysWhenTheLinkIsGone(t *testing.T) {
+	t.Parallel()
+	rig := newTargetRig(t)
+	err := CheckLibraryTarget(filepath.Join(rig.library, "missing.mkv"), rig.root, rig.want())
+	if !errors.Is(err, ErrOperatorRequired) || !strings.Contains(err.Error(), "library link") ||
+		!strings.Contains(err.Error(), "is gone") {
+		t.Fatalf("CheckLibraryTarget() = %v, want the link reported gone", err)
+	}
+	regular := filepath.Join(rig.library, "regular.mkv")
+	if writeErr := os.WriteFile(regular, nil, 0o600); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	err = CheckLibraryTarget(filepath.Join(regular, "child"), rig.root, rig.want())
+	if !errors.Is(err, ErrOperatorRequired) || !strings.Contains(err.Error(), "cannot be read") {
+		t.Fatalf("CheckLibraryTarget() = %v, want an unreadable path", err)
 	}
 }
 

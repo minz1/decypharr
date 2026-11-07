@@ -1,7 +1,10 @@
 package reacquire
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
 )
 
@@ -23,6 +26,12 @@ type TargetWant struct {
 	OwnedElsewhere func(folder, name string) bool
 }
 
+// missing reports a path that does not exist, as against one that cannot be read.
+func missing(path string) bool {
+	_, err := os.Lstat(path)
+	return errors.Is(err, fs.ErrNotExist)
+}
+
 // CheckLibraryTarget reads the live library path, which the Arr's record of the file may no longer match, and
 // refuses with OperatorRequired unless it is a symlink into the managed mount that resolves to the bound file by the
 // rules of the index (entry folder and name). It reads the link and never its target, so a link whose data vanished
@@ -31,6 +40,10 @@ func CheckLibraryTarget(path, managedRoot string, want TargetWant) error {
 	managedRoot = filepath.Clean(managedRoot)
 	target, readable := symlinkTarget(path)
 	switch {
+	case target == "" && !readable && missing(path):
+		return OperatorRequired(fmt.Sprintf(
+			"the library link %q is gone, so its Arr file was not deleted", path,
+		))
 	case target == "" && !readable:
 		return OperatorRequired(fmt.Sprintf(
 			"the library path %q cannot be read, so its Arr file was not deleted", path,
