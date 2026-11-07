@@ -71,7 +71,7 @@ type rcdOwner struct {
 	onReady func()
 	// onExit runs when rcd exits while Ready, before the restart or the failure.
 	onExit func()
-	// beforeStop runs only when a stop starts from Ready: the unmount, before rcd is signalled.
+	// beforeStop runs on every stop, from any state: the unmount, before rcd is signalled.
 	beforeStop func(ctx context.Context)
 	// closeLog runs once, on every path that ends the owner.
 	closeLog func() error
@@ -294,17 +294,16 @@ func (o *rcdOwner) parked(ctx context.Context) error {
 	return o.stopSequence(rcdFailed, nil)
 }
 
-// stopSequence ends the owner from the state from: Stopping, the unmount (only
-// from Ready), the process, the log, then Stopped. A process that cannot be
+// stopSequence ends the owner from the state from: Stopping, the unmount, the process, the log, then Stopped. A process that cannot be
 // reaped leaves the state at Stopping and is returned as the error. earlier is
 // an error from a stop that already failed.
 func (o *rcdOwner) stopSequence(from rcdState, att *rcdAttempt, earlier ...error) error {
 	o.transition(from, rcdStopping)
-	if from == rcdReady {
-		ctx, cancel := task.Detached(o.group.Context(), rcdUnmountBudget)
-		o.beforeStop(ctx)
-		cancel()
-	}
+	// Whatever state the stop starts from, a mount of this or an earlier rcd may
+	// still be in place, so the unmount always runs, before rcd is signalled.
+	ctx, cancel := task.Detached(o.group.Context(), rcdUnmountBudget)
+	o.beforeStop(ctx)
+	cancel()
 	err := errors.Join(earlier...)
 	if att != nil {
 		err = errors.Join(err, o.stopProcess(att))
@@ -343,6 +342,8 @@ func (o *rcdOwner) stopProcess(att *rcdAttempt) error {
 	case <-att.exited:
 		return nil
 	case <-time.After(rcloneReapTimeout):
+		// exec's copy goroutines may still write to the log after closeLog, which
+		// reopens the file; that fd leaks only until the process exits.
 		o.logger.Error().Int("pid", pid).Msg("rcd could not be reaped")
 		return fmt.Errorf("rcd could not be reaped: pid %d", pid)
 	}

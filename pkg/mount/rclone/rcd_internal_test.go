@@ -456,8 +456,8 @@ func TestStopDuringStartingNeverReady(t *testing.T) {
 		if got := h.readyCalls.Load(); got != 0 {
 			t.Fatalf("onReady calls = %d, want 0", got)
 		}
-		if got := h.beforeStopCalls.Load(); got != 0 {
-			t.Fatalf("beforeStop calls = %d, want 0 (the stop did not start from Ready)", got)
+		if got, want := h.eventList(), []string{"beforeStop", "signal"}; !slices.Equal(got, want) {
+			t.Fatalf("events = %v, want %v (the unmount runs on every stop, before the signal)", got, want)
 		}
 		if !h.proc(0).stopped() || !h.proc(0).reaped() {
 			t.Fatal("process was not stopped and reaped")
@@ -516,8 +516,23 @@ func TestStopDuringBackoffSpawnsNothing(t *testing.T) {
 		if got := h.spawns(); got != 1 {
 			t.Fatalf("spawns = %d, want 1", got)
 		}
-		if got := h.beforeStopCalls.Load(); got != 0 {
-			t.Fatalf("beforeStop calls = %d, want 0", got)
+		if got := h.beforeStopCalls.Load(); got != 1 {
+			t.Fatalf("beforeStop calls = %d, want 1: the dead rcd's mount is still there", got)
+		}
+	})
+}
+
+func TestStopFromFailedUnmounts(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		h := newRcdHarness(t)
+		h.spawnErr = func(int) error { return fmt.Errorf("rclone: %w", exec.ErrNotFound) }
+		h.start()
+		h.wantState(rcdFailed)
+
+		h.wantStopped()
+		if got := h.beforeStopCalls.Load(); got != 1 {
+			t.Fatalf("beforeStop calls = %d, want 1", got)
 		}
 	})
 }
