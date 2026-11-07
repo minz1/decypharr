@@ -288,10 +288,13 @@ func (m *Manager) onRcdExit() {
 
 // remount mounts once rcd is Ready. A running recovery does its own remount.
 func (m *Manager) remount(ctx context.Context) error {
-	if m.recovering.Load() {
-		m.logger.Info().Msg("Recovery is running, leaving the remount to it")
+	// The guard is held while mounting, so a health check cannot start a
+	// recovery that unmounts under this mount.
+	if !m.recovering.CompareAndSwap(false, true) {
+		m.logger.Debug().Msg("Recovery is running, leaving the remount to it")
 		return nil
 	}
+	defer m.recovering.Store(false)
 	if m.IsMounted() {
 		return nil
 	}

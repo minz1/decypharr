@@ -56,12 +56,12 @@ func (m *Manager) performMountHealthCheck(ctx context.Context) {
 	if !m.IsReady() {
 		return
 	}
+	// With no mount yet there is nothing to check or recover.
+	if m.getMountInfo() == nil {
+		return
+	}
 	if err := m.client.CheckMountHealth(ctx, FSName); err != nil {
 		m.logger.Warn().Err(err).Msg("Mount health check failed, attempting recovery")
-
-		if m.getMountInfo() == nil {
-			return
-		}
 		// One recovery at a time: a remount with retries can outlast the
 		// next health tick.
 		if !m.recovering.CompareAndSwap(false, true) {
