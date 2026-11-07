@@ -7,6 +7,8 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+
+	"github.com/sirrobot01/decypharr/internal/state"
 )
 
 // LookupEnv reads one environment variable, reporting whether it is set.
@@ -105,23 +107,157 @@ func (c *Config) Clone() (*Config, error) {
 	return &snapshot, nil
 }
 
+// Pending says whether the saved configuration still needs a restart to reach
+// the running services.
+type Pending uint8
+
+const (
+	// PendingNone: the running services already have every saved setting that
+	// only a restart can apply.
+	PendingNone Pending = iota + 1
+	// PendingRestart: a saved setting needs a restart that has been or is
+	// about to be requested.
+	PendingRestart
+	// PendingFailed: the restart could not be requested. The next save, or an
+	// explicit retry, asks again.
+	PendingFailed
+)
+
+// String is the name the API reports: "none", "pending" or "failed".
+func (p Pending) String() string {
+	switch p {
+	case PendingNone:
+		return "none"
+	case PendingRestart:
+		return "pending"
+	case PendingFailed:
+		return "failed"
+	default:
+		return fmt.Sprintf("Pending(%d)", uint8(p))
+	}
+}
+
+// successors is the transition table of Pending.
+func (p Pending) successors() []Pending {
+	switch p {
+	case PendingNone:
+		return []Pending{PendingRestart}
+	case PendingRestart:
+		return []Pending{PendingNone, PendingFailed}
+	case PendingFailed:
+		return []Pending{PendingRestart, PendingNone}
+	}
+	return nil
+}
+
 // Store publishes read-only Config snapshots for one service generation and
 // serializes edits to them. A restart builds a new Store from a fresh Load.
+//
+// The snapshot the generation started with is its running snapshot. Every
+// published update gets the next snapshot id, and Pending compares the
+// current snapshot with the running one, never with the previous save, so a
+// hot-only save cannot hide an earlier save that still needs a restart.
 type Store struct {
 	mu      sync.Mutex
 	current atomic.Pointer[Config]
+
+	running    *Config // the snapshot the services started with (guarded by mu)
+	runningID  uint64
+	currentID  uint64
+	pending    Pending // guarded by mu
+	restartErr error   // why the last restart request failed (guarded by mu)
 }
 
-// NewStore publishes cfg as the first snapshot. cfg must not be edited
-// afterwards; use Update.
+// NewStore publishes cfg as the first snapshot, which is also the running
+// one. cfg must not be edited afterwards; use Update.
 func NewStore(cfg *Config) *Store {
-	s := &Store{}
+	s := &Store{running: cfg, runningID: 1, currentID: 1, pending: PendingNone}
 	s.current.Store(cfg)
 	return s
 }
 
 // Get returns the current read-only snapshot. Use Update to change it.
 func (s *Store) Get() *Config { return s.current.Load() }
+
+// RunningID is the id of the snapshot the services run on.
+func (s *Store) RunningID() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.runningID
+}
+
+// CurrentID is the id of the latest published snapshot.
+func (s *Store) CurrentID() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.currentID
+}
+
+// Pending reports whether the current snapshot needs a restart.
+func (s *Store) Pending() Pending {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.pending
+}
+
+// RestartRequired reports whether the current snapshot differs from the
+// running one in a setting only a restart applies.
+func (s *Store) RestartRequired() bool { return s.Pending() != PendingNone }
+
+// RestartError is why the last restart request failed, or nil.
+func (s *Store) RestartError() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.restartErr
+}
+
+// RestartRequested records that a restart was asked for again after a
+// failure. It reports whether the store was in the failed state.
+func (s *Store) RestartRequested() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.pending != PendingFailed {
+		return false
+	}
+	return s.moveLocked(PendingRestart)
+}
+
+// MarkRestartFailed records that the pending restart could not be requested.
+// It reports whether a restart was pending.
+func (s *Store) MarkRestartFailed(cause error) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.moveLocked(PendingFailed) {
+		return false
+	}
+	s.restartErr = cause
+	return true
+}
+
+// moveLocked is the one transition function of Pending: it refuses every
+// move the table does not list. The caller holds s.mu.
+func (s *Store) moveLocked(to Pending) bool {
+	if !state.Legal(Pending.successors, s.pending, to) {
+		return false
+	}
+	s.pending = to
+	if to != PendingFailed {
+		s.restartErr = nil
+	}
+	return true
+}
+
+// settleLocked recomputes Pending after a snapshot was published. A failed
+// restart stays failed while the snapshot still needs one.
+func (s *Store) settleLocked(published *Config) {
+	if s.running.RequiresRestart(published) {
+		if s.pending == PendingNone {
+			s.moveLocked(PendingRestart)
+		}
+		return
+	}
+	s.moveLocked(PendingNone)
+}
 
 // Update saves and publishes a new snapshot. The callback edits a private
 // copy. Do not call Update from the callback.
@@ -151,6 +287,8 @@ func (s *Store) Update(edit func(*Config) error) (*Config, error) {
 		return nil, fmt.Errorf("copy saved configuration: %w", err)
 	}
 	s.current.Store(published)
+	s.currentID++
+	s.settleLocked(published)
 	return published, nil
 }
 
