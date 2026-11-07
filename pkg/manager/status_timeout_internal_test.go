@@ -169,8 +169,9 @@ func notConverted() error {
 		customerror.ErrProviderStatusTimeout)
 }
 
-// A magnet the provider has not converted within maxConversionWait has no seeders: its grab fails in the Arr, so the
-// Arr searches another release, and the provider's torrent is deleted. Other pending waits keep the longer bound.
+// A magnet the provider has not converted within 2h (SM11-1, owner-proxy ruling; the ages are literal so the test pins
+// the deadline, not just its use) has no seeders: its grab fails in the Arr, so the Arr searches another release, and
+// the provider's torrent is deleted. Other pending waits keep the longer bound.
 func TestUnconvertedMagnetFailsItsGrabAfterTheConversionWait(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -178,9 +179,9 @@ func TestUnconvertedMagnetFailsItsGrabAfterTheConversionWait(t *testing.T) {
 		age      time.Duration
 		wantFail bool
 	}{
-		"converting past the wait":        {notConverted(), maxConversionWait + time.Minute, true},
-		"converting within the wait":      {notConverted(), maxConversionWait - time.Minute, false},
-		"other pending wait past it":      {customerror.ErrProviderStatusTimeout, maxConversionWait + time.Minute, false},
+		"converting past 2h":              {notConverted(), 2*time.Hour + time.Minute, true},
+		"converting within 2h":            {notConverted(), 2*time.Hour - time.Minute, false},
+		"other pending wait past 2h":      {customerror.ErrProviderStatusTimeout, 2*time.Hour + time.Minute, false},
 		"other pending wait past its own": {customerror.ErrProviderStatusTimeout, maxProviderPendingTime + time.Minute, false},
 	} {
 		t.Run(name, func(t *testing.T) {
