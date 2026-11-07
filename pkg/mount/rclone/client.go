@@ -5,57 +5,33 @@ import (
 	"fmt"
 	"runtime"
 	"strconv"
-	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/fsutil"
-	"github.com/sirrobot01/decypharr/internal/retry"
 	"github.com/sirrobot01/decypharr/internal/utils"
 )
 
-// mountWithRetry attempts to mount with retry logic using avast/retry-go.
-func (m *Manager) mountWithRetry(ctx context.Context, maxRetries int) error {
-	return retry.Do(
-		func() error {
-			return m.performMount(ctx)
-		},
-		retry.Attempts(uint(maxRetries)+1),
-		retry.Delay(config.DefaultRetryDelay),
-		retry.DelayType(retry.FixedDelay),
-		retry.If(func(_ error) bool {
-			return true // Always retry on error
-		}),
-	)
-}
-
-// performMount performs a single mount attempt.
-func (m *Manager) performMount(ctx context.Context) error {
+// mountOnce makes one mount attempt. forget first asks rclone to drop its
+// registration of a gone mount; cleanup first detaches a stale mount point.
+// Both are best effort: with nothing to drop or detach they fail, and that
+// must not block the mount.
+func (m *Manager) mountOnce(ctx context.Context, cleanup, forget bool) error {
 	cfg := m.mount
-
-	// Create mount directory if not on windows
-	if runtime.GOOS != "windows" {
-		_ = fsutil.MkdirShared(cfg.MountPath, m.mountDirMode)
+	if forget {
+		if err := m.client.Unmount(ctx, cfg.MountPath); err != nil {
+			m.logger.Debug().Err(err).Msg("rclone had no mount to forget")
+		}
 	}
-
-	// Check if already mounted
-	mountInfo := m.getMountInfo()
-
-	if mountInfo != nil && mountInfo.Mounted {
-		m.logger.Info().Msg("Already mounted")
-		return nil
-	}
-
-	// Clean up any stale mount first. Best effort: when nothing is mounted
-	// every umount fails, and that must not block the remount.
-	if mountInfo != nil && !mountInfo.Mounted {
+	if cleanup {
 		if err := m.forceUnmount(ctx); err != nil {
 			m.logger.Debug().Err(err).Msg("No stale mount to clean up")
 		}
 	}
-
-	// Create rclone config for this provider
+	if runtime.GOOS != "windows" {
+		_ = fsutil.MkdirShared(cfg.MountPath, m.mountDirMode)
+	}
 	if err := m.createConfig(ctx); err != nil {
-		return fmt.Errorf("failed to create rclone config: %w", err)
+		return err
 	}
 
 	mountArgs := map[string]any{
@@ -68,81 +44,60 @@ func (m *Manager) performMount(ctx context.Context) error {
 		// Only add _config if there are options to set
 		mountArgs["_config"] = map[string]any{"BufferSize": cfg.Rclone.BufferSize}
 	}
-
 	if err := m.client.Mount(ctx, mountArgs); err != nil {
-		_ = m.forceUnmount(ctx)
+		if detachErr := m.forceUnmount(ctx); detachErr != nil {
+			m.logger.Debug().Err(detachErr).Msg("Nothing to detach after the failed mount")
+		}
 		return fmt.Errorf("failed to mount %s via RC: %w", cfg.MountPath, err)
 	}
-
-	// Store mount info
-	mntInfo := &MountInfo{
-		LocalPath:  cfg.MountPath,
-		WebDAVURL:  m.webdavURL,
-		Mounted:    true,
-		MountedAt:  time.Now().Format(time.RFC3339),
-		ConfigName: ConfigName,
-	}
-
-	m.info.Store(mntInfo)
-
 	return nil
 }
 
-// unmount takes the mount down before rcd is signalled. A stop from Ready asks
-// rcd first, within rcdRCUnmountBudget, and falls back to the unmount helpers on
-// what is left of ctx. From any other state no live rcd holds a mount, as mounts
-// are made only once rcd is Ready, so the old mount is a dead endpoint and the
-// helpers run at once. A mount marked down is still unmounted: rcd may have
-// remounted it since.
+// unmount takes the mount down before rcd is signalled; it is the last move of
+// the mount's state, made after the supervisor has stopped. A stop from Ready
+// asks rcd first, within rcdRCUnmountBudget, and falls back to the unmount
+// helpers on what is left of ctx. From any other state no live rcd holds a
+// mount, as mounts are made only once rcd is Ready, so the old mount is a dead
+// endpoint and the helpers run at once. A mount that was ever attempted is
+// unmounted whatever its state: rcd may hold it even after a failed attempt.
 func (m *Manager) unmount(ctx context.Context, from rcdState) {
-	mountInfo := m.getMountInfo()
-
-	if mountInfo == nil {
-		m.logger.Info().Msg("Mount not found, nothing to unmount")
+	attempted := false
+	if !m.moveMountWith(func(cur mountView) (mountState, func(*mountView)) {
+		attempted = cur.attempted
+		if !attempted {
+			return mountUnmounted, nil
+		}
+		return mountUnmounting, nil
+	}) {
+		// The state is wrong, the mount point may not be: unmount anyway.
+		m.logger.Warn().Str("mount", m.view.Load().state.String()).Msg("The mount's state refused the unmount")
+	}
+	if !attempted {
+		m.logger.Info().Msg("No mount was attempted, nothing to unmount")
 		return
 	}
 
 	m.logger.Info().Msg("Unmounting")
-
 	var err error
 	force := from != rcdReady
 	if !force {
 		rcCtx, cancel := context.WithTimeout(ctx, rcdRCUnmountBudget)
-		err = m.client.Unmount(rcCtx, mountInfo.LocalPath)
+		err = m.client.Unmount(rcCtx, m.mount.MountPath)
 		cancel()
 		if err != nil {
 			m.logger.Warn().Err(err).Msg("RC unmount failed, trying force unmount")
 			force = true
 		}
 	}
-
 	if force {
-		if forceUnmountErr := m.forceUnmount(ctx); forceUnmountErr != nil {
-			m.logger.Error().Err(forceUnmountErr).Msg("Force unmount failed")
-			// Don't return error here, update the state anyway
+		if forceErr := m.forceUnmount(ctx); forceErr != nil {
+			m.logger.Error().Err(forceErr).Msg("Force unmount failed")
 		}
 	}
-
-	errMsg := ""
-	if err != nil {
-		errMsg = err.Error()
+	if !m.moveMount(mountUnmounted, withErr(err)) {
+		m.logger.Warn().Str("mount", m.view.Load().state.String()).Msg("The mount's state refused Unmounted")
 	}
-	m.markUnmounted(errMsg)
 	m.logger.Info().Msg("Unmount completed")
-}
-
-// markUnmounted publishes a copy of the mount info flagged unmounted. The
-// stored MountInfo is shared with concurrent readers (Stats, IsMounted), so it
-// is replaced, never mutated in place.
-func (m *Manager) markUnmounted(errMsg string) {
-	current := m.getMountInfo()
-	if current == nil {
-		return
-	}
-	next := *current
-	next.Mounted = false
-	next.Error = errMsg
-	m.info.Store(&next)
 }
 
 // createConfig creates an rclone config entry for the provider.
