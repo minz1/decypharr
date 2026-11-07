@@ -45,7 +45,8 @@ type fakeSonarr struct {
 	monitorCalls int
 	// autoRedownload is the arr's "redownload failed downloads" setting.
 	autoRedownload bool
-	// onCommand, set before the first request, runs when a search command arrives, before it is served.
+	// onCommand runs when a search command arrives, before it is served. A test sets it before it provokes the
+	// search it watches; the fake reads it without a lock.
 	onCommand func()
 	// releases is what the interactive search returns; grabs counts the releases grabbed.
 	releases []map[string]any
