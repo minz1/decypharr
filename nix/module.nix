@@ -863,6 +863,8 @@ in
         Restart = "on-failure";
         RestartSec = 5;
         TimeoutStopSec = 30;
+        # decypharr stops rcd itself after the RC unmount; the cgroup must not signal it first.
+        KillMode = "mixed";
         StateDirectory = "decypharr";
         EnvironmentFile = cfg.environmentFiles;
 
