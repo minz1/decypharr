@@ -38,6 +38,12 @@ const (
 	percent              = 100
 	defaultHost          = "https://www.premiumize.me"
 	profileCacheDuration = time.Hour
+	// statusPollInterval is the delay between CheckStatus polls of a finished
+	// transfer whose files are not linked yet.
+	statusPollInterval = 2 * time.Second
+	// maxFinalizingPolls bounds that wait (about five minutes at the default
+	// interval).
+	maxFinalizingPolls = 150
 )
 
 var _ common.Client = (*Premiumize)(nil)
@@ -52,6 +58,10 @@ type Premiumize struct {
 	config                config.Debrid
 	profile               types.ProfileCache
 	options               types.ProviderOptions
+
+	// CheckStatus polling knobs; zero values select the defaults.
+	pollInterval       time.Duration
+	maxFinalizingPolls int
 }
 
 func New(
@@ -240,8 +250,27 @@ func (pm *Premiumize) CheckStatus(t *types.Torrent) (*types.Torrent, error) {
 }
 
 func (pm *Premiumize) UpdateAndReturnTorrent(t *types.Torrent) (*types.Torrent, error) {
-	if err := pm.UpdateTorrent(t); err != nil {
-		return t, err
+	interval := cmp.Or(pm.pollInterval, statusPollInterval)
+	maxFinalizing := cmp.Or(pm.maxFinalizingPolls, maxFinalizingPolls)
+	for polls := 0; ; polls++ {
+		finalizing, err := pm.refreshTorrent(t)
+		if err != nil {
+			return t, err
+		}
+		if !finalizing {
+			break
+		}
+		// Premiumize reports the transfer finished but its links are not visible
+		// yet. That says nothing about the cache, so keep polling (bounded).
+		if polls >= maxFinalizing {
+			return t, fmt.Errorf(
+				"torrent %s finished but its files are still not ready after %d polls: %w",
+				t.Name,
+				maxFinalizing,
+				customerror.ErrProviderStatusTimeout,
+			)
+		}
+		time.Sleep(interval)
 	}
 	if t.Status == types.TorrentStatusDownloaded {
 		return t, nil
@@ -269,15 +298,22 @@ func (pm *Premiumize) GetTorrent(torrentID string) (*types.Torrent, error) {
 }
 
 func (pm *Premiumize) UpdateTorrent(t *types.Torrent) error {
+	_, err := pm.refreshTorrent(t)
+	return err
+}
+
+// refreshTorrent copies the provider's current view of t into t. finalizing is
+// true when the transfer is finished but its files are not linked yet.
+func (pm *Premiumize) refreshTorrent(t *types.Torrent) (bool, error) {
 	transfers, err := pm.listTransfers()
 	if err != nil {
-		return err
+		return false, err
 	}
 	for _, tr := range transfers {
 		if tr.ID == t.ID {
-			updated, transferToTorrentErr := pm.transferToTorrent(tr, t.InfoHash)
-			if transferToTorrentErr != nil {
-				return transferToTorrentErr
+			updated, isFinalizing, transferErr := pm.transferState(tr, t.InfoHash)
+			if transferErr != nil {
+				return false, transferErr
 			}
 			t.Name = updated.Name
 			t.Filename = updated.Filename
@@ -290,10 +326,10 @@ func (pm *Premiumize) UpdateTorrent(t *types.Torrent) error {
 			t.Links = updated.Links
 			t.Debrid = updated.Debrid
 			t.InfoHash = cmp.Or(updated.InfoHash, t.InfoHash)
-			return nil
+			return isFinalizing, nil
 		}
 	}
-	return customerror.ErrTorrentNotFound
+	return false, customerror.ErrTorrentNotFound
 }
 
 func (pm *Premiumize) DeleteTorrent(torrentID string) error {
@@ -374,20 +410,33 @@ func (pm *Premiumize) listTransfers() ([]premiumizeTransfer, error) {
 }
 
 func (pm *Premiumize) transferToTorrent(tr premiumizeTransfer, fallbackInfoHash string) (*types.Torrent, error) {
+	torrent, _, err := pm.transferState(tr, fallbackInfoHash)
+	return torrent, err
+}
+
+// transferState converts a transfer. finalizing is true when Premiumize marks
+// it finished but the folder tree has no usable file links yet; the torrent is
+// then reported as downloading.
+func (pm *Premiumize) transferState(
+	tr premiumizeTransfer,
+	fallbackInfoHash string,
+) (*types.Torrent, bool, error) {
 	status := mapStatus(tr.Status)
 	files := make(map[string]types.File)
 	var links []string
+	finalizing := false
 	if status == types.TorrentStatusDownloaded {
-		var err error
 		var ready bool
-		files, links, ready, err = pm.filesForTransfer(tr)
-		if err != nil {
-			return nil, err
+		var filesErr error
+		files, links, ready, filesErr = pm.filesForTransfer(tr)
+		if filesErr != nil {
+			return nil, false, filesErr
 		}
 		// Premiumize can mark a transfer finished before its folder tree has
 		// usable file links. Keep it active until linked files are visible.
 		if !ready {
 			status = types.TorrentStatusDownloading
+			finalizing = true
 		}
 	}
 	size := int64(0)
@@ -413,7 +462,7 @@ func (pm *Premiumize) transferToTorrent(tr premiumizeTransfer, fallbackInfoHash 
 		Links:            links,
 		Debrid:           pm.config.Name,
 		Added:            added,
-	}, nil
+	}, finalizing, nil
 }
 
 func (pm *Premiumize) transferInfoHash(tr premiumizeTransfer, fallbackInfoHash string) string {
