@@ -63,7 +63,12 @@ const (
 	// readHeaderTimeout bounds slow-header (slowloris) clients; bodies and
 	// long streams are unaffected.
 	readHeaderTimeout = 30 * time.Second
-	shutdownGrace     = 10 * time.Second
+	// shutdownGrace is the share of the stop budget that in-flight requests
+	// get to finish before the streams still open are closed.
+	shutdownGrace = 8 * time.Second
+	// defaultStopBudget bounds the shutdown of a server that was not given the
+	// generation's stop context.
+	defaultStopBudget = 25 * time.Second
 )
 
 type Server struct {
@@ -82,6 +87,8 @@ type Server struct {
 	restartFunc func()
 	// tasks lists the running tasks of the generation for /debug/tasks.
 	tasks func() []task.Info
+	// stopCtx returns the context that ends at the generation's drain deadline.
+	stopCtx func() context.Context
 	// shutdownGrace is how long in-flight requests get to finish before open streams are closed.
 	shutdownGrace time.Duration
 }
@@ -258,7 +265,9 @@ func (s *Server) Start(g *task.Group) error {
 }
 
 // shutdown drains srv: in-flight requests get the grace period, then the
-// streams still open are closed and their handlers waited for.
+// streams still open are closed and their handlers waited for. Both waits are
+// bounded by the stop context, so the server never outlasts the generation's
+// drain deadline.
 func (s *Server) shutdown(
 	ctx context.Context,
 	srv *http.Server,
@@ -266,7 +275,9 @@ func (s *Server) shutdown(
 	cancelRequests context.CancelFunc,
 ) error {
 	s.logger.Info().Msg("Shutting down gracefully...")
-	graceCtx, cancel := task.Detached(ctx, s.shutdownGrace)
+	stop, release := s.stopContext(ctx)
+	defer release()
+	graceCtx, cancel := context.WithTimeout(stop, s.shutdownGrace)
 	defer cancel()
 	err := srv.Shutdown(graceCtx)
 	if !errors.Is(err, context.DeadlineExceeded) {
@@ -275,16 +286,36 @@ func (s *Server) shutdown(
 	s.logger.Warn().Dur("grace", s.shutdownGrace).
 		Msg("Closing requests still open after the shutdown grace period")
 	cancelRequests()
-	err = srv.Close()
-	handlers.wait()
-	return err
+	closeErr := srv.Close()
+	if waitErr := handlers.wait(stop); waitErr != nil {
+		return errors.Join(closeErr, fmt.Errorf("handlers still running at the stop deadline: %w", waitErr))
+	}
+	return closeErr
 }
 
-// handlerTracker lets Start wait out handlers that outlive a forced close, so nothing they use is stopped under them.
+// stopContext is the context that bounds the shutdown: the one the generation
+// wired in, or, for a server without one, a detached context with the default
+// budget. The returned func releases it.
+func (s *Server) stopContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if s.stopCtx != nil {
+		return s.stopCtx(), func() {}
+	}
+	return task.Detached(ctx, defaultStopBudget)
+}
+
+// SetStopContext wires the server's shutdown to the generation's stop
+// context, which ends at the generation's drain deadline.
+func (s *Server) SetStopContext(stop func() context.Context) {
+	s.stopCtx = stop
+}
+
+// handlerTracker lets Start wait out handlers that outlive a forced close, so
+// nothing they use is stopped under them.
 type handlerTracker struct {
 	mu       sync.Mutex
 	stopping bool
-	running  sync.WaitGroup
+	running  int
+	idle     chan struct{} // closed when running drops to zero while a wait is pending
 }
 
 func (h *handlerTracker) wrap(next http.Handler) http.Handler {
@@ -295,18 +326,41 @@ func (h *handlerTracker) wrap(next http.Handler) http.Handler {
 			http.Error(w, "server is stopping", http.StatusServiceUnavailable)
 			return
 		}
-		h.running.Add(1)
+		h.running++
 		h.mu.Unlock()
-		defer h.running.Done()
+		defer h.done()
 		next.ServeHTTP(w, r)
 	})
 }
 
-func (h *handlerTracker) wait() {
+func (h *handlerTracker) done() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.running--
+	if h.running == 0 && h.idle != nil {
+		close(h.idle)
+		h.idle = nil
+	}
+}
+
+// wait refuses new requests and waits until the running ones return, or until
+// ctx ends, in which case it reports ctx's error.
+func (h *handlerTracker) wait(ctx context.Context) error {
 	h.mu.Lock()
 	h.stopping = true
+	if h.running == 0 {
+		h.mu.Unlock()
+		return nil
+	}
+	idle := make(chan struct{})
+	h.idle = idle
 	h.mu.Unlock()
-	h.running.Wait()
+	select {
+	case <-idle:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (s *Server) getLogs(w http.ResponseWriter, _ *http.Request) {

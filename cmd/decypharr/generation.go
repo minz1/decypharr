@@ -84,16 +84,48 @@ func (s genState) successors() []genState {
 type generation struct {
 	root *task.Group
 
+	log zerolog.Logger
+	// deadline bounds the whole teardown; the supervisor sets it before the
+	// services are built.
+	deadline time.Duration
+
 	mu         sync.Mutex
 	state      genState
 	restart    chan struct{} // closed by the first request of the current token
 	requested  bool
 	ready      <-chan struct{}
 	onRejected func(error)
+
+	stopOnce   sync.Once
+	stopCtx    context.Context
+	stopCancel context.CancelFunc
 }
 
-func newGeneration(root *task.Group) *generation {
-	return &generation{root: root, state: genStarting, restart: make(chan struct{})}
+func newGeneration(root *task.Group, log zerolog.Logger) *generation {
+	return &generation{
+		root:     root,
+		log:      log,
+		deadline: generationDrainDeadline,
+		state:    genStarting,
+		restart:  make(chan struct{}),
+	}
+}
+
+// stopContext is the context that bounds the teardown: it ends when the drain
+// deadline passes, whoever starts the teardown first (the supervisor, or a
+// service that notices the group failing). Services bound their own stop
+// waits by it, so the whole stop fits the deadline.
+func (g *generation) stopContext() context.Context {
+	g.stopOnce.Do(func() {
+		g.stopCtx, g.stopCancel = task.Detached(g.root.Context(), g.deadline)
+	})
+	return g.stopCtx
+}
+
+// releaseStop frees the stop context's timer once the teardown is over.
+func (g *generation) releaseStop() {
+	g.stopContext()
+	g.stopCancel()
 }
 
 // State reports the generation's lifecycle state.
@@ -103,16 +135,26 @@ func (g *generation) State() genState {
 	return g.state
 }
 
-// transition is the one place the state changes: it refuses every move the
-// table does not list.
+// transition is the one place the state changes: it refuses, and logs, every
+// move the table does not list.
 func (g *generation) transition(to genState) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if !state.Legal(genState.successors, g.state, to) {
+		g.log.Error().Stringer("from", g.state).Stringer("to", to).Msg("Refused an illegal generation transition")
 		return false
 	}
 	g.state = to
 	return true
+}
+
+// finish records how the generation ended. It does nothing when the generation
+// is already in that state, as after a failed build.
+func (g *generation) finish(to genState) {
+	if g.State() == to {
+		return
+	}
+	g.transition(to)
 }
 
 // WaitReady sets the channel whose closing means the services are ready to
@@ -148,16 +190,18 @@ func (g *generation) restartRequested() <-chan struct{} {
 
 // rejectRestart records that a requested restart cannot happen and makes the
 // next request effective again, so the generation keeps serving and a later
-// request can retry.
+// request can retry. The token is re-armed before the owner is told, so a
+// request made in reaction to that report is not swallowed by the old token.
 func (g *generation) rejectRestart(cause error) {
-	if g.onRejected != nil {
-		g.onRejected(cause)
-	}
 	g.mu.Lock()
-	defer g.mu.Unlock()
 	if g.state == genStarting || g.state == genServing {
 		g.restart = make(chan struct{})
 		g.requested = false
+	}
+	report := g.onRejected
+	g.mu.Unlock()
+	if report != nil {
+		report(cause)
 	}
 }
 
@@ -221,7 +265,9 @@ func (s supervisor) run(ctx context.Context) error {
 func (s supervisor) runGeneration(ctx context.Context, cfg *config.Config) outcome {
 	logs := s.logs(cfg)
 	log := logs.New("decypharr")
-	gen := newGeneration(task.NewRoot(context.WithoutCancel(ctx), "generation", log))
+	gen := newGeneration(task.NewRoot(context.WithoutCancel(ctx), "generation", log), log)
+	gen.deadline = s.drainDeadline
+	defer gen.releaseStop()
 
 	cleanup, buildErr := s.build(gen, cfg, logs)
 	kind, next := endFailed, (*config.Config)(nil)
@@ -230,37 +276,44 @@ func (s supervisor) runGeneration(ctx context.Context, cfg *config.Config) outco
 		gen.transition(genFailed)
 	} else {
 		kind, next = s.await(ctx, gen, log)
-		if kind == endFailed {
-			log.Error().Err(gen.root.Err()).Msg("Service stopped unexpectedly")
-		}
+		gen.transition(genDraining)
 	}
 
-	gen.transition(genDraining)
-	stopCtx, cancel := task.Detached(ctx, s.drainDeadline)
-	defer cancel()
-	stopErr := gen.root.Stop(stopCtx)
+	stopErr := gen.root.Stop(gen.stopContext())
 	if cleanup != nil {
 		cleanup()
 	}
 
+	// A failure that fired before the stop began wins over a stop or a restart
+	// that was picked at the same moment: the process must exit non-zero.
+	if kind != endFailed {
+		select {
+		case <-gen.root.Failed():
+			kind = endFailed
+		default:
+		}
+	}
 	failure := buildErr
 	if kind == endFailed && failure == nil {
 		failure = gen.root.Err()
+		log.Error().Err(failure).Msg("Service stopped unexpectedly")
 	}
 	if stopErr != nil {
 		log.Error().Err(stopErr).Msg("Services did not stop in time; not starting another generation")
-		gen.transition(genFailed)
+		gen.finish(genFailed)
 		return outcome{state: genFailed, err: errors.Join(failure, stopErr)}
 	}
 	if failure != nil {
-		gen.transition(genFailed)
+		gen.finish(genFailed)
 		return outcome{state: genFailed, err: failure}
 	}
 	if err := gen.root.Err(); err != nil {
 		log.Warn().Err(err).Msg("A service failed while the generation was stopping")
 	}
-	if kind == endStop {
-		gen.transition(genStopped)
+	// A signal that arrived while a restart was draining stops the process: no
+	// new generation is built on a cancelled context.
+	if kind == endStop || ctx.Err() != nil {
+		gen.finish(genStopped)
 		log.Info().Msg("Decypharr has been stopped gracefully.")
 		return outcome{state: genStopped}
 	}
@@ -268,7 +321,7 @@ func (s supervisor) runGeneration(ctx context.Context, cfg *config.Config) outco
 	// The old services are gone, so anything saved while they drained is on
 	// disk now. If it no longer loads, fall back to what was validated before
 	// the drain.
-	gen.transition(genRestarting)
+	gen.finish(genRestarting)
 	after, err := s.load()
 	if err != nil {
 		log.Error().Err(err).
