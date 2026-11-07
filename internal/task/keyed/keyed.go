@@ -94,7 +94,7 @@ type host[K comparable, M any] interface {
 	Send(key K, msg M) error
 	After(key K, d time.Duration, msg M) TimerID
 	CancelTimer(id TimerID)
-	spawn(key K, name string, fn func(ctx context.Context) M) error
+	spawn(key K, name string, fn func(ctx context.Context) M, onPanic func(v any) M) error
 }
 
 // activate builds the key's state. A panic is logged and counted, and the key
@@ -238,6 +238,7 @@ type Runner[K comparable, M, S any] struct {
 
 	totalHandled                               atomic.Uint64
 	totalPanics                                atomic.Uint64
+	totalChildPanics                           atomic.Uint64
 	totalCoalesced, totalDropped, totalRefused atomic.Uint64
 }
 
@@ -561,15 +562,19 @@ type Effects[K comparable, M any] struct {
 
 // Go runs fn as a child task of the key's actor, on the runner's context, and
 // sends the message it returns back to the same key. The message is queued
-// past the mailbox bound: the actor asked for it, so it is never refused. If
-// fn panics no message is sent and the panic is logged. Go returns ErrStopped
+// past the mailbox bound: the actor asked for it, so it is never refused.
+//
+// If fn panics the runner recovers it, logs it with the key, counts it, and
+// sends onPanic(v), v being the panic value, in fn's place. An actor that
+// waits for the child must never wait for ever, so onPanic should say that
+// the work failed; with a nil onPanic nothing is sent. Go returns ErrStopped
 // once the runner stops.
-func (fx *Effects[K, M]) Go(name string, fn func(ctx context.Context) M) error {
-	return fx.r.spawn(fx.key, name, fn)
+func (fx *Effects[K, M]) Go(name string, fn func(ctx context.Context) M, onPanic func(v any) M) error {
+	return fx.r.spawn(fx.key, name, fn, onPanic)
 }
 
 // spawn starts a child task of key's actor.
-func (r *Runner[K, M, S]) spawn(key K, name string, fn func(ctx context.Context) M) error {
+func (r *Runner[K, M, S]) spawn(key K, name string, fn func(ctx context.Context) M, onPanic func(v any) M) error {
 	r.mu.Lock()
 	if !r.accepting() {
 		r.mu.Unlock()
@@ -581,7 +586,10 @@ func (r *Runner[K, M, S]) spawn(key K, name string, fn func(ctx context.Context)
 
 	err := r.group.Go(fmt.Sprint(key)+"/"+name, func(ctx context.Context) error {
 		defer r.childDone(key)
-		msg := fn(withHandlerMarker(ctx))
+		msg, ok := r.runChild(withHandlerMarker(ctx), key, name, fn, onPanic)
+		if !ok {
+			return nil
+		}
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		if deliverErr := r.enqueueLocked(key, envelope[M]{msg: msg, at: time.Now(), bypass: true}); deliverErr != nil {
@@ -595,6 +603,53 @@ func (r *Runner[K, M, S]) spawn(key K, name string, fn func(ctx context.Context)
 		return ErrStopped
 	}
 	return nil
+}
+
+// runChild runs a child task's function and returns the message to deliver. A panic in fn becomes onPanic's
+// message; a panic in onPanic, or a nil onPanic, delivers nothing.
+func (r *Runner[K, M, S]) runChild(
+	ctx context.Context,
+	key K,
+	name string,
+	fn func(ctx context.Context) M,
+	onPanic func(v any) M,
+) (M, bool) {
+	var (
+		msg      M
+		panicked bool
+		value    any
+	)
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				panicked, value = true, recovered
+			}
+		}()
+		msg = fn(ctx)
+	}()
+	if !panicked {
+		return msg, true
+	}
+	r.totalChildPanics.Add(1)
+	r.logger.Error().Str("runner", r.name).Str("key", fmt.Sprint(key)).Str("task", name).Interface("panic", value).
+		Bytes("stack", debug.Stack()).Msg("Child task panicked")
+	if onPanic == nil {
+		var zero M
+		return zero, false
+	}
+	var fallback M
+	delivered := true
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				delivered = false
+				r.logger.Error().Str("runner", r.name).Str("key", fmt.Sprint(key)).Str("task", name).
+					Interface("panic", recovered).Msg("onPanic panicked; nothing is delivered for the child task")
+			}
+		}()
+		fallback = onPanic(value)
+	}()
+	return fallback, delivered
 }
 
 func (r *Runner[K, M, S]) childDone(key K) {
@@ -643,6 +698,8 @@ type Info struct {
 	Keys    []KeyInfo `json:"keys"`
 	Handled uint64    `json:"handled"`
 	Panics  uint64    `json:"panics"`
+	// ChildPanics counts the child tasks that panicked.
+	ChildPanics uint64 `json:"child_panics"`
 	// Coalesced, Dropped and Refused count the messages the overflow policy replaced, pushed out and refused.
 	Coalesced uint64 `json:"coalesced"`
 	Dropped   uint64 `json:"dropped"`
@@ -657,14 +714,15 @@ func (r *Runner[K, M, S]) Snapshot() Info {
 	defer r.mu.Unlock()
 	now := time.Now()
 	info := Info{
-		Name:      r.name,
-		State:     r.lifecycle.Load().String(),
-		Keys:      make([]KeyInfo, 0, len(r.keys)),
-		Handled:   r.totalHandled.Load(),
-		Panics:    r.totalPanics.Load(),
-		Coalesced: r.totalCoalesced.Load(),
-		Dropped:   r.totalDropped.Load(),
-		Refused:   r.totalRefused.Load(),
+		Name:        r.name,
+		State:       r.lifecycle.Load().String(),
+		Keys:        make([]KeyInfo, 0, len(r.keys)),
+		Handled:     r.totalHandled.Load(),
+		Panics:      r.totalPanics.Load(),
+		ChildPanics: r.totalChildPanics.Load(),
+		Coalesced:   r.totalCoalesced.Load(),
+		Dropped:     r.totalDropped.Load(),
+		Refused:     r.totalRefused.Load(),
 	}
 	for _, a := range r.keys {
 		key := KeyInfo{
