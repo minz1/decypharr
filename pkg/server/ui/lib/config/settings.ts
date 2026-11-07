@@ -24,6 +24,9 @@ interface SaveDeps {
 
 interface SaveResult {
   restarted: boolean;
+  /** The server saved the settings but could not request the restart they need. */
+  restartFailed: boolean;
+  restartError: string;
   warnings: string[];
 }
 
@@ -68,12 +71,15 @@ const readSaveResult = async (response: Response): Promise<SaveResult> => {
     const result: unknown = JSON.parse(await response.text());
     const record = typeof result === "object" && result !== null ? result : {};
     const warnings: unknown = Reflect.get(record, "warnings");
+    const restartError: unknown = Reflect.get(record, "restart_error");
     return {
       restarted: Reflect.get(record, "restarted") !== false,
+      restartFailed: Reflect.get(record, "restart") === "failed",
+      restartError: typeof restartError === "string" ? restartError : "",
       warnings: Array.isArray(warnings) ? warnings.map((warning) => toText(warning)) : [],
     };
   } catch {
-    return { restarted: true, warnings: [] };
+    return { restarted: true, restartFailed: false, restartError: "", warnings: [] };
   }
 };
 
@@ -94,7 +100,11 @@ const reportSaved = (result: SaveResult, deps: SaveDeps): void => {
   for (const warning of result.warnings) {
     createToast(warning, "warning");
   }
-  if (result.restarted) {
+  if (result.restartFailed) {
+    // Saved, but the services still run the old settings: do not claim they were applied.
+    createToast(`Saved; restart failed: ${orDefault(result.restartError, "unknown error")}`, "warning");
+    deps.overlay.classList.add("hidden");
+  } else if (result.restarted) {
     createToast("Configuration saved successfully! Services are restarting...", "success");
     setTimeout(deps.reload, result.warnings.length > 0 ? WARNING_RELOAD_DELAY_MS : RELOAD_DELAY_MS);
   } else {

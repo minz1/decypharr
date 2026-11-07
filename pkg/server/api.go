@@ -366,11 +366,11 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		"restarted": pending == config.PendingRestart,
 		"restart":   pending.String(),
 	}
-	var warnings []string
-	if pending == config.PendingFailed {
-		warnings = append(warnings, "Configuration was saved, but the restart could not be requested: "+
-			s.config.RestartError().Error()+". Save again to retry, or restart Decypharr by hand.")
+	if cause := s.config.RestartError(); pending == config.PendingFailed && cause != nil {
+		// The configuration is saved; the next save retries the restart.
+		response["restart_error"] = cause.Error()
 	}
+	var warnings []string
 	if locked := webdavAuthWarnings(updated); len(locked) > 0 {
 		warnings = append(warnings, locked...)
 		s.logger.Warn().Strs("warnings", locked).Msg("WebDAV auth locks out its clients")
