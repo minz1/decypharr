@@ -545,6 +545,12 @@ func (handler *arrHandler) checkArrFile(
 	case !bindingMatchesManagedFile(binding, current):
 		return false, fmt.Errorf("arr file %d no longer matches the indexed media", binding.ArrFileID)
 	default:
+		// Every path is read before the first file is deleted, so a refusal leaves the Arr as it was.
+		if checker, ok := handler.invalidator.(LibraryTargetChecker); ok {
+			if checkErr := checker.CheckLibraryTarget(binding); checkErr != nil {
+				return false, checkErr
+			}
+		}
 		return true, nil
 	}
 }

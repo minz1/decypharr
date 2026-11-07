@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 
 	"github.com/sirrobot01/appendstore"
 
@@ -85,6 +86,41 @@ func (m *Manager) CheckInvalidation(_ context.Context, job reacquire.Job) error 
 		}
 	}
 	return nil
+}
+
+// CheckLibraryTarget is the check the reacquire handler makes before it deletes the Arr file at a binding's library
+// path: see reacquire.CheckLibraryTarget. The bound entry gives the folder and name the link must resolve to.
+func (m *Manager) CheckLibraryTarget(binding reacquire.Binding) error {
+	root := filepath.Join(m.store.Get().Mount.MountPath, EntryAllFolder)
+	if binding.Confidence == reacquire.ConfidenceLibraryFile {
+		return reacquire.CheckLibraryTarget(binding.LibraryPath, root, reacquire.TargetWant{})
+	}
+	want := reacquire.TargetWant{
+		Bound: true,
+		Name:  filepath.Base(binding.EntryFileName),
+		Moved: binding.Confidence == reacquire.ConfidenceManagedTarget,
+		OwnedElsewhere: func(folder, name string) bool {
+			item, err := m.storage.GetEntryItem(folder)
+			if err != nil {
+				return false
+			}
+			file := item.Files[name]
+			return file != nil && file.InfoHash != binding.EntryID
+		},
+	}
+	// The entry as stored now: its folder and file names may have changed since the binding was indexed.
+	if entry, err := m.storage.Get(binding.EntryID); err == nil {
+		want.Folder = entry.GetFolder(m.folderNaming())
+		for _, file := range entry.Files {
+			if file != nil && file.ID == binding.EntryFileID && file.Name != "" {
+				want.Name = filepath.Base(file.Name)
+			}
+		}
+	} else {
+		// The entry is gone: whatever its link says, the link may not belong to another entry.
+		want.Moved = true
+	}
+	return reacquire.CheckLibraryTarget(binding.LibraryPath, root, want)
 }
 
 // removeFailedDownloadRecord drops the queue record of a download whose grab the Arr failed, as a client delete would.
