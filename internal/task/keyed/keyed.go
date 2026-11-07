@@ -142,6 +142,7 @@ type actor[K comparable, M any] struct {
 	running  bool
 	wake     chan struct{}
 	children int // child tasks in flight
+	timers   int // timers pending
 	handled  uint64
 	panics   uint64
 }
@@ -162,6 +163,12 @@ type Runner[K comparable, M any] struct {
 	mu   sync.Mutex
 	keys map[K]*actor[K, M]
 	live int // key goroutines running or starting
+
+	// Timers belong to the runner (see timers.go). Guarded by mu.
+	timers    timerHeap[K, M]
+	timerByID map[TimerID]*timerEntry[K, M]
+	lastTimer TimerID
+	timerWake chan struct{}
 
 	totalHandled atomic.Uint64
 	totalPanics  atomic.Uint64
@@ -188,6 +195,8 @@ func New[K comparable, M any](g *task.Group, name string, h Handler[K, M], opts 
 		lifecycle: state.NewAtomic(runRunning, runSuccessors),
 		ctx:       child.Context(),
 		keys:      make(map[K]*actor[K, M]),
+		timerByID: make(map[TimerID]*timerEntry[K, M]),
+		timerWake: make(chan struct{}, 1),
 	}
 	if err := child.Go("supervisor", r.supervise); err != nil {
 		r.lifecycle.Transition(runRunning, runStopping)
@@ -212,19 +221,13 @@ func NewSingleton[M any](g *task.Group, name string, h Handler[struct{}, M], opt
 	return r
 }
 
-// supervise is the runner's own task: it ends the runner when the group stops.
-func (r *Runner[K, M]) supervise(ctx context.Context) error {
-	<-ctx.Done()
-	r.beginStop()
-	return nil
-}
-
 // beginStop moves the runner to Stopping, and on to Stopped once no key
 // goroutine is left.
 func (r *Runner[K, M]) beginStop() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.lifecycle.Transition(runRunning, runStopping)
+	r.clearTimersLocked()
 	r.settleLocked()
 }
 
@@ -294,7 +297,7 @@ func (r *Runner[K, M]) actorLocked(key K) *actor[K, M] {
 
 // dropIfIdleLocked forgets a key that has nothing queued, nothing running and nothing in flight.
 func (r *Runner[K, M]) dropIfIdleLocked(a *actor[K, M]) {
-	if !a.running && len(a.queue) == 0 && a.children == 0 && !r.noIdle {
+	if !a.running && len(a.queue) == 0 && a.children == 0 && a.timers == 0 && !r.noIdle {
 		delete(r.keys, a.key)
 	}
 }
@@ -469,9 +472,11 @@ type KeyInfo struct {
 	// OldestAge is how long the oldest queued message has waited.
 	OldestAge time.Duration `json:"oldest_age_ns"`
 	Children  int           `json:"children"`
-	Running   bool          `json:"running"`
-	Handled   uint64        `json:"handled"`
-	Panics    uint64        `json:"panics"`
+	// Timers is the number of timers pending for the key.
+	Timers  int    `json:"timers"`
+	Running bool   `json:"running"`
+	Handled uint64 `json:"handled"`
+	Panics  uint64 `json:"panics"`
 }
 
 // Info describes a runner and its keys.
@@ -502,6 +507,7 @@ func (r *Runner[K, M]) Snapshot() Info {
 			Key:      fmt.Sprint(a.key),
 			Depth:    len(a.queue),
 			Children: a.children,
+			Timers:   a.timers,
 			Running:  a.running,
 			Handled:  a.handled,
 			Panics:   a.panics,
