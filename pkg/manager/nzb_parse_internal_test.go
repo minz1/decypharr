@@ -34,6 +34,7 @@ func newParseRetryManager(t *testing.T, parse parseFunc) *Manager {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	m := &Manager{
+		work:          testGroup(t),
 		queue:         newQueue(store, "", nil, zerolog.Nop()),
 		logger:        zerolog.Nop(),
 		usenetTimeout: 20 * time.Millisecond,
@@ -225,8 +226,7 @@ func newParseQueueManager(t *testing.T, delay time.Duration, parse roundParse) (
 	if err = m.queue.Update(entry); err != nil {
 		t.Fatal(err)
 	}
-	m.jobQueue = NewJobQueue(t.Context(), 1, m.processJob, zerolog.Nop())
-	t.Cleanup(m.jobQueue.Close)
+	m.jobQueue = NewJobQueue(m.work, 1, m.processJob, zerolog.Nop())
 	job := NewJob(JobTypeNZB, &ImportRequest{ID: "nzb-1", Name: "Show.S01", Arr: m.arr.GetOrCreate("sonarr")})
 	job.Entry = entry
 	if err = m.jobQueue.Submit(job); err != nil {
@@ -362,7 +362,9 @@ func TestShutdownDuringParseBackoffKeepsTheEntry(t *testing.T) {
 	eventually(t, "the backoff to hold the entry", func() bool {
 		return waitingJobs(m.jobQueue) == 1 && m.jobQueue.Holds("nzb-1")
 	})
-	m.jobQueue.Close()
+	if err := m.work.Stop(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	eventually(t, "the backoff to stop", func() bool { return !m.jobQueue.Holds("nzb-1") })
 	if entry := storedEntry(
 		t,
@@ -454,8 +456,7 @@ func TestHearsayIncompleteNZBFailsAtOnce(t *testing.T) {
 	m.hearsay = service
 	m.usenet = newUnreachableUsenet(t)
 	m.parseRequeueDelay = time.Hour
-	m.jobQueue = NewJobQueue(t.Context(), 1, m.processJob, zerolog.Nop())
-	t.Cleanup(m.jobQueue.Close)
+	m.jobQueue = NewJobQueue(m.work, 1, m.processJob, zerolog.Nop())
 	staged := filepath.Join(t.TempDir(), "Show.S01.nzb")
 	if err = os.WriteFile(staged, []byte("<nzb/>"), 0o600); err != nil {
 		t.Fatal(err)

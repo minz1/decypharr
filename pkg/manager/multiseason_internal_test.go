@@ -118,7 +118,7 @@ func TestDeletingSeasonPackRemovesInFlightSeason(t *testing.T) {
 		if deleteErr := m.queue.Delete(entry.InfoHash, true, nil); deleteErr != nil {
 			t.Fatal(deleteErr)
 		}
-		m.downloadTasks.Wait()
+		waitWorkIdle(t, m)
 		synctest.Wait()
 		for _, child := range children {
 			checkSeasonAfterPackDelete(t, m, child, child.InfoHash == completed.InfoHash)
@@ -168,7 +168,7 @@ func TestDeletingSeasonPackKeepsSharedFolder(t *testing.T) {
 		if deleteErr := m.queue.Delete(entry.InfoHash, false, nil); deleteErr != nil {
 			t.Fatal(deleteErr)
 		}
-		m.downloadTasks.Wait()
+		waitWorkIdle(t, m)
 		synctest.Wait()
 
 		for _, child := range children {
@@ -187,7 +187,6 @@ func newSeasonPackTest(t *testing.T, name string) (*Manager, *storage.Entry, *ty
 	t.Helper()
 	m := newShutdownTestManager(t, t.TempDir())
 	m.mountManager = shutdownMount{stop: func() error { return nil }}
-	t.Cleanup(func() { _ = m.Stop() })
 	entry := &storage.Entry{
 		InfoHash:       "0123456789012345678901234567890123456789",
 		Name:           name,

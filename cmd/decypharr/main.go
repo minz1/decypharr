@@ -7,8 +7,6 @@ import (
 	"runtime"
 	"strconv"
 
-	"github.com/rs/zerolog"
-
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/internal/task"
@@ -71,11 +69,10 @@ func Start(ctx context.Context, dataDir string) error {
 // the P1-mount track.
 func buildServices(gen *generation, cfg *config.Config, logs *logger.Factory) (func(), error) {
 	root := gen.root
-	log := logs.New("decypharr")
 	store := config.NewStore(cfg)
 	cleanup := runtime.GC // refresh GC once the generation is gone
 
-	mgr, err := manager.New(store, logs)
+	mgr, err := manager.New(root.Child("manager"), store, logs)
 	if err != nil {
 		return nil, err
 	}
@@ -101,37 +98,21 @@ func buildServices(gen *generation, cfg *config.Config, logs *logger.Factory) (f
 	gen.WaitReady(mgr.IsReady())
 	gen.OnRestartRejected(func(cause error) { store.MarkRestartFailed(cause) })
 
-	if err = root.Child("manager").GoCritical("run", func(ctx context.Context) error {
-		return runManager(ctx, mgr, log)
-	}); err != nil {
+	// The manager starts the mount it was given once it is ready, and stops it
+	// when its group stops, after the downloads are saved. A start step that
+	// fails fails the manager's group, and with it the generation.
+	//
+	// Known gap (P1-mount): the mount managers bound their unmount with fixed
+	// timeouts of their own (about 10s graceful plus 10s forced), not with the
+	// drain deadline. A stuck unmount can outlast the drain budget; the
+	// process then exits on the stop timeout.
+	if err = mgr.Start(); err != nil {
 		return cleanup, err
 	}
 	if err = srv.Start(root.Child("http")); err != nil {
 		return cleanup, err
 	}
 	return cleanup, startShares(root.Child("share"), mgr, cfg, logs)
-}
-
-// runManager runs the manager for the life of its group. The manager is
-// stopped inside this task, so it happens on every path (a failed Start
-// included), after the services created later have stopped, and under the
-// generation's drain deadline.
-//
-// Known gap (P1-mount): Stop also unmounts, and the mount managers bound that
-// with fixed timeouts of their own (about 10s graceful plus 10s forced), not
-// with this deadline. A stuck unmount can therefore outlast the drain budget;
-// the process then exits on the stop timeout.
-func runManager(ctx context.Context, mgr *manager.Manager, log zerolog.Logger) error {
-	defer func() {
-		if err := mgr.Stop(); err != nil {
-			log.Warn().Err(err).Msg("Failed to stop manager during shutdown")
-		}
-	}()
-	if err := mgr.Start(ctx); err != nil {
-		return err
-	}
-	<-ctx.Done()
-	return nil
 }
 
 // startShares starts NFS and SMB, when enabled, over one shared export. The

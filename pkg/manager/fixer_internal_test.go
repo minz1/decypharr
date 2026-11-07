@@ -63,7 +63,12 @@ func checkFixWithRemovedProvider(t *testing.T, existing bool) {
 	client := &replacementProvider{}
 	m := withTestConfig(
 		t,
-		&Manager{storage: store, clients: xsync.NewMap[string, debrid.Client](), logger: zerolog.Nop()},
+		&Manager{
+			work:    testGroup(t),
+			storage: store,
+			clients: xsync.NewMap[string, debrid.Client](),
+			logger:  zerolog.Nop(),
+		},
 	)
 	m.clients.Store("remaining", client)
 	fixer := NewFixer(m)
@@ -128,7 +133,7 @@ func TestRunRepairLogsEveryAttempt(t *testing.T) {
 	var logs bytes.Buffer
 	m := withTestConfig(t, &Manager{
 		storage: store, clients: xsync.NewMap[string, debrid.Client](), logger: zerolog.New(&logs),
-		entry: newEntryCache(func(string) bool { return false }, nil, nil), ctx: t.Context(),
+		entry:         newEntryCache(func(string) bool { return false }, nil, nil),
 		confirmBroken: func(context.Context, *storage.Entry) bool { return false },
 	})
 	m.clients.Store("first", &refusingProvider{err: errors.New("first refused")})
@@ -198,7 +203,7 @@ func TestMoveTorrentRefreshesWhenClearingBad(t *testing.T) {
 func TestFixTorrentReleasesAllWaiters(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
-		fixer := NewFixer(withTestConfig(t, &Manager{logger: zerolog.Nop()}))
+		fixer := NewFixer(withTestConfig(t, &Manager{work: testGroup(t), logger: zerolog.Nop()}))
 		entry := &storage.Entry{InfoHash: "hash", Name: "release", Protocol: config.ProtocolTorrent}
 		inFlight := &FixerRequest{InfoHash: entry.InfoHash, done: make(chan struct{})}
 		fixer.inFlightRepairs.Store(entry.InfoHash, inFlight)
@@ -227,7 +232,7 @@ func TestFixTorrentReleasesAllWaiters(t *testing.T) {
 
 func TestResetFailureStateClearsPerDebridFailures(t *testing.T) {
 	t.Parallel()
-	fixer := NewFixer(withTestConfig(t, &Manager{logger: zerolog.Nop()}))
+	fixer := NewFixer(withTestConfig(t, &Manager{work: testGroup(t), logger: zerolog.Nop()}))
 	fixer.failedToReinsert.Store(failureKey("hash", "provider"), struct{}{})
 	fixer.failedToReinsert.Store("hash", struct{}{})
 	fixer.failedToReinsert.Store(failureKey("other", "provider"), struct{}{})

@@ -78,11 +78,7 @@ func (m *Manager) LastPruneReport() PruneReport {
 }
 
 func (m *Manager) RunPruneNow(opts PruneOptions) (PruneReport, error) {
-	ctx := m.ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	return m.RunPrune(ctx, opts)
+	return m.RunPrune(m.work.Context(), opts)
 }
 
 func (m *Manager) RunPrune(ctx context.Context, opts PruneOptions) (PruneReport, error) {

@@ -8,10 +8,8 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -23,6 +21,8 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/logger"
+	"github.com/sirrobot01/decypharr/internal/state"
+	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/arr/reacquire"
@@ -38,7 +38,6 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/strm"
 	"github.com/sirrobot01/decypharr/pkg/usenet"
 	"github.com/sirrobot01/decypharr/pkg/usenet/parser"
-	"github.com/sirrobot01/decypharr/pkg/version"
 )
 
 // Streaming HTTP transport tuning and manager defaults.
@@ -77,9 +76,22 @@ type Manager struct {
 	arrService   *reacquire.Service
 	arrIndexer   *reacquire.Indexer
 	logger       zerolog.Logger
-	ready        chan struct{}
-	readyOnce    sync.Once
 	streamClient *http.Client
+
+	// group is the manager's task group, handed in by its owner. Every child
+	// below is made from it in dependency order, so stopping the group stops
+	// the newest first; storage closes in the group's own last task.
+	group *task.Group
+	// work owns the manager's background work: download actions, the job
+	// queue and fire-and-forget calls to providers, the Arr and the mount.
+	work     *task.Group
+	children []*task.Group
+	// life is the readiness state; ready closes on its move to Ready.
+	life  *state.Atomic[lifecycle]
+	ready chan struct{}
+	// The sub-services the start sequence runs, each as a task on its own
+	// child group. A nil service is not configured.
+	hearsaySvc, reacquireSvc, indexerSvc, repairSvc, mountSvc, schedulerSvc *service
 
 	arrRecoveryMu          sync.RWMutex
 	arrRecovery            ArrRecovery
@@ -128,7 +140,6 @@ type Manager struct {
 
 	// repair
 	fixer *Fixer
-	ctx   context.Context
 
 	// strm reconciler
 	strm *strm.Reconciler
@@ -137,6 +148,7 @@ type Manager struct {
 	virtualFolders   *virtualfolders.Folders
 	mountManager     MountManager
 
+	// startTime is when the manager was built; never written afterwards.
 	startTime         time.Time
 	usenetTimeout     time.Duration
 	parseRequeueDelay time.Duration
@@ -174,16 +186,6 @@ type Manager struct {
 	jobQueue  *JobQueue
 	nzbSyncMu sync.Mutex
 
-	downloadMu    sync.Mutex
-	downloadTasks sync.WaitGroup
-	// placementRuns holds the provider deletions started when an entry is removed; Stop waits for them
-	// before it closes the storage they read.
-	placementRuns    sync.WaitGroup
-	placementMu      sync.Mutex
-	placementsClosed bool
-	downloadsStopped bool
-	cancelDownloads  context.CancelFunc
-
 	// Notifications service
 	Notifications *notifications.Service
 
@@ -194,9 +196,10 @@ type Manager struct {
 var _ repair.Backend = (*Manager)(nil)
 
 // New builds the manager for one service generation from the configuration
-// published by store. A restart builds a new Manager from a new Store; Stop
-// releases everything this one opened.
-func New(store *config.Store, logs *logger.Factory) (*Manager, error) {
+// published by store. g is the manager's task group: its owner made it with
+// parent.Child("manager") and stops it, which stops the manager's services
+// and closes what New opened. A restart builds a new Manager from a new Store.
+func New(g *task.Group, store *config.Store, logs *logger.Factory) (*Manager, error) {
 	cfg := store.Get()
 	_logger := logs.New("manager")
 
@@ -249,6 +252,9 @@ func New(store *config.Store, logs *logger.Factory) (*Manager, error) {
 	}
 
 	instance := &Manager{
+		group:                  g,
+		life:                   newLifecycle(),
+		startTime:              time.Now(),
 		storage:                strg,
 		clients:                xsync.NewMap[string, debrid.Client](),
 		logger:                 _logger,
@@ -272,7 +278,13 @@ func New(store *config.Store, logs *logger.Factory) (*Manager, error) {
 		torrentSubmissions:     newTorrentSubmissionGate(torrentSubmissionDedupWindow),
 	}
 
-	instance.init()
+	if err = instance.init(); err != nil {
+		// The group may be stopped already; storage is the one thing New opened that nothing else closes.
+		if closeErr := strg.Close(); closeErr != nil {
+			_logger.Warn().Err(closeErr).Msg("Failed to close storage after a failed start")
+		}
+		return nil, err
+	}
 	return instance, nil
 }
 
@@ -281,8 +293,10 @@ func (m *Manager) folderNaming() config.WebDavFolderNaming {
 	return m.store.Get().FolderNaming
 }
 
-func (m *Manager) init() {
-	m.ctx, m.cancelDownloads = context.WithCancel(context.Background())
+func (m *Manager) init() error {
+	if err := m.registerServices(); err != nil {
+		return err
+	}
 	cfg := m.config
 	scheduler, err := gocron.NewScheduler(
 		gocron.WithLocation(time.Local),
@@ -341,7 +355,7 @@ func (m *Manager) init() {
 
 	// Initialize strm reconciler
 	m.strm = strm.NewReconciler(
-		m.ctx,
+		m.work.Context(),
 		m.store,
 		m.storage,
 		func(ctx context.Context, entry *storage.Entry, filename string) (io.ReadCloser, error) {
@@ -388,6 +402,13 @@ func (m *Manager) init() {
 
 	// Initialize the unified active-download queue after all processors exist.
 	m.initJobQueue()
+
+	// Storage closes last: this task ends when the group's own context does,
+	// which is after every child group has stopped.
+	if err = m.group.Go("storage", m.closeStorage); err != nil {
+		return fmt.Errorf("own the manager's storage: %w", err)
+	}
+	return nil
 }
 
 func (m *Manager) initArrServices() {
@@ -448,7 +469,7 @@ func (m *Manager) initLinkService() {
 }
 
 func (m *Manager) initJobQueue() {
-	m.jobQueue = NewJobQueue(m.ctx, m.config.MaxActiveDownloads, m.processJob, m.logs.New("jobqueue"))
+	m.jobQueue = NewJobQueue(m.work, m.config.MaxActiveDownloads, m.processJob, m.logs.New("jobqueue"))
 	// Restore persisted active/queued downloads in the background. With large
 	// queues this re-parses thousands of NZBs over the network, and running it
 	// inline blocked manager construction — and therefore the HTTP server —
@@ -456,26 +477,22 @@ func (m *Manager) initJobQueue() {
 	// "download client unavailable". Backgrounding lets the API serve and the
 	// worker pool drain immediately while the restore catches up.
 	entries, err := m.restoreSnapshot()
-	m.startDownloadTask(func() {
-		defer func() {
-			if r := recover(); r != nil {
-				m.logger.Error().Interface("panic", r).Msg("Recovered from panic while restoring active downloads")
-			}
-		}()
-		m.restoreActiveDownloadJobs(entries, err)
-	})
+	if startErr := m.runWork(
+		"restore-downloads",
+		func() { m.restoreActiveDownloadJobs(entries, err) },
+	); startErr != nil {
+		m.logger.Warn().Err(startErr).Msg("Active downloads not restored: the manager is stopping")
+	}
 }
 
-// startDownloadTask registers work before shutdown can wait for it.
-// Once shutdown starts, queued entries stay in storage for the next start.
-func (m *Manager) startDownloadTask(task func()) bool {
-	m.downloadMu.Lock()
-	defer m.downloadMu.Unlock()
-	if m.downloadsStopped {
-		return false
-	}
-	m.downloadTasks.Go(task)
-	return true
+// runWork runs fn as a task of the work group, which the manager's stop
+// cancels and waits for. Once the manager stops it starts nothing and
+// returns task.ErrStopped: queued entries stay in storage for the next start.
+func (m *Manager) runWork(name string, fn func()) error {
+	return m.work.Go(name, func(context.Context) error {
+		fn()
+		return nil
+	})
 }
 
 func (m *Manager) processJob(ctx context.Context, job *Job) {
@@ -642,132 +659,6 @@ func (m *Manager) migrate() {
 	m.logger.Info().Msg("Automatic migration started successfully")
 }
 
-// Start starts the manager and all its components.
-func (m *Manager) Start(ctx context.Context) error {
-	m.startTime = time.Now()
-	m.logger.Info().
-		Str("version", version.GetInfo().String()).
-		Str("mount_type", string(m.config.Mount.Type)).
-		Str("notifications", strconv.FormatBool(m.Notifications.IsEnabled())).
-		Str("mount_path", m.config.Mount.MountPath).
-		Msg("Starting manager")
-
-	// run the migration process
-	m.migrate()
-
-	if m.arrService != nil {
-		if err := m.arrService.Start(ctx); err != nil {
-			return fmt.Errorf("failed to start Arr reacquisition service: %w", err)
-		}
-	}
-	if m.arrIndexer != nil {
-		if err := m.arrIndexer.Start(ctx); err != nil {
-			return fmt.Errorf("failed to start Arr indexer: %w", err)
-		}
-	}
-
-	go func() {
-		m.syncTorrents(ctx)
-		// Sync NZBs
-		if err := m.syncNZBs(ctx); err != nil {
-			m.logger.Error().Err(err).Msg("Failed to perform initial NZB syncTorrents")
-		}
-		if fixNZB := os.Getenv("DECYPHARR_FIX_NZB_SIZES"); fixNZB == "1" {
-			m.logger.Info().Msg("Starting NZB file size correction as requested by environment variable")
-			m.fixNZBFileSizes(ctx)
-		}
-		// Converge the .strm export tree with config applied since last run.
-		m.strm.SweepAsync("startup")
-	}()
-
-	// Start workers
-	if err := m.StartWorker(ctx); err != nil {
-		return fmt.Errorf("failed to start manager worker: %w", err)
-	}
-
-	// Start network participation when the operator opted in.
-	if m.hearsay != nil {
-		if err := m.hearsay.Start(ctx); err != nil {
-			m.logger.Warn().Err(err).Msg("Failed to start hearsay network participation")
-		}
-	}
-
-	// Close ready channel once, safe for multiple calls
-	m.readyOnce.Do(func() {
-		close(m.ready)
-	})
-
-	// Start the mount manager if set
-	// This also start thr mounting process
-	if m.mountManager != nil {
-		if err := m.mountManager.Start(ctx); err != nil {
-			// If mount manager fails to start, we log the error but continue running the manager
-			m.logger.Error().Err(err).Msg("Failed to start mount manager, continuing without mounting")
-			return nil
-		}
-	}
-
-	return nil
-}
-
-// Stop stops the manager and cleans up all resources.
-func (m *Manager) Stop() error {
-	m.logger.Info().Msg("Stopping manager")
-	m.downloadMu.Lock()
-	m.downloadsStopped = true
-	if m.cancelDownloads != nil {
-		m.cancelDownloads()
-	}
-	m.downloadMu.Unlock()
-
-	m.stopSchedulers()
-
-	if m.jobQueue != nil {
-		m.logger.Info().Msg("Closing active download queue")
-		m.jobQueue.Close()
-	}
-
-	m.downloadTasks.Wait()
-
-	// Downloads have saved their final or resumable state.
-	if m.mountManager != nil {
-		m.logger.Info().Msg("Stopping mount manager")
-		if err := m.mountManager.Stop(); err != nil {
-			m.logger.Warn().Err(err).Msg("Failed to stop mount manager")
-		}
-	}
-	if m.repair != nil {
-		m.repair.Stop()
-	}
-	m.closeArrServices()
-
-	// What can start a provider deletion (the repair, the reacquire worker, the API) has stopped. The deletions in
-	// flight read the storage and may delete usenet placements, so they end before either closes, and none starts
-	// after.
-	m.closePlacementRuns()
-
-	// Close usenet connection manager if active
-	if m.usenet != nil {
-		m.logger.Info().Msg("Closing usenet connections")
-		if err := m.usenet.Close(); err != nil {
-			m.logger.Warn().Err(err).Msg("Failed to close usenet")
-		}
-	}
-
-	m.hearsay.Close()
-
-	// Close storage
-	if m.storage != nil {
-		m.logger.Info().Msg("Closing storage database")
-		if err := m.storage.Close(); err != nil {
-			m.logger.Warn().Err(err).Msg("Failed to close storage")
-		}
-	}
-
-	m.logger.Info().Msg("Manager stopped successfully")
-	return nil
-}
-
 func (m *Manager) stopSchedulers() {
 	if m.scheduler != nil {
 		if err := m.scheduler.Shutdown(); err != nil {
@@ -783,23 +674,6 @@ func (m *Manager) stopSchedulers() {
 
 // queueCleanupLedgerName is the file, under the db directory, that holds the searches queue cleanup owes.
 const queueCleanupLedgerName = "queue_cleanup_searches.db"
-
-func (m *Manager) closeArrServices() {
-	if m.arr != nil {
-		if err := m.arr.Close(); err != nil {
-			m.logger.Warn().Err(err).Msg("Failed to close the queue cleanup search ledger")
-		}
-	}
-	if m.arrIndexer != nil {
-		m.arrIndexer.Close()
-	}
-	if m.arrService != nil {
-		if err := m.arrService.Close(); err != nil {
-			m.logger.Warn().Err(err).Msg("Failed to close Arr reacquisition service")
-		}
-	}
-	m.SetArrRecovery(nil)
-}
 
 func (m *Manager) GetStats() (map[string]any, error) {
 	count, err := m.storage.Count()
@@ -830,18 +704,6 @@ func (m *Manager) GetStats() (map[string]any, error) {
 		"completed_jobs": completedJobs,
 		"failed_jobs":    failedJobs,
 	}, nil
-}
-
-func (m *Manager) IsReady() chan struct{} {
-	return m.ready
-}
-
-func (m *Manager) Uptime() time.Duration {
-	return time.Since(m.startTime)
-}
-
-func (m *Manager) StartTime() time.Time {
-	return m.startTime
 }
 
 // CRUD operations
@@ -876,7 +738,10 @@ func (m *Manager) AddOrUpdate(entry *storage.Entry, callback func(t *storage.Ent
 		m.strm.SyncEntryAsync(entry)
 	}
 	if callback != nil {
-		go callback(entry)
+		// The callback only refreshes derived views; a stopping manager drops it.
+		if err := m.runWork("add-or-update-callback", func() { callback(entry) }); err != nil {
+			m.logger.Debug().Err(err).Str("infohash", entry.InfoHash).Msg("Dropped the save callback")
+		}
 	}
 	return nil
 }
@@ -923,11 +788,13 @@ func (m *Manager) DeleteEntry(infohash string, removePlacements bool) error {
 	m.strm.RemoveEntryAsync(torr)
 	// Refresh entry cache
 	m.InvalidateEntryCache()
-	go func() {
+	if workErr := m.runWork("refresh-mount", func() {
 		if refreshMountErr := m.RefreshMount(); refreshMountErr != nil {
 			m.logger.Error().Err(refreshMountErr).Msg("Mount refresh after entry deletion failed")
 		}
-	}()
+	}); workErr != nil {
+		m.logger.Debug().Err(workErr).Msg("Skipped the mount refresh after entry deletion")
+	}
 	return nil
 }
 
@@ -959,7 +826,7 @@ func (m *Manager) SubmitJob(job *Job) error {
 // awaitsJob reports whether a queued entry may still get a job: before the restore, while the job queue holds one,
 // or during shutdown (the next start restores it). Holds goes first: shutdown cancels before it releases holds.
 func (m *Manager) awaitsJob(infoHash string) bool {
-	return !m.queueRestored.Load() || m.jobQueue.Holds(infoHash) || m.ctx.Err() != nil
+	return !m.queueRestored.Load() || m.jobQueue.Holds(infoHash) || m.work.Context().Err() != nil
 }
 
 // slotFreed wakes a job throttled by provider: an active download there finished, failed or was removed.

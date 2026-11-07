@@ -30,6 +30,7 @@ func newDroppedTestManager(t *testing.T, recovery ArrRecovery) (*Manager, *stora
 		{Name: "sonarr", Host: "http://localhost:8989", Token: "x"},
 	}})
 	m := &Manager{
+		work:             testGroup(t),
 		clients:          xsync.NewMap[string, debrid.Client](),
 		providerMisses:   xsync.NewMap[string, map[string]struct{}](),
 		dropHookFailures: xsync.NewMap[string, map[string]int](),

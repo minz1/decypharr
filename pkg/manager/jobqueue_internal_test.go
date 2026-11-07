@@ -18,7 +18,7 @@ func holdingQueue(t *testing.T) (*JobQueue, func()) {
 	t.Helper()
 	released := make(chan struct{})
 	var q *JobQueue
-	q = NewJobQueue(t.Context(), 1, func(_ context.Context, job *Job) {
+	q = NewJobQueue(testGroup(t), 1, func(_ context.Context, job *Job) {
 		switch job.ID {
 		case "running":
 			<-released
@@ -29,7 +29,6 @@ func holdingQueue(t *testing.T) (*JobQueue, func()) {
 			}
 		}
 	}, zerolog.Nop())
-	t.Cleanup(q.Close)
 	release := sync.OnceFunc(func() { close(released) })
 	t.Cleanup(release)
 	return q, release
@@ -93,9 +92,8 @@ func TestJobQueueHoldsAJobThrottledDuringItsRun(t *testing.T) {
 // Until the persisted queue is resubmitted, a queued entry may still be waiting for its job.
 func TestQueuedEntryAwaitsAJobUntilTheQueueIsRestored(t *testing.T) {
 	t.Parallel()
-	ctx, cancel := context.WithCancel(t.Context())
-	m := &Manager{ctx: ctx, jobQueue: NewJobQueue(ctx, 1, func(context.Context, *Job) {}, zerolog.Nop())}
-	t.Cleanup(m.jobQueue.Close)
+	group := testGroup(t)
+	m := &Manager{work: group, jobQueue: NewJobQueue(group, 1, func(context.Context, *Job) {}, zerolog.Nop())}
 	if !m.awaitsJob("hash") {
 		t.Fatal("awaitsJob = false before the restore")
 	}
@@ -108,7 +106,9 @@ func TestQueuedEntryAwaitsAJobUntilTheQueueIsRestored(t *testing.T) {
 		t.Fatal("awaitsJob = false for a job waiting for a slot")
 	}
 	// Shutdown cancels every waiter before the sweep stops; restore resubmits them on the next start.
-	cancel()
+	if err := group.Stop(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if !m.awaitsJob("hash") {
 		t.Fatal("awaitsJob = false after shutdown started")
 	}
@@ -129,7 +129,7 @@ func TestOnlyAFullRestoreMarksTheQueueRestored(t *testing.T) {
 			} else {
 				t.Cleanup(func() { _ = store.Close() })
 			}
-			m := &Manager{queue: newQueue(store, "", nil, zerolog.Nop()), logger: zerolog.Nop(), ctx: t.Context()}
+			m := &Manager{queue: newQueue(store, "", nil, zerolog.Nop()), logger: zerolog.Nop(), work: testGroup(t)}
 			m.restoreActiveDownloadJobs(m.restoreSnapshot())
 			if m.queueRestored.Load() == closed {
 				t.Fatalf("queueRestored = %v after a %s", m.queueRestored.Load(), name)

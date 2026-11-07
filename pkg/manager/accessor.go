@@ -89,7 +89,7 @@ func (m *Manager) Storage() *storage.Storage {
 }
 
 func (m *Manager) Context() context.Context {
-	return m.ctx
+	return m.work.Context()
 }
 
 func (m *Manager) Usenet() *usenet.Usenet {
