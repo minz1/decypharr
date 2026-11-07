@@ -301,6 +301,24 @@ func TestGuardedUpdateNamesTheExpectedAndActualStatus(t *testing.T) {
 	}
 }
 
+// Only a refusal by the waiting guard says the job was not waiting: a guard that wanted another status must not
+// look like one, or a caller that handles errNotWaiting would act on a job that may well be waiting.
+func TestOnlyTheWaitingGuardMatchesErrNotWaiting(t *testing.T) {
+	t.Parallel()
+	fake := newFakeSonarr(t, 101)
+	rig := newFakeSonarrRig(t, fake, StrategyCommandSearch, 101)
+
+	terminal := statusGuard{want: "terminal", allows: Status.Terminal}
+	_, err := rig.service.updateJobWithDurability(rig.job.ID, StatusFailed, nil, false, terminal)
+	var unexpected *unexpectedStatusError
+	if !errors.As(err, &unexpected) {
+		t.Fatalf("err = %v, want the terminal guard to refuse a queued job", err)
+	}
+	if errors.Is(err, errNotWaiting) {
+		t.Fatalf("err = %v matches errNotWaiting, want only the waiting guard's refusal to", err)
+	}
+}
+
 func TestExpiryDoesNotFailAJobThatIsNoLongerWaiting(t *testing.T) {
 	t.Parallel()
 	fake := newFakeSonarr(t, 101)

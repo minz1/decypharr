@@ -504,11 +504,13 @@ type statusGuard struct {
 	// want names the statuses the guard allows, for the error that reports a refusal.
 	want   string
 	allows func(Status) bool
+	// refused is the sentinel a refusal matches, for callers that ask errors.Is; nil matches none.
+	refused error
 }
 
 // fromWaiting allows only a job that is waiting for its replacement.
 func fromWaiting() statusGuard {
-	return statusGuard{want: "waiting", allows: Status.waiting}
+	return statusGuard{want: "waiting", allows: Status.waiting, refused: errNotWaiting}
 }
 
 func (guard statusGuard) permits(status Status) bool {
@@ -517,18 +519,19 @@ func (guard statusGuard) permits(status Status) bool {
 
 // unexpectedStatusError reports a guarded update that found the job in another status than the guard allows.
 type unexpectedStatusError struct {
-	jobID string
-	want  string
-	got   Status
+	jobID   string
+	want    string
+	got     Status
+	refused error
 }
 
 func (err *unexpectedStatusError) Error() string {
 	return fmt.Sprintf("reacquire job %q is %s, expected a %s status", err.jobID, err.got, err.want)
 }
 
-// Is keeps the callers that ask whether the job was waiting working: this error matches errNotWaiting.
+// Is matches the refusing guard's own sentinel, so only the waiting guard's refusal reads as errNotWaiting.
 func (err *unexpectedStatusError) Is(target error) bool {
-	return target == errNotWaiting
+	return err.refused != nil && target == err.refused
 }
 
 // rebindJob queues a waiting job again with more bindings to replace.
@@ -572,7 +575,7 @@ func (s *Service) updateJobWithDurability(
 		return Job{}, fmt.Errorf("reacquire job %q not found", id)
 	}
 	if !from.permits(original.Status) {
-		return Job{}, &unexpectedStatusError{jobID: id, want: from.want, got: original.Status}
+		return Job{}, &unexpectedStatusError{jobID: id, want: from.want, got: original.Status, refused: from.refused}
 	}
 	if original.Status.Terminal() && status != original.Status {
 		return Job{}, fmt.Errorf("reacquire job %q is already %s", id, original.Status)
