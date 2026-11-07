@@ -9,6 +9,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/internal/task"
 )
 
 func TestExportServesThroughCache(t *testing.T) {
@@ -19,7 +20,7 @@ func TestExportServesThroughCache(t *testing.T) {
 	enabled := true
 	dir := filepath.Join(t.TempDir(), "share-cache")
 	export, err := NewExport(
-		context.Background(),
+		task.NewRoot(t.Context(), "test", zerolog.Nop()),
 		mgr,
 		config.ShareCache{Enabled: &enabled, Dir: dir, MaxSize: "1GB"},
 		zerolog.Nop(),
@@ -61,7 +62,8 @@ func TestExportWithoutCache(t *testing.T) {
 	addEntry(t, mgr, "Example Show", map[string]int64{"a.mkv": 1})
 
 	dir := filepath.Join(t.TempDir(), "share-cache")
-	export, err := NewExport(context.Background(), mgr, config.ShareCache{Dir: dir}, zerolog.Nop())
+	group := task.NewRoot(t.Context(), "test", zerolog.Nop())
+	export, err := NewExport(group, mgr, config.ShareCache{Dir: dir}, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}
