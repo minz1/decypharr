@@ -74,7 +74,9 @@ type Handler[K comparable, M, S any] interface {
 	// Handle processes one message for key and may change its state. It runs
 	// on the key's goroutine, one message at a time. It must not block on
 	// I/O: slow work runs as a child task (fx.Go) and reports back with a
-	// message. ctx ends when the runner stops.
+	// message. ctx ends when the runner stops. Use only the ctx passed to
+	// Handle (or one derived from it): it marks the call as a handler's, which
+	// is how Ask refuses to run from inside one.
 	Handle(ctx context.Context, key K, st *S, msg M, fx *Effects[K, M])
 }
 
