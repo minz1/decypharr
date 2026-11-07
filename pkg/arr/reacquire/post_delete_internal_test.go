@@ -283,6 +283,23 @@ func TestJobRequeuedDuringTheExpirySearchStaysQueued(t *testing.T) {
 	}
 }
 
+// A guarded update that is refused says which statuses it wanted and which it found, and still matches the error
+// the callers that only ask whether the job was waiting look for.
+func TestGuardedUpdateNamesTheExpectedAndActualStatus(t *testing.T) {
+	t.Parallel()
+	fake := newFakeSonarr(t, 101)
+	rig := newFakeSonarrRig(t, fake, StrategyCommandSearch, 101)
+
+	_, err := rig.service.updateJobWithDurability(rig.job.ID, StatusFailed, nil, false, fromWaiting())
+	if !errors.Is(err, errNotWaiting) {
+		t.Fatalf("err = %v, want it to match errNotWaiting", err)
+	}
+	var unexpected *unexpectedStatusError
+	if !errors.As(err, &unexpected) || unexpected.got != StatusQueued || unexpected.want != "waiting" {
+		t.Fatalf("err = %v, want an unexpectedStatusError that wanted waiting and found %s", err, StatusQueued)
+	}
+}
+
 func TestExpiryDoesNotFailAJobThatIsNoLongerWaiting(t *testing.T) {
 	t.Parallel()
 	fake := newFakeSonarr(t, 101)

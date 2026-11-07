@@ -67,7 +67,7 @@ func (s *Service) stopWithCompensation(
 	id string,
 	progress JobProgress,
 	cause error,
-	from func(Status) bool,
+	from statusGuard,
 ) bool {
 	searchNote := "no compensating search was sent"
 	if job, ok := s.Job(id); ok {
@@ -81,7 +81,7 @@ func (s *Service) stopWithCompensation(
 			}
 		}
 	}
-	if job, ok := s.Job(id); ok && from != nil && !from(job.Status) {
+	if job, ok := s.Job(id); ok && !from.permits(job.Status) {
 		// A replacement can be indexed while the search is sent, and indexing completes a waiting job: it is ready
 		// then, which is the better ending. A job that moved elsewhere is left to whatever moved it.
 		s.logger.Debug().Str("job_id", id).Str("status", string(job.Status)).
@@ -147,18 +147,18 @@ func (s *Service) expireWaitingJob(ctx context.Context, id string) {
 		// and cannot overlap; holding the status makes that independent of the loop. Every held update runs
 		// completeJobFromIndex, and so does a binding indexed from another goroutine, so a replacement that
 		// arrives meanwhile completes the job; stopWithCompensation then leaves it ready.
-		held := &serviceJobProgress{service: s, jobID: id, from: Status.waiting}
+		held := &serviceJobProgress{service: s, jobID: id, from: fromWaiting()}
 		s.stopWithCompensation(
 			ctx,
 			s.currentHandler(),
 			id,
 			heldProgress{inner: held, status: job.Status},
 			cause,
-			Status.waiting,
+			fromWaiting(),
 		)
 		return
 	}
 	_, _ = s.updateJobWithDurability(id, StatusFailed, func(job *Job) {
 		job.LastError = cause.Error()
-	}, false, Status.waiting)
+	}, false, fromWaiting())
 }

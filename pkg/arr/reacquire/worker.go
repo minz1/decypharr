@@ -459,7 +459,7 @@ func (s *Service) settleFailure(
 	}
 	if current.hasConfirmedFileDelete() && !current.hasConfirmedSearchOrGrab() {
 		// The file is gone and nothing is searching for it: search, then let an operator look.
-		return s.stopWithCompensation(ctx, handler, current.ID, progress, err, nil)
+		return s.stopWithCompensation(ctx, handler, current.ID, progress, err, statusGuard{})
 	}
 	if operator {
 		return s.stopReconciliation(current.ID, err)
@@ -490,14 +490,46 @@ func (s *Service) nextJob() (Job, bool) {
 }
 
 func (s *Service) updateJob(id string, status Status, mutate func(*Job)) (Job, error) {
-	return s.updateJobWithDurability(id, status, mutate, false, nil)
+	return s.updateJobWithDurability(id, status, mutate, false, statusGuard{})
 }
 
 func (s *Service) updateJobDurable(id string, status Status, mutate func(*Job)) (Job, error) {
-	return s.updateJobWithDurability(id, status, mutate, true, nil)
+	return s.updateJobWithDurability(id, status, mutate, true, statusGuard{})
 }
 
 var errNotWaiting = errors.New("reacquire job is not waiting")
+
+// statusGuard limits the statuses an update may move a job out of. The zero value allows any.
+type statusGuard struct {
+	// want names the statuses the guard allows, for the error that reports a refusal.
+	want   string
+	allows func(Status) bool
+}
+
+// fromWaiting allows only a job that is waiting for its replacement.
+func fromWaiting() statusGuard {
+	return statusGuard{want: "waiting", allows: Status.waiting}
+}
+
+func (guard statusGuard) permits(status Status) bool {
+	return guard.allows == nil || guard.allows(status)
+}
+
+// unexpectedStatusError reports a guarded update that found the job in another status than the guard allows.
+type unexpectedStatusError struct {
+	jobID string
+	want  string
+	got   Status
+}
+
+func (err *unexpectedStatusError) Error() string {
+	return fmt.Sprintf("reacquire job %q is %s, expected a %s status", err.jobID, err.got, err.want)
+}
+
+// Is keeps the callers that ask whether the job was waiting working: this error matches errNotWaiting.
+func (err *unexpectedStatusError) Is(target error) bool {
+	return target == errNotWaiting
+}
 
 // rebindJob queues a waiting job again with more bindings to replace.
 func (s *Service) rebindJob(id string, bindings []Binding) error {
@@ -527,7 +559,7 @@ func (s *Service) updateJobWithDurability(
 	status Status,
 	mutate func(*Job),
 	durable bool,
-	from func(Status) bool,
+	from statusGuard,
 ) (Job, error) {
 	if !status.valid() {
 		return Job{}, fmt.Errorf("invalid reacquire status %q", status)
@@ -539,8 +571,8 @@ func (s *Service) updateJobWithDurability(
 	if !ok {
 		return Job{}, fmt.Errorf("reacquire job %q not found", id)
 	}
-	if from != nil && !from(original.Status) {
-		return Job{}, fmt.Errorf("reacquire job %q is %s: %w", id, original.Status, errNotWaiting)
+	if !from.permits(original.Status) {
+		return Job{}, &unexpectedStatusError{jobID: id, want: from.want, got: original.Status}
 	}
 	if original.Status.Terminal() && status != original.Status {
 		return Job{}, fmt.Errorf("reacquire job %q is already %s", id, original.Status)
@@ -637,7 +669,7 @@ type serviceJobProgress struct {
 	jobID   string
 	waiting atomic.Bool
 	// from, when set, limits the statuses an update may move the job out of.
-	from func(Status) bool
+	from statusGuard
 }
 
 func (progress *serviceJobProgress) Update(status Status, mutate func(*Job)) error {
