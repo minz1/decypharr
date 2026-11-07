@@ -915,6 +915,8 @@ func parseRepairHealthStatus(raw string) (storage.HealthStatus, bool) {
 		return storage.HealthUnknown, true
 	case storage.HealthUnsupported:
 		return storage.HealthUnsupported, true
+	case storage.HealthHeld:
+		return storage.HealthHeld, true
 	default:
 		return "", false
 	}

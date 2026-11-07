@@ -259,12 +259,45 @@ type RepairConfig struct {
 	// fires mid-repair-sweep, AutoRepair decides what happens to whatever was
 	// already found broken: repaired if true, left alone if false.
 	StopSchedule string `json:"stop_schedule,omitempty"`
+
+	// The keys below tune the confirmation gap and the outage breaker that gates every heal. Zero (or an
+	// invalid value) means the default, never unlimited; BreakerSettings holds the resolved values.
+
+	// ConfirmGap is the least time between the first and the second observation of a broken file (default 1h).
+	ConfirmGap string `json:"confirm_gap,omitempty"`
+	// BreakerMinConfirmed is the confirmed-entry count below which a bucket never trips (default 10).
+	BreakerMinConfirmed int `json:"breaker_min_confirmed,omitempty"`
+	// BreakerPercent trips a bucket whose confirmed share of the probed entries reaches it (default 5).
+	BreakerPercent int `json:"breaker_percent,omitempty"`
+	// BreakerConfirmed trips a bucket outright at this many confirmed entries (default 50).
+	BreakerConfirmed int `json:"breaker_confirmed,omitempty"`
+	// BreakerReleaseAfter is how long a bucket stays tripped before a later run may release it (default 1h).
+	BreakerReleaseAfter string `json:"breaker_release_after,omitempty"`
+	// HealCapPerBucket and HealCapPerRun bound the heals one bucket and one run or rolling window may start
+	// (defaults 25 and 50).
+	HealCapPerBucket int `json:"heal_cap_per_bucket,omitempty"`
+	HealCapPerRun    int `json:"heal_cap_per_run,omitempty"`
+	// CanarySize is how many recently good entries are probed before a bucket heals (default 3), taken from
+	// those last good within CanaryRecent (default 24h) or else CanaryFallback (default 7d); a verdict is
+	// reused for CanaryCache (default 15m).
+	CanarySize     int    `json:"canary_size,omitempty"`
+	CanaryRecent   string `json:"canary_recent,omitempty"`
+	CanaryFallback string `json:"canary_fallback,omitempty"`
+	CanaryCache    string `json:"canary_cache,omitempty"`
+	// BreakerWindow is the rolling window of the heal ledger and of trips outside a sweep (default 1h).
+	BreakerWindow string `json:"breaker_window,omitempty"`
 }
 
 func (r RepairConfig) IsZero() bool {
 	return !r.Enabled && r.Source == "" && r.Schedule == "" && r.Workers == 0 &&
 		r.NNTPConnectionPercent == 0 && r.Strategy == "" && r.RecheckInterval == "" && len(r.Arrs) == 0 &&
-		!r.AutoRepair && r.StopSchedule == ""
+		!r.AutoRepair && r.StopSchedule == "" && r.breakerKeysZero()
+}
+
+func (r RepairConfig) breakerKeysZero() bool {
+	return r.ConfirmGap == "" && r.BreakerMinConfirmed == 0 && r.BreakerPercent == 0 && r.BreakerConfirmed == 0 &&
+		r.BreakerReleaseAfter == "" && r.HealCapPerBucket == 0 && r.HealCapPerRun == 0 && r.CanarySize == 0 &&
+		r.CanaryRecent == "" && r.CanaryFallback == "" && r.CanaryCache == "" && r.BreakerWindow == ""
 }
 
 type Config struct {

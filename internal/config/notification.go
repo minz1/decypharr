@@ -12,6 +12,8 @@ const (
 	EventRepairComplete   NotificationEvent = "repair_complete"
 	EventRepairFailed     NotificationEvent = "repair_failed"
 	EventRepairCancelled  NotificationEvent = "repair_cancelled"
+	// EventRepairBreaker fires when the outage breaker starts holding a bucket's heals.
+	EventRepairBreaker NotificationEvent = "repair_breaker_tripped"
 )
 
 // Notifications holds all notification configuration.

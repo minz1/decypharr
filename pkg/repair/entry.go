@@ -77,7 +77,7 @@ func (r *Service) probeEntry(
 		h.FailureReason = topReason(broken)
 	case storage.HealthUnknown:
 		h.FailureReason = firstFailureReason(results)
-	case storage.HealthRepairing, storage.HealthUnsupported, storage.HealthStale:
+	case storage.HealthRepairing, storage.HealthUnsupported, storage.HealthStale, storage.HealthHeld:
 		// rollupStatus never produces these.
 	}
 	r.saveHealth(h)

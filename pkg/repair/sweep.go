@@ -192,7 +192,7 @@ func (r *Service) probeAndHealCandidates(
 				run.Stats.Broken++
 			case storage.HealthUnknown, storage.HealthUnsupported:
 				run.Stats.Unknown++
-			case storage.HealthRepairing, storage.HealthStale:
+			case storage.HealthRepairing, storage.HealthStale, storage.HealthHeld:
 				// A finished probe never leaves these; nothing to count.
 			}
 			r.saveRun(run)

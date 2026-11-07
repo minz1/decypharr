@@ -181,6 +181,10 @@ const (
 	HealthRepairing   HealthStatus = "repairing"
 	HealthUnsupported HealthStatus = "unsupported"
 	HealthStale       HealthStatus = "stale"
+	// HealthHeld is an entry confirmed broken whose heal the breaker is holding back. It is deliberately not
+	// HealthBroken: a binary that predates it must never read a held entry as one it may heal. The BrokenFiles
+	// stay so the entry is still described, and the next run probes it again before any heal.
+	HealthHeld HealthStatus = "held"
 )
 
 // ArrKind narrows BrokenFile.ArrName to a typed Arr (sonarr / radarr / ...).
@@ -215,6 +219,13 @@ type BrokenFile struct {
 	ArrFileID  int     `json:"arr_file_id,omitempty"`
 	TargetPath string  `json:"target_path,omitempty"`
 	SourcePath string  `json:"source_path,omitempty"`
+
+	// Provider is the active provider whose probe failed ("usenet" for NZBs); it names the breaker bucket.
+	Provider string `json:"provider,omitempty"`
+	// FirstSeenAt and FirstSeenRunID record the first observation of this failure. A second observation
+	// confirms it only from a different run and a minimum gap later; rows without them count as a first one.
+	FirstSeenAt    time.Time `json:"first_seen_at,omitzero"`
+	FirstSeenRunID string    `json:"first_seen_run_id,omitempty"`
 }
 
 // EntryHealth is the source of truth for repair decisions. It is keyed by
@@ -242,6 +253,10 @@ type EntryHealth struct {
 	ActiveRunID    string       `json:"active_run_id,omitempty"`
 	PreviousStatus HealthStatus `json:"previous_status,omitempty"`
 
+	// HeldBucket and HeldAt describe a HealthHeld entry: the breaker bucket holding it and since when.
+	HeldBucket string    `json:"held_bucket,omitempty"`
+	HeldAt     time.Time `json:"held_at,omitzero"`
+
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
@@ -261,7 +276,7 @@ func (h *EntryHealth) IsDue(now time.Time, recheck time.Duration) bool {
 	switch h.Status {
 	case HealthHealthy, HealthUnsupported:
 		// fall through to staleness check
-	case HealthUnknown, HealthBroken, HealthRepairing, HealthStale:
+	case HealthUnknown, HealthBroken, HealthRepairing, HealthStale, HealthHeld:
 		return true
 	default:
 		return true
