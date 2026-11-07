@@ -212,7 +212,8 @@ func TestReplacementLandingDuringTheExpirySearchEndsTheJobReady(t *testing.T) {
 	if strings.Contains(logged, `"level":"error"`) || strings.Contains(logged, `"level":"warn"`) {
 		t.Fatalf("a replacement that completed the job was logged as a problem: %s", logged)
 	}
-	if !strings.Contains(logged, "completed while it was searched for") {
+	if !strings.Contains(logged, "left waiting while it was searched for") ||
+		!strings.Contains(logged, `"status":"ready"`) {
 		t.Fatalf("the completion was not logged at debug: %s", logged)
 	}
 }

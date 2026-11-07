@@ -85,7 +85,7 @@ func (s *Service) stopWithCompensation(
 		// A replacement can be indexed while the search is sent, and indexing completes a waiting job: it is ready
 		// then, which is the better ending. A job that moved elsewhere is left to whatever moved it.
 		s.logger.Debug().Str("job_id", id).Str("status", string(job.Status)).
-			Msg("Reacquire job completed while it was searched for; left as it is")
+			Msg("Reacquire job left waiting while it was searched for; left as it is")
 		return true
 	}
 	monitorNote := "episodes are monitored again"
