@@ -58,7 +58,7 @@ func (m *Manager) Start(g *task.Group) error {
 		Str("backend", string(m.defaultBackendType)).
 		Msg("Starting DFS with backend")
 
-	vfsManager, err := vfs.NewManager(context.Background(), m.manager, m.config, m.logs)
+	vfsManager, err := vfs.NewManager(g.Child("vfs"), m.manager, m.config, m.logs)
 	if err != nil {
 		return fmt.Errorf("failed to create VFS manager: %w", err)
 	}

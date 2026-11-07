@@ -8,7 +8,7 @@ import (
 
 func TestStreamingFileCloseIsIdempotent(t *testing.T) {
 	t.Parallel()
-	item := &CacheItem{info: ItemInfo{Size: 1 << 20}}
+	item := &CacheItem{cache: &Cache{ctx: t.Context()}, info: ItemInfo{Size: 1 << 20}}
 	file := NewStreamingFile(item)
 	if file == nil {
 		t.Fatal("NewStreamingFile returned nil")
@@ -33,7 +33,7 @@ func TestStreamingFileCloseIsIdempotent(t *testing.T) {
 
 func TestStreamingFileRejectsNegativeOffset(t *testing.T) {
 	t.Parallel()
-	item := &CacheItem{info: ItemInfo{Size: 1 << 20}}
+	item := &CacheItem{cache: &Cache{ctx: t.Context()}, info: ItemInfo{Size: 1 << 20}}
 	file := NewStreamingFile(item)
 	if file == nil {
 		t.Fatal("NewStreamingFile returned nil")

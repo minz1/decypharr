@@ -40,7 +40,7 @@ func TestCacheDoesNotServeAReplacedEntrysBytes(t *testing.T) {
 	cfg.CacheCleanupInterval = time.Hour
 	cfg.CacheDiskSize = 1 << 30
 	newCache := func() *Cache {
-		cache, err := NewCache(context.Background(), backend, cfg, zerolog.Nop())
+		cache, err := NewCache(newTestGroup(t), backend, cfg, zerolog.Nop())
 		if err != nil {
 			t.Fatal(err)
 		}
