@@ -249,9 +249,9 @@ func (f *Fixer) MoveTorrent(entry *storage.Entry, debridName string, reinsert bo
 	}
 
 	// Only replace the old torrent on the same provider. Other placements stay valid.
-	var oldID string
+	var old storage.ProviderEntry
 	if source, ok := entry.Providers[debridName]; ok && source != nil && debridName == entry.ActiveProvider {
-		oldID = source.ID
+		old = *source
 	}
 
 	newDebridTorrent, err := f.submitReplacement(client, entry)
@@ -260,11 +260,15 @@ func (f *Fixer) MoveTorrent(entry *storage.Entry, debridName string, reinsert bo
 	}
 	f.adoptPlacement(entry, debridName, newDebridTorrent)
 
-	// Delete old entry from debrid if different ID
-	if oldID != "" && oldID != newDebridTorrent.ID {
-		go func() {
-			_ = client.DeleteTorrent(oldID)
-		}()
+	// Delete the old torrent from the provider if it has a different ID, unless another entry (the other seasons
+	// of a pack) still lists it.
+	if old.ID != "" && old.ID != newDebridTorrent.ID {
+		f.manager.placementRuns.Go(func() {
+			if _, releaseErr := f.manager.releasePlacement(debridName, &old, entry.InfoHash); releaseErr != nil {
+				f.manager.logger.Warn().Err(releaseErr).Str("infohash", entry.InfoHash).Str("provider", debridName).
+					Msg("Failed to delete the replaced provider torrent")
+			}
+		})
 	}
 
 	return true, nil

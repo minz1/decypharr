@@ -129,7 +129,7 @@ func (m *Manager) pruneRemovePlacements(e *storage.Entry) (bool, error) {
 		if p == nil || p.ID == "" {
 			continue
 		}
-		ran, err := m.removePlacement(name, p, e.InfoHash)
+		ran, err := m.releasePlacement(name, p, e.InfoHash)
 		if err != nil {
 			return removed, fmt.Errorf("%s/%s: %w", name, p.ID, err)
 		}
@@ -138,9 +138,19 @@ func (m *Manager) pruneRemovePlacements(e *storage.Entry) (bool, error) {
 	return removed, nil
 }
 
+// placementHeldElsewhere reports whether an entry other than self, stored or queued, lists the provider torrent id.
+// Multi-season entries share the torrent of the pack they came from, so a torrent has as many holders as entries
+// list it.
 func (m *Manager) placementHeldElsewhere(provider, id, self string) (bool, error) {
+	if m.storage == nil {
+		return false, nil
+	}
+	holds := func(e *storage.Entry) bool {
+		p := e.Providers[provider]
+		return e.InfoHash != self && p != nil && p.ID == id
+	}
 	err := m.storage.ForEachStrict(func(e *storage.Entry) error {
-		if p := e.Providers[provider]; e.InfoHash != self && p != nil && p.ID == id {
+		if holds(e) {
 			return errPlacementHeld
 		}
 		return nil
@@ -148,10 +158,17 @@ func (m *Manager) placementHeldElsewhere(provider, id, self string) (bool, error
 	if errors.Is(err, errPlacementHeld) {
 		return true, nil
 	}
-	return false, err
+	if err != nil {
+		return false, err
+	}
+	queued, err := m.storage.FilterQueued(holds)
+	return len(queued) > 0, err
 }
 
-func (m *Manager) removePlacement(provider string, p *storage.ProviderEntry, self string) (bool, error) {
+// releasePlacement deletes one provider torrent, unless an entry other than self still holds it, and frees the slot
+// it held. Every removal of a provider torrent goes through it, with the provider's lock held so that no submission
+// or holder change slips in between the recount and the delete. It reports whether the torrent was deleted.
+func (m *Manager) releasePlacement(provider string, p *storage.ProviderEntry, self string) (bool, error) {
 	id := p.ID
 	lock := m.providerLock(provider)
 	lock.Lock()

@@ -267,7 +267,7 @@ func TestRemovingAPlacementWakesAJobWaitingOnItsProvider(t *testing.T) {
 			m.jobQueue, ran = startRecordingQueue(t)
 			m.jobQueue.WaitForSlot(&Job{ID: "waiting"}, []string{"provider"}, time.Hour)
 			placement := &storage.ProviderEntry{Provider: "provider", ID: "id", Progress: progress}
-			if err := m.RemoveFromProvider(placement); err != nil {
+			if err := m.RemoveFromProvider(placement, "self"); err != nil {
 				t.Fatal(err)
 			}
 			synctest.Wait()
@@ -463,7 +463,7 @@ func TestErroredTorrentWakesOneJobNotTwo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = m.RemoveFromProvider(saved.Providers["provider"]); err != nil {
+	if err = m.RemoveFromProvider(saved.Providers["provider"], saved.InfoHash); err != nil {
 		t.Fatal(err)
 	}
 	if got := waitingJobs(m.jobQueue); got != 1 {

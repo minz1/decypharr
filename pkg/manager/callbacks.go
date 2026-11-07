@@ -8,33 +8,36 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
-func (m *Manager) RemoveFromProvider(providerEntry *storage.ProviderEntry) error {
-	if providerEntry == nil {
+// RemoveFromProvider deletes one provider torrent for the entry self, unless another entry still holds it.
+func (m *Manager) RemoveFromProvider(providerEntry *storage.ProviderEntry, self string) error {
+	if providerEntry == nil || providerEntry.ID == "" {
 		return nil
 	}
 	if providerEntry.Provider == usenetProvider {
-		if m.usenet != nil {
-			return m.usenet.Delete(providerEntry.ID)
+		if m.usenet == nil && m.removeUsenet == nil {
+			return nil
 		}
+	} else if m.ProviderClient(providerEntry.Provider) == nil {
 		return nil
 	}
-
-	client := m.ProviderClient(providerEntry.Provider)
-	if client == nil {
-		return nil
-	}
-	if err := client.DeleteTorrent(providerEntry.ID); err != nil {
-		return err
-	}
-	if providerEntry.HoldsSlot() {
-		m.slotFreed(providerEntry.Provider)
-	}
-	return nil
+	_, err := m.releasePlacement(providerEntry.Provider, providerEntry, self)
+	return err
 }
 
+// dropSourcePlacement takes the placements an entry has on provider away from it and deletes them there.
+func (m *Manager) dropSourcePlacement(entry *storage.Entry, provider string) {
+	entry.RemoveProvider(provider, func(placement *storage.ProviderEntry) error {
+		return m.RemoveFromProvider(placement, entry.InfoHash)
+	})
+}
+
+// RemoveTorrentPlacements deletes the provider torrents of an entry that is gone, except those another entry holds.
 func (m *Manager) RemoveTorrentPlacements(t *storage.Entry) {
 	for _, placement := range t.Providers {
-		_ = m.RemoveFromProvider(placement)
+		if err := m.RemoveFromProvider(placement, t.InfoHash); err != nil {
+			m.logger.Warn().Err(err).Str("infohash", t.InfoHash).Str("provider", placement.Provider).
+				Msg("Failed to delete a provider torrent of a removed entry")
+		}
 	}
 }
 
@@ -71,7 +74,7 @@ func (m *Manager) stopProviderDownload(entry *storage.Entry) {
 			return
 		}
 	}
-	if removeErr := m.RemoveFromProvider(placement); removeErr != nil {
+	if removeErr := m.RemoveFromProvider(placement, entry.InfoHash); removeErr != nil {
 		m.logger.Warn().Err(removeErr).Str("name", entry.Name).Str("debrid", placement.Provider).
 			Msg("Failed to delete the provider torrent of a removed download")
 	}

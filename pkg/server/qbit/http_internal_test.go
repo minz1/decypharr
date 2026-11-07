@@ -182,14 +182,14 @@ func TestAddBlockedOnOneProviderThrottledOnAnotherIsQueued(t *testing.T) {
 	slot := func(provider string) *storage.ProviderEntry {
 		return &storage.ProviderEntry{Provider: provider, ID: "other", Status: types.TorrentStatusDownloading}
 	}
-	if err := mgr.RemoveFromProvider(slot(realDebrid.name)); err != nil {
+	if err := mgr.RemoveFromProvider(slot(realDebrid.name), ""); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(300 * time.Millisecond)
 	if got := torBox.submits.Load(); got != 1 {
 		t.Fatalf("a freed realdebrid slot resubmitted the add (torbox submits = %d)", got)
 	}
-	if err := mgr.RemoveFromProvider(slot(torBox.name)); err != nil {
+	if err := mgr.RemoveFromProvider(slot(torBox.name), ""); err != nil {
 		t.Fatal(err)
 	}
 	for deadline := time.Now().Add(5 * time.Second); torBox.submits.Load() < 2; time.Sleep(10 * time.Millisecond) {

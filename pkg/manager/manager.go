@@ -174,8 +174,11 @@ type Manager struct {
 	jobQueue  *JobQueue
 	nzbSyncMu sync.Mutex
 
-	downloadMu       sync.Mutex
-	downloadTasks    sync.WaitGroup
+	downloadMu    sync.Mutex
+	downloadTasks sync.WaitGroup
+	// placementRuns holds the provider deletions started when an entry is removed; Stop waits for them
+	// before it closes the storage they read.
+	placementRuns    sync.WaitGroup
 	downloadsStopped bool
 	cancelDownloads  context.CancelFunc
 
@@ -723,6 +726,7 @@ func (m *Manager) Stop() error {
 	}
 
 	m.downloadTasks.Wait()
+	m.placementRuns.Wait()
 
 	// Downloads have saved their final or resumable state.
 	if m.mountManager != nil {
@@ -904,7 +908,7 @@ func (m *Manager) DeleteEntry(infohash string, removePlacements bool) error {
 	}
 	// Delete active placements from debrid clients
 	if removePlacements {
-		go m.RemoveTorrentPlacements(torr)
+		m.placementRuns.Go(func() { m.RemoveTorrentPlacements(torr) })
 	}
 
 	if deleteErr := m.storage.Delete(infohash); deleteErr != nil {
