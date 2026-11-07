@@ -51,13 +51,41 @@ type Service struct {
 // readRetries is how many times the shared client retries an Arr read.
 const readRetries = 5
 
+// Option configures a Service.
+type Option func(*Service)
+
+// WithLifetime ties the service's background work to parent: it ends when parent does or when Close is called,
+// whichever comes first. The manager passes its task group's context, so a canary probe stops with the group.
+func WithLifetime(parent context.Context) Option {
+	return func(s *Service) {
+		s.lifetime, s.stop = context.WithCancel(parent)
+	}
+}
+
+// closeContext is a context that ends when its channel is closed and has no parent, for a service that was given
+// no lifetime of its own: Close alone ends its background work.
+type closeContext struct{ done <-chan struct{} }
+
+func (closeContext) Deadline() (time.Time, bool) { return time.Time{}, false }
+func (c closeContext) Done() <-chan struct{}     { return c.done }
+func (closeContext) Value(any) any               { return nil }
+func (c closeContext) Err() error {
+	select {
+	case <-c.done:
+		return context.Canceled
+	default:
+		return nil
+	}
+}
+
 // New builds the service from the Arr instances configured in cfg. The
 // instance list and queue cleanup rules are read live from cfg.
-func New(cfg *config.Store, tlsConfig *tls.Config, log zerolog.Logger) *Service {
-	lifetime, stop := context.WithCancel(context.Background())
+func New(cfg *config.Store, tlsConfig *tls.Config, log zerolog.Logger, options ...Option) *Service {
+	done := make(chan struct{})
+	var closeOnce sync.Once
 	service := &Service{
-		lifetime:        lifetime,
-		stop:            stop,
+		lifetime:        closeContext{done: done},
+		stop:            func() { closeOnce.Do(func() { close(done) }) },
 		arrs:            make(map[string]Arr),
 		cleanupFailing:  make(map[string]bool),
 		importFailures:  make(map[string]map[string]importFailure),
@@ -80,6 +108,9 @@ func New(cfg *config.Store, tlsConfig *tls.Config, log zerolog.Logger) *Service 
 			request.WithTimeout(0),
 			request.WithMaxRetries(0),
 		),
+	}
+	for _, option := range options {
+		option(service)
 	}
 	for _, configured := range cfg.Get().Arrs {
 		instance := fromConfig(configured)
