@@ -36,7 +36,9 @@ type Service struct {
 	importFailures map[string]map[string]importFailure
 	// pendingSearches holds, per arr then queue record ID, the blocklisted records whose episode search is still owed. Guarded by mu.
 	pendingSearches map[string]map[int]pendingSearch
-	now             func() time.Time
+	// ledger keeps pendingSearches on disk, nil when no data directory was given.
+	ledger *searchLedger
+	now    func() time.Time
 }
 
 // readRetries is how many times the shared client retries an Arr read.

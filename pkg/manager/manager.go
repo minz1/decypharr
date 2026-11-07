@@ -383,6 +383,12 @@ func (m *Manager) init() {
 }
 
 func (m *Manager) initArrServices() {
+	// Queue cleanup keeps the searches it owes in a file of its own; without it they live in memory only.
+	ledgerPath := filepath.Join(m.config.Dir(), "db", queueCleanupLedgerName)
+	if err := m.arr.OpenSearchLedger(ledgerPath); err != nil {
+		m.logger.Error().Err(err).
+			Msg("Failed to open the queue cleanup search ledger; owed searches will not survive a restart")
+	}
 	service, err := reacquire.NewService(reacquire.ServiceOptions{
 		Arrs:      m.arr,
 		Directory: filepath.Join(m.config.Dir(), "db"),
@@ -744,7 +750,15 @@ func (m *Manager) stopSchedulers() {
 	}
 }
 
+// queueCleanupLedgerName is the file, under the db directory, that holds the searches queue cleanup owes.
+const queueCleanupLedgerName = "queue_cleanup_searches.db"
+
 func (m *Manager) closeArrServices() {
+	if m.arr != nil {
+		if err := m.arr.Close(); err != nil {
+			m.logger.Warn().Err(err).Msg("Failed to close the queue cleanup search ledger")
+		}
+	}
 	if m.arrIndexer != nil {
 		m.arrIndexer.Close()
 	}

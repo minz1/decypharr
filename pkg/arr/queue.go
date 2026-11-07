@@ -186,8 +186,14 @@ func (s *Service) CleanupQueue(ctx context.Context, name string) error {
 		blocklistResearch = append(blocklistResearch, arrDecides...)
 	}
 	s.blocklistQueueItems(ctx, name, blocklistResearch, QueueActionBlocklistResearch, false)
-	removed := s.blocklistQueueItems(ctx, name, blocklistSearchMissing, QueueActionBlocklistResearch, true)
-	s.searchPendingEpisodes(ctx, name, items, searched, removed)
+	s.dropRejudgedSearches(name, items)
+	// The arr forgets a download removed this way without searching for it, so the search is owed from before the
+	// removal is sent. If the owed searches cannot be recorded, nothing is removed.
+	if s.planSearches(name, searched) {
+		outcome := s.blocklistQueueItems(ctx, name, blocklistSearchMissing, QueueActionBlocklistResearch, true)
+		s.settleSearches(name, searched, outcome)
+	}
+	s.searchPendingEpisodes(ctx, name, items)
 	s.blocklistQueueItems(ctx, name, blocklist, QueueActionBlocklist, true)
 	s.removeLeftovers(ctx, name, leftovers)
 	s.mu.RLock()
@@ -382,7 +388,7 @@ func (s *Service) recheckPendingSearches(ctx context.Context, name string) {
 					pending[id] = search
 				}
 			case hasFile || !exists:
-				delete(pending, id)
+				s.dropSearchLocked(name, id)
 			}
 		}
 		s.mu.Unlock()
@@ -490,12 +496,22 @@ func splitMappedDownloads(items []QueueSchema) ([]QueueSchema, []QueueSchema) {
 	return unmapped, mapped
 }
 
-// blocklistQueueItems removes items from the arr's queue with a blocklist, names each one it removed, and reports whether it did.
+// removalOutcome is how a bulk removal ended: the arr took it, refused it, or may have taken it.
+type removalOutcome int
+
+const (
+	removalNone    removalOutcome = iota // nothing was sent
+	removalDone                          // the arr answered with success
+	removalRefused                       // the arr answered with a refusal, or the request never left
+	removalUnknown                       // the request may have reached the arr without a clear answer
+)
+
+// blocklistQueueItems removes items from the arr's queue with a blocklist, names each one it removed, and reports how it ended.
 func (s *Service) blocklistQueueItems(
 	ctx context.Context, name string, items []QueueSchema, action QueueAction, skipRedownload bool,
-) bool {
+) removalOutcome {
 	if len(items) == 0 {
-		return false
+		return removalNone
 	}
 	ids := make([]int, len(items))
 	for i, item := range items {
@@ -503,13 +519,16 @@ func (s *Service) blocklistQueueItems(
 	}
 	if err := s.removeQueueItems(ctx, name, ids, true, skipRedownload); err != nil {
 		s.logger.Error().Err(err).Str("arr", name).Str("action", string(action)).Msg("Queue cleanup: blocklist failed")
-		return false
+		if errors.Is(err, ErrMutationOutcomeUnknown) {
+			return removalUnknown
+		}
+		return removalRefused
 	}
 	for _, item := range items {
 		s.logger.Info().Str("arr", name).Str("title", item.Title).Str("download_id", item.DownloadID).
 			Str("action", string(action)).Str("status", statusText(item)).Msg("Queue cleanup: blocklisted")
 	}
-	return true
+	return removalDone
 }
 
 // removeLeftovers removes the rows of packs that did their job, keeping the release and the client's copy.
@@ -591,39 +610,119 @@ type pendingSearch struct {
 	since   time.Time
 	sentAt  time.Time
 	retryAt time.Time
+	state   ledgerState
+	// restored marks a search that was owed before this process started. It is not given up on until it was tried once.
+	restored bool
 }
 
-// searchPendingEpisodes adds the searched downloads' episodes without a file to the arr's pending searches and
-// sends those this tick removed or that have left the queue. A pending record seen in this tick's queue is dropped
-// first, since the cleanup rules have just judged it again. What the arr refuses stays pending, retried each minute
-// for up to an hour; a search whose outcome is unknown is resent only if the arr's command list does not show it.
-// shortcut: a record gone from the queue counts as removed by our blocklist, though a user, the arr or a page shift
-// in Queue() may have caused it. That risks one extra search, for an episode still without a file
-// (refreshEpisodeFiles drops the rest); check FailedHistory before searching an unconfirmed removal if it shows up live.
-func (s *Service) searchPendingEpisodes(ctx context.Context, name string, items, searched []QueueSchema, removed bool) {
+// dropRejudgedSearches drops a planned owed search whose record is in this tick's queue: the cleanup rules have just
+// judged it again, and either it was never removed or they will plan it anew. An armed one stays, since the arr
+// accepted its removal.
+func (s *Service) dropRejudgedSearches(name string, items []QueueSchema) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, item := range items {
+		if search, ok := s.pendingSearches[name][item.ID]; ok && search.state != ledgerArmed {
+			s.dropSearchLocked(name, item.ID)
+		}
+	}
+}
+
+// dropSearchLocked forgets an owed search, in memory and in the ledger. Caller must hold s.mu.
+func (s *Service) dropSearchLocked(name string, queueID int) {
+	delete(s.pendingSearches[name], queueID)
+	if err := s.ledger.remove(name, queueID); err != nil {
+		s.logger.Warn().Err(err).Str("arr", name).Int("queue_id", queueID).
+			Msg("Queue cleanup: could not drop an owed search from the ledger; it may be searched again after a restart")
+	}
+}
+
+// planSearches records the searches owed for items about to be removed without the arr's re-search, in memory and on
+// disk, before the removal is sent. It reports false, having planned nothing, when the ledger cannot take them.
+func (s *Service) planSearches(name string, searched []QueueSchema) bool {
+	var planned []pendingSearch
+	s.mu.RLock()
+	for _, item := range searched {
+		if _, owed := s.pendingSearches[name][item.ID]; !item.EpisodeHasFile && !owed {
+			planned = append(planned, pendingSearch{item: item, since: s.now(), state: ledgerPlanned})
+		}
+	}
+	s.mu.RUnlock()
+	rows := make([]ledgerRow, len(planned))
+	for i, search := range planned {
+		rows[i] = ledgerRow{Arr: name, State: ledgerPlanned, Item: search.item, Since: search.since}
+	}
+	if err := s.currentLedger().put(rows...); err != nil {
+		s.logger.Error().Err(err).Str("arr", name).
+			Msg("Queue cleanup: the owed searches could not be recorded, so nothing is removed this tick")
+		return false
+	}
+	if len(planned) == 0 {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	pending := s.pendingSearches[name]
 	if pending == nil {
 		pending = make(map[int]pendingSearch)
 		s.pendingSearches[name] = pending
 	}
-	for _, item := range items {
-		delete(pending, item.ID)
+	for _, search := range planned {
+		pending[search.item.ID] = search
 	}
+	return true
+}
+
+// settleSearches moves the searches planned for a removal on from planned: armed when the arr took the removal,
+// abandoned when it refused it. A removal of unknown outcome leaves them planned, to be searched once their record
+// has left the queue.
+func (s *Service) settleSearches(name string, searched []QueueSchema, outcome removalOutcome) {
+	if outcome != removalDone && outcome != removalRefused {
+		return
+	}
+	var rows []ledgerRow
+	s.mu.Lock()
 	for _, item := range searched {
-		if !item.EpisodeHasFile {
-			pending[item.ID] = pendingSearch{item: item, since: s.now()}
+		search, ok := s.pendingSearches[name][item.ID]
+		if !ok || search.state != ledgerPlanned {
+			continue
 		}
+		if outcome == removalRefused {
+			delete(s.pendingSearches[name], item.ID)
+			rows = append(rows, ledgerRow{Arr: name, State: ledgerAbandoned, Item: item, Since: search.since})
+			continue
+		}
+		search.state = ledgerArmed
+		s.pendingSearches[name][item.ID] = search
+		rows = append(rows, ledgerRow{Arr: name, State: ledgerArmed, Item: item, Since: search.since})
 	}
+	s.mu.Unlock()
+	if err := s.currentLedger().put(rows...); err != nil {
+		s.logger.Warn().Err(err).Str("arr", name).
+			Msg("Queue cleanup: the ledger could not be updated; a restart searches these once their record has left the queue")
+	}
+}
+
+// searchPendingEpisodes sends the owed searches that are due: those whose removal the arr took (armed), and those
+// whose record has left the queue, which covers a removal of unknown outcome and a restart after one. What the arr
+// refuses stays pending, retried each minute for up to an hour, except that a search owed from before a restart is
+// tried once whatever its age; a search whose outcome is unknown is resent only if the arr's command list does not
+// show it.
+// shortcut: a planned record gone from the queue counts as removed by our blocklist, though a user, the arr or a page
+// shift in Queue() may have caused it. That risks one extra search, for an episode still without a file
+// (refreshEpisodeFiles drops the rest); check FailedHistory before searching an unconfirmed removal if it shows up live.
+func (s *Service) searchPendingEpisodes(ctx context.Context, name string, items []QueueSchema) {
+	s.mu.Lock()
+	pending := s.pendingSearches[name]
 	due := make([]pendingSearch, 0, len(pending))
 	for id, search := range pending {
-		if s.now().Sub(search.since) >= searchGiveUpAfter {
-			delete(pending, id)
+		if !search.restored && s.now().Sub(search.since) >= searchGiveUpAfter {
+			s.dropSearchLocked(name, id)
 			s.logger.Warn().Str("arr", name).Int("episode_id", search.item.EpisodeID).
 				Msg("Queue cleanup: episode search not done after 1h, giving up; needs manual intervention")
 			continue
 		}
-		if (!hasQueueID(items, id) || removed) && !s.now().Before(search.retryAt) {
+		if (search.state == ledgerArmed || !hasQueueID(items, id)) && !s.now().Before(search.retryAt) {
 			due = append(due, search)
 		}
 	}
@@ -637,8 +736,10 @@ func (s *Service) searchPendingEpisodes(ctx context.Context, name string, items,
 	sentAt := s.now()
 	done, unknown := s.searchEpisodes(ctx, name, items)
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	pending = s.pendingSearches[name]
 	for _, item := range slices.Concat(confirmed, done) {
-		delete(pending, item.ID)
+		s.dropSearchLocked(name, item.ID)
 	}
 	for _, item := range unknown {
 		if search, ok := pending[item.ID]; ok {
@@ -649,10 +750,10 @@ func (s *Service) searchPendingEpisodes(ctx context.Context, name string, items,
 	for _, tried := range due {
 		if search, ok := pending[tried.item.ID]; ok {
 			search.retryAt = sentAt.Add(searchRetryDelay)
+			search.restored = false
 			pending[tried.item.ID] = search
 		}
 	}
-	s.mu.Unlock()
 }
 
 // unsentSearches returns the due items to search now and those the arr's command list shows were already received.
@@ -795,10 +896,17 @@ func (s *Service) removeQueueItems(ctx context.Context, name string, ids []int, 
 
 	resp, err := s.mutate(ctx, instance, http.MethodDelete, "api/v3/queue/bulk?"+query.Encode(), payload, nil)
 	if err != nil {
+		if dispatched(resp, err) {
+			return UnknownMutationOutcome(fmt.Errorf("remove queue items: %w", err), 0)
+		}
 		return fmt.Errorf("remove queue items: %w", err)
 	}
 	if expectSuccessErr := expectSuccess(resp); expectSuccessErr != nil {
-		return fmt.Errorf("remove queue items: %w", expectSuccessErr)
+		expectSuccessErr = fmt.Errorf("remove queue items: %w", expectSuccessErr)
+		if resp.StatusCode >= http.StatusInternalServerError {
+			return UnknownMutationOutcome(expectSuccessErr, 0)
+		}
+		return expectSuccessErr
 	}
 	return nil
 }

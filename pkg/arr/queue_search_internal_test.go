@@ -48,6 +48,12 @@ type researchArr struct {
 	seasons        map[seasonKey][]int
 	blocklistFails bool
 	removeBefore   int // ids a failing bulk delete still removes
+	// deleteHangsUp removes the records of a bulk delete without a re-search, then drops the connection.
+	deleteHangsUp bool
+	// deleteRefused answers a bulk delete without a re-search with 400 and removes nothing.
+	deleteRefused bool
+	// onSkipDelete runs when such a delete arrives, before it is applied.
+	onSkipDelete   func()
 	searchFails    bool
 	commands       int
 	deletes        map[string][]int
@@ -214,7 +220,24 @@ func (a *researchArr) bulkDelete(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
+	if skip == "true" && a.onSkipDelete != nil {
+		a.onSkipDelete()
+	}
+	if skip == "true" && a.deleteRefused {
+		http.Error(w, "no", http.StatusBadRequest)
+		return
+	}
 	removed := body.IDs
+	if skip == "true" && a.deleteHangsUp {
+		a.records = slices.DeleteFunc(a.records, func(record QueueSchema) bool {
+			return slices.Contains(removed, record.ID)
+		})
+		a.deletes[skip] = append(a.deletes[skip], body.IDs...)
+		if hijacked, _, err := w.(http.Hijacker).Hijack(); err == nil {
+			_ = hijacked.Close()
+		}
+		return
+	}
 	if a.blocklistFails && skip == "true" {
 		removed = body.IDs[:min(a.removeBefore, len(body.IDs))]
 	}
