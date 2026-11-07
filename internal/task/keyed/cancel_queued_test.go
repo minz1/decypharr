@@ -1,6 +1,7 @@
 package keyed_test
 
 import (
+	"errors"
 	"slices"
 	"testing"
 	"testing/synctest"
@@ -35,6 +36,29 @@ func TestCancellingATimerRemovesItsQueuedMessage(t *testing.T) {
 		synctest.Wait()
 		if got := rec.got("a"); !slices.Equal(got, []int{1, 3}) {
 			t.Fatalf("handled %v, want [1 3]: a cancelled timer is never handled", got)
+		}
+	})
+}
+
+// A recalled timer message frees no room it never took: the mailbox bound counts the same after the recall.
+func TestCancellingAQueuedTimerKeepsTheMailboxBound(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		rec := newRecorder()
+		r := keyed.New[string, msg, struct{}](newRoot(t), "recall-timer-bound", rec, keyed.Options[msg]{MailboxSize: 1})
+		release := make(chan struct{})
+		mustSend(t, r, "a", msg{id: 1, block: release})
+		synctest.Wait()
+		id := r.After("a", time.Second, msg{id: 2})
+		time.Sleep(2 * time.Second) // fired; queued behind the blocked handler
+		r.CancelTimer(id)
+
+		mustSend(t, r, "a", msg{id: 3})
+		err := r.Send("a", msg{id: 4})
+		close(release)
+		synctest.Wait()
+		if !errors.Is(err, keyed.ErrMailboxFull) {
+			t.Fatalf("second Send behind a blocked handler = %v, want ErrMailboxFull with a bound of 1", err)
 		}
 	})
 }
