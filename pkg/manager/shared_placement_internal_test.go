@@ -144,6 +144,32 @@ func TestReplacingAPlacementKeepsOneACoHolderUses(t *testing.T) {
 	}
 }
 
+// A failed storage delete leaves the entry, so its provider torrent stays too:
+// a library link bound to it must not point at a torrent that is gone.
+func TestFailedStorageDeleteKeepsTheProviderTorrent(t *testing.T) {
+	t.Parallel()
+	h := newPruneHarness(t, config.PruneModeDelete)
+	h.mount2(t)
+	h.addEntry(t, "solo", nil)
+	var itemKey string
+	for name := range h.m.storage.GetEntryItems() {
+		itemKey = name
+	}
+	if itemKey == "" {
+		t.Fatal("the entry has no name index")
+	}
+	h.corruptStore(t, "items.db", itemKey, []byte{1, 2, 3})
+
+	if err := h.m.DeleteEntry("solo", true); err == nil {
+		t.Fatal("DeleteEntry() = nil, want the storage failure")
+	}
+	h.m.placementRuns.Wait()
+	requireDeleted(t, h)
+	if !h.has("solo") {
+		t.Fatal("the entry is gone")
+	}
+}
+
 // A queued entry that holds the provider torrent counts as a holder.
 func TestAQueuedEntryCountsAsAHolder(t *testing.T) {
 	t.Parallel()

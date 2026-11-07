@@ -906,13 +906,13 @@ func (m *Manager) DeleteEntry(infohash string, removePlacements bool) error {
 	if err != nil {
 		return err
 	}
-	// Delete active placements from debrid clients
-	if removePlacements {
-		m.placementRuns.Go(func() { m.RemoveTorrentPlacements(torr) })
-	}
-
+	// The record goes first: a failed delete leaves the entry, and its provider torrent must stay with it. Once it
+	// is gone the entry no longer counts among the torrent's holders.
 	if deleteErr := m.storage.Delete(infohash); deleteErr != nil {
 		return deleteErr
+	}
+	if removePlacements {
+		m.placementRuns.Go(func() { m.RemoveTorrentPlacements(torr) })
 	}
 	m.strm.RemoveEntryAsync(torr)
 	// Refresh entry cache
