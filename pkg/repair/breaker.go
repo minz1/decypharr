@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/internal/flight"
 )
 
 // Class is the kind of failure a heal answers. With the provider it names a breaker bucket, so an outage of one
@@ -189,6 +190,7 @@ type breaker struct {
 	buckets  map[Bucket]*bucketBreaker
 	ledger   []healRecord
 	verdicts map[Bucket]canaryVerdict
+	flight   flight.Group[canaryOutcome]
 }
 
 func newBreaker(settings func() config.BreakerSettings, canary canaryFunc) *breaker {
@@ -281,15 +283,30 @@ func (b *breaker) evaluate(ctx context.Context, key Bucket, in bucketInput) buck
 	if !needCanary {
 		return out
 	}
-	verdict := canaryInconclusive
-	if b.canary != nil {
-		verdict = b.canary(ctx, key, b.settings())
-	}
+	verdict := b.probeCanary(ctx, key)
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.verdicts[key] = canaryVerdict{outcome: verdict, at: b.now()}
 	out, _ = b.stepLocked(key, in, &verdict)
 	return out
+}
+
+// probeCanary runs the canary of key's bucket and caches its verdict. Concurrent callers for one bucket share a
+// single probe, and the verdict is cached before any of them returns.
+func (b *breaker) probeCanary(ctx context.Context, key Bucket) canaryOutcome {
+	verdict, _, err := b.flight.Do(ctx, key.String(), func(ctx context.Context) (canaryOutcome, error) {
+		verdict := canaryInconclusive
+		if b.canary != nil {
+			verdict = b.canary(ctx, key, b.settings())
+		}
+		b.mu.Lock()
+		b.verdicts[key] = canaryVerdict{outcome: verdict, at: b.now()}
+		b.mu.Unlock()
+		return verdict, nil
+	})
+	if err != nil {
+		return canaryInconclusive
+	}
+	return verdict
 }
 
 // stepLocked applies one evaluation. With needCanary true it changed nothing and wants a verdict.
