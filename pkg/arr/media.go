@@ -130,13 +130,6 @@ func (s *Service) DeleteLibraryFile(ctx context.Context, name string, fileID int
 	if err != nil {
 		return err
 	}
-	var monitored []int
-	if instance.Type == Sonarr {
-		if monitored, err = s.monitoredEpisodesOfFile(ctx, instance, fileID); err != nil {
-			return err
-		}
-	}
-
 	resp, err := s.mutate(ctx, instance, http.MethodDelete, fmt.Sprintf("api/v3/%s/%d", resource, fileID), nil, nil)
 	if err != nil {
 		if dispatched(resp, err) {
@@ -154,15 +147,23 @@ func (s *Service) DeleteLibraryFile(ctx context.Context, name string, fileID int
 		}
 		return expectSuccessErr
 	}
-	if monitorErr := s.monitorEpisodes(ctx, instance, monitored); monitorErr != nil {
-		s.logger.Error().Err(monitorErr).Str("arr", name).Ints("episode_ids", monitored).Int("file_id", fileID).
-			Msg("Deleted an episode file but could not re-monitor its episodes; monitor them in the Arr")
-	}
 	return nil
 }
 
-// monitoredEpisodesOfFile lists the monitored episodes an episode file covers; Sonarr may unmonitor them on delete.
-func (s *Service) monitoredEpisodesOfFile(ctx context.Context, instance Arr, fileID int) ([]int, error) {
+// MonitoredEpisodesOfFile lists the monitored episodes an episode file covers.
+// Sonarr may unmonitor them when the file is deleted, so a caller that deletes
+// the file records them first. Radarr has none.
+func (s *Service) MonitoredEpisodesOfFile(ctx context.Context, name string, fileID int) ([]int, error) {
+	instance, err := s.instance(name)
+	if err != nil {
+		return nil, err
+	}
+	if instance.Type != Sonarr {
+		return nil, nil
+	}
+	if fileID <= 0 {
+		return nil, fmt.Errorf("list episodes of file: invalid file ID %d", fileID)
+	}
 	var monitored []int
 	endpoint := fmt.Sprintf("api/v3/episode?episodeFileId=%d", fileID)
 	resp, err := s.getDecoded(ctx, instance, endpoint, arrayResponseDecoder(func(episode sonarrEpisode) error {
@@ -180,19 +181,31 @@ func (s *Service) monitoredEpisodesOfFile(ctx context.Context, instance Arr, fil
 	return monitored, nil
 }
 
-func (s *Service) monitorEpisodes(ctx context.Context, instance Arr, episodeIDs []int) error {
+// MonitorEpisodes sets episodes monitored. It changes nothing for an episode
+// that already is, so a retry is safe. A failure is logged here as well as
+// returned: a reacquire goes on without the episodes monitored.
+func (s *Service) MonitorEpisodes(ctx context.Context, name string, episodeIDs []int) error {
 	if len(episodeIDs) == 0 {
 		return nil
+	}
+	instance, err := s.instanceOfType(name, Sonarr)
+	if err != nil {
+		return err
 	}
 	payload := struct {
 		EpisodeIDs []int `json:"episodeIds"`
 		Monitored  bool  `json:"monitored"`
 	}{EpisodeIDs: episodeIDs, Monitored: true}
 	resp, err := s.mutate(ctx, instance, http.MethodPut, "api/v3/episode/monitor", payload, nil)
-	if err != nil {
-		return err
+	if err == nil {
+		err = expectSuccess(resp)
 	}
-	return expectSuccess(resp)
+	if err != nil {
+		s.logger.Error().Err(err).Str("arr", name).Ints("episode_ids", episodeIDs).
+			Msg("Could not monitor the episodes of a deleted episode file again; monitor them in the Arr")
+		return fmt.Errorf("monitor episodes: %w", err)
+	}
+	return nil
 }
 
 func (s *Service) SearchEpisodes(ctx context.Context, name string, episodeIDs []int) (Command, error) {

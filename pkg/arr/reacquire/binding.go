@@ -205,12 +205,14 @@ type Job struct {
 	ReplacementDownloadID  string     `json:"replacementDownloadId,omitempty"`
 	ReplacementDownloadIDs []string   `json:"replacementDownloadIds,omitempty"`
 	Mutations              []Mutation `json:"mutations,omitempty"`
-	RetryAt                time.Time  `json:"retryAt,omitzero"`
-	LastError              string     `json:"lastError,omitempty"`
-	CreatedAt              time.Time  `json:"createdAt"`
-	UpdatedAt              time.Time  `json:"updatedAt"`
-	StartedAt              time.Time  `json:"startedAt,omitzero"`
-	CompletedAt            time.Time  `json:"completedAt,omitzero"`
+	// FileDeletes journals the Arr files the job deleted; see FileDelete.
+	FileDeletes []FileDelete `json:"fileDeletes,omitempty"`
+	RetryAt     time.Time    `json:"retryAt,omitzero"`
+	LastError   string       `json:"lastError,omitempty"`
+	CreatedAt   time.Time    `json:"createdAt"`
+	UpdatedAt   time.Time    `json:"updatedAt"`
+	StartedAt   time.Time    `json:"startedAt,omitzero"`
+	CompletedAt time.Time    `json:"completedAt,omitzero"`
 }
 
 func cloneJob(job Job) Job {
@@ -224,6 +226,12 @@ func cloneJob(job Job) Job {
 	job.Mutations = make([]Mutation, len(mutations))
 	for i, mutation := range mutations {
 		job.Mutations[i] = cloneMutation(mutation)
+	}
+	if fileDeletes := job.FileDeletes; fileDeletes != nil {
+		job.FileDeletes = make([]FileDelete, len(fileDeletes))
+		for i, record := range fileDeletes {
+			job.FileDeletes[i] = cloneFileDelete(record)
+		}
 	}
 	return job
 }

@@ -5,12 +5,18 @@ import (
 	"time"
 )
 
-// reconciliationDeadline uses the first intent time. Retries do not extend it.
+// reconciliationDeadline uses the first intent time, or the first unconfirmed
+// file delete, whichever is older. Retries do not extend it.
 func (job Job) reconciliationDeadline() time.Time {
 	var first time.Time
 	for _, mutation := range job.Mutations {
 		if mutation.State == MutationIntent && (first.IsZero() || mutation.IntentAt.Before(first)) {
 			first = mutation.IntentAt
+		}
+	}
+	for _, record := range job.FileDeletes {
+		if record.unconfirmed() && (first.IsZero() || record.AttemptedAt.Before(first)) {
+			first = record.AttemptedAt
 		}
 	}
 	if first.IsZero() && len(job.Mutations) == 0 {

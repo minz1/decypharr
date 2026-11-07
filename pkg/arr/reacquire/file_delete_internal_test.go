@@ -107,7 +107,9 @@ func TestFileLookupFailureIsRetriedNotFatal(t *testing.T) {
 		ArrName: "movies", ArrType: arr.Radarr, ArrFileID: 42, MovieID: 9, LibraryPath: "/library/movie.mkv",
 	}
 
-	err := handler.deleteArrFiles(t.Context(), testInstance(server.URL), []Binding{binding})
+	err := handler.deleteArrFiles(
+		t.Context(), testInstance(server.URL), &Job{}, []Binding{binding}, &recordedProgress{},
+	)
 	if !errors.Is(err, errArrLookup) {
 		t.Fatalf("deleteArrFiles() = %v, want a lookup error the worker retries", err)
 	}

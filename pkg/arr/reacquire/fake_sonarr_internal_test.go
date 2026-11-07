@@ -29,7 +29,8 @@ type fakeSonarr struct {
 	monitored   map[int]bool
 	// deleteMode decides what the next DELETE does: "ok" removes the file and
 	// answers, "drop-landed" removes the file and drops the connection,
-	// "drop-lost" drops the connection without removing the file.
+	// "drop-lost" drops the connection without removing the file, "refuse"
+	// answers 403.
 	deleteMode string
 	// unmonitorOnDelete mimics Sonarr's "unmonitor deleted episodes" setting.
 	unmonitorOnDelete bool
@@ -37,6 +38,8 @@ type fakeSonarr struct {
 	searches          int
 	// blocklists counts POSTs of history/failed, which blocklist the grab.
 	blocklists int
+	// failMonitor answers the monitor toggle with a refusal.
+	failMonitor bool
 }
 
 func newFakeSonarr(t *testing.T, episodeIDs ...int) *fakeSonarr {
@@ -56,6 +59,7 @@ func newFakeSonarr(t *testing.T, episodeIDs ...int) *fakeSonarr {
 	mux.HandleFunc(fmt.Sprintf("GET /api/v3/episodefile/%d", fakeSonarrFileID), fake.episodeFile)
 	mux.HandleFunc("GET /api/v3/episode", fake.episodes)
 	mux.HandleFunc(fmt.Sprintf("DELETE /api/v3/episodefile/%d", fakeSonarrFileID), fake.deleteFile)
+	mux.HandleFunc("PUT /api/v3/episode/monitor", fake.monitor)
 	mux.HandleFunc("POST /api/v3/command", fake.command)
 	mux.HandleFunc("GET /api/v3/history", fake.history)
 	mux.HandleFunc("POST /api/v3/history/failed/{id}", fake.blocklist)
@@ -129,9 +133,50 @@ func (fake *fakeSonarr) deleteFile(w http.ResponseWriter, _ *http.Request) {
 		dropConnection(w)
 	case "drop-lost":
 		dropConnection(w)
+	case "refuse":
+		w.WriteHeader(http.StatusForbidden)
 	default:
 		fake.t.Errorf("unknown delete mode %q", fake.deleteMode)
 	}
+}
+
+func (fake *fakeSonarr) isMonitored(id int) bool {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	return fake.monitored[id]
+}
+
+// loseFile removes the file as a DELETE that landed would, without a request.
+func (fake *fakeSonarr) loseFile() {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	fake.removeFile()
+}
+
+func (fake *fakeSonarr) setMonitorFailing(failing bool) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	fake.failMonitor = failing
+}
+
+func (fake *fakeSonarr) monitor(w http.ResponseWriter, request *http.Request) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.failMonitor {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	var body struct {
+		EpisodeIDs []int `json:"episodeIds"`
+		Monitored  bool  `json:"monitored"`
+	}
+	if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+		fake.t.Errorf("decode monitor request: %v", err)
+	}
+	for _, id := range body.EpisodeIDs {
+		fake.monitored[id] = body.Monitored
+	}
+	w.WriteHeader(http.StatusAccepted)
 }
 
 func (fake *fakeSonarr) blocklistCount() int {

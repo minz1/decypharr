@@ -398,10 +398,8 @@ func (s *Service) settleJob(id string, err error, progress *serviceJobProgress) 
 		return true
 	}
 	if err != nil {
-		for _, mutation := range current.Mutations {
-			if mutation.State == MutationIntent && mutation.Attempts > 0 {
-				return s.stopReconciliation(id, err)
-			}
+		if current.hasAttemptedIntent() {
+			return s.stopReconciliation(id, err)
 		}
 		_, updateErr := s.updateJob(id, StatusFailed, func(job *Job) {
 			job.LastError = err.Error()
@@ -611,6 +609,11 @@ func retryDelay(job Job, err error) time.Duration {
 	attempts := 0
 	for _, mutation := range job.Mutations {
 		attempts = max(attempts, mutation.Attempts)
+	}
+	for _, record := range job.FileDeletes {
+		if record.unconfirmed() {
+			attempts = max(attempts, record.Attempts)
+		}
 	}
 	delay := retryBaseDelay
 	for range max(0, min(attempts-1, retryMaxDoublings)) {

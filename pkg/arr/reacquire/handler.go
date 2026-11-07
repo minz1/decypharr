@@ -3,6 +3,7 @@ package reacquire
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -36,7 +37,13 @@ func (handler *arrHandler) Reacquire(ctx context.Context, job Job, progress JobP
 	if updateErr := progress.Update(StatusInvalidating, nil); updateErr != nil {
 		return updateErr
 	}
-	if deleteArrFilesErr := handler.deleteArrFiles(ctx, plan.instance, plan.bindings); deleteArrFilesErr != nil {
+	if deleteArrFilesErr := handler.deleteArrFiles(
+		ctx,
+		plan.instance,
+		&job,
+		plan.bindings,
+		progress,
+	); deleteArrFilesErr != nil {
 		return deleteArrFilesErr
 	}
 	waitingStatus, err := handler.runStrategy(ctx, &job, plan, progress)
@@ -423,7 +430,17 @@ func mutationBindings(job Job) ([]Binding, error) {
 	return bindings, nil
 }
 
-func (handler *arrHandler) deleteArrFiles(ctx context.Context, instance arr.Arr, bindings []Binding) error {
+// deleteArrFiles deletes the Arr files of the bindings, journaling each delete
+// in job.FileDeletes before it is sent. Every file is checked before the first
+// is deleted. A file a journaled delete already removed is settled, not
+// deleted again.
+func (handler *arrHandler) deleteArrFiles(
+	ctx context.Context,
+	instance arr.Arr,
+	job *Job,
+	bindings []Binding,
+	progress JobProgress,
+) error {
 	byFileID := make(map[int]Binding, len(bindings))
 	for _, binding := range bindings {
 		if binding.ArrFileID <= 0 {
@@ -431,30 +448,56 @@ func (handler *arrHandler) deleteArrFiles(ctx context.Context, instance arr.Arr,
 		}
 		byFileID[binding.ArrFileID] = binding
 	}
-
 	present := make([]int, 0, len(byFileID))
-	for fileID, binding := range byFileID {
-		current, found, err := handler.arrs.LibraryFile(ctx, instance.Name, binding.ArrFileID)
+	for _, fileID := range slices.Sorted(maps.Keys(byFileID)) {
+		isPresent, err := handler.checkArrFile(ctx, instance, job, progress, byFileID[fileID])
 		if err != nil {
-			// An earlier run may have deleted a file already: retry the read, never fail the job.
-			return fmt.Errorf("%w: %w", errArrLookup, err)
+			return err
 		}
-		if !found {
-			continue
+		if isPresent {
+			present = append(present, fileID)
 		}
-		if !bindingMatchesManagedFile(binding, current) {
-			return fmt.Errorf("arr file %d no longer matches the indexed media", binding.ArrFileID)
-		}
-		present = append(present, fileID)
 	}
 
-	slices.Sort(present)
 	for _, fileID := range present {
-		if err := handler.arrs.DeleteLibraryFile(ctx, instance.Name, fileID); err != nil {
+		if err := handler.deleteArrFile(ctx, instance, job, progress, fileID); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// checkArrFile reports whether the binding's file is still in the Arr and is
+// the one the binding names. A file that an earlier run's journaled DELETE
+// removed is settled here instead.
+func (handler *arrHandler) checkArrFile(
+	ctx context.Context,
+	instance arr.Arr,
+	job *Job,
+	progress JobProgress,
+	binding Binding,
+) (bool, error) {
+	record, journaled := fileDeleteFor(*job, binding.ArrFileID)
+	if journaled && !record.unconfirmed() {
+		// The delete landed in an earlier run; only its re-monitor can be owed.
+		return false, handler.settleFileDelete(ctx, instance, job, progress, record)
+	}
+	current, found, err := handler.arrs.LibraryFile(ctx, instance.Name, binding.ArrFileID)
+	if err != nil {
+		// An earlier run may have deleted a file already: retry the read, never fail the job.
+		return false, fmt.Errorf("%w: %w", errArrLookup, err)
+	}
+	switch {
+	case !found && journaled:
+		// The DELETE of an earlier run landed, whatever its answer was.
+		return false, handler.settleFileDelete(ctx, instance, job, progress, record)
+	case !found:
+		return false, nil
+	case !bindingMatchesManagedFile(binding, current):
+		return false, fmt.Errorf("arr file %d no longer matches the indexed media", binding.ArrFileID)
+	default:
+		return true, nil
+	}
 }
 
 func bindingMatchesManagedFile(binding Binding, current arr.LibraryFile) bool {
