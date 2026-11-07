@@ -164,6 +164,9 @@ func (m *Manager) Start() error {
 	err := m.group.GoCritical("start", func(ctx context.Context) error {
 		defer close(m.startDone)
 		if startErr := m.startSequence(ctx); startErr != nil {
+			if ctx.Err() != nil || errors.Is(startErr, task.ErrStopped) {
+				return nil // stopped while starting: the stop is not a failure
+			}
 			m.life.Transition(lifecycleStarting, lifecycleFailed)
 			return startErr
 		}
