@@ -4,11 +4,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/logger"
+	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/pkg/manager"
 	"github.com/sirrobot01/decypharr/pkg/manager/managertest"
 	"github.com/sirrobot01/decypharr/pkg/server/qbit"
@@ -18,12 +20,19 @@ import (
 func TestQueueReadFailuresReachHTTPClients(t *testing.T) {
 	t.Parallel()
 	store := managertest.Store(t, func(cfg *config.Config) { cfg.UseAuth = false })
-	mgr, err := manager.New(store, logger.Discard())
+	root := task.NewRoot(t.Context(), "test", zerolog.Nop())
+	mgr, err := manager.New(root.Child("manager"), store, logger.Discard())
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Stop fails on the storage closed below; that is the point of the test.
-	t.Cleanup(func() { _ = mgr.Stop() })
+	// The storage is closed below; the stop only logs that it is closed twice.
+	t.Cleanup(func() {
+		ctx, cancel := task.Detached(t.Context(), time.Minute)
+		defer cancel()
+		if stopErr := root.Stop(ctx); stopErr != nil {
+			t.Error(stopErr)
+		}
+	})
 	server := &Server{manager: mgr, config: store}
 	qbitRoutes := qbit.New(mgr, store, zerolog.Nop()).Routes()
 	sabRoutes := sabnzbd.New(mgr, store, zerolog.Nop()).Routes()

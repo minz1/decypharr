@@ -46,7 +46,12 @@ func TestRefreshTorrentIncompleteReturnsStoredEntry(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 	m := withTestConfig(
 		t,
-		&Manager{storage: store, clients: xsync.NewMap[string, debrid.Client](), logger: zerolog.Nop()},
+		&Manager{
+			work:    testGroup(t),
+			storage: store,
+			clients: xsync.NewMap[string, debrid.Client](),
+			logger:  zerolog.Nop(),
+		},
 	)
 	m.clients.Store("provider", incompleteProvider{})
 	entry := &storage.Entry{

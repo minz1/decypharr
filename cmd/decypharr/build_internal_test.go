@@ -102,7 +102,7 @@ func TestBuildServicesRunsAndDrainsTheRealTree(t *testing.T) {
 	gen := run.generation()
 	waitServing(t, gen)
 	paths := taskPaths(gen)
-	for _, want := range []string{"generation/manager:run", "generation/http:serve"} {
+	for _, want := range []string{"generation/manager:storage", "generation/http:serve"} {
 		if !slices.Contains(paths, want) {
 			t.Errorf("tasks %v lack %s", paths, want)
 		}
@@ -132,7 +132,7 @@ func TestRealServicesStopServerBeforeManager(t *testing.T) {
 		defer close(sampled)
 		for {
 			paths := taskPaths(gen)
-			managerGone := !slices.Contains(paths, "generation/manager:run")
+			managerGone := !slices.Contains(paths, "generation/manager:storage")
 			serverRuns := slices.ContainsFunc(paths, func(path string) bool {
 				return strings.HasPrefix(path, "generation/http:")
 			})

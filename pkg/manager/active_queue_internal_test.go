@@ -36,7 +36,7 @@ func TestRestoreLeavesActiveDownloadsOutsideSubmissionWorkers(t *testing.T) {
 			queue:  newQueue(store, "", nil, zerolog.Nop()),
 			arr:    arr.New(config.NewStore(&config.Config{}), nil, zerolog.Nop()),
 			logger: zerolog.Nop(),
-			ctx:    t.Context(),
+			work:   testGroup(t),
 		},
 	)
 	for i := range 4 {
@@ -53,13 +53,12 @@ func TestRestoreLeavesActiveDownloadsOutsideSubmissionWorkers(t *testing.T) {
 		}
 	}
 	received := make(chan *Job, 4)
-	m.jobQueue = NewJobQueue(t.Context(), 1, func(ctx context.Context, job *Job) {
+	m.jobQueue = NewJobQueue(m.work, 1, func(ctx context.Context, job *Job) {
 		if job.Request == nil {
 			m.processJob(ctx, job)
 		}
 		received <- job
 	}, zerolog.Nop())
-	t.Cleanup(m.jobQueue.Close)
 	m.restoreActiveDownloadJobs(m.restoreSnapshot())
 	select {
 	case job := <-received:
@@ -113,7 +112,7 @@ func TestRestoreSkipsEntriesChangedSinceTheSnapshot(t *testing.T) {
 		queue:  newQueue(store, "", nil, zerolog.Nop()),
 		arr:    arr.New(config.NewStore(&config.Config{}), nil, zerolog.Nop()),
 		logger: zerolog.Nop(),
-		ctx:    t.Context(),
+		work:   testGroup(t),
 	})
 	deleted, held, changed := fmt.Sprintf("%040d", 1), fmt.Sprintf("%040d", 2), fmt.Sprintf("%040d", 3)
 	for _, hash := range []string{deleted, held, changed} {
@@ -124,11 +123,10 @@ func TestRestoreSkipsEntriesChangedSinceTheSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	running, release := make(chan struct{}, 1), make(chan struct{})
-	m.jobQueue = NewJobQueue(t.Context(), 1, func(context.Context, *Job) {
+	m.jobQueue = NewJobQueue(m.work, 1, func(context.Context, *Job) {
 		running <- struct{}{}
 		<-release
 	}, zerolog.Nop())
-	t.Cleanup(m.jobQueue.Close)
 	t.Cleanup(func() { close(release) })
 	if submitErr := m.jobQueue.Submit(&Job{ID: held}); submitErr != nil {
 		t.Fatal(submitErr)
@@ -223,10 +221,9 @@ func newRestoreTestManager(t *testing.T) *Manager {
 		queue:  newQueue(store, "", nil, zerolog.Nop()),
 		arr:    arr.New(config.NewStore(&config.Config{}), nil, zerolog.Nop()),
 		logger: zerolog.Nop(),
-		ctx:    t.Context(),
+		work:   testGroup(t),
 	})
-	m.jobQueue = NewJobQueue(t.Context(), 1, func(context.Context, *Job) {}, zerolog.Nop())
-	t.Cleanup(m.jobQueue.Close)
+	m.jobQueue = NewJobQueue(m.work, 1, func(context.Context, *Job) {}, zerolog.Nop())
 	return m
 }
 
@@ -234,7 +231,6 @@ func newRestoreTestManager(t *testing.T) *Manager {
 func TestRestoreRequeuesAnNZBWhoseParseRanOutOfTime(t *testing.T) {
 	t.Parallel()
 	m := newRestoreTestManager(t)
-	m.jobQueue.Close()
 	m.usenet = newUnreachableUsenet(t)
 	m.usenetTimeout = 20 * time.Millisecond
 	m.parseRequeueDelay = 20 * time.Millisecond
@@ -252,8 +248,7 @@ func TestRestoreRequeuesAnNZBWhoseParseRanOutOfTime(t *testing.T) {
 		}
 		return &storage.NZB{Name: name}, nil, nil
 	}
-	m.jobQueue = NewJobQueue(t.Context(), 1, m.processJob, zerolog.Nop())
-	t.Cleanup(m.jobQueue.Close)
+	m.jobQueue = NewJobQueue(m.work, 1, m.processJob, zerolog.Nop())
 	staged := filepath.Join(t.TempDir(), "obf.nzb")
 	if err := os.WriteFile(staged, []byte("<nzb/>"), 0o600); err != nil {
 		t.Fatal(err)
@@ -356,10 +351,9 @@ func TestRestoreResubmitsAnEntryWhoseResetCannotBeSaved(t *testing.T) {
 	m := withTestConfig(t, &Manager{
 		queue:  newQueue(store, "", nil, zerolog.Nop()),
 		logger: zerolog.Nop(),
-		ctx:    t.Context(),
+		work:   testGroup(t),
 	})
-	m.jobQueue = NewJobQueue(t.Context(), 1, func(ctx context.Context, _ *Job) { <-ctx.Done() }, zerolog.Nop())
-	t.Cleanup(m.jobQueue.Close)
+	m.jobQueue = NewJobQueue(m.work, 1, func(ctx context.Context, _ *Job) { <-ctx.Done() }, zerolog.Nop())
 
 	m.restoreActiveDownloadJobs(m.restoreSnapshot())
 

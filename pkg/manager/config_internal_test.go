@@ -28,6 +28,9 @@ func withTestConfig(t *testing.T, m *Manager) *Manager {
 	t.Helper()
 	m.store = testConfigStore(t, nil)
 	m.config = m.store.Get()
+	if m.work == nil {
+		m.work = testGroup(t)
+	}
 	if m.arr == nil {
 		m.arr = arr.New(m.store, nil, zerolog.Nop())
 	}

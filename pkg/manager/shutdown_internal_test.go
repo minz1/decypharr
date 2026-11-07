@@ -1,7 +1,7 @@
 package manager
 
 import (
-	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,6 +11,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	debrid "github.com/sirrobot01/decypharr/pkg/debrid/common"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
@@ -99,7 +100,7 @@ func runShutdownResume(t *testing.T, multiSeason bool) {
 	}
 	m.restoreActiveDownloadJobs(m.restoreSnapshot())
 	m.processQueuedEntries()
-	m.downloadTasks.Wait()
+	waitWorkIdle(t, m)
 	synctest.Wait()
 	saved, err := m.queue.GetTorrent(entry.InfoHash)
 	if err != nil || !saved.IsComplete || saved.IsDownloading {
@@ -124,7 +125,7 @@ func runShutdownResume(t *testing.T, multiSeason bool) {
 	}
 	m.restoreActiveDownloadJobs(m.restoreSnapshot())
 	m.processQueuedEntries()
-	m.downloadTasks.Wait()
+	waitWorkIdle(t, m)
 	if _, lstatErr := os.Lstat(linkPath); !os.IsNotExist(lstatErr) {
 		t.Fatalf("completed import was processed again: %v", lstatErr)
 	}
@@ -141,13 +142,10 @@ func newShutdownTestManager(t *testing.T, dbPath string) *Manager {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(t.Context())
 	m := &Manager{
-		storage:         store,
-		config:          cfg,
-		store:           st,
-		ctx:             ctx,
-		cancelDownloads: cancel,
+		storage: store,
+		config:  cfg,
+		store:   st,
 		queue: newQueue(
 			store,
 			"",
@@ -160,9 +158,27 @@ func newShutdownTestManager(t *testing.T, dbPath string) *Manager {
 		processingEntries: xsync.NewMap[string, struct{}](),
 		Notifications:     notifications.New(&cfg.Notifications, nil, zerolog.Nop()),
 	}
+	wireLifecycle(t, m)
 	m.initEntryCache()
 	m.downloader = NewDownloadManager(m)
 	return m
+}
+
+// wireLifecycle gives a hand-built manager the task tree New would: a group
+// of its own, the supervised sub-services and the storage-closing task. A
+// stopped manager reopened on the same database calls it again.
+func wireLifecycle(t *testing.T, m *Manager) {
+	t.Helper()
+	m.group = testGroup(t)
+	m.life = newLifecycle()
+	m.ready = make(chan struct{})
+	m.children = nil
+	if err := m.registerServices(); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.group.Go("storage", m.closeStorage); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // seedCompletedSeason queues season 1 of the pack as already imported.
@@ -208,14 +224,20 @@ func interruptAndStop(t *testing.T, m *Manager, entry *storage.Entry, torrent *t
 	if err != nil || !saved.IsDownloading || saved.IsComplete {
 		t.Fatalf("in-flight entry = %#v, error = %v", saved, err)
 	}
-	if stopErr := m.Stop(); stopErr != nil {
+	if stopErr := m.Stop(t.Context()); stopErr != nil {
 		t.Fatal(stopErr)
 	}
 	if mountStops != 1 {
 		t.Fatalf("mount stops = %d", mountStops)
 	}
-	if m.startDownloadTask(func() { t.Error("work started after shutdown") }) {
-		t.Fatal("shutdown accepted new work")
+	if lateErr := m.runWork(
+		"late",
+		func() { t.Error("work started after shutdown") },
+	); !errors.Is(
+		lateErr,
+		task.ErrStopped,
+	) {
+		t.Fatalf("work after shutdown: err = %v, want ErrStopped", lateErr)
 	}
 	synctest.Wait()
 }
@@ -229,10 +251,8 @@ func reopenShutdownTestManager(t *testing.T, m *Manager, dbPath string, entry *s
 		t.Fatal(err)
 	}
 	m.storage, m.queue = store, newQueue(store, "", nil, zerolog.Nop())
-	m.ctx, m.cancelDownloads = context.WithCancel(t.Context())
-	m.downloadsStopped = false
-	m.jobQueue = NewJobQueue(m.ctx, 1, m.processJob, zerolog.Nop())
-	t.Cleanup(func() { _ = m.Stop() })
+	wireLifecycle(t, m)
+	m.jobQueue = NewJobQueue(m.work, 1, m.processJob, zerolog.Nop())
 	saved, err := m.queue.GetTorrent(entry.InfoHash)
 	if err != nil {
 		t.Fatal(err)

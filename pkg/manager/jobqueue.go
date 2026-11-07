@@ -11,6 +11,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/sirrobot01/decypharr/internal/task"
 	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 	"github.com/sirrobot01/decypharr/pkg/usenet/parser"
@@ -72,13 +73,12 @@ type JobQueue struct {
 
 	maxWorkers int
 	logger     zerolog.Logger
-	wg         sync.WaitGroup
 	active     atomic.Int64
 
 	// processFunc is called by workers to process a job
 	processFunc func(ctx context.Context, job *Job)
-	ctx         context.Context
-	cancel      context.CancelFunc
+	// group owns the workers and the slot waiters; its context ends them.
+	group *task.Group
 }
 
 type slotWaiter struct {
@@ -91,9 +91,12 @@ type slotWaiter struct {
 // jobQueueInitialCapacity presizes the pending-job slice.
 const jobQueueInitialCapacity = 64
 
-// NewJobQueue creates a new unified job queue with the given number of workers.
+// NewJobQueue creates a job queue whose workers and slot waiters are tasks of
+// g. Stopping g closes the queue: pending jobs are dropped (their records stay
+// in storage and are restored on the next start) and running jobs see their
+// context end. A queue made on a group that is not running refuses every job.
 func NewJobQueue(
-	ctx context.Context,
+	g *task.Group,
 	maxWorkers int,
 	processFunc func(ctx context.Context, job *Job),
 	log zerolog.Logger,
@@ -102,22 +105,34 @@ func NewJobQueue(
 		maxWorkers = defaultFileDownloadWorkers
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
 	q := &JobQueue{
 		jobs:        make([]*Job, 0, jobQueueInitialCapacity),
 		held:        make(map[string]int),
 		maxWorkers:  maxWorkers,
 		logger:      log,
 		processFunc: processFunc,
-		ctx:         ctx,
-		cancel:      cancel,
+		group:       g,
 	}
 	q.cond = sync.NewCond(&q.mu)
 
-	// Start worker goroutines
+	// The closer wakes the workers, which wait on the condition variable
+	// rather than on the context, when the group stops.
+	if err := g.Go("closer", func(ctx context.Context) error {
+		<-ctx.Done()
+		q.shutdown()
+		return nil
+	}); err != nil {
+		q.shutdown()
+		return q
+	}
 	for i := range maxWorkers {
-		q.wg.Add(1)
-		go q.worker(i)
+		if err := g.Go("worker", func(context.Context) error {
+			q.worker(i)
+			return nil
+		}); err != nil {
+			q.shutdown()
+			break
+		}
 	}
 
 	q.logger.Info().Int("workers", maxWorkers).Msg("Job queue started")
@@ -130,7 +145,7 @@ func (q *JobQueue) Submit(job *Job) error {
 	defer q.mu.Unlock()
 
 	if q.closed {
-		return fmt.Errorf("job queue is closed")
+		return fmt.Errorf("job queue: %w", task.ErrStopped)
 	}
 
 	q.jobs = append(q.jobs, job)
@@ -170,13 +185,13 @@ func (q *JobQueue) WaitForSlot(job *Job, providers []string, delay time.Duration
 	q.waiters = slices.Insert(q.waiters, i, w)
 	q.held[job.ID]++
 	q.mu.Unlock()
-	go func() {
+	if err := q.group.Go("wait-slot", func(ctx context.Context) error {
 		defer q.release(job.ID)
 		timer := time.NewTimer(delay)
 		defer timer.Stop()
 		select {
-		case <-q.ctx.Done():
-			return
+		case <-ctx.Done():
+			return nil
 		case <-w.wake:
 		case <-timer.C:
 		}
@@ -184,10 +199,17 @@ func (q *JobQueue) WaitForSlot(job *Job, providers []string, delay time.Duration
 		q.waiters = slices.DeleteFunc(q.waiters, func(other *slotWaiter) bool { return other == w })
 		job.wokenBy = w.freedBy
 		q.mu.Unlock()
-		if err := q.Submit(job); err != nil {
-			q.logger.Debug().Err(err).Str("job_id", job.ID).Msg("Failed to retry job")
+		if submitErr := q.Submit(job); submitErr != nil {
+			q.logger.Debug().Err(submitErr).Str("job_id", job.ID).Msg("Failed to retry job")
 		}
-	}()
+		return nil
+	}); err != nil {
+		// The queue is stopping: the job's record stays in storage for the next start.
+		q.mu.Lock()
+		q.waiters = slices.DeleteFunc(q.waiters, func(other *slotWaiter) bool { return other == w })
+		q.mu.Unlock()
+		q.release(job.ID)
+	}
 }
 
 // SlotFreed wakes the longest-waiting job throttled by provider.
@@ -203,21 +225,18 @@ func (q *JobQueue) SlotFreed(provider string) {
 	q.waiters = slices.Delete(q.waiters, i, i+1)
 }
 
-// Close signals all workers to stop and waits for them to finish.
-func (q *JobQueue) Close() {
+// shutdown refuses new jobs and wakes every worker; the closer task calls it
+// when the group stops.
+func (q *JobQueue) shutdown() {
 	q.mu.Lock()
 	q.closed = true
 	q.mu.Unlock()
-	q.cancel()
 	q.cond.Broadcast() // Wake all waiting workers
-	q.wg.Wait()
 	q.logger.Info().Msg("Job queue stopped")
 }
 
-// worker is the main loop for a single worker goroutine.
+// worker is the main loop for a single worker task.
 func (q *JobQueue) worker(id int) {
-	defer q.wg.Done()
-
 	for {
 		job := q.pop()
 		if job == nil {
@@ -254,7 +273,7 @@ func (q *JobQueue) runJob(job *Job) {
 				Msg("Recovered from panic while processing job")
 		}
 	}()
-	q.processFunc(q.ctx, job)
+	q.processFunc(q.group.Context(), job)
 }
 
 // pop removes and returns the next job, blocking if queue is empty.

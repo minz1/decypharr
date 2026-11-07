@@ -201,7 +201,7 @@ func (m *Manager) pollEntry(listed *storage.Entry) {
 		return
 	}
 	task := m.queuedEntryTask(entry)
-	if !pollable(entry) || task == nil || !m.startDownloadTask(task) {
+	if !pollable(entry) || task == nil || m.runWork("process-queued-entry", task) != nil {
 		m.processingEntries.Delete(entry.InfoHash)
 	}
 }
@@ -568,7 +568,7 @@ func (m *Manager) processAction(entry *storage.Entry) {
 			m.logger.Info().Str("name", entry.Name).Msg("Entry deleted, stopped its post-download action")
 			return
 		}
-		if errors.Is(err, context.Canceled) && m.ctx.Err() != nil {
+		if errors.Is(err, context.Canceled) && m.work.Context().Err() != nil {
 			entry.IsDownloading = false
 			if updateErr := m.queue.Update(entry); updateErr != nil {
 				m.logger.Error().Err(updateErr).Str("name", entry.Name).Msg("Failed to save interrupted download")
@@ -618,11 +618,11 @@ func (m *Manager) startProcessAction(entry *storage.Entry) {
 	if _, claimed := m.claimDrivable(entry.InfoHash); !claimed {
 		return
 	}
-	started := m.startDownloadTask(func() {
+	err := m.runWork("process-action", func() {
 		defer m.processingEntries.Delete(entry.InfoHash)
 		m.processAction(entry)
 	})
-	if !started {
+	if err != nil {
 		m.processingEntries.Delete(entry.InfoHash)
 	}
 }

@@ -198,19 +198,21 @@ func (d *Downloader) notifyCompleted(entry *storage.Entry) {
 
 // refreshArr asks the entry's arr to re-read its download client, so it acts on a finish or failure now.
 func (m *Manager) refreshArr(entry *storage.Entry) {
-	go func() {
+	// The refresh is a courtesy: a stopping manager skips it, and the arr's next poll sees the change.
+	_ = m.work.Go("refresh-arr", func(ctx context.Context) error {
 		instance := m.arr.GetOrCreate(entry.Category)
 		if !instance.Reachable() {
-			return
+			return nil
 		}
-		if err := m.arr.RefreshMonitoredDownloads(context.Background(), instance.Name); err != nil {
+		if err := m.arr.RefreshMonitoredDownloads(ctx, instance.Name); err != nil {
 			m.logger.Debug().
 				Err(err).
 				Str("arr", instance.Name).
 				Str("entry", entry.Name).
 				Msg("Failed to trigger Arr refresh")
 		}
-	}()
+		return nil
+	})
 }
 
 func (d *Downloader) markAsError(entry *storage.Entry, err error) {
@@ -468,10 +470,7 @@ func (d *Downloader) sleepUntilNextSymlinkAttempt(ctx context.Context, delay tim
 }
 
 func (d *Downloader) operationContext() context.Context {
-	if d.manager != nil && d.manager.ctx != nil {
-		return d.manager.ctx
-	}
-	return context.Background()
+	return d.manager.Context()
 }
 
 func nextSymlinkBackoff(current time.Duration, maxDelay time.Duration) time.Duration {
