@@ -43,7 +43,7 @@ const (
 	bytesPerMB      = 1 << 20
 )
 
-// New creates a Collector and starts the background refresh goroutine.
+// New creates a Collector. Run starts its background refresh.
 func New(mgr *manager.Manager, cfg *config.Store, log zerolog.Logger) *Collector {
 	c := &Collector{
 		mgr:          mgr,
@@ -57,9 +57,10 @@ func New(mgr *manager.Manager, cfg *config.Store, log zerolog.Logger) *Collector
 	return c
 }
 
-// Start begins the background refresh loop, which runs until ctx is done.
-func (c *Collector) Start(ctx context.Context) {
-	go c.loop(ctx)
+// Run refreshes the snapshot in the background and returns when ctx is done.
+// The caller owns the goroutine, so run it as a task of the owning group.
+func (c *Collector) Run(ctx context.Context) {
+	c.loop(ctx)
 }
 
 // Snapshot returns the latest cached snapshot (zero-alloc per call).

@@ -23,6 +23,7 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/logger"
+	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/pkg/manager"
 	"github.com/sirrobot01/decypharr/pkg/server/qbit"
 	"github.com/sirrobot01/decypharr/pkg/server/sabnzbd"
@@ -79,6 +80,8 @@ type Server struct {
 	assets      assetManifest
 	urlBase     string
 	restartFunc func()
+	// tasks lists the running tasks of the generation for /debug/tasks.
+	tasks func() []task.Info
 	// shutdownGrace is how long in-flight requests get to finish before open streams are closed.
 	shutdownGrace time.Duration
 }
@@ -155,6 +158,7 @@ func New(mgr *manager.Manager, store *config.Store, logs *logger.Factory) *Serve
 
 			r.Route("/debug", func(r chi.Router) {
 				r.Get("/stats", s.stats.Handler())
+				r.Get("/tasks", s.handleDebugTasks)
 				r.Post("/speedtest", s.handleSpeedTest)
 				r.Get("/logs", s.getLogs)
 				r.Get("/logs/rclone", s.getRcloneLogs)
@@ -171,23 +175,40 @@ func New(mgr *manager.Manager, store *config.Store, logs *logger.Factory) *Serve
 	return s
 }
 
-func (s *Server) SetRestartFunc(restartFunc func()) {
-	s.restartFunc = restartFunc
+// SetRestartFunc wires the server to the generation it belongs to. restart
+// asks that generation to end and the next one to start; it must be cheap,
+// idempotent and must not block.
+func (s *Server) SetRestartFunc(restart func()) {
+	s.restartFunc = restart
 }
 
-func (s *Server) Restart() {
-	if s.restartFunc != nil {
-		s.restartFunc()
-	} else {
-		s.logger.Warn().Msg("Restart function not set")
+// SetTaskSnapshot wires GET /debug/tasks to the generation's task tree.
+func (s *Server) SetTaskSnapshot(snapshot func() []task.Info) {
+	s.tasks = snapshot
+}
+
+// errRestartUnavailable is returned by Restart when no generation is wired.
+var errRestartUnavailable = errors.New("restart is not available: the server is not attached to a generation")
+
+// Restart asks the generation this server belongs to for a restart. It never
+// blocks and a second call within the same generation changes nothing.
+func (s *Server) Restart() error {
+	if s.restartFunc == nil {
+		return errRestartUnavailable
 	}
+	s.restartFunc()
+	return nil
 }
 
-// Start serves HTTP until ctx is done. It returns an error when the
-// listener cannot be opened or the server fails, so the process does not
-// keep running without its web UI and APIs.
-func (s *Server) Start(ctx context.Context) error {
+// Start opens the listener and serves HTTP on tasks of g until g stops. It
+// returns an error when the listener cannot be opened, and the group fails if
+// the server dies later, so the process does not keep running without its web
+// UI and APIs. g belongs to the server: stopping g drains in-flight requests
+// for the shutdown grace period, then closes the streams still open and waits
+// for their handlers.
+func (s *Server) Start(g *task.Group) error {
 	cfg := s.config.Get()
+	ctx := g.Context()
 
 	addr := net.JoinHostPort(cfg.BindAddress, cfg.Port)
 	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", addr)
@@ -196,11 +217,16 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 
 	// Start background stats collector
-	s.stats.Start(ctx)
+	if err = g.Go("stats", func(ctx context.Context) error {
+		s.stats.Run(ctx)
+		return nil
+	}); err != nil {
+		_ = listener.Close()
+		return err
+	}
 
 	s.logger.Info().Msgf("Starting server on %s%s", listener.Addr(), cfg.URLBase)
 	requests, cancelRequests := context.WithCancel(context.WithoutCancel(ctx))
-	defer cancelRequests()
 	var handlers handlerTracker
 	srv := &http.Server{
 		Handler:           handlers.wrap(s.router),
@@ -208,31 +234,50 @@ func (s *Server) Start(ctx context.Context) error {
 		ReadHeaderTimeout: readHeaderTimeout,
 	}
 
-	serveErr := make(chan error, 1)
-	go func() {
-		serveErr <- srv.Serve(listener)
-	}()
-
-	select {
-	case err = <-serveErr:
-		if errors.Is(err, http.ErrServerClosed) {
+	if err = g.GoCritical("serve", func(context.Context) error {
+		serveErr := srv.Serve(listener)
+		if errors.Is(serveErr, http.ErrServerClosed) {
 			return nil
 		}
-		return fmt.Errorf("http server: %w", err)
-	case <-ctx.Done():
-		s.logger.Info().Msg("Shutting down gracefully...")
-		graceCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.shutdownGrace)
-		defer cancel()
-		if err = srv.Shutdown(graceCtx); !errors.Is(err, context.DeadlineExceeded) {
-			return err
-		}
-		s.logger.Warn().Dur("grace", s.shutdownGrace).
-			Msg("Closing requests still open after the shutdown grace period")
+		return fmt.Errorf("http server: %w", serveErr)
+	}); err != nil {
 		cancelRequests()
-		err = srv.Close()
-		handlers.wait()
+		_ = listener.Close()
 		return err
 	}
+	if err = g.Go("shutdown", func(ctx context.Context) error {
+		defer cancelRequests()
+		<-ctx.Done()
+		return s.shutdown(ctx, srv, &handlers, cancelRequests)
+	}); err != nil {
+		cancelRequests()
+		_ = listener.Close()
+		return err
+	}
+	return nil
+}
+
+// shutdown drains srv: in-flight requests get the grace period, then the
+// streams still open are closed and their handlers waited for.
+func (s *Server) shutdown(
+	ctx context.Context,
+	srv *http.Server,
+	handlers *handlerTracker,
+	cancelRequests context.CancelFunc,
+) error {
+	s.logger.Info().Msg("Shutting down gracefully...")
+	graceCtx, cancel := task.Detached(ctx, s.shutdownGrace)
+	defer cancel()
+	err := srv.Shutdown(graceCtx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	s.logger.Warn().Dur("grace", s.shutdownGrace).
+		Msg("Closing requests still open after the shutdown grace period")
+	cancelRequests()
+	err = srv.Close()
+	handlers.wait()
+	return err
 }
 
 // handlerTracker lets Start wait out handlers that outlive a forced close, so nothing they use is stopped under them.

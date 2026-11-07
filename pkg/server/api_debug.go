@@ -3,12 +3,30 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/manager"
 )
+
+type debugTask struct {
+	Path    string    `json:"path"`
+	Started time.Time `json:"started"`
+}
+
+// handleDebugTasks lists the tasks the running generation owns, sorted by
+// path: what the process is doing and since when.
+func (s *Server) handleDebugTasks(w http.ResponseWriter, _ *http.Request) {
+	tasks := []debugTask{}
+	if s.tasks != nil {
+		for _, info := range s.tasks() {
+			tasks = append(tasks, debugTask{Path: info.Path, Started: info.Started})
+		}
+	}
+	utils.JSONResponse(w, map[string]any{"tasks": tasks}, http.StatusOK)
+}
 
 func (s *Server) handleIngests(w http.ResponseWriter, _ *http.Request) {
 	ingests, err := s.manager.GetIngests()
