@@ -1,10 +1,14 @@
 package repair
 
 import (
+	"bytes"
 	"context"
+	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
+
+	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 )
@@ -33,5 +37,36 @@ func TestStopSharesOneDrainBudget(t *testing.T) {
 		}
 		close(block)
 		synctest.Wait()
+	})
+}
+
+// A probe that uses up the budget is reported as the probe, not as a run that failed to drain: with no run in
+// flight there is nothing left to drain. Stop is repeated because the bug was a select between two ready channels.
+func TestStopBlamesOnlyWhatTimedOut(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		for range 32 {
+			var logs bytes.Buffer
+			service := New(Dependencies{Logger: zerolog.New(&logs)})
+			block := make(chan struct{})
+			started := make(chan struct{})
+			service.breaker.canary = func(context.Context, Bucket, config.BreakerSettings) canaryOutcome {
+				close(started)
+				<-block // a probe that ignores its cancellation
+				return canaryInconclusive
+			}
+			go service.QueueCanary(t.Context(), "rd")
+			<-started
+
+			service.Stop()
+			close(block)
+			synctest.Wait()
+			if !strings.Contains(logs.String(), "a canary probe did not stop in time") {
+				t.Fatalf("Stop logged %q, want the stuck probe named", logs.String())
+			}
+			if strings.Contains(logs.String(), "drain timed out") {
+				t.Fatalf("Stop logged %q with no run in flight, want no drain timeout", logs.String())
+			}
+		}
 	})
 }

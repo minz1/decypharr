@@ -132,6 +132,12 @@ func (r *Service) Stop() {
 	expired := make(chan struct{})
 	budget := time.AfterFunc(repairStopDrainTimeout, func() { close(expired) })
 	defer budget.Stop()
+	// The run drains while the probe is waited for, so a run that finished meanwhile has closed done by then.
+	done := make(chan struct{})
+	go func() {
+		r.runWG.Wait()
+		close(done)
+	}()
 
 	// A canary probe still running reads storage and usenet; end it and wait for it to leave.
 	probeCancel()
@@ -139,11 +145,12 @@ func (r *Service) Stop() {
 		r.logger.Warn().Dur("timeout", repairStopDrainTimeout).Msg("Repair: a canary probe did not stop in time")
 	}
 
-	done := make(chan struct{})
-	go func() {
-		r.runWG.Wait()
-		close(done)
-	}()
+	// A drained run wins over a budget a stuck probe already spent: only a run still going has timed out.
+	select {
+	case <-done:
+		return
+	default:
+	}
 	select {
 	case <-done:
 	case <-expired:
