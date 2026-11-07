@@ -376,7 +376,7 @@ func TestEffectsGoReportsBackAsAMessageAndSendReachesOtherKeys(t *testing.T) {
 		rec := newRecorder()
 		r := keyed.New[string, msg, struct{}](newRoot(t), "effects", rec, keyed.Options[msg]{})
 		mustSend(t, r, "a", msg{id: 1, run: func(_ context.Context, fx *keyed.Effects[string, msg]) {
-			if err := fx.Go("fetch", func(context.Context) msg { return msg{id: 10} }); err != nil {
+			if err := fx.Go("fetch", func(context.Context) msg { return msg{id: 10} }, nil); err != nil {
 				t.Error(err)
 			}
 			if err := fx.Send("b", msg{id: 20}); err != nil {
@@ -405,7 +405,7 @@ func TestAChildResultIsDeliveredEvenWhenTheMailboxIsFull(t *testing.T) {
 			_ = fx.Go("io", func(context.Context) msg {
 				<-finish
 				return msg{id: 99}
-			})
+			}, nil)
 			<-release
 		}})
 		synctest.Wait()

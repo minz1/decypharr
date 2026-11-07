@@ -22,7 +22,7 @@ func TestAKeyStaysUpWhileAChildIsInFlight(t *testing.T) {
 			_ = fx.Go("io", func(context.Context) msg {
 				<-finish
 				return msg{id: 2}
-			})
+			}, nil)
 		}})
 
 		time.Sleep(10 * time.Second) // far past the idle time
