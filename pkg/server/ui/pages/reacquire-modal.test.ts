@@ -19,9 +19,11 @@ const openModal = async (routes: Routes = {}): Promise<Awaited<ReturnType<typeof
 const resultRows = (): string[] =>
   [...document.querySelectorAll("#bindingResults tr")].map((row) => row.textContent.replaceAll(/\s+/gu, " ").trim());
 
-const choose = async (): Promise<void> => {
+const choose = async (strategy?: string): Promise<void> => {
   await click("#bindingResults tr td:nth-child(2)");
-  element("#reacquireStrategy", HTMLSelectElement).value = "command_search";
+  if (strategy !== undefined) {
+    element("#reacquireStrategy", HTMLSelectElement).value = strategy;
+  }
   element("#reacquireSubmit", HTMLButtonElement).click();
   await click("#reacquireSubmit");
   await settle();
@@ -185,5 +187,24 @@ describe("reacquiring a file", () => {
     await openModal();
     await click("#reacquireCancelBtn");
     expect({ open: element("#reacquireModal", HTMLDialogElement).open }).toStrictEqual({ open: false });
+  });
+});
+
+describe("the strategy of a reacquisition", () => {
+  it("preselects Search only, which blocklists nothing", async () => {
+    await openModal();
+    const strategy = element("#reacquireStrategy", HTMLSelectElement);
+    expect({ value: strategy.value, options: [...strategy.options].map((option) => option.value) }).toStrictEqual({
+      value: "command_search",
+      options: ["command_search", "history_failed", "interactive_best"],
+    });
+  });
+
+  it("posts the strategy chosen in the modal as it is", async () => {
+    const requests = await openModal({ "POST /api/arr/reacquire": () => Response.json({ id: "j" }) });
+    await choose("history_failed");
+    expect(mutations(requests).map((request) => request.body)).toStrictEqual([
+      `{"entryId":"entry-${XSS}","fileId":"file-${XSS}","cause":"manual","strategy":"history_failed"}`,
+    ]);
   });
 });

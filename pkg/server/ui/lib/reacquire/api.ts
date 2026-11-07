@@ -95,7 +95,7 @@ const reacquireRequest = (binding: Binding, strategy: string): RequestInit =>
     entryId: binding.entryId,
     fileId: binding.entryFileId,
     cause: "manual",
-    strategy: strategy === "" ? "history_failed" : strategy,
+    strategy,
   });
 
 const looseRecord = (body: string): JSONRecord => {

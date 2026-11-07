@@ -112,8 +112,9 @@ describe("the requests", () => {
 
   it.each([
     ["command_search", '{"entryId":"e1","fileId":"f1","cause":"manual","strategy":"command_search"}'],
-    ["", '{"entryId":"e1","fileId":"f1","cause":"manual","strategy":"history_failed"}'],
-  ])("reacquires the chosen file with strategy %j", (strategy, body) => {
+    ["history_failed", '{"entryId":"e1","fileId":"f1","cause":"manual","strategy":"history_failed"}'],
+    ["interactive_best", '{"entryId":"e1","fileId":"f1","cause":"manual","strategy":"interactive_best"}'],
+  ])("reacquires the chosen file with the selected strategy %j as it is", (strategy, body) => {
     expect(reacquireRequest(BINDING, strategy)).toStrictEqual({
       method: "POST",
       headers: { "Content-Type": "application/json" },
