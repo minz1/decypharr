@@ -73,6 +73,11 @@ func (f *fakeArrRecovery) Lookup(entryID, fileID string) (reacquire.Binding, boo
 }
 
 func (f *fakeArrRecovery) Reacquire(request reacquire.Request) (*reacquire.Job, error) {
+	if request.Gate != nil && request.Gate.Admit != nil {
+		if err := request.Gate.Admit(); err != nil {
+			return nil, err
+		}
+	}
 	f.calls.Add(1)
 	f.requestMu.Lock()
 	f.request = request

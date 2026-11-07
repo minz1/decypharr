@@ -517,6 +517,25 @@ func (b *breaker) recordForced(items []healItem, usage *runUsage) {
 	b.recordLocked(b.now(), items, usage)
 }
 
+// refund takes back heals that were admitted but never started, newest first: the caps count only deletions.
+func (b *breaker) refund(items []healItem) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, item := range items {
+		remaining := item.units
+		for i := len(b.ledger) - 1; i >= 0 && remaining > 0; i-- {
+			rec := &b.ledger[i]
+			if rec.bucket != item.bucket {
+				continue
+			}
+			taken := min(rec.units, remaining)
+			rec.units -= taken
+			remaining -= taken
+		}
+	}
+	b.ledger = slices.DeleteFunc(b.ledger, func(rec healRecord) bool { return rec.units <= 0 })
+}
+
 func (b *breaker) recordLocked(now time.Time, items []healItem, usage *runUsage) {
 	for _, item := range items {
 		b.ledger = append(b.ledger, healRecord{at: now, bucket: item.bucket, units: item.units})

@@ -80,11 +80,6 @@ func (m *Manager) submitStreamReacquire(entryID, fileID, filename string) {
 		if !m.streamFailureConfirmed(entryID, filename) {
 			return
 		}
-		if err := m.admitStreamHeal(recovery, entryID, fileID); err != nil {
-			m.logger.Warn().Err(err).Str("entry_id", entryID).Str("file_id", fileID).
-				Msg("Stream failed but the repair breaker is not admitting heals; not reacquiring")
-			return
-		}
 		job, err := recovery.Reacquire(reacquire.Request{
 			EntryID: entryID,
 			FileID:  fileID,
@@ -92,9 +87,16 @@ func (m *Manager) submitStreamReacquire(entryID, fileID, filename string) {
 			// The full-article check above confirmed the content is gone, which is
 			// what justifies blocklisting the release.
 			Strategy: reacquire.StrategyHistoryFailed,
+			// The repair breaker decides only if this request would create a job that deletes an Arr file.
+			Gate: m.healGate(entryID, "", repair.ClassUsenetSegment, 1),
 		})
 		if err != nil {
 			if errors.Is(err, reacquire.ErrBindingNotFound) {
+				return
+			}
+			if errors.Is(err, repair.ErrHealHeld) || errors.Is(err, repair.ErrHealCapped) {
+				m.logger.Warn().Err(err).Str("entry_id", entryID).Str("file_id", fileID).
+					Msg("Stream failed but the repair breaker is not admitting heals; not reacquiring")
 				return
 			}
 			m.logger.Error().Err(err).
@@ -162,63 +164,6 @@ func (m *Manager) recoverDroppedEntry(provider string, entry *storage.Entry) err
 		return fmt.Errorf("arr recovery service is not running")
 	}
 	return m.failGrab(entry, recovery, instance.Name, provider+" dropped the torrent")
-}
-
-// reacquireDroppedFiles queues a reacquisition for each of a dropped entry's files the Arr imported. It reports
-// whether any was imported. The files still without a job are admitted once, together, by the repair breaker; a
-// retry of files that already have one asks nothing of it.
-func (m *Manager) reacquireDroppedFiles(provider string, entry *storage.Entry, recovery ArrRecovery) (bool, error) {
-	if recovery == nil || entry.InfoHash == "" {
-		return false, nil
-	}
-	jobs := recovery.Jobs()
-	imported := false
-	var todo []string
-	for _, file := range entry.Files {
-		if file.ID == "" {
-			continue
-		}
-		if _, ok := recovery.Lookup(entry.InfoHash, file.ID); !ok {
-			continue
-		}
-		imported = true
-		if !repair.HasActiveJob(jobs, entry.InfoHash, file.ID) {
-			todo = append(todo, file.ID)
-		}
-	}
-	if len(todo) == 0 {
-		return imported, nil
-	}
-	// A held heal is returned as an error, so the dropped entry is kept and retried on the next sync.
-	if err := m.admitHeal(entry.InfoHash, provider, repair.ClassDropped, len(todo)); err != nil {
-		return imported, fmt.Errorf("reacquire %d files: %w", len(todo), err)
-	}
-	var reacquireErr error
-	for _, fileID := range todo {
-		if _, err := recovery.Reacquire(reacquire.Request{
-			EntryID: entry.InfoHash,
-			FileID:  fileID,
-			Cause:   reacquire.CauseRepair,
-			// A provider dropping a torrent is no evidence the release is bad: search again, blocklist nothing.
-			Strategy: reacquire.StrategyCommandSearch,
-		}); err != nil {
-			reacquireErr = errors.Join(reacquireErr, fmt.Errorf("reacquire file %s: %w", fileID, err))
-		}
-	}
-	if reacquireErr == nil {
-		m.logger.Info().Str("debrid", provider).Str("infohash", entry.InfoHash).Str("name", entry.Name).
-			Msg("Debrid dropped an imported torrent; reacquiring its files")
-	}
-	return imported, reacquireErr
-}
-
-// admitStreamHeal asks the breaker about a stream-triggered reacquisition. A file that already has a job is not a
-// heal: asking again returns that job and deletes nothing.
-func (m *Manager) admitStreamHeal(recovery ArrRecovery, entryID, fileID string) error {
-	if repair.HasActiveJob(recovery.Jobs(), entryID, fileID) {
-		return nil
-	}
-	return m.admitHeal(entryID, "", repair.ClassUsenetSegment, 1)
 }
 
 // admitHeal asks the repair breaker whether a reacquisition of units files may delete Arr files for entryID. An

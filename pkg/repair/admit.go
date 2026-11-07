@@ -66,6 +66,18 @@ func (r *Service) releaseForced(items []healItem, caller string) {
 	}
 }
 
+// Refund takes back an admission whose heal was never started, for a caller whose request turned out to need no
+// heal: it got an existing job back, or failed before anything was deleted. Units is how many to give back.
+func (r *Service) Refund(req HealRequest) {
+	if req.Provider == "" {
+		req.Provider = unknownProvider
+	}
+	if req.Class == "" {
+		req.Class = ClassOther
+	}
+	r.breaker.refund([]healItem{{bucket: Bucket{Provider: req.Provider, Class: req.Class}, units: max(req.Units, 1)}})
+}
+
 // BreakerStatus lists the buckets whose heals are held or being released.
 func (r *Service) BreakerStatus() []BucketStatus { return r.breaker.status() }
 

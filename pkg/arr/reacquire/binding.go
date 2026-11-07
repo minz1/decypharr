@@ -174,6 +174,26 @@ type Request struct {
 	FileID   string   `json:"fileId"`
 	Cause    Cause    `json:"cause"`
 	Strategy Strategy `json:"strategy,omitempty"`
+
+	// Gate, when set, is asked for permission only when this request would create a job. A request that gets an
+	// existing job back asks nothing, whatever happens while it is decided.
+	Gate *Gate `json:"-"`
+}
+
+// Gate lets a caller veto the creation of a job that deletes an Arr file, and take its admission back when no job
+// is created after all. Admit runs outside the service's locks and may be slow.
+type Gate struct {
+	// Admit decides whether a new job may be created; an error vetoes it and is returned to the caller.
+	Admit func() error
+	// Refund is called after Admit returned nil if no job was created: another request created or attached one
+	// first, or saving the job failed.
+	Refund func()
+}
+
+func (g *Gate) refund() {
+	if g != nil && g.Admit != nil && g.Refund != nil {
+		g.Refund()
+	}
 }
 
 func (request Request) validate() error {

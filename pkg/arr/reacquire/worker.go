@@ -75,7 +75,7 @@ func (s *Service) FailDownload(arrName, downloadID, entryID string) (*Job, error
 			CreatedAt:  now,
 			UpdatedAt:  now,
 		}
-	})
+	}, nil)
 }
 
 // requeueWaitingJob runs a waiting HistoryFailed job for key again: the Arr
@@ -143,28 +143,48 @@ func (s *Service) enqueue(request Request, binding Binding) (*Job, error) {
 			CreatedAt:  now,
 			UpdatedAt:  now,
 		}
-	})
+	}, request.Gate)
+}
+
+// existingJobLocked returns the active job for key, or the one attached reports. Caller must hold jobsMu.
+func (s *Service) existingJobLocked(key jobKey, attached func() (Job, bool)) (Job, bool) {
+	if id, exists := s.activeReacquisitions[key]; exists {
+		return cloneJob(s.jobs[id]), true
+	}
+	if attached != nil {
+		return attached()
+	}
+	return Job{}, false
 }
 
 // queueJob returns the active job for key (or the one attached reports),
 // otherwise saves and indexes the job build returns and wakes the worker.
-// attached and build run under jobsMu.
-func (s *Service) queueJob(key jobKey, attached func() (Job, bool), build func(now time.Time) Job) (*Job, error) {
+// attached and build run under jobsMu. A gate is asked once it is clear a job would be created, outside jobsMu; if
+// a job appears meanwhile that one is returned and the admission refunded.
+func (s *Service) queueJob(
+	key jobKey, attached func() (Job, bool), build func(now time.Time) Job, gate *Gate,
+) (*Job, error) {
 	s.jobsMu.Lock()
-	if id, exists := s.activeReacquisitions[key]; exists {
-		job := cloneJob(s.jobs[id])
+	if job, ok := s.existingJobLocked(key, attached); ok {
 		s.jobsMu.Unlock()
 		return &job, nil
 	}
-	if attached != nil {
-		if job, ok := attached(); ok {
+	if gate != nil && gate.Admit != nil {
+		s.jobsMu.Unlock()
+		if err := gate.Admit(); err != nil {
+			return nil, err
+		}
+		s.jobsMu.Lock()
+		if job, ok := s.existingJobLocked(key, attached); ok {
 			s.jobsMu.Unlock()
+			gate.refund()
 			return &job, nil
 		}
 	}
 	job := build(s.now())
 	if err := s.jobRepository.Save(job); err != nil {
 		s.jobsMu.Unlock()
+		gate.refund()
 		return nil, err
 	}
 	s.jobs[job.ID] = cloneJob(job)

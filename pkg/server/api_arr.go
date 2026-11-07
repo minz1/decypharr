@@ -123,15 +123,7 @@ func (s *Server) handleArrReacquire(w http.ResponseWriter, r *http.Request) {
 		s.sendJSONError(w, message, http.StatusBadRequest)
 		return
 	}
-	if !s.admitReacquire(
-		w,
-		r,
-		request,
-		body.Force,
-		repair.HasActiveJob(service.Jobs(), request.EntryID, request.FileID),
-	) {
-		return
-	}
+	request.Gate = s.reacquireGate(r, request, body.Force)
 
 	job, err := service.Reacquire(request)
 	if err != nil {
@@ -141,37 +133,26 @@ func (s *Server) handleArrReacquire(w http.ResponseWriter, r *http.Request) {
 	utils.JSONResponse(w, job, http.StatusAccepted)
 }
 
-// admitReacquire puts a manual reacquisition through the repair breaker, which counts it toward the rolling heal
-// cap like any other heal that deletes an Arr file. It answers the request itself and reports false when the
-// reacquisition must not be queued.
-func (s *Server) admitReacquire(
-	w http.ResponseWriter, r *http.Request, request reacquire.Request, force, active bool,
-) bool {
+// reacquireGate puts a manual reacquisition through the repair breaker, which counts it toward the rolling heal cap
+// like any other heal that deletes an Arr file. The breaker is asked only if the request would create a job: asking
+// again for a file that already has one returns that job and costs nothing.
+func (s *Server) reacquireGate(r *http.Request, request reacquire.Request, force bool) *reacquire.Gate {
 	svc := s.manager.Repair()
-	if svc == nil || active {
-		// A file with a job under way gets that job back and loses nothing more: not a heal to count.
-		return true
+	if svc == nil {
+		return nil
 	}
-	err := svc.Admit(r.Context(), repair.HealRequest{
+	heal := repair.HealRequest{
 		Provider: svc.ProviderFor(request.EntryID),
 		Class:    repair.ClassOther,
 		Subject:  request.EntryID,
 		Operator: true,
 		Force:    force,
 		Caller:   requestCaller(r),
-	})
-	switch {
-	case err == nil:
-		return true
-	case errors.Is(err, repair.ErrHealHeld):
-		s.sendJSONError(w, err.Error()+`; send "force": true to override`, http.StatusConflict)
-	case errors.Is(err, repair.ErrHealCapped):
-		s.sendJSONError(w, err.Error(), http.StatusTooManyRequests)
-	default:
-		s.logger.Error().Err(err).Msg("Repair breaker failed")
-		s.sendJSONError(w, "Repair breaker failed", http.StatusInternalServerError)
 	}
-	return false
+	return &reacquire.Gate{
+		Admit:  func() error { return svc.Admit(r.Context(), heal) },
+		Refund: func() { svc.Refund(heal) },
+	}
 }
 
 func (s *Server) handleRefreshArrIndex(w http.ResponseWriter, _ *http.Request) {
@@ -192,6 +173,10 @@ func (s *Server) handleArrReacquireError(w http.ResponseWriter, err error) {
 		s.sendJSONError(w, err.Error(), http.StatusNotFound)
 	case errors.Is(err, reacquire.ErrBindingUnsafe):
 		s.sendJSONError(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, repair.ErrHealHeld):
+		s.sendJSONError(w, err.Error()+`; send "force": true to override`, http.StatusConflict)
+	case errors.Is(err, repair.ErrHealCapped):
+		s.sendJSONError(w, err.Error(), http.StatusTooManyRequests)
 	case errors.Is(err, reacquire.ErrServiceNotStarted), errors.Is(err, reacquire.ErrServiceClosed):
 		s.sendJSONError(w, err.Error(), http.StatusServiceUnavailable)
 	default:

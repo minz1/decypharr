@@ -21,6 +21,11 @@ type filesRecovery struct {
 
 	jobsMu sync.Mutex
 	active []reacquire.Job
+	vetoes []error
+	// failBeforeGate fails a request that has no job before the gate is asked, like an unusable binding.
+	failBeforeGate error
+	// racedAfterGate makes another request win the job after the gate admitted.
+	racedAfterGate bool
 }
 
 func (f *filesRecovery) Lookup(entryID, fileID string) (reacquire.Binding, bool) {
@@ -36,6 +41,20 @@ func (f *filesRecovery) Reacquire(request reacquire.Request) (*reacquire.Job, er
 	for _, job := range f.active {
 		if job.EntryID == request.EntryID && job.FileID == request.FileID {
 			return &job, nil
+		}
+	}
+	if f.failBeforeGate != nil {
+		return nil, f.failBeforeGate
+	}
+	if request.Gate != nil && request.Gate.Admit != nil {
+		if err := request.Gate.Admit(); err != nil {
+			f.vetoes = append(f.vetoes, err)
+			return nil, err
+		}
+		if f.racedAfterGate {
+			// Another request created the job while the gate decided: it is returned and the admission refunded.
+			request.Gate.Refund()
+			return &reacquire.Job{ID: "raced", EntryID: request.EntryID, FileID: request.FileID}, nil
 		}
 	}
 	f.calls.Add(1)
@@ -110,22 +129,5 @@ func TestDroppedEntryIsAdmittedOnceForAllItsFiles(t *testing.T) {
 	}
 	if recovery.calls.Load() != 26 {
 		t.Fatalf("reacquire calls = %d, want all 26 files", recovery.calls.Load())
-	}
-}
-
-func TestStreamReacquireOfAFileWithAJobIsNotAHeal(t *testing.T) {
-	t.Parallel()
-	recovery := &filesRecovery{entryID: "nzb-1", files: map[string]bool{"file-1": true}}
-	recovery.active = []reacquire.Job{{ID: "job-0", EntryID: "nzb-1", FileID: "file-1", Status: reacquire.StatusQueued}}
-	m := &Manager{checkStreamFile: confirmBroken}
-	m.SetArrRecovery(recovery)
-	m.repair = repair.New(repair.Dependencies{})
-	tripBucket(t, m.repair, m.repair.ProviderFor("nzb-1"), repair.ClassUsenetSegment)
-
-	if err := m.admitStreamHeal(recovery, "nzb-1", "file-1"); err != nil {
-		t.Fatalf("a file with a job under way was held: %v", err)
-	}
-	if err := m.admitStreamHeal(recovery, "nzb-1", "file-2"); !errors.Is(err, repair.ErrHealHeld) {
-		t.Fatalf("a file without a job = %v, want held by the tripped bucket", err)
 	}
 }
