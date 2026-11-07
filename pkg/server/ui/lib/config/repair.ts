@@ -40,6 +40,42 @@ const field = (doc: Document, key: string): ReturnType<typeof withId> => withId(
 const numberOr = (repair: Record<string, unknown>, key: string, fallback: number): string =>
   orDefault(numberText(optNum(repair, key)), String(fallback));
 
+// The breaker keys are empty when unset: the server reads empty or 0 as the default, and the form shows it as a placeholder.
+const BREAKER_DURATIONS = [
+  "confirm_gap",
+  "breaker_release_after",
+  "canary_recent",
+  "canary_fallback",
+  "canary_cache",
+  "breaker_window",
+] as const;
+const BREAKER_COUNTS = [
+  "breaker_min_confirmed",
+  "breaker_percent",
+  "breaker_confirmed",
+  "heal_cap_per_bucket",
+  "heal_cap_per_run",
+  "canary_size",
+] as const;
+
+const populateBreakerFields = (doc: Document, repair: Record<string, unknown>): void => {
+  for (const key of BREAKER_DURATIONS) {
+    setText(field(doc, key), optStr(repair, key) ?? "");
+  }
+  for (const key of BREAKER_COUNTS) {
+    setText(field(doc, key), numberText(optNum(repair, key)));
+  }
+};
+
+// Only the keys that are set are sent, as the server stores them: a save of a config that never set one is unchanged.
+const collectBreakerFields = (doc: Document): Record<string, unknown> => {
+  const entries: [string, string | number][] = [
+    ...BREAKER_DURATIONS.map((key): [string, string] => [key, field(doc, key)?.value.trim() ?? ""]),
+    ...BREAKER_COUNTS.map((key): [string, number] => [key, intOr(field(doc, key)?.value, 0)]),
+  ];
+  return Object.fromEntries(entries.filter(([, value]) => value !== "" && value !== 0));
+};
+
 const populateRepairFields = (doc: Document, repair: Record<string, unknown>): void => {
   setChecked(field(doc, "enabled"), optBool(repair, "enabled") === true);
   setText(field(doc, "source"), orDefault(optStr(repair, "source"), "arr"));
@@ -58,6 +94,7 @@ const populateRepair = (doc: Document, value: unknown): void => {
   renderArrChoices(doc, arrNames(doc), new Set(textList(repair?.["arrs"], "repair.arrs")));
   if (repair !== undefined) {
     populateRepairFields(doc, repair);
+    populateBreakerFields(doc, repair);
   }
 };
 
@@ -81,6 +118,7 @@ const collectRepair = (doc: Document): Record<string, unknown> => ({
   stop_schedule: field(doc, "stop_schedule")?.value.trim() ?? "",
   auto_repair: checkedOf(field(doc, "auto_repair")) ?? false,
   verify_content: checkedOf(field(doc, "verify_content")) ?? false,
+  ...collectBreakerFields(doc),
   arrs: chosenArrs(doc),
 });
 

@@ -803,6 +803,18 @@
                                                         <input type="checkbox"
                                                                class="checkbox checkbox-primary checkbox-sm"
                                                                name="notifications.events[]"
+                                                               value="repair_breaker_tripped">
+                                                        <div>
+                                                            <span class="font-medium text-sm">Repair Held</span>
+                                                            <div class="label-text-alt">When the outage breaker starts holding a provider's heals</div>
+                                                        </div>
+                                                    </label>
+                                                </div>
+                                                <div>
+                                                    <label class="label cursor-pointer justify-start gap-2">
+                                                        <input type="checkbox"
+                                                               class="checkbox checkbox-primary checkbox-sm"
+                                                               name="notifications.events[]"
                                                                value="reacquire_needs_attention">
                                                         <div>
                                                             <span class="font-medium text-sm">Reacquire Needs Attention</span>
@@ -2236,6 +2248,156 @@ fe80::/10</textarea>
                                                name="repair.verify_content">
                                         <span class="label-text font-medium">Verify NZB content</span>
                                     </label>
+                                </div>
+                                <div class="space-y-4">
+                                    <div>
+                                        <h4 class="text-lg font-semibold">Outage breaker</h4>
+                                        <p class="label-text-alt opacity-70">
+                                            A broken file is healed only after a second sighting at least the confirmation gap later.
+                                            When many files of one provider break the same way, the breaker holds their heals until a
+                                            canary check passes. Leave a field empty, or 0, for its default; the default is shown as the placeholder.
+                                        </p>
+                                    </div>
+                                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                                        <div>
+                                            <label class="label" for="repair.confirm_gap">
+                                                <span class="font-medium">Confirmation gap</span>
+                                            </label>
+                                            <input type="text"
+                                                   class="input w-full"
+                                                   name="repair.confirm_gap"
+                                                   id="repair.confirm_gap"
+                                                   placeholder="1h">
+                                            <span class="label-text-alt opacity-70">Least time between the first and second sighting of a broken file. A positive duration; default 1h.</span>
+                                        </div>
+                                        <div>
+                                            <label class="label" for="repair.breaker_window">
+                                                <span class="font-medium">Breaker window</span>
+                                            </label>
+                                            <input type="text"
+                                                   class="input w-full"
+                                                   name="repair.breaker_window"
+                                                   id="repair.breaker_window"
+                                                   placeholder="1h">
+                                            <span class="label-text-alt opacity-70">Rolling window of the heal count, and of trips outside a sweep. A positive duration; default 1h.</span>
+                                        </div>
+                                        <div>
+                                            <label class="label" for="repair.breaker_min_confirmed">
+                                                <span class="font-medium">Trip: minimum confirmed</span>
+                                            </label>
+                                            <input type="number"
+                                                   min="0"
+                                                   class="input w-full"
+                                                   name="repair.breaker_min_confirmed"
+                                                   id="repair.breaker_min_confirmed"
+                                                   placeholder="10">
+                                            <span class="label-text-alt opacity-70">A group never trips below this many confirmed broken files. Default 10.</span>
+                                        </div>
+                                        <div>
+                                            <label class="label" for="repair.breaker_percent">
+                                                <span class="font-medium">Trip: share of probed (%)</span>
+                                            </label>
+                                            <input type="number"
+                                                   min="0"
+                                                   class="input w-full"
+                                                   name="repair.breaker_percent"
+                                                   id="repair.breaker_percent"
+                                                   placeholder="5">
+                                            <span class="label-text-alt opacity-70">Trips a group when confirmed files reach this share of those probed. Default 5.</span>
+                                        </div>
+                                        <div>
+                                            <label class="label" for="repair.breaker_confirmed">
+                                                <span class="font-medium">Trip: confirmed outright</span>
+                                            </label>
+                                            <input type="number"
+                                                   min="0"
+                                                   class="input w-full"
+                                                   name="repair.breaker_confirmed"
+                                                   id="repair.breaker_confirmed"
+                                                   placeholder="50">
+                                            <span class="label-text-alt opacity-70">Trips a group at this many confirmed files whatever the share. Default 50.</span>
+                                        </div>
+                                        <div>
+                                            <label class="label" for="repair.breaker_release_after">
+                                                <span class="font-medium">Release after</span>
+                                            </label>
+                                            <input type="text"
+                                                   class="input w-full"
+                                                   name="repair.breaker_release_after"
+                                                   id="repair.breaker_release_after"
+                                                   placeholder="1h">
+                                            <span class="label-text-alt opacity-70">How long a tripped group stays held before a later run may release it. A positive duration; default 1h.</span>
+                                        </div>
+                                        <div>
+                                            <label class="label" for="repair.heal_cap_per_bucket">
+                                                <span class="font-medium">Heal cap per group</span>
+                                            </label>
+                                            <input type="number"
+                                                   min="0"
+                                                   class="input w-full"
+                                                   name="repair.heal_cap_per_bucket"
+                                                   id="repair.heal_cap_per_bucket"
+                                                   placeholder="25">
+                                            <span class="label-text-alt opacity-70">Most heals one provider and failure class may start in a run. Default 25.</span>
+                                        </div>
+                                        <div>
+                                            <label class="label" for="repair.heal_cap_per_run">
+                                                <span class="font-medium">Heal cap per run</span>
+                                            </label>
+                                            <input type="number"
+                                                   min="0"
+                                                   class="input w-full"
+                                                   name="repair.heal_cap_per_run"
+                                                   id="repair.heal_cap_per_run"
+                                                   placeholder="50">
+                                            <span class="label-text-alt opacity-70">Most heals all groups together may start in a run or window. Default 50.</span>
+                                        </div>
+                                        <div>
+                                            <label class="label" for="repair.canary_size">
+                                                <span class="font-medium">Canary size</span>
+                                            </label>
+                                            <input type="number"
+                                                   min="0"
+                                                   class="input w-full"
+                                                   name="repair.canary_size"
+                                                   id="repair.canary_size"
+                                                   placeholder="3">
+                                            <span class="label-text-alt opacity-70">Recently good entries probed before a group heals. Default 3.</span>
+                                        </div>
+                                        <div>
+                                            <label class="label" for="repair.canary_cache">
+                                                <span class="font-medium">Canary verdict cache</span>
+                                            </label>
+                                            <input type="text"
+                                                   class="input w-full"
+                                                   name="repair.canary_cache"
+                                                   id="repair.canary_cache"
+                                                   placeholder="15m">
+                                            <span class="label-text-alt opacity-70">How long a canary verdict is reused. A positive duration; default 15m.</span>
+                                        </div>
+                                        <div>
+                                            <label class="label" for="repair.canary_recent">
+                                                <span class="font-medium">Canary: recently good</span>
+                                            </label>
+                                            <input type="text"
+                                                   class="input w-full"
+                                                   name="repair.canary_recent"
+                                                   id="repair.canary_recent"
+                                                   placeholder="24h">
+                                            <span class="label-text-alt opacity-70">Canaries come from entries last good within this time. A positive duration; default 24h.</span>
+                                        </div>
+                                        <div>
+                                            <label class="label" for="repair.canary_fallback">
+                                                <span class="font-medium">Canary: fallback age</span>
+                                            </label>
+                                            <input type="text"
+                                                   class="input w-full"
+                                                   name="repair.canary_fallback"
+                                                   id="repair.canary_fallback"
+                                                   placeholder="7d">
+                                            <span class="label-text-alt opacity-70">Used when none was good within the recent time. A positive duration; default 7d.</span>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         </div>
