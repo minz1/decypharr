@@ -331,27 +331,31 @@ func (c *Collector) collectMount(cfg *config.Config) MountStats {
 	mountMgr := c.mgr.MountManager()
 	enabled := cfg.Mount.Type != config.MountTypeNone
 
-	if mountMgr == nil || !mountMgr.IsReady() {
+	if mountMgr == nil {
 		return MountStats{
 			Ready:   false,
 			Enabled: enabled,
 		}
 	}
 
+	// A mount that is not ready still says why: its stats carry its state.
+	ready := mountMgr.IsReady()
 	mountStats := mountMgr.Stats()
 	if mountStats == nil {
-		return MountStats{
-			Ready:   true,
-			Enabled: enabled,
-			Type:    mountMgr.Type(),
-			Error:   "failed to get mount stats",
+		out := MountStats{Ready: ready, Enabled: enabled}
+		if ready {
+			out.Type = mountMgr.Type()
+			out.Error = "failed to get mount stats"
 		}
+		return out
 	}
 
+	state, _ := mountStats["state"].(string)
 	return MountStats{
-		Ready:   true,
+		Ready:   ready,
 		Enabled: enabled,
 		Type:    mountMgr.Type(),
+		State:   state,
 		Detail:  mountStats,
 	}
 }
