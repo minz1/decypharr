@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime/debug"
 	"strconv"
 	"time"
 
@@ -110,11 +111,7 @@ func (m *Manager) superviseService(
 	err := child.Go("run", func(ctx context.Context) error {
 		select {
 		case <-svc.begin:
-			var startErr error
-			if start != nil {
-				startErr = start(ctx)
-			}
-			svc.result <- startErr
+			svc.result <- m.runStart(ctx, name, start)
 		case <-ctx.Done():
 		}
 		<-ctx.Done()
@@ -130,6 +127,23 @@ func (m *Manager) superviseService(
 		return nil, fmt.Errorf("supervise %s: %w", name, err)
 	}
 	return svc, nil
+}
+
+// runStart runs a service's start and returns its outcome. A panic is logged
+// with its stack and returned as the start's error, so the step that waits
+// for the result fails instead of waiting for ever.
+func (m *Manager) runStart(ctx context.Context, name string, start func(ctx context.Context) error) (err error) {
+	if start == nil {
+		return nil
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			m.logger.Error().Str("service", name).Interface("panic", recovered).Bytes("stack", debug.Stack()).
+				Msg("Service start panicked")
+			err = fmt.Errorf("start %s panicked: %v", name, recovered)
+		}
+	}()
+	return start(ctx)
 }
 
 // run starts the service and waits for its start to return.
