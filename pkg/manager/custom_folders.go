@@ -39,11 +39,13 @@ func (m *Manager) ApplyVirtualFolders(definitions []config.VirtualFolder) error 
 		m.entry.InvalidateAll()
 	}
 	if m.mountManager != nil {
-		go func() {
+		if workErr := m.runWork("refresh-mount", func() {
 			if refreshErr := m.mountManager.Refresh([]string{""}); refreshErr != nil {
 				m.logger.Warn().Err(refreshErr).Msg("Failed to refresh mount after virtual-folder update")
 			}
-		}()
+		}); workErr != nil {
+			m.logger.Debug().Err(workErr).Msg("Skipped the mount refresh after the virtual-folder update")
+		}
 	}
 	return nil
 }

@@ -129,13 +129,11 @@ func (m *Manager) doRefreshTorrents(_ context.Context, provider string, debridCl
 	// Batch update torrents with changed placements (run concurrently)
 	var updateWg sync.WaitGroup
 	if len(torrentsToUpdate) > 0 {
-		updateWg.Add(1)
-		go func(torrents []*storage.Entry) {
-			defer updateWg.Done()
-			if batchAddOrUpdateErr := m.storage.BatchAddOrUpdate(torrents); batchAddOrUpdateErr != nil {
+		updateWg.Go(func() {
+			if batchAddOrUpdateErr := m.storage.BatchAddOrUpdate(torrentsToUpdate); batchAddOrUpdateErr != nil {
 				m.logger.Error().Err(batchAddOrUpdateErr).Msg("Failed to batch update remote")
 			}
-		}(torrentsToUpdate)
+		})
 	}
 
 	// Process new torrents
