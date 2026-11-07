@@ -29,6 +29,7 @@ describe("the health colour", () => {
   it.each([
     ["healthy", "text-success"],
     ["broken", "text-error"],
+    ["held", "text-warning"],
     ["repairing", "text-info"],
     ["stale", "text-warning"],
     ["unsupported", "text-base-content/60"],

@@ -78,7 +78,7 @@ describe("the repair status", () => {
       line: `Repair enabled · next scheduled run: ${new Date("2026-01-02T03:04:05Z").toLocaleString()}`,
       badge: "1",
       badgeHidden: false,
-      cards: ["healthy4", "broken1", "repairing0", "stale0", "unknown0", "unsupported0"],
+      cards: ["healthy4", "broken1", "held0", "repairing0", "stale0", "unknown0", "unsupported0"],
       brokenColour: "stat-value text-lg text-error",
       buttons: [false, true, false],
       panelHidden: true,

@@ -4,6 +4,7 @@ import type { BrokenFile, EntryHealth, PageButton } from "#ui/lib/repair/types";
 const HEALTH_COLORS: Readonly<Record<string, string>> = {
   healthy: "text-success",
   broken: "text-error",
+  held: "text-warning",
   repairing: "text-info",
   stale: "text-warning",
   unsupported: "text-base-content/60",

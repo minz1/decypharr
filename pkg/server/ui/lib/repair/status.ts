@@ -2,7 +2,7 @@ import { byId, cloneTemplate, field } from "#ui/lib/common/dom";
 import { formatTimestamp, healthColor } from "#ui/lib/repair/format";
 import type { RepairStatus, RunStats, StatusView } from "#ui/lib/repair/types";
 
-const HEALTH_ORDER = ["healthy", "broken", "repairing", "stale", "unknown", "unsupported"] as const;
+const HEALTH_ORDER = ["healthy", "broken", "held", "repairing", "stale", "unknown", "unsupported"] as const;
 
 const RUN_STAT_FIELDS: readonly (readonly [keyof RunStats, string])[] = [
   ["candidates", "Candidates"],
