@@ -128,11 +128,29 @@ func runSuccessors(s runState) []runState {
 
 // envelope is a queued message.
 type envelope[M any] struct {
-	msg M
-	at  time.Time
+	msg   M
+	at    time.Time
+	class Class
 	// bypass marks a message that does not count against the mailbox bound: a timer, or a child task's result.
 	bypass bool
+	// reply is where the asker of an Ask waits; nil for a message from Send.
+	reply *replySlot
 }
+
+// Class says what a message is, which decides what happens to it when its
+// key's mailbox is full.
+type Class uint8
+
+const (
+	// Command is a request that must not be lost silently: into a full mailbox it is refused with
+	// ErrMailboxFull, so the caller can try again later.
+	Command Class = iota + 1
+	// Observation is a report of how things stand: the latest replaces an older one with the same coalesce key,
+	// and into a full mailbox the oldest observation is dropped.
+	Observation
+	// Timer is never dropped and does not count against the bound.
+	Timer
+)
 
 // actor is the runner's record of one key. The runner's mutex guards every field.
 type actor[K comparable, M any] struct {
@@ -371,6 +389,9 @@ func (r *Runner[K, M]) loop(ctx context.Context, a *actor[K, M]) {
 // exitLocked ends the key's goroutine. On a stop the queue is dropped.
 func (r *Runner[K, M]) exitLocked(a *actor[K, M], stopping bool) {
 	if stopping {
+		for _, env := range a.queue {
+			dropReply(env.reply)
+		}
 		a.queue, a.bypassed = nil, 0
 	}
 	a.running = false
@@ -386,6 +407,7 @@ func (r *Runner[K, M]) handle(ctx context.Context, a *actor[K, M], env envelope[
 	fx := &Effects[K, M]{r: r, key: a.key}
 	defer func() {
 		recovered := recover()
+		fx.finishReply(env.reply, recovered != nil)
 		r.mu.Lock()
 		a.handled++
 		if recovered != nil {
@@ -407,6 +429,9 @@ func (r *Runner[K, M]) handle(ctx context.Context, a *actor[K, M], env envelope[
 type Effects[K comparable, M any] struct {
 	r   *Runner[K, M]
 	key K
+
+	replied bool
+	value   any
 }
 
 // Go runs fn as a child task of the key's actor, on the runner's context, and
