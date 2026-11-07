@@ -73,7 +73,7 @@ func TestOpenHandleSurvivesCacheCrossingBudget(t *testing.T) {
 	cfg.CacheDir = t.TempDir()
 	cfg.CacheCleanupInterval = time.Hour
 	cfg.CacheDiskSize = 1 << 30
-	cache, err := NewCache(context.Background(), backend, cfg, zerolog.Nop())
+	cache, err := NewCache(newTestGroup(t), backend, cfg, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}

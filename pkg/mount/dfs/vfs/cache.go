@@ -23,6 +23,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/buffer"
 	"github.com/sirrobot01/decypharr/internal/fsutil"
 	"github.com/sirrobot01/decypharr/internal/logger"
+	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	dfsconfig "github.com/sirrobot01/decypharr/pkg/mount/dfs/config"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/vfs/ranges"
@@ -76,8 +77,11 @@ type Cache struct {
 
 	manager Backend
 
-	ctx    context.Context
-	cancel context.CancelFunc
+	// ctx is the cache's group context: it ends when the group stops.
+	ctx context.Context
+	// itemsGroup owns the cache items' tasks; closing it is how the cache
+	// refuses new items.
+	itemsGroup *task.Group
 
 	createGroup  singleflight.Group
 	threshold    int64
@@ -144,12 +148,10 @@ type purgeRunSummary struct {
 }
 
 // NewCache creates a new sparse file cache.
-func NewCache(ctx context.Context, mgr Backend, config *dfsconfig.FuseConfig, log zerolog.Logger) (*Cache, error) {
+func NewCache(g *task.Group, mgr Backend, config *dfsconfig.FuseConfig, log zerolog.Logger) (*Cache, error) {
 	if err := os.MkdirAll(config.CacheDir, 0o750); err != nil {
 		return nil, fmt.Errorf("failed to create cache dir: %w", err)
 	}
-
-	ctx, cancel := context.WithCancel(ctx)
 
 	maxSize := config.CacheDiskSize
 	threshold := int64(0)
@@ -177,8 +179,8 @@ func NewCache(ctx context.Context, mgr Backend, config *dfsconfig.FuseConfig, lo
 		logger:       log,
 		items:        xsync.NewMap[string, *CacheItem](),
 		manager:      mgr,
-		ctx:          ctx,
-		cancel:       cancel,
+		ctx:          g.Context(),
+		itemsGroup:   g.Child("items"),
 		threshold:    threshold,
 	}
 
@@ -197,9 +199,20 @@ func NewCache(ctx context.Context, mgr Backend, config *dfsconfig.FuseConfig, lo
 		BackWindow:       backWindow,
 	})
 	c.evict()
-	go c.evictLoop()
-	go c.speedSampleLoop()
+	if err := g.Go("evict", c.evictLoop); err != nil {
+		return nil, c.abortStart("evict", err)
+	}
+	if err := g.Go("speed", c.speedSampleLoop); err != nil {
+		return nil, c.abortStart("speed", err)
+	}
 	return c, nil
+}
+
+// abortStart releases what NewCache built when its group refused a loop.
+func (c *Cache) abortStart(loop string, err error) error {
+	c.itemsGroup.Close()
+	_ = c.pool.Close()
+	return fmt.Errorf("start cache %s loop: %w", loop, err)
 }
 
 // GetItem returns or creates a cache item for the given file of entry. Items
@@ -520,6 +533,9 @@ func (c *Cache) storeDiskStats(candidates []candidateEntry, removed map[string]s
 // so a re-opened item can serve its cached bytes immediately without
 // re-downloading.
 func (c *Cache) newItem(key string, entry *storage.Entry, filename string, fileSize int64) (*CacheItem, error) {
+	if c.itemsGroup.State() != task.Running {
+		return nil, fmt.Errorf("cache item %s: %w", key, task.ErrStopped)
+	}
 	_logger := c.logger.With().Str("entry", entry.Name).Str("filename", filename).Logger()
 	log := logger.NewRateLimitedLogger(logger.WithLogger(_logger))
 
@@ -615,7 +631,7 @@ func (c *Cache) newItem(key string, entry *storage.Entry, filename string, fileS
 }
 
 // evictLoop runs periodic evict.
-func (c *Cache) evictLoop() {
+func (c *Cache) evictLoop(ctx context.Context) error {
 	ticker := time.NewTicker(c.config.CacheCleanupInterval)
 	defer ticker.Stop()
 
@@ -623,8 +639,8 @@ func (c *Cache) evictLoop() {
 		select {
 		case <-ticker.C:
 			c.evict()
-		case <-c.ctx.Done():
-			return
+		case <-ctx.Done():
+			return nil
 		}
 	}
 }
@@ -920,7 +936,7 @@ func (c *Cache) PurgeCache() map[string]any {
 
 // Close shuts down the cache.
 func (c *Cache) Close() error {
-	c.cancel()
+	c.itemsGroup.Close()
 
 	c.items.Range(func(key string, item *CacheItem) bool {
 		if err := item.Close(); err != nil {
@@ -981,15 +997,15 @@ func (c *Cache) updateSpeed() {
 // speedSampleLoop updates the download speed on a fixed 1-second cadence,
 // independent of GetStats calls so the reported speed is always fresh and
 // the sample window is predictable regardless of polling frequency.
-func (c *Cache) speedSampleLoop() {
+func (c *Cache) speedSampleLoop(ctx context.Context) error {
 	ticker := time.NewTicker(speedSampleInterval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
 			c.updateSpeed()
-		case <-c.ctx.Done():
-			return
+		case <-ctx.Done():
+			return nil
 		}
 	}
 }
@@ -1273,9 +1289,9 @@ func (item *CacheItem) StopDownloaders() {
 }
 
 // ReadAt reads from the sparse file, downloading if needed.
-// Uses [context.Background]() — prefer ReadAtContext when a caller context is available.
+// It runs on the cache's context; prefer ReadAtContext when a caller context is available.
 func (item *CacheItem) ReadAt(p []byte, off int64) (int, error) {
-	return item.ReadAtContext(context.Background(), p, off)
+	return item.ReadAtContext(item.cache.ctx, p, off)
 }
 
 // ReadAtContext reads from the sparse file, downloading if needed.

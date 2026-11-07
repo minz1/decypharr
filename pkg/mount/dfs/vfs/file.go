@@ -42,10 +42,10 @@ func NewStreamingFile(item *CacheItem) *StreamingFile {
 	}
 }
 
-// ReadAt implements [io.ReaderAt] using a background context.
+// ReadAt implements [io.ReaderAt] on the cache's context.
 // Prefer ReadAtContext when a caller context is available (e.g. from a FUSE handle).
 func (f *StreamingFile) ReadAt(p []byte, off int64) (int, error) {
-	return f.ReadAtContext(context.Background(), p, off)
+	return f.ReadAtContext(f.item.cache.ctx, p, off)
 }
 
 // ReadAtContext reads from the file, passing ctx into the download layer so

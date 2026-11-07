@@ -290,7 +290,7 @@ func TestNewCacheAccountsPersistentUsageAtStartup(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c, err := NewCache(t.Context(), nil, &fuseconfig.FuseConfig{
+	c, err := NewCache(newTestGroup(t), nil, &fuseconfig.FuseConfig{
 		CacheDir:             cacheDir,
 		CacheDiskSize:        100,
 		CacheCleanupInterval: time.Hour,

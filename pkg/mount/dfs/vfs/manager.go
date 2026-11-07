@@ -1,12 +1,12 @@
 package vfs
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/logger"
+	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/pkg/manager"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/config"
 )
@@ -16,9 +16,6 @@ type Manager struct {
 	manager *manager.Manager
 	cache   *Cache
 	logger  zerolog.Logger
-
-	ctx    context.Context
-	cancel context.CancelFunc
 }
 
 // getFileAttempts bounds GetFile's retries against a janitor tearing the
@@ -27,16 +24,13 @@ const getFileAttempts = 8
 
 // NewManager creates a new VFS manager.
 func NewManager(
-	ctx context.Context,
+	g *task.Group,
 	mgr *manager.Manager,
 	config *config.FuseConfig,
 	logs *logger.Factory,
 ) (*Manager, error) {
-	ctx, cancel := context.WithCancel(ctx)
-
-	cache, err := NewCache(ctx, mgr, config, logs.New("dfs"))
+	cache, err := NewCache(g, mgr, config, logs.New("dfs"))
 	if err != nil {
-		cancel()
 		return nil, fmt.Errorf("failed to create cache: %w", err)
 	}
 
@@ -44,8 +38,6 @@ func NewManager(
 		manager: mgr,
 		cache:   cache,
 		logger:  logs.New("vfs"),
-		ctx:     ctx,
-		cancel:  cancel,
 	}
 
 	return m, nil
@@ -96,8 +88,6 @@ func (m *Manager) GetFile(info *manager.FileInfo) (File, error) {
 
 // Close shuts down the manager.
 func (m *Manager) Close() error {
-	m.cancel()
-
 	// Close cache
 	if m.cache != nil {
 		return m.cache.Close()
