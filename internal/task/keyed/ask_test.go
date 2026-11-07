@@ -118,7 +118,7 @@ func TestAskFromAChildTaskOfAHandlerIsRefused(t *testing.T) {
 				_, err := r.Ask(ctx, "b", 1)
 				results <- err
 				return 1
-			})
+			}, nil)
 		})
 		r = keyed.New[string, int, struct{}](g, "ask-child", h, keyed.Options[int]{})
 		if err := r.Send("a", 0); err != nil {
