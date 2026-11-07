@@ -37,7 +37,7 @@ func TestGenerationTransitionTable(t *testing.T) {
 
 func TestGenerationRefusesIllegalTransitions(t *testing.T) {
 	t.Parallel()
-	gen := newGeneration(task.NewRoot(t.Context(), "generation", zerolog.Nop()))
+	gen := newGeneration(task.NewRoot(t.Context(), "generation", zerolog.Nop()), zerolog.Nop())
 	if gen.transition(genRestarting) {
 		t.Fatal("starting -> restarting was allowed: a generation must drain first")
 	}
@@ -56,7 +56,7 @@ func TestGenerationRefusesIllegalTransitions(t *testing.T) {
 // and the next generation starts with a fresh token.
 func TestRestartIsIdempotentWithinAGeneration(t *testing.T) {
 	t.Parallel()
-	first := newGeneration(task.NewRoot(t.Context(), "generation", zerolog.Nop()))
+	first := newGeneration(task.NewRoot(t.Context(), "generation", zerolog.Nop()), zerolog.Nop())
 	var calls sync.WaitGroup
 	for range 8 {
 		calls.Go(first.RequestRestart)
@@ -69,7 +69,7 @@ func TestRestartIsIdempotentWithinAGeneration(t *testing.T) {
 		t.Fatal("restart was not recorded")
 	}
 
-	second := newGeneration(task.NewRoot(t.Context(), "generation", zerolog.Nop()))
+	second := newGeneration(task.NewRoot(t.Context(), "generation", zerolog.Nop()), zerolog.Nop())
 	select {
 	case <-second.restartRequested():
 		t.Fatal("a new generation inherited the previous generation's restart request")
