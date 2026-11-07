@@ -24,6 +24,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/internal/task"
+	"github.com/sirrobot01/decypharr/internal/task/keyed"
 	"github.com/sirrobot01/decypharr/pkg/manager"
 	"github.com/sirrobot01/decypharr/pkg/server/qbit"
 	"github.com/sirrobot01/decypharr/pkg/server/sabnzbd"
@@ -90,6 +91,8 @@ type Server struct {
 	restartFunc func()
 	// tasks lists the running tasks of the generation for /debug/tasks.
 	tasks func() []task.Info
+	// actors lists the keyed runners of the generation for /debug/tasks.
+	actors func() []keyed.Info
 	// stopCtx returns the context that ends at the generation's drain deadline.
 	stopCtx func() context.Context
 	// shutdownGrace is how long in-flight requests get to finish before open streams are closed.
@@ -198,6 +201,11 @@ func (s *Server) SetRestartFunc(restart func()) {
 // SetTaskSnapshot wires GET /debug/tasks to the generation's task tree.
 func (s *Server) SetTaskSnapshot(snapshot func() []task.Info) {
 	s.tasks = snapshot
+}
+
+// SetActorSnapshot adds the keyed runners' mailboxes to GET /debug/tasks.
+func (s *Server) SetActorSnapshot(snapshot func() []keyed.Info) {
+	s.actors = snapshot
 }
 
 // errRestartUnavailable is returned by Restart when no generation is wired.
