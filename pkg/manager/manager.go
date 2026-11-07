@@ -87,8 +87,12 @@ type Manager struct {
 	work     *task.Group
 	children []*task.Group
 	// life is the readiness state; ready closes on its move to Ready.
-	life  *state.Atomic[lifecycle]
-	ready chan struct{}
+	life *state.Atomic[lifecycle]
+	// startMu guards startRan: whether Start launched the start task, whose end startDone announces.
+	startMu   sync.Mutex
+	startRan  bool
+	startDone chan struct{}
+	ready     chan struct{}
 	// The sub-services the start sequence runs, each as a task on its own
 	// child group. A nil service is not configured.
 	hearsaySvc, placementsSvc, reacquireSvc, indexerSvc, repairSvc, mountSvc, schedulerSvc *service
@@ -254,6 +258,7 @@ func New(g *task.Group, store *config.Store, logs *logger.Factory) (*Manager, er
 	instance := &Manager{
 		group:                  g,
 		life:                   newLifecycle(),
+		startDone:              make(chan struct{}),
 		startTime:              time.Now(),
 		storage:                strg,
 		clients:                xsync.NewMap[string, debrid.Client](),
