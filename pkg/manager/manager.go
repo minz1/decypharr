@@ -918,7 +918,7 @@ func (m *Manager) DeleteEntry(infohash string, removePlacements bool) error {
 		return deleteErr
 	}
 	if removePlacements {
-		m.startPlacementRun(func() { m.RemoveTorrentPlacements(torr) })
+		m.startPlacementRun(torr.Name, "all", func() { m.RemoveTorrentPlacements(torr) })
 	}
 	m.strm.RemoveEntryAsync(torr)
 	// Refresh entry cache

@@ -342,7 +342,8 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 
 		// Delete from debrid on error
 		if dbT != nil && dbT.ID != "" {
-			m.startPlacementRun(func() { m.discardSubmitted(entry.ActiveProvider, dbT.ID, entry.InfoHash) })
+			provider, id := entry.ActiveProvider, dbT.ID
+			m.startPlacementRun(entry.Name, provider, func() { m.discardSubmitted(provider, id, entry.InfoHash) })
 		}
 		return
 	}
@@ -742,7 +743,10 @@ func (m *Manager) submitToProvider(
 	if err != nil {
 		if torrent != nil && torrent.ID != "" {
 			// Delete the torrent if it was not downloaded
-			m.startPlacementRun(func() { m.discardSubmitted(db.Config().Name, torrent.ID, debridTorrent.InfoHash) })
+			provider, id := db.Config().Name, torrent.ID
+			m.startPlacementRun(debridTorrent.Name, provider, func() {
+				m.discardSubmitted(provider, id, debridTorrent.InfoHash)
+			})
 		}
 		if !reported {
 			m.hearsay.DiscardAdd(decision)

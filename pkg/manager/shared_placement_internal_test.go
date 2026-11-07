@@ -188,7 +188,7 @@ func TestPlacementRunsEndBeforeTheStorageCloses(t *testing.T) {
 	h := newPruneHarness(t, config.PruneModeDelete)
 	release := make(chan struct{})
 	finished := make(chan struct{})
-	if !h.m.startPlacementRun(func() {
+	if !h.m.startPlacementRun("test entry", "torbox", func() {
 		<-release
 		close(finished)
 	}) {
@@ -214,12 +214,30 @@ func TestPlacementRunsEndBeforeTheStorageCloses(t *testing.T) {
 	}
 
 	ran := false
-	if h.m.startPlacementRun(func() { ran = true }) {
+	if h.m.startPlacementRun("test entry", "torbox", func() { ran = true }) {
 		t.Fatal("a run was accepted after the runs closed")
 	}
 	h.m.placementRuns.Wait()
 	if ran {
 		t.Fatal("a refused run touched the storage")
+	}
+}
+
+// A deletion refused because the manager is stopping leaves a provider torrent behind: that is said, with the
+// entry and the provider, so it is not orphaned silently.
+func TestRefusedPlacementRunIsLogged(t *testing.T) {
+	t.Parallel()
+	h := newPruneHarness(t, config.PruneModeDelete)
+	h.m.closePlacementRuns()
+
+	if h.m.startPlacementRun("Show.S01", "torbox", func() {}) {
+		t.Fatal("a run was accepted after the runs closed")
+	}
+	logged := h.logs.String()
+	for _, want := range []string{`"level":"warn"`, "Show.S01", "torbox"} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("log %q does not carry %q", logged, want)
+		}
 	}
 }
 

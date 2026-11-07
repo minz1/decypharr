@@ -39,11 +39,14 @@ func (m *Manager) discardSubmitted(provider, id, self string) {
 }
 
 // startPlacementRun starts a provider deletion that Stop waits for. It reports false, and runs nothing, once
-// Stop has closed the runs: a deletion after that would read a storage that is closing.
-func (m *Manager) startPlacementRun(run func()) bool {
+// Stop has closed the runs: a deletion after that would read a storage that is closing. The refusal is logged with
+// the entry and the provider, since the provider torrent is left behind.
+func (m *Manager) startPlacementRun(entry, provider string, run func()) bool {
 	m.placementMu.Lock()
 	defer m.placementMu.Unlock()
 	if m.placementsClosed {
+		m.logger.Warn().Str("name", entry).Str("provider", provider).
+			Msg("Manager is stopping; a provider torrent was not deleted and may be left behind")
 		return false
 	}
 	m.placementRuns.Go(run)
