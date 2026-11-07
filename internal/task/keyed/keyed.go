@@ -485,9 +485,10 @@ func (r *Runner[K, M, S]) actorLocked(key K) *actor[K, M] {
 	return a
 }
 
-// dropIfIdleLocked forgets a key that has nothing queued, nothing running and nothing in flight.
+// dropIfIdleLocked forgets a key that has nothing queued, nothing running and nothing in flight. A singleton's
+// record stays while the runner runs (its goroutine never exits); once the runner stops it goes like any other.
 func (r *Runner[K, M, S]) dropIfIdleLocked(a *actor[K, M]) {
-	if !a.running && len(a.queue) == 0 && a.children == 0 && a.timers == 0 && !r.noIdle {
+	if !a.running && len(a.queue) == 0 && a.children == 0 && a.timers == 0 && (!r.noIdle || !r.accepting()) {
 		delete(r.keys, a.key)
 	}
 }
