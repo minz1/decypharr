@@ -61,12 +61,14 @@ type Manager struct {
 	mount        config.Mount
 	mountDirMode fs.FileMode
 	unmounter    *unmount.Unmounter
-	logger       zerolog.Logger
-	info         atomic.Pointer[MountInfo]
-	manager      *manager.Manager
-	webdavURL    string
-	recovering   atomic.Bool
-	rcdLog       *lumberjack.Logger
+	// detach unmounts a path without rclone's help; the unmounter by default.
+	detach     func(ctx context.Context, path string) error
+	logger     zerolog.Logger
+	info       atomic.Pointer[MountInfo]
+	manager    *manager.Manager
+	webdavURL  string
+	recovering atomic.Bool
+	rcdLog     *lumberjack.Logger
 
 	client *rclone.Client
 	owner  *rcdOwner
@@ -165,6 +167,9 @@ func (m *Manager) wire() {
 	o.ping = m.client.Ping
 	o.onReady = m.onRcdReady
 	o.onExit = m.onRcdExit
+	if m.detach == nil {
+		m.detach = m.unmounter.Unmount
+	}
 	o.beforeStop = m.unmount
 	o.closeLog = m.closeLog
 	m.owner = o
