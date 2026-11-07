@@ -443,7 +443,9 @@ func (r *Runner[K, M]) loop(ctx context.Context, a *actor[K, M]) {
 		case <-ctx.Done():
 		case <-idleC:
 			r.mu.Lock()
-			if len(a.queue) == 0 {
+			// A child task in flight will send its result to this key: the goroutine stays up for it. Pending
+			// timers do not hold it; the key's record does that, and a firing timer starts the goroutine again.
+			if len(a.queue) == 0 && a.children == 0 {
 				r.exitLocked(a, false)
 				r.mu.Unlock()
 				return
