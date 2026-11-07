@@ -221,7 +221,12 @@ type breaker struct {
 	ledger   []healRecord
 	verdicts map[Bucket]canaryVerdict
 	flight   flight.Group[canaryOutcome]
+	// lifetime is the context a canary probe is tied to; nil leaves it to the caller's detached context.
+	lifetime func() context.Context
 }
+
+// canaryProbeTimeout bounds one canary probe.
+const canaryProbeTimeout = 2 * time.Minute
 
 func newBreaker(settings func() config.BreakerSettings, canary canaryFunc) *breaker {
 	return &breaker{
@@ -340,7 +345,14 @@ func (b *breaker) probeCanary(ctx context.Context, key Bucket) canaryOutcome {
 		}
 		verdict := canaryInconclusive
 		if b.canary != nil {
-			verdict = b.canary(ctx, key, b.settings())
+			// The flight runs without its first caller's cancellation, so the probe is bounded here instead: by a
+			// timeout, and by the service's lifetime, so it cannot read storage after shutdown.
+			if b.lifetime != nil {
+				ctx = b.lifetime()
+			}
+			probeCtx, cancel := context.WithTimeout(ctx, canaryProbeTimeout)
+			verdict = b.canary(probeCtx, key, b.settings())
+			cancel()
 		}
 		b.mu.Lock()
 		b.verdicts[key] = canaryVerdict{outcome: verdict, at: b.now()}

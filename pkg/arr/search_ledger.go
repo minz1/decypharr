@@ -167,8 +167,9 @@ func (s *Service) OpenSearchLedger(path string) error {
 	return nil
 }
 
-// Close closes the search ledger, if one was opened.
+// Close cancels the service's background work and closes the search ledger, if one was opened.
 func (s *Service) Close() error {
+	s.stop()
 	s.mu.Lock()
 	ledger := s.ledger
 	s.ledger = nil

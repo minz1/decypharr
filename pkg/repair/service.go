@@ -125,6 +125,13 @@ type Service struct {
 	seeded bool
 }
 
+// lifetime is the context that ends with the service: background probes are tied to it.
+func (r *Service) lifetime() context.Context {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.parentCtx
+}
+
 func (r *Service) clock() time.Time {
 	if r.now != nil {
 		return r.now()
@@ -159,6 +166,7 @@ func New(deps Dependencies) *Service {
 	}
 	r.breaker = newBreaker(r.breakerSettings, r.canaryProbe)
 	r.breaker.now = r.clock
+	r.breaker.lifetime = r.lifetime
 	return r
 }
 

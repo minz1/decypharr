@@ -43,6 +43,9 @@ type Service struct {
 	now          func() time.Time
 	// guard limits how fast queue cleanup blocklists downloads.
 	guard *queueGuard
+	// lifetime ends when Close is called; background work, such as a canary probe, is tied to it.
+	lifetime context.Context
+	stop     context.CancelFunc
 }
 
 // readRetries is how many times the shared client retries an Arr read.
@@ -51,7 +54,10 @@ const readRetries = 5
 // New builds the service from the Arr instances configured in cfg. The
 // instance list and queue cleanup rules are read live from cfg.
 func New(cfg *config.Store, tlsConfig *tls.Config, log zerolog.Logger) *Service {
+	lifetime, stop := context.WithCancel(context.Background())
 	service := &Service{
+		lifetime:        lifetime,
+		stop:            stop,
 		arrs:            make(map[string]Arr),
 		cleanupFailing:  make(map[string]bool),
 		importFailures:  make(map[string]map[string]importFailure),

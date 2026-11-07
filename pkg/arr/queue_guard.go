@@ -303,6 +303,9 @@ func (s *Service) admitBlocklists(ctx context.Context, name string, items []Queu
 	return decision.allowed
 }
 
+// guardCanaryTimeout bounds one canary probe of a provider.
+const guardCanaryTimeout = 2 * time.Minute
+
 // canaryFor probes a provider's canary. Callers asking at the same moment share one probe, and a verdict that
 // arrives while they queue is reused rather than probed again.
 func (s *Service) canaryFor(ctx context.Context, provider string, ttl time.Duration) CanaryVerdict {
@@ -316,7 +319,11 @@ func (s *Service) canaryFor(ctx context.Context, provider string, ttl time.Durat
 		s.guard.mu.Unlock()
 		verdict := CanaryInconclusive
 		if probe != nil {
-			verdict = probe(ctx, provider)
+			// The flight runs without its first caller's cancellation, so the probe is bounded here instead: by a
+			// timeout, and by the service's lifetime, so it cannot read storage after Close.
+			probeCtx, cancel := context.WithTimeout(s.lifetime, guardCanaryTimeout)
+			verdict = probe(probeCtx, provider)
+			cancel()
 		}
 		s.guard.mu.Lock()
 		s.guard.verdicts[provider] = guardVerdict{verdict: verdict, at: s.now()}
