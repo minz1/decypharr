@@ -2,7 +2,6 @@ package repair
 
 import (
 	"sync"
-	"time"
 )
 
 // probeTracker counts the canary probes in flight so Stop can wait for them. A WaitGroup would do, but probes
@@ -29,8 +28,8 @@ func (t *probeTracker) begin() func() {
 	}
 }
 
-// wait returns once no probe is in flight, or after timeout, and reports whether it ended idle.
-func (t *probeTracker) wait(timeout time.Duration) bool {
+// wait returns once no probe is in flight, or when expired is closed, and reports whether it ended idle.
+func (t *probeTracker) wait(expired <-chan struct{}) bool {
 	t.mu.Lock()
 	if t.n == 0 {
 		t.mu.Unlock()
@@ -44,7 +43,7 @@ func (t *probeTracker) wait(timeout time.Duration) bool {
 	select {
 	case <-idle:
 		return true
-	case <-time.After(timeout):
+	case <-expired:
 		return false
 	}
 }

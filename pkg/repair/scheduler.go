@@ -128,9 +128,14 @@ func (r *Service) Stop() {
 	if cancel != nil {
 		cancel()
 	}
+	// Waiting for a probe and for the run to drain share one budget, so a stop never takes twice as long.
+	expired := make(chan struct{})
+	budget := time.AfterFunc(repairStopDrainTimeout, func() { close(expired) })
+	defer budget.Stop()
+
 	// A canary probe still running reads storage and usenet; end it and wait for it to leave.
 	probeCancel()
-	if !r.probes.wait(repairStopDrainTimeout) {
+	if !r.probes.wait(expired) {
 		r.logger.Warn().Dur("timeout", repairStopDrainTimeout).Msg("Repair: a canary probe did not stop in time")
 	}
 
@@ -141,7 +146,7 @@ func (r *Service) Stop() {
 	}()
 	select {
 	case <-done:
-	case <-time.After(repairStopDrainTimeout):
+	case <-expired:
 		r.logger.Warn().Dur("timeout", repairStopDrainTimeout).Msg("Repair: drain timed out")
 	}
 }
