@@ -2,6 +2,7 @@ package keyed_test
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"testing"
 	"testing/synctest"
@@ -116,6 +117,41 @@ func TestCancelChildRecallsAResultAlreadyQueued(t *testing.T) {
 		}
 		if keys := r.Snapshot().Keys; len(keys) != 1 || keys[0].Depth != 0 || keys[0].Children != 0 {
 			t.Fatalf("keys = %+v, want nothing queued and no child in flight", keys)
+		}
+	})
+}
+
+// A recalled child result frees no room it never took: the mailbox bound counts the same after the recall.
+func TestRecallingAChildResultKeepsTheMailboxBound(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		rec := newRecorder()
+		r := keyed.New[string, msg, struct{}](newRoot(t), "recall-bound", rec, keyed.Options[msg]{MailboxSize: 1})
+		proceed, release, cancel := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		var id keyed.ChildID
+		mustSend(t, r, "a", msg{id: 1, run: func(_ context.Context, fx *keyed.Effects[string, msg]) {
+			id, _ = fx.Go("io", func(context.Context) msg {
+				<-proceed
+				return msg{id: 2}
+			}, nil)
+		}})
+		synctest.Wait()
+		mustSend(t, r, "a", msg{id: 3, block: cancel, run: func(_ context.Context, fx *keyed.Effects[string, msg]) {
+			fx.CancelChild(id)
+		}})
+		synctest.Wait()
+		close(proceed)
+		synctest.Wait()
+		mustSend(t, r, "a", msg{id: 4, block: release}) // queued behind 3; handled once 3 returns
+		close(cancel)
+		synctest.Wait() // 3 recalled the result; 4 is in flight
+
+		mustSend(t, r, "a", msg{id: 5})
+		err := r.Send("a", msg{id: 6})
+		close(release)
+		synctest.Wait()
+		if !errors.Is(err, keyed.ErrMailboxFull) {
+			t.Fatalf("second Send behind a blocked handler = %v, want ErrMailboxFull with a bound of 1", err)
 		}
 	})
 }
