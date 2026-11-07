@@ -98,7 +98,8 @@ type host[K comparable, M any] interface {
 	Send(key K, msg M) error
 	After(key K, d time.Duration, msg M) TimerID
 	CancelTimer(id TimerID)
-	spawn(key K, name string, fn func(ctx context.Context) M, onPanic func(v any) M) error
+	spawn(key K, name string, fn func(ctx context.Context) M, onPanic func(v any) M) (ChildID, error)
+	cancelChild(id ChildID)
 }
 
 // activate builds the key's state. A panic is logged and counted and reported
@@ -246,10 +247,12 @@ type Runner[K comparable, M, S any] struct {
 	lifecycle *state.Atomic[runState]
 	ctx       context.Context
 
-	mu   sync.Mutex
-	keys map[K]*actor[K, M]
-	live int // key goroutines running or starting
-	kids int // child tasks running
+	mu        sync.Mutex
+	keys      map[K]*actor[K, M]
+	live      int // key goroutines running or starting
+	kids      int // child tasks running
+	childRecs map[ChildID]*childRec[K]
+	lastChild ChildID
 
 	// Timers belong to the runner (see timers.go). Guarded by mu.
 	timers    timerHeap[K, M]
@@ -288,6 +291,7 @@ func New[K comparable, M, S any](g *task.Group, name string, h Handler[K, M, S],
 		keys:         make(map[K]*actor[K, M]),
 		timerByID:    make(map[TimerID]*timerEntry[K, M]),
 		queuedTimers: make(map[TimerID]K),
+		childRecs:    make(map[ChildID]*childRec[K]),
 		timerWake:    make(chan struct{}, 1),
 	}
 	if err := child.Go("supervisor", r.supervise); err != nil {
@@ -613,39 +617,79 @@ type Effects[K comparable, M any] struct {
 	value   any
 }
 
-// Go runs fn as a child task of the key's actor, on the runner's context, and
-// sends the message it returns back to the same key. The message is queued
-// past the mailbox bound: the actor asked for it, so it is never refused.
+// ChildID names a child task started with [Effects.Go].
+type ChildID uint64
+
+// childRec is the runner's record of a running child task. The runner's mutex guards it.
+type childRec[K comparable] struct {
+	key       K
+	cancel    context.CancelFunc // set when the task starts
+	cancelled bool
+}
+
+// Go runs fn as a child task of the key's actor, on a context derived from the
+// runner's, and sends the message it returns back to the same key. The message
+// is queued past the mailbox bound: the actor asked for it, so it is never
+// refused. The returned id names the child for [Effects.CancelChild].
 //
 // If fn panics the runner recovers it, logs it with the key, counts it, and
 // sends onPanic(v), v being the panic value, in fn's place. An actor that
 // waits for the child must never wait for ever, so onPanic should say that
 // the work failed; with a nil onPanic nothing is sent. Go returns ErrStopped
 // once the runner stops.
-func (fx *Effects[K, M]) Go(name string, fn func(ctx context.Context) M, onPanic func(v any) M) error {
+func (fx *Effects[K, M]) Go(name string, fn func(ctx context.Context) M, onPanic func(v any) M) (ChildID, error) {
 	return fx.r.spawn(fx.key, name, fn, onPanic)
 }
 
+// CancelChild cancels a child task: its context ends, it no longer keeps the
+// key's goroutine up, and whatever it returns, or its onPanic message, is
+// dropped. A child that ignores its context keeps running until it returns,
+// but nothing it does reaches the actor. Cancelling a child that has finished
+// or is unknown changes nothing.
+func (fx *Effects[K, M]) CancelChild(id ChildID) {
+	fx.r.cancelChild(id)
+}
+
 // spawn starts a child task of key's actor.
-func (r *Runner[K, M, S]) spawn(key K, name string, fn func(ctx context.Context) M, onPanic func(v any) M) error {
+func (r *Runner[K, M, S]) spawn(
+	key K,
+	name string,
+	fn func(ctx context.Context) M,
+	onPanic func(v any) M,
+) (ChildID, error) {
 	r.mu.Lock()
 	if !r.accepting() {
 		r.mu.Unlock()
-		return ErrStopped
+		return 0, ErrStopped
 	}
 	a := r.actorLocked(key)
 	a.children++
 	r.kids++
+	r.lastChild++
+	id := r.lastChild
+	rec := &childRec[K]{key: key}
+	r.childRecs[id] = rec
 	r.mu.Unlock()
 
 	err := r.group.Go(fmt.Sprint(key)+"/"+name, func(ctx context.Context) error {
-		defer r.childDone(key)
-		msg, ok := r.runChild(withHandlerMarker(ctx), key, name, fn, onPanic)
+		cctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		r.mu.Lock()
+		rec.cancel = cancel
+		if rec.cancelled {
+			cancel()
+		}
+		r.mu.Unlock()
+		defer r.childDone(key, id, rec)
+		msg, ok := r.runChild(withHandlerMarker(cctx), key, name, fn, onPanic)
 		if !ok {
 			return nil
 		}
 		r.mu.Lock()
 		defer r.mu.Unlock()
+		if rec.cancelled {
+			return nil // the actor gave up on this child: its result is dropped
+		}
 		if deliverErr := r.enqueueLocked(key, envelope[M]{msg: msg, at: time.Now(), bypass: true}); deliverErr != nil {
 			r.logger.Debug().Err(deliverErr).Str("runner", r.name).Str("key", fmt.Sprint(key)).
 				Str("task", name).Msg("A child task's result was not delivered")
@@ -653,10 +697,27 @@ func (r *Runner[K, M, S]) spawn(key K, name string, fn func(ctx context.Context)
 		return nil
 	})
 	if err != nil {
-		r.childDone(key)
-		return ErrStopped
+		r.childDone(key, id, rec)
+		return 0, ErrStopped
 	}
-	return nil
+	return id, nil
+}
+
+func (r *Runner[K, M, S]) cancelChild(id ChildID) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rec, ok := r.childRecs[id]
+	if !ok || rec.cancelled {
+		return
+	}
+	rec.cancelled = true
+	if a, found := r.keys[rec.key]; found {
+		a.children--
+		r.dropIfIdleLocked(a)
+	}
+	if rec.cancel != nil {
+		rec.cancel()
+	}
 }
 
 // runChild runs a child task's function and returns the message to deliver. A panic in fn becomes onPanic's
@@ -706,11 +767,12 @@ func (r *Runner[K, M, S]) runChild(
 	return fallback, delivered
 }
 
-func (r *Runner[K, M, S]) childDone(key K) {
+func (r *Runner[K, M, S]) childDone(key K, id ChildID, rec *childRec[K]) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.kids--
-	if a, ok := r.keys[key]; ok {
+	delete(r.childRecs, id)
+	if a, ok := r.keys[key]; ok && !rec.cancelled { // a cancelled child was released from the key already
 		a.children--
 		r.dropIfIdleLocked(a)
 	}

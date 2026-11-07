@@ -18,7 +18,7 @@ func TestTheRunnerIsStoppingWhileAChildTaskStillRuns(t *testing.T) {
 		r := keyed.New[string, msg, struct{}](g, "kids", rec, keyed.Options[msg]{})
 		release := make(chan struct{})
 		mustSend(t, r, "a", msg{id: 1, run: func(_ context.Context, fx *keyed.Effects[string, msg]) {
-			_ = fx.Go("io", func(context.Context) msg { // ignores its context, as provider calls do
+			_, _ = fx.Go("io", func(context.Context) msg { // ignores its context, as provider calls do
 				<-release
 				return msg{id: 2}
 			}, nil)

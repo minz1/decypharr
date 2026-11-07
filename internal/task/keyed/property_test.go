@@ -244,10 +244,10 @@ func (o *observer) Handle(
 func (o *observer) spawn(fx *keyed.Effects[int, pmsg], m pmsg) {
 	switch m.spawn {
 	case 1:
-		_ = fx.Go("child", func(context.Context) pmsg { return pmsg{id: m.id + childBase} },
+		_, _ = fx.Go("child", func(context.Context) pmsg { return pmsg{id: m.id + childBase} },
 			func(any) pmsg { return pmsg{id: m.id + panicBase} })
 	case 2:
-		_ = fx.Go("child", func(context.Context) pmsg { panic("child failed") },
+		_, _ = fx.Go("child", func(context.Context) pmsg { panic("child failed") },
 			func(any) pmsg { return pmsg{id: m.id + panicBase} })
 	}
 }

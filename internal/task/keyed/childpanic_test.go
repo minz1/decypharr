@@ -29,7 +29,7 @@ func TestAChildPanicDeliversTheOnPanicMessage(t *testing.T) {
 		release := make(chan struct{})
 		fail := make(chan struct{})
 		mustSend(t, r, "a", msg{id: 1, run: func(_ context.Context, fx *keyed.Effects[string, msg]) {
-			err := fx.Go("io", func(context.Context) msg {
+			_, err := fx.Go("io", func(context.Context) msg {
 				<-fail
 				panic("provider exploded")
 			}, func(v any) msg {
@@ -74,7 +74,7 @@ func TestAChildPanicWithNoOnPanicDeliversNothing(t *testing.T) {
 		rec := newRecorder()
 		r := keyed.New[string, msg, struct{}](newRoot(t), "child-panic-none", rec, keyed.Options[msg]{})
 		mustSend(t, r, "a", msg{id: 1, run: func(_ context.Context, fx *keyed.Effects[string, msg]) {
-			_ = fx.Go("io", func(context.Context) msg { panic("boom") }, nil)
+			_, _ = fx.Go("io", func(context.Context) msg { panic("boom") }, nil)
 		}})
 		synctest.Wait()
 
@@ -97,7 +97,7 @@ func TestAPanicInOnPanicIsContained(t *testing.T) {
 		rec := newRecorder()
 		r := keyed.New[string, msg, struct{}](newRoot(t), "on-panic-panics", rec, keyed.Options[msg]{})
 		mustSend(t, r, "a", msg{id: 1, run: func(_ context.Context, fx *keyed.Effects[string, msg]) {
-			_ = fx.Go("io", func(context.Context) msg { panic("boom") }, func(any) msg { panic("again") })
+			_, _ = fx.Go("io", func(context.Context) msg { panic("boom") }, func(any) msg { panic("again") })
 		}})
 		synctest.Wait()
 		mustSend(t, r, "a", msg{id: 2})
