@@ -1129,6 +1129,53 @@
                                                 <div id="queueCleanupCustom" class="space-y-2"></div>
                                             </div>
                                         </div>
+                                        <div class="rounded-box border border-base-300 bg-base-100 p-3 space-y-3">
+                                            <div>
+                                                <h4 class="font-medium text-sm">Blocklist limits</h4>
+                                                <p class="text-xs opacity-60 mt-1">
+                                                    Cleanup blocklists at most this many distinct downloads per window; the rest stay in the queue
+                                                    and go in a later window, oldest first. A season pack counts once however many episodes it has.
+                                                    Leave a field empty, or 0, for its default; the default is shown as the placeholder.
+                                                </p>
+                                            </div>
+                                            <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                                                <div>
+                                                    <label class="label" for="queue_cleanup.blocklist_per_bucket">
+                                                        <span class="font-medium">Per rule and provider</span>
+                                                    </label>
+                                                    <input type="number"
+                                                           min="0"
+                                                           class="input w-full"
+                                                           name="queue_cleanup.blocklist_per_bucket"
+                                                           id="queue_cleanup.blocklist_per_bucket"
+                                                           placeholder="20">
+                                                    <span class="label-text-alt opacity-70">Downloads one Arr, rule and provider may have blocklisted per window. Failed downloads may go beyond it only while the provider's canary check passes. Default 20.</span>
+                                                </div>
+                                                <div>
+                                                    <label class="label" for="queue_cleanup.blocklist_per_arr">
+                                                        <span class="font-medium">Per Arr</span>
+                                                    </label>
+                                                    <input type="number"
+                                                           min="0"
+                                                           class="input w-full"
+                                                           name="queue_cleanup.blocklist_per_arr"
+                                                           id="queue_cleanup.blocklist_per_arr"
+                                                           placeholder="100">
+                                                    <span class="label-text-alt opacity-70">Hard cap on the downloads one Arr may have blocklisted per window, whatever the rule. Default 100.</span>
+                                                </div>
+                                                <div>
+                                                    <label class="label" for="queue_cleanup.blocklist_window">
+                                                        <span class="font-medium">Window</span>
+                                                    </label>
+                                                    <input type="text"
+                                                           class="input w-full"
+                                                           name="queue_cleanup.blocklist_window"
+                                                           id="queue_cleanup.blocklist_window"
+                                                           placeholder="1h">
+                                                    <span class="label-text-alt opacity-70">The rolling window of both limits. A positive duration; default 1h.</span>
+                                                </div>
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
                             </div>

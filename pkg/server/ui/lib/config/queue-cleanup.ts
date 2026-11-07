@@ -1,5 +1,9 @@
 import { cloneTemplate } from "#ui/lib/common/dom";
-import { asArray, isRecord, optStr } from "#ui/lib/common/json";
+import { asArray, isRecord, optNum, optStr } from "#ui/lib/common/json";
+import { intOr, numberText, setText, withId } from "#ui/lib/config/form";
+
+const LIMIT_COUNTS = ["blocklist_per_bucket", "blocklist_per_arr"] as const;
+const LIMIT_WINDOW = "blocklist_window";
 
 const CATALOG = [
   { id: "failed_download", label: "Failed download" },
@@ -70,7 +74,28 @@ const readRules = (value: unknown): { actions: Map<string, string>; custom: Cust
   return { actions, custom };
 };
 
+// The limits are empty when unset: the server reads empty or 0 as the default, and the form shows it as a placeholder.
+const field = (doc: Document, key: string): ReturnType<typeof withId> => withId(doc, `queue_cleanup.${key}`);
+
+const populateLimits = (doc: Document, value: unknown): void => {
+  const queue = isRecord(value) ? value : {};
+  for (const key of LIMIT_COUNTS) {
+    setText(field(doc, key), numberText(optNum(queue, key)));
+  }
+  setText(field(doc, LIMIT_WINDOW), optStr(queue, LIMIT_WINDOW) ?? "");
+};
+
+// Only the limits that are set are sent, as the server stores them: a save of a config that never set one is unchanged.
+const collectLimits = (doc: Document): Record<string, unknown> => {
+  const entries: [string, string | number][] = [
+    ...LIMIT_COUNTS.map((key): [string, number] => [key, intOr(field(doc, key)?.value, 0)]),
+    [LIMIT_WINDOW, field(doc, LIMIT_WINDOW)?.value.trim() ?? ""],
+  ];
+  return Object.fromEntries(entries.filter(([, limit]) => limit !== "" && limit !== 0));
+};
+
 const populateQueueCleanup = (doc: Document, value: unknown): void => {
+  populateLimits(doc, value);
   const catalog = doc.querySelector("#queueCleanupCatalog");
   const customRows = doc.querySelector("#queueCleanupCustom");
   if (catalog === null || customRows === null) {
@@ -97,7 +122,7 @@ const collectQueueCleanup = (doc: Document): Record<string, unknown> => {
       action: actionOf(row),
     }))
     .filter((rule) => rule.match !== "");
-  return { rules: [...catalog, ...custom] };
+  return { rules: [...catalog, ...custom], ...collectLimits(doc) };
 };
 
 export { addQueueCleanupRow, collectQueueCleanup, populateQueueCleanup };

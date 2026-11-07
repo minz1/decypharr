@@ -114,6 +114,21 @@ describe("each settings checkbox", () => {
   });
 });
 
+describe("the queue-cleanup blocklist limits", () => {
+  it("are sent only once set", async () => {
+    const { requests } = await bootSettings();
+    await settingsLoaded();
+    fill('[id="queue_cleanup.blocklist_per_arr"]', "60");
+    fill('[id="queue_cleanup.blocklist_window"]', "30m");
+    submitSettings();
+    const body = await savedBody(requests);
+    const queue = JSON.stringify(body["queue_cleanup"]);
+    expect(queue).toContain('"blocklist_per_arr":60');
+    expect(queue).toContain('"blocklist_window":"30m"');
+    expect(queue).not.toContain("blocklist_per_bucket");
+  });
+});
+
 describe("saving loaded settings", () => {
   it("a save after a successful config load posts what config.js posted, plus each arr's inherit choice", async () => {
     const { requests } = await bootSettings();
