@@ -4,6 +4,7 @@ import (
 	"container/heap"
 	"context"
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -70,13 +71,17 @@ func (r *Runner[K, M, S]) After(key K, d time.Duration, msg M) TimerID {
 	return entry.id
 }
 
-// CancelTimer cancels a pending timer. A timer that already fired, or was
-// already cancelled, is left alone.
+// CancelTimer cancels a timer. A timer that has not fired is removed; one that
+// fired but whose message still waits in the mailbox has the message taken
+// back out, so a cancelled deadline is never handled. A message the actor is
+// already handling cannot be recalled, and a timer already cancelled is left
+// alone.
 func (r *Runner[K, M, S]) CancelTimer(id TimerID) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	entry, ok := r.timerByID[id]
 	if !ok {
+		r.recallQueuedLocked(id)
 		return
 	}
 	heap.Remove(&r.timers, entry.index)
@@ -87,6 +92,24 @@ func (r *Runner[K, M, S]) CancelTimer(id TimerID) {
 	}
 }
 
+// recallQueuedLocked removes the message of a fired timer from its mailbox, if it still waits there.
+func (r *Runner[K, M, S]) recallQueuedLocked(id TimerID) {
+	key, ok := r.queuedTimers[id]
+	if !ok {
+		return
+	}
+	delete(r.queuedTimers, id)
+	a, found := r.keys[key]
+	if !found {
+		return
+	}
+	if i := slices.IndexFunc(a.queue, func(env envelope[M]) bool { return env.timer == id }); i >= 0 {
+		a.queue = slices.Delete(a.queue, i, i+1)
+		a.bypassed--
+	}
+	r.dropIfIdleLocked(a)
+}
+
 // fireDueLocked delivers every timer that is due.
 func (r *Runner[K, M, S]) fireDueLocked(now time.Time) {
 	for len(r.timers) > 0 && !r.timers[0].due.After(now) {
@@ -94,10 +117,15 @@ func (r *Runner[K, M, S]) fireDueLocked(now time.Time) {
 		delete(r.timerByID, entry.id)
 		a := r.actorLocked(entry.key)
 		a.timers--
-		if err := r.enqueueLocked(entry.key, envelope[M]{msg: entry.msg, at: now, bypass: true}); err != nil {
+		if err := r.enqueueLocked(
+			entry.key,
+			envelope[M]{msg: entry.msg, at: now, bypass: true, timer: entry.id},
+		); err != nil {
 			r.logger.Debug().Err(err).Str("runner", r.name).Str("key", fmt.Sprint(entry.key)).
 				Msg("A timer fired on a stopping runner and was dropped")
+			continue
 		}
+		r.queuedTimers[entry.id] = entry.key
 	}
 }
 
