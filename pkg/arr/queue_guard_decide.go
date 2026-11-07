@@ -18,9 +18,9 @@ type guardPlan struct {
 }
 
 // admitsExcess reports whether the bucket's excess may go ahead: only for a rule with a canary, and only while it
-// passes (or has nothing to probe).
+// passes. A canary with nothing to probe is no evidence, so the excess waits for the next window.
 func (p *guardPlan) admitsExcess() bool {
-	return p.canary && (p.verdict == CanaryPass || p.verdict == CanaryNone)
+	return p.canary && p.verdict == CanaryPass
 }
 
 // decide judges every bucket with downloads this tick. With a non-empty need it changed nothing and wants those
@@ -144,7 +144,7 @@ func (g *queueGuard) applyVerdictLocked(
 	switch {
 	case plan.admitsExcess() && bucket.state == guardTripped:
 		_ = bucket.transition(guardClosed, now)
-	case !plan.admitsExcess() && bucket.state == guardClosed:
+	case (plan.verdict == CanaryFail || plan.verdict == CanaryInconclusive) && bucket.state == guardClosed:
 		if err := bucket.transition(guardTripped, now); err == nil {
 			return []guardEvent{{trip: true, key: key, text: fmt.Sprintf(
 				"Queue cleanup: more than %d distinct downloads an hour and the provider canary did not pass; "+
