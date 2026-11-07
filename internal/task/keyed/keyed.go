@@ -22,8 +22,10 @@
 // observation, and is refused only if there is none, so the caller can try
 // again later; an observation is coalesced with an older one, or replaces the
 // oldest. A timer's message and a child task's result are never dropped or
-// refused. Timers belong to the runner, not to the goroutine, so a
-// goroutine's idle exit never loses one.
+// refused for a full mailbox; they go only with a cancel (of the timer or the
+// child), a stop, or an Activate that panics, which drops everything queued
+// for the key and logs it. Timers belong to the runner, not to the goroutine,
+// so a goroutine's idle exit never loses one.
 //
 // The runner's lifecycle is an explicit state machine (running, stopping,
 // stopped) driven by its group: stopping the group refuses new messages,
@@ -124,17 +126,36 @@ func (r *Runner[K, M, S]) activate(ctx context.Context, key K) (S, bool) {
 
 // abandonLocked ends the goroutine of a key whose Activate panicked: the messages queued so far are dropped and
 // counted, an Ask among them is answered with ErrHandlerPanicked, and the next message starts the key again.
+// Timer and child messages are dropped too, since there is no state to handle them on: the warning names how many,
+// because a dropped deadline is not handled until the key's next Activate sets it again.
 func (r *Runner[K, M, S]) abandonLocked(a *actor[K, M]) {
+	timers, children := 0, 0
 	for _, env := range a.queue {
 		if env.reply != nil {
 			env.reply.finish(nil, ErrHandlerPanicked)
 		}
-		delete(r.queuedTimers, env.timer)
+		switch {
+		case env.timer != 0:
+			timers++
+		case env.child != 0:
+			children++
+		}
+		r.forgetQueuedLocked(env)
 		a.dropped++
 		r.totalDropped.Add(1)
 	}
+	if timers > 0 || children > 0 {
+		r.logger.Warn().Str("runner", r.name).Str("key", fmt.Sprint(a.key)).Int("timers", timers).
+			Int("child_results", children).Msg("Activate panicked; timer messages and child results were dropped")
+	}
 	a.queue, a.bypassed = nil, 0
 	r.exitLocked(a, false)
+}
+
+// forgetQueuedLocked forgets that env waits in a mailbox, once it leaves the queue: handled, dropped or recalled.
+func (r *Runner[K, M, S]) forgetQueuedLocked(env envelope[M]) {
+	delete(r.queuedTimers, env.timer)
+	delete(r.queuedChildren, env.child)
 }
 
 // Options sets how a runner behaves. The zero value is usable.
@@ -203,6 +224,8 @@ type envelope[M any] struct {
 	bypass bool
 	// timer is the timer that delivered the message, so cancelling the timer can take the message back.
 	timer TimerID
+	// child is the child task that sent the message as its result, so cancelling the child can take it back.
+	child ChildID
 	// reply is where the asker of an Ask waits; nil for a message from Send.
 	reply *replySlot
 }
@@ -247,12 +270,14 @@ type Runner[K comparable, M, S any] struct {
 	lifecycle *state.Atomic[runState]
 	ctx       context.Context
 
-	mu        sync.Mutex
-	keys      map[K]*actor[K, M]
-	live      int // key goroutines running or starting
-	kids      int // child tasks running
+	mu   sync.Mutex
+	keys map[K]*actor[K, M]
+	live int // key goroutines running or starting
+	// childRecs holds the child tasks running, so its length is their count.
 	childRecs map[ChildID]*childRec[K]
-	lastChild ChildID
+	// queuedChildren maps a finished child whose result still waits in a mailbox to its key.
+	queuedChildren map[ChildID]K
+	lastChild      ChildID
 
 	// Timers belong to the runner (see timers.go). Guarded by mu.
 	timers    timerHeap[K, M]
@@ -280,19 +305,20 @@ func New[K comparable, M, S any](g *task.Group, name string, h Handler[K, M, S],
 	}
 	child := g.Child(name)
 	r := &Runner[K, M, S]{
-		name:         name,
-		group:        child,
-		handler:      h,
-		opts:         opts,
-		logger:       opts.Logger,
-		noIdle:       opts.IdleAfter < 0,
-		lifecycle:    state.NewAtomic(runRunning, runSuccessors),
-		ctx:          child.Context(),
-		keys:         make(map[K]*actor[K, M]),
-		timerByID:    make(map[TimerID]*timerEntry[K, M]),
-		queuedTimers: make(map[TimerID]K),
-		childRecs:    make(map[ChildID]*childRec[K]),
-		timerWake:    make(chan struct{}, 1),
+		name:           name,
+		group:          child,
+		handler:        h,
+		opts:           opts,
+		logger:         opts.Logger,
+		noIdle:         opts.IdleAfter < 0,
+		lifecycle:      state.NewAtomic(runRunning, runSuccessors),
+		ctx:            child.Context(),
+		keys:           make(map[K]*actor[K, M]),
+		timerByID:      make(map[TimerID]*timerEntry[K, M]),
+		queuedTimers:   make(map[TimerID]K),
+		childRecs:      make(map[ChildID]*childRec[K]),
+		queuedChildren: make(map[ChildID]K),
+		timerWake:      make(chan struct{}, 1),
 	}
 	if err := child.Go("supervisor", r.supervise); err != nil {
 		r.lifecycle.Transition(runRunning, runStopping)
@@ -358,7 +384,7 @@ func (r *Runner[K, M, S]) beginStop() {
 
 // settleLocked moves a stopping runner with no key goroutine and no child task left to Stopped.
 func (r *Runner[K, M, S]) settleLocked() {
-	if r.live == 0 && r.kids == 0 {
+	if r.live == 0 && len(r.childRecs) == 0 {
 		r.lifecycle.Transition(runStopping, runStopped)
 	}
 }
@@ -540,7 +566,7 @@ func (r *Runner[K, M, S]) loop(ctx context.Context, a *actor[K, M]) {
 			if env.bypass {
 				a.bypassed--
 			}
-			delete(r.queuedTimers, env.timer)
+			r.forgetQueuedLocked(env)
 			r.mu.Unlock()
 			r.handle(hctx, a, &held, env)
 			continue
@@ -574,7 +600,7 @@ func (r *Runner[K, M, S]) exitLocked(a *actor[K, M], stopping bool) {
 	if stopping {
 		for _, env := range a.queue {
 			dropReply(env.reply)
-			delete(r.queuedTimers, env.timer)
+			r.forgetQueuedLocked(env)
 		}
 		a.queue, a.bypassed = nil, 0
 	}
@@ -655,9 +681,11 @@ func (fx *Effects[K, M]) Go(name string, fn func(ctx context.Context) M, onPanic
 
 // CancelChild cancels a child task: its context ends, it no longer keeps the
 // key's goroutine up, and whatever it returns, or its onPanic message, is
-// dropped. A child that ignores its context keeps running until it returns,
-// but nothing it does reaches the actor. Cancelling a child that has finished
-// or is unknown changes nothing.
+// dropped, even when it is already queued behind the message being handled.
+// A child that ignores its context keeps running until it returns, but nothing
+// it does reaches the actor. A child cancelled before its task starts never
+// runs fn. Cancelling a child whose result has been handled, or an unknown
+// one, changes nothing.
 func (fx *Effects[K, M]) CancelChild(id ChildID) {
 	fx.live()
 	fx.r.cancelChild(id)
@@ -677,7 +705,6 @@ func (r *Runner[K, M, S]) spawn(
 	}
 	a := r.actorLocked(key)
 	a.children++
-	r.kids++
 	r.lastChild++
 	id := r.lastChild
 	rec := &childRec[K]{key: key}
@@ -685,15 +712,16 @@ func (r *Runner[K, M, S]) spawn(
 	r.mu.Unlock()
 
 	err := r.group.Go(fmt.Sprint(key)+"/"+name, func(ctx context.Context) error {
+		defer r.childDone(key, id, rec)
 		cctx, cancel := context.WithCancel(ctx)
 		defer cancel()
 		r.mu.Lock()
 		rec.cancel = cancel
-		if rec.cancelled {
-			cancel()
-		}
+		cancelled := rec.cancelled
 		r.mu.Unlock()
-		defer r.childDone(key, id, rec)
+		if cancelled {
+			return nil // cancelled before it started: fn never runs
+		}
 		msg, ok := r.runChild(withHandlerMarker(cctx), key, name, fn, onPanic)
 		if !ok {
 			return nil
@@ -703,10 +731,13 @@ func (r *Runner[K, M, S]) spawn(
 		if rec.cancelled {
 			return nil // the actor gave up on this child: its result is dropped
 		}
-		if deliverErr := r.enqueueLocked(key, envelope[M]{msg: msg, at: time.Now(), bypass: true}); deliverErr != nil {
+		env := envelope[M]{msg: msg, at: time.Now(), bypass: true, child: id}
+		if deliverErr := r.enqueueLocked(key, env); deliverErr != nil {
 			r.logger.Debug().Err(deliverErr).Str("runner", r.name).Str("key", fmt.Sprint(key)).
 				Str("task", name).Msg("A child task's result was not delivered")
+			return nil
 		}
+		r.queuedChildren[id] = key
 		return nil
 	})
 	if err != nil {
@@ -719,6 +750,7 @@ func (r *Runner[K, M, S]) spawn(
 func (r *Runner[K, M, S]) cancelChild(id ChildID) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.recallChildResultLocked(id)
 	rec, ok := r.childRecs[id]
 	if !ok || rec.cancelled {
 		return
@@ -731,6 +763,24 @@ func (r *Runner[K, M, S]) cancelChild(id ChildID) {
 	if rec.cancel != nil {
 		rec.cancel()
 	}
+}
+
+// recallChildResultLocked removes the result of a finished child from its mailbox, if it still waits there.
+func (r *Runner[K, M, S]) recallChildResultLocked(id ChildID) {
+	key, ok := r.queuedChildren[id]
+	if !ok {
+		return
+	}
+	delete(r.queuedChildren, id)
+	a, found := r.keys[key]
+	if !found {
+		return
+	}
+	if i := slices.IndexFunc(a.queue, func(env envelope[M]) bool { return env.child == id }); i >= 0 {
+		a.queue = slices.Delete(a.queue, i, i+1)
+		a.bypassed--
+	}
+	r.dropIfIdleLocked(a)
 }
 
 // runChild runs a child task's function and returns the message to deliver. A panic in fn becomes onPanic's
@@ -783,7 +833,6 @@ func (r *Runner[K, M, S]) runChild(
 func (r *Runner[K, M, S]) childDone(key K, id ChildID, rec *childRec[K]) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.kids--
 	delete(r.childRecs, id)
 	if a, ok := r.keys[key]; ok && !rec.cancelled { // a cancelled child was released from the key already
 		a.children--

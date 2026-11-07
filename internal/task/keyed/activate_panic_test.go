@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
+
+	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/task/keyed"
 )
@@ -45,7 +48,8 @@ func TestAnActivatePanicHandlesNothingInThatActivation(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		h := &flaky{gate: make(chan struct{})}
-		r := keyed.New[string, int, int](newRoot(t), "flaky", h, keyed.Options[int]{})
+		logs := &syncBuffer{}
+		r := keyed.New[string, int, int](newRoot(t), "flaky", h, keyed.Options[int]{Logger: zerolog.New(logs)})
 		if err := r.Send("a", 1); err != nil {
 			t.Fatal(err)
 		}
@@ -80,6 +84,10 @@ func TestAnActivatePanicHandlesNothingInThatActivation(t *testing.T) {
 		}
 		if len(info.Keys) != 0 {
 			t.Fatalf("keys = %+v, want the key gone: its goroutine exited", info.Keys)
+		}
+		// The timer's message is dropped with the rest; a dropped deadline must be visible in the log.
+		if !strings.Contains(logs.String(), `"timers":1`) {
+			t.Fatalf("the dropped timer message was not logged: %s", logs.String())
 		}
 
 		// The next message activates the key again, and now Handle sees a real state.
