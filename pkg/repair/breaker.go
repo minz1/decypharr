@@ -95,8 +95,8 @@ type bucketBreaker struct {
 	// trippedRun is the sweep that last tripped the bucket, "" when no sweep did; only a later run releases it.
 	trippedRun string
 	reason     holdReason
-	// confirmed holds when each subject was last confirmed broken, for the rolling window.
-	confirmed map[string]time.Time
+	// confirmed holds each subject confirmed broken, for the rolling window.
+	confirmed map[string]*confirmation
 }
 
 // transition is the only way a bucket changes state.
@@ -201,7 +201,7 @@ func newBreaker(settings func() config.BreakerSettings, canary canaryFunc) *brea
 func (b *breaker) bucketLocked(key Bucket) *bucketBreaker {
 	bk := b.buckets[key]
 	if bk == nil {
-		bk = &bucketBreaker{state: breakerClosed, confirmed: make(map[string]time.Time)}
+		bk = &bucketBreaker{state: breakerClosed, confirmed: make(map[string]*confirmation)}
 		b.buckets[key] = bk
 	}
 	return bk
@@ -219,11 +219,32 @@ func over(s config.BreakerSettings, confirmed, probed int) bool {
 	return confirmed >= s.Confirmed || confirmed*100 >= probed*s.Percent
 }
 
-// noteConfirmed records that subject was confirmed broken in key's bucket, for the rolling window.
+// confirmation is when a subject was first confirmed broken, and whether a heal for it is being held.
+type confirmation struct {
+	at   time.Time
+	held bool
+}
+
+// noteConfirmed records that subject was confirmed broken in key's bucket, for the rolling window. Only the first
+// sighting counts: a caller retrying a held heal is the same failure, not a new one, so retries cannot keep a
+// bucket tripped.
 func (b *breaker) noteConfirmed(key Bucket, subject string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.bucketLocked(key).confirmed[subject] = b.now()
+	confirmed := b.bucketLocked(key).confirmed
+	if _, seen := confirmed[subject]; !seen {
+		confirmed[subject] = &confirmation{at: b.now()}
+	}
+}
+
+// markHeld records whether the heal for subject is being held, which keeps its sighting past the window so a
+// retry is still recognised.
+func (b *breaker) markHeld(key Bucket, subject string, held bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if c := b.bucketLocked(key).confirmed[subject]; c != nil {
+		c.held = held
+	}
 }
 
 // windowCount is the number of distinct subjects confirmed in key's bucket within the rolling window.
@@ -236,12 +257,16 @@ func (b *breaker) windowCount(key Bucket) int {
 func (b *breaker) windowCountLocked(key Bucket, s config.BreakerSettings) int {
 	bk := b.bucketLocked(key)
 	cutoff := b.now().Add(-s.Window)
-	for subject, at := range bk.confirmed {
-		if at.Before(cutoff) {
+	counted := 0
+	for subject, c := range bk.confirmed {
+		switch {
+		case !c.at.Before(cutoff):
+			counted++
+		case !c.held:
 			delete(bk.confirmed, subject)
 		}
 	}
-	return len(bk.confirmed)
+	return counted
 }
 
 // evaluate judges key's bucket on in, moving it between states, and says whether its heals may go ahead.
@@ -282,6 +307,11 @@ func (b *breaker) stepLocked(key Bucket, in bucketInput, fresh *canaryOutcome) (
 		}
 		return b.canaryStepLocked(bk, key, in, s, fresh, false)
 	case breakerTripped:
+		if exceeded && in.probed < 0 {
+			// The rolling window is its own clock: its old sightings age out, so a caller retrying within it must
+			// not push the release further away.
+			return bucketOutcome{hold: holdTripped}, false
+		}
 		if exceeded {
 			return b.tripLocked(bk, now, in.runID, holdTripped), false
 		}
@@ -407,7 +437,7 @@ func (b *breaker) seed(at time.Time, key Bucket, subject string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.ledger = append(b.ledger, healRecord{at: at, bucket: key, units: 1})
-	b.bucketLocked(key).confirmed[subject] = at
+	b.bucketLocked(key).confirmed[subject] = &confirmation{at: at}
 }
 
 // BucketStatus is the observable state of one bucket.

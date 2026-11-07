@@ -83,10 +83,12 @@ func (r *Service) Admit(ctx context.Context, req HealRequest) error {
 		}
 	}()
 	if out.hold != holdNone {
+		r.breaker.markHeld(bucket, req.Subject, true)
 		return &HeldError{Bucket: bucket, Reason: string(out.hold)}
 	}
 	if !r.breaker.tryAdmit(items, nil) {
 		return fmt.Errorf("%w for %s", ErrHealCapped, bucket)
 	}
+	r.breaker.markHeld(bucket, req.Subject, false)
 	return nil
 }
