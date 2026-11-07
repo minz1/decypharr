@@ -365,7 +365,9 @@ func TestShutdownDuringParseBackoffKeepsTheEntry(t *testing.T) {
 	if err := m.work.Stop(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the backoff to stop", func() bool { return !m.jobQueue.Holds("nzb-1") })
+	if m.jobQueue.Holds("nzb-1") { // Stop returned only once every waiter had let go
+		t.Fatal("the backoff still holds the entry after the stop")
+	}
 	if entry := storedEntry(
 		t,
 		m,
