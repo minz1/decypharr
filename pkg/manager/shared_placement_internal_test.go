@@ -35,7 +35,7 @@ func (h *pruneHarness) deleteEntry(t *testing.T, hash string) {
 	if err := h.m.DeleteEntry(hash, true); err != nil {
 		t.Fatal(err)
 	}
-	h.m.placementRuns.Wait()
+	drainPlacements(t, h.m)
 }
 
 func requireDeleted(t *testing.T, h *pruneHarness, want ...string) {
@@ -76,7 +76,7 @@ func TestInvalidatingASeasonLeavesItsSiblingsTorrent(t *testing.T) {
 	if err := h.m.InvalidateReacquire(context.Background(), job); err != nil {
 		t.Fatal(err)
 	}
-	h.m.placementRuns.Wait()
+	drainPlacements(t, h.m)
 	requireDeleted(t, h)
 	for _, hash := range []string{"pack", "s2"} {
 		if !h.has(hash) {
@@ -141,7 +141,7 @@ func TestReplacingAPlacementKeepsOneACoHolderUses(t *testing.T) {
 		if _, moveErr := fixer.MoveTorrent(entry, "remaining", true); moveErr != nil {
 			t.Fatal(moveErr)
 		}
-		m.placementRuns.Wait()
+		drainPlacements(t, m)
 		if got, want := client.deletions.Load(), map[bool]int64{true: 0, false: 1}[shared]; got != want {
 			t.Fatalf("shared=%v: provider deletions = %d, want %d", shared, got, want)
 		}
@@ -170,7 +170,7 @@ func TestFailedStorageDeleteKeepsTheProviderTorrent(t *testing.T) {
 	if err := h.m.DeleteEntry("solo", true); err == nil {
 		t.Fatal("DeleteEntry() = nil, want the storage failure")
 	}
-	h.m.placementRuns.Wait()
+	drainPlacements(t, h.m)
 	requireDeleted(t, h)
 	if !h.has("solo") {
 		t.Fatal("the entry is gone")
@@ -198,7 +198,7 @@ func TestPlacementRunsEndBeforeTheStorageCloses(t *testing.T) {
 
 	closed := make(chan struct{})
 	go func() {
-		h.m.closePlacementRuns()
+		closePlacements(t, h.m)
 		close(closed)
 	}()
 	select {
@@ -218,7 +218,7 @@ func TestPlacementRunsEndBeforeTheStorageCloses(t *testing.T) {
 	if h.m.startPlacementRun("test entry", "torbox", func() { ran = true }) {
 		t.Fatal("a run was accepted after the runs closed")
 	}
-	h.m.placementRuns.Wait()
+	drainPlacements(t, h.m)
 	if ran {
 		t.Fatal("a refused run touched the storage")
 	}
@@ -231,6 +231,7 @@ func TestStopWaitsForAPlacementRunBeforeClosingStorage(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		h := newPruneHarness(t, config.PruneModeDelete)
 		h.addEntry(t, "stored", nil)
+		wireLifecycle(t, h.m) // the group Stop runs, with the task that closes the storage last
 		release := make(chan struct{})
 		var readErr error
 		if !h.m.startPlacementRun("test entry", "torbox", func() {
@@ -241,7 +242,7 @@ func TestStopWaitsForAPlacementRunBeforeClosingStorage(t *testing.T) {
 		}
 		stopped := make(chan struct{})
 		go func() {
-			_ = h.m.Stop()
+			_ = h.m.Stop(t.Context())
 			close(stopped)
 		}()
 
@@ -272,7 +273,7 @@ func TestStopWaitsForAPlacementRunBeforeClosingStorage(t *testing.T) {
 func TestRefusedPlacementRunIsLogged(t *testing.T) {
 	t.Parallel()
 	h := newPruneHarness(t, config.PruneModeDelete)
-	h.m.closePlacementRuns()
+	closePlacements(t, h.m)
 
 	if h.m.startPlacementRun("Show.S01", "torbox", func() {}) {
 		t.Fatal("a run was accepted after the runs closed")
@@ -291,12 +292,12 @@ func TestDeleteEntryAfterStopDoesNotRunPlacementRemoval(t *testing.T) {
 	h := newPruneHarness(t, config.PruneModeDelete)
 	h.mount2(t)
 	h.addEntry(t, "late", nil)
-	h.m.closePlacementRuns()
+	closePlacements(t, h.m)
 
 	if err := h.m.DeleteEntry("late", true); err != nil {
 		t.Fatal(err)
 	}
-	h.m.placementRuns.Wait()
+	drainPlacements(t, h.m)
 	requireDeleted(t, h)
 }
 

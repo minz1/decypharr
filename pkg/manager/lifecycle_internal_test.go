@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"strings"
@@ -39,7 +40,7 @@ func TestLifecycleTable(t *testing.T) {
 // newLifecycleManager builds a manager the way main does, on a root of its own.
 func newLifecycleManager(t *testing.T) (*Manager, *task.Group) {
 	t.Helper()
-	root := task.NewRoot(t.Context(), "test", zerolog.Nop())
+	root := task.NewRoot(context.WithoutCancel(t.Context()), "test", zerolog.Nop())
 	m, err := New(root.Child("manager"), testConfigStore(t, nil), logger.Discard())
 	if err != nil {
 		t.Fatal(err)

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -20,7 +21,7 @@ import (
 func TestQueueReadFailuresReachHTTPClients(t *testing.T) {
 	t.Parallel()
 	store := managertest.Store(t, func(cfg *config.Config) { cfg.UseAuth = false })
-	root := task.NewRoot(t.Context(), "test", zerolog.Nop())
+	root := task.NewRoot(context.WithoutCancel(t.Context()), "test", zerolog.Nop())
 	mgr, err := manager.New(root.Child("manager"), store, logger.Discard())
 	if err != nil {
 		t.Fatal(err)

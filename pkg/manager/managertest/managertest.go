@@ -2,6 +2,7 @@
 package managertest
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -35,7 +36,7 @@ func Store(t testing.TB, edit func(*config.Config)) *config.Store {
 func New(t testing.TB, edit func(*config.Config)) (*manager.Manager, *config.Store) {
 	t.Helper()
 	store := Store(t, edit)
-	root := task.NewRoot(t.Context(), "test", zerolog.Nop())
+	root := task.NewRoot(context.WithoutCancel(t.Context()), "test", zerolog.Nop())
 	mgr, err := manager.New(root.Child("manager"), store, logger.Discard())
 	if err != nil {
 		t.Fatal(err)
