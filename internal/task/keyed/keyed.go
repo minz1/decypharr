@@ -4,9 +4,11 @@
 // are handled one at a time, in the order they were accepted, by that key's
 // goroutine, which is a task of the runner's group. The goroutine starts with
 // the first message, exits after a quiet period, and starts again with the
-// next one; a handler therefore keeps no state in its goroutine, and the state
-// of a key lives wherever the handler keeps it (a store, a map the handler
-// owns).
+// next one. The state of a key, S, belongs to the runner: the handler's
+// Activate builds it when the goroutine starts, every Handle call receives it
+// by pointer, and the runner drops it when the goroutine exits. Anything that
+// must outlast the goroutine is written to a store before Handle returns, and
+// read again by the next Activate.
 //
 // A handler must not block on I/O. Slow work runs as a child task
 // ([Effects.Go]) bound to the runner's context, and reports back with a
