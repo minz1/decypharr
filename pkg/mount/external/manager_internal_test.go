@@ -181,3 +181,17 @@ func (emptyRC) RoundTrip(req *http.Request) (*http.Response, error) {
 		Request:    req,
 	}, nil
 }
+
+func TestStartAfterStopSaysStopped(t *testing.T) {
+	t.Parallel()
+	m := newTestManager(func(context.Context) error { return nil })
+	if err := m.Stop(); err != nil {
+		t.Fatal(err)
+	}
+
+	err := m.Start(task.NewRoot(t.Context(), "mount", zerolog.Nop()))
+
+	if !errors.Is(err, task.ErrStopped) {
+		t.Fatalf("Start after Stop = %v, want task.ErrStopped", err)
+	}
+}
