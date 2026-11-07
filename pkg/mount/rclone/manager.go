@@ -259,6 +259,7 @@ func (m *Manager) spawnRcd() (rcdProcess, error) {
 	cmd := exec.CommandContext(context.WithoutCancel(m.owner.group.Context()), "rclone", args...)
 	cmd.Stdout = m.rcdLog
 	cmd.Stderr = m.rcdLog
+	ownProcessGroup(cmd)
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("failed to start rclone: %w", err)
 	}
