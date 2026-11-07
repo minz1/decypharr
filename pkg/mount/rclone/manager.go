@@ -62,13 +62,17 @@ type Manager struct {
 	mountDirMode fs.FileMode
 	unmounter    *unmount.Unmounter
 	// detach unmounts a path without rclone's help; the unmounter by default.
-	detach     func(ctx context.Context, path string) error
-	logger     zerolog.Logger
-	info       atomic.Pointer[MountInfo]
-	manager    *manager.Manager
-	webdavURL  string
-	recovering atomic.Bool
-	rcdLog     *lumberjack.Logger
+	detach func(ctx context.Context, path string) error
+	logger zerolog.Logger
+	info   atomic.Pointer[MountInfo]
+	// view is the mount's state; moveMount is its only writer.
+	view atomic.Pointer[mountView]
+	// mountRefused counts moves the mount's table refused.
+	mountRefused atomic.Uint64
+	manager      *manager.Manager
+	webdavURL    string
+	recovering   atomic.Bool
+	rcdLog       *lumberjack.Logger
 
 	client *rclone.Client
 	owner  *rcdOwner
@@ -90,6 +94,8 @@ type MountInfo struct {
 	MountedAt  string `json:"mounted_at,omitempty"`
 	ConfigName string `json:"config_name"`
 	Error      string `json:"error,omitempty"`
+	// State is the mount's phase, shown next to Error.
+	State string `json:"state"`
 }
 
 type RCRequest struct {
@@ -173,6 +179,7 @@ func (m *Manager) wire() {
 	o.beforeStop = m.unmount
 	o.closeLog = m.closeLog
 	m.owner = o
+	m.view.Store(&mountView{state: mountWaiting})
 }
 
 // Start starts the rcd owner and the monitor on children of g. It returns
