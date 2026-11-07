@@ -70,7 +70,7 @@ func TestAdmitReleasesATrippedBucketAfterTheHoldWithAPassingCanary(t *testing.T)
 	}
 }
 
-func TestAdmitForceBypassesAndReleasesTheBreakerAndCounts(t *testing.T) {
+func TestAdmitForceBypassesTheBreakerButCountsAndDoesNotRelease(t *testing.T) {
 	t.Parallel()
 	service, _ := newAdmitService(t)
 	for i := range 12 {
@@ -83,8 +83,11 @@ func TestAdmitForceBypassesAndReleasesTheBreakerAndCounts(t *testing.T) {
 	if err := service.Admit(t.Context(), forced); err != nil {
 		t.Fatalf("forced admit = %v", err)
 	}
-	if len(service.BreakerStatus()) != 0 {
-		t.Fatalf("a forced heal is the operator's evidence and releases the bucket: %+v", service.BreakerStatus())
+	if len(service.BreakerStatus()) != 1 {
+		t.Fatalf(
+			"a force is no evidence the provider works: the bucket must stay tripped: %+v",
+			service.BreakerStatus(),
+		)
 	}
 }
 

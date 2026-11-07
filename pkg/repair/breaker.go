@@ -374,13 +374,13 @@ func (b *breaker) stepLocked(key Bucket, in bucketInput, fresh *canaryOutcome) (
 		if exceeded && in.probed < 0 {
 			// The rolling window is its own clock: its old sightings age out, so a caller retrying within it must
 			// not push the release further away.
-			return bucketOutcome{hold: holdTripped}, false
+			return bucketOutcome{hold: holdOf(bk)}, false
 		}
 		if exceeded {
 			return b.tripLocked(bk, now, in.runID, holdTripped), false
 		}
 		if now.Sub(bk.since) < s.ReleaseAfter || (in.runID != "" && in.runID == bk.trippedRun) {
-			return bucketOutcome{hold: holdTripped}, false
+			return bucketOutcome{hold: holdOf(bk)}, false
 		}
 		return b.canaryStepLocked(bk, key, in, s, fresh, true)
 	case breakerReleasing:
@@ -438,17 +438,32 @@ func (b *breaker) canaryStepLocked(
 	return bucketOutcome{hold: holdCanaryInconclusive}, false
 }
 
-// forceRelease closes a tripped bucket on an operator's say-so. It reports whether the bucket was open.
-func (b *breaker) forceRelease(key Bucket) bool {
+// holdOf is why a tripped bucket holds: the reason it was tripped or last held for.
+func holdOf(bk *bucketBreaker) holdReason {
+	if bk.reason == holdNone {
+		return holdTripped
+	}
+	return bk.reason
+}
+
+// forceRelease closes a tripped bucket on an operator's say-so, but only one held as no_canary: that is the one
+// hold waiting for a sweep or an operator. A bucket a canary or the threshold tripped is not released, since a
+// force is no evidence the provider works. It reports whether the bucket was released and, when it was open and
+// stays so, why it is held.
+func (b *breaker) forceRelease(key Bucket) (bool, holdReason) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	bk := b.buckets[key]
 	if bk == nil || bk.state != breakerTripped {
-		return false
+		return false, holdNone
+	}
+	if bk.reason != holdNoCanary {
+		return false, bk.reason
 	}
 	now := b.now()
-	return bk.transition(breakerReleasing, now, "", holdNone) == nil &&
+	released := bk.transition(breakerReleasing, now, "", holdNone) == nil &&
 		bk.transition(breakerClosed, now, "", holdNone) == nil
+	return released, bk.reason
 }
 
 // settle closes every bucket that was releasing: its held entries have had their chance to drain.

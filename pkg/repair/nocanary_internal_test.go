@@ -70,17 +70,24 @@ func TestAClosedBucketWithoutACanaryStillAdmits(t *testing.T) {
 	}
 }
 
-func TestOperatorForceReleasesATrippedBucketAndIsLogged(t *testing.T) {
+func TestOperatorForceReleasesABucketHeldAsNoCanary(t *testing.T) {
 	t.Parallel()
-	service, _ := newAdmitService(t)
+	service, clock := newAdmitService(t)
 	for i := range 10 {
 		_ = service.Admit(
 			t.Context(),
 			HealRequest{Provider: "rd", Class: ClassHosterLink, Subject: fmt.Sprintf("e%d", i)},
 		)
 	}
-	if len(service.BreakerStatus()) != 1 {
-		t.Fatal("setup: the bucket did not trip")
+	clock.Advance(3 * time.Hour)
+	var held *HeldError
+	if err := service.Admit(
+		t.Context(),
+		HealRequest{Provider: "rd", Class: ClassHosterLink, Subject: "late"},
+	); !errors.As(
+		err, &held) ||
+		held.Reason != string(holdNoCanary) {
+		t.Fatalf("setup: admit = %v, want held as no_canary", err)
 	}
 	err := service.Admit(t.Context(), HealRequest{
 		Provider: "rd", Class: ClassHosterLink, Subject: "late", Operator: true, Force: true, Caller: "ops",

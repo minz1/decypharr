@@ -122,8 +122,8 @@ func TestOperatorForceHealsPastATrippedBucket(t *testing.T) {
 	if got := f.health(t, 0).Status; got != storage.HealthBroken {
 		t.Fatalf("a forced heal left the entry %s", got)
 	}
-	if status := f.service.BreakerStatus(); len(status) != 0 {
-		t.Fatalf("an operator force releases the bucket: %+v", status)
+	if status := f.service.BreakerStatus(); len(status) != 1 || status[0].State != "tripped" {
+		t.Fatalf("a force must not close a bucket the threshold tripped: %+v", status)
 	}
 }
 

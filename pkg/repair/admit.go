@@ -49,13 +49,19 @@ func (e *HeldError) Error() string {
 
 func (e *HeldError) Unwrap() error { return ErrHealHeld }
 
-// releaseForced closes the tripped buckets of heals an operator forced: their say-so is the evidence a bucket with
-// nothing to probe waits for. The release is logged with the caller.
+// releaseForced closes the buckets of heals an operator forced that were held as no_canary: their say-so is the
+// evidence such a bucket waits for. A bucket held for any other reason stays tripped. Both are logged with the
+// caller.
 func (r *Service) releaseForced(items []healItem, caller string) {
 	for _, item := range items {
-		if r.breaker.forceRelease(item.bucket) {
+		released, reason := r.breaker.forceRelease(item.bucket)
+		switch {
+		case released:
 			r.logger.Info().Str("bucket", item.bucket.String()).Str("caller", caller).
 				Msg("Repair: breaker released by an operator force")
+		case reason != holdNone:
+			r.logger.Info().Str("bucket", item.bucket.String()).Str("reason", string(reason)).Str("caller", caller).
+				Msg("Repair: operator force admitted a heal but the bucket stays tripped")
 		}
 	}
 }
