@@ -408,7 +408,7 @@ func (b *breaker) canaryStepLocked(
 	case canaryInconclusive:
 		return bucketOutcome{hold: holdCanaryInconclusive}, false
 	case canaryNone, canaryPass:
-		if releasing && outcome == canaryNone && !(in.runID != "" && in.sample.passes()) {
+		if releasing && outcome == canaryNone && (in.runID == "" || !in.sample.passes()) {
 			// Nothing to probe is no evidence of recovery: the clock alone never releases the bucket.
 			bk.reason = holdNoCanary
 			return bucketOutcome{hold: holdNoCanary}, false

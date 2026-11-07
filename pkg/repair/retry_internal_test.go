@@ -39,7 +39,8 @@ func TestRetriesOfHeldSubjectsDoNotKeepTheBucketTripped(t *testing.T) {
 	t.Parallel()
 	service, clock := newAdmitService(t)
 	service.breaker.canary = func(context.Context, Bucket, config.BreakerSettings) canaryOutcome { return canaryPass }
-	retry := func() (admitted int) {
+	retry := func() int {
+		admitted := 0
 		for i := range 10 {
 			err := service.Admit(t.Context(), HealRequest{
 				Provider: "rd", Class: ClassDropped, Subject: fmt.Sprintf("entry-%d", i),
