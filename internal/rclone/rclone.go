@@ -173,6 +173,23 @@ func (r *Client) Unmount(ctx context.Context, mountPoint string) error {
 	return nil
 }
 
+// ListMounts returns the mount points rclone currently serves.
+func (r *Client) ListMounts(ctx context.Context) ([]string, error) {
+	var res struct {
+		MountPoints []struct {
+			MountPoint string `json:"MountPoint"`
+		} `json:"mountPoints"`
+	}
+	if err := r.Do(ctx, Request{Command: "mount/listmounts"}, &res); err != nil {
+		return nil, fmt.Errorf("failed to list mounts via RC: %w", err)
+	}
+	points := make([]string, 0, len(res.MountPoints))
+	for _, mp := range res.MountPoints {
+		points = append(points, mp.MountPoint)
+	}
+	return points, nil
+}
+
 func (r *Client) Mount(ctx context.Context, mountArgs map[string]any) error {
 	req := Request{
 		Command: "mount/mount",
