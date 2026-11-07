@@ -1,19 +1,13 @@
 package rclone
 
 import (
-	"context"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
-	"sync"
 	"testing"
 
 	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
-	"github.com/sirrobot01/decypharr/internal/rclone"
 	"github.com/sirrobot01/decypharr/internal/task"
 )
 
@@ -53,44 +47,16 @@ func TestNewManagerWithWebDAVDisabledIsUsable(t *testing.T) {
 // failed health check left the mount down for good.
 func TestRecoverMountRemounts(t *testing.T) {
 	t.Parallel()
-	cfg := loadConfig(t, `{"mount": {"mount_path": "`+filepath.ToSlash(t.TempDir())+`"}}`)
+	r := newManagerRig(t)
+	r.m.info.Store(&MountInfo{LocalPath: "/mnt/x", Mounted: false, Error: "Health check failed"})
 
-	var mu sync.Mutex
-	var calls []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		calls = append(calls, strings.TrimPrefix(r.URL.Path, "/"))
-		mu.Unlock()
-		_, _ = w.Write([]byte("{}"))
-	}))
-	t.Cleanup(srv.Close)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	m := &Manager{
-		logger: zerolog.Nop(),
-		mount:  cfg.Mount,
-		ctx:    ctx,
-		cancel: cancel,
-		client: rclone.NewClient(srv.URL, "", "", nil, zerolog.Nop()),
-	}
-	m.info.Store(&MountInfo{LocalPath: "/mnt/x", Mounted: false, Error: "Health check failed"})
-
-	if err := m.RecoverMount(ctx); err != nil {
+	if err := r.m.RecoverMount(t.Context()); err != nil {
 		t.Fatalf("RecoverMount: %v", err)
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	mounted := false
-	for _, c := range calls {
-		if c == "mount/mount" {
-			mounted = true
-		}
+	if got := r.count("rc:mount/mount"); got != 1 {
+		t.Fatalf("recovery asked rclone to mount %d times, want 1", got)
 	}
-	if !mounted {
-		t.Fatalf("recovery never asked rclone to mount; RC calls: %v", calls)
-	}
-	if !m.IsMounted() {
+	if !r.m.IsMounted() {
 		t.Fatal("mount not marked mounted after recovery")
 	}
 }

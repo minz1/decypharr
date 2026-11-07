@@ -45,14 +45,18 @@ func (m *Manager) MonitorMounts(ctx context.Context) {
 			m.logger.Debug().Msg("Mount monitoring stopped")
 			return
 		case <-ticker.C:
-			m.performMountHealthCheck()
+			m.performMountHealthCheck(ctx)
 		}
 	}
 }
 
 // performMountHealthCheck checks and attempts to recover unhealthy mounts.
-func (m *Manager) performMountHealthCheck() {
-	if err := m.client.CheckMountHealth(context.Background(), FSName); err != nil {
+// While rcd is not Ready the owner is already acting, so it checks nothing.
+func (m *Manager) performMountHealthCheck(ctx context.Context) {
+	if !m.IsReady() {
+		return
+	}
+	if err := m.client.CheckMountHealth(ctx, FSName); err != nil {
 		m.logger.Warn().Err(err).Msg("Mount health check failed, attempting recovery")
 
 		if m.getMountInfo() == nil {
@@ -64,11 +68,15 @@ func (m *Manager) performMountHealthCheck() {
 			return
 		}
 		m.markUnmounted("Health check failed")
-		go func() {
+		if goErr := m.ops.Go("recover", func(ctx context.Context) error {
 			defer m.recovering.Store(false)
-			if recoverMountErr := m.RecoverMount(m.ctx); recoverMountErr != nil {
+			if recoverMountErr := m.RecoverMount(ctx); recoverMountErr != nil {
 				m.logger.Error().Err(recoverMountErr).Msg("Failed to recover mount")
 			}
-		}()
+			return nil
+		}); goErr != nil {
+			m.recovering.Store(false)
+			m.logger.Warn().Err(goErr).Msg("Recovery skipped: the manager is stopping")
+		}
 	}
 }
