@@ -294,6 +294,11 @@ func (s supervisor) runGeneration(ctx context.Context, cfg *config.Config) outco
 		}
 	}
 	failure := buildErr
+	if buildErr != nil && gen.root.Err() != nil {
+		// A service that failed to start stops the root, and the services built after it only find it stopped.
+		// The failure that stopped the root is the cause; the refusal is its echo.
+		failure = errors.Join(gen.root.Err(), buildErr)
+	}
 	if kind == endFailed && failure == nil {
 		failure = gen.root.Err()
 		log.Error().Err(failure).Msg("Service stopped unexpectedly")
