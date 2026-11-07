@@ -39,7 +39,10 @@ func (m *Manager) SwitchTorrent(
 
 	m.migrationJobs.Store(job.ID, job)
 
-	go m.executeMigration(job, entry)
+	if err = m.runWork("switch-provider", func() { m.executeMigration(job, entry) }); err != nil {
+		m.migrationJobs.Delete(job.ID)
+		return nil, err
+	}
 
 	return job, nil
 }
