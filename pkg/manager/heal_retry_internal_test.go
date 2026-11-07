@@ -26,6 +26,8 @@ type filesRecovery struct {
 	failBeforeGate error
 	// racedAfterGate makes another request win the job after the gate admitted.
 	racedAfterGate bool
+	// afterAdmit runs after each admission, outside the fake's lock, to look at what the breaker holds meanwhile.
+	afterAdmit func()
 }
 
 func (f *filesRecovery) Lookup(entryID, fileID string) (reacquire.Binding, bool) {
@@ -50,6 +52,9 @@ func (f *filesRecovery) Reacquire(request reacquire.Request) (*reacquire.Job, er
 		if err := request.Gate.Admit(); err != nil {
 			f.vetoes = append(f.vetoes, err)
 			return nil, err
+		}
+		if f.afterAdmit != nil {
+			f.afterAdmit()
 		}
 		if f.racedAfterGate {
 			// Another request created the job while the gate decided: it is returned and the admission refunded.

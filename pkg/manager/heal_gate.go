@@ -3,7 +3,7 @@ package manager
 import (
 	"errors"
 	"fmt"
-	"sync"
+	"slices"
 
 	"github.com/sirrobot01/decypharr/pkg/arr/reacquire"
 	"github.com/sirrobot01/decypharr/pkg/repair"
@@ -34,18 +34,19 @@ func (m *Manager) refundHeal(entryID, provider string, class repair.Class, units
 }
 
 // entryGate admits the reacquisitions of one entry's files together: the first file that would create a job asks
-// the breaker for all of them, and what the files did not use is given back when the entry is done. Files that
-// already have a job, or fail before one is created, ask for nothing and cost nothing.
+// the breaker for the files estimated to need one, and a file beyond the estimate asks for itself. What the files
+// did not use is given back when the entry is done. Files that already have a job, or fail before one is created,
+// ask for nothing and cost nothing.
 type entryGate struct {
 	m        *Manager
 	entryID  string
 	provider string
 	class    repair.Class
-	units    int
+	// estimate is how many files had no job when the entry was looked at; the first request asks for that many.
+	estimate int
 
-	once      sync.Once
 	err       error
-	asked     bool
+	reserved  int
 	requested int
 }
 
@@ -55,14 +56,20 @@ func (g *entryGate) gate() *reacquire.Gate {
 	}
 	return &reacquire.Gate{
 		Admit: func() error {
-			g.once.Do(func() {
-				g.asked = true
-				g.err = g.m.admitHeal(g.entryID, g.provider, g.class, g.units)
-			})
-			if g.err == nil {
-				g.requested++
+			if g.err != nil {
+				return g.err
 			}
-			return g.err
+			need := g.requested + 1
+			if need > g.reserved {
+				ask := max(g.estimate, need) - g.reserved
+				if err := g.m.admitHeal(g.entryID, g.provider, g.class, ask); err != nil {
+					g.err = err
+					return err
+				}
+				g.reserved += ask
+			}
+			g.requested++
+			return nil
 		},
 		Refund: func() { g.requested-- },
 	}
@@ -70,9 +77,23 @@ func (g *entryGate) gate() *reacquire.Gate {
 
 // settle gives back the part of the admission no file used.
 func (g *entryGate) settle() {
-	if g.asked && g.err == nil && g.units > g.requested {
-		g.m.refundHeal(g.entryID, g.provider, g.class, g.units-g.requested)
+	if g.reserved > g.requested {
+		g.m.refundHeal(g.entryID, g.provider, g.class, g.reserved-g.requested)
 	}
+}
+
+// filesWithoutJob counts the files that have no active job. It only sizes the admission; the job queue decides
+// whether a request really needs a job.
+func filesWithoutJob(jobs []reacquire.Job, entryID string, files []string) int {
+	count := 0
+	for _, fileID := range files {
+		if !slices.ContainsFunc(jobs, func(job reacquire.Job) bool {
+			return job.EntryID == entryID && job.FileID == fileID && !job.Status.Terminal()
+		}) {
+			count++
+		}
+	}
+	return count
 }
 
 // reacquireDroppedFiles queues a reacquisition for each of a dropped entry's files the Arr imported. It reports
@@ -94,7 +115,10 @@ func (m *Manager) reacquireDroppedFiles(provider string, entry *storage.Entry, r
 	if len(bound) == 0 {
 		return false, nil
 	}
-	gate := &entryGate{m: m, entryID: entry.InfoHash, provider: provider, class: repair.ClassDropped, units: len(bound)}
+	gate := &entryGate{
+		m: m, entryID: entry.InfoHash, provider: provider, class: repair.ClassDropped,
+		estimate: filesWithoutJob(recovery.Jobs(), entry.InfoHash, bound),
+	}
 	defer gate.settle()
 	var reacquireErr error
 	for _, fileID := range bound {
