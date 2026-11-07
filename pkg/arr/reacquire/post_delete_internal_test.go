@@ -310,8 +310,7 @@ func TestOnlyTheWaitingGuardMatchesErrNotWaiting(t *testing.T) {
 
 	terminal := statusGuard{want: "terminal", allows: Status.Terminal}
 	_, err := rig.service.updateJobWithDurability(rig.job.ID, StatusFailed, nil, false, terminal)
-	var unexpected *unexpectedStatusError
-	if !errors.As(err, &unexpected) {
+	if _, ok := errors.AsType[*unexpectedStatusError](err); !ok {
 		t.Fatalf("err = %v, want the terminal guard to refuse a queued job", err)
 	}
 	if errors.Is(err, errNotWaiting) {
