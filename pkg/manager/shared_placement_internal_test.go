@@ -2,6 +2,7 @@ package manager
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/puzpuzpuz/xsync/v4"
@@ -151,9 +152,12 @@ func TestFailedStorageDeleteKeepsTheProviderTorrent(t *testing.T) {
 	h := newPruneHarness(t, config.PruneModeDelete)
 	h.mount2(t)
 	h.addEntry(t, "solo", nil)
+	h.addEntry(t, "free", nil)
 	var itemKey string
 	for name := range h.m.storage.GetEntryItems() {
-		itemKey = name
+		if strings.HasSuffix(name, "solo") {
+			itemKey = name
+		}
 	}
 	if itemKey == "" {
 		t.Fatal("the entry has no name index")
@@ -168,6 +172,11 @@ func TestFailedStorageDeleteKeepsTheProviderTorrent(t *testing.T) {
 	if !h.has("solo") {
 		t.Fatal("the entry is gone")
 	}
+
+	// The control: with the storage working, the same harness deletes the provider torrent of an entry it removes,
+	// so the absence above is the order of the two deletes and nothing else.
+	h.deleteEntry(t, "free")
+	requireDeleted(t, h, "id-free")
 }
 
 // A queued entry that holds the provider torrent counts as a holder.
