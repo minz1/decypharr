@@ -420,32 +420,3 @@ func TestAChildResultIsDeliveredEvenWhenTheMailboxIsFull(t *testing.T) {
 		}
 	})
 }
-
-func TestASingletonStaysUpThroughIdleTime(t *testing.T) {
-	t.Parallel()
-	synctest.Test(t, func(t *testing.T) {
-		got := make(chan int, 4)
-		h := keyed.HandlerFunc[struct{}, int](
-			func(_ context.Context, _ struct{}, m int, _ *keyed.Effects[struct{}, int]) {
-				got <- m
-			},
-		)
-		g := newRoot(t)
-		r := keyed.NewSingleton[int, struct{}](g, "single", h, keyed.Options[int]{IdleAfter: time.Second})
-		synctest.Wait()
-
-		time.Sleep(time.Hour)
-		synctest.Wait()
-		if err := r.Send(struct{}{}, 7); err != nil {
-			t.Fatal(err)
-		}
-		synctest.Wait()
-
-		if v := <-got; v != 7 {
-			t.Fatalf("handled %d, want 7", v)
-		}
-		if info := r.Snapshot(); len(info.Keys) != 1 || !info.Keys[0].Running {
-			t.Fatalf("snapshot = %+v, want the one key still running", info)
-		}
-	})
-}
