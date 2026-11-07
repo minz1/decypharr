@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -34,8 +35,11 @@ const (
 	// killing it; rcloneReapTimeout bounds the wait after the kill.
 	rcloneGracefulStop = 2 * time.Second
 	rcloneReapTimeout  = 5 * time.Second
-	// serverReadyTimeout bounds the wait for rcd before mounting.
-	serverReadyTimeout = 30 * time.Second
+
+	// managerStopTimeout bounds Stop: the unmount, the signal, the kill and the reap.
+	managerStopTimeout = 30 * time.Second
+	// rcCallTimeout bounds one RC call made for a caller that has no context.
+	rcCallTimeout = 10 * time.Second
 
 	// rclone.log rotation.
 	logMaxSizeMB  = 10
@@ -46,29 +50,35 @@ const (
 	mountRetries = 3
 )
 
-// Manager handles the rclone RC server and provides mount operations.
+// errStarted is returned by a second Start.
+var errStarted = errors.New("rclone manager already started")
+
+// Manager handles the rclone RC server and provides mount operations. The
+// rcdOwner runs the rcd process; the manager mounts when it becomes Ready.
 type Manager struct {
-	cmd           *exec.Cmd
-	configDir     string
-	logsDir       string
-	mount         config.Mount
-	mountDirMode  fs.FileMode
-	unmounter     *unmount.Unmounter
-	logger        zerolog.Logger
-	ctx           context.Context
-	cancel        context.CancelFunc
-	serverReady   chan struct{}
-	serverStarted atomic.Bool
-	info          atomic.Pointer[MountInfo]
-	manager       *manager.Manager
-	webdavURL     string
-	// exited is closed once the rcd process has been reaped. Its waiter
-	// goroutine is the only cmd.Wait caller; a second concurrent Wait races
-	// on the Cmd's state.
-	exited     chan struct{}
-	recovering atomic.Bool
+	configDir    string
+	logsDir      string
+	mount        config.Mount
+	mountDirMode fs.FileMode
+	unmounter    *unmount.Unmounter
+	logger       zerolog.Logger
+	info         atomic.Pointer[MountInfo]
+	manager      *manager.Manager
+	webdavURL    string
+	recovering   atomic.Bool
+	rcdLog       *lumberjack.Logger
 
 	client *rclone.Client
+	owner  *rcdOwner
+
+	// mu guards Start against Stop. rcd and ops are written once, in Start; the
+	// tasks started after that read them without the lock.
+	mu sync.Mutex
+	// rcd runs the owner and its reapers; ops runs the mount, the monitor and
+	// the recoveries. ops is the newer child, so it stops first: the mount
+	// work ends, then the owner unmounts through RC, then rcd stops.
+	rcd *task.Group
+	ops *task.Group
 }
 
 type MountInfo struct {
@@ -123,43 +133,107 @@ func NewManager(mgr *manager.Manager, mainCfg *config.Config, _logger zerolog.Lo
 		webdavURL += "/"
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	logsDir := logger.Dir(mainCfg.Dir())
 	rcServer := "http://" + net.JoinHostPort("localhost", cfg.Rclone.Port)
-	rcloneClient := rclone.NewClient(rcServer, "", "", mgr.TLSConfig(), _logger)
-
 	m := &Manager{
 		configDir:    configDir,
-		logsDir:      logger.Dir(mainCfg.Dir()),
+		logsDir:      logsDir,
 		mount:        cfg,
 		mountDirMode: mainCfg.SharedDirModeValue(),
 		unmounter:    unmount.New(_logger),
 		logger:       _logger,
-		ctx:          ctx,
-		cancel:       cancel,
-		client:       rcloneClient,
-		serverReady:  make(chan struct{}),
+		client:       rclone.NewClient(rcServer, "", "", mgr.TLSConfig(), _logger),
 		webdavURL:    webdavURL,
 		manager:      mgr,
+		// Lumberjack rotates rclone.log; rclone's own --log-file does not.
+		rcdLog: &lumberjack.Logger{
+			Filename:   filepath.Join(logsDir, "rclone.log"),
+			MaxSize:    logMaxSizeMB,
+			MaxAge:     logMaxAgeDays,
+			MaxBackups: logMaxBackups,
+			Compress:   true,
+		},
 	}
+	m.wire()
 	return m
 }
 
-// Start starts the rclone RC server.
+// wire builds the rcd owner and connects it to the manager.
+func (m *Manager) wire() {
+	o := newRcdOwner(nil, m.logger)
+	o.spawn = m.spawnRcd
+	o.ping = m.client.Ping
+	o.onReady = m.onRcdReady
+	o.onExit = m.onRcdExit
+	o.beforeStop = m.unmount
+	o.closeLog = m.closeLog
+	m.owner = o
+}
+
+// Start starts the rcd owner and the monitor on children of g. It returns
+// before rcd answers; IsReady says when it does.
 func (m *Manager) Start(g *task.Group) error {
-	ctx := g.Context()
-	cfg := m.mount
-	if m.serverStarted.Load() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	current := m.owner.state.Load()
+	if current == rcdStopping || current == rcdStopped {
+		return task.ErrStopped
+	}
+	if current != rcdNew {
+		return errStarted
+	}
+	m.owner.transition(rcdNew, rcdStarting)
+	m.rcd = g.Child("rcd")
+	m.ops = g.Child("ops")
+	m.owner.group = m.rcd
+
+	if err := m.rcd.Go("owner", m.owner.run); err != nil {
+		// The owner never ran, so nothing else ends this state.
+		m.owner.transition(rcdStarting, rcdStopping)
+		m.owner.transition(rcdStopping, rcdStopped)
+		return fmt.Errorf("start the rcd owner: %w", err)
+	}
+	if err := m.ops.Go("monitor", func(ctx context.Context) error {
+		m.MonitorMounts(ctx)
+		return nil
+	}); err != nil {
+		return fmt.Errorf("start the mount monitor: %w", err)
+	}
+	return nil
+}
+
+// Stop stops the mount work, unmounts through RC and stops rcd, in that order.
+// Before Start it only closes the manager to a later Start.
+func (m *Manager) Stop() error {
+	m.mu.Lock()
+	if m.owner.state.Load() == rcdNew {
+		m.owner.transition(rcdNew, rcdStopped)
+		m.mu.Unlock()
 		return nil
 	}
-	// Use lumberjack for log rotation instead of rclone's --log-file
-	rotatingLog := &lumberjack.Logger{
-		Filename:   filepath.Join(m.logsDir, "rclone.log"),
-		MaxSize:    logMaxSizeMB,
-		MaxAge:     logMaxAgeDays,
-		MaxBackups: logMaxBackups,
-		Compress:   true,
+	rcd, ops := m.rcd, m.ops
+	m.mu.Unlock()
+	if rcd == nil || ops == nil {
+		return nil
 	}
 
+	m.logger.Info().Msg("Stopping rclone RC server")
+	ctx, cancel := task.Detached(rcd.Context(), managerStopTimeout)
+	defer cancel()
+	err := errors.Join(ops.Stop(ctx), rcd.Stop(ctx))
+	if current := m.owner.state.Load(); err == nil && current != rcdStopped {
+		err = fmt.Errorf("rcd did not stop: state %s", current)
+	}
+	if err != nil {
+		return err
+	}
+	m.logger.Info().Msg("Client RC server stopped")
+	return nil
+}
+
+// spawnRcd starts the rcd process. Its output goes to the rotating log.
+func (m *Manager) spawnRcd() (rcdProcess, error) {
+	cfg := m.mount
 	args := []string{
 		"rcd",
 		"--rc-addr", ":" + cfg.Rclone.Port,
@@ -181,97 +255,50 @@ func (m *Manager) Start(g *task.Group) error {
 			args = append(args, "--cache-dir", cfg.Rclone.CacheDir)
 		}
 	}
-	m.cmd = exec.CommandContext(ctx, "rclone", args...)
-
-	// Route rclone output through lumberjack for rotation
-	m.cmd.Stdout = rotatingLog
-	m.cmd.Stderr = rotatingLog
-
-	if err := m.cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start rclone: %w", err)
+	// The owner signals the process in order, so the group ending must not kill it.
+	cmd := exec.CommandContext(context.WithoutCancel(m.owner.group.Context()), "rclone", args...)
+	cmd.Stdout = m.rcdLog
+	cmd.Stderr = m.rcdLog
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start rclone: %w", err)
 	}
-	m.serverStarted.Store(true)
-	m.exited = make(chan struct{})
-	go m.reap()
-
-	// Wait for server to be ready in a goroutine
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				m.logger.Error().Interface("panic", r).Msg("Panic in rclone RC server monitor")
-			}
-		}()
-
-		m.waitForServer()
-		close(m.serverReady)
-
-		// Start mounting here now
-
-		if err := m.waitForReady(serverReadyTimeout); err != nil {
-			m.logger.Error().Err(err).Msg("Client RC server did not become ready in time")
-			return
-		}
-
-		// Start mount
-		if err := m.startMount(m.ctx); err != nil {
-			m.logger.Error().Err(err).Msgf("Failed to mount rclone filesystem")
-		} else {
-			m.logger.Info().Msgf("Successfully mounted rclone filesystem")
-		}
-	}()
-	return nil
+	return &execProcess{cmd: cmd}, nil
 }
 
-// reap waits for the rcd process and records its exit.
-func (m *Manager) reap() {
-	defer close(m.exited)
-	err := m.cmd.Wait()
-	switch {
-	case err == nil:
-		m.logger.Info().Msg("Client RC server exited normally")
-	case errors.Is(err, context.Canceled):
-		m.logger.Info().Msg("Client RC server terminated: context canceled")
-	case WasHardTerminated(err): // SIGKILL on *nix; non-zero exit on Windows
-		m.logger.Info().Msg("Client RC server hard-terminated")
-	default:
-		m.logger.Warn().Err(err).Msg("Client RC server exited")
-	}
-}
-
-// Stop stops the rclone RC server and unmounts all mounts.
-func (m *Manager) Stop() error {
-	if !m.serverStarted.Load() {
+// closeLog closes the rotating log once the owner has ended.
+func (m *Manager) closeLog() error {
+	if m.rcdLog == nil {
 		return nil
 	}
+	return m.rcdLog.Close()
+}
 
-	m.logger.Info().Msg("Stopping rclone RC server")
-	// Unmount while m.ctx is live: the force-unmount fallback runs its
-	// commands under it, and a canceled context kills them before they start.
-	m.stopMount()
-	m.cancel()
-
-	if m.cmd != nil && m.cmd.Process != nil {
-		// Try graceful shutdown first, then kill.
-		if err := m.cmd.Process.Signal(os.Interrupt); err != nil {
-			_ = m.cmd.Process.Kill()
-		}
-		select {
-		case <-m.exited:
-		case <-time.After(rcloneGracefulStop):
-			if err := m.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
-				return err
-			}
-			select {
-			case <-m.exited:
-				m.logger.Info().Msg("Client process cleanup completed")
-			case <-time.After(rcloneReapTimeout):
-				m.logger.Error().Msg("Timed out waiting for rclone to exit")
-			}
-		}
+// onRcdReady mounts whenever rcd becomes Ready, unless a recovery is running.
+func (m *Manager) onRcdReady() {
+	if err := m.ops.Go("mount", m.remount); err != nil {
+		m.logger.Warn().Err(err).Msg("Mount skipped: the manager is stopping")
 	}
+}
 
-	m.serverStarted.Store(false)
-	m.logger.Info().Msg("Client RC server stopped")
+// onRcdExit records that the mount went away with rcd.
+func (m *Manager) onRcdExit() {
+	m.markUnmounted("rclone exited")
+}
+
+// remount mounts once rcd is Ready. A running recovery does its own remount.
+func (m *Manager) remount(ctx context.Context) error {
+	if m.recovering.Load() {
+		m.logger.Info().Msg("Recovery is running, leaving the remount to it")
+		return nil
+	}
+	if m.IsMounted() {
+		return nil
+	}
+	if err := m.mountWithRetry(ctx, mountRetries); err != nil {
+		m.logger.Error().Err(err).Msg("Failed to mount rclone filesystem")
+		return nil
+	}
+	m.logger.Info().Msg("Successfully mounted rclone filesystem")
 	return nil
 }
 
@@ -284,57 +311,21 @@ func (m *Manager) IsMounted() bool {
 	return info != nil && info.Mounted
 }
 
-// Start creates the mount using rclone RC.
-func (m *Manager) startMount(ctx context.Context) error {
-	// Check if already mounted
-	if m.IsMounted() {
-		m.logger.Info().Msg("Mount is already mounted")
-		return nil
-	}
-
-	// Try to ping rcd
-	if err := m.client.Ping(ctx); err != nil {
-		return fmt.Errorf("rclone RC server is not reachable: %w", err)
-	}
-
-	if err := m.mountWithRetry(ctx, mountRetries); err != nil {
-		m.logger.Error().Err(err).Msg("Mount operation failed")
-		return err
-	}
-	go m.MonitorMounts(ctx)
-	return nil
-}
-
-func (m *Manager) stopMount() {
-	if !m.IsMounted() {
-		m.logger.Info().Msgf("Mount is not mounted, skipping unmount")
-		return
-	}
-
-	m.logger.Info().Msg("Unmounting via RC")
-
-	m.unmount(m.ctx)
-	m.logger.Info().Msgf("Successfully unmounted %s", m.getMountInfo().LocalPath)
-}
-
-// IsReady returns true if the RC server is ready.
+// IsReady returns true while rcd answers.
 func (m *Manager) IsReady() bool {
-	select {
-	case <-m.serverReady:
-		return true
-	default:
-		return false
-	}
+	return m.owner.state.Load() == rcdReady
 }
 
 // Refresh refreshes directories in the VFS cache.
 func (m *Manager) Refresh(dirs []string) error {
 	mountInfo := m.getMountInfo()
-	if mountInfo == nil || !mountInfo.Mounted {
+	if mountInfo == nil || !mountInfo.Mounted || !m.IsReady() {
 		return fmt.Errorf("mount is not mounted")
 	}
 
-	if err := m.client.Refresh(context.Background(), dirs, FSName); err != nil {
+	ctx, cancel := context.WithTimeout(m.owner.group.Context(), rcCallTimeout)
+	defer cancel()
+	if err := m.client.Refresh(ctx, dirs, FSName); err != nil {
 		m.logger.Error().Err(err).
 			Msg("Failed to refresh directory")
 		return fmt.Errorf("failed to refresh directory %s : %w", dirs, err)
@@ -348,34 +339,4 @@ func (m *Manager) GetLogger() zerolog.Logger {
 
 func (m *Manager) Type() string {
 	return "rclone"
-}
-
-// waitForServer waits for the RC server to become available.
-func (m *Manager) waitForServer() {
-	maxAttempts := 30
-	for range maxAttempts {
-		if m.ctx.Err() != nil {
-			return
-		}
-
-		if err := m.client.Ping(m.ctx); err == nil {
-			return
-		}
-
-		time.Sleep(time.Second)
-	}
-
-	m.logger.Error().Msg("Client RC server not responding - mount operations will be disabled")
-}
-
-// waitForReady waits for the RC server to be ready.
-func (m *Manager) waitForReady(timeout time.Duration) error {
-	select {
-	case <-m.serverReady:
-		return nil
-	case <-time.After(timeout):
-		return fmt.Errorf("timeout waiting for rclone RC server to be ready")
-	case <-m.ctx.Done():
-		return m.ctx.Err()
-	}
 }

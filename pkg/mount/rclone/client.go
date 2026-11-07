@@ -54,7 +54,7 @@ func (m *Manager) performMount(ctx context.Context) error {
 	}
 
 	// Create rclone config for this provider
-	if err := m.createConfig(); err != nil {
+	if err := m.createConfig(ctx); err != nil {
 		return fmt.Errorf("failed to create rclone config: %w", err)
 	}
 
@@ -88,12 +88,13 @@ func (m *Manager) performMount(ctx context.Context) error {
 	return nil
 }
 
-// unmount is the internal unmount function.
+// unmount asks rcd to unmount, and falls back to the unmount helpers. A mount
+// marked down is still unmounted: rcd may have remounted it since.
 func (m *Manager) unmount(ctx context.Context) {
 	mountInfo := m.getMountInfo()
 
-	if mountInfo == nil || !mountInfo.Mounted {
-		m.logger.Info().Msg("Mount not found or already unmounted")
+	if mountInfo == nil {
+		m.logger.Info().Msg("Mount not found, nothing to unmount")
 		return
 	}
 
@@ -135,7 +136,7 @@ func (m *Manager) markUnmounted(errMsg string) {
 }
 
 // createConfig creates an rclone config entry for the provider.
-func (m *Manager) createConfig() error {
+func (m *Manager) createConfig(ctx context.Context) error {
 	args := map[string]any{
 		"name": ConfigName,
 		"type": "webdav",
@@ -145,7 +146,7 @@ func (m *Manager) createConfig() error {
 			"pacer_min_sleep": "0",
 		},
 	}
-	if err := m.client.CreateConfig(context.Background(), args); err != nil {
+	if err := m.client.CreateConfig(ctx, args); err != nil {
 		return fmt.Errorf("failed to create rclone config: %w", err)
 	}
 	return nil
