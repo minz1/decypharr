@@ -114,7 +114,7 @@ func TestAskFromAChildTaskOfAHandlerIsRefused(t *testing.T) {
 			if m != 0 {
 				return
 			}
-			_ = fx.Go("probe", func(ctx context.Context) int {
+			_, _ = fx.Go("probe", func(ctx context.Context) int {
 				_, err := r.Ask(ctx, "b", 1)
 				results <- err
 				return 1
