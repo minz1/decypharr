@@ -2,6 +2,7 @@ package customerror
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 )
 
@@ -78,6 +79,13 @@ var ErrProviderStatusTimeout = (&Error{
 	err:        errors.New("provider did not finish processing the torrent in time"),
 	Code:       "provider_status_timeout",
 }).Retryable()
+
+// StatusWaitStopped is the error of a status poll that was cut short because the
+// application is stopping. It is both a pending status (no verdict on the
+// release) and the cause that stopped the wait.
+func StatusWaitStopped(name string, cause error) error {
+	return fmt.Errorf("torrent %s: stopped waiting for the provider: %w: %w", name, ErrProviderStatusTimeout, cause)
+}
 
 var ErrTorrentBlocked = (&Error{
 	statusCode: http.StatusUnavailableForLegalReasons,

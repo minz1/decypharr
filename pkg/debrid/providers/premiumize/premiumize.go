@@ -41,9 +41,10 @@ const (
 	// statusPollInterval is the delay between CheckStatus polls of a finished
 	// transfer whose files are not linked yet.
 	statusPollInterval = 2 * time.Second
-	// maxFinalizingPolls bounds that wait (about five minutes at the default
-	// interval).
-	maxFinalizingPolls = 150
+	// maxFinalizingPolls bounds that wait (about 30 seconds at the default
+	// interval). It runs inside the add request and a queue slot, so a longer wait
+	// is left to the queue's next pass.
+	maxFinalizingPolls = 15
 )
 
 var _ common.Client = (*Premiumize)(nil)
@@ -270,7 +271,9 @@ func (pm *Premiumize) UpdateAndReturnTorrent(t *types.Torrent) (*types.Torrent, 
 				customerror.ErrProviderStatusTimeout,
 			)
 		}
-		time.Sleep(interval)
+		if waitErr := pm.options.Wait(interval); waitErr != nil {
+			return t, customerror.StatusWaitStopped(t.Name, waitErr)
+		}
 	}
 	if t.Status == types.TorrentStatusDownloaded {
 		return t, nil

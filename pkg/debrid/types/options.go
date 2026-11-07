@@ -1,7 +1,9 @@
 package types
 
 import (
+	"context"
 	"crypto/tls"
+	"time"
 
 	"github.com/rs/zerolog"
 )
@@ -20,6 +22,11 @@ type ProviderOptions struct {
 	// TLSConfig is the verified TLS configuration for API and download
 	// requests. Nil means the system roots.
 	TLSConfig *tls.Config
+	// Shutdown returns a context that ends when the application stops, so a
+	// provider that polls between API calls can stop with it. The client
+	// interface carries no context yet; this is the interim route. Nil, or a
+	// nil context, means the application never stops.
+	Shutdown func() context.Context
 }
 
 // FileAllowed applies ValidateFile, allowing every file when it is nil.
@@ -28,4 +35,25 @@ func (o ProviderOptions) FileAllowed(name string, size int64) error {
 		return nil
 	}
 	return o.ValidateFile(name, size)
+}
+
+// Wait sleeps for d, or returns the shutdown context's error as soon as the
+// application stops.
+func (o ProviderOptions) Wait(d time.Duration) error {
+	var ctx context.Context
+	if o.Shutdown != nil {
+		ctx = o.Shutdown()
+	}
+	if ctx == nil {
+		time.Sleep(d)
+		return nil
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

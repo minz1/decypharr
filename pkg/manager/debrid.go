@@ -2,6 +2,7 @@ package manager
 
 import (
 	"cmp"
+	"context"
 	"errors"
 	"slices"
 
@@ -64,6 +65,7 @@ func (m *Manager) createClient(dc config.Debrid) (debrid.Client, error) {
 		},
 		Logger:    m.logs.New(dc.Name),
 		TLSConfig: m.tlsConfig,
+		Shutdown:  func() context.Context { return m.ctx },
 	}
 
 	switch dc.Provider {

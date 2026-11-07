@@ -17,7 +17,11 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
-func queuedEntryAddedAt(t *testing.T, provider debrid.Client, addedAt time.Time) (*Manager, *storage.Entry) {
+func queuedEntryAddedAt(
+	t *testing.T,
+	provider debrid.Client,
+	placementAddedAt, entryAddedOn time.Time,
+) (*Manager, *storage.Entry) {
 	t.Helper()
 	store, err := storage.NewStorage(t.TempDir(), storage.Options{})
 	if err != nil {
@@ -32,7 +36,10 @@ func queuedEntryAddedAt(t *testing.T, provider debrid.Client, addedAt time.Time)
 	entry := &storage.Entry{
 		InfoHash: "0123456789012345678901234567890123456789", Name: "release",
 		Protocol: config.ProtocolTorrent, ActiveProvider: "provider", State: storage.EntryStateDownloading,
-		Providers: map[string]*storage.ProviderEntry{"provider": {Provider: "provider", ID: "id", AddedAt: addedAt}},
+		AddedOn: entryAddedOn,
+		Providers: map[string]*storage.ProviderEntry{
+			"provider": {Provider: "provider", ID: "id", AddedAt: placementAddedAt},
+		},
 	}
 	if addErr := m.queue.Add(entry); addErr != nil {
 		t.Fatal(addErr)
@@ -43,25 +50,28 @@ func queuedEntryAddedAt(t *testing.T, provider debrid.Client, addedAt time.Time)
 // A provider that has not finished converting or linking a torrent is not a
 // verdict on the release: the entry stays queued for the next pass and the
 // provider's torrent is kept, until the wait has lasted maxProviderPendingTime.
+// The wait is measured from the placement, else the entry; when neither knows
+// its age the first timeout starts the clock.
 func TestQueuedTorrentStatusTimeoutKeepsEntryUntilWaitIsExhausted(t *testing.T) {
 	t.Parallel()
+	stale := time.Now().Add(-maxProviderPendingTime - time.Minute)
+	fresh := time.Now().Add(-time.Minute)
 	for _, tc := range []struct {
-		name       string
-		age        time.Duration
-		wantFailed bool
+		name                      string
+		placementAddedAt, entryAt time.Time
+		wantFailed                bool
+		wantClockStarted          bool
 	}{
-		{name: "fresh placement", age: time.Minute},
-		{name: "wait exhausted", age: maxProviderPendingTime + time.Minute, wantFailed: true},
-		{name: "unknown placement age", age: -1},
+		{name: "fresh placement", placementAddedAt: fresh, entryAt: stale},
+		{name: "wait exhausted", placementAddedAt: stale, entryAt: fresh, wantFailed: true},
+		{name: "no placement age, stale entry", entryAt: stale, wantFailed: true},
+		{name: "no placement age, fresh entry", entryAt: fresh},
+		{name: "no age anywhere starts the clock", wantClockStarted: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			provider := &failingStatusProvider{err: customerror.ErrProviderStatusTimeout}
-			addedAt := time.Now().Add(-tc.age)
-			if tc.age < 0 {
-				addedAt = time.Time{}
-			}
-			m, entry := queuedEntryAddedAt(t, provider, addedAt)
+			m, entry := queuedEntryAddedAt(t, provider, tc.placementAddedAt, tc.entryAt)
 
 			m.processQueuedTorrent(entry)
 
@@ -74,6 +84,9 @@ func TestQueuedTorrentStatusTimeoutKeepsEntryUntilWaitIsExhausted(t *testing.T) 
 			}
 			if deleted := waitDeleted(provider); deleted != tc.wantFailed {
 				t.Fatalf("provider torrent deleted = %v, want %v", deleted, tc.wantFailed)
+			}
+			if started := !saved.GetActiveProvider().AddedAt.IsZero(); tc.wantClockStarted && !started {
+				t.Fatal("the first timeout did not record when the wait began")
 			}
 		})
 	}
@@ -113,19 +126,36 @@ func (p *submitProvider) DeleteTorrent(string) error {
 	return nil
 }
 
-// A status check that gave up waiting must not surface as ErrTorrentNotCached,
-// the only error submitToProvider reports to hearsay as "not cached".
-func TestSubmitToProviderStatusTimeoutIsNotReportedAsUncached(t *testing.T) {
+// A status check that gave up waiting is not a verdict. The add returns the
+// submitted torrent as still downloading, so it is queued and the scheduler
+// keeps checking it; the provider's torrent is not deleted, and the error is
+// never ErrTorrentNotCached, the only one reported to hearsay as "not cached".
+func TestSubmitToProviderStatusTimeoutQueuesTheTorrent(t *testing.T) {
 	t.Parallel()
-	provider := &submitProvider{err: customerror.ErrProviderStatusTimeout}
-	m := withTestConfig(t, &Manager{logger: zerolog.Nop(), clients: xsync.NewMap[string, debrid.Client]()})
+	for name, err := range map[string]error{
+		"timeout":  customerror.ErrProviderStatusTimeout,
+		"shutdown": errors.Join(customerror.ErrProviderStatusTimeout, errors.New("context canceled")),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			provider := &submitProvider{err: err}
+			m := withTestConfig(t, &Manager{logger: zerolog.Nop(), clients: xsync.NewMap[string, debrid.Client]()})
 
-	_, err := m.submitToProvider(
-		provider,
-		&types.Torrent{InfoHash: "hash", Name: "name"},
-		&ImportRequest{Magnet: &utils.Magnet{InfoHash: "hash", Name: "name"}},
-	)
-	if !errors.Is(err, customerror.ErrProviderStatusTimeout) || errors.Is(err, customerror.ErrTorrentNotCached) {
-		t.Fatalf("err = %v, want the status timeout and not ErrTorrentNotCached", err)
+			torrent, submitErr := m.submitToProvider(
+				provider,
+				&types.Torrent{InfoHash: "hash", Name: "name"},
+				&ImportRequest{Magnet: &utils.Magnet{InfoHash: "hash", Name: "name"}},
+			)
+			if submitErr != nil {
+				t.Fatalf("err = %v, want the torrent queued", submitErr)
+			}
+			if torrent == nil || torrent.ID != "id" || torrent.Status != types.TorrentStatusDownloading {
+				t.Fatalf("torrent = %#v, want the submitted torrent, downloading", torrent)
+			}
+			time.Sleep(20 * time.Millisecond)
+			if provider.deleted.Load() != 0 {
+				t.Fatal("a pending torrent was deleted at the provider")
+			}
+		})
 	}
 }

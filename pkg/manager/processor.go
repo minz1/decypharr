@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -323,7 +324,7 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 	if !m.queue.Contains(entry.InfoHash) {
 		return // removed while the status check ran
 	}
-	if err != nil && transientStatusError(err) && !statusWaitExhausted(placement, err) {
+	if err != nil && transientStatusError(err) && !m.statusWaitExhausted(entry, placement, err) {
 		// A network blip or provider hiccup: leave the entry as it is, so the
 		// next queue pass checks again, rather than failing it and deleting
 		// the provider's torrent.
@@ -424,11 +425,19 @@ func (m *Manager) awaitLinks(entry *storage.Entry, placement *storage.ProviderEn
 const maxProviderPendingTime = 6 * time.Hour
 
 // statusWaitExhausted reports a provider-pending status error that has outlasted
-// maxProviderPendingTime since the placement was added.
-func statusWaitExhausted(placement *storage.ProviderEntry, err error) bool {
-	return errors.Is(err, customerror.ErrProviderStatusTimeout) &&
-		!placement.AddedAt.IsZero() &&
-		time.Since(placement.AddedAt) > maxProviderPendingTime
+// maxProviderPendingTime. The wait is measured from the placement, else from the
+// entry; when neither knows its age the first timeout is recorded as its start.
+func (m *Manager) statusWaitExhausted(entry *storage.Entry, placement *storage.ProviderEntry, err error) bool {
+	if !errors.Is(err, customerror.ErrProviderStatusTimeout) {
+		return false
+	}
+	start := cmp.Or(placement.AddedAt, entry.AddedOn)
+	if start.IsZero() {
+		placement.AddedAt = time.Now()
+		_ = m.queue.Update(entry)
+		return false
+	}
+	return time.Since(start) > maxProviderPendingTime
 }
 
 // linksWaitLimit is how long a finished torrent may go without file links before its grab fails.
@@ -715,6 +724,19 @@ func (m *Manager) submitToProvider(
 	_logger.Info().Str("id", dbt.ID).Msgf("Entry: %s submitted to %s", dbt.Name, db.Config().Name)
 
 	torrent, err := db.CheckStatus(dbt)
+	if errors.Is(err, customerror.ErrProviderStatusTimeout) && torrent != nil && torrent.ID != "" {
+		// The provider has not finished converting the magnet or linking its
+		// files. That is no verdict on the release: queue the torrent as still
+		// downloading, so the scheduler keeps checking it, and keep it at the
+		// provider. Nothing is reported to hearsay.
+		m.hearsay.DiscardAdd(decision)
+		torrent.Status = debridTypes.TorrentStatusDownloading
+		_logger.Info().
+			Str("id", torrent.ID).
+			Err(err).
+			Msg("Provider still processing the torrent; queued to keep checking")
+		return torrent, nil
+	}
 	reported := errors.Is(err, customerror.ErrTorrentNotCached)
 	if reported {
 		m.hearsay.RecordAdd(decision, false)

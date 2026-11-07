@@ -41,8 +41,10 @@ const (
 	// statusPollInterval is the delay before each CheckStatus poll.
 	statusPollInterval = 2 * time.Second
 	// maxConversionPolls bounds how long CheckStatus waits for Real-Debrid to turn
-	// a magnet into a torrent (about six minutes at the default interval).
-	maxConversionPolls = 180
+	// a magnet into a torrent (about 30 seconds at the default interval). It runs
+	// inside the add request and a queue slot, so a longer wait is left to the
+	// queue's next pass.
+	maxConversionPolls = 15
 
 	statusMagnetConversion      = "magnet_conversion"
 	statusDownloaded            = "downloaded"
@@ -597,7 +599,9 @@ func (r *RealDebrid) CheckStatus(t *types.Torrent) (*types.Torrent, error) {
 	maxConverting := cmp.Or(r.maxConversionPolls, maxConversionPolls)
 	converting := 0
 	for {
-		time.Sleep(interval)
+		if waitErr := r.options.Wait(interval); waitErr != nil {
+			return t, customerror.StatusWaitStopped(t.Name, waitErr)
+		}
 
 		var data torrentInfo
 		status, err := r.doGet(context.Background(), "/torrents/info/"+t.ID, &data)
