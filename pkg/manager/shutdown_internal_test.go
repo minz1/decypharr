@@ -172,6 +172,8 @@ func wireLifecycle(t *testing.T, m *Manager) {
 	m.group = testGroup(t)
 	m.life = newLifecycle()
 	m.ready = make(chan struct{})
+	m.startDone = make(chan struct{})
+	m.startRan = false
 	m.children = nil
 	if err := m.registerServices(); err != nil {
 		t.Fatal(err)

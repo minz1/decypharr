@@ -148,6 +148,8 @@ func (s *service) run(ctx context.Context) error {
 // moves the manager's group to Failed: the services already started stop,
 // newest first, and Ready never fires. Start is for one call per manager.
 func (m *Manager) Start() error {
+	m.startMu.Lock()
+	defer m.startMu.Unlock()
 	if !m.life.Transition(lifecycleConstructed, lifecycleStarting) {
 		switch m.life.Load() {
 		case lifecycleStarting, lifecycleReady, lifecycleFailed:
@@ -158,10 +160,12 @@ func (m *Manager) Start() error {
 			return task.ErrStopped
 		}
 	}
-	return m.group.GoCritical("start", func(ctx context.Context) error {
-		if err := m.startSequence(ctx); err != nil {
+	m.startRan = true
+	err := m.group.GoCritical("start", func(ctx context.Context) error {
+		defer close(m.startDone)
+		if startErr := m.startSequence(ctx); startErr != nil {
 			m.life.Transition(lifecycleStarting, lifecycleFailed)
-			return err
+			return startErr
 		}
 		if !m.life.Transition(lifecycleStarting, lifecycleReady) {
 			return nil // stopped while starting
@@ -170,6 +174,10 @@ func (m *Manager) Start() error {
 		m.startMount(ctx)
 		return nil
 	})
+	if err != nil {
+		close(m.startDone)
+	}
+	return err
 }
 
 // startSequence starts the sub-services in dependency order. Services the
@@ -275,6 +283,15 @@ func (m *Manager) closeStorage(ctx context.Context) error {
 	<-ctx.Done()
 	for _, child := range m.children {
 		<-child.Done()
+	}
+	// The start task is a sibling of this one. A stop during migrate() or the
+	// initial calls must not close storage under it. A stop that began before
+	// Start was called refuses Start, so there is nothing to wait for.
+	m.startMu.Lock()
+	ran := m.startRan
+	m.startMu.Unlock()
+	if ran {
+		<-m.startDone
 	}
 	if m.storage != nil {
 		m.logger.Info().Msg("Closing storage database")
