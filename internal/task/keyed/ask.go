@@ -15,6 +15,9 @@ var (
 	// ErrOutcomeUnknown wraps the error of an Ask that gave up, or whose message was dropped, after the message
 	// was queued: it may have been handled, or may be. The command must be safe to repeat.
 	ErrOutcomeUnknown = errors.New("keyed: the outcome of the message is unknown")
+	// ErrNotSent wraps the error of an Ask whose context had ended before it was called: nothing was queued, so
+	// the outcome is known, unlike ErrOutcomeUnknown.
+	ErrNotSent = errors.New("keyed: the message was not sent")
 	// ErrNoReply is the reply of an Ask whose handler returned without calling Effects.Reply.
 	ErrNoReply = errors.New("keyed: the handler did not reply")
 	// ErrHandlerPanicked is the reply of an Ask whose handler panicked.
@@ -49,6 +52,9 @@ func (s *replySlot) finish(value any, err error) {
 func (r *Runner[K, M, S]) Ask(ctx context.Context, key K, msg M) (any, error) {
 	if ctx.Value(inHandler{}) != nil {
 		return nil, ErrAskInHandler
+	}
+	if ctx.Err() != nil {
+		return nil, fmt.Errorf("%w: %w", ErrNotSent, context.Cause(ctx))
 	}
 	slot := newReplySlot()
 	r.mu.Lock()
