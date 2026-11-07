@@ -2,7 +2,6 @@ package manager
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"time"
 
@@ -47,25 +46,4 @@ func drainPlacements(t testing.TB, m *Manager) {
 	t.Helper()
 	closePlacements(t, m)
 	m.placementsSvc = &service{group: testGroup(t)}
-}
-
-// waitWorkIdle waits until the manager's work group runs nothing but the job
-// queue's own workers: every download action and background call has
-// returned. It replaces waiting on the old download WaitGroup.
-func waitWorkIdle(t testing.TB, m *Manager) {
-	t.Helper()
-	for range 10000 {
-		busy := false
-		for _, info := range m.work.Snapshot() {
-			if !strings.HasSuffix(info.Path, ":worker") && !strings.HasSuffix(info.Path, ":closer") {
-				busy = true
-				break
-			}
-		}
-		if !busy {
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatalf("work still running: %v", m.work.Snapshot())
 }

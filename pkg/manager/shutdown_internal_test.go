@@ -100,7 +100,6 @@ func runShutdownResume(t *testing.T, multiSeason bool) {
 	}
 	m.restoreActiveDownloadJobs(m.restoreSnapshot())
 	m.processQueuedEntries()
-	waitWorkIdle(t, m)
 	synctest.Wait()
 	saved, err := m.queue.GetTorrent(entry.InfoHash)
 	if err != nil || !saved.IsComplete || saved.IsDownloading {
@@ -125,7 +124,6 @@ func runShutdownResume(t *testing.T, multiSeason bool) {
 	}
 	m.restoreActiveDownloadJobs(m.restoreSnapshot())
 	m.processQueuedEntries()
-	waitWorkIdle(t, m)
 	if _, lstatErr := os.Lstat(linkPath); !os.IsNotExist(lstatErr) {
 		t.Fatalf("completed import was processed again: %v", lstatErr)
 	}
