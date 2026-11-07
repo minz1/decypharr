@@ -22,7 +22,7 @@ func TestManualReacquireIsHeldByATrippedBreakerUnlessForced(t *testing.T) {
 	admit := func(i int, force bool) int {
 		w := httptest.NewRecorder()
 		request := reacquire.Request{EntryID: fmt.Sprintf("entry-%d", i), FileID: "file"}
-		if s.admitReacquire(w, httptest.NewRequest(http.MethodPost, "/api/arr/reacquire", nil), request, force) {
+		if s.admitReacquire(w, httptest.NewRequest(http.MethodPost, "/api/arr/reacquire", nil), request, force, false) {
 			return http.StatusAccepted
 		}
 		return w.Code
@@ -38,6 +38,39 @@ func TestManualReacquireIsHeldByATrippedBreakerUnlessForced(t *testing.T) {
 	}
 	if got := admit(10, true); got != http.StatusAccepted {
 		t.Fatalf("forced reacquire = %d, want accepted", got)
+	}
+}
+
+// Asking again for a file that already has a job returns that job; it deletes nothing, so it is not a heal to
+// count and a tripped bucket does not refuse it.
+func TestManualReacquireOfAFileWithAJobIsNotCounted(t *testing.T) {
+	t.Parallel()
+	mgr, _ := managertest.New(t, nil)
+	s := &Server{manager: mgr, logger: zerolog.Nop()}
+	request := reacquire.Request{EntryID: "entry-1", FileID: "file"}
+	for i := range 12 {
+		w := httptest.NewRecorder()
+		other := reacquire.Request{EntryID: fmt.Sprintf("other-%d", i), FileID: "file"}
+		s.admitReacquire(w, httptest.NewRequest(http.MethodPost, "/api/arr/reacquire", nil), other, false, false)
+	}
+	post := func(active bool) bool {
+		return s.admitReacquire(
+			httptest.NewRecorder(),
+			httptest.NewRequest(http.MethodPost, "/", nil),
+			request,
+			false,
+			active,
+		)
+	}
+	if post(false) {
+		t.Fatal("a new reacquisition passed a tripped bucket")
+	}
+	if !post(true) {
+		t.Fatal("a repeated request for a file with a job was held")
+	}
+	jobs := []reacquire.Job{{EntryID: "entry-1", FileID: "file", Status: reacquire.StatusQueued}}
+	if !repair.HasActiveJob(jobs, "entry-1", "file") || repair.HasActiveJob(jobs, "entry-1", "other-file") {
+		t.Fatal("HasActiveJob does not match on entry and file")
 	}
 }
 

@@ -123,7 +123,13 @@ func (s *Server) handleArrReacquire(w http.ResponseWriter, r *http.Request) {
 		s.sendJSONError(w, message, http.StatusBadRequest)
 		return
 	}
-	if !s.admitReacquire(w, r, request, body.Force) {
+	if !s.admitReacquire(
+		w,
+		r,
+		request,
+		body.Force,
+		repair.HasActiveJob(service.Jobs(), request.EntryID, request.FileID),
+	) {
 		return
 	}
 
@@ -138,9 +144,12 @@ func (s *Server) handleArrReacquire(w http.ResponseWriter, r *http.Request) {
 // admitReacquire puts a manual reacquisition through the repair breaker, which counts it toward the rolling heal
 // cap like any other heal that deletes an Arr file. It answers the request itself and reports false when the
 // reacquisition must not be queued.
-func (s *Server) admitReacquire(w http.ResponseWriter, r *http.Request, request reacquire.Request, force bool) bool {
+func (s *Server) admitReacquire(
+	w http.ResponseWriter, r *http.Request, request reacquire.Request, force, active bool,
+) bool {
 	svc := s.manager.Repair()
-	if svc == nil {
+	if svc == nil || active {
+		// A file with a job under way gets that job back and loses nothing more: not a heal to count.
 		return true
 	}
 	err := svc.Admit(r.Context(), repair.HealRequest{

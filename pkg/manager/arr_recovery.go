@@ -80,7 +80,7 @@ func (m *Manager) submitStreamReacquire(entryID, fileID, filename string) {
 		if !m.streamFailureConfirmed(entryID, filename) {
 			return
 		}
-		if err := m.admitHeal(entryID, "", repair.ClassUsenetSegment); err != nil {
+		if err := m.admitStreamHeal(recovery, entryID, fileID); err != nil {
 			m.logger.Warn().Err(err).Str("entry_id", entryID).Str("file_id", fileID).
 				Msg("Stream failed but the repair breaker is not admitting heals; not reacquiring")
 			return
@@ -164,44 +164,66 @@ func (m *Manager) recoverDroppedEntry(provider string, entry *storage.Entry) err
 	return m.failGrab(entry, recovery, instance.Name, provider+" dropped the torrent")
 }
 
-// reacquireDroppedFiles queues a reacquisition for each of a dropped entry's
-// files the Arr imported. It reports whether any was imported.
+// reacquireDroppedFiles queues a reacquisition for each of a dropped entry's files the Arr imported. It reports
+// whether any was imported. The files still without a job are admitted once, together, by the repair breaker; a
+// retry of files that already have one asks nothing of it.
 func (m *Manager) reacquireDroppedFiles(provider string, entry *storage.Entry, recovery ArrRecovery) (bool, error) {
+	if recovery == nil || entry.InfoHash == "" {
+		return false, nil
+	}
+	jobs := recovery.Jobs()
 	imported := false
-	var reacquireErr error
+	var todo []string
 	for _, file := range entry.Files {
-		if recovery == nil || entry.InfoHash == "" || file.ID == "" {
+		if file.ID == "" {
 			continue
 		}
 		if _, ok := recovery.Lookup(entry.InfoHash, file.ID); !ok {
 			continue
 		}
 		imported = true
-		// A held heal is returned as an error, so the dropped entry is kept and retried on the next sync.
-		if err := m.admitHeal(entry.InfoHash, provider, repair.ClassDropped); err != nil {
-			reacquireErr = errors.Join(reacquireErr, fmt.Errorf("reacquire file %s: %w", file.ID, err))
-			continue
+		if !repair.HasActiveJob(jobs, entry.InfoHash, file.ID) {
+			todo = append(todo, file.ID)
 		}
+	}
+	if len(todo) == 0 {
+		return imported, nil
+	}
+	// A held heal is returned as an error, so the dropped entry is kept and retried on the next sync.
+	if err := m.admitHeal(entry.InfoHash, provider, repair.ClassDropped, len(todo)); err != nil {
+		return imported, fmt.Errorf("reacquire %d files: %w", len(todo), err)
+	}
+	var reacquireErr error
+	for _, fileID := range todo {
 		if _, err := recovery.Reacquire(reacquire.Request{
 			EntryID: entry.InfoHash,
-			FileID:  file.ID,
+			FileID:  fileID,
 			Cause:   reacquire.CauseRepair,
 			// A provider dropping a torrent is no evidence the release is bad: search again, blocklist nothing.
 			Strategy: reacquire.StrategyCommandSearch,
 		}); err != nil {
-			reacquireErr = errors.Join(reacquireErr, fmt.Errorf("reacquire file %s: %w", file.ID, err))
+			reacquireErr = errors.Join(reacquireErr, fmt.Errorf("reacquire file %s: %w", fileID, err))
 		}
 	}
-	if imported && reacquireErr == nil {
+	if reacquireErr == nil {
 		m.logger.Info().Str("debrid", provider).Str("infohash", entry.InfoHash).Str("name", entry.Name).
 			Msg("Debrid dropped an imported torrent; reacquiring its files")
 	}
 	return imported, reacquireErr
 }
 
-// admitHeal asks the repair breaker whether a reacquisition may delete an Arr file for entryID. An empty provider
-// is the entry's own. Without a repair service there is no breaker to ask.
-func (m *Manager) admitHeal(entryID, provider string, class repair.Class) error {
+// admitStreamHeal asks the breaker about a stream-triggered reacquisition. A file that already has a job is not a
+// heal: asking again returns that job and deletes nothing.
+func (m *Manager) admitStreamHeal(recovery ArrRecovery, entryID, fileID string) error {
+	if repair.HasActiveJob(recovery.Jobs(), entryID, fileID) {
+		return nil
+	}
+	return m.admitHeal(entryID, "", repair.ClassUsenetSegment, 1)
+}
+
+// admitHeal asks the repair breaker whether a reacquisition of units files may delete Arr files for entryID. An
+// empty provider is the entry's own. Without a repair service there is no breaker to ask.
+func (m *Manager) admitHeal(entryID, provider string, class repair.Class, units int) error {
 	if m.repair == nil {
 		return nil
 	}
@@ -212,7 +234,7 @@ func (m *Manager) admitHeal(entryID, provider string, class repair.Class) error 
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return m.repair.Admit(ctx, repair.HealRequest{Provider: provider, Class: class, Subject: entryID})
+	return m.repair.Admit(ctx, repair.HealRequest{Provider: provider, Class: class, Subject: entryID, Units: units})
 }
 
 // failGrab queues the job that fails a never-imported download's grab in
