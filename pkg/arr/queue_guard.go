@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/sirrobot01/decypharr/internal/flight"
 )
 
 // CanaryVerdict is the answer of a canary probe of one provider.
@@ -148,6 +150,8 @@ type queueGuard struct {
 	// arrWarned is when an arr's hard cap was last logged.
 	arrWarned map[string]time.Time
 	verdicts  map[string]guardVerdict
+	// canaryFlight shares one canary probe per provider among concurrent callers.
+	canaryFlight flight.Group[CanaryVerdict]
 	// pending holds the downloads reserved by decide whose blocklist has not yet been committed or released.
 	pending map[string]struct{}
 }
@@ -287,7 +291,7 @@ func (s *Service) admitBlocklists(ctx context.Context, name string, items []Queu
 			break
 		}
 		for _, provider := range need {
-			fresh[provider] = s.canaryFor(ctx, provider)
+			fresh[provider] = s.canaryFor(ctx, provider, ttl)
 		}
 	}
 	for _, event := range decision.events {
@@ -299,17 +303,29 @@ func (s *Service) admitBlocklists(ctx context.Context, name string, items []Queu
 	return decision.allowed
 }
 
-func (s *Service) canaryFor(ctx context.Context, provider string) CanaryVerdict {
-	s.guard.mu.Lock()
-	probe := s.guard.hooks.Canary
-	s.guard.mu.Unlock()
-	verdict := CanaryInconclusive
-	if probe != nil {
-		verdict = probe(ctx, provider)
+// canaryFor probes a provider's canary. Callers asking at the same moment share one probe, and a verdict that
+// arrives while they queue is reused rather than probed again.
+func (s *Service) canaryFor(ctx context.Context, provider string, ttl time.Duration) CanaryVerdict {
+	verdict, _, err := s.guard.canaryFlight.Do(ctx, provider, func(ctx context.Context) (CanaryVerdict, error) {
+		s.guard.mu.Lock()
+		probe := s.guard.hooks.Canary
+		if cached, ok := s.guard.verdicts[provider]; ok && s.now().Sub(cached.at) < ttl {
+			s.guard.mu.Unlock()
+			return cached.verdict, nil
+		}
+		s.guard.mu.Unlock()
+		verdict := CanaryInconclusive
+		if probe != nil {
+			verdict = probe(ctx, provider)
+		}
+		s.guard.mu.Lock()
+		s.guard.verdicts[provider] = guardVerdict{verdict: verdict, at: s.now()}
+		s.guard.mu.Unlock()
+		return verdict, nil
+	})
+	if err != nil {
+		return CanaryInconclusive
 	}
-	s.guard.mu.Lock()
-	s.guard.verdicts[provider] = guardVerdict{verdict: verdict, at: s.now()}
-	s.guard.mu.Unlock()
 	return verdict
 }
 

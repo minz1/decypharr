@@ -44,9 +44,10 @@ func (r *Service) canaryProbe(ctx context.Context, bucket Bucket, settings confi
 }
 
 // QueueCanary is the canary of queue cleanup's blocklist guard: it probes recently good entries of the provider and
-// reports whether they still read. Any provider failure counts, whatever its class.
+// reports whether they still read. Any provider failure counts, whatever its class. It shares the breaker's probe
+// of the provider's unclassified bucket, so concurrent callers and the breaker never probe it twice at once.
 func (r *Service) QueueCanary(ctx context.Context, provider string) arr.CanaryVerdict {
-	switch r.canaryProbe(ctx, Bucket{Provider: provider, Class: ClassOther}, r.breakerSettings()) {
+	switch r.breaker.probeCanary(ctx, Bucket{Provider: provider, Class: ClassOther}) {
 	case canaryPass:
 		return arr.CanaryPass
 	case canaryFail:
