@@ -79,6 +79,31 @@ func (p slowDeleteProvider) DeleteTorrent(string) error {
 	return nil
 }
 
+// checkPlacementStopOrder checks the events of a stop with a slow delete in flight. Everything that can queue a
+// delete stopped before the placements group, and none of it waited for the delete. The group's stop waits for the
+// delete, so usenet and then hearsay stop only after it.
+func checkPlacementStopOrder(t *testing.T, events []string) {
+	t.Helper()
+	at := func(event string) int { return slices.Index(events, event) }
+	finished := at("delete finished")
+	if finished < 0 {
+		t.Fatalf("events = %v, the delete never finished", events)
+	}
+	for _, service := range []string{"mount", "repair", "indexer", "reacquire"} {
+		stopped := at("stopped " + service)
+		if stopped < 0 || stopped > at("stopped placements") || stopped > finished {
+			t.Errorf("%s did not stop before the delete finished and the placements group: %v", service, events)
+		}
+	}
+	if at("mount stop returned") > finished {
+		t.Errorf("the mount waited for the delete: %v", events)
+	}
+	usenet := at("stopped usenet")
+	if at("stopped placements") >= usenet || finished >= usenet || usenet >= at("stopped hearsay") {
+		t.Errorf("events = %v, want the delete finished before usenet stops, and hearsay last", events)
+	}
+}
+
 // A provider delete in flight when the manager stops delays only the services that stop after the placements
 // group (usenet, hearsay) and storage: the mount, repair and Arr stops do not wait for it, and the whole stop fits
 // the budget. A delete asked for once that group has closed is refused and logged.
@@ -119,27 +144,7 @@ func TestSlowProviderDeleteKeepsTheStopOrderAndFitsTheBudget(t *testing.T) {
 		mu.Lock()
 		got := slices.Clone(events)
 		mu.Unlock()
-		at := func(event string) int { return slices.Index(got, event) }
-		finished := at("delete finished")
-		if finished < 0 {
-			t.Fatalf("events = %v, the delete never finished", got)
-		}
-		// Everything that can queue a delete has stopped before the placements group, and none of them waited for
-		// the delete; the group stops once the delete is done; usenet and hearsay stop after it.
-		for _, service := range []string{"mount", "repair", "indexer", "reacquire"} {
-			if at("stopped "+service) < 0 || at("stopped "+service) > at("stopped placements") ||
-				at("stopped "+service) > finished {
-				t.Errorf("%s did not stop before the delete finished and the placements group: %v", service, got)
-			}
-		}
-		if at("mount stop returned") > finished {
-			t.Errorf("the mount waited for the delete: %v", got)
-		}
-		// The placements service has nothing to stop itself; the group waits for the delete before usenet stops.
-		if !(at("stopped placements") < at("stopped usenet") && finished < at("stopped usenet") &&
-			at("stopped usenet") < at("stopped hearsay")) {
-			t.Errorf("events = %v, want the delete finished before usenet stops, and hearsay last", got)
-		}
+		checkPlacementStopOrder(t, got)
 
 		if m.startPlacementRun("Show.S02", "realdebrid", func() { _ = client.DeleteTorrent("late") }) {
 			t.Fatal("a delete after the placements group closed was accepted")
