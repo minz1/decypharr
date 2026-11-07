@@ -104,6 +104,11 @@ func (s *Service) stopWithCompensation(
 }
 
 // heldProgress reports to a job but keeps it in one status, whatever status a step asks for.
+//
+// It holds the status the job had when the pass began, so a move to another waiting status during the pass would be
+// put back. None happens: a waiting_* status is only ever written by the handler, which runs on the worker loop that
+// also runs the pass, and the other writers leave waiting for a different kind of status (rebindJob queues the job,
+// completeJobFromIndex makes it ready), which the guard on each update refuses to overwrite.
 type heldProgress struct {
 	inner  JobProgress
 	status Status
