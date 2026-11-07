@@ -28,12 +28,16 @@ func reacquireHandler(t *testing.T) (*Server, func(body string) (int, string)) {
 	mgr, _ := managertest.New(t, func(cfg *config.Config) {
 		cfg.Arrs = []config.Arr{{Name: "radarr", Host: stalled.URL, Token: "token"}}
 	})
+	instance, ok := mgr.Arr().Get("radarr")
+	if !ok {
+		t.Fatal("radarr is not configured")
+	}
 	service := mgr.ArrService()
 	if err := service.Start(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if err := service.UpsertBinding(reacquire.Binding{
-		ArrName: "radarr", ArrType: arr.Radarr, ArrInstanceFingerprint: "fingerprint",
+		ArrName: "radarr", ArrType: arr.Radarr, ArrInstanceFingerprint: instance.Fingerprint(),
 		EntryID: "entry-1", EntryFileID: "file", DownloadID: "download", ArrFileID: 40,
 		LibraryPath: "/library/movie.mkv", MovieID: 7, Confidence: reacquire.ConfidenceExactPath,
 	}); err != nil {
