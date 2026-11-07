@@ -42,9 +42,39 @@ func (s *Service) SetQueueGuardHooks(hooks QueueGuardHooks) {
 	s.guard.hooks = hooks
 }
 
-// failedDownloadRule is the one rule whose excess can still pass: a failed download is evidence of the release only
-// while the provider itself is healthy, which the canary tests.
-const failedDownloadRule = "failed_download"
+const (
+	// failedDownloadRule and failGrabRule are the rules whose excess can still pass: a failed download is evidence of
+	// the release only while the provider itself is healthy, which the canary tests.
+	failedDownloadRule = "failed_download"
+	// failGrabRule names the failing of a never-imported grab by decypharr itself, outside queue cleanup.
+	failGrabRule = "fail_grab"
+)
+
+func ruleHasCanary(rule string) bool { return rule == failedDownloadRule || rule == failGrabRule }
+
+// ErrBlocklistHeld is wrapped by the error AdmitFailGrab returns while the guard holds a grab. Nothing was sent;
+// the caller tries again later.
+var ErrBlocklistHeld = errors.New("the arr blocklist guard is holding this download")
+
+// AdmitFailGrab asks whether the grab of a never-imported download may be failed, which blocklists its release,
+// under the same limits as queue cleanup: 20 distinct downloads an hour per provider, more only while that
+// provider's canary passes, and the arr's hard cap. The grab counts only once CommitFailGrab says it was sent.
+func (s *Service) AdmitFailGrab(ctx context.Context, arrName, downloadID, provider string) error {
+	item := QueueSchema{ID: 1, DownloadID: downloadID, rule: failGrabRule, provider: provider}
+	if s.admitBlocklists(ctx, arrName, []QueueSchema{item})[item.ID] {
+		return nil
+	}
+	return fmt.Errorf("%w: %s in %s", ErrBlocklistHeld, downloadID, arrName)
+}
+
+// CommitFailGrab counts a grab failure AdmitFailGrab admitted and that was sent.
+func (s *Service) CommitFailGrab(arrName, downloadID, provider string) {
+	s.guard.commit(
+		arrName,
+		[]QueueSchema{{ID: 1, DownloadID: downloadID, rule: failGrabRule, provider: provider}},
+		s.now(),
+	)
+}
 
 // guardState is the state of one blocklist bucket.
 //

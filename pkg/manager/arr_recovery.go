@@ -239,11 +239,27 @@ func (m *Manager) admitHeal(entryID, provider string, class repair.Class, units 
 
 // failGrab queues the job that fails a never-imported download's grab in
 // arrName. Sonarr and Radarr store qBittorrent download IDs uppercased.
+//
+// Failing a grab blocklists its release, so it passes the arr blocklist guard with queue cleanup's blocklists. A
+// held one creates no job and returns an error wrapping arr.ErrBlocklistHeld.
 func (m *Manager) failGrab(entry *storage.Entry, recovery ArrRecovery, arrName, reason string) error {
-	job, err := recovery.FailDownload(arrName, strings.ToUpper(entry.InfoHash), entry.InfoHash)
+	provider := entry.ActiveProvider
+	if provider == "" {
+		provider = string(config.ProtocolTorrent)
+	}
+	downloadID := strings.ToUpper(entry.InfoHash)
+	ctx := m.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := m.arr.AdmitFailGrab(ctx, arrName, downloadID, provider); err != nil {
+		return err
+	}
+	job, err := recovery.FailDownload(arrName, downloadID, entry.InfoHash)
 	if err != nil {
 		return fmt.Errorf("fail download in %s: %w", arrName, err)
 	}
+	m.arr.CommitFailGrab(arrName, downloadID, provider)
 	event := m.logger.Info().Str("infohash", entry.InfoHash).Str("name", entry.Name).Str("arr", arrName)
 	if job != nil {
 		event = event.Str("job", job.ID)
@@ -378,28 +394,51 @@ func (m *Manager) recheckBadEntry(infohash string) {
 }
 
 // failGrabIfQueued fails an arr torrent's grab only while the arr still queues it; imported files stay with repair.
+// A grab the guard holds is kept and retried by the manager.
 func (m *Manager) failGrabIfQueued(ctx context.Context, entry *storage.Entry) {
+	err := m.tryFailGrabIfQueued(ctx, entry)
+	switch {
+	case err == nil:
+	case errors.Is(err, arr.ErrBlocklistHeld):
+		m.holdGrab(entry.InfoHash, func(ctx context.Context) error {
+			current := m.badEntry(entry.InfoHash)
+			if current == nil {
+				return nil
+			}
+			return m.tryFailGrabIfQueued(ctx, current)
+		})
+	default:
+		m.logger.Warn().Err(err).Str("name", entry.Name).Msg("Failed to fail the grab in the Arr")
+	}
+}
+
+// badEntry returns the entry while it still exists and is marked bad, else nil.
+func (m *Manager) badEntry(infoHash string) *storage.Entry {
+	entry, err := m.GetEntry(infoHash)
+	if err != nil || entry == nil || !entry.Bad {
+		return nil
+	}
+	return entry
+}
+
+func (m *Manager) tryFailGrabIfQueued(ctx context.Context, entry *storage.Entry) error {
 	if !entry.IsTorrent() || entry.Manual {
-		return
+		return nil
 	}
 	instance, ok := m.Arr().Get(entry.Category)
 	recovery := m.recoveryService()
 	if !ok || recovery == nil {
-		return
+		return nil
 	}
 	records, err := m.Arr().Queue(ctx, instance.Name)
 	if err != nil {
-		m.logger.Warn().Err(err).Str("arr", instance.Name).Str("infohash", entry.InfoHash).
-			Msg("Arr queue unreadable; leaving the grab of a bad entry")
-		return
+		return fmt.Errorf("arr queue unreadable; leaving the grab of a bad entry: %w", err)
 	}
 	queued := slices.ContainsFunc(records, func(record arr.QueueSchema) bool {
 		return strings.EqualFold(record.DownloadID, entry.InfoHash)
 	})
 	if !queued {
-		return
+		return nil
 	}
-	if grabErr := m.failGrab(entry, recovery, instance.Name, "No provider can serve the torrent"); grabErr != nil {
-		m.logger.Warn().Err(grabErr).Str("name", entry.Name).Msg("Failed to fail the grab in the Arr")
-	}
+	return m.failGrab(entry, recovery, instance.Name, "No provider can serve the torrent")
 }

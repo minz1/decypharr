@@ -68,7 +68,7 @@ func (g *queueGuard) planBucketsLocked(ordered []*guardUnit, limits config.Block
 		bucket := g.bucketLocked(unit.key)
 		plan := plans[unit.key]
 		if plan == nil {
-			plan = &guardPlan{canary: unit.key.rule == failedDownloadRule}
+			plan = &guardPlan{canary: ruleHasCanary(unit.key.rule)}
 			plans[unit.key] = plan
 		}
 		switch {

@@ -84,6 +84,8 @@ type Manager struct {
 	arrRecoveryMu          sync.RWMutex
 	arrRecovery            ArrRecovery
 	reacquireNotifications sync.Map
+	// heldGrabs are grab failures the arr blocklist guard held back, retried oldest first.
+	heldGrabs heldGrabs
 
 	pruneMu      sync.Mutex
 	pruneNow     func() time.Time
@@ -522,17 +524,33 @@ func (m *Manager) failEntry(entry *storage.Entry, err error) {
 // failBadRelease fails entry and, for an arr's torrent, its grab: the arr treats qBit "error" as a warning and never re-searches.
 func (m *Manager) failBadRelease(entry *storage.Entry, err error) {
 	m.failEntry(entry, err)
+	grabErr := m.failReleaseGrab(entry)
+	switch {
+	case grabErr == nil:
+	case errors.Is(grabErr, arr.ErrBlocklistHeld):
+		// Nothing retries this failure by itself; the held grab is kept and retried while the entry stays in error.
+		m.holdGrab(entry.InfoHash, func(context.Context) error {
+			if !m.queue.Contains(entry.InfoHash) {
+				return nil
+			}
+			return m.failReleaseGrab(entry)
+		})
+	default:
+		m.logger.Warn().Err(grabErr).Str("name", entry.Name).Msg("Failed to fail the grab in the Arr")
+	}
+}
+
+// failReleaseGrab fails the grab of an arr's torrent whose release the provider rejected.
+func (m *Manager) failReleaseGrab(entry *storage.Entry) error {
 	if !entry.IsTorrent() || entry.Manual {
-		return
+		return nil
 	}
 	instance, ok := m.Arr().Get(entry.Category)
 	recovery := m.recoveryService()
 	if !ok || recovery == nil {
-		return
+		return nil
 	}
-	if grabErr := m.failGrab(entry, recovery, instance.Name, "Provider rejected the torrent"); grabErr != nil {
-		m.logger.Warn().Err(grabErr).Str("name", entry.Name).Msg("Failed to fail the grab in the Arr")
-	}
+	return m.failGrab(entry, recovery, instance.Name, "Provider rejected the torrent")
 }
 
 // handleJobError drops a job whose entry was deleted, requeues one the provider throttled or whose parse ran out of

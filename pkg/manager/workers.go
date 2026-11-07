@@ -137,7 +137,10 @@ func (m *Manager) StartWorker(ctx context.Context) error {
 	m.schedulePrune(ctx)
 
 	// Arr monitoring job
-	m.scheduleEvery(ctx, m.scheduler, "10s", "arr-monitoring", func() { m.arr.CleanupQueues(ctx) })
+	m.scheduleEvery(ctx, m.scheduler, "10s", "arr-monitoring", func() {
+		m.arr.CleanupQueues(ctx)
+		m.retryHeldGrabs(ctx)
+	})
 
 	// Register the health checker sweep with the scheduler if enabled.
 	if m.repair != nil {
