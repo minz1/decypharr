@@ -85,6 +85,11 @@ type Options[M any] struct {
 	IdleAfter time.Duration
 	// Logger receives the runner's reports, such as a handler panic. The zero value logs nothing.
 	Logger zerolog.Logger
+	// Class tells what a message is when it is sent; nil makes every message a Command.
+	Class func(M) Class
+	// CoalesceKey names the observation a message replaces: an observation queued behind another with the same
+	// non-empty key replaces it, in its place in the queue. It is called only for observations.
+	CoalesceKey func(M) string
 }
 
 // runState is the lifecycle of a runner.
@@ -131,6 +136,8 @@ type envelope[M any] struct {
 	msg   M
 	at    time.Time
 	class Class
+	// coalesce is the key an observation coalesces on, or empty.
+	coalesce string
 	// bypass marks a message that does not count against the mailbox bound: a timer, or a child task's result.
 	bypass bool
 	// reply is where the asker of an Ask waits; nil for a message from Send.
@@ -154,15 +161,16 @@ const (
 
 // actor is the runner's record of one key. The runner's mutex guards every field.
 type actor[K comparable, M any] struct {
-	key      K
-	queue    []envelope[M]
-	bypassed int // envelopes in queue that bypass the bound
-	running  bool
-	wake     chan struct{}
-	children int // child tasks in flight
-	timers   int // timers pending
-	handled  uint64
-	panics   uint64
+	key                         K
+	queue                       []envelope[M]
+	bypassed                    int // envelopes in queue that bypass the bound
+	running                     bool
+	wake                        chan struct{}
+	children                    int // child tasks in flight
+	timers                      int // timers pending
+	handled                     uint64
+	coalesced, dropped, refused uint64
+	panics                      uint64
 }
 
 func (a *actor[K, M]) depth() int { return len(a.queue) - a.bypassed }
@@ -188,8 +196,9 @@ type Runner[K comparable, M any] struct {
 	lastTimer TimerID
 	timerWake chan struct{}
 
-	totalHandled atomic.Uint64
-	totalPanics  atomic.Uint64
+	totalHandled                               atomic.Uint64
+	totalPanics                                atomic.Uint64
+	totalCoalesced, totalDropped, totalRefused atomic.Uint64
 }
 
 // New makes a runner whose key goroutines are tasks of a child of g named
@@ -267,9 +276,64 @@ func (r *Runner[K, M]) accepting() bool {
 // once the runner stops and ErrMailboxFull when the key's mailbox has no room
 // for a message of its class.
 func (r *Runner[K, M]) Send(key K, msg M) error {
+	env := envelope[M]{msg: msg, at: time.Now(), class: Command}
+	if r.opts.Class != nil {
+		if class := r.opts.Class(msg); class == Observation || class == Timer {
+			env.class = class
+		}
+	}
+	if env.class == Observation && r.opts.CoalesceKey != nil {
+		env.coalesce = r.opts.CoalesceKey(msg)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.enqueueLocked(key, envelope[M]{msg: msg, at: time.Now()})
+	return r.enqueueLocked(key, env)
+}
+
+// admitLocked applies the overflow policy of env's class to a's mailbox. It reports whether env is to be
+// queued; a nil error with false means env was coalesced into a queued message.
+func (r *Runner[K, M]) admitLocked(a *actor[K, M], env envelope[M]) (bool, error) {
+	switch {
+	case env.bypass || env.class == Timer:
+		return true, nil
+	case env.class == Observation:
+		if env.coalesce != "" {
+			i := slices.IndexFunc(a.queue, func(queued envelope[M]) bool {
+				return !queued.bypass && queued.class == Observation && queued.coalesce == env.coalesce
+			})
+			if i >= 0 {
+				a.queue[i].msg = env.msg
+				a.coalesced++
+				r.totalCoalesced.Add(1)
+				return false, nil
+			}
+		}
+		if a.depth() < r.opts.MailboxSize {
+			return true, nil
+		}
+		oldest := slices.IndexFunc(a.queue, func(queued envelope[M]) bool {
+			return !queued.bypass && queued.class == Observation
+		})
+		if oldest < 0 {
+			return false, r.refuseLocked(a)
+		}
+		a.queue = slices.Delete(a.queue, oldest, oldest+1)
+		a.dropped++
+		r.totalDropped.Add(1)
+		return true, nil
+	default:
+		if a.depth() >= r.opts.MailboxSize {
+			return false, r.refuseLocked(a)
+		}
+		return true, nil
+	}
+}
+
+func (r *Runner[K, M]) refuseLocked(a *actor[K, M]) error {
+	a.refused++
+	r.totalRefused.Add(1)
+	r.dropIfIdleLocked(a)
+	return ErrMailboxFull
 }
 
 // enqueueLocked queues env for key and starts the key's goroutine if it is not running.
@@ -277,10 +341,13 @@ func (r *Runner[K, M]) enqueueLocked(key K, env envelope[M]) error {
 	if !r.accepting() {
 		return ErrStopped
 	}
+	if env.class == Timer {
+		env.bypass = true
+	}
 	a := r.actorLocked(key)
-	if !env.bypass && a.depth() >= r.opts.MailboxSize {
-		r.dropIfIdleLocked(a)
-		return ErrMailboxFull
+	queued, err := r.admitLocked(a, env)
+	if err != nil || !queued {
+		return err
 	}
 	a.queue = append(a.queue, env)
 	if env.bypass {
@@ -293,13 +360,13 @@ func (r *Runner[K, M]) enqueueLocked(key K, env envelope[M]) error {
 		}
 		return nil
 	}
-	if err := r.startLocked(a); err != nil {
+	if startErr := r.startLocked(a); startErr != nil {
 		a.queue = a.queue[:len(a.queue)-1]
 		if env.bypass {
 			a.bypassed--
 		}
 		r.dropIfIdleLocked(a)
-		return err
+		return startErr
 	}
 	return nil
 }
@@ -498,10 +565,13 @@ type KeyInfo struct {
 	OldestAge time.Duration `json:"oldest_age_ns"`
 	Children  int           `json:"children"`
 	// Timers is the number of timers pending for the key.
-	Timers  int    `json:"timers"`
-	Running bool   `json:"running"`
-	Handled uint64 `json:"handled"`
-	Panics  uint64 `json:"panics"`
+	Timers    int    `json:"timers"`
+	Running   bool   `json:"running"`
+	Handled   uint64 `json:"handled"`
+	Panics    uint64 `json:"panics"`
+	Coalesced uint64 `json:"coalesced"`
+	Dropped   uint64 `json:"dropped"`
+	Refused   uint64 `json:"refused"`
 }
 
 // Info describes a runner and its keys.
@@ -511,6 +581,10 @@ type Info struct {
 	Keys    []KeyInfo `json:"keys"`
 	Handled uint64    `json:"handled"`
 	Panics  uint64    `json:"panics"`
+	// Coalesced, Dropped and Refused count the messages the overflow policy replaced, pushed out and refused.
+	Coalesced uint64 `json:"coalesced"`
+	Dropped   uint64 `json:"dropped"`
+	Refused   uint64 `json:"refused"`
 }
 
 // Snapshot describes the runner: its state and, for each key that has a
@@ -521,21 +595,27 @@ func (r *Runner[K, M]) Snapshot() Info {
 	defer r.mu.Unlock()
 	now := time.Now()
 	info := Info{
-		Name:    r.name,
-		State:   r.lifecycle.Load().String(),
-		Keys:    make([]KeyInfo, 0, len(r.keys)),
-		Handled: r.totalHandled.Load(),
-		Panics:  r.totalPanics.Load(),
+		Name:      r.name,
+		State:     r.lifecycle.Load().String(),
+		Keys:      make([]KeyInfo, 0, len(r.keys)),
+		Handled:   r.totalHandled.Load(),
+		Panics:    r.totalPanics.Load(),
+		Coalesced: r.totalCoalesced.Load(),
+		Dropped:   r.totalDropped.Load(),
+		Refused:   r.totalRefused.Load(),
 	}
 	for _, a := range r.keys {
 		key := KeyInfo{
-			Key:      fmt.Sprint(a.key),
-			Depth:    len(a.queue),
-			Children: a.children,
-			Timers:   a.timers,
-			Running:  a.running,
-			Handled:  a.handled,
-			Panics:   a.panics,
+			Key:       fmt.Sprint(a.key),
+			Depth:     len(a.queue),
+			Children:  a.children,
+			Timers:    a.timers,
+			Running:   a.running,
+			Handled:   a.handled,
+			Panics:    a.panics,
+			Coalesced: a.coalesced,
+			Dropped:   a.dropped,
+			Refused:   a.refused,
 		}
 		if len(a.queue) > 0 {
 			key.OldestAge = now.Sub(a.queue[0].at)
