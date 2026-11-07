@@ -603,11 +603,29 @@ func (p *replay) after(i int, o op) {
 	}
 }
 
+// cancelCandidates lists the timers a cancel can still change: first those that fired and whose message waits
+// behind a blocked handler (the recall path), then those not yet due. A blind pick over every timer would rarely
+// land on the first kind.
+func (p *replay) cancelCandidates() []int {
+	var queued, pending []int
+	for i, timer := range p.timers {
+		switch {
+		case timer.cancelled:
+		case !timer.fired:
+			pending = append(pending, i)
+		case slices.ContainsFunc(p.keys[timer.key].queue, func(item qItem) bool { return item.timer == int(timer.id) }):
+			queued = append(queued, i)
+		}
+	}
+	return append(queued, pending...)
+}
+
 func (p *replay) cancel(o op) {
-	if o.at >= len(p.timers) {
+	candidates := p.cancelCandidates()
+	if len(candidates) == 0 {
 		return
 	}
-	timer := &p.timers[o.at]
+	timer := &p.timers[candidates[o.at%len(candidates)]]
 	p.runner.CancelTimer(timer.id)
 	if !timer.fired {
 		timer.cancelled = true
