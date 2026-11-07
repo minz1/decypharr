@@ -144,7 +144,7 @@ func (q *JobQueue) Submit(job *Job) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	if q.closed {
+	if q.closed || q.group.Context().Err() != nil {
 		return fmt.Errorf("job queue: %w", task.ErrStopped)
 	}
 
