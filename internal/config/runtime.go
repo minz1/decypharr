@@ -35,6 +35,12 @@ type meta struct {
 	envOverrides []envOverride
 	envAPIToken  string
 	fileAPIToken string
+	// stagingAuth is set on the private copy Store.Update hands to its edit
+	// callback: SaveAuth then keeps the auth.json bytes in stagedAuth instead of
+	// writing them, and Update writes them only once the whole edit has been
+	// validated and saved.
+	stagingAuth bool
+	stagedAuth  []byte
 }
 
 // errReadOnly is returned by writes on a Config loaded with LoadReadOnly.
@@ -126,6 +132,7 @@ func (s *Store) Update(edit func(*Config) error) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("copy configuration: %w", err)
 	}
+	next.meta.stagingAuth = true
 	if editErr := edit(next); editErr != nil {
 		return nil, editErr
 	}
@@ -134,15 +141,50 @@ func (s *Store) Update(edit func(*Config) error) (*Config, error) {
 	if checkErr := next.CheckLoadable(); checkErr != nil {
 		return nil, checkErr
 	}
-	if saveErr := next.Save(); saveErr != nil {
-		return nil, saveErr
+	if persistErr := next.persist(s.current.Load()); persistErr != nil {
+		return nil, persistErr
 	}
+	next.meta.stagingAuth = false
+	next.meta.stagedAuth = nil
 	published, err := next.Clone()
 	if err != nil {
 		return nil, fmt.Errorf("copy saved configuration: %w", err)
 	}
 	s.current.Store(published)
 	return published, nil
+}
+
+// persist saves c to config.json and then writes the auth.json bytes staged by
+// SaveAuth. The auth file follows the config file, so a configuration that fails
+// validation or saving leaves auth.json and its SessionVersion as they were; if
+// the auth write itself fails, config.json is rewritten from previous, the
+// snapshot being replaced.
+func (c *Config) persist(previous *Config) error {
+	if saveErr := c.Save(); saveErr != nil {
+		return saveErr
+	}
+	if c.meta.stagedAuth == nil {
+		return nil
+	}
+	authErr := c.writeFile(c.AuthFile(), c.meta.stagedAuth)
+	if authErr == nil {
+		return nil
+	}
+	failure := fmt.Errorf("write auth file: %w", authErr)
+	if restoreErr := previous.restoreConfigFile(); restoreErr != nil {
+		return errors.Join(failure, fmt.Errorf("restore config file: %w", restoreErr))
+	}
+	return failure
+}
+
+// restoreConfigFile rewrites config.json from c, a snapshot that was saved
+// before the update being rolled back.
+func (c *Config) restoreConfigFile() error {
+	copied, err := c.Clone()
+	if err != nil {
+		return err
+	}
+	return copied.Save()
 }
 
 // writeFile writes a 0600 file inside the data folder, tightening the mode of

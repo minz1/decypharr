@@ -520,6 +520,9 @@ func (c *Config) GetAuth() *Auth {
 	return auth
 }
 
+// SaveAuth gives the credentials a new SessionVersion and persists them to
+// auth.json. Inside a Store.Update edit the write is deferred until the update
+// has passed validation and been saved.
 func (c *Config) SaveAuth(auth *Auth) error {
 	if auth == nil {
 		return errors.New("authentication settings are required")
@@ -534,7 +537,12 @@ func (c *Config) SaveAuth(auth *Auth) error {
 	if err != nil {
 		return err
 	}
-	if writeFileErr := c.writeFile(c.AuthFile(), data); writeFileErr != nil {
+	if c.meta.stagingAuth {
+		if c.meta.readOnly {
+			return errReadOnly
+		}
+		c.meta.stagedAuth = data
+	} else if writeFileErr := c.writeFile(c.AuthFile(), data); writeFileErr != nil {
 		return writeFileErr
 	}
 	c.Auth = &updated
@@ -860,6 +868,11 @@ func (c *Config) Save() error {
 func clearHotFields(c *Config) {
 	// Auth lives in auth.json and is preserved separately by the caller.
 	c.Auth = nil
+
+	// The staged auth write is bookkeeping of one Store.Update. A snapshot
+	// copied inside the edit callback carries it; the published one does not.
+	c.meta.stagingAuth = false
+	c.meta.stagedAuth = nil
 
 	// AppURL is only read live (e.g. STRM URL generation in the downloader);
 	// it is never cached in a service struct, so it applies without a restart.
