@@ -25,6 +25,7 @@ const (
 	opObserve                     // an observation
 	opSendChild                   // a command whose handler starts a child task
 	opSendPanic                   // a command whose handler starts a child task that panics
+	opAsk                         // an Ask, a command that waits for its reply
 	opAfter                       // a timer
 	opCancel                      // cancels a timer
 	opAdvance                     // lets time pass
@@ -46,7 +47,9 @@ func (o op) String() string {
 	case opSend:
 		return fmt.Sprintf("send(k%d)", o.key)
 	case opObserve:
-		return fmt.Sprintf("observe(k%d)", o.key)
+		return fmt.Sprintf("observe(k%d,group %d)", o.key, o.at)
+	case opAsk:
+		return fmt.Sprintf("ask(k%d)", o.key)
 	case opSendChild:
 		return fmt.Sprintf("send+child(k%d)", o.key)
 	case opSendPanic:
@@ -86,27 +89,44 @@ const (
 	propSlack = 3 * time.Millisecond
 )
 
+// coalesceGroupCount is how many coalesce keys an observation can carry.
+const coalesceGroupCount = 3
+
+// coalesceKey names a group of observations; group 0 has no key and coalesces with nothing.
+func coalesceKey(group int) string {
+	switch group {
+	case 1:
+		return "x"
+	case 2:
+		return "y"
+	default:
+		return ""
+	}
+}
+
 func genOps(seed int64) []op {
 	rng := rand.New(rand.NewPCG(uint64(seed), uint64(seed)+7))
 	ops := make([]op, 8+rng.IntN(50))
 	for i := range ops {
 		key := rng.IntN(propKeys)
 		switch n := rng.IntN(100); {
-		case n < 22:
+		case n < 20:
 			ops[i] = op{kind: opSend, key: key}
-		case n < 38:
-			ops[i] = op{kind: opObserve, key: key}
-		case n < 44:
+		case n < 36:
+			ops[i] = op{kind: opObserve, key: key, at: rng.IntN(coalesceGroupCount)}
+		case n < 41:
 			ops[i] = op{kind: opSendChild, key: key}
-		case n < 49:
+		case n < 46:
 			ops[i] = op{kind: opSendPanic, key: key}
-		case n < 58:
+		case n < 53:
+			ops[i] = op{kind: opAsk, key: key}
+		case n < 61:
 			ops[i] = op{kind: opAfter, key: key, at: 1 + rng.IntN(60)}
-		case n < 66:
+		case n < 69:
 			ops[i] = op{kind: opCancel, at: rng.IntN(4)}
-		case n < 76:
+		case n < 78:
 			ops[i] = op{kind: opAdvance, at: 1 + rng.IntN(120)}
-		case n < 86:
+		case n < 87:
 			ops[i] = op{kind: opHold, key: key}
 		case n < 96:
 			ops[i] = op{kind: opRelease, key: key}
@@ -132,7 +152,8 @@ func simplifyOp(o op) []op {
 type pmsg struct {
 	id    int
 	obs   bool
-	spawn int // 0 none, 1 a child task, 2 a child task that panics
+	co    string // the coalesce key of an observation
+	spawn int    // 0 none, 1 a child task, 2 a child task that panics
 }
 
 func classifyProp(m pmsg) keyed.Class {
@@ -232,6 +253,7 @@ func (o *observer) Handle(
 		<-gate
 	}
 	o.spawn(fx, m)
+	fx.Reply(m.id)
 	o.mu.Lock()
 	o.active[key]--
 	o.handled[key] = append(o.handled[key], m.id)
@@ -281,6 +303,7 @@ func (o *observer) total() int {
 type qItem struct {
 	id     int
 	obs    bool
+	co     string
 	bypass bool // a timer's message or a child's result
 	spawn  int
 	timer  int // the id of the timer that delivered it, or 0
@@ -304,6 +327,14 @@ func (k *keyModel) depth() int {
 		}
 	}
 	return n
+}
+
+// queuedWithCoalesceKey is the index of the queued observation an observation with this key replaces, or -1.
+func (k *keyModel) queuedWithCoalesceKey(co string) int {
+	if co == "" {
+		return -1
+	}
+	return slices.IndexFunc(k.queue, func(item qItem) bool { return item.obs && !item.bypass && item.co == co })
 }
 
 // evictOldestObservation removes the oldest queued observation, and reports whether there was one.
@@ -340,9 +371,30 @@ type replay struct {
 	inFlightAtStop int
 	timers         []timerModel
 	dropped        uint64
+	coalesced      uint64
 	refused        uint64
 	childPanics    uint64
+	asks           []*askRecord
 	broken         []string
+}
+
+// askRecord is an Ask made by the sequence and what the model expects of it.
+type askRecord struct {
+	id      int
+	key     int
+	refused bool // the model's mailbox refused it
+	late    bool // sent after the Stop
+	cancel  context.CancelFunc
+	mu      sync.Mutex
+	done    bool
+	value   any
+	err     error
+}
+
+func (a *askRecord) finish(value any, err error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.done, a.value, a.err = true, value, err
 }
 
 func newReplay(t *testing.T) *replay {
@@ -353,7 +405,10 @@ func newReplay(t *testing.T) *replay {
 		root: root,
 		obs:  obs,
 		runner: keyed.New[int, pmsg, pstate](root, "prop", obs,
-			keyed.Options[pmsg]{MailboxSize: propSize, IdleAfter: propIdle, Class: classifyProp}),
+			keyed.Options[pmsg]{
+				MailboxSize: propSize, IdleAfter: propIdle, Class: classifyProp,
+				CoalesceKey: func(m pmsg) string { return m.co },
+			}),
 	}
 	for i := range p.keys {
 		p.keys[i] = &keyModel{}
@@ -393,6 +448,11 @@ func (p *replay) deliver(key int, item qItem) bool {
 	case item.bypass:
 		km.queue = append(km.queue, item)
 	case item.obs:
+		if i := km.queuedWithCoalesceKey(item.co); i >= 0 {
+			km.queue[i] = item // the latest replaces the queued one, in its place
+			p.coalesced++
+			return false
+		}
 		if km.depth() >= propSize {
 			if !km.evictOldestObservation() {
 				p.refused++
@@ -489,8 +549,27 @@ func (p *replay) stop() {
 	synctest.Wait()
 }
 
+// ask is an Ask in a goroutine of its own, since it waits behind a blocked handler. The model delivers it as a
+// command; whether it was refused is known at once, and the rest is checked at the end.
+func (p *replay) ask(i int, o op) {
+	rec := &askRecord{id: i, key: o.key, late: p.stopped}
+	p.asks = append(p.asks, rec)
+	if !p.stopped {
+		rec.refused = p.deliver(o.key, qItem{id: i})
+	}
+	ctx, cancel := context.WithCancel(p.t.Context())
+	rec.cancel = cancel
+	go func() {
+		value, err := p.runner.Ask(ctx, o.key, pmsg{id: i})
+		rec.finish(value, err)
+	}()
+}
+
 func (p *replay) send(i int, o op) {
-	item := qItem{id: i, obs: o.kind == opObserve}
+	item := qItem{id: i, obs: o.kind == opObserve, co: coalesceKey(o.at)}
+	if !item.obs {
+		item.co = ""
+	}
 	if o.kind == opSendChild {
 		item.spawn = 1
 	}
@@ -504,7 +583,7 @@ func (p *replay) send(i int, o op) {
 		return
 	}
 	refused := p.deliver(o.key, item)
-	err := p.runner.Send(o.key, pmsg{id: i, obs: item.obs, spawn: item.spawn})
+	err := p.runner.Send(o.key, pmsg{id: i, obs: item.obs, co: item.co, spawn: item.spawn})
 	switch {
 	case refused && !errors.Is(err, keyed.ErrMailboxFull):
 		p.failf("op %d: Send = %v, want ErrMailboxFull", i, err)
@@ -541,6 +620,8 @@ func (p *replay) cancel(o op) {
 
 func (p *replay) step(i int, o op) {
 	switch o.kind {
+	case opAsk:
+		p.ask(i, o)
 	case opSend, opObserve, opSendChild, opSendPanic:
 		p.send(i, o)
 	case opAfter:
@@ -577,9 +658,37 @@ func (p *replay) check() {
 		}
 	}
 	info := p.runner.Snapshot()
-	if info.Dropped != p.dropped || info.Refused != p.refused || info.ChildPanics != p.childPanics {
-		p.failf("counters: dropped %d refused %d child panics %d; want %d %d %d",
-			info.Dropped, info.Refused, info.ChildPanics, p.dropped, p.refused, p.childPanics)
+	if info.Dropped != p.dropped || info.Refused != p.refused || info.ChildPanics != p.childPanics ||
+		info.Coalesced != p.coalesced {
+		p.failf("counters: dropped %d refused %d child panics %d coalesced %d; want %d %d %d %d",
+			info.Dropped, info.Refused, info.ChildPanics, info.Coalesced,
+			p.dropped, p.refused, p.childPanics, p.coalesced)
+	}
+	p.checkAsks()
+}
+
+// checkAsks expects each Ask to have ended as the model says: refused at once, answered with its own id when it
+// was handled, refused after the Stop, or told the outcome is unknown when the Stop dropped it from the queue.
+func (p *replay) checkAsks() {
+	for _, ask := range p.asks {
+		ask.mu.Lock()
+		done, value, err := ask.done, ask.value, ask.err
+		ask.mu.Unlock()
+		handled := slices.Contains(p.keys[ask.key].expected, ask.id)
+		switch {
+		case !done:
+			p.failf("ask %d never returned", ask.id)
+		case ask.late && !errors.Is(err, keyed.ErrStopped):
+			p.failf("ask %d after the Stop = %v, want ErrStopped", ask.id, err)
+		case ask.late:
+		case ask.refused && !errors.Is(err, keyed.ErrMailboxFull):
+			p.failf("ask %d = %v, want ErrMailboxFull", ask.id, err)
+		case ask.refused:
+		case handled && (err != nil || value != ask.id):
+			p.failf("ask %d = %v, %v; want its own id", ask.id, value, err)
+		case !handled && (!errors.Is(err, keyed.ErrOutcomeUnknown) || !errors.Is(err, keyed.ErrStopped)):
+			p.failf("ask %d = %v, %v; want unknown, wrapping ErrStopped", ask.id, value, err)
+		}
 	}
 }
 
@@ -600,6 +709,10 @@ func violations(t *testing.T, ops []op) []string {
 		time.Sleep(time.Hour)
 		synctest.Wait()
 		p.check()
+		for _, ask := range p.asks {
+			ask.cancel() // an Ask that never returned must not hold the bubble
+		}
+		synctest.Wait()
 		broken = p.broken
 	})
 	return broken
@@ -607,6 +720,6 @@ func violations(t *testing.T, ops []op) []string {
 
 func TestRunnerHoldsItsInvariantsOverRandomSequences(t *testing.T) {
 	t.Parallel()
-	proptest.Check(t, proptest.Config{Seeds: 300}, genOps,
-		func(ops []op) bool { return len(violations(t, ops)) > 0 }, simplifyOp)
+	proptest.CheckWhy(t, proptest.Config{Seeds: 300}, genOps,
+		func(ops []op) []string { return violations(t, ops) }, simplifyOp)
 }
