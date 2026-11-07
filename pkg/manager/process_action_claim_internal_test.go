@@ -40,7 +40,6 @@ func endActions(t *testing.T, m *Manager) {
 	if err := m.work.Stop(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	waitWorkIdle(t, m)
 }
 
 // newClaimTestEntry queues a finished single-release torrent whose files never

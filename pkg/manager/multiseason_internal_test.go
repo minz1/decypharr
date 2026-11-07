@@ -118,7 +118,6 @@ func TestDeletingSeasonPackRemovesInFlightSeason(t *testing.T) {
 		if deleteErr := m.queue.Delete(entry.InfoHash, true, nil); deleteErr != nil {
 			t.Fatal(deleteErr)
 		}
-		waitWorkIdle(t, m)
 		synctest.Wait()
 		for _, child := range children {
 			checkSeasonAfterPackDelete(t, m, child, child.InfoHash == completed.InfoHash)
@@ -168,7 +167,6 @@ func TestDeletingSeasonPackKeepsSharedFolder(t *testing.T) {
 		if deleteErr := m.queue.Delete(entry.InfoHash, false, nil); deleteErr != nil {
 			t.Fatal(deleteErr)
 		}
-		waitWorkIdle(t, m)
 		synctest.Wait()
 
 		for _, child := range children {
