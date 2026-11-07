@@ -69,6 +69,8 @@ type managerRig struct {
 	hangUnmount atomic.Bool
 	// detaches records, per forced unmount, whether its ctx was still live.
 	detaches []bool
+	// mounted is rclone's mount list: set by a mount/mount that answers, cleared by mount/unmount.
+	mounted atomic.Bool
 }
 
 // detach is the Manager's forced unmount: it records the ctx's state at call time.
@@ -144,7 +146,10 @@ func (r *managerRig) serveRC(w http.ResponseWriter, req *http.Request) {
 	cmd := strings.TrimPrefix(req.URL.Path, "/")
 	r.record("rc:" + cmd)
 	if cmd == "mount/mount" && r.mountGate != nil {
-		<-r.mountGate
+		select {
+		case <-r.mountGate:
+		case <-req.Context().Done():
+		}
 	}
 	if cmd == "mount/unmount" && r.hangUnmount.Load() {
 		<-req.Context().Done()
@@ -153,7 +158,31 @@ func (r *managerRig) serveRC(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "failed", status)
 		return
 	}
+	switch cmd {
+	case "mount/mount":
+		if req.Context().Err() == nil {
+			r.mounted.Store(true)
+		}
+	case "mount/unmount":
+		r.mounted.Store(false)
+	case "mount/listmounts":
+		if r.mounted.Load() {
+			_, _ = fmt.Fprintf(w, `{"mountPoints":[{"MountPoint":%q}]}`, r.m.mount.MountPath)
+		} else {
+			_, _ = w.Write([]byte(`{"mountPoints":[]}`))
+		}
+		return
+	default:
+	}
 	_, _ = w.Write([]byte("{}"))
+}
+
+// wantMount fails unless the mount's state is want.
+func (r *managerRig) wantMount(want mountState) {
+	r.t.Helper()
+	if got := r.m.view.Load().state; got != want {
+		r.t.Fatalf("mount state = %s, want %s; events: %v", got, want, r.events)
+	}
 }
 
 func (r *managerRig) record(event string) {
@@ -331,7 +360,7 @@ func TestRemountAfterRcdExit(t *testing.T) {
 		if r.m.IsMounted() {
 			t.Fatal("mount still marked mounted after rcd exited")
 		}
-		if info := r.m.getMountInfo(); info == nil || info.Error == "" {
+		if info := r.m.mountInfo(); info == nil || info.Error == "" || info.State != "waiting" {
 			t.Fatalf("mount info = %+v, want the exit recorded", info)
 		}
 
@@ -348,38 +377,6 @@ func TestRemountAfterRcdExit(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-}
-
-func TestRemountSkippedDuringRecovery(t *testing.T) {
-	t.Parallel()
-	synctest.Test(t, func(t *testing.T) {
-		r := newManagerRig(t)
-		r.m.recovering.Store(true)
-		r.start()
-		r.wantState(rcdReady)
-		if got := r.count("rc:mount/mount"); got != 0 {
-			t.Fatalf("mount calls = %d, want 0 while a recovery runs", got)
-		}
-		if err := r.m.Stop(); err != nil {
-			t.Fatal(err)
-		}
-	})
-}
-
-func TestHealthCheckSkipsWhenNotReady(t *testing.T) {
-	t.Parallel()
-	r := newManagerRig(t)
-	r.m.owner.transition(rcdNew, rcdStarting)
-	r.m.owner.transition(rcdStarting, rcdRestarting)
-	r.m.info.Store(&MountInfo{LocalPath: "/mnt/x", Mounted: true})
-
-	r.m.performMountHealthCheck(t.Context())
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if len(r.events) != 0 {
-		t.Fatalf("RC calls while rcd restarts: %v", r.events)
-	}
 }
 
 func TestStatsShowsStateWhenNotReady(t *testing.T) {
@@ -430,8 +427,8 @@ func TestStopAfterExitStillUnmountsViaRC(t *testing.T) {
 		r.start()
 		r.proc().exit()
 		synctest.Wait()
-		// The next Ready finds a recovery running, so the mount stays marked down.
-		r.m.recovering.Store(true)
+		// The next Ready's mount attempts fail, so the mount stays marked down.
+		r.failRC("mount/mount", http.StatusBadRequest)
 		<-time.After(rcdBackoffBase)
 		synctest.Wait()
 		r.wantState(rcdReady)
@@ -443,8 +440,9 @@ func TestStopAfterExitStillUnmountsViaRC(t *testing.T) {
 			t.Fatal(err)
 		}
 		if got := r.count("rc:mount/unmount"); got != 1 {
-			t.Fatalf("unmount calls = %d, want 1", got)
+			t.Fatalf("unmount calls = %d, want 1; events: %v", got, r.events)
 		}
+		r.wantMount(mountUnmounted)
 	})
 }
 

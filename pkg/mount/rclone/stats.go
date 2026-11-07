@@ -20,6 +20,6 @@ func (m *Manager) Stats() map[string]any {
 	stats["restarts"] = m.owner.restarts.Load()
 	stats["enabled"] = true
 	stats["type"] = m.Type()
-	stats["mounts"] = m.getMountInfo()
+	stats["mounts"] = m.mountInfo()
 	return stats
 }

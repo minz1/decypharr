@@ -23,6 +23,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/internal/rclone"
 	"github.com/sirrobot01/decypharr/internal/task"
+	"github.com/sirrobot01/decypharr/internal/task/keyed"
 	"github.com/sirrobot01/decypharr/pkg/manager"
 	"github.com/sirrobot01/decypharr/pkg/mount/unmount"
 )
@@ -45,9 +46,6 @@ const (
 	logMaxSizeMB  = 10
 	logMaxAgeDays = 15
 	logMaxBackups = 5
-
-	// mountRetries is how many times a failed RC mount is retried.
-	mountRetries = 3
 )
 
 // errStarted is returned by a second Start.
@@ -64,27 +62,26 @@ type Manager struct {
 	// detach unmounts a path without rclone's help; the unmounter by default.
 	detach func(ctx context.Context, path string) error
 	logger zerolog.Logger
-	info   atomic.Pointer[MountInfo]
 	// view is the mount's state; moveMount is its only writer.
 	view atomic.Pointer[mountView]
 	// mountRefused counts moves the mount's table refused.
 	mountRefused atomic.Uint64
 	manager      *manager.Manager
 	webdavURL    string
-	recovering   atomic.Bool
 	rcdLog       *lumberjack.Logger
 
 	client *rclone.Client
 	owner  *rcdOwner
 
-	// mu guards Start against Stop. rcd and ops are written once, in Start; the
-	// tasks started after that read them without the lock.
+	// mu guards Start against Stop. rcd, ops and sup are written once, in
+	// Start; the tasks started after that read them without the lock.
 	mu sync.Mutex
-	// rcd runs the owner and its reapers; ops runs the mount, the monitor and
-	// the recoveries. ops is the newer child, so it stops first: the mount
-	// work ends, then the owner unmounts through RC, then rcd stops.
+	// rcd runs the owner and its reapers; ops runs the mount supervisor and
+	// its children. ops is the newer child, so it stops first: the supervisor
+	// ends, then the owner unmounts through RC, then rcd stops.
 	rcd *task.Group
 	ops *task.Group
+	sup *keyed.Singleton[supMsg, supState]
 }
 
 type MountInfo struct {
@@ -198,18 +195,14 @@ func (m *Manager) Start(g *task.Group) error {
 	m.rcd = g.Child("rcd")
 	m.ops = g.Child("ops")
 	m.owner.group = m.rcd
+	// The supervisor exists before the owner can report rcd Ready to it.
+	m.sup = keyed.NewSingleton(m.ops, "supervisor", mountSupervisor{m: m}, keyed.Options[supMsg]{Logger: m.logger})
 
 	if err := m.rcd.Go("owner", m.owner.run); err != nil {
 		// The owner never ran, so nothing else ends this state.
 		m.owner.transition(rcdStarting, rcdStopping)
 		m.owner.transition(rcdStopping, rcdStopped)
 		return fmt.Errorf("start the rcd owner: %w", err)
-	}
-	if err := m.ops.Go("monitor", func(ctx context.Context) error {
-		m.MonitorMounts(ctx)
-		return nil
-	}); err != nil {
-		return fmt.Errorf("start the mount monitor: %w", err)
 	}
 	return nil
 }
@@ -286,45 +279,16 @@ func (m *Manager) closeLog() error {
 	return m.rcdLog.Close()
 }
 
-// onRcdReady mounts whenever rcd becomes Ready, unless a recovery is running.
-func (m *Manager) onRcdReady() {
-	if err := m.ops.Go("mount", m.remount); err != nil {
-		m.logger.Warn().Err(err).Msg("Mount skipped: the manager is stopping")
-	}
-}
+// onRcdReady tells the supervisor that rcd answers.
+func (m *Manager) onRcdReady() { m.sendSup(supRcdReady) }
 
-// onRcdExit records that the mount went away with rcd.
-func (m *Manager) onRcdExit() {
-	m.markUnmounted("rclone exited")
-}
+// onRcdExit tells the supervisor that rcd exited, taking the mount with it.
+func (m *Manager) onRcdExit() { m.sendSup(supRcdDied) }
 
-// remount mounts once rcd is Ready. A running recovery does its own remount.
-func (m *Manager) remount(ctx context.Context) error {
-	// The guard is held while mounting, so a health check cannot start a
-	// recovery that unmounts under this mount.
-	if !m.recovering.CompareAndSwap(false, true) {
-		m.logger.Debug().Msg("Recovery is running, leaving the remount to it")
-		return nil
-	}
-	defer m.recovering.Store(false)
-	if m.IsMounted() {
-		return nil
-	}
-	if err := m.mountWithRetry(ctx, mountRetries); err != nil {
-		m.logger.Error().Err(err).Msg("Failed to mount rclone filesystem")
-		return nil
-	}
-	m.logger.Info().Msg("Successfully mounted rclone filesystem")
-	return nil
-}
-
-func (m *Manager) getMountInfo() *MountInfo {
-	return m.info.Load()
-}
-
+// IsMounted reports a mount that serves: Mounted, or Degraded after a failed probe.
 func (m *Manager) IsMounted() bool {
-	info := m.getMountInfo()
-	return info != nil && info.Mounted
+	s := m.view.Load().state
+	return s == mountMounted || s == mountDegraded
 }
 
 // IsReady returns true while rcd answers.
@@ -334,8 +298,7 @@ func (m *Manager) IsReady() bool {
 
 // Refresh refreshes directories in the VFS cache.
 func (m *Manager) Refresh(dirs []string) error {
-	mountInfo := m.getMountInfo()
-	if mountInfo == nil || !mountInfo.Mounted || !m.IsReady() {
+	if !m.IsMounted() || !m.IsReady() {
 		return fmt.Errorf("mount is not mounted")
 	}
 

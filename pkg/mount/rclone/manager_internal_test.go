@@ -42,21 +42,3 @@ func TestNewManagerWithWebDAVDisabledIsUsable(t *testing.T) {
 		t.Fatalf("Stop: %v", err)
 	}
 }
-
-// RecoverMount used to call Start, a no-op once the RC server runs, so a
-// failed health check left the mount down for good.
-func TestRecoverMountRemounts(t *testing.T) {
-	t.Parallel()
-	r := newManagerRig(t)
-	r.m.info.Store(&MountInfo{LocalPath: "/mnt/x", Mounted: false, Error: "Health check failed"})
-
-	if err := r.m.RecoverMount(t.Context()); err != nil {
-		t.Fatalf("RecoverMount: %v", err)
-	}
-	if got := r.count("rc:mount/mount"); got != 1 {
-		t.Fatalf("recovery asked rclone to mount %d times, want 1", got)
-	}
-	if !r.m.IsMounted() {
-		t.Fatal("mount not marked mounted after recovery")
-	}
-}
