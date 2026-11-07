@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/sirrobot01/decypharr/internal/task/keyed"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/manager"
 )
@@ -17,7 +18,9 @@ type debugTask struct {
 }
 
 // handleDebugTasks lists the tasks the running generation owns, sorted by
-// path: what the process is doing and since when.
+// path: what the process is doing and since when. The actors field lists the
+// keyed runners with each key's mailbox depth and the age of its oldest
+// message.
 func (s *Server) handleDebugTasks(w http.ResponseWriter, _ *http.Request) {
 	tasks := []debugTask{}
 	if s.tasks != nil {
@@ -25,7 +28,11 @@ func (s *Server) handleDebugTasks(w http.ResponseWriter, _ *http.Request) {
 			tasks = append(tasks, debugTask{Path: info.Path, Started: info.Started})
 		}
 	}
-	utils.JSONResponse(w, map[string]any{"tasks": tasks}, http.StatusOK)
+	actors := []keyed.Info{}
+	if s.actors != nil {
+		actors = append(actors, s.actors()...)
+	}
+	utils.JSONResponse(w, map[string]any{"tasks": tasks, "actors": actors}, http.StatusOK)
 }
 
 func (s *Server) handleIngests(w http.ResponseWriter, _ *http.Request) {
