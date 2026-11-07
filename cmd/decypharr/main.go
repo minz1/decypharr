@@ -97,6 +97,7 @@ func buildServices(gen *generation, cfg *config.Config, logs *logger.Factory) (f
 	srv := server.New(mgr, store, logs)
 	srv.SetRestartFunc(gen.RequestRestart)
 	srv.SetTaskSnapshot(root.Snapshot)
+	srv.SetStopContext(gen.stopContext)
 	gen.WaitReady(mgr.IsReady())
 	gen.OnRestartRejected(func(cause error) { store.MarkRestartFailed(cause) })
 
