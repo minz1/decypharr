@@ -31,7 +31,7 @@ func classify(m kind) keyed.Class {
 	}
 }
 
-func newKindRunner(t *testing.T, size int) (*keyed.Runner[string, kind], *[]int) {
+func newKindRunner(t *testing.T, size int) (*keyed.Runner[string, kind, struct{}], *[]int) {
 	t.Helper()
 	var handled []int
 	h := keyed.HandlerFunc[string, kind](func(_ context.Context, _ string, m kind, _ *keyed.Effects[string, kind]) {
@@ -40,7 +40,7 @@ func newKindRunner(t *testing.T, size int) (*keyed.Runner[string, kind], *[]int)
 		}
 		handled = append(handled, m.id)
 	})
-	r := keyed.New[string, kind](newRoot(t), "overflow", h, keyed.Options[kind]{
+	r := keyed.New[string, kind, struct{}](newRoot(t), "overflow", h, keyed.Options[kind]{
 		MailboxSize: size,
 		Class:       classify,
 		CoalesceKey: func(m kind) string { return m.same },
@@ -180,7 +180,7 @@ func TestACoalescedObservationKeepsItsPlaceAndItsAge(t *testing.T) {
 	})
 }
 
-func send(t *testing.T, r *keyed.Runner[string, kind], m kind) {
+func send(t *testing.T, r *keyed.Runner[string, kind, struct{}], m kind) {
 	t.Helper()
 	if err := r.Send("a", m); err != nil {
 		t.Fatalf("Send(%d) = %v", m.id, err)

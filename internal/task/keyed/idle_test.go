@@ -16,7 +16,7 @@ func TestAKeyStaysUpWhileAChildIsInFlight(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		rec := newRecorder()
-		r := keyed.New[string, msg](newRoot(t), "children", rec, keyed.Options[msg]{IdleAfter: time.Second})
+		r := keyed.New[string, msg, struct{}](newRoot(t), "children", rec, keyed.Options[msg]{IdleAfter: time.Second})
 		finish := make(chan struct{})
 		mustSend(t, r, "a", msg{id: 1, run: func(_ context.Context, fx *keyed.Effects[string, msg]) {
 			_ = fx.Go("io", func(context.Context) msg {

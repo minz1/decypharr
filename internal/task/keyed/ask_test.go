@@ -22,7 +22,7 @@ type askMsg struct {
 	id      int
 }
 
-func newAskRunner(t *testing.T, opts keyed.Options[askMsg]) (*keyed.Runner[string, askMsg], func()) {
+func newAskRunner(t *testing.T, opts keyed.Options[askMsg]) (*keyed.Runner[string, askMsg, struct{}], func()) {
 	t.Helper()
 	g := newRoot(t)
 	h := keyed.HandlerFunc[string, askMsg](
@@ -45,7 +45,7 @@ func newAskRunner(t *testing.T, opts keyed.Options[askMsg]) (*keyed.Runner[strin
 			}
 		},
 	)
-	return keyed.New[string, askMsg](g, "ask", h, opts), func() { stop(t, g) }
+	return keyed.New[string, askMsg, struct{}](g, "ask", h, opts), func() { stop(t, g) }
 }
 
 func TestAskReturnsTheHandlersReply(t *testing.T) {
@@ -87,7 +87,7 @@ func TestAnAskTimeoutMeansTheOutcomeIsUnknown(t *testing.T) {
 func TestAskFromInsideAHandlerIsRefused(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
-		var r *keyed.Runner[string, askMsg]
+		var r *keyed.Runner[string, askMsg, struct{}]
 		r, _ = newAskRunner(t, keyed.Options[askMsg]{})
 
 		got, err := r.Ask(t.Context(), "a", askMsg{inside: func(ctx context.Context) error {
@@ -109,7 +109,7 @@ func TestAskFromAChildTaskOfAHandlerIsRefused(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		g := newRoot(t)
 		results := make(chan error, 1)
-		var r *keyed.Runner[string, int]
+		var r *keyed.Runner[string, int, struct{}]
 		h := keyed.HandlerFunc[string, int](func(_ context.Context, _ string, m int, fx *keyed.Effects[string, int]) {
 			if m != 0 {
 				return
@@ -120,7 +120,7 @@ func TestAskFromAChildTaskOfAHandlerIsRefused(t *testing.T) {
 				return 1
 			})
 		})
-		r = keyed.New[string, int](g, "ask-child", h, keyed.Options[int]{})
+		r = keyed.New[string, int, struct{}](g, "ask-child", h, keyed.Options[int]{})
 		if err := r.Send("a", 0); err != nil {
 			t.Fatal(err)
 		}

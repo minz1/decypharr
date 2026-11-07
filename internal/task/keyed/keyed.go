@@ -59,21 +59,59 @@ const (
 	defaultIdleAfter = time.Minute
 )
 
-// Handler handles the messages of a runner.
-type Handler[K comparable, M any] interface {
-	// Handle processes one message for key. It runs on the key's goroutine,
-	// one message at a time. It must not block on I/O: slow work runs as a
-	// child task (fx.Go) and reports back with a message. ctx ends when the
-	// runner stops.
-	Handle(ctx context.Context, key K, msg M, fx *Effects[K, M])
+// Handler handles the messages of a runner. S is the state of one key: the
+// runner holds it for as long as the key's goroutine runs, hands it to every
+// Handle call by pointer, and drops it when the goroutine exits. A handler
+// without state uses struct{}.
+type Handler[K comparable, M, S any] interface {
+	// Activate builds the state of key. It runs on the key's goroutine when
+	// that starts, before the first message, and may read the key's record
+	// from a store. A load that fails is a state value ("load failed"), not
+	// an error: the next Handle call decides what to do about it.
+	Activate(ctx context.Context, key K) S
+	// Handle processes one message for key and may change its state. It runs
+	// on the key's goroutine, one message at a time. It must not block on
+	// I/O: slow work runs as a child task (fx.Go) and reports back with a
+	// message. ctx ends when the runner stops.
+	Handle(ctx context.Context, key K, st *S, msg M, fx *Effects[K, M])
 }
 
-// HandlerFunc makes a Handler of a function.
+// HandlerFunc makes a stateless Handler of a function.
 type HandlerFunc[K comparable, M any] func(ctx context.Context, key K, msg M, fx *Effects[K, M])
 
+// Activate has no state to build.
+func (HandlerFunc[K, M]) Activate(context.Context, K) struct{} { return struct{}{} }
+
 // Handle calls f.
-func (f HandlerFunc[K, M]) Handle(ctx context.Context, key K, msg M, fx *Effects[K, M]) {
+func (f HandlerFunc[K, M]) Handle(ctx context.Context, key K, _ *struct{}, msg M, fx *Effects[K, M]) {
 	f(ctx, key, msg, fx)
+}
+
+// host is what Effects needs of the runner it belongs to, without the runner's state type.
+type host[K comparable, M any] interface {
+	Send(key K, msg M) error
+	After(key K, d time.Duration, msg M) TimerID
+	CancelTimer(id TimerID)
+	spawn(key K, name string, fn func(ctx context.Context) M) error
+}
+
+// activate builds the key's state. A panic is logged and counted, and the key
+// starts from the zero state.
+func (r *Runner[K, M, S]) activate(ctx context.Context, key K) S {
+	var st S
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				r.totalPanics.Add(1)
+				r.logger.Error().Str("runner", r.name).Str("key", fmt.Sprint(key)).Interface("panic", recovered).
+					Bytes("stack", debug.Stack()).Msg("Activate panicked; the key starts from an empty state")
+				var zero S
+				st = zero
+			}
+		}()
+		st = r.handler.Activate(ctx, key)
+	}()
+	return st
 }
 
 // Options sets how a runner behaves. The zero value is usable.
@@ -176,10 +214,10 @@ type actor[K comparable, M any] struct {
 func (a *actor[K, M]) depth() int { return len(a.queue) - a.bypassed }
 
 // Runner runs one actor per key.
-type Runner[K comparable, M any] struct {
+type Runner[K comparable, M, S any] struct {
 	name      string
 	group     *task.Group
-	handler   Handler[K, M]
+	handler   Handler[K, M, S]
 	opts      Options[M]
 	logger    zerolog.Logger
 	noIdle    bool
@@ -204,7 +242,7 @@ type Runner[K comparable, M any] struct {
 // New makes a runner whose key goroutines are tasks of a child of g named
 // name. Stopping g stops the runner. A runner made on a group that is not
 // running refuses every message.
-func New[K comparable, M any](g *task.Group, name string, h Handler[K, M], opts Options[M]) *Runner[K, M] {
+func New[K comparable, M, S any](g *task.Group, name string, h Handler[K, M, S], opts Options[M]) *Runner[K, M, S] {
 	if opts.MailboxSize <= 0 {
 		opts.MailboxSize = defaultMailboxSize
 	}
@@ -212,7 +250,7 @@ func New[K comparable, M any](g *task.Group, name string, h Handler[K, M], opts 
 		opts.IdleAfter = defaultIdleAfter
 	}
 	child := g.Child(name)
-	r := &Runner[K, M]{
+	r := &Runner[K, M, S]{
 		name:      name,
 		group:     child,
 		handler:   h,
@@ -234,7 +272,12 @@ func New[K comparable, M any](g *task.Group, name string, h Handler[K, M], opts 
 
 // NewSingleton makes a runner with the one key and no idle exit: its goroutine
 // runs until the runner stops.
-func NewSingleton[M any](g *task.Group, name string, h Handler[struct{}, M], opts Options[M]) *Runner[struct{}, M] {
+func NewSingleton[M, S any](
+	g *task.Group,
+	name string,
+	h Handler[struct{}, M, S],
+	opts Options[M],
+) *Runner[struct{}, M, S] {
 	opts.IdleAfter = -1
 	r := New(g, name, h, opts)
 	r.mu.Lock()
@@ -250,7 +293,7 @@ func NewSingleton[M any](g *task.Group, name string, h Handler[struct{}, M], opt
 
 // beginStop moves the runner to Stopping, and on to Stopped once no key
 // goroutine is left.
-func (r *Runner[K, M]) beginStop() {
+func (r *Runner[K, M, S]) beginStop() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.lifecycle.Transition(runRunning, runStopping)
@@ -259,7 +302,7 @@ func (r *Runner[K, M]) beginStop() {
 }
 
 // settleLocked moves a stopping runner with no goroutine left to Stopped.
-func (r *Runner[K, M]) settleLocked() {
+func (r *Runner[K, M, S]) settleLocked() {
 	if r.live == 0 {
 		r.lifecycle.Transition(runStopping, runStopped)
 	}
@@ -268,14 +311,14 @@ func (r *Runner[K, M]) settleLocked() {
 // accepting reports whether the runner takes messages. The group's context
 // ends before the supervisor task has marked the runner as stopping, so both
 // are checked.
-func (r *Runner[K, M]) accepting() bool {
+func (r *Runner[K, M, S]) accepting() bool {
 	return r.lifecycle.Load() == runRunning && r.ctx.Err() == nil
 }
 
 // Send hands msg to key's actor without waiting for it. It returns ErrStopped
 // once the runner stops and ErrMailboxFull when the key's mailbox has no room
 // for a message of its class.
-func (r *Runner[K, M]) Send(key K, msg M) error {
+func (r *Runner[K, M, S]) Send(key K, msg M) error {
 	env := envelope[M]{msg: msg, at: time.Now(), class: Command}
 	if r.opts.Class != nil {
 		if class := r.opts.Class(msg); class == Observation || class == Timer {
@@ -292,7 +335,7 @@ func (r *Runner[K, M]) Send(key K, msg M) error {
 
 // admitLocked applies the overflow policy of env's class to a's mailbox. It reports whether env is to be
 // queued; a nil error with false means env was coalesced into a queued message.
-func (r *Runner[K, M]) admitLocked(a *actor[K, M], env envelope[M]) (bool, error) {
+func (r *Runner[K, M, S]) admitLocked(a *actor[K, M], env envelope[M]) (bool, error) {
 	switch {
 	case env.bypass || env.class == Timer:
 		return true, nil
@@ -329,7 +372,7 @@ func (r *Runner[K, M]) admitLocked(a *actor[K, M], env envelope[M]) (bool, error
 	}
 }
 
-func (r *Runner[K, M]) refuseLocked(a *actor[K, M]) error {
+func (r *Runner[K, M, S]) refuseLocked(a *actor[K, M]) error {
 	a.refused++
 	r.totalRefused.Add(1)
 	r.dropIfIdleLocked(a)
@@ -337,7 +380,7 @@ func (r *Runner[K, M]) refuseLocked(a *actor[K, M]) error {
 }
 
 // enqueueLocked queues env for key and starts the key's goroutine if it is not running.
-func (r *Runner[K, M]) enqueueLocked(key K, env envelope[M]) error {
+func (r *Runner[K, M, S]) enqueueLocked(key K, env envelope[M]) error {
 	if !r.accepting() {
 		return ErrStopped
 	}
@@ -371,7 +414,7 @@ func (r *Runner[K, M]) enqueueLocked(key K, env envelope[M]) error {
 	return nil
 }
 
-func (r *Runner[K, M]) actorLocked(key K) *actor[K, M] {
+func (r *Runner[K, M, S]) actorLocked(key K) *actor[K, M] {
 	a, ok := r.keys[key]
 	if !ok {
 		a = &actor[K, M]{key: key, wake: make(chan struct{}, 1)}
@@ -381,14 +424,14 @@ func (r *Runner[K, M]) actorLocked(key K) *actor[K, M] {
 }
 
 // dropIfIdleLocked forgets a key that has nothing queued, nothing running and nothing in flight.
-func (r *Runner[K, M]) dropIfIdleLocked(a *actor[K, M]) {
+func (r *Runner[K, M, S]) dropIfIdleLocked(a *actor[K, M]) {
 	if !a.running && len(a.queue) == 0 && a.children == 0 && a.timers == 0 && !r.noIdle {
 		delete(r.keys, a.key)
 	}
 }
 
 // startLocked starts the key's goroutine.
-func (r *Runner[K, M]) startLocked(a *actor[K, M]) error {
+func (r *Runner[K, M, S]) startLocked(a *actor[K, M]) error {
 	a.running = true
 	r.live++
 	err := r.group.Go(fmt.Sprint(a.key), func(ctx context.Context) error {
@@ -406,8 +449,9 @@ func (r *Runner[K, M]) startLocked(a *actor[K, M]) error {
 
 // loop is the key's goroutine: it handles queued messages in order and exits
 // when the runner stops or the key has been quiet for IdleAfter.
-func (r *Runner[K, M]) loop(ctx context.Context, a *actor[K, M]) {
+func (r *Runner[K, M, S]) loop(ctx context.Context, a *actor[K, M]) {
 	hctx := withHandlerMarker(ctx)
+	held := r.activate(hctx, a.key)
 	var idle *time.Timer
 	if !r.noIdle {
 		idle = time.NewTimer(r.opts.IdleAfter)
@@ -428,7 +472,7 @@ func (r *Runner[K, M]) loop(ctx context.Context, a *actor[K, M]) {
 				a.bypassed--
 			}
 			r.mu.Unlock()
-			r.handle(hctx, a, env)
+			r.handle(hctx, a, &held, env)
 			continue
 		}
 		r.mu.Unlock()
@@ -456,7 +500,7 @@ func (r *Runner[K, M]) loop(ctx context.Context, a *actor[K, M]) {
 }
 
 // exitLocked ends the key's goroutine. On a stop the queue is dropped.
-func (r *Runner[K, M]) exitLocked(a *actor[K, M], stopping bool) {
+func (r *Runner[K, M, S]) exitLocked(a *actor[K, M], stopping bool) {
 	if stopping {
 		for _, env := range a.queue {
 			dropReply(env.reply)
@@ -472,7 +516,7 @@ func (r *Runner[K, M]) exitLocked(a *actor[K, M], stopping bool) {
 }
 
 // handle runs the handler for one message, recovering a panic.
-func (r *Runner[K, M]) handle(ctx context.Context, a *actor[K, M], env envelope[M]) {
+func (r *Runner[K, M, S]) handle(ctx context.Context, a *actor[K, M], st *S, env envelope[M]) {
 	fx := &Effects[K, M]{r: r, key: a.key}
 	defer func() {
 		recovered := recover()
@@ -490,13 +534,13 @@ func (r *Runner[K, M]) handle(ctx context.Context, a *actor[K, M], env envelope[
 				Bytes("stack", debug.Stack()).Msg("Handler panicked; the actor goes on with its next message")
 		}
 	}()
-	r.handler.Handle(ctx, a.key, env.msg, fx)
+	r.handler.Handle(ctx, a.key, st, env.msg, fx)
 }
 
 // Effects is what a handler can do besides change its own state. It is valid
 // only inside the Handle call it was passed to.
 type Effects[K comparable, M any] struct {
-	r   *Runner[K, M]
+	r   host[K, M]
 	key K
 
 	replied bool
@@ -509,7 +553,11 @@ type Effects[K comparable, M any] struct {
 // fn panics no message is sent and the panic is logged. Go returns ErrStopped
 // once the runner stops.
 func (fx *Effects[K, M]) Go(name string, fn func(ctx context.Context) M) error {
-	r, key := fx.r, fx.key
+	return fx.r.spawn(fx.key, name, fn)
+}
+
+// spawn starts a child task of key's actor.
+func (r *Runner[K, M, S]) spawn(key K, name string, fn func(ctx context.Context) M) error {
 	r.mu.Lock()
 	if !r.accepting() {
 		r.mu.Unlock()
@@ -537,7 +585,7 @@ func (fx *Effects[K, M]) Go(name string, fn func(ctx context.Context) M) error {
 	return nil
 }
 
-func (r *Runner[K, M]) childDone(key K) {
+func (r *Runner[K, M, S]) childDone(key K) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if a, ok := r.keys[key]; ok {
@@ -592,7 +640,7 @@ type Info struct {
 // Snapshot describes the runner: its state and, for each key that has a
 // goroutine, queued messages or work in flight, the mailbox depth, the age of
 // the oldest queued message and whether the key's goroutine is running.
-func (r *Runner[K, M]) Snapshot() Info {
+func (r *Runner[K, M, S]) Snapshot() Info {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := time.Now()
