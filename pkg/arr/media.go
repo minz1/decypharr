@@ -115,7 +115,9 @@ func (s *Service) LibraryFile(ctx context.Context, name string, fileID int) (Lib
 }
 
 // DeleteLibraryFile removes one imported file. A file the Arr no longer has is
-// treated as deleted.
+// treated as deleted. A request that may have reached the Arr without a clear
+// answer (a dropped connection, a timeout, a 5xx) reports
+// ErrMutationOutcomeUnknown; the caller checks whether the file is gone.
 func (s *Service) DeleteLibraryFile(ctx context.Context, name string, fileID int) error {
 	instance, err := s.instance(name)
 	if err != nil {
@@ -137,13 +139,20 @@ func (s *Service) DeleteLibraryFile(ctx context.Context, name string, fileID int
 
 	resp, err := s.mutate(ctx, instance, http.MethodDelete, fmt.Sprintf("api/v3/%s/%d", resource, fileID), nil, nil)
 	if err != nil {
+		if dispatched(resp, err) {
+			return UnknownMutationOutcome(fmt.Errorf("delete %s %d: %w", resource, fileID, err), 0)
+		}
 		return fmt.Errorf("delete %s %d: %w", resource, fileID, err)
 	}
 	if resp.StatusCode == http.StatusNotFound {
 		return nil
 	}
 	if expectSuccessErr := expectSuccess(resp); expectSuccessErr != nil {
-		return fmt.Errorf("delete %s %d: %w", resource, fileID, expectSuccessErr)
+		expectSuccessErr = fmt.Errorf("delete %s %d: %w", resource, fileID, expectSuccessErr)
+		if resp.StatusCode >= http.StatusInternalServerError {
+			return UnknownMutationOutcome(expectSuccessErr, 0)
+		}
+		return expectSuccessErr
 	}
 	if monitorErr := s.monitorEpisodes(ctx, instance, monitored); monitorErr != nil {
 		s.logger.Error().Err(monitorErr).Str("arr", name).Ints("episode_ids", monitored).Int("file_id", fileID).

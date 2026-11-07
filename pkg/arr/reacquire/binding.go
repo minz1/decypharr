@@ -18,9 +18,10 @@ var (
 	ErrJobNotTerminal    = errors.New("only completed reacquire jobs can be deleted")
 	ErrServiceNotStarted = errors.New("arr service not started")
 	ErrServiceClosed     = errors.New("arr service closed")
-	// errArrLookup marks a read from the Arr that failed before any mutation
-	// was sent. The job is retried, at the slowest retry pace, until its
-	// reconciliation deadline.
+	// errArrLookup marks a read from the Arr that failed. The job is retried,
+	// at the slowest retry pace, until its reconciliation deadline. A read
+	// that fails after an earlier run deleted an Arr file is retried too: the
+	// job must not end failed with the file gone and no search sent.
 	errArrLookup = errors.New("arr lookup failed")
 )
 

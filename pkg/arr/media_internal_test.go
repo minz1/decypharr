@@ -42,6 +42,63 @@ func TestDeleteManagedFile(t *testing.T) {
 	}
 }
 
+func TestDeleteLibraryFileClassifiesUnknownOutcomes(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name        string
+		handler     http.HandlerFunc
+		wantErr     bool
+		wantUnknown bool
+	}{
+		{
+			name: "connection dropped after the request was received",
+			handler: func(w http.ResponseWriter, _ *http.Request) {
+				if conn, _, err := w.(http.Hijacker).Hijack(); err == nil {
+					_ = conn.Close()
+				}
+			},
+			wantErr:     true,
+			wantUnknown: true,
+		},
+		{
+			name:        "server error",
+			handler:     func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusBadGateway) },
+			wantErr:     true,
+			wantUnknown: true,
+		},
+		{
+			name:    "definitive refusal",
+			handler: func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusForbidden) },
+			wantErr: true,
+		},
+		{
+			name:    "already gone",
+			handler: func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotFound) },
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(test.handler)
+			defer server.Close()
+
+			s := testService(Arr{Host: server.URL, Token: "secret", Type: Radarr})
+			err := s.DeleteLibraryFile(t.Context(), "arr", 17)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("error = %v, wantErr %v", err, test.wantErr)
+			}
+			if got := errors.Is(err, ErrMutationOutcomeUnknown); got != test.wantUnknown {
+				t.Fatalf("unknown outcome = %v, want %v (error %v)", got, test.wantUnknown, err)
+			}
+		})
+	}
+
+	unconfigured := testService(Arr{Type: Radarr})
+	if err := unconfigured.DeleteLibraryFile(t.Context(), "arr", 17); err == nil ||
+		errors.Is(err, ErrMutationOutcomeUnknown) {
+		t.Fatalf("preflight error = %v", err)
+	}
+}
+
 func TestGetDownloadClientConfig(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

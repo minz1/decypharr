@@ -436,7 +436,8 @@ func (handler *arrHandler) deleteArrFiles(ctx context.Context, instance arr.Arr,
 	for fileID, binding := range byFileID {
 		current, found, err := handler.arrs.LibraryFile(ctx, instance.Name, binding.ArrFileID)
 		if err != nil {
-			return err
+			// An earlier run may have deleted a file already: retry the read, never fail the job.
+			return fmt.Errorf("%w: %w", errArrLookup, err)
 		}
 		if !found {
 			continue
