@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/rs/zerolog"
+
+	"github.com/sirrobot01/decypharr/internal/state/statetest"
 )
 
 func allStates() []State { return []State{Running, Stopping, Stopped, Failing, Failed} }
@@ -16,19 +18,12 @@ func allStates() []State { return []State{Running, Stopping, Stopped, Failing, F
 // including self-loops, is refused.
 func TestTransitionTable(t *testing.T) {
 	t.Parallel()
-	want := map[[2]State]bool{
-		{Running, Stopping}: true,
-		{Running, Failing}:  true,
-		{Stopping, Stopped}: true,
-		{Failing, Failed}:   true,
-	}
-	for _, from := range allStates() {
-		for _, to := range allStates() {
-			if got := legal(from, to); got != want[[2]State{from, to}] {
-				t.Errorf("legal(%s, %s) = %v, want %v", from, to, got, !got)
-			}
-		}
-	}
+	statetest.Table(t, State.successors, allStates(), []statetest.Edge[State]{
+		{From: Running, To: Stopping},
+		{From: Running, To: Failing},
+		{From: Stopping, To: Stopped},
+		{From: Failing, To: Failed},
+	})
 }
 
 func TestSettledStateMatchesTable(t *testing.T) {
