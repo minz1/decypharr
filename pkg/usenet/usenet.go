@@ -1358,19 +1358,26 @@ func (u *Usenet) markAsProcessing(nzb *storage.NZB) error {
 	return nil
 }
 
+// markAsCompleted records the NZB as completed and only then releases its
+// source file and marker. A failed write leaves the persisted "parsing" record
+// and the source it points to intact, so the NZB can still be re-driven or
+// failed instead of being stranded on a deleted file. A crash between the write
+// and the removals leaves an orphan .nzb and .processing marker behind: a leak,
+// not data loss.
 func (u *Usenet) markAsCompleted(nzb *storage.NZB) error {
+	source, status := nzb.Path, nzb.Status
 	nzb.Status = NZBStatusCompleted
-
-	if nzb.Path != "" {
-		if err := os.Remove(nzb.Path); err != nil && !os.IsNotExist(err) {
-			u.logger.Warn().Err(err).Str("path", nzb.Path).Msg("Failed to delete NZB source file after completion")
-		}
-		u.removeProcessingMarker(nzb.Path)
-		nzb.Path = ""
+	nzb.Path = ""
+	if err := u.nzbStorage.AddNZB(nzb); err != nil {
+		nzb.Status, nzb.Path = status, source
+		return fmt.Errorf("failed to save NZB to storage: %w", err)
 	}
 
-	if err := u.nzbStorage.AddNZB(nzb); err != nil {
-		return fmt.Errorf("failed to save NZB to storage: %w", err)
+	if source != "" {
+		if err := os.Remove(source); err != nil && !os.IsNotExist(err) {
+			u.logger.Warn().Err(err).Str("path", source).Msg("Failed to delete NZB source file after completion")
+		}
+		u.removeProcessingMarker(source)
 	}
 	return nil
 }
