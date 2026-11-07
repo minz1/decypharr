@@ -652,7 +652,7 @@ func (u *Usenet) Process(
 	updatedNZB, err := u.analyzer.Process(ctx, nzb, groups)
 	if err != nil {
 		// Mark as failed
-		_ = u.markAsFailed(nzb, err)
+		u.failUnlessCancelled(ctx, nzb, err)
 		return nzb, fmt.Errorf("failed to process NZB archives: %w", err)
 	}
 	if finishErr := u.finish(ctx, updatedNZB); finishErr != nil {
@@ -678,7 +678,7 @@ func (u *Usenet) finish(ctx context.Context, nzb *storage.NZB) error {
 	// so a provider hiccup won't wrongly fail an import — only a definitively
 	// missing segment (gone on every provider) fails the NZB.
 	if checkNZBAvailabilityErr := u.checkNZBAvailability(ctx, nzb); checkNZBAvailabilityErr != nil {
-		_ = u.markAsFailed(nzb, checkNZBAvailabilityErr)
+		u.failUnlessCancelled(ctx, nzb, checkNZBAvailabilityErr)
 		return fmt.Errorf("availability check failed: %w", checkNZBAvailabilityErr)
 	}
 
@@ -691,15 +691,15 @@ func (u *Usenet) finish(ctx context.Context, nzb *storage.NZB) error {
 	// fails here — and the arr grabs a replacement — instead of reaching the
 	// library as an unplayable file.
 	if verifyNZBContentErr := u.verifyNZBContent(ctx, nzb); verifyNZBContentErr != nil {
-		_ = u.markAsFailed(nzb, verifyNZBContentErr)
+		u.failUnlessCancelled(ctx, nzb, verifyNZBContentErr)
 		return fmt.Errorf("content verification failed: %w", verifyNZBContentErr)
 	}
 
 	// Both gates pass over a cancelled context without checking anything,
-	// so an interrupted run proves nothing about the content: fail it, as a
-	// cancelled parse is failed, rather than complete it unverified.
+	// so an interrupted run proves nothing about the content: never complete
+	// it unverified. A shutdown leaves it parsing; a timeout fails it.
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		_ = u.markAsFailed(nzb, ctxErr)
+		u.failUnlessCancelled(ctx, nzb, ctxErr)
 		return fmt.Errorf("processing interrupted: %w", ctxErr)
 	}
 
@@ -1380,6 +1380,18 @@ func (u *Usenet) markAsCompleted(nzb *storage.NZB) error {
 		u.removeProcessingMarker(source)
 	}
 	return nil
+}
+
+// failUnlessCancelled records err as nzb's failure, unless ctx was cancelled.
+// A cancelled run is a shutdown, which proves nothing about the NZB: it stays
+// parsing so the restore re-drives it. A deadline is the NZB's own failure and
+// is recorded like any other. A failed write is not reported: the NZB then
+// stays parsing and the caller's error still reaches the manager.
+func (u *Usenet) failUnlessCancelled(ctx context.Context, nzb *storage.NZB, err error) {
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return
+	}
+	_ = u.markAsFailed(nzb, err)
 }
 
 func (u *Usenet) markAsFailed(nzb *storage.NZB, err error) error {
