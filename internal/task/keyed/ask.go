@@ -20,7 +20,8 @@ var (
 	ErrNotSent = errors.New("keyed: the message was not sent")
 	// ErrNoReply is the reply of an Ask whose handler returned without calling Effects.Reply.
 	ErrNoReply = errors.New("keyed: the handler did not reply")
-	// ErrHandlerPanicked is the reply of an Ask whose handler panicked.
+	// ErrHandlerPanicked is the reply of an Ask whose handler panicked, or whose message was queued for a key whose
+	// Activate panicked: the message was never handled, since there was no state to handle it on.
 	ErrHandlerPanicked = errors.New("keyed: the handler panicked")
 )
 
