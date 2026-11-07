@@ -591,6 +591,7 @@ func (r *Runner[K, M, S]) handle(ctx context.Context, a *actor[K, M], st *S, env
 	fx := &Effects[K, M]{r: r, key: a.key}
 	defer func() {
 		recovered := recover()
+		fx.done.Store(true)
 		fx.finishReply(env.reply, recovered != nil)
 		r.mu.Lock()
 		a.handled++
@@ -616,6 +617,15 @@ type Effects[K comparable, M any] struct {
 
 	replied bool
 	value   any
+	// done is set when Handle returns: Effects kept past that point would race with the actor's next message.
+	done atomic.Bool
+}
+
+// live panics if Handle has already returned.
+func (fx *Effects[K, M]) live() {
+	if fx.done.Load() {
+		panic("keyed: Effects used after Handle returned; it is valid only inside the Handle call it was passed to")
+	}
 }
 
 // ChildID names a child task started with [Effects.Go].
@@ -639,6 +649,7 @@ type childRec[K comparable] struct {
 // the work failed; with a nil onPanic nothing is sent. Go returns ErrStopped
 // once the runner stops.
 func (fx *Effects[K, M]) Go(name string, fn func(ctx context.Context) M, onPanic func(v any) M) (ChildID, error) {
+	fx.live()
 	return fx.r.spawn(fx.key, name, fn, onPanic)
 }
 
@@ -648,6 +659,7 @@ func (fx *Effects[K, M]) Go(name string, fn func(ctx context.Context) M, onPanic
 // but nothing it does reaches the actor. Cancelling a child that has finished
 // or is unknown changes nothing.
 func (fx *Effects[K, M]) CancelChild(id ChildID) {
+	fx.live()
 	fx.r.cancelChild(id)
 }
 
@@ -784,6 +796,7 @@ func (r *Runner[K, M, S]) childDone(key K, id ChildID, rec *childRec[K]) {
 
 // Send hands msg to another key of the same runner, without waiting for it.
 func (fx *Effects[K, M]) Send(key K, msg M) error {
+	fx.live()
 	return fx.r.Send(key, msg)
 }
 
