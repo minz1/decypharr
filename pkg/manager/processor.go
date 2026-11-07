@@ -238,11 +238,13 @@ func (m *Manager) processQueuedNZB(entry *storage.Entry) {
 		// Still processing, skip for now
 		return
 	case usenet.NZBStatusCompleted:
-		if processNZBErr := m.processNZB(entry, metadata); processNZBErr != nil {
-			m.logger.Error().Err(processNZBErr).Str("name", entry.Name).Msg("Error processing queued NZB")
-			m.failEntry(entry, processNZBErr)
+		if applyErr := m.applyNZBMetadata(entry, metadata); applyErr != nil {
+			m.logger.Error().Err(applyErr).Str("name", entry.Name).Msg("Error processing queued NZB")
+			m.failEntry(entry, applyErr)
 			return
 		}
+		// This poll holds the entry's claim, so it drives the action itself.
+		m.processAction(entry)
 	default:
 		m.logger.Error().Str("name", entry.Name).Msgf("Unknown NZB status: %s", metadata.Status)
 		m.failEntry(entry, fmt.Errorf("unknown nzb status: %s", metadata.Status))
@@ -500,7 +502,36 @@ func (m *Manager) processNewTorrent(torrent *storage.Entry, debridTorrent *debri
 	}
 
 	// Parse post-download action
-	m.startDownloadTask(func() { m.processAction(torrent) })
+	m.startProcessAction(torrent)
+}
+
+// startProcessAction starts the post-download action of an entry no poll holds
+// the claim of, and keeps the processingEntries claim until the action returns.
+// Without it the poller sees the unclaimed, not yet downloading entry and starts
+// a second action on the same destination files. An entry that is claimed has a
+// driver and is left to it. The caller's copy can be stale (IsDownloading is only
+// set once the action has found its files, and a finished action leaves no claim),
+// so under the claim the entry is re-read: it must still be queued, still
+// downloading, and not already driven by a local download.
+//
+// Callers that already hold the claim (the poll) run processAction themselves.
+// Interim: the keyed owner replaces the claim map.
+func (m *Manager) startProcessAction(entry *storage.Entry) {
+	if _, loaded := m.processingEntries.LoadOrStore(entry.InfoHash, struct{}{}); loaded {
+		return
+	}
+	saved, err := m.queue.GetTorrent(entry.InfoHash)
+	if err != nil || saved.State != storage.EntryStateDownloading || saved.IsDownloading {
+		m.processingEntries.Delete(entry.InfoHash)
+		return
+	}
+	started := m.startDownloadTask(func() {
+		defer m.processingEntries.Delete(entry.InfoHash)
+		m.processAction(entry)
+	})
+	if !started {
+		m.processingEntries.Delete(entry.InfoHash)
+	}
 }
 
 func applyDebridTorrentToEntry(torrent *storage.Entry, debridTorrent *debridTypes.Torrent) {

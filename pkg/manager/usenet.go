@@ -122,7 +122,17 @@ func (m *Manager) parseQueuedNZB(ctx context.Context, job *Job) error {
 	return nil
 }
 
+// processNZB records the processed NZB on its entry and starts the post-download action.
 func (m *Manager) processNZB(entry *storage.Entry, metadata *storage.NZB) error {
+	if err := m.applyNZBMetadata(entry, metadata); err != nil {
+		return err
+	}
+	m.startProcessAction(entry)
+	return nil
+}
+
+// applyNZBMetadata marks the entry downloaded and gives it the NZB's files.
+func (m *Manager) applyNZBMetadata(entry *storage.Entry, metadata *storage.NZB) error {
 	// Add files using logical streamable files
 	for _, file := range metadata.Files {
 		tFile := &storage.File{
@@ -148,7 +158,6 @@ func (m *Manager) processNZB(entry *storage.Entry, metadata *storage.NZB) error 
 		return fmt.Errorf("nzb has no files")
 	}
 
-	m.startDownloadTask(func() { m.processAction(entry) })
 	return nil
 }
 
