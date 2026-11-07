@@ -322,18 +322,17 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 
 	dbT, err := client.CheckStatus(debridTorrent)
 	if !m.queue.Contains(entry.InfoHash) {
+		m.providerWaits.observe(entry.InfoHash, waitNone)
 		return // removed while the status check ran
 	}
-	if err != nil && transientStatusError(err) && !m.statusWaitExhausted(entry, placement, err) {
-		// A network blip or provider hiccup: leave the entry as it is, so the
-		// next queue pass checks again, rather than failing it and deleting
-		// the provider's torrent.
-		m.logger.Warn().Err(err).Str("name", entry.Name).Msg("Status check failed; retrying on the next pass")
+	if m.retryNextPass(entry, placement, err) {
 		return
 	}
 	m.releaseLeftSlot(entry, placement, dbT, err)
 	if err != nil {
-		m.logger.Error().Err(err).Str("name", entry.Name).Msg("Error checking status")
+		m.logger.Error().Err(err).Str("name", entry.Name).
+			Stringer("wait", providerWaitOf(err)).Dur("waited", providerWaitAge(entry, placement)).
+			Msg("Error checking status")
 		if releaseIsDead(dbT, err) {
 			m.failBadRelease(entry, err)
 		} else {
@@ -447,6 +446,39 @@ func (m *Manager) statusWaitExhausted(entry *storage.Entry, placement *storage.P
 		limit = maxConversionWait
 	}
 	return time.Since(start) > limit
+}
+
+// retryNextPass reports a status check to leave for the next queue pass: a network blip or provider hiccup, or a
+// provider-pending wait that has not run out. The entry stays as it is rather than failing and deleting the
+// provider's torrent. A provider-pending wait repeats every pass for hours, so it is logged when it starts or
+// changes; any other transient failure is logged each time.
+func (m *Manager) retryNextPass(entry *storage.Entry, placement *storage.ProviderEntry, err error) bool {
+	if err == nil || !transientStatusError(err) || m.statusWaitExhausted(entry, placement, err) {
+		m.providerWaits.observe(entry.InfoHash, waitNone)
+		return false
+	}
+	wait := providerWaitOf(err)
+	if wait == waitNone {
+		m.logger.Warn().Err(err).Str("name", entry.Name).Msg("Status check failed; retrying on the next pass")
+		return true
+	}
+	line := m.logger.Debug()
+	if m.providerWaits.observe(entry.InfoHash, wait) != wait {
+		line = m.logger.Warn()
+	}
+	line.Err(err).Str("name", entry.Name).Stringer("wait", wait).
+		Dur("waited", providerWaitAge(entry, placement)).
+		Msg("Entry waiting on the provider; checking again on the next pass")
+	return true
+}
+
+// providerWaitAge is how long the placement has waited on its provider, measured as statusWaitExhausted measures it.
+func providerWaitAge(entry *storage.Entry, placement *storage.ProviderEntry) time.Duration {
+	start := cmp.Or(placement.AddedAt, entry.AddedOn)
+	if start.IsZero() {
+		return 0
+	}
+	return time.Since(start).Truncate(time.Second)
 }
 
 // linksWaitLimit is how long a finished torrent may go without file links before its grab fails.

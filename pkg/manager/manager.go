@@ -69,17 +69,19 @@ const (
 
 // Manager handles unified torrent management - replaces wire.Store completely.
 type Manager struct {
-	storage      *storage.Storage
-	migrator     *migration.Migrator
-	repair       *repair.Service
-	clients      *xsync.Map[string, debrid.Client]
-	arr          *arr.Service
-	arrService   *reacquire.Service
-	arrIndexer   *reacquire.Indexer
-	logger       zerolog.Logger
-	ready        chan struct{}
-	readyOnce    sync.Once
-	streamClient *http.Client
+	storage    *storage.Storage
+	migrator   *migration.Migrator
+	repair     *repair.Service
+	clients    *xsync.Map[string, debrid.Client]
+	arr        *arr.Service
+	arrService *reacquire.Service
+	arrIndexer *reacquire.Indexer
+	logger     zerolog.Logger
+	// providerWaits is what each queued entry is waiting on at its provider, for logging a wait once per change.
+	providerWaits providerWaits
+	ready         chan struct{}
+	readyOnce     sync.Once
+	streamClient  *http.Client
 
 	arrRecoveryMu          sync.RWMutex
 	arrRecovery            ArrRecovery

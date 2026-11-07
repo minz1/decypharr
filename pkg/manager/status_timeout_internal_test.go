@@ -1,8 +1,10 @@
 package manager
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -206,5 +208,51 @@ func TestUnconvertedMagnetFailsItsGrabAfterTheConversionWait(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// warnLines counts the WARN lines that name the entry's provider wait.
+func warnLines(logs *bytes.Buffer) int {
+	n := 0
+	for line := range strings.SplitSeq(logs.String(), "\n") {
+		if strings.Contains(line, `"level":"warn"`) && strings.Contains(line, "waiting on the provider") {
+			n++
+		}
+	}
+	return n
+}
+
+// A wait on the provider is logged when it starts and when it changes, with its age, not on every queue pass: live,
+// one converting magnet logged a WARN per pass, 214 an hour. The give-up says how long the entry waited.
+func TestAProviderWaitIsLoggedOncePerChange(t *testing.T) {
+	t.Parallel()
+	provider := &failingStatusProvider{err: notConverted()}
+	m, entry := queuedEntryAddedAt(t, provider, time.Now().Add(-time.Hour), time.Time{})
+	var logs bytes.Buffer
+	m.logger = zerolog.New(&logs)
+
+	for range 3 {
+		m.processQueuedTorrent(entry)
+	}
+	if got := warnLines(&logs); got != 1 {
+		t.Fatalf("three passes on a converting magnet logged %d WARNs, want 1:\n%s", got, logs.String())
+	}
+	if !strings.Contains(logs.String(), `"waited":`) {
+		t.Fatalf("the wait's WARN carries no age:\n%s", logs.String())
+	}
+
+	provider.err = customerror.ErrProviderStatusTimeout // converted, now waiting on something else
+	m.processQueuedTorrent(entry)
+	m.processQueuedTorrent(entry)
+	if got := warnLines(&logs); got != 2 {
+		t.Fatalf("a changed wait logged %d WARNs in all, want 2:\n%s", got, logs.String())
+	}
+
+	provider.err = notConverted()
+	entry.GetActiveProvider().AddedAt = time.Now().Add(-maxConversionWait - time.Minute)
+	logs.Reset()
+	m.processQueuedTorrent(entry)
+	if !strings.Contains(logs.String(), `"level":"error"`) || !strings.Contains(logs.String(), `"waited":`) {
+		t.Fatalf("the give-up logged no ERROR with the wait's age:\n%s", logs.String())
 	}
 }
