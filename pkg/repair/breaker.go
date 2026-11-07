@@ -320,6 +320,9 @@ func (b *breaker) stepLocked(key Bucket, in bucketInput, fresh *canaryOutcome) (
 		}
 		return b.canaryStepLocked(bk, key, in, s, fresh, true)
 	case breakerReleasing:
+		if exceeded {
+			return b.tripLocked(bk, now, in.runID, holdTripped), false
+		}
 		return bucketOutcome{}, false
 	}
 	return bucketOutcome{hold: holdTripped}, false
