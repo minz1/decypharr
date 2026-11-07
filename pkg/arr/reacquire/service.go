@@ -34,6 +34,9 @@ type ServiceOptions struct {
 	Handler   Handler
 	// Logger records what the service changes on its own; the zero value logs nothing.
 	Logger zerolog.Logger
+	// OnNeedsAttention, when set, is called once each time a job moves to needs_attention.
+	// It must not block: the service calls it from the worker.
+	OnNeedsAttention func(NeedsAttention)
 }
 
 type jobKey struct {
@@ -46,6 +49,7 @@ type jobKey struct {
 type Service struct {
 	arrs                 *arr.Service
 	logger               zerolog.Logger
+	onNeedsAttention     func(NeedsAttention)
 	index                *Index
 	bindingRepository    *BindingRepository
 	jobRepository        *JobRepository
@@ -83,6 +87,7 @@ func NewService(options ServiceOptions) (*Service, error) {
 	return &Service{
 		arrs:                 options.Arrs,
 		logger:               options.Logger,
+		onNeedsAttention:     options.OnNeedsAttention,
 		index:                index,
 		bindingRepository:    bindingRepository,
 		jobRepository:        jobRepository,

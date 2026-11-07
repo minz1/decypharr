@@ -127,6 +127,8 @@ func (d *DiscordNotifier) getHeader(event config.NotificationEvent) string {
 		return "[Decypharr] Repair Cancelled"
 	case config.EventRepairBreaker:
 		return "[Decypharr] Repair Held: provider outage suspected"
+	case config.EventReacquireNeedsAttention:
+		return "[Decypharr] Reacquire Needs Attention"
 	default:
 		// Split the event string and capitalize the first letter of each word
 		// (strings.ToTitle would upper-case every letter).

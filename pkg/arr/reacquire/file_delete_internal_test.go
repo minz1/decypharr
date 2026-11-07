@@ -4,6 +4,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -24,6 +26,25 @@ type fakeSonarrRig struct {
 	handler   Handler
 	job       Job
 	skew      atomic.Int64
+	announced attentionLog
+}
+
+// attentionLog collects the needs-attention notices a service raised.
+type attentionLog struct {
+	mu      sync.Mutex
+	notices []NeedsAttention
+}
+
+func (log *attentionLog) add(notice NeedsAttention) {
+	log.mu.Lock()
+	defer log.mu.Unlock()
+	log.notices = append(log.notices, notice)
+}
+
+func (log *attentionLog) all() []NeedsAttention {
+	log.mu.Lock()
+	defer log.mu.Unlock()
+	return slices.Clone(log.notices)
 }
 
 func newFakeSonarrRig(t *testing.T, fake *fakeSonarr, strategy Strategy, episodeIDs ...int) *fakeSonarrRig {
@@ -53,7 +74,9 @@ func newFakeSonarrRig(t *testing.T, fake *fakeSonarr, strategy Strategy, episode
 // open starts the service on the rig's directory, as a restart would.
 func (rig *fakeSonarrRig) open(t *testing.T) {
 	t.Helper()
-	service, err := NewService(ServiceOptions{Arrs: rig.arrs, Directory: rig.directory})
+	service, err := NewService(ServiceOptions{
+		Arrs: rig.arrs, Directory: rig.directory, OnNeedsAttention: rig.announced.add,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

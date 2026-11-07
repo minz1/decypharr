@@ -14,6 +14,8 @@ const (
 	EventRepairCancelled  NotificationEvent = "repair_cancelled"
 	// EventRepairBreaker fires when the outage breaker starts holding a bucket's heals.
 	EventRepairBreaker NotificationEvent = "repair_breaker_tripped"
+	// EventReacquireNeedsAttention fires when a reacquisition job stops for an operator.
+	EventReacquireNeedsAttention NotificationEvent = "reacquire_needs_attention"
 )
 
 // Notifications holds all notification configuration.

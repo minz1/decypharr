@@ -1,7 +1,10 @@
 package reacquire
 
 import (
+	"cmp"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -28,15 +31,75 @@ func (job Job) reconciliationDeadline() time.Time {
 	return first.Add(reconciliationTimeout)
 }
 
+// NeedsAttention is what an operator is told when a job stops for them.
+type NeedsAttention struct {
+	JobID   string
+	ArrName string
+	// File is the library file the job was replacing.
+	File string
+	// Why is the cause that stopped the job, with what the job did about it.
+	Why string
+	// Remonitor says where the re-monitor of the deleted files' episodes stands.
+	Remonitor string
+}
+
 func (s *Service) stopReconciliation(id string, cause error) bool {
-	_, err := s.updateJobDurable(id, StatusNeedsAttention, func(job *Job) {
+	before, known := s.Job(id)
+	stopped, err := s.updateJobDurable(id, StatusNeedsAttention, func(job *Job) {
 		job.LastError = fmt.Sprintf(
 			"%v; check the action in Arr, then acknowledge this job before starting another",
 			cause,
 		)
 		job.RetryAt = time.Time{}
 	})
-	return err == nil
+	if err != nil {
+		return false
+	}
+	if s.onNeedsAttention != nil && known && before.Status != StatusNeedsAttention {
+		s.onNeedsAttention(NeedsAttention{
+			JobID:     stopped.ID,
+			ArrName:   stopped.ArrName,
+			File:      stopped.libraryFile(),
+			Why:       cause.Error(),
+			Remonitor: stopped.remonitorSummary(),
+		})
+	}
+	return true
+}
+
+// libraryFile names the file the job is replacing.
+func (job Job) libraryFile() string {
+	for _, binding := range job.Bindings {
+		if binding.EntryID == job.EntryID && binding.EntryFileID == job.FileID {
+			return cmp.Or(binding.LibraryPath, binding.EntryFileName, job.FileID)
+		}
+	}
+	return job.FileID
+}
+
+// remonitorSummary says where the episodes of the files the job deleted stand.
+func (job Job) remonitorSummary() string {
+	if !job.hasFileDelete() {
+		return "no Arr file was deleted"
+	}
+	var unconfirmed, owed []string
+	for _, record := range job.FileDeletes {
+		switch {
+		case record.unconfirmed():
+			unconfirmed = append(unconfirmed, strconv.Itoa(record.ArrFileID))
+		case record.remonitorOwed():
+			owed = append(owed, fmt.Sprint(record.EpisodeIDs))
+		}
+	}
+	switch {
+	case len(unconfirmed) > 0:
+		return fmt.Sprintf("the delete of Arr file %s is not confirmed, so its episodes may be unmonitored",
+			strings.Join(unconfirmed, ", "))
+	case len(owed) > 0:
+		return fmt.Sprintf("episodes %s are not monitored again yet", strings.Join(owed, ", "))
+	default:
+		return "episodes are monitored again"
+	}
 }
 
 // AcknowledgeJob releases a stopped job after an operator checks its remote actions.
