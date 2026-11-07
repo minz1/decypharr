@@ -168,10 +168,12 @@ func (r *Runner[K, M, S]) supervise(ctx context.Context) error {
 
 // After sets a timer that delivers msg to this key. See [Runner.After].
 func (fx *Effects[K, M]) After(d time.Duration, msg M) TimerID {
+	fx.live()
 	return fx.r.After(fx.key, d, msg)
 }
 
 // CancelTimer cancels a timer of this runner. See [Runner.CancelTimer].
 func (fx *Effects[K, M]) CancelTimer(id TimerID) {
+	fx.live()
 	fx.r.CancelTimer(id)
 }
