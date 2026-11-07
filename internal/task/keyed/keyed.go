@@ -99,23 +99,38 @@ type host[K comparable, M any] interface {
 	spawn(key K, name string, fn func(ctx context.Context) M, onPanic func(v any) M) error
 }
 
-// activate builds the key's state. A panic is logged and counted, and the key
-// starts from the zero state.
-func (r *Runner[K, M, S]) activate(ctx context.Context, key K) S {
+// activate builds the key's state. A panic is logged and counted and reported
+// as false: the zero state would claim things the store never said (that
+// nothing holds a torrent, say), so no message is handled on it.
+func (r *Runner[K, M, S]) activate(ctx context.Context, key K) (S, bool) {
 	var st S
+	ok := true
 	func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
+				ok = false
 				r.totalPanics.Add(1)
 				r.logger.Error().Str("runner", r.name).Str("key", fmt.Sprint(key)).Interface("panic", recovered).
-					Bytes("stack", debug.Stack()).Msg("Activate panicked; the key starts from an empty state")
-				var zero S
-				st = zero
+					Bytes("stack", debug.Stack()).Msg("Activate panicked; the messages waiting for the key are dropped")
 			}
 		}()
 		st = r.handler.Activate(ctx, key)
 	}()
-	return st
+	return st, ok
+}
+
+// abandonLocked ends the goroutine of a key whose Activate panicked: the messages queued so far are dropped and
+// counted, an Ask among them is answered with ErrHandlerPanicked, and the next message starts the key again.
+func (r *Runner[K, M, S]) abandonLocked(a *actor[K, M]) {
+	for _, env := range a.queue {
+		if env.reply != nil {
+			env.reply.finish(nil, ErrHandlerPanicked)
+		}
+		a.dropped++
+		r.totalDropped.Add(1)
+	}
+	a.queue, a.bypassed = nil, 0
+	r.exitLocked(a, false)
 }
 
 // Options sets how a runner behaves. The zero value is usable.
@@ -485,7 +500,13 @@ func (r *Runner[K, M, S]) startLocked(a *actor[K, M]) error {
 // when the runner stops or the key has been quiet for IdleAfter.
 func (r *Runner[K, M, S]) loop(ctx context.Context, a *actor[K, M]) {
 	hctx := withHandlerMarker(ctx)
-	held := r.activate(hctx, a.key)
+	held, ok := r.activate(hctx, a.key)
+	if !ok {
+		r.mu.Lock()
+		r.abandonLocked(a)
+		r.mu.Unlock()
+		return
+	}
 	var idle *time.Timer
 	if !r.noIdle {
 		idle = time.NewTimer(r.opts.IdleAfter)
