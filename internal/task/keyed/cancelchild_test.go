@@ -80,6 +80,46 @@ func TestACancelledStuckChildDoesNotKeepTheKeyUp(t *testing.T) {
 	})
 }
 
+// A child that finished while the actor was busy has its result queued; cancelling the child then takes the
+// result back out, so the actor never acts on work it gave up on.
+func TestCancelChildRecallsAResultAlreadyQueued(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		rec := newRecorder()
+		r := keyed.New[string, msg, struct{}](newRoot(t), "cancel-queued-child", rec, keyed.Options[msg]{})
+		proceed := make(chan struct{})
+		var id keyed.ChildID
+		mustSend(t, r, "a", msg{id: 1, run: func(_ context.Context, fx *keyed.Effects[string, msg]) {
+			id, _ = fx.Go("io", func(context.Context) msg {
+				<-proceed
+				return msg{id: 2}
+			}, nil)
+		}})
+		synctest.Wait()
+
+		release := make(chan struct{})
+		mustSend(t, r, "a", msg{id: 3, block: release, run: func(_ context.Context, fx *keyed.Effects[string, msg]) {
+			fx.CancelChild(id)
+		}})
+		synctest.Wait() // msg 3 is in flight
+		close(proceed)
+		synctest.Wait() // the child's result waits behind msg 3
+		if depth := r.Snapshot().Keys[0].Depth; depth != 1 {
+			t.Fatalf("depth = %d, want the child's result queued", depth)
+		}
+
+		close(release)
+		synctest.Wait()
+
+		if got := rec.got("a"); !slices.Equal(got, []int{1, 3}) {
+			t.Fatalf("handled %v, want [1 3]: a cancelled child's queued result is dropped", got)
+		}
+		if keys := r.Snapshot().Keys; len(keys) != 1 || keys[0].Depth != 0 || keys[0].Children != 0 {
+			t.Fatalf("keys = %+v, want nothing queued and no child in flight", keys)
+		}
+	})
+}
+
 func TestCancelChildOfAnUnknownOrFinishedChildChangesNothing(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
