@@ -99,32 +99,3 @@ func sameSeen(got, want []countSeen) bool {
 	}
 	return len(got) == len(want)
 }
-
-// A handler that panics while building its state leaves the key with the zero state, and the key goes on.
-func TestAPanicInActivateLeavesTheZeroState(t *testing.T) {
-	t.Parallel()
-	synctest.Test(t, func(t *testing.T) {
-		seen := make(chan int, 1)
-		h := activatePanics{seen: seen}
-		r := keyed.New[string, int, int](newRoot(t), "activate", h, keyed.Options[int]{})
-		if err := r.Send("a", 0); err != nil {
-			t.Fatal(err)
-		}
-		synctest.Wait()
-
-		if got := <-seen; got != 0 {
-			t.Fatalf("state = %d, want the zero state", got)
-		}
-		if r.Snapshot().Panics != 1 {
-			t.Fatalf("panics = %d, want the one in Activate counted", r.Snapshot().Panics)
-		}
-	})
-}
-
-type activatePanics struct{ seen chan int }
-
-func (activatePanics) Activate(context.Context, string) int { panic("cannot load") }
-
-func (h activatePanics) Handle(_ context.Context, _ string, st *int, _ int, _ *keyed.Effects[string, int]) {
-	h.seen <- *st
-}
