@@ -246,6 +246,7 @@ type Runner[K comparable, M, S any] struct {
 	mu   sync.Mutex
 	keys map[K]*actor[K, M]
 	live int // key goroutines running or starting
+	kids int // child tasks running
 
 	// Timers belong to the runner (see timers.go). Guarded by mu.
 	timers    timerHeap[K, M]
@@ -345,9 +346,9 @@ func (r *Runner[K, M, S]) beginStop() {
 	r.settleLocked()
 }
 
-// settleLocked moves a stopping runner with no goroutine left to Stopped.
+// settleLocked moves a stopping runner with no key goroutine and no child task left to Stopped.
 func (r *Runner[K, M, S]) settleLocked() {
-	if r.live == 0 {
+	if r.live == 0 && r.kids == 0 {
 		r.lifecycle.Transition(runStopping, runStopped)
 	}
 }
@@ -626,6 +627,7 @@ func (r *Runner[K, M, S]) spawn(key K, name string, fn func(ctx context.Context)
 	}
 	a := r.actorLocked(key)
 	a.children++
+	r.kids++
 	r.mu.Unlock()
 
 	err := r.group.Go(fmt.Sprint(key)+"/"+name, func(ctx context.Context) error {
@@ -699,9 +701,13 @@ func (r *Runner[K, M, S]) runChild(
 func (r *Runner[K, M, S]) childDone(key K) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.kids--
 	if a, ok := r.keys[key]; ok {
 		a.children--
 		r.dropIfIdleLocked(a)
+	}
+	if !r.accepting() {
+		r.settleLocked()
 	}
 }
 
