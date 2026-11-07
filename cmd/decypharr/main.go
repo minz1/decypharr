@@ -6,7 +6,6 @@ import (
 	"os"
 	"runtime"
 	"strconv"
-	"sync"
 
 	"github.com/rs/zerolog"
 
@@ -63,11 +62,13 @@ func Start(ctx context.Context, dataDir string) error {
 // buildServices starts one generation's services as children of gen.root.
 // Children stop newest first, so they are created in dependency order:
 //
-//	manager → http → mount → share{export, nfs, smb}
+//	manager → http → share{export, nfs, smb}
 //
-// The share servers read through the manager and the mount (rclone and
-// external mounts read our own WebDAV), so they stop first, then the mount,
-// then the server that feeds it, and the manager last.
+// The share servers read through the manager, so they stop first, then the
+// server, and the manager last. The mount belongs to the manager: it starts it
+// in Start and stops it in Stop, after the downloads are saved and before
+// storage closes. Moving it into its own group, with a bounded unmount, is
+// the P1-mount track.
 func buildServices(gen *generation, cfg *config.Config, logs *logger.Factory) (func(), error) {
 	root := gen.root
 	log := logs.New("decypharr")
@@ -92,29 +93,19 @@ func buildServices(gen *generation, cfg *config.Config, logs *logger.Factory) (f
 +-------------------------------------------------------+
 `, version.GetInfo(), cfg.LogLevel)
 
-	mounts := &stopOnceMount{MountManager: createMountManager(mgr, cfg, logs)}
-	mgr.SetMountManager(mounts)
+	installMount(mgr, cfg, logs)
 	srv := server.New(mgr, store, logs)
 	srv.SetRestartFunc(gen.RequestRestart)
 	srv.SetTaskSnapshot(root.Snapshot)
 	gen.WaitReady(mgr.IsReady())
 	gen.OnRestartRejected(func(cause error) { store.MarkRestartFailed(cause) })
 
-	// The manager starts the mount it was given once it is ready, and stops it
-	// again when it stops. The mount group below stops it earlier, in its own
-	// place in the order; stopOnceMount makes the second stop a no-op.
 	if err = root.Child("manager").GoCritical("run", func(ctx context.Context) error {
 		return runManager(ctx, mgr, log)
 	}); err != nil {
 		return cleanup, err
 	}
 	if err = srv.Start(root.Child("http")); err != nil {
-		return cleanup, err
-	}
-	if err = root.Child("mount").Go("stop", func(ctx context.Context) error {
-		<-ctx.Done()
-		return mounts.Stop()
-	}); err != nil {
 		return cleanup, err
 	}
 	return cleanup, startShares(root.Child("share"), mgr, cfg, logs)
@@ -124,6 +115,11 @@ func buildServices(gen *generation, cfg *config.Config, logs *logger.Factory) (f
 // stopped inside this task, so it happens on every path (a failed Start
 // included), after the services created later have stopped, and under the
 // generation's drain deadline.
+//
+// Known gap (P1-mount): Stop also unmounts, and the mount managers bound that
+// with fixed timeouts of their own (about 10s graceful plus 10s forced), not
+// with this deadline. A stuck unmount can therefore outlast the drain budget;
+// the process then exits on the stop timeout.
 func runManager(ctx context.Context, mgr *manager.Manager, log zerolog.Logger) error {
 	defer func() {
 		if err := mgr.Stop(); err != nil {
@@ -164,20 +160,11 @@ func startShares(g *task.Group, mgr *manager.Manager, cfg *config.Config, logs *
 	return nil
 }
 
-// stopOnceMount lets two owners stop one mount: the generation's mount group,
-// in its place in the shutdown order, and the manager, which stops its mount
-// when it stops. The first stop does the work; the second waits for it and
-// reports the same result.
-type stopOnceMount struct {
-	manager.MountManager
-
-	once sync.Once
-	err  error
-}
-
-func (m *stopOnceMount) Stop() error {
-	m.once.Do(func() { m.err = m.MountManager.Stop() })
-	return m.err
+// installMount gives the manager the mount manager the configuration asks
+// for. It is passed as is: the HTTP API finds the DFS cache operations by type
+// assertion on it, so it must not be wrapped.
+func installMount(mgr *manager.Manager, cfg *config.Config, logs *logger.Factory) {
+	mgr.SetMountManager(createMountManager(mgr, cfg, logs))
 }
 
 func createMountManager(mgr *manager.Manager, cfg *config.Config, logs *logger.Factory) manager.MountManager {
