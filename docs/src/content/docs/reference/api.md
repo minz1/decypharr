@@ -197,7 +197,7 @@ curl -X POST \
 
 ### GET /api/arrs
 
-List connected Arrs.
+List connected Arrs. Each item carries its name, host and settings, never its API token.
 
 ```bash
 curl -H "Authorization: Bearer TOKEN" \

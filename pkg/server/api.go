@@ -21,6 +21,7 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/utils"
+	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/repair"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 	"github.com/sirrobot01/decypharr/pkg/version"
@@ -34,8 +35,34 @@ type mountCachePurger interface {
 	PurgeCache() (map[string]any, error)
 }
 
+// arrView is what GET /api/arrs returns for an Arr: everything but its API token.
+type arrView struct {
+	Name             string     `json:"name"`
+	Host             string     `json:"host"`
+	Type             arr.Type   `json:"type"`
+	SkipRepair       bool       `json:"skip_repair"`
+	DownloadUncached *bool      `json:"download_uncached"`
+	SelectedDebrid   string     `json:"selected_debrid,omitempty"`
+	Source           arr.Source `json:"source,omitempty"`
+	ImportWebhook    bool       `json:"import_webhook,omitempty"`
+}
+
 func (s *Server) handleGetArrs(w http.ResponseWriter, _ *http.Request) {
-	utils.JSONResponse(w, s.manager.Arr().All(), http.StatusOK)
+	instances := s.manager.Arr().All()
+	views := make([]arrView, 0, len(instances))
+	for _, instance := range instances {
+		views = append(views, arrView{
+			Name:             instance.Name,
+			Host:             instance.Host,
+			Type:             instance.Type,
+			SkipRepair:       instance.SkipRepair,
+			DownloadUncached: instance.DownloadUncached,
+			SelectedDebrid:   instance.SelectedDebrid,
+			Source:           instance.Source,
+			ImportWebhook:    instance.ImportWebhook,
+		})
+	}
+	utils.JSONResponse(w, views, http.StatusOK)
 }
 
 func (s *Server) handleGetVersion(w http.ResponseWriter, _ *http.Request) {
