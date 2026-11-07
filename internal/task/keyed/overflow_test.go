@@ -16,14 +16,11 @@ type kind struct {
 	id   int
 	obs  bool
 	same string
-	tick bool
 	hold <-chan struct{}
 }
 
 func classify(m kind) keyed.Class {
 	switch {
-	case m.tick:
-		return keyed.Timer
 	case m.obs:
 		return keyed.Observation
 	default:
@@ -115,26 +112,6 @@ func TestAnObservationIsRefusedWhenTheMailboxHoldsNothingToDrop(t *testing.T) {
 		close(hold)
 		synctest.Wait()
 		if want := []int{1, 2}; !slices.Equal(*handled, want) {
-			t.Fatalf("handled %v, want %v", *handled, want)
-		}
-	})
-}
-
-func TestATimerClassMessageIsNeverRefused(t *testing.T) {
-	t.Parallel()
-	synctest.Test(t, func(t *testing.T) {
-		r, handled := newKindRunner(t, 1)
-		hold := make(chan struct{})
-		send(t, r, kind{id: 1, hold: hold})
-		synctest.Wait()
-		send(t, r, kind{id: 2})
-
-		send(t, r, kind{id: 3, tick: true})
-		send(t, r, kind{id: 4, tick: true})
-
-		close(hold)
-		synctest.Wait()
-		if want := []int{1, 2, 3, 4}; !slices.Equal(*handled, want) {
 			t.Fatalf("handled %v, want %v", *handled, want)
 		}
 	})

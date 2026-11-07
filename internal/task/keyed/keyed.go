@@ -197,8 +197,6 @@ const (
 	// Observation is a report of how things stand: the latest replaces an older one with the same coalesce key,
 	// and into a full mailbox the oldest observation is dropped.
 	Observation
-	// Timer is never dropped and does not count against the bound.
-	Timer
 )
 
 // actor is the runner's record of one key. The runner's mutex guards every field.
@@ -275,14 +273,21 @@ func New[K comparable, M, S any](g *task.Group, name string, h Handler[K, M, S],
 	return r
 }
 
-// NewSingleton makes a runner with the one key and no idle exit: its goroutine
-// runs until the runner stops.
+// Singleton is a runner with the one key and no idle exit: its goroutine, and
+// so its state, lives until the runner stops. It is for the services that are
+// one thing each (a mount supervisor, a run coordinator, a configuration
+// hot-apply).
+type Singleton[M, S any] struct {
+	r *Runner[struct{}, M, S]
+}
+
+// NewSingleton starts a singleton on a child of g named name.
 func NewSingleton[M, S any](
 	g *task.Group,
 	name string,
 	h Handler[struct{}, M, S],
 	opts Options[M],
-) *Runner[struct{}, M, S] {
+) *Singleton[M, S] {
 	opts.IdleAfter = -1
 	r := New(g, name, h, opts)
 	r.mu.Lock()
@@ -293,8 +298,25 @@ func NewSingleton[M, S any](
 			r.logger.Warn().Err(err).Str("runner", name).Msg("Singleton not started")
 		}
 	}
-	return r
+	return &Singleton[M, S]{r: r}
 }
+
+// Send hands msg to the singleton without waiting. See [Runner.Send].
+func (s *Singleton[M, S]) Send(msg M) error { return s.r.Send(struct{}{}, msg) }
+
+// Ask sends msg and waits for the reply. See [Runner.Ask].
+func (s *Singleton[M, S]) Ask(ctx context.Context, msg M) (any, error) {
+	return s.r.Ask(ctx, struct{}{}, msg)
+}
+
+// After delivers msg to the singleton once d has passed. See [Runner.After].
+func (s *Singleton[M, S]) After(d time.Duration, msg M) TimerID { return s.r.After(struct{}{}, d, msg) }
+
+// CancelTimer cancels a pending timer. See [Runner.CancelTimer].
+func (s *Singleton[M, S]) CancelTimer(id TimerID) { s.r.CancelTimer(id) }
+
+// Snapshot describes the singleton's runner. See [Runner.Snapshot].
+func (s *Singleton[M, S]) Snapshot() Info { return s.r.Snapshot() }
 
 // beginStop moves the runner to Stopping, and on to Stopped once no key
 // goroutine is left.
@@ -326,7 +348,7 @@ func (r *Runner[K, M, S]) accepting() bool {
 func (r *Runner[K, M, S]) Send(key K, msg M) error {
 	env := envelope[M]{msg: msg, at: time.Now(), class: Command}
 	if r.opts.Class != nil {
-		if class := r.opts.Class(msg); class == Observation || class == Timer {
+		if class := r.opts.Class(msg); class == Observation {
 			env.class = class
 		}
 	}
@@ -342,7 +364,7 @@ func (r *Runner[K, M, S]) Send(key K, msg M) error {
 // queued; a nil error with false means env was coalesced into a queued message.
 func (r *Runner[K, M, S]) admitLocked(a *actor[K, M], env envelope[M]) (bool, error) {
 	switch {
-	case env.bypass || env.class == Timer:
+	case env.bypass:
 		return true, nil
 	case env.class == Observation:
 		if env.coalesce != "" {
@@ -398,9 +420,6 @@ func (r *Runner[K, M, S]) refuseLocked(a *actor[K, M]) error {
 func (r *Runner[K, M, S]) enqueueLocked(key K, env envelope[M]) error {
 	if !r.accepting() {
 		return ErrStopped
-	}
-	if env.class == Timer {
-		env.bypass = true
 	}
 	a := r.actorLocked(key)
 	queued, err := r.admitLocked(a, env)
