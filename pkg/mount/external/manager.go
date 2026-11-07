@@ -84,7 +84,11 @@ func (m *Manager) Start(g *task.Group) error {
 		return fmt.Errorf("webdav is not enabled")
 	}
 	if !m.transition(extNew, extStarting) {
-		return fmt.Errorf("external rclone manager cannot start from state %s", m.state.Load())
+		current := m.state.Load()
+		if current == extStopped {
+			return fmt.Errorf("external rclone manager: %w", task.ErrStopped)
+		}
+		return fmt.Errorf("external rclone manager cannot start from state %s", current)
 	}
 	m.group.Store(g)
 	if err := g.Go("ping", m.probe); err != nil {
