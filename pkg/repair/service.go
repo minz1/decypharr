@@ -123,13 +123,18 @@ type Service struct {
 	breaker *breaker
 	// seeded is set once the breaker has been seeded from the journal; guarded by mu.
 	seeded bool
+	// probeCtx is the context canary probes run on, cancelled by Stop; probes counts the ones in flight.
+	probeCtx    context.Context
+	probeCancel context.CancelFunc
+	probes      probeTracker
 }
 
-// lifetime is the context that ends with the service: background probes are tied to it.
+// lifetime is the context background probes run on: it ends when the service is stopped or its parent context ends,
+// and a restart (Start after Stop) makes a fresh one.
 func (r *Service) lifetime() context.Context {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.parentCtx
+	return r.probeCtx
 }
 
 func (r *Service) clock() time.Time {
@@ -167,6 +172,8 @@ func New(deps Dependencies) *Service {
 	r.breaker = newBreaker(r.breakerSettings, r.canaryProbe)
 	r.breaker.now = r.clock
 	r.breaker.lifetime = r.lifetime
+	r.breaker.track = r.probes.begin
+	r.probeCtx, r.probeCancel = context.WithCancel(r.parentCtx)
 	return r
 }
 

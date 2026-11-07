@@ -320,7 +320,8 @@ func (s *Service) canaryFor(ctx context.Context, provider string, ttl time.Durat
 		verdict := CanaryInconclusive
 		if probe != nil {
 			// The flight runs without its first caller's cancellation, so the probe is bounded here instead: by a
-			// timeout, and by the service's lifetime, so it cannot read storage after Close.
+			// timeout, and by the service's lifetime. Close ends the wait here; the probe itself runs in the repair
+			// service, which cancels it and waits for it when it stops.
 			probeCtx, cancel := context.WithTimeout(s.lifetime, guardCanaryTimeout)
 			verdict = probe(probeCtx, provider)
 			cancel()

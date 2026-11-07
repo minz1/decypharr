@@ -223,6 +223,8 @@ type breaker struct {
 	flight   flight.Group[canaryOutcome]
 	// lifetime is the context a canary probe is tied to; nil leaves it to the caller's detached context.
 	lifetime func() context.Context
+	// track registers a probe in flight and returns the function that ends it; nil tracks nothing.
+	track func() func()
 }
 
 // canaryProbeTimeout bounds one canary probe.
@@ -346,7 +348,10 @@ func (b *breaker) probeCanary(ctx context.Context, key Bucket) canaryOutcome {
 		verdict := canaryInconclusive
 		if b.canary != nil {
 			// The flight runs without its first caller's cancellation, so the probe is bounded here instead: by a
-			// timeout, and by the service's lifetime, so it cannot read storage after shutdown.
+			// timeout, and by the service's lifetime, which Stop ends and then waits for the probe to leave.
+			if b.track != nil {
+				defer b.track()()
+			}
 			if b.lifetime != nil {
 				ctx = b.lifetime()
 			}

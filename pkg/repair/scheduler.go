@@ -21,6 +21,8 @@ func (r *Service) Start(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.parentCtx = ctx
+	r.probeCancel()
+	r.probeCtx, r.probeCancel = context.WithCancel(ctx)
 
 	r.reconcileOrphans()
 	r.seedBreakerFromJournal()
@@ -121,9 +123,15 @@ func (r *Service) Stop() {
 		r.scheduler.RemoveByTags(repairStopSchedulerTag)
 		r.stopScheduled = false
 	}
+	probeCancel := r.probeCancel
 	r.mu.Unlock()
 	if cancel != nil {
 		cancel()
+	}
+	// A canary probe still running reads storage and usenet; end it and wait for it to leave.
+	probeCancel()
+	if !r.probes.wait(repairStopDrainTimeout) {
+		r.logger.Warn().Dur("timeout", repairStopDrainTimeout).Msg("Repair: a canary probe did not stop in time")
 	}
 
 	done := make(chan struct{})

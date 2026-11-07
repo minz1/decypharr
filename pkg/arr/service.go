@@ -43,7 +43,7 @@ type Service struct {
 	now          func() time.Time
 	// guard limits how fast queue cleanup blocklists downloads.
 	guard *queueGuard
-	// lifetime ends when Close is called; background work, such as a canary probe, is tied to it.
+	// lifetime ends when Close is called; the waits for background work, such as a canary probe, are tied to it.
 	lifetime context.Context
 	stop     context.CancelFunc
 }

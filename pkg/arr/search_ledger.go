@@ -167,7 +167,7 @@ func (s *Service) OpenSearchLedger(path string) error {
 	return nil
 }
 
-// Close cancels the service's background work and closes the search ledger, if one was opened.
+// Close ends the waits for background work (a canary probe) and closes the search ledger, if one was opened.
 func (s *Service) Close() error {
 	s.stop()
 	s.mu.Lock()
