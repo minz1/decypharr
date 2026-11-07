@@ -156,6 +156,7 @@ func (s *Server) admitReacquire(
 		Provider: svc.ProviderFor(request.EntryID),
 		Class:    repair.ClassOther,
 		Subject:  request.EntryID,
+		Operator: true,
 		Force:    force,
 		Caller:   requestCaller(r),
 	})

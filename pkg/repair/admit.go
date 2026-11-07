@@ -28,6 +28,9 @@ type HealRequest struct {
 	Subject string
 	// Units is the number of library files the heal replaces (one when zero).
 	Units int
+	// Operator marks a heal a person asked for. It is not evidence that anything is failing, so it counts toward the
+	// caps but never toward tripping a bucket.
+	Operator bool
 	// Force lets an operator heal past the breaker; the heal still counts toward the caps.
 	Force bool
 	// Caller names who forced it, for the log.
@@ -62,7 +65,7 @@ func (r *Service) Admit(ctx context.Context, req HealRequest) error {
 	units := max(req.Units, 1)
 	bucket := Bucket{Provider: req.Provider, Class: req.Class}
 	items := []healItem{{bucket: bucket, units: units}}
-	if req.Subject != "" {
+	if req.Subject != "" && !req.Operator {
 		r.breaker.noteConfirmed(bucket, req.Subject)
 	}
 

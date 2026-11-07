@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -14,8 +15,24 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/repair"
 )
 
-// A manual reacquisition deletes an Arr file, so it goes through the repair breaker like any other heal.
-func TestManualReacquireIsHeldByATrippedBreakerUnlessForced(t *testing.T) {
+// tripUnclassified makes the repair breaker hold the bucket a manual reacquisition of an unknown entry falls in,
+// by confirming ten distinct failures there, as automated paths do.
+func tripUnclassified(t *testing.T, service *repair.Service) {
+	t.Helper()
+	var err error
+	for i := range 10 {
+		err = service.Admit(t.Context(), repair.HealRequest{
+			Provider: service.ProviderFor("entry-1"), Class: repair.ClassOther, Subject: fmt.Sprintf("failing-%d", i),
+		})
+	}
+	if !errors.Is(err, repair.ErrHealHeld) {
+		t.Fatalf("setup: the bucket did not trip: %v", err)
+	}
+}
+
+// A manual reacquisition deletes an Arr file, so it goes through the repair breaker like any other heal, but it is
+// no evidence of a failure: any number of them never trip the breaker.
+func TestManualReacquireIsHeldByATrippedBreakerUnlessForcedAndNeverTripsIt(t *testing.T) {
 	t.Parallel()
 	mgr, _ := managertest.New(t, nil)
 	s := &Server{manager: mgr, logger: zerolog.Nop()}
@@ -27,16 +44,19 @@ func TestManualReacquireIsHeldByATrippedBreakerUnlessForced(t *testing.T) {
 		}
 		return w.Code
 	}
-
-	for i := range 9 {
+	for i := range 12 {
 		if got := admit(i, false); got != http.StatusAccepted {
-			t.Fatalf("reacquire %d = %d, want accepted", i, got)
+			t.Fatalf("manual reacquire %d = %d, want accepted: operators never trip the breaker", i, got)
 		}
 	}
-	if got := admit(9, false); got != http.StatusConflict {
-		t.Fatalf("tenth distinct entry = %d, want the breaker's conflict", got)
+	if status := mgr.Repair().BreakerStatus(); len(status) != 0 {
+		t.Fatalf("manual reacquires tripped %+v", status)
 	}
-	if got := admit(10, true); got != http.StatusAccepted {
+	tripUnclassified(t, mgr.Repair())
+	if got := admit(20, false); got != http.StatusConflict {
+		t.Fatalf("manual reacquire in a tripped bucket = %d, want the breaker's conflict", got)
+	}
+	if got := admit(21, true); got != http.StatusAccepted {
 		t.Fatalf("forced reacquire = %d, want accepted", got)
 	}
 }
@@ -48,11 +68,7 @@ func TestManualReacquireOfAFileWithAJobIsNotCounted(t *testing.T) {
 	mgr, _ := managertest.New(t, nil)
 	s := &Server{manager: mgr, logger: zerolog.Nop()}
 	request := reacquire.Request{EntryID: "entry-1", FileID: "file"}
-	for i := range 12 {
-		w := httptest.NewRecorder()
-		other := reacquire.Request{EntryID: fmt.Sprintf("other-%d", i), FileID: "file"}
-		s.admitReacquire(w, httptest.NewRequest(http.MethodPost, "/api/arr/reacquire", nil), other, false, false)
-	}
+	tripUnclassified(t, mgr.Repair())
 	post := func(active bool) bool {
 		return s.admitReacquire(
 			httptest.NewRecorder(),
