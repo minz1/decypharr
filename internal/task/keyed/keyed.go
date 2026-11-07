@@ -16,10 +16,12 @@
 // itself.
 //
 // Mailboxes are bounded. What happens when one is full depends on the class
-// of the message ([Class]): a command is refused so the caller can try again
-// later, an observation is coalesced with, or replaces, an older one, and a
-// timer is never dropped. Timers belong to the runner, not to the goroutine,
-// so a goroutine's idle exit never loses one.
+// of the message ([Class]): a command pushes out the oldest queued
+// observation, and is refused only if there is none, so the caller can try
+// again later; an observation is coalesced with an older one, or replaces the
+// oldest. A timer's message and a child task's result are never dropped or
+// refused. Timers belong to the runner, not to the goroutine, so a
+// goroutine's idle exit never loses one.
 //
 // The runner's lifecycle is an explicit state machine (running, stopping,
 // stopped) driven by its group: stopping the group refuses new messages,
@@ -187,8 +189,8 @@ type envelope[M any] struct {
 type Class uint8
 
 const (
-	// Command is a request that must not be lost silently: into a full mailbox it is refused with
-	// ErrMailboxFull, so the caller can try again later.
+	// Command is a request that must not be lost silently: into a full mailbox it pushes out the oldest queued
+	// observation, and is refused with ErrMailboxFull, so the caller can try again later, only if there is none.
 	Command Class = iota + 1
 	// Observation is a report of how things stand: the latest replaces an older one with the same coalesce key,
 	// and into a full mailbox the oldest observation is dropped.
@@ -354,22 +356,32 @@ func (r *Runner[K, M, S]) admitLocked(a *actor[K, M], env envelope[M]) (bool, er
 		if a.depth() < r.opts.MailboxSize {
 			return true, nil
 		}
-		oldest := slices.IndexFunc(a.queue, func(queued envelope[M]) bool {
-			return !queued.bypass && queued.class == Observation
-		})
-		if oldest < 0 {
+		if !r.evictObservationLocked(a) {
 			return false, r.refuseLocked(a)
 		}
-		a.queue = slices.Delete(a.queue, oldest, oldest+1)
-		a.dropped++
-		r.totalDropped.Add(1)
 		return true, nil
 	default:
-		if a.depth() >= r.opts.MailboxSize {
+		// A command, or an Ask, pushes out the oldest queued observation rather than be refused.
+		if a.depth() >= r.opts.MailboxSize && !r.evictObservationLocked(a) {
 			return false, r.refuseLocked(a)
 		}
 		return true, nil
 	}
+}
+
+// evictObservationLocked drops the oldest queued observation, counting it, and reports whether there was one.
+// Messages that bypass the bound are never dropped.
+func (r *Runner[K, M, S]) evictObservationLocked(a *actor[K, M]) bool {
+	oldest := slices.IndexFunc(a.queue, func(queued envelope[M]) bool {
+		return !queued.bypass && queued.class == Observation
+	})
+	if oldest < 0 {
+		return false
+	}
+	a.queue = slices.Delete(a.queue, oldest, oldest+1)
+	a.dropped++
+	r.totalDropped.Add(1)
+	return true
 }
 
 func (r *Runner[K, M, S]) refuseLocked(a *actor[K, M]) error {
