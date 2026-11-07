@@ -180,7 +180,7 @@ func TestSettleJobRetriesFailedLookupUntilDeadline(t *testing.T) {
 	progress := &serviceJobProgress{service: service, jobID: started.ID}
 	lookupErr := fmt.Errorf("%w: connection refused", errArrLookup)
 
-	service.settleJob(started.ID, lookupErr, progress)
+	service.settleJob(t.Context(), nil, started.ID, lookupErr, progress)
 	retried, _ := service.Job(started.ID)
 	if retried.Status != StatusQueued || retried.RetryAt.Before(started.UpdatedAt.Add(retryMaxDelay)) {
 		t.Fatalf("after a lookup failure: status %q retryAt %v, want queued at least %v later",
@@ -188,7 +188,7 @@ func TestSettleJobRetriesFailedLookupUntilDeadline(t *testing.T) {
 	}
 
 	service.now = func() time.Time { return started.StartedAt.Add(reconciliationTimeout + time.Minute) }
-	service.settleJob(started.ID, lookupErr, progress)
+	service.settleJob(t.Context(), nil, started.ID, lookupErr, progress)
 	stopped, _ := service.Job(started.ID)
 	if stopped.Status != StatusNeedsAttention {
 		t.Fatalf("after the deadline: status %q, want %q", stopped.Status, StatusNeedsAttention)

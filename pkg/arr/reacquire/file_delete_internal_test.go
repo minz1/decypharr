@@ -4,7 +4,9 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 
@@ -21,6 +23,7 @@ type fakeSonarrRig struct {
 	service   *Service
 	handler   Handler
 	job       Job
+	skew      atomic.Int64
 }
 
 func newFakeSonarrRig(t *testing.T, fake *fakeSonarr, strategy Strategy, episodeIDs ...int) *fakeSonarrRig {
@@ -55,10 +58,16 @@ func (rig *fakeSonarrRig) open(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = service.Close() })
+	service.now = func() time.Time { return time.Now().UTC().Add(time.Duration(rig.skew.Load())) }
 	if startErr := service.Start(t.Context()); startErr != nil {
 		t.Fatal(startErr)
 	}
 	rig.service = service
+}
+
+// advance moves the service's clock forward.
+func (rig *fakeSonarrRig) advance(by time.Duration) {
+	rig.skew.Add(int64(by))
 }
 
 // run executes the job once and returns its stored state.

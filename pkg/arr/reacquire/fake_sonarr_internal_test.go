@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync"
 	"testing"
 
@@ -40,6 +41,14 @@ type fakeSonarr struct {
 	blocklists int
 	// failMonitor answers the monitor toggle with a refusal.
 	failMonitor bool
+	// releases is what the interactive search returns; grabs counts the releases grabbed.
+	releases []map[string]any
+	grabs    int
+	// afterDelete lists the requests made once the file was gone, in order.
+	// failAfterDelete, when it is not -1, is the index of the one request
+	// answered with a refusal instead of being served.
+	afterDelete     []string
+	failAfterDelete int
 }
 
 func newFakeSonarr(t *testing.T, episodeIDs ...int) *fakeSonarr {
@@ -50,6 +59,7 @@ func newFakeSonarr(t *testing.T, episodeIDs ...int) *fakeSonarr {
 		monitored:         make(map[int]bool, len(episodeIDs)),
 		deleteMode:        "ok",
 		unmonitorOnDelete: true,
+		failAfterDelete:   -1,
 	}
 	for _, id := range episodeIDs {
 		fake.monitored[id] = true
@@ -64,7 +74,15 @@ func newFakeSonarr(t *testing.T, episodeIDs ...int) *fakeSonarr {
 	mux.HandleFunc("GET /api/v3/history", fake.history)
 	mux.HandleFunc("POST /api/v3/history/failed/{id}", fake.blocklist)
 	mux.HandleFunc("GET /api/v3/command", func(w http.ResponseWriter, _ *http.Request) { _, _ = fmt.Fprint(w, `[]`) })
-	fake.server = httptest.NewServer(mux)
+	mux.HandleFunc("GET /api/v3/release", fake.releaseList)
+	mux.HandleFunc("POST /api/v3/release", fake.grab)
+	fake.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if fake.refuseAfterDelete(request) {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		mux.ServeHTTP(w, request)
+	}))
 	t.Cleanup(fake.server.Close)
 	return fake
 }
@@ -138,6 +156,63 @@ func (fake *fakeSonarr) deleteFile(w http.ResponseWriter, _ *http.Request) {
 	default:
 		fake.t.Errorf("unknown delete mode %q", fake.deleteMode)
 	}
+}
+
+// refuseAfterDelete records a request made after the file was gone and reports
+// whether it is the one to refuse.
+func (fake *fakeSonarr) refuseAfterDelete(request *http.Request) bool {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.filePresent {
+		return false
+	}
+	fake.afterDelete = append(fake.afterDelete, request.Method+" "+request.URL.Path)
+	return len(fake.afterDelete)-1 == fake.failAfterDelete
+}
+
+func (fake *fakeSonarr) requestsAfterDelete() []string {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	return slices.Clone(fake.afterDelete)
+}
+
+func (fake *fakeSonarr) failRequestAfterDelete(index int) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	fake.failAfterDelete = index
+}
+
+// offerRelease adds a release to the interactive search.
+func (fake *fakeSonarr) offerRelease(eligible bool) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	fake.releases = append(fake.releases, map[string]any{
+		"guid": "guid-1", "title": "Show S01E01", "indexer": "indexer", "indexerId": 4,
+		"approved": eligible, "rejected": !eligible, "downloadAllowed": eligible,
+	})
+}
+
+func (fake *fakeSonarr) releaseList(w http.ResponseWriter, _ *http.Request) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	releases := fake.releases
+	if releases == nil {
+		releases = []map[string]any{}
+	}
+	_ = json.NewEncoder(w).Encode(releases)
+}
+
+func (fake *fakeSonarr) grab(w http.ResponseWriter, _ *http.Request) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	fake.grabs++
+	w.WriteHeader(http.StatusOK)
+}
+
+func (fake *fakeSonarr) grabCount() int {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	return fake.grabs
 }
 
 func (fake *fakeSonarr) isMonitored(id int) bool {

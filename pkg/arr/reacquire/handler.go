@@ -2,6 +2,7 @@ package reacquire
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -109,25 +110,35 @@ type reacquirePlan struct {
 	failure        exactDownloadFailure
 }
 
-// prepare checks the job can still act on the Arr it was bound to, and reads
-// the history the chosen strategy needs. It makes no Arr mutation.
-func (handler *arrHandler) prepare(ctx context.Context, job Job) (reacquirePlan, error) {
+// target returns the Arr the job is bound to and the bindings that authorize
+// acting on it, after checking both can still be searched.
+func (handler *arrHandler) target(job Job) (arr.Arr, []Binding, error) {
 	if handler == nil || handler.arrs == nil {
-		return reacquirePlan{}, fmt.Errorf("arr reacquirer is not configured")
+		return arr.Arr{}, nil, fmt.Errorf("arr reacquirer is not configured")
 	}
 	instance, ok := handler.arrs.Get(job.ArrName)
 	if !ok {
-		return reacquirePlan{}, fmt.Errorf("arr %q is not configured", job.ArrName)
+		return arr.Arr{}, nil, fmt.Errorf("arr %q is not configured", job.ArrName)
 	}
 	bindings, err := mutationBindings(job)
 	if err != nil {
-		return reacquirePlan{}, err
+		return arr.Arr{}, nil, err
 	}
 	if validateMutationInstanceErr := validateMutationInstance(instance, bindings); validateMutationInstanceErr != nil {
-		return reacquirePlan{}, validateMutationInstanceErr
+		return arr.Arr{}, nil, validateMutationInstanceErr
 	}
 	if validateSearchBindingsErr := validateSearchBindings(instance, bindings); validateSearchBindingsErr != nil {
-		return reacquirePlan{}, validateSearchBindingsErr
+		return arr.Arr{}, nil, validateSearchBindingsErr
+	}
+	return instance, bindings, nil
+}
+
+// prepare checks the job can still act on the Arr it was bound to, and reads
+// the history the chosen strategy needs. It makes no Arr mutation.
+func (handler *arrHandler) prepare(ctx context.Context, job Job) (reacquirePlan, error) {
+	instance, bindings, err := handler.target(job)
+	if err != nil {
+		return reacquirePlan{}, err
 	}
 	downloadConfig, err := handler.arrs.DownloadClientConfig(ctx, instance.Name)
 	if err != nil {
@@ -179,7 +190,11 @@ func (handler *arrHandler) runStrategy(
 		if err := handler.executeExactDownloadFailure(ctx, plan.instance, job, plan.failure, progress); err != nil {
 			return "", err
 		}
-		return handler.grabBestRelease(ctx, plan.instance, job, plan.bindings, progress)
+		status, err := handler.grabBestRelease(ctx, plan.instance, job, plan.bindings, progress)
+		if errors.Is(err, errNoEligibleRelease) {
+			return handler.searchBindings(ctx, plan.instance, job, plan.bindings, progress)
+		}
+		return status, err
 	case StrategyDownloadFailed:
 		return "", fmt.Errorf("strategy %q has no plan", job.Strategy)
 	default:

@@ -2,6 +2,7 @@ package reacquire
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -41,8 +42,12 @@ func (handler *arrHandler) grabBestRelease(
 		}
 		return handler.dispatchReleaseMutation(ctx, instance, job, mutation, release, progress)
 	}
-	return "", fmt.Errorf("arr returned no downloadable replacement release with reconcilable identity")
+	return "", fmt.Errorf("%w with reconcilable identity", errNoEligibleRelease)
 }
+
+// errNoEligibleRelease means the Arr offered nothing the job may grab. The file
+// is already deleted by then, so the job searches instead of failing.
+var errNoEligibleRelease = errors.New("arr returned no downloadable replacement release")
 
 // resumeReleaseGrab continues a grab chosen by an earlier run. It never picks
 // a different release: the persisted one is confirmed, reconciled, or sent

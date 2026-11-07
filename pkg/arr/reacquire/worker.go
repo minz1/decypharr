@@ -362,13 +362,19 @@ func (s *Service) runJob(ctx context.Context, handler Handler, job Job) bool {
 	if ctx.Err() != nil {
 		return true
 	}
-	return s.settleJob(job.ID, err, progress)
+	return s.settleJob(ctx, handler, job.ID, err, progress)
 }
 
 // settleJob records how one handler run ended: retry an unconfirmed mutation,
 // stop for an operator, fail, or mark the job ready. It reports false when the
 // job could not be updated.
-func (s *Service) settleJob(id string, err error, progress *serviceJobProgress) bool {
+func (s *Service) settleJob(
+	ctx context.Context,
+	handler Handler,
+	id string,
+	err error,
+	progress *serviceJobProgress,
+) bool {
 	current, ok := s.Job(id)
 	if !ok {
 		return false
@@ -400,6 +406,10 @@ func (s *Service) settleJob(id string, err error, progress *serviceJobProgress) 
 	if err != nil {
 		if current.hasAttemptedIntent() {
 			return s.stopReconciliation(id, err)
+		}
+		if current.hasConfirmedFileDelete() && !current.hasConfirmedSearchOrGrab() {
+			// The file is gone and nothing is searching for it: search, then let an operator look.
+			return s.stopWithCompensation(ctx, handler, id, progress, err)
 		}
 		_, updateErr := s.updateJob(id, StatusFailed, func(job *Job) {
 			job.LastError = err.Error()
@@ -779,9 +789,7 @@ func (s *Service) maintainJobs() {
 	s.jobsMu.RUnlock()
 
 	for _, id := range expire {
-		_, _ = s.updateJob(id, StatusFailed, func(job *Job) {
-			job.LastError = "replacement was not imported before the reacquisition timeout"
-		})
+		s.expireWaitingJob(s.maintenanceContext(), id)
 	}
 	for _, id := range prune {
 		s.pruneTerminalJob(id, now)

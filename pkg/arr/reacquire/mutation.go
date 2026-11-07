@@ -16,6 +16,10 @@ const (
 	maxMutationAttempts     = 3
 )
 
+// compensatingKeySuffix marks the search a job sends on its own after it
+// deleted an Arr file and nothing else would search for the media.
+const compensatingKeySuffix = ":compensating"
+
 type MutationKind string
 
 const (
