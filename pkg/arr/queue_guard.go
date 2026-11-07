@@ -309,7 +309,7 @@ const guardCanaryTimeout = 2 * time.Minute
 // canaryFor probes a provider's canary. Callers asking at the same moment share one probe, and a verdict that
 // arrives while they queue is reused rather than probed again.
 func (s *Service) canaryFor(ctx context.Context, provider string, ttl time.Duration) CanaryVerdict {
-	verdict, _, err := s.guard.canaryFlight.Do(ctx, provider, func(ctx context.Context) (CanaryVerdict, error) {
+	verdict, _, err := s.guard.canaryFlight.Do(ctx, provider, func(context.Context) (CanaryVerdict, error) {
 		s.guard.mu.Lock()
 		probe := s.guard.hooks.Canary
 		if cached, ok := s.guard.verdicts[provider]; ok && s.now().Sub(cached.at) < ttl {

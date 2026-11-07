@@ -2,6 +2,7 @@ package arr
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"testing/synctest"
@@ -42,7 +43,7 @@ func TestGuardCanaryProbeIsBoundedByATimeout(t *testing.T) {
 		if err == nil {
 			t.Fatal("a download beyond the free allowance passed on a canary that never answered")
 		}
-		if got := <-ended; got != context.DeadlineExceeded {
+		if got := <-ended; !errors.Is(got, context.DeadlineExceeded) {
 			t.Fatalf("the probe ended with %v, want its deadline", got)
 		}
 		if waited := time.Since(start); waited != guardCanaryTimeout {
@@ -63,7 +64,7 @@ func TestGuardCanaryProbeEndsWhenTheServiceCloses(t *testing.T) {
 		if err := service.Close(); err != nil {
 			t.Fatal(err)
 		}
-		if got := <-ended; got != context.Canceled {
+		if got := <-ended; !errors.Is(got, context.Canceled) {
 			t.Fatalf("the probe ended with %v, want it cancelled by Close", got)
 		}
 		if err := <-done; err == nil {

@@ -2,6 +2,7 @@ package repair
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -11,7 +12,7 @@ import (
 
 // blockingBreaker has a canary that waits until its context ends, as a probe of a stuck provider would, and a
 // lifetime the test can end.
-func blockingBreaker(ended chan<- error, lifetime context.Context) *breaker {
+func blockingBreaker(lifetime context.Context, ended chan<- error) *breaker {
 	b := newBreaker(
 		func() config.BreakerSettings { return config.RepairConfig{}.BreakerSettings() },
 		func(ctx context.Context, _ Bucket, _ config.BreakerSettings) canaryOutcome {
@@ -29,12 +30,12 @@ func TestCanaryProbeIsBoundedByATimeout(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		ended := make(chan error, 1)
-		b := blockingBreaker(ended, t.Context())
+		b := blockingBreaker(t.Context(), ended)
 		start := time.Now()
 		if got := b.probeCanary(t.Context(), testBucket()); got != canaryInconclusive {
 			t.Fatalf("verdict = %v, want inconclusive", got)
 		}
-		if err := <-ended; err != context.DeadlineExceeded {
+		if err := <-ended; !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("the probe ended with %v, want its deadline", err)
 		}
 		if waited := time.Since(start); waited != canaryProbeTimeout {
@@ -49,12 +50,12 @@ func TestCanaryProbeEndsWithTheServiceLifetime(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		lifetime, stop := context.WithCancel(t.Context())
 		ended := make(chan error, 1)
-		b := blockingBreaker(ended, lifetime)
+		b := blockingBreaker(lifetime, ended)
 		done := make(chan canaryOutcome, 1)
 		go func() { done <- b.probeCanary(t.Context(), testBucket()) }()
 		synctest.Wait()
 		stop()
-		if err := <-ended; err != context.Canceled {
+		if err := <-ended; !errors.Is(err, context.Canceled) {
 			t.Fatalf("the probe ended with %v, want it cancelled", err)
 		}
 		if got := <-done; got != canaryInconclusive {
