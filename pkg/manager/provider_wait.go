@@ -3,6 +3,7 @@ package manager
 import (
 	"errors"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/sirrobot01/decypharr/internal/customerror"
@@ -45,7 +46,8 @@ func providerWaitOf(err error) providerWait {
 	}
 }
 
-// providerWaits holds each queued entry's current wait. The zero value is ready to use.
+// providerWaits holds each queued entry's current wait, keyed by lower-case infohash as the queue store is. The zero
+// value is ready to use.
 type providerWaits struct {
 	mu   sync.Mutex
 	byID map[string]providerWait
@@ -53,7 +55,8 @@ type providerWaits struct {
 
 // observe records the wait of the entry's latest status check and reports the wait it replaced. Every wait may
 // follow every other, so there is no illegal move; waitNone forgets the entry.
-func (w *providerWaits) observe(key string, next providerWait) providerWait {
+func (w *providerWaits) observe(infohash string, next providerWait) providerWait {
+	key := strings.ToLower(infohash)
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	previous := w.byID[key]

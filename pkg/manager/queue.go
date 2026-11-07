@@ -123,6 +123,8 @@ type Queue struct {
 	removeStalledAfter time.Duration
 	naming             func() config.WebDavFolderNaming
 	running            *xsync.Map[string, context.CancelCauseFunc] // infohash -> cancels its post-download action
+	// waits is what each queued entry is waiting on at its provider, for logging a wait once per change.
+	waits providerWaits
 }
 
 var errEntryDeleted = errors.New("queue entry deleted")
@@ -210,8 +212,9 @@ func (q *Queue) wrapCleanupWithFileDelete(cleanup func(t *storage.Entry) error) 
 	}
 }
 
-// stopRunning cancels the post-download action of a deleted entry.
+// stopRunning cancels the post-download action of a deleted entry and forgets its provider wait.
 func (q *Queue) stopRunning(infohash string) {
+	q.waits.observe(infohash, waitNone)
 	if cancel, ok := q.running.Load(strings.ToLower(infohash)); ok {
 		cancel(errEntryDeleted)
 	}

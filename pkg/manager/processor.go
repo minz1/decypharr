@@ -322,7 +322,7 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 
 	dbT, err := client.CheckStatus(debridTorrent)
 	if !m.queue.Contains(entry.InfoHash) {
-		m.providerWaits.observe(entry.InfoHash, waitNone)
+		m.queue.waits.observe(entry.InfoHash, waitNone)
 		return // removed while the status check ran
 	}
 	if m.retryNextPass(entry, placement, err) {
@@ -330,9 +330,7 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 	}
 	m.releaseLeftSlot(entry, placement, dbT, err)
 	if err != nil {
-		m.logger.Error().Err(err).Str("name", entry.Name).
-			Stringer("wait", providerWaitOf(err)).Dur("waited", providerWaitAge(entry, placement)).
-			Msg("Error checking status")
+		m.logStatusFailure(entry, placement, err)
 		if releaseIsDead(dbT, err) {
 			m.failBadRelease(entry, err)
 		} else {
@@ -454,7 +452,7 @@ func (m *Manager) statusWaitExhausted(entry *storage.Entry, placement *storage.P
 // changes; any other transient failure is logged each time.
 func (m *Manager) retryNextPass(entry *storage.Entry, placement *storage.ProviderEntry, err error) bool {
 	if err == nil || !transientStatusError(err) || m.statusWaitExhausted(entry, placement, err) {
-		m.providerWaits.observe(entry.InfoHash, waitNone)
+		m.queue.waits.observe(entry.InfoHash, waitNone)
 		return false
 	}
 	wait := providerWaitOf(err)
@@ -463,13 +461,22 @@ func (m *Manager) retryNextPass(entry *storage.Entry, placement *storage.Provide
 		return true
 	}
 	line := m.logger.Debug()
-	if m.providerWaits.observe(entry.InfoHash, wait) != wait {
+	if m.queue.waits.observe(entry.InfoHash, wait) != wait {
 		line = m.logger.Warn()
 	}
 	line.Err(err).Str("name", entry.Name).Stringer("wait", wait).
 		Dur("waited", providerWaitAge(entry, placement)).
 		Msg("Entry waiting on the provider; checking again on the next pass")
 	return true
+}
+
+// logStatusFailure logs a status check the entry fails on; a provider wait that ran out also says which and how long.
+func (m *Manager) logStatusFailure(entry *storage.Entry, placement *storage.ProviderEntry, err error) {
+	line := m.logger.Error().Err(err).Str("name", entry.Name)
+	if wait := providerWaitOf(err); wait != waitNone {
+		line = line.Stringer("wait", wait).Dur("waited", providerWaitAge(entry, placement))
+	}
+	line.Msg("Error checking status")
 }
 
 // providerWaitAge is how long the placement has waited on its provider, measured as statusWaitExhausted measures it.

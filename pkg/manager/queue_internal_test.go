@@ -254,6 +254,47 @@ func TestDeleteStalledRemovesQueuedEntriesWithNoJob(t *testing.T) {
 
 func noJob(string) bool { return false }
 
+// An entry removed from the queue outside the processor forgets its provider wait: the map stays bounded, and a
+// later grab of the same hash logs its wait's start at WARN again.
+func TestQueueRemovalForgetsTheProviderWait(t *testing.T) {
+	t.Parallel()
+	for name, remove := range map[string]func(*Queue, *storage.Entry) error{
+		"Delete": func(q *Queue, e *storage.Entry) error { return q.Delete(e.InfoHash, false, nil) },
+		"DeleteWhere": func(q *Queue, e *storage.Entry) error {
+			return q.DeleteWhere("", config.ProtocolAll, "", []string{e.InfoHash}, nil)
+		},
+		"DeleteStalled": func(q *Queue, _ *storage.Entry) error { return q.DeleteStalled(noJob) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			store, err := storage.NewStorage(filepath.Join(t.TempDir(), "db"), storage.Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			q := newQueue(store, "1h", nil, zerolog.Nop())
+			entry := &storage.Entry{
+				InfoHash: "0123456789ABCDEF0123456789ABCDEF01234567", Name: "converting",
+				AddedOn: time.Now().Add(-2 * time.Hour), State: storage.EntryStateDownloading,
+				Status: debridTypes.TorrentStatusQueued,
+			}
+			if addErr := q.Add(entry); addErr != nil {
+				t.Fatal(addErr)
+			}
+			q.waits.observe(entry.InfoHash, waitConverting)
+			if removeErr := remove(q, entry); removeErr != nil {
+				t.Fatal(removeErr)
+			}
+			if q.Contains(entry.InfoHash) {
+				t.Fatal("entry still queued")
+			}
+			if got := q.waits.observe(entry.InfoHash, waitConverting); got != waitNone {
+				t.Fatalf("after %s the entry's wait is still %s, want it forgotten", name, got)
+			}
+		})
+	}
+}
+
 // A local download resets Progress to 0 when it starts; the sweep used to take it for a stalled entry and cancel it.
 func TestDeleteStalledKeepsARunningLocalDownload(t *testing.T) {
 	t.Parallel()
