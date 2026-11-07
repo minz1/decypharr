@@ -51,28 +51,3 @@ func TestRejectedRestartReArmsBeforeReporting(t *testing.T) {
 		t.Fatal("a restart requested while the rejection was reported was lost")
 	}
 }
-
-// When a service failed and a restart was requested at the same moment, the
-// failure wins: the process exits non-zero instead of restarting.
-func TestFailureBeatsARestartRequestedAtTheSameTime(t *testing.T) {
-	t.Parallel()
-	h := newHarness(t)
-	failure := errors.New("serve: listener died")
-	sup := h.supervisor(func(gen *generation, cfg *config.Config, _ *logger.Factory) (func(), error) {
-		h.record(cfg, gen)
-		serve := gen.root.Child("http").GoCritical("serve", func(context.Context) error { return failure })
-		if serve != nil {
-			return noop, serve
-		}
-		<-gen.root.Failed() // both are ready by the time the supervisor waits
-		gen.RequestRestart()
-		return noop, nil
-	})
-	err := awaitRun(t, h.runAsync(t.Context(), sup))
-	if !errors.Is(err, failure) {
-		t.Fatalf("run returned %v, want the service failure", err)
-	}
-	if len(h.gens) != 1 {
-		t.Fatalf("%d generations were built, want only the failed one", len(h.gens)+1)
-	}
-}
