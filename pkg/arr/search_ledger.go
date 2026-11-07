@@ -145,6 +145,7 @@ func (s *Service) OpenSearchLedger(path string) error {
 	}
 	s.mu.Lock()
 	s.ledger = ledger
+	s.ledgerClosed = false
 	for _, row := range rows {
 		if row.State == ledgerAbandoned {
 			if removeErr := ledger.remove(row.Arr, row.Item.ID); removeErr != nil {
@@ -171,6 +172,7 @@ func (s *Service) Close() error {
 	s.mu.Lock()
 	ledger := s.ledger
 	s.ledger = nil
+	s.ledgerClosed = ledger != nil
 	s.mu.Unlock()
 	return ledger.close()
 }

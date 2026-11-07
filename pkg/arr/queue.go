@@ -668,6 +668,11 @@ func (s *Service) dropSearchLocked(name string, queueID int) {
 func (s *Service) planSearches(name string, searched []QueueSchema) bool {
 	var planned []pendingSearch
 	s.mu.RLock()
+	if s.ledgerClosed {
+		// A cleanup that outlived Close cannot record what it would owe, so it removes nothing.
+		s.mu.RUnlock()
+		return false
+	}
 	for _, item := range searched {
 		if _, owed := s.pendingSearches[name][item.ID]; !item.EpisodeHasFile && !owed {
 			planned = append(planned, pendingSearch{item: item, since: s.now(), state: ledgerPlanned})

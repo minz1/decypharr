@@ -197,6 +197,19 @@ func TestPlannedRowOfARecordStillQueuedIsDroppedAfterARestart(t *testing.T) {
 	}
 }
 
+// A cleanup still running after the service closed must not remove anything it
+// cannot record: a closed ledger is not the same as none configured.
+func TestCleanupAfterCloseRemovesNothing(t *testing.T) {
+	t.Parallel()
+	fake := newResearchArr(missingRecord(1, 11, "a", false))
+	rig := newLedgerRig(t, fake)
+	service := rig.start(t)
+	rig.crash(t, service)
+
+	runCleanup(t, service, "tv", 1)
+	fake.check(t, researchWant{})
+}
+
 // With no row on disk the DELETE would leave a search nothing remembers, so it
 // is not sent.
 func TestBlocklistDeleteWaitsForTheLedgerToTakeTheRow(t *testing.T) {

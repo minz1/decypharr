@@ -38,7 +38,9 @@ type Service struct {
 	pendingSearches map[string]map[int]pendingSearch
 	// ledger keeps pendingSearches on disk, nil when no data directory was given.
 	ledger *searchLedger
-	now    func() time.Time
+	// ledgerClosed is set once Close closed the ledger: a service that had one never goes back to having none.
+	ledgerClosed bool
+	now          func() time.Time
 	// guard limits how fast queue cleanup blocklists downloads.
 	guard *queueGuard
 }
