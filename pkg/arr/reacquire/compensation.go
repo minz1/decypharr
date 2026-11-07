@@ -67,6 +67,7 @@ func (s *Service) stopWithCompensation(
 	id string,
 	progress JobProgress,
 	cause error,
+	from func(Status) bool,
 ) bool {
 	searchNote := "no compensating search was sent"
 	if job, ok := s.Job(id); ok {
@@ -80,6 +81,13 @@ func (s *Service) stopWithCompensation(
 			}
 		}
 	}
+	if job, ok := s.Job(id); ok && from != nil && !from(job.Status) {
+		// A replacement can be indexed while the search is sent, and indexing completes a waiting job: it is ready
+		// then, which is the better ending. A job that moved elsewhere is left to whatever moved it.
+		s.logger.Debug().Str("job_id", id).Str("status", string(job.Status)).
+			Msg("Reacquire job completed while it was searched for; left as it is")
+		return true
+	}
 	monitorNote := "episodes are monitored again"
 	if job, ok := s.Job(id); ok {
 		var owed []int
@@ -92,7 +100,7 @@ func (s *Service) stopWithCompensation(
 			monitorNote = fmt.Sprintf("episodes %v could not be monitored again", owed)
 		}
 	}
-	return s.stopReconciliation(id, fmt.Errorf("%w; %s; %s", cause, searchNote, monitorNote))
+	return s.stopReconciliationFrom(id, fmt.Errorf("%w; %s; %s", cause, searchNote, monitorNote), from)
 }
 
 // heldProgress reports to a job but keeps it in one status, whatever status a step asks for.
@@ -123,14 +131,27 @@ func (s *Service) maintenanceContext() context.Context {
 // expireWaitingJob ends a job that waited for its replacement too long. A job
 // that deleted an Arr file is searched for once more and left for an operator:
 // failing it would leave the media missing with nothing looking for it.
+//
+// The caller read the job as waiting, but it may have moved since: a job that is no longer waiting is left alone,
+// and every step that changes it checks that it still is.
 func (s *Service) expireWaitingJob(ctx context.Context, id string) {
 	cause := errors.New("replacement was not imported before the reacquisition timeout")
 	if job, ok := s.Job(id); ok && job.hasFileDelete() {
-		// The search is sent beside the worker, so the job keeps its waiting status throughout: a dispatchable one
-		// would let the worker run the job against the same Arr, or stop it at the reconciliation deadline before
-		// the search is sent.
-		progress := heldProgress{inner: &serviceJobProgress{service: s, jobID: id}, status: job.Status}
-		s.stopWithCompensation(ctx, s.currentHandler(), id, progress, cause)
+		// The job keeps its waiting status while it is searched for, and each update checks that it still has it.
+		// A dispatchable status would let the worker run the job against the same Arr, or stop it at the
+		// reconciliation deadline before the search is sent. In production the worker and this pass share one loop
+		// and cannot overlap; holding the status makes that independent of the loop. Every held update runs
+		// completeJobFromIndex, and so does a binding indexed from another goroutine, so a replacement that
+		// arrives meanwhile completes the job; stopWithCompensation then leaves it ready.
+		held := &serviceJobProgress{service: s, jobID: id, from: Status.waiting}
+		s.stopWithCompensation(
+			ctx,
+			s.currentHandler(),
+			id,
+			heldProgress{inner: held, status: job.Status},
+			cause,
+			Status.waiting,
+		)
 		return
 	}
 	_, _ = s.updateJob(id, StatusFailed, func(job *Job) {

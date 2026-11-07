@@ -459,7 +459,7 @@ func (s *Service) settleFailure(
 	}
 	if current.hasConfirmedFileDelete() && !current.hasConfirmedSearchOrGrab() {
 		// The file is gone and nothing is searching for it: search, then let an operator look.
-		return s.stopWithCompensation(ctx, handler, current.ID, progress, err)
+		return s.stopWithCompensation(ctx, handler, current.ID, progress, err, nil)
 	}
 	if operator {
 		return s.stopReconciliation(current.ID, err)
@@ -490,11 +490,11 @@ func (s *Service) nextJob() (Job, bool) {
 }
 
 func (s *Service) updateJob(id string, status Status, mutate func(*Job)) (Job, error) {
-	return s.updateJobWithDurability(id, status, mutate, false)
+	return s.updateJobWithDurability(id, status, mutate, false, nil)
 }
 
 func (s *Service) updateJobDurable(id string, status Status, mutate func(*Job)) (Job, error) {
-	return s.updateJobWithDurability(id, status, mutate, true)
+	return s.updateJobWithDurability(id, status, mutate, true, nil)
 }
 
 var errNotWaiting = errors.New("reacquire job is not waiting")
@@ -519,11 +519,15 @@ func (s *Service) rebindJob(id string, bindings []Binding) error {
 	return nil
 }
 
+// updateJobWithDurability changes a job's status and fields in one step under the jobs lock. When from is set, the
+// job must be in a status it accepts at that moment: a caller that read the job earlier cannot move one that has
+// since gone elsewhere.
 func (s *Service) updateJobWithDurability(
 	id string,
 	status Status,
 	mutate func(*Job),
 	durable bool,
+	from func(Status) bool,
 ) (Job, error) {
 	if !status.valid() {
 		return Job{}, fmt.Errorf("invalid reacquire status %q", status)
@@ -534,6 +538,9 @@ func (s *Service) updateJobWithDurability(
 	original, ok := s.jobs[id]
 	if !ok {
 		return Job{}, fmt.Errorf("reacquire job %q not found", id)
+	}
+	if from != nil && !from(original.Status) {
+		return Job{}, fmt.Errorf("reacquire job %q is %s: %w", id, original.Status, errNotWaiting)
 	}
 	if original.Status.Terminal() && status != original.Status {
 		return Job{}, fmt.Errorf("reacquire job %q is already %s", id, original.Status)
@@ -629,6 +636,8 @@ type serviceJobProgress struct {
 	service *Service
 	jobID   string
 	waiting atomic.Bool
+	// from, when set, limits the statuses an update may move the job out of.
+	from func(Status) bool
 }
 
 func (progress *serviceJobProgress) Update(status Status, mutate func(*Job)) error {
@@ -643,15 +652,7 @@ func (progress *serviceJobProgress) update(status Status, mutate func(*Job), dur
 	if status.waiting() {
 		progress.waiting.Store(true)
 	}
-	var (
-		job Job
-		err error
-	)
-	if durable {
-		job, err = progress.service.updateJobDurable(progress.jobID, status, mutate)
-	} else {
-		job, err = progress.service.updateJob(progress.jobID, status, mutate)
-	}
+	job, err := progress.service.updateJobWithDurability(progress.jobID, status, mutate, durable, progress.from)
 	if err != nil || !status.waiting() {
 		return err
 	}

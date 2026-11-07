@@ -44,14 +44,20 @@ type NeedsAttention struct {
 }
 
 func (s *Service) stopReconciliation(id string, cause error) bool {
+	return s.stopReconciliationFrom(id, cause, nil)
+}
+
+// stopReconciliationFrom is stopReconciliation for a job that must still be in a status from accepts: it stops
+// nothing, and reports false, for one that has moved on.
+func (s *Service) stopReconciliationFrom(id string, cause error, from func(Status) bool) bool {
 	before, known := s.Job(id)
-	stopped, err := s.updateJobDurable(id, StatusNeedsAttention, func(job *Job) {
+	stopped, err := s.updateJobWithDurability(id, StatusNeedsAttention, func(job *Job) {
 		job.LastError = fmt.Sprintf(
 			"%v; check the action in Arr, then acknowledge this job before starting another",
 			cause,
 		)
 		job.RetryAt = time.Time{}
-	})
+	}, true, from)
 	if err != nil {
 		return false
 	}

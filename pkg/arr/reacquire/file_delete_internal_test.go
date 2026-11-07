@@ -1,6 +1,7 @@
 package reacquire
 
 import (
+	"bytes"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -27,6 +28,25 @@ type fakeSonarrRig struct {
 	job       Job
 	skew      atomic.Int64
 	announced attentionLog
+	logs      lockedBuffer
+}
+
+// lockedBuffer is a log sink the service's goroutines and the test can both use.
+type lockedBuffer struct {
+	mu   sync.Mutex
+	data bytes.Buffer
+}
+
+func (buffer *lockedBuffer) Write(p []byte) (int, error) {
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	return buffer.data.Write(p)
+}
+
+func (buffer *lockedBuffer) String() string {
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	return buffer.data.String()
 }
 
 // attentionLog collects the needs-attention notices a service raised.
@@ -76,6 +96,7 @@ func (rig *fakeSonarrRig) open(t *testing.T) {
 	t.Helper()
 	service, err := NewService(ServiceOptions{
 		Arrs: rig.arrs, Directory: rig.directory, OnNeedsAttention: rig.announced.add,
+		Logger: zerolog.New(&rig.logs).Level(zerolog.DebugLevel),
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -178,6 +178,45 @@ func TestExpiredJobIsNotDispatchableWhileItIsSearchedFor(t *testing.T) {
 	}
 }
 
+// A replacement that is indexed while the expired job is searched for completes it: the media exists again, so the
+// job ends ready rather than in needs_attention, and nothing is reported as an error.
+func TestReplacementLandingDuringTheExpirySearchEndsTheJobReady(t *testing.T) {
+	t.Parallel()
+	fake := newFakeSonarr(t, 101)
+	rig := newFakeSonarrRig(t, fake, StrategyCommandSearch, 101)
+	if waiting := rig.run(t); waiting.Status != StatusWaitingForGrab {
+		t.Fatalf("job = %s: %s", waiting.Status, waiting.LastError)
+	}
+	fake.onCommand = func() {
+		replacement := fakeSonarrBinding(fake.instance(), 101)
+		replacement.EntryID, replacement.EntryFileID, replacement.DownloadID = "entry-2", "file-2", "download-2"
+		replacement.ArrFileID, replacement.LibraryPath = fakeSonarrFileID+1, "/library/show/s01e01-new.mkv"
+		if err := rig.service.UpsertBinding(replacement); err != nil {
+			t.Errorf("index the replacement: %v", err)
+		}
+	}
+	if err := rig.service.SetHandler(rig.handler); err != nil {
+		t.Fatal(err)
+	}
+	rig.advance(waitingTimeout + time.Minute)
+	rig.service.expireWaitingJob(t.Context(), rig.job.ID)
+
+	done, _ := rig.service.Job(rig.job.ID)
+	if done.Status != StatusReady {
+		t.Fatalf("job = %s: %s", done.Status, done.LastError)
+	}
+	if notices := rig.announced.all(); len(notices) != 0 {
+		t.Fatalf("notices = %+v, want none", notices)
+	}
+	logged := rig.logs.String()
+	if strings.Contains(logged, `"level":"error"`) || strings.Contains(logged, `"level":"warn"`) {
+		t.Fatalf("a replacement that completed the job was logged as a problem: %s", logged)
+	}
+	if !strings.Contains(logged, "completed while it was searched for") {
+		t.Fatalf("the completion was not logged at debug: %s", logged)
+	}
+}
+
 // A handler that cannot send a search still does not fail the job.
 func TestFailureAfterTheDeleteWithoutASearchingHandlerStopsTheJob(t *testing.T) {
 	t.Parallel()
