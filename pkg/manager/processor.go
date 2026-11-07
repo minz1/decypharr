@@ -182,23 +182,50 @@ func (m *Manager) processQueuedEntries() {
 		return
 	}
 	for _, entry := range queueEntries {
-		// Only active downloads that no local worker is already driving.
-		if entry.State != storage.EntryStateDownloading || entry.Status == debridTypes.TorrentStatusQueued ||
-			entry.IsDownloading {
-			continue
-		}
-		task := m.queuedEntryTask(entry)
-		if task == nil {
-			continue
-		}
-		// Skip if a previous tick's goroutine hasn't finished yet for this hash.
-		if _, loaded := m.processingEntries.LoadOrStore(entry.InfoHash, struct{}{}); loaded {
-			continue
-		}
-		if !m.startDownloadTask(task) {
-			m.processingEntries.Delete(entry.InfoHash)
-		}
+		m.pollEntry(entry)
 	}
+}
+
+// pollEntry drives one entry of a queue listing. The listing can be stale by the
+// time the claim is taken (a hand-off action may have finished, errored or
+// deleted the entry), so the entry is re-read under the claim and the filter
+// re-applied; the task then works on the fresh copy.
+func (m *Manager) pollEntry(listed *storage.Entry) {
+	if !pollable(listed) || m.queuedEntryTask(listed) == nil {
+		return
+	}
+	// Skip if a previous tick's goroutine hasn't finished yet for this hash.
+	entry, claimed := m.claimDrivable(listed.InfoHash)
+	if !claimed {
+		return
+	}
+	task := m.queuedEntryTask(entry)
+	if !pollable(entry) || task == nil || !m.startDownloadTask(task) {
+		m.processingEntries.Delete(entry.InfoHash)
+	}
+}
+
+// pollable reports whether the poll drives an entry: an active download that
+// has left the queue and that no local worker is already driving.
+func pollable(entry *storage.Entry) bool {
+	return entry.State == storage.EntryStateDownloading && entry.Status != debridTypes.TorrentStatusQueued &&
+		!entry.IsDownloading
+}
+
+// claimDrivable takes the entry's processingEntries claim and returns the
+// entry re-read under it. It reports false, with no claim held, when another
+// driver holds the claim or the entry is gone, no longer downloading, or being
+// downloaded locally.
+func (m *Manager) claimDrivable(hash string) (*storage.Entry, bool) {
+	if _, loaded := m.processingEntries.LoadOrStore(hash, struct{}{}); loaded {
+		return nil, false
+	}
+	saved, err := m.queue.GetTorrent(hash)
+	if err != nil || saved.State != storage.EntryStateDownloading || saved.IsDownloading {
+		m.processingEntries.Delete(hash)
+		return nil, false
+	}
+	return saved, true
 }
 
 // queuedEntryTask returns the poll step for a queued entry, or nil when the
@@ -531,12 +558,7 @@ func (m *Manager) processNewTorrent(torrent *storage.Entry, debridTorrent *debri
 // Callers that already hold the claim (the poll) run processAction themselves.
 // Interim: the keyed owner replaces the claim map.
 func (m *Manager) startProcessAction(entry *storage.Entry) {
-	if _, loaded := m.processingEntries.LoadOrStore(entry.InfoHash, struct{}{}); loaded {
-		return
-	}
-	saved, err := m.queue.GetTorrent(entry.InfoHash)
-	if err != nil || saved.State != storage.EntryStateDownloading || saved.IsDownloading {
-		m.processingEntries.Delete(entry.InfoHash)
+	if _, claimed := m.claimDrivable(entry.InfoHash); !claimed {
 		return
 	}
 	started := m.startDownloadTask(func() {

@@ -220,6 +220,115 @@ func TestQueuedTorrentPollRunsTheActionOnceUnderItsClaim(t *testing.T) {
 	})
 }
 
+// A poll holds a listing taken before a hand-off action finished the entry. The
+// stale copy must not drive it: an NZB poll would write the deleted entry back
+// and run the action again.
+func TestPollOfAListedEntryDeletedMeanwhileWritesNothingBack(t *testing.T) {
+	t.Parallel()
+	usenetClient := newUnreachableUsenet(t)
+	synctest.Test(t, func(t *testing.T) {
+		m, starts := newClaimTestManager(t)
+		m.usenet = usenetClient
+		listed, meta := newClaimTestNZB(t, m)
+		if err := m.usenet.NZBStorage().AddNZB(meta); err != nil {
+			t.Fatal(err)
+		}
+		snapshot, err := m.queue.GetTorrent(claimTestHash)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if deleteErr := m.queue.Delete(claimTestHash, false, nil); deleteErr != nil {
+			t.Fatal(deleteErr)
+		}
+
+		m.pollEntry(snapshot)
+		synctest.Wait()
+
+		if starts.Load() != 0 {
+			t.Fatalf("a deleted entry started %d actions", starts.Load())
+		}
+		if m.queue.Contains(claimTestHash) {
+			t.Fatalf("the poll wrote the deleted entry %q back", listed.Name)
+		}
+		if _, claimed := m.processingEntries.Load(claimTestHash); claimed {
+			t.Fatal("a skipped poll leaked the claim")
+		}
+	})
+}
+
+// The same for an entry a hand-off has since marked as failed: the poll must
+// not run it again.
+func TestPollOfAListedEntryErroredMeanwhileDoesNotRunIt(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		m, starts := newClaimTestManager(t)
+		newClaimTestEntry(t, m)
+		m.clients.Store("provider", completedTorrentProvider{torrent: finishedClaimTorrent()})
+		snapshot, err := m.queue.GetTorrent(claimTestHash)
+		if err != nil {
+			t.Fatal(err)
+		}
+		failed, err := m.queue.GetTorrent(claimTestHash)
+		if err != nil {
+			t.Fatal(err)
+		}
+		failed.MarkAsError(errEntryDeleted)
+		if updateErr := m.queue.Update(failed); updateErr != nil {
+			t.Fatal(updateErr)
+		}
+
+		m.pollEntry(snapshot)
+		synctest.Wait()
+
+		if starts.Load() != 0 {
+			t.Fatalf("an errored entry started %d actions", starts.Load())
+		}
+		if _, claimed := m.processingEntries.Load(claimTestHash); claimed {
+			t.Fatal("a skipped poll leaked the claim")
+		}
+	})
+}
+
+// A hand-off skipped because a poll held the claim (the poll saw the NZB still
+// parsing) must not leave the action unrun: the next poll runs it, once.
+func TestHandOffSkippedBehindAPollIsRunByTheNextPoll(t *testing.T) {
+	t.Parallel()
+	usenetClient := newUnreachableUsenet(t)
+	synctest.Test(t, func(t *testing.T) {
+		m, starts := newClaimTestManager(t)
+		m.usenet = usenetClient
+		entry, meta := newClaimTestNZB(t, m)
+		meta.Status = usenet.NZBStatusParsing
+		if err := m.usenet.NZBStorage().AddNZB(meta); err != nil {
+			t.Fatal(err)
+		}
+
+		// The poll holds the claim while it reads the parsing meta.
+		m.processingEntries.Store(claimTestHash, struct{}{})
+		if err := m.processNZB(entry, meta); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		if starts.Load() != 0 {
+			t.Fatalf("a hand-off ran behind the poll's claim: starts = %d", starts.Load())
+		}
+		m.processingEntries.Delete(claimTestHash)
+
+		meta.Status = usenet.NZBStatusCompleted
+		if err := m.usenet.NZBStorage().AddNZB(meta); err != nil {
+			t.Fatal(err)
+		}
+		m.processQueuedEntries()
+		synctest.Wait()
+		m.processQueuedEntries()
+		synctest.Wait()
+
+		if got := starts.Load(); got != 1 {
+			t.Fatalf("post-download actions started = %d, want exactly 1", got)
+		}
+	})
+}
+
 // newClaimTestNZB queues a processed NZB whose files never reach the mount.
 func newClaimTestNZB(t *testing.T, m *Manager) (*storage.Entry, *storage.NZB) {
 	t.Helper()
