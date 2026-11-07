@@ -76,7 +76,7 @@ func TestDebugTasksShowsTheMailboxesOfTheWiredRunners(t *testing.T) {
 		entered <- struct{}{}
 		<-release
 	})
-	runner := keyed.New[string, int](g, "entries", h, keyed.Options[int]{})
+	runner := keyed.New[string, int, struct{}](g, "entries", h, keyed.Options[int]{})
 	t.Cleanup(func() { close(release) })
 	for range 3 {
 		if err := runner.Send("Show.S01", 1); err != nil {

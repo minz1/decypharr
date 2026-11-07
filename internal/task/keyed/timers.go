@@ -52,7 +52,7 @@ func (h *timerHeap[K, M]) Pop() any {
 // lose it: the message goes through the mailbox, past its bound, and starts
 // the goroutine if it has exited. It returns the timer's id, or 0 once the
 // runner has stopped.
-func (r *Runner[K, M]) After(key K, d time.Duration, msg M) TimerID {
+func (r *Runner[K, M, S]) After(key K, d time.Duration, msg M) TimerID {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if !r.accepting() {
@@ -72,7 +72,7 @@ func (r *Runner[K, M]) After(key K, d time.Duration, msg M) TimerID {
 
 // CancelTimer cancels a pending timer. A timer that already fired, or was
 // already cancelled, is left alone.
-func (r *Runner[K, M]) CancelTimer(id TimerID) {
+func (r *Runner[K, M, S]) CancelTimer(id TimerID) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	entry, ok := r.timerByID[id]
@@ -88,7 +88,7 @@ func (r *Runner[K, M]) CancelTimer(id TimerID) {
 }
 
 // fireDueLocked delivers every timer that is due.
-func (r *Runner[K, M]) fireDueLocked(now time.Time) {
+func (r *Runner[K, M, S]) fireDueLocked(now time.Time) {
 	for len(r.timers) > 0 && !r.timers[0].due.After(now) {
 		entry, _ := heap.Pop(&r.timers).(*timerEntry[K, M])
 		delete(r.timerByID, entry.id)
@@ -102,7 +102,7 @@ func (r *Runner[K, M]) fireDueLocked(now time.Time) {
 }
 
 // clearTimersLocked cancels every pending timer.
-func (r *Runner[K, M]) clearTimersLocked() {
+func (r *Runner[K, M, S]) clearTimersLocked() {
 	r.timers = nil
 	clear(r.timerByID)
 	for _, a := range r.keys {
@@ -113,7 +113,7 @@ func (r *Runner[K, M]) clearTimersLocked() {
 
 // supervise is the runner's own task: it fires the timers as they fall due,
 // and ends the runner when the group stops.
-func (r *Runner[K, M]) supervise(ctx context.Context) error {
+func (r *Runner[K, M, S]) supervise(ctx context.Context) error {
 	timer := time.NewTimer(time.Hour)
 	defer timer.Stop()
 	for {

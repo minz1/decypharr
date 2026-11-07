@@ -145,7 +145,7 @@ func (o *observer) total() int {
 type replay struct {
 	t       *testing.T
 	root    *task.Group
-	runner  *keyed.Runner[int, int]
+	runner  *keyed.Runner[int, int, struct{}]
 	obs     *observer
 	elapsed time.Duration
 	stopped bool
@@ -163,7 +163,7 @@ func newReplay(t *testing.T) *replay {
 		t:    t,
 		root: root,
 		obs:  obs,
-		runner: keyed.New[int, int](root, "prop", keyed.HandlerFunc[int, int](obs.handle),
+		runner: keyed.New[int, int, struct{}](root, "prop", keyed.HandlerFunc[int, int](obs.handle),
 			keyed.Options[int]{MailboxSize: 1_000, IdleAfter: propIdle}),
 		sent: map[int][]int{},
 	}

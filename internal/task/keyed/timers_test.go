@@ -14,7 +14,7 @@ func TestATimerDeliversItsMessageThroughTheMailbox(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		rec := newRecorder()
-		r := keyed.New[string, msg](newRoot(t), "timer", rec, keyed.Options[msg]{})
+		r := keyed.New[string, msg, struct{}](newRoot(t), "timer", rec, keyed.Options[msg]{})
 		if id := r.After("a", 5*time.Second, msg{id: 1}); id == 0 {
 			t.Fatal("After returned no timer id")
 		}
@@ -37,7 +37,7 @@ func TestATimerSurvivesTheKeysIdleExit(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		rec := newRecorder()
-		r := keyed.New[string, msg](newRoot(t), "survive", rec, keyed.Options[msg]{IdleAfter: time.Second})
+		r := keyed.New[string, msg, struct{}](newRoot(t), "survive", rec, keyed.Options[msg]{IdleAfter: time.Second})
 		mustSend(t, r, "a", msg{id: 1})
 		r.After("a", time.Minute, msg{id: 2})
 
@@ -64,7 +64,7 @@ func TestACancelledTimerNeverFires(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		rec := newRecorder()
-		r := keyed.New[string, msg](newRoot(t), "cancel", rec, keyed.Options[msg]{})
+		r := keyed.New[string, msg, struct{}](newRoot(t), "cancel", rec, keyed.Options[msg]{})
 		id := r.After("a", 5*time.Second, msg{id: 1})
 		keep := r.After("a", 6*time.Second, msg{id: 2})
 		time.Sleep(time.Second)
@@ -85,7 +85,7 @@ func TestTimersFireInDueOrder(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		rec := newRecorder()
-		r := keyed.New[string, msg](newRoot(t), "order", rec, keyed.Options[msg]{})
+		r := keyed.New[string, msg, struct{}](newRoot(t), "order", rec, keyed.Options[msg]{})
 		r.After("a", 3*time.Second, msg{id: 3})
 		r.After("a", time.Second, msg{id: 1})
 		r.After("a", 2*time.Second, msg{id: 2})
@@ -104,7 +104,7 @@ func TestATimerIsNeverDroppedWhenTheMailboxIsFull(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		rec := newRecorder()
-		r := keyed.New[string, msg](newRoot(t), "timers-full", rec, keyed.Options[msg]{MailboxSize: 1})
+		r := keyed.New[string, msg, struct{}](newRoot(t), "timers-full", rec, keyed.Options[msg]{MailboxSize: 1})
 		release := make(chan struct{})
 		mustSend(t, r, "a", msg{id: 1, block: release})
 		synctest.Wait()
@@ -127,7 +127,7 @@ func TestAHandlerSetsAndCancelsItsOwnTimers(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		rec := newRecorder()
-		r := keyed.New[string, msg](newRoot(t), "own", rec, keyed.Options[msg]{})
+		r := keyed.New[string, msg, struct{}](newRoot(t), "own", rec, keyed.Options[msg]{})
 		mustSend(t, r, "a", msg{id: 1, run: func(_ context.Context, fx *keyed.Effects[string, msg]) {
 			fx.After(time.Second, msg{id: 2})
 			fx.CancelTimer(fx.After(time.Second, msg{id: 3}))
@@ -147,7 +147,7 @@ func TestStopCancelsTheTimers(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		rec := newRecorder()
 		g := newRoot(t)
-		r := keyed.New[string, msg](g, "stop-timers", rec, keyed.Options[msg]{})
+		r := keyed.New[string, msg, struct{}](g, "stop-timers", rec, keyed.Options[msg]{})
 		r.After("a", time.Hour, msg{id: 1})
 
 		stop(t, g)
