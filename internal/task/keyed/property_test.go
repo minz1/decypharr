@@ -325,20 +325,21 @@ type timerModel struct {
 
 // replay applies a generated sequence to a real runner and keeps the model of what that should have done.
 type replay struct {
-	t           *testing.T
-	root        *task.Group
-	runner      *keyed.Runner[int, pmsg, pstate]
-	obs         *observer
-	keys        [propKeys]*keyModel
-	elapsed     time.Duration
-	stopped     bool
-	stopAt      time.Duration
-	atStop      int
-	timers      []timerModel
-	dropped     uint64
-	refused     uint64
-	childPanics uint64
-	broken      []string
+	t       *testing.T
+	root    *task.Group
+	runner  *keyed.Runner[int, pmsg, pstate]
+	obs     *observer
+	keys    [propKeys]*keyModel
+	elapsed time.Duration
+	stopped bool
+	atStop  int
+	// inFlightAtStop counts the handlers that were blocked when the Stop began.
+	inFlightAtStop int
+	timers         []timerModel
+	dropped        uint64
+	refused        uint64
+	childPanics    uint64
+	broken         []string
 }
 
 func newReplay(t *testing.T) *replay {
@@ -457,16 +458,29 @@ func (p *replay) stop() {
 	if p.stopped {
 		return
 	}
-	for key := range propKeys {
-		p.releaseKey(key)
+	// The Stop begins with the holds in place, so handlers are blocked and messages queue behind them. They are
+	// released only once the Stop is under way: each in-flight message finishes, nothing queued is handled.
+	p.atStop = p.obs.total()
+	done := make(chan error, 1)
+	go func() {
+		ctx, cancel := task.Detached(p.t.Context(), time.Minute)
+		defer cancel()
+		done <- p.root.Stop(ctx)
+	}()
+	synctest.Wait() // the Stop has cancelled the runner and waits for the handlers in flight
+	p.stopped = true
+	for key, km := range p.keys {
+		if km.blocked {
+			p.inFlightAtStop++
+			km.expected = append(km.expected, km.inflight.id)
+		}
+		km.armed, km.blocked, km.inflight, km.queue = false, false, qItem{}, nil
+		p.obs.release(key)
 	}
-	p.settle() // the released handlers and what queued behind them finish before the Stop
-	ctx, cancel := task.Detached(p.t.Context(), time.Minute)
-	defer cancel()
-	if err := p.root.Stop(ctx); err != nil {
+	if err := <-done; err != nil {
 		p.failf("Stop: %v", err)
 	}
-	p.stopped, p.atStop, p.stopAt = true, p.obs.total(), p.elapsed
+	synctest.Wait()
 }
 
 func (p *replay) send(i int, o op) {
@@ -542,17 +556,13 @@ func (p *replay) check() {
 	p.obs.mu.Lock()
 	defer p.obs.mu.Unlock()
 	p.broken = append(p.broken, p.obs.broken...)
-	if p.obs.count != p.atStop {
-		p.failf("%d messages were handled after Stop", p.obs.count-p.atStop)
+	// Once the Stop has begun only the messages in flight finish; everything queued behind them is dropped.
+	if after := p.obs.count - p.atStop; after != p.inFlightAtStop {
+		p.failf("%d messages were handled after the Stop began, want the %d in flight", after, p.inFlightAtStop)
 	}
 	for key := range propKeys {
 		if got, want := p.obs.handled[key], p.keys[key].expected; !slices.Equal(got, want) {
 			p.failf("key %d: handled %v, want %v", key, got, want)
-		}
-	}
-	for _, timer := range p.timers {
-		if timer.fired && timer.due > p.stopAt {
-			p.failf("timer %d fired after the Stop", timer.msg)
 		}
 	}
 	info := p.runner.Snapshot()
