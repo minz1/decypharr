@@ -194,6 +194,7 @@ func (m *Manager) failGrab(entry *storage.Entry, recovery ArrRecovery, arrName, 
 		provider = string(config.ProtocolTorrent)
 	}
 	downloadID := strings.ToUpper(entry.InfoHash)
+	// A cancelled context makes a canary inconclusive, so the call holds (fails closed); a grab held at shutdown is lost (accepted).
 	ctx := m.work.Context()
 	if err := m.arr.AdmitFailGrab(ctx, arrName, downloadID, provider); err != nil {
 		return err
