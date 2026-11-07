@@ -98,6 +98,11 @@ func (s *Service) requeueWaitingJob(key jobKey) (*Job, bool, error) {
 	return &requeued, true, nil
 }
 
+// enqueue queues the job for binding and the other files of the same download.
+//
+// Invariant: the Arr files a job deletes are exactly the imported files of the managed entries it invalidates.
+// Only bindings that authorize a mutation are kept, so a file bound any weaker is not deleted, and the invalidator
+// (see InvalidationChecker) refuses an entry that has such a file instead of deleting its data under the Arr file.
 func (s *Service) enqueue(request Request, binding Binding) (*Job, error) {
 	// An unindexed file can become indexed while its replacement is pending.
 	// Keep both request paths attached to the existing job.
@@ -402,6 +407,9 @@ func (s *Service) settleJob(
 		}
 		s.scheduleRetry(queued)
 		return true
+	}
+	if errors.Is(err, ErrOperatorRequired) {
+		return s.stopReconciliation(id, err)
 	}
 	if err != nil {
 		if current.hasAttemptedIntent() {

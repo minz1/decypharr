@@ -17,8 +17,26 @@ type arrHandler struct {
 	invalidator Invalidator
 }
 
+// Invalidator removes the managed entries a reacquire job replaces. An
+// Invalidator that can also say beforehand whether it will do so, by
+// implementing InvalidationChecker, lets a job stop before it touches the Arr.
 type Invalidator interface {
 	InvalidateReacquire(context.Context, Job) error
+}
+
+// InvalidationChecker is the read-only half of an Invalidator: it fails with
+// OperatorRequired when invalidating the job's entries would be unsafe.
+type InvalidationChecker interface {
+	CheckInvalidation(context.Context, Job) error
+}
+
+// ErrOperatorRequired marks a refusal only an operator can settle. A job that
+// meets it stops in needs_attention rather than failing or retrying.
+var ErrOperatorRequired = errors.New("needs an operator")
+
+// OperatorRequired is ErrOperatorRequired with the reason the operator needs.
+func OperatorRequired(reason string) error {
+	return fmt.Errorf("%w: %s", ErrOperatorRequired, reason)
 }
 
 // NewHandler returns the Arr-backed Handler. invalidator may be nil.
@@ -33,6 +51,12 @@ func (handler *arrHandler) Reacquire(ctx context.Context, job Job, progress JobP
 	plan, err := handler.prepare(ctx, job)
 	if err != nil {
 		return err
+	}
+	// Refuse before the Arr is touched when the entries cannot be invalidated safely afterwards.
+	if checker, ok := handler.invalidator.(InvalidationChecker); ok && handler.invalidates(plan) {
+		if checkErr := checker.CheckInvalidation(ctx, plan.invalidationJob(job)); checkErr != nil {
+			return checkErr
+		}
 	}
 
 	if updateErr := progress.Update(StatusInvalidating, nil); updateErr != nil {
@@ -51,17 +75,27 @@ func (handler *arrHandler) Reacquire(ctx context.Context, job Job, progress JobP
 	if err != nil {
 		return err
 	}
-	if handler.invalidator != nil && plan.bindings[0].Confidence != ConfidenceLibraryFile {
-		invalidationJob := job
-		invalidationJob.Bindings = plan.bindings
+	if handler.invalidates(plan) {
 		if invalidateReacquireErr := handler.invalidator.InvalidateReacquire(
 			ctx,
-			invalidationJob,
+			plan.invalidationJob(job),
 		); invalidateReacquireErr != nil {
 			return invalidateReacquireErr
 		}
 	}
 	return progress.Update(waitingStatus, nil)
+}
+
+// invalidates reports whether the job's managed entries are invalidated once it has searched: a file the Arr
+// holds without a managed entry has none to remove.
+func (handler *arrHandler) invalidates(plan reacquirePlan) bool {
+	return handler.invalidator != nil && plan.bindings[0].Confidence != ConfidenceLibraryFile
+}
+
+// invalidationJob is the job as the invalidator sees it: its bindings are those that authorize a mutation.
+func (plan reacquirePlan) invalidationJob(job Job) Job {
+	job.Bindings = plan.bindings
+	return job
 }
 
 // failDownload fails the grab of a download that has no library files. It
