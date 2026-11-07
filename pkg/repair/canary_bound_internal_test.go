@@ -58,8 +58,8 @@ func TestCanaryProbeEndsWithTheServiceLifetime(t *testing.T) {
 		if err := <-ended; !errors.Is(err, context.Canceled) {
 			t.Fatalf("the probe ended with %v, want it cancelled", err)
 		}
-		if got := <-done; got != canaryInconclusive {
-			t.Fatalf("verdict = %v, want inconclusive", got)
+		if got := <-done; got != canaryAborted {
+			t.Fatalf("verdict = %v, want aborted", got)
 		}
 	})
 }

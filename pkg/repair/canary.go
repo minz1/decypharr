@@ -74,6 +74,8 @@ func (r *Service) QueueCanary(ctx context.Context, provider string) arr.CanaryVe
 		return arr.CanaryFail
 	case canaryInconclusive:
 		return arr.CanaryInconclusive
+	case canaryAborted:
+		return arr.CanaryAborted
 	case canaryNone:
 		return arr.CanaryNone
 	}

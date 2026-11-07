@@ -23,6 +23,9 @@ const (
 	CanaryFail
 	// CanaryInconclusive neither passed nor showed the provider failing.
 	CanaryInconclusive
+	// CanaryAborted is a probe cut off because the repair service stopped. It says nothing about the provider: the
+	// excess waits for the next window, nothing is cached and no bucket trips.
+	CanaryAborted
 )
 
 // QueueGuardHooks is what the manager lends the queue guard. Each hook may be nil; a nil Canary reads as an
@@ -325,6 +328,9 @@ func (s *Service) canaryFor(ctx context.Context, provider string, ttl time.Durat
 			probeCtx, cancel := context.WithTimeout(s.lifetime, guardCanaryTimeout)
 			verdict = probe(probeCtx, provider)
 			cancel()
+		}
+		if verdict == CanaryAborted {
+			return verdict, nil // not a finding about the provider: not cached
 		}
 		s.guard.mu.Lock()
 		s.guard.verdicts[provider] = guardVerdict{verdict: verdict, at: s.now()}

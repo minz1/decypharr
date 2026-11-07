@@ -144,6 +144,9 @@ const (
 	canaryFail
 	// canaryInconclusive is a canary that neither passed nor showed this bucket's failure.
 	canaryInconclusive
+	// canaryAborted is a probe cut off because the service stopped. It says nothing about the provider, so it holds
+	// the evaluation that asked but is never cached and never trips a bucket.
+	canaryAborted
 )
 
 type canaryVerdict struct {
@@ -358,6 +361,12 @@ func (b *breaker) probeCanary(ctx context.Context, key Bucket) canaryOutcome {
 			probeCtx, cancel := context.WithTimeout(ctx, canaryProbeTimeout)
 			verdict = b.canary(probeCtx, key, b.settings())
 			cancel()
+			if errors.Is(ctx.Err(), context.Canceled) {
+				// The service stopped under the probe (a restart for a settings change, or shutdown). Whatever it
+				// found says nothing about the provider and must not hold the bucket for the cache's length. A
+				// timeout is different: the provider did not answer in time, and that is cached.
+				return canaryAborted, nil
+			}
 		}
 		b.mu.Lock()
 		b.verdicts[key] = canaryVerdict{outcome: verdict, at: b.now()}
@@ -436,7 +445,7 @@ func (b *breaker) canaryStepLocked(
 	switch outcome {
 	case canaryFail:
 		return b.tripLocked(bk, now, in.runID, holdCanaryFailed), false
-	case canaryInconclusive:
+	case canaryInconclusive, canaryAborted:
 		return bucketOutcome{hold: holdCanaryInconclusive}, false
 	case canaryNone, canaryPass:
 		if releasing && outcome == canaryNone && (in.runID == "" || !in.sample.passes()) {
