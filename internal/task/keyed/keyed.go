@@ -128,6 +128,7 @@ func (r *Runner[K, M, S]) abandonLocked(a *actor[K, M]) {
 		if env.reply != nil {
 			env.reply.finish(nil, ErrHandlerPanicked)
 		}
+		delete(r.queuedTimers, env.timer)
 		a.dropped++
 		r.totalDropped.Add(1)
 	}
@@ -199,6 +200,8 @@ type envelope[M any] struct {
 	coalesce string
 	// bypass marks a message that does not count against the mailbox bound: a timer, or a child task's result.
 	bypass bool
+	// timer is the timer that delivered the message, so cancelling the timer can take the message back.
+	timer TimerID
 	// reply is where the asker of an Ask waits; nil for a message from Send.
 	reply *replySlot
 }
@@ -251,8 +254,10 @@ type Runner[K comparable, M, S any] struct {
 	// Timers belong to the runner (see timers.go). Guarded by mu.
 	timers    timerHeap[K, M]
 	timerByID map[TimerID]*timerEntry[K, M]
-	lastTimer TimerID
-	timerWake chan struct{}
+	// queuedTimers maps a fired timer whose message still waits in a mailbox to its key.
+	queuedTimers map[TimerID]K
+	lastTimer    TimerID
+	timerWake    chan struct{}
 
 	totalHandled                               atomic.Uint64
 	totalPanics                                atomic.Uint64
@@ -272,17 +277,18 @@ func New[K comparable, M, S any](g *task.Group, name string, h Handler[K, M, S],
 	}
 	child := g.Child(name)
 	r := &Runner[K, M, S]{
-		name:      name,
-		group:     child,
-		handler:   h,
-		opts:      opts,
-		logger:    opts.Logger,
-		noIdle:    opts.IdleAfter < 0,
-		lifecycle: state.NewAtomic(runRunning, runSuccessors),
-		ctx:       child.Context(),
-		keys:      make(map[K]*actor[K, M]),
-		timerByID: make(map[TimerID]*timerEntry[K, M]),
-		timerWake: make(chan struct{}, 1),
+		name:         name,
+		group:        child,
+		handler:      h,
+		opts:         opts,
+		logger:       opts.Logger,
+		noIdle:       opts.IdleAfter < 0,
+		lifecycle:    state.NewAtomic(runRunning, runSuccessors),
+		ctx:          child.Context(),
+		keys:         make(map[K]*actor[K, M]),
+		timerByID:    make(map[TimerID]*timerEntry[K, M]),
+		queuedTimers: make(map[TimerID]K),
+		timerWake:    make(chan struct{}, 1),
 	}
 	if err := child.Go("supervisor", r.supervise); err != nil {
 		r.lifecycle.Transition(runRunning, runStopping)
@@ -529,6 +535,7 @@ func (r *Runner[K, M, S]) loop(ctx context.Context, a *actor[K, M]) {
 			if env.bypass {
 				a.bypassed--
 			}
+			delete(r.queuedTimers, env.timer)
 			r.mu.Unlock()
 			r.handle(hctx, a, &held, env)
 			continue
@@ -562,6 +569,7 @@ func (r *Runner[K, M, S]) exitLocked(a *actor[K, M], stopping bool) {
 	if stopping {
 		for _, env := range a.queue {
 			dropReply(env.reply)
+			delete(r.queuedTimers, env.timer)
 		}
 		a.queue, a.bypassed = nil, 0
 	}
