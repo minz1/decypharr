@@ -257,6 +257,7 @@ func (m *Manager) failGrab(entry *storage.Entry, recovery ArrRecovery, arrName, 
 	}
 	job, err := recovery.FailDownload(arrName, downloadID, entry.InfoHash)
 	if err != nil {
+		m.arr.ReleaseFailGrab(arrName, downloadID, provider)
 		return fmt.Errorf("fail download in %s: %w", arrName, err)
 	}
 	m.arr.CommitFailGrab(arrName, downloadID, provider)

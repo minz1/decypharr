@@ -50,7 +50,7 @@ func (g *queueGuard) decide(
 	held := make(map[*guardUnit]bool)
 	events := g.applyPlansLocked(plans, limits, now, held)
 	events = append(events, g.capArrLocked(arrName, ordered, limits, now, held)...)
-	return guardDecision{allowed: g.settleLocked(ordered, held, now), events: events}, nil
+	return guardDecision{allowed: g.settleLocked(arrName, ordered, held, now), events: events}, nil
 }
 
 // releaseDrainedLocked closes a tripped bucket once its window has drained below the free allowance again.
@@ -188,7 +188,9 @@ func (g *queueGuard) capArrLocked(
 }
 
 // settleLocked remembers when each held download was first held and returns the queue rows of those that go ahead.
-func (g *queueGuard) settleLocked(ordered []*guardUnit, held map[*guardUnit]bool, now time.Time) map[int]bool {
+func (g *queueGuard) settleLocked(
+	arrName string, ordered []*guardUnit, held map[*guardUnit]bool, now time.Time,
+) map[int]bool {
 	allowed := make(map[int]bool)
 	for _, unit := range ordered {
 		id := unit.id()
@@ -199,9 +201,27 @@ func (g *queueGuard) settleLocked(ordered []*guardUnit, held map[*guardUnit]bool
 			continue
 		}
 		delete(g.heldSince, id)
+		g.reserveLocked(arrName, unit, now)
 		for _, row := range unit.rows {
 			allowed[row] = true
 		}
 	}
 	return allowed
+}
+
+// reserveLocked counts an admitted download at once, so callers admitted meanwhile are judged against it; commit
+// confirms it once its blocklist is sent and release takes it back if the blocklist was not.
+func (g *queueGuard) reserveLocked(arrName string, unit *guardUnit, now time.Time) {
+	bucket := g.bucketLocked(unit.key)
+	if _, counted := bucket.sent[unit.download]; counted {
+		return
+	}
+	bucket.sent[unit.download] = now
+	if g.arrSent[arrName] == nil {
+		g.arrSent[arrName] = make(map[string]time.Time)
+	}
+	if _, counted := g.arrSent[arrName][unit.download]; !counted {
+		g.arrSent[arrName][unit.download] = now
+	}
+	g.pending[unit.id()] = struct{}{}
 }

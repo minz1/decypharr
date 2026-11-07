@@ -67,6 +67,11 @@ func (s *Service) AdmitFailGrab(ctx context.Context, arrName, downloadID, provid
 	return fmt.Errorf("%w: %s in %s", ErrBlocklistHeld, downloadID, arrName)
 }
 
+// ReleaseFailGrab gives back the place AdmitFailGrab reserved when the grab was then not failed.
+func (s *Service) ReleaseFailGrab(arrName, downloadID, provider string) {
+	s.guard.release(arrName, []QueueSchema{{ID: 1, DownloadID: downloadID, rule: failGrabRule, provider: provider}})
+}
+
 // CommitFailGrab counts a grab failure AdmitFailGrab admitted and that was sent.
 func (s *Service) CommitFailGrab(arrName, downloadID, provider string) {
 	s.guard.commit(
@@ -143,6 +148,8 @@ type queueGuard struct {
 	// arrWarned is when an arr's hard cap was last logged.
 	arrWarned map[string]time.Time
 	verdicts  map[string]guardVerdict
+	// pending holds the downloads reserved by decide whose blocklist has not yet been committed or released.
+	pending map[string]struct{}
 }
 
 func newQueueGuard() *queueGuard {
@@ -152,6 +159,7 @@ func newQueueGuard() *queueGuard {
 		heldSince: make(map[string]time.Time),
 		arrWarned: make(map[string]time.Time),
 		verdicts:  make(map[string]guardVerdict),
+		pending:   make(map[string]struct{}),
 	}
 }
 
@@ -341,6 +349,7 @@ func (g *queueGuard) pruneLocked(arrName string, now time.Time, window time.Dura
 		for download, at := range bucket.sent {
 			if at.Before(cutoff) {
 				delete(bucket.sent, download)
+				delete(g.pending, (&guardUnit{key: key, download: download}).id())
 			}
 		}
 	}
@@ -371,7 +380,44 @@ func (g *queueGuard) commit(arrName string, items []QueueSchema, now time.Time) 
 			g.arrSent[arrName] = make(map[string]time.Time)
 		}
 		g.arrSent[arrName][download] = now
+		delete(g.pending, (&guardUnit{key: key, download: download}).id())
 	}
+}
+
+// release takes back the reservations of items whose blocklist was refused or never sent. A download already
+// committed stays counted.
+func (g *queueGuard) release(arrName string, items []QueueSchema) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, item := range items {
+		if item.rule == "" {
+			continue
+		}
+		key := guardKey{arr: arrName, rule: item.rule, provider: item.provider}
+		download := downloadKey(item)
+		id := (&guardUnit{key: key, download: download}).id()
+		if _, reserved := g.pending[id]; !reserved {
+			continue
+		}
+		delete(g.pending, id)
+		delete(g.bucketLocked(key).sent, download)
+		if !g.countedElsewhereLocked(arrName, download) {
+			delete(g.arrSent[arrName], download)
+		}
+	}
+}
+
+// countedElsewhereLocked reports whether another bucket of the arr still counts the download.
+func (g *queueGuard) countedElsewhereLocked(arrName, download string) bool {
+	for key, bucket := range g.buckets {
+		if key.arr != arrName {
+			continue
+		}
+		if _, ok := bucket.sent[download]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // keepAllowed returns the items whose rows the guard admitted.

@@ -201,10 +201,7 @@ func (s *Service) CleanupQueue(ctx context.Context, name string) error {
 	s.dropRejudgedSearches(name, items)
 	// The arr forgets a download removed this way without searching for it, so the search is owed from before the
 	// removal is sent. If the owed searches cannot be recorded, nothing is removed.
-	if s.planSearches(name, searched) {
-		outcome := s.blocklistQueueItems(ctx, name, blocklistSearchMissing, QueueActionBlocklistResearch, true)
-		s.settleSearches(name, searched, outcome)
-	}
+	s.blocklistWithOwedSearches(ctx, name, blocklistSearchMissing, searched)
 	s.searchPendingEpisodes(ctx, name, items)
 	s.blocklistQueueItems(ctx, name, blocklist, QueueActionBlocklist, true)
 	s.removeLeftovers(ctx, name, leftovers)
@@ -547,6 +544,7 @@ func (s *Service) blocklistQueueItems(
 			s.guard.commit(name, items, s.now())
 			return removalUnknown
 		}
+		s.guard.release(name, items)
 		return removalRefused
 	}
 	s.guard.commit(name, items, s.now())
@@ -555,6 +553,18 @@ func (s *Service) blocklistQueueItems(
 			Str("action", string(action)).Str("status", statusText(item)).Msg("Queue cleanup: blocklisted")
 	}
 	return removalDone
+}
+
+// blocklistWithOwedSearches blocklists items without the arr's re-search, once the searches owed for those of them in
+// searched are recorded. If they cannot be recorded nothing is removed, and the guard's places for items are given
+// back.
+func (s *Service) blocklistWithOwedSearches(ctx context.Context, name string, items, searched []QueueSchema) {
+	if !s.planSearches(name, searched) {
+		s.guard.release(name, items)
+		return
+	}
+	outcome := s.blocklistQueueItems(ctx, name, items, QueueActionBlocklistResearch, true)
+	s.settleSearches(name, searched, outcome)
 }
 
 // removeLeftovers removes the rows of packs that did their job, keeping the release and the client's copy.
