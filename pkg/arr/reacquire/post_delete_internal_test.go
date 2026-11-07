@@ -149,6 +149,33 @@ func TestExpiredWaitingJobWithADeletedFileSearchesAgain(t *testing.T) {
 	}
 }
 
+// The maintenance pass that searches for an expired job runs beside the worker. The job must stay out of the
+// worker's reach while it does: a dispatchable status would let the worker run the job against the same Arr, or
+// stop it at the reconciliation deadline before the search is sent.
+func TestExpiredJobIsNotDispatchableWhileItIsSearchedFor(t *testing.T) {
+	t.Parallel()
+	fake := newFakeSonarr(t, 101)
+	rig := newFakeSonarrRig(t, fake, StrategyCommandSearch, 101)
+	if waiting := rig.run(t); waiting.Status != StatusWaitingForGrab {
+		t.Fatalf("job = %s: %s", waiting.Status, waiting.LastError)
+	}
+	var seen []Status
+	fake.onCommand = func() {
+		if job, ok := rig.service.Job(rig.job.ID); ok {
+			seen = append(seen, job.Status)
+		}
+	}
+	if err := rig.service.SetHandler(rig.handler); err != nil {
+		t.Fatal(err)
+	}
+	rig.advance(waitingTimeout + time.Minute)
+	rig.service.expireWaitingJob(t.Context(), rig.job.ID)
+
+	if len(seen) != 1 || seen[0].dispatchable() {
+		t.Fatalf("status when the compensating search arrived = %v, want one non-dispatchable status", seen)
+	}
+}
+
 // A handler that cannot send a search still does not fail the job.
 func TestFailureAfterTheDeleteWithoutASearchingHandlerStopsTheJob(t *testing.T) {
 	t.Parallel()

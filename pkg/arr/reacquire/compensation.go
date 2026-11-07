@@ -95,6 +95,20 @@ func (s *Service) stopWithCompensation(
 	return s.stopReconciliation(id, fmt.Errorf("%w; %s; %s", cause, searchNote, monitorNote))
 }
 
+// heldProgress reports to a job but keeps it in one status, whatever status a step asks for.
+type heldProgress struct {
+	inner  JobProgress
+	status Status
+}
+
+func (progress heldProgress) Update(_ Status, mutate func(*Job)) error {
+	return progress.inner.Update(progress.status, mutate)
+}
+
+func (progress heldProgress) UpdateDurable(_ Status, mutate func(*Job)) error {
+	return progress.inner.UpdateDurable(progress.status, mutate)
+}
+
 // maintenanceContext is the context of the service's own work: the one Start
 // was given, or a background one before it.
 func (s *Service) maintenanceContext() context.Context {
@@ -112,7 +126,11 @@ func (s *Service) maintenanceContext() context.Context {
 func (s *Service) expireWaitingJob(ctx context.Context, id string) {
 	cause := errors.New("replacement was not imported before the reacquisition timeout")
 	if job, ok := s.Job(id); ok && job.hasFileDelete() {
-		s.stopWithCompensation(ctx, s.currentHandler(), id, &serviceJobProgress{service: s, jobID: id}, cause)
+		// The search is sent beside the worker, so the job keeps its waiting status throughout: a dispatchable one
+		// would let the worker run the job against the same Arr, or stop it at the reconciliation deadline before
+		// the search is sent.
+		progress := heldProgress{inner: &serviceJobProgress{service: s, jobID: id}, status: job.Status}
+		s.stopWithCompensation(ctx, s.currentHandler(), id, progress, cause)
 		return
 	}
 	_, _ = s.updateJob(id, StatusFailed, func(job *Job) {

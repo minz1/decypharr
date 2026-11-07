@@ -45,6 +45,8 @@ type fakeSonarr struct {
 	monitorCalls int
 	// autoRedownload is the arr's "redownload failed downloads" setting.
 	autoRedownload bool
+	// onCommand, set before the first request, runs when a search command arrives, before it is served.
+	onCommand func()
 	// releases is what the interactive search returns; grabs counts the releases grabbed.
 	releases []map[string]any
 	grabs    int
@@ -299,6 +301,9 @@ func (fake *fakeSonarr) blocklist(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (fake *fakeSonarr) command(w http.ResponseWriter, _ *http.Request) {
+	if fake.onCommand != nil {
+		fake.onCommand()
+	}
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	fake.searches++
