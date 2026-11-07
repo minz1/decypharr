@@ -136,7 +136,11 @@ func (s *Service) maintenanceContext() context.Context {
 // and every step that changes it checks that it still is.
 func (s *Service) expireWaitingJob(ctx context.Context, id string) {
 	cause := errors.New("replacement was not imported before the reacquisition timeout")
-	if job, ok := s.Job(id); ok && job.hasFileDelete() {
+	job, ok := s.Job(id)
+	if !ok || !job.Status.waiting() {
+		return
+	}
+	if job.hasFileDelete() {
 		// The job keeps its waiting status while it is searched for, and each update checks that it still has it.
 		// A dispatchable status would let the worker run the job against the same Arr, or stop it at the
 		// reconciliation deadline before the search is sent. In production the worker and this pass share one loop
@@ -154,7 +158,7 @@ func (s *Service) expireWaitingJob(ctx context.Context, id string) {
 		)
 		return
 	}
-	_, _ = s.updateJob(id, StatusFailed, func(job *Job) {
+	_, _ = s.updateJobWithDurability(id, StatusFailed, func(job *Job) {
 		job.LastError = cause.Error()
-	})
+	}, false, Status.waiting)
 }

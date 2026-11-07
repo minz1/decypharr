@@ -217,6 +217,45 @@ func TestReplacementLandingDuringTheExpirySearchEndsTheJobReady(t *testing.T) {
 	}
 }
 
+// A job that left its waiting status between the maintenance snapshot and the expiry is not touched: a re-queued
+// job held at queued, or failed, would lose the work it is doing.
+func TestExpiryLeavesAJobThatIsNoLongerWaiting(t *testing.T) {
+	t.Parallel()
+	fake := newFakeSonarr(t, 101)
+	rig := newFakeSonarrRig(t, fake, StrategyCommandSearch, 101)
+	if waiting := rig.run(t); waiting.Status != StatusWaitingForGrab {
+		t.Fatalf("job = %s: %s", waiting.Status, waiting.LastError)
+	}
+	if err := rig.service.SetHandler(rig.handler); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rig.service.updateJob(rig.job.ID, StatusQueued, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	rig.service.expireWaitingJob(t.Context(), rig.job.ID)
+	requeued, _ := rig.service.Job(rig.job.ID)
+	if requeued.Status != StatusQueued || fake.searchCount() != 1 {
+		t.Fatalf(
+			"job = %s, searches = %d, want the job left queued with no new search",
+			requeued.Status,
+			fake.searchCount(),
+		)
+	}
+}
+
+func TestExpiryDoesNotFailAJobThatIsNoLongerWaiting(t *testing.T) {
+	t.Parallel()
+	fake := newFakeSonarr(t, 101)
+	rig := newFakeSonarrRig(t, fake, StrategyCommandSearch, 101)
+
+	rig.service.expireWaitingJob(t.Context(), rig.job.ID)
+	queued, _ := rig.service.Job(rig.job.ID)
+	if queued.Status != StatusQueued {
+		t.Fatalf("job = %s: %s, want it left queued", queued.Status, queued.LastError)
+	}
+}
+
 // A handler that cannot send a search still does not fail the job.
 func TestFailureAfterTheDeleteWithoutASearchingHandlerStopsTheJob(t *testing.T) {
 	t.Parallel()
