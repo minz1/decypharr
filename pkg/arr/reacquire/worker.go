@@ -408,22 +408,8 @@ func (s *Service) settleJob(
 		s.scheduleRetry(queued)
 		return true
 	}
-	if errors.Is(err, ErrOperatorRequired) {
-		return s.stopReconciliation(id, err)
-	}
 	if err != nil {
-		if current.hasAttemptedIntent() {
-			return s.stopReconciliation(id, err)
-		}
-		if current.hasConfirmedFileDelete() && !current.hasConfirmedSearchOrGrab() {
-			// The file is gone and nothing is searching for it: search, then let an operator look.
-			return s.stopWithCompensation(ctx, handler, id, progress, err)
-		}
-		_, updateErr := s.updateJob(id, StatusFailed, func(job *Job) {
-			job.LastError = err.Error()
-			job.RetryAt = time.Time{}
-		})
-		return updateErr == nil
+		return s.settleFailure(ctx, handler, current, err, progress)
 	}
 	current, ok = s.Job(id)
 	if !ok || current.Status.Terminal() || progress.waiting.Load() || current.Status.waiting() {
@@ -435,6 +421,34 @@ func (s *Service) settleJob(
 		job.RetryAt = time.Time{}
 	})
 	return err == nil
+}
+
+// settleFailure ends a run that failed for a reason a retry does not mend. A job with a remote action that may have
+// landed, or one that asks for an operator, stops for one; so does a job that deleted Arr files and has no search
+// taken, but only after it sends the search. Any other job fails.
+func (s *Service) settleFailure(
+	ctx context.Context,
+	handler Handler,
+	current Job,
+	err error,
+	progress *serviceJobProgress,
+) bool {
+	operator := errors.Is(err, ErrOperatorRequired)
+	if !operator && current.hasAttemptedIntent() {
+		return s.stopReconciliation(current.ID, err)
+	}
+	if current.hasConfirmedFileDelete() && !current.hasConfirmedSearchOrGrab() {
+		// The file is gone and nothing is searching for it: search, then let an operator look.
+		return s.stopWithCompensation(ctx, handler, current.ID, progress, err)
+	}
+	if operator {
+		return s.stopReconciliation(current.ID, err)
+	}
+	_, updateErr := s.updateJob(current.ID, StatusFailed, func(job *Job) {
+		job.LastError = err.Error()
+		job.RetryAt = time.Time{}
+	})
+	return updateErr == nil
 }
 
 func (s *Service) nextJob() (Job, bool) {

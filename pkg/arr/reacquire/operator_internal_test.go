@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 // refusingInvalidator refuses to invalidate: check says no before anything is
@@ -42,6 +43,33 @@ func TestOperatorRefusalBeforeTheDeleteSendsNothing(t *testing.T) {
 	}
 	if notices := rig.announced.all(); len(notices) != 1 {
 		t.Fatalf("notices = %+v, want one", notices)
+	}
+}
+
+// A pack job that deleted Arr files in an earlier run and then meets a refusal has no search taken: the files are
+// gone, so it sends its compensating search before it stops.
+func TestOperatorRefusalAfterAnEarlierDeleteSendsTheCompensatingSearch(t *testing.T) {
+	t.Parallel()
+	fake := newFakeSonarr(t, 101)
+	rig := newFakeSonarrRig(t, fake, StrategyCommandSearch, 101)
+	now := time.Now().UTC()
+	seedFileDelete(t, rig, FileDelete{
+		ArrFileID: fakeSonarrFileID, EpisodeIDs: []int{101}, AttemptedAt: now, ConfirmedAt: now,
+		Attempts: 1, Remonitored: true,
+	})
+	fake.loseFile()
+	inv := &refusingInvalidator{check: OperatorRequired("a sibling file lost its binding")}
+	rig.handler = NewHandler(rig.arrs, inv)
+
+	stopped := rig.run(t)
+	if stopped.Status != StatusNeedsAttention || !strings.Contains(stopped.LastError, "sibling") {
+		t.Fatalf("job = %s: %s", stopped.Status, stopped.LastError)
+	}
+	if searches := fake.searchCount(); searches != 1 {
+		t.Fatalf("searches = %d, want the one compensating search", searches)
+	}
+	if !strings.Contains(stopped.LastError, "compensating search was sent") {
+		t.Fatalf("last error = %q, want the compensating search named", stopped.LastError)
 	}
 }
 
