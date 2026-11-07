@@ -84,9 +84,11 @@ type MountStats struct {
 	Ready   bool   `json:"ready"`
 	Enabled bool   `json:"enabled"`
 	Type    string `json:"type,omitempty"`
-	Error   string `json:"error,omitempty"`
-	// Detail holds the subsystem-specific stats (e.g. VFS counters).
-	// nil when mount is not ready.
+	// State is the mount's own state (e.g. "failed", "restarting"), when it reports one.
+	State string `json:"state,omitempty"`
+	Error string `json:"error,omitempty"`
+	// Detail holds the subsystem-specific stats (e.g. VFS counters, the state
+	// and restarts of rcd while the mount is not ready).
 	Detail map[string]any `json:"detail,omitempty"`
 }
 

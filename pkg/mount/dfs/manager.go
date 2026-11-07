@@ -121,13 +121,15 @@ func (m *Manager) Refresh(dirs []string) error {
 // Stats returns unified statistics across all DFS mounts.
 func (m *Manager) Stats() map[string]any {
 	// Aggregate stats from all mounts
+	ready := m.ready.Load()
 	stats := map[string]any{
 		"enabled": true,
-		"ready":   m.ready.Load(),
+		"ready":   ready,
 		"type":    m.Type(),
 		"backend": string(m.defaultBackendType),
 	}
-	if m.vfs != nil {
+	// Start sets vfs before it sets ready, so vfs is only read once ready.
+	if ready && m.vfs != nil {
 		maps.Copy(stats, m.vfs.GetStats())
 	}
 	return stats
