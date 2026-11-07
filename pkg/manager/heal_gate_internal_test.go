@@ -70,7 +70,7 @@ func TestStreamReacquireIsGatedOnlyForANewJob(t *testing.T) {
 		recovery.active = []reacquire.Job{
 			{ID: "job-0", EntryID: "nzb-1", FileID: "file-1", Status: reacquire.StatusQueued},
 		}
-		m := &Manager{checkStreamFile: confirmBroken}
+		m := &Manager{work: testGroup(t), checkStreamFile: confirmBroken}
 		m.SetArrRecovery(recovery)
 		m.repair = repair.New(repair.Dependencies{})
 		tripBucket(t, m.repair, m.repair.ProviderFor("nzb-1"), repair.ClassUsenetSegment)

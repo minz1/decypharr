@@ -91,7 +91,7 @@ func TestInvalidatingAPackMatchesTheArrFilesTheJobDeletes(t *testing.T) {
 	if err := h.m.InvalidateReacquire(context.Background(), job); err != nil {
 		t.Fatal(err)
 	}
-	h.m.placementRuns.Wait()
+	drainPlacements(t, h.m)
 	if h.has("pack") {
 		t.Fatal("the invalidated entry is still stored")
 	}
@@ -123,7 +123,7 @@ func TestInvalidationRefusesAnEntryWithAnImportedFileTheJobDoesNotDelete(t *test
 			t.Fatalf("%s = %v, want an operator-required refusal", name, err)
 		}
 	}
-	h.m.placementRuns.Wait()
+	drainPlacements(t, h.m)
 	if !h.has("pack") {
 		t.Fatal("the entry was deleted")
 	}

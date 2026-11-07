@@ -39,11 +39,14 @@ func (m *Manager) discardSubmitted(provider, id, self string) {
 	}
 }
 
-// startPlacementRun starts a provider deletion as a task of the manager's work group, which Stop waits for. It
-// reports false, and runs nothing, once the group has closed: a deletion after that would read a storage that is
-// closing. The refusal is logged with the entry and the provider, since the provider torrent is left behind.
+// startPlacementRun starts a provider deletion as a task of the placements group. The deletion can take minutes
+// (the provider client retries) and ignores the group's context, so it never runs inline in a caller that
+// something else waits on. The group stops after the services that can start a deletion (repair, the reacquire
+// worker, the mount, the API) and before usenet and storage, which a deletion in flight reads: Stop's deadline
+// bounds the wait. It reports false, and runs nothing, once the group has closed; the refusal is logged with the
+// entry and the provider, and the provider's torrent is found again by the next sync.
 func (m *Manager) startPlacementRun(entry, provider string, run func()) bool {
-	err := m.work.Go("placement-run", func(context.Context) error {
+	err := m.placementsSvc.group.Go("placement-run", func(context.Context) error {
 		run()
 		return nil
 	})

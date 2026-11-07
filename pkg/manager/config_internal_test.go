@@ -31,6 +31,9 @@ func withTestConfig(t *testing.T, m *Manager) *Manager {
 	if m.work == nil {
 		m.work = testGroup(t)
 	}
+	if m.placementsSvc == nil {
+		m.placementsSvc = &service{group: testGroup(t)}
+	}
 	if m.arr == nil {
 		m.arr = arr.New(m.store, nil, zerolog.Nop())
 	}
