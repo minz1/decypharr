@@ -44,6 +44,9 @@ func ClassForReason(reason string) Class {
 		return ClassUsenetSegment
 	case reasonUsenetCorruptContent, "usenet_manifest_missing", "usenet_manifest_invalid":
 		return ClassUsenetManifest
+	case "torrent_not_found", "placement_not_found":
+		// The provider no longer has the torrent: the same event the manager files under dropped.
+		return ClassDropped
 	default:
 		return ClassOther
 	}

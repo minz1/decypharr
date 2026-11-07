@@ -306,7 +306,8 @@ func TestClassForReason(t *testing.T) {
 		"usenet_corrupt_content":  ClassUsenetManifest,
 		"usenet_manifest_missing": ClassUsenetManifest,
 		"usenet_manifest_invalid": ClassUsenetManifest,
-		"torrent_not_found":       ClassOther,
+		"torrent_not_found":       ClassDropped,
+		"placement_not_found":     ClassDropped,
 		"missing_provider_link":   ClassOther,
 		"":                        ClassOther,
 	} {
