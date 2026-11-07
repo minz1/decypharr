@@ -5,6 +5,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -24,12 +25,16 @@ func TestCanaryTimeoutIsLogged(t *testing.T) {
 	f.client.blockCheck = true
 	f.client.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
-	defer cancel()
-	settings := config.RepairConfig{}.BreakerSettings()
-	if got := f.service.canaryProbe(ctx, rdHoster(), settings); got != canaryInconclusive {
-		t.Fatalf("verdict = %v, want inconclusive", got)
-	}
+	// The probe runs on fake time: the deadline can only fire once the first entry is being checked and every
+	// goroutine is blocked on the silent provider, so what it had managed is fixed.
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+		defer cancel()
+		settings := config.RepairConfig{}.BreakerSettings()
+		if got := f.service.canaryProbe(ctx, rdHoster(), settings); got != canaryInconclusive {
+			t.Fatalf("verdict = %v, want inconclusive", got)
+		}
+	})
 	line := logs.String()
 	for _, want := range []string{
 		`"level":"warn"`, "canary timed out", `"bucket":"rd/hoster_link"`, `"entries_probed":1`, `"files_checked":0`,
