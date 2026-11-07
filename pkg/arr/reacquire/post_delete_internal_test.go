@@ -251,6 +251,38 @@ func TestExpiryLeavesAJobThatIsNoLongerWaiting(t *testing.T) {
 	}
 }
 
+// A job re-queued while the search is sent stays queued: the updates the search makes check, under the jobs lock,
+// that the job is still waiting, so none puts it back to waiting or stops it. The retry time is in the future so the
+// worker leaves the queued job alone.
+func TestJobRequeuedDuringTheExpirySearchStaysQueued(t *testing.T) {
+	t.Parallel()
+	fake := newFakeSonarr(t, 101)
+	rig := newFakeSonarrRig(t, fake, StrategyCommandSearch, 101)
+	if waiting := rig.run(t); waiting.Status != StatusWaitingForGrab {
+		t.Fatalf("job = %s: %s", waiting.Status, waiting.LastError)
+	}
+	fake.onCommand = func() {
+		if _, err := rig.service.updateJob(rig.job.ID, StatusQueued, func(job *Job) {
+			job.RetryAt = rig.service.now().Add(time.Hour)
+		}); err != nil {
+			t.Errorf("re-queue the job: %v", err)
+		}
+	}
+	if err := rig.service.SetHandler(rig.handler); err != nil {
+		t.Fatal(err)
+	}
+	rig.advance(waitingTimeout + time.Minute)
+	rig.service.expireWaitingJob(t.Context(), rig.job.ID)
+
+	requeued, _ := rig.service.Job(rig.job.ID)
+	if requeued.Status != StatusQueued {
+		t.Fatalf("job = %s: %s, want it left queued", requeued.Status, requeued.LastError)
+	}
+	if notices := rig.announced.all(); len(notices) != 0 {
+		t.Fatalf("notices = %+v, want none", notices)
+	}
+}
+
 func TestExpiryDoesNotFailAJobThatIsNoLongerWaiting(t *testing.T) {
 	t.Parallel()
 	fake := newFakeSonarr(t, 101)
