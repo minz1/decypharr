@@ -33,6 +33,8 @@ type outageClient struct {
 	checks  int
 	// onCheck, when set, runs on every check with the number of checks so far.
 	onCheck func(checks int)
+	// blockCheck makes a check wait until its context ends, as a provider that never answers would.
+	blockCheck bool
 }
 
 func (c *outageClient) Config() config.Debrid {
@@ -40,7 +42,14 @@ func (c *outageClient) Config() config.Debrid {
 }
 func (c *outageClient) SupportsCheck() bool { return true }
 
-func (c *outageClient) CheckFile(_ context.Context, infoHash, _ string) error {
+func (c *outageClient) CheckFile(ctx context.Context, infoHash, _ string) error {
+	c.mu.Lock()
+	block := c.blockCheck
+	c.mu.Unlock()
+	if block {
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.checks++

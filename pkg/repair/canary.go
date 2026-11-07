@@ -2,6 +2,7 @@ package repair
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"time"
 
@@ -12,18 +13,36 @@ import (
 
 // canaryProbe probes the entries of bucket's provider that were last good most recently. Their files failing the
 // way the bucket fails means the provider, not the releases, is the problem; every other failure to read them
-// leaves the question open.
+// leaves the question open. A probe that runs out of time ends inconclusive, which only ever holds, and is logged.
 func (r *Service) canaryProbe(ctx context.Context, bucket Bucket, settings config.BreakerSettings) canaryOutcome {
 	names := r.canaryEntries(bucket, settings)
 	if len(names) == 0 {
 		return canaryNone
 	}
+	started := time.Now()
+	outcome, progress := r.probeCanaryEntries(ctx, bucket, names)
+	if outcome == canaryInconclusive && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		r.logger.Warn().Str("bucket", bucket.String()).Dur("duration", time.Since(started)).
+			Int("entries", len(names)).Int("entries_probed", progress.entries).Int("files_checked", progress.files).
+			Msg("Repair: canary timed out; the bucket's heals stay held")
+	}
+	return outcome
+}
+
+// canaryProgress is how far a canary got.
+type canaryProgress struct{ entries, files int }
+
+func (r *Service) probeCanaryEntries(
+	ctx context.Context, bucket Bucket, names []string,
+) (canaryOutcome, canaryProgress) {
+	var progress canaryProgress
 	nzb := r.nzbProber()
 	outcome := canaryPass
 	for _, name := range names {
 		if ctx.Err() != nil {
-			return canaryInconclusive
+			return canaryInconclusive, progress
 		}
+		progress.entries++
 		item, err := r.storage.GetEntryItem(name)
 		if err != nil || item == nil {
 			outcome = canaryInconclusive
@@ -33,14 +52,15 @@ func (r *Service) canaryProbe(ctx context.Context, bucket Bucket, settings confi
 		for _, result := range r.probeFiles(ctx, c, orderedFilenames(item), nzb, RunOptions{}) {
 			switch {
 			case result.healthy:
+				progress.files++
 			case result.broken && canaryMatches(bucket.Class, ClassForReason(result.reason)):
-				return canaryFail
+				return canaryFail, progress
 			default:
 				outcome = canaryInconclusive
 			}
 		}
 	}
-	return outcome
+	return outcome, progress
 }
 
 // QueueCanary is the canary of queue cleanup's blocklist guard: it probes recently good entries of the provider and
