@@ -421,6 +421,7 @@ func (s *Service) settleJob(
 	if !ok || current.Status.Terminal() || progress.waiting.Load() || current.Status.waiting() {
 		return true
 	}
+	s.retryRemonitor(ctx, id)
 	_, err = s.updateJob(id, StatusReady, func(job *Job) {
 		job.LastError = ""
 		job.RetryAt = time.Time{}
@@ -698,6 +699,7 @@ func (s *Service) completeJobFromIndex(job Job) error {
 	if !ready {
 		return nil
 	}
+	s.retryRemonitor(s.maintenanceContext(), job.ID)
 	_, err := s.updateJob(job.ID, StatusReady, func(job *Job) {
 		job.ReplacementDownloadIDs = replacementDownloadIDs
 		job.ReplacementDownloadID = replacementDownloadIDs[0]
@@ -791,6 +793,7 @@ func (s *Service) maintainJobs() {
 	for _, id := range expire {
 		s.expireWaitingJob(s.maintenanceContext(), id)
 	}
+	s.retryRemonitors(s.maintenanceContext())
 	for _, id := range prune {
 		s.pruneTerminalJob(id, now)
 	}

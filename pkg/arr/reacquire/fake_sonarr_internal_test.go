@@ -41,6 +41,10 @@ type fakeSonarr struct {
 	blocklists int
 	// failMonitor answers the monitor toggle with a refusal.
 	failMonitor bool
+	// monitorCalls counts the monitor toggles received.
+	monitorCalls int
+	// autoRedownload is the arr's "redownload failed downloads" setting.
+	autoRedownload bool
 	// releases is what the interactive search returns; grabs counts the releases grabbed.
 	releases []map[string]any
 	grabs    int
@@ -110,7 +114,22 @@ func (fake *fakeSonarr) setDeleteMode(mode string) {
 }
 
 func (fake *fakeSonarr) downloadClient(w http.ResponseWriter, _ *http.Request) {
-	_, _ = fmt.Fprint(w, `{"enableCompletedDownloadHandling":true}`)
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	_, _ = fmt.Fprintf(w, `{"enableCompletedDownloadHandling":true,"autoRedownloadFailed":%t}`, fake.autoRedownload)
+}
+
+// letArrRedownload sets the arr's "redownload failed downloads" setting.
+func (fake *fakeSonarr) letArrRedownload() {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	fake.autoRedownload = true
+}
+
+func (fake *fakeSonarr) monitorRequests() int {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	return fake.monitorCalls
 }
 
 func (fake *fakeSonarr) episodeFile(w http.ResponseWriter, request *http.Request) {
@@ -237,6 +256,7 @@ func (fake *fakeSonarr) setMonitorFailing(failing bool) {
 func (fake *fakeSonarr) monitor(w http.ResponseWriter, request *http.Request) {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
+	fake.monitorCalls++
 	if fake.failMonitor {
 		w.WriteHeader(http.StatusBadRequest)
 		return

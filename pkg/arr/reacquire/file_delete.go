@@ -29,7 +29,17 @@ type FileDelete struct {
 	ConfirmedAt time.Time `json:"confirmedAt,omitzero"`
 	// Remonitored is set once EpisodeIDs are monitored again.
 	Remonitored bool `json:"remonitored,omitempty"`
+	// RemonitorAttempts counts the refused tries to monitor EpisodeIDs again, and RemonitorAt is the last.
+	RemonitorAttempts int       `json:"remonitorAttempts,omitzero"`
+	RemonitorAt       time.Time `json:"remonitorAt,omitzero"`
 }
+
+const (
+	// remonitorMaxAttempts bounds the tries to monitor a deleted file's episodes again.
+	remonitorMaxAttempts = 5
+	// remonitorBackoff is the wait after the first refused try; each further one doubles it.
+	remonitorBackoff = time.Minute
+)
 
 func cloneFileDelete(record FileDelete) FileDelete {
 	record.EpisodeIDs = slices.Clone(record.EpisodeIDs)
@@ -143,9 +153,24 @@ func (handler *arrHandler) settleFileDelete(
 	}
 	if monitorErr := handler.arrs.MonitorEpisodes(ctx, instance.Name, record.EpisodeIDs); monitorErr == nil {
 		record.Remonitored = true
-		if err := persistFileDelete(job, progress, record); err != nil {
-			return arr.UnknownMutationOutcome(fmt.Errorf("persist re-monitored Arr episodes: %w", err), 0)
-		}
+	} else {
+		record.RemonitorAttempts++
+		record.RemonitorAt = time.Now().UTC()
+	}
+	if err := persistFileDelete(job, progress, record); err != nil {
+		return arr.UnknownMutationOutcome(fmt.Errorf("persist re-monitored Arr episodes: %w", err), 0)
 	}
 	return nil
+}
+
+// remonitorDue reports an owed re-monitor that may be tried now: it is not out
+// of tries, and the wait after the last refusal has passed.
+func (record FileDelete) remonitorDue(now time.Time) bool {
+	if !record.remonitorOwed() || record.RemonitorAttempts >= remonitorMaxAttempts {
+		return false
+	}
+	if record.RemonitorAttempts == 0 {
+		return true
+	}
+	return !now.Before(record.RemonitorAt.Add(remonitorBackoff << (record.RemonitorAttempts - 1)))
 }
