@@ -129,19 +129,22 @@ func (s *Server) setupCompleteHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg = updated
 
-	// Trigger manager restart to apply new config
-	go s.Restart()
-
+	// Ask the generation to restart so the new config reaches the services; the
+	// restart happens after this response, so the answer is 202.
 	response := SetupWizardResponse{
 		Success:    true,
 		Message:    "Setup completed successfully! Restarting services...",
 		RedirectTo: "/",
+	}
+	if pending := s.requestRestart(); pending == config.PendingFailed {
+		response.Message = "Setup completed, but the restart could not be requested. Restart Decypharr to apply it."
 	}
 	if auth := cfg.GetAuth(); auth != nil && auth.TokenOnly {
 		response.APIToken = auth.APIToken
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(response)
 }
 
