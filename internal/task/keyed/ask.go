@@ -46,7 +46,7 @@ func (s *replySlot) finish(value any, err error) {
 // command must be safe to repeat. Ask returns ErrStopped for a stopped
 // runner and ErrMailboxFull when the key has no room, in both cases without
 // having queued anything. Called from a handler it returns ErrAskInHandler.
-func (r *Runner[K, M]) Ask(ctx context.Context, key K, msg M) (any, error) {
+func (r *Runner[K, M, S]) Ask(ctx context.Context, key K, msg M) (any, error) {
 	if ctx.Value(inHandler{}) != nil {
 		return nil, ErrAskInHandler
 	}

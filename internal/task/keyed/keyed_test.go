@@ -39,7 +39,9 @@ func newRecorder() *recorder {
 	return &recorder{handled: map[string][]int{}, inFlight: map[string]int{}}
 }
 
-func (r *recorder) Handle(ctx context.Context, key string, m msg, fx *keyed.Effects[string, msg]) {
+func (r *recorder) Activate(context.Context, string) struct{} { return struct{}{} }
+
+func (r *recorder) Handle(ctx context.Context, key string, _ *struct{}, m msg, fx *keyed.Effects[string, msg]) {
 	r.mu.Lock()
 	r.inFlight[key]++
 	if r.inFlight[key] > 1 {
@@ -114,7 +116,7 @@ func stop(t testing.TB, g *task.Group) {
 	}
 }
 
-func mustSend(t testing.TB, r *keyed.Runner[string, msg], key string, m msg) {
+func mustSend(t testing.TB, r *keyed.Runner[string, msg, struct{}], key string, m msg) {
 	t.Helper()
 	if err := r.Send(key, m); err != nil {
 		t.Fatalf("Send(%q, %d) = %v", key, m.id, err)
@@ -125,7 +127,7 @@ func TestMessagesToAKeyAreHandledInOrder(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		rec := newRecorder()
-		r := keyed.New[string, msg](newRoot(t), "orders", rec, keyed.Options[msg]{MailboxSize: 128})
+		r := keyed.New[string, msg, struct{}](newRoot(t), "orders", rec, keyed.Options[msg]{MailboxSize: 128})
 		var want []int
 		for i := range 100 {
 			mustSend(t, r, "a", msg{id: i})
@@ -142,7 +144,7 @@ func TestKeysRunInParallel(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		rec := newRecorder()
-		r := keyed.New[string, msg](newRoot(t), "parallel", rec, keyed.Options[msg]{})
+		r := keyed.New[string, msg, struct{}](newRoot(t), "parallel", rec, keyed.Options[msg]{})
 		release := make(chan struct{})
 		mustSend(t, r, "slow", msg{id: 1, block: release})
 		synctest.Wait()
@@ -168,7 +170,7 @@ func TestOneHandlerAtATimePerKeyUnderConcurrentSends(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		rec := newRecorder()
-		r := keyed.New[string, msg](newRoot(t), "serial", rec, keyed.Options[msg]{MailboxSize: 1_000})
+		r := keyed.New[string, msg, struct{}](newRoot(t), "serial", rec, keyed.Options[msg]{MailboxSize: 1_000})
 		var senders sync.WaitGroup
 		for s := range 20 {
 			senders.Go(func() {
@@ -204,7 +206,7 @@ func TestAKeyExitsWhenIdleAndRestartsOnSend(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		rec := newRecorder()
 		g := newRoot(t)
-		r := keyed.New[string, msg](g, "idle", rec, keyed.Options[msg]{IdleAfter: time.Second})
+		r := keyed.New[string, msg, struct{}](g, "idle", rec, keyed.Options[msg]{IdleAfter: time.Second})
 		mustSend(t, r, "a", msg{id: 1})
 		synctest.Wait()
 		if info := r.Snapshot(); len(info.Keys) != 1 || !info.Keys[0].Running {
@@ -235,7 +237,7 @@ func TestSendAfterStopIsRefusedAndNothingIsLeftRunning(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		rec := newRecorder()
 		g := newRoot(t)
-		r := keyed.New[string, msg](g, "stop", rec, keyed.Options[msg]{})
+		r := keyed.New[string, msg, struct{}](g, "stop", rec, keyed.Options[msg]{})
 		mustSend(t, r, "a", msg{id: 1})
 		synctest.Wait()
 
@@ -261,7 +263,7 @@ func TestStopWaitsForTheMessageInFlightAndDropsTheQueue(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		rec := newRecorder()
 		g := newRoot(t)
-		r := keyed.New[string, msg](g, "inflight", rec, keyed.Options[msg]{})
+		r := keyed.New[string, msg, struct{}](g, "inflight", rec, keyed.Options[msg]{})
 		release := make(chan struct{})
 		mustSend(t, r, "a", msg{id: 1, block: release})
 		mustSend(t, r, "a", msg{id: 2})
@@ -294,7 +296,7 @@ func TestAHandlerPanicIsRecoveredAndTheNextMessageHandled(t *testing.T) {
 		root := task.NewRoot(context.WithoutCancel(t.Context()), "test", zerolog.New(logs))
 		t.Cleanup(func() { stop(t, root) })
 		rec := newRecorder()
-		r := keyed.New[string, msg](root, "panics", rec, keyed.Options[msg]{Logger: zerolog.New(logs)})
+		r := keyed.New[string, msg, struct{}](root, "panics", rec, keyed.Options[msg]{Logger: zerolog.New(logs)})
 		mustSend(t, r, "a", msg{id: 1, panic: true})
 		mustSend(t, r, "a", msg{id: 2})
 		synctest.Wait()
@@ -320,7 +322,7 @@ func TestSnapshotShowsDepthAndAgeOfTheOldestMessage(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		rec := newRecorder()
-		r := keyed.New[string, msg](newRoot(t), "snapshot", rec, keyed.Options[msg]{})
+		r := keyed.New[string, msg, struct{}](newRoot(t), "snapshot", rec, keyed.Options[msg]{})
 		release := make(chan struct{})
 		mustSend(t, r, "a", msg{id: 1, block: release})
 		synctest.Wait()
@@ -349,7 +351,7 @@ func TestACommandIsRefusedWhenTheMailboxIsFull(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		rec := newRecorder()
-		r := keyed.New[string, msg](newRoot(t), "full", rec, keyed.Options[msg]{MailboxSize: 2})
+		r := keyed.New[string, msg, struct{}](newRoot(t), "full", rec, keyed.Options[msg]{MailboxSize: 2})
 		release := make(chan struct{})
 		mustSend(t, r, "a", msg{id: 1, block: release}) // in flight, so not queued
 		synctest.Wait()
@@ -372,7 +374,7 @@ func TestEffectsGoReportsBackAsAMessageAndSendReachesOtherKeys(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		rec := newRecorder()
-		r := keyed.New[string, msg](newRoot(t), "effects", rec, keyed.Options[msg]{})
+		r := keyed.New[string, msg, struct{}](newRoot(t), "effects", rec, keyed.Options[msg]{})
 		mustSend(t, r, "a", msg{id: 1, run: func(_ context.Context, fx *keyed.Effects[string, msg]) {
 			if err := fx.Go("fetch", func(context.Context) msg { return msg{id: 10} }); err != nil {
 				t.Error(err)
@@ -396,7 +398,7 @@ func TestAChildResultIsDeliveredEvenWhenTheMailboxIsFull(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		rec := newRecorder()
-		r := keyed.New[string, msg](newRoot(t), "results", rec, keyed.Options[msg]{MailboxSize: 1})
+		r := keyed.New[string, msg, struct{}](newRoot(t), "results", rec, keyed.Options[msg]{MailboxSize: 1})
 		finish := make(chan struct{})
 		release := make(chan struct{})
 		mustSend(t, r, "a", msg{id: 1, run: func(_ context.Context, fx *keyed.Effects[string, msg]) {
@@ -429,7 +431,7 @@ func TestASingletonStaysUpThroughIdleTime(t *testing.T) {
 			},
 		)
 		g := newRoot(t)
-		r := keyed.NewSingleton[int](g, "single", h, keyed.Options[int]{IdleAfter: time.Second})
+		r := keyed.NewSingleton[int, struct{}](g, "single", h, keyed.Options[int]{IdleAfter: time.Second})
 		synctest.Wait()
 
 		time.Sleep(time.Hour)
