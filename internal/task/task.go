@@ -518,7 +518,10 @@ func (g *Group) Close() { g.beginStop() }
 // once they return, so an owner must wait on Done (or exit) before reusing
 // what they hold. Stop is safe to call more than once and from several
 // goroutines, but never from a task of g or of a descendant (it would wait
-// for itself): use Close there. On a failing group it only waits.
+// for itself): use Close there. On a failing group whose shutdown an
+// ancestor has taken over, Stop (like Close) starts that shutdown now rather
+// than at its turn in the ancestor's sequence; the root's owner, which is
+// the usual caller, only waits.
 func (g *Group) Stop(ctx context.Context) error {
 	g.beginStop()
 	select {
