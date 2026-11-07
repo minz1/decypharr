@@ -107,6 +107,14 @@ func WithProxy(proxyURL string) ClientOption {
 	}
 }
 
+// WithTransport sends the client's requests through rt instead of the
+// default transport, which also leaves the TLS config and proxy unused.
+func WithTransport(rt http.RoundTripper) ClientOption {
+	return func(c *Client) {
+		c.httpClient.Transport = rt
+	}
+}
+
 // Do performs an HTTP request with retries for certain status codes.
 func (c *Client) Do(req *http.Request) (*http.Response, error) {
 	// Apply headers

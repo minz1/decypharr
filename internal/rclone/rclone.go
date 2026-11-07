@@ -37,7 +37,14 @@ type Request struct {
 	Args    map[string]any `json:"args,omitempty"`
 }
 
-func NewClient(url, username, password string, tlsConfig *tls.Config, logger zerolog.Logger) *Client {
+// NewClient returns a client for the RC server at url. opts adjust the underlying
+// HTTP client, such as giving it a transport.
+func NewClient(
+	url, username, password string,
+	tlsConfig *tls.Config,
+	logger zerolog.Logger,
+	opts ...request.ClientOption,
+) *Client {
 	headers := map[string]string{}
 
 	// Add basic auth header if credentials provided
@@ -46,14 +53,14 @@ func NewClient(url, username, password string, tlsConfig *tls.Config, logger zer
 		headers["Authorization"] = "Basic " + auth
 	}
 
-	opts := []request.ClientOption{
+	clientOpts := []request.ClientOption{
 		request.WithHeaders(headers),
 		request.WithTimeout(rcTimeout),
 		request.WithMaxRetries(rcMaxRetries),
 	}
 
 	return &Client{
-		client:   request.New(logger, tlsConfig, opts...),
+		client:   request.New(logger, tlsConfig, append(clientOpts, opts...)...),
 		baseURL:  url,
 		username: username,
 		password: password,
@@ -242,4 +249,10 @@ func (r *Client) GetVersion(ctx context.Context) (*VersionResponse, error) {
 		return nil, fmt.Errorf("failed to get version: %w", err)
 	}
 	return &versionResp, nil
+}
+
+// WithTransport sends the client's requests through rt, for tests that serve
+// the RC API in process.
+func WithTransport(rt http.RoundTripper) request.ClientOption {
+	return request.WithTransport(rt)
 }
