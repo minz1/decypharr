@@ -18,6 +18,7 @@ import (
 
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -131,14 +132,34 @@ type Config struct {
 }
 
 // Check runs the property over the configured seeds. For each seed gen builds
-// a sequence from the seed; the first sequence for which
-// fails reports true is shrunk, and Check reports the seed and the shrunk
-// trace through t.Errorf, then stops.
+// a sequence from the seed; the first sequence for which fails reports true is
+// shrunk, and Check reports the seed and the shrunk trace through t.Errorf,
+// then stops.
 func Check[E any](
 	t T,
 	cfg Config,
 	gen func(seed int64) []E,
 	fails func([]E) bool,
+	simplify func(E) []E,
+) {
+	t.Helper()
+	CheckWhy(t, cfg, gen, func(events []E) []string {
+		if fails(events) {
+			return []string{"the property failed"}
+		}
+		return nil
+	}, simplify)
+}
+
+// CheckWhy is Check for a property that says what broke: why returns the
+// violations of a sequence, none when it holds. The failure report lists the
+// violations of the shrunk sequence, which are often fewer and clearer than
+// those of the sequence that first failed.
+func CheckWhy[E any](
+	t T,
+	cfg Config,
+	gen func(seed int64) []E,
+	why func([]E) []string,
 	simplify func(E) []E,
 ) {
 	t.Helper()
@@ -157,14 +178,15 @@ func Check[E any](
 		t.Errorf("%v", err)
 		return
 	}
+	fails := func(events []E) bool { return len(why(events)) > 0 }
 	for _, seed := range seeds {
 		events := gen(seed)
 		if !fails(events) {
 			continue
 		}
 		shrunk := Shrink(events, fails, simplify)
-		t.Errorf("property failed for seed %d (run it again with %s=%d)\nshrunk from %d to %d events: %v",
-			seed, SeedBaseEnv, seed-1, len(events), len(shrunk), shrunk)
+		t.Errorf("property failed for seed %d (run it again with %s=%d)\nshrunk from %d to %d events: %v\n%s",
+			seed, SeedBaseEnv, seed-1, len(events), len(shrunk), shrunk, strings.Join(why(shrunk), "\n"))
 		return
 	}
 }

@@ -11,16 +11,16 @@ import (
 	"github.com/sirrobot01/decypharr/internal/proptest"
 )
 
-// containsInOrder reports whether events holds first and, later, second.
-func containsInOrder(events []int, first, second int) bool {
-	i := slices.Index(events, first)
-	return i >= 0 && slices.Contains(events[i+1:], second)
+// threeThenSeven reports whether events holds a 3 and, later, a 7.
+func threeThenSeven(events []int) bool {
+	i := slices.Index(events, 3)
+	return i >= 0 && slices.Contains(events[i+1:], 7)
 }
 
 func TestShrinkFindsTheSmallestFailingSubsequence(t *testing.T) {
 	t.Parallel()
 	events := []int{9, 1, 3, 4, 8, 2, 2, 5, 7, 6, 0, 3, 3}
-	fails := func(e []int) bool { return containsInOrder(e, 3, 7) }
+	fails := threeThenSeven
 	if !fails(events) {
 		t.Fatal("the test input does not fail")
 	}
@@ -65,7 +65,7 @@ func TestShrinkDoesNotModifyItsInput(t *testing.T) {
 	events := []int{5, 3, 9, 7, 1}
 	before := slices.Clone(events)
 
-	proptest.Shrink(events, func(e []int) bool { return containsInOrder(e, 3, 7) }, func(int) []int { return []int{0} })
+	proptest.Shrink(events, threeThenSeven, func(int) []int { return []int{0} })
 
 	if !slices.Equal(events, before) {
 		t.Fatalf("the input became %v, was %v", events, before)
@@ -114,7 +114,7 @@ func TestCheckRunsEverySeedOnAPassingProperty(t *testing.T) {
 func TestCheckReportsTheSeedAndTheShrunkTrace(t *testing.T) {
 	t.Parallel()
 	f := &fakeT{}
-	fails := func(e []int) bool { return containsInOrder(e, 3, 7) }
+	fails := threeThenSeven
 
 	proptest.Check(f, proptest.Config{Seeds: 200, Getenv: noEnv}, genInts, fails, nil)
 
