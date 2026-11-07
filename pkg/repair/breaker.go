@@ -324,6 +324,14 @@ func (b *breaker) evaluate(ctx context.Context, key Bucket, in bucketInput) buck
 // single probe, and the verdict is cached before any of them returns.
 func (b *breaker) probeCanary(ctx context.Context, key Bucket) canaryOutcome {
 	verdict, _, err := b.flight.Do(ctx, key.String(), func(ctx context.Context) (canaryOutcome, error) {
+		// A caller that reached the flight after another's probe finished finds its verdict cached.
+		b.mu.Lock()
+		cached, ok := b.verdicts[key]
+		fresh := ok && b.now().Sub(cached.at) < b.settings().CanaryCache
+		b.mu.Unlock()
+		if fresh {
+			return cached.outcome, nil
+		}
 		verdict := canaryInconclusive
 		if b.canary != nil {
 			verdict = b.canary(ctx, key, b.settings())
