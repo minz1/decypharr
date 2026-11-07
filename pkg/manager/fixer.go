@@ -263,7 +263,7 @@ func (f *Fixer) MoveTorrent(entry *storage.Entry, debridName string, reinsert bo
 	// Delete the old torrent from the provider if it has a different ID, unless another entry (the other seasons
 	// of a pack) still lists it.
 	if old.ID != "" && old.ID != newDebridTorrent.ID {
-		f.manager.placementRuns.Go(func() {
+		f.manager.startPlacementRun(func() {
 			if _, releaseErr := f.manager.releasePlacement(debridName, &old, entry.InfoHash); releaseErr != nil {
 				f.manager.logger.Warn().Err(releaseErr).Str("infohash", entry.InfoHash).Str("provider", debridName).
 					Msg("Failed to delete the replaced provider torrent")

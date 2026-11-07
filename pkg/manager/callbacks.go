@@ -24,6 +24,27 @@ func (m *Manager) RemoveFromProvider(providerEntry *storage.ProviderEntry, self 
 	return err
 }
 
+// startPlacementRun starts a provider deletion that Stop waits for. It reports false, and runs nothing, once
+// Stop has closed the runs: a deletion after that would read a storage that is closing.
+func (m *Manager) startPlacementRun(run func()) bool {
+	m.placementMu.Lock()
+	defer m.placementMu.Unlock()
+	if m.placementsClosed {
+		return false
+	}
+	m.placementRuns.Go(run)
+	return true
+}
+
+// closePlacementRuns refuses new provider deletions and waits for those in flight. Starting and closing share a
+// lock, so no run is added after the wait begins.
+func (m *Manager) closePlacementRuns() {
+	m.placementMu.Lock()
+	m.placementsClosed = true
+	m.placementMu.Unlock()
+	m.placementRuns.Wait()
+}
+
 // dropSourcePlacement takes the placements an entry has on provider away from it and deletes them there.
 func (m *Manager) dropSourcePlacement(entry *storage.Entry, provider string) {
 	entry.RemoveProvider(provider, func(placement *storage.ProviderEntry) error {

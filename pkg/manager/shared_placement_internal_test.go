@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/rs/zerolog"
@@ -177,6 +178,63 @@ func TestFailedStorageDeleteKeepsTheProviderTorrent(t *testing.T) {
 	// so the absence above is the order of the two deletes and nothing else.
 	h.deleteEntry(t, "free")
 	requireDeleted(t, h, "id-free")
+}
+
+// Stop waits for the provider deletions in flight, and refuses new ones from then on: one started after the wait
+// would read a storage that is about to close.
+func TestPlacementRunsEndBeforeTheStorageCloses(t *testing.T) {
+	t.Parallel()
+	h := newPruneHarness(t, config.PruneModeDelete)
+	release := make(chan struct{})
+	finished := make(chan struct{})
+	if !h.m.startPlacementRun(func() {
+		<-release
+		close(finished)
+	}) {
+		t.Fatal("a run was refused before Stop")
+	}
+
+	closed := make(chan struct{})
+	go func() {
+		h.m.closePlacementRuns()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+		t.Fatal("closing the runs did not wait for the one in flight")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	<-closed
+	select {
+	case <-finished:
+	default:
+		t.Fatal("the run in flight did not finish before the runs closed")
+	}
+
+	ran := false
+	if h.m.startPlacementRun(func() { ran = true }) {
+		t.Fatal("a run was accepted after the runs closed")
+	}
+	h.m.placementRuns.Wait()
+	if ran {
+		t.Fatal("a refused run touched the storage")
+	}
+}
+
+// A removal that arrives while the manager stops is not run against a closed storage.
+func TestDeleteEntryAfterStopDoesNotRunPlacementRemoval(t *testing.T) {
+	t.Parallel()
+	h := newPruneHarness(t, config.PruneModeDelete)
+	h.mount2(t)
+	h.addEntry(t, "late", nil)
+	h.m.closePlacementRuns()
+
+	if err := h.m.DeleteEntry("late", true); err != nil {
+		t.Fatal(err)
+	}
+	h.m.placementRuns.Wait()
+	requireDeleted(t, h)
 }
 
 // A queued entry that holds the provider torrent counts as a holder.

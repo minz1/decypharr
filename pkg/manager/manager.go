@@ -179,6 +179,8 @@ type Manager struct {
 	// placementRuns holds the provider deletions started when an entry is removed; Stop waits for them
 	// before it closes the storage they read.
 	placementRuns    sync.WaitGroup
+	placementMu      sync.Mutex
+	placementsClosed bool
 	downloadsStopped bool
 	cancelDownloads  context.CancelFunc
 
@@ -726,7 +728,6 @@ func (m *Manager) Stop() error {
 	}
 
 	m.downloadTasks.Wait()
-	m.placementRuns.Wait()
 
 	// Downloads have saved their final or resumable state.
 	if m.mountManager != nil {
@@ -739,6 +740,11 @@ func (m *Manager) Stop() error {
 		m.repair.Stop()
 	}
 	m.closeArrServices()
+
+	// What can start a provider deletion (the repair, the reacquire worker, the API) has stopped. The deletions in
+	// flight read the storage and may delete usenet placements, so they end before either closes, and none starts
+	// after.
+	m.closePlacementRuns()
 
 	// Close usenet connection manager if active
 	if m.usenet != nil {
@@ -912,7 +918,7 @@ func (m *Manager) DeleteEntry(infohash string, removePlacements bool) error {
 		return deleteErr
 	}
 	if removePlacements {
-		m.placementRuns.Go(func() { m.RemoveTorrentPlacements(torr) })
+		m.startPlacementRun(func() { m.RemoveTorrentPlacements(torr) })
 	}
 	m.strm.RemoveEntryAsync(torr)
 	// Refresh entry cache
