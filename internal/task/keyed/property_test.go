@@ -80,6 +80,8 @@ const (
 	propIdle = 40 * time.Millisecond
 	// propTick is the time every step takes, so the handlers of the step have finished before the next one.
 	propTick = time.Millisecond
+	// propSettle lets the handlers that the last timer of a tick started finish.
+	propSettle = 5 * time.Microsecond
 	// propSlack is how far from the idle time a gap must be for the state check to expect an outcome.
 	propSlack = 3 * time.Millisecond
 )
@@ -99,12 +101,12 @@ func genOps(seed int64) []op {
 		case n < 49:
 			ops[i] = op{kind: opSendPanic, key: key}
 		case n < 58:
-			ops[i] = op{kind: opAfter, key: key, at: 1 + rng.IntN(200)}
-		case n < 62:
-			ops[i] = op{kind: opCancel, at: rng.IntN(8)}
-		case n < 74:
+			ops[i] = op{kind: opAfter, key: key, at: 1 + rng.IntN(60)}
+		case n < 66:
+			ops[i] = op{kind: opCancel, at: rng.IntN(4)}
+		case n < 76:
 			ops[i] = op{kind: opAdvance, at: 1 + rng.IntN(120)}
-		case n < 84:
+		case n < 86:
 			ops[i] = op{kind: opHold, key: key}
 		case n < 96:
 			ops[i] = op{kind: opRelease, key: key}
@@ -281,6 +283,7 @@ type qItem struct {
 	obs    bool
 	bypass bool // a timer's message or a child's result
 	spawn  int
+	timer  int // the id of the timer that delivered it, or 0
 }
 
 // keyModel is what the sequence expects of one key: whether a handler is blocked, what waits behind it, and what
@@ -445,12 +448,15 @@ func (p *replay) passTime(d time.Duration) {
 	})
 	for _, i := range due {
 		p.timers[i].fired = true
-		p.deliver(p.timers[i].key, qItem{id: p.timers[i].msg, bypass: true})
+		p.deliver(p.timers[i].key, qItem{id: p.timers[i].msg, bypass: true, timer: int(p.timers[i].id)})
 	}
 }
 
 func (p *replay) settle() {
 	p.passTime(propTick)
+	// A message delivered by the last timer of the tick is still in the handler's microsecond sleep; let it end.
+	// The model's clock does not count these few microseconds: timers are set in whole milliseconds.
+	time.Sleep(propSettle)
 	synctest.Wait()
 }
 
@@ -522,10 +528,15 @@ func (p *replay) cancel(o op) {
 	if o.at >= len(p.timers) {
 		return
 	}
-	p.runner.CancelTimer(p.timers[o.at].id)
-	if !p.timers[o.at].fired {
-		p.timers[o.at].cancelled = true
+	timer := &p.timers[o.at]
+	p.runner.CancelTimer(timer.id)
+	if !timer.fired {
+		timer.cancelled = true
+		return
 	}
+	// A fired timer whose message still waits behind a blocked handler has it taken back; one being handled does not.
+	km := p.keys[timer.key]
+	km.queue = slices.DeleteFunc(km.queue, func(item qItem) bool { return item.timer == int(timer.id) })
 }
 
 func (p *replay) step(i int, o op) {
@@ -596,6 +607,6 @@ func violations(t *testing.T, ops []op) []string {
 
 func TestRunnerHoldsItsInvariantsOverRandomSequences(t *testing.T) {
 	t.Parallel()
-	proptest.Check(t, proptest.Config{Seeds: 60}, genOps,
+	proptest.Check(t, proptest.Config{Seeds: 300}, genOps,
 		func(ops []op) bool { return len(violations(t, ops)) > 0 }, simplifyOp)
 }
