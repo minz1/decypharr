@@ -89,6 +89,7 @@ var ErrAlreadyStarted = errors.New("manager already started")
 // group's creation order is its place in the shutdown order.
 type service struct {
 	name  string
+	group *task.Group
 	begin chan struct{}
 	// result carries the outcome of start; buffered so the task never waits on a reader.
 	result chan error
@@ -105,7 +106,7 @@ func (m *Manager) superviseService(
 ) (*service, error) {
 	child := m.group.Child(name)
 	m.children = append(m.children, child)
-	svc := &service{name: name, begin: make(chan struct{}), result: make(chan error, 1)}
+	svc := &service{name: name, group: child, begin: make(chan struct{}), result: make(chan error, 1)}
 	err := child.Go("run", func(ctx context.Context) error {
 		select {
 		case <-svc.begin:
@@ -117,12 +118,12 @@ func (m *Manager) superviseService(
 		case <-ctx.Done():
 		}
 		<-ctx.Done()
-		if stop == nil {
-			return nil
+		if stop != nil {
+			if stopErr := stop(); stopErr != nil {
+				m.logger.Warn().Err(stopErr).Str("service", name).Msg("Failed to stop service")
+			}
 		}
-		if stopErr := stop(); stopErr != nil {
-			m.logger.Warn().Err(stopErr).Str("service", name).Msg("Failed to stop service")
-		}
+		m.logger.Debug().Str("service", name).Msg("Service stopped")
 		return nil
 	})
 	if err != nil {
@@ -349,6 +350,9 @@ func (m *Manager) registerServices() error {
 	if err := m.superviseAll([]serviceSpec{
 		{name: "hearsay", handle: &m.hearsaySvc, start: m.startHearsay, stop: m.stopHearsay},
 		{name: "usenet", stop: m.stopUsenet},
+		// Provider deletes queued by the services above run here, so they finish after those services have
+		// stopped and before usenet and storage go: no stop waits on a slow delete, and no delete is lost.
+		{name: "placements", handle: &m.placementsSvc},
 		{name: "reacquire", handle: &m.reacquireSvc, start: m.startReacquire, stop: m.stopReacquire},
 		{name: "indexer", handle: &m.indexerSvc, start: m.startIndexer, stop: m.stopIndexer},
 		{name: "repair", handle: &m.repairSvc, start: m.startRepair, stop: m.stopRepair},

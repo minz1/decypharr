@@ -74,7 +74,7 @@ func TestStreamReacquireIsHeldWhileTheUsenetBucketIsTripped(t *testing.T) {
 			started: make(chan struct{}),
 			binding: reacquire.Binding{EntryID: "nzb-1", EntryFileID: "file-1"},
 		}
-		m := &Manager{checkStreamFile: confirmBroken}
+		m := &Manager{work: testGroup(t), checkStreamFile: confirmBroken}
 		m.SetArrRecovery(recovery)
 		m.repair = repair.New(repair.Dependencies{})
 		tripBucket(t, m.repair, m.repair.ProviderFor("nzb-1"), repair.ClassUsenetSegment)

@@ -61,13 +61,14 @@ func newPruneHarness(t *testing.T, mode config.PruneMode) *pruneHarness {
 		},
 	})
 	h.m = &Manager{
-		work:     testGroup(t),
-		clients:  xsync.NewMap[string, debrid.Client](),
-		storage:  store,
-		queue:    newQueue(store, "", nil, zerolog.Nop()),
-		store:    cfg,
-		logger:   zerolog.New(h.logs),
-		pruneNow: func() time.Time { return h.now },
+		work:          testGroup(t),
+		placementsSvc: &service{group: testGroup(t)},
+		clients:       xsync.NewMap[string, debrid.Client](),
+		storage:       store,
+		queue:         newQueue(store, "", nil, zerolog.Nop()),
+		store:         cfg,
+		logger:        zerolog.New(h.logs),
+		pruneNow:      func() time.Time { return h.now },
 	}
 	h.m.entry = newEntryCache(func(string) bool { return false }, nil, nil)
 	h.provider = &fakePruneProvider{}

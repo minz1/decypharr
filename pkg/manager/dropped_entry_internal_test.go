@@ -31,6 +31,7 @@ func newDroppedTestManager(t *testing.T, recovery ArrRecovery) (*Manager, *stora
 	}})
 	m := &Manager{
 		work:             testGroup(t),
+		placementsSvc:    &service{group: testGroup(t)},
 		clients:          xsync.NewMap[string, debrid.Client](),
 		providerMisses:   xsync.NewMap[string, map[string]struct{}](),
 		dropHookFailures: xsync.NewMap[string, map[string]int](),

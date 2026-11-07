@@ -91,7 +91,7 @@ type Manager struct {
 	ready chan struct{}
 	// The sub-services the start sequence runs, each as a task on its own
 	// child group. A nil service is not configured.
-	hearsaySvc, reacquireSvc, indexerSvc, repairSvc, mountSvc, schedulerSvc *service
+	hearsaySvc, placementsSvc, reacquireSvc, indexerSvc, repairSvc, mountSvc, schedulerSvc *service
 
 	arrRecoveryMu          sync.RWMutex
 	arrRecovery            ArrRecovery
