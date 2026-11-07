@@ -2,6 +2,7 @@ package keyed_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"slices"
@@ -20,10 +21,15 @@ import (
 type opKind int
 
 const (
-	opSend opKind = iota + 1
-	opAfter
-	opCancel
-	opAdvance
+	opSend      opKind = iota + 1 // a command
+	opObserve                     // an observation
+	opSendChild                   // a command whose handler starts a child task
+	opSendPanic                   // a command whose handler starts a child task that panics
+	opAfter                       // a timer
+	opCancel                      // cancels a timer
+	opAdvance                     // lets time pass
+	opHold                        // makes the next message of the key block in its handler
+	opRelease                     // lets a blocked handler go, and the queue behind it drain
 	opStop
 )
 
@@ -39,6 +45,16 @@ func (o op) String() string {
 	switch o.kind {
 	case opSend:
 		return fmt.Sprintf("send(k%d)", o.key)
+	case opObserve:
+		return fmt.Sprintf("observe(k%d)", o.key)
+	case opSendChild:
+		return fmt.Sprintf("send+child(k%d)", o.key)
+	case opSendPanic:
+		return fmt.Sprintf("send+panicking-child(k%d)", o.key)
+	case opHold:
+		return fmt.Sprintf("hold(k%d)", o.key)
+	case opRelease:
+		return fmt.Sprintf("release(k%d)", o.key)
 	case opAfter:
 		return fmt.Sprintf("after(k%d,%dms)", o.key, o.at)
 	case opCancel:
@@ -54,33 +70,46 @@ func (o op) String() string {
 
 const (
 	propKeys = 3
-	// timerBase separates the ids of timer messages from those of sends.
+	// The ids of messages that are not sends are offset, so a handled id says where the message came from.
 	timerBase = 1_000_000
+	childBase = 2_000_000
+	panicBase = 3_000_000
+	// propSize is the mailbox bound of the runner under test, small so that holds make mailboxes overflow.
+	propSize = 3
 	// propIdle is the idle exit of the runner under test, short so sequences exercise it.
 	propIdle = 40 * time.Millisecond
 	// propTick is the time every step takes, so the handlers of the step have finished before the next one.
 	propTick = time.Millisecond
+	// propSlack is how far from the idle time a gap must be for the state check to expect an outcome.
+	propSlack = 3 * time.Millisecond
 )
 
 func genOps(seed int64) []op {
 	rng := rand.New(rand.NewPCG(uint64(seed), uint64(seed)+7))
-	ops := make([]op, 5+rng.IntN(35))
+	ops := make([]op, 8+rng.IntN(50))
 	for i := range ops {
-		switch rng.IntN(10) {
-		case 0, 1, 2, 3:
-			ops[i] = op{kind: opSend, key: rng.IntN(propKeys)}
-		case 4, 5:
-			ops[i] = op{kind: opAfter, key: rng.IntN(propKeys), at: 1 + rng.IntN(200)}
-		case 6:
+		key := rng.IntN(propKeys)
+		switch n := rng.IntN(100); {
+		case n < 22:
+			ops[i] = op{kind: opSend, key: key}
+		case n < 38:
+			ops[i] = op{kind: opObserve, key: key}
+		case n < 44:
+			ops[i] = op{kind: opSendChild, key: key}
+		case n < 49:
+			ops[i] = op{kind: opSendPanic, key: key}
+		case n < 58:
+			ops[i] = op{kind: opAfter, key: key, at: 1 + rng.IntN(200)}
+		case n < 62:
 			ops[i] = op{kind: opCancel, at: rng.IntN(8)}
-		case 7, 8:
+		case n < 74:
 			ops[i] = op{kind: opAdvance, at: 1 + rng.IntN(120)}
+		case n < 84:
+			ops[i] = op{kind: opHold, key: key}
+		case n < 96:
+			ops[i] = op{kind: opRelease, key: key}
 		default:
-			if rng.IntN(4) == 0 { // a stop is rarer, so most sequences run long
-				ops[i] = op{kind: opStop}
-			} else {
-				ops[i] = op{kind: opSend, key: rng.IntN(propKeys)}
-			}
+			ops[i] = op{kind: opStop}
 		}
 	}
 	return ops
@@ -97,42 +126,147 @@ func simplifyOp(o op) []op {
 	return simpler
 }
 
-// timerModel is what the sequence expects of one timer.
-type timerModel struct {
-	id        keyed.TimerID
-	key       int
-	msg       int
-	due       time.Duration
-	cancelled bool
+// pmsg is the message of the runner under test.
+type pmsg struct {
+	id    int
+	obs   bool
+	spawn int // 0 none, 1 a child task, 2 a child task that panics
 }
 
-// observer records what the handlers saw.
+func classifyProp(m pmsg) keyed.Class {
+	if m.obs {
+		return keyed.Observation
+	}
+	return keyed.Command
+}
+
+// pstate is the state of a key: which activation built it, and how many messages that activation has handled.
+type pstate struct {
+	activation int
+	handled    int
+}
+
+// observer is the handler under test. It records what it saw and checks the state it is given.
 type observer struct {
-	mu      sync.Mutex
-	handled map[int][]int // key -> ids in handling order
-	active  map[int]int
-	overlap bool
-	count   int
+	mu          sync.Mutex
+	handled     map[int][]int // key -> ids in handling order
+	active      map[int]int
+	activations map[int]int // key -> activations so far
+	perAct      map[[2]int]int
+	lastEnd     map[int]time.Time
+	lastAct     map[int]int
+	holds       map[int]chan struct{} // armed: the next message of the key blocks on it
+	blocked     map[int]chan struct{} // blocking now
+	broken      []string
+	count       int
 }
 
 func newObserver() *observer {
-	return &observer{handled: map[int][]int{}, active: map[int]int{}}
+	return &observer{
+		handled: map[int][]int{}, active: map[int]int{}, activations: map[int]int{}, perAct: map[[2]int]int{},
+		lastEnd: map[int]time.Time{}, lastAct: map[int]int{}, holds: map[int]chan struct{}{},
+		blocked: map[int]chan struct{}{},
+	}
 }
 
-func (o *observer) handle(_ context.Context, key int, m int, _ *keyed.Effects[int, int]) {
+func (o *observer) failf(format string, args ...any) {
+	o.broken = append(o.broken, fmt.Sprintf(format, args...))
+}
+
+func (o *observer) Activate(_ context.Context, key int) pstate {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.activations[key]++
+	return pstate{activation: o.activations[key]}
+}
+
+// checkState checks the state the runner handed to a message against the activations and the quiet time.
+func (o *observer) checkState(key int, st *pstate) {
+	if st.activation != o.activations[key] {
+		o.failf("key %d: a message saw the state of activation %d, but activation %d is the latest",
+			key, st.activation, o.activations[key])
+	}
+	slot := [2]int{key, st.activation}
+	if st.handled != o.perAct[slot] {
+		o.failf("key %d: the state of activation %d had handled %d messages, the activation had handled %d",
+			key, st.activation, st.handled, o.perAct[slot])
+	}
+	o.perAct[slot]++
+	if end, seen := o.lastEnd[key]; seen {
+		gap := time.Since(end)
+		switch {
+		case gap > propIdle+propSlack && st.activation == o.lastAct[key]:
+			o.failf("key %d: quiet for %v, longer than the idle time, yet the state was kept", key, gap)
+		case gap < propIdle-propSlack && st.activation != o.lastAct[key]:
+			o.failf("key %d: quiet for only %v, shorter than the idle time, yet the state was dropped", key, gap)
+		}
+	}
+	o.lastAct[key] = st.activation
+	st.handled++
+}
+
+func (o *observer) Handle(
+	ctx context.Context,
+	key int,
+	st *pstate,
+	m pmsg,
+	fx *keyed.Effects[int, pmsg],
+) {
 	o.mu.Lock()
 	o.active[key]++
 	if o.active[key] > 1 {
-		o.overlap = true
+		o.failf("two handlers ran at once for key %d", key)
+	}
+	o.checkState(key, st)
+	gate := o.holds[key]
+	delete(o.holds, key)
+	if gate != nil {
+		o.blocked[key] = gate
 	}
 	o.mu.Unlock()
 	// Wait inside the handler, so a second handler for the key would overlap this one.
 	time.Sleep(time.Microsecond)
+	if gate != nil {
+		<-gate
+	}
+	o.spawn(fx, m)
 	o.mu.Lock()
 	o.active[key]--
-	o.handled[key] = append(o.handled[key], m)
+	o.handled[key] = append(o.handled[key], m.id)
 	o.count++
+	o.lastEnd[key] = time.Now()
 	o.mu.Unlock()
+	_ = ctx
+}
+
+func (o *observer) spawn(fx *keyed.Effects[int, pmsg], m pmsg) {
+	switch m.spawn {
+	case 1:
+		_ = fx.Go("child", func(context.Context) pmsg { return pmsg{id: m.id + childBase} },
+			func(any) pmsg { return pmsg{id: m.id + panicBase} })
+	case 2:
+		_ = fx.Go("child", func(context.Context) pmsg { panic("child failed") },
+			func(any) pmsg { return pmsg{id: m.id + panicBase} })
+	}
+}
+
+func (o *observer) arm(key int) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.holds[key] == nil && o.blocked[key] == nil {
+		o.holds[key] = make(chan struct{})
+	}
+}
+
+// release lets the blocked handler of key go and disarms the key.
+func (o *observer) release(key int) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	delete(o.holds, key)
+	if gate := o.blocked[key]; gate != nil {
+		delete(o.blocked, key)
+		close(gate)
+	}
 }
 
 func (o *observer) total() int {
@@ -141,42 +275,181 @@ func (o *observer) total() int {
 	return o.count
 }
 
+// qItem is a message in the model of a mailbox.
+type qItem struct {
+	id     int
+	obs    bool
+	bypass bool // a timer's message or a child's result
+	spawn  int
+}
+
+// keyModel is what the sequence expects of one key: whether a handler is blocked, what waits behind it, and what
+// has been handled.
+type keyModel struct {
+	armed    bool
+	blocked  bool
+	inflight qItem
+	queue    []qItem
+	expected []int
+}
+
+func (k *keyModel) depth() int {
+	n := 0
+	for _, item := range k.queue {
+		if !item.bypass {
+			n++
+		}
+	}
+	return n
+}
+
+// evictOldestObservation removes the oldest queued observation, and reports whether there was one.
+func (k *keyModel) evictOldestObservation() bool {
+	i := slices.IndexFunc(k.queue, func(item qItem) bool { return item.obs && !item.bypass })
+	if i < 0 {
+		return false
+	}
+	k.queue = slices.Delete(k.queue, i, i+1)
+	return true
+}
+
+// timerModel is what the sequence expects of one timer.
+type timerModel struct {
+	id        keyed.TimerID
+	key       int
+	msg       int
+	due       time.Duration
+	cancelled bool
+	fired     bool
+}
+
 // replay applies a generated sequence to a real runner and keeps the model of what that should have done.
 type replay struct {
-	t       *testing.T
-	root    *task.Group
-	runner  *keyed.Runner[int, int, struct{}]
-	obs     *observer
-	elapsed time.Duration
-	stopped bool
-	stopAt  time.Duration
-	atStop  int
-	sent    map[int][]int // key -> ids Send accepted, in order
-	timers  []timerModel
-	broken  []string
+	t           *testing.T
+	root        *task.Group
+	runner      *keyed.Runner[int, pmsg, pstate]
+	obs         *observer
+	keys        [propKeys]*keyModel
+	elapsed     time.Duration
+	stopped     bool
+	stopAt      time.Duration
+	atStop      int
+	timers      []timerModel
+	dropped     uint64
+	refused     uint64
+	childPanics uint64
+	broken      []string
 }
 
 func newReplay(t *testing.T) *replay {
 	root := task.NewRoot(context.WithoutCancel(t.Context()), "prop", zerolog.Nop())
 	obs := newObserver()
-	return &replay{
+	p := &replay{
 		t:    t,
 		root: root,
 		obs:  obs,
-		runner: keyed.New[int, int, struct{}](root, "prop", keyed.HandlerFunc[int, int](obs.handle),
-			keyed.Options[int]{MailboxSize: 1_000, IdleAfter: propIdle}),
-		sent: map[int][]int{},
+		runner: keyed.New[int, pmsg, pstate](root, "prop", obs,
+			keyed.Options[pmsg]{MailboxSize: propSize, IdleAfter: propIdle, Class: classifyProp}),
 	}
+	for i := range p.keys {
+		p.keys[i] = &keyModel{}
+	}
+	return p
 }
 
 func (p *replay) failf(format string, args ...any) {
 	p.broken = append(p.broken, fmt.Sprintf(format, args...))
 }
 
-// settle lets time pass and the runner finish what it was given.
+// drain is the model of handlers running items in order: each is handled, and a child task's result queues behind
+// what already waits.
+func (p *replay) drain(key int, items []qItem) {
+	km := p.keys[key]
+	for i := 0; i < len(items); i++ {
+		item := items[i]
+		km.expected = append(km.expected, item.id)
+		switch item.spawn {
+		case 1:
+			items = append(items, qItem{id: item.id + childBase, bypass: true})
+		case 2:
+			p.childPanics++
+			items = append(items, qItem{id: item.id + panicBase, bypass: true})
+		}
+	}
+}
+
+// deliver is the model of a message reaching a key. It reports whether the mailbox refused it.
+func (p *replay) deliver(key int, item qItem) bool {
+	km := p.keys[key]
+	switch {
+	case !km.blocked && km.armed:
+		km.armed, km.blocked, km.inflight = false, true, item
+	case !km.blocked:
+		p.drain(key, []qItem{item})
+	case item.bypass:
+		km.queue = append(km.queue, item)
+	case item.obs:
+		if km.depth() >= propSize {
+			if !km.evictOldestObservation() {
+				p.refused++
+				return true
+			}
+			p.dropped++
+		}
+		km.queue = append(km.queue, item)
+	default:
+		if km.depth() >= propSize {
+			if !km.evictOldestObservation() {
+				p.refused++
+				return true
+			}
+			p.dropped++
+		}
+		km.queue = append(km.queue, item)
+	}
+	return false
+}
+
+// releaseKey is the model of letting a blocked handler go: it finishes, then the queue behind it drains.
+func (p *replay) releaseKey(key int) {
+	km := p.keys[key]
+	km.armed = false
+	p.obs.release(key)
+	if !km.blocked {
+		return
+	}
+	items := append([]qItem{km.inflight}, km.queue...)
+	km.blocked, km.inflight, km.queue = false, qItem{}, nil
+	p.drain(key, items)
+}
+
+// passTime lets d pass and delivers the timers that fell due, in due order.
+func (p *replay) passTime(d time.Duration) {
+	time.Sleep(d)
+	p.elapsed += d
+	if p.stopped {
+		return // the Stop cancelled every timer
+	}
+	var due []int
+	for i, timer := range p.timers {
+		if !timer.fired && !timer.cancelled && timer.due <= p.elapsed {
+			due = append(due, i)
+		}
+	}
+	slices.SortStableFunc(due, func(a, b int) int {
+		if c := p.timers[a].due - p.timers[b].due; c != 0 {
+			return int(c)
+		}
+		return int(p.timers[a].id) - int(p.timers[b].id)
+	})
+	for _, i := range due {
+		p.timers[i].fired = true
+		p.deliver(p.timers[i].key, qItem{id: p.timers[i].msg, bypass: true})
+	}
+}
+
 func (p *replay) settle() {
-	time.Sleep(propTick)
-	p.elapsed += propTick
+	p.passTime(propTick)
 	synctest.Wait()
 }
 
@@ -184,6 +457,10 @@ func (p *replay) stop() {
 	if p.stopped {
 		return
 	}
+	for key := range propKeys {
+		p.releaseKey(key)
+	}
+	p.settle() // the released handlers and what queued behind them finish before the Stop
 	ctx, cancel := task.Detached(p.t.Context(), time.Minute)
 	defer cancel()
 	if err := p.root.Stop(ctx); err != nil {
@@ -193,20 +470,32 @@ func (p *replay) stop() {
 }
 
 func (p *replay) send(i int, o op) {
-	err := p.runner.Send(o.key, i)
+	item := qItem{id: i, obs: o.kind == opObserve}
+	if o.kind == opSendChild {
+		item.spawn = 1
+	}
+	if o.kind == opSendPanic {
+		item.spawn = 2
+	}
+	if p.stopped {
+		if err := p.runner.Send(o.key, pmsg{id: i}); !errors.Is(err, keyed.ErrStopped) {
+			p.failf("op %d: Send after Stop = %v, want ErrStopped", i, err)
+		}
+		return
+	}
+	refused := p.deliver(o.key, item)
+	err := p.runner.Send(o.key, pmsg{id: i, obs: item.obs, spawn: item.spawn})
 	switch {
-	case err == nil && p.stopped:
-		p.failf("op %d: Send accepted after Stop", i)
-	case err == nil:
-		p.sent[o.key] = append(p.sent[o.key], i)
-	case !p.stopped:
-		p.failf("op %d: Send refused with %v", i, err)
+	case refused && !errors.Is(err, keyed.ErrMailboxFull):
+		p.failf("op %d: Send = %v, want ErrMailboxFull", i, err)
+	case !refused && err != nil:
+		p.failf("op %d: Send = %v, want it accepted", i, err)
 	}
 }
 
 func (p *replay) after(i int, o op) {
 	delay := time.Duration(o.at) * time.Millisecond
-	id := p.runner.After(o.key, delay, timerBase+i)
+	id := p.runner.After(o.key, delay, pmsg{id: timerBase + i})
 	switch {
 	case id == 0 && !p.stopped:
 		p.failf("op %d: After returned no timer", i)
@@ -220,68 +509,56 @@ func (p *replay) cancel(o op) {
 		return
 	}
 	p.runner.CancelTimer(p.timers[o.at].id)
-	if p.timers[o.at].due > p.elapsed {
+	if !p.timers[o.at].fired {
 		p.timers[o.at].cancelled = true
 	}
 }
 
 func (p *replay) step(i int, o op) {
 	switch o.kind {
-	case opSend:
+	case opSend, opObserve, opSendChild, opSendPanic:
 		p.send(i, o)
 	case opAfter:
 		p.after(i, o)
 	case opCancel:
 		p.cancel(o)
 	case opAdvance:
-		time.Sleep(time.Duration(o.at) * time.Millisecond)
-		p.elapsed += time.Duration(o.at) * time.Millisecond
+		p.passTime(time.Duration(o.at) * time.Millisecond)
+	case opHold:
+		if km := p.keys[o.key]; !p.stopped && !km.blocked && !km.armed {
+			km.armed = true
+			p.obs.arm(o.key)
+		}
+	case opRelease:
+		p.releaseKey(o.key)
 	case opStop:
 		p.stop()
 	}
 	p.settle()
 }
 
-// check compares what the handlers saw with what the sequence expects.
+// check compares what the handlers saw with what the model expects.
 func (p *replay) check() {
 	p.obs.mu.Lock()
 	defer p.obs.mu.Unlock()
-	if p.obs.overlap {
-		p.failf("two handlers ran at once for one key")
-	}
+	p.broken = append(p.broken, p.obs.broken...)
 	if p.obs.count != p.atStop {
 		p.failf("%d messages were handled after Stop", p.obs.count-p.atStop)
 	}
 	for key := range propKeys {
-		var fromSends []int
-		for _, id := range p.obs.handled[key] {
-			if id < timerBase {
-				fromSends = append(fromSends, id)
-			}
-		}
-		if !slices.Equal(fromSends, p.sent[key]) {
-			p.failf("key %d: sends handled %v, accepted %v (order or exactly-once broken)", key, fromSends, p.sent[key])
+		if got, want := p.obs.handled[key], p.keys[key].expected; !slices.Equal(got, want) {
+			p.failf("key %d: handled %v, want %v", key, got, want)
 		}
 	}
-	p.checkTimers()
-}
-
-// checkTimers expects every timer that fell due before the stop, and was not cancelled, to have fired once.
-func (p *replay) checkTimers() {
 	for _, timer := range p.timers {
-		fired := 0
-		for _, id := range p.obs.handled[timer.key] {
-			if id == timer.msg {
-				fired++
-			}
+		if timer.fired && timer.due > p.stopAt {
+			p.failf("timer %d fired after the Stop", timer.msg)
 		}
-		want := 1
-		if timer.cancelled || timer.due > p.stopAt {
-			want = 0
-		}
-		if fired != want {
-			p.failf("timer for key %d (msg %d) fired %d times, want %d", timer.key, timer.msg, fired, want)
-		}
+	}
+	info := p.runner.Snapshot()
+	if info.Dropped != p.dropped || info.Refused != p.refused || info.ChildPanics != p.childPanics {
+		p.failf("counters: dropped %d refused %d child panics %d; want %d %d %d",
+			info.Dropped, info.Refused, info.ChildPanics, p.dropped, p.refused, p.childPanics)
 	}
 }
 
@@ -295,8 +572,7 @@ func violations(t *testing.T, ops []op) []string {
 			p.step(i, o)
 		}
 		if !p.stopped {
-			time.Sleep(time.Second) // every pending timer falls due
-			p.elapsed += time.Second
+			p.passTime(time.Second) // every pending timer falls due
 			synctest.Wait()
 		}
 		p.stop()
