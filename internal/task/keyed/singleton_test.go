@@ -95,5 +95,8 @@ func TestASingletonRefusesAfterStop(t *testing.T) {
 		if got := s.Snapshot().State; got != "stopped" {
 			t.Fatalf("state = %q, want stopped", got)
 		}
+		if keys := s.Snapshot().Keys; len(keys) != 0 {
+			t.Fatalf("keys = %+v after Stop, want none: a stopped runner holds no key", keys)
+		}
 	})
 }
