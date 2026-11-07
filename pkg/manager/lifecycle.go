@@ -273,7 +273,6 @@ func (m *Manager) Stop(ctx context.Context) error {
 // touch it, then closes it.
 func (m *Manager) closeStorage(ctx context.Context) error {
 	<-ctx.Done()
-	m.markStopping()
 	for _, child := range m.children {
 		<-child.Done()
 	}
@@ -285,6 +284,11 @@ func (m *Manager) closeStorage(ctx context.Context) error {
 	}
 	m.life.Transition(lifecycleStopping, lifecycleStopped)
 	m.logger.Info().Msg("Manager stopped")
+	return nil
+}
+
+func (m *Manager) markStoppingService() error {
+	m.markStopping()
 	return nil
 }
 
@@ -367,6 +371,8 @@ func (m *Manager) registerServices() error {
 	m.children = append(m.children, m.work)
 	return m.superviseAll([]serviceSpec{
 		{name: "scheduler", handle: &m.schedulerSvc, start: m.startScheduler, stop: m.stopSchedulerService},
+		// The newest child stops first, so its stop marks the manager as stopping before any other service stops.
+		{name: "stopping", stop: m.markStoppingService},
 	})
 }
 
