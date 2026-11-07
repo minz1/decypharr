@@ -67,6 +67,23 @@ func TestStopFromMountedUsesRC(t *testing.T) {
 	})
 }
 
+// The RC unmount fails and the forced one works: the stop ends clean, with no
+// error left from the step that was replaced.
+func TestStopKeepsTheForcedUnmountsOutcome(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		r := newManagerRig(t)
+		r.startMounted()
+		r.failRC("mount/unmount", http.StatusBadRequest)
+		r.stop()
+		r.wantLiveDetach()
+		r.wantMount(mountUnmounted)
+		if info := r.m.mountInfo(); info.Error != "" {
+			t.Fatalf("info = %+v, want no error: the forced unmount worked", info)
+		}
+	})
+}
+
 // A Failed mount may still be held by rcd: the stop asks rcd to drop it.
 func TestStopFromFailedUsesRC(t *testing.T) {
 	t.Parallel()

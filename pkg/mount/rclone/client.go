@@ -90,9 +90,16 @@ func (m *Manager) unmount(ctx context.Context, from rcdState) {
 		}
 	}
 	if force {
-		if forceErr := m.forceUnmount(ctx); forceErr != nil {
-			m.logger.Error().Err(forceErr).Msg("Force unmount failed")
+		// The forced unmount is the last step, so its outcome is the one kept.
+		err = m.forceUnmount(ctx)
+		if err != nil {
+			m.logger.Error().Err(err).Msg("Force unmount failed")
 		}
+	}
+	// A refused first move left the state behind: step it into Unmounting now,
+	// or Unmounted is refused and a stopped manager reads as mounted.
+	if s := m.view.Load().state; s != mountUnmounting && s != mountUnmounted {
+		m.moveMount(mountUnmounting, nil)
 	}
 	if !m.moveMount(mountUnmounted, withErr(err)) {
 		m.logger.Warn().Str("mount", m.view.Load().state.String()).Msg("The mount's state refused Unmounted")
