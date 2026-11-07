@@ -171,8 +171,10 @@ func TestExpiredJobIsNotDispatchableWhileItIsSearchedFor(t *testing.T) {
 	rig.advance(waitingTimeout + time.Minute)
 	rig.service.expireWaitingJob(t.Context(), rig.job.ID)
 
-	if len(seen) != 1 || seen[0].dispatchable() {
-		t.Fatalf("status when the compensating search arrived = %v, want one non-dispatchable status", seen)
+	// Exactly the waiting status it had: a worker that took the job first would have stopped it, leaving
+	// needs_attention, which is no more dispatchable than waiting but means the search never went out held.
+	if len(seen) != 1 || seen[0] != StatusWaitingForGrab {
+		t.Fatalf("status when the compensating search arrived = %v, want [%s]", seen, StatusWaitingForGrab)
 	}
 }
 
