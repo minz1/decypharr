@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/puzpuzpuz/xsync/v4"
@@ -221,6 +222,49 @@ func TestPlacementRunsEndBeforeTheStorageCloses(t *testing.T) {
 	if ran {
 		t.Fatal("a refused run touched the storage")
 	}
+}
+
+// Stop itself waits for a provider deletion in flight before it closes the storage the deletion reads, and refuses
+// one that is requested after.
+func TestStopWaitsForAPlacementRunBeforeClosingStorage(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		h := newPruneHarness(t, config.PruneModeDelete)
+		h.addEntry(t, "stored", nil)
+		release := make(chan struct{})
+		var readErr error
+		if !h.m.startPlacementRun("test entry", "torbox", func() {
+			<-release
+			_, readErr = h.m.storage.Get("stored")
+		}) {
+			t.Fatal("a run was refused before Stop")
+		}
+		stopped := make(chan struct{})
+		go func() {
+			_ = h.m.Stop()
+			close(stopped)
+		}()
+
+		synctest.Wait()
+		select {
+		case <-stopped:
+			t.Fatal("Stop returned, and closed the storage, while a placement run was in flight")
+		default:
+		}
+		close(release)
+		synctest.Wait()
+		select {
+		case <-stopped:
+		default:
+			t.Fatal("Stop did not finish once the run ended")
+		}
+		if readErr != nil {
+			t.Fatalf("the run read a closed storage: %v", readErr)
+		}
+		if h.m.startPlacementRun("test entry", "torbox", func() { t.Error("a run started after Stop") }) {
+			t.Fatal("a run was accepted after Stop")
+		}
+	})
 }
 
 // A deletion refused because the manager is stopping leaves a provider torrent behind: that is said, with the
