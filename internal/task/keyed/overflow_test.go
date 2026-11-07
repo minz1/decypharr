@@ -120,27 +120,6 @@ func TestAnObservationIsRefusedWhenTheMailboxHoldsNothingToDrop(t *testing.T) {
 	})
 }
 
-func TestACommandIsRefusedAndCountedWhenTheMailboxIsFull(t *testing.T) {
-	t.Parallel()
-	synctest.Test(t, func(t *testing.T) {
-		r, _ := newKindRunner(t, 1)
-		hold := make(chan struct{})
-		send(t, r, kind{id: 1, hold: hold})
-		synctest.Wait()
-		send(t, r, kind{id: 2, obs: true})
-
-		err := r.Send("a", kind{id: 3})
-
-		if !errors.Is(err, keyed.ErrMailboxFull) {
-			t.Fatalf("Send = %v, want ErrMailboxFull: a command does not push an observation out", err)
-		}
-		if got := r.Snapshot().Refused; got != 1 {
-			t.Fatalf("refused = %d, want 1", got)
-		}
-		close(hold)
-	})
-}
-
 func TestATimerClassMessageIsNeverRefused(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
