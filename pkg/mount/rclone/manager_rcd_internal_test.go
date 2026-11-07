@@ -2,6 +2,7 @@ package rclone
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -26,9 +27,16 @@ import (
 
 // handlerTransport serves requests with an in-process handler, so the RC
 // client needs no socket and works inside a synctest bubble.
-type handlerTransport struct{ handler http.Handler }
+type handlerTransport struct {
+	handler http.Handler
+	// down, when set and true, refuses every request like a dead listener.
+	down *atomic.Bool
+}
 
 func (t handlerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.down != nil && t.down.Load() {
+		return nil, errors.New("connection refused")
+	}
 	rec := httptest.NewRecorder()
 	t.handler.ServeHTTP(rec, req)
 	res := rec.Result()
@@ -55,6 +63,40 @@ type managerRig struct {
 	fail map[string]int
 	// mountGate, when set before start, holds every mount/mount call until it is closed.
 	mountGate chan struct{}
+	// rcDown makes the RC server refuse connections.
+	rcDown atomic.Bool
+	// hangUnmount makes mount/unmount block until its request is cancelled.
+	hangUnmount atomic.Bool
+	// detaches records, per forced unmount, whether its ctx was still live.
+	detaches []bool
+}
+
+// detach is the Manager's forced unmount: it records the ctx's state at call time.
+func (r *managerRig) detach(ctx context.Context, _ string) error {
+	r.record("detach")
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	// Live means the ctx has not ended and keeps the share the RC call left over.
+	deadline, ok := ctx.Deadline()
+	r.detaches = append(
+		r.detaches,
+		ctx.Err() == nil && ok && time.Until(deadline) >= rcdUnmountBudget-rcdRCUnmountBudget,
+	)
+	return nil
+}
+
+// wantLiveDetach fails unless exactly one forced unmount ran and its ctx was live.
+func (r *managerRig) wantLiveDetach() {
+	r.t.Helper()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.detaches) != 1 || !r.detaches[0] {
+		r.t.Fatalf(
+			"forced unmounts (ctx live?) = %v, want exactly one with a live ctx; events: %v",
+			r.detaches,
+			r.events,
+		)
+	}
 }
 
 // failRC makes the RC command cmd answer with status.
@@ -84,9 +126,10 @@ func newManagerRig(t *testing.T) *managerRig {
 	}
 	m.client = rclone.NewClient(
 		"http://rc.invalid", "", "", nil, zerolog.Nop(),
-		rclone.WithTransport(handlerTransport{handler: http.HandlerFunc(r.serveRC)}),
+		rclone.WithTransport(handlerTransport{handler: http.HandlerFunc(r.serveRC), down: &r.rcDown}),
 	)
 	m.wire()
+	m.detach = r.detach
 	m.owner.spawn = r.spawnProc
 	m.owner.closeLog = func() error {
 		r.closes.Add(1)
@@ -102,6 +145,9 @@ func (r *managerRig) serveRC(w http.ResponseWriter, req *http.Request) {
 	r.record("rc:" + cmd)
 	if cmd == "mount/mount" && r.mountGate != nil {
 		<-r.mountGate
+	}
+	if cmd == "mount/unmount" && r.hangUnmount.Load() {
+		<-req.Context().Done()
 	}
 	if status := r.failStatus(cmd); status != 0 {
 		http.Error(w, "failed", status)
@@ -487,9 +533,10 @@ func TestStopDuringBackoffUnmounts(t *testing.T) {
 		if err := r.m.Stop(); err != nil {
 			t.Fatal(err)
 		}
-		if got := r.count("rc:mount/unmount"); got != 1 {
-			t.Fatalf("unmount calls = %d, want 1; events: %v", got, r.events)
+		if got := r.count("rc:mount/unmount"); got != 0 {
+			t.Fatalf("RC unmount calls = %d, want 0: rcd is dead; events: %v", got, r.events)
 		}
+		r.wantLiveDetach()
 		r.wantState(rcdStopped)
 	})
 }
@@ -510,9 +557,46 @@ func TestStopAfterCrashLoopUnmounts(t *testing.T) {
 		if err := r.m.Stop(); err != nil {
 			t.Fatal(err)
 		}
-		if got := r.count("rc:mount/unmount"); got != 1 {
-			t.Fatalf("unmount calls = %d, want 1; events: %v", got, r.events)
+		if got := r.count("rc:mount/unmount"); got != 0 {
+			t.Fatalf("RC unmount calls = %d, want 0: rcd is dead; events: %v", got, r.events)
 		}
+		r.wantLiveDetach()
+	})
+}
+
+// The RC refuses connections while the manager is Ready: the retries eat their
+// share, and the forced unmount still gets a live ctx.
+func TestStopWithRefusingRCLeavesForcedUnmountTime(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		r := newManagerRig(t)
+		r.start()
+		r.wantState(rcdReady)
+		r.rcDown.Store(true)
+
+		if err := r.m.Stop(); err != nil {
+			t.Fatal(err)
+		}
+		r.wantLiveDetach()
+		r.wantState(rcdStopped)
+	})
+}
+
+// The RC hangs while the manager is Ready: the RC call is cut at its own
+// budget, and the forced unmount still gets a live ctx.
+func TestStopWithHangingRCLeavesForcedUnmountTime(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		r := newManagerRig(t)
+		r.start()
+		r.wantState(rcdReady)
+		r.hangUnmount.Store(true)
+
+		if err := r.m.Stop(); err != nil {
+			t.Fatal(err)
+		}
+		r.wantLiveDetach()
+		r.wantState(rcdStopped)
 	})
 }
 

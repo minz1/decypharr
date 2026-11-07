@@ -88,9 +88,13 @@ func (m *Manager) performMount(ctx context.Context) error {
 	return nil
 }
 
-// unmount asks rcd to unmount, and falls back to the unmount helpers. A mount
-// marked down is still unmounted: rcd may have remounted it since.
-func (m *Manager) unmount(ctx context.Context) {
+// unmount takes the mount down before rcd is signalled. A stop from Ready asks
+// rcd first, within rcdRCUnmountBudget, and falls back to the unmount helpers on
+// what is left of ctx. From any other state no live rcd holds a mount, as mounts
+// are made only once rcd is Ready, so the old mount is a dead endpoint and the
+// helpers run at once. A mount marked down is still unmounted: rcd may have
+// remounted it since.
+func (m *Manager) unmount(ctx context.Context, from rcdState) {
 	mountInfo := m.getMountInfo()
 
 	if mountInfo == nil {
@@ -100,13 +104,19 @@ func (m *Manager) unmount(ctx context.Context) {
 
 	m.logger.Info().Msg("Unmounting")
 
-	// Try RC unmount first
+	var err error
+	force := from != rcdReady
+	if !force {
+		rcCtx, cancel := context.WithTimeout(ctx, rcdRCUnmountBudget)
+		err = m.client.Unmount(rcCtx, mountInfo.LocalPath)
+		cancel()
+		if err != nil {
+			m.logger.Warn().Err(err).Msg("RC unmount failed, trying force unmount")
+			force = true
+		}
+	}
 
-	err := m.client.Unmount(ctx, mountInfo.LocalPath)
-
-	// If RC unmount fails or server is not ready, try force unmount
-	if err != nil {
-		m.logger.Warn().Err(err).Msg("RC unmount failed, trying force unmount")
+	if force {
 		if forceUnmountErr := m.forceUnmount(ctx); forceUnmountErr != nil {
 			m.logger.Error().Err(forceUnmountErr).Msg("Force unmount failed")
 			// Don't return error here, update the state anyway
@@ -155,7 +165,7 @@ func (m *Manager) createConfig(ctx context.Context) error {
 // forceUnmount detaches the mount point without rclone's help, for a mount
 // whose rclone is gone or no longer answers.
 func (m *Manager) forceUnmount(ctx context.Context) error {
-	if err := m.unmounter.Unmount(ctx, m.mount.MountPath); err != nil {
+	if err := m.detach(ctx, m.mount.MountPath); err != nil {
 		return err
 	}
 	m.logger.Info().Str("path", m.mount.MountPath).Msg("Force-unmounted the mount point")

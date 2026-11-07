@@ -156,7 +156,7 @@ func newRcdHarness(t *testing.T) *rcdHarness {
 		}
 	}
 	o.onExit = func() { h.exitCalls.Add(1) }
-	o.beforeStop = func(context.Context) {
+	o.beforeStop = func(context.Context, rcdState) {
 		h.beforeStopCalls.Add(1)
 		h.record("beforeStop")
 	}

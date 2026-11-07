@@ -30,8 +30,11 @@ const (
 	rcdBackoffMax  = 30 * time.Second
 	// rcdStableAfter is how long rcd must stay Ready for its failures to be forgotten.
 	rcdStableAfter = time.Minute
-	// rcdUnmountBudget bounds the unmount that runs before rcd is signalled.
+	// rcdUnmountBudget bounds the whole unmount that runs before rcd is signalled.
 	rcdUnmountBudget = 8 * time.Second
+	// rcdRCUnmountBudget bounds the RC unmount within it, so a dead or hung rcd
+	// leaves the rest for the forced unmount.
+	rcdRCUnmountBudget = 5 * time.Second
 )
 
 // rcdProcess is the running rcd, as the owner sees it.
@@ -71,8 +74,9 @@ type rcdOwner struct {
 	onReady func()
 	// onExit runs when rcd exits while Ready, before the restart or the failure.
 	onExit func()
-	// beforeStop runs on every stop, from any state: the unmount, before rcd is signalled.
-	beforeStop func(ctx context.Context)
+	// beforeStop runs on every stop, from any state: the unmount, before rcd is
+	// signalled. from is the state the stop starts from.
+	beforeStop func(ctx context.Context, from rcdState)
 	// closeLog runs once, on every path that ends the owner.
 	closeLog func() error
 	logger   zerolog.Logger
@@ -89,7 +93,7 @@ func newRcdOwner(group *task.Group, logger zerolog.Logger) *rcdOwner {
 		ping:       func(context.Context) error { return errors.New("rcd owner has no ping") },
 		onReady:    func() {},
 		onExit:     func() {},
-		beforeStop: func(context.Context) {},
+		beforeStop: func(context.Context, rcdState) {},
 		closeLog:   func() error { return nil },
 		logger:     logger,
 		state:      state.NewAtomic(rcdNew, rcdSuccessors),
@@ -294,15 +298,16 @@ func (o *rcdOwner) parked(ctx context.Context) error {
 	return o.stopSequence(rcdFailed, nil)
 }
 
-// stopSequence ends the owner from the state from: Stopping, the unmount, the process, the log, then Stopped. A process that cannot be
-// reaped leaves the state at Stopping and is returned as the error. earlier is
-// an error from a stop that already failed.
+// stopSequence ends the owner from the state from: Stopping, the unmount, the
+// process, the log, then Stopped. A process that cannot be reaped leaves the
+// state at Stopping and is returned as the error. earlier is an error from a
+// stop that already failed.
 func (o *rcdOwner) stopSequence(from rcdState, att *rcdAttempt, earlier ...error) error {
 	o.transition(from, rcdStopping)
 	// Whatever state the stop starts from, a mount of this or an earlier rcd may
 	// still be in place, so the unmount always runs, before rcd is signalled.
 	ctx, cancel := task.Detached(o.group.Context(), rcdUnmountBudget)
-	o.beforeStop(ctx)
+	o.beforeStop(ctx, from)
 	cancel()
 	err := errors.Join(earlier...)
 	if att != nil {
