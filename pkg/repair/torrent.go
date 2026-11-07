@@ -160,6 +160,7 @@ func (r *Service) brokenFiles(candidate *candidate, results []fileResult) []stor
 			InfoHash:  result.infoHash,
 			Protocol:  result.protocol,
 			Reason:    result.reason,
+			Provider:  result.provider,
 		}
 		if managed, ok := candidate.item.Files[result.name]; ok && managed != nil {
 			file.Size = managed.Size

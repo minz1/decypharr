@@ -53,7 +53,12 @@ func (s *Server) handleTautulli(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	run, err := svc.RecheckMedia(s.manager.Context(), strings.TrimSpace(payload.Arr), mediaID, payload.Fix)
+	run, err := svc.RecheckMedia(
+		s.manager.Context(),
+		strings.TrimSpace(payload.Arr),
+		mediaID,
+		webhookRecheckOptions(payload.Fix, requestCaller(r)),
+	)
 	if err != nil {
 		status := repairErrStatus(err)
 		http.Error(w, err.Error(), status)
@@ -69,6 +74,17 @@ func (s *Server) handleTautulli(w http.ResponseWriter, r *http.Request) {
 			Msg("Tautulli webhook: media recheck triggered")
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+// webhookRecheckOptions is what an automated webhook may ask of a recheck: probe, and heal only what the
+// confirmation gate already confirmed, through the breaker. It carries no force; a payload cannot ask for one.
+func webhookRecheckOptions(fix bool, caller string) repair.RecheckOptions {
+	return repair.RecheckOptions{Fix: fix, Source: repair.SourceWebhook, Caller: caller}
+}
+
+// requestCaller names who made a request, for the log lines that record an override.
+func requestCaller(r *http.Request) string {
+	return r.Method + " " + r.URL.Path + " from " + r.RemoteAddr
 }
 
 // handleArrWebhook binds an arr import to its decypharr entry as soon as the arr reports it.

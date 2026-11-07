@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 
@@ -31,6 +32,8 @@ type sweepFixture struct {
 	backend    *removedProviderBackend
 	entry      *storage.Entry
 	run        *storage.RepairRun
+	clock      *fakeClock
+	probes     int
 }
 
 func newSweepFixture(t *testing.T, fileNames ...string) *sweepFixture {
@@ -57,10 +60,19 @@ func newSweepFixture(t *testing.T, fileNames ...string) *sweepFixture {
 		client:   newLinkClient(nil),
 	}
 	service := New(Dependencies{Storage: store, Backend: backend, Reacquirer: reacquirer})
+	clock := newFakeClock()
+	service.now = clock.Now
 	return &sweepFixture{
 		store: store, service: service, reacquirer: reacquirer, backend: backend, entry: entry,
-		run: &storage.RepairRun{ID: "run"},
+		run: &storage.RepairRun{ID: "run"}, clock: clock,
 	}
+}
+
+// nextRun starts a new run two hours after the previous one, so its probes are independent observations.
+func (f *sweepFixture) nextRun() {
+	f.probes++
+	f.clock.Advance(2 * time.Hour)
+	f.run = &storage.RepairRun{ID: fmt.Sprintf("run-%d", f.probes)}
 }
 
 func (f *sweepFixture) candidates() map[string]*candidate {
@@ -74,16 +86,18 @@ func (f *sweepFixture) candidates() map[string]*candidate {
 	}}
 }
 
-func (f *sweepFixture) probe(ctx context.Context, t *testing.T, confirm bool) map[string]*candidate {
+func (f *sweepFixture) probe(ctx context.Context, t *testing.T, confirm bool) *probeBatch {
 	t.Helper()
-	candidates := f.candidates()
-	err := f.service.probeAndHealCandidates(
-		ctx, f.run, candidates, []string{f.entry.Name}, newErrorCache(), RunOptions{}, true, confirm,
+	f.nextRun()
+	policy := healPolicy{confirm: confirm}
+	batch, err := f.service.probeCandidates(
+		ctx, f.run, f.candidates(), []string{f.entry.Name}, newErrorCache(), RunOptions{}, true, policy,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return candidates
+	f.service.healBatch(ctx, f.run, batch, policy)
+	return batch
 }
 
 // serveRadarr serves one Radarr movie per entry file, each a symlink into the entry.
@@ -114,7 +128,8 @@ func (f *sweepFixture) serveRadarr(t *testing.T) {
 
 func (f *sweepFixture) sweep(ctx context.Context, stop *repairStopState) {
 	autoRepair := true
-	f.service.executeSweep(ctx, &storage.RepairRun{ID: "sweep"}, RunOptions{AutoRepair: &autoRepair}, stop)
+	f.nextRun()
+	f.service.executeSweep(ctx, f.run, RunOptions{AutoRepair: &autoRepair}, stop)
 }
 
 func (f *sweepFixture) setStoredStatus(t *testing.T, status storage.HealthStatus) {
@@ -238,7 +253,7 @@ func TestRecheckEntryWithFixHealsFirstBrokenProbe(t *testing.T) {
 	t.Parallel()
 	f := newSweepFixture(t, "video.mkv")
 	f.serveRadarr(t)
-	if _, err := f.service.RecheckEntry(t.Context(), f.entry.Name, true); err != nil {
+	if _, err := f.service.RecheckEntry(t.Context(), f.entry.Name, RecheckOptions{Fix: true}); err != nil {
 		t.Fatal(err)
 	}
 	f.service.runWG.Wait()

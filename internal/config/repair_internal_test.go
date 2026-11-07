@@ -83,6 +83,9 @@ func TestRepairBreakerKeysAreOptionalInJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(generic) != 1 {
-		t.Fatalf("an untouched config serializes %v; the new keys must be omitted so the previous binary sees no change", generic)
+		t.Fatalf(
+			"an untouched config serializes %v; the new keys must be omitted so the previous binary sees no change",
+			generic,
+		)
 	}
 }

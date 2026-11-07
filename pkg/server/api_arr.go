@@ -11,6 +11,7 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/arr/reacquire"
+	"github.com/sirrobot01/decypharr/pkg/repair"
 )
 
 // arrBindingSearchMax bounds a binding search: the index can hold hundreds of
@@ -102,11 +103,17 @@ func (s *Server) handleArrReacquire(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var request reacquire.Request
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+	var body struct {
+		reacquire.Request
+
+		// Force sends the reacquisition past the repair breaker for this request only.
+		Force bool `json:"force,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		s.sendJSONError(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+	request := body.Request
 	if request.Cause == "" {
 		request.Cause = reacquire.CauseManual
 	}
@@ -116,6 +123,9 @@ func (s *Server) handleArrReacquire(w http.ResponseWriter, r *http.Request) {
 		s.sendJSONError(w, message, http.StatusBadRequest)
 		return
 	}
+	if !s.admitReacquire(w, r, request, body.Force) {
+		return
+	}
 
 	job, err := service.Reacquire(request)
 	if err != nil {
@@ -123,6 +133,35 @@ func (s *Server) handleArrReacquire(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	utils.JSONResponse(w, job, http.StatusAccepted)
+}
+
+// admitReacquire puts a manual reacquisition through the repair breaker, which counts it toward the rolling heal
+// cap like any other heal that deletes an Arr file. It answers the request itself and reports false when the
+// reacquisition must not be queued.
+func (s *Server) admitReacquire(w http.ResponseWriter, r *http.Request, request reacquire.Request, force bool) bool {
+	svc := s.manager.Repair()
+	if svc == nil {
+		return true
+	}
+	err := svc.Admit(r.Context(), repair.HealRequest{
+		Provider: svc.ProviderFor(request.EntryID),
+		Class:    repair.ClassOther,
+		Subject:  request.EntryID,
+		Force:    force,
+		Caller:   requestCaller(r),
+	})
+	switch {
+	case err == nil:
+		return true
+	case errors.Is(err, repair.ErrHealHeld):
+		s.sendJSONError(w, err.Error()+`; send "force": true to override`, http.StatusConflict)
+	case errors.Is(err, repair.ErrHealCapped):
+		s.sendJSONError(w, err.Error(), http.StatusTooManyRequests)
+	default:
+		s.logger.Error().Err(err).Msg("Repair breaker failed")
+		s.sendJSONError(w, "Repair breaker failed", http.StatusInternalServerError)
+	}
+	return false
 }
 
 func (s *Server) handleRefreshArrIndex(w http.ResponseWriter, _ *http.Request) {

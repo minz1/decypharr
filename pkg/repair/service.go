@@ -27,6 +27,8 @@ type Status struct {
 	ActiveRun    *storage.RepairRun           `json:"active_run,omitempty"`
 	LastRun      *storage.RepairRun           `json:"last_run,omitempty"`
 	HealthCounts map[storage.HealthStatus]int `json:"health_counts"`
+	// Breaker lists the buckets whose heals are held or being released; empty when every bucket is closed.
+	Breaker []BucketStatus `json:"breaker,omitempty"`
 }
 
 // RunOptions are one-off options for a manually-started repair run.
@@ -115,6 +117,24 @@ type Service struct {
 	stopScheduled  bool
 	activeStopFunc func()
 	runWG          sync.WaitGroup
+
+	// now is the clock; nil means time.Now. Tests replace it to move through the confirmation gap.
+	now     func() time.Time
+	breaker *breaker
+	// seeded is set once the breaker has been seeded from the journal; guarded by mu.
+	seeded bool
+}
+
+func (r *Service) clock() time.Time {
+	if r.now != nil {
+		return r.now()
+	}
+	return time.Now()
+}
+
+// breakerSettings is the live resolved confirmation and breaker configuration.
+func (r *Service) breakerSettings() config.BreakerSettings {
+	return r.cfg().BreakerSettings()
 }
 
 // New builds a repair service from its dependencies.
@@ -124,7 +144,7 @@ func New(deps Dependencies) *Service {
 	if rq, ok := deps.Reacquirer.(*reacquire.Service); ok && rq == nil {
 		deps.Reacquirer = nil
 	}
-	return &Service{
+	r := &Service{
 		scheduler:     deps.Scheduler,
 		backend:       deps.Backend,
 		storage:       deps.Storage,
@@ -137,6 +157,9 @@ func New(deps Dependencies) *Service {
 		logger:        deps.Logger,
 		parentCtx:     context.Background(),
 	}
+	r.breaker = newBreaker(r.breakerSettings, r.canaryProbe)
+	r.breaker.now = r.clock
+	return r
 }
 
 // folderNaming is the live folder naming scheme.

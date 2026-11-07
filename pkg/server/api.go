@@ -574,6 +574,9 @@ func (s *Server) handleUpdateRepairConfig(w http.ResponseWriter, r *http.Request
 // validateRepairConfig returns a client-facing message for an invalid
 // enabled config, or "".
 func validateRepairConfig(req *config.RepairConfig) string {
+	if msg := validateBreakerConfig(req); msg != "" {
+		return msg
+	}
 	if !req.Enabled {
 		return ""
 	}
@@ -590,6 +593,32 @@ func validateRepairConfig(req *config.RepairConfig) string {
 	}
 	if req.Source != "" && req.Source != config.RepairSourceArr && req.Source != config.RepairSourceManaged {
 		return "Invalid source (must be 'arr' or 'managed')"
+	}
+	return ""
+}
+
+// validateBreakerConfig rejects breaker keys that could not be honoured; zero stays valid and means the default.
+func validateBreakerConfig(req *config.RepairConfig) string {
+	for key, raw := range map[string]string{
+		"confirm_gap": req.ConfirmGap, "breaker_release_after": req.BreakerReleaseAfter,
+		"canary_recent": req.CanaryRecent, "canary_fallback": req.CanaryFallback,
+		"canary_cache": req.CanaryCache, "breaker_window": req.BreakerWindow,
+	} {
+		if raw == "" {
+			continue
+		}
+		if d, err := utils.ParseDuration(raw); err != nil || d <= 0 {
+			return fmt.Sprintf("Invalid %s (must be a positive duration)", key)
+		}
+	}
+	for key, value := range map[string]int{
+		"breaker_min_confirmed": req.BreakerMinConfirmed, "breaker_percent": req.BreakerPercent,
+		"breaker_confirmed": req.BreakerConfirmed, "heal_cap_per_bucket": req.HealCapPerBucket,
+		"heal_cap_per_run": req.HealCapPerRun, "canary_size": req.CanarySize,
+	} {
+		if value < 0 {
+			return fmt.Sprintf("Invalid %s (must not be negative; 0 means the default)", key)
+		}
 	}
 	return ""
 }
@@ -765,6 +794,8 @@ func (s *Server) handleRecheckMedia(w http.ResponseWriter, r *http.Request) {
 		Arr     string `json:"arr"`
 		MediaID string `json:"media_id"`
 		Fix     bool   `json:"fix"`
+		// Force heals past the repair breaker for this request only.
+		Force bool `json:"force"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
@@ -783,7 +814,7 @@ func (s *Server) handleRecheckMedia(w http.ResponseWriter, r *http.Request) {
 		s.manager.Context(),
 		strings.TrimSpace(req.Arr),
 		strings.TrimSpace(req.MediaID),
-		req.Fix,
+		repair.RecheckOptions{Fix: req.Fix, Source: repair.SourceOperator, Force: req.Force, Caller: requestCaller(r)},
 	)
 	if err != nil {
 		status := repairErrStatus(err)
@@ -808,13 +839,18 @@ func (s *Server) handleRecheckEntry(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "No entry name provided", http.StatusBadRequest)
 		return
 	}
-	fix := boolOr(queryBool(r.URL.Query(), "fix"), false)
+	opts := repair.RecheckOptions{
+		Fix:    boolOr(queryBool(r.URL.Query(), "fix"), false),
+		Source: repair.SourceOperator,
+		Force:  boolOr(queryBool(r.URL.Query(), "force"), false),
+		Caller: requestCaller(r),
+	}
 	svc := s.manager.Repair()
 	if svc == nil {
 		http.Error(w, "Repair service not available", http.StatusServiceUnavailable)
 		return
 	}
-	state, err := svc.RecheckEntry(s.manager.Context(), name, fix)
+	state, err := svc.RecheckEntry(s.manager.Context(), name, opts)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -825,24 +861,39 @@ func (s *Server) handleRecheckEntry(w http.ResponseWriter, r *http.Request) {
 // handleFixBroken kicks off the Arr delete + re-search pass on currently
 // broken entries. Body: {"names": ["...", ...]}. Empty/missing names ⇒ fix
 // every broken entry in storage.
+// Every fix passes the repair breaker; "force": true overrides it for this request only.
 func (s *Server) handleFixBroken(w http.ResponseWriter, r *http.Request) {
-	s.runBrokenAction(w, r, (*repair.Service).FixBroken)
+	s.runBrokenAction(
+		w,
+		r,
+		func(svc *repair.Service, ctx context.Context, names []string, force bool) (*storage.RepairRun, error) {
+			return svc.FixBroken(ctx, names, repair.FixOptions{Force: force, Caller: requestCaller(r)})
+		},
+	)
 }
 
 // handleClearBroken clears currently broken files without asking the Arr to
 // re-search for replacements. Body: {"names": ["...", ...]}. Empty/missing
 // names ⇒ clear every broken entry in storage.
 func (s *Server) handleClearBroken(w http.ResponseWriter, r *http.Request) {
-	s.runBrokenAction(w, r, (*repair.Service).ClearBroken)
+	s.runBrokenAction(
+		w,
+		r,
+		func(svc *repair.Service, ctx context.Context, names []string, _ bool) (*storage.RepairRun, error) {
+			return svc.ClearBroken(ctx, names)
+		},
+	)
 }
 
 func (s *Server) runBrokenAction(
 	w http.ResponseWriter,
 	r *http.Request,
-	action func(*repair.Service, context.Context, []string) (*storage.RepairRun, error),
+	action func(*repair.Service, context.Context, []string, bool) (*storage.RepairRun, error),
 ) {
 	var req struct {
 		Names []string `json:"names,omitempty"`
+		// Force heals past the repair breaker for this request only (fix only).
+		Force bool `json:"force,omitempty"`
 	}
 	// Body is optional.
 	if r.Body != nil && r.ContentLength != 0 {
@@ -856,7 +907,7 @@ func (s *Server) runBrokenAction(
 		http.Error(w, "Repair service not available", http.StatusServiceUnavailable)
 		return
 	}
-	run, err := action(svc, s.manager.Context(), req.Names)
+	run, err := action(svc, s.manager.Context(), req.Names, req.Force)
 	if err != nil {
 		http.Error(w, err.Error(), repairErrStatus(err))
 		return

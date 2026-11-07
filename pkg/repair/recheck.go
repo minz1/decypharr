@@ -7,14 +7,40 @@ import (
 	"maps"
 	"slices"
 	"strings"
-	"sync"
+
+	"uuid"
 
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
+// logForce records that an operator overrode the breaker, and refuses to let a webhook do the same.
+func (r *Service) logForce(opts RecheckOptions, what string) RecheckOptions {
+	if opts.Source == SourceWebhook {
+		if opts.Force {
+			r.logger.Warn().
+				Str("caller", opts.Caller).
+				Str("action", what).
+				Msg("Repair: a webhook cannot force; ignored")
+		}
+		opts.Force = false
+		return opts
+	}
+	opts.Source = SourceOperator
+	if opts.Force && opts.Fix {
+		r.logger.Info().Str("caller", opts.Caller).Str("action", what).Msg("Repair: operator forced past the breaker")
+	}
+	return opts
+}
+
 // RecheckEntry starts a background probe for one entry.
-func (r *Service) RecheckEntry(ctx context.Context, entryName string, fix bool) (*storage.EntryHealth, error) {
+func (r *Service) RecheckEntry(
+	ctx context.Context,
+	entryName string,
+	opts RecheckOptions,
+) (*storage.EntryHealth, error) {
+	opts = r.logForce(opts, "recheck-entry "+entryName)
+	fix := opts.Fix
 	if entryName == "" {
 		return nil, errors.New("entry name is empty")
 	}
@@ -28,7 +54,7 @@ func (r *Service) RecheckEntry(ctx context.Context, entryName string, fix bool) 
 		return nil, fmt.Errorf("entry %q not found", entryName)
 	}
 
-	runID := "recheck-" + entryName
+	runID := "recheck-" + uuid.New().String()
 	c := &candidate{name: entryName, item: item}
 
 	if ctx == nil {
@@ -40,16 +66,19 @@ func (r *Service) RecheckEntry(ctx context.Context, entryName string, fix bool) 
 		}
 		heal := newErrorCache()
 		nzb := r.nzbProber()
-		final, _ := r.probeEntry(ctx, runID, c, heal, nzb, RunOptions{MissingProviderIsBroken: true}, fix)
-		if final == nil {
+		result := r.probeEntry(ctx, runID, c, heal, nzb, RunOptions{MissingProviderIsBroken: true}, fix)
+		if result == nil || !fix || result.health.Status != storage.HealthBroken {
 			return
 		}
-		if !fix || final.Status != storage.HealthBroken {
-			return
+		policy := opts.policy()
+		files := result.health.BrokenFiles
+		if policy.confirm {
+			files = result.confirmed
 		}
-		pseudo := &storage.RepairRun{ID: runID, Stats: storage.RepairRunStats{}}
-		var statsMu sync.Mutex
-		r.healBrokenEntry(ctx, pseudo, &statsMu, final, final.BrokenFiles)
+		batch := newProbeBatch(true)
+		batch.noteProbed(result.providers)
+		batch.add(result.health, files)
+		r.healBatch(ctx, &storage.RepairRun{ID: runID}, batch, policy)
 	})
 
 	if h == nil {
@@ -61,7 +90,12 @@ func (r *Service) RecheckEntry(ctx context.Context, entryName string, fix bool) 
 }
 
 // RecheckMedia starts a background probe for entries resolved through Arr.
-func (r *Service) RecheckMedia(ctx context.Context, arrName, mediaID string, fix bool) (*storage.RepairRun, error) {
+func (r *Service) RecheckMedia(
+	ctx context.Context,
+	arrName, mediaID string,
+	opts RecheckOptions,
+) (*storage.RepairRun, error) {
+	opts = r.logForce(opts, "recheck-media "+arrName+"/"+mediaID)
 	mediaID = strings.TrimSpace(mediaID)
 	if mediaID == "" {
 		return nil, errors.New("media_id is required")
@@ -74,7 +108,7 @@ func (r *Service) RecheckMedia(ctx context.Context, arrName, mediaID string, fix
 
 	run := newManualRun(storage.RepairStageSelecting, fmt.Sprintf("media:%s/%s", arrName, mediaID))
 	return r.startManualRun(ctx, run, func(runCtx context.Context) {
-		r.executeRecheckMedia(runCtx, run, arrs, arrName, mediaID, fix)
+		r.executeRecheckMedia(runCtx, run, arrs, arrName, mediaID, opts)
 	})
 }
 
@@ -83,7 +117,7 @@ func (r *Service) executeRecheckMedia(
 	run *storage.RepairRun,
 	arrs []arr.Arr,
 	arrName, mediaID string,
-	fix bool,
+	opts RecheckOptions,
 ) {
 	candidates := make(map[string]*candidate)
 	var lastErr error
@@ -118,7 +152,9 @@ func (r *Service) executeRecheckMedia(
 
 	heal := newErrorCache()
 	mediaNames := slices.Sorted(maps.Keys(candidates))
-	err := r.probeAndHealCandidates(ctx, run, candidates, mediaNames, heal, RunOptions{}, fix, false)
+	err := r.probeAndHealCandidates(
+		ctx, run, candidates, mediaNames, heal, RunOptions{}, opts.Fix, opts.policy(),
+	)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			r.finalizeRun(run, storage.RepairRunCancelled, "", "context cancelled during probing")
@@ -140,7 +176,7 @@ func (r *Service) executeRecheckMedia(
 		Int("candidates", run.Stats.Candidates).
 		Int("broken", run.Stats.Broken).
 		Int("repaired", run.Stats.Repaired).
-		Bool("fix", fix).
+		Bool("fix", opts.Fix).
 		Msg("RecheckMedia: completed")
 }
 

@@ -23,6 +23,7 @@ func (r *Service) Start(ctx context.Context) error {
 	r.parentCtx = ctx
 
 	r.reconcileOrphans()
+	r.seedBreakerFromJournal()
 
 	cfg := r.cfg()
 	if !cfg.Enabled {
@@ -223,6 +224,7 @@ func (r *Service) Status() Status {
 	st := Status{
 		Enabled:      cfg.Enabled,
 		HealthCounts: r.storage.CountEntryHealthByStatus(),
+		Breaker:      r.BreakerStatus(),
 	}
 	if next := r.nextScheduledRun(); next != nil {
 		st.NextRunAt = next

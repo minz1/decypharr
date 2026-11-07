@@ -66,7 +66,7 @@ func TestProbeEntryWithRemovedProvider(t *testing.T) {
 			}}
 			service := New(Dependencies{Storage: store, Backend: backend})
 			candidate := &candidate{name: entry.Name, item: &storage.EntryItem{Name: entry.Name, Files: entry.Files}}
-			health, _ := service.probeEntry(
+			result := service.probeEntry(
 				t.Context(),
 				"run",
 				candidate,
@@ -78,7 +78,7 @@ func TestProbeEntryWithRemovedProvider(t *testing.T) {
 			if tc.autoRepair && calls != 1 || !tc.autoRepair && calls != 0 {
 				t.Fatalf("repair calls = %d", calls)
 			}
-			assertRemovedProviderOutcome(t, store, entry, health, tc.replacement)
+			assertRemovedProviderOutcome(t, store, entry, result.health, tc.replacement)
 		})
 	}
 }

@@ -22,19 +22,20 @@ var (
 	errUnmappedBrokenFile = errors.New("broken file has no managed identity")
 )
 
+// repairBroken heals persisted broken entries through the breaker. Nothing is probed, so the breaker sees only the
+// count of confirmed entries and not a share of what was probed.
 func (r *Service) repairBroken(
 	ctx context.Context,
 	run *storage.RepairRun,
 	healths *xsync.Map[string, *storage.EntryHealth],
+	policy healPolicy,
 ) {
-	var statsMu sync.Mutex
+	batch := newProbeBatch(false)
 	healths.Range(func(_ string, health *storage.EntryHealth) bool {
-		if ctx != nil && ctx.Err() != nil {
-			return false
-		}
-		r.healBrokenEntry(ctx, run, &statsMu, health, health.BrokenFiles)
+		batch.add(health, health.BrokenFiles)
 		return true
 	})
+	r.healBatch(ctx, run, batch, policy)
 }
 
 func (r *Service) healBrokenEntry(

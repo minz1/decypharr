@@ -55,6 +55,8 @@ type RepairRunStats struct {
 	Broken       int `json:"broken"`
 	Unknown      int `json:"unknown"`
 	Repaired     int `json:"repaired"`
+	// Held counts confirmed entries the breaker held back instead of healing.
+	Held         int `json:"held,omitempty"`
 	Cleared      int `json:"cleared,omitempty"`
 	RepairFailed int `json:"repair_failed"`
 }

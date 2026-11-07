@@ -58,7 +58,7 @@ func TestRecheckEntryTreatsAMissingProviderAsBroken(t *testing.T) {
 	t.Parallel()
 	f := newSweepFixture(t, "video.mkv")
 	f.backend.client = nil
-	if _, err := f.service.RecheckEntry(t.Context(), f.entry.Name, false); err != nil {
+	if _, err := f.service.RecheckEntry(t.Context(), f.entry.Name, RecheckOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	f.service.runWG.Wait()
@@ -99,7 +99,7 @@ func TestRecheckEntryWithFixActsOnAMissingProvider(t *testing.T) {
 	f := newSweepFixture(t, "video.mkv")
 	f.backend.client = nil
 	f.serveRadarr(t)
-	if _, err := f.service.RecheckEntry(t.Context(), f.entry.Name, true); err != nil {
+	if _, err := f.service.RecheckEntry(t.Context(), f.entry.Name, RecheckOptions{Fix: true}); err != nil {
 		t.Fatal(err)
 	}
 	f.service.runWG.Wait()

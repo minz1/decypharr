@@ -17,9 +17,6 @@ type candidate struct {
 	arrName    string
 	arrKind    storage.ArrKind
 	contentMap map[string]arr.ContentFile
-	// health and unhealed hold confirmed files a cancelled sweep did not reach.
-	health   *storage.EntryHealth
-	unhealed []storage.BrokenFile
 }
 
 func (r *Service) enumerateCandidates(ctx context.Context, cfg config.RepairConfig) (map[string]*candidate, error) {
@@ -100,7 +97,7 @@ func (r *Service) filterDueCandidates(candidates map[string]*candidate, opts Run
 	if opts.IgnoreLastChecked {
 		return candidates, 0
 	}
-	now := time.Now()
+	now := r.clock()
 	recheck := r.recheckInterval()
 	due := make(map[string]*candidate, len(candidates))
 	skipped := 0

@@ -16,7 +16,7 @@ import (
 
 func (r *Service) collectBrokenHealths(
 	names []string,
-	requireArrFile bool,
+	requireArrFile, includeHeld bool,
 ) (*xsync.Map[string, *storage.EntryHealth], int) {
 	wanted := make(map[string]struct{}, len(names))
 	for _, n := range names {
@@ -27,7 +27,7 @@ func (r *Service) collectBrokenHealths(
 
 	healths := xsync.NewMap[string, *storage.EntryHealth]()
 	_ = r.storage.ForEachEntryHealth(func(h *storage.EntryHealth) error {
-		if h == nil || h.Status != storage.HealthBroken {
+		if h == nil || (h.Status != storage.HealthBroken && (!includeHeld || h.Status != storage.HealthHeld)) {
 			return nil
 		}
 		if _, ok := wanted[h.EntryName]; len(wanted) > 0 && !ok {
@@ -81,18 +81,29 @@ func isAlreadyClearedFileError(err error) bool {
 		strings.Contains(msg, "file is deleted")
 }
 
-// FixBroken repairs persisted broken entries without probing them again.
-func (r *Service) FixBroken(ctx context.Context, names []string) (*storage.RepairRun, error) {
-	healths, wantedCount := r.collectBrokenHealths(names, true)
+// FixBroken repairs persisted broken entries without probing them again. It is the operator asking, so the
+// two-observation gate is skipped, but every heal passes the breaker, fix-all included: a bucket that is tripped
+// (or that this request would trip) holds its entries unless opts.Force. Held entries are fixed only with Force,
+// since only a sweep re-probes them.
+func (r *Service) FixBroken(ctx context.Context, names []string, opts FixOptions) (*storage.RepairRun, error) {
+	healths, wantedCount := r.collectBrokenHealths(names, true, opts.Force)
 	if healths.Size() == 0 {
 		return nil, errors.New("no fixable broken entries")
 	}
-	return r.startBrokenRun(ctx, healths, brokenRunSource("fix-broken", wantedCount), "repair", r.repairBroken)
+	if opts.Force {
+		r.logger.Info().Str("caller", opts.Caller).Int("entries", healths.Size()).
+			Msg("Repair: operator forced a fix past the breaker")
+	}
+	policy := healPolicy{force: opts.Force}
+	return r.startBrokenRun(ctx, healths, brokenRunSource("fix-broken", wantedCount), "repair",
+		func(runCtx context.Context, run *storage.RepairRun, h *xsync.Map[string, *storage.EntryHealth]) {
+			r.repairBroken(runCtx, run, h, policy)
+		})
 }
 
 // ClearBroken removes persisted broken files without calling Arr.
 func (r *Service) ClearBroken(ctx context.Context, names []string) (*storage.RepairRun, error) {
-	healths, wantedCount := r.collectBrokenHealths(names, false)
+	healths, wantedCount := r.collectBrokenHealths(names, false, true)
 	if healths.Size() == 0 {
 		return nil, errors.New("no broken files to clear")
 	}
