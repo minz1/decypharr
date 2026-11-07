@@ -290,8 +290,33 @@ func configResponse(cfg config.Config, arrs []config.Arr) configResponseBody {
 	return response
 }
 
+type configGetBody struct {
+	configResponseBody
+
+	// Restart says whether the saved configuration has reached the running
+	// services: "none", "pending" (a restart is on its way) or "failed" (it
+	// could not be requested; the next save retries).
+	Restart string `json:"restart"`
+}
+
 func (s *Server) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
-	utils.JSONResponse(w, configResponse(*s.config.Get(), s.manager.Arr().SyncToConfig()), http.StatusOK)
+	body := configGetBody{
+		configResponseBody: configResponse(*s.config.Get(), s.manager.Arr().SyncToConfig()),
+		Restart:            s.config.Pending().String(),
+	}
+	utils.JSONResponse(w, body, http.StatusOK)
+}
+
+// requestRestart asks the generation for a restart once a saved setting needs
+// one and records in the store whether the request could be made. It returns
+// the resulting state; a state of failed carries the cause in the store.
+func (s *Server) requestRestart() config.Pending {
+	s.config.RestartRequested() // a retry after a failed request
+	if err := s.Restart(); err != nil {
+		s.logger.Error().Err(err).Msg("Restart could not be requested")
+		s.config.MarkRestartFailed(err)
+	}
+	return s.config.Pending()
 }
 
 func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
@@ -322,9 +347,11 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.manager.Arr().SyncFromConfig(before.Arrs, updated.Arrs)
-	restarted := before.RequiresRestart(updated)
-	if restarted {
-		go s.Restart()
+	// The store compares with the snapshot the services run, so an earlier
+	// save that still needs a restart keeps this one pending as well.
+	pending := s.config.Pending()
+	if pending != config.PendingNone {
+		pending = s.requestRestart()
 	} else if applyErr := s.applyLiveConfig(&before, updated); applyErr != nil {
 		s.logger.Error().Err(applyErr).Msg("Failed to apply virtual folders")
 		http.Error(
@@ -334,12 +361,28 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		)
 		return
 	}
-	response := map[string]any{keyStatus: keySuccess, "restarted": restarted}
-	if warnings := webdavAuthWarnings(updated); len(warnings) > 0 {
-		response["warnings"] = warnings
-		s.logger.Warn().Strs("warnings", warnings).Msg("WebDAV auth locks out its clients")
+	response := map[string]any{
+		keyStatus:   keySuccess,
+		"restarted": pending == config.PendingRestart,
+		"restart":   pending.String(),
 	}
-	utils.JSONResponse(w, response, http.StatusOK)
+	var warnings []string
+	if pending == config.PendingFailed {
+		warnings = append(warnings, "Configuration was saved, but the restart could not be requested: "+
+			s.config.RestartError().Error()+". Save again to retry, or restart Decypharr by hand.")
+	}
+	if locked := webdavAuthWarnings(updated); len(locked) > 0 {
+		warnings = append(warnings, locked...)
+		s.logger.Warn().Strs("warnings", locked).Msg("WebDAV auth locks out its clients")
+	}
+	if len(warnings) > 0 {
+		response["warnings"] = warnings
+	}
+	status := http.StatusOK
+	if pending == config.PendingRestart {
+		status = http.StatusAccepted
+	}
+	utils.JSONResponse(w, response, status)
 }
 
 func webdavAuthWarnings(cfg *config.Config) []string {

@@ -112,14 +112,14 @@ func (c *Config) Clone() (*Config, error) {
 type Pending uint8
 
 const (
-	// PendingNone: the running services already have every saved setting that
-	// only a restart can apply.
+	// PendingNone means the running services already have every saved setting
+	// that only a restart can apply.
 	PendingNone Pending = iota + 1
-	// PendingRestart: a saved setting needs a restart that has been or is
+	// PendingRestart means a saved setting needs a restart that has been or is
 	// about to be requested.
 	PendingRestart
-	// PendingFailed: the restart could not be requested. The next save, or an
-	// explicit retry, asks again.
+	// PendingFailed means the restart could not be requested. The next save,
+	// or an explicit retry, asks again.
 	PendingFailed
 )
 
