@@ -401,7 +401,7 @@ func (m *Manager) failGrabIfQueued(ctx context.Context, entry *storage.Entry) {
 	switch {
 	case err == nil:
 	case errors.Is(err, arr.ErrBlocklistHeld):
-		m.holdGrab(entry.InfoHash, func(ctx context.Context) error {
+		m.holdGrab(entry.InfoHash, grabBucket(entry), func(ctx context.Context) error {
 			current := m.badEntry(entry.InfoHash)
 			if current == nil {
 				return nil

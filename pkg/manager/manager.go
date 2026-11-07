@@ -534,7 +534,7 @@ func (m *Manager) failBadRelease(entry *storage.Entry, err error) {
 	case grabErr == nil:
 	case errors.Is(grabErr, arr.ErrBlocklistHeld):
 		// Nothing retries this failure by itself; the held grab is kept and retried while the entry stays in error.
-		m.holdGrab(entry.InfoHash, func(context.Context) error {
+		m.holdGrab(entry.InfoHash, grabBucket(entry), func(context.Context) error {
 			if !m.queue.Contains(entry.InfoHash) {
 				return nil
 			}
