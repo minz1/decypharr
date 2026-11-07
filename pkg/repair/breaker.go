@@ -267,8 +267,14 @@ func (b *breaker) noteConfirmed(key Bucket, subject string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	confirmed := b.bucketLocked(key).confirmed
-	if _, seen := confirmed[subject]; !seen {
-		confirmed[subject] = &confirmation{at: b.now()}
+	now := b.now()
+	seen := confirmed[subject]
+	switch {
+	case seen == nil:
+		confirmed[subject] = &confirmation{at: now}
+	case !seen.held && seen.at.Before(now.Add(-b.settings().Window)):
+		// Its sighting aged out of the window and it failed again: a new failure, not a retry.
+		seen.at = now
 	}
 }
 
