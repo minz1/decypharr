@@ -66,7 +66,9 @@ func TestDroppedImportedEntryReacquiresBoundFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if fake.calls.Load() != 1 || fake.request.Cause != reacquire.CauseRepair {
+	// A provider dropping a torrent is no evidence the release is bad: search, never blocklist.
+	if fake.calls.Load() != 1 || fake.request.Cause != reacquire.CauseRepair ||
+		fake.request.Strategy != reacquire.StrategyCommandSearch {
 		t.Fatalf("reacquire calls=%d request=%+v", fake.calls.Load(), fake.request)
 	}
 	if len(fake.fails) != 0 {

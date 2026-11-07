@@ -35,6 +35,8 @@ type fakeSonarr struct {
 	unmonitorOnDelete bool
 	deletes           int
 	searches          int
+	// blocklists counts POSTs of history/failed, which blocklist the grab.
+	blocklists int
 }
 
 func newFakeSonarr(t *testing.T, episodeIDs ...int) *fakeSonarr {
@@ -55,6 +57,8 @@ func newFakeSonarr(t *testing.T, episodeIDs ...int) *fakeSonarr {
 	mux.HandleFunc("GET /api/v3/episode", fake.episodes)
 	mux.HandleFunc(fmt.Sprintf("DELETE /api/v3/episodefile/%d", fakeSonarrFileID), fake.deleteFile)
 	mux.HandleFunc("POST /api/v3/command", fake.command)
+	mux.HandleFunc("GET /api/v3/history", fake.history)
+	mux.HandleFunc("POST /api/v3/history/failed/{id}", fake.blocklist)
 	mux.HandleFunc("GET /api/v3/command", func(w http.ResponseWriter, _ *http.Request) { _, _ = fmt.Fprint(w, `[]`) })
 	fake.server = httptest.NewServer(mux)
 	t.Cleanup(fake.server.Close)
@@ -128,6 +132,30 @@ func (fake *fakeSonarr) deleteFile(w http.ResponseWriter, _ *http.Request) {
 	default:
 		fake.t.Errorf("unknown delete mode %q", fake.deleteMode)
 	}
+}
+
+func (fake *fakeSonarr) blocklistCount() int {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	return fake.blocklists
+}
+
+// history holds the grab of the download, and its failure once blocklisted.
+func (fake *fakeSonarr) history(w http.ResponseWriter, _ *http.Request) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	records := []map[string]any{{"id": 7, "downloadId": "download", "eventType": "grabbed"}}
+	if fake.blocklists > 0 {
+		records = append(records, map[string]any{"id": 8, "downloadId": "download", "eventType": "downloadFailed"})
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{"page": 1, "totalRecords": len(records), "records": records})
+}
+
+func (fake *fakeSonarr) blocklist(w http.ResponseWriter, _ *http.Request) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	fake.blocklists++
+	w.WriteHeader(http.StatusOK)
 }
 
 func (fake *fakeSonarr) command(w http.ResponseWriter, _ *http.Request) {

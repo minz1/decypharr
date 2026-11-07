@@ -282,7 +282,8 @@ func TestUsenetArticleNotFoundQueuesOneNonBlockingReacquire(t *testing.T) {
 	recovery.requestMu.Lock()
 	request := recovery.request
 	recovery.requestMu.Unlock()
-	if request.EntryID != "nzb-1" || request.FileID != "file-1" || request.Cause != reacquire.CauseStream {
+	if request.EntryID != "nzb-1" || request.FileID != "file-1" || request.Cause != reacquire.CauseStream ||
+		request.Strategy != reacquire.StrategyHistoryFailed {
 		t.Fatalf("reacquire request = %+v", request)
 	}
 

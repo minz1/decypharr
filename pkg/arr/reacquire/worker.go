@@ -249,7 +249,11 @@ func (s *Service) loadJobs(jobs []Job) error {
 	clear(s.jobs)
 	clear(s.activeReacquisitions)
 	for _, job := range jobs {
-		job.Strategy = job.Strategy.normalized()
+		if job.Strategy == "" {
+			if err := s.convertLegacyStrategy(&job); err != nil {
+				return err
+			}
+		}
 		s.jobs[job.ID] = cloneJob(job)
 		if job.Status.Terminal() {
 			continue
@@ -267,6 +271,28 @@ func (s *Service) loadJobs(jobs []Job) error {
 			s.jobs[previousID] = previous
 		}
 		s.activeReacquisitions[key] = job.ID
+	}
+	return nil
+}
+
+// convertLegacyStrategy gives a stored job that has no strategy the one it can
+// safely finish with, and stores it. Older binaries read an empty strategy as
+// history_failed. A job that already blocklisted a release keeps that strategy
+// so the blocklist stays settled; any other job searches and blocklists nothing.
+func (s *Service) convertLegacyStrategy(job *Job) error {
+	job.Strategy = StrategyCommandSearch
+	if slices.ContainsFunc(job.Mutations, func(mutation Mutation) bool {
+		return mutation.Kind == MutationHistoryFailed
+	}) {
+		job.Strategy = StrategyHistoryFailed
+	}
+	s.logger.Warn().
+		Str("job_id", job.ID).
+		Str("status", string(job.Status)).
+		Str("strategy", string(job.Strategy)).
+		Msg("Reacquire job was stored without a strategy; converted it")
+	if err := s.jobRepository.Save(*job); err != nil {
+		return fmt.Errorf("store converted reacquire job %q: %w", job.ID, err)
 	}
 	return nil
 }

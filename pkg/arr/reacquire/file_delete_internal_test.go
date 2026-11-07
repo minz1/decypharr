@@ -23,7 +23,7 @@ type fakeSonarrRig struct {
 	job       Job
 }
 
-func newFakeSonarrRig(t *testing.T, fake *fakeSonarr, episodeIDs ...int) *fakeSonarrRig {
+func newFakeSonarrRig(t *testing.T, fake *fakeSonarr, strategy Strategy, episodeIDs ...int) *fakeSonarrRig {
 	t.Helper()
 	rig := &fakeSonarrRig{fake: fake, directory: t.TempDir()}
 	rig.arrs = arr.New(config.NewStore(&config.Config{}), nil, zerolog.Nop())
@@ -38,7 +38,7 @@ func newFakeSonarrRig(t *testing.T, fake *fakeSonarr, episodeIDs ...int) *fakeSo
 		EntryID:  binding.EntryID,
 		FileID:   binding.EntryFileID,
 		Cause:    CauseManual,
-		Strategy: StrategyCommandSearch,
+		Strategy: strategy,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -79,7 +79,7 @@ func TestUnknownFileDeleteRequeuesAndContinuesOnceTheFileIsGone(t *testing.T) {
 	t.Parallel()
 	fake := newFakeSonarr(t, 101)
 	fake.setDeleteMode("drop-landed")
-	rig := newFakeSonarrRig(t, fake, 101)
+	rig := newFakeSonarrRig(t, fake, StrategyCommandSearch, 101)
 
 	queued := rig.run(t)
 	if queued.Status != StatusQueued || queued.RetryAt.IsZero() {

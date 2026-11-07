@@ -84,6 +84,9 @@ func (m *Manager) submitStreamReacquire(entryID, fileID, filename string) {
 			EntryID: entryID,
 			FileID:  fileID,
 			Cause:   reacquire.CauseStream,
+			// The full-article check above confirmed the content is gone, which is
+			// what justifies blocklisting the release.
+			Strategy: reacquire.StrategyHistoryFailed,
 		})
 		if err != nil {
 			if errors.Is(err, reacquire.ErrBindingNotFound) {
@@ -173,6 +176,8 @@ func (m *Manager) reacquireDroppedFiles(provider string, entry *storage.Entry, r
 			EntryID: entry.InfoHash,
 			FileID:  file.ID,
 			Cause:   reacquire.CauseRepair,
+			// A provider dropping a torrent is no evidence the release is bad: search again, blocklist nothing.
+			Strategy: reacquire.StrategyCommandSearch,
 		}); err != nil {
 			reacquireErr = errors.Join(reacquireErr, fmt.Errorf("reacquire file %s: %w", file.ID, err))
 		}

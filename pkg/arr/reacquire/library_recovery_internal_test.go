@@ -511,7 +511,8 @@ func TestBoundLibraryRequestKeepsItsStrategy(t *testing.T) {
 		want     Strategy
 	}{
 		{name: "command search", strategy: StrategyCommandSearch, want: StrategyCommandSearch},
-		{name: "empty", want: StrategyHistoryFailed},
+		{name: "history failed", strategy: StrategyHistoryFailed, want: StrategyHistoryFailed},
+		{name: "empty", want: StrategyCommandSearch},
 		{name: "invalid", strategy: "bogus"},
 	}
 	for _, tt := range tests {

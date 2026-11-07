@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/pkg/arr"
 )
 
@@ -30,6 +32,8 @@ type ServiceOptions struct {
 	Directory string
 	Index     *Index
 	Handler   Handler
+	// Logger records what the service changes on its own; the zero value logs nothing.
+	Logger zerolog.Logger
 }
 
 type jobKey struct {
@@ -41,6 +45,7 @@ type jobKey struct {
 
 type Service struct {
 	arrs                 *arr.Service
+	logger               zerolog.Logger
 	index                *Index
 	bindingRepository    *BindingRepository
 	jobRepository        *JobRepository
@@ -77,6 +82,7 @@ func NewService(options ServiceOptions) (*Service, error) {
 	}
 	return &Service{
 		arrs:                 options.Arrs,
+		logger:               options.Logger,
 		index:                index,
 		bindingRepository:    bindingRepository,
 		jobRepository:        jobRepository,

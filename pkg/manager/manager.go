@@ -387,6 +387,7 @@ func (m *Manager) initArrServices() {
 		Arrs:      m.arr,
 		Directory: filepath.Join(m.config.Dir(), "db"),
 		Handler:   reacquire.NewHandler(m.arr, m),
+		Logger:    m.logger,
 	})
 	if err != nil {
 		m.logger.Error().Err(err).Msg("Failed to initialize Arr reacquisition service")

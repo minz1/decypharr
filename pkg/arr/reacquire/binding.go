@@ -113,9 +113,11 @@ const (
 	StrategyDownloadFailed Strategy = "download_failed"
 )
 
+// normalized names the strategy an empty one stands for. It is the one that
+// blocklists nothing: a caller that wants a blocklist has to ask for it.
 func (strategy Strategy) normalized() Strategy {
 	if strategy == "" {
-		return StrategyHistoryFailed
+		return StrategyCommandSearch
 	}
 	return strategy
 }
