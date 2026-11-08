@@ -195,6 +195,10 @@ func (m *Manager) pollEntry(listed *storage.Entry) {
 	if !pollable(listed) || m.queuedEntryTask(listed) == nil {
 		return
 	}
+	// An entry a mount step left resumable stays so while the mount stops: its symlink step would only end the same way.
+	if m.mountGate.IsStopping() && needsMount(listed) {
+		return
+	}
 	// Skip if a previous tick's goroutine hasn't finished yet for this hash.
 	entry, claimed := m.claimDrivable(listed.InfoHash)
 	if !claimed {
@@ -204,6 +208,13 @@ func (m *Manager) pollEntry(listed *storage.Entry) {
 	if !pollable(entry) || task == nil || m.runWork("process-queued-entry", task) != nil {
 		m.processingEntries.Delete(entry.InfoHash)
 	}
+}
+
+// needsMount reports whether a downloaded entry's post-download action reads the mount: process() sends every
+// action other than Download and None to the symlink step.
+func needsMount(entry *storage.Entry) bool {
+	return entry.Status == debridTypes.TorrentStatusDownloaded &&
+		entry.Action != config.DownloadActionDownload && entry.Action != config.DownloadActionNone
 }
 
 // pollable reports whether the poll drives an entry: an active download that
@@ -568,11 +579,7 @@ func (m *Manager) processAction(entry *storage.Entry) {
 			m.logger.Info().Str("name", entry.Name).Msg("Entry deleted, stopped its post-download action")
 			return
 		}
-		if errors.Is(err, context.Canceled) && m.work.Context().Err() != nil {
-			entry.IsDownloading = false
-			if updateErr := m.queue.Update(entry); updateErr != nil {
-				m.logger.Error().Err(updateErr).Str("name", entry.Name).Msg("Failed to save interrupted download")
-			}
+		if m.saveIfInterrupted(entry, err) {
 			return
 		}
 		m.logger.Error().
@@ -582,6 +589,24 @@ func (m *Manager) processAction(entry *storage.Entry) {
 		m.failEntry(entry, err)
 		return
 	}
+}
+
+// saveIfInterrupted saves an entry whose post-download action was cut short by a stop and reports whether it was:
+// the work group is stopping, or the mount is. It stays queued and idle, to resume in the next generation.
+func (m *Manager) saveIfInterrupted(entry *storage.Entry, err error) bool {
+	mountStopping := errors.Is(err, ErrMountStopping)
+	workStopping := errors.Is(err, context.Canceled) && m.work.Context().Err() != nil
+	if !mountStopping && !workStopping {
+		return false
+	}
+	if mountStopping {
+		m.logger.Info().Str("name", entry.Name).Msg("Mount stopping, download left resumable")
+	}
+	entry.IsDownloading = false
+	if updateErr := m.queue.Update(entry); updateErr != nil {
+		m.logger.Error().Err(updateErr).Str("name", entry.Name).Msg("Failed to save interrupted download")
+	}
+	return true
 }
 
 // processTorrent handles the complete torrent lifecycle.
