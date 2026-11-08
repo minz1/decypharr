@@ -268,6 +268,25 @@ func TestRejectedSentOnce(t *testing.T) {
 	})
 }
 
+// A send cancelled by the stop ends as stopped, at Debug, not as a rejection.
+func TestCanceledSendDropsAsStopped(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		f := newFake("hook", outcome{err: context.Canceled})
+		r := newRig(t, f)
+		r.notify(t, "hook", 1)
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		want := []dropRecord{{id: "1", reason: dropStopped, attempts: 1}}
+		if got := r.obs.gotDrops("hook"); !slices.Equal(got, want) {
+			t.Fatalf("drops %v, want %v", got, want)
+		}
+		if n := r.logs.count("warn", "Notification dropped"); n != 0 {
+			t.Fatalf("drop WARNs = %d, want 0", n)
+		}
+	})
+}
+
 func TestDroppedAfterFourSends(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {

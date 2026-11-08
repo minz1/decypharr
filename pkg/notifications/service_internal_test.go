@@ -57,6 +57,17 @@ func TestDisabledServiceNotifyNoop(t *testing.T) {
 	})
 }
 
+// With no notifier configured the service builds no runner, so it needs no
+// group.
+func TestNoNotifiersNeedsNoGroup(t *testing.T) {
+	t.Parallel()
+	s := New(nil, &config.Notifications{Enabled: true}, nil, zerolog.Nop())
+	if s.IsEnabled() {
+		t.Fatal("IsEnabled() = true with no notifier")
+	}
+	s.Notify(Event{Type: config.EventDownloadComplete})
+}
+
 func TestNotifyNilEntryAndError(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {

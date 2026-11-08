@@ -24,6 +24,7 @@ type Service struct {
 // New creates a new notification service based on the provided configuration.
 // tlsConfig is the verified TLS base (the configured CA file). Deliveries run
 // on g: stopping it cancels the sends in flight and drops what is queued.
+// With no notifier configured it builds no runner and g may be nil.
 func New(g *task.Group, cfg *config.Notifications, tlsConfig *tls.Config, logger zerolog.Logger) *Service {
 	var notifiers []Notifier
 	if cfg.Enabled {
@@ -46,12 +47,11 @@ func newService(
 	obs observer,
 ) *Service {
 	logger = logger.With().Str("component", "notifications").Logger()
-	return &Service{
-		config:    cfg,
-		notifiers: notifiers,
-		logger:    logger,
-		runner:    newRunner(g, notifiers, logger, obs),
+	s := &Service{config: cfg, notifiers: notifiers, logger: logger}
+	if len(notifiers) > 0 { // Notify returns before the runner when there are none
+		s.runner = newRunner(g, notifiers, logger, obs)
 	}
+	return s
 }
 
 // Notify hands an event to every notifier's queue and returns at once. The

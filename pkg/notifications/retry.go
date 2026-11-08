@@ -50,14 +50,18 @@ func newStatusError(resp *http.Response, now time.Time) *StatusError {
 }
 
 // parseRetryAfter reads a Retry-After value: seconds (whole or decimal) or an
-// HTTP-date. Anything unreadable, negative or already past is zero.
+// HTTP-date. Anything unreadable, negative or already past is zero; seconds
+// beyond maxRetryAfter read as maxRetryAfter, so huge values cannot overflow.
 func parseRetryAfter(v string, now time.Time) time.Duration {
 	if v == "" {
 		return 0
 	}
 	if secs, err := strconv.ParseFloat(v, 64); err == nil {
-		if secs <= 0 {
+		switch {
+		case !(secs > 0): // also NaN
 			return 0
+		case secs >= maxRetryAfter.Seconds():
+			return maxRetryAfter
 		}
 		return time.Duration(secs * float64(time.Second))
 	}

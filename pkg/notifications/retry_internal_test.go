@@ -75,6 +75,9 @@ func TestParseRetryAfter(t *testing.T) {
 		{"", 0},
 		{"abc", 0},
 		{"-3", 0},
+		{"NaN", 0},
+		{"1e300", maxRetryAfter},
+		{"Inf", maxRetryAfter},
 		{now.Add(20 * time.Second).Format(http.TimeFormat), 20 * time.Second},
 		{now.Add(-5 * time.Second).Format(http.TimeFormat), 0},
 	}

@@ -2,6 +2,7 @@ package notifications
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/rs/zerolog"
@@ -219,7 +220,7 @@ func (d *dispatcher) sendDone(
 		st.transition(phaseWaiting, logger)
 		logger.Debug().Err(err).Int("attempt", st.attempt).Dur("wait", wait).Msg("Notification send failed, retrying")
 		return
-	case retry:
+	case retry, errors.Is(err, context.Canceled):
 		d.drop(key, st, dropStopped, err, logger)
 	case retryable(err):
 		d.drop(key, st, dropFailed, err, logger)
