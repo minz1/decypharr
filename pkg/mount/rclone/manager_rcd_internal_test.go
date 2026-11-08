@@ -71,6 +71,21 @@ type managerRig struct {
 	detaches []bool
 	// mounted is rclone's mount list: set by a mount/mount that answers, cleared by mount/unmount.
 	mounted atomic.Bool
+
+	// watching is set by watchOn: a fake mount table watcher runs and readTable reads table.
+	watching bool
+	// changedCh feeds the fake watcher's changed calls; failCh ends it with an error.
+	changedCh chan struct{}
+	failCh    chan error
+	// changed is the callback the fake watcher was given, guarded by mu.
+	changed func()
+	// table is the fake mount table's FUSE count at our path, tableErr its read error; guarded by mu.
+	table    int
+	tableErr error
+	// tableIgnoresMount keeps a mount/mount from showing in the fake table.
+	tableIgnoresMount bool
+	// readGate, when set, holds the next readTable call until it is closed; guarded by mu.
+	readGate chan struct{}
 }
 
 // detach is the Manager's forced unmount: it records the ctx's state at call time.
@@ -132,6 +147,9 @@ func newManagerRig(t *testing.T) *managerRig {
 	)
 	m.wire()
 	m.detach = r.detach
+	// By default there are no mount table events: the supervisor keeps today's probe cadence.
+	m.watchTable = func(context.Context, func()) error { return errNoMountTable }
+	m.readTable = func(string) (int, error) { return 0, errNoMountTable }
 	m.owner.spawn = r.spawnProc
 	m.owner.closeLog = func() error {
 		r.closes.Add(1)
@@ -145,9 +163,13 @@ func newManagerRig(t *testing.T) *managerRig {
 func (r *managerRig) serveRC(w http.ResponseWriter, req *http.Request) {
 	cmd := strings.TrimPrefix(req.URL.Path, "/")
 	r.record("rc:" + cmd)
-	if cmd == "mount/mount" && r.mountGate != nil {
+	if cmd == "mount/mount" && r.watching && r.failStatus(cmd) == 0 {
+		// The kernel mount exists before rclone answers.
+		r.plugMount()
+	}
+	if gate := r.currentMountGate(); cmd == "mount/mount" && gate != nil {
 		select {
-		case <-r.mountGate:
+		case <-gate:
 		case <-req.Context().Done():
 		}
 	}
@@ -160,11 +182,14 @@ func (r *managerRig) serveRC(w http.ResponseWriter, req *http.Request) {
 	}
 	switch cmd {
 	case "mount/mount":
-		if req.Context().Err() == nil {
+		if !r.watching && req.Context().Err() == nil {
 			r.mounted.Store(true)
 		}
 	case "mount/unmount":
 		r.mounted.Store(false)
+		if r.watching {
+			r.setTable(0)
+		}
 	case "mount/listmounts":
 		if r.mounted.Load() {
 			_, _ = fmt.Fprintf(w, `{"mountPoints":[{"MountPoint":%q}]}`, r.m.mount.MountPath)

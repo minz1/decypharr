@@ -29,6 +29,9 @@ const (
 	failedBackoffFactor = 2
 	// goneToRecover is how many mountGone probes in a row make the supervisor remount.
 	goneToRecover = 2
+	// watchdogInterval is the probe period while the mount table is watched: the table reports a detach at once,
+	// so the probe only catches a hung rclone.
+	watchdogInterval = 5 * time.Minute
 )
 
 // supKind is what a supervisor message says.
@@ -47,7 +50,23 @@ const (
 	supRetryDue
 	// supProbeDue: the next probe is due.
 	supProbeDue
+	// supWatchDown: the mount table watcher ended, err says why; the table is not trusted again.
+	supWatchDown
+	// supTableChanged: the mount table changed. It carries nothing: the handler reads the table when it runs, so a
+	// late one sees the table as it is.
+	supTableChanged
 )
+
+// supClass makes a table change an observation, which a full mailbox coalesces; the rest are commands.
+func supClass(msg supMsg) keyed.Class {
+	if msg.kind == supTableChanged {
+		return keyed.Observation
+	}
+	return keyed.Command
+}
+
+// supCoalesce makes queued table changes one: the handler reads the table, so one read sees them all.
+func supCoalesce(supMsg) string { return "table" }
 
 // probeKind is what a probe found.
 type probeKind uint8
@@ -70,6 +89,8 @@ type supMsg struct {
 	epoch uint64
 	err   error
 	probe probeKind
+	// path is where a mount attempt that worked shows in the mount table.
+	path string
 }
 
 // supState is the supervisor's own bookkeeping; the mount's state is the
@@ -87,6 +108,25 @@ type supState struct {
 	gone int
 	// backoff is the wait before the next round's probe; zero until the first Failed.
 	backoff time.Duration
+	// watchUp says the mount table is watched and trusted. It starts true and, once false, stays false.
+	watchUp bool
+	// tablePath and tableCount are where our mount shows in the mount table and how many FUSE entries were there
+	// when it was mounted; fewer later means it was detached.
+	tablePath  string
+	tableCount int
+}
+
+// nextProbe is when an up mount is probed next. A watched table reports a detach itself, so the probe is only a
+// watchdog; without it a mountGone is checked again soon.
+func nextProbe(state mountState, gone int, watchUp bool) time.Duration {
+	switch {
+	case watchUp && (state == mountMounted || state == mountDegraded):
+		return watchdogInterval
+	case state == mountDegraded && gone >= 1:
+		return degradedProbeInterval
+	default:
+		return probeInterval
+	}
 }
 
 // mountSupervisor is the one actor that moves the mount's state while the
@@ -95,8 +135,8 @@ type mountSupervisor struct {
 	m *Manager
 }
 
-// Activate starts with no child, no timer and a fresh round.
-func (mountSupervisor) Activate(context.Context, struct{}) supState { return supState{} }
+// Activate starts with no child, no timer, a fresh round and the table trusted until told otherwise.
+func (mountSupervisor) Activate(context.Context, struct{}) supState { return supState{watchUp: true} }
 
 // Handle applies one event to the mount's state.
 func (s mountSupervisor) Handle(
@@ -114,7 +154,7 @@ func (s mountSupervisor) Handle(
 	case supMountDone:
 		if s.current(st, msg) {
 			st.hasChild = false
-			s.mountDone(ctx, st, fx, msg.err)
+			s.mountDone(ctx, st, fx, msg.err, msg.path)
 		}
 	case supProbeDone:
 		if s.current(st, msg) {
@@ -133,6 +173,10 @@ func (s mountSupervisor) Handle(
 			st.hasTimer = false
 			s.probeDue(st, fx)
 		}
+	case supWatchDown:
+		s.watchDown(st, fx, msg.err)
+	case supTableChanged:
+		s.tableChanged(ctx, st, fx)
 	default:
 		s.m.logger.Error().Uint8("kind", uint8(msg.kind)).Msg("Mount supervisor got an unknown message")
 	}
@@ -194,6 +238,7 @@ func (s mountSupervisor) mountDone(
 	st *supState,
 	fx *keyed.Effects[struct{}, supMsg],
 	err error,
+	path string,
 ) {
 	if s.m.view.Load().state != mountMounting {
 		return
@@ -201,7 +246,8 @@ func (s mountSupervisor) mountDone(
 	if err == nil {
 		if s.enter(ctx, st, fx, mountMounted, func(v *mountView) { v.err = ""; v.mountedAt = time.Now() }) {
 			st.gone, st.backoff = 0, 0
-			s.schedule(st, fx, probeInterval, supProbeDue)
+			s.selfCheck(st, path)
+			s.schedule(st, fx, nextProbe(mountMounted, 0, st.watchUp), supProbeDue)
 		}
 		return
 	}
@@ -230,16 +276,15 @@ func (s mountSupervisor) probeDone(
 	switch s.m.view.Load().state {
 	case mountMounted:
 		if kind == probeOK {
-			s.schedule(st, fx, probeInterval, supProbeDue)
+			s.schedule(st, fx, nextProbe(mountMounted, 0, st.watchUp), supProbeDue)
 			return
 		}
 		if s.enter(ctx, st, fx, mountDegraded, withErr(err)) {
 			st.gone = 0
-			next := probeInterval
 			if kind == probeMountGone {
-				st.gone, next = 1, degradedProbeInterval
+				st.gone = 1
 			}
-			s.schedule(st, fx, next, supProbeDue)
+			s.schedule(st, fx, nextProbe(mountDegraded, st.gone, st.watchUp), supProbeDue)
 		}
 	case mountDegraded:
 		s.degradedProbe(ctx, st, fx, kind, err)
@@ -272,7 +317,7 @@ func (s mountSupervisor) degradedProbe(
 	case probeOK:
 		if s.enter(ctx, st, fx, mountMounted, func(v *mountView) { v.err = "" }) {
 			st.gone = 0
-			s.schedule(st, fx, probeInterval, supProbeDue)
+			s.schedule(st, fx, nextProbe(mountMounted, 0, st.watchUp), supProbeDue)
 		}
 	case probeMountGone:
 		st.gone++
@@ -284,7 +329,7 @@ func (s mountSupervisor) degradedProbe(
 			return
 		}
 		if s.enter(ctx, st, fx, mountDegraded, withErr(err)) {
-			s.schedule(st, fx, degradedProbeInterval, supProbeDue)
+			s.schedule(st, fx, nextProbe(mountDegraded, st.gone, st.watchUp), supProbeDue)
 		}
 	case probeBackendDown, probeRCError:
 		s.degradedStays(ctx, st, fx, err)
@@ -303,8 +348,77 @@ func (s mountSupervisor) degradedStays(
 ) {
 	st.gone = 0
 	if s.enter(ctx, st, fx, mountDegraded, withErr(err)) {
-		s.schedule(st, fx, probeInterval, supProbeDue)
+		s.schedule(st, fx, nextProbe(mountDegraded, 0, st.watchUp), supProbeDue)
 	}
+}
+
+// watchDown stops trusting the mount table and moves a pending probe of an up mount to the fast cadence. It is a
+// cadence change, not a move: the epoch stays.
+func (s mountSupervisor) watchDown(st *supState, fx *keyed.Effects[struct{}, supMsg], reason error) {
+	if !st.watchUp {
+		return
+	}
+	s.fallBack(st, reason)
+	state := s.m.view.Load().state
+	if !st.hasTimer || (state != mountMounted && state != mountDegraded) {
+		return
+	}
+	fx.CancelTimer(st.timer)
+	next := nextProbe(state, st.gone, st.watchUp)
+	s.schedule(st, fx, next, supProbeDue)
+	s.m.logger.Debug().Dur("next_probe_in", next).Msg("Mount probe moved to the fast cadence")
+}
+
+// selfCheck reads the table right after a mount worked: a table that does not show the mount at path (a symlinked
+// mount point, a detach before this) cannot report its detach, so the supervisor stops trusting it.
+func (s mountSupervisor) selfCheck(st *supState, path string) {
+	if !st.watchUp {
+		return
+	}
+	n, err := s.m.readTable(path)
+	if err == nil && n == 0 {
+		err = fmt.Errorf("the mount table shows no FUSE mount at %s", path)
+	}
+	if err != nil {
+		s.fallBack(st, err)
+		return
+	}
+	st.tablePath, st.tableCount = path, n
+}
+
+// tableChanged reads the mount table now, not when the change was seen: a change queued behind a repair finds the
+// mount back and does nothing. Fewer FUSE entries at our path than at mount time is a detach: remount at once.
+func (s mountSupervisor) tableChanged(ctx context.Context, st *supState, fx *keyed.Effects[struct{}, supMsg]) {
+	state := s.m.view.Load().state
+	if !st.watchUp || (state != mountMounted && state != mountDegraded) {
+		return
+	}
+	n, err := s.m.readTable(st.tablePath)
+	if err != nil {
+		s.watchDown(st, fx, err)
+		return
+	}
+	if n >= st.tableCount {
+		s.m.logger.Debug().Int("fuse_entries", n).Msg("Mount table changed; our mount is still there")
+		return
+	}
+	st.attempts, st.gone = 0, 0
+	if s.enter(ctx, st, fx, mountMounting, withErr(errors.New("mount point detached"))) {
+		s.spawnMount(st, fx, true, true)
+	}
+}
+
+// fallBack stops trusting the mount table for the rest of the supervisor's life; the probe cadence is today's.
+func (s mountSupervisor) fallBack(st *supState, reason error) {
+	if !st.watchUp {
+		return
+	}
+	st.watchUp = false
+	ev := s.m.logger.Warn()
+	if errors.Is(reason, errNoMountTable) {
+		ev = s.m.logger.Debug()
+	}
+	ev.Err(reason).Dur("probe_every", probeInterval).Msg("Mount table events are off; probing the mount instead")
 }
 
 // withErr records err as the mount's last failure.
@@ -358,7 +472,10 @@ func (s mountSupervisor) spawnMount(st *supState, fx *keyed.Effects[struct{}, su
 	id, err := fx.Go("mount", func(ctx context.Context) supMsg {
 		ctx, cancel := context.WithTimeout(ctx, mountAttemptTimeout)
 		defer cancel()
-		return supMsg{kind: supMountDone, epoch: epoch, err: s.m.mountOnce(ctx, cleanup, forget)}
+		if err := s.m.mountOnce(ctx, cleanup, forget); err != nil {
+			return supMsg{kind: supMountDone, epoch: epoch, err: err}
+		}
+		return supMsg{kind: supMountDone, epoch: epoch, path: tablePathFor(s.m.mount.MountPath)}
 	}, func(v any) supMsg {
 		return supMsg{kind: supMountDone, epoch: epoch, err: fmt.Errorf("mount attempt panicked: %v", v)}
 	})
@@ -412,13 +529,40 @@ func (m *Manager) probe(ctx context.Context) (probeKind, error) {
 	return probeMountGone, errors.New("mount point not listed by rclone")
 }
 
-// sendSup hands an rcd event to the supervisor. Before Start, or once it
-// stops, there is no one to tell.
-func (m *Manager) sendSup(kind supKind) {
+// sendSup hands an rcd event to the supervisor.
+func (m *Manager) sendSup(kind supKind) { m.sendSupMsg(supMsg{kind: kind}) }
+
+// sendSupMsg hands an event to the supervisor. Before Start, or once it stops, there is no one to tell.
+func (m *Manager) sendSupMsg(msg supMsg) {
 	if m.sup == nil {
 		return
 	}
-	if err := m.sup.Send(supMsg{kind: kind}); err != nil {
-		m.logger.Debug().Err(err).Msg("Mount supervisor did not take an rcd event")
+	if err := m.sup.Send(msg); err != nil {
+		ev := m.logger.Debug()
+		if errors.Is(err, keyed.ErrMailboxFull) {
+			ev = m.logger.Warn()
+		}
+		ev.Err(err).Uint8("kind", uint8(msg.kind)).Msg("Mount supervisor did not take an event")
 	}
 }
+
+// runTableWatch is the "mountinfo" task: it watches the mount table until ctx ends. If the watch ends first, the
+// supervisor stops trusting the table; the task itself has not failed.
+func (m *Manager) runTableWatch(ctx context.Context) error {
+	m.tableWatchEnded(ctx, m.watchTable(ctx, m.tableChanged))
+	return nil
+}
+
+// tableWatchEnded tells the supervisor the watch ended, unless it ended because ctx did.
+func (m *Manager) tableWatchEnded(ctx context.Context, err error) {
+	if ctx.Err() != nil {
+		return
+	}
+	if err == nil {
+		err = errors.New("mount table watch ended")
+	}
+	m.sendSupMsg(supMsg{kind: supWatchDown, err: err})
+}
+
+// tableChanged is the watcher's callback. It sends no payload: the supervisor reads the table itself.
+func (m *Manager) tableChanged() { m.sendSupMsg(supMsg{kind: supTableChanged}) }

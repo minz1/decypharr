@@ -14,7 +14,8 @@ import (
 //	Waiting → Mounting                       (rcd became Ready)
 //	Mounting → Mounting                      (an attempt failed, attempts left)
 //	Mounting → Mounted | Failed              (an attempt worked; the round is spent)
-//	Mounted → Degraded                       (a probe failed)
+//	Mounted → Degraded                       (a probe failed, or the WebDAV server stopped)
+//	Mounted → Mounting                       (the mount table lost the mount)
 //	Degraded → Degraded | Mounted            (another failed probe; a good one)
 //	Degraded → Mounting                      (the mount point is gone twice in a row)
 //	Failed → Failed | Mounting               (the backend is down; it answers again)
@@ -69,7 +70,7 @@ func mountSuccessors(s mountState) []mountState {
 	case mountMounting:
 		return []mountState{mountMounting, mountMounted, mountFailed, mountWaiting, mountUnmounting}
 	case mountMounted:
-		return []mountState{mountDegraded, mountWaiting, mountUnmounting}
+		return []mountState{mountDegraded, mountMounting, mountWaiting, mountUnmounting}
 	case mountDegraded:
 		return []mountState{mountDegraded, mountMounted, mountMounting, mountWaiting, mountUnmounting}
 	case mountFailed:
