@@ -10,7 +10,7 @@ import (
 )
 
 // checkDetached asserts ctx ignores a cancelled parent and ends exactly d from start.
-func checkDetached(t *testing.T, ctx context.Context, start time.Time, d time.Duration) {
+func checkDetached(ctx context.Context, t *testing.T, start time.Time, d time.Duration) {
 	t.Helper()
 	if ctx.Err() != nil {
 		t.Fatalf("ctx done at once: %v", ctx.Err())
@@ -28,6 +28,7 @@ func checkDetached(t *testing.T, ctx context.Context, start time.Time, d time.Du
 }
 
 func TestSliceNilIsDetached(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		parent, cancel := context.WithCancel(t.Context())
 		cancel()
@@ -35,11 +36,12 @@ func TestSliceNilIsDetached(t *testing.T) {
 		start := time.Now()
 		ctx, done := s.Bound(parent, 5*time.Second)
 		defer done()
-		checkDetached(t, ctx, start, 5*time.Second)
+		checkDetached(ctx, t, start, 5*time.Second)
 	})
 }
 
 func TestSliceUnarmedIsDetached(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		parent, cancel := context.WithCancel(t.Context())
 		cancel()
@@ -51,11 +53,12 @@ func TestSliceUnarmedIsDetached(t *testing.T) {
 		if calls != 1 {
 			t.Fatalf("slice called %d times, want 1", calls)
 		}
-		checkDetached(t, ctx, start, 5*time.Second)
+		checkDetached(ctx, t, start, 5*time.Second)
 	})
 }
 
 func TestSliceArmedTakesTheShorter(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		start := time.Now()
 		for _, tc := range []struct{ slice, d, want time.Duration }{
