@@ -89,7 +89,7 @@ func (u *Usenet) VerifyFileHead(ctx context.Context, file *storage.NZBFile) erro
 	if err != nil {
 		return err
 	}
-	defer entry.cleanup()
+	defer entry.cleanupOneShot(ctx)
 
 	readerAt, _, err := entry.getOrCreateReader()
 	if err != nil {

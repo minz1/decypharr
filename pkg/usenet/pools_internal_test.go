@@ -28,11 +28,12 @@ func TestRestartAppliesUsenetMemoryBudget(t *testing.T) {
 		}); updateErr != nil {
 			t.Fatal(updateErr)
 		}
-		service, newErr := New(task.NewRoot(t.Context(), "test", zerolog.Nop()), store, logger.Discard())
+		root := task.NewRoot(t.Context(), "test", zerolog.Nop())
+		t.Cleanup(func() { stopLifecycleGroup(t, root) })
+		service, newErr := New(root, store, logger.Discard())
 		if newErr != nil {
 			t.Fatal(newErr)
 		}
-		t.Cleanup(func() { _ = service.Close() })
 		cfg := reader.DefaultConfig()
 		cfg.Pools = service.bufferPools
 		segments := make([]reader.SegmentMeta, 64)
@@ -53,8 +54,6 @@ func TestRestartAppliesUsenetMemoryBudget(t *testing.T) {
 		if closeErr := cache.Close(); closeErr != nil {
 			t.Fatal(closeErr)
 		}
-		if closeErr := service.Close(); closeErr != nil {
-			t.Fatal(closeErr)
-		}
+		stopLifecycleGroup(t, root)
 	}
 }

@@ -12,7 +12,6 @@ import (
 // owner stops it, and it is created first, so it stops last.
 type Pools struct {
 	g       *task.Group
-	bufferG *task.Group
 	buffers *buffer.Pool
 	extents *extentPool
 }
@@ -28,7 +27,6 @@ func NewPools(g *task.Group, memoryBudget int64) (*Pools, error) {
 	}
 	return &Pools{
 		g:       g,
-		bufferG: bufferG,
 		buffers: buffers,
 		extents: newExtentPool(memoryBudget),
 	}, nil
@@ -41,10 +39,6 @@ func (p *Pools) newReaderGroup() *task.Group { return p.g.Child("reader") }
 // Context ends when the pools' group stops. Work done for the pools' readers
 // outside a task runs on it.
 func (p *Pools) Context() context.Context { return p.g.Context() }
-
-// BufferGroup is the group the buffer pool runs on. Stopping it closes every
-// Buffer still registered.
-func (p *Pools) BufferGroup() *task.Group { return p.bufferG }
 
 // Stats reports allocated buffer bytes. These are not process RSS values.
 func (p *Pools) Stats() map[string]any {

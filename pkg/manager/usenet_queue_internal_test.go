@@ -126,14 +126,21 @@ func newUnreachableUsenet(t *testing.T) *usenet.Usenet {
 		}
 	})
 
-	usenetClient, err := usenet.New(task.NewRoot(t.Context(), "test", zerolog.Nop()), store, logger.Discard())
+	usenetRoot := task.NewRoot(t.Context(), "test", zerolog.Nop())
+	t.Cleanup(func() { stopUsenetRoot(t, usenetRoot) })
+	usenetClient, err := usenet.New(usenetRoot, store, logger.Discard())
 	if err != nil {
 		t.Fatalf("create usenet client: %v", err)
 	}
-	t.Cleanup(func() {
-		if closeErr := usenetClient.Close(); closeErr != nil {
-			t.Errorf("close usenet client: %v", closeErr)
-		}
-	})
 	return usenetClient
+}
+
+// stopUsenetRoot stops the group a test hung its usenet service on.
+func stopUsenetRoot(t *testing.T, root *task.Group) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 30*time.Second)
+	defer cancel()
+	if err := root.Stop(ctx); err != nil {
+		t.Errorf("stop the usenet group: %v", err)
+	}
 }
