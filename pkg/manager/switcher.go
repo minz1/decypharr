@@ -39,7 +39,10 @@ func (m *Manager) SwitchTorrent(
 
 	m.migrationJobs.Store(job.ID, job)
 
-	if err = m.runWork("switch-provider", func() { m.executeMigration(job, entry) }); err != nil {
+	if err = m.runWorkCtx(
+		"switch-provider",
+		func(ctx context.Context) { m.executeMigration(ctx, job, entry) },
+	); err != nil {
 		m.migrationJobs.Delete(job.ID)
 		return nil, err
 	}
@@ -47,7 +50,7 @@ func (m *Manager) SwitchTorrent(
 	return job, nil
 }
 
-func (m *Manager) executeMigration(job *storage.SwitcherJob, torrent *storage.Entry) {
+func (m *Manager) executeMigration(ctx context.Context, job *storage.SwitcherJob, torrent *storage.Entry) {
 	m.logger.Info().
 		Str("job_id", job.ID).
 		Str("torrent", torrent.Name).
@@ -65,7 +68,7 @@ func (m *Manager) executeMigration(job *storage.SwitcherJob, torrent *storage.En
 	}
 	job.Progress = 10
 
-	success, err := m.fixer.MoveTorrent(torrent, job.TargetProvider, false) // false = don't force re-download
+	success, err := m.fixer.MoveTorrent(ctx, torrent, job.TargetProvider, false) // false = don't force re-download
 
 	if err != nil || !success {
 		job.Status = storage.SwitcherStatusFailed

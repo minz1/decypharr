@@ -92,7 +92,7 @@ func (r *Service) probeTorrentFileByUnrestrict(
 	downloadLink, err := client.GetDownloadLink(ctx, placement.ID, debridFile)
 	if fresh && err == nil && !downloadLink.Empty() && downloadLink.Generated.Before(started) {
 		if acc, accErr := client.AccountManager().GetAccount(downloadLink.Token); accErr == nil && acc != nil {
-			_ = acc.DeleteLink(downloadLink, nil)
+			_ = acc.DeleteLink(ctx, downloadLink, nil)
 		}
 		downloadLink, err = client.GetDownloadLink(ctx, placement.ID, debridFile)
 		if err == nil && !downloadLink.Empty() && downloadLink.Generated.Before(started) {

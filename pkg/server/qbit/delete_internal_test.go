@@ -1,6 +1,7 @@
 package qbit
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"sync/atomic"
@@ -25,7 +26,7 @@ func (*deletingProvider) Config() config.Debrid {
 	return config.Debrid{Name: "torbox", Provider: "torbox"}
 }
 func (*deletingProvider) Logger() zerolog.Logger { return zerolog.Nop() }
-func (p *deletingProvider) DeleteTorrent(id string) error {
+func (p *deletingProvider) DeleteTorrent(_ context.Context, id string) error {
 	p.deleted.Store(id)
 	return nil
 }

@@ -11,30 +11,30 @@ import (
 )
 
 type Client interface {
-	SubmitMagnet(tr *types.Torrent) (*types.Torrent, error)
-	CheckStatus(tr *types.Torrent) (*types.Torrent, error)
+	SubmitMagnet(ctx context.Context, tr *types.Torrent) (*types.Torrent, error)
+	CheckStatus(ctx context.Context, tr *types.Torrent) (*types.Torrent, error)
 	GetDownloadLink(ctx context.Context, torrentID string, file *types.File) (types.DownloadLink, error)
-	DeleteTorrent(torrentID string) error
+	DeleteTorrent(ctx context.Context, torrentID string) error
 	// IsAvailable returns one result for each checked, nonempty input hash.
 	// Result keys retain the input spelling. Missing keys were not checked.
 	// On failure, results contain only completed batches. Unsupported providers
 	// return types.ErrAvailabilityUnsupported.
-	IsAvailable(infohashes []string) (map[string]bool, error)
-	UpdateTorrent(torrent *types.Torrent) error
-	GetTorrent(torrentID string) (*types.Torrent, error)
-	GetTorrents() ([]*types.Torrent, error)
+	IsAvailable(ctx context.Context, infohashes []string) (map[string]bool, error)
+	UpdateTorrent(ctx context.Context, torrent *types.Torrent) error
+	GetTorrent(ctx context.Context, torrentID string) (*types.Torrent, error)
+	GetTorrents(ctx context.Context) ([]*types.Torrent, error)
 	Config() config.Debrid
 	Logger() zerolog.Logger
-	RefreshDownloadLinks() error
+	RefreshDownloadLinks(ctx context.Context) error
 	CheckFile(
 		ctx context.Context,
 		infohash, fileID string,
 	) error // fileID here can link, file id(in the case of torbox), etc.
 	AccountManager() *account.Manager // Returns the active download account/token
-	GetProfile() (*types.Profile, error)
-	GetAvailableSlots() (int, error)
-	SyncAccounts() // Updates each accounts details(like traffic, username, etc.)
-	DeleteLink(dl types.DownloadLink) error
+	GetProfile(ctx context.Context) (*types.Profile, error)
+	GetAvailableSlots(ctx context.Context) (int, error)
+	SyncAccounts(ctx context.Context) // Updates each accounts details(like traffic, username, etc.)
+	DeleteLink(ctx context.Context, dl types.DownloadLink) error
 	SpeedTest(ctx context.Context) types.SpeedTestResult
 	SupportsCheck() bool
 }

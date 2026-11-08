@@ -28,7 +28,7 @@ type replacementProvider struct {
 func (c *replacementProvider) Config() config.Debrid {
 	return config.Debrid{Name: "remaining", Provider: "torbox"}
 }
-func (c *replacementProvider) SubmitMagnet(torrent *types.Torrent) (*types.Torrent, error) {
+func (c *replacementProvider) SubmitMagnet(_ context.Context, torrent *types.Torrent) (*types.Torrent, error) {
 	c.submissions++
 	torrent.ID = "new"
 	torrent.Debrid = "remaining"
@@ -36,10 +36,13 @@ func (c *replacementProvider) SubmitMagnet(torrent *types.Torrent) (*types.Torre
 	torrent.Files = map[string]types.File{"video.mkv": {Name: "video.mkv", ID: "file"}}
 	return torrent, nil
 }
-func (c *replacementProvider) CheckStatus(torrent *types.Torrent) (*types.Torrent, error) {
+func (c *replacementProvider) CheckStatus(_ context.Context, torrent *types.Torrent) (*types.Torrent, error) {
 	return torrent, nil
 }
-func (c *replacementProvider) DeleteTorrent(string) error { c.deletions.Add(1); return nil }
+func (c *replacementProvider) DeleteTorrent(context.Context, string) error {
+	c.deletions.Add(1)
+	return nil
+}
 
 func TestFixTorrentWithRemovedProvider(t *testing.T) {
 	t.Parallel()
@@ -121,7 +124,9 @@ type refusingProvider struct {
 	err error
 }
 
-func (c *refusingProvider) SubmitMagnet(*types.Torrent) (*types.Torrent, error) { return nil, c.err }
+func (c *refusingProvider) SubmitMagnet(context.Context, *types.Torrent) (*types.Torrent, error) {
+	return nil, c.err
+}
 
 func TestRunRepairLogsEveryAttempt(t *testing.T) {
 	t.Parallel()

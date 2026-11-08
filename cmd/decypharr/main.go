@@ -99,7 +99,7 @@ func buildServices(gen *generation, cfg *config.Config, logs *logger.Factory) (f
 	gate := manager.NewMountGate(logs.New("mount"))
 	mgr.SetMountGate(gate)
 	shares := &shareStates{}
-	srv := server.New(mgr, store, logs, shares.accessState())
+	srv := server.New(mgr.Context(), mgr, store, logs, shares.accessState())
 	srv.SetRestartFunc(gen.RequestRestart)
 	srv.SetTaskSnapshot(root.Snapshot)
 	srv.SetStopContext(gen.stopContext)

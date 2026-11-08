@@ -1,6 +1,7 @@
 package qbit
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -140,9 +141,9 @@ type refusingProvider struct {
 func (p *refusingProvider) Config() config.Debrid {
 	return config.Debrid{Name: p.name, Provider: p.name}
 }
-func (p *refusingProvider) Logger() zerolog.Logger     { return zerolog.Nop() }
-func (p *refusingProvider) DeleteTorrent(string) error { return nil }
-func (p *refusingProvider) SubmitMagnet(*types.Torrent) (*types.Torrent, error) {
+func (p *refusingProvider) Logger() zerolog.Logger                      { return zerolog.Nop() }
+func (p *refusingProvider) DeleteTorrent(context.Context, string) error { return nil }
+func (p *refusingProvider) SubmitMagnet(context.Context, *types.Torrent) (*types.Torrent, error) {
 	p.submits.Add(1)
 	return nil, p.err
 }

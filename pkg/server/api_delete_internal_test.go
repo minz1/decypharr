@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -31,7 +32,7 @@ func (*queueCheckingProvider) Config() config.Debrid {
 	return config.Debrid{Name: "torbox", Provider: "torbox"}
 }
 func (*queueCheckingProvider) Logger() zerolog.Logger { return zerolog.Nop() }
-func (p *queueCheckingProvider) DeleteTorrent(string) error {
+func (p *queueCheckingProvider) DeleteTorrent(context.Context, string) error {
 	p.queuedAtDelete.Store(p.queue.Contains(p.hash))
 	close(p.deleted)
 	return nil

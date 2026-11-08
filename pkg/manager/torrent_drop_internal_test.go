@@ -86,10 +86,12 @@ type fakeListing struct {
 	looked []string
 }
 
-func (f *fakeListing) GetTorrents() ([]*types.Torrent, error) { return f.torrents, nil }
-func (f *fakeListing) Config() config.Debrid                  { return config.Debrid{Limit: f.limit} }
+func (f *fakeListing) GetTorrents(_ context.Context) ([]*types.Torrent, error) {
+	return f.torrents, nil
+}
+func (f *fakeListing) Config() config.Debrid { return config.Debrid{Limit: f.limit} }
 
-func (f *fakeListing) GetTorrent(id string) (*types.Torrent, error) {
+func (f *fakeListing) GetTorrent(_ context.Context, id string) (*types.Torrent, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.looked = append(f.looked, id)

@@ -3,6 +3,7 @@ package manager
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"slices"
 	"strings"
@@ -73,7 +74,7 @@ type slowDeleteProvider struct {
 	deleted func()
 }
 
-func (p slowDeleteProvider) DeleteTorrent(string) error {
+func (p slowDeleteProvider) DeleteTorrent(context.Context, string) error {
 	time.Sleep(p.delay)
 	p.deleted()
 	return nil
@@ -122,7 +123,7 @@ func TestSlowProviderDeleteKeepsTheStopOrderAndFitsTheBudget(t *testing.T) {
 		logs := &lockedLog{onStopped: func(service string) { record("stopped " + service) }}
 		m.logger = zerolog.New(logs)
 		client := slowDeleteProvider{delay: deleteTime, deleted: func() { record("delete finished") }}
-		m.startPlacementRun("Show.S01", "torbox", func() { _ = client.DeleteTorrent("id") })
+		m.startPlacementRun("Show.S01", "torbox", func() { _ = client.DeleteTorrent(t.Context(), "id") })
 		synctest.Wait()
 
 		started := time.Now()
@@ -139,7 +140,7 @@ func TestSlowProviderDeleteKeepsTheStopOrderAndFitsTheBudget(t *testing.T) {
 		mu.Unlock()
 		checkPlacementStopOrder(t, got)
 
-		if m.startPlacementRun("Show.S02", "realdebrid", func() { _ = client.DeleteTorrent("late") }) {
+		if m.startPlacementRun("Show.S02", "realdebrid", func() { _ = client.DeleteTorrent(t.Context(), "late") }) {
 			t.Fatal("a delete after the placements group closed was accepted")
 		}
 		synctest.Wait()

@@ -61,11 +61,11 @@ func TestSubmissionRequestsUseDedicatedClient(t *testing.T) {
 	torrent := &types.Torrent{
 		Magnet: &utils.Magnet{Link: "magnet:?xt=urn:btih:ABC"},
 	}
-	added, err := tb.SubmitMagnet(torrent)
+	added, err := tb.SubmitMagnet(t.Context(), torrent)
 	if err != nil {
 		t.Fatalf("SubmitMagnet() error = %v", err)
 	}
-	if _, checkStatusErr := tb.CheckStatus(added); checkStatusErr != nil {
+	if _, checkStatusErr := tb.CheckStatus(t.Context(), added); checkStatusErr != nil {
 		t.Fatalf("CheckStatus() error = %v", checkStatusErr)
 	}
 
@@ -106,7 +106,7 @@ func TestGetTorrentsBypassesTorboxCache(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	tb := testTorbox(server.URL)
-	torrents, err := tb.GetTorrents()
+	torrents, err := tb.GetTorrents(t.Context())
 	if err != nil {
 		t.Fatalf("GetTorrents() error = %v", err)
 	}
@@ -137,7 +137,7 @@ func TestGetTorrentsReturnsPaginationErrors(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	tb := testTorbox(server.URL)
-	torrents, err := tb.GetTorrents()
+	torrents, err := tb.GetTorrents(t.Context())
 	if err == nil {
 		t.Fatal("GetTorrents() error = nil, want pagination error")
 	}
@@ -165,7 +165,7 @@ func TestGetTorrentAcceptsObjectAndArrayResponses(t *testing.T) {
 			}))
 			t.Cleanup(server.Close)
 
-			torrent, err := testTorbox(server.URL).GetTorrent("17")
+			torrent, err := testTorbox(server.URL).GetTorrent(t.Context(), "17")
 			if err != nil {
 				t.Fatalf("GetTorrent() error = %v", err)
 			}
@@ -201,7 +201,7 @@ func TestDeleteTorrentUsesControlEndpoint(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	if err := testTorbox(server.URL).DeleteTorrent("42"); err != nil {
+	if err := testTorbox(server.URL).DeleteTorrent(t.Context(), "42"); err != nil {
 		t.Fatalf("DeleteTorrent() error = %v", err)
 	}
 }
@@ -232,7 +232,7 @@ func TestAvailabilityPreservesKeysAndReportsIncompleteBatches(t *testing.T) {
 		hashes = append(hashes, fmt.Sprintf("hash%d", len(hashes)))
 	}
 	hashes = append(hashes, "unchecked")
-	result, err := testTorbox(server.URL).IsAvailable(hashes)
+	result, err := testTorbox(server.URL).IsAvailable(t.Context(), hashes)
 	if err == nil {
 		t.Fatal("failed batch returned no error")
 	}
@@ -260,7 +260,12 @@ func TestGetTorrentReportsGoneAsNotFound(t *testing.T) {
 				respond(w)
 			}))
 			t.Cleanup(server.Close)
-			if _, err := testTorbox(server.URL).GetTorrent("17"); !errors.Is(err, customerror.ErrTorrentNotFound) {
+			if _, err := testTorbox(
+				server.URL,
+			).GetTorrent(t.Context(), "17"); !errors.Is(
+				err,
+				customerror.ErrTorrentNotFound,
+			) {
 				t.Fatalf("err=%v, want ErrTorrentNotFound", err)
 			}
 		})
@@ -280,7 +285,7 @@ func TestGetTorrentUnsuccessfulResponseIsNotNotFound(t *testing.T) {
 				_, _ = fmt.Fprint(w, body)
 			}))
 			t.Cleanup(server.Close)
-			_, err := testTorbox(server.URL).GetTorrent("17")
+			_, err := testTorbox(server.URL).GetTorrent(t.Context(), "17")
 			if err == nil || errors.Is(err, customerror.ErrTorrentNotFound) {
 				t.Fatalf("err=%v, want a non-not-found error", err)
 			}
@@ -294,7 +299,7 @@ func TestGetTorrentKeepsOtherFailures(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	t.Cleanup(server.Close)
-	_, err := testTorbox(server.URL).GetTorrent("17")
+	_, err := testTorbox(server.URL).GetTorrent(t.Context(), "17")
 	if err == nil || errors.Is(err, customerror.ErrTorrentNotFound) {
 		t.Fatalf("err=%v, want a non-not-found error", err)
 	}
@@ -330,7 +335,7 @@ func TestSubmitMagnetReportsTorBoxErrorBody(t *testing.T) {
 			}))
 			t.Cleanup(server.Close)
 			torrent := &types.Torrent{Magnet: &utils.Magnet{Link: "magnet:?xt=urn:btih:ABC"}}
-			_, err := testTorbox(server.URL).SubmitMagnet(torrent)
+			_, err := testTorbox(server.URL).SubmitMagnet(t.Context(), torrent)
 			if err == nil || err.Error() != tc.want {
 				t.Fatalf("SubmitMagnet() error = %v, want %q", err, tc.want)
 			}
@@ -362,7 +367,7 @@ func TestSubmitMagnetWithdrawsAQueuedAdd(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	torrent := &types.Torrent{InfoHash: "abc", Name: "release", Magnet: &utils.Magnet{Link: "magnet:?xt=urn:btih:abc"}}
-	_, err := testTorbox(server.URL).SubmitMagnet(torrent)
+	_, err := testTorbox(server.URL).SubmitMagnet(t.Context(), torrent)
 	if !errors.Is(err, customerror.ErrTooManyActiveDownloads) {
 		t.Fatalf("SubmitMagnet() error = %v, want ErrTooManyActiveDownloads", err)
 	}
@@ -387,7 +392,7 @@ func TestSubmitMagnetWithoutIDOrQueueEntryFails(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	torrent := &types.Torrent{InfoHash: "abc", Name: "release", Magnet: &utils.Magnet{Link: "magnet:?xt=urn:btih:abc"}}
-	_, err := testTorbox(server.URL).SubmitMagnet(torrent)
+	_, err := testTorbox(server.URL).SubmitMagnet(t.Context(), torrent)
 	if err == nil || errors.Is(err, customerror.ErrTooManyActiveDownloads) {
 		t.Fatalf("SubmitMagnet() error = %v, want a plain failure", err)
 	}
@@ -406,7 +411,7 @@ func TestSubmitMagnetAcceptsObjectAndArrayResponses(t *testing.T) {
 				_, _ = fmt.Fprint(w, body)
 			}))
 			t.Cleanup(server.Close)
-			torrent, err := testTorbox(server.URL).SubmitMagnet(&types.Torrent{
+			torrent, err := testTorbox(server.URL).SubmitMagnet(t.Context(), &types.Torrent{
 				InfoHash: "abc",
 				Magnet:   &utils.Magnet{Link: "magnet:?xt=urn:btih:abc"},
 			})

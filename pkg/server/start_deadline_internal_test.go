@@ -25,7 +25,7 @@ func TestShutdownIsBoundedByTheStopContext(t *testing.T) {
 		cfg.BindAddress = "127.0.0.1"
 		cfg.Port = port
 	})
-	srv := New(mgr, store, logger.Discard(), nil)
+	srv := New(t.Context(), mgr, store, logger.Discard(), nil)
 	// The grace period alone would outlast the test; only the stop context ends the wait.
 	srv.shutdownGrace = time.Hour
 	stop, cancelStop := context.WithTimeout(context.WithoutCancel(t.Context()), 300*time.Millisecond)

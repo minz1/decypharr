@@ -20,7 +20,7 @@ func TestRefreshKeepsManual(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	entry, err := m.processSyncTorrent(&types.Torrent{
+	entry, err := m.processSyncTorrent(t.Context(), &types.Torrent{
 		InfoHash: hash, Name: "pack", Debrid: "rd", ID: "id1", Status: types.TorrentStatusDownloaded,
 		Files: map[string]types.File{"a.mkv": {Name: "a.mkv", Size: 1, Link: "https://x/a"}},
 	})
@@ -37,7 +37,7 @@ func TestSyncStoresProgressAsFraction(t *testing.T) {
 	t.Parallel()
 	m := newShutdownTestManager(t, filepath.Join(t.TempDir(), "db"))
 	m.clients.Store("rd", completedTorrentProvider{})
-	entry, err := m.processSyncTorrent(&types.Torrent{
+	entry, err := m.processSyncTorrent(t.Context(), &types.Torrent{
 		InfoHash: "0123456789012345678901234567890123456789", Name: "pack", Debrid: "rd", ID: "id1",
 		Status: types.TorrentStatusDownloading, Progress: 40,
 		Files: map[string]types.File{"a.mkv": {Name: "a.mkv", Size: 1, Link: "https://x/a"}},

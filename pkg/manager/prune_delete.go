@@ -187,14 +187,16 @@ func (m *Manager) releasePlacement(provider string, p *storage.ProviderEntry, se
 	if client == nil {
 		return false, errors.New("provider not configured")
 	}
-	delErr := client.DeleteTorrent(id)
+	// Placeholder until the grace ctx replaces it: a started delete must not end with a caller's ctx.
+	providerCtx := context.Background()
+	delErr := client.DeleteTorrent(providerCtx, id)
 	if delErr == nil {
 		if p.HoldsSlot() {
 			m.slotFreed(provider)
 		}
 		return true, nil
 	}
-	if _, getErr := client.GetTorrent(id); errors.Is(getErr, customerror.ErrTorrentNotFound) {
+	if _, getErr := client.GetTorrent(providerCtx, id); errors.Is(getErr, customerror.ErrTorrentNotFound) {
 		return true, nil
 	}
 	return false, delErr

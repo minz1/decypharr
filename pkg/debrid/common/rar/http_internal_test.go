@@ -40,9 +40,9 @@ func TestHTTPFileReadAt(t *testing.T) {
 			defer srv.Close()
 			f := &HTTPFile{URL: srv.URL, client: srv.Client(), FileSize: tc.size}
 			buf := make([]byte, tc.count)
-			n, err := f.ReadAt(buf, tc.offset)
+			n, err := f.ReadAtContext(t.Context(), buf, tc.offset)
 			if !errors.Is(err, tc.wantErr) || string(buf[:n]) != tc.want {
-				t.Fatalf("ReadAt = %q, %v; want %q, %v", buf[:n], err, tc.want, tc.wantErr)
+				t.Fatalf("ReadAtContext = %q, %v; want %q, %v", buf[:n], err, tc.want, tc.wantErr)
 			}
 			if n < len(buf) && err == nil {
 				t.Fatal("short read returned nil error")

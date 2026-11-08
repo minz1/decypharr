@@ -81,7 +81,7 @@ func (tc finalizingCase) run(t *testing.T) {
 		pollInterval:       time.Millisecond,
 		maxFinalizingPolls: 3,
 	}
-	result, err := pm.CheckStatus(&types.Torrent{ID: "t1", DownloadUncached: tc.allowUncached})
+	result, err := pm.CheckStatus(t.Context(), &types.Torrent{ID: "t1", DownloadUncached: tc.allowUncached})
 	switch {
 	case tc.wantErr != nil && !errors.Is(err, tc.wantErr):
 		t.Fatalf("error = %v, want %v", err, tc.wantErr)

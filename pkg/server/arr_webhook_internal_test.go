@@ -103,7 +103,7 @@ func TestArrWebhookRequiresAuth(t *testing.T) {
 		cfg.Auth = &config.Auth{APIToken: "server-token", TokenOnly: true}
 		cfg.Arrs = []config.Arr{{Name: "sonarr", Host: "http://sonarr.invalid", Token: "t", ImportWebhook: true}}
 	})
-	srv := New(mgr, store, logger.Discard(), nil)
+	srv := New(t.Context(), mgr, store, logger.Discard(), nil)
 	for name, tc := range map[string]struct {
 		set  func(*http.Request)
 		want int

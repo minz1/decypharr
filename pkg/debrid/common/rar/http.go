@@ -79,12 +79,8 @@ func (f *HTTPFile) getFileSize(ctx context.Context) (int64, error) {
 	return size, err
 }
 
-// ReadAt reads bytes at off. It returns an error for a short read.
-func (f *HTTPFile) ReadAt(p []byte, off int64) (int, error) {
-	return f.ReadAtContext(context.Background(), p, off)
-}
-
-// ReadAtContext is ReadAt with its requests bound to ctx.
+// ReadAtContext reads bytes at off with its requests bound to ctx. It returns
+// an error for a short read.
 func (f *HTTPFile) ReadAtContext(ctx context.Context, p []byte, off int64) (int, error) {
 	if off < 0 {
 		return 0, fs.ErrInvalid

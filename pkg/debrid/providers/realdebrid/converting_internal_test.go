@@ -97,7 +97,7 @@ func (tc convertingCase) run(t *testing.T) {
 		pollInterval:       time.Millisecond,
 		maxConversionPolls: 3,
 	}
-	result, err := provider.CheckStatus(&types.Torrent{ID: "id", DownloadUncached: tc.allowUncached})
+	result, err := provider.CheckStatus(t.Context(), &types.Torrent{ID: "id", DownloadUncached: tc.allowUncached})
 	assertError(t, err, tc.wantErr, "")
 	if tc.alsoErr != nil && !errors.Is(err, tc.alsoErr) {
 		t.Fatalf("error = %v, want it to match %v too", err, tc.alsoErr)

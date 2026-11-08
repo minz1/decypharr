@@ -70,7 +70,7 @@ func (s *Server) handleGetVersion(w http.ResponseWriter, _ *http.Request) {
 	utils.JSONResponse(w, v, http.StatusOK)
 }
 
-func (s *Server) handleRunMountCacheCleanup(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleRunMountCacheCleanup(w http.ResponseWriter, r *http.Request) {
 	mountMgr := s.manager.MountManager()
 	if mountMgr == nil || !mountMgr.IsReady() {
 		http.Error(w, "Mount is not ready", http.StatusServiceUnavailable)
@@ -91,7 +91,7 @@ func (s *Server) handleRunMountCacheCleanup(w http.ResponseWriter, _ *http.Reque
 	}
 
 	if s.stats != nil {
-		s.stats.Refresh()
+		s.stats.Refresh(r.Context())
 	}
 
 	utils.JSONResponse(w, map[string]any{
@@ -100,7 +100,7 @@ func (s *Server) handleRunMountCacheCleanup(w http.ResponseWriter, _ *http.Reque
 	}, http.StatusOK)
 }
 
-func (s *Server) handlePurgeMountCache(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handlePurgeMountCache(w http.ResponseWriter, r *http.Request) {
 	mountMgr := s.manager.MountManager()
 	if mountMgr == nil || !mountMgr.IsReady() {
 		http.Error(w, "Mount is not ready", http.StatusServiceUnavailable)
@@ -121,7 +121,7 @@ func (s *Server) handlePurgeMountCache(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	if s.stats != nil {
-		s.stats.Refresh()
+		s.stats.Refresh(r.Context())
 	}
 
 	utils.JSONResponse(w, map[string]any{

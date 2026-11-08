@@ -38,7 +38,7 @@ func TestGetTorrentsPaginatesOnRawPageSize(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	torrents, err := testRealDebrid(server.URL).GetTorrents()
+	torrents, err := testRealDebrid(server.URL).GetTorrents(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestCheckStatusReturnsTorrentOnSlotLimit(t *testing.T) {
 		)
 	}))
 	defer server.Close()
-	torrent, err := testRealDebrid(server.URL).CheckStatus(&types.Torrent{ID: "t"})
+	torrent, err := testRealDebrid(server.URL).CheckStatus(t.Context(), &types.Torrent{ID: "t"})
 	if !errors.Is(err, customerror.ErrTooManyActiveDownloads) {
 		t.Fatalf("CheckStatus() error = %v, want too many active downloads", err)
 	}
@@ -77,7 +77,7 @@ func TestCheckStatusReportsDroppedTorrentAsNotFound(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer server.Close()
-	_, err := testRealDebrid(server.URL).CheckStatus(&types.Torrent{ID: "L2DZNJEZU2RZU", Name: "release"})
+	_, err := testRealDebrid(server.URL).CheckStatus(t.Context(), &types.Torrent{ID: "L2DZNJEZU2RZU", Name: "release"})
 	if !errors.Is(err, customerror.ErrTorrentNotFound) {
 		t.Fatalf("CheckStatus() error = %v, want ErrTorrentNotFound", err)
 	}

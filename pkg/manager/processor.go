@@ -86,7 +86,7 @@ func (m *Manager) processTorrentJob(ctx context.Context, job *Job) error {
 		job.Entry.Status = debridTypes.TorrentStatusDownloading
 		job.Entry.IsDownloading = false
 		_ = m.queue.Update(job.Entry)
-		m.processQueuedTorrent(job.Entry)
+		m.processQueuedTorrent(ctx, job.Entry)
 		return nil
 	}
 	if job.DebridTorrent == nil {
@@ -205,7 +205,7 @@ func (m *Manager) pollEntry(listed *storage.Entry) {
 		return
 	}
 	task := m.queuedEntryTask(entry)
-	if !pollable(entry) || task == nil || m.runWork("process-queued-entry", task) != nil {
+	if !pollable(entry) || task == nil || m.runWorkCtx("process-queued-entry", task) != nil {
 		m.processingEntries.Delete(entry.InfoHash)
 	}
 }
@@ -242,12 +242,12 @@ func (m *Manager) claimDrivable(hash string) (*storage.Entry, bool) {
 
 // queuedEntryTask returns the poll step for a queued entry, or nil when the
 // scheduler has nothing to drive for it.
-func (m *Manager) queuedEntryTask(entry *storage.Entry) func() {
+func (m *Manager) queuedEntryTask(entry *storage.Entry) func(context.Context) {
 	switch {
 	case entry.IsTorrent() && entry.ActiveProvider != "":
-		return func() { m.processQueuedTorrent(entry) }
+		return func(ctx context.Context) { m.processQueuedTorrent(ctx, entry) }
 	case entry.IsNZB():
-		return func() { m.processQueuedNZB(entry) }
+		return func(context.Context) { m.processQueuedNZB(entry) }
 	default:
 		return nil
 	}
@@ -298,7 +298,7 @@ func transientStatusError(err error) bool {
 	return customerror.IsRetriableError(err) && !errors.Is(err, customerror.ErrTorrentNotCached)
 }
 
-func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
+func (m *Manager) processQueuedTorrent(ctx context.Context, entry *storage.Entry) {
 	defer m.processingEntries.Delete(entry.InfoHash)
 	placement := entry.GetActiveProvider()
 	if placement == nil {
@@ -331,7 +331,7 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 		DownloadUncached: entry.DownloadUncached,
 	}
 
-	dbT, err := client.CheckStatus(debridTorrent)
+	dbT, err := client.CheckStatus(ctx, debridTorrent)
 	if !m.queue.Contains(entry.InfoHash) {
 		m.queue.waits.observe(entry.InfoHash, waitNone)
 		return // removed while the status check ran
@@ -687,7 +687,7 @@ func addEntryFiles(entry *storage.Entry, debridTorrent *debridTypes.Torrent) {
 }
 
 // SendToDebrid submits a magnet to debrid service(s) - replaces debrid.Parse.
-func (m *Manager) SendToDebrid(_ context.Context, importRequest *ImportRequest) (*debridTypes.Torrent, error) {
+func (m *Manager) SendToDebrid(ctx context.Context, importRequest *ImportRequest) (*debridTypes.Torrent, error) {
 	debridTorrent := &debridTypes.Torrent{
 		InfoHash: importRequest.Magnet.InfoHash,
 		Magnet:   importRequest.Magnet,
@@ -711,7 +711,7 @@ func (m *Manager) SendToDebrid(_ context.Context, importRequest *ImportRequest) 
 	var throttled []string
 
 	for _, db := range clients {
-		torrent, err := m.submitToProvider(db, debridTorrent, importRequest)
+		torrent, err := m.submitToProvider(ctx, db, debridTorrent, importRequest)
 		if err != nil {
 			errs = append(errs, err)
 			if isTooManyActiveDownloads(err) {
@@ -754,6 +754,7 @@ func (e *throttledError) Unwrap() error { return e.err }
 // submitToProvider submits the magnet to one provider and checks it landed,
 // recording the cache outcome with hearsay.
 func (m *Manager) submitToProvider(
+	ctx context.Context,
 	db common.Client,
 	debridTorrent *debridTypes.Torrent,
 	importRequest *ImportRequest,
@@ -782,7 +783,7 @@ func (m *Manager) submitToProvider(
 		Str("Action", string(importRequest.Action)).
 		Msg("Processing torrent")
 
-	dbt, err := db.SubmitMagnet(debridTorrent)
+	dbt, err := db.SubmitMagnet(ctx, debridTorrent)
 	if err != nil || dbt == nil || dbt.ID == "" {
 		if errors.Is(err, customerror.ErrTorrentBlocked) {
 			m.hearsay.RecordAdd(decision, false)
@@ -796,7 +797,7 @@ func (m *Manager) submitToProvider(
 	}
 	_logger.Info().Str("id", dbt.ID).Msgf("Entry: %s submitted to %s", dbt.Name, db.Config().Name)
 
-	torrent, err := db.CheckStatus(dbt)
+	torrent, err := db.CheckStatus(ctx, dbt)
 	if errors.Is(err, customerror.ErrProviderStatusTimeout) && torrent != nil && torrent.ID != "" {
 		// The provider has not finished converting the magnet or linking its
 		// files. That is no verdict on the release: queue the torrent as still

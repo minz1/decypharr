@@ -503,8 +503,13 @@ func (m *Manager) initJobQueue() {
 // cancels and waits for. Once the manager stops it starts nothing and
 // returns task.ErrStopped: queued entries stay in storage for the next start.
 func (m *Manager) runWork(name string, fn func()) error {
-	return m.work.Go(name, func(context.Context) error {
-		fn()
+	return m.runWorkCtx(name, func(context.Context) { fn() })
+}
+
+// runWorkCtx is runWork for a step that calls providers on the work task's ctx.
+func (m *Manager) runWorkCtx(name string, fn func(ctx context.Context)) error {
+	return m.work.Go(name, func(ctx context.Context) error {
+		fn(ctx)
 		return nil
 	})
 }

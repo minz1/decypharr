@@ -78,7 +78,7 @@ func TestGetTorrentSelectsRequestedMagnetFromArray(t *testing.T) {
 		client: request.New(zerolog.Nop(), nil, request.WithMaxRetries(0)),
 		config: config.Debrid{Name: "alldebrid"},
 	}
-	torrent, err := ad.GetTorrent("2")
+	torrent, err := ad.GetTorrent(t.Context(), "2")
 	if err != nil {
 		t.Fatalf("GetTorrent() error = %v", err)
 	}
@@ -108,7 +108,7 @@ func TestGetTorrentNotFoundOnlyOnSuccessEnvelope(t *testing.T) {
 				client: request.New(zerolog.Nop(), nil, request.WithMaxRetries(0)),
 				config: config.Debrid{Name: "alldebrid"},
 			}
-			_, err := ad.GetTorrent("2")
+			_, err := ad.GetTorrent(t.Context(), "2")
 			if err == nil || errors.Is(err, customerror.ErrTorrentNotFound) != tc.notFound {
 				t.Fatalf("err=%v, want not-found=%v", err, tc.notFound)
 			}
@@ -184,7 +184,7 @@ func TestCheckStatusRestartsStatusSeven(t *testing.T) {
 
 	ad := testAllDebrid(server.URL + "/v4.1")
 	torrent := &debridTypes.Torrent{ID: "42", DownloadUncached: true}
-	got, err := ad.CheckStatus(torrent)
+	got, err := ad.CheckStatus(t.Context(), torrent)
 	if err != nil {
 		t.Fatalf("CheckStatus() error = %v", err)
 	}
@@ -223,7 +223,7 @@ func TestCheckStatusBoundsStatusSevenRetries(t *testing.T) {
 
 	ad := testAllDebrid(server.URL)
 	torrent := &debridTypes.Torrent{ID: "42", DownloadUncached: true}
-	got, err := ad.CheckStatus(torrent)
+	got, err := ad.CheckStatus(t.Context(), torrent)
 	if err == nil || !strings.Contains(err.Error(), "remained at status code 7") {
 		t.Fatalf("CheckStatus() error = %v, want bounded status code 7 error", err)
 	}
@@ -259,7 +259,7 @@ func TestCheckStatusDoesNotRestartTerminalStatus(t *testing.T) {
 
 	ad := testAllDebrid(server.URL)
 	torrent := &debridTypes.Torrent{ID: "42", DownloadUncached: true}
-	got, err := ad.CheckStatus(torrent)
+	got, err := ad.CheckStatus(t.Context(), torrent)
 	if err == nil || !strings.Contains(err.Error(), "status code 10") {
 		t.Fatalf("CheckStatus() error = %v, want terminal status code 10 error", err)
 	}
@@ -282,7 +282,7 @@ func testAllDebrid(host string) *AllDebrid {
 
 func TestAvailabilityReportsUnsupported(t *testing.T) {
 	t.Parallel()
-	result, err := (&AllDebrid{}).IsAvailable([]string{"hash"})
+	result, err := (&AllDebrid{}).IsAvailable(t.Context(), []string{"hash"})
 	if !errors.Is(err, debridTypes.ErrAvailabilityUnsupported) || result != nil {
 		t.Fatalf("IsAvailable = %v, %v", result, err)
 	}
@@ -300,7 +300,7 @@ func TestGetTorrentsFlattensFolders(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	torrents, err := testAllDebrid(server.URL).GetTorrents()
+	torrents, err := testAllDebrid(server.URL).GetTorrents(t.Context())
 	if err != nil || len(torrents) != 1 {
 		t.Fatalf("GetTorrents() = %v, %v", torrents, err)
 	}

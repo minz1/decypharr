@@ -190,7 +190,7 @@ func (p *throttlingProvider) Config() config.Debrid {
 	return config.Debrid{Name: p.name, Provider: p.name}
 }
 func (p *throttlingProvider) Logger() zerolog.Logger { return zerolog.Nop() }
-func (p *throttlingProvider) SubmitMagnet(*types.Torrent) (*types.Torrent, error) {
+func (p *throttlingProvider) SubmitMagnet(context.Context, *types.Torrent) (*types.Torrent, error) {
 	p.submits.Add(1)
 	return nil, p.err
 }
@@ -248,7 +248,7 @@ func TestQueuedTorrentLeavingItsProviderSlotWakesAWaitingJob(t *testing.T) {
 			entry.Providers = map[string]*storage.ProviderEntry{"provider": {Provider: "provider", ID: "id"}}
 			m.jobQueue, _ = startRecordingQueue(t)
 			m.jobQueue.WaitForSlot(&Job{ID: "waiting"}, []string{"provider"}, time.Hour)
-			m.processQueuedTorrent(entry)
+			m.processQueuedTorrent(t.Context(), entry)
 			if woke := waitingJobs(m.jobQueue) == 0; woke != tc.wantWake {
 				t.Fatalf("woke a waiting job = %v, want %v", woke, tc.wantWake)
 			}
@@ -458,7 +458,7 @@ func TestErroredTorrentWakesOneJobNotTwo(t *testing.T) {
 	m.jobQueue, _ = startRecordingQueue(t)
 	m.jobQueue.WaitForSlot(&Job{ID: "first"}, []string{"provider"}, time.Hour)
 	m.jobQueue.WaitForSlot(&Job{ID: "second"}, []string{"provider"}, time.Hour)
-	m.processQueuedTorrent(entry)
+	m.processQueuedTorrent(t.Context(), entry)
 	saved, err := m.queue.GetTorrent(entry.InfoHash)
 	if err != nil {
 		t.Fatal(err)
@@ -533,7 +533,7 @@ func TestCompletedQueuedTorrentWakesOneJobAndStaysDueForSync(t *testing.T) {
 	m.jobQueue, _ = startRecordingQueue(t)
 	m.jobQueue.WaitForSlot(&Job{ID: "first"}, []string{"provider"}, time.Hour)
 	m.jobQueue.WaitForSlot(&Job{ID: "second"}, []string{"provider"}, time.Hour)
-	m.processQueuedTorrent(entry)
+	m.processQueuedTorrent(t.Context(), entry)
 	if waitingJobs(m.jobQueue) != 1 {
 		t.Fatal("a completed download did not wake exactly one job waiting on its provider")
 	}
@@ -554,7 +554,7 @@ type finishingProvider struct {
 	files  map[string]types.File
 }
 
-func (p *finishingProvider) CheckStatus(torrent *types.Torrent) (*types.Torrent, error) {
+func (p *finishingProvider) CheckStatus(_ context.Context, torrent *types.Torrent) (*types.Torrent, error) {
 	torrent.Status = types.TorrentStatusDownloaded
 	if p.debrid != "" {
 		torrent.Debrid = p.debrid
@@ -599,7 +599,7 @@ func finishQueuedTorrent(
 		t.Fatal(err)
 	}
 	m.jobQueue, _ = startRecordingQueue(t)
-	m.processQueuedTorrent(entry)
+	m.processQueuedTorrent(t.Context(), entry)
 	stored, err := m.storage.Get(entry.InfoHash)
 	if err != nil {
 		t.Fatal(err)
@@ -683,7 +683,7 @@ func TestFinishedTorrentWithoutLinksWaitsForThemBeforeTheAction(t *testing.T) {
 	t.Parallel()
 	m, provider, entry := queueTorrentAwaitingLinks(t, nil)
 
-	m.processQueuedTorrent(entry)
+	m.processQueuedTorrent(t.Context(), entry)
 	if _, err := m.storage.Get(entry.InfoHash); err == nil {
 		t.Fatal("the action ran before the finished torrent's files had links")
 	}
@@ -706,7 +706,7 @@ func TestFinishedTorrentWithoutLinksWaitsForThemBeforeTheAction(t *testing.T) {
 	provider.files = map[string]types.File{
 		"a.mkv": {TorrentID: "id", ID: "1", Name: "a.mkv", Path: "a.mkv", Size: 1, Link: "torbox://id/1"},
 	}
-	m.processQueuedTorrent(queued)
+	m.processQueuedTorrent(t.Context(), queued)
 	stored, err := m.storage.Get(entry.InfoHash)
 	if err != nil {
 		t.Fatalf("the action did not run once the links appeared: %v", err)
@@ -772,7 +772,7 @@ func TestFinishedTorrentWithoutLinksPastTheBoundFails(t *testing.T) {
 			finishedAt := time.Now().Add(-tc.waited).Truncate(time.Second)
 			m, _, entry := queueTorrentAwaitingLinks(t, &finishedAt)
 
-			m.processQueuedTorrent(entry)
+			m.processQueuedTorrent(t.Context(), entry)
 			if _, err := m.storage.Get(entry.InfoHash); err == nil {
 				t.Fatal("the action ran without the finished torrent's links")
 			}
@@ -801,7 +801,7 @@ func TestLinksWaitWarnLogsTheElapsedWait(t *testing.T) {
 	var logs bytes.Buffer
 	m.logger = zerolog.New(&logs)
 
-	m.processQueuedTorrent(entry)
+	m.processQueuedTorrent(t.Context(), entry)
 
 	var line struct {
 		Waited float64 `json:"waited"`
@@ -899,7 +899,7 @@ func TestSyncKeepsTheLinksStoredAtFinish(t *testing.T) {
 	if stored.Providers["provider"].NeedsUpdate(listed) {
 		t.Fatal("sync would re-fetch a placement that already holds every link")
 	}
-	synced, err := m.processSyncTorrent(listed)
+	synced, err := m.processSyncTorrent(t.Context(), listed)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -56,7 +56,7 @@ func TestUpdateTorrentRejectsNullData(t *testing.T) {
 		_, _ = fmt.Fprint(w, `{"success":false,"error":"NOT_FOUND","data":null}`)
 	}))
 	defer server.Close()
-	if err := testTorbox(server.URL).UpdateTorrent(&types.Torrent{ID: "17"}); err == nil {
+	if err := testTorbox(server.URL).UpdateTorrent(t.Context(), &types.Torrent{ID: "17"}); err == nil {
 		t.Fatal("UpdateTorrent() with null data returned no error")
 	}
 }

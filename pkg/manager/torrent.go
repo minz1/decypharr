@@ -80,12 +80,12 @@ func (m *Manager) refreshTorrents(ctx context.Context, provider string, debridCl
 }
 
 // doRefreshTorrents performs the actual refresh logic.
-func (m *Manager) doRefreshTorrents(_ context.Context, provider string, debridClient debrid.Client) error {
+func (m *Manager) doRefreshTorrents(ctx context.Context, provider string, debridClient debrid.Client) error {
 	lock := m.providerLock(provider)
 	lock.Lock()
 	defer lock.Unlock()
 
-	remote, err := debridClient.GetTorrents()
+	remote, err := debridClient.GetTorrents(ctx)
 	if err != nil {
 		m.logger.Error().Err(err).Str("debrid", provider).Msg("Failed to get remote")
 		return err
@@ -121,7 +121,7 @@ func (m *Manager) doRefreshTorrents(_ context.Context, provider string, debridCl
 	if err != nil {
 		return err
 	}
-	m.confirmDrops(provider, debridClient, &changes)
+	m.confirmDrops(ctx, provider, debridClient, &changes)
 	newTorrents, torrentsToUpdate := changes.fetch, changes.update
 
 	m.providerMisses.Store(provider, changes.misses)
@@ -138,7 +138,7 @@ func (m *Manager) doRefreshTorrents(_ context.Context, provider string, debridCl
 
 	// Process new torrents
 	if len(newTorrents) > 0 {
-		if processNewTorrentsErr := m.processNewTorrents(provider, newTorrents); processNewTorrentsErr != nil {
+		if processNewTorrentsErr := m.processNewTorrents(ctx, provider, newTorrents); processNewTorrentsErr != nil {
 			m.logger.Error().Err(processNewTorrentsErr).Str("debrid", provider).Msg("Failed to process new torrents")
 		}
 	}
@@ -248,7 +248,7 @@ func listedAbsence(provider string, entry *storage.Entry, listedIDs map[string]s
 // later sync, as do entries whose Arr recovery failed. A lookup error other
 // than not-found means the provider is unhealthy and ends the lookups. An
 // entry whose recovery keeps failing goes behind the others.
-func (m *Manager) confirmDrops(provider string, client debrid.Client, changes *torrentChanges) {
+func (m *Manager) confirmDrops(ctx context.Context, provider string, client debrid.Client, changes *torrentChanges) {
 	// refreshSG serialises syncs per provider, so this map needs no lock.
 	failed, _ := m.dropHookFailures.LoadOrStore(provider, map[string]int{})
 	slices.SortStableFunc(changes.confirm, func(a, b *storage.Entry) int {
@@ -274,7 +274,7 @@ func (m *Manager) confirmDrops(provider string, client debrid.Client, changes *t
 			return
 		}
 		id := entry.Providers[provider].ID
-		_, err := client.GetTorrent(id)
+		_, err := client.GetTorrent(ctx, id)
 		switch {
 		case err == nil:
 			delete(changes.misses, entry.InfoHash)
@@ -351,7 +351,7 @@ func (m *Manager) handleTorrentDeletions(provider string, torrentsToDelete []*st
 }
 
 // processNewTorrents processes new torrents with worker pool and batch writing.
-func (m *Manager) processNewTorrents(provider string, newTorrents []*types.Torrent) error {
+func (m *Manager) processNewTorrents(ctx context.Context, provider string, newTorrents []*types.Torrent) error {
 	workChan := make(chan *types.Torrent, min(refreshWorkChanBuffer, len(newTorrents)))
 	batchChan := make(chan *storage.Entry, refreshBatchChanBuffer)
 	errChan := make(chan error, 1) // Buffer for first error
@@ -372,7 +372,7 @@ func (m *Manager) processNewTorrents(provider string, newTorrents []*types.Torre
 	for range workers {
 		processWg.Go(func() {
 			for t := range workChan {
-				mt, err := m.processSyncTorrent(t)
+				mt, err := m.processSyncTorrent(ctx, t)
 				switch {
 				case errors.Is(err, errSyncSkipped):
 				case err != nil:
@@ -454,7 +454,7 @@ func (m *Manager) runBatchWriter(batchChan <-chan *storage.Entry, errChan chan<-
 }
 
 // processSyncTorrent processes a single torrent and returns it for batched writing.
-func (m *Manager) processSyncTorrent(t *types.Torrent) (*storage.Entry, error) {
+func (m *Manager) processSyncTorrent(ctx context.Context, t *types.Torrent) (*storage.Entry, error) {
 	// GetReader the debrid client
 	client := m.ProviderClient(t.Debrid)
 	if client == nil {
@@ -466,7 +466,7 @@ func (m *Manager) processSyncTorrent(t *types.Torrent) (*storage.Entry, error) {
 	if needsUpdate {
 		// This is the main bottleneck - API call per torrent
 		// Consider: Could we batch UpdateTorrent calls? Depends on debrid API
-		if err := client.UpdateTorrent(t); err != nil {
+		if err := client.UpdateTorrent(ctx, t); err != nil {
 			return nil, err
 		}
 
@@ -563,7 +563,7 @@ func newSyncedEntry(t *types.Torrent, addedOn time.Time) *storage.Entry {
 }
 
 // refreshTorrent refreshes a single torrent from its active debrid.
-func (m *Manager) refreshTorrent(infohash string) (*storage.Entry, error) {
+func (m *Manager) refreshTorrent(ctx context.Context, infohash string) (*storage.Entry, error) {
 	torrent, err := m.storage.Get(infohash)
 	if err != nil {
 		return nil, err
@@ -584,12 +584,12 @@ func (m *Manager) refreshTorrent(infohash string) (*storage.Entry, error) {
 	}
 
 	// GetReader updated torrent info from debrid
-	debridTorrent, err := client.GetTorrent(placement.ID)
+	debridTorrent, err := client.GetTorrent(ctx, placement.ID)
 	if err != nil {
 		return nil, err
 	}
 
-	entry, err := m.processSyncTorrent(debridTorrent)
+	entry, err := m.processSyncTorrent(ctx, debridTorrent)
 	if errors.Is(err, errSyncSkipped) {
 		// Nothing new to store; callers dereference the result, so hand back
 		// the stored entry rather than nil.
@@ -617,7 +617,7 @@ func (m *Manager) refreshDebridDownloadLinks(ctx context.Context, debridName str
 		return
 	}
 
-	if err := client.RefreshDownloadLinks(); err != nil {
+	if err := client.RefreshDownloadLinks(ctx); err != nil {
 		m.logger.Error().Err(err).Str("debrid", debridName).Msg("Failed to refresh download links")
 	}
 }

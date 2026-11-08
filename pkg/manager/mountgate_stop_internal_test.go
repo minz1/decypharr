@@ -265,7 +265,7 @@ type statusCounter struct {
 	checks *atomic.Int32
 }
 
-func (c statusCounter) CheckStatus(torrent *types.Torrent) (*types.Torrent, error) {
+func (c statusCounter) CheckStatus(_ context.Context, torrent *types.Torrent) (*types.Torrent, error) {
 	c.checks.Add(1)
 	return torrent, nil
 }

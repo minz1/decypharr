@@ -176,23 +176,23 @@ func (pm *Premiumize) doForm(
 	return pm.do(req, out)
 }
 
-func (pm *Premiumize) SubmitMagnet(t *types.Torrent) (*types.Torrent, error) {
+func (pm *Premiumize) SubmitMagnet(ctx context.Context, t *types.Torrent) (*types.Torrent, error) {
 	if t.Magnet == nil {
 		return nil, fmt.Errorf("missing magnet")
 	}
 	if t.Magnet.IsTorrent() {
-		return pm.addTorrent(t)
+		return pm.addTorrent(ctx, t)
 	}
-	return pm.addMagnet(t)
+	return pm.addMagnet(ctx, t)
 }
 
-func (pm *Premiumize) addMagnet(t *types.Torrent) (*types.Torrent, error) {
+func (pm *Premiumize) addMagnet(ctx context.Context, t *types.Torrent) (*types.Torrent, error) {
 	src := t.Magnet.Link
 	if src == "" && t.InfoHash != "" {
 		src = utils.ConstructMagnet(t.InfoHash, t.Name).Link
 	}
 	var data transferCreateResponse
-	err := pm.doForm(context.Background(), http.MethodPost, "/api/transfer/create", url.Values{"src": {src}}, &data)
+	err := pm.doForm(ctx, http.MethodPost, "/api/transfer/create", url.Values{"src": {src}}, &data)
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +200,7 @@ func (pm *Premiumize) addMagnet(t *types.Torrent) (*types.Torrent, error) {
 	return t, nil
 }
 
-func (pm *Premiumize) addTorrent(t *types.Torrent) (*types.Torrent, error) {
+func (pm *Premiumize) addTorrent(ctx context.Context, t *types.Torrent) (*types.Torrent, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	part, err := writer.CreateFormFile("src", cmp.Or(t.Filename, t.Magnet.Name, "upload.torrent"))
@@ -215,7 +215,7 @@ func (pm *Premiumize) addTorrent(t *types.Torrent) (*types.Torrent, error) {
 	}
 
 	req, err := http.NewRequestWithContext(
-		context.Background(),
+		ctx,
 		http.MethodPost,
 		pm.endpoint("/api/transfer/create"),
 		&body,
@@ -246,15 +246,15 @@ func (pm *Premiumize) applySubmittedTorrent(t *types.Torrent, data transferCreat
 	}
 }
 
-func (pm *Premiumize) CheckStatus(t *types.Torrent) (*types.Torrent, error) {
-	return pm.UpdateAndReturnTorrent(t)
+func (pm *Premiumize) CheckStatus(ctx context.Context, t *types.Torrent) (*types.Torrent, error) {
+	return pm.UpdateAndReturnTorrent(ctx, t)
 }
 
-func (pm *Premiumize) UpdateAndReturnTorrent(t *types.Torrent) (*types.Torrent, error) {
+func (pm *Premiumize) UpdateAndReturnTorrent(ctx context.Context, t *types.Torrent) (*types.Torrent, error) {
 	interval := cmp.Or(pm.pollInterval, statusPollInterval)
 	maxFinalizing := cmp.Or(pm.maxFinalizingPolls, maxFinalizingPolls)
 	for polls := 0; ; polls++ {
-		finalizing, err := pm.refreshTorrent(t)
+		finalizing, err := pm.refreshTorrent(ctx, t)
 		if err != nil {
 			return t, err
 		}
@@ -287,34 +287,34 @@ func (pm *Premiumize) UpdateAndReturnTorrent(t *types.Torrent) (*types.Torrent, 
 	return t, fmt.Errorf("torrent: %s has error status: %s", t.Name, t.Status)
 }
 
-func (pm *Premiumize) GetTorrent(torrentID string) (*types.Torrent, error) {
-	transfers, err := pm.listTransfers()
+func (pm *Premiumize) GetTorrent(ctx context.Context, torrentID string) (*types.Torrent, error) {
+	transfers, err := pm.listTransfers(ctx)
 	if err != nil {
 		return nil, err
 	}
 	for _, tr := range transfers {
 		if tr.ID == torrentID {
-			return pm.transferToTorrent(tr, "")
+			return pm.transferToTorrent(ctx, tr, "")
 		}
 	}
 	return nil, customerror.ErrTorrentNotFound
 }
 
-func (pm *Premiumize) UpdateTorrent(t *types.Torrent) error {
-	_, err := pm.refreshTorrent(t)
+func (pm *Premiumize) UpdateTorrent(ctx context.Context, t *types.Torrent) error {
+	_, err := pm.refreshTorrent(ctx, t)
 	return err
 }
 
 // refreshTorrent copies the provider's current view of t into t. finalizing is
 // true when the transfer is finished but its files are not linked yet.
-func (pm *Premiumize) refreshTorrent(t *types.Torrent) (bool, error) {
-	transfers, err := pm.listTransfers()
+func (pm *Premiumize) refreshTorrent(ctx context.Context, t *types.Torrent) (bool, error) {
+	transfers, err := pm.listTransfers(ctx)
 	if err != nil {
 		return false, err
 	}
 	for _, tr := range transfers {
 		if tr.ID == t.ID {
-			updated, isFinalizing, transferErr := pm.transferState(tr, t.InfoHash)
+			updated, isFinalizing, transferErr := pm.transferState(ctx, tr, t.InfoHash)
 			if transferErr != nil {
 				return false, transferErr
 			}
@@ -335,9 +335,9 @@ func (pm *Premiumize) refreshTorrent(t *types.Torrent) (bool, error) {
 	return false, customerror.ErrTorrentNotFound
 }
 
-func (pm *Premiumize) DeleteTorrent(torrentID string) error {
+func (pm *Premiumize) DeleteTorrent(ctx context.Context, torrentID string) error {
 	return pm.doForm(
-		context.Background(),
+		ctx,
 		http.MethodPost,
 		"/api/transfer/delete",
 		url.Values{"id": {torrentID}},
@@ -345,7 +345,7 @@ func (pm *Premiumize) DeleteTorrent(torrentID string) error {
 	)
 }
 
-func (pm *Premiumize) IsAvailable(infohashes []string) (map[string]bool, error) {
+func (pm *Premiumize) IsAvailable(ctx context.Context, infohashes []string) (map[string]bool, error) {
 	result := make(map[string]bool, len(infohashes))
 	const batchSize = 100
 	for i := 0; i < len(infohashes); i += batchSize {
@@ -364,7 +364,7 @@ func (pm *Premiumize) IsAvailable(infohashes []string) (map[string]bool, error) 
 			continue
 		}
 		var data cacheCheckResponse
-		if err := pm.doForm(context.Background(), http.MethodPost, "/api/cache/check", values, &data); err != nil {
+		if err := pm.doForm(ctx, http.MethodPost, "/api/cache/check", values, &data); err != nil {
 			return result, fmt.Errorf("check availability: %w", err)
 		}
 		if len(data.Response) != len(validHashes) {
@@ -381,15 +381,19 @@ func (pm *Premiumize) IsAvailable(infohashes []string) (map[string]bool, error) 
 	return result, nil
 }
 
-func (pm *Premiumize) GetTorrents() ([]*types.Torrent, error) {
-	transfers, err := pm.listTransfers()
+func (pm *Premiumize) GetTorrents(ctx context.Context) ([]*types.Torrent, error) {
+	transfers, err := pm.listTransfers(ctx)
 	if err != nil {
 		return nil, err
 	}
 	torrents := make([]*types.Torrent, 0, len(transfers))
 	for _, tr := range transfers {
-		torrent, transferToTorrentErr := pm.transferToTorrent(tr, "")
+		torrent, transferToTorrentErr := pm.transferToTorrent(ctx, tr, "")
 		if transferToTorrentErr != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				// A listing is whole or an error, never a partial list.
+				return nil, fmt.Errorf("list premiumize transfers: %w", ctxErr)
+			}
 			pm.logger.Warn().Err(transferToTorrentErr).Str("transfer_id", tr.ID).Msg("Skipping Premiumize transfer")
 			continue
 		}
@@ -400,9 +404,9 @@ func (pm *Premiumize) GetTorrents() ([]*types.Torrent, error) {
 	return torrents, nil
 }
 
-func (pm *Premiumize) listTransfers() ([]premiumizeTransfer, error) {
+func (pm *Premiumize) listTransfers(ctx context.Context) ([]premiumizeTransfer, error) {
 	var data transferListResponse
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, pm.endpoint("/api/transfer/list"), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pm.endpoint("/api/transfer/list"), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -412,8 +416,12 @@ func (pm *Premiumize) listTransfers() ([]premiumizeTransfer, error) {
 	return data.Transfers, nil
 }
 
-func (pm *Premiumize) transferToTorrent(tr premiumizeTransfer, fallbackInfoHash string) (*types.Torrent, error) {
-	torrent, _, err := pm.transferState(tr, fallbackInfoHash)
+func (pm *Premiumize) transferToTorrent(
+	ctx context.Context,
+	tr premiumizeTransfer,
+	fallbackInfoHash string,
+) (*types.Torrent, error) {
+	torrent, _, err := pm.transferState(ctx, tr, fallbackInfoHash)
 	return torrent, err
 }
 
@@ -421,6 +429,7 @@ func (pm *Premiumize) transferToTorrent(tr premiumizeTransfer, fallbackInfoHash 
 // it finished but the folder tree has no usable file links yet; the torrent is
 // then reported as downloading.
 func (pm *Premiumize) transferState(
+	ctx context.Context,
 	tr premiumizeTransfer,
 	fallbackInfoHash string,
 ) (*types.Torrent, bool, error) {
@@ -431,7 +440,7 @@ func (pm *Premiumize) transferState(
 	if status == types.TorrentStatusDownloaded {
 		var ready bool
 		var filesErr error
-		files, links, ready, filesErr = pm.filesForTransfer(tr)
+		files, links, ready, filesErr = pm.filesForTransfer(ctx, tr)
 		if filesErr != nil {
 			return nil, false, filesErr
 		}
@@ -481,11 +490,14 @@ func (pm *Premiumize) transferInfoHash(tr premiumizeTransfer, fallbackInfoHash s
 	return hex.EncodeToString(digest[:20])
 }
 
-func (pm *Premiumize) filesForTransfer(tr premiumizeTransfer) (map[string]types.File, []string, bool, error) {
+func (pm *Premiumize) filesForTransfer(
+	ctx context.Context,
+	tr premiumizeTransfer,
+) (map[string]types.File, []string, bool, error) {
 	files := make(map[string]types.File)
 	links := make([]string, 0)
 	if fileID := tr.FileID.String(); fileID != "" {
-		item, err := pm.itemDetails(context.Background(), fileID)
+		item, err := pm.itemDetails(ctx, fileID)
 		if err != nil {
 			return nil, nil, false, err
 		}
@@ -493,7 +505,7 @@ func (pm *Premiumize) filesForTransfer(tr premiumizeTransfer) (map[string]types.
 		return files, links, item.Link != "", nil
 	}
 	if folderID := tr.FolderID.String(); folderID != "" {
-		linkedFiles, err := pm.addFolderFiles(files, &links, tr.ID, folderID, "")
+		linkedFiles, err := pm.addFolderFiles(ctx, files, &links, tr.ID, folderID, "")
 		if err != nil {
 			return nil, nil, false, err
 		}
@@ -520,13 +532,14 @@ func (pm *Premiumize) itemDetails(ctx context.Context, id string) (*itemDetailsR
 }
 
 func (pm *Premiumize) addFolderFiles(
+	ctx context.Context,
 	files map[string]types.File,
 	links *[]string,
 	transferID, folderID, prefix string,
 ) (int, error) {
 	var data folderListResponse
 	req, err := http.NewRequestWithContext(
-		context.Background(),
+		ctx,
 		http.MethodGet,
 		pm.endpoint("/api/folder/list?id="+url.QueryEscape(folderID)),
 		nil,
@@ -543,7 +556,7 @@ func (pm *Premiumize) addFolderFiles(
 	for _, item := range data.Content {
 		itemPath := path.Join(prefix, item.Name)
 		if item.Type == "folder" {
-			n, addFolderFilesErr := pm.addFolderFiles(files, links, transferID, item.ID, itemPath)
+			n, addFolderFilesErr := pm.addFolderFiles(ctx, files, links, transferID, item.ID, itemPath)
 			if addFolderFilesErr != nil {
 				return 0, addFolderFilesErr
 			}
@@ -628,10 +641,14 @@ func (pm *Premiumize) fetchDownloadLink(
 	}, nil
 }
 
-func (pm *Premiumize) RefreshDownloadLinks() error {
-	return pm.accountsManager.RefreshLinks(func(*account.Account) ([]types.DownloadLink, error) {
-		return []types.DownloadLink{}, nil
-	})
+func (pm *Premiumize) RefreshDownloadLinks(ctx context.Context) error {
+	return pm.accountsManager.RefreshLinks(
+		ctx,
+		func(fetchCtx context.Context, _ *account.Account) ([]types.DownloadLink, error) {
+			// Premiumize links do not expire, so there is nothing to fetch; an ended ctx is still reported.
+			return []types.DownloadLink{}, fetchCtx.Err()
+		},
+	)
 }
 
 func (pm *Premiumize) CheckFile(ctx context.Context, _, fileID string) error {
@@ -662,15 +679,15 @@ func (pm *Premiumize) CheckFile(ctx context.Context, _, fileID string) error {
 	return nil
 }
 
-func (pm *Premiumize) GetProfile() (*types.Profile, error) {
+func (pm *Premiumize) GetProfile(ctx context.Context) (*types.Profile, error) {
 	return pm.profile.Get(profileCacheDuration, func() (*types.Profile, error) {
-		return pm.getClientProfile(pm.client)
+		return pm.getClientProfile(ctx, pm.client)
 	})
 }
 
-func (pm *Premiumize) getClientProfile(client *request.Client) (*types.Profile, error) {
+func (pm *Premiumize) getClientProfile(ctx context.Context, client *request.Client) (*types.Profile, error) {
 	var data accountInfoResponse
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, pm.endpoint("/api/account/info"), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pm.endpoint("/api/account/info"), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -713,7 +730,10 @@ func (pm *Premiumize) getClientProfile(client *request.Client) (*types.Profile, 
 	}, nil
 }
 
-func (pm *Premiumize) GetAvailableSlots() (int, error) {
+func (pm *Premiumize) GetAvailableSlots(ctx context.Context) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	// Premiumize does not provide active slot info without listing transfers.
 	return config.DefaultAvailableSlots, nil
 }
@@ -722,12 +742,12 @@ func (pm *Premiumize) AccountManager() *account.Manager {
 	return pm.accountsManager
 }
 
-func (pm *Premiumize) SyncAccounts() {
-	pm.accountsManager.Sync(pm.syncAccount)
+func (pm *Premiumize) SyncAccounts(ctx context.Context) {
+	pm.accountsManager.Sync(ctx, pm.syncAccount)
 }
 
-func (pm *Premiumize) syncAccount(acc *account.Account) error {
-	profile, err := pm.getClientProfile(acc.Client())
+func (pm *Premiumize) syncAccount(ctx context.Context, acc *account.Account) error {
+	profile, err := pm.getClientProfile(ctx, acc.Client())
 	if err != nil {
 		return err
 	}
@@ -735,14 +755,15 @@ func (pm *Premiumize) syncAccount(acc *account.Account) error {
 	return nil
 }
 
-func (pm *Premiumize) DeleteLink(downloadLink types.DownloadLink) error {
+func (pm *Premiumize) DeleteLink(ctx context.Context, downloadLink types.DownloadLink) error {
 	return pm.accountsManager.DeleteDownloadLink(
+		ctx,
 		downloadLink,
-		func(*account.Account, types.DownloadLink) error {
+		func(deleteCtx context.Context, _ *account.Account, _ types.DownloadLink) error {
 			// Premiumize exposes item and transfer deletion, but not a safe
 			// generated-link deletion endpoint. Deleting dl.Id here would delete
 			// the user's cloud file, not just invalidate this cached CDN link.
-			return nil
+			return deleteCtx.Err()
 		},
 	)
 }

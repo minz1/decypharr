@@ -30,7 +30,7 @@ const (
 )
 
 // EntryRefresher is a function that refreshes an entry by infohash.
-type EntryRefresher func(infohash string) (*storage.Entry, error)
+type EntryRefresher func(ctx context.Context, infohash string) (*storage.Entry, error)
 type EntryRepairer func(ctx context.Context, entry *storage.Entry) error
 
 // EntryGiveUp takes an entry no re-insertion could fix.
@@ -299,7 +299,7 @@ func (s *Service) fetchLink(
 
 	// A refresh hands back a newer entry. It is used for this fetch only:
 	// the caller's entry is shared with concurrent readers and stays as is.
-	current, placementFile, err := s.getPlacementFile(entry, filename)
+	current, placementFile, err := s.getPlacementFile(ctx, entry, filename)
 	if err != nil {
 		return types.DownloadLink{}, err
 	}
@@ -380,6 +380,7 @@ func (s *Service) fetchLink(
 // getPlacementFile retrieves the placement file with refresh fallback. It
 // returns the entry the file belongs to: entry itself, or the refreshed copy.
 func (s *Service) getPlacementFile(
+	ctx context.Context,
 	entry *storage.Entry,
 	filename string,
 ) (*storage.Entry, *storage.ProviderFile, error) {
@@ -402,7 +403,7 @@ func (s *Service) getPlacementFile(
 	if placementFile := placement.Files[filename]; hasLocator(placementFile) {
 		return entry, placementFile, nil
 	}
-	return s.refreshPlacementFile(entry, filename)
+	return s.refreshPlacementFile(ctx, entry, filename)
 }
 
 func hasLocator(file *storage.ProviderFile) bool {
@@ -413,6 +414,7 @@ func hasLocator(file *storage.ProviderFile) bool {
 // refreshed entry when it now carries a locator for filename. entry is never
 // written: callers share it with other readers.
 func (s *Service) refreshPlacementFile(
+	ctx context.Context,
 	entry *storage.Entry,
 	filename string,
 ) (*storage.Entry, *storage.ProviderFile, error) {
@@ -423,7 +425,7 @@ func (s *Service) refreshPlacementFile(
 		)
 	}
 
-	refreshed, err := s.entryRefresher(entry.InfoHash)
+	refreshed, err := s.entryRefresher(ctx, entry.InfoHash)
 	if err != nil {
 		return nil, nil, NewRefetchableError(
 			fmt.Errorf("failed to refresh entry: %w", err),
@@ -546,7 +548,7 @@ func (s *Service) invalidateAndRefetch(
 		return types.DownloadLink{}, err
 	}
 
-	_ = client.DeleteLink(link) // This might fail, doesnt matter
+	_ = client.DeleteLink(ctx, link) // This might fail, doesnt matter
 
 	return s.fetchLink(ctx, entry, link.Filename, attempt)
 }
