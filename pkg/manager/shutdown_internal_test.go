@@ -154,7 +154,6 @@ func newShutdownTestManager(t *testing.T, dbPath string) *Manager {
 		logger:            zerolog.Nop(),
 		clients:           xsync.NewMap[string, debrid.Client](),
 		processingEntries: xsync.NewMap[string, struct{}](),
-		Notifications:     notifications.New(&cfg.Notifications, nil, zerolog.Nop()),
 	}
 	wireLifecycle(t, m)
 	m.initEntryCache()
@@ -163,8 +162,9 @@ func newShutdownTestManager(t *testing.T, dbPath string) *Manager {
 }
 
 // wireLifecycle gives a hand-built manager the task tree New would: a group
-// of its own, the supervised sub-services and the storage-closing task. A
-// stopped manager reopened on the same database calls it again.
+// of its own, the supervised sub-services, a notification service on the new
+// group and the storage-closing task. A stopped manager reopened on the same
+// database calls it again.
 func wireLifecycle(t *testing.T, m *Manager) {
 	t.Helper()
 	m.group = testGroup(t)
@@ -176,6 +176,11 @@ func wireLifecycle(t *testing.T, m *Manager) {
 	if err := m.registerServices(); err != nil {
 		t.Fatal(err)
 	}
+	notifyCfg := &config.Notifications{}
+	if m.config != nil {
+		notifyCfg = &m.config.Notifications
+	}
+	m.Notifications = notifications.New(m.notifyGroup, notifyCfg, nil, zerolog.Nop())
 	if err := m.group.Go("storage", m.closeStorage); err != nil {
 		t.Fatal(err)
 	}

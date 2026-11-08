@@ -3,6 +3,7 @@ package manager
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"slices"
 	"testing"
@@ -52,5 +53,33 @@ func TestRegisteredServicesStopInReverseOrderAndStorageLast(t *testing.T) {
 	}
 	if storage < 0 || storage < lastService {
 		t.Fatalf("storage closed at %d, before the last service stopped at %d: %v", storage, lastService, messages)
+	}
+}
+
+// Notification deliveries stop after every service, so a service may still notify while it stops.
+func TestNotificationsStopAfterEveryService(t *testing.T) {
+	t.Parallel()
+	m := newShutdownTestManager(t, t.TempDir())
+	logs := &lockedLog{}
+	m.logger = zerolog.New(logs)
+	seen := make(chan []string, 1)
+	if err := m.notifyGroup.Go("probe", func(ctx context.Context) error {
+		<-ctx.Done() // the notifications group begins to stop
+		seen <- logs.messages()
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	stopRoot(t, m.group)
+
+	stopped := 0
+	for _, message := range <-seen {
+		if message == "Service stopped" {
+			stopped++
+		}
+	}
+	if want := len(logs.stopped()); stopped != want || want == 0 {
+		t.Fatalf("notifications began to stop after %d of %d services", stopped, want)
 	}
 }
