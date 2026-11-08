@@ -85,6 +85,8 @@ type Manager struct {
 	// work owns the manager's background work: download actions, the job
 	// queue and fire-and-forget calls to providers, the Arr and the mount.
 	work *task.Group
+	// strmGroup, a child of work, runs the strm reconciler's background tasks.
+	strmGroup *task.Group
 	// notifyGroup runs notification deliveries; the first child, it stops last.
 	notifyGroup *task.Group
 	children    []*task.Group
@@ -366,7 +368,7 @@ func (m *Manager) init() error {
 
 	// Initialize strm reconciler
 	m.strm = strm.NewReconciler(
-		m.work.Context(),
+		m.strmGroup,
 		m.store,
 		m.storage,
 		func(ctx context.Context, entry *storage.Entry, filename string) (io.ReadCloser, error) {

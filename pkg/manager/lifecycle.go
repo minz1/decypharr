@@ -395,6 +395,9 @@ func (m *Manager) registerServices() error {
 	// stops before the whole manager, so they end resumable on the mount gate.
 	m.work = m.group.Child("work")
 	m.children = append(m.children, m.work)
+	// The strm reconciler's tasks. Made before the work services below, so it is not work's newest child: it stops
+	// after "stopping" has marked the manager as stopping.
+	m.strmGroup = m.work.Child("strm")
 	return m.superviseAll([]serviceSpec{
 		{name: "scheduler", handle: &m.schedulerSvc, start: m.startScheduler, stop: m.stopSchedulerService},
 		// The newest child stops first, so its stop marks the manager as stopping before any other service stops.
