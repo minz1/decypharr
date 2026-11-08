@@ -5,9 +5,13 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"path/filepath"
+	"runtime"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 
 	"github.com/rs/zerolog"
 	"github.com/sirrobot01/hearsay/transport"
@@ -334,6 +338,136 @@ func TestHearsayRushStop(t *testing.T) {
 	if !engineClosed(r.s) {
 		t.Fatal("the engine is still open after the stop")
 	}
+}
+
+// events is an ordered, concurrency-safe log of what happened.
+type events struct {
+	mu   sync.Mutex
+	list []string
+}
+
+func (e *events) add(name string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.list = append(e.list, name)
+}
+
+func (e *events) get() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return slices.Clone(e.list)
+}
+
+// A rushed stop leaves an operation in flight alone: the close task queues for the write lock and closes the node
+// and the engine only after the operation returned. Start stands for the operation, held inside afterSync.
+func TestRushedStopWaitsForOperationInFlight(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, nil, zerolog.Nop())
+	var log events
+	closeNode := r.s.closeNode
+	r.s.closeNode = func(node *transport.Node) error {
+		log.add("node closed")
+		return closeNode(node)
+	}
+	inside := make(chan struct{})
+	block := make(chan struct{})
+	release := sync.OnceFunc(func() { close(block) })
+	defer release()
+	r.s.afterSync = func() {
+		close(inside)
+		<-block
+		log.add("op returned")
+	}
+	var wg sync.WaitGroup
+	var startErr error
+	wg.Go(func() { startErr = r.s.Start(t.Context()) })
+	<-inside
+
+	r.g.Close()
+	// The close task reaches the write lock once the syncer is gone. The lock is pending exactly when a new reader
+	// is refused; until then, a closed engine means the close task did not wait for the operation.
+	for r.s.opMu.TryRLock() {
+		r.s.opMu.RUnlock()
+		if engineClosed(r.s) {
+			t.Fatal("the engine closed under an operation in flight")
+		}
+		runtime.Gosched()
+	}
+	if engineClosed(r.s) || r.closes.Load() != 0 {
+		t.Fatal("the node or the engine closed under an operation in flight")
+	}
+	release()
+	wg.Wait()
+	<-r.g.Done()
+
+	if !errors.Is(startErr, task.ErrStopped) {
+		t.Fatalf("Start() = %v, want task.ErrStopped", startErr)
+	}
+	if got, want := log.get(), []string{"op returned", "node closed"}; !slices.Equal(got, want) {
+		t.Fatalf("events = %v, want %v", got, want)
+	}
+	if !engineClosed(r.s) {
+		t.Fatal("the engine is still open after the stop")
+	}
+}
+
+// A rushed stop waits for a syncer that outlasts its cancellation: the node closes only after the syncer task exited.
+func TestRushedStopWaitsForLiveSyncer(t *testing.T) {
+	t.Parallel()
+	// The node does network lookups, which a synctest bubble cannot hold; open it outside and hand it to Start.
+	node, listenErr := transport.ListenWithConfig(transport.NodeConfig{Dir: filepath.Join(t.TempDir(), "swarm")})
+	if listenErr != nil {
+		t.Fatal(listenErr)
+	}
+	t.Cleanup(func() {
+		if err := node.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	synctest.Test(t, func(t *testing.T) {
+		r := newRig(t, nil, zerolog.Nop())
+		r.s.listen = func(transport.NodeConfig) (*transport.Node, error) { return node, nil }
+		var log events
+		// The node stays open for the test to close outside the bubble.
+		r.s.closeNode = func(*transport.Node) error {
+			log.add("node closed")
+			return nil
+		}
+		block := make(chan struct{})
+		release := sync.OnceFunc(func() { close(block) })
+		defer release()
+		r.s.runSyncer = func(_ *transport.Syncer, ctx context.Context) {
+			<-ctx.Done()
+			<-block // a pass that ignores its cancellation
+			log.add("syncer exited")
+		}
+		if err := r.s.Start(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+
+		// A rushed stop cancels every task at once, so the close task wakes with the syncer still running.
+		expired, cancel := context.WithCancel(t.Context())
+		cancel()
+		if err := r.g.Stop(expired); !errors.Is(err, task.ErrStopTimeout) {
+			t.Fatalf("Stop() = %v, want task.ErrStopTimeout while the syncer runs", err)
+		}
+		synctest.Wait()
+		if got := log.get(); len(got) != 0 {
+			t.Fatalf("events = %v with the syncer still running, want none", got)
+		}
+		if engineClosed(r.s) {
+			t.Fatal("the engine closed under a live syncer")
+		}
+		release()
+		<-r.g.Done()
+
+		if got, want := log.get(), []string{"syncer exited", "node closed"}; !slices.Equal(got, want) {
+			t.Fatalf("events = %v, want %v", got, want)
+		}
+		if !engineClosed(r.s) {
+			t.Fatal("the engine is still open after the stop")
+		}
+	})
 }
 
 func TestHearsaySnapshotEmptyAfterStop(t *testing.T) {

@@ -76,6 +76,8 @@ type Service struct {
 	// listen opens the transport node and closeNode closes it; tests replace them.
 	listen    func(transport.NodeConfig) (*transport.Node, error)
 	closeNode func(*transport.Node) error
+	// runSyncer runs one syncer until ctx ends; tests replace it with one that outlasts its context.
+	runSyncer func(*transport.Syncer, context.Context)
 	// afterSync, when set, runs in Start after the syncer task is accepted and
 	// before the node is stored; tests use it to stop the service at that point.
 	afterSync func()
@@ -166,6 +168,7 @@ func New(g *task.Group, cfg *config.Config, log zerolog.Logger) (*Service, error
 	s.life = state.NewAtomic(constructed, lifecycleSuccessors)
 	s.listen = transport.ListenWithConfig
 	s.closeNode = (*transport.Node).Close
+	s.runSyncer = (*transport.Syncer).Run
 	if err = g.Go("close", s.closeTask); err != nil {
 		s.closeEngine()
 		return nil, fmt.Errorf("hearsay: %w", err)
@@ -415,7 +418,7 @@ func (s *Service) Start(_ context.Context) error {
 		Log:      slog.New(zerologHandler{log: s.log}),
 	}
 	if err = s.syncGroup.Go("sync", func(ctx context.Context) error {
-		syncer.Run(ctx)
+		s.runSyncer(syncer, ctx)
 		return nil
 	}); err != nil {
 		s.discardNode(node)
