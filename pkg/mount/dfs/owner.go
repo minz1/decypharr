@@ -19,10 +19,14 @@ const (
 	// the mount point is lazily detached.
 	gracefulUnmountTimeout = 4 * time.Second
 	// vfsCloseReserve is the part of stopBudget kept for closing the cache: the
-	// detach context ends this long before the budget does.
+	// detach context ends this long before the budget does, unless detachFloor
+	// wins, and then the cache close runs after the budget.
 	vfsCloseReserve = 2 * time.Second
 	// detachFloor is the least time a lazy detach gets, even past the budget:
-	// a mount left attached outlives the process.
+	// a mount left attached outlives the process. With a slice nearly spent it
+	// may run up to detachFloor past the slice, and so past the generation's
+	// 25s stop deadline (the stop then times out), still inside systemd's
+	// TimeoutStopSec of 30s.
 	detachFloor = time.Second
 )
 
