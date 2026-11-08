@@ -251,6 +251,7 @@ type Usenet struct {
 	g                        *task.Group
 	bufferPools              *reader.Pools
 	nntp                     *nntp.Client
+	nntpGroup                *task.Group // the nntp client's group; Close stops it
 	analyzer                 *parser.NZBParser
 	fetchScheduler           *reader.FetchScheduler
 	logger                   zerolog.Logger
@@ -339,16 +340,16 @@ func New(g *task.Group, store *config.Store, logs *logger.Factory) (*Usenet, err
 	}()
 
 	// Create NNTP client with retry configuration
-	client, err := nntp.NewClient(cfg, logs.New("nntp-client"))
+	nntpGroup := g.Child("nntp")
+	client, err := nntp.NewClient(nntpGroup, cfg, logs.New("nntp-client"))
 	if err != nil {
-		_ = markers.Close()
+		abortNew(nntpGroup, markers)
 		return nil, err
 	}
 
 	// Disk rewind files are session-scoped; clear any left by an interrupted run.
 	if clearErr := clearStaleStreamCache(strings.TrimSpace(usenetConfig.DiskPath)); clearErr != nil {
-		_ = client.Close()
-		_ = markers.Close()
+		abortNew(nntpGroup, markers)
 		return nil, clearErr
 	}
 
@@ -368,8 +369,7 @@ func New(g *task.Group, store *config.Store, logs *logger.Factory) (*Usenet, err
 
 	bufferPools, err := reader.NewPools(g, usenetConfig.BufferMemoryBytes())
 	if err != nil {
-		_ = client.Close()
-		_ = markers.Close()
+		abortNew(nntpGroup, markers)
 		return nil, fmt.Errorf("create buffer pools: %w", err)
 	}
 
@@ -378,6 +378,7 @@ func New(g *task.Group, store *config.Store, logs *logger.Factory) (*Usenet, err
 		bufferPools: bufferPools,
 		nzbStorage:  nzbStorage,
 		nntp:        client,
+		nntpGroup:   nntpGroup,
 		analyzer: parser.NewParser(
 			client,
 			processingMaxConns,
@@ -405,6 +406,14 @@ func New(g *task.Group, store *config.Store, logs *logger.Factory) (*Usenet, err
 	})
 
 	return u, nil
+}
+
+// abortNew undoes a failed New: it stops the nntp client's group, waiting for
+// its tasks, and closes the marker root.
+func abortNew(nntpGroup *task.Group, markers *os.Root) {
+	nntpGroup.Close()
+	<-nntpGroup.Done()
+	_ = markers.Close()
 }
 
 // clearStaleStreamCache removes rewind files ("cache-*") left in dir by an
@@ -898,11 +907,11 @@ func (u *Usenet) Close() error {
 			<-u.bufferPools.BufferGroup().Done()
 		}
 
-		if u.nntp != nil {
-			if err := u.nntp.Close(); err != nil {
-				closeErr = errors.Join(closeErr, err)
-				u.logger.Warn().Err(err).Msg("Failed to close NNTP client")
-			}
+		if u.nntpGroup != nil {
+			// Interim until Usenet.Close is deleted: stop the nntp client's group
+			// and wait for its tasks and leases.
+			u.nntpGroup.Close()
+			<-u.nntpGroup.Done()
 		}
 		if u.markers != nil {
 			closeErr = errors.Join(closeErr, u.markers.Close())

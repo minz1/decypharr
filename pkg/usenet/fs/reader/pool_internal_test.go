@@ -105,3 +105,13 @@ func TestCacheWithoutPoolsRefused(t *testing.T) {
 		t.Fatalf("cache without pools: %v, want errPoolsRequired", err)
 	}
 }
+
+// newClientGroup returns a group for an nntp client under a root the test
+// stops when it ends. It is registered before the test's pools and caches, so
+// the client stops after them.
+func newClientGroup(t testing.TB) *task.Group {
+	t.Helper()
+	root := task.NewRoot(t.Context(), "test-nntp", zerolog.Nop())
+	t.Cleanup(func() { stopTestGroup(t, root) })
+	return root.Child("nntp")
+}

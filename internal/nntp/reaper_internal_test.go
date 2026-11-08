@@ -44,8 +44,8 @@ func newPipeConnection(t *testing.T, respond bool) *Connection {
 	return c
 }
 
-func newReaperTestClient(pp *ProviderPool) *Client {
-	return &Client{
+func newReaperTestClient(t *testing.T, pp *ProviderPool) *Client {
+	return newTestClient(t, &Client{
 		pools:          map[string]*ProviderPool{"test": pp},
 		logger:         zerolog.Nop(),
 		idleTimeout:    5 * time.Minute,
@@ -53,7 +53,7 @@ func newReaperTestClient(pp *ProviderPool) *Client {
 		pingInterval:   30 * time.Second,
 		pingTimeout:    1500 * time.Millisecond,
 		keepalivePing:  1500 * time.Millisecond,
-	}
+	})
 }
 
 func newTestPool(maxConns int) *ProviderPool {
@@ -77,9 +77,9 @@ func TestReaperKeepsAndPingsIdleConnection(t *testing.T) {
 	conn := newPipeConnection(t, true)
 	// Idle past pingInterval (30s) but well inside idleTimeout (5m).
 	poolEntry(pp, conn, 40*time.Second)
-	c := newReaperTestClient(pp)
+	c := newReaperTestClient(t, pp)
 
-	c.reapIdleConnections()
+	c.reapIdleConnections(t.Context())
 
 	pp.mu.Lock()
 	defer pp.mu.Unlock()
@@ -103,9 +103,9 @@ func TestReaperSkipsRecentlyActiveConnection(t *testing.T) {
 	pp := newTestPool(4)
 	conn := newPipeConnection(t, true)
 	entry := poolEntry(pp, conn, 5*time.Second) // fresher than pingInterval
-	c := newReaperTestClient(pp)
+	c := newReaperTestClient(t, pp)
 
-	c.reapIdleConnections()
+	c.reapIdleConnections(t.Context())
 
 	pp.mu.Lock()
 	defer pp.mu.Unlock()
@@ -122,9 +122,9 @@ func TestReaperClosesExpiredConnection(t *testing.T) {
 	pp := newTestPool(4)
 	conn := newPipeConnection(t, true)
 	poolEntry(pp, conn, 6*time.Minute) // past idleTimeout
-	c := newReaperTestClient(pp)
+	c := newReaperTestClient(t, pp)
 
-	c.reapIdleConnections()
+	c.reapIdleConnections(t.Context())
 
 	pp.mu.Lock()
 	defer pp.mu.Unlock()
@@ -141,9 +141,9 @@ func TestReaperClosesConnectionOnFailedPing(t *testing.T) {
 	pp := newTestPool(4)
 	conn := newPipeConnection(t, false) // server side closed: ping fails
 	poolEntry(pp, conn, 40*time.Second)
-	c := newReaperTestClient(pp)
+	c := newReaperTestClient(t, pp)
 
-	c.reapIdleConnections()
+	c.reapIdleConnections(t.Context())
 
 	pp.mu.Lock()
 	defer pp.mu.Unlock()
@@ -164,9 +164,9 @@ func TestReaperSkipsPingWhenPoolBusy(t *testing.T) {
 	pp.slots <- struct{}{} // all slots taken: pool fully busy
 	conn := newPipeConnection(t, true)
 	entry := poolEntry(pp, conn, 40*time.Second)
-	c := newReaperTestClient(pp)
+	c := newReaperTestClient(t, pp)
 
-	c.reapIdleConnections()
+	c.reapIdleConnections(t.Context())
 
 	pp.mu.Lock()
 	defer pp.mu.Unlock()
@@ -185,7 +185,7 @@ func TestReaperSkipsPingWhenPoolBusy(t *testing.T) {
 func TestReaperFlushesPoolWhenEveryPingTimesOut(t *testing.T) {
 	t.Parallel()
 	pp := newTestPool(16)
-	c := newReaperTestClient(pp)
+	c := newReaperTestClient(t, pp)
 
 	// Enough entries to need several rounds through the 4 ping workers.
 	silent := make([]*Connection, 12)
@@ -198,7 +198,7 @@ func TestReaperFlushesPoolWhenEveryPingTimesOut(t *testing.T) {
 	poolEntry(pp, fresh, 5*time.Second)
 
 	start := time.Now()
-	c.reapIdleConnections()
+	c.reapIdleConnections(t.Context())
 	elapsed := time.Since(start)
 
 	// 12 sequential pings over 4 workers would be 3 × keepalivePing; the
@@ -226,7 +226,7 @@ func TestReaperKeepsPoolWhenSomePingsAnswer(t *testing.T) {
 	t.Parallel()
 	// max 16 so maxPing (max/4) covers the whole set in one batch.
 	pp := newTestPool(16)
-	c := newReaperTestClient(pp)
+	c := newReaperTestClient(t, pp)
 
 	// Dead entry first, so its timeout is the batch's last word rather than
 	// its first: the live replies land in microseconds and must beat it.
@@ -238,7 +238,7 @@ func TestReaperKeepsPoolWhenSomePingsAnswer(t *testing.T) {
 		poolEntry(pp, live[i], 40*time.Second)
 	}
 
-	c.reapIdleConnections()
+	c.reapIdleConnections(t.Context())
 
 	pp.mu.Lock()
 	defer pp.mu.Unlock()
@@ -269,11 +269,11 @@ func TestSetIdleTimeoutClampsDerivedThresholds(t *testing.T) {
 		{idle: 20 * time.Second, stale: 10 * time.Second, ping: 10 * time.Second, keepalive: defaultKeepalivePingTimeout},
 		{idle: 4 * time.Second, stale: 2 * time.Second, ping: 2 * time.Second, keepalive: 2 * time.Second},
 	} {
-		c := &Client{
+		c := newTestClient(t, &Client{
 			staleThreshold: defaultStaleThreshold,
 			pingInterval:   defaultPingInterval,
 			keepalivePing:  defaultKeepalivePingTimeout,
-		}
+		})
 		c.setIdleTimeout(tc.idle)
 		if c.idleTimeout != tc.idle || c.staleThreshold != tc.stale || c.pingInterval != tc.ping ||
 			c.keepalivePing != tc.keepalive {

@@ -11,8 +11,8 @@ import (
 	"github.com/sirrobot01/decypharr/internal/config"
 )
 
-func newAcquireTestClient(pp *ProviderPool) *Client {
-	return &Client{
+func newAcquireTestClient(t *testing.T, pp *ProviderPool) *Client {
+	return newTestClient(t, &Client{
 		pools:          map[string]*ProviderPool{pp.config.ID(): pp},
 		orderedPools:   []*ProviderPool{pp},
 		providers:      []config.UsenetProvider{pp.config},
@@ -20,11 +20,11 @@ func newAcquireTestClient(pp *ProviderPool) *Client {
 		idleTimeout:    5 * time.Minute,
 		staleThreshold: 60 * time.Second,
 		pingInterval:   30 * time.Second,
-	}
+	})
 }
 
-func newTieredAcquireTestClient(primary, backup *ProviderPool, spillover time.Duration) *Client {
-	return &Client{
+func newTieredAcquireTestClient(t *testing.T, primary, backup *ProviderPool, spillover time.Duration) *Client {
+	return newTestClient(t, &Client{
 		pools: map[string]*ProviderPool{
 			primary.config.ID(): primary,
 			backup.config.ID():  backup,
@@ -36,7 +36,7 @@ func newTieredAcquireTestClient(primary, backup *ProviderPool, spillover time.Du
 		staleThreshold:   60 * time.Second,
 		pingInterval:     30 * time.Second,
 		streamBackupWait: spillover,
-	}
+	})
 }
 
 // TestWaitForConnectionUnblocksOnRelease: with the pool saturated, an
@@ -45,7 +45,7 @@ func newTieredAcquireTestClient(primary, backup *ProviderPool, spillover time.Du
 func TestWaitForConnectionUnblocksOnRelease(t *testing.T) {
 	t.Parallel()
 	pp := newTestPool(1)
-	c := newAcquireTestClient(pp)
+	c := newAcquireTestClient(t, pp)
 
 	// Saturate the pool: the one slot is taken by a fictitious user.
 	pp.slots <- struct{}{}
@@ -93,7 +93,7 @@ func TestWaitForConnectionUnblocksOnRelease(t *testing.T) {
 func TestWaitForConnectionCtxCancelUnblocks(t *testing.T) {
 	t.Parallel()
 	pp := newTestPool(1)
-	c := newAcquireTestClient(pp)
+	c := newAcquireTestClient(t, pp)
 	pp.slots <- struct{}{} // saturate
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -127,7 +127,7 @@ func TestStreamDemandSpillsToBackupAfterConfiguredWait(t *testing.T) {
 	backupConn := newPipeConnection(t, true)
 	poolEntry(backup, backupConn, 0)
 	const spillover = 20 * time.Millisecond
-	c := newTieredAcquireTestClient(primary, backup, spillover)
+	c := newTieredAcquireTestClient(t, primary, backup, spillover)
 
 	started := time.Now()
 	conn, provider, err := c.getAnyAvailableConnection(t.Context(), WorkloadStreamDemand, providerExclusions{})
@@ -159,7 +159,7 @@ func TestOnlyStreamDemandCanSpillToBackup(t *testing.T) {
 			backup.config.Host = "backup"
 			backup.config.Backup = true
 			poolEntry(backup, newPipeConnection(t, true), 0)
-			c := newTieredAcquireTestClient(primary, backup, time.Millisecond)
+			c := newTieredAcquireTestClient(t, primary, backup, time.Millisecond)
 			ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
 			defer cancel()
 
@@ -186,8 +186,7 @@ func TestBodyJanitorClosesStalledConn(t *testing.T) {
 	stalledConn := newPipeConnection(t, true)
 	idleConn := newPipeConnection(t, true)
 
-	janitor := newBodyJanitor()
-	t.Cleanup(janitor.close)
+	janitor := newBodyJanitor(newTestGroup(t))
 	janitor.add(stalledConn)
 	janitor.add(idleConn)
 	defer janitor.remove(stalledConn)

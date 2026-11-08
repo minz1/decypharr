@@ -48,13 +48,12 @@ func ppStack(t *testing.T, streams, segsPer int, rtt time.Duration) (*nntpd.Serv
 	}
 
 	host, port := srv.Addr()
-	client, err := nntp.NewClient(&config.Config{Usenet: config.Usenet{
+	client, err := nntp.NewClient(newClientGroup(t), &config.Config{Usenet: config.Usenet{
 		Providers: []config.UsenetProvider{{Host: host, Port: port, MaxConnections: 32}},
 	}}, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = client.Close() })
 	return srv, client, all
 }
 

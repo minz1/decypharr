@@ -178,13 +178,13 @@ func newPipelineTestFetcher(
 		}
 	}
 	host, port := srv.Addr()
-	client, err := nntp.NewClient(&config.Config{Usenet: config.Usenet{Providers: []config.UsenetProvider{{
+	nntpCfg := &config.Config{Usenet: config.Usenet{Providers: []config.UsenetProvider{{
 		Host: host, Port: port, MaxConnections: 2,
-	}}}}, zerolog.Nop())
+	}}}}
+	client, err := nntp.NewClient(newClientGroup(t), nntpCfg, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = client.Close() })
 
 	cfg := DefaultConfig()
 	cfg.DiskPath = t.TempDir()

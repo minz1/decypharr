@@ -18,12 +18,12 @@ import (
 // providers) without any real network config. staleThreshold is huge so
 // pooled checkouts never pay a verify ping; idleTimeout is huge so entries
 // never idle-expire mid-bench.
-func newBenchClient(providers []config.UsenetProvider, ordered []*ProviderPool) *Client {
+func newBenchClient(b testing.TB, providers []config.UsenetProvider, ordered []*ProviderPool) *Client {
 	pools := make(map[string]*ProviderPool, len(ordered))
 	for _, pp := range ordered {
 		pools[pp.config.ID()] = pp
 	}
-	return &Client{
+	return newTestClient(b, &Client{
 		pools:          pools,
 		orderedPools:   ordered,
 		providers:      providers,
@@ -31,7 +31,7 @@ func newBenchClient(providers []config.UsenetProvider, ordered []*ProviderPool) 
 		idleTimeout:    24 * time.Hour,
 		staleThreshold: 24 * time.Hour,
 		pingInterval:   24 * time.Hour,
-	}
+	})
 }
 
 // newBenchPool creates a pool pre-filled with `max` pipe-backed connections so
@@ -78,7 +78,7 @@ func reportWaitQuantiles(b *testing.B, waits []time.Duration) {
 // per-segment overhead the pool adds when capacity is available.
 func BenchmarkPoolCheckoutUncontended(b *testing.B) {
 	pp, provider := newBenchPool(b, "bench-a", 8)
-	c := newBenchClient([]config.UsenetProvider{provider}, []*ProviderPool{pp})
+	c := newBenchClient(b, []config.UsenetProvider{provider}, []*ProviderPool{pp})
 	ctx := context.Background()
 
 	for b.Loop() {
@@ -127,7 +127,7 @@ func benchmarkPriorityAdmission(b *testing.B, load, contender Workload) {
 		articleTime = 2 * time.Millisecond
 	)
 	pp, provider := newBenchPool(b, "bench-priority", slots)
-	client := newBenchClient([]config.UsenetProvider{provider}, []*ProviderPool{pp})
+	client := newBenchClient(b, []config.UsenetProvider{provider}, []*ProviderPool{pp})
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	for range workers {
@@ -196,7 +196,7 @@ func waitForBenchSaturation(b *testing.B, client *Client, pp *ProviderPool, work
 // waiter was woken to claim them.
 func benchContended(b *testing.B, slots, workers int, hold time.Duration) {
 	pp, provider := newBenchPool(b, "bench-a", slots)
-	c := newBenchClient([]config.UsenetProvider{provider}, []*ProviderPool{pp})
+	c := newBenchClient(b, []config.UsenetProvider{provider}, []*ProviderPool{pp})
 	ctx := context.Background()
 
 	waitsPerWorker := make([][]time.Duration, workers)
@@ -297,6 +297,7 @@ func BenchmarkAcquireDeadPrimary(b *testing.B) {
 	healthy.Priority = 2
 
 	c := newBenchClient(
+		b,
 		[]config.UsenetProvider{dead, healthy},
 		[]*ProviderPool{deadPool, healthyPool},
 	)

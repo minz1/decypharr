@@ -2,58 +2,59 @@ package nntp
 
 import (
 	"testing"
-	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 )
 
-// The janitor belongs to its Client: its sweeper starts with the first
-// connection and stops at close, and nothing registers afterwards.
-func TestBodyJanitorStopsAtClose(t *testing.T) {
+// The janitor belongs to its Client's group: its sweeper is a task of that
+// group, and a connection registered after the group stopped is closed
+// rather than left unwatched.
+func TestBodyJanitorStopsWithItsGroup(t *testing.T) {
 	t.Parallel()
-	janitor := newBodyJanitor()
+	g := newTestGroup(t)
+	janitor := newBodyJanitor(g)
 	conn := newPipeConnection(t, true)
 	janitor.add(conn)
 
-	closed := make(chan struct{})
-	go func() {
-		janitor.close()
-		close(closed)
-	}()
-	select {
-	case <-closed:
-	case <-time.After(5 * time.Second):
-		t.Fatal("close did not stop the sweeper")
-	}
-	select {
-	case <-janitor.done:
-	default:
-		t.Fatal("sweeper goroutine still running after close")
+	g.Close()
+	<-g.Done()
+	if left := g.Snapshot(); len(left) != 0 {
+		t.Fatalf("tasks still running after stop: %v", left)
 	}
 
-	janitor.add(conn)
+	late := newPipeConnection(t, true)
+	janitor.add(late)
 	janitor.mu.Lock()
 	registered := len(janitor.conns)
-	running := janitor.running
+	stopped := janitor.stopped
 	janitor.mu.Unlock()
 	if registered != 0 {
-		t.Fatalf("%d connections registered after close", registered)
+		t.Fatalf("%d connections registered after stop", registered)
 	}
-	if !running {
-		t.Fatal("janitor forgot it had started")
+	if !stopped {
+		t.Fatal("janitor did not record that it stopped")
 	}
-	janitor.close() // idempotent
+	if _, err := late.conn.Write([]byte("x")); err == nil {
+		t.Fatal("a connection added after stop was left open and unwatched")
+	}
 }
 
-// A janitor that never saw a connection closes without a goroutine to wait on.
-func TestUnusedBodyJanitorCloses(t *testing.T) {
+// A janitor on a group that refuses tasks is born stopped, and a nil janitor
+// ignores everything.
+func TestStoppedGroupJanitorIsBornStopped(t *testing.T) {
 	t.Parallel()
-	janitor := newBodyJanitor()
-	janitor.close()
+	g := newTestGroup(t)
+	g.Close()
+	<-g.Done()
+	janitor := newBodyJanitor(g)
+	conn := newPipeConnection(t, true)
+	janitor.add(conn)
+	if _, err := conn.conn.Write([]byte("x")); err == nil {
+		t.Fatal("a stopped janitor kept a connection open")
+	}
 	var nilJanitor *bodyJanitor
 	nilJanitor.add(nil)
 	nilJanitor.remove(nil)
-	nilJanitor.close()
 }
 
 // Pools and connections share their Client's clock, so cooldown deadlines

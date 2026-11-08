@@ -28,7 +28,8 @@ func newPipelineIntegrityReader(
 	segments []SegmentMeta,
 ) *StreamingReader {
 	t.Helper()
-	client, err := nntp.NewClient(&config.Config{Usenet: config.Usenet{Providers: providers}}, zerolog.Nop())
+	cfg := &config.Config{Usenet: config.Usenet{Providers: providers}}
+	client, err := nntp.NewClient(newClientGroup(t), cfg, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,11 +38,10 @@ func newPipelineIntegrityReader(
 		WithRetention(RetentionDelivery), WithMaxConnections(2), WithPrefetchAhead(0),
 		WithBodyPipelineDepth(2), func(c *Config) { c.DownloadTimeout = 5 * time.Second })
 	if err != nil {
-		_ = client.Close()
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if joinErr := errors.Join(sr.Close(), client.Close()); joinErr != nil {
+		if joinErr := sr.Close(); joinErr != nil {
 			t.Error(joinErr)
 		}
 		if pool := sr.cache.extentPool.stats(); pool.MemoryInUse != 0 || pool.Caches != 0 ||

@@ -25,7 +25,7 @@ func newBenchServerClient(b *testing.B, cfg nntpd.Config, maxConns int) (*nntpd.
 	b.Cleanup(srv.Close)
 
 	host, port := srv.Addr()
-	client, err := NewClient(&config.Config{
+	client, err := NewClient(newTestGroup(b), &config.Config{
 		Usenet: config.Usenet{
 			Providers: []config.UsenetProvider{{
 				Host:           host,
@@ -37,7 +37,6 @@ func newBenchServerClient(b *testing.B, cfg nntpd.Config, maxConns int) (*nntpd.
 	if err != nil {
 		b.Fatal(err)
 	}
-	b.Cleanup(func() { _ = client.Close() })
 	return srv, client
 }
 
