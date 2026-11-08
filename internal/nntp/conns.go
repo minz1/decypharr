@@ -3,6 +3,7 @@ package nntp
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +19,7 @@ import (
 	"github.com/rs/zerolog"
 
 	nntpyenc "github.com/sirrobot01/decypharr/internal/nntp/yenc"
+	"github.com/sirrobot01/decypharr/internal/task"
 )
 
 // bodyBufInitialCap covers a typical ~750KB usenet segment.
@@ -135,41 +137,39 @@ func (m monoClock) now() int64 {
 
 // bodyJanitor sweeps connections currently in nextBodyWithIdleDeadline and
 // closes any whose last-progress timestamp is older than their idle
-// deadline. A Client owns one; its goroutine starts on the first add and
-// stops at close. A nil janitor ignores registrations.
+// deadline. A Client owns one; its sweeper is a task on the client's group,
+// started with the janitor. A nil janitor ignores registrations.
 type bodyJanitor struct {
 	mu      sync.Mutex
 	conns   map[*Connection]struct{}
-	running bool
-	closed  bool
-	stop    chan struct{}
-	done    chan struct{}
+	stopped bool
 }
 
 const bodyJanitorInterval = 5 * time.Second
 
-func newBodyJanitor() *bodyJanitor {
-	return &bodyJanitor{
-		conns: make(map[*Connection]struct{}),
-		stop:  make(chan struct{}),
-		done:  make(chan struct{}),
+// newBodyJanitor starts the sweeper as a task of g. On a group that refuses
+// tasks the janitor is born stopped.
+func newBodyJanitor(g *task.Group) *bodyJanitor {
+	j := &bodyJanitor{conns: make(map[*Connection]struct{})}
+	if err := g.Go("janitor", j.run); err != nil {
+		j.stopped = true
 	}
+	return j
 }
 
+// add registers c. A stopped janitor can no longer watch c, so it closes it:
+// nobody is left to unblock a stalled read on it.
 func (j *bodyJanitor) add(c *Connection) {
 	if j == nil {
 		return
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	if j.closed {
+	if j.stopped {
+		_ = c.conn.Close()
 		return
 	}
 	j.conns[c] = struct{}{}
-	if !j.running {
-		j.running = true
-		go j.run()
-	}
 }
 
 func (j *bodyJanitor) remove(c *Connection) {
@@ -181,34 +181,21 @@ func (j *bodyJanitor) remove(c *Connection) {
 	j.mu.Unlock()
 }
 
-// close stops the sweeper and waits for it. Later registrations are ignored.
-func (j *bodyJanitor) close() {
-	if j == nil {
-		return
-	}
-	j.mu.Lock()
-	if j.closed {
-		j.mu.Unlock()
-		return
-	}
-	j.closed = true
-	running := j.running
-	clear(j.conns)
-	close(j.stop)
-	j.mu.Unlock()
-	if running {
-		<-j.done
-	}
-}
-
-func (j *bodyJanitor) run() {
-	defer close(j.done)
+// run is the sweeper task. When ctx ends it forgets every registration and
+// refuses later ones.
+func (j *bodyJanitor) run(ctx context.Context) error {
 	tick := time.NewTicker(bodyJanitorInterval)
 	defer tick.Stop()
+	defer func() {
+		j.mu.Lock()
+		j.stopped = true
+		clear(j.conns)
+		j.mu.Unlock()
+	}()
 	for {
 		select {
-		case <-j.stop:
-			return
+		case <-ctx.Done():
+			return nil
 		case <-tick.C:
 			j.sweep()
 		}

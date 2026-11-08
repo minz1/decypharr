@@ -54,25 +54,24 @@ func TestDownloadDecryptsEncryptedFiles(t *testing.T) {
 		})
 	}
 
-	host, port := srv.Addr()
-	client, err := nntp.NewClient(&config.Config{Usenet: config.Usenet{
-		Providers: []config.UsenetProvider{{Host: host, Port: port, MaxConnections: 4}},
-	}}, zerolog.Nop())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = client.Close() })
-
-	metaStore := &NZBStorage{metaDir: t.TempDir(), codec: testCodec(t), logger: zerolog.Nop()}
-	if addErr := metaStore.AddNZB(&storage.NZB{ID: "nzb", Files: []storage.NZBFile{file}}); addErr != nil {
-		t.Fatal(addErr)
-	}
 	g := task.NewRoot(t.Context(), "test", zerolog.Nop())
 	t.Cleanup(func() {
 		ctx, cancel := task.Detached(t.Context(), 30*time.Second)
 		defer cancel()
 		_ = g.Stop(ctx)
 	})
+	host, port := srv.Addr()
+	client, err := nntp.NewClient(g.Child("nntp"), &config.Config{Usenet: config.Usenet{
+		Providers: []config.UsenetProvider{{Host: host, Port: port, MaxConnections: 4}},
+	}}, zerolog.Nop())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	metaStore := &NZBStorage{metaDir: t.TempDir(), codec: testCodec(t), logger: zerolog.Nop()}
+	if addErr := metaStore.AddNZB(&storage.NZB{ID: "nzb", Files: []storage.NZBFile{file}}); addErr != nil {
+		t.Fatal(addErr)
+	}
 	bufferPools, poolsErr := reader.NewPools(g, 64<<20)
 	if poolsErr != nil {
 		t.Fatal(poolsErr)

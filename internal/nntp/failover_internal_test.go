@@ -29,11 +29,11 @@ func TestFailoverAttributesMissingArticleToActualProvider(t *testing.T) {
 		{Host: host, Port: firstPort, MaxConnections: 1, Priority: 1, Backbone: "first"},
 		{Host: "localhost", Port: secondPort, MaxConnections: 1, Priority: 2, Backbone: "second"},
 	}
-	client, err := NewClient(&config.Config{Retries: 1, Usenet: config.Usenet{Providers: providers}}, zerolog.Nop())
+	cfg := &config.Config{Retries: 1, Usenet: config.Usenet{Providers: providers}}
+	client, err := NewClient(newTestGroup(t), cfg, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
 	var visited []string
 	err = client.ExecuteWithFailover(t.Context(), WorkloadStreamDemand, func(conn *Connection) error {
 		backbone := conn.pool.config.Backbone
@@ -68,6 +68,7 @@ func TestFailoverHonorsSingleProviderRetryBudget(t *testing.T) {
 	defer server.Close()
 	host, port := server.Addr()
 	client, err := NewClient(
+		newTestGroup(t),
 		&config.Config{
 			Retries: 1,
 			Usenet:  config.Usenet{Providers: []config.UsenetProvider{{Host: host, Port: port, MaxConnections: 1}}},
@@ -77,7 +78,6 @@ func TestFailoverHonorsSingleProviderRetryBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
 	calls := 0
 	failure := NewTimeoutError(errors.New("timeout"))
 	err = client.ExecuteWithFailover(

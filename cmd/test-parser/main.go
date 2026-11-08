@@ -15,6 +15,7 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/nntp"
+	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 	"github.com/sirrobot01/decypharr/pkg/usenet/manifest"
 	"github.com/sirrobot01/decypharr/pkg/usenet/parser"
@@ -25,6 +26,7 @@ const (
 	exitUsage = 2
 
 	defaultMaxConcurrent = 10
+	stopTimeout          = 10 * time.Second
 	ruleWidth            = 80
 	bytesPerMB           = 1024 * 1024
 	bytesPerGB           = 1024 * bytesPerMB
@@ -84,15 +86,18 @@ func parseAndProcess(w io.Writer, log zerolog.Logger, nzbFile string, content []
 	if err != nil {
 		return fmt.Errorf("load configuration: %w", err)
 	}
-	client, err := nntp.NewClient(cfg, log)
+	root := task.NewRoot(context.Background(), "test-parser", log)
+	defer func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), stopTimeout)
+		defer cancel()
+		if stopErr := root.Stop(stopCtx); stopErr != nil {
+			log.Warn().Err(stopErr).Msg("Failed to stop NNTP client")
+		}
+	}()
+	client, err := nntp.NewClient(root.Child("nntp"), cfg, log)
 	if err != nil {
 		return fmt.Errorf("create NNTP client: %w", err)
 	}
-	defer func() {
-		if closeErr := client.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("Failed to close NNTP client")
-		}
-	}()
 
 	maxConcurrent := cfg.Usenet.ProcessingMaxConnections
 	if maxConcurrent <= 0 {

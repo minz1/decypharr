@@ -46,7 +46,7 @@ func TestDialCooldownReroutesAroundDeadProvider(t *testing.T) {
 	conn := newPipeConnection(t, true)
 	poolEntry(healthyPool, conn, 0)
 
-	c := &Client{
+	c := newTestClient(t, &Client{
 		pools:          map[string]*ProviderPool{dead.ID(): deadPool, healthy.ID(): healthyPool},
 		orderedPools:   []*ProviderPool{deadPool, healthyPool},
 		providers:      []config.UsenetProvider{dead, healthy},
@@ -54,7 +54,7 @@ func TestDialCooldownReroutesAroundDeadProvider(t *testing.T) {
 		idleTimeout:    time.Hour,
 		staleThreshold: time.Hour,
 		pingInterval:   time.Hour,
-	}
+	})
 
 	got, prov, err := c.getAnyAvailableConnection(context.Background(), WorkloadStreamDemand, providerExclusions{})
 	if err != nil {
@@ -96,7 +96,7 @@ func TestDialCooldownKeepsSingleProviderFailFast(t *testing.T) {
 		max:    dead.MaxConnections,
 		config: dead,
 	}
-	c := &Client{
+	c := newTestClient(t, &Client{
 		pools:          map[string]*ProviderPool{dead.ID(): deadPool},
 		orderedPools:   []*ProviderPool{deadPool},
 		providers:      []config.UsenetProvider{dead},
@@ -104,7 +104,7 @@ func TestDialCooldownKeepsSingleProviderFailFast(t *testing.T) {
 		idleTimeout:    time.Hour,
 		staleThreshold: time.Hour,
 		pingInterval:   time.Hour,
-	}
+	})
 
 	for i := range 3 {
 		start := time.Now()
@@ -129,7 +129,7 @@ func TestDialCooldownKeepsSingleProviderFailFast(t *testing.T) {
 func TestHandoffFIFO(t *testing.T) {
 	t.Parallel()
 	pp := newTestPool(1)
-	c := newAcquireTestClient(pp)
+	c := newAcquireTestClient(t, pp)
 	pp.slots <- struct{}{} // saturate
 
 	acquire := func() chan *Connection {
@@ -179,7 +179,7 @@ func TestHandoffFIFO(t *testing.T) {
 func TestHandoffOrdersEveryWorkloadClass(t *testing.T) {
 	t.Parallel()
 	pp := newTestPool(1)
-	c := newAcquireTestClient(pp)
+	c := newAcquireTestClient(t, pp)
 	pp.slots <- struct{}{}
 
 	ordered := []*slotWaiter{
@@ -228,7 +228,7 @@ func TestLowerPriorityCannotBargePastStreamDemand(t *testing.T) {
 		t.Run(lower.String(), func(t *testing.T) {
 			t.Parallel()
 			pp := newTestPool(1)
-			c := newAcquireTestClient(pp)
+			c := newAcquireTestClient(t, pp)
 			stream := newSlotWaiter(WorkloadStreamDemand, []*ProviderPool{pp})
 			c.register(stream)
 
@@ -253,7 +253,7 @@ func TestLowerPriorityCannotBargePastStreamDemand(t *testing.T) {
 func TestDeregisterDrainsPendingHandoff(t *testing.T) {
 	t.Parallel()
 	pp := newTestPool(1)
-	c := newAcquireTestClient(pp)
+	c := newAcquireTestClient(t, pp)
 	pp.slots <- struct{}{} // slot held; hasIdle=false but no cooldown → handoff allowed
 
 	w := newSlotWaiter(WorkloadStreamDemand, []*ProviderPool{pp})
@@ -277,7 +277,7 @@ func TestDeregisterDrainsPendingHandoff(t *testing.T) {
 func TestAdmissionMetricsRecordOutcomesAndHandoffs(t *testing.T) {
 	t.Parallel()
 	pp := newTestPool(1)
-	c := newAcquireTestClient(pp)
+	c := newAcquireTestClient(t, pp)
 	pp.slots <- struct{}{}
 
 	admitted := c.newQueuedWaiter(WorkloadStreamDemand, []*ProviderPool{pp})
@@ -313,7 +313,7 @@ func TestAdmissionMetricsRecordOutcomesAndHandoffs(t *testing.T) {
 func TestQueueSnapshotReportsOldestLiveWait(t *testing.T) {
 	t.Parallel()
 	pp := newTestPool(1)
-	c := newAcquireTestClient(pp)
+	c := newAcquireTestClient(t, pp)
 	w := c.newQueuedWaiter(WorkloadStreamPrefetch, []*ProviderPool{pp})
 	c.register(w)
 	time.Sleep(time.Millisecond)
@@ -355,7 +355,7 @@ func TestSameHostProvidersGetDistinctPools(t *testing.T) {
 		{Host: "news.example.com", Port: 563, Username: "bob", MaxConnections: 7, Priority: 2},
 	}
 	pools, orderedPools := buildPools(providers, newMonoClock())
-	c := &Client{
+	c := newTestClient(t, &Client{
 		pools:          pools,
 		orderedPools:   orderedPools,
 		providers:      providers,
@@ -363,7 +363,7 @@ func TestSameHostProvidersGetDistinctPools(t *testing.T) {
 		idleTimeout:    time.Hour,
 		staleThreshold: time.Hour,
 		pingInterval:   time.Hour,
-	}
+	})
 
 	if len(c.pools) != 2 {
 		t.Fatalf("expected 2 pools for dual-account setup, got %d", len(c.pools))
@@ -398,7 +398,7 @@ func TestSameHostProvidersGetDistinctPools(t *testing.T) {
 func TestSpeedTestRespectsPoolAccounting(t *testing.T) {
 	t.Parallel()
 	pp := newTestPool(1)
-	c := newAcquireTestClient(pp)
+	c := newAcquireTestClient(t, pp)
 	c.speedTestResults = xsync.NewMap[string, SpeedTestResult]()
 	conn := newPipeConnection(t, true) // answers DATE, so ping succeeds
 	poolEntry(pp, conn, 0)
@@ -426,7 +426,7 @@ func TestSpeedTestRespectsPoolAccounting(t *testing.T) {
 func TestCheckoutFlushesPoolOnPingTimeout(t *testing.T) {
 	t.Parallel()
 	pp := newTestPool(4)
-	c := newAcquireTestClient(pp)
+	c := newAcquireTestClient(t, pp)
 	// Point dials at a closed port so the post-flush dial fails fast.
 	pp.config = config.UsenetProvider{Host: "127.0.0.1", Port: closedPort(t)}
 

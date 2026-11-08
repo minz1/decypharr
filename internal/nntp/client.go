@@ -135,7 +135,15 @@ type Client struct {
 	streamBackupWait       time.Duration
 	streamBackupSpillovers atomic.Uint64
 
-	closed atomic.Bool
+	// g owns every goroutine and lease of this client: the reaper, the janitor,
+	// the conns-closer, dials and verify pings, and (as a child) the repair
+	// chunks. Stopping it stops the client.
+	g *task.Group
+
+	// afterDialStoreHook is nil in production. Tests set it to run code between
+	// a dial's stopped() pre-check and its activeConns.Store.
+	afterDialStoreHook func()
+
 	// Speed test results storage
 	speedTestResults *xsync.Map[string, SpeedTestResult]
 
@@ -143,8 +151,6 @@ type Client struct {
 	// BatchStat call. Sized at construction from
 	// cfg.Repair.NNTPConnectionPercent.
 	repairPool *RepairPool
-	// repairGroup owns the repair chunks; Close stops it.
-	repairGroup *task.Group
 
 	// TCP socket buffer sizes (bytes) applied to every new connection. 0 means
 	// "leave OS autotuning untouched". Sized from cfg.Usenet.Socket*Buffer.
@@ -255,8 +261,11 @@ func buildPools(providers []config.UsenetProvider, clock monoClock) (map[string]
 	return pools, ordered
 }
 
-// NewClient creates a new connection manager.
-func NewClient(cfg *config.Config, log zerolog.Logger) (*Client, error) {
+// NewClient creates a new connection manager whose goroutines run as tasks of
+// g. The caller owns g: stopping it stops the client, and there is no Close.
+// The repair pool's group is created first, so its chunks stop before the
+// client's own tasks are cancelled.
+func NewClient(g *task.Group, cfg *config.Config, log zerolog.Logger) (*Client, error) {
 	// Clone: sorting and normalizing below must not mutate the shared config,
 	// which other goroutines read concurrently.
 	providers := slices.Clone(cfg.Usenet.Providers)
@@ -285,11 +294,13 @@ func NewClient(cfg *config.Config, log zerolog.Logger) (*Client, error) {
 		return nil, tlsErr
 	}
 	pools, orderedPools := buildPools(providers, clock)
+	repairGroup := g.Child("repair")
 	cm := &Client{
+		g:                g,
 		tlsBase:          tlsBase,
 		clock:            clock,
 		bufs:             &bodyBufPool{},
-		janitor:          newBodyJanitor(),
+		janitor:          newBodyJanitor(g),
 		pools:            pools,
 		orderedPools:     orderedPools,
 		providers:        providers,
@@ -319,14 +330,57 @@ func NewClient(cfg *config.Config, log zerolog.Logger) (*Client, error) {
 			cm.streamBackupWait = d
 		}
 	}
-	// Interim until the client runs on a group of its own: the repair
-	// chunks run on a root group that Close stops.
-	cm.repairGroup = task.NewRoot(context.Background(), "nntp-repair", log)
-	cm.repairPool = cm.newRepairPool(cm.repairGroup, cfg.Repair.NNTPConnectionPercent)
+	cm.repairPool = cm.newRepairPool(repairGroup, cfg.Repair.NNTPConnectionPercent)
 
-	// Start background reaper
-	go cm.reaper()
+	if err := cm.start(); err != nil {
+		return nil, err
+	}
 	return cm, nil
+}
+
+// stopped reports whether the client's group has begun stopping. Every acquire
+// path and every idle put checks it.
+func (c *Client) stopped() bool {
+	return c.g.Context().Err() != nil
+}
+
+// start launches the reaper and the conns-closer as tasks of the client's group.
+func (c *Client) start() error {
+	if err := c.g.Go("reaper", c.reaper); err != nil {
+		return err
+	}
+	return c.g.Go("conns-closer", c.closeConns)
+}
+
+// closeConns is the conns-closer task. When the client's group is cancelled it
+// closes every idle connection and every checked-out one, so in-flight reads
+// and writes fail at once and their owners can finish. A dial that stores a
+// connection after this sweep sees stopped() on its own recheck.
+func (c *Client) closeConns(ctx context.Context) error {
+	<-ctx.Done()
+	totalClosed := 0
+	for _, pp := range c.pools {
+		pp.mu.Lock()
+		for _, entry := range pp.conns {
+			_ = entry.conn.Close()
+			c.releaseConnectionEntry(entry)
+			totalClosed++
+		}
+		pp.conns = nil
+		pp.mu.Unlock()
+
+		pp.activeConns.Range(func(key, _ any) bool {
+			if conn, ok := key.(*Connection); ok {
+				_ = conn.Close()
+				totalClosed++
+			}
+			return true
+		})
+	}
+	c.logger.Info().
+		Int("total_closed", totalClosed).
+		Msg("Connection manager closed")
+	return nil
 }
 
 func (c *Client) acquireConnectionEntry(
@@ -388,18 +442,15 @@ func (c *Client) put(conn *Connection, provider config.UsenetProvider) {
 		return
 	}
 
-	if c.closed.Load() {
-		_ = conn.Close()
-		c.releaseSlot(pp)
-		return
-	}
-
 	entry := c.acquireConnectionEntry(conn, provider, time.Now())
 
+	// stopped() is read under pp.mu, which the conns-closer takes for its
+	// idle drain: either the closer drains this entry or we see stopped.
 	pp.mu.Lock()
 	// Cap stack size (shouldn't happen with semaphore, but be safe)
-	if len(pp.conns) >= pp.max {
+	if c.stopped() || len(pp.conns) >= pp.max {
 		pp.mu.Unlock()
+		c.releaseConnectionEntry(entry)
 		_ = conn.Close()
 		c.releaseSlot(pp)
 		return
@@ -426,7 +477,12 @@ func (c *Client) release(conn *Connection) {
 // timing out rather than erroring immediately: a reset means the server
 // dropped this one session, but a silent timeout means the network path is
 // gone — and every older entry idling below it in the stack is dead too.
-func (c *Client) checkEntryHealth(entry *connectionEntry) (bool, bool) {
+//
+// The verify ping runs under a "pop" lease and is bounded by the client's
+// group ctx only. The caller's ctx is checked once before the ping and never
+// closes the connection: a caller that cancels must not cost the pool its
+// stale connections one after another.
+func (c *Client) checkEntryHealth(ctx context.Context, entry *connectionEntry) (bool, bool) {
 	if entry == nil || entry.conn == nil {
 		return false, false
 	}
@@ -438,8 +494,21 @@ func (c *Client) checkEntryHealth(entry *connectionEntry) (bool, bool) {
 	// A successful reaper keepalive counts as activity, so freshly-pinged
 	// connections skip the extra checkout round-trip.
 	if time.Since(entry.lastActivity()) > c.staleThreshold {
-		if err := entry.conn.ping(c.pingTimeout); err != nil {
-			return false, isTimeoutLike(err)
+		if ctx.Err() != nil {
+			// The caller is gone: it gets no verdict on this entry, which the
+			// caller of this function drops.
+			return false, false
+		}
+		leave, err := c.g.Enter("pop")
+		if err != nil {
+			return false, false
+		}
+		defer leave()
+		conn := entry.conn
+		stop := context.AfterFunc(c.g.Context(), func() { _ = conn.Close() })
+		defer stop()
+		if pingErr := conn.ping(c.pingTimeout); pingErr != nil {
+			return false, isTimeoutLike(pingErr)
 		}
 	}
 	return true, false
@@ -710,9 +779,9 @@ func (c *Client) waitForConnection(
 
 	var lastErr error
 	for {
-		if c.closed.Load() {
+		if c.stopped() {
 			c.finishWait(w, admissionFailed)
-			return nil, config.UsenetProvider{}, errors.New("nntp client is closed")
+			return nil, config.UsenetProvider{}, task.ErrStopped
 		}
 		c.register(w)
 
@@ -813,63 +882,120 @@ func (c *Client) getOrCreateFromPool(
 ) (*Connection, error) {
 	// Try to get existing connection from pool (quick lock)
 	for {
-		pp.mu.Lock()
-		if len(pp.conns) > 0 {
-			// Pop from end (LIFO)
-			n := len(pp.conns)
-			entry := pp.conns[n-1]
-			pp.conns[n-1] = nil // Avoid memory leak
-			pp.conns = pp.conns[:n-1]
-			pp.mu.Unlock()
-
-			now := time.Now()
-			if c.isIdleExpired(entry.lastUsed, now) {
-				conn := entry.conn
-				c.releaseConnectionEntry(entry)
-				_ = conn.Close()
-				continue
-			}
-
-			// Health check outside lock
-			healthy, pingTimedOut := c.checkEntryHealth(entry)
-			if healthy {
-				conn := entry.conn
-				c.releaseConnectionEntry(entry)
-				conn.pool = pp                         // already set at creation; kept authoritative
-				pp.activeConns.Store(conn, struct{}{}) // Register as active (checked-out)
-				return conn, nil
-			}
-			// Unhealthy - close and try next pooled connection
-			conn := entry.conn
-			c.releaseConnectionEntry(entry)
-			_ = conn.Close()
-			if pingTimedOut {
-				// The freshest pooled connection timed out its verify ping:
-				// the path to this provider is gone and the older entries
-				// share its fate. Close them all now instead of paying
-				// PingTimeout for each in sequence.
-				c.flushIdle(pp)
-			}
-			continue
+		if c.stopped() {
+			return nil, task.ErrStopped
 		}
-		pp.mu.Unlock()
-		break
+		conn, popped, err := c.popIdle(ctx, pp)
+		if err != nil {
+			return nil, err
+		}
+		if conn != nil {
+			return conn, nil
+		}
+		if !popped {
+			break
+		}
 	}
 
 	// No pooled connection available, create new one
 	if !allowDial && pp.inDialCooldown() {
 		return nil, errDialCooldown
 	}
-	conn, err := c.createConnection(ctx, provider)
+	return c.dial(ctx, pp, provider)
+}
+
+// popIdle takes the freshest idle connection from pp (LIFO) and verifies it.
+// It returns the checked-out connection, or popped=false when the pool had no
+// idle connection. popped=true with no connection means the entry was dropped
+// and the caller should try the next one.
+func (c *Client) popIdle(ctx context.Context, pp *ProviderPool) (*Connection, bool, error) {
+	pp.mu.Lock()
+	n := len(pp.conns)
+	if n == 0 {
+		pp.mu.Unlock()
+		return nil, false, nil
+	}
+	entry := pp.conns[n-1]
+	pp.conns[n-1] = nil // Avoid memory leak
+	pp.conns = pp.conns[:n-1]
+	pp.mu.Unlock()
+
+	if c.isIdleExpired(entry.lastUsed, time.Now()) {
+		dead := entry.conn
+		c.releaseConnectionEntry(entry)
+		_ = dead.Close()
+		return nil, true, nil
+	}
+
+	// Health check outside lock
+	healthy, pingTimedOut := c.checkEntryHealth(ctx, entry)
+	conn := entry.conn
+	c.releaseConnectionEntry(entry)
+	if healthy {
+		conn.pool = pp                         // already set at creation; kept authoritative
+		pp.activeConns.Store(conn, struct{}{}) // Register as active (checked-out)
+		// Store, then recheck: the conns-closer runs after the ctx is
+		// cancelled and then ranges activeConns, so either it sees
+		// this conn or we see stopped().
+		if c.stopped() {
+			pp.activeConns.Delete(conn)
+			_ = conn.Close()
+			return nil, true, task.ErrStopped
+		}
+		return conn, true, nil
+	}
+	// Unhealthy - close and try next pooled connection
+	_ = conn.Close()
+	if pingTimedOut {
+		// The freshest pooled connection timed out its verify ping:
+		// the path to this provider is gone and the older entries
+		// share its fate. Close them all now instead of paying
+		// PingTimeout for each in sequence.
+		c.flushIdle(pp)
+	}
+	// A caller that went away during the verify must not go on to
+	// verify (and close) the rest of the pool.
+	return nil, true, ctx.Err()
+}
+
+// dial opens a new connection to pp's provider under a "dial" lease, on the
+// caller's ctx also cancelled by the client's group, and registers it as
+// checked out.
+func (c *Client) dial(ctx context.Context, pp *ProviderPool, provider config.UsenetProvider) (*Connection, error) {
+	leave, err := c.g.Enter("dial")
 	if err != nil {
-		if ctx.Err() == nil {
+		return nil, err
+	}
+	defer leave()
+	dialCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	defer context.AfterFunc(c.g.Context(), cancel)()
+
+	conn, err := c.createConnection(dialCtx, provider)
+	if err != nil {
+		if dialCtx.Err() == nil {
 			pp.noteDialFailure()
+		} else if c.stopped() {
+			return nil, task.ErrStopped
 		}
 		return nil, err
+	}
+	if c.stopped() {
+		_ = conn.Close()
+		return nil, task.ErrStopped
+	}
+	if hook := c.afterDialStoreHook; hook != nil {
+		hook()
 	}
 	pp.noteDialSuccess()
 	conn.pool = pp                         // identity for put/release routing
 	pp.activeConns.Store(conn, struct{}{}) // Register as active (checked-out)
+	// Store, then recheck (see the pooled path above).
+	if c.stopped() {
+		pp.activeConns.Delete(conn)
+		_ = conn.Close()
+		return nil, task.ErrStopped
+	}
 	return conn, nil
 }
 
@@ -1004,23 +1130,22 @@ func (c *Client) createConnection(ctx context.Context, provider config.UsenetPro
 	}
 	_ = netConn.SetDeadline(time.Now().Add(handshake))
 
-	// Read greeting
-	line, err := reader.ReadString('\n')
-	if err != nil {
+	// The greeting read and the auth exchange are bounded only by the
+	// deadline above; ctx ending closes the socket so they stop at once.
+	stop := context.AfterFunc(ctx, func() { _ = netConn.Close() })
+	if handshakeErr := greetAndAuthenticate(conn, provider); handshakeErr != nil {
+		stop()
 		_ = netConn.Close()
-		return nil, NewConnectionError(fmt.Errorf("read greeting: %w", err))
-	}
-	if !strings.HasPrefix(line, "200") && !strings.HasPrefix(line, "201") {
-		_ = netConn.Close()
-		return nil, NewConnectionError(fmt.Errorf("unexpected greeting: %s", line))
-	}
-
-	// Authenticate
-	if provider.Username != "" {
-		if authenticateErr := conn.authenticate(); authenticateErr != nil {
-			_ = netConn.Close()
-			return nil, fmt.Errorf("auth: %w", authenticateErr)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
 		}
+		return nil, handshakeErr
+	}
+	// No bare defer: a callback that fires after a good handshake must not
+	// hand the caller a closed connection.
+	if !stop() {
+		_ = netConn.Close()
+		return nil, ctx.Err()
 	}
 
 	// Clear deadline for normal operation
@@ -1033,16 +1158,37 @@ func (c *Client) createConnection(ctx context.Context, provider config.UsenetPro
 	return conn, nil
 }
 
-// reaper periodically closes idle connections.
-func (c *Client) reaper() {
+// greetAndAuthenticate reads the server greeting and, when the provider has
+// credentials, authenticates.
+func greetAndAuthenticate(conn *Connection, provider config.UsenetProvider) error {
+	line, err := conn.reader.ReadString('\n')
+	if err != nil {
+		return NewConnectionError(fmt.Errorf("read greeting: %w", err))
+	}
+	if !strings.HasPrefix(line, "200") && !strings.HasPrefix(line, "201") {
+		return NewConnectionError(fmt.Errorf("unexpected greeting: %s", line))
+	}
+	if provider.Username != "" {
+		if authenticateErr := conn.authenticate(); authenticateErr != nil {
+			return fmt.Errorf("auth: %w", authenticateErr)
+		}
+	}
+	return nil
+}
+
+// reaper is the task that periodically closes idle connections. A sweep runs
+// to completion on the task's goroutine, so the group's stop waits for it.
+func (c *Client) reaper(ctx context.Context) error {
 	ticker := time.NewTicker(reaperInterval)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		if c.closed.Load() {
-			return
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			c.reapIdleConnections(ctx)
 		}
-		c.reapIdleConnections()
 	}
 }
 
@@ -1053,7 +1199,7 @@ const (
 	keepaliveWorkers   = 4
 )
 
-func (c *Client) reapIdleConnections() {
+func (c *Client) reapIdleConnections(ctx context.Context) {
 	now := time.Now()
 	for _, pp := range c.pools {
 		var toClose, toPing []*connectionEntry
@@ -1102,7 +1248,7 @@ func (c *Client) reapIdleConnections() {
 		// Ping outside the pool lock, in parallel, so slot-held time stays
 		// one round-trip rather than the whole batch's.
 		if len(toPing) > 0 {
-			c.keepAliveBatch(pp, toPing, now)
+			c.keepAliveBatch(ctx, pp, toPing, now)
 		}
 	}
 }
@@ -1145,7 +1291,7 @@ func (t *keepaliveTally) add(err error) {
 // pool, the same rule checkout applies in getOrCreateFromPool. Without it a
 // provider blip costs len(batch) × KeepalivePingTimeout of held slots to
 // learn what the first ping already proved.
-func (c *Client) keepAliveBatch(pp *ProviderPool, toPing []*connectionEntry, now time.Time) {
+func (c *Client) keepAliveBatch(ctx context.Context, pp *ProviderPool, toPing []*connectionEntry, now time.Time) {
 	var wg sync.WaitGroup
 	var st keepaliveState
 	workers := min(len(toPing), keepaliveWorkers)
@@ -1162,7 +1308,7 @@ func (c *Client) keepAliveBatch(pp *ProviderPool, toPing []*connectionEntry, now
 	for i := range workers {
 		wg.Go(func() {
 			for entry := range pingCh {
-				tallies[i].add(c.keepAlive(pp, entry, now, &st))
+				tallies[i].add(c.keepAlive(ctx, pp, entry, now, &st))
 			}
 		})
 	}
@@ -1204,7 +1350,13 @@ func (c *Client) keepAliveBatch(pp *ProviderPool, toPing []*connectionEntry, now
 // handing out, caught here without sacrificing the warm pool. A timeout may
 // also condemn the path, which tells the rest of the batch to give up
 // unpinged.
-func (c *Client) keepAlive(pp *ProviderPool, entry *connectionEntry, now time.Time, st *keepaliveState) error {
+func (c *Client) keepAlive(
+	ctx context.Context,
+	pp *ProviderPool,
+	entry *connectionEntry,
+	now time.Time,
+	st *keepaliveState,
+) error {
 	discard := func() {
 		conn := entry.conn
 		c.releaseConnectionEntry(entry)
@@ -1217,22 +1369,27 @@ func (c *Client) keepAlive(pp *ProviderPool, entry *connectionEntry, now time.Ti
 		discard()
 		return errPathDown
 	}
-	if err := entry.conn.ping(c.keepalivePing); err != nil {
+	// conn.ping takes no ctx, so the reaper's ctx ending closes the conn to
+	// cut the ping short.
+	stopPing := context.AfterFunc(ctx, func() { _ = entry.conn.Close() })
+	pingErr := entry.conn.ping(c.keepalivePing)
+	stopPing()
+	if pingErr != nil {
 		// Silence condemns the path, but only while nothing has answered:
 		// a live peer that dropped one session sends RST or EOF, so a
 		// timeout alongside a working sibling is a wedged session, not an
 		// outage.
-		if isTimeoutLike(err) && !st.ok.Load() {
+		if isTimeoutLike(pingErr) && !st.ok.Load() {
 			st.pathDown.Store(true)
 		}
 		discard()
-		return err
+		return pingErr
 	}
 	st.ok.Store(true)
 	entry.lastPing = now
 
 	pp.mu.Lock()
-	if c.closed.Load() || len(pp.conns) >= pp.max {
+	if c.stopped() || len(pp.conns) >= pp.max {
 		pp.mu.Unlock()
 		discard()
 		return nil
@@ -1245,7 +1402,7 @@ func (c *Client) keepAlive(pp *ProviderPool, entry *connectionEntry, now time.Ti
 
 // Stats returns current pool statistics.
 func (c *Client) Stats() map[string]any {
-	if c.closed.Load() {
+	if c.stopped() {
 		return nil
 	}
 
@@ -1328,8 +1485,8 @@ func (c *Client) Stats() map[string]any {
 }
 
 func (c *Client) Stat(ctx context.Context, workload Workload, messageID string) (int, string, error) {
-	if c.closed.Load() {
-		return 0, "", errors.New("nntp client is closed")
+	if c.stopped() {
+		return 0, "", task.ErrStopped
 	}
 
 	var num int
@@ -1417,8 +1574,8 @@ func excludeForArticleNotFound(exclusions *providerExclusions, provider config.U
 // BatchStat checks the availability of many message IDs using NNTP STAT and
 // stops queued work after the first article is definitively missing.
 func (c *Client) BatchStat(ctx context.Context, messageIDs []string) (*BatchStatResult, error) {
-	if c.closed.Load() {
-		return nil, errors.New("nntp client is closed")
+	if c.stopped() {
+		return nil, task.ErrStopped
 	}
 	if len(messageIDs) == 0 {
 		return &BatchStatResult{}, nil
@@ -1667,52 +1824,6 @@ func (c *Client) batchStatOnProvider(
 		c.returnOrReleaseConn(conn, providerCfg)
 	}
 	return results, nil
-}
-
-// Close shuts down the connection manager.
-func (c *Client) Close() error {
-	if c.closed.Swap(true) {
-		return nil
-	}
-
-	var totalClosed int
-	for _, pp := range c.pools {
-		pp.mu.Lock()
-		// Close idle connections
-		for _, entry := range pp.conns {
-			_ = entry.conn.Close()
-			c.releaseConnectionEntry(entry)
-			totalClosed++
-		}
-		pp.conns = nil
-		pp.mu.Unlock()
-
-		// Force-close active (checked-out) connections to unblock any in-flight operations.
-		// This causes StreamBody/sendCommand reads to fail immediately, allowing prefetch
-		// workers to exit and SegmentFetcher.Close() to complete without hanging.
-		pp.activeConns.Range(func(key, _ any) bool {
-			if conn, ok := key.(*Connection); ok {
-				_ = conn.Close()
-				totalClosed++
-			}
-			return true
-		})
-	}
-
-	// Stop the BatchStat worker pool last — its workers may be holding
-	// connections we just force-closed, which makes them return with
-	// errors and exit cleanly.
-	if c.repairGroup != nil {
-		c.repairGroup.Close()
-		<-c.repairGroup.Done()
-	}
-	c.janitor.close()
-
-	c.logger.Info().
-		Int("total_closed", totalClosed).
-		Msg("Connection manager closed")
-
-	return nil
 }
 
 // findProvider resolves a provider by its canonical ID. A bare host is

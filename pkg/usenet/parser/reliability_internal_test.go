@@ -12,6 +12,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/internal/nntp"
+	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/internal/testutil/nntpd"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 	"github.com/sirrobot01/decypharr/pkg/usenet/manifest"
@@ -216,14 +217,18 @@ func TestExtensionlessObfuscatedMediaProducesLogicalFile(t *testing.T) {
 		"<media@nntpd>",
 		nntpd.Encode(payload, "hBnewXHwWBUEYm24QydJAcpQ4nNpC", 1, int64(len(payload)), 0),
 	)
+	root := task.NewRoot(t.Context(), "test", zerolog.Nop())
+	t.Cleanup(func() {
+		root.Close()
+		<-root.Done()
+	})
 	host, port := server.Addr()
-	client, err := nntp.NewClient(&config.Config{Usenet: config.Usenet{
+	client, err := nntp.NewClient(root.Child("nntp"), &config.Config{Usenet: config.Usenet{
 		Providers: []config.UsenetProvider{{Host: host, Port: port, MaxConnections: 2}},
 	}}, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = client.Close() })
 
 	const source = `<?xml version="1.0" encoding="UTF-8"?>
 <nzb xmlns="http://www.newzbin.com/DTD/2003/nzb">

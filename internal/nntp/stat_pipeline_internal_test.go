@@ -57,7 +57,7 @@ func TestBatchStatOnProviderYieldsToStreamBetweenPipelines(t *testing.T) {
 	}
 	pp := newTestPool(1)
 	poolEntry(pp, conn, 0)
-	client := newAcquireTestClient(pp)
+	client := newAcquireTestClient(t, pp)
 
 	messageIDs := make([]string, statPipelineDepth+4)
 	for i := range messageIDs {
@@ -286,7 +286,7 @@ func TestBatchStatPreservesMappingAcrossBackboneExclusions(t *testing.T) {
 	first.config.Host, first.config.Backbone = "first", "shared"
 	second.config.Host, second.config.Backbone = "second", "shared"
 	third.config.Host, third.config.Backbone = "third", "other"
-	client := newTieredAcquireTestClient(first, second, 0)
+	client := newTieredAcquireTestClient(t, first, second, 0)
 	client.providers = append(client.providers, third.config)
 	client.pools[third.config.ID()] = third
 	client.orderedPools = append(client.orderedPools, third)

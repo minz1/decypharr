@@ -58,7 +58,7 @@ func newBenchStack(b *testing.B, cfg nntpd.Config) (*nntp.Client, []SegmentMeta)
 	}
 
 	host, port := srv.Addr()
-	client, err := nntp.NewClient(&config.Config{
+	client, err := nntp.NewClient(newClientGroup(b), &config.Config{
 		Usenet: config.Usenet{
 			Providers: []config.UsenetProvider{{
 				Host:           host,
@@ -70,7 +70,6 @@ func newBenchStack(b *testing.B, cfg nntpd.Config) (*nntp.Client, []SegmentMeta)
 	if err != nil {
 		b.Fatal(err)
 	}
-	b.Cleanup(func() { _ = client.Close() })
 	return client, segs
 }
 
