@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"log"
+	"net"
 	"net/http"
 	"net/http/pprof"
 	"os"
@@ -13,7 +15,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/cmd/decypharr"
+	"github.com/sirrobot01/decypharr/internal/task"
 )
 
 // pprofReadHeaderTimeout bounds slow clients on the opt-in pprof listener.
@@ -57,30 +62,81 @@ func run() error {
 	// and the usenet reader each create a buffer.Pool with their own configured
 	// RAM budget and disk limit.
 
-	// Start pprof server if enabled
-	if pprofAddr != "" && enablePprof {
-		go servePprof(pprofAddr)
-	}
-
 	// Create a context canceled on SIGINT/SIGTERM
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	logger := zerolog.New(os.Stderr).With().Timestamp().Logger()
+	proc := task.NewRoot(context.WithoutCancel(ctx), "process", logger)
+	defer func() {
+		proc.Close()
+		<-proc.Done()
+	}()
+
+	// Start pprof server if enabled
+	if pprofAddr != "" && enablePprof {
+		if err := proc.Go("pprof", func(ctx context.Context) error {
+			if err := servePprof(ctx, pprofAddr); err != nil {
+				log.Printf("pprof server error: %v", err)
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+	}
 
 	return decypharr.Start(ctx, configPath)
 }
 
 // servePprof exposes the profiling endpoints on their own mux, so they are
 // only reachable on the opt-in pprof listener.
-func servePprof(addr string) {
+func servePprof(ctx context.Context, addr string) error {
+	var lc net.ListenConfig
+	ln, err := lc.Listen(ctx, "tcp", addr)
+	if err != nil {
+		return err
+	}
+	log.Printf("Starting pprof server on %s", addr)
+	return servePprofOn(ctx, ln)
+}
+
+// servePprofOn serves the profiling endpoints on ln until ctx is done, then
+// shuts the server down and returns nil.
+func servePprofOn(ctx context.Context, ln net.Listener) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/debug/pprof/", pprof.Index)
 	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
 	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
 	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
 	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
-	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: pprofReadHeaderTimeout}
-	log.Printf("Starting pprof server on %s", addr)
-	if err := srv.ListenAndServe(); err != nil {
-		log.Printf("pprof server error: %v", err)
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: pprofReadHeaderTimeout}
+
+	served := make(chan error, 1)
+	proc := task.NewRoot(context.WithoutCancel(ctx), "pprof-serve", zerolog.Nop())
+	if err := proc.Go("serve", func(context.Context) error {
+		served <- srv.Serve(ln)
+		return nil
+	}); err != nil {
+		_ = ln.Close()
+		return err
 	}
+	defer func() {
+		proc.Close()
+		<-proc.Done()
+	}()
+
+	select {
+	case err := <-served:
+		return err
+	case <-ctx.Done():
+	}
+	shutdownCtx, cancel := task.Detached(ctx, time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		_ = srv.Close()
+	}
+	if err := <-served; err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }
