@@ -385,7 +385,7 @@ func (m *Manager) init() error {
 	m.Notifications = notifications.New(m.notifyGroup, &m.config.Notifications, m.tlsConfig, m.logger)
 
 	// Initialize Hearsay state and its default network participation.
-	if hs, newErr := hearsay.New(m.config, m.logger); newErr != nil {
+	if hs, newErr := hearsay.New(m.hearsaySvc.group, m.config, m.logger); newErr != nil {
 		m.logger.Warn().Err(newErr).Msg("Hearsay disabled: failed to initialize")
 	} else {
 		m.hearsay = hs

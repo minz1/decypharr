@@ -44,7 +44,7 @@ func TestParseStageReportsMissingSegmentsToHearsayOnlyWhileRunning(t *testing.T)
 			cfg.WithDir(t.TempDir())
 			cfg.Hearsay.AdviceMode = "active"
 			cfg.Usenet.Providers = []config.UsenetProvider{{Host: "news.example", Backbone: "omicron"}}
-			service, err := hearsay.New(cfg, zerolog.Nop())
+			service, err := hearsay.New(testGroup(t), cfg, zerolog.Nop())
 			if err != nil {
 				t.Fatal(err)
 			}
