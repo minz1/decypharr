@@ -34,12 +34,11 @@ func TestRegisteredServicesStopInReverseOrderAndStorageLast(t *testing.T) {
 	m := newShutdownTestManager(t, t.TempDir())
 	logs := &lockedLog{}
 	m.logger = zerolog.New(logs)
-	m.mountManager = shutdownMount{stop: func() error { return nil }}
 
 	stopRoot(t, m.group)
 
 	want := []string{
-		"stopping", "scheduler", "mount", "repair", "indexer", "reacquire", "placements", "usenet", "hearsay",
+		"stopping", "scheduler", "repair", "indexer", "reacquire", "placements", "usenet", "hearsay",
 	}
 	if got := logs.stopped(); !slices.Equal(got, want) {
 		t.Fatalf("stop order = %v, want %v", got, want)

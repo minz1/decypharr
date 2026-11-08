@@ -188,7 +188,6 @@ func (m *Manager) Start() error {
 			return nil // stopped while starting
 		}
 		close(m.ready)
-		m.startMount(ctx)
 		return nil
 	})
 	if err != nil {
@@ -198,7 +197,7 @@ func (m *Manager) Start() error {
 }
 
 // startSequence starts the sub-services in dependency order. Services the
-// manager can run without (repair, hearsay, the mount) log a failed start and
+// manager can run without (repair, hearsay) log a failed start and
 // the sequence goes on; the Arr services are required.
 func (m *Manager) startSequence(ctx context.Context) error {
 	m.logger.Info().
@@ -257,18 +256,6 @@ func (m *Manager) startOptional(ctx context.Context, svc *service, what string) 
 	}
 }
 
-// startMount starts the mount manager once the manager is ready. Its start
-// runs on the mount child, which also stops it when the manager stops.
-func (m *Manager) startMount(ctx context.Context) {
-	if m.mountSvc == nil {
-		return
-	}
-	if err := m.mountSvc.run(ctx); err != nil {
-		// If mount manager fails to start, we log the error but continue running the manager
-		m.logger.Error().Err(err).Msg("Failed to start mount manager, continuing without mounting")
-	}
-}
-
 // initialSync brings the library in line with the providers after a start.
 func (m *Manager) initialSync(ctx context.Context) error {
 	m.syncTorrents(ctx)
@@ -286,7 +273,8 @@ func (m *Manager) initialSync(ctx context.Context) error {
 }
 
 // Stop stops the manager's group and waits, bounded by ctx: scheduler,
-// downloads, mount, repair, Arr services, usenet, hearsay, then storage. An
+// downloads, repair, Arr services, usenet, hearsay, then storage. The mount is
+// not the manager's: main stops it before the manager. An
 // owner that holds the group stops it directly; Stop is for one that does not.
 func (m *Manager) Stop(ctx context.Context) error {
 	m.mountGate.markStopping()
@@ -382,7 +370,7 @@ func (m *Manager) superviseAll(specs []serviceSpec) error {
 
 // registerServices makes the manager's child groups in dependency order: a
 // group created earlier stops later, so the services that others rely on
-// (usenet, the Arr, repair, the mount) outlive the work and the scheduler
+// (usenet, the Arr, repair) outlive the work and the scheduler
 // that call them, and hearsay outlives them all. Storage closes in the
 // group's own task, after every child.
 func (m *Manager) registerServices() error {
@@ -395,13 +383,11 @@ func (m *Manager) registerServices() error {
 		{name: "reacquire", handle: &m.reacquireSvc, start: m.startReacquire, stop: m.stopReacquire},
 		{name: "indexer", handle: &m.indexerSvc, start: m.startIndexer, stop: m.stopIndexer},
 		{name: "repair", handle: &m.repairSvc, start: m.startRepair, stop: m.stopRepair},
-		{name: "mount", handle: &m.mountSvc, start: m.startMountManager, stop: m.stopMountManager},
 	}); err != nil {
 		return err
 	}
-	// Download actions, the job queue and background provider calls. It stops
-	// before the mount, so downloads have saved their final or resumable
-	// state while the mount is still up.
+	// Download actions, the job queue and background provider calls. The mount
+	// stops before the whole manager, so they end resumable on the mount gate.
 	m.work = m.group.Child("work")
 	m.children = append(m.children, m.work)
 	return m.superviseAll([]serviceSpec{
@@ -476,21 +462,6 @@ func (m *Manager) stopRepair() error {
 		m.repair.Stop()
 	}
 	return nil
-}
-
-func (m *Manager) startMountManager(_ context.Context) error {
-	if m.mountManager == nil {
-		return nil
-	}
-	return m.mountManager.Start(m.mountSvc.group)
-}
-
-func (m *Manager) stopMountManager() error {
-	if m.mountManager == nil {
-		return nil
-	}
-	m.logger.Info().Msg("Stopping mount manager")
-	return m.mountManager.Stop()
 }
 
 func (m *Manager) stopSchedulerService() error {

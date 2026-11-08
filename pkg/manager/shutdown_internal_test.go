@@ -203,21 +203,9 @@ func seedCompletedSeason(t *testing.T, m *Manager, entry *storage.Entry) *storag
 }
 
 // interruptAndStop starts the import, then shuts down while it waits for the
-// mount, checking the mount stops only after the entry was saved resumable.
+// mount; the stop closes the mount gate, so the entry is saved resumable.
 func interruptAndStop(t *testing.T, m *Manager, entry *storage.Entry, torrent *types.Torrent) {
 	t.Helper()
-	mountStops := 0
-	m.mountManager = shutdownMount{stop: func() error {
-		mountStops++
-		saved, getTorrentErr := m.queue.GetTorrent(entry.InfoHash)
-		if getTorrentErr != nil {
-			return getTorrentErr
-		}
-		if saved.IsDownloading {
-			t.Error("mount stopped before interrupted work was saved")
-		}
-		return nil
-	}}
 	m.processNewTorrent(entry, torrent)
 	synctest.Wait()
 	saved, err := m.queue.GetTorrent(entry.InfoHash)
@@ -226,9 +214,6 @@ func interruptAndStop(t *testing.T, m *Manager, entry *storage.Entry, torrent *t
 	}
 	if stopErr := m.Stop(t.Context()); stopErr != nil {
 		t.Fatal(stopErr)
-	}
-	if mountStops != 1 {
-		t.Fatalf("mount stops = %d", mountStops)
 	}
 	if lateErr := m.runWork(
 		"late",

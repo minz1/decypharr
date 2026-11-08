@@ -89,14 +89,11 @@ func checkPlacementStopOrder(t *testing.T, events []string) {
 	if finished < 0 {
 		t.Fatalf("events = %v, the delete never finished", events)
 	}
-	for _, service := range []string{"mount", "repair", "indexer", "reacquire"} {
+	for _, service := range []string{"repair", "indexer", "reacquire"} {
 		stopped := at("stopped " + service)
 		if stopped < 0 || stopped > at("stopped placements") || stopped > finished {
 			t.Errorf("%s did not stop before the delete finished and the placements group: %v", service, events)
 		}
-	}
-	if at("mount stop returned") > finished {
-		t.Errorf("the mount waited for the delete: %v", events)
 	}
 	usenet := at("stopped usenet")
 	if at("stopped placements") >= usenet || finished >= usenet || usenet >= at("stopped hearsay") {
@@ -105,7 +102,7 @@ func checkPlacementStopOrder(t *testing.T, events []string) {
 }
 
 // A provider delete in flight when the manager stops delays only the services that stop after the placements
-// group (usenet, hearsay) and storage: the mount, repair and Arr stops do not wait for it, and the whole stop fits
+// group (usenet, hearsay) and storage: the repair and Arr stops do not wait for it, and the whole stop fits
 // the budget. A delete asked for once that group has closed is refused and logged.
 func TestSlowProviderDeleteKeepsTheStopOrderAndFitsTheBudget(t *testing.T) {
 	t.Parallel()
@@ -124,10 +121,6 @@ func TestSlowProviderDeleteKeepsTheStopOrderAndFitsTheBudget(t *testing.T) {
 		}
 		logs := &lockedLog{onStopped: func(service string) { record("stopped " + service) }}
 		m.logger = zerolog.New(logs)
-		m.mountManager = shutdownMount{stop: func() error {
-			record("mount stop returned")
-			return nil
-		}}
 		client := slowDeleteProvider{delay: deleteTime, deleted: func() { record("delete finished") }}
 		m.startPlacementRun("Show.S01", "torbox", func() { _ = client.DeleteTorrent("id") })
 		synctest.Wait()

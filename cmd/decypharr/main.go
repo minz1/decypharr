@@ -60,21 +60,26 @@ func Start(ctx context.Context, dataDir string) error {
 // buildServices starts one generation's services as children of gen.root.
 // Children stop newest first, so they are created in dependency order:
 //
-//	manager → http → share{export, nfs, smb}
+//	manager → http → mount{run, stopping} → share{export, nfs, smb}
 //
-// The share servers read through the manager, so they stop first, then the
-// server, and the manager last. The mount belongs to the manager: it starts it
-// in Start and stops it in Stop, after the downloads are saved and before
-// storage closes. Moving it into its own group, with a bounded unmount, is
-// the P1-mount track.
+// The share servers read through the manager, so they stop first; then the
+// mount, whose "stopping" child closes the mount gate and arms the mount's
+// 8s slice before the mount's own stop begins; then the server, and the
+// manager last. A stopping mount therefore never fails a grab: the manager's
+// mount-dependent steps end resumable on the gate. Before the mount stops,
+// the server has not stopped, so the HTTP API is still served.
 func buildServices(gen *generation, cfg *config.Config, logs *logger.Factory) (func(), error) {
 	root := gen.root
 	store := config.NewStore(cfg)
-	cleanup := runtime.GC // refresh GC once the generation is gone
+	slice := newMountSlice(gen)
+	cleanup := func() {
+		slice.release()
+		runtime.GC() // refresh GC once the generation is gone
+	}
 
 	mgr, err := manager.New(root.Child("manager"), store, logs)
 	if err != nil {
-		return nil, err
+		return cleanup, err
 	}
 
 	// ascii banner
@@ -91,6 +96,8 @@ func buildServices(gen *generation, cfg *config.Config, logs *logger.Factory) (f
 `, version.GetInfo(), cfg.LogLevel)
 
 	installMount(mgr, cfg, logs)
+	gate := manager.NewMountGate(logs.New("mount"))
+	mgr.SetMountGate(gate)
 	srv := server.New(mgr, store, logs)
 	srv.SetRestartFunc(gen.RequestRestart)
 	srv.SetTaskSnapshot(root.Snapshot)
@@ -98,18 +105,16 @@ func buildServices(gen *generation, cfg *config.Config, logs *logger.Factory) (f
 	gen.WaitReady(mgr.IsReady())
 	gen.OnRestartRejected(func(cause error) { store.MarkRestartFailed(cause) })
 
-	// The manager starts the mount it was given once it is ready, and stops it
-	// when its group stops, after the downloads are saved. A start step that
-	// fails fails the manager's group, and with it the generation.
-	//
-	// Known gap (P1-mount): the mount managers bound their unmount with fixed
-	// timeouts of their own (about 10s graceful plus 10s forced), not with the
-	// drain deadline. A stuck unmount can outlast the drain budget; the
-	// process then exits on the stop timeout.
+	// A start step that fails fails the manager's group, and with it the
+	// generation. The mount group starts the mount once the manager is ready;
+	// a mount that fails to start is logged and the generation goes on.
 	if err = mgr.Start(); err != nil {
 		return cleanup, err
 	}
 	if err = srv.Start(root.Child("http")); err != nil {
+		return cleanup, err
+	}
+	if err = startMountGroup(root, mgr.MountManager(), mgr.IsReady(), gate, slice, logs.New("mount")); err != nil {
 		return cleanup, err
 	}
 	return cleanup, startShares(root.Child("share"), mgr, cfg, logs)

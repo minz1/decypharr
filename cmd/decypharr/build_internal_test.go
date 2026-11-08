@@ -200,3 +200,28 @@ func TestRealServicesSignalDuringRestartDrain(t *testing.T) {
 		t.Fatalf("generation is %v, want stopped", got)
 	}
 }
+
+// The real tree has the mount in its own root group, not under the manager.
+// Presence only: the order is TestMountGroupStopOrder's job.
+func TestRealServicesRootChildrenOrder(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	run := startReal(ctx, t, nil)
+	gen := run.generation()
+	waitServing(t, gen)
+	paths := taskPaths(gen)
+	if !slices.ContainsFunc(paths, func(path string) bool { return strings.HasPrefix(path, "generation/mount/run") }) {
+		t.Errorf("tasks %v lack a generation/mount/run path", paths)
+	}
+	if slices.ContainsFunc(
+		paths,
+		func(path string) bool { return strings.HasPrefix(path, "generation/manager/mount") },
+	) {
+		t.Errorf("tasks %v still hold a generation/manager/mount path", paths)
+	}
+	cancel()
+	if err := run.finished(); err != nil {
+		t.Fatal(err)
+	}
+}
