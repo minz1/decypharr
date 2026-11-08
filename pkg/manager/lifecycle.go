@@ -289,6 +289,7 @@ func (m *Manager) initialSync(ctx context.Context) error {
 // downloads, mount, repair, Arr services, usenet, hearsay, then storage. An
 // owner that holds the group stops it directly; Stop is for one that does not.
 func (m *Manager) Stop(ctx context.Context) error {
+	m.mountGate.markStopping()
 	m.logger.Info().Msg("Stopping manager")
 	return m.group.Stop(ctx)
 }
