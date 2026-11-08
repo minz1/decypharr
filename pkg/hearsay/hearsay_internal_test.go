@@ -17,6 +17,7 @@ import (
 	"github.com/sirrobot01/hearsay/transport"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 	"github.com/sirrobot01/decypharr/pkg/usenet/manifest"
 	"github.com/sirrobot01/decypharr/pkg/usenet/parser"
@@ -68,7 +69,7 @@ func testService(t *testing.T) *Service {
 	cfg.WithDir(t.TempDir())
 	cfg.Hearsay.AdviceMode = "active"
 	cfg.Usenet.Providers = []config.UsenetProvider{{Host: "news.example", Backbone: "omicron"}}
-	s, err := New(cfg, zerolog.Nop())
+	s, err := New(testRoot(t), cfg, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,12 +80,18 @@ func testService(t *testing.T) *Service {
 	return s
 }
 
+// testRoot is a root group that the test's service closes.
+func testRoot(t testing.TB) *task.Group {
+	t.Helper()
+	return task.NewRoot(t.Context(), "test", zerolog.Nop())
+}
+
 func TestDisabledIsInert(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{Debrids: []config.Debrid{{Provider: "realdebrid"}}}
 	cfg.WithDir(t.TempDir())
 	cfg.Hearsay.Disabled = true
-	s, err := New(cfg, zerolog.Nop())
+	s, err := New(testRoot(t), cfg, zerolog.Nop())
 	if err != nil || s == nil || s.Status().Enabled {
 		t.Fatalf("want an inert service, got %v, %v", s, err)
 	}
@@ -106,7 +113,7 @@ func TestNetworkPublisherShadowDefaults(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{Debrids: []config.Debrid{{Provider: "realdebrid"}}}
 	cfg.WithDir(t.TempDir())
-	s, err := New(cfg, zerolog.Nop())
+	s, err := New(testRoot(t), cfg, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +132,7 @@ func TestExplicitNetworkOptOut(t *testing.T) {
 	cfg := &config.Config{Debrids: []config.Debrid{{Provider: "realdebrid"}}}
 	cfg.WithDir(t.TempDir())
 	cfg.Hearsay.Participate = new(false)
-	s, err := New(cfg, zerolog.Nop())
+	s, err := New(testRoot(t), cfg, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +160,7 @@ func TestSeededTorrentLimit(t *testing.T) {
 				Hearsay: config.Hearsay{MaxSeededTorrents: test.limit, Publish: new(false)},
 			}
 			cfg.WithDir(t.TempDir())
-			s, err := New(cfg, zerolog.Nop())
+			s, err := New(testRoot(t), cfg, zerolog.Nop())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -198,9 +205,9 @@ func TestTransportStatsCache(t *testing.T) {
 		t.Fatal("transport statistics refreshed before expiry")
 	}
 
-	s.mu.Lock()
+	s.statsMu.Lock()
 	s.transportStatsAt = time.Now().Add(-transportStatsTTL)
-	s.mu.Unlock()
+	s.statsMu.Unlock()
 	var wg sync.WaitGroup
 	for range 8 {
 		wg.Go(func() {
@@ -239,7 +246,7 @@ func TestInvalidConfigurationDisablesHearsay(t *testing.T) {
 			cfg := &config.Config{Debrids: []config.Debrid{{Provider: "realdebrid"}}}
 			cfg.WithDir(t.TempDir())
 			test.mutate(&cfg.Hearsay)
-			if service, err := New(cfg, zerolog.Nop()); err == nil || service != nil {
+			if service, err := New(testRoot(t), cfg, zerolog.Nop()); err == nil || service != nil {
 				t.Fatalf("service, error = %v, %v", service, err)
 			}
 		})
@@ -310,7 +317,7 @@ func TestShadowAdviceMeasuresWithoutGating(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{Debrids: []config.Debrid{{Provider: "realdebrid"}}}
 	cfg.WithDir(t.TempDir())
-	s, err := New(cfg, zerolog.Nop())
+	s, err := New(testRoot(t), cfg, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -400,7 +407,7 @@ func TestFollowDropsUnlistedFeeds(t *testing.T) {
 	cfg.WithDir(dir)
 
 	// First run: no follow list, so a discovered feed is retained.
-	open, err := New(cfg, zerolog.Nop())
+	open, err := New(testRoot(t), cfg, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -418,7 +425,7 @@ func TestFollowDropsUnlistedFeeds(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg.Hearsay.Follow = []string{"ed25519:" + hex.EncodeToString(other)}
-	s, err := New(cfg, zerolog.Nop())
+	s, err := New(testRoot(t), cfg, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}

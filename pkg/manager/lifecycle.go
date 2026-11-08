@@ -379,7 +379,8 @@ func (m *Manager) registerServices() error {
 	m.notifyGroup = m.group.Child("notifications")
 	m.children = append(m.children, m.notifyGroup)
 	if err := m.superviseAll([]serviceSpec{
-		{name: "hearsay", handle: &m.hearsaySvc, start: m.startHearsay, stop: m.stopHearsay},
+		// Hearsay closes its own node and engine in a close task of this group.
+		{name: "hearsay", handle: &m.hearsaySvc, start: m.startHearsay},
 		{name: "usenet", handle: &m.usenetSvc},
 		// Provider deletes queued by the services above run here, so they finish after those services have
 		// stopped and before usenet and storage go: no stop waits on a slow delete, and no delete is lost.
@@ -406,11 +407,6 @@ func (m *Manager) startHearsay(ctx context.Context) error {
 		return nil
 	}
 	return m.hearsay.Start(ctx)
-}
-
-func (m *Manager) stopHearsay() error {
-	m.hearsay.Close() // nil-safe
-	return nil
 }
 
 func (m *Manager) startReacquire(ctx context.Context) error {
