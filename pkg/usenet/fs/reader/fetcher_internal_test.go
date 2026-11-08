@@ -2,7 +2,10 @@ package reader
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -10,12 +13,22 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/nntp"
+	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/internal/testutil/nntpd"
 )
 
-// newTestFetcher builds a cache+fetcher pair with no NNTP client. Its private
-// scheduler has no workers, so hints stay queued without using the nil client.
+// newTestFetcher builds a cache+fetcher pair with no NNTP client. Its
+// scheduler's only worker is parked, so hints stay queued without using the
+// nil client.
 func newTestFetcher(t *testing.T, segCount int) *SegmentFetcher {
+	t.Helper()
+	sf, _ := newTestFetcherOn(t, segCount, newParkedScheduler(t))
+	return sf
+}
+
+// newTestFetcherOn builds a cache and a fetcher on scheduler, and returns the
+// fetcher's group. The test stops the group before the cache closes.
+func newTestFetcherOn(t *testing.T, segCount int, scheduler *FetchScheduler) (*SegmentFetcher, *task.Group) {
 	t.Helper()
 	const segSize = int64(1000)
 	segs := make([]SegmentMeta, segCount)
@@ -31,6 +44,7 @@ func newTestFetcher(t *testing.T, segCount int) *SegmentFetcher {
 	cfg := DefaultConfig()
 	cfg.DiskPath = t.TempDir()
 	cfg.MaxConnections = 1
+	cfg.Scheduler = scheduler
 
 	stats := &Stats{}
 	cache, err := newTestSegmentCache(t, segs, cfg, stats, zerolog.Nop())
@@ -39,9 +53,8 @@ func newTestFetcher(t *testing.T, segCount int) *SegmentFetcher {
 	}
 	t.Cleanup(func() { _ = cache.Close() })
 
-	sf := NewSegmentFetcher(context.Background(), nil, cache, cfg, stats, zerolog.Nop())
-	t.Cleanup(sf.Close)
-	return sf
+	fetcherGroup := newTestRoot(t)
+	return NewSegmentFetcher(fetcherGroup, nil, cache, cfg, stats, zerolog.Nop()), fetcherGroup
 }
 
 func TestCancelPendingPrefetchDrainsQueue(t *testing.T) {
@@ -152,6 +165,18 @@ func newPipelineTestFetcher(
 	present func(int) bool,
 ) (*nntpd.Server, *SegmentCache, *SegmentFetcher, *Stats) {
 	t.Helper()
+	srv, cache, fetcher, stats, _ := newPipelineStack(t, depth, 2, present)
+	return srv, cache, fetcher, stats
+}
+
+// newPipelineStack builds a fetcher over a real nntpd server with a shared
+// scheduler of the given width.
+func newPipelineStack(
+	t *testing.T,
+	depth, workers int,
+	present func(int) bool,
+) (*nntpd.Server, *SegmentCache, *SegmentFetcher, *Stats, *task.Group) {
+	t.Helper()
 	srv, err := nntpd.New(nntpd.Config{RTT: 10 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
@@ -197,9 +222,11 @@ func newPipelineTestFetcher(
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = cache.Close() })
-	fetcher := NewSegmentFetcher(t.Context(), client, cache, cfg, stats, zerolog.Nop())
-	t.Cleanup(fetcher.Close)
-	return srv, cache, fetcher, stats
+	root := newTestRoot(t)
+	scheduler, _, _ := newTestScheduler(t, root, workers)
+	cfg.Scheduler = scheduler
+	fetcher := NewSegmentFetcher(root.Child("fetcher"), client, cache, cfg, stats, zerolog.Nop())
+	return srv, cache, fetcher, stats, root
 }
 
 func waitForSegmentState(t *testing.T, cache *SegmentCache, segIdx int, want SegmentState) {
@@ -228,7 +255,9 @@ func waitForCondition(t *testing.T, condition func() bool) {
 
 func TestEnsureSegmentsPropagatesPermanentFailure(t *testing.T) {
 	t.Parallel()
-	sf := newTestFetcher(t, 6)
+	// The segments are failed already, so the fetch never reaches the nil client.
+	scheduler, _, _ := newTestScheduler(t, newTestRoot(t), 1)
+	sf, _ := newTestFetcherOn(t, 6, scheduler)
 
 	notFound := &nntp.Error{Type: nntp.ErrorTypeArticleNotFound, Message: "gone"}
 	// Multiple missing segments exercises the concurrent fan-out path.
@@ -276,5 +305,94 @@ func TestSeekAbandonedWindow(t *testing.T) {
 					tc.prevEnd, tc.startSeg, tc.endSeg, a, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestFetcherStopDoesNotWaitForQueued proves stopping a fetcher's group does
+// not wait behind another owner's closure holding the shared worker: the
+// fetcher's queued closure is dropped, unrun, once the worker reaches it.
+func TestFetcherStopDoesNotWaitForQueued(t *testing.T) {
+	t.Parallel()
+	root := newTestRoot(t)
+	scheduler, _, other := newTestScheduler(t, root, 1)
+	busy := make(chan struct{})
+	busyDone := make(chan struct{})
+	release := make(chan struct{})
+	releaseOnce := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(releaseOnce)
+	if !scheduler.submit(t.Context(), other, priorityDemand, func() {
+		close(busy)
+		<-release
+		close(busyDone)
+	}, nil) {
+		t.Fatal("submit the busy closure")
+	}
+	<-busy
+
+	sf, fetcherGroup := newTestFetcherOn(t, 4, scheduler)
+	var ran atomic.Bool
+	dropped := make(chan struct{})
+	if !sf.submit(t.Context(), priorityPrefetch, func() { ran.Store(true) }, func() { close(dropped) }) {
+		t.Fatal("queue a prefetch")
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), time.Second)
+	defer cancel()
+	if err := fetcherGroup.Stop(ctx); err != nil {
+		t.Fatalf("fetcher Stop: %v", err)
+	}
+	select {
+	case <-busyDone:
+		t.Fatal("the busy closure ended before the fetcher stopped")
+	default:
+	}
+
+	releaseOnce()
+	<-dropped
+	if ran.Load() {
+		t.Error("the queued closure ran after its fetcher stopped")
+	}
+	if err := root.Stop(ctx); err != nil {
+		t.Fatalf("root Stop: %v", err)
+	}
+	if snap := append(root.Snapshot(), fetcherGroup.Snapshot()...); len(snap) != 0 {
+		t.Errorf("tasks left: %v", snap)
+	}
+}
+
+// TestWorkerSurvivesPanickingClosure proves a panic inside a fetch closure is
+// contained: the fetch reports a failure, the single worker runs the next
+// closure, and the panicked segment can be fetched again.
+func TestWorkerSurvivesPanickingClosure(t *testing.T) {
+	t.Parallel()
+	_, cache, sf, _, root := newPipelineStack(t, 2, 1, func(int) bool { return true })
+	var calls atomic.Int32
+	sf.afterMarkFetchingHook = func() {
+		if calls.Add(1) == 1 {
+			panic("injected fetch panic")
+		}
+	}
+
+	if err := sf.Fetch(t.Context(), 0); !errors.Is(err, ErrCacheClosed) {
+		t.Fatalf("Fetch after a panic = %v, want the dropped-closure error", err)
+	}
+	if state := cache.GetState(0); state != StateEmpty {
+		t.Fatalf("panicked segment state = %s, want %s", state, StateEmpty)
+	}
+	ran := make(chan struct{})
+	if !sf.submit(t.Context(), priorityDemand, func() { close(ran) }, nil) {
+		t.Fatal("submit the follow-up closure")
+	}
+	<-ran
+	if err := sf.Fetch(t.Context(), 0); err != nil {
+		t.Fatalf("Fetch of the panicked segment: %v", err)
+	}
+	if state := cache.GetState(0); state != StateOnDisk {
+		t.Fatalf("segment state = %s, want %s", state, StateOnDisk)
+	}
+	if err := root.Stop(context.WithoutCancel(t.Context())); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if snap := root.Snapshot(); len(snap) != 0 {
+		t.Errorf("tasks left: %v", snap)
 	}
 }

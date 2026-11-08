@@ -34,7 +34,8 @@ func newPipelineIntegrityReader(
 		t.Fatal(err)
 	}
 	pools, _ := newTestPools(t, 256<<20)
-	sr, err := NewStreamingReader(t.Context(), client, segments, WithPools(pools),
+	scheduler, _, _ := newTestScheduler(t, newTestRoot(t), 2)
+	sr, err := NewStreamingReader(t.Context(), client, segments, WithPools(pools), WithFetchScheduler(scheduler),
 		WithRetention(RetentionDelivery), WithMaxConnections(2), WithPrefetchAhead(0),
 		WithBodyPipelineDepth(2), func(c *Config) { c.DownloadTimeout = 5 * time.Second })
 	if err != nil {

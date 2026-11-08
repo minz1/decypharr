@@ -14,6 +14,7 @@ import (
 
 	appconfig "github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/nntp"
+	"github.com/sirrobot01/decypharr/internal/task"
 )
 
 // SegmentFetcher deduplicates downloads and submits them to the shared scheduler.
@@ -30,16 +31,17 @@ type SegmentFetcher struct {
 
 	// Background prefetch
 	scheduler      *FetchScheduler
-	ownedScheduler bool
 	prefetchQueued []atomic.Uint64 // one deduplication bit per segment
 	prefetchGen    atomic.Uint64
-	taskMu         sync.Mutex
-	taskWg         sync.WaitGroup
-	closing        bool
 
-	// Lifecycle
-	ctx    context.Context
-	cancel context.CancelFunc
+	// Lifecycle: g is the fetcher's group. Its owner stops it, which cancels
+	// ctx and waits for the closures running under its leases.
+	g   *task.Group
+	ctx context.Context
+
+	// afterMarkFetchingHook runs after a fetch wins the Empty -> Fetching
+	// claim. Nil in production; tests set it before any fetch starts.
+	afterMarkFetchingHook func()
 }
 
 // fetchPromise allows multiple goroutines to wait for the same segment download.
@@ -53,24 +55,24 @@ type prefetchClaim struct {
 	promise *fetchPromise
 }
 
-// NewSegmentFetcher creates a new segment fetcher.
+// errFetchAborted is what waiters on a fetch see when it ended without a
+// result (a panic unwound it).
+var errFetchAborted = errors.New("segment fetch aborted")
+
+// NewSegmentFetcher creates a segment fetcher whose work is owned by g. The
+// fetcher's context is g's; stopping g cancels it and waits for the closures
+// running under its leases. config.Scheduler is required.
 func NewSegmentFetcher(
-	ctx context.Context,
+	g *task.Group,
 	client *nntp.Client,
 	cache *SegmentCache,
 	config Config,
 	stats *Stats,
 	logger zerolog.Logger,
 ) *SegmentFetcher {
-	ctx, cancel := context.WithCancel(ctx)
 	config.BodyPipelineDepth = appconfig.NormalizeBodyPipelineDepth(config.BodyPipelineDepth)
 
-	maxConns := config.MaxConnections
-	if maxConns < 1 {
-		maxConns = defaultMaxConnections
-	}
-
-	sf := &SegmentFetcher{
+	return &SegmentFetcher{
 		client:   client,
 		cache:    cache,
 		config:   config,
@@ -79,20 +81,10 @@ func NewSegmentFetcher(
 		inFlight: make(map[int]*fetchPromise),
 		// A packed bitmap avoids per-segment goroutines and large bool arrays.
 		prefetchQueued: make([]atomic.Uint64, (cache.SegmentCount()+bitsPerWord-1)/bitsPerWord),
-		ctx:            ctx,
-		cancel:         cancel,
+		scheduler:      config.Scheduler,
+		g:              g,
+		ctx:            g.Context(),
 	}
-	sf.scheduler = config.Scheduler
-	if sf.scheduler == nil {
-		workers := maxConns
-		if client == nil {
-			workers = 0
-		}
-		sf.scheduler = NewFetchScheduler(workers)
-		sf.ownedScheduler = true
-	}
-
-	return sf
 }
 
 // Fetch schedules a foreground download and waits for it. Provider concurrency
@@ -112,11 +104,13 @@ func (sf *SegmentFetcher) schedule(ctx context.Context, priority fetchPriority, 
 		ctx = context.Background()
 	}
 	done := make(chan error, 1)
-	if sf.scheduler.workers == 0 && priority == priorityDemand {
-		done <- run()
-		return done
+	drop := func() {
+		select {
+		case done <- ErrCacheClosed:
+		default:
+		}
 	}
-	if !sf.submit(ctx, priority, func() { done <- run() }, func() { done <- ErrCacheClosed }) {
+	if !sf.submit(ctx, priority, func() { done <- run() }, drop) {
 		if err := ctx.Err(); err != nil {
 			done <- err
 		} else if ctxErr := sf.ctx.Err(); ctxErr != nil {
@@ -143,27 +137,7 @@ func (sf *SegmentFetcher) waitScheduled(ctx context.Context, done <-chan error) 
 }
 
 func (sf *SegmentFetcher) submit(ctx context.Context, priority fetchPriority, run, drop func()) bool {
-	sf.taskMu.Lock()
-	if sf.closing {
-		sf.taskMu.Unlock()
-		return false
-	}
-	sf.taskWg.Add(1)
-	sf.taskMu.Unlock()
-
-	if sf.scheduler.submit(ctx, priority, func() {
-		defer sf.taskWg.Done()
-		run()
-	}, func() {
-		defer sf.taskWg.Done()
-		if drop != nil {
-			drop()
-		}
-	}) {
-		return true
-	}
-	sf.taskWg.Done()
-	return false
+	return sf.scheduler.submit(ctx, sf.g, priority, run, drop)
 }
 
 // fetchDirect performs one deduplicated fetch inside a scheduler worker.
@@ -205,16 +179,17 @@ func (sf *SegmentFetcher) fetchDirect(ctx context.Context, segIdx int, workload 
 	sf.inFlight[segIdx] = promise
 	sf.inFlightMu.Unlock()
 
-	// Actually fetch
-	err := sf.doFetch(ctx, segIdx, workload)
-	promise.err = err
-	close(promise.done)
+	// Settle the promise and free the slot on every exit, a panic included.
+	err := errFetchAborted
+	defer func() {
+		promise.err = err
+		close(promise.done)
+		sf.inFlightMu.Lock()
+		delete(sf.inFlight, segIdx)
+		sf.inFlightMu.Unlock()
+	}()
 
-	// Cleanup
-	sf.inFlightMu.Lock()
-	delete(sf.inFlight, segIdx)
-	sf.inFlightMu.Unlock()
-
+	err = sf.doFetch(ctx, segIdx, workload)
 	return err
 }
 
@@ -243,6 +218,17 @@ func (sf *SegmentFetcher) doFetchAttempt(ctx context.Context, segIdx int, worklo
 		return sf.awaitOtherFetch(ctx, segIdx, workload, restarts)
 	}
 
+	// A panic before the outcome below must not leave the slot claimed.
+	claimed := true
+	defer func() {
+		if claimed {
+			sf.cache.ReleaseFetching(segIdx)
+		}
+	}()
+	if sf.afterMarkFetchingHook != nil {
+		sf.afterMarkFetchingHook()
+	}
+
 	downloadCtx, cancel := context.WithTimeout(ctx, sf.downloadTimeout())
 	defer cancel()
 
@@ -250,6 +236,7 @@ func (sf *SegmentFetcher) doFetchAttempt(ctx context.Context, segIdx int, worklo
 	err := sf.client.ExecuteWithFailover(downloadCtx, workload, func(conn *nntp.Connection) error {
 		return sf.downloadSegment(downloadCtx, conn, segIdx, seg.MessageID)
 	})
+	claimed = false
 	if err != nil {
 		sf.stats.DownloadErrors.Add(1)
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -840,22 +827,6 @@ func (sf *SegmentFetcher) retryBackoff(attempt int) time.Duration {
 	d := base << (attempt - 1)
 	d = min(d, maxRetryBackoff)
 	return d
-}
-
-// Close cancels this reader's work. Shared scheduler workers outlive it.
-func (sf *SegmentFetcher) Close() {
-	sf.taskMu.Lock()
-	if sf.closing {
-		sf.taskMu.Unlock()
-		return
-	}
-	sf.closing = true
-	sf.taskMu.Unlock()
-	sf.cancel()
-	if sf.ownedScheduler {
-		sf.scheduler.Close()
-	}
-	sf.taskWg.Wait()
 }
 
 // errNoDecodedData treats an article whose body decodes to nothing as

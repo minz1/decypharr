@@ -13,6 +13,7 @@ import (
 	appconfig "github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/crypto"
 	"github.com/sirrobot01/decypharr/internal/nntp"
+	"github.com/sirrobot01/decypharr/internal/task"
 )
 
 // StreamingReader provides [io.ReaderAt] over NNTP segments with automatic
@@ -56,11 +57,14 @@ type StreamingReader struct {
 	cursors       map[*Cursor]struct{}
 	defaultCursor *Cursor
 
-	// Lifecycle
-	ctx    context.Context
-	cancel context.CancelFunc
-	closed atomic.Bool
-	logger zerolog.Logger
+	// Lifecycle: g is the reader's group (a child of the pools' group) and
+	// fetcherG the fetcher's, a child of g.
+	g        *task.Group
+	fetcherG *task.Group
+	ctx      context.Context
+	cancel   context.CancelFunc
+	closed   atomic.Bool
+	logger   zerolog.Logger
 
 	// Stats
 	stats *Stats
@@ -98,7 +102,11 @@ type Cursor struct {
 	closed atomic.Bool
 }
 
-// NewStreamingReader creates a new streaming reader for NNTP segments.
+// NewStreamingReader creates a new streaming reader for NNTP segments. It
+// requires WithPools and WithFetchScheduler. The reader runs on a group made
+// by the pools, and its fetcher on a child of that group: the fetcher's
+// context is the fetcher group's, not derived from ctx, so cancelling ctx
+// does not stop in-flight fetches; Close does.
 func NewStreamingReader(
 	ctx context.Context,
 	client *nntp.Client,
@@ -118,7 +126,14 @@ func NewStreamingReader(
 		opt(&config)
 	}
 	config.BodyPipelineDepth = appconfig.NormalizeBodyPipelineDepth(config.BodyPipelineDepth)
+	if config.Pools == nil {
+		return nil, errPoolsRequired
+	}
+	if config.Scheduler == nil {
+		return nil, errSchedulerRequired
+	}
 
+	g := config.Pools.newReaderGroup()
 	ctx, cancel := context.WithCancel(ctx)
 	logger := zerolog.Nop() // Use logger from config if available
 
@@ -128,13 +143,18 @@ func NewStreamingReader(
 	cache, err := NewSegmentCache(ctx, segments, config, stats, logger)
 	if err != nil {
 		cancel()
+		g.Close()
+		<-g.Done()
 		return nil, fmt.Errorf("create cache: %w", err)
 	}
 
-	// Create fetcher
-	fetcher := NewSegmentFetcher(ctx, client, cache, config, stats, logger)
+	// Create fetcher on a child created after the cache.
+	fetcherG := g.Child("fetcher")
+	fetcher := NewSegmentFetcher(fetcherG, client, cache, config, stats, logger)
 
 	sr := &StreamingReader{
+		g:         g,
+		fetcherG:  fetcherG,
 		cache:     cache,
 		fetcher:   fetcher,
 		config:    config,
@@ -707,9 +727,13 @@ func (sr *StreamingReader) Close() error {
 
 	sr.cancel()
 
-	// Close fetcher first (stops downloads)
-	sr.fetcher.Close()
-
-	// Then close cache (cleans up files)
-	return sr.cache.Close()
+	// Interim until readers are Pools children with an async Close: stop the
+	// fetcher first (cancels downloads and waits for its leases), then close
+	// the cache (cleans up files), then end the reader group.
+	sr.fetcherG.Close()
+	<-sr.fetcherG.Done()
+	err := sr.cache.Close()
+	sr.g.Close()
+	<-sr.g.Done()
+	return err
 }

@@ -87,6 +87,7 @@ func TestPlaybackUnderPoolPressure(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			pools, _ := newTestPools(t, tc.poolMB<<20)
+			scheduler, _, _ := newTestScheduler(t, newTestRoot(t), 8)
 			srv, client, all := ppStack(t, tc.streams, tc.segsPer, 2*time.Millisecond)
 
 			fileSize := ppSegSize * int64(tc.segsPer)
@@ -94,7 +95,8 @@ func TestPlaybackUnderPoolPressure(t *testing.T) {
 			readers := make([]*StreamingReader, tc.streams)
 			for s := range tc.streams {
 				sr, err := NewStreamingReader(context.Background(), client, all[s],
-					WithPools(pools), WithMaxConnections(8), WithPrefetchAhead(22), WithRetention(RetentionWindow))
+					WithPools(pools), WithFetchScheduler(scheduler), WithMaxConnections(8),
+					WithPrefetchAhead(22), WithRetention(RetentionWindow))
 				if err != nil {
 					t.Fatal(err)
 				}

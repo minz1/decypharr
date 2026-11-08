@@ -28,13 +28,15 @@ func newTestReader(t *testing.T, segCount int) *StreamingReader {
 	cfg.DiskPath = t.TempDir()
 	cfg.MaxConnections = 1
 	cfg.PrefetchAhead = 4
+	cfg.Scheduler = newParkedScheduler(t)
 
 	stats := &Stats{}
 	cache, err := newTestSegmentCache(t, segs, cfg, stats, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewSegmentCache: %v", err)
 	}
-	fetcher := NewSegmentFetcher(context.Background(), nil, cache, cfg, stats, zerolog.Nop())
+	fetcherGroup := newTestRoot(t)
+	fetcher := NewSegmentFetcher(fetcherGroup, nil, cache, cfg, stats, zerolog.Nop())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	sr := &StreamingReader{
@@ -50,7 +52,7 @@ func newTestReader(t *testing.T, segCount int) *StreamingReader {
 		stats:     stats,
 	}
 	t.Cleanup(func() {
-		fetcher.Close()
+		stopTestGroup(t, fetcherGroup)
 		_ = cache.Close()
 		cancel()
 	})
