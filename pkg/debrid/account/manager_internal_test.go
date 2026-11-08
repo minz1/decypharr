@@ -232,7 +232,11 @@ func TestNewManagerWithLimitersPicksLimiterPerKey(t *testing.T) {
 		if !ok {
 			t.Fatalf("no account for %s", token)
 		}
-		resp, err := acc.httpClient.Get(server.URL)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := acc.httpClient.Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}
