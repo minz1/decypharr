@@ -1,6 +1,7 @@
 package usenet
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -452,7 +453,11 @@ func (s *NZBStorage) Stats() map[string]any {
 // concurrent readers. Each rewrite uses temp-file + atomic rename, so readers
 // always observe a fully-decodable file (old proto or new v2). Decode failures
 // are logged and skipped rather than aborting. Returns the number migrated.
-func (s *NZBStorage) MigrateLegacy() (int, error) {
+//
+// ctx is checked before each file is handed to a worker: once it ends, no
+// further file starts, the files already running finish, and ctx's error is
+// returned without the completion marker, so a later run resumes.
+func (s *NZBStorage) MigrateLegacy(ctx context.Context) (int, error) {
 	if s.migrationMarkerExists() {
 		return 0, nil
 	}
@@ -472,7 +477,11 @@ func (s *NZBStorage) MigrateLegacy() (int, error) {
 	var migrated, failed atomic.Int64
 	pl := pool.New().WithMaxGoroutines(min(runtime.NumCPU(), migrationWorkers))
 
+	var stopped error
 	for _, path := range legacy {
+		if stopped = ctx.Err(); stopped != nil {
+			break
+		}
 		pl.Go(func() {
 			ok, migrateFileErr := s.migrateFile(path)
 			if migrateFileErr != nil {
@@ -498,6 +507,10 @@ func (s *NZBStorage) MigrateLegacy() (int, error) {
 	_ = s.recalculateStatsLocked()
 	s.mu.Unlock()
 
+	if stopped != nil {
+		s.logger.Info().Int64("migrated", migrated.Load()).Msg("Migration: stopped before every file was upgraded")
+		return int(migrated.Load()), stopped
+	}
 	if failed.Load() == 0 {
 		s.writeMigrationMarker()
 	}

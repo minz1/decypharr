@@ -80,11 +80,12 @@ func TestRestoreRemovesAnNZBParsedAfterItsEntryWasDeleted(t *testing.T) {
 			ProcessingMaxConnections: 2,
 		}
 	})
-	usenetClient, err := usenet.New(task.NewRoot(t.Context(), "test", zerolog.Nop()), cfgStore, logger.Discard())
+	usenetRoot := task.NewRoot(t.Context(), "test", zerolog.Nop())
+	t.Cleanup(func() { stopUsenetRoot(t, usenetRoot) })
+	usenetClient, err := usenet.New(usenetRoot, cfgStore, logger.Discard())
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = usenetClient.Close() })
 	m := newRestoreTestManager(t)
 	m.usenet = usenetClient
 	m.usenetTimeout = 10 * time.Second

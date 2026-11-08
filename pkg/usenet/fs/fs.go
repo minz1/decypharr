@@ -241,7 +241,7 @@ func (f *FS) CreateReaderAt() (io.ReaderAt, int64, func(), error) {
 // CreateReaderAtForVolume creates a reader for a single volume directly.
 // This is an optimization for the common streaming case where there's only one volume.
 // Returns PrefetchableReaderAt so callers can trigger prefetch before starting reads.
-func (f *FS) CreateReaderAtForVolume(vol *types.Volume) (PrefetchableReaderAt, int64, func(), error) {
+func (f *FS) CreateReaderAtForVolume(vol *types.Volume) (PrefetchableReaderAt, int64, func(context.Context), error) {
 	if vol == nil || len(vol.Segments) == 0 {
 		return nil, 0, nil, fmt.Errorf("no segments in volume")
 	}
@@ -250,17 +250,15 @@ func (f *FS) CreateReaderAtForVolume(vol *types.Volume) (PrefetchableReaderAt, i
 }
 
 // createNewReaderForVolume wraps the volume's streaming reader with its cleanup.
-func (f *FS) createNewReaderForVolume(vol *types.Volume) (PrefetchableReaderAt, int64, func(), error) {
+func (f *FS) createNewReaderForVolume(vol *types.Volume) (PrefetchableReaderAt, int64, func(context.Context), error) {
 	streamReader, err := f.newReader(vol)
 	if err != nil {
 		return nil, 0, nil, fmt.Errorf("failed to create new streaming reader for volume %s: %w", vol.Name, err)
 	}
-	// Interim until the entry cleanup takes a ctx (Task 8): the reader's close
-	// is asynchronous, and Usenet.Close must not stop the pools before the
-	// cache has released its buffers.
-	cleanup := func() {
-		_ = streamReader.Close()
-		<-streamReader.Done()
+	// The cleanup stops the reader and waits for its cache to release, bounded
+	// by the caller's ctx; an expired ctx leaves the reader stopping on its own.
+	cleanup := func(ctx context.Context) {
+		_ = streamReader.Stop(ctx)
 	}
 	return streamReader, vol.Size, cleanup, nil
 }

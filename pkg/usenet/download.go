@@ -262,7 +262,7 @@ func (u *Usenet) downloadDecrypted(
 	if err != nil {
 		return err
 	}
-	defer entry.cleanup()
+	defer entry.cleanupOneShot(ctx)
 	readerAt, size, err := entry.getOrCreateReader()
 	if err != nil {
 		return err

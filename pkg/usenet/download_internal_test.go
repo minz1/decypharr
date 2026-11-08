@@ -81,6 +81,7 @@ func TestDownloadDecryptsEncryptedFiles(t *testing.T) {
 		t.Fatal(schedErr)
 	}
 	u := &Usenet{
+		work:                     g.Child("work"),
 		bufferPools:              bufferPools,
 		fetchScheduler:           scheduler,
 		nntp:                     client,
