@@ -131,7 +131,7 @@ func TestExpiredWaitingJobWithADeletedFileSearchesAgain(t *testing.T) {
 	}
 
 	rig.advance(waitingTimeout + time.Minute)
-	rig.service.maintainJobs()
+	rig.service.maintainJobs(t.Context())
 	expired, _ := rig.service.Job(rig.job.ID)
 	if expired.Status != StatusNeedsAttention {
 		t.Fatalf("expired job = %s: %s", expired.Status, expired.LastError)
@@ -143,7 +143,7 @@ func TestExpiredWaitingJobWithADeletedFileSearchesAgain(t *testing.T) {
 		!strings.Contains(expired.LastError, "compensating search was sent") {
 		t.Fatalf("last error = %q", expired.LastError)
 	}
-	rig.service.maintainJobs()
+	rig.service.maintainJobs(t.Context())
 	if searches := fake.searchCount(); searches != 2 {
 		t.Fatalf("a stopped job was searched again: %d searches", searches)
 	}

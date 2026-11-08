@@ -121,7 +121,7 @@ func assertStoppedJobHeld(
 		t.Fatalf("mutation evidence changed: %#v", stopped.Mutations)
 	}
 	elapsed.Store(int64(2 * failureRetention))
-	service.maintainJobs()
+	service.maintainJobs(t.Context())
 	if _, ok := service.nextJob(); ok {
 		t.Fatal("stopped job remains dispatchable")
 	}

@@ -331,7 +331,7 @@ func (s *Service) run(ctx context.Context) {
 			return
 		case <-ticker.C:
 			s.reconcileImportedJobs(ctx)
-			s.maintainJobs()
+			s.maintainJobs(ctx)
 			s.signal()
 		case <-s.wake:
 			if !s.drainJobs(ctx) {
@@ -784,7 +784,8 @@ func (s *Service) completeJobFromIndex(job Job) error {
 	if s.beforeMaintenanceCtx != nil {
 		s.beforeMaintenanceCtx()
 	}
-	s.retryRemonitor(s.g.Context(), job.ID)
+	// The worker's context ends when the worker is told to stop, before the group's, so this call never holds up a stop.
+	s.retryRemonitor(s.worker.Context(), job.ID)
 	_, err := s.updateJob(job.ID, StatusReady, func(job *Job) {
 		job.ReplacementDownloadIDs = replacementDownloadIDs
 		job.ReplacementDownloadID = replacementDownloadIDs[0]
@@ -857,7 +858,7 @@ func replacementCandidate(candidates []Binding, oldDownloadID string, matches fu
 	return Binding{}, false
 }
 
-func (s *Service) maintainJobs() {
+func (s *Service) maintainJobs(ctx context.Context) {
 	now := s.now()
 	var expire []string
 	var prune []string
@@ -876,9 +877,9 @@ func (s *Service) maintainJobs() {
 	s.jobsMu.RUnlock()
 
 	for _, id := range expire {
-		s.expireWaitingJob(s.g.Context(), id)
+		s.expireWaitingJob(ctx, id)
 	}
-	s.retryRemonitors(s.g.Context())
+	s.retryRemonitors(ctx)
 	for _, id := range prune {
 		s.pruneTerminalJob(id, now)
 	}

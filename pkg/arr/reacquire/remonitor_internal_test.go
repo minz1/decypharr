@@ -23,14 +23,14 @@ func TestRefusedRemonitorIsRetriedByMaintenance(t *testing.T) {
 	}
 
 	// Not yet: the backoff has not passed.
-	rig.service.maintainJobs()
+	rig.service.maintainJobs(t.Context())
 	if calls := fake.monitorRequests(); calls != 1 {
 		t.Fatalf("monitor requests before the backoff = %d, want 1", calls)
 	}
 
 	fake.setMonitorFailing(false)
 	rig.advance(remonitorBackoff + time.Second)
-	rig.service.maintainJobs()
+	rig.service.maintainJobs(t.Context())
 	paid, _ := rig.service.Job(rig.job.ID)
 	if record := fileDeleteOf(t, paid); !record.Remonitored {
 		t.Fatalf("journaled delete = %+v, want remonitored", record)
@@ -52,7 +52,7 @@ func TestPersistentRemonitorFailureIsSurfaced(t *testing.T) {
 
 	for range 2 * remonitorMaxAttempts {
 		rig.advance(2 * time.Hour)
-		rig.service.maintainJobs()
+		rig.service.maintainJobs(t.Context())
 	}
 	job, _ := rig.service.Job(rig.job.ID)
 	if record := fileDeleteOf(t, job); record.Remonitored || record.RemonitorAttempts != remonitorMaxAttempts {
@@ -111,7 +111,7 @@ func TestExpiryAfterAConfirmedDeleteWithoutASearchSearches(t *testing.T) {
 	}
 
 	rig.advance(waitingTimeout + time.Minute)
-	rig.service.maintainJobs()
+	rig.service.maintainJobs(t.Context())
 	expired, _ := rig.service.Job(rig.job.ID)
 	if expired.Status != StatusNeedsAttention || fake.searchCount() != 1 {
 		t.Fatalf("expired job = %s, searches = %d: %s", expired.Status, fake.searchCount(), expired.LastError)

@@ -48,6 +48,9 @@ type fakeSonarr struct {
 	// onCommand runs when a search command arrives, before it is served. A test sets it before it provokes the
 	// search it watches; the fake reads it without a lock.
 	onCommand func()
+	// onMonitor runs when a monitor toggle arrives, before it is served. Set before the toggle is provoked; the fake
+	// reads it without a lock.
+	onMonitor func(*http.Request)
 	// releases is what the interactive search returns; grabs counts the releases grabbed.
 	releases []map[string]any
 	grabs    int
@@ -257,6 +260,9 @@ func (fake *fakeSonarr) setMonitorFailing(failing bool) {
 }
 
 func (fake *fakeSonarr) monitor(w http.ResponseWriter, request *http.Request) {
+	if fake.onMonitor != nil {
+		fake.onMonitor(request)
+	}
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	fake.monitorCalls++

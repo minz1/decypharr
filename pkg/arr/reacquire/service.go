@@ -73,7 +73,7 @@ type Service struct {
 	jobsMu               sync.RWMutex
 	jobs                 map[string]Job
 	activeReacquisitions map[jobKey]string
-	// beforeMaintenanceCtx, when set, is called in completeJobFromIndex just before it reads the group's
+	// beforeMaintenanceCtx, when set, is called in completeJobFromIndex just before it reads the worker's
 	// context. It is a seam for tests that hold a public entry point in flight there while Close queues for the
 	// write lock; completeJobFromIndex takes no lock, so nothing may block there for good.
 	beforeMaintenanceCtx func()
