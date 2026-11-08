@@ -571,6 +571,7 @@ func (s *SABnzbd) addNZBURL(
 	}
 	// Download NZB content
 	filename, content, err := utils.DownloadFile(
+		ctx,
 		s.manager.FetchClient(),
 		url,
 		utils.WithUserAgent(s.settings.Get().NZBUserAgent),

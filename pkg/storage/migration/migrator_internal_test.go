@@ -1,20 +1,20 @@
 package migration
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
-// Stop cancels a running migration instead of waiting for it: Start used to
-// hold the lock Stop needs for the whole run.
-func TestStopCancelsRunningMigration(t *testing.T) {
+// A cancelled context stops a running migration: Start returns and no
+// further torrent migrates.
+func TestMigratorStartStopsWithCtx(t *testing.T) {
 	t.Parallel()
 	dataDir := t.TempDir()
 	debridDir := filepath.Join(dataDir, "cache", "realdebrid")
@@ -33,30 +33,28 @@ func TestStopCancelsRunningMigration(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
 	m := New(store, dataDir, zerolog.Nop())
-	stopped := make(chan error, 1)
 	calls := 0
 	m.beforeEach = func() {
 		calls++
-		if calls != 1 {
-			return
-		}
-		go func() { stopped <- m.Stop() }()
-		select {
-		case stopErr := <-stopped:
-			stopped <- stopErr
-		case <-time.After(5 * time.Second):
-			t.Error("Stop waited for the running migration")
+		if calls == 1 {
+			cancel()
 		}
 	}
 
-	if startErr := m.Start(); startErr != nil {
+	if startErr := m.Start(ctx); startErr != nil {
 		t.Fatal(startErr)
 	}
-	if stopErr := <-stopped; stopErr != nil {
-		t.Fatalf("Stop: %v", stopErr)
-	}
 	if calls != 1 {
-		t.Fatalf("migration went on for %d torrents after Stop, want it to stop after the first", calls-1)
+		t.Fatalf("migration went on for %d torrents after the cancel, want it to stop after the first", calls-1)
+	}
+	status, err := m.GetStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Running {
+		t.Fatal("status still Running after the cancelled migration returned")
 	}
 }

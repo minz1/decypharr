@@ -15,7 +15,6 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/hearsay"
 	"github.com/sirrobot01/decypharr/pkg/repair"
 	"github.com/sirrobot01/decypharr/pkg/storage"
-	"github.com/sirrobot01/decypharr/pkg/storage/migration"
 	"github.com/sirrobot01/decypharr/pkg/strm"
 	"github.com/sirrobot01/decypharr/pkg/usenet"
 )
@@ -38,11 +37,6 @@ func (m *Manager) Hearsay() *hearsay.Service {
 
 func (m *Manager) Scheduler() gocron.Scheduler {
 	return m.scheduler
-}
-
-// Migrator returns the migrator instance.
-func (m *Manager) Migrator() *migration.Migrator {
-	return m.migrator
 }
 
 // Strm returns the .strm reconciler. Created during init(), so callers can

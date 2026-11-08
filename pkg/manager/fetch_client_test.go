@@ -29,7 +29,7 @@ func TestFetchClientTrustsConfiguredCA(t *testing.T) {
 	}
 
 	mgr, _ := managertest.New(t, func(c *config.Config) { c.TLSCAFile = caFile })
-	_, body, err := utils.DownloadFile(mgr.FetchClient(), indexer.URL+"/get.nzb")
+	_, body, err := utils.DownloadFile(t.Context(), mgr.FetchClient(), indexer.URL+"/get.nzb")
 	if err != nil {
 		t.Fatalf("download from an indexer signed by tls_ca_file: %v", err)
 	}

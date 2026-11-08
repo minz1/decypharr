@@ -170,8 +170,13 @@ func NewDownloadClient(tlsConfig *tls.Config) *http.Client {
 
 // fetchWith GETs rawURL with client and returns the response only for 200
 // OK. The caller closes the body.
-func fetchWith(client *http.Client, rawURL string, options ...DownloadOptions) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, rawURL, nil)
+func fetchWith(
+	ctx context.Context,
+	client *http.Client,
+	rawURL string,
+	options ...DownloadOptions,
+) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -192,8 +197,13 @@ func fetchWith(client *http.Client, rawURL string, options ...DownloadOptions) (
 
 // DownloadFile fetches url with client and returns the server-suggested
 // filename and body.
-func DownloadFile(client *http.Client, url string, options ...DownloadOptions) (string, []byte, error) {
-	resp, err := fetchWith(client, url, options...)
+func DownloadFile(
+	ctx context.Context,
+	client *http.Client,
+	url string,
+	options ...DownloadOptions,
+) (string, []byte, error) {
+	resp, err := fetchWith(ctx, client, url, options...)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to download file: %w", err)
 	}
