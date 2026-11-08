@@ -14,6 +14,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/internal/nntp"
+	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/pkg/manager"
 	fuseconfig "github.com/sirrobot01/decypharr/pkg/mount/dfs/config"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/vfs/ranges"
@@ -73,6 +74,9 @@ const (
 
 // Downloaders coordinates multiple concurrent downloads to a cache item.
 type Downloaders struct {
+	// group is the item's task group: the kicker runs on it, and parentCtx is
+	// its context.
+	group         *task.Group
 	parentCtx     context.Context
 	ctx           context.Context
 	cancel        context.CancelFunc
@@ -133,8 +137,8 @@ type Downloaders struct {
 }
 
 // NewDownloaders creates a new download coordinator.
-func NewDownloaders(ctx context.Context, mgr Backend, item *CacheItem, cfg *fuseconfig.FuseConfig) *Downloaders {
-	parentCtx := ctx
+func NewDownloaders(g *task.Group, mgr Backend, item *CacheItem, cfg *fuseconfig.FuseConfig) *Downloaders {
+	parentCtx := g.Context()
 	ctx, cancel := context.WithCancel(parentCtx)
 	chunkSize := cfg.ChunkSize
 	if chunkSize <= 0 {
@@ -150,6 +154,7 @@ func NewDownloaders(ctx context.Context, mgr Backend, item *CacheItem, cfg *fuse
 	}
 
 	dls := &Downloaders{
+		group:         g,
 		parentCtx:     parentCtx,
 		ctx:           ctx,
 		cancel:        cancel,
@@ -1174,11 +1179,15 @@ func (dls *Downloaders) currentKickerInterval() time.Duration {
 // startKicker starts a background safety-net goroutine that periodically checks
 // waiters and handles idle timeout. The primary notification path is direct
 // kickWaiters() calls from cacheWriter.Write(); this ticker is only a fallback.
+//
+// A group that no longer runs refuses the kicker. The session then has no
+// kicker to wait for, so its sentinel is already closed and it stays idle.
+// The caller holds dls.mu, or has not shared dls yet.
 func (dls *Downloaders) startKicker() {
 	ctx := dls.ctx
 	done := make(chan struct{})
 	dls.kickerDone = done
-	go func() {
+	err := dls.group.Go("kicker", func(_ context.Context) error {
 		defer close(done)
 
 		interval := dls.currentKickerInterval()
@@ -1195,13 +1204,17 @@ func (dls *Downloaders) startKicker() {
 				}
 				dls.kickWaiters()
 				if dls.checkIdleTimeout() {
-					return
+					return nil
 				}
 			case <-ctx.Done():
-				return
+				return nil
 			}
 		}
-	}()
+	})
+	if err != nil {
+		close(done)
+		dls.idle = true
+	}
 }
 
 // downloader methods

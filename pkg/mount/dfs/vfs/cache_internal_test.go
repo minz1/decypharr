@@ -14,7 +14,7 @@ import (
 	fuseconfig "github.com/sirrobot01/decypharr/pkg/mount/dfs/config"
 )
 
-func newTestCache(cacheDir string) *Cache {
+func newTestCache(t testing.TB, cacheDir string) *Cache {
 	return &Cache{
 		config: &fuseconfig.FuseConfig{
 			CacheDir:    cacheDir,
@@ -22,6 +22,7 @@ func newTestCache(cacheDir string) *Cache {
 		},
 		items:  xsync.NewMap[string, *CacheItem](),
 		logger: zerolog.Nop(),
+		ctx:    t.Context(),
 	}
 }
 
@@ -34,7 +35,7 @@ func TestIsOverBudget_BugReproduction(t *testing.T) {
 
 	// Bug scenario: threshold=0 (from CacheDiskSize=0). Even with 100 GB "used",
 	// IsOverBudget must return false — no limit was configured, not "over budget".
-	c := newTestCache(cacheDir)
+	c := newTestCache(t, cacheDir)
 	c.totalSize.Store(100 * 1024 * 1024 * 1024)
 	if c.IsOverBudget() {
 		t.Fatal("threshold=0 must never report over budget (means no limit configured, not 'full')")
@@ -177,7 +178,7 @@ func TestScanDiskCandidates_DoesNotDeleteLegacyFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c := newTestCache(cacheDir)
+	c := newTestCache(t, cacheDir)
 	_ = c.scanDiskCandidates()
 
 	if _, err := os.Stat(metaPath); err != nil {
@@ -201,7 +202,7 @@ func TestScanDiskCandidates_RemovesOrphanMetadataWithCachedRanges(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	c := newTestCache(cacheDir)
+	c := newTestCache(t, cacheDir)
 	scan := c.scanDiskCandidates()
 
 	if len(scan.candidates) != 0 {
@@ -237,7 +238,7 @@ func TestDiskAdmissionReclaimsClosedCacheFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c := newTestCache(cacheDir)
+	c := newTestCache(t, cacheDir)
 	c.config.CacheExpiry = 0
 	p := buffer.NewPool(buffer.PoolConfig{
 		Name:             "test",
@@ -324,7 +325,7 @@ func TestEvictCandidates_RemovesOnlyTargetPair(t *testing.T) {
 		}
 	}
 
-	c := newTestCache(cacheDir)
+	c := newTestCache(t, cacheDir)
 	now := time.Now()
 	candidates := []candidateEntry{
 		{
@@ -387,7 +388,7 @@ func TestGetStatsReportsDiskItemsSeparatelyFromActiveItems(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c := newTestCache(cacheDir)
+	c := newTestCache(t, cacheDir)
 	c.config.CacheDiskSize = 100
 	c.evict()
 
@@ -424,7 +425,7 @@ func TestRunCleanupReportsResultStats(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c := newTestCache(cacheDir)
+	c := newTestCache(t, cacheDir)
 	stats := c.RunCleanup()
 
 	if got := stats["cleanup_status"]; got != "healthy" {
@@ -473,7 +474,7 @@ func TestPurgeCacheRemovesIdleDiskItemsAndSkipsActiveItems(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c := newTestCache(cacheDir)
+	c := newTestCache(t, cacheDir)
 	activeItem := &CacheItem{
 		cache:    c,
 		key:      "entry/active.mkv",
@@ -541,7 +542,7 @@ func TestOnBufferEvict_TotalSizeDrift(t *testing.T) {
 	// Each subtest owns its cache: they assert absolute totalSize values.
 	setup := func(t *testing.T) (*Cache, func() *CacheItem) {
 		t.Helper()
-		c := newTestCache(t.TempDir())
+		c := newTestCache(t, t.TempDir())
 		return c, func() *CacheItem { return &CacheItem{cache: c} }
 	}
 
@@ -625,10 +626,11 @@ func TestCleanupItems_ForceZeroOpenClosesRecentItems(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c := newTestCache(cacheDir)
+	c := newTestCache(t, cacheDir)
 	c.pool = pool
 	item := &CacheItem{
 		cache:    c,
+		group:    newTestGroup(t),
 		key:      "entry/video.mkv",
 		buf:      buf,
 		metaPath: dataPath + ".json",

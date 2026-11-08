@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -35,6 +36,10 @@ const (
 	// metaFlushDebounce is the minimum spacing between signal-driven
 	// metadata flushes; crash exposure stays bounded by metaFlushInterval.
 	metaFlushDebounce = 500 * time.Millisecond
+
+	// cacheCloseTimeout bounds the wait for an item's tasks to end when the
+	// item is closed, and Cache.Close's wait for all of them together.
+	cacheCloseTimeout = 3 * time.Second
 
 	// How long to keep unused cache items around before removing(no delete on disk, just remove from map and close file. Cleanup loop will remove from disk eventually.
 	itemIdleTimeout = 1 * time.Minute
@@ -82,6 +87,8 @@ type Cache struct {
 	// itemsGroup owns the cache items' tasks; closing it is how the cache
 	// refuses new items.
 	itemsGroup *task.Group
+	// itemSeq numbers the items' groups.
+	itemSeq atomic.Uint64
 
 	createGroup  singleflight.Group
 	threshold    int64
@@ -580,6 +587,7 @@ func (c *Cache) newItem(key string, entry *storage.Entry, filename string, fileS
 		}
 	}
 
+	group := c.itemsGroup.Child(strconv.FormatUint(c.itemSeq.Add(1), 10))
 	var item *CacheItem
 	buf, err := c.pool.NewBuffer(buffer.Config{
 		// RAM window in front of a sparse file: reads during playback are
@@ -606,6 +614,7 @@ func (c *Cache) newItem(key string, entry *storage.Entry, filename string, fileS
 		},
 	})
 	if err != nil {
+		group.Close()
 		return nil, fmt.Errorf("failed to create buffer: %w", err)
 	}
 
@@ -622,10 +631,22 @@ func (c *Cache) newItem(key string, entry *storage.Entry, filename string, fileS
 		metaPath: metaPath,
 		info:     info,
 		logger:   log.Rate(key),
+
+		group:       group,
+		metaFlushCh: make(chan struct{}, 1),
 	}
 
-	item.downloaders.Store(NewDownloaders(c.ctx, c.manager, item, c.config))
-	item.startMetaWriter()
+	// The writer reads item.buf, so the buffer and the downloaders exist
+	// before it starts.
+	dls := NewDownloaders(group, c.manager, item, c.config)
+	item.downloaders.Store(dls)
+	if goErr := group.Go("meta", item.metaWriter); goErr != nil {
+		item.downloaders.Store(nil)
+		_ = dls.Close(nil)
+		_ = buf.Close()
+		group.Close()
+		return nil, fmt.Errorf("cache item %s: %w", key, goErr)
+	}
 	item.markMetadataDirty()
 	return item, nil
 }
@@ -938,8 +959,11 @@ func (c *Cache) PurgeCache() map[string]any {
 func (c *Cache) Close() error {
 	c.itemsGroup.Close()
 
+	// One budget for every item's tasks to end in.
+	ctx, cancel := task.Detached(c.ctx, cacheCloseTimeout)
+	defer cancel()
 	c.items.Range(func(key string, item *CacheItem) bool {
-		if err := item.Close(); err != nil {
+		if err := item.closeWith(ctx); err != nil {
 			c.logger.Warn().Err(err).Str("key", key).Msg("failed to close cache item")
 		}
 		return true
@@ -1085,43 +1109,21 @@ type CacheItem struct {
 
 	metaMu sync.RWMutex
 
-	metaDirty   atomic.Bool
-	metaStateMu sync.RWMutex
+	metaDirty atomic.Bool
+	// group owns the item's tasks: the metadata writer and the downloaders'
+	// kicker. Stopping it is how the item's goroutines end.
+	group *task.Group
+	// metaFlushCh signals the metadata writer. It has capacity 1 and is never
+	// closed.
 	metaFlushCh chan struct{}
-	metaStopCh  chan struct{}
-	metaWG      sync.WaitGroup
 
 	closeOnce sync.Once
 	closeErr  error
 }
 
-func (item *CacheItem) startMetaWriter() {
-	flushCh := make(chan struct{}, 1)
-	stopCh := make(chan struct{})
-	item.metaStateMu.Lock()
-	item.metaFlushCh = flushCh
-	item.metaStopCh = stopCh
-	item.metaWG.Add(1)
-	item.metaStateMu.Unlock()
-	go item.metaWriterLoop(flushCh, stopCh)
-}
-
-func (item *CacheItem) stopMetaWriter() {
-	item.metaStateMu.Lock()
-	stopCh := item.metaStopCh
-	if stopCh == nil {
-		item.metaStateMu.Unlock()
-		return
-	}
-	item.metaStopCh = nil
-	item.metaFlushCh = nil
-	item.metaStateMu.Unlock()
-	close(stopCh)
-	item.metaWG.Wait()
-}
-
-func (item *CacheItem) metaWriterLoop(flushCh <-chan struct{}, stopCh <-chan struct{}) {
-	defer item.metaWG.Done()
+// metaWriter persists the item's metadata on a tick and on a debounced signal,
+// and once more when its group stops.
+func (item *CacheItem) metaWriter(ctx context.Context) error {
 	ticker := time.NewTicker(metaFlushInterval)
 	defer ticker.Stop()
 	var lastFlush time.Time
@@ -1130,7 +1132,7 @@ func (item *CacheItem) metaWriterLoop(flushCh <-chan struct{}, stopCh <-chan str
 		case <-ticker.C:
 			item.flushMetadata(false)
 			lastFlush = time.Now()
-		case <-flushCh:
+		case <-item.metaFlushCh:
 			// The signal fires per write; debounce the flush. The dirty
 			// flag stays set, so the ticker picks up whatever the debounce
 			// skipped.
@@ -1139,23 +1141,19 @@ func (item *CacheItem) metaWriterLoop(flushCh <-chan struct{}, stopCh <-chan str
 			}
 			item.flushMetadata(false)
 			lastFlush = time.Now()
-		case <-stopCh:
+		case <-ctx.Done():
 			item.flushMetadata(true)
-			return
+			return nil
 		}
 	}
 }
 
 func (item *CacheItem) markMetadataDirty() {
 	item.metaDirty.Store(true)
-	item.metaStateMu.RLock()
-	if item.metaFlushCh != nil {
-		select {
-		case item.metaFlushCh <- struct{}{}:
-		default:
-		}
+	select {
+	case item.metaFlushCh <- struct{}{}:
+	default:
 	}
-	item.metaStateMu.RUnlock()
 }
 
 func (item *CacheItem) flushMetadata(force bool) {
@@ -1405,6 +1403,16 @@ func (item *CacheItem) FindMissing(r ranges.Range) ranges.Range {
 // design — the user expects re-opens of a previously-cached file to hit
 // disk, not re-download).
 func (item *CacheItem) Close() error {
+	ctx, cancel := task.Detached(item.cache.ctx, cacheCloseTimeout)
+	defer cancel()
+	return item.closeWith(ctx)
+}
+
+// closeWith is Close on the caller's budget: ctx bounds the wait for the
+// item's tasks. The downloaders close first, the group stops (the metadata
+// writer's last flush included) before the buffer closes, and the final
+// flush runs last, so two flushes never write the temporary file together.
+func (item *CacheItem) closeWith(ctx context.Context) error {
 	item.closeOnce.Do(func() {
 		dls := item.downloaders.Swap(nil)
 
@@ -1414,7 +1422,9 @@ func (item *CacheItem) Close() error {
 			}
 		}
 
-		item.stopMetaWriter()
+		if err := item.group.Stop(ctx); err != nil && item.closeErr == nil {
+			item.closeErr = err
+		}
 
 		if item.buf != nil {
 			if err := item.buf.Close(); err != nil && item.closeErr == nil {

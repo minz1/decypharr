@@ -46,19 +46,23 @@ func newBenchItemWindow(tb testing.TB, fileSize, window int64) (*CacheItem, *Dow
 	cache := &Cache{
 		config: &fuseconfig.FuseConfig{},
 		logger: zerolog.Nop(),
+		ctx:    tb.Context(),
 	}
 	log := logger.NewRateLimitedLogger(logger.WithLogger(zerolog.Nop()))
+	group := newTestGroup(tb)
 	item := &CacheItem{
-		cache:    cache,
-		key:      "bench",
-		filename: "bench.bin",
-		buf:      buf,
-		metaPath: filepath.Join(dir, "data.json"),
-		info:     ItemInfo{Size: fileSize},
-		logger:   log.Rate("bench"),
+		cache:       cache,
+		group:       group,
+		metaFlushCh: make(chan struct{}, 1),
+		key:         "bench",
+		filename:    "bench.bin",
+		buf:         buf,
+		metaPath:    filepath.Join(dir, "data.json"),
+		info:        ItemInfo{Size: fileSize},
+		logger:      log.Rate("bench"),
 	}
 
-	dls := NewDownloaders(context.Background(), nil, item, &fuseconfig.FuseConfig{})
+	dls := NewDownloaders(group, nil, item, &fuseconfig.FuseConfig{})
 	// Pre-mark the stream as tracked so the read path never dereferences the
 	// nil manager.
 	dls.mu.Lock()
@@ -67,7 +71,9 @@ func newBenchItemWindow(tb testing.TB, fileSize, window int64) (*CacheItem, *Dow
 	dls.mu.Unlock()
 	item.downloaders.Store(dls)
 
-	item.startMetaWriter()
+	if err = group.Go("meta", item.metaWriter); err != nil {
+		tb.Fatal(err)
+	}
 	tb.Cleanup(func() {
 		// Drop the fake stream ID first — Close would otherwise try to
 		// unregister it with the nil manager.
@@ -75,9 +81,7 @@ func newBenchItemWindow(tb testing.TB, fileSize, window int64) (*CacheItem, *Dow
 		dls.streamID = ""
 		dls.streamTracked.Store(false)
 		dls.mu.Unlock()
-		dls.Close(nil)
-		item.stopMetaWriter()
-		_ = buf.Close()
+		_ = item.Close()
 	})
 	return item, dls
 }

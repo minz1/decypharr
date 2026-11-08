@@ -290,7 +290,7 @@ func TestIdleRestartStartsKickerBeforeOldOneClosesDone(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	dls := &Downloaders{ctx: ctx, cancel: cancel, idle: true}
+	dls := &Downloaders{group: newTestGroup(t), ctx: ctx, cancel: cancel, idle: true}
 	exiting := make(chan struct{}) // old kicker: decided to exit, done not yet closed
 	dls.kickerDone = exiting
 
