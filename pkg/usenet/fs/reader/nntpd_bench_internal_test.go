@@ -32,9 +32,35 @@ func benchModes() []benchMode {
 	return []benchMode{{"disk", false}, {"memory", true}}
 }
 
+// benchStack is what every reader of one sub-benchmark shares, as the readers
+// of a running service share one client, one set of pools and one scheduler.
+type benchStack struct {
+	client    *nntp.Client
+	segs      []SegmentMeta
+	pools     *Pools
+	scheduler *FetchScheduler
+}
+
 // newBenchStack builds a fake NNTP server carrying benchSegs segments of
-// Pattern data, and a client pointed at it.
-func newBenchStack(b *testing.B, cfg nntpd.Config) (*nntp.Client, []SegmentMeta) {
+// Pattern data, a client pointed at it, and the shared pools and scheduler.
+func newBenchStack(b *testing.B, cfg nntpd.Config) benchStack {
+	b.Helper()
+	client, segs := newBenchServer(b, cfg)
+	pools, _ := newTestPools(b, 256<<20)
+	scheduler, _, _ := newTestScheduler(b, newTestRoot(b), 8)
+	return benchStack{client: client, segs: segs, pools: pools, scheduler: scheduler}
+}
+
+// stopBenchReader stops sr and waits for its shutdown, so the next timed
+// iteration does not overlap the previous reader's teardown.
+func stopBenchReader(b *testing.B, sr *StreamingReader) {
+	b.Helper()
+	if err := sr.Stop(b.Context()); err != nil {
+		b.Fatal(err)
+	}
+}
+
+func newBenchServer(b *testing.B, cfg nntpd.Config) (*nntp.Client, []SegmentMeta) {
 	b.Helper()
 	srv, err := nntpd.New(cfg)
 	if err != nil {
@@ -73,21 +99,14 @@ func newBenchStack(b *testing.B, cfg nntpd.Config) (*nntp.Client, []SegmentMeta)
 	return client, segs
 }
 
-func newBenchReader(
-	b *testing.B,
-	client *nntp.Client,
-	segs []SegmentMeta,
-	memory bool,
-	diskPath string,
-) *StreamingReader {
+func newBenchReader(b *testing.B, stack benchStack, memory bool, diskPath string) *StreamingReader {
 	b.Helper()
 	retention := RetentionRewind
 	if memory {
 		retention = RetentionWindow
 	}
-	pools, _ := newTestPools(b, 256<<20)
-	scheduler, _, _ := newTestScheduler(b, newTestRoot(b), 8)
-	sr, err := NewStreamingReader(context.Background(), client, segs, WithPools(pools), WithFetchScheduler(scheduler),
+	sr, err := NewStreamingReader(context.Background(), stack.client, stack.segs,
+		WithPools(stack.pools), WithFetchScheduler(stack.scheduler),
 		WithDiskPath(diskPath),
 		WithMaxConnections(8),
 		WithPrefetchAhead(8),
@@ -128,7 +147,7 @@ func poolRAMMB(sr *StreamingReader) float64 {
 func BenchmarkColdStream(b *testing.B) {
 	for _, mode := range benchModes() {
 		b.Run(mode.name, func(b *testing.B) {
-			client, segs := newBenchStack(b, nntpd.Config{})
+			stack := newBenchStack(b, nntpd.Config{})
 			fileSize := benchSegSize * benchSegs
 			buf := make([]byte, 128*1024)
 
@@ -139,7 +158,7 @@ func BenchmarkColdStream(b *testing.B) {
 			for range b.N {
 				b.StopTimer()
 				dir := b.TempDir()
-				sr := newBenchReader(b, client, segs, mode.memory, dir)
+				sr := newBenchReader(b, stack, mode.memory, dir)
 				b.StartTimer()
 
 				for off := int64(0); off < fileSize; off += int64(len(buf)) {
@@ -155,7 +174,7 @@ func BenchmarkColdStream(b *testing.B) {
 				b.StopTimer()
 				peakPoolMB = max(peakPoolMB, poolRAMMB(sr))
 				peakDiskMB = max(peakDiskMB, diskAllocatedMB(dir))
-				_ = sr.Close()
+				stopBenchReader(b, sr)
 				b.StartTimer()
 			}
 			b.ReportMetric(peakPoolMB, "pool-ram-MB")
@@ -171,7 +190,7 @@ func BenchmarkConfiguredBodyPipelineDepth(b *testing.B) {
 	const prefetchAhead = benchSegs - 1
 	for _, depth := range []int{1, 2, 4} {
 		b.Run(fmt.Sprintf("depth%d", depth), func(b *testing.B) {
-			client, segs := newBenchStack(b, nntpd.Config{RTT: 30 * time.Millisecond})
+			stack := newBenchStack(b, nntpd.Config{RTT: 30 * time.Millisecond})
 			fileSize := benchSegSize * benchSegs
 			buf := make([]byte, 128*1024)
 
@@ -179,10 +198,8 @@ func BenchmarkConfiguredBodyPipelineDepth(b *testing.B) {
 			b.SetBytes(fileSize)
 			for b.Loop() {
 				b.StopTimer()
-				pools, _ := newTestPools(b, 256<<20)
-				scheduler, _, _ := newTestScheduler(b, newTestRoot(b), 8)
-				sr, err := NewStreamingReader(b.Context(), client, segs,
-					WithPools(pools), WithFetchScheduler(scheduler),
+				sr, err := NewStreamingReader(b.Context(), stack.client, stack.segs,
+					WithPools(stack.pools), WithFetchScheduler(stack.scheduler),
 					WithDiskPath(b.TempDir()),
 					WithMaxConnections(8),
 					WithPrefetchAhead(prefetchAhead),
@@ -197,9 +214,7 @@ func BenchmarkConfiguredBodyPipelineDepth(b *testing.B) {
 				readSequential(b, sr, buf, fileSize)
 
 				b.StopTimer()
-				if closeErr := sr.Close(); closeErr != nil {
-					b.Fatal(closeErr)
-				}
+				stopBenchReader(b, sr)
 				b.StartTimer()
 			}
 		})
@@ -211,7 +226,7 @@ func BenchmarkConfiguredBodyPipelineDepth(b *testing.B) {
 func BenchmarkOpenToFirstByte(b *testing.B) {
 	for _, mode := range benchModes() {
 		b.Run(mode.name, func(b *testing.B) {
-			client, segs := newBenchStack(b, nntpd.Config{})
+			stack := newBenchStack(b, nntpd.Config{})
 			buf := make([]byte, 64*1024)
 
 			b.ReportAllocs()
@@ -220,12 +235,12 @@ func BenchmarkOpenToFirstByte(b *testing.B) {
 				b.StopTimer()
 				dir := b.TempDir()
 				b.StartTimer()
-				sr := newBenchReader(b, client, segs, mode.memory, dir)
+				sr := newBenchReader(b, stack, mode.memory, dir)
 				if _, err := sr.ReadAt(buf, 0); err != nil {
 					b.Fatal(err)
 				}
 				b.StopTimer()
-				_ = sr.Close()
+				stopBenchReader(b, sr)
 				b.StartTimer()
 			}
 		})
@@ -251,7 +266,7 @@ func BenchmarkSeekLatency(b *testing.B) {
 }
 
 func benchmarkSeekLatency(b *testing.B, rtt time.Duration, memory bool) {
-	client, segs := newBenchStack(b, nntpd.Config{RTT: rtt})
+	stack := newBenchStack(b, nntpd.Config{RTT: rtt})
 	buf := make([]byte, 64*1024)
 
 	var durations []time.Duration
@@ -264,9 +279,9 @@ func benchmarkSeekLatency(b *testing.B, rtt time.Duration, memory bool) {
 		if visited == benchSegs {
 			b.StopTimer()
 			if sr != nil {
-				_ = sr.Close()
+				stopBenchReader(b, sr)
 			}
-			sr = newBenchReader(b, client, segs, memory, b.TempDir())
+			sr = newBenchReader(b, stack, memory, b.TempDir())
 			visited = 0
 			b.StartTimer()
 		}
@@ -280,7 +295,7 @@ func benchmarkSeekLatency(b *testing.B, rtt time.Duration, memory bool) {
 	}
 	b.StopTimer()
 	if sr != nil {
-		_ = sr.Close()
+		stopBenchReader(b, sr)
 	}
 	reportPercentiles(b, durations)
 }
@@ -311,13 +326,13 @@ func readSequential(b *testing.B, sr *StreamingReader, buf []byte, fileSize int6
 func BenchmarkWarmReread(b *testing.B) {
 	for _, mode := range benchModes() {
 		b.Run(mode.name, func(b *testing.B) {
-			client, segs := newBenchStack(b, nntpd.Config{})
+			stack := newBenchStack(b, nntpd.Config{})
 			fileSize := benchSegSize * benchSegs
 			buf := make([]byte, 128*1024)
 
 			dir := b.TempDir()
-			sr := newBenchReader(b, client, segs, mode.memory, dir)
-			defer sr.Close()
+			sr := newBenchReader(b, stack, mode.memory, dir)
+			defer stopBenchReader(b, sr)
 			readAll := func() {
 				for off := int64(0); off < fileSize; off += int64(len(buf)) {
 					if _, err := sr.ReadAt(buf[:min(int64(len(buf)), fileSize-off)], off); err != nil {
