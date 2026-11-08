@@ -74,6 +74,11 @@ type Manager struct {
 	client *rclone.Client
 	owner  *rcdOwner
 
+	// watchTable reports mount table changes until its ctx ends; readTable counts the FUSE entries at a path. The
+	// OS's by default (Linux: /proc/self/mountinfo; elsewhere both return errNoMountTable).
+	watchTable func(ctx context.Context, changed func()) error
+	readTable  func(path string) (int, error)
+
 	// mu guards Start against Stop. rcd, ops and sup are written once, in
 	// Start; the tasks started after that read them without the lock.
 	mu sync.Mutex
@@ -174,6 +179,8 @@ func (m *Manager) wire() {
 	if m.detach == nil {
 		m.detach = m.unmounter.Unmount
 	}
+	m.watchTable = watchMountTable
+	m.readTable = readMountTable
 	o.beforeStop = m.unmount
 	o.closeLog = m.closeLog
 	m.owner = o
@@ -200,7 +207,14 @@ func (m *Manager) Start(g *task.Group) error {
 	m.ops = g.Child("ops")
 	m.owner.group = m.rcd
 	// The supervisor exists before the owner can report rcd Ready to it.
-	m.sup = keyed.NewSingleton(m.ops, "supervisor", mountSupervisor{m: m}, keyed.Options[supMsg]{Logger: m.logger})
+	m.sup = keyed.NewSingleton(m.ops, "supervisor", mountSupervisor{m: m}, keyed.Options[supMsg]{
+		Logger:      m.logger,
+		Class:       supClass,
+		CoalesceKey: supCoalesce,
+	})
+	if err := m.ops.Go("mountinfo", m.runTableWatch); err != nil {
+		m.sendSupMsg(supMsg{kind: supWatchDown, err: fmt.Errorf("start the mount table watcher: %w", err)})
+	}
 
 	if err := m.rcd.Go("owner", m.owner.run); err != nil {
 		// The owner never ran, so nothing else ends this state.

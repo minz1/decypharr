@@ -24,6 +24,7 @@ func TestMountTransitionTable(t *testing.T) {
 			{From: mountMounting, To: mountWaiting},
 			{From: mountMounting, To: mountUnmounting},
 			{From: mountMounted, To: mountDegraded},
+			{From: mountMounted, To: mountMounting},
 			{From: mountMounted, To: mountWaiting},
 			{From: mountMounted, To: mountUnmounting},
 			{From: mountDegraded, To: mountDegraded},
