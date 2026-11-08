@@ -25,7 +25,7 @@ func (q *QBit) addMagnet(
 	callbackURL string,
 	rmTrackerUrls bool,
 ) error {
-	magnet, err := utils.GetMagnetFromURL(q.manager.FetchClient(), url, rmTrackerUrls)
+	magnet, err := utils.GetMagnetFromURL(ctx, q.manager.FetchClient(), url, rmTrackerUrls)
 	if err != nil {
 		return customerror.NewError(fmt.Errorf("error parsing magnet link: %w", err), http.StatusBadRequest, "invalid_magnet", false, false).
 			Permanent()

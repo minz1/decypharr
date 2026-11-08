@@ -3,6 +3,7 @@ package utils
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/base32"
 	"encoding/hex"
 	"errors"
@@ -62,11 +63,11 @@ func GetMagnetFromFile(file io.Reader, filePath string, rmTrackerUrls bool) (*Ma
 
 // GetMagnetFromURL resolves a magnet link, or downloads a .torrent over
 // HTTP(S) with client.
-func GetMagnetFromURL(client *http.Client, url string, rmTrackerUrls bool) (*Magnet, error) {
+func GetMagnetFromURL(ctx context.Context, client *http.Client, url string, rmTrackerUrls bool) (*Magnet, error) {
 	if strings.HasPrefix(url, "magnet:") {
 		return GetMagnetInfo(url, rmTrackerUrls)
 	} else if strings.HasPrefix(url, "http") {
-		return OpenMagnetHTTPURL(client, url, rmTrackerUrls)
+		return OpenMagnetHTTPURL(ctx, client, url, rmTrackerUrls)
 	}
 	return nil, fmt.Errorf("invalid url")
 }
@@ -139,7 +140,12 @@ func ReadMagnetFile(file io.Reader) (string, error) {
 
 // OpenMagnetHTTPURL downloads a .torrent file with client and converts it
 // to a Magnet.
-func OpenMagnetHTTPURL(client *http.Client, magnetLink string, rmTrackerUrls bool) (*Magnet, error) {
+func OpenMagnetHTTPURL(
+	ctx context.Context,
+	client *http.Client,
+	magnetLink string,
+	rmTrackerUrls bool,
+) (*Magnet, error) {
 	// Indexers often answer a torrent URL with a redirect to a magnet link,
 	// which an HTTP client cannot follow: stop there and use the link.
 	stopAtMagnet := *client
@@ -152,7 +158,7 @@ func OpenMagnetHTTPURL(client *http.Client, magnetLink string, rmTrackerUrls boo
 		}
 		return nil
 	}
-	resp, err := fetchWith(&stopAtMagnet, magnetLink)
+	resp, err := fetchWith(ctx, &stopAtMagnet, magnetLink)
 	if redirect, ok := errors.AsType[*magnetRedirectError](err); ok {
 		return GetMagnetInfo(redirect.link, rmTrackerUrls)
 	}

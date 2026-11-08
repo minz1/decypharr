@@ -632,7 +632,7 @@ func (m *Manager) handleJobError(job *Job, err error) {
 	}
 }
 
-func (m *Manager) migrate() {
+func (m *Manager) migrate(ctx context.Context) {
 	// Check if migration has already been done
 	status, err := m.migrator.GetStatus()
 	if err == nil && !status.Running && status.Completed > 0 {
@@ -665,7 +665,7 @@ func (m *Manager) migrate() {
 		Msg("Found cache files, starting automatic migration...")
 
 	// Start migration with backup
-	if startErr := m.migrator.Start(); startErr != nil {
+	if startErr := m.migrator.Start(ctx); startErr != nil {
 		m.logger.Error().Err(startErr).Msg("Failed to start automatic migration")
 		return
 	}

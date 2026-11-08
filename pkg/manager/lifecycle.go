@@ -208,7 +208,7 @@ func (m *Manager) startSequence(ctx context.Context) error {
 		Msg("Starting manager")
 
 	// run the migration process
-	m.migrate()
+	m.migrate(ctx)
 
 	if err := m.startRequired(ctx, m.reacquireSvc, "Arr reacquisition service"); err != nil {
 		return err

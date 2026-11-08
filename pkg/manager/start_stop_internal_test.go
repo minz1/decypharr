@@ -7,7 +7,7 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// A stop that arrives while the start task is still running (it is blocked in migrate(), which ignores the stop)
+// A stop that arrives while the start task is still running (it is blocked in a startup step that has not seen the stop yet)
 // must not close storage under it: storage closes only once the start task has returned.
 func TestStorageClosesOnlyAfterTheStartTaskReturns(t *testing.T) {
 	t.Parallel()

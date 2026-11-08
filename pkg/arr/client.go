@@ -95,9 +95,6 @@ func (s *Service) do(
 		}
 		body = bytes.NewReader(data)
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	req, err := http.NewRequestWithContext(ctx, method, url, body)
 	if err != nil {
 		return nil, err

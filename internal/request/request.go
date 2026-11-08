@@ -170,16 +170,6 @@ func (c *Client) MakeRequest(req *http.Request) ([]byte, error) {
 	return bodyBytes, nil
 }
 
-// Get issues an unbounded-context GET; prefer Do with a request context.
-func (c *Client) Get(url string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("creating GET request: %w", err)
-	}
-
-	return c.Do(req)
-}
-
 // retryAfterBackoff extends DefaultBackoff with Retry-After header support.
 // When a 429 response carries a Retry-After header decypharr waits exactly as
 // long as the server requests (capped at maxWait) instead of using jittered

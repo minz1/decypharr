@@ -24,8 +24,7 @@ type Migrator struct {
 	backupPath string
 	logger     zerolog.Logger
 	mu         sync.RWMutex
-	cancelFunc context.CancelFunc
-	ctx        context.Context
+	running    bool
 	// beforeEach, when set by a test, runs before each torrent migrates.
 	beforeEach func()
 }
@@ -43,18 +42,17 @@ func New(storage *storage.Storage, dataDir string, log zerolog.Logger) *Migrator
 	}
 }
 
-// Start migrates the cache files and returns when the migration ends or
-// Stop cancels it. mu is not held while it runs, so Stop can.
-func (m *Migrator) Start() error {
+// Start migrates the cache files and returns when the migration ends or ctx
+// is cancelled. mu is not held while it runs.
+func (m *Migrator) Start(ctx context.Context) error {
 	m.mu.Lock()
-	if m.cancelFunc != nil {
+	if m.running {
 		m.mu.Unlock()
 		return errors.New("migration is already running")
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	m.ctx, m.cancelFunc = ctx, cancel
+	m.running = true
 	m.mu.Unlock()
-	defer m.finish(ctx)
+	defer m.finish()
 
 	cachedTorrents, err := m.loadCacheTorrents()
 	if err != nil {
@@ -80,36 +78,11 @@ func (m *Migrator) Start() error {
 	return nil
 }
 
-// finish unregisters the run begun with ctx, unless Stop already did.
-func (m *Migrator) finish(ctx context.Context) {
+// finish marks the run as over.
+func (m *Migrator) finish() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.ctx == ctx && m.cancelFunc != nil {
-		m.cancelFunc()
-		m.cancelFunc = nil
-	}
-}
-
-// Stop stops the migration process.
-func (m *Migrator) Stop() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if m.cancelFunc != nil {
-		m.cancelFunc()
-		m.cancelFunc = nil
-	}
-
-	// Update status
-	status, err := m.storage.GetMigrationStatus()
-	if err != nil {
-		return err
-	}
-
-	status.Running = false
-	status.UpdatedAt = time.Now()
-
-	return m.storage.SaveMigrationStatus(status)
+	m.running = false
 }
 
 // GetStatus returns the current migration status.
@@ -166,7 +139,10 @@ func (m *Migrator) runMigration(ctx context.Context, cachedTorrents map[string][
 		}
 		select {
 		case <-ctx.Done():
-			m.logger.Info().Msg("Migration stopped by user")
+			m.logger.Info().Msg("Migration stopped")
+			status.Running = false
+			status.UpdatedAt = time.Now()
+			_ = m.storage.SaveMigrationStatus(status)
 			return
 		default:
 		}
