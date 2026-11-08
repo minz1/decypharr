@@ -98,7 +98,8 @@ func buildServices(gen *generation, cfg *config.Config, logs *logger.Factory) (f
 	installMount(mgr, cfg, logs)
 	gate := manager.NewMountGate(logs.New("mount"))
 	mgr.SetMountGate(gate)
-	srv := server.New(mgr, store, logs)
+	shares := &shareStates{}
+	srv := server.New(mgr, store, logs, shares.accessState())
 	srv.SetRestartFunc(gen.RequestRestart)
 	srv.SetTaskSnapshot(root.Snapshot)
 	srv.SetStopContext(gen.stopContext)
@@ -118,14 +119,17 @@ func buildServices(gen *generation, cfg *config.Config, logs *logger.Factory) (f
 	if err = startMountGroup(root, mm, mgr.IsReady(), gate, slice, srv.Stopped(), mountLog); err != nil {
 		return cleanup, err
 	}
-	return cleanup, startShares(root.Child("share"), mgr, cfg, logs)
+	return cleanup, startShares(root.Child("share"), shares, mgr, cfg, logs)
 }
 
 // startShares starts NFS and SMB, when enabled, over one shared export. The
 // export is created first so it stops last: NFS and SMB export the same
 // catalog through one cache, and a second cache over the same directory would
-// delete the first one's files.
-func startShares(g *task.Group, mgr *manager.Manager, cfg *config.Config, logs *logger.Factory) error {
+// delete the first one's files. Each started server's group is recorded in
+// states for the stats collector.
+func startShares(
+	g *task.Group, states *shareStates, mgr *manager.Manager, cfg *config.Config, logs *logger.Factory,
+) error {
 	if !cfg.NFS.Enabled && !cfg.SMB.Enabled {
 		return nil
 	}
@@ -135,13 +139,17 @@ func startShares(g *task.Group, mgr *manager.Manager, cfg *config.Config, logs *
 	}
 	if cfg.NFS.Enabled {
 		nfs := share.NewNFS(mgr, export, cfg.NFS, cfg.Dir(), logs.New("nfs"))
-		if err = g.Child("nfs").GoCritical("serve", nfs.Start); err != nil {
+		group := g.Child("nfs")
+		states.setNFS(group)
+		if err = group.GoCritical("serve", nfs.Start); err != nil {
 			return err
 		}
 	}
 	if cfg.SMB.Enabled {
 		smb := share.NewSMB(mgr, export, cfg.SMB, logs.New("smb"))
-		if err = g.Child("smb").GoCritical("serve", smb.Start); err != nil {
+		group := g.Child("smb")
+		states.setSMB(group)
+		if err = group.GoCritical("serve", smb.Start); err != nil {
 			return err
 		}
 	}

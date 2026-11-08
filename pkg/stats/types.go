@@ -37,6 +37,9 @@ type AccessStats struct {
 type NFSAccess struct {
 	Enabled bool   `json:"enabled"`
 	Port    uint16 `json:"port"`
+	// State is disabled, running, failed or stopped; omitted when the
+	// collector has no state source.
+	State string `json:"state,omitempty"`
 }
 
 type SMBAccess struct {
@@ -44,6 +47,9 @@ type SMBAccess struct {
 	Port      uint16 `json:"port"`
 	ShareName string `json:"share_name"`
 	Username  string `json:"username"`
+	// State is disabled, running, failed or stopped; omitted when the
+	// collector has no state source.
+	State string `json:"state,omitempty"`
 }
 
 type WebDAVAccess struct {

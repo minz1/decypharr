@@ -23,7 +23,7 @@ func TestShutdownFitsItsSliceOfTheStopBudget(t *testing.T) {
 		cfg.BindAddress = "127.0.0.1"
 		cfg.Port = port
 	})
-	srv := New(mgr, store, logger.Discard())
+	srv := New(mgr, store, logger.Discard(), nil)
 	srv.shutdownGrace = 50 * time.Millisecond
 	srv.drainSlice = 300 * time.Millisecond
 	// The stop deadline is far away: only the server's own slice can end the wait.

@@ -69,7 +69,7 @@ func TestStartReportsListenFailure(t *testing.T) {
 		cfg.BindAddress = "127.0.0.1"
 		cfg.Port = port
 	})
-	srv := New(mgr, store, logger.Discard())
+	srv := New(mgr, store, logger.Discard(), nil)
 	g := newGroup(t)
 	if err = srv.Start(g); err == nil {
 		t.Fatal("Start returned nil for a busy port")
@@ -87,7 +87,7 @@ func TestStartServesUntilItsGroupStops(t *testing.T) {
 		cfg.BindAddress = "127.0.0.1"
 		cfg.Port = "0"
 	})
-	srv := New(mgr, store, logger.Discard())
+	srv := New(mgr, store, logger.Discard(), nil)
 	g := newGroup(t)
 	if err := srv.Start(g); err != nil {
 		t.Fatal(err)
@@ -111,7 +111,7 @@ func TestStartOnAStoppedGroupRefuses(t *testing.T) {
 		cfg.BindAddress = "127.0.0.1"
 		cfg.Port = "0"
 	})
-	srv := New(mgr, store, logger.Discard())
+	srv := New(mgr, store, logger.Discard(), nil)
 	g := newGroup(t)
 	stopGroup(t, g)
 	if err := srv.Start(g); err == nil {
@@ -127,7 +127,7 @@ func TestStartFinishesInFlightResponseOnStop(t *testing.T) {
 		cfg.BindAddress = "127.0.0.1"
 		cfg.Port = port
 	})
-	srv := New(mgr, store, logger.Discard())
+	srv := New(mgr, store, logger.Discard(), nil)
 	g := newGroup(t)
 	release := make(chan struct{})
 	srv.router = chi.NewRouter()
@@ -188,7 +188,7 @@ func TestStartClosesStreamsThatOutliveShutdownGrace(t *testing.T) {
 		cfg.BindAddress = "127.0.0.1"
 		cfg.Port = port
 	})
-	srv := New(mgr, store, logger.Discard())
+	srv := New(mgr, store, logger.Discard(), nil)
 	srv.shutdownGrace = 100 * time.Millisecond
 	g := newGroup(t)
 	srv.router = chi.NewRouter()
@@ -228,7 +228,7 @@ func TestStoppedClosesWhenServeReturns(t *testing.T) {
 		cfg.BindAddress = "127.0.0.1"
 		cfg.Port = "0"
 	})
-	srv := New(mgr, store, logger.Discard())
+	srv := New(mgr, store, logger.Discard(), nil)
 	stopped := srv.Stopped()
 	g := newGroup(t)
 	if err := srv.Start(g); err != nil {

@@ -105,7 +105,9 @@ type Server struct {
 
 // New builds the HTTP front end for one service generation. Settings that
 // apply without a restart are read live from store.
-func New(mgr *manager.Manager, store *config.Store, logs *logger.Factory) *Server {
+//
+// access reports the NFS and SMB run states for /api/stats; nil leaves them out.
+func New(mgr *manager.Manager, store *config.Store, logs *logger.Factory, access stats.AccessState) *Server {
 	l := logs.New("http")
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
@@ -122,7 +124,7 @@ func New(mgr *manager.Manager, store *config.Store, logs *logger.Factory) *Serve
 		SameSite: http.SameSiteLaxMode,
 	}
 
-	statsCollector := stats.New(mgr, store, logs.New("stats"))
+	statsCollector := stats.New(mgr, store, logs.New("stats"), access)
 
 	s := &Server{
 		config:  store,

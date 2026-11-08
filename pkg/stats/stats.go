@@ -19,11 +19,26 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
+// The states an access entry reports.
+const (
+	ShareRunning  = "running"
+	ShareFailed   = "failed"
+	ShareStopped  = "stopped"
+	ShareDisabled = "disabled"
+)
+
+// AccessState reports the NFS and SMB servers' run states (ShareRunning,
+// ShareFailed or ShareStopped) as the owner of their task groups sees them.
+// The collector reports ShareDisabled itself for a server the configuration
+// turns off.
+type AccessState func() (nfs, smb string)
+
 // Collector owns the cached stats snapshot and the HTTP handler.
 type Collector struct {
 	config *config.Store
 	mgr    *manager.Manager
 	logger zerolog.Logger
+	access AccessState
 
 	mu       sync.RWMutex
 	snapshot *Snapshot
@@ -43,9 +58,11 @@ const (
 	bytesPerMB      = 1 << 20
 )
 
-// New creates a Collector. Run starts its background refresh.
-func New(mgr *manager.Manager, cfg *config.Store, log zerolog.Logger) *Collector {
+// New creates a Collector. Run starts its background refresh. A nil access
+// leaves the NFS and SMB state out of the snapshot.
+func New(mgr *manager.Manager, cfg *config.Store, log zerolog.Logger, access AccessState) *Collector {
 	c := &Collector{
+		access:       access,
 		mgr:          mgr,
 		config:       cfg,
 		logger:       log,
@@ -145,7 +162,7 @@ func (c *Collector) collect() *Snapshot {
 	snap.Mount = c.collectMount(cfg)
 
 	// --- Access servers (WebDAV) ---
-	snap.Access = collectAccess(cfg)
+	snap.Access = collectAccess(cfg, c.access)
 
 	// --- Usenet ---
 	if c.mgr.HasUsenet() {
@@ -304,8 +321,18 @@ func (c *Collector) getProfiles() map[string]*debridTypes.Profile {
 
 // collectAccess reports the network file servers (WebDAV, NFS, SMB) and how
 // to reach them. Ports/paths only — the host is supplied by the dashboard.
-func collectAccess(cfg *config.Config) AccessStats {
+func collectAccess(cfg *config.Config, access AccessState) AccessStats {
 	webdavPath := strings.TrimSuffix(cfg.URLBase, "/") + "/webdav"
+	var nfsState, smbState string
+	if access != nil {
+		nfsState, smbState = access()
+		if !cfg.NFS.Enabled {
+			nfsState = ShareDisabled
+		}
+		if !cfg.SMB.Enabled {
+			smbState = ShareDisabled
+		}
+	}
 	return AccessStats{
 		WebDAV: WebDAVAccess{
 			Enabled:      !cfg.DisableWebDav,
@@ -316,12 +343,14 @@ func collectAccess(cfg *config.Config) AccessStats {
 		NFS: NFSAccess{
 			Enabled: cfg.NFS.Enabled,
 			Port:    cfg.NFS.Port,
+			State:   nfsState,
 		},
 		SMB: SMBAccess{
 			Enabled:   cfg.SMB.Enabled,
 			Port:      cfg.SMB.Port,
 			ShareName: cfg.SMB.ShareName,
 			Username:  cfg.SMB.Username,
+			State:     smbState,
 		},
 	}
 }
