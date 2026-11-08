@@ -64,7 +64,6 @@ func (m *Manager) createClient(dc config.Debrid) (debrid.Client, error) {
 		},
 		Logger:    m.logs.New(dc.Name),
 		TLSConfig: m.tlsConfig,
-		Shutdown:  m.work.Context,
 	}
 
 	switch dc.Provider {

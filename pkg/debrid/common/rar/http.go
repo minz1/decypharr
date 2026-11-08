@@ -38,6 +38,7 @@ func NewHTTPFile(ctx context.Context, tlsConfig *tls.Config, url string, maxRetr
 
 func (f *HTTPFile) doWithRetry(ctx context.Context, operation func() error) error {
 	return retry.Do(
+		ctx,
 		func() error {
 			err := operation()
 			if err != nil && (!errors.Is(err, ErrNetworkError) || ctx.Err() != nil) {

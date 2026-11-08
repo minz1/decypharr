@@ -34,7 +34,6 @@ func TestCheckStatusStopsPollingOnShutdown(t *testing.T) {
 	defer server.Close()
 	ctx, cancel := context.WithCancel(t.Context())
 	options := mkvOnly()
-	options.Shutdown = func() context.Context { return ctx }
 	provider := &RealDebrid{
 		Host:         server.URL,
 		client:       request.New(zerolog.Nop(), nil, request.WithMaxRetries(0)),
@@ -45,7 +44,7 @@ func TestCheckStatusStopsPollingOnShutdown(t *testing.T) {
 	time.AfterFunc(50*time.Millisecond, cancel)
 
 	start := time.Now()
-	_, err := provider.CheckStatus(t.Context(), &types.Torrent{ID: "id"})
+	_, err := provider.CheckStatus(ctx, &types.Torrent{ID: "id"})
 
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Fatalf("CheckStatus took %s to notice the shutdown", elapsed)

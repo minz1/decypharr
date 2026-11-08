@@ -1,6 +1,7 @@
 package retry
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -83,8 +84,9 @@ func Unrecoverable(err error) error {
 }
 
 // Do executes fn up to Attempts times until it succeeds or returns an
-// unrecoverable error, and returns the last error.
-func Do(fn func() error, opts ...Option) error {
+// unrecoverable error, and returns the last error. A ctx that ends while Do
+// waits out a delay returns that error, wrapped.
+func Do(ctx context.Context, fn func() error, opts ...Option) error {
 	if fn == nil {
 		return fmt.Errorf("retry: nil function")
 	}
@@ -104,12 +106,33 @@ func Do(fn func() error, opts ...Option) error {
 		if attempt >= cfg.attempts || (cfg.retryIf != nil && !cfg.retryIf(err)) {
 			return err
 		}
-		time.Sleep(delay)
+		if waitErr := sleep(ctx, delay); waitErr != nil {
+			return fmt.Errorf("retry stopped waiting: %w", waitErr)
+		}
 		if cfg.delayType == BackOffDelay {
 			delay *= 2
 		}
 		if cfg.maxDelay > 0 {
 			delay = min(delay, cfg.maxDelay)
 		}
+	}
+}
+
+// sleep waits out d, or returns ctx's error as soon as ctx ends.
+func sleep(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	if ctx == nil {
+		time.Sleep(d)
+		return nil
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
