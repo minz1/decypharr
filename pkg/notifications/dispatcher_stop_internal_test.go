@@ -48,6 +48,8 @@ func (h *stopOnHandler) Handle(
 	}
 	h.mu.Unlock()
 	if fire {
+		// Blocking inside Handle breaks the keyed contract for real handlers; it
+		// is safe here only because the stop runs on its own goroutine and ends ctx.
 		go func() {
 			stopGroup(h.t, h.group)
 			close(h.stopped)
@@ -177,7 +179,7 @@ func TestStoppingRunnerRefusesTheRetrySend(t *testing.T) {
 			t.Fatalf("phase before the retry = %v, want waiting", got)
 		}
 		h.arm(msgRetryDue)
-		time.Sleep(time.Second)
+		time.Sleep(time.Second) // fake time: to the first retry's due time
 		<-h.stopped
 		synctest.Wait()
 		if n := len(f.sent()); n != 1 {
