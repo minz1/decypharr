@@ -196,28 +196,38 @@ func checkSeasonAfterMountStop(t *testing.T, m *Manager, season *storage.Entry, 
 	}
 }
 
-// A delete that races the mount stop still removes the season it cut short.
+// A season cut short by the mount stop, whose pack's delete had already
+// cancelled the action, is removed; the pack is neither completed nor failed.
 func TestSeasonPackDeleteDuringMountStopRemovesSeason(t *testing.T) {
 	t.Parallel()
-	synctest.Test(t, func(t *testing.T) {
-		m, entry, torrent, children := newSeasonPackTest(t, "Show.S01-S02")
-		m.mountGate = NewMountGate(zerolog.Nop())
-		m.downloader.mountWaitTimeout = 2 * time.Minute
+	m, entry, _, _ := newSeasonPackTest(t, "Show.S01-S02")
+	m.mountGate = NewMountGate(zerolog.Nop())
+	m.mountGate.markStopping()
+	ctx, cancel := context.WithCancelCause(t.Context())
+	cancel(errEntryDeleted)
+	multi, seasons := m.downloader.detectMultiSeason(entry)
+	if !multi || len(seasons) != 2 {
+		t.Fatalf("detectMultiSeason = %v, %d seasons; want a two-season pack", multi, len(seasons))
+	}
 
-		m.processNewTorrent(entry, torrent)
-		synctest.Wait()
-		m.mountGate.markStopping()
-		if err := m.queue.Delete(entry.InfoHash, true, nil); err != nil {
-			t.Fatal(err)
-		}
-		synctest.Wait()
+	err := m.downloader.downloadSeasons(ctx, entry, seasons, m.GetTorrentMountPath(entry))
 
-		for _, child := range children {
-			if m.queue.Contains(child.InfoHash) {
-				t.Errorf("season %s still queued after its pack was deleted", child.Name)
-			}
+	if !errors.Is(err, ErrMountStopping) {
+		t.Fatalf("err = %v, want ErrMountStopping", err)
+	}
+	for _, season := range seasons {
+		if m.queue.Contains(season.InfoHash) {
+			t.Errorf("season %s still queued after its pack was deleted", season.Name)
 		}
-	})
+	}
+	saved, getErr := m.queue.GetTorrent(entry.InfoHash)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if saved.IsComplete || saved.State == storage.EntryStateError || saved.LastError != "" {
+		t.Fatalf("pack completed or failed: complete %v, state %v, error %q",
+			saved.IsComplete, saved.State, saved.LastError)
+	}
 }
 
 // statusCounter is a provider that counts status checks.

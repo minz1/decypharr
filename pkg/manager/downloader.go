@@ -120,7 +120,8 @@ func (d *Downloader) downloadSeasons(
 		if err := d.process(ctx, result, mountPath); err != nil {
 			if errors.Is(err, ErrMountStopping) {
 				// The season and the pack stay queued for the next generation; the pack is not complete.
-				// A delete that raced the stop still removes the season it cut short.
+				// A pack delete whose cancel landed before this return also removes the season; one that
+				// lands after it finds the action gone and leaves the season queued (as on a work cancel).
 				d.removeSeasonOfDeletedPack(ctx, torrent, result)
 				return err
 			}
