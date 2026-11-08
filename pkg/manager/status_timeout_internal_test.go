@@ -2,6 +2,7 @@ package manager
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -76,7 +77,7 @@ func TestQueuedTorrentStatusTimeoutKeepsEntryUntilWaitIsExhausted(t *testing.T) 
 			provider := &failingStatusProvider{err: customerror.ErrProviderStatusTimeout}
 			m, entry := queuedEntryAddedAt(t, provider, tc.placementAddedAt, tc.entryAt)
 
-			m.processQueuedTorrent(entry)
+			m.processQueuedTorrent(t.Context(), entry)
 
 			saved, err := m.queue.GetTorrent(entry.InfoHash)
 			if err != nil {
@@ -117,14 +118,16 @@ func (*submitProvider) Config() config.Debrid {
 	return config.Debrid{Name: "provider", Provider: "provider"}
 }
 func (*submitProvider) Logger() zerolog.Logger { return zerolog.Nop() }
-func (*submitProvider) SubmitMagnet(t *types.Torrent) (*types.Torrent, error) {
+func (*submitProvider) SubmitMagnet(_ context.Context, t *types.Torrent) (*types.Torrent, error) {
 	t.ID = "id"
 	return t, nil
 }
 
-func (p *submitProvider) CheckStatus(t *types.Torrent) (*types.Torrent, error) { return t, p.err }
+func (p *submitProvider) CheckStatus(_ context.Context, t *types.Torrent) (*types.Torrent, error) {
+	return t, p.err
+}
 
-func (p *submitProvider) DeleteTorrent(string) error {
+func (p *submitProvider) DeleteTorrent(context.Context, string) error {
 	p.deleted.Add(1)
 	return nil
 }
@@ -145,6 +148,7 @@ func TestSubmitToProviderStatusTimeoutQueuesTheTorrent(t *testing.T) {
 			m := withTestConfig(t, &Manager{logger: zerolog.Nop(), clients: xsync.NewMap[string, debrid.Client]()})
 
 			torrent, submitErr := m.submitToProvider(
+				t.Context(),
 				provider,
 				&types.Torrent{InfoHash: "hash", Name: "name"},
 				&ImportRequest{Magnet: &utils.Magnet{InfoHash: "hash", Name: "name"}},
@@ -197,7 +201,7 @@ func TestUnconvertedMagnetFailsItsGrabAfterTheConversionWait(t *testing.T) {
 				"provider": {Provider: "provider", ID: "id", AddedAt: time.Now().Add(-tc.age)},
 			}
 
-			m.processQueuedTorrent(entry)
+			m.processQueuedTorrent(t.Context(), entry)
 
 			if got := len(fake.fails) == 1; got != tc.wantFail {
 				t.Fatalf("FailDownload calls = %v, want failed = %v", fake.fails, tc.wantFail)
@@ -233,7 +237,7 @@ func TestAProviderWaitIsLoggedOncePerChange(t *testing.T) {
 	m.logger = zerolog.New(&logs)
 
 	for range 3 {
-		m.processQueuedTorrent(entry)
+		m.processQueuedTorrent(t.Context(), entry)
 	}
 	if got := warnLines(&logs); got != 1 {
 		t.Fatalf("three passes on a converting magnet logged %d WARNs, want 1:\n%s", got, logs.String())
@@ -243,8 +247,8 @@ func TestAProviderWaitIsLoggedOncePerChange(t *testing.T) {
 	}
 
 	provider.err = customerror.ErrProviderStatusTimeout // converted, now waiting on something else
-	m.processQueuedTorrent(entry)
-	m.processQueuedTorrent(entry)
+	m.processQueuedTorrent(t.Context(), entry)
+	m.processQueuedTorrent(t.Context(), entry)
 	if got := warnLines(&logs); got != 2 {
 		t.Fatalf("a changed wait logged %d WARNs in all, want 2:\n%s", got, logs.String())
 	}
@@ -252,7 +256,7 @@ func TestAProviderWaitIsLoggedOncePerChange(t *testing.T) {
 	provider.err = notConverted()
 	entry.GetActiveProvider().AddedAt = time.Now().Add(-maxConversionWait - time.Minute)
 	logs.Reset()
-	m.processQueuedTorrent(entry)
+	m.processQueuedTorrent(t.Context(), entry)
 	if !strings.Contains(logs.String(), `"level":"error"`) || !strings.Contains(logs.String(), `"waited":`) {
 		t.Fatalf("the give-up logged no ERROR with the wait's age:\n%s", logs.String())
 	}

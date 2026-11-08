@@ -22,9 +22,9 @@ import (
 )
 
 type LinkFetcher func(ctx context.Context, account *Account, id string, file *types.File) (types.DownloadLink, error)
-type LinkDeleter func(account *Account, dl types.DownloadLink) error
-type LinksFetcher func(account *Account) ([]types.DownloadLink, error)
-type SyncFunc func(account *Account) error
+type LinkDeleter func(ctx context.Context, account *Account, dl types.DownloadLink) error
+type LinksFetcher func(ctx context.Context, account *Account) ([]types.DownloadLink, error)
+type SyncFunc func(ctx context.Context, account *Account) error
 
 type Manager struct {
 	debrid              string
@@ -263,7 +263,7 @@ func (m *Manager) StoreDownloadLink(downloadLink types.DownloadLink) {
 	account.storeLink(downloadLink)
 }
 
-func (m *Manager) DeleteDownloadLink(downloadLink types.DownloadLink, deleter LinkDeleter) error {
+func (m *Manager) DeleteDownloadLink(ctx context.Context, downloadLink types.DownloadLink, deleter LinkDeleter) error {
 	if downloadLink.Link == "" || downloadLink.Token == "" {
 		return fmt.Errorf("invalid download link")
 	}
@@ -271,7 +271,7 @@ func (m *Manager) DeleteDownloadLink(downloadLink types.DownloadLink, deleter Li
 	if err != nil || account == nil {
 		return fmt.Errorf("account not found for download link")
 	}
-	return account.DeleteLink(downloadLink, deleter)
+	return account.DeleteLink(ctx, downloadLink, deleter)
 }
 
 func (m *Manager) Stats() []map[string]any {
@@ -295,11 +295,11 @@ func (m *Manager) Stats() []map[string]any {
 	return stats
 }
 
-func (m *Manager) RefreshLinks(fetcher LinksFetcher) error {
+func (m *Manager) RefreshLinks(ctx context.Context, fetcher LinksFetcher) error {
 	wgPool := pool.New().WithMaxGoroutines(max(1, m.accounts.Size())).WithErrors()
 	m.accounts.Range(func(_ string, acc *Account) bool {
 		wgPool.Go(func() error {
-			links, err := fetcher(acc)
+			links, err := fetcher(ctx, acc)
 			if err != nil {
 				m.logger.Error().
 					Err(err).
@@ -318,7 +318,7 @@ func (m *Manager) RefreshLinks(fetcher LinksFetcher) error {
 	return wgPool.Wait()
 }
 
-func (m *Manager) Sync(syncer SyncFunc) {
+func (m *Manager) Sync(ctx context.Context, syncer SyncFunc) {
 	workers := m.accounts.Size()
 	if workers == 0 {
 		return
@@ -326,7 +326,7 @@ func (m *Manager) Sync(syncer SyncFunc) {
 	wgPool := pool.New().WithMaxGoroutines(workers)
 	m.accounts.Range(func(_ string, acc *Account) bool {
 		wgPool.Go(func() {
-			if err := syncer(acc); err != nil {
+			if err := syncer(ctx, acc); err != nil {
 				m.logger.Error().
 					Err(err).
 					Str("debrid", m.debrid).

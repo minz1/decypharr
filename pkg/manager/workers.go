@@ -20,17 +20,17 @@ func (m *Manager) runInitialCalls() error {
 			return nil
 		}),
 		m.runWork("process-queued-entries", m.processQueuedEntries),
-		m.runWork("sync-accounts", m.syncAccounts),
+		m.runWorkCtx("sync-accounts", m.syncAccounts),
 	)
 }
 
-func (m *Manager) syncAccounts() {
+func (m *Manager) syncAccounts(ctx context.Context) {
 	// Sync accounts for all debrids
 	m.clients.Range(func(_ string, debridClient debrid.Client) bool {
 		if debridClient == nil {
 			return true
 		}
-		debridClient.SyncAccounts()
+		debridClient.SyncAccounts(ctx)
 		return true
 	})
 }
@@ -106,7 +106,7 @@ func (m *Manager) addDebridJobs(ctx context.Context, debridName string, debridCl
 		}
 	})
 	m.scheduleEvery(ctx, m.scheduler, config.DefaultAccountSyncInterval, debridName+"-account-syncTorrents",
-		debridClient.SyncAccounts)
+		func() { debridClient.SyncAccounts(ctx) })
 }
 
 func (m *Manager) schedulePrune(ctx context.Context) {

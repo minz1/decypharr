@@ -26,14 +26,14 @@ type incompleteProvider struct {
 	debrid.Client
 }
 
-func (incompleteProvider) GetTorrent(id string) (*types.Torrent, error) {
+func (incompleteProvider) GetTorrent(_ context.Context, id string) (*types.Torrent, error) {
 	return &types.Torrent{
 		ID: id, Debrid: "provider", InfoHash: "0123456789012345678901234567890123456789",
 		Files: map[string]types.File{"video.mkv": {Name: "video.mkv"}},
 	}, nil
 }
 
-func (incompleteProvider) UpdateTorrent(*types.Torrent) error { return nil }
+func (incompleteProvider) UpdateTorrent(context.Context, *types.Torrent) error { return nil }
 
 // The link service dereferences the refresher's entry; an incomplete provider
 // torrent must hand back the stored entry, never (nil, nil).
@@ -66,7 +66,7 @@ func TestRefreshTorrentIncompleteReturnsStoredEntry(t *testing.T) {
 		t.Fatal(addErr)
 	}
 
-	refreshed, err := m.refreshTorrent(entry.InfoHash)
+	refreshed, err := m.refreshTorrent(t.Context(), entry.InfoHash)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ type countingStatusProvider struct {
 	checks atomic.Int64
 }
 
-func (c *countingStatusProvider) CheckStatus(torrent *types.Torrent) (*types.Torrent, error) {
+func (c *countingStatusProvider) CheckStatus(_ context.Context, torrent *types.Torrent) (*types.Torrent, error) {
 	c.checks.Add(1)
 	return torrent, nil
 }
@@ -141,14 +141,14 @@ type failingStatusProvider struct {
 	deleted atomic.Int64
 }
 
-func (f *failingStatusProvider) CheckStatus(torrent *types.Torrent) (*types.Torrent, error) {
+func (f *failingStatusProvider) CheckStatus(_ context.Context, torrent *types.Torrent) (*types.Torrent, error) {
 	if f.status != "" {
 		torrent.Status = f.status
 	}
 	return torrent, f.err
 }
 
-func (f *failingStatusProvider) DeleteTorrent(string) error {
+func (f *failingStatusProvider) DeleteTorrent(context.Context, string) error {
 	f.deleted.Add(1)
 	return nil
 }
@@ -189,7 +189,7 @@ func TestQueuedTorrentSurvivesTransientStatusErrors(t *testing.T) {
 			if addErr := m.queue.Add(entry); addErr != nil {
 				t.Fatal(addErr)
 			}
-			m.processQueuedTorrent(entry)
+			m.processQueuedTorrent(t.Context(), entry)
 			saved, err := m.queue.GetTorrent(entry.InfoHash)
 			if err != nil {
 				t.Fatal(err)
@@ -211,13 +211,13 @@ type removedDuringPollProvider struct {
 	err     error
 }
 
-func (p *removedDuringPollProvider) CheckStatus(torrent *types.Torrent) (*types.Torrent, error) {
+func (p *removedDuringPollProvider) CheckStatus(_ context.Context, torrent *types.Torrent) (*types.Torrent, error) {
 	p.onCheck()
 	torrent.Status = types.TorrentStatusDownloading
 	return torrent, p.err
 }
 
-func (*removedDuringPollProvider) DeleteTorrent(string) error { return nil }
+func (*removedDuringPollProvider) DeleteTorrent(context.Context, string) error { return nil }
 
 // An entry the arr removes while its status check is in flight stays removed: no error record, no failed grab.
 func TestQueuedTorrentRemovedDuringStatusCheckStaysRemoved(t *testing.T) {
@@ -253,7 +253,7 @@ func TestQueuedTorrentRemovedDuringStatusCheckStaysRemoved(t *testing.T) {
 			if addErr := m.queue.Add(entry); addErr != nil {
 				t.Fatal(addErr)
 			}
-			m.processQueuedTorrent(entry)
+			m.processQueuedTorrent(t.Context(), entry)
 			if m.queue.Contains(entry.InfoHash) {
 				t.Fatal("the removed entry was written back")
 			}
@@ -270,7 +270,7 @@ type deletedDuringPollProvider struct {
 	pollFailed               atomic.Bool
 }
 
-func (p *deletedDuringPollProvider) CheckStatus(*types.Torrent) (*types.Torrent, error) {
+func (p *deletedDuringPollProvider) CheckStatus(context.Context, *types.Torrent) (*types.Torrent, error) {
 	close(p.checking)
 	select {
 	case <-p.gone:
@@ -280,7 +280,7 @@ func (p *deletedDuringPollProvider) CheckStatus(*types.Torrent) (*types.Torrent,
 	}
 }
 
-func (p *deletedDuringPollProvider) DeleteTorrent(string) error {
+func (p *deletedDuringPollProvider) DeleteTorrent(context.Context, string) error {
 	close(p.gone)
 	<-p.pollDone
 	p.pollFailed.Store(p.failed())
@@ -320,7 +320,7 @@ func TestRemoveQueuedDuringStatusCheckFailsNothing(t *testing.T) {
 	}
 	go func() {
 		defer close(provider.pollDone)
-		m.processQueuedTorrent(entry)
+		m.processQueuedTorrent(t.Context(), entry)
 	}()
 	wait := func(ch chan struct{}, what string) {
 		select {
@@ -353,14 +353,14 @@ func (*removedDuringSubmitProvider) Config() config.Debrid {
 	return config.Debrid{Name: "provider", Provider: "provider"}
 }
 func (*removedDuringSubmitProvider) Logger() zerolog.Logger { return zerolog.Nop() }
-func (p *removedDuringSubmitProvider) SubmitMagnet(t *types.Torrent) (*types.Torrent, error) {
+func (p *removedDuringSubmitProvider) SubmitMagnet(_ context.Context, t *types.Torrent) (*types.Torrent, error) {
 	p.submitted()
 	return &types.Torrent{
 		ID: "provider-id", Debrid: "provider", InfoHash: t.InfoHash, Name: t.Name,
 		Status: types.TorrentStatusDownloading, Files: map[string]types.File{},
 	}, nil
 }
-func (*removedDuringSubmitProvider) CheckStatus(t *types.Torrent) (*types.Torrent, error) {
+func (*removedDuringSubmitProvider) CheckStatus(_ context.Context, t *types.Torrent) (*types.Torrent, error) {
 	return t, nil
 }
 

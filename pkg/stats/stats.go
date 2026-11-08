@@ -60,7 +60,13 @@ const (
 
 // New creates a Collector. Run starts its background refresh. A nil access
 // leaves the NFS and SMB state out of the snapshot.
-func New(mgr *manager.Manager, cfg *config.Store, log zerolog.Logger, access AccessState) *Collector {
+func New(
+	ctx context.Context,
+	mgr *manager.Manager,
+	cfg *config.Store,
+	log zerolog.Logger,
+	access AccessState,
+) *Collector {
 	c := &Collector{
 		access:       access,
 		mgr:          mgr,
@@ -70,7 +76,7 @@ func New(mgr *manager.Manager, cfg *config.Store, log zerolog.Logger, access Acc
 		profileTTL:   profileTTL,
 	}
 	// Build an initial snapshot synchronously so the first request is served immediately.
-	c.snapshot = c.collect()
+	c.snapshot = c.collect(ctx)
 	return c
 }
 
@@ -88,8 +94,8 @@ func (c *Collector) Snapshot() *Snapshot {
 }
 
 // Refresh rebuilds and stores a fresh snapshot immediately.
-func (c *Collector) Refresh() *Snapshot {
-	snap := c.collect()
+func (c *Collector) Refresh(ctx context.Context) *Snapshot {
+	snap := c.collect(ctx)
 	c.mu.Lock()
 	c.snapshot = snap
 	c.mu.Unlock()
@@ -113,7 +119,7 @@ func (c *Collector) loop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			snap := c.collect()
+			snap := c.collect(ctx)
 			c.mu.Lock()
 			c.snapshot = snap
 			c.mu.Unlock()
@@ -122,7 +128,7 @@ func (c *Collector) loop(ctx context.Context) {
 }
 
 // collect builds a full Snapshot from all subsystems.
-func (c *Collector) collect() *Snapshot {
+func (c *Collector) collect(ctx context.Context) *Snapshot {
 	var memStats runtime.MemStats
 	runtime.ReadMemStats(&memStats)
 
@@ -156,7 +162,7 @@ func (c *Collector) collect() *Snapshot {
 	}
 
 	// --- Debrids ---
-	snap.Debrids = c.collectDebrids(cfg)
+	snap.Debrids = c.collectDebrids(ctx, cfg)
 
 	// --- Mount ---
 	snap.Mount = c.collectMount(cfg)
@@ -228,14 +234,14 @@ func (c *Collector) collect() *Snapshot {
 }
 
 // collectDebrids gathers debrid stats with cached profiles.
-func (c *Collector) collectDebrids(cfg *config.Config) []debridTypes.Stats {
+func (c *Collector) collectDebrids(ctx context.Context, cfg *config.Config) []debridTypes.Stats {
 	torrentCount, err := c.mgr.GetTorrentsCount()
 	if err != nil {
 		c.logger.Error().Err(err).Msg("Failed to get torrents count for debrid stats")
 		torrentCount = 0
 	}
 
-	profiles := c.getProfiles()
+	profiles := c.getProfiles(ctx)
 
 	result := make([]debridTypes.Stats, 0)
 	c.mgr.Clients().Range(func(debridName string, client debrid.Client) bool {
@@ -282,7 +288,7 @@ func (c *Collector) collectDebrids(cfg *config.Config) []debridTypes.Stats {
 }
 
 // getProfiles returns cached debrid profiles, refreshing if stale.
-func (c *Collector) getProfiles() map[string]*debridTypes.Profile {
+func (c *Collector) getProfiles(ctx context.Context) map[string]*debridTypes.Profile {
 	c.profileMu.RLock()
 	if time.Since(c.profileFetched) < c.profileTTL && len(c.profileCache) > 0 {
 		defer c.profileMu.RUnlock()
@@ -296,7 +302,7 @@ func (c *Collector) getProfiles() map[string]*debridTypes.Profile {
 		if client == nil {
 			return true
 		}
-		profile, err := client.GetProfile()
+		profile, err := client.GetProfile(ctx)
 		if err != nil {
 			c.logger.Error().Err(err).Str("debrid", name).Msg("Failed to get debrid profile")
 			// Use stale cache entry if available

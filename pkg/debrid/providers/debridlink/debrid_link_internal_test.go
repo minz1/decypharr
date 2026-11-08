@@ -1,6 +1,7 @@
 package debridlink
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -40,7 +41,7 @@ func TestTorrentResponses(t *testing.T) {
 			}
 			provider.Host = server.URL
 			for _, list := range []bool{false, true} {
-				torrent, fetchErr := fetchTorrent(provider, list)
+				torrent, fetchErr := fetchTorrent(t.Context(), provider, list)
 				if test.wantError {
 					if fetchErr == nil {
 						t.Fatalf("list=%v: invalid envelope accepted", list)
@@ -57,11 +58,11 @@ func TestTorrentResponses(t *testing.T) {
 }
 
 // fetchTorrent reads torrent "torrent" through the list or the info endpoint.
-func fetchTorrent(provider *DebridLink, list bool) (*types.Torrent, error) {
+func fetchTorrent(ctx context.Context, provider *DebridLink, list bool) (*types.Torrent, error) {
 	if !list {
-		return provider.GetTorrent("torrent")
+		return provider.GetTorrent(ctx, "torrent")
 	}
-	torrents, _, err := provider.getTorrents(1, pageSize)
+	torrents, _, err := provider.getTorrents(ctx, 1, pageSize)
 	if err != nil || len(torrents) != 1 {
 		return nil, err
 	}
@@ -114,7 +115,7 @@ func TestGetTorrentReportsGoneAsNotFound(t *testing.T) {
 				t.Fatal(err)
 			}
 			provider.Host = server.URL
-			_, err = provider.GetTorrent("torrent")
+			_, err = provider.GetTorrent(t.Context(), "torrent")
 			if got := errors.Is(err, customerror.ErrTorrentNotFound); got != test.gone || err == nil {
 				t.Fatalf("err=%v, want not-found=%v", err, test.gone)
 			}

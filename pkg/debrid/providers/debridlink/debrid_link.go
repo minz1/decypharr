@@ -112,7 +112,12 @@ func (dl *DebridLink) Logger() zerolog.Logger {
 }
 
 // doGet performs a GET request and unmarshals the response.
-func (dl *DebridLink) doGet(endpoint string, queryParams map[string]string, result any) (int, error) {
+func (dl *DebridLink) doGet(
+	ctx context.Context,
+	endpoint string,
+	queryParams map[string]string,
+	result any,
+) (int, error) {
 	u, err := url.Parse(dl.Host + endpoint)
 	if err != nil {
 		return 0, err
@@ -126,14 +131,14 @@ func (dl *DebridLink) doGet(endpoint string, queryParams map[string]string, resu
 		u.RawQuery = q.Encode()
 	}
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, u.String(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return 0, err
 	}
 	return common.DoJSON(dl.client, req, result)
 }
 
-func (dl *DebridLink) IsAvailable(hashes []string) (map[string]bool, error) {
+func (dl *DebridLink) IsAvailable(ctx context.Context, hashes []string) (map[string]bool, error) {
 	result := make(map[string]bool)
 
 	for _, validHashes := range common.HashBatches(hashes, pageSize) {
@@ -141,7 +146,7 @@ func (dl *DebridLink) IsAvailable(hashes []string) (map[string]bool, error) {
 		endpoint := fmt.Sprintf("/seedbox/cached/%s", hashStr)
 		var data AvailableResponse
 
-		httpStatus, err := dl.doGet(endpoint, nil, &data)
+		httpStatus, err := dl.doGet(ctx, endpoint, nil, &data)
 		if err != nil {
 			return result, fmt.Errorf("check availability: %w", err)
 		}
@@ -161,11 +166,11 @@ func (dl *DebridLink) IsAvailable(hashes []string) (map[string]bool, error) {
 	return result, nil
 }
 
-func (dl *DebridLink) GetTorrent(torrentID string) (*types.Torrent, error) {
+func (dl *DebridLink) GetTorrent(ctx context.Context, torrentID string) (*types.Torrent, error) {
 	endpoint := fmt.Sprintf("/seedbox/%s", torrentID)
 	var res torrentInfo
 
-	httpStatus, err := dl.doGet(endpoint, nil, &res)
+	httpStatus, err := dl.doGet(ctx, endpoint, nil, &res)
 	if err != nil {
 		return nil, err
 	}
@@ -215,10 +220,10 @@ func (dl *DebridLink) GetTorrent(torrentID string) (*types.Torrent, error) {
 	return torrent, nil
 }
 
-func (dl *DebridLink) UpdateTorrent(t *types.Torrent) error {
+func (dl *DebridLink) UpdateTorrent(ctx context.Context, t *types.Torrent) error {
 	var res torrentInfo
 
-	httpStatus, err := dl.doGet("/seedbox/list", map[string]string{"ids": t.ID}, &res)
+	httpStatus, err := dl.doGet(ctx, "/seedbox/list", map[string]string{"ids": t.ID}, &res)
 	if err != nil {
 		return err
 	}
@@ -286,7 +291,7 @@ func (dl *DebridLink) UpdateTorrent(t *types.Torrent) error {
 	return nil
 }
 
-func (dl *DebridLink) SubmitMagnet(t *types.Torrent) (*types.Torrent, error) {
+func (dl *DebridLink) SubmitMagnet(ctx context.Context, t *types.Torrent) (*types.Torrent, error) {
 	payload := map[string]string{"url": t.Magnet.Link}
 	var res SubmitTorrentInfo
 
@@ -296,7 +301,7 @@ func (dl *DebridLink) SubmitMagnet(t *types.Torrent) (*types.Torrent, error) {
 	}
 	body := bytes.NewReader(dt)
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, dl.Host+"/seedbox/add", body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, dl.Host+"/seedbox/add", body)
 	if err != nil {
 		return nil, err
 	}
@@ -362,8 +367,8 @@ func (dl *DebridLink) SubmitMagnet(t *types.Torrent) (*types.Torrent, error) {
 	return t, nil
 }
 
-func (dl *DebridLink) CheckStatus(torrent *types.Torrent) (*types.Torrent, error) {
-	if err := dl.UpdateTorrent(torrent); err != nil {
+func (dl *DebridLink) CheckStatus(ctx context.Context, torrent *types.Torrent) (*types.Torrent, error) {
+	if err := dl.UpdateTorrent(ctx, torrent); err != nil {
 		return torrent, err
 	}
 	switch torrent.Status {
@@ -380,10 +385,10 @@ func (dl *DebridLink) CheckStatus(torrent *types.Torrent) (*types.Torrent, error
 	return torrent, fmt.Errorf("torrent: %s has error", torrent.Name)
 }
 
-func (dl *DebridLink) DeleteTorrent(torrentID string) error {
+func (dl *DebridLink) DeleteTorrent(ctx context.Context, torrentID string) error {
 	endpoint := fmt.Sprintf("/seedbox/%s/remove", torrentID)
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodDelete, dl.Host+endpoint, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, dl.Host+endpoint, nil)
 	if err != nil {
 		return err
 	}
@@ -429,18 +434,20 @@ func (dl *DebridLink) GetDownloadUncached() bool {
 	return dl.DownloadUncached
 }
 
-func (dl *DebridLink) GetTorrents() ([]*types.Torrent, error) {
+func (dl *DebridLink) GetTorrents(ctx context.Context) ([]*types.Torrent, error) {
 	page := 0
 	perPage := pageSize
 	torrents := make([]*types.Torrent, 0)
-	var fetchErr error
 	for {
 		// Pagination follows the provider's page size; unfinished torrents
 		// are filtered out of t, so an all-unfinished page must not stop it.
-		t, seen, err := dl.getTorrents(page, perPage)
+		t, seen, err := dl.getTorrents(ctx, page, perPage)
+		if err == nil {
+			err = ctx.Err()
+		}
 		if err != nil {
-			fetchErr = err
-			break
+			// A listing is whole or an error, never a partial list.
+			return nil, err
 		}
 		if seen == 0 {
 			break
@@ -448,20 +455,17 @@ func (dl *DebridLink) GetTorrents() ([]*types.Torrent, error) {
 		torrents = append(torrents, t...)
 		page++
 	}
-	if fetchErr != nil {
-		return torrents, fetchErr
-	}
 	return torrents, nil
 }
 
-func (dl *DebridLink) fetchDownloadLinks(account *account.Account) ([]types.DownloadLink, error) {
+func (dl *DebridLink) fetchDownloadLinks(ctx context.Context, account *account.Account) ([]types.DownloadLink, error) {
 	links := make([]types.DownloadLink, 0)
 	limit := pageSize
 	page := 0
 	for {
-		data, seen, err := dl._fetchDownloadLinks(account, page, limit)
+		data, seen, err := dl._fetchDownloadLinks(ctx, account, page, limit)
 		if err != nil {
-			return links, err
+			return nil, err
 		}
 		links = append(links, data...)
 		// Expired links are filtered out of data; paginate on the raw count.
@@ -476,13 +480,14 @@ func (dl *DebridLink) fetchDownloadLinks(account *account.Account) ([]types.Down
 // _fetchDownloadLinks returns the unexpired links on one page and the number
 // of entries the page contained before filtering.
 func (dl *DebridLink) _fetchDownloadLinks(
+	ctx context.Context,
 	account *account.Account,
 	page, limit int,
 ) ([]types.DownloadLink, int, error) {
 	links := make([]types.DownloadLink, 0)
 
 	req, err := http.NewRequestWithContext(
-		context.Background(),
+		ctx,
 		http.MethodGet,
 		fmt.Sprintf("%s/downloader/list?page=%d&perPage=%d", dl.Host, page, limit),
 		nil,
@@ -536,13 +541,13 @@ func (dl *DebridLink) _fetchDownloadLinks(
 	return links, len(data), nil
 }
 
-func (dl *DebridLink) RefreshDownloadLinks() error {
-	return dl.accountsManager.RefreshLinks(dl.fetchDownloadLinks)
+func (dl *DebridLink) RefreshDownloadLinks(ctx context.Context) error {
+	return dl.accountsManager.RefreshLinks(ctx, dl.fetchDownloadLinks)
 }
 
 // getTorrents returns the finished torrents on one page and the number of
 // entries the page contained before filtering.
-func (dl *DebridLink) getTorrents(page, perPage int) ([]*types.Torrent, int, error) {
+func (dl *DebridLink) getTorrents(ctx context.Context, page, perPage int) ([]*types.Torrent, int, error) {
 	torrents := make([]*types.Torrent, 0)
 	var res torrentInfo
 
@@ -551,7 +556,7 @@ func (dl *DebridLink) getTorrents(page, perPage int) ([]*types.Torrent, int, err
 		"perPage": strconv.Itoa(perPage),
 	}
 
-	httpStatus, err := dl.doGet("/seedbox/list", params, &res)
+	httpStatus, err := dl.doGet(ctx, "/seedbox/list", params, &res)
 	if err != nil {
 		return torrents, 0, err
 	}
@@ -636,20 +641,23 @@ func (dl *DebridLink) CheckFile(ctx context.Context, _, link string) error {
 	return nil
 }
 
-func (dl *DebridLink) GetAvailableSlots() (int, error) {
-	// AllDebrid does not provide available slots info
+func (dl *DebridLink) GetAvailableSlots(ctx context.Context) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	// DebridLink does not provide available slots info
 	return config.DefaultAvailableSlots, nil
 }
 
 // GetProfile returns the account profile, fetched once and then cached.
-func (dl *DebridLink) GetProfile() (*types.Profile, error) {
-	return dl.profile.Get(0, dl.fetchProfile)
+func (dl *DebridLink) GetProfile(ctx context.Context) (*types.Profile, error) {
+	return dl.profile.Get(0, func() (*types.Profile, error) { return dl.fetchProfile(ctx) })
 }
 
-func (dl *DebridLink) fetchProfile() (*types.Profile, error) {
+func (dl *DebridLink) fetchProfile(ctx context.Context) (*types.Profile, error) {
 	var res UserInfo
 
-	httpStatus, err := dl.doGet("/account/infos", nil, &res)
+	httpStatus, err := dl.doGet(ctx, "/account/infos", nil, &res)
 	if err != nil {
 		return nil, err
 	}
@@ -686,18 +694,22 @@ func (dl *DebridLink) AccountManager() *account.Manager {
 	return dl.accountsManager
 }
 
-func (dl *DebridLink) syncAccount(*account.Account) error {
-	// Currently no account-specific data to sync
-	return nil
+func (dl *DebridLink) syncAccount(ctx context.Context, _ *account.Account) error {
+	// Currently no account-specific data to sync; an ended ctx is still reported, so Sync does not count it as a success.
+	return ctx.Err()
 }
 
-func (dl *DebridLink) SyncAccounts() {
-	dl.accountsManager.Sync(dl.syncAccount)
+func (dl *DebridLink) SyncAccounts(ctx context.Context) {
+	dl.accountsManager.Sync(ctx, dl.syncAccount)
 }
 
-func (dl *DebridLink) deleteDownloadLink(account *account.Account, downloadLink types.DownloadLink) error {
+func (dl *DebridLink) deleteDownloadLink(
+	ctx context.Context,
+	account *account.Account,
+	downloadLink types.DownloadLink,
+) error {
 	deleteURL := fmt.Sprintf("%s/downloader/%s/remove", dl.Host, downloadLink.ID)
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodDelete, deleteURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, deleteURL, nil)
 	if err != nil {
 		return err
 	}
@@ -716,8 +728,8 @@ func (dl *DebridLink) deleteDownloadLink(account *account.Account, downloadLink 
 	return nil
 }
 
-func (dl *DebridLink) DeleteLink(downloadLink types.DownloadLink) error {
-	return dl.accountsManager.DeleteDownloadLink(downloadLink, dl.deleteDownloadLink)
+func (dl *DebridLink) DeleteLink(ctx context.Context, downloadLink types.DownloadLink) error {
+	return dl.accountsManager.DeleteDownloadLink(ctx, downloadLink, dl.deleteDownloadLink)
 }
 
 // SpeedTest measures API latency and download speed using cached links.
@@ -728,7 +740,7 @@ func (dl *DebridLink) SpeedTest(ctx context.Context) types.SpeedTestResult {
 	}
 
 	start := time.Now()
-	httpStatus, err := dl.doGet("/account/infos", nil, nil)
+	httpStatus, err := dl.doGet(ctx, "/account/infos", nil, nil)
 	latency := time.Since(start)
 
 	if err != nil {

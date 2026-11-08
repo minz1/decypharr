@@ -110,11 +110,11 @@ func (a *Account) storeLink(dl types.DownloadLink) {
 	slicedLink := a.sliceFileLink(dl.Link)
 	a.links.Store(slicedLink, dl)
 }
-func (a *Account) DeleteLink(link types.DownloadLink, deleter LinkDeleter) error {
+func (a *Account) DeleteLink(ctx context.Context, link types.DownloadLink, deleter LinkDeleter) error {
 	slicedLink := a.sliceFileLink(link.Link)
 	a.links.Delete(slicedLink)
 	if deleter != nil {
-		return deleter(a, link)
+		return deleter(ctx, a, link)
 	}
 	return nil
 }

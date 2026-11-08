@@ -19,7 +19,7 @@ func TestDebugTasksListsRunningTasksBehindAuth(t *testing.T) {
 		cfg.UseAuth = true
 		cfg.Auth = &config.Auth{TokenOnly: true, APIToken: "debug-token"}
 	})
-	server := New(mgr, store, logger.Discard(), nil)
+	server := New(t.Context(), mgr, store, logger.Discard(), nil)
 	server.SetTaskSnapshot(func() []task.Info {
 		return []task.Info{{Path: "generation/http:serve"}}
 	})

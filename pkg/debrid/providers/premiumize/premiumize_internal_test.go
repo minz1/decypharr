@@ -48,7 +48,7 @@ func TestGetTorrentsAssignsStableUniqueHashesWithoutMagnetSources(t *testing.T) 
 		options: types.ProviderOptions{ValidateFile: func(string, int64) error { return nil }},
 	}
 
-	first, err := pm.GetTorrents()
+	first, err := pm.GetTorrents(t.Context())
 	if err != nil {
 		t.Fatalf("GetTorrents() error = %v", err)
 	}
@@ -65,7 +65,7 @@ func TestGetTorrentsAssignsStableUniqueHashesWithoutMagnetSources(t *testing.T) 
 		t.Fatalf("GetTorrents() hash lengths = %d, %d; want 40", len(first[0].InfoHash), len(first[1].InfoHash))
 	}
 
-	second, err := pm.GetTorrents()
+	second, err := pm.GetTorrents(t.Context())
 	if err != nil {
 		t.Fatalf("second GetTorrents() error = %v", err)
 	}
@@ -97,7 +97,7 @@ func TestAvailabilityRejectsIncompleteResponses(t *testing.T) {
 	}))
 	defer server.Close()
 	pm := &Premiumize{Host: server.URL, client: request.New(zerolog.Nop(), nil, request.WithMaxRetries(0))}
-	result, err := pm.IsAvailable([]string{"first", "second"})
+	result, err := pm.IsAvailable(t.Context(), []string{"first", "second"})
 	if err == nil || len(result) != 0 {
 		t.Fatalf("incomplete response = %v, %v", result, err)
 	}

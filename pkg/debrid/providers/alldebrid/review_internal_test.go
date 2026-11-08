@@ -38,7 +38,7 @@ func TestFetchedLinkUsesAccountToken(t *testing.T) {
 	if dl.Token != "download-key" {
 		t.Fatalf("token = %q, want the fetching account's token", dl.Token)
 	}
-	if deleteErr := ad.accountsManager.DeleteDownloadLink(dl, nil); deleteErr != nil {
+	if deleteErr := ad.accountsManager.DeleteDownloadLink(t.Context(), dl, nil); deleteErr != nil {
 		t.Fatalf("DeleteDownloadLink() = %v", deleteErr)
 	}
 }

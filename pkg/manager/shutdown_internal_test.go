@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -34,7 +35,7 @@ type completedTorrentProvider struct {
 	torrent *types.Torrent
 }
 
-func (c completedTorrentProvider) CheckStatus(*types.Torrent) (*types.Torrent, error) {
+func (c completedTorrentProvider) CheckStatus(context.Context, *types.Torrent) (*types.Torrent, error) {
 	return c.torrent, nil
 }
 

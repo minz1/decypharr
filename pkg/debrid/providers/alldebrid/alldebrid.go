@@ -133,7 +133,10 @@ func (ad *AllDebrid) doRequest(
 	return common.DoJSON(client, req, result)
 }
 
-func (ad *AllDebrid) IsAvailable([]string) (map[string]bool, error) {
+func (ad *AllDebrid) IsAvailable(ctx context.Context, _ []string) (map[string]bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return nil, types.ErrAvailabilityUnsupported
 }
 
@@ -159,17 +162,17 @@ func (ad *AllDebrid) doPostFile(ctx context.Context, endpoint string, fileData [
 	return common.DoJSON(ad.client, req, result)
 }
 
-func (ad *AllDebrid) SubmitMagnet(torrent *types.Torrent) (*types.Torrent, error) {
+func (ad *AllDebrid) SubmitMagnet(ctx context.Context, torrent *types.Torrent) (*types.Torrent, error) {
 	if torrent.Magnet.IsTorrent() {
-		return ad.addTorrentFile(torrent)
+		return ad.addTorrentFile(ctx, torrent)
 	}
-	return ad.addMagnetLink(torrent)
+	return ad.addMagnetLink(ctx, torrent)
 }
 
-func (ad *AllDebrid) addTorrentFile(torrent *types.Torrent) (*types.Torrent, error) {
+func (ad *AllDebrid) addTorrentFile(ctx context.Context, torrent *types.Torrent) (*types.Torrent, error) {
 	var data UploadFileResponse
 
-	status, err := ad.doPostFile(context.Background(), "/magnet/upload/file", torrent.Magnet.File, &data)
+	status, err := ad.doPostFile(ctx, "/magnet/upload/file", torrent.Magnet.File, &data)
 	if err != nil {
 		return nil, err
 	}
@@ -191,11 +194,11 @@ func (ad *AllDebrid) addTorrentFile(torrent *types.Torrent) (*types.Torrent, err
 	return torrent, nil
 }
 
-func (ad *AllDebrid) addMagnetLink(torrent *types.Torrent) (*types.Torrent, error) {
+func (ad *AllDebrid) addMagnetLink(ctx context.Context, torrent *types.Torrent) (*types.Torrent, error) {
 	var data UploadMagnetResponse
 
 	status, err := ad.doRequest(
-		context.Background(),
+		ctx,
 		ad.client,
 		"/magnet/upload",
 		map[string]string{"magnets[]": torrent.Magnet.Link},
@@ -276,11 +279,11 @@ func (ad *AllDebrid) flattenFiles(
 	return result
 }
 
-func (ad *AllDebrid) GetTorrent(torrentID string) (*types.Torrent, error) {
+func (ad *AllDebrid) GetTorrent(ctx context.Context, torrentID string) (*types.Torrent, error) {
 	var res TorrentInfoResponse
 
 	httpStatus, err := ad.doRequest(
-		context.Background(),
+		ctx,
 		ad.client,
 		"/magnet/status",
 		map[string]string{"id": torrentID},
@@ -333,11 +336,11 @@ func (ad *AllDebrid) GetTorrent(torrentID string) (*types.Torrent, error) {
 	return t, nil
 }
 
-func (ad *AllDebrid) updateTorrent(t *types.Torrent) (int, error) {
+func (ad *AllDebrid) updateTorrent(ctx context.Context, t *types.Torrent) (int, error) {
 	var res TorrentInfoResponse
 
 	httpStatus, err := ad.doRequest(
-		context.Background(),
+		ctx,
 		ad.client,
 		"/magnet/status",
 		map[string]string{"id": t.ID},
@@ -382,8 +385,8 @@ func (ad *AllDebrid) updateTorrent(t *types.Torrent) (int, error) {
 	return data.StatusCode, nil
 }
 
-func (ad *AllDebrid) UpdateTorrent(t *types.Torrent) error {
-	_, err := ad.updateTorrent(t)
+func (ad *AllDebrid) UpdateTorrent(ctx context.Context, t *types.Torrent) error {
+	_, err := ad.updateTorrent(ctx, t)
 	return err
 }
 
@@ -397,18 +400,18 @@ func findMagnet(magnets Magnets, torrentID string) (magnetInfo, error) {
 	return magnetInfo{}, customerror.ErrTorrentNotFound
 }
 
-func (ad *AllDebrid) CheckStatus(torrent *types.Torrent) (*types.Torrent, error) {
+func (ad *AllDebrid) CheckStatus(ctx context.Context, torrent *types.Torrent) (*types.Torrent, error) {
 	if torrent == nil {
 		return nil, fmt.Errorf("torrent is required")
 	}
 
-	statusCode, err := ad.updateTorrent(torrent)
+	statusCode, err := ad.updateTorrent(ctx, torrent)
 	if err != nil {
 		return torrent, err
 	}
 
 	if statusCode == allDebridNoPeerStatusCode {
-		statusCode, err = ad.restartNoPeerTorrent(torrent)
+		statusCode, err = ad.restartNoPeerTorrent(ctx, torrent)
 		if err != nil {
 			return torrent, err
 		}
@@ -434,13 +437,13 @@ func defaultNoPeerRetryBackoff() []time.Duration {
 	return []time.Duration{250 * time.Millisecond, 500 * time.Millisecond, time.Second}
 }
 
-func (ad *AllDebrid) restartNoPeerTorrent(torrent *types.Torrent) (int, error) {
+func (ad *AllDebrid) restartNoPeerTorrent(ctx context.Context, torrent *types.Torrent) (int, error) {
 	ad.logger.Warn().
 		Str("torrent_id", torrent.ID).
 		Str("name", torrent.Name).
 		Msg("AllDebrid reported status code 7; restarting magnet")
 
-	if err := ad.restartTorrent(torrent.ID); err != nil {
+	if err := ad.restartTorrent(ctx, torrent.ID); err != nil {
 		return allDebridNoPeerStatusCode, fmt.Errorf(
 			"restart AllDebrid torrent %s after status code 7: %w",
 			torrent.ID,
@@ -454,7 +457,7 @@ func (ad *AllDebrid) restartNoPeerTorrent(torrent *types.Torrent) (int, error) {
 	}
 	for attempt, delay := range backoff {
 		time.Sleep(delay)
-		statusCode, err := ad.updateTorrent(torrent)
+		statusCode, err := ad.updateTorrent(ctx, torrent)
 		if err != nil {
 			return allDebridNoPeerStatusCode, fmt.Errorf(
 				"check AllDebrid torrent %s after restart: %w",
@@ -480,7 +483,7 @@ func (ad *AllDebrid) restartNoPeerTorrent(torrent *types.Torrent) (int, error) {
 	)
 }
 
-func (ad *AllDebrid) restartTorrent(torrentID string) error {
+func (ad *AllDebrid) restartTorrent(ctx context.Context, torrentID string) error {
 	u, err := url.Parse(ad.Host)
 	if err != nil {
 		return err
@@ -494,7 +497,7 @@ func (ad *AllDebrid) restartTorrent(torrentID string) error {
 
 	form := url.Values{"id": {torrentID}}
 	req, err := http.NewRequestWithContext(
-		context.Background(),
+		ctx,
 		http.MethodPost,
 		u.String(),
 		strings.NewReader(form.Encode()),
@@ -530,9 +533,9 @@ func (ad *AllDebrid) restartTorrent(torrentID string) error {
 	return nil
 }
 
-func (ad *AllDebrid) DeleteTorrent(torrentID string) error {
+func (ad *AllDebrid) DeleteTorrent(ctx context.Context, torrentID string) error {
 	status, err := ad.doRequest(
-		context.Background(),
+		ctx,
 		ad.client,
 		"/magnet/delete",
 		map[string]string{"id": torrentID},
@@ -594,23 +597,23 @@ func (ad *AllDebrid) GetDownloadLink(ctx context.Context, id string, file *types
 	return ad.accountsManager.GetDownloadLink(ctx, id, file, ad.fetchDownloadLink)
 }
 
-func (ad *AllDebrid) GetTorrents() ([]*types.Torrent, error) {
+func (ad *AllDebrid) GetTorrents(ctx context.Context) ([]*types.Torrent, error) {
 	torrents := make([]*types.Torrent, 0)
 	var res TorrentsListResponse
 
 	status, err := ad.doRequest(
-		context.Background(),
+		ctx,
 		ad.client,
 		"/magnet/status",
 		map[string]string{"status": "ready"},
 		&res,
 	)
 	if err != nil {
-		return torrents, err
+		return nil, err
 	}
 
 	if !common.IsSuccess(status) {
-		return torrents, fmt.Errorf("alldebrid API error: Status: %d", status)
+		return nil, fmt.Errorf("alldebrid API error: Status: %d", status)
 	}
 
 	for _, magnet := range res.Data.Magnets {
@@ -635,14 +638,17 @@ func (ad *AllDebrid) GetTorrents() ([]*types.Torrent, error) {
 	return torrents, nil
 }
 
-func (ad *AllDebrid) fetchDownloadLinks(*account.Account) ([]types.DownloadLink, error) {
+func (ad *AllDebrid) fetchDownloadLinks(ctx context.Context, _ *account.Account) ([]types.DownloadLink, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	// AllDebrid does not support fetching all download links
 	downloadLinks := make([]types.DownloadLink, 0)
 	return downloadLinks, nil
 }
 
-func (ad *AllDebrid) RefreshDownloadLinks() error {
-	return ad.accountsManager.RefreshLinks(ad.fetchDownloadLinks)
+func (ad *AllDebrid) RefreshDownloadLinks(ctx context.Context) error {
+	return ad.accountsManager.RefreshLinks(ctx, ad.fetchDownloadLinks)
 }
 
 func (ad *AllDebrid) CheckFile(ctx context.Context, _, link string) error {
@@ -690,20 +696,23 @@ func (ad *AllDebrid) CheckFile(ctx context.Context, _, link string) error {
 	return nil
 }
 
-func (ad *AllDebrid) GetAvailableSlots() (int, error) {
+func (ad *AllDebrid) GetAvailableSlots(ctx context.Context) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	// AllDebrid does not provide available slots info
 	return config.DefaultAvailableSlots, nil
 }
 
 // GetProfile returns the account profile, fetched once and then cached.
-func (ad *AllDebrid) GetProfile() (*types.Profile, error) {
-	return ad.profile.Get(0, ad.fetchProfile)
+func (ad *AllDebrid) GetProfile(ctx context.Context) (*types.Profile, error) {
+	return ad.profile.Get(0, func() (*types.Profile, error) { return ad.fetchProfile(ctx) })
 }
 
-func (ad *AllDebrid) fetchProfile() (*types.Profile, error) {
+func (ad *AllDebrid) fetchProfile(ctx context.Context) (*types.Profile, error) {
 	var res UserProfileResponse
 
-	status, err := ad.doRequest(context.Background(), ad.client, "/user", nil, &res)
+	status, err := ad.doRequest(ctx, ad.client, "/user", nil, &res)
 	if err != nil {
 		return nil, err
 	}
@@ -745,17 +754,18 @@ func (ad *AllDebrid) AccountManager() *account.Manager {
 	return ad.accountsManager
 }
 
-func (ad *AllDebrid) syncAccount(*account.Account) error {
-	return nil
+func (ad *AllDebrid) syncAccount(ctx context.Context, _ *account.Account) error {
+	// No account data to sync; an ended ctx is still reported, so Sync does not count it as a success.
+	return ctx.Err()
 }
 
-func (ad *AllDebrid) SyncAccounts() {
-	ad.accountsManager.Sync(ad.syncAccount)
+func (ad *AllDebrid) SyncAccounts(ctx context.Context) {
+	ad.accountsManager.Sync(ctx, ad.syncAccount)
 }
 
-func (ad *AllDebrid) deleteLink(account *account.Account, downloadLink types.DownloadLink) error {
+func (ad *AllDebrid) deleteLink(ctx context.Context, account *account.Account, downloadLink types.DownloadLink) error {
 	status, err := ad.doRequest(
-		context.Background(),
+		ctx,
 		account.Client(),
 		"/user/links/delete",
 		map[string]string{"links": downloadLink.Link},
@@ -771,8 +781,8 @@ func (ad *AllDebrid) deleteLink(account *account.Account, downloadLink types.Dow
 	return nil
 }
 
-func (ad *AllDebrid) DeleteLink(downloadLink types.DownloadLink) error {
-	return ad.accountsManager.DeleteDownloadLink(downloadLink, ad.deleteLink)
+func (ad *AllDebrid) DeleteLink(ctx context.Context, downloadLink types.DownloadLink) error {
+	return ad.accountsManager.DeleteDownloadLink(ctx, downloadLink, ad.deleteLink)
 }
 
 // SpeedTest measures API latency and download speed using cached links.
@@ -783,7 +793,7 @@ func (ad *AllDebrid) SpeedTest(ctx context.Context) types.SpeedTestResult {
 	}
 
 	start := time.Now()
-	status, err := ad.doRequest(context.Background(), ad.client, "/user", nil, nil)
+	status, err := ad.doRequest(ctx, ad.client, "/user", nil, nil)
 	latency := time.Since(start)
 
 	if err != nil {

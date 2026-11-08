@@ -69,7 +69,7 @@ func TestRefreshDoesNotOverwriteSharedEntry(t *testing.T) {
 
 	clients := xsync.NewMap[string, debrid.Client]()
 	clients.Store("fake", &linkClient{url: server.URL})
-	refresher := func(string) (*storage.Entry, error) { return testEntry(true), nil }
+	refresher := func(context.Context, string) (*storage.Entry, error) { return testEntry(true), nil }
 	service := link.New(clients, refresher, nil, nil, server.Client(), 0, nil, zerolog.Nop())
 
 	shared := testEntry(false)
@@ -115,7 +115,7 @@ func headServer(t *testing.T, first int) (*httptest.Server, *atomic.Int32) {
 	return server, &calls
 }
 
-func (c *linkClient) DeleteLink(types.DownloadLink) error { return nil }
+func (c *linkClient) DeleteLink(context.Context, types.DownloadLink) error { return nil }
 
 func newHeadService(server *httptest.Server) *link.Service {
 	clients := xsync.NewMap[string, debrid.Client]()

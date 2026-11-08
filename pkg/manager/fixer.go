@@ -173,7 +173,7 @@ func (f *Fixer) runRepair(
 		// Force a fresh submit only for the broken active provider; for any other
 		// debrid, let MoveTorrent reuse an existing valid placement if present.
 		reinsert := debridName == entry.ActiveProvider
-		success, err := f.MoveTorrent(entry, debridName, reinsert)
+		success, err := f.MoveTorrent(ctx, entry, debridName, reinsert)
 		totalAttempts++
 
 		if success {
@@ -218,7 +218,7 @@ func (f *Fixer) runRepair(
 }
 
 // MoveTorrent attempts to re-insert a torrent on a specific debrid.
-func (f *Fixer) MoveTorrent(entry *storage.Entry, debridName string, reinsert bool) (bool, error) {
+func (f *Fixer) MoveTorrent(ctx context.Context, entry *storage.Entry, debridName string, reinsert bool) (bool, error) {
 	// Check if entry can be moved
 	if entry == nil {
 		return false, fmt.Errorf("entry is nil")
@@ -254,7 +254,7 @@ func (f *Fixer) MoveTorrent(entry *storage.Entry, debridName string, reinsert bo
 		old = *source
 	}
 
-	newDebridTorrent, err := f.submitReplacement(client, debridName, entry)
+	newDebridTorrent, err := f.submitReplacement(ctx, client, debridName, entry)
 	if err != nil {
 		return false, err
 	}
@@ -292,6 +292,7 @@ func activateExistingPlacement(entry *storage.Entry, debridName string) bool {
 // submitReplacement submits entry's magnet to client and returns the new
 // placement once every file has a link or ID; a failed placement is deleted.
 func (f *Fixer) submitReplacement(
+	ctx context.Context,
 	client debrid.Client,
 	debridName string,
 	entry *storage.Entry,
@@ -304,7 +305,7 @@ func (f *Fixer) submitReplacement(
 		return nil, fmt.Errorf("failed to construct magnet for entry %s", entry.Name)
 	}
 
-	newDebridTorrent, err := client.SubmitMagnet(&types.Torrent{
+	newDebridTorrent, err := client.SubmitMagnet(ctx, &types.Torrent{
 		Name:             entry.Name,
 		Magnet:           magnet,
 		InfoHash:         entry.InfoHash,
@@ -320,7 +321,7 @@ func (f *Fixer) submitReplacement(
 	}
 
 	newDebridTorrent.DownloadUncached = false
-	newDebridTorrent, err = client.CheckStatus(newDebridTorrent)
+	newDebridTorrent, err = client.CheckStatus(ctx, newDebridTorrent)
 	if errors.Is(err, customerror.ErrTorrentNotCached) {
 		f.manager.hearsay.ReportAdd(client.Config().Provider, entry.InfoHash, false)
 	}

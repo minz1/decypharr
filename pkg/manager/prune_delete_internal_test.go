@@ -29,7 +29,7 @@ type fakePruneProvider struct {
 	onDelete  func(id string)
 }
 
-func (f *fakePruneProvider) DeleteTorrent(id string) error {
+func (f *fakePruneProvider) DeleteTorrent(_ context.Context, id string) error {
 	f.mu.Lock()
 	f.deleted = append(f.deleted, id)
 	hook, fail := f.onDelete, f.deleteErr
@@ -43,7 +43,7 @@ func (f *fakePruneProvider) DeleteTorrent(id string) error {
 	return nil
 }
 
-func (f *fakePruneProvider) GetTorrent(id string) (*types.Torrent, error) {
+func (f *fakePruneProvider) GetTorrent(_ context.Context, id string) (*types.Torrent, error) {
 	f.mu.Lock()
 	f.looked = append(f.looked, id)
 	lookup := f.lookup

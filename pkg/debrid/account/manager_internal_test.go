@@ -44,7 +44,7 @@ func TestSyncReenablesHealthyDisabledAccount(t *testing.T) {
 	m, acc := newTestManager(&logs)
 	m.Disable(acc)
 
-	m.Sync(func(*Account) error { return nil })
+	m.Sync(t.Context(), func(context.Context, *Account) error { return nil })
 
 	if acc.Disabled.Load() {
 		t.Fatal("expected a successful sync to re-enable the account")
@@ -60,7 +60,7 @@ func TestSyncKeepsAccountDisabledOnFailure(t *testing.T) {
 	m, acc := newTestManager(&logs)
 	m.Disable(acc)
 
-	m.Sync(func(*Account) error { return errors.New("temporary failure") })
+	m.Sync(t.Context(), func(context.Context, *Account) error { return errors.New("temporary failure") })
 
 	if !acc.Disabled.Load() {
 		t.Fatal("expected a failed sync to leave the account disabled")

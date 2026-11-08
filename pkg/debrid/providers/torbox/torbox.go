@@ -185,8 +185,8 @@ func (tb *Torbox) submissionClient() *request.Client {
 }
 
 // doGet performs a GET request and unmarshals the response.
-func (tb *Torbox) doGet(endpoint string, queryParams map[string]string, result any) (int, error) {
-	return tb.doGetWithClient(context.Background(), tb.client, endpoint, queryParams, result)
+func (tb *Torbox) doGet(ctx context.Context, endpoint string, queryParams map[string]string, result any) (int, error) {
+	return tb.doGetWithClient(ctx, tb.client, endpoint, queryParams, result)
 }
 
 func (tb *Torbox) doGetWithClient(
@@ -277,14 +277,14 @@ func (tb *Torbox) doPostJSON(ctx context.Context, endpoint string, payload any, 
 	return common.DoJSON(tb.client, req, result)
 }
 
-func (tb *Torbox) IsAvailable(hashes []string) (map[string]bool, error) {
+func (tb *Torbox) IsAvailable(ctx context.Context, hashes []string) (map[string]bool, error) {
 	result := make(map[string]bool)
 
 	for _, validHashes := range common.HashBatches(hashes, batchSize) {
 		hashStr := strings.Join(validHashes, ",")
 		var res AvailableResponse
 
-		status, err := tb.doGet("/api/torrents/checkcached", map[string]string{"hash": hashStr}, &res)
+		status, err := tb.doGet(ctx, "/api/torrents/checkcached", map[string]string{"hash": hashStr}, &res)
 		if err != nil {
 			return result, fmt.Errorf("check availability: %w", err)
 		}
@@ -307,7 +307,7 @@ func (tb *Torbox) IsAvailable(hashes []string) (map[string]bool, error) {
 	return result, nil
 }
 
-func (tb *Torbox) SubmitMagnet(torrent *types.Torrent) (*types.Torrent, error) {
+func (tb *Torbox) SubmitMagnet(ctx context.Context, torrent *types.Torrent) (*types.Torrent, error) {
 	var data AddMagnetResponse
 
 	formData := map[string]string{
@@ -318,7 +318,7 @@ func (tb *Torbox) SubmitMagnet(torrent *types.Torrent) (*types.Torrent, error) {
 	}
 
 	status, err := tb.doPostFormWithClient(
-		context.Background(),
+		ctx,
 		tb.submissionClient(),
 		"/api/torrents/createtorrent",
 		formData,
@@ -343,7 +343,11 @@ func (tb *Torbox) SubmitMagnet(torrent *types.Torrent) (*types.Torrent, error) {
 		}
 	}
 	if id == 0 {
-		if !tb.withdrawQueued(torrent.InfoHash) {
+		queued, withdrawErr := tb.withdrawQueued(ctx, torrent.InfoHash)
+		if withdrawErr != nil {
+			return nil, withdrawErr
+		}
+		if !queued {
 			reason := apiReason(data.Error, data.Detail)
 			return nil, fmt.Errorf("torbox returned no torrent id for %s%s", torrent.Name, reason)
 		}
@@ -359,31 +363,39 @@ func (tb *Torbox) SubmitMagnet(torrent *types.Torrent) (*types.Torrent, error) {
 }
 
 // withdrawQueued removes hash from TorBox's queue and reports whether it was queued there.
-func (tb *Torbox) withdrawQueued(hash string) bool {
+// It returns an error wrapping ctx.Err() when ctx ends mid-way, so the caller
+// does not read a stopped lookup as "not queued".
+func (tb *Torbox) withdrawQueued(ctx context.Context, hash string) (bool, error) {
 	var queued APIResponse[[]struct {
 		ID   int    `json:"id"`
 		Hash string `json:"hash"`
 	}]
 	params := map[string]string{"type": "torrent", "bypass_cache": queryTrue}
-	status, err := tb.doGet("/api/queued/getqueued", params, &queued)
+	status, err := tb.doGet(ctx, "/api/queued/getqueued", params, &queued)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return false, fmt.Errorf("list TorBox's queue: %w", ctxErr)
+	}
 	if err != nil || !common.IsSuccess(status) || queued.Data == nil {
 		tb.logger.Warn().Err(err).Int("status", status).Str("hash", hash).Msg("Failed to list TorBox's queue")
-		return false
+		return false, nil
 	}
 	for _, item := range *queued.Data {
 		if !strings.EqualFold(item.Hash, hash) {
 			continue
 		}
 		payload := map[string]any{"queued_id": item.ID, "operation": "delete", "type": "torrent"}
-		status, err = tb.doPostJSON(context.Background(), "/api/queued/controlqueued", payload, nil)
+		status, err = tb.doPostJSON(ctx, "/api/queued/controlqueued", payload, nil)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return false, fmt.Errorf("withdraw queued TorBox add: %w", ctxErr)
+		}
 		if err != nil || !common.IsSuccess(status) {
 			tb.logger.Warn().Err(err).Int("status", status).Str("hash", hash).
 				Msg("Failed to withdraw a queued TorBox add")
 		}
-		return true
+		return true, nil
 	}
 	tb.logger.Warn().Str("hash", hash).Msg("TorBox returned no torrent id and has no queued add for it")
-	return false
+	return false, nil
 }
 
 func (tb *Torbox) getTorboxStatus(status string, finished bool) types.TorrentStatus {
@@ -404,14 +416,14 @@ func (tb *Torbox) getTorboxStatus(status string, finished bool) types.TorrentSta
 	}
 }
 
-func (tb *Torbox) GetTorrent(torrentID string) (*types.Torrent, error) {
+func (tb *Torbox) GetTorrent(ctx context.Context, torrentID string) (*types.Torrent, error) {
 	// TorBox ignores a non-positive id and lists everything, so such a placement is simply gone.
 	if id, err := strconv.Atoi(torrentID); err != nil || id <= 0 {
 		return nil, customerror.ErrTorrentNotFound
 	}
 	var res InfoResponse
 
-	status, err := tb.doGet("/api/torrents/mylist", map[string]string{"id": torrentID}, &res)
+	status, err := tb.doGet(ctx, "/api/torrents/mylist", map[string]string{"id": torrentID}, &res)
 	if err != nil {
 		return nil, err
 	}
@@ -514,15 +526,15 @@ func (tb *Torbox) loadDownloadPresent(ctx context.Context) (map[string]bool, err
 	return present, nil
 }
 
-func (tb *Torbox) UpdateTorrent(t *types.Torrent) error {
-	return tb.updateTorrentWithClient(tb.client, t)
+func (tb *Torbox) UpdateTorrent(ctx context.Context, t *types.Torrent) error {
+	return tb.updateTorrentWithClient(ctx, tb.client, t)
 }
 
-func (tb *Torbox) updateTorrentWithClient(client *request.Client, t *types.Torrent) error {
+func (tb *Torbox) updateTorrentWithClient(ctx context.Context, client *request.Client, t *types.Torrent) error {
 	var res InfoResponse
 
 	status, err := tb.doGetWithClient(
-		context.Background(),
+		ctx,
 		client,
 		"/api/torrents/mylist",
 		map[string]string{"id": t.ID},
@@ -590,8 +602,8 @@ func (tb *Torbox) updateTorrentWithClient(client *request.Client, t *types.Torre
 	return nil
 }
 
-func (tb *Torbox) CheckStatus(torrent *types.Torrent) (*types.Torrent, error) {
-	if err := tb.updateTorrentWithClient(tb.submissionClient(), torrent); err != nil || torrent == nil {
+func (tb *Torbox) CheckStatus(ctx context.Context, torrent *types.Torrent) (*types.Torrent, error) {
+	if err := tb.updateTorrentWithClient(ctx, tb.submissionClient(), torrent); err != nil || torrent == nil {
 		return torrent, err
 	}
 
@@ -609,7 +621,7 @@ func (tb *Torbox) CheckStatus(torrent *types.Torrent) (*types.Torrent, error) {
 	return torrent, fmt.Errorf("torrent: %s has error", torrent.Name)
 }
 
-func (tb *Torbox) DeleteTorrent(torrentID string) error {
+func (tb *Torbox) DeleteTorrent(ctx context.Context, torrentID string) error {
 	id, err := strconv.Atoi(torrentID)
 	if err != nil || id <= 0 {
 		return customerror.ErrTorrentNotFound
@@ -623,7 +635,7 @@ func (tb *Torbox) DeleteTorrent(torrentID string) error {
 		Operation: "delete",
 	}
 
-	status, err := tb.doPostJSON(context.Background(), "/api/torrents/controltorrent", payload, nil)
+	status, err := tb.doPostJSON(ctx, "/api/torrents/controltorrent", payload, nil)
 	if err != nil {
 		return err
 	}
@@ -689,12 +701,15 @@ func (tb *Torbox) fetchDownloadLink(
 	return dl, nil
 }
 
-func (tb *Torbox) GetTorrents() ([]*types.Torrent, error) {
+func (tb *Torbox) GetTorrents(ctx context.Context) ([]*types.Torrent, error) {
 	offset := 0
 	allTorrents := make([]*types.Torrent, 0)
 
 	for {
-		torrents, err := tb.getTorrents(offset)
+		torrents, err := tb.getTorrents(ctx, offset)
+		if err == nil {
+			err = ctx.Err()
+		}
 		if err != nil {
 			return nil, fmt.Errorf("get TorBox torrents at offset %d: %w", offset, err)
 		}
@@ -707,10 +722,10 @@ func (tb *Torbox) GetTorrents() ([]*types.Torrent, error) {
 	return allTorrents, nil
 }
 
-func (tb *Torbox) getTorrents(offset int) ([]*types.Torrent, error) {
+func (tb *Torbox) getTorrents(ctx context.Context, offset int) ([]*types.Torrent, error) {
 	var res TorrentsListResponse
 
-	status, err := tb.doGet("/api/torrents/mylist", map[string]string{
+	status, err := tb.doGet(ctx, "/api/torrents/mylist", map[string]string{
 		"bypass_cache": queryTrue,
 		"offset":       strconv.Itoa(offset),
 	}, &res)
@@ -781,12 +796,15 @@ func (tb *Torbox) getTorrents(offset int) ([]*types.Torrent, error) {
 	return torrents, nil
 }
 
-func (tb *Torbox) fetchDownloadLinks(_ *account.Account) ([]types.DownloadLink, error) {
+func (tb *Torbox) fetchDownloadLinks(ctx context.Context, _ *account.Account) ([]types.DownloadLink, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return []types.DownloadLink{}, nil
 }
 
-func (tb *Torbox) RefreshDownloadLinks() error {
-	return tb.accountsManager.RefreshLinks(tb.fetchDownloadLinks)
+func (tb *Torbox) RefreshDownloadLinks(ctx context.Context) error {
+	return tb.accountsManager.RefreshLinks(ctx, tb.fetchDownloadLinks)
 }
 
 func (tb *Torbox) CheckFile(ctx context.Context, _, link string) error {
@@ -848,8 +866,8 @@ func planSlots(plan string) int {
 	}
 }
 
-func (tb *Torbox) GetAvailableSlots() (int, error) {
-	profile, err := tb.GetProfile()
+func (tb *Torbox) GetAvailableSlots(ctx context.Context) (int, error) {
+	profile, err := tb.GetProfile(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -857,14 +875,14 @@ func (tb *Torbox) GetAvailableSlots() (int, error) {
 }
 
 // GetProfile returns the account profile, fetched once and then cached.
-func (tb *Torbox) GetProfile() (*types.Profile, error) {
-	return tb.profile.Get(0, tb.fetchProfile)
+func (tb *Torbox) GetProfile(ctx context.Context) (*types.Profile, error) {
+	return tb.profile.Get(0, func() (*types.Profile, error) { return tb.fetchProfile(ctx) })
 }
 
-func (tb *Torbox) fetchProfile() (*types.Profile, error) {
+func (tb *Torbox) fetchProfile(ctx context.Context) (*types.Profile, error) {
 	var data ProfileResponse
 
-	status, err := tb.doGet("/api/user/me", map[string]string{"settings": queryTrue}, &data)
+	status, err := tb.doGet(ctx, "/api/user/me", map[string]string{"settings": queryTrue}, &data)
 	if err != nil {
 		return nil, err
 	}
@@ -909,20 +927,21 @@ func (tb *Torbox) AccountManager() *account.Manager {
 	return tb.accountsManager
 }
 
-func (tb *Torbox) syncAccount(_ *account.Account) error {
-	return nil
+func (tb *Torbox) syncAccount(ctx context.Context, _ *account.Account) error {
+	// No account data to sync; an ended ctx is still reported, so Sync does not count it as a success.
+	return ctx.Err()
 }
 
-func (tb *Torbox) SyncAccounts() {
-	tb.accountsManager.Sync(tb.syncAccount)
+func (tb *Torbox) SyncAccounts(ctx context.Context) {
+	tb.accountsManager.Sync(ctx, tb.syncAccount)
 }
 
-func (tb *Torbox) deleteDownloadLink(*account.Account, types.DownloadLink) error {
-	return nil
+func (tb *Torbox) deleteDownloadLink(ctx context.Context, _ *account.Account, _ types.DownloadLink) error {
+	return ctx.Err()
 }
 
-func (tb *Torbox) DeleteLink(downloadLink types.DownloadLink) error {
-	return tb.accountsManager.DeleteDownloadLink(downloadLink, tb.deleteDownloadLink)
+func (tb *Torbox) DeleteLink(ctx context.Context, downloadLink types.DownloadLink) error {
+	return tb.accountsManager.DeleteDownloadLink(ctx, downloadLink, tb.deleteDownloadLink)
 }
 
 // SpeedTest measures API latency and download speed using cached links.
@@ -933,7 +952,7 @@ func (tb *Torbox) SpeedTest(ctx context.Context) types.SpeedTestResult {
 	}
 
 	start := time.Now()
-	status, err := tb.doGet("/api/user/me", nil, nil)
+	status, err := tb.doGet(ctx, "/api/user/me", nil, nil)
 	latency := time.Since(start)
 
 	if err != nil {

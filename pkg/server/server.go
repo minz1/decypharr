@@ -107,7 +107,13 @@ type Server struct {
 // apply without a restart are read live from store.
 //
 // access reports the NFS and SMB run states for /api/stats; nil leaves them out.
-func New(mgr *manager.Manager, store *config.Store, logs *logger.Factory, access stats.AccessState) *Server {
+func New(
+	ctx context.Context,
+	mgr *manager.Manager,
+	store *config.Store,
+	logs *logger.Factory,
+	access stats.AccessState,
+) *Server {
 	l := logs.New("http")
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
@@ -124,7 +130,7 @@ func New(mgr *manager.Manager, store *config.Store, logs *logger.Factory, access
 		SameSite: http.SameSiteLaxMode,
 	}
 
-	statsCollector := stats.New(mgr, store, logs.New("stats"), access)
+	statsCollector := stats.New(ctx, mgr, store, logs.New("stats"), access)
 
 	s := &Server{
 		config:  store,

@@ -92,7 +92,7 @@ func TestStatusCheckFailsGrabOnlyForDeadTorrents(t *testing.T) {
 			m.clients.Store("provider", tc.provider)
 			entry.Protocol, entry.ActiveProvider, entry.State = config.ProtocolTorrent, "provider", storage.EntryStateDownloading
 			entry.Providers = map[string]*storage.ProviderEntry{"provider": {Provider: "provider", ID: "id"}}
-			m.processQueuedTorrent(entry)
+			m.processQueuedTorrent(t.Context(), entry)
 			assertErrored(t, m)
 			if got := len(fake.fails) == 1; got != tc.wantFail {
 				t.Fatalf("FailDownload calls = %v, want failed = %v", fake.fails, tc.wantFail)

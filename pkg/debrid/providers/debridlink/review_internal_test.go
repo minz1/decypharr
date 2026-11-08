@@ -49,11 +49,11 @@ func TestPaginationIgnoresFilteredEntries(t *testing.T) {
 	}
 	provider.Host = server.URL
 
-	torrents, err := provider.GetTorrents()
+	torrents, err := provider.GetTorrents(t.Context())
 	if err != nil || len(torrents) != 1 || torrents[0].ID != "b" {
 		t.Fatalf("GetTorrents() = %d torrents, %v; want torrent b from page 1", len(torrents), err)
 	}
-	links, err := provider.fetchDownloadLinks(provider.accountsManager.Current())
+	links, err := provider.fetchDownloadLinks(t.Context(), provider.accountsManager.Current())
 	if err != nil || len(links) != perPage {
 		t.Fatalf("fetchDownloadLinks() = %d links, %v; want %d", len(links), err, perPage)
 	}
