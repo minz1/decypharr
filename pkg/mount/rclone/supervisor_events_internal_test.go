@@ -421,3 +421,58 @@ func (r *managerRig) eventCount() int {
 	defer r.mu.Unlock()
 	return len(r.events)
 }
+
+// closeBackend stops the fake WebDAV server.
+func (r *managerRig) closeBackend() {
+	close(r.backend)
+	synctest.Wait()
+}
+
+// Proof 4: the WebDAV server stopping degrades the mount without a probe, and a mount that finishes after it ends
+// Degraded, not Mounted.
+func TestBackendStopDegradesWithoutProbe(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		r := newManagerRig(t)
+		r.watchOn()
+		r.startMounted()
+
+		r.closeBackend()
+		r.wantMount(mountDegraded)
+		if got := r.m.view.Load().err; got != "WebDAV server stopped" {
+			t.Fatalf("mount error = %q, want %q", got, "WebDAV server stopped")
+		}
+		r.wantCount("rc:mount/listmounts", 0)
+		r.stop()
+	})
+	synctest.Test(t, func(t *testing.T) {
+		r := newManagerRig(t)
+		r.watchOn()
+		gate := r.gateMounts()
+		r.start()
+		r.wantMount(mountMounting)
+
+		r.closeBackend()
+		r.wantMount(mountMounting)
+		close(gate)
+		synctest.Wait()
+		r.wantMount(mountDegraded)
+		r.stop()
+	})
+}
+
+// A stopped WebDAV server keeps the mount Degraded through a probe that finds it fine.
+func TestBackendStopStaysDegraded(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		r := newManagerRig(t)
+		r.watchOn()
+		r.startMounted()
+
+		r.closeBackend()
+		r.after(watchdogInterval)
+		r.wantCount("rc:mount/listmounts", 1)
+		r.wantMount(mountDegraded)
+		r.stop()
+	})
+}

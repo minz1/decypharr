@@ -78,6 +78,8 @@ type Manager struct {
 	// OS's by default (Linux: /proc/self/mountinfo; elsewhere both return errNoMountTable).
 	watchTable func(ctx context.Context, changed func()) error
 	readTable  func(path string) (int, error)
+	// backendStopped closes when the WebDAV server the mount reads from stops; nil means never. Set before Start.
+	backendStopped <-chan struct{}
 
 	// mu guards Start against Stop. rcd, ops and sup are written once, in
 	// Start; the tasks started after that read them without the lock.
@@ -190,6 +192,9 @@ func (m *Manager) wire() {
 // SetStopSlice gives the manager the generation's mount slice, before Start.
 func (m *Manager) SetStopSlice(s task.Slice) { m.owner.setStopSlice(s) }
 
+// SetBackendStopped gives the manager a channel that closes when the WebDAV server stops, before Start.
+func (m *Manager) SetBackendStopped(stopped <-chan struct{}) { m.backendStopped = stopped }
+
 // Start starts the rcd owner and the mount supervisor on children of g. It returns
 // before rcd answers; IsReady says when it does.
 func (m *Manager) Start(g *task.Group) error {
@@ -214,6 +219,10 @@ func (m *Manager) Start(g *task.Group) error {
 	})
 	if err := m.ops.Go("mountinfo", m.runTableWatch); err != nil {
 		m.sendSupMsg(supMsg{kind: supWatchDown, err: fmt.Errorf("start the mount table watcher: %w", err)})
+	}
+	if err := m.ops.Go("backend", m.runBackendWatch); err != nil {
+		// Only a stopping group refuses a task, and then the supervisor is ending too.
+		m.logger.Debug().Err(err).Msg("WebDAV server watch not started")
 	}
 
 	if err := m.rcd.Go("owner", m.owner.run); err != nil {

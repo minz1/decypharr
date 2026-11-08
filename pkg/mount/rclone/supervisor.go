@@ -55,6 +55,8 @@ const (
 	// supTableChanged: the mount table changed. It carries nothing: the handler reads the table when it runs, so a
 	// late one sees the table as it is.
 	supTableChanged
+	// supBackendStopped: the WebDAV server the mount reads from stopped.
+	supBackendStopped
 )
 
 // supClass makes a table change an observation, which a full mailbox coalesces; the rest are commands.
@@ -114,6 +116,8 @@ type supState struct {
 	// when it was mounted; fewer later means it was detached.
 	tablePath  string
 	tableCount int
+	// backendStopped says the WebDAV server stopped; once set it stays, and the mount is never Mounted again.
+	backendStopped bool
 }
 
 // nextProbe is when an up mount is probed next. A watched table reports a detach itself, so the probe is only a
@@ -177,6 +181,8 @@ func (s mountSupervisor) Handle(
 		s.watchDown(st, fx, msg.err)
 	case supTableChanged:
 		s.tableChanged(ctx, st, fx)
+	case supBackendStopped:
+		s.backendStopped(ctx, st, fx)
 	default:
 		s.m.logger.Error().Uint8("kind", uint8(msg.kind)).Msg("Mount supervisor got an unknown message")
 	}
@@ -247,6 +253,10 @@ func (s mountSupervisor) mountDone(
 		if s.enter(ctx, st, fx, mountMounted, func(v *mountView) { v.err = ""; v.mountedAt = time.Now() }) {
 			st.gone, st.backoff = 0, 0
 			s.selfCheck(st, path)
+			if st.backendStopped {
+				s.degradeForBackend(ctx, st, fx)
+				return
+			}
 			s.schedule(st, fx, nextProbe(mountMounted, 0, st.watchUp), supProbeDue)
 		}
 		return
@@ -315,6 +325,10 @@ func (s mountSupervisor) degradedProbe(
 ) {
 	switch kind {
 	case probeOK:
+		if st.backendStopped {
+			s.degradeForBackend(ctx, st, fx)
+			return
+		}
 		if s.enter(ctx, st, fx, mountMounted, func(v *mountView) { v.err = "" }) {
 			st.gone = 0
 			s.schedule(st, fx, nextProbe(mountMounted, 0, st.watchUp), supProbeDue)
@@ -367,6 +381,26 @@ func (s mountSupervisor) watchDown(st *supState, fx *keyed.Effects[struct{}, sup
 	next := nextProbe(state, st.gone, st.watchUp)
 	s.schedule(st, fx, next, supProbeDue)
 	s.m.logger.Debug().Dur("next_probe_in", next).Msg("Mount probe moved to the fast cadence")
+}
+
+// backendStopped marks the WebDAV server stopped. An up mount goes Degraded and stays there; a remount cannot bring
+// the server back. In other states only the flag is kept, for mountDone to apply.
+func (s mountSupervisor) backendStopped(ctx context.Context, st *supState, fx *keyed.Effects[struct{}, supMsg]) {
+	st.backendStopped = true
+	switch s.m.view.Load().state {
+	case mountMounted, mountDegraded:
+		s.degradeForBackend(ctx, st, fx)
+	case mountWaiting, mountMounting, mountFailed, mountUnmounting, mountUnmounted:
+	default:
+	}
+}
+
+// degradeForBackend moves an up mount to Degraded for the stopped WebDAV server and schedules its next probe.
+func (s mountSupervisor) degradeForBackend(ctx context.Context, st *supState, fx *keyed.Effects[struct{}, supMsg]) {
+	st.gone = 0
+	if s.enter(ctx, st, fx, mountDegraded, withErr(errors.New("WebDAV server stopped"))) {
+		s.schedule(st, fx, nextProbe(mountDegraded, 0, st.watchUp), supProbeDue)
+	}
 }
 
 // selfCheck reads the table right after a mount worked: a table that does not show the mount at path (a symlinked
@@ -562,6 +596,16 @@ func (m *Manager) tableWatchEnded(ctx context.Context, err error) {
 		err = errors.New("mount table watch ended")
 	}
 	m.sendSupMsg(supMsg{kind: supWatchDown, err: err})
+}
+
+// runBackendWatch is the "backend" task: it tells the supervisor once the WebDAV server stops.
+func (m *Manager) runBackendWatch(ctx context.Context) error {
+	select {
+	case <-m.backendStopped:
+		m.sendSup(supBackendStopped)
+	case <-ctx.Done():
+	}
+	return nil
 }
 
 // tableChanged is the watcher's callback. It sends no payload: the supervisor reads the table itself.
