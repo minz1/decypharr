@@ -446,6 +446,7 @@ func (m *Manager) initArrServices() {
 	}
 	m.arrService = service
 	m.arrIndexer = reacquire.NewIndexer(
+		m.indexerSvc.group,
 		m.arr,
 		managedArrCatalog{storage: m.storage, logger: m.logger, naming: m.folderNaming},
 		service,
