@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 
 	"uuid"
 
@@ -944,20 +945,25 @@ func (p *NZBParser) enrichGroupWithFileInfo(ctx context.Context, group *FileGrou
 		err  error
 	}
 
-	// Fetch both headers in parallel
+	// Fetch both headers in parallel. Every return cancels the fetches, then
+	// waits for them (defers run last-in first-out), so none outlives the call.
+	var fetches sync.WaitGroup
+	defer fetches.Wait()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	firstCh := make(chan headerResult, 1)
 	lastCh := make(chan headerResult, 1)
 
-	go func() {
+	fetches.Go(func() {
 		data, err := fetchFileHeader(ctx, p.source, firstFile)
 		firstCh <- headerResult{data, err}
-	}()
+	})
 
 	if !sameFile {
-		go func() {
+		fetches.Go(func() {
 			data, err := fetchFileHeader(ctx, p.source, lastFile)
 			lastCh <- headerResult{data, err}
-		}()
+		})
 	}
 
 	// Wait for first result

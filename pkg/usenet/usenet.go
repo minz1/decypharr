@@ -176,9 +176,6 @@ type noPrefetchReader struct {
 }
 
 func (n *noPrefetchReader) ReadAtContext(ctx context.Context, p []byte, off int64) (int, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
@@ -220,9 +217,6 @@ type contextSectionReader struct {
 }
 
 func newContextSectionReader(ctx context.Context, r reader.ReadCursor, off, length int64) *contextSectionReader {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	return &contextSectionReader{
 		ctx:   ctx,
 		r:     r,

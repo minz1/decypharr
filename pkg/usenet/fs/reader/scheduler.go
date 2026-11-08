@@ -172,9 +172,6 @@ func (s *FetchScheduler) submit(
 	if s == nil || run == nil || owner == nil {
 		return false
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.closed {
