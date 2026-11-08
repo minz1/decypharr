@@ -81,6 +81,7 @@ func TestReadReportsFailedReadsInsideTheFile(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			f := NewFS(nil, nil, zerolog.Nop())
+			f.ctx = t.Context()
 			fh := f.handles.Create(info, &fakeStream{size: 8192, n: tc.n, err: tc.err})
 			if got := f.Read("/test-entry/video.mkv", make([]byte, 1024), tc.off, fh); got != tc.want {
 				t.Fatalf("Read = %d, want %d", got, tc.want)
@@ -93,6 +94,7 @@ func TestReadFailureLogNamesTheFile(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
 	f := NewFS(nil, nil, zerolog.New(&out))
+	f.ctx = t.Context()
 	fh := f.handles.Create(testRemoteFileInfo(t, 8192), &fakeStream{size: 8192, err: io.ErrUnexpectedEOF})
 	if got := f.Read("/test-entry/video.mkv", make([]byte, 1024), 0, fh); got != -fuse.EIO {
 		t.Fatalf("Read = %d, want EIO", got)

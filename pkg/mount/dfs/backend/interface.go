@@ -4,6 +4,8 @@ import (
 	"context"
 	"os"
 	"runtime"
+
+	"github.com/sirrobot01/decypharr/internal/task"
 )
 
 // Type represents the type of FUSE backend.
@@ -14,19 +16,21 @@ const (
 	Cgo    Type = "cgo"
 )
 
+// Mounted is a live mount. The dfs owner task holds it from Mount to unmount.
+type Mounted interface {
+	// Done is closed once when the serve loop has ended.
+	Done() <-chan struct{}
+	// Unmount is the graceful unmount; it may block.
+	Unmount() error
+	// Detach is the lazy detach of the mount point, bounded by ctx.
+	Detach(ctx context.Context) error
+}
+
 // Backend represents a FUSE backend implementation.
 type Backend interface {
-	// Mount mounts the filesystem at the configured path
-	Mount(ctx context.Context) error
-
-	// Unmount unmounts the filesystem
-	Unmount(ctx context.Context) error
-
-	// WaitReady waits for the mount to be ready
-	WaitReady(ctx context.Context) error
-
-	// IsReady returns true if the mount is ready
-	IsReady() bool
+	// Mount mounts the filesystem at the configured path and returns once it
+	// is ready to serve. Tasks the backend needs run on g.
+	Mount(ctx context.Context, g *task.Group) (Mounted, error)
 
 	Refresh(dir string)
 

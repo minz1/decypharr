@@ -2,28 +2,63 @@ package cgofuse
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime"
-	"sync/atomic"
 
 	"github.com/rs/zerolog"
 	"github.com/winfsp/cgofuse/fuse"
 
 	"github.com/sirrobot01/decypharr/internal/fsutil"
+	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/backend"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/config"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/vfs"
+	"github.com/sirrobot01/decypharr/pkg/mount/unmount"
 )
+
+// host is the part of *fuse.FileSystemHost the backend uses.
+type host interface {
+	// Mount blocks until the filesystem is unmounted; false means it failed.
+	Mount(path string, opts []string) bool
+	Unmount() bool
+}
+
+// mountDetacher lazily detaches a mount point (unmount.Unmounter).
+type mountDetacher interface {
+	Unmount(ctx context.Context, mountPath string) error
+}
 
 // Backend implements the cgofuse backend for cross-platform FUSE support.
 type Backend struct {
-	config *config.FuseConfig
-	logger zerolog.Logger
-	host   *fuse.FileSystemHost
-	ready  atomic.Bool
-	root   *FS
-	vfs    *vfs.Manager
+	config    *config.FuseConfig
+	logger    zerolog.Logger
+	root      *FS
+	newHost   func(*FS) host
+	unmounter mountDetacher
 }
+
+// mounted is the live mount; done closes when the host's Mount returns.
+type mounted struct {
+	host     host
+	done     chan struct{}
+	path     string
+	detacher mountDetacher
+}
+
+// Done is closed once when the serve loop has ended.
+func (m *mounted) Done() <-chan struct{} { return m.done }
+
+// Unmount asks the host to unmount; its Mount then returns.
+func (m *mounted) Unmount() error {
+	if !m.host.Unmount() {
+		return errors.New("cgofuse unmount failed")
+	}
+	return nil
+}
+
+// Detach lazily detaches the mount point (cgofuse has no lazy mode of its own).
+func (m *mounted) Detach(ctx context.Context) error { return m.detacher.Unmount(ctx, m.path) }
 
 // NewBackend creates a new cgofuse backend.
 func NewBackend(vfs *vfs.Manager, config *config.FuseConfig, log zerolog.Logger) (backend.Backend, error) {
@@ -31,34 +66,20 @@ func NewBackend(vfs *vfs.Manager, config *config.FuseConfig, log zerolog.Logger)
 		config: config,
 		logger: log,
 		root:   NewFS(vfs, config, log),
-		vfs:    vfs,
+		newHost: func(f *FS) host {
+			h := fuse.NewFileSystemHost(f)
+			h.SetCapReaddirPlus(true)     // Enable ReaddirPlus (used by WinFsp on Windows)
+			h.SetCapCaseInsensitive(true) // Windows is case-insensitive
+			return h
+		},
+		unmounter: unmount.New(log),
 	}, nil
 }
 
-// Mount mounts the filesystem using cgofuse.
-func (b *Backend) Mount(ctx context.Context) error {
-	// Create mount point if it doesn't exist (skip on Windows)
-	if runtime.GOOS != "windows" {
-		_ = fsutil.MkdirShared(b.config.MountPath, b.config.MountDirMode)
-	}
-	if b.root == nil {
-		return fmt.Errorf("root node is not initialized")
-	}
-
-	if b.vfs == nil {
-		return fmt.Errorf("VFS manager is not initialized")
-	}
-
-	// Create filesystem host
-	b.host = fuse.NewFileSystemHost(b.root)
-	b.host.SetCapReaddirPlus(true)     // Enable ReaddirPlus (used by WinFsp on Windows)
-	b.host.SetCapCaseInsensitive(true) // Windows is case-insensitive
-
-	// Build mount options
-	var options []string
-
+// mountOptions builds the host's command line options for this platform.
+func mountOptions() []string {
 	// Common options
-	options = append(options, "-o", "fsname=dfs")
+	options := []string{"-o", "fsname=dfs"}
 
 	// Platform-specific options
 	switch runtime.GOOS {
@@ -67,8 +88,6 @@ func (b *Backend) Mount(ctx context.Context) error {
 		options = append(options, "-o", "uid=-1,gid=-1")
 		options = append(options, "-o", "volname=DFS")
 		options = append(options, "--FileSystemName=DFS")
-		// Allow other users to access
-		options = append(options, "-o", "uid=-1,gid=-1")
 	case "darwin":
 		// macFUSE options
 		options = append(options, "-o", "volname=dfs")
@@ -80,69 +99,47 @@ func (b *Backend) Mount(ctx context.Context) error {
 		options = append(options, "-o", "allow_other")
 		options = append(options, "-o", "default_permissions")
 	}
+	return options
+}
 
-	// Start mount in background
-	errChan := make(chan error, 1)
+// Mount mounts the filesystem using cgofuse: the blocking host.Mount runs as
+// task "serve" on g, and the mount is ready when the host calls Init.
+func (b *Backend) Mount(ctx context.Context, g *task.Group) (backend.Mounted, error) {
+	// Create mount point if it doesn't exist (skip on Windows)
+	if runtime.GOOS != "windows" {
+		_ = fsutil.MkdirShared(b.config.MountPath, b.config.MountDirMode)
+	}
+	if b.root == nil {
+		return nil, fmt.Errorf("root node is not initialized")
+	}
 
-	go func() {
+	b.root.ctx = g.Context()
+	h := b.newHost(b.root)
+	handle := &mounted{host: h, done: make(chan struct{}), path: b.config.MountPath, detacher: b.unmounter}
+	options := mountOptions()
+
+	served := make(chan bool, 1)
+	if err := g.Go("serve", func(context.Context) error {
 		// Mount returns when unmounted
-		ok := b.host.Mount(b.config.MountPath, options)
-		if !ok {
-			errChan <- fmt.Errorf("mount failed")
-		} else {
-			errChan <- nil
-		}
-	}()
-
-	// Wait briefly for mount to initialize
-	// cgofuse doesn't have a ready signal, so we check if mount point is accessible
-	select {
-	case err := <-errChan:
-		if err != nil {
-			return err
-		}
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-		// Mount is running in background
-	}
-
-	b.ready.Store(true)
-	return nil
-}
-
-// Unmount unmounts the filesystem.
-func (b *Backend) Unmount(_ context.Context) error {
-	b.logger.Info().Msg("Unmounting cgofuse backend")
-
-	if b.host != nil {
-		_ = b.host.Unmount()
-	}
-
-	// Close VFS manager
-	if b.vfs != nil {
-		if err := b.vfs.Close(); err != nil {
-			b.logger.Warn().Err(err).Msg("Failed to close VFS")
-		}
-	}
-
-	b.ready.Store(false)
-	return nil
-}
-
-// WaitReady waits for the mount to be ready.
-func (b *Backend) WaitReady(_ context.Context) error {
-	// cgofuse doesn't have a direct ready signal
-	// We rely on the ready flag being set after successful mount
-	if b.ready.Load() {
+		ok := h.Mount(b.config.MountPath, options)
+		close(handle.done)
+		served <- ok
 		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("start cgofuse serve: %w", err)
 	}
-	return fmt.Errorf("mount not ready")
-}
 
-// IsReady returns true if the mount is ready.
-func (b *Backend) IsReady() bool {
-	return b.ready.Load()
+	mountCtx, cancel := context.WithTimeout(ctx, b.config.DaemonTimeout)
+	defer cancel()
+	select {
+	case <-b.root.initialized:
+		return handle, nil
+	case <-served:
+		return nil, errors.New("cgofuse mount failed")
+	case <-mountCtx.Done():
+		h.Unmount()
+		return nil, fmt.Errorf("waiting for cgofuse init: %w", mountCtx.Err())
+	}
 }
 
 // Type returns the backend type.

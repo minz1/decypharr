@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -48,21 +49,30 @@ type FS struct {
 
 	// Handle management
 	handles *HandleManager
+
+	// ctx is the backend group's context, set before the host mounts; reads
+	// derive their timeout from it so a stop cancels them.
+	ctx context.Context
+	// initialized is closed once by Init: the host's readiness signal.
+	initialized chan struct{}
+	initOnce    sync.Once
 }
 
 // NewFS creates a new cgofuse filesystem.
 func NewFS(vfsManager *vfs.Manager, config *config.FuseConfig, log zerolog.Logger) *FS {
 	return &FS{
-		vfs:     vfsManager,
-		config:  config,
-		logger:  log,
-		readLog: logger.NewRateLimitedLogger(logger.WithLogger(log)),
-		handles: NewHandleManager(),
+		vfs:         vfsManager,
+		config:      config,
+		logger:      log,
+		readLog:     logger.NewRateLimitedLogger(logger.WithLogger(log)),
+		handles:     NewHandleManager(),
+		initialized: make(chan struct{}),
 	}
 }
 
 // Init is called when the filesystem is mounted.
 func (f *FS) Init() {
+	f.initOnce.Do(func() { close(f.initialized) })
 }
 
 // Destroy is called when the filesystem is unmounted.
@@ -305,7 +315,7 @@ func (f *FS) Read(path string, buff []byte, off int64, fh uint64) int {
 		return -fuse.EIO
 	}
 
-	readCtx, cancel := context.WithTimeout(context.Background(), readTimeout)
+	readCtx, cancel := context.WithTimeout(f.ctx, readTimeout)
 	defer cancel()
 
 	n, err := handle.reader.ReadAtContext(readCtx, buff[:size], off)

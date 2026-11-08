@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"runtime"
 	"runtime/debug"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"github.com/hanwen/go-fuse/v2/fs"
@@ -16,6 +16,7 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/fsutil"
 	"github.com/sirrobot01/decypharr/internal/logger"
+	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/backend"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/config"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/vfs"
@@ -39,14 +40,10 @@ const (
 
 // Backend implements the hanwen/go-fuse backend.
 type Backend struct {
-	config      *config.FuseConfig
-	logger      zerolog.Logger
-	server      *fuse.Server
-	ready       atomic.Bool
-	unmountFunc func(ctx context.Context)
-	root        *Dir
-	vfs         *vfs.Manager
-	unmounter   mountDetacher
+	config    *config.FuseConfig
+	logger    zerolog.Logger
+	root      *Dir
+	unmounter mountDetacher
 }
 
 // mountDetacher force-detaches a mount point (unmount.Unmounter).
@@ -54,10 +51,37 @@ type mountDetacher interface {
 	Unmount(ctx context.Context, mountPath string) error
 }
 
-// fuseServer is the part of *fuse.Server teardown uses.
+// fuseServer is the part of *fuse.Server the handle uses.
 type fuseServer interface {
 	Unmount() error
 }
+
+// mounted is the live mount: Done closes when go-fuse forgets the root, which
+// it does after the serve loops have exited.
+type mounted struct {
+	server   fuseServer
+	done     chan struct{}
+	once     sync.Once
+	path     string
+	detacher mountDetacher
+}
+
+func newMounted(server fuseServer, path string, detacher mountDetacher) *mounted {
+	return &mounted{server: server, done: make(chan struct{}), path: path, detacher: detacher}
+}
+
+// end closes Done once, however often go-fuse calls the root's hook.
+func (m *mounted) end() { m.once.Do(func() { close(m.done) }) }
+
+// Done is closed once when the serve loop has ended.
+func (m *mounted) Done() <-chan struct{} { return m.done }
+
+// Unmount is the graceful unmount: it returns once the kernel has detached the
+// mount and the serve loop has exited, or with the reason it could not.
+func (m *mounted) Unmount() error { return m.server.Unmount() }
+
+// Detach lazily detaches the mount point.
+func (m *mounted) Detach(ctx context.Context) error { return m.detacher.Unmount(ctx, m.path) }
 
 // NewBackend creates a new hanwen backend.
 func NewBackend(vfs *vfs.Manager, config *config.FuseConfig, log zerolog.Logger) (backend.Backend, error) {
@@ -71,121 +95,33 @@ func NewBackend(vfs *vfs.Manager, config *config.FuseConfig, log zerolog.Logger)
 		config:    config,
 		logger:    log,
 		root:      root,
-		vfs:       vfs,
 		unmounter: unmount.New(log),
 	}, nil
 }
 
-// Mount mounts the filesystem using hanwen/go-fuse.
-func (b *Backend) Mount(ctx context.Context) error {
-	// Create mount point if it doesn't exist(skip if on Windows)
-
+// Mount mounts the filesystem using hanwen/go-fuse. It runs in the dfs owner
+// task and returns once the kernel has answered the mount.
+func (b *Backend) Mount(ctx context.Context, _ *task.Group) (backend.Mounted, error) {
 	if b.root == nil {
-		return fmt.Errorf("root node is not initialized")
-	}
-	if b.vfs == nil {
-		return fmt.Errorf("VFS manager is not initialized")
+		return nil, fmt.Errorf("root node is not initialized")
 	}
 
 	_ = fsutil.MkdirShared(b.config.MountPath, b.config.MountDirMode)
 	// Try to unmount if already mounted
 	b.forceUnmount(ctx)
 
-	opts := b.mountOptions()
+	handle := newMounted(nil, b.config.MountPath, b.unmounter)
+	b.root.onServeEnd = handle.end
 
-	// Start timer before creating NodeFS - adjust timeout duration as needed
-	mountCtx, cancel := context.WithTimeout(ctx, b.config.DaemonTimeout)
-	defer cancel()
-
-	// Channel to receive the result of fs.Mount
-	type fsResult struct {
-		server *fuse.Server
-		err    error
-	}
-	fsResultChan := make(chan fsResult, 1)
-
-	// Run fs.Mount in a goroutine
-	go func() {
-		server, err := fs.Mount(b.config.MountPath, b.root, opts)
-		fsResultChan <- fsResult{server: server, err: err}
-	}()
-
-	var server *fuse.Server
-	select {
-	case result := <-fsResultChan:
-		server = result.server
-		if result.err != nil {
-			return fmt.Errorf("failed to create mount: %w", result.err)
-		}
-	case <-mountCtx.Done():
-		b.ready.Store(false)
-		// If fs.Mount later succeeds, nobody is left to read the result —
-		// unmount the orphaned server instead of leaking a live mount.
-		go func() {
-			if result := <-fsResultChan; result.server != nil {
-				_ = result.server.Unmount()
-			}
-		}()
-		return fmt.Errorf("timeout creating mount: %w", mountCtx.Err())
-	}
-
-	b.server = server
-
-	// Now wait for the mount to be ready with the same timeout context
 	b.logger.Info().
 		Str("mount_path", b.config.MountPath).
 		Msg("Waiting for mount to be ready")
-
-	waitChan := make(chan error, 1)
-	go func() {
-		waitChan <- server.WaitMount()
-	}()
-
-	select {
-	case err := <-waitChan:
-		if err != nil {
-			_ = server.Unmount() // cleanup on error
-			return fmt.Errorf("failed to wait for mount: %w", err)
-		}
-	case <-mountCtx.Done():
-		_ = server.Unmount() // cleanup on timeout
-		return fmt.Errorf("timeout waiting for mount to be ready: %w", mountCtx.Err())
+	server, err := fs.Mount(b.config.MountPath, b.root, b.mountOptions())
+	if err != nil {
+		return nil, fmt.Errorf("failed to create mount: %w", err)
 	}
-
-	b.unmountFunc = func(ctx context.Context) { b.unmountServer(ctx, server) }
-	b.ready.Store(true)
-	return nil
-}
-
-// unmountServer closes the VFS manager and unmounts server, force-unmounting
-// when the regular unmount fails or ctx expires first.
-func (b *Backend) unmountServer(ctx context.Context, server fuseServer) {
-	b.logger.Info().Msg("Unmounting filesystem")
-
-	done := make(chan error, 1)
-	go func() {
-		if b.vfs != nil {
-			if err := b.vfs.Close(); err != nil {
-				b.logger.Warn().Err(err).Msg("Failed to close VFS")
-			}
-		}
-		// Unmount returns once the kernel has detached the mount and the
-		// serve loop has exited, or with the reason it could not.
-		done <- server.Unmount()
-	}()
-
-	select {
-	case err := <-done:
-		if err == nil {
-			b.logger.Info().Msg("Filesystem unmounted successfully")
-			return
-		}
-		b.logger.Warn().Err(err).Msg("Unmount failed, forcing unmount")
-	case <-ctx.Done():
-		b.logger.Warn().Err(ctx.Err()).Msg("Unmount timed out, forcing unmount")
-	}
-	// ctx may already be done; the unmounter bounds its own attempts.
-	b.forceUnmount(context.WithoutCancel(ctx))
+	handle.server = server
+	return handle, nil
 }
 
 // mountOptions builds the go-fuse options for this mount.
@@ -234,38 +170,6 @@ func (b *Backend) mountOptions() *fs.Options {
 		GID:          b.config.GID,
 	}
 	return opts
-}
-
-// Unmount unmounts the filesystem.
-func (b *Backend) Unmount(ctx context.Context) error {
-	b.logger.Info().Msg("Unmounting hanwen backend")
-	if b.unmountFunc != nil {
-		// unmountFunc already closes the VFS manager as part of its teardown;
-		// don't close it a second time here.
-		b.unmountFunc(ctx)
-		return nil
-	}
-	// Mount never completed: force-unmount and close the VFS ourselves.
-	b.forceUnmount(ctx)
-	if b.vfs != nil {
-		if err := b.vfs.Close(); err != nil {
-			b.logger.Warn().Err(err).Msg("Failed to close VFS")
-		}
-	}
-	return nil
-}
-
-// WaitReady waits for the mount to be ready.
-func (b *Backend) WaitReady(_ context.Context) error {
-	if b.server == nil {
-		return fmt.Errorf("server not initialized")
-	}
-	return b.server.WaitMount()
-}
-
-// IsReady returns true if the mount is ready.
-func (b *Backend) IsReady() bool {
-	return b.ready.Load()
 }
 
 // Type returns the backend type.
