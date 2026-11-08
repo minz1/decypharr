@@ -34,10 +34,11 @@ const (
 
 	// rcloneGracefulStop is how long Stop lets rcd exit on SIGINT before
 	// killing it; rcloneReapTimeout bounds the wait after the kill.
-	rcloneGracefulStop = 2 * time.Second
-	rcloneReapTimeout  = 5 * time.Second
+	rcloneGracefulStop = time.Second
+	rcloneReapTimeout  = 2 * time.Second
 
-	// managerStopTimeout bounds Stop: the unmount, the signal, the kill and the reap.
+	// managerStopTimeout bounds Stop when no mount slice is armed (a stop outside
+	// the generation): the unmount, the signal, the kill and the reap.
 	managerStopTimeout = 30 * time.Second
 	// rcCallTimeout bounds one RC call made for a caller that has no context.
 	rcCallTimeout = 10 * time.Second
@@ -179,6 +180,9 @@ func (m *Manager) wire() {
 	m.view.Store(&mountView{state: mountWaiting})
 }
 
+// SetStopSlice gives the manager the generation's mount slice, before Start.
+func (m *Manager) SetStopSlice(s task.Slice) { m.owner.setStopSlice(s) }
+
 // Start starts the rcd owner and the mount supervisor on children of g. It returns
 // before rcd answers; IsReady says when it does.
 func (m *Manager) Start(g *task.Group) error {
@@ -223,7 +227,7 @@ func (m *Manager) Stop() error {
 	}
 
 	m.logger.Info().Msg("Stopping rclone RC server")
-	ctx, cancel := task.Detached(rcd.Context(), managerStopTimeout)
+	ctx, cancel := m.owner.slice().Bound(rcd.Context(), managerStopTimeout)
 	defer cancel()
 	err := errors.Join(ops.Stop(ctx), rcd.Stop(ctx))
 	if current := m.owner.state.Load(); err == nil && current != rcdStopped {

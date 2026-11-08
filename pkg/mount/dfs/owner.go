@@ -12,14 +12,15 @@ import (
 )
 
 const (
-	// stopBudget bounds the whole DFS stop: the unmount, then the cache close.
+	// stopBudget bounds the whole DFS stop when no mount slice is armed (a stop
+	// outside the generation): the unmount, then the cache close.
 	stopBudget = 10 * time.Second
 	// gracefulUnmountTimeout is how long the graceful unmount may take before
 	// the mount point is lazily detached.
-	gracefulUnmountTimeout = 5 * time.Second
+	gracefulUnmountTimeout = 4 * time.Second
 	// vfsCloseReserve is the part of stopBudget kept for closing the cache: the
 	// detach context ends this long before the budget does.
-	vfsCloseReserve = 3 * time.Second
+	vfsCloseReserve = 2 * time.Second
 )
 
 var (
@@ -143,7 +144,7 @@ func (m *Manager) owner(bck backend.Backend, backG *task.Group, res *startResult
 // for what is left of the budget minus the cache's reserve. begin is nil when
 // no unmount task could be started.
 func (m *Manager) stopMount(ctx context.Context, h backend.Mounted, begin chan struct{}, unmounted <-chan error) {
-	sctx, cancel := task.Detached(ctx, stopBudget)
+	sctx, cancel := m.slice().Bound(ctx, stopBudget)
 	defer cancel()
 
 	m.advance([]dfsState{dfsReady, dfsStarting}, dfsStopping)
@@ -172,7 +173,7 @@ func (m *Manager) stopMount(ctx context.Context, h backend.Mounted, begin chan s
 // unmountLate releases a mount that came up after the owner was told to stop:
 // there is no unmount task (the group is stopping), so the owner unmounts it.
 func (m *Manager) unmountLate(ctx context.Context, h backend.Mounted) {
-	sctx, cancel := task.Detached(ctx, stopBudget)
+	sctx, cancel := m.slice().Bound(ctx, stopBudget)
 	defer cancel()
 	if err := h.Unmount(); err != nil {
 		m.detach(sctx, h, err.Error())

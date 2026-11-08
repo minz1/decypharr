@@ -31,10 +31,10 @@ const (
 	// rcdStableAfter is how long rcd must stay Ready for its failures to be forgotten.
 	rcdStableAfter = time.Minute
 	// rcdUnmountBudget bounds the whole unmount that runs before rcd is signalled.
-	rcdUnmountBudget = 8 * time.Second
+	rcdUnmountBudget = 5 * time.Second
 	// rcdRCUnmountBudget bounds the RC unmount within it, so a dead or hung rcd
 	// leaves the rest for the forced unmount.
-	rcdRCUnmountBudget = 5 * time.Second
+	rcdRCUnmountBudget = 3 * time.Second
 )
 
 // rcdProcess is the running rcd, as the owner sees it.
@@ -85,6 +85,8 @@ type rcdOwner struct {
 	restarts atomic.Uint64
 	// group is the rcd group: the per-process reapers run on it.
 	group *task.Group
+	// stopSlice is the generation's mount slice: the stop waits end with it once it began.
+	stopSlice atomic.Pointer[task.Slice]
 }
 
 func newRcdOwner(group *task.Group, logger zerolog.Logger) *rcdOwner {
@@ -99,6 +101,23 @@ func newRcdOwner(group *task.Group, logger zerolog.Logger) *rcdOwner {
 		state:      state.NewAtomic(rcdNew, rcdSuccessors),
 		group:      group,
 	}
+}
+
+// setStopSlice gives the owner the generation's mount slice; nil clears it.
+func (o *rcdOwner) setStopSlice(s task.Slice) {
+	if s == nil {
+		o.stopSlice.Store(nil)
+		return
+	}
+	o.stopSlice.Store(&s)
+}
+
+// slice is the owner's stop slice; the zero Slice (unarmed) when none was set.
+func (o *rcdOwner) slice() task.Slice {
+	if s := o.stopSlice.Load(); s != nil {
+		return *s
+	}
+	return nil
 }
 
 // transition is the only writer of state. A refused move is a bug in the owner.
@@ -306,7 +325,7 @@ func (o *rcdOwner) stopSequence(from rcdState, att *rcdAttempt, earlier ...error
 	o.transition(from, rcdStopping)
 	// Whatever state the stop starts from, a mount of this or an earlier rcd may
 	// still be in place, so the unmount always runs, before rcd is signalled.
-	ctx, cancel := task.Detached(o.group.Context(), rcdUnmountBudget)
+	ctx, cancel := o.slice().Bound(o.group.Context(), rcdUnmountBudget)
 	o.beforeStop(ctx, from)
 	cancel()
 	err := errors.Join(earlier...)
@@ -336,17 +355,24 @@ func (o *rcdOwner) stopProcess(att *rcdAttempt) error {
 		graceful = false
 	}
 	if graceful {
+		wait, cancel := o.slice().Bound(o.group.Context(), rcloneGracefulStop)
 		select {
 		case <-att.exited:
+			cancel()
 			return nil
-		case <-time.After(rcloneGracefulStop):
+		case <-wait.Done():
+			cancel()
 			o.kill(att)
 		}
 	}
+	// The reap keeps its own timer, not the slice: a killed rcd must still be
+	// reaped when the slice is over, or the process is left behind.
+	reap := time.NewTimer(rcloneReapTimeout)
+	defer reap.Stop()
 	select {
 	case <-att.exited:
 		return nil
-	case <-time.After(rcloneReapTimeout):
+	case <-reap.C:
 		// exec's copy goroutines may still write to the log after closeLog, which
 		// reopens the file; that fd leaks only until the process exits.
 		o.logger.Error().Int("pid", pid).Msg("rcd could not be reaped")

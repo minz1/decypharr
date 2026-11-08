@@ -39,7 +39,7 @@ const (
 
 	// cacheCloseTimeout bounds the wait for an item's tasks to end when the
 	// item is closed, and Cache.Close's wait for all of them together.
-	cacheCloseTimeout = 3 * time.Second
+	cacheCloseTimeout = 2 * time.Second
 
 	// How long to keep unused cache items around before removing(no delete on disk, just remove from map and close file. Cleanup loop will remove from disk eventually.
 	itemIdleTimeout = 1 * time.Minute
@@ -89,6 +89,8 @@ type Cache struct {
 	itemsGroup *task.Group
 	// itemSeq numbers the items' groups.
 	itemSeq atomic.Uint64
+	// stopSlice is the generation's mount slice; closes wait no longer than it once it began.
+	stopSlice atomic.Pointer[task.Slice]
 
 	createGroup  singleflight.Group
 	threshold    int64
@@ -955,12 +957,29 @@ func (c *Cache) PurgeCache() map[string]any {
 	}
 }
 
+// SetStopSlice gives the cache the generation's mount slice; nil clears it.
+func (c *Cache) SetStopSlice(s task.Slice) {
+	if s == nil {
+		c.stopSlice.Store(nil)
+		return
+	}
+	c.stopSlice.Store(&s)
+}
+
+// slice is the cache's stop slice; the zero Slice (unarmed) when none was set.
+func (c *Cache) slice() task.Slice {
+	if s := c.stopSlice.Load(); s != nil {
+		return *s
+	}
+	return nil
+}
+
 // Close shuts down the cache.
 func (c *Cache) Close() error {
 	c.itemsGroup.Close()
 
 	// One budget for every item's tasks to end in.
-	ctx, cancel := task.Detached(c.ctx, cacheCloseTimeout)
+	ctx, cancel := c.slice().Bound(c.ctx, cacheCloseTimeout)
 	defer cancel()
 	c.items.Range(func(key string, item *CacheItem) bool {
 		if err := item.closeWith(ctx); err != nil {
@@ -1403,7 +1422,7 @@ func (item *CacheItem) FindMissing(r ranges.Range) ranges.Range {
 // design — the user expects re-opens of a previously-cached file to hit
 // disk, not re-download).
 func (item *CacheItem) Close() error {
-	ctx, cancel := task.Detached(item.cache.ctx, cacheCloseTimeout)
+	ctx, cancel := item.cache.slice().Bound(item.cache.ctx, cacheCloseTimeout)
 	defer cancel()
 	return item.closeWith(ctx)
 }
