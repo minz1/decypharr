@@ -138,6 +138,34 @@ func TestSleepReturnsMountStoppingWhenDeadlinePassed(t *testing.T) {
 	}
 }
 
+// A wait already sleeping ends when the gate closes, not at its next attempt.
+func TestSleepEndsWhenGateCloses(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		d := symlinkTestDownloader(t)
+		d.manager.mountGate = NewMountGate(zerolog.Nop())
+		begin := time.Now()
+		done := make(chan error, 1)
+		go func() {
+			done <- d.sleepUntilNextSymlinkAttempt(t.Context(), time.Hour, time.Now().Add(2*time.Hour))
+		}()
+		time.Sleep(time.Second)
+		d.manager.mountGate.markStopping()
+		synctest.Wait()
+		select {
+		case err := <-done:
+			if !errors.Is(err, ErrMountStopping) {
+				t.Fatalf("err = %v, want ErrMountStopping", err)
+			}
+		default:
+			t.Fatal("the wait did not end when the gate closed")
+		}
+		if got := time.Since(begin); got != time.Second {
+			t.Fatalf("wait ended at +%v, want +1s", got)
+		}
+	})
+}
+
 // Test 2: an add the HTTP side accepted while the mount stops stays queued.
 func TestAddDuringMountStopStaysQueued(t *testing.T) {
 	t.Parallel()

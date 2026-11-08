@@ -95,6 +95,8 @@ type fakeHandle struct {
 	hangOnce       sync.Once
 	// detachDeadline is the unix nanoseconds of the last Detach ctx deadline; 0 when it had none.
 	detachDeadline atomic.Int64
+	// detachCtxDone records that the last Detach got a ctx that had already ended.
+	detachCtxDone atomic.Bool
 }
 
 func newFakeHandle(calls *callLog) *fakeHandle {
@@ -128,6 +130,7 @@ func (h *fakeHandle) Detach(ctx context.Context) error {
 	if deadline, ok := ctx.Deadline(); ok {
 		h.detachDeadline.Store(deadline.UnixNano())
 	}
+	h.detachCtxDone.Store(ctx.Err() != nil)
 	h.calls.add("detach")
 	h.end()
 	if h.detachReleases {
@@ -720,6 +723,15 @@ func TestDFSStopBoundedBySlice(t *testing.T) {
 		requireCalls(t, f, "mount", "unmount", "detach", "vfsClose")
 		if got, want := f.calls.at("detach").Sub(begin), 3*time.Second; got != want {
 			t.Fatalf("detach at +%v, want +%v", got, want)
+		}
+		// A slice too short for the cache's reserve still leaves the detach a
+		// live ctx: a real lazy detach (exec.CommandContext) refuses an ended one.
+		if f.fb.handle.detachCtxDone.Load() {
+			t.Fatal("detach got an ended ctx")
+		}
+		got := time.Unix(0, f.fb.handle.detachDeadline.Load()).Sub(begin)
+		if want := 3*time.Second + detachFloor; got != want {
+			t.Fatalf("detach ctx ends +%v, want +%v", got, want)
 		}
 	})
 }

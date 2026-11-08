@@ -770,3 +770,20 @@ func TestDetachedKeepsValuesDropsCancel(t *testing.T) {
 		t.Fatalf("detached timeout err = %v, want deadline exceeded", short.Err())
 	}
 }
+
+// Children lists child groups in creation order, the reverse of their stop
+// order, whatever their names sort to.
+func TestChildrenInCreationOrder(t *testing.T) {
+	t.Parallel()
+	root := task.NewRoot(t.Context(), "root", zerolog.Nop())
+	for _, name := range []string{"zeta", "alpha", "mid"} {
+		root.Child(name)
+	}
+	want := []string{"root/zeta", "root/alpha", "root/mid"}
+	if got := root.Children(); !slices.Equal(got, want) {
+		t.Fatalf("Children = %v, want %v", got, want)
+	}
+	if err := root.Stop(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}

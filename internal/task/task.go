@@ -450,6 +450,19 @@ func (g *Group) recordDirty(cause error) {
 	}
 }
 
+// Children lists the paths of g's child groups oldest first: a stop closes
+// them in the reverse of this order.
+func (g *Group) Children() []string {
+	g.mu.Lock()
+	children := g.childrenLocked()
+	g.mu.Unlock()
+	paths := make([]string, 0, len(children))
+	for _, child := range children {
+		paths = append(paths, child.path)
+	}
+	return paths
+}
+
 // childrenLocked returns g's children oldest first. The caller holds g.mu.
 func (g *Group) childrenLocked() []*Group {
 	children := make([]*Group, 0, len(g.children))
