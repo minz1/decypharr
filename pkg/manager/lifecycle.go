@@ -372,7 +372,8 @@ func (m *Manager) superviseAll(specs []serviceSpec) error {
 // group created earlier stops later, so the services that others rely on
 // (usenet, the Arr, repair) outlive the work and the scheduler
 // that call them, and hearsay outlives them all. Notification deliveries come
-// first so they stop last: every service may notify while it stops. Storage
+// first so they stop last: every service may call Notify while it stops
+// without error (the event is then dropped when the deliveries stop). Storage
 // closes in the group's own task, after every child.
 func (m *Manager) registerServices() error {
 	m.notifyGroup = m.group.Child("notifications")
