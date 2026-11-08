@@ -97,7 +97,7 @@ type Manager struct {
 	ready     chan struct{}
 	// The sub-services the start sequence runs, each as a task on its own
 	// child group. A nil service is not configured.
-	hearsaySvc, placementsSvc, reacquireSvc, indexerSvc, repairSvc, schedulerSvc *service
+	hearsaySvc, usenetSvc, placementsSvc, reacquireSvc, indexerSvc, repairSvc, schedulerSvc *service
 
 	arrRecoveryMu          sync.RWMutex
 	arrRecovery            ArrRecovery
@@ -456,7 +456,7 @@ func (m *Manager) initArrServices() {
 }
 
 func (m *Manager) initUsenet() {
-	usenetClient, err := usenet.New(m.store, m.logs)
+	usenetClient, err := usenet.New(m.usenetSvc.group, m.store, m.logs)
 	if err != nil {
 		m.logger.Warn().Msg("Usenet client not configured")
 		m.usenet = nil

@@ -7,6 +7,7 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/logger"
+	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/pkg/usenet/fs/reader"
 )
 
@@ -27,7 +28,7 @@ func TestRestartAppliesUsenetMemoryBudget(t *testing.T) {
 		}); updateErr != nil {
 			t.Fatal(updateErr)
 		}
-		service, newErr := New(store, logger.Discard())
+		service, newErr := New(task.NewRoot(t.Context(), "test", zerolog.Nop()), store, logger.Discard())
 		if newErr != nil {
 			t.Fatal(newErr)
 		}
