@@ -53,7 +53,7 @@ func (fake *fakeRadarrLibrary) ServeHTTP(w http.ResponseWriter, r *http.Request)
 // startTestService opens and starts a Service over directory.
 func startTestService(t *testing.T, directory string, registry *arr.Service) *Service {
 	t.Helper()
-	service, err := NewService(ServiceOptions{Directory: directory, Arrs: registry})
+	service, err := NewService(newTestGroup(t), ServiceOptions{Directory: directory, Arrs: registry})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +337,7 @@ func runReturnedDownloadCase(t *testing.T, tc returnedDownloadCase) {
 	instance := arr.Arr{Name: "library", Type: arr.Radarr, Host: server.URL, Token: "token"}
 	registry := arr.New(config.NewStore(&config.Config{}), nil, zerolog.Nop())
 	registry.AddOrUpdate(instance)
-	service, err := NewService(ServiceOptions{Directory: t.TempDir(), Arrs: registry})
+	service, err := NewService(newTestGroup(t), ServiceOptions{Directory: t.TempDir(), Arrs: registry})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -390,7 +390,7 @@ func runReturnedDownloadCase(t *testing.T, tc returnedDownloadCase) {
 func TestRebindLeavesAJobThatIsNoLongerWaiting(t *testing.T) {
 	t.Parallel()
 	instance := arr.Arr{Name: "library", Type: arr.Radarr, Host: "http://arr.invalid", Token: "token"}
-	service, err := NewService(ServiceOptions{Directory: t.TempDir(), Arrs: newTestArrStorage()})
+	service, err := NewService(newTestGroup(t), ServiceOptions{Directory: t.TempDir(), Arrs: newTestArrStorage()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,7 +410,7 @@ func TestRebindLeavesAJobThatIsNoLongerWaiting(t *testing.T) {
 func TestNoteWaitingLeavesAJobThatIsNoLongerWaiting(t *testing.T) {
 	t.Parallel()
 	instance := arr.Arr{Name: "library", Type: arr.Radarr, Host: "http://arr.invalid", Token: "token"}
-	service, err := NewService(ServiceOptions{Directory: t.TempDir(), Arrs: newTestArrStorage()})
+	service, err := NewService(newTestGroup(t), ServiceOptions{Directory: t.TempDir(), Arrs: newTestArrStorage()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -433,7 +433,7 @@ func runImportedJobCase(t *testing.T, tc importedJobCase) {
 	registry := arr.New(config.NewStore(&config.Config{}), nil, zerolog.Nop())
 	registry.AddOrUpdate(instance)
 	directory := t.TempDir()
-	service, err := NewService(ServiceOptions{Directory: directory, Arrs: registry})
+	service, err := NewService(newTestGroup(t), ServiceOptions{Directory: directory, Arrs: registry})
 	if err != nil {
 		t.Fatal(err)
 	}

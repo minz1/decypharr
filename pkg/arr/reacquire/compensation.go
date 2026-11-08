@@ -122,17 +122,6 @@ func (progress heldProgress) UpdateDurable(_ Status, mutate func(*Job)) error {
 	return progress.inner.UpdateDurable(progress.status, mutate)
 }
 
-// maintenanceContext is the context of the service's own work: the one Start
-// was given, or a background one before it.
-func (s *Service) maintenanceContext() context.Context {
-	s.lifecycleMu.RLock()
-	defer s.lifecycleMu.RUnlock()
-	if s.ctx == nil {
-		return context.Background()
-	}
-	return s.ctx
-}
-
 // expireWaitingJob ends a job that waited for its replacement too long. A job
 // that deleted an Arr file is searched for once more and left for an operator:
 // failing it would leave the media missing with nothing looking for it.

@@ -109,7 +109,7 @@ func TestServiceDeduplicatesAndPersistsReacquireJobs(t *testing.T) {
 	t.Parallel()
 	directory := t.TempDir()
 	handler := &waitingReacquireHandler{called: make(chan string, 1)}
-	service, err := NewService(ServiceOptions{Directory: directory, Handler: handler})
+	service, err := NewService(newTestGroup(t), ServiceOptions{Directory: directory, Handler: handler})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +174,7 @@ func TestServiceDeduplicatesAndPersistsReacquireJobs(t *testing.T) {
 		t.Fatal(closeErr)
 	}
 
-	reopened, err := NewService(ServiceOptions{Directory: directory})
+	reopened, err := NewService(newTestGroup(t), ServiceOptions{Directory: directory})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +193,7 @@ func TestServiceDeduplicatesAndPersistsReacquireJobs(t *testing.T) {
 func TestServiceDeletesOnlyTerminalJobsAndPersistsDeletion(t *testing.T) {
 	t.Parallel()
 	directory := t.TempDir()
-	service, err := NewService(ServiceOptions{Directory: directory})
+	service, err := NewService(newTestGroup(t), ServiceOptions{Directory: directory})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +261,7 @@ func TestServiceDeletesOnlyTerminalJobsAndPersistsDeletion(t *testing.T) {
 	if closeErr := service.Close(); closeErr != nil {
 		t.Fatal(closeErr)
 	}
-	reopened, err := NewService(ServiceOptions{Directory: directory})
+	reopened, err := NewService(newTestGroup(t), ServiceOptions{Directory: directory})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +280,7 @@ func TestServiceDeletesOnlyTerminalJobsAndPersistsDeletion(t *testing.T) {
 func TestServicePersistsUnknownMutationForRestartReconciliation(t *testing.T) {
 	t.Parallel()
 	directory := t.TempDir()
-	service, err := NewService(ServiceOptions{Directory: directory, Handler: unknownMutationHandler{}})
+	service, err := NewService(newTestGroup(t), ServiceOptions{Directory: directory, Handler: unknownMutationHandler{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,7 +327,7 @@ func TestServicePersistsUnknownMutationForRestartReconciliation(t *testing.T) {
 		t.Fatal(closeErr)
 	}
 
-	reopened, err := NewService(ServiceOptions{Directory: directory})
+	reopened, err := NewService(newTestGroup(t), ServiceOptions{Directory: directory})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +344,7 @@ func TestServicePersistsUnknownMutationForRestartReconciliation(t *testing.T) {
 func TestWaitingTransitionFindsExistingCompleteEpisodeReplacement(t *testing.T) {
 	t.Parallel()
 	handler := &delayedWaitingHandler{started: make(chan struct{}), release: make(chan struct{})}
-	service, err := NewService(ServiceOptions{Directory: t.TempDir(), Handler: handler})
+	service, err := NewService(newTestGroup(t), ServiceOptions{Directory: t.TempDir(), Handler: handler})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -430,7 +430,7 @@ func TestWaitingTransitionFindsExistingCompleteEpisodeReplacement(t *testing.T) 
 func TestWaitingJobExpiresAndReleasesDeduplicationKey(t *testing.T) {
 	t.Parallel()
 	handler := &waitingReacquireHandler{called: make(chan string, 2)}
-	service, err := NewService(ServiceOptions{Directory: t.TempDir(), Handler: handler})
+	service, err := NewService(newTestGroup(t), ServiceOptions{Directory: t.TempDir(), Handler: handler})
 	if err != nil {
 		t.Fatal(err)
 	}

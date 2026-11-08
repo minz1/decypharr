@@ -86,7 +86,7 @@ func TestLegacyJobWithoutStrategyIsConvertedOnLoad(t *testing.T) {
 	}
 
 	var logged bytes.Buffer
-	service, err := NewService(ServiceOptions{Directory: directory, Logger: zerolog.New(&logged)})
+	service, err := NewService(newTestGroup(t), ServiceOptions{Directory: directory, Logger: zerolog.New(&logged)})
 	if err != nil {
 		t.Fatal(err)
 	}

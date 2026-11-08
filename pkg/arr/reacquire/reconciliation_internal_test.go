@@ -30,7 +30,7 @@ func TestReconciliationStopsAndRetainsDuplicateProtection(t *testing.T) {
 func runReconciliationStop(t *testing.T, scenario string) {
 	t.Helper()
 	directory := t.TempDir()
-	service, err := NewService(ServiceOptions{Directory: directory})
+	service, err := NewService(newTestGroup(t), ServiceOptions{Directory: directory})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -712,19 +712,23 @@ func retryDelay(job Job, err error) time.Duration {
 }
 
 func (s *Service) scheduleRetry(job Job) {
-	if job.RetryAt.IsZero() || s.ctx == nil {
+	if job.RetryAt.IsZero() {
 		return
 	}
 	delay := max(time.Duration(0), job.RetryAt.Sub(s.now()))
-	s.wg.Go(func() {
+	err := s.worker.Go("retry", func(ctx context.Context) error {
 		timer := time.NewTimer(delay)
 		defer timer.Stop()
 		select {
-		case <-s.ctx.Done():
+		case <-ctx.Done():
 		case <-timer.C:
 			s.signal()
 		}
+		return nil
 	})
+	if err != nil {
+		s.logger.Debug().Err(err).Str("job_id", job.ID).Msg("Reacquire retry not scheduled: the service is stopping")
+	}
 }
 
 func (s *Service) schedulePersistedRetries() {
@@ -777,7 +781,10 @@ func (s *Service) completeJobFromIndex(job Job) error {
 	if !ready {
 		return nil
 	}
-	s.retryRemonitor(s.maintenanceContext(), job.ID)
+	if s.beforeMaintenanceCtx != nil {
+		s.beforeMaintenanceCtx()
+	}
+	s.retryRemonitor(s.g.Context(), job.ID)
 	_, err := s.updateJob(job.ID, StatusReady, func(job *Job) {
 		job.ReplacementDownloadIDs = replacementDownloadIDs
 		job.ReplacementDownloadID = replacementDownloadIDs[0]
@@ -869,9 +876,9 @@ func (s *Service) maintainJobs() {
 	s.jobsMu.RUnlock()
 
 	for _, id := range expire {
-		s.expireWaitingJob(s.maintenanceContext(), id)
+		s.expireWaitingJob(s.g.Context(), id)
 	}
-	s.retryRemonitors(s.maintenanceContext())
+	s.retryRemonitors(s.g.Context())
 	for _, id := range prune {
 		s.pruneTerminalJob(id, now)
 	}
