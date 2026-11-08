@@ -86,6 +86,8 @@ type managerRig struct {
 	tableIgnoresMount bool
 	// readGate, when set, holds the next readTable call until it is closed; guarded by mu.
 	readGate chan struct{}
+	// backend is handed to SetBackendStopped; closeBackend closes it.
+	backend chan struct{}
 }
 
 // detach is the Manager's forced unmount: it records the ctx's state at call time.
@@ -155,6 +157,8 @@ func newManagerRig(t *testing.T) *managerRig {
 		r.closes.Add(1)
 		return nil
 	}
+	r.backend = make(chan struct{})
+	m.SetBackendStopped(r.backend)
 	r.m = m
 	r.g = task.NewRoot(t.Context(), "mount", zerolog.Nop())
 	return r
