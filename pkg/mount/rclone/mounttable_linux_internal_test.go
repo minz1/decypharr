@@ -83,38 +83,40 @@ func watchChild(t *testing.T) {
 		t.Fatalf("make / private: %v", err)
 	}
 	target := t.TempDir()
+	w, err := openMountTable()
+	if err != nil {
+		t.Fatalf("openMountTable: %v", err)
+	}
+	defer w.close()
+	// The watch is open, so this one mount is a change it must report.
+	if err = unix.Mount("tmpfs", target, "tmpfs", 0, ""); err != nil {
+		t.Fatalf("mount tmpfs: %v", err)
+	}
+	defer func() { _ = unix.Unmount(target, 0) }()
+
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	changed := make(chan struct{}, 1)
 	done := make(chan error, 1)
 	go func() {
-		done <- watchMountTable(ctx, func() {
+		done <- w.run(ctx, func() {
 			select {
 			case changed <- struct{}{}:
 			default:
 			}
 		})
 	}()
-	bound := time.After(10 * time.Second)
-	for {
-		if err := unix.Mount("tmpfs", target, "tmpfs", 0, ""); err != nil {
-			t.Fatalf("mount tmpfs: %v", err)
+	select {
+	case <-changed:
+		cancel()
+		if err = <-done; err != nil {
+			t.Fatalf("run: %v", err)
 		}
-		if err := unix.Unmount(target, 0); err != nil {
-			t.Fatalf("unmount tmpfs: %v", err)
-		}
-		select {
-		case <-changed:
-			cancel()
-			if err := <-done; err != nil {
-				t.Fatalf("watchMountTable: %v", err)
-			}
-			return
-		case err := <-done:
-			t.Fatalf("watchMountTable returned early: %v", err)
-		case <-bound:
-			t.Fatal("no mount table change seen within 10s")
-		case <-time.After(200 * time.Millisecond):
-		}
+	case err = <-done:
+		t.Fatalf("run returned early: %v", err)
+	case <-time.After(10 * time.Second):
+		cancel()
+		<-done
+		t.Fatal("no mount table change seen within 10s")
 	}
 }

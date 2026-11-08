@@ -116,7 +116,7 @@ type supState struct {
 	// when it was mounted; fewer later means it was detached.
 	tablePath  string
 	tableCount int
-	// backendStopped says the WebDAV server stopped; once set it stays, and the mount is never Mounted again.
+	// backendStopped says the WebDAV server stopped; once set it stays, and an up mount never stays Mounted.
 	backendStopped bool
 }
 
@@ -360,6 +360,11 @@ func (s mountSupervisor) degradedStays(
 	fx *keyed.Effects[struct{}, supMsg],
 	err error,
 ) {
+	if st.backendStopped {
+		// The stopped server is the cause; a probe failing because of it does not replace it.
+		s.degradeForBackend(ctx, st, fx)
+		return
+	}
 	st.gone = 0
 	if s.enter(ctx, st, fx, mountDegraded, withErr(err)) {
 		s.schedule(st, fx, nextProbe(mountDegraded, 0, st.watchUp), supProbeDue)

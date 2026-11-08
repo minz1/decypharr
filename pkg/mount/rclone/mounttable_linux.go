@@ -21,33 +21,59 @@ const mountinfoPath = "/proc/self/mountinfo"
 // POLLPRI; the poll itself rearms it, and changes between polls coalesce. An eventfd in the same poll set wakes it
 // when ctx ends.
 func watchMountTable(ctx context.Context, changed func()) error {
+	w, err := openMountTable()
+	if err != nil {
+		return err
+	}
+	defer w.close()
+	return w.run(ctx, changed)
+}
+
+// mountWatch is an open watch on the mount table: changes from its open on are reported by run.
+type mountWatch struct {
+	table, wake int
+}
+
+// openMountTable opens the mount table and the eventfd that wakes run. A change after it returns is never missed:
+// the kernel compares against the table's change count as of the open.
+func openMountTable() (*mountWatch, error) {
 	table, err := unix.Open(mountinfoPath, unix.O_RDONLY|unix.O_CLOEXEC, 0)
 	if errors.Is(err, unix.ENOENT) {
-		return fmt.Errorf("%w: no %s", errNoMountTable, mountinfoPath)
+		return nil, fmt.Errorf("%w: no %s", errNoMountTable, mountinfoPath)
 	}
 	if err != nil {
-		return fmt.Errorf("open %s: %w", mountinfoPath, err)
+		return nil, fmt.Errorf("open %s: %w", mountinfoPath, err)
 	}
-	defer func() { _ = unix.Close(table) }()
 	wake, err := unix.Eventfd(0, unix.EFD_CLOEXEC|unix.EFD_NONBLOCK)
 	if err != nil {
-		return fmt.Errorf("eventfd: %w", err)
+		_ = unix.Close(table)
+		return nil, fmt.Errorf("eventfd: %w", err)
 	}
-	defer func() { _ = unix.Close(wake) }()
-	tableFd, okTable := pollFd(table)
-	wakeFd, okWake := pollFd(wake)
+	return &mountWatch{table: table, wake: wake}, nil
+}
+
+// close closes both fds; run must have returned.
+func (w *mountWatch) close() {
+	_ = unix.Close(w.table)
+	_ = unix.Close(w.wake)
+}
+
+// run calls changed after each change to the mount table until ctx is done (nil) or the watch fails (the error).
+func (w *mountWatch) run(ctx context.Context, changed func()) error {
+	tableFd, okTable := pollFd(w.table)
+	wakeFd, okWake := pollFd(w.wake)
 	if !okTable || !okWake {
 		return fmt.Errorf("poll %s: descriptor out of range", mountinfoPath)
 	}
 
 	// The write happens only while both fds are open: on return we either stop the AfterFunc before it runs or wait
-	// for it to finish, and only then do the deferred closes run.
+	// for it to finish, and only after that may close run.
 	wrote := make(chan struct{})
 	stop := context.AfterFunc(ctx, func() {
 		defer close(wrote)
 		var one [8]byte
 		binary.NativeEndian.PutUint64(one[:], 1)
-		_, _ = unix.Write(wake, one[:])
+		_, _ = unix.Write(w.wake, one[:])
 	})
 	defer func() {
 		if !stop() {
@@ -60,7 +86,7 @@ func watchMountTable(ctx context.Context, changed func()) error {
 		{Fd: wakeFd, Events: unix.POLLIN},
 	}
 	for {
-		if _, err = unix.Poll(fds, -1); err != nil {
+		if _, err := unix.Poll(fds, -1); err != nil {
 			if errors.Is(err, unix.EINTR) {
 				continue
 			}
