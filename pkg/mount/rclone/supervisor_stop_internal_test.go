@@ -59,9 +59,11 @@ func TestStopFromMountedUsesRC(t *testing.T) {
 		r := newManagerRig(t)
 		r.startMounted()
 		r.stop()
-		r.wantCount("rc:mount/unmount", 1)
-		if n := r.detachCount(); n != 0 {
-			t.Fatalf("forced unmounts = %d, want 0; events: %v", n, r.events)
+		if n := r.stopCount("rc:mount/unmount"); n != 1 {
+			t.Fatalf("RC unmounts during the stop = %d, want 1; events: %v", n, r.events)
+		}
+		if n := r.stopCount("detach"); n != 0 {
+			t.Fatalf("forced unmounts during the stop = %d, want 0; events: %v", n, r.events)
 		}
 		r.wantMount(mountUnmounted)
 	})
@@ -91,12 +93,13 @@ func TestStopFromFailedUsesRC(t *testing.T) {
 		r := newManagerRig(t)
 		r.failRound()
 		r.wantState(rcdReady)
-		before := r.detachCount()
 
 		r.stop()
-		r.wantCount("rc:mount/unmount", 1)
-		if n := r.detachCount(); n != before {
-			t.Fatalf("forced unmounts during the stop = %d, want 0; events: %v", n-before, r.events)
+		if n := r.stopCount("rc:mount/unmount"); n != 1 {
+			t.Fatalf("RC unmounts during the stop = %d, want 1; events: %v", n, r.events)
+		}
+		if n := r.stopCount("detach"); n != 0 {
+			t.Fatalf("forced unmounts during the stop = %d, want 0; events: %v", n, r.events)
 		}
 		r.wantMount(mountUnmounted)
 		if info := r.m.mountInfo(); info.Error == "" {
