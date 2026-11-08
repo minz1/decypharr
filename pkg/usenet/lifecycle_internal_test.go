@@ -207,8 +207,10 @@ func TestCleanupRacingReleaseIsSynchronized(t *testing.T) {
 		readerCleanup: func(context.Context) {},
 	}
 	fe.readerOnce.Do(func() {})
-	if !fe.acquire() || !fe.acquire() {
-		t.Fatal("acquire a fresh entry")
+	for range 2 {
+		if !fe.acquire() {
+			t.Fatal("acquire a fresh entry")
+		}
 	}
 	var wg sync.WaitGroup
 	wg.Go(func() { fe.cleanup(t.Context()) })
