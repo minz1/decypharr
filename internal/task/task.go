@@ -269,32 +269,57 @@ func (g *Group) GoCritical(name string, fn func(ctx context.Context) error) erro
 }
 
 func (g *Group) start(name string, fn func(ctx context.Context) error, critical bool) error {
+	id, err := g.admit(name)
+	if err != nil {
+		return err
+	}
+	go g.run(id, name, fn, critical)
+	return nil
+}
+
+// Enter leases a slot in g for work that runs on a goroutine g does not
+// own, such as a shared worker running a closure on g's behalf. Until leave
+// is called the lease counts as one of g's tasks: Snapshot lists it and
+// g's shutdown waits for it after cancelling g's context, so the work must
+// watch g.Context(). When g is not running Enter returns ErrStopped, as Go
+// does, and no leave. leave is safe to call more than once.
+func (g *Group) Enter(name string) (func(), error) {
+	id, err := g.admit(name)
+	if err != nil {
+		return nil, err
+	}
+	var once sync.Once
+	return func() { once.Do(func() { g.release(id) }) }, nil
+}
+
+// admit registers a task or lease named name, or refuses it when g is not
+// running.
+func (g *Group) admit(name string) (uint64, error) {
 	g.mu.Lock()
+	defer g.mu.Unlock()
 	if g.state != Running || g.ctx.Err() != nil {
-		failure := g.failure
-		g.mu.Unlock()
-		if failure != nil {
-			return fmt.Errorf("%w: %w", ErrStopped, failure)
+		if g.failure != nil {
+			return 0, fmt.Errorf("%w: %w", ErrStopped, g.failure)
 		}
-		return ErrStopped
+		return 0, ErrStopped
 	}
 	g.nextID++
 	id := g.nextID
 	g.tasks[id] = running{name: name, started: time.Now()}
 	g.wg.Add(1)
-	g.mu.Unlock()
+	return id, nil
+}
 
-	go g.run(id, name, fn, critical)
-	return nil
+// release ends the task or lease admitted as id.
+func (g *Group) release(id uint64) {
+	g.mu.Lock()
+	delete(g.tasks, id)
+	g.mu.Unlock()
+	g.wg.Done()
 }
 
 func (g *Group) run(id uint64, name string, fn func(ctx context.Context) error, critical bool) {
-	defer func() {
-		g.mu.Lock()
-		delete(g.tasks, id)
-		g.mu.Unlock()
-		g.wg.Done()
-	}()
+	defer g.release(id)
 	err := g.call(name, fn)
 	if critical {
 		err = Fatal(err)
