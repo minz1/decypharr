@@ -1411,7 +1411,9 @@ func (item *CacheItem) Close() error {
 // closeWith is Close on the caller's budget: ctx bounds the wait for the
 // item's tasks. The downloaders close first, the group stops (the metadata
 // writer's last flush included) before the buffer closes, and the final
-// flush runs last, so two flushes never write the temporary file together.
+// flush runs last. If the group did not stop within ctx the writer is still
+// owed its own forced flush, so closeWith leaves it alone rather than write the
+// temporary file beside it.
 func (item *CacheItem) closeWith(ctx context.Context) error {
 	item.closeOnce.Do(func() {
 		dls := item.downloaders.Swap(nil)
@@ -1422,15 +1424,21 @@ func (item *CacheItem) closeWith(ctx context.Context) error {
 			}
 		}
 
-		if err := item.group.Stop(ctx); err != nil && item.closeErr == nil {
-			item.closeErr = err
+		stopped := true
+		if err := item.group.Stop(ctx); err != nil {
+			stopped = false
+			if item.closeErr == nil {
+				item.closeErr = err
+			}
 		}
 
 		if item.buf != nil {
 			if err := item.buf.Close(); err != nil && item.closeErr == nil {
 				item.closeErr = err
 			}
-			item.flushMetadata(true)
+			if stopped {
+				item.flushMetadata(true)
+			}
 		}
 	})
 	return item.closeErr

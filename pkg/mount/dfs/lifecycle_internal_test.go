@@ -131,20 +131,27 @@ func (h *fakeHandle) Detach(context.Context) error {
 }
 
 type fakeBackend struct {
-	calls    *callLog
-	handle   *fakeHandle
-	gate     chan struct{} // Mount blocks until closed
-	mountErr error
-	mounts   int
+	calls  *callLog
+	handle *fakeHandle
+	gate   chan struct{} // Mount blocks until closed
+	// untilCancelled makes Mount block until its context ends, then fail with
+	// the context error, like cgofuse waiting for Init.
+	untilCancelled bool
+	mountErr       error
+	mounts         int
 	// onMount runs in Mount, before it returns.
 	onMount func(g *task.Group)
 	mu      sync.Mutex
 }
 
-func (b *fakeBackend) Mount(_ context.Context, g *task.Group) (backend.Mounted, error) {
+func (b *fakeBackend) Mount(ctx context.Context, g *task.Group) (backend.Mounted, error) {
 	b.mu.Lock()
 	b.mounts++
 	b.mu.Unlock()
+	if b.untilCancelled {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	if b.gate != nil {
 		<-b.gate
 	}
@@ -546,6 +553,9 @@ func TestGracefulHangDetachesAt5s(t *testing.T) {
 		if got := f.calls.at("detach").Sub(begin); got != gracefulUnmountTimeout {
 			t.Fatalf("detach at +%v, want +%v", got, gracefulUnmountTimeout)
 		}
+		// The closer bound holds only because the fake's Detach frees the hung
+		// Unmount; a real hung fusermount or loops.Wait holds the group until the
+		// stopper's deadline.
 		if got := f.calls.at("vfsClose").Sub(begin); got > 7*time.Second {
 			t.Fatalf("vfsClose at +%v, want by +7s", got)
 		}
@@ -642,6 +652,36 @@ func TestDFSSubtreeEmptyAfterStop(t *testing.T) {
 		}
 		if left := f.parent.Snapshot(); len(left) != 0 {
 			t.Fatalf("tasks left after the stop: %v", left)
+		}
+	})
+}
+
+// A stop that cancels a Mount waiting for the host is not a failure.
+func TestStopDuringStartingMountCancelled(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		f := newFixture(t)
+		defer f.finish(t)
+		f.fb.untilCancelled = true
+		started := f.startAsync()
+		synctest.Wait()
+
+		if err := f.stopParent(t, 30*time.Second); err != nil {
+			t.Fatalf("parent stop = %v", err)
+		}
+		if err := <-started; err == nil {
+			t.Fatal("Start succeeded during a stop")
+		}
+		if err := f.m.Stop(); err != nil {
+			t.Fatalf("Stop = %v", err)
+		}
+		requireState(t, f.m, dfsStopped)
+		out := f.logs.String()
+		if strings.Contains(out, `"to":"failed"`) {
+			t.Fatalf("a Failed move happened during a stop:\n%s", out)
+		}
+		if strings.Contains(out, `"level":"error"`) {
+			t.Fatalf("an ERROR was logged during a stop:\n%s", out)
 		}
 	})
 }

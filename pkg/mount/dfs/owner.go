@@ -47,33 +47,55 @@ func (r *startResult) report(err error) {
 	})
 }
 
+// mountReady mounts and moves Starting to Ready. It returns nil, with the
+// start result reported, when the mount failed, was cancelled, or came up late
+// (and was released).
+func (m *Manager) mountReady(
+	ctx context.Context,
+	bck backend.Backend,
+	backG *task.Group,
+	res *startResult,
+) backend.Mounted {
+	h, err := bck.Mount(ctx, backG)
+	switch {
+	case err != nil && ctx.Err() != nil:
+		// A stop cancelled the mount: that is a stop, not a failure.
+		m.advance([]dfsState{dfsStarting}, dfsStopping)
+		res.report(task.ErrStopped)
+		return nil
+	case err != nil:
+		// A start failure is not a task failure: the manager stays up and
+		// shows state failed.
+		m.advance([]dfsState{dfsStarting}, dfsFailed)
+		res.report(fmt.Errorf("failed to start DFS backend: %w", err))
+		return nil
+	}
+	select {
+	case <-h.Done():
+		m.advance([]dfsState{dfsStarting}, dfsFailed)
+		res.report(errors.New("DFS serve loop ended before the mount was ready"))
+		return nil
+	default:
+	}
+	if ctx.Err() != nil || !m.move(dfsStarting, dfsReady) {
+		// A stop, or Start's timeout, got there first: the mount came up
+		// late and nobody will use it.
+		m.advance([]dfsState{dfsStarting}, dfsStopping)
+		m.unmountLate(ctx, h)
+		res.report(task.ErrStopped)
+		return nil
+	}
+	return h
+}
+
 // owner is the backend group's task: it mounts, watches the serve loop and
 // unmounts, and it is the only task that touches the mount.
 func (m *Manager) owner(bck backend.Backend, backG *task.Group, res *startResult) func(context.Context) error {
 	return func(ctx context.Context) error {
 		defer res.report(task.ErrStopped)
 
-		h, err := bck.Mount(ctx, backG)
-		if err != nil {
-			// A start failure is not a task failure: the manager stays up and
-			// shows state failed.
-			m.advance([]dfsState{dfsStarting}, dfsFailed)
-			res.report(fmt.Errorf("failed to start DFS backend: %w", err))
-			return nil
-		}
-		select {
-		case <-h.Done():
-			m.advance([]dfsState{dfsStarting}, dfsFailed)
-			res.report(errors.New("DFS serve loop ended before the mount was ready"))
-			return nil
-		default:
-		}
-		if ctx.Err() != nil || !m.move(dfsStarting, dfsReady) {
-			// A stop, or Start's timeout, got there first: the mount came up
-			// late and nobody will use it.
-			m.advance([]dfsState{dfsStarting}, dfsStopping)
-			m.unmountLate(ctx, h)
-			res.report(task.ErrStopped)
+		h := m.mountReady(ctx, bck, backG, res)
+		if h == nil {
 			return nil
 		}
 
@@ -99,6 +121,9 @@ func (m *Manager) owner(bck backend.Backend, backG *task.Group, res *startResult
 
 		select {
 		case <-h.Done():
+			// The ctx check is defence in depth against an outside serve end
+			// racing a stop: our own unmount cannot reach it, because begin
+			// closes only after this select.
 			if ctx.Err() == nil && m.move(dfsReady, dfsFailed) {
 				m.logger.Error().
 					Str("mount_path", m.config.MountPath).

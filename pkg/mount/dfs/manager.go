@@ -167,6 +167,8 @@ func (m *Manager) Start(g *task.Group) error {
 			backG.Close()
 			return task.ErrStopped
 		}
+		// If the owner wins Ready just as DaemonTimeout fires, this move loses and
+		// the state ends Stopped, not Failed (P3).
 		m.advance([]dfsState{dfsStarting}, dfsFailed)
 		backG.Close()
 		return fmt.Errorf("DFS mount timed out after %s: %w", m.config.DaemonTimeout, ctx.Err())
