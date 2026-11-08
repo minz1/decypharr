@@ -44,6 +44,10 @@ var ErrStopped = errors.New("task group stopped")
 // deadline. The error names them.
 var ErrStopTimeout = errors.New("task group stop timed out")
 
+// ErrGraceExpired is the cancellation cause of a Grace context whose grace
+// after its parent's end ran out.
+var ErrGraceExpired = errors.New("stop grace expired")
+
 // State is a group's lifecycle state.
 type State uint8
 
@@ -613,4 +617,37 @@ func (g *Group) Snapshot() []Info {
 // after the owner was cancelled, such as a final flush during Stop.
 func Detached(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(ctx), timeout)
+}
+
+// Grace returns a context that keeps ctx's values and outlives it by d: it
+// is cancelled d after ctx ends, and never while ctx is live. Unlike
+// Detached it sets no deadline from its start, so work begun long before a
+// stop keeps its full time and a stop leaves it at most d more; its cause
+// is then ErrGraceExpired. The returned CancelFunc cancels it and releases
+// its timers.
+func Grace(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	gctx, cancelCause := context.WithCancelCause(context.WithoutCancel(ctx))
+	expire := func() { cancelCause(ErrGraceExpired) }
+	var (
+		mu       sync.Mutex
+		timer    *time.Timer
+		released bool
+	)
+	stopAfter := context.AfterFunc(ctx, func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if !released {
+			timer = time.AfterFunc(d, expire)
+		}
+	})
+	return gctx, func() {
+		stopAfter()
+		mu.Lock()
+		released = true
+		if timer != nil {
+			timer.Stop()
+		}
+		mu.Unlock()
+		cancelCause(nil)
+	}
 }
