@@ -1,6 +1,7 @@
 package notifications
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/internal/task"
 )
 
 // Notification callbacks trust the configured CA, so a callback endpoint
@@ -27,7 +29,9 @@ func TestCallbackTrustsConfiguredCA(t *testing.T) {
 	roots.AddCert(server.Certificate())
 
 	cfg := &config.Notifications{Enabled: true, CallbackURL: server.URL}
-	service := New(cfg, &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots}, zerolog.Nop())
+	g := task.NewRoot(context.WithoutCancel(t.Context()), "test", zerolog.Nop())
+	t.Cleanup(func() { stopGroup(t, g) })
+	service := New(g, cfg, &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots}, zerolog.Nop())
 	for _, notifier := range service.notifiers {
 		if err := notifier.Send(t.Context(), Event{Type: config.EventDownloadComplete}); err != nil {
 			t.Fatalf("%s: %v", notifier.Name(), err)

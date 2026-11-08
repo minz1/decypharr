@@ -84,8 +84,10 @@ type Manager struct {
 	group *task.Group
 	// work owns the manager's background work: download actions, the job
 	// queue and fire-and-forget calls to providers, the Arr and the mount.
-	work     *task.Group
-	children []*task.Group
+	work *task.Group
+	// notifyGroup runs notification deliveries; the first child, it stops last.
+	notifyGroup *task.Group
+	children    []*task.Group
 	// life is the readiness state; ready closes on its move to Ready.
 	life *state.Atomic[lifecycle]
 	// startMu guards startRan: whether Start launched the start task, whose end startDone announces.
@@ -380,7 +382,7 @@ func (m *Manager) init() error {
 	m.initArrServices()
 
 	// Initialize notifications service
-	m.Notifications = notifications.New(&m.config.Notifications, m.tlsConfig, m.logger)
+	m.Notifications = notifications.New(m.notifyGroup, &m.config.Notifications, m.tlsConfig, m.logger)
 
 	// Initialize Hearsay state and its default network participation.
 	if hs, newErr := hearsay.New(m.config, m.logger); newErr != nil {

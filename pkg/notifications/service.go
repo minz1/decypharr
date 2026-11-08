@@ -1,69 +1,90 @@
 package notifications
 
 import (
-	"context"
 	"crypto/tls"
-	"time"
+	"errors"
 
 	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/internal/task"
+	"github.com/sirrobot01/decypharr/internal/task/keyed"
 	"github.com/sirrobot01/decypharr/internal/utils"
+	"github.com/sirrobot01/decypharr/pkg/storage"
 )
-
-// sendTimeout bounds one notifier delivery.
-const sendTimeout = 30 * time.Second
 
 // Service manages and dispatches notifications to all configured notifiers.
 type Service struct {
 	config    *config.Notifications
 	notifiers []Notifier
 	logger    zerolog.Logger
+	runner    *keyed.Runner[string, msg, notifierState]
 }
 
 // New creates a new notification service based on the provided configuration.
-// tlsConfig is the verified TLS base (the configured CA file).
-func New(cfg *config.Notifications, tlsConfig *tls.Config, logger zerolog.Logger) *Service {
-	s := &Service{
-		config:    cfg,
-		logger:    logger.With().Str("component", "notifications").Logger(),
-		notifiers: make([]Notifier, 0),
+// tlsConfig is the verified TLS base (the configured CA file). Deliveries run
+// on g: stopping it cancels the sends in flight and drops what is queued.
+func New(g *task.Group, cfg *config.Notifications, tlsConfig *tls.Config, logger zerolog.Logger) *Service {
+	var notifiers []Notifier
+	if cfg.Enabled {
+		client := utils.NewHTTPClient(tlsConfig, 0) // each send is bounded by sendTimeout
+		if cfg.WebhookURL != "" {
+			notifiers = append(notifiers, NewDiscord(cfg.WebhookURL, client))
+		}
+		if cfg.CallbackURL != "" {
+			notifiers = append(notifiers, NewCallback(cfg.CallbackURL, client))
+		}
 	}
-	if !cfg.Enabled {
-		return s
-	}
-	client := utils.NewHTTPClient(tlsConfig, 0) // each send is bounded by sendTimeout
-	if cfg.WebhookURL != "" {
-		s.notifiers = append(s.notifiers, NewDiscord(cfg.WebhookURL, client))
-	}
-	if cfg.CallbackURL != "" {
-		s.notifiers = append(s.notifiers, NewCallback(cfg.CallbackURL, client))
-	}
-	return s
+	return newService(g, cfg, notifiers, logger, nopObserver{})
 }
 
-// Notify sends an event to all enabled notifiers asynchronously.
+func newService(
+	g *task.Group,
+	cfg *config.Notifications,
+	notifiers []Notifier,
+	logger zerolog.Logger,
+	obs observer,
+) *Service {
+	logger = logger.With().Str("component", "notifications").Logger()
+	return &Service{
+		config:    cfg,
+		notifiers: notifiers,
+		logger:    logger,
+		runner:    newRunner(g, notifiers, logger, obs),
+	}
+}
+
+// Notify hands an event to every notifier's queue and returns at once. The
+// event's entry is copied first, so the caller may go on changing it.
 func (s *Service) Notify(event Event) {
-	if !s.IsEventEnabled(event.Type) {
+	if !s.IsEventEnabled(event.Type) || len(s.notifiers) == 0 {
 		return
 	}
-	for _, notifier := range s.notifiers {
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), sendTimeout)
-			defer cancel()
-			if err := notifier.Send(ctx, event); err != nil {
-				s.logger.Error().
-					Err(err).
-					Str("notifier", notifier.Name()).
-					Str("event", string(event.Type)).
-					Msg("Failed to send notification")
-				return
-			}
-			s.logger.Trace().
-				Str("notifier", notifier.Name()).
+	if e := event.Entry; e != nil {
+		event.Entry = &storage.Entry{
+			InfoHash:       e.InfoHash,
+			Name:           e.Name,
+			Category:       e.Category,
+			ActiveProvider: e.ActiveProvider,
+			ContentPath:    e.ContentPath,
+		}
+	}
+	for _, n := range s.notifiers {
+		err := s.runner.Send(n.Name(), msg{kind: msgEnqueue, ev: event})
+		switch {
+		case err == nil:
+		case errors.Is(err, keyed.ErrStopped):
+			s.logger.Debug().
+				Str("notifier", n.Name()).
 				Str("event", string(event.Type)).
-				Msg("Notification sent successfully")
-		}()
+				Msg("Notification dropped: stopping")
+		default:
+			s.logger.Warn().
+				Err(err).
+				Str("notifier", n.Name()).
+				Str("event", string(event.Type)).
+				Msg("Notification dropped")
+		}
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 )
 
 // CallbackPayload represents the HTTP callback payload.
@@ -66,23 +67,23 @@ func (c *CallbackNotifier) Send(ctx context.Context, event Event) error {
 
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("failed to marshal callback payload: %w", err)
+		return permanent(fmt.Errorf("failed to marshal callback payload: %w", err))
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.callbackURL, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("failed to create callback request: %w", err)
+		return permanent(fmt.Errorf("failed to create callback request: %w", err))
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to send callback request: %w", err)
+		return sendError("callback request", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("callback returned non-2xx status: %s", resp.Status)
+		return fmt.Errorf("callback: %w", newStatusError(resp, time.Now()))
 	}
 
 	return nil

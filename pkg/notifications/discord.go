@@ -5,20 +5,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 )
 
-// Discord embed colors and the error-body excerpt limit.
+// Discord embed colors.
 const (
-	colorGreen   = 0x2ECC71
-	colorRed     = 0xE74C3C
-	colorYellow  = 0xF1C40F
-	colorBlue    = 0x3498DB
-	maxErrorBody = 1024
+	colorGreen  = 0x2ECC71
+	colorRed    = 0xE74C3C
+	colorYellow = 0xF1C40F
+	colorBlue   = 0x3498DB
 )
 
 // DiscordEmbed represents a Discord embed object.
@@ -71,24 +70,23 @@ func (d *DiscordNotifier) Send(ctx context.Context, event Event) error {
 
 	body, err := json.Marshal(webhook)
 	if err != nil {
-		return fmt.Errorf("failed to marshal discord webhook: %w", err)
+		return permanent(fmt.Errorf("failed to marshal discord webhook: %w", err))
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.webhookURL, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("failed to create discord request: %w", err)
+		return permanent(fmt.Errorf("failed to create discord request: %w", err))
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := d.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to send discord message: %w", err)
+		return sendError("discord message", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
-		return fmt.Errorf("discord returned error status code: %s, body: %s", resp.Status, string(bodyBytes))
+		return fmt.Errorf("discord: %w", newStatusError(resp, time.Now()))
 	}
 
 	return nil
