@@ -105,6 +105,10 @@ func (g *MountGate) markStopping() {
 	}
 }
 
+// BeginStop closes the gate: the generation's owner calls it before the mount's own stop begins. A gate already
+// Stopping returns silently.
+func (g *MountGate) BeginStop() { g.markStopping() }
+
 // SetMountGate installs the generation's gate. Call it before Start; nil keeps the default.
 func (m *Manager) SetMountGate(g *MountGate) {
 	if g != nil {
