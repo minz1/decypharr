@@ -151,6 +151,8 @@ type Manager struct {
 	virtualFoldersMu sync.RWMutex
 	virtualFolders   *virtualfolders.Folders
 	mountManager     MountManager
+	// mountGate closes when the mount starts to stop; steps that need the mount end resumable once it has.
+	mountGate *MountGate
 
 	// startTime is when the manager was built; never written afterwards.
 	startTime         time.Time
@@ -258,6 +260,7 @@ func New(g *task.Group, store *config.Store, logs *logger.Factory) (*Manager, er
 	instance := &Manager{
 		group:         g,
 		life:          newLifecycle(),
+		mountGate:     NewMountGate(_logger),
 		startDone:     make(chan struct{}),
 		startTime:     time.Now(),
 		storage:       strg,
