@@ -12,8 +12,9 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
-// A cancelled context stops a running migration: Start returns and no
-// further torrent migrates.
+// A cancelled context stops a running migration: Start returns, no further
+// torrent migrates, and the saved status stays Running so the next start
+// resumes it (manager.migrate treats !Running && Completed > 0 as done).
 func TestMigratorStartStopsWithCtx(t *testing.T) {
 	t.Parallel()
 	dataDir := t.TempDir()
@@ -39,7 +40,7 @@ func TestMigratorStartStopsWithCtx(t *testing.T) {
 	calls := 0
 	m.beforeEach = func() {
 		calls++
-		if calls == 1 {
+		if calls == 2 {
 			cancel()
 		}
 	}
@@ -47,14 +48,18 @@ func TestMigratorStartStopsWithCtx(t *testing.T) {
 	if startErr := m.Start(ctx); startErr != nil {
 		t.Fatal(startErr)
 	}
-	if calls != 1 {
-		t.Fatalf("migration went on for %d torrents after the cancel, want it to stop after the first", calls-1)
+	if calls != 2 {
+		t.Fatalf("migration went on for %d torrents after the cancel, want it to stop at the second", calls-2)
 	}
 	status, err := m.GetStatus()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.Running {
-		t.Fatal("status still Running after the cancelled migration returned")
+	if status.Completed == 0 {
+		t.Fatal("no torrent migrated before the cancel; the test needs a partial migration")
+	}
+	if !status.Running {
+		t.Fatalf("cancelled partial migration (Completed %d) saved as not Running: the next start skips it",
+			status.Completed)
 	}
 }

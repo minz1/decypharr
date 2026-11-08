@@ -139,8 +139,9 @@ func (m *Migrator) runMigration(ctx context.Context, cachedTorrents map[string][
 		}
 		select {
 		case <-ctx.Done():
-			m.logger.Info().Msg("Migration stopped")
-			status.Running = false
+			// Running stays true: the next start resumes the migration
+			// (already migrated torrents are skipped by Exists).
+			m.logger.Info().Msg("Migration stopped; it resumes on the next start")
 			status.UpdatedAt = time.Now()
 			_ = m.storage.SaveMigrationStatus(status)
 			return
