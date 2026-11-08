@@ -4,6 +4,10 @@ import (
 	"context"
 	"net"
 	"testing"
+
+	"github.com/rs/zerolog"
+
+	"github.com/sirrobot01/decypharr/internal/task"
 )
 
 func TestServePprofStopsOnCancel(t *testing.T) {
@@ -14,9 +18,10 @@ func TestServePprofStopsOnCancel(t *testing.T) {
 	}
 	addr := ln.Addr().String()
 
+	g := task.NewRoot(t.Context(), "test", zerolog.Nop())
 	ctx, cancel := context.WithCancel(context.WithoutCancel(t.Context()))
 	result := make(chan error, 1)
-	go func() { result <- servePprofOn(ctx, ln) }()
+	go func() { result <- servePprofOn(ctx, g, ln) }()
 
 	cancel()
 	if got := <-result; got != nil {
@@ -27,5 +32,8 @@ func TestServePprofStopsOnCancel(t *testing.T) {
 	if err == nil {
 		_ = conn.Close()
 		t.Fatalf("listener %s still accepts connections after servePprofOn returned", addr)
+	}
+	if snap := g.Snapshot(); len(snap) != 0 {
+		t.Fatalf("tasks left on the group after servePprofOn returned: %v", snap)
 	}
 }

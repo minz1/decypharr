@@ -76,7 +76,7 @@ func run() error {
 	// Start pprof server if enabled
 	if pprofAddr != "" && enablePprof {
 		if err := proc.Go("pprof", func(ctx context.Context) error {
-			if err := servePprof(ctx, pprofAddr); err != nil {
+			if err := servePprof(ctx, proc, pprofAddr); err != nil {
 				log.Printf("pprof server error: %v", err)
 			}
 			return nil
@@ -90,19 +90,19 @@ func run() error {
 
 // servePprof exposes the profiling endpoints on their own mux, so they are
 // only reachable on the opt-in pprof listener.
-func servePprof(ctx context.Context, addr string) error {
+func servePprof(ctx context.Context, g *task.Group, addr string) error {
 	var lc net.ListenConfig
 	ln, err := lc.Listen(ctx, "tcp", addr)
 	if err != nil {
 		return err
 	}
 	log.Printf("Starting pprof server on %s", addr)
-	return servePprofOn(ctx, ln)
+	return servePprofOn(ctx, g, ln)
 }
 
-// servePprofOn serves the profiling endpoints on ln until ctx is done, then
-// shuts the server down and returns nil.
-func servePprofOn(ctx context.Context, ln net.Listener) error {
+// servePprofOn serves the profiling endpoints on ln, on a child of g, until
+// ctx is done, then shuts the server down and returns nil.
+func servePprofOn(ctx context.Context, g *task.Group, ln net.Listener) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/debug/pprof/", pprof.Index)
 	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
@@ -112,18 +112,18 @@ func servePprofOn(ctx context.Context, ln net.Listener) error {
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: pprofReadHeaderTimeout}
 
 	served := make(chan error, 1)
-	proc := task.NewRoot(context.WithoutCancel(ctx), "pprof-serve", zerolog.Nop())
-	if err := proc.Go("serve", func(context.Context) error {
+	serve := g.Child("pprof-serve")
+	defer func() {
+		serve.Close()
+		<-serve.Done()
+	}()
+	if err := serve.Go("serve", func(context.Context) error {
 		served <- srv.Serve(ln)
 		return nil
 	}); err != nil {
 		_ = ln.Close()
 		return err
 	}
-	defer func() {
-		proc.Close()
-		<-proc.Done()
-	}()
 
 	select {
 	case err := <-served:
