@@ -133,7 +133,9 @@ type propEvent struct {
 	notifier string
 	script   []pout
 	sends    []time.Time
-	outcomes []string // "delivered" or "dropped:<reason>/<attempts>"
+	// firstSend is the index of its first send among its notifier's sends.
+	firstSend int
+	outcomes  []string // "delivered" or "dropped:<reason>/<attempts>"
 }
 
 // propWorld is the fake notifiers' shared record.
@@ -141,7 +143,10 @@ type propWorld struct {
 	mu       sync.Mutex
 	events   map[string]*propEvent
 	inFlight map[string]int
-	overlaps []string
+	// sendCount counts each notifier's sends, so send order is known even
+	// when sends share a synctest instant.
+	sendCount map[string]int
+	overlaps  []string
 }
 
 type propNotifier struct {
@@ -156,6 +161,10 @@ func (n *propNotifier) Send(ctx context.Context, ev Event) error {
 	w.mu.Lock()
 	e := w.events[ev.Message]
 	k := len(e.sends)
+	if k == 0 {
+		e.firstSend = w.sendCount[n.name]
+	}
+	w.sendCount[n.name]++
 	e.sends = append(e.sends, time.Now())
 	w.inFlight[n.name]++
 	if w.inFlight[n.name] > 1 {
@@ -249,7 +258,11 @@ func expect(script []pout) (string, []time.Duration) {
 func dispatcherViolations(t *testing.T, ops []pop) []string {
 	var broken []string
 	synctest.Test(t, func(t *testing.T) {
-		world := &propWorld{events: map[string]*propEvent{}, inFlight: map[string]int{}}
+		world := &propWorld{
+			events:    map[string]*propEvent{},
+			inFlight:  map[string]int{},
+			sendCount: map[string]int{},
+		}
 		var notifiers []Notifier
 		for i := range propNotifiers {
 			notifiers = append(notifiers, &propNotifier{name: "n" + strconv.Itoa(i), world: world})
@@ -295,7 +308,8 @@ func dispatcherViolations(t *testing.T, ops []pop) []string {
 
 // order is what the check carries from one event of a notifier to the next.
 type order struct {
-	lastStart    time.Time
+	// minFirstSend is the lowest send index the next sent event may start at.
+	minFirstSend int
 	lastOverflow int
 }
 
@@ -354,11 +368,22 @@ func checkEvent(e *propEvent, o *order) []string {
 				e.seq, e.script, k+2, got, gap))
 		}
 	}
-	if e.sends[0].Before(o.lastStart) {
+	if e.firstSend < o.minFirstSend {
 		broken = append(broken, fmt.Sprintf("event %d was first sent before an older event of its notifier", e.seq))
 	}
-	o.lastStart = e.sends[0]
+	o.minFirstSend = e.firstSend + 1
 	return broken
+}
+
+// TestDispatcherPropertyOrderWithoutDelays: events queued behind a head that
+// all deliver at once are first sent in notify order, though every send
+// happens at the same synctest instant.
+func TestDispatcherPropertyOrderWithoutDelays(t *testing.T) {
+	t.Parallel()
+	ops := []pop{{kind: popBurst, notifier: 0, count: 3}}
+	if broken := dispatcherViolations(t, ops); len(broken) != 0 {
+		t.Fatalf("%v: %v", ops, broken)
+	}
 }
 
 func TestDispatcherProperty(t *testing.T) {
