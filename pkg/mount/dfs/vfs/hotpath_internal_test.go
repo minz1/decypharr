@@ -65,7 +65,7 @@ func TestMetadataFlushDebounce(t *testing.T) {
 
 	// The final mutation must be durable after the writer stops.
 	want := len(item.buf.PersistedRanges(0, item.info.Size))
-	item.stopMetaWriter()
+	stopItemGroup(t, item)
 	data, err := os.ReadFile(item.metaPath)
 	if err != nil {
 		t.Fatal(err)
@@ -92,7 +92,7 @@ func TestMetadataSnapshotReplacesLoadedRanges(t *testing.T) {
 	// Production flushes from one goroutine at a time (the writer, then Close
 	// after stopping it); a live writer racing this explicit flush can land
 	// its older snapshot last.
-	item.stopMetaWriter()
+	stopItemGroup(t, item)
 
 	item.metaMu.Lock()
 	item.info.Rs = ranges.Ranges{
@@ -115,12 +115,16 @@ func TestMetadataSnapshotReplacesLoadedRanges(t *testing.T) {
 func TestCloseFlushesResidentBytesBeforeMetadata(t *testing.T) {
 	t.Parallel()
 	item := &CacheItem{
-		cache:    &Cache{},
-		buf:      newTestBuffer(t, 8<<20),
-		metaPath: filepath.Join(t.TempDir(), "data.json"),
-		info:     ItemInfo{Size: 8 << 20},
+		cache:       &Cache{ctx: t.Context()},
+		group:       newTestGroup(t),
+		metaFlushCh: make(chan struct{}, 1),
+		buf:         newTestBuffer(t, 8<<20),
+		metaPath:    filepath.Join(t.TempDir(), "data.json"),
+		info:        ItemInfo{Size: 8 << 20},
 	}
-	item.startMetaWriter()
+	if err := item.group.Go("meta", item.metaWriter); err != nil {
+		t.Fatal(err)
+	}
 	data := make([]byte, 256<<10)
 	for i := range data {
 		data[i] = byte(i % 251)

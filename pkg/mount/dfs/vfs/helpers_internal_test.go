@@ -57,7 +57,8 @@ func markCached(tb testing.TB, buf *buffer.Buffer, r ranges.Range) {
 func TestSelfCachingItemLifecycle(t *testing.T) {
 	t.Parallel()
 	item := &CacheItem{
-		cache: &Cache{config: &fuseconfig.FuseConfig{}, logger: zerolog.Nop()},
+		cache: &Cache{config: &fuseconfig.FuseConfig{}, logger: zerolog.Nop(), ctx: t.Context()},
+		group: newTestGroup(t),
 		key:   "entry/file.mkv",
 		info:  ItemInfo{Size: 1 << 20},
 	}
