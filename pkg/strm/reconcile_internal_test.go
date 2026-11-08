@@ -7,15 +7,25 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
 func newTestReconciler(t *testing.T) *Reconciler {
+	t.Helper()
+	g := task.NewRoot(t.Context(), "test", zerolog.Nop())
+	t.Cleanup(func() {
+		g.Close()
+		<-g.Done()
+	})
+	return newTestReconcilerOn(t, g)
+}
+
+func newTestReconcilerOn(t *testing.T, g *task.Group) *Reconciler {
 	t.Helper()
 	loaded, err := config.Load(t.TempDir(), config.MapEnv(nil))
 	if err != nil {
@@ -28,7 +38,7 @@ func newTestReconciler(t *testing.T) *Reconciler {
 	}
 	t.Cleanup(func() { _ = strg.Close() })
 
-	m := NewReconciler(t.Context(), config.NewStore(loaded), strg, nil, zerolog.Nop())
+	m := NewReconciler(g, config.NewStore(loaded), strg, nil, zerolog.Nop())
 
 	cfg := m.config.Get()
 	cfg.AppURL = "http://media.local:8282"
@@ -198,16 +208,83 @@ func TestStrmRemoveEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Synchronous variant of RemoveEntryAsync's work for the test: reuse the
-	// async trigger and wait for the folder to disappear.
+	// The remove runs as a task of the group; stopping the group waits for it.
 	m.RemoveEntryAsync(entry)
-	for range 100 {
-		if _, err := os.Stat(dir); os.IsNotExist(err) {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
+	m.group.Close()
+	<-m.group.Done()
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("entry folder %s not removed: %v", dir, err)
 	}
-	t.Fatalf("entry folder %s not removed", dir)
+}
+
+// Stopping the group waits for every async task and leaves none behind.
+func TestReconcilerSnapshotEmptyAfterStop(t *testing.T) {
+	t.Parallel()
+	g := task.NewRoot(t.Context(), "test", zerolog.Nop())
+	m := newTestReconcilerOn(t, g)
+	entry := addStrmTestEntry(t, m, "aabbccddeeff00112233445566778899aabbccdd", "Movie.2023", "Movie.2023.mkv")
+
+	m.SyncEntryAsync(entry)
+	m.SweepAsync("test")
+	m.RemoveEntryAsync(entry)
+	g.Close()
+	<-g.Done()
+
+	if got := g.Snapshot(); len(got) != 0 {
+		t.Fatalf("tasks left after stop: %v", got)
+	}
+}
+
+// Work asked for after the group stopped is dropped: nothing is written.
+func TestAsyncWorkAfterStopNotRun(t *testing.T) {
+	t.Parallel()
+	g := task.NewRoot(t.Context(), "test", zerolog.Nop())
+	m := newTestReconcilerOn(t, g)
+	cfg := m.config.Get()
+	entry := addStrmTestEntry(t, m, "aabbccddeeff00112233445566778899aabbccdd", "Movie.2023", "Movie.2023.mkv")
+	g.Close()
+	<-g.Done()
+
+	m.SyncEntryAsync(entry)
+	m.SweepAsync("test")
+
+	if got := g.Snapshot(); len(got) != 0 {
+		t.Fatalf("tasks started on a stopped group: %v", got)
+	}
+	if _, err := os.Stat(filepath.Join(cfg.Strm.Path, entry.GetFolder(cfg.FolderNaming))); !os.IsNotExist(err) {
+		t.Fatalf("export folder written after stop: %v", err)
+	}
+}
+
+// A remove refused by a stopped group still deletes the entry's signed .strm
+// files and sidecars before it returns; a foreign .strm stays.
+func TestRefusedRemoveDeletesInline(t *testing.T) {
+	t.Parallel()
+	g := task.NewRoot(t.Context(), "test", zerolog.Nop())
+	m := newTestReconcilerOn(t, g)
+	cfg := m.config.Get()
+	infohash := "aabbccddeeff00112233445566778899aabbccdd"
+	entry := addStrmTestEntry(t, m, infohash, "Movie.2023", "Movie.2023.mkv", "Movie.2023.srt")
+	m.syncEntry(t.Context(), entry, &Report{})
+	dir := filepath.Join(cfg.Strm.Path, entry.GetFolder(cfg.FolderNaming))
+	sidecar := filepath.Join(dir, "Movie.2023.srt")
+	foreign := filepath.Join(dir, "foreign.strm")
+	mustWrite(t, sidecar, "sidecar")
+	mustWrite(t, foreign, "plex://movie/12345")
+	g.Close()
+	<-g.Done()
+
+	m.RemoveEntryAsync(entry)
+
+	if _, err := os.Stat(filepath.Join(dir, "Movie.2023.strm")); !os.IsNotExist(err) {
+		t.Errorf("signed .strm not removed: %v", err)
+	}
+	if _, err := os.Stat(sidecar); !os.IsNotExist(err) {
+		t.Errorf("sidecar not removed: %v", err)
+	}
+	if got := mustRead(t, foreign); got != "plex://movie/12345" {
+		t.Errorf("foreign file touched: %q", got)
+	}
 }
 
 func TestSidecarStreamIsCompleteBeforePublication(t *testing.T) {

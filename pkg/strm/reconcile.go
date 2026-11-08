@@ -14,6 +14,7 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/fsutil"
+	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
@@ -26,22 +27,23 @@ const maxStrmRead = 1024
 type Reconciler struct {
 	config     *config.Store
 	storage    *storage.Storage
-	ctx        context.Context
+	group      *task.Group
 	openStream func(context.Context, *storage.Entry, string) (io.ReadCloser, error)
 	logger     zerolog.Logger
 	sweepMu    sync.Mutex
 }
 
 // NewReconciler creates the export service with its storage and stream
-// source. STRM settings are read live from cfg.
+// source. Its background work runs as tasks of g. STRM settings are read live
+// from cfg.
 func NewReconciler(
-	ctx context.Context,
+	g *task.Group,
 	cfg *config.Store,
 	store *storage.Storage,
 	openStream func(context.Context, *storage.Entry, string) (io.ReadCloser, error),
 	logger zerolog.Logger,
 ) *Reconciler {
-	return &Reconciler{ctx: ctx, config: cfg, storage: store, openStream: openStream,
+	return &Reconciler{group: g, config: cfg, storage: store, openStream: openStream,
 		logger: logger.With().Str("component", "strm").Logger()}
 }
 
@@ -112,16 +114,20 @@ func (s *Reconciler) SyncEntryAsync(entry *storage.Entry) {
 	if !s.active() {
 		return
 	}
-	go func() {
+	err := s.group.Go("sync "+entry.InfoHash, func(ctx context.Context) error {
 		if ok, _ := s.storage.Exists(entry.InfoHash); !ok {
-			return
+			return nil
 		}
 		rep := &Report{}
-		s.syncEntry(s.ctx, entry, rep)
+		s.syncEntry(ctx, entry, rep)
 		for _, e := range rep.Errors {
 			s.logger.Warn().Str("entry", entry.Name).Msg("strm sync: " + e)
 		}
-	}()
+		return nil
+	})
+	if err != nil {
+		s.logger.Debug().Err(err).Str("entry", entry.Name).Msg("strm sync dropped")
+	}
 }
 
 // syncEntry reconciles one entry's folder: (re)write desired .strm files,
@@ -319,11 +325,11 @@ func (s *Reconciler) SweepAsync(reason string) {
 	if !s.active() {
 		return
 	}
-	go func() {
-		rep, err := s.Sweep(s.ctx)
+	err := s.group.Go("sweep", func(ctx context.Context) error {
+		rep, err := s.Sweep(ctx)
 		if err != nil {
 			s.logger.Warn().Err(err).Str("reason", reason).Msg("strm sweep failed")
-			return
+			return nil
 		}
 		s.logger.Info().
 			Str("reason", reason).
@@ -334,7 +340,11 @@ func (s *Reconciler) SweepAsync(reason string) {
 			Int("deleted", rep.Deleted).
 			Int("errors", len(rep.Errors)).
 			Msg("strm sweep complete")
-	}()
+		return nil
+	})
+	if err != nil {
+		s.logger.Debug().Err(err).Str("reason", reason).Msg("strm sweep dropped")
+	}
 }
 
 // RemoveEntryAsync deletes an entry's .strm files right after the entry is
@@ -345,23 +355,35 @@ func (s *Reconciler) RemoveEntryAsync(entry *storage.Entry) {
 		return
 	}
 	cfg := s.config.Get()
-	go func() {
-		dir := entryDir(cfg, entry)
-		for _, path := range entryStrmFiles(dir, entry.InfoHash) {
+	dir := entryDir(cfg, entry)
+	err := s.group.Go("remove "+entry.InfoHash, func(context.Context) error {
+		removeEntryFiles(dir, cfg.Strm.Path, entry)
+		return nil
+	})
+	if err != nil {
+		// The startup sweep would not find the sidecars, so delete now.
+		s.logger.Debug().Err(err).Str("entry", entry.Name).Msg("strm remove runs inline")
+		removeEntryFiles(dir, cfg.Strm.Path, entry)
+	}
+}
+
+// removeEntryFiles deletes the entry's signed .strm files and sidecars from
+// its folder dir and prunes the folders that become empty up to root.
+func removeEntryFiles(dir, root string, entry *storage.Entry) {
+	for _, path := range entryStrmFiles(dir, entry.InfoHash) {
+		_ = os.Remove(path)
+	}
+	// Sidecars carry no signature; remove them by name while we still know
+	// the entry's file list.
+	for _, f := range entry.Files {
+		if !IsSidecar(f.Name) {
+			continue
+		}
+		if path, err := fsutil.JoinName(dir, f.Name); err == nil {
 			_ = os.Remove(path)
 		}
-		// Sidecars carry no signature; remove them by name while we still
-		// know the entry's file list.
-		for _, f := range entry.Files {
-			if !IsSidecar(f.Name) {
-				continue
-			}
-			if path, err := fsutil.JoinName(dir, f.Name); err == nil {
-				_ = os.Remove(path)
-			}
-		}
-		pruneEmptyDirs(dir, cfg.Strm.Path)
-	}()
+	}
+	pruneEmptyDirs(dir, root)
 }
 
 // pruneEmptyDirs removes empty directories from dir up to (excluding) root.
