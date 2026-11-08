@@ -100,9 +100,6 @@ func (sf *SegmentFetcher) scheduleAndWait(ctx context.Context, priority fetchPri
 }
 
 func (sf *SegmentFetcher) schedule(ctx context.Context, priority fetchPriority, run func() error) <-chan error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	done := make(chan error, 1)
 	drop := func() {
 		select {
@@ -123,9 +120,6 @@ func (sf *SegmentFetcher) schedule(ctx context.Context, priority fetchPriority, 
 }
 
 func (sf *SegmentFetcher) waitScheduled(ctx context.Context, done <-chan error) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	select {
 	case err := <-done:
 		return err

@@ -31,9 +31,6 @@ func newArticleReaderAt(
 	source ArticleSource,
 	volumes []*types.Volume,
 ) (*articleReaderAt, int64, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	if source == nil {
 		return nil, 0, fmt.Errorf("article source is nil")
 	}
