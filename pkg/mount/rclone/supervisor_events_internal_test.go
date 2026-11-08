@@ -476,3 +476,23 @@ func TestBackendStopStaysDegraded(t *testing.T) {
 		r.stop()
 	})
 }
+
+// A probe that fails while the WebDAV server is stopped keeps the stopped server as the mount's error.
+func TestBackendStopKeepsItsErrorThroughFailedProbes(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		r := newManagerRig(t)
+		r.watchOn()
+		r.startMounted()
+
+		r.closeBackend()
+		r.failRC("operations/list", http.StatusBadRequest)
+		r.after(watchdogInterval)
+		r.wantCount("rc:operations/list", 1)
+		r.wantMount(mountDegraded)
+		if got := r.m.view.Load().err; got != "WebDAV server stopped" {
+			t.Fatalf("mount error = %q, want %q", got, "WebDAV server stopped")
+		}
+		r.stop()
+	})
+}
