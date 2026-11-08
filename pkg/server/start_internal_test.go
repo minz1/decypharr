@@ -220,3 +220,29 @@ func TestStartClosesStreamsThatOutliveShutdownGrace(t *testing.T) {
 		t.Fatal("the group finished while a closed stream's handler was still running")
 	}
 }
+
+// Stopped closes once Serve has returned, and not before.
+func TestStoppedClosesWhenServeReturns(t *testing.T) {
+	t.Parallel()
+	mgr, store := managertest.New(t, func(cfg *config.Config) {
+		cfg.BindAddress = "127.0.0.1"
+		cfg.Port = "0"
+	})
+	srv := New(mgr, store, logger.Discard())
+	stopped := srv.Stopped()
+	g := newGroup(t)
+	if err := srv.Start(g); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-stopped:
+		t.Fatal("Stopped closed while the server serves")
+	default:
+	}
+	stopGroup(t, g)
+	select {
+	case <-stopped:
+	default:
+		t.Fatal("Stopped still open after the group stopped")
+	}
+}

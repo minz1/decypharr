@@ -99,6 +99,8 @@ type Server struct {
 	shutdownGrace time.Duration
 	// drainSlice bounds the whole drain: the grace period and the wait for handlers after the forced close.
 	drainSlice time.Duration
+	// stopped closes when the serve task's Serve returns, whatever the reason.
+	stopped chan struct{}
 }
 
 // New builds the HTTP front end for one service generation. Settings that
@@ -133,6 +135,7 @@ func New(mgr *manager.Manager, store *config.Store, logs *logger.Factory) *Serve
 
 		shutdownGrace: shutdownGrace,
 		drainSlice:    httpSlice,
+		stopped:       make(chan struct{}),
 	}
 	s.loadUI(embeddedStatic())
 	if s.vite == nil {
@@ -208,6 +211,10 @@ func (s *Server) SetActorSnapshot(snapshot func() []keyed.Info) {
 	s.actors = snapshot
 }
 
+// Stopped closes when the server stops serving, for whatever reason. It exists from New, so it can be handed out
+// before Start; each generation has its own server, so it never carries over a restart.
+func (s *Server) Stopped() <-chan struct{} { return s.stopped }
+
 // errRestartUnavailable is returned by Restart when no generation is wired.
 var errRestartUnavailable = errors.New("restart is not available: the server is not attached to a generation")
 
@@ -256,6 +263,7 @@ func (s *Server) Start(g *task.Group) error {
 	}
 
 	if err = g.GoCritical("serve", func(context.Context) error {
+		defer close(s.stopped)
 		serveErr := srv.Serve(listener)
 		if errors.Is(serveErr, http.ErrServerClosed) {
 			return nil

@@ -65,17 +65,24 @@ type stopSliceTaker interface {
 	SetStopSlice(task.Slice)
 }
 
+// backendStopTaker is a mount manager that wants to know when the WebDAV server it reads from stops.
+type backendStopTaker interface {
+	SetBackendStopped(<-chan struct{})
+}
+
 // startMountGroup makes the generation's mount group: "run" starts the mount
 // once the manager is ready and stops it after its own children (the rcd, the
 // DFS groups) have ended; "stopping", made last, so it stops first, arms the
 // slice and closes the gate before anything of the mount stops. A failed mount
-// start is logged and the generation goes on without a mount.
+// start is logged and the generation goes on without a mount. backendStopped,
+// closed when the WebDAV server stops, goes to a manager that takes it.
 func startMountGroup(
 	root *task.Group,
 	mm manager.MountManager,
 	ready <-chan struct{},
 	gate *manager.MountGate,
 	slice *mountSlice,
+	backendStopped <-chan struct{},
 	log zerolog.Logger,
 ) error {
 	if mm == nil {
@@ -83,6 +90,9 @@ func startMountGroup(
 	}
 	if taker, ok := mm.(stopSliceTaker); ok {
 		taker.SetStopSlice(slice.get)
+	}
+	if taker, ok := mm.(backendStopTaker); ok {
+		taker.SetBackendStopped(backendStopped)
 	}
 	mountG := root.Child("mount")
 	run := mountG.Child("run")

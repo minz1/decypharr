@@ -114,7 +114,8 @@ func buildServices(gen *generation, cfg *config.Config, logs *logger.Factory) (f
 	if err = srv.Start(root.Child("http")); err != nil {
 		return cleanup, err
 	}
-	if err = startMountGroup(root, mgr.MountManager(), mgr.IsReady(), gate, slice, logs.New("mount")); err != nil {
+	mm, mountLog := mgr.MountManager(), logs.New("mount")
+	if err = startMountGroup(root, mm, mgr.IsReady(), gate, slice, srv.Stopped(), mountLog); err != nil {
 		return cleanup, err
 	}
 	return cleanup, startShares(root.Child("share"), mgr, cfg, logs)
