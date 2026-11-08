@@ -19,7 +19,7 @@ func TestDroppedRetryAsksOnlyForTheFilesWithoutAJob(t *testing.T) {
 		})
 	}
 	m, _ := newDroppedTestManager(t, recovery)
-	m.repair = repair.New(repair.Dependencies{Storage: m.storage})
+	m.repair = repair.New(testGroup(t), repair.Dependencies{Storage: m.storage})
 
 	duringTheSync := -1
 	recovery.afterAdmit = func() {

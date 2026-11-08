@@ -397,7 +397,7 @@ func (m *Manager) init() error {
 	if m.arrService != nil {
 		reacquirer = m.arrService
 	}
-	m.repair = repair.New(repair.Dependencies{
+	m.repair = repair.New(m.repairSvc.group, repair.Dependencies{
 		Scheduler:     m.scheduler,
 		Backend:       m,
 		Storage:       m.storage,

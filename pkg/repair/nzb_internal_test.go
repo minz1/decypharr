@@ -92,7 +92,11 @@ func TestRollupStatusKeepsUnresolvedEntryUnknown(t *testing.T) {
 func TestServiceNZBProberWithoutUsenetReportsNotConfigured(t *testing.T) {
 	t.Parallel()
 	// A nil *usenet.Usenet used to become a non-nil interface and panic in CheckFile.
-	result := New(Dependencies{}).nzbProber().probe(t.Context(), nzbProbeRequest{nzbID: "nzb", fileName: "movie.mkv"})
+	result := New(
+		testGroup(t),
+		Dependencies{},
+	).nzbProber().
+		probe(t.Context(), nzbProbeRequest{nzbID: "nzb", fileName: "movie.mkv"})
 	if result.reason != "usenet_client_not_configured" || result.broken || result.healthy {
 		t.Fatalf("result = %+v", result)
 	}

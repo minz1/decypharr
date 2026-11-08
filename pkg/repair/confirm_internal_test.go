@@ -120,7 +120,7 @@ func confirmEntry(names ...string) *storage.Entry {
 
 func confirmService(t *testing.T, client debrid.Client) *Service {
 	t.Helper()
-	return New(Dependencies{Storage: newRepairTestStorage(t), Backend: &clientBackend{client: client}})
+	return New(testGroup(t), Dependencies{Storage: newRepairTestStorage(t), Backend: &clientBackend{client: client}})
 }
 
 func TestConfirmBroken(t *testing.T) {

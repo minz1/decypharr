@@ -64,7 +64,7 @@ func TestProbeEntryWithRemovedProvider(t *testing.T) {
 				}
 				return store.AddOrUpdate(e)
 			}}
-			service := New(Dependencies{Storage: store, Backend: backend})
+			service := New(testGroup(t), Dependencies{Storage: store, Backend: backend})
 			candidate := &candidate{name: entry.Name, item: &storage.EntryItem{Name: entry.Name, Files: entry.Files}}
 			result := service.probeEntry(
 				t.Context(),

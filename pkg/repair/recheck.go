@@ -10,6 +10,7 @@ import (
 
 	"uuid"
 
+	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
@@ -44,6 +45,12 @@ func (r *Service) RecheckEntry(
 	if entryName == "" {
 		return nil, errors.New("entry name is empty")
 	}
+	r.mu.Lock()
+	stopped := r.stopped
+	r.mu.Unlock()
+	if stopped {
+		return nil, task.ErrStopped
+	}
 	h, _ := r.storage.GetEntryHealth(entryName)
 	if h != nil && h.ActiveRunID != "" {
 		return nil, fmt.Errorf("entry is being probed by run %s", h.ActiveRunID)
@@ -57,10 +64,19 @@ func (r *Service) RecheckEntry(
 	runID := "recheck-" + uuid.New().String()
 	c := &candidate{name: entryName, item: item}
 
-	if ctx == nil {
-		ctx = r.parentCtx
+	taskCtx, cancel := context.WithCancel(r.g.Context())
+	stopCaller := func() {}
+	if ctx != nil {
+		unhook := context.AfterFunc(ctx, cancel)
+		stopCaller = func() { unhook() }
 	}
-	r.runWG.Go(func() {
+	ctx = taskCtx
+	if goErr := r.g.Go("recheck "+runID, func(context.Context) error {
+		defer func() {
+			cancel()
+			stopCaller()
+			r.exited(runID)
+		}()
 		if fix {
 			r.attachArrContext(ctx, c)
 		}
@@ -68,7 +84,7 @@ func (r *Service) RecheckEntry(
 		nzb := r.nzbProber()
 		result := r.probeEntry(ctx, runID, c, heal, nzb, RunOptions{MissingProviderIsBroken: true}, fix)
 		if result == nil || !fix || result.health.Status != storage.HealthBroken {
-			return
+			return nil
 		}
 		policy := opts.policy()
 		files := result.health.BrokenFiles
@@ -79,7 +95,12 @@ func (r *Service) RecheckEntry(
 		batch.noteProbed(result)
 		batch.add(result.health, files)
 		r.healBatch(ctx, &storage.RepairRun{ID: runID}, batch, policy)
-	})
+		return nil
+	}); goErr != nil {
+		cancel()
+		stopCaller()
+		return nil, goErr
+	}
 
 	if h == nil {
 		h = &storage.EntryHealth{EntryName: entryName}

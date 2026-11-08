@@ -11,6 +11,7 @@ import (
 
 	"github.com/puzpuzpuz/xsync/v4"
 
+	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
@@ -159,49 +160,38 @@ func newManualRun(stage storage.RepairRunStage, source string) *storage.RepairRu
 }
 
 // startManualRun claims the single active-run slot for run, persists it, and
-// runs work in the background with a context Stop and StopRun cancel. It fails
-// when another run is active or the run record cannot be saved. A nil ctx
-// falls back to the service's parent context.
+// runs work as a task of the group on a context that ends with the group, Stop,
+// StopRun or ctx, whichever comes first. It fails when the service is stopped,
+// another run is active, the run record cannot be saved or the group refuses the
+// task. A nil ctx leaves the run to the group alone.
 func (r *Service) startManualRun(
 	ctx context.Context,
 	run *storage.RepairRun,
 	work func(context.Context),
 ) (*storage.RepairRun, error) {
-	if ctx == nil {
-		ctx = r.parentCtx
-	}
 	r.mu.Lock()
+	if r.stopped {
+		r.mu.Unlock()
+		return nil, task.ErrStopped
+	}
 	if r.activeRunID != "" {
 		id := r.activeRunID
 		r.mu.Unlock()
 		return nil, fmt.Errorf("repair already running (run %s)", id)
 	}
-	runCtx, cancel := context.WithCancel(ctx)
+	runCtx, cancel := context.WithCancel(r.g.Context())
 	r.activeRunID = run.ID
 	r.cancelRun = cancel
 	r.mu.Unlock()
 
-	if err := r.storage.SaveRepairRun(run); err != nil {
-		r.mu.Lock()
-		r.activeRunID = ""
-		r.cancelRun = nil
-		r.mu.Unlock()
-		cancel()
-		return nil, fmt.Errorf("failed to persist repair run: %w", err)
+	stopCaller := func() {}
+	if ctx != nil {
+		unhook := context.AfterFunc(ctx, cancel)
+		stopCaller = func() { unhook() }
 	}
-
-	r.runWG.Go(func() {
-		defer func() {
-			r.mu.Lock()
-			if r.activeRunID == run.ID {
-				r.activeRunID = ""
-				r.cancelRun = nil
-			}
-			r.mu.Unlock()
-			cancel()
-		}()
-		work(runCtx)
-	})
+	if err := r.startRunTask("manual "+run.ID, run, cancel, stopCaller, func() { work(runCtx) }); err != nil {
+		return nil, err
+	}
 	return run, nil
 }
 

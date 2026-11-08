@@ -12,6 +12,7 @@ import (
 	"uuid"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/pkg/notifications"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
@@ -28,13 +29,17 @@ func (r *Service) runSweep(trigger storage.RepairRunTrigger, opts RunOptions) (s
 	}
 
 	r.mu.Lock()
+	if r.stopped {
+		r.mu.Unlock()
+		return "", task.ErrStopped
+	}
 	if r.activeRunID != "" {
 		id := r.activeRunID
 		r.mu.Unlock()
 		return id, errors.New("repair already running")
 	}
 
-	runCtx, cancel := context.WithCancel(r.parentCtx)
+	runCtx, cancel := context.WithCancel(r.g.Context())
 	stopState := &repairStopState{}
 	sourceParts := []string{string(cfg.Source)}
 	if opts.IgnoreLastChecked {
@@ -69,32 +74,64 @@ func (r *Service) runSweep(trigger storage.RepairRunTrigger, opts RunOptions) (s
 	r.activeStopFunc = stopState.set
 	r.mu.Unlock()
 
-	if err := r.storage.SaveRepairRun(run); err != nil {
-		r.mu.Lock()
-		r.activeRunID = ""
-		r.cancelRun = nil
-		r.activeStopFunc = nil
-		r.mu.Unlock()
-		cancel()
-		return "", fmt.Errorf("failed to persist repair run: %w", err)
-	}
-
-	r.runWG.Go(func() {
-		defer func() {
-			r.mu.Lock()
-			if r.activeRunID == run.ID {
-				r.activeRunID = ""
-				r.cancelRun = nil
-				r.activeStopFunc = nil
-			}
-			r.mu.Unlock()
-			cancel()
-		}()
+	err := r.startRunTask("sweep "+run.ID, run, cancel, func() {}, func() {
 		r.executeSweep(runCtx, run, opts, stopState)
 	})
+	if err != nil {
+		return "", err
+	}
 
 	r.logger.Info().Str("run_id", run.ID).Str("trigger", string(trigger)).Msg("Repair sweep started")
 	return run.ID, nil
+}
+
+// releaseSlot frees the run slot if run still holds it.
+func (r *Service) releaseSlot(runID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.activeRunID == runID {
+		r.activeRunID = ""
+		r.cancelRun = nil
+		r.activeStopFunc = nil
+	}
+}
+
+// startRunTask runs work as a task of the group on the slot run holds. The task persists the run first and reports
+// the result here; a run that cannot be saved or a task the group refuses gives the slot back and writes nothing
+// more. Otherwise the slot is released only when the task exits, after stopCaller and cancel have run.
+func (r *Service) startRunTask(
+	name string,
+	run *storage.RepairRun,
+	cancel context.CancelFunc,
+	stopCaller func(),
+	work func(),
+) error {
+	saved := make(chan error, 1)
+	if err := r.g.Go(name, func(context.Context) error {
+		defer func() {
+			r.releaseSlot(run.ID)
+			cancel()
+			stopCaller()
+			r.exited(run.ID)
+		}()
+		err := r.storage.SaveRepairRun(run)
+		saved <- err
+		if err != nil {
+			return nil
+		}
+		work()
+		return nil
+	}); err != nil {
+		r.releaseSlot(run.ID)
+		cancel()
+		stopCaller()
+		return err
+	}
+	if err := <-saved; err != nil {
+		r.releaseSlot(run.ID)
+		return fmt.Errorf("failed to persist repair run: %w", err)
+	}
+	return nil
 }
 
 func (r *Service) finalizeRun(run *storage.RepairRun, status storage.RepairRunStatus, errStr, cancelReason string) {

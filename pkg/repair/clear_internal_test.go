@@ -20,7 +20,7 @@ func clearService(t *testing.T, entries ...*storage.Entry) (*Service, *clientBac
 		}
 	}
 	backend := &clientBackend{client: newLinkClient(nil)}
-	return New(Dependencies{Storage: store, Backend: backend}), backend
+	return New(testGroup(t), Dependencies{Storage: store, Backend: backend}), backend
 }
 
 func healthy(hash, name string) fileResult {
@@ -151,7 +151,7 @@ func TestProbeEntryKeepsMarkedBadRecheckFromAutoHeal(t *testing.T) {
 	}
 	backend := &givingUpBackend{store: store}
 	backend.client = newLinkClient(nil)
-	service := New(Dependencies{Storage: store, Backend: backend})
+	service := New(testGroup(t), Dependencies{Storage: store, Backend: backend})
 	item := &storage.EntryItem{Name: entry.Name, Files: entry.Files}
 	service.probeEntry(t.Context(), "run", &candidate{name: entry.Name, item: item}, newErrorCache(), nil,
 		RunOptions{}, true)

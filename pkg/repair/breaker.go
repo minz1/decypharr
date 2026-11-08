@@ -226,8 +226,9 @@ type breaker struct {
 	flight   flight.Group[canaryOutcome]
 	// lifetime is the context a canary probe is tied to; nil leaves it to the caller's detached context.
 	lifetime func() context.Context
-	// track registers a probe in flight and returns the function that ends it; nil tracks nothing.
-	track func() func()
+	// track leases the probe from the service's group and returns the function that ends it. A refused lease means
+	// the group is stopping; nil leases nothing.
+	track func() (leave func(), err error)
 }
 
 // canaryProbeTimeout bounds one canary probe.
@@ -348,25 +349,9 @@ func (b *breaker) probeCanary(ctx context.Context, key Bucket) canaryOutcome {
 		if fresh {
 			return cached.outcome, nil
 		}
-		verdict := canaryInconclusive
-		if b.canary != nil {
-			// The flight runs without its first caller's cancellation, so the probe is bounded here instead: by a
-			// timeout, and by the service's lifetime, which Stop ends and then waits for the probe to leave.
-			if b.track != nil {
-				defer b.track()()
-			}
-			if b.lifetime != nil {
-				ctx = b.lifetime()
-			}
-			probeCtx, cancel := context.WithTimeout(ctx, canaryProbeTimeout)
-			verdict = b.canary(probeCtx, key, b.settings())
-			cancel()
-			if errors.Is(ctx.Err(), context.Canceled) {
-				// The service stopped under the probe (a restart for a settings change, or shutdown). Whatever it
-				// found says nothing about the provider and must not hold the bucket for the cache's length. A
-				// timeout is different: the provider did not answer in time, and that is cached.
-				return canaryAborted, nil
-			}
+		verdict, aborted := b.runCanary(ctx, key)
+		if aborted {
+			return canaryAborted, nil
 		}
 		b.mu.Lock()
 		b.verdicts[key] = canaryVerdict{outcome: verdict, at: b.now()}
@@ -377,6 +362,32 @@ func (b *breaker) probeCanary(ctx context.Context, key Bucket) canaryOutcome {
 		return canaryInconclusive
 	}
 	return verdict
+}
+
+// runCanary runs the canary once and reports whether the service stopped under it, in which case the verdict says
+// nothing about the provider.
+func (b *breaker) runCanary(ctx context.Context, key Bucket) (canaryOutcome, bool) {
+	if b.canary == nil {
+		return canaryInconclusive, false
+	}
+	// The flight runs without its first caller's cancellation, so the probe is bounded here instead: by a
+	// timeout, and by the service's lifetime, which Stop ends; the group waits for the probe to leave.
+	if b.track != nil {
+		leave, err := b.track()
+		if err != nil {
+			return canaryAborted, true
+		}
+		defer leave()
+	}
+	if b.lifetime != nil {
+		ctx = b.lifetime()
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, canaryProbeTimeout)
+	verdict := b.canary(probeCtx, key, b.settings())
+	cancel()
+	// A service stopped under the probe (a restart for a settings change, or shutdown) must not hold the bucket for
+	// the cache's length. A timeout is different: the provider did not answer in time, and that is cached.
+	return verdict, errors.Is(ctx.Err(), context.Canceled)
 }
 
 // stepLocked applies one evaluation. With needCanary true it changed nothing and wants a verdict.

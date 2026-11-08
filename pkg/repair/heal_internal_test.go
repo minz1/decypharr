@@ -20,8 +20,10 @@ import (
 type fakeReacquirer struct {
 	libraryRequests []reacquire.LibraryRequest
 	library         func(reacquire.LibraryRequest) (*reacquire.Job, error)
-	requests        []reacquire.Request
-	reacquire       func(reacquire.Request) (*reacquire.Job, error)
+	// libraryWith, when set, answers library requests with the caller's context and wins over library.
+	libraryWith func(context.Context, reacquire.LibraryRequest) (*reacquire.Job, error)
+	requests    []reacquire.Request
+	reacquire   func(reacquire.Request) (*reacquire.Job, error)
 }
 
 func (fake *fakeReacquirer) Reacquire(request reacquire.Request) (*reacquire.Job, error) {
@@ -30,10 +32,13 @@ func (fake *fakeReacquirer) Reacquire(request reacquire.Request) (*reacquire.Job
 }
 
 func (fake *fakeReacquirer) ReacquireLibraryFile(
-	_ context.Context,
+	ctx context.Context,
 	request reacquire.LibraryRequest,
 ) (*reacquire.Job, error) {
 	fake.libraryRequests = append(fake.libraryRequests, request)
+	if fake.libraryWith != nil {
+		return fake.libraryWith(ctx, request)
+	}
 	if fake.library == nil {
 		return nil, errors.New("library recovery unavailable")
 	}
@@ -62,7 +67,7 @@ func TestHealBrokenEntryQueuesStableFileIdentity(t *testing.T) {
 	reacquirer := &fakeReacquirer{reacquire: func(reacquire.Request) (*reacquire.Job, error) {
 		return &reacquire.Job{ID: "reacquire-1"}, nil
 	}}
-	service := New(Dependencies{Storage: store, Reacquirer: reacquirer})
+	service := New(testGroup(t), Dependencies{Storage: store, Reacquirer: reacquirer})
 	run := &storage.RepairRun{ID: "repair-run-1"}
 	health := &storage.EntryHealth{
 		EntryName:   entry.Name,
@@ -126,7 +131,7 @@ func TestHealBrokenEntryCountsQueueAndIdentityFailures(t *testing.T) {
 	reacquirer := &fakeReacquirer{reacquire: func(reacquire.Request) (*reacquire.Job, error) {
 		return nil, errors.New("queue unavailable")
 	}}
-	service := New(Dependencies{Storage: store, Reacquirer: reacquirer})
+	service := New(testGroup(t), Dependencies{Storage: store, Reacquirer: reacquirer})
 	run := &storage.RepairRun{ID: "repair-run-2"}
 	health := &storage.EntryHealth{
 		EntryName:   "Series.Release",
@@ -173,7 +178,7 @@ func TestHealBrokenEntrySkipsArrsWithoutReacquisition(t *testing.T) {
 	reacquirer := &fakeReacquirer{reacquire: func(reacquire.Request) (*reacquire.Job, error) {
 		return nil, errors.New("must not be called")
 	}}
-	service := New(Dependencies{Storage: store, Arrs: registry, Reacquirer: reacquirer})
+	service := New(testGroup(t), Dependencies{Storage: store, Arrs: registry, Reacquirer: reacquirer})
 	run := &storage.RepairRun{ID: "repair-run-3"}
 	health := &storage.EntryHealth{
 		EntryName:   "Album",
@@ -218,7 +223,7 @@ func TestHealBrokenEntryQueuesUnindexedLibraryFile(t *testing.T) {
 	reacquirer := &fakeReacquirer{library: func(reacquire.LibraryRequest) (*reacquire.Job, error) {
 		return &reacquire.Job{ID: "library-job"}, nil
 	}}
-	service := New(Dependencies{Storage: store, Arrs: registry, Reacquirer: reacquirer})
+	service := New(testGroup(t), Dependencies{Storage: store, Arrs: registry, Reacquirer: reacquirer})
 	run := &storage.RepairRun{ID: "repair-run-4"}
 	health := &storage.EntryHealth{
 		EntryName:   "Series.Release",
@@ -258,7 +263,7 @@ func TestHealBrokenEntryDoesNotBypassUnsafeOrUnavailableReacquisition(t *testing
 			reacquirer := &fakeReacquirer{
 				reacquire: func(reacquire.Request) (*reacquire.Job, error) { return nil, cause },
 			}
-			service := New(Dependencies{Storage: store, Reacquirer: reacquirer})
+			service := New(testGroup(t), Dependencies{Storage: store, Reacquirer: reacquirer})
 			_, err := service.reacquireBrokenFile(
 				t.Context(),
 				storage.BrokenFile{
@@ -280,7 +285,7 @@ func TestHealBrokenEntryDoesNotBypassUnsafeOrUnavailableReacquisition(t *testing
 func TestNewTreatsNilReacquireServiceAsUnavailable(t *testing.T) {
 	t.Parallel()
 	var unavailable *reacquire.Service
-	service := New(Dependencies{Reacquirer: unavailable})
+	service := New(testGroup(t), Dependencies{Reacquirer: unavailable})
 	if service.reacquirer != nil {
 		t.Fatal("typed-nil reacquire service must not be kept as a Reacquirer")
 	}
@@ -329,7 +334,7 @@ func healReasons(t *testing.T, reasons ...string) []reacquire.Strategy {
 	reacquirer := &fakeReacquirer{reacquire: func(reacquire.Request) (*reacquire.Job, error) {
 		return &reacquire.Job{ID: "job"}, nil
 	}}
-	service := New(Dependencies{Storage: store, Reacquirer: reacquirer})
+	service := New(testGroup(t), Dependencies{Storage: store, Reacquirer: reacquirer})
 	health := &storage.EntryHealth{EntryName: entry.Name, Status: storage.HealthBroken, BrokenFiles: files}
 	var statsMu sync.Mutex
 	service.healBrokenEntry(t.Context(), &storage.RepairRun{ID: "run"}, &statsMu, health, files)
@@ -384,7 +389,7 @@ func TestHealBrokenEntryOnlyHealsGivenFiles(t *testing.T) {
 	reacquirer := &fakeReacquirer{reacquire: func(reacquire.Request) (*reacquire.Job, error) {
 		return &reacquire.Job{ID: "job"}, nil
 	}}
-	service := New(Dependencies{Storage: store, Reacquirer: reacquirer})
+	service := New(testGroup(t), Dependencies{Storage: store, Reacquirer: reacquirer})
 	broken := []storage.BrokenFile{
 		{FileName: "a.mkv", InfoHash: "release-2", ArrName: "radarr", Reason: "hoster_unavailable"},
 		{FileName: "b.mkv", InfoHash: "release-2", ArrName: "radarr", Reason: "hoster_unavailable"},
@@ -406,7 +411,7 @@ func TestLibraryFallbackCarriesStrategy(t *testing.T) {
 		reacquire: func(reacquire.Request) (*reacquire.Job, error) { return nil, reacquire.ErrBindingNotFound },
 		library:   func(reacquire.LibraryRequest) (*reacquire.Job, error) { return &reacquire.Job{ID: "job"}, nil },
 	}
-	service := New(Dependencies{Storage: newRepairTestStorage(t), Reacquirer: reacquirer})
+	service := New(testGroup(t), Dependencies{Storage: newRepairTestStorage(t), Reacquirer: reacquirer})
 	broken := []storage.BrokenFile{{
 		FileName: "gone.mkv", InfoHash: "missing-entry", ArrName: "radarr", ArrFileID: 7,
 		SourcePath: "/library/gone.mkv", Reason: "usenet_manifest_missing",

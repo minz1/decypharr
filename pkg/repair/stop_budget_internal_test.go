@@ -3,6 +3,7 @@ package repair
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -11,13 +12,14 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/internal/task"
 )
 
-// Waiting for a stuck probe and for a stuck run share one drain budget, so a settings save never waits twice as long.
-func TestStopSharesOneDrainBudget(t *testing.T) {
+// Stop only cancels: a probe that ignores its cancellation does not hold it, the group's own stop waits for it.
+func TestStopDoesNotWait(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
-		service := New(Dependencies{})
+		service := New(testGroup(t), Dependencies{})
 		block := make(chan struct{})
 		started := make(chan struct{})
 		service.breaker.canary = func(context.Context, Bucket, config.BreakerSettings) canaryOutcome {
@@ -25,48 +27,50 @@ func TestStopSharesOneDrainBudget(t *testing.T) {
 			<-block // a probe that ignores its cancellation
 			return canaryInconclusive
 		}
-		service.runWG.Go(func() { <-block }) // a run that does not drain either
 		go service.QueueCanary(t.Context(), "rd")
 		<-started
 
 		begin := time.Now()
 		service.Stop()
-		if waited := time.Since(begin); waited != repairStopDrainTimeout {
-			t.Fatalf("Stop waited %s with a stuck probe and a stuck run, want one budget of %s",
-				waited, repairStopDrainTimeout)
+		if waited := time.Since(begin); waited != 0 {
+			t.Fatalf("Stop waited %s with a stuck probe, want no wait", waited)
 		}
 		close(block)
 		synctest.Wait()
 	})
 }
 
-// A probe that uses up the budget is reported as the probe, not as a run that failed to drain: with no run in
-// flight there is nothing left to drain. Stop is repeated because the bug was a select between two ready channels.
-func TestStopBlamesOnlyWhatTimedOut(t *testing.T) {
+// A sweep or probe that ignores cancellation shows in the group's stop-timeout task list, and Stop logs no private
+// drain warning about it.
+func TestStopTimeoutListsLiveSweep(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
-		for range 32 {
-			var logs bytes.Buffer
-			service := New(Dependencies{Logger: zerolog.New(&logs)})
-			block := make(chan struct{})
-			started := make(chan struct{})
-			service.breaker.canary = func(context.Context, Bucket, config.BreakerSettings) canaryOutcome {
-				close(started)
-				<-block // a probe that ignores its cancellation
-				return canaryInconclusive
-			}
-			go service.QueueCanary(t.Context(), "rd")
-			<-started
-
-			service.Stop()
-			close(block)
-			synctest.Wait()
-			if !strings.Contains(logs.String(), "a canary probe did not stop in time") {
-				t.Fatalf("Stop logged %q, want the stuck probe named", logs.String())
-			}
-			if strings.Contains(logs.String(), "drain timed out") {
-				t.Fatalf("Stop logged %q with no run in flight, want no drain timeout", logs.String())
-			}
+		var logs bytes.Buffer
+		g := task.NewRoot(t.Context(), "test", zerolog.New(&logs))
+		service := New(g, Dependencies{Logger: zerolog.New(&logs)})
+		block := make(chan struct{})
+		started := make(chan struct{})
+		if err := g.Go("sweep run-1", func(context.Context) error {
+			close(started)
+			<-block // a sweep that ignores its cancellation
+			return nil
+		}); err != nil {
+			t.Fatal(err)
 		}
+		<-started
+
+		service.Stop()
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		defer cancel()
+		err := g.Stop(ctx)
+		if !errors.Is(err, task.ErrStopTimeout) || !strings.Contains(err.Error(), "sweep run-1") {
+			t.Fatalf("group stop = %v, want a stop timeout naming the live sweep", err)
+		}
+		if strings.Contains(logs.String(), "drain timed out") ||
+			strings.Contains(logs.String(), "did not stop in time") {
+			t.Fatalf("logs %q carry a private drain warning", logs.String())
+		}
+		close(block)
+		synctest.Wait()
 	})
 }

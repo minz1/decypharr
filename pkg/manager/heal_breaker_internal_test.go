@@ -34,7 +34,7 @@ func TestDroppedFilesAreHeldWhileTheDroppedBucketIsTripped(t *testing.T) {
 		started: make(chan struct{}),
 	}
 	m, entry := newDroppedTestManager(t, fake)
-	m.repair = repair.New(repair.Dependencies{Storage: m.storage})
+	m.repair = repair.New(testGroup(t), repair.Dependencies{Storage: m.storage})
 	tripBucket(t, m.repair, "realdebrid", repair.ClassDropped)
 
 	err := m.recoverDroppedEntry("realdebrid", entry)
@@ -57,7 +57,7 @@ func TestDroppedFilesReacquireWhenTheBreakerIsClosed(t *testing.T) {
 		started: make(chan struct{}),
 	}
 	m, entry := newDroppedTestManager(t, fake)
-	m.repair = repair.New(repair.Dependencies{Storage: m.storage})
+	m.repair = repair.New(testGroup(t), repair.Dependencies{Storage: m.storage})
 
 	if err := m.recoverDroppedEntry("realdebrid", entry); err != nil {
 		t.Fatal(err)
@@ -76,7 +76,7 @@ func TestStreamReacquireIsHeldWhileTheUsenetBucketIsTripped(t *testing.T) {
 		}
 		m := &Manager{work: testGroup(t), checkStreamFile: confirmBroken}
 		m.SetArrRecovery(recovery)
-		m.repair = repair.New(repair.Dependencies{})
+		m.repair = repair.New(testGroup(t), repair.Dependencies{})
 		tripBucket(t, m.repair, m.repair.ProviderFor("nzb-1"), repair.ClassUsenetSegment)
 
 		m.submitStreamReacquire("nzb-1", "file-1", "a.mkv")

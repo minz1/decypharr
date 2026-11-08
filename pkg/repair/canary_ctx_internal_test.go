@@ -10,7 +10,7 @@ import (
 // A canary whose context has already ended reads no storage: it is inconclusive, not "nothing to probe".
 func TestCanaryChecksItsContextBeforeReadingStorage(t *testing.T) {
 	t.Parallel()
-	service := New(Dependencies{}) // no storage at all
+	service := New(testGroup(t), Dependencies{}) // no storage at all
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	got := service.canaryProbe(ctx, rdHoster(), config.RepairConfig{}.BreakerSettings())

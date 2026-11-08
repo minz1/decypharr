@@ -61,7 +61,7 @@ func TestRecheckEntryTreatsAMissingProviderAsBroken(t *testing.T) {
 	if _, err := f.service.RecheckEntry(t.Context(), f.entry.Name, RecheckOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	f.service.runWG.Wait()
+	f.exits.wait()
 	saved, _ := f.store.GetEntryHealth(f.entry.Name)
 	if saved == nil || saved.Status != storage.HealthBroken || saved.FailureReason != "provider_client_not_found" {
 		t.Fatalf("saved health = %#v, want broken with the missing-provider reason", saved)
@@ -85,7 +85,10 @@ func TestClearDisprovedMarksLogsKeptMark(t *testing.T) {
 		if err := store.AddOrUpdate(markedEntry(confirmHash, "a.mkv", "b.mkv")); err != nil {
 			t.Fatal(err)
 		}
-		service := New(Dependencies{Storage: store, Backend: &clientBackend{}, Logger: zerolog.New(&logs)})
+		service := New(
+			testGroup(t),
+			Dependencies{Storage: store, Backend: &clientBackend{}, Logger: zerolog.New(&logs)},
+		)
 		service.clearDisprovedMarks(t.Context(), tc.results)
 		if !strings.Contains(logs.String(), "bad mark kept") || !strings.Contains(logs.String(), tc.want) {
 			t.Errorf("%s: log = %q, want a kept-mark line naming %q", tc.name, logs.String(), tc.want)
@@ -102,7 +105,7 @@ func TestRecheckEntryWithFixActsOnAMissingProvider(t *testing.T) {
 	if _, err := f.service.RecheckEntry(t.Context(), f.entry.Name, RecheckOptions{Fix: true}); err != nil {
 		t.Fatal(err)
 	}
-	f.service.runWG.Wait()
+	f.exits.wait()
 	if len(f.reacquirer.requests) != 1 || f.reacquirer.requests[0].FileID != "id-video.mkv" {
 		t.Fatalf("requests = %#v, want one for video.mkv", f.reacquirer.requests)
 	}
