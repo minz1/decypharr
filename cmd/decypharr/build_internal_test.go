@@ -201,8 +201,23 @@ func TestRealServicesSignalDuringRestartDrain(t *testing.T) {
 	}
 }
 
-// The real tree has the mount in its own root group, not under the manager.
-// Presence only: the order is TestMountGroupStopOrder's job.
+// startedAt is when the task at path was registered; registration is
+// synchronous with Go, so it follows the order buildServices made the groups.
+func startedAt(t *testing.T, gen *generation, path string) time.Time {
+	t.Helper()
+	for _, info := range gen.root.Snapshot() {
+		if info.Path == path {
+			return info.Started
+		}
+	}
+	t.Fatalf("no task %s", path)
+	return time.Time{}
+}
+
+// The real tree has the mount in its own root group, not under the manager,
+// made after http and the manager: children stop newest first, so the mount
+// stops before the HTTP API and the manager. TestMountGroupStopOrder pins the
+// stop order for a given creation order; this pins buildServices' order.
 func TestRealServicesRootChildrenOrder(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(t.Context())
@@ -210,6 +225,12 @@ func TestRealServicesRootChildrenOrder(t *testing.T) {
 	run := startReal(ctx, t, nil)
 	gen := run.generation()
 	waitServing(t, gen)
+	order := []string{"generation/manager:storage", "generation/http:serve", "generation/mount/run:mount"}
+	for i := 1; i < len(order); i++ {
+		if startedAt(t, gen, order[i]).Before(startedAt(t, gen, order[i-1])) {
+			t.Errorf("%s started before %s; want the order %v", order[i], order[i-1], order)
+		}
+	}
 	paths := taskPaths(gen)
 	if !slices.ContainsFunc(paths, func(path string) bool { return strings.HasPrefix(path, "generation/mount/run") }) {
 		t.Errorf("tasks %v lack a generation/mount/run path", paths)
