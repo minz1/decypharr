@@ -110,11 +110,11 @@ type Config struct {
 	// Retention declares whether this reader or its downstream owns rewind.
 	Retention Retention
 
-	// Scheduler is shared by all readers using the same NNTP client. When nil,
-	// a private scheduler is created for compatibility with standalone readers.
+	// Scheduler is shared by all readers using the same NNTP client. It is
+	// required: readers own no workers.
 	Scheduler *FetchScheduler
 
-	// MaxConnections is the private-scheduler width for standalone readers.
+	// MaxConnections is advisory: the shared Scheduler fixes the fetch width.
 	MaxConnections int
 
 	// PrefetchAhead is the number of segments to prefetch ahead of reads (default: 8).
@@ -200,7 +200,7 @@ func WithFetchScheduler(scheduler *FetchScheduler) Option {
 	}
 }
 
-// WithMaxConnections sets the private-scheduler width for standalone readers.
+// WithMaxConnections records the provider connection count (advisory).
 func WithMaxConnections(n int) Option {
 	return func(c *Config) {
 		c.MaxConnections = n

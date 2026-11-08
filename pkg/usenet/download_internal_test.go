@@ -76,8 +76,13 @@ func TestDownloadDecryptsEncryptedFiles(t *testing.T) {
 	if poolsErr != nil {
 		t.Fatal(poolsErr)
 	}
+	scheduler, schedErr := reader.NewFetchScheduler(g.Child("scheduler"), 4)
+	if schedErr != nil {
+		t.Fatal(schedErr)
+	}
 	u := &Usenet{
 		bufferPools:              bufferPools,
+		fetchScheduler:           scheduler,
 		nntp:                     client,
 		nzbStorage:               metaStore,
 		logger:                   zerolog.Nop(),

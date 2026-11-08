@@ -253,6 +253,7 @@ type Usenet struct {
 	nntp                     *nntp.Client
 	nntpGroup                *task.Group // the nntp client's group; Close stops it
 	analyzer                 *parser.NZBParser
+	schedGroup               *task.Group // the fetch scheduler's group; Close stops it
 	fetchScheduler           *reader.FetchScheduler
 	logger                   zerolog.Logger
 	config                   *config.Store
@@ -343,38 +344,39 @@ func New(g *task.Group, store *config.Store, logs *logger.Factory) (*Usenet, err
 	nntpGroup := g.Child("nntp")
 	client, err := nntp.NewClient(nntpGroup, cfg, logs.New("nntp-client"))
 	if err != nil {
-		abortNew(nntpGroup, markers)
+		abortNew(markers, nntpGroup)
 		return nil, err
 	}
 
 	// Disk rewind files are session-scoped; clear any left by an interrupted run.
 	if clearErr := clearStaleStreamCache(strings.TrimSpace(usenetConfig.DiskPath)); clearErr != nil {
-		abortNew(nntpGroup, markers)
+		abortNew(markers, nntpGroup)
 		return nil, clearErr
 	}
 
-	maxConns := usenetConfig.MaxConnections
-	if maxConns <= 0 {
-		maxConns = 10
-	}
-	processingMaxConns := usenetConfig.ProcessingMaxConnections
-	if processingMaxConns <= 0 {
-		processingMaxConns = maxConns
-	}
-
+	maxConns, processingMaxConns := connectionLimits(usenetConfig)
 	prefetchSize, err := config.ParseSize(usenetConfig.ReadAhead)
 	if err != nil {
 		prefetchSize = defaultReadAhead
 	}
 
+	// The scheduler's group is created after nntp's and before the pools'.
+	schedGroup := g.Child("scheduler")
+	fetchScheduler, err := reader.NewFetchScheduler(schedGroup, maxConns)
+	if err != nil {
+		abortNew(markers, schedGroup, nntpGroup)
+		return nil, fmt.Errorf("create fetch scheduler: %w", err)
+	}
+
 	bufferPools, err := reader.NewPools(g, usenetConfig.BufferMemoryBytes())
 	if err != nil {
-		abortNew(nntpGroup, markers)
+		abortNew(markers, schedGroup, nntpGroup)
 		return nil, fmt.Errorf("create buffer pools: %w", err)
 	}
 
 	u := &Usenet{
 		g:           g,
+		schedGroup:  schedGroup,
 		bufferPools: bufferPools,
 		nzbStorage:  nzbStorage,
 		nntp:        client,
@@ -389,7 +391,7 @@ func New(g *task.Group, store *config.Store, logs *logger.Factory) (*Usenet, err
 		config:                   store,
 		streamSettings:           usenetConfig,
 		markers:                  markers,
-		fetchScheduler:           reader.NewFetchScheduler(maxConns),
+		fetchScheduler:           fetchScheduler,
 		logger:                   _logger,
 		metadataDir:              metadataDir,
 		maxConnections:           maxConns,
@@ -408,11 +410,27 @@ func New(g *task.Group, store *config.Store, logs *logger.Factory) (*Usenet, err
 	return u, nil
 }
 
-// abortNew undoes a failed New: it stops the nntp client's group, waiting for
-// its tasks, and closes the marker root.
-func abortNew(nntpGroup *task.Group, markers *os.Root) {
-	nntpGroup.Close()
-	<-nntpGroup.Done()
+// connectionLimits returns the streaming scheduler width and the per-file
+// processing width for cfg, defaulting each when unset.
+func connectionLimits(cfg config.Usenet) (int, int) {
+	maxConns := cfg.MaxConnections
+	if maxConns <= 0 {
+		maxConns = 10
+	}
+	processingMaxConns := cfg.ProcessingMaxConnections
+	if processingMaxConns <= 0 {
+		processingMaxConns = maxConns
+	}
+	return maxConns, processingMaxConns
+}
+
+// abortNew undoes a failed New: it stops the given groups, newest first,
+// waiting for each one's tasks, and closes the marker root.
+func abortNew(markers *os.Root, groups ...*task.Group) {
+	for _, g := range groups {
+		g.Close()
+		<-g.Done()
+	}
 	_ = markers.Close()
 }
 
@@ -897,8 +915,11 @@ func (u *Usenet) Close() error {
 			})
 		}
 		cleanup.Wait()
-		if u.fetchScheduler != nil {
-			u.fetchScheduler.Close()
+		if u.schedGroup != nil {
+			// Interim until Usenet.Close is deleted: stop the scheduler's group,
+			// dropping queued work and waiting for its workers.
+			u.schedGroup.Close()
+			<-u.schedGroup.Done()
 		}
 
 		if u.bufferPools != nil {

@@ -2,8 +2,12 @@ package reader
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"runtime/debug"
 	"sync"
-	"sync/atomic"
+
+	"github.com/sirrobot01/decypharr/internal/task"
 )
 
 type fetchPriority uint8
@@ -14,9 +18,12 @@ const (
 	priorityDemand
 )
 
+// scheduledFetch is one queued closure. owner is the group whose lease the
+// closure runs under; drop settles the closure when it never runs.
 type scheduledFetch struct {
-	run  func()
-	drop func()
+	owner *task.Group
+	run   func()
+	drop  func()
 }
 
 // Queue depths: a floor plus room per worker.
@@ -27,29 +34,36 @@ const (
 	prefetchQueuePerWorker = 32
 )
 
+// errSchedulerRequired is returned by NewStreamingReader without a shared
+// scheduler: readers do not own workers.
+var errSchedulerRequired = errors.New("streaming reader needs the service's fetch scheduler")
+
+// errFetchClosurePanicked reports a scheduled closure that panicked; the
+// scheduler's group logs it with the stack.
+var errFetchClosurePanicked = errors.New("scheduled fetch closure panicked")
+
 // FetchScheduler bounds NNTP work across every reader sharing a client.
-// Foreground reads use the demand queue; speculative work uses prefetch.
+// Foreground reads use the demand queue; speculative work uses prefetch. Its
+// workers are tasks of the group it was made on; the group's owner stops it.
 type FetchScheduler struct {
+	g        *task.Group
+	mu       sync.RWMutex // submitters hold RLock; stopping takes Lock
+	closed   bool
 	demand   chan scheduledFetch
 	prefetch chan scheduledFetch
-	stop     chan struct{}
 	workers  int
-	wg       sync.WaitGroup
-	closed   atomic.Bool
-	submitMu sync.Mutex
-	submitWg sync.WaitGroup
 }
 
-// NewFetchScheduler starts workers matching the real provider concurrency.
-// A zero worker scheduler is useful for state-only tests.
-func NewFetchScheduler(workers int) *FetchScheduler {
-	if workers < 0 {
-		workers = 0
+// NewFetchScheduler starts workers tasks on g, matching the real provider
+// concurrency. It returns an error if workers < 1 or g refuses tasks.
+func NewFetchScheduler(g *task.Group, workers int) (*FetchScheduler, error) {
+	if workers < 1 {
+		return nil, fmt.Errorf("fetch scheduler needs at least one worker, got %d", workers)
 	}
 	s := &FetchScheduler{
+		g:        g,
 		demand:   make(chan scheduledFetch, max(minDemandQueue, workers*demandQueuePerWorker)),
 		prefetch: make(chan scheduledFetch, max(minPrefetchQueue, workers*prefetchQueuePerWorker)),
-		stop:     make(chan struct{}),
 		workers:  workers,
 	}
 	reserved := 0
@@ -57,126 +71,137 @@ func NewFetchScheduler(workers int) *FetchScheduler {
 		reserved = 1
 	}
 	for i := range workers {
-		s.wg.Add(1)
-		go s.worker(i >= reserved)
+		allowPrefetch := i >= reserved
+		if err := g.Go("worker", func(ctx context.Context) error {
+			return s.worker(ctx, allowPrefetch)
+		}); err != nil {
+			return nil, fmt.Errorf("start fetch worker: %w", err)
+		}
 	}
-	return s
+	return s, nil
 }
 
-func (s *FetchScheduler) worker(allowPrefetch bool) {
-	defer s.wg.Done()
-	for {
-		if !allowPrefetch {
+// worker runs closures until ctx ends, then refuses new work and drops what
+// is still queued.
+func (s *FetchScheduler) worker(ctx context.Context, allowPrefetch bool) error {
+	defer s.stop()
+	// A worker reserved for demand never receives from the nil channel.
+	prefetch := s.prefetch
+	if !allowPrefetch {
+		prefetch = nil
+	}
+	for ctx.Err() == nil {
+		if allowPrefetch {
+			// Prefer demand already waiting before accepting speculative work.
 			select {
-			case <-s.stop:
-				return
-			case task := <-s.demand:
-				task.run()
+			case f := <-s.demand:
+				s.execute(ctx, f)
+				continue
+			default:
 			}
-			continue
 		}
-
 		select {
-		case <-s.stop:
-			return
+		case <-ctx.Done():
+		case f := <-s.demand:
+			s.execute(ctx, f)
+		case f := <-prefetch:
+			s.execute(ctx, f)
+		}
+	}
+	return nil
+}
+
+// execute runs f under a lease on its owner, or drops it when the scheduler
+// or the owner has stopped. A panic is logged with its stack and the closure
+// is dropped, so the worker survives.
+func (s *FetchScheduler) execute(ctx context.Context, f scheduledFetch) {
+	if ctx.Err() != nil {
+		f.settle()
+		return
+	}
+	leave, err := f.owner.Enter("fetch")
+	if err != nil {
+		f.settle()
+		return
+	}
+	defer leave()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			stack := debug.Stack()
+			failure := fmt.Errorf("%w: %v\n%s", errFetchClosurePanicked, recovered, stack)
+			// The group logs a task's error; if it is stopping the log is lost.
+			_ = s.g.Go("fetch-panic", func(context.Context) error { return failure })
+			f.settle()
+		}
+	}()
+	f.run()
+}
+
+func (f scheduledFetch) settle() {
+	if f.drop != nil {
+		f.drop()
+	}
+}
+
+// stop refuses further submissions and drops everything still queued.
+func (s *FetchScheduler) stop() {
+	s.mu.Lock()
+	s.closed = true
+	s.mu.Unlock()
+	for {
+		select {
+		case f := <-s.demand:
+			f.settle()
+		case f := <-s.prefetch:
+			f.settle()
 		default:
-		}
-
-		// Prefer demand already waiting before accepting speculative work.
-		select {
-		case task := <-s.demand:
-			task.run()
-			continue
-		default:
-		}
-
-		select {
-		case <-s.stop:
 			return
-		case task := <-s.demand:
-			task.run()
-		case task := <-s.prefetch:
-			task.run()
 		}
 	}
 }
 
-func (s *FetchScheduler) submit(ctx context.Context, priority fetchPriority, run, drop func()) bool {
-	if s == nil || run == nil {
+// submit queues run on behalf of owner. It reports false, without calling
+// drop, when the closure was not accepted. An accepted closure is settled
+// exactly once: run, or drop if it never runs.
+func (s *FetchScheduler) submit(
+	ctx context.Context,
+	owner *task.Group,
+	priority fetchPriority,
+	run, drop func(),
+) bool {
+	if s == nil || run == nil || owner == nil {
 		return false
 	}
-	s.submitMu.Lock()
-	if s.closed.Load() {
-		s.submitMu.Unlock()
-		return false
-	}
-	s.submitWg.Add(1)
-	s.submitMu.Unlock()
-	defer s.submitWg.Done()
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	task := scheduledFetch{run: run, drop: drop}
-	if priority == priorityPrefetch {
-		select {
-		case s.prefetch <- task:
-			return true
-		case <-ctx.Done():
-			return false
-		case <-s.stop:
-			return false
-		default:
-			return false
-		}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
+		return false
 	}
-	if priority == priorityProbe {
+	f := scheduledFetch{owner: owner, run: run, drop: drop}
+	if priority != priorityDemand {
+		// Speculative work never waits for room.
+		queue := s.prefetch
+		if priority == priorityProbe {
+			queue = s.demand
+		}
 		select {
-		case s.demand <- task:
+		case queue <- f:
 			return true
-		case <-ctx.Done():
-			return false
-		case <-s.stop:
-			return false
 		default:
 			return false
 		}
 	}
 	select {
-	case s.demand <- task:
+	case s.demand <- f:
 		return true
 	case <-ctx.Done():
 		return false
-	case <-s.stop:
+	case <-owner.Context().Done():
 		return false
-	}
-}
-
-// Close stops accepting work and waits for active fetches. It is idempotent.
-func (s *FetchScheduler) Close() {
-	if s == nil {
-		return
-	}
-	s.submitMu.Lock()
-	if !s.closed.CompareAndSwap(false, true) {
-		s.submitMu.Unlock()
-		return
-	}
-	s.submitMu.Unlock()
-	s.submitWg.Wait()
-	close(s.stop)
-	s.wg.Wait()
-	for {
-		select {
-		case task := <-s.demand:
-			if task.drop != nil {
-				task.drop()
-			}
-		case task := <-s.prefetch:
-			if task.drop != nil {
-				task.drop()
-			}
-		default:
-			return
-		}
+	case <-s.g.Context().Done():
+		return false
 	}
 }

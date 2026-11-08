@@ -32,6 +32,10 @@ func NewPools(g *task.Group, memoryBudget int64) (*Pools, error) {
 	}, nil
 }
 
+// newReaderGroup makes the group one StreamingReader runs on, a child of the
+// pools' group.
+func (p *Pools) newReaderGroup() *task.Group { return p.g.Child("reader") }
+
 // BufferGroup is the group the buffer pool runs on. Stopping it closes every
 // Buffer still registered.
 func (p *Pools) BufferGroup() *task.Group { return p.bufferG }
