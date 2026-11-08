@@ -462,7 +462,7 @@ func TestWaitingJobExpiresAndReleasesDeduplicationKey(t *testing.T) {
 	waitForJobStatus(t, service, first.ID, StatusWaitingForImport)
 
 	service.now = func() time.Time { return base.Add(waitingTimeout + time.Minute) }
-	service.maintainJobs()
+	service.maintainJobs(t.Context())
 	waitForJobStatus(t, service, first.ID, StatusFailed)
 	second, err := service.Reacquire(Request{EntryID: "entry", FileID: "file", Cause: CauseRepair})
 	if err != nil {

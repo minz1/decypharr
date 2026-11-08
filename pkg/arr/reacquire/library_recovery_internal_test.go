@@ -479,7 +479,7 @@ func assertImportTimeoutOutcome(
 	ready bool,
 ) {
 	t.Helper()
-	service.maintainJobs()
+	service.maintainJobs(t.Context())
 	updated, _ := service.Job(jobID)
 	want := StatusFailed
 	if ready {
