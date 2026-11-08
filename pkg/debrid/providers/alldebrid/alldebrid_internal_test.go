@@ -1,6 +1,7 @@
 package alldebrid
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -314,5 +315,40 @@ func TestGetTorrentsFlattensFolders(t *testing.T) {
 	}
 	if len(files) != 3 {
 		t.Errorf("files = %v, want the three leaf files", files)
+	}
+}
+
+// A ctx that ends while the no-peer retry sleeps between status checks stops
+// the restart at once, with the ctx error.
+func TestRestartNoPeerReturnsAtCancel(t *testing.T) {
+	t.Parallel()
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v4/magnet/restart", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"status":"success","data":{"message":"Magnet was successfully restarted"}}`)
+	})
+	mux.HandleFunc("GET /v4.1/magnet/status", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(
+			w,
+			`{"status":"success","data":{"magnets":[{"id":42,"filename":"Release.mkv","statusCode":7}]}}`,
+		)
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	ad := testAllDebrid(server.URL + "/v4.1")
+	ad.noPeerRetryBackoff = []time.Duration{time.Hour}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	time.AfterFunc(50*time.Millisecond, cancel)
+
+	start := time.Now()
+	_, err := ad.restartNoPeerTorrent(ctx, &debridTypes.Torrent{ID: "42", DownloadUncached: true})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("restartNoPeerTorrent err = %v, want context.Canceled", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("restartNoPeerTorrent took %s to notice the cancel", elapsed)
 	}
 }

@@ -129,6 +129,7 @@ func (r *Reader) readBytes(ctx context.Context, start int64, length int) ([]byte
 func (r *Reader) readExact(ctx context.Context, start int64, length int) ([]byte, error) {
 	var data []byte
 	err := retry.Do(
+		ctx,
 		func() error {
 			var readErr error
 			data, readErr = r.readBytes(ctx, start, length)

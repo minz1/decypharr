@@ -49,14 +49,13 @@ func TestCheckStatusStopsPollingOnShutdown(t *testing.T) {
 		logger: zerolog.Nop(),
 		options: types.ProviderOptions{
 			ValidateFile: func(string, int64) error { return nil },
-			Shutdown:     func() context.Context { return ctx },
 		},
 		pollInterval: time.Hour,
 	}
 	time.AfterFunc(50*time.Millisecond, cancel)
 
 	start := time.Now()
-	_, err := pm.CheckStatus(t.Context(), &types.Torrent{ID: "t1"})
+	_, err := pm.CheckStatus(ctx, &types.Torrent{ID: "t1"})
 
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Fatalf("CheckStatus took %s to notice the shutdown", elapsed)

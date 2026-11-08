@@ -456,7 +456,13 @@ func (ad *AllDebrid) restartNoPeerTorrent(ctx context.Context, torrent *types.To
 		backoff = defaultNoPeerRetryBackoff()
 	}
 	for attempt, delay := range backoff {
-		time.Sleep(delay)
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return allDebridNoPeerStatusCode, ctx.Err()
+		case <-timer.C:
+		}
 		statusCode, err := ad.updateTorrent(ctx, torrent)
 		if err != nil {
 			return allDebridNoPeerStatusCode, fmt.Errorf(

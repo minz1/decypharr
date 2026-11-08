@@ -271,7 +271,7 @@ func (pm *Premiumize) UpdateAndReturnTorrent(ctx context.Context, t *types.Torre
 				customerror.ErrProviderStatusTimeout,
 			)
 		}
-		if waitErr := pm.options.Wait(interval); waitErr != nil {
+		if waitErr := pm.options.Wait(ctx, interval); waitErr != nil {
 			return t, customerror.StatusWaitStopped(t.Name, waitErr)
 		}
 	}

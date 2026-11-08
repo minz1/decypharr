@@ -1239,7 +1239,7 @@ func (r *RealDebrid) awaitPoll(ctx context.Context, t *types.Torrent, interval t
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return ctxErr
 	}
-	if waitErr := r.options.Wait(interval); waitErr != nil {
+	if waitErr := r.options.Wait(ctx, interval); waitErr != nil {
 		return customerror.StatusWaitStopped(t.Name, waitErr)
 	}
 	return nil
