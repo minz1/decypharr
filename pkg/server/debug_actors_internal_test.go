@@ -49,7 +49,7 @@ func debugServer(t *testing.T) *Server {
 		cfg.UseAuth = true
 		cfg.Auth = &config.Auth{TokenOnly: true, APIToken: "debug-token"}
 	})
-	return New(mgr, store, logger.Discard())
+	return New(mgr, store, logger.Discard(), nil)
 }
 
 // The actors field is additive: with no runner wired it is an empty list next to the tasks.

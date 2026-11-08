@@ -2,6 +2,11 @@
 // so it can be served over the facetfs protocol packages (NFSv4 today; SFTP
 // and SMB share the same adapter later). The export is read-only: every
 // mutating call fails with [fs.ErrPermission].
+//
+// The NFS and SMB servers are children of the generation's task group, built
+// once with the generation. Their settings (NFS, SMB and ShareCache) are not
+// applied live: changing any of them needs a restart, which the configuration
+// reports through Config.RequiresRestart.
 package share
 
 import (
