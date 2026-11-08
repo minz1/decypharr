@@ -232,3 +232,38 @@ func TestKickerRefusedDoesNotHang(t *testing.T) {
 		}
 	})
 }
+
+// When the stop budget is spent before the item's tasks end, the metadata
+// writer still owes its own final flush; closeWith must not start a second one
+// beside it.
+func TestExpiredStopBudgetDoesNotFlushTwice(t *testing.T) {
+	t.Parallel()
+	g := newTestGroup(t)
+	cache, backend := newLifecycleCache(t, g)
+	item, err := cache.GetItem(backend.entry, "f", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The meta task's final flush blocks on this lock, so the stop below
+	// cannot finish in time.
+	item.metaMu.Lock()
+	spent, cancel := context.WithCancel(t.Context())
+	cancel()
+	closed := make(chan error, 1)
+	go func() { closed <- item.closeWith(spent) }()
+
+	var closeErr error
+	select {
+	case closeErr = <-closed:
+	case <-time.After(testStopBudget):
+		t.Error("closeWith is flushing beside the meta task's own final flush")
+	}
+	item.metaMu.Unlock()
+	if closeErr == nil {
+		t.Error("closeWith did not return the stop error")
+		<-closed
+	}
+	// Let the writer's flush land before the temp dir goes.
+	stopItemGroup(t, item)
+	_ = cache.Close()
+}

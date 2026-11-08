@@ -8,6 +8,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/task"
+	"github.com/sirrobot01/decypharr/pkg/mount/dfs/backend"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/config"
 )
 
@@ -142,6 +143,48 @@ func TestDoneWhenHostMountReturns(t *testing.T) {
 		defer cancel()
 		if stopErr := g.Stop(stopCtx); stopErr != nil {
 			t.Fatalf("Stop = %v", stopErr)
+		}
+	})
+}
+
+// Init that comes after the timeout still finds a mount to release: the
+// unmount waits for it, because a host that is not mounted yet cannot be
+// unmounted.
+func TestLateInitIsUnmounted(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		h := &fakeHost{initGate: make(chan struct{}), stayUp: true, mountOK: true}
+		b, g := newTestBackend(t, h)
+		type result struct {
+			m   backend.Mounted
+			err error
+		}
+		res := make(chan result, 1)
+		go func() {
+			m, err := b.Mount(t.Context(), g)
+			res <- result{m, err}
+		}()
+		<-time.After(b.config.DaemonTimeout + time.Second)
+		synctest.Wait()
+		select {
+		case <-res:
+			t.Fatal("Mount returned before the host mounted")
+		default:
+		}
+
+		close(h.initGate)
+		synctest.Wait()
+		r := <-res
+		if r.err == nil || r.m != nil {
+			t.Fatalf("Mount = (%v, %v), want the timeout error", r.m, r.err)
+		}
+		if h.unmounts != 1 {
+			t.Fatalf("host unmounts = %d, want 1 after the late Init", h.unmounts)
+		}
+		stopCtx, cancel := task.Detached(t.Context(), time.Second)
+		defer cancel()
+		if stopErr := g.Stop(stopCtx); stopErr != nil {
+			t.Fatalf("Stop = %v (serve should have ended)", stopErr)
 		}
 	})
 }

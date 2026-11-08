@@ -137,8 +137,26 @@ func (b *Backend) Mount(ctx context.Context, g *task.Group) (backend.Mounted, er
 	case <-served:
 		return nil, errors.New("cgofuse mount failed")
 	case <-mountCtx.Done():
-		h.Unmount()
+		b.releaseLate(ctx, h, served)
 		return nil, fmt.Errorf("waiting for cgofuse init: %w", mountCtx.Err())
+	}
+}
+
+// releaseLate unmounts a host that has not called Init yet: it cannot be
+// unmounted before it is mounted, so wait (bounded) for Init, then unmount.
+func (b *Backend) releaseLate(ctx context.Context, h host, served <-chan bool) {
+	waitCtx, cancel := task.Detached(ctx, b.config.DaemonTimeout)
+	defer cancel()
+	select {
+	case <-b.root.initialized:
+		h.Unmount()
+		select {
+		case <-served:
+		case <-waitCtx.Done():
+		}
+	case <-served:
+	case <-waitCtx.Done():
+		h.Unmount()
 	}
 }
 
