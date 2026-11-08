@@ -103,6 +103,8 @@ type mountRig struct {
 	slice *mountSlice
 	logs  *syncBuffer
 	log   *eventLog
+	// backend is the WebDAV server's stop channel start hands over; nil by default.
+	backend <-chan struct{}
 }
 
 func newMountRig(t *testing.T) *mountRig {
@@ -121,7 +123,7 @@ func newMountRig(t *testing.T) *mountRig {
 func (r *mountRig) start(mm manager.MountManager, ready <-chan struct{}) {
 	r.t.Helper()
 	logger := zerolog.New(r.logs)
-	if err := startMountGroup(r.root, mm, ready, r.gate, r.slice, logger); err != nil {
+	if err := startMountGroup(r.root, mm, ready, r.gate, r.slice, r.backend, logger); err != nil {
 		r.t.Fatal(err)
 	}
 }
@@ -287,6 +289,45 @@ func TestMountSliceHandedToOwnersThatTakeIt(t *testing.T) {
 		if _, armed := (*got)(); !armed {
 			t.Fatal("the slice is not armed after the stop")
 		}
+	})
+}
+
+// backendMount is a fakeMount that takes the WebDAV server's stop channel, as the rclone owner does.
+type backendMount struct {
+	*fakeMount
+
+	got atomic.Pointer[<-chan struct{}]
+	// atStart is whether the channel was set when Start ran.
+	atStart atomic.Bool
+}
+
+func (b *backendMount) SetBackendStopped(stopped <-chan struct{}) { b.got.Store(&stopped) }
+
+func (b *backendMount) Start(g *task.Group) error {
+	b.atStart.Store(b.got.Load() != nil)
+	return b.fakeMount.Start(g)
+}
+
+// The WebDAV server's stop channel reaches an owner that takes one, before Start.
+func TestStartMountGroupHandsOverBackendStopped(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		r := newMountRig(t)
+		backend := make(chan struct{})
+		r.backend = backend
+		mm := &backendMount{fakeMount: &fakeMount{log: r.log}}
+		ready := make(chan struct{})
+		close(ready)
+		r.start(mm, ready)
+		synctest.Wait()
+
+		if !mm.atStart.Load() {
+			t.Fatal("the owner had no backend channel when Start ran")
+		}
+		if got := mm.got.Load(); got == nil || *got != (<-chan struct{})(backend) {
+			t.Fatal("the owner got a different channel than the one passed in")
+		}
+		r.stop()
 	})
 }
 
