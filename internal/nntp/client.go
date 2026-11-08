@@ -22,6 +22,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
 	nntpyenc "github.com/sirrobot01/decypharr/internal/nntp/yenc"
+	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/internal/utils"
 )
 
@@ -138,14 +139,12 @@ type Client struct {
 	// Speed test results storage
 	speedTestResults *xsync.Map[string, SpeedTestResult]
 
-	// repairPool is the shared worker pool that processes BatchStat
-	// chunks. Sized at construction from cfg.Repair.NNTPConnectionPercent.
-	// Replaces the previous RepairBank counting semaphore + per-call
-	// conc.Pool design — that pattern produced N × bank.Capacity
-	// goroutines under N concurrent BatchStat calls because each call
-	// sized its own pool to the entire bank capacity. The shared pool
-	// caps total worker goroutines to exactly pool.Capacity().
+	// repairPool bounds the BatchStat chunks running at once across every
+	// BatchStat call. Sized at construction from
+	// cfg.Repair.NNTPConnectionPercent.
 	repairPool *RepairPool
+	// repairGroup owns the repair chunks; Close stops it.
+	repairGroup *task.Group
 
 	// TCP socket buffer sizes (bytes) applied to every new connection. 0 means
 	// "leave OS autotuning untouched". Sized from cfg.Usenet.Socket*Buffer.
@@ -320,7 +319,10 @@ func NewClient(cfg *config.Config, log zerolog.Logger) (*Client, error) {
 			cm.streamBackupWait = d
 		}
 	}
-	cm.repairPool = cm.newRepairPool(cfg.Repair.NNTPConnectionPercent)
+	// Interim until the client runs on a group of its own: the repair
+	// chunks run on a root group that Close stops.
+	cm.repairGroup = task.NewRoot(context.Background(), "nntp-repair", log)
+	cm.repairPool = cm.newRepairPool(cm.repairGroup, cfg.Repair.NNTPConnectionPercent)
 
 	// Start background reaper
 	go cm.reaper()
@@ -1457,9 +1459,9 @@ func (c *Client) BatchStat(ctx context.Context, messageIDs []string) (*BatchStat
 	}
 
 	// Each chunk submits to the shared RepairPool. Concurrency is bounded
-	// by the pool's worker count, NOT by a per-call pool — so M concurrent
-	// BatchStat calls share the same pool.Capacity() workers in FIFO
-	// arrival order instead of each spinning up its own bank-sized pool.
+	// by the pool's capacity, NOT by a per-call pool — so M concurrent
+	// BatchStat calls share the same pool.Capacity() slots instead of
+	// each spinning up its own bank-sized pool.
 	// Tasks write disjoint index ranges of allResults; the only shared
 	// mutable state is the early-bailout cancel.
 	markChunkErr := func(startIdx, n int, e error) {
@@ -1494,8 +1496,8 @@ func (c *Client) BatchStat(ctx context.Context, messageIDs []string) (*BatchStat
 			}
 		})
 		if err != nil {
-			// Submit refused the task — caller's ctx expired before a worker
-			// took it, or the pool is shutting down. Synthesize a chunk-wide
+			// Submit refused the chunk — caller's ctx expired before a slot
+			// freed, or the pool is shutting down. Synthesize a chunk-wide
 			// error so the result vector still has the right shape.
 			markChunkErr(ch.startIdx, len(ch.messageIDs), err)
 			wg.Done()
@@ -1700,7 +1702,10 @@ func (c *Client) Close() error {
 	// Stop the BatchStat worker pool last — its workers may be holding
 	// connections we just force-closed, which makes them return with
 	// errors and exit cleanly.
-	c.repairPool.Stop()
+	if c.repairGroup != nil {
+		c.repairGroup.Close()
+		<-c.repairGroup.Done()
+	}
 	c.janitor.close()
 
 	c.logger.Info().
