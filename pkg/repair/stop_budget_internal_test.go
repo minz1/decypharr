@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -21,6 +22,8 @@ func TestStopDoesNotWait(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		service := New(testGroup(t), Dependencies{})
 		block := make(chan struct{})
+		release := sync.OnceFunc(func() { close(block) })
+		defer release() // a failed assertion must not leave the probe blocked, or synctest hides it behind a deadlock
 		started := make(chan struct{})
 		service.breaker.canary = func(context.Context, Bucket, config.BreakerSettings) canaryOutcome {
 			close(started)
@@ -35,7 +38,7 @@ func TestStopDoesNotWait(t *testing.T) {
 		if waited := time.Since(begin); waited != 0 {
 			t.Fatalf("Stop waited %s with a stuck probe, want no wait", waited)
 		}
-		close(block)
+		release()
 		synctest.Wait()
 	})
 }
@@ -49,6 +52,8 @@ func TestStopTimeoutListsLiveSweep(t *testing.T) {
 		g := task.NewRoot(t.Context(), "test", zerolog.New(&logs))
 		service := New(g, Dependencies{Logger: zerolog.New(&logs)})
 		block := make(chan struct{})
+		release := sync.OnceFunc(func() { close(block) })
+		defer release() // a failed assertion must not leave the sweep blocked, or synctest hides it behind a deadlock
 		started := make(chan struct{})
 		if err := g.Go("sweep run-1", func(context.Context) error {
 			close(started)
@@ -70,7 +75,7 @@ func TestStopTimeoutListsLiveSweep(t *testing.T) {
 			strings.Contains(logs.String(), "did not stop in time") {
 			t.Fatalf("logs %q carry a private drain warning", logs.String())
 		}
-		close(block)
+		release()
 		synctest.Wait()
 	})
 }
