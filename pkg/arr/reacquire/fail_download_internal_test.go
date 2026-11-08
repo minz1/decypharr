@@ -52,7 +52,7 @@ func startFailDownloadService(t *testing.T, host string) *Service {
 		registry.AddOrUpdate(arr.Arr{Name: "sonarr", Host: host, Token: "secret", Type: arr.Sonarr})
 		options.Handler = NewHandler(registry, nil)
 	}
-	service, err := NewService(options)
+	service, err := NewService(newTestGroup(t), options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +258,10 @@ func TestFailDownloadSkipsImportedDownload(t *testing.T) {
 	registry := newTestArrStorage()
 	registry.AddOrUpdate(arr.Arr{Name: "sonarr", Host: server.URL, Token: "secret", Type: arr.Sonarr})
 	invalidator := &recordingInvalidator{}
-	service, err := NewService(ServiceOptions{Directory: t.TempDir(), Handler: NewHandler(registry, invalidator)})
+	service, err := NewService(
+		newTestGroup(t),
+		ServiceOptions{Directory: t.TempDir(), Handler: NewHandler(registry, invalidator)},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -419,7 +422,7 @@ func runWaitingJobFailDownload(t *testing.T, strategy Strategy, reruns bool) {
 		return progress.Update(StatusWaitingForGrab, nil)
 	})
 	instance := arr.Arr{Name: "sonarr", Type: arr.Sonarr, Host: "http://arr.invalid", Token: "token"}
-	service, err := NewService(ServiceOptions{Directory: t.TempDir(), Handler: handler})
+	service, err := NewService(newTestGroup(t), ServiceOptions{Directory: t.TempDir(), Handler: handler})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -464,7 +467,7 @@ func TestFailDownloadReturnsARunningHistoryFailedJob(t *testing.T) {
 		return progress.Update(StatusWaitingForGrab, nil)
 	})
 	instance := arr.Arr{Name: "sonarr", Type: arr.Sonarr, Host: "http://arr.invalid", Token: "token"}
-	service, err := NewService(ServiceOptions{Directory: t.TempDir(), Handler: handler})
+	service, err := NewService(newTestGroup(t), ServiceOptions{Directory: t.TempDir(), Handler: handler})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -10,6 +10,8 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/sirrobot01/decypharr/internal/state"
+	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 )
 
@@ -47,27 +49,37 @@ type jobKey struct {
 }
 
 type Service struct {
-	arrs                 *arr.Service
-	logger               zerolog.Logger
-	onNeedsAttention     func(NeedsAttention)
-	index                *Index
-	bindingRepository    *BindingRepository
-	jobRepository        *JobRepository
-	wake                 chan struct{}
-	now                  func() time.Time
-	lifecycleMu          sync.RWMutex
-	started              bool
-	closed               bool
-	ctx                  context.Context
-	cancel               context.CancelFunc
+	// g owns everything the service runs: the worker child and the close task. The worker holds the run loop and
+	// the retry timers, and stops before g's own tasks so the close task can wait for it.
+	g                 *task.Group
+	worker            *task.Group
+	arrs              *arr.Service
+	logger            zerolog.Logger
+	onNeedsAttention  func(NeedsAttention)
+	index             *Index
+	bindingRepository *BindingRepository
+	jobRepository     *JobRepository
+	wake              chan struct{}
+	now               func() time.Time
+	// lifecycleMu is the operation guard. Public entry points hold the read lock for their whole duration; Start
+	// and the close task take the write lock. Internal helpers never take it: a nested read lock deadlocks behind
+	// a waiting writer.
+	lifecycleMu sync.RWMutex
+	state       serviceState
+	// closeErr is what closing the repositories returned; set by the close task, under lifecycleMu.
+	closeErr             error
+	handlerMu            sync.Mutex
 	handler              Handler
-	wg                   sync.WaitGroup
 	jobsMu               sync.RWMutex
 	jobs                 map[string]Job
 	activeReacquisitions map[jobKey]string
+	// beforeMaintenanceCtx, when set, is called in completeJobFromIndex just before it reads the group's
+	// context. It is a seam for tests that hold a public entry point in flight there while Close queues for the
+	// write lock; completeJobFromIndex takes no lock, so nothing may block there for good.
+	beforeMaintenanceCtx func()
 }
 
-func NewService(options ServiceOptions) (*Service, error) {
+func NewService(g *task.Group, options ServiceOptions) (*Service, error) {
 	if options.Directory == "" {
 		return nil, errors.New("arr service database directory is required")
 	}
@@ -84,7 +96,9 @@ func NewService(options ServiceOptions) (*Service, error) {
 	if index == nil {
 		index = NewIndex()
 	}
-	return &Service{
+	service := &Service{
+		g:                    g,
+		worker:               g.Child("worker"),
 		arrs:                 options.Arrs,
 		logger:               options.Logger,
 		onNeedsAttention:     options.OnNeedsAttention,
@@ -96,19 +110,70 @@ func NewService(options ServiceOptions) (*Service, error) {
 		handler:              options.Handler,
 		jobs:                 make(map[string]Job),
 		activeReacquisitions: make(map[jobKey]string),
-	}, nil
+	}
+	// The repositories opened above are closed by this task, so a service whose Start never runs still closes.
+	if goErr := g.Go("close", service.closeWhenStopped); goErr != nil {
+		_ = bindingRepository.Close()
+		_ = jobRepository.Close()
+		return nil, fmt.Errorf("own the arr service: %w", goErr)
+	}
+	return service, nil
 }
 
-func (s *Service) Start(ctx context.Context) error {
+// moveLocked moves the service to state to when serviceSuccessors allows it. The caller holds lifecycleMu.
+// A move the table refuses is ignored: the state stays where it was.
+func (s *Service) moveLocked(to serviceState) {
+	if state.Legal(serviceSuccessors, s.state, to) {
+		s.state = to
+	}
+}
+
+// closeWhenStopped is the service's close task. It waits for the group to stop, then for the worker, then takes
+// the operation guard's write lock, so no entry point is still using the repositories when they close.
+func (s *Service) closeWhenStopped(ctx context.Context) error {
+	<-ctx.Done()
+	// Under a rush the group does not wait between its steps, and a group whose context ended on its own has
+	// not stopped its children at all: stop the worker here and wait for it explicitly.
+	s.worker.Close()
+	<-s.worker.Done()
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
-	if s.closed {
+	s.moveLocked(serviceStopped)
+	s.closeErr = errors.Join(s.bindingRepository.Close(), s.jobRepository.Close())
+	return nil
+}
+
+// Start loads the stores and starts the worker. It is for one call; a later call finds the service running.
+// The service runs until its group stops.
+func (s *Service) Start(_ context.Context) error {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	switch s.state {
+	case serviceRunning:
+		return nil
+	case serviceFailed, serviceStopped:
+		return ErrServiceClosed
+	case serviceConstructed:
+	}
+	if err := s.load(); err != nil {
+		s.moveLocked(serviceFailed)
+		return err
+	}
+	if err := s.worker.Go("run", func(ctx context.Context) error {
+		s.run(ctx)
+		return nil
+	}); err != nil {
 		return ErrServiceClosed
 	}
-	if s.started {
-		return nil
-	}
+	s.moveLocked(serviceRunning)
+	s.schedulePersistedRetries()
+	s.signal()
+	return nil
+}
 
+// load reads the persisted bindings and jobs and completes the waiting jobs whose replacement is indexed.
+// The caller holds lifecycleMu for writing, so nothing here may take it.
+func (s *Service) load() error {
 	bindings, err := s.bindingRepository.LoadAll()
 	if err != nil {
 		return fmt.Errorf("load arr bindings: %w", err)
@@ -131,40 +196,29 @@ func (s *Service) Start(ctx context.Context) error {
 			}
 		}
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	s.ctx, s.cancel = context.WithCancel(ctx)
-	s.started = true
-	s.wg.Go(func() { s.run(s.ctx) })
-	s.schedulePersistedRetries()
-	s.signal()
 	return nil
 }
 
+// Close stops the service's group and waits for it, so the repositories are closed when it returns. It is for
+// callers outside the manager, which lets the group stop on its own; it must not be called from a task of the
+// group (it would wait for itself). It returns what closing the repositories returned.
 func (s *Service) Close() error {
-	s.lifecycleMu.Lock()
-	if s.closed {
-		s.lifecycleMu.Unlock()
-		return nil
-	}
-	s.closed = true
-	if s.cancel != nil {
-		s.cancel()
-	}
-	s.lifecycleMu.Unlock()
-
-	s.wg.Wait()
-	return errors.Join(s.bindingRepository.Close(), s.jobRepository.Close())
+	s.g.Close()
+	<-s.g.Done()
+	s.lifecycleMu.RLock()
+	defer s.lifecycleMu.RUnlock()
+	return s.closeErr
 }
 
 func (s *Service) SetHandler(handler Handler) error {
-	s.lifecycleMu.Lock()
-	defer s.lifecycleMu.Unlock()
-	if s.closed {
-		return ErrServiceClosed
+	release, err := s.beginAnyOperation()
+	if err != nil {
+		return err
 	}
+	defer release()
+	s.handlerMu.Lock()
 	s.handler = handler
+	s.handlerMu.Unlock()
 	s.signal()
 	return nil
 }
@@ -291,17 +345,25 @@ func (s *Service) DeleteBinding(entryID, fileID string) error {
 	return nil
 }
 
+// beginOperation is the guard of a public entry point that needs a running service. The caller releases the read
+// lock it returns when the operation ends.
 func (s *Service) beginOperation() (func(), error) {
-	s.lifecycleMu.RLock()
-	if s.closed {
-		s.lifecycleMu.RUnlock()
-		return nil, ErrServiceClosed
+	release, err := s.beginAnyOperation()
+	if err != nil {
+		return nil, err
 	}
-	if !s.started {
-		s.lifecycleMu.RUnlock()
+	if s.state == serviceConstructed {
+		release()
 		return nil, ErrServiceNotStarted
 	}
-	if s.ctx != nil && s.ctx.Err() != nil {
+	return release, nil
+}
+
+// beginAnyOperation is beginOperation for an entry point that may also run before Start: it refuses only a
+// failed or stopped service, or one whose group is stopping.
+func (s *Service) beginAnyOperation() (func(), error) {
+	s.lifecycleMu.RLock()
+	if s.state == serviceFailed || s.state == serviceStopped || s.g.Context().Err() != nil {
 		s.lifecycleMu.RUnlock()
 		return nil, ErrServiceClosed
 	}
@@ -309,8 +371,8 @@ func (s *Service) beginOperation() (func(), error) {
 }
 
 func (s *Service) currentHandler() Handler {
-	s.lifecycleMu.RLock()
-	defer s.lifecycleMu.RUnlock()
+	s.handlerMu.Lock()
+	defer s.handlerMu.Unlock()
 	return s.handler
 }
 
@@ -324,5 +386,5 @@ func (s *Service) signal() {
 func (s *Service) Ready() bool {
 	s.lifecycleMu.RLock()
 	defer s.lifecycleMu.RUnlock()
-	return s.started && !s.closed
+	return s.state == serviceRunning && s.g.State() == task.Running
 }

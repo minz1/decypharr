@@ -420,12 +420,11 @@ func (m *Manager) startReacquire(ctx context.Context) error {
 	return m.arrService.Start(ctx)
 }
 
+// stopReacquire runs inside the reacquire group's own "run" task, so it must not wait for the group: the service's
+// worker and close task stop with the group, and the close task closes the repositories.
 func (m *Manager) stopReacquire() error {
-	defer m.SetArrRecovery(nil)
-	if m.arrService == nil {
-		return nil
-	}
-	return m.arrService.Close()
+	m.SetArrRecovery(nil)
+	return nil
 }
 
 func (m *Manager) startIndexer(ctx context.Context) error {

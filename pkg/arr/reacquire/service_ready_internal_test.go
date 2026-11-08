@@ -4,7 +4,7 @@ import "testing"
 
 func TestServiceReadyOnlyWhileStarted(t *testing.T) {
 	t.Parallel()
-	service, err := NewService(ServiceOptions{Directory: t.TempDir()})
+	service, err := NewService(newTestGroup(t), ServiceOptions{Directory: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}

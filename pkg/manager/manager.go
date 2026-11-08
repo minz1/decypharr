@@ -429,7 +429,7 @@ func (m *Manager) initArrServices() {
 		m.logger.Error().Err(err).
 			Msg("Failed to open the queue cleanup search ledger; owed searches will not survive a restart")
 	}
-	service, err := reacquire.NewService(reacquire.ServiceOptions{
+	service, err := reacquire.NewService(m.reacquireSvc.group, reacquire.ServiceOptions{
 		Arrs:      m.arr,
 		Directory: filepath.Join(m.config.Dir(), "db"),
 		Handler:   reacquire.NewHandler(m.arr, m),

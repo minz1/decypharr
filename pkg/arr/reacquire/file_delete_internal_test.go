@@ -94,7 +94,7 @@ func newFakeSonarrRig(t *testing.T, fake *fakeSonarr, strategy Strategy, episode
 // open starts the service on the rig's directory, as a restart would.
 func (rig *fakeSonarrRig) open(t *testing.T) {
 	t.Helper()
-	service, err := NewService(ServiceOptions{
+	service, err := NewService(newTestGroup(t), ServiceOptions{
 		Arrs: rig.arrs, Directory: rig.directory, OnNeedsAttention: rig.announced.add,
 		Logger: zerolog.New(&rig.logs).Level(zerolog.DebugLevel),
 	})

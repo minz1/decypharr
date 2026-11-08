@@ -31,7 +31,7 @@ func (g *countingGate) gate() *Gate {
 func gateService(t *testing.T) (*Service, Binding) {
 	t.Helper()
 	handler := &waitingReacquireHandler{called: make(chan string, 4)}
-	service, err := NewService(ServiceOptions{Directory: t.TempDir(), Handler: handler})
+	service, err := NewService(newTestGroup(t), ServiceOptions{Directory: t.TempDir(), Handler: handler})
 	if err != nil {
 		t.Fatal(err)
 	}

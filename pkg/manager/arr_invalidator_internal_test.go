@@ -6,7 +6,10 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/arr/reacquire"
 	"github.com/sirrobot01/decypharr/pkg/storage"
@@ -28,12 +31,13 @@ func packHarness(t *testing.T, confidence map[string]reacquire.Confidence) (*pru
 			e.Files[id+".mkv"] = &storage.File{ID: id, Name: id + ".mkv", Size: 10, InfoHash: "pack"}
 		}
 	})
-	service, err := reacquire.NewService(reacquire.ServiceOptions{Directory: t.TempDir()})
+	g := task.NewRoot(t.Context(), "test", zerolog.Nop())
+	service, err := reacquire.NewService(g, reacquire.ServiceOptions{Directory: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = service.Close() })
-	if startErr := service.Start(context.Background()); startErr != nil {
+	if startErr := service.Start(t.Context()); startErr != nil {
 		t.Fatal(startErr)
 	}
 	h.m.arrService = service
