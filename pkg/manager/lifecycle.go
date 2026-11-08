@@ -51,7 +51,7 @@ func (l lifecycle) String() string {
 	case lifecycleFailed:
 		return "failed"
 	case lifecycleStopping:
-		return "stopping"
+		return stoppingName
 	case lifecycleStopped:
 		return "stopped"
 	default:

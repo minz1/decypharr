@@ -14,6 +14,9 @@ import (
 // whose readers mean "my own group is stopping".
 var ErrMountStopping = errors.New("mount is stopping")
 
+// stoppingName names the Stopping state of both the manager lifecycle and the mount gate.
+const stoppingName = "stopping"
+
 // mountGateState is the mount gate's state.
 //
 //	Serving → Stopping
@@ -33,7 +36,7 @@ func (s mountGateState) String() string {
 	case mountGateServing:
 		return "serving"
 	case mountGateStopping:
-		return "stopping"
+		return stoppingName
 	default:
 		return "mountGateState(" + strconv.FormatUint(uint64(s), 10) + ")"
 	}

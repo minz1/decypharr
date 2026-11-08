@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -116,6 +118,12 @@ func (d *Downloader) downloadSeasons(
 			continue
 		}
 		if err := d.process(ctx, result, mountPath); err != nil {
+			if errors.Is(err, ErrMountStopping) {
+				// The season and the pack stay queued for the next generation; the pack is not complete.
+				// A delete that raced the stop still removes the season it cut short.
+				d.removeSeasonOfDeletedPack(ctx, torrent, result)
+				return err
+			}
 			if ctx.Err() != nil {
 				d.removeSeasonOfDeletedPack(ctx, torrent, result)
 				return err
@@ -232,6 +240,9 @@ func (d *Downloader) markAsError(entry *storage.Entry, err error) {
 
 // processSymlink creates symlinks for torrent files.
 func (d *Downloader) processSymlink(ctx context.Context, entry *storage.Entry, mountPath string) error {
+	if d.manager.mountGate.IsStopping() {
+		return ErrMountStopping
+	}
 	files := entry.GetActiveFiles()
 	torrentSymlinkPath := entry.DownloadPath(d.manager.folderNaming())
 	d.logger.Info().
@@ -261,26 +272,32 @@ func (d *Downloader) processSymlink(ctx context.Context, entry *storage.Entry, m
 		return waitForSymlinkFilesReadyErr
 	}
 
-	// Warm the mount cache for the first few files so a subsequent import scan is fast
-	// Usenet parsing/probing deliberately avoids the streaming read-ahead
-	// setting. A large playback window can turn a small import probe into a
-	// substantial background download and hold an active slot unnecessarily.
-	if !entry.IsNZB() && !d.manager.store.Get().SkipPreCache && len(filePaths) > 0 {
-		probeFiles := filePaths
-		if len(probeFiles) > MaxNZBPreCacheFiles {
-			probeFiles = probeFiles[:MaxNZBPreCacheFiles]
-		}
-		d.logger.Debug().Int("files", len(probeFiles)).Msgf("Warming cache for %s", entry.Name)
-		if warmFileCacheErr := d.manager.WarmFileCache(ctx, probeFiles); warmFileCacheErr != nil {
-			d.logger.Error().Msgf("Failed to warm cache: %s", warmFileCacheErr)
-		} else {
-			d.logger.Debug().
-				Str("entry", entry.Name).
-				Msgf("Warmed cache for %d/%d files", len(probeFiles), len(filePaths))
-		}
-	}
+	d.warmAfterLinks(ctx, entry, filePaths)
 
 	return d.completeEntry(ctx, entry)
+}
+
+// warmAfterLinks warms the mount cache for the first few files so a subsequent import scan is fast.
+// Usenet parsing/probing deliberately avoids the streaming read-ahead
+// setting. A large playback window can turn a small import probe into a
+// substantial background download and hold an active slot unnecessarily.
+// A stopping mount is not read for a warm-up.
+func (d *Downloader) warmAfterLinks(ctx context.Context, entry *storage.Entry, filePaths []string) {
+	if entry.IsNZB() || d.manager.store.Get().SkipPreCache || len(filePaths) == 0 || d.manager.mountGate.IsStopping() {
+		return
+	}
+	probeFiles := filePaths
+	if len(probeFiles) > MaxNZBPreCacheFiles {
+		probeFiles = probeFiles[:MaxNZBPreCacheFiles]
+	}
+	d.logger.Debug().Int("files", len(probeFiles)).Msgf("Warming cache for %s", entry.Name)
+	if warmFileCacheErr := d.manager.WarmFileCache(ctx, probeFiles); warmFileCacheErr != nil {
+		d.logger.Error().Msgf("Failed to warm cache: %s", warmFileCacheErr)
+	} else {
+		d.logger.Debug().
+			Str("entry", entry.Name).
+			Msgf("Warmed cache for %d/%d files", len(probeFiles), len(filePaths))
+	}
 }
 
 func (d *Downloader) createSymlinksWhenMountFilesAppear(
@@ -303,21 +320,15 @@ func (d *Downloader) createSymlinksWhenMountFilesAppear(
 	deadline := time.Now().Add(timeout)
 	delay := symlinkScanInitialInterval
 	for attempt := 1; len(remaining) > 0; attempt++ {
-		var lastErr error
-		for name, link := range remaining {
-			if err := mountFileReady(link.mountFile); err != nil {
-				lastErr = err
-				continue
-			}
-			if err := os.Symlink(link.mountFile, link.symlinkPath); err != nil && !os.IsExist(err) {
-				return nil, fmt.Errorf("failed to create symlink %s -> %s: %w", link.symlinkPath, link.mountFile, err)
-			}
-			paths = append(paths, link.symlinkPath)
-			delete(remaining, name)
-			d.logger.Info().Msgf("File is ready: %s/%s", entry.GetFolder(d.manager.folderNaming()), name)
+		lastErr, linkErr := d.linkReadyFiles(entry, remaining, &paths)
+		if linkErr != nil {
+			return nil, linkErr
 		}
 		if len(remaining) == 0 {
 			break
+		}
+		if d.manager.mountGate.IsStopping() {
+			return nil, ErrMountStopping
 		}
 		if time.Now().After(deadline) {
 			return nil, fmt.Errorf(
@@ -340,6 +351,35 @@ func (d *Downloader) createSymlinksWhenMountFilesAppear(
 		delay = nextSymlinkBackoff(delay, symlinkScanMaxInterval)
 	}
 	return paths, nil
+}
+
+// linkReadyFiles links each pending file that is on the mount now, appends its link to paths and drops it from
+// remaining. It returns why the last file that was not ready is not.
+func (d *Downloader) linkReadyFiles(
+	entry *storage.Entry,
+	remaining map[string]mountLink,
+	paths *[]string,
+) (error, error) {
+	var lastErr error
+	for name, link := range remaining {
+		if readyErr := mountFileReady(link.mountFile); readyErr != nil {
+			lastErr = readyErr
+			continue
+		}
+		symlinkErr := os.Symlink(link.mountFile, link.symlinkPath)
+		if symlinkErr != nil && !os.IsExist(symlinkErr) {
+			return nil, fmt.Errorf(
+				"failed to create symlink %s -> %s: %w",
+				link.symlinkPath,
+				link.mountFile,
+				symlinkErr,
+			)
+		}
+		*paths = append(*paths, link.symlinkPath)
+		delete(remaining, name)
+		d.logger.Info().Msgf("File is ready: %s/%s", entry.GetFolder(d.manager.folderNaming()), name)
+	}
+	return lastErr, nil
 }
 
 type mountLink struct {
@@ -402,6 +442,9 @@ func (d *Downloader) waitForSymlinkFilesReady(ctx context.Context, filePaths []s
 			return nil
 		}
 
+		if d.manager.mountGate.IsStopping() {
+			return ErrMountStopping
+		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf(
 				"timeout waiting for symlink files to be ready: %d files still pending (%s)",
@@ -451,6 +494,11 @@ func verifySymlinkFileReady(path string) error {
 }
 
 func (d *Downloader) sleepUntilNextSymlinkAttempt(ctx context.Context, delay time.Duration, deadline time.Time) error {
+	// The gate is checked first, so a deadline that passed during the stop never wins.
+	gate := d.manager.mountGate
+	if gate.IsStopping() {
+		return ErrMountStopping
+	}
 	if remaining := time.Until(deadline); remaining < delay {
 		delay = remaining
 	}
@@ -464,6 +512,8 @@ func (d *Downloader) sleepUntilNextSymlinkAttempt(ctx context.Context, delay tim
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-gate.Stopping():
+		return ErrMountStopping
 	case <-timer.C:
 		return nil
 	}
@@ -798,6 +848,9 @@ func (d *Downloader) detectMultiSeason(torrent *storage.Entry) (bool, []SeasonIn
 			Name:         seasonName,
 		})
 	}
+
+	// Fan the seasons out in season order, so a stop that cuts the pack short leaves the later seasons unstarted.
+	slices.SortFunc(seasons, func(a, b SeasonInfo) int { return cmp.Compare(a.SeasonNumber, b.SeasonNumber) })
 
 	// Only convert to multi-season if multiple season entries were actually created
 	if len(seasons) <= 1 {
