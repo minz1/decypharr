@@ -60,8 +60,10 @@ func newTestPool(t testing.TB, cfg PoolConfig) *Pool {
 	if cfg.Name == "" {
 		cfg.Name = "test"
 	}
-	p := NewPool(cfg)
-	t.Cleanup(func() { _ = p.Close() })
+	p, err := NewPool(newTestGroup(t), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
 	return p
 }
 

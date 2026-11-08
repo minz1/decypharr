@@ -56,8 +56,7 @@ func BenchmarkStreamSequential(b *testing.B) {
 }
 
 func benchStreamSequential(b *testing.B, cfg Config) {
-	p := NewPool(PoolConfig{Name: "bench"})
-	defer p.Close()
+	p := newTestPool(b, PoolConfig{Name: "bench"})
 	if cfg.DiskPath != "" {
 		cfg.DiskPath = filepath.Join(b.TempDir(), "buf.bin")
 		cfg.TotalSize = 1 << 40 // sparse; real usage bounded by the discard window
@@ -137,8 +136,7 @@ func contendedReader(buf *Buffer, frontier *atomic.Int64, stop <-chan struct{}, 
 }
 
 func benchStreamContendedReads(b *testing.B, cfg Config) {
-	p := NewPool(PoolConfig{Name: "bench"})
-	defer p.Close()
+	p := newTestPool(b, PoolConfig{Name: "bench"})
 	if cfg.DiskPath != "" {
 		cfg.DiskPath = filepath.Join(b.TempDir(), "buf.bin")
 		cfg.TotalSize = 1 << 40
@@ -204,8 +202,7 @@ func benchStreamContendedReads(b *testing.B, cfg Config) {
 // BenchmarkReadWarmDisk measures reopened, non-resident reads.
 func BenchmarkReadWarmDisk(b *testing.B) {
 	path := filepath.Join(b.TempDir(), "buf.bin")
-	p := NewPool(PoolConfig{Name: "bench"})
-	defer p.Close()
+	p := newTestPool(b, PoolConfig{Name: "bench"})
 
 	const size = int64(64 << 20)
 	{
@@ -253,8 +250,7 @@ func BenchmarkReadWarmDisk(b *testing.B) {
 
 // BenchmarkReadWarmRAM measures the resident counterpart to ReadWarmDisk.
 func BenchmarkReadWarmRAM(b *testing.B) {
-	p := NewPool(PoolConfig{Name: "bench"})
-	defer p.Close()
+	p := newTestPool(b, PoolConfig{Name: "bench"})
 
 	const size = int64(64 << 20)
 	buf, err := p.NewBuffer(Config{

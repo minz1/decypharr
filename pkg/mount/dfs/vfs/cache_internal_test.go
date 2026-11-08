@@ -240,13 +240,12 @@ func TestDiskAdmissionReclaimsClosedCacheFile(t *testing.T) {
 
 	c := newTestCache(t, cacheDir)
 	c.config.CacheExpiry = 0
-	p := buffer.NewPool(buffer.PoolConfig{
+	p := newTestPool(t, buffer.PoolConfig{
 		Name:             "test",
 		DiskLimit:        100,
 		InitialDiskUsage: 80,
 		ReclaimDisk:      c.reclaimClosedDisk,
 	})
-	t.Cleanup(func() { _ = p.Close() })
 	c.pool = p
 
 	b, err := p.NewBuffer(buffer.Config{
@@ -615,8 +614,7 @@ func TestCleanupItems_ForceZeroOpenClosesRecentItems(t *testing.T) {
 
 	// Build a CacheItem backed by a real buffer so Close() exercises the
 	// production teardown path. The buffer creates and owns the disk file.
-	pool := buffer.NewPool(buffer.PoolConfig{Name: "test"})
-	t.Cleanup(func() { _ = pool.Close() })
+	pool := newTestPool(t, buffer.PoolConfig{Name: "test"})
 
 	buf, err := pool.NewBuffer(buffer.Config{
 		DiskPath:  dataPath,

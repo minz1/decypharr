@@ -84,6 +84,9 @@ type Cache struct {
 
 	// ctx is the cache's group context: it ends when the group stops.
 	ctx context.Context
+	// buffersGroup runs the pool's tasks. It is the cache's oldest child, so it
+	// stops after itemsGroup: the pool sweeps the buffers no item closed.
+	buffersGroup *task.Group
 	// itemsGroup owns the cache items' tasks; closing it is how the cache
 	// refuses new items.
 	itemsGroup *task.Group
@@ -179,6 +182,10 @@ func NewCache(g *task.Group, mgr Backend, config *dfsconfig.FuseConfig, log zero
 		backWindow = min(backWindow, share)
 		backWindow = max(backWindow, minStreamWindow)
 	}
+	// The buffers group is made before the items group, so it is the older
+	// child and stops after it: every item closes its buffer before the pool's
+	// sweep closes what is left.
+	buffersGroup := g.Child("buffers")
 	c := &Cache{
 		config: config,
 		// Per-stream RAM ask: the read-ahead the downloader produces plus as
@@ -189,6 +196,7 @@ func NewCache(g *task.Group, mgr Backend, config *dfsconfig.FuseConfig, log zero
 		items:        xsync.NewMap[string, *CacheItem](),
 		manager:      mgr,
 		ctx:          g.Context(),
+		buffersGroup: buffersGroup,
 		itemsGroup:   g.Child("items"),
 		threshold:    threshold,
 	}
@@ -199,7 +207,7 @@ func NewCache(g *task.Group, mgr Backend, config *dfsconfig.FuseConfig, log zero
 	initialScan := c.scanDiskCandidates()
 	c.totalSize.Store(initialScan.totalSize)
 	c.storeDiskStats(initialScan.candidates, nil)
-	c.pool = buffer.NewPool(buffer.PoolConfig{
+	pool, err := buffer.NewPool(buffersGroup, buffer.PoolConfig{
 		Name:             "dfs",
 		MemoryBudget:     config.BufferMemory,
 		DiskLimit:        maxSize,
@@ -207,21 +215,42 @@ func NewCache(g *task.Group, mgr Backend, config *dfsconfig.FuseConfig, log zero
 		ReclaimDisk:      c.reclaimClosedDisk,
 		BackWindow:       backWindow,
 	})
-	c.evict()
-	if err := g.Go("evict", c.evictLoop); err != nil {
-		return nil, c.abortStart("evict", err)
+	if err != nil {
+		return nil, c.abortStart("buffer pool", err)
 	}
-	if err := g.Go("speed", c.speedSampleLoop); err != nil {
-		return nil, c.abortStart("speed", err)
+	c.pool = pool
+	c.evict()
+	if goErr := g.Go("evict", c.evictLoop); goErr != nil {
+		return nil, c.abortStart("evict", goErr)
+	}
+	if goErr := g.Go("speed", c.speedSampleLoop); goErr != nil {
+		return nil, c.abortStart("speed", goErr)
 	}
 	return c, nil
 }
 
 // abortStart releases what NewCache built when its group refused a loop.
 func (c *Cache) abortStart(loop string, err error) error {
+	ctx, cancel := task.Detached(c.ctx, cacheCloseTimeout)
+	defer cancel()
 	c.itemsGroup.Close()
-	_ = c.pool.Close()
-	return fmt.Errorf("start cache %s loop: %w", loop, err)
+	c.stopBuffers(ctx)
+	return fmt.Errorf("start cache %s: %w", loop, err)
+}
+
+// stopBuffers waits for the items group to end, so every item has closed its
+// buffer, then stops the buffers group, whose pool closes the buffers still
+// registered. ctx bounds both waits; the stop itself proceeds regardless.
+func (c *Cache) stopBuffers(ctx context.Context) {
+	select {
+	case <-c.itemsGroup.Done():
+	case <-ctx.Done():
+	}
+	c.buffersGroup.Close()
+	select {
+	case <-c.buffersGroup.Done():
+	case <-ctx.Done():
+	}
 }
 
 // GetItem returns or creates a cache item for the given file of entry. Items
@@ -991,11 +1020,8 @@ func (c *Cache) Close() error {
 	c.itemCount.Store(0)
 	c.diskItems.Store(0)
 
-	// Stop the pool's disk-eviction worker after all items (and their buffers)
-	// are closed.
-	if c.pool != nil {
-		_ = c.pool.Close()
-	}
+	// Stop the pool's workers after all items (and their buffers) are closed.
+	c.stopBuffers(ctx)
 
 	return nil
 }
@@ -1452,7 +1478,8 @@ func (item *CacheItem) closeWith(ctx context.Context) error {
 		}
 
 		if item.buf != nil {
-			if err := item.buf.Close(); err != nil && item.closeErr == nil {
+			// The pool's sweep may have closed the buffer already.
+			if err := item.buf.Close(); err != nil && !errors.Is(err, buffer.ErrClosed) && item.closeErr == nil {
 				item.closeErr = err
 			}
 			if stopped {

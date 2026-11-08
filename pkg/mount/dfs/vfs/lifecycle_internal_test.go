@@ -12,6 +12,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/sirrobot01/decypharr/internal/buffer"
 	"github.com/sirrobot01/decypharr/internal/task"
 	dfsconfig "github.com/sirrobot01/decypharr/pkg/mount/dfs/config"
 	"github.com/sirrobot01/decypharr/pkg/storage"
@@ -32,6 +33,17 @@ func newTestGroup(t testing.TB) *task.Group {
 		}
 	})
 	return g
+}
+
+// newTestPool returns a buffer pool on a test group that the test stops, within
+// a bounded time, when it ends.
+func newTestPool(t testing.TB, cfg buffer.PoolConfig) *buffer.Pool {
+	t.Helper()
+	pool, err := buffer.NewPool(newTestGroup(t), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	return pool
 }
 
 func newLifecycleCache(t *testing.T, g *task.Group) (*Cache, *bytesBackend) {
@@ -147,6 +159,50 @@ func TestItemTasksEndWithGroup(t *testing.T) {
 	defer cancel()
 	if err := g.Stop(ctx); err != nil {
 		t.Fatalf("stop: %v", err)
+	}
+	if left := snapshotPaths(g); len(left) != 0 {
+		t.Errorf("tasks left after stop: %v", left)
+	}
+}
+
+// TestCacheStopClosesBuffersAfterItems pins the stop order: the items stop,
+// closing their own buffers, while the buffer pool still runs; only then does
+// the pool's group stop and sweep what is left.
+func TestCacheStopClosesBuffersAfterItems(t *testing.T) {
+	t.Parallel()
+	g := task.NewRoot(t.Context(), "test", zerolog.Nop())
+	cache, backend := newLifecycleCache(t, g)
+
+	item, err := cache.GetItem(backend.entry, "f", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.buf == nil {
+		t.Fatal("the item holds no buffer")
+	}
+	// An items-group task sees the items stop; the pool must still be running then.
+	poolStoppedFirst := make(chan error, 1)
+	if goErr := cache.itemsGroup.Go("observer", func(ctx context.Context) error {
+		<-ctx.Done()
+		poolStoppedFirst <- cache.buffersGroup.Context().Err()
+		return nil
+	}); goErr != nil {
+		t.Fatal(goErr)
+	}
+
+	ctx, cancel := task.Detached(t.Context(), testStopBudget)
+	defer cancel()
+	if stopErr := g.Stop(ctx); stopErr != nil {
+		t.Fatalf("stop: %v", stopErr)
+	}
+	if poolErr := <-poolStoppedFirst; poolErr != nil {
+		t.Errorf("the buffer pool stopped before the items: %v", poolErr)
+	}
+	if item.closeErr != nil {
+		t.Errorf("item close error = %v, want nil", item.closeErr)
+	}
+	if n := cache.pool.Stats().Buffers; n != 0 {
+		t.Errorf("buffers left registered = %d, want 0", n)
 	}
 	if left := snapshotPaths(g); len(left) != 0 {
 		t.Errorf("tasks left after stop: %v", left)

@@ -87,8 +87,7 @@ func TestPlaybackUnderPoolPressure(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			pools := NewPools(tc.poolMB << 20)
-			t.Cleanup(func() { _ = pools.Close() })
+			pools, _ := newTestPools(t, tc.poolMB<<20)
 			srv, client, all := ppStack(t, tc.streams, tc.segsPer, 2*time.Millisecond)
 
 			fileSize := ppSegSize * int64(tc.segsPer)

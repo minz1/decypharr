@@ -366,9 +366,16 @@ func New(g *task.Group, store *config.Store, logs *logger.Factory) (*Usenet, err
 		prefetchSize = defaultReadAhead
 	}
 
+	bufferPools, err := reader.NewPools(g, usenetConfig.BufferMemoryBytes())
+	if err != nil {
+		_ = client.Close()
+		_ = markers.Close()
+		return nil, fmt.Errorf("create buffer pools: %w", err)
+	}
+
 	u := &Usenet{
 		g:           g,
-		bufferPools: reader.NewPools(usenetConfig.BufferMemoryBytes()),
+		bufferPools: bufferPools,
 		nzbStorage:  nzbStorage,
 		nntp:        client,
 		analyzer: parser.NewParser(
@@ -886,7 +893,9 @@ func (u *Usenet) Close() error {
 		}
 
 		if u.bufferPools != nil {
-			closeErr = errors.Join(closeErr, u.bufferPools.Close())
+			// The pools' group closes every Buffer still registered, then ends.
+			u.bufferPools.BufferGroup().Close()
+			<-u.bufferPools.BufferGroup().Done()
 		}
 
 		if u.nntp != nil {

@@ -151,8 +151,7 @@ func TestCloseFlushesResidentBytesBeforeMetadata(t *testing.T) {
 func TestDiskPersistenceChangeMarksMetadataDirty(t *testing.T) {
 	t.Parallel()
 	const fileSize = 8 << 20
-	pool := buffer.NewPool(buffer.PoolConfig{Name: "test"})
-	t.Cleanup(func() { _ = pool.Close() })
+	pool := newTestPool(t, buffer.PoolConfig{Name: "test"})
 
 	var item *CacheItem
 	buf, err := pool.NewBuffer(buffer.Config{

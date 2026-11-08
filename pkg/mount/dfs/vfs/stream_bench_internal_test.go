@@ -31,8 +31,7 @@ func newBenchItemWindow(tb testing.TB, fileSize, window int64) (*CacheItem, *Dow
 	tb.Helper()
 	dir := tb.TempDir()
 
-	pool := buffer.NewPool(buffer.PoolConfig{Name: "bench"})
-	tb.Cleanup(func() { _ = pool.Close() })
+	pool := newTestPool(tb, buffer.PoolConfig{Name: "bench"})
 
 	buf, err := pool.NewBuffer(buffer.Config{
 		MemorySize: window,

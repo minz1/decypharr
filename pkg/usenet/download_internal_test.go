@@ -6,13 +6,16 @@ import (
 	"crypto/cipher"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/nntp"
+	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/internal/testutil/nntpd"
 	"github.com/sirrobot01/decypharr/pkg/storage"
+	"github.com/sirrobot01/decypharr/pkg/usenet/fs/reader"
 )
 
 func TestDownloadDecryptsEncryptedFiles(t *testing.T) {
@@ -64,7 +67,18 @@ func TestDownloadDecryptsEncryptedFiles(t *testing.T) {
 	if addErr := metaStore.AddNZB(&storage.NZB{ID: "nzb", Files: []storage.NZBFile{file}}); addErr != nil {
 		t.Fatal(addErr)
 	}
+	g := task.NewRoot(t.Context(), "test", zerolog.Nop())
+	t.Cleanup(func() {
+		ctx, cancel := task.Detached(t.Context(), 30*time.Second)
+		defer cancel()
+		_ = g.Stop(ctx)
+	})
+	bufferPools, poolsErr := reader.NewPools(g, 64<<20)
+	if poolsErr != nil {
+		t.Fatal(poolsErr)
+	}
 	u := &Usenet{
+		bufferPools:              bufferPools,
 		nntp:                     client,
 		nzbStorage:               metaStore,
 		logger:                   zerolog.Nop(),

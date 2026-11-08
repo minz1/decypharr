@@ -1,26 +1,40 @@
 package reader
 
 import (
-	"errors"
-	"sync"
-
 	"github.com/sirrobot01/decypharr/internal/buffer"
+	"github.com/sirrobot01/decypharr/internal/task"
 )
 
-// Pools holds the shared cache budgets for one Usenet service run.
+// Pools holds the shared cache budgets for one Usenet service run. The buffer
+// pool runs on the "buffers" child of the group it was made on; the group's
+// owner stops it, and it is created first, so it stops last.
 type Pools struct {
+	g       *task.Group
+	bufferG *task.Group
 	buffers *buffer.Pool
 	extents *extentPool
-	mu      sync.RWMutex
-	closed  bool
 }
 
-func NewPools(memoryBudget int64) *Pools {
-	return &Pools{
-		buffers: buffer.NewPool(buffer.PoolConfig{Name: "usenet", MemoryBudget: memoryBudget}),
-		extents: newExtentPool(memoryBudget),
+// NewPools builds the pools on g. It returns task.ErrStopped (wrapped) if g
+// refuses tasks.
+func NewPools(g *task.Group, memoryBudget int64) (*Pools, error) {
+	bufferG := g.Child("buffers")
+	buffers, err := buffer.NewPool(bufferG, buffer.PoolConfig{Name: "usenet", MemoryBudget: memoryBudget})
+	if err != nil {
+		bufferG.Close()
+		return nil, err
 	}
+	return &Pools{
+		g:       g,
+		bufferG: bufferG,
+		buffers: buffers,
+		extents: newExtentPool(memoryBudget),
+	}, nil
 }
+
+// BufferGroup is the group the buffer pool runs on. Stopping it closes every
+// Buffer still registered.
+func (p *Pools) BufferGroup() *task.Group { return p.bufferG }
 
 // Stats reports allocated buffer bytes. These are not process RSS values.
 func (p *Pools) Stats() map[string]any {
@@ -34,26 +48,4 @@ func (p *Pools) Stats() map[string]any {
 		"buffers":          blocks.Buffers,
 		"extent_caches":    extents.Caches,
 	}
-}
-
-// Close releases the pools after the service stops its readers.
-func (p *Pools) Close() error {
-	p.mu.Lock()
-	if p.closed {
-		p.mu.Unlock()
-		return nil
-	}
-	p.closed = true
-	p.mu.Unlock()
-	p.extents.mu.RLock()
-	caches := make([]*SegmentCache, 0, len(p.extents.caches))
-	for cache := range p.extents.caches {
-		caches = append(caches, cache)
-	}
-	p.extents.mu.RUnlock()
-	var err error
-	for _, cache := range caches {
-		err = errors.Join(err, cache.Close())
-	}
-	return errors.Join(err, p.buffers.Close())
 }

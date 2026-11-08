@@ -1,13 +1,19 @@
 package buffer
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
+
+	"github.com/sirrobot01/decypharr/internal/task"
 )
 
 // Pool enforces shared RAM and sparse-disk budgets across its Buffers.
 type Pool struct {
 	name        string
+	g           *task.Group
 	memBudget   atomic.Int64 // allocated block byte target; 0 = unlimited
 	diskLimit   atomic.Int64 // on-disk present bytes ceiling; 0 = unlimited
 	backWindow  int64        // bytes retained behind a read head before punching
@@ -29,9 +35,6 @@ type Pool struct {
 
 	evictSig    chan struct{}
 	memEvictSig chan struct{}
-	stopCh      chan struct{}
-	wg          sync.WaitGroup
-	closed      atomic.Bool
 	unmap       unmapper
 
 	statsPunches   atomic.Int64
@@ -84,9 +87,12 @@ type PoolStats struct {
 	BytesReclaimed  int64
 }
 
-// NewPool creates a Pool. If DiskLimit > 0 it starts a background worker that
-// reclaims disk by punching behind read heads when the limit is breached.
-func NewPool(cfg PoolConfig) *Pool {
+// NewPool creates a Pool whose workers are tasks on g. It makes a child group
+// "evict" first, holding the memory and disk reclaim loops, so they stop
+// before g's own tasks are cancelled: the unmapper, and the buffers-closer that
+// closes every Buffer still registered when g stops. The owner stops g; there
+// is no Close. It returns task.ErrStopped (wrapped) if g refuses tasks.
+func NewPool(g *task.Group, cfg PoolConfig) (*Pool, error) {
 	if cfg.MemoryBudget < 0 {
 		cfg.MemoryBudget = 0
 	}
@@ -99,34 +105,51 @@ func NewPool(cfg PoolConfig) *Pool {
 	if cfg.BackWindow < 0 {
 		cfg.BackWindow = 0
 	}
+	evict := g.Child("evict")
 	p := &Pool{
 		name:        cfg.Name,
+		g:           g,
 		backWindow:  cfg.BackWindow,
 		reclaimDisk: cfg.ReclaimDisk,
 		buffers:     make(map[*Buffer]struct{}),
 		evictSig:    make(chan struct{}, 1),
 		memEvictSig: make(chan struct{}, 1),
-		stopCh:      make(chan struct{}),
 	}
+	p.unmap.ch = make(chan blockRelease, unmapQueueDepth)
 	p.memBudget.Store(cfg.MemoryBudget)
 	p.diskLimit.Store(cfg.DiskLimit)
 	p.diskInUse.Store(cfg.InitialDiskUsage)
 	if cfg.DiskLimit > 0 {
-		p.wg.Go(p.diskEvictLoop)
+		if err := evict.Go("disk-evict", p.diskEvictLoop); err != nil {
+			return nil, fmt.Errorf("buffer pool %q: %w", cfg.Name, err)
+		}
 	}
 	if cfg.MemoryBudget > 0 {
-		p.wg.Go(p.memEvictLoop)
+		if err := evict.Go("mem-evict", p.memEvictLoop); err != nil {
+			return nil, fmt.Errorf("buffer pool %q: %w", cfg.Name, err)
+		}
+	}
+	if err := g.Go("unmapper", p.unmap.run); err != nil {
+		return nil, fmt.Errorf("buffer pool %q: %w", cfg.Name, err)
+	}
+	if err := g.Go("buffers-closer", p.closeBuffers); err != nil {
+		return nil, fmt.Errorf("buffer pool %q: %w", cfg.Name, err)
 	}
 	if cfg.DiskLimit > 0 && cfg.InitialDiskUsage > cfg.DiskLimit {
 		p.signalDiskEvict()
 	}
-	return p
+	return p, nil
 }
 
+// stopped reports whether the pool's group is stopping: no Buffer may be
+// registered once it is.
+func (p *Pool) stopped() bool { return p.g.Context().Err() != nil }
+
 // NewBuffer creates a Buffer bound to this pool. Its RAM and disk usage count
-// against the pool's budgets.
+// against the pool's budgets. It returns ErrClosed once the pool's group
+// stops.
 func (p *Pool) NewBuffer(cfg Config) (*Buffer, error) {
-	if p.closed.Load() {
+	if p.stopped() {
 		return nil, ErrClosed
 	}
 	b, err := newBuffer(p, cfg)
@@ -134,7 +157,7 @@ func (p *Pool) NewBuffer(cfg Config) (*Buffer, error) {
 		return nil, err
 	}
 	p.mu.Lock()
-	if p.closed.Load() {
+	if p.stopped() {
 		p.mu.Unlock()
 		_ = b.Close()
 		return nil, ErrClosed
@@ -175,32 +198,26 @@ func (p *Pool) Stats() PoolStats {
 	}
 }
 
-// Close stops the disk worker and closes every Buffer still registered. Safe
-// to call when callers already own their Buffers' lifetimes — Buffer.Close is
-// idempotent.
-func (p *Pool) Close() error {
-	if !p.closed.CompareAndSwap(false, true) {
-		return nil
-	}
-	if p.diskLimit.Load() > 0 || p.memBudget.Load() > 0 {
-		close(p.stopCh)
-		p.wg.Wait()
-	}
+// closeBuffers is the buffers-closer task: once the group stops, it closes
+// every Buffer still registered. A Buffer an owner already closed answers
+// ErrClosed, which is not a failure. The snapshot is taken under p.mu after the
+// group's context ended, and NewBuffer registers under p.mu only while it has
+// not, so no Buffer can register after the sweep.
+func (p *Pool) closeBuffers(ctx context.Context) error {
+	<-ctx.Done()
 	p.mu.Lock()
 	bufs := make([]*Buffer, 0, len(p.buffers))
 	for b := range p.buffers {
 		bufs = append(bufs, b)
 	}
 	p.mu.Unlock()
-	var firstErr error
+	var err error
 	for _, b := range bufs {
-		if err := b.Close(); err != nil && firstErr == nil {
-			firstErr = err
+		if closeErr := b.Close(); closeErr != nil && !errors.Is(closeErr, ErrClosed) {
+			err = errors.Join(err, closeErr)
 		}
 	}
-	// The buffers' blocks are queued; unmap them before returning.
-	p.unmap.close()
-	return firstErr
+	return err
 }
 
 // --- RAM admission ----------------------------------------------------------
@@ -274,11 +291,11 @@ func (p *Pool) signalMemEvict() {
 	}
 }
 
-func (p *Pool) memEvictLoop() {
+func (p *Pool) memEvictLoop(ctx context.Context) error {
 	for {
 		select {
-		case <-p.stopCh:
-			return
+		case <-ctx.Done():
+			return nil
 		case <-p.memEvictSig:
 			p.reclaimMemory()
 		}
@@ -431,11 +448,11 @@ func (p *Pool) signalDiskEvict() {
 	}
 }
 
-func (p *Pool) diskEvictLoop() {
+func (p *Pool) diskEvictLoop(ctx context.Context) error {
 	for {
 		select {
-		case <-p.stopCh:
-			return
+		case <-ctx.Done():
+			return nil
 		case <-p.evictSig:
 			p.diskPressureMu.Lock()
 			p.reclaimDiskTo(p.diskLimit.Load())

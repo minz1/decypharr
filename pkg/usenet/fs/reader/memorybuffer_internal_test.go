@@ -58,7 +58,7 @@ func TestWindowRetentionDropsWhenOverBudget(t *testing.T) {
 	cfg.DiskPath = t.TempDir()
 	cfg.PrefetchAhead = 0 // probe profile: 8MB window, so drops must fire
 
-	cache, err := NewSegmentCache(context.Background(), segs, cfg, &Stats{}, zerolog.Nop())
+	cache, err := newTestSegmentCache(t, segs, cfg, &Stats{}, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewSegmentCache: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestMemoryEvictionFollowsPlayback(t *testing.T) {
 	cfg.DiskPath = t.TempDir()
 	cfg.PrefetchAhead = 0 // probe profile: 8MB window against ~14MB of segments
 
-	cache, err := NewSegmentCache(context.Background(), segs, cfg, &Stats{}, zerolog.Nop())
+	cache, err := newTestSegmentCache(t, segs, cfg, &Stats{}, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewSegmentCache: %v", err)
 	}
@@ -162,8 +162,8 @@ func putSegment(t *testing.T, sc *SegmentCache, segIdx int, data []byte) {
 
 func TestMemoryWriterAdoptsDecodedExtent(t *testing.T) {
 	t.Parallel()
-	cache, err := NewSegmentCache(
-		context.Background(),
+	cache, err := newTestSegmentCache(
+		t,
 		mkSegs(1, 64<<10),
 		DefaultConfig(),
 		&Stats{},
@@ -199,7 +199,7 @@ func TestDeliveryAcknowledgementReleasesCompleteSegments(t *testing.T) {
 	stats := &Stats{}
 	cfg := DefaultConfig()
 	cfg.Retention = RetentionDelivery
-	cache, err := NewSegmentCache(context.Background(), mkSegs(4, segSize), cfg, stats, zerolog.Nop())
+	cache, err := newTestSegmentCache(t, mkSegs(4, segSize), cfg, stats, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +236,7 @@ func TestIdleDeliveryDropsResidentsAndLatePublishes(t *testing.T) {
 	const segSize = int64(64 << 10)
 	cfg := DefaultConfig()
 	cfg.Retention = RetentionDelivery
-	cache, err := NewSegmentCache(context.Background(), mkSegs(3, segSize), cfg, &Stats{}, zerolog.Nop())
+	cache, err := newTestSegmentCache(t, mkSegs(3, segSize), cfg, &Stats{}, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +316,7 @@ func TestRetentionStorageTiers(t *testing.T) {
 func roundTripSegments(t *testing.T, cfg Config, segCount int) {
 	t.Helper()
 	const segSize = 64 << 10
-	cache, err := NewSegmentCache(context.Background(), mkSegs(segCount, segSize), cfg, &Stats{}, zerolog.Nop())
+	cache, err := newTestSegmentCache(t, mkSegs(segCount, segSize), cfg, &Stats{}, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewSegmentCache: %v", err)
 	}
@@ -367,7 +367,7 @@ func TestWaitForSegmentReportsEvicted(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.DiskPath = t.TempDir()
 
-	cache, err := NewSegmentCache(context.Background(), segs, cfg, &Stats{}, zerolog.Nop())
+	cache, err := newTestSegmentCache(t, segs, cfg, &Stats{}, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewSegmentCache: %v", err)
 	}
@@ -405,7 +405,7 @@ func TestPinnedSegmentsSurviveRAMPressure(t *testing.T) {
 	cfg.DiskPath = t.TempDir()
 	cfg.PrefetchAhead = 0 // probe profile: 8MB window
 
-	cache, err := NewSegmentCache(context.Background(), segs, cfg, &Stats{}, zerolog.Nop())
+	cache, err := newTestSegmentCache(t, segs, cfg, &Stats{}, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewSegmentCache: %v", err)
 	}
@@ -449,10 +449,9 @@ func TestMaxPrefetchSegmentsTracksFairShare(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.DiskPath = t.TempDir()
 
-	cfg.Pools = NewPools(64 << 20)
-	t.Cleanup(func() { _ = cfg.Pools.Close() })
+	cfg.Pools, _ = newTestPools(t, 64<<20)
 
-	first, err := NewSegmentCache(context.Background(), segs, cfg, &Stats{}, zerolog.Nop())
+	first, err := newTestSegmentCache(t, segs, cfg, &Stats{}, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewSegmentCache: %v", err)
 	}
@@ -461,7 +460,7 @@ func TestMaxPrefetchSegmentsTracksFairShare(t *testing.T) {
 
 	// Seven more streams open against the same pool.
 	for range 7 {
-		sc, newSegmentCacheErr := NewSegmentCache(context.Background(), segs, cfg, &Stats{}, zerolog.Nop())
+		sc, newSegmentCacheErr := newTestSegmentCache(t, segs, cfg, &Stats{}, zerolog.Nop())
 		if newSegmentCacheErr != nil {
 			t.Fatalf("NewSegmentCache: %v", newSegmentCacheErr)
 		}
