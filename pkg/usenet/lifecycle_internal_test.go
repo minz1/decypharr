@@ -171,6 +171,53 @@ func TestStreamAfterStopReturnsErrStopped(t *testing.T) {
 	}
 }
 
+// An entry already in the map must not be handed out once the work group has
+// stopped: finalize is about to stop its reader.
+func TestExistingEntryAfterWorkStopReturnsErrStopped(t *testing.T) {
+	t.Parallel()
+	srv := startStallingServer(t)
+	u, _ := newLifecycleUsenet(t, srv.port, 1)
+	addLifecycleFile(t, u, "nzb", "movie.mkv", 2)
+
+	h, err := u.OpenFile(t.Context(), "nzb", "movie.mkv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopLifecycleGroup(t, u.work)
+
+	entry, err := u.getOrCreateEntry(t.Context(), "nzb", "movie.mkv", configuredRetention(u.streamSettings))
+	if entry != nil {
+		entry.releaseUsed()
+	}
+	if !errors.Is(err, task.ErrStopped) {
+		t.Fatalf("existing entry after the work stop = %v, want task.ErrStopped", err)
+	}
+	if err = h.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// finalize stops entries that streams may still hold; a handle released at the
+// same moment must not race the reader fields cleanup clears.
+func TestCleanupRacingReleaseIsSynchronized(t *testing.T) {
+	t.Parallel()
+	fe := &fsEntry{
+		retention:     RetentionDelivery,
+		reader:        &noPrefetchReader{},
+		readerCleanup: func(context.Context) {},
+	}
+	fe.readerOnce.Do(func() {})
+	if !fe.acquire() || !fe.acquire() {
+		t.Fatal("acquire a fresh entry")
+	}
+	var wg sync.WaitGroup
+	wg.Go(func() { fe.cleanup(t.Context()) })
+	wg.Go(fe.releaseUsed)
+	wg.Go(func() { _, _, _ = fe.getOrCreateReader() })
+	wg.Wait()
+	fe.releaseUsed()
+}
+
 func TestReleaseAfterRecreateKeepsReplacementRefcount(t *testing.T) {
 	t.Parallel()
 	srv := startStallingServer(t)

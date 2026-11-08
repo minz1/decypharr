@@ -78,11 +78,17 @@ const fsEntryTombstone = int32(-1 << 30)
 
 // cleanup stops the entry's reader and waits for it to release its memory,
 // bounded by ctx. An entry whose reader was never created has nothing to stop.
+// The reader fields are cleared under lifecycleMu, since finalize may clean an
+// entry that a stream still holds and releases concurrently; the stop itself
+// runs outside the lock.
 func (fe *fsEntry) cleanup(ctx context.Context) {
-	if fe.readerCleanup != nil {
-		fe.readerCleanup(ctx)
-		fe.readerCleanup = nil
-		fe.reader = nil
+	fe.lifecycleMu.Lock()
+	stop := fe.readerCleanup
+	fe.readerCleanup = nil
+	fe.reader = nil
+	fe.lifecycleMu.Unlock()
+	if stop != nil {
+		stop(ctx)
 	}
 }
 
@@ -154,9 +160,11 @@ func (fe *fsEntry) getOrCreateReader() (fs.PrefetchableReaderAt, int64, error) {
 			return
 		}
 
+		fe.lifecycleMu.Lock()
 		fe.reader = readerAt
 		fe.readerSize = size
 		fe.readerCleanup = cleanup
+		fe.lifecycleMu.Unlock()
 	})
 
 	if fe.readerErr != nil {
@@ -164,10 +172,13 @@ func (fe *fsEntry) getOrCreateReader() (fs.PrefetchableReaderAt, int64, error) {
 	}
 	// cleanup() nils the reader after the Once has fired; a caller racing a
 	// shutdown-path cleanup must get an error, not a nil interface.
-	if fe.reader == nil {
+	fe.lifecycleMu.Lock()
+	readerAt := fe.reader
+	fe.lifecycleMu.Unlock()
+	if readerAt == nil {
 		return nil, 0, fmt.Errorf("reader has been closed")
 	}
-	return fe.reader, fe.readerSize, nil
+	return readerAt, fe.readerSize, nil
 }
 
 // noPrefetchReader wraps [io.ReaderAt] for cases where prefetch isn't available.
@@ -601,6 +612,17 @@ func (u *Usenet) getOrCreateEntry(
 ) (*fsEntry, error) {
 	key := entryKey(nzoID, filename, retention)
 
+	// The lease covers both paths. Once the work group has stopped no entry
+	// is handed out, not even one already in the map, since finalize is about
+	// to stop its reader. On the slow path it spans the creation and the
+	// store, so the work group's stop waits for both, and finalize (which
+	// runs after it) finds every entry that was ever stored.
+	leave, err := u.work.Enter("entry")
+	if err != nil {
+		return nil, fmt.Errorf("get entry for %s: %w", filename, err)
+	}
+	defer leave()
+
 	// Fast path: entry already exists and isn't being torn down. acquire() (a
 	// CAS, not a blind Add) is what closes the race against cleanupIdleFS:
 	// once the janitor claims an idle entry no new reference can be taken, so
@@ -609,15 +631,6 @@ func (u *Usenet) getOrCreateEntry(
 		entry.lastAccessed.Store(time.Now().Unix())
 		return entry, nil
 	}
-
-	// Slow path: create an entry. The lease spans the creation and the store,
-	// so the work group's stop waits for both, and finalize (which runs after
-	// it) finds every entry that was ever stored.
-	leave, err := u.work.Enter("entry")
-	if err != nil {
-		return nil, fmt.Errorf("get entry for %s: %w", filename, err)
-	}
-	defer leave()
 
 	file, err := u.getFile(nzoID, filename)
 	if err != nil {
