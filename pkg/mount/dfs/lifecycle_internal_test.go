@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"testing/synctest"
@@ -92,6 +93,8 @@ type fakeHandle struct {
 	// server's unmount.
 	detachReleases bool
 	hangOnce       sync.Once
+	// detachDeadline is the unix nanoseconds of the last Detach ctx deadline; 0 when it had none.
+	detachDeadline atomic.Int64
 }
 
 func newFakeHandle(calls *callLog) *fakeHandle {
@@ -121,7 +124,10 @@ func (h *fakeHandle) Unmount() error {
 	return nil
 }
 
-func (h *fakeHandle) Detach(context.Context) error {
+func (h *fakeHandle) Detach(ctx context.Context) error {
+	if deadline, ok := ctx.Deadline(); ok {
+		h.detachDeadline.Store(deadline.UnixNano())
+	}
 	h.calls.add("detach")
 	h.end()
 	if h.detachReleases {
@@ -682,6 +688,62 @@ func TestStopDuringStartingMountCancelled(t *testing.T) {
 		}
 		if strings.Contains(out, `"level":"error"`) {
 			t.Fatalf("an ERROR was logged during a stop:\n%s", out)
+		}
+	})
+}
+
+// armedSlice is a slice armed for d from now, like the generation's mount slice.
+func armedSlice(t *testing.T, d time.Duration) task.Slice {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), d)
+	t.Cleanup(cancel)
+	return func() (context.Context, bool) { return ctx, true }
+}
+
+// A slice shorter than the graceful timeout cuts the graceful unmount: the
+// detach comes with the slice, not at gracefulUnmountTimeout.
+func TestDFSStopBoundedBySlice(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		f := newFixture(t)
+		defer f.finish(t)
+		f.fb.handle.hang = make(chan struct{})
+		f.fb.handle.detachReleases = true
+		f.m.SetStopSlice(armedSlice(t, 3*time.Second))
+		if err := f.m.Start(f.parent); err != nil {
+			t.Fatalf("Start = %v", err)
+		}
+		begin := time.Now()
+		if err := f.stopParent(t, 30*time.Second); err != nil {
+			t.Fatalf("parent stop = %v", err)
+		}
+		requireCalls(t, f, "mount", "unmount", "detach", "vfsClose")
+		if got, want := f.calls.at("detach").Sub(begin), 3*time.Second; got != want {
+			t.Fatalf("detach at +%v, want +%v", got, want)
+		}
+	})
+}
+
+// A mount that came up after the stop began is released on the constant budget
+// when no slice is armed: the detach ctx ends stopBudget-vfsCloseReserve out.
+func TestDFSUnmountLateUsesConstantBudget(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		f := newFixture(t)
+		defer f.finish(t)
+		f.fb.handle.unmountErr = syscall.EBUSY
+		f.fb.onMount = func(g *task.Group) { g.Close() }
+		f.m.SetStopSlice(func() (context.Context, bool) { return nil, false })
+		begin := time.Now()
+		_ = f.m.Start(f.parent)
+		synctest.Wait()
+
+		if !slices.Contains(f.calls.names(), "detach") {
+			t.Fatalf("calls = %v, want a detach", f.calls.names())
+		}
+		got := time.Unix(0, f.fb.handle.detachDeadline.Load()).Sub(begin)
+		if want := stopBudget - vfsCloseReserve; got != want {
+			t.Fatalf("detach ctx ends +%v, want +%v", got, want)
 		}
 	})
 }

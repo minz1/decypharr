@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -266,4 +267,36 @@ func TestExpiredStopBudgetDoesNotFlushTwice(t *testing.T) {
 	// Let the writer's flush land before the temp dir goes.
 	stopItemGroup(t, item)
 	_ = cache.Close()
+}
+
+// Close and an item's Close both take their wait from the stop slice, so the
+// cache closes inside the mount's share of the stop.
+func TestCacheCloseTakesTheStopSlice(t *testing.T) {
+	t.Parallel()
+	g := newTestGroup(t)
+	cache, backend := newLifecycleCache(t, g)
+	var asked atomic.Int32
+	sctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	t.Cleanup(cancel)
+	cache.SetStopSlice(func() (context.Context, bool) {
+		asked.Add(1)
+		return sctx, true
+	})
+	item, err := cache.GetItem(backend.entry, "f", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if closeErr := item.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	if got := asked.Load(); got != 1 {
+		t.Fatalf("item Close asked the slice %d times, want 1", got)
+	}
+	if closeErr := cache.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	if got := asked.Load(); got != 2 {
+		t.Fatalf("slice asked %d times after Cache.Close, want 2", got)
+	}
 }

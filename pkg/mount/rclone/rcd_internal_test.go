@@ -39,6 +39,7 @@ type fakeProc struct {
 	signals  int
 	kills    int
 	signalAt time.Time
+	killAt   time.Time
 	waited   bool
 	record   func(string)
 }
@@ -68,6 +69,7 @@ func (p *fakeProc) Signal(os.Signal) error {
 func (p *fakeProc) Kill() error {
 	p.mu.Lock()
 	p.kills++
+	p.killAt = time.Now()
 	p.mu.Unlock()
 	p.record("kill")
 	if p.exitOnKill {
@@ -668,4 +670,100 @@ func TestSpawnNotFoundFailsAtOnce(t *testing.T) {
 			})
 		})
 	}
+}
+
+// armedSlice is a slice armed for d from now, like the generation's mount slice.
+func armedSlice(t *testing.T, d time.Duration) task.Slice {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), d)
+	t.Cleanup(cancel)
+	return func() (context.Context, bool) { return ctx, true }
+}
+
+// The unmount and the graceful wait both end with the slice: rcd is killed when
+// the slice ends, not after the constant budgets.
+func TestRcloneStopBoundedBySlice(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		h := newRcdHarness(t)
+		h.newProc = func(_ int, p *fakeProc) { p.exitOnSignal = false }
+		h.owner.beforeStop = func(ctx context.Context, _ rcdState) { <-ctx.Done() }
+		h.start()
+		h.advance(time.Second)
+		began := time.Now()
+		h.owner.setStopSlice(armedSlice(t, 1500*time.Millisecond))
+
+		if err := h.stop(); err != nil {
+			t.Fatalf("run = %v, want nil", err)
+		}
+		p := h.proc(0)
+		p.mu.Lock()
+		killedAt := p.killAt
+		p.mu.Unlock()
+		if got, want := killedAt.Sub(began), 1500*time.Millisecond; got != want {
+			t.Fatalf("rcd killed at +%v, want +%v: the slice did not bound the stop", got, want)
+		}
+	})
+}
+
+// A killed rcd gets its own reap timeout, even when the slice is over.
+func TestRcloneKilledRcdReapedPastSlice(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		h := newRcdHarness(t)
+		h.newProc = func(_ int, p *fakeProc) {
+			p.exitOnSignal = false
+			p.exitOnKill = false
+		}
+		h.start()
+		h.advance(time.Second)
+		ended, cancel := context.WithCancel(t.Context())
+		cancel()
+		h.owner.setStopSlice(func() (context.Context, bool) { return ended, true })
+
+		stopped := make(chan error, 1)
+		go func() { stopped <- h.group.Stop(h.t.Context()) }()
+		synctest.Wait()
+		p := h.proc(0)
+		p.mu.Lock()
+		kills := p.kills
+		p.mu.Unlock()
+		if kills != 1 {
+			t.Fatalf("kills = %d, want 1: an over slice kills at once", kills)
+		}
+		h.advance(rcloneReapTimeout - time.Second)
+		p.exit()
+		if err := <-h.result; err != nil {
+			t.Fatalf("run = %v, want nil: the reap must outlive the slice", err)
+		}
+		if err := <-stopped; err != nil {
+			t.Fatalf("group stop: %v", err)
+		}
+		h.wantState(rcdStopped)
+	})
+}
+
+// A stop with no armed slice, from Failed, keeps the constant unmount budget.
+func TestRcloneFailedRestartUsesConstantBudget(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		h := newRcdHarness(t)
+		h.spawnErr = func(int) error { return fmt.Errorf("rclone: %w", exec.ErrNotFound) }
+		var budget atomic.Int64
+		h.owner.beforeStop = func(ctx context.Context, _ rcdState) {
+			deadline, ok := ctx.Deadline()
+			if !ok {
+				return
+			}
+			budget.Store(int64(time.Until(deadline)))
+		}
+		h.owner.setStopSlice(func() (context.Context, bool) { return nil, false })
+		h.start()
+		h.wantState(rcdFailed)
+
+		h.wantStopped()
+		if got := time.Duration(budget.Load()); got != rcdUnmountBudget {
+			t.Fatalf("unmount budget = %v, want %v", got, rcdUnmountBudget)
+		}
+	})
 }

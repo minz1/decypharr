@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"sync"
+	"sync/atomic"
 
 	"github.com/rs/zerolog"
 
@@ -42,7 +43,9 @@ type Manager struct {
 	vfsGroup     *task.Group
 	backendGroup *task.Group
 	vfs          *vfs.Manager
-	backend      backend.Backend
+	// stopSlice is the generation's mount slice; the stop waits end with it once it began.
+	stopSlice atomic.Pointer[task.Slice]
+	backend   backend.Backend
 }
 
 // NewManager creates a new FUSE filesystem manager for the DFS settings in cfg.
@@ -91,6 +94,24 @@ func (m *Manager) advance(froms []dfsState, to dfsState) {
 	}
 }
 
+// SetStopSlice gives the manager the generation's mount slice, before Start.
+// The cache gets it too, so its close ends with the slice as well.
+func (m *Manager) SetStopSlice(s task.Slice) {
+	if s == nil {
+		m.stopSlice.Store(nil)
+		return
+	}
+	m.stopSlice.Store(&s)
+}
+
+// slice is the manager's stop slice; the zero Slice (unarmed) when none was set.
+func (m *Manager) slice() task.Slice {
+	if s := m.stopSlice.Load(); s != nil {
+		return *s
+	}
+	return nil
+}
+
 // Start mounts the filesystem and returns once it is ready (or failed).
 func (m *Manager) Start(g *task.Group) error {
 	m.mu.Lock()
@@ -122,6 +143,7 @@ func (m *Manager) Start(g *task.Group) error {
 		m.mu.Unlock()
 		return fmt.Errorf("failed to create VFS manager: %w", err)
 	}
+	vfsManager.SetStopSlice(m.slice())
 	m.vfs = vfsManager
 	bck, err := m.newBackend(vfsManager)
 	if err != nil {
@@ -204,7 +226,7 @@ func (m *Manager) Stop() error {
 		Str("backend", string(m.defaultBackendType)).
 		Msg("Stopping FUSE filesystem")
 
-	ctx, cancel := task.Detached(vfsG.Context(), stopBudget)
+	ctx, cancel := m.slice().Bound(vfsG.Context(), stopBudget)
 	defer cancel()
 	var errs []error
 	if err := backG.Stop(ctx); err != nil {

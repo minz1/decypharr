@@ -43,6 +43,9 @@ func NewManager(
 	return m, nil
 }
 
+// SetStopSlice gives the cache the generation's mount slice.
+func (m *Manager) SetStopSlice(s task.Slice) { m.cache.SetStopSlice(s) }
+
 func (m *Manager) GetManager() *manager.Manager {
 	return m.manager
 }
