@@ -20,6 +20,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/internal/nntp"
+	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 	"github.com/sirrobot01/decypharr/pkg/usenet/fs"
 	"github.com/sirrobot01/decypharr/pkg/usenet/fs/reader"
@@ -246,6 +247,8 @@ func (r *contextSectionReader) Read(p []byte) (int, error) {
 }
 
 type Usenet struct {
+	// g is the usenet service's group: the service's components and tasks run on it.
+	g                        *task.Group
 	bufferPools              *reader.Pools
 	nntp                     *nntp.Client
 	analyzer                 *parser.NZBParser
@@ -296,9 +299,13 @@ func configuredRetention(cfg config.Usenet) Retention {
 	return RetentionWindow
 }
 
-// New creates the usenet service for the configuration published by store.
-// Availability sampling is read live; everything else is fixed at creation.
-func New(store *config.Store, logs *logger.Factory) (*Usenet, error) {
+// New creates the usenet service on g, its service group, for the
+// configuration published by store. Availability sampling is read live;
+// everything else is fixed at creation.
+func New(g *task.Group, store *config.Store, logs *logger.Factory) (*Usenet, error) {
+	if g == nil {
+		return nil, errors.New("usenet: nil service group")
+	}
 	cfg := store.Get()
 	usenetConfig := cfg.Usenet
 	if len(usenetConfig.Providers) == 0 {
@@ -360,6 +367,7 @@ func New(store *config.Store, logs *logger.Factory) (*Usenet, error) {
 	}
 
 	u := &Usenet{
+		g:           g,
 		bufferPools: reader.NewPools(usenetConfig.BufferMemoryBytes()),
 		nzbStorage:  nzbStorage,
 		nntp:        client,

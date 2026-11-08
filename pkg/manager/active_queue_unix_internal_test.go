@@ -9,8 +9,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/logger"
+	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/internal/testutil/nntpd"
 	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/storage"
@@ -77,7 +80,7 @@ func TestRestoreRemovesAnNZBParsedAfterItsEntryWasDeleted(t *testing.T) {
 			ProcessingMaxConnections: 2,
 		}
 	})
-	usenetClient, err := usenet.New(cfgStore, logger.Discard())
+	usenetClient, err := usenet.New(task.NewRoot(t.Context(), "test", zerolog.Nop()), cfgStore, logger.Discard())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/logger"
+	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/storage"
@@ -125,7 +126,7 @@ func newUnreachableUsenet(t *testing.T) *usenet.Usenet {
 		}
 	})
 
-	usenetClient, err := usenet.New(store, logger.Discard())
+	usenetClient, err := usenet.New(task.NewRoot(t.Context(), "test", zerolog.Nop()), store, logger.Discard())
 	if err != nil {
 		t.Fatalf("create usenet client: %v", err)
 	}

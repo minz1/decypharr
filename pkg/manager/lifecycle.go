@@ -380,7 +380,7 @@ func (m *Manager) registerServices() error {
 	m.children = append(m.children, m.notifyGroup)
 	if err := m.superviseAll([]serviceSpec{
 		{name: "hearsay", handle: &m.hearsaySvc, start: m.startHearsay, stop: m.stopHearsay},
-		{name: "usenet", stop: m.stopUsenet},
+		{name: "usenet", handle: &m.usenetSvc, stop: m.stopUsenet},
 		// Provider deletes queued by the services above run here, so they finish after those services have
 		// stopped and before usenet and storage go: no stop waits on a slow delete, and no delete is lost.
 		{name: "placements", handle: &m.placementsSvc},
