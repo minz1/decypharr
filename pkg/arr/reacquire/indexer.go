@@ -2,6 +2,7 @@ package reacquire
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -11,6 +12,8 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/sirrobot01/decypharr/internal/state"
+	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 )
 
@@ -53,24 +56,23 @@ type indexRequest struct {
 func (r indexRequest) key() string { return r.arrName + "\x00" + r.entryID }
 
 type Indexer struct {
+	g           *task.Group
 	arrs        *arr.Service
 	catalog     ManagedCatalog
 	writer      bindingWriter
 	managedRoot string
 	logger      zerolog.Logger
 
-	wake               chan struct{}
-	queue              []indexRequest
-	pending            map[string]struct{}
-	covered            map[string]uint64
-	waits              map[string]chan struct{}
-	mu                 sync.Mutex
-	ctx                context.Context
-	cancel             context.CancelFunc
-	wg                 sync.WaitGroup
+	wake    chan struct{}
+	queue   []indexRequest
+	pending map[string]struct{}
+	covered map[string]uint64
+	waits   map[string]chan struct{}
+	mu      sync.Mutex
+	// lifecycleMu guards state, and is held while a request is appended, so no request is queued once the loop
+	// has left.
 	lifecycleMu        sync.Mutex
-	started            atomic.Bool
-	closed             atomic.Bool
+	state              indexerState
 	generationSequence atomic.Uint64
 	requestSequence    atomic.Uint64
 }
@@ -87,6 +89,7 @@ const (
 // every entry folder; library symlinks that point outside it are not managed by
 // Decypharr and are skipped.
 func NewIndexer(
+	g *task.Group,
 	arrs *arr.Service,
 	catalog ManagedCatalog,
 	writer bindingWriter,
@@ -94,6 +97,7 @@ func NewIndexer(
 	log zerolog.Logger,
 ) *Indexer {
 	return &Indexer{
+		g:           g,
 		arrs:        arrs,
 		catalog:     catalog,
 		writer:      writer,
@@ -105,45 +109,57 @@ func NewIndexer(
 	}
 }
 
-func (i *Indexer) Start(ctx context.Context) error {
+// Start runs the loop as a task of the indexer's group; the indexer runs until the group stops.
+func (i *Indexer) Start(_ context.Context) error {
 	if i == nil || i.arrs == nil || i.catalog == nil || i.writer == nil {
 		return fmt.Errorf("arr indexer is not configured")
 	}
 	i.lifecycleMu.Lock()
 	defer i.lifecycleMu.Unlock()
-	if i.closed.Load() {
-		return fmt.Errorf("arr indexer is closed")
-	}
-	if !i.started.CompareAndSwap(false, true) {
+	switch i.state {
+	case indexerRunning:
 		return nil
+	case indexerStopped:
+		return errIndexerClosed
+	case indexerConstructed:
 	}
-	if ctx == nil {
-		ctx = context.Background()
+	if err := i.g.Go("loop", func(ctx context.Context) error {
+		defer i.loopExited()
+		i.run(ctx)
+		return nil
+	}); err != nil {
+		i.moveLocked(indexerStopped)
+		return errIndexerClosed
 	}
-	workerCtx, cancel := context.WithCancel(ctx)
-	i.mu.Lock()
-	i.ctx = workerCtx
-	i.cancel = cancel
-	i.mu.Unlock()
-	i.wg.Go(func() { i.run(workerCtx) })
-	i.Refresh()
+	i.moveLocked(indexerRunning)
+	i.enqueueLocked(indexRequest{})
 	return nil
 }
 
+var errIndexerClosed = errors.New("arr indexer is closed")
+
+// moveLocked moves the indexer to state to when indexerSuccessors allows it. The caller holds lifecycleMu.
+func (i *Indexer) moveLocked(to indexerState) {
+	if state.Legal(indexerSuccessors, i.state, to) {
+		i.state = to
+	}
+}
+
+// loopExited is the loop task's last act: from now on no request is queued.
+func (i *Indexer) loopExited() {
+	i.lifecycleMu.Lock()
+	defer i.lifecycleMu.Unlock()
+	i.moveLocked(indexerStopped)
+}
+
+// Close stops the indexer's group and waits for it. It is for callers outside the manager, which lets the group
+// stop on its own; it must not be called from a task of the group (it would wait for itself).
 func (i *Indexer) Close() {
 	if i == nil {
 		return
 	}
-	i.lifecycleMu.Lock()
-	if !i.closed.CompareAndSwap(false, true) {
-		i.lifecycleMu.Unlock()
-		return
-	}
-	if i.cancel != nil {
-		i.cancel()
-	}
-	i.lifecycleMu.Unlock()
-	i.wg.Wait()
+	i.g.Close()
+	<-i.g.Done()
 }
 
 func (i *Indexer) Refresh() bool {
@@ -164,15 +180,23 @@ func (i *Indexer) ReindexEntry(arrName, entryID string) bool {
 }
 
 func (i *Indexer) enqueue(request indexRequest) bool {
-	if i == nil || i.closed.Load() {
+	if i == nil {
+		return false
+	}
+	i.lifecycleMu.Lock()
+	defer i.lifecycleMu.Unlock()
+	return i.enqueueLocked(request)
+}
+
+// enqueueLocked queues request while the indexer is running and its group is not stopping, and reports whether it
+// did. The group's context is read as well as the state: the group cancels before the loop has left and moved the
+// state, and nothing may queue in between. The caller holds lifecycleMu.
+func (i *Indexer) enqueueLocked(request indexRequest) bool {
+	if i.state != indexerRunning || i.g.Context().Err() != nil {
 		return false
 	}
 	key := request.key()
 	i.mu.Lock()
-	if i.ctx == nil || i.ctx.Err() != nil {
-		i.mu.Unlock()
-		return false
-	}
 	if _, exists := i.pending[key]; exists {
 		i.mu.Unlock()
 		return true
@@ -443,7 +467,7 @@ func (i *Indexer) retryTargeted(ctx context.Context, request indexRequest, webho
 		return
 	}
 	request.lateWaited = request.lateWaited || waitForWebhook
-	i.retry(ctx, request, delay)
+	i.retry(request, delay)
 }
 
 // importWaitDelay with the webhook is one outer bound on waiting for it; without it, the history poll's schedule.
@@ -500,7 +524,7 @@ func (i *Indexer) nextGeneration(arrName string) uint64 {
 
 // retry enqueues request again after delay. A targeted wait ends early when a newer wait or a match for its entry
 // supersedes it.
-func (i *Indexer) retry(ctx context.Context, request indexRequest, delay time.Duration) {
+func (i *Indexer) retry(request indexRequest, delay time.Duration) {
 	request.attempt++
 	key := request.key()
 	stop := make(chan struct{})
@@ -513,7 +537,7 @@ func (i *Indexer) retry(ctx context.Context, request indexRequest, delay time.Du
 		i.waits[key] = stop
 		i.mu.Unlock()
 	}
-	i.wg.Go(func() {
+	if err := i.g.Go("retry", func(ctx context.Context) error {
 		timer := time.NewTimer(delay)
 		defer timer.Stop()
 		select {
@@ -524,7 +548,14 @@ func (i *Indexer) retry(ctx context.Context, request indexRequest, delay time.Du
 				i.enqueue(request)
 			}
 		}
-	})
+		return nil
+	}); err != nil {
+		i.endWait(request, stop)
+		i.logger.Debug().
+			Err(err).
+			Str("arr", request.arrName).
+			Msg("Arr index retry not scheduled: the indexer is stopping")
+	}
 }
 
 // endWait reports whether stop is still request's pending wait, and clears it.
@@ -564,5 +595,5 @@ func (i *Indexer) retryBackoff(ctx context.Context, request indexRequest) {
 	if request.attempt >= targetedIndexAttempts || ctx.Err() != nil {
 		return
 	}
-	i.retry(ctx, request, targetedIndexDelay(request.attempt))
+	i.retry(request, targetedIndexDelay(request.attempt))
 }

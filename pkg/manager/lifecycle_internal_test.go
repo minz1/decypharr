@@ -136,8 +136,8 @@ func TestPartialStartFailureFailsTheGroup(t *testing.T) {
 	if m.arrService == nil || m.arrIndexer == nil {
 		t.Fatal("the Arr services are not configured in the test manager")
 	}
-	// The reacquisition service starts; the indexer, closed beforehand, refuses.
-	m.arrIndexer.Close()
+	// The reacquisition service starts; the indexer, left unconfigured, refuses.
+	m.arrIndexer = reacquire.NewIndexer(m.indexerSvc.group, nil, nil, nil, "", zerolog.Nop())
 
 	if err := m.Start(); err != nil {
 		t.Fatal(err)
@@ -162,6 +162,33 @@ func TestPartialStartFailureFailsTheGroup(t *testing.T) {
 	}
 	if err := m.arrService.Start(m.work.Context()); !errors.Is(err, reacquire.ErrServiceClosed) {
 		t.Fatalf("the started reacquisition service was not stopped: Start = %v", err)
+	}
+	if left := root.Snapshot(); len(left) != 0 {
+		t.Fatalf("tasks left after the stop: %v", left)
+	}
+}
+
+// The indexer's stop runs inside a task of the indexer's group, so it must not wait for that group: a stop with the
+// Arr indexer configured and started ends inside its deadline, not at it.
+func TestStopIndexerDoesNotWaitOnItsGroup(t *testing.T) {
+	t.Parallel()
+	m, root := newLifecycleManager(t)
+	if m.arrIndexer == nil {
+		t.Fatal("the Arr indexer is not configured in the test manager")
+	}
+	if err := m.Start(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-m.IsReady():
+	case <-time.After(lifecycleWait):
+		t.Fatalf("never ready; state %v", m.life.Load())
+	}
+
+	ctx, cancel := task.Detached(t.Context(), 3*time.Second)
+	defer cancel()
+	if err := root.Stop(ctx); err != nil {
+		t.Fatalf("stop with the indexer running = %v, want nil", err)
 	}
 	if left := root.Snapshot(); len(left) != 0 {
 		t.Fatalf("tasks left after the stop: %v", left)

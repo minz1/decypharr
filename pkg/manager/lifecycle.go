@@ -434,6 +434,8 @@ func (m *Manager) startIndexer(ctx context.Context) error {
 	return m.arrIndexer.Start(ctx)
 }
 
+// stopIndexer runs inside the indexer group's own "run" task, so it must not wait for the group: the indexer's loop
+// and retries stop with the group.
 func (m *Manager) stopIndexer() error {
 	// The queue cleanup search ledger closes first, as it did before the services were tasks.
 	if m.arr != nil {
@@ -441,7 +443,6 @@ func (m *Manager) stopIndexer() error {
 			m.logger.Warn().Err(err).Msg("Failed to close the queue cleanup search ledger")
 		}
 	}
-	m.arrIndexer.Close() // nil-safe: not configured without the reacquisition service
 	return nil
 }
 

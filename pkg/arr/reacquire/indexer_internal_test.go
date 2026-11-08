@@ -512,8 +512,8 @@ func TestExhaustedTargetedRequestsCoalesceArrRefresh(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
-	indexer := NewIndexer(nil, nil, nil, "", zerolog.Nop())
-	indexer.ctx = ctx
+	indexer := NewIndexer(newTestGroup(t), nil, nil, nil, "", zerolog.Nop())
+	indexer.state = indexerRunning
 
 	finalAttempt := targetedIndexAttempts
 	indexer.retryTargeted(ctx, indexRequest{arrName: "radarr", entryID: "one", attempt: finalAttempt}, false, false)
@@ -532,7 +532,7 @@ func TestExhaustedTargetedRequestsCoalesceArrRefresh(t *testing.T) {
 
 func TestRefreshCoverageSkipsOnlyOlderTargetedRequests(t *testing.T) {
 	t.Parallel()
-	indexer := NewIndexer(nil, nil, nil, "", zerolog.Nop())
+	indexer := NewIndexer(nil, nil, nil, nil, "", zerolog.Nop())
 	indexer.markCovered("radarr", 10)
 
 	if !indexer.coveredByRefresh(indexRequest{arrName: "radarr", entryID: "old", version: 10}) {
@@ -615,10 +615,12 @@ func TestUnmatchedEntryAfterLateWait(t *testing.T) {
 			managed := []ManagedFile{{EntryID: "entry", EntryFolder: "Movie", FileID: "file", FileName: "movie.mkv"}}
 			writer := new(recordingBindingWriter)
 			var logs bytes.Buffer
-			indexer := NewIndexer(arrs, fixedManagedCatalog(managed), writer, t.TempDir(), zerolog.New(&logs))
+			indexer := NewIndexer(
+				newTestGroup(t), arrs, fixedManagedCatalog(managed), writer, t.TempDir(), zerolog.New(&logs),
+			)
 			ctx, cancel := context.WithCancel(t.Context())
 			t.Cleanup(cancel)
-			indexer.ctx = ctx
+			indexer.state = indexerRunning
 
 			indexer.handle(
 				ctx,
@@ -722,8 +724,9 @@ func TestWebhookWaitRunsOutOnce(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
-		indexer := NewIndexer(nil, nil, nil, "", zerolog.Nop())
-		indexer.ctx = ctx
+		g := newTestGroup(t)
+		indexer := NewIndexer(g, nil, nil, nil, "", zerolog.Nop())
+		indexer.state = indexerRunning
 
 		indexer.retryTargeted(ctx, indexRequest{arrName: "radarr", entryID: "entry"}, true, false)
 		time.Sleep(lateImportWait)
@@ -737,8 +740,7 @@ func TestWebhookWaitRunsOutOnce(t *testing.T) {
 		if refresh, queued := indexer.nextRequest(); !queued || refresh.entryID != "" {
 			t.Fatalf("request = %#v, %v; want the full refresh", refresh, queued)
 		}
-		cancel()
-		indexer.wg.Wait()
+		stopGroup(g)
 	})
 }
 
@@ -834,10 +836,11 @@ func TestFailedTargetedAttemptRetriesOnThePollSchedule(t *testing.T) {
 			})
 			var logs bytes.Buffer
 			writer := new(recordingBindingWriter)
-			indexer := NewIndexer(arrs, failingManagedCatalog{}, writer, t.TempDir(), zerolog.New(&logs))
+			g := newTestGroup(t)
+			indexer := NewIndexer(g, arrs, failingManagedCatalog{}, writer, t.TempDir(), zerolog.New(&logs))
 			ctx, cancel := context.WithCancel(t.Context())
-			t.Cleanup(func() { cancel(); indexer.wg.Wait() })
-			indexer.ctx = ctx
+			t.Cleanup(func() { cancel(); stopGroup(g) })
+			indexer.state = indexerRunning
 
 			request := tc.request
 			request.arrName, request.entryID = "radarr", "entry"
@@ -881,10 +884,13 @@ func TestMatchedEntryEndsItsPendingWait(t *testing.T) {
 		EntryID: "entry", EntryFolder: "Movie.Release", FileID: "file", FileName: "movie.mkv", DownloadID: "download",
 	}}
 	writer := new(recordingBindingWriter)
-	indexer := NewIndexer(arrs, fixedManagedCatalog(managed), writer, filepath.Join(dir, "managed"), zerolog.Nop())
+	g := newTestGroup(t)
+	indexer := NewIndexer(
+		g, arrs, fixedManagedCatalog(managed), writer, filepath.Join(dir, "managed"), zerolog.Nop(),
+	)
 	ctx, cancel := context.WithCancel(t.Context())
-	t.Cleanup(func() { cancel(); indexer.wg.Wait() })
-	indexer.ctx = ctx
+	t.Cleanup(func() { cancel(); stopGroup(g) })
+	indexer.state = indexerRunning
 
 	request := indexRequest{arrName: "radarr", entryID: "entry"}
 	indexer.retryTargeted(ctx, request, true, false)
@@ -917,15 +923,14 @@ func TestOnlyTargetedWaitsSupersede(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			synctest.Test(t, func(t *testing.T) {
-				ctx, cancel := context.WithCancel(t.Context())
-				defer cancel()
-				indexer := NewIndexer(nil, nil, nil, "", zerolog.Nop())
-				indexer.ctx = ctx
+				g := newTestGroup(t)
+				indexer := NewIndexer(g, nil, nil, nil, "", zerolog.Nop())
+				indexer.state = indexerRunning
 
 				older, newer := tc.request, tc.request
 				newer.attempt = 8
-				indexer.retry(ctx, older, time.Second)
-				indexer.retry(ctx, newer, 2*time.Second)
+				indexer.retry(older, time.Second)
+				indexer.retry(newer, 2*time.Second)
 				var got []int
 				for range 2 {
 					time.Sleep(time.Second)
@@ -937,8 +942,7 @@ func TestOnlyTargetedWaitsSupersede(t *testing.T) {
 				if !slices.Equal(got, tc.attempts) {
 					t.Errorf("attempts fired = %v; want %v", got, tc.attempts)
 				}
-				cancel()
-				indexer.wg.Wait()
+				stopGroup(g)
 			})
 		})
 	}
