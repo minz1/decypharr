@@ -169,7 +169,7 @@ func (s mountSupervisor) Handle(
 		if s.current(st, msg) {
 			st.hasTimer = false
 			if s.m.view.Load().state == mountMounting {
-				s.spawnMount(st, fx, true, false)
+				s.spawnMount(st, fx, true, true)
 			}
 		}
 	case supProbeDue:
@@ -224,9 +224,18 @@ func (s mountSupervisor) rcdReady(ctx context.Context, st *supState, fx *keyed.E
 		return
 	}
 	st.attempts = 0
+	// A fresh rcd holds no mount, so its first attempt has nothing to forget. Before any attempt, the mount point is
+	// detached only when the table shows a FUSE mount there (a killed process's dead endpoint): a bind or fstab
+	// mount at the path is the user's and must stay.
 	if s.enter(ctx, st, fx, mountMounting, func(v *mountView) { v.attempted = true }) {
-		s.spawnMount(st, fx, cur.attempted, false)
+		s.spawnMount(st, fx, cur.attempted || s.staleFUSE(), false)
 	}
+}
+
+// staleFUSE reports whether the mount table shows a FUSE mount at the mount point. Without a table it says no.
+func (s mountSupervisor) staleFUSE() bool {
+	n, err := s.m.readTable(tablePathFor(s.m.mount.MountPath))
+	return err == nil && n > 0
 }
 
 func (s mountSupervisor) rcdDied(ctx context.Context, st *supState, fx *keyed.Effects[struct{}, supMsg]) {
@@ -302,7 +311,7 @@ func (s mountSupervisor) probeDone(
 		if kind == probeOK || kind == probeMountGone {
 			st.attempts = 0
 			if s.enter(ctx, st, fx, mountMounting, nil) {
-				s.spawnMount(st, fx, true, false)
+				s.spawnMount(st, fx, true, true)
 			}
 			return
 		}
@@ -505,7 +514,9 @@ func (s mountSupervisor) enter(
 }
 
 // spawnMount starts one mount attempt. cleanup detaches a stale mount first;
-// forget asks rclone to drop its registration of a gone one.
+// forget asks rclone to drop its registration of a gone one, or of an earlier
+// attempt that rclone finished after our timeout. Every attempt but a fresh
+// rcd's first forgets.
 func (s mountSupervisor) spawnMount(st *supState, fx *keyed.Effects[struct{}, supMsg], cleanup, forget bool) {
 	epoch := st.epoch
 	id, err := fx.Go("mount", func(ctx context.Context) supMsg {

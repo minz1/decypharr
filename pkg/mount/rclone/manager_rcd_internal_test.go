@@ -69,6 +69,8 @@ type managerRig struct {
 	hangUnmount atomic.Bool
 	// detaches records, per forced unmount, whether its ctx was still live.
 	detaches []bool
+	// stopDetaches and stopEvents are len(detaches) and len(events) at markStop; guarded by mu.
+	stopDetaches, stopEvents int
 	// mounted is rclone's mount list: set by a mount/mount that answers, cleared by mount/unmount.
 	mounted atomic.Bool
 
@@ -104,15 +106,36 @@ func (r *managerRig) detach(ctx context.Context, _ string) error {
 	return nil
 }
 
-// wantLiveDetach fails unless exactly one forced unmount ran and its ctx was live.
+// markStop notes where a stop begins: the first mount attempt cleans up too, so the stop's checks look only at what
+// came after.
+func (r *managerRig) markStop() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.stopDetaches, r.stopEvents = len(r.detaches), len(r.events)
+}
+
+// stopCount is how many times event was recorded since markStop.
+func (r *managerRig) stopCount(event string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, e := range r.events[r.stopEvents:] {
+		if e == event {
+			n++
+		}
+	}
+	return n
+}
+
+// wantLiveDetach fails unless exactly one forced unmount ran since markStop and its ctx was live.
 func (r *managerRig) wantLiveDetach() {
 	r.t.Helper()
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if len(r.detaches) != 1 || !r.detaches[0] {
+	if d := r.detaches[r.stopDetaches:]; len(d) != 1 || !d[0] {
 		r.t.Fatalf(
-			"forced unmounts (ctx live?) = %v, want exactly one with a live ctx; events: %v",
-			r.detaches,
+			"forced unmounts since the stop (ctx live?) = %v, want exactly one with a live ctx; events: %v",
+			d,
 			r.events,
 		)
 	}
@@ -282,6 +305,7 @@ func TestStartTwiceErrors(t *testing.T) {
 		if got := r.spawn.Load(); got != 1 {
 			t.Fatalf("spawns = %d, want 1", got)
 		}
+		r.markStop()
 		if err := r.m.Stop(); err != nil {
 			t.Fatal(err)
 		}
@@ -293,6 +317,7 @@ func TestStartAfterStopIsStopped(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		r := newManagerRig(t)
 		r.start()
+		r.markStop()
 		if err := r.m.Stop(); err != nil {
 			t.Fatal(err)
 		}
@@ -306,6 +331,7 @@ func TestStopBeforeStartIsNil(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		r := newManagerRig(t)
+		r.markStop()
 		if err := r.m.Stop(); err != nil {
 			t.Fatalf("Stop before Start = %v, want nil", err)
 		}
@@ -348,6 +374,7 @@ func TestConcurrentStartSpawnsOnce(t *testing.T) {
 		if got := r.spawn.Load(); got != 1 {
 			t.Fatalf("spawns = %d, want 1", got)
 		}
+		r.markStop()
 		if err := r.m.Stop(); err != nil {
 			t.Fatal(err)
 		}
@@ -402,6 +429,7 @@ func TestRemountAfterRcdExit(t *testing.T) {
 		if !r.m.IsMounted() {
 			t.Fatal("mount not restored after rcd restarted")
 		}
+		r.markStop()
 		if err := r.m.Stop(); err != nil {
 			t.Fatal(err)
 		}
@@ -440,6 +468,7 @@ func TestStopLeavesNoTasks(t *testing.T) {
 		if len(r.g.Snapshot()) == 0 {
 			t.Fatal("no tasks while running")
 		}
+		r.markStop()
 		if err := r.m.Stop(); err != nil {
 			t.Fatal(err)
 		}
@@ -465,6 +494,7 @@ func TestStopAfterExitStillUnmountsViaRC(t *testing.T) {
 			t.Fatal("mount should be marked down")
 		}
 
+		r.markStop()
 		if err := r.m.Stop(); err != nil {
 			t.Fatal(err)
 		}
@@ -557,6 +587,7 @@ func TestStopDuringBackoffUnmounts(t *testing.T) {
 		synctest.Wait()
 		r.wantState(rcdRestarting)
 
+		r.markStop()
 		if err := r.m.Stop(); err != nil {
 			t.Fatal(err)
 		}
@@ -581,6 +612,7 @@ func TestStopAfterCrashLoopUnmounts(t *testing.T) {
 		synctest.Wait()
 		r.wantState(rcdFailed)
 
+		r.markStop()
 		if err := r.m.Stop(); err != nil {
 			t.Fatal(err)
 		}
@@ -601,6 +633,7 @@ func TestStopWithRefusingRCLeavesForcedUnmountTime(t *testing.T) {
 		r.wantState(rcdReady)
 		r.rcDown.Store(true)
 
+		r.markStop()
 		if err := r.m.Stop(); err != nil {
 			t.Fatal(err)
 		}
@@ -619,6 +652,7 @@ func TestStopWithHangingRCLeavesForcedUnmountTime(t *testing.T) {
 		r.wantState(rcdReady)
 		r.hangUnmount.Store(true)
 
+		r.markStop()
 		if err := r.m.Stop(); err != nil {
 			t.Fatal(err)
 		}
@@ -638,6 +672,7 @@ func TestStopWithDeadRCFinishesWithinBudget(t *testing.T) {
 		r.failRC("mount/unmount", http.StatusInternalServerError)
 
 		began := time.Now()
+		r.markStop()
 		if err := r.m.Stop(); err != nil {
 			t.Fatal(err)
 		}

@@ -12,13 +12,17 @@ import (
 )
 
 // mountOnce makes one mount attempt. forget first asks rclone to drop its
-// registration of a gone mount; cleanup first detaches a stale mount point.
-// Both are best effort: with nothing to drop or detach they fail, and that
-// must not block the mount.
+// registration of a gone mount, within rcdRCUnmountBudget so a hung rclone
+// leaves the rest of the attempt its time; cleanup then detaches a stale mount
+// point. Both are best effort: with nothing to drop or detach they fail, and
+// that must not block the mount.
 func (m *Manager) mountOnce(ctx context.Context, cleanup, forget bool) error {
 	cfg := m.mount
 	if forget {
-		if err := m.client.Unmount(ctx, cfg.MountPath); err != nil {
+		forgetCtx, cancel := context.WithTimeout(ctx, rcdRCUnmountBudget)
+		err := m.client.Unmount(forgetCtx, cfg.MountPath)
+		cancel()
+		if err != nil {
 			m.logger.Debug().Err(err).Msg("rclone had no mount to forget")
 		}
 	}

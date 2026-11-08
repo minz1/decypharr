@@ -36,9 +36,10 @@ func (r *managerRig) lastIndex(event string) int {
 	return -1
 }
 
-// stop stops the manager and fails on an error.
+// stop marks the stop and stops the manager, failing on an error.
 func (r *managerRig) stop() {
 	r.t.Helper()
+	r.markStop()
 	if err := r.m.Stop(); err != nil {
 		r.t.Fatal(err)
 	}
@@ -256,6 +257,125 @@ func TestRcdDiedDropsInflightMount(t *testing.T) {
 		r.after(rcdBackoffBase)
 		r.wantState(rcdReady)
 		r.wantMount(mountMounted)
+		r.stop()
+	})
+}
+
+// A mount result from before the rcd died reaches the supervisor after Mounting was entered again. The runner drops
+// a cancelled child's result itself, so the stale result is sent directly: the epoch alone must drop it.
+func TestStaleMountResultDroppedAfterRemount(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		r := newManagerRig(t)
+		gate := make(chan struct{})
+		r.mountGate = gate
+		r.start()
+		r.wantMount(mountMounting)
+
+		r.proc().exit()
+		synctest.Wait()
+		r.wantMount(mountWaiting)
+		r.after(rcdBackoffBase)
+		r.wantState(rcdReady)
+		r.wantMount(mountMounting)
+		r.wantCount("rc:mount/mount", 2)
+
+		// Epoch 1 is the first attempt's: rcd ready, rcd died and rcd ready again moved it to 3.
+		r.m.sendSupMsg(supMsg{kind: supMountDone, epoch: 1})
+		synctest.Wait()
+		r.wantMount(mountMounting)
+
+		close(gate)
+		synctest.Wait()
+		r.wantMount(mountMounted)
+		r.stop()
+	})
+}
+
+// A retry and a new round each ask rclone to forget the mount first: an attempt that timed out on our side may have
+// finished on rclone's.
+func TestRetriesForgetTheMountFirst(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		r := newManagerRig(t)
+		r.failRC("mount/mount", http.StatusBadRequest)
+		r.start()
+		r.wantCount("rc:mount/unmount", 0)
+
+		r.after(config.DefaultRetryDelay)
+		r.wantCount("rc:mount/mount", 2)
+		r.wantCount("rc:mount/unmount", 1)
+		if forgot, retried := r.lastIndex("rc:mount/unmount"), r.lastIndex("rc:mount/mount"); forgot > retried {
+			t.Fatalf("unmount at %d after the retry at %d; events: %v", forgot, retried, r.events)
+		}
+
+		for range mountAttempts - 2 {
+			r.after(config.DefaultRetryDelay)
+		}
+		r.wantMount(mountFailed)
+		before := r.count("rc:mount/unmount")
+
+		r.failRC("mount/mount", 0)
+		r.after(failedBackoffBase)
+		r.wantMount(mountMounted)
+		r.wantCount("rc:mount/unmount", before+1)
+		if forgot, mounted := r.lastIndex("rc:mount/unmount"), r.lastIndex("rc:mount/mount"); forgot > mounted {
+			t.Fatalf("unmount at %d after the new round's mount at %d; events: %v", forgot, mounted, r.events)
+		}
+		r.stop()
+	})
+}
+
+// The first attempt after a start detaches a FUSE mount the table shows at the mount point: a killed process may have
+// left a dead endpoint.
+func TestFirstAttemptCleansUpStaleFUSE(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		r := newManagerRig(t)
+		r.m.readTable = func(string) (int, error) { return 1, nil }
+		r.startMounted()
+		detached, mounted := r.index("detach"), r.index("rc:mount/mount")
+		if detached < 0 || detached > mounted {
+			t.Fatalf("detach at %d, first mount at %d, want the detach first; events: %v", detached, mounted, r.events)
+		}
+		r.stop()
+	})
+}
+
+// Without a FUSE mount at the mount point the first attempt detaches nothing: a bind or fstab mount there is the
+// user's. That holds when the table shows none and when there is no table.
+func TestFirstAttemptLeavesOtherMounts(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{{"no FUSE entry", nil}, {"no table", errNoMountTable}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				r := newManagerRig(t)
+				r.m.readTable = func(string) (int, error) { return 0, tc.err }
+				r.startMounted()
+				r.wantCount("detach", 0)
+				r.stop()
+			})
+		})
+	}
+}
+
+// A forget that rclone never answers is cut at its own budget: the retry still reaches mount/mount.
+func TestHungForgetLeavesTheAttemptItsTime(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		r := newManagerRig(t)
+		r.failRC("mount/mount", http.StatusBadRequest)
+		r.start()
+		r.hangUnmount.Store(true)
+
+		r.after(config.DefaultRetryDelay + rcdRCUnmountBudget)
+		r.wantCount("rc:mount/unmount", 1)
+		r.wantCount("rc:mount/mount", 2)
+		r.hangUnmount.Store(false)
 		r.stop()
 	})
 }
