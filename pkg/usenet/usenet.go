@@ -427,8 +427,14 @@ func (u *Usenet) migrateLegacy(ctx context.Context) error {
 // entries from the map, stops their readers (already done, so each wait ends at
 // once) and closes the marker directory. It is the single owner of that
 // teardown.
+//
+// A rushed stop (its deadline already passed) cancels finalize together with
+// the children, so it first waits for the work group: an entry creator still
+// holding its lease stores its entry before the map is collected. The service
+// group's own stop waits for the work group anyway, so this adds no wait.
 func (u *Usenet) finalize(ctx context.Context) error {
 	<-ctx.Done()
+	<-u.work.Done()
 	u.logger.Info().Msg("Closing Usenet")
 
 	entries := make([]*fsEntry, 0, u.fs.Size())
