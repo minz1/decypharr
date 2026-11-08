@@ -19,7 +19,7 @@ import (
 
 func newAdmitService(t *testing.T) (*Service, *fakeClock) {
 	t.Helper()
-	service := New(Dependencies{Storage: newRepairTestStorage(t)})
+	service := New(testGroup(t), Dependencies{Storage: newRepairTestStorage(t)})
 	clock := newFakeClock()
 	service.now = clock.Now
 	return service, clock

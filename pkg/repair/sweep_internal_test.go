@@ -34,6 +34,7 @@ type sweepFixture struct {
 	run        *storage.RepairRun
 	clock      *fakeClock
 	probes     int
+	exits      exitWatch
 }
 
 func newSweepFixture(t *testing.T, fileNames ...string) *sweepFixture {
@@ -59,12 +60,13 @@ func newSweepFixture(t *testing.T, fileNames ...string) *sweepFixture {
 		reinsert: func(*storage.Entry) error { return errors.New("no replacement") },
 		client:   newLinkClient(nil),
 	}
-	service := New(Dependencies{Storage: store, Backend: backend, Reacquirer: reacquirer})
+	service := New(testGroup(t), Dependencies{Storage: store, Backend: backend, Reacquirer: reacquirer})
 	clock := newFakeClock()
 	service.now = clock.Now
+	exits := service.watchExits()
 	return &sweepFixture{
 		store: store, service: service, reacquirer: reacquirer, backend: backend, entry: entry,
-		run: &storage.RepairRun{ID: "run"}, clock: clock,
+		run: &storage.RepairRun{ID: "run"}, clock: clock, exits: exits,
 	}
 }
 
@@ -198,7 +200,7 @@ func TestSweepConfirmsAfterCrashRestore(t *testing.T) {
 	if err := f.store.SaveEntryHealth(crashed); err != nil {
 		t.Fatal(err)
 	}
-	f.service.revertStuckHealths()
+	f.service.revertStuckHealths("")
 	f.probe(t.Context(), t, true)
 	if len(f.reacquirer.requests) != 2 {
 		t.Fatalf("requests = %d, want one per confirming probe", len(f.reacquirer.requests))
@@ -256,7 +258,7 @@ func TestRecheckEntryWithFixHealsFirstBrokenProbe(t *testing.T) {
 	if _, err := f.service.RecheckEntry(t.Context(), f.entry.Name, RecheckOptions{Fix: true}); err != nil {
 		t.Fatal(err)
 	}
-	f.service.runWG.Wait()
+	f.exits.wait()
 	if len(f.reacquirer.requests) != 1 || f.reacquirer.requests[0].FileID != "id-video.mkv" {
 		t.Fatalf("requests = %#v, want one for video.mkv", f.reacquirer.requests)
 	}
@@ -289,7 +291,7 @@ func TestStoppedSweepFinishesOnlyCutHeals(t *testing.T) {
 			cancel()
 			stop := &repairStopState{}
 			stop.set()
-			f.service.finishCancelledRepairSweep(ctx, f.run, stop, true, "stopped", candidates)
+			f.service.finishCancelledRepairSweep(f.run, stop, true, "stopped", candidates)
 			if len(f.reacquirer.requests) != tc.total || len(fileIDs(f.reacquirer.requests)) != 2 {
 				t.Fatalf("requests after finish = %#v, want %d covering both files", f.reacquirer.requests, tc.total)
 			}

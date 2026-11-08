@@ -33,7 +33,7 @@ func TestDroppedFilesThatFailBeforeAJobCostNothing(t *testing.T) {
 	entry, recovery := droppedEntryWithFiles(10)
 	recovery.failBeforeGate = errors.New("binding unusable")
 	m, _ := newDroppedTestManager(t, recovery)
-	m.repair = repair.New(repair.Dependencies{Storage: m.storage})
+	m.repair = repair.New(testGroup(t), repair.Dependencies{Storage: m.storage})
 
 	for range 6 {
 		if err := m.recoverDroppedEntry("realdebrid", entry); err == nil {
@@ -51,7 +51,7 @@ func TestDroppedFilesThatLoseTheRaceAreRefunded(t *testing.T) {
 	entry, recovery := droppedEntryWithFiles(10)
 	recovery.racedAfterGate = true
 	m, _ := newDroppedTestManager(t, recovery)
-	m.repair = repair.New(repair.Dependencies{Storage: m.storage})
+	m.repair = repair.New(testGroup(t), repair.Dependencies{Storage: m.storage})
 
 	if err := m.recoverDroppedEntry("realdebrid", entry); err != nil {
 		t.Fatal(err)
@@ -72,7 +72,7 @@ func TestStreamReacquireIsGatedOnlyForANewJob(t *testing.T) {
 		}
 		m := &Manager{work: testGroup(t), checkStreamFile: confirmBroken}
 		m.SetArrRecovery(recovery)
-		m.repair = repair.New(repair.Dependencies{})
+		m.repair = repair.New(testGroup(t), repair.Dependencies{})
 		tripBucket(t, m.repair, m.repair.ProviderFor("nzb-1"), repair.ClassUsenetSegment)
 
 		m.submitStreamReacquire("nzb-1", "file-1", "a.mkv")

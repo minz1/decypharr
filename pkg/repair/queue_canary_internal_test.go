@@ -23,7 +23,7 @@ func TestQueueCanaryMapsEachVerdict(t *testing.T) {
 		{canaryNone, arr.CanaryNone},
 	}
 	for _, tc := range answered {
-		service := New(Dependencies{})
+		service := New(testGroup(t), Dependencies{})
 		service.breaker.canary = func(context.Context, Bucket, config.BreakerSettings) canaryOutcome {
 			return tc.outcome
 		}
@@ -33,7 +33,7 @@ func TestQueueCanaryMapsEachVerdict(t *testing.T) {
 	}
 
 	synctest.Test(t, func(t *testing.T) {
-		service := New(Dependencies{})
+		service := New(testGroup(t), Dependencies{})
 		started := make(chan struct{})
 		service.breaker.canary = func(ctx context.Context, _ Bucket, _ config.BreakerSettings) canaryOutcome {
 			close(started)

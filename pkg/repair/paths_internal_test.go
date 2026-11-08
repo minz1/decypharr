@@ -21,7 +21,7 @@ func (f *outageFixture) recheckMediaAfter(t *testing.T, after time.Duration, opt
 	if _, err := f.service.RecheckMedia(t.Context(), "radarr", "1", opts); err != nil {
 		t.Fatal(err)
 	}
-	f.service.runWG.Wait()
+	f.exits.wait()
 }
 
 // trip makes the provider's hoster bucket trip: 80 of 100 releases fail on two sweeps, then recover enough that
@@ -134,7 +134,7 @@ func TestOperatorRecheckEntryPassesTheBreaker(t *testing.T) {
 	if _, err := f.service.RecheckEntry(t.Context(), f.entries[0].Name, RecheckOptions{Fix: true}); err != nil {
 		t.Fatal(err)
 	}
-	f.service.runWG.Wait()
+	f.exits.wait()
 	if f.requests() != 0 {
 		t.Fatalf("recheck-entry fix healed past a tripped bucket: %#v", f.reacquirer.requests)
 	}
@@ -145,7 +145,7 @@ func TestOperatorRecheckEntryPassesTheBreaker(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	f.service.runWG.Wait()
+	f.exits.wait()
 	if f.requests() != 1 {
 		t.Fatalf("recheck-entry with force healed %d entries, want 1", f.requests())
 	}
@@ -161,7 +161,7 @@ func TestFixBrokenAllIsHeldWhenItWouldTripTheBreaker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.service.runWG.Wait()
+	f.exits.wait()
 	if f.requests() != 0 {
 		t.Fatalf("fix-all healed %d of 30 entries past the breaker: %v", f.requests(), run.Stats)
 	}
@@ -176,7 +176,7 @@ func TestFixBrokenAllIsHeldWhenItWouldTripTheBreaker(t *testing.T) {
 	if _, err = f.service.FixBroken(t.Context(), nil, FixOptions{Force: true, Caller: "ops"}); err != nil {
 		t.Fatal(err)
 	}
-	f.service.runWG.Wait()
+	f.exits.wait()
 	if f.requests() != 30 {
 		t.Fatalf("forced fix-all healed %d, want 30", f.requests())
 	}
@@ -190,7 +190,7 @@ func TestFixBrokenWithFewEntriesPassesTheBreaker(t *testing.T) {
 	if _, err := f.service.FixBroken(t.Context(), []string{f.entries[1].Name}, FixOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	f.service.runWG.Wait()
+	f.exits.wait()
 	if f.requests() != 1 || f.reacquirer.requests[0].FileID != "id-release-001" {
 		t.Fatalf("requests = %#v, want the named entry", f.reacquirer.requests)
 	}
@@ -213,7 +213,7 @@ func TestFixBrokenNamedEntryIsHeldByATrippedBucket(t *testing.T) {
 	if _, err := f.service.FixBroken(t.Context(), []string{f.entries[90].Name}, FixOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	f.service.runWG.Wait()
+	f.exits.wait()
 	if f.requests() != 0 {
 		t.Fatalf("a named fix healed past a tripped bucket: %#v", f.reacquirer.requests)
 	}

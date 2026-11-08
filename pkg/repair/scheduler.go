@@ -9,24 +9,38 @@ import (
 
 	"github.com/go-co-op/gocron/v2"
 
+	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
 // Start reconciles repair state and registers configured schedules.
-func (r *Service) Start(ctx context.Context) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+func (r *Service) Start(context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.parentCtx = ctx
-	r.probeCancel()
-	r.probeCtx, r.probeCancel = context.WithCancel(ctx)
+	if r.stopped {
+		return task.ErrStopped
+	}
 
 	r.reconcileOrphans()
 	r.seedBreakerFromJournal()
+	return r.registerJobsLocked()
+}
 
+// removeJobsLocked removes the repair schedules. The caller holds mu.
+func (r *Service) removeJobsLocked() {
+	if r.scheduled {
+		r.scheduler.RemoveByTags(repairSchedulerTag)
+		r.scheduled = false
+	}
+	if r.stopScheduled {
+		r.scheduler.RemoveByTags(repairStopSchedulerTag)
+		r.stopScheduled = false
+	}
+}
+
+// registerJobsLocked registers the schedules of the current configuration. The caller holds mu.
+func (r *Service) registerJobsLocked() error {
 	cfg := r.cfg()
 	if !cfg.Enabled {
 		r.logger.Info().Msg("Repair disabled in config")
@@ -51,7 +65,11 @@ func (r *Service) Start(ctx context.Context) error {
 	r.scheduler.RemoveByTags(repairSchedulerTag)
 	if _, newJobErr := r.scheduler.NewJob(jd,
 		gocron.NewTask(func() {
-			if _, runSweepErr := r.runSweep(storage.RepairTriggerScheduled, RunOptions{}); runSweepErr != nil {
+			_, runSweepErr := r.runSweep(storage.RepairTriggerScheduled, RunOptions{})
+			switch {
+			case errors.Is(runSweepErr, task.ErrStopped):
+				r.logger.Debug().Err(runSweepErr).Msg("Scheduled repair sweep skipped: repair is stopping")
+			case runSweepErr != nil:
 				r.logger.Warn().Err(runSweepErr).Msg("Scheduled repair sweep skipped")
 			}
 		}),
@@ -108,63 +126,37 @@ func sweepStartAt(schedule string, runs []*storage.RepairRun, now time.Time) (ti
 	return time.Time{}, false
 }
 
-// Stop cancels active repair work and removes its schedules.
+// Stop refuses further work, cancels the active run and the canary probes and removes the schedules. It does not
+// wait: the group's own stop waits for the run and the probes, and the run's slot is released by its task.
 func (r *Service) Stop() {
 	r.mu.Lock()
+	r.stopped = true
+	r.removeJobsLocked()
 	cancel := r.cancelRun
-	r.cancelRun = nil
-	r.activeRunID = ""
-	r.activeStopFunc = nil
-	if r.scheduled {
-		r.scheduler.RemoveByTags(repairSchedulerTag)
-		r.scheduled = false
-	}
-	if r.stopScheduled {
-		r.scheduler.RemoveByTags(repairStopSchedulerTag)
-		r.stopScheduled = false
-	}
 	probeCancel := r.probeCancel
 	r.mu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
-	// Waiting for a probe and for the run to drain share one budget, so a stop never takes twice as long.
-	expired := make(chan struct{})
-	budget := time.AfterFunc(repairStopDrainTimeout, func() { close(expired) })
-	defer budget.Stop()
-	// The run drains while the probe is waited for, so a run that finished meanwhile has closed done by then.
-	done := make(chan struct{})
-	go func() {
-		r.runWG.Wait()
-		close(done)
-	}()
-
-	// A canary probe still running reads storage and usenet; end it and wait for it to leave.
 	probeCancel()
-	if !r.probes.wait(expired) {
-		r.logger.Warn().Dur("timeout", repairStopDrainTimeout).Msg("Repair: a canary probe did not stop in time")
-	}
-
-	// A drained run wins over a budget a stuck probe already spent: only a run still going has timed out.
-	select {
-	case <-done:
-		return
-	default:
-	}
-	select {
-	case <-done:
-	case <-expired:
-		r.logger.Warn().Dur("timeout", repairStopDrainTimeout).Msg("Repair: drain timed out")
-	}
 }
 
-// ApplyConfig restarts repair scheduling with the current configuration.
+// ApplyConfig restarts repair scheduling with the current configuration. It cancels the active run and the probes
+// in flight and returns without waiting for them; the run's slot stays held until its task exits.
 func (r *Service) ApplyConfig() error {
-	r.Stop()
 	r.mu.Lock()
-	ctx := r.parentCtx
-	r.mu.Unlock()
-	return r.Start(ctx)
+	defer r.mu.Unlock()
+	if r.stopped {
+		return task.ErrStopped
+	}
+	if r.cancelRun != nil {
+		r.cancelRun()
+	}
+	r.probeCancel()
+	r.probeCtx, r.probeCancel = context.WithCancel(r.g.Context())
+	r.seedBreakerFromJournal()
+	r.removeJobsLocked()
+	return r.registerJobsLocked()
 }
 
 // RunNow starts a manual repair sweep.
@@ -294,22 +286,23 @@ func (r *Service) nextScheduledRun() *time.Time {
 	return nil
 }
 
+// reconcileOrphans repairs what a previous process left behind, except the run this service owns. The caller holds mu.
 func (r *Service) reconcileOrphans() {
 	if r.storage == nil {
 		return
 	}
-	r.cancelOrphanRuns()
-	r.revertStuckHealths()
+	r.cancelOrphanRuns(r.activeRunID)
+	r.revertStuckHealths(r.activeRunID)
 }
 
-// cancelOrphanRuns marks runs a previous process left running as cancelled.
-func (r *Service) cancelOrphanRuns() {
+// cancelOrphanRuns marks runs a previous process left running as cancelled, except the run owned.
+func (r *Service) cancelOrphanRuns(owned string) {
 	s := r.storage
 	if runs, err := s.ListRepairRuns(); err == nil {
 		now := time.Now()
 		n := 0
 		for _, run := range runs {
-			if run == nil || run.Status != storage.RepairRunRunning {
+			if run == nil || run.Status != storage.RepairRunRunning || run.ID == owned {
 				continue
 			}
 			run.Status = storage.RepairRunCancelled
@@ -331,12 +324,12 @@ func (r *Service) cancelOrphanRuns() {
 	}
 }
 
-// revertStuckHealths restores entries a crashed run left in "repairing".
-func (r *Service) revertStuckHealths() {
+// revertStuckHealths restores entries a crashed run left in "repairing", except those of the run owned.
+func (r *Service) revertStuckHealths(owned string) {
 	s := r.storage
 	cleared := 0
 	_ = s.ForEachEntryHealth(func(state *storage.EntryHealth) error {
-		if state == nil || state.ActiveRunID == "" {
+		if state == nil || state.ActiveRunID == "" || state.ActiveRunID == owned {
 			return nil
 		}
 		if state.PreviousStatus != "" {

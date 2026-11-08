@@ -17,6 +17,7 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
+	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/arr/reacquire"
 	debrid "github.com/sirrobot01/decypharr/pkg/debrid/common"
@@ -36,6 +37,8 @@ type outageClient struct {
 	onCheck func(checks int)
 	// blockCheck makes a check wait until its context ends, as a provider that never answers would.
 	blockCheck bool
+	// entered, when set, receives a value each time a blocked check starts waiting.
+	entered chan struct{}
 }
 
 func (c *outageClient) Config() config.Debrid {
@@ -48,6 +51,9 @@ func (c *outageClient) CheckFile(ctx context.Context, infoHash, _ string) error 
 	block := c.blockCheck
 	c.mu.Unlock()
 	if block {
+		if c.entered != nil {
+			c.entered <- struct{}{}
+		}
 		<-ctx.Done()
 		return ctx.Err()
 	}
@@ -83,6 +89,8 @@ type outageFixture struct {
 	entries    []*storage.Entry
 	runs       int
 	run        *storage.RepairRun
+	exits      exitWatch
+	g          *task.Group
 	// deleted are the entries whose Radarr file a reacquisition deleted (see openJobsReacquirer).
 	deletedMu sync.Mutex
 	deleted   map[string]bool
@@ -119,11 +127,13 @@ func newOutageFixture(t *testing.T, size int, repair config.RepairConfig) *outag
 		reinsert: func(*storage.Entry) error { return fmt.Errorf("no replacement") },
 		client:   f.client,
 	}
-	f.service = New(Dependencies{
+	f.g = testGroup(t)
+	f.service = New(f.g, Dependencies{
 		Storage: store, Backend: backend, Reacquirer: f.reacquirer,
 		Config: config.NewStore(&config.Config{Repair: repair}), Logger: zerolog.Nop(),
 	})
 	f.service.now = f.clock.Now
+	f.exits = f.service.watchExits()
 	f.serveRadarr(t)
 	return f
 }
@@ -516,7 +526,7 @@ func TestRecheckDuringTheDrainDoesNotEndIt(t *testing.T) {
 	if _, err := f.service.RecheckEntry(t.Context(), f.entries[79].Name, RecheckOptions{Fix: true}); err != nil {
 		t.Fatal(err)
 	}
-	f.service.runWG.Wait()
+	f.exits.wait()
 	if status := f.service.BreakerStatus(); len(status) != 1 || status[0].State != string(breakerReleasing) {
 		t.Fatalf("after the recheck: %+v, want the bucket still releasing", status)
 	}

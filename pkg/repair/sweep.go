@@ -37,7 +37,7 @@ func (r *Service) executeSweep(
 	candidates, err := r.enumerateCandidates(ctx, cfg)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
-			r.finishCancelledRepairSweep(ctx, run, stopState, autoRepair, "context cancelled during selection", nil)
+			r.finishCancelledRepairSweep(run, stopState, autoRepair, "context cancelled during selection", nil)
 			return
 		}
 		log.Error().Err(err).Msg("Sweep: enumeration failed")
@@ -45,7 +45,7 @@ func (r *Service) executeSweep(
 		return
 	}
 	if ctx.Err() != nil {
-		r.finishCancelledRepairSweep(ctx, run, stopState, autoRepair, "context cancelled after selection", nil)
+		r.finishCancelledRepairSweep(run, stopState, autoRepair, "context cancelled after selection", nil)
 		return
 	}
 
@@ -74,7 +74,7 @@ func (r *Service) executeSweep(
 			if batch != nil {
 				batch.partial = true // held entries it never reached are still held: no drain ends on it
 			}
-			r.finishCancelledRepairSweep(ctx, run, stopState, autoRepair, "context cancelled during probing", batch)
+			r.finishCancelledRepairSweep(run, stopState, autoRepair, "context cancelled during probing", batch)
 			return
 		}
 		log.Error().Err(err).Msg("Sweep: probing failed")
@@ -82,7 +82,7 @@ func (r *Service) executeSweep(
 		return
 	}
 	if ctx.Err() != nil {
-		r.finishCancelledRepairSweep(ctx, run, stopState, autoRepair, "context cancelled after probing", batch)
+		r.finishCancelledRepairSweep(run, stopState, autoRepair, "context cancelled after probing", batch)
 		return
 	}
 
@@ -91,7 +91,7 @@ func (r *Service) executeSweep(
 		r.saveRun(run)
 		r.healBatch(ctx, run, batch, policy)
 		if ctx.Err() != nil {
-			r.finishCancelledRepairSweep(ctx, run, stopState, autoRepair, "context cancelled during repair", batch)
+			r.finishCancelledRepairSweep(run, stopState, autoRepair, "context cancelled during repair", batch)
 			return
 		}
 	}
@@ -108,7 +108,6 @@ func (r *Service) executeSweep(
 }
 
 func (r *Service) finishCancelledRepairSweep(
-	ctx context.Context,
 	run *storage.RepairRun,
 	stopState *repairStopState,
 	autoRepair bool,
@@ -125,7 +124,7 @@ func (r *Service) finishCancelledRepairSweep(
 	log.Info().Bool("auto_repair", autoRepair).Msg("Repair sweep: stop schedule fired; finishing run")
 
 	if autoRepair && batch != nil && len(batch.pendingNames()) > 0 {
-		repairCtx, cancel := context.WithTimeout(detachedRepairContext(ctx, r.parentCtx), repairStopFinalRepairTimeout)
+		repairCtx, cancel := context.WithTimeout(r.g.Context(), repairStopFinalRepairTimeout)
 		defer cancel()
 
 		run.Stage = storage.RepairStageRepairing
@@ -136,14 +135,4 @@ func (r *Service) finishCancelledRepairSweep(
 
 	run.CancelReason = ""
 	r.finalizeRun(run, storage.RepairRunCompleted, "", "stopped by schedule: "+reason)
-}
-
-func detachedRepairContext(runCtx, parentCtx context.Context) context.Context {
-	if runCtx.Err() == nil {
-		return runCtx
-	}
-	if parentCtx != nil {
-		return parentCtx
-	}
-	return context.Background()
 }

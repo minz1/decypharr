@@ -11,7 +11,7 @@ import (
 func TestQueueProviderIsTheEntrysOwnOrNothing(t *testing.T) {
 	t.Parallel()
 	m, _ := newDroppedTestManager(t, nil)
-	m.repair = repair.New(repair.Dependencies{Storage: m.storage})
+	m.repair = repair.New(testGroup(t), repair.Dependencies{Storage: m.storage})
 	if err := m.storage.AddOrUpdate(&storage.Entry{
 		InfoHash: "abcdef0123", Name: "Movie", Protocol: config.ProtocolTorrent, ActiveProvider: "realdebrid",
 	}); err != nil {

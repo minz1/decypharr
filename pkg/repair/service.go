@@ -10,6 +10,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/arr/reacquire"
@@ -64,7 +65,6 @@ const (
 	// At most this many files probed concurrently within a single entry. The
 	// outer worker count comes from cfg.Repair.Workers.
 	repairFilesPerEntry          = 2
-	repairStopDrainTimeout       = 30 * time.Second
 	repairStopFinalRepairTimeout = 5 * time.Minute
 )
 
@@ -109,32 +109,43 @@ type Service struct {
 	config        *config.Store
 	logger        zerolog.Logger
 
+	g *task.Group
+
 	mu             sync.Mutex
-	parentCtx      context.Context
 	activeRunID    string
 	cancelRun      context.CancelFunc
 	scheduled      bool
 	stopScheduled  bool
 	activeStopFunc func()
-	runWG          sync.WaitGroup
+	// stopped is set by Stop under mu: later runs, rechecks and configuration changes are refused.
+	stopped bool
+
+	// onRunExit, when set, is called with a run or recheck ID after its task has released its slot. Tests wait on it.
+	onRunExit func(runID string)
 
 	// now is the clock; nil means time.Now. Tests replace it to move through the confirmation gap.
 	now     func() time.Time
 	breaker *breaker
 	// seeded is set once the breaker has been seeded from the journal; guarded by mu.
 	seeded bool
-	// probeCtx is the context canary probes run on, cancelled by Stop; probes counts the ones in flight.
+	// probeCtx is the context canary probes run on, cancelled by Stop and by ApplyConfig; guarded by mu.
 	probeCtx    context.Context
 	probeCancel context.CancelFunc
-	probes      probeTracker
 }
 
-// lifetime is the context background probes run on: it ends when the service is stopped or its parent context ends,
-// and a restart (Start after Stop) makes a fresh one.
+// lifetime is the context background probes run on: it ends when the service is stopped or its group ends, and
+// ApplyConfig makes a fresh one.
 func (r *Service) lifetime() context.Context {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.probeCtx
+}
+
+// exited reports a finished run or recheck to the test hook.
+func (r *Service) exited(runID string) {
+	if r.onRunExit != nil {
+		r.onRunExit(runID)
+	}
 }
 
 func (r *Service) clock() time.Time {
@@ -150,7 +161,7 @@ func (r *Service) breakerSettings() config.BreakerSettings {
 }
 
 // New builds a repair service from its dependencies.
-func New(deps Dependencies) *Service {
+func New(g *task.Group, deps Dependencies) *Service {
 	// A nil *reacquire.Service (its database failed to open) must not become a
 	// non-nil Reacquirer, or every auto-repair calls into a nil receiver.
 	if rq, ok := deps.Reacquirer.(*reacquire.Service); ok && rq == nil {
@@ -167,13 +178,13 @@ func New(deps Dependencies) *Service {
 		hearsay:       deps.Hearsay,
 		config:        deps.Config,
 		logger:        deps.Logger,
-		parentCtx:     context.Background(),
+		g:             g,
 	}
 	r.breaker = newBreaker(r.breakerSettings, r.canaryProbe)
 	r.breaker.now = r.clock
 	r.breaker.lifetime = r.lifetime
-	r.breaker.track = r.probes.begin
-	r.probeCtx, r.probeCancel = context.WithCancel(r.parentCtx)
+	r.breaker.track = func() (func(), error) { return g.Enter("canary") }
+	r.probeCtx, r.probeCancel = context.WithCancel(g.Context())
 	return r
 }
 

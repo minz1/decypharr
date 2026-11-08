@@ -99,7 +99,7 @@ func TestDroppedRetriesDoNotUseUpTheHealCaps(t *testing.T) {
 	t.Parallel()
 	entry, recovery := droppedEntryWithFiles(10)
 	m, _ := newDroppedTestManager(t, recovery)
-	m.repair = repair.New(repair.Dependencies{Storage: m.storage})
+	m.repair = repair.New(testGroup(t), repair.Dependencies{Storage: m.storage})
 
 	for range 4 {
 		if err := m.recoverDroppedEntry("realdebrid", entry); err != nil {
@@ -127,7 +127,7 @@ func TestDroppedEntryIsAdmittedOnceForAllItsFiles(t *testing.T) {
 	t.Parallel()
 	entry, recovery := droppedEntryWithFiles(26)
 	m, _ := newDroppedTestManager(t, recovery)
-	m.repair = repair.New(repair.Dependencies{Storage: m.storage})
+	m.repair = repair.New(testGroup(t), repair.Dependencies{Storage: m.storage})
 
 	if err := m.recoverDroppedEntry("realdebrid", entry); err != nil {
 		t.Fatalf("a 26-file entry was refused partway: %v", err)

@@ -259,7 +259,7 @@ func TestHealOutsideASweepAfterARecheckReleaseRunsTheCanary(t *testing.T) {
 		if _, err := f.service.FixBroken(t.Context(), []string{f.entries[85].Name}, FixOptions{}); err != nil {
 			t.Fatal(err)
 		}
-		f.service.runWG.Wait()
+		f.exits.wait()
 		if got := f.requests(); got != before {
 			t.Fatalf("heals = %d, want %d: a fix on a releasing bucket with a failing canary healed", got, before)
 		}
@@ -303,7 +303,7 @@ func recheck(t *testing.T, f *outageFixture, i int) {
 	if _, err := f.service.RecheckEntry(t.Context(), f.entries[i].Name, RecheckOptions{Fix: true}); err != nil {
 		t.Fatal(err)
 	}
-	f.service.runWG.Wait()
+	f.exits.wait()
 }
 
 // assertAdmitHeldByAFailingCanary breaks the whole provider and asks for a heal once the canary verdict is stale.
