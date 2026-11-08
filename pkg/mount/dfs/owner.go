@@ -21,6 +21,9 @@ const (
 	// vfsCloseReserve is the part of stopBudget kept for closing the cache: the
 	// detach context ends this long before the budget does.
 	vfsCloseReserve = 2 * time.Second
+	// detachFloor is the least time a lazy detach gets, even past the budget:
+	// a mount left attached outlives the process.
+	detachFloor = time.Second
 )
 
 var (
@@ -182,11 +185,18 @@ func (m *Manager) unmountLate(ctx context.Context, h backend.Mounted) {
 	m.logUnmounted("graceful", "")
 }
 
-// detach lazily detaches the mount, bounded to leave the cache its reserve.
+// detach lazily detaches the mount, bounded to leave the cache its reserve
+// but never given less than detachFloor: like the rcd reap, it keeps its own
+// time when the slice is (nearly) over, since an attached mount outlives us.
 func (m *Manager) detach(sctx context.Context, h backend.Mounted, reason string) {
 	dctx, cancel := sctx, context.CancelFunc(func() {})
 	if deadline, ok := sctx.Deadline(); ok {
-		dctx, cancel = context.WithDeadline(sctx, deadline.Add(-vfsCloseReserve))
+		end := deadline.Add(-vfsCloseReserve)
+		if floor := time.Now().Add(detachFloor); end.Before(floor) {
+			dctx, cancel = context.WithDeadline(context.WithoutCancel(sctx), floor)
+		} else {
+			dctx, cancel = context.WithDeadline(sctx, end)
+		}
 	}
 	defer cancel()
 	if err := h.Detach(dctx); err != nil {
