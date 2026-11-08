@@ -479,10 +479,8 @@ func (c *Client) release(conn *Connection) {
 // gone — and every older entry idling below it in the stack is dead too.
 //
 // The verify ping runs under a "pop" lease and is bounded by the client's
-// group ctx only. The caller's ctx is checked once before the ping and never
-// closes the connection: a caller that cancels must not cost the pool its
-// stale connections one after another.
-func (c *Client) checkEntryHealth(ctx context.Context, entry *connectionEntry) (bool, bool) {
+// group ctx only: popIdle never starts one for a caller that has gone.
+func (c *Client) checkEntryHealth(entry *connectionEntry) (bool, bool) {
 	if entry == nil || entry.conn == nil {
 		return false, false
 	}
@@ -490,15 +488,7 @@ func (c *Client) checkEntryHealth(ctx context.Context, entry *connectionEntry) (
 	if entry.conn.IsClosed() {
 		return false, false
 	}
-	// Verify with a ping if we haven't heard from this connection recently.
-	// A successful reaper keepalive counts as activity, so freshly-pinged
-	// connections skip the extra checkout round-trip.
-	if time.Since(entry.lastActivity()) > c.staleThreshold {
-		if ctx.Err() != nil {
-			// The caller is gone: it gets no verdict on this entry, which the
-			// caller of this function drops.
-			return false, false
-		}
+	if c.needsVerify(entry) {
 		leave, err := c.g.Enter("pop")
 		if err != nil {
 			return false, false
@@ -512,6 +502,33 @@ func (c *Client) checkEntryHealth(ctx context.Context, entry *connectionEntry) (
 		}
 	}
 	return true, false
+}
+
+// needsVerify reports whether a pooled entry must pass a verify ping before
+// it is handed out: we haven't heard from it recently. A successful reaper
+// keepalive counts as activity, so freshly-pinged connections skip the extra
+// checkout round-trip.
+func (c *Client) needsVerify(entry *connectionEntry) bool {
+	return time.Since(entry.lastActivity()) > c.staleThreshold
+}
+
+// pushBackIdle returns an entry popIdle took, unverified and unchanged, to the
+// top of pp's idle stack. Like put, it closes the connection instead when the
+// client has stopped or the stack is full. A put between the pop and this
+// push leaves the stale entry above a fresher one, so the stack's oldest-below
+// order is best effort: a later ping-timeout flush may close a healthy
+// connection, which costs one redial.
+func (c *Client) pushBackIdle(pp *ProviderPool, entry *connectionEntry) {
+	pp.mu.Lock()
+	if c.stopped() || len(pp.conns) >= pp.max {
+		pp.mu.Unlock()
+		conn := entry.conn
+		c.releaseConnectionEntry(entry)
+		_ = conn.Close()
+		return
+	}
+	pp.conns = append(pp.conns, entry)
+	pp.mu.Unlock()
 }
 
 // flushIdle closes every idle pooled connection on pp. Called when a
@@ -927,8 +944,16 @@ func (c *Client) popIdle(ctx context.Context, pp *ProviderPool) (*Connection, bo
 		return nil, true, nil
 	}
 
+	// A caller that has already gone gets no verdict on an entry that needs a
+	// verify ping: the entry may well be healthy, so it goes back on the
+	// stack untouched and the caller gets its ctx error.
+	if ctxErr := ctx.Err(); ctxErr != nil && c.needsVerify(entry) {
+		c.pushBackIdle(pp, entry)
+		return nil, true, ctxErr
+	}
+
 	// Health check outside lock
-	healthy, pingTimedOut := c.checkEntryHealth(ctx, entry)
+	healthy, pingTimedOut := c.checkEntryHealth(entry)
 	conn := entry.conn
 	c.releaseConnectionEntry(entry)
 	if healthy {
