@@ -801,9 +801,6 @@ func (sc *SegmentCache) WaitForSegment(ctx context.Context, segIdx int) error {
 	if segIdx < 0 || segIdx >= sc.segCount {
 		return fmt.Errorf("segment index out of range: %d", segIdx)
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
 
 	if settled, err := sc.segmentSettled(segIdx); settled {
 		return err
@@ -867,9 +864,6 @@ func (sc *SegmentCache) segmentSettled(segIdx int) (bool, error) {
 func (sc *SegmentCache) WaitForEvictionRelease(ctx context.Context, segIdx int) error {
 	if segIdx < 0 || segIdx >= sc.segCount {
 		return fmt.Errorf("segment index out of range: %d", segIdx)
-	}
-	if ctx == nil {
-		ctx = context.Background()
 	}
 	if SegmentState(sc.states[segIdx].Load()) != StateEvicting {
 		return nil

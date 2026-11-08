@@ -467,10 +467,8 @@ func (u *Usenet) createEntry(file *storage.NZBFile, prefetchSize int64, retentio
 		return nil, fmt.Errorf("no volumes available for file %s", file.Name)
 	}
 
-	fsCtx := context.Background()
-
 	usenetFS, err := fs.NewFS(
-		fsCtx,
+		u.bufferPools.Context(),
 		u.nntp,
 		u.maxConnections,
 		prefetchSize,
