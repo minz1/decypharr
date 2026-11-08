@@ -1,6 +1,8 @@
 package reader
 
 import (
+	"context"
+
 	"github.com/sirrobot01/decypharr/internal/buffer"
 	"github.com/sirrobot01/decypharr/internal/task"
 )
@@ -35,6 +37,10 @@ func NewPools(g *task.Group, memoryBudget int64) (*Pools, error) {
 // newReaderGroup makes the group one StreamingReader runs on, a child of the
 // pools' group.
 func (p *Pools) newReaderGroup() *task.Group { return p.g.Child("reader") }
+
+// Context ends when the pools' group stops. Work done for the pools' readers
+// outside a task runs on it.
+func (p *Pools) Context() context.Context { return p.g.Context() }
 
 // BufferGroup is the group the buffer pool runs on. Stopping it closes every
 // Buffer still registered.

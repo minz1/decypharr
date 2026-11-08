@@ -42,7 +42,7 @@ func newPipelineIntegrityReader(
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if joinErr := sr.Close(); joinErr != nil {
+		if joinErr := stopTestReader(t, sr); joinErr != nil {
 			t.Error(joinErr)
 		}
 		if pool := sr.cache.extentPool.stats(); pool.MemoryInUse != 0 || pool.Caches != 0 ||
@@ -154,7 +154,7 @@ func checkPipelineRetry(t *testing.T, mode string) {
 	backupHost, backupPort := backup.Addr()
 	sr := newPipelineIntegrityReader(t, primaryAndBackup(primary, backupHost, backupPort, "integrity"), segments)
 
-	ctx, cancel := context.WithTimeout(sr.ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(sr.fetcher.ctx, 5*time.Second)
 	defer cancel()
 	fetchErr := sr.fetcher.fetchPrefetchBatch(ctx, []int{0, 1})
 	pendingFailure := mode == "pending-crc-error"
@@ -169,7 +169,7 @@ func checkPipelineRetry(t *testing.T, mode string) {
 	checkRetrySlot(t, sr, 0, first[dataStart:], false)
 	checkRetrySlot(t, sr, 1, second, pendingFailure)
 
-	if closeErr := sr.Close(); closeErr != nil {
+	if closeErr := stopTestReader(t, sr); closeErr != nil {
 		t.Fatal(closeErr)
 	}
 	primary.Close()
@@ -320,7 +320,7 @@ func checkPipelineRecovery(t *testing.T, action string) {
 	defer backup.release()
 	sr := newPipelineIntegrityReader(t, primaryAndBackup(primary, "127.0.0.1", backup.port, "staging"), segments)
 
-	ctx, cancel := context.WithTimeout(sr.ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(sr.fetcher.ctx, 5*time.Second)
 	defer cancel()
 	finished := make(chan error, 1)
 	if !sr.fetcher.submit(
@@ -347,7 +347,7 @@ func checkPipelineRecovery(t *testing.T, action string) {
 	case "cancel":
 		cancel()
 	case "reader-close":
-		if closeErr := sr.Close(); closeErr != nil {
+		if closeErr := stopTestReader(t, sr); closeErr != nil {
 			t.Fatal(closeErr)
 		}
 	case "idle":

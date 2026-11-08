@@ -112,10 +112,6 @@ func NewFS(
 	logger zerolog.Logger,
 	opts ...Option,
 ) (*FS, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
 	f := &FS{
 		ctx:               ctx,
 		client:            client,
@@ -259,8 +255,12 @@ func (f *FS) createNewReaderForVolume(vol *types.Volume) (PrefetchableReaderAt, 
 	if err != nil {
 		return nil, 0, nil, fmt.Errorf("failed to create new streaming reader for volume %s: %w", vol.Name, err)
 	}
+	// Interim until the entry cleanup takes a ctx (Task 8): the reader's close
+	// is asynchronous, and Usenet.Close must not stop the pools before the
+	// cache has released its buffers.
 	cleanup := func() {
 		_ = streamReader.Close()
+		<-streamReader.Done()
 	}
 	return streamReader, vol.Size, cleanup, nil
 }

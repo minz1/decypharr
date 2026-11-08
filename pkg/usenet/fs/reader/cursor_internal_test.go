@@ -35,26 +35,24 @@ func newTestReader(t *testing.T, segCount int) *StreamingReader {
 	if err != nil {
 		t.Fatalf("NewSegmentCache: %v", err)
 	}
-	fetcherGroup := newTestRoot(t)
+	g := newTestRoot(t)
+	fetcherGroup := g.Child("fetcher")
 	fetcher := NewSegmentFetcher(fetcherGroup, nil, cache, cfg, stats, zerolog.Nop())
 
-	ctx, cancel := context.WithCancel(context.Background())
 	sr := &StreamingReader{
+		g:         g,
 		cache:     cache,
 		fetcher:   fetcher,
 		config:    cfg,
 		totalSize: cache.TotalSize(),
 		segCount:  cache.SegmentCount(),
 		cursors:   make(map[*Cursor]struct{}),
-		ctx:       ctx,
-		cancel:    cancel,
 		logger:    zerolog.Nop(),
 		stats:     stats,
 	}
 	t.Cleanup(func() {
-		stopTestGroup(t, fetcherGroup)
+		stopTestGroup(t, g)
 		_ = cache.Close()
-		cancel()
 	})
 
 	return sr

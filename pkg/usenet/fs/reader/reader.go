@@ -57,14 +57,11 @@ type StreamingReader struct {
 	cursors       map[*Cursor]struct{}
 	defaultCursor *Cursor
 
-	// Lifecycle: g is the reader's group (a child of the pools' group) and
-	// fetcherG the fetcher's, a child of g.
-	g        *task.Group
-	fetcherG *task.Group
-	ctx      context.Context
-	cancel   context.CancelFunc
-	closed   atomic.Bool
-	logger   zerolog.Logger
+	// Lifecycle: g is the reader's group, a child of the pools' group. The
+	// fetcher runs on a child of g; the cache closes in g's cache-closer task.
+	g      *task.Group
+	closed atomic.Bool
+	logger zerolog.Logger
 
 	// Stats
 	stats *Stats
@@ -104,9 +101,11 @@ type Cursor struct {
 
 // NewStreamingReader creates a new streaming reader for NNTP segments. It
 // requires WithPools and WithFetchScheduler. The reader runs on a group made
-// by the pools, and its fetcher on a child of that group: the fetcher's
-// context is the fetcher group's, not derived from ctx, so cancelling ctx
-// does not stop in-flight fetches; Close does.
+// by the pools, and its fetcher on a child of that group: their contexts are
+// not derived from ctx, so cancelling ctx does not stop in-flight fetches;
+// Close or Stop does. ctx only refuses the construction if it is already
+// done. It returns task.ErrStopped, before allocating anything, if the pools
+// have stopped.
 func NewStreamingReader(
 	ctx context.Context,
 	client *nntp.Client,
@@ -134,35 +133,44 @@ func NewStreamingReader(
 	}
 
 	g := config.Pools.newReaderGroup()
-	ctx, cancel := context.WithCancel(ctx)
+	if g.Context().Err() != nil {
+		return nil, task.ErrStopped
+	}
+	if err := ctx.Err(); err != nil {
+		g.Close()
+		return nil, err
+	}
 	logger := zerolog.Nop() // Use logger from config if available
 
 	stats := &Stats{}
 
-	// Create cache
-	cache, err := NewSegmentCache(ctx, segments, config, stats, logger)
+	// The cache runs on the reader group's context, so a stop wakes its waiters.
+	cache, err := NewSegmentCache(g.Context(), segments, config, stats, logger)
 	if err != nil {
-		cancel()
 		g.Close()
-		<-g.Done()
 		return nil, fmt.Errorf("create cache: %w", err)
 	}
 
-	// Create fetcher on a child created after the cache.
-	fetcherG := g.Child("fetcher")
-	fetcher := NewSegmentFetcher(fetcherG, client, cache, config, stats, logger)
+	// The cache closes after the fetcher stopped: the fetcher child is newer
+	// than this task, so the group stops it first.
+	if err = g.Go("cache-closer", func(ctx context.Context) error {
+		<-ctx.Done()
+		return cache.Close()
+	}); err != nil {
+		_ = cache.Close()
+		g.Close()
+		return nil, err
+	}
+	fetcher := NewSegmentFetcher(g.Child("fetcher"), client, cache, config, stats, logger)
 
 	sr := &StreamingReader{
 		g:         g,
-		fetcherG:  fetcherG,
 		cache:     cache,
 		fetcher:   fetcher,
 		config:    config,
 		totalSize: cache.TotalSize(),
 		segCount:  cache.SegmentCount(),
 		cursors:   make(map[*Cursor]struct{}),
-		ctx:       ctx,
-		cancel:    cancel,
 		logger:    logger,
 		stats:     stats,
 	}
@@ -288,11 +296,11 @@ func seekAbandonedWindow(prevEnd int64, startSeg, endSeg, ahead int) bool {
 }
 
 // ReadAt implements [io.ReaderAt] with blocking semantics.
-// Blocks until the requested byte range is available.
+// Blocks until the requested byte range is available, or the reader stops.
 //
 // THE CRITICAL PATH: Uses Pin/Unpin to prevent the race condition.
 func (sr *StreamingReader) ReadAt(p []byte, off int64) (int, error) {
-	return sr.ReadAtContext(context.Background(), p, off)
+	return sr.ReadAtContext(sr.g.Context(), p, off)
 }
 
 // ReadAtContext implements context-aware random reads. The context is carried
@@ -306,9 +314,6 @@ func (sr *StreamingReader) ReadAtContext(ctx context.Context, p []byte, off int6
 }
 
 func (sr *StreamingReader) readAtCursor(ctx context.Context, cur *Cursor, p []byte, off int64) (int, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	if sr.closed.Load() {
 		return 0, io.ErrClosedPipe
 	}
@@ -719,21 +724,20 @@ func (sr *StreamingReader) Stats() map[string]int64 {
 	return sr.stats.Snapshot()
 }
 
-// Close releases all resources.
+// Close starts the reader's shutdown and returns at once: reads after it
+// return [io.ErrClosedPipe], the fetcher stops, then the cache closes. Wait
+// on Done, or use Stop, to know the cache has released its memory.
 func (sr *StreamingReader) Close() error {
-	if sr.closed.Swap(true) {
-		return nil
-	}
-
-	sr.cancel()
-
-	// Interim until readers are Pools children with an async Close: stop the
-	// fetcher first (cancels downloads and waits for its leases), then close
-	// the cache (cleans up files), then end the reader group.
-	sr.fetcherG.Close()
-	<-sr.fetcherG.Done()
-	err := sr.cache.Close()
+	sr.closed.Store(true)
 	sr.g.Close()
-	<-sr.g.Done()
-	return err
+	return nil
 }
+
+// Stop closes the reader and waits for its shutdown, bounded by ctx.
+func (sr *StreamingReader) Stop(ctx context.Context) error {
+	sr.closed.Store(true)
+	return sr.g.Stop(ctx)
+}
+
+// Done is closed once the reader has stopped and released its cache.
+func (sr *StreamingReader) Done() <-chan struct{} { return sr.g.Done() }
