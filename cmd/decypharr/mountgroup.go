@@ -14,7 +14,9 @@ import (
 )
 
 // mountSliceBudget is the share of the generation's teardown the mount gets:
-// the unmount, the signal to rcd, and the cache close all fit in it.
+// the unmount, the signal to rcd, and the cache close fit in it when it is
+// armed in full; a slice armed with under ~3s left lets the DFS detach run up
+// to dfs's detachFloor (1s) past it, and the cache close after that.
 const mountSliceBudget = 8 * time.Second
 
 // mountSlice is the mount's time budget for its stop. It is unarmed until the
