@@ -111,7 +111,11 @@ func TestPendingBlockRemainsChargedUntilRelease(t *testing.T) {
 
 func TestCloseReleasesRetainedAndDeferredAllocations(t *testing.T) {
 	t.Parallel()
-	p := newTestPool(t, PoolConfig{})
+	g := newTestGroup(t)
+	p, err := NewPool(g, PoolConfig{Name: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	b := newTestBuffer(t, p, Config{MemorySize: 16 * blockSize})
 	data := make([]byte, 16*blockSize)
 	mustWrite(t, b, data, 0)
@@ -119,36 +123,31 @@ func TestCloseReleasesRetainedAndDeferredAllocations(t *testing.T) {
 	if stats := p.Stats(); stats.MemoryInUse != 0 || stats.MemoryAllocated < maxReuseBlocks*blockSize {
 		t.Fatalf("reuse or deferred blocks are not charged: %+v", stats)
 	}
-	if err := p.Close(); err != nil {
-		t.Fatal(err)
+	stopGroup(t, g)
+	if got := p.Stats().MemoryAllocated; got != 0 {
+		t.Fatalf("stop left %d bytes charged", got)
 	}
-	waitFor(t, "all allocations released after close", func() bool {
-		return p.Stats().MemoryAllocated == 0
-	})
 }
 
-// Each Pool owns its unmap worker: Close drains it and stops the goroutine,
-// and blocks released afterwards are unmapped inline, not leaked.
-func TestPoolCloseDrainsAndStopsUnmapper(t *testing.T) {
+// Each Pool owns its unmap worker: stopping the group drains it and ends the
+// task, and blocks released afterwards are unmapped inline, not leaked.
+func TestPoolStopDrainsAndStopsUnmapper(t *testing.T) {
 	t.Parallel()
-	p := NewPool(PoolConfig{})
+	g := newTestGroup(t)
+	p, err := NewPool(g, PoolConfig{Name: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	a := &blockAllocator{pool: p} // no reuse: every put is released
 	for range 4 {
 		a.put(a.get())
 	}
-	if err := p.Close(); err != nil {
-		t.Fatal(err)
-	}
+	stopGroup(t, g)
 	if got := p.Stats().MemoryAllocated; got != 0 {
-		t.Fatalf("closed pool still charges %d bytes", got)
+		t.Fatalf("stopped pool still charges %d bytes", got)
 	}
-	p.unmap.mu.RLock()
-	done := p.unmap.done
-	p.unmap.mu.RUnlock()
-	select {
-	case <-done:
-	default:
-		t.Fatal("unmap worker still running after Close")
+	if left := g.Snapshot(); len(left) != 0 {
+		t.Fatalf("tasks left after stop: %v", left)
 	}
 
 	a.put(a.get())

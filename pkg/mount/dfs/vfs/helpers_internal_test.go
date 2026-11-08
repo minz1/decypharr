@@ -14,7 +14,7 @@ import (
 // newTestBuffer returns a disk-backed buffer over a fresh temp file.
 func newTestBuffer(tb testing.TB, fileSize int64) *buffer.Buffer {
 	tb.Helper()
-	pool := buffer.NewPool(buffer.PoolConfig{Name: "test"})
+	pool := newTestPool(tb, buffer.PoolConfig{Name: "test"})
 	buf, err := pool.NewBuffer(buffer.Config{
 		DiskPath:  filepath.Join(tb.TempDir(), "data.bin"),
 		TotalSize: fileSize,
@@ -22,7 +22,6 @@ func newTestBuffer(tb testing.TB, fileSize int64) *buffer.Buffer {
 	if err != nil {
 		tb.Fatal(err)
 	}
-	tb.Cleanup(func() { _ = pool.Close() })
 	return buf
 }
 

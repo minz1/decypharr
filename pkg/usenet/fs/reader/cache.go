@@ -20,8 +20,7 @@ import (
 // SegmentCache publishes verified segments as immutable RAM extents or as
 // ranges in a sparse rewind file.
 type SegmentCache struct {
-	pools     *Pools
-	ownsPools bool
+	pools *Pools
 	// Segment metadata
 	segments   []SegmentMeta
 	segCount   int
@@ -164,24 +163,15 @@ func NewSegmentCache(
 	}
 
 	pools := config.Pools
-	ownsPools := pools == nil
-	if ownsPools {
-		pools = NewPools(memSize)
-	}
-	pools.mu.RLock()
-	defer pools.mu.RUnlock()
-	if pools.closed {
+	if pools == nil {
 		abort()
-		return nil, buffer.ErrClosed
+		return nil, errPoolsRequired
 	}
 	var buf *buffer.Buffer
 	if !memoryMode {
 		var err error
 		if buf, err = pools.buffers.NewBuffer(bufCfg); err != nil {
 			abort()
-			if ownsPools {
-				_ = pools.buffers.Close()
-			}
 			return nil, fmt.Errorf("create buffer: %w", err)
 		}
 	}
@@ -190,7 +180,6 @@ func NewSegmentCache(
 
 	sc := &SegmentCache{
 		pools:        pools,
-		ownsPools:    ownsPools,
 		segments:     segments,
 		segCount:     segCount,
 		segOffsets:   offsets,
@@ -802,6 +791,10 @@ func (sc *SegmentCache) ReleaseFetching(segIdx int) {
 // failure: the caller re-fetches and retries.
 var ErrSegmentEvicted = errors.New("segment evicted before read")
 
+// errPoolsRequired is returned by NewSegmentCache without Pools: the pools
+// belong to the service, which stops them.
+var errPoolsRequired = errors.New("segment cache needs the service's pools")
+
 // WaitForSegment waits for an active fetch or eviction. Empty returns
 // ErrSegmentEvicted immediately because no producer exists to wake a waiter.
 func (sc *SegmentCache) WaitForSegment(ctx context.Context, segIdx int) error {
@@ -1023,9 +1016,6 @@ func (sc *SegmentCache) Close() error {
 	}
 	if sc.diskPath != "" {
 		closeErr = errors.Join(closeErr, os.RemoveAll(sc.diskPath))
-	}
-	if sc.ownsPools {
-		closeErr = errors.Join(closeErr, sc.pools.Close())
 	}
 	return closeErr
 }

@@ -33,7 +33,7 @@ func newTestFetcher(t *testing.T, segCount int) *SegmentFetcher {
 	cfg.MaxConnections = 1
 
 	stats := &Stats{}
-	cache, err := NewSegmentCache(context.Background(), segs, cfg, stats, zerolog.Nop())
+	cache, err := newTestSegmentCache(t, segs, cfg, stats, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("NewSegmentCache: %v", err)
 	}
@@ -192,7 +192,7 @@ func newPipelineTestFetcher(
 	cfg.BodyPipelineDepth = depth
 	cfg.DownloadTimeout = 5 * time.Second
 	stats := &Stats{}
-	cache, err := NewSegmentCache(t.Context(), segments, cfg, stats, zerolog.Nop())
+	cache, err := newTestSegmentCache(t, segments, cfg, stats, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}

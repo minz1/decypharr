@@ -1,6 +1,9 @@
 package buffer
 
-import "sync"
+import (
+	"context"
+	"sync"
+)
 
 // unmapper is a Pool's background unmap worker. munmap is a TLB-shootdown
 // syscall; on Linux it can stall for tens of microseconds and, worse, the
@@ -12,14 +15,13 @@ import "sync"
 // (the queue drains continuously), only the *timing* moves off the critical
 // path, so deterministic RAM release is preserved.
 //
-// The goroutine starts with the first release and stops at Pool.Close, after
-// draining what is queued; later releases run inline. The zero value is
-// ready to use.
+// run is a task on the Pool's group. When the group stops it marks the
+// unmapper closed and drains what is queued; later releases run inline. A
+// zero unmapper has no queue, so every release runs inline.
 type unmapper struct {
 	mu     sync.RWMutex
 	ch     chan blockRelease
 	closed bool
-	done   chan struct{}
 }
 
 // unmapQueueDepth bounds pending background releases before put falls back to
@@ -30,11 +32,6 @@ const unmapQueueDepth = 256
 // full or the worker has stopped.
 func (u *unmapper) release(r blockRelease) {
 	u.mu.RLock()
-	if u.ch == nil && !u.closed {
-		u.mu.RUnlock()
-		u.start()
-		u.mu.RLock()
-	}
 	if !u.closed {
 		select {
 		case u.ch <- r:
@@ -47,37 +44,27 @@ func (u *unmapper) release(r blockRelease) {
 	r.release()
 }
 
-func (u *unmapper) start() {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	if u.ch != nil || u.closed {
-		return
-	}
-	u.ch = make(chan blockRelease, unmapQueueDepth)
-	u.done = make(chan struct{})
-	go func(ch <-chan blockRelease, done chan<- struct{}) {
-		defer close(done)
-		for r := range ch {
+// run releases queued blocks until ctx ends, then closes the unmapper and
+// drains the queue. Nothing is queued once closed is set, and every release
+// queued before it is in the channel when the drain starts.
+func (u *unmapper) run(ctx context.Context) error {
+	for {
+		select {
+		case r := <-u.ch:
 			r.release()
+		case <-ctx.Done():
+			u.mu.Lock()
+			u.closed = true
+			u.mu.Unlock()
+			for {
+				select {
+				case r := <-u.ch:
+					r.release()
+				default:
+					return nil
+				}
+			}
 		}
-	}(u.ch, u.done)
-}
-
-// close drains the queue and stops the worker.
-func (u *unmapper) close() {
-	u.mu.Lock()
-	if u.closed {
-		u.mu.Unlock()
-		return
-	}
-	u.closed = true
-	ch, done := u.ch, u.done
-	if ch != nil {
-		close(ch)
-	}
-	u.mu.Unlock()
-	if done != nil {
-		<-done
 	}
 }
 

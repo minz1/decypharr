@@ -86,7 +86,8 @@ func newBenchReader(
 	if memory {
 		retention = RetentionWindow
 	}
-	sr, err := NewStreamingReader(context.Background(), client, segs,
+	pools, _ := newTestPools(b, 256<<20)
+	sr, err := NewStreamingReader(context.Background(), client, segs, WithPools(pools),
 		WithDiskPath(diskPath),
 		WithMaxConnections(8),
 		WithPrefetchAhead(8),
@@ -178,7 +179,8 @@ func BenchmarkConfiguredBodyPipelineDepth(b *testing.B) {
 			b.SetBytes(fileSize)
 			for b.Loop() {
 				b.StopTimer()
-				sr, err := NewStreamingReader(b.Context(), client, segs,
+				pools, _ := newTestPools(b, 256<<20)
+				sr, err := NewStreamingReader(b.Context(), client, segs, WithPools(pools),
 					WithDiskPath(b.TempDir()),
 					WithMaxConnections(8),
 					WithPrefetchAhead(prefetchAhead),

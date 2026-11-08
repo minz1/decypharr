@@ -18,11 +18,10 @@ func TestDiskBackstop_ReclaimsOverLimit(t *testing.T) {
 	// gate (reserveDisk has nothing to reclaim from yet, since nothing has
 	// hit disk). The limit is dropped below after the data is safely on disk
 	// to simulate the pool budget shrinking out from under an open stream.
-	pool := NewPool(PoolConfig{
+	pool := newTestPool(t, PoolConfig{
 		Name:       "test",
 		BackWindow: 0, // punch everything behind the read head
 	})
-	defer pool.Close()
 
 	buf, err := pool.NewBuffer(Config{
 		DiskPath:  filepath.Join(dir, "stream.buf"),
@@ -71,11 +70,10 @@ func TestDiskBackstop_FiresOnEvictCallback(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
-	pool := NewPool(PoolConfig{
+	pool := newTestPool(t, PoolConfig{
 		Name:       "test",
 		BackWindow: 0,
 	})
-	defer pool.Close()
 
 	var evictCalls atomic.Int32
 	var evictedBytes atomic.Int64
@@ -121,11 +119,10 @@ func TestDiskBackstop_NoOpWithoutReadHead(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
-	pool := NewPool(PoolConfig{
+	pool := newTestPool(t, PoolConfig{
 		Name:       "test",
 		BackWindow: 0,
 	})
-	defer pool.Close()
 
 	buf, err := pool.NewBuffer(Config{
 		DiskPath:  filepath.Join(dir, "stream.buf"),
