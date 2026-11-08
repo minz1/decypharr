@@ -2,15 +2,16 @@ package dfs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
-	"sync/atomic"
-	"time"
+	"sync"
 
 	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/logger"
+	"github.com/sirrobot01/decypharr/internal/state"
 	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/pkg/manager"
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/backend"
@@ -18,19 +19,30 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/vfs"
 )
 
-// unmountTimeout bounds Stop's backend unmount.
-const unmountTimeout = 10 * time.Second
-
 // Manager manages FUSE filesystem instances with proper caching.
+//
+// Two task groups hang off the service group, in this order: "vfs" (the
+// cache) and "backend" (the owner task). The newer child stops first, so the
+// owner unmounts before the vfs closer closes the cache.
 type Manager struct {
 	manager            *manager.Manager
 	logger             zerolog.Logger
-	ready              atomic.Bool
-	backend            backend.Backend
+	state              *state.Atomic[dfsState]
 	defaultBackendType backend.Type
 	config             *fuseconfig.FuseConfig
-	vfs                *vfs.Manager
 	logs               *logger.Factory
+
+	// newBackend and closeVFS are test seams.
+	newBackend func(*vfs.Manager) (backend.Backend, error)
+	closeVFS   func() error
+
+	// mu guards the state move and group setup in Start, and Stop's read of
+	// them. It is not held while waiting for the owner.
+	mu           sync.Mutex
+	vfsGroup     *task.Group
+	backendGroup *task.Group
+	vfs          *vfs.Manager
+	backend      backend.Backend
 }
 
 // NewManager creates a new FUSE filesystem manager for the DFS settings in cfg.
@@ -42,75 +54,177 @@ func NewManager(manager *manager.Manager, cfg *config.Config, logs *logger.Facto
 		manager:            manager,
 		logs:               logs,
 		logger:             logs.New("dfs"),
+		state:              state.NewAtomic(dfsNew, dfsSuccessors),
 		defaultBackendType: backend.GetDefaultBackendType(),
 		config:             fuseConfig,
 	}
+	m.newBackend = func(v *vfs.Manager) (backend.Backend, error) {
+		return newBackend(m.defaultBackendType, v, m.config, m.logs)
+	}
+	m.closeVFS = func() error { return m.vfs.Close() }
 	return m
 }
 
-// Start starts the FUSE filesystem manager.
+// move changes the state from one value to another. An illegal edge is a bug
+// and logs an error; a legal edge lost to a concurrent mover is expected.
+func (m *Manager) move(from, to dfsState) bool {
+	if m.state.Transition(from, to) {
+		m.logger.Debug().Stringer("from", from).Stringer("to", to).Msg("dfs state moved")
+		return true
+	}
+	if !state.Legal(dfsSuccessors, from, to) {
+		m.logger.Error().Stringer("from", from).Stringer("to", to).Msg("dfs state move refused")
+		return false
+	}
+	m.logger.Debug().Stringer("from", from).Stringer("to", to).Msg("dfs state move lost")
+	return false
+}
+
+// advance moves to the state from the first of froms the machine is in, and
+// does nothing when it is in none of them.
+func (m *Manager) advance(froms []dfsState, to dfsState) {
+	for _, from := range froms {
+		if m.state.Transition(from, to) {
+			m.logger.Debug().Stringer("from", from).Stringer("to", to).Msg("dfs state moved")
+			return
+		}
+	}
+}
+
+// Start mounts the filesystem and returns once it is ready (or failed).
 func (m *Manager) Start(g *task.Group) error {
-	ctx := g.Context()
-	// Create VFS manager
+	m.mu.Lock()
+	cur := m.state.Load()
+	if cur == dfsStopping || cur == dfsStopped {
+		m.mu.Unlock()
+		return task.ErrStopped
+	}
+	if cur != dfsNew || !m.move(dfsNew, dfsStarting) {
+		m.mu.Unlock()
+		return errStarted
+	}
 
 	m.logger.Info().
 		Str("mount_path", m.config.MountPath).
 		Str("backend", string(m.defaultBackendType)).
 		Msg("Starting DFS with backend")
 
-	vfsManager, err := vfs.NewManager(g.Child("vfs"), m.manager, m.config, m.logs)
+	// Both children first: the child order is the stop order.
+	vfsG := g.Child("vfs")
+	backG := g.Child("backend")
+	m.vfsGroup, m.backendGroup = vfsG, backG
+
+	vfsManager, err := vfs.NewManager(vfsG, m.manager, m.config, m.logs)
 	if err != nil {
+		m.advance([]dfsState{dfsStarting}, dfsFailed)
+		backG.Close()
+		vfsG.Close()
+		m.mu.Unlock()
 		return fmt.Errorf("failed to create VFS manager: %w", err)
 	}
-	bck, err := newBackend(m.defaultBackendType, vfsManager, m.config, m.logs)
-	if err == nil {
-		err = bck.Mount(ctx)
-	}
+	m.vfs = vfsManager
+	bck, err := m.newBackend(vfsManager)
 	if err != nil {
-		// Nothing will ever Stop a manager that failed to start: release the
-		// VFS cache's loops, files and buffer pool now.
-		_ = vfsManager.Close()
+		// Nothing will ever mount: release the cache now.
+		m.advance([]dfsState{dfsStarting}, dfsFailed)
+		m.releaseVFS()
+		backG.Close()
+		vfsG.Close()
+		m.mu.Unlock()
 		return fmt.Errorf("failed to start DFS backend: %w", err)
 	}
-	m.vfs = vfsManager
 	m.backend = bck
 
-	m.ready.Store(true)
-	m.logger.Info().
-		Str("mount_path", m.config.MountPath).
-		Str("backend", string(m.defaultBackendType)).
-		Msg("DFS started successfully")
-	return nil
+	res := newStartResult()
+	if err = vfsG.Go("closer", m.closer(vfsG, backG)); err != nil {
+		m.abortStart(vfsG, backG)
+		m.mu.Unlock()
+		return err
+	}
+	if err = backG.GoCritical("owner", m.owner(bck, backG, res)); err != nil {
+		backG.Close()
+		m.mu.Unlock()
+		return task.ErrStopped
+	}
+	m.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(g.Context(), m.config.DaemonTimeout)
+	defer cancel()
+	select {
+	case <-res.done:
+		if res.err != nil {
+			backG.Close()
+			return res.err
+		}
+		m.logger.Info().
+			Str("mount_path", m.config.MountPath).
+			Str("backend", string(m.defaultBackendType)).
+			Stringer("state", m.state.Load()).
+			Msg("DFS started successfully")
+		return nil
+	case <-ctx.Done():
+		if g.Context().Err() != nil {
+			backG.Close()
+			return task.ErrStopped
+		}
+		m.advance([]dfsState{dfsStarting}, dfsFailed)
+		backG.Close()
+		return fmt.Errorf("DFS mount timed out after %s: %w", m.config.DaemonTimeout, ctx.Err())
+	}
 }
 
-// Stop stops the  FUSE filesystem manager.
+// abortStart releases a start whose groups refused their tasks (the parent is
+// stopping).
+func (m *Manager) abortStart(vfsG, backG *task.Group) {
+	backG.Close()
+	m.advance([]dfsState{dfsStarting}, dfsStopping)
+	m.releaseVFS()
+	m.advance([]dfsState{dfsStopping}, dfsStopped)
+	vfsG.Close()
+}
+
+// Stop stops the groups, backend first, on one budget. Under the production
+// parent-group stop they have ended already and this returns at once.
 func (m *Manager) Stop() error {
-	if m.backend == nil {
+	m.mu.Lock()
+	if m.vfsGroup == nil {
+		if m.state.Load() == dfsNew {
+			m.move(dfsNew, dfsStopped)
+		}
+		m.mu.Unlock()
 		m.logger.Info().Msg("Backend not initialized, nothing to stop")
 		return nil
 	}
+	vfsG, backG := m.vfsGroup, m.backendGroup
+	m.mu.Unlock()
+
 	m.logger.Info().
-		Str("backend", string(m.backend.Type())).
+		Str("backend", string(m.defaultBackendType)).
 		Msg("Stopping FUSE filesystem")
 
-	ctx, cancel := context.WithTimeout(context.Background(), unmountTimeout)
+	ctx, cancel := task.Detached(vfsG.Context(), stopBudget)
 	defer cancel()
-
-	// Unmount using backend, this also ensures the VFS manager is properly closed
-	if err := m.backend.Unmount(ctx); err != nil {
-		m.logger.Warn().Err(err).Msg("Backend unmount error")
+	var errs []error
+	if err := backG.Stop(ctx); err != nil {
+		errs = append(errs, err)
 	}
-	m.ready.Store(false)
-	return nil
+	if err := vfsG.Stop(ctx); err != nil {
+		errs = append(errs, err)
+	}
+	m.advance([]dfsState{dfsReady, dfsStarting, dfsFailed}, dfsStopping)
+	m.advance([]dfsState{dfsStopping}, dfsStopped)
+	return errors.Join(errs...)
 }
 
 func (m *Manager) IsReady() bool {
-	return m.ready.Load()
+	return m.state.Load() == dfsReady
 }
 
+var errNotReady = errors.New("DFS mount is not ready")
+
 func (m *Manager) Refresh(dirs []string) error {
-	if m.backend == nil {
-		return fmt.Errorf("backend not initialized")
+	if !m.IsReady() {
+		return errNotReady
 	}
 	for _, dir := range dirs {
 		m.backend.Refresh(dir)
@@ -120,15 +234,16 @@ func (m *Manager) Refresh(dirs []string) error {
 
 // Stats returns unified statistics across all DFS mounts.
 func (m *Manager) Stats() map[string]any {
-	// Aggregate stats from all mounts
-	ready := m.ready.Load()
+	cur := m.state.Load()
+	ready := cur == dfsReady
 	stats := map[string]any{
 		"enabled": true,
 		"ready":   ready,
+		"state":   cur.String(),
 		"type":    m.Type(),
 		"backend": string(m.defaultBackendType),
 	}
-	// Start sets vfs before it sets ready, so vfs is only read once ready.
+	// Start sets vfs before the owner moves to Ready, so vfs is only read once ready.
 	if ready && m.vfs != nil {
 		maps.Copy(stats, m.vfs.GetStats())
 	}
@@ -136,15 +251,15 @@ func (m *Manager) Stats() map[string]any {
 }
 
 func (m *Manager) CleanupCache() (map[string]any, error) {
-	if m.vfs == nil {
-		return nil, fmt.Errorf("VFS manager is not initialized")
+	if !m.IsReady() {
+		return nil, errNotReady
 	}
 	return m.vfs.CleanupCache(), nil
 }
 
 func (m *Manager) PurgeCache() (map[string]any, error) {
-	if m.vfs == nil {
-		return nil, fmt.Errorf("VFS manager is not initialized")
+	if !m.IsReady() {
+		return nil, errNotReady
 	}
 	return m.vfs.PurgeCache(), nil
 }

@@ -43,7 +43,12 @@ type Dir struct {
 	// modTime is atomic because Lookup refreshes it on a retained inode while
 	// Getattr may be reading it concurrently.
 	modTime atomic.Uint64
+	// onServeEnd is set on the root only: go-fuse forgets the root once the
+	// serve loops have exited, which is how the backend learns the mount ended.
+	onServeEnd func()
 }
+
+var _ = (fs.NodeOnForgetter)((*Dir)(nil))
 
 var _ = (fs.NodeLookuper)((*Dir)(nil))
 var _ = (fs.NodeReaddirer)((*Dir)(nil))
@@ -84,6 +89,14 @@ func newDir(
 	}
 	d.modTime.Store(modTime)
 	return d
+}
+
+// OnForget reports the end of the serve loop for the root; other directories
+// have no hook.
+func (d *Dir) OnForget() {
+	if d.onServeEnd != nil {
+		d.onServeEnd()
+	}
 }
 
 func (d *Dir) childPath(name string) string {
