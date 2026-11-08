@@ -3,53 +3,41 @@ package nntp
 import (
 	"context"
 	"errors"
-	"sync"
+
+	"github.com/sirrobot01/decypharr/internal/task"
 )
 
 // repairDefaultPercent is used when cfg.Repair.NNTPConnectionPercent is unset.
 const repairDefaultPercent = 20
 
-// repairPoolMinWorkers is the floor for the worker count. Even with no
-// repair-mode budget configured (BatchStat called by non-repair paths) we
-// keep a small pool around so the caller doesn't have to branch.
+// repairPoolMinWorkers is the floor for the chunk capacity. Even with no
+// repair-mode budget configured (BatchStat called by non-repair paths) a
+// couple of chunks may run at once, so the caller doesn't have to branch.
 const repairPoolMinWorkers = 2
 
-// RepairPool is a process-wide worker pool for BatchStat chunks. It
-// replaces the previous RepairBank counting-semaphore design where each
-// BatchStat call spawned its own pool sized to bank.Capacity — under M
-// concurrent BatchStat calls that produced M × bank.Capacity goroutines
-// all racing for the same bank.Capacity tokens, with most blocked.
-//
-// The new shape: one shared pool sized to bank.Capacity, BatchStat
-// submits chunks onto the shared task channel, workers pull them off in
-// FIFO order. Total goroutines is exactly len(workers), period, no
-// matter how many BatchStat calls run concurrently.
+// RepairPool bounds the BatchStat chunks running at once across every
+// BatchStat call. Each accepted chunk is a task on the pool's group, holding
+// one capacity token while it runs, so M concurrent BatchStat calls share
+// the same Capacity() and stopping the group waits for every chunk.
 type RepairPool struct {
-	tasks   chan repairTask
-	workers int
-	wg      sync.WaitGroup
-	quit    chan struct{}
-	once    sync.Once
-	// submitMu orders Submit against Stop: Submit enqueues under RLock, and
-	// Stop sets closed under Lock, so no task lands after its drain.
-	submitMu sync.RWMutex
-	closed   bool // guarded by submitMu
+	// g owns the chunk tasks; stopping it cancels and waits for them.
+	g *task.Group
+	// tokens holds one entry per running chunk; its capacity is the bound.
+	tokens chan struct{}
+	// stat runs one chunk's STATs.
+	stat func(ctx context.Context, messageIDs []string) ([]StatResult, error)
 }
 
-// repairTask describes one bounded STAT batch.
-type repairTask struct {
-	ctx        context.Context
-	messageIDs []string
-	done       func(results []StatResult, err error)
-}
-
-// errRepairPoolClosed is returned by Submit after Stop has been called.
+// errRepairPoolClosed is returned by Submit once the pool's group is stopping.
 var errRepairPoolClosed = errors.New("repair pool closed")
 
-// newRepairPool starts a worker pool sized to `percent` of the client's
-// total provider connections, with a small floor so non-repair BatchStat
-// callers still have a couple of workers available.
-func (c *Client) newRepairPool(percent int) *RepairPool {
+// errRepairChunkPanicked is the error a chunk reports when its STATs panicked.
+var errRepairChunkPanicked = errors.New("repair chunk panicked")
+
+// newRepairPool runs chunks on g, sized to `percent` of the client's total
+// provider connections, with a small floor so non-repair BatchStat callers
+// still have a couple of chunks available.
+func (c *Client) newRepairPool(g *task.Group, percent int) *RepairPool {
 	if c == nil {
 		return nil
 	}
@@ -69,33 +57,20 @@ func (c *Client) newRepairPool(percent int) *RepairPool {
 			capacity = total
 		}
 	}
-
-	p := &RepairPool{
-		// Buffered = capacity so a burst of chunk submissions from a single
-		// BatchStat doesn't immediately block on the first send. Once the
-		// buffer fills, the submitter naturally backpressures.
-		tasks:   make(chan repairTask, capacity),
-		workers: capacity,
-		quit:    make(chan struct{}),
-	}
-	p.wg.Add(capacity)
-	for range capacity {
-		go p.worker(c)
-	}
-	return p
+	return &RepairPool{g: g, tokens: make(chan struct{}, capacity), stat: c.batchStatAcrossProviders}
 }
 
 // pickStatBatchSize picks the per-chunk batch size for a BatchStat call.
 //
 // Default is the ceiling (statBatchSize). For small inputs vs. the
-// available worker pool, we shrink the chunk size so a single call can
-// keep the whole pool busy — otherwise a 100-ID call against a 30-worker
+// available capacity, we shrink the chunk size so a single call can
+// keep the whole pool busy — otherwise a 100-ID call against a 30-chunk
 // pool would only fan out to 2 chunks (chunks=ceil(100/50)) and leave
-// 28 workers idle. Floors at minSize so the per-chunk overhead doesn't
+// 28 slots idle. Floors at minSize so the per-chunk overhead doesn't
 // dominate when input is tiny.
 //
-// overcommit > 1 means we aim for more chunks than workers so a worker
-// finishing a fast chunk has a queued one waiting rather than idling
+// overcommit > 1 means we aim for more chunks than slots so a slot
+// freed by a fast chunk has a waiting one to take it rather than idling
 // while the rest of the pool finishes slower chunks.
 func pickStatBatchSize(totalIDs, workers, ceilSize, minSize int) int {
 	if workers <= 0 || totalIDs <= 0 {
@@ -126,94 +101,73 @@ func (c *Client) TotalConnections() int {
 	return total
 }
 
-// Capacity returns the number of concurrent workers in the pool.
+// Capacity returns the number of chunks that may run at once.
 func (p *RepairPool) Capacity() int {
 	if p == nil {
 		return 0
 	}
-	return p.workers
+	return cap(p.tokens)
 }
 
-// Submit hands a chunk to the pool. done is invoked on a worker goroutine
-// exactly once when the chunk has been processed (or rejected). Returns
-// an error and does NOT call done when the caller's ctx expires before a
-// worker takes the task, or when the pool has been stopped.
+// Submit waits for a free slot, then runs the chunk as a task. done is
+// called exactly once, on the chunk's task, when Submit returns nil. Submit
+// returns an error and does NOT call done when the caller's ctx ends before
+// a slot frees, or when the pool's group is stopping.
 func (p *RepairPool) Submit(ctx context.Context, msgIDs []string, done func([]StatResult, error)) error {
 	if p == nil {
 		return errRepairPoolClosed
 	}
-	task := repairTask{ctx: ctx, messageIDs: msgIDs, done: done}
-	p.submitMu.RLock()
-	defer p.submitMu.RUnlock()
-	if p.closed {
-		return errRepairPoolClosed
+	// A BatchStat that already bailed out must not spawn a chunk.
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	// quit takes priority: once Stop closes it, refuse new work even if
-	// the buffered tasks channel still has room.
+	stopping := p.g.Context().Done()
 	select {
-	case <-p.quit:
+	case <-stopping:
 		return errRepairPoolClosed
 	default:
 	}
 	select {
-	case p.tasks <- task:
-		return nil
+	case p.tokens <- struct{}{}:
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-p.quit:
+	case <-stopping:
 		return errRepairPoolClosed
 	}
+	err := p.g.Go("chunk", func(taskCtx context.Context) error {
+		p.runChunk(ctx, taskCtx, msgIDs, done)
+		return nil
+	})
+	if err != nil {
+		<-p.tokens
+		return errRepairPoolClosed
+	}
+	return nil
 }
 
-// Stop signals workers to exit and blocks until in-flight chunks finish.
-// Tasks still queued are completed with errRepairPoolClosed: BatchStat
-// waits for every accepted chunk's done callback, so abandoning them would
-// hang it forever.
-func (p *RepairPool) Stop() {
-	if p == nil {
+// runChunk runs one chunk's STATs on a ctx that ends with either the caller's
+// ctx or the chunk's task, then gives its slot back and calls done, even when
+// the STATs panic.
+func (p *RepairPool) runChunk(
+	callerCtx, taskCtx context.Context,
+	msgIDs []string,
+	done func([]StatResult, error),
+) {
+	runCtx, cancel := context.WithCancel(callerCtx)
+	stop := context.AfterFunc(taskCtx, cancel)
+	results, err := []StatResult(nil), errRepairChunkPanicked
+	defer func() {
+		stop()
+		cancel()
+		<-p.tokens
+		if done != nil {
+			done(results, err)
+		}
+	}()
+	// The caller may have cancelled while the chunk waited for its task.
+	if ctxErr := runCtx.Err(); ctxErr != nil {
+		err = ctxErr
 		return
 	}
-	p.once.Do(func() { close(p.quit) })
-	// Closing quit releases any Submit blocked on a full queue. Taking the
-	// write lock then waits out every Submit still inside its read lock (one
-	// that raced past the quit check finishes its send), and closed makes
-	// every later Submit refuse, so the drain below sees all accepted tasks.
-	p.submitMu.Lock()
-	p.closed = true
-	p.submitMu.Unlock()
-	p.wg.Wait()
-	for {
-		select {
-		case t := <-p.tasks:
-			if t.done != nil {
-				t.done(nil, errRepairPoolClosed)
-			}
-		default:
-			return
-		}
-	}
-}
-
-// worker runs queued STAT batches until the pool stops. Its worker count is the
-// shared connection cap for availability scans.
-func (p *RepairPool) worker(c *Client) {
-	defer p.wg.Done()
-	for {
-		select {
-		case <-p.quit:
-			return
-		case t := <-p.tasks:
-			if t.done == nil {
-				continue
-			}
-			// Caller may have cancelled while we were waiting. Surface
-			// it as the task's error without doing the work.
-			if err := t.ctx.Err(); err != nil {
-				t.done(nil, err)
-				continue
-			}
-			results, err := c.batchStatAcrossProviders(t.ctx, t.messageIDs)
-			t.done(results, err)
-		}
-	}
+	results, err = p.stat(runCtx, msgIDs)
 }
