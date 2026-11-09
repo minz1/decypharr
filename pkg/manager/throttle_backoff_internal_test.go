@@ -210,7 +210,7 @@ func TestThrottledSubmitWaitsOnTheProviderThatThrottledIt(t *testing.T) {
 		var ran chan string
 		m.jobQueue, ran = startRecordingQueue(t)
 		req := &ImportRequest{Magnet: &utils.Magnet{InfoHash: "hash", Name: "name"}}
-		_, err := m.SendToDebrid(t.Context(), req)
+		_, err := m.SendToDebrid(req)
 		m.handleJobError(&Job{ID: "job", Type: JobTypeTorrent, Request: req}, err)
 		m.slotFreed("realdebrid")
 		synctest.Wait()
@@ -318,7 +318,7 @@ func TestTorrentThrottledAtAddWaitsForASlot(t *testing.T) {
 		Arr:            arr.Arr{Name: "sonarr"},
 		DownloadFolder: t.TempDir(),
 	}
-	if err := m.addNewTorrent(t.Context(), req); err != nil {
+	if err := m.addNewTorrent(req); err != nil {
 		t.Fatal(err)
 	}
 	m.jobQueue.mu.Lock()
@@ -358,7 +358,7 @@ func TestWokenJobThrottledAgainWaitsAndPassesNothingOn(t *testing.T) {
 				Arr:            arr.Arr{Name: "sonarr"},
 				DownloadFolder: t.TempDir(),
 			}
-			if err := m.addNewTorrent(t.Context(), req); err != nil {
+			if err := m.addNewTorrent(req); err != nil {
 				t.Fatal(err)
 			}
 		}
