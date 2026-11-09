@@ -157,6 +157,13 @@ type Manager struct {
 	mountManager     MountManager
 	// mountGate closes when the mount starts to stop; steps that need the mount end resumable once it has.
 	mountGate *MountGate
+	// stopping ends the moment the manager starts stopping; its cause is task.ErrStopped. grace keeps a ctx alive
+	// placementStopGrace past it, for a started provider delete to finish or be cut. Both are made in New; a
+	// hand-built test manager calls initGrace to get them.
+	stopping    context.Context
+	stopCause   context.CancelCauseFunc
+	grace       context.Context
+	graceCancel context.CancelFunc
 
 	// startTime is when the manager was built; never written afterwards.
 	startTime         time.Time
@@ -201,6 +208,23 @@ type Manager struct {
 
 	// Hearsay network participation; nil when disabled.
 	hearsay *hearsay.Service
+}
+
+// placementStopGrace is how long a started provider delete may run after the
+// manager starts stopping. A delete still going when it ends is cut.
+const placementStopGrace = 5 * time.Second
+
+// initGrace makes the manager's stopping and grace contexts from parent's
+// values, never its cancel: only markStopping ends stopping. New always calls
+// it; a hand-built test manager calls it too when it must exercise the stop
+// grace. stopping is cancelled with task.ErrStopped the moment the manager
+// starts stopping; grace keeps a ctx alive placementStopGrace past that.
+func (m *Manager) initGrace(parent context.Context) {
+	if m.stopping != nil {
+		return
+	}
+	m.stopping, m.stopCause = context.WithCancelCause(context.WithoutCancel(parent))
+	m.grace, m.graceCancel = task.Grace(m.stopping, placementStopGrace)
 }
 
 var _ repair.Backend = (*Manager)(nil)
@@ -290,6 +314,7 @@ func New(g *task.Group, store *config.Store, logs *logger.Factory) (*Manager, er
 		processingEntries:      xsync.NewMap[string, struct{}](),
 		torrentSubmissions:     newTorrentSubmissionGate(torrentSubmissionDedupWindow),
 	}
+	instance.initGrace(g.Context())
 
 	if err = instance.init(); err != nil {
 		// The group may be stopped already; storage is the one thing New opened that nothing else closes.
@@ -802,7 +827,7 @@ func (m *Manager) DeleteEntry(infohash string, removePlacements bool) error {
 		return deleteErr
 	}
 	if removePlacements {
-		m.startPlacementRun(torr.Name, "all", func() { m.RemoveTorrentPlacements(torr) })
+		m.startPlacementRun(torr.Name, "all", func(context.Context) { m.RemoveTorrentPlacements(torr) })
 	}
 	m.strm.RemoveEntryAsync(torr)
 	// Refresh entry cache

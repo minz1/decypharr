@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"testing/synctest"
 
 	"github.com/rs/zerolog"
 
@@ -74,36 +75,38 @@ func allExact() map[string]reacquire.Confidence {
 // invalidates: every file of a pack is bound, so invalidating deletes the entry.
 func TestInvalidatingAPackMatchesTheArrFilesTheJobDeletes(t *testing.T) {
 	t.Parallel()
-	h, bindings := packHarness(t, allExact())
-	job := reacquire.Job{EntryID: "pack", Bindings: authorizing(bindings)}
+	synctest.Test(t, func(t *testing.T) {
+		h, bindings := packHarness(t, allExact())
+		job := reacquire.Job{EntryID: "pack", Bindings: authorizing(bindings)}
 
-	var imported, deleted []int
-	for id := range packFiles() {
-		if binding, ok := h.m.arrService.Lookup("pack", id); ok && binding.ArrFileID > 0 {
-			imported = append(imported, binding.ArrFileID)
+		var imported, deleted []int
+		for id := range packFiles() {
+			if binding, ok := h.m.arrService.Lookup("pack", id); ok && binding.ArrFileID > 0 {
+				imported = append(imported, binding.ArrFileID)
+			}
 		}
-	}
-	for _, binding := range job.Bindings {
-		deleted = append(deleted, binding.ArrFileID)
-	}
-	slices.Sort(imported)
-	slices.Sort(deleted)
-	if !slices.Equal(imported, deleted) {
-		t.Fatalf("job deletes Arr files %v, the entry's imported files are %v", deleted, imported)
-	}
+		for _, binding := range job.Bindings {
+			deleted = append(deleted, binding.ArrFileID)
+		}
+		slices.Sort(imported)
+		slices.Sort(deleted)
+		if !slices.Equal(imported, deleted) {
+			t.Fatalf("job deletes Arr files %v, the entry's imported files are %v", deleted, imported)
+		}
 
-	if err := h.m.InvalidateReacquire(context.Background(), job); err != nil {
-		t.Fatal(err)
-	}
-	drainPlacements(t, h.m)
-	if h.has("pack") {
-		t.Fatal("the invalidated entry is still stored")
-	}
-	for id := range packFiles() {
-		if _, ok := h.m.arrService.Lookup("pack", id); ok {
-			t.Errorf("binding of %s survived the invalidation", id)
+		if err := h.m.InvalidateReacquire(context.Background(), job); err != nil {
+			t.Fatal(err)
 		}
-	}
+		drainPlacements(t, h.m)
+		if h.has("pack") {
+			t.Fatal("the invalidated entry is still stored")
+		}
+		for id := range packFiles() {
+			if _, ok := h.m.arrService.Lookup("pack", id); ok {
+				t.Errorf("binding of %s survived the invalidation", id)
+			}
+		}
+	})
 }
 
 // A sibling imported with a heuristic binding is not in the job, so its Arr
@@ -111,28 +114,30 @@ func TestInvalidatingAPackMatchesTheArrFilesTheJobDeletes(t *testing.T) {
 // operator is asked.
 func TestInvalidationRefusesAnEntryWithAnImportedFileTheJobDoesNotDelete(t *testing.T) {
 	t.Parallel()
-	confidence := allExact()
-	confidence["fc"] = reacquire.ConfidenceHeuristic
-	h, bindings := packHarness(t, confidence)
-	job := reacquire.Job{EntryID: "pack", Bindings: authorizing(bindings)}
-	if len(job.Bindings) != 2 {
-		t.Fatalf("job has %d bindings, want the 2 that authorize", len(job.Bindings))
-	}
-
-	for name, run := range map[string]func() error{
-		"check":      func() error { return h.m.CheckInvalidation(context.Background(), job) },
-		"invalidate": func() error { return h.m.InvalidateReacquire(context.Background(), job) },
-	} {
-		if err := run(); !errors.Is(err, reacquire.ErrOperatorRequired) {
-			t.Fatalf("%s = %v, want an operator-required refusal", name, err)
+	synctest.Test(t, func(t *testing.T) {
+		confidence := allExact()
+		confidence["fc"] = reacquire.ConfidenceHeuristic
+		h, bindings := packHarness(t, confidence)
+		job := reacquire.Job{EntryID: "pack", Bindings: authorizing(bindings)}
+		if len(job.Bindings) != 2 {
+			t.Fatalf("job has %d bindings, want the 2 that authorize", len(job.Bindings))
 		}
-	}
-	drainPlacements(t, h.m)
-	if !h.has("pack") {
-		t.Fatal("the entry was deleted")
-	}
-	requireDeleted(t, h)
-	if _, ok := h.m.arrService.Lookup("pack", "fa"); !ok {
-		t.Fatal("a binding was removed")
-	}
+
+		for name, run := range map[string]func() error{
+			"check":      func() error { return h.m.CheckInvalidation(context.Background(), job) },
+			"invalidate": func() error { return h.m.InvalidateReacquire(context.Background(), job) },
+		} {
+			if err := run(); !errors.Is(err, reacquire.ErrOperatorRequired) {
+				t.Fatalf("%s = %v, want an operator-required refusal", name, err)
+			}
+		}
+		drainPlacements(t, h.m)
+		if !h.has("pack") {
+			t.Fatal("the entry was deleted")
+		}
+		requireDeleted(t, h)
+		if _, ok := h.m.arrService.Lookup("pack", "fa"); !ok {
+			t.Fatal("a binding was removed")
+		}
+	})
 }

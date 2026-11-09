@@ -170,6 +170,7 @@ func wireLifecycle(t *testing.T, m *Manager) {
 	t.Helper()
 	m.group = testGroup(t)
 	m.life = newLifecycle()
+	m.initGrace(m.group.Context())
 	m.ready = make(chan struct{})
 	m.startDone = make(chan struct{})
 	m.startRan = false

@@ -91,7 +91,7 @@ func (m *Manager) executeMigration(ctx context.Context, job *storage.SwitcherJob
 		}
 
 		if sourcePlacement != nil {
-			m.dropSourcePlacement(torrent, job.SourceProvider)
+			m.dropSourcePlacement(ctx, torrent, job.SourceProvider)
 		}
 	}
 

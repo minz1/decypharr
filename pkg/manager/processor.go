@@ -99,7 +99,7 @@ func (m *Manager) processTorrentJob(ctx context.Context, job *Job) error {
 		}
 		if !m.queue.Contains(job.Entry.InfoHash) {
 			applyDebridTorrentToEntry(job.Entry, debridTorrent)
-			m.stopProviderDownload(job.Entry)
+			m.stopProviderDownload(ctx, job.Entry)
 			return nil
 		}
 		job.DebridTorrent = debridTorrent
@@ -351,7 +351,9 @@ func (m *Manager) processQueuedTorrent(ctx context.Context, entry *storage.Entry
 		// Delete from debrid on error
 		if dbT != nil && dbT.ID != "" {
 			provider, id := entry.ActiveProvider, dbT.ID
-			m.startPlacementRun(entry.Name, provider, func() { m.discardSubmitted(provider, id, entry.InfoHash) })
+			m.startPlacementRun(entry.Name, provider, func(ctx context.Context) {
+				m.discardSubmitted(ctx, provider, id, entry.InfoHash)
+			})
 		}
 		return
 	}
@@ -819,8 +821,8 @@ func (m *Manager) submitToProvider(
 		if torrent != nil && torrent.ID != "" {
 			// Delete the torrent if it was not downloaded
 			provider, id := db.Config().Name, torrent.ID
-			m.startPlacementRun(debridTorrent.Name, provider, func() {
-				m.discardSubmitted(provider, id, debridTorrent.InfoHash)
+			m.startPlacementRun(debridTorrent.Name, provider, func(ctx context.Context) {
+				m.discardSubmitted(ctx, provider, id, debridTorrent.InfoHash)
 			})
 		}
 		if !reported {

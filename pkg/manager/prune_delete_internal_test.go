@@ -534,7 +534,7 @@ func TestPruneCoHolderAddedAfterSnapshotStopsProviderDelete(t *testing.T) {
 	cs := h.cands(t, "aaaa")
 	h.addEntry(t, "late", shareID("42"))
 
-	outcome, size := h.m.pruneOne(cs[0])
+	outcome, size := h.m.pruneOne(context.Background(), cs[0])
 
 	if outcome != pruneDeleted || size != 0 || h.has("aaaa") || !h.has("late") || len(h.provider.deletedIDs()) != 0 {
 		t.Fatalf("outcome=%v size=%d calls=%v", outcome, size, h.provider.deletedIDs())

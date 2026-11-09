@@ -9,12 +9,20 @@ import (
 	"github.com/sirrobot01/appendstore"
 
 	"github.com/sirrobot01/decypharr/internal/customerror"
+	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
 const pruneDay = 24 * time.Hour
 
 var errPlacementHeld = errors.New("placement held by another entry")
+
+// errPlacementStopped marks a provider deletion the manager's stop refused or cut: the torrent is left at the
+// provider, which is not a provider failure. Callers log it at INFO as "left behind (stopping)".
+var errPlacementStopped = errors.New("provider deletion stopped")
+
+// placementStopped reports whether err is a deletion the stop refused or cut, not a provider failure.
+func placementStopped(err error) bool { return errors.Is(err, errPlacementStopped) }
 
 type pruneOutcome int
 
@@ -23,9 +31,14 @@ const (
 	pruneSkipped
 	pruneFailed
 	pruneStorageFailed
+	// pruneStopped: the stop refused or cut a provider removal; the entry is kept and the batch ends quietly.
+	pruneStopped
 )
 
 func (m *Manager) recordPruneOutcome(hash string, outcome pruneOutcome) {
+	if outcome == pruneStopped {
+		return
+	}
 	if outcome != pruneFailed && outcome != pruneStorageFailed {
 		delete(m.pruneFails, hash)
 		return
@@ -44,7 +57,7 @@ func (m *Manager) pruneEntries(ctx context.Context, eligible []PruneCandidate) (
 		if ctx.Err() != nil {
 			break
 		}
-		outcome, size := m.pruneOne(c)
+		outcome, size := m.pruneOne(ctx, c)
 		m.recordPruneOutcome(c.InfoHash, outcome)
 		switch outcome {
 		case pruneDeleted:
@@ -54,6 +67,8 @@ func (m *Manager) pruneEntries(ctx context.Context, eligible []PruneCandidate) (
 			failed++
 		case pruneStorageFailed:
 			return deleted, failed + 1, freed
+		case pruneStopped:
+			return deleted, failed, freed
 		case pruneSkipped:
 		}
 	}
@@ -70,7 +85,7 @@ func (m *Manager) finishPruneBatch(deleted int) {
 	}
 }
 
-func (m *Manager) pruneOne(c PruneCandidate) (pruneOutcome, int64) {
+func (m *Manager) pruneOne(ctx context.Context, c PruneCandidate) (pruneOutcome, int64) {
 	log := m.logger.With().Str("infohash", c.InfoHash).Logger()
 	e, err := m.storage.Get(c.InfoHash)
 	if errors.Is(err, appendstore.ErrKeyNotFound) {
@@ -89,7 +104,11 @@ func (m *Manager) pruneOne(c PruneCandidate) (pruneOutcome, int64) {
 	if reason := m.pruneExclusion(e, reacquiring); reason != "" {
 		return pruneSkipped, 0
 	}
-	removed, err := m.pruneRemovePlacements(e)
+	removed, err := m.pruneRemovePlacements(ctx, e)
+	if placementStopped(err) {
+		log.Info().Err(err).Msg("prune: provider torrent left behind (stopping), keeping entry")
+		return pruneStopped, 0
+	}
 	if err != nil {
 		log.Warn().Err(err).Msg("prune: provider removal failed, keeping entry")
 		return pruneFailed, 0
@@ -123,13 +142,13 @@ func (m *Manager) clearPruneKey(hash string) {
 	}
 }
 
-func (m *Manager) pruneRemovePlacements(e *storage.Entry) (bool, error) {
+func (m *Manager) pruneRemovePlacements(ctx context.Context, e *storage.Entry) (bool, error) {
 	removed := false
 	for name, p := range e.Providers {
 		if p == nil || p.ID == "" {
 			continue
 		}
-		ran, err := m.releasePlacement(name, p, e.InfoHash)
+		ran, err := m.releasePlacement(ctx, name, p, e.InfoHash)
 		if err != nil {
 			return removed, fmt.Errorf("%s/%s: %w", name, p.ID, err)
 		}
@@ -167,12 +186,24 @@ func (m *Manager) placementHeldElsewhere(provider, id, self string) (bool, error
 
 // releasePlacement deletes one provider torrent, unless an entry other than self still holds it, and frees the slot
 // it held. Every removal of a provider torrent goes through it, with the provider's lock held so that no submission
-// or holder change slips in between the recount and the delete. It reports whether the torrent was deleted.
-func (m *Manager) releasePlacement(provider string, p *storage.ProviderEntry, self string) (bool, error) {
+// or holder change slips in between the recount and the delete. It reports whether the torrent was deleted. ctx is
+// the ctx of the task it runs in (its owner); a delete in flight runs on the manager's stop grace, not on ctx.
+func (m *Manager) releasePlacement(
+	ctx context.Context,
+	provider string,
+	p *storage.ProviderEntry,
+	self string,
+) (bool, error) {
 	id := p.ID
 	lock := m.providerLock(provider)
 	lock.Lock()
 	defer lock.Unlock()
+	// Refuse before the recount: a stopped owner, or a grace that has run out,
+	// deletes nothing, so a delete queued on the lock behind a cut one makes no
+	// provider call of its own.
+	if err := m.placementRefusal(ctx); err != nil {
+		return false, err
+	}
 	held, err := m.placementHeldElsewhere(provider, id, self)
 	if err != nil {
 		return false, fmt.Errorf("recount holders: %w", err)
@@ -187,19 +218,60 @@ func (m *Manager) releasePlacement(provider string, p *storage.ProviderEntry, se
 	if client == nil {
 		return false, errors.New("provider not configured")
 	}
-	// Placeholder until the grace ctx replaces it: a started delete must not end with a caller's ctx.
-	providerCtx := context.Background()
-	delErr := client.DeleteTorrent(providerCtx, id)
+	// A started delete runs on the stop grace, not on ctx: it survives the
+	// caller's stop for at most placementStopGrace, then is cut.
+	delCtx := m.deleteContext(ctx)
+	delErr := client.DeleteTorrent(delCtx, id)
 	if delErr == nil {
 		if p.HoldsSlot() {
 			m.slotFreed(provider)
 		}
 		return true, nil
 	}
-	if _, getErr := client.GetTorrent(providerCtx, id); errors.Is(getErr, customerror.ErrTorrentNotFound) {
+	if _, getErr := client.GetTorrent(delCtx, id); errors.Is(getErr, customerror.ErrTorrentNotFound) {
 		return true, nil
 	}
+	if delCtx.Err() != nil {
+		cause := context.Cause(delCtx)
+		m.logger.Warn().Err(cause).Str("provider", provider).Str("id", id).
+			Msg("Provider torrent may be left behind after the stop")
+		return false, fmt.Errorf("%w: %w: %w", errPlacementStopped, delErr, cause)
+	}
 	return false, delErr
+}
+
+// deleteContext is the ctx a started provider delete runs on: the manager's stop grace. A hand-built test manager
+// that never called initGrace has none; its delete then keeps ctx's values without its cancel, since a started
+// delete must not end with its caller.
+func (m *Manager) deleteContext(ctx context.Context) context.Context {
+	if m.grace != nil {
+		return m.grace
+	}
+	return context.WithoutCancel(ctx)
+}
+
+// placementRefusal reports why a provider deletion must not run: its owner ctx
+// ended or the stop grace ran out. It reports nil while both are live, so a
+// delete asked for after the stop began still gets what is left of the shared
+// grace. A refusal wraps errPlacementStopped and the cause of the ctx that
+// ended, and always names task.ErrStopped when the manager has begun stopping,
+// so a release asked for after closeStorage released the grace still reads as
+// a stop.
+func (m *Manager) placementRefusal(ctx context.Context) error {
+	var ended context.Context
+	switch {
+	case ctx.Err() != nil:
+		ended = ctx
+	case m.grace != nil && m.grace.Err() != nil:
+		ended = m.grace
+	default:
+		return nil
+	}
+	err := fmt.Errorf("%w: %w", errPlacementStopped, context.Cause(ended))
+	if m.stopping != nil && m.stopping.Err() != nil && !errors.Is(err, task.ErrStopped) {
+		err = fmt.Errorf("%w: %w", err, task.ErrStopped)
+	}
+	return err
 }
 
 func (m *Manager) removeUsenetPlacement(id string) error {
