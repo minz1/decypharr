@@ -4,13 +4,24 @@ import (
 	"context"
 	"errors"
 
+	"github.com/rs/zerolog"
 	"github.com/sirrobot01/appendstore"
 
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
-// RemoveFromProvider deletes one provider torrent for the entry self, unless another entry still holds it.
-func (m *Manager) RemoveFromProvider(providerEntry *storage.ProviderEntry, self string) error {
+// placementFailure starts the log line for a failed provider deletion: WARN with failMsg, or INFO as left behind
+// when the manager's stop refused or cut it, which is not a provider failure. It returns the event and its message.
+func (m *Manager) placementFailure(err error, failMsg string) (*zerolog.Event, string) {
+	if placementStopped(err) {
+		return m.logger.Info().Err(err), "Provider torrent left behind (stopping)"
+	}
+	return m.logger.Warn().Err(err), failMsg
+}
+
+// RemoveFromProvider deletes one provider torrent for the entry self, unless another entry still holds it. ctx is
+// the caller's ctx: the delete itself runs on the manager's stop grace, never on ctx.
+func (m *Manager) RemoveFromProvider(ctx context.Context, providerEntry *storage.ProviderEntry, self string) error {
 	if providerEntry == nil || providerEntry.ID == "" {
 		return nil
 	}
@@ -21,33 +32,34 @@ func (m *Manager) RemoveFromProvider(providerEntry *storage.ProviderEntry, self 
 	} else if m.ProviderClient(providerEntry.Provider) == nil {
 		return nil
 	}
-	_, err := m.releasePlacement(providerEntry.Provider, providerEntry, self)
+	_, err := m.releasePlacement(ctx, providerEntry.Provider, providerEntry, self)
 	return err
 }
 
 // discardSubmitted deletes a torrent that was just added at a provider and given up on, for the entry self. A
 // provider answers an add of a magnet it already holds with the existing torrent's ID, so the torrent may be one
 // another entry holds; it is released, not deleted outright. The caller has accounted for any slot the add held.
-func (m *Manager) discardSubmitted(provider, id, self string) {
+func (m *Manager) discardSubmitted(ctx context.Context, provider, id, self string) {
 	if id == "" {
 		return
 	}
 	placement := &storage.ProviderEntry{Provider: provider, ID: id, Progress: 1}
-	if _, err := m.releasePlacement(provider, placement, self); err != nil {
-		m.logger.Warn().Err(err).Str("provider", provider).Str("id", id).
-			Msg("Failed to delete a provider torrent that was given up on")
+	if _, err := m.releasePlacement(ctx, provider, placement, self); err != nil {
+		ev, msg := m.placementFailure(err, "Failed to delete a provider torrent that was given up on")
+		ev.Str("provider", provider).Str("id", id).Msg(msg)
 	}
 }
 
 // startPlacementRun starts a provider deletion as a task of the placements group. The deletion can take minutes
-// (the provider client retries) and ignores the group's context, so it never runs inline in a caller that
-// something else waits on. The group stops after the services that can start a deletion (repair, the reacquire
-// worker, the mount, the API) and before usenet and storage, which a deletion in flight reads: Stop's deadline
-// bounds the wait. It reports false, and runs nothing, once the group has closed; the refusal is logged with the
-// entry and the provider, and the provider's torrent is found again by the next sync.
-func (m *Manager) startPlacementRun(entry, provider string, run func()) bool {
-	err := m.placementsSvc.group.Go("placement-run", func(context.Context) error {
-		run()
+// (the provider client retries) and runs on the stop grace, so it never runs inline in a caller that something else
+// waits on and it survives the caller's stop for at most placementStopGrace. The group stops after the services that
+// can start a deletion (repair, the reacquire worker, the mount, the API) and before usenet and storage, which a
+// deletion in flight reads: Stop's deadline bounds the wait. run receives the placement-run task's ctx. It reports
+// false, and runs nothing, once the group has closed; the refusal is logged with the entry and the provider, and the
+// provider's torrent is found again by the next sync.
+func (m *Manager) startPlacementRun(entry, provider string, run func(ctx context.Context)) bool {
+	err := m.placementsSvc.group.Go("placement-run", func(ctx context.Context) error {
+		run(ctx)
 		return nil
 	})
 	if err != nil {
@@ -59,18 +71,21 @@ func (m *Manager) startPlacementRun(entry, provider string, run func()) bool {
 }
 
 // dropSourcePlacement takes the placements an entry has on provider away from it and deletes them there.
-func (m *Manager) dropSourcePlacement(entry *storage.Entry, provider string) {
+func (m *Manager) dropSourcePlacement(ctx context.Context, entry *storage.Entry, provider string) {
 	entry.RemoveProvider(provider, func(placement *storage.ProviderEntry) error {
-		return m.RemoveFromProvider(placement, entry.InfoHash)
+		return m.RemoveFromProvider(ctx, placement, entry.InfoHash)
 	})
 }
 
 // RemoveTorrentPlacements deletes the provider torrents of an entry that is gone, except those another entry holds.
+// It runs inline and synchronous on the placements group ctx, never a request ctx, so a client disconnect does not
+// undo a user's delete.
 func (m *Manager) RemoveTorrentPlacements(t *storage.Entry) {
+	ctx := m.placementsSvc.group.Context()
 	for _, placement := range t.Providers {
-		if err := m.RemoveFromProvider(placement, t.InfoHash); err != nil {
-			m.logger.Warn().Err(err).Str("infohash", t.InfoHash).Str("provider", placement.Provider).
-				Msg("Failed to delete a provider torrent of a removed entry")
+		if err := m.RemoveFromProvider(ctx, placement, t.InfoHash); err != nil {
+			ev, msg := m.placementFailure(err, "Failed to delete a provider torrent of a removed entry")
+			ev.Str("infohash", t.InfoHash).Str("provider", placement.Provider).Msg(msg)
 		}
 	}
 }
@@ -87,12 +102,12 @@ func (m *Manager) RemoveQueued(infohash string, deleteFiles bool) error {
 	if deleteErr := m.queue.Delete(infohash, deleteFiles, nil); deleteErr != nil {
 		return deleteErr
 	}
-	m.stopProviderDownload(entry)
+	m.stopProviderDownload(m.placementsSvc.group.Context(), entry)
 	return nil
 }
 
 // stopProviderDownload deletes the provider torrent of an entry still downloading there, so a removed grab frees its slot.
-func (m *Manager) stopProviderDownload(entry *storage.Entry) {
+func (m *Manager) stopProviderDownload(ctx context.Context, entry *storage.Entry) {
 	placement := entry.GetActiveProvider()
 	if !entry.IsTorrent() || entry.IsComplete || placement == nil || !placement.HoldsSlot() {
 		return
@@ -108,8 +123,8 @@ func (m *Manager) stopProviderDownload(entry *storage.Entry) {
 			return
 		}
 	}
-	if removeErr := m.RemoveFromProvider(placement, entry.InfoHash); removeErr != nil {
-		m.logger.Warn().Err(removeErr).Str("name", entry.Name).Str("debrid", placement.Provider).
-			Msg("Failed to delete the provider torrent of a removed download")
+	if removeErr := m.RemoveFromProvider(ctx, placement, entry.InfoHash); removeErr != nil {
+		ev, msg := m.placementFailure(removeErr, "Failed to delete the provider torrent of a removed download")
+		ev.Str("name", entry.Name).Str("debrid", placement.Provider).Msg(msg)
 	}
 }

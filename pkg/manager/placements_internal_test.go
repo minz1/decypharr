@@ -123,7 +123,7 @@ func TestSlowProviderDeleteKeepsTheStopOrderAndFitsTheBudget(t *testing.T) {
 		logs := &lockedLog{onStopped: func(service string) { record("stopped " + service) }}
 		m.logger = zerolog.New(logs)
 		client := slowDeleteProvider{delay: deleteTime, deleted: func() { record("delete finished") }}
-		m.startPlacementRun("Show.S01", "torbox", func() { _ = client.DeleteTorrent(t.Context(), "id") })
+		m.startPlacementRun("Show.S01", "torbox", func(context.Context) { _ = client.DeleteTorrent(t.Context(), "id") })
 		synctest.Wait()
 
 		started := time.Now()
@@ -140,7 +140,11 @@ func TestSlowProviderDeleteKeepsTheStopOrderAndFitsTheBudget(t *testing.T) {
 		mu.Unlock()
 		checkPlacementStopOrder(t, got)
 
-		if m.startPlacementRun("Show.S02", "realdebrid", func() { _ = client.DeleteTorrent(t.Context(), "late") }) {
+		if m.startPlacementRun(
+			"Show.S02",
+			"realdebrid",
+			func(context.Context) { _ = client.DeleteTorrent(t.Context(), "late") },
+		) {
 			t.Fatal("a delete after the placements group closed was accepted")
 		}
 		synctest.Wait()

@@ -270,7 +270,7 @@ func TestRemovingAPlacementWakesAJobWaitingOnItsProvider(t *testing.T) {
 			m.jobQueue, ran = startRecordingQueue(t)
 			m.jobQueue.WaitForSlot(&Job{ID: "waiting"}, []string{"provider"}, time.Hour)
 			placement := &storage.ProviderEntry{Provider: "provider", ID: "id", Progress: progress}
-			if err := m.RemoveFromProvider(placement, "self"); err != nil {
+			if err := m.RemoveFromProvider(context.Background(), placement, "self"); err != nil {
 				t.Fatal(err)
 			}
 			synctest.Wait()
@@ -463,7 +463,7 @@ func TestErroredTorrentWakesOneJobNotTwo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = m.RemoveFromProvider(saved.Providers["provider"], saved.InfoHash); err != nil {
+	if err = m.RemoveFromProvider(context.Background(), saved.Providers["provider"], saved.InfoHash); err != nil {
 		t.Fatal(err)
 	}
 	if got := waitingJobs(m.jobQueue); got != 1 {
@@ -498,7 +498,7 @@ func TestPruningAPlacementWakesAJobOnlyWhenItFreedASlot(t *testing.T) {
 				InfoHash:  "pruned",
 				Providers: map[string]*storage.ProviderEntry{"provider": &placement},
 			}
-			if _, err := m.pruneRemovePlacements(e); err != nil {
+			if _, err := m.pruneRemovePlacements(context.Background(), e); err != nil {
 				t.Fatal(err)
 			}
 			if got := 1 - waitingJobs(m.jobQueue); got != tc.wantWoken {

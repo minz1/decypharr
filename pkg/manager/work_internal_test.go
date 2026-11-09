@@ -3,6 +3,7 @@ package manager
 import (
 	"context"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -41,9 +42,11 @@ func closePlacements(t testing.TB, m *Manager) {
 }
 
 // drainPlacements waits for the provider deletions started so far, then gives the manager a fresh placements
-// group, so a test can start more.
+// group, so a test can start more. It runs in a synctest bubble: [synctest.Wait] lets every started run finish
+// before the group's stop cancels the runs' ctx, which a run not yet at its check would read as a stop.
 func drainPlacements(t testing.TB, m *Manager) {
 	t.Helper()
+	synctest.Wait()
 	closePlacements(t, m)
 	m.placementsSvc = &service{group: testGroup(t)}
 }

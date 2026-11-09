@@ -290,6 +290,11 @@ func (m *Manager) closeStorage(ctx context.Context) error {
 	for _, child := range m.children {
 		<-child.Done()
 	}
+	// Every child, including the placements group, has finished, so no provider
+	// delete is still running: release the stop grace's timer and context.
+	if m.graceCancel != nil {
+		m.graceCancel()
+	}
 	// The start task is a sibling of this one. A stop during migrate() or the
 	// initial calls must not close storage under it. A stop that began before
 	// Start was called refuses Start, so there is nothing to wait for.
@@ -317,6 +322,12 @@ func (m *Manager) markStoppingService() error {
 
 // markStopping moves the lifecycle to Stopping from wherever it is.
 func (m *Manager) markStopping() {
+	// First and unconditionally: arm the stop grace before the early returns,
+	// so a manager that is already Stopping still has a live grace. The cancel
+	// is idempotent. A hand-built test manager without initGrace has no grace.
+	if m.stopCause != nil {
+		m.stopCause(task.ErrStopped)
+	}
 	for {
 		current := m.life.Load()
 		if current == lifecycleStopping || current == lifecycleStopped {
