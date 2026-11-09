@@ -68,7 +68,7 @@ func (m *Manager) executeMigration(ctx context.Context, job *storage.SwitcherJob
 	}
 	job.Progress = 10
 
-	success, err := m.fixer.MoveTorrent(ctx, torrent, job.TargetProvider, false) // false = don't force re-download
+	success, err := m.fixer.MoveTorrent(torrent, job.TargetProvider, false) // false = don't force re-download
 
 	if err != nil || !success {
 		job.Status = storage.SwitcherStatusFailed
