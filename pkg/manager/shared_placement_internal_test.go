@@ -145,7 +145,7 @@ func TestReplacingAPlacementKeepsOneACoHolderUses(t *testing.T) {
 				}
 			}
 			fixer := NewFixer(m)
-			if _, moveErr := fixer.MoveTorrent(t.Context(), entry, "remaining", true); moveErr != nil {
+			if _, moveErr := fixer.MoveTorrent(entry, "remaining", true); moveErr != nil {
 				t.Fatal(moveErr)
 			}
 			drainPlacements(t, m)
@@ -373,7 +373,7 @@ func TestFixerReplacementThatFailsItsStatusCheckKeepsASharedTorrent(t *testing.T
 		h.m.clients.Store("torbox", client)
 		entry := &storage.Entry{InfoHash: "0123456789012345678901234567890123456789", Name: "release"}
 
-		if _, err := NewFixer(h.m).submitReplacement(t.Context(), client, "torbox", entry); err == nil {
+		if _, err := NewFixer(h.m).submitReplacement(client, "torbox", entry); err == nil {
 			t.Fatal("submitReplacement() = nil, want the status check failure")
 		}
 		if held {

@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/internal/task"
 	debrid "github.com/sirrobot01/decypharr/pkg/debrid/common"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/storage"
@@ -249,5 +250,203 @@ func TestResetFailureStateClearsPerDebridFailures(t *testing.T) {
 	}
 	if !fixer.IsFailedToReinsert("other", "provider") {
 		t.Fatal("reset cleared another torrent's failure")
+	}
+}
+
+// healProvider lets a test script the provider calls of a heal. A nil hook falls back to replacementProvider.
+type healProvider struct {
+	replacementProvider
+
+	submit func(ctx context.Context, t *types.Torrent) (*types.Torrent, error)
+	check  func(ctx context.Context, t *types.Torrent) (*types.Torrent, error)
+}
+
+func (c *healProvider) SubmitMagnet(ctx context.Context, t *types.Torrent) (*types.Torrent, error) {
+	if c.submit != nil {
+		return c.submit(ctx, t)
+	}
+	return c.replacementProvider.SubmitMagnet(ctx, t)
+}
+
+func (c *healProvider) CheckStatus(ctx context.Context, t *types.Torrent) (*types.Torrent, error) {
+	if c.check != nil {
+		return c.check(ctx, t)
+	}
+	return c.replacementProvider.CheckStatus(ctx, t)
+}
+
+// healHarness is a fixer over one provider whose work group a test can cancel.
+type healHarness struct {
+	fixer      *Fixer
+	entry      *storage.Entry
+	cancelWork context.CancelFunc
+	confirms   atomic.Int64 // give-up checks: giveUpOnEntry asks confirmBroken before it marks anything
+}
+
+func newHealHarness(t *testing.T, client debrid.Client) *healHarness {
+	t.Helper()
+	store, err := storage.NewStorage(t.TempDir(), storage.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	parent, cancelWork := context.WithCancel(context.WithoutCancel(t.Context()))
+	work := task.NewRoot(parent, "test", zerolog.Nop())
+	t.Cleanup(func() {
+		ctx, cancel := task.Detached(t.Context(), testStopTimeout)
+		defer cancel()
+		if stopErr := work.Stop(ctx); stopErr != nil {
+			t.Error(stopErr)
+		}
+		cancelWork()
+	})
+	h := &healHarness{cancelWork: cancelWork}
+	m := withTestConfig(t, &Manager{
+		work: work, storage: store, clients: xsync.NewMap[string, debrid.Client](), logger: zerolog.Nop(),
+		entry: newEntryCache(func(string) bool { return false }, nil, nil),
+		confirmBroken: func(context.Context, *storage.Entry) bool {
+			h.confirms.Add(1)
+			return false
+		},
+	})
+	m.clients.Store("remaining", client)
+	h.fixer = NewFixer(m)
+	h.fixer.providerOrder = []string{"remaining"}
+	h.entry = &storage.Entry{
+		InfoHash: "0123456789012345678901234567890123456789", Name: "release",
+		Protocol: config.ProtocolTorrent, ActiveProvider: "removed",
+		Providers: map[string]*storage.ProviderEntry{
+			"removed": {Provider: "removed", ID: "old", Status: types.TorrentStatusDownloaded},
+		},
+	}
+	return h
+}
+
+type fixOutcome struct {
+	result *FixResult
+	err    error
+}
+
+// fixAsync runs the heal on ctx and returns its outcome channel.
+func (h *healHarness) fixAsync(ctx context.Context) <-chan fixOutcome {
+	out := make(chan fixOutcome, 1)
+	go func() {
+		result, err := h.fixer.FixTorrent(ctx, h.entry, false)
+		out <- fixOutcome{result, err}
+	}()
+	return out
+}
+
+// A stop during a provider call is not a failed heal: no give-up (which fails the grab in the Arr), no memo, no
+// delete of a torrent that was submitted.
+func TestFixStopMidHealNoGiveUp(t *testing.T) {
+	t.Parallel()
+	for _, stage := range []string{"submit", "check"} {
+		t.Run(stage, func(t *testing.T) {
+			t.Parallel()
+			entered := make(chan struct{})
+			block := func(ctx context.Context, torrent *types.Torrent) (*types.Torrent, error) {
+				close(entered)
+				<-ctx.Done()
+				return torrent, ctx.Err()
+			}
+			client := &healProvider{}
+			if stage == "submit" {
+				client.submit = func(ctx context.Context, torrent *types.Torrent) (*types.Torrent, error) {
+					_, err := block(ctx, torrent)
+					return nil, err
+				}
+			} else {
+				client.check = block
+			}
+			h := newHealHarness(t, client)
+			// The reader's ctx ends with the stop too, as a player's does when the process goes down.
+			handed, cancel := context.WithCancel(h.fixer.manager.work.Context())
+			defer cancel()
+			out := h.fixAsync(handed)
+			<-entered
+			h.cancelWork()
+			got := <-out
+			if !errors.Is(got.err, context.Canceled) {
+				t.Fatalf("error = %v, want context.Canceled", got.err)
+			}
+			if n := h.confirms.Load(); n != 0 {
+				t.Fatalf("give-up checks = %d, want 0", n)
+			}
+			if n := h.fixer.failedToReinsert.Size(); n != 0 {
+				t.Fatalf("failure memos = %d, want 0", n)
+			}
+			if n := client.deletions.Load(); n != 0 {
+				t.Fatalf("deletes = %d, want 0", n)
+			}
+		})
+	}
+}
+
+// A config save cancels the repair run's ctx, not the work ctx: the provider call goes on and the heal completes.
+func TestFixRunCtxCancelHealCompletes(t *testing.T) {
+	t.Parallel()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	client := &healProvider{}
+	client.submit = func(ctx context.Context, torrent *types.Torrent) (*types.Torrent, error) {
+		close(entered)
+		<-release
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return client.replacementProvider.SubmitMagnet(ctx, torrent)
+	}
+	client.check = func(ctx context.Context, torrent *types.Torrent) (*types.Torrent, error) {
+		if err := ctx.Err(); err != nil {
+			return torrent, err
+		}
+		return torrent, nil
+	}
+	h := newHealHarness(t, client)
+	run, cancelRun := context.WithCancel(t.Context())
+	defer cancelRun()
+	out := h.fixAsync(run)
+	<-entered
+	cancelRun()
+	close(release)
+	got := <-out
+	if got.err != nil || got.result == nil || !got.result.Success {
+		t.Fatalf("heal = %#v, error = %v; want success", got.result, got.err)
+	}
+	if h.entry.ActiveProvider != "remaining" {
+		t.Fatalf("active provider = %q, want remaining", h.entry.ActiveProvider)
+	}
+	if n := h.fixer.failedToReinsert.Size(); n != 0 {
+		t.Fatalf("failure memos = %d, want 0", n)
+	}
+}
+
+// Only the work ctx makes a failure a stop: a provider that failed for real on a live work ctx is memoised even
+// when the reader that asked for the heal has gone.
+func TestFixReaderCancelAfterFailureStoresMemo(t *testing.T) {
+	t.Parallel()
+	var cancelReader context.CancelFunc
+	client := &healProvider{}
+	client.submit = func(context.Context, *types.Torrent) (*types.Torrent, error) {
+		cancelReader()
+		return nil, errors.New("provider refused")
+	}
+	h := newHealHarness(t, client)
+	var reader context.Context
+	reader, cancelReader = context.WithCancel(t.Context())
+	defer cancelReader()
+	got := <-h.fixAsync(reader)
+	if got.err == nil || got.result == nil || got.result.Success {
+		t.Fatalf("heal = %#v, error = %v; want a failure", got.result, got.err)
+	}
+	if !h.fixer.IsFailedToReinsert(h.entry.InfoHash, "remaining") {
+		t.Fatal("per-debrid memo was not stored")
+	}
+	if _, ok := h.fixer.failedToReinsert.Load(h.entry.InfoHash); !ok {
+		t.Fatal("whole-torrent memo was not stored")
+	}
+	if n := h.confirms.Load(); n != 1 {
+		t.Fatalf("give-up checks = %d, want 1", n)
 	}
 }
