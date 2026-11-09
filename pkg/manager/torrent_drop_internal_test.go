@@ -132,8 +132,13 @@ func addPlaced(t *testing.T, m *Manager, n int) {
 
 func syncTimes(t *testing.T, m *Manager, client debrid.Client, n int) {
 	t.Helper()
+	syncTimesCtx(context.Background(), t, m, client, n)
+}
+
+func syncTimesCtx(ctx context.Context, t *testing.T, m *Manager, client debrid.Client, n int) {
+	t.Helper()
 	for range n {
-		if err := m.doRefreshTorrents(context.Background(), "rd", client); err != nil {
+		if err := m.doRefreshTorrents(ctx, "rd", client); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -381,15 +386,16 @@ func TestTruncatedSyncLeavesMissesUnchanged(t *testing.T) {
 	}
 }
 
-// A sync cancelled mid-confirmation stops quietly; any other lookup error is
+// A sync stopped mid-confirmation (its ctx ended) stops quietly; any other lookup error is
 // worth a warning, since it means the provider is unhealthy.
 func TestConfirmDropsWarnsOnlyForProviderErrors(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		err  error
-		warn bool
+		err     error
+		stopped bool
+		warn    bool
 	}{
-		"cancelled":      {err: context.Canceled},
+		"stopped":        {err: context.Canceled, stopped: true},
 		"provider error": {err: errors.New("torbox API error: Status: 500"), warn: true},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -398,11 +404,17 @@ func TestConfirmDropsWarnsOnlyForProviderErrors(t *testing.T) {
 			var logs bytes.Buffer
 			m.logger = zerolog.New(&logs)
 			addPlaced(t, m, 1)
+			ctx, stop := context.WithCancel(t.Context())
 			client := &fakeListing{
 				torrents: []*types.Torrent{otherListed()},
-				lookup:   func(string) (*types.Torrent, error) { return nil, tc.err },
+				lookup: func(string) (*types.Torrent, error) {
+					if tc.stopped {
+						stop()
+					}
+					return nil, tc.err
+				},
 			}
-			syncTimes(t, m, client, 2)
+			syncTimesCtx(ctx, t, m, client, 2)
 			if warned := strings.Contains(logs.String(), "Could not confirm dropped torrents"); warned != tc.warn {
 				t.Fatalf("warned = %t, want %t; logs: %s", warned, tc.warn, logs.String())
 			}

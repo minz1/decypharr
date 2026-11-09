@@ -1,9 +1,12 @@
 package manager
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -421,5 +424,100 @@ func TestCompleteEntryLeavesARemovedEntryRemoved(t *testing.T) {
 
 	if m.queue.Contains(entry.InfoHash) {
 		t.Fatal("a removed entry was saved back as completed")
+	}
+}
+
+// stoppedListing stops the sync during its listing and answers with the page it had read so far and the ctx error.
+type stoppedListing struct {
+	*fakeListing
+
+	stop context.CancelFunc
+}
+
+func (l *stoppedListing) GetTorrents(ctx context.Context) ([]*types.Torrent, error) {
+	l.stop()
+	return l.torrents, ctx.Err()
+}
+
+// A listing cut by the stop is an error, not a short list (S5): it must not count the entries it lacks as misses, or
+// look them up, or drop them.
+func TestRefreshStopMidListingRecordsNoDrops(t *testing.T) {
+	t.Parallel()
+	fake := &fakeArrRecovery{}
+	m, _ := newDroppedTestManager(t, fake)
+	addPlaced(t, m, 1)
+	full := &fakeListing{torrents: []*types.Torrent{otherListed()}, lookup: goneLookup}
+	syncTimes(t, m, full, 1) // the first miss is on record
+	ctx, stop := context.WithCancel(t.Context())
+
+	err := m.doRefreshTorrents(ctx, "rd", &stoppedListing{fakeListing: full, stop: stop})
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want the stop", err)
+	}
+	if !stored(m, "hash-00") || len(fake.fails) != 0 || full.lookups() != 0 {
+		t.Fatalf("a cut listing acted on a miss: stored=%v fails=%d lookups=%d",
+			stored(m, "hash-00"), len(fake.fails), full.lookups())
+	}
+}
+
+// A lookup that finished as the sync was stopped is no confirmation: the placement is not dropped (S1).
+func TestConfirmDropsStoppedLookupDropsNothing(t *testing.T) {
+	t.Parallel()
+	fake := &fakeArrRecovery{}
+	m, _ := newDroppedTestManager(t, fake)
+	addPlaced(t, m, 1)
+	ctx, stop := context.WithCancel(t.Context())
+	client := &fakeListing{torrents: []*types.Torrent{otherListed()}, lookup: func(string) (*types.Torrent, error) {
+		stop()
+		return nil, customerror.ErrTorrentNotFound
+	}}
+	syncTimes(t, m, client, 1) // the first miss is on record
+
+	syncTimesCtx(ctx, t, m, client, 1)
+
+	if !stored(m, "hash-00") || len(fake.fails) != 0 {
+		t.Fatalf("a stopped lookup dropped the entry: stored=%v fails=%d", stored(m, "hash-00"), len(fake.fails))
+	}
+}
+
+// stoppedUpdateProvider fails every file update the way a provider does once the sync's ctx has ended.
+type stoppedUpdateProvider struct {
+	debrid.Client
+}
+
+func (stoppedUpdateProvider) UpdateTorrent(ctx context.Context, _ *types.Torrent) error {
+	return fmt.Errorf("update: %w", ctx.Err())
+}
+
+// A sync stopped with torrents left to process drains them quietly: the stop is no failure of each torrent, so it logs
+// no ERROR per remaining one (S5).
+func TestProcessNewTorrentsCancelledDrainsQuietly(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	m := withTestConfig(t, &Manager{
+		clients: xsync.NewMap[string, debrid.Client](),
+		logger:  zerolog.New(zerolog.SyncWriter(&logs)),
+	})
+	m.clients.Store("provider", stoppedUpdateProvider{})
+	var pending []*types.Torrent
+	for i := range 40 {
+		id := fmt.Sprintf("id-%02d", i)
+		pending = append(pending, &types.Torrent{ID: id, InfoHash: id, Debrid: "provider"})
+	}
+	ctx, stop := context.WithCancel(t.Context())
+	stop()
+
+	if err := m.processNewTorrents(ctx, "provider", pending); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := strings.Count(logs.String(), `"level":"error"`); got > 1 {
+		t.Fatalf(
+			"a stopped sync of %d torrents logged %d ERRORs, want at most 1:\n%s",
+			len(pending),
+			got,
+			logs.String(),
+		)
 	}
 }

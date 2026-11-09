@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/puzpuzpuz/xsync/v4"
@@ -259,5 +260,93 @@ func TestAProviderWaitIsLoggedOncePerChange(t *testing.T) {
 	m.processQueuedTorrent(t.Context(), entry)
 	if !strings.Contains(logs.String(), `"level":"error"`) || !strings.Contains(logs.String(), `"waited":`) {
 		t.Fatalf("the give-up logged no ERROR with the wait's age:\n%s", logs.String())
+	}
+}
+
+// pendingStatusProvider holds a status check until its ctx ends, then fails it the way a provider's Wait does when
+// stopped: with the provider-pending error and the ctx error.
+type pendingStatusProvider struct {
+	debrid.Client
+
+	wait     error
+	checking chan struct{}
+	deleted  atomic.Int64
+}
+
+func (p *pendingStatusProvider) CheckStatus(ctx context.Context, t *types.Torrent) (*types.Torrent, error) {
+	close(p.checking)
+	<-ctx.Done()
+	return t, errors.Join(p.wait, ctx.Err())
+}
+
+func (p *pendingStatusProvider) DeleteTorrent(context.Context, string) error {
+	p.deleted.Add(1)
+	return nil
+}
+
+// pendingEntryManager is a manager with one queued torrent that has waited 7h on a provider whose status check holds
+// until it is stopped.
+func pendingEntryManager(
+	t *testing.T,
+	fake *fakeArrRecovery,
+	provider *pendingStatusProvider,
+) (*Manager, *storage.Entry) {
+	t.Helper()
+	m, entry := newDroppedTestManager(t, fake)
+	withLocalArr(m)
+	m.processingEntries = xsync.NewMap[string, struct{}]()
+	m.store = testConfigStore(t, nil)
+	m.clients.Store("provider", provider)
+	entry.Protocol, entry.ActiveProvider, entry.State = config.ProtocolTorrent, "provider", storage.EntryStateDownloading
+	entry.Providers = map[string]*storage.ProviderEntry{
+		"provider": {Provider: "provider", ID: "id", AddedAt: time.Now().Add(-7 * time.Hour)},
+	}
+	if err := m.queue.Update(entry); err != nil {
+		t.Fatal(err)
+	}
+	return m, entry
+}
+
+// A stop is no verdict (S1): a status check cut by the stop leaves the entry as it is, even one that has waited past
+// its limit. Its grab is not failed, it is not marked errored, and the provider's torrent is not deleted.
+func TestQueuedStopDuringCheckStatusLeavesEntry(t *testing.T) {
+	t.Parallel()
+	for name, wait := range map[string]error{
+		"provider wait":        customerror.ErrProviderStatusTimeout,
+		"magnet not converted": notConverted(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				fake := &fakeArrRecovery{}
+				provider := &pendingStatusProvider{wait: wait, checking: make(chan struct{})}
+				m, entry := pendingEntryManager(t, fake, provider)
+				ctx, stop := context.WithCancel(t.Context())
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					m.processQueuedTorrent(ctx, entry)
+				}()
+				<-provider.checking
+				stop()
+				<-done
+				drainPlacements(t, m)
+
+				saved, err := m.queue.GetTorrent(entry.InfoHash)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if saved.State != storage.EntryStateDownloading || saved.LastError != "" {
+					t.Fatalf("state = %q, last error %q; want the entry left downloading", saved.State, saved.LastError)
+				}
+				if len(fake.fails) != 0 || provider.deleted.Load() != 0 {
+					t.Fatalf(
+						"FailDownload calls = %v, provider deletes = %d; want none",
+						fake.fails,
+						provider.deleted.Load(),
+					)
+				}
+			})
+		})
 	}
 }

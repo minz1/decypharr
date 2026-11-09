@@ -13,9 +13,11 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
+	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/debrid/common"
 	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
+	"github.com/sirrobot01/decypharr/pkg/hearsay"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 	"github.com/sirrobot01/decypharr/pkg/usenet"
 )
@@ -36,12 +38,18 @@ func (m *Manager) AddNewTorrent(ctx context.Context, importReq *ImportRequest) e
 		if _, err := m.queue.GetTorrent(importReq.Magnet.InfoHash); err == nil {
 			return nil
 		}
-		return m.addNewTorrent(ctx, importReq)
+		return m.addNewTorrent(importReq)
 	})
 }
 
-func (m *Manager) addNewTorrent(ctx context.Context, importReq *ImportRequest) error {
-	debridTorrent, err := m.SendToDebrid(ctx, importReq)
+// stopped reports a ctx that has ended. A provider call whose ctx has ended was cut by a stop (or its owner's end),
+// which says nothing about the torrent: its caller changes no state and records no failure.
+func stopped(ctx context.Context) bool { return ctx.Err() != nil }
+
+// addNewTorrent submits to the provider on the manager's work ctx, never the request's: a client that disconnects
+// mid-submit must not leave a submitted torrent with no queue entry.
+func (m *Manager) addNewTorrent(importReq *ImportRequest) error {
+	debridTorrent, err := m.SendToDebrid(importReq)
 	if err != nil {
 		if isTooManyActiveDownloads(err) {
 			m.logger.Warn().Msgf("Too many active downloads, marking as queued: %s", importReq.Magnet.Name)
@@ -63,6 +71,13 @@ func (m *Manager) addNewTorrent(ctx context.Context, importReq *ImportRequest) e
 	job.Entry = torrent
 	job.DebridTorrent = debridTorrent
 	if submitJobErr := m.SubmitJob(job); submitJobErr != nil {
+		if errors.Is(submitJobErr, task.ErrStopped) {
+			// The queue closed with the stop: the entry stays queued and the next start's restore drives it.
+			m.logger.Info().
+				Str("name", torrent.Name).
+				Msg("Manager is stopping; the torrent stays queued for the next start")
+			return nil
+		}
 		m.failEntry(torrent, submitJobErr)
 		return fmt.Errorf("failed to queue torrent: %w", submitJobErr)
 	}
@@ -93,7 +108,7 @@ func (m *Manager) processTorrentJob(ctx context.Context, job *Job) error {
 		if job.Request == nil {
 			return fmt.Errorf("torrent job has no request or processing payload")
 		}
-		debridTorrent, err := m.SendToDebrid(ctx, job.Request)
+		debridTorrent, err := m.SendToDebrid(job.Request)
 		if err != nil {
 			return fmt.Errorf("failed to submit torrent to debrid: %w", err)
 		}
@@ -298,6 +313,25 @@ func transientStatusError(err error) bool {
 	return customerror.IsRetriableError(err) && !errors.Is(err, customerror.ErrTorrentNotCached)
 }
 
+// statusProbe is the provider torrent a status check of the entry's active placement asks about.
+func (m *Manager) statusProbe(entry *storage.Entry, placement *storage.ProviderEntry) *debridTypes.Torrent {
+	magnet, err := utils.GetMagnetInfo(entry.Magnet, m.store.Get().AlwaysRmTrackerUrls)
+	if err != nil {
+		magnet = utils.ConstructMagnet(entry.InfoHash, entry.Name)
+	}
+	return &debridTypes.Torrent{
+		ID:               placement.ID,
+		Debrid:           entry.ActiveProvider,
+		InfoHash:         entry.InfoHash,
+		Magnet:           magnet,
+		Name:             entry.Name,
+		OriginalFilename: entry.OriginalFilename,
+		Size:             entry.Size,
+		Files:            make(map[string]debridTypes.File),
+		DownloadUncached: entry.DownloadUncached,
+	}
+}
+
 func (m *Manager) processQueuedTorrent(ctx context.Context, entry *storage.Entry) {
 	defer m.processingEntries.Delete(entry.InfoHash)
 	placement := entry.GetActiveProvider()
@@ -314,27 +348,16 @@ func (m *Manager) processQueuedTorrent(ctx context.Context, entry *storage.Entry
 		return
 	}
 
-	magnet, err := utils.GetMagnetInfo(entry.Magnet, m.store.Get().AlwaysRmTrackerUrls)
-	if err != nil {
-		magnet = utils.ConstructMagnet(entry.InfoHash, entry.Name)
-	}
-
-	debridTorrent := &debridTypes.Torrent{
-		ID:               placement.ID,
-		Debrid:           entry.ActiveProvider,
-		InfoHash:         entry.InfoHash,
-		Magnet:           magnet,
-		Name:             entry.Name,
-		OriginalFilename: entry.OriginalFilename,
-		Size:             entry.Size,
-		Files:            make(map[string]debridTypes.File),
-		DownloadUncached: entry.DownloadUncached,
-	}
-
-	dbT, err := client.CheckStatus(ctx, debridTorrent)
+	dbT, err := client.CheckStatus(ctx, m.statusProbe(entry, placement))
 	if !m.queue.Contains(entry.InfoHash) {
 		m.queue.waits.observe(entry.InfoHash, waitNone)
 		return // removed while the status check ran
+	}
+	// A stop is no verdict on the release: the entry stays as it is for the next pass or generation, whatever
+	// the check made of the stop, and the provider's torrent is kept.
+	if stopped(ctx) {
+		m.logger.Debug().Str("name", entry.Name).Msg("Stopped during the status check; entry left as it is")
+		return
 	}
 	if m.retryNextPass(entry, placement, err) {
 		return
@@ -358,7 +381,7 @@ func (m *Manager) processQueuedTorrent(ctx context.Context, entry *storage.Entry
 		return
 	}
 
-	debridTorrent = dbT
+	debridTorrent := dbT
 
 	if debridTorrent == nil {
 		m.logger.Error().Str("name", entry.Name).Msg("Provider entry not found")
@@ -688,8 +711,11 @@ func addEntryFiles(entry *storage.Entry, debridTorrent *debridTypes.Torrent) {
 	}
 }
 
-// SendToDebrid submits a magnet to debrid service(s) - replaces debrid.Parse.
-func (m *Manager) SendToDebrid(ctx context.Context, importRequest *ImportRequest) (*debridTypes.Torrent, error) {
+// SendToDebrid submits a magnet to debrid service(s) - replaces debrid.Parse. The provider calls run on the manager's
+// work ctx, not on a caller's: a submit belongs to the manager, and the torrent it leaves at the provider must get a
+// queue entry whatever happens to the request that asked.
+func (m *Manager) SendToDebrid(importRequest *ImportRequest) (*debridTypes.Torrent, error) {
+	ctx := m.work.Context()
 	debridTorrent := &debridTypes.Torrent{
 		InfoHash: importRequest.Magnet.InfoHash,
 		Magnet:   importRequest.Magnet,
@@ -753,6 +779,27 @@ type throttledError struct {
 func (e *throttledError) Error() string { return e.err.Error() }
 func (e *throttledError) Unwrap() error { return e.err }
 
+// keptSubmission is the submit result of a stopped add, queued as still downloading. The result need not name its
+// provider (AllDebrid sets only the ID), and an entry with no active provider is never rebuilt into a job, so it takes
+// the provider, hash and DownloadUncached choice from the request's torrent.
+func keptSubmission(submitted *debridTypes.Torrent, provider string, input *debridTypes.Torrent) *debridTypes.Torrent {
+	submitted.Status = debridTypes.TorrentStatusDownloading
+	submitted.Debrid = provider
+	submitted.InfoHash = input.InfoHash
+	submitted.DownloadUncached = input.DownloadUncached
+	return submitted
+}
+
+// reportRefusedSubmit tells hearsay about a submit that returned no torrent: only the provider's block counts as a
+// verdict, and not one that came with a stop.
+func (m *Manager) reportRefusedSubmit(ctx context.Context, decision hearsay.AddDecision, err error) {
+	if errors.Is(err, customerror.ErrTorrentBlocked) && !stopped(ctx) {
+		m.hearsay.RecordAdd(decision, false)
+		return
+	}
+	m.hearsay.DiscardAdd(decision)
+}
+
 // submitToProvider submits the magnet to one provider and checks it landed,
 // recording the cache outcome with hearsay.
 func (m *Manager) submitToProvider(
@@ -787,11 +834,7 @@ func (m *Manager) submitToProvider(
 
 	dbt, err := db.SubmitMagnet(ctx, debridTorrent)
 	if err != nil || dbt == nil || dbt.ID == "" {
-		if errors.Is(err, customerror.ErrTorrentBlocked) {
-			m.hearsay.RecordAdd(decision, false)
-		} else {
-			m.hearsay.DiscardAdd(decision)
-		}
+		m.reportRefusedSubmit(ctx, decision, err)
 		if err == nil {
 			err = fmt.Errorf("%s returned an empty torrent after submission", db.Config().Name)
 		}
@@ -800,6 +843,13 @@ func (m *Manager) submitToProvider(
 	_logger.Info().Str("id", dbt.ID).Msgf("Entry: %s submitted to %s", dbt.Name, db.Config().Name)
 
 	torrent, err := db.CheckStatus(ctx, dbt)
+	if stopped(ctx) {
+		// A stop is no verdict on a torrent the provider already holds, whatever the check made of it: queue the
+		// submit result as still downloading and keep it at the provider.
+		m.hearsay.DiscardAdd(decision)
+		_logger.Info().Str("id", dbt.ID).Err(err).Msg("Stopped after the submit; queued to keep checking")
+		return keptSubmission(dbt, db.Config().Name, debridTorrent), nil
+	}
 	if errors.Is(err, customerror.ErrProviderStatusTimeout) && torrent != nil && torrent.ID != "" {
 		// The provider has not finished converting the magnet or linking its
 		// files. That is no verdict on the release: queue the torrent as still

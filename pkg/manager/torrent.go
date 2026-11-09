@@ -246,7 +246,8 @@ func listedAbsence(provider string, entry *storage.Entry, listedIDs map[string]s
 // drops the placement. At most maxDropLookupsPerSync lookups run per call and
 // at most maxDropRecoveriesPerSync drops succeed; the rest stay misses for a
 // later sync, as do entries whose Arr recovery failed. A lookup error other
-// than not-found means the provider is unhealthy and ends the lookups. An
+// than not-found means the provider is unhealthy and ends the lookups; so does
+// the stop of ctx, quietly and before any answer is read. An
 // entry whose recovery keeps failing goes behind the others.
 func (m *Manager) confirmDrops(ctx context.Context, provider string, client debrid.Client, changes *torrentChanges) {
 	// refreshSG serialises syncs per provider, so this map needs no lock.
@@ -275,6 +276,10 @@ func (m *Manager) confirmDrops(ctx context.Context, provider string, client debr
 		}
 		id := entry.Providers[provider].ID
 		_, err := client.GetTorrent(ctx, id)
+		if stopped(ctx) {
+			// A lookup cut by the stop confirms nothing, whatever it answered: the miss stays for the next sync.
+			return
+		}
 		switch {
 		case err == nil:
 			delete(changes.misses, entry.InfoHash)
@@ -286,9 +291,6 @@ func (m *Manager) confirmDrops(ctx context.Context, provider string, client debr
 			delete(changes.misses, entry.InfoHash)
 			applied++
 		default:
-			if errors.Is(err, context.Canceled) {
-				return
-			}
 			m.logger.Warn().Err(err).Str("debrid", provider).Str("id", id).
 				Int("deferred", len(changes.confirm)-i).
 				Msg("Could not confirm dropped torrents; will retry next sync")
@@ -358,7 +360,7 @@ func (m *Manager) processNewTorrents(ctx context.Context, provider string, newTo
 
 	var processWg sync.WaitGroup
 	var batchWg sync.WaitGroup
-	var processed atomic.Int64
+	var processed, drained atomic.Int64
 	totalTorrents := len(newTorrents)
 
 	// Batch writer goroutine
@@ -372,9 +374,15 @@ func (m *Manager) processNewTorrents(ctx context.Context, provider string, newTo
 	for range workers {
 		processWg.Go(func() {
 			for t := range workChan {
+				if stopped(ctx) {
+					drained.Add(1) // the stop is no failure of this torrent; the next sync finds it again
+					continue
+				}
 				mt, err := m.processSyncTorrent(ctx, t)
 				switch {
 				case errors.Is(err, errSyncSkipped):
+				case err != nil && stopped(ctx):
+					drained.Add(1)
 				case err != nil:
 					m.logger.Error().Err(err).Str("debrid", provider).Msgf("Failed to process torrent %s", t.ID)
 				default:
@@ -399,6 +407,9 @@ func (m *Manager) processNewTorrents(ctx context.Context, provider string, newTo
 	processWg.Wait()
 	close(batchChan)
 	batchWg.Wait()
+	if left := drained.Load(); left > 0 {
+		m.logger.Info().Str("debrid", provider).Int64("left", left).Msg("Sync stopped; torrents left for the next sync")
+	}
 
 	// Check if batch writer encountered an error
 	select {
