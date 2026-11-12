@@ -38,10 +38,9 @@ const (
 type supKind uint8
 
 const (
-	// supRcdReady: rcd answers.
-	supRcdReady supKind = iota + 1
-	// supRcdDied: rcd exited while Ready.
-	supRcdDied
+	// supRcdChanged: the rcd state changed. It carries nothing: the handler reads the rcd snapshot when it runs, so
+	// an exit and the next Ready coalesced into one are still both seen.
+	supRcdChanged supKind = iota + 1
 	// supMountDone: a mount attempt ended, err says how.
 	supMountDone
 	// supProbeDone: a probe ended, probe and err say how.
@@ -59,16 +58,23 @@ const (
 	supBackendStopped
 )
 
-// supClass makes a table change an observation, which a full mailbox coalesces; the rest are commands.
+// supClass makes a table change and an rcd change observations, which a full mailbox coalesces; the rest are
+// commands.
 func supClass(msg supMsg) keyed.Class {
-	if msg.kind == supTableChanged {
+	if msg.kind == supTableChanged || msg.kind == supRcdChanged {
 		return keyed.Observation
 	}
 	return keyed.Command
 }
 
-// supCoalesce makes queued table changes one: the handler reads the table, so one read sees them all.
-func supCoalesce(supMsg) string { return "table" }
+// supCoalesce makes queued changes of one kind one: the handler reads the table or the rcd snapshot, so one read
+// sees them all. The two kinds never overwrite each other.
+func supCoalesce(msg supMsg) string {
+	if msg.kind == supRcdChanged {
+		return "rcd"
+	}
+	return "table"
+}
 
 // probeKind is what a probe found.
 type probeKind uint8
@@ -118,6 +124,8 @@ type supState struct {
 	tableCount int
 	// backendStopped says the WebDAV server stopped; once set it stays, and an up mount never stays Mounted.
 	backendStopped bool
+	// rcdGen is the rcd generation the mount was started through; 0 before the first Ready.
+	rcdGen uint64
 }
 
 // nextProbe is when an up mount is probed next. A watched table reports a detach itself, so the probe is only a
@@ -151,10 +159,8 @@ func (s mountSupervisor) Handle(
 	fx *keyed.Effects[struct{}, supMsg],
 ) {
 	switch msg.kind {
-	case supRcdReady:
-		s.rcdReady(ctx, st, fx)
-	case supRcdDied:
-		s.rcdDied(ctx, st, fx)
+	case supRcdChanged:
+		s.rcdChanged(ctx, st, fx)
 	case supMountDone:
 		if s.current(st, msg) {
 			st.hasChild = false
@@ -168,7 +174,7 @@ func (s mountSupervisor) Handle(
 	case supRetryDue:
 		if s.current(st, msg) {
 			st.hasTimer = false
-			if s.m.view.Load().state == mountMounting {
+			if s.m.view.Load().state == mountMounting && s.rcdUp(ctx, st, fx) {
 				s.spawnMount(st, fx, true, true)
 			}
 		}
@@ -217,13 +223,47 @@ func nextBackoff(b time.Duration) time.Duration {
 	return min(b*failedBackoffFactor, failedBackoffMax)
 }
 
-func (s mountSupervisor) rcdReady(ctx context.Context, st *supState, fx *keyed.Effects[struct{}, supMsg]) {
+// rcdChanged applies the rcd snapshot: a mount made through an rcd that is gone or replaced goes back to Waiting,
+// then a Ready rcd starts the waiting mount.
+func (s mountSupervisor) rcdChanged(ctx context.Context, st *supState, fx *keyed.Effects[struct{}, supMsg]) {
+	snap := s.m.owner.snapshot()
+	if snap.state != rcdReady || snap.gen != st.rcdGen {
+		s.rcdDied(ctx, st, fx)
+	}
+	if snap.state == rcdReady {
+		s.rcdReady(ctx, st, fx, snap.gen)
+	}
+}
+
+// rcdCurrent reports whether the rcd the mount was started through is still the Ready one.
+func (s mountSupervisor) rcdCurrent(st *supState) bool {
+	snap := s.m.owner.snapshot()
+	return snap.state == rcdReady && snap.gen == st.rcdGen
+}
+
+// rcdUp guards every spawn but the rcd report's own: when the rcd is gone or replaced, it moves the mount to Waiting
+// for the rcd report to restart it, and says no.
+func (s mountSupervisor) rcdUp(ctx context.Context, st *supState, fx *keyed.Effects[struct{}, supMsg]) bool {
+	if s.rcdCurrent(st) {
+		return true
+	}
+	s.rcdDied(ctx, st, fx)
+	return false
+}
+
+func (s mountSupervisor) rcdReady(
+	ctx context.Context,
+	st *supState,
+	fx *keyed.Effects[struct{}, supMsg],
+	gen uint64,
+) {
 	cur := s.m.view.Load()
 	if cur.state != mountWaiting {
 		s.m.logger.Debug().Str("mount", cur.state.String()).Msg("rcd ready, mount not waiting")
 		return
 	}
 	st.attempts = 0
+	st.rcdGen = gen
 	// A fresh rcd holds no mount, so its first attempt has nothing to forget. Before any attempt, the mount point is
 	// detached only when the table shows a FUSE mount there (a killed process's dead endpoint): a bind or fstab
 	// mount at the path is the user's and must stay.
@@ -309,6 +349,9 @@ func (s mountSupervisor) probeDone(
 		s.degradedProbe(ctx, st, fx, kind, err)
 	case mountFailed:
 		if kind == probeOK || kind == probeMountGone {
+			if !s.rcdUp(ctx, st, fx) {
+				return
+			}
 			st.attempts = 0
 			if s.enter(ctx, st, fx, mountMounting, nil) {
 				s.spawnMount(st, fx, true, true)
@@ -345,6 +388,9 @@ func (s mountSupervisor) degradedProbe(
 	case probeMountGone:
 		st.gone++
 		if st.gone >= goneToRecover {
+			if !s.rcdUp(ctx, st, fx) {
+				return
+			}
 			st.attempts, st.gone = 0, 0
 			if s.enter(ctx, st, fx, mountMounting, withErr(err)) {
 				s.spawnMount(st, fx, true, true)
@@ -448,6 +494,9 @@ func (s mountSupervisor) tableChanged(ctx context.Context, st *supState, fx *key
 	}
 	if n >= st.tableCount {
 		s.m.logger.Debug().Int("fuse_entries", n).Msg("Mount table changed; our mount is still there")
+		return
+	}
+	if !s.rcdUp(ctx, st, fx) {
 		return
 	}
 	st.attempts, st.gone = 0, 0

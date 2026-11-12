@@ -306,11 +306,11 @@ func (m *Manager) closeLog() error {
 	return m.rcdLog.Close()
 }
 
-// onRcdReady tells the supervisor that rcd answers.
-func (m *Manager) onRcdReady() { m.sendSup(supRcdReady) }
+// onRcdReady tells the supervisor the rcd state changed; it reads the snapshot itself.
+func (m *Manager) onRcdReady() { m.sendSup(supRcdChanged) }
 
-// onRcdExit tells the supervisor that rcd exited, taking the mount with it.
-func (m *Manager) onRcdExit() { m.sendSup(supRcdDied) }
+// onRcdExit tells the supervisor the rcd state changed: rcd exited, taking the mount with it.
+func (m *Manager) onRcdExit() { m.sendSup(supRcdChanged) }
 
 // IsMounted reports a mount that serves: Mounted, or Degraded after a failed probe.
 func (m *Manager) IsMounted() bool {
@@ -320,7 +320,7 @@ func (m *Manager) IsMounted() bool {
 
 // IsReady returns true while rcd answers.
 func (m *Manager) IsReady() bool {
-	return m.owner.state.Load() == rcdReady
+	return m.owner.snapshot().state == rcdReady
 }
 
 // Refresh refreshes directories in the VFS cache.

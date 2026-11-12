@@ -81,7 +81,10 @@ type rcdOwner struct {
 	closeLog func() error
 	logger   zerolog.Logger
 
-	state    *state.Atomic[rcdState]
+	state *state.Atomic[rcdState]
+	// snap is what readers outside the owner see: the state and its Ready generation as one value, published after
+	// every move and before the callbacks run.
+	snap     atomic.Pointer[rcdSnapshot]
 	restarts atomic.Uint64
 	// group is the rcd group: the per-process reapers run on it.
 	group *task.Group
@@ -89,8 +92,18 @@ type rcdOwner struct {
 	stopSlice atomic.Pointer[task.Slice]
 }
 
+// rcdSnapshot is the rcd state with its generation: gen counts the moves to Ready, so a reader can tell the rcd a
+// mount was made through from a later one.
+type rcdSnapshot struct {
+	state rcdState
+	gen   uint64
+}
+
+// snapshot is the last published rcd state and generation.
+func (o *rcdOwner) snapshot() rcdSnapshot { return *o.snap.Load() }
+
 func newRcdOwner(group *task.Group, logger zerolog.Logger) *rcdOwner {
-	return &rcdOwner{
+	o := &rcdOwner{
 		spawn:      func() (rcdProcess, error) { return nil, errors.New("rcd owner has no spawn") },
 		ping:       func(context.Context) error { return errors.New("rcd owner has no ping") },
 		onReady:    func() {},
@@ -101,6 +114,8 @@ func newRcdOwner(group *task.Group, logger zerolog.Logger) *rcdOwner {
 		state:      state.NewAtomic(rcdNew, rcdSuccessors),
 		group:      group,
 	}
+	o.snap.Store(&rcdSnapshot{state: rcdNew})
+	return o
 }
 
 // setStopSlice gives the owner the generation's mount slice; nil clears it.
@@ -123,6 +138,11 @@ func (o *rcdOwner) slice() task.Slice {
 // transition is the only writer of state. A refused move is a bug in the owner.
 func (o *rcdOwner) transition(from, to rcdState) bool {
 	if o.state.Transition(from, to) {
+		gen := o.snapshot().gen
+		if to == rcdReady {
+			gen++
+		}
+		o.snap.Store(&rcdSnapshot{state: to, gen: gen})
 		o.logger.Debug().Str("from", from.String()).Str("to", to.String()).Msg("rcd state")
 		return true
 	}
@@ -156,25 +176,18 @@ func (o *rcdOwner) run(ctx context.Context) error {
 		case endFailed:
 		}
 
-		if res.from == rcdReady {
-			o.onExit()
-		}
 		if res.stable {
 			failures = 0
 		}
 		failures++
-		if res.att != nil {
-			// A failed attempt with a live process stops it before the next one.
-			if err := o.stopProcess(res.att); err != nil {
-				return o.stopSequence(res.from, nil, err)
-			}
+		target, err := o.leave(res, failures)
+		if err != nil {
+			return o.stopSequence(target, nil, err)
 		}
-		if failures > rcdMaxRestarts {
+		if target == rcdFailed {
 			o.logger.Error().Int("failures", failures).Msg("rcd keeps failing, giving up")
-			o.transition(res.from, rcdFailed)
 			return o.parked(ctx)
 		}
-		o.transition(res.from, rcdRestarting)
 		o.restarts.Add(1)
 		backoff := min(rcdBackoffBase<<(failures-1), rcdBackoffMax)
 		o.logger.Warn().Dur("backoff", backoff).Int("failures", failures).Msg("rcd failed, restarting")
@@ -185,6 +198,25 @@ func (o *rcdOwner) run(ctx context.Context) error {
 			o.transition(rcdRestarting, rcdStarting)
 		}
 	}
+}
+
+// leave moves a failed attempt to Restarting, or to Failed once failures pass rcdMaxRestarts, then runs onExit for
+// an rcd that was Ready and stops a live process. The move comes first, so no reader sees a dead rcd as Ready. It
+// returns the state it moved to and the error of a process it could not stop.
+func (o *rcdOwner) leave(res attemptResult, failures int) (rcdState, error) {
+	target := rcdRestarting
+	if failures > rcdMaxRestarts {
+		target = rcdFailed
+	}
+	o.transition(res.from, target)
+	if res.from == rcdReady {
+		o.onExit()
+	}
+	if res.att == nil {
+		return target, nil
+	}
+	// A failed attempt with a live process stops it before the next one.
+	return target, o.stopProcess(res.att)
 }
 
 // attemptEnd is how an attempt ended.
