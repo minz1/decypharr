@@ -69,6 +69,12 @@ func (o owner) lookup(ctx context.Context) int {
 
 func caller(ctx context.Context, r runner) { _, _ = r.Ask(ctx, "k", 1) }
 `)
+	writeSource(t, root, "pkg/c/c.go", `package c
+
+import stdctx "context"
+
+var root = stdctx.TODO()
+`)
 	const exempt = "\n\nfunc f() { go work(); _ = context.Background() }\n"
 	writeSource(t, root, "pkg/a/a_test.go", "package a"+exempt)
 	writeSource(t, root, "cmd/tool/main.go", "package main"+exempt)
@@ -79,8 +85,9 @@ func caller(ctx context.Context, r runner) { _, _ = r.Ask(ctx, "k", 1) }
 	if got := bareGoStatements(t, root); len(got) != 1 || !strings.Contains(got[0], "a.go:6") {
 		t.Errorf("bare go guard = %q, want one finding at a.go:6", got)
 	}
-	if got := backgroundContexts(t, root); len(got) != 1 || !strings.Contains(got[0], "a.go:7") {
-		t.Errorf("context.Background guard = %q, want one finding at a.go:7", got)
+	got := strings.Join(backgroundContexts(t, root), "\n")
+	if strings.Count(got, "\n") != 1 || !strings.Contains(got, "a.go:7") || !strings.Contains(got, "c.go:5") {
+		t.Errorf("context.Background guard = %q, want findings at a.go:7 and c.go:5 (an aliased TODO)", got)
 	}
 	if got := asksInsideHandlers(t, root); len(got) != 1 || !strings.Contains(got[0], "a.go:17") {
 		t.Errorf("Ask guard = %q, want one finding at a.go:17 (reached from Handle through its child task)", got)
@@ -100,7 +107,7 @@ func writeSource(t *testing.T, root, rel, src string) {
 
 func bareGoStatements(t *testing.T, root string) []string {
 	t.Helper()
-	return inspectGoverned(t, root, func(node ast.Node) string {
+	return inspectGoverned(t, root, func(_ *ast.File, node ast.Node) string {
 		if _, ok := node.(*ast.GoStmt); ok {
 			return "bare go statement; start it through internal/task or a scoped sync.WaitGroup.Go"
 		}
@@ -110,27 +117,41 @@ func bareGoStatements(t *testing.T, root string) []string {
 
 func backgroundContexts(t *testing.T, root string) []string {
 	t.Helper()
-	return inspectGoverned(t, root, func(node ast.Node) string {
+	return inspectGoverned(t, root, func(file *ast.File, node ast.Node) string {
 		sel, ok := node.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != "Background" {
+		if !ok || (sel.Sel.Name != "Background" && sel.Sel.Name != "TODO") {
 			return ""
 		}
-		if pkg, isIdent := sel.X.(*ast.Ident); isIdent && pkg.Name == "context" {
-			return "context.Background; derive the context from the caller or the owning task group"
+		if pkg, isIdent := sel.X.(*ast.Ident); isIdent && pkg.Name == contextImportName(file) {
+			return "context." + sel.Sel.Name + "; derive the context from the caller or the owning task group"
 		}
 		return ""
 	})
 }
 
+// contextImportName is the name file refers to package context by ("" when it does not import it by name).
+func contextImportName(file *ast.File) string {
+	for _, spec := range file.Imports {
+		if spec.Path.Value != `"context"` {
+			continue
+		}
+		if spec.Name != nil {
+			return spec.Name.Name
+		}
+		return "context"
+	}
+	return ""
+}
+
 // inspectGoverned reports, for every node of a governed file, the finding check returns ("" for none).
-func inspectGoverned(t *testing.T, root string, check func(ast.Node) string) []string {
+func inspectGoverned(t *testing.T, root string, check func(*ast.File, ast.Node) string) []string {
 	t.Helper()
 	fset := token.NewFileSet()
 	var found []string
 	for _, files := range governedPackages(t, root, fset) {
 		for _, file := range files {
 			ast.Inspect(file, func(node ast.Node) bool {
-				if msg := check(node); msg != "" {
+				if msg := check(file, node); msg != "" {
 					found = append(found, fset.Position(node.Pos()).String()+": "+msg)
 				}
 				return true

@@ -127,6 +127,14 @@ func (m *Migrator) countMultiDebrid(torrents map[string][]*storage.CachedTorrent
 	return count
 }
 
+// saveStoppedStatus saves a stopped migration's status, still running, so the next start resumes it.
+func (m *Migrator) saveStoppedStatus(status *storage.SystemMigrationStatus) {
+	status.UpdatedAt = time.Now()
+	if err := m.storage.SaveMigrationStatus(status); err != nil {
+		m.logger.Warn().Err(err).Msg("Failed to save the stopped migration's status")
+	}
+}
+
 // runMigration performs the actual migration.
 func (m *Migrator) runMigration(ctx context.Context, cachedTorrents map[string][]*storage.CachedTorrent) {
 	m.logger.Info().Msg("Starting migration from cache files")
@@ -142,8 +150,7 @@ func (m *Migrator) runMigration(ctx context.Context, cachedTorrents map[string][
 			// Running stays true: the next start resumes the migration
 			// (already migrated torrents are skipped by Exists).
 			m.logger.Info().Msg("Migration stopped; it resumes on the next start")
-			status.UpdatedAt = time.Now()
-			_ = m.storage.SaveMigrationStatus(status)
+			m.saveStoppedStatus(status)
 			return
 		default:
 		}
