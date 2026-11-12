@@ -309,6 +309,8 @@ func newHealHarness(t *testing.T, client debrid.Client) *healHarness {
 			return false
 		},
 	})
+	m.life = newLifecycle()
+	m.initGrace(t.Context())
 	m.clients.Store("remaining", client)
 	h.fixer = NewFixer(m)
 	h.fixer.providerOrder = []string{"remaining"}

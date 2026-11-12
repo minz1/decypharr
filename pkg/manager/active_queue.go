@@ -33,7 +33,7 @@ func (m *Manager) restoreActiveDownloadJobs(entries []*storage.Entry, err error)
 	// in storage for processQueuedEntries. Only unfinished imports need workers.
 	readFailed := false
 	for _, snapshot := range entries {
-		if m.work.Context().Err() != nil {
+		if m.stopErr() != nil {
 			return
 		}
 		// Read before Holds: an add between queue.Add and SubmitJob is then usually holding already.
@@ -69,7 +69,7 @@ func (m *Manager) restoreEntry(entry *storage.Entry, interrupted bool) bool {
 		return true
 	}
 	job, rebuildErr := m.rebuildQueuedJob(entry)
-	if rebuildErr != nil && m.work.Context().Err() != nil {
+	if rebuildErr != nil && m.stopErr() != nil {
 		return false
 	}
 	// An NZB re-parse can take minutes; the arr may have deleted the entry meanwhile.
@@ -90,7 +90,7 @@ func (m *Manager) restoreEntry(entry *storage.Entry, interrupted bool) bool {
 	}
 	_ = m.queue.Update(entry)
 	if submitErr := m.SubmitJob(job); submitErr != nil {
-		if m.work.Context().Err() != nil {
+		if m.stopErr() != nil {
 			return false
 		}
 		m.failEntry(entry, submitErr)

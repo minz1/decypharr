@@ -93,7 +93,12 @@ func TestJobQueueHoldsAJobThrottledDuringItsRun(t *testing.T) {
 func TestQueuedEntryAwaitsAJobUntilTheQueueIsRestored(t *testing.T) {
 	t.Parallel()
 	group := testGroup(t)
-	m := &Manager{work: group, jobQueue: NewJobQueue(group, 1, func(context.Context, *Job) {}, zerolog.Nop())}
+	m := &Manager{
+		work:     group,
+		life:     newLifecycle(),
+		jobQueue: NewJobQueue(group, 1, func(context.Context, *Job) {}, zerolog.Nop()),
+	}
+	m.initGrace(t.Context())
 	if !m.awaitsJob("hash") {
 		t.Fatal("awaitsJob = false before the restore")
 	}

@@ -268,7 +268,7 @@ func (m *Manager) placementRefusal(ctx context.Context) error {
 		return nil
 	}
 	err := fmt.Errorf("%w: %w", errPlacementStopped, context.Cause(ended))
-	if m.stopping != nil && m.stopping.Err() != nil && !errors.Is(err, task.ErrStopped) {
+	if m.stopErr() != nil && !errors.Is(err, task.ErrStopped) {
 		err = fmt.Errorf("%w: %w", err, task.ErrStopped)
 	}
 	return err

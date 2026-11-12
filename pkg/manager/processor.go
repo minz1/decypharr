@@ -620,7 +620,7 @@ func (m *Manager) processAction(entry *storage.Entry) {
 // the work group is stopping, or the mount is. It stays queued and idle, to resume in the next generation.
 func (m *Manager) saveIfInterrupted(entry *storage.Entry, err error) bool {
 	mountStopping := errors.Is(err, ErrMountStopping)
-	workStopping := errors.Is(err, context.Canceled) && m.work.Context().Err() != nil
+	workStopping := errors.Is(err, context.Canceled) && m.stopErr() != nil
 	if !mountStopping && !workStopping {
 		return false
 	}

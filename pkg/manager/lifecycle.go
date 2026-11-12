@@ -278,7 +278,7 @@ func (m *Manager) initialSync(ctx context.Context) error {
 // not the manager's: main stops it before the manager. An
 // owner that holds the group stops it directly; Stop is for one that does not.
 func (m *Manager) Stop(ctx context.Context) error {
-	m.mountGate.markStopping()
+	m.markStopping()
 	m.logger.Info().Msg("Stopping manager")
 	return m.group.Stop(ctx)
 }
@@ -329,6 +329,8 @@ func (m *Manager) markStopping() {
 	if m.stopCause != nil {
 		m.stopCause(task.ErrStopped)
 	}
+	// A stopping manager ends its mount-dependent steps resumable, whoever closes the gate first.
+	m.mountGate.markStopping()
 	for {
 		current := m.life.Load()
 		if current == lifecycleStopping || current == lifecycleStopped {
@@ -338,6 +340,24 @@ func (m *Manager) markStopping() {
 			return
 		}
 	}
+}
+
+// stopErr is task.ErrStopped once the manager has begun stopping, else nil: the one "manager is stopping" source
+// every reader uses. markStopping starts it. A rushed stop or a cancelled parent can end the work ctx before the
+// "stopping" service runs; the first reader that sees that marks the stop, so none sees the work cut while the
+// manager still reads as running.
+func (m *Manager) stopErr() error {
+	if m.stopping == nil {
+		return nil // a hand-built test manager without initGrace
+	}
+	if m.stopping.Err() == nil && m.work != nil && m.work.Context().Err() != nil {
+		m.markStopping()
+	}
+	if m.stopping.Err() == nil {
+		return nil
+	}
+	// Both: callers that classify a cut call as context.Canceled keep doing so.
+	return fmt.Errorf("%w: %w", m.stopping.Err(), context.Cause(m.stopping))
 }
 
 // IsReady returns a channel that is closed once the start sequence has

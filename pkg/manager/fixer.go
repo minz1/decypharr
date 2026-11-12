@@ -225,10 +225,10 @@ func (f *Fixer) runRepair(
 	return result, result.Error
 }
 
-// workStopped is the work ctx's error once the manager is stopping, else nil. Only the work ctx makes a failed
+// workStopped is task.ErrStopped once the manager is stopping, else nil. Only the manager's stop makes a failed
 // provider call a stop: the ctx FixTorrent is handed ends with a config save or a closed player, and a call that
-// failed on a live work ctx is a real failure whoever asked for the heal.
-func (f *Fixer) workStopped() error { return f.manager.work.Context().Err() }
+// failed while the manager runs is a real failure whoever asked for the heal.
+func (f *Fixer) workStopped() error { return f.manager.stopErr() }
 
 // MoveTorrent attempts to re-insert a torrent on a specific debrid. Its provider calls run on the work ctx, so it
 // takes no ctx of its own.

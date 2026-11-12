@@ -10,6 +10,7 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
+	"github.com/sirrobot01/decypharr/internal/task"
 	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/hearsay"
 	"github.com/sirrobot01/decypharr/pkg/storage"
@@ -52,6 +53,11 @@ func (m *Manager) AddNewNZB(_ context.Context, req *ImportRequest) (string, erro
 	job.ID = entry.InfoHash
 	job.Entry = entry
 	if submitJobErr := m.SubmitJob(job); submitJobErr != nil {
+		if errors.Is(submitJobErr, task.ErrStopped) {
+			// The queue closed with the stop: the entry stays queued and the next start's restore parses it.
+			m.logger.Info().Str("name", entry.Name).Msg("Manager is stopping; the NZB stays queued for the next start")
+			return req.ID, nil
+		}
 		m.failEntry(entry, submitJobErr)
 		return "", fmt.Errorf("failed to queue NZB: %w", submitJobErr)
 	}

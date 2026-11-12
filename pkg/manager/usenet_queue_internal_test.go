@@ -110,6 +110,44 @@ func TestAddNewNZBQueuesBeforeNetworkParsing(t *testing.T) {
 	}
 }
 
+// An NZB added while the manager stops is kept for the next start's restore, as a torrent is: the stop is not a
+// failed download, so the Arr is not told it failed.
+func TestAddNewNZBRefusedByTheStopStaysQueued(t *testing.T) {
+	t.Parallel()
+	store, err := storage.NewStorage(filepath.Join(t.TempDir(), "db"), storage.Options{})
+	if err != nil {
+		t.Fatalf("create storage: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	m := withTestConfig(t, &Manager{
+		usenet: newUnreachableUsenet(t),
+		queue:  newQueue(store, "", nil, zerolog.Nop()),
+		logger: zerolog.Nop(),
+	})
+	jobs := testGroup(t)
+	m.jobQueue = NewJobQueue(jobs, 1, func(context.Context, *Job) {}, zerolog.Nop())
+	if stopErr := jobs.Stop(t.Context()); stopErr != nil {
+		t.Fatal(stopErr)
+	}
+	req := NewNZBRequest("release.nzb", t.TempDir(), []byte("nzb"), arr.Arr{Name: "sonarr"},
+		config.DownloadActionSymlink, "", ImportTypeSABnzbd, false)
+
+	id, err := m.AddNewNZB(t.Context(), req)
+	if err != nil || id != req.ID {
+		t.Fatalf("AddNewNZB() = %q, %v; want %q, nil (kept for the restore)", id, err, req.ID)
+	}
+	entry, err := m.queue.GetTorrent(id)
+	if err != nil {
+		t.Fatalf("get queued NZB: %v", err)
+	}
+	if entry.Status != debridTypes.TorrentStatusQueued || entry.State == storage.EntryStateError {
+		t.Fatalf("NZB status/state = %q/%q, want queued and not failed", entry.Status, entry.State)
+	}
+	if _, statErr := os.Stat(entry.Magnet); statErr != nil {
+		t.Fatalf("staged NZB source: %v", statErr)
+	}
+}
+
 // newUnreachableUsenet builds a usenet client whose only provider refuses
 // connections, so any network parse fails fast.
 func newUnreachableUsenet(t *testing.T) *usenet.Usenet {

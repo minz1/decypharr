@@ -891,13 +891,16 @@ func (m *Manager) SubmitJob(job *Job) error {
 	if m.jobQueue == nil {
 		return fmt.Errorf("active download queue not initialized")
 	}
+	if err := m.stopErr(); err != nil {
+		return fmt.Errorf("job queue: %w", err)
+	}
 	return m.jobQueue.Submit(job)
 }
 
 // awaitsJob reports whether a queued entry may still get a job: before the restore, while the job queue holds one,
-// or during shutdown (the next start restores it). Holds goes first: shutdown cancels before it releases holds.
+// or during shutdown (the next start restores it). Holds goes first: shutdown marks the stop before it releases holds.
 func (m *Manager) awaitsJob(infoHash string) bool {
-	return !m.queueRestored.Load() || m.jobQueue.Holds(infoHash) || m.work.Context().Err() != nil
+	return !m.queueRestored.Load() || m.jobQueue.Holds(infoHash) || m.stopErr() != nil
 }
 
 // slotFreed wakes a job throttled by provider: an active download there finished, failed or was removed.
