@@ -188,6 +188,8 @@ type bucketInput struct {
 	probed int
 	// held is how many of confirmed the breaker already held before this run.
 	held int
+	// inFlight is how many of probed have a reacquisition still open: no evidence either way.
+	inFlight int
 	// sample is what the sweep found among the provider's entries that were not already held.
 	sample sweepSample
 }
@@ -221,6 +223,9 @@ type bucketOutcome struct {
 
 // breaker holds the bucket machines, the rolling heal ledger and the canary verdicts. It is in memory: a
 // restart reseeds the ledger and the window from the reacquire journal, and held entries stay on their rows.
+// A restart mid-drain therefore starts a releasing bucket closed; its held rows count there and the next sweep
+// re-trips it, so the drain resumes only after another ReleaseAfter and a clean sample or canary (SM12-28, accepted:
+// it holds longer, never heals more).
 type breaker struct {
 	mu       sync.Mutex
 	settings func() config.BreakerSettings
@@ -396,8 +401,9 @@ func (b *breaker) stepLocked(key Bucket, in bucketInput, fresh *canaryOutcome) (
 		confirmed = b.windowCountLocked(key, s)
 	case bk.state == breakerReleasing:
 		// The held rows are the drain's backlog, not new evidence, sample or not: a sweep after the release seldom
-		// finds healthy entries due again, so only entries broken outside the hold can re-trip the bucket.
-		confirmed, probed = confirmed-in.held, probed-in.held
+		// finds healthy entries due again, so only entries broken outside the hold can re-trip the bucket. Entries
+		// being reacquired are no evidence either, so they leave the scale too.
+		confirmed, probed = confirmed-in.held, probed-in.held-in.inFlight
 	case bk.state != breakerClosed && in.sample.passes():
 		// The provider works for the entries a sweep found that were not held, so the held ones still broken are the
 		// failure that opened the bucket, not new evidence: judge the bucket on the sample alone. Without a clean
@@ -508,20 +514,23 @@ func (b *breaker) forceRelease(key Bucket) (bool, holdReason) {
 	return released, bk.reason
 }
 
-// settle closes every bucket that was releasing: its held entries have had their chance to drain.
-func (b *breaker) settle(keys ...Bucket) {
+// settle closes every releasing bucket of keys that no held row names (held, see Service.heldBuckets): nothing is
+// left to drain.
+func (b *breaker) settle(held map[string]bool, keys ...Bucket) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	now := b.now()
 	for _, key := range keys {
-		if bk := b.buckets[key]; bk != nil && bk.state == breakerReleasing {
+		if bk := b.buckets[key]; bk != nil && bk.state == breakerReleasing && !held[key.String()] {
 			_ = bk.transition(breakerClosed, now, "", holdNone)
 		}
 	}
 }
 
-// settleDrained closes, after a sweep, every releasing bucket of a provider the sweep probed that holds no entry
-// the caps left for a later run: the sweep re-probed its held entries and admitted every one still broken.
+// settleDrained closes, after a sweep that probed every due candidate, every releasing bucket of a provider the
+// sweep probed that holds no entry the caps left for a later run: the sweep re-probed its held entries (held rows are
+// always due) and admitted every one still broken. A held row outside the candidates (its media left the Arr) is
+// never re-probed, so it must not keep the bucket releasing, where no canary runs.
 func (b *breaker) settleDrained(probed map[string]int, undrained map[Bucket]bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

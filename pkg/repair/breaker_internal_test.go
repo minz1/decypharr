@@ -138,7 +138,7 @@ func TestEvaluateReleasesOnlyInALaterRunAfterTheHoldAndAPassingCanary(t *testing
 	if state := b.buckets[testBucket()].state; state != breakerReleasing {
 		t.Fatalf("state = %s, want releasing", state)
 	}
-	b.settle(testBucket())
+	b.settle(nil, testBucket())
 	if state := b.buckets[testBucket()].state; state != breakerClosed {
 		t.Fatalf("state after settle = %s, want closed", state)
 	}

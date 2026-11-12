@@ -71,6 +71,9 @@ func (r *Service) executeSweep(
 	batch, err := r.probeCandidates(ctx, run, due, names, heal, opts, autoRepair, policy)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
+			if batch != nil {
+				batch.partial = true // held entries it never reached are still held: no drain ends on it
+			}
 			r.finishCancelledRepairSweep(ctx, run, stopState, autoRepair, "context cancelled during probing", batch)
 			return
 		}

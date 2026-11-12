@@ -50,29 +50,34 @@ type probeBatch struct {
 	probed map[string]int
 	// samples are, per provider, the entries probed that were not held and how many of them were broken.
 	samples map[string]sweepSample
+	// inFlight counts, per provider, the entries probed whose reacquisition is still open.
+	inFlight map[string]int
 	// scaled says the probed counts describe the run; without them (persisted rows fixed by an operator) only
 	// the count of confirmed entries is judged.
 	scaled bool
 	// sweep marks a batch from a sweep, whose samples may stand in for a canary that had nothing to probe.
 	sweep bool
-	usage *runUsage
+	// partial marks a sweep's batch whose probing a stop cut short: held entries it never reached are still held.
+	partial bool
+	usage   *runUsage
 	// open are the entry IDs with a reacquisition still open (see openReacquisitions).
 	open map[string]bool
 }
 
 func newProbeBatch(scaled bool, open map[string]bool) *probeBatch {
 	return &probeBatch{
-		entries: make(map[string]*probedEntry),
-		probed:  make(map[string]int),
-		samples: make(map[string]sweepSample),
-		scaled:  scaled,
-		usage:   newRunUsage(),
-		open:    open,
+		entries:  make(map[string]*probedEntry),
+		probed:   make(map[string]int),
+		samples:  make(map[string]sweepSample),
+		inFlight: make(map[string]int),
+		scaled:   scaled,
+		usage:    newRunUsage(),
+		open:     open,
 	}
 }
 
-// inFlight reports whether any of files belongs to an entry whose reacquisition is still open.
-func (b *probeBatch) inFlight(files []storage.BrokenFile) bool {
+// isInFlight reports whether any of files belongs to an entry whose reacquisition is still open.
+func (b *probeBatch) isInFlight(files []storage.BrokenFile) bool {
 	return slices.ContainsFunc(files, func(file storage.BrokenFile) bool { return b.open[file.InfoHash] })
 }
 
@@ -81,8 +86,12 @@ func (b *probeBatch) noteProbed(result *probeResult) {
 	defer b.mu.Unlock()
 	for _, provider := range result.providers {
 		b.probed[provider]++
-		if result.wasHeld || b.inFlight(result.health.BrokenFiles) {
-			continue // a held entry is suspect and one being reacquired is old news: neither samples the provider
+		if b.isInFlight(result.health.BrokenFiles) {
+			b.inFlight[provider]++
+			continue // one being reacquired is old news: no sample of the provider
+		}
+		if result.wasHeld {
+			continue // a held entry is suspect: no sample of the provider
 		}
 		sample := b.samples[provider]
 		sample.probed++
@@ -99,8 +108,9 @@ func (b *probeBatch) add(health *storage.EntryHealth, files []storage.BrokenFile
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	// In flight as noteProbed decides it, on every broken file, so the scale and the evidence agree.
 	b.entries[health.EntryName] = &probedEntry{
-		health: health, pending: files, wasHeld: wasHeld, inFlight: b.inFlight(files),
+		health: health, pending: files, wasHeld: wasHeld, inFlight: b.isInFlight(health.BrokenFiles),
 	}
 }
 
@@ -174,8 +184,9 @@ func (r *Service) healBatch(ctx context.Context, run *storage.RepairRun, batch *
 		plan: make(map[Bucket]bucketOutcome), undrained: make(map[Bucket]bool),
 	}
 	stopped := false
-	if policy.sweep && !policy.force {
-		// Only a sweep re-probes every held entry, so only a sweep can tell that a drain is over.
+	if policy.sweep && !policy.force && !batch.partial {
+		// Only a sweep that probed every due candidate re-probes every held entry, so only it can tell that a drain
+		// is over.
 		defer func() {
 			if !stopped {
 				r.breaker.settleDrained(batch.probed, d.undrained)
@@ -303,6 +314,19 @@ func (r *Service) holdEntry(
 		Str("reason", string(reason)).Msg("Repair: heal held by the breaker")
 }
 
+// heldBuckets names every bucket a persisted held row still waits in. A release outside a sweep closes the bucket
+// only when none does; otherwise the next complete sweep drains it (settleDrained).
+func (r *Service) heldBuckets() map[string]bool {
+	held := make(map[string]bool)
+	_ = r.storage.ForEachEntryHealth(func(h *storage.EntryHealth) error {
+		if h != nil && h.Status == storage.HealthHeld {
+			held[h.HeldBucket] = true
+		}
+		return nil
+	})
+	return held
+}
+
 // judgeBuckets evaluates each bucket that has pending files once, on the batch as a whole.
 func (r *Service) judgeBuckets(
 	ctx context.Context,
@@ -325,6 +349,9 @@ func (r *Service) judgeBuckets(
 		}
 		confirmed := len(subjects[bucket])
 		in := bucketInput{runID: runID, confirmed: confirmed, probed: probed, held: held[bucket]}
+		if batch.scaled {
+			in.inFlight = batch.inFlight[bucket.Provider]
+		}
 		if batch.sweep {
 			in.sample = batch.samples[bucket.Provider]
 		}
