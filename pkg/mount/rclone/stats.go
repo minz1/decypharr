@@ -5,7 +5,7 @@ import "context"
 // Stats returns mount metadata and RC statistics. Unless rcd is Ready it
 // reports the owner's state and makes no RC call.
 func (m *Manager) Stats() map[string]any {
-	current := m.owner.state.Load()
+	current := m.owner.snapshot().state
 	var stats map[string]any
 	if current == rcdReady {
 		ctx, cancel := context.WithTimeout(m.owner.group.Context(), rcCallTimeout)

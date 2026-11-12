@@ -90,6 +90,8 @@ type managerRig struct {
 	readGate chan struct{}
 	// backend is handed to SetBackendStopped; closeBackend closes it.
 	backend chan struct{}
+	// pingHeld fails every rcd ping while set, holding rcd out of Ready (see holdRcdDown).
+	pingHeld atomic.Bool
 }
 
 // detach is the Manager's forced unmount: it records the ctx's state at call time.
@@ -176,6 +178,13 @@ func newManagerRig(t *testing.T) *managerRig {
 	m.watchTable = func(context.Context, func()) error { return errNoMountTable }
 	m.readTable = func(string) (int, error) { return 0, errNoMountTable }
 	m.owner.spawn = r.spawnProc
+	ping := m.owner.ping
+	m.owner.ping = func(ctx context.Context) error {
+		if r.pingHeld.Load() {
+			return errors.New("ping held by the test")
+		}
+		return ping(ctx)
+	}
 	m.owner.closeLog = func() error {
 		r.closes.Add(1)
 		return nil
