@@ -162,8 +162,16 @@ func TestHeldRowsCountOnlyWithoutACleanSampleOnAnOpenBucket(t *testing.T) {
 		t.Fatalf("dirty sample: outcome = %+v, want still tripped", out)
 	}
 	clock.Advance(2 * time.Hour)
+	// A clean sample is judged on its own scale: 15 of 200 is over 5%, though 15 of all 400 probed is not.
+	shareOfSample := bucketInput{
+		runID: "r3", confirmed: 95, held: 80, probed: 400, sample: sweepSample{probed: 200, broken: 15},
+	}
+	if out := b.evaluate(t.Context(), testBucket(), shareOfSample); out.hold != holdTripped || out.released {
+		t.Fatalf("over 5%% of the sample: outcome = %+v, want still tripped", out)
+	}
+	clock.Advance(2 * time.Hour)
 	later := heldOnly
-	later.runID = "r3"
+	later.runID = "r4"
 	if out := b.evaluate(t.Context(), testBucket(), later); !out.released {
 		t.Fatalf("clean sample: outcome = %+v, want released despite 80 held rows still broken", out)
 	}
