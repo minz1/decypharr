@@ -479,6 +479,9 @@ func (b *breaker) canaryStepLocked(
 	case canaryFail:
 		return b.tripLocked(bk, now, in.runID, holdCanaryFailed), false
 	case canaryInconclusive, canaryAborted:
+		if bk.state == breakerReleasing {
+			bk.reason = holdCanaryInconclusive // a canary now holds the drain, so a force must not close it
+		}
 		return bucketOutcome{hold: holdCanaryInconclusive}, false
 	case canaryNone, canaryPass:
 		return b.admitStepLocked(bk, in, outcome == canaryNone, releasing), false

@@ -186,3 +186,26 @@ func TestReleasingBucketWithNoCanaryAndNoSampleHolds(t *testing.T) {
 		t.Fatalf("out = %+v, want a clean sample of 3 to drain", out)
 	}
 }
+
+// A bucket released on its sample after a no_canary trip drains normally: the trip's reason is gone, so an operator
+// force does not close the drain.
+func TestForceDoesNotCloseANormalDrainAfterANoCanaryTrip(t *testing.T) {
+	t.Parallel()
+	verdict := canaryNone
+	b, clock, _ := testBreaker(&verdict)
+	key := testBucket()
+	b.mu.Lock()
+	b.tripLocked(b.bucketLocked(key), clock.Now(), "sweep-0", holdNoCanary)
+	b.mu.Unlock()
+	clock.Advance(2 * time.Hour)
+	in := bucketInput{runID: "sweep-1", probed: 30, sample: sweepSample{probed: 30}}
+	if out := b.evaluate(t.Context(), key, in); !out.released {
+		t.Fatalf("out = %+v, want released on a clean sample", out)
+	}
+	if released, _ := b.forceRelease(key); released {
+		t.Fatal("an operator force closed a bucket draining on a clean sample")
+	}
+	if status := b.status(); len(status) != 1 || status[0].State != string(breakerReleasing) {
+		t.Fatalf("status = %+v, want the bucket still releasing", status)
+	}
+}
