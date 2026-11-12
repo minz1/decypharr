@@ -192,8 +192,6 @@ type bucketInput struct {
 	inFlight int
 	// sample is what the sweep found among the provider's entries that were not already held.
 	sample sweepSample
-	// sweep marks an evaluation by a sweep, the only run that drains a releasing bucket without a canary.
-	sweep bool
 }
 
 // sweepSample is the entries a sweep probed on a provider that were not held by the breaker, and how many were
@@ -398,14 +396,17 @@ func (b *breaker) stepLocked(key Bucket, in bucketInput, fresh *canaryOutcome) (
 	now := b.now()
 	bk := b.bucketLocked(key)
 	confirmed, probed := in.confirmed, in.probed
+	if probed >= 0 {
+		// Entries being reacquired are no evidence either way, so they leave every scale (SM12-37).
+		probed -= in.inFlight
+	}
 	switch {
 	case probed < 0:
 		confirmed = b.windowCountLocked(key, s)
 	case bk.state == breakerReleasing:
 		// The held rows are the drain's backlog, not new evidence, sample or not: a sweep after the release seldom
-		// finds healthy entries due again, so only entries broken outside the hold can re-trip the bucket. Entries
-		// being reacquired are no evidence either, so they leave the scale too.
-		confirmed, probed = confirmed-in.held, probed-in.held-in.inFlight
+		// finds healthy entries due again, so only entries broken outside the hold can re-trip the bucket.
+		confirmed, probed = confirmed-in.held, probed-in.held
 	case bk.state != breakerClosed && in.sample.passes():
 		// The provider works for the entries a sweep found that were not held, so the held ones still broken are the
 		// failure that opened the bucket, not new evidence: judge the bucket on the sample alone. Without a clean
@@ -437,14 +438,12 @@ func (b *breaker) stepLocked(key Bucket, in bucketInput, fresh *canaryOutcome) (
 		if exceeded {
 			return b.tripLocked(bk, now, in.runID, holdTripped), false
 		}
-		if !in.sweep {
-			// A heal outside a sweep (Admit, a recheck, an operator fix) has no sample to judge the provider on, so the
-			// canary gates it as it gates one on a closed bucket: a release is no free pass (SM12-31).
-			out, needCanary := b.canaryStepLocked(bk, key, in, s, fresh, false)
-			out.draining = !needCanary && out.hold == holdNone
-			return out, needCanary
-		}
-		return bucketOutcome{draining: true}, false
+		// A drain lives over several sweeps and heals outside them, so the canary gates every evaluation of a releasing
+		// bucket as it gates one on a closed bucket: a release is no free pass (SM12-31, SM12-36). An inconclusive
+		// canary holds the drain (draining false), so the bucket stays releasing and its rows stay held.
+		out, needCanary := b.canaryStepLocked(bk, key, in, s, fresh, false)
+		out.draining = !needCanary && out.hold == holdNone
+		return out, needCanary
 	}
 	return bucketOutcome{hold: holdTripped}, false
 }
@@ -539,7 +538,7 @@ func (b *breaker) settle(held map[string]bool, keys ...Bucket) {
 // settleDrained closes, after a sweep that probed every due candidate, every releasing bucket of a provider the
 // sweep probed that holds no entry the caps left for a later run: the sweep re-probed its held entries (held rows are
 // always due) and admitted every one still broken. A held row outside the candidates (its media left the Arr) is
-// never re-probed, so it must not keep the bucket releasing, where no canary runs. Only a bucket the sweep drained
+// never re-probed, so it must not keep the bucket releasing forever. Only a bucket the sweep drained
 // closes: one its plan judged draining, or, with no entry of it pending, one releasing when the heals began
 // (wasReleasing). A bucket released while the sweep held its entries keeps them (SM12-32).
 func (b *breaker) settleDrained(

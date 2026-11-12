@@ -381,7 +381,7 @@ func (r *Service) judgeBuckets(
 			in.inFlight = batch.inFlight[bucket.Provider]
 		}
 		if batch.sweep {
-			in.sample, in.sweep = batch.samples[bucket.Provider], true
+			in.sample = batch.samples[bucket.Provider]
 		}
 		out := r.breaker.evaluate(ctx, bucket, in)
 		plan[bucket] = out

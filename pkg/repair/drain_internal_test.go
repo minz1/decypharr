@@ -69,6 +69,33 @@ func TestInFlightEntriesDoNotDiluteAReleasingBucket(t *testing.T) {
 	f.service.breaker.bucketLocked(key).state = breakerReleasing
 	f.service.breaker.mu.Unlock()
 
+	batch := inFlightBatch(10)
+	plan := f.service.judgeBuckets(t.Context(), "sweep", batch, batch.pendingNames())
+	if plan[key].hold == holdNone {
+		t.Fatalf("plan = %+v: 10 newly broken of 40 real probes must re-trip the releasing bucket", plan[key])
+	}
+}
+
+// SM12-37: in-flight entries leave the scale of every scaled judgement, so they cannot dilute a closed bucket either,
+// even one whose cached canary passes.
+func TestInFlightEntriesDoNotDiluteAClosedBucket(t *testing.T) {
+	t.Parallel()
+	f := newOutageFixture(t, 1, config.RepairConfig{})
+	key := rdHoster()
+	f.service.breaker.mu.Lock()
+	f.service.breaker.verdicts[key] = canaryVerdict{outcome: canaryPass, at: f.clock.Now()}
+	f.service.breaker.mu.Unlock()
+
+	batch := inFlightBatch(0)
+	plan := f.service.judgeBuckets(t.Context(), "sweep", batch, batch.pendingNames())
+	if plan[key].hold == holdNone || !plan[key].newlyTripped {
+		t.Fatalf("plan = %+v: 10 newly broken of 40 real probes must trip the closed bucket", plan[key])
+	}
+}
+
+// inFlightBatch is a sweep batch on rd: 250 broken entries with an open reacquisition, held broken entries, 30
+// clean and 10 newly broken.
+func inFlightBatch(held int) *probeBatch {
 	open := map[string]bool{}
 	batch := newProbeBatch(true, open)
 	batch.sweep = true
@@ -88,7 +115,7 @@ func TestInFlightEntriesDoNotDiluteAReleasingBucket(t *testing.T) {
 	for i := range 250 {
 		probe(fmt.Sprintf("inflight-%03d", i), true, false, true)
 	}
-	for i := range 10 {
+	for i := range held {
 		probe(fmt.Sprintf("held-%03d", i), true, true, false)
 	}
 	for i := range 30 {
@@ -97,10 +124,81 @@ func TestInFlightEntriesDoNotDiluteAReleasingBucket(t *testing.T) {
 	for i := range 10 {
 		probe(fmt.Sprintf("broken-%03d", i), true, false, false)
 	}
+	return batch
+}
 
-	plan := f.service.judgeBuckets(t.Context(), "sweep", batch, batch.pendingNames())
-	if plan[key].hold == holdNone {
-		t.Fatalf("plan = %+v: 10 newly broken of 40 real probes must re-trip the releasing bucket", plan[key])
+// SM12-36, R0.1 run 3: a drain lives over several sweeps, so each drain sweep runs the canary as any other
+// evaluation does. A provider-wide outage mid-drain under MinConfirmed trips the bucket on the canary and heals none.
+func TestDrainSweepRunsTheCanary(t *testing.T) {
+	t.Parallel()
+	f := startDrain(t) // 25 healed, 55 held
+	f.markUpDirty(t)
+	f.sweep(t.Context(), nil) // the drain goes on: 50 healed, 30 held
+	assertNotTripped(t, f, "drain sweep")
+
+	f.client.set(true) // the whole provider goes down
+	before := f.requests()
+	for sweep := range 2 { // three entries that are not held: first sighting, then confirmed
+		for i := 80; i < 83; i++ {
+			err := f.store.MarkEntryDirty(f.entries[i].Name, config.ProtocolTorrent, "entry_item_changed")
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		f.sweep(t.Context(), nil)
+		if sweep == 0 {
+			if status := f.service.BreakerStatus(); len(status) != 1 || status[0].Reason != string(holdCanaryFailed) {
+				t.Fatalf("first outage sweep: %+v, want the canary to trip the draining bucket", status)
+			}
+		}
+	}
+	if got := f.requests(); got != before {
+		t.Fatalf("heals = %d, want %d: a drain sweep healed under a failing canary", got, before)
+	}
+	if status := f.service.BreakerStatus(); len(status) != 1 || status[0].State != string(breakerTripped) {
+		t.Fatalf("after the outage sweeps: %+v, want tripped", status)
+	}
+}
+
+// Item 59 review: an inconclusive canary on a drain sweep heals nothing and closes nothing: the bucket stays
+// releasing and its rows stay held for the next passing canary.
+func TestInconclusiveCanaryPausesTheDrain(t *testing.T) {
+	t.Parallel()
+	f := startDrain(t) // 25 healed, 55 held
+	b := f.service.breaker
+	b.mu.Lock()
+	// Stamped at the next sweep's time (sweep advances the clock 25h), so the sweep finds it fresh.
+	b.verdicts[rdHoster()] = canaryVerdict{outcome: canaryInconclusive, at: f.clock.Now().Add(25 * time.Hour)}
+	b.mu.Unlock()
+
+	f.sweep(t.Context(), nil)
+	if got := f.requests(); got != 25 {
+		t.Fatalf("heals = %d, want 25: an inconclusive canary healed held entries", got)
+	}
+	if got := f.countStatus(t, storage.HealthHeld); got != 55 {
+		t.Fatalf("held = %d, want 55", got)
+	}
+	if status := f.service.BreakerStatus(); len(status) != 1 || status[0].State != string(breakerReleasing) {
+		t.Fatalf("after the sweep: %+v, want releasing", status)
+	}
+}
+
+// SM12-38: an Admit whose canary passes on a releasing bucket that no held row names closes it, as a release does.
+func TestAdmitOnADrainedReleasingBucketClosesIt(t *testing.T) {
+	t.Parallel()
+	f := newOutageFixture(t, 1, config.RepairConfig{})
+	b := f.service.breaker
+	b.mu.Lock()
+	b.bucketLocked(rdHoster()).state = breakerReleasing
+	b.verdicts[rdHoster()] = canaryVerdict{outcome: canaryPass, at: f.clock.Now()}
+	b.mu.Unlock()
+
+	err := f.service.Admit(t.Context(), HealRequest{Provider: "rd", Class: ClassHosterLink, Subject: "x"})
+	if err != nil {
+		t.Fatalf("admit: %v, want admitted", err)
+	}
+	if status := f.service.BreakerStatus(); len(status) != 0 {
+		t.Fatalf("after the admit: %+v, want closed: no held row is left to drain", status)
 	}
 }
 

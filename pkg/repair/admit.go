@@ -111,8 +111,9 @@ func (r *Service) Admit(ctx context.Context, req HealRequest) error {
 		r.announceTrip("", bucket, out.hold, r.breaker.windowCount(bucket), -1)
 	}
 	defer func() {
-		if out.released {
-			// A release that leaves held rows is a drain the next sweep carries out.
+		if out.released || out.draining {
+			// A release, or a passing heal on a releasing bucket, that leaves held rows is a drain the next sweep
+			// carries out; with none left the bucket closes (SM12-38).
 			r.settleOutsideSweep(bucket)
 		}
 	}()
