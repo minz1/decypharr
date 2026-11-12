@@ -30,7 +30,7 @@ func (r *Service) repairBroken(
 	healths *xsync.Map[string, *storage.EntryHealth],
 	policy healPolicy,
 ) {
-	batch := newProbeBatch(false)
+	batch := newProbeBatch(false, r.openReacquisitions())
 	healths.Range(func(_ string, health *storage.EntryHealth) bool {
 		batch.add(health, health.BrokenFiles, health.Status == storage.HealthHeld)
 		return true

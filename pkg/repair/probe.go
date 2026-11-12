@@ -43,7 +43,7 @@ func (r *Service) probeCandidates(
 	policy healPolicy,
 ) (*probeBatch, error) {
 	var runMu sync.Mutex
-	batch := newProbeBatch(true)
+	batch := newProbeBatch(true, r.openReacquisitions())
 	batch.sweep = policy.sweep
 
 	g, gctx := errgroup.WithContext(ctx)

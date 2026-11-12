@@ -7,6 +7,27 @@ type jobLister interface {
 	Jobs() []reacquire.Job
 }
 
+// openReacquisitions returns the IDs of the entries a reacquisition still open in the journal covers, nil when the
+// reacquirer keeps no journal. Their heal is under way: a sweep that finds them still broken has no new evidence.
+func (r *Service) openReacquisitions() map[string]bool {
+	lister, ok := r.reacquirer.(jobLister)
+	if !ok {
+		return nil
+	}
+	open := make(map[string]bool)
+	for _, job := range lister.Jobs() {
+		if job.Status.Terminal() {
+			continue
+		}
+		open[job.EntryID] = true
+		for _, binding := range job.Bindings {
+			open[binding.EntryID] = true
+		}
+	}
+	delete(open, "") // a library job may name no entry
+	return open
+}
+
 // seedBreakerFromJournal restores the heals of the last window into the breaker after a restart, from the
 // reacquire job journal, so a restart does not hand a tripped provider a fresh set of caps. The journal does not
 // record why a repair job was queued, so a job counts toward its cause's bucket: usenet segments for a stream

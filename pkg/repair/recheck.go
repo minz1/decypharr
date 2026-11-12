@@ -75,7 +75,7 @@ func (r *Service) RecheckEntry(
 		if policy.confirm {
 			files = result.confirmed
 		}
-		batch := newProbeBatch(true)
+		batch := newProbeBatch(true, r.openReacquisitions())
 		batch.noteProbed(result)
 		batch.add(result.health, files, result.wasHeld)
 		r.healBatch(ctx, &storage.RepairRun{ID: runID}, batch, policy)

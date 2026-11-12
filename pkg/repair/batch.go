@@ -36,6 +36,9 @@ type probedEntry struct {
 	admitted bool
 	// wasHeld marks an entry the breaker held before this run probed it.
 	wasHeld bool
+	// inFlight marks an entry whose reacquisition is still open: its heal is under way, so it is no new evidence
+	// and takes no cap slot.
+	inFlight bool
 }
 
 // probeBatch is what a run probed, held back so that every heal is decided after all the probes: the breaker
@@ -53,16 +56,24 @@ type probeBatch struct {
 	// sweep marks a batch from a sweep, whose samples may stand in for a canary that had nothing to probe.
 	sweep bool
 	usage *runUsage
+	// open are the entry IDs with a reacquisition still open (see openReacquisitions).
+	open map[string]bool
 }
 
-func newProbeBatch(scaled bool) *probeBatch {
+func newProbeBatch(scaled bool, open map[string]bool) *probeBatch {
 	return &probeBatch{
 		entries: make(map[string]*probedEntry),
 		probed:  make(map[string]int),
 		samples: make(map[string]sweepSample),
 		scaled:  scaled,
 		usage:   newRunUsage(),
+		open:    open,
 	}
+}
+
+// inFlight reports whether any of files belongs to an entry whose reacquisition is still open.
+func (b *probeBatch) inFlight(files []storage.BrokenFile) bool {
+	return slices.ContainsFunc(files, func(file storage.BrokenFile) bool { return b.open[file.InfoHash] })
 }
 
 func (b *probeBatch) noteProbed(result *probeResult) {
@@ -70,8 +81,8 @@ func (b *probeBatch) noteProbed(result *probeResult) {
 	defer b.mu.Unlock()
 	for _, provider := range result.providers {
 		b.probed[provider]++
-		if result.wasHeld {
-			continue // a held entry is suspect, not a sample of a working provider
+		if result.wasHeld || b.inFlight(result.health.BrokenFiles) {
+			continue // a held entry is suspect and one being reacquired is old news: neither samples the provider
 		}
 		sample := b.samples[provider]
 		sample.probed++
@@ -88,7 +99,9 @@ func (b *probeBatch) add(health *storage.EntryHealth, files []storage.BrokenFile
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.entries[health.EntryName] = &probedEntry{health: health, pending: files, wasHeld: wasHeld}
+	b.entries[health.EntryName] = &probedEntry{
+		health: health, pending: files, wasHeld: wasHeld, inFlight: b.inFlight(files),
+	}
 }
 
 func (b *probeBatch) pendingNames() []string {
@@ -156,49 +169,106 @@ func (r *Service) bucketItems(files []storage.BrokenFile) []healItem {
 // judged once on the whole batch; an entry heals only if every bucket its files fall in lets it through and the
 // caps have room, is held (status held) if a bucket holds it, and otherwise stays confirmed for the next run.
 func (r *Service) healBatch(ctx context.Context, run *storage.RepairRun, batch *probeBatch, policy healPolicy) {
+	d := &healDecision{
+		run: run, batch: batch, policy: policy,
+		plan: make(map[Bucket]bucketOutcome), undrained: make(map[Bucket]bool),
+	}
+	stopped := false
+	if policy.sweep && !policy.force {
+		// Only a sweep re-probes every held entry, so only a sweep can tell that a drain is over.
+		defer func() {
+			if !stopped {
+				r.breaker.settleDrained(batch.probed, d.undrained)
+			}
+		}()
+	}
 	names := batch.pendingNames()
 	if len(names) == 0 {
 		return
 	}
-	plan := make(map[Bucket]bucketOutcome)
 	if !policy.force {
-		plan = r.judgeBuckets(ctx, run.ID, batch, names)
-		defer r.settleReleased(plan)
+		d.plan = r.judgeBuckets(ctx, run.ID, batch, names)
+		for bucket, out := range d.plan {
+			if out.released {
+				r.logger.Info().Str("bucket", bucket.String()).Msg("Repair: breaker released; draining held entries")
+			}
+		}
 	}
 
-	var statsMu sync.Mutex
-	capped := 0
 	for _, name := range names {
 		if ctx != nil && ctx.Err() != nil {
+			stopped = true // the entries not reached are still to drain
 			break
 		}
 		entry := batch.entries[name]
-		if !entry.admitted {
-			items := r.bucketItems(entry.pending)
-			if bucket, reason, held := heldBy(plan, items); held {
-				r.holdEntry(run, &statsMu, entry, bucket, reason)
-				continue
-			}
-			if policy.force {
-				r.breaker.recordForced(items, batch.usage)
-				r.releaseForced(items, policy.caller)
-			} else if !r.breaker.tryAdmit(items, batch.usage) {
-				capped++
-				entry.pending = nil
-				continue
-			}
-			entry.admitted = true
-			if entry.health.Status == storage.HealthHeld {
-				entry.health.Status = storage.HealthBroken
-				entry.health.HeldBucket, entry.health.HeldAt = "", time.Time{}
-			}
+		if !entry.admitted && !r.admitEntry(d, entry) {
+			continue
 		}
-		entry.pending = r.healBrokenEntry(ctx, run, &statsMu, entry.health, entry.pending)
+		entry.pending = r.healBrokenEntry(ctx, run, &d.statsMu, entry.health, entry.pending)
 	}
-	if capped > 0 {
-		r.logger.Info().Str("run_id", run.ID).Int("entries", capped).
+	if d.capped > 0 {
+		r.logger.Info().Str("run_id", run.ID).Int("entries", d.capped).
 			Msg("Repair: heal cap reached; the rest stay confirmed for a later run")
 	}
+}
+
+// healDecision is what healBatch decides its entries on, and what the decisions add up to.
+type healDecision struct {
+	run     *storage.RepairRun
+	batch   *probeBatch
+	policy  healPolicy
+	plan    map[Bucket]bucketOutcome
+	statsMu sync.Mutex
+	capped  int
+	// undrained are the draining buckets that still hold entries the caps left for a later run.
+	undrained map[Bucket]bool
+}
+
+// admitEntry decides an entry not yet admitted: it reports true when its heal may start, and otherwise has held
+// it or left it for a later run.
+func (r *Service) admitEntry(d *healDecision, entry *probedEntry) bool {
+	if entry.inFlight && !d.policy.force {
+		entry.pending = nil
+		return false
+	}
+	items := r.bucketItems(entry.pending)
+	if bucket, reason, held := heldBy(d.plan, items); held {
+		r.holdEntry(d.run, &d.statsMu, entry, bucket, reason)
+		return false
+	}
+	if d.policy.force {
+		r.breaker.recordForced(items, d.batch.usage)
+		r.releaseForced(items, d.policy.caller)
+	} else if !r.breaker.tryAdmit(items, d.batch.usage) {
+		d.capped++
+		if draining := drainingBuckets(d.plan, items); len(draining) > 0 {
+			// Saved broken it would count as new evidence next sweep and re-trip the bucket.
+			r.holdEntry(d.run, &d.statsMu, entry, draining[0], holdDraining)
+			for _, bucket := range draining {
+				d.undrained[bucket] = true // every bucket the entry waits in stays draining
+			}
+			return false
+		}
+		entry.pending = nil
+		return false
+	}
+	entry.admitted = true
+	if entry.health.Status == storage.HealthHeld {
+		entry.health.Status = storage.HealthBroken
+		entry.health.HeldBucket, entry.health.HeldAt = "", time.Time{}
+	}
+	return true
+}
+
+// drainingBuckets names the buckets of items that are draining their held entries.
+func drainingBuckets(plan map[Bucket]bucketOutcome, items []healItem) []Bucket {
+	var draining []Bucket
+	for _, item := range items {
+		if plan[item.bucket].draining {
+			draining = append(draining, item.bucket)
+		}
+	}
+	return draining
 }
 
 func heldBy(plan map[Bucket]bucketOutcome, items []healItem) (Bucket, holdReason, bool) {
@@ -240,24 +310,7 @@ func (r *Service) judgeBuckets(
 	batch *probeBatch,
 	names []string,
 ) map[Bucket]bucketOutcome {
-	subjects := make(map[Bucket]map[string]struct{})
-	held := make(map[Bucket]int)
-	for _, name := range names {
-		entry := batch.entries[name]
-		if entry.admitted {
-			continue
-		}
-		for _, item := range r.bucketItems(entry.pending) {
-			if subjects[item.bucket] == nil {
-				subjects[item.bucket] = make(map[string]struct{})
-			}
-			subjects[item.bucket][name] = struct{}{}
-			if entry.wasHeld {
-				held[item.bucket]++
-			}
-			r.breaker.noteConfirmed(item.bucket, name)
-		}
-	}
+	subjects, held := r.sightBuckets(batch, names)
 	buckets := make([]Bucket, 0, len(subjects))
 	for bucket := range subjects {
 		buckets = append(buckets, bucket)
@@ -284,15 +337,32 @@ func (r *Service) judgeBuckets(
 	return plan
 }
 
-func (r *Service) settleReleased(plan map[Bucket]bucketOutcome) {
-	var released []Bucket
-	for bucket, out := range plan {
-		if out.released {
-			released = append(released, bucket)
-			r.logger.Info().Str("bucket", bucket.String()).Msg("Repair: breaker released; draining held entries")
+// sightBuckets returns, per bucket, the entries the batch confirms broken there and how many of them were held,
+// and notes the sightings in the breaker's rolling window.
+func (r *Service) sightBuckets(batch *probeBatch, names []string) (map[Bucket]map[string]struct{}, map[Bucket]int) {
+	subjects := make(map[Bucket]map[string]struct{})
+	held := make(map[Bucket]int)
+	for _, name := range names {
+		entry := batch.entries[name]
+		if entry.admitted || entry.inFlight {
+			continue
+		}
+		for _, item := range r.bucketItems(entry.pending) {
+			if subjects[item.bucket] == nil {
+				subjects[item.bucket] = make(map[string]struct{})
+			}
+			subjects[item.bucket][name] = struct{}{}
+			if entry.wasHeld {
+				held[item.bucket]++
+			}
+			// A probed run judges held entries itself; re-sighting them would refill the rolling window that heals
+			// outside a sweep are judged on, and trip the bucket mid-drain.
+			if !entry.wasHeld || !batch.scaled {
+				r.breaker.noteConfirmed(item.bucket, name)
+			}
 		}
 	}
-	r.breaker.settle(released...)
+	return subjects, held
 }
 
 // announceTrip logs and notifies that a bucket's heals are held.

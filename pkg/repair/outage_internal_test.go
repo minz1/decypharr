@@ -2,6 +2,7 @@ package repair
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -180,10 +181,10 @@ func (f *outageFixture) downRange(from, to int) {
 	f.client.set(false, hashes...)
 }
 
-// markDirty makes entries [from, to) due for the next sweep.
-func (f *outageFixture) markDirty(t *testing.T, from, to int) {
+// markUpDirty makes the entries the outage left up, 80 onward, due for the next sweep.
+func (f *outageFixture) markUpDirty(t *testing.T) {
 	t.Helper()
-	for i := from; i < to; i++ {
+	for i := 80; i < len(f.entries); i++ {
 		if err := f.store.MarkEntryDirty(f.entries[i].Name, config.ProtocolTorrent, "entry_item_changed"); err != nil {
 			t.Fatal(err)
 		}
@@ -314,13 +315,74 @@ func TestHeldEntriesStillBrokenDoNotKeepTheBucketTripped(t *testing.T) {
 	}
 
 	// The 80 stay broken; the other 20 come due and probe clean.
-	f.markDirty(t, 80, 100)
+	f.markUpDirty(t)
 	f.sweep(t.Context(), nil)
 	if f.requests() != 25 {
 		t.Fatalf("heals = %d, want the bucket released and the held entries drained up to the cap of 25", f.requests())
 	}
+	if got := f.countStatus(t, storage.HealthHeld); got != 55 {
+		t.Fatalf("still held = %d, want the 55 the cap left for later sweeps of the drain", got)
+	}
+}
+
+// openJobsReacquirer reports every requested reacquisition as a queued job, as the reacquire journal does while
+// the Arr has not replaced the file yet.
+type openJobsReacquirer struct{ *fakeReacquirer }
+
+func (j openJobsReacquirer) Jobs() []reacquire.Job {
+	jobs := make([]reacquire.Job, 0, len(j.requests))
+	for _, request := range j.requests {
+		jobs = append(jobs, reacquire.Job{Status: reacquire.StatusQueued, EntryID: request.EntryID})
+	}
+	return jobs
+}
+
+// Item 54: after a release the cap drains the held entries over several sweeps. The ones the cap left wait held,
+// the healed ones (their reacquisitions still open) are no new evidence, so the bucket never re-trips, and each
+// sweep heals entries not healed before until the drain ends and the bucket closes.
+func TestReleaseDrainsHeldEntriesAcrossSweepsWithoutRetripping(t *testing.T) {
+	t.Parallel()
+	t.Run("a clean sample every sweep", func(t *testing.T) {
+		t.Parallel()
+		assertDrains(t, true)
+	})
+	// The healthy entries are not due again for the recheck interval, so later drain sweeps see only held rows.
+	t.Run("no sample after the release", func(t *testing.T) {
+		t.Parallel()
+		assertDrains(t, false)
+	})
+}
+
+func assertDrains(t *testing.T, sampleEverySweep bool) {
+	t.Helper()
+	f := newOutageFixture(t, 100, config.RepairConfig{})
+	f.service.reacquirer = openJobsReacquirer{f.reacquirer}
+	f.downRange(0, 80)
+	f.sweep(t.Context(), nil)
+	f.sweep(t.Context(), nil)
+
+	for sweep, want := range []int{25, 50, 75, 80, 80} {
+		if sweep == 0 || sampleEverySweep {
+			f.markUpDirty(t)
+		}
+		f.sweep(t.Context(), nil)
+		if got := f.requests(); got != want {
+			t.Fatalf("drain sweep %d: heals = %d, want %d (25 new per sweep)", sweep, got, want)
+		}
+		assertNotTripped(t, f, fmt.Sprintf("drain sweep %d", sweep))
+	}
+	healed := map[string]bool{}
+	for _, request := range f.reacquirer.requests {
+		if healed[request.FileID] {
+			t.Fatalf("%s healed twice", request.FileID)
+		}
+		healed[request.FileID] = true
+	}
 	if got := f.countStatus(t, storage.HealthHeld); got != 0 {
-		t.Fatalf("still held = %d, want none after the release", got)
+		t.Fatalf("still held = %d after the drain", got)
+	}
+	if status := f.service.BreakerStatus(); len(status) != 0 {
+		t.Fatalf("the bucket did not close after the drain: %+v", status)
 	}
 }
 
@@ -333,7 +395,7 @@ func TestHeldBucketStaysTrippedWhenTheSampleIsDirty(t *testing.T) {
 	f.sweep(t.Context(), nil)
 
 	f.downRange(0, 95)
-	f.markDirty(t, 80, 100)
+	f.markUpDirty(t)
 	f.sweep(t.Context(), nil) // first sighting of 80..94
 	f.sweep(t.Context(), nil) // 15 non-held entries confirmed
 	if f.requests() != 0 {
@@ -381,4 +443,62 @@ func TestReleaseReprobesHeldEntriesBeforeHealingTheRest(t *testing.T) {
 	if len(f.service.BreakerStatus()) != 0 {
 		t.Fatalf("the bucket did not close after draining: %+v", f.service.BreakerStatus())
 	}
+}
+
+// startDrain trips the bucket on 80 of 100 entries and runs the first drain sweep: 25 healed, 55 held.
+func startDrain(t *testing.T) *outageFixture {
+	t.Helper()
+	f := newOutageFixture(t, 100, config.RepairConfig{})
+	f.service.reacquirer = openJobsReacquirer{f.reacquirer}
+	f.downRange(0, 80)
+	f.sweep(t.Context(), nil)
+	f.sweep(t.Context(), nil)
+	f.markUpDirty(t)
+	f.sweep(t.Context(), nil)
+	if f.requests() != 25 || f.countStatus(t, storage.HealthHeld) != 55 {
+		t.Fatalf("setup: heals %d held %d", f.requests(), f.countStatus(t, storage.HealthHeld))
+	}
+	return f
+}
+
+func assertNotTripped(t *testing.T, f *outageFixture, when string) {
+	t.Helper()
+	for _, status := range f.service.BreakerStatus() {
+		if status.State == string(breakerTripped) {
+			t.Fatalf("%s: the bucket re-tripped: %+v", when, status)
+		}
+	}
+}
+
+// Item 54 review: a recheck of one held entry mid-drain must not close the drain while other entries stay held.
+func TestRecheckDuringTheDrainDoesNotEndIt(t *testing.T) {
+	t.Parallel()
+	f := startDrain(t)
+	f.clock.Advance(2 * time.Hour)
+	if _, err := f.service.RecheckEntry(t.Context(), f.entries[79].Name, RecheckOptions{Fix: true}); err != nil {
+		t.Fatal(err)
+	}
+	f.service.runWG.Wait()
+	if status := f.service.BreakerStatus(); len(status) != 1 || status[0].State != string(breakerReleasing) {
+		t.Fatalf("after the recheck: %+v, want the bucket still releasing", status)
+	}
+	f.markUpDirty(t)
+	f.sweep(t.Context(), nil)
+	assertNotTripped(t, f, "sweep after the recheck")
+	if got := f.requests(); got < 50 {
+		t.Fatalf("heals = %d, want the drain to go on", got)
+	}
+}
+
+// Item 54 review: sweeps re-sighting held entries must not fill the rolling window, so a heal admitted outside a
+// sweep mid-drain does not re-trip the bucket.
+func TestAdmitDuringTheDrainDoesNotRetrip(t *testing.T) {
+	t.Parallel()
+	f := startDrain(t)
+	f.clock.Advance(30 * time.Minute) // inside the window the drain sweep's sightings are in
+	err := f.service.Admit(t.Context(), HealRequest{Provider: "rd", Class: ClassHosterLink, Subject: "other"})
+	if err != nil && !errors.Is(err, ErrHealCapped) {
+		t.Fatalf("admit mid-drain: %v, want admitted or capped (the drain used the bucket's cap), never held", err)
+	}
+	assertNotTripped(t, f, "admit")
 }

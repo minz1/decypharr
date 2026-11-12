@@ -66,7 +66,7 @@ func (b Bucket) String() string { return b.Provider + "/" + string(b.Class) }
 //	closed    heals pass, within the caps
 //	tripped   heals are held; entered when a run or the rolling window finds too many confirmed failures
 //	releasing a later run found the bucket under threshold with a passing canary; its held entries are
-//	          re-probed and drained through the caps, then the bucket closes
+//	          re-probed and drained through the caps, over as many runs as the caps need, then the bucket closes
 type breakerState string
 
 const (
@@ -125,6 +125,8 @@ const (
 	// holdNoCanary holds a tripped bucket that has nothing recently good to probe: only a later sweep that samples
 	// the provider, or an operator force, releases it.
 	holdNoCanary holdReason = "no_canary"
+	// holdDraining holds an entry of a releasing bucket that the caps left for the next run of the drain.
+	holdDraining holdReason = "draining"
 )
 
 // hint says what a bucket held for this reason is waiting for.
@@ -213,6 +215,8 @@ type bucketOutcome struct {
 	newlyTripped bool
 	// released reports that this evaluation moved the bucket to releasing.
 	released bool
+	// draining reports a releasing bucket: entries the caps leave stay held for the next run.
+	draining bool
 }
 
 // breaker holds the bucket machines, the rolling heal ledger and the canary verdicts. It is in memory: a
@@ -390,6 +394,10 @@ func (b *breaker) stepLocked(key Bucket, in bucketInput, fresh *canaryOutcome) (
 	switch {
 	case probed < 0:
 		confirmed = b.windowCountLocked(key, s)
+	case bk.state == breakerReleasing:
+		// The held rows are the drain's backlog, not new evidence, sample or not: a sweep after the release seldom
+		// finds healthy entries due again, so only entries broken outside the hold can re-trip the bucket.
+		confirmed, probed = confirmed-in.held, probed-in.held
 	case bk.state != breakerClosed && in.sample.passes():
 		// The provider works for the entries a sweep found that were not held, so the held ones still broken are the
 		// failure that opened the bucket, not new evidence: judge the bucket on the sample alone. Without a clean
@@ -421,7 +429,7 @@ func (b *breaker) stepLocked(key Bucket, in bucketInput, fresh *canaryOutcome) (
 		if exceeded {
 			return b.tripLocked(bk, now, in.runID, holdTripped), false
 		}
-		return bucketOutcome{}, false
+		return bucketOutcome{draining: true}, false
 	}
 	return bucketOutcome{hold: holdTripped}, false
 }
@@ -465,7 +473,7 @@ func (b *breaker) canaryStepLocked(
 			if err := bk.transition(breakerReleasing, now, in.runID, holdNone); err != nil {
 				return bucketOutcome{hold: holdTripped}, false
 			}
-			return bucketOutcome{released: true}, false
+			return bucketOutcome{released: true, draining: true}, false
 		}
 		return bucketOutcome{}, false
 	}
@@ -507,6 +515,19 @@ func (b *breaker) settle(keys ...Bucket) {
 	now := b.now()
 	for _, key := range keys {
 		if bk := b.buckets[key]; bk != nil && bk.state == breakerReleasing {
+			_ = bk.transition(breakerClosed, now, "", holdNone)
+		}
+	}
+}
+
+// settleDrained closes, after a sweep, every releasing bucket of a provider the sweep probed that holds no entry
+// the caps left for a later run: the sweep re-probed its held entries and admitted every one still broken.
+func (b *breaker) settleDrained(probed map[string]int, undrained map[Bucket]bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	now := b.now()
+	for key, bk := range b.buckets {
+		if bk.state == breakerReleasing && probed[key.Provider] > 0 && !undrained[key] {
 			_ = bk.transition(breakerClosed, now, "", holdNone)
 		}
 	}
