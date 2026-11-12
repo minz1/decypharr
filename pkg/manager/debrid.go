@@ -2,6 +2,7 @@ package manager
 
 import (
 	"cmp"
+	"context"
 	"errors"
 	"slices"
 
@@ -40,6 +41,25 @@ func (m *Manager) initDebridClients() {
 		}
 		m.clients.Store(dc.Name, client)
 	}
+}
+
+// startProfileFetches fetches each Real-Debrid client's profile as a work task, once the manager starts: the client
+// caches it, and a stop ends the call. Other providers fetch theirs when asked.
+func (m *Manager) startProfileFetches() {
+	m.clients.Range(func(name string, client debrid.Client) bool {
+		if client.Config().Provider != "realdebrid" {
+			return true
+		}
+		if err := m.work.Go("rd-profile", func(ctx context.Context) error {
+			if _, err := client.GetProfile(ctx); err != nil && !stopped(ctx) {
+				m.logger.Error().Err(err).Str("debrid", name).Msg("Failed to get RealDebrid profile")
+			}
+			return nil
+		}); err != nil {
+			m.logger.Debug().Err(err).Str("debrid", name).Msg("Manager stopping; RealDebrid profile not fetched")
+		}
+		return true
+	})
 }
 
 // createClient creates a debrid client based on configuration.

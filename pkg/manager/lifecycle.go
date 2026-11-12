@@ -220,6 +220,7 @@ func (m *Manager) startSequence(ctx context.Context) error {
 	if err := m.work.Go("initial-sync", m.initialSync); err != nil {
 		return fmt.Errorf("start the initial sync: %w", err)
 	}
+	m.startProfileFetches()
 	if err := m.runInitialCalls(); err != nil {
 		return fmt.Errorf("start the initial calls: %w", err)
 	}
