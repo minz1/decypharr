@@ -407,10 +407,11 @@ func (b *breaker) stepLocked(key Bucket, in bucketInput, fresh *canaryOutcome) (
 		// The held rows are the drain's backlog, not new evidence, sample or not: a sweep after the release seldom
 		// finds healthy entries due again, so only entries broken outside the hold can re-trip the bucket.
 		confirmed, probed = confirmed-in.held, probed-in.held
-	case bk.state != breakerClosed && in.sample.passes():
+	case bk.state != breakerClosed && bk.trippedRun != "" && in.sample.passes():
 		// The provider works for the entries a sweep found that were not held, so the held ones still broken are the
 		// failure that opened the bucket, not new evidence: judge the bucket on the sample alone. Without a clean
-		// sample, and on a closed bucket (fresh after a restart), held rows count and keep or trip the hold.
+		// sample, on a closed bucket (fresh after a restart), and on one only the rolling window tripped (no sweep
+		// judged its held rows yet, SM12-45), held rows count and keep or trip the hold.
 		confirmed, probed = confirmed-in.held, in.sample.probed
 	}
 	exceeded := over(s, confirmed, probed)
@@ -483,8 +484,12 @@ func (b *breaker) canaryStepLocked(
 			bk.reason = holdNoCanary
 			return bucketOutcome{hold: holdNoCanary}, false
 		}
-		if bk.state == breakerReleasing && outcome == canaryNone && in.runID != "" &&
-			in.sample.probed >= sampleMinimum && !in.sample.passes() {
+		if bk.state == breakerReleasing && outcome == canaryNone && in.sample.probed < sampleMinimum {
+			// No canary and no sample to judge (outside a sweep there is none): no evidence the provider works, so the
+			// drain waits, its rows held, for a sweep that samples it (SM12-47).
+			return bucketOutcome{hold: holdNoCanary}, false
+		}
+		if bk.state == breakerReleasing && outcome == canaryNone && !in.sample.passes() {
 			// A drain, not a release: with no canary the sweep's sample is its only evidence, and a broken one is new
 			// evidence, so the bucket trips again as no_canary and only a later passing sample releases it.
 			return b.tripLocked(bk, now, in.runID, holdNoCanary), false
@@ -576,8 +581,9 @@ func (b *breaker) releasing() map[Bucket]bool {
 }
 
 // tryAdmit starts the heals in items if every bucket and the total are under their caps, in the run so far
-// (usage, nil outside a run) and in the rolling window. A bucket admits while its count is under the cap, so an
-// entry bigger than the cap still heals once.
+// (usage, nil outside a run) and in the rolling window. A bucket admits an entry that fits under its cap, and an
+// entry bigger than the cap only into an empty bucket, so it still heals once but never carries a bucket past the
+// cap (SM12-46).
 func (b *breaker) tryAdmit(items []healItem, usage *runUsage) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -598,8 +604,9 @@ func (b *breaker) tryAdmit(items []healItem, usage *runUsage) bool {
 	if total >= s.CapPerRun || (usage != nil && usage.total >= s.CapPerRun) {
 		return false
 	}
-	for key := range cost {
-		if perBucket[key] >= s.CapPerBucket || (usage != nil && usage.perBucket[key] >= s.CapPerBucket) {
+	full := func(have, cost int) bool { return have >= s.CapPerBucket || (have > 0 && have+cost > s.CapPerBucket) }
+	for key, units := range cost {
+		if full(perBucket[key], units) || (usage != nil && full(usage.perBucket[key], units)) {
 			return false
 		}
 	}

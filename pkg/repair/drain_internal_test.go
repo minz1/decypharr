@@ -16,7 +16,7 @@ import (
 func TestAdmitReleaseBetweenSweepsLeavesTheDrainToTheSweep(t *testing.T) {
 	t.Parallel()
 	f := newOutageFixture(t, 100, config.RepairConfig{})
-	f.service.reacquirer = openJobsReacquirer{f.reacquirer}
+	f.service.reacquirer = newOpenJobsReacquirer(f)
 	f.downRange(0, 80)
 	f.sweep(t.Context(), nil)
 	f.sweep(t.Context(), nil)

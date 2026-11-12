@@ -83,6 +83,9 @@ type outageFixture struct {
 	entries    []*storage.Entry
 	runs       int
 	run        *storage.RepairRun
+	// deleted are the entries whose Radarr file a reacquisition deleted (see openJobsReacquirer).
+	deletedMu sync.Mutex
+	deleted   map[string]bool
 }
 
 func outageHash(i int) string { return fmt.Sprintf("%040x", i+1) }
@@ -129,19 +132,29 @@ func newOutageFixture(t *testing.T, size int, repair config.RepairConfig) *outag
 func (f *outageFixture) serveRadarr(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
-	movies := make([]string, 0, len(f.entries))
-	for i, entry := range f.entries {
+	links := make([]string, 0, len(f.entries))
+	for _, entry := range f.entries {
 		link := filepath.Join(dir, entry.Name+".mkv")
 		if err := os.Symlink(filepath.Join("/mnt/decypharr", entry.Name, "video.mkv"), link); err != nil {
 			t.Fatal(err)
 		}
-		movies = append(movies, fmt.Sprintf(`{"id":%d,"title":%q,"movieFile":{"id":%d,"path":%q}}`,
-			i+1, entry.Name, i+1, link))
+		links = append(links, link)
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v3/movie" {
 			http.NotFound(w, r)
 			return
+		}
+		f.deletedMu.Lock()
+		defer f.deletedMu.Unlock()
+		movies := make([]string, 0, len(f.entries))
+		for i, entry := range f.entries {
+			if f.deleted[entry.Name] {
+				movies = append(movies, fmt.Sprintf(`{"id":%d,"title":%q}`, i+1, entry.Name))
+				continue
+			}
+			movies = append(movies, fmt.Sprintf(`{"id":%d,"title":%q,"movieFile":{"id":%d,"path":%q}}`,
+				i+1, entry.Name, i+1, links[i]))
 		}
 		_, _ = fmt.Fprintf(w, "[%s]", strings.Join(movies, ","))
 	}))
@@ -325,14 +338,37 @@ func TestHeldEntriesStillBrokenDoNotKeepTheBucketTripped(t *testing.T) {
 	}
 }
 
-// openJobsReacquirer reports every requested reacquisition as a queued job, as the reacquire journal does while
-// the Arr has not replaced the file yet.
-type openJobsReacquirer struct{ *fakeReacquirer }
+// openJobsReacquirer reports every requested reacquisition as a queued job created when it was requested, as the
+// reacquire journal does while the Arr has not replaced the file yet, and deletes the entry's Radarr file as a
+// reacquisition does, so the entry is no candidate of a later sweep.
+type openJobsReacquirer struct {
+	*fakeReacquirer
+
+	f  *outageFixture
+	at *[]time.Time
+}
+
+func newOpenJobsReacquirer(f *outageFixture) openJobsReacquirer {
+	return openJobsReacquirer{fakeReacquirer: f.reacquirer, f: f, at: new([]time.Time)}
+}
+
+func (j openJobsReacquirer) Reacquire(request reacquire.Request) (*reacquire.Job, error) {
+	j.f.deletedMu.Lock()
+	if j.f.deleted == nil {
+		j.f.deleted = map[string]bool{}
+	}
+	j.f.deleted[strings.TrimPrefix(request.FileID, "id-")] = true
+	j.f.deletedMu.Unlock()
+	*j.at = append(*j.at, j.f.clock.Now())
+	return j.fakeReacquirer.Reacquire(request)
+}
 
 func (j openJobsReacquirer) Jobs() []reacquire.Job {
 	jobs := make([]reacquire.Job, 0, len(j.requests))
-	for _, request := range j.requests {
-		jobs = append(jobs, reacquire.Job{Status: reacquire.StatusQueued, EntryID: request.EntryID})
+	for i, request := range j.requests {
+		jobs = append(jobs, reacquire.Job{
+			Status: reacquire.StatusQueued, EntryID: request.EntryID, CreatedAt: (*j.at)[i],
+		})
 	}
 	return jobs
 }
@@ -356,7 +392,7 @@ func TestReleaseDrainsHeldEntriesAcrossSweepsWithoutRetripping(t *testing.T) {
 func assertDrains(t *testing.T, sampleEverySweep bool) {
 	t.Helper()
 	f := newOutageFixture(t, 100, config.RepairConfig{})
-	f.service.reacquirer = openJobsReacquirer{f.reacquirer}
+	f.service.reacquirer = newOpenJobsReacquirer(f)
 	f.downRange(0, 80)
 	f.sweep(t.Context(), nil)
 	f.sweep(t.Context(), nil)
@@ -449,7 +485,7 @@ func TestReleaseReprobesHeldEntriesBeforeHealingTheRest(t *testing.T) {
 func startDrain(t *testing.T) *outageFixture {
 	t.Helper()
 	f := newOutageFixture(t, 100, config.RepairConfig{})
-	f.service.reacquirer = openJobsReacquirer{f.reacquirer}
+	f.service.reacquirer = newOpenJobsReacquirer(f)
 	f.downRange(0, 80)
 	f.sweep(t.Context(), nil)
 	f.sweep(t.Context(), nil)

@@ -9,14 +9,17 @@ type jobLister interface {
 
 // openReacquisitions returns the IDs of the entries a reacquisition still open in the journal covers, nil when the
 // reacquirer keeps no journal. Their heal is under way: a sweep that finds them still broken has no new evidence.
+// A job waiting on an operator, or open longer than the breaker Window, is no heal under way, so it hides nothing
+// (SM12-44).
 func (r *Service) openReacquisitions() map[string]bool {
 	lister, ok := r.reacquirer.(jobLister)
 	if !ok {
 		return nil
 	}
 	open := make(map[string]bool)
+	cutoff := r.clock().Add(-r.breakerSettings().Window)
 	for _, job := range lister.Jobs() {
-		if job.Status.Terminal() {
+		if job.Status.Terminal() || job.Status == reacquire.StatusNeedsAttention || job.CreatedAt.Before(cutoff) {
 			continue
 		}
 		open[job.EntryID] = true

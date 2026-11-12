@@ -86,12 +86,14 @@ func (b *probeBatch) noteProbed(result *probeResult) {
 	defer b.mu.Unlock()
 	for _, provider := range result.providers {
 		b.probed[provider]++
+		if result.wasHeld {
+			// A held entry is suspect: no sample of the provider. It stays on the scale even while reacquired, since
+			// its row is the backlog the breaker judges (SM12-44).
+			continue
+		}
 		if b.isInFlight(result.health.BrokenFiles) {
 			b.inFlight[provider]++
 			continue // one being reacquired is old news: no sample of the provider
-		}
-		if result.wasHeld {
-			continue // a held entry is suspect: no sample of the provider
 		}
 		sample := b.samples[provider]
 		sample.probed++
@@ -108,7 +110,8 @@ func (b *probeBatch) add(health *storage.EntryHealth, files []storage.BrokenFile
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	// In flight as noteProbed decides it, on every broken file, so the scale and the evidence agree.
+	// In flight as noteProbed decides it, on every broken file, so the scale and the evidence agree; a held entry
+	// in flight still counts on both (SM12-44) and only takes no cap slot.
 	b.entries[health.EntryName] = &probedEntry{
 		health: health, pending: files, wasHeld: wasHeld, inFlight: b.isInFlight(health.BrokenFiles),
 	}
@@ -245,11 +248,19 @@ type healDecision struct {
 // admitEntry decides an entry not yet admitted: it reports true when its heal may start, and otherwise has held
 // it or left it for a later run.
 func (r *Service) admitEntry(d *healDecision, entry *probedEntry) bool {
+	items := r.bucketItems(entry.pending)
 	if entry.inFlight && !d.policy.force {
-		entry.pending = nil
+		// Its heal is under way, so it takes no cap slot. A held one keeps its hold while its bucket holds or drains,
+		// so the next sweep still counts it as the backlog (SM12-44).
+		if bucket, reason, held := heldBy(d.plan, items); entry.wasHeld && held {
+			r.holdEntry(d.run, &d.statsMu, entry, bucket, reason)
+			return false
+		}
+		if !r.holdDrain(d, entry, items) {
+			entry.pending = nil
+		}
 		return false
 	}
-	items := r.bucketItems(entry.pending)
 	if bucket, reason, held := heldBy(d.plan, items); held {
 		r.holdEntry(d.run, &d.statsMu, entry, bucket, reason)
 		return false
@@ -259,22 +270,30 @@ func (r *Service) admitEntry(d *healDecision, entry *probedEntry) bool {
 		r.releaseForced(items, d.policy.caller)
 	} else if !r.breaker.tryAdmit(items, d.batch.usage) {
 		d.capped++
-		// Only the drain's backlog waits held; a new failure the cap left stays broken, evidence for the next sweep.
-		if draining := drainingBuckets(d.plan, items); entry.wasHeld && len(draining) > 0 {
-			// Saved broken it would count as new evidence next sweep and re-trip the bucket.
-			r.holdEntry(d.run, &d.statsMu, entry, draining[0], holdDraining)
-			for _, bucket := range draining {
-				d.undrained[bucket] = true // every bucket the entry waits in stays draining
-			}
-			return false
+		if !r.holdDrain(d, entry, items) {
+			entry.pending = nil
 		}
-		entry.pending = nil
 		return false
 	}
 	entry.admitted = true
 	if entry.health.Status == storage.HealthHeld {
 		entry.health.Status = storage.HealthBroken
 		entry.health.HeldBucket, entry.health.HeldAt = "", time.Time{}
+	}
+	return true
+}
+
+// holdDrain keeps a held entry that is not healing this run held under its draining bucket, and reports whether it
+// did. Only the drain's backlog waits held; a new failure stays broken, evidence for the next sweep. Saved broken, a
+// held entry would count as new evidence next sweep and re-trip the bucket.
+func (r *Service) holdDrain(d *healDecision, entry *probedEntry, items []healItem) bool {
+	draining := drainingBuckets(d.plan, items)
+	if !entry.wasHeld || len(draining) == 0 {
+		return false
+	}
+	r.holdEntry(d.run, &d.statsMu, entry, draining[0], holdDraining)
+	for _, bucket := range draining {
+		d.undrained[bucket] = true // every bucket the entry waits in stays draining
 	}
 	return true
 }
@@ -399,7 +418,7 @@ func (r *Service) sightBuckets(batch *probeBatch, names []string) (map[Bucket]ma
 	held := make(map[Bucket]int)
 	for _, name := range names {
 		entry := batch.entries[name]
-		if entry.admitted || entry.inFlight {
+		if entry.admitted || (entry.inFlight && !entry.wasHeld) {
 			continue
 		}
 		for _, item := range r.bucketItems(entry.pending) {
