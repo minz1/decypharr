@@ -35,9 +35,20 @@ func TestRegisteredServicesStopInReverseOrderAndStorageLast(t *testing.T) {
 	m := newShutdownTestManager(t, t.TempDir())
 	logs := &lockedLog{}
 	m.logger = zerolog.New(logs)
+	strmSaw := make(chan lifecycle, 1)
+	if err := m.strmGroup.Go("probe", func(ctx context.Context) error {
+		<-ctx.Done() // the strm group begins to stop
+		strmSaw <- m.life.Load()
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	stopRoot(t, m.group)
 
+	if got := <-strmSaw; got != lifecycleStopping {
+		t.Fatalf("state when the strm group began to stop = %v, want stopping", got)
+	}
 	want := []string{
 		"stopping", "scheduler", "repair", "indexer", "reacquire", "placements", "usenet", "hearsay",
 	}
