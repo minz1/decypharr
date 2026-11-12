@@ -111,6 +111,8 @@ func (b *bucketBreaker) transition(to breakerState, at time.Time, runID string, 
 	b.state, b.since = to, at
 	if to == breakerTripped {
 		b.trippedRun, b.reason = runID, reason
+	} else {
+		b.reason = holdNone // the hold ended; a releasing bucket's own holds set it again
 	}
 	return nil
 }
@@ -122,8 +124,8 @@ const (
 	holdTripped            holdReason = "tripped"
 	holdCanaryFailed       holdReason = "canary_failed"
 	holdCanaryInconclusive holdReason = "canary_inconclusive"
-	// holdNoCanary holds a tripped bucket that has nothing recently good to probe: only a later sweep that samples
-	// the provider, or an operator force, releases it.
+	// holdNoCanary holds a tripped bucket, or the drain of a releasing one, that has nothing recently good to probe:
+	// only a later sweep that samples the provider, or an operator force, releases it.
 	holdNoCanary holdReason = "no_canary"
 	// holdDraining holds an entry of a releasing bucket that the caps left for the next run of the drain.
 	holdDraining holdReason = "draining"
@@ -479,32 +481,42 @@ func (b *breaker) canaryStepLocked(
 	case canaryInconclusive, canaryAborted:
 		return bucketOutcome{hold: holdCanaryInconclusive}, false
 	case canaryNone, canaryPass:
-		if releasing && outcome == canaryNone && (in.runID == "" || !in.sample.passes()) {
-			// Nothing to probe is no evidence of recovery: the clock alone never releases the bucket.
-			bk.reason = holdNoCanary
-			return bucketOutcome{hold: holdNoCanary}, false
-		}
-		if bk.state == breakerReleasing && outcome == canaryNone && in.sample.probed < sampleMinimum {
-			// No canary and no sample to judge (outside a sweep there is none): no evidence the provider works, so the
-			// drain waits, its rows held, for a sweep that samples it (SM12-47). Force-healing an entry is the
-			// operator's way past it.
-			bk.reason = holdNoCanary
-			return bucketOutcome{hold: holdNoCanary}, false
-		}
-		if bk.state == breakerReleasing && outcome == canaryNone && !in.sample.passes() {
-			// A drain, not a release: with no canary the sweep's sample is its only evidence, and a broken one is new
-			// evidence, so the bucket trips again as no_canary and only a later passing sample releases it.
-			return b.tripLocked(bk, now, in.runID, holdNoCanary), false
-		}
-		if releasing {
-			if err := bk.transition(breakerReleasing, now, in.runID, holdNone); err != nil {
-				return bucketOutcome{hold: holdTripped}, false
-			}
-			return bucketOutcome{released: true, draining: true}, false
-		}
-		return bucketOutcome{}, false
+		return b.admitStepLocked(bk, in, outcome == canaryNone, releasing), false
 	}
 	return bucketOutcome{hold: holdCanaryInconclusive}, false
+}
+
+// admitStepLocked decides on a bucket whose canary passed or had nothing to probe (noCanary): it admits, releases a
+// tripped bucket (releasing) or drains a releasing one, unless without a canary the sample gives no evidence.
+func (b *breaker) admitStepLocked(bk *bucketBreaker, in bucketInput, noCanary, releasing bool) bucketOutcome {
+	now := b.now()
+	if releasing && noCanary && (in.runID == "" || !in.sample.passes()) {
+		// Nothing to probe is no evidence of recovery: the clock alone never releases the bucket.
+		bk.reason = holdNoCanary
+		return bucketOutcome{hold: holdNoCanary}
+	}
+	if bk.state == breakerReleasing && noCanary && in.sample.probed < sampleMinimum {
+		// No canary and no sample to judge (outside a sweep there is none): no evidence the provider works, so the
+		// drain waits, its rows held, for a sweep that samples it (SM12-47), or for an operator force (see
+		// forceRelease).
+		bk.reason = holdNoCanary
+		return bucketOutcome{hold: holdNoCanary}
+	}
+	if bk.state == breakerReleasing && noCanary && !in.sample.passes() {
+		// A drain, not a release: with no canary the sweep's sample is its only evidence, and a broken one is new
+		// evidence, so the bucket trips again as no_canary and only a later passing sample releases it.
+		return b.tripLocked(bk, now, in.runID, holdNoCanary)
+	}
+	if releasing {
+		if err := bk.transition(breakerReleasing, now, in.runID, holdNone); err != nil {
+			return bucketOutcome{hold: holdTripped}
+		}
+		return bucketOutcome{released: true, draining: true}
+	}
+	if bk.state == breakerReleasing {
+		bk.reason = holdNone // the drain goes on: a no_canary hold of an earlier run is over
+	}
+	return bucketOutcome{}
 }
 
 // holdOf is why a tripped bucket holds: the reason it was tripped or last held for.
@@ -515,22 +527,22 @@ func holdOf(bk *bucketBreaker) holdReason {
 	return bk.reason
 }
 
-// forceRelease closes a tripped bucket on an operator's say-so, but only one held as no_canary: that is the one
-// hold waiting for a sweep or an operator. A bucket a canary or the threshold tripped is not released, since a
-// force is no evidence the provider works. It reports whether the bucket was released and, when it was open and
-// stays so, why it is held.
+// forceRelease closes a tripped bucket, or a releasing one whose drain waits for a sample (SM12-47), on an
+// operator's say-so, but only one held as no_canary: that is the one hold waiting for a sweep or an operator. A
+// bucket a canary or the threshold tripped is not released, since a force is no evidence the provider works. It
+// reports whether the bucket was released and, when it was open and stays so, why it is held.
 func (b *breaker) forceRelease(key Bucket) (bool, holdReason) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	bk := b.buckets[key]
-	if bk == nil || bk.state != breakerTripped {
+	if bk == nil || (bk.state != breakerTripped && bk.state != breakerReleasing) {
 		return false, holdNone
 	}
 	if bk.reason != holdNoCanary {
 		return false, bk.reason
 	}
 	now := b.now()
-	released := bk.transition(breakerReleasing, now, "", holdNone) == nil &&
+	released := (bk.state == breakerReleasing || bk.transition(breakerReleasing, now, "", holdNone) == nil) &&
 		bk.transition(breakerClosed, now, "", holdNone) == nil
 	return released, bk.reason
 }

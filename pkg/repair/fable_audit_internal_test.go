@@ -166,6 +166,13 @@ func TestReleasingBucketWithNoCanaryAndNoSampleHolds(t *testing.T) {
 			if out.draining || out.hold == holdNone {
 				t.Fatalf("out = %+v, want the drain held without evidence", out)
 			}
+			// The hold must not strand the bucket on a provider too small to sample: an operator force closes it.
+			if released, reason := b.forceRelease(key); !released {
+				t.Fatalf("forceRelease = false (%s), want the no_canary drain closed", reason)
+			}
+			if status := b.status(); len(status) != 0 {
+				t.Fatalf("status = %+v, want the bucket closed", status)
+			}
 		})
 	}
 	verdict := canaryNone
