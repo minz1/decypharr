@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -366,4 +367,38 @@ func newTestGroup(t *testing.T) *task.Group {
 		<-g.Done()
 	})
 	return g
+}
+
+// A rushed stop does not wait between the group's steps, so the close task itself waits for a worker that is mid-write
+// before it closes the repositories under it.
+func TestCloseTaskWaitsForTheWorkerBeforeClosingRepositories(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		service := newTestService(t, newTestGroup(t), t.TempDir())
+		writing := make(chan struct{})
+		release := make(chan struct{})
+		if err := service.worker.Go("write", func(context.Context) error {
+			close(writing)
+			<-release
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		<-writing
+		_ = rushStop(service.g)
+		synctest.Wait()
+		service.lifecycleMu.RLock()
+		stopped := service.state == serviceStopped
+		service.lifecycleMu.RUnlock()
+		if stopped {
+			t.Fatal("the repositories were closed while the worker was still writing")
+		}
+		close(release)
+		<-service.g.Done()
+		service.lifecycleMu.RLock()
+		defer service.lifecycleMu.RUnlock()
+		if service.state != serviceStopped {
+			t.Fatalf("state = %v after the worker finished, want stopped", service.state)
+		}
+	})
 }
