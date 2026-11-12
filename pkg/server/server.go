@@ -234,7 +234,8 @@ func (s *Server) Stopped() <-chan struct{} { return s.stopped }
 var errRestartUnavailable = errors.New("restart is not available: the server is not attached to a generation")
 
 // Restart asks the generation this server belongs to for a restart. It never
-// blocks and a second call within the same generation changes nothing.
+// blocks. A second call while the next config loads is kept and retried if
+// that load is rejected; otherwise it changes nothing.
 func (s *Server) Restart() error {
 	if s.restartFunc == nil {
 		return errRestartUnavailable

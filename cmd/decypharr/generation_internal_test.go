@@ -392,9 +392,10 @@ func TestRestartRequestedDuringARejectedLoadIsRetried(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	loading, release := make(chan struct{}), make(chan struct{})
-	var loads atomic.Int32
+	var loads, rejected atomic.Int32
 	sup := h.supervisor(func(gen *generation, cfg *config.Config, _ *logger.Factory) (func(), error) {
 		h.record(cfg, gen)
+		gen.OnRestartRejected(func(error) { rejected.Add(1) })
 		return noop, nil
 	})
 	sup.load = func() (*config.Config, error) {
@@ -414,6 +415,12 @@ func TestRestartRequestedDuringARejectedLoadIsRetried(t *testing.T) {
 	first.RequestRestart() // saves B while A loads
 	close(release)
 	h.nextGeneration()
+	if got := loads.Load(); got != 4 {
+		t.Fatalf("loads = %d, want 4: startup, the rejected load, the retry and the reload after the drain", got)
+	}
+	if got := rejected.Load(); got != 1 {
+		t.Fatalf("rejections reported = %d, want 1", got)
+	}
 	cancel()
 	if err := awaitRun(t, done); err != nil {
 		t.Fatal(err)
