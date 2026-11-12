@@ -144,6 +144,31 @@ func TestEvaluateReleasesOnlyInALaterRunAfterTheHoldAndAPassingCanary(t *testing
 	}
 }
 
+// SM12-20: held rows still broken count on a closed bucket (a restart forgot the trip), and on an open bucket only
+// when no clean sample shows the provider working.
+func TestHeldRowsCountOnlyWithoutACleanSampleOnAnOpenBucket(t *testing.T) {
+	t.Parallel()
+	verdict := canaryNone
+	b, clock, _ := testBreaker(&verdict)
+	clean := sweepSample{probed: 20}
+	heldOnly := bucketInput{runID: "r1", confirmed: 80, held: 80, probed: 100, sample: clean}
+	if out := b.evaluate(t.Context(), testBucket(), heldOnly); out.hold != holdTripped || !out.newlyTripped {
+		t.Fatalf("closed bucket: outcome = %+v, want the held rows to trip it", out)
+	}
+	clock.Advance(2 * time.Hour)
+	dirty := heldOnly
+	dirty.runID, dirty.sample = "r2", sweepSample{probed: 20, broken: 15}
+	if out := b.evaluate(t.Context(), testBucket(), dirty); out.hold != holdTripped || out.released {
+		t.Fatalf("dirty sample: outcome = %+v, want still tripped", out)
+	}
+	clock.Advance(2 * time.Hour)
+	later := heldOnly
+	later.runID = "r3"
+	if out := b.evaluate(t.Context(), testBucket(), later); !out.released {
+		t.Fatalf("clean sample: outcome = %+v, want released despite 80 held rows still broken", out)
+	}
+}
+
 func TestEvaluateStaysTrippedWhileStillOverThreshold(t *testing.T) {
 	t.Parallel()
 	verdict := canaryPass

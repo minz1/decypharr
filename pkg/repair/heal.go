@@ -32,7 +32,7 @@ func (r *Service) repairBroken(
 ) {
 	batch := newProbeBatch(false)
 	healths.Range(func(_ string, health *storage.EntryHealth) bool {
-		batch.add(health, health.BrokenFiles)
+		batch.add(health, health.BrokenFiles, health.Status == storage.HealthHeld)
 		return true
 	})
 	r.healBatch(ctx, run, batch, policy)

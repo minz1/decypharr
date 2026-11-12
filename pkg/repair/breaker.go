@@ -184,6 +184,8 @@ type bucketInput struct {
 	confirmed int
 	// probed is the entries probed on the bucket's provider this run, negative when no probe set the scale.
 	probed int
+	// held is how many of confirmed the breaker already held before this run.
+	held int
 	// sample is what the sweep found among the provider's entries that were not already held.
 	sample sweepSample
 }
@@ -384,11 +386,17 @@ func (b *breaker) stepLocked(key Bucket, in bucketInput, fresh *canaryOutcome) (
 	s := b.settings()
 	now := b.now()
 	bk := b.bucketLocked(key)
-	confirmed := in.confirmed
-	if in.probed < 0 {
+	confirmed, probed := in.confirmed, in.probed
+	switch {
+	case probed < 0:
 		confirmed = b.windowCountLocked(key, s)
+	case bk.state != breakerClosed && in.sample.passes():
+		// The provider works for the entries a sweep found that were not held, so the held ones still broken are the
+		// failure that opened the bucket, not new evidence: judge the bucket on the sample alone. Without a clean
+		// sample, and on a closed bucket (fresh after a restart), held rows count and keep or trip the hold.
+		confirmed, probed = confirmed-in.held, in.sample.probed
 	}
-	exceeded := over(s, confirmed, in.probed)
+	exceeded := over(s, confirmed, probed)
 
 	switch bk.state {
 	case breakerClosed:

@@ -74,7 +74,7 @@ func (r *Service) probeCandidates(
 				if policy.confirm {
 					files = result.confirmed
 				}
-				batch.add(h, files)
+				batch.add(h, files, result.wasHeld)
 			}
 
 			runMu.Lock()

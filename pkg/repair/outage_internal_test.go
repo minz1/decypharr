@@ -180,6 +180,16 @@ func (f *outageFixture) downRange(from, to int) {
 	f.client.set(false, hashes...)
 }
 
+// markDirty makes entries [from, to) due for the next sweep.
+func (f *outageFixture) markDirty(t *testing.T, from, to int) {
+	t.Helper()
+	for i := from; i < to; i++ {
+		if err := f.store.MarkEntryDirty(f.entries[i].Name, config.ProtocolTorrent, "entry_item_changed"); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func (f *outageFixture) countStatus(t *testing.T, status storage.HealthStatus) int {
 	t.Helper()
 	n := 0
@@ -287,6 +297,53 @@ func TestCanaryCatchesAnOutageUnderTheThreshold(t *testing.T) {
 	}
 	if status := f.service.BreakerStatus(); len(status) != 1 || status[0].Reason != "canary_failed" {
 		t.Fatalf("breaker status = %+v, want a canary trip", status)
+	}
+}
+
+// SM12-20, live 2026-11-09..12: 134 held usenet entries, real losses, re-tripped their bucket every sweep. Held
+// entries that are still broken are the failure that tripped the bucket, not new evidence: a clean sample of the
+// entries that are not held releases it, and the held ones drain through the caps.
+func TestHeldEntriesStillBrokenDoNotKeepTheBucketTripped(t *testing.T) {
+	t.Parallel()
+	f := newOutageFixture(t, 100, config.RepairConfig{})
+	f.downRange(0, 80)
+	f.sweep(t.Context(), nil)
+	f.sweep(t.Context(), nil)
+	if f.requests() != 0 || f.countStatus(t, storage.HealthHeld) != 80 {
+		t.Fatalf("setup: requests %d held %d", f.requests(), f.countStatus(t, storage.HealthHeld))
+	}
+
+	// The 80 stay broken; the other 20 come due and probe clean.
+	f.markDirty(t, 80, 100)
+	f.sweep(t.Context(), nil)
+	if f.requests() != 25 {
+		t.Fatalf("heals = %d, want the bucket released and the held entries drained up to the cap of 25", f.requests())
+	}
+	if got := f.countStatus(t, storage.HealthHeld); got != 0 {
+		t.Fatalf("still held = %d, want none after the release", got)
+	}
+}
+
+// The counterpart: when entries that are not held break too, the bucket stays tripped and nothing heals.
+func TestHeldBucketStaysTrippedWhenTheSampleIsDirty(t *testing.T) {
+	t.Parallel()
+	f := newOutageFixture(t, 100, config.RepairConfig{})
+	f.downRange(0, 80)
+	f.sweep(t.Context(), nil)
+	f.sweep(t.Context(), nil)
+
+	f.downRange(0, 95)
+	f.markDirty(t, 80, 100)
+	f.sweep(t.Context(), nil) // first sighting of 80..94
+	f.sweep(t.Context(), nil) // 15 non-held entries confirmed
+	if f.requests() != 0 {
+		t.Fatalf("heals = %d, want none while the non-held sample is broken", f.requests())
+	}
+	if got := f.countStatus(t, storage.HealthHeld); got != 95 {
+		t.Fatalf("held = %d, want all 95 confirmed entries", got)
+	}
+	if status := f.service.BreakerStatus(); len(status) != 1 || status[0].State != "tripped" {
+		t.Fatalf("breaker status = %+v, want tripped", status)
 	}
 }
 

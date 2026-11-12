@@ -34,6 +34,8 @@ type probedEntry struct {
 	pending []storage.BrokenFile
 	// admitted marks an entry the breaker already let through, so a continuation is not judged twice.
 	admitted bool
+	// wasHeld marks an entry the breaker held before this run probed it.
+	wasHeld bool
 }
 
 // probeBatch is what a run probed, held back so that every heal is decided after all the probes: the breaker
@@ -80,13 +82,13 @@ func (b *probeBatch) noteProbed(result *probeResult) {
 	}
 }
 
-func (b *probeBatch) add(health *storage.EntryHealth, files []storage.BrokenFile) {
+func (b *probeBatch) add(health *storage.EntryHealth, files []storage.BrokenFile, wasHeld bool) {
 	if len(files) == 0 {
 		return
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.entries[health.EntryName] = &probedEntry{health: health, pending: files}
+	b.entries[health.EntryName] = &probedEntry{health: health, pending: files, wasHeld: wasHeld}
 }
 
 func (b *probeBatch) pendingNames() []string {
@@ -239,6 +241,7 @@ func (r *Service) judgeBuckets(
 	names []string,
 ) map[Bucket]bucketOutcome {
 	subjects := make(map[Bucket]map[string]struct{})
+	held := make(map[Bucket]int)
 	for _, name := range names {
 		entry := batch.entries[name]
 		if entry.admitted {
@@ -249,6 +252,9 @@ func (r *Service) judgeBuckets(
 				subjects[item.bucket] = make(map[string]struct{})
 			}
 			subjects[item.bucket][name] = struct{}{}
+			if entry.wasHeld {
+				held[item.bucket]++
+			}
 			r.breaker.noteConfirmed(item.bucket, name)
 		}
 	}
@@ -265,7 +271,7 @@ func (r *Service) judgeBuckets(
 			probed = batch.probed[bucket.Provider]
 		}
 		confirmed := len(subjects[bucket])
-		in := bucketInput{runID: runID, confirmed: confirmed, probed: probed}
+		in := bucketInput{runID: runID, confirmed: confirmed, probed: probed, held: held[bucket]}
 		if batch.sweep {
 			in.sample = batch.samples[bucket.Provider]
 		}
