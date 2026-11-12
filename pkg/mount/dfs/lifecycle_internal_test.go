@@ -622,6 +622,29 @@ func TestUnmountTaskRefused(t *testing.T) {
 	})
 }
 
+// A stop whose unmount never finishes within the budget reports stopping: we
+// never saw the mount go, so stopped would be a lie.
+func TestTimedOutStopStaysStopping(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		f := newFixture(t)
+		defer f.finish(t)
+		f.fb.handle.hang = make(chan struct{})
+		if err := f.m.Start(f.parent); err != nil {
+			t.Fatalf("Start = %v", err)
+		}
+		if err := f.m.Stop(); err == nil {
+			t.Fatal("Stop = nil, want the timeout")
+		}
+		synctest.Wait()
+		if got := f.m.Stats()["state"]; got != "stopping" {
+			t.Fatalf(`Stats()["state"] = %v, want "stopping"`, got)
+		}
+		f.fb.handle.release()
+		synctest.Wait()
+	})
+}
+
 func TestExplicitStopOrders(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {

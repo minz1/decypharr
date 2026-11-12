@@ -224,13 +224,25 @@ func (m *Manager) logUnmounted(branch, reason string) {
 // has unmounted, or never mounted) it closes the cache.
 func (m *Manager) closer(vfsG, backG *task.Group) func(context.Context) error {
 	return func(ctx context.Context) error {
+		backendDone := false
 		select {
 		case <-backG.Done():
+			backendDone = true
 		case <-ctx.Done():
+			select {
+			case <-backG.Done():
+				backendDone = true
+			default:
+			}
 		}
 		m.advance([]dfsState{dfsReady, dfsStarting}, dfsStopping)
+		// The stop budget is spent either way, so the cache is released; Stopped only once the backend has ended.
 		m.releaseVFS()
-		m.advance([]dfsState{dfsStopping}, dfsStopped)
+		if backendDone {
+			m.advance([]dfsState{dfsStopping}, dfsStopped)
+		} else {
+			m.logger.Warn().Msg("DFS cache released while the backend is still stopping")
+		}
 		// Ends the evict and speed tasks too, on the start-failure path.
 		vfsG.Close()
 		return nil
