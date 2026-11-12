@@ -97,11 +97,12 @@ func (m *Manager) advance(froms []dfsState, to dfsState) {
 }
 
 // failWith moves to Failed from the first of froms the machine is in, keeping cause for Stats; it reports whether
-// it moved.
+// it moved. The cause is stored before the state moves, so a concurrent Stats reader that sees Failed already has the
+// error to show.
 func (m *Manager) failWith(cause string, froms ...dfsState) bool {
 	for _, from := range froms {
+		m.failure.Store(&cause)
 		if m.state.Transition(from, dfsFailed) {
-			m.failure.Store(&cause)
 			m.logger.Debug().Stringer("from", from).Stringer("to", dfsFailed).Msg("dfs state moved")
 			return true
 		}
