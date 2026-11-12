@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/go-co-op/gocron/v2"
@@ -308,6 +309,36 @@ func TestApplyConfigReturnsWithoutWaiting(t *testing.T) {
 	}
 	release()
 	f.exits.wait()
+}
+
+// ApplyConfig only cancels: a probe that ignores its cancellation does not hold it. The sweep fixture serves real
+// sockets, which keep a synctest clock from advancing, so a stuck probe stands in for the stuck sweep.
+func TestApplyConfigDoesNotWait(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		service := New(testGroup(t), Dependencies{})
+		block := make(chan struct{})
+		release := sync.OnceFunc(func() { close(block) })
+		defer release() // a failed assertion must not leave the probe blocked, or synctest hides it behind a deadlock
+		started := make(chan struct{})
+		service.breaker.canary = func(context.Context, Bucket, config.BreakerSettings) canaryOutcome {
+			close(started)
+			<-block // a probe that ignores its cancellation
+			return canaryInconclusive
+		}
+		go service.QueueCanary(t.Context(), "rd")
+		<-started
+
+		begin := time.Now()
+		if err := service.ApplyConfig(); err != nil {
+			t.Fatal(err)
+		}
+		if waited := time.Since(begin); waited != 0 {
+			t.Fatalf("ApplyConfig waited %s with a stuck probe, want no wait", waited)
+		}
+		release()
+		synctest.Wait()
+	})
 }
 
 // repairJobs counts the repair-tagged jobs registered on s.
