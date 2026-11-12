@@ -64,7 +64,7 @@ func (r *Service) probeCandidates(
 			if result == nil {
 				c.item = nil
 				c.contentMap = nil
-				return nil
+				return gctx.Err() // a probe the stop cut: its held entry is still held, so the batch is partial
 			}
 			h := result.health
 			batch.noteProbed(result)

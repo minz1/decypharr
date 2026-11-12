@@ -1,6 +1,7 @@
 package repair
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
@@ -56,6 +57,49 @@ func TestStopSchedulePartialSweepKeepsTheDrainOpen(t *testing.T) {
 	assertNotTripped(t, f, "sweep after the stopped sweep")
 	if f.requests() <= before {
 		t.Fatalf("heals = %d, want more than %d: the drain goes on", f.requests(), before)
+	}
+}
+
+// A stop that lands on the sweep's last check cuts the probes still running after every probe has started, so
+// probing returns no error; their held entries were never re-probed, so the bucket stays releasing.
+func TestStopOnTheLastCheckKeepsTheDrainOpen(t *testing.T) {
+	t.Parallel()
+	f := startDrain(t)
+	held := f.countStatus(t, storage.HealthHeld) // the sweep's candidates, one check each
+
+	// The last repairDefaultWorkers checks hang until the stop, so every probe has started when it lands.
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	hung := make(chan struct{}, held)
+	f.client.mu.Lock()
+	start := f.client.checks
+	f.client.entered = hung
+	f.client.down = map[string]bool{}
+	f.client.allDown = true // only the first check finds an entry broken, so the final heal admits all it has
+	f.client.onCheck = func(n int) {
+		if n-start == 2 {
+			f.client.allDown = false
+		}
+		if n-start == held-repairDefaultWorkers {
+			f.client.blockCheck = true // runs under the client's lock
+		}
+	}
+	f.client.mu.Unlock()
+	stop := &repairStopState{}
+	stop.set()
+	go func() {
+		for range repairDefaultWorkers {
+			<-hung
+		}
+		f.client.mu.Lock()
+		f.client.blockCheck = false // the hung checks wait on ctx; the final heal's canary must not hang
+		f.client.mu.Unlock()
+		cancel()
+	}()
+	f.sweep(ctx, stop)
+	if status := f.service.BreakerStatus(); len(status) != 1 || status[0].State != string(breakerReleasing) {
+		t.Fatalf("after a stop that cut the last probes: %+v (held %d), want releasing",
+			status, f.countStatus(t, storage.HealthHeld))
 	}
 }
 
