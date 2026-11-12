@@ -483,6 +483,12 @@ func (b *breaker) canaryStepLocked(
 			bk.reason = holdNoCanary
 			return bucketOutcome{hold: holdNoCanary}, false
 		}
+		if bk.state == breakerReleasing && outcome == canaryNone && in.runID != "" &&
+			in.sample.probed >= sampleMinimum && !in.sample.passes() {
+			// A drain, not a release: with no canary the sweep's sample is its only evidence, and a broken one is new
+			// evidence, so the bucket trips again as no_canary and only a later passing sample releases it.
+			return b.tripLocked(bk, now, in.runID, holdNoCanary), false
+		}
 		if releasing {
 			if err := bk.transition(breakerReleasing, now, in.runID, holdNone); err != nil {
 				return bucketOutcome{hold: holdTripped}, false

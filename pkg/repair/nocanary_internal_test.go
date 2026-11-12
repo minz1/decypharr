@@ -123,3 +123,41 @@ func TestNonSweepPathsKeepHoldingWithoutACanary(t *testing.T) {
 		t.Fatalf("status = %+v, want no_canary waiting for a sweep or force", status)
 	}
 }
+
+// A releasing bucket with no canary has only the sweep's sample as evidence, so a drain sweep whose non-held sample
+// is broken trips it again as no_canary, and only a later passing sample releases it (R0.1 run 4, finding 1): a
+// later sweep with too small a sample must not drain the backlog the broken one held.
+func TestDrainWithoutACanaryTripsOnABrokenSample(t *testing.T) {
+	t.Parallel()
+	b, clock := trippedWithoutCanary(t)
+	out := b.evaluate(t.Context(), testBucket(), bucketInput{
+		runID: "r2", confirmed: 80, held: 80, probed: 100, sample: sweepSample{probed: 20},
+	})
+	if !out.released {
+		t.Fatalf("release sweep = %+v, want released on a clean sample", out)
+	}
+	clock.Advance(25 * time.Hour)
+	out = b.evaluate(t.Context(), testBucket(), bucketInput{
+		runID: "r3", confirmed: 64, held: 55, probed: 64, sample: sweepSample{probed: 9, broken: 9},
+	})
+	if out.draining || out.hold != holdNoCanary || !out.newlyTripped {
+		t.Errorf("drain sweep with a broken sample = %+v, want tripped as no_canary", out)
+	}
+	if state := b.buckets[testBucket()].state; state != breakerTripped {
+		t.Errorf("state = %s, want tripped", state)
+	}
+	clock.Advance(25 * time.Hour)
+	out = b.evaluate(t.Context(), testBucket(), bucketInput{
+		runID: "r4", confirmed: 66, held: 64, probed: 66, sample: sweepSample{probed: 2, broken: 2},
+	})
+	if out.draining || out.released || out.hold == holdNone {
+		t.Errorf("sweep with too small a sample = %+v, want held", out)
+	}
+	clock.Advance(25 * time.Hour)
+	out = b.evaluate(t.Context(), testBucket(), bucketInput{
+		runID: "r5", confirmed: 64, held: 64, probed: 84, sample: sweepSample{probed: 20},
+	})
+	if !out.released || !out.draining {
+		t.Errorf("sweep with a clean sample = %+v, want released and draining", out)
+	}
+}
