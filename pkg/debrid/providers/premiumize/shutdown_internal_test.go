@@ -14,6 +14,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/internal/request"
+	"github.com/sirrobot01/decypharr/internal/testutil"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
 )
 
@@ -42,9 +43,13 @@ func TestCheckStatusStopsPollingOnShutdown(t *testing.T) {
 	server := httptest.NewServer(mux)
 	defer server.Close()
 	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	// A poll ends with the folder listing (the file has no link yet, so the transfer is finalizing).
+	firstPoll := func(r *http.Request) bool { return r.URL.Path == "/api/folder/list" }
 	pm := &Premiumize{
-		Host:   server.URL,
-		client: request.New(zerolog.Nop(), nil, request.WithMaxRetries(0)),
+		Host: server.URL,
+		client: request.New(zerolog.Nop(), nil, request.WithMaxRetries(0),
+			request.WithTransport(testutil.CancelAfterResponse(firstPoll, cancel))),
 		config: config.Debrid{Name: "premiumize"},
 		logger: zerolog.Nop(),
 		options: types.ProviderOptions{
@@ -52,14 +57,10 @@ func TestCheckStatusStopsPollingOnShutdown(t *testing.T) {
 		},
 		pollInterval: time.Hour,
 	}
-	time.AfterFunc(50*time.Millisecond, cancel)
 
-	start := time.Now()
+	// The poll interval is an hour, so returning at all means the wait ended on the cancel.
 	_, err := pm.CheckStatus(ctx, &types.Torrent{ID: "t1"})
 
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("CheckStatus took %s to notice the shutdown", elapsed)
-	}
 	if !errors.Is(err, customerror.ErrProviderStatusTimeout) || !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want a pending status wrapping the cancellation", err)
 	}

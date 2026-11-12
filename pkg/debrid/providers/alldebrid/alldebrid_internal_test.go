@@ -17,6 +17,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/internal/request"
+	"github.com/sirrobot01/decypharr/internal/testutil"
 	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 )
 
@@ -341,14 +342,14 @@ func TestRestartNoPeerReturnsAtCancel(t *testing.T) {
 	ad.noPeerRetryBackoff = []time.Duration{time.Hour}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	time.AfterFunc(50*time.Millisecond, cancel)
+	// The backoff sleep follows the restart, before the first status check.
+	restart := func(r *http.Request) bool { return r.URL.Path == "/v4/magnet/restart" }
+	ad.client = request.New(zerolog.Nop(), nil, request.WithMaxRetries(0),
+		request.WithTransport(testutil.CancelAfterResponse(restart, cancel)))
 
-	start := time.Now()
+	// The backoff is an hour, so returning at all means the sleep ended on the cancel.
 	_, err := ad.restartNoPeerTorrent(ctx, &debridTypes.Torrent{ID: "42", DownloadUncached: true})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("restartNoPeerTorrent err = %v, want context.Canceled", err)
-	}
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("restartNoPeerTorrent took %s to notice the cancel", elapsed)
 	}
 }

@@ -3,9 +3,8 @@ package realdebrid
 import (
 	"context"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -28,31 +27,33 @@ func TestDefaultConversionWaitIsShort(t *testing.T) {
 // pending status (the entry stays queued) and the cancellation.
 func TestCheckStatusStopsPollingOnShutdown(t *testing.T) {
 	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"status":"magnet_conversion","filename":"movie"}`))
-	}))
-	defer server.Close()
-	ctx, cancel := context.WithCancel(t.Context())
-	options := mkvOnly()
-	provider := &RealDebrid{
-		Host:         server.URL,
-		client:       request.New(zerolog.Nop(), nil, request.WithMaxRetries(0)),
-		logger:       zerolog.Nop(),
-		options:      options,
-		pollInterval: time.Hour,
-	}
-	time.AfterFunc(50*time.Millisecond, cancel)
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		provider := &RealDebrid{
+			// CheckStatus waits before its first poll, so no request is made; a poll
+			// after the wait fails to dial and the error check below catches it.
+			Host:         "http://127.0.0.1:0",
+			client:       request.New(zerolog.Nop(), nil, request.WithMaxRetries(0)),
+			logger:       zerolog.Nop(),
+			options:      mkvOnly(),
+			pollInterval: time.Hour,
+		}
+		done := make(chan error, 1)
+		go func() {
+			_, err := provider.CheckStatus(ctx, &types.Torrent{ID: "id"})
+			done <- err
+		}()
 
-	start := time.Now()
-	_, err := provider.CheckStatus(ctx, &types.Torrent{ID: "id"})
+		synctest.Wait()
+		cancel()
+		err := <-done
 
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("CheckStatus took %s to notice the shutdown", elapsed)
-	}
-	if !errors.Is(err, customerror.ErrProviderStatusTimeout) || !errors.Is(err, context.Canceled) {
-		t.Fatalf("err = %v, want a pending status wrapping the cancellation", err)
-	}
-	if errors.Is(err, customerror.ErrTorrentNotCached) {
-		t.Fatalf("err = %v must not be ErrTorrentNotCached", err)
-	}
+		if !errors.Is(err, customerror.ErrProviderStatusTimeout) || !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want a pending status wrapping the cancellation", err)
+		}
+		if errors.Is(err, customerror.ErrTorrentNotCached) {
+			t.Fatalf("err = %v must not be ErrTorrentNotCached", err)
+		}
+	})
 }
