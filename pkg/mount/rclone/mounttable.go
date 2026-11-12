@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -14,11 +16,16 @@ var errNoMountTable = errors.New("mount table events are not available on this O
 // 4) is the mount point.
 const mountinfoFields = 6
 
-// countFuseAt counts the FUSE entries in a /proc/self/mountinfo table whose mount point is path. More than one means
-// mounts are stacked there.
-func countFuseAt(table []byte, path string) int {
+// tableEntry is one FUSE line of /proc/self/mountinfo at our path: its mount ID (field 1) and its parent's (field 2).
+type tableEntry struct {
+	id, parent int
+}
+
+// fuseEntriesAt lists the FUSE entries in a /proc/self/mountinfo table whose mount point is path, in table order.
+// More than one means mounts are stacked there.
+func fuseEntriesAt(table []byte, path string) []tableEntry {
 	want := filepath.Clean(path)
-	n := 0
+	var entries []tableEntry
 	for line := range bytes.Lines(table) {
 		pre, post, ok := strings.Cut(strings.TrimRight(string(line), "\n"), " - ")
 		if !ok {
@@ -29,14 +36,38 @@ func countFuseAt(table []byte, path string) int {
 		if len(fields) < mountinfoFields || len(after) == 0 {
 			continue
 		}
-		if !strings.HasPrefix(after[0], "fuse") {
+		if !strings.HasPrefix(after[0], "fuse") || filepath.Clean(unescapeMountinfo(fields[4])) != want {
 			continue
 		}
-		if filepath.Clean(unescapeMountinfo(fields[4])) == want {
-			n++
+		id, idErr := strconv.Atoi(fields[0])
+		parent, parentErr := strconv.Atoi(fields[1])
+		if idErr != nil || parentErr != nil {
+			continue
+		}
+		entries = append(entries, tableEntry{id: id, parent: parent})
+	}
+	return entries
+}
+
+// topEntry is the mount on top of the stack at a path: the entry no other entry there names as its parent. A mount
+// made just now is that one. With several (a broken table), the last in table order wins.
+func topEntry(entries []tableEntry) (int, bool) {
+	for _, top := range slices.Backward(entries) {
+		if !slices.ContainsFunc(entries, func(e tableEntry) bool { return e.parent == top.id }) {
+			return top.id, true
 		}
 	}
-	return n
+	return 0, false
+}
+
+// hasEntry reports whether the mount with this ID is still in entries.
+func hasEntry(entries []tableEntry, id int) bool {
+	for _, e := range entries {
+		if e.id == id {
+			return true
+		}
+	}
+	return false
 }
 
 // unescapeMountinfo undoes the kernel's octal escapes (\040 space, \011 tab, \012 newline, \134 backslash) in a

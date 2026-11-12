@@ -8,4 +8,4 @@ import "context"
 func watchMountTable(context.Context, func()) error { return errNoMountTable }
 
 // readMountTable has no mount table to read outside Linux.
-func readMountTable(string) (int, error) { return 0, errNoMountTable }
+func readMountTable(string) ([]tableEntry, error) { return nil, errNoMountTable }

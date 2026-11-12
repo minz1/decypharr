@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -30,7 +31,7 @@ func (r *managerRig) watchOn() {
 			}
 		}
 	}
-	r.m.readTable = func(string) (int, error) {
+	r.m.readTable = func(string) ([]tableEntry, error) {
 		r.mu.Lock()
 		gate := r.readGate
 		r.readGate = nil
@@ -40,7 +41,7 @@ func (r *managerRig) watchOn() {
 		}
 		r.mu.Lock()
 		defer r.mu.Unlock()
-		return r.table, r.tableErr
+		return slices.Clone(r.table), r.tableErr
 	}
 }
 
@@ -93,17 +94,29 @@ func (r *managerRig) callChanged() {
 	changed()
 }
 
-func (r *managerRig) setTable(n int) {
+// clearTable empties the fake table: nothing is mounted at our path.
+func (r *managerRig) clearTable() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.table = n
+	r.table = nil
 }
 
-// plugMount is a mount/mount reaching the kernel: the table shows it (unless tableIgnoresMount) and rclone lists it.
+// newEntryLocked hands out a fresh mount ID on top of the parent; r.mu must be held.
+func (r *managerRig) newEntryLocked(parent int) tableEntry {
+	r.nextID++
+	return tableEntry{id: 100 + r.nextID, parent: parent}
+}
+
+// plugMount is a mount/mount reaching the kernel: the table shows a fresh mount on top of the lower ones (unless
+// tableIgnoresMount) and rclone lists it.
 func (r *managerRig) plugMount() {
 	r.mu.Lock()
 	if !r.tableIgnoresMount {
-		r.table = 1
+		parent := 1
+		if len(r.lower) > 0 {
+			parent = r.lower[len(r.lower)-1].id
+		}
+		r.table = append(slices.Clone(r.lower), r.newEntryLocked(parent))
 	}
 	r.mu.Unlock()
 	r.mounted.Store(true)
@@ -111,13 +124,17 @@ func (r *managerRig) plugMount() {
 
 // unplug detaches the mount behind rclone's back: the table no longer shows it and rclone stops listing it.
 func (r *managerRig) unplug() {
-	r.setTable(0)
+	r.mu.Lock()
+	r.saved, r.table = r.table, nil
+	r.mu.Unlock()
 	r.mounted.Store(false)
 }
 
-// plug puts a detached mount back, from outside.
+// plug puts a detached mount back, from outside: the same mount, so the same mount ID.
 func (r *managerRig) plug() {
-	r.setTable(1)
+	r.mu.Lock()
+	r.table = r.saved
+	r.mu.Unlock()
 	r.mounted.Store(true)
 }
 
