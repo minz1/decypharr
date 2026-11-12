@@ -1,6 +1,7 @@
 package reacquire
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -115,5 +116,23 @@ func TestExpiryAfterAConfirmedDeleteWithoutASearchSearches(t *testing.T) {
 	expired, _ := rig.service.Job(rig.job.ID)
 	if expired.Status != StatusNeedsAttention || fake.searchCount() != 1 {
 		t.Fatalf("expired job = %s, searches = %d: %s", expired.Status, fake.searchCount(), expired.LastError)
+	}
+}
+
+// A re-monitor that fails because the worker's context ended says nothing about the Arr, so it spends no try.
+func TestRemonitorOnACancelledContextSpendsNoTry(t *testing.T) {
+	t.Parallel()
+	fake := newFakeSonarr(t, 101)
+	fake.setMonitorFailing(true)
+	rig := newFakeSonarrRig(t, fake, StrategyCommandSearch, 101)
+	rig.run(t)
+	rig.advance(remonitorBackoff + time.Second)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	rig.service.retryRemonitor(ctx, rig.job.ID)
+	job, _ := rig.service.Job(rig.job.ID)
+	if record := fileDeleteOf(t, job); record.RemonitorAttempts != 1 {
+		t.Fatalf("RemonitorAttempts = %d after a cancelled retry, want 1", record.RemonitorAttempts)
 	}
 }
