@@ -1,6 +1,7 @@
 package rclone
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -50,6 +51,15 @@ func TestMountStateNames(t *testing.T) {
 		if got := s.String(); got != name {
 			t.Errorf("state %d = %q, want %q", uint32(s), got, name)
 		}
+	}
+	// The UI badge table (pkg/server/ui/lib/stats/mount.test.ts) holds this list too.
+	ui := []string{"waiting", "mounting", "mounted", "degraded", "failed", "unmounting", "unmounted"}
+	var got []string
+	for s := mountWaiting; s <= mountUnmounted; s++ {
+		got = append(got, s.String())
+	}
+	if !slices.Equal(got, ui) {
+		t.Errorf("mount states = %v, the UI knows %v", got, ui)
 	}
 }
 

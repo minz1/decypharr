@@ -196,6 +196,7 @@ describe("the rclone mount", () => {
       enabled: true,
       type: "rclone",
       detail: {
+        mounts: { state: "mounted" },
         version: { version: "v1.71.0", arch: "amd64", os: "linux" },
         core: { bytes: 1024, transferring: [{ name: XSS, bytes: 1, size: 4, speed: 1, eta: 0 }] },
         memory: { Sys: 1024, TotalAlloc: 0 },

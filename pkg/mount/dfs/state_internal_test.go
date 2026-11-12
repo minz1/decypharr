@@ -1,6 +1,7 @@
 package dfs
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/sirrobot01/decypharr/internal/state/statetest"
@@ -33,5 +34,14 @@ func TestDFSStateNames(t *testing.T) {
 		if got := s.String(); got != name {
 			t.Errorf("state %d = %q, want %q", uint32(s), got, name)
 		}
+	}
+	// The UI badge table (pkg/server/ui/lib/stats/mount.test.ts) holds this list too.
+	ui := []string{"new", "starting", "ready", "failed", "stopping", "stopped"}
+	var got []string
+	for s := dfsNew; s <= dfsStopped; s++ {
+		got = append(got, s.String())
+	}
+	if !slices.Equal(got, ui) {
+		t.Errorf("DFS states = %v, the UI knows %v", got, ui)
 	}
 }
