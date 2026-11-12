@@ -218,7 +218,8 @@ func (s *Service) moveToStopping() {
 // and reports whether the engine is still open. When it returns true the
 // caller defers s.opMu.RUnlock(); when false the lock is not held.
 func (s *Service) enter() bool {
-	if s.inert() {
+	// Checked before the lock too: a stopping service must answer without queuing behind the close task's pending write lock.
+	if s.inert() || !s.life.Load().engineOpen() {
 		return false
 	}
 	s.opMu.RLock()

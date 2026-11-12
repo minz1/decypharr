@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/sirrobot01/hearsay/transport"
@@ -408,6 +409,47 @@ func TestRushedStopWaitsForOperationInFlight(t *testing.T) {
 	}
 	if !engineClosed(r.s) {
 		t.Fatal("the engine is still open after the stop")
+	}
+}
+
+// A Start blocked in listen holds a read lock, and the close task queues for the write lock behind it. Status must not
+// queue behind that pending writer: once the service is stopping it answers without taking the lock.
+func TestStatusDoesNotStallBehindPendingClose(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, nil, zerolog.Nop())
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	r.s.listen = func(nodeConfig transport.NodeConfig) (*transport.Node, error) {
+		close(entered)
+		<-release
+		return transport.ListenWithConfig(nodeConfig)
+	}
+	var wg sync.WaitGroup
+	wg.Go(func() { _ = r.s.Start(t.Context()) })
+	defer wg.Wait()
+	defer close(release)
+	<-entered
+
+	r.g.Close()
+	// The write lock is pending exactly when a new reader is refused.
+	for r.s.opMu.TryRLock() {
+		r.s.opMu.RUnlock()
+		select {
+		case <-t.Context().Done():
+			t.Fatal("test ended before the close task queued for the write lock")
+		default:
+			runtime.Gosched()
+		}
+	}
+	done := make(chan Status, 1)
+	go func() { done <- r.s.Status() }()
+	select {
+	case status := <-done:
+		if status.State != "stopping" {
+			t.Fatalf("Status().State = %q, want stopping", status.State)
+		}
+	case <-time.After(5 * time.Second): // a failure bound only: Status is stuck behind the pending close
+		t.Fatal("Status stalled behind the pending close task")
 	}
 }
 
