@@ -33,7 +33,7 @@ func (r *Service) probeEntry(
 	if h == nil {
 		h = &storage.EntryHealth{EntryName: c.name}
 	}
-	previous := h.Status
+	previous, protocol := h.Status, h.Protocol
 	stored := h.BrokenFiles
 	markedBefore := h.Dirty && h.DirtyReason == MarkedBadReason
 
@@ -49,10 +49,20 @@ func (r *Service) probeEntry(
 		r.autoHealResults(ctx, results, heal)
 	}
 	r.clearDisprovedMarks(ctx, results)
+	final := rollupStatus(results)
+	if ctx.Err() != nil && final == storage.HealthUnknown {
+		// A probe the stop cut off before any verdict would save a rollup of errors and restart the confirmation
+		// clock: put back what the probe found.
+		h.Status, h.ActiveRunID, h.PreviousStatus, h.Protocol = previous, "", "", protocol
+		if previous == "" {
+			h.Status = storage.HealthUnknown
+		}
+		r.saveHealth(h)
+		return nil
+	}
 
 	now := r.clock()
 	broken := stampObservations(r.brokenFiles(c, results), previous, stored, runID, now)
-	final := rollupStatus(results)
 
 	h.Status = final
 	h.FileCount = len(names)

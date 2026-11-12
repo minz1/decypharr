@@ -500,3 +500,30 @@ func TestSnapshotEmptyAfterStop(t *testing.T) {
 		t.Fatalf("tasks left after stop: %+v", left)
 	}
 }
+
+func TestCancelledRecheckSavesNoRollup(t *testing.T) {
+	t.Parallel()
+	f := newOutageFixture(t, 1, config.RepairConfig{})
+	f.client.mu.Lock()
+	f.client.blockCheck = true
+	f.client.entered = make(chan struct{}, 4)
+	entered := f.client.entered
+	f.client.mu.Unlock()
+	if _, err := f.service.RecheckEntry(
+		context.WithoutCancel(t.Context()),
+		f.entries[0].Name,
+		RecheckOptions{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	<-entered
+	f.g.Close()
+	<-f.g.Done()
+	h, err := f.store.GetEntryHealth(f.entries[0].Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !h.LastCheckedAt.IsZero() || h.ActiveRunID != "" {
+		t.Fatalf("health = %+v, want no rollup of the cancelled probe and no active run", h)
+	}
+}
