@@ -700,6 +700,25 @@ func TestFailedStatsCarryCause(t *testing.T) {
 	}
 }
 
+// A failure that loses the race to Failed (Start's timeout against the serve loop ending) keeps the winner's cause.
+func TestRefusedFailureKeepsTheWinnersCause(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		f := newFixture(t)
+		defer f.finish(t)
+		f.fb.mountErr = errors.New("boom")
+		<-f.startAsync()
+		synctest.Wait()
+		requireState(t, f.m, dfsFailed)
+		if f.m.failWith("late loser", dfsStarting) {
+			t.Fatal("a second failure moved the machine")
+		}
+		if got, _ := f.m.Stats()["error"].(string); !strings.Contains(got, "boom") {
+			t.Fatalf(`Stats()["error"] = %q, want the winner's "boom"`, got)
+		}
+	})
+}
+
 // A stop whose unmount never finishes within the budget reports stopping: we
 // never saw the mount go, so stopped would be a lie.
 func TestTimedOutStopStaysStopping(t *testing.T) {

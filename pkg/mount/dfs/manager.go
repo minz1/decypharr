@@ -97,15 +97,17 @@ func (m *Manager) advance(froms []dfsState, to dfsState) {
 }
 
 // failWith moves to Failed from the first of froms the machine is in, keeping cause for Stats; it reports whether
-// it moved. The cause is stored before the state moves, so a concurrent Stats reader that sees Failed already has the
-// error to show.
+// it moved. The cause is offered before the state moves, so a concurrent Stats reader that sees Failed already has
+// an error to show; only the caller whose move wins keeps it, so a racing loser never replaces the winner's cause.
 func (m *Manager) failWith(cause string, froms ...dfsState) bool {
 	for _, from := range froms {
-		m.failure.Store(&cause)
+		m.failure.CompareAndSwap(nil, &cause)
 		if m.state.Transition(from, dfsFailed) {
+			m.failure.Store(&cause)
 			m.logger.Debug().Stringer("from", from).Stringer("to", dfsFailed).Msg("dfs state moved")
 			return true
 		}
+		m.failure.CompareAndSwap(&cause, nil)
 	}
 	return false
 }
