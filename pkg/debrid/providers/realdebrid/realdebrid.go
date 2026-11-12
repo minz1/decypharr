@@ -129,12 +129,7 @@ func New(
 		config:                dc,
 		retries:               options.Retries,
 	}
-
-	go func() {
-		if _, profileErr := r.GetProfile(context.Background()); profileErr != nil {
-			r.logger.Error().Err(profileErr).Msg("Failed to get RealDebrid profile")
-		}
-	}()
+	// New makes no request: the manager fetches the profile on its work, where a stop ends the call.
 	return r, nil
 }
 
