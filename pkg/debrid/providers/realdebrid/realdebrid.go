@@ -767,12 +767,8 @@ func (r *RealDebrid) GetFileDownloadLinks(
 	files := make(map[string]types.File)
 	links := make(map[string]types.DownloadLink)
 
-	_files := t.GetFiles()
-	wg.Add(len(_files))
-
-	for _, f := range _files {
-		go func(file types.File) {
-			defer wg.Done()
+	for _, file := range t.GetFiles() {
+		wg.Go(func() {
 			link, err := r.GetDownloadLink(ctx, t.ID, &file)
 			if err != nil {
 				mu.Lock()
@@ -796,7 +792,7 @@ func (r *RealDebrid) GetFileDownloadLinks(
 			files[file.Name] = file
 			links[file.Name] = link
 			mu.Unlock()
-		}(f)
+		})
 	}
 
 	wg.Wait()
