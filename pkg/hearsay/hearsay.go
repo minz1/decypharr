@@ -325,6 +325,14 @@ func (s *Service) closeEngine() {
 	}
 }
 
+// Refused reports how many illegal moves the service's lifecycle refused.
+func (s *Service) Refused() uint64 {
+	if s == nil || s.life == nil {
+		return 0
+	}
+	return s.life.Refused()
+}
+
 // inert reports whether the service is nil or disabled.
 func (s *Service) inert() bool {
 	return s == nil || s.engine == nil

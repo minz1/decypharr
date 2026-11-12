@@ -23,6 +23,7 @@ func TestDebugTasksListsRunningTasksBehindAuth(t *testing.T) {
 	server.SetTaskSnapshot(func() []task.Info {
 		return []task.Info{{Path: "generation/http:serve"}}
 	})
+	server.SetRefusals(mgr.Refusals)
 
 	anonymous := httptest.NewRecorder()
 	server.router.ServeHTTP(anonymous, httptest.NewRequest(http.MethodGet, "/debug/tasks", nil))
@@ -42,11 +43,17 @@ func TestDebugTasksListsRunningTasksBehindAuth(t *testing.T) {
 			Path    string `json:"path"`
 			Started string `json:"started"`
 		} `json:"tasks"`
+		Refused map[string]uint64 `json:"refused_moves"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
 	if len(body.Tasks) != 1 || body.Tasks[0].Path != "generation/http:serve" {
 		t.Fatalf("tasks = %+v, want the one snapshot entry", body.Tasks)
+	}
+	for _, machine := range []string{"manager", "mount_gate", "notifications"} {
+		if n, ok := body.Refused[machine]; !ok || n != 0 {
+			t.Errorf("refused_moves[%q] = %d, %t; want 0, listed (all: %v)", machine, n, ok, body.Refused)
+		}
 	}
 }

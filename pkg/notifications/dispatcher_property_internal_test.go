@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -268,7 +269,7 @@ func dispatcherViolations(t *testing.T, ops []pop) []string {
 			notifiers = append(notifiers, &propNotifier{name: "n" + strconv.Itoa(i), world: world})
 		}
 		g := task.NewRoot(context.WithoutCancel(t.Context()), "prop", zerolog.Nop())
-		r := newRunner(g, notifiers, zerolog.Nop(), world)
+		r := newRunner(g, notifiers, zerolog.Nop(), world, new(atomic.Uint64))
 		seq := 0
 		notify := func(notifier int, script []pout) {
 			seq++

@@ -102,6 +102,7 @@ func buildServices(gen *generation, cfg *config.Config, logs *logger.Factory) (f
 	srv := server.New(mgr.Context(), mgr, store, logs, shares.accessState())
 	srv.SetRestartFunc(gen.RequestRestart)
 	srv.SetTaskSnapshot(root.Snapshot)
+	srv.SetRefusals(refusals(gen, mgr))
 	srv.SetStopContext(gen.stopContext)
 	gen.WaitReady(mgr.IsReady())
 	gen.OnRestartRejected(func(cause error) { store.MarkRestartFailed(cause) })
@@ -120,6 +121,16 @@ func buildServices(gen *generation, cfg *config.Config, logs *logger.Factory) (f
 		return cleanup, err
 	}
 	return cleanup, startShares(root.Child("share"), shares, mgr, cfg, logs)
+}
+
+// refusals lists every state machine's refused illegal moves: the manager's
+// machines, its mount's, and the generation's own.
+func refusals(gen *generation, mgr interface{ Refusals() map[string]uint64 }) func() map[string]uint64 {
+	return func() map[string]uint64 {
+		out := mgr.Refusals()
+		out["generation"] = gen.Refused()
+		return out
+	}
 }
 
 // startShares starts NFS and SMB, when enabled, over one shared export. The

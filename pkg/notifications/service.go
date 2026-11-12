@@ -3,6 +3,7 @@ package notifications
 import (
 	"crypto/tls"
 	"errors"
+	"sync/atomic"
 
 	"github.com/rs/zerolog"
 
@@ -19,6 +20,8 @@ type Service struct {
 	notifiers []Notifier
 	logger    zerolog.Logger
 	runner    *keyed.Runner[string, msg, notifierState]
+	// refused counts the illegal phase moves of every notifier.
+	refused atomic.Uint64
 }
 
 // New creates a new notification service based on the provided configuration.
@@ -49,9 +52,17 @@ func newService(
 	logger = logger.With().Str("component", "notifications").Logger()
 	s := &Service{config: cfg, notifiers: notifiers, logger: logger}
 	if len(notifiers) > 0 { // Notify returns before the runner when there are none
-		s.runner = newRunner(g, notifiers, logger, obs)
+		s.runner = newRunner(g, notifiers, logger, obs, &s.refused)
 	}
 	return s
+}
+
+// Refused reports how many illegal moves the notifiers' phases and their runner refused.
+func (s *Service) Refused() uint64 {
+	if s.runner == nil {
+		return s.refused.Load()
+	}
+	return s.refused.Load() + s.runner.IllegalMoves()
 }
 
 // Notify hands an event to every notifier's queue and returns at once. The

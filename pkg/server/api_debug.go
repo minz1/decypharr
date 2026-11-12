@@ -20,7 +20,8 @@ type debugTask struct {
 // handleDebugTasks lists the tasks the running generation owns, sorted by
 // path: what the process is doing and since when. The actors field lists the
 // keyed runners with each key's mailbox depth and the age of its oldest
-// message.
+// message. The refused_moves field counts, by state machine, the illegal moves
+// each refused: any count above zero is a bug.
 func (s *Server) handleDebugTasks(w http.ResponseWriter, _ *http.Request) {
 	tasks := []debugTask{}
 	if s.tasks != nil {
@@ -32,7 +33,11 @@ func (s *Server) handleDebugTasks(w http.ResponseWriter, _ *http.Request) {
 	if s.actors != nil {
 		actors = append(actors, s.actors()...)
 	}
-	utils.JSONResponse(w, map[string]any{"tasks": tasks, "actors": actors}, http.StatusOK)
+	refused := map[string]uint64{}
+	if s.refusals != nil {
+		refused = s.refusals()
+	}
+	utils.JSONResponse(w, map[string]any{"tasks": tasks, "actors": actors, "refused_moves": refused}, http.StatusOK)
 }
 
 func (s *Server) handleIngests(w http.ResponseWriter, _ *http.Request) {

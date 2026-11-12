@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/rs/zerolog"
 
@@ -87,6 +88,7 @@ type dispatcher struct {
 	notifiers map[string]Notifier
 	logger    zerolog.Logger
 	obs       observer
+	refused   *atomic.Uint64
 }
 
 func newRunner(
@@ -94,8 +96,11 @@ func newRunner(
 	notifiers []Notifier,
 	logger zerolog.Logger,
 	obs observer,
+	refused *atomic.Uint64,
 ) *keyed.Runner[string, msg, notifierState] {
-	d := &dispatcher{notifiers: make(map[string]Notifier, len(notifiers)), logger: logger, obs: obs}
+	d := &dispatcher{
+		notifiers: make(map[string]Notifier, len(notifiers)), logger: logger, obs: obs, refused: refused,
+	}
 	for _, n := range notifiers {
 		d.notifiers[n.Name()] = n
 	}
@@ -107,7 +112,7 @@ func newRunner(
 }
 
 func (d *dispatcher) Activate(context.Context, string) notifierState {
-	return notifierState{phase: phaseIdle}
+	return notifierState{phase: phaseIdle, refused: d.refused}
 }
 
 func (d *dispatcher) Handle(_ context.Context, key string, st *notifierState, m msg, fx *keyed.Effects[string, msg]) {

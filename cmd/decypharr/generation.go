@@ -89,10 +89,11 @@ type generation struct {
 	// services are built.
 	deadline time.Duration
 
-	mu         sync.Mutex
-	state      genState
-	restart    chan struct{} // closed by the first request of the current token
-	requested  bool
+	mu        sync.Mutex
+	state     genState
+	refused   uint64        // illegal moves transition refused
+	restart   chan struct{} // closed by the first request of the current token
+	requested bool
 	// again records a request made while the current one was pending: its
 	// configuration may be newer than the one being loaded.
 	again      bool
@@ -144,11 +145,19 @@ func (g *generation) transition(to genState) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if !state.Legal(genState.successors, g.state, to) {
+		g.refused++
 		g.log.Error().Stringer("from", g.state).Stringer("to", to).Msg("Refused an illegal generation transition")
 		return false
 	}
 	g.state = to
 	return true
+}
+
+// Refused reports how many illegal moves transition refused.
+func (g *generation) Refused() uint64 {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.refused
 }
 
 // finish records how the generation ended. It does nothing when the generation

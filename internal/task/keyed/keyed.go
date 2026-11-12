@@ -375,6 +375,13 @@ func (s *Singleton[M, S]) CancelTimer(id TimerID) { s.r.CancelTimer(id) }
 // Snapshot describes the singleton's runner. See [Runner.Snapshot].
 func (s *Singleton[M, S]) Snapshot() Info { return s.r.Snapshot() }
 
+// IllegalMoves counts the lifecycle moves the singleton's runner refused. See [Runner.IllegalMoves].
+func (s *Singleton[M, S]) IllegalMoves() uint64 { return s.r.IllegalMoves() }
+
+// IllegalMoves counts the lifecycle moves the runner's transition table refused. It is not [Info.Refused], which
+// counts messages refused for a full mailbox.
+func (r *Runner[K, M, S]) IllegalMoves() uint64 { return r.lifecycle.Refused() }
+
 // beginStop moves the runner to Stopping, and on to Stopped once no key
 // goroutine is left.
 func (r *Runner[K, M, S]) beginStop() {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"path/filepath"
@@ -748,6 +749,22 @@ func (m *Manager) GetStats() (map[string]any, error) {
 		"completed_jobs": completedJobs,
 		"failed_jobs":    failedJobs,
 	}, nil
+}
+
+// Refusals reports, by state machine, how many illegal moves the manager's
+// machines and its mount's refused.
+func (m *Manager) Refusals() map[string]uint64 {
+	out := map[string]uint64{"manager": m.life.Refused(), "mount_gate": m.mountGate.Refused()}
+	if m.Notifications != nil {
+		out["notifications"] = m.Notifications.Refused()
+	}
+	if m.hearsay != nil {
+		out["hearsay"] = m.hearsay.Refused()
+	}
+	if mm, ok := m.mountManager.(interface{ Refusals() map[string]uint64 }); ok {
+		maps.Copy(out, mm.Refusals())
+	}
+	return out
 }
 
 // CRUD operations

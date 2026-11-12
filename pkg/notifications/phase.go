@@ -1,6 +1,8 @@
 package notifications
 
 import (
+	"sync/atomic"
+
 	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/state"
@@ -58,12 +60,17 @@ type notifierState struct {
 	queue   []Event
 	// dropped counts the events the current overflow episode pushed out.
 	dropped int
+	// refused counts the illegal moves of every notifier; nil counts nothing.
+	refused *atomic.Uint64
 }
 
 // transition is the one way the phase changes. An illegal move is refused,
-// logged and reported as false.
+// counted, logged and reported as false.
 func (st *notifierState) transition(to phase, logger zerolog.Logger) bool {
 	if !state.Legal(phaseSuccessors, st.phase, to) {
+		if st.refused != nil {
+			st.refused.Add(1)
+		}
 		logger.Error().Stringer("from", st.phase).Stringer("to", to).Msg("Notifier refused an illegal phase change")
 		return false
 	}
