@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"runtime"
 	"strconv"
+	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/fsutil"
@@ -57,13 +58,30 @@ func (m *Manager) mountOnce(ctx context.Context, cleanup, forget bool) error {
 	return nil
 }
 
+// waitMountWork closes the mount work and waits for it on half the unmount budget, so a mount attempt still
+// unwinding cannot land after the unmount. A parent cancel starts no shutdown of ops, so Close does; after Stop it is
+// already done. On a timeout the unmount runs anyway: a mount left attached outlives the process.
+func (m *Manager) waitMountWork() {
+	if m.ops == nil {
+		return
+	}
+	m.ops.Close()
+	timer := time.NewTimer(rcdMountWorkWait)
+	defer timer.Stop()
+	select {
+	case <-m.ops.Done():
+	case <-timer.C:
+		m.logger.Warn().Msg("Mount work still running at unmount")
+	}
+}
+
 // unmount takes the mount down before rcd is signalled; it is the last move of
-// the mount's state, made after the supervisor has stopped. A stop from Ready
-// asks rcd first, within rcdRCUnmountBudget, and falls back to the unmount
-// helpers on what is left of ctx. From any other state no live rcd holds a
-// mount, as mounts are made only once rcd is Ready, so the old mount is a dead
-// endpoint and the helpers run at once. A mount that was ever attempted is
-// unmounted whatever its state: rcd may hold it even after a failed attempt.
+// the mount's state, made after the mount work has stopped (waitMountWork). A
+// stop from Ready asks rcd first, within rcdRCUnmountBudget, and falls back to
+// the unmount helpers on what is left of ctx. From any other state no live rcd
+// holds a mount, as mounts are made only once rcd is Ready, so the old mount is
+// a dead endpoint and the helpers run at once. A mount that was ever attempted
+// is unmounted whatever its state: rcd may hold it even after a failed attempt.
 func (m *Manager) unmount(ctx context.Context, from rcdState) {
 	attempted := false
 	if !m.moveMountWith(func(cur mountView) (mountState, func(*mountView)) {
@@ -81,11 +99,17 @@ func (m *Manager) unmount(ctx context.Context, from rcdState) {
 		return
 	}
 
+	m.waitMountWork()
 	m.logger.Info().Msg("Unmounting")
 	var err error
 	force := from != rcdReady
 	if !force {
-		rcCtx, cancel := context.WithTimeout(ctx, rcdRCUnmountBudget)
+		// The RC try takes at most half of what the mount-work wait left, so the forced fallback keeps a live share.
+		rcBudget := rcdRCUnmountBudget
+		if deadline, ok := ctx.Deadline(); ok {
+			rcBudget = min(rcBudget, time.Until(deadline)/rcdRCShareDiv)
+		}
+		rcCtx, cancel := context.WithTimeout(ctx, rcBudget)
 		err = m.client.Unmount(rcCtx, m.mount.MountPath)
 		cancel()
 		if err != nil {
