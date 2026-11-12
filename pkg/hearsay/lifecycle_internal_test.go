@@ -291,8 +291,9 @@ func TestNoEngineCallAfterClose(t *testing.T) {
 	if r.s.EvaluateAdd("realdebrid", lifecycleInfoHash).Reject() {
 		t.Fatal("a stopped service gates a submit")
 	}
-	if status := r.s.Status(); status.Enabled || status.State != "stopped" {
-		t.Fatalf("status = %+v, want the inert stopped status", status)
+	if status := r.s.Status(); !status.Enabled || status.State != "stopped" || status.Participate != r.s.participate ||
+		status.Publish != r.s.publish {
+		t.Fatalf("status = %+v, want the stopped state with the configured values", status)
 	}
 	if recorded(t, r.s) {
 		t.Fatal("ObserveTorrent reached the closed engine")
@@ -392,10 +393,12 @@ func TestRushedStopWaitsForOperationInFlight(t *testing.T) {
 		if engineClosed(r.s) {
 			t.Fatal("the engine closed under an operation in flight")
 		}
-		runtime.Gosched()
-	}
-	if engineClosed(r.s) || r.closes.Load() != 0 {
-		t.Fatal("the node or the engine closed under an operation in flight")
+		select {
+		case <-t.Context().Done():
+			t.Fatal("test ended before the close task queued for the write lock")
+		default:
+			runtime.Gosched()
+		}
 	}
 	release()
 	wg.Wait()

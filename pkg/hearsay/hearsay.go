@@ -494,7 +494,12 @@ func (s *Service) Status() Status {
 		return Status{State: constructed.String()}
 	}
 	if !s.enter() {
-		return Status{State: s.life.Load().String()}
+		return Status{
+			Enabled:     true,
+			State:       s.life.Load().String(),
+			Participate: s.participate,
+			Publish:     s.publish,
+		}
 	}
 	defer s.opMu.RUnlock()
 	s.mu.Lock()
