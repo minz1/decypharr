@@ -196,7 +196,8 @@ type ProfileCache struct {
 
 // Get returns the cached profile while it is younger than ttl (ttl <= 0 never
 // expires) and otherwise refreshes it with fetch. Each caller receives its own
-// copy, so callers may modify the result.
+// copy, so callers may modify the result. The lock is held across fetch: a caller that arrives during a fetch waits
+// for it and gets its result rather than making a second request (bounded by the fetch's own ctx and timeouts).
 func (c *ProfileCache) Get(ttl time.Duration, fetch func() (*Profile, error)) (*Profile, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
