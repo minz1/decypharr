@@ -84,6 +84,9 @@ func (g *MountGate) IsStopping() bool {
 	return g != nil && g.state.Load() == mountGateStopping
 }
 
+// Refused reports how many illegal moves the gate refused.
+func (g *MountGate) Refused() uint64 { return g.state.Refused() }
+
 // transition moves the gate from one state to another and refuses, with a log line, any move the table does not
 // list. It reports whether this call made the move.
 func (g *MountGate) transition(from, to mountGateState) bool {

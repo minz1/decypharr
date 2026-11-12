@@ -346,3 +346,15 @@ func (m *Manager) GetLogger() zerolog.Logger {
 func (m *Manager) Type() string {
 	return "rclone"
 }
+
+// Refusals reports how many illegal moves each of the manager's state machines refused.
+func (m *Manager) Refusals() map[string]uint64 {
+	out := map[string]uint64{"rclone.mount": m.mountRefused.Load(), "rclone.rcd": m.owner.state.Refused()}
+	m.mu.Lock()
+	sup := m.sup
+	m.mu.Unlock()
+	if sup != nil {
+		out["rclone.supervisor"] = sup.IllegalMoves()
+	}
+	return out
+}

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -171,7 +172,7 @@ func newRig(t *testing.T, notifiers ...Notifier) *rig {
 	obs := newRecordObserver()
 	return &rig{
 		group:  g,
-		runner: newRunner(g, notifiers, zerolog.New(logs).Level(zerolog.TraceLevel), obs),
+		runner: newRunner(g, notifiers, zerolog.New(logs).Level(zerolog.TraceLevel), obs, new(atomic.Uint64)),
 		obs:    obs,
 		logs:   logs,
 	}

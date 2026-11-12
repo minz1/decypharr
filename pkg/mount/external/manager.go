@@ -161,3 +161,8 @@ func (m *Manager) IsReady() bool {
 func (m *Manager) Type() string {
 	return "external"
 }
+
+// Refusals reports how many illegal moves the manager's state refused.
+func (m *Manager) Refusals() map[string]uint64 {
+	return map[string]uint64{"external": m.state.Refused()}
+}

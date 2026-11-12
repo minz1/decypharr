@@ -93,6 +93,8 @@ type Server struct {
 	tasks func() []task.Info
 	// actors lists the keyed runners of the generation for /debug/tasks.
 	actors func() []keyed.Info
+	// refusals counts, by state machine, the illegal moves refused, for /debug/tasks.
+	refusals func() map[string]uint64
 	// stopCtx returns the context that ends at the generation's drain deadline.
 	stopCtx func() context.Context
 	// shutdownGrace is how long in-flight requests get to finish before open streams are closed.
@@ -217,6 +219,11 @@ func (s *Server) SetTaskSnapshot(snapshot func() []task.Info) {
 // SetActorSnapshot adds the keyed runners' mailboxes to GET /debug/tasks.
 func (s *Server) SetActorSnapshot(snapshot func() []keyed.Info) {
 	s.actors = snapshot
+}
+
+// SetRefusals adds each state machine's count of refused illegal moves to GET /debug/tasks.
+func (s *Server) SetRefusals(refusals func() map[string]uint64) {
+	s.refusals = refusals
 }
 
 // Stopped closes when the server stops serving, for whatever reason. It exists from New, so it can be handed out
