@@ -358,12 +358,14 @@ func (j openJobsReacquirer) Reacquire(request reacquire.Request) (*reacquire.Job
 		j.f.deleted = map[string]bool{}
 	}
 	j.f.deleted[strings.TrimPrefix(request.FileID, "id-")] = true
-	j.f.deletedMu.Unlock()
 	*j.at = append(*j.at, j.f.clock.Now())
+	defer j.f.deletedMu.Unlock()
 	return j.fakeReacquirer.Reacquire(request)
 }
 
 func (j openJobsReacquirer) Jobs() []reacquire.Job {
+	j.f.deletedMu.Lock()
+	defer j.f.deletedMu.Unlock()
 	jobs := make([]reacquire.Job, 0, len(j.requests))
 	for i, request := range j.requests {
 		jobs = append(jobs, reacquire.Job{

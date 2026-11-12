@@ -486,7 +486,9 @@ func (b *breaker) canaryStepLocked(
 		}
 		if bk.state == breakerReleasing && outcome == canaryNone && in.sample.probed < sampleMinimum {
 			// No canary and no sample to judge (outside a sweep there is none): no evidence the provider works, so the
-			// drain waits, its rows held, for a sweep that samples it (SM12-47).
+			// drain waits, its rows held, for a sweep that samples it (SM12-47). Force-healing an entry is the
+			// operator's way past it.
+			bk.reason = holdNoCanary
 			return bucketOutcome{hold: holdNoCanary}, false
 		}
 		if bk.state == breakerReleasing && outcome == canaryNone && !in.sample.passes() {
@@ -581,9 +583,9 @@ func (b *breaker) releasing() map[Bucket]bool {
 }
 
 // tryAdmit starts the heals in items if every bucket and the total are under their caps, in the run so far
-// (usage, nil outside a run) and in the rolling window. A bucket admits an entry that fits under its cap, and an
-// entry bigger than the cap only into an empty bucket, so it still heals once but never carries a bucket past the
-// cap (SM12-46).
+// (usage, nil outside a run) and in the rolling window. A bucket (and the total) admits an entry that fits under its
+// cap, and an entry bigger than the cap only when empty, so it still heals once but never carries a bucket or the
+// total past the cap (SM12-46).
 func (b *breaker) tryAdmit(items []healItem, usage *runUsage) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -601,12 +603,17 @@ func (b *breaker) tryAdmit(items []healItem, usage *runUsage) bool {
 		total += rec.units
 		perBucket[rec.bucket] += rec.units
 	}
-	if total >= s.CapPerRun || (usage != nil && usage.total >= s.CapPerRun) {
+	full := func(have, cost, limit int) bool { return have >= limit || (have > 0 && have+cost > limit) }
+	units := 0
+	for _, item := range items {
+		units += item.units
+	}
+	if full(total, units, s.CapPerRun) || (usage != nil && full(usage.total, units, s.CapPerRun)) {
 		return false
 	}
-	full := func(have, cost int) bool { return have >= s.CapPerBucket || (have > 0 && have+cost > s.CapPerBucket) }
 	for key, units := range cost {
-		if full(perBucket[key], units) || (usage != nil && full(usage.perBucket[key], units)) {
+		if full(perBucket[key], units, s.CapPerBucket) ||
+			(usage != nil && full(usage.perBucket[key], units, s.CapPerBucket)) {
 			return false
 		}
 	}

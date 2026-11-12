@@ -44,9 +44,15 @@ func TestInFlightHeldRowsStillTripAClosedBucket(t *testing.T) {
 		batch.noteProbed(&probeResult{health: health, providers: []string{"rd"}})
 	}
 
-	f.service.healBatch(t.Context(), &storage.RepairRun{ID: "sweep"}, batch, healPolicy{confirm: true, sweep: true})
-	if got := f.requests(); got != 0 {
-		t.Fatalf("heals = %d, want 0: in-flight held rows hid the backlog from a closed bucket", got)
+	run := &storage.RepairRun{ID: "sweep"}
+	f.service.healBatch(t.Context(), run, batch, healPolicy{confirm: true, sweep: true})
+	for name, entry := range batch.entries {
+		if entry.admitted {
+			t.Fatalf("%s admitted: in-flight held rows hid the backlog from a closed bucket", name)
+		}
+	}
+	if run.Stats.Held != 131 {
+		t.Fatalf("held = %d, want 131", run.Stats.Held)
 	}
 	if status := f.service.BreakerStatus(); len(status) != 1 || status[0].State != string(breakerTripped) {
 		t.Fatalf("breaker = %+v, want rd/hoster_link tripped", status)
@@ -126,7 +132,16 @@ func TestTryAdmitDoesNotOvershootTheBucketCap(t *testing.T) {
 		t.Fatal("the 25th unit refused")
 	}
 	other := Bucket{Provider: "usenet", Class: ClassUsenetSegment}
-	if !b.tryAdmit([]healItem{{bucket: other, units: 30}}, newRunUsage()) {
+	if !b.tryAdmit([]healItem{{bucket: other, units: 24}}, usage) {
+		t.Fatal("24 units refused at a run total of 25 of 50")
+	}
+	third := Bucket{Provider: "ad", Class: ClassUsenetSegment}
+	if b.tryAdmit([]healItem{{bucket: third, units: 2}}, newRunUsage()) {
+		t.Fatal("2 more units admitted at a window total of 49 of 50")
+	}
+
+	fresh, _, _ := testBreaker(&verdict)
+	if !fresh.tryAdmit([]healItem{{bucket: other, units: 30}}, newRunUsage()) {
 		t.Fatal("an entry bigger than the cap refused on an empty bucket: it must still heal once")
 	}
 }
