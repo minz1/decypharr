@@ -44,12 +44,12 @@ func TestWatchMountTableCancelledBeforeStart(t *testing.T) {
 
 func TestReadMountTableMissing(t *testing.T) {
 	t.Parallel()
-	n, err := readMountTable(filepath.Join(t.TempDir(), "not-mounted"))
+	entries, err := readMountTable(filepath.Join(t.TempDir(), "not-mounted"))
 	if err != nil {
 		t.Fatalf("readMountTable: %v", err)
 	}
-	if n != 0 {
-		t.Fatalf("readMountTable(unmounted) = %d, want 0", n)
+	if len(entries) != 0 {
+		t.Fatalf("readMountTable(unmounted) = %v, want none", entries)
 	}
 }
 

@@ -118,10 +118,10 @@ type supState struct {
 	backoff time.Duration
 	// watchUp says the mount table is watched and trusted. It starts true and, once false, stays false.
 	watchUp bool
-	// tablePath and tableCount are where our mount shows in the mount table and how many FUSE entries were there
-	// when it was mounted; fewer later means it was detached.
-	tablePath  string
-	tableCount int
+	// tablePath and tableID are where our mount shows in the mount table and its mount ID there: the top of the stack
+	// when it was mounted. That ID gone later means our mount was detached, whatever happened to the mounts below it.
+	tablePath string
+	tableID   int
 	// backendStopped says the WebDAV server stopped; once set it stays, and an up mount never stays Mounted.
 	backendStopped bool
 	// rcdGen is the rcd generation the mount was started through; 0 before the first Ready.
@@ -277,8 +277,8 @@ func (s mountSupervisor) rcdReady(
 
 // staleFUSE reports whether the mount table shows a FUSE mount at the mount point. Without a table it says no.
 func (s mountSupervisor) staleFUSE() bool {
-	n, err := s.m.readTable(tablePathFor(s.m.mount.MountPath))
-	return err == nil && n > 0
+	entries, err := s.m.readTable(tablePathFor(s.m.mount.MountPath))
+	return err == nil && len(entries) > 0
 }
 
 func (s mountSupervisor) rcdDied(ctx context.Context, st *supState, fx *keyed.Effects[struct{}, supMsg]) {
@@ -480,31 +480,32 @@ func (s mountSupervisor) selfCheck(st *supState, path string) {
 	if !st.watchUp {
 		return
 	}
-	n, err := s.m.readTable(path)
-	if err == nil && n == 0 {
+	entries, err := s.m.readTable(path)
+	id, ok := topEntry(entries)
+	if err == nil && !ok {
 		err = fmt.Errorf("the mount table shows no FUSE mount at %s", path)
 	}
 	if err != nil {
 		s.fallBack(st, err)
 		return
 	}
-	st.tablePath, st.tableCount = path, n
+	st.tablePath, st.tableID = path, id
 }
 
 // tableChanged reads the mount table now, not when the change was seen: a change queued behind a repair finds the
-// mount back and does nothing. Fewer FUSE entries at our path than at mount time is a detach: remount at once.
+// mount back and does nothing. Our mount ID gone from the table is a detach: remount at once.
 func (s mountSupervisor) tableChanged(ctx context.Context, st *supState, fx *keyed.Effects[struct{}, supMsg]) {
 	state := s.m.view.Load().state
 	if !st.watchUp || (state != mountMounted && state != mountDegraded) {
 		return
 	}
-	n, err := s.m.readTable(st.tablePath)
+	entries, err := s.m.readTable(st.tablePath)
 	if err != nil {
 		s.watchDown(st, fx, err)
 		return
 	}
-	if n >= st.tableCount {
-		s.m.logger.Debug().Int("fuse_entries", n).Msg("Mount table changed; our mount is still there")
+	if hasEntry(entries, st.tableID) {
+		s.m.logger.Debug().Int("mount_id", st.tableID).Msg("Mount table changed; our mount is still there")
 		return
 	}
 	if st.backendStopped {

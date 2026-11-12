@@ -81,8 +81,13 @@ type managerRig struct {
 	failCh    chan error
 	// changed is the callback the fake watcher was given, guarded by mu.
 	changed func()
-	// table is the fake mount table's FUSE count at our path, tableErr its read error; guarded by mu.
-	table    int
+	// table is the fake mount table's FUSE entries at our path, tableErr its read error; saved is what unplug took
+	// away, nextID the next mount ID handed out; guarded by mu.
+	table  []tableEntry
+	saved  []tableEntry
+	nextID int
+	// lower are stale FUSE mounts an unmount cannot remove; every mount/mount stacks on top of them.
+	lower    []tableEntry
 	tableErr error
 	// tableIgnoresMount keeps a mount/mount from showing in the fake table.
 	tableIgnoresMount bool
@@ -176,7 +181,7 @@ func newManagerRig(t *testing.T) *managerRig {
 	m.detach = r.detach
 	// By default there are no mount table events: the supervisor keeps today's probe cadence.
 	m.watchTable = func(context.Context, func()) error { return errNoMountTable }
-	m.readTable = func(string) (int, error) { return 0, errNoMountTable }
+	m.readTable = func(string) ([]tableEntry, error) { return nil, errNoMountTable }
 	m.owner.spawn = r.spawnProc
 	ping := m.owner.ping
 	m.owner.ping = func(ctx context.Context) error {
@@ -224,7 +229,7 @@ func (r *managerRig) serveRC(w http.ResponseWriter, req *http.Request) {
 	case "mount/unmount":
 		r.mounted.Store(false)
 		if r.watching {
-			r.setTable(0)
+			r.clearTable()
 		}
 	case "mount/listmounts":
 		if r.mounted.Load() {

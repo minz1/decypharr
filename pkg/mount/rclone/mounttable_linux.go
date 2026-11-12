@@ -104,17 +104,17 @@ func (w *mountWatch) run(ctx context.Context, changed func()) error {
 	}
 }
 
-// readMountTable counts the FUSE entries at path in this process's mount table. It is a procfs read and never a
+// readMountTable lists the FUSE entries at path in this process's mount table. It is a procfs read and never a
 // FUSE round-trip, so it cannot hang on our own mount.
-func readMountTable(path string) (int, error) {
+func readMountTable(path string) ([]tableEntry, error) {
 	table, err := os.ReadFile(mountinfoPath)
 	if errors.Is(err, fs.ErrNotExist) {
-		return 0, fmt.Errorf("%w: no %s", errNoMountTable, mountinfoPath)
+		return nil, fmt.Errorf("%w: no %s", errNoMountTable, mountinfoPath)
 	}
 	if err != nil {
-		return 0, fmt.Errorf("read %s: %w", mountinfoPath, err)
+		return nil, fmt.Errorf("read %s: %w", mountinfoPath, err)
 	}
-	return countFuseAt(table, path), nil
+	return fuseEntriesAt(table, path), nil
 }
 
 // pollFd is fd as a poll descriptor; false if it does not fit.

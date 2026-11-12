@@ -74,10 +74,10 @@ type Manager struct {
 	client *rclone.Client
 	owner  *rcdOwner
 
-	// watchTable reports mount table changes until its ctx ends; readTable counts the FUSE entries at a path. The
+	// watchTable reports mount table changes until its ctx ends; readTable lists the FUSE entries at a path. The
 	// OS's by default (Linux: /proc/self/mountinfo; elsewhere both return errNoMountTable).
 	watchTable func(ctx context.Context, changed func()) error
-	readTable  func(path string) (int, error)
+	readTable  func(path string) ([]tableEntry, error)
 	// backendStopped closes when the WebDAV server the mount reads from stops; nil means never. Set before Start.
 	backendStopped <-chan struct{}
 

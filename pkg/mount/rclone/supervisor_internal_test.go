@@ -332,7 +332,7 @@ func TestFirstAttemptCleansUpStaleFUSE(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		r := newManagerRig(t)
-		r.m.readTable = func(string) (int, error) { return 1, nil }
+		r.m.readTable = func(string) ([]tableEntry, error) { return []tableEntry{{id: 1}}, nil }
 		r.startMounted()
 		detached, mounted := r.index("detach"), r.index("rc:mount/mount")
 		if detached < 0 || detached > mounted {
@@ -354,7 +354,7 @@ func TestFirstAttemptLeavesOtherMounts(t *testing.T) {
 			t.Parallel()
 			synctest.Test(t, func(t *testing.T) {
 				r := newManagerRig(t)
-				r.m.readTable = func(string) (int, error) { return 0, tc.err }
+				r.m.readTable = func(string) ([]tableEntry, error) { return nil, tc.err }
 				r.startMounted()
 				r.wantCount("detach", 0)
 				r.stop()
