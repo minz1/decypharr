@@ -20,8 +20,9 @@ type debugTask struct {
 // handleDebugTasks lists the tasks the running generation owns, sorted by
 // path: what the process is doing and since when. The actors field lists the
 // keyed runners with each key's mailbox depth and the age of its oldest
-// message. The refused_moves field counts, by state machine, the illegal moves
-// each refused: any count above zero is a bug.
+// message. The refused_moves field counts, by state machine, the moves each
+// refused (rclone.mount also counts moves dropped under contention): any
+// count above zero is worth a look.
 func (s *Server) handleDebugTasks(w http.ResponseWriter, _ *http.Request) {
 	tasks := []debugTask{}
 	if s.tasks != nil {

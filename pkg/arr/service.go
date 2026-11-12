@@ -353,3 +353,11 @@ func (s *Service) instanceOfType(name string, want Type) (Arr, error) {
 	}
 	return instance, nil
 }
+
+// Refused reports how many illegal moves the queue guard's buckets refused.
+func (s *Service) Refused() uint64 {
+	if s == nil || s.guard == nil {
+		return 0
+	}
+	return s.guard.refused.Load()
+}

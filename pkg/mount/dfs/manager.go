@@ -318,6 +318,8 @@ func (m *Manager) Type() string {
 	return "dfs"
 }
 
+var _ manager.RefusalReporter = (*Manager)(nil)
+
 // Refusals reports how many illegal moves the manager's state refused.
 func (m *Manager) Refusals() map[string]uint64 {
 	return map[string]uint64{"dfs": m.state.Refused()}

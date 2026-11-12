@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sirrobot01/decypharr/internal/flight"
@@ -119,11 +120,16 @@ type guardBucket struct {
 	sent map[string]time.Time
 	// warnedAt is when a hold in this bucket was last logged, so a long hold logs once per window.
 	warnedAt time.Time
+	// refused counts the illegal moves of every bucket; nil counts nothing.
+	refused *atomic.Uint64
 }
 
 // transition is the only way a bucket changes state.
 func (b *guardBucket) transition(to guardState, at time.Time) error {
 	if !slices.Contains(b.state.successors(), to) {
+		if b.refused != nil {
+			b.refused.Add(1)
+		}
 		return fmt.Errorf("%w: %s -> %s", errGuardEdge, b.state, to)
 	}
 	b.state, b.since = to, at
@@ -157,6 +163,8 @@ type queueGuard struct {
 	canaryFlight flight.Group[CanaryVerdict]
 	// pending holds the downloads reserved by decide whose blocklist has not yet been committed or released.
 	pending map[string]struct{}
+	// refused counts the illegal moves the buckets' transition refused.
+	refused atomic.Uint64
 }
 
 func newQueueGuard() *queueGuard {
@@ -173,7 +181,7 @@ func newQueueGuard() *queueGuard {
 func (g *queueGuard) bucketLocked(key guardKey) *guardBucket {
 	bucket := g.buckets[key]
 	if bucket == nil {
-		bucket = &guardBucket{state: guardClosed, sent: make(map[string]time.Time)}
+		bucket = &guardBucket{state: guardClosed, sent: make(map[string]time.Time), refused: &g.refused}
 		g.buckets[key] = bucket
 	}
 	return bucket

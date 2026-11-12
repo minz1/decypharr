@@ -22,7 +22,9 @@ func TestRefusalsCountsEachMachineAndTheMount(t *testing.T) {
 	m.mountGate.transition(mountGateStopping, mountGateServing)
 
 	got := m.Refusals()
-	want := map[string]uint64{"manager": 1, "mount_gate": 2, "rclone.mount": 2}
+	want := map[string]uint64{
+		"manager": 1, "mount_gate": 2, "repair_breaker": 0, "arr_queue_guard": 0, "rclone.mount": 2,
+	}
 	if !maps.Equal(got, want) {
 		t.Fatalf("Refusals() = %v, want %v", got, want)
 	}
