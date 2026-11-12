@@ -97,6 +97,10 @@ type managerRig struct {
 	backend chan struct{}
 	// pingHeld fails every rcd ping while set, holding rcd out of Ready (see holdRcdDown).
 	pingHeld atomic.Bool
+	// cancel cancels g's parent ctx, as a parent shutdown does without calling Stop.
+	cancel context.CancelFunc
+	// mountLinger is how long a gated mount/mount keeps running after its request is cancelled.
+	mountLinger time.Duration
 }
 
 // detach is the Manager's forced unmount: it records the ctx's state at call time.
@@ -197,7 +201,10 @@ func newManagerRig(t *testing.T) *managerRig {
 	r.backend = make(chan struct{})
 	m.SetBackendStopped(r.backend)
 	r.m = m
-	r.g = task.NewRoot(t.Context(), "mount", zerolog.Nop())
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	r.cancel = cancel
+	r.g = task.NewRoot(ctx, "mount", zerolog.Nop())
 	return r
 }
 
@@ -212,6 +219,9 @@ func (r *managerRig) serveRC(w http.ResponseWriter, req *http.Request) {
 		select {
 		case <-gate:
 		case <-req.Context().Done():
+			// Mount work that unwinds slowly once cancelled (fake time inside the bubble).
+			<-time.After(r.mountLinger)
+			r.record("mount returned")
 		}
 	}
 	if cmd == "mount/unmount" && r.hangUnmount.Load() {

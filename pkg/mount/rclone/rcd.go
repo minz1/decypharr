@@ -35,6 +35,10 @@ const (
 	// rcdRCUnmountBudget bounds the RC unmount within it, so a dead or hung rcd
 	// leaves the rest for the forced unmount.
 	rcdRCUnmountBudget = 3 * time.Second
+	// rcdMountWorkWait is the share of the unmount budget spent waiting for in-flight mount work.
+	rcdMountWorkWait = rcdUnmountBudget / 2
+	// rcdRCShareDiv caps the RC unmount at 1/rcdRCShareDiv of what is left, so the forced unmount keeps the rest.
+	rcdRCShareDiv = 2
 )
 
 // rcdProcess is the running rcd, as the owner sees it.

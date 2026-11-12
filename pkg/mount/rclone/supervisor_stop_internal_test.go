@@ -1,9 +1,11 @@
 package rclone
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os/exec"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -49,6 +51,63 @@ func TestStopDuringMountAttemptNoLateMount(t *testing.T) {
 			t.Fatalf("mount at %d after the unmount at %d; events: %v", last, unmounted, r.events)
 		}
 		r.wantMount(mountUnmounted)
+		r.wantState(rcdStopped)
+	})
+}
+
+// A parent shutdown cancels the ctx without calling Stop: the unmount must still
+// wait for the mount attempt that is unwinding, not race it.
+func TestParentCancelUnmountAfterMountChild(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		r := newManagerRig(t)
+		r.mountGate = make(chan struct{})
+		r.mountLinger = time.Second
+		r.start()
+		r.wantMount(mountMounting)
+
+		r.cancel()
+		<-time.After(time.Minute)
+		synctest.Wait()
+
+		returned, unmounted := r.index("mount returned"), r.index("rc:mount/unmount")
+		if returned < 0 || unmounted < returned {
+			t.Fatalf("mount returned at %d, unmount at %d, want the unmount after; events: %v",
+				returned, unmounted, r.events)
+		}
+		r.wantState(rcdStopped)
+	})
+}
+
+// The mount attempt ignores its ctx past the unmount's wait: the forced unmount
+// still runs, and with a ctx that has not ended.
+func TestParentCancelUnmountsWithLiveCtx(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		r := newManagerRig(t)
+		r.mountGate = make(chan struct{})
+		r.mountLinger = 10 * time.Second
+		r.failRC("mount/unmount", http.StatusInternalServerError)
+		// The first detach is the stop's; the attempt's own cleanup later detaches on its spent ctx.
+		var live, seen atomic.Bool
+		r.m.detach = func(ctx context.Context, _ string) error {
+			if seen.CompareAndSwap(false, true) {
+				live.Store(ctx.Err() == nil)
+			}
+			r.record("detach")
+			return nil
+		}
+		r.start()
+		r.wantMount(mountMounting)
+
+		r.cancel()
+		<-time.After(time.Minute)
+		synctest.Wait()
+
+		if !seen.Load() || !live.Load() {
+			t.Fatalf("stop's forced unmount ran = %v with a live ctx = %v, want both; events: %v",
+				seen.Load(), live.Load(), r.events)
+		}
 		r.wantState(rcdStopped)
 	})
 }
