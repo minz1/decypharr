@@ -65,7 +65,7 @@ type Manager struct {
 	logger zerolog.Logger
 	// view is the mount's state; moveMount is its only writer.
 	view atomic.Pointer[mountView]
-	// mountRefused counts moves the mount's table refused.
+	// mountRefused counts moves the mount's table refused, and moves dropped after losing the swap twice.
 	mountRefused atomic.Uint64
 	manager      *manager.Manager
 	webdavURL    string
@@ -346,6 +346,8 @@ func (m *Manager) GetLogger() zerolog.Logger {
 func (m *Manager) Type() string {
 	return "rclone"
 }
+
+var _ manager.RefusalReporter = (*Manager)(nil)
 
 // Refusals reports how many illegal moves each of the manager's state machines refused.
 func (m *Manager) Refusals() map[string]uint64 {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"
@@ -101,11 +102,16 @@ type bucketBreaker struct {
 	reason     holdReason
 	// confirmed holds each subject confirmed broken, for the rolling window.
 	confirmed map[string]*confirmation
+	// refused counts the illegal moves of every bucket; nil counts nothing.
+	refused *atomic.Uint64
 }
 
 // transition is the only way a bucket changes state.
 func (b *bucketBreaker) transition(to breakerState, at time.Time, runID string, reason holdReason) error {
 	if !slices.Contains(b.state.successors(), to) {
+		if b.refused != nil {
+			b.refused.Add(1)
+		}
 		return fmt.Errorf("%w: %s -> %s", errBreakerEdge, b.state, to)
 	}
 	b.state, b.since = to, at
@@ -229,6 +235,8 @@ type breaker struct {
 	// track leases the probe from the service's group and returns the function that ends it. A refused lease means
 	// the group is stopping; nil leases nothing.
 	track func() (leave func(), err error)
+	// refused counts the illegal moves the buckets' transition refused.
+	refused atomic.Uint64
 }
 
 // canaryProbeTimeout bounds one canary probe.
@@ -247,7 +255,7 @@ func newBreaker(settings func() config.BreakerSettings, canary canaryFunc) *brea
 func (b *breaker) bucketLocked(key Bucket) *bucketBreaker {
 	bk := b.buckets[key]
 	if bk == nil {
-		bk = &bucketBreaker{state: breakerClosed, confirmed: make(map[string]*confirmation)}
+		bk = &bucketBreaker{state: breakerClosed, confirmed: make(map[string]*confirmation), refused: &b.refused}
 		b.buckets[key] = bk
 	}
 	return bk

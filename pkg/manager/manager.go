@@ -751,17 +751,27 @@ func (m *Manager) GetStats() (map[string]any, error) {
 	}, nil
 }
 
+// RefusalReporter is a mount that reports, by state machine, the moves it refused.
+type RefusalReporter interface {
+	Refusals() map[string]uint64
+}
+
 // Refusals reports, by state machine, how many illegal moves the manager's
 // machines and its mount's refused.
 func (m *Manager) Refusals() map[string]uint64 {
-	out := map[string]uint64{"manager": m.life.Refused(), "mount_gate": m.mountGate.Refused()}
+	out := map[string]uint64{
+		"manager":         m.life.Refused(),
+		"mount_gate":      m.mountGate.Refused(),
+		"repair_breaker":  m.repair.Refused(),
+		"arr_queue_guard": m.arr.Refused(),
+	}
 	if m.Notifications != nil {
 		out["notifications"] = m.Notifications.Refused()
 	}
 	if m.hearsay != nil {
 		out["hearsay"] = m.hearsay.Refused()
 	}
-	if mm, ok := m.mountManager.(interface{ Refusals() map[string]uint64 }); ok {
+	if mm, ok := m.mountManager.(RefusalReporter); ok {
 		maps.Copy(out, mm.Refusals())
 	}
 	return out

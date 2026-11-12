@@ -254,3 +254,11 @@ func (r *Service) recheckInterval() time.Duration {
 	}
 	return d
 }
+
+// Refused reports how many illegal moves the breaker's buckets refused.
+func (r *Service) Refused() uint64 {
+	if r == nil || r.breaker == nil {
+		return 0
+	}
+	return r.breaker.refused.Load()
+}
