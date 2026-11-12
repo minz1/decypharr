@@ -236,8 +236,12 @@ func (m *Manager) Stop() error {
 		errs = append(errs, err)
 	}
 	m.advance([]dfsState{dfsReady, dfsStarting, dfsFailed}, dfsStopping)
+	if len(errs) > 0 {
+		// A group outlived the budget: the unmount was never seen to finish, so the state stays Stopping.
+		return errors.Join(errs...)
+	}
 	m.advance([]dfsState{dfsStopping}, dfsStopped)
-	return errors.Join(errs...)
+	return nil
 }
 
 func (m *Manager) IsReady() bool {
