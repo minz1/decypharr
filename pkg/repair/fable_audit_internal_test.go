@@ -166,12 +166,14 @@ func TestReleasingBucketWithNoCanaryAndNoSampleHolds(t *testing.T) {
 			if out.draining || out.hold == holdNone {
 				t.Fatalf("out = %+v, want the drain held without evidence", out)
 			}
-			// The hold must not strand the bucket on a provider too small to sample: an operator force closes it.
-			if released, reason := b.forceRelease(key); !released {
-				t.Fatalf("forceRelease = false (%s), want the no_canary drain closed", reason)
+			// The status says why, and a force does not close it: its held rows would trip it again (SM12-25).
+			if released, _ := b.forceRelease(key); released {
+				t.Fatal("forceRelease closed a releasing bucket")
 			}
-			if status := b.status(); len(status) != 0 {
-				t.Fatalf("status = %+v, want the bucket closed", status)
+			status := b.status()
+			if len(status) != 1 || status[0].State != string(breakerReleasing) ||
+				status[0].Reason != string(holdNoCanary) {
+				t.Fatalf("status = %+v, want releasing, no_canary", status)
 			}
 		})
 	}
@@ -184,6 +186,49 @@ func TestReleasingBucketWithNoCanaryAndNoSampleHolds(t *testing.T) {
 	in := bucketInput{runID: "sweep", probed: 3, sample: sweepSample{probed: 3}}
 	if out := b.evaluate(t.Context(), key, in); !out.draining {
 		t.Fatalf("out = %+v, want a clean sample of 3 to drain", out)
+	}
+}
+
+// SM12-41/47: a releasing bucket's status shows what holds its drain now, not an earlier hold: an inconclusive
+// canary shows as such, and a no_canary hold clears once a clean sample lets the drain go on.
+func TestReleasingBucketStatusShowsTheCurrentHold(t *testing.T) {
+	t.Parallel()
+	reasonOf := func(b *breaker) string {
+		status := b.status()
+		if len(status) != 1 || status[0].State != string(breakerReleasing) {
+			t.Fatalf("status = %+v, want one releasing bucket", status)
+		}
+		return status[0].Reason
+	}
+	key := testBucket()
+	sweep := func(run string, probed int) bucketInput {
+		return bucketInput{runID: run, probed: probed, sample: sweepSample{probed: probed}}
+	}
+
+	verdict := canaryInconclusive
+	b, _, _ := testBreaker(&verdict)
+	b.mu.Lock()
+	b.bucketLocked(key).state = breakerReleasing
+	b.mu.Unlock()
+	b.evaluate(t.Context(), key, sweep("sweep", 30))
+	if got := reasonOf(b); got != string(holdCanaryInconclusive) {
+		t.Fatalf("reason = %q, want %s", got, holdCanaryInconclusive)
+	}
+
+	none := canaryNone
+	b, _, _ = testBreaker(&none)
+	b.mu.Lock()
+	b.bucketLocked(key).state = breakerReleasing
+	b.mu.Unlock()
+	b.evaluate(t.Context(), key, sweep("sweep-1", 2))
+	if got := reasonOf(b); got != string(holdNoCanary) {
+		t.Fatalf("reason = %q, want %s after a small sample", got, holdNoCanary)
+	}
+	if out := b.evaluate(t.Context(), key, sweep("sweep-2", 30)); !out.draining {
+		t.Fatalf("out = %+v, want a clean sample of 30 to drain", out)
+	}
+	if got := reasonOf(b); got != "" {
+		t.Fatalf("reason = %q, want none once the drain goes on", got)
 	}
 }
 

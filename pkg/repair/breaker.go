@@ -480,7 +480,7 @@ func (b *breaker) canaryStepLocked(
 		return b.tripLocked(bk, now, in.runID, holdCanaryFailed), false
 	case canaryInconclusive, canaryAborted:
 		if bk.state == breakerReleasing {
-			bk.reason = holdCanaryInconclusive // a canary now holds the drain, so a force must not close it
+			bk.reason = holdCanaryInconclusive // the status shows the canary holding the drain, not an old reason
 		}
 		return bucketOutcome{hold: holdCanaryInconclusive}, false
 	case canaryNone, canaryPass:
@@ -500,8 +500,8 @@ func (b *breaker) admitStepLocked(bk *bucketBreaker, in bucketInput, noCanary, r
 	}
 	if bk.state == breakerReleasing && noCanary && in.sample.probed < sampleMinimum {
 		// No canary and no sample to judge (outside a sweep there is none): no evidence the provider works, so the
-		// drain waits, its rows held, for a sweep that samples it (SM12-47), or for an operator force (see
-		// forceRelease).
+		// drain waits, its rows held, for a sweep that samples it (SM12-47), or for an operator to force-heal them
+		// (see forceRelease).
 		bk.reason = holdNoCanary
 		return bucketOutcome{hold: holdNoCanary}
 	}
@@ -530,22 +530,24 @@ func holdOf(bk *bucketBreaker) holdReason {
 	return bk.reason
 }
 
-// forceRelease closes a tripped bucket, or a releasing one whose drain waits for a sample (SM12-47), on an
-// operator's say-so, but only one held as no_canary: that is the one hold waiting for a sweep or an operator. A
-// bucket a canary or the threshold tripped is not released, since a force is no evidence the provider works. It
-// reports whether the bucket was released and, when it was open and stays so, why it is held.
+// forceRelease closes a tripped bucket on an operator's say-so, but only one held as no_canary: that is the one
+// hold waiting for a sweep or an operator. A bucket a canary or the threshold tripped is not released, since a
+// force is no evidence the provider works. A releasing bucket is never closed here: its held rows would trip it
+// again on the next sweep (SM12-25); a drain held as no_canary ends by force-healing its held entries, after which
+// the next complete sweep closes it (settleDrained). It reports whether the bucket was released and, when it was
+// open and stays so, why it is held.
 func (b *breaker) forceRelease(key Bucket) (bool, holdReason) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	bk := b.buckets[key]
-	if bk == nil || (bk.state != breakerTripped && bk.state != breakerReleasing) {
+	if bk == nil || bk.state != breakerTripped {
 		return false, holdNone
 	}
 	if bk.reason != holdNoCanary {
 		return false, bk.reason
 	}
 	now := b.now()
-	released := (bk.state == breakerReleasing || bk.transition(breakerReleasing, now, "", holdNone) == nil) &&
+	released := bk.transition(breakerReleasing, now, "", holdNone) == nil &&
 		bk.transition(breakerClosed, now, "", holdNone) == nil
 	return released, bk.reason
 }
@@ -619,11 +621,11 @@ func (b *breaker) tryAdmit(items []healItem, usage *runUsage) bool {
 		perBucket[rec.bucket] += rec.units
 	}
 	full := func(have, cost, limit int) bool { return have >= limit || (have > 0 && have+cost > limit) }
-	units := 0
+	all := 0
 	for _, item := range items {
-		units += item.units
+		all += item.units
 	}
-	if full(total, units, s.CapPerRun) || (usage != nil && full(usage.total, units, s.CapPerRun)) {
+	if full(total, all, s.CapPerRun) || (usage != nil && full(usage.total, all, s.CapPerRun)) {
 		return false
 	}
 	for key, units := range cost {
