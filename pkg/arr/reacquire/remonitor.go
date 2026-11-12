@@ -52,6 +52,10 @@ func (s *Service) remonitor(ctx context.Context, id, arrName string, record File
 	callCtx, cancel := context.WithTimeout(ctx, executionTimeout)
 	err := s.arrs.MonitorEpisodes(callCtx, arrName, record.EpisodeIDs)
 	cancel()
+	if err != nil && ctx.Err() != nil {
+		// The worker is stopping: the Arr did not refuse, so no try is spent.
+		return
+	}
 	if err == nil {
 		record.Remonitored = true
 	} else {
