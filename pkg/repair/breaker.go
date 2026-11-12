@@ -192,6 +192,8 @@ type bucketInput struct {
 	inFlight int
 	// sample is what the sweep found among the provider's entries that were not already held.
 	sample sweepSample
+	// sweep marks an evaluation by a sweep, the only run that drains a releasing bucket without a canary.
+	sweep bool
 }
 
 // sweepSample is the entries a sweep probed on a provider that were not held by the breaker, and how many were
@@ -435,6 +437,13 @@ func (b *breaker) stepLocked(key Bucket, in bucketInput, fresh *canaryOutcome) (
 		if exceeded {
 			return b.tripLocked(bk, now, in.runID, holdTripped), false
 		}
+		if !in.sweep {
+			// A heal outside a sweep (Admit, a recheck, an operator fix) has no sample to judge the provider on, so the
+			// canary gates it as it gates one on a closed bucket: a release is no free pass (SM12-31).
+			out, needCanary := b.canaryStepLocked(bk, key, in, s, fresh, false)
+			out.draining = !needCanary && out.hold == holdNone
+			return out, needCanary
+		}
 		return bucketOutcome{draining: true}, false
 	}
 	return bucketOutcome{hold: holdTripped}, false
@@ -530,16 +539,35 @@ func (b *breaker) settle(held map[string]bool, keys ...Bucket) {
 // settleDrained closes, after a sweep that probed every due candidate, every releasing bucket of a provider the
 // sweep probed that holds no entry the caps left for a later run: the sweep re-probed its held entries (held rows are
 // always due) and admitted every one still broken. A held row outside the candidates (its media left the Arr) is
-// never re-probed, so it must not keep the bucket releasing, where no canary runs.
-func (b *breaker) settleDrained(probed map[string]int, undrained map[Bucket]bool) {
+// never re-probed, so it must not keep the bucket releasing, where no canary runs. Only a bucket the sweep drained
+// closes: one its plan judged draining, or, with no entry of it pending, one releasing when the heals began
+// (wasReleasing). A bucket released while the sweep held its entries keeps them (SM12-32).
+func (b *breaker) settleDrained(
+	probed map[string]int, plan map[Bucket]bucketOutcome, wasReleasing, undrained map[Bucket]bool,
+) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	now := b.now()
 	for key, bk := range b.buckets {
-		if bk.state == breakerReleasing && probed[key.Provider] > 0 && !undrained[key] {
+		out, judged := plan[key]
+		drained := out.draining || (!judged && wasReleasing[key])
+		if bk.state == breakerReleasing && drained && probed[key.Provider] > 0 && !undrained[key] {
 			_ = bk.transition(breakerClosed, now, "", holdNone)
 		}
 	}
+}
+
+// releasing names the buckets that are releasing now.
+func (b *breaker) releasing() map[Bucket]bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make(map[Bucket]bool)
+	for key, bk := range b.buckets {
+		if bk.state == breakerReleasing {
+			out[key] = true
+		}
+	}
+	return out
 }
 
 // tryAdmit starts the heals in items if every bucket and the total are under their caps, in the run so far

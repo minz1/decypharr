@@ -113,7 +113,7 @@ func (r *Service) Admit(ctx context.Context, req HealRequest) error {
 	defer func() {
 		if out.released {
 			// A release that leaves held rows is a drain the next sweep carries out.
-			r.breaker.settle(r.heldBuckets(), bucket)
+			r.settleOutsideSweep(bucket)
 		}
 	}()
 	if out.hold != holdNone {

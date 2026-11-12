@@ -184,14 +184,21 @@ func (r *Service) healBatch(ctx context.Context, run *storage.RepairRun, batch *
 		plan: make(map[Bucket]bucketOutcome), undrained: make(map[Bucket]bool),
 	}
 	stopped := false
-	if policy.sweep && !policy.force && !batch.partial {
+	switch {
+	case policy.force:
+	case policy.sweep && !batch.partial:
 		// Only a sweep that probed every due candidate re-probes every held entry, so only it can tell that a drain
 		// is over.
+		wasReleasing := r.breaker.releasing()
 		defer func() {
 			if !stopped {
-				r.breaker.settleDrained(batch.probed, d.undrained)
+				r.breaker.settleDrained(batch.probed, d.plan, wasReleasing, d.undrained)
 			}
 		}()
+	case !policy.sweep:
+		// A release outside a sweep closes the bucket at run end, as Admit's does, unless held rows still wait in it
+		// for a sweep to drain (SM12-31).
+		defer func() { r.settleOutsideSweep(drainingOf(d.plan)...) }()
 	}
 	names := batch.pendingNames()
 	if len(names) == 0 {
@@ -252,7 +259,8 @@ func (r *Service) admitEntry(d *healDecision, entry *probedEntry) bool {
 		r.releaseForced(items, d.policy.caller)
 	} else if !r.breaker.tryAdmit(items, d.batch.usage) {
 		d.capped++
-		if draining := drainingBuckets(d.plan, items); len(draining) > 0 {
+		// Only the drain's backlog waits held; a new failure the cap left stays broken, evidence for the next sweep.
+		if draining := drainingBuckets(d.plan, items); entry.wasHeld && len(draining) > 0 {
 			// Saved broken it would count as new evidence next sweep and re-trip the bucket.
 			r.holdEntry(d.run, &d.statsMu, entry, draining[0], holdDraining)
 			for _, bucket := range draining {
@@ -314,17 +322,37 @@ func (r *Service) holdEntry(
 		Str("reason", string(reason)).Msg("Repair: heal held by the breaker")
 }
 
-// heldBuckets names every bucket a persisted held row still waits in. A release outside a sweep closes the bucket
-// only when none does; otherwise the next complete sweep drains it (settleDrained).
-func (r *Service) heldBuckets() map[string]bool {
+// drainingOf names the buckets plan judged draining.
+func drainingOf(plan map[Bucket]bucketOutcome) []Bucket {
+	var draining []Bucket
+	for bucket, out := range plan {
+		if out.draining {
+			draining = append(draining, bucket)
+		}
+	}
+	return draining
+}
+
+// settleOutsideSweep closes the releasing buckets among keys that no persisted held row waits in. Otherwise the next
+// complete sweep drains them (settleDrained). A scan that fails proves nothing, so they stay releasing (SM12-34).
+// A scan that runs before a concurrent sweep saves its draining holds may close the bucket under them; those rows
+// then count on a closed bucket with its canary, which holds longer and never heals more.
+func (r *Service) settleOutsideSweep(keys ...Bucket) {
+	if len(keys) == 0 {
+		return
+	}
 	held := make(map[string]bool)
-	_ = r.storage.ForEachEntryHealth(func(h *storage.EntryHealth) error {
+	err := r.storage.ForEachEntryHealth(func(h *storage.EntryHealth) error {
 		if h != nil && h.Status == storage.HealthHeld {
 			held[h.HeldBucket] = true
 		}
 		return nil
 	})
-	return held
+	if err != nil {
+		r.logger.Warn().Err(err).Msg("Repair: cannot read the held rows; released buckets stay releasing until a sweep")
+		return
+	}
+	r.breaker.settle(held, keys...)
 }
 
 // judgeBuckets evaluates each bucket that has pending files once, on the batch as a whole.
@@ -353,7 +381,7 @@ func (r *Service) judgeBuckets(
 			in.inFlight = batch.inFlight[bucket.Provider]
 		}
 		if batch.sweep {
-			in.sample = batch.samples[bucket.Provider]
+			in.sample, in.sweep = batch.samples[bucket.Provider], true
 		}
 		out := r.breaker.evaluate(ctx, bucket, in)
 		plan[bucket] = out
