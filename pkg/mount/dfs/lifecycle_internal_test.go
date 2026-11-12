@@ -622,6 +622,84 @@ func TestUnmountTaskRefused(t *testing.T) {
 	})
 }
 
+// The serve loop has ended and the stop has begun by the time the owner looks:
+// that is a stop, never a death, and the coinciding serve end is logged.
+func TestServeEndAtStopIsAStop(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		f := newFixture(t)
+		defer f.finish(t)
+		if err := f.m.Start(f.parent); err != nil {
+			t.Fatalf("Start = %v", err)
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		ended := newFakeHandle(f.calls)
+		ended.end()
+		if err := f.m.servingEnded(ctx, ended); err != nil {
+			t.Fatalf("servingEnded = %v, want nil (a stop)", err)
+		}
+		requireState(t, f.m, dfsReady)
+		if !strings.Contains(f.logs.String(), "DFS serve loop ended as the stop began") {
+			t.Fatalf("no serve-end warning in %s", f.logs.String())
+		}
+	})
+}
+
+// Every move to Failed keeps its cause, and Stats shows it.
+func TestFailedStatsCarryCause(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		setup func(f *lifecycleFixture)
+		// died ends the serve loop after a good start.
+		died bool
+		want string
+	}{
+		{name: "start failure", setup: func(f *lifecycleFixture) { f.fb.mountErr = errors.New("boom") }, want: "boom"},
+		{
+			name: "backend not created",
+			setup: func(f *lifecycleFixture) {
+				f.m.newBackend = func(*vfs.Manager) (backend.Backend, error) { return nil, errors.New("no fuse") }
+			},
+			want: "no fuse",
+		},
+		{
+			name:  "serve ended before ready",
+			setup: func(f *lifecycleFixture) { f.fb.handle.end() },
+			want:  "serve loop ended before the mount was ready",
+		},
+		{name: "timeout", setup: func(f *lifecycleFixture) { f.fb.gate = make(chan struct{}) }, want: "timed out"},
+		{name: "died", setup: func(*lifecycleFixture) {}, died: true, want: "serve loop ended while mounted"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				f := newFixture(t)
+				defer f.finish(t)
+				tc.setup(f)
+				err := <-f.startAsync()
+				if tc.died {
+					if err != nil {
+						t.Fatalf("Start = %v", err)
+					}
+					f.fb.handle.end()
+				}
+				synctest.Wait()
+				if f.fb.gate != nil {
+					close(f.fb.gate)
+					synctest.Wait()
+				}
+				requireState(t, f.m, dfsFailed)
+				if got, _ := f.m.Stats()["error"].(string); !strings.Contains(got, tc.want) {
+					t.Fatalf(`Stats()["error"] = %q, want it to contain %q`, got, tc.want)
+				}
+			})
+		})
+	}
+}
+
 // A stop whose unmount never finishes within the budget reports stopping: we
 // never saw the mount go, so stopped would be a lie.
 func TestTimedOutStopStaysStopping(t *testing.T) {

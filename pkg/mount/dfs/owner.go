@@ -74,14 +74,16 @@ func (m *Manager) mountReady(
 	case err != nil:
 		// A start failure is not a task failure: the manager stays up and
 		// shows state failed.
-		m.advance([]dfsState{dfsStarting}, dfsFailed)
-		res.report(fmt.Errorf("failed to start DFS backend: %w", err))
+		err = fmt.Errorf("failed to start DFS backend: %w", err)
+		m.failWith(err.Error(), dfsStarting)
+		res.report(err)
 		return nil
 	}
 	select {
 	case <-h.Done():
-		m.advance([]dfsState{dfsStarting}, dfsFailed)
-		res.report(errors.New("DFS serve loop ended before the mount was ready"))
+		err = errors.New("DFS serve loop ended before the mount was ready")
+		m.failWith(err.Error(), dfsStarting)
+		res.report(err)
 		return nil
 	default:
 	}
@@ -129,21 +131,41 @@ func (m *Manager) owner(bck backend.Backend, backG *task.Group, res *startResult
 
 		select {
 		case <-h.Done():
-			// The ctx check is defence in depth against an outside serve end
-			// racing a stop: our own unmount cannot reach it, because begin
-			// closes only after this select.
-			if ctx.Err() == nil && m.move(dfsReady, dfsFailed) {
-				m.logger.Error().
-					Str("mount_path", m.config.MountPath).
-					Str("backend", string(m.defaultBackendType)).
-					Msg("DFS mount died: serve loop ended while mounted")
-				return errMountDied
-			}
 		case <-ctx.Done():
+		}
+		if err := m.servingEnded(ctx, h); err != nil {
+			return err
 		}
 		m.stopMount(ctx, h, begin, unmounted)
 		return nil
 	}
+}
+
+// servingEnded is the owner's verdict once its wait ends, taken from both facts rather than from which one woke it:
+// a cancelled ctx is a stop whatever ended first. Our own unmount cannot end the serve loop here, as begin closes
+// only after this.
+func (m *Manager) servingEnded(ctx context.Context, h backend.Mounted) error {
+	ended := false
+	select {
+	case <-h.Done():
+		ended = true
+	default:
+	}
+	if ctx.Err() != nil {
+		if ended {
+			// Mounted exposes no serve error, so a real failure that coincides with the stop survives only here.
+			m.logger.Warn().Str("mount_path", m.config.MountPath).Msg("DFS serve loop ended as the stop began")
+		}
+		return nil
+	}
+	if m.failWith(errMountDied.Error(), dfsReady) {
+		m.logger.Error().
+			Str("mount_path", m.config.MountPath).
+			Str("backend", string(m.defaultBackendType)).
+			Msg("DFS mount died: serve loop ended while mounted")
+		return errMountDied
+	}
+	return nil
 }
 
 // stopMount is the owner's stop steps: the state goes to Stopping, then the

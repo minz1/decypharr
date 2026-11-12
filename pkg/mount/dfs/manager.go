@@ -46,6 +46,8 @@ type Manager struct {
 	// stopSlice is the generation's mount slice; the stop waits end with it once it began.
 	stopSlice atomic.Pointer[task.Slice]
 	backend   backend.Backend
+	// failure is why the mount last moved to Failed; Stats shows it while Failed.
+	failure atomic.Pointer[string]
 }
 
 // NewManager creates a new FUSE filesystem manager for the DFS settings in cfg.
@@ -94,6 +96,19 @@ func (m *Manager) advance(froms []dfsState, to dfsState) {
 	}
 }
 
+// failWith moves to Failed from the first of froms the machine is in, keeping cause for Stats; it reports whether
+// it moved.
+func (m *Manager) failWith(cause string, froms ...dfsState) bool {
+	for _, from := range froms {
+		if m.state.Transition(from, dfsFailed) {
+			m.failure.Store(&cause)
+			m.logger.Debug().Stringer("from", from).Stringer("to", dfsFailed).Msg("dfs state moved")
+			return true
+		}
+	}
+	return false
+}
+
 // SetStopSlice gives the manager the generation's mount slice, before Start.
 // The cache gets it too, so its close ends with the slice as well.
 func (m *Manager) SetStopSlice(s task.Slice) {
@@ -137,23 +152,25 @@ func (m *Manager) Start(g *task.Group) error {
 
 	vfsManager, err := vfs.NewManager(vfsG, m.manager, m.config, m.logs)
 	if err != nil {
-		m.advance([]dfsState{dfsStarting}, dfsFailed)
+		err = fmt.Errorf("failed to create VFS manager: %w", err)
+		m.failWith(err.Error(), dfsStarting)
 		backG.Close()
 		vfsG.Close()
 		m.mu.Unlock()
-		return fmt.Errorf("failed to create VFS manager: %w", err)
+		return err
 	}
 	vfsManager.SetStopSlice(m.slice())
 	m.vfs = vfsManager
 	bck, err := m.newBackend(vfsManager)
 	if err != nil {
 		// Nothing will ever mount: release the cache now.
-		m.advance([]dfsState{dfsStarting}, dfsFailed)
+		err = fmt.Errorf("failed to start DFS backend: %w", err)
+		m.failWith(err.Error(), dfsStarting)
 		m.releaseVFS()
 		backG.Close()
 		vfsG.Close()
 		m.mu.Unlock()
-		return fmt.Errorf("failed to start DFS backend: %w", err)
+		return err
 	}
 	m.backend = bck
 
@@ -191,9 +208,10 @@ func (m *Manager) Start(g *task.Group) error {
 		}
 		// If the owner wins Ready just as DaemonTimeout fires, this move loses and
 		// the state ends Stopped, not Failed (P3).
-		m.advance([]dfsState{dfsStarting}, dfsFailed)
+		err = fmt.Errorf("DFS mount timed out after %s: %w", m.config.DaemonTimeout, ctx.Err())
+		m.failWith(err.Error(), dfsStarting)
 		backG.Close()
-		return fmt.Errorf("DFS mount timed out after %s: %w", m.config.DaemonTimeout, ctx.Err())
+		return err
 	}
 }
 
@@ -270,6 +288,9 @@ func (m *Manager) Stats() map[string]any {
 		"state":   cur.String(),
 		"type":    m.Type(),
 		"backend": string(m.defaultBackendType),
+	}
+	if cause := m.failure.Load(); cur == dfsFailed && cause != nil {
+		stats["error"] = *cause
 	}
 	// Start sets vfs before the owner moves to Ready, so vfs is only read once ready.
 	if ready && m.vfs != nil {
