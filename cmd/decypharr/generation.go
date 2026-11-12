@@ -93,6 +93,9 @@ type generation struct {
 	state      genState
 	restart    chan struct{} // closed by the first request of the current token
 	requested  bool
+	// again records a request made while the current one was pending: its
+	// configuration may be newer than the one being loaded.
+	again      bool
 	ready      <-chan struct{}
 	onRejected func(error)
 
@@ -167,14 +170,19 @@ func (g *generation) WaitReady(ready <-chan struct{}) { g.ready = ready }
 // Call it from the build function.
 func (g *generation) OnRestartRejected(report func(error)) { g.onRejected = report }
 
-// RequestRestart asks for the next generation. It never blocks, a second call
-// within the same request changes nothing, and a generation that is already
-// draining ignores it: the next generation reads the configuration after the
-// drain, so whatever was saved is picked up anyway.
+// RequestRestart asks for the next generation. It never blocks, and a
+// generation that is already draining ignores it: the next generation reads the
+// configuration after the drain, so whatever was saved is picked up anyway. A
+// second call while a request is pending is kept: if the pending request is
+// rejected, the kept one loads the configuration again.
 func (g *generation) RequestRestart() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.requested || (g.state != genStarting && g.state != genServing) {
+	if g.state != genStarting && g.state != genServing {
+		return
+	}
+	if g.requested {
+		g.again = true
 		return
 	}
 	g.requested = true
@@ -192,11 +200,16 @@ func (g *generation) restartRequested() <-chan struct{} {
 // next request effective again, so the generation keeps serving and a later
 // request can retry. The token is re-armed before the owner is told, so a
 // request made in reaction to that report is not swallowed by the old token.
+// A request kept while the rejected one was pending is retried at once.
 func (g *generation) rejectRestart(cause error) {
 	g.mu.Lock()
 	if g.state == genStarting || g.state == genServing {
 		g.restart = make(chan struct{})
-		g.requested = false
+		g.requested = g.again
+		g.again = false
+		if g.requested {
+			close(g.restart)
+		}
 	}
 	report := g.onRejected
 	g.mu.Unlock()

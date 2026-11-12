@@ -385,6 +385,41 @@ func TestRestartWithUnloadableConfigKeepsServing(t *testing.T) {
 	}
 }
 
+// A restart requested while the previous request's configuration is still
+// loading is kept: when that load is rejected, the kept request loads again and
+// the next generation starts with what was saved in the meantime.
+func TestRestartRequestedDuringARejectedLoadIsRetried(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	loading, release := make(chan struct{}), make(chan struct{})
+	var loads atomic.Int32
+	sup := h.supervisor(func(gen *generation, cfg *config.Config, _ *logger.Factory) (func(), error) {
+		h.record(cfg, gen)
+		return noop, nil
+	})
+	sup.load = func() (*config.Config, error) {
+		if loads.Add(1) == 2 {
+			close(loading)
+			<-release
+			return nil, errors.New("config.json does not load")
+		}
+		return h.disk.Load(), nil
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := h.runAsync(ctx, sup)
+	first := h.nextGeneration()
+	first.RequestRestart() // saves A, which does not load
+	<-loading
+	first.RequestRestart() // saves B while A loads
+	close(release)
+	h.nextGeneration()
+	cancel()
+	if err := awaitRun(t, done); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // A critical service that fails ends the generation with its error, stops the
 // other services and starts no next generation.
 func TestCriticalServiceFailureEndsTheGenerationWithAnError(t *testing.T) {
