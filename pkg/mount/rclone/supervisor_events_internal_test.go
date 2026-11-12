@@ -130,8 +130,8 @@ func TestNextProbe(t *testing.T) {
 		want    time.Duration
 	}{
 		{mountMounted, 0, true, watchdogInterval},
-		{mountDegraded, 0, true, watchdogInterval},
-		{mountDegraded, 1, true, watchdogInterval},
+		{mountDegraded, 0, true, probeInterval},
+		{mountDegraded, 1, true, degradedProbeInterval},
 		{mountMounted, 0, false, probeInterval},
 		{mountDegraded, 1, false, degradedProbeInterval},
 		{mountDegraded, 0, false, probeInterval},
@@ -162,8 +162,8 @@ func TestWatchdogProbesEveryFiveMinutes(t *testing.T) {
 	})
 }
 
-// Q4: with the table watched, a mountGone probe while the table still shows the mount takes two watchdog probes
-// to remount.
+// Q4: with the table watched, a mountGone probe while the table still shows the mount is checked again at the
+// degraded cadence, and the second one remounts.
 func TestWatchdogMountGoneTwiceRecovers(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -174,7 +174,7 @@ func TestWatchdogMountGoneTwiceRecovers(t *testing.T) {
 		r.mounted.Store(false)
 		r.after(watchdogInterval)
 		r.wantMount(mountDegraded)
-		r.after(watchdogInterval - time.Second)
+		r.after(degradedProbeInterval - time.Second)
 		r.wantMount(mountDegraded)
 		r.wantCount("rc:mount/mount", 1)
 		r.after(time.Second)
@@ -470,7 +470,7 @@ func TestBackendStopStaysDegraded(t *testing.T) {
 		r.startMounted()
 
 		r.closeBackend()
-		r.after(watchdogInterval)
+		r.after(probeInterval)
 		r.wantCount("rc:mount/listmounts", 1)
 		r.wantMount(mountDegraded)
 		r.stop()
@@ -487,7 +487,7 @@ func TestBackendStopKeepsItsErrorThroughFailedProbes(t *testing.T) {
 
 		r.closeBackend()
 		r.failRC("operations/list", http.StatusBadRequest)
-		r.after(watchdogInterval)
+		r.after(probeInterval)
 		r.wantCount("rc:operations/list", 1)
 		r.wantMount(mountDegraded)
 		if got := r.m.view.Load().err; got != "WebDAV server stopped" {

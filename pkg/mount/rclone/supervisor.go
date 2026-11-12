@@ -128,14 +128,17 @@ type supState struct {
 	rcdGen uint64
 }
 
-// nextProbe is when an up mount is probed next. A watched table reports a detach itself, so the probe is only a
-// watchdog; without it a mountGone is checked again soon.
+// nextProbe is when an up mount is probed next. A watched table reports a detach itself, so a Mounted mount's probe
+// is only a watchdog; a Degraded one is probed at the normal cadence, and a mountGone is checked again soon.
 func nextProbe(state mountState, gone int, watchUp bool) time.Duration {
 	switch {
-	case watchUp && (state == mountMounted || state == mountDegraded):
-		return watchdogInterval
 	case state == mountDegraded && gone >= 1:
 		return degradedProbeInterval
+	case state == mountDegraded:
+		// A Degraded mount is not repaired by the table: only a probe finds it good again.
+		return probeInterval
+	case state == mountMounted && watchUp:
+		return watchdogInterval
 	default:
 		return probeInterval
 	}
@@ -348,7 +351,10 @@ func (s mountSupervisor) probeDone(
 	case mountDegraded:
 		s.degradedProbe(ctx, st, fx, kind, err)
 	case mountFailed:
-		if kind == probeOK || kind == probeMountGone {
+		if st.backendStopped {
+			// No round can mount against the stopped server; the stopped server is the error.
+			err = errors.New("WebDAV server stopped")
+		} else if kind == probeOK || kind == probeMountGone {
 			if !s.rcdUp(ctx, st, fx) {
 				return
 			}
@@ -386,6 +392,11 @@ func (s mountSupervisor) degradedProbe(
 			s.schedule(st, fx, nextProbe(mountMounted, 0, st.watchUp), supProbeDue)
 		}
 	case probeMountGone:
+		if st.backendStopped {
+			// A remount would read from the stopped server.
+			s.degradeForBackend(ctx, st, fx)
+			return
+		}
 		st.gone++
 		if st.gone >= goneToRecover {
 			if !s.rcdUp(ctx, st, fx) {
@@ -494,6 +505,10 @@ func (s mountSupervisor) tableChanged(ctx context.Context, st *supState, fx *key
 	}
 	if n >= st.tableCount {
 		s.m.logger.Debug().Int("fuse_entries", n).Msg("Mount table changed; our mount is still there")
+		return
+	}
+	if st.backendStopped {
+		s.degradeForBackend(ctx, st, fx)
 		return
 	}
 	if !s.rcdUp(ctx, st, fx) {
