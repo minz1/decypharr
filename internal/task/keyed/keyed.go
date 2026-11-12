@@ -2,7 +2,10 @@
 //
 // An actor is a goroutine that owns the state for its key. Messages for a key
 // are handled one at a time, in the order they were accepted, by that key's
-// goroutine, which is a task of the runner's group. The goroutine starts with
+// goroutine, which is a task of the runner's group. The one exception is a
+// coalesced observation: it takes the queued place of the older one it
+// replaces, so it is handled before any message sent between the two. The
+// goroutine starts with
 // the first message, exits after a quiet period, and starts again with the
 // next one. The state of a key, S, belongs to the runner: the handler's
 // Activate builds it when the goroutine starts, every Handle call receives it
