@@ -223,11 +223,12 @@ func (s *Store) RestartRequested() bool {
 }
 
 // MarkRestartFailed records that the pending restart could not be requested.
-// It reports whether a restart was pending.
+// It reports whether a restart was pending. A failed retry replaces the
+// earlier cause.
 func (s *Store) MarkRestartFailed(cause error) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.moveLocked(PendingFailed) {
+	if s.pending != PendingFailed && !s.moveLocked(PendingFailed) {
 		return false
 	}
 	s.restartErr = cause

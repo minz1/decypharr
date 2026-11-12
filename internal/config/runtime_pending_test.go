@@ -94,6 +94,21 @@ func TestSnapshotIDsCountPublishedUpdates(t *testing.T) {
 	}
 }
 
+// A retried restart that fails again shows its own cause, not the first one's.
+func TestASecondRestartFailureReplacesTheCause(t *testing.T) {
+	t.Parallel()
+	store := newStore(t)
+	coldChange(t, store, "9191")
+	first, second := errors.New("first load rejected"), errors.New("retry rejected")
+	store.MarkRestartFailed(first)
+	if !store.MarkRestartFailed(second) {
+		t.Fatal("a second failure was refused while failed")
+	}
+	if !errors.Is(store.RestartError(), second) {
+		t.Fatalf("RestartError = %v, want the latest cause", store.RestartError())
+	}
+}
+
 func TestFailedRestartIsSurfacedAndRetriable(t *testing.T) {
 	t.Parallel()
 	store := newStore(t)
