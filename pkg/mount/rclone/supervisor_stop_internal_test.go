@@ -112,6 +112,40 @@ func TestParentCancelUnmountsWithLiveCtx(t *testing.T) {
 	})
 }
 
+// The stop's slice is armed to ~2s (a hurry, or a short generation stop): the
+// mount-work wait must leave the RC unmount and the forced unmount their share
+// of it, or the forced unmount runs on a spent ctx and the FUSE mount stays.
+func TestStopSliceArmedUnmountsWithLiveCtx(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		r := newManagerRig(t)
+		r.mountGate = make(chan struct{})
+		r.mountLinger = 10 * time.Second
+		r.failRC("mount/unmount", http.StatusInternalServerError)
+		var live, seen atomic.Bool
+		r.m.detach = func(ctx context.Context, _ string) error {
+			if seen.CompareAndSwap(false, true) {
+				live.Store(ctx.Err() == nil)
+			}
+			r.record("detach")
+			return nil
+		}
+		r.start()
+		r.wantMount(mountMounting)
+
+		r.m.SetStopSlice(armedSlice(t, 2*time.Second))
+		r.cancel()
+		<-time.After(time.Minute)
+		synctest.Wait()
+
+		if !seen.Load() || !live.Load() {
+			t.Fatalf("stop's forced unmount ran = %v with a live ctx = %v, want both; events: %v",
+				seen.Load(), live.Load(), r.events)
+		}
+		r.wantState(rcdStopped)
+	})
+}
+
 func TestStopFromMountedUsesRC(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {

@@ -58,18 +58,25 @@ func (m *Manager) mountOnce(ctx context.Context, cleanup, forget bool) error {
 	return nil
 }
 
-// waitMountWork closes the mount work and waits for it on half the unmount budget, so a mount attempt still
-// unwinding cannot land after the unmount. A parent cancel starts no shutdown of ops, so Close does; after Stop it is
-// already done. On a timeout the unmount runs anyway: a mount left attached outlives the process.
-func (m *Manager) waitMountWork() {
+// waitMountWork closes the mount work and waits for it, so a mount attempt still unwinding cannot land after the
+// unmount. A parent cancel starts no shutdown of ops, so Close does; after Stop it is already done. The wait is at
+// most half the unmount budget, capped at half the ctx's remaining time so a short stop slice still leaves the RC
+// unmount and the forced unmount their share; on a timeout the unmount runs anyway: a mount left attached outlives the
+// process.
+func (m *Manager) waitMountWork(ctx context.Context) {
 	if m.ops == nil {
 		return
 	}
 	m.ops.Close()
-	timer := time.NewTimer(rcdMountWorkWait)
+	wait := rcdMountWorkWait
+	if deadline, ok := ctx.Deadline(); ok {
+		wait = min(wait, time.Until(deadline)/rcdRCShareDiv)
+	}
+	timer := time.NewTimer(wait)
 	defer timer.Stop()
 	select {
 	case <-m.ops.Done():
+	case <-ctx.Done():
 	case <-timer.C:
 		m.logger.Warn().Msg("Mount work still running at unmount")
 	}
@@ -99,7 +106,7 @@ func (m *Manager) unmount(ctx context.Context, from rcdState) {
 		return
 	}
 
-	m.waitMountWork()
+	m.waitMountWork(ctx)
 	m.logger.Info().Msg("Unmounting")
 	var err error
 	force := from != rcdReady
