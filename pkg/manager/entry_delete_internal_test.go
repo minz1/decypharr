@@ -249,3 +249,28 @@ func TestDeleteCancelsTheRunningAction(t *testing.T) {
 		h.next(grab.ChildCleanup)
 	})
 }
+
+func TestSweepKeepsAFailedSeasonWhileItsPackRuns(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	synctest.Test(t, func(t *testing.T) {
+		h := newActorHarness(t, store)
+		h.a.packOf = func() map[string]string { return map[string]string{"s": "pack"} }
+		m := h.manager()
+		m.queue = &Queue{storage: store, logger: zerolog.Nop(), removeStalledAfter: time.Hour}
+		seed(t, store, testEntry("s"), failedState())
+		time.Sleep(2 * time.Hour)
+
+		h.grabs.publish(GrabView{State: grab.State{Key: "pack", Phase: grab.PhaseActing}})
+		if err := m.sweepStalled(func(string) bool { return false }); err != nil {
+			t.Fatal(err)
+		}
+		h.none()
+
+		h.grabs.publish(GrabView{State: grab.State{Key: "pack", Phase: grab.PhaseComplete}})
+		if err := m.sweepStalled(func(string) bool { return false }); err != nil {
+			t.Fatal(err)
+		}
+		reply(h.next(grab.ChildCleanup), grab.Event{Kind: grab.EvCleanupDone})
+	})
+}

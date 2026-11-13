@@ -138,3 +138,30 @@ func TestDroppedGrabHeldByTheGuardIsAnError(t *testing.T) {
 		t.Fatalf("held grab = %v with %d jobs, want a held error and no third job", err, len(recovery.fails))
 	}
 }
+
+// A failed grab's Arr effects run off the actor: a canary probe that hangs never holds the caller.
+func TestFailLaterDoesNotWaitForTheCanary(t *testing.T) {
+	t.Parallel()
+	recovery := &fakeArrRecovery{}
+	var verdict atomic.Int64
+	m, _ := grabManager(t, recovery, &verdict)
+	for i := range 2 {
+		if err := m.failGrab(grabEntry(i), recovery, "sonarr", "free"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	called, release := make(chan struct{}), make(chan struct{})
+	m.arr.SetQueueGuardHooks(arr.QueueGuardHooks{
+		Canary: func(context.Context, string) arr.CanaryVerdict {
+			close(called)
+			<-release
+			return arr.CanaryPass
+		},
+		Notify: func(string, string) {},
+	})
+	entry := grabEntry(9)
+	failed := grab.State{Key: strings.ToLower(entry.InfoHash), Phase: grab.PhaseFailed}
+	m.failLater(grab.Grab{Entry: entry, State: failed}, grab.FailBadRelease)
+	<-called
+	close(release)
+}

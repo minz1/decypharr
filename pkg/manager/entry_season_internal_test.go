@@ -36,11 +36,11 @@ func newPackTest(t *testing.T, store *storage.Storage) *packTest {
 	for _, n := range []int{1, 2} {
 		p.keys = append(p.keys, strings.ToLower(grab.SeasonHash("pack", n)))
 	}
-	h.a.seasonsOf = func(e *storage.Entry) []int {
-		if e.InfoHash == "pack" {
-			return []int{1, 2}
+	h.a.seasonsOf = func(e *storage.Entry) []*storage.Entry {
+		if e.InfoHash != "pack" {
+			return nil
 		}
-		return nil
+		return []*storage.Entry{seasonEntry(p.keys[0]), seasonEntry(p.keys[1])}
 	}
 	h.a.completed = func(g grab.Grab) { h.record("completed:" + g.State.Key) }
 	return p
@@ -166,8 +166,15 @@ func TestPackIdleBetweenSeasonsStillCompletes(t *testing.T) {
 	store := newTestStore(t)
 	synctest.Test(t, func(t *testing.T) {
 		p := newPackTest(t, store)
+		p.h.a.retryDelay = func(int) time.Duration { return 2 * time.Minute }
 		p.startPack()
-		time.Sleep(3 * time.Minute)
+		time.Sleep(90 * time.Second)
+		synctest.Wait()
+		for _, k := range p.h.a.runner.Snapshot().Keys {
+			if k.Key == "pack" && k.Running {
+				t.Fatal("the pack's goroutine is still up after a minute idle")
+			}
+		}
 		p.want("pack", grab.PhaseActing)
 
 		p.finish(p.keys[0])
@@ -326,4 +333,48 @@ func TestPackIndexLearnsSeasonsOfPacksAddedAfterBoot(t *testing.T) {
 	if got := idx.snapshot()["season"]; got != "pack" {
 		t.Fatalf("keys are not lower-cased: %q", got)
 	}
+}
+
+func TestMountStopMidSeasonKeepsThePackWaitingAndRerunsTheSeason(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	synctest.Test(t, func(t *testing.T) {
+		p := newPackTest(t, store)
+		p.startPack()
+		cut, done := p.keys[0], p.keys[1]
+
+		p.take(grab.ChildAction, cut).reply <- actionResult(t.Context(), seasonEntry(cut), ErrMountStopping)
+		p.finish(done)
+		p.want(cut, grab.PhaseActing)
+		p.want("pack", grab.PhaseActing)
+		if p.completions() != 0 {
+			t.Fatal("the pack completed with a season cut short by a mount stop")
+		}
+
+		time.Sleep(throttledRetryDelay(0))
+		p.finish(cut)
+		p.want("pack", grab.PhaseComplete)
+	})
+}
+
+func TestPackHandsAGoneSeasonOnAgainInsteadOfWaitingForever(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	synctest.Test(t, func(t *testing.T) {
+		p := newPackTest(t, store)
+		p.startPack()
+		gone, kept := p.keys[0], p.keys[1]
+
+		p.h.mustAsk(gone, grab.Event{Kind: grab.EvDelete})
+		p.take(grab.ChildAction, gone)
+		reply(p.take(grab.ChildCleanup, gone), grab.Event{Kind: grab.EvCleanupDone})
+		p.want(gone, grab.PhaseAbsent)
+		p.finish(kept)
+		p.want("pack", grab.PhaseActing)
+
+		time.Sleep(throttledRetryDelay(0))
+		p.want(gone, grab.PhaseActing)
+		p.finish(gone)
+		p.want("pack", grab.PhaseComplete)
+	})
 }

@@ -64,7 +64,8 @@ func (m *Manager) SetCategory(ctx context.Context, key, category string) error {
 	return m.askEntry(ctx, key, msg)
 }
 
-// sweepStalled has each stalled grab's actor remove it: a failed grab through its retention, any other with a
+// sweepStalled has each stalled grab's actor remove it: a failed grab through its retention (a failed season only
+// once its pack has ended), any other with a
 // delete that removes only its staged NZB. Nothing waits for the actors; a send that fails is retried by the
 // next sweep.
 func (m *Manager) sweepStalled(pending func(infoHash string) bool) error {
@@ -72,15 +73,30 @@ func (m *Manager) sweepStalled(pending func(infoHash string) bool) error {
 	if err != nil {
 		return err
 	}
+	packs := m.entries.packOf()
 	var errs []error
 	for _, e := range stalled {
+		key := strings.ToLower(e.InfoHash)
 		kind := grab.EvDelete
 		if e.State == storage.EntryStateError {
 			kind = grab.EvFailedRetention
+			if m.packRunning(packs[key]) {
+				continue
+			}
 		}
-		errs = append(errs, m.entries.runner.Send(strings.ToLower(e.InfoHash), eventMsg(grab.Event{Kind: kind})))
+		errs = append(errs, m.entries.runner.Send(key, eventMsg(grab.Event{Kind: kind})))
 	}
 	return errors.Join(errs...)
+}
+
+// packRunning reports a pack still waiting for its seasons: a failed season of it is kept, so the pack counts
+// it as ended instead of handing it on again.
+func (m *Manager) packRunning(pack string) bool {
+	if pack == "" {
+		return false
+	}
+	v, ok := m.grabs.get(pack)
+	return ok && !terminalPhase(v.State.Phase)
 }
 
 // progressSink is how the action of key's grab reports its progress: a coalesced observation to the actor, which

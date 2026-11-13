@@ -46,8 +46,8 @@ func terminalPhase(p grab.Phase) bool {
 func (a *entryActor) seasonKeys(pack *storage.Entry) []string {
 	seasons := a.seasonsOf(pack)
 	keys := make([]string, 0, len(seasons))
-	for _, n := range seasons {
-		keys = append(keys, strings.ToLower(grab.SeasonHash(pack.InfoHash, n)))
+	for _, s := range seasons {
+		keys = append(keys, strings.ToLower(s.InfoHash))
 	}
 	return keys
 }
@@ -62,35 +62,61 @@ func (a *entryActor) seasonRecord(key string) (grab.Grab, bool) {
 	return g, true
 }
 
-func (a *entryActor) seasonsTerminal(keys []string) bool {
-	for _, key := range keys {
-		if g, ok := a.seasonRecord(key); !ok || !terminalPhase(g.State.Phase) {
-			return false
+// seasonsTerminal reports whether every season's record is terminal, and lists the seasons with no record.
+func (a *entryActor) seasonsTerminal(seasons []*storage.Entry) (bool, []*storage.Entry) {
+	terminal := true
+	var missing []*storage.Entry
+	for _, season := range seasons {
+		g, ok := a.seasonRecord(strings.ToLower(season.InfoHash))
+		switch {
+		case !ok:
+			terminal = false
+			missing = append(missing, season)
+		case !terminalPhase(g.State.Phase):
+			terminal = false
 		}
 	}
-	return true
+	return terminal, missing
 }
 
 // packWaits completes a pack in its action once every season is terminal by the seasons' own records, and
-// otherwise checks again after a delay: a ChildDone only wakes it.
-func (a *entryActor) packWaits(key string, st *entryState, fx *keyed.Effects[string, entryMsg]) {
+// otherwise checks again after a delay: a ChildDone only wakes it. A check after the fan-out hands each season
+// with no record to its actor again, so a season whose submit was refused or whose record went away is not
+// waited for forever.
+func (a *entryActor) packWaits(key string, st *entryState, ev grab.Event, fx *keyed.Effects[string, entryMsg]) {
 	g := st.g
 	if g.State.Phase != grab.PhaseActing || g.State.PackKey != "" || g.Entry == nil {
 		return
 	}
-	keys := a.seasonKeys(g.Entry)
-	if len(keys) == 0 {
+	seasons := a.seasonsOf(g.Entry)
+	if len(seasons) == 0 {
 		return
 	}
-	if a.seasonsTerminal(keys) {
+	terminal, missing := a.seasonsTerminal(seasons)
+	if terminal {
 		a.step(key, st, eventMsg(grab.Event{Kind: grab.EvActionDone}), fx)
 		return
+	}
+	if ev.Kind == grab.EvChildDone {
+		a.resubmit(key, missing)
 	}
 	if st.hasSeasonTimer {
 		fx.CancelTimer(st.seasonTimer)
 	}
 	st.seasonTimer = fx.After(a.retryDelay(0), eventMsg(grab.Event{Kind: grab.EvChildDone}))
 	st.hasSeasonTimer = true
+}
+
+// resubmit hands each season to its actor again as a child of pack.
+func (a *entryActor) resubmit(pack string, seasons []*storage.Entry) {
+	for _, season := range seasons {
+		msg := eventMsg(grab.Event{Kind: grab.EvSubmit, PackKey: pack})
+		msg.entry = season.Clone()
+		if err := a.send(strings.ToLower(season.InfoHash), msg); err != nil {
+			a.logger.Debug().Err(err).Str("pack", pack).Str("season", season.Name).
+				Msg("Missing season not handed on; the pack tries again on its next check")
+		}
+	}
 }
 
 // seasonEnded tells a season's pack that the season is terminal.
@@ -136,7 +162,7 @@ func (a *entryActor) afterStep(
 	a.seasonEnded(key, cur.State, st.g.State)
 	switch {
 	case ev.Kind == grab.EvChildDone || ev.Kind == grab.EvSeasonsStarted:
-		a.packWaits(key, st, fx)
+		a.packWaits(key, st, ev, fx)
 	case ev.Kind == grab.EvDelete && cur.State.Phase == grab.PhaseActing && cur.State.PackKey == "" && cur.Entry != nil:
 		a.deleteSeasons(cur.Entry, true)
 	case ev.Kind == grab.EvActionNone && cur.State.PackKey == "" && cur.Entry != nil:
@@ -144,12 +170,11 @@ func (a *entryActor) afterStep(
 	}
 }
 
-// seasonNumbers are the season numbers a pack fans out into.
-func (m *Manager) seasonNumbers(pack *storage.Entry) []int {
+// seasonEntries are the season records a pack fans out into.
+func (m *Manager) seasonEntries(pack *storage.Entry) []*storage.Entry {
 	seasons := m.downloader.seasonsOf(pack)
-	numbers := make([]int, 0, len(seasons))
-	for _, s := range seasons {
-		numbers = append(numbers, s.SeasonNumber)
+	if len(seasons) == 0 {
+		return nil
 	}
-	return numbers
+	return convertToMultiSeason(pack, seasons)
 }

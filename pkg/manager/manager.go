@@ -505,10 +505,10 @@ func (m *Manager) initEntries(packOf map[string]string) {
 		capacity:  m.config.MaxActiveDownloads,
 		child:     m.entryChild,
 		publish:   m.storage.PublishEntry,
-		fail:      m.failEffects,
+		fail:      m.failLater,
 		packOf:    packs.snapshot,
 		packAdd:   packs.add,
-		seasonsOf: m.seasonNumbers,
+		seasonsOf: m.seasonEntries,
 		naming:    m.folderNaming,
 		inLibrary: func(key string) bool {
 			ok, err := m.storage.Exists(key)

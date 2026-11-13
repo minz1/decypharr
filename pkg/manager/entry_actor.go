@@ -101,14 +101,14 @@ type entryDeps struct {
 	child func(call entryChildCall) func(ctx context.Context) entryMsg
 	// publish writes the library entry of a grab entering its action.
 	publish func(e *storage.Entry) error
-	// fail runs what failing a grab does outside its record.
+	// fail runs what failing a grab does outside its record; it must not block.
 	fail func(g grab.Grab, effect grab.FailEffect)
 	// packOf maps season child keys to their pack; inLibrary reports a key the library holds.
 	packOf func() map[string]string
-	// packAdd records that season is a child of pack; seasonsOf lists the season numbers of a pack, none for an
+	// packAdd records that season is a child of pack; seasonsOf builds the season records of a pack, none for an
 	// entry that is no pack; naming is the download folder naming.
 	packAdd    func(pack, season string)
-	seasonsOf  func(pack *storage.Entry) []int
+	seasonsOf  func(pack *storage.Entry) []*storage.Entry
 	naming     func() config.WebDavFolderNaming
 	inLibrary  func(key string) bool
 	pollEvery  time.Duration
@@ -135,7 +135,7 @@ func newEntryActor(g *task.Group, deps entryDeps) *entryActor {
 		a.packAdd = func(string, string) {}
 	}
 	if a.seasonsOf == nil {
-		a.seasonsOf = func(*storage.Entry) []int { return nil }
+		a.seasonsOf = func(*storage.Entry) []*storage.Entry { return nil }
 	}
 	if a.naming == nil {
 		a.naming = func() config.WebDavFolderNaming { return "" }
