@@ -393,7 +393,7 @@ func (m *Manager) recheckBad(ctx context.Context, infohash string) {
 		}
 	case repair.VerdictBroken:
 		if m.fixer.repairs.running(infohash) {
-			m.logger.Info().Str("infohash", infohash).Msg("A repair is running; leaving the bad mark and the grab for now")
+			m.logger.Info().Str("infohash", infohash).Msg("A repair is running; leaving the bad mark and the grab")
 			return
 		}
 		failCtx, cancel := context.WithTimeout(ctx, time.Minute)

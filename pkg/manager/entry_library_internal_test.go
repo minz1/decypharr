@@ -335,14 +335,17 @@ func TestRepairResultAndBadFlagOfAGrabKeyGoThroughTheActor(t *testing.T) {
 		stamp := time.Now()
 		entry := libEntry("a", "old")
 		entry.Providers = map[string]*storage.ProviderEntry{
-			"remaining": {Provider: "remaining", ID: "kept", Status: types.TorrentStatusDownloaded, DownloadedAt: &stamp},
+			"remaining": {
+				Provider: "remaining", ID: "kept", Status: types.TorrentStatusDownloaded, DownloadedAt: &stamp,
+			},
 		}
 		if err := store.AddOrUpdate(entry); err != nil {
 			t.Fatal(err)
 		}
 		m := h.libManager()
 
-		if err := m.applyRepairResult(t.Context(), "a", RepairResult{Provider: "remaining", SeenID: "kept"}); err != nil {
+		repaired := RepairResult{Provider: "remaining", SeenID: "kept"}
+		if err := m.applyRepairResult(t.Context(), "a", repaired); err != nil {
 			t.Fatal(err)
 		}
 		if stored, err := store.Get("a"); err != nil || stored.ActiveProvider != "remaining" {
@@ -357,7 +360,7 @@ func TestRepairResultAndBadFlagOfAGrabKeyGoThroughTheActor(t *testing.T) {
 		}
 
 		h.stop()
-		err = m.applyRepairResult(t.Context(), "a", RepairResult{Provider: "remaining", SeenID: "kept"})
+		err = m.applyRepairResult(t.Context(), "a", repaired)
 		if !errors.Is(err, keyed.ErrStopped) {
 			t.Fatalf("applyRepairResult with the actor stopped: %v, want ErrStopped", err)
 		}
