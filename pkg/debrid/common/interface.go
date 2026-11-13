@@ -23,6 +23,7 @@ type Client interface {
 	UpdateTorrent(ctx context.Context, torrent *types.Torrent) error
 	GetTorrent(ctx context.Context, torrentID string) (*types.Torrent, error)
 	GetTorrents(ctx context.Context) ([]*types.Torrent, error)
+	Lookup(ctx context.Context, infohash string) (types.LookupResult, *types.Torrent)
 	Config() config.Debrid
 	Logger() zerolog.Logger
 	RefreshDownloadLinks(ctx context.Context) error

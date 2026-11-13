@@ -370,7 +370,7 @@ func (tb *Torbox) withdrawQueued(ctx context.Context, hash string) (bool, error)
 		ID   int    `json:"id"`
 		Hash string `json:"hash"`
 	}]
-	params := map[string]string{"type": "torrent", "bypass_cache": queryTrue}
+	params := queuedParams()
 	status, err := tb.doGet(ctx, "/api/queued/getqueued", params, &queued)
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return false, fmt.Errorf("list TorBox's queue: %w", ctxErr)
@@ -726,8 +726,8 @@ func (tb *Torbox) getTorrents(ctx context.Context, offset int) ([]*types.Torrent
 	var res TorrentsListResponse
 
 	status, err := tb.doGet(ctx, "/api/torrents/mylist", map[string]string{
-		"bypass_cache": queryTrue,
-		"offset":       strconv.Itoa(offset),
+		queryBypassCache: queryTrue,
+		"offset":         strconv.Itoa(offset),
 	}, &res)
 	if err != nil {
 		return nil, err
