@@ -172,6 +172,8 @@ type recordingProvider struct {
 	name string
 	mu   sync.Mutex
 	ids  []string
+
+	onDelete func()
 }
 
 func (c *recordingProvider) Config() config.Debrid {
@@ -179,6 +181,9 @@ func (c *recordingProvider) Config() config.Debrid {
 }
 
 func (c *recordingProvider) DeleteTorrent(_ context.Context, id string) error {
+	if c.onDelete != nil {
+		c.onDelete()
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.ids = append(c.ids, id)

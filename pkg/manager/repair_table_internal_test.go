@@ -159,3 +159,37 @@ func TestFixTorrentJoinsARunningSwitchAndGetsItsResult(t *testing.T) {
 		}
 	})
 }
+
+func TestSwitchHoldsTheRepairSlotUntilTheSourceIsDropped(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		source := &recordingProvider{name: "removed"}
+		m := newResultManager(t, source)
+		storeResultEntry(t, m, func(e *storage.Entry) { e.Bad = false })
+		stored, err := m.storage.Get(resultHash)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m.clients.Store("remaining", &healProvider{})
+		var slotHeld atomic.Bool
+		source.onDelete = func() { slotHeld.Store(m.fixer.repairs.running(resultHash)) }
+		job := &storage.SwitcherJob{
+			ID: "job", InfoHash: resultHash, SourceProvider: "removed", TargetProvider: "remaining",
+			Status: storage.SwitcherStatusPending,
+		}
+		m.executeMigration(t.Context(), job, stored)
+		if job.Status != storage.SwitcherStatusCompleted {
+			t.Fatalf("job = %+v, want completed", job)
+		}
+		drainPlacements(t, m)
+		if got := source.deleted(); len(got) != 1 {
+			t.Fatalf("source deleted = %v, want the old placement deleted once", got)
+		}
+		if !slotHeld.Load() {
+			t.Fatal("a repair could start while the source placement was being dropped")
+		}
+		if m.fixer.repairs.running(resultHash) {
+			t.Fatal("the repair slot stayed held after the switch")
+		}
+	})
+}
