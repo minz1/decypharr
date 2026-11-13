@@ -121,7 +121,8 @@ func TestObservationOf(t *testing.T) {
 		{"unknown raw 0/0 is stalled", Torrent{Status: "magnet_conversion"}, PhaseStalled, "magnet_conversion",
 			CachedUnknown},
 	}
-	for _, c := range cases {
+	for i := range cases {
+		c := &cases[i]
 		o := ObservationOf(&c.t)
 		if o.Phase != c.phase || o.Raw != c.raw || o.Cached != c.cached {
 			t.Errorf("%s: got phase %s raw %q cached %d, want %s %q %d", c.name, o.Phase, o.Raw, o.Cached,
