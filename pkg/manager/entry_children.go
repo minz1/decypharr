@@ -237,15 +237,24 @@ func (m *Manager) placementFailed(
 	}
 	switch {
 	case err != nil:
-		return eventMsg(grab.Event{Kind: grab.EvProviderObserved, Observed: debridTypes.PhaseFailed, Fail: fail, Reason: err.Error()})
+		return eventMsg(
+			grab.Event{
+				Kind:     grab.EvProviderObserved,
+				Observed: debridTypes.PhaseFailed,
+				Fail:     fail,
+				Reason:   err.Error(),
+			},
+		)
 	case t == nil:
 		return eventMsg(grab.Event{Kind: grab.EvPlacementGone, Fail: grab.FailBadRelease,
 			Reason: "debrid entry not found"})
 	}
 	m.logger.Error().Str("debrid", t.Debrid).Str("name", t.Name).Str("status", string(t.Status)).
 		Msg("Entry in error state")
-	return eventMsg(grab.Event{Kind: grab.EvProviderObserved, Observed: debridTypes.PhaseFailed, Fail: grab.FailBadRelease,
-		Reason: "entry in error state on debrid: " + t.Debrid})
+	return eventMsg(
+		grab.Event{Kind: grab.EvProviderObserved, Observed: debridTypes.PhaseFailed, Fail: grab.FailBadRelease,
+			Reason: "entry in error state on debrid: " + t.Debrid},
+	)
 }
 
 // polled is the observation a status check of a placement makes; it carries the placement's progress.

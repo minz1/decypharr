@@ -89,6 +89,7 @@ func phaseSuccessors(p Phase) []Phase {
 		return []Phase{PhaseDownloaded, PhaseFailed}
 	case PhaseStalled:
 		return []Phase{PhaseRemoteQueued, PhaseDownloading, PhaseFinalizing, PhaseDownloaded, PhaseFailed}
+	case PhaseUnknown, PhaseDownloaded, PhaseFailed:
 	}
 	return nil
 }
@@ -140,12 +141,9 @@ func ObservationOf(t *Torrent) Observation {
 	default:
 		o.Phase, o.Raw = PhaseUnknown, string(t.Status)
 	}
-	switch o.Phase {
-	case PhaseDownloading, PhaseDownloaded, PhaseFailed:
-	default:
-		if t.Seeders == 0 && t.Progress == 0 {
-			o.Phase = PhaseStalled
-		}
+	active := o.Phase == PhaseDownloading || o.Phase == PhaseDownloaded || o.Phase == PhaseFailed
+	if !active && t.Seeders == 0 && t.Progress == 0 {
+		o.Phase = PhaseStalled
 	}
 	return o
 }

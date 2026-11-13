@@ -178,10 +178,10 @@ func observe(st State, ev Event) (State, []Effect, error) {
 		PhaseDeleting:
 		return refuse(st, ev, "contradicts "+st.Phase.String())
 	}
-	switch observed {
-	case debridTypes.PhaseFailed:
+	if observed == debridTypes.PhaseFailed {
 		return fail(st, ev, ev.Fail, "failed at the provider")
-	case debridTypes.PhaseUnknown:
+	}
+	if observed == debridTypes.PhaseUnknown {
 		next := st
 		next.UnknownRaw, next.StalledSince = ev.Raw, cmp.Or(st.StalledSince, ev.At)
 		return persistIfChanged(st, next)

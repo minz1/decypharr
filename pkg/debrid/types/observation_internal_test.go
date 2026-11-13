@@ -113,7 +113,13 @@ func TestObservationOf(t *testing.T) {
 	}{
 		{"downloaded", Torrent{Status: TorrentStatusDownloaded}, PhaseDownloaded, "", CachedYes},
 		{"error", Torrent{Status: TorrentStatusError}, PhaseFailed, "", CachedUnknown},
-		{"downloading 0/0 is not stalled", Torrent{Status: TorrentStatusDownloading}, PhaseDownloading, "", CachedUnknown},
+		{
+			"downloading 0/0 is not stalled",
+			Torrent{Status: TorrentStatusDownloading},
+			PhaseDownloading,
+			"",
+			CachedUnknown,
+		},
 		{"queued 0/0 is stalled", Torrent{Status: "queued"}, PhaseStalled, "", CachedUnknown},
 		{"queued with seeders", Torrent{Status: "queued", Seeders: 3}, PhaseRemoteQueued, "", CachedUnknown},
 		{"unknown raw with progress", Torrent{Status: "magnet_conversion", Progress: 0.1}, PhaseUnknown,

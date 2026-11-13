@@ -10,18 +10,6 @@ const (
 	missConfirming
 )
 
-func (p missPhase) String() string {
-	switch p {
-	case missNone:
-		return "none"
-	case missOnce:
-		return "once"
-	case missConfirming:
-		return "confirming"
-	}
-	return "miss(?)"
-}
-
 func allMissPhases() []missPhase { return []missPhase{missNone, missOnce, missConfirming} }
 
 func missSuccessors(p missPhase) []missPhase {

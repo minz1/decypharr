@@ -35,26 +35,32 @@ func TestFirstObservationIsAlwaysLegal(t *testing.T) {
 				t.Errorf("%s: %v", p, err)
 				continue
 			}
-			switch p {
-			case debridTypes.PhaseDownloaded:
-				want := PhaseAwaitingLinks
-				if linked {
-					want = PhaseActing
-				}
-				if got.Phase != want {
-					t.Errorf("downloaded linked=%v: phase %v, want %v", linked, got.Phase, want)
-				}
-			case debridTypes.PhaseFailed:
-				if got.Phase != PhaseFailed {
-					t.Errorf("failed: phase %v", got.Phase)
-				}
-			default:
-				if got.Phase != PhaseProvider || got.ProviderPhase != p {
-					t.Errorf("%s: phase %v provider phase %v", p, got.Phase, got.ProviderPhase)
-				}
+			want := phaseAfterFirstObservation(p, linked)
+			if got.Phase != want || (want == PhaseProvider && got.ProviderPhase != p) {
+				t.Errorf(
+					"%s linked=%v: phase %v provider phase %v, want %v",
+					p,
+					linked,
+					got.Phase,
+					got.ProviderPhase,
+					want,
+				)
 			}
 		}
 	}
+}
+
+func phaseAfterFirstObservation(p debridTypes.Phase, linked bool) Phase {
+	if p == debridTypes.PhaseFailed {
+		return PhaseFailed
+	}
+	if p != debridTypes.PhaseDownloaded {
+		return PhaseProvider
+	}
+	if linked {
+		return PhaseActing
+	}
+	return PhaseAwaitingLinks
 }
 
 func TestBackwardObservationIsRefused(t *testing.T) {
@@ -158,7 +164,7 @@ func TestResubmittedGrabStartsAtNone(t *testing.T) {
 	if st.Phase != PhaseProvider || st.ProviderPhase != debridTypes.PhaseNone {
 		t.Fatalf("resubmitted: %v provider phase %v, want provider/none", st.Phase, st.ProviderPhase)
 	}
-	if _, _, err := Transition(st, observedAs(debridTypes.PhaseConverting, "", at())); err != nil {
+	if _, _, err = Transition(st, observedAs(debridTypes.PhaseConverting, "", at())); err != nil {
 		t.Errorf("first observation of the new placement: %v", err)
 	}
 }

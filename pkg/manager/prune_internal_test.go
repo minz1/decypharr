@@ -291,7 +291,11 @@ func TestPruneExclusions(t *testing.T) {
 	h.reference(t, keep)
 	h.addEntry(t, "man1", func(e *storage.Entry) { e.Manual = true })
 	h.addEntry(t, "que1", nil)
-	h.addEntry(t, "inc1", func(e *storage.Entry) { e.Providers["torbox"].Status = debridTypes.TorrentStatusRemoteQueued })
+	h.addEntry(
+		t,
+		"inc1",
+		func(e *storage.Entry) { e.Providers["torbox"].Status = debridTypes.TorrentStatusRemoteQueued },
+	)
 	h.addEntry(t, "dow1", func(e *storage.Entry) {
 		e.Providers["torbox"].Status = debridTypes.TorrentStatusDownloading
 	})

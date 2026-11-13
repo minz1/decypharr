@@ -40,7 +40,13 @@ func TestMissMachine(t *testing.T) {
 		{"found on lookup before confirming", once, missFoundOnLookup, once, false},
 		{"dropped", confirming, missDropped, missState{}, true},
 		{"dropped before confirming", once, missDropped, once, false},
-		{"recovery failed", confirming, missRecoveryFailed, missState{phase: missConfirming, recoveryFailures: 3}, true},
+		{
+			"recovery failed",
+			confirming,
+			missRecoveryFailed,
+			missState{phase: missConfirming, recoveryFailures: 3},
+			true,
+		},
 		{"recovery failed before confirming", missState{}, missRecoveryFailed, missState{}, false},
 	}
 	for _, r := range rows {
