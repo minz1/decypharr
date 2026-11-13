@@ -137,11 +137,18 @@ func (m *Manager) rebuildQueuedTorrentJob(entry *storage.Entry) (*Job, error) {
 		}, nil
 	}
 
+	job := NewJob(JobTypeTorrent, m.requestFromEntry(entry))
+	job.ID = entry.InfoHash
+	job.Entry = entry
+	return job, nil
+}
+
+// requestFromEntry rebuilds the add request of a queued torrent that was never placed at a provider.
+func (m *Manager) requestFromEntry(entry *storage.Entry) *ImportRequest {
 	magnet, err := utils.GetMagnetInfo(entry.Magnet, m.store.Get().AlwaysRmTrackerUrls)
 	if err != nil {
 		magnet = utils.ConstructMagnet(entry.InfoHash, entry.Name)
 	}
-
 	downloadUncached := entry.DownloadUncached
 	req := NewTorrentRequest(
 		entry.ActiveProvider,
@@ -156,10 +163,7 @@ func (m *Manager) rebuildQueuedTorrentJob(entry *storage.Entry) (*Job, error) {
 	)
 	req.ID = entry.InfoHash
 	req.Manual = entry.Manual
-	job := NewJob(JobTypeTorrent, req)
-	job.ID = entry.InfoHash
-	job.Entry = entry
-	return job, nil
+	return req
 }
 
 func (m *Manager) rebuildQueuedNZBJob(entry *storage.Entry) (*Job, error) {

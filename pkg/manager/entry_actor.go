@@ -26,8 +26,11 @@ const entryMailboxSize = 64
 type entryMsg struct {
 	// ev goes to grab.Transition; nil for a child exit without a result and for a retry.
 	ev *grab.Event
-	// entry is the new queue record a Submit carries.
+	// entry is the new queue record a Submit carries, and req the add request it came with.
 	entry *storage.Entry
+	req   *ImportRequest
+	// update applies what a child saw to the record; it runs again when a failed save is retried.
+	update func(e *storage.Entry)
 	// torrent is what a submit or poll child saw at the provider.
 	torrent  *debridTypes.Torrent
 	tags     []string
@@ -56,6 +59,7 @@ type entryChildCall struct {
 	grab     grab.Grab
 	cleanup  grab.Cleanup
 	releases []placementRef
+	req      *ImportRequest
 }
 
 // entryState is one grab's actor state.
@@ -65,6 +69,8 @@ type entryState struct {
 	live     map[grab.ChildKind]keyed.ChildID
 	pending  []grab.Effect
 	releases []placementRef
+	// req is the add request of a grab submitted since the start; a grab loaded from disk has none.
+	req      *ImportRequest
 	timer    keyed.TimerID
 	hasTimer bool
 	retries  int
@@ -292,6 +298,9 @@ func (a *entryActor) step(key string, st *entryState, m entryMsg, fx *keyed.Effe
 		a.refuse(key, ev, err, fx)
 		return
 	}
+	if ev.Kind == grab.EvSubmit && m.req != nil {
+		st.req = m.req
+	}
 	s := &entryStep{key: key, st: st, cur: cur, next: grab.Grab{State: nextState}, m: m, ev: ev, fx: fx}
 	if cur.Entry != nil {
 		s.next.Entry = cur.Entry.Clone()
@@ -384,7 +393,7 @@ func (a *entryActor) effect(s *entryStep, e grab.Effect) error {
 		}
 		a.grabs.remove(s.key)
 		s.next.Entry = nil
-		st.releases = nil
+		st.releases, st.req = nil, nil
 	}
 	return nil
 }
@@ -512,6 +521,7 @@ func (a *entryActor) start(
 	}
 	call := entryChildCall{
 		kind: e.Child, grab: g, cleanup: e.Cleanup, releases: append([]placementRef(nil), st.releases...),
+		req: st.req,
 	}
 	work := a.child(call)
 	kind := e.Child
@@ -565,6 +575,10 @@ func applyPayload(e *storage.Entry, m entryMsg) bool {
 	changed := false
 	if m.torrent != nil {
 		applyDebridTorrentToEntry(e, m.torrent)
+		changed = true
+	}
+	if m.update != nil {
+		m.update(e)
 		changed = true
 	}
 	if m.tags != nil {

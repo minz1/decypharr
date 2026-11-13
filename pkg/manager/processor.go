@@ -715,7 +715,11 @@ func addEntryFiles(entry *storage.Entry, debridTorrent *debridTypes.Torrent) {
 // work ctx, not on a caller's: a submit belongs to the manager, and the torrent it leaves at the provider must get a
 // queue entry whatever happens to the request that asked.
 func (m *Manager) SendToDebrid(importRequest *ImportRequest) (*debridTypes.Torrent, error) {
-	ctx := m.work.Context()
+	return m.sendToDebrid(m.work.Context(), importRequest)
+}
+
+// sendToDebrid is SendToDebrid on ctx: a grab's submit child runs it on its own ctx, which only a stop cuts.
+func (m *Manager) sendToDebrid(ctx context.Context, importRequest *ImportRequest) (*debridTypes.Torrent, error) {
 	debridTorrent := &debridTypes.Torrent{
 		InfoHash: importRequest.Magnet.InfoHash,
 		Magnet:   importRequest.Magnet,

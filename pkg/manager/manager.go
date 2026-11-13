@@ -204,6 +204,10 @@ type Manager struct {
 	jobQueue  *JobQueue
 	nzbSyncMu sync.Mutex
 
+	// grabs is the read index of every grab; entries is the actor that owns them.
+	grabs   *grabIndex
+	entries *entryActor
+
 	// Notifications service
 	Notifications *notifications.Service
 
@@ -440,6 +444,7 @@ func (m *Manager) init() error {
 	m.arr.SetQueueGuardHooks(m.queueGuardHooks())
 
 	// Initialize the unified active-download queue after all processors exist.
+	m.initEntries()
 	m.initJobQueue()
 
 	// Storage closes last: this task ends when the group's own context does,
@@ -506,6 +511,26 @@ func (m *Manager) initLinkService() {
 		m.folderNaming,
 		m.logs.New("link"),
 	)
+}
+
+func (m *Manager) initEntries() {
+	m.grabs = &grabIndex{}
+	m.entries = newEntryActor(m.work, entryDeps{
+		store:    m.storage,
+		grabs:    m.grabs,
+		logger:   m.logs.New("grab"),
+		capacity: m.config.MaxActiveDownloads,
+		child:    m.entryChild,
+		publish:  m.storage.PublishEntry,
+		fail:     m.failEffects,
+		packOf:   func() map[string]string { return nil },
+		inLibrary: func(key string) bool {
+			ok, err := m.storage.Exists(key)
+			return ok && err == nil
+		},
+		pollEvery:  m.refreshInterval,
+		retryDelay: throttledRetryDelay,
+	})
 }
 
 func (m *Manager) initJobQueue() {
