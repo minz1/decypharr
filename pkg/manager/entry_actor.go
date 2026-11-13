@@ -119,7 +119,6 @@ type entryState struct {
 	// submitCut says the submit deadline cancelled the running submit; the rest of the submit's clock is in the index,
 	// since an idle actor drops this state.
 	submitCut bool
-	nudges    int
 }
 
 type providerWarn struct {
@@ -293,7 +292,8 @@ func (a *entryActor) handle(
 		m = a.childExited(key, st, m)
 	}
 	if m.exit && m.child == grab.ChildPoll && m.nudged {
-		st.nudges++
+		key := st.g.State.Key
+		a.grabs.setNudges(key, a.grabs.nudgesOf(key)+1)
 	}
 	if m.exit && m.child == grab.ChildPoll && m.seen != nil && st.g.State.Phase == grab.PhaseProvider {
 		a.grabs.setPolled(key, *m.seen)
@@ -702,7 +702,7 @@ func (a *entryActor) leftPhase(st *entryState, to grab.Phase, fx *keyed.Effects[
 	}
 	st.retries = 0
 	st.warned = nil
-	st.nudges = 0
+	a.grabs.setNudges(st.g.State.Key, 0)
 	a.grabs.setPolled(st.g.State.Key, pollSeen{})
 	a.grabs.setSubmitClock(st.g.State.Key, submitClock{})
 	a.cancelDeadline(st, fx)
@@ -770,7 +770,7 @@ func (a *entryActor) start(
 	}
 	call := entryChildCall{
 		kind: e.Child, grab: g, cleanup: e.Cleanup, releases: append([]placementRef(nil), st.releases...),
-		req: st.req, allowSelect: st.nudges < maxSelects,
+		req: st.req, allowSelect: a.grabs.nudgesOf(st.g.State.Key) < maxSelects,
 	}
 	if e.Child == grab.ChildLookup {
 		c := a.grabs.submitClockOf(key)

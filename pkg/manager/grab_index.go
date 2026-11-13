@@ -35,6 +35,9 @@ type grabIndex struct {
 	// submits is the clock of each submitting grab; like polled, it stays while the actor is idle, so the lookup
 	// deadline and backoff do not restart each time a timer wakes the actor.
 	submits map[string]submitClock
+	// nudges counts the selects and restarts sent for each grab's placement in this phase; like polled, it stays while
+	// the actor is idle, so the cap holds across polls spaced further apart than the idle limit.
+	nudges map[string]int
 }
 
 // submitClock is when this process loaded a submitting grab (zero if it entered Submitting here), when its submit
@@ -66,6 +69,7 @@ func (x *grabIndex) remove(key string) {
 	delete(x.seen, key)
 	delete(x.polled, key)
 	delete(x.submits, key)
+	delete(x.nudges, key)
 }
 
 // goneChan is closed when key has no grab.
@@ -185,4 +189,26 @@ func (x *grabIndex) submitClockOf(key string) submitClock {
 	x.mu.RLock()
 	defer x.mu.RUnlock()
 	return x.submits[strings.ToLower(key)]
+}
+
+// nudgesOf is how many selects and restarts key's placement has been sent in this phase.
+func (x *grabIndex) nudgesOf(key string) int {
+	x.mu.RLock()
+	defer x.mu.RUnlock()
+	return x.nudges[strings.ToLower(key)]
+}
+
+// setNudges records how many selects and restarts key's placement has been sent; zero forgets the count.
+func (x *grabIndex) setNudges(key string, n int) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	key = strings.ToLower(key)
+	if n == 0 {
+		delete(x.nudges, key)
+		return
+	}
+	if x.nudges == nil {
+		x.nudges = make(map[string]int)
+	}
+	x.nudges[key] = n
 }

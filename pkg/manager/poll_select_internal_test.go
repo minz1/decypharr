@@ -34,6 +34,15 @@ func (p *awaitingSelectionProvider) Poll(
 
 func TestPollsAllowThreeSelectsThenFailWithNoEffect(t *testing.T) {
 	t.Parallel()
+	selectsThenFail(t, 0)
+}
+
+func TestSelectsAreCountedAcrossAnIdleActor(t *testing.T) {
+	t.Parallel()
+	selectsThenFail(t, 2*time.Minute)
+}
+
+func selectsThenFail(t *testing.T, gap time.Duration) {
 	store := newTestStore(t)
 	synctest.Test(t, func(t *testing.T) {
 		h := deadlineHarness(t, store, time.Hour)
@@ -50,6 +59,7 @@ func TestPollsAllowThreeSelectsThenFailWithNoEffect(t *testing.T) {
 		h.mustAsk("a", grab.Event{Kind: grab.EvRecover})
 		synctest.Wait()
 		for range maxSelects {
+			time.Sleep(gap)
 			h.mustAsk("a", grab.Event{Kind: grab.EvPollTimer})
 			synctest.Wait()
 		}
