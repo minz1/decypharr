@@ -377,4 +377,3 @@ func (f *Fixer) buildAttemptOrder(torrent *storage.Entry, skipCurrent bool) []st
 
 	return order
 }
-

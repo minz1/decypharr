@@ -46,7 +46,8 @@ func applyRepair(fresh *storage.Entry, r RepairResult, now time.Time) (*storage.
 	}
 	out := fresh.Clone()
 	if r.Placement != nil {
-		if cur := out.Providers[r.Provider]; cur != nil && cur.ID != "" && cur.ID != r.Placement.ID && cur.ID != r.SeenID {
+		if cur := out.Providers[r.Provider]; cur != nil && cur.ID != "" && cur.ID != r.Placement.ID &&
+			cur.ID != r.SeenID {
 			return nil, errPlacementChanged
 		}
 		adoptPlacement(out, r.Placement, now)

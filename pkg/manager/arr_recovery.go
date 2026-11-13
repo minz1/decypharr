@@ -265,11 +265,11 @@ func (m *Manager) ClearBad(_ context.Context, infohash string) error {
 		return nil
 	}
 	var running bool
-	flipped, gone, err := m.setBad(infohash, false, func() bool {
+	w, err := m.setBad(infohash, false, func() bool {
 		running = m.fixer.repairs.running(infohash)
 		return running
 	})
-	if err != nil || gone {
+	if err != nil || w.gone {
 		return err
 	}
 	if running {
@@ -279,7 +279,7 @@ func (m *Manager) ClearBad(_ context.Context, infohash string) error {
 			repair.MarkedBadReason,
 		)
 	}
-	if flipped {
+	if w.flipped {
 		m.refreshLater()
 	}
 	m.fixer.repairs.reset(infohash)
@@ -296,10 +296,11 @@ func (m *Manager) refreshLater() {
 
 // setBad writes key's bad flag on a fresh read under the stripe (through the actor when the key has a grab). skip,
 // when set, runs inside that write and holds it back. flipped reports a changed flag; gone, a missing entry.
-func (m *Manager) setBad(key string, bad bool, skip func() bool) (flipped, gone bool, err error) {
-	err = m.mergeLibrary(m.work.Context(), key, func(fresh *storage.Entry) (*storage.Entry, error) {
+func (m *Manager) setBad(key string, bad bool, skip func() bool) (badWrite, error) {
+	var w badWrite
+	err := m.mergeLibrary(m.work.Context(), key, func(fresh *storage.Entry) (*storage.Entry, error) {
 		if fresh == nil {
-			gone = true
+			w.gone = true
 			return nil, storage.ErrNoChange
 		}
 		if skip != nil && skip() {
@@ -307,12 +308,15 @@ func (m *Manager) setBad(key string, bad bool, skip func() bool) (flipped, gone 
 		}
 		out, mergeErr := withBad(fresh, bad, time.Now())
 		if mergeErr == nil {
-			flipped = true
+			w.flipped = true
 		}
 		return out, mergeErr
 	})
-	return flipped, gone, err
+	return w, err
 }
+
+// badWrite is what a setBad write did: flipped, the flag changed; gone, the entry was missing.
+type badWrite struct{ flipped, gone bool }
 
 // confirmCheckTimeout bounds each fresh read check of an entry's active placement.
 const confirmCheckTimeout = time.Minute
@@ -339,20 +343,23 @@ func (m *Manager) giveUpOnEntry(entry *storage.Entry) {
 		event.Str("infohash", entry.InfoHash).Str("name", entry.Name).Msg(msg)
 		return
 	}
-	flipped, gone, err := m.setBad(entry.InfoHash, true, nil)
+	w, err := m.setBad(entry.InfoHash, true, nil)
 	if err != nil {
 		m.logger.Warn().Err(err).Str("infohash", entry.InfoHash).Msg("Failed to persist the bad flag")
 	}
-	if gone {
+	if w.gone {
 		return
 	}
-	if flipped {
+	if w.flipped {
 		m.refreshLater()
 	}
 	if entry.IsTorrent() {
-		if err := m.storage.MarkEntryDirty(entry.GetFolder(m.folderNaming()), config.ProtocolTorrent,
-			repair.MarkedBadReason); err != nil {
-			m.logger.Warn().Err(err).Str("infohash", entry.InfoHash).Msg("Failed to queue the bad entry for a recheck")
+		if markErr := m.storage.MarkEntryDirty(entry.GetFolder(m.folderNaming()), config.ProtocolTorrent,
+			repair.MarkedBadReason); markErr != nil {
+			m.logger.Warn().
+				Err(markErr).
+				Str("infohash", entry.InfoHash).
+				Msg("Failed to queue the bad entry for a recheck")
 		}
 	}
 	// A stopping manager drops the recheck: the mark stays, and the next repair sweep revisits it.
@@ -458,14 +465,19 @@ func (m *Manager) rearmBadRechecks() {
 			return nil
 		})
 		if err != nil {
-			m.logger.Warn().Err(err).Msg("Failed to list the bad entries to recheck")
+			return fmt.Errorf("list the bad entries to recheck: %w", err)
 		}
-		for _, key := range keys {
-			if ctx.Err() != nil {
-				return nil
-			}
-			m.recheckBad(ctx, key)
-		}
+		m.recheckBadKeys(ctx, keys)
 		return nil
 	})
+}
+
+// recheckBadKeys rechecks keys one after another and stops at the first cancelled ctx.
+func (m *Manager) recheckBadKeys(ctx context.Context, keys []string) {
+	for _, key := range keys {
+		if ctx.Err() != nil {
+			return
+		}
+		m.recheckBad(ctx, key)
+	}
 }

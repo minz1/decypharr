@@ -21,10 +21,10 @@ import (
 
 const resultHash = "0123456789012345678901234567890123456789"
 
-func resultPlacement(id string, status types.TorrentStatus) *types.Torrent {
+func resultPlacement(status types.TorrentStatus) *types.Torrent {
 	return &types.Torrent{
-		ID: id, Debrid: "remaining", Status: status,
-		Files: map[string]types.File{"video.mkv": {Name: "video.mkv", ID: "file-" + id}},
+		ID: "new", Debrid: "remaining", Status: status,
+		Files: map[string]types.File{"video.mkv": {Name: "video.mkv", ID: "file-new"}},
 	}
 }
 
@@ -39,19 +39,18 @@ func resultEntry() *storage.Entry {
 	}
 }
 
-func TestApplyRepair(t *testing.T) {
-	t.Parallel()
-	now := time.Now()
-	stamp := now
-	for name, tc := range map[string]struct {
-		fresh   func() *storage.Entry
-		result  RepairResult
-		wantErr error
-		check   func(t *testing.T, out *storage.Entry)
-	}{
+type applyRepairCase struct {
+	fresh   func() *storage.Entry
+	result  RepairResult
+	wantErr error
+	check   func(t *testing.T, out *storage.Entry)
+}
+
+func applyRepairCases(stamp time.Time) map[string]applyRepairCase {
+	return map[string]applyRepairCase{
 		"healed adds the placement and activates it": {
 			fresh:  resultEntry,
-			result: RepairResult{Provider: "remaining", Placement: resultPlacement("new", types.TorrentStatusDownloaded)},
+			result: RepairResult{Provider: "remaining", Placement: resultPlacement(types.TorrentStatusDownloaded)},
 			check: func(t *testing.T, out *storage.Entry) {
 				if out.ActiveProvider != "remaining" || out.Bad || out.Providers["remaining"].ID != "new" {
 					t.Fatalf("merged = %+v", out)
@@ -81,7 +80,7 @@ func TestApplyRepair(t *testing.T) {
 		},
 		"an activation that fails keeps the mark": {
 			fresh:   resultEntry,
-			result:  RepairResult{Provider: "remaining", Placement: resultPlacement("new", types.TorrentStatusDownloading)},
+			result:  RepairResult{Provider: "remaining", Placement: resultPlacement(types.TorrentStatusDownloading)},
 			wantErr: errActivateFailed,
 		},
 		"an existing placement that is no longer complete fails": {
@@ -111,7 +110,7 @@ func TestApplyRepair(t *testing.T) {
 		},
 		"a missing entry changes nothing": {
 			fresh:   func() *storage.Entry { return nil },
-			result:  RepairResult{Provider: "remaining", Placement: resultPlacement("new", types.TorrentStatusDownloaded)},
+			result:  RepairResult{Provider: "remaining", Placement: resultPlacement(types.TorrentStatusDownloaded)},
 			wantErr: storage.ErrNoChange,
 		},
 		"a newer placement on another provider survives": {
@@ -123,9 +122,10 @@ func TestApplyRepair(t *testing.T) {
 				e.Files["extra.mkv"] = &storage.File{Name: "extra.mkv"}
 				return e
 			},
-			result: RepairResult{Provider: "remaining", Placement: resultPlacement("new", types.TorrentStatusDownloaded)},
+			result: RepairResult{Provider: "remaining", Placement: resultPlacement(types.TorrentStatusDownloaded)},
 			check: func(t *testing.T, out *storage.Entry) {
-				if out.Providers["other"] == nil || out.Providers["other"].ID != "newer" || out.Files["extra.mkv"] == nil {
+				if out.Providers["other"] == nil || out.Providers["other"].ID != "newer" ||
+					out.Files["extra.mkv"] == nil {
 					t.Fatalf("merged = %+v, want the newer placement and file kept", out)
 				}
 				if out.ActiveProvider != "remaining" {
@@ -141,28 +141,42 @@ func TestApplyRepair(t *testing.T) {
 				}
 				return e
 			},
-			result:  RepairResult{Provider: "remaining", SeenID: "seen", Placement: resultPlacement("new", types.TorrentStatusDownloaded)},
+			result: RepairResult{
+				Provider:  "remaining",
+				SeenID:    "seen",
+				Placement: resultPlacement(types.TorrentStatusDownloaded),
+			},
 			wantErr: errPlacementChanged,
 		},
-	} {
+	}
+}
+
+func TestApplyRepair(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	for name, tc := range applyRepairCases(now) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			fresh := tc.fresh()
-			var before *storage.Entry
-			if fresh != nil {
-				before = fresh.Clone()
-			}
-			out, err := applyRepair(fresh, tc.result, now)
-			if !errors.Is(err, tc.wantErr) || (tc.wantErr == nil) != (err == nil) {
-				t.Fatalf("error = %v, want %v", err, tc.wantErr)
-			}
-			if !reflect.DeepEqual(fresh, before) {
-				t.Fatalf("fresh was written: %+v, want %+v", fresh, before)
-			}
-			if tc.check != nil {
-				tc.check(t, out)
-			}
+			runApplyRepairCase(t, tc, now)
 		})
+	}
+}
+
+func runApplyRepairCase(t *testing.T, tc applyRepairCase, now time.Time) {
+	fresh := tc.fresh()
+	var before *storage.Entry
+	if fresh != nil {
+		before = fresh.Clone()
+	}
+	out, err := applyRepair(fresh, tc.result, now)
+	if !errors.Is(err, tc.wantErr) || (tc.wantErr == nil) != (err == nil) {
+		t.Fatalf("error = %v, want %v", err, tc.wantErr)
+	}
+	if !reflect.DeepEqual(fresh, before) {
+		t.Fatalf("fresh was written: %+v, want %+v", fresh, before)
+	}
+	if tc.check != nil {
+		tc.check(t, out)
 	}
 }
 
@@ -174,7 +188,9 @@ type recordingProvider struct {
 	ids  []string
 }
 
-func (c *recordingProvider) Config() config.Debrid { return config.Debrid{Name: c.name, Provider: "torbox"} }
+func (c *recordingProvider) Config() config.Debrid {
+	return config.Debrid{Name: c.name, Provider: "torbox"}
+}
 
 func (c *recordingProvider) DeleteTorrent(_ context.Context, id string) error {
 	c.mu.Lock()
@@ -218,24 +234,25 @@ func storeResultEntry(t *testing.T, m *Manager, edit func(*storage.Entry)) {
 	}
 }
 
-func TestApplyRepairResultReleasesOrDiscards(t *testing.T) {
-	t.Parallel()
+type releaseCase struct {
+	store       bool
+	edit        func(*storage.Entry)
+	result      RepairResult
+	wantErr     error
+	wantDeleted []string
+	wantActive  string
+}
+
+func releaseCases() map[string]releaseCase {
 	healed := RepairResult{
-		Provider: "remaining", SeenID: "old", Placement: resultPlacement("new", types.TorrentStatusDownloaded),
+		Provider: "remaining", SeenID: "old", Placement: resultPlacement(types.TorrentStatusDownloaded),
 		Release: &placementRelease{provider: "remaining", id: "old", grab: resultHash, delete: true, library: true},
 	}
 	failing := RepairResult{
-		Provider: "remaining", SeenID: "old", Placement: resultPlacement("new", types.TorrentStatusDownloading),
+		Provider: "remaining", SeenID: "old", Placement: resultPlacement(types.TorrentStatusDownloading),
 		Release: healed.Release,
 	}
-	for name, tc := range map[string]struct {
-		store       bool
-		edit        func(*storage.Entry)
-		result      RepairResult
-		wantErr     error
-		wantDeleted []string
-		wantActive  string
-	}{
+	return map[string]releaseCase{
 		"healed releases the old placement": {
 			store: true, result: healed, wantDeleted: []string{"old"}, wantActive: "remaining",
 			edit: func(e *storage.Entry) {
@@ -246,7 +263,11 @@ func TestApplyRepairResultReleasesOrDiscards(t *testing.T) {
 			},
 		},
 		"a failed activation discards the new placement and keeps the old": {
-			store: true, result: failing, wantErr: errActivateFailed, wantDeleted: []string{"new"}, wantActive: "remaining",
+			store:       true,
+			result:      failing,
+			wantErr:     errActivateFailed,
+			wantDeleted: []string{"new"},
+			wantActive:  "remaining",
 			edit: func(e *storage.Entry) {
 				e.ActiveProvider = "remaining"
 				e.Providers["remaining"] = &storage.ProviderEntry{
@@ -258,7 +279,11 @@ func TestApplyRepairResultReleasesOrDiscards(t *testing.T) {
 			result: healed, wantErr: errRepairSuperseded, wantDeleted: []string{"new"},
 		},
 		"a placement recorded meanwhile is kept and releases nothing": {
-			store: true, result: healed, wantErr: errPlacementChanged, wantDeleted: []string{"new"}, wantActive: "remaining",
+			store:       true,
+			result:      healed,
+			wantErr:     errPlacementChanged,
+			wantDeleted: []string{"new"},
+			wantActive:  "remaining",
 			edit: func(e *storage.Entry) {
 				e.ActiveProvider = "remaining"
 				e.Providers["remaining"] = &storage.ProviderEntry{
@@ -275,32 +300,39 @@ func TestApplyRepairResultReleasesOrDiscards(t *testing.T) {
 				}
 			},
 		},
-	} {
+	}
+}
+
+func TestApplyRepairResultReleasesOrDiscards(t *testing.T) {
+	t.Parallel()
+	for name, tc := range releaseCases() {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			synctest.Test(t, func(t *testing.T) {
-				client := &recordingProvider{name: "remaining"}
-				m := newResultManager(t, client)
-				if tc.store {
-					storeResultEntry(t, m, tc.edit)
-				}
-				err := m.applyRepairResult(t.Context(), resultHash, tc.result)
-				if !errors.Is(err, tc.wantErr) || (tc.wantErr == nil) != (err == nil) {
-					t.Fatalf("error = %v, want %v", err, tc.wantErr)
-				}
-				drainPlacements(t, m)
-				if got := client.deleted(); !slices.Equal(got, tc.wantDeleted) {
-					t.Fatalf("deleted = %v, want %v", got, tc.wantDeleted)
-				}
-				if tc.wantActive == "" {
-					return
-				}
-				stored, getErr := m.storage.Get(resultHash)
-				if getErr != nil || stored.ActiveProvider != tc.wantActive {
-					t.Fatalf("stored = %+v, %v; want %s active", stored, getErr, tc.wantActive)
-				}
-			})
+			synctest.Test(t, func(t *testing.T) { runReleaseCase(t, tc) })
 		})
+	}
+}
+
+func runReleaseCase(t *testing.T, tc releaseCase) {
+	client := &recordingProvider{name: "remaining"}
+	m := newResultManager(t, client)
+	if tc.store {
+		storeResultEntry(t, m, tc.edit)
+	}
+	err := m.applyRepairResult(t.Context(), resultHash, tc.result)
+	if !errors.Is(err, tc.wantErr) || (tc.wantErr == nil) != (err == nil) {
+		t.Fatalf("error = %v, want %v", err, tc.wantErr)
+	}
+	drainPlacements(t, m)
+	if got := client.deleted(); !slices.Equal(got, tc.wantDeleted) {
+		t.Fatalf("deleted = %v, want %v", got, tc.wantDeleted)
+	}
+	if tc.wantActive == "" {
+		return
+	}
+	stored, getErr := m.storage.Get(resultHash)
+	if getErr != nil || stored.ActiveProvider != tc.wantActive {
+		t.Fatalf("stored = %+v, %v; want %s active", stored, getErr, tc.wantActive)
 	}
 }
 
@@ -310,7 +342,8 @@ func TestWithBadWritesOnlyTheFlag(t *testing.T) {
 	fresh.Files["extra.mkv"] = &storage.File{Name: "extra.mkv"}
 	before := fresh.Clone()
 	out, err := withBad(fresh, false, time.Now())
-	if err != nil || out.Bad || !reflect.DeepEqual(out.Files, before.Files) || !reflect.DeepEqual(out.Providers, before.Providers) {
+	if err != nil || out.Bad || !reflect.DeepEqual(out.Files, before.Files) ||
+		!reflect.DeepEqual(out.Providers, before.Providers) {
 		t.Fatalf("out = %+v, %v; want only the flag changed", out, err)
 	}
 	if !fresh.Bad {
@@ -411,4 +444,18 @@ func TestSwitchKeepsWhatASyncWroteDuringTheMove(t *testing.T) {
 			t.Fatalf("source deleted = %v, want [old]", got)
 		}
 	})
+}
+
+func storeMoveAndApply(t *testing.T, m *Manager, fixer *Fixer, entry *storage.Entry) {
+	t.Helper()
+	if err := m.storage.AddOrUpdate(entry); err != nil {
+		t.Fatal(err)
+	}
+	result, err := fixer.MoveTorrent(entry, "remaining", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = m.applyRepairResult(t.Context(), entry.InfoHash, result); err != nil {
+		t.Fatal(err)
+	}
 }

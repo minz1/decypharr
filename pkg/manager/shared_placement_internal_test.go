@@ -143,16 +143,7 @@ func TestReplacingAPlacementKeepsOneACoHolderUses(t *testing.T) {
 				}
 			}
 			fixer := NewFixer(m)
-			if addErr := store.AddOrUpdate(entry); addErr != nil {
-				t.Fatal(addErr)
-			}
-			result, moveErr := fixer.MoveTorrent(entry, "remaining", true)
-			if moveErr != nil {
-				t.Fatal(moveErr)
-			}
-			if applyErr := m.applyRepairResult(t.Context(), entry.InfoHash, result); applyErr != nil {
-				t.Fatal(applyErr)
-			}
+			storeMoveAndApply(t, m, fixer, entry)
 			drainPlacements(t, m)
 			if got, want := client.deletions.Load(), map[bool]int64{true: 0, false: 1}[shared]; got != want {
 				t.Fatalf("shared=%v: provider deletions = %d, want %d", shared, got, want)
