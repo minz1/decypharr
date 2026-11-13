@@ -253,12 +253,14 @@ func (pm *Premiumize) CheckStatus(ctx context.Context, t *types.Torrent) (*types
 func (pm *Premiumize) UpdateAndReturnTorrent(ctx context.Context, t *types.Torrent) (*types.Torrent, error) {
 	interval := cmp.Or(pm.pollInterval, statusPollInterval)
 	maxFinalizing := cmp.Or(pm.maxFinalizingPolls, maxFinalizingPolls)
+	var obs types.Observation
+	var err error
 	for polls := 0; ; polls++ {
-		finalizing, err := pm.refreshTorrent(ctx, t)
+		obs, err = pm.refreshTorrent(ctx, t)
 		if err != nil {
 			return t, err
 		}
-		if !finalizing {
+		if obs.Phase != types.PhaseFinalizing {
 			break
 		}
 		// Premiumize reports the transfer finished but its links are not visible
@@ -275,14 +277,18 @@ func (pm *Premiumize) UpdateAndReturnTorrent(ctx context.Context, t *types.Torre
 			return t, customerror.StatusWaitStopped(t.Name, waitErr)
 		}
 	}
-	if t.Status == types.TorrentStatusDownloaded {
-		return t, nil
-	}
-	if t.Status == types.TorrentStatusDownloading || t.Status == types.TorrentStatusRemoteQueued {
-		if !t.DownloadUncached {
-			return t, fmt.Errorf("torrent %s: %w", t.Name, customerror.ErrTorrentNotCached)
+	if t.Status != types.TorrentStatusError {
+		switch obs.Phase {
+		case types.PhaseDownloaded:
+			return t, nil
+		case types.PhaseDownloading, types.PhaseRemoteQueued:
+			if !t.DownloadUncached {
+				return t, fmt.Errorf("torrent %s: %w", t.Name, customerror.ErrTorrentNotCached)
+			}
+			return t, nil
+		case types.PhaseNone, types.PhaseUnknown, types.PhaseConverting, types.PhaseAwaitingSelection,
+			types.PhaseFinalizing, types.PhaseStalled, types.PhaseFailed:
 		}
-		return t, nil
 	}
 	return t, fmt.Errorf("torrent: %s has error status: %s", t.Name, t.Status)
 }
@@ -305,18 +311,16 @@ func (pm *Premiumize) UpdateTorrent(ctx context.Context, t *types.Torrent) error
 	return err
 }
 
-// refreshTorrent copies the provider's current view of t into t. finalizing is
-// true when the transfer is finished but its files are not linked yet.
-func (pm *Premiumize) refreshTorrent(ctx context.Context, t *types.Torrent) (bool, error) {
+func (pm *Premiumize) refreshTorrent(ctx context.Context, t *types.Torrent) (types.Observation, error) {
 	transfers, err := pm.listTransfers(ctx)
 	if err != nil {
-		return false, err
+		return types.Observation{}, err
 	}
 	for _, tr := range transfers {
 		if tr.ID == t.ID {
-			updated, isFinalizing, transferErr := pm.transferState(ctx, tr, t.InfoHash)
+			updated, obs, transferErr := pm.transferState(ctx, tr, t.InfoHash)
 			if transferErr != nil {
-				return false, transferErr
+				return types.Observation{}, transferErr
 			}
 			t.Name = updated.Name
 			t.Filename = updated.Filename
@@ -329,10 +333,10 @@ func (pm *Premiumize) refreshTorrent(ctx context.Context, t *types.Torrent) (boo
 			t.Links = updated.Links
 			t.Debrid = updated.Debrid
 			t.InfoHash = cmp.Or(updated.InfoHash, t.InfoHash)
-			return isFinalizing, nil
+			return obs, nil
 		}
 	}
-	return false, customerror.ErrTorrentNotFound
+	return types.Observation{}, customerror.ErrTorrentNotFound
 }
 
 func (pm *Premiumize) DeleteTorrent(ctx context.Context, torrentID string) error {
@@ -432,23 +436,23 @@ func (pm *Premiumize) transferState(
 	ctx context.Context,
 	tr premiumizeTransfer,
 	fallbackInfoHash string,
-) (*types.Torrent, bool, error) {
+) (*types.Torrent, types.Observation, error) {
 	status := mapStatus(tr.Status)
 	files := make(map[string]types.File)
 	var links []string
-	finalizing := false
+	obs := observe(tr.Status, true)
 	if status == types.TorrentStatusDownloaded {
 		var ready bool
 		var filesErr error
 		files, links, ready, filesErr = pm.filesForTransfer(ctx, tr)
 		if filesErr != nil {
-			return nil, false, filesErr
+			return nil, types.Observation{}, filesErr
 		}
 		// Premiumize can mark a transfer finished before its folder tree has
 		// usable file links. Keep it active until linked files are visible.
 		if !ready {
 			status = types.TorrentStatusDownloading
-			finalizing = true
+			obs = observe(tr.Status, false)
 		}
 	}
 	size := int64(0)
@@ -474,7 +478,7 @@ func (pm *Premiumize) transferState(
 		Links:            links,
 		Debrid:           pm.config.Name,
 		Added:            added,
-	}, finalizing, nil
+	}, obs, nil
 }
 
 func (pm *Premiumize) transferInfoHash(tr premiumizeTransfer, fallbackInfoHash string) string {
