@@ -369,6 +369,11 @@ func (m *Manager) recheckBadEntry(ctx context.Context, infohash string) {
 	case <-ctx.Done():
 		return
 	}
+	m.recheckBad(ctx, infohash)
+}
+
+// recheckBad re-reads a bad entry and decides its arr grab from a fresh read check.
+func (m *Manager) recheckBad(ctx context.Context, infohash string) {
 	entry, err := m.GetEntry(infohash)
 	if err != nil || entry == nil || !entry.Bad {
 		return
@@ -434,4 +439,33 @@ func (m *Manager) tryFailGrabIfQueued(ctx context.Context, entry *storage.Entry)
 		return nil
 	}
 	return m.failGrab(entry, recovery, instance.Name, "No provider can serve the torrent")
+}
+
+// rearmBadRechecks gives every bad torrent entry the second check a restart cut short. One task runs them one
+// after another after badRecheckDelay, so a library of bad entries does not hit its providers at once.
+func (m *Manager) rearmBadRechecks() {
+	_ = m.work.Go("rearm-bad-rechecks", func(ctx context.Context) error {
+		select {
+		case <-time.After(m.badRecheckDelay):
+		case <-ctx.Done():
+			return nil
+		}
+		var keys []string
+		err := m.storage.ForEach(func(e *storage.Entry) error {
+			if e.Bad && e.IsTorrent() && !e.Manual {
+				keys = append(keys, e.InfoHash)
+			}
+			return nil
+		})
+		if err != nil {
+			m.logger.Warn().Err(err).Msg("Failed to list the bad entries to recheck")
+		}
+		for _, key := range keys {
+			if ctx.Err() != nil {
+				return nil
+			}
+			m.recheckBad(ctx, key)
+		}
+		return nil
+	})
 }

@@ -432,6 +432,7 @@ func (m *Manager) init() error {
 	m.initEntries(packOf)
 	m.holderActor()
 	m.recoverEntries(records, packOf)
+	m.rearmBadRechecks()
 
 	// Storage closes last: this task ends when the group's own context does,
 	// which is after every child group has stopped.

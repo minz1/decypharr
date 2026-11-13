@@ -422,3 +422,53 @@ func waitForFails(t *testing.T, fake *fakeArrRecovery, want int) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+func TestRearmRechecksABadEntryAfterARestart(t *testing.T) {
+	t.Parallel()
+	m, entry, checks := newWaitTestManager(t, repair.VerdictBroken)
+	saveBad(t, m, entry, true)
+	synctest.Test(t, func(t *testing.T) {
+		m.work = testGroup(t)
+		m.rearmBadRechecks()
+		synctest.Wait()
+		if checks.count() != 0 {
+			t.Fatalf("checks before the delay = %d, want 0", checks.count())
+		}
+		time.Sleep(10 * time.Minute)
+		synctest.Wait()
+	})
+	if checks.count() != 1 || !storedBad(t, m) {
+		t.Fatalf("checks = %d, bad = %v; want one check and the mark kept", checks.count(), storedBad(t, m))
+	}
+}
+
+func TestRearmClearsABadEntryWhoseCheckPasses(t *testing.T) {
+	t.Parallel()
+	m, entry, _ := newWaitTestManager(t, repair.VerdictHealthy)
+	saveBad(t, m, entry, true)
+	synctest.Test(t, func(t *testing.T) {
+		m.work = testGroup(t)
+		m.rearmBadRechecks()
+		time.Sleep(10 * time.Minute)
+		synctest.Wait()
+	})
+	if storedBad(t, m) {
+		t.Fatal("the mark survived a passing check")
+	}
+}
+
+func TestRearmLeavesManualEntriesAlone(t *testing.T) {
+	t.Parallel()
+	m, entry, checks := newWaitTestManager(t, repair.VerdictBroken)
+	entry.Manual = true
+	saveBad(t, m, entry, true)
+	synctest.Test(t, func(t *testing.T) {
+		m.work = testGroup(t)
+		m.rearmBadRechecks()
+		time.Sleep(10 * time.Minute)
+		synctest.Wait()
+	})
+	if checks.count() != 0 || !storedBad(t, m) {
+		t.Fatalf("checks = %d, bad = %v; want a manual entry left alone", checks.count(), storedBad(t, m))
+	}
+}
