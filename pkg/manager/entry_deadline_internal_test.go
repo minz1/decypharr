@@ -469,3 +469,28 @@ func TestAPendingWaitCountsFromWhenItWasFirstSeen(t *testing.T) {
 		h.mustBe("a", grab.PhaseFailed)
 	})
 }
+
+func TestAFailedSaveKeepsTheSubmitClock(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	synctest.Test(t, func(t *testing.T) {
+		h := deadlineHarness(t, store, 0)
+		seedPhase(t, store, "a", grab.PhaseSubmitting)
+		h.mustAsk("a", grab.Event{Kind: grab.EvRecover})
+		synctest.Wait()
+		loaded := h.grabs.submitClockOf("a").loaded
+		if loaded.IsZero() {
+			t.Fatal("recovering a submitting grab recorded no load time")
+		}
+		if err := store.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := h.ask("a", eventMsg(grab.Event{Kind: grab.EvDelete})); err == nil {
+			t.Fatal("a delete whose save failed was accepted")
+		}
+		if got := h.grabs.submitClockOf("a").loaded; !got.Equal(loaded) {
+			t.Fatalf("submit clock loaded at %v after a failed save, want %v", got, loaded)
+		}
+	})
+}

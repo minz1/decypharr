@@ -463,6 +463,9 @@ func (a *entryActor) step(key string, st *entryState, m entryMsg, fx *keyed.Effe
 	}
 	st.saveFails = 0
 	st.g = s.next
+	if nextState.Phase != cur.State.Phase {
+		a.grabs.setSubmitClock(key, submitClock{})
+	}
 	a.syncHold(key, st, s.next)
 	if ev.Kind == grab.EvActionProgress {
 		st.putAt, st.putProgress = ev.At, m.progress
@@ -706,7 +709,6 @@ func (a *entryActor) leftPhase(st *entryState, to grab.Phase, fx *keyed.Effects[
 	st.warned = nil
 	a.grabs.setNudges(st.g.State.Key, 0)
 	a.grabs.setPolled(st.g.State.Key, pollSeen{})
-	a.grabs.setSubmitClock(st.g.State.Key, submitClock{})
 	a.cancelDeadline(st, fx)
 	st.putAt = time.Time{}
 	switch to {
