@@ -67,6 +67,9 @@ func byPhase(st State, ev Event) (State, []Effect, error) {
 		if ev.Kind == EvProviderDropped {
 			return fail(st, ev, ev.Fail, "dropped by the provider")
 		}
+		if ev.Kind == EvActionNone {
+			return remove(st, ev, Cleanup{})
+		}
 	case PhaseFailed:
 		if ev.Kind == EvFailedRetention {
 			return remove(st, ev, Cleanup{})
@@ -145,7 +148,7 @@ func resume(st State, ev Event) (State, []Effect, error) {
 			// An NZB submit is local: nothing can have reached a provider.
 			return enter(st, PhaseQueued, ev, Effect{Kind: FxRequestAdmission})
 		}
-		return st, []Effect{startChild(ChildLookup)}, nil
+		return lookupAfterSubmit(st)
 	case PhaseProvider:
 		return st, []Effect{startChild(ChildPoll)}, nil
 	case PhaseAwaitingLinks:
@@ -189,6 +192,7 @@ func queued(st State, ev Event) (State, []Effect, error) {
 	case ev.Kind.is(EvAdmissionDeadline):
 		return st, []Effect{{Kind: FxRequestAdmission}}, nil
 	case ev.Kind.is(EvAdmitted):
+		st.SubmitAttempt = SubmitAttempt{At: ev.At}
 		return enter(st, PhaseSubmitting, ev, startChild(ChildSubmit))
 	}
 	return refuse(st, ev, notAccepted)
@@ -209,6 +213,9 @@ func submitting(st State, ev Event) (State, []Effect, error) {
 }
 
 func submitResult(st State, ev Event) (State, []Effect, error) {
+	if ev.Provider != "" {
+		st.SubmitAttempt.Provider = ev.Provider
+	}
 	switch {
 	case ev.Outcome.is(OutcomeThrottled):
 		return enter(st, PhaseThrottled, ev)

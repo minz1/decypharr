@@ -453,3 +453,44 @@ func TestRefusalLeavesStateUnchanged(t *testing.T) {
 		t.Errorf("refusal: %+v, %+v, %v; want the input back", got, fx, err)
 	}
 }
+
+func TestAdmittedJournalsTheSubmitAttempt(t *testing.T) {
+	t.Parallel()
+	got, _, err := Transition(in(PhaseQueued), ev(EvAdmitted))
+	if err != nil || !got.SubmitAttempt.At.Equal(at()) {
+		t.Fatalf("admitted: %+v, %v; want SubmitAttempt.At %v", got.SubmitAttempt, err, at())
+	}
+	res := withOutcome(EvSubmitResult, OutcomePlacement)
+	res.Provider, res.TorrentID = "realdebrid", "id1"
+	got, _, err = Transition(got, res)
+	if err != nil || got.SubmitAttempt.Provider != "realdebrid" || !got.SubmitAttempt.At.Equal(at()) {
+		t.Fatalf("submit result: %+v, %v; want provider realdebrid at %v", got.SubmitAttempt, err, at())
+	}
+}
+
+func TestRecoverInSubmittingLooksUpAfterTheSubmit(t *testing.T) {
+	t.Parallel()
+	_, fx, err := Transition(in(PhaseSubmitting), ev(EvRecover))
+	want := []Effect{{Kind: FxStartChild, Child: ChildLookup, AfterExit: ChildSubmit, HasAfter: true}}
+	if err != nil || !slices.Equal(fx, want) {
+		t.Errorf("recover in submitting: %+v, %v; want %+v", fx, err, want)
+	}
+}
+
+func TestActionNoneDeletesACompleteRecord(t *testing.T) {
+	t.Parallel()
+	got, fx, err := Transition(in(PhaseComplete), ev(EvActionNone))
+	want := []string{"persist", "cancel_children", "start:cleanup"}
+	if err != nil || got.Phase != PhaseDeleting || got.Cleanup != (Cleanup{}) || !slices.Equal(describe(fx), want) {
+		t.Fatalf("action none: %v %+v %v, %v; want deleting with a zero cleanup, %v", got.Phase, got.Cleanup,
+			describe(fx), err, want)
+	}
+	for _, p := range AllPhases() {
+		if p == PhaseComplete || p == PhaseDeleting {
+			continue
+		}
+		if _, _, refusal := Transition(in(p), ev(EvActionNone)); !IsRefused(refusal) {
+			t.Errorf("action none in %v: %v; want refused", p, refusal)
+		}
+	}
+}
