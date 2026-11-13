@@ -15,9 +15,9 @@ func observe(data torrentInfo) types.Observation {
 		o.Phase = types.PhaseConverting
 	case statusWaitingFilesSelection:
 		o.Phase = types.PhaseAwaitingSelection
-	case "queued":
+	case statusQueued:
 		o.Phase = types.PhaseRemoteQueued
-	case "downloading", "compressing", "uploading":
+	case statusDownloading, statusCompressing, statusUploading:
 		o.Phase = types.PhaseDownloading
 	case statusDownloaded:
 		o.Phase = types.PhaseDownloaded

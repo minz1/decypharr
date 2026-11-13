@@ -25,22 +25,85 @@ func TestCheckStatusVerdictPerRawState(t *testing.T) {
 		wantErr    error
 		wantText   string
 	}{
-		{name: "converting forever", states: []string{"magnet_conversion"}, wantStatus: types.TorrentStatusDownloading, wantErr: customerror.ErrMagnetNotConverted},
-		{name: "awaiting selection then downloaded", states: []string{"waiting_files_selection", "downloaded"}, wantStatus: types.TorrentStatusDownloaded},
-		{name: "queued", states: []string{"queued"}, wantStatus: types.TorrentStatusDownloading, wantErr: customerror.ErrTorrentNotCached},
-		{name: "queued uncached allowed", states: []string{"queued"}, uncached: true, wantStatus: types.TorrentStatusDownloading},
-		{name: "downloading", states: []string{"downloading"}, wantStatus: types.TorrentStatusDownloading, wantErr: customerror.ErrTorrentNotCached},
-		{name: "downloading uncached allowed", states: []string{"downloading"}, uncached: true, wantStatus: types.TorrentStatusDownloading},
-		{name: "compressing", states: []string{"compressing"}, wantStatus: types.TorrentStatusDownloading, wantErr: customerror.ErrTorrentNotCached},
-		{name: "compressing uncached allowed", states: []string{"compressing"}, uncached: true, wantStatus: types.TorrentStatusDownloading},
-		{name: "uploading", states: []string{"uploading"}, wantStatus: types.TorrentStatusDownloading, wantErr: customerror.ErrTorrentNotCached},
-		{name: "uploading uncached allowed", states: []string{"uploading"}, uncached: true, wantStatus: types.TorrentStatusDownloading},
+		{
+			name:       "converting forever",
+			states:     []string{"magnet_conversion"},
+			wantStatus: types.TorrentStatusDownloading,
+			wantErr:    customerror.ErrMagnetNotConverted,
+		},
+		{
+			name:       "awaiting selection then downloaded",
+			states:     []string{"waiting_files_selection", "downloaded"},
+			wantStatus: types.TorrentStatusDownloaded,
+		},
+		{
+			name:       "queued",
+			states:     []string{"queued"},
+			wantStatus: types.TorrentStatusDownloading,
+			wantErr:    customerror.ErrTorrentNotCached,
+		},
+		{
+			name:       "queued uncached allowed",
+			states:     []string{"queued"},
+			uncached:   true,
+			wantStatus: types.TorrentStatusDownloading,
+		},
+		{
+			name:       "downloading",
+			states:     []string{"downloading"},
+			wantStatus: types.TorrentStatusDownloading,
+			wantErr:    customerror.ErrTorrentNotCached,
+		},
+		{
+			name:       "downloading uncached allowed",
+			states:     []string{"downloading"},
+			uncached:   true,
+			wantStatus: types.TorrentStatusDownloading,
+		},
+		{
+			name:       "compressing",
+			states:     []string{"compressing"},
+			wantStatus: types.TorrentStatusDownloading,
+			wantErr:    customerror.ErrTorrentNotCached,
+		},
+		{
+			name:       "compressing uncached allowed",
+			states:     []string{"compressing"},
+			uncached:   true,
+			wantStatus: types.TorrentStatusDownloading,
+		},
+		{
+			name:       "uploading",
+			states:     []string{"uploading"},
+			wantStatus: types.TorrentStatusDownloading,
+			wantErr:    customerror.ErrTorrentNotCached,
+		},
+		{
+			name:       "uploading uncached allowed",
+			states:     []string{"uploading"},
+			uncached:   true,
+			wantStatus: types.TorrentStatusDownloading,
+		},
 		{name: "downloaded", states: []string{"downloaded"}, wantStatus: types.TorrentStatusDownloaded},
-		{name: "error", states: []string{"error"}, wantStatus: types.TorrentStatusError, wantText: "has error status: error"},
-		{name: "magnet_error", states: []string{"magnet_error"}, wantStatus: types.TorrentStatusError, wantText: "magnet_error"},
+		{
+			name:       "error",
+			states:     []string{"error"},
+			wantStatus: types.TorrentStatusError,
+			wantText:   "has error status: error",
+		},
+		{
+			name:       "magnet_error",
+			states:     []string{"magnet_error"},
+			wantStatus: types.TorrentStatusError,
+			wantText:   "magnet_error",
+		},
 		{name: "virus", states: []string{"virus"}, wantStatus: types.TorrentStatusError, wantText: "virus"},
 		{name: "dead", states: []string{"dead"}, wantStatus: types.TorrentStatusError, wantText: "dead"},
-		{name: "D7 unknown string is kept as a downloading placement", states: []string{"future_state"}, wantStatus: types.TorrentStatusDownloading},
+		{
+			name:       "D7 unknown string is kept as a downloading placement",
+			states:     []string{"future_state"},
+			wantStatus: types.TorrentStatusDownloading,
+		},
 	}
 	for i := range cases {
 		tc := &cases[i]
@@ -57,7 +120,12 @@ func TestCheckStatusVerdictPerRawState(t *testing.T) {
 				if state == "downloaded" {
 					selected = 1
 				}
-				fmt.Fprintf(w, `{"status":%q,"filename":"movie","files":[{"id":1,"path":"/movie.mkv","bytes":1000,"selected":%d}],"links":["https://example.test/movie"]}`, state, selected)
+				fmt.Fprintf(
+					w,
+					`{"status":%q,"filename":"movie","files":[{"id":1,"path":"/movie.mkv","bytes":1000,"selected":%d}],"links":["https://example.test/movie"]}`,
+					state,
+					selected,
+				)
 			}))
 			defer server.Close()
 			provider := &RealDebrid{
@@ -87,7 +155,12 @@ func TestObserveMapsEveryRawState(t *testing.T) {
 		stall types.Phase
 	}{
 		{"magnet_conversion", torrentInfo{Status: "magnet_conversion"}, types.PhaseConverting, types.PhaseConverting},
-		{"waiting_files_selection", torrentInfo{Status: "waiting_files_selection"}, types.PhaseAwaitingSelection, types.PhaseAwaitingSelection},
+		{
+			"waiting_files_selection",
+			torrentInfo{Status: "waiting_files_selection"},
+			types.PhaseAwaitingSelection,
+			types.PhaseAwaitingSelection,
+		},
 		{"queued", torrentInfo{Status: "queued"}, types.PhaseRemoteQueued, types.PhaseRemoteQueued},
 		{"downloading", torrentInfo{Status: "downloading"}, types.PhaseDownloading, types.PhaseDownloading},
 		{"compressing", torrentInfo{Status: "compressing"}, types.PhaseDownloading, types.PhaseDownloading},

@@ -30,23 +30,73 @@ func TestCheckStatusVerdictPerRawState(t *testing.T) {
 		"downloading", "forcedDL", "checkingDL", "checkingResumeData", "allocating", "moving", "paused",
 		"pausedDL", "pausedUP", "queuedUP", "checkingUP", "forcedUP", "incomplete", "queued", "queuedDL", "metaDL",
 	} {
-		cases = append(cases,
-			row{name: state, state: state, wantStatus: types.TorrentStatusDownloading, wantErr: customerror.ErrTorrentNotCached},
-			row{name: state + " uncached allowed", state: state, uncached: true, wantStatus: types.TorrentStatusDownloading},
+		cases = append(
+			cases,
+			row{
+				name:       state,
+				state:      state,
+				wantStatus: types.TorrentStatusDownloading,
+				wantErr:    customerror.ErrTorrentNotCached,
+			},
+			row{
+				name:       state + " uncached allowed",
+				state:      state,
+				uncached:   true,
+				wantStatus: types.TorrentStatusDownloading,
+			},
 		)
 	}
 	for _, state := range []string{"completed", "cached", "uploading", "downloaded"} {
-		cases = append(cases, row{name: state + " not finished", state: state, wantStatus: types.TorrentStatusDownloaded})
+		cases = append(
+			cases,
+			row{name: state + " not finished", state: state, wantStatus: types.TorrentStatusDownloaded},
+		)
 	}
-	cases = append(cases,
+	cases = append(
+		cases,
 		row{name: "finished", state: "completed", finished: true, wantStatus: types.TorrentStatusDownloaded},
-		row{name: "finished without files", state: "completed", finished: true, noFiles: true, wantStatus: types.TorrentStatusDownloaded},
-		row{name: "finished while stalled", state: "stalled", finished: true, wantStatus: types.TorrentStatusDownloaded},
-		row{name: "D7 stalled is not an error", state: "stalled", wantStatus: types.TorrentStatusDownloading, wantErr: customerror.ErrTorrentNotCached},
-		row{name: "D7 stalled uncached allowed", state: "stalled", uncached: true, wantStatus: types.TorrentStatusDownloading},
-		row{name: "D7 stalledDL is not an error", state: "stalledDL", wantStatus: types.TorrentStatusDownloading, wantErr: customerror.ErrTorrentNotCached},
-		row{name: "D7 stalled with detail", state: "stalled (no seeds)", wantStatus: types.TorrentStatusDownloading, wantErr: customerror.ErrTorrentNotCached},
-		row{name: "D7 unknown string is kept as a downloading placement", state: "future_state", wantStatus: types.TorrentStatusDownloading},
+		row{
+			name:       "finished without files",
+			state:      "completed",
+			finished:   true,
+			noFiles:    true,
+			wantStatus: types.TorrentStatusDownloaded,
+		},
+		row{
+			name:       "finished while stalled",
+			state:      "stalled",
+			finished:   true,
+			wantStatus: types.TorrentStatusDownloaded,
+		},
+		row{
+			name:       "D7 stalled is not an error",
+			state:      "stalled",
+			wantStatus: types.TorrentStatusDownloading,
+			wantErr:    customerror.ErrTorrentNotCached,
+		},
+		row{
+			name:       "D7 stalled uncached allowed",
+			state:      "stalled",
+			uncached:   true,
+			wantStatus: types.TorrentStatusDownloading,
+		},
+		row{
+			name:       "D7 stalledDL is not an error",
+			state:      "stalledDL",
+			wantStatus: types.TorrentStatusDownloading,
+			wantErr:    customerror.ErrTorrentNotCached,
+		},
+		row{
+			name:       "D7 stalled with detail",
+			state:      "stalled (no seeds)",
+			wantStatus: types.TorrentStatusDownloading,
+			wantErr:    customerror.ErrTorrentNotCached,
+		},
+		row{
+			name:       "D7 unknown string is kept as a downloading placement",
+			state:      "future_state",
+			wantStatus: types.TorrentStatusDownloading,
+		},
 	)
 	for i := range cases {
 		tc := cases[i]
@@ -58,22 +108,19 @@ func TestCheckStatusVerdictPerRawState(t *testing.T) {
 				if tc.noFiles {
 					files = `[]`
 				}
-				fmt.Fprintf(w, `{"success":true,"data":{"id":17,"name":"Release.mkv","size":100,"progress":0,"download_state":%q,"download_finished":%t,"created_at":"2026-01-02T03:04:05Z","hash":"ABC","files":%s}}`, tc.state, tc.finished, files)
+				fmt.Fprintf(
+					w,
+					`{"success":true,"data":{"id":17,"name":"Release.mkv","size":100,"progress":0,"download_state":%q,"download_finished":%t,"created_at":"2026-01-02T03:04:05Z","hash":"ABC","files":%s}}`,
+					tc.state,
+					tc.finished,
+					files,
+				)
 			}))
 			defer server.Close()
-			got, err := testTorbox(server.URL).CheckStatus(t.Context(), &types.Torrent{ID: "17", DownloadUncached: tc.uncached})
-			switch {
-			case tc.wantErr != nil:
-				if !errors.Is(err, tc.wantErr) {
-					t.Fatalf("error = %v, want %v", err, tc.wantErr)
-				}
-			case tc.wantText != "":
-				if err == nil || !strings.Contains(err.Error(), tc.wantText) {
-					t.Fatalf("error = %v, want %q", err, tc.wantText)
-				}
-			case err != nil:
-				t.Fatal(err)
-			}
+			got, err := testTorbox(
+				server.URL,
+			).CheckStatus(t.Context(), &types.Torrent{ID: "17", DownloadUncached: tc.uncached})
+			checkVerdict(t, err, tc.wantErr, tc.wantText)
 			if got == nil || got.Status != tc.wantStatus {
 				t.Fatalf("result = %#v, want status %s", got, tc.wantStatus)
 			}
@@ -123,14 +170,44 @@ func TestObserveMapsEveryRawState(t *testing.T) {
 		}
 		o := observe(data)
 		if o.Phase != c.phase || o.Raw != c.state {
-			t.Errorf("%q finished=%t files=%d: got phase %s raw %q, want %s", c.state, c.finished, c.files, o.Phase, o.Raw, c.phase)
+			t.Errorf(
+				"%q finished=%t files=%d: got phase %s raw %q, want %s",
+				c.state,
+				c.finished,
+				c.files,
+				o.Phase,
+				o.Raw,
+				c.phase,
+			)
 		}
 		if o.Phase != types.PhaseUnknown && !types.LegalEdge(types.PhaseNone, o.Phase) {
 			t.Errorf("%q: none -> %s is not a legal edge", c.state, o.Phase)
 		}
 		stalled := types.WithStall(o)
 		if stalled.Phase != c.stall || stalled.Raw != c.state {
-			t.Errorf("%q at 0 seeders and 0 progress: got phase %s raw %q, want %s", c.state, stalled.Phase, stalled.Raw, c.stall)
+			t.Errorf(
+				"%q at 0 seeders and 0 progress: got phase %s raw %q, want %s",
+				c.state,
+				stalled.Phase,
+				stalled.Raw,
+				c.stall,
+			)
 		}
+	}
+}
+
+func checkVerdict(t *testing.T, err, wantErr error, wantText string) {
+	t.Helper()
+	switch {
+	case wantErr != nil:
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("error = %v, want %v", err, wantErr)
+		}
+	case wantText != "":
+		if err == nil || !strings.Contains(err.Error(), wantText) {
+			t.Fatalf("error = %v, want %q", err, wantText)
+		}
+	case err != nil:
+		t.Fatal(err)
 	}
 }

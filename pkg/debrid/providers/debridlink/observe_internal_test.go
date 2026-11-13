@@ -16,7 +16,12 @@ import (
 func serveSeedbox(t *testing.T, status, errorID int) *DebridLink {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprintf(w, `{"success":true,"value":[{"id":"torrent","hashString":"hash","status":%d,"errorId":%d,"files":[{"id":"file","name":"movie.mkv","size":1000,"downloadUrl":"https://files.example/movie"}]}]}`, status, errorID)
+		fmt.Fprintf(
+			w,
+			`{"success":true,"value":[{"id":"torrent","hashString":"hash","status":%d,"errorId":%d,"files":[{"id":"file","name":"movie.mkv","size":1000,"downloadUrl":"https://files.example/movie"}]}]}`,
+			status,
+			errorID,
+		)
 	}))
 	t.Cleanup(server.Close)
 	provider, err := New(config.Debrid{Name: "debridlink", APIKey: "token"}, nil, mkvOnly())
@@ -40,12 +45,28 @@ func TestCheckStatusVerdictPerRawState(t *testing.T) {
 	cases := []row{
 		{name: "100 done", status: 100, wantStatus: types.TorrentStatusDownloaded},
 		{name: "100 done with an error id", status: 100, errorID: 3, wantStatus: types.TorrentStatusDownloaded},
-		{name: "D7 error id on a running torrent is kept as a downloading placement", status: 6, errorID: 3, wantStatus: types.TorrentStatusDownloading},
+		{
+			name:       "D7 error id on a running torrent is kept as a downloading placement",
+			status:     6,
+			errorID:    3,
+			wantStatus: types.TorrentStatusDownloading,
+		},
 	}
 	for _, code := range []int{0, 1, 2, 3, 4, 5, 6, 7, 99, -1} {
-		cases = append(cases,
-			row{name: "status " + strconv.Itoa(code), status: code, wantStatus: types.TorrentStatusDownloading, wantErr: customerror.ErrTorrentNotCached},
-			row{name: "status " + strconv.Itoa(code) + " uncached allowed", status: code, uncached: true, wantStatus: types.TorrentStatusDownloading},
+		cases = append(
+			cases,
+			row{
+				name:       "status " + strconv.Itoa(code),
+				status:     code,
+				wantStatus: types.TorrentStatusDownloading,
+				wantErr:    customerror.ErrTorrentNotCached,
+			},
+			row{
+				name:       "status " + strconv.Itoa(code) + " uncached allowed",
+				status:     code,
+				uncached:   true,
+				wantStatus: types.TorrentStatusDownloading,
+			},
 		)
 	}
 	for i := range cases {
@@ -53,7 +74,10 @@ func TestCheckStatusVerdictPerRawState(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			provider := serveSeedbox(t, tc.status, tc.errorID)
-			got, err := provider.CheckStatus(t.Context(), &types.Torrent{ID: "torrent", DownloadUncached: tc.uncached, Files: map[string]types.File{}})
+			got, err := provider.CheckStatus(
+				t.Context(),
+				&types.Torrent{ID: "torrent", DownloadUncached: tc.uncached, Files: map[string]types.File{}},
+			)
 			if tc.wantErr != nil {
 				if !errors.Is(err, tc.wantErr) {
 					t.Fatalf("error = %v, want %v", err, tc.wantErr)
@@ -115,7 +139,13 @@ func TestObserveMapsEveryRawState(t *testing.T) {
 		}
 		stalled := types.WithStall(o)
 		if stalled.Phase != c.stall || stalled.Raw != o.Raw {
-			t.Errorf("%s at 0 seeders and 0 progress: got phase %s raw %q, want %s", c.name, stalled.Phase, stalled.Raw, c.stall)
+			t.Errorf(
+				"%s at 0 seeders and 0 progress: got phase %s raw %q, want %s",
+				c.name,
+				stalled.Phase,
+				stalled.Raw,
+				c.stall,
+			)
 		}
 	}
 }

@@ -19,7 +19,7 @@ func observe(status string, linked bool) types.Observation {
 		o.Stallable = true
 	case "running":
 		o.Phase = types.PhaseDownloading
-	case "error", "deleted", "banned", "timeout":
+	case statusError, "deleted", "banned", "timeout":
 		o.Phase = types.PhaseFailed
 	default:
 		o.Phase = types.PhaseUnknown

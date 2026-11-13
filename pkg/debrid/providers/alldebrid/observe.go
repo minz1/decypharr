@@ -17,7 +17,7 @@ func observe(statusCode int) types.Observation {
 		o.Phase = types.PhaseDownloaded
 	case statusCode == allDebridNoPeerStatusCode:
 		o.Phase = types.PhaseStalled
-	case statusCode >= 5:
+	case statusCode >= allDebridFirstFailedStatusCode:
 		o.Phase = types.PhaseFailed
 	default:
 		o.Phase = types.PhaseUnknown

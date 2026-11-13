@@ -49,6 +49,10 @@ const (
 	statusMagnetConversion      = "magnet_conversion"
 	statusDownloaded            = "downloaded"
 	statusWaitingFilesSelection = "waiting_files_selection"
+	statusQueued                = "queued"
+	statusDownloading           = "downloading"
+	statusCompressing           = "compressing"
+	statusUploading             = "uploading"
 
 	// Real-Debrid unrestrict error codes.
 	errHosterUnavailable = 19
@@ -558,12 +562,17 @@ func (r *RealDebrid) GetTorrent(ctx context.Context, torrentID string) (*types.T
 }
 
 func (r *RealDebrid) GetDownloadingStatus() []string {
-	return []string{"downloading", "magnet_conversion", "queued", "compressing", "uploading"}
+	return []string{statusDownloading, statusMagnetConversion, statusQueued, statusCompressing, statusUploading}
 }
 
 func getStatus(status string) types.TorrentStatus {
 	switch status {
-	case "downloading", "magnet_conversion", "queued", "compressing", "uploading", "waiting_files_selection":
+	case statusDownloading,
+		statusMagnetConversion,
+		statusQueued,
+		statusCompressing,
+		statusUploading,
+		statusWaitingFilesSelection:
 		return types.TorrentStatusDownloading
 	case statusDownloaded:
 		return types.TorrentStatusDownloaded
@@ -664,7 +673,7 @@ func (r *RealDebrid) CheckStatus(ctx context.Context, t *types.Torrent) (*types.
 				return t, fmt.Errorf("torrent %s: %w", t.Name, customerror.ErrTorrentNotCached)
 			}
 			return t, nil
-		default:
+		case types.PhaseFailed, types.PhaseNone, types.PhaseStalled:
 			r.logger.Warn().
 				Str("torrent_id", t.ID).
 				Str("debrid_status", debridStatus).

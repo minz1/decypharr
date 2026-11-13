@@ -27,7 +27,8 @@ import (
 const (
 	allDebridNoPeerStatusCode = 7
 	// allDebridReadyStatusCode is the magnet status code of a finished download.
-	allDebridReadyStatusCode = 4
+	allDebridReadyStatusCode       = 4
+	allDebridFirstFailedStatusCode = 5
 	// repairRetries bounds retries of repair-time link checks.
 	repairRetries = 4
 	// defaultLinkExpiry applies when auto_expire_links_after is unset.
@@ -428,7 +429,11 @@ func (ad *AllDebrid) CheckStatus(ctx context.Context, torrent *types.Torrent) (*
 		return torrent, nil
 	case types.PhaseFailed, types.PhaseUnknown:
 		return torrent, fmt.Errorf("torrent %s has AllDebrid status code %d", torrent.Name, statusCode)
-	case types.PhaseNone, types.PhaseConverting, types.PhaseAwaitingSelection, types.PhaseFinalizing, types.PhaseStalled:
+	case types.PhaseNone,
+		types.PhaseConverting,
+		types.PhaseAwaitingSelection,
+		types.PhaseFinalizing,
+		types.PhaseStalled:
 	}
 	return torrent, fmt.Errorf("torrent %s has unknown AllDebrid status code %d", torrent.Name, statusCode)
 }

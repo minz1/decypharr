@@ -45,6 +45,8 @@ const (
 	// interval). It runs inside the add request and a queue slot, so a longer wait
 	// is left to the queue's next pass.
 	maxFinalizingPolls = 15
+
+	statusError = "error"
 )
 
 var _ common.Client = (*Premiumize)(nil)
@@ -155,7 +157,7 @@ func (pm *Premiumize) do(req *http.Request, out any) error {
 	}
 
 	var envelope apiError
-	if unmarshalErr := json.Unmarshal(body, &envelope); unmarshalErr == nil && envelope.Status == "error" {
+	if unmarshalErr := json.Unmarshal(body, &envelope); unmarshalErr == nil && envelope.Status == statusError {
 		return fmt.Errorf("premiumize API error: %s (%s)", envelope.Message, envelope.Code)
 	}
 
@@ -710,7 +712,7 @@ func (pm *Premiumize) getClientProfile(ctx context.Context, client *request.Clie
 	if unmarshalErr := json.Unmarshal(body, &data); unmarshalErr != nil {
 		return nil, unmarshalErr
 	}
-	if data.Status == "error" {
+	if data.Status == statusError {
 		return nil, fmt.Errorf("premiumize API error: %s (%s)", data.Message, data.Code)
 	}
 	expiration := time.Time{}
