@@ -294,7 +294,6 @@ func (a *entryActor) handle(
 		m = a.childExited(key, st, m)
 	}
 	if m.exit && m.child == grab.ChildPoll && m.nudged {
-		key := st.g.State.Key
 		a.grabs.setNudges(key, a.grabs.nudgesOf(key)+1)
 	}
 	if m.exit && m.child == grab.ChildPoll && m.seen != nil && st.g.State.Phase == grab.PhaseProvider {
