@@ -107,18 +107,27 @@ const (
 )
 
 type Observation struct {
-	Provider string
-	ID       string
-	Raw      string
-	Phase    Phase
-	Cached   Verdict
-	Progress float64
-	Speed    int64
-	Seeders  int
+	Provider  string
+	ID        string
+	Raw       string
+	Phase     Phase
+	Cached    Verdict
+	Progress  float64
+	Speed     int64
+	Seeders   int
+	Stallable bool
 }
 
 func NotCached(o Observation, downloadUncached bool) bool {
 	return o.Cached == CachedNo && !downloadUncached
+}
+
+func WithStall(o Observation) Observation {
+	eligible := o.Phase == PhaseUnknown || (o.Phase == PhaseRemoteQueued && o.Stallable)
+	if eligible && o.Seeders == 0 && o.Progress == 0 {
+		o.Phase = PhaseStalled
+	}
+	return o
 }
 
 func ObservationOf(t *Torrent) Observation {

@@ -136,3 +136,31 @@ func TestObservationOf(t *testing.T) {
 		}
 	}
 }
+
+func TestWithStallKeepsRaw(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		in   Observation
+		want Phase
+	}{
+		{"unknown 0/0", Observation{Phase: PhaseUnknown, Raw: "future"}, PhaseStalled},
+		{"unknown with seeders", Observation{Phase: PhaseUnknown, Raw: "future", Seeders: 1}, PhaseUnknown},
+		{"unknown with progress", Observation{Phase: PhaseUnknown, Raw: "future", Progress: 1}, PhaseUnknown},
+		{"stallable queued 0/0", Observation{Phase: PhaseRemoteQueued, Raw: "queued", Stallable: true}, PhaseStalled},
+		{"exempt queued 0/0", Observation{Phase: PhaseRemoteQueued, Raw: "queued"}, PhaseRemoteQueued},
+		{"converting 0/0", Observation{Phase: PhaseConverting, Raw: "magnet_conversion"}, PhaseConverting},
+		{"awaiting selection 0/0", Observation{Phase: PhaseAwaitingSelection}, PhaseAwaitingSelection},
+		{"finalizing 0/0", Observation{Phase: PhaseFinalizing}, PhaseFinalizing},
+		{"downloading 0/0", Observation{Phase: PhaseDownloading}, PhaseDownloading},
+		{"downloaded 0/0", Observation{Phase: PhaseDownloaded}, PhaseDownloaded},
+		{"failed 0/0", Observation{Phase: PhaseFailed}, PhaseFailed},
+	}
+	for i := range cases {
+		c := &cases[i]
+		got := WithStall(c.in)
+		if got.Phase != c.want || got.Raw != c.in.Raw {
+			t.Errorf("%s: got phase %s raw %q, want %s %q", c.name, got.Phase, got.Raw, c.want, c.in.Raw)
+		}
+	}
+}
