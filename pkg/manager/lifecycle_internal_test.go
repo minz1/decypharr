@@ -101,9 +101,6 @@ func TestStartReachesReadyAndStopLeavesNoTasks(t *testing.T) {
 	if err := m.runWork("late", func() { t.Error("work ran after Stop") }); !errors.Is(err, task.ErrStopped) {
 		t.Fatalf("work after Stop = %v, want ErrStopped", err)
 	}
-	if err := m.SubmitJob(&Job{ID: "late"}); !errors.Is(err, task.ErrStopped) {
-		t.Fatalf("SubmitJob after Stop = %v, want ErrStopped", err)
-	}
 	if m.Context().Err() == nil {
 		t.Fatal("the manager's context is live after Stop")
 	}

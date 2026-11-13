@@ -5,11 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/puzpuzpuz/xsync/v4"
-
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
+	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
@@ -30,8 +29,7 @@ func TestFailBadReleaseFailsArrTorrentGrab(t *testing.T) {
 			fake := &fakeArrRecovery{}
 			m, entry := newDroppedTestManager(t, fake)
 			tc.edit(entry)
-			m.failBadRelease(entry, errors.New("entry in error state on debrid"))
-			assertErrored(t, m)
+			m.failEffects(failedGrab(entry, "entry in error state on debrid"), grab.FailBadRelease)
 			want := [3]string{"sonarr", strings.ToUpper(droppedHash), droppedHash}
 			if got := len(fake.fails) == 1 && fake.fails[0] == want; got != tc.wantFail {
 				t.Fatalf("FailDownload calls = %v, want failed = %v", fake.fails, tc.wantFail)
@@ -46,8 +44,7 @@ func TestFailEntryLeavesTheGrabAlone(t *testing.T) {
 	fake := &fakeArrRecovery{}
 	m, entry := newDroppedTestManager(t, fake)
 	entry.Protocol = config.ProtocolTorrent
-	m.failEntry(entry, errors.New("timeout waiting for mount files"))
-	assertErrored(t, m)
+	m.failEffects(failedGrab(entry, "timeout waiting for mount files"), grab.FailEntry)
 	if len(fake.fails) != 0 {
 		t.Fatalf("FailDownload calls = %v, want none", fake.fails)
 	}
@@ -57,16 +54,7 @@ func TestFailBadReleaseWithoutRecoveryService(t *testing.T) {
 	t.Parallel()
 	m, entry := newDroppedTestManager(t, nil)
 	entry.Protocol = config.ProtocolTorrent
-	m.failBadRelease(entry, errors.New("debrid entry not found"))
-	assertErrored(t, m)
-}
-
-func assertErrored(t *testing.T, m *Manager) {
-	t.Helper()
-	record, err := m.Queue().GetTorrent(droppedHash)
-	if err != nil || record.State != storage.EntryStateError {
-		t.Fatalf("record = %+v, %v; want errored", record, err)
-	}
+	m.failEffects(failedGrab(entry, "debrid entry not found"), grab.FailBadRelease)
 }
 
 // Dead swarms surface as status-check errors; only those the provider pins on the torrent may blocklist the release.
@@ -85,17 +73,17 @@ func TestStatusCheckFailsGrabOnlyForDeadTorrents(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			fake := &fakeArrRecovery{}
-			m, entry := newDroppedTestManager(t, fake)
-			m.processingEntries = xsync.NewMap[string, struct{}]()
+			m, entry := newDroppedTestManager(t, nil)
 			m.store = testConfigStore(t, nil)
 			m.clients.Store("provider", tc.provider)
 			entry.Protocol, entry.ActiveProvider, entry.State = config.ProtocolTorrent, "provider", storage.EntryStateDownloading
 			entry.Providers = map[string]*storage.ProviderEntry{"provider": {Provider: "provider", ID: "id"}}
-			m.processQueuedTorrent(t.Context(), entry)
-			assertErrored(t, m)
-			if got := len(fake.fails) == 1; got != tc.wantFail {
-				t.Fatalf("FailDownload calls = %v, want failed = %v", fake.fails, tc.wantFail)
+			msg := poll(t.Context(), m, entry)
+			if msg.ev == nil || !msg.ev.Failed {
+				t.Fatalf("result = %+v, want a failed observation", msg.ev)
+			}
+			if got := msg.ev.Fail == grab.FailBadRelease; got != tc.wantFail {
+				t.Fatalf("fail effect = %v, want a bad release = %v", msg.ev.Fail, tc.wantFail)
 			}
 		})
 	}

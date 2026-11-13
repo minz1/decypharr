@@ -2,8 +2,6 @@ package manager
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -34,12 +32,12 @@ func TestParseStageReportsMissingSegmentsToHearsayOnlyWhileRunning(t *testing.T)
 				BaseName: "a",
 				Files:    []manifest.File{{Segments: []manifest.Segment{{Number: 1, MessageID: "a@example"}}}},
 			}}
-			m := withTestConfig(t, newParseRetryManager(
+			m, call := newParseChildCall(
 				t,
 				func(context.Context, string, string, []byte, string) (*storage.NZB, map[string]*parser.FileGroup, error) {
 					return nil, groups, customerror.ErrUsenetSegmentMissing
 				},
-			))
+			)
 			cfg := &config.Config{}
 			cfg.WithDir(t.TempDir())
 			cfg.Hearsay.AdviceMode = "active"
@@ -50,22 +48,14 @@ func TestParseStageReportsMissingSegmentsToHearsayOnlyWhileRunning(t *testing.T)
 			}
 			t.Cleanup(service.Close)
 			m.hearsay = service
-			staged := filepath.Join(t.TempDir(), "Show.S01.nzb")
-			if err = os.WriteFile(staged, []byte("<nzb/>"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			entry := storedEntry(t, m)
-			entry.Magnet = staged
-			job := NewJob(JobTypeNZB, &ImportRequest{ID: "nzb-1", Name: "Show.S01", Arr: m.arr.GetOrCreate("sonarr")})
-			job.Entry = entry
 
 			ctx, cancel := context.WithCancel(t.Context())
 			if tc.cancelled {
 				cancel()
 			}
 			defer cancel()
-			if parseErr := m.parseQueuedNZB(ctx, job); parseErr == nil {
-				t.Fatal("parseQueuedNZB() = nil, want the parse failure")
+			if msg := m.parseChild(ctx, call); msg.ev != nil == tc.cancelled {
+				t.Fatalf("parse result = %+v, want a failure only while running", msg.ev)
 			}
 
 			if got := service.NZBClaimedIncomplete(hearsay.NZBSubjectFromGroups(groups)); got != tc.reported {

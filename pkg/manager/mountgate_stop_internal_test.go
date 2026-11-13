@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -15,29 +14,28 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
-	debrid "github.com/sirrobot01/decypharr/pkg/debrid/common"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
+	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
-// checkLeftResumable asserts a stop left the entry queued, idle and unfailed.
+// checkLeftResumable asserts a stop left the entry queued and unfailed.
 func checkLeftResumable(t *testing.T, m *Manager, hash string) *storage.Entry {
 	t.Helper()
 	saved, err := m.queue.GetTorrent(hash)
 	if err != nil {
 		t.Fatalf("entry %s left the queue: %v", hash, err)
 	}
-	if saved.State != storage.EntryStateDownloading || saved.LastError != "" || saved.IsComplete ||
-		saved.IsDownloading {
-		t.Fatalf("entry %s is not resumable: state %v, error %q, complete %v, downloading %v",
-			hash, saved.State, saved.LastError, saved.IsComplete, saved.IsDownloading)
+	if saved.State != storage.EntryStateDownloading || saved.LastError != "" || saved.IsComplete {
+		t.Fatalf("entry %s is not resumable: state %v, error %q, complete %v",
+			hash, saved.State, saved.LastError, saved.IsComplete)
 	}
 	return saved
 }
 
 // newMountStopManager is a hand-built manager with an open mount gate and a one-release torrent whose file never
 // appears on the mount.
-func newMountStopManager(t *testing.T) (*Manager, *storage.Entry, *types.Torrent) {
+func newMountStopManager(t *testing.T) (*Manager, *storage.Entry) {
 	t.Helper()
 	m := newShutdownTestManager(t, t.TempDir())
 	m.mountGate = NewMountGate(zerolog.Nop())
@@ -66,17 +64,17 @@ func newMountStopManager(t *testing.T) (*Manager, *storage.Entry, *types.Torrent
 	if err := os.MkdirAll(m.GetTorrentMountPath(entry), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	return m, entry, torrent
+	return m, entry
 }
 
 // Test 1: a wait whose 2m deadline falls while the mount stops used to fail the grab.
 func TestSymlinkWaitDeadlineDuringMountStopIsResumable(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
-		m, entry, torrent := newMountStopManager(t)
+		m, entry := newMountStopManager(t)
 		m.downloader.mountWaitTimeout = 2 * time.Minute
 
-		m.processNewTorrent(entry, torrent)
+		result := runAction(t, m, entry)
 		synctest.Wait()
 		saved, err := m.queue.GetTorrent(entry.InfoHash)
 		if err != nil || saved.State != storage.EntryStateDownloading {
@@ -88,6 +86,7 @@ func TestSymlinkWaitDeadlineDuringMountStopIsResumable(t *testing.T) {
 		time.Sleep(time.Minute) // past the deadline
 		synctest.Wait()
 
+		assertCutShort(t, result)
 		checkLeftResumable(t, m, entry.InfoHash)
 	})
 }
@@ -170,12 +169,13 @@ func TestSleepEndsWhenGateCloses(t *testing.T) {
 func TestAddDuringMountStopStaysQueued(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
-		m, entry, torrent := newMountStopManager(t)
+		m, entry := newMountStopManager(t)
 		m.mountGate.markStopping()
 
-		m.processNewTorrent(entry, torrent)
+		result := runAction(t, m, entry)
 		synctest.Wait()
 
+		assertCutShort(t, result)
 		checkLeftResumable(t, m, entry.InfoHash)
 		if _, err := os.Lstat(entry.DownloadPath("")); !os.IsNotExist(err) {
 			t.Fatalf("a download folder was made for a stopping mount: %v", err)
@@ -187,7 +187,7 @@ func TestAddDuringMountStopStaysQueued(t *testing.T) {
 func TestSeasonPackMountStopKeepsParentQueued(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
-		m, entry, torrent, children := newSeasonPackTest(t, "Show.S01-S02")
+		m, entry, children := newSeasonPackTest(t, "Show.S01-S02")
 		m.mountGate = NewMountGate(zerolog.Nop())
 		m.downloader.mountWaitTimeout = 2 * time.Minute
 		mountPath := m.GetTorrentMountPath(entry)
@@ -195,11 +195,12 @@ func TestSeasonPackMountStopKeepsParentQueued(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		m.processNewTorrent(entry, torrent)
+		result := runAction(t, m, entry)
 		synctest.Wait()
 		m.mountGate.markStopping()
 		synctest.Wait()
 
+		assertCutShort(t, result)
 		for _, child := range children {
 			checkSeasonAfterMountStop(t, m, child, child.Files["Show.S01E01.mkv"] != nil)
 		}
@@ -228,7 +229,7 @@ func checkSeasonAfterMountStop(t *testing.T, m *Manager, season *storage.Entry, 
 // cancelled the action, is removed; the pack is neither completed nor failed.
 func TestSeasonPackDeleteDuringMountStopRemovesSeason(t *testing.T) {
 	t.Parallel()
-	m, entry, _, _ := newSeasonPackTest(t, "Show.S01-S02")
+	m, entry, _ := newSeasonPackTest(t, "Show.S01-S02")
 	m.mountGate = NewMountGate(zerolog.Nop())
 	m.mountGate.markStopping()
 	ctx, cancel := context.WithCancelCause(t.Context())
@@ -258,58 +259,6 @@ func TestSeasonPackDeleteDuringMountStopRemovesSeason(t *testing.T) {
 	}
 }
 
-// statusCounter is a provider that counts status checks.
-type statusCounter struct {
-	debrid.Client
-
-	checks *atomic.Int32
-}
-
-func (c statusCounter) CheckStatus(_ context.Context, torrent *types.Torrent) (*types.Torrent, error) {
-	c.checks.Add(1)
-	return torrent, nil
-}
-
-// Test 9: an entry saved resumable is not re-driven while the mount stops; a Download-action entry still is.
-func TestPollSkipsSymlinkEntriesWhileMountStops(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		name   string
-		action config.DownloadAction
-		driven bool
-	}{
-		{"symlink", config.DownloadActionSymlink, false},
-		{"unknown action", config.DownloadAction("other"), false},
-		{"download", config.DownloadActionDownload, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			synctest.Test(t, func(t *testing.T) {
-				m, entry, _ := newMountStopManager(t)
-				checks := &atomic.Int32{}
-				m.clients.Store("provider", statusCounter{checks: checks})
-				entry.Action = tc.action
-				entry.Status = types.TorrentStatusDownloaded
-				entry.IsDownloading = false
-				if err := m.queue.Update(entry); err != nil {
-					t.Fatal(err)
-				}
-				m.mountGate.markStopping()
-
-				m.pollEntry(entry)
-				synctest.Wait()
-
-				if got := checks.Load() > 0; got != tc.driven {
-					t.Fatalf("status checked = %v, want %v", got, tc.driven)
-				}
-				if _, held := m.processingEntries.Load(entry.InfoHash); held {
-					t.Fatal("the poll left its claim behind")
-				}
-			})
-		})
-	}
-}
-
 func TestWarmSkippedWhileMountStops(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "release.mkv")
@@ -331,5 +280,27 @@ func TestWarmSkippedWhileMountStops(t *testing.T) {
 		if warmed := strings.Contains(logs.String(), "Warming cache for"); warmed == stopping {
 			t.Fatalf("stopping %v: warm ran = %v; logs %q", stopping, warmed, logs.String())
 		}
+	}
+}
+
+// runAction starts entry's action child and returns what it reports; a nil event is the stop that cut it short.
+func runAction(t *testing.T, m *Manager, entry *storage.Entry) <-chan entryMsg {
+	t.Helper()
+	call := entryChildCall{kind: grab.ChildAction, grab: grab.Grab{Entry: entry}}
+	done := make(chan entryMsg, 1)
+	go func() { done <- m.actionChild(m.Context(), call) }()
+	return done
+}
+
+func assertCutShort(t *testing.T, result <-chan entryMsg) {
+	t.Helper()
+	synctest.Wait()
+	select {
+	case msg := <-result:
+		if msg.ev != nil {
+			t.Fatalf("action reported %+v, want nothing so the actor runs it again", msg.ev)
+		}
+	default:
+		t.Fatal("the action did not end")
 	}
 }

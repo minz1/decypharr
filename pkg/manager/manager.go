@@ -10,9 +10,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
-	"slices"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/go-co-op/gocron/v2"
@@ -187,21 +185,6 @@ type Manager struct {
 	// dropHookFailures counts failed Arr recoveries per provider and infohash.
 	dropHookFailures *xsync.Map[string, map[string]int]
 
-	// In-flight queue-processor dispatches, keyed by InfoHash, to prevent
-	// duplicate goroutines from processing the same entry when the scheduler
-	// re-fires before the previous pass has updated the queue row.
-	processingEntries *xsync.Map[string, struct{}]
-
-	// Set once restoreActiveDownloadJobs has resubmitted the persisted queue.
-	queueRestored atomic.Bool
-
-	// Suppresses repeated provider submissions for the same torrent after an
-	// Arr import/re-grab loop. The queue itself handles duplicates while an
-	// entry is present; this gate covers the short window after Arr deletes it.
-	torrentSubmissions *torrentSubmissionGate
-
-	// Unified active-download queue for torrent and NZB imports.
-	jobQueue  *JobQueue
 	nzbSyncMu sync.Mutex
 
 	// grabs is the read index of every grab; entries is the actor that owns them.
@@ -316,8 +299,6 @@ func New(g *task.Group, store *config.Store, logs *logger.Factory) (*Manager, er
 		activeStreams:          xsync.NewMap[string, *ActiveStream](),
 		providerMisses:         xsync.NewMap[string, map[string]struct{}](),
 		dropHookFailures:       xsync.NewMap[string, map[string]int](),
-		processingEntries:      xsync.NewMap[string, struct{}](),
-		torrentSubmissions:     newTorrentSubmissionGate(torrentSubmissionDedupWindow),
 	}
 	instance.initGrace(g.Context())
 
@@ -444,8 +425,9 @@ func (m *Manager) init() error {
 	m.arr.SetQueueGuardHooks(m.queueGuardHooks())
 
 	// Initialize the unified active-download queue after all processors exist.
-	m.initEntries()
-	m.initJobQueue()
+	records, packOf := m.readQueue()
+	m.initEntries(packOf)
+	m.recoverEntries(records, packOf)
 
 	// Storage closes last: this task ends when the group's own context does,
 	// which is after every child group has stopped.
@@ -513,7 +495,7 @@ func (m *Manager) initLinkService() {
 	)
 }
 
-func (m *Manager) initEntries() {
+func (m *Manager) initEntries(packOf map[string]string) {
 	m.grabs = &grabIndex{}
 	m.entries = newEntryActor(m.work, entryDeps{
 		store:    m.storage,
@@ -523,7 +505,7 @@ func (m *Manager) initEntries() {
 		child:    m.entryChild,
 		publish:  m.storage.PublishEntry,
 		fail:     m.failEffects,
-		packOf:   func() map[string]string { return nil },
+		packOf:   func() map[string]string { return packOf },
 		inLibrary: func(key string) bool {
 			ok, err := m.storage.Exists(key)
 			return ok && err == nil
@@ -531,23 +513,6 @@ func (m *Manager) initEntries() {
 		pollEvery:  m.refreshInterval,
 		retryDelay: throttledRetryDelay,
 	})
-}
-
-func (m *Manager) initJobQueue() {
-	m.jobQueue = NewJobQueue(m.work, m.config.MaxActiveDownloads, m.processJob, m.logs.New("jobqueue"))
-	// Restore persisted active/queued downloads in the background. With large
-	// queues this re-parses thousands of NZBs over the network, and running it
-	// inline blocked manager construction — and therefore the HTTP server —
-	// for 60-90 minutes on big libraries, during which every arr reported
-	// "download client unavailable". Backgrounding lets the API serve and the
-	// worker pool drain immediately while the restore catches up.
-	entries, err := m.restoreSnapshot()
-	if startErr := m.runWork(
-		"restore-downloads",
-		func() { m.restoreActiveDownloadJobs(entries, err) },
-	); startErr != nil {
-		m.logger.Warn().Err(startErr).Msg("Active downloads not restored: the manager is stopping")
-	}
 }
 
 // runWork runs fn as a task of the work group, which the manager's stop
@@ -563,32 +528,6 @@ func (m *Manager) runWorkCtx(name string, fn func(ctx context.Context)) error {
 		fn(ctx)
 		return nil
 	})
-}
-
-func (m *Manager) processJob(ctx context.Context, job *Job) {
-	if job == nil {
-		return
-	}
-
-	var err error
-	switch job.Type {
-	case JobTypeTorrent:
-		err = m.processTorrentJob(ctx, job)
-	case JobTypeNZB:
-		err = m.processNZBJob(ctx, job)
-	default:
-		err = fmt.Errorf("unknown job type: %s", job.Type)
-	}
-
-	m.passOnUnusedSlot(job, err)
-	if err != nil && ctx.Err() == nil {
-		m.handleJobError(job, err)
-	}
-	// The worker slot is released as soon as the job is handed off. Waiting
-	// here until the entry left the downloading state parked a worker for the
-	// whole post-download lifecycle - including the 30 minute mount wait of the
-	// symlink action - so a handful of slow imports stalled every job the arrs
-	// submitted. processQueuedEntries drives the entry from here.
 }
 
 // throttledRetryDelay doubles the wait after each active-download cap hit, up to maxThrottledRetryDelay.
@@ -643,49 +582,6 @@ func (m *Manager) failReleaseGrab(entry *storage.Entry) error {
 		return nil
 	}
 	return m.failGrab(entry, recovery, instance.Name, "Provider rejected the torrent")
-}
-
-// handleJobError drops a job whose entry was deleted, requeues one the provider throttled or whose parse ran out of
-// time, or fails its entry.
-func (m *Manager) handleJobError(job *Job, err error) {
-	// A delete raced the job; failing it would re-create the record.
-	if job.Entry != nil && !m.queue.Contains(job.Entry.InfoHash) {
-		m.logger.Debug().
-			Err(err).
-			Str("job_id", job.ID).
-			Str("name", job.Entry.Name).
-			Msg("Dropped the failed job of a deleted entry")
-		return
-	}
-	if isTooManyActiveDownloads(err) {
-		if job.Entry != nil {
-			job.Entry.Status = debridTypes.TorrentStatusQueued
-			_ = m.queue.Update(job.Entry)
-		}
-		var providers []string
-		if throttled, ok := errors.AsType[*throttledError](err); ok {
-			providers = throttled.providers
-		}
-		delay := throttledRetryDelay(job.ThrottledRetries)
-		job.ThrottledRetries++
-		m.jobQueue.WaitForSlot(job, providers, delay)
-		return
-	}
-	if errors.Is(err, errParseBudget) {
-		if job.ParseRounds+1 < parseRounds {
-			m.requeueParse(job, err)
-			return
-		}
-		err = fmt.Errorf("gave up after %d parse rounds: %w", parseRounds, err)
-	}
-	event := m.logger.Error().Err(err).Str("job_id", job.ID).Str("type", string(job.Type))
-	if job.Entry != nil {
-		event = event.Str("name", job.Entry.Name)
-	}
-	event.Msg("Active download failed")
-	if job.Entry != nil {
-		m.failEntry(job.Entry, err)
-	}
 }
 
 func (m *Manager) migrate(ctx context.Context) {
@@ -911,44 +807,17 @@ func (m *Manager) GetMigrationJob(jobID string) (*storage.SwitcherJob, error) {
 	return job, nil
 }
 
-// SubmitJob submits an import to the unified active-download queue.
-func (m *Manager) SubmitJob(job *Job) error {
-	if m.jobQueue == nil {
-		return fmt.Errorf("active download queue not initialized")
-	}
-	if err := m.stopErr(); err != nil {
-		return fmt.Errorf("job queue: %w", err)
-	}
-	return m.jobQueue.Submit(job)
-}
-
-// awaitsJob reports whether a queued entry may still get a job: before the restore, while the job queue holds one,
-// or during shutdown (the next start restores it). Holds goes first: shutdown marks the stop before it releases holds.
+// awaitsJob reports whether a queued entry is still in its grab's hands, or the manager is stopping (the next start
+// recovers it).
 func (m *Manager) awaitsJob(infoHash string) bool {
-	return !m.queueRestored.Load() || m.jobQueue.Holds(infoHash) || m.stopErr() != nil
+	return m.grabs.active(infoHash) || m.stopErr() != nil
 }
 
-// slotFreed wakes a job throttled by provider: an active download there finished, failed or was removed.
+// slotFreed wakes the grabs throttled by provider: an active download there finished, failed or was removed.
 func (m *Manager) slotFreed(provider string) {
-	if m.jobQueue != nil {
-		m.jobQueue.SlotFreed(provider)
+	if m.entries != nil {
+		m.entries.admit.SlotFreed(provider)
 	}
-}
-
-// passOnUnusedSlot wakes the next job waiting on the provider whose freed slot woke job, if job did not take it.
-func (m *Manager) passOnUnusedSlot(job *Job, err error) {
-	provider := job.wokenBy
-	if provider == "" {
-		return
-	}
-	if err == nil && job.DebridTorrent != nil && job.DebridTorrent.Debrid == provider &&
-		job.DebridTorrent.Status != debridTypes.TorrentStatusDownloaded {
-		return
-	}
-	if throttled, ok := errors.AsType[*throttledError](err); ok && slices.Contains(throttled.providers, provider) {
-		return
-	}
-	m.slotFreed(provider)
 }
 
 func (m *Manager) providerLock(name string) *sync.Mutex {

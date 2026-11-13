@@ -16,15 +16,17 @@ import (
 type p1Drives struct{ resubmit, poll, sweep bool }
 
 // previousBinaryDrives runs the previous binary's own predicates on e: the restore snapshot filter and its
-// Status==queued resubmit, pollable with queuedEntryTask, and Queue.stalled with a job pending for every record
+// Status==queued resubmit, its poll predicate (downloading, not queued, not local; a provider torrent or an NZB)
+// and Queue.stalled with a job pending for every record
 // (restore gave the queued ones one).
 func previousBinaryDrives(e *storage.Entry, now time.Time) p1Drives {
 	q := &Queue{removeStalledAfter: time.Second}
 	swept, _ := q.stalled(e, now, func(string) bool { return true })
 	return p1Drives{
 		resubmit: e.State == storage.EntryStateDownloading && e.Status == debridTypes.TorrentStatusQueued,
-		poll:     pollable(e) && (&Manager{}).queuedEntryTask(e) != nil,
-		sweep:    swept,
+		poll: e.State == storage.EntryStateDownloading && e.Status != debridTypes.TorrentStatusQueued &&
+			!e.IsDownloading && (e.IsTorrent() && e.ActiveProvider != "" || e.IsNZB()),
+		sweep: swept,
 	}
 }
 

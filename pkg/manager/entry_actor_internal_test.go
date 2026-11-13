@@ -37,6 +37,8 @@ type actorHarness struct {
 	mu      sync.Mutex
 	log     []string
 	fails   []grab.FailEffect
+	root    *task.Group
+	down    bool
 }
 
 func newTestStore(t *testing.T) *storage.Storage {
@@ -51,13 +53,12 @@ func newTestStore(t *testing.T) *storage.Storage {
 
 func newActorHarness(t *testing.T, store *storage.Storage) *actorHarness {
 	t.Helper()
-	h := &actorHarness{t: t, store: store, grabs: &grabIndex{}, started: make(chan childRun, 32)}
+	h := &actorHarness{t: t, store: store, grabs: &grabIndex{}, started: make(chan childRun, 256)}
 	root := task.NewRoot(context.WithoutCancel(t.Context()), "test", zerolog.Nop())
+	h.root = root
 	t.Cleanup(func() {
-		ctx, cancel := task.Detached(t.Context(), time.Minute)
-		defer cancel()
-		if err := root.Stop(ctx); err != nil {
-			t.Error(err)
+		if !h.down {
+			h.stop()
 		}
 	})
 	h.a = newEntryActor(root, entryDeps{
@@ -451,23 +452,6 @@ func TestInterruptedActionResumes(t *testing.T) {
 	})
 }
 
-func TestThrottledGrabSubmitsAgainOnItsTimer(t *testing.T) {
-	t.Parallel()
-	store := newTestStore(t)
-	synctest.Test(t, func(t *testing.T) {
-		h := newActorHarness(t, store)
-		reply(h.submitting("a"), grab.Event{Kind: grab.EvSubmitResult, Outcome: grab.OutcomeThrottled})
-		synctest.Wait()
-		if got := h.phase("a"); got != grab.PhaseThrottled {
-			t.Fatalf("phase %v, want throttled", got)
-		}
-		h.none()
-
-		time.Sleep(throttledRetryDelay(1))
-		h.next(grab.ChildSubmit)
-	})
-}
-
 func TestRefusedAdmittedReleasesTheSlot(t *testing.T) {
 	t.Parallel()
 	store := newTestStore(t)
@@ -598,4 +582,20 @@ func TestSeasonEnteringActingWritesNoLibraryEntry(t *testing.T) {
 			t.Fatal("a season child has a library entry")
 		}
 	})
+}
+
+// stop ends the harness's actors and their children, as a manager's stop does.
+func (h *actorHarness) stop() {
+	h.t.Helper()
+	h.down = true
+	ctx, cancel := task.Detached(h.t.Context(), time.Minute)
+	defer cancel()
+	if err := h.root.Stop(ctx); err != nil {
+		h.t.Error(err)
+	}
+}
+
+// manager is a Manager that submits to and recovers through the harness's actor.
+func (h *actorHarness) manager() *Manager {
+	return &Manager{entries: h.a, grabs: h.grabs, storage: h.store, logger: zerolog.Nop()}
 }

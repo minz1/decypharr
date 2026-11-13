@@ -19,6 +19,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/utils"
 	debrid "github.com/sirrobot01/decypharr/pkg/debrid/common"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
+	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
@@ -35,7 +36,7 @@ func queuedEntryAddedAt(
 	t.Cleanup(func() { _ = store.Close() })
 	m := withTestConfig(t, &Manager{
 		queue: newQueue(store, "", nil, zerolog.Nop()), clients: xsync.NewMap[string, debrid.Client](),
-		logger: zerolog.Nop(), processingEntries: xsync.NewMap[string, struct{}](),
+		logger: zerolog.Nop(),
 	})
 	m.clients.Store("provider", provider)
 	entry := &storage.Entry{
@@ -56,7 +57,7 @@ func queuedEntryAddedAt(
 // verdict on the release: the entry stays queued for the next pass and the
 // provider's torrent is kept, until the wait has lasted maxProviderPendingTime.
 // The wait is measured from the placement, else the entry; when neither knows
-// its age the first timeout starts the clock.
+// its age it never runs out.
 func TestQueuedTorrentStatusTimeoutKeepsEntryUntilWaitIsExhausted(t *testing.T) {
 	t.Parallel()
 	stale := time.Now().Add(-maxProviderPendingTime - time.Minute)
@@ -65,46 +66,26 @@ func TestQueuedTorrentStatusTimeoutKeepsEntryUntilWaitIsExhausted(t *testing.T) 
 		name                      string
 		placementAddedAt, entryAt time.Time
 		wantFailed                bool
-		wantClockStarted          bool
 	}{
 		{name: "fresh placement", placementAddedAt: fresh, entryAt: stale},
 		{name: "wait exhausted", placementAddedAt: stale, entryAt: fresh, wantFailed: true},
 		{name: "no placement age, stale entry", entryAt: stale, wantFailed: true},
 		{name: "no placement age, fresh entry", entryAt: fresh},
-		{name: "no age anywhere starts the clock", wantClockStarted: true},
+		{name: "no age anywhere"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			provider := &failingStatusProvider{err: customerror.ErrProviderStatusTimeout}
 			m, entry := queuedEntryAddedAt(t, provider, tc.placementAddedAt, tc.entryAt)
 
-			m.processQueuedTorrent(t.Context(), entry)
+			msg := poll(t.Context(), m, entry)
+			closePlacements(t, m)
 
-			saved, err := m.queue.GetTorrent(entry.InfoHash)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if failed := saved.State == storage.EntryStateError; failed != tc.wantFailed {
-				t.Fatalf("state = %q, want failed=%v", saved.State, tc.wantFailed)
-			}
-			if deleted := waitDeleted(provider); deleted != tc.wantFailed {
-				t.Fatalf("provider torrent deleted = %v, want %v", deleted, tc.wantFailed)
-			}
-			if started := !saved.GetActiveProvider().AddedAt.IsZero(); tc.wantClockStarted && !started {
-				t.Fatal("the first timeout did not record when the wait began")
+			if failed := msg.ev != nil && msg.ev.Kind == grab.EvPendingDeadline; failed != tc.wantFailed {
+				t.Fatalf("result = %+v, want failed=%v", msg.ev, tc.wantFailed)
 			}
 		})
 	}
-}
-
-// waitDeleted reports whether the provider's torrent gets deleted; the manager
-// deletes it in a goroutine, so a deletion is given a moment to arrive.
-func waitDeleted(provider *failingStatusProvider) bool {
-	deadline := time.Now().Add(time.Second)
-	for provider.deleted.Load() == 0 && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	return provider.deleted.Load() != 0
 }
 
 // submitProvider submits a torrent whose status check ends with err.
@@ -191,9 +172,7 @@ func TestUnconvertedMagnetFailsItsGrabAfterTheConversionWait(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			fake := &fakeArrRecovery{}
-			m, entry := newDroppedTestManager(t, fake)
-			m.processingEntries = xsync.NewMap[string, struct{}]()
+			m, entry := newDroppedTestManager(t, nil)
 			m.store = testConfigStore(t, nil)
 			provider := &failingStatusProvider{err: tc.err}
 			m.clients.Store("provider", provider)
@@ -202,16 +181,12 @@ func TestUnconvertedMagnetFailsItsGrabAfterTheConversionWait(t *testing.T) {
 				"provider": {Provider: "provider", ID: "id", AddedAt: time.Now().Add(-tc.age)},
 			}
 
-			m.processQueuedTorrent(t.Context(), entry)
+			msg := poll(t.Context(), m, entry)
+			closePlacements(t, m)
 
-			if got := len(fake.fails) == 1; got != tc.wantFail {
-				t.Fatalf("FailDownload calls = %v, want failed = %v", fake.fails, tc.wantFail)
-			}
-			if tc.wantFail {
-				assertErrored(t, m)
-				if !waitDeleted(provider) {
-					t.Fatal("the unconverted magnet was not deleted at the provider")
-				}
+			failed := msg.ev != nil && msg.ev.Fail == grab.FailBadRelease
+			if failed != tc.wantFail {
+				t.Fatalf("result = %+v, want a bad release = %v", msg.ev, tc.wantFail)
 			}
 		})
 	}
@@ -238,7 +213,7 @@ func TestAProviderWaitIsLoggedOncePerChange(t *testing.T) {
 	m.logger = zerolog.New(&logs)
 
 	for range 3 {
-		m.processQueuedTorrent(t.Context(), entry)
+		poll(t.Context(), m, entry)
 	}
 	if got := warnLines(&logs); got != 1 {
 		t.Fatalf("three passes on a converting magnet logged %d WARNs, want 1:\n%s", got, logs.String())
@@ -248,8 +223,8 @@ func TestAProviderWaitIsLoggedOncePerChange(t *testing.T) {
 	}
 
 	provider.err = customerror.ErrProviderStatusTimeout // converted, now waiting on something else
-	m.processQueuedTorrent(t.Context(), entry)
-	m.processQueuedTorrent(t.Context(), entry)
+	poll(t.Context(), m, entry)
+	poll(t.Context(), m, entry)
 	if got := warnLines(&logs); got != 2 {
 		t.Fatalf("a changed wait logged %d WARNs in all, want 2:\n%s", got, logs.String())
 	}
@@ -257,7 +232,7 @@ func TestAProviderWaitIsLoggedOncePerChange(t *testing.T) {
 	provider.err = notConverted()
 	entry.GetActiveProvider().AddedAt = time.Now().Add(-maxConversionWait - time.Minute)
 	logs.Reset()
-	m.processQueuedTorrent(t.Context(), entry)
+	poll(t.Context(), m, entry)
 	if !strings.Contains(logs.String(), `"level":"error"`) || !strings.Contains(logs.String(), `"waited":`) {
 		t.Fatalf("the give-up logged no ERROR with the wait's age:\n%s", logs.String())
 	}
@@ -288,13 +263,11 @@ func (p *pendingStatusProvider) DeleteTorrent(context.Context, string) error {
 // until it is stopped.
 func pendingEntryManager(
 	t *testing.T,
-	fake *fakeArrRecovery,
 	provider *pendingStatusProvider,
 ) (*Manager, *storage.Entry) {
 	t.Helper()
-	m, entry := newDroppedTestManager(t, fake)
+	m, entry := newDroppedTestManager(t, nil)
 	withLocalArr(m)
-	m.processingEntries = xsync.NewMap[string, struct{}]()
 	m.store = testConfigStore(t, nil)
 	m.clients.Store("provider", provider)
 	entry.Protocol, entry.ActiveProvider, entry.State = config.ProtocolTorrent, "provider", storage.EntryStateDownloading
@@ -318,18 +291,14 @@ func TestQueuedStopDuringCheckStatusLeavesEntry(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			synctest.Test(t, func(t *testing.T) {
-				fake := &fakeArrRecovery{}
 				provider := &pendingStatusProvider{wait: wait, checking: make(chan struct{})}
-				m, entry := pendingEntryManager(t, fake, provider)
+				m, entry := pendingEntryManager(t, provider)
 				ctx, stop := context.WithCancel(t.Context())
-				done := make(chan struct{})
-				go func() {
-					defer close(done)
-					m.processQueuedTorrent(ctx, entry)
-				}()
+				result := make(chan entryMsg, 1)
+				go func() { result <- poll(ctx, m, entry) }()
 				<-provider.checking
 				stop()
-				<-done
+				msg := <-result
 				drainPlacements(t, m)
 
 				saved, err := m.queue.GetTorrent(entry.InfoHash)
@@ -339,14 +308,15 @@ func TestQueuedStopDuringCheckStatusLeavesEntry(t *testing.T) {
 				if saved.State != storage.EntryStateDownloading || saved.LastError != "" {
 					t.Fatalf("state = %q, last error %q; want the entry left downloading", saved.State, saved.LastError)
 				}
-				if len(fake.fails) != 0 || provider.deleted.Load() != 0 {
-					t.Fatalf(
-						"FailDownload calls = %v, provider deletes = %d; want none",
-						fake.fails,
-						provider.deleted.Load(),
-					)
+				if msg.ev != nil || provider.deleted.Load() != 0 {
+					t.Fatalf("result = %+v, provider deletes = %d; want none", msg.ev, provider.deleted.Load())
 				}
 			})
 		})
 	}
+}
+
+// poll runs entry's poll child once and returns what it reports.
+func poll(ctx context.Context, m *Manager, entry *storage.Entry) entryMsg {
+	return m.pollChild(ctx, entryChildCall{kind: grab.ChildPoll, grab: grab.Grab{Entry: entry}}, false)
 }

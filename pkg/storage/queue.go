@@ -140,11 +140,34 @@ func (s *Storage) DeleteQueued(infohash string, cleanup func(*Entry) error) erro
 
 // FilterQueued returns matching entries. It returns an error if the scan fails.
 func (s *Storage) FilterQueued(filter func(*Entry) bool) ([]*Entry, error) {
+	return s.filterQueued(filter, false, func(key string, err error) error {
+		return fmt.Errorf("decode queued entry %q: %w", key, err)
+	})
+}
+
+// FilterQueuedGrab is FilterQueued with each record's grab document (Entry.Grab). Only the grab code calls it.
+// A record that does not decode is skipped: it returns every record it read, with the decode errors joined.
+func (s *Storage) FilterQueuedGrab(filter func(*Entry) bool) ([]*Entry, error) {
+	var bad []error
+	entries, err := s.filterQueued(filter, true, func(key string, err error) error {
+		bad = append(bad, fmt.Errorf("decode queued entry %q: %w", key, err))
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return entries, errors.Join(bad...)
+}
+
+func (s *Storage) filterQueued(filter func(*Entry) bool, withGrab bool, undecoded func(key string, err error) error) (
+	[]*Entry,
+	error,
+) {
 	var entries []*Entry
 	err := s.queue.ForEach(func(key string, value []byte) error {
-		entry, err := decodeQueued(value, false)
+		entry, err := decodeQueued(value, withGrab)
 		if err != nil {
-			return fmt.Errorf("decode queued entry %q: %w", key, err)
+			return undecoded(key, err)
 		}
 		if filter == nil || filter(entry) {
 			entries = append(entries, entry)

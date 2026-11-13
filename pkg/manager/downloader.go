@@ -520,10 +520,6 @@ func (d *Downloader) sleepUntilNextSymlinkAttempt(ctx context.Context, delay tim
 	}
 }
 
-func (d *Downloader) operationContext() context.Context {
-	return d.manager.Context()
-}
-
 func nextSymlinkBackoff(current time.Duration, maxDelay time.Duration) time.Duration {
 	current *= 2
 	if current > maxDelay {

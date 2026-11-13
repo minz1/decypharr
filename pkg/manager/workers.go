@@ -19,7 +19,6 @@ func (m *Manager) runInitialCalls() error {
 			m.refreshDownloadLinks(ctx)
 			return nil
 		}),
-		m.runWork("process-queued-entries", m.processQueuedEntries),
 		m.runWorkCtx("sync-accounts", m.syncAccounts),
 	)
 }
@@ -71,8 +70,6 @@ func (m *Manager) scheduleEvery(
 }
 
 func (m *Manager) addQueueProcessorJob(ctx context.Context) {
-	m.scheduleEvery(ctx, m.scheduler, m.config.RefreshInterval, "queue-processing", m.processQueuedEntries)
-
 	if m.config.RemoveStalledAfter != "" {
 		m.scheduleEvery(ctx, m.scheduler, "1m", "remove-stalled", func() {
 			if err := m.queue.DeleteStalled(m.awaitsJob); err != nil {

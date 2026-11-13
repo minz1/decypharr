@@ -287,10 +287,14 @@ func (a *entryActor) step(key string, st *entryState, m entryMsg, fx *keyed.Effe
 	cur := st.g
 	if cur.State.Phase == grab.PhaseAbsent && ev.Kind == grab.EvSubmit {
 		if m.entry == nil {
-			fx.Reply(errors.New("submit without a record"))
+			fx.Reply(fmt.Errorf("submit %s without a record", key))
 			return
 		}
 		cur.Entry = m.entry
+		cur.State.NZB = m.entry.IsNZB()
+	}
+	if cur.State.Phase == grab.PhaseFailed && ev.Kind == grab.EvSubmit && m.entry != nil && cur.Entry != nil {
+		cur.Entry = readded(cur.Entry, m.entry)
 		cur.State.NZB = m.entry.IsNZB()
 	}
 	nextState, effects, err := grab.Transition(cur.State, ev)
@@ -327,6 +331,15 @@ func (a *entryActor) step(key string, st *entryState, m entryMsg, fx *keyed.Effe
 		s.next.Entry.Action == config.DownloadActionNone {
 		a.step(key, st, eventMsg(grab.Event{Kind: grab.EvActionNone, At: ev.At}), fx)
 	}
+}
+
+// readded is the record a re-add of a failed grab submits: the new request's, keeping when the grab was first
+// added and the placements it had.
+func readded(failed, added *storage.Entry) *storage.Entry {
+	e := added.Clone()
+	e.AddedOn = failed.AddedOn
+	e.Providers = failed.Clone().Providers
+	return e
 }
 
 // saveFailed keeps the old state and redelivers the message after a backoff, so its save is tried again.

@@ -8,21 +8,19 @@ import (
 	"net/http"
 	"path/filepath"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
-	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/debrid/common"
 	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/hearsay"
 	"github.com/sirrobot01/decypharr/pkg/storage"
-	"github.com/sirrobot01/decypharr/pkg/usenet"
 )
 
-// AddNewTorrent submits a torrent to debrid before entering the active-download queue.
+// AddNewTorrent hands a torrent to its grab, which queues it for a provider. Adding a hash already in hand is a
+// success, as in qBittorrent.
 func (m *Manager) AddNewTorrent(ctx context.Context, importReq *ImportRequest) error {
 	if importReq == nil || importReq.Magnet == nil {
 		return fmt.Errorf("magnet is required")
@@ -30,125 +28,13 @@ func (m *Manager) AddNewTorrent(ctx context.Context, importReq *ImportRequest) e
 	if importReq.Arr.Name == "" {
 		return fmt.Errorf("arr is required")
 	}
-
-	return m.torrentSubmissions.Do(ctx, torrentSubmissionKey(importReq), func() error {
-		// qBittorrent treats adding an existing hash as an idempotent success.
-		// Check again inside the singleflight call so concurrent requests cannot
-		// both pass the lookup and submit the same hash to a provider.
-		if _, err := m.queue.GetTorrent(importReq.Magnet.InfoHash); err == nil {
-			return nil
-		}
-		return m.addNewTorrent(importReq)
-	})
+	return m.submitEntry(ctx, newTorrentQueueEntry(importReq, debridTypes.TorrentStatusQueued, m.folderNaming()),
+		importReq)
 }
 
 // stopped reports a ctx that has ended. A provider call whose ctx has ended was cut by a stop (or its owner's end),
 // which says nothing about the torrent: its caller changes no state and records no failure.
 func stopped(ctx context.Context) bool { return ctx.Err() != nil }
-
-// addNewTorrent submits to the provider on the manager's work ctx, never the request's: a client that disconnects
-// mid-submit must not leave a submitted torrent with no queue entry.
-func (m *Manager) addNewTorrent(importReq *ImportRequest) error {
-	debridTorrent, err := m.SendToDebrid(importReq)
-	if err != nil {
-		if isTooManyActiveDownloads(err) {
-			m.logger.Warn().Msgf("Too many active downloads, marking as queued: %s", importReq.Magnet.Name)
-			return m.queueTorrentRetry(importReq, err)
-		}
-		return fmt.Errorf("failed to submit torrent to debrid: %w", err)
-	}
-
-	torrent := newTorrentQueueEntry(importReq, debridTypes.TorrentStatusQueued, m.folderNaming())
-	torrent.DownloadUncached = debridTorrent.DownloadUncached
-	applyDebridTorrentToEntry(torrent, debridTorrent)
-
-	if addErr := m.queue.Add(torrent); addErr != nil {
-		return fmt.Errorf("failed to add torrent to queue: %w", addErr)
-	}
-
-	job := NewJob(JobTypeTorrent, importReq)
-	job.ID = torrent.InfoHash
-	job.Entry = torrent
-	job.DebridTorrent = debridTorrent
-	if submitJobErr := m.SubmitJob(job); submitJobErr != nil {
-		if errors.Is(submitJobErr, task.ErrStopped) {
-			// The queue closed with the stop: the entry stays queued and the next start's restore drives it.
-			m.logger.Info().
-				Str("name", torrent.Name).
-				Msg("Manager is stopping; the torrent stays queued for the next start")
-			return nil
-		}
-		m.failEntry(torrent, submitJobErr)
-		return fmt.Errorf("failed to queue torrent: %w", submitJobErr)
-	}
-	return nil
-}
-
-func (m *Manager) processTorrentJob(ctx context.Context, job *Job) error {
-	if job == nil || job.Entry == nil {
-		return fmt.Errorf("invalid torrent job")
-	}
-	if !m.queue.Contains(job.Entry.InfoHash) {
-		return nil // removed from the queue while waiting for a worker
-	}
-	if job.ResumeExisting {
-		// Claim the entry before flipping it to downloading: once the status
-		// changes the scheduler may pick it up too, and only one of us may
-		// drive it.
-		if _, loaded := m.processingEntries.LoadOrStore(job.Entry.InfoHash, struct{}{}); loaded {
-			return nil
-		}
-		job.Entry.Status = debridTypes.TorrentStatusDownloading
-		job.Entry.IsDownloading = false
-		_ = m.queue.Update(job.Entry)
-		m.processQueuedTorrent(ctx, job.Entry)
-		return nil
-	}
-	if job.DebridTorrent == nil {
-		if job.Request == nil {
-			return fmt.Errorf("torrent job has no request or processing payload")
-		}
-		debridTorrent, err := m.SendToDebrid(job.Request)
-		if err != nil {
-			return fmt.Errorf("failed to submit torrent to debrid: %w", err)
-		}
-		if !m.queue.Contains(job.Entry.InfoHash) {
-			applyDebridTorrentToEntry(job.Entry, debridTorrent)
-			m.stopProviderDownload(ctx, job.Entry)
-			return nil
-		}
-		job.DebridTorrent = debridTorrent
-	}
-
-	job.Entry.Status = debridTypes.TorrentStatusDownloading
-	job.Entry.DownloadUncached = job.DebridTorrent.DownloadUncached
-	if job.Request != nil {
-		job.Request.Status = importStatusStarted
-	}
-	m.processNewTorrent(job.Entry, job.DebridTorrent)
-	return nil
-}
-
-func (m *Manager) queueTorrentRetry(importReq *ImportRequest, throttled error) error {
-	torrent := newTorrentQueueEntry(importReq, debridTypes.TorrentStatusQueued, m.folderNaming())
-	if err := m.queue.Add(torrent); err != nil {
-		return fmt.Errorf("failed to add torrent to queue: %w", err)
-	}
-
-	importReq.Status = "queued"
-	importReq.CompletedAt = time.Time{}
-	importReq.Error = ""
-	job := NewJob(JobTypeTorrent, importReq)
-	job.ID = torrent.InfoHash
-	job.Entry = torrent
-	if m.jobQueue == nil {
-		err := fmt.Errorf("active download queue not initialized")
-		m.failEntry(torrent, err)
-		return fmt.Errorf("failed to queue torrent: %w", err)
-	}
-	m.handleJobError(job, throttled)
-	return nil
-}
 
 func newTorrentQueueEntry(
 	importReq *ImportRequest,
@@ -191,121 +77,6 @@ func isTooManyActiveDownloads(err error) bool {
 	return errors.Is(err, customerror.ErrTooManyActiveDownloads)
 }
 
-func (m *Manager) processQueuedEntries() {
-	queueEntries, err := m.queue.ListFilter("", config.ProtocolAll, storage.EntryStateDownloading, nil, "", true)
-	if err != nil {
-		m.logger.Error().Err(err).Msg("Failed to read the download queue")
-		return
-	}
-	for _, entry := range queueEntries {
-		m.pollEntry(entry)
-	}
-}
-
-// pollEntry drives one entry of a queue listing. The listing can be stale by the
-// time the claim is taken (a hand-off action may have finished, errored or
-// deleted the entry), so the entry is re-read under the claim and the filter
-// re-applied; the task then works on the fresh copy.
-func (m *Manager) pollEntry(listed *storage.Entry) {
-	if !pollable(listed) || m.queuedEntryTask(listed) == nil {
-		return
-	}
-	// An entry a mount step left resumable stays so while the mount stops: its symlink step would only end the same way.
-	if m.mountGate.IsStopping() && needsMount(listed) {
-		return
-	}
-	// Skip if a previous tick's goroutine hasn't finished yet for this hash.
-	entry, claimed := m.claimDrivable(listed.InfoHash)
-	if !claimed {
-		return
-	}
-	task := m.queuedEntryTask(entry)
-	if !pollable(entry) || task == nil || m.runWorkCtx("process-queued-entry", task) != nil {
-		m.processingEntries.Delete(entry.InfoHash)
-	}
-}
-
-// needsMount reports whether a downloaded entry's post-download action reads the mount: process() sends every
-// action other than Download and None to the symlink step.
-func needsMount(entry *storage.Entry) bool {
-	return entry.Status == debridTypes.TorrentStatusDownloaded &&
-		entry.Action != config.DownloadActionDownload && entry.Action != config.DownloadActionNone
-}
-
-// pollable reports whether the poll drives an entry: an active download that
-// has left the queue and that no local worker is already driving.
-func pollable(entry *storage.Entry) bool {
-	return entry.State == storage.EntryStateDownloading && entry.Status != debridTypes.TorrentStatusQueued &&
-		!entry.IsDownloading
-}
-
-// claimDrivable takes the entry's processingEntries claim and returns the
-// entry re-read under it. It reports false, with no claim held, when another
-// driver holds the claim or the entry is gone, no longer downloading, or being
-// downloaded locally.
-func (m *Manager) claimDrivable(hash string) (*storage.Entry, bool) {
-	if _, loaded := m.processingEntries.LoadOrStore(hash, struct{}{}); loaded {
-		return nil, false
-	}
-	saved, err := m.queue.GetTorrent(hash)
-	if err != nil || saved.State != storage.EntryStateDownloading || saved.IsDownloading {
-		m.processingEntries.Delete(hash)
-		return nil, false
-	}
-	return saved, true
-}
-
-// queuedEntryTask returns the poll step for a queued entry, or nil when the
-// scheduler has nothing to drive for it.
-func (m *Manager) queuedEntryTask(entry *storage.Entry) func(context.Context) {
-	switch {
-	case entry.IsTorrent() && entry.ActiveProvider != "":
-		return func(ctx context.Context) { m.processQueuedTorrent(ctx, entry) }
-	case entry.IsNZB():
-		return func(context.Context) { m.processQueuedNZB(entry) }
-	default:
-		return nil
-	}
-}
-
-func (m *Manager) processQueuedNZB(entry *storage.Entry) {
-	defer m.processingEntries.Delete(entry.InfoHash)
-	// Check if the nzb is already processed. Only header fields (status, file
-	// list) are needed here; processNZB does not touch the segment map.
-	metadata, err := m.usenet.GetNZBHeader(entry.InfoHash)
-	if err != nil {
-		m.logger.Error().Err(err).Str("name", entry.Name).Msg("Error getting NZB metadata")
-		m.failEntry(entry, err)
-		return
-	}
-	if metadata == nil {
-		m.logger.Error().Str("name", entry.Name).Msg("NZB metadata not found")
-		m.failEntry(entry, fmt.Errorf("nzb metadata not found"))
-		return
-	}
-	switch metadata.Status {
-	case usenet.NZBStatusFailed:
-		m.logger.Error().Str("name", entry.Name).Msg("NZB processing failed")
-		m.failEntry(entry, fmt.Errorf("nzb processing failed"))
-		return
-	case usenet.NZBStatusParsing, usenet.NZBStatusDownloading:
-		// Still processing, skip for now
-		return
-	case usenet.NZBStatusCompleted:
-		if applyErr := m.applyNZBMetadata(entry, metadata); applyErr != nil {
-			m.logger.Error().Err(applyErr).Str("name", entry.Name).Msg("Error processing queued NZB")
-			m.failEntry(entry, applyErr)
-			return
-		}
-		// This poll holds the entry's claim, so it drives the action itself.
-		m.processAction(entry)
-	default:
-		m.logger.Error().Str("name", entry.Name).Msgf("Unknown NZB status: %s", metadata.Status)
-		m.failEntry(entry, fmt.Errorf("unknown nzb status: %s", metadata.Status))
-		return
-	}
-}
-
 // transientStatusError reports whether a status check failed for a reason
 // that may pass on its own (network errors, timeouts, provider 5xx, slot
 // limits). An uncached torrent is an outcome, not a transient failure.
@@ -332,124 +103,6 @@ func (m *Manager) statusProbe(entry *storage.Entry, placement *storage.ProviderE
 	}
 }
 
-func (m *Manager) processQueuedTorrent(ctx context.Context, entry *storage.Entry) {
-	defer m.processingEntries.Delete(entry.InfoHash)
-	placement := entry.GetActiveProvider()
-	if placement == nil {
-		m.logger.Error().Str("name", entry.Name).Msg("No active placement found for queued entry")
-		m.failEntry(entry, fmt.Errorf("no active placement found"))
-		return
-	}
-
-	client := m.ProviderClient(entry.ActiveProvider)
-	if client == nil {
-		m.logger.Error().Str("debrid", entry.ActiveProvider).Msg("Provider client not found")
-		m.failEntry(entry, fmt.Errorf("debrid client not found: %s", entry.ActiveProvider))
-		return
-	}
-
-	dbT, err := client.CheckStatus(ctx, m.statusProbe(entry, placement))
-	if !m.queue.Contains(entry.InfoHash) {
-		m.queue.waits.observe(entry.InfoHash, waitNone)
-		return // removed while the status check ran
-	}
-	// A stop is no verdict on the release: the entry stays as it is for the next pass or generation, whatever
-	// the check made of the stop, and the provider's torrent is kept.
-	if stopped(ctx) {
-		m.logger.Debug().Str("name", entry.Name).Msg("Stopped during the status check; entry left as it is")
-		return
-	}
-	if m.retryNextPass(entry, placement, err) {
-		return
-	}
-	m.releaseLeftSlot(entry, placement, dbT, err)
-	if err != nil {
-		m.logStatusFailure(entry, placement, err)
-		if releaseIsDead(dbT, err) {
-			m.failBadRelease(entry, err)
-		} else {
-			m.failEntry(entry, err)
-		}
-
-		// Delete from debrid on error
-		if dbT != nil && dbT.ID != "" {
-			provider, id := entry.ActiveProvider, dbT.ID
-			m.startPlacementRun(entry.Name, provider, func(ctx context.Context) {
-				m.discardSubmitted(ctx, provider, id, entry.InfoHash)
-			})
-		}
-		return
-	}
-
-	debridTorrent := dbT
-
-	if debridTorrent == nil {
-		m.logger.Error().Str("name", entry.Name).Msg("Provider entry not found")
-		m.failBadRelease(entry, fmt.Errorf("debrid entry not found"))
-		return
-	}
-
-	if debridTorrent.Status == debridTypes.TorrentStatusError {
-		m.logger.Error().
-			Str("debrid", debridTorrent.Debrid).
-			Str("name", debridTorrent.Name).
-			Str("status", string(debridTorrent.Status)).
-			Msg("Entry in error state")
-		m.failBadRelease(entry, fmt.Errorf("entry in error state on debrid: %s", debridTorrent.Debrid))
-		return
-	}
-
-	// Update entry progress
-	entry.Progress = debridTorrent.Progress / percentScale
-	entry.Speed = debridTorrent.Speed
-	entry.Size = debridTorrent.GetSize()
-	entry.Seeders = debridTorrent.Seeders
-	entry.UpdatedAt = time.Now()
-
-	// Update placement progress
-	placement.Progress = entry.Progress
-
-	_ = m.queue.Update(entry)
-	// Check if done or failed
-	if debridTorrent.Status == debridTypes.TorrentStatusDownloaded {
-		m.finishDownloaded(entry, placement, debridTorrent)
-	}
-}
-
-// finishDownloaded runs the action once the entry can take the finished torrent's files; the next poll retries until then.
-func (m *Manager) finishDownloaded(
-	entry *storage.Entry,
-	placement *storage.ProviderEntry,
-	finished *debridTypes.Torrent,
-) {
-	if awaitingLinks(entry, finished) {
-		m.awaitLinks(entry, placement)
-		return
-	}
-	refreshFinishedPlacement(entry, placement, finished)
-	m.processAction(entry)
-}
-
-// awaitLinks leaves the entry for the next poll, or fails its grab once the provider has gone linksWaitLimit without links.
-func (m *Manager) awaitLinks(entry *storage.Entry, placement *storage.ProviderEntry) {
-	if placement.DownloadedAt == nil {
-		now := time.Now()
-		placement.DownloadedAt = &now
-		_ = m.queue.Update(entry)
-	}
-	waited := time.Since(*placement.DownloadedAt)
-	if waited <= linksWaitLimit {
-		m.logger.Debug().Str("name", entry.Name).Msg("Downloaded, waiting for file links before the action")
-		return
-	}
-	m.logger.Warn().Str("name", entry.Name).Str("debrid", entry.ActiveProvider).
-		Dur("waited", waited.Truncate(time.Second)).
-		Msg("Downloaded but the provider never gave file links; failing the grab")
-	placement.Status = debridTypes.TorrentStatusError
-	m.slotFreed(entry.ActiveProvider)
-	m.failBadRelease(entry, fmt.Errorf("provider gave no file links %s after the download finished", linksWaitLimit))
-}
-
 // maxProviderPendingTime is how long a placement may wait on a provider that has
 // not finished processing its torrent (ErrProviderStatusTimeout), links not
 // visible yet for one, before the entry fails. The failure carries no verdict on
@@ -461,51 +114,6 @@ const maxProviderPendingTime = 6 * time.Hour
 // own; failing it first, as a dead release, lets the Arr search another one sooner.
 const maxConversionWait = 2 * time.Hour
 
-// statusWaitExhausted reports a provider-pending status error that has outlasted
-// its wait: maxConversionWait for a magnet still converting, else
-// maxProviderPendingTime. The wait is measured from the placement, else from the
-// entry; when neither knows its age the first timeout is recorded as its start.
-func (m *Manager) statusWaitExhausted(entry *storage.Entry, placement *storage.ProviderEntry, err error) bool {
-	if !errors.Is(err, customerror.ErrProviderStatusTimeout) {
-		return false
-	}
-	start := cmp.Or(placement.AddedAt, entry.AddedOn)
-	if start.IsZero() {
-		placement.AddedAt = time.Now()
-		_ = m.queue.Update(entry)
-		return false
-	}
-	limit := maxProviderPendingTime
-	if errors.Is(err, customerror.ErrMagnetNotConverted) {
-		limit = maxConversionWait
-	}
-	return time.Since(start) > limit
-}
-
-// retryNextPass reports a status check to leave for the next queue pass: a network blip or provider hiccup, or a
-// provider-pending wait that has not run out. The entry stays as it is rather than failing and deleting the
-// provider's torrent. A provider-pending wait repeats every pass for hours, so it is logged when it starts or
-// changes; any other transient failure is logged each time.
-func (m *Manager) retryNextPass(entry *storage.Entry, placement *storage.ProviderEntry, err error) bool {
-	if err == nil || !transientStatusError(err) || m.statusWaitExhausted(entry, placement, err) {
-		m.queue.waits.observe(entry.InfoHash, waitNone)
-		return false
-	}
-	wait := providerWaitOf(err)
-	if wait == waitNone {
-		m.logger.Warn().Err(err).Str("name", entry.Name).Msg("Status check failed; retrying on the next pass")
-		return true
-	}
-	line := m.logger.Debug()
-	if m.queue.waits.observe(entry.InfoHash, wait) != wait {
-		line = m.logger.Warn()
-	}
-	line.Err(err).Str("name", entry.Name).Stringer("wait", wait).
-		Dur("waited", providerWaitAge(entry, placement)).
-		Msg("Entry waiting on the provider; checking again on the next pass")
-	return true
-}
-
 // logStatusFailure logs a status check the entry fails on; a provider wait that ran out also says which and how long.
 func (m *Manager) logStatusFailure(entry *storage.Entry, placement *storage.ProviderEntry, err error) {
 	line := m.logger.Error().Err(err).Str("name", entry.Name)
@@ -515,7 +123,7 @@ func (m *Manager) logStatusFailure(entry *storage.Entry, placement *storage.Prov
 	line.Msg("Error checking status")
 }
 
-// providerWaitAge is how long the placement has waited on its provider, measured as statusWaitExhausted measures it.
+// providerWaitAge is how long the placement has waited on its provider, measured from the placement, else from the entry.
 func providerWaitAge(entry *storage.Entry, placement *storage.ProviderEntry) time.Duration {
 	start := cmp.Or(placement.AddedAt, entry.AddedOn)
 	if start.IsZero() {
@@ -545,136 +153,6 @@ func refreshFinishedPlacement(entry *storage.Entry, old *storage.ProviderEntry, 
 	placement.Progress = 1
 	now := time.Now()
 	placement.DownloadedAt = &now
-}
-
-// releaseLeftSlot wakes a job waiting on the entry's provider once the placement finished or failed there, and marks a failed one.
-func (m *Manager) releaseLeftSlot(
-	entry *storage.Entry,
-	placement *storage.ProviderEntry,
-	dbT *debridTypes.Torrent,
-	err error,
-) {
-	failed := err != nil || dbT == nil || dbT.Status == debridTypes.TorrentStatusError
-	if !failed && (dbT.Status != debridTypes.TorrentStatusDownloaded || awaitingLinks(entry, dbT)) {
-		return
-	}
-	m.slotFreed(entry.ActiveProvider)
-	if failed {
-		placement.Status = debridTypes.TorrentStatusError
-	}
-}
-
-func (m *Manager) processAction(entry *storage.Entry) {
-	key := strings.ToLower(entry.InfoHash)
-	ctx, cancel := context.WithCancelCause(m.downloader.operationContext())
-	m.queue.running.Store(key, cancel)
-	defer func() {
-		m.queue.running.Delete(key)
-		cancel(nil)
-	}()
-
-	entry.Status = debridTypes.TorrentStatusDownloaded
-	entry.UpdatedAt = time.Now()
-	_ = m.queue.Update(entry)
-	m.logger.Info().
-		Str("name", entry.Name).
-		Str("action", string(entry.Action)).
-		Msg("Download completed, processing action")
-
-	// Merge with existing entry if same infohash already exists (e.g., same
-	// torrent on a different provider). The queue entry only knows about the
-	// provider it was queued for, so we need to preserve other placements.
-	if existing, err := m.storage.Get(entry.InfoHash); err == nil && existing != nil {
-		entry = storage.HandleExistingEntryMerge(existing, entry)
-	}
-
-	// Now add entry to the main storage
-	if err := m.AddOrUpdate(entry, nil); err != nil {
-		m.logger.Error().Err(err).Str("name", entry.Name).Msg("Failed to persist completed download")
-		m.failEntry(entry, err)
-		return
-	}
-	m.InvalidateEntryCache()
-	if err := m.RefreshMount(); err != nil {
-		m.logger.Error().Err(err).Msg("Mount refresh failed")
-	}
-	err := m.downloader.download(ctx, entry)
-	if err != nil {
-		if errors.Is(context.Cause(ctx), errEntryDeleted) {
-			m.logger.Info().Str("name", entry.Name).Msg("Entry deleted, stopped its post-download action")
-			return
-		}
-		if m.saveIfInterrupted(entry, err) {
-			return
-		}
-		m.logger.Error().
-			Err(err).
-			Str("name", entry.Name).
-			Msg("Error running post-download action")
-		m.failEntry(entry, err)
-		return
-	}
-}
-
-// saveIfInterrupted saves an entry whose post-download action was cut short by a stop and reports whether it was:
-// the work group is stopping, or the mount is. It stays queued and idle, to resume in the next generation.
-func (m *Manager) saveIfInterrupted(entry *storage.Entry, err error) bool {
-	mountStopping := errors.Is(err, ErrMountStopping)
-	workStopping := errors.Is(err, context.Canceled) && m.stopErr() != nil
-	if !mountStopping && !workStopping {
-		return false
-	}
-	if mountStopping {
-		m.logger.Info().Str("name", entry.Name).Msg("Mount stopping, download left resumable")
-	}
-	entry.IsDownloading = false
-	if updateErr := m.queue.Update(entry); updateErr != nil {
-		m.logger.Error().Err(updateErr).Str("name", entry.Name).Msg("Failed to save interrupted download")
-	}
-	return true
-}
-
-// processTorrent handles the complete torrent lifecycle.
-func (m *Manager) processNewTorrent(torrent *storage.Entry, debridTorrent *debridTypes.Torrent) {
-	// Update status to submitting
-	torrent.UpdatedAt = time.Now()
-	applyDebridTorrentToEntry(torrent, debridTorrent)
-	_ = m.queue.Update(torrent)
-
-	if debridTorrent.Status != debridTypes.TorrentStatusDownloaded {
-		m.logger.Info().
-			Str("debrid", debridTorrent.Debrid).
-			Str("name", debridTorrent.Name).
-			Msg("Started downloading torrent")
-		return
-	}
-
-	// Parse post-download action
-	m.startProcessAction(torrent)
-}
-
-// startProcessAction starts the post-download action of an entry no poll holds
-// the claim of, and keeps the processingEntries claim until the action returns.
-// Without it the poller sees the unclaimed, not yet downloading entry and starts
-// a second action on the same destination files. An entry that is claimed has a
-// driver and is left to it. The caller's copy can be stale (IsDownloading is only
-// set once the action has found its files, and a finished action leaves no claim),
-// so under the claim the entry is re-read: it must still be queued, still
-// downloading, and not already driven by a local download.
-//
-// Callers that already hold the claim (the poll) run processAction themselves.
-// Interim: the keyed owner replaces the claim map.
-func (m *Manager) startProcessAction(entry *storage.Entry) {
-	if _, claimed := m.claimDrivable(entry.InfoHash); !claimed {
-		return
-	}
-	err := m.runWork("process-action", func() {
-		defer m.processingEntries.Delete(entry.InfoHash)
-		m.processAction(entry)
-	})
-	if err != nil {
-		m.processingEntries.Delete(entry.InfoHash)
-	}
 }
 
 func applyDebridTorrentToEntry(torrent *storage.Entry, debridTorrent *debridTypes.Torrent) {

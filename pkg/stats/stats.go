@@ -193,14 +193,9 @@ func (c *Collector) collect(ctx context.Context) *Snapshot {
 	}
 
 	// --- Queue ---
-	if queue := c.mgr.JobQueue(); queue != nil {
-		// Active counts entries actually downloading, not jobs holding a
-		// worker slot: a worker is released once the job is handed off to the
-		// queue scheduler, well before the download finishes.
-		snap.Queue = QueueStats{
-			Pending: queue.Len(),
-			Active:  c.mgr.Storage().CountQueuedByState(storage.EntryStateDownloading),
-		}
+	snap.Queue = QueueStats{
+		Pending: c.mgr.PendingGrabs(),
+		Active:  c.mgr.Storage().CountQueuedByState(storage.EntryStateDownloading),
 	}
 
 	// --- Arrs ---

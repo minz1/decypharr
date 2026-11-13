@@ -217,3 +217,21 @@ func TestLoadedProgressIsAFraction(t *testing.T) {
 		})
 	}
 }
+
+func TestRestoreReadFailureDoesNotStrandRecords(t *testing.T) {
+	t.Parallel()
+	s, queue := newQueueTestStorage(t)
+	if err := s.AddQueue(&Entry{InfoHash: "valid", Name: "before"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := queue.Put("corrupt", []byte{0xff}, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.FilterQueuedGrab(nil)
+	if err == nil || !strings.Contains(err.Error(), "corrupt") {
+		t.Fatalf("error = %v, want the corrupt record key", err)
+	}
+	if len(got) != 1 || got[0].InfoHash != "valid" {
+		t.Fatalf("records = %v, want the valid one still returned", got)
+	}
+}

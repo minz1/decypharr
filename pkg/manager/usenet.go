@@ -4,21 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"
-	"github.com/sirrobot01/decypharr/internal/customerror"
-	"github.com/sirrobot01/decypharr/internal/task"
 	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
-	"github.com/sirrobot01/decypharr/pkg/hearsay"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 	"github.com/sirrobot01/decypharr/pkg/usenet/parser"
 )
 
-// AddNewNZB persists an NZB and returns as soon as it enters the active-download queue.
-func (m *Manager) AddNewNZB(_ context.Context, req *ImportRequest) (string, error) {
+// AddNewNZB stages an NZB and hands it to its grab, which parses it once admitted.
+func (m *Manager) AddNewNZB(ctx context.Context, req *ImportRequest) (string, error) {
 	if m.usenet == nil {
 		return "", fmt.Errorf("usenet not configured")
 	}
@@ -43,163 +39,14 @@ func (m *Manager) AddNewNZB(_ context.Context, req *ImportRequest) (string, erro
 	entry := newNZBQueueEntry(req, stagedPath)
 
 	entry.ContentPath = entry.DownloadPath(m.folderNaming())
-	if addErr := m.queue.Add(entry); addErr != nil {
-		m.usenet.RemoveStagedNZB(stagedPath)
-		return "", fmt.Errorf("failed to add nzb to queue: %w", addErr)
-	}
-
 	req.Status = "queued"
-	job := NewJob(JobTypeNZB, req)
-	job.ID = entry.InfoHash
-	job.Entry = entry
-	if submitJobErr := m.SubmitJob(job); submitJobErr != nil {
-		if errors.Is(submitJobErr, task.ErrStopped) {
-			// The queue closed with the stop: the entry stays queued and the next start's restore parses it.
-			m.logger.Info().Str("name", entry.Name).Msg("Manager is stopping; the NZB stays queued for the next start")
-			return req.ID, nil
+	if err = m.submitEntry(ctx, entry, req); err != nil {
+		if !mayHoldRecord(err) {
+			m.usenet.RemoveStagedNZB(stagedPath)
 		}
-		m.failEntry(entry, submitJobErr)
-		return "", fmt.Errorf("failed to queue NZB: %w", submitJobErr)
+		return "", fmt.Errorf("failed to queue NZB: %w", err)
 	}
 	return req.ID, nil
-}
-
-func (m *Manager) processNZBJob(ctx context.Context, job *Job) error {
-	if job == nil || job.Entry == nil {
-		return fmt.Errorf("invalid NZB job")
-	}
-	if !m.queue.Contains(job.Entry.InfoHash) {
-		return nil // removed from the queue while waiting for a worker
-	}
-	if job.NZBMeta == nil {
-		if err := m.parseQueuedNZB(ctx, job); err != nil {
-			return err
-		}
-	}
-	if job.Request != nil {
-		job.Request.Status = importStatusStarted
-	}
-	return m.processNewNzb(ctx, job.Entry, job.NZBMeta, job.NZBGroups)
-}
-
-// parseQueuedNZB parses a staged NZB for a job that reached a worker before
-// parsing, recording the parse outcome with hearsay.
-func (m *Manager) parseQueuedNZB(ctx context.Context, job *Job) error {
-	if job.Request == nil {
-		return fmt.Errorf("NZB job has no request or processing payload")
-	}
-	content, err := os.ReadFile(job.Entry.Magnet)
-	if err != nil {
-		return fmt.Errorf("read staged NZB: %w", err)
-	}
-	meta, groups, err := m.parseNZB(ctx, job.Entry.InfoHash, job.Request.Name, content, job.Request.Arr.Name)
-	if err != nil {
-		// A missing article at the parse stage is a definitive
-		// availability result: record and share it before failing the
-		// queued entry, so the arr can move to another release. A shutdown
-		// cuts the parse short and says nothing about the release.
-		if m.hearsay != nil && ctx.Err() == nil && errors.Is(err, customerror.ErrUsenetSegmentMissing) {
-			m.hearsay.ReportNZB(hearsay.NZBSubjectFromGroups(groups), false)
-		}
-		return fmt.Errorf("usenet parse failed: %w", err)
-	}
-
-	// Own truth or a strong network consensus that the segments are
-	// gone means the availability check is doomed. The accepted SAB
-	// job is marked failed in history, which tells the arr to retry.
-	if m.hearsay != nil && m.hearsay.NZBClaimedIncomplete(hearsay.NZBSubjectFromGroups(groups)) {
-		return fmt.Errorf("nzb rejected: hearsay claims segments missing on every configured backbone")
-	}
-
-	m.usenet.RemoveStagedNZB(job.Entry.Magnet)
-	job.Entry.Magnet = ""
-	job.NZBMeta = meta
-	job.NZBGroups = groups
-	job.Entry.Name = meta.Name
-	job.Entry.OriginalFilename = meta.Name
-	job.Entry.Size = meta.TotalSize
-	job.Entry.Bytes = meta.TotalSize
-	job.Entry.Status = debridTypes.TorrentStatusDownloading
-	job.Entry.ActiveProvider = usenetProvider
-	_ = job.Entry.AddUsenetProvider(meta)
-	if updateErr := m.queue.Update(job.Entry); updateErr != nil {
-		return fmt.Errorf("update queued NZB: %w", updateErr)
-	}
-	return nil
-}
-
-// processNZB records the processed NZB on its entry and starts the post-download action.
-func (m *Manager) processNZB(entry *storage.Entry, metadata *storage.NZB) error {
-	if err := m.applyNZBMetadata(entry, metadata); err != nil {
-		return err
-	}
-	m.startProcessAction(entry)
-	return nil
-}
-
-// applyNZBMetadata marks the entry downloaded and gives it the NZB's files.
-func (m *Manager) applyNZBMetadata(entry *storage.Entry, metadata *storage.NZB) error {
-	// Add files using logical streamable files
-	for _, file := range metadata.Files {
-		tFile := &storage.File{
-			Name:     file.Name,
-			Size:     file.Size,
-			InfoHash: entry.InfoHash,
-			AddedOn:  entry.AddedOn,
-		}
-		entry.Files[file.Name] = tFile
-	}
-	// Mark as complete
-	if placement := entry.GetActiveProvider(); placement != nil {
-		now := time.Now()
-		placement.DownloadedAt = &now
-		placement.Progress = 1.0
-	}
-	entry.Size = metadata.TotalSize
-	entry.Progress = 1.0
-	entry.UpdatedAt = time.Now()
-	_ = m.queue.Update(entry)
-
-	if len(entry.Files) == 0 {
-		return fmt.Errorf("nzb has no files")
-	}
-
-	return nil
-}
-
-// processNewNzb processes a new NZB entry after it has been added to the usenet client.
-func (m *Manager) processNewNzb(
-	parentCtx context.Context,
-	entry *storage.Entry,
-	metadata *storage.NZB,
-	groups map[string]*parser.FileGroup,
-) error {
-	// Create context with timeout for processing
-	ctx, cancel := context.WithTimeout(parentCtx, m.usenetTimeout)
-	defer cancel()
-
-	// Derive the content identifier from the parsed groups. Process is
-	// what fills in metadata.Files, so hashing the NZB here would
-	// always see an empty list and produce no subject at all.
-	var hearsaySubject string
-	if m.hearsay != nil {
-		hearsaySubject = hearsay.NZBSubjectFromGroups(groups)
-	}
-
-	updatedNZB, err := m.usenet.Process(ctx, metadata, groups)
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-			return fmt.Errorf("usenet processing timed out after %s: %w", m.usenetTimeout, err)
-		}
-		if parentCtx.Err() == nil && errors.Is(err, customerror.ErrUsenetSegmentMissing) {
-			m.hearsay.ReportNZB(hearsaySubject, false)
-		}
-		return fmt.Errorf("failed to process nzb: %w", err)
-	}
-	m.hearsay.ReportNZB(hearsaySubject, true)
-
-	metadata = updatedNZB
-	return m.processNZB(entry, metadata)
 }
 
 // HasUsenet returns true if usenet is configured.
@@ -352,21 +199,6 @@ func newNZBQueueEntry(req *ImportRequest, stagedPath string) *storage.Entry {
 
 // errParseBudget marks a parse round that ended only because its time ran out; the job is requeued.
 var errParseBudget = errors.New("NZB parse ran out of time")
-
-// requeueParse retries a job's parse after a backoff that doubles each round.
-func (m *Manager) requeueParse(job *Job, err error) {
-	delay := m.parseRequeueDelay << job.ParseRounds
-	job.ParseRounds++
-	m.logger.Warn().
-		Err(err).
-		Str("name", job.Entry.Name).
-		Str("id", job.ID).
-		Int("round", job.ParseRounds).
-		Int("of", parseRounds).
-		Dur("delay", delay).
-		Msg("NZB parse ran out of time; requeued")
-	m.jobQueue.WaitForSlot(job, nil, delay)
-}
 
 // parseNZB parses an NZB's articles under the usenet budget, with one more
 // budget when only the first ran out and the entry is still queued.

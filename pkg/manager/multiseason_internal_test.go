@@ -103,12 +103,13 @@ func TestSeasonSplitChildrenInheritManual(t *testing.T) {
 func TestDeletingSeasonPackRemovesInFlightSeason(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
-		m, entry, torrent, children := newSeasonPackTest(t, "Show.S01-S02")
+		m, entry, children := newSeasonPackTest(t, "Show.S01-S02")
 		completed := seedCompletedSeason(t, m, entry)
 		if mkdirErr := os.MkdirAll(completed.DownloadPath(""), 0o755); mkdirErr != nil {
 			t.Fatal(mkdirErr)
 		}
-		m.processNewTorrent(entry, torrent)
+		cancelAction := runDownload(t, m, entry)
+		defer cancelAction()
 		synctest.Wait()
 		for _, child := range children {
 			if !m.queue.Contains(child.InfoHash) {
@@ -148,7 +149,7 @@ func checkSeasonAfterPackDelete(t *testing.T, m *Manager, season *storage.Entry,
 func TestDeletingSeasonPackKeepsSharedFolder(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
-		m, entry, torrent, children := newSeasonPackTest(t, "Show.S01.1080p")
+		m, entry, children := newSeasonPackTest(t, "Show.S01.1080p")
 		folder := entry.DownloadPath("")
 		for _, child := range children {
 			if child.DownloadPath("") != folder {
@@ -162,7 +163,8 @@ func TestDeletingSeasonPackKeepsSharedFolder(t *testing.T) {
 		if writeErr := os.WriteFile(kept, []byte("media"), 0o644); writeErr != nil {
 			t.Fatal(writeErr)
 		}
-		m.processNewTorrent(entry, torrent)
+		cancelAction := runDownload(t, m, entry)
+		defer cancelAction()
 		synctest.Wait()
 		if deleteErr := m.queue.Delete(entry.InfoHash, false, nil); deleteErr != nil {
 			t.Fatal(deleteErr)
@@ -181,7 +183,7 @@ func TestDeletingSeasonPackKeepsSharedFolder(t *testing.T) {
 }
 
 // newSeasonPackTest queues a finished two-season pack whose files never appear on the mount.
-func newSeasonPackTest(t *testing.T, name string) (*Manager, *storage.Entry, *types.Torrent, []*storage.Entry) {
+func newSeasonPackTest(t *testing.T, name string) (*Manager, *storage.Entry, []*storage.Entry) {
 	t.Helper()
 	m := newShutdownTestManager(t, t.TempDir())
 	m.mountManager = shutdownMount{stop: func() error { return nil }}
@@ -217,5 +219,17 @@ func newSeasonPackTest(t *testing.T, name string) (*Manager, *storage.Entry, *ty
 	if len(children) != 2 {
 		t.Fatalf("seasons = %d, want 2", len(children))
 	}
-	return m, entry, torrent, children
+	return m, entry, children
+}
+
+// runDownload runs entry's download as an action does, under the cancel a delete of the entry sends.
+func runDownload(t *testing.T, m *Manager, entry *storage.Entry) func() {
+	t.Helper()
+	ctx := runningAction(t, m.queue, entry.InfoHash)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = m.downloader.download(ctx, entry)
+	}()
+	return func() { <-done }
 }

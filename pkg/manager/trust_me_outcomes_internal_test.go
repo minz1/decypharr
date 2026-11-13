@@ -13,7 +13,6 @@ import (
 
 	debrid "github.com/sirrobot01/decypharr/pkg/debrid/common"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
-	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
 // SM12-23: item 62's accepted trust-me outcomes, one test each, named for the outcome.
@@ -30,30 +29,26 @@ func (p *verdictAfterStopProvider) CheckStatus(_ context.Context, t *types.Torre
 	return &types.Torrent{ID: t.ID, Name: t.Name, Status: types.TorrentStatusError}, nil
 }
 
-// (a) A stop that lands after CheckStatus returned a verdict discards the verdict: the entry stays queued as
-// downloading and the provider's torrent is kept (5fbadfdd).
-func TestQueuedStopAfterStatusVerdictKeepsEntryAndTorrent(t *testing.T) {
+// (a) A stop that lands after CheckStatus returned a verdict discards the verdict: the poll reports nothing and
+// the provider's torrent is kept (5fbadfdd).
+func TestPollChildStopAfterStatusVerdictReportsNothing(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
-		fake := &fakeArrRecovery{}
 		ctx, stop := context.WithCancel(t.Context())
 		defer stop()
 		provider := &verdictAfterStopProvider{stop: stop}
-		m, entry := pendingEntryManager(t, fake, &provider.pendingStatusProvider)
+		m, entry := pendingEntryManager(t, &provider.pendingStatusProvider)
 		m.clients.Store("provider", provider)
 
-		m.processQueuedTorrent(ctx, entry)
+		msg := poll(ctx, m, entry)
 		drainPlacements(t, m)
 
-		saved, err := m.queue.GetTorrent(entry.InfoHash)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if saved.State != storage.EntryStateDownloading || saved.LastError != "" {
-			t.Fatalf("state = %q, last error %q; want the entry left downloading", saved.State, saved.LastError)
-		}
-		if len(fake.fails) != 0 || provider.deleted.Load() != 0 {
-			t.Fatalf("FailDownload calls = %v, provider deletes = %d; want none", fake.fails, provider.deleted.Load())
+		if msg.ev != nil || provider.deleted.Load() != 0 {
+			t.Fatalf(
+				"poll result = %+v, provider deletes = %d; want no result and none",
+				msg.ev,
+				provider.deleted.Load(),
+			)
 		}
 	})
 }

@@ -1,7 +1,6 @@
 package manager
 
 import (
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,13 +14,14 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/arr"
+	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 	"github.com/sirrobot01/decypharr/pkg/usenet"
 )
 
 // A failed download must reach the arr now: it only fails a grab it sees in
 // history, and a busy arr may not refresh before the entry is swept.
-func TestFailedJobAsksArrToRefreshDownloads(t *testing.T) {
+func TestFailedGrabAsksArrToRefreshDownloads(t *testing.T) {
 	t.Parallel()
 	refreshed := make(chan string, 4)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -41,13 +41,9 @@ func TestFailedJobAsksArrToRefreshDownloads(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 	m := withTestConfig(t, &Manager{queue: newQueue(store, "", nil, zerolog.Nop()), logger: zerolog.Nop()})
 	m.arr.AddOrUpdate(arr.Arr{Name: "radarr", Host: server.URL, Token: "token", Type: arr.Radarr})
-	m.jobQueue = NewJobQueue(m.work, 1, m.processJob, zerolog.Nop())
 
 	entry := &storage.Entry{InfoHash: "abc", Name: "Movie", Category: "radarr", Protocol: config.ProtocolNZB}
-	if addErr := m.queue.Add(entry); addErr != nil {
-		t.Fatal(addErr)
-	}
-	m.handleJobError(&Job{ID: "abc", Type: JobTypeNZB, Entry: entry}, errors.New("usenet parse failed"))
+	m.failEffects(failedGrab(entry, "usenet parse failed"), grab.FailEntry)
 
 	select {
 	case body := <-refreshed:
@@ -59,8 +55,8 @@ func TestFailedJobAsksArrToRefreshDownloads(t *testing.T) {
 	}
 }
 
-// Every failure path must release a parsed NZB's usenet side, not only processing failures.
-func TestFailEntryReleasesParsedNZB(t *testing.T) {
+// Every failure path must release a parsed NZB's usenet side.
+func TestFailEffectsReleaseParsedNZB(t *testing.T) {
 	t.Parallel()
 	usenetClient := newUnreachableUsenet(t)
 	parsing := &storage.NZB{ID: "nzb-1", Status: usenet.NZBStatusParsing}
@@ -76,7 +72,7 @@ func TestFailEntryReleasesParsedNZB(t *testing.T) {
 	m := withTestConfig(t, &Manager{usenet: usenetClient, queue: queue, logger: zerolog.Nop()})
 	entry := &storage.Entry{InfoHash: "nzb-1", Name: "release", Protocol: config.ProtocolNZB}
 
-	m.failEntry(entry, errors.New("nzb rejected: hearsay claims segments missing"))
+	m.failEffects(failedGrab(entry, "nzb rejected: hearsay claims segments missing"), grab.FailEntry)
 
 	header, getErr := usenetClient.GetNZBHeader("nzb-1")
 	if getErr != nil || header.Status != usenet.NZBStatusFailed {
@@ -84,8 +80,8 @@ func TestFailEntryReleasesParsedNZB(t *testing.T) {
 	}
 }
 
-// Nothing re-reads a failed job's staged NZB, so it goes at the failure instead of lingering through the 24h hold.
-func TestFailEntryDropsStagedNZB(t *testing.T) {
+// Nothing re-reads a failed grab's staged NZB, so it goes at the failure instead of lingering through the 24h hold.
+func TestFailEffectsDropStagedNZB(t *testing.T) {
 	t.Parallel()
 	store, err := storage.NewStorage(filepath.Join(t.TempDir(), "db"), storage.Options{})
 	if err != nil {
@@ -100,12 +96,16 @@ func TestFailEntryDropsStagedNZB(t *testing.T) {
 	m := withTestConfig(t, &Manager{queue: queue, logger: zerolog.Nop()})
 	entry := &storage.Entry{InfoHash: "job", Name: "release", Protocol: config.ProtocolNZB, Magnet: staged}
 
-	m.failEntry(entry, errors.New("usenet parse failed"))
+	m.failEffects(failedGrab(entry, "usenet parse failed"), grab.FailEntry)
 
 	if _, statErr := os.Stat(staged); !os.IsNotExist(statErr) {
 		t.Fatalf("staged NZB still on disk after the failure: %v", statErr)
 	}
-	if entry.Magnet != "" {
-		t.Fatalf("Magnet = %q, want cleared", entry.Magnet)
+}
+
+func failedGrab(entry *storage.Entry, reason string) grab.Grab {
+	return grab.Grab{
+		State: grab.State{Key: entry.InfoHash, Phase: grab.PhaseFailed, Failure: grab.Failure{Reason: reason}},
+		Entry: entry,
 	}
 }

@@ -13,6 +13,7 @@ import (
 	debrid "github.com/sirrobot01/decypharr/pkg/debrid/common"
 	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/hearsay"
+	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/repair"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 	"github.com/sirrobot01/decypharr/pkg/strm"
@@ -66,8 +67,15 @@ func (m *Manager) Queue() *Queue {
 	return m.queue
 }
 
-func (m *Manager) JobQueue() *JobQueue {
-	return m.jobQueue
+// PendingGrabs counts the grabs waiting for an active-download slot.
+func (m *Manager) PendingGrabs() int {
+	n := 0
+	for _, v := range m.grabs.snapshot() {
+		if v.State.Phase == grab.PhaseQueued || v.State.Phase == grab.PhaseThrottled {
+			n++
+		}
+	}
+	return n
 }
 
 func (m *Manager) Clients() *xsync.Map[string, debrid.Client] {

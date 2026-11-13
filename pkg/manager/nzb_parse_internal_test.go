@@ -1,7 +1,6 @@
 package manager
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -12,13 +11,11 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
-	"github.com/sirrobot01/appendstore"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
-	"github.com/sirrobot01/decypharr/internal/kvstore"
-	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/hearsay"
+	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 	"github.com/sirrobot01/decypharr/pkg/usenet/manifest"
 	"github.com/sirrobot01/decypharr/pkg/usenet/parser"
@@ -152,123 +149,6 @@ func TestParseNZBDoesNotRetry(t *testing.T) {
 	}
 }
 
-// The failure line is the one an operator greps for; it must say which NZB failed.
-func TestActiveDownloadFailureLogNamesTheEntry(t *testing.T) {
-	t.Parallel()
-	var logs bytes.Buffer
-	m := newParseRetryManager(t, nil)
-	m = withTestConfig(t, m)
-	m.logger = zerolog.New(&logs).Level(zerolog.InfoLevel)
-	entry, err := m.queue.GetTorrent("nzb-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	m.handleJobError(&Job{ID: "nzb-1", Type: JobTypeNZB, Entry: entry}, errors.New("usenet parse failed"))
-
-	if !strings.Contains(logs.String(), `"name":"Show.S01"`) {
-		t.Fatalf("failure log = %s, want the entry name", logs.String())
-	}
-}
-
-// A delete that lands while the job runs must not come back as a failed record the arr already removed.
-func TestJobErrorForADeletedEntryWritesNothingBack(t *testing.T) {
-	t.Parallel()
-	m := withTestConfig(t, newParseRetryManager(t, nil))
-	entry, err := m.queue.GetTorrent("nzb-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = m.queue.Delete("nzb-1", false, nil); err != nil {
-		t.Fatal(err)
-	}
-
-	m.handleJobError(&Job{ID: "nzb-1", Type: JobTypeNZB, Entry: entry}, errors.New("usenet parse failed"))
-
-	if m.queue.Contains("nzb-1") {
-		t.Fatal("the failure re-created the deleted entry")
-	}
-}
-
-type roundParse = func(ctx context.Context, call int32) (*storage.NZB, error)
-
-// newParseQueueManager queues nzb-1 as a staged NZB on a real job queue; calls gets each parse call's number as it returns.
-func newParseQueueManager(t *testing.T, delay time.Duration, parse roundParse) (*Manager, <-chan int32) {
-	t.Helper()
-	ended := make(chan int32, 16)
-	var n atomic.Int32
-	m := withTestConfig(t, newParseRetryManager(
-		t,
-		func(ctx context.Context, _, _ string, _ []byte, _ string) (*storage.NZB, map[string]*parser.FileGroup, error) {
-			call := n.Add(1)
-			meta, err := parse(ctx, call)
-			select {
-			case ended <- call:
-			default: // a runaway requeue must not block the worker past Close
-			}
-			return meta, nil, err
-		},
-	))
-	m.parseRequeueDelay = delay
-	m.usenet = newUnreachableUsenet(t)
-	staged := filepath.Join(t.TempDir(), "Show.S01.nzb")
-	if err := os.WriteFile(staged, []byte("<nzb/>"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	entry, err := m.queue.GetTorrent("nzb-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	entry.Magnet = staged
-	entry.SavePath = t.TempDir()
-	entry.Category = "sonarr"
-	entry.Status = debridTypes.TorrentStatusQueued
-	if err = m.queue.Update(entry); err != nil {
-		t.Fatal(err)
-	}
-	m.jobQueue = NewJobQueue(m.work, 1, m.processJob, zerolog.Nop())
-	job := NewJob(JobTypeNZB, &ImportRequest{ID: "nzb-1", Name: "Show.S01", Arr: m.arr.GetOrCreate("sonarr")})
-	job.Entry = entry
-	if err = m.jobQueue.Submit(job); err != nil {
-		t.Fatal(err)
-	}
-	return m, ended
-}
-
-func awaitCall(t *testing.T, calls <-chan int32, want int32) {
-	t.Helper()
-	for {
-		select {
-		case got := <-calls:
-			if got == want {
-				return
-			}
-		case <-time.After(2 * time.Second):
-			t.Fatalf("parse call %d never came", want)
-		}
-	}
-}
-
-func noCallWithin(t *testing.T, calls <-chan int32, d time.Duration) {
-	t.Helper()
-	select {
-	case got := <-calls:
-		t.Fatalf("unexpected parse call %d", got)
-	case <-time.After(d):
-	}
-}
-
-func eventually(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for !cond() {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-}
-
 func storedEntry(t *testing.T, m *Manager) *storage.Entry {
 	t.Helper()
 	entry, err := m.queue.GetTorrent("nzb-1")
@@ -278,173 +158,118 @@ func storedEntry(t *testing.T, m *Manager) *storage.Entry {
 	return entry
 }
 
-// A parse that keeps running out of time costs the grab only after three rounds, so a busy broker doesn't blocklist a good release.
-func TestParseRequeuedTwiceThenFailsTheGrab(t *testing.T) {
-	t.Parallel()
-	m, calls := newParseQueueManager(t, 20*time.Millisecond, func(ctx context.Context, _ int32) (*storage.NZB, error) {
-		return nil, waitOutBudget(ctx)
-	})
-
-	awaitCall(t, calls, 4)
-	eventually(t, "the second backoff", func() bool { return waitingJobs(m.jobQueue) == 1 })
-	if entry := storedEntry(t, m); entry.State == storage.EntryStateError {
-		t.Fatalf("entry failed after two rounds: %s", entry.LastError)
+// newParseChildCall stages nzb-1 and returns the call of its submit child on a manager whose parse is parse.
+func newParseChildCall(t *testing.T, parse parseFunc) (*Manager, entryChildCall) {
+	t.Helper()
+	m := withTestConfig(t, newParseRetryManager(t, parse))
+	m.usenet = newUnreachableUsenet(t)
+	staged := filepath.Join(t.TempDir(), "Show.S01.nzb")
+	if err := os.WriteFile(staged, []byte("<nzb/>"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	awaitCall(t, calls, 6)
-	eventually(t, "the grab to fail", func() bool { return storedEntry(t, m).State == storage.EntryStateError })
-	if entry := storedEntry(t, m); !strings.Contains(entry.LastError, "gave up after 3 parse rounds") {
-		t.Fatalf("last error = %q, want the give-up", entry.LastError)
-	}
-	noCallWithin(t, calls, 100*time.Millisecond)
-}
-
-func TestParseSucceedsOnTheSecondRequeue(t *testing.T) {
-	t.Parallel()
-	m, calls := newParseQueueManager(
-		t,
-		20*time.Millisecond,
-		func(ctx context.Context, call int32) (*storage.NZB, error) {
-			if call < 5 {
-				return nil, waitOutBudget(ctx)
-			}
-			return &storage.NZB{Name: "Show.S01"}, nil
-		},
-	)
-
-	awaitCall(t, calls, 5)
-	eventually(t, "the job to finish", func() bool { return !m.jobQueue.Holds("nzb-1") })
 	entry := storedEntry(t, m)
-	if entry.ActiveProvider != usenetProvider || !strings.HasPrefix(entry.LastError, "failed to process nzb") {
-		t.Fatalf(
-			"entry provider %q, last error %q, want a parsed NZB past the parse",
-			entry.ActiveProvider,
-			entry.LastError,
-		)
+	entry.Magnet = staged
+	entry.Category = "sonarr"
+	call := entryChildCall{
+		kind: grab.ChildSubmit,
+		grab: grab.Grab{State: grab.State{Key: "nzb-1", Phase: grab.PhaseSubmitting, NZB: true}, Entry: entry},
 	}
+	return m, call
 }
 
-func TestParseSegmentMissingFailsAtOnce(t *testing.T) {
-	t.Parallel()
-	m, calls := newParseQueueManager(t, 20*time.Millisecond, func(context.Context, int32) (*storage.NZB, error) {
-		return nil, customerror.ErrUsenetSegmentMissing
-	})
-
-	awaitCall(t, calls, 1)
-	eventually(t, "the grab to fail", func() bool { return storedEntry(t, m).State == storage.EntryStateError })
-	noCallWithin(t, calls, 100*time.Millisecond)
-}
-
-func TestDeleteDuringParseBackoffLeavesNothing(t *testing.T) {
-	t.Parallel()
-	m, calls := newParseQueueManager(t, 300*time.Millisecond, func(ctx context.Context, _ int32) (*storage.NZB, error) {
-		return nil, waitOutBudget(ctx)
-	})
-
-	awaitCall(t, calls, 2)
-	eventually(t, "the backoff", func() bool { return waitingJobs(m.jobQueue) == 1 })
-	if err := m.queue.Delete("nzb-1", true, nil); err != nil {
-		t.Fatal(err)
-	}
-	eventually(t, "the job to let go", func() bool { return !m.jobQueue.Holds("nzb-1") })
-	noCallWithin(t, calls, 50*time.Millisecond)
-	if m.queue.Contains("nzb-1") {
-		t.Fatal("the deleted entry came back")
-	}
-}
-
-func TestShutdownDuringParseBackoffKeepsTheEntry(t *testing.T) {
-	t.Parallel()
-	m, calls := newParseQueueManager(t, time.Hour, func(ctx context.Context, _ int32) (*storage.NZB, error) {
-		return nil, waitOutBudget(ctx)
-	})
-
-	awaitCall(t, calls, 2)
-	eventually(t, "the backoff to hold the entry", func() bool {
-		return waitingJobs(m.jobQueue) == 1 && m.jobQueue.Holds("nzb-1")
-	})
-	if err := m.work.Stop(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if m.jobQueue.Holds("nzb-1") { // Stop returned only once every waiter had let go
-		t.Fatal("the backoff still holds the entry after the stop")
-	}
-	if entry := storedEntry(
-		t,
-		m,
-	); entry.Status != debridTypes.TorrentStatusQueued ||
-		entry.State == storage.EntryStateError {
-		t.Fatalf("entry status %q state %q, want it left queued for the next start", entry.Status, entry.State)
-	}
-}
-
-func TestDeleteDuringParseRoundLeavesNothing(t *testing.T) {
-	t.Parallel()
-	var m *Manager
-	ready := make(chan struct{})
-	m, calls := newParseQueueManager(t, 20*time.Millisecond, func(ctx context.Context, _ int32) (*storage.NZB, error) {
-		<-ready
-		if err := m.queue.Delete("nzb-1", false, nil); err != nil {
-			t.Error(err)
-		}
-		return nil, waitOutBudget(ctx)
-	})
-	close(ready)
-
-	awaitCall(t, calls, 1)
-	eventually(t, "the job to let go", func() bool { return !m.jobQueue.Holds("nzb-1") })
-	noCallWithin(t, calls, 50*time.Millisecond)
-	if m.queue.Contains("nzb-1") {
-		t.Fatal("the failure re-created the deleted entry")
-	}
-}
-
-// Only a missing record means the arr deleted the entry; a record that fails to read still gets the job's failure.
-func TestJobErrorForAnUnreadableEntryStillFailsIt(t *testing.T) {
-	t.Parallel()
-	dir := filepath.Join(t.TempDir(), "db")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	raw, err := kvstore.Open(filepath.Join(dir, "queue.db"), appendstore.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = raw.Put("nzb-1", []byte{0xff}, nil); err != nil {
-		t.Fatal(err)
-	}
-	if err = raw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	store, err := storage.NewStorage(dir, storage.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-	m := withTestConfig(t, &Manager{queue: newQueue(store, "", nil, zerolog.Nop()), logger: zerolog.Nop()})
-	entry := &storage.Entry{InfoHash: "nzb-1", Name: "Show.S01", Protocol: config.ProtocolNZB}
-
-	m.handleJobError(&Job{ID: "nzb-1", Type: JobTypeNZB, Entry: entry}, errors.New("usenet parse failed"))
-
-	if saved, getErr := m.queue.GetTorrent("nzb-1"); getErr != nil || saved.State != storage.EntryStateError {
-		t.Fatalf("entry = %+v, %v: the job failure was dropped", saved, getErr)
-	}
-}
-
-// Hearsay's verdict that the segments are gone is final: the entry fails at once instead of parsing again.
-func TestHearsayIncompleteNZBFailsAtOnce(t *testing.T) {
-	t.Parallel()
-	groups := map[string]*parser.FileGroup{"a": {
+func parsedGroups() map[string]*parser.FileGroup {
+	return map[string]*parser.FileGroup{"a": {
 		BaseName: "a",
 		Files:    []manifest.File{{Segments: []manifest.Segment{{Number: 1, MessageID: "a@example"}}}},
 	}}
+}
+
+func assertParseFailed(t *testing.T, msg entryMsg, reason string) {
+	t.Helper()
+	if msg.ev == nil || msg.ev.Kind != grab.EvParseResult || msg.ev.Outcome != grab.OutcomePermanent ||
+		msg.ev.Fail != grab.FailEntry || !strings.Contains(msg.ev.Reason, reason) {
+		t.Fatalf("parse result = %+v, want a permanent failure mentioning %q", msg.ev, reason)
+	}
+}
+
+func TestParseChildThrottlesAParseThatRanOutOfTime(t *testing.T) {
+	t.Parallel()
+	m, call := newParseChildCall(
+		t,
+		func(ctx context.Context, _, _ string, _ []byte, _ string) (*storage.NZB, map[string]*parser.FileGroup, error) {
+			return nil, nil, waitOutBudget(ctx)
+		},
+	)
+
+	msg := m.parseChild(t.Context(), call)
+
+	if msg.ev == nil || msg.ev.Kind != grab.EvParseResult || msg.ev.Outcome != grab.OutcomeThrottled {
+		t.Fatalf("parse result = %+v, want a throttled outcome", msg.ev)
+	}
+}
+
+func TestParseChildFailsAtOnceOnAMissingSegment(t *testing.T) {
+	t.Parallel()
 	var calls atomic.Int32
-	m := withTestConfig(t, newParseRetryManager(
+	m, call := newParseChildCall(
+		t,
+		func(context.Context, string, string, []byte, string) (*storage.NZB, map[string]*parser.FileGroup, error) {
+			calls.Add(1)
+			return nil, nil, customerror.ErrUsenetSegmentMissing
+		},
+	)
+
+	assertParseFailed(t, m.parseChild(t.Context(), call), "usenet parse failed")
+	if calls.Load() != 1 {
+		t.Fatalf("parsed %d times, want 1", calls.Load())
+	}
+}
+
+func TestParseChildReportsNothingOnceStopped(t *testing.T) {
+	t.Parallel()
+	m, call := newParseChildCall(
+		t,
+		func(context.Context, string, string, []byte, string) (*storage.NZB, map[string]*parser.FileGroup, error) {
+			return &storage.NZB{ID: "nzb-1", Name: "Show.S01"}, parsedGroups(), nil
+		},
+	)
+	m.usenetTimeout = time.Minute
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	if msg := m.parseChild(ctx, call); msg.ev != nil {
+		t.Fatalf("parse result = %+v, want none so the grab is looked up", msg.ev)
+	}
+	if _, err := os.Stat(call.grab.Entry.Magnet); err != nil {
+		t.Fatalf("staged NZB lost by the interrupted parse: %v", err)
+	}
+}
+
+func TestParseChildFailsAProcessRunThatOutlivesItsBudget(t *testing.T) {
+	t.Parallel()
+	m, call := newParseChildCall(
+		t,
+		func(context.Context, string, string, []byte, string) (*storage.NZB, map[string]*parser.FileGroup, error) {
+			return &storage.NZB{ID: "nzb-1", Name: "Show.S01"}, parsedGroups(), nil
+		},
+	)
+	m.usenetTimeout = time.Nanosecond
+
+	assertParseFailed(t, m.parseChild(t.Context(), call), "failed to process nzb")
+}
+
+// Hearsay's verdict that the segments are gone is final: the grab fails at once instead of parsing again.
+func TestParseChildFailsOnHearsayIncompleteVerdict(t *testing.T) {
+	t.Parallel()
+	groups := parsedGroups()
+	var calls atomic.Int32
+	m, call := newParseChildCall(
 		t,
 		func(context.Context, string, string, []byte, string) (*storage.NZB, map[string]*parser.FileGroup, error) {
 			calls.Add(1)
 			return &storage.NZB{Name: "Show.S01"}, groups, nil
 		},
-	))
+	)
 	cfg := &config.Config{}
 	cfg.WithDir(t.TempDir())
 	cfg.Hearsay.AdviceMode = "active"
@@ -456,32 +281,9 @@ func TestHearsayIncompleteNZBFailsAtOnce(t *testing.T) {
 	t.Cleanup(service.Close)
 	service.ReportNZB(hearsay.NZBSubjectFromGroups(groups), false)
 	m.hearsay = service
-	m.usenet = newUnreachableUsenet(t)
-	m.parseRequeueDelay = time.Hour
-	m.jobQueue = NewJobQueue(m.work, 1, m.processJob, zerolog.Nop())
-	staged := filepath.Join(t.TempDir(), "Show.S01.nzb")
-	if err = os.WriteFile(staged, []byte("<nzb/>"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	entry := storedEntry(t, m)
-	entry.Magnet = staged
-	if err = m.queue.Update(entry); err != nil {
-		t.Fatal(err)
-	}
-	job := NewJob(JobTypeNZB, &ImportRequest{ID: "nzb-1", Name: "Show.S01", Arr: m.arr.GetOrCreate("sonarr")})
-	job.Entry = entry
 
-	m.processJob(t.Context(), job)
-
-	saved := storedEntry(t, m)
-	if saved.State != storage.EntryStateError || !strings.Contains(saved.LastError, "hearsay") {
-		t.Fatalf("entry state %q, last error %q, want it failed on hearsay's verdict", saved.State, saved.LastError)
-	}
-	if calls.Load() != 1 || waitingJobs(m.jobQueue) != 0 || m.jobQueue.Holds("nzb-1") {
-		t.Fatalf(
-			"parsed %d times, %d waiting: a hearsay-incomplete NZB was requeued",
-			calls.Load(),
-			waitingJobs(m.jobQueue),
-		)
+	assertParseFailed(t, m.parseChild(t.Context(), call), "hearsay")
+	if calls.Load() != 1 {
+		t.Fatalf("parsed %d times, want 1", calls.Load())
 	}
 }

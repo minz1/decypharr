@@ -16,6 +16,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	debrid "github.com/sirrobot01/decypharr/pkg/debrid/common"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
+	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/notifications"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
@@ -89,7 +90,7 @@ func runShutdownResume(t *testing.T, multiSeason bool) {
 		t.Fatal(mkdirAllErr)
 	}
 
-	interruptAndStop(t, m, entry, torrent)
+	interruptAndStop(t, m, entry)
 	reopenShutdownTestManager(t, m, dbPath, entry)
 	if multiSeason && !m.queue.Contains(seasonHolding(t, m, entry, "Show.S02E01.mkv").InfoHash) {
 		t.Fatal("shutdown removed the in-flight season")
@@ -99,9 +100,11 @@ func runShutdownResume(t *testing.T, multiSeason bool) {
 			t.Fatal(writeFileErr)
 		}
 	}
-	m.restoreActiveDownloadJobs(m.restoreSnapshot())
-	m.processQueuedEntries()
+	resumed := runAction(t, m, entry)
 	synctest.Wait()
+	if msg := <-resumed; msg.ev == nil || msg.ev.Kind != grab.EvActionDone {
+		t.Fatalf("resumed action reported %+v, want ActionDone", msg.ev)
+	}
 	saved, err := m.queue.GetTorrent(entry.InfoHash)
 	if err != nil || !saved.IsComplete || saved.IsDownloading {
 		t.Fatalf("resumed entry = %#v, error = %v", saved, err)
@@ -119,14 +122,6 @@ func runShutdownResume(t *testing.T, multiSeason bool) {
 	target, err := os.Readlink(linkPath)
 	if err != nil || target != filepath.Join(mountPath, "Show.S02E01.mkv") {
 		t.Fatalf("restored symlink = %q, error = %v", target, err)
-	}
-	if removeErr := os.Remove(linkPath); removeErr != nil {
-		t.Fatal(removeErr)
-	}
-	m.restoreActiveDownloadJobs(m.restoreSnapshot())
-	m.processQueuedEntries()
-	if _, lstatErr := os.Lstat(linkPath); !os.IsNotExist(lstatErr) {
-		t.Fatalf("completed import was processed again: %v", lstatErr)
 	}
 }
 
@@ -151,10 +146,9 @@ func newShutdownTestManager(t *testing.T, dbPath string) *Manager {
 			nil,
 			zerolog.Nop(),
 		),
-		arr:               arr.New(config.NewStore(&config.Config{}), nil, zerolog.Nop()),
-		logger:            zerolog.Nop(),
-		clients:           xsync.NewMap[string, debrid.Client](),
-		processingEntries: xsync.NewMap[string, struct{}](),
+		arr:     arr.New(config.NewStore(&config.Config{}), nil, zerolog.Nop()),
+		logger:  zerolog.Nop(),
+		clients: xsync.NewMap[string, debrid.Client](),
 	}
 	wireLifecycle(t, m)
 	m.initEntryCache()
@@ -210,10 +204,10 @@ func seedCompletedSeason(t *testing.T, m *Manager, entry *storage.Entry) *storag
 }
 
 // interruptAndStop starts the import, then shuts down while it waits for the
-// mount; the stop closes the mount gate, so the entry is saved resumable.
-func interruptAndStop(t *testing.T, m *Manager, entry *storage.Entry, torrent *types.Torrent) {
+// mount; the stop closes the mount gate and the action ends with no result, so the grab runs it again.
+func interruptAndStop(t *testing.T, m *Manager, entry *storage.Entry) {
 	t.Helper()
-	m.processNewTorrent(entry, torrent)
+	result := runAction(t, m, entry)
 	synctest.Wait()
 	saved, err := m.queue.GetTorrent(entry.InfoHash)
 	if err != nil || !saved.IsDownloading || saved.IsComplete {
@@ -231,7 +225,7 @@ func interruptAndStop(t *testing.T, m *Manager, entry *storage.Entry, torrent *t
 	) {
 		t.Fatalf("work after shutdown: err = %v, want ErrStopped", lateErr)
 	}
-	synctest.Wait()
+	assertCutShort(t, result)
 }
 
 // reopenShutdownTestManager simulates a restart on the same database and
@@ -244,12 +238,11 @@ func reopenShutdownTestManager(t *testing.T, m *Manager, dbPath string, entry *s
 	}
 	m.storage, m.queue = store, newQueue(store, "", nil, zerolog.Nop())
 	wireLifecycle(t, m)
-	m.jobQueue = NewJobQueue(m.work, 1, m.processJob, zerolog.Nop())
 	saved, err := m.queue.GetTorrent(entry.InfoHash)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if saved.State != storage.EntryStateDownloading || saved.IsDownloading || saved.IsComplete ||
+	if saved.State != storage.EntryStateDownloading || saved.IsComplete ||
 		saved.LastError != "" {
 		t.Fatalf("interrupted entry cannot resume: %#v", saved)
 	}

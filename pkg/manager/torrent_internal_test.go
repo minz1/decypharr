@@ -5,20 +5,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
-	"time"
 
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
-	"github.com/sirrobot01/decypharr/internal/utils"
-	"github.com/sirrobot01/decypharr/pkg/arr"
 	debrid "github.com/sirrobot01/decypharr/pkg/debrid/common"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/storage"
@@ -78,62 +74,6 @@ func TestRefreshTorrentIncompleteReturnsStoredEntry(t *testing.T) {
 	}
 }
 
-type countingStatusProvider struct {
-	debrid.Client
-
-	checks atomic.Int64
-}
-
-func (c *countingStatusProvider) CheckStatus(_ context.Context, torrent *types.Torrent) (*types.Torrent, error) {
-	c.checks.Add(1)
-	return torrent, nil
-}
-
-// A resumed job must not drive an entry the queue scheduler is already
-// processing, nor release the scheduler's in-flight claim.
-func TestResumeJobSkipsEntryAlreadyInFlight(t *testing.T) {
-	t.Parallel()
-	store, err := storage.NewStorage(t.TempDir(), storage.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-	client := &countingStatusProvider{}
-	m := withTestConfig(t, &Manager{
-		queue: newQueue(
-			store,
-			"",
-			nil,
-			zerolog.Nop(),
-		),
-		clients:           xsync.NewMap[string, debrid.Client](),
-		logger:            zerolog.Nop(),
-		processingEntries: xsync.NewMap[string, struct{}](),
-	})
-	m.clients.Store("provider", client)
-	entry := &storage.Entry{
-		InfoHash: "0123456789012345678901234567890123456789", Name: "release",
-		Protocol: config.ProtocolTorrent, State: storage.EntryStateDownloading,
-		Status: types.TorrentStatusDownloading, ActiveProvider: "provider",
-		Providers: map[string]*storage.ProviderEntry{"provider": {Provider: "provider", ID: "id"}},
-	}
-	if addErr := m.queue.Add(entry); addErr != nil {
-		t.Fatal(addErr)
-	}
-	m.processingEntries.Store(entry.InfoHash, struct{}{})
-
-	job := &Job{ID: entry.InfoHash, Type: JobTypeTorrent, Entry: entry, ResumeExisting: true}
-	if jobErr := m.processTorrentJob(t.Context(), job); jobErr != nil {
-		t.Fatal(jobErr)
-	}
-	if got := client.checks.Load(); got != 0 {
-		t.Fatalf("provider status checks = %d, want 0", got)
-	}
-	if _, ok := m.processingEntries.Load(entry.InfoHash); !ok {
-		t.Fatal("resumed job released the scheduler's in-flight claim")
-	}
-}
-
 // failingStatusProvider fails every status check with err and records
 // deletions.
 type failingStatusProvider struct {
@@ -156,9 +96,9 @@ func (f *failingStatusProvider) DeleteTorrent(context.Context, string) error {
 	return nil
 }
 
-// A transient status-check failure must not fail the import or delete the
-// provider's torrent; a definitive one still does.
-func TestQueuedTorrentSurvivesTransientStatusErrors(t *testing.T) {
+// A transient status-check failure must not fail the grab or delete the provider's torrent; a definitive one still
+// does.
+func TestPollChildSurvivesTransientStatusErrors(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name      string
@@ -173,233 +113,23 @@ func TestQueuedTorrentSurvivesTransientStatusErrors(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			store, err := storage.NewStorage(t.TempDir(), storage.Options{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = store.Close() })
 			provider := &failingStatusProvider{err: tc.err}
-			m := withTestConfig(t, &Manager{
-				queue: newQueue(store, "", nil, zerolog.Nop()), clients: xsync.NewMap[string, debrid.Client](),
-				logger: zerolog.Nop(), processingEntries: xsync.NewMap[string, struct{}](),
-			})
+			m, _ := newDroppedTestManager(t, nil)
+			m.store = testConfigStore(t, nil)
 			m.clients.Store("provider", provider)
 			entry := &storage.Entry{
 				InfoHash: "0123456789012345678901234567890123456789", Name: "release",
 				Protocol: config.ProtocolTorrent, ActiveProvider: "provider", State: storage.EntryStateDownloading,
 				Providers: map[string]*storage.ProviderEntry{"provider": {Provider: "provider", ID: "id"}},
 			}
-			if addErr := m.queue.Add(entry); addErr != nil {
-				t.Fatal(addErr)
-			}
-			m.processQueuedTorrent(t.Context(), entry)
-			saved, err := m.queue.GetTorrent(entry.InfoHash)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if failed := saved.State == storage.EntryStateError; failed != tc.wantError {
-				t.Fatalf("state = %q, want failed=%v", saved.State, tc.wantError)
+			msg := poll(t.Context(), m, entry)
+			if failed := msg.ev != nil && msg.ev.Failed; failed != tc.wantError {
+				t.Fatalf("poll result = %+v, want failed=%v", msg.ev, tc.wantError)
 			}
 			if !tc.wantError && provider.deleted.Load() != 0 {
 				t.Fatal("a transient failure deleted the provider's torrent")
 			}
 		})
-	}
-}
-
-type removedDuringPollProvider struct {
-	debrid.Client
-
-	onCheck func()
-	err     error
-}
-
-func (p *removedDuringPollProvider) CheckStatus(_ context.Context, torrent *types.Torrent) (*types.Torrent, error) {
-	p.onCheck()
-	torrent.Status = types.TorrentStatusDownloading
-	return torrent, p.err
-}
-
-func (*removedDuringPollProvider) DeleteTorrent(context.Context, string) error { return nil }
-
-// An entry the arr removes while its status check is in flight stays removed: no error record, no failed grab.
-func TestQueuedTorrentRemovedDuringStatusCheckStaysRemoved(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		name string
-		err  error
-	}{
-		{"provider torrent already deleted", customerror.ErrTorrentNotFound},
-		{"still downloading", nil},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			store, err := storage.NewStorage(t.TempDir(), storage.Options{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = store.Close() })
-			m := withTestConfig(t, &Manager{
-				queue: newQueue(store, "", nil, zerolog.Nop()), clients: xsync.NewMap[string, debrid.Client](),
-				logger: zerolog.Nop(), processingEntries: xsync.NewMap[string, struct{}](),
-			})
-			entry := &storage.Entry{
-				InfoHash: "0123456789012345678901234567890123456789", Name: "release", Manual: true,
-				Protocol: config.ProtocolTorrent, ActiveProvider: "provider", State: storage.EntryStateDownloading,
-				Providers: map[string]*storage.ProviderEntry{"provider": {Provider: "provider", ID: "id"}},
-			}
-			m.clients.Store("provider", &removedDuringPollProvider{err: tc.err, onCheck: func() {
-				if deleteErr := m.queue.Delete(entry.InfoHash, false, nil); deleteErr != nil {
-					t.Error(deleteErr)
-				}
-			}})
-			if addErr := m.queue.Add(entry); addErr != nil {
-				t.Fatal(addErr)
-			}
-			m.processQueuedTorrent(t.Context(), entry)
-			if m.queue.Contains(entry.InfoHash) {
-				t.Fatal("the removed entry was written back")
-			}
-		})
-	}
-}
-
-// deletedDuringPollProvider answers a status check only once its torrent is deleted, then holds the delete until the poll returns.
-type deletedDuringPollProvider struct {
-	debrid.Client
-
-	checking, gone, pollDone chan struct{}
-	failed                   func() bool
-	pollFailed               atomic.Bool
-}
-
-func (p *deletedDuringPollProvider) CheckStatus(context.Context, *types.Torrent) (*types.Torrent, error) {
-	close(p.checking)
-	select {
-	case <-p.gone:
-		return nil, customerror.ErrTorrentNotFound
-	case <-time.After(5 * time.Second):
-		return nil, errors.New("the provider torrent was never deleted")
-	}
-}
-
-func (p *deletedDuringPollProvider) DeleteTorrent(context.Context, string) error {
-	close(p.gone)
-	<-p.pollDone
-	p.pollFailed.Store(p.failed())
-	return nil
-}
-
-// A removed download's provider torrent goes only after its queue record, so a poll seeing it gone does not fail the release.
-func TestRemoveQueuedDuringStatusCheckFailsNothing(t *testing.T) {
-	t.Parallel()
-	store, err := storage.NewStorage(t.TempDir(), storage.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-	m := withTestConfig(t, &Manager{
-		storage: store, queue: newQueue(store, "", nil, zerolog.Nop()), clients: xsync.NewMap[string, debrid.Client](),
-		logger: zerolog.Nop(), processingEntries: xsync.NewMap[string, struct{}](),
-	})
-	entry := &storage.Entry{
-		InfoHash: "0123456789012345678901234567890123456789", Name: "release", Manual: true,
-		Protocol: config.ProtocolTorrent, ActiveProvider: "provider", State: storage.EntryStateDownloading,
-		Status: types.TorrentStatusDownloading,
-		Providers: map[string]*storage.ProviderEntry{"provider": {
-			Provider: "provider", ID: "id", Status: types.TorrentStatusDownloading,
-		}},
-	}
-	provider := &deletedDuringPollProvider{
-		checking: make(chan struct{}), gone: make(chan struct{}), pollDone: make(chan struct{}),
-		failed: func() bool {
-			saved, getErr := m.queue.GetTorrent(entry.InfoHash)
-			return getErr == nil && saved.State == storage.EntryStateError
-		},
-	}
-	m.clients.Store("provider", provider)
-	if addErr := m.queue.Add(entry); addErr != nil {
-		t.Fatal(addErr)
-	}
-	go func() {
-		defer close(provider.pollDone)
-		m.processQueuedTorrent(t.Context(), entry)
-	}()
-	wait := func(ch chan struct{}, what string) {
-		select {
-		case <-ch:
-		case <-time.After(10 * time.Second):
-			t.Fatal(what)
-		}
-	}
-	wait(provider.checking, "the poll never checked the provider")
-	if removeErr := m.RemoveQueued(entry.InfoHash, false); removeErr != nil {
-		t.Fatal(removeErr)
-	}
-	wait(provider.pollDone, "the poll never returned")
-	wait(provider.gone, "the removal never deleted the provider torrent")
-	if provider.pollFailed.Load() {
-		t.Fatal("the poll failed the release whose provider torrent the removal deleted")
-	}
-	if m.queue.Contains(entry.InfoHash) {
-		t.Fatal("the removed entry was written back")
-	}
-}
-
-type removedDuringSubmitProvider struct {
-	*fakePruneProvider
-
-	submitted func()
-}
-
-func (*removedDuringSubmitProvider) Config() config.Debrid {
-	return config.Debrid{Name: "provider", Provider: "provider"}
-}
-func (*removedDuringSubmitProvider) Logger() zerolog.Logger { return zerolog.Nop() }
-func (p *removedDuringSubmitProvider) SubmitMagnet(_ context.Context, t *types.Torrent) (*types.Torrent, error) {
-	p.submitted()
-	return &types.Torrent{
-		ID: "provider-id", Debrid: "provider", InfoHash: t.InfoHash, Name: t.Name,
-		Status: types.TorrentStatusDownloading, Files: map[string]types.File{},
-	}, nil
-}
-func (*removedDuringSubmitProvider) CheckStatus(_ context.Context, t *types.Torrent) (*types.Torrent, error) {
-	return t, nil
-}
-
-// An entry the arr removes while its submit is in flight is not re-created, and the provider torrent goes with it.
-func TestTorrentRemovedDuringSubmitLeavesNothing(t *testing.T) {
-	t.Parallel()
-	m, _ := newDroppedTestManager(t, nil)
-	hash := "0123456789012345678901234567890123456789"
-	fake := &removedDuringSubmitProvider{fakePruneProvider: &fakePruneProvider{}, submitted: func() {
-		if err := m.RemoveQueued(hash, false); err != nil {
-			t.Error(err)
-		}
-	}}
-	m.clients.Store("provider", fake)
-	entry := &storage.Entry{
-		InfoHash: hash, Name: "release", Category: "sonarr", Protocol: config.ProtocolTorrent,
-		State: storage.EntryStateDownloading, Status: types.TorrentStatusQueued,
-		Files: map[string]*storage.File{}, Providers: map[string]*storage.ProviderEntry{},
-	}
-	if err := m.queue.Add(entry); err != nil {
-		t.Fatal(err)
-	}
-	req := &ImportRequest{Magnet: &utils.Magnet{InfoHash: hash, Name: "release"}, Arr: arr.Arr{Name: "sonarr"}}
-
-	if err := m.processTorrentJob(
-		t.Context(),
-		&Job{ID: hash, Type: JobTypeTorrent, Entry: entry, Request: req},
-	); err != nil {
-		t.Fatal(err)
-	}
-
-	if m.queue.Contains(hash) {
-		t.Fatal("an entry removed during its submit was written back")
-	}
-	if got := fake.deletedIDs(); !slices.Equal(got, []string{"provider-id"}) {
-		t.Fatalf("deleted provider torrents = %v, want the one just added", got)
 	}
 }
 

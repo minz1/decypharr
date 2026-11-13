@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/sirrobot01/decypharr/internal/customerror"
+	"github.com/sirrobot01/decypharr/internal/utils"
 	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/hearsay"
 	"github.com/sirrobot01/decypharr/pkg/manager/grab"
@@ -353,4 +355,34 @@ func (m *Manager) cleanupChild(ctx context.Context, call entryChildCall) entryMs
 		return entryMsg{}
 	}
 	return eventMsg(grab.Event{Kind: grab.EvCleanupDone})
+}
+
+// requestFromEntry rebuilds the add request of a queued torrent that was never placed at a provider.
+func (m *Manager) requestFromEntry(entry *storage.Entry) *ImportRequest {
+	magnet, err := utils.GetMagnetInfo(entry.Magnet, m.store.Get().AlwaysRmTrackerUrls)
+	if err != nil {
+		magnet = utils.ConstructMagnet(entry.InfoHash, entry.Name)
+	}
+	downloadUncached := entry.DownloadUncached
+	req := NewTorrentRequest(
+		entry.ActiveProvider,
+		downloadFolderForEntry(m.store.Get().DownloadFolder, entry),
+		magnet,
+		m.arr.GetOrCreate(entry.Category),
+		entry.Action,
+		&downloadUncached,
+		entry.CallbackURL,
+		ImportTypeAPI,
+		entry.SkipMultiSeason,
+	)
+	req.ID = entry.InfoHash
+	req.Manual = entry.Manual
+	return req
+}
+
+func downloadFolderForEntry(fallback string, entry *storage.Entry) string {
+	if entry != nil && entry.SavePath != "" {
+		return filepath.Dir(entry.SavePath)
+	}
+	return fallback
 }
