@@ -85,6 +85,14 @@ func (m *Manager) lookupFound(call entryChildCall, t *debridTypes.Torrent) entry
 		Str("debrid", t.Debrid).
 		Str("torrent_id", t.ID).
 		Msg("Submit outcome found at the provider")
+	if attempt := call.grab.State.SubmitAttempt.Provider; attempt != "" && !strings.EqualFold(attempt, t.Debrid) {
+		m.logger.Warn().
+			Str("name", name).
+			Str("debrid", t.Debrid).
+			Str("torrent_id", t.ID).
+			Str("submitted_to", attempt).
+			Msg("Adopting a torrent found at a provider the grab did not submit to")
+	}
 	found := &debridTypes.Torrent{
 		ID:       t.ID,
 		Debrid:   t.Debrid,
