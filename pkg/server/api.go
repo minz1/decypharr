@@ -659,15 +659,21 @@ func (s *Server) handleRepairStatus(w http.ResponseWriter, _ *http.Request) {
 	utils.JSONResponse(w, svc.Status(), http.StatusOK)
 }
 
+type repairRunRequest struct {
+	IgnoreLastChecked bool   `json:"ignore_last_checked,omitempty"`
+	Force             bool   `json:"force,omitempty"`
+	AutoRepair        *bool  `json:"auto_repair,omitempty"`
+	UnrestrictLink    bool   `json:"unrestrict_link,omitempty"`
+	VerifyContent     *bool  `json:"verify_content,omitempty"`
+	Protocol          string `json:"protocol,omitempty"`
+}
+
+type repairRunResponse struct {
+	RunID string `json:"run_id"`
+}
+
 func (s *Server) handleRunRepair(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		IgnoreLastChecked bool   `json:"ignore_last_checked,omitempty"`
-		Force             bool   `json:"force,omitempty"`
-		AutoRepair        *bool  `json:"auto_repair,omitempty"`
-		UnrestrictLink    bool   `json:"unrestrict_link,omitempty"`
-		VerifyContent     *bool  `json:"verify_content,omitempty"`
-		Protocol          string `json:"protocol,omitempty"`
-	}
+	var req repairRunRequest
 	if r.Body != nil && r.ContentLength != 0 {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 			http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
@@ -712,7 +718,7 @@ func (s *Server) handleRunRepair(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	utils.JSONResponse(w, map[string]string{"run_id": id}, http.StatusOK)
+	utils.JSONResponse(w, repairRunResponse{RunID: id}, http.StatusOK)
 }
 
 // queryBool parses a lenient boolean query value; nil when absent or
