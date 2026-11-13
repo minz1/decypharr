@@ -32,6 +32,7 @@ type document struct {
 	Failure       *docFailure `json:"failure,omitempty"`
 	Cleanup       *docCleanup `json:"cleanup,omitempty"`
 	SubmitAttempt *docSubmit  `json:"submit_attempt,omitempty"`
+	ProviderPhase string      `json:"provider_phase,omitempty"`
 	UnknownRaw    string      `json:"unknown_raw,omitempty"`
 	StalledSince  time.Time   `json:"stalled_since,omitzero"`
 }
@@ -203,6 +204,9 @@ func toDocument(st State) document {
 		NoSubmit: st.NoSubmit, UnknownRaw: st.UnknownRaw,
 		StalledSince: st.StalledSince,
 	}
+	if st.ProviderPhase != debridTypes.PhaseNone {
+		d.ProviderPhase = st.ProviderPhase.String()
+	}
 	if st.Failure != (Failure{}) {
 		d.Failure = &docFailure{Reason: st.Failure.Reason, Cause: st.Failure.Cause, At: st.Failure.At,
 			Count: st.Failure.Count}
@@ -231,7 +235,7 @@ func fromDocument(e *storage.Entry) (State, error) {
 	st := State{
 		Key: strings.ToLower(e.InfoHash), Phase: phase, PhaseSince: d.PhaseSince, PackKey: d.PackKey,
 		NZB: e.IsNZB(), NoSubmit: d.NoSubmit, UnknownRaw: d.UnknownRaw,
-		StalledSince: d.StalledSince,
+		StalledSince: d.StalledSince, ProviderPhase: debridTypes.PhaseNamed(d.ProviderPhase),
 	}
 	if f := d.Failure; f != nil {
 		st.Failure = Failure{Reason: f.Reason, Cause: f.Cause, At: f.At, Count: f.Count}

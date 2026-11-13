@@ -52,6 +52,7 @@ func stateOf(kind recordKind, p Phase) (State, bool) {
 		st.Cleanup = Cleanup{DeleteFiles: true}
 	case PhaseProvider:
 		st.UnknownRaw, st.StalledSince = "magnet_conversion", since()
+		st.ProviderPhase = debridTypes.PhaseDownloading
 	case PhaseAbsent, PhaseQueued, PhaseThrottled, PhaseAwaitingLinks, PhaseActing, PhaseComplete:
 	}
 	return st, p != PhaseAbsent && st.Validate() == nil
@@ -262,5 +263,36 @@ func TestADocumentWithoutStalledSinceLoadsAndOmitsItWhenZero(t *testing.T) {
 	}
 	if strings.Contains(string(e.Grab), "stalled_since") {
 		t.Fatalf("document %s carries stalled_since for a grab that is not stalled", e.Grab)
+	}
+}
+
+func TestGrabDocumentKeepsTheProviderPhase(t *testing.T) {
+	t.Parallel()
+	st, _ := stateOf(kindTorrent, PhaseProvider)
+	e := record(kindTorrent)
+	if err := Encode(Grab{State: st, Entry: e}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(e.Grab), `"provider_phase":"downloading"`) {
+		t.Fatalf("document %s has no provider phase", e.Grab)
+	}
+	for name, doc := range map[string]string{
+		"bogus":   strings.Replace(string(e.Grab), `"provider_phase":"downloading"`, `"provider_phase":"bogus"`, 1),
+		"missing": strings.Replace(string(e.Grab), `"provider_phase":"downloading",`, ``, 1),
+	} {
+		e.Grab = []byte(doc)
+		got, err := Load(e, nil, true)
+		if err != nil || got.State.ProviderPhase != debridTypes.PhaseNone {
+			t.Errorf("%s: %v %v, want none", name, got.State.ProviderPhase, err)
+		}
+	}
+	none, _ := stateOf(kindTorrent, PhaseProvider)
+	none.ProviderPhase = debridTypes.PhaseNone
+	e = record(kindTorrent)
+	if err := Encode(Grab{State: none, Entry: e}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(e.Grab), "provider_phase") {
+		t.Errorf("a none phase is written: %s", e.Grab)
 	}
 }

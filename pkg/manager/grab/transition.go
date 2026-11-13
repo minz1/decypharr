@@ -2,9 +2,11 @@ package grab
 
 import (
 	"cmp"
+	"fmt"
 	"time"
 
 	"github.com/sirrobot01/decypharr/internal/state"
+	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 )
 
 // reasonBusy is why a Submit is refused while the grab is being deleted.
@@ -164,10 +166,11 @@ func resume(st State, ev Event) (State, []Effect, error) {
 // observe handles a provider observation. Only Provider and AwaitingLinks
 // take one: in Acting a second Downloaded must never start a second action.
 func observe(st State, ev Event) (State, []Effect, error) {
+	observed := observedPhase(ev)
 	switch st.Phase {
 	case PhaseProvider:
 	case PhaseAwaitingLinks:
-		if ev.Failed {
+		if observed == debridTypes.PhaseFailed {
 			return fail(st, ev, ev.Fail, "failed at the provider")
 		}
 		return refuse(st, ev, notAccepted) // the links child decides when it is ready
@@ -175,22 +178,56 @@ func observe(st State, ev Event) (State, []Effect, error) {
 		PhaseDeleting:
 		return refuse(st, ev, "contradicts "+st.Phase.String())
 	}
-	if ev.Failed {
+	switch observed {
+	case debridTypes.PhaseFailed:
 		return fail(st, ev, ev.Fail, "failed at the provider")
+	case debridTypes.PhaseUnknown:
+		next := st
+		next.UnknownRaw, next.StalledSince = ev.Raw, cmp.Or(st.StalledSince, ev.At)
+		return persistIfChanged(st, next)
 	}
-	if ev.Downloaded {
+	if st.ProviderPhase != debridTypes.PhaseNone && observed != st.ProviderPhase &&
+		!debridTypes.LegalEdge(st.ProviderPhase, observed) {
+		return refuse(st, ev, fmt.Sprintf("provider phase %v -> %v", st.ProviderPhase, observed))
+	}
+	if observed == debridTypes.PhaseDownloaded {
+		ev.Downloaded = true
 		return placed(st, ev)
 	}
-	stalled := time.Time{}
-	if ev.Stalled {
-		stalled = cmp.Or(st.StalledSince, ev.At)
+	next := st
+	next.ProviderPhase, next.UnknownRaw = observed, ""
+	switch {
+	case observed != debridTypes.PhaseStalled:
+		next.StalledSince = time.Time{}
+	case st.UnknownRaw != "":
+		next.StalledSince = ev.At
+	default:
+		next.StalledSince = cmp.Or(st.StalledSince, ev.At)
 	}
-	if ev.Raw == st.UnknownRaw && stalled.Equal(st.StalledSince) {
+	return persistIfChanged(st, next)
+}
+
+func observedPhase(ev Event) debridTypes.Phase {
+	switch {
+	case ev.Failed:
+		return debridTypes.PhaseFailed
+	case ev.Observed != debridTypes.PhaseNone:
+		return ev.Observed
+	case ev.Downloaded:
+		return debridTypes.PhaseDownloaded
+	case ev.Stalled:
+		return debridTypes.PhaseStalled
+	case ev.Raw != "":
+		return debridTypes.PhaseUnknown
+	}
+	return debridTypes.PhaseDownloading
+}
+
+func persistIfChanged(st, next State) (State, []Effect, error) {
+	if next == st {
 		return st, nil, nil
 	}
-	// A known status clears UnknownRaw, and a poll that is not stalled clears StalledSince.
-	st.UnknownRaw, st.StalledSince = ev.Raw, stalled
-	return st, []Effect{{Kind: FxPersist}}, nil
+	return next, []Effect{{Kind: FxPersist}}, nil
 }
 
 func queued(st State, ev Event) (State, []Effect, error) {
@@ -312,6 +349,7 @@ func enter(st State, to Phase, ev Event, fx ...Effect) (State, []Effect, error) 
 		return refuse(st, ev, "no move to "+to.String())
 	}
 	st.Phase, st.PhaseSince, st.StalledSince = to, ev.At, time.Time{}
+	st.ProviderPhase, st.UnknownRaw = debridTypes.PhaseNone, ""
 	return st, append([]Effect{{Kind: FxPersist}}, fx...), nil
 }
 

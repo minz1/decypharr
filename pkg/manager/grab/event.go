@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"slices"
 	"time"
+
+	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 )
 
 // EventKind is what happened to a grab.
@@ -109,6 +111,7 @@ type Event struct {
 	Downloaded, AllLinked, Failed bool
 	// Stalled is a poll that saw the placement not downloading, with no seeders and no progress.
 	Stalled bool
+	Observed debridTypes.Phase
 	// Raw is an unrecognised provider status, shown as is.
 	Raw    string
 	Reason string

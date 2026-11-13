@@ -5,6 +5,8 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 )
 
 func at() time.Time { return time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC) }
@@ -145,7 +147,7 @@ func TestTransitionRows(t *testing.T) {
 		{"provider poll timer", in(PhaseProvider), ev(EvPollTimer), PhaseProvider, nil, false},
 		{
 			"provider observed downloading",
-			in(PhaseProvider),
+			inProvider(debridTypes.PhaseDownloading),
 			observed(false, false, false, ""),
 			PhaseProvider,
 			nil,

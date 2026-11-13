@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"slices"
 	"time"
+
+	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 )
 
 // Failure says why and when a grab failed.
@@ -46,7 +48,8 @@ type State struct {
 	UnknownRaw string
 	// StalledSince is when the first of the polls in a row that saw the placement stalled did; zero when the last
 	// poll did not.
-	StalledSince time.Time
+	StalledSince  time.Time
+	ProviderPhase debridTypes.Phase
 }
 
 // season reports whether the grab is a season child of a pack.
@@ -59,6 +62,9 @@ func (s State) Validate() error {
 	}
 	if s.season() && submitsToProvider(s.Phase) {
 		return fmt.Errorf("season child %q in %v", s.Key, s.Phase)
+	}
+	if s.ProviderPhase != debridTypes.PhaseNone && s.Phase != PhaseProvider {
+		return fmt.Errorf("provider phase %v in %v", s.ProviderPhase, s.Phase)
 	}
 	if s.Phase == PhaseFailed {
 		if s.Failure.Reason == "" {
