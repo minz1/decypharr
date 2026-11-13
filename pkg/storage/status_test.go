@@ -39,6 +39,9 @@ func TestQueuedStatusesLoad(t *testing.T) {
 	if got := e.Providers["pm"].Status; got != debridTypes.TorrentStatusRemoteQueued {
 		t.Fatalf("placement status %q, want the provider's queue", got)
 	}
+	if !e.Providers["pm"].HoldsSlot() {
+		t.Fatal("a provider-queued placement must hold its slot")
+	}
 	back := storage.EntryToProto(e)
 	if back.GetStatus() != "queued" || back.GetProviders()["pm"].GetStatus() != "queued" {
 		t.Fatalf("re-encoded statuses %q and %q, want queued for both", back.GetStatus(),
