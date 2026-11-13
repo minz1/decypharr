@@ -441,3 +441,31 @@ func TestADueDeadlineWhoseSaveFailsRetriesOnTheSaveBackoff(t *testing.T) {
 		h.mustBe("a", grab.PhaseProvider)
 	})
 }
+
+func TestAPendingWaitCountsFromWhenItWasFirstSeen(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	synctest.Test(t, func(t *testing.T) {
+		h := deadlineHarness(t, store, 0)
+		e := testEntry("a")
+		e.AddedOn = time.Now().Add(-7 * time.Hour)
+		e.Providers = map[string]*storage.ProviderEntry{
+			"realdebrid": {Provider: "realdebrid", ID: "t1", AddedAt: e.AddedOn},
+		}
+		seed(t, store, e, grab.State{Phase: grab.PhaseProvider})
+		h.mustAsk("a", grab.Event{Kind: grab.EvRecover})
+		run := h.next(grab.ChildPoll)
+		run.reply <- entryMsg{seen: &pollSeen{pending: grab.PendingProvider}}
+		h.mustBe("a", grab.PhaseProvider)
+
+		time.Sleep(time.Hour)
+		h.mustAsk("a", grab.Event{Kind: grab.EvPollTimer})
+		h.next(grab.ChildPoll).reply <- entryMsg{seen: &pollSeen{pending: grab.PendingProvider}}
+		h.mustBe("a", grab.PhaseProvider)
+
+		time.Sleep(5*time.Hour - time.Minute)
+		h.mustBe("a", grab.PhaseProvider)
+		time.Sleep(time.Minute)
+		h.mustBe("a", grab.PhaseFailed)
+	})
+}

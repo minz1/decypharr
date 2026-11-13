@@ -31,6 +31,9 @@ func (a *entryActor) deadlineView(key string, st *entryState) grab.DeadlineView 
 			v.DownloadedAt = *p.DownloadedAt
 		}
 	}
+	if polled.pending == grab.PendingProvider && !v.PendingBase.IsZero() {
+		v.PendingBase = maxTime(v.PendingBase, polled.since)
+	}
 	return v
 }
 

@@ -156,6 +156,12 @@ func (x *grabIndex) setPolled(key string, p pollSeen) {
 		delete(x.polled, key)
 		return
 	}
+	if old := x.polled[key]; old.pending == p.pending {
+		p.since = old.since
+	}
+	if p.since.IsZero() {
+		p.since = time.Now()
+	}
 	if x.polled == nil {
 		x.polled = make(map[string]pollSeen)
 	}

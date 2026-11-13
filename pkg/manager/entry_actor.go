@@ -60,9 +60,11 @@ type entryMsg struct {
 }
 
 // pollSeen is what a poll of the placement saw: what it waits on at the provider, and whether the release is dead.
+// since is set by the grab index, not by the poll: when this process first saw the wait.
 type pollSeen struct {
 	pending grab.Pending
 	dead    bool
+	since   time.Time
 }
 
 func eventMsg(ev grab.Event) entryMsg { return entryMsg{ev: &ev} }
