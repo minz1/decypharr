@@ -289,8 +289,10 @@ func TestPruneExclusions(t *testing.T) {
 	h.reference(t, keep)
 	h.addEntry(t, "man1", func(e *storage.Entry) { e.Manual = true })
 	h.addEntry(t, "que1", nil)
-	h.addEntry(t, "inc1", func(e *storage.Entry) { e.Status = debridTypes.TorrentStatusQueued })
-	h.addEntry(t, "dow1", func(e *storage.Entry) { e.Status = debridTypes.TorrentStatusDownloading })
+	h.addEntry(t, "inc1", func(e *storage.Entry) { e.Providers["torbox"].Status = debridTypes.TorrentStatusQueued })
+	h.addEntry(t, "dow1", func(e *storage.Entry) {
+		e.Providers["torbox"].Status = debridTypes.TorrentStatusDownloading
+	})
 	h.addEntry(t, "err1", func(e *storage.Entry) { e.Status = debridTypes.TorrentStatusError })
 	h.addEntry(t, "syn1", func(e *storage.Entry) { e.IsComplete, e.State = true, "" })
 	h.addEntry(t, "rea1", nil)
@@ -726,7 +728,9 @@ func TestPruneIgnoresMigrationStatusRecord(t *testing.T) {
 func TestPruneExcludedEntriesAreNotStamped(t *testing.T) {
 	t.Parallel()
 	h := scanGapHarness(t)
-	inc := h.addEntry(t, "inc1", func(e *storage.Entry) { e.Status = debridTypes.TorrentStatusDownloading })
+	inc := h.addEntry(t, "inc1", func(e *storage.Entry) {
+		e.Providers["torbox"].Status = debridTypes.TorrentStatusDownloading
+	})
 
 	h.run(t)
 	h.age(t, 8*24*time.Hour)
@@ -740,7 +744,7 @@ func TestPruneExcludedEntriesAreNotStamped(t *testing.T) {
 		t.Fatal("excluded entry stamped")
 	}
 
-	inc.Status = debridTypes.TorrentStatusDownloaded
+	inc.Providers["torbox"].Status = debridTypes.TorrentStatusDownloaded
 	if err := h.m.storage.AddOrUpdate(inc); err != nil {
 		t.Fatal(err)
 	}
@@ -957,5 +961,55 @@ func TestRunPruneNowUsesManagerContext(t *testing.T) {
 	}
 	if _, err := h.m.RunPruneNow(PruneOptions{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+// A synced entry's Status is written once and never refreshed; the sync keeps its placements current.
+func TestPruneExclusionReadsThePlacementNotTheStaleStatus(t *testing.T) {
+	t.Parallel()
+	h := newPruneHarness(t, config.PruneModeDelete)
+	h.reference(t, h.addEntry(t, "aaaa", nil))
+	h.addEntry(t, "stal", func(e *storage.Entry) {
+		e.Status = debridTypes.TorrentStatusDownloading
+		e.Providers["torbox"].Status = debridTypes.TorrentStatusDownloaded
+	})
+	h.addEntry(t, "live", func(e *storage.Entry) {
+		e.Status = debridTypes.TorrentStatusDownloaded
+		e.Providers["torbox"].Status = debridTypes.TorrentStatusDownloading
+	})
+	h.addEntry(t, "wait", func(e *storage.Entry) {
+		e.Status = debridTypes.TorrentStatusDownloaded
+		e.Providers["torbox"].Status = debridTypes.TorrentStatusQueued
+	})
+	// The active placement was dropped and the left one is still downloading: SwitchToNextProvider keeps no active.
+	h.addEntry(t, "dang", func(e *storage.Entry) {
+		e.Status = debridTypes.TorrentStatusDownloading
+		e.Providers["torbox"].Status = debridTypes.TorrentStatusDownloading
+		e.ActiveProvider = "realdebrid"
+	})
+	h.addEntry(t, "nopl", func(e *storage.Entry) {
+		e.Status = debridTypes.TorrentStatusQueued
+		e.ActiveProvider = ""
+	})
+	h.addEntry(t, "two", func(e *storage.Entry) {
+		e.Status = debridTypes.TorrentStatusDownloaded
+		e.Providers["torbox"].Status = debridTypes.TorrentStatusDownloaded
+		second := *e.Providers["torbox"]
+		second.Provider, second.Status = "realdebrid", debridTypes.TorrentStatusDownloading
+		e.Providers["realdebrid"] = &second
+	})
+	h.run(t)
+	h.age(t, pruneGrace)
+	r := h.run(t)
+	for hash, want := range map[string]string{
+		"stal": "", "live": pruneExcludedIncomplete, "wait": pruneExcludedIncomplete,
+		"dang": pruneExcludedIncomplete, "nopl": pruneExcludedIncomplete, "two": pruneExcludedIncomplete,
+	} {
+		if got := candidate(t, r, hash).Excluded; got != want {
+			t.Errorf("%s excluded=%q want %q", hash, got, want)
+		}
+	}
+	if !candidate(t, r, "stal").eligible(h.now) {
+		t.Fatal("a finished placement with a stale Status is never pruned")
 	}
 }

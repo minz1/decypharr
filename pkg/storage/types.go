@@ -94,6 +94,10 @@ type Entry struct {
 	LastError     string     `msgpack:"last_error,omitempty"      json:"last_error,omitempty"`      // Last error message
 	ErrorCount    int        `msgpack:"error_count,omitempty"     json:"error_count,omitempty"`     // Number of errors
 	LastErrorTime *time.Time `msgpack:"last_error_time,omitempty" json:"last_error_time,omitempty"` // Last error time
+
+	// Grab is the grab's state document, opaque here. Only the queue store reads and writes it (field 1000 of
+	// the queue record); library records never carry it.
+	Grab []byte `msgpack:"-" json:"-"`
 }
 
 func (e *Entry) IsTorrent() bool {

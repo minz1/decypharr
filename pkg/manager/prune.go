@@ -343,7 +343,7 @@ func (m *Manager) pruneExclusion(e *storage.Entry, reacquiring map[string]struct
 		return pruneExcludedManual
 	case m.pruneQueued(e.InfoHash):
 		return pruneExcludedQueued
-	case e.Status == debridTypes.TorrentStatusQueued || e.Status == debridTypes.TorrentStatusDownloading:
+	case placementIncomplete(e):
 		return pruneExcludedIncomplete
 	}
 	if _, ok := reacquiring[e.InfoHash]; ok {
@@ -353,6 +353,21 @@ func (m *Manager) pruneExclusion(e *storage.Entry, reacquiring map[string]struct
 		return pruneExcludedBound
 	}
 	return ""
+}
+
+// placementIncomplete reports whether any placement of e is still queued or downloading. The sync keeps
+// placements current; Entry.Status is written once and goes stale, so it is read only when e has no active
+// placement to say otherwise.
+func placementIncomplete(e *storage.Entry) bool {
+	incomplete := func(s debridTypes.TorrentStatus) bool {
+		return s == debridTypes.TorrentStatusQueued || s == debridTypes.TorrentStatusDownloading
+	}
+	for _, p := range e.Providers {
+		if incomplete(p.Status) {
+			return true
+		}
+	}
+	return e.GetActiveProvider() == nil && incomplete(e.Status)
 }
 
 func (m *Manager) pruneBound(e *storage.Entry) bool {
