@@ -103,8 +103,15 @@ type host[K comparable, M any] interface {
 	Send(key K, msg M) error
 	After(key K, d time.Duration, msg M) TimerID
 	CancelTimer(id TimerID)
-	spawn(key K, name string, fn func(ctx context.Context) M, onPanic func(v any) M) (ChildID, error)
+	spawn(
+		key K,
+		name string,
+		fn func(ctx context.Context) M,
+		onPanic func(v any) M,
+		exit func(err error) M,
+	) (ChildID, error)
 	cancelChild(id ChildID)
+	cancelAwait(id ChildID)
 }
 
 // activate builds the key's state. A panic is logged and counted and reported
@@ -669,10 +676,19 @@ type ChildID uint64
 
 // childRec is the runner's record of a running child task. The runner's mutex guards it.
 type childRec[K comparable] struct {
-	key       K
-	cancel    context.CancelFunc // set when the task starts
-	cancelled bool
+	key         K
+	cancel      context.CancelFunc // set when the task starts
+	cancelled   bool               // CancelChild: released from the key, result dropped
+	awaitCancel bool               // CancelAwait: context ended, still counted, exit still delivered
 }
+
+// ErrChildCancelled is the exit a tracked child reports when [Effects.CancelAwait] reached it before it ran.
+var ErrChildCancelled = errors.New("keyed: child cancelled before it ran")
+
+// ChildPanicError is the exit a tracked child reports when its function panicked.
+type ChildPanicError struct{ Value any }
+
+func (e *ChildPanicError) Error() string { return fmt.Sprintf("keyed: child panicked: %v", e.Value) }
 
 // Go runs fn as a child task of the key's actor, on a context derived from the
 // runner's, and sends the message it returns back to the same key. The message
@@ -686,7 +702,44 @@ type childRec[K comparable] struct {
 // once the runner stops.
 func (fx *Effects[K, M]) Go(name string, fn func(ctx context.Context) M, onPanic func(v any) M) (ChildID, error) {
 	fx.live()
-	return fx.r.spawn(fx.key, name, fn, onPanic)
+	return fx.r.spawn(fx.key, name, fn, onPanic, nil)
+}
+
+// GoTracked runs fn as a child task like [Effects.Go], but its exit always
+// reaches the actor: fn's message when fn returns (also after
+// [Effects.CancelAwait]), exit(ErrChildCancelled) when it was cancelled before
+// fn ran, and exit(*ChildPanicError) when fn panicked. A panic in exit is logged
+// and nothing is delivered. Use it for a child whose outcome the actor must
+// learn even after giving up on it.
+func (fx *Effects[K, M]) GoTracked(
+	name string,
+	fn func(ctx context.Context) M,
+	exit func(err error) M,
+) (ChildID, error) {
+	fx.live()
+	onPanic := func(v any) M { return exit(&ChildPanicError{Value: v}) }
+	return fx.r.spawn(fx.key, name, fn, onPanic, exit)
+}
+
+// CancelAwait ends a child task's context but, unlike [Effects.CancelChild],
+// keeps it counted against the key and still delivers its exit message.
+// Cancelling a finished or unknown child changes nothing.
+func (fx *Effects[K, M]) CancelAwait(id ChildID) {
+	fx.live()
+	fx.r.cancelAwait(id)
+}
+
+func (r *Runner[K, M, S]) cancelAwait(id ChildID) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rec, ok := r.childRecs[id]
+	if !ok || rec.cancelled {
+		return
+	}
+	rec.awaitCancel = true
+	if rec.cancel != nil {
+		rec.cancel()
+	}
 }
 
 // CancelChild cancels a child task: its context ends, it no longer keeps the
@@ -707,6 +760,7 @@ func (r *Runner[K, M, S]) spawn(
 	name string,
 	fn func(ctx context.Context) M,
 	onPanic func(v any) M,
+	exit func(err error) M, // tracked children only; nil for Go
 ) (ChildID, error) {
 	r.mu.Lock()
 	if !r.accepting() {
@@ -727,12 +781,16 @@ func (r *Runner[K, M, S]) spawn(
 		defer cancel()
 		r.mu.Lock()
 		rec.cancel = cancel
-		cancelled := rec.cancelled
+		cancelled, awaitCancelled := rec.cancelled, rec.awaitCancel
 		r.mu.Unlock()
-		if cancelled {
+		if cancelled || (awaitCancelled && exit == nil) {
 			return nil // cancelled before it started: fn never runs
 		}
-		msg, ok := r.runChild(withHandlerMarker(cctx), key, name, fn, onPanic)
+		run := fn
+		if awaitCancelled {
+			run, onPanic = func(context.Context) M { return exit(ErrChildCancelled) }, nil
+		}
+		msg, ok := r.runChild(withHandlerMarker(cctx), key, name, run, onPanic)
 		if !ok {
 			return nil
 		}
