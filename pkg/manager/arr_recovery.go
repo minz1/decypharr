@@ -346,6 +346,7 @@ func (m *Manager) giveUpOnEntry(entry *storage.Entry) {
 	w, err := m.setBad(entry.InfoHash, true, nil)
 	if err != nil {
 		m.logger.Warn().Err(err).Str("infohash", entry.InfoHash).Msg("Failed to persist the bad flag")
+		return
 	}
 	if w.gone {
 		return

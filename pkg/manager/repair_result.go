@@ -118,11 +118,11 @@ func (m *Manager) applyRepairResult(ctx context.Context, key string, r RepairRes
 		return out, mergeErr
 	})
 	switch {
-	case gone:
-		err = errRepairSuperseded
 	case errors.Is(err, errActivateFailed), errors.Is(err, errPlacementChanged):
 	case err != nil:
 		return err
+	case gone:
+		err = errRepairSuperseded
 	case merged == nil:
 		return nil
 	}
