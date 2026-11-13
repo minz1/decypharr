@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"cmp"
 	"maps"
 
 	"github.com/sirrobot01/decypharr/internal/config"
@@ -18,8 +17,14 @@ func HandleExistingEntryMerge(existing, incoming *Entry) *Entry {
 		return incoming
 	}
 	incoming.Files = mergeFiles(existing.Files, incoming.Files)
-	incoming.ActiveProvider = cmp.Or(incoming.ActiveProvider, existing.ActiveProvider)
 	incoming.Providers = mergeProviders(existing.Providers, incoming.Providers)
+	if incoming.ActiveProvider == "" {
+		active := existing.ActiveProvider
+		if _, ok := incoming.Providers[active]; !ok && active != "" {
+			active = BestPlacement(incoming.Providers, nil)
+		}
+		incoming.SetActive(active, true)
+	}
 	incoming.Tags = mergeTags(existing.Tags, incoming.Tags)
 
 	return incoming

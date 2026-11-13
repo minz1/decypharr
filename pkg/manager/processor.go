@@ -157,7 +157,7 @@ func refreshFinishedPlacement(entry *storage.Entry, old *storage.ProviderEntry, 
 
 func applyDebridTorrentToEntry(torrent *storage.Entry, debridTorrent *debridTypes.Torrent) {
 	_ = torrent.AddTorrentProvider(debridTorrent)
-	torrent.ActiveProvider = debridTorrent.Debrid
+	torrent.SetActive(debridTorrent.Debrid, true)
 	torrent.Bytes = debridTorrent.GetSize()
 	torrent.Size = debridTorrent.GetSize()
 	torrent.Name = debridTorrent.Name

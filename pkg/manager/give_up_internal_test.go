@@ -17,6 +17,7 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/arr"
+	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
@@ -129,7 +130,10 @@ func TestGiveUpSkipsWhenPlacementServes(t *testing.T) {
 func TestGiveUpWithoutProviderClientLogsNoWarn(t *testing.T) {
 	t.Parallel()
 	m, entry := newGiveUpTestManager(t, &queueArr{}, &fakeArrRecovery{})
-	entry.ActiveProvider = "gone"
+	entry.Providers = map[string]*storage.ProviderEntry{
+		"gone": {Provider: "gone", Status: debridTypes.TorrentStatusDownloaded},
+	}
+	entry.SetActive("gone", true)
 	saveBad(t, m, entry, false)
 	var logs bytes.Buffer
 	m.logger = zerolog.New(&logs).Level(zerolog.DebugLevel)

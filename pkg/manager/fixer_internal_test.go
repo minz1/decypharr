@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/rs/zerolog"
@@ -77,18 +78,20 @@ func checkFixWithRemovedProvider(t *testing.T, existing bool) {
 	m.clients.Store("remaining", client)
 	fixer := NewFixer(m)
 	fixer.providerOrder = []string{"remaining"}
+	stamp := time.Now()
 	entry := &storage.Entry{
 		InfoHash: "0123456789012345678901234567890123456789", Name: "release",
-		Protocol: config.ProtocolTorrent, ActiveProvider: "removed",
+		Protocol: config.ProtocolTorrent, ActiveProvider: "removed", IsComplete: true,
 		Providers: map[string]*storage.ProviderEntry{
-			"removed": {Provider: "removed", ID: "old", Status: types.TorrentStatusDownloaded},
+			"removed": {Provider: "removed", ID: "old", Status: types.TorrentStatusDownloaded, DownloadedAt: &stamp},
 		},
 	}
 	if existing {
 		entry.Providers["remaining"] = &storage.ProviderEntry{
-			Provider: "remaining",
-			ID:       "new",
-			Status:   types.TorrentStatusDownloaded,
+			Provider:     "remaining",
+			ID:           "new",
+			Status:       types.TorrentStatusDownloaded,
+			DownloadedAt: &stamp,
 		}
 	}
 	result, err := fixer.FixTorrent(t.Context(), entry, false)
@@ -112,6 +115,9 @@ func checkFixWithRemovedProvider(t *testing.T, existing bool) {
 	loaded, err := store.Get(entry.InfoHash)
 	if err != nil || loaded.ActiveProvider != "remaining" {
 		t.Fatalf("saved entry = %#v, error = %v", loaded, err)
+	}
+	if loaded.Providers["remaining"].DownloadedAt == nil {
+		t.Fatal("adopted placement has no DownloadedAt")
 	}
 	if loaded.Providers["removed"].ID != "old" {
 		t.Fatal("source placement changed")
@@ -149,6 +155,9 @@ func TestRunRepairLogsEveryAttempt(t *testing.T) {
 	entry := &storage.Entry{
 		InfoHash: "0123456789012345678901234567890123456789", Name: "release",
 		Protocol: config.ProtocolTorrent, ActiveProvider: "removed",
+		Providers: map[string]*storage.ProviderEntry{
+			"removed": {Provider: "removed", ID: "old", Status: types.TorrentStatusDownloaded},
+		},
 	}
 	if result, fixErr := fixer.FixTorrent(t.Context(), entry, false); fixErr == nil || result.Success {
 		t.Fatalf("repair = %#v, error = %v; want a failure", result, fixErr)

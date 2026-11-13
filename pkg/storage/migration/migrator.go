@@ -384,12 +384,9 @@ func mergeCachedPlacement(managed *storage.Entry, other *storage.CachedTorrent) 
 	}
 }
 
-// activateBestPlacement finds and activates the first placement that is completed.
+// activateBestPlacement activates the best completed placement.
 func (m *Migrator) activateBestPlacement(torrent *storage.Entry) {
-	for debrid, placement := range torrent.Providers {
-		if placement.Status == debridTypes.TorrentStatusDownloaded {
-			torrent.ActiveProvider = debrid
-			return
-		}
+	if best := storage.BestPlacement(torrent.Providers, nil); best != "" {
+		torrent.SetActive(best, false)
 	}
 }

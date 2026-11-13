@@ -224,7 +224,6 @@ func ProtoToEntry(pb *EntryProto) *Entry {
 		Magnet:           pb.GetMagnet(),
 		IsDownloading:    pb.GetIsDownloading(),
 		SizeDownloaded:   pb.GetSizeDownloaded(),
-		ActiveProvider:   pb.GetActiveProvider(),
 		Providers:        make(map[string]*ProviderEntry),
 		Files:            make(map[string]*File),
 		State:            TorrentState(pb.GetState()),
@@ -276,6 +275,7 @@ func ProtoToEntry(pb *EntryProto) *Entry {
 		e.Providers[name] = protoToProviderEntry(pe)
 	}
 	dropStrayUsenetPlacements(e.Providers)
+	e.SetActive(pb.GetActiveProvider(), true)
 	for name, f := range pb.GetFiles() {
 		e.Files[name] = protoToFile(f)
 	}

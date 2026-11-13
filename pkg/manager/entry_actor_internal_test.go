@@ -207,7 +207,15 @@ func seed(t *testing.T, store *storage.Storage, e *storage.Entry, st grab.State)
 	}
 	switch st.Phase {
 	case grab.PhaseProvider, grab.PhaseAwaitingLinks, grab.PhaseActing, grab.PhaseComplete:
-		e.ActiveProvider = "realdebrid"
+		if e.Providers == nil {
+			e.Providers = map[string]*storage.ProviderEntry{}
+		}
+		if _, ok := e.Providers["realdebrid"]; !ok {
+			e.Providers["realdebrid"] = &storage.ProviderEntry{
+				Provider: "realdebrid", Status: debridTypes.TorrentStatusDownloaded,
+			}
+		}
+		e.SetActive("realdebrid", true)
 	case grab.PhaseAbsent, grab.PhaseQueued, grab.PhaseThrottled, grab.PhaseSubmitting, grab.PhaseFailed,
 		grab.PhaseDeleting:
 	}

@@ -303,7 +303,7 @@ func (m *Manager) confirmDrops(ctx context.Context, provider string, client debr
 // providers is updated; one with no provider left is deleted after its Arr
 // recovery. It reports false when that recovery failed and the entry was kept.
 func (m *Manager) applyDrop(provider string, entry *storage.Entry, changes *torrentChanges) bool {
-	entry.RemoveProvider(provider, nil)
+	entry.RemoveProvider(provider, m.debridOrder(), nil)
 	if len(entry.Providers) > 0 {
 		changes.update = append(changes.update, entry)
 		return true
@@ -527,6 +527,8 @@ func (m *Manager) processSyncTorrent(ctx context.Context, t *types.Torrent) (*st
 		_ = mt.ActivatePlacement(t.Debrid)
 	}
 
+	healDanglingActive(mt, m.debridOrder())
+
 	// confirm everything is complete
 	if validateErr := mt.Validate(); validateErr != nil {
 		m.logger.Warn().
@@ -550,7 +552,7 @@ func newSyncedEntry(t *types.Torrent, addedOn time.Time) *storage.Entry {
 	if size == 0 {
 		size = t.Bytes
 	}
-	return &storage.Entry{
+	entry := &storage.Entry{
 		Protocol:         config.ProtocolTorrent,
 		InfoHash:         t.InfoHash,
 		Name:             t.Name,
@@ -558,7 +560,6 @@ func newSyncedEntry(t *types.Torrent, addedOn time.Time) *storage.Entry {
 		Size:             size,
 		Bytes:            size,
 		Magnet:           magnet.Link,
-		ActiveProvider:   t.Debrid,
 		Providers:        make(map[string]*storage.ProviderEntry),
 		Files:            make(map[string]*storage.File),
 		Status:           t.Status,
@@ -571,6 +572,8 @@ func newSyncedEntry(t *types.Torrent, addedOn time.Time) *storage.Entry {
 		CreatedAt:        addedOn,
 		UpdatedAt:        time.Now(),
 	}
+	entry.SetActive(t.Debrid, true)
+	return entry
 }
 
 // refreshTorrent refreshes a single torrent from its active debrid.
@@ -648,4 +651,10 @@ func isComplete(files map[string]types.File) bool {
 		}
 	}
 	return true
+}
+
+func healDanglingActive(entry *storage.Entry, order []string) {
+	if entry.ActiveProvider != "" && entry.GetActiveProvider() == nil {
+		entry.SwitchToNextProvider(order)
+	}
 }

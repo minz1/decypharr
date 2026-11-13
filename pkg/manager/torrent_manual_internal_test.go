@@ -3,6 +3,7 @@ package manager
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
@@ -47,5 +48,28 @@ func TestSyncStoresProgressAsFraction(t *testing.T) {
 	}
 	if placement := entry.Providers["rd"]; entry.Progress != 0.4 || placement.Progress != 0.4 {
 		t.Fatalf("entry progress %v, placement progress %v, want 0.4", entry.Progress, placement.Progress)
+	}
+}
+
+func TestSyncHealsALegacyDanglingActive(t *testing.T) {
+	t.Parallel()
+	m := newShutdownTestManager(t, filepath.Join(t.TempDir(), "db"))
+	stamp := time.Now()
+	entry := &storage.Entry{
+		InfoHash: "0123456789012345678901234567890123456789", Name: "pack", ActiveProvider: "gone", IsComplete: true,
+		Providers: map[string]*storage.ProviderEntry{
+			"a": {Provider: "a", ID: "1", Status: types.TorrentStatusDownloaded, DownloadedAt: &stamp},
+			"b": {Provider: "b", ID: "2", Status: types.TorrentStatusDownloaded, DownloadedAt: &stamp},
+		},
+	}
+	healDanglingActive(entry, []string{"b", "a"})
+	if entry.ActiveProvider != "b" {
+		t.Fatalf("active = %q, want b", entry.ActiveProvider)
+	}
+	if err := m.storage.AddOrUpdate(entry); err != nil {
+		t.Fatal(err)
+	}
+	if n := m.storage.InvariantViolations(); n != 0 {
+		t.Fatalf("violations = %d", n)
 	}
 }

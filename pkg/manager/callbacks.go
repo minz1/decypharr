@@ -72,7 +72,7 @@ func (m *Manager) startPlacementRun(entry, provider string, run func(ctx context
 
 // dropSourcePlacement takes the placements an entry has on provider away from it and deletes them there.
 func (m *Manager) dropSourcePlacement(ctx context.Context, entry *storage.Entry, provider string) {
-	entry.RemoveProvider(provider, func(placement *storage.ProviderEntry) error {
+	entry.RemoveProvider(provider, m.debridOrder(), func(placement *storage.ProviderEntry) error {
 		return m.RemoveFromProvider(ctx, placement, entry.InfoHash)
 	})
 }

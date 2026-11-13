@@ -986,7 +986,7 @@ func TestPruneExclusionReadsThePlacementNotTheStaleStatus(t *testing.T) {
 	h.addEntry(t, "dang", func(e *storage.Entry) {
 		e.Status = debridTypes.TorrentStatusDownloading
 		e.Providers["torbox"].Status = debridTypes.TorrentStatusDownloading
-		e.ActiveProvider = "realdebrid"
+		e.ClearActive()
 	})
 	h.addEntry(t, "nopl", func(e *storage.Entry) {
 		e.Status = debridTypes.TorrentStatusQueued

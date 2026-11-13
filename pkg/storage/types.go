@@ -5,6 +5,7 @@ import (
 	"math"
 	"path"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"
@@ -108,7 +109,27 @@ func (e *Entry) IsNZB() bool {
 	return e.Protocol == config.ProtocolNZB
 }
 
+func (e *Entry) Invariants() error {
+	if e.ActiveProvider != "" {
+		if _, ok := e.Providers[e.ActiveProvider]; !ok {
+			return fmt.Errorf("active provider %q is not a placement", e.ActiveProvider)
+		}
+	}
+	if !e.IsComplete {
+		return nil
+	}
+	for key, p := range e.Providers {
+		if p != nil && p.Status == debridTypes.TorrentStatusDownloaded && p.DownloadedAt == nil {
+			return fmt.Errorf("downloaded placement %q has no DownloadedAt", key)
+		}
+	}
+	return nil
+}
+
 func (e *Entry) Validate() error {
+	if err := e.Invariants(); err != nil {
+		return err
+	}
 	activeProvider := e.GetActiveProvider()
 	if activeProvider == nil {
 		return fmt.Errorf("no active providerEntry")
@@ -331,6 +352,13 @@ func (e *Entry) AddTorrentProvider(debridTorrent *debridTypes.Torrent) *Provider
 		Status:   debridTorrent.Status,
 		Files:    make(map[string]*ProviderFile),
 	}
+	if old := e.Providers[debridTorrent.Debrid]; old != nil && old.ID == debridTorrent.ID {
+		providerEntry.AddedAt, providerEntry.DownloadedAt = old.AddedAt, old.DownloadedAt
+	}
+	if providerEntry.Status == debridTypes.TorrentStatusDownloaded && providerEntry.DownloadedAt == nil {
+		now := time.Now()
+		providerEntry.DownloadedAt = &now
+	}
 
 	for _, f := range debridTorrent.GetFiles() {
 		providerEntry.Files[f.Name] = &ProviderFile{
@@ -366,14 +394,66 @@ func (e *Entry) ActivatePlacement(debridName string) error {
 		return ErrPlacementNotCompleted
 	}
 
-	e.ActiveProvider = debridName
+	if !e.SetActive(debridName, false) {
+		return ErrPlacementNotFound
+	}
 	e.UpdatedAt = time.Now()
 
 	return nil
 }
 
+func (e *Entry) SetActive(name string, force bool) bool {
+	if e.ActiveProvider != "" && !force {
+		p, ok := e.Providers[name]
+		if !ok || p == nil || p.Status != debridTypes.TorrentStatusDownloaded {
+			return false
+		}
+	}
+	e.ActiveProvider = name
+	return true
+}
+
+func (e *Entry) ClearActive() {
+	e.ActiveProvider = ""
+}
+
+func BestPlacement(placements map[string]*ProviderEntry, order []string) string {
+	best := ""
+	for key, p := range placements {
+		if p == nil || p.Status != debridTypes.TorrentStatusDownloaded {
+			continue
+		}
+		if best == "" || placementBefore(key, p, best, placements[best], order) {
+			best = key
+		}
+	}
+	return best
+}
+
+func placementBefore(ak string, a *ProviderEntry, bk string, b *ProviderEntry, order []string) bool {
+	if ra, rb := orderRank(order, ak), orderRank(order, bk); ra != rb {
+		return ra < rb
+	}
+	switch {
+	case a.DownloadedAt != nil && b.DownloadedAt == nil:
+		return true
+	case a.DownloadedAt == nil && b.DownloadedAt != nil:
+		return false
+	case a.DownloadedAt != nil && !a.DownloadedAt.Equal(*b.DownloadedAt):
+		return a.DownloadedAt.After(*b.DownloadedAt)
+	}
+	return ak < bk
+}
+
+func orderRank(order []string, key string) int {
+	if i := slices.Index(order, key); i >= 0 {
+		return i
+	}
+	return len(order)
+}
+
 // RemoveProvider deletes a debrid torrent from the debrid itself.
-func (e *Entry) RemoveProvider(debridName string, cleanup func(providerEntry *ProviderEntry) error) {
+func (e *Entry) RemoveProvider(debridName string, order []string, cleanup func(providerEntry *ProviderEntry) error) {
 	if e.Providers == nil {
 		return
 	}
@@ -396,7 +476,7 @@ func (e *Entry) RemoveProvider(debridName string, cleanup func(providerEntry *Pr
 
 	// If the providerEntry is the active providerEntry, find a new active providerEntry
 	if e.ActiveProvider == debridName {
-		e.SwitchToNextProvider()
+		e.SwitchToNextProvider(order)
 	}
 
 	// Call cleanup function for each providerEntry if provided
@@ -417,16 +497,14 @@ func (e *Entry) HasProvider(provider string) bool {
 }
 
 // SwitchToNextProvider switches to the next completed providerEntry if available.
-func (e *Entry) SwitchToNextProvider() {
-	if e.Providers == nil {
+func (e *Entry) SwitchToNextProvider(order []string) {
+	best := BestPlacement(e.Providers, order)
+	if best == "" {
+		e.ClearActive()
 		return
 	}
-	for _, providerEntry := range e.Providers {
-		if providerEntry.Status == debridTypes.TorrentStatusDownloaded {
-			_ = e.ActivatePlacement(providerEntry.Provider)
-			return
-		}
-	}
+	e.SetActive(best, false)
+	e.UpdatedAt = time.Now()
 }
 
 // MarkAsCompleted marks the torrent as completed.
@@ -637,7 +715,6 @@ func (ct *CachedTorrent) ToManagedTorrent() *Entry {
 		Size:             ct.Size,
 		Bytes:            ct.Bytes,
 		Magnet:           "",
-		ActiveProvider:   ct.Debrid,
 		Providers:        make(map[string]*ProviderEntry),
 		Status:           debridTypes.TorrentStatus(ct.Status),
 		Progress:         ct.Progress,
@@ -653,6 +730,7 @@ func (ct *CachedTorrent) ToManagedTorrent() *Entry {
 		UpdatedAt:        now,
 		Files:            make(map[string]*File),
 	}
+	mt.SetActive(ct.Debrid, true)
 
 	for name, f := range ct.Files {
 		mt.Files[name] = &File{

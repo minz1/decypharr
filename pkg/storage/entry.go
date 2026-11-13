@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"testing"
 	"time"
 
 	"github.com/sirrobot01/appendstore"
@@ -15,6 +16,7 @@ import (
 // AddOrUpdate adds or updates an entry.
 func (s *Storage) AddOrUpdate(entry *Entry) error {
 	entry.UpdatedAt = time.Now()
+	s.checkInvariants(entry)
 
 	if err := s.assignFileIDs(entry); err != nil {
 		return err
@@ -31,6 +33,23 @@ func (s *Storage) AddOrUpdate(entry *Entry) error {
 		return fmt.Errorf("save entry %q: %w", entry.InfoHash, putErr)
 	}
 	return s.updateEntryItem(entry)
+}
+
+// InvariantViolations counts the writes whose entry broke an Entry invariant.
+func (s *Storage) InvariantViolations() uint64 {
+	return s.invariantViolations.Load()
+}
+
+func (s *Storage) checkInvariants(entry *Entry) {
+	err := entry.Invariants()
+	if err == nil {
+		return
+	}
+	s.invariantViolations.Add(1)
+	s.logger.Error().Err(err).Str("infohash", entry.InfoHash).Msg("Entry invariant violated")
+	if testing.Testing() {
+		panic(fmt.Sprintf("entry %q: %v", entry.InfoHash, err))
+	}
 }
 
 // BatchAddOrUpdate adds or updates multiple entries.

@@ -104,7 +104,6 @@ func convertToMultiSeason(torrent *storage.Entry, seasons []SeasonInfo) []*stora
 			Category:         torrent.Category,
 			SavePath:         torrent.SavePath,
 			Status:           debridTypes.TorrentStatusDownloading,
-			ActiveProvider:   torrent.ActiveProvider,
 			Action:           torrent.Action,
 			Manual:           torrent.Manual,
 			CreatedAt:        time.Now(),
@@ -116,6 +115,7 @@ func convertToMultiSeason(torrent *storage.Entry, seasons []SeasonInfo) []*stora
 
 		// Copy placement
 		maps.Copy(seasonTorrent.Providers, torrent.Providers)
+		seasonTorrent.SetActive(torrent.ActiveProvider, true)
 		seasonResults = append(seasonResults, seasonTorrent)
 	}
 	return seasonResults

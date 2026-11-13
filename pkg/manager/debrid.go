@@ -179,3 +179,14 @@ func (m *Manager) GetIngestsByDebrid(debridName string) ([]types.IngestData, err
 	}
 	return ingests, nil
 }
+
+func (m *Manager) debridOrder() []string {
+	if m.config == nil {
+		return nil
+	}
+	order := make([]string, 0, len(m.config.Debrids))
+	for _, d := range m.config.Debrids {
+		order = append(order, d.Name)
+	}
+	return order
+}

@@ -148,7 +148,8 @@ func writeTuple(st State, e *storage.Entry) {
 	}
 	switch st.Phase {
 	case PhaseQueued, PhaseThrottled, PhaseSubmitting:
-		e.Progress, e.ActiveProvider = 0, ""
+		e.Progress = 0
+		e.ClearActive()
 	case PhaseAwaitingLinks:
 		e.Progress = 1
 	case PhaseActing:

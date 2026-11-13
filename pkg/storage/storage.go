@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sirrobot01/decypharr/internal/kvstore"
@@ -49,6 +50,8 @@ type Storage struct {
 
 	// stripes serialise read-modify-writes of one library key (LockEntry).
 	stripes [entryStripes]sync.Mutex
+
+	invariantViolations atomic.Uint64
 
 	healthCountsMu      sync.Mutex
 	healthCounts        map[HealthStatus]int

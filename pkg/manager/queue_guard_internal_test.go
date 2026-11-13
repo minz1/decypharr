@@ -14,6 +14,7 @@ func TestQueueProviderIsTheEntrysOwnOrNothing(t *testing.T) {
 	m.repair = repair.New(testGroup(t), repair.Dependencies{Storage: m.storage})
 	if err := m.storage.AddOrUpdate(&storage.Entry{
 		InfoHash: "abcdef0123", Name: "Movie", Protocol: config.ProtocolTorrent, ActiveProvider: "realdebrid",
+		Providers: map[string]*storage.ProviderEntry{"realdebrid": {Provider: "realdebrid"}},
 	}); err != nil {
 		t.Fatal(err)
 	}

@@ -72,13 +72,14 @@ func (s *Service) Notify(event Event) {
 		return
 	}
 	if e := event.Entry; e != nil {
-		event.Entry = &storage.Entry{
-			InfoHash:       e.InfoHash,
-			Name:           e.Name,
-			Category:       e.Category,
-			ActiveProvider: e.ActiveProvider,
-			ContentPath:    e.ContentPath,
+		copied := &storage.Entry{
+			InfoHash:    e.InfoHash,
+			Name:        e.Name,
+			Category:    e.Category,
+			ContentPath: e.ContentPath,
 		}
+		copied.SetActive(e.ActiveProvider, true)
+		event.Entry = copied
 	}
 	for _, n := range s.notifiers {
 		err := s.runner.Send(n.Name(), msg{kind: msgEnqueue, ev: event})
