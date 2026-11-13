@@ -152,11 +152,12 @@ func (m *Manager) recoverDroppedEntry(provider string, entry *storage.Entry) err
 		m.logger.Warn().Err(err).Str("infohash", entry.InfoHash).Msg("Failed to read queue record of dropped entry")
 		return err
 	}
-	// Mark the record before queuing the job: the job removes the record once
-	// the grab is failed, and a later write would bring it back.
 	if record.State != storage.EntryStateError {
-		dropped := grab.Event{Kind: grab.EvProviderDropped, Reason: provider + " no longer lists this torrent"}
-		if askErr := m.askGrab(m.work.Context(), entry.InfoHash, dropped); askErr != nil {
+		dropped := eventMsg(grab.Event{
+			Kind:   grab.EvProviderDropped,
+			Reason: provider + " no longer lists this torrent",
+		})
+		if askErr := m.askEntry(m.work.Context(), entry.InfoHash, dropped); askErr != nil {
 			return fmt.Errorf("mark dropped entry as errored: %w", askErr)
 		}
 	}

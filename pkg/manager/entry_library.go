@@ -108,7 +108,7 @@ func (m *Manager) batchWriteLibrary(ctx context.Context, entries []*storage.Entr
 // the Arr to see.
 func (m *Manager) dropLibraryEntry(ctx context.Context, key string) error {
 	if _, grabbed := m.grabs.get(key); grabbed {
-		if err := m.askGrab(ctx, key, grab.Event{Kind: grab.EvProviderDropped}); err != nil {
+		if err := m.askEntry(ctx, key, eventMsg(grab.Event{Kind: grab.EvProviderDropped})); err != nil {
 			return err
 		}
 	}
@@ -153,17 +153,4 @@ func (m *Manager) pruneDelete(key string) error {
 		return errPruneGrabbed
 	}
 	return m.storage.Delete(key)
-}
-
-// askGrab gives key's actor an event and waits for its answer. An event the grab's phase does not take is not an
-// error: the grab is already where the event would have put it, or past it.
-func (m *Manager) askGrab(ctx context.Context, key string, ev grab.Event) error {
-	v, err := m.entries.runner.Ask(ctx, strings.ToLower(key), eventMsg(ev))
-	if err == nil && v != nil {
-		err, _ = v.(error)
-	}
-	if err != nil && !grab.IsRefused(err) {
-		return err
-	}
-	return nil
 }
