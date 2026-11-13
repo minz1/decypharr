@@ -82,7 +82,10 @@ func (r *Service) RecheckEntry(
 		}
 		heal := newErrorCache()
 		nzb := r.nzbProber()
-		result := r.probeEntry(ctx, runID, c, heal, nzb, RunOptions{MissingProviderIsBroken: true}, fix)
+		result := r.probeEntry(ctx, runID, c, heal, nzb, RunOptions{
+			MissingProviderIsBroken: true,
+			UnrestrictLink:          opts.UnrestrictLink,
+		}, fix)
 		if result == nil || !fix || result.health.Status != storage.HealthBroken {
 			return nil
 		}

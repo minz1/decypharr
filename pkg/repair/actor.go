@@ -19,6 +19,8 @@ type RecheckOptions struct {
 	Source Source
 	// Force lets an operator heal past the breaker. A webhook's Force is ignored.
 	Force bool
+	// UnrestrictLink probes torrent files with a fresh provider link, so a hash the provider dropped reads broken.
+	UnrestrictLink bool
 	// Caller names who asked, for the log.
 	Caller string
 }

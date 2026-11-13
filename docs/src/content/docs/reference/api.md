@@ -175,12 +175,14 @@ Per-entry health, including the broken-file list.
 
 ### POST /api/repair/health/{name}/check
 
-Force-recheck a single entry.
+Force-recheck a single entry. Query flags: `fix=true` repairs what the check finds broken; `unrestrict_link=true`
+asks the provider for a fresh link for each torrent file, so a torrent the provider dropped reads `torrent_not_found`
+(with `fix=true` it is re-inserted); `force=true` repairs past the repair breaker.
 
 ```bash
 curl -X POST \
   -H "Authorization: Bearer TOKEN" \
-  'http://localhost:8282/api/repair/health/My.Show.S01/check'
+  'http://localhost:8282/api/repair/health/My.Show.S01/check?unrestrict_link=true&fix=true'
 ```
 
 ### POST /api/repair/recheck/media

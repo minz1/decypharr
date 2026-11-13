@@ -872,23 +872,28 @@ func (s *Server) handleRecheckEntry(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "No entry name provided", http.StatusBadRequest)
 		return
 	}
-	opts := repair.RecheckOptions{
-		Fix:    boolOr(queryBool(r.URL.Query(), "fix"), false),
-		Source: repair.SourceOperator,
-		Force:  boolOr(queryBool(r.URL.Query(), "force"), false),
-		Caller: requestCaller(r),
-	}
 	svc := s.manager.Repair()
 	if svc == nil {
 		http.Error(w, "Repair service not available", http.StatusServiceUnavailable)
 		return
 	}
-	state, err := svc.RecheckEntry(s.manager.Context(), name, opts)
+	state, err := svc.RecheckEntry(s.manager.Context(), name, recheckEntryOptions(r))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	utils.JSONResponse(w, state, http.StatusOK)
+}
+
+func recheckEntryOptions(r *http.Request) repair.RecheckOptions {
+	q := r.URL.Query()
+	return repair.RecheckOptions{
+		Fix:            boolOr(queryBool(q, "fix"), false),
+		Source:         repair.SourceOperator,
+		Force:          boolOr(queryBool(q, "force"), false),
+		Caller:         requestCaller(r),
+		UnrestrictLink: boolOr(queryBool(q, "unrestrict_link"), false),
+	}
 }
 
 // handleFixBroken kicks off the Arr delete + re-search pass on currently
