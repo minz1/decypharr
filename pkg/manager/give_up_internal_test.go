@@ -472,3 +472,21 @@ func TestRearmLeavesManualEntriesAlone(t *testing.T) {
 		t.Fatalf("checks = %d, bad = %v; want a manual entry left alone", checks.count(), storedBad(t, m))
 	}
 }
+
+func TestRecheckBadLeavesTheGrabWhileARepairRuns(t *testing.T) {
+	t.Parallel()
+	fake := &fakeArrRecovery{}
+	m, entry := newGiveUpTestManager(t, &queueArr{downloadIDs: []string{strings.ToUpper(droppedHash)}}, fake)
+	saveBad(t, m, entry, true)
+	m.fixer.repairs.begin(droppedHash, &FixerRequest{done: make(chan struct{})})
+
+	m.recheckBad(t.Context(), droppedHash)
+
+	waitForFails(t, fake, 0)
+	if !storedBad(t, m) {
+		t.Fatal("the mark was cleared while a repair ran")
+	}
+	m.fixer.repairs.end(droppedHash)
+	m.recheckBad(t.Context(), droppedHash)
+	waitForFails(t, fake, 1)
+}

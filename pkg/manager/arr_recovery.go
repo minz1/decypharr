@@ -392,6 +392,10 @@ func (m *Manager) recheckBad(ctx context.Context, infohash string) {
 			m.logger.Warn().Err(clearErr).Str("infohash", infohash).Msg("Failed to clear a disproved bad mark")
 		}
 	case repair.VerdictBroken:
+		if m.fixer.repairs.running(infohash) {
+			m.logger.Info().Str("infohash", infohash).Msg("A repair is running; leaving the bad mark and the grab for now")
+			return
+		}
 		failCtx, cancel := context.WithTimeout(ctx, time.Minute)
 		defer cancel()
 		m.failGrabIfQueued(failCtx, entry)
