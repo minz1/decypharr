@@ -75,6 +75,20 @@ import stdctx "context"
 
 var root = stdctx.TODO()
 `)
+	writeSource(t, root, "pkg/d/d.go", `package d
+
+type deps struct{ fail func(int) }
+
+type actor struct{ deps }
+
+func wire(o owner) *actor { return &actor{deps: deps{fail: o.failAsk}} }
+
+func (a *actor) Handle(ctx context.Context, key string, st *int, m int, fx *keyed.Effects[string, int]) {
+	a.fail(m)
+}
+
+func (o owner) failAsk(m int) { _, _ = o.r.Ask(o.ctx, "k", m) }
+`)
 	const exempt = "\n\nfunc f() { go work(); _ = context.Background() }\n"
 	writeSource(t, root, "pkg/a/a_test.go", "package a"+exempt)
 	writeSource(t, root, "cmd/tool/main.go", "package main"+exempt)
@@ -89,8 +103,10 @@ var root = stdctx.TODO()
 	if strings.Count(got, "\n") != 1 || !strings.Contains(got, "a.go:7") || !strings.Contains(got, "c.go:5") {
 		t.Errorf("context.Background guard = %q, want findings at a.go:7 and c.go:5 (an aliased TODO)", got)
 	}
-	if got := asksInsideHandlers(t, root); len(got) != 1 || !strings.Contains(got[0], "a.go:17") {
-		t.Errorf("Ask guard = %q, want one finding at a.go:17 (reached from Handle through its child task)", got)
+	got = strings.Join(asksInsideHandlers(t, root), "\n")
+	if strings.Count(got, "\n") != 1 || !strings.Contains(got, "a.go:17") || !strings.Contains(got, "d.go:13") {
+		t.Errorf("Ask guard = %q, want findings at a.go:17 (through a child task) and d.go:13 (through a "+
+			"dependency field)", got)
 	}
 }
 
@@ -162,23 +178,24 @@ func inspectGoverned(t *testing.T, root string, check func(*ast.File, ast.Node) 
 }
 
 // asksInsideHandlers reports every Ask call reachable from a function that takes a *keyed.Effects (a Handle method
-// and its helpers, including the child functions they pass to Effects.Go), following calls and function values by
-// name within the package.
-// shortcut: name-based and package-local (no type information), so a call into another package is not followed;
-// upgrade to go/types if a handler starts calling into another package that uses Ask.
+// and its helpers, including the child functions they pass to Effects.Go and the functions wired into dependency
+// fields), following calls and function values within the package.
+// shortcut: no type information, so a call into another package or on a local or parameter is not followed;
+// upgrade to go/types if a handler starts reaching Ask that way.
 func asksInsideHandlers(t *testing.T, root string) []string {
 	t.Helper()
 	fset := token.NewFileSet()
 	var found []string
 	for _, files := range governedPackages(t, root, fset) {
 		decls, queue := handlerRoots(files)
+		bound := fieldBindings(files, decls)
 		seen := make(map[*ast.FuncDecl]bool)
 		for len(queue) > 0 {
 			fn := queue[0]
 			queue = queue[1:]
 			if !seen[fn] {
 				seen[fn] = true
-				queue = append(queue, scanForAsk(fset, fn, decls, &found)...)
+				queue = append(queue, scanForAsk(fset, fn, decls, bound, &found)...)
 			}
 		}
 	}
@@ -202,27 +219,118 @@ func handlerRoots(files []*ast.File) (map[string][]*ast.FuncDecl, []*ast.FuncDec
 	return decls, roots
 }
 
-// scanForAsk records every Ask selector in fn's body and returns the package functions fn names (calls or values).
+// fieldBindings maps a field of a dependency struct (a composite literal of a type named *deps) to the package
+// functions the literal stores in it (`fail: m.failLater`), so a handler calling a dependency field reaches the
+// function wired into it.
+func fieldBindings(files []*ast.File, decls map[string][]*ast.FuncDecl) map[string][]*ast.FuncDecl {
+	bound := make(map[string][]*ast.FuncDecl)
+	for _, file := range files {
+		ast.Inspect(file, func(node ast.Node) bool {
+			lit, ok := node.(*ast.CompositeLit)
+			if !ok || lit.Type == nil || !strings.HasSuffix(strings.ToLower(types.ExprString(lit.Type)), "deps") {
+				return true
+			}
+			for _, elt := range lit.Elts {
+				kv, isKV := elt.(*ast.KeyValueExpr)
+				if !isKV {
+					continue
+				}
+				if field, isIdent := kv.Key.(*ast.Ident); isIdent {
+					bound[field.Name] = append(bound[field.Name], named(kv.Value, decls)...)
+				}
+			}
+			return true
+		})
+	}
+	return bound
+}
+
+// named are the package functions an expression names.
+func named(expr ast.Expr, decls map[string][]*ast.FuncDecl) []*ast.FuncDecl {
+	var out []*ast.FuncDecl
+	ast.Inspect(expr, func(v ast.Node) bool {
+		switch n := v.(type) {
+		case *ast.SelectorExpr:
+			out = append(out, decls[n.Sel.Name]...)
+		case *ast.Ident:
+			out = append(out, decls[n.Name]...)
+		}
+		return true
+	})
+	return out
+}
+
+// receiver is fn's receiver name and type name ("" for a function).
+func receiver(fn *ast.FuncDecl) (string, string) {
+	if fn.Recv == nil || len(fn.Recv.List) == 0 {
+		return "", ""
+	}
+	field := fn.Recv.List[0]
+	typ := field.Type
+	if star, ok := typ.(*ast.StarExpr); ok {
+		typ = star.X
+	}
+	switch t := typ.(type) {
+	case *ast.IndexExpr:
+		typ = t.X
+	case *ast.IndexListExpr:
+		typ = t.X
+	}
+	name := ""
+	if len(field.Names) > 0 {
+		name = field.Names[0].Name
+	}
+	return name, types.ExprString(typ)
+}
+
+// methodsOf are the decls named name whose receiver type is typ.
+func methodsOf(decls []*ast.FuncDecl, typ string) []*ast.FuncDecl {
+	var out []*ast.FuncDecl
+	for _, d := range decls {
+		if _, t := receiver(d); t == typ {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// scanForAsk records every Ask selector in fn's body and returns the package functions fn names: a call or value on
+// fn's receiver resolves to the receiver type's methods and the functions wired into its dependency fields, a
+// selector on any other identifier (an import, a local, a parameter) to nothing, and a longer chain or a bare name
+// to every package function of that name.
 func scanForAsk(
 	fset *token.FileSet,
 	fn *ast.FuncDecl,
-	decls map[string][]*ast.FuncDecl,
+	decls, bound map[string][]*ast.FuncDecl,
 	found *[]string,
 ) []*ast.FuncDecl {
+	recvName, recvType := receiver(fn)
 	var next []*ast.FuncDecl
-	ast.Inspect(fn.Body, func(node ast.Node) bool {
+	var visit func(ast.Node) bool
+	visit = func(node ast.Node) bool {
 		switch n := node.(type) {
 		case *ast.SelectorExpr:
 			if n.Sel.Name == "Ask" {
 				*found = append(*found, fset.Position(n.Sel.Pos()).String()+": Ask in "+fn.Name.Name+
 					", reachable from a keyed handler; send a message and handle the reply as one instead")
 			}
-			next = append(next, decls[n.Sel.Name]...)
+			x, isIdent := n.X.(*ast.Ident)
+			switch {
+			case isIdent && recvName != "" && x.Name == recvName:
+				next = append(next, methodsOf(decls[n.Sel.Name], recvType)...)
+				next = append(next, bound[n.Sel.Name]...)
+			case !isIdent:
+				next = append(next, decls[n.Sel.Name]...)
+				next = append(next, bound[n.Sel.Name]...)
+				ast.Inspect(n.X, visit)
+			}
+			return false
 		case *ast.Ident:
 			next = append(next, decls[n.Name]...)
 		}
 		return true
-	})
+	}
+	ast.Inspect(fn.Body, visit)
 	return next
 }
 
