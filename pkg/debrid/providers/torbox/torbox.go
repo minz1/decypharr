@@ -463,34 +463,7 @@ func (tb *Torbox) GetTorrent(ctx context.Context, torrentID string) (*types.Torr
 		Files:            make(map[string]types.File),
 		Added:            data.CreatedAt,
 	}
-	for _, f := range data.Files {
-		fileName := filepath.Base(f.Name)
-		if validateFileAllowedErr := tb.options.FileAllowed(f.AbsolutePath, f.Size); validateFileAllowedErr != nil {
-			continue
-		}
-
-		file := types.File{
-			TorrentID: t.ID,
-			ID:        strconv.Itoa(f.ID),
-			Name:      fileName,
-			Size:      f.Size,
-			Path:      f.Name,
-		}
-
-		if data.DownloadFinished {
-			file.Link = fmt.Sprintf("torbox://%s/%d", t.ID, f.ID)
-		}
-
-		t.Files[fileName] = file
-	}
-	var cleanPath string
-	if len(t.Files) > 0 {
-		cleanPath = path.Clean(data.Files[0].Name)
-	} else {
-		cleanPath = path.Clean(data.Name)
-	}
-
-	t.OriginalFilename = strings.Split(cleanPath, "/")[0]
+	tb.fillFiles(t, data, false)
 	t.Debrid = tb.config.Name
 
 	return t, nil
@@ -527,10 +500,15 @@ func (tb *Torbox) loadDownloadPresent(ctx context.Context) (map[string]bool, err
 }
 
 func (tb *Torbox) UpdateTorrent(ctx context.Context, t *types.Torrent) error {
-	return tb.updateTorrentWithClient(ctx, tb.client, t)
+	_, err := tb.updateTorrentWithClient(ctx, tb.client, t)
+	return err
 }
 
-func (tb *Torbox) updateTorrentWithClient(ctx context.Context, client *request.Client, t *types.Torrent) error {
+func (tb *Torbox) updateTorrentWithClient(
+	ctx context.Context,
+	client *request.Client,
+	t *types.Torrent,
+) (*torboxInfo, error) {
 	var res InfoResponse
 
 	status, err := tb.doGetWithClient(
@@ -541,15 +519,15 @@ func (tb *Torbox) updateTorrentWithClient(ctx context.Context, client *request.C
 		&res,
 	)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if !common.IsSuccess(status) {
-		return fmt.Errorf("torbox API error: Status: %d", status)
+		return nil, fmt.Errorf("torbox API error: Status: %d", status)
 	}
 	data := res.Data
 	if data == nil {
-		return fmt.Errorf("torbox API error: no data for torrent %s: %v %s", t.ID, res.Error, res.Detail)
+		return nil, fmt.Errorf("torbox API error: no data for torrent %s: %v %s", t.ID, res.Error, res.Detail)
 	}
 	name := data.Name
 
@@ -564,59 +542,33 @@ func (tb *Torbox) updateTorrentWithClient(ctx context.Context, client *request.C
 	if data.Hash != "" {
 		t.InfoHash = data.Hash
 	}
+
+	tb.fillFiles(t, data, true)
 	t.Debrid = tb.config.Name
-
-	t.Files = make(map[string]types.File)
-
-	for _, f := range data.Files {
-		fileName := filepath.Base(f.Name)
-
-		if validateFileAllowedErr := tb.options.FileAllowed(f.AbsolutePath, f.Size); validateFileAllowedErr != nil {
-			continue
-		}
-
-		file := types.File{
-			TorrentID: t.ID,
-			ID:        strconv.Itoa(f.ID),
-			Name:      fileName,
-			Size:      f.Size,
-			Path:      fileName,
-		}
-
-		if data.DownloadFinished {
-			file.Link = fmt.Sprintf("torbox://%s/%s", t.ID, strconv.Itoa(f.ID))
-		}
-
-		t.Files[fileName] = file
-	}
-
-	var cleanPath string
-	if len(t.Files) > 0 {
-		cleanPath = path.Clean(data.Files[0].Name)
-	} else {
-		cleanPath = path.Clean(data.Name)
-	}
-
-	t.OriginalFilename = strings.Split(cleanPath, "/")[0]
-	t.Debrid = tb.config.Name
-	return nil
+	return data, nil
 }
 
 func (tb *Torbox) CheckStatus(ctx context.Context, torrent *types.Torrent) (*types.Torrent, error) {
-	if err := tb.updateTorrentWithClient(ctx, tb.submissionClient(), torrent); err != nil || torrent == nil {
+	data, err := tb.updateTorrentWithClient(ctx, tb.submissionClient(), torrent)
+	if err != nil || torrent == nil {
 		return torrent, err
 	}
 
-	switch torrent.Status {
-	case types.TorrentStatusDownloaded:
+	switch observe(data).Phase {
+	case types.PhaseDownloaded, types.PhaseFinalizing:
+		torrent.Status = types.TorrentStatusDownloaded
 		tb.logger.Info().Msgf("Torrent: %s downloaded", torrent.Name)
 		return torrent, nil
-	case types.TorrentStatusDownloading:
+	case types.PhaseDownloading, types.PhaseRemoteQueued, types.PhaseConverting, types.PhaseStalled:
+		torrent.Status = types.TorrentStatusDownloading
 		if !torrent.DownloadUncached {
 			return torrent, fmt.Errorf("torrent %s: %w", torrent.Name, customerror.ErrTorrentNotCached)
 		}
 		return torrent, nil
-	case types.TorrentStatusRemoteQueued, types.TorrentStatusError:
+	case types.PhaseUnknown:
+		torrent.Status = types.TorrentStatusDownloading
+		return torrent, nil
+	case types.PhaseNone, types.PhaseAwaitingSelection, types.PhaseFailed:
 	}
 	return torrent, fmt.Errorf("torrent: %s has error", torrent.Name)
 }
@@ -759,36 +711,7 @@ func (tb *Torbox) getTorrents(ctx context.Context, offset int) ([]*types.Torrent
 			InfoHash:         data.Hash,
 		}
 
-		for _, f := range data.Files {
-			fileName := filepath.Base(f.Name)
-			if validateFileAllowedErr := tb.options.FileAllowed(
-				f.AbsolutePath,
-				f.Size,
-			); validateFileAllowedErr != nil {
-				continue
-			}
-			file := types.File{
-				TorrentID: t.ID,
-				ID:        strconv.Itoa(f.ID),
-				Name:      fileName,
-				Size:      f.Size,
-				Path:      f.Name,
-			}
-
-			if data.DownloadFinished {
-				file.Link = fmt.Sprintf("torbox://%s/%d", t.ID, f.ID)
-			}
-
-			t.Files[fileName] = file
-		}
-
-		var cleanPath string
-		if len(t.Files) > 0 {
-			cleanPath = path.Clean(data.Files[0].Name)
-		} else {
-			cleanPath = path.Clean(data.Name)
-		}
-		t.OriginalFilename = strings.Split(cleanPath, "/")[0]
+		tb.fillFiles(t, &data, false)
 
 		torrents = append(torrents, t)
 	}
@@ -972,4 +895,33 @@ func (tb *Torbox) SpeedTest(ctx context.Context) types.SpeedTestResult {
 
 func (tb *Torbox) SupportsCheck() bool {
 	return true
+}
+
+func (tb *Torbox) fillFiles(t *types.Torrent, data *torboxInfo, flatPath bool) {
+	t.Files = make(map[string]types.File)
+	for _, f := range data.Files {
+		fileName := filepath.Base(f.Name)
+		if validateFileAllowedErr := tb.options.FileAllowed(f.AbsolutePath, f.Size); validateFileAllowedErr != nil {
+			continue
+		}
+		file := types.File{
+			TorrentID: t.ID,
+			ID:        strconv.Itoa(f.ID),
+			Name:      fileName,
+			Size:      f.Size,
+			Path:      f.Name,
+		}
+		if flatPath {
+			file.Path = fileName
+		}
+		if data.DownloadFinished {
+			file.Link = fmt.Sprintf("torbox://%s/%d", t.ID, f.ID)
+		}
+		t.Files[fileName] = file
+	}
+	cleanPath := path.Clean(data.Name)
+	if len(t.Files) > 0 {
+		cleanPath = path.Clean(data.Files[0].Name)
+	}
+	t.OriginalFilename = strings.Split(cleanPath, "/")[0]
 }
