@@ -517,6 +517,7 @@ func (m *Manager) initEntries(packOf map[string]string) {
 		},
 		pollEvery:          m.refreshInterval,
 		removeStalledAfter: m.removeStalledAfter(),
+		submitBudget:       m.submitBudget(),
 		retryDelay:         throttledRetryDelay,
 		completed:          m.completed,
 		expired:            m.expiredGrab,

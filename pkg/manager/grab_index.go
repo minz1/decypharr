@@ -32,6 +32,16 @@ type grabIndex struct {
 	// polled is what the last poll of each grab saw at its provider; like seen, it is not persisted and stays while the
 	// actor is idle, so a deadline derived from it still fires.
 	polled map[string]pollSeen
+	// submits is the clock of each submitting grab; like polled, it stays while the actor is idle, so the lookup
+	// deadline and backoff do not restart each time a timer wakes the actor.
+	submits map[string]submitClock
+}
+
+// submitClock is when this process loaded a submitting grab (zero if it entered Submitting here), when its submit
+// child last ended here, and how many lookups have run since.
+type submitClock struct {
+	loaded, exited time.Time
+	lookups        int
 }
 
 func (x *grabIndex) publish(v GrabView) {
@@ -55,6 +65,7 @@ func (x *grabIndex) remove(key string) {
 	delete(x.gone, key)
 	delete(x.seen, key)
 	delete(x.polled, key)
+	delete(x.submits, key)
 }
 
 // goneChan is closed when key has no grab.
@@ -152,4 +163,26 @@ func (x *grabIndex) polledOf(key string) pollSeen {
 	x.mu.RLock()
 	defer x.mu.RUnlock()
 	return x.polled[strings.ToLower(key)]
+}
+
+// setSubmitClock records key's submit clock; the zero clock forgets it.
+func (x *grabIndex) setSubmitClock(key string, c submitClock) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	key = strings.ToLower(key)
+	if c == (submitClock{}) {
+		delete(x.submits, key)
+		return
+	}
+	if x.submits == nil {
+		x.submits = make(map[string]submitClock)
+	}
+	x.submits[key] = c
+}
+
+// submitClockOf is key's submit clock, or the zero value.
+func (x *grabIndex) submitClockOf(key string) submitClock {
+	x.mu.RLock()
+	defer x.mu.RUnlock()
+	return x.submits[strings.ToLower(key)]
 }

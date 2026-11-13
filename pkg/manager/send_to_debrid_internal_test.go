@@ -6,6 +6,8 @@ import (
 	"slices"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/rs/zerolog"
@@ -247,4 +249,77 @@ func TestSubmitChildStopAfterSubmitSetsProvider(t *testing.T) {
 	if deleted := provider.deleted.Load(); deleted != 0 {
 		t.Fatalf("provider deletes = %d, want none", deleted)
 	}
+}
+
+// A status check that outlives its provider's limit while the submit is still wanted keeps the torrent as a placement
+// still downloading.
+func TestProviderSubmitTimeoutKeepsPlacement(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		provider := &addProvider{
+			submit: func(_ context.Context, torrent *types.Torrent) (*types.Torrent, error) {
+				return submittedTorrent(torrent)
+			},
+			check: func(ctx context.Context, torrent *types.Torrent) (*types.Torrent, error) {
+				<-ctx.Done()
+				return torrent, errors.Join(customerror.ErrProviderStatusTimeout, ctx.Err())
+			},
+		}
+		m := newAddTestManager(t, provider)
+		start := time.Now()
+		msg := m.submitChild(t.Context(), submitCall(t))
+		if waited := time.Since(start); waited != ProviderSubmitLimit {
+			t.Fatalf("the check was cut after %v, want %v", waited, ProviderSubmitLimit)
+		}
+		if msg.ev == nil || msg.ev.Outcome != grab.OutcomePlacement || msg.torrent == nil ||
+			msg.torrent.Status != types.TorrentStatusDownloading {
+			t.Fatalf("submit result = %+v, want a placement still downloading", msg)
+		}
+		closePlacements(t, m)
+		if got := provider.deleted.Load(); got != 0 {
+			t.Fatalf("provider deletes = %d, want none", got)
+		}
+	})
+}
+
+// hangingProvider is a provider whose submit hangs until its ctx ends.
+type hangingProvider struct {
+	debrid.Client
+
+	name    string
+	submits *atomic.Int64
+}
+
+func (p *hangingProvider) Config() config.Debrid {
+	return config.Debrid{Name: p.name, Provider: p.name}
+}
+func (p *hangingProvider) Logger() zerolog.Logger { return zerolog.Nop() }
+func (p *hangingProvider) SubmitMagnet(ctx context.Context, _ *types.Torrent) (*types.Torrent, error) {
+	p.submits.Add(1)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// A submit that outlives its provider's limit may still have reached the provider: the next provider is not tried,
+// nothing is refused, and the submit reports no result, so the grab looks it up.
+func TestSubmitMagnetTimeoutIsUnknown(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		m := withTestConfig(t, &Manager{logger: zerolog.Nop(), clients: xsync.NewMap[string, debrid.Client]()})
+		var submits atomic.Int64
+		for _, name := range []string{"realdebrid", "torbox"} {
+			m.clients.Store(name, &hangingProvider{name: name, submits: &submits})
+		}
+		start := time.Now()
+		msg := m.submitChild(t.Context(), submitCall(t))
+		if msg.ev != nil {
+			t.Fatalf("a submit cut by its provider's limit reported %+v, want no result", msg.ev)
+		}
+		if got := submits.Load(); got != 1 {
+			t.Fatalf("%d providers were sent the magnet, want 1", got)
+		}
+		if waited := time.Since(start); waited != ProviderSubmitLimit {
+			t.Fatalf("the submit was cut after %v, want %v", waited, ProviderSubmitLimit)
+		}
+	})
 }

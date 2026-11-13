@@ -366,7 +366,7 @@ func TestOneChildPerKind(t *testing.T) {
 	})
 }
 
-func TestLookupWaitsForTheRunningSubmit(t *testing.T) {
+func TestSubmitDeadlineCutsTheRunningSubmit(t *testing.T) {
 	t.Parallel()
 	store := newTestStore(t)
 	synctest.Test(t, func(t *testing.T) {
@@ -374,11 +374,13 @@ func TestLookupWaitsForTheRunningSubmit(t *testing.T) {
 		submit := h.submitting("a")
 
 		h.mustAsk("a", grab.Event{Kind: grab.EvSubmitDeadline})
+		h.next(grab.ChildLookup)
 		h.none()
 
 		submit.reply <- entryMsg{}
-		h.next(grab.ChildLookup)
+		synctest.Wait()
 		h.none()
+		h.mustBe("a", grab.PhaseSubmitting)
 	})
 }
 

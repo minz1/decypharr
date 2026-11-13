@@ -36,6 +36,19 @@ func (m *Manager) AddNewTorrent(ctx context.Context, importReq *ImportRequest) e
 // which says nothing about the torrent: its caller changes no state and records no failure.
 func stopped(ctx context.Context) bool { return ctx.Err() != nil }
 
+// ProviderSubmitLimit is the longest one provider's submit and status check may take.
+const ProviderSubmitLimit = 10 * time.Minute
+
+// errSubmitOutcomeUnknown is a submit cut by its provider's limit before the provider answered: the magnet may have
+// reached it, so the grab looks the submit up instead of trying the next provider.
+var errSubmitOutcomeUnknown = errors.New("submit outcome unknown")
+
+// submitBudget is the longest a grab's submit child may run: every provider's limit, and a minute to spare.
+func (m *Manager) submitBudget() time.Duration {
+	clients := m.FilterDebrid(func(common.Client) bool { return true })
+	return time.Duration(len(clients))*ProviderSubmitLimit + time.Minute
+}
+
 func newTorrentQueueEntry(
 	importReq *ImportRequest,
 	status storage.EntryStatus,
@@ -207,7 +220,13 @@ func (m *Manager) sendToDebrid(ctx context.Context, importRequest *ImportRequest
 	var throttled []string
 
 	for _, db := range clients {
-		torrent, err := m.submitToProvider(ctx, db, debridTorrent, importRequest)
+		pctx, cancel := context.WithTimeout(ctx, ProviderSubmitLimit)
+		torrent, err := m.submitToProvider(pctx, db, debridTorrent, importRequest)
+		cut := stopped(pctx)
+		cancel()
+		if err != nil && cut {
+			return nil, fmt.Errorf("%s: %w: %w", db.Config().Name, errSubmitOutcomeUnknown, err)
+		}
 		if err != nil {
 			errs = append(errs, err)
 			if isTooManyActiveDownloads(err) {

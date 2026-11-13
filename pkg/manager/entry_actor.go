@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -75,6 +76,8 @@ type entryChildCall struct {
 	cleanup  grab.Cleanup
 	releases []placementRef
 	req      *ImportRequest
+	// settleFrom is when a lookup's wait before a listing may call the torrent absent starts.
+	settleFrom time.Time
 }
 
 // entryState is one grab's actor state.
@@ -109,6 +112,9 @@ type entryState struct {
 	putAt       time.Time
 	putProgress float64
 	warned      map[providerWarn]struct{}
+	// submitCut says the submit deadline cancelled the running submit; the rest of the submit's clock is in the index,
+	// since an idle actor drops this state.
+	submitCut bool
 }
 
 type providerWarn struct {
@@ -143,6 +149,8 @@ type entryDeps struct {
 	// removeStalledAfter is how long a placement may stall, and how long a failed grab is kept once an Arr listed it;
 	// zero is no limit.
 	removeStalledAfter time.Duration
+	// submitBudget is the longest a submit child may run; zero is one provider's limit and a minute.
+	submitBudget time.Duration
 	// expired runs what a grab that ran out its provider wait or its wait for links does outside its record; it must
 	// not block. It may be nil.
 	expired func(g grab.Grab, kind grab.EventKind)
@@ -183,6 +191,9 @@ func newEntryActor(g *task.Group, deps entryDeps) *entryActor {
 	if a.naming == nil {
 		a.naming = func() config.WebDavFolderNaming { return "" }
 	}
+	if a.submitBudget <= 0 {
+		a.submitBudget = ProviderSubmitLimit + time.Minute
+	}
 	a.send = func(key string, m entryMsg) error { return a.runner.Send(key, m) }
 	a.admit = newAdmission(deps.capacity, func(key string, ev grab.Event) error {
 		return a.runner.Send(key, eventMsg(ev))
@@ -209,7 +220,9 @@ func entryClass(m entryMsg) keyed.Class {
 // Activate loads key's grab. A read error refuses every command; a document that does not load is derived from
 // the record's legacy fields.
 func (a *entryActor) Activate(_ context.Context, key string) entryState {
-	st := entryState{live: make(map[grab.ChildKind]keyed.ChildID), g: grab.Grab{State: grab.State{Key: key}}}
+	st := entryState{
+		live: make(map[grab.ChildKind]keyed.ChildID), g: grab.Grab{State: grab.State{Key: key}},
+	}
 	e, err := a.store.GetQueuedGrab(key)
 	switch {
 	case errors.Is(err, appendstore.ErrKeyNotFound):
@@ -223,6 +236,14 @@ func (a *entryActor) Activate(_ context.Context, key string) entryState {
 		a.logger.Warn().Err(err).Str("key", key).Msg("Grab document unreadable; using the state its record implies")
 	}
 	st.g = g
+	if g.State.Phase == grab.PhaseSubmitting {
+		c := a.grabs.submitClockOf(key)
+		if c.loaded.IsZero() {
+			c.loaded = time.Now()
+			a.grabs.setSubmitClock(key, c)
+		}
+		st.retries = c.lookups
+	}
 	a.grabs.publish(GrabView{State: g.State, Entry: *g.Entry})
 	a.syncHold(key, &st, g)
 	return st
@@ -286,6 +307,9 @@ func (a *entryActor) handle(
 func (a *entryActor) childExited(key string, st *entryState, m entryMsg) entryMsg {
 	delete(st.live, m.child)
 	if m.child == grab.ChildSubmit {
+		c := a.grabs.submitClockOf(key)
+		c.exited = time.Now()
+		a.grabs.setSubmitClock(key, c)
 		a.admit.Release(key)
 		if m.ev == nil {
 			m.ev = &grab.Event{Kind: grab.EvSubmitResult, Outcome: grab.OutcomeUnknown}
@@ -318,6 +342,11 @@ func (a *entryActor) rearm(st *entryState, m entryMsg, fx *keyed.Effects[string,
 		delay = a.pollEvery
 	}
 	st.retries++
+	if kind == grab.ChildLookup {
+		c := a.grabs.submitClockOf(st.g.State.Key)
+		c.lookups = st.retries
+		a.grabs.setSubmitClock(st.g.State.Key, c)
+	}
 	a.arm(st, fx, delay, entryMsg{retry: true, child: kind})
 }
 
@@ -333,14 +362,16 @@ func (a *entryActor) retry(key string, st *entryState, child grab.ChildKind, fx 
 // phaseChild is the child a phase retries; the poll is driven by its timer event instead.
 func phaseChild(p grab.Phase) (grab.ChildKind, bool) {
 	switch p {
+	case grab.PhaseSubmitting:
+		return grab.ChildLookup, true
 	case grab.PhaseAwaitingLinks:
 		return grab.ChildLinks, true
 	case grab.PhaseActing:
 		return grab.ChildAction, true
 	case grab.PhaseDeleting:
 		return grab.ChildCleanup, true
-	case grab.PhaseAbsent, grab.PhaseQueued, grab.PhaseThrottled, grab.PhaseSubmitting, grab.PhaseProvider,
-		grab.PhaseComplete, grab.PhaseFailed:
+	case grab.PhaseAbsent, grab.PhaseQueued, grab.PhaseThrottled, grab.PhaseProvider, grab.PhaseComplete,
+		grab.PhaseFailed:
 	}
 	return 0, false
 }
@@ -426,9 +457,7 @@ func (a *entryActor) step(key string, st *entryState, m entryMsg, fx *keyed.Effe
 	if ev.Kind == grab.EvActionProgress {
 		st.putAt, st.putProgress = ev.At, m.progress
 	}
-	if ev.Kind == grab.EvPollTimer && nextState.Phase == grab.PhaseProvider {
-		a.start(key, st, grab.Effect{Kind: grab.FxStartChild, Child: grab.ChildPoll}, false, fx)
-	}
+	a.timerChildren(key, st, ev, fx)
 	fx.Reply(nil)
 	a.afterStep(key, st, cur, ev, fx)
 	if ev.Kind == grab.EvPendingDeadline || ev.Kind == grab.EvLinkWaitExpired {
@@ -441,6 +470,18 @@ func (a *entryActor) step(key string, st *entryState, m entryMsg, fx *keyed.Effe
 		s.next.Entry.Action == config.DownloadActionNone &&
 		nextState.PackKey == "" {
 		a.step(key, st, eventMsg(grab.Event{Kind: grab.EvActionNone, At: ev.At}), fx)
+	}
+}
+
+// timerChildren applies what a saved timer event does to children: the submit deadline cuts a submit still running,
+// and the poll timer starts the next poll.
+func (a *entryActor) timerChildren(key string, st *entryState, ev grab.Event, fx *keyed.Effects[string, entryMsg]) {
+	if id, running := st.live[grab.ChildSubmit]; running && ev.Kind == grab.EvSubmitDeadline {
+		fx.CancelAwait(id)
+		st.submitCut = true
+	}
+	if ev.Kind == grab.EvPollTimer && st.g.State.Phase == grab.PhaseProvider {
+		a.start(key, st, grab.Effect{Kind: grab.FxStartChild, Child: grab.ChildPoll}, false, fx)
 	}
 }
 
@@ -654,6 +695,7 @@ func (a *entryActor) leftPhase(st *entryState, to grab.Phase, fx *keyed.Effects[
 	st.retries = 0
 	st.warned = nil
 	a.grabs.setPolled(st.g.State.Key, pollSeen{})
+	a.grabs.setSubmitClock(st.g.State.Key, submitClock{})
 	a.cancelDeadline(st, fx)
 	st.putAt = time.Time{}
 	switch to {
@@ -721,6 +763,10 @@ func (a *entryActor) start(
 		kind: e.Child, grab: g, cleanup: e.Cleanup, releases: append([]placementRef(nil), st.releases...),
 		req: st.req,
 	}
+	if e.Child == grab.ChildLookup {
+		c := a.grabs.submitClockOf(key)
+		call.settleFrom = cmp.Or(c.exited, c.loaded)
+	}
 	work := a.child(call)
 	kind := e.Child
 	id, err := fx.GoTracked("grab-"+childKind(kind).String(), func(ctx context.Context) entryMsg {
@@ -735,6 +781,9 @@ func (a *entryActor) start(
 		return
 	}
 	st.live[kind] = id
+	if kind == grab.ChildSubmit {
+		st.submitCut = false
+	}
 }
 
 // mustWait reports a start that waits for another child: a cleanup for every child, a HasAfter for its kind.

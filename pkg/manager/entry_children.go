@@ -40,15 +40,15 @@ func (m *Manager) entryChild(call entryChildCall) func(ctx context.Context) entr
 	return func(context.Context) entryMsg { return entryMsg{} }
 }
 
-// submitChild sends the grab's magnet to a provider. A stop says nothing about the submit: the child reports no
-// result and the grab looks the submit up.
+// submitChild sends the grab's magnet to a provider. A stop, or a provider's limit that cut the submit before it
+// answered, says nothing about the submit: the child reports no result and the grab looks the submit up.
 func (m *Manager) submitChild(ctx context.Context, call entryChildCall) entryMsg {
 	req := call.req
 	if req == nil {
 		req = m.requestFromEntry(call.grab.Entry)
 	}
 	t, err := m.sendToDebrid(ctx, req)
-	if stopped(ctx) && err != nil {
+	if err != nil && (stopped(ctx) || errors.Is(err, errSubmitOutcomeUnknown)) {
 		return entryMsg{}
 	}
 	return submitResult(call.grab.Entry, t, err)

@@ -18,6 +18,9 @@ func (a *entryActor) deadlineView(key string, st *entryState) grab.DeadlineView 
 		Pending: polled.pending, Dead: polled.dead, StalledAfter: a.removeStalledAfter, Retention: a.removeStalledAfter,
 		SeenFailure: a.grabs.seenFailure(key), PackRunning: a.packRunning(g.State.PackKey),
 	}
+	if g.State.Phase == grab.PhaseSubmitting {
+		a.submitView(&v, st, a.grabs.submitClockOf(key).loaded)
+	}
 	if g.Entry == nil {
 		return v
 	}
@@ -29,6 +32,26 @@ func (a *entryActor) deadlineView(key string, st *entryState) grab.DeadlineView 
 		}
 	}
 	return v
+}
+
+// submitView fills the submit window of a submitting grab. A running submit counts from its attempt; once it ended,
+// or for a grab loaded in Submitting, the lookups get their full hour after the later of the submit budget and the
+// load. A record with no attempt time counts from the load.
+func (a *entryActor) submitView(v *grab.DeadlineView, st *entryState, loaded time.Time) {
+	budget, at := a.submitBudget, cmp.Or(st.g.State.SubmitAttempt.At, loaded)
+	_, running := st.live[grab.ChildSubmit]
+	v.SubmitBudget, v.SubmitRunning = budget, running && !st.submitCut
+	v.SubmitBase = at
+	if !v.SubmitRunning {
+		v.SubmitBase = maxTime(at.Add(budget), loaded).Add(-budget)
+	}
+}
+
+func maxTime(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
 }
 
 // packRunning reports a pack still waiting for its seasons: a failed season of it is kept, so the pack counts it
