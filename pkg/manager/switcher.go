@@ -68,10 +68,19 @@ func (m *Manager) executeMigration(ctx context.Context, job *storage.SwitcherJob
 	}
 	job.Progress = 10
 
+	req := m.fixer.newRequest(torrent)
+	if _, owner := m.fixer.repairs.begin(torrent.InfoHash, req); !owner {
+		job.Status = storage.SwitcherStatusFailed
+		job.Error = "repair in progress"
+		job.CompletedAt = new(time.Now())
+		return
+	}
 	result, err := m.fixer.MoveTorrent(torrent.Clone(), job.TargetProvider, false)
 	if err == nil {
 		err = m.applyRepairResult(ctx, torrent.InfoHash, result)
 	}
+	fixResult := &FixResult{Success: err == nil, NewDebrid: job.TargetProvider, Error: err, AttemptsCount: 1}
+	m.fixer.finish(torrent.InfoHash, req, fixResult)
 
 	if err != nil {
 		job.Status = storage.SwitcherStatusFailed

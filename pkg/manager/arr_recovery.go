@@ -266,7 +266,7 @@ func (m *Manager) ClearBad(_ context.Context, infohash string) error {
 	}
 	var running bool
 	flipped, gone, err := m.setBad(infohash, false, func() bool {
-		running = m.fixer.repairRunning(infohash)
+		running = m.fixer.repairs.running(infohash)
 		return running
 	})
 	if err != nil || gone {
@@ -282,7 +282,7 @@ func (m *Manager) ClearBad(_ context.Context, infohash string) error {
 	if flipped {
 		m.refreshLater()
 	}
-	m.fixer.ResetFailureState(infohash)
+	m.fixer.repairs.reset(infohash)
 	m.logger.Info().Str("infohash", infohash).Str("name", entry.Name).Msg("cleared bad mark: files pass the read check")
 	return nil
 }

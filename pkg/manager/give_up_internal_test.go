@@ -280,7 +280,7 @@ func TestClearBadClearsAndPersists(t *testing.T) {
 	t.Parallel()
 	m, entry := newGiveUpTestManager(t, &queueArr{}, &fakeArrRecovery{})
 	saveBad(t, m, entry, true)
-	m.fixer.failedToReinsert.Store(failureKey(droppedHash, "x"), struct{}{})
+	m.fixer.repairs.fail(droppedHash, "x", time.Now())
 	synctest.Test(t, func(t *testing.T) {
 		m.work = testGroup(t)
 		if err := m.ClearBad(t.Context(), droppedHash); err != nil {
@@ -292,7 +292,7 @@ func TestClearBadClearsAndPersists(t *testing.T) {
 	if err != nil || stored.Bad {
 		t.Fatalf("stored = %+v, %v; want the mark cleared", stored, err)
 	}
-	if m.fixer.IsFailedToReinsert(droppedHash, "x") {
+	if m.fixer.repairs.failed(droppedHash, "x", time.Now()) {
 		t.Fatal("failure key survived the clear")
 	}
 	if got := refreshes(m); got != 1 {
@@ -322,7 +322,7 @@ func TestClearBadIgnoresUnmarkedMissingAndInFlight(t *testing.T) {
 	}
 
 	saveBad(t, m, entry, true)
-	m.fixer.inFlightRepairs.Store(droppedHash, &FixerRequest{done: make(chan struct{})})
+	m.fixer.repairs.begin(droppedHash, &FixerRequest{done: make(chan struct{})})
 	if err := m.ClearBad(t.Context(), droppedHash); err != nil {
 		t.Fatal(err)
 	}

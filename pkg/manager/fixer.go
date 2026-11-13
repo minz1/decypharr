@@ -4,10 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
-
-	"github.com/puzpuzpuz/xsync/v4"
 
 	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/internal/utils"
@@ -20,10 +17,8 @@ import (
 type Fixer struct {
 	manager *Manager
 
-	// Track re-insertion attempts and failures
-	failedToReinsert   *xsync.Map[string, struct{}]      // infohash:debrid -> failed completely
-	inFlightRepairs    *xsync.Map[string, *FixerRequest] // infohash -> repair request
-	providerOrder      []string                          // Order of providers to try (from config)
+	repairs            repairTable
+	providerOrder      []string
 	maxReinsertRetries int
 }
 
@@ -46,6 +41,9 @@ func (r *FixerRequest) wait(ctx context.Context, name string) (*FixResult, error
 	defer timer.Stop()
 	select {
 	case <-r.done:
+		if r.result == nil {
+			return nil, fmt.Errorf("repair of %s ended without a result", name)
+		}
 		return r.result, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -80,8 +78,6 @@ func NewFixer(manager *Manager) *Fixer {
 
 	return &Fixer{
 		manager:            manager,
-		failedToReinsert:   xsync.NewMap[string, struct{}](),
-		inFlightRepairs:    xsync.NewMap[string, *FixerRequest](),
 		providerOrder:      debridOrder,
 		maxReinsertRetries: fixerMaxReinsertRetries,
 	}
@@ -119,7 +115,17 @@ func (f *Fixer) FixTorrent(ctx context.Context, entry *storage.Entry, skipCurren
 			AttemptsCount: 0,
 		}, nil
 	}
-	req := &FixerRequest{
+	req := f.newRequest(entry)
+	if inFlight, owner := f.repairs.begin(entry.InfoHash, req); !owner {
+		return inFlight.wait(ctx, entry.Name)
+	}
+	result, err := f.runRepair(ctx, entry.Clone(), skipCurrent, req)
+	f.finish(entry.InfoHash, req, result)
+	return result, err
+}
+
+func (f *Fixer) newRequest(entry *storage.Entry) *FixerRequest {
+	return &FixerRequest{
 		InfoHash:         entry.InfoHash,
 		CurrentDebrid:    entry.ActiveProvider,
 		AttemptedDebrids: make([]string, 0),
@@ -127,17 +133,13 @@ func (f *Fixer) FixTorrent(ctx context.Context, entry *storage.Entry, skipCurren
 		LastAttempt:      time.Now(),
 		done:             make(chan struct{}),
 	}
-	// LoadOrStore so two callers can never both start a repair; everyone else
-	// waits on the owner's done channel.
-	if inFlight, loaded := f.inFlightRepairs.LoadOrStore(entry.InfoHash, req); loaded {
-		return inFlight.wait(ctx, entry.Name)
-	}
-	defer f.inFlightRepairs.Delete(entry.InfoHash)
+}
 
-	result, err := f.runRepair(ctx, entry.Clone(), skipCurrent, req)
+// finish stores a repair's result, releases its waiters and clears it from the table.
+func (f *Fixer) finish(key string, req *FixerRequest, result *FixResult) {
 	req.result = result
 	close(req.done)
-	return result, err
+	f.repairs.end(key)
 }
 
 // runRepair tries each debrid in order until one accepts the entry, marking
@@ -153,7 +155,7 @@ func (f *Fixer) runRepair(
 
 	for _, debridName := range f.buildAttemptOrder(entry, skipCurrent) {
 		// Check if entry has been marked as failed to re-insert
-		if f.IsFailedToReinsert(entry.InfoHash, debridName) {
+		if f.repairs.failed(entry.InfoHash, debridName, time.Now()) {
 			continue
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -188,7 +190,7 @@ func (f *Fixer) runRepair(
 				Str("name", entry.Name).
 				Str("infohash", entry.InfoHash).
 				Msg("Successfully re-inserted entry")
-			f.ResetFailureState(entry.InfoHash)
+			f.repairs.reset(entry.InfoHash)
 			return &FixResult{Success: true, NewDebrid: debridName, AttemptsCount: totalAttempts}, nil
 		}
 
@@ -203,7 +205,7 @@ func (f *Fixer) runRepair(
 			Str("infohash", entry.InfoHash).
 			Str("name", entry.Name).
 			Msg("re-insert attempt failed")
-		f.failedToReinsert.Store(failureKey(entry.InfoHash, debridName), struct{}{})
+		f.repairs.fail(entry.InfoHash, debridName, time.Now())
 	}
 	// Giving up fails the grab in the Arr, so a stopping manager must never reach it.
 	if stopErr := f.workStopped(); stopErr != nil {
@@ -220,7 +222,6 @@ func (f *Fixer) runRepair(
 		Int("attempts", totalAttempts).
 		Msg("All re-insertion attempts failed")
 
-	f.failedToReinsert.Store(entry.InfoHash, struct{}{})
 	f.manager.giveUpOnEntry(entry)
 
 	result := &FixResult{
@@ -377,29 +378,3 @@ func (f *Fixer) buildAttemptOrder(torrent *storage.Entry, skipCurrent bool) []st
 	return order
 }
 
-// IsFailedToReinsert checks if a torrent has been marked as failed to re-insert.
-func (f *Fixer) IsFailedToReinsert(infohash, debrid string) bool {
-	_, failed := f.failedToReinsert.Load(failureKey(infohash, debrid))
-	return failed
-}
-
-// ResetFailureState clears every failure recorded for a torrent, including the
-// per-debrid ones, so a later repair may try those debrids again.
-func (f *Fixer) ResetFailureState(infohash string) {
-	prefix := failureKey(infohash, "")
-	f.failedToReinsert.Range(func(key string, _ struct{}) bool {
-		if key == infohash || strings.HasPrefix(key, prefix) {
-			f.failedToReinsert.Delete(key)
-		}
-		return true
-	})
-}
-
-func failureKey(infohash, debrid string) string {
-	return infohash + ":" + debrid
-}
-
-func (f *Fixer) repairRunning(infohash string) bool {
-	_, running := f.inFlightRepairs.Load(infohash)
-	return running
-}

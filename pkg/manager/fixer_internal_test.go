@@ -226,7 +226,7 @@ func TestFixTorrentReleasesAllWaiters(t *testing.T) {
 		fixer := NewFixer(withTestConfig(t, &Manager{work: testGroup(t), logger: zerolog.Nop()}))
 		entry := &storage.Entry{InfoHash: "hash", Name: "release", Protocol: config.ProtocolTorrent}
 		inFlight := &FixerRequest{InfoHash: entry.InfoHash, done: make(chan struct{})}
-		fixer.inFlightRepairs.Store(entry.InfoHash, inFlight)
+		fixer.repairs.begin(entry.InfoHash, inFlight)
 
 		const waiters = 3
 		results := make(chan *FixResult, waiters)
@@ -253,16 +253,17 @@ func TestFixTorrentReleasesAllWaiters(t *testing.T) {
 func TestResetFailureStateClearsPerDebridFailures(t *testing.T) {
 	t.Parallel()
 	fixer := NewFixer(withTestConfig(t, &Manager{work: testGroup(t), logger: zerolog.Nop()}))
-	fixer.failedToReinsert.Store(failureKey("hash", "provider"), struct{}{})
-	fixer.failedToReinsert.Store("hash", struct{}{})
-	fixer.failedToReinsert.Store(failureKey("other", "provider"), struct{}{})
+	now := time.Now()
+	fixer.repairs.fail("hash", "provider", now)
+	fixer.repairs.fail("hash", "second", now)
+	fixer.repairs.fail("other", "provider", now)
 
-	fixer.ResetFailureState("hash")
+	fixer.repairs.reset("hash")
 
-	if fixer.IsFailedToReinsert("hash", "provider") {
+	if fixer.repairs.failed("hash", "provider", now) || fixer.repairs.failed("hash", "second", now) {
 		t.Fatal("per-debrid failure survived a reset")
 	}
-	if !fixer.IsFailedToReinsert("other", "provider") {
+	if !fixer.repairs.failed("other", "provider", now) {
 		t.Fatal("reset cleared another torrent's failure")
 	}
 }
@@ -392,7 +393,7 @@ func TestFixStopMidHealNoGiveUp(t *testing.T) {
 			if n := h.confirms.Load(); n != 0 {
 				t.Fatalf("give-up checks = %d, want 0", n)
 			}
-			if n := h.fixer.failedToReinsert.Size(); n != 0 {
+			if n := h.fixer.repairs.size(); n != 0 {
 				t.Fatalf("failure memos = %d, want 0", n)
 			}
 			if n := client.deletions.Load(); n != 0 {
@@ -437,7 +438,7 @@ func TestFixRunCtxCancelHealCompletes(t *testing.T) {
 	if getErr != nil || stored.ActiveProvider != "remaining" {
 		t.Fatalf("stored entry = %+v, %v; want remaining active", stored, getErr)
 	}
-	if n := h.fixer.failedToReinsert.Size(); n != 0 {
+	if n := h.fixer.repairs.size(); n != 0 {
 		t.Fatalf("failure memos = %d, want 0", n)
 	}
 }
@@ -460,11 +461,8 @@ func TestFixReaderCancelAfterFailureStoresMemo(t *testing.T) {
 	if got.err == nil || got.result == nil || got.result.Success {
 		t.Fatalf("heal = %#v, error = %v; want a failure", got.result, got.err)
 	}
-	if !h.fixer.IsFailedToReinsert(h.entry.InfoHash, "remaining") {
+	if !h.fixer.repairs.failed(h.entry.InfoHash, "remaining", time.Now()) {
 		t.Fatal("per-debrid memo was not stored")
-	}
-	if _, ok := h.fixer.failedToReinsert.Load(h.entry.InfoHash); !ok {
-		t.Fatal("whole-torrent memo was not stored")
 	}
 	if n := h.confirms.Load(); n != 1 {
 		t.Fatalf("give-up checks = %d, want 1", n)
