@@ -272,8 +272,6 @@ func lookupResult(st State, ev Event) (State, []Effect, error) {
 	switch {
 	case ev.Outcome.is(OutcomeFound):
 		return placed(st, ev)
-	case ev.Outcome.is(OutcomeUnknown):
-		return st, nil, nil // the lookup child retries
 	case ev.Outcome.is(OutcomeAbsent):
 		return enter(st, PhaseQueued, ev, Effect{Kind: FxRequestAdmission})
 	}

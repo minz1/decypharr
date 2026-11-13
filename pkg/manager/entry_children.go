@@ -37,9 +37,7 @@ func (m *Manager) entryChild(call entryChildCall) func(ctx context.Context) entr
 		return func(ctx context.Context) entryMsg { return m.cleanupChild(ctx, call) }
 	case grab.ChildLookup:
 	}
-	return func(context.Context) entryMsg {
-		return eventMsg(grab.Event{Kind: grab.EvLookup, Outcome: grab.OutcomeUnknown})
-	}
+	return func(context.Context) entryMsg { return entryMsg{} }
 }
 
 // submitChild sends the grab's magnet to a provider. A stop says nothing about the submit: the child reports no

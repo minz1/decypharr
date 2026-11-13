@@ -197,8 +197,7 @@ func childReply(kind grab.ChildKind, key string, v int) entryMsg {
 		return [...]entryMsg{
 			propPlaced(grab.EvLookup, grab.OutcomeFound, key, false, false),
 			eventMsg(grab.Event{Kind: grab.EvLookup, Outcome: grab.OutcomeAbsent}),
-			eventMsg(grab.Event{Kind: grab.EvLookup, Outcome: grab.OutcomeUnknown}),
-			{}, {},
+			{}, {}, {},
 		}[v]
 	case grab.ChildPoll:
 		return [...]entryMsg{

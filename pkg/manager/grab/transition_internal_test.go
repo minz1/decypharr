@@ -141,7 +141,7 @@ func TestTransitionRows(t *testing.T) {
 		},
 		{"submit unknown", in(PhaseSubmitting), withOutcome(EvSubmitResult, OutcomeUnknown), PhaseSubmitting,
 			[]string{"start:lookup"}, false},
-		{"lookup unknown", in(PhaseSubmitting), withOutcome(EvLookup, OutcomeUnknown), PhaseSubmitting, nil, false},
+		{"lookup unknown", in(PhaseSubmitting), withOutcome(EvLookup, OutcomeUnknown), PhaseSubmitting, nil, true},
 		{"lookup absent", in(PhaseSubmitting), withOutcome(EvLookup, OutcomeAbsent), PhaseQueued,
 			[]string{"persist", "admit"}, false},
 		{"provider poll timer", in(PhaseProvider), ev(EvPollTimer), PhaseProvider, nil, false},

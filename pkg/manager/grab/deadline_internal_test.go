@@ -43,7 +43,6 @@ func TestNextDeadline(t *testing.T) {
 		{name: "not pending", st: provider(time.Time{}), v: DeadlineView{PendingBase: base}, none: true},
 		{name: "stalled", st: provider(base), v: DeadlineView{StalledAfter: time.Hour},
 			want: EvStalledDeadline, at: base.Add(time.Hour), fail: FailNoEffect},
-		{name: "stalled without a limit", st: provider(base), none: true},
 		{name: "stalled before pending", st: provider(base),
 			v:    DeadlineView{PendingBase: base, Pending: PendingProvider, StalledAfter: time.Hour},
 			want: EvStalledDeadline, at: base.Add(time.Hour), fail: FailNoEffect},
@@ -89,7 +88,7 @@ func TestEveryNonTerminalPhaseHasADeadlineOrAChildInFlight(t *testing.T) {
 	t.Parallel()
 	maximal := DeadlineView{
 		PendingBase: at(), Pending: PendingProvider, DownloadedAt: at(), StalledAfter: time.Hour,
-		Retention: time.Hour, SeenFailure: at(),
+		Retention: time.Hour, SeenFailure: at(), SubmitBase: at(), SubmitBudget: time.Minute,
 	}
 	for _, p := range AllPhases() {
 		st := in(p)
@@ -103,11 +102,11 @@ func TestEveryNonTerminalPhaseHasADeadlineOrAChildInFlight(t *testing.T) {
 			if hasDeadline {
 				t.Errorf("%v is idle yet has a deadline", p)
 			}
-		case PhaseQueued, PhaseThrottled, PhaseSubmitting, PhaseActing, PhaseDeleting:
+		case PhaseQueued, PhaseThrottled, PhaseActing, PhaseDeleting:
 			if hasDeadline {
 				t.Errorf("%v has a timer or child of its own yet also a derived deadline", p)
 			}
-		case PhaseProvider, PhaseAwaitingLinks, PhaseFailed:
+		case PhaseSubmitting, PhaseProvider, PhaseAwaitingLinks, PhaseFailed:
 			if !hasDeadline {
 				t.Errorf("%v waits on the clock yet has no deadline", p)
 			}
@@ -160,5 +159,70 @@ func TestUnknownRunArmsTheStalledDeadline(t *testing.T) {
 	failed, _, err = Transition(st, ev)
 	if err != nil || failed.Failure.Reason != "stalled" {
 		t.Fatalf("stall failed as %+v %v", failed.Failure, err)
+	}
+}
+
+func TestSubmittingDeadlines(t *testing.T) {
+	t.Parallel()
+	base := at()
+	budget := 21 * time.Minute
+	nzb := in(PhaseSubmitting)
+	nzb.NZB = true
+	cases := []struct {
+		name   string
+		st     State
+		v      DeadlineView
+		want   EventKind
+		at     time.Time
+		fail   FailEffect
+		reason string
+		none   bool
+	}{
+		{name: "submit running", st: in(PhaseSubmitting),
+			v:    DeadlineView{SubmitBase: base, SubmitBudget: budget, SubmitRunning: true},
+			want: EvSubmitDeadline, at: base.Add(budget)},
+		{name: "submit not running", st: in(PhaseSubmitting),
+			v:    DeadlineView{SubmitBase: base, SubmitBudget: budget},
+			want: EvLookupDeadline, at: base.Add(budget + LookupLimit), fail: FailNoEffect,
+			reason: "submit outcome unknown"},
+		{name: "nzb", st: nzb, v: DeadlineView{SubmitBase: base, SubmitBudget: budget, SubmitRunning: true},
+			none: true},
+		{name: "zero base", st: in(PhaseSubmitting), v: DeadlineView{SubmitBudget: budget}, none: true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			ev, due, ok := NextDeadline(c.st, c.v)
+			if c.none {
+				if ok {
+					t.Fatalf("deadline %v at %v, want none", ev.Kind, due)
+				}
+				return
+			}
+			if !ok || ev.Kind != c.want || !due.Equal(c.at) || ev.Fail != c.fail || ev.Reason != c.reason {
+				t.Fatalf("got %v at %v fail %v reason %q (ok %v), want %v at %v fail %v reason %q",
+					ev.Kind, due, ev.Fail, ev.Reason, ok, c.want, c.at, c.fail, c.reason)
+			}
+		})
+	}
+}
+
+func TestUnknownCappedWithoutStalledAfter(t *testing.T) {
+	t.Parallel()
+	st := State{Key: "k", Phase: PhaseProvider, UnknownRaw: "x", StalledSince: at()}
+	ev, due, ok := NextDeadline(st, DeadlineView{})
+	if !ok || ev.Kind != EvStalledDeadline || !due.Equal(at().Add(PendingLimit)) || ev.Fail != FailNoEffect {
+		t.Fatalf("%+v at %v (ok %v), want a stall deadline at %v", ev, due, ok, at().Add(PendingLimit))
+	}
+	if want := `provider state "x" unknown for 6h0m0s`; ev.Reason != want {
+		t.Fatalf("capped unknown run reason %q, want %q", ev.Reason, want)
+	}
+	v := DeadlineView{PendingBase: at(), Pending: PendingConverting}
+	if ev, due, _ = NextDeadline(st, v); ev.Kind != EvPendingDeadline || !due.Equal(at().Add(ConversionLimit)) {
+		t.Fatalf("an earlier pending deadline lost to the cap: %v at %v", ev.Kind, due)
+	}
+	st.UnknownRaw = ""
+	if ev, due, ok = NextDeadline(st, DeadlineView{}); ok {
+		t.Fatalf("a plain stall without a limit got %v at %v, want none", ev.Kind, due)
 	}
 }

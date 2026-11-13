@@ -30,6 +30,10 @@ const (
 	// NZBRetention is the least time a failed NZB stays in SAB history: a backfilling arr can skip refreshes for
 	// hours.
 	NZBRetention = 24 * time.Hour
+	// LookupLimit is how long lookups may run after a submit whose outcome is unknown before the grab fails.
+	LookupLimit = time.Hour
+	// LookupSettle is how long a lookup waits before, and between, the listings that may call a torrent absent.
+	LookupSettle = 2 * time.Minute
 )
 
 // DeadlineView is what NextDeadline reads besides the state: the timestamps of the record, what the last poll saw
@@ -50,6 +54,12 @@ type DeadlineView struct {
 	SeenFailure time.Time
 	// PackRunning is a pack still waiting for this season.
 	PackRunning bool
+	// SubmitBase is when the submit window of a submitting grab starts; zero when unknown.
+	SubmitBase time.Time
+	// SubmitBudget is the longest a submit child may run.
+	SubmitBudget time.Duration
+	// SubmitRunning is a submit child still live and not cut by its deadline.
+	SubmitRunning bool
 }
 
 // NextDeadline is the next event the clock owes the grab, and when it is due; false when none is. It is pure: every
@@ -68,9 +78,23 @@ func NextDeadline(st State, v DeadlineView) (Event, time.Time, bool) {
 		}, v.DownloadedAt.Add(LinksLimit), true
 	case PhaseFailed:
 		return retentionDeadline(st, v)
-	case PhaseAbsent, PhaseQueued, PhaseThrottled, PhaseSubmitting, PhaseActing, PhaseComplete, PhaseDeleting:
+	case PhaseSubmitting:
+		return submitDeadline(st, v)
+	case PhaseAbsent, PhaseQueued, PhaseThrottled, PhaseActing, PhaseComplete, PhaseDeleting:
 	}
 	return Event{}, time.Time{}, false
+}
+
+func submitDeadline(st State, v DeadlineView) (Event, time.Time, bool) {
+	if st.NZB || v.SubmitBase.IsZero() {
+		return Event{}, time.Time{}, false
+	}
+	due := v.SubmitBase.Add(v.SubmitBudget)
+	if v.SubmitRunning {
+		return Event{Kind: EvSubmitDeadline}, due, true
+	}
+	ev := Event{Kind: EvLookupDeadline, Fail: FailNoEffect, Reason: "submit outcome unknown"}
+	return ev, due.Add(LookupLimit), true
 }
 
 func providerDeadline(st State, v DeadlineView) (Event, time.Time, bool) {
@@ -86,11 +110,15 @@ func providerDeadline(st State, v DeadlineView) (Event, time.Time, bool) {
 			ev.Fail = FailBadRelease
 		}
 	}
-	if !st.StalledSince.IsZero() && v.StalledAfter > 0 {
-		if at := st.StalledSince.Add(v.StalledAfter); !ok || at.Before(due) {
+	limit := v.StalledAfter
+	if limit <= 0 && st.UnknownRaw != "" {
+		limit = PendingLimit
+	}
+	if !st.StalledSince.IsZero() && limit > 0 {
+		if at := st.StalledSince.Add(limit); !ok || at.Before(due) {
 			ev, due, ok = Event{Kind: EvStalledDeadline, Fail: FailNoEffect}, at, true
 			if st.UnknownRaw != "" {
-				ev.Reason = fmt.Sprintf("provider state %q unknown for %s", st.UnknownRaw, v.StalledAfter)
+				ev.Reason = fmt.Sprintf("provider state %q unknown for %s", st.UnknownRaw, limit)
 			}
 		}
 	}
