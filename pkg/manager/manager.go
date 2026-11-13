@@ -114,7 +114,7 @@ type Manager struct {
 	// checkStreamFile confirms a stream failure; nil uses the usenet client's full article check.
 	checkStreamFile func(ctx context.Context, nzoID, filename string) error
 	// confirmBroken checks an entry's active placement before a give-up marks it; nil uses the repair service.
-	confirmBroken func(ctx context.Context, entry *storage.Entry) bool
+	confirmBroken func(ctx context.Context, entry *storage.Entry) repair.Verdict
 	// badRecheckDelay is how long a give-up waits before its second check decides the arr grab.
 	badRecheckDelay time.Duration
 	// parseNZBFunc parses an NZB's articles; nil uses the usenet client.

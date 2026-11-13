@@ -17,15 +17,18 @@ const (
 	libPut libOpKind = iota
 	libDelete
 	libRemoveFile
+	libMerge
 )
 
-// libraryOp is one write to a library record. A cascade delete also deletes the key's grab.
+// libraryOp is one write to a library record. A cascade delete also deletes the key's grab. A merge op rewrites the
+// record from a fresh read, under the stripe; its func must not lock.
 type libraryOp struct {
 	kind    libOpKind
 	entry   *storage.Entry
 	file    string
 	folder  string
 	cascade bool
+	merge   func(fresh *storage.Entry) (*storage.Entry, error)
 }
 
 // applyLibraryOp writes op to key's library record; the caller holds key's stripe.
@@ -37,6 +40,8 @@ func applyLibraryOp(s *storage.Storage, key string, op libraryOp) error {
 		return s.Delete(key)
 	case libRemoveFile:
 		return s.RemoveFile(key, op.folder, op.file)
+	case libMerge:
+		return s.MergeEntryLocked(key, op.merge)
 	}
 	return fmt.Errorf("unknown library op %d", op.kind)
 }
@@ -134,6 +139,8 @@ func (a *entryActor) library(key string, st *entryState, op *libraryOp, fx *keye
 		unlock := a.store.LockEntry(key)
 		err = a.store.RemoveFile(key, op.folder, op.file)
 		unlock()
+	case op.kind == libMerge:
+		err = a.store.MergeEntry(key, op.merge)
 	}
 	fx.Reply(err)
 }
@@ -154,4 +161,13 @@ func (m *Manager) pruneDelete(key string) error {
 		return errPruneGrabbed
 	}
 	return m.storage.Delete(key)
+}
+
+// mergeLibrary rewrites key's library record from a fresh read; merge runs under the stripe and must not lock.
+func (m *Manager) mergeLibrary(
+	ctx context.Context,
+	key string,
+	merge func(fresh *storage.Entry) (*storage.Entry, error),
+) error {
+	return m.writeLibrary(ctx, key, libraryOp{kind: libMerge, merge: merge})
 }

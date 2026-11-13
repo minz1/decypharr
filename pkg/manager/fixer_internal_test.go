@@ -18,6 +18,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/task"
 	debrid "github.com/sirrobot01/decypharr/pkg/debrid/common"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
+	"github.com/sirrobot01/decypharr/pkg/repair"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
@@ -95,6 +96,9 @@ func checkFixWithRemovedProvider(t *testing.T, existing bool) {
 			DownloadedAt: &stamp,
 		}
 	}
+	if err = store.AddOrUpdate(entry); err != nil {
+		t.Fatal(err)
+	}
 	result, err := fixer.FixTorrent(t.Context(), entry, false)
 	if err != nil || !result.Success {
 		t.Fatalf("repair = %#v, error = %v", result, err)
@@ -144,7 +148,7 @@ func TestRunRepairLogsEveryAttempt(t *testing.T) {
 	m := withTestConfig(t, &Manager{
 		storage: store, clients: xsync.NewMap[string, debrid.Client](), logger: zerolog.New(&logs),
 		entry:         newEntryCache(func(string) bool { return false }, nil, nil),
-		confirmBroken: func(context.Context, *storage.Entry) bool { return false },
+		confirmBroken: func(context.Context, *storage.Entry) repair.Verdict { return repair.VerdictHealthy },
 	})
 	m.clients.Store("first", &refusingProvider{err: errors.New("first refused")})
 	m.clients.Store("second", &refusingProvider{err: errors.New("second refused")})
@@ -195,6 +199,9 @@ func TestMoveTorrentRefreshesWhenClearingBad(t *testing.T) {
 					"removed":   {Provider: "removed", ID: "old", Status: types.TorrentStatusDownloaded},
 					"remaining": {Provider: "remaining", ID: "new", Status: types.TorrentStatusDownloaded},
 				},
+			}
+			if err = store.AddOrUpdate(entry); err != nil {
+				t.Fatal(err)
 			}
 			if result, fixErr := fixer.FixTorrent(t.Context(), entry, false); fixErr != nil || !result.Success {
 				t.Fatalf("repair = %#v, error = %v", result, fixErr)
@@ -311,9 +318,9 @@ func newHealHarness(t *testing.T, client debrid.Client) *healHarness {
 	m := withTestConfig(t, &Manager{
 		work: work, storage: store, clients: xsync.NewMap[string, debrid.Client](), logger: zerolog.Nop(),
 		entry: newEntryCache(func(string) bool { return false }, nil, nil),
-		confirmBroken: func(context.Context, *storage.Entry) bool {
+		confirmBroken: func(context.Context, *storage.Entry) repair.Verdict {
 			h.confirms.Add(1)
-			return false
+			return repair.VerdictHealthy
 		},
 	})
 	m.life = newLifecycle()
@@ -327,6 +334,9 @@ func newHealHarness(t *testing.T, client debrid.Client) *healHarness {
 		Providers: map[string]*storage.ProviderEntry{
 			"removed": {Provider: "removed", ID: "old", Status: types.TorrentStatusDownloaded},
 		},
+	}
+	if err = store.AddOrUpdate(h.entry); err != nil {
+		t.Fatal(err)
 	}
 	return h
 }

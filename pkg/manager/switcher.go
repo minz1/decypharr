@@ -68,10 +68,12 @@ func (m *Manager) executeMigration(ctx context.Context, job *storage.SwitcherJob
 	}
 	job.Progress = 10
 
-	torrent = torrent.Clone()
-	success, err := m.fixer.MoveTorrent(torrent, job.TargetProvider, false)
+	result, err := m.fixer.MoveTorrent(torrent.Clone(), job.TargetProvider, false)
+	if err == nil {
+		err = m.applyRepairResult(ctx, torrent.InfoHash, result)
+	}
 
-	if err != nil || !success {
+	if err != nil {
 		job.Status = storage.SwitcherStatusFailed
 		job.Error = fmt.Sprintf("failed to move torrent to target debrid: %v", err)
 		job.CompletedAt = new(time.Now())
@@ -83,30 +85,17 @@ func (m *Manager) executeMigration(ctx context.Context, job *storage.SwitcherJob
 	}
 
 	if !job.KeepOld {
-		var sourcePlacement *storage.ProviderEntry
-		for _, p := range torrent.Providers {
-			if p.Provider == job.SourceProvider {
-				sourcePlacement = p
-				break
-			}
-		}
-
-		if sourcePlacement != nil {
-			m.dropSourcePlacement(ctx, torrent, job.SourceProvider)
+		if dropErr := m.dropSourcePlacement(ctx, torrent.InfoHash, job.SourceProvider); dropErr != nil {
+			job.Status = storage.SwitcherStatusFailed
+			job.Error = fmt.Sprintf("failed to update torrent: %v", dropErr)
+			m.logger.Error().Err(dropErr).Msg("Failed to update torrent after migration")
+			job.CompletedAt = new(time.Now())
+			return
 		}
 	}
-
-	if addOrUpdateErr := m.AddOrUpdate(torrent, func(_ *storage.Entry) {
-		m.InvalidateEntryCache()
-	}); addOrUpdateErr != nil {
-		job.Status = storage.SwitcherStatusFailed
-		job.Error = fmt.Sprintf("failed to update torrent: %v", addOrUpdateErr)
-		m.logger.Error().Err(addOrUpdateErr).Msg("Failed to update torrent after migration")
-	} else {
-		job.Status = storage.SwitcherStatusCompleted
-		job.Progress = 100
-	}
-
+	m.InvalidateEntryCache()
+	job.Status = storage.SwitcherStatusCompleted
+	job.Progress = 100
 	job.CompletedAt = new(time.Now())
 
 	m.logger.Info().

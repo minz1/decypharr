@@ -79,6 +79,11 @@ func freshLink(name string) debridTypes.DownloadLink {
 	}
 }
 
+func later(link debridTypes.DownloadLink) debridTypes.DownloadLink {
+	link.Generated = time.Now().Add(time.Hour)
+	return link
+}
+
 func aged(link debridTypes.DownloadLink) debridTypes.DownloadLink {
 	link.Generated = time.Now().Add(-time.Hour)
 	return link
@@ -128,27 +133,29 @@ func TestConfirmBroken(t *testing.T) {
 	statusErr := func(status int) error { return customerror.NewProviderStatusError(errors.New("x"), status) }
 	fail := func(err error) []linkResult { return []linkResult{{err: err}} }
 	for _, tc := range []struct {
-		name  string
-		links map[string][]linkResult
-		nzb   bool
-		none  bool
-		want  bool
+		name    string
+		links   map[string][]linkResult
+		nzb     bool
+		none    bool
+		noFiles bool
+		want    Verdict
 	}{
-		{name: "both links fine", want: false},
-		{name: "hoster unavailable", links: map[string][]linkResult{"b.mkv": fail(customerror.ErrHosterUnavailable)}, want: true},
-		{name: "empty link", links: map[string][]linkResult{"b.mkv": {{}}}, want: true},
+		{name: "both links fine", want: VerdictHealthy},
+		{name: "hoster unavailable", links: map[string][]linkResult{"b.mkv": fail(customerror.ErrHosterUnavailable)}, want: VerdictBroken},
+		{name: "empty link", links: map[string][]linkResult{"b.mkv": {{}}}, want: VerdictBroken},
 		{name: "torrent not found", links: map[string][]linkResult{
 			"b.mkv": fail(fmt.Errorf("x: %w", customerror.ErrTorrentNotFound)),
-		}, want: true},
-		{name: "forbidden is inconclusive", links: map[string][]linkResult{"a.mkv": fail(statusErr(403))}, want: false},
+		}, want: VerdictBroken},
+		{name: "forbidden is inconclusive", links: map[string][]linkResult{"a.mkv": fail(statusErr(403))}, want: VerdictInconclusive},
 		{name: "unauthorized and outage", links: map[string][]linkResult{
 			"a.mkv": fail(statusErr(401)), "b.mkv": fail(statusErr(503)),
-		}, want: false},
+		}, want: VerdictInconclusive},
 		{name: "outage then hoster unavailable", links: map[string][]linkResult{
 			"a.mkv": fail(statusErr(503)), "b.mkv": fail(customerror.ErrHosterUnavailable),
-		}, want: true},
-		{name: "no client is inconclusive", none: true, want: false},
-		{name: "nzb entry", nzb: true, want: true},
+		}, want: VerdictBroken},
+		{name: "no client is inconclusive", none: true, want: VerdictInconclusive},
+		{name: "nzb entry", nzb: true, want: VerdictBroken},
+		{name: "no live file is inconclusive", noFiles: true, want: VerdictInconclusive},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -157,6 +164,9 @@ func TestConfirmBroken(t *testing.T) {
 				client = newLinkClient(tc.links)
 			}
 			entry := confirmEntry("a.mkv", "b.mkv")
+			if tc.noFiles {
+				entry.Files = nil
+			}
 			if tc.nzb {
 				entry.Protocol = config.ProtocolNZB
 			}
@@ -172,8 +182,12 @@ func TestConfirmBrokenSkipsDeletedFiles(t *testing.T) {
 	entry := confirmEntry("a.mkv", "gone.mkv")
 	entry.Files["gone.mkv"].Deleted = true
 	client := newLinkClient(map[string][]linkResult{"gone.mkv": {{err: customerror.ErrHosterUnavailable}}})
-	if confirmService(t, client).ConfirmBroken(t.Context(), entry) {
-		t.Fatal("ConfirmBroken = true, want a deleted file left unprobed")
+	if got := confirmService(t, client).ConfirmBroken(t.Context(), entry); got != VerdictHealthy {
+		t.Fatalf("ConfirmBroken = %v, want a deleted file left unprobed", got)
+	}
+	entry.Files["a.mkv"].Deleted = true
+	if got := confirmService(t, client).ConfirmBroken(t.Context(), entry); got != VerdictInconclusive {
+		t.Fatalf("ConfirmBroken = %v, want no live file inconclusive", got)
 	}
 }
 
@@ -183,11 +197,11 @@ func TestFreshProbeRefetchesCachedLink(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		second linkResult
-		want   bool
+		want   Verdict
 	}{
-		{name: "dead on refetch", second: linkResult{err: customerror.ErrHosterUnavailable}, want: true},
-		{name: "fine on refetch", second: linkResult{link: freshLink("a.mkv")}, want: false},
-		{name: "still old on refetch", second: linkResult{link: aged(freshLink("a.mkv"))}, want: false},
+		{name: "dead on refetch", second: linkResult{err: customerror.ErrHosterUnavailable}, want: VerdictBroken},
+		{name: "fine on refetch", second: linkResult{link: later(freshLink("a.mkv"))}, want: VerdictHealthy},
+		{name: "still old on refetch", second: linkResult{link: aged(freshLink("a.mkv"))}, want: VerdictInconclusive},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -274,8 +288,8 @@ func TestFreshProbeEvictsFromTheAccountCache(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	if !confirmService(t, client).ConfirmBroken(t.Context(), entry) {
-		t.Fatal("ConfirmBroken = false, want the cached old link evicted and the dead refetch seen")
+	if confirmService(t, client).ConfirmBroken(t.Context(), entry) != VerdictBroken {
+		t.Fatal("ConfirmBroken != broken, want the cached old link evicted and the dead refetch seen")
 	}
 	if inner.fetches != 2 {
 		t.Fatalf("provider fetches = %d, want 2 (warm-up, then the refetch after eviction)", inner.fetches)

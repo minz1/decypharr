@@ -251,7 +251,8 @@ func (m *Manager) refreshAfterSave() {
 	}
 }
 
-// ClearBad lifts a bad mark that a fresh read check disproved; a repair in flight defers it to the next sweep.
+// ClearBad lifts a bad mark that a fresh read check disproved; a repair in flight defers it to the next sweep. It
+// writes only the flag, on a fresh read, so a placement or file state written meanwhile survives.
 func (m *Manager) ClearBad(_ context.Context, infohash string) error {
 	entry, err := m.GetEntry(infohash)
 	if errors.Is(err, appendstore.ErrKeyNotFound) {
@@ -263,28 +264,61 @@ func (m *Manager) ClearBad(_ context.Context, infohash string) error {
 	if !entry.Bad {
 		return nil
 	}
-	if _, inFlight := m.fixer.inFlightRepairs.Load(infohash); inFlight {
+	var running bool
+	flipped, gone, err := m.setBad(infohash, false, func() bool {
+		running = m.fixer.repairRunning(infohash)
+		return running
+	})
+	if err != nil || gone {
+		return err
+	}
+	if running {
 		return m.storage.MarkEntryDirty(
 			entry.GetFolder(m.folderNaming()),
 			config.ProtocolTorrent,
 			repair.MarkedBadReason,
 		)
 	}
-	entry.Bad = false
-	entry.UpdatedAt = time.Now()
-	if err = m.AddOrUpdate(entry, func(*storage.Entry) { m.refreshAfterSave() }); err != nil {
-		return err
+	if flipped {
+		m.refreshLater()
 	}
 	m.fixer.ResetFailureState(infohash)
 	m.logger.Info().Str("infohash", infohash).Str("name", entry.Name).Msg("cleared bad mark: files pass the read check")
 	return nil
 }
 
+// refreshLater shows a changed bad mark in the library from the work group; a stopping manager drops it.
+func (m *Manager) refreshLater() {
+	if err := m.runWork("bad-refresh", m.refreshAfterSave); err != nil {
+		m.logger.Debug().Err(err).Msg("Dropped the library refresh")
+	}
+}
+
+// setBad writes key's bad flag on a fresh read under the stripe (through the actor when the key has a grab). skip,
+// when set, runs inside that write and holds it back. flipped reports a changed flag; gone, a missing entry.
+func (m *Manager) setBad(key string, bad bool, skip func() bool) (flipped, gone bool, err error) {
+	err = m.mergeLibrary(m.work.Context(), key, func(fresh *storage.Entry) (*storage.Entry, error) {
+		if fresh == nil {
+			gone = true
+			return nil, storage.ErrNoChange
+		}
+		if skip != nil && skip() {
+			return nil, storage.ErrNoChange
+		}
+		out, mergeErr := withBad(fresh, bad, time.Now())
+		if mergeErr == nil {
+			flipped = true
+		}
+		return out, mergeErr
+	})
+	return flipped, gone, err
+}
+
 // confirmCheckTimeout bounds each fresh read check of an entry's active placement.
 const confirmCheckTimeout = time.Minute
 
-// entryBroken reports whether the entry's active placement fails a fresh read check.
-func (m *Manager) entryBroken(parent context.Context, entry *storage.Entry) bool {
+// recheckVerdict runs a fresh read check of the entry's active placement.
+func (m *Manager) recheckVerdict(parent context.Context, entry *storage.Entry) repair.Verdict {
 	ctx, cancel := context.WithTimeout(parent, confirmCheckTimeout)
 	defer cancel()
 	if m.confirmBroken != nil {
@@ -295,7 +329,7 @@ func (m *Manager) entryBroken(parent context.Context, entry *storage.Entry) bool
 
 // giveUpOnEntry marks a confirmed-broken entry bad; the arr grab waits for a second check, as a blocklist is final.
 func (m *Manager) giveUpOnEntry(entry *storage.Entry) {
-	if !m.entryBroken(m.work.Context(), entry) {
+	if m.recheckVerdict(m.work.Context(), entry) != repair.VerdictBroken {
 		event := m.logger.Warn()
 		msg := "not marking bad: active placement still serves links or the check was inconclusive"
 		if entry.ActiveProvider != "" && m.ProviderClient(entry.ActiveProvider) == nil {
@@ -305,9 +339,15 @@ func (m *Manager) giveUpOnEntry(entry *storage.Entry) {
 		event.Str("infohash", entry.InfoHash).Str("name", entry.Name).Msg(msg)
 		return
 	}
-	entry.Bad = true
-	if err := m.AddOrUpdate(entry, func(*storage.Entry) { m.refreshAfterSave() }); err != nil {
+	flipped, gone, err := m.setBad(entry.InfoHash, true, nil)
+	if err != nil {
 		m.logger.Warn().Err(err).Str("infohash", entry.InfoHash).Msg("Failed to persist the bad flag")
+	}
+	if gone {
+		return
+	}
+	if flipped {
+		m.refreshLater()
 	}
 	if entry.IsTorrent() {
 		if err := m.storage.MarkEntryDirty(entry.GetFolder(m.folderNaming()), config.ProtocolTorrent,
@@ -333,15 +373,17 @@ func (m *Manager) recheckBadEntry(ctx context.Context, infohash string) {
 	if err != nil || entry == nil || !entry.Bad {
 		return
 	}
-	if !m.entryBroken(ctx, entry) {
+	switch m.recheckVerdict(ctx, entry) {
+	case repair.VerdictHealthy:
 		if clearErr := m.ClearBad(ctx, infohash); clearErr != nil {
 			m.logger.Warn().Err(clearErr).Str("infohash", infohash).Msg("Failed to clear a disproved bad mark")
 		}
-		return
+	case repair.VerdictBroken:
+		failCtx, cancel := context.WithTimeout(ctx, time.Minute)
+		defer cancel()
+		m.failGrabIfQueued(failCtx, entry)
+	case repair.VerdictInconclusive:
 	}
-	failCtx, cancel := context.WithTimeout(ctx, time.Minute)
-	defer cancel()
-	m.failGrabIfQueued(failCtx, entry)
 }
 
 // failGrabIfQueued fails an arr torrent's grab only while the arr still queues it; imported files stay with repair.

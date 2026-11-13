@@ -3,6 +3,7 @@ package manager
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/sirrobot01/appendstore"
@@ -98,11 +99,35 @@ func (m *Manager) startPlacementRun(entry, provider string, run func(ctx context
 	return true
 }
 
-// dropSourcePlacement takes the placements an entry has on provider away from it and deletes them there.
-func (m *Manager) dropSourcePlacement(ctx context.Context, entry *storage.Entry, provider string) {
-	entry.RemoveProvider(provider, m.debridOrder(), func(placement *storage.ProviderEntry) error {
-		return m.RemoveFromProvider(ctx, placement, entry.InfoHash)
+// dropSourcePlacement takes the placements key's entry has on provider out of its record, then deletes them there:
+// a provider torrent is released only once no record lists it.
+func (m *Manager) dropSourcePlacement(ctx context.Context, key, provider string) error {
+	var dropped []*storage.ProviderEntry
+	err := m.mergeLibrary(ctx, key, func(fresh *storage.Entry) (*storage.Entry, error) {
+		if fresh == nil {
+			return nil, storage.ErrNoChange
+		}
+		out := fresh.Clone()
+		out.RemoveProvider(provider, m.debridOrder(), func(placement *storage.ProviderEntry) error {
+			dropped = append(dropped, placement)
+			return nil
+		})
+		if len(dropped) == 0 {
+			return nil, storage.ErrNoChange
+		}
+		out.UpdatedAt = time.Now()
+		return out, nil
 	})
+	if err != nil {
+		return err
+	}
+	for _, placement := range dropped {
+		if removeErr := m.RemoveFromProvider(ctx, placement, key); removeErr != nil {
+			ev, msg := m.placementFailure(removeErr, "Failed to delete a provider torrent of a dropped placement")
+			ev.Str("infohash", key).Str("provider", provider).Msg(msg)
+		}
+	}
+	return nil
 }
 
 // RemoveTorrentPlacements deletes the provider torrents of an entry that is gone, except those another entry holds.

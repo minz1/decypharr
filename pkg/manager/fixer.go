@@ -173,10 +173,16 @@ func (f *Fixer) runRepair(
 		// Force a fresh submit only for the broken active provider; for any other
 		// debrid, let MoveTorrent reuse an existing valid placement if present.
 		reinsert := debridName == entry.ActiveProvider
-		success, err := f.MoveTorrent(entry, debridName, reinsert)
+		result, err := f.MoveTorrent(entry, debridName, reinsert)
+		if err == nil {
+			err = f.manager.applyRepairResult(f.manager.work.Context(), entry.InfoHash, result)
+		}
 		totalAttempts++
 
-		if success {
+		if errors.Is(err, errRepairSuperseded) || errors.Is(err, errPlacementChanged) {
+			return &FixResult{Success: false, Error: err, AttemptsCount: totalAttempts}, err
+		}
+		if err == nil {
 			f.manager.logger.Info().
 				Str("debrid", debridName).
 				Str("name", entry.Name).
@@ -230,36 +236,32 @@ func (f *Fixer) runRepair(
 // failed while the manager runs is a real failure whoever asked for the heal.
 func (f *Fixer) workStopped() error { return f.manager.stopErr() }
 
-// MoveTorrent attempts to re-insert a torrent on a specific debrid. Its provider calls run on the work ctx, so it
-// takes no ctx of its own.
-func (f *Fixer) MoveTorrent(entry *storage.Entry, debridName string, reinsert bool) (bool, error) {
-	// Check if entry can be moved
+// MoveTorrent decides how to put a torrent on a specific debrid: it activates a completed placement the entry
+// already has there, or submits the magnet again. It reads entry and writes nothing; the caller applies the result.
+// Its provider calls run on the work ctx, so it takes no ctx of its own.
+func (f *Fixer) MoveTorrent(entry *storage.Entry, debridName string, reinsert bool) (RepairResult, error) {
 	if entry == nil {
-		return false, fmt.Errorf("entry is nil")
+		return RepairResult{}, fmt.Errorf("entry is nil")
 	}
 	if !entry.CanBeMoved() {
-		return false, fmt.Errorf("entry %s cannot be moved", entry.Name)
+		return RepairResult{}, fmt.Errorf("entry %s cannot be moved", entry.Name)
 	}
-
-	wasBad := entry.Bad
-	defer func() {
-		var refresh func(*storage.Entry)
-		if wasBad && !entry.Bad {
-			refresh = func(*storage.Entry) { f.manager.refreshAfterSave() }
-		}
-		_ = f.manager.AddOrUpdate(entry, refresh)
-	}()
 
 	client := f.manager.ProviderClient(debridName)
 	if client == nil {
-		return false, fmt.Errorf("debrid client %s not found", debridName)
+		return RepairResult{}, fmt.Errorf("debrid client %s not found", debridName)
+	}
+
+	var seenID string
+	if seen := entry.Providers[debridName]; seen != nil {
+		seenID = seen.ID
 	}
 
 	// Prefer activating an existing, completed placement on the target debrid
 	// before re-submitting the magnet. Skipped when reinsert=true — e.g. the
 	// current active provider just failed and its placement is presumed stale.
-	if !reinsert && activateExistingPlacement(entry, debridName) {
-		return true, nil
+	if !reinsert && canActivateExisting(entry, debridName) {
+		return RepairResult{Outcome: repairHealed, Provider: debridName, SeenID: seenID}, nil
 	}
 
 	// Only replace the old torrent on the same provider. Other placements stay valid.
@@ -270,34 +272,27 @@ func (f *Fixer) MoveTorrent(entry *storage.Entry, debridName string, reinsert bo
 
 	newDebridTorrent, err := f.submitReplacement(client, debridName, entry)
 	if err != nil {
-		return false, err
+		return RepairResult{}, err
 	}
-	f.adoptPlacement(entry, debridName, newDebridTorrent)
+	result := RepairResult{Outcome: repairHealed, Provider: debridName, Placement: newDebridTorrent, SeenID: seenID}
 
 	// Delete the old torrent from the provider if it has a different ID, unless another entry (the other seasons
 	// of a pack) still lists it.
 	if old.ID != "" && old.ID != newDebridTorrent.ID {
-		f.manager.releaseAsync(f.manager.work.Context(), entry.Name, placementRelease{
+		result.Release = &placementRelease{
 			provider: debridName, id: old.ID, grab: entry.InfoHash, delete: true, slot: old.HoldsSlot(), library: true,
-		})
+		}
 	}
-
-	return true, nil
+	return result, nil
 }
 
-// activateExistingPlacement switches entry to a completed placement it
-// already has on debridName.
-func activateExistingPlacement(entry *storage.Entry, debridName string) bool {
+// canActivateExisting reports whether entry has a completed placement on debridName it can switch to.
+func canActivateExisting(entry *storage.Entry, debridName string) bool {
 	target, ok := entry.Providers[debridName]
 	if !ok || target == nil || target.ID == "" || target.Status != types.TorrentStatusDownloaded {
 		return false
 	}
-	if err := entry.ActivatePlacement(debridName); err != nil {
-		return false // fall through to a fresh submit
-	}
-	entry.Bad = false
-	entry.UpdatedAt = time.Now()
-	return true
+	return entry.Clone().ActivatePlacement(debridName) == nil
 }
 
 // submitReplacement submits entry's magnet to client and returns the new
@@ -365,42 +360,6 @@ func (f *Fixer) submitReplacement(
 	return newDebridTorrent, nil
 }
 
-// adoptPlacement records a new placement on entry, revives its files and
-// makes debridName active.
-func (f *Fixer) adoptPlacement(entry *storage.Entry, debridName string, placement *types.Torrent) {
-	addedOn := placement.Added
-	if addedOn.IsZero() {
-		addedOn = time.Now()
-	}
-	_ = entry.AddTorrentProvider(placement)
-	if entry.Files == nil {
-		entry.Files = make(map[string]*storage.File)
-	}
-	for _, file := range placement.GetFiles() {
-		if existing, exists := entry.Files[file.Name]; exists {
-			existing.Size = file.Size
-			existing.ByteRange = file.ByteRange
-			existing.Deleted = false
-			existing.InfoHash = entry.InfoHash
-			existing.AddedOn = addedOn
-			continue
-		}
-		entry.Files[file.Name] = &storage.File{
-			Name:      file.Name,
-			Size:      file.Size,
-			ByteRange: file.ByteRange,
-			Deleted:   false,
-			InfoHash:  entry.InfoHash,
-			AddedOn:   addedOn,
-		}
-	}
-	if err := entry.ActivatePlacement(debridName); err != nil {
-		f.manager.logger.Warn().Err(err).Msg("failed to activate placement")
-	}
-	entry.Bad = false
-	entry.UpdatedAt = time.Now()
-}
-
 // buildAttemptOrder creates the order of debrids to attempt re-insertion
 // Priority: current active debrid first, then others in config order
 // If skipCurrent is true, current active debrid is skipped.
@@ -438,4 +397,9 @@ func (f *Fixer) ResetFailureState(infohash string) {
 
 func failureKey(infohash, debrid string) string {
 	return infohash + ":" + debrid
+}
+
+func (f *Fixer) repairRunning(infohash string) bool {
+	_, running := f.inFlightRepairs.Load(infohash)
+	return running
 }

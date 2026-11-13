@@ -52,6 +52,11 @@ var ErrNoChange = errors.New("storage: no change")
 // returned. The caller must not hold the stripe, and merge must not lock.
 func (s *Storage) MergeEntry(key string, merge func(fresh *Entry) (*Entry, error)) error {
 	defer s.LockEntry(key)()
+	return s.MergeEntryLocked(key, merge)
+}
+
+// MergeEntryLocked is MergeEntry for a caller that already holds key's stripe.
+func (s *Storage) MergeEntryLocked(key string, merge func(fresh *Entry) (*Entry, error)) error {
 	fresh, err := s.Get(key)
 	if err != nil && !errors.Is(err, appendstore.ErrKeyNotFound) {
 		return err

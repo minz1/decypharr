@@ -96,18 +96,16 @@ func TestSwitchingAwayKeepsAPlacementACoHolderUses(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		h := sharedHarness(t)
-		entry, err := h.m.storage.Get("s1")
+		if err := h.m.dropSourcePlacement(context.Background(), "s1", "torbox"); err != nil {
+			t.Fatal(err)
+		}
+		requireDeleted(t, h)
+		stored, err := h.m.storage.Get("s1")
 		if err != nil {
 			t.Fatal(err)
 		}
-
-		h.m.dropSourcePlacement(context.Background(), entry, "torbox")
-		requireDeleted(t, h)
-		if entry.Providers["torbox"] != nil {
+		if stored.Providers["torbox"] != nil {
 			t.Fatal("the switched entry still lists the source placement")
-		}
-		if err = h.m.storage.AddOrUpdate(entry); err != nil {
-			t.Fatal(err)
 		}
 
 		h.deleteEntry(t, "s2")
@@ -145,8 +143,15 @@ func TestReplacingAPlacementKeepsOneACoHolderUses(t *testing.T) {
 				}
 			}
 			fixer := NewFixer(m)
-			if _, moveErr := fixer.MoveTorrent(entry, "remaining", true); moveErr != nil {
+			if addErr := store.AddOrUpdate(entry); addErr != nil {
+				t.Fatal(addErr)
+			}
+			result, moveErr := fixer.MoveTorrent(entry, "remaining", true)
+			if moveErr != nil {
 				t.Fatal(moveErr)
+			}
+			if applyErr := m.applyRepairResult(t.Context(), entry.InfoHash, result); applyErr != nil {
+				t.Fatal(applyErr)
 			}
 			drainPlacements(t, m)
 			if got, want := client.deletions.Load(), map[bool]int64{true: 0, false: 1}[shared]; got != want {

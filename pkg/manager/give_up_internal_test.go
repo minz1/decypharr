@@ -18,6 +18,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
+	"github.com/sirrobot01/decypharr/pkg/repair"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
@@ -58,18 +59,21 @@ func newGiveUpTestManager(t *testing.T, fakeArr *queueArr, recovery ArrRecovery)
 	m.entry = newEntryCache(func(string) bool { return false }, nil, nil)
 	m.fixer = NewFixer(m)
 	m.mountManager = &countingMount{}
-	m.confirmBroken = func(context.Context, *storage.Entry) bool { return true }
+	if err := m.storage.AddOrUpdate(entry); err != nil {
+		t.Fatal(err)
+	}
+	m.confirmBroken = func(context.Context, *storage.Entry) repair.Verdict { return repair.VerdictBroken }
 	return m, entry
 }
 
 // scriptedChecks answers each confirm call with the next value (the last one repeats) and counts the calls.
 type scriptedChecks struct {
 	mu      sync.Mutex
-	answers []bool
+	answers []repair.Verdict
 	calls   int
 }
 
-func (c *scriptedChecks) check(context.Context, *storage.Entry) bool {
+func (c *scriptedChecks) check(context.Context, *storage.Entry) repair.Verdict {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	answer := c.answers[min(c.calls, len(c.answers)-1)]
@@ -84,7 +88,7 @@ func (c *scriptedChecks) count() int {
 }
 
 // newWaitTestManager gives up on an entry no arr owns, so neither right nor wrong code can reach HTTP.
-func newWaitTestManager(t *testing.T, answers ...bool) (*Manager, *storage.Entry, *scriptedChecks) {
+func newWaitTestManager(t *testing.T, answers ...repair.Verdict) (*Manager, *storage.Entry, *scriptedChecks) {
 	t.Helper()
 	m, entry := newGiveUpTestManager(t, &queueArr{}, &fakeArrRecovery{})
 	entry.Category = "nobody"
@@ -111,7 +115,7 @@ func TestGiveUpSkipsWhenPlacementServes(t *testing.T) {
 	saveBad(t, m, entry, false)
 	var logs bytes.Buffer
 	m.logger = zerolog.New(&logs)
-	m.confirmBroken = func(context.Context, *storage.Entry) bool { return false }
+	m.confirmBroken = func(context.Context, *storage.Entry) repair.Verdict { return repair.VerdictHealthy }
 
 	m.giveUpOnEntry(entry)
 
@@ -137,7 +141,7 @@ func TestGiveUpWithoutProviderClientLogsNoWarn(t *testing.T) {
 	saveBad(t, m, entry, false)
 	var logs bytes.Buffer
 	m.logger = zerolog.New(&logs).Level(zerolog.DebugLevel)
-	m.confirmBroken = func(context.Context, *storage.Entry) bool { return false }
+	m.confirmBroken = func(context.Context, *storage.Entry) repair.Verdict { return repair.VerdictHealthy }
 
 	m.giveUpOnEntry(entry)
 
@@ -150,7 +154,7 @@ func TestGiveUpMarksThenFailsGrabAfterSecondCheck(t *testing.T) {
 	t.Parallel()
 	fake := &fakeArrRecovery{}
 	m, entry := newGiveUpTestManager(t, &queueArr{downloadIDs: []string{strings.ToUpper(droppedHash)}}, fake)
-	checks := &scriptedChecks{answers: []bool{true, true}}
+	checks := &scriptedChecks{answers: []repair.Verdict{repair.VerdictBroken, repair.VerdictBroken}}
 	m.confirmBroken = checks.check
 	m.badRecheckDelay = 10 * time.Millisecond
 
@@ -168,7 +172,7 @@ func TestGiveUpMarksThenFailsGrabAfterSecondCheck(t *testing.T) {
 
 func TestGiveUpWaitsBeforeTheSecondCheck(t *testing.T) {
 	t.Parallel()
-	m, entry, checks := newWaitTestManager(t, true, true)
+	m, entry, checks := newWaitTestManager(t, repair.VerdictBroken, repair.VerdictBroken)
 	synctest.Test(t, func(t *testing.T) {
 		m.work = testGroup(t)
 		m.giveUpOnEntry(entry)
@@ -204,7 +208,7 @@ func TestGiveUpDirtiesTheFolderName(t *testing.T) {
 
 func TestGiveUpClearsWhenSecondCheckPasses(t *testing.T) {
 	t.Parallel()
-	m, entry, checks := newWaitTestManager(t, true, false)
+	m, entry, checks := newWaitTestManager(t, repair.VerdictBroken, repair.VerdictHealthy)
 	synctest.Test(t, func(t *testing.T) {
 		m.work = testGroup(t)
 		m.giveUpOnEntry(entry)
@@ -213,6 +217,20 @@ func TestGiveUpClearsWhenSecondCheckPasses(t *testing.T) {
 	})
 	if storedBad(t, m) || checks.count() != 2 {
 		t.Fatalf("bad = %v, checks = %d; want cleared after two checks", storedBad(t, m), checks.count())
+	}
+}
+
+func TestGiveUpKeepsMarkWhenSecondCheckIsInconclusive(t *testing.T) {
+	t.Parallel()
+	m, entry, checks := newWaitTestManager(t, repair.VerdictBroken, repair.VerdictInconclusive)
+	synctest.Test(t, func(t *testing.T) {
+		m.work = testGroup(t)
+		m.giveUpOnEntry(entry)
+		time.Sleep(10 * time.Minute)
+		synctest.Wait()
+	})
+	if !storedBad(t, m) || checks.count() != 2 {
+		t.Fatalf("bad = %v, checks = %d; want the mark kept after two checks", storedBad(t, m), checks.count())
 	}
 }
 
@@ -225,7 +243,7 @@ func TestGiveUpSkipsSecondCheckWhenEntryChanges(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			m, entry, checks := newWaitTestManager(t, true)
+			m, entry, checks := newWaitTestManager(t, repair.VerdictBroken)
 			synctest.Test(t, func(t *testing.T) {
 				m.work = testGroup(t)
 				m.giveUpOnEntry(entry)
