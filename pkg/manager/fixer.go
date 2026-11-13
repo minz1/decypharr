@@ -134,7 +134,7 @@ func (f *Fixer) FixTorrent(ctx context.Context, entry *storage.Entry, skipCurren
 	}
 	defer f.inFlightRepairs.Delete(entry.InfoHash)
 
-	result, err := f.runRepair(ctx, entry, skipCurrent, req)
+	result, err := f.runRepair(ctx, entry.Clone(), skipCurrent, req)
 	req.result = result
 	close(req.done)
 	return result, err

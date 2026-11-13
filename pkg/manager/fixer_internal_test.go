@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -97,9 +98,6 @@ func checkFixWithRemovedProvider(t *testing.T, existing bool) {
 	result, err := fixer.FixTorrent(t.Context(), entry, false)
 	if err != nil || !result.Success {
 		t.Fatalf("repair = %#v, error = %v", result, err)
-	}
-	if entry.ActiveProvider != "remaining" {
-		t.Fatalf("active provider = %q", entry.ActiveProvider)
 	}
 	wantSubmissions := 1
 	if existing {
@@ -425,8 +423,9 @@ func TestFixRunCtxCancelHealCompletes(t *testing.T) {
 	if got.err != nil || got.result == nil || !got.result.Success {
 		t.Fatalf("heal = %#v, error = %v; want success", got.result, got.err)
 	}
-	if h.entry.ActiveProvider != "remaining" {
-		t.Fatalf("active provider = %q, want remaining", h.entry.ActiveProvider)
+	stored, getErr := h.fixer.manager.storage.Get(h.entry.InfoHash)
+	if getErr != nil || stored.ActiveProvider != "remaining" {
+		t.Fatalf("stored entry = %+v, %v; want remaining active", stored, getErr)
 	}
 	if n := h.fixer.failedToReinsert.Size(); n != 0 {
 		t.Fatalf("failure memos = %d, want 0", n)
@@ -459,5 +458,50 @@ func TestFixReaderCancelAfterFailureStoresMemo(t *testing.T) {
 	}
 	if n := h.confirms.Load(); n != 1 {
 		t.Fatalf("give-up checks = %d, want 1", n)
+	}
+}
+
+// The caller's entry is read by its other users while a repair runs; the repair works on its own copy.
+func TestFixTorrentLeavesTheCallersEntryAlone(t *testing.T) {
+	t.Parallel()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	client := &healProvider{}
+	client.submit = func(ctx context.Context, torrent *types.Torrent) (*types.Torrent, error) {
+		close(entered)
+		<-release
+		return client.replacementProvider.SubmitMagnet(ctx, torrent)
+	}
+	h := newHealHarness(t, client)
+	h.entry.Bad = true
+	h.entry.Files = map[string]*storage.File{"video.mkv": {Name: "video.mkv", Deleted: true}}
+	before := h.entry.Clone()
+
+	stop := make(chan struct{})
+	readerDone := make(chan struct{})
+	go func() {
+		defer close(readerDone)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			_ = len(h.entry.Providers) + len(h.entry.Files) + len(h.entry.ActiveProvider)
+			_ = h.entry.Files["video.mkv"].Deleted
+		}
+	}()
+
+	out := h.fixAsync(t.Context())
+	<-entered
+	close(release)
+	got := <-out
+	close(stop)
+	<-readerDone
+	if got.err != nil || got.result == nil || !got.result.Success {
+		t.Fatalf("heal = %#v, error = %v; want success", got.result, got.err)
+	}
+	if !reflect.DeepEqual(h.entry, before) {
+		t.Fatalf("the caller's entry changed: %+v, want %+v", h.entry, before)
 	}
 }
