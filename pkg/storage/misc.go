@@ -9,9 +9,11 @@ import (
 
 // HandleExistingEntryMerge merges an incoming entry with an existing one that
 // shares the same infohash. This preserves placements, files, and tags from
-// the existing entry that the incoming entry may not know about.
+// the existing entry that the incoming entry may not know about. A re-add never
+// clears Bad; only a repair verdict does.
 func HandleExistingEntryMerge(existing, incoming *Entry) *Entry {
 	incoming.Manual = incoming.Manual || existing.Manual
+	incoming.Bad = existing.Bad
 	if incoming.Protocol == config.ProtocolNZB {
 		return incoming
 	}

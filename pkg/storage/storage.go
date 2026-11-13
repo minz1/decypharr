@@ -47,6 +47,9 @@ type Storage struct {
 	logger      zerolog.Logger
 	naming      func() config.WebDavFolderNaming
 
+	// stripes serialise read-modify-writes of one library key (LockEntry).
+	stripes [entryStripes]sync.Mutex
+
 	healthCountsMu      sync.Mutex
 	healthCounts        map[HealthStatus]int
 	healthCountsBuiltAt time.Time
