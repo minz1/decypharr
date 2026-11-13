@@ -30,7 +30,7 @@ func TestDropNeedsTwoConsecutiveMisses(t *testing.T) {
 	t.Parallel()
 	var c torrentChanges
 	e := dropEntry("A")
-	c.classify("A", e, nil, false)
+	c.classify("A", e, nil, missState{})
 	if len(c.update) != 0 {
 		t.Fatalf("first miss acted: %+v", c)
 	}
@@ -41,7 +41,7 @@ func TestDropNeedsTwoConsecutiveMisses(t *testing.T) {
 		t.Fatal("provider removed on first miss")
 	}
 	var c2 torrentChanges
-	c2.classify("A", e, nil, true)
+	c2.classify("A", e, nil, missState{phase: missOnce})
 	if len(c2.confirm) != 1 || c2.confirm[0] != e {
 		t.Fatalf("second miss is not a confirmation candidate: %+v", c2)
 	}
@@ -54,12 +54,12 @@ func TestMultiProviderDropNeedsTwoMisses(t *testing.T) {
 	t.Parallel()
 	e := dropEntry("A", "B")
 	var c torrentChanges
-	c.classify("A", e, nil, false)
+	c.classify("A", e, nil, missState{})
 	if len(c.update) != 0 || e.Providers["A"] == nil {
 		t.Fatalf("first miss acted: %+v", c)
 	}
 	var c2 torrentChanges
-	c2.classify("A", e, nil, true)
+	c2.classify("A", e, nil, missState{phase: missOnce})
 	if len(c2.confirm) != 1 || len(c2.update) != 0 || e.Providers["A"] == nil {
 		t.Fatalf("second miss: %+v", c2)
 	}
@@ -68,7 +68,7 @@ func TestMultiProviderDropNeedsTwoMisses(t *testing.T) {
 func TestReappearingTorrentResetsMiss(t *testing.T) {
 	t.Parallel()
 	var c torrentChanges
-	c.classify("A", dropEntry("A"), &types.Torrent{InfoHash: "h1"}, true)
+	c.classify("A", dropEntry("A"), &types.Torrent{InfoHash: "h1"}, missState{phase: missOnce})
 	if _, ok := c.misses["h1"]; ok {
 		t.Fatal("present torrent recorded as miss")
 	}
@@ -339,13 +339,13 @@ func TestRefreshForgetsHookFailuresOnceListedAgain(t *testing.T) {
 	client := &fakeListing{torrents: []*types.Torrent{otherListed()}, lookup: goneLookup}
 
 	syncTimes(t, m, client, 2)
-	if failed, _ := m.dropHookFailures.Load("rd"); failed["hash-00"] != 1 {
-		t.Fatalf("hook failures = %v, want hash-00 counted once", failed)
+	if misses, _ := m.listingMisses.Load("rd"); misses["hash-00"].recoveryFailures != 1 {
+		t.Fatalf("misses = %v, want hash-00 recovery failures counted once", misses)
 	}
 	client.torrents = append(client.torrents, &types.Torrent{ID: "id-00", InfoHash: "hash-00"})
 	syncTimes(t, m, client, 1)
-	if failed, _ := m.dropHookFailures.Load("rd"); len(failed) != 0 {
-		t.Fatalf("hook failures = %v, want none once the torrent is listed again", failed)
+	if misses, _ := m.listingMisses.Load("rd"); len(misses) != 0 {
+		t.Fatalf("misses = %v, want none once the torrent is listed again", misses)
 	}
 }
 

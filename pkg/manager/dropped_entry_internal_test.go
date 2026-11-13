@@ -32,16 +32,15 @@ func newDroppedTestManager(t *testing.T, recovery ArrRecovery) (*Manager, *stora
 		{Name: "sonarr", Host: "http://localhost:8989", Token: "x"},
 	}})
 	m := &Manager{
-		work:             testGroup(t),
-		placementsSvc:    &service{group: testGroup(t)},
-		clients:          xsync.NewMap[string, debrid.Client](),
-		providerMisses:   xsync.NewMap[string, map[string]struct{}](),
-		dropHookFailures: xsync.NewMap[string, map[string]int](),
-		storage:          store,
-		grabs:            &grabIndex{},
-		queue:            newQueue(store, nil, zerolog.Nop()),
-		arr:              arr.New(cfg, nil, zerolog.Nop()),
-		logger:           zerolog.Nop(),
+		work:          testGroup(t),
+		placementsSvc: &service{group: testGroup(t)},
+		clients:       xsync.NewMap[string, debrid.Client](),
+		listingMisses: xsync.NewMap[string, map[string]missState](),
+		storage:       store,
+		grabs:         &grabIndex{},
+		queue:         newQueue(store, nil, zerolog.Nop()),
+		arr:           arr.New(cfg, nil, zerolog.Nop()),
+		logger:        zerolog.Nop(),
 	}
 	m.entries = newEntryActor(m.work, entryDeps{
 		store: store, grabs: m.grabs, logger: zerolog.Nop(), capacity: 1, child: m.entryChild,

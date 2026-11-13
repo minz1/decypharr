@@ -182,10 +182,7 @@ type Manager struct {
 	// Active streams tracking
 	activeStreams *xsync.Map[string, *ActiveStream]
 
-	// providerMisses holds each provider's previous-sync misses (infohashes).
-	providerMisses *xsync.Map[string, map[string]struct{}]
-	// dropHookFailures counts failed Arr recoveries per provider and infohash.
-	dropHookFailures *xsync.Map[string, map[string]int]
+	listingMisses *xsync.Map[string, map[string]missState]
 
 	nzbSyncMu sync.Mutex
 
@@ -299,8 +296,7 @@ func New(g *task.Group, store *config.Store, logs *logger.Factory) (*Manager, er
 		badRecheckDelay:        defaultBadRecheckDelay,
 		debridSpeedTestResults: xsync.NewMap[string, debridTypes.SpeedTestResult](),
 		activeStreams:          xsync.NewMap[string, *ActiveStream](),
-		providerMisses:         xsync.NewMap[string, map[string]struct{}](),
-		dropHookFailures:       xsync.NewMap[string, map[string]int](),
+		listingMisses:          xsync.NewMap[string, map[string]missState](),
 	}
 	instance.initGrace(g.Context())
 

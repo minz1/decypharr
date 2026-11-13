@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"errors"
-	"maps"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -110,7 +109,7 @@ func (m *Manager) doRefreshTorrents(ctx context.Context, provider string, debrid
 		}
 	}
 
-	previousMisses, _ := m.providerMisses.Load(provider)
+	previousMisses, _ := m.listingMisses.Load(provider)
 	// A listing cut off at the configured limit omits torrents that still
 	// exist, so it proves nothing about absences.
 	limit := debridClient.Config().Limit
@@ -124,7 +123,7 @@ func (m *Manager) doRefreshTorrents(ctx context.Context, provider string, debrid
 	m.confirmDrops(ctx, provider, debridClient, &changes)
 	newTorrents, torrentsToUpdate := changes.fetch, changes.update
 
-	m.providerMisses.Store(provider, changes.misses)
+	m.listingMisses.Store(provider, changes.misses)
 
 	// Batch update torrents with changed placements (run concurrently)
 	var updateWg sync.WaitGroup
@@ -158,19 +157,29 @@ type torrentChanges struct {
 	confirm []*storage.Entry
 	// misses are the infohashes this listing lacks although the entry is
 	// placed on the provider.
-	misses map[string]struct{}
+	misses map[string]missState
 }
 
-func (c *torrentChanges) markMiss(infoHash string) {
-	if c.misses == nil {
-		c.misses = make(map[string]struct{})
+func (c *torrentChanges) setMiss(infoHash string, s missState) {
+	if s.phase == missNone {
+		delete(c.misses, infoHash)
+		return
 	}
-	c.misses[infoHash] = struct{}{}
+	if c.misses == nil {
+		c.misses = make(map[string]missState)
+	}
+	c.misses[infoHash] = s
+}
+
+func (c *torrentChanges) stepMiss(infoHash string, ev missEvent) {
+	if next, ok := stepMiss(c.misses[infoHash], ev); ok {
+		c.setMiss(infoHash, next)
+	}
 }
 
 // classify records how entry changes given the provider's current listing
 // of it (nil when the provider no longer lists it).
-func (c *torrentChanges) classify(provider string, entry *storage.Entry, current *types.Torrent, missedBefore bool) {
+func (c *torrentChanges) classify(provider string, entry *storage.Entry, current *types.Torrent, prev missState) {
 	placement, onProvider := entry.Providers[provider]
 	switch {
 	case !onProvider:
@@ -178,8 +187,9 @@ func (c *torrentChanges) classify(provider string, entry *storage.Entry, current
 			c.fetch = append(c.fetch, current)
 		}
 	case current == nil:
-		c.markMiss(entry.InfoHash)
-		if missedBefore {
+		next, _ := stepMiss(prev, missAbsent)
+		c.setMiss(entry.InfoHash, next)
+		if next.phase == missConfirming {
 			c.confirm = append(c.confirm, entry)
 		}
 	case placement.NeedsUpdate(current):
@@ -194,7 +204,7 @@ func (m *Manager) detectTorrentChanges(
 	provider string,
 	remoteTorrentsByHash map[string]*types.Torrent,
 	listedIDs map[string]struct{},
-	previousMisses map[string]struct{},
+	previousMisses map[string]missState,
 	truncated bool,
 ) (torrentChanges, error) {
 	var changes torrentChanges
@@ -207,8 +217,8 @@ func (m *Manager) detectTorrentChanges(
 			if current == nil && listedAbsence(provider, entry, listedIDs, truncated) {
 				continue
 			}
-			_, missedBefore := previousMisses[entry.InfoHash]
-			changes.classify(provider, entry, current, missedBefore)
+			prev := previousMisses[entry.InfoHash]
+			changes.classify(provider, entry, current, prev)
 		}
 		return nil
 	})
@@ -217,7 +227,11 @@ func (m *Manager) detectTorrentChanges(
 		return torrentChanges{}, err
 	}
 	if truncated {
-		changes.misses = maps.Clone(previousMisses)
+		changes.misses = nil
+		for hash, s := range previousMisses {
+			next, _ := stepMiss(s, missTruncated)
+			changes.setMiss(hash, next)
+		}
 	}
 
 	// Check for brand new torrents (not in cache at all)
@@ -250,18 +264,9 @@ func listedAbsence(provider string, entry *storage.Entry, listedIDs map[string]s
 // the stop of ctx, quietly and before any answer is read. An
 // entry whose recovery keeps failing goes behind the others.
 func (m *Manager) confirmDrops(ctx context.Context, provider string, client debrid.Client, changes *torrentChanges) {
-	// refreshSG serialises syncs per provider, so this map needs no lock.
-	failed, _ := m.dropHookFailures.LoadOrStore(provider, map[string]int{})
 	slices.SortStableFunc(changes.confirm, func(a, b *storage.Entry) int {
-		return cmp.Compare(failed[a.InfoHash], failed[b.InfoHash])
+		return cmp.Compare(changes.misses[a.InfoHash].recoveryFailures, changes.misses[b.InfoHash].recoveryFailures)
 	})
-	defer func() {
-		for hash := range failed {
-			if _, miss := changes.misses[hash]; !miss {
-				delete(failed, hash)
-			}
-		}
-	}()
 
 	applied := 0
 	for i, entry := range changes.confirm {
@@ -282,13 +287,13 @@ func (m *Manager) confirmDrops(ctx context.Context, provider string, client debr
 		}
 		switch {
 		case err == nil:
-			delete(changes.misses, entry.InfoHash)
+			changes.stepMiss(entry.InfoHash, missFoundOnLookup)
 		case errors.Is(err, customerror.ErrTorrentNotFound):
 			if !m.applyDrop(provider, entry, changes) {
-				failed[entry.InfoHash]++
+				changes.stepMiss(entry.InfoHash, missRecoveryFailed)
 				continue
 			}
-			delete(changes.misses, entry.InfoHash)
+			changes.stepMiss(entry.InfoHash, missDropped)
 			applied++
 		default:
 			m.logger.Warn().Err(err).Str("debrid", provider).Str("id", id).
