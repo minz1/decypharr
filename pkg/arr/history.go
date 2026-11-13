@@ -21,7 +21,7 @@ const (
 	eventTypeGrabbed   = 1
 	historyPageSize    = 100
 	latestGrabPageSize = 50
-	// seasonIDLength matches pkg/manager seasonHashBytes: torrent infohashes are 40 or 64 hex digits.
+	// seasonIDLength matches pkg/manager/grab seasonHashBytes: torrent infohashes are 40 or 64 hex digits.
 	seasonIDLength = 32
 )
 

@@ -1,8 +1,6 @@
 package manager
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"maps"
 	"regexp"
@@ -12,6 +10,7 @@ import (
 	"time"
 
 	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
+	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
@@ -254,14 +253,9 @@ func getSortedSeasons(seasons map[int]bool) []int {
 	return result
 }
 
-// seasonHashBytes truncates season IDs to 32 hex digits. IDs are persisted
-// and reported to the arrs, so the length must not change.
-const seasonHashBytes = 16
-
 // generateSeasonHash derives a season entry's ID from its pack's infohash and
 // season number. Versions before the SHA-256 switch derived it with md5, so a
 // pack still fanning out across that upgrade gets new season entries.
 func generateSeasonHash(originalHash string, seasonNumber int) string {
-	sum := sha256.Sum256(fmt.Appendf(nil, "%s-%d", originalHash, seasonNumber))
-	return hex.EncodeToString(sum[:seasonHashBytes])
+	return grab.SeasonHash(originalHash, seasonNumber)
 }
