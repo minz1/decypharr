@@ -410,25 +410,25 @@ func (ad *AllDebrid) CheckStatus(ctx context.Context, torrent *types.Torrent) (*
 		return torrent, err
 	}
 
-	if statusCode == allDebridNoPeerStatusCode {
+	if observe(statusCode).Phase == types.PhaseStalled {
 		statusCode, err = ad.restartNoPeerTorrent(ctx, torrent)
 		if err != nil {
 			return torrent, err
 		}
 	}
 
-	switch torrent.Status {
-	case types.TorrentStatusDownloaded:
+	switch observe(statusCode).Phase {
+	case types.PhaseDownloaded:
 		ad.logger.Info().Msgf("Torrent: %s downloaded", torrent.Name)
 		return torrent, nil
-	case types.TorrentStatusDownloading:
+	case types.PhaseDownloading, types.PhaseRemoteQueued:
 		if !torrent.DownloadUncached {
 			return torrent, fmt.Errorf("torrent %s: %w", torrent.Name, customerror.ErrTorrentNotCached)
 		}
 		return torrent, nil
-	case types.TorrentStatusError:
+	case types.PhaseFailed, types.PhaseUnknown:
 		return torrent, fmt.Errorf("torrent %s has AllDebrid status code %d", torrent.Name, statusCode)
-	case types.TorrentStatusRemoteQueued:
+	case types.PhaseNone, types.PhaseConverting, types.PhaseAwaitingSelection, types.PhaseFinalizing, types.PhaseStalled:
 	}
 	return torrent, fmt.Errorf("torrent %s has unknown AllDebrid status code %d", torrent.Name, statusCode)
 }
