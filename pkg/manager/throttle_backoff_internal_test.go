@@ -119,7 +119,7 @@ func TestLinksCheckedReadyWhenEveryFileHasALink(t *testing.T) {
 	}
 }
 
-func TestLinksCheckedWaitsInsideTheBoundAndFailsPastIt(t *testing.T) {
+func TestLinksCheckedWaitsForLinksWithoutAResult(t *testing.T) {
 	t.Parallel()
 	partial := func() *types.Torrent {
 		files := linkedFiles()
@@ -131,12 +131,11 @@ func TestLinksCheckedWaitsInsideTheBoundAndFailsPastIt(t *testing.T) {
 	m := &Manager{logger: zerolog.Nop()}
 	entry, placement := linksEntry(time.Minute)
 	if msg := m.linksChecked(entry, placement, partial()); msg.ev != nil {
-		t.Fatalf("links result inside the bound = %+v, want no result", msg.ev)
+		t.Fatalf("links result = %+v, want no result", msg.ev)
 	}
-	entry, placement = linksEntry(linksWaitLimit + time.Minute)
-	msg := m.linksChecked(entry, placement, partial())
-	if msg.ev == nil || msg.ev.Kind != grab.EvLinkWaitExpired || msg.ev.Fail != grab.FailBadRelease {
-		t.Fatalf("links result past the bound = %+v, want EvLinkWaitExpired failing the release", msg.ev)
+	entry, placement = linksEntry(100 * time.Hour)
+	if msg := m.linksChecked(entry, placement, partial()); msg.ev != nil {
+		t.Fatalf("links result long past the old bound = %+v, want no result", msg.ev)
 	}
 }
 

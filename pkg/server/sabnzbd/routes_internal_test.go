@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 
@@ -307,5 +308,49 @@ func TestAddNZBURLSendsConfiguredUserAgent(t *testing.T) {
 	}
 	if agent := <-gotAgent; agent != "decypharr-test/1.0" {
 		t.Fatalf("User-Agent = %q, want the configured nzb_user_agent", agent)
+	}
+}
+
+// A SAB delete of a failed NZB removes its staged NZB and its download files.
+func TestDeleteFailedNZBRemovesItsStagedNZBAndFiles(t *testing.T) {
+	t.Parallel()
+	_, router, mgr := newContractRouter(t)
+	staged := filepath.Join(t.TempDir(), "job.queued")
+	if err := os.WriteFile(staged, []byte("<nzb/>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	failedAt := time.Now().Add(-time.Hour)
+	entry := &storage.Entry{
+		InfoHash: "failed-nzb", Name: "Release.nzb", Category: "tv", Protocol: config.ProtocolNZB,
+		State: storage.EntryStateError, LastError: "missing segments", LastErrorTime: &failedAt, ErrorCount: 1,
+		Magnet: staged, SavePath: filepath.Join(t.TempDir(), "downloads"),
+	}
+	downloaded := entry.DownloadPath("")
+	if err := os.MkdirAll(downloaded, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(downloaded, "video.mkv"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Queue().Add(entry); err != nil {
+		t.Fatal(err)
+	}
+
+	values := url.Values{
+		"mode": {"queue"}, "name": {"delete"}, "value": {entry.InfoHash}, "category": {"tv"},
+		"ma_password": {"test-token"},
+	}
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, sabRequest(http.MethodGet, values))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if err := mgr.AwaitGone(t.Context(), entry.InfoHash); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{staged, downloaded} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("%s still on disk after the delete: %v", path, err)
+		}
 	}
 }

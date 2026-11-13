@@ -39,7 +39,7 @@ func TestFailedGrabAsksArrToRefreshDownloads(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	m := withTestConfig(t, &Manager{queue: newQueue(store, "", nil, zerolog.Nop()), logger: zerolog.Nop()})
+	m := withTestConfig(t, &Manager{queue: newQueue(store, nil, zerolog.Nop()), logger: zerolog.Nop()})
 	m.arr.AddOrUpdate(arr.Arr{Name: "radarr", Host: server.URL, Token: "token", Type: arr.Radarr})
 
 	entry := &storage.Entry{InfoHash: "abc", Name: "Movie", Category: "radarr", Protocol: config.ProtocolNZB}
@@ -68,7 +68,7 @@ func TestFailEffectsReleaseParsedNZB(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	queue := newQueue(store, "", nil, zerolog.Nop())
+	queue := newQueue(store, nil, zerolog.Nop())
 	m := withTestConfig(t, &Manager{usenet: usenetClient, queue: queue, logger: zerolog.Nop()})
 	entry := &storage.Entry{InfoHash: "nzb-1", Name: "release", Protocol: config.ProtocolNZB}
 
@@ -92,7 +92,7 @@ func TestFailEffectsDropStagedNZB(t *testing.T) {
 	if writeErr := os.WriteFile(staged, []byte("<nzb/>"), 0o600); writeErr != nil {
 		t.Fatal(writeErr)
 	}
-	queue := newQueue(store, "", nil, zerolog.Nop())
+	queue := newQueue(store, nil, zerolog.Nop())
 	m := withTestConfig(t, &Manager{queue: queue, logger: zerolog.Nop()})
 	entry := &storage.Entry{InfoHash: "job", Name: "release", Protocol: config.ProtocolNZB, Magnet: staged}
 

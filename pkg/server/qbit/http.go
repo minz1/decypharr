@@ -90,6 +90,7 @@ func (q *QBit) handleTorrentsInfo(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to read the download queue", http.StatusInternalServerError)
 		return
 	}
+	q.manager.ArrSeen(torrents)
 	qbitTorrents := make([]Torrent, len(torrents))
 	for i, t := range torrents {
 		qbitTorrents[i] = convertToQBitTorrentTorrent(t, q.config.Get().FolderNaming)

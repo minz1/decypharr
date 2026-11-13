@@ -32,7 +32,7 @@ func newParseRetryManager(t *testing.T, parse parseFunc) *Manager {
 	t.Cleanup(func() { _ = store.Close() })
 	m := &Manager{
 		work:          testGroup(t),
-		queue:         newQueue(store, "", nil, zerolog.Nop()),
+		queue:         newQueue(store, nil, zerolog.Nop()),
 		logger:        zerolog.Nop(),
 		usenetTimeout: 20 * time.Millisecond,
 		parseNZBFunc:  parse,

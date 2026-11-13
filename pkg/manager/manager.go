@@ -342,7 +342,7 @@ func (m *Manager) init() error {
 		cetScheduler, _ = gocron.NewScheduler(gocron.WithGlobalJobOptions(gocron.WithTags("decypharr-cet")))
 	}
 
-	m.queue = newQueue(m.storage, cfg.RemoveStalledAfter, m.folderNaming, m.logs.New("queue"))
+	m.queue = newQueue(m.storage, m.folderNaming, m.logs.New("queue"))
 
 	m.scheduler = scheduler
 	m.cetScheduler = cetScheduler
@@ -514,9 +514,11 @@ func (m *Manager) initEntries(packOf map[string]string) {
 			ok, err := m.storage.Exists(key)
 			return ok && err == nil
 		},
-		pollEvery:  m.refreshInterval,
-		retryDelay: throttledRetryDelay,
-		completed:  m.completed,
+		pollEvery:          m.refreshInterval,
+		removeStalledAfter: m.removeStalledAfter(),
+		retryDelay:         throttledRetryDelay,
+		completed:          m.completed,
+		expired:            m.expiredGrab,
 	})
 }
 
@@ -775,12 +777,6 @@ func (m *Manager) GetMigrationJob(jobID string) (*storage.SwitcherJob, error) {
 		return nil, fmt.Errorf("migration job not found: %s", jobID)
 	}
 	return job, nil
-}
-
-// awaitsJob reports whether a queued entry is still in its grab's hands, or the manager is stopping (the next start
-// recovers it).
-func (m *Manager) awaitsJob(infoHash string) bool {
-	return m.grabs.active(infoHash) || m.stopErr() != nil
 }
 
 // slotFreed wakes the grabs throttled by provider: an active download there finished, failed or was removed.

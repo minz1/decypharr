@@ -47,6 +47,18 @@ type entryMsg struct {
 	retry bool
 	// lib is a write to the key's library record, applied by the actor while the key has a grab.
 	lib *libraryOp
+	// deadline wakes the actor to check the clock: its own deadline timer, or the end of the pack it waits for.
+	deadline bool
+	// arrSaw is the failure time an Arr listing rendered for a failed grab.
+	arrSaw time.Time
+	// seen is what a poll saw of the placement at its provider.
+	seen *pollSeen
+}
+
+// pollSeen is what a poll of the placement saw: what it waits on at the provider, and whether the release is dead.
+type pollSeen struct {
+	pending grab.Pending
+	dead    bool
 }
 
 func eventMsg(ev grab.Event) entryMsg { return entryMsg{ev: &ev} }
@@ -86,6 +98,11 @@ type entryState struct {
 	// seasonTimer rechecks a pack waiting for its seasons.
 	seasonTimer    keyed.TimerID
 	hasSeasonTimer bool
+	// deadlineTimer wakes the grab at the next deadline NextDeadline derives, which is deadlineAt; it is separate from
+	// timer, the phase's own.
+	deadlineTimer    keyed.TimerID
+	hasDeadlineTimer bool
+	deadlineAt       time.Time
 	// putAt and putProgress are when the action last saved its progress, and the progress it saved.
 	putAt       time.Time
 	putProgress float64
@@ -115,6 +132,12 @@ type entryDeps struct {
 	retryDelay func(n int) time.Duration
 	// completed runs what a finished grab triggers outside its record; it must not block.
 	completed func(g grab.Grab)
+	// removeStalledAfter is how long a placement may stall, and how long a failed grab is kept once an Arr listed it;
+	// zero is no limit.
+	removeStalledAfter time.Duration
+	// expired runs what a grab that ran out its provider wait or its wait for links does outside its record; it must
+	// not block. It may be nil.
+	expired func(g grab.Grab, kind grab.EventKind)
 }
 
 // entryActor owns every grab: one keyed actor per entry key is the only writer of its queue record.
@@ -136,6 +159,9 @@ func newEntryActor(g *task.Group, deps entryDeps) *entryActor {
 	}
 	if a.seasonsOf == nil {
 		a.seasonsOf = func(*storage.Entry) []*storage.Entry { return nil }
+	}
+	if a.expired == nil {
+		a.expired = func(grab.Grab, grab.EventKind) {}
 	}
 	if a.naming == nil {
 		a.naming = func() config.WebDavFolderNaming { return "" }
@@ -196,12 +222,34 @@ func (a *entryActor) Handle(
 		fx.Reply(fmt.Errorf("grab %s unreadable: %w", key, st.loadErr))
 		return
 	}
+	a.handle(key, st, m, fx)
+	a.armDeadline(key, st, fx)
+}
+
+// handle runs one message of key's grab.
+func (a *entryActor) handle(
+	key string,
+	st *entryState,
+	m entryMsg,
+	fx *keyed.Effects[string, entryMsg],
+) {
 	if m.lib != nil {
 		a.library(key, st, m.lib, fx)
 		return
 	}
+	if m.deadline {
+		a.deadlineFired(key, st, fx)
+		return
+	}
+	if !m.arrSaw.IsZero() {
+		a.arrSaw(key, st, m.arrSaw)
+		return
+	}
 	if m.exit {
 		m = a.childExited(key, st, m)
+	}
+	if m.exit && m.child == grab.ChildPoll && m.seen != nil && st.g.State.Phase == grab.PhaseProvider {
+		a.grabs.setPolled(key, *m.seen)
 	}
 	switch {
 	case m.ev != nil:
@@ -358,6 +406,9 @@ func (a *entryActor) step(key string, st *entryState, m entryMsg, fx *keyed.Effe
 	}
 	fx.Reply(nil)
 	a.afterStep(key, st, cur, ev, fx)
+	if ev.Kind == grab.EvPendingDeadline || ev.Kind == grab.EvLinkWaitExpired {
+		a.expired(cur, ev.Kind)
+	}
 	if cur.State.Phase != grab.PhaseComplete && nextState.Phase == grab.PhaseComplete && s.next.Entry != nil {
 		a.completed(s.next)
 	}
@@ -542,6 +593,8 @@ func (a *entryActor) leftPhase(st *entryState, to grab.Phase, fx *keyed.Effects[
 		st.hasSeasonTimer = false
 	}
 	st.retries = 0
+	a.grabs.setPolled(st.g.State.Key, pollSeen{})
+	a.cancelDeadline(st, fx)
 	st.putAt = time.Time{}
 	switch to {
 	case grab.PhaseProvider, grab.PhaseAwaitingLinks, grab.PhaseActing:

@@ -3,6 +3,7 @@ package manager
 import (
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/storage"
@@ -25,6 +26,12 @@ type grabIndex struct {
 	mu    sync.RWMutex
 	views map[string]GrabView
 	gone  map[string][]chan struct{}
+	// seen is the failure time an Arr listing last rendered for each failed grab. It is not persisted, and it stays
+	// while the grab's actor is idle.
+	seen map[string]time.Time
+	// polled is what the last poll of each grab saw at its provider; like seen, it is not persisted and stays while the
+	// actor is idle, so a deadline derived from it still fires.
+	polled map[string]pollSeen
 }
 
 func (x *grabIndex) publish(v GrabView) {
@@ -46,6 +53,8 @@ func (x *grabIndex) remove(key string) {
 		close(ch)
 	}
 	delete(x.gone, key)
+	delete(x.seen, key)
+	delete(x.polled, key)
 }
 
 // goneChan is closed when key has no grab.
@@ -104,4 +113,43 @@ func (x *grabIndex) snapshot() []GrabView {
 		out[i] = out[i].clone()
 	}
 	return out
+}
+
+// markSeen records that an Arr listing rendered key's failure at at, to the second.
+func (x *grabIndex) markSeen(key string, at time.Time) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	if x.seen == nil {
+		x.seen = make(map[string]time.Time)
+	}
+	x.seen[strings.ToLower(key)] = at.Truncate(time.Second)
+}
+
+// seenFailure is the failure time an Arr listing last rendered for key, or zero.
+func (x *grabIndex) seenFailure(key string) time.Time {
+	x.mu.RLock()
+	defer x.mu.RUnlock()
+	return x.seen[strings.ToLower(key)]
+}
+
+// setPolled records what the last poll of key's placement saw.
+func (x *grabIndex) setPolled(key string, p pollSeen) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	key = strings.ToLower(key)
+	if p == (pollSeen{}) {
+		delete(x.polled, key)
+		return
+	}
+	if x.polled == nil {
+		x.polled = make(map[string]pollSeen)
+	}
+	x.polled[key] = p
+}
+
+// polledOf is what the last poll of key's placement saw, or the zero value.
+func (x *grabIndex) polledOf(key string) pollSeen {
+	x.mu.RLock()
+	defer x.mu.RUnlock()
+	return x.polled[strings.ToLower(key)]
 }

@@ -170,12 +170,11 @@ func (m *Manager) pollChild(ctx context.Context, call entryChildCall, links bool
 	if stopped(ctx) {
 		return entryMsg{}
 	}
-	if err == nil || !transientStatusError(err) || pendingWaitOver(entry, placement, err) {
-		m.queue.waits.observe(entry.InfoHash, waitNone)
-	} else {
+	if err != nil && transientStatusError(err) {
 		m.logPendingStatus(entry, placement, err)
-		return entryMsg{}
+		return pendingPoll(err)
 	}
+	m.queue.waits.observe(entry.InfoHash, waitNone)
 	if err != nil || t == nil || t.Status == debridTypes.TorrentStatusError {
 		return m.placementFailed(entry, placement, t, err)
 	}
@@ -188,17 +187,17 @@ func (m *Manager) pollChild(ctx context.Context, call entryChildCall, links bool
 	return polled(entry, placement, t)
 }
 
-// pendingWaitOver reports a provider-pending status error that has outlasted its wait, as statusWaitExhausted does,
-// without writing the record: a placement that does not know its age has not waited too long.
-func pendingWaitOver(entry *storage.Entry, placement *storage.ProviderEntry, err error) bool {
-	if !errors.Is(err, customerror.ErrProviderStatusTimeout) {
-		return false
+// pendingPoll is what a status check left for the next poll reports: what the provider is still doing with the
+// placement, which the grab's deadline for that wait reads. Any other transient error reports nothing.
+func pendingPoll(err error) entryMsg {
+	switch providerWaitOf(err) {
+	case waitConverting:
+		return entryMsg{seen: &pollSeen{pending: grab.PendingConverting, dead: true}}
+	case waitPending:
+		return entryMsg{seen: &pollSeen{pending: grab.PendingProvider}}
+	case waitNone:
 	}
-	age := providerWaitAge(entry, placement)
-	if errors.Is(err, customerror.ErrMagnetNotConverted) {
-		return age > maxConversionWait
-	}
-	return age > maxProviderPendingTime
+	return entryMsg{}
 }
 
 // logPendingStatus logs a status check left for the next poll, as retryNextPass does.
@@ -238,8 +237,6 @@ func (m *Manager) placementFailed(
 		}
 	}
 	switch {
-	case err != nil && errors.Is(err, customerror.ErrProviderStatusTimeout):
-		return eventMsg(grab.Event{Kind: grab.EvPendingDeadline, Fail: fail, Reason: err.Error()})
 	case err != nil:
 		return eventMsg(grab.Event{Kind: grab.EvProviderObserved, Failed: true, Fail: fail, Reason: err.Error()})
 	case t == nil:
@@ -255,9 +252,11 @@ func (m *Manager) placementFailed(
 // polled is the observation a status check of a placement makes; it carries the placement's progress.
 func polled(entry *storage.Entry, placement *storage.ProviderEntry, t *debridTypes.Torrent) entryMsg {
 	downloaded := t.Status == debridTypes.TorrentStatusDownloaded
-	msg := eventMsg(
-		grab.Event{Kind: grab.EvProviderObserved, Downloaded: downloaded, AllLinked: !awaitingLinks(entry, t)},
-	)
+	stalled := t.Status != debridTypes.TorrentStatusDownloading && t.Seeders == 0 && t.Progress == 0
+	msg := eventMsg(grab.Event{
+		Kind: grab.EvProviderObserved, Downloaded: downloaded, AllLinked: !awaitingLinks(entry, t), Stalled: stalled,
+	})
+	msg.seen = &pollSeen{}
 	provider, id := placement.Provider, placement.ID
 	progress, speed, size, seeders := t.Progress/percentScale, t.Speed, t.GetSize(), t.Seeders
 	msg.update = func(e *storage.Entry) {
@@ -296,16 +295,8 @@ func (m *Manager) linksChecked(
 		}
 		return msg
 	}
-	if placement.DownloadedAt == nil || time.Since(*placement.DownloadedAt) <= linksWaitLimit {
-		m.logger.Debug().Str("name", entry.Name).Msg("Downloaded, waiting for file links before the action")
-		return entryMsg{}
-	}
-	m.logger.Warn().Str("name", entry.Name).Str("debrid", entry.ActiveProvider).
-		Dur("waited", time.Since(*placement.DownloadedAt).Truncate(time.Second)).
-		Msg("Downloaded but the provider never gave file links; failing the grab")
-	m.slotFreed(entry.ActiveProvider)
-	return eventMsg(grab.Event{Kind: grab.EvLinkWaitExpired, Fail: grab.FailBadRelease,
-		Reason: fmt.Sprintf("provider gave no file links %s after the download finished", linksWaitLimit)})
+	m.logger.Debug().Str("name", entry.Name).Msg("Downloaded, waiting for file links before the action")
+	return entryMsg{}
 }
 
 // actionChild runs the grab's post-download action. A stop of the mount or the manager cuts it short with no

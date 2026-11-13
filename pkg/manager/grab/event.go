@@ -107,6 +107,8 @@ type Event struct {
 	Outcome Outcome
 	// Downloaded and AllLinked describe a placement result or observation; Failed is a provider Failed observation.
 	Downloaded, AllLinked, Failed bool
+	// Stalled is a poll that saw the placement not downloading, with no seeders and no progress.
+	Stalled bool
 	// Raw is an unrecognised provider status, shown as is.
 	Raw    string
 	Reason string

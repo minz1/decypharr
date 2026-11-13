@@ -39,7 +39,7 @@ func newDroppedTestManager(t *testing.T, recovery ArrRecovery) (*Manager, *stora
 		dropHookFailures: xsync.NewMap[string, map[string]int](),
 		storage:          store,
 		grabs:            &grabIndex{},
-		queue:            newQueue(store, "", nil, zerolog.Nop()),
+		queue:            newQueue(store, nil, zerolog.Nop()),
 		arr:              arr.New(cfg, nil, zerolog.Nop()),
 		logger:           zerolog.Nop(),
 	}

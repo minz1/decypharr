@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -35,7 +36,7 @@ func queuedEntryAddedAt(
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	m := withTestConfig(t, &Manager{
-		queue: newQueue(store, "", nil, zerolog.Nop()), clients: xsync.NewMap[string, debrid.Client](),
+		queue: newQueue(store, nil, zerolog.Nop()), clients: xsync.NewMap[string, debrid.Client](),
 		logger: zerolog.Nop(),
 	})
 	m.clients.Store("provider", provider)
@@ -53,36 +54,32 @@ func queuedEntryAddedAt(
 	return m, entry
 }
 
-// A provider that has not finished converting or linking a torrent is not a
-// verdict on the release: the entry stays queued for the next pass and the
-// provider's torrent is kept, until the wait has lasted maxProviderPendingTime.
-// The wait is measured from the placement, else the entry; when neither knows
-// its age it never runs out.
-func TestQueuedTorrentStatusTimeoutKeepsEntryUntilWaitIsExhausted(t *testing.T) {
+// A provider that has not finished converting or linking a torrent is not a verdict on the release: the poll reports
+// what the provider waits on and nothing else, whatever the placement's age; the grab's deadline decides when the
+// wait has lasted too long. A magnet still converting is a dead release once it does.
+func TestAPollOfAPendingProviderReportsWhatItWaitsOn(t *testing.T) {
 	t.Parallel()
-	stale := time.Now().Add(-maxProviderPendingTime - time.Minute)
-	fresh := time.Now().Add(-time.Minute)
-	for _, tc := range []struct {
-		name                      string
-		placementAddedAt, entryAt time.Time
-		wantFailed                bool
+	for name, tc := range map[string]struct {
+		err  error
+		want *pollSeen
 	}{
-		{name: "fresh placement", placementAddedAt: fresh, entryAt: stale},
-		{name: "wait exhausted", placementAddedAt: stale, entryAt: fresh, wantFailed: true},
-		{name: "no placement age, stale entry", entryAt: stale, wantFailed: true},
-		{name: "no placement age, fresh entry", entryAt: fresh},
-		{name: "no age anywhere"},
+		"pending":    {customerror.ErrProviderStatusTimeout, &pollSeen{pending: grab.PendingProvider}},
+		"converting": {notConverted(), &pollSeen{pending: grab.PendingConverting, dead: true}},
+		"other":      {syscall.ECONNRESET, nil},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			provider := &failingStatusProvider{err: customerror.ErrProviderStatusTimeout}
-			m, entry := queuedEntryAddedAt(t, provider, tc.placementAddedAt, tc.entryAt)
+			provider := &failingStatusProvider{err: tc.err}
+			m, entry := queuedEntryAddedAt(t, provider, time.Now().Add(-100*time.Hour), time.Time{})
 
 			msg := poll(t.Context(), m, entry)
 			closePlacements(t, m)
 
-			if failed := msg.ev != nil && msg.ev.Kind == grab.EvPendingDeadline; failed != tc.wantFailed {
-				t.Fatalf("result = %+v, want failed=%v", msg.ev, tc.wantFailed)
+			if msg.ev != nil {
+				t.Fatalf("event = %+v, want none", msg.ev)
+			}
+			if (msg.seen == nil) != (tc.want == nil) || tc.want != nil && *msg.seen != *tc.want {
+				t.Fatalf("seen = %+v, want %+v", msg.seen, tc.want)
 			}
 		})
 	}
@@ -155,43 +152,6 @@ func notConverted() error {
 		customerror.ErrProviderStatusTimeout)
 }
 
-// A magnet the provider has not converted within 2h (SM11-1, owner-proxy ruling; the ages are literal so the test pins
-// the deadline, not just its use) has no seeders: its grab fails in the Arr, so the Arr searches another release, and
-// the provider's torrent is deleted. Other pending waits keep the longer bound.
-func TestUnconvertedMagnetFailsItsGrabAfterTheConversionWait(t *testing.T) {
-	t.Parallel()
-	for name, tc := range map[string]struct {
-		err      error
-		age      time.Duration
-		wantFail bool
-	}{
-		"converting past 2h":              {notConverted(), 2*time.Hour + time.Minute, true},
-		"converting within 2h":            {notConverted(), 2*time.Hour - time.Minute, false},
-		"other pending wait past 2h":      {customerror.ErrProviderStatusTimeout, 2*time.Hour + time.Minute, false},
-		"other pending wait past its own": {customerror.ErrProviderStatusTimeout, maxProviderPendingTime + time.Minute, false},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			m, entry := newDroppedTestManager(t, nil)
-			m.store = testConfigStore(t, nil)
-			provider := &failingStatusProvider{err: tc.err}
-			m.clients.Store("provider", provider)
-			entry.Protocol, entry.ActiveProvider, entry.State = config.ProtocolTorrent, "provider", storage.EntryStateDownloading
-			entry.Providers = map[string]*storage.ProviderEntry{
-				"provider": {Provider: "provider", ID: "id", AddedAt: time.Now().Add(-tc.age)},
-			}
-
-			msg := poll(t.Context(), m, entry)
-			closePlacements(t, m)
-
-			failed := msg.ev != nil && msg.ev.Fail == grab.FailBadRelease
-			if failed != tc.wantFail {
-				t.Fatalf("result = %+v, want a bad release = %v", msg.ev, tc.wantFail)
-			}
-		})
-	}
-}
-
 // warnLines counts the WARN lines that name the entry's provider wait.
 func warnLines(logs *bytes.Buffer) int {
 	n := 0
@@ -204,7 +164,7 @@ func warnLines(logs *bytes.Buffer) int {
 }
 
 // A wait on the provider is logged when it starts and when it changes, with its age, not on every queue pass: live,
-// one converting magnet logged a WARN per pass, 214 an hour. The give-up says how long the entry waited.
+// one converting magnet logged a WARN per pass, 214 an hour.
 func TestAProviderWaitIsLoggedOncePerChange(t *testing.T) {
 	t.Parallel()
 	provider := &failingStatusProvider{err: notConverted()}
@@ -227,14 +187,6 @@ func TestAProviderWaitIsLoggedOncePerChange(t *testing.T) {
 	poll(t.Context(), m, entry)
 	if got := warnLines(&logs); got != 2 {
 		t.Fatalf("a changed wait logged %d WARNs in all, want 2:\n%s", got, logs.String())
-	}
-
-	provider.err = notConverted()
-	entry.GetActiveProvider().AddedAt = time.Now().Add(-maxConversionWait - time.Minute)
-	logs.Reset()
-	poll(t.Context(), m, entry)
-	if !strings.Contains(logs.String(), `"level":"error"`) || !strings.Contains(logs.String(), `"waited":`) {
-		t.Fatalf("the give-up logged no ERROR with the wait's age:\n%s", logs.String())
 	}
 }
 

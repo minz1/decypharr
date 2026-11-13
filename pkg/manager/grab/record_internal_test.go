@@ -3,6 +3,7 @@ package grab
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,7 +51,7 @@ func stateOf(kind recordKind, p Phase) (State, bool) {
 	case PhaseDeleting:
 		st.Cleanup = Cleanup{DeleteFiles: true}
 	case PhaseProvider:
-		st.UnknownRaw = "magnet_conversion"
+		st.UnknownRaw, st.StalledSince = "magnet_conversion", since()
 	case PhaseAbsent, PhaseQueued, PhaseThrottled, PhaseAwaitingLinks, PhaseActing, PhaseComplete:
 	}
 	return st, p != PhaseAbsent && st.Validate() == nil
@@ -240,5 +241,26 @@ func TestEncodeKeepsTheProgressOfADownloadingAction(t *testing.T) {
 	}
 	if e.Progress != 0.4 || !e.IsDownloading {
 		t.Fatalf("progress %v downloading %v, want the action's 0.4 kept", e.Progress, e.IsDownloading)
+	}
+}
+
+func TestADocumentWithoutStalledSinceLoadsAndOmitsItWhenZero(t *testing.T) {
+	t.Parallel()
+	st, _ := stateOf(kindTorrent, PhaseProvider)
+	e := record(kindTorrent)
+	e.Grab = []byte(`{"v":1,"phase":"provider","phase_since":"2026-11-03T04:05:06Z"}`)
+	got, err := Load(e, nil, false)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.State.Phase != PhaseProvider || !got.State.StalledSince.IsZero() {
+		t.Fatalf("loaded %+v, want a provider grab that is not stalled", got.State)
+	}
+	st.StalledSince = time.Time{}
+	if encodeErr := Encode(Grab{State: st, Entry: e}); encodeErr != nil {
+		t.Fatal(encodeErr)
+	}
+	if strings.Contains(string(e.Grab), "stalled_since") {
+		t.Fatalf("document %s carries stalled_since for a grab that is not stalled", e.Grab)
 	}
 }

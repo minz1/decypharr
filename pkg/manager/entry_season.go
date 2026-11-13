@@ -130,6 +130,23 @@ func (a *entryActor) seasonEnded(key string, cur, next grab.State) {
 	}
 }
 
+// packEnded wakes the seasons of a pack that ended or was removed: a failed season is held while its pack runs, and
+// nothing else tells it the pack is over.
+func (a *entryActor) packEnded(key string, cur, next grab.Grab) {
+	if cur.State.PackKey != "" || cur.Entry == nil || terminalPhase(cur.State.Phase) {
+		return
+	}
+	if !terminalPhase(next.State.Phase) && next.State.Phase != grab.PhaseAbsent {
+		return
+	}
+	for _, season := range a.seasonKeys(cur.Entry) {
+		if err := a.send(season, entryMsg{deadline: true}); err != nil {
+			a.logger.Warn().Err(err).Str("pack", key).Str("season", season).
+				Msg("Pack end not delivered to a season; its failure is kept until a restart")
+		}
+	}
+}
+
 // deleteSeasons deletes the seasons of a deleted pack that are not terminal. A season's files go with it unless
 // it shares the pack's folder.
 func (a *entryActor) deleteSeasons(pack *storage.Entry, onlyLive bool) {
@@ -160,6 +177,7 @@ func (a *entryActor) afterStep(
 	fx *keyed.Effects[string, entryMsg],
 ) {
 	a.seasonEnded(key, cur.State, st.g.State)
+	a.packEnded(key, cur, st.g)
 	switch {
 	case ev.Kind == grab.EvChildDone || ev.Kind == grab.EvSeasonsStarted:
 		a.packWaits(key, st, ev, fx)

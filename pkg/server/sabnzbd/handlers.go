@@ -515,6 +515,7 @@ func (s *SABnzbd) getHistory(ctx context.Context, nzoIDs []string) (History, err
 	if err != nil {
 		return History{}, err
 	}
+	s.manager.ArrSeen(failed)
 	slots := make([]HistorySlot, 0, len(completed)+len(failed))
 	history := History{
 		Version: Version,

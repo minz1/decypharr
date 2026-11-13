@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 
@@ -65,5 +66,41 @@ func TestDeleteDownloadingTorrentDeletesProviderTorrent(t *testing.T) {
 	}
 	if got, _ := provider.deleted.Load().(string); got != "provider-id" {
 		t.Fatalf("deleted provider torrent = %q, want provider-id", got)
+	}
+}
+
+// The arr deleting a failed grab whose placement still holds a slot deletes the provider torrent with it.
+func TestDeleteFailedTorrentWithFilesDeletesProviderTorrent(t *testing.T) {
+	t.Parallel()
+	mgr, store := managertest.New(t, func(cfg *config.Config) { cfg.UseAuth = false })
+	provider := &deletingProvider{}
+	mgr.Clients().Store("torbox", provider)
+	routes := New(mgr, store, zerolog.Nop()).Routes()
+
+	const hash = "0123456789abcdef0123456789abcdef01234568"
+	failedAt := time.Now().Add(-time.Hour)
+	entry := &storage.Entry{
+		InfoHash: hash, Name: "release", Category: "sonarr", Protocol: config.ProtocolTorrent,
+		ActiveProvider: "torbox", State: storage.EntryStateError, Status: types.TorrentStatusError,
+		LastError: "no seeders", LastErrorTime: &failedAt, ErrorCount: 1,
+		Providers: map[string]*storage.ProviderEntry{"torbox": {
+			Provider: "torbox", ID: "stuck-id", Status: types.TorrentStatusDownloading,
+		}},
+	}
+	if err := mgr.Queue().Add(entry); err != nil {
+		t.Fatal(err)
+	}
+	if w := postForm(
+		routes,
+		"/torrents/delete",
+		url.Values{"hashes": {hash}, "deleteFiles": {"true"}},
+	); w.Code != http.StatusOK {
+		t.Fatalf("delete status = %d: %s", w.Code, w.Body.String())
+	}
+	if err := mgr.AwaitGone(t.Context(), hash); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := provider.deleted.Load().(string); got != "stuck-id" {
+		t.Fatalf("deleted provider torrent = %q, want stuck-id", got)
 	}
 }

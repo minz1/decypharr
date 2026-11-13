@@ -33,6 +33,7 @@ type document struct {
 	Cleanup       *docCleanup `json:"cleanup,omitempty"`
 	SubmitAttempt *docSubmit  `json:"submit_attempt,omitempty"`
 	UnknownRaw    string      `json:"unknown_raw,omitempty"`
+	StalledSince  time.Time   `json:"stalled_since,omitzero"`
 }
 
 type docFailure struct {
@@ -200,6 +201,7 @@ func toDocument(st State) document {
 	d := document{
 		V: documentVersion, Phase: st.Phase.String(), PhaseSince: st.PhaseSince, PackKey: st.PackKey,
 		NoSubmit: st.NoSubmit, UnknownRaw: st.UnknownRaw,
+		StalledSince: st.StalledSince,
 	}
 	if st.Failure != (Failure{}) {
 		d.Failure = &docFailure{Reason: st.Failure.Reason, Cause: st.Failure.Cause, At: st.Failure.At,
@@ -229,6 +231,7 @@ func fromDocument(e *storage.Entry) (State, error) {
 	st := State{
 		Key: strings.ToLower(e.InfoHash), Phase: phase, PhaseSince: d.PhaseSince, PackKey: d.PackKey,
 		NZB: e.IsNZB(), NoSubmit: d.NoSubmit, UnknownRaw: d.UnknownRaw,
+		StalledSince: d.StalledSince,
 	}
 	if f := d.Failure; f != nil {
 		st.Failure = Failure{Reason: f.Reason, Cause: f.Cause, At: f.At, Count: f.Count}

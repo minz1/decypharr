@@ -103,17 +103,6 @@ func (m *Manager) statusProbe(entry *storage.Entry, placement *storage.ProviderE
 	}
 }
 
-// maxProviderPendingTime is how long a placement may wait on a provider that has
-// not finished processing its torrent (ErrProviderStatusTimeout), links not
-// visible yet for one, before the entry fails. The failure carries no verdict on
-// the release. A magnet still converting has the shorter maxConversionWait.
-const maxProviderPendingTime = 6 * time.Hour
-
-// maxConversionWait is how long a magnet may stay unconverted (ErrMagnetNotConverted).
-// One that never converts has no seeders, and Real-Debrid drops it at about 3h on its
-// own; failing it first, as a dead release, lets the Arr search another one sooner.
-const maxConversionWait = 2 * time.Hour
-
 // logStatusFailure logs a status check the entry fails on; a provider wait that ran out also says which and how long.
 func (m *Manager) logStatusFailure(entry *storage.Entry, placement *storage.ProviderEntry, err error) {
 	line := m.logger.Error().Err(err).Str("name", entry.Name)
@@ -131,9 +120,6 @@ func providerWaitAge(entry *storage.Entry, placement *storage.ProviderEntry) tim
 	}
 	return time.Since(start).Truncate(time.Second)
 }
-
-// linksWaitLimit is how long a finished torrent may go without file links before its grab fails.
-const linksWaitLimit = 6 * time.Hour
 
 // awaitingLinks reports a downloaded torrent whose files the entry can't take yet: it knows none and some lack a link.
 func awaitingLinks(entry *storage.Entry, finished *debridTypes.Torrent) bool {
@@ -371,7 +357,7 @@ func (m *Manager) submitToProvider(
 }
 
 // releaseIsDead reports a status-check failure the provider pins on the torrent itself, not on decypharr or the account.
-// A magnet that never converted (it reaches here only once maxConversionWait is spent) has no seeders: it is dead too.
+// A magnet that never converted (its grab fails at grab.ConversionLimit) has no seeders: it is dead too.
 func releaseIsDead(torrent *debridTypes.Torrent, err error) bool {
 	return errors.Is(err, customerror.ErrTorrentNotFound) ||
 		errors.Is(err, customerror.ErrMagnetNotConverted) ||

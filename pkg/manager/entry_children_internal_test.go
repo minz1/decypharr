@@ -5,9 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
-	"time"
 
-	"github.com/sirrobot01/decypharr/internal/customerror"
 	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/storage"
@@ -96,37 +94,6 @@ func TestActionResultRetriesAStopAndFailsAnError(t *testing.T) {
 	}
 }
 
-func TestPendingWaitOverUsesTheShorterConversionWait(t *testing.T) {
-	t.Parallel()
-	pending := fmt.Errorf("wait: %w", customerror.ErrProviderStatusTimeout)
-	converting := fmt.Errorf("%w: %w", customerror.ErrProviderStatusTimeout, customerror.ErrMagnetNotConverted)
-	cases := []struct {
-		name string
-		age  time.Duration
-		err  error
-		want bool
-	}{
-		{name: "not a wait", age: 24 * time.Hour, err: errors.New("502"), want: false},
-		{name: "pending within", age: 3 * time.Hour, err: pending, want: false},
-		{name: "pending past", age: 7 * time.Hour, err: pending, want: true},
-		{name: "converting past", age: 3 * time.Hour, err: converting, want: true},
-		{name: "converting within", age: time.Hour, err: converting, want: false},
-		{name: "no age", err: pending, want: false},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			t.Parallel()
-			placement := &storage.ProviderEntry{}
-			if c.age > 0 {
-				placement.AddedAt = time.Now().Add(-c.age)
-			}
-			if got := pendingWaitOver(&storage.Entry{}, placement, c.err); got != c.want {
-				t.Errorf("pendingWaitOver = %v, want %v", got, c.want)
-			}
-		})
-	}
-}
-
 func TestPolledUpdateKeepsTheFirstDownloadedAt(t *testing.T) {
 	t.Parallel()
 	entry := &storage.Entry{InfoHash: "h", ActiveProvider: "rd", Files: map[string]*storage.File{},
@@ -162,5 +129,31 @@ func TestApplyParsedNZBTwiceGivesTheSameRecord(t *testing.T) {
 	}
 	if p := entry.GetActiveProvider(); p == nil || p.DownloadedAt == nil || p.ID != "n1" {
 		t.Errorf("placement = %+v", p)
+	}
+}
+
+func TestAPolledPlacementIsStalledWhenItIsNotDownloadingAndHasNeitherSeedersNorProgress(t *testing.T) {
+	t.Parallel()
+	entry := &storage.Entry{InfoHash: "h", ActiveProvider: "rd", Files: map[string]*storage.File{},
+		Providers: map[string]*storage.ProviderEntry{"rd": {Provider: "rd", ID: "1"}}}
+	for name, tc := range map[string]struct {
+		t    *debridTypes.Torrent
+		want bool
+	}{
+		"idle":        {&debridTypes.Torrent{ID: "1", Debrid: "rd", Status: debridTypes.TorrentStatusQueued}, true},
+		"downloading": {&debridTypes.Torrent{ID: "1", Debrid: "rd", Status: debridTypes.TorrentStatusDownloading}, false},
+		"seeded":      {&debridTypes.Torrent{ID: "1", Debrid: "rd", Status: debridTypes.TorrentStatusQueued, Seeders: 2}, false},
+		"progressed":  {&debridTypes.Torrent{ID: "1", Debrid: "rd", Status: debridTypes.TorrentStatusQueued, Progress: 10}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			msg := polled(entry, entry.Providers["rd"], tc.t)
+			if msg.ev == nil || msg.ev.Stalled != tc.want {
+				t.Fatalf("event = %+v, want Stalled %v", msg.ev, tc.want)
+			}
+			if msg.seen == nil || *msg.seen != (pollSeen{}) {
+				t.Fatalf("seen = %+v, want the zero pollSeen that clears a pending wait", msg.seen)
+			}
+		})
 	}
 }

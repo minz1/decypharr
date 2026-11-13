@@ -2,6 +2,7 @@ package grab
 
 import (
 	"cmp"
+	"time"
 
 	"github.com/sirrobot01/decypharr/internal/state"
 )
@@ -180,10 +181,15 @@ func observe(st State, ev Event) (State, []Effect, error) {
 	if ev.Downloaded {
 		return placed(st, ev)
 	}
-	if ev.Raw == st.UnknownRaw {
+	stalled := time.Time{}
+	if ev.Stalled {
+		stalled = cmp.Or(st.StalledSince, ev.At)
+	}
+	if ev.Raw == st.UnknownRaw && stalled.Equal(st.StalledSince) {
 		return st, nil, nil
 	}
-	st.UnknownRaw = ev.Raw // a known status clears it
+	// A known status clears UnknownRaw, and a poll that is not stalled clears StalledSince.
+	st.UnknownRaw, st.StalledSince = ev.Raw, stalled
 	return st, []Effect{{Kind: FxPersist}}, nil
 }
 
@@ -305,7 +311,7 @@ func enter(st State, to Phase, ev Event, fx ...Effect) (State, []Effect, error) 
 	if !state.Legal(successors, st.Phase, to) {
 		return refuse(st, ev, "no move to "+to.String())
 	}
-	st.Phase, st.PhaseSince = to, ev.At
+	st.Phase, st.PhaseSince, st.StalledSince = to, ev.At, time.Time{}
 	return st, append([]Effect{{Kind: FxPersist}}, fx...), nil
 }
 

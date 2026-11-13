@@ -70,14 +70,6 @@ func (m *Manager) scheduleEvery(
 }
 
 func (m *Manager) addQueueProcessorJob(ctx context.Context) {
-	if m.config.RemoveStalledAfter != "" {
-		m.scheduleEvery(ctx, m.scheduler, "1m", "remove-stalled", func() {
-			if err := m.sweepStalled(m.awaitsJob); err != nil {
-				m.logger.Error().Err(err).Msg("Failed to process remove stalled torrents")
-			}
-		})
-	}
-
 	// NZB refresh job for pending archives
 	if m.usenet != nil {
 		m.scheduleEvery(ctx, m.scheduler, "10m", "nzb-refresh", func() {

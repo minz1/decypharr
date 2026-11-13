@@ -6,8 +6,6 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/rs/zerolog"
-
 	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
@@ -197,43 +195,6 @@ func TestProgressIsDebounced(t *testing.T) {
 	})
 }
 
-func TestSweepRemovesFailedThroughTheActor(t *testing.T) {
-	t.Parallel()
-	store := newTestStore(t)
-	synctest.Test(t, func(t *testing.T) {
-		h := newActorHarness(t, store)
-		m := h.manager()
-		m.queue = &Queue{storage: store, logger: zerolog.Nop(), removeStalledAfter: time.Hour}
-		seed(t, store, testEntry("a"), failedState())
-		seedPhase(t, store, "b", grab.PhaseQueued)
-		time.Sleep(2 * time.Hour)
-
-		if err := m.sweepStalled(func(string) bool { return false }); err != nil {
-			t.Fatal(err)
-		}
-		cleanup := h.next(grab.ChildCleanup)
-		if cleanup.call.cleanup != (grab.Cleanup{}) {
-			t.Fatalf("cleanup %+v, want the zero cleanup", cleanup.call.cleanup)
-		}
-		other := h.next(grab.ChildCleanup)
-		if other.call.cleanup != (grab.Cleanup{}) {
-			t.Fatalf("cleanup %+v, want the zero cleanup", other.call.cleanup)
-		}
-		if got := h.diskPhase(); got != grab.PhaseDeleting {
-			t.Fatalf("disk phase %v before the cleanup finished, want deleting", got)
-		}
-		reply(cleanup, grab.Event{Kind: grab.EvCleanupDone})
-		reply(other, grab.Event{Kind: grab.EvCleanupDone})
-		synctest.Wait()
-		if got := h.diskPhase(); got != grab.PhaseAbsent {
-			t.Fatalf("disk phase %v, want absent", got)
-		}
-		if _, err := store.GetQueuedGrab("b"); err == nil {
-			t.Fatal("the stalled queued grab was not removed")
-		}
-	})
-}
-
 func TestDeleteCancelsTheRunningAction(t *testing.T) {
 	t.Parallel()
 	store := newTestStore(t)
@@ -247,30 +208,5 @@ func TestDeleteCancelsTheRunningAction(t *testing.T) {
 			t.Fatal(err)
 		}
 		h.next(grab.ChildCleanup)
-	})
-}
-
-func TestSweepKeepsAFailedSeasonWhileItsPackRuns(t *testing.T) {
-	t.Parallel()
-	store := newTestStore(t)
-	synctest.Test(t, func(t *testing.T) {
-		h := newActorHarness(t, store)
-		h.a.packOf = func() map[string]string { return map[string]string{"s": "pack"} }
-		m := h.manager()
-		m.queue = &Queue{storage: store, logger: zerolog.Nop(), removeStalledAfter: time.Hour}
-		seed(t, store, testEntry("s"), failedState())
-		time.Sleep(2 * time.Hour)
-
-		h.grabs.publish(GrabView{State: grab.State{Key: "pack", Phase: grab.PhaseActing}})
-		if err := m.sweepStalled(func(string) bool { return false }); err != nil {
-			t.Fatal(err)
-		}
-		h.none()
-
-		h.grabs.publish(GrabView{State: grab.State{Key: "pack", Phase: grab.PhaseComplete}})
-		if err := m.sweepStalled(func(string) bool { return false }); err != nil {
-			t.Fatal(err)
-		}
-		reply(h.next(grab.ChildCleanup), grab.Event{Kind: grab.EvCleanupDone})
 	})
 }

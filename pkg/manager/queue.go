@@ -18,7 +18,6 @@ import (
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/arr"
-	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
@@ -117,17 +116,15 @@ func (r *ImportRequest) skipMultiSeason() bool {
 }
 
 type Queue struct {
-	storage            *storage.Storage
-	logger             zerolog.Logger
-	removeStalledAfter time.Duration
-	naming             func() config.WebDavFolderNaming
+	storage *storage.Storage
+	logger  zerolog.Logger
+	naming  func() config.WebDavFolderNaming
 	// waits is what each queued entry is waiting on at its provider, for logging a wait once per change.
 	waits providerWaits
 }
 
 func newQueue(
 	storage *storage.Storage,
-	removeStalledAfterStr string,
 	naming func() config.WebDavFolderNaming,
 	log zerolog.Logger,
 ) *Queue {
@@ -135,17 +132,6 @@ func newQueue(
 		storage: storage,
 		logger:  log,
 		naming:  naming,
-	}
-
-	if removeStalledAfterStr != "" {
-		removeStalledAfter, err := utils.ParseDuration(removeStalledAfterStr)
-		switch {
-		case err != nil:
-			log.Warn().Err(err).Str("remove_stalled_after", removeStalledAfterStr).
-				Msg("Invalid remove_stalled_after; stalled entries are kept")
-		case removeStalledAfter > 0:
-			q.removeStalledAfter = removeStalledAfter
-		}
 	}
 
 	return q
@@ -193,50 +179,6 @@ func (q *Queue) deleteEntryFiles(entry *storage.Entry) error {
 		return fmt.Errorf("remove downloaded files %q: %w", downloadedPath, err)
 	}
 	return nil
-}
-
-// failedNZBRetention is the least time a failed NZB stays in SAB history: a backfilling arr can skip refreshes for hours.
-const failedNZBRetention = 24 * time.Hour
-
-// Stalled lists the entries that made no progress for removeStalledAfter.
-// A queued entry counts as stalled once pending says no job will run it.
-// Without a valid positive duration it lists nothing.
-func (q *Queue) Stalled(pending func(infoHash string) bool) ([]*storage.Entry, error) {
-	if q.removeStalledAfter <= 0 {
-		return nil, nil
-	}
-	now := time.Now()
-	return q.storage.FilterQueued(func(t *storage.Entry) bool {
-		stalled, reason := q.stalled(t, now, pending)
-		if stalled {
-			q.logger.Info().Str("id", t.InfoHash).Str("name", t.Name).Str("reason", reason).
-				Msg("Removing stalled entry")
-		}
-		return stalled
-	})
-}
-
-// stalled reports whether the sweep should remove t, and why.
-func (q *Queue) stalled(t *storage.Entry, now time.Time, pending func(infoHash string) bool) (bool, string) {
-	if t.State == storage.EntryStateError {
-		failedAt := t.AddedOn
-		if t.LastErrorTime != nil {
-			failedAt = *t.LastErrorTime
-		}
-		retention := q.removeStalledAfter
-		if t.IsNZB() {
-			retention = max(retention, failedNZBRetention)
-		}
-		return t.Progress == 0 && failedAt.Before(now.Add(-retention)), "failed " + retention.String() + " ago"
-	}
-	if t.IsDownloading || !t.AddedOn.Before(now.Add(-q.removeStalledAfter)) {
-		return false, ""
-	}
-	if t.Status == debridTypes.TorrentStatusQueued {
-		return !pending(t.InfoHash), "queued with no job"
-	}
-	return t.Status != debridTypes.TorrentStatusDownloading && t.Seeders == 0 && t.Progress == 0,
-		"no progress or seeders"
 }
 
 func (q *Queue) Update(torrent *storage.Entry) error {

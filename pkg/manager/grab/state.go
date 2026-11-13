@@ -44,6 +44,9 @@ type State struct {
 	SubmitAttempt SubmitAttempt
 	// UnknownRaw is the provider's last unrecognised status, shown as is.
 	UnknownRaw string
+	// StalledSince is when the first of the polls in a row that saw the placement stalled did; zero when the last
+	// poll did not.
+	StalledSince time.Time
 }
 
 // season reports whether the grab is a season child of a pack.

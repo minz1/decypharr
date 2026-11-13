@@ -20,14 +20,34 @@ type p1Drives struct{ resubmit, poll, sweep bool }
 // and Queue.stalled with a job pending for every record
 // (restore gave the queued ones one).
 func previousBinaryDrives(e *storage.Entry, now time.Time) p1Drives {
-	q := &Queue{removeStalledAfter: time.Second}
-	swept, _ := q.stalled(e, now, func(string) bool { return true })
+	swept := previousSweepRemoves(e, now, time.Second)
 	return p1Drives{
 		resubmit: e.State == storage.EntryStateDownloading && e.Status == debridTypes.TorrentStatusQueued,
 		poll: e.State == storage.EntryStateDownloading && e.Status != debridTypes.TorrentStatusQueued &&
 			!e.IsDownloading && (e.IsTorrent() && e.ActiveProvider != "" || e.IsNZB()),
 		sweep: swept,
 	}
+}
+
+// previousSweepRemoves is the previous binary's stalled predicate with a job pending for every record: a failed record
+// with no progress older than its retention (24h at least for an NZB), or an idle downloading one with no seeders
+// and no progress older than after.
+func previousSweepRemoves(t *storage.Entry, now time.Time, after time.Duration) bool {
+	if t.State == storage.EntryStateError {
+		failedAt := t.AddedOn
+		if t.LastErrorTime != nil {
+			failedAt = *t.LastErrorTime
+		}
+		retention := after
+		if t.IsNZB() {
+			retention = max(retention, 24*time.Hour)
+		}
+		return t.Progress == 0 && failedAt.Before(now.Add(-retention))
+	}
+	if t.IsDownloading || !t.AddedOn.Before(now.Add(-after)) || t.Status == debridTypes.TorrentStatusQueued {
+		return false
+	}
+	return t.Status != debridTypes.TorrentStatusDownloading && t.Seeders == 0 && t.Progress == 0
 }
 
 // TestThePreviousBinaryDrivesEveryEncodedGrabAsItsOwnRecord pins the rollback contract of the legacy tuple: each
