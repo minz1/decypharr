@@ -108,6 +108,12 @@ type entryState struct {
 	// putAt and putProgress are when the action last saved its progress, and the progress it saved.
 	putAt       time.Time
 	putProgress float64
+	warned      map[providerWarn]struct{}
+}
+
+type providerWarn struct {
+	raw      string
+	from, to debridTypes.Phase
 }
 
 // entryDeps is what the entry actor needs outside the grab.
@@ -392,9 +398,11 @@ func (a *entryActor) step(key string, st *entryState, m entryMsg, fx *keyed.Effe
 	}
 	nextState, effects, err := grab.Transition(cur.State, ev)
 	if err != nil {
+		a.warnRefusedObservation(key, st, ev, err)
 		a.refuse(key, ev, err, fx)
 		return
 	}
+	a.noteObservation(key, st, cur.State, nextState, ev)
 	a.noteSubmit(key, st, m, ev)
 	s := &entryStep{key: key, st: st, cur: cur, next: grab.Grab{State: nextState}, m: m, ev: ev, fx: fx}
 	if cur.Entry != nil {
@@ -599,6 +607,40 @@ func (a *entryActor) refuse(key string, ev grab.Event, err error, fx *keyed.Effe
 	fx.Reply(err)
 }
 
+func (a *entryActor) warnRefusedObservation(key string, st *entryState, ev grab.Event, err error) {
+	from := st.g.State.ProviderPhase
+	if ev.Kind != grab.EvProviderObserved || st.g.State.Phase != grab.PhaseProvider ||
+		!st.firstWarn(providerWarn{from: from, to: ev.Observed}) {
+		return
+	}
+	a.logger.Warn().Err(err).Str("key", key).Stringer("from", from).Stringer("to", ev.Observed).
+		Msg("Provider observation goes backward")
+}
+
+func (a *entryActor) noteObservation(key string, st *entryState, cur, next grab.State, ev grab.Event) {
+	if ev.Kind != grab.EvProviderObserved || next.Phase != grab.PhaseProvider {
+		return
+	}
+	if next.ProviderPhase != cur.ProviderPhase {
+		a.logger.Debug().Str("key", key).Stringer("from", cur.ProviderPhase).Stringer("to", next.ProviderPhase).
+			Msg("Provider phase observed")
+	}
+	if ev.Observed == debridTypes.PhaseUnknown && st.firstWarn(providerWarn{raw: ev.Raw}) {
+		a.logger.Warn().Str("key", key).Str("status", ev.Raw).Msg("Provider reports a state this binary does not know")
+	}
+}
+
+func (st *entryState) firstWarn(w providerWarn) bool {
+	if _, seen := st.warned[w]; seen {
+		return false
+	}
+	if st.warned == nil {
+		st.warned = map[providerWarn]struct{}{}
+	}
+	st.warned[w] = struct{}{}
+	return true
+}
+
 // leftPhase drops the timer and retry count of the phase the grab leaves for to, before to's effects arm their own.
 func (a *entryActor) leftPhase(st *entryState, to grab.Phase, fx *keyed.Effects[string, entryMsg]) {
 	if st.hasTimer {
@@ -610,6 +652,7 @@ func (a *entryActor) leftPhase(st *entryState, to grab.Phase, fx *keyed.Effects[
 		st.hasSeasonTimer = false
 	}
 	st.retries = 0
+	st.warned = nil
 	a.grabs.setPolled(st.g.State.Key, pollSeen{})
 	a.cancelDeadline(st, fx)
 	st.putAt = time.Time{}

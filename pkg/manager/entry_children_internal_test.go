@@ -132,24 +132,36 @@ func TestApplyParsedNZBTwiceGivesTheSameRecord(t *testing.T) {
 	}
 }
 
-func TestAPolledPlacementIsStalledWhenItIsNotDownloadingAndHasNeitherSeedersNorProgress(t *testing.T) {
+func TestPollSendsTheObservedPhase(t *testing.T) {
 	t.Parallel()
 	entry := &storage.Entry{InfoHash: "h", ActiveProvider: "rd", Files: map[string]*storage.File{},
 		Providers: map[string]*storage.ProviderEntry{"rd": {Provider: "rd", ID: "1"}}}
-	for name, tc := range map[string]struct {
-		t    *debridTypes.Torrent
-		want bool
+	torrent := func(status debridTypes.TorrentStatus, seeders int, progress float64) *debridTypes.Torrent {
+		return &debridTypes.Torrent{ID: "1", Debrid: "rd", Status: status, Seeders: seeders, Progress: progress}
+	}
+	cases := []struct {
+		name       string
+		t          *debridTypes.Torrent
+		want       debridTypes.Phase
+		raw        string
+		downloaded bool
 	}{
-		"idle":        {&debridTypes.Torrent{ID: "1", Debrid: "rd", Status: debridTypes.TorrentStatusQueued}, true},
-		"downloading": {&debridTypes.Torrent{ID: "1", Debrid: "rd", Status: debridTypes.TorrentStatusDownloading}, false},
-		"seeded":      {&debridTypes.Torrent{ID: "1", Debrid: "rd", Status: debridTypes.TorrentStatusQueued, Seeders: 2}, false},
-		"progressed":  {&debridTypes.Torrent{ID: "1", Debrid: "rd", Status: debridTypes.TorrentStatusQueued, Progress: 10}, false},
-	} {
-		t.Run(name, func(t *testing.T) {
+		{"idle", torrent(debridTypes.TorrentStatusQueued, 0, 0), debridTypes.PhaseStalled, "", false},
+		{"seeded", torrent(debridTypes.TorrentStatusQueued, 2, 0), debridTypes.PhaseRemoteQueued, "", false},
+		{"progressed", torrent(debridTypes.TorrentStatusQueued, 0, 10), debridTypes.PhaseRemoteQueued, "", false},
+		{"downloading", torrent(debridTypes.TorrentStatusDownloading, 0, 0), debridTypes.PhaseDownloading, "", false},
+		{"downloaded", torrent(debridTypes.TorrentStatusDownloaded, 0, 100), debridTypes.PhaseDownloaded, "", true},
+		{"unknown", torrent("magnet_conversion", 1, 0), debridTypes.PhaseUnknown, "magnet_conversion", false},
+	}
+	for i := range cases {
+		c := &cases[i]
+		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			msg := polled(entry, entry.Providers["rd"], tc.t)
-			if msg.ev == nil || msg.ev.Stalled != tc.want {
-				t.Fatalf("event = %+v, want Stalled %v", msg.ev, tc.want)
+			msg := polled(entry, entry.Providers["rd"], c.t)
+			ev := msg.ev
+			if ev == nil || ev.Kind != grab.EvProviderObserved || ev.Observed != c.want || ev.Raw != c.raw ||
+				ev.Downloaded != c.downloaded || !ev.AllLinked {
+				t.Fatalf("event = %+v, want %v raw %q downloaded %v all linked", ev, c.want, c.raw, c.downloaded)
 			}
 			if msg.seen == nil || *msg.seen != (pollSeen{}) {
 				t.Fatalf("seen = %+v, want the zero pollSeen that clears a pending wait", msg.seen)

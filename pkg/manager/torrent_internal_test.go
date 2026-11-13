@@ -124,7 +124,7 @@ func TestPollChildSurvivesTransientStatusErrors(t *testing.T) {
 				Providers: map[string]*storage.ProviderEntry{"provider": {Provider: "provider", ID: "id"}},
 			}
 			msg := poll(t.Context(), m, entry)
-			if failed := msg.ev != nil && msg.ev.Failed; failed != tc.wantError {
+			if failed := msg.ev != nil && msg.ev.Observed == types.PhaseFailed; failed != tc.wantError {
 				t.Fatalf("poll result = %+v, want failed=%v", msg.ev, tc.wantError)
 			}
 			if !tc.wantError && provider.deleted.Load() != 0 {

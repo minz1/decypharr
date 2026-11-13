@@ -215,10 +215,6 @@ func observedPhase(ev Event) debridTypes.Phase {
 		return ev.Observed
 	case ev.Downloaded:
 		return debridTypes.PhaseDownloaded
-	case ev.Stalled:
-		return debridTypes.PhaseStalled
-	case ev.Raw != "":
-		return debridTypes.PhaseUnknown
 	}
 	return debridTypes.PhaseDownloading
 }

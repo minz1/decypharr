@@ -89,6 +89,9 @@ func providerDeadline(st State, v DeadlineView) (Event, time.Time, bool) {
 	if !st.StalledSince.IsZero() && v.StalledAfter > 0 {
 		if at := st.StalledSince.Add(v.StalledAfter); !ok || at.Before(due) {
 			ev, due, ok = Event{Kind: EvStalledDeadline, Fail: FailNoEffect}, at, true
+			if st.UnknownRaw != "" {
+				ev.Reason = fmt.Sprintf("provider state %q unknown for %s", st.UnknownRaw, v.StalledAfter)
+			}
 		}
 	}
 	return ev, due, ok

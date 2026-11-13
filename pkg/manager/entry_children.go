@@ -237,23 +237,24 @@ func (m *Manager) placementFailed(
 	}
 	switch {
 	case err != nil:
-		return eventMsg(grab.Event{Kind: grab.EvProviderObserved, Failed: true, Fail: fail, Reason: err.Error()})
+		return eventMsg(grab.Event{Kind: grab.EvProviderObserved, Observed: debridTypes.PhaseFailed, Fail: fail, Reason: err.Error()})
 	case t == nil:
 		return eventMsg(grab.Event{Kind: grab.EvPlacementGone, Fail: grab.FailBadRelease,
 			Reason: "debrid entry not found"})
 	}
 	m.logger.Error().Str("debrid", t.Debrid).Str("name", t.Name).Str("status", string(t.Status)).
 		Msg("Entry in error state")
-	return eventMsg(grab.Event{Kind: grab.EvProviderObserved, Failed: true, Fail: grab.FailBadRelease,
+	return eventMsg(grab.Event{Kind: grab.EvProviderObserved, Observed: debridTypes.PhaseFailed, Fail: grab.FailBadRelease,
 		Reason: "entry in error state on debrid: " + t.Debrid})
 }
 
 // polled is the observation a status check of a placement makes; it carries the placement's progress.
 func polled(entry *storage.Entry, placement *storage.ProviderEntry, t *debridTypes.Torrent) entryMsg {
-	downloaded := t.Status == debridTypes.TorrentStatusDownloaded
-	stalled := t.Status != debridTypes.TorrentStatusDownloading && t.Seeders == 0 && t.Progress == 0
+	obs := debridTypes.ObservationOf(t)
+	downloaded := obs.Phase == debridTypes.PhaseDownloaded
 	msg := eventMsg(grab.Event{
-		Kind: grab.EvProviderObserved, Downloaded: downloaded, AllLinked: !awaitingLinks(entry, t), Stalled: stalled,
+		Kind: grab.EvProviderObserved, Observed: obs.Phase, Raw: obs.Raw, Downloaded: downloaded,
+		AllLinked: !awaitingLinks(entry, t),
 	})
 	msg.seen = &pollSeen{}
 	provider, id := placement.Provider, placement.ID

@@ -79,7 +79,7 @@ func TestStatusCheckFailsGrabOnlyForDeadTorrents(t *testing.T) {
 			entry.Protocol, entry.ActiveProvider, entry.State = config.ProtocolTorrent, "provider", storage.EntryStateDownloading
 			entry.Providers = map[string]*storage.ProviderEntry{"provider": {Provider: "provider", ID: "id"}}
 			msg := poll(t.Context(), m, entry)
-			if msg.ev == nil || !msg.ev.Failed {
+			if msg.ev == nil || msg.ev.Observed != types.PhaseFailed {
 				t.Fatalf("result = %+v, want a failed observation", msg.ev)
 			}
 			if got := msg.ev.Fail == grab.FailBadRelease; got != tc.wantFail {

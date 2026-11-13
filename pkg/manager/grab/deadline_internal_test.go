@@ -4,6 +4,8 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 )
 
 func TestNextDeadline(t *testing.T) {
@@ -119,12 +121,12 @@ func TestEveryNonTerminalPhaseHasADeadlineOrAChildInFlight(t *testing.T) {
 func TestAStalledPollSetsAndClearsStalledSince(t *testing.T) {
 	t.Parallel()
 	st := in(PhaseProvider)
-	first := Event{Kind: EvProviderObserved, Stalled: true, At: at()}
+	first := Event{Kind: EvProviderObserved, Observed: debridTypes.PhaseStalled, At: at()}
 	st, fx, err := Transition(st, first)
 	if err != nil || !st.StalledSince.Equal(at()) || len(fx) != 1 || fx[0].Kind != FxPersist {
 		t.Fatalf("first stalled poll: %+v %v %v", st.StalledSince, fx, err)
 	}
-	again := Event{Kind: EvProviderObserved, Stalled: true, At: at().Add(time.Minute)}
+	again := Event{Kind: EvProviderObserved, Observed: debridTypes.PhaseStalled, At: at().Add(time.Minute)}
 	st, fx, err = Transition(st, again)
 	if err != nil || !st.StalledSince.Equal(at()) || len(fx) != 0 {
 		t.Fatalf("second stalled poll: %+v %v %v", st.StalledSince, fx, err)
@@ -132,5 +134,31 @@ func TestAStalledPollSetsAndClearsStalledSince(t *testing.T) {
 	st, fx, err = Transition(st, Event{Kind: EvProviderObserved, At: at().Add(2 * time.Minute)})
 	if err != nil || !st.StalledSince.IsZero() || len(fx) != 1 {
 		t.Fatalf("poll that is not stalled: %+v %v %v", st.StalledSince, fx, err)
+	}
+}
+
+func TestUnknownRunArmsTheStalledDeadline(t *testing.T) {
+	t.Parallel()
+	v := DeadlineView{StalledAfter: time.Hour}
+	st := State{Key: "k", Phase: PhaseProvider, UnknownRaw: "x", StalledSince: at()}
+	ev, due, ok := NextDeadline(st, v)
+	if !ok || ev.Kind != EvStalledDeadline || !due.Equal(at().Add(time.Hour)) || ev.Fail != FailNoEffect {
+		t.Fatalf("unknown run: %+v %v %v", ev, due, ok)
+	}
+	if want := `provider state "x" unknown for 1h0m0s`; ev.Reason != want {
+		t.Fatalf("unknown run reason %q, want %q", ev.Reason, want)
+	}
+	failed, _, err := Transition(st, ev)
+	if err != nil || failed.Failure.Reason != ev.Reason {
+		t.Fatalf("unknown run failed as %+v %v", failed.Failure, err)
+	}
+	st.UnknownRaw = ""
+	ev, _, ok = NextDeadline(st, v)
+	if !ok || ev.Fail != FailNoEffect {
+		t.Fatalf("stall: %+v %v", ev, ok)
+	}
+	failed, _, err = Transition(st, ev)
+	if err != nil || failed.Failure.Reason != "stalled" {
+		t.Fatalf("stall failed as %+v %v", failed.Failure, err)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/sirrobot01/appendstore"
 
+	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
@@ -119,7 +120,11 @@ func TestAPlacementOfUnknownAgeNeverFailsPending(t *testing.T) {
 }
 
 func observed(stalled bool) entryMsg {
-	return eventMsg(grab.Event{Kind: grab.EvProviderObserved, Stalled: stalled})
+	phase := debridTypes.PhaseDownloading
+	if stalled {
+		phase = debridTypes.PhaseStalled
+	}
+	return eventMsg(grab.Event{Kind: grab.EvProviderObserved, Observed: phase})
 }
 
 func TestAStalledPlacementFailsAfterTheLimitWithNoEffect(t *testing.T) {
