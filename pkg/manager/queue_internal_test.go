@@ -15,27 +15,12 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
-func TestQueueDeleteKeepsFilesWhenNotRequested(t *testing.T) {
+func TestQueueDeleteRemovesFiles(t *testing.T) {
 	t.Parallel()
 	queue, entry, downloadedPath := newQueueDeleteTest(t)
 
-	if err := queue.Delete(entry.InfoHash, false, nil); err != nil {
-		t.Fatalf("delete queued entry: %v", err)
-	}
-	if _, err := os.Stat(downloadedPath); err != nil {
-		t.Fatalf("expected downloaded files to remain: %v", err)
-	}
-	if _, err := queue.GetTorrent(entry.InfoHash); err == nil {
-		t.Fatal("expected queued entry to be removed")
-	}
-}
-
-func TestQueueDeleteRemovesFilesWhenRequested(t *testing.T) {
-	t.Parallel()
-	queue, entry, downloadedPath := newQueueDeleteTest(t)
-
-	if err := queue.Delete(entry.InfoHash, true, nil); err != nil {
-		t.Fatalf("delete queued entry: %v", err)
+	if err := queue.deleteEntryFiles(entry); err != nil {
+		t.Fatalf("delete entry files: %v", err)
 	}
 	if _, err := os.Stat(downloadedPath); !os.IsNotExist(err) {
 		t.Fatalf("expected downloaded files to be removed, got %v", err)

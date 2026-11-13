@@ -468,7 +468,7 @@ func (a *entryActor) effect(s *entryStep, e grab.Effect) error {
 	case grab.FxFail:
 		a.fail(s.next, e.Fail)
 	case grab.FxRemoveRecord:
-		if err := a.store.DeleteQueued(s.key, nil); err != nil {
+		if err := a.store.RemoveQueued(s.key, nil); err != nil {
 			return fmt.Errorf("remove queue record: %w", err)
 		}
 		a.grabs.remove(s.key)

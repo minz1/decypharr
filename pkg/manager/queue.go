@@ -195,25 +195,6 @@ func (q *Queue) deleteEntryFiles(entry *storage.Entry) error {
 	return nil
 }
 
-func (q *Queue) wrapCleanupWithFileDelete(cleanup func(t *storage.Entry) error) func(*storage.Entry) error {
-	return func(entry *storage.Entry) error {
-		if err := q.deleteEntryFiles(entry); err != nil {
-			return err
-		}
-		if cleanup != nil {
-			return cleanup(entry)
-		}
-		return nil
-	}
-}
-
-func (q *Queue) Delete(infohash string, deleteFiles bool, cleanup func(t *storage.Entry) error) error {
-	if deleteFiles {
-		cleanup = q.wrapCleanupWithFileDelete(cleanup)
-	}
-	return q.storage.DeleteQueued(infohash, cleanup)
-}
-
 // failedNZBRetention is the least time a failed NZB stays in SAB history: a backfilling arr can skip refreshes for hours.
 const failedNZBRetention = 24 * time.Hour
 

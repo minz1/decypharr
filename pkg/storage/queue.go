@@ -117,8 +117,8 @@ func decodeQueued(data []byte, withGrab bool) (*Entry, error) {
 	return e, nil
 }
 
-// DeleteQueued removes an entry only after its cleanup succeeds; a missing entry is already deleted.
-func (s *Storage) DeleteQueued(infohash string, cleanup func(*Entry) error) error {
+// RemoveQueued removes an entry only after its cleanup succeeds; a missing entry is already deleted.
+func (s *Storage) RemoveQueued(infohash string, cleanup func(*Entry) error) error {
 	key := strings.ToLower(infohash)
 	if cleanup != nil {
 		entry, err := s.GetQueued(key)
@@ -202,7 +202,7 @@ func (s *Storage) DeleteWhereQueued(predicate func(*Entry) bool, cleanup func(*E
 	}
 	var errs []error
 	for _, entry := range entries {
-		if deleteQueuedErr := s.DeleteQueued(entry.InfoHash, cleanup); deleteQueuedErr != nil {
+		if deleteQueuedErr := s.RemoveQueued(entry.InfoHash, cleanup); deleteQueuedErr != nil {
 			errs = append(errs, deleteQueuedErr)
 		}
 	}

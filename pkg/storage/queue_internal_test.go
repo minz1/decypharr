@@ -139,7 +139,7 @@ func TestQueueCleanupFailureRetainsEntry(t *testing.T) {
 	}
 }
 
-func TestDeleteQueuedMissingEntryIsAlreadyDeleted(t *testing.T) {
+func TestRemoveQueuedMissingEntryIsAlreadyDeleted(t *testing.T) {
 	t.Parallel()
 	for name, withCleanup := range map[string]bool{"without cleanup": false, "with cleanup": true} {
 		t.Run(name, func(t *testing.T) {
@@ -149,8 +149,8 @@ func TestDeleteQueuedMissingEntryIsAlreadyDeleted(t *testing.T) {
 			if withCleanup {
 				cleanup = func(*Entry) error { t.Error("cleanup ran for a missing entry"); return nil }
 			}
-			if err := s.DeleteQueued("gone", cleanup); err != nil {
-				t.Fatalf("DeleteQueued(missing) = %v, want nil", err)
+			if err := s.RemoveQueued("gone", cleanup); err != nil {
+				t.Fatalf("RemoveQueued(missing) = %v, want nil", err)
 			}
 		})
 	}

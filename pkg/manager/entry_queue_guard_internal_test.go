@@ -18,12 +18,8 @@ func queueWriterName(call *ast.CallExpr) string {
 		return ""
 	}
 	switch sel.Sel.Name {
-	case "AddQueue", "UpdateQueue", "UpdateQueuedGrab", "UpdateWhereQueued", "DeleteWhereQueued":
+	case "AddQueue", "UpdateQueue", "UpdateQueuedGrab", "UpdateWhereQueued", "DeleteWhereQueued", "RemoveQueued":
 		return sel.Sel.Name
-	case "DeleteQueued":
-		if last := lastName(sel.X); last == "store" || last == "storage" {
-			return sel.Sel.Name
-		}
 	case "Add", "Update", "Delete":
 		if inner, isCall := sel.X.(*ast.CallExpr); isCall {
 			if fun, isSel := inner.Fun.(*ast.SelectorExpr); isSel && fun.Sel.Name == "Queue" {

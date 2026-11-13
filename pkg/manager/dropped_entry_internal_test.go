@@ -304,7 +304,7 @@ func TestDroppedEntryRecordStaysRemovedByAFastJob(t *testing.T) {
 	fake := &fakeArrRecovery{}
 	m, entry := newDroppedTestManager(t, fake)
 	fake.onFail = func(entryID string) {
-		if err := m.queue.Delete(entryID, false, nil); err != nil {
+		if err := m.queue.storage.RemoveQueued(entryID, nil); err != nil {
 			t.Error(err)
 		}
 	}

@@ -124,7 +124,7 @@ func TestParseNZBDoesNotRetry(t *testing.T) {
 		},
 		"entry removed": func(t *testing.T, m *Manager) (context.Context, parseFunc) {
 			return t.Context(), func(ctx context.Context, id, _ string, _ []byte, _ string) (*storage.NZB, map[string]*parser.FileGroup, error) {
-				if err := m.queue.Delete(id, false, nil); err != nil {
+				if err := m.queue.storage.RemoveQueued(id, nil); err != nil {
 					t.Error(err)
 				}
 				return nil, nil, waitOutBudget(ctx)

@@ -402,7 +402,7 @@ func TestAQueuedEntryCountsAsAHolder(t *testing.T) {
 		h.deleteEntry(t, "stored")
 		requireDeleted(t, h)
 
-		if err := h.m.queue.Delete("queued", false, nil); err != nil {
+		if err := h.m.queue.storage.RemoveQueued("queued", nil); err != nil {
 			t.Fatal(err)
 		}
 		other := h.addEntry(t, "again", shareID("shared"))

@@ -109,7 +109,7 @@ func TestDeleteDuringSymlinkActionLeavesNoEntry(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(mountPath, "Show.S01E01.mkv"), []byte("media"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.queue.Delete(entry.InfoHash, false, nil); err != nil {
+	if err := m.queue.storage.RemoveQueued(entry.InfoHash, nil); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancelCause(t.Context())
@@ -160,7 +160,7 @@ func TestDeleteBeforeUsenetDownloadLeavesNoEntry(t *testing.T) {
 	if err := m.queue.Add(entry); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.queue.Delete(entry.InfoHash, false, nil); err != nil {
+	if err := m.queue.storage.RemoveQueued(entry.InfoHash, nil); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancelCause(t.Context())
