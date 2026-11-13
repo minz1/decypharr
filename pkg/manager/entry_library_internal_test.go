@@ -12,10 +12,12 @@ import (
 	"strings"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/sirrobot01/appendstore"
 
 	"github.com/sirrobot01/decypharr/internal/task/keyed"
+	"github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
@@ -322,4 +324,48 @@ func (m *Manager) fine() { _ = m.storage.Get(""); _ = m.queue.Delete("") }
 	if got := directLibraryWrites(fset, []*ast.File{f}); len(got) != 1 || !strings.Contains(got[0], "in bad") {
 		t.Fatalf("guard findings %q, want one in bad", got)
 	}
+}
+
+func TestRepairResultAndBadFlagOfAGrabKeyGoThroughTheActor(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	synctest.Test(t, func(t *testing.T) {
+		h := newActorHarness(t, store)
+		h.grabbed()
+		stamp := time.Now()
+		entry := libEntry("a", "old")
+		entry.Providers = map[string]*storage.ProviderEntry{
+			"remaining": {Provider: "remaining", ID: "kept", Status: types.TorrentStatusDownloaded, DownloadedAt: &stamp},
+		}
+		if err := store.AddOrUpdate(entry); err != nil {
+			t.Fatal(err)
+		}
+		m := h.libManager()
+
+		if err := m.applyRepairResult(t.Context(), "a", RepairResult{Provider: "remaining", SeenID: "kept"}); err != nil {
+			t.Fatal(err)
+		}
+		if stored, err := store.Get("a"); err != nil || stored.ActiveProvider != "remaining" {
+			t.Fatalf("stored = %+v, %v; want remaining active", stored, err)
+		}
+		w, err := m.setBad("a", true, nil)
+		if err != nil || !w.flipped {
+			t.Fatalf("setBad = %+v, %v; want the flag flipped", w, err)
+		}
+		if stored, getErr := store.Get("a"); getErr != nil || !stored.Bad {
+			t.Fatalf("stored = %+v, %v; want the mark set", stored, getErr)
+		}
+
+		h.stop()
+		err = m.applyRepairResult(t.Context(), "a", RepairResult{Provider: "remaining", SeenID: "kept"})
+		if !errors.Is(err, keyed.ErrStopped) {
+			t.Fatalf("applyRepairResult with the actor stopped: %v, want ErrStopped", err)
+		}
+		if _, err = m.setBad("a", false, nil); !errors.Is(err, keyed.ErrStopped) {
+			t.Fatalf("setBad with the actor stopped: %v, want ErrStopped", err)
+		}
+		if stored, getErr := store.Get("a"); getErr != nil || !stored.Bad {
+			t.Fatalf("stored = %+v, %v; want a grab key never written without its actor", stored, getErr)
+		}
+	})
 }
