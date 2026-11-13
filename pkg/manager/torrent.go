@@ -535,7 +535,7 @@ func (m *Manager) processSyncTorrent(ctx context.Context, t *types.Torrent) (*st
 			Err(validateErr).
 			Str("infohash", t.InfoHash).
 			Str("name", mt.Name).
-			Msg("Validation failed for torrent, marking as bad")
+			Msg("Validation failed for torrent")
 	}
 
 	return mt, nil
