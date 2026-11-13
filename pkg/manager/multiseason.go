@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"maps"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -241,16 +240,6 @@ func (sp *seasonParser) inferSeasonFromPath(path string, knownSeasons map[int]bo
 	}
 
 	return 0
-}
-
-// Helper to get sorted season list for logging.
-func getSortedSeasons(seasons map[int]bool) []int {
-	result := make([]int, 0, len(seasons))
-	for season := range seasons {
-		result = append(result, season)
-	}
-	sort.Ints(result)
-	return result
 }
 
 // generateSeasonHash derives a season entry's ID from its pack's infohash and

@@ -134,30 +134,6 @@ func TestPollChildSurvivesTransientStatusErrors(t *testing.T) {
 	}
 }
 
-// A post-download action that finishes after the arr removed its entry does not save it back as completed.
-func TestCompleteEntryLeavesARemovedEntryRemoved(t *testing.T) {
-	t.Parallel()
-	m := newShutdownTestManager(t, t.TempDir())
-	entry := &storage.Entry{
-		InfoHash: "0123456789012345678901234567890123456789", Name: "release", Protocol: config.ProtocolTorrent,
-		State: storage.EntryStateDownloading, Status: types.TorrentStatusDownloaded,
-	}
-	if err := m.queue.Add(entry); err != nil {
-		t.Fatal(err)
-	}
-	if err := m.queue.Delete(entry.InfoHash, false, nil); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := m.downloader.completeEntry(t.Context(), entry); err != nil {
-		t.Fatal(err)
-	}
-
-	if m.queue.Contains(entry.InfoHash) {
-		t.Fatal("a removed entry was saved back as completed")
-	}
-}
-
 // stoppedListing stops the sync during its listing and answers with the page it had read so far and the ctx error.
 type stoppedListing struct {
 	*fakeListing

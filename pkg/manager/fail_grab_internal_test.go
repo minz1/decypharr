@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/arr"
+	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
@@ -82,7 +84,9 @@ func TestHeldGrabIsRetriedLaterAndSentOnce(t *testing.T) {
 		if err := m.queue.Add(entries[i]); err != nil {
 			t.Fatal(err)
 		}
-		m.failBadRelease(entries[i], errors.New("rejected"))
+		failed := grab.State{Key: strings.ToLower(entries[i].InfoHash), Phase: grab.PhaseFailed}
+		m.grabs.publish(GrabView{State: failed, Entry: *entries[i]})
+		m.failEffects(grab.Grab{Entry: entries[i], State: failed}, grab.FailBadRelease)
 	}
 	if len(recovery.fails) != 2 {
 		t.Fatalf("grabs failed straight away = %d, want the 2 free ones", len(recovery.fails))

@@ -83,6 +83,9 @@ type entryState struct {
 	saveFails int
 	// throttles counts throttled submits since the grab last reached its provider.
 	throttles int
+	// seasonTimer rechecks a pack waiting for its seasons.
+	seasonTimer    keyed.TimerID
+	hasSeasonTimer bool
 	// putAt and putProgress are when the action last saved its progress, and the progress it saved.
 	putAt       time.Time
 	putProgress float64
@@ -101,7 +104,12 @@ type entryDeps struct {
 	// fail runs what failing a grab does outside its record.
 	fail func(g grab.Grab, effect grab.FailEffect)
 	// packOf maps season child keys to their pack; inLibrary reports a key the library holds.
-	packOf     func() map[string]string
+	packOf func() map[string]string
+	// packAdd records that season is a child of pack; seasonsOf lists the season numbers of a pack, none for an
+	// entry that is no pack; naming is the download folder naming.
+	packAdd    func(pack, season string)
+	seasonsOf  func(pack *storage.Entry) []int
+	naming     func() config.WebDavFolderNaming
 	inLibrary  func(key string) bool
 	pollEvery  time.Duration
 	retryDelay func(n int) time.Duration
@@ -116,10 +124,23 @@ type entryActor struct {
 	runner  *keyed.Runner[string, entryMsg, entryState]
 	admit   *admission
 	refused atomic.Uint64
+
+	// send delivers a message to another grab's actor.
+	send func(key string, m entryMsg) error
 }
 
 func newEntryActor(g *task.Group, deps entryDeps) *entryActor {
 	a := &entryActor{entryDeps: deps}
+	if a.packAdd == nil {
+		a.packAdd = func(string, string) {}
+	}
+	if a.seasonsOf == nil {
+		a.seasonsOf = func(*storage.Entry) []int { return nil }
+	}
+	if a.naming == nil {
+		a.naming = func() config.WebDavFolderNaming { return "" }
+	}
+	a.send = func(key string, m entryMsg) error { return a.runner.Send(key, m) }
 	a.admit = newAdmission(deps.capacity, func(key string, ev grab.Event) error {
 		return a.runner.Send(key, eventMsg(ev))
 	})
@@ -310,9 +331,7 @@ func (a *entryActor) step(key string, st *entryState, m entryMsg, fx *keyed.Effe
 		a.refuse(key, ev, err, fx)
 		return
 	}
-	if ev.Kind == grab.EvSubmit && m.req != nil {
-		st.req = m.req
-	}
+	a.noteSubmit(key, st, m, ev)
 	s := &entryStep{key: key, st: st, cur: cur, next: grab.Grab{State: nextState}, m: m, ev: ev, fx: fx}
 	if cur.Entry != nil {
 		s.next.Entry = cur.Entry.Clone()
@@ -338,12 +357,27 @@ func (a *entryActor) step(key string, st *entryState, m entryMsg, fx *keyed.Effe
 		a.start(key, st, grab.Effect{Kind: grab.FxStartChild, Child: grab.ChildPoll}, false, fx)
 	}
 	fx.Reply(nil)
+	a.afterStep(key, st, cur, ev, fx)
 	if cur.State.Phase != grab.PhaseComplete && nextState.Phase == grab.PhaseComplete && s.next.Entry != nil {
 		a.completed(s.next)
 	}
 	if ev.Kind == grab.EvActionDone && nextState.Phase == grab.PhaseComplete && s.next.Entry != nil &&
-		s.next.Entry.Action == config.DownloadActionNone {
+		s.next.Entry.Action == config.DownloadActionNone &&
+		nextState.PackKey == "" {
 		a.step(key, st, eventMsg(grab.Event{Kind: grab.EvActionNone, At: ev.At}), fx)
+	}
+}
+
+// noteSubmit keeps what an accepted submit carries: the request and, for a season, its pack.
+func (a *entryActor) noteSubmit(key string, st *entryState, m entryMsg, ev grab.Event) {
+	if ev.Kind != grab.EvSubmit {
+		return
+	}
+	if m.req != nil {
+		st.req = m.req
+	}
+	if ev.PackKey != "" {
+		a.packAdd(ev.PackKey, key)
 	}
 }
 
@@ -502,6 +536,10 @@ func (a *entryActor) leftPhase(st *entryState, to grab.Phase, fx *keyed.Effects[
 	if st.hasTimer {
 		fx.CancelTimer(st.timer)
 		st.hasTimer = false
+	}
+	if st.hasSeasonTimer {
+		fx.CancelTimer(st.seasonTimer)
+		st.hasSeasonTimer = false
 	}
 	st.retries = 0
 	st.putAt = time.Time{}

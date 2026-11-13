@@ -83,12 +83,6 @@ func (m *Manager) sweepStalled(pending func(infoHash string) bool) error {
 	return errors.Join(errs...)
 }
 
-// deleting reports whether key's grab is being deleted.
-func (m *Manager) deleting(key string) bool {
-	v, ok := m.grabs.get(strings.ToLower(key))
-	return ok && v.State.Phase == grab.PhaseDeleting
-}
-
 // progressSink is how the action of key's grab reports its progress: a coalesced observation to the actor, which
 // decides what is worth saving.
 func (m *Manager) progressSink(key string) func(entry *storage.Entry) {

@@ -47,7 +47,7 @@ func newDroppedTestManager(t *testing.T, recovery ArrRecovery) (*Manager, *stora
 		store: store, grabs: m.grabs, logger: zerolog.Nop(), capacity: 1, child: m.entryChild,
 		publish: store.PublishEntry, fail: func(grab.Grab, grab.FailEffect) {},
 		packOf:     func() map[string]string { return nil },
-		inLibrary:  func(string) bool { return false },
+		inLibrary:  func(string) bool { return true },
 		pollEvery:  testPollEvery,
 		retryDelay: throttledRetryDelay,
 		completed:  func(grab.Grab) {},

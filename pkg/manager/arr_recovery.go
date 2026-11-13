@@ -14,6 +14,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/arr/reacquire"
+	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/repair"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
@@ -154,9 +155,9 @@ func (m *Manager) recoverDroppedEntry(provider string, entry *storage.Entry) err
 	// Mark the record before queuing the job: the job removes the record once
 	// the grab is failed, and a later write would bring it back.
 	if record.State != storage.EntryStateError {
-		record.MarkAsError(fmt.Errorf("%s no longer lists this torrent", provider))
-		if updateErr := m.Queue().Update(record); updateErr != nil {
-			return fmt.Errorf("mark dropped entry as errored: %w", updateErr)
+		dropped := grab.Event{Kind: grab.EvProviderDropped, Reason: provider + " no longer lists this torrent"}
+		if askErr := m.askGrab(m.work.Context(), entry.InfoHash, dropped); askErr != nil {
+			return fmt.Errorf("mark dropped entry as errored: %w", askErr)
 		}
 	}
 	instance, ok := m.Arr().Get(record.Category)

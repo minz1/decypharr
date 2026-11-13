@@ -41,6 +41,7 @@ const (
 	EvCategoryChanged
 	EvRemoveFile
 	EvActionNone
+	EvSeasonsStarted
 	evCount // the number of kinds, for tests
 )
 
@@ -109,7 +110,9 @@ type Event struct {
 	// Raw is an unrecognised provider status, shown as is.
 	Raw    string
 	Reason string
-	Fail   FailEffect
+	// Seasons are the season numbers a pack fanned out into.
+	Seasons []int
+	Fail    FailEffect
 	// Cleanup is what a Delete cleans up.
 	Cleanup Cleanup
 	// Provider and TorrentID name the placement a SubmitResult or Lookup carries.

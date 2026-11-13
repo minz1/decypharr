@@ -75,82 +75,28 @@ func NewDownloadManager(manager *Manager) *Downloader {
 	}
 }
 
-func (d *Downloader) download(ctx context.Context, torrent *storage.Entry) error {
+// downloadIn runs torrent's action with its files read from mountPath.
+func (d *Downloader) downloadIn(ctx context.Context, torrent *storage.Entry, mountPath string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	// Mark as in-flight up front so the queue scheduler skips this entry while
-	// we're iterating seasons / creating symlinks (processSymlink only flips
-	// this flag after its own directory scan, which is too late for the parent
-	// of a multi-season torrent).
 	torrent.IsDownloading = true
 	if owner := ownerOf(ctx); owner != nil {
 		owner.progress(torrent)
-	} else {
-		_ = d.manager.queue.Update(torrent)
 	}
-
-	var (
-		isMultiSeason bool
-		seasons       []SeasonInfo
-	)
-	if !torrent.SkipMultiSeason {
-		isMultiSeason, seasons = d.detectMultiSeason(torrent)
-	}
-	torrentMountPath := d.manager.GetTorrentMountPath(torrent)
-	if isMultiSeason {
-		return d.downloadSeasons(ctx, torrent, seasons, torrentMountPath)
-	}
-	return d.process(ctx, torrent, torrentMountPath)
+	return d.process(ctx, torrent, mountPath)
 }
 
-// downloadSeasons fans a season pack out into one entry per season and
-// processes each that is not already complete.
-func (d *Downloader) downloadSeasons(
-	ctx context.Context,
-	torrent *storage.Entry,
-	seasons []SeasonInfo,
-	mountPath string,
-) error {
-	results := convertToMultiSeason(torrent, seasons)
-	for _, result := range results {
-		if saved, err := d.manager.queue.GetTorrent(result.InfoHash); err == nil && saved.IsComplete {
-			continue
-		}
-		if err := d.manager.queue.Add(result); err != nil {
-			d.logger.Error().Err(err).Msgf("Failed to save season torrent")
-			continue
-		}
-		if err := d.process(withOwner(ctx, nil), result, mountPath); err != nil {
-			if errors.Is(err, ErrMountStopping) {
-				// The season and the pack stay queued for the next generation; the pack is not complete.
-				// A pack delete whose cancel landed before this return also removes the season; one that
-				// lands after it finds the action gone and leaves the season queued (as on a work cancel).
-				d.removeSeasonOfDeletedPack(torrent, result)
-				return err
-			}
-			if ctx.Err() != nil {
-				d.removeSeasonOfDeletedPack(torrent, result)
-				return err
-			}
-			d.markAsError(result, err)
-		}
+// seasonsOf lists the seasons a pack fans out into; none for an entry that is no pack.
+func (d *Downloader) seasonsOf(torrent *storage.Entry) []SeasonInfo {
+	if torrent.SkipMultiSeason {
+		return nil
 	}
-	// Parent has been fanned out into season entries; mark it complete so
-	// it leaves the downloading queue instead of getting re-processed.
-	return d.completeEntry(ctx, torrent)
-}
-
-// removeSeasonOfDeletedPack drops a season the pack's delete cut short; a folder shared with the pack is the pack's.
-func (d *Downloader) removeSeasonOfDeletedPack(pack, season *storage.Entry) {
-	if !d.manager.deleting(pack.InfoHash) {
-		return
+	multi, seasons := d.detectMultiSeason(torrent)
+	if !multi {
+		return nil
 	}
-	naming := d.manager.folderNaming()
-	ownFolder := season.DownloadPath(naming) != pack.DownloadPath(naming)
-	if err := d.manager.queue.Delete(season.InfoHash, ownFolder, nil); err != nil {
-		d.logger.Error().Err(err).Str("name", season.Name).Msg("Failed to remove season of a deleted pack")
-	}
+	return seasons
 }
 
 func (d *Downloader) process(ctx context.Context, entry *storage.Entry, mountPath string) error {
@@ -160,41 +106,10 @@ func (d *Downloader) process(ctx context.Context, entry *storage.Entry, mountPat
 	case config.DownloadActionSymlink:
 		return d.processSymlink(ctx, entry, mountPath)
 	case config.DownloadActionNone:
-		if err := d.completeEntry(ctx, entry); err != nil {
-			return err
-		}
-		if ownerOf(ctx) == nil {
-			_ = d.manager.queue.Delete(entry.InfoHash, true, nil)
-		}
-		return nil
+		return ctx.Err()
 	default:
 		return d.processSymlink(ctx, entry, mountPath)
 	}
-}
-
-// completeEntry marks entry completed and tells the arr, unless its action was cancelled (a delete must not re-save it).
-func (d *Downloader) completeEntry(ctx context.Context, entry *storage.Entry) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if ownerOf(ctx) != nil {
-		return nil
-	}
-	if !d.manager.queue.Contains(entry.InfoHash) {
-		return nil
-	}
-	d.markAsCompleted(entry)
-	d.manager.strm.SyncEntryAsync(entry)
-	d.notifyCompleted(entry)
-	d.manager.refreshArr(entry)
-	d.manager.ReindexArrEntry(entry.Category, entry.InfoHash)
-	return nil
-}
-
-func (d *Downloader) markAsCompleted(entry *storage.Entry) {
-	// Mark as completed
-	entry.MarkAsCompleted(entry.DownloadPath(d.manager.folderNaming()))
-	_ = d.manager.queue.Update(entry)
 }
 
 func (d *Downloader) notifyCompleted(entry *storage.Entry) {
@@ -229,21 +144,6 @@ func (m *Manager) refreshArr(entry *storage.Entry) {
 				Msg("Failed to trigger Arr refresh")
 		}
 		return nil
-	})
-}
-
-func (d *Downloader) markAsError(entry *storage.Entry, err error) {
-	d.logger.Error().Err(err).Str("name", entry.Name).Msg("Failed to process action")
-	d.manager.failEntry(entry, err)
-
-	// Send error notification
-	msg := fmt.Sprintf("Download failed: %s [%s] - %s", entry.Name, entry.Category, err.Error())
-	d.manager.Notifications.Notify(notifications.Event{
-		Type:    config.EventDownloadFailed,
-		Status:  "error",
-		Entry:   entry,
-		Message: msg,
-		Error:   err,
 	})
 }
 
@@ -283,7 +183,7 @@ func (d *Downloader) processSymlink(ctx context.Context, entry *storage.Entry, m
 
 	d.warmAfterLinks(ctx, entry, filePaths)
 
-	return d.completeEntry(ctx, entry)
+	return ctx.Err()
 }
 
 // warmAfterLinks warms the mount cache for the first few files so a subsequent import scan is fast.
@@ -675,7 +575,7 @@ func (d *Downloader) processTorrentDownload(ctx context.Context, entry *storage.
 		return fmt.Errorf("download failed: %w", err)
 	}
 	d.logger.Info().Msgf("Downloaded all files for %s", entry.Name)
-	return d.completeEntry(ctx, entry)
+	return ctx.Err()
 }
 
 // resolveLinkWithRetry fetches a download link, retrying transient failures
@@ -724,9 +624,7 @@ func (d *Downloader) saveProgress(ctx context.Context, entry *storage.Entry) {
 	}
 	if owner := ownerOf(ctx); owner != nil {
 		owner.progress(entry)
-		return
 	}
-	_ = d.manager.queue.Update(entry)
 }
 
 type ownerKey struct{}
@@ -823,7 +721,7 @@ func (d *Downloader) processUsenetDownload(ctx context.Context, entry *storage.E
 	}
 
 	d.logger.Info().Msgf("Downloaded all NZB files for %s", entry.Name)
-	return d.completeEntry(ctx, entry)
+	return ctx.Err()
 }
 
 // writeAndClose fills f with write and closes it. A failed close fails the
@@ -882,8 +780,6 @@ func (d *Downloader) detectMultiSeason(torrent *storage.Entry) (bool, []SeasonIn
 	if len(seasons) <= 1 {
 		return false, nil
 	}
-
-	d.logger.Info().Msgf("Multi-season torrent detected with seasons: %v", getSortedSeasons(seasonsFound))
 
 	return true, seasons
 }

@@ -1,16 +1,10 @@
 package manager
 
 import (
-	"context"
-	"os"
 	"path/filepath"
-	"strings"
 	"testing"
-	"testing/synctest"
 
 	"github.com/sirrobot01/decypharr/internal/config"
-	"github.com/sirrobot01/decypharr/pkg/debrid/types"
-	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
@@ -99,152 +93,5 @@ func TestSeasonSplitChildrenInheritManual(t *testing.T) {
 		if !child.Manual {
 			t.Fatalf("child %s lost Manual", child.InfoHash)
 		}
-	}
-}
-
-// Deleting a season pack mid fan-out left the in-flight season queued with no worker.
-func TestDeletingSeasonPackRemovesInFlightSeason(t *testing.T) {
-	t.Parallel()
-	synctest.Test(t, func(t *testing.T) {
-		m, entry, children := newSeasonPackTest(t, "Show.S01-S02")
-		completed := seedCompletedSeason(t, m, entry)
-		if mkdirErr := os.MkdirAll(completed.DownloadPath(""), 0o755); mkdirErr != nil {
-			t.Fatal(mkdirErr)
-		}
-		cancelAction, deletePack := runDownload(t, m, entry)
-		defer cancelAction()
-		synctest.Wait()
-		for _, child := range children {
-			if !m.queue.Contains(child.InfoHash) {
-				t.Fatalf("season %s not queued before the delete", child.Name)
-			}
-		}
-		if deleteErr := deletePack(true); deleteErr != nil {
-			t.Fatal(deleteErr)
-		}
-		synctest.Wait()
-		for _, child := range children {
-			checkSeasonAfterPackDelete(t, m, child, child.InfoHash == completed.InfoHash)
-		}
-	})
-}
-
-// checkSeasonAfterPackDelete checks a completed season kept its entry and folder and an in-flight one lost both.
-func checkSeasonAfterPackDelete(t *testing.T, m *Manager, season *storage.Entry, completed bool) {
-	t.Helper()
-	saved, getErr := m.queue.GetTorrent(season.InfoHash)
-	_, statErr := os.Stat(season.DownloadPath(""))
-	if completed {
-		if getErr != nil || !saved.IsComplete || statErr != nil {
-			t.Errorf("completed season %s lost: entry %v, folder %v", season.Name, getErr, statErr)
-		}
-		return
-	}
-	if getErr == nil {
-		t.Errorf("season %s still queued after its pack was deleted: %#v", season.Name, saved)
-	}
-	if !os.IsNotExist(statErr) {
-		t.Errorf("season %s folder left behind: %v", season.Name, statErr)
-	}
-}
-
-// A season sharing the pack's folder must not wipe it when the pack is deleted with its files kept.
-func TestDeletingSeasonPackKeepsSharedFolder(t *testing.T) {
-	t.Parallel()
-	synctest.Test(t, func(t *testing.T) {
-		m, entry, children := newSeasonPackTest(t, "Show.S01.1080p")
-		folder := entry.DownloadPath("")
-		for _, child := range children {
-			if child.DownloadPath("") != folder {
-				t.Fatalf("season %s folder %q, want the pack's %q", child.Name, child.DownloadPath(""), folder)
-			}
-		}
-		kept := filepath.Join(folder, "imported.mkv")
-		if mkdirErr := os.MkdirAll(folder, 0o755); mkdirErr != nil {
-			t.Fatal(mkdirErr)
-		}
-		if writeErr := os.WriteFile(kept, []byte("media"), 0o644); writeErr != nil {
-			t.Fatal(writeErr)
-		}
-		cancelAction, deletePack := runDownload(t, m, entry)
-		defer cancelAction()
-		synctest.Wait()
-		if deleteErr := deletePack(false); deleteErr != nil {
-			t.Fatal(deleteErr)
-		}
-		synctest.Wait()
-
-		for _, child := range children {
-			if m.queue.Contains(child.InfoHash) {
-				t.Errorf("season %s still queued after its pack was deleted", child.Name)
-			}
-		}
-		if _, statErr := os.Stat(kept); statErr != nil {
-			t.Fatalf("shared folder lost a kept file: %v", statErr)
-		}
-	})
-}
-
-// newSeasonPackTest queues a finished two-season pack whose files never appear on the mount.
-func newSeasonPackTest(t *testing.T, name string) (*Manager, *storage.Entry, []*storage.Entry) {
-	t.Helper()
-	m := newShutdownTestManager(t, t.TempDir())
-	m.mountManager = shutdownMount{stop: func() error { return nil }}
-	entry := &storage.Entry{
-		InfoHash:       "0123456789012345678901234567890123456789",
-		Name:           name,
-		Protocol:       config.ProtocolTorrent,
-		State:          storage.EntryStateDownloading,
-		ActiveProvider: "provider",
-		Action:         config.DownloadActionSymlink,
-		SavePath:       t.TempDir(),
-		Files:          map[string]*storage.File{},
-		Providers:      map[string]*storage.ProviderEntry{},
-	}
-	torrent := &types.Torrent{
-		ID: "provider-id", Debrid: "provider", InfoHash: entry.InfoHash, Name: entry.Name,
-		Status: types.TorrentStatusDownloaded, Progress: 100,
-		Files: map[string]types.File{
-			"Show.S01E01.mkv": {Name: "Show.S01E01.mkv", ID: "1", Size: 5},
-			"Show.S02E01.mkv": {Name: "Show.S02E01.mkv", ID: "2", Size: 5},
-		},
-	}
-	applyDebridTorrentToEntry(entry, torrent)
-	m.clients.Store("provider", completedTorrentProvider{torrent: torrent})
-	if addErr := m.queue.Add(entry); addErr != nil {
-		t.Fatal(addErr)
-	}
-	if mkdirErr := os.MkdirAll(m.GetTorrentMountPath(entry), 0o755); mkdirErr != nil {
-		t.Fatal(mkdirErr)
-	}
-	_, seasons := m.downloader.detectMultiSeason(entry)
-	children := convertToMultiSeason(entry, seasons)
-	if len(children) != 2 {
-		t.Fatalf("seasons = %d, want 2", len(children))
-	}
-	return m, entry, children
-}
-
-// runDownload runs entry's download as an action does and returns what waits for it to end and deletePack. deletePack does what the pack's delete does: the actor
-// enters Deleting, cancels the action and removes the record.
-func runDownload(
-	t *testing.T,
-	m *Manager,
-	entry *storage.Entry,
-) (func(), func(deleteFiles bool) error) {
-	t.Helper()
-	ctx, cancel := context.WithCancel(t.Context())
-	t.Cleanup(cancel)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		_ = m.downloader.download(ctx, entry)
-	}()
-	return func() { <-done }, func(deleteFiles bool) error {
-		m.grabs.publish(GrabView{
-			State: grab.State{Key: strings.ToLower(entry.InfoHash), Phase: grab.PhaseDeleting}, Entry: *entry,
-		})
-		cancel()
-		return m.queue.Delete(entry.InfoHash, deleteFiles, nil)
 	}
 }

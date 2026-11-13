@@ -3,7 +3,6 @@ package manager
 import (
 	"context"
 	"crypto/tls"
-	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -497,16 +496,20 @@ func (m *Manager) initLinkService() {
 }
 
 func (m *Manager) initEntries(packOf map[string]string) {
+	packs := newPackIndex(packOf)
 	m.grabs = &grabIndex{}
 	m.entries = newEntryActor(m.work, entryDeps{
-		store:    m.storage,
-		grabs:    m.grabs,
-		logger:   m.logs.New("grab"),
-		capacity: m.config.MaxActiveDownloads,
-		child:    m.entryChild,
-		publish:  m.storage.PublishEntry,
-		fail:     m.failEffects,
-		packOf:   func() map[string]string { return packOf },
+		store:     m.storage,
+		grabs:     m.grabs,
+		logger:    m.logs.New("grab"),
+		capacity:  m.config.MaxActiveDownloads,
+		child:     m.entryChild,
+		publish:   m.storage.PublishEntry,
+		fail:      m.failEffects,
+		packOf:    packs.snapshot,
+		packAdd:   packs.add,
+		seasonsOf: m.seasonNumbers,
+		naming:    m.folderNaming,
 		inLibrary: func(key string) bool {
 			ok, err := m.storage.Exists(key)
 			return ok && err == nil
@@ -535,42 +538,6 @@ func (m *Manager) runWorkCtx(name string, fn func(ctx context.Context)) error {
 // throttledRetryDelay doubles the wait after each active-download cap hit, up to maxThrottledRetryDelay.
 func throttledRetryDelay(retries int) time.Duration {
 	return min(tooManyDownloadsRetryDelay<<min(retries, maxThrottledDoublings), maxThrottledRetryDelay)
-}
-
-// failEntry records err on entry and tells its arr, so it sees the failure before the sweep removes it.
-func (m *Manager) failEntry(entry *storage.Entry, err error) {
-	if removeErr := removeStagedNZB(entry); removeErr != nil {
-		m.logger.Warn().Err(removeErr).Str("name", entry.Name).Msg("Failed to remove the failed job's staged NZB")
-	} else if entry.IsNZB() {
-		entry.Magnet = ""
-	}
-	entry.MarkAsError(err)
-	_ = m.queue.Update(entry)
-	if entry.IsNZB() && m.usenet != nil {
-		if releaseErr := m.usenet.Fail(entry.InfoHash, err); releaseErr != nil {
-			m.logger.Warn().Err(releaseErr).Str("name", entry.Name).Msg("Failed to release the failed NZB")
-		}
-	}
-	m.refreshArr(entry)
-}
-
-// failBadRelease fails entry and, for an arr's torrent, its grab: the arr treats qBit "error" as a warning and never re-searches.
-func (m *Manager) failBadRelease(entry *storage.Entry, err error) {
-	m.failEntry(entry, err)
-	grabErr := m.failReleaseGrab(entry)
-	switch {
-	case grabErr == nil:
-	case errors.Is(grabErr, arr.ErrBlocklistHeld):
-		// Nothing retries this failure by itself; the held grab is kept and retried while the entry stays in error.
-		m.holdGrab(entry.InfoHash, grabBucket(entry), func(context.Context) error {
-			if !m.queue.Contains(entry.InfoHash) {
-				return nil
-			}
-			return m.failReleaseGrab(entry)
-		})
-	default:
-		m.logger.Warn().Err(grabErr).Str("name", entry.Name).Msg("Failed to fail the grab in the Arr")
-	}
 }
 
 // failReleaseGrab fails the grab of an arr's torrent whose release the provider rejected.

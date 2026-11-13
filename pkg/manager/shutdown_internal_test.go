@@ -21,15 +21,6 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
-type shutdownMount struct {
-	MountManager
-
-	stop func() error
-}
-
-func (m shutdownMount) Stop() error            { return m.stop() }
-func (m shutdownMount) Refresh([]string) error { return nil }
-
 type completedTorrentProvider struct {
 	debrid.Client
 
@@ -42,17 +33,10 @@ func (c completedTorrentProvider) CheckStatus(context.Context, *types.Torrent) (
 
 func TestShutdownResumesInterruptedSymlinks(t *testing.T) {
 	t.Parallel()
-	for _, multiSeason := range []bool{false, true} {
-		t.Run(map[bool]string{false: "single release", true: "season pack"}[multiSeason], func(t *testing.T) {
-			t.Parallel()
-			synctest.Test(t, func(t *testing.T) {
-				runShutdownResume(t, multiSeason)
-			})
-		})
-	}
+	synctest.Test(t, runShutdownResume)
 }
 
-func runShutdownResume(t *testing.T, multiSeason bool) {
+func runShutdownResume(t *testing.T) {
 	t.Helper()
 	dbPath := t.TempDir()
 	m := newShutdownTestManager(t, dbPath)
@@ -63,7 +47,7 @@ func runShutdownResume(t *testing.T, multiSeason bool) {
 		State:           storage.EntryStateDownloading,
 		ActiveProvider:  "provider",
 		Action:          config.DownloadActionSymlink,
-		SkipMultiSeason: !multiSeason,
+		SkipMultiSeason: true,
 		SavePath:        t.TempDir(),
 		Files:           map[string]*storage.File{},
 		Providers:       map[string]*storage.ProviderEntry{},
@@ -73,17 +57,10 @@ func runShutdownResume(t *testing.T, multiSeason bool) {
 		Status: types.TorrentStatusDownloaded, Progress: 100,
 		Files: map[string]types.File{"Show.S02E01.mkv": {Name: "Show.S02E01.mkv", ID: "2", Size: 5}},
 	}
-	if multiSeason {
-		torrent.Files["Show.S01E01.mkv"] = types.File{Name: "Show.S01E01.mkv", ID: "1", Size: 5}
-	}
 	applyDebridTorrentToEntry(entry, torrent)
 	m.clients.Store("provider", completedTorrentProvider{torrent: torrent})
 	if addErr := m.queue.Add(entry); addErr != nil {
 		t.Fatal(addErr)
-	}
-	var completedSeason *storage.Entry
-	if multiSeason {
-		completedSeason = seedCompletedSeason(t, m, entry)
 	}
 	mountPath := m.GetTorrentMountPath(entry)
 	if mkdirAllErr := os.MkdirAll(mountPath, 0o755); mkdirAllErr != nil {
@@ -92,9 +69,6 @@ func runShutdownResume(t *testing.T, multiSeason bool) {
 
 	interruptAndStop(t, m, entry)
 	reopenShutdownTestManager(t, m, dbPath, entry)
-	if multiSeason && !m.queue.Contains(seasonHolding(t, m, entry, "Show.S02E01.mkv").InfoHash) {
-		t.Fatal("shutdown removed the in-flight season")
-	}
 	for name := range torrent.Files {
 		if writeFileErr := os.WriteFile(filepath.Join(mountPath, name), []byte("media"), 0o644); writeFileErr != nil {
 			t.Fatal(writeFileErr)
@@ -111,14 +85,6 @@ func runShutdownResume(t *testing.T, multiSeason bool) {
 		t.Fatalf("resumed entry = %#v, error = %v", saved, err)
 	}
 	downloadPath := saved.DownloadPath("")
-	if multiSeason {
-		downloadPath = seasonDownloadPath(t, m, entry, "Show.S02E01.mkv")
-		if _, lstatErr := os.Lstat(filepath.Join(completedSeason.DownloadPath(""), "Show.S01E01.mkv")); !os.IsNotExist(
-			lstatErr,
-		) {
-			t.Fatalf("completed season was processed again: %v", lstatErr)
-		}
-	}
 	linkPath := filepath.Join(downloadPath, "Show.S02E01.mkv")
 	target, err := os.Readlink(linkPath)
 	if err != nil || target != filepath.Join(mountPath, "Show.S02E01.mkv") {
@@ -184,27 +150,6 @@ func wireLifecycle(t *testing.T, m *Manager) {
 	}
 }
 
-// seedCompletedSeason queues season 1 of the pack as already imported.
-func seedCompletedSeason(t *testing.T, m *Manager, entry *storage.Entry) *storage.Entry {
-	t.Helper()
-	found, seasons := m.downloader.detectMultiSeason(entry)
-	if !found {
-		t.Fatal("season pack was not detected")
-	}
-	var completed *storage.Entry
-	for _, season := range convertToMultiSeason(entry, seasons) {
-		if season.Files["Show.S01E01.mkv"] == nil {
-			continue
-		}
-		completed = season
-		season.MarkAsCompleted(season.DownloadPath(""))
-		if addErr := m.queue.Add(season); addErr != nil {
-			t.Fatal(addErr)
-		}
-	}
-	return completed
-}
-
 // interruptAndStop starts the import, then shuts down while it waits for the
 // mount; the stop closes the mount gate and the action ends with no result, so the grab runs it again.
 func interruptAndStop(t *testing.T, m *Manager, entry *storage.Entry) {
@@ -248,23 +193,4 @@ func reopenShutdownTestManager(t *testing.T, m *Manager, dbPath string, entry *s
 		saved.LastError != "" {
 		t.Fatalf("interrupted entry cannot resume: %#v", saved)
 	}
-}
-
-// seasonDownloadPath returns the download path of the season holding file.
-func seasonDownloadPath(t *testing.T, m *Manager, entry *storage.Entry, file string) string {
-	t.Helper()
-	return seasonHolding(t, m, entry, file).DownloadPath("")
-}
-
-// seasonHolding returns the season entry of the pack that holds file.
-func seasonHolding(t *testing.T, m *Manager, entry *storage.Entry, file string) *storage.Entry {
-	t.Helper()
-	_, seasons := m.downloader.detectMultiSeason(entry)
-	for _, season := range convertToMultiSeason(entry, seasons) {
-		if season.Files[file] != nil {
-			return season
-		}
-	}
-	t.Fatalf("no season holds %s", file)
-	return nil
 }

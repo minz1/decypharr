@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/sirrobot01/decypharr/internal/customerror"
@@ -317,8 +318,13 @@ func (m *Manager) actionChild(ctx context.Context, call entryChildCall) entryMsg
 	if err := m.RefreshMount(); err != nil {
 		m.logger.Error().Err(err).Msg("Mount refresh failed")
 	}
+	if call.grab.State.PackKey == "" {
+		if seasons := m.downloader.seasonsOf(entry); len(seasons) > 0 {
+			return m.packChild(ctx, call, seasons)
+		}
+	}
 	owned := withOwner(ctx, &actionOwner{progress: m.progressSink(call.grab.State.Key)})
-	result := actionResult(ctx, entry, m.downloader.download(owned, entry))
+	result := actionResult(ctx, entry, m.downloader.downloadIn(owned, entry, m.actionMountPath(call.grab)))
 	if result.ev != nil && result.ev.Kind == grab.EvActionDone {
 		path := entry.DownloadPath(m.folderNaming())
 		result.update = func(e *storage.Entry) { e.ContentPath = path }
@@ -392,4 +398,38 @@ func downloadFolderForEntry(fallback string, entry *storage.Entry) string {
 		return filepath.Dir(entry.SavePath)
 	}
 	return fallback
+}
+
+// actionMountPath is where a grab's files are read: a season reads its pack's folder on the mount.
+func (m *Manager) actionMountPath(g grab.Grab) string {
+	if g.State.PackKey != "" {
+		if pack, err := m.storage.GetQueued(g.State.PackKey); err == nil {
+			return m.GetTorrentMountPath(pack)
+		}
+	}
+	return m.GetTorrentMountPath(g.Entry)
+}
+
+// packChild fans a season pack out: it hands each season that is not complete to its own actor and reports the
+// seasons it started. A season the actor refuses ends the attempt with no result, so the pack's action runs again.
+func (m *Manager) packChild(ctx context.Context, call entryChildCall, seasons []SeasonInfo) entryMsg {
+	pack, packKey := call.grab.Entry, call.grab.State.Key
+	started := make([]int, 0, len(seasons))
+	for i, season := range convertToMultiSeason(pack, seasons) {
+		if ctx.Err() != nil {
+			return entryMsg{}
+		}
+		started = append(started, seasons[i].SeasonNumber)
+		if saved, err := m.queue.GetTorrent(season.InfoHash); err == nil && saved.IsComplete {
+			continue
+		}
+		msg := eventMsg(grab.Event{Kind: grab.EvSubmit, PackKey: packKey})
+		msg.entry = season
+		if err := m.entries.send(strings.ToLower(season.InfoHash), msg); err != nil {
+			m.logger.Warn().Err(err).Str("name", season.Name).Msg("Season not handed on; the pack tries again")
+			return entryMsg{}
+		}
+	}
+	m.logger.Info().Str("name", pack.Name).Ints("seasons", started).Msg("Multi-season torrent fanned out")
+	return eventMsg(grab.Event{Kind: grab.EvSeasonsStarted, Seasons: started})
 }

@@ -274,7 +274,7 @@ func awaitingLinks(st State, ev Event) (State, []Effect, error) {
 
 func acting(st State, ev Event) (State, []Effect, error) {
 	switch {
-	case ev.Kind.is(EvActionProgress, EvChildDone):
+	case ev.Kind.is(EvActionProgress, EvChildDone, EvSeasonsStarted):
 		return st, nil, nil
 	case ev.Kind.is(EvActionDone):
 		return enter(st, PhaseComplete, ev)

@@ -178,6 +178,8 @@ func TestTransitionRows(t *testing.T) {
 			[]string{"persist", "fail"}, false},
 		{"acting progress", in(PhaseActing), ev(EvActionProgress), PhaseActing, nil, false},
 		{"acting child done", in(PhaseActing), ev(EvChildDone), PhaseActing, nil, false},
+		{"acting seasons started", in(PhaseActing), ev(EvSeasonsStarted), PhaseActing, nil, false},
+		{"provider seasons started", in(PhaseProvider), ev(EvSeasonsStarted), PhaseProvider, nil, true},
 		{"acting done", in(PhaseActing), ev(EvActionDone), PhaseComplete, []string{"persist"}, false},
 		{"acting failed", in(PhaseActing), ev(EvActionFailed), PhaseFailed, []string{"persist", "fail"}, false},
 		{"complete dropped", in(PhaseComplete), ev(EvProviderDropped), PhaseFailed, []string{"persist", "fail"}, false},
