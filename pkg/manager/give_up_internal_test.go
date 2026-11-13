@@ -490,3 +490,36 @@ func TestRecheckBadLeavesTheGrabWhileARepairRuns(t *testing.T) {
 	m.recheckBad(t.Context(), droppedHash)
 	waitForFails(t, fake, 1)
 }
+
+func TestRearmFailsTheQueuedGrabOfABrokenEntryOnce(t *testing.T) {
+	t.Parallel()
+	fake := &fakeArrRecovery{}
+	m, entry := newGiveUpTestManager(t, &queueArr{downloadIDs: []string{strings.ToUpper(droppedHash)}}, fake)
+	saveBad(t, m, entry, true)
+	checks := &scriptedChecks{answers: []repair.Verdict{repair.VerdictBroken}}
+	m.confirmBroken = checks.check
+	m.badRecheckDelay = 10 * time.Millisecond
+
+	m.rearmBadRechecks()
+
+	waitForFails(t, fake, 1)
+	if checks.count() != 1 || !storedBad(t, m) {
+		t.Fatalf("checks = %d, bad = %v; want one check and the mark kept", checks.count(), storedBad(t, m))
+	}
+	fake.failMu.Lock()
+	defer fake.failMu.Unlock()
+	if got := fake.fails[0]; got[1] != strings.ToUpper(droppedHash) {
+		t.Fatalf("failed download = %v, want %s", got, strings.ToUpper(droppedHash))
+	}
+}
+
+func TestNewArmsTheBadRecheckTask(t *testing.T) {
+	t.Parallel()
+	_, root := newLifecycleManager(t)
+	for _, info := range root.Snapshot() {
+		if strings.HasSuffix(info.Path, ":rearm-bad-rechecks") {
+			return
+		}
+	}
+	t.Fatalf("tasks = %v, want the bad recheck task armed by the manager's init", root.Snapshot())
+}
