@@ -23,6 +23,7 @@ type _torrentInfo struct {
 	Wait           bool    `json:"wait"`
 	PeersConnected int     `json:"peersConnected"`
 	Status         int     `json:"status"`
+	ErrorID        int     `json:"errorId"`
 	TotalSize      int64   `json:"totalSize"`
 	Files          []struct {
 		ID              string `json:"id"`

@@ -190,11 +190,12 @@ func (dl *DebridLink) GetTorrent(ctx context.Context, torrentID string) (*types.
 	data := *res.Value
 	t := data[0]
 	name := utils.RemoveInvalidChars(t.Name)
+	obs := observe(&t)
 	torrent := &types.Torrent{
 		ID:               t.ID,
 		Name:             name,
 		Bytes:            t.TotalSize,
-		Status:           types.TorrentStatusDownloaded,
+		Status:           torrentStatus(obs),
 		Filename:         name,
 		OriginalFilename: name,
 		Debrid:           dl.config.Name,
@@ -221,38 +222,40 @@ func (dl *DebridLink) GetTorrent(ctx context.Context, torrentID string) (*types.
 }
 
 func (dl *DebridLink) UpdateTorrent(ctx context.Context, t *types.Torrent) error {
+	_, err := dl.updateTorrent(ctx, t)
+	return err
+}
+
+func (dl *DebridLink) updateTorrent(ctx context.Context, t *types.Torrent) (types.Observation, error) {
 	var res torrentInfo
 
 	httpStatus, err := dl.doGet(ctx, "/seedbox/list", map[string]string{"ids": t.ID}, &res)
 	if err != nil {
-		return err
+		return types.Observation{}, err
 	}
 
 	if !common.IsSuccess(httpStatus) {
-		return fmt.Errorf("debridlink API error: Status: %d", httpStatus)
+		return types.Observation{}, fmt.Errorf("debridlink API error: Status: %d", httpStatus)
 	}
 	if !res.Success {
-		return fmt.Errorf("error getting torrent")
+		return types.Observation{}, fmt.Errorf("error getting torrent")
 	}
 	if res.Value == nil {
-		return fmt.Errorf("torrent not found")
+		return types.Observation{}, fmt.Errorf("torrent not found")
 	}
 	dt := *res.Value
 
 	if len(dt) == 0 {
-		return fmt.Errorf("torrent not found")
+		return types.Observation{}, fmt.Errorf("torrent not found")
 	}
 	data := dt[0]
-	status := types.TorrentStatusDownloading
-	if data.Status == seedboxDone {
-		status = types.TorrentStatusDownloaded
-	}
+	obs := observe(&data)
 	name := utils.RemoveInvalidChars(data.Name)
 	t.ID = data.ID
 	t.Name = name
 	t.Bytes = data.TotalSize
 	t.Progress = data.DownloadPercent
-	t.Status = status
+	t.Status = torrentStatus(obs)
 	t.Speed = data.DownloadSpeed
 	t.Seeders = data.PeersConnected
 	t.Filename = name
@@ -288,7 +291,7 @@ func (dl *DebridLink) UpdateTorrent(ctx context.Context, t *types.Torrent) error
 		dl.accountsManager.StoreDownloadLink(link)
 	}
 
-	return nil
+	return obs, nil
 }
 
 func (dl *DebridLink) SubmitMagnet(ctx context.Context, t *types.Torrent) (*types.Torrent, error) {
@@ -368,19 +371,23 @@ func (dl *DebridLink) SubmitMagnet(ctx context.Context, t *types.Torrent) (*type
 }
 
 func (dl *DebridLink) CheckStatus(ctx context.Context, torrent *types.Torrent) (*types.Torrent, error) {
-	if err := dl.UpdateTorrent(ctx, torrent); err != nil {
+	obs, err := dl.updateTorrent(ctx, torrent)
+	if err != nil {
 		return torrent, err
 	}
-	switch torrent.Status {
-	case types.TorrentStatusDownloading:
+	switch obs.Phase {
+	case types.PhaseDownloading:
 		if !torrent.DownloadUncached {
 			return torrent, fmt.Errorf("torrent %s: %w", torrent.Name, customerror.ErrTorrentNotCached)
 		}
 		return torrent, nil
-	case types.TorrentStatusDownloaded:
+	case types.PhaseDownloaded:
 		dl.logger.Info().Msgf("Torrent: %s downloaded", torrent.Name)
 		return torrent, nil
-	case types.TorrentStatusRemoteQueued, types.TorrentStatusError:
+	case types.PhaseUnknown:
+		return torrent, nil
+	case types.PhaseNone, types.PhaseConverting, types.PhaseAwaitingSelection, types.PhaseRemoteQueued,
+		types.PhaseFinalizing, types.PhaseStalled, types.PhaseFailed:
 	}
 	return torrent, fmt.Errorf("torrent: %s has error", torrent.Name)
 }
