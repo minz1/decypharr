@@ -636,8 +636,8 @@ func (r *RealDebrid) CheckStatus(ctx context.Context, t *types.Torrent) (*types.
 		debridStatus := data.Status
 		r.applyStatus(t, data)
 
-		switch {
-		case debridStatus == statusMagnetConversion:
+		switch observe(data).Phase {
+		case types.PhaseConverting:
 			// Real-Debrid is still resolving the magnet; it has not said anything
 			// about the cache yet, so keep polling (bounded).
 			converting++
@@ -650,13 +650,16 @@ func (r *RealDebrid) CheckStatus(ctx context.Context, t *types.Torrent) (*types.
 					customerror.ErrProviderStatusTimeout,
 				)
 			}
-		case debridStatus == statusWaitingFilesSelection:
+		case types.PhaseAwaitingSelection:
 			if selectErr := r.selectFiles(ctx, t, data); selectErr != nil {
 				return t, selectErr
 			}
-		case debridStatus == statusDownloaded:
+		case types.PhaseDownloaded, types.PhaseFinalizing:
 			return r.finishDownloaded(ctx, t, data)
-		case t.Status == types.TorrentStatusDownloading:
+		case types.PhaseUnknown:
+			t.Status = types.TorrentStatusDownloading
+			return t, nil
+		case types.PhaseDownloading, types.PhaseRemoteQueued:
 			if !t.DownloadUncached {
 				return t, fmt.Errorf("torrent %s: %w", t.Name, customerror.ErrTorrentNotCached)
 			}

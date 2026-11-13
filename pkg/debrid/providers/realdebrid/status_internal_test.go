@@ -77,7 +77,7 @@ func TestCheckStatusFailureAndUncachedContracts(t *testing.T) {
 		{name: "magnet error", state: "magnet_error", wantStatus: types.TorrentStatusError, wantText: "magnet_error"},
 		{name: "virus", state: "virus", wantStatus: types.TorrentStatusError, wantText: "virus"},
 		{name: "dead", state: "dead", wantStatus: types.TorrentStatusError, wantText: "dead"},
-		{name: "unknown", state: "future_state", wantStatus: types.TorrentStatusError, wantText: "future_state"},
+		{name: "unknown", state: "future_state", wantStatus: types.TorrentStatusDownloading},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
