@@ -1247,3 +1247,43 @@ func (r *RealDebrid) awaitPoll(ctx context.Context, t *types.Torrent, interval t
 	}
 	return nil
 }
+
+func (r *RealDebrid) Poll(
+	ctx context.Context,
+	t *types.Torrent,
+	allowSelect bool,
+) (*types.Torrent, types.Observation, error) {
+	var data torrentInfo
+	status, err := r.doGet(ctx, "/torrents/info/"+t.ID, &data)
+	if err != nil {
+		r.logger.Info().Msgf("ERROR Checking file: %v", err)
+		return t, types.Observation{}, err
+	}
+	if status == http.StatusNotFound {
+		return t, types.Observation{}, fmt.Errorf("torrent %s: %w", t.Name, customerror.ErrTorrentNotFound)
+	}
+	if status != http.StatusOK {
+		return t, types.Observation{}, fmt.Errorf("realdebrid API error: Status: %d", status)
+	}
+	r.applyStatus(t, data)
+	obs := observe(data)
+	obs.Provider, obs.ID = r.config.Name, t.ID
+	switch obs.Phase {
+	case types.PhaseAwaitingSelection:
+		if allowSelect {
+			if selectErr := r.selectFiles(ctx, t, data); selectErr != nil {
+				return t, obs, selectErr
+			}
+			obs.Nudged = true
+		}
+	case types.PhaseDownloaded:
+		if _, finishErr := r.finishDownloaded(ctx, t, data); finishErr != nil {
+			return t, obs, finishErr
+		}
+	case types.PhaseDownloading, types.PhaseRemoteQueued:
+		obs.Cached = types.CachedNo
+	case types.PhaseNone, types.PhaseUnknown, types.PhaseConverting, types.PhaseFinalizing, types.PhaseStalled,
+		types.PhaseFailed:
+	}
+	return t, types.WithStall(obs), nil
+}

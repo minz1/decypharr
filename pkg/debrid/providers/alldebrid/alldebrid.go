@@ -825,3 +825,37 @@ func (ad *AllDebrid) SpeedTest(ctx context.Context) types.SpeedTestResult {
 func (ad *AllDebrid) SupportsCheck() bool {
 	return true
 }
+
+func (ad *AllDebrid) Poll(
+	ctx context.Context,
+	torrent *types.Torrent,
+	allowRestart bool,
+) (*types.Torrent, types.Observation, error) {
+	statusCode, err := ad.updateTorrent(ctx, torrent)
+	if err != nil {
+		return torrent, types.Observation{}, err
+	}
+	obs := observe(statusCode)
+	obs.Provider, obs.ID = ad.config.Name, torrent.ID
+	obs.Progress, obs.Speed, obs.Seeders = torrent.Progress, torrent.Speed, torrent.Seeders
+	switch obs.Phase {
+	case types.PhaseStalled:
+		if !allowRestart {
+			obs.Phase = types.PhaseFailed
+			break
+		}
+		if restartErr := ad.restartTorrent(ctx, torrent.ID); restartErr != nil {
+			return torrent, obs, fmt.Errorf(
+				"restart AllDebrid torrent %s after status code 7: %w",
+				torrent.ID,
+				restartErr,
+			)
+		}
+		obs.Nudged = true
+	case types.PhaseDownloading, types.PhaseRemoteQueued:
+		obs.Cached = types.CachedNo
+	case types.PhaseNone, types.PhaseUnknown, types.PhaseConverting, types.PhaseAwaitingSelection,
+		types.PhaseFinalizing, types.PhaseDownloaded, types.PhaseFailed:
+	}
+	return torrent, types.WithStall(obs), nil
+}

@@ -925,3 +925,23 @@ func (tb *Torbox) fillFiles(t *types.Torrent, data *torboxInfo, flatPath bool) {
 	}
 	t.OriginalFilename = strings.Split(cleanPath, "/")[0]
 }
+
+func (tb *Torbox) Poll(
+	ctx context.Context,
+	torrent *types.Torrent,
+	_ bool,
+) (*types.Torrent, types.Observation, error) {
+	data, err := tb.updateTorrentWithClient(ctx, tb.client, torrent)
+	if err != nil {
+		return torrent, types.Observation{}, err
+	}
+	obs := observe(data)
+	obs.Provider, obs.ID = tb.config.Name, torrent.ID
+	switch obs.Phase {
+	case types.PhaseDownloading, types.PhaseRemoteQueued, types.PhaseConverting, types.PhaseStalled:
+		obs.Cached = types.CachedNo
+	case types.PhaseNone, types.PhaseUnknown, types.PhaseAwaitingSelection, types.PhaseFinalizing,
+		types.PhaseDownloaded, types.PhaseFailed:
+	}
+	return torrent, types.WithStall(obs), nil
+}

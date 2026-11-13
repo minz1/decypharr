@@ -768,3 +768,19 @@ func (dl *DebridLink) SpeedTest(ctx context.Context) types.SpeedTestResult {
 func (dl *DebridLink) SupportsCheck() bool {
 	return true
 }
+
+func (dl *DebridLink) Poll(
+	ctx context.Context,
+	torrent *types.Torrent,
+	_ bool,
+) (*types.Torrent, types.Observation, error) {
+	obs, err := dl.updateTorrent(ctx, torrent)
+	if err != nil {
+		return torrent, types.Observation{}, err
+	}
+	obs.Provider, obs.ID = dl.config.Name, torrent.ID
+	if obs.Phase == types.PhaseDownloading {
+		obs.Cached = types.CachedNo
+	}
+	return torrent, types.WithStall(obs), nil
+}

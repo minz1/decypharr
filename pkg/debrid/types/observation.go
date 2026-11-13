@@ -116,6 +116,7 @@ type Observation struct {
 	Speed     int64
 	Seeders   int
 	Stallable bool
+	Nudged    bool
 }
 
 func NotCached(o Observation, downloadUncached bool) bool {

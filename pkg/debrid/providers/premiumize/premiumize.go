@@ -825,3 +825,21 @@ func normalizeProgress(progress float64) float64 {
 	}
 	return progress
 }
+
+func (pm *Premiumize) Poll(
+	ctx context.Context,
+	t *types.Torrent,
+	_ bool,
+) (*types.Torrent, types.Observation, error) {
+	obs, err := pm.refreshTorrent(ctx, t)
+	if err != nil {
+		return t, types.Observation{}, err
+	}
+	obs.Provider, obs.ID = pm.config.Name, t.ID
+	obs.Progress, obs.Seeders = t.Progress, t.Seeders
+	if (obs.Phase == types.PhaseDownloading || obs.Phase == types.PhaseRemoteQueued) &&
+		t.Status != types.TorrentStatusError {
+		obs.Cached = types.CachedNo
+	}
+	return t, types.WithStall(obs), nil
+}
