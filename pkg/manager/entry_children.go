@@ -36,6 +36,7 @@ func (m *Manager) entryChild(call entryChildCall) func(ctx context.Context) entr
 	case grab.ChildCleanup:
 		return func(ctx context.Context) entryMsg { return m.cleanupChild(ctx, call) }
 	case grab.ChildLookup:
+		return func(ctx context.Context) entryMsg { return m.lookupChild(ctx, call) }
 	}
 	return func(context.Context) entryMsg { return entryMsg{} }
 }
