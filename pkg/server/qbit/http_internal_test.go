@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 
 	"github.com/rs/zerolog"
 
@@ -153,6 +154,10 @@ func (p *refusingProvider) SubmitMagnet(context.Context, *types.Torrent) (*types
 // TorBox slot frees, not when a RealDebrid one does.
 func TestAddBlockedOnOneProviderThrottledOnAnotherIsQueued(t *testing.T) {
 	t.Parallel()
+	synctest.Test(t, addBlockedOnOneProviderThrottledOnAnother)
+}
+
+func addBlockedOnOneProviderThrottledOnAnother(t *testing.T) {
 	mgr, store := managertest.New(t, func(cfg *config.Config) { cfg.UseAuth = false })
 	realDebrid := &refusingProvider{
 		name:   "realdebrid",

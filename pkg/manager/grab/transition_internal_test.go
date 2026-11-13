@@ -367,6 +367,22 @@ func TestSeasonChildNeverSubmits(t *testing.T) {
 	}
 }
 
+func TestResubmitOfAnActingSeasonStartsNothing(t *testing.T) {
+	t.Parallel()
+	from := State{Key: "k", Phase: PhaseActing, PackKey: "p"}
+	again := ev(EvSubmit)
+	again.PackKey = "p"
+	got, fx, _ := Transition(from, again)
+	if got != from {
+		t.Errorf("state %+v, want %+v unchanged", got, from)
+	}
+	for _, f := range fx {
+		if f.Kind == FxStartChild || f.Kind == FxPersist {
+			t.Errorf("re-submit of an acting season gave effect %+v", f)
+		}
+	}
+}
+
 func TestNoSubmitRefusesRetry(t *testing.T) {
 	t.Parallel()
 	from := failedState()
