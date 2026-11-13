@@ -38,8 +38,8 @@ func TestPollMakesOneRequestPerRawState(t *testing.T) {
 	}{
 		{"downloading", false, types.PhaseDownloading, types.CachedNo, 1},
 		{"queued", false, types.PhaseRemoteQueued, types.CachedNo, 1},
-		{"metaDL", false, types.PhaseConverting, types.CachedNo, 1},
-		{"stalled", false, types.PhaseStalled, types.CachedNo, 1},
+		{"metaDL", false, types.PhaseDownloading, types.CachedNo, 1},
+		{"stalled", false, types.PhaseStalled, types.CachedUnknown, 1},
 		{"cached", false, types.PhaseFinalizing, types.CachedUnknown, 1},
 		{"uploading", true, types.PhaseDownloaded, types.CachedUnknown, 1},
 		{"future_state", false, types.PhaseStalled, types.CachedUnknown, 1},
@@ -74,5 +74,25 @@ func requireLinks(t *testing.T, files map[string]types.File) {
 		if f.Link == "" {
 			t.Fatalf("downloaded file has no link: %+v", f)
 		}
+	}
+}
+
+func TestPollKeepsAStalledTorrentOutOfTheErrorStatus(t *testing.T) {
+	t.Parallel()
+	for _, state := range []string{"stalled", "stalledDL", "future_state"} {
+		t.Run(state, func(t *testing.T) {
+			t.Parallel()
+			_, url := serveTorboxState(t, state, false)
+			got, obs, err := testTorbox(url).Poll(t.Context(), &types.Torrent{ID: "17"}, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if obs.Phase != types.PhaseStalled || obs.Cached == types.CachedNo {
+				t.Fatalf("observation = %+v, want a stalled one that is not known uncached", obs)
+			}
+			if got.Status != types.TorrentStatusDownloading {
+				t.Fatalf("status = %s, want downloading so a stall is not a dead release", got.Status)
+			}
+		})
 	}
 }

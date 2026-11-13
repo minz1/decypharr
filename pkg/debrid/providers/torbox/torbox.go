@@ -938,10 +938,12 @@ func (tb *Torbox) Poll(
 	obs := observe(data)
 	obs.Provider, obs.ID = tb.config.Name, torrent.ID
 	switch obs.Phase {
-	case types.PhaseDownloading, types.PhaseRemoteQueued, types.PhaseConverting, types.PhaseStalled:
+	case types.PhaseDownloading, types.PhaseRemoteQueued:
 		obs.Cached = types.CachedNo
-	case types.PhaseNone, types.PhaseUnknown, types.PhaseAwaitingSelection, types.PhaseFinalizing,
-		types.PhaseDownloaded, types.PhaseFailed:
+	case types.PhaseConverting, types.PhaseStalled, types.PhaseUnknown:
+		torrent.Status = types.TorrentStatusDownloading
+	case types.PhaseNone, types.PhaseAwaitingSelection, types.PhaseFinalizing, types.PhaseDownloaded,
+		types.PhaseFailed:
 	}
 	return torrent, types.WithStall(obs), nil
 }

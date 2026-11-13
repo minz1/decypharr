@@ -26,9 +26,7 @@ func observe(data *torboxInfo) types.Observation {
 		o.Phase = types.PhaseFinalizing
 	case "queued", "queuedDL":
 		o.Phase = types.PhaseRemoteQueued
-	case "metaDL":
-		o.Phase = types.PhaseConverting
-	case "downloading", "forcedDL", "checkingDL", "checkingResumeData", "allocating", "moving", "paused",
+	case "downloading", "metaDL", "forcedDL", "checkingDL", "checkingResumeData", "allocating", "moving", "paused",
 		"pausedDL", "pausedUP", "queuedUP", "checkingUP", "forcedUP", "incomplete":
 		o.Phase = types.PhaseDownloading
 	case "stalled", "stalledDL":

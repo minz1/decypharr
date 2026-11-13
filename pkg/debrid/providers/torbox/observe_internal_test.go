@@ -151,7 +151,7 @@ func TestObserveMapsEveryRawState(t *testing.T) {
 	for _, s := range []string{"queued", "queuedDL"} {
 		cases = append(cases, row{s, false, 0, types.PhaseRemoteQueued, types.PhaseRemoteQueued})
 	}
-	cases = append(cases, row{"metaDL", false, 0, types.PhaseConverting, types.PhaseConverting})
+	cases = append(cases, row{"metaDL", false, 0, types.PhaseDownloading, types.PhaseDownloading})
 	for _, s := range []string{
 		"downloading", "forcedDL", "checkingDL", "checkingResumeData", "allocating", "moving", "paused",
 		"pausedDL", "pausedUP", "queuedUP", "checkingUP", "forcedUP", "incomplete",
