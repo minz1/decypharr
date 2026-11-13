@@ -90,22 +90,6 @@ func (m *Manager) RemoveTorrentPlacements(t *storage.Entry) {
 	}
 }
 
-// RemoveQueued deletes a queued entry, then its provider download: a poll that sees the provider torrent gone must not find the entry.
-func (m *Manager) RemoveQueued(infohash string, deleteFiles bool) error {
-	entry, err := m.queue.GetTorrent(infohash)
-	if errors.Is(err, appendstore.ErrKeyNotFound) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if deleteErr := m.queue.Delete(infohash, deleteFiles, nil); deleteErr != nil {
-		return deleteErr
-	}
-	m.stopProviderDownload(m.placementsSvc.group.Context(), entry)
-	return nil
-}
-
 // stopProviderDownload deletes the provider torrent of an entry still downloading there, so a removed grab frees its slot.
 func (m *Manager) stopProviderDownload(ctx context.Context, entry *storage.Entry) {
 	placement := entry.GetActiveProvider()

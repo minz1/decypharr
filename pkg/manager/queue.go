@@ -2,7 +2,6 @@ package manager
 
 import (
 	"cmp"
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -13,7 +12,6 @@ import (
 
 	"uuid"
 
-	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/rs/zerolog"
 	"github.com/sirrobot01/appendstore"
 
@@ -123,12 +121,9 @@ type Queue struct {
 	logger             zerolog.Logger
 	removeStalledAfter time.Duration
 	naming             func() config.WebDavFolderNaming
-	running            *xsync.Map[string, context.CancelCauseFunc] // infohash -> cancels its post-download action
 	// waits is what each queued entry is waiting on at its provider, for logging a wait once per change.
 	waits providerWaits
 }
-
-var errEntryDeleted = errors.New("queue entry deleted")
 
 func newQueue(
 	storage *storage.Storage,
@@ -140,7 +135,6 @@ func newQueue(
 		storage: storage,
 		logger:  log,
 		naming:  naming,
-		running: xsync.NewMap[string, context.CancelCauseFunc](),
 	}
 
 	if removeStalledAfterStr != "" {
@@ -203,7 +197,6 @@ func (q *Queue) deleteEntryFiles(entry *storage.Entry) error {
 
 func (q *Queue) wrapCleanupWithFileDelete(cleanup func(t *storage.Entry) error) func(*storage.Entry) error {
 	return func(entry *storage.Entry) error {
-		q.stopRunning(entry.InfoHash)
 		if err := q.deleteEntryFiles(entry); err != nil {
 			return err
 		}
@@ -214,56 +207,31 @@ func (q *Queue) wrapCleanupWithFileDelete(cleanup func(t *storage.Entry) error) 
 	}
 }
 
-// stopRunning cancels the post-download action of a deleted entry and forgets its provider wait.
-func (q *Queue) stopRunning(infohash string) {
-	q.waits.observe(infohash, waitNone)
-	if cancel, ok := q.running.Load(strings.ToLower(infohash)); ok {
-		cancel(errEntryDeleted)
-	}
-}
-
 func (q *Queue) Delete(infohash string, deleteFiles bool, cleanup func(t *storage.Entry) error) error {
-	q.stopRunning(infohash)
 	if deleteFiles {
 		cleanup = q.wrapCleanupWithFileDelete(cleanup)
 	}
 	return q.storage.DeleteQueued(infohash, cleanup)
 }
 
-func (q *Queue) DeleteWhere(
-	category string,
-	protocol config.Protocol,
-	state storage.TorrentState,
-	hashes []string,
-	cleanup func(t *storage.Entry) error,
-) error {
-	return q.storage.DeleteWhereQueued(
-		q.ListFilterFunc(category, protocol, state, hashes),
-		q.wrapCleanupWithFileDelete(cleanup),
-	)
-}
-
 // failedNZBRetention is the least time a failed NZB stays in SAB history: a backfilling arr can skip refreshes for hours.
 const failedNZBRetention = 24 * time.Hour
 
-// DeleteStalled removes entries that made no progress for removeStalledAfter.
+// Stalled lists the entries that made no progress for removeStalledAfter.
 // A queued entry counts as stalled once pending says no job will run it.
-// Without a valid positive duration it removes nothing.
-func (q *Queue) DeleteStalled(pending func(infoHash string) bool) error {
+// Without a valid positive duration it lists nothing.
+func (q *Queue) Stalled(pending func(infoHash string) bool) ([]*storage.Entry, error) {
 	if q.removeStalledAfter <= 0 {
-		return nil
+		return nil, nil
 	}
 	now := time.Now()
-	return q.storage.DeleteWhereQueued(func(t *storage.Entry) bool {
+	return q.storage.FilterQueued(func(t *storage.Entry) bool {
 		stalled, reason := q.stalled(t, now, pending)
 		if stalled {
 			q.logger.Info().Str("id", t.InfoHash).Str("name", t.Name).Str("reason", reason).
 				Msg("Removing stalled entry")
 		}
 		return stalled
-	}, func(t *storage.Entry) error {
-		q.stopRunning(t.InfoHash)
-		return removeStagedNZB(t)
 	})
 }
 
@@ -370,8 +338,4 @@ func (q *Queue) ListFilter(
 		})
 	}
 	return torrents, nil
-}
-
-func (q *Queue) UpdateWhere(predicate func(*storage.Entry) bool, updateFunc func(*storage.Entry) bool) error {
-	return q.storage.UpdateWhereQueued(predicate, updateFunc)
 }

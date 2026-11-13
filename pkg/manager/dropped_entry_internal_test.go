@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/rs/zerolog"
@@ -14,6 +15,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/arr/reacquire"
 	debrid "github.com/sirrobot01/decypharr/pkg/debrid/common"
+	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
@@ -41,6 +43,15 @@ func newDroppedTestManager(t *testing.T, recovery ArrRecovery) (*Manager, *stora
 		arr:              arr.New(cfg, nil, zerolog.Nop()),
 		logger:           zerolog.Nop(),
 	}
+	m.entries = newEntryActor(m.work, entryDeps{
+		store: store, grabs: m.grabs, logger: zerolog.Nop(), capacity: 1, child: m.entryChild,
+		publish: store.PublishEntry, fail: func(grab.Grab, grab.FailEffect) {},
+		packOf:     func() map[string]string { return nil },
+		inLibrary:  func(string) bool { return false },
+		pollEvery:  testPollEvery,
+		retryDelay: throttledRetryDelay,
+		completed:  func(grab.Grab) {},
+	})
 	if recovery != nil {
 		m.SetArrRecovery(recovery)
 	}
@@ -252,18 +263,21 @@ func TestFailedReacquireKeepsImportedEntry(t *testing.T) {
 // removed so the Arr stops tracking a download that no longer exists.
 func TestInvalidateDownloadFailedRemovesQueueRecord(t *testing.T) {
 	t.Parallel()
-	m, entry := newDroppedTestManager(t, &fakeArrRecovery{})
-	job := reacquire.Job{Strategy: reacquire.StrategyDownloadFailed, EntryID: entry.InfoHash}
+	synctest.Test(t, func(t *testing.T) {
+		m, entry := newDroppedTestManager(t, &fakeArrRecovery{})
+		job := reacquire.Job{Strategy: reacquire.StrategyDownloadFailed, EntryID: entry.InfoHash}
 
-	if err := m.InvalidateReacquire(t.Context(), job); err != nil {
-		t.Fatal(err)
-	}
-	if m.queue.Contains(entry.InfoHash) {
-		t.Fatal("queue record still present after the grab was failed")
-	}
-	if err := m.InvalidateReacquire(t.Context(), job); err != nil {
-		t.Fatalf("second invalidation of a removed record: %v", err)
-	}
+		if err := m.InvalidateReacquire(t.Context(), job); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		if m.queue.Contains(entry.InfoHash) {
+			t.Fatal("queue record still present after the grab was failed")
+		}
+		if err := m.InvalidateReacquire(t.Context(), job); err != nil {
+			t.Fatalf("second invalidation of a removed record: %v", err)
+		}
+	})
 }
 
 // Each confirmed drop leaves one INFO line naming the job that fails its grab.

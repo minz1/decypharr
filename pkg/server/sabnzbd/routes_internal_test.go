@@ -223,6 +223,11 @@ func checkDeleted(t *testing.T, mgr *manager.Manager, entries []*storage.Entry, 
 	t.Helper()
 	for i, entry := range entries {
 		deleted := i == 0 && wantDeleted
+		if deleted {
+			if err := mgr.AwaitGone(t.Context(), entry.InfoHash); err != nil {
+				t.Fatal(err)
+			}
+		}
 		_, err := mgr.Queue().GetTorrent(entry.InfoHash)
 		if deleted && err == nil || !deleted && err != nil {
 			t.Errorf("entry %s, deleted=%v, error=%v", entry.InfoHash, deleted, err)
@@ -248,7 +253,7 @@ func TestRouterQueueDelete(t *testing.T) {
 		{"partial", "target,missing", http.MethodGet, 200, true},
 		{"all missing", "missing", http.MethodGet, 200, false},
 		{"empty", "", http.MethodGet, 400, false},
-		{"cleanup failure", "target", http.MethodGet, 500, false},
+		{"cleanup failure", "target", http.MethodGet, 200, false},
 		{"failed category", "failed", http.MethodGet, 200, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

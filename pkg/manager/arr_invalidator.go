@@ -9,6 +9,7 @@ import (
 	"github.com/sirrobot01/appendstore"
 
 	"github.com/sirrobot01/decypharr/pkg/arr/reacquire"
+	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 )
 
 // InvalidateReacquire removes the managed entries a reacquire job replaces, once the job has deleted their Arr files
@@ -20,7 +21,7 @@ import (
 // survive the deletion of its data.
 func (m *Manager) InvalidateReacquire(ctx context.Context, job reacquire.Job) error {
 	if job.Strategy == reacquire.StrategyDownloadFailed {
-		return m.removeFailedDownloadRecord(job.EntryID)
+		return m.removeFailedDownloadRecord(ctx, job.EntryID)
 	}
 	if err := m.CheckInvalidation(ctx, job); err != nil {
 		return err
@@ -124,11 +125,11 @@ func (m *Manager) CheckLibraryTarget(binding reacquire.Binding) error {
 }
 
 // removeFailedDownloadRecord drops the queue record of a download whose grab the Arr failed, as a client delete would.
-func (m *Manager) removeFailedDownloadRecord(entryID string) error {
-	if entryID == "" || !m.queue.Contains(entryID) {
+func (m *Manager) removeFailedDownloadRecord(ctx context.Context, entryID string) error {
+	if entryID == "" {
 		return nil
 	}
-	return m.queue.Delete(entryID, true, nil)
+	return m.DeleteQueued(ctx, entryID, grab.Cleanup{DeleteFiles: true})
 }
 
 // invalidatedEntryIDs is the set of managed entries a reacquire job replaces:

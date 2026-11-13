@@ -218,23 +218,6 @@ func sortQueuedTorrents(torrents []*storage.Entry, sortBy, sortOrder string) {
 	sort.Slice(torrents, less)
 }
 
-// queueDeleteCleanup removes, with removeFromDebrid, the queue record and then every provider placement of an entry.
-func (s *Server) queueDeleteCleanup(removeFromDebrid bool) func(*storage.Entry) error {
-	if !removeFromDebrid {
-		return nil
-	}
-	return func(t *storage.Entry) error {
-		if exists, _ := s.manager.EntryExists(t.InfoHash); exists {
-			return s.manager.DeleteEntry(t.InfoHash, true)
-		}
-		if err := s.manager.Queue().Delete(t.InfoHash, false, nil); err != nil {
-			return err
-		}
-		s.manager.RemoveTorrentPlacements(t)
-		return nil
-	}
-}
-
 func (s *Server) handleDeleteTorrent(w http.ResponseWriter, r *http.Request) {
 	hash := chi.URLParam(r, "hash")
 	removeFromDebrid := boolOr(queryBool(r.URL.Query(), "removeFromDebrid"), false)
@@ -242,9 +225,7 @@ func (s *Server) handleDeleteTorrent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "No hash provided", http.StatusBadRequest)
 		return
 	}
-	cleanup := s.queueDeleteCleanup(removeFromDebrid)
-
-	if err := s.manager.Queue().Delete(hash, true, cleanup); err != nil {
+	if err := s.manager.DeleteTorrent(r.Context(), hash, removeFromDebrid); err != nil {
 		s.logger.Error().Err(err).Str("hash", hash).Msg("Failed to delete entry from queue")
 		http.Error(w, "Failed to delete entry from queue", http.StatusInternalServerError)
 		return
@@ -261,8 +242,11 @@ func (s *Server) handleDeleteTorrents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hashes := strings.Split(hashesStr, ",")
-	cleanup := s.queueDeleteCleanup(removeFromDebrid)
-	if err := s.manager.Queue().DeleteWhere("", config.ProtocolAll, "", hashes, cleanup); err != nil {
+	var errs []error
+	for _, hash := range hashes {
+		errs = append(errs, s.manager.DeleteTorrent(r.Context(), hash, removeFromDebrid))
+	}
+	if err := errors.Join(errs...); err != nil {
 		s.logger.Error().Err(err).Msg("Failed to delete torrents")
 		http.Error(w, "Failed to delete torrents", http.StatusInternalServerError)
 		return

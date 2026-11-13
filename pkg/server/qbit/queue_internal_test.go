@@ -133,6 +133,9 @@ func TestDeleteUnknownHashSucceeds(t *testing.T) {
 			if w.Code != http.StatusOK {
 				t.Fatalf("status = %d: %s", w.Code, w.Body.String())
 			}
+			if err := q.manager.AwaitGone(t.Context(), "aaa"); err != nil {
+				t.Fatal(err)
+			}
 			if _, err := q.manager.Queue().GetTorrent("aaa"); err == nil {
 				t.Fatal("known hash was not deleted")
 			}

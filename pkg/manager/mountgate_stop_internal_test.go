@@ -232,8 +232,11 @@ func TestSeasonPackDeleteDuringMountStopRemovesSeason(t *testing.T) {
 	m, entry, _ := newSeasonPackTest(t, "Show.S01-S02")
 	m.mountGate = NewMountGate(zerolog.Nop())
 	m.mountGate.markStopping()
+	m.grabs.publish(
+		GrabView{State: grab.State{Key: strings.ToLower(entry.InfoHash), Phase: grab.PhaseDeleting}, Entry: *entry},
+	)
 	ctx, cancel := context.WithCancelCause(t.Context())
-	cancel(errEntryDeleted)
+	cancel(nil)
 	multi, seasons := m.downloader.detectMultiSeason(entry)
 	if !multi || len(seasons) != 2 {
 		t.Fatalf("detectMultiSeason = %v, %d seasons; want a two-season pack", multi, len(seasons))
@@ -286,6 +289,9 @@ func TestWarmSkippedWhileMountStops(t *testing.T) {
 // runAction starts entry's action child and returns what it reports; a nil event is the stop that cut it short.
 func runAction(t *testing.T, m *Manager, entry *storage.Entry) <-chan entryMsg {
 	t.Helper()
+	if m.entries == nil {
+		m.entries = stoppedManager(t).entries
+	}
 	call := entryChildCall{kind: grab.ChildAction, grab: grab.Grab{Entry: entry}}
 	done := make(chan entryMsg, 1)
 	go func() { done <- m.actionChild(m.Context(), call) }()

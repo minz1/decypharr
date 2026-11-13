@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"sync/atomic"
 	"time"
@@ -82,6 +83,9 @@ type entryState struct {
 	saveFails int
 	// throttles counts throttled submits since the grab last reached its provider.
 	throttles int
+	// putAt and putProgress are when the action last saved its progress, and the progress it saved.
+	putAt       time.Time
+	putProgress float64
 }
 
 // entryDeps is what the entry actor needs outside the grab.
@@ -101,6 +105,8 @@ type entryDeps struct {
 	inLibrary  func(key string) bool
 	pollEvery  time.Duration
 	retryDelay func(n int) time.Duration
+	// completed runs what a finished grab triggers outside its record; it must not block.
+	completed func(g grab.Grab)
 }
 
 // entryActor owns every grab: one keyed actor per entry key is the only writer of its queue record.
@@ -291,17 +297,13 @@ func (a *entryActor) step(key string, st *entryState, m entryMsg, fx *keyed.Effe
 		ev.At = time.Now()
 	}
 	cur := st.g
-	if cur.State.Phase == grab.PhaseAbsent && ev.Kind == grab.EvSubmit {
-		if m.entry == nil {
-			fx.Reply(fmt.Errorf("submit %s without a record", key))
-			return
-		}
-		cur.Entry = m.entry
-		cur.State.NZB = m.entry.IsNZB()
+	if ev.Kind == grab.EvActionProgress && cur.State.Phase == grab.PhaseActing && a.progressSkipped(st, m, ev.At) {
+		fx.Reply(nil)
+		return
 	}
-	if cur.State.Phase == grab.PhaseFailed && ev.Kind == grab.EvSubmit && m.entry != nil && cur.Entry != nil {
-		cur.Entry = readded(cur.Entry, m.entry)
-		cur.State.NZB = m.entry.IsNZB()
+	if err := withSubmitted(key, &cur, ev, m); err != nil {
+		fx.Reply(err)
+		return
 	}
 	nextState, effects, err := grab.Transition(cur.State, ev)
 	if err != nil {
@@ -315,7 +317,7 @@ func (a *entryActor) step(key string, st *entryState, m entryMsg, fx *keyed.Effe
 	if cur.Entry != nil {
 		s.next.Entry = cur.Entry.Clone()
 	}
-	s.changed = applyPayload(s.next.Entry, m)
+	s.changed = applyPayload(s.next.Entry, m, cur.State.Phase)
 	if nextState.Phase != cur.State.Phase {
 		a.leftPhase(st, nextState.Phase, fx)
 	}
@@ -329,14 +331,39 @@ func (a *entryActor) step(key string, st *entryState, m entryMsg, fx *keyed.Effe
 	}
 	st.saveFails = 0
 	st.g = s.next
+	if ev.Kind == grab.EvActionProgress {
+		st.putAt, st.putProgress = ev.At, m.progress
+	}
 	if ev.Kind == grab.EvPollTimer && nextState.Phase == grab.PhaseProvider {
 		a.start(key, st, grab.Effect{Kind: grab.FxStartChild, Child: grab.ChildPoll}, false, fx)
 	}
 	fx.Reply(nil)
+	if cur.State.Phase != grab.PhaseComplete && nextState.Phase == grab.PhaseComplete && s.next.Entry != nil {
+		a.completed(s.next)
+	}
 	if ev.Kind == grab.EvActionDone && nextState.Phase == grab.PhaseComplete && s.next.Entry != nil &&
 		s.next.Entry.Action == config.DownloadActionNone {
 		a.step(key, st, eventMsg(grab.Event{Kind: grab.EvActionNone, At: ev.At}), fx)
 	}
+}
+
+// withSubmitted puts the record a submit carries into cur: a new grab takes it, a failed one is re-added with it.
+func withSubmitted(key string, cur *grab.Grab, ev grab.Event, m entryMsg) error {
+	if ev.Kind != grab.EvSubmit {
+		return nil
+	}
+	switch {
+	case cur.State.Phase == grab.PhaseAbsent:
+		if m.entry == nil {
+			return fmt.Errorf("submit %s without a record", key)
+		}
+		cur.Entry = m.entry
+		cur.State.NZB = m.entry.IsNZB()
+	case cur.State.Phase == grab.PhaseFailed && m.entry != nil && cur.Entry != nil:
+		cur.Entry = readded(cur.Entry, m.entry)
+		cur.State.NZB = m.entry.IsNZB()
+	}
+	return nil
 }
 
 // readded is the record a re-add of a failed grab submits: the new request's, keeping when the grab was first
@@ -477,6 +504,7 @@ func (a *entryActor) leftPhase(st *entryState, to grab.Phase, fx *keyed.Effects[
 		st.hasTimer = false
 	}
 	st.retries = 0
+	st.putAt = time.Time{}
 	switch to {
 	case grab.PhaseProvider, grab.PhaseAwaitingLinks, grab.PhaseActing:
 		st.throttles = 0
@@ -587,7 +615,7 @@ func (a *entryActor) startPending(key string, st *entryState, fx *keyed.Effects[
 }
 
 // applyPayload copies what a message carries into the record and reports whether it changed anything.
-func applyPayload(e *storage.Entry, m entryMsg) bool {
+func applyPayload(e *storage.Entry, m entryMsg, phase grab.Phase) bool {
 	if e == nil {
 		return false
 	}
@@ -600,19 +628,35 @@ func applyPayload(e *storage.Entry, m entryMsg) bool {
 		m.update(e)
 		changed = true
 	}
-	if m.tags != nil {
+	if phase == grab.PhaseDeleting || m.ev == nil {
+		return changed
+	}
+	if m.ev.Kind == grab.EvTagsChanged {
 		e.Tags = m.tags
 		changed = true
 	}
-	if m.category != "" && m.category != e.Category {
+	if m.ev.Kind == grab.EvCategoryChanged {
 		e.Category = m.category
 		changed = true
 	}
-	if m.ev != nil && m.ev.Kind == grab.EvActionProgress && m.progress != e.Progress {
+	if m.ev.Kind == grab.EvActionProgress && m.progress != e.Progress {
 		e.Progress = m.progress
 		changed = true
 	}
 	return changed
+}
+
+const (
+	progressPutEvery = 5 * time.Second
+	progressPutStep  = 0.01
+)
+
+// progressSkipped reports a progress report too soon and too small after the last one saved to be worth a write.
+func (a *entryActor) progressSkipped(st *entryState, m entryMsg, now time.Time) bool {
+	if st.putAt.IsZero() {
+		return false
+	}
+	return now.Sub(st.putAt) < progressPutEvery && math.Abs(m.progress-st.putProgress) < progressPutStep
 }
 
 // childKind names a child kind in logs.

@@ -1,11 +1,9 @@
 package manager
 
 import (
-	"context"
-	"errors"
 	"os"
 	"path/filepath"
-	"strings"
+	"slices"
 	"testing"
 	"time"
 
@@ -13,6 +11,7 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
+	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
@@ -106,7 +105,7 @@ func newQueueDeleteTest(t *testing.T) (*Queue, *storage.Entry, string) {
 
 // An unparsable or non-positive remove_stalled_after disables stalled
 // removal; it used to leave a zero cutoff that removed every stalled entry.
-func TestDeleteStalledNeedsAValidDuration(t *testing.T) {
+func TestStalledNeedsAValidDuration(t *testing.T) {
 	t.Parallel()
 	for setting, wantKept := range map[string]bool{"1 day": true, "0s": true, "-1h": true, "1h": false} {
 		t.Run(setting, func(t *testing.T) {
@@ -124,11 +123,9 @@ func TestDeleteStalledNeedsAValidDuration(t *testing.T) {
 			if addErr := q.Add(stalled); addErr != nil {
 				t.Fatal(addErr)
 			}
-			if deleteErr := q.DeleteStalled(noJob); deleteErr != nil {
-				t.Fatal(deleteErr)
-			}
-			if _, getErr := q.GetTorrent(stalled.InfoHash); (getErr == nil) != wantKept {
-				t.Fatalf("remove_stalled_after %q: kept = %v, want %v", setting, getErr == nil, wantKept)
+			kept := !sweptOut(t, q, stalled.InfoHash, noJob)
+			if kept != wantKept {
+				t.Fatalf("remove_stalled_after %q: kept = %v, want %v", setting, kept, wantKept)
 			}
 		})
 	}
@@ -136,7 +133,7 @@ func TestDeleteStalledNeedsAValidDuration(t *testing.T) {
 
 // A failed entry must stay visible long enough for the arr to read it from history;
 // timing the sweep from the add hid late failures, and the arr never re-searched.
-func TestDeleteStalledTimesFailuresFromTheFailure(t *testing.T) {
+func TestStalledTimesFailuresFromTheFailure(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
 	cases := []struct {
@@ -172,72 +169,35 @@ func TestDeleteStalledTimesFailuresFromTheFailure(t *testing.T) {
 			if addErr := q.Add(entry); addErr != nil {
 				t.Fatal(addErr)
 			}
-			if deleteErr := q.DeleteStalled(noJob); deleteErr != nil {
-				t.Fatal(deleteErr)
-			}
-			if _, getErr := q.GetTorrent(entry.InfoHash); (getErr == nil) != tc.wantKept {
-				t.Fatalf("kept = %v, want %v", getErr == nil, tc.wantKept)
+			kept := !sweptOut(t, q, entry.InfoHash, noJob)
+			if kept != tc.wantKept {
+				t.Fatalf("kept = %v, want %v", kept, tc.wantKept)
 			}
 		})
 	}
 }
 
 // The sweep dropped failed NZB entries without their staged file, leaking one .queued file per failure.
-func TestDeleteStalledRemovesStagedNZB(t *testing.T) {
+func TestCleanupRemovesStagedNZB(t *testing.T) {
 	t.Parallel()
-	store, err := storage.NewStorage(filepath.Join(t.TempDir(), "db"), storage.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
 	staged := filepath.Join(t.TempDir(), "job.queued")
 	if writeErr := os.WriteFile(staged, []byte("<nzb/>"), 0o600); writeErr != nil {
 		t.Fatal(writeErr)
 	}
-	failedAt := time.Now().Add(-25 * time.Hour)
-	q := newQueue(store, "10m", nil, zerolog.Nop())
-	entry := &storage.Entry{
-		InfoHash: "job", Name: "failed", Protocol: config.ProtocolNZB, Magnet: staged,
-		AddedOn: failedAt, State: storage.EntryStateError, LastErrorTime: &failedAt,
-	}
-	if addErr := q.Add(entry); addErr != nil {
-		t.Fatal(addErr)
-	}
-	action := runningAction(t, q, entry.InfoHash)
-	if deleteErr := q.DeleteStalled(noJob); deleteErr != nil {
-		t.Fatal(deleteErr)
+	m := &Manager{queue: &Queue{logger: zerolog.Nop()}, logger: zerolog.Nop()}
+	entry := &storage.Entry{InfoHash: "job", Name: "failed", Protocol: config.ProtocolNZB, Magnet: staged}
+
+	got := m.cleanupChild(t.Context(), entryChildCall{kind: grab.ChildCleanup, grab: grab.Grab{Entry: entry}})
+	if got.ev == nil || got.ev.Kind != grab.EvCleanupDone {
+		t.Fatalf("cleanup result %+v, want done", got)
 	}
 	if _, statErr := os.Stat(staged); !os.IsNotExist(statErr) {
-		t.Fatalf("staged NZB still on disk after the sweep: %v", statErr)
+		t.Fatalf("staged NZB still on disk after the cleanup: %v", statErr)
 	}
-	if !errors.Is(context.Cause(action), errEntryDeleted) {
-		t.Fatalf("post-download action cause = %v, want errEntryDeleted", context.Cause(action))
-	}
-}
-
-// Deleting an entry cancels its post-download action, so the action cannot write the entry back.
-func TestQueueDeleteStopsRunningAction(t *testing.T) {
-	t.Parallel()
-	queue, entry, _ := newQueueDeleteTest(t)
-	action := runningAction(t, queue, strings.ToUpper(entry.InfoHash))
-	if err := queue.Delete(entry.InfoHash, false, nil); err != nil {
-		t.Fatal(err)
-	}
-	if !errors.Is(context.Cause(action), errEntryDeleted) {
-		t.Fatalf("post-download action cause = %v, want errEntryDeleted", context.Cause(action))
-	}
-}
-
-func runningAction(t *testing.T, q *Queue, infohash string) context.Context {
-	t.Helper()
-	ctx, cancel := context.WithCancelCause(t.Context())
-	t.Cleanup(func() { cancel(nil) })
-	q.running.Store(strings.ToLower(infohash), cancel)
-	return ctx
 }
 
 // A queued entry whose job is gone never leaves the queue; one whose job still waits must stay.
-func TestDeleteStalledRemovesQueuedEntriesWithNoJob(t *testing.T) {
+func TestStalledRemovesQueuedEntriesWithNoJob(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name     string
@@ -265,11 +225,9 @@ func TestDeleteStalledRemovesQueuedEntriesWithNoJob(t *testing.T) {
 			if addErr := q.Add(entry); addErr != nil {
 				t.Fatal(addErr)
 			}
-			if deleteErr := q.DeleteStalled(func(string) bool { return tc.pending }); deleteErr != nil {
-				t.Fatal(deleteErr)
-			}
-			if _, getErr := q.GetTorrent(entry.InfoHash); (getErr == nil) != tc.wantKept {
-				t.Fatalf("kept = %v, want %v", getErr == nil, tc.wantKept)
+			kept := !sweptOut(t, q, entry.InfoHash, func(string) bool { return tc.pending })
+			if kept != tc.wantKept {
+				t.Fatalf("kept = %v, want %v", kept, tc.wantKept)
 			}
 		})
 	}
@@ -277,49 +235,31 @@ func TestDeleteStalledRemovesQueuedEntriesWithNoJob(t *testing.T) {
 
 func noJob(string) bool { return false }
 
-// An entry removed from the queue outside the processor forgets its provider wait: the map stays bounded, and a
-// later grab of the same hash logs its wait's start at WARN again.
-func TestQueueRemovalForgetsTheProviderWait(t *testing.T) {
+func sweptOut(t *testing.T, q *Queue, hash string, pending func(string) bool) bool {
+	t.Helper()
+	stalled, err := q.Stalled(pending)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return slices.ContainsFunc(stalled, func(e *storage.Entry) bool { return e.InfoHash == hash })
+}
+
+// An entry whose grab is cleaned up forgets its provider wait: the map stays bounded, and a later grab of the same
+// hash logs its wait's start at WARN again.
+func TestCleanupForgetsTheProviderWait(t *testing.T) {
 	t.Parallel()
-	for name, remove := range map[string]func(*Queue, *storage.Entry) error{
-		"Delete": func(q *Queue, e *storage.Entry) error { return q.Delete(e.InfoHash, false, nil) },
-		"DeleteWhere": func(q *Queue, e *storage.Entry) error {
-			return q.DeleteWhere("", config.ProtocolAll, "", []string{e.InfoHash}, nil)
-		},
-		"DeleteStalled": func(q *Queue, _ *storage.Entry) error { return q.DeleteStalled(noJob) },
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			store, err := storage.NewStorage(filepath.Join(t.TempDir(), "db"), storage.Options{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = store.Close() })
-			q := newQueue(store, "1h", nil, zerolog.Nop())
-			entry := &storage.Entry{
-				InfoHash: "0123456789ABCDEF0123456789ABCDEF01234567", Name: "converting",
-				AddedOn: time.Now().Add(-2 * time.Hour), State: storage.EntryStateDownloading,
-				Status: debridTypes.TorrentStatusQueued,
-			}
-			if addErr := q.Add(entry); addErr != nil {
-				t.Fatal(addErr)
-			}
-			q.waits.observe(entry.InfoHash, waitConverting)
-			if removeErr := remove(q, entry); removeErr != nil {
-				t.Fatal(removeErr)
-			}
-			if q.Contains(entry.InfoHash) {
-				t.Fatal("entry still queued")
-			}
-			if got := q.waits.observe(entry.InfoHash, waitConverting); got != waitNone {
-				t.Fatalf("after %s the entry's wait is still %s, want it forgotten", name, got)
-			}
-		})
+	m := &Manager{queue: newQueue(nil, "1h", nil, zerolog.Nop()), logger: zerolog.Nop()}
+	entry := &storage.Entry{InfoHash: "0123456789ABCDEF0123456789ABCDEF01234567", Name: "converting"}
+	m.queue.waits.observe(entry.InfoHash, waitConverting)
+
+	m.cleanupChild(t.Context(), entryChildCall{kind: grab.ChildCleanup, grab: grab.Grab{Entry: entry}})
+	if got := m.queue.waits.observe(entry.InfoHash, waitConverting); got != waitNone {
+		t.Fatalf("after the cleanup the entry's wait is still %s, want it forgotten", got)
 	}
 }
 
 // A local download resets Progress to 0 when it starts; the sweep used to take it for a stalled entry and cancel it.
-func TestDeleteStalledKeepsARunningLocalDownload(t *testing.T) {
+func TestStalledKeepsARunningLocalDownload(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name        string
@@ -345,15 +285,9 @@ func TestDeleteStalledKeepsARunningLocalDownload(t *testing.T) {
 			if addErr := q.Add(entry); addErr != nil {
 				t.Fatal(addErr)
 			}
-			action := runningAction(t, q, entry.InfoHash)
-			if deleteErr := q.DeleteStalled(noJob); deleteErr != nil {
-				t.Fatal(deleteErr)
-			}
-			if _, getErr := q.GetTorrent(entry.InfoHash); (getErr == nil) != tc.wantKept {
-				t.Fatalf("kept = %v, want %v", getErr == nil, tc.wantKept)
-			}
-			if tc.wantKept && action.Err() != nil {
-				t.Fatal("the running download was cancelled")
+			kept := !sweptOut(t, q, entry.InfoHash, noJob)
+			if kept != tc.wantKept {
+				t.Fatalf("kept = %v, want %v", kept, tc.wantKept)
 			}
 		})
 	}

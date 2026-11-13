@@ -1,13 +1,16 @@
 package manager
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"testing/synctest"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
+	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
@@ -108,7 +111,7 @@ func TestDeletingSeasonPackRemovesInFlightSeason(t *testing.T) {
 		if mkdirErr := os.MkdirAll(completed.DownloadPath(""), 0o755); mkdirErr != nil {
 			t.Fatal(mkdirErr)
 		}
-		cancelAction := runDownload(t, m, entry)
+		cancelAction, deletePack := runDownload(t, m, entry)
 		defer cancelAction()
 		synctest.Wait()
 		for _, child := range children {
@@ -116,7 +119,7 @@ func TestDeletingSeasonPackRemovesInFlightSeason(t *testing.T) {
 				t.Fatalf("season %s not queued before the delete", child.Name)
 			}
 		}
-		if deleteErr := m.queue.Delete(entry.InfoHash, true, nil); deleteErr != nil {
+		if deleteErr := deletePack(true); deleteErr != nil {
 			t.Fatal(deleteErr)
 		}
 		synctest.Wait()
@@ -163,10 +166,10 @@ func TestDeletingSeasonPackKeepsSharedFolder(t *testing.T) {
 		if writeErr := os.WriteFile(kept, []byte("media"), 0o644); writeErr != nil {
 			t.Fatal(writeErr)
 		}
-		cancelAction := runDownload(t, m, entry)
+		cancelAction, deletePack := runDownload(t, m, entry)
 		defer cancelAction()
 		synctest.Wait()
-		if deleteErr := m.queue.Delete(entry.InfoHash, false, nil); deleteErr != nil {
+		if deleteErr := deletePack(false); deleteErr != nil {
 			t.Fatal(deleteErr)
 		}
 		synctest.Wait()
@@ -222,14 +225,26 @@ func newSeasonPackTest(t *testing.T, name string) (*Manager, *storage.Entry, []*
 	return m, entry, children
 }
 
-// runDownload runs entry's download as an action does, under the cancel a delete of the entry sends.
-func runDownload(t *testing.T, m *Manager, entry *storage.Entry) func() {
+// runDownload runs entry's download as an action does and returns what waits for it to end and deletePack. deletePack does what the pack's delete does: the actor
+// enters Deleting, cancels the action and removes the record.
+func runDownload(
+	t *testing.T,
+	m *Manager,
+	entry *storage.Entry,
+) (func(), func(deleteFiles bool) error) {
 	t.Helper()
-	ctx := runningAction(t, m.queue, entry.InfoHash)
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		_ = m.downloader.download(ctx, entry)
 	}()
-	return func() { <-done }
+	return func() { <-done }, func(deleteFiles bool) error {
+		m.grabs.publish(GrabView{
+			State: grab.State{Key: strings.ToLower(entry.InfoHash), Phase: grab.PhaseDeleting}, Entry: *entry,
+		})
+		cancel()
+		return m.queue.Delete(entry.InfoHash, deleteFiles, nil)
+	}
 }

@@ -152,7 +152,9 @@ func writeTuple(st State, e *storage.Entry) {
 	case PhaseAwaitingLinks:
 		e.Progress = 1
 	case PhaseActing:
-		e.Progress = 1
+		if !e.IsDownloading || e.Progress == 0 {
+			e.Progress = 1
+		}
 		if st.season() {
 			e.Progress = 0
 		}

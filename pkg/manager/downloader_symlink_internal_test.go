@@ -113,7 +113,7 @@ func TestDeleteDuringSymlinkActionLeavesNoEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancelCause(t.Context())
-	cancel(errEntryDeleted)
+	cancel(nil)
 
 	if err := m.downloader.processSymlink(ctx, entry, mountPath); !errors.Is(err, context.Canceled) {
 		t.Errorf("processSymlink err = %v, want context.Canceled", err)
@@ -133,7 +133,7 @@ func TestWarmFileCacheStopsWhenCancelled(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancelCause(t.Context())
-	cancel(errEntryDeleted)
+	cancel(nil)
 
 	if err := m.WarmFileCache(ctx, []string{path}); err != nil {
 		t.Fatal(err)
@@ -164,7 +164,7 @@ func TestDeleteBeforeUsenetDownloadLeavesNoEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancelCause(t.Context())
-	cancel(errEntryDeleted)
+	cancel(nil)
 
 	if err := m.downloader.processUsenetDownload(ctx, entry); err == nil {
 		t.Error("processUsenetDownload err = nil, want the cancellation")

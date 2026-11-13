@@ -513,6 +513,7 @@ func (m *Manager) initEntries(packOf map[string]string) {
 		},
 		pollEvery:  m.refreshInterval,
 		retryDelay: throttledRetryDelay,
+		completed:  m.completed,
 	})
 }
 

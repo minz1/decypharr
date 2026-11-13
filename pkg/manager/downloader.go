@@ -84,7 +84,11 @@ func (d *Downloader) download(ctx context.Context, torrent *storage.Entry) error
 	// this flag after its own directory scan, which is too late for the parent
 	// of a multi-season torrent).
 	torrent.IsDownloading = true
-	_ = d.manager.queue.Update(torrent)
+	if owner := ownerOf(ctx); owner != nil {
+		owner.progress(torrent)
+	} else {
+		_ = d.manager.queue.Update(torrent)
+	}
 
 	var (
 		isMultiSeason bool
@@ -117,16 +121,16 @@ func (d *Downloader) downloadSeasons(
 			d.logger.Error().Err(err).Msgf("Failed to save season torrent")
 			continue
 		}
-		if err := d.process(ctx, result, mountPath); err != nil {
+		if err := d.process(withOwner(ctx, nil), result, mountPath); err != nil {
 			if errors.Is(err, ErrMountStopping) {
 				// The season and the pack stay queued for the next generation; the pack is not complete.
 				// A pack delete whose cancel landed before this return also removes the season; one that
 				// lands after it finds the action gone and leaves the season queued (as on a work cancel).
-				d.removeSeasonOfDeletedPack(ctx, torrent, result)
+				d.removeSeasonOfDeletedPack(torrent, result)
 				return err
 			}
 			if ctx.Err() != nil {
-				d.removeSeasonOfDeletedPack(ctx, torrent, result)
+				d.removeSeasonOfDeletedPack(torrent, result)
 				return err
 			}
 			d.markAsError(result, err)
@@ -138,8 +142,8 @@ func (d *Downloader) downloadSeasons(
 }
 
 // removeSeasonOfDeletedPack drops a season the pack's delete cut short; a folder shared with the pack is the pack's.
-func (d *Downloader) removeSeasonOfDeletedPack(ctx context.Context, pack, season *storage.Entry) {
-	if !errors.Is(context.Cause(ctx), errEntryDeleted) {
+func (d *Downloader) removeSeasonOfDeletedPack(pack, season *storage.Entry) {
+	if !d.manager.deleting(pack.InfoHash) {
 		return
 	}
 	naming := d.manager.folderNaming()
@@ -159,8 +163,9 @@ func (d *Downloader) process(ctx context.Context, entry *storage.Entry, mountPat
 		if err := d.completeEntry(ctx, entry); err != nil {
 			return err
 		}
-		// Remove entry from queue
-		_ = d.manager.queue.Delete(entry.InfoHash, true, nil)
+		if ownerOf(ctx) == nil {
+			_ = d.manager.queue.Delete(entry.InfoHash, true, nil)
+		}
 		return nil
 	default:
 		return d.processSymlink(ctx, entry, mountPath)
@@ -171,6 +176,9 @@ func (d *Downloader) process(ctx context.Context, entry *storage.Entry, mountPat
 func (d *Downloader) completeEntry(ctx context.Context, entry *storage.Entry) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if ownerOf(ctx) != nil {
+		return nil
 	}
 	if !d.manager.queue.Contains(entry.InfoHash) {
 		return nil
@@ -711,9 +719,30 @@ func (d *Downloader) resolveLinkWithRetry(
 // processUsenetDownload downloads NZB files via parallel NNTP segment fetching.
 // saveProgress stores entry's progress unless its download was cancelled, so a deleted entry is not written back.
 func (d *Downloader) saveProgress(ctx context.Context, entry *storage.Entry) {
-	if ctx.Err() == nil {
-		_ = d.manager.queue.Update(entry)
+	if ctx.Err() != nil {
+		return
 	}
+	if owner := ownerOf(ctx); owner != nil {
+		owner.progress(entry)
+		return
+	}
+	_ = d.manager.queue.Update(entry)
+}
+
+type ownerKey struct{}
+
+// actionOwner is the actor of the grab whose action runs: it persists what the action reports.
+type actionOwner struct {
+	progress func(entry *storage.Entry)
+}
+
+func withOwner(ctx context.Context, owner *actionOwner) context.Context {
+	return context.WithValue(ctx, ownerKey{}, owner)
+}
+
+func ownerOf(ctx context.Context) *actionOwner {
+	owner, _ := ctx.Value(ownerKey{}).(*actionOwner)
+	return owner
 }
 
 func (d *Downloader) processUsenetDownload(ctx context.Context, entry *storage.Entry) error {

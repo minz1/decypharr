@@ -84,6 +84,9 @@ func TestDashboardDeleteRemovesQueueRecordBeforeProviderTorrent(t *testing.T) {
 			if provider.queuedAtDelete.Load() {
 				t.Fatal("the provider torrent was deleted while the queue still held the entry")
 			}
+			if err := mgr.AwaitGone(t.Context(), hash); err != nil {
+				t.Fatal(err)
+			}
 			if mgr.Queue().Contains(hash) {
 				t.Fatal("queue entry kept")
 			}

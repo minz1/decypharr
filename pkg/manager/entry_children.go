@@ -317,7 +317,13 @@ func (m *Manager) actionChild(ctx context.Context, call entryChildCall) entryMsg
 	if err := m.RefreshMount(); err != nil {
 		m.logger.Error().Err(err).Msg("Mount refresh failed")
 	}
-	return actionResult(ctx, entry, m.downloader.download(ctx, entry))
+	owned := withOwner(ctx, &actionOwner{progress: m.progressSink(call.grab.State.Key)})
+	result := actionResult(ctx, entry, m.downloader.download(owned, entry))
+	if result.ev != nil && result.ev.Kind == grab.EvActionDone {
+		path := entry.DownloadPath(m.folderNaming())
+		result.update = func(e *storage.Entry) { e.ContentPath = path }
+	}
+	return result
 }
 
 // actionResult is the event an action's end makes.
@@ -343,6 +349,7 @@ func (m *Manager) cleanupChild(ctx context.Context, call entryChildCall) entryMs
 	if entry == nil {
 		return eventMsg(grab.Event{Kind: grab.EvCleanupDone})
 	}
+	m.queue.waits.observe(entry.InfoHash, waitNone)
 	if call.cleanup.ReleaseDelete {
 		m.stopProviderDownload(ctx, entry)
 	}

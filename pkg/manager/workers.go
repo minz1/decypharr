@@ -72,7 +72,7 @@ func (m *Manager) scheduleEvery(
 func (m *Manager) addQueueProcessorJob(ctx context.Context) {
 	if m.config.RemoveStalledAfter != "" {
 		m.scheduleEvery(ctx, m.scheduler, "1m", "remove-stalled", func() {
-			if err := m.queue.DeleteStalled(m.awaitsJob); err != nil {
+			if err := m.sweepStalled(m.awaitsJob); err != nil {
 				m.logger.Error().Err(err).Msg("Failed to process remove stalled torrents")
 			}
 		})

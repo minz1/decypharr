@@ -80,6 +80,7 @@ func newActorHarness(t *testing.T, store *storage.Storage) *actorHarness {
 		inLibrary:  func(string) bool { return false },
 		pollEvery:  testPollEvery,
 		retryDelay: throttledRetryDelay,
+		completed:  func(grab.Grab) {},
 	})
 	return h
 }

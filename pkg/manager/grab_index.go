@@ -24,6 +24,7 @@ func (v GrabView) clone() GrabView {
 type grabIndex struct {
 	mu    sync.RWMutex
 	views map[string]GrabView
+	gone  map[string][]chan struct{}
 }
 
 func (x *grabIndex) publish(v GrabView) {
@@ -39,7 +40,29 @@ func (x *grabIndex) publish(v GrabView) {
 func (x *grabIndex) remove(key string) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
-	delete(x.views, strings.ToLower(key))
+	key = strings.ToLower(key)
+	delete(x.views, key)
+	for _, ch := range x.gone[key] {
+		close(ch)
+	}
+	delete(x.gone, key)
+}
+
+// goneChan is closed when key has no grab.
+func (x *grabIndex) goneChan(key string) <-chan struct{} {
+	key = strings.ToLower(key)
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	ch := make(chan struct{})
+	if _, ok := x.views[key]; !ok {
+		close(ch)
+		return ch
+	}
+	if x.gone == nil {
+		x.gone = make(map[string][]chan struct{})
+	}
+	x.gone[key] = append(x.gone[key], ch)
+	return ch
 }
 
 func (x *grabIndex) get(key string) (GrabView, bool) {

@@ -11,6 +11,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/arr"
+	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
@@ -213,7 +214,11 @@ func (q *QBit) handleTorrentsDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, hash := range hashes {
-		if err := q.manager.RemoveQueued(hash, deleteFiles); err != nil {
+		if err := q.manager.DeleteQueued(
+			ctx,
+			hash,
+			grab.Cleanup{DeleteFiles: deleteFiles, ReleaseDelete: true},
+		); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -295,17 +300,18 @@ func (q *QBit) handleSetCategory(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "No hashes provided", http.StatusBadRequest)
 		return
 	}
-	filterFunc := q.manager.Queue().ListFilterFunc("", config.ProtocolTorrent, "", hashes)
-
-	updateFunc := func(t *storage.Entry) bool {
-		if t.Category != category {
-			t.Category = category
-			return true
-		}
-		return false
+	torrents, err := q.manager.Queue().ListFilter("", config.ProtocolTorrent, "", hashes, "", false)
+	if err != nil {
+		http.Error(w, "Failed to read the download queue", http.StatusInternalServerError)
+		return
 	}
-
-	if err := q.manager.Queue().UpdateWhere(filterFunc, updateFunc); err != nil {
+	var errs []error
+	for _, t := range torrents {
+		if t.Category != category {
+			errs = append(errs, q.manager.SetCategory(ctx, t.InfoHash, category))
+		}
+	}
+	if err = errors.Join(errs...); err != nil {
 		q.logger.Warn().Err(err).Msgf("Error setting torrent category")
 		http.Error(w, "Failed to update torrents", http.StatusInternalServerError)
 		return
@@ -331,7 +337,7 @@ func (q *QBit) handleAddTorrentTags(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, t := range torrents {
-		q.setTorrentTags(t, tags)
+		q.setTorrentTags(ctx, t, tags)
 	}
 	utils.JSONResponse(w, nil, http.StatusOK)
 }
@@ -354,7 +360,7 @@ func (q *QBit) handleRemoveTorrentTags(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, torrent := range torrents {
-		q.removeTorrentTags(torrent, tags)
+		q.removeTorrentTags(ctx, torrent, tags)
 	}
 	utils.JSONResponse(w, nil, http.StatusOK)
 }

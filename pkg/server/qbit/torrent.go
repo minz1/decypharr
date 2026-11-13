@@ -118,22 +118,29 @@ func (q *QBit) GetTorrentProperties(t *storage.Entry) *TorrentProperties {
 	}
 }
 
-func (q *QBit) setTorrentTags(t *storage.Entry, tags []string) {
+func (q *QBit) setTorrentTags(ctx context.Context, t *storage.Entry, tags []string) {
+	merged := slices.Clone(t.Tags)
 	for _, tag := range tags {
-		if tag != "" && !slices.Contains(t.Tags, tag) {
-			t.Tags = append(t.Tags, tag)
+		if tag != "" && !slices.Contains(merged, tag) {
+			merged = append(merged, tag)
 		}
 	}
 	q.addTags(tags)
-	_ = q.manager.Queue().Update(t)
+	q.saveTags(ctx, t, merged)
 }
 
-func (q *QBit) removeTorrentTags(t *storage.Entry, tags []string) {
-	t.Tags = utils.RemoveItem(t.Tags, tags...)
+func (q *QBit) removeTorrentTags(ctx context.Context, t *storage.Entry, tags []string) {
+	merged := utils.RemoveItem(slices.Clone(t.Tags), tags...)
 	q.mu.Lock()
 	q.tags = utils.RemoveItem(q.tags, tags...)
 	q.mu.Unlock()
-	_ = q.manager.Queue().Update(t)
+	q.saveTags(ctx, t, merged)
+}
+
+func (q *QBit) saveTags(ctx context.Context, t *storage.Entry, tags []string) {
+	if err := q.manager.SetTags(ctx, t.InfoHash, tags); err != nil {
+		q.logger.Warn().Err(err).Str("hash", t.InfoHash).Msg("Failed to save torrent tags")
+	}
 }
 
 func (q *QBit) addTags(tags []string) {

@@ -102,11 +102,12 @@ func runShutdownResume(t *testing.T, multiSeason bool) {
 	}
 	resumed := runAction(t, m, entry)
 	synctest.Wait()
-	if msg := <-resumed; msg.ev == nil || msg.ev.Kind != grab.EvActionDone {
+	msg := <-resumed
+	if msg.ev == nil || msg.ev.Kind != grab.EvActionDone {
 		t.Fatalf("resumed action reported %+v, want ActionDone", msg.ev)
 	}
 	saved, err := m.queue.GetTorrent(entry.InfoHash)
-	if err != nil || !saved.IsComplete || saved.IsDownloading {
+	if err != nil || msg.update == nil || saved.IsDownloading {
 		t.Fatalf("resumed entry = %#v, error = %v", saved, err)
 	}
 	downloadPath := saved.DownloadPath("")
@@ -138,6 +139,7 @@ func newShutdownTestManager(t *testing.T, dbPath string) *Manager {
 	}
 	m := &Manager{
 		storage: store,
+		grabs:   &grabIndex{},
 		config:  cfg,
 		store:   st,
 		queue: newQueue(
@@ -210,7 +212,7 @@ func interruptAndStop(t *testing.T, m *Manager, entry *storage.Entry) {
 	result := runAction(t, m, entry)
 	synctest.Wait()
 	saved, err := m.queue.GetTorrent(entry.InfoHash)
-	if err != nil || !saved.IsDownloading || saved.IsComplete {
+	if err != nil || saved.IsComplete {
 		t.Fatalf("in-flight entry = %#v, error = %v", saved, err)
 	}
 	if stopErr := m.Stop(t.Context()); stopErr != nil {

@@ -190,6 +190,7 @@ func stoppedManager(t *testing.T) *Manager {
 		inLibrary:  func(string) bool { return false },
 		pollEvery:  testPollEvery,
 		retryDelay: throttledRetryDelay,
+		completed:  func(grab.Grab) {},
 	})
 	ctx, cancel := task.Detached(t.Context(), time.Minute)
 	defer cancel()

@@ -57,6 +57,9 @@ func TestDeleteDownloadingTorrentDeletesProviderTorrent(t *testing.T) {
 	); w.Code != http.StatusOK {
 		t.Fatalf("delete status = %d: %s", w.Code, w.Body.String())
 	}
+	if err := mgr.AwaitGone(t.Context(), hash); err != nil {
+		t.Fatal(err)
+	}
 	if mgr.Queue().Contains(hash) {
 		t.Fatal("queue entry kept")
 	}

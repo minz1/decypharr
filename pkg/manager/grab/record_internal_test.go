@@ -229,3 +229,16 @@ func TestEncodeRefusesWhatThePreviousBinaryCannotDrive(t *testing.T) {
 		}
 	}
 }
+
+func TestEncodeKeepsTheProgressOfADownloadingAction(t *testing.T) {
+	t.Parallel()
+	st, _ := stateOf(kindTorrent, PhaseActing)
+	e := record(kindTorrent)
+	e.IsDownloading, e.Progress = true, 0.4
+	if err := Encode(Grab{State: st, Entry: e}); err != nil {
+		t.Fatal(err)
+	}
+	if e.Progress != 0.4 || !e.IsDownloading {
+		t.Fatalf("progress %v downloading %v, want the action's 0.4 kept", e.Progress, e.IsDownloading)
+	}
+}

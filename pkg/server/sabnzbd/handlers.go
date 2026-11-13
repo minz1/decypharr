@@ -13,6 +13,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/manager"
+	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
@@ -88,8 +89,7 @@ func (s *SABnzbd) handleDelete(w http.ResponseWriter, r *http.Request) {
 
 	if nzoIDs == "failed" {
 		// Delete all failed entries
-		if err := s.manager.Queue().
-			DeleteWhere(cat, config.ProtocolNZB, storage.EntryStateError, nil, nil); err != nil {
+		if err := s.manager.DeleteFailedNZBs(r.Context(), cat); err != nil {
 			s.logger.Error().
 				Err(err).
 				Msg("Failed to delete all failed NZBs")
@@ -110,7 +110,7 @@ func (s *SABnzbd) handleDelete(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Use atomic delete operation
-		if err := s.manager.Queue().Delete(nzoID, true, nil); err != nil {
+		if err := s.manager.DeleteQueued(r.Context(), nzoID, grab.Cleanup{DeleteFiles: true}); err != nil {
 			errors = append(errors, fmt.Sprintf("Failed to delete %s: %v", nzoID, err))
 		} else {
 			successCount++
