@@ -2,6 +2,7 @@ package manager
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -49,4 +50,5 @@ func drainPlacements(t testing.TB, m *Manager) {
 	synctest.Wait()
 	closePlacements(t, m)
 	m.placementsSvc = &service{group: testGroup(t)}
+	m.holders, m.holdersOnce = nil, sync.Once{}
 }

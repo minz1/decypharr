@@ -39,6 +39,8 @@ type actorHarness struct {
 	fails   []grab.FailEffect
 	root    *task.Group
 	down    bool
+	holds   []string
+	holdErr error
 }
 
 func newTestStore(t *testing.T) *storage.Storage {
@@ -81,8 +83,32 @@ func newActorHarness(t *testing.T, store *storage.Storage) *actorHarness {
 		pollEvery:  testPollEvery,
 		retryDelay: throttledRetryDelay,
 		completed:  func(grab.Grab) {},
+		hold: func(provider, id, key string) error {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			if h.holdErr != nil {
+				return h.holdErr
+			}
+			h.holds = append(h.holds, "hold:"+provider+"/"+id+"/"+key)
+			return nil
+		},
+		unhold: func(provider, id, key string) error {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			if h.holdErr != nil {
+				return h.holdErr
+			}
+			h.holds = append(h.holds, "unhold:"+provider+"/"+id+"/"+key)
+			return nil
+		},
 	})
 	return h
+}
+
+func (h *actorHarness) held() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return slices.Clone(h.holds)
 }
 
 func (h *actorHarness) record(s string) {

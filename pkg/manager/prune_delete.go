@@ -150,7 +150,9 @@ func (m *Manager) pruneRemovePlacements(ctx context.Context, e *storage.Entry) (
 		if p == nil || p.ID == "" {
 			continue
 		}
-		ran, err := m.releasePlacement(ctx, name, p, e.InfoHash)
+		ran, err := m.releaseWait(ctx, placementRelease{
+			provider: name, id: p.ID, grab: e.InfoHash, delete: true, slot: p.HoldsSlot(), library: true,
+		})
 		if err != nil {
 			return removed, fmt.Errorf("%s/%s: %w", name, p.ID, err)
 		}
@@ -186,60 +188,24 @@ func (m *Manager) placementHeldElsewhere(provider, id, self string) (bool, error
 	return len(queued) > 0, err
 }
 
-// releasePlacement deletes one provider torrent, unless an entry other than self still holds it, and frees the slot
-// it held. Every removal of a provider torrent goes through it, with the provider's lock held so that no submission
-// or holder change slips in between the recount and the delete. It reports whether the torrent was deleted. ctx is
-// the ctx of the task it runs in (its owner); a delete in flight runs on the manager's stop grace, not on ctx.
-func (m *Manager) releasePlacement(
-	ctx context.Context,
-	provider string,
-	p *storage.ProviderEntry,
-	self string,
-) (bool, error) {
-	id := p.ID
-	lock := m.providerLock(provider)
+// releaseUsenet deletes one usenet placement, unless an entry other than self still holds it. A usenet placement has
+// no provider torrent, so it stays outside the holder; the provider's lock serialises it with a submission. It
+// reports whether the placement was deleted.
+func (m *Manager) releaseUsenet(ctx context.Context, id, self string) (bool, error) {
+	lock := m.providerLock(usenetProvider)
 	lock.Lock()
 	defer lock.Unlock()
-	// Refuse before the recount: a stopped owner, or a grace that has run out,
-	// deletes nothing, so a delete queued on the lock behind a cut one makes no
-	// provider call of its own.
 	if err := m.placementRefusal(ctx); err != nil {
 		return false, err
 	}
-	held, err := m.placementHeldElsewhere(provider, id, self)
+	held, err := m.placementHeldElsewhere(usenetProvider, id, self)
 	if err != nil {
 		return false, fmt.Errorf("recount holders: %w", err)
 	}
 	if held {
 		return false, nil
 	}
-	if provider == usenetProvider {
-		return true, m.removeUsenetPlacement(id)
-	}
-	client := m.ProviderClient(provider)
-	if client == nil {
-		return false, errors.New("provider not configured")
-	}
-	// A started delete runs on the stop grace, not on ctx: it survives the
-	// caller's stop for at most placementStopGrace, then is cut.
-	delCtx := m.deleteContext(ctx)
-	delErr := client.DeleteTorrent(delCtx, id)
-	if delErr == nil {
-		if p.HoldsSlot() {
-			m.slotFreed(provider)
-		}
-		return true, nil
-	}
-	if _, getErr := client.GetTorrent(delCtx, id); errors.Is(getErr, customerror.ErrTorrentNotFound) {
-		return true, nil
-	}
-	if delCtx.Err() != nil {
-		cause := context.Cause(delCtx)
-		m.logger.Warn().Err(cause).Str("provider", provider).Str("id", id).
-			Msg("Provider torrent may be left behind after the stop")
-		return false, fmt.Errorf("%w: %w: %w", errPlacementStopped, delErr, cause)
-	}
-	return false, delErr
+	return true, m.removeUsenetPlacement(id)
 }
 
 // deleteContext is the ctx a started provider delete runs on: the manager's stop grace. A hand-built test manager

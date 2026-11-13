@@ -344,44 +344,50 @@ func (c *duplicateAddProvider) CheckStatus(_ context.Context, torrent *types.Tor
 // add with the existing ID.
 func TestDiscardingASubmittedTorrentKeepsOneACoHolderUses(t *testing.T) {
 	t.Parallel()
-	for _, held := range []bool{true, false} {
-		h := newPruneHarness(t, config.PruneModeDelete)
-		h.mount2(t)
-		if held {
-			h.addEntry(t, "holder", shareID("dup"))
-		}
+	synctest.Test(t, func(t *testing.T) {
+		for _, held := range []bool{true, false} {
+			h := newPruneHarness(t, config.PruneModeDelete)
+			h.mount2(t)
+			if held {
+				h.addEntry(t, "holder", shareID("dup"))
+			}
 
-		h.m.discardSubmitted(context.Background(), "torbox", "dup", "self")
-		if held {
-			requireDeleted(t, h)
-		} else {
-			requireDeleted(t, h, "dup")
+			_ = h.m.discardSubmitted(context.Background(), "torbox", "dup", "self")
+			drainPlacements(t, h.m)
+			if held {
+				requireDeleted(t, h)
+			} else {
+				requireDeleted(t, h, "dup")
+			}
 		}
-	}
+	})
 }
 
 func TestFixerReplacementThatFailsItsStatusCheckKeepsASharedTorrent(t *testing.T) {
 	t.Parallel()
-	for _, held := range []bool{true, false} {
-		h := newPruneHarness(t, config.PruneModeDelete)
-		h.mount2(t)
-		if held {
-			h.addEntry(t, "holder", shareID("dup"))
-		}
-		h.m.config = h.m.store.Get()
-		client := &duplicateAddProvider{Client: h.provider, id: "dup"}
-		h.m.clients.Store("torbox", client)
-		entry := &storage.Entry{InfoHash: "0123456789012345678901234567890123456789", Name: "release"}
+	synctest.Test(t, func(t *testing.T) {
+		for _, held := range []bool{true, false} {
+			h := newPruneHarness(t, config.PruneModeDelete)
+			h.mount2(t)
+			if held {
+				h.addEntry(t, "holder", shareID("dup"))
+			}
+			h.m.config = h.m.store.Get()
+			client := &duplicateAddProvider{Client: h.provider, id: "dup"}
+			h.m.clients.Store("torbox", client)
+			entry := &storage.Entry{InfoHash: "0123456789012345678901234567890123456789", Name: "release"}
 
-		if _, err := NewFixer(h.m).submitReplacement(client, "torbox", entry); err == nil {
-			t.Fatal("submitReplacement() = nil, want the status check failure")
+			if _, err := NewFixer(h.m).submitReplacement(client, "torbox", entry); err == nil {
+				t.Fatal("submitReplacement() = nil, want the status check failure")
+			}
+			drainPlacements(t, h.m)
+			if held {
+				requireDeleted(t, h)
+			} else {
+				requireDeleted(t, h, "dup")
+			}
 		}
-		if held {
-			requireDeleted(t, h)
-		} else {
-			requireDeleted(t, h, "dup")
-		}
-	}
+	})
 }
 
 // A queued entry that holds the provider torrent counts as a holder.

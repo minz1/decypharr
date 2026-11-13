@@ -176,7 +176,7 @@ func (m *Manager) pollChild(ctx context.Context, call entryChildCall, links bool
 	}
 	m.queue.waits.observe(entry.InfoHash, waitNone)
 	if err != nil || t == nil || t.Status == debridTypes.TorrentStatusError {
-		return m.placementFailed(entry, placement, t, err)
+		return m.placementFailed(ctx, entry, placement, t, err)
 	}
 	if links {
 		return m.linksChecked(entry, placement, t)
@@ -217,6 +217,7 @@ func (m *Manager) logPendingStatus(entry *storage.Entry, placement *storage.Prov
 
 // placementFailed is the event of a placement the provider failed or lost; its torrent is deleted there.
 func (m *Manager) placementFailed(
+	ctx context.Context,
 	entry *storage.Entry,
 	placement *storage.ProviderEntry,
 	t *debridTypes.Torrent,
@@ -231,9 +232,7 @@ func (m *Manager) placementFailed(
 		m.logStatusFailure(entry, placement, err)
 		if t != nil && t.ID != "" {
 			provider, id := entry.ActiveProvider, t.ID
-			m.startPlacementRun(entry.Name, provider, func(ctx context.Context) {
-				m.discardSubmitted(ctx, provider, id, entry.InfoHash)
-			})
+			_ = m.discardSubmitted(ctx, provider, id, entry.InfoHash)
 		}
 	}
 	switch {
@@ -341,14 +340,18 @@ func actionResult(ctx context.Context, entry *storage.Entry, err error) entryMsg
 func (m *Manager) cleanupChild(ctx context.Context, call entryChildCall) entryMsg {
 	entry := call.grab.Entry
 	for _, ref := range call.releases {
-		m.discardSubmitted(ctx, ref.Provider, ref.TorrentID, call.grab.State.Key)
+		if err := m.discardSubmitted(ctx, ref.Provider, ref.TorrentID, call.grab.State.Key); err != nil {
+			return entryMsg{}
+		}
 	}
 	if entry == nil {
 		return eventMsg(grab.Event{Kind: grab.EvCleanupDone})
 	}
 	m.queue.waits.observe(entry.InfoHash, waitNone)
 	if call.cleanup.ReleaseDelete {
-		m.stopProviderDownload(ctx, entry)
+		if err := m.stopProviderDownload(ctx, entry); err != nil {
+			return entryMsg{}
+		}
 	}
 	remove := removeStagedNZB
 	if call.cleanup.DeleteFiles {

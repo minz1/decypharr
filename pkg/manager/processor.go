@@ -339,9 +339,7 @@ func (m *Manager) submitToProvider(
 		if torrent != nil && torrent.ID != "" {
 			// Delete the torrent if it was not downloaded
 			provider, id := db.Config().Name, torrent.ID
-			m.startPlacementRun(debridTorrent.Name, provider, func(ctx context.Context) {
-				m.discardSubmitted(ctx, provider, id, debridTorrent.InfoHash)
-			})
+			_ = m.discardSubmitted(ctx, provider, id, debridTorrent.InfoHash)
 		}
 		if !reported {
 			m.hearsay.DiscardAdd(decision)

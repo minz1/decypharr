@@ -84,6 +84,8 @@ type entryState struct {
 	live     map[grab.ChildKind]keyed.ChildID
 	pending  []grab.Effect
 	releases []placementRef
+	// held is the provider torrent the holder was last told this grab uses.
+	held placementRef
 	// req is the add request of a grab submitted since the start; a grab loaded from disk has none.
 	req      *ImportRequest
 	timer    keyed.TimerID
@@ -138,6 +140,9 @@ type entryDeps struct {
 	// expired runs what a grab that ran out its provider wait or its wait for links does outside its record; it must
 	// not block. It may be nil.
 	expired func(g grab.Grab, kind grab.EventKind)
+	// hold and unhold tell the provider torrent holder that a grab uses a torrent and that it no longer does; both may be
+	// nil, and a refusal is retried by the grab's next step.
+	hold, unhold func(provider, id, key string) error
 }
 
 // entryActor owns every grab: one keyed actor per entry key is the only writer of its queue record.
@@ -159,6 +164,12 @@ func newEntryActor(g *task.Group, deps entryDeps) *entryActor {
 	}
 	if a.seasonsOf == nil {
 		a.seasonsOf = func(*storage.Entry) []*storage.Entry { return nil }
+	}
+	if a.hold == nil {
+		a.hold = func(string, string, string) error { return nil }
+	}
+	if a.unhold == nil {
+		a.unhold = func(string, string, string) error { return nil }
 	}
 	if a.expired == nil {
 		a.expired = func(grab.Grab, grab.EventKind) {}
@@ -207,6 +218,7 @@ func (a *entryActor) Activate(_ context.Context, key string) entryState {
 	}
 	st.g = g
 	a.grabs.publish(GrabView{State: g.State, Entry: *g.Entry})
+	a.syncHold(key, &st, g)
 	return st
 }
 
@@ -374,6 +386,10 @@ func (a *entryActor) step(key string, st *entryState, m entryMsg, fx *keyed.Effe
 		fx.Reply(err)
 		return
 	}
+	if a.staleGone(cur, ev) {
+		fx.Reply(nil)
+		return
+	}
 	nextState, effects, err := grab.Transition(cur.State, ev)
 	if err != nil {
 		a.refuse(key, ev, err, fx)
@@ -398,6 +414,7 @@ func (a *entryActor) step(key string, st *entryState, m entryMsg, fx *keyed.Effe
 	}
 	st.saveFails = 0
 	st.g = s.next
+	a.syncHold(key, st, s.next)
 	if ev.Kind == grab.EvActionProgress {
 		st.putAt, st.putProgress = ev.At, m.progress
 	}
@@ -755,4 +772,56 @@ type childKind grab.ChildKind
 
 func (c childKind) String() string {
 	return [...]string{"submit", "lookup", "poll", "links", "action", "cleanup"}[c]
+}
+
+func wantedHold(g grab.Grab) placementRef {
+	switch g.State.Phase {
+	case grab.PhaseAbsent, grab.PhaseComplete:
+		return placementRef{}
+	case grab.PhaseQueued, grab.PhaseThrottled, grab.PhaseSubmitting, grab.PhaseProvider, grab.PhaseAwaitingLinks,
+		grab.PhaseActing, grab.PhaseFailed, grab.PhaseDeleting:
+	}
+	if g.Entry == nil {
+		return placementRef{}
+	}
+	p := g.Entry.GetActiveProvider()
+	if p == nil || p.ID == "" || p.Provider == usenetProvider {
+		return placementRef{}
+	}
+	return placementRef{Provider: p.Provider, TorrentID: p.ID}
+}
+
+// syncHold tells the holder which provider torrent the grab now uses. A grab being deleted keeps its hold: its
+// cleanup's release takes it. A refused message leaves held as it was, so the next step sends it again.
+func (a *entryActor) syncHold(key string, st *entryState, g grab.Grab) {
+	if g.State.Phase == grab.PhaseDeleting {
+		return
+	}
+	want := wantedHold(g)
+	if want == st.held {
+		return
+	}
+	if st.held != (placementRef{}) {
+		if err := a.unhold(st.held.Provider, st.held.TorrentID, key); err != nil {
+			a.logger.Warn().Err(err).Str("key", key).Msg("Provider torrent holder not told the grab let go")
+			return
+		}
+		st.held = placementRef{}
+	}
+	if want == (placementRef{}) {
+		return
+	}
+	if err := a.hold(want.Provider, want.TorrentID, key); err != nil {
+		a.logger.Warn().Err(err).Str("key", key).Msg("Provider torrent holder not told the grab uses a torrent")
+		return
+	}
+	st.held = want
+}
+
+// staleGone reports a placement-gone from the holder about a torrent the grab no longer uses.
+func (a *entryActor) staleGone(cur grab.Grab, ev grab.Event) bool {
+	if ev.Kind != grab.EvPlacementGone || ev.TorrentID == "" {
+		return false
+	}
+	return wantedHold(cur) != placementRef{Provider: ev.Provider, TorrentID: ev.TorrentID}
 }

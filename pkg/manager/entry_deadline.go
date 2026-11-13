@@ -2,7 +2,6 @@ package manager
 
 import (
 	"cmp"
-	"context"
 	"strings"
 	"time"
 
@@ -107,9 +106,7 @@ func (m *Manager) expiredGrab(g grab.Grab, kind grab.EventKind) {
 		return
 	}
 	id := placement.ID
-	m.startPlacementRun(entry.Name, provider, func(ctx context.Context) {
-		m.discardSubmitted(ctx, provider, id, entry.InfoHash)
-	})
+	_ = m.discardSubmitted(m.work.Context(), provider, id, entry.InfoHash)
 }
 
 // removeStalledAfter is the configured limit on a stalled placement and on a failed grab's retention; an invalid or

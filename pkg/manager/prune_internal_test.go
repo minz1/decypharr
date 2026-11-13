@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,7 +33,7 @@ type pruneHarness struct {
 	root     string
 	mount    string
 	now      time.Time
-	logs     *bytes.Buffer
+	logs     *lockedBuffer
 	fake     *fakeArrRecovery
 	provider *fakePruneProvider
 	dbDir    string
@@ -50,7 +51,7 @@ func newPruneHarness(t *testing.T, mode config.PruneMode) *pruneHarness {
 		root:  t.TempDir(),
 		mount: filepath.Join(t.TempDir(), "mnt"),
 		now:   time.Unix(1_800_000_000, 0),
-		logs:  &bytes.Buffer{},
+		logs:  &lockedBuffer{},
 		fake:  &fakeArrRecovery{},
 	}
 	cfg := config.NewStore(&config.Config{
@@ -1013,4 +1014,21 @@ func TestPruneExclusionReadsThePlacementNotTheStaleStatus(t *testing.T) {
 	if !candidate(t, r, "stal").eligible(h.now) {
 		t.Fatal("a finished placement with a stale Status is never pruned")
 	}
+}
+
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }

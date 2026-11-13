@@ -99,6 +99,9 @@ type Manager struct {
 	// child group. A nil service is not configured.
 	hearsaySvc, usenetSvc, placementsSvc, reacquireSvc, indexerSvc, repairSvc, schedulerSvc *service
 
+	holders     *holderActor
+	holdersOnce sync.Once
+
 	arrRecoveryMu          sync.RWMutex
 	arrRecovery            ArrRecovery
 	reacquireNotifications sync.Map
@@ -427,6 +430,7 @@ func (m *Manager) init() error {
 	// Initialize the unified active-download queue after all processors exist.
 	records, packOf := m.readQueue()
 	m.initEntries(packOf)
+	m.holderActor()
 	m.recoverEntries(records, packOf)
 
 	// Storage closes last: this task ends when the group's own context does,
@@ -519,6 +523,12 @@ func (m *Manager) initEntries(packOf map[string]string) {
 		retryDelay:         throttledRetryDelay,
 		completed:          m.completed,
 		expired:            m.expiredGrab,
+		hold: func(provider, id, key string) error {
+			return m.holdPlacement(provider, id, key)
+		},
+		unhold: func(provider, id, key string) error {
+			return m.sendRelease(placementRelease{provider: provider, id: id, grab: key}, nil)
+		},
 	})
 }
 

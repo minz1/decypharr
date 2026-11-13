@@ -32,21 +32,49 @@ func (m *Manager) RemoveFromProvider(ctx context.Context, providerEntry *storage
 	} else if m.ProviderClient(providerEntry.Provider) == nil {
 		return nil
 	}
-	_, err := m.releasePlacement(ctx, providerEntry.Provider, providerEntry, self)
+	_, err := m.releaseWait(ctx, placementRelease{
+		provider: providerEntry.Provider, id: providerEntry.ID, grab: self, delete: true,
+		slot: providerEntry.HoldsSlot(), library: true,
+	})
 	return err
 }
 
 // discardSubmitted deletes a torrent that was just added at a provider and given up on, for the entry self. A
 // provider answers an add of a magnet it already holds with the existing torrent's ID, so the torrent may be one
 // another entry holds; it is released, not deleted outright. The caller has accounted for any slot the add held.
-func (m *Manager) discardSubmitted(ctx context.Context, provider, id, self string) {
+func (m *Manager) discardSubmitted(ctx context.Context, provider, id, self string) error {
 	if id == "" {
-		return
+		return nil
 	}
-	placement := &storage.ProviderEntry{Provider: provider, ID: id, Progress: 1}
-	if _, err := m.releasePlacement(ctx, provider, placement, self); err != nil {
-		ev, msg := m.placementFailure(err, "Failed to delete a provider torrent that was given up on")
+	err := m.releaseNoWait(ctx, placementRelease{provider: provider, id: id, grab: self, delete: true})
+	if err != nil {
+		ev, msg := m.placementFailure(err, "Failed to hand a provider torrent that was given up on to its holder")
 		ev.Str("provider", provider).Str("id", id).Msg(msg)
+	}
+	return err
+}
+
+// releaseNoWait hands a release to the provider torrent's holder without waiting for the delete; it fails only when
+// the holder refuses it. A usenet release has no holder: it runs inline and a failure is logged.
+func (m *Manager) releaseNoWait(ctx context.Context, r placementRelease) error {
+	if err := m.placementRefusal(ctx); r.delete && err != nil {
+		return err
+	}
+	if r.provider != usenetProvider {
+		return m.sendRelease(r, nil)
+	}
+	if _, err := m.releaseUsenet(ctx, r.id, r.grab); err != nil {
+		ev, msg := m.placementFailure(err, "Failed to delete a usenet placement")
+		ev.Str("id", r.id).Msg(msg)
+	}
+	return nil
+}
+
+// releaseAsync is releaseNoWait for a caller that only logs a refusal.
+func (m *Manager) releaseAsync(ctx context.Context, name string, r placementRelease) {
+	if err := m.releaseNoWait(ctx, r); err != nil {
+		ev, msg := m.placementFailure(err, "Provider torrent not released; it may be left behind")
+		ev.Str("name", name).Str("provider", r.provider).Str("id", r.id).Msg(msg)
 	}
 }
 
@@ -91,24 +119,28 @@ func (m *Manager) RemoveTorrentPlacements(t *storage.Entry) {
 }
 
 // stopProviderDownload deletes the provider torrent of an entry still downloading there, so a removed grab frees its slot.
-func (m *Manager) stopProviderDownload(ctx context.Context, entry *storage.Entry) {
+func (m *Manager) stopProviderDownload(ctx context.Context, entry *storage.Entry) error {
 	placement := entry.GetActiveProvider()
 	if !entry.IsTorrent() || entry.IsComplete || placement == nil || !placement.HoldsSlot() {
-		return
+		return nil
 	}
 	stored, err := m.storage.Get(entry.InfoHash)
 	switch {
 	case errors.Is(err, appendstore.ErrKeyNotFound):
 	case err != nil:
 		m.logger.Warn().Err(err).Str("name", entry.Name).Msg("Kept the provider torrent of a removed download")
-		return
+		return nil
 	default:
 		if lib := stored.Providers[placement.Provider]; lib != nil && lib.ID == placement.ID {
-			return
+			return nil
 		}
 	}
-	if removeErr := m.RemoveFromProvider(ctx, placement, entry.InfoHash); removeErr != nil {
-		ev, msg := m.placementFailure(removeErr, "Failed to delete the provider torrent of a removed download")
+	err = m.releaseNoWait(ctx, placementRelease{
+		provider: placement.Provider, id: placement.ID, grab: entry.InfoHash, delete: true, slot: placement.HoldsSlot(),
+	})
+	if err != nil {
+		ev, msg := m.placementFailure(err, "Failed to hand the provider torrent of a removed download to its holder")
 		ev.Str("name", entry.Name).Str("debrid", placement.Provider).Msg(msg)
 	}
+	return err
 }

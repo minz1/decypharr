@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/url"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,7 +19,7 @@ import (
 type deletingProvider struct {
 	debrid.Client
 
-	deleted atomic.Value
+	deleted chan string
 }
 
 func (*deletingProvider) Config() config.Debrid {
@@ -28,7 +27,7 @@ func (*deletingProvider) Config() config.Debrid {
 }
 func (*deletingProvider) Logger() zerolog.Logger { return zerolog.Nop() }
 func (p *deletingProvider) DeleteTorrent(_ context.Context, id string) error {
-	p.deleted.Store(id)
+	p.deleted <- id
 	return nil
 }
 
@@ -36,7 +35,7 @@ func (p *deletingProvider) DeleteTorrent(_ context.Context, id string) error {
 func TestDeleteDownloadingTorrentDeletesProviderTorrent(t *testing.T) {
 	t.Parallel()
 	mgr, store := managertest.New(t, func(cfg *config.Config) { cfg.UseAuth = false })
-	provider := &deletingProvider{}
+	provider := &deletingProvider{deleted: make(chan string, 1)}
 	mgr.Clients().Store("torbox", provider)
 	routes := New(mgr, store, zerolog.Nop()).Routes()
 
@@ -64,8 +63,13 @@ func TestDeleteDownloadingTorrentDeletesProviderTorrent(t *testing.T) {
 	if mgr.Queue().Contains(hash) {
 		t.Fatal("queue entry kept")
 	}
-	if got, _ := provider.deleted.Load().(string); got != "provider-id" {
-		t.Fatalf("deleted provider torrent = %q, want provider-id", got)
+	select {
+	case got := <-provider.deleted:
+		if got != "provider-id" {
+			t.Fatalf("deleted provider torrent = %q, want provider-id", got)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the provider torrent was never deleted")
 	}
 }
 
@@ -73,7 +77,7 @@ func TestDeleteDownloadingTorrentDeletesProviderTorrent(t *testing.T) {
 func TestDeleteFailedTorrentWithFilesDeletesProviderTorrent(t *testing.T) {
 	t.Parallel()
 	mgr, store := managertest.New(t, func(cfg *config.Config) { cfg.UseAuth = false })
-	provider := &deletingProvider{}
+	provider := &deletingProvider{deleted: make(chan string, 1)}
 	mgr.Clients().Store("torbox", provider)
 	routes := New(mgr, store, zerolog.Nop()).Routes()
 
@@ -100,7 +104,12 @@ func TestDeleteFailedTorrentWithFilesDeletesProviderTorrent(t *testing.T) {
 	if err := mgr.AwaitGone(t.Context(), hash); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := provider.deleted.Load().(string); got != "stuck-id" {
-		t.Fatalf("deleted provider torrent = %q, want stuck-id", got)
+	select {
+	case got := <-provider.deleted:
+		if got != "stuck-id" {
+			t.Fatalf("deleted provider torrent = %q, want stuck-id", got)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the provider torrent was never deleted")
 	}
 }

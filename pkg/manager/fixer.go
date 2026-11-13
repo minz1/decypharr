@@ -277,11 +277,8 @@ func (f *Fixer) MoveTorrent(entry *storage.Entry, debridName string, reinsert bo
 	// Delete the old torrent from the provider if it has a different ID, unless another entry (the other seasons
 	// of a pack) still lists it.
 	if old.ID != "" && old.ID != newDebridTorrent.ID {
-		f.manager.startPlacementRun(entry.Name, debridName, func(ctx context.Context) {
-			if _, releaseErr := f.manager.releasePlacement(ctx, debridName, &old, entry.InfoHash); releaseErr != nil {
-				ev, msg := f.manager.placementFailure(releaseErr, "Failed to delete the replaced provider torrent")
-				ev.Str("infohash", entry.InfoHash).Str("provider", debridName).Msg(msg)
-			}
+		f.manager.releaseAsync(f.manager.work.Context(), entry.Name, placementRelease{
+			provider: debridName, id: old.ID, grab: entry.InfoHash, delete: true, slot: old.HoldsSlot(), library: true,
 		})
 	}
 
@@ -345,7 +342,7 @@ func (f *Fixer) submitReplacement(
 		// A stop leaves the submitted torrent at the provider, next to the old one: the check never finished, so
 		// nothing says it is unwanted.
 		if newDebridTorrent != nil && newDebridTorrent.ID != "" && !stopped(work) {
-			f.manager.discardSubmitted(work, debridName, newDebridTorrent.ID, entry.InfoHash)
+			_ = f.manager.discardSubmitted(work, debridName, newDebridTorrent.ID, entry.InfoHash)
 		}
 		return nil, fmt.Errorf("failed to check status: %w", err)
 	}
@@ -356,12 +353,12 @@ func (f *Fixer) submitReplacement(
 	)
 
 	if len(newDebridTorrent.Files) == 0 {
-		f.manager.discardSubmitted(work, debridName, newDebridTorrent.ID, entry.InfoHash)
+		_ = f.manager.discardSubmitted(work, debridName, newDebridTorrent.ID, entry.InfoHash)
 		return nil, fmt.Errorf("no files in entry after re-insertion")
 	}
 	for _, file := range newDebridTorrent.GetFiles() {
 		if file.Link == "" && file.ID == "" {
-			f.manager.discardSubmitted(work, debridName, newDebridTorrent.ID, entry.InfoHash)
+			_ = f.manager.discardSubmitted(work, debridName, newDebridTorrent.ID, entry.InfoHash)
 			return nil, fmt.Errorf("empty link/id for file %s", file.Name)
 		}
 	}

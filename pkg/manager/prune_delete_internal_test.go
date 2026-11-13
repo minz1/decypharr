@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"
@@ -386,7 +387,7 @@ func TestPruneCtxCancelStopsBatch(t *testing.T) {
 	deleted, failed, _ := h.m.pruneEntries(ctx, cs)
 
 	if deleted != 1 || failed != 0 || h.has("aaaa") || !h.has("bbbb") {
-		t.Fatalf("deleted=%d failed=%d", deleted, failed)
+		t.Fatalf("deleted=%d failed=%d aaaa=%v bbbb=%v", deleted, failed, h.has("aaaa"), h.has("bbbb"))
 	}
 }
 
@@ -699,4 +700,36 @@ func TestPruneFailureCountDroppedOnceEntryLeavesCandidates(t *testing.T) {
 	if _, ok := h.m.pruneFails["bbbb"]; ok {
 		t.Fatalf("stale failure count: %v", h.m.pruneFails)
 	}
+}
+
+func TestRemoveFromProviderOutlivesItsCancelledCaller(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		h := newPruneHarness(t, config.PruneModeDelete)
+		entry := h.addEntry(t, "aaaa", nil)
+		ctx, cancel := context.WithCancel(context.Background())
+		h.provider.onDelete = func(string) { cancel() }
+
+		err := h.m.RemoveFromProvider(ctx, entry.Providers["torbox"], entry.InfoHash)
+
+		if err != nil {
+			t.Fatalf("RemoveFromProvider = %v, want nil: the provider deleted the torrent", err)
+		}
+	})
+}
+
+func TestADiscardFromACancelledCallerLeavesTheTorrent(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		h := newPruneHarness(t, config.PruneModeDelete)
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+
+		if err := h.m.discardSubmitted(ctx, "torbox", "given-up", "self"); !errors.Is(err, errPlacementStopped) {
+			t.Fatalf("discardSubmitted = %v, want errPlacementStopped", err)
+		}
+		drainPlacements(t, h.m)
+
+		requireDeleted(t, h)
+	})
 }

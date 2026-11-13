@@ -74,7 +74,7 @@ func gracePlacement() *storage.ProviderEntry {
 func startRelease(ctx context.Context, m *Manager) <-chan error {
 	done := make(chan error, 1)
 	go func() {
-		_, err := m.releasePlacement(ctx, "torbox", gracePlacement(), "self")
+		_, err := releaseGrace(ctx, m)
 		done <- err
 	}()
 	return done
@@ -132,7 +132,7 @@ func TestReleasePlacementNormalDeleteNotCut(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		h, provider := newGraceHarness(t, time.Hour)
 		started := time.Now()
-		_, err := h.m.releasePlacement(t.Context(), "torbox", gracePlacement(), "self")
+		_, err := releaseGrace(t.Context(), h.m)
 		if err != nil {
 			t.Fatalf("a slow delete in normal running failed: %v", err)
 		}
@@ -154,7 +154,7 @@ func TestReleasePlacementDoneCtxNoProviderCall(t *testing.T) {
 			h, provider := newGraceHarness(t, 0)
 			owner, cancel := context.WithCancelCause(t.Context())
 			cancel(task.ErrStopped)
-			_, err := h.m.releasePlacement(owner, "torbox", gracePlacement(), "self")
+			_, err := releaseGrace(owner, h.m)
 			if !placementStopped(err) || !errors.Is(err, task.ErrStopped) {
 				t.Fatalf("err = %v, want a stopped placement naming the owner's cause", err)
 			}
@@ -170,7 +170,7 @@ func TestReleasePlacementDoneCtxNoProviderCall(t *testing.T) {
 			h.m.markStopping()
 			time.Sleep(placementStopGrace)
 			synctest.Wait()
-			_, err := h.m.releasePlacement(t.Context(), "torbox", gracePlacement(), "self")
+			_, err := releaseGrace(t.Context(), h.m)
 			if !placementStopped(err) || !errors.Is(err, task.ErrGraceExpired) {
 				t.Fatalf("err = %v, want a stopped placement with ErrGraceExpired", err)
 			}
@@ -188,7 +188,7 @@ func TestWorkStopBoundedByDeleteGrace(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		h, provider := newGraceHarness(t, 0)
 		if err := h.m.work.Go("job", func(ctx context.Context) error {
-			_, err := h.m.releasePlacement(ctx, "torbox", gracePlacement(), "self")
+			_, err := releaseGrace(ctx, h.m)
 			return err
 		}); err != nil {
 			t.Fatal(err)
@@ -301,7 +301,7 @@ func TestRefusalAfterGraceCancelReadsStopped(t *testing.T) {
 		h, provider := newGraceHarness(t, 0)
 		h.m.markStopping()
 		h.m.graceCancel()
-		_, err := h.m.releasePlacement(t.Context(), "torbox", gracePlacement(), "self")
+		_, err := releaseGrace(t.Context(), h.m)
 		if !errors.Is(err, task.ErrStopped) || !placementStopped(err) {
 			t.Fatalf("err = %v, want ErrStopped", err)
 		}
@@ -363,6 +363,54 @@ func TestPruneEndsQuietlyWhenStopRefusesRemoval(t *testing.T) {
 		logs := h.logs.String()
 		if strings.Count(logs, "left behind (stopping)") != 1 || strings.Contains(logs, "provider removal failed") {
 			t.Fatalf("want one quiet left-behind line and no failure:\n%s", logs)
+		}
+	})
+}
+
+func releaseGrace(ctx context.Context, m *Manager) (bool, error) {
+	p := gracePlacement()
+	return m.releaseWait(ctx, placementRelease{
+		provider: "torbox", id: p.ID, grab: "self", delete: true, slot: p.HoldsSlot(), library: true,
+	})
+}
+
+type failingDeleteProvider struct {
+	debrid.Client
+}
+
+func (failingDeleteProvider) DeleteTorrent(context.Context, string) error {
+	return errors.New("provider answered 500")
+}
+
+func (failingDeleteProvider) GetTorrent(_ context.Context, id string) (*types.Torrent, error) {
+	return &types.Torrent{ID: id}, nil
+}
+
+func TestAWaitingReleaseDuringARetryBackoffEndsWithTheGrace(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		h, _ := newGraceHarness(t, 0)
+		h.m.clients.Store("torbox", failingDeleteProvider{})
+		silent := placementRelease{provider: "torbox", id: "id-cut", grab: "a", delete: true}
+		if err := h.m.releaseNoWait(t.Context(), silent); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		waiting := placementRelease{provider: "torbox", id: "id-cut", grab: "b", delete: true}
+		done := make(chan error, 1)
+		go func() {
+			_, err := h.m.releaseWait(t.Context(), waiting)
+			done <- err
+		}()
+		synctest.Wait()
+		requireRunning(t, done, "during the backoff")
+
+		h.m.markStopping()
+		time.Sleep(placementStopGrace)
+		synctest.Wait()
+
+		if err := requireEnded(t, done, "at the end of the grace"); !placementStopped(err) {
+			t.Fatalf("waiting release err = %v, want a stopped placement", err)
 		}
 	})
 }
