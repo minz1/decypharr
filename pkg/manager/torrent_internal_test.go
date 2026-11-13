@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/rs/zerolog"
@@ -226,5 +227,13 @@ func TestProcessNewTorrentsCancelledDrainsQuietly(t *testing.T) {
 			got,
 			logs.String(),
 		)
+	}
+}
+
+func TestSyncedRemoteQueuedTorrentIsNotLocalQueued(t *testing.T) {
+	t.Parallel()
+	torrent := &types.Torrent{InfoHash: "h", Name: "n", Debrid: "pm", ID: "1", Status: types.TorrentStatusRemoteQueued}
+	if got := newSyncedEntry(torrent, time.Now()).Status; got != storage.EntryStatusDownloading {
+		t.Fatalf("synced entry status %q, want downloading", got)
 	}
 }

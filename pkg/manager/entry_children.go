@@ -137,7 +137,7 @@ func applyParsedNZB(e *storage.Entry, nzb *storage.NZB) {
 	e.Magnet = ""
 	e.Name, e.OriginalFilename = nzb.Name, nzb.Name
 	e.Size, e.Bytes = nzb.TotalSize, nzb.TotalSize
-	e.Status = debridTypes.TorrentStatusDownloading
+	e.Status = storage.EntryStatusDownloading
 	e.SetActive(usenetProvider, true)
 	placement := e.AddUsenetProvider(nzb)
 	for _, file := range nzb.Files {

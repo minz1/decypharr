@@ -135,7 +135,7 @@ func ObservationOf(t *Torrent) Observation {
 		o.Phase = PhaseFailed
 	case TorrentStatusDownloading:
 		o.Phase = PhaseDownloading
-	case TorrentStatusQueued:
+	case TorrentStatusRemoteQueued:
 		o.Phase = PhaseRemoteQueued
 	default:
 		o.Phase, o.Raw = PhaseUnknown, string(t.Status)

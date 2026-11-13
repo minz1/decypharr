@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"
-	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
@@ -238,7 +237,7 @@ func convertToSABnzbdNZB(e *storage.Entry, naming config.WebDavFolderNaming) NZB
 
 	// Map storage state to SABnzbd status
 	status := mapStorageStateToSABStatus(e.State)
-	if e.Status == debridTypes.TorrentStatusQueued {
+	if e.Status == storage.EntryStatusQueued {
 		status = StatusQueued
 	}
 
@@ -283,7 +282,7 @@ func getNZBFiles(e *storage.Entry) []File {
 	// Determine file status based on job state
 	fileStatus := "queued"
 	switch {
-	case e.Status == debridTypes.TorrentStatusQueued:
+	case e.Status == storage.EntryStatusQueued:
 		fileStatus = "queued"
 	case e.State == storage.EntryStateDownloading:
 		fileStatus = "active"

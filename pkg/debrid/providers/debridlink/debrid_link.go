@@ -380,7 +380,7 @@ func (dl *DebridLink) CheckStatus(ctx context.Context, torrent *types.Torrent) (
 	case types.TorrentStatusDownloaded:
 		dl.logger.Info().Msgf("Torrent: %s downloaded", torrent.Name)
 		return torrent, nil
-	case types.TorrentStatusQueued, types.TorrentStatusError:
+	case types.TorrentStatusRemoteQueued, types.TorrentStatusError:
 	}
 	return torrent, fmt.Errorf("torrent: %s has error", torrent.Name)
 }

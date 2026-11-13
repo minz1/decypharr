@@ -616,7 +616,7 @@ func (tb *Torbox) CheckStatus(ctx context.Context, torrent *types.Torrent) (*typ
 			return torrent, fmt.Errorf("torrent %s: %w", torrent.Name, customerror.ErrTorrentNotCached)
 		}
 		return torrent, nil
-	case types.TorrentStatusQueued, types.TorrentStatusError:
+	case types.TorrentStatusRemoteQueued, types.TorrentStatusError:
 	}
 	return torrent, fmt.Errorf("torrent: %s has error", torrent.Name)
 }

@@ -236,7 +236,7 @@ func (pm *Premiumize) addTorrent(ctx context.Context, t *types.Torrent) (*types.
 func (pm *Premiumize) applySubmittedTorrent(t *types.Torrent, data transferCreateResponse) {
 	t.ID = data.ID
 	t.Debrid = pm.config.Name
-	t.Status = types.TorrentStatusQueued
+	t.Status = types.TorrentStatusRemoteQueued
 	if data.Name != "" {
 		t.Name = data.Name
 		t.Filename = data.Name
@@ -278,7 +278,7 @@ func (pm *Premiumize) UpdateAndReturnTorrent(ctx context.Context, t *types.Torre
 	if t.Status == types.TorrentStatusDownloaded {
 		return t, nil
 	}
-	if t.Status == types.TorrentStatusDownloading || t.Status == types.TorrentStatusQueued {
+	if t.Status == types.TorrentStatusDownloading || t.Status == types.TorrentStatusRemoteQueued {
 		if !t.DownloadUncached {
 			return t, fmt.Errorf("torrent %s: %w", t.Name, customerror.ErrTorrentNotCached)
 		}
@@ -805,7 +805,7 @@ func mapStatus(status string) types.TorrentStatus {
 	case "finished", "seeding":
 		return types.TorrentStatusDownloaded
 	case "queued":
-		return types.TorrentStatusQueued
+		return types.TorrentStatusRemoteQueued
 	case "running":
 		return types.TorrentStatusDownloading
 	default:

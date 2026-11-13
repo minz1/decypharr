@@ -122,7 +122,7 @@ func (h *pruneHarness) addEntry(t *testing.T, hash string, edit func(*storage.En
 		Name:           "Show." + hash,
 		Size:           100,
 		State:          storage.EntryStateDownloading,
-		Status:         debridTypes.TorrentStatusDownloaded,
+		Status:         storage.EntryStatusDownloaded,
 		ActiveProvider: "torbox",
 		Providers:      map[string]*storage.ProviderEntry{"torbox": {Provider: "torbox", ID: "id-" + hash}},
 		Files: map[string]*storage.File{
@@ -291,11 +291,11 @@ func TestPruneExclusions(t *testing.T) {
 	h.reference(t, keep)
 	h.addEntry(t, "man1", func(e *storage.Entry) { e.Manual = true })
 	h.addEntry(t, "que1", nil)
-	h.addEntry(t, "inc1", func(e *storage.Entry) { e.Providers["torbox"].Status = debridTypes.TorrentStatusQueued })
+	h.addEntry(t, "inc1", func(e *storage.Entry) { e.Providers["torbox"].Status = debridTypes.TorrentStatusRemoteQueued })
 	h.addEntry(t, "dow1", func(e *storage.Entry) {
 		e.Providers["torbox"].Status = debridTypes.TorrentStatusDownloading
 	})
-	h.addEntry(t, "err1", func(e *storage.Entry) { e.Status = debridTypes.TorrentStatusError })
+	h.addEntry(t, "err1", func(e *storage.Entry) { e.Status = storage.EntryStatusError })
 	h.addEntry(t, "syn1", func(e *storage.Entry) { e.IsComplete, e.State = true, "" })
 	h.addEntry(t, "rea1", nil)
 	h.addEntry(t, "rea2", nil)
@@ -972,29 +972,29 @@ func TestPruneExclusionReadsThePlacementNotTheStaleStatus(t *testing.T) {
 	h := newPruneHarness(t, config.PruneModeDelete)
 	h.reference(t, h.addEntry(t, "aaaa", nil))
 	h.addEntry(t, "stal", func(e *storage.Entry) {
-		e.Status = debridTypes.TorrentStatusDownloading
+		e.Status = storage.EntryStatusDownloading
 		e.Providers["torbox"].Status = debridTypes.TorrentStatusDownloaded
 	})
 	h.addEntry(t, "live", func(e *storage.Entry) {
-		e.Status = debridTypes.TorrentStatusDownloaded
+		e.Status = storage.EntryStatusDownloaded
 		e.Providers["torbox"].Status = debridTypes.TorrentStatusDownloading
 	})
 	h.addEntry(t, "wait", func(e *storage.Entry) {
-		e.Status = debridTypes.TorrentStatusDownloaded
-		e.Providers["torbox"].Status = debridTypes.TorrentStatusQueued
+		e.Status = storage.EntryStatusDownloaded
+		e.Providers["torbox"].Status = debridTypes.TorrentStatusRemoteQueued
 	})
 	// The active placement was dropped and the left one is still downloading: SwitchToNextProvider keeps no active.
 	h.addEntry(t, "dang", func(e *storage.Entry) {
-		e.Status = debridTypes.TorrentStatusDownloading
+		e.Status = storage.EntryStatusDownloading
 		e.Providers["torbox"].Status = debridTypes.TorrentStatusDownloading
 		e.ClearActive()
 	})
 	h.addEntry(t, "nopl", func(e *storage.Entry) {
-		e.Status = debridTypes.TorrentStatusQueued
+		e.Status = storage.EntryStatusQueued
 		e.ActiveProvider = ""
 	})
 	h.addEntry(t, "two", func(e *storage.Entry) {
-		e.Status = debridTypes.TorrentStatusDownloaded
+		e.Status = storage.EntryStatusDownloaded
 		e.Providers["torbox"].Status = debridTypes.TorrentStatusDownloaded
 		second := *e.Providers["torbox"]
 		second.Provider, second.Status = "realdebrid", debridTypes.TorrentStatusDownloading

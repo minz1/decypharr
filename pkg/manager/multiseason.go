@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
@@ -103,7 +102,7 @@ func convertToMultiSeason(torrent *storage.Entry, seasons []SeasonInfo) []*stora
 			Magnet:           torrent.Magnet,
 			Category:         torrent.Category,
 			SavePath:         torrent.SavePath,
-			Status:           debridTypes.TorrentStatusDownloading,
+			Status:           storage.EntryStatusDownloading,
 			Action:           torrent.Action,
 			Manual:           torrent.Manual,
 			CreatedAt:        time.Now(),

@@ -9,8 +9,6 @@ import (
 
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
-
-	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 )
 
 const grabGoldenFile = "testdata/queue_record_grab_v1.bin"
@@ -20,7 +18,7 @@ func grabTestEntry() *Entry {
 		InfoHash:       "abcdef0123456789abcdef0123456789abcdef01",
 		Name:           "Show.S01",
 		State:          EntryStateDownloading,
-		Status:         debridTypes.TorrentStatusDownloading,
+		Status:         EntryStatusDownloading,
 		Progress:       0.25,
 		ActiveProvider: "realdebrid",
 		AddedOn:        time.Unix(1_700_000_000, 0),

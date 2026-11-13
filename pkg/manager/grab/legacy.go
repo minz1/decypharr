@@ -119,11 +119,11 @@ func FromLegacy(e *storage.Entry, packOf map[string]string, inLibrary bool) Stat
 func downloadingPhase(e *storage.Entry) (Phase, bool) {
 	p := e.Providers[e.ActiveProvider]
 	switch {
-	case e.Status == debridTypes.TorrentStatusQueued:
+	case e.Status == storage.EntryStatusQueued:
 		return PhaseQueued, true
-	case e.Status == debridTypes.TorrentStatusDownloaded:
+	case e.Status == storage.EntryStatusDownloaded:
 		return PhaseActing, true
-	case e.Status != debridTypes.TorrentStatusDownloading:
+	case e.Status != storage.EntryStatusDownloading:
 		return PhaseAbsent, false
 	case e.ActiveProvider == "" || p == nil:
 		return PhaseQueued, true

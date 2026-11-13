@@ -59,7 +59,7 @@ func TestDashboardDeleteRemovesQueueRecordBeforeProviderTorrent(t *testing.T) {
 			mgr.Clients().Store("torbox", provider)
 			if err := mgr.Queue().Add(&storage.Entry{
 				InfoHash: hash, Name: "release", Category: "sonarr", Protocol: config.ProtocolTorrent,
-				ActiveProvider: "torbox", State: storage.EntryStateDownloading, Status: types.TorrentStatusDownloading,
+				ActiveProvider: "torbox", State: storage.EntryStateDownloading, Status: storage.EntryStatusDownloading,
 				Providers: map[string]*storage.ProviderEntry{"torbox": {
 					Provider: "torbox", ID: "provider-id", Status: tc.status,
 				}},

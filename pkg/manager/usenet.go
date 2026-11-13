@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"
-	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 	"github.com/sirrobot01/decypharr/pkg/usenet/parser"
 )
@@ -181,7 +180,7 @@ func newNZBQueueEntry(req *ImportRequest, stagedPath string) *storage.Entry {
 		Magnet:           stagedPath,
 		Category:         req.Arr.Name,
 		SavePath:         filepath.Join(req.DownloadFolder, req.Arr.Name),
-		Status:           debridTypes.TorrentStatusQueued,
+		Status:           storage.EntryStatusQueued,
 		State:            storage.EntryStateDownloading,
 		Progress:         0,
 		Action:           req.Action,

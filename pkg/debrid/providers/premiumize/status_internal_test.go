@@ -53,7 +53,7 @@ func TestCheckStatusFinalizingTransferIsNotUncached(t *testing.T) {
 		},
 		{
 			name: "queued is uncached", transfer: "queued",
-			wantStatus: types.TorrentStatusQueued, wantLists: 1, wantErr: customerror.ErrTorrentNotCached,
+			wantStatus: types.TorrentStatusRemoteQueued, wantLists: 1, wantErr: customerror.ErrTorrentNotCached,
 		},
 		{
 			name: "running allowed when uncached downloads are on", transfer: "running", allowUncached: true,

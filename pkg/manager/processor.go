@@ -28,7 +28,7 @@ func (m *Manager) AddNewTorrent(ctx context.Context, importReq *ImportRequest) e
 	if importReq.Arr.Name == "" {
 		return fmt.Errorf("arr is required")
 	}
-	return m.submitEntry(ctx, newTorrentQueueEntry(importReq, debridTypes.TorrentStatusQueued, m.folderNaming()),
+	return m.submitEntry(ctx, newTorrentQueueEntry(importReq, storage.EntryStatusQueued, m.folderNaming()),
 		importReq)
 }
 
@@ -38,7 +38,7 @@ func stopped(ctx context.Context) bool { return ctx.Err() != nil }
 
 func newTorrentQueueEntry(
 	importReq *ImportRequest,
-	status debridTypes.TorrentStatus,
+	status storage.EntryStatus,
 	naming config.WebDavFolderNaming,
 ) *storage.Entry {
 	now := time.Now()

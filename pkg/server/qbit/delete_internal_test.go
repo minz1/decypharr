@@ -42,7 +42,7 @@ func TestDeleteDownloadingTorrentDeletesProviderTorrent(t *testing.T) {
 	const hash = "0123456789abcdef0123456789abcdef01234567"
 	entry := &storage.Entry{
 		InfoHash: hash, Name: "release", Category: "sonarr", Protocol: config.ProtocolTorrent,
-		ActiveProvider: "torbox", State: storage.EntryStateDownloading, Status: types.TorrentStatusDownloading,
+		ActiveProvider: "torbox", State: storage.EntryStateDownloading, Status: storage.EntryStatusDownloading,
 		Providers: map[string]*storage.ProviderEntry{"torbox": {
 			Provider: "torbox", ID: "provider-id", Status: types.TorrentStatusDownloading,
 		}},
@@ -85,7 +85,7 @@ func TestDeleteFailedTorrentWithFilesDeletesProviderTorrent(t *testing.T) {
 	failedAt := time.Now().Add(-time.Hour)
 	entry := &storage.Entry{
 		InfoHash: hash, Name: "release", Category: "sonarr", Protocol: config.ProtocolTorrent,
-		ActiveProvider: "torbox", State: storage.EntryStateError, Status: types.TorrentStatusError,
+		ActiveProvider: "torbox", State: storage.EntryStateError, Status: storage.EntryStatusError,
 		LastError: "no seeders", LastErrorTime: &failedAt, ErrorCount: 1,
 		Providers: map[string]*storage.ProviderEntry{"torbox": {
 			Provider: "torbox", ID: "stuck-id", Status: types.TorrentStatusDownloading,

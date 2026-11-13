@@ -24,7 +24,7 @@ func since() time.Time { return time.Date(2026, 11, 3, 4, 5, 6, 0, time.UTC) }
 
 // record is a queue record of kind before any grab writer touched it.
 func record(kind recordKind) *storage.Entry {
-	e := placedAt(legacy(storage.EntryStateDownloading, debridTypes.TorrentStatusDownloading),
+	e := placedAt(legacy(storage.EntryStateDownloading, storage.EntryStatusDownloading),
 		debridTypes.TorrentStatusDownloading, nil)
 	e.Progress = 0.4
 	switch kind {
@@ -94,7 +94,7 @@ func TestEncodeWritesTheLegacyTuple(t *testing.T) {
 	t.Parallel()
 	type tuple struct {
 		State      storage.TorrentState
-		Status     debridTypes.TorrentStatus
+		Status     storage.EntryStatus
 		Progress   float64
 		Active     string
 		IsComplete bool
@@ -103,10 +103,10 @@ func TestEncodeWritesTheLegacyTuple(t *testing.T) {
 		dl   = storage.EntryStateDownloading
 		up   = storage.EntryStatePausedUP
 		er   = storage.EntryStateError
-		q    = debridTypes.TorrentStatusQueued
-		dn   = debridTypes.TorrentStatusDownloading
-		done = debridTypes.TorrentStatusDownloaded
-		fail = debridTypes.TorrentStatusError
+		q    = storage.EntryStatusQueued
+		dn   = storage.EntryStatusDownloading
+		done = storage.EntryStatusDownloaded
+		fail = storage.EntryStatusError
 	)
 	cases := []struct {
 		kind recordKind

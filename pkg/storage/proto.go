@@ -227,7 +227,7 @@ func ProtoToEntry(pb *EntryProto) *Entry {
 		Providers:        make(map[string]*ProviderEntry),
 		Files:            make(map[string]*File),
 		State:            TorrentState(pb.GetState()),
-		Status:           debridTypes.TorrentStatus(pb.GetStatus()),
+		Status:           EntryStatus(pb.GetStatus()),
 		Progress:         progressFraction(pb.GetProgress()),
 		Speed:            pb.GetSpeed(),
 		Seeders:          int(pb.GetSeeders()),

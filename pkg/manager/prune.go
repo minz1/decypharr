@@ -359,15 +359,13 @@ func (m *Manager) pruneExclusion(e *storage.Entry, reacquiring map[string]struct
 // placements current; Entry.Status is written once and goes stale, so it is read only when e has no active
 // placement to say otherwise.
 func placementIncomplete(e *storage.Entry) bool {
-	incomplete := func(s debridTypes.TorrentStatus) bool {
-		return s == debridTypes.TorrentStatusQueued || s == debridTypes.TorrentStatusDownloading
-	}
 	for _, p := range e.Providers {
-		if incomplete(p.Status) {
+		if p.Status == debridTypes.TorrentStatusRemoteQueued || p.Status == debridTypes.TorrentStatusDownloading {
 			return true
 		}
 	}
-	return e.GetActiveProvider() == nil && incomplete(e.Status)
+	return e.GetActiveProvider() == nil &&
+		(e.Status == storage.EntryStatusQueued || e.Status == storage.EntryStatusDownloading)
 }
 
 func (m *Manager) pruneBound(e *storage.Entry) bool {

@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"
-	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
@@ -22,8 +21,8 @@ type p1Drives struct{ resubmit, poll, sweep bool }
 func previousBinaryDrives(e *storage.Entry, now time.Time) p1Drives {
 	swept := previousSweepRemoves(e, now, time.Second)
 	return p1Drives{
-		resubmit: e.State == storage.EntryStateDownloading && e.Status == debridTypes.TorrentStatusQueued,
-		poll: e.State == storage.EntryStateDownloading && e.Status != debridTypes.TorrentStatusQueued &&
+		resubmit: e.State == storage.EntryStateDownloading && e.Status == storage.EntryStatusQueued,
+		poll: e.State == storage.EntryStateDownloading && e.Status != storage.EntryStatusQueued &&
 			!e.IsDownloading && (e.IsTorrent() && e.ActiveProvider != "" || e.IsNZB()),
 		sweep: swept,
 	}
@@ -44,10 +43,10 @@ func previousSweepRemoves(t *storage.Entry, now time.Time, after time.Duration) 
 		}
 		return t.Progress == 0 && failedAt.Before(now.Add(-retention))
 	}
-	if t.IsDownloading || !t.AddedOn.Before(now.Add(-after)) || t.Status == debridTypes.TorrentStatusQueued {
+	if t.IsDownloading || !t.AddedOn.Before(now.Add(-after)) || t.Status == storage.EntryStatusQueued {
 		return false
 	}
-	return t.Status != debridTypes.TorrentStatusDownloading && t.Seeders == 0 && t.Progress == 0
+	return t.Status != storage.EntryStatusDownloading && t.Seeders == 0 && t.Progress == 0
 }
 
 // TestThePreviousBinaryDrivesEveryEncodedGrabAsItsOwnRecord pins the rollback contract of the legacy tuple: each
@@ -60,7 +59,7 @@ func TestThePreviousBinaryDrivesEveryEncodedGrabAsItsOwnRecord(t *testing.T) {
 	record := func(kind string) *storage.Entry {
 		e := &storage.Entry{
 			InfoHash: pack, Name: "Show.S01", Protocol: config.ProtocolTorrent,
-			State: storage.EntryStateDownloading, Status: debridTypes.TorrentStatusDownloading,
+			State: storage.EntryStateDownloading, Status: storage.EntryStatusDownloading,
 			ActiveProvider: "rd", AddedOn: now.Add(-48 * time.Hour),
 			Providers: map[string]*storage.ProviderEntry{"rd": {Provider: "rd", ID: "RD1"}},
 		}

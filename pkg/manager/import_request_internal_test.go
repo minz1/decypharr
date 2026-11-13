@@ -5,7 +5,7 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/arr"
-	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
+	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
 func TestImportRequestSkipMultiSeason(t *testing.T) {
@@ -43,7 +43,7 @@ func TestNewTorrentQueueEntryKeepsArrPacksWhole(t *testing.T) {
 		Magnet: &utils.Magnet{Name: "Show S01-S04", InfoHash: "abc"},
 		Arr:    arr.Arr{Name: "sonarr"},
 	}
-	if entry := newTorrentQueueEntry(req, debridTypes.TorrentStatusQueued, ""); !entry.SkipMultiSeason {
+	if entry := newTorrentQueueEntry(req, storage.EntryStatusQueued, ""); !entry.SkipMultiSeason {
 		t.Fatal("qbit entry SkipMultiSeason = false, want true")
 	}
 }
@@ -74,7 +74,7 @@ func TestQueueEntriesCarryManual(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			torrentReq := &ImportRequest{Type: tt.typ, Manual: tt.manual, Magnet: magnet}
-			torrentEntry := newTorrentQueueEntry(torrentReq, debridTypes.TorrentStatusDownloading, "")
+			torrentEntry := newTorrentQueueEntry(torrentReq, storage.EntryStatusDownloading, "")
 			if torrentEntry.Manual != tt.manual {
 				t.Fatalf("torrent entry Manual = %v, want %v", torrentEntry.Manual, tt.manual)
 			}

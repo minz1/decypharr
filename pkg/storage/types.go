@@ -32,6 +32,26 @@ const (
 	EntryStateError       TorrentState = "error"
 )
 
+type EntryStatus string
+
+const (
+	EntryStatusQueued      EntryStatus = "queued"
+	EntryStatusDownloading EntryStatus = "downloading"
+	EntryStatusDownloaded  EntryStatus = "downloaded"
+	EntryStatusError       EntryStatus = "error"
+)
+
+func StatusOfPlacement(s debridTypes.TorrentStatus) EntryStatus {
+	switch s {
+	case debridTypes.TorrentStatusRemoteQueued, debridTypes.TorrentStatusDownloading:
+		return EntryStatusDownloading
+	case debridTypes.TorrentStatusDownloaded:
+		return EntryStatusDownloaded
+	case debridTypes.TorrentStatusError:
+	}
+	return EntryStatusError
+}
+
 // Common errors.
 var (
 	ErrPlacementNotFound     = fmt.Errorf("providerEntry not found")
@@ -62,10 +82,10 @@ type Entry struct {
 
 	State TorrentState `msgpack:"state" json:"state"` // This is for QBitTorrent compatibility
 	// Provider State (from active providerEntry)
-	Status   debridTypes.TorrentStatus `msgpack:"status"   json:"status"`   // downloaded, downloading, queued, error
-	Progress float64                   `msgpack:"progress" json:"progress"` // Download progress (0..1)
-	Speed    int64                     `msgpack:"speed"    json:"speed"`    // Download speed
-	Seeders  int                       `msgpack:"seeders"  json:"seeders"`  // Number of seeders
+	Status   EntryStatus `msgpack:"status"   json:"status"`
+	Progress float64     `msgpack:"progress" json:"progress"` // Download progress (0..1)
+	Speed    int64       `msgpack:"speed"    json:"speed"`    // Download speed
+	Seeders  int         `msgpack:"seeders"  json:"seeders"`  // Number of seeders
 
 	IsComplete bool `msgpack:"is_complete" json:"is_complete"` // Ready for use
 	Bad        bool `msgpack:"bad"         json:"bad"`         // Marked as bad/corrupted
@@ -522,7 +542,7 @@ func (e *Entry) MarkAsCompleted(contentPath string) {
 // MarkAsError marks the torrent as errored.
 func (e *Entry) MarkAsError(err error) {
 	e.State = EntryStateError
-	e.Status = debridTypes.TorrentStatusError
+	e.Status = EntryStatusError
 	e.IsDownloading = false
 	e.LastError = err.Error()
 	e.ErrorCount++
@@ -716,7 +736,7 @@ func (ct *CachedTorrent) ToManagedTorrent() *Entry {
 		Bytes:            ct.Bytes,
 		Magnet:           "",
 		Providers:        make(map[string]*ProviderEntry),
-		Status:           debridTypes.TorrentStatus(ct.Status),
+		Status:           StatusOfPlacement(debridTypes.TorrentStatus(ct.Status)),
 		Progress:         ct.Progress,
 		Speed:            ct.Speed,
 		Seeders:          ct.Seeders,

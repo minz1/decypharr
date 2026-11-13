@@ -101,12 +101,12 @@ func TestRecoverOfALegacyRecord(t *testing.T) {
 	}{
 		{"queued", func() *storage.Entry {
 			e := testEntry("a")
-			e.State, e.Status = storage.EntryStateDownloading, debridTypes.TorrentStatusQueued
+			e.State, e.Status = storage.EntryStateDownloading, storage.EntryStatusQueued
 			return e
 		}, grab.ChildSubmit},
 		{"on a provider", func() *storage.Entry {
 			e := testEntry("a")
-			e.State, e.Status, e.ActiveProvider = storage.EntryStateDownloading, debridTypes.TorrentStatusDownloading,
+			e.State, e.Status, e.ActiveProvider = storage.EntryStateDownloading, storage.EntryStatusDownloading,
 				"torbox"
 			e.Providers = map[string]*storage.ProviderEntry{
 				"torbox": {Provider: "torbox", ID: "t1", Status: debridTypes.TorrentStatusDownloading},
@@ -115,7 +115,7 @@ func TestRecoverOfALegacyRecord(t *testing.T) {
 		}, grab.ChildPoll},
 		{"downloaded", func() *storage.Entry {
 			e := testEntry("a")
-			e.State, e.Status, e.ActiveProvider = storage.EntryStateDownloading, debridTypes.TorrentStatusDownloaded,
+			e.State, e.Status, e.ActiveProvider = storage.EntryStateDownloading, storage.EntryStatusDownloaded,
 				"torbox"
 			e.Providers = map[string]*storage.ProviderEntry{
 				"torbox": {Provider: "torbox", ID: "t1", Status: debridTypes.TorrentStatusDownloaded},

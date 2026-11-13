@@ -57,7 +57,7 @@ type docSubmit struct {
 // legacyTuple is the State/Status/IsComplete a record in a phase carries for an older binary.
 type legacyTuple struct {
 	state    storage.TorrentState
-	status   debridTypes.TorrentStatus // empty: any (a season child keeps the status it was created with)
+	status   storage.EntryStatus // empty: any (a season child keeps the status it was created with)
 	complete bool
 }
 
@@ -66,11 +66,11 @@ func tupleFor(st State) (legacyTuple, bool) {
 	if st.season() {
 		switch st.Phase {
 		case PhaseActing:
-			return legacyTuple{state: "", status: debridTypes.TorrentStatusDownloading}, true
+			return legacyTuple{state: "", status: storage.EntryStatusDownloading}, true
 		case PhaseComplete:
 			return legacyTuple{state: storage.EntryStatePausedUP, complete: true}, true
 		case PhaseFailed:
-			return legacyTuple{state: storage.EntryStateError, status: debridTypes.TorrentStatusError}, true
+			return legacyTuple{state: storage.EntryStateError, status: storage.EntryStatusError}, true
 		case PhaseAbsent, PhaseQueued, PhaseThrottled, PhaseSubmitting, PhaseProvider, PhaseAwaitingLinks,
 			PhaseDeleting:
 			return legacyTuple{}, false
@@ -78,17 +78,17 @@ func tupleFor(st State) (legacyTuple, bool) {
 	}
 	switch st.Phase {
 	case PhaseQueued, PhaseThrottled, PhaseSubmitting:
-		return legacyTuple{state: storage.EntryStateDownloading, status: debridTypes.TorrentStatusQueued}, true
+		return legacyTuple{state: storage.EntryStateDownloading, status: storage.EntryStatusQueued}, true
 	case PhaseProvider, PhaseAwaitingLinks:
-		return legacyTuple{state: storage.EntryStateDownloading, status: debridTypes.TorrentStatusDownloading}, true
+		return legacyTuple{state: storage.EntryStateDownloading, status: storage.EntryStatusDownloading}, true
 	case PhaseActing:
-		return legacyTuple{state: storage.EntryStateDownloading, status: debridTypes.TorrentStatusDownloaded}, true
+		return legacyTuple{state: storage.EntryStateDownloading, status: storage.EntryStatusDownloaded}, true
 	case PhaseComplete:
 		return legacyTuple{
-			state: storage.EntryStatePausedUP, status: debridTypes.TorrentStatusDownloaded, complete: true,
+			state: storage.EntryStatePausedUP, status: storage.EntryStatusDownloaded, complete: true,
 		}, true
 	case PhaseFailed:
-		return legacyTuple{state: storage.EntryStateError, status: debridTypes.TorrentStatusError}, true
+		return legacyTuple{state: storage.EntryStateError, status: storage.EntryStatusError}, true
 	case PhaseAbsent, PhaseDeleting:
 	}
 	return legacyTuple{}, false

@@ -13,8 +13,8 @@ import (
 	"github.com/sirrobot01/decypharr/internal/logger"
 	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/pkg/arr"
-	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/manager/grab"
+	"github.com/sirrobot01/decypharr/pkg/storage"
 	"github.com/sirrobot01/decypharr/pkg/usenet"
 )
 
@@ -55,7 +55,7 @@ func TestAddNewNZBQueuesBeforeNetworkParsing(t *testing.T) {
 		if err != nil {
 			t.Fatalf("get queued NZB: %v", err)
 		}
-		if entry.Status != debridTypes.TorrentStatusQueued || entry.Magnet == "" {
+		if entry.Status != storage.EntryStatusQueued || entry.Magnet == "" {
 			t.Fatalf("queued NZB status/path = %q/%q", entry.Status, entry.Magnet)
 		}
 		if _, statErr := os.Stat(entry.Magnet); statErr != nil {

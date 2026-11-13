@@ -21,7 +21,7 @@ const (
 func addedOn() time.Time { return time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC) }
 func updated() time.Time { return time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC) }
 
-func legacy(state storage.TorrentState, status debridTypes.TorrentStatus) *storage.Entry {
+func legacy(state storage.TorrentState, status storage.EntryStatus) *storage.Entry {
 	return &storage.Entry{
 		Protocol: config.ProtocolTorrent, InfoHash: packHash, State: state, Status: status,
 		AddedOn: addedOn(), UpdatedAt: updated(),
@@ -76,21 +76,21 @@ func legacyCases() []legacyCase {
 	child := SeasonHash(packHash, 2)
 	packOf := SeasonIndex([]string{packHash, child})
 	season := func(state storage.TorrentState, complete bool) *storage.Entry {
-		e := legacy(state, debridTypes.TorrentStatusDownloaded)
+		e := legacy(state, storage.EntryStatusDownloaded)
 		e.InfoHash, e.IsComplete = child, complete
 		return e
 	}
-	errComplete := legacy(storage.EntryStateError, debridTypes.TorrentStatusError)
+	errComplete := legacy(storage.EntryStateError, storage.EntryStatusError)
 	errComplete.IsComplete, errComplete.LastError = true, "boom"
 	orphanDone := legacy("", "")
 	orphanDone.IsComplete = true
-	otherMagnet := legacy(storage.EntryStateError, debridTypes.TorrentStatusError)
+	otherMagnet := legacy(storage.EntryStateError, storage.EntryStatusError)
 	otherMagnet.Magnet = "magnet:?xt=urn:btih:" + otherHash
-	badMagnet := legacy(storage.EntryStateError, debridTypes.TorrentStatusError)
+	badMagnet := legacy(storage.EntryStateError, storage.EntryStatusError)
 	badMagnet.Magnet = "not a magnet"
-	nzb := legacy(storage.EntryStateDownloading, debridTypes.TorrentStatusDownloading)
+	nzb := legacy(storage.EntryStateDownloading, storage.EntryStatusDownloading)
 	nzb.Protocol, nzb.Magnet = config.ProtocolNZB, "/data/nzbs/x.nzb"
-	deletedOnly := placedAt(legacy(storage.EntryStateDownloading, debridTypes.TorrentStatusDownloading),
+	deletedOnly := placedAt(legacy(storage.EntryStateDownloading, storage.EntryStatusDownloading),
 		debridTypes.TorrentStatusDownloaded, &storage.ProviderFile{Link: "https://x"})
 	deletedOnly.Files["a.mkv"].Deleted = true
 
@@ -108,29 +108,29 @@ func legacyCases() []legacyCase {
 		{name: "magnet of another hash", e: otherMagnet, want: PhaseFailed, noSubmit: "unmatched season"},
 		{name: "unparseable magnet", e: badMagnet, want: PhaseFailed},
 		{name: "nzb file path in magnet", e: nzb, want: PhaseQueued},
-		{name: "pausedUP", e: legacy(storage.EntryStatePausedUP, debridTypes.TorrentStatusDownloaded),
+		{name: "pausedUP", e: legacy(storage.EntryStatePausedUP, storage.EntryStatusDownloaded),
 			want: PhaseComplete},
-		{name: "pausedUP without library", e: legacy(storage.EntryStatePausedUP, debridTypes.TorrentStatusDownloaded),
+		{name: "pausedUP without library", e: legacy(storage.EntryStatePausedUP, storage.EntryStatusDownloaded),
 			noLib: true, want: PhaseFailed, reason: "library entry missing"},
-		{name: "queued", e: legacy(storage.EntryStateDownloading, debridTypes.TorrentStatusQueued), want: PhaseQueued},
-		{name: "status downloaded", e: legacy(storage.EntryStateDownloading, debridTypes.TorrentStatusDownloaded),
+		{name: "queued", e: legacy(storage.EntryStateDownloading, storage.EntryStatusQueued), want: PhaseQueued},
+		{name: "status downloaded", e: legacy(storage.EntryStateDownloading, storage.EntryStatusDownloaded),
 			want: PhaseActing},
 		{name: "acting without library stays", e: legacy(storage.EntryStateDownloading,
-			debridTypes.TorrentStatusDownloaded), noLib: true, want: PhaseActing},
+			storage.EntryStatusDownloaded), noLib: true, want: PhaseActing},
 		{name: "placement downloaded with link", e: placedAt(legacy(storage.EntryStateDownloading,
-			debridTypes.TorrentStatusDownloading), debridTypes.TorrentStatusDownloaded,
+			storage.EntryStatusDownloading), debridTypes.TorrentStatusDownloaded,
 			&storage.ProviderFile{Link: "https://x"}), want: PhaseActing},
 		{name: "placement downloaded without provider file", e: placedAt(legacy(storage.EntryStateDownloading,
-			debridTypes.TorrentStatusDownloading), debridTypes.TorrentStatusDownloaded, nil), want: PhaseAwaitingLinks},
+			storage.EntryStatusDownloading), debridTypes.TorrentStatusDownloaded, nil), want: PhaseAwaitingLinks},
 		{name: "placement downloaded with only deleted files", e: deletedOnly, want: PhaseAwaitingLinks},
 		{name: "placement downloading", e: placedAt(legacy(storage.EntryStateDownloading,
-			debridTypes.TorrentStatusDownloading), debridTypes.TorrentStatusDownloading, nil), want: PhaseProvider},
+			storage.EntryStatusDownloading), debridTypes.TorrentStatusDownloading, nil), want: PhaseProvider},
 		{name: "downloading without placement", e: legacy(storage.EntryStateDownloading,
-			debridTypes.TorrentStatusDownloading), want: PhaseQueued},
-		{name: "pausedDL", e: legacy(storage.EntryStatePausedDL, debridTypes.TorrentStatusDownloading),
+			storage.EntryStatusDownloading), want: PhaseQueued},
+		{name: "pausedDL", e: legacy(storage.EntryStatePausedDL, storage.EntryStatusDownloading),
 			want: PhaseFailed, reason: "unreadable legacy state pausedDL/downloading"},
 		{name: "downloading with error status", e: legacy(storage.EntryStateDownloading,
-			debridTypes.TorrentStatusError), want: PhaseFailed, reason: "unreadable legacy state downloading/error"},
+			storage.EntryStatusError), want: PhaseFailed, reason: "unreadable legacy state downloading/error"},
 	}
 }
 
@@ -157,7 +157,7 @@ func TestFromLegacy(t *testing.T) {
 func TestPrepopulatedFilesWithoutLinkAwaitLinks(t *testing.T) {
 	t.Parallel()
 	// Real-Debrid fills a file's ID before its link.
-	e := placedAt(legacy(storage.EntryStateDownloading, debridTypes.TorrentStatusDownloading),
+	e := placedAt(legacy(storage.EntryStateDownloading, storage.EntryStatusDownloading),
 		debridTypes.TorrentStatusDownloaded, &storage.ProviderFile{ID: "1", Path: "/a.mkv"})
 	if !LacksLink(e) {
 		t.Error("LacksLink = false for a file with an ID and no link")
@@ -170,7 +170,7 @@ func TestPrepopulatedFilesWithoutLinkAwaitLinks(t *testing.T) {
 func TestCompleteSeasonChildWithoutLibraryStaysComplete(t *testing.T) {
 	t.Parallel()
 	child := SeasonHash(packHash, 1)
-	e := legacy(storage.EntryStatePausedUP, debridTypes.TorrentStatusDownloaded)
+	e := legacy(storage.EntryStatePausedUP, storage.EntryStatusDownloaded)
 	e.InfoHash = child
 	if got := FromLegacy(e, SeasonIndex([]string{packHash}), false); got.Phase != PhaseComplete {
 		t.Errorf("phase %v, want complete: a season child never has a library record", got.Phase)
@@ -183,13 +183,13 @@ func TestLegacyFailuresCarryATime(t *testing.T) {
 	child := SeasonHash(packHash, 2)
 	failing := map[string]func() *storage.Entry{
 		"season error": func() *storage.Entry {
-			e := legacy(storage.EntryStateError, debridTypes.TorrentStatusError)
+			e := legacy(storage.EntryStateError, storage.EntryStatusError)
 			e.InfoHash = child
 			return e
 		},
 		"orphan":     func() *storage.Entry { return legacy("", "") },
 		"unreadable": func() *storage.Entry { return legacy(storage.EntryStatePausedDL, "") },
-		"error":      func() *storage.Entry { return legacy(storage.EntryStateError, debridTypes.TorrentStatusError) },
+		"error":      func() *storage.Entry { return legacy(storage.EntryStateError, storage.EntryStatusError) },
 	}
 	for name, mk := range failing {
 		for _, tc := range []struct {

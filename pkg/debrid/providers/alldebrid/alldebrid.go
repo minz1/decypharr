@@ -428,7 +428,7 @@ func (ad *AllDebrid) CheckStatus(ctx context.Context, torrent *types.Torrent) (*
 		return torrent, nil
 	case types.TorrentStatusError:
 		return torrent, fmt.Errorf("torrent %s has AllDebrid status code %d", torrent.Name, statusCode)
-	case types.TorrentStatusQueued:
+	case types.TorrentStatusRemoteQueued:
 	}
 	return torrent, fmt.Errorf("torrent %s has unknown AllDebrid status code %d", torrent.Name, statusCode)
 }

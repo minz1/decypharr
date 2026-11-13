@@ -201,7 +201,7 @@ func addBlockedOnOneProviderThrottledOnAnother(t *testing.T) {
 	}
 	<-torBox.signal
 	entry, err := mgr.Queue().GetTorrent(hash)
-	if err != nil || entry.Status != types.TorrentStatusQueued {
+	if err != nil || entry.Status != storage.EntryStatusQueued {
 		t.Fatalf("entry after the retry = %+v, %v; want still queued", entry, err)
 	}
 }

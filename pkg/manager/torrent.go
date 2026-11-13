@@ -562,7 +562,7 @@ func newSyncedEntry(t *types.Torrent, addedOn time.Time) *storage.Entry {
 		Magnet:           magnet.Link,
 		Providers:        make(map[string]*storage.ProviderEntry),
 		Files:            make(map[string]*storage.File),
-		Status:           t.Status,
+		Status:           storage.StatusOfPlacement(t.Status),
 		Progress:         t.Progress / percentScale,
 		Speed:            t.Speed,
 		Seeders:          t.Seeders,

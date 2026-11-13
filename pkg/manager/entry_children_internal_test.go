@@ -146,9 +146,9 @@ func TestPollSendsTheObservedPhase(t *testing.T) {
 		raw        string
 		downloaded bool
 	}{
-		{"idle", torrent(debridTypes.TorrentStatusQueued, 0, 0), debridTypes.PhaseStalled, "", false},
-		{"seeded", torrent(debridTypes.TorrentStatusQueued, 2, 0), debridTypes.PhaseRemoteQueued, "", false},
-		{"progressed", torrent(debridTypes.TorrentStatusQueued, 0, 10), debridTypes.PhaseRemoteQueued, "", false},
+		{"idle", torrent(debridTypes.TorrentStatusRemoteQueued, 0, 0), debridTypes.PhaseStalled, "", false},
+		{"seeded", torrent(debridTypes.TorrentStatusRemoteQueued, 2, 0), debridTypes.PhaseRemoteQueued, "", false},
+		{"progressed", torrent(debridTypes.TorrentStatusRemoteQueued, 0, 10), debridTypes.PhaseRemoteQueued, "", false},
 		{"downloading", torrent(debridTypes.TorrentStatusDownloading, 0, 0), debridTypes.PhaseDownloading, "", false},
 		{"downloaded", torrent(debridTypes.TorrentStatusDownloaded, 0, 100), debridTypes.PhaseDownloaded, "", true},
 		{"unknown", torrent("magnet_conversion", 1, 0), debridTypes.PhaseUnknown, "magnet_conversion", false},
