@@ -161,6 +161,26 @@ func TestPackCompletionNeedsEverySeasonTerminalNotJustOneDone(t *testing.T) {
 	})
 }
 
+func TestAFailedSeasonDoesNotFailItsPack(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	synctest.Test(t, func(t *testing.T) {
+		p := newPackTest(t, store)
+		p.startPack()
+
+		reply(p.take(grab.ChildAction, p.keys[0]), grab.Event{Kind: grab.EvActionFailed})
+		p.want(p.keys[0], grab.PhaseFailed)
+		p.want("pack", grab.PhaseActing)
+
+		p.finish(p.keys[1])
+		p.want("pack", grab.PhaseComplete)
+		p.want(p.keys[0], grab.PhaseFailed)
+		if got := p.completions(); got != 1 {
+			t.Fatalf("completion hook ran %d times, want once", got)
+		}
+	})
+}
+
 func TestPackIdleBetweenSeasonsStillCompletes(t *testing.T) {
 	t.Parallel()
 	store := newTestStore(t)

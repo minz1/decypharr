@@ -16,14 +16,15 @@ type libOpKind uint8
 const (
 	libPut libOpKind = iota
 	libDelete
-	libUpdateItem
+	libRemoveFile
 )
 
 // libraryOp is one write to a library record. A cascade delete also deletes the key's grab.
 type libraryOp struct {
 	kind    libOpKind
 	entry   *storage.Entry
-	item    *storage.EntryItem
+	file    string
+	folder  string
 	cascade bool
 }
 
@@ -34,8 +35,8 @@ func applyLibraryOp(s *storage.Storage, key string, op libraryOp) error {
 		return s.AddOrUpdate(op.entry)
 	case libDelete:
 		return s.Delete(key)
-	case libUpdateItem:
-		return s.UpdateItem(op.item)
+	case libRemoveFile:
+		return s.RemoveFile(key, op.folder, op.file)
 	}
 	return fmt.Errorf("unknown library op %d", op.kind)
 }
@@ -129,9 +130,9 @@ func (a *entryActor) library(key string, st *entryState, op *libraryOp, fx *keye
 		unlock := a.store.LockEntry(key)
 		err = a.store.Delete(key)
 		unlock()
-	case op.kind == libUpdateItem:
+	case op.kind == libRemoveFile:
 		unlock := a.store.LockEntry(key)
-		err = a.store.UpdateItem(op.item)
+		err = a.store.RemoveFile(key, op.folder, op.file)
 		unlock()
 	}
 	fx.Reply(err)

@@ -169,12 +169,45 @@ func (s *Storage) keepSharedFiles(item *EntryItem, name, deletedHash string) err
 	return nil
 }
 
-// mergeNewerFiles adds files to item, replacing a same-named file only with a newer copy.
+// mergeNewerFiles adds files to item, replacing a same-named file only with a newer copy or with its own
+// removal.
 func mergeNewerFiles(item *EntryItem, files map[string]*File) {
 	for fileName, file := range files {
-		if existing, ok := item.Files[fileName]; !ok || file.AddedOn.After(existing.AddedOn) ||
-			(file.AddedOn.Equal(existing.AddedOn) && file.Size != existing.Size) {
+		existing, ok := item.Files[fileName]
+		if !ok || file.AddedOn.After(existing.AddedOn) {
+			item.Files[fileName] = file
+			continue
+		}
+		sameAge := file.AddedOn.Equal(existing.AddedOn)
+		removed := file.Deleted && !existing.Deleted && strings.EqualFold(file.InfoHash, existing.InfoHash)
+		if sameAge && (file.Size != existing.Size || removed) {
 			item.Files[fileName] = file
 		}
 	}
+}
+
+// RemoveFile marks key's file removed in its entry and in the name index folder; a repair that re-adds the file
+// with a newer AddedOn brings it back. A file only the index still has is removed there. The caller holds key's
+// stripe.
+func (s *Storage) RemoveFile(key, folder, fileName string) error {
+	entry, err := s.Get(key)
+	if err != nil && !errors.Is(err, appendstore.ErrKeyNotFound) {
+		return fmt.Errorf("read entry %q: %w", key, err)
+	}
+	if entry != nil {
+		if file, ok := entry.Files[fileName]; ok && !file.Deleted {
+			file.Deleted = true
+			return s.AddOrUpdate(entry)
+		}
+	}
+	item, err := s.GetEntryItem(folder)
+	if err != nil {
+		return fmt.Errorf("read name index %q: %w", folder, err)
+	}
+	file, ok := item.Files[fileName]
+	if !ok || !strings.EqualFold(file.InfoHash, key) {
+		return fmt.Errorf("file %s of entry %q is not in name index %q", fileName, key, folder)
+	}
+	file.Deleted = true
+	return s.UpdateItem(item)
 }

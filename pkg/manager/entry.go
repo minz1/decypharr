@@ -378,17 +378,14 @@ func (m *Manager) RemoveTorrentFile(torrentName, filename string) error {
 	if err != nil {
 		return fmt.Errorf("file %s not found in entry %s", filename, torrentName)
 	}
-	file.Deleted = true
-	item.Files[filename] = file
-
-	// Update item in storage
-	if updateItemErr := m.writeLibrary(
+	if removeErr := m.writeLibrary(
 		m.work.Context(),
 		file.InfoHash,
-		libraryOp{kind: libUpdateItem, item: item},
-	); updateItemErr != nil {
-		return fmt.Errorf("failed to update entry %s: %w", torrentName, updateItemErr)
+		libraryOp{kind: libRemoveFile, file: filename, folder: torrentName},
+	); removeErr != nil {
+		return fmt.Errorf("failed to update entry %s: %w", torrentName, removeErr)
 	}
+	file.Deleted = true
 
 	// If the torrent has no more files, delete the entire entry
 	hasFiles := false
