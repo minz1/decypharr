@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -185,14 +186,15 @@ func (q *Queue) deleteEntryFiles(entry *storage.Entry) error {
 	if err := removeStagedNZB(entry); err != nil {
 		return err
 	}
+	// Without an absolute save path the download path resolves against the working directory.
+	if !filepath.IsAbs(entry.SavePath) {
+		return nil
+	}
 	var naming config.WebDavFolderNaming
 	if q.naming != nil {
 		naming = q.naming()
 	}
 	downloadedPath := entry.DownloadPath(naming)
-	if downloadedPath == "" {
-		return nil
-	}
 	if err := os.RemoveAll(downloadedPath); err != nil {
 		return fmt.Errorf("remove downloaded files %q: %w", downloadedPath, err)
 	}

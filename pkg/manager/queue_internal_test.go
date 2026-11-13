@@ -43,6 +43,29 @@ func TestQueueDeleteRemovesFilesWhenRequested(t *testing.T) {
 	}
 }
 
+// A record without an absolute save path names no download: deleting its files
+// once removed a directory relative to the process's working directory.
+func TestQueueDeleteKeepsARelativeDownloadPath(t *testing.T) {
+	t.Parallel()
+	queue, entry, downloadedPath := newQueueDeleteTest(t)
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel, err := filepath.Rel(wd, entry.SavePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = queue.deleteEntryFiles(
+		&storage.Entry{InfoHash: entry.InfoHash, Name: entry.Name, SavePath: rel},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(downloadedPath); err != nil {
+		t.Fatalf("a relative download path was deleted: %v", err)
+	}
+}
+
 func newQueueDeleteTest(t *testing.T) (*Queue, *storage.Entry, string) {
 	t.Helper()
 
