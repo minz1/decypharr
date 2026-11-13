@@ -130,30 +130,3 @@ func WithStall(o Observation) Observation {
 	}
 	return o
 }
-
-func ObservationOf(t *Torrent) Observation {
-	o := Observation{
-		Provider: t.Debrid,
-		ID:       t.ID,
-		Progress: t.Progress,
-		Speed:    t.Speed,
-		Seeders:  t.Seeders,
-	}
-	switch t.Status {
-	case TorrentStatusDownloaded:
-		o.Phase, o.Cached = PhaseDownloaded, CachedYes
-	case TorrentStatusError:
-		o.Phase = PhaseFailed
-	case TorrentStatusDownloading:
-		o.Phase = PhaseDownloading
-	case TorrentStatusRemoteQueued:
-		o.Phase = PhaseRemoteQueued
-	default:
-		o.Phase, o.Raw = PhaseUnknown, string(t.Status)
-	}
-	active := o.Phase == PhaseDownloading || o.Phase == PhaseDownloaded || o.Phase == PhaseFailed
-	if !active && t.Seeders == 0 && t.Progress == 0 {
-		o.Phase = PhaseStalled
-	}
-	return o
-}

@@ -24,12 +24,17 @@ type verdictAfterStopProvider struct {
 	stop context.CancelFunc
 }
 
-func (p *verdictAfterStopProvider) CheckStatus(_ context.Context, t *types.Torrent) (*types.Torrent, error) {
+func (p *verdictAfterStopProvider) Poll(
+	_ context.Context,
+	t *types.Torrent,
+	_ bool,
+) (*types.Torrent, types.Observation, error) {
 	p.stop()
-	return &types.Torrent{ID: t.ID, Name: t.Name, Status: types.TorrentStatusError}, nil
+	return &types.Torrent{ID: t.ID, Name: t.Name, Status: types.TorrentStatusError},
+		types.Observation{Phase: types.PhaseFailed}, nil
 }
 
-// (a) A stop that lands after CheckStatus returned a verdict discards the verdict: the poll reports nothing and
+// (a) A stop that lands after Poll returned a verdict discards the verdict: the poll reports nothing and
 // the provider's torrent is kept (5fbadfdd).
 func TestPollChildStopAfterStatusVerdictReportsNothing(t *testing.T) {
 	t.Parallel()

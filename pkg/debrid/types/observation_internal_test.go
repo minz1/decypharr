@@ -102,41 +102,6 @@ func TestNotCachedNeverFromATransientPhase(t *testing.T) {
 	}
 }
 
-func TestObservationOf(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name   string
-		t      Torrent
-		phase  Phase
-		raw    string
-		cached Verdict
-	}{
-		{"downloaded", Torrent{Status: TorrentStatusDownloaded}, PhaseDownloaded, "", CachedYes},
-		{"error", Torrent{Status: TorrentStatusError}, PhaseFailed, "", CachedUnknown},
-		{
-			"downloading 0/0 is not stalled",
-			Torrent{Status: TorrentStatusDownloading},
-			PhaseDownloading,
-			"",
-			CachedUnknown,
-		},
-		{"queued 0/0 is stalled", Torrent{Status: "queued"}, PhaseStalled, "", CachedUnknown},
-		{"queued with seeders", Torrent{Status: "queued", Seeders: 3}, PhaseRemoteQueued, "", CachedUnknown},
-		{"unknown raw with progress", Torrent{Status: "magnet_conversion", Progress: 0.1}, PhaseUnknown,
-			"magnet_conversion", CachedUnknown},
-		{"unknown raw 0/0 is stalled", Torrent{Status: "magnet_conversion"}, PhaseStalled, "magnet_conversion",
-			CachedUnknown},
-	}
-	for i := range cases {
-		c := &cases[i]
-		o := ObservationOf(&c.t)
-		if o.Phase != c.phase || o.Raw != c.raw || o.Cached != c.cached {
-			t.Errorf("%s: got phase %s raw %q cached %d, want %s %q %d", c.name, o.Phase, o.Raw, o.Cached,
-				c.phase, c.raw, c.cached)
-		}
-	}
-}
-
 func TestWithStallKeepsRaw(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

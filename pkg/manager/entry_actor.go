@@ -24,6 +24,8 @@ import (
 
 const entryMailboxSize = 64
 
+const maxSelects = 3
+
 // entryMsg is one message to a grab's actor: a reducer event (ev), a child's exit, or a phase retry.
 type entryMsg struct {
 	// ev goes to grab.Transition; nil for a child exit without a result and for a retry.
@@ -53,7 +55,8 @@ type entryMsg struct {
 	// arrSaw is the failure time an Arr listing rendered for a failed grab.
 	arrSaw time.Time
 	// seen is what a poll saw of the placement at its provider.
-	seen *pollSeen
+	seen   *pollSeen
+	nudged bool
 }
 
 // pollSeen is what a poll of the placement saw: what it waits on at the provider, and whether the release is dead.
@@ -77,7 +80,8 @@ type entryChildCall struct {
 	releases []placementRef
 	req      *ImportRequest
 	// settleFrom is when a lookup's wait before a listing may call the torrent absent starts.
-	settleFrom time.Time
+	settleFrom  time.Time
+	allowSelect bool
 }
 
 // entryState is one grab's actor state.
@@ -115,6 +119,7 @@ type entryState struct {
 	// submitCut says the submit deadline cancelled the running submit; the rest of the submit's clock is in the index,
 	// since an idle actor drops this state.
 	submitCut bool
+	nudges    int
 }
 
 type providerWarn struct {
@@ -286,6 +291,9 @@ func (a *entryActor) handle(
 	}
 	if m.exit {
 		m = a.childExited(key, st, m)
+	}
+	if m.exit && m.child == grab.ChildPoll && m.nudged {
+		st.nudges++
 	}
 	if m.exit && m.child == grab.ChildPoll && m.seen != nil && st.g.State.Phase == grab.PhaseProvider {
 		a.grabs.setPolled(key, *m.seen)
@@ -694,6 +702,7 @@ func (a *entryActor) leftPhase(st *entryState, to grab.Phase, fx *keyed.Effects[
 	}
 	st.retries = 0
 	st.warned = nil
+	st.nudges = 0
 	a.grabs.setPolled(st.g.State.Key, pollSeen{})
 	a.grabs.setSubmitClock(st.g.State.Key, submitClock{})
 	a.cancelDeadline(st, fx)
@@ -761,7 +770,7 @@ func (a *entryActor) start(
 	}
 	call := entryChildCall{
 		kind: e.Child, grab: g, cleanup: e.Cleanup, releases: append([]placementRef(nil), st.releases...),
-		req: st.req,
+		req: st.req, allowSelect: st.nudges < maxSelects,
 	}
 	if e.Child == grab.ChildLookup {
 		c := a.grabs.submitClockOf(key)

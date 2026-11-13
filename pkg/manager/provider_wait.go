@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/sirrobot01/decypharr/internal/customerror"
+	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 )
 
 // providerWait is what a queued entry is waiting on at its provider, kept in memory so a wait is logged when it
@@ -69,4 +70,17 @@ func (w *providerWaits) observe(infohash string, next providerWait) providerWait
 	}
 	w.byID[key] = next
 	return previous
+}
+
+func providerWaitOfPhase(phase debridTypes.Phase) providerWait {
+	switch phase {
+	case debridTypes.PhaseConverting:
+		return waitConverting
+	case debridTypes.PhaseFinalizing:
+		return waitPending
+	case debridTypes.PhaseNone, debridTypes.PhaseUnknown, debridTypes.PhaseAwaitingSelection,
+		debridTypes.PhaseRemoteQueued, debridTypes.PhaseDownloading, debridTypes.PhaseStalled,
+		debridTypes.PhaseDownloaded, debridTypes.PhaseFailed:
+	}
+	return waitNone
 }

@@ -31,6 +31,17 @@ func (c completedTorrentProvider) CheckStatus(context.Context, *types.Torrent) (
 	return c.torrent, nil
 }
 
+func (c completedTorrentProvider) Poll(
+	context.Context,
+	*types.Torrent,
+	bool,
+) (*types.Torrent, types.Observation, error) {
+	if c.torrent == nil {
+		return nil, types.Observation{}, nil
+	}
+	return c.torrent, observationOfStatus(c.torrent), nil
+}
+
 func TestShutdownResumesInterruptedSymlinks(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, runShutdownResume)

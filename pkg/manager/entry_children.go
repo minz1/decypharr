@@ -165,31 +165,51 @@ func (m *Manager) pollChild(ctx context.Context, call entryChildCall, links bool
 		return eventMsg(grab.Event{Kind: grab.EvPlacementGone, Fail: grab.FailEntry,
 			Reason: "debrid client not found: " + entry.ActiveProvider})
 	}
-	t, err := client.CheckStatus(ctx, m.statusProbe(entry, placement))
+	t, obs, err := client.Poll(ctx, m.statusProbe(entry, placement), call.allowSelect)
 	if stopped(ctx) {
 		return entryMsg{}
 	}
-	if err != nil && transientStatusError(err) {
-		m.logPendingStatus(entry, placement, err)
-		return pendingPoll(err)
+	wait := providerWaitOfPhase(obs.Phase)
+	if err != nil {
+		wait = providerWaitOf(err)
+	}
+	if wait != waitNone || (err != nil && transientStatusError(err)) {
+		m.logPendingStatus(entry, placement, wait, err)
+		return pendingPoll(wait)
 	}
 	m.queue.waits.observe(entry.InfoHash, waitNone)
-	if err != nil || t == nil || t.Status == debridTypes.TorrentStatusError {
+	switch {
+	case err != nil || t == nil:
 		return m.placementFailed(ctx, entry, placement, t, err)
-	}
-	if links {
+	case obs.Phase == debridTypes.PhaseFailed:
+		t.Status = debridTypes.TorrentStatusError
+		return m.placementFailed(ctx, entry, placement, t,
+			fmt.Errorf("torrent %s has error status: %s", t.Name, obs.Raw))
+	case debridTypes.NotCached(obs, entry.DownloadUncached):
+		return m.placementFailed(ctx, entry, placement, t,
+			fmt.Errorf("torrent %s: %w", t.Name, customerror.ErrTorrentNotCached))
+	case obs.Phase == debridTypes.PhaseAwaitingSelection && !call.allowSelect:
+		m.slotFreed(entry.ActiveProvider)
+		return eventMsg(grab.Event{Kind: grab.EvProviderObserved, Observed: debridTypes.PhaseFailed,
+			Fail: grab.FailNoEffect, Reason: "provider never accepted the file selection"})
+	case links:
+		if obs.Phase != debridTypes.PhaseDownloaded {
+			return entryMsg{}
+		}
 		return m.linksChecked(entry, placement, t)
 	}
-	if t.Status == debridTypes.TorrentStatusDownloaded && !awaitingLinks(entry, t) {
+	if obs.Phase == debridTypes.PhaseDownloaded && !awaitingLinks(entry, t) {
 		m.slotFreed(entry.ActiveProvider)
 	}
-	return polled(entry, placement, t)
+	msg := polled(entry, placement, t, obs)
+	msg.nudged = obs.Nudged
+	return msg
 }
 
 // pendingPoll is what a status check left for the next poll reports: what the provider is still doing with the
 // placement, which the grab's deadline for that wait reads. Any other transient error reports nothing.
-func pendingPoll(err error) entryMsg {
-	switch providerWaitOf(err) {
+func pendingPoll(wait providerWait) entryMsg {
+	switch wait {
 	case waitConverting:
 		return entryMsg{seen: &pollSeen{pending: grab.PendingConverting, dead: true}}
 	case waitPending:
@@ -200,8 +220,12 @@ func pendingPoll(err error) entryMsg {
 }
 
 // logPendingStatus logs a status check left for the next poll, as retryNextPass does.
-func (m *Manager) logPendingStatus(entry *storage.Entry, placement *storage.ProviderEntry, err error) {
-	wait := providerWaitOf(err)
+func (m *Manager) logPendingStatus(
+	entry *storage.Entry,
+	placement *storage.ProviderEntry,
+	wait providerWait,
+	err error,
+) {
 	if wait == waitNone {
 		m.logger.Warn().Err(err).Str("name", entry.Name).Msg("Status check failed; retrying on the next poll")
 		return
@@ -257,8 +281,12 @@ func (m *Manager) placementFailed(
 }
 
 // polled is the observation a status check of a placement makes; it carries the placement's progress.
-func polled(entry *storage.Entry, placement *storage.ProviderEntry, t *debridTypes.Torrent) entryMsg {
-	obs := debridTypes.ObservationOf(t)
+func polled(
+	entry *storage.Entry,
+	placement *storage.ProviderEntry,
+	t *debridTypes.Torrent,
+	obs debridTypes.Observation,
+) entryMsg {
 	downloaded := obs.Phase == debridTypes.PhaseDownloaded
 	msg := eventMsg(grab.Event{
 		Kind: grab.EvProviderObserved, Observed: obs.Phase, Raw: obs.Raw, Downloaded: downloaded,

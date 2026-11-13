@@ -83,6 +83,8 @@ type failingStatusProvider struct {
 
 	err     error
 	status  types.TorrentStatus
+	phase   types.Phase
+	cached  types.Verdict
 	deleted atomic.Int64
 }
 
@@ -91,6 +93,21 @@ func (f *failingStatusProvider) CheckStatus(_ context.Context, torrent *types.To
 		torrent.Status = f.status
 	}
 	return torrent, f.err
+}
+
+func (f *failingStatusProvider) Poll(
+	_ context.Context,
+	torrent *types.Torrent,
+	_ bool,
+) (*types.Torrent, types.Observation, error) {
+	if f.status != "" {
+		torrent.Status = f.status
+	}
+	obs := types.Observation{Phase: f.phase, Cached: f.cached}
+	if f.status == types.TorrentStatusError {
+		obs.Phase = types.PhaseFailed
+	}
+	return torrent, obs, f.err
 }
 
 func (f *failingStatusProvider) DeleteTorrent(context.Context, string) error {

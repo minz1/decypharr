@@ -60,16 +60,19 @@ func queuedEntryAddedAt(
 func TestAPollOfAPendingProviderReportsWhatItWaitsOn(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		err  error
-		want *pollSeen
+		phase types.Phase
+		err   error
+		want  *pollSeen
 	}{
-		"pending":    {customerror.ErrProviderStatusTimeout, &pollSeen{pending: grab.PendingProvider}},
-		"converting": {notConverted(), &pollSeen{pending: grab.PendingConverting, dead: true}},
-		"other":      {syscall.ECONNRESET, nil},
+		"finalizing":  {phase: types.PhaseFinalizing, want: &pollSeen{pending: grab.PendingProvider}},
+		"converting":  {phase: types.PhaseConverting, want: &pollSeen{pending: grab.PendingConverting, dead: true}},
+		"timed out":   {err: customerror.ErrProviderStatusTimeout, want: &pollSeen{pending: grab.PendingProvider}},
+		"not convert": {err: notConverted(), want: &pollSeen{pending: grab.PendingConverting, dead: true}},
+		"other":       {err: syscall.ECONNRESET},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			provider := &failingStatusProvider{err: tc.err}
+			provider := &failingStatusProvider{err: tc.err, phase: tc.phase}
 			m, entry := queuedEntryAddedAt(t, provider, time.Now().Add(-100*time.Hour), time.Time{})
 
 			msg := poll(t.Context(), m, entry)
@@ -167,7 +170,7 @@ func warnLines(logs *bytes.Buffer) int {
 // one converting magnet logged a WARN per pass, 214 an hour.
 func TestAProviderWaitIsLoggedOncePerChange(t *testing.T) {
 	t.Parallel()
-	provider := &failingStatusProvider{err: notConverted()}
+	provider := &failingStatusProvider{phase: types.PhaseConverting}
 	m, entry := queuedEntryAddedAt(t, provider, time.Now().Add(-time.Hour), time.Time{})
 	var logs bytes.Buffer
 	m.logger = zerolog.New(&logs)
@@ -182,7 +185,7 @@ func TestAProviderWaitIsLoggedOncePerChange(t *testing.T) {
 		t.Fatalf("the wait's WARN carries no age:\n%s", logs.String())
 	}
 
-	provider.err = customerror.ErrProviderStatusTimeout // converted, now waiting on something else
+	provider.phase = types.PhaseFinalizing
 	poll(t.Context(), m, entry)
 	poll(t.Context(), m, entry)
 	if got := warnLines(&logs); got != 2 {
@@ -200,10 +203,14 @@ type pendingStatusProvider struct {
 	deleted  atomic.Int64
 }
 
-func (p *pendingStatusProvider) CheckStatus(ctx context.Context, t *types.Torrent) (*types.Torrent, error) {
+func (p *pendingStatusProvider) Poll(
+	ctx context.Context,
+	t *types.Torrent,
+	_ bool,
+) (*types.Torrent, types.Observation, error) {
 	close(p.checking)
 	<-ctx.Done()
-	return t, errors.Join(p.wait, ctx.Err())
+	return t, types.Observation{}, errors.Join(p.wait, ctx.Err())
 }
 
 func (p *pendingStatusProvider) DeleteTorrent(context.Context, string) error {

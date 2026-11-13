@@ -101,7 +101,7 @@ func TestPolledUpdateKeepsTheFirstDownloadedAt(t *testing.T) {
 	unlinked := map[string]debridTypes.File{"a.mkv": {Name: "a.mkv"}}
 	t1 := &debridTypes.Torrent{ID: "1", Debrid: "rd", Status: debridTypes.TorrentStatusDownloaded, Progress: 100,
 		Files: unlinked}
-	m := polled(entry, entry.Providers["rd"], t1)
+	m := polled(entry, entry.Providers["rd"], t1, observationOfStatus(t1))
 	if m.ev == nil || !m.ev.Downloaded || m.ev.AllLinked {
 		t.Fatalf("event = %+v, want downloaded and awaiting links", m.ev)
 	}
@@ -157,7 +157,7 @@ func TestPollSendsTheObservedPhase(t *testing.T) {
 		c := &cases[i]
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			msg := polled(entry, entry.Providers["rd"], c.t)
+			msg := polled(entry, entry.Providers["rd"], c.t, observationOfStatus(c.t))
 			ev := msg.ev
 			if ev == nil || ev.Kind != grab.EvProviderObserved || ev.Observed != c.want || ev.Raw != c.raw ||
 				ev.Downloaded != c.downloaded || !ev.AllLinked {
@@ -168,4 +168,21 @@ func TestPollSendsTheObservedPhase(t *testing.T) {
 			}
 		})
 	}
+}
+
+func observationOfStatus(t *debridTypes.Torrent) debridTypes.Observation {
+	o := debridTypes.Observation{Provider: t.Debrid, ID: t.ID, Progress: t.Progress, Speed: t.Speed, Seeders: t.Seeders}
+	switch t.Status {
+	case debridTypes.TorrentStatusDownloaded:
+		o.Phase = debridTypes.PhaseDownloaded
+	case debridTypes.TorrentStatusError:
+		o.Phase = debridTypes.PhaseFailed
+	case debridTypes.TorrentStatusDownloading:
+		o.Phase = debridTypes.PhaseDownloading
+	case debridTypes.TorrentStatusRemoteQueued:
+		o.Phase, o.Stallable = debridTypes.PhaseRemoteQueued, true
+	default:
+		o.Phase, o.Raw = debridTypes.PhaseUnknown, string(t.Status)
+	}
+	return debridTypes.WithStall(o)
 }
