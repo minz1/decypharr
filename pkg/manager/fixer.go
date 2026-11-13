@@ -262,7 +262,7 @@ func (f *Fixer) MoveTorrent(entry *storage.Entry, debridName string, reinsert bo
 	// before re-submitting the magnet. Skipped when reinsert=true — e.g. the
 	// current active provider just failed and its placement is presumed stale.
 	if !reinsert && canActivateExisting(entry, debridName) {
-		return RepairResult{Outcome: repairHealed, Provider: debridName, SeenID: seenID}, nil
+		return RepairResult{Provider: debridName, SeenID: seenID}, nil
 	}
 
 	// Only replace the old torrent on the same provider. Other placements stay valid.
@@ -275,7 +275,7 @@ func (f *Fixer) MoveTorrent(entry *storage.Entry, debridName string, reinsert bo
 	if err != nil {
 		return RepairResult{}, err
 	}
-	result := RepairResult{Outcome: repairHealed, Provider: debridName, Placement: newDebridTorrent, SeenID: seenID}
+	result := RepairResult{Provider: debridName, Placement: newDebridTorrent, SeenID: seenID}
 
 	// Delete the old torrent from the provider if it has a different ID, unless another entry (the other seasons
 	// of a pack) still lists it.

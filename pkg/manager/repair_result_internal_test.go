@@ -94,20 +94,6 @@ func applyRepairCases(stamp time.Time) map[string]applyRepairCase {
 			result:  RepairResult{Provider: "remaining", SeenID: "kept"},
 			wantErr: errActivateFailed,
 		},
-		"bad sets the mark": {
-			fresh:  func() *storage.Entry { e := resultEntry(); e.Bad = false; return e },
-			result: RepairResult{Outcome: repairBad},
-			check: func(t *testing.T, out *storage.Entry) {
-				if !out.Bad {
-					t.Fatal("the mark was not set")
-				}
-			},
-		},
-		"bad on a bad entry changes nothing": {
-			fresh:   resultEntry,
-			result:  RepairResult{Outcome: repairBad},
-			wantErr: storage.ErrNoChange,
-		},
 		"a missing entry changes nothing": {
 			fresh:   func() *storage.Entry { return nil },
 			result:  RepairResult{Provider: "remaining", Placement: resultPlacement(types.TorrentStatusDownloaded)},

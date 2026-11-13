@@ -10,16 +10,8 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
-type repairOutcome uint8
-
-const (
-	repairHealed repairOutcome = iota
-	repairBad
-)
-
 // RepairResult is what a repair decided, applied by one merge onto a fresh read of the entry.
 type RepairResult struct {
-	Outcome  repairOutcome
 	Provider string
 	// Placement is the fresh submit the repair made active; nil when an existing placement was activated.
 	Placement *types.Torrent
@@ -40,9 +32,6 @@ var (
 func applyRepair(fresh *storage.Entry, r RepairResult, now time.Time) (*storage.Entry, error) {
 	if fresh == nil {
 		return nil, storage.ErrNoChange
-	}
-	if r.Outcome == repairBad {
-		return withBad(fresh, true, now)
 	}
 	out := fresh.Clone()
 	if r.Placement != nil {
