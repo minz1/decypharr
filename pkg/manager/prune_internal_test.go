@@ -65,6 +65,7 @@ func newPruneHarness(t *testing.T, mode config.PruneMode) *pruneHarness {
 		placementsSvc: &service{group: testGroup(t)},
 		clients:       xsync.NewMap[string, debrid.Client](),
 		storage:       store,
+		grabs:         &grabIndex{},
 		queue:         newQueue(store, "", nil, zerolog.Nop()),
 		store:         cfg,
 		logger:        zerolog.New(h.logs),

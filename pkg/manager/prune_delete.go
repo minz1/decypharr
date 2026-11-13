@@ -113,7 +113,9 @@ func (m *Manager) pruneOne(ctx context.Context, c PruneCandidate) (pruneOutcome,
 		log.Warn().Err(err).Msg("prune: provider removal failed, keeping entry")
 		return pruneFailed, 0
 	}
-	if err = m.storage.Delete(e.InfoHash); errors.Is(err, appendstore.ErrKeyNotFound) {
+	if err = m.pruneDelete(e.InfoHash); errors.Is(err, errPruneGrabbed) {
+		return pruneSkipped, 0
+	} else if errors.Is(err, appendstore.ErrKeyNotFound) {
 		m.clearPruneKey(c.InfoHash)
 		return pruneSkipped, 0
 	} else if err != nil {

@@ -37,5 +37,8 @@ func withTestConfig(t *testing.T, m *Manager) *Manager {
 	if m.arr == nil {
 		m.arr = arr.New(m.store, nil, zerolog.Nop())
 	}
+	if m.grabs == nil {
+		m.grabs = &grabIndex{}
+	}
 	return m
 }

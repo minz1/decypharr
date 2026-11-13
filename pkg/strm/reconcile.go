@@ -29,6 +29,7 @@ type Reconciler struct {
 	storage    *storage.Storage
 	group      *task.Group
 	openStream func(context.Context, *storage.Entry, string) (io.ReadCloser, error)
+	write      func(*storage.Entry) error
 	logger     zerolog.Logger
 	sweepMu    sync.Mutex
 }
@@ -41,9 +42,10 @@ func NewReconciler(
 	cfg *config.Store,
 	store *storage.Storage,
 	openStream func(context.Context, *storage.Entry, string) (io.ReadCloser, error),
+	write func(*storage.Entry) error,
 	logger zerolog.Logger,
 ) *Reconciler {
-	return &Reconciler{group: g, config: cfg, storage: store, openStream: openStream,
+	return &Reconciler{group: g, config: cfg, storage: store, openStream: openStream, write: write,
 		logger: logger.With().Str("component", "strm").Logger()}
 }
 
@@ -142,7 +144,7 @@ func (s *Reconciler) syncEntry(ctx context.Context, entry *storage.Entry, rep *R
 	// AddOrUpdate assigns and persists them.
 	for _, f := range entry.Files {
 		if f.ID == "" {
-			if err := s.storage.AddOrUpdate(entry); err != nil {
+			if err := s.write(entry); err != nil {
 				rep.addError(fmt.Errorf("assign file ids for %s: %w", entry.Name, err))
 				return nil
 			}

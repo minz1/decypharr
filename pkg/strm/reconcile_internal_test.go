@@ -38,7 +38,7 @@ func newTestReconcilerOn(t *testing.T, g *task.Group) *Reconciler {
 	}
 	t.Cleanup(func() { _ = strg.Close() })
 
-	m := NewReconciler(g, config.NewStore(loaded), strg, nil, zerolog.Nop())
+	m := NewReconciler(g, config.NewStore(loaded), strg, nil, strg.AddOrUpdate, zerolog.Nop())
 
 	cfg := m.config.Get()
 	cfg.AppURL = "http://media.local:8282"

@@ -44,6 +44,8 @@ type entryMsg struct {
 	exitErr error
 	// retry restarts child, if the grab is still in the phase that runs it.
 	retry bool
+	// lib is a write to the key's library record, applied by the actor while the key has a grab.
+	lib *libraryOp
 }
 
 func eventMsg(ev grab.Event) entryMsg { return entryMsg{ev: &ev} }
@@ -165,6 +167,10 @@ func (a *entryActor) Handle(
 ) {
 	if st.loadErr != nil {
 		fx.Reply(fmt.Errorf("grab %s unreadable: %w", key, st.loadErr))
+		return
+	}
+	if m.lib != nil {
+		a.library(key, st, m.lib, fx)
 		return
 	}
 	if m.exit {

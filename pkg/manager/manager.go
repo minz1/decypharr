@@ -385,6 +385,7 @@ func (m *Manager) init() error {
 		func(ctx context.Context, entry *storage.Entry, filename string) (io.ReadCloser, error) {
 			return m.OpenStreamUntracked(ctx, entry, filename, 0)
 		},
+		m.putLibrary,
 		m.logger,
 	)
 
@@ -463,7 +464,7 @@ func (m *Manager) initArrServices() {
 	m.arrIndexer = reacquire.NewIndexer(
 		m.indexerSvc.group,
 		m.arr,
-		managedArrCatalog{storage: m.storage, logger: m.logger, naming: m.folderNaming},
+		managedArrCatalog{storage: m.storage, write: m.putLibrary, logger: m.logger, naming: m.folderNaming},
 		service,
 		filepath.Join(m.config.Mount.MountPath, EntryAllFolder),
 		m.logs.New("arr-indexer"),
@@ -721,7 +722,7 @@ func (m *Manager) GetEntryByName(torrentName, filename string) (*storage.Entry, 
 
 func (m *Manager) AddOrUpdate(entry *storage.Entry, callback func(t *storage.Entry)) error {
 	entry.UpdatedAt = time.Now()
-	if err := m.storage.AddOrUpdate(entry); err != nil {
+	if err := m.writeLibrary(m.work.Context(), entry.InfoHash, libraryOp{kind: libPut, entry: entry}); err != nil {
 		return err
 	}
 	// Keep .strm files derived state: any post-completion update (repair,
@@ -771,7 +772,8 @@ func (m *Manager) DeleteEntry(infohash string, removePlacements bool) error {
 	}
 	// The record goes first: a failed delete leaves the entry, and its provider torrent must stay with it. Once it
 	// is gone the entry no longer counts among the torrent's holders.
-	if deleteErr := m.storage.Delete(infohash); deleteErr != nil {
+	op := libraryOp{kind: libDelete, cascade: true}
+	if deleteErr := m.writeLibrary(m.work.Context(), infohash, op); deleteErr != nil {
 		return deleteErr
 	}
 	if removePlacements {

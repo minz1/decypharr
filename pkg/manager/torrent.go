@@ -130,7 +130,7 @@ func (m *Manager) doRefreshTorrents(ctx context.Context, provider string, debrid
 	var updateWg sync.WaitGroup
 	if len(torrentsToUpdate) > 0 {
 		updateWg.Go(func() {
-			if batchAddOrUpdateErr := m.storage.BatchAddOrUpdate(torrentsToUpdate); batchAddOrUpdateErr != nil {
+			if batchAddOrUpdateErr := m.batchWriteLibrary(ctx, torrentsToUpdate); batchAddOrUpdateErr != nil {
 				m.logger.Error().Err(batchAddOrUpdateErr).Msg("Failed to batch update remote")
 			}
 		})
@@ -337,7 +337,7 @@ func (m *Manager) handleTorrentDeletions(provider string, torrentsToDelete []*st
 					mu.Unlock()
 					continue
 				}
-				if err := m.storage.Delete(entry.InfoHash); err != nil {
+				if err := m.dropLibraryEntry(m.work.Context(), entry.InfoHash); err != nil {
 					m.logger.Error().Err(err).Str("infohash", entry.InfoHash).Msg("Failed to delete torrent")
 				}
 			}
@@ -431,7 +431,7 @@ func (m *Manager) runBatchWriter(batchChan <-chan *storage.Entry, errChan chan<-
 		if len(batch) == 0 || writeErr != nil {
 			return
 		}
-		if err := m.storage.BatchAddOrUpdate(batch); err != nil {
+		if err := m.batchWriteLibrary(m.work.Context(), batch); err != nil {
 			m.logger.Error().Err(err).Msg("Failed to batch write remote")
 			writeErr = err
 			// Send first error to channel (non-blocking)
@@ -609,7 +609,11 @@ func (m *Manager) refreshTorrent(ctx context.Context, infohash string) (*storage
 	if err != nil {
 		return nil, err
 	}
-	if addOrUpdateErr := m.storage.AddOrUpdate(entry); addOrUpdateErr != nil {
+	if addOrUpdateErr := m.writeLibrary(
+		ctx,
+		entry.InfoHash,
+		libraryOp{kind: libPut, entry: entry},
+	); addOrUpdateErr != nil {
 		return nil, addOrUpdateErr
 	}
 	return entry, nil

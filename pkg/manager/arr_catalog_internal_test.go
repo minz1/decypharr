@@ -39,7 +39,7 @@ func TestListManagedFilesIgnoresEntryCategory(t *testing.T) {
 		}
 	}
 
-	catalog := managedArrCatalog{storage: store, logger: zerolog.Nop()}
+	catalog := managedArrCatalog{storage: store, write: store.AddOrUpdate, logger: zerolog.Nop()}
 	files, err := catalog.ListManagedFiles(t.Context(), "")
 	if err != nil {
 		t.Fatal(err)

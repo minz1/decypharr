@@ -48,6 +48,7 @@ func TestRefreshTorrentIncompleteReturnsStoredEntry(t *testing.T) {
 		&Manager{
 			work:    testGroup(t),
 			storage: store,
+			grabs:   &grabIndex{},
 			clients: xsync.NewMap[string, debrid.Client](),
 			logger:  zerolog.Nop(),
 		},

@@ -17,6 +17,7 @@ const managedCatalogBatch = 256
 
 type managedArrCatalog struct {
 	storage *storage.Storage
+	write   func(*storage.Entry) error
 	logger  zerolog.Logger
 	naming  func() config.WebDavFolderNaming
 }
@@ -116,7 +117,7 @@ func (c managedArrCatalog) listEntryFiles(entryID string) ([]reacquire.ManagedFi
 
 func (c managedArrCatalog) entryFiles(entry *storage.Entry, skips *catalogSkips) ([]reacquire.ManagedFile, error) {
 	if needsFileIDs(entry) {
-		if err := c.storage.AddOrUpdate(entry); err != nil {
+		if err := c.write(entry); err != nil {
 			return nil, err
 		}
 	}

@@ -74,7 +74,11 @@ func (m *Manager) applyNZBSizesToEntry(nzb *storage.NZB, total int64) {
 	}
 	// Add usenet placement to update it
 	_ = entry.AddUsenetProvider(nzb)
-	if addErr := m.storage.AddOrUpdate(entry); addErr != nil {
+	if addErr := m.writeLibrary(
+		m.work.Context(),
+		entry.InfoHash,
+		libraryOp{kind: libPut, entry: entry},
+	); addErr != nil {
 		m.logger.Warn().
 			Err(addErr).
 			Str("nzb_id", nzb.ID).

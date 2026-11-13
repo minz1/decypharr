@@ -382,7 +382,11 @@ func (m *Manager) RemoveTorrentFile(torrentName, filename string) error {
 	item.Files[filename] = file
 
 	// Update item in storage
-	if updateItemErr := m.storage.UpdateItem(item); updateItemErr != nil {
+	if updateItemErr := m.writeLibrary(
+		m.work.Context(),
+		file.InfoHash,
+		libraryOp{kind: libUpdateItem, item: item},
+	); updateItemErr != nil {
 		return fmt.Errorf("failed to update entry %s: %w", torrentName, updateItemErr)
 	}
 
