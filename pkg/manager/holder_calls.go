@@ -161,7 +161,7 @@ func (m *Manager) holderRecount(provider, id string, call holderCall, holds []st
 	if err != nil {
 		return holderRecount{}, err
 	}
-	queued, err := m.storage.FilterQueued(func(e *storage.Entry) bool { return lists(e) && !own(e) })
+	queued, err := m.storage.FilterQueued(func(e *storage.Entry) bool { return lists(e) && (call.library || !own(e)) })
 	rc.held = len(queued) > 0
 	return rc, err
 }

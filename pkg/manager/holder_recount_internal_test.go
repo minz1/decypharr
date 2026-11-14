@@ -23,6 +23,27 @@ func TestARecountCountsASameKeyLibraryRecordAsAHolder(t *testing.T) {
 	}
 }
 
+func TestALibraryReleaseCountsASameKeyGrabAsAHolder(t *testing.T) {
+	t.Parallel()
+	h := newPruneHarness(t, config.PruneModeDelete)
+	e := &storage.Entry{
+		InfoHash: "self", Name: "self", State: storage.EntryStateDownloading,
+		Providers: map[string]*storage.ProviderEntry{"torbox": {Provider: "torbox", ID: "dup"}},
+	}
+	if err := h.m.queue.Add(e); err != nil {
+		t.Fatal(err)
+	}
+
+	rc, err := h.m.holderRecount("torbox", "dup", holderCall{releasing: "self", library: true}, nil)
+	if err != nil || !rc.held {
+		t.Fatalf("recount = %+v, %v; want a live grab of the pruned key to keep the torrent", rc, err)
+	}
+	rc, err = h.m.holderRecount("torbox", "dup", holderCall{releasing: "self"}, nil)
+	if err != nil || rc.held {
+		t.Fatalf("recount = %+v, %v; want a grab's own release not to count its record", rc, err)
+	}
+}
+
 func TestARecountDropsHoldsWithNoRecordOrAnotherTorrent(t *testing.T) {
 	t.Parallel()
 	h := newPruneHarness(t, config.PruneModeDelete)
