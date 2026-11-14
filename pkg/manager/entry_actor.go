@@ -264,6 +264,9 @@ func (a *entryActor) Handle(
 	fx *keyed.Effects[string, entryMsg],
 ) {
 	if st.loadErr != nil {
+		if m.ev != nil && m.ev.Kind == grab.EvAdmitted {
+			a.admit.Release(key)
+		}
 		fx.Reply(fmt.Errorf("grab %s unreadable: %w", key, st.loadErr))
 		return
 	}

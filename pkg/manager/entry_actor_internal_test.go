@@ -559,6 +559,27 @@ func TestStoreReadErrorRefusesCommands(t *testing.T) {
 	})
 }
 
+func TestAdmittedToAnUnreadableGrabReleasesTheSlot(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	synctest.Test(t, func(t *testing.T) {
+		h := newActorHarness(t, store)
+		seedPhase(t, store, "a", grab.PhaseQueued)
+		if err := store.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		h.a.admit.Request("a")
+		synctest.Wait()
+		h.a.admit.mu.Lock()
+		held := h.a.admit.holding["a"]
+		h.a.admit.mu.Unlock()
+		if held {
+			t.Fatal("an unreadable grab still holds its slot")
+		}
+	})
+}
+
 func TestRetryAfterDeleteStartsNothing(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
