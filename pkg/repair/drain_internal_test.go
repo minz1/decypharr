@@ -429,6 +429,41 @@ func TestCappedNewFailureInADrainingBucketStaysBroken(t *testing.T) {
 	}
 }
 
+func TestAdmitAfterAHeldTrippedSweepWaitsForReleaseAfter(t *testing.T) {
+	t.Parallel()
+	f := newOutageFixture(t, 100, config.RepairConfig{})
+	f.downRange(0, 80)
+	f.sweep(t.Context(), nil)
+	f.sweep(t.Context(), nil)
+	f.sweep(t.Context(), nil)
+	if status := f.service.BreakerStatus(); len(status) != 1 || status[0].State != string(breakerTripped) {
+		t.Fatalf("setup: %+v (held %d), want tripped on the held rows", status, f.countStatus(t, storage.HealthHeld))
+	}
+	b := f.service.breaker
+	passingCanary := func() {
+		b.mu.Lock()
+		b.verdicts[rdHoster()] = canaryVerdict{outcome: canaryPass, at: f.clock.Now()}
+		b.mu.Unlock()
+	}
+
+	f.clock.Advance(59 * time.Minute)
+	passingCanary()
+	if got := b.windowCount(rdHoster()); got >= b.settings().MinConfirmed {
+		t.Fatalf("window = %d, want the held rows out of it", got)
+	}
+	err := f.service.Admit(t.Context(), HealRequest{Provider: "rd", Class: ClassHosterLink, Subject: "other"})
+	if !errors.Is(err, ErrHealHeld) {
+		t.Fatalf("admit inside ReleaseAfter: %v, want held", err)
+	}
+
+	f.clock.Advance(2 * time.Minute)
+	passingCanary()
+	err = f.service.Admit(t.Context(), HealRequest{Provider: "rd", Class: ClassHosterLink, Subject: "other2"})
+	if err != nil && !errors.Is(err, ErrHealCapped) {
+		t.Fatalf("admit past ReleaseAfter: %v, want the bucket released", err)
+	}
+}
+
 // SM12-34: a held-row scan that fails says nothing about the held rows, so a release outside a sweep must not close
 // the bucket on it.
 func TestHeldRowScanErrorKeepsTheBucketReleasing(t *testing.T) {
