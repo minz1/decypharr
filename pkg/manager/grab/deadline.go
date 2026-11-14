@@ -1,6 +1,7 @@
 package grab
 
 import (
+	"cmp"
 	"fmt"
 	"time"
 )
@@ -69,13 +70,14 @@ func NextDeadline(st State, v DeadlineView) (Event, time.Time, bool) {
 	case PhaseProvider:
 		return providerDeadline(st, v)
 	case PhaseAwaitingLinks:
-		if v.DownloadedAt.IsZero() {
+		base := cmp.Or(v.DownloadedAt, st.PhaseSince)
+		if base.IsZero() {
 			return Event{}, time.Time{}, false
 		}
 		return Event{
 			Kind: EvLinkWaitExpired, Fail: FailBadRelease,
 			Reason: fmt.Sprintf("provider gave no file links %s after the download finished", LinksLimit),
-		}, v.DownloadedAt.Add(LinksLimit), true
+		}, base.Add(LinksLimit), true
 	case PhaseFailed:
 		return retentionDeadline(st, v)
 	case PhaseSubmitting:
