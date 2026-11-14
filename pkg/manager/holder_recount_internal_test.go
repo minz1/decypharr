@@ -27,13 +27,15 @@ func TestARecountCountsASameKeyLibraryRecordAsAHolder(t *testing.T) {
 func TestALibraryReleaseCountsASameKeyGrabAsAHolder(t *testing.T) {
 	t.Parallel()
 	h := newPruneHarness(t, config.PruneModeDelete)
-	queued := func(phase grab.Phase) {
+	queued := func(phases ...grab.Phase) {
 		e := &storage.Entry{
 			InfoHash: "self", Name: "self", State: storage.EntryStateDownloading, ActiveProvider: "torbox",
 			Providers: map[string]*storage.ProviderEntry{"torbox": {Provider: "torbox", ID: "dup"}},
 		}
-		if err := grab.Encode(grab.Grab{State: grab.State{Key: "self", Phase: phase}, Entry: e}); err != nil {
-			t.Fatal(err)
+		for _, phase := range phases {
+			if err := grab.Encode(grab.Grab{State: grab.State{Key: "self", Phase: phase}, Entry: e}); err != nil {
+				t.Fatal(err)
+			}
 		}
 		if err := h.m.queue.Add(e); err != nil {
 			t.Fatal(err)
@@ -51,7 +53,7 @@ func TestALibraryReleaseCountsASameKeyGrabAsAHolder(t *testing.T) {
 	}
 
 	for _, phase := range []grab.Phase{grab.PhaseDeleting, grab.PhaseComplete} {
-		queued(phase)
+		queued(grab.PhaseActing, phase)
 		rc, err = h.m.holderRecount("torbox", "dup", holderCall{releasing: "self", library: true}, nil)
 		if err != nil || rc.held {
 			t.Fatalf("recount = %+v, %v; want a %v grab of the pruned key not to keep the torrent", rc, err, phase)
