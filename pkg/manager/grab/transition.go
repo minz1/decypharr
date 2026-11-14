@@ -96,7 +96,7 @@ func absent(st State, ev Event) (State, []Effect, error) {
 // deleting ignores every event it does not name: late child results arrive after a Delete.
 func deleting(st State, ev Event) (State, []Effect, error) {
 	switch {
-	case ev.Kind.is(EvSubmit):
+	case ev.Kind.is(EvSubmit, EvAdmitted):
 		return refuse(st, ev, reasonBusy)
 	case ev.Kind.is(EvSubmitResult, EvParseResult, EvLookup):
 		if ev.Outcome == OutcomePlacement || ev.Outcome == OutcomeFound {

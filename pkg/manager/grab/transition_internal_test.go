@@ -201,6 +201,7 @@ func TestTransitionRows(t *testing.T) {
 			[]string{"persist", "cancel_children", "start:cleanup"}, false},
 		{"retention not failed", in(PhaseComplete), ev(EvFailedRetention), PhaseComplete, nil, true},
 		{"deleting submit", in(PhaseDeleting), ev(EvSubmit), PhaseDeleting, nil, true},
+		{"deleting admitted", in(PhaseDeleting), ev(EvAdmitted), PhaseDeleting, nil, true},
 		{"deleting late placement", in(PhaseDeleting), placed(EvSubmitResult, OutcomePlacement, false, false),
 			PhaseDeleting, []string{"release"}, false},
 		{"deleting late found", in(PhaseDeleting), withOutcome(EvLookup, OutcomeFound), PhaseDeleting,

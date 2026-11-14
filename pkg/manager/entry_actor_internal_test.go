@@ -502,6 +502,19 @@ func TestRefusedAdmittedReleasesTheSlot(t *testing.T) {
 	})
 }
 
+func TestAdmittedWhileDeletingReleasesTheSlot(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	synctest.Test(t, func(t *testing.T) {
+		h := newActorHarness(t, store)
+		seedPhase(t, store, "a", grab.PhaseDeleting)
+		h.a.admit.Request("a")
+		synctest.Wait()
+
+		h.submitting("b")
+	})
+}
+
 func TestDocumentLoadErrorUsesTheDerivedState(t *testing.T) {
 	t.Parallel()
 	store := newTestStore(t)
