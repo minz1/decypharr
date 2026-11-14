@@ -13,6 +13,23 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/mount/dfs/vfs/ranges"
 )
 
+// TestBenchItemSurvivesItsIdleTimeout reproduces a flake seen under a loaded
+// host: a hot-path test outlived the 30s idle timeout, the kicker tore the
+// session down and untracked its stream through the rig's backend.
+func TestBenchItemSurvivesItsIdleTimeout(t *testing.T) {
+	t.Parallel()
+	_, dls := newBenchItem(t, 1<<20)
+	dls.ensureStreamTracked()
+	dls.lastActivity.Store(time.Now().Add(-2 * idleTimeout).UnixNano())
+
+	if !dls.checkIdleTimeout() {
+		t.Fatal("idle timeout not reached")
+	}
+	if dls.streamTracked.Load() {
+		t.Fatal("stream still tracked after the idle teardown")
+	}
+}
+
 // TestMetadataFlushDebounce hammers markMetadataDirty the way the download
 // path does (per ~32KB write) and asserts the signal path no longer rewrites
 // the JSON per signal: distinct on-disk versions stay bounded by the debounce,
@@ -233,7 +250,7 @@ func TestDownloadWithPriorityReportsHit(t *testing.T) {
 
 	// A fake downloader whose window covers every offset the test touches:
 	// the cached fast path extends by readahead and would otherwise spawn a
-	// real downloader (nil manager) for the uncovered tail.
+	// real downloader (empty backend) for the uncovered tail.
 	fakeCtx, fakeCancel := context.WithCancel(context.Background())
 	defer fakeCancel()
 	dls.mu.Lock()

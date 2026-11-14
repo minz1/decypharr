@@ -355,7 +355,7 @@ func TestWaiterTickerRescue(t *testing.T) {
 	dls.waiterCount.Add(1)
 	dls.recomputeMinWaiterEndLocked()
 	// A fake in-range downloader so the ticker's kickWaiters doesn't spawn a
-	// real one against the nil manager.
+	// real one against the empty backend.
 	fakeCtx, fakeCancel := context.WithCancel(context.Background())
 	defer fakeCancel()
 	dls.dls = append(dls.dls, &downloader{

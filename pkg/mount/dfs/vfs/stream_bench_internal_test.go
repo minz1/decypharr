@@ -19,7 +19,7 @@ import (
 
 // newBenchItem builds a CacheItem wired the way newItem does, but without a
 // Cache/Manager behind it: the buffer is real, the metadata writer loop is
-// real, and the Downloaders coordinator is real but pre-tracked and never
+// real, and the Downloaders coordinator is real, backed by an empty origin, and never
 // asked to download (callers pre-fill the item or write directly).
 func newBenchItem(tb testing.TB, fileSize int64) (*CacheItem, *Downloaders) {
 	return newBenchItemWindow(tb, fileSize, fileSize+(1<<20))
@@ -61,27 +61,13 @@ func newBenchItemWindow(tb testing.TB, fileSize, window int64) (*CacheItem, *Dow
 		logger:      log.Rate("bench"),
 	}
 
-	dls := NewDownloaders(group, nil, item, &fuseconfig.FuseConfig{})
-	// Pre-mark the stream as tracked so the read path never dereferences the
-	// nil manager.
-	dls.mu.Lock()
-	dls.streamID = "bench"
-	dls.streamTracked.Store(true)
-	dls.mu.Unlock()
+	dls := NewDownloaders(group, &bytesBackend{}, item, &fuseconfig.FuseConfig{})
 	item.downloaders.Store(dls)
 
 	if err = group.Go("meta", item.metaWriter); err != nil {
 		tb.Fatal(err)
 	}
-	tb.Cleanup(func() {
-		// Drop the fake stream ID first — Close would otherwise try to
-		// unregister it with the nil manager.
-		dls.mu.Lock()
-		dls.streamID = ""
-		dls.streamTracked.Store(false)
-		dls.mu.Unlock()
-		_ = item.Close()
-	})
+	tb.Cleanup(func() { _ = item.Close() })
 	return item, dls
 }
 
@@ -211,8 +197,8 @@ func BenchmarkColdReadWakeLatency(b *testing.B) {
 	item, dls := newBenchItem(b, fileSize)
 
 	// A fake in-flight downloader already covering every position, so the
-	// read path extends it instead of spawning a real one against the nil
-	// manager.
+	// read path extends it instead of spawning a real one against the empty
+	// backend.
 	fakeCtx, fakeCancel := context.WithCancel(context.Background())
 	b.Cleanup(fakeCancel)
 	fake := &downloader{
@@ -297,8 +283,8 @@ func BenchmarkKickWaiters(b *testing.B) {
 	dls.waiterCount.Store(12)
 	// A live downloader already covers the missing region, so kickWaiters
 	// scans and re-parks the waiters (the steady-state shape while a download
-	// is in flight) instead of spawning a real downloader against the nil
-	// manager.
+	// is in flight) instead of spawning a real downloader against the empty
+	// backend.
 	fakeCtx, fakeCancel := context.WithCancel(context.Background())
 	b.Cleanup(fakeCancel)
 	dls.dls = append(dls.dls, &downloader{
