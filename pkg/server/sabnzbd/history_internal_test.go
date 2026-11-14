@@ -127,6 +127,18 @@ func TestGetFilesFailedStatus(t *testing.T) {
 	}
 }
 
+func TestGetFilesHidesDeletingGrab(t *testing.T) {
+	t.Parallel()
+	_, router, mgr := newContractRouter(t)
+	addNZBGrab(t, mgr, "going", grab.State{Phase: grab.PhaseDeleting})
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, sabRequest(http.MethodGet,
+		url.Values{"mode": {"get_files"}, "value": {"going"}, "ma_password": {"test-token"}}))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("get_files of a deleting grab = %d %s, want 404", rec.Code, rec.Body)
+	}
+}
+
 func queueGrab(t *testing.T, mgr *manager.Manager, e *storage.Entry, phase grab.Phase) {
 	t.Helper()
 	st := grab.State{Key: e.InfoHash, Phase: phase, NZB: e.Protocol == config.ProtocolNZB}

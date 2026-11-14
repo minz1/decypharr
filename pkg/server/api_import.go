@@ -25,8 +25,6 @@ const (
 	multipartMemory = 32 << 20 // in memory before spilling to temp files
 )
 
-// addBatch collects the per-item results of one add request and the
-// prepared imports that still need submitting.
 // addResult is one item of an add response: the grab it became, or why it did not.
 type addResult struct {
 	Name  string `json:"name"`
@@ -35,6 +33,8 @@ type addResult struct {
 	Error string `json:"error,omitempty"`
 }
 
+// addBatch collects the per-item results of one add request and the
+// prepared imports that still need submitting.
 type addBatch struct {
 	results []*addResult
 	tasks   []addTask

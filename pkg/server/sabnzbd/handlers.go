@@ -472,8 +472,10 @@ func (s *SABnzbd) handleGetFiles(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var files []File
-	if v, ok := s.manager.Grab(nzoID); ok {
-		files = getNZBFiles(&v.Entry, grab.Project(v.State, v.Entry.Progress).SABFile)
+	v, ok := s.manager.Grab(nzoID)
+	p := grab.Project(v.State, v.Entry.Progress)
+	if ok && p.Client {
+		files = getNZBFiles(&v.Entry, p.SABFile)
 	} else {
 		entry, err := s.manager.GetEntry(nzoID)
 		if err != nil {

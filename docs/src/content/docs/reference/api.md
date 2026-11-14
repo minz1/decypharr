@@ -92,7 +92,7 @@ curl -X POST \
   http://localhost:8282/api/add
 ```
 
-The response lists one result per item: `[{"name", "id", "phase", "error"}]`. `phase` is the grab phase once the item is queued. `error` is set, and `phase` omitted, when the item was refused.
+The response lists one result per item: `[{"name", "id", "phase", "error"}]`. `phase` is the grab phase once the item is queued. `error` is set, and `phase` omitted, when the item was refused. `id` is the info hash for a torrent (before, a per-request id) and the NZB id for an NZB.
 
 ### DELETE /api/torrents
 

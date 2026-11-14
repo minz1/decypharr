@@ -136,7 +136,9 @@ func newQueue(
 	return q
 }
 
-// Add stores a queue record, with its grab document when it carries one, and shows it to readers as recovery would.
+// Add seeds a queue record, with its grab document when it carries one, and shows it to readers as recovery would.
+// It bypasses the entry actors, so no actor drives the grab until the next recovery: production grabs are added
+// through AddNewTorrent and AddNewNZB, never here.
 func (q *Queue) Add(torrent *storage.Entry) error {
 	torrent.CreatedAt = time.Now()
 	if err := q.storage.UpdateQueuedGrab(torrent); err != nil {
@@ -147,7 +149,10 @@ func (q *Queue) Add(torrent *storage.Entry) error {
 		return err
 	}
 	inLibrary, err := q.storage.Exists(torrent.InfoHash)
-	g, _ := grab.Load(stored, nil, inLibrary && err == nil)
+	if err != nil {
+		return err
+	}
+	g, _ := grab.Load(stored, nil, inLibrary)
 	q.grabs.publish(GrabView{State: g.State, Entry: *g.Entry})
 	return nil
 }
