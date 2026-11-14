@@ -161,9 +161,24 @@ func (m *Manager) holderRecount(provider, id string, call holderCall, holds []st
 	if err != nil {
 		return holderRecount{}, err
 	}
-	queued, err := m.storage.FilterQueued(func(e *storage.Entry) bool { return lists(e) && (call.library || !own(e)) })
+	queued, err := m.storage.FilterQueued(func(e *storage.Entry) bool {
+		return lists(e) && (!own(e) || call.library && grabUsesPlacement(e))
+	})
 	rc.held = len(queued) > 0
 	return rc, err
+}
+
+// grabUsesPlacement reports a queue record whose grab can still use its placements: one not finished, failed or
+// being deleted.
+func grabUsesPlacement(e *storage.Entry) bool {
+	g, _ := grab.Load(e, nil, true)
+	switch g.State.Phase {
+	case grab.PhaseQueued, grab.PhaseThrottled, grab.PhaseSubmitting, grab.PhaseProvider, grab.PhaseAwaitingLinks,
+		grab.PhaseActing:
+		return true
+	case grab.PhaseAbsent, grab.PhaseComplete, grab.PhaseFailed, grab.PhaseDeleting:
+	}
+	return false
 }
 
 // placementGone tells a grab that tried to hold a torrent already deleted that its placement is gone.

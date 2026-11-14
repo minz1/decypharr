@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
@@ -26,13 +27,19 @@ func TestARecountCountsASameKeyLibraryRecordAsAHolder(t *testing.T) {
 func TestALibraryReleaseCountsASameKeyGrabAsAHolder(t *testing.T) {
 	t.Parallel()
 	h := newPruneHarness(t, config.PruneModeDelete)
-	e := &storage.Entry{
-		InfoHash: "self", Name: "self", State: storage.EntryStateDownloading,
-		Providers: map[string]*storage.ProviderEntry{"torbox": {Provider: "torbox", ID: "dup"}},
+	queued := func(phase grab.Phase) {
+		e := &storage.Entry{
+			InfoHash: "self", Name: "self", State: storage.EntryStateDownloading, ActiveProvider: "torbox",
+			Providers: map[string]*storage.ProviderEntry{"torbox": {Provider: "torbox", ID: "dup"}},
+		}
+		if err := grab.Encode(grab.Grab{State: grab.State{Key: "self", Phase: phase}, Entry: e}); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.m.queue.Add(e); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := h.m.queue.Add(e); err != nil {
-		t.Fatal(err)
-	}
+	queued(grab.PhaseProvider)
 
 	rc, err := h.m.holderRecount("torbox", "dup", holderCall{releasing: "self", library: true}, nil)
 	if err != nil || !rc.held {
@@ -41,6 +48,14 @@ func TestALibraryReleaseCountsASameKeyGrabAsAHolder(t *testing.T) {
 	rc, err = h.m.holderRecount("torbox", "dup", holderCall{releasing: "self"}, nil)
 	if err != nil || rc.held {
 		t.Fatalf("recount = %+v, %v; want a grab's own release not to count its record", rc, err)
+	}
+
+	for _, phase := range []grab.Phase{grab.PhaseDeleting, grab.PhaseComplete} {
+		queued(phase)
+		rc, err = h.m.holderRecount("torbox", "dup", holderCall{releasing: "self", library: true}, nil)
+		if err != nil || rc.held {
+			t.Fatalf("recount = %+v, %v; want a %v grab of the pruned key not to keep the torrent", rc, err, phase)
+		}
 	}
 }
 
