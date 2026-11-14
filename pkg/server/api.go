@@ -23,6 +23,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/manager"
+	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/repair"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 	"github.com/sirrobot01/decypharr/pkg/version"
@@ -131,6 +132,14 @@ func (s *Server) handlePurgeMountCache(w http.ResponseWriter, r *http.Request) {
 	}, http.StatusOK)
 }
 
+// dashboardTorrent is a queue entry as the dashboard lists it: the entry, the grab phase and the label shown for it.
+type dashboardTorrent struct {
+	*storage.Entry
+
+	Phase string `json:"phase"`
+	Label string `json:"label"`
+}
+
 func (s *Server) handleGetTorrents(w http.ResponseWriter, r *http.Request) {
 	page, limit := pageParams(r.URL.Query(), defaultQueuePageLimit)
 	search := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("search")))
@@ -147,13 +156,14 @@ func (s *Server) handleGetTorrents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	views := s.manager.Queue().ListFilter(manager.ListQuery{Dashboard: true}, "added_on", false)
-	allTorrents := make([]*storage.Entry, len(views))
+	allTorrents := make([]*dashboardTorrent, len(views))
 	for i := range views {
-		allTorrents[i] = &views[i].Entry
-		allTorrents[i].Sanitize()
+		views[i].Entry.Sanitize()
+		p := grab.Project(views[i].State, views[i].Entry.Progress)
+		allTorrents[i] = &dashboardTorrent{Entry: &views[i].Entry, Phase: views[i].State.Phase.String(), Label: p.Label}
 	}
 
-	filteredTorrents := make([]*storage.Entry, 0)
+	filteredTorrents := make([]*dashboardTorrent, 0)
 	categorySet := make(map[string]struct{})
 	for _, t := range allTorrents {
 		if t.Category != "" {
@@ -161,7 +171,7 @@ func (s *Server) handleGetTorrents(w http.ResponseWriter, r *http.Request) {
 		}
 		if (search == "" || strings.Contains(strings.ToLower(t.Name+" "+t.InfoHash), search)) &&
 			(category == "" || t.Category == category) &&
-			(state == "" || t.State == storage.TorrentState(state)) {
+			(state == "" || t.Phase == state) {
 			filteredTorrents = append(filteredTorrents, t)
 		}
 	}
@@ -183,7 +193,7 @@ func (s *Server) handleGetTorrents(w http.ResponseWriter, r *http.Request) {
 	}, http.StatusOK)
 }
 
-func sortQueuedTorrents(torrents []*storage.Entry, sortBy, sortOrder string) {
+func sortQueuedTorrents(torrents []*dashboardTorrent, sortBy, sortOrder string) {
 	if len(torrents) == 0 {
 		return
 	}
@@ -202,7 +212,7 @@ func sortQueuedTorrents(torrents []*storage.Entry, sortBy, sortOrder string) {
 		case "category":
 			result = strings.ToLower(torrents[i].Category) < strings.ToLower(torrents[j].Category)
 		case "state":
-			result = torrents[i].State < torrents[j].State
+			result = torrents[i].Phase < torrents[j].Phase
 		default:
 			result = torrents[i].AddedOn.Before(torrents[j].AddedOn)
 		}

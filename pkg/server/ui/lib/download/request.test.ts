@@ -79,22 +79,22 @@ describe("building the add request", () => {
 });
 
 describe("reading the add results", () => {
-  it("reads each result's status and error", () => {
-    expect(parseAddResults([{ status: "queued", name: "x" }, { status: "error", error: "bad" }, {}])).toStrictEqual([
-      { status: "queued", error: undefined },
-      { status: "error", error: "bad" },
-      { status: undefined, error: undefined },
+  it("reads each result's phase and error", () => {
+    expect(parseAddResults([{ phase: "queued", name: "x" }, { error: "bad" }, {}])).toStrictEqual([
+      { phase: "queued", error: undefined },
+      { phase: undefined, error: "bad" },
+      { phase: undefined, error: undefined },
     ]);
   });
 
-  it.each([{ error: "x" }, [1], [{ status: 1 }]])("rejects %o", (value) => {
+  it.each([{ error: "x" }, [1], [{ phase: 1 }]])("rejects %o", (value) => {
     expect(() => parseAddResults(value)).toThrow(ShapeError);
   });
 });
 
-const ok = { status: "queued", error: undefined };
+const ok = { phase: "queued", error: undefined };
 
-const failed = (error?: string): { status: string; error: string | undefined } => ({ status: "error", error });
+const failed = (error: string): { phase: undefined; error: string } => ({ phase: undefined, error });
 
 describe("summarizing the add results", () => {
   it("celebrates and clears the form when everything was added", () => {
@@ -105,10 +105,10 @@ describe("summarizing the add results", () => {
   });
 
   it("warns about a partial success and lists the errors", () => {
-    expect(summarizeResults([ok, failed("bad"), failed()])).toStrictEqual({
+    expect(summarizeResults([ok, failed("bad"), failed("worse")])).toStrictEqual({
       toasts: [
         { message: "Added 1 item(s) with 2 error(s)", type: "warning" },
-        { message: "Errors occurred while adding items:\n• bad\n• Unknown error", type: "error" },
+        { message: "Errors occurred while adding items:\n• bad\n• worse", type: "error" },
       ],
       clear: false,
     });

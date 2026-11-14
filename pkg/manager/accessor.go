@@ -119,3 +119,9 @@ func (m *Manager) TLSConfig() *tls.Config {
 func (m *Manager) Grab(key string) (GrabView, bool) {
 	return m.grabs.get(key)
 }
+
+// GrabPhase is the phase of key's grab as readers see it.
+func (m *Manager) GrabPhase(key string) (grab.Phase, bool) {
+	v, ok := m.grabs.get(key)
+	return v.State.Phase, ok
+}

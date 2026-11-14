@@ -16,9 +16,6 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/manager"
 )
 
-// importStatusError marks a failed item in the import results.
-const importStatusError = "error"
-
 // maxConcurrentImports bounds how many prepared imports are submitted at once.
 const maxConcurrentImports = 10
 
@@ -30,26 +27,36 @@ const (
 
 // addBatch collects the per-item results of one add request and the
 // prepared imports that still need submitting.
+// addResult is one item of an add response: the grab it became, or why it did not.
+type addResult struct {
+	Name  string `json:"name"`
+	ID    string `json:"id"`
+	Phase string `json:"phase,omitempty"`
+	Error string `json:"error,omitempty"`
+}
+
 type addBatch struct {
-	results []*manager.ImportRequest
+	results []*addResult
 	tasks   []addTask
 }
 
 type addTask struct {
 	request *manager.ImportRequest
+	result  *addResult
 	source  string
 }
 
 func (b *addBatch) failf(format string, args ...any) {
-	b.results = append(
-		b.results,
-		&manager.ImportRequest{Status: importStatusError, Error: fmt.Sprintf(format, args...)},
-	)
+	b.results = append(b.results, &addResult{Error: fmt.Sprintf(format, args...)})
 }
 
 func (b *addBatch) add(req *manager.ImportRequest, source string) {
-	b.results = append(b.results, req)
-	b.tasks = append(b.tasks, addTask{request: req, source: source})
+	result := &addResult{Name: req.Name}
+	if req.Magnet != nil {
+		result.Name, result.ID = req.Magnet.Name, req.Magnet.InfoHash
+	}
+	b.results = append(b.results, result)
+	b.tasks = append(b.tasks, addTask{request: req, result: result, source: source})
 }
 
 // addOptions are the form fields shared by every item of one add request.
@@ -119,7 +126,7 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = r.MultipartForm.RemoveAll() }()
 	opts := s.parseAddOptions(r)
-	batch := &addBatch{results: make([]*manager.ImportRequest, 0)}
+	batch := &addBatch{results: make([]*addResult, 0)}
 
 	for _, u := range nonEmptyLines(r.FormValue("urls")) {
 		magnet, err := utils.GetMagnetFromURL(r.Context(), s.manager.FetchClient(), u, opts.rmTrackerURLs)
@@ -159,16 +166,20 @@ func (s *Server) handleAddContent(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	submitter := iter.Iterator[addTask]{MaxGoroutines: maxConcurrentImports}
 	submitter.ForEach(batch.tasks, func(task *addTask) {
-		req := task.request
+		req, result := task.request, task.result
 		var err error
 		if req.Magnet != nil {
 			err = s.manager.AddNewTorrent(ctx, req)
 		} else {
-			req.ID, err = s.manager.AddNewNZB(ctx, req)
+			result.ID, err = s.manager.AddNewNZB(ctx, req)
 		}
 		if err != nil {
 			s.logger.Error().Err(err).Str("source", task.source).Msg("Failed to import content")
-			req.Error, req.Status = err.Error(), importStatusError
+			result.Error = err.Error()
+			return
+		}
+		if phase, ok := s.manager.GrabPhase(result.ID); ok {
+			result.Phase = phase.String()
 		}
 	})
 	utils.JSONResponse(w, batch.results, http.StatusOK)

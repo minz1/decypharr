@@ -33,8 +33,8 @@ const fillProtocol = (row: ParentNode, protocol: string): void => {
   target.append(badge.text);
 };
 
-const fillState = (row: ParentNode, state: string): void => {
-  const badge = stateBadge(state);
+const fillState = (row: ParentNode, torrent: Torrent): void => {
+  const badge = stateBadge(torrent.phase, torrent.label);
   const target = field(row, "state");
   target.classList.add(badge.className);
   target.textContent = badge.text;
@@ -65,7 +65,7 @@ const torrentRow = (torrent: Torrent, selected: boolean): HTMLTableRowElement =>
   fillBadgeCell(field(row, "category"), torrent.category);
   fillProtocol(row, torrent.protocol);
   fillBadgeCell(field(row, "provider"), torrent.activeProvider);
-  fillState(row, torrent.state);
+  fillState(row, torrent);
   return row;
 };
 

@@ -25,8 +25,6 @@ import (
 const (
 	// usenetProvider is the provider name NZB entries are placed on.
 	usenetProvider = "usenet"
-	// importStatusStarted marks an import request that is being processed.
-	importStatusStarted = "started"
 )
 
 type ImportType string
@@ -53,7 +51,6 @@ type ImportRequest struct {
 	SkipMultiSeason  bool                  `json:"skip_multi_season"`
 	Manual           bool                  `json:"manual"`
 
-	Status      string    `json:"status"`
 	CompletedAt time.Time `json:"completedAt"`
 	Error       string    `json:"error,omitempty"`
 
@@ -74,7 +71,6 @@ func NewTorrentRequest(
 ) *ImportRequest {
 	return &ImportRequest{
 		ID:               uuid.New().String(),
-		Status:           importStatusStarted,
 		DownloadFolder:   downloadFolder,
 		SelectedDebrid:   cmp.Or(arr.SelectedDebrid, debrid), // Use debrid from arr if available
 		Magnet:           magnet,
@@ -99,7 +95,6 @@ func NewNZBRequest(
 	return &ImportRequest{
 		Name:            name,
 		ID:              uuid.New().String(),
-		Status:          importStatusStarted,
 		DownloadFolder:  downloadFolder,
 		SelectedDebrid:  usenetProvider, // NZB imports always use usenet
 		NZBContent:      nzbContent,

@@ -63,11 +63,11 @@ describe("the dashboard's filters", () => {
   it("filter by state, category and sort from the first page", async () => {
     const requests = await bootDashboard(twoTorrents);
     await waitForRows(2);
-    change("#stateFilter", "error");
+    change("#stateFilter", "failed");
     change("#categoryFilter", "radarr");
     change("#sortSelector", "name_asc");
     expect(lastURL(requests)).toBe(
-      "/api/torrents?page=1&limit=20&sort_by=name&sort_order=asc&category=radarr&state=error",
+      "/api/torrents?page=1&limit=20&sort_by=name&sort_order=asc&category=radarr&state=failed",
     );
   });
 

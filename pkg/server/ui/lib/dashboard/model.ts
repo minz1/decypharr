@@ -7,12 +7,16 @@ const PERCENT = 100;
 const LOW_PERCENT = 25;
 const MID_PERCENT = 75;
 
-const STATE_BADGES: Readonly<Record<string, Badge>> = {
-  pausedUP: { className: "badge-success", text: "Completed" },
-  downloading: { className: "badge-info", text: "Downloading" },
-  error: { className: "badge-error", text: "Error" },
-  queued: { className: "badge-ghost", text: "Queued" },
-  paused: { className: "badge-warning", text: "Paused" },
+const STATE_BADGES: Readonly<Record<string, string>> = {
+  queued: "badge-neutral",
+  throttled: "badge-neutral",
+  submitting: "badge-neutral",
+  provider: "badge-info",
+  awaiting_links: "badge-info",
+  acting: "badge-info",
+  complete: "badge-success",
+  failed: "badge-error",
+  deleting: "badge-warning",
 };
 
 const PROTOCOL_BADGES: Readonly<Record<string, ProtocolBadge>> = {
@@ -32,7 +36,8 @@ const parseTorrent = (value: unknown): Torrent => {
     protocol: optStr(record, "protocol") ?? "",
     activeProvider: optStr(record, "active_provider") ?? "",
     numSeeds: optNum(record, "num_seeds") ?? optNum(record, "seeders") ?? 0,
-    state: optStr(record, "state") ?? "",
+    phase: optStr(record, "phase") ?? "",
+    label: optStr(record, "label") ?? "",
   };
 };
 
@@ -112,7 +117,10 @@ const progressColor = (percent: number): string => {
   return percent < MID_PERCENT ? "progress-warning" : "progress-info";
 };
 
-const stateBadge = (state: string): Badge => STATE_BADGES[state] ?? { className: "badge-ghost", text: state };
+const stateBadge = (phase: string, label: string): Badge => ({
+  className: STATE_BADGES[phase] ?? "badge-ghost",
+  text: label === "" ? phase : label,
+});
 
 const protocolBadge = (protocol: string): ProtocolBadge =>
   PROTOCOL_BADGES[protocol] ?? {

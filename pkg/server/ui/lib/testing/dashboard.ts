@@ -29,7 +29,8 @@ const torrent = (hash: string, name: string, category = "sonarr"): Record<string
   category,
   protocol: "torrent",
   active_provider: "realdebrid",
-  state: "downloading",
+  phase: "provider",
+  label: "Downloading",
 });
 
 const page = (torrents: Record<string, unknown>[], totalPages = 1): Response =>

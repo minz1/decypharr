@@ -64,6 +64,7 @@ const provideIcons = (provide: TestProject["provide"]): void => {
 };
 
 const provideConfigSample = (provide: TestProject["provide"]): void => {
+  provide("phases", readFixtureJSON("phases.json"));
   provide("configSample", readFixtureJSON("config-sample.json"));
   provide("configExclusions", readFixtureJSON("config-exclusions.json"));
   provide("configResponses", {

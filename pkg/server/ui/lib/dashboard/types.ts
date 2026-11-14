@@ -8,7 +8,8 @@ interface Torrent {
   protocol: string;
   activeProvider: string;
   numSeeds: number;
-  state: string;
+  phase: string;
+  label: string;
 }
 
 interface TorrentPage {

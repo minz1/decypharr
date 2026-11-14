@@ -23,7 +23,7 @@ const reply =
     Promise.resolve(new Response(body, { status }));
 
 const added = (statuses: readonly string[]): Respond =>
-  reply(JSON.stringify(statuses.map((status) => ({ status, error: status === "error" ? "<b>bad</b>" : undefined }))));
+  reply(JSON.stringify(statuses.map((status) => (status === "error" ? { error: "<b>bad</b>" } : { phase: status }))));
 
 const submitMagnet = async (respond: Respond): Promise<string[]> => {
   await bootDownload({ respond });

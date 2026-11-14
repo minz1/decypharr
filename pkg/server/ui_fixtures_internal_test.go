@@ -12,6 +12,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/manager/managertest"
 )
 
@@ -155,7 +156,27 @@ func TestRenderUIFixtures(t *testing.T) {
 		}
 		writeFixture(t, dir, "config"+suffix+".json", response)
 	}
+	writeFixture(t, dir, "phases.json", phaseFixture(t))
 	for name, body := range configSampleFiles(t) {
 		writeFixture(t, dir, name, body)
 	}
+}
+
+func phaseFixture(t *testing.T) []byte {
+	t.Helper()
+	type row struct {
+		Phase string `json:"phase"`
+		Label string `json:"label"`
+	}
+	rows := make([]row, 0)
+	for _, phase := range grab.AllPhases() {
+		if p := grab.Project(grab.State{Phase: phase}, 0); p.Dashboard {
+			rows = append(rows, row{Phase: phase.String(), Label: p.Label})
+		}
+	}
+	body, err := json.Marshal(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
 }

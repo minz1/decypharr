@@ -38,7 +38,6 @@ func (m *Manager) AddNewNZB(ctx context.Context, req *ImportRequest) (string, er
 	entry := newNZBQueueEntry(req, stagedPath)
 
 	entry.ContentPath = entry.DownloadPath(m.folderNaming())
-	req.Status = "queued"
 	if err = m.submitEntry(ctx, entry, req); err != nil {
 		if !mayHoldRecord(err) {
 			m.usenet.RemoveStagedNZB(stagedPath)

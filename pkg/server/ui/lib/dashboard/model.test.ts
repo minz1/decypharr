@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, inject, it } from "vitest";
 
+import { asArray, asRecord, str } from "#ui/lib/common/json";
 import {
   createDashboardState,
   deleteSelectedURL,
@@ -12,6 +13,7 @@ import {
   torrentSpeed,
   torrentsURL,
 } from "#ui/lib/dashboard/model";
+import { loadFixture } from "#ui/lib/testing/fixture";
 
 const torrent = {
   info_hash: "abcdef0123456789",
@@ -22,7 +24,8 @@ const torrent = {
   category: "sonarr",
   protocol: "torrent",
   active_provider: "realdebrid",
-  state: "downloading",
+  phase: "provider",
+  label: "Downloading",
 };
 
 describe("the torrent page parser", () => {
@@ -41,7 +44,8 @@ describe("the torrent page parser", () => {
           protocol: "torrent",
           activeProvider: "realdebrid",
           numSeeds: 0,
-          state: "downloading",
+          phase: "provider",
+          label: "Downloading",
         },
       ],
       total: 41,
@@ -126,10 +130,10 @@ describe("badges", () => {
     ]);
   });
 
-  it("names known states and passes unknown ones through", () => {
-    expect([stateBadge("pausedUP"), stateBadge("stalledDL")]).toStrictEqual([
+  it("shows the server label under the class of the phase, and a neutral one for an unknown phase", () => {
+    expect([stateBadge("complete", "Completed"), stateBadge("later", "Later")]).toStrictEqual([
       { className: "badge-success", text: "Completed" },
-      { className: "badge-ghost", text: "stalledDL" },
+      { className: "badge-ghost", text: "Later" },
     ]);
   });
 
@@ -142,5 +146,30 @@ describe("badges", () => {
 
   it("shows a dash for no speed", () => {
     expect([torrentSpeed(0), torrentSpeed(2048)]).toStrictEqual(["-", "2 KB/s"]);
+  });
+});
+
+const phaseRows = (): { phase: string; label: string }[] =>
+  asArray(inject("phases"), "phases").map((row) => {
+    const record = asRecord(row, "phase row");
+    return { phase: str(record, "phase"), label: str(record, "label") };
+  });
+
+describe("dashboard badges cover every phase", () => {
+  it("gives each phase a class and shows its label", () => {
+    for (const row of phaseRows()) {
+      const badge = stateBadge(row.phase, row.label);
+      expect([row.phase, badge.className]).not.toContain("badge-ghost");
+      expect(badge.text).toBe(row.label);
+    }
+  });
+
+  it("offers exactly the phases in the state filter", () => {
+    loadFixture("index");
+    const values = [...document.querySelectorAll<HTMLOptionElement>("#stateFilter option")].map((option) => [
+      option.value,
+      option.textContent.trim(),
+    ]);
+    expect(values).toStrictEqual([["", "All States"], ...phaseRows().map((row) => [row.phase, row.label])]);
   });
 });

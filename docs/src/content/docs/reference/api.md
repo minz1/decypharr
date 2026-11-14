@@ -68,6 +68,9 @@ curl -H "Authorization: Bearer TOKEN" \
 
 - `category`: Filter by category
 - `hash`: Get specific torrent
+- `state`: Filter by grab phase: `queued`, `throttled`, `submitting`, `provider`, `awaiting_links`, `acting`, `complete`, `failed` or `deleting`
+
+Each item carries `phase` (one of those names) and `label` (the text the dashboard shows) beside the torrent fields.
 
 ### POST /api/add
 
@@ -88,6 +91,8 @@ curl -X POST \
   -d '{"url": "magnet:?xt=..."}' \
   http://localhost:8282/api/add
 ```
+
+The response lists one result per item: `[{"name", "id", "phase", "error"}]`. `phase` is the grab phase once the item is queued. `error` is set, and `phase` omitted, when the item was refused.
 
 ### DELETE /api/torrents
 

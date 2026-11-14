@@ -15,7 +15,7 @@ interface AddRequest {
 }
 
 interface AddResult {
-  status: string | undefined;
+  phase: string | undefined;
   error: string | undefined;
 }
 
@@ -80,14 +80,14 @@ const buildAddRequest = (request: AddRequest): { form: FormData } | { warning: s
 const parseAddResults = (value: unknown): AddResult[] =>
   asArray(value, "response").map((item, index) => {
     const result = asRecord(item, `response[${index}]`);
-    return { status: optStr(result, "status"), error: optStr(result, "error") };
+    return { phase: optStr(result, "phase"), error: optStr(result, "error") };
   });
 
 const errorList = (failures: readonly AddResult[]): string =>
   `Errors occurred while adding items:\n${failures.map((failure) => `• ${failure.error ?? "Unknown error"}`).join("\n")}`;
 
 const summarizeResults = (results: readonly AddResult[]): Summary => {
-  const failures = results.filter((result) => result.status === "error");
+  const failures = results.filter((result) => result.error !== undefined);
   const successes = results.length - failures.length;
   if (failures.length > 0) {
     const details = { message: errorList(failures), type: "error" } as const;
