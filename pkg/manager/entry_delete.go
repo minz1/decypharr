@@ -115,13 +115,12 @@ func (m *Manager) DeleteTorrent(ctx context.Context, key string, removeFromDebri
 
 // DeleteFailedNZBs deletes the grabs and files of the failed NZBs of category.
 func (m *Manager) DeleteFailedNZBs(ctx context.Context, category string) error {
-	failed, err := m.queue.ListFilter(category, config.ProtocolNZB, storage.EntryStateError, nil, "", false)
-	if err != nil {
-		return err
-	}
+	failed := m.queue.ListFilter(
+		ListQuery{Category: category, Protocol: config.ProtocolNZB, Phases: []grab.Phase{grab.PhaseFailed}}, "", false,
+	)
 	keys := make([]string, 0, len(failed))
-	for _, e := range failed {
-		keys = append(keys, e.InfoHash)
+	for _, v := range failed {
+		keys = append(keys, v.Entry.InfoHash)
 	}
 	return m.DeleteQueuedAll(ctx, keys, grab.Cleanup{DeleteFiles: true})
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/arr"
+	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
@@ -119,6 +120,7 @@ type Queue struct {
 	storage *storage.Storage
 	logger  zerolog.Logger
 	naming  func() config.WebDavFolderNaming
+	grabs   *grabIndex
 	// waits is what each queued entry is waiting on at its provider, for logging a wait once per change.
 	waits providerWaits
 }
@@ -126,19 +128,33 @@ type Queue struct {
 func newQueue(
 	storage *storage.Storage,
 	naming func() config.WebDavFolderNaming,
+	grabs *grabIndex,
 	log zerolog.Logger,
 ) *Queue {
 	q := &Queue{
 		storage: storage,
 		logger:  log,
 		naming:  naming,
+		grabs:   grabs,
 	}
 
 	return q
 }
 
+// Add stores a queue record, with its grab document when it carries one, and shows it to readers as recovery would.
 func (q *Queue) Add(torrent *storage.Entry) error {
-	return q.storage.AddQueue(torrent)
+	torrent.CreatedAt = time.Now()
+	if err := q.storage.UpdateQueuedGrab(torrent); err != nil {
+		return err
+	}
+	stored, err := q.storage.GetQueuedGrab(torrent.InfoHash)
+	if err != nil {
+		return err
+	}
+	inLibrary, err := q.storage.Exists(torrent.InfoHash)
+	g, _ := grab.Load(stored, nil, inLibrary && err == nil)
+	q.grabs.publish(GrabView{State: g.State, Entry: *g.Entry})
+	return nil
 }
 
 func (q *Queue) GetTorrent(infohash string) (*storage.Entry, error) {
@@ -186,79 +202,70 @@ func (q *Queue) Update(torrent *storage.Entry) error {
 	return q.storage.UpdateQueue(torrent)
 }
 
-func (q *Queue) ListFilterFunc(
-	category string,
-	protocol config.Protocol,
-	state storage.TorrentState,
-	hashes []string,
-) func(*storage.Entry) bool {
-	if category == "" && len(hashes) == 0 && state == "" && protocol == config.ProtocolAll {
-		return nil
-	}
-	hashSet := make(map[string]struct{}, len(hashes))
-	for _, h := range hashes {
-		hashSet[strings.ToLower(h)] = struct{}{}
-	}
-	return func(t *storage.Entry) bool {
-		return (category == "" || t.Category == category) &&
-			(state == "" || t.State == state) &&
-			(protocol == config.ProtocolAll || t.Protocol == protocol) &&
-			inHashSet(hashSet, t.InfoHash)
-	}
+// ListQuery selects the grabs ListFilter lists. The zero value lists every grab clients see.
+type ListQuery struct {
+	Category string
+	Protocol config.Protocol
+	// Phases limits the list to these phases; nil lists every listed phase, an empty set lists nothing.
+	Phases []grab.Phase
+	Hashes []string
+	// Dashboard lists the phases the dashboard shows instead of the phases clients see.
+	Dashboard bool
 }
 
-// inHashSet reports whether hash is in set; an empty set matches everything.
-func inHashSet(set map[string]struct{}, hash string) bool {
-	if len(set) == 0 {
-		return true
+func (query ListQuery) lists(v GrabView) bool {
+	p := grab.Project(v.State, v.Entry.Progress)
+	if query.Dashboard && !p.Dashboard || !query.Dashboard && !p.Client {
+		return false
 	}
-	_, ok := set[strings.ToLower(hash)]
-	return ok
+	return (query.Category == "" || v.Entry.Category == query.Category) &&
+		(query.Protocol == config.ProtocolAll || v.Entry.Protocol == query.Protocol) &&
+		(query.Phases == nil || slices.Contains(query.Phases, v.State.Phase))
 }
 
-func (q *Queue) ListFilter(
-	category string,
-	protocol config.Protocol,
-	state storage.TorrentState,
-	hashes []string,
-	sortBy string,
-	reverse bool,
-) ([]*storage.Entry, error) {
-	filterFunc := q.ListFilterFunc(category, protocol, state, hashes)
-	torrents, err := q.storage.FilterQueued(filterFunc)
-	if err != nil {
-		return nil, err
+// ListFilter lists copies of the grabs in the read index that match query, sorted by sortBy (added_on when empty),
+// then by key.
+func (q *Queue) ListFilter(query ListQuery, sortBy string, reverse bool) []GrabView {
+	hashes := make(map[string]struct{}, len(query.Hashes))
+	for _, h := range query.Hashes {
+		hashes[strings.ToLower(h)] = struct{}{}
 	}
+	views := slices.DeleteFunc(q.grabs.snapshot(), func(v GrabView) bool {
+		_, wanted := hashes[strings.ToLower(v.Entry.InfoHash)]
+		return !query.lists(v) || len(hashes) > 0 && !wanted
+	})
+	slices.SortFunc(views, func(a, b GrabView) int {
+		x, y := &a.Entry, &b.Entry
+		if !reverse {
+			x, y = y, x
+		}
+		return cmp.Or(compareEntries(sortBy, x, y), cmp.Compare(a.State.Key, b.State.Key))
+	})
+	return views
+}
 
-	if sortBy != "" {
-		slices.SortFunc(torrents, func(a, b *storage.Entry) int {
-			if !reverse {
-				a, b = b, a
-			}
-			switch sortBy {
-			case "name":
-				return cmp.Compare(a.Name, b.Name)
-			case "size":
-				return cmp.Compare(a.Size, b.Size)
-			case "completed", "downloaded":
-				var left, right time.Time
-				if a.CompletedAt != nil {
-					left = *a.CompletedAt
-				}
-				if b.CompletedAt != nil {
-					right = *b.CompletedAt
-				}
-				return left.Compare(right)
-			case "progress":
-				return cmp.Compare(a.Progress, b.Progress)
-			case "category":
-				return cmp.Compare(a.Category, b.Category)
-			case "seeders":
-				return cmp.Compare(a.Seeders, b.Seeders)
-			default:
-				return a.AddedOn.Compare(b.AddedOn)
-			}
-		})
+func compareEntries(sortBy string, a, b *storage.Entry) int {
+	switch sortBy {
+	case "name":
+		return cmp.Compare(a.Name, b.Name)
+	case "size":
+		return cmp.Compare(a.Size, b.Size)
+	case "completed", "downloaded":
+		var left, right time.Time
+		if a.CompletedAt != nil {
+			left = *a.CompletedAt
+		}
+		if b.CompletedAt != nil {
+			right = *b.CompletedAt
+		}
+		return left.Compare(right)
+	case "progress":
+		return cmp.Compare(a.Progress, b.Progress)
+	case "category":
+		return cmp.Compare(a.Category, b.Category)
+	case "seeders":
+		return cmp.Compare(a.Seeders, b.Seeders)
+	default:
+		return a.AddedOn.Compare(b.AddedOn)
 	}
-	return torrents, nil
 }

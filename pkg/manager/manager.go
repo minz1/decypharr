@@ -297,6 +297,7 @@ func New(g *task.Group, store *config.Store, logs *logger.Factory) (*Manager, er
 		debridSpeedTestResults: xsync.NewMap[string, debridTypes.SpeedTestResult](),
 		activeStreams:          xsync.NewMap[string, *ActiveStream](),
 		listingMisses:          xsync.NewMap[string, map[string]missState](),
+		grabs:                  &grabIndex{},
 	}
 	instance.initGrace(g.Context())
 
@@ -341,7 +342,7 @@ func (m *Manager) init() error {
 		cetScheduler, _ = gocron.NewScheduler(gocron.WithGlobalJobOptions(gocron.WithTags("decypharr-cet")))
 	}
 
-	m.queue = newQueue(m.storage, m.folderNaming, m.logs.New("queue"))
+	m.queue = newQueue(m.storage, m.folderNaming, m.grabs, m.logs.New("queue"))
 
 	m.scheduler = scheduler
 	m.cetScheduler = cetScheduler
@@ -498,7 +499,6 @@ func (m *Manager) initLinkService() {
 
 func (m *Manager) initEntries(packOf map[string]string) {
 	packs := newPackIndex(packOf)
-	m.grabs = &grabIndex{}
 	m.entries = newEntryActor(m.work, entryDeps{
 		store:     m.storage,
 		grabs:     m.grabs,

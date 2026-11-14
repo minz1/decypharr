@@ -265,7 +265,7 @@ func TestRefusedSeasonSendRetriesThePack(t *testing.T) {
 		p := newPackTest(t, store)
 		m := &Manager{
 			entries: p.h.a, storage: store, logger: zerolog.Nop(),
-			queue: newQueue(store, nil, zerolog.Nop()),
+			queue: newQueue(store, nil, &grabIndex{}, zerolog.Nop()),
 		}
 		pack := testEntry("pack")
 		var seasons []SeasonInfo

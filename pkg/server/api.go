@@ -22,6 +22,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/arr"
+	"github.com/sirrobot01/decypharr/pkg/manager"
 	"github.com/sirrobot01/decypharr/pkg/repair"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 	"github.com/sirrobot01/decypharr/pkg/version"
@@ -145,14 +146,11 @@ func (s *Server) handleGetTorrents(w http.ResponseWriter, r *http.Request) {
 		sortOrder = sortDesc
 	}
 
-	allTorrents, err := s.manager.Queue().ListFilter("", config.ProtocolAll, "", nil, "added_on", false)
-	if err != nil {
-		s.logger.Error().Err(err).Msg("Failed to read the download queue")
-		s.sendJSONError(w, "Failed to read the download queue", http.StatusInternalServerError)
-		return
-	}
-	for _, t := range allTorrents {
-		t.Sanitize()
+	views := s.manager.Queue().ListFilter(manager.ListQuery{Dashboard: true}, "added_on", false)
+	allTorrents := make([]*storage.Entry, len(views))
+	for i := range views {
+		allTorrents[i] = &views[i].Entry
+		allTorrents[i].Sanitize()
 	}
 
 	filteredTorrents := make([]*storage.Entry, 0)

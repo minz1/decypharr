@@ -67,7 +67,7 @@ func newPruneHarness(t *testing.T, mode config.PruneMode) *pruneHarness {
 		clients:       xsync.NewMap[string, debrid.Client](),
 		storage:       store,
 		grabs:         &grabIndex{},
-		queue:         newQueue(store, nil, zerolog.Nop()),
+		queue:         newQueue(store, nil, &grabIndex{}, zerolog.Nop()),
 		store:         cfg,
 		logger:        zerolog.New(h.logs),
 		pruneNow:      func() time.Time { return h.now },
@@ -105,7 +105,7 @@ func (h *pruneHarness) corruptStore(t *testing.T, file, key string, value []byte
 		t.Fatal(err)
 	}
 	h.m.storage = store
-	h.m.queue = newQueue(store, nil, zerolog.Nop())
+	h.m.queue = newQueue(store, nil, &grabIndex{}, zerolog.Nop())
 }
 
 func (h *pruneHarness) setPrune(t *testing.T, edit func(*config.Prune)) {

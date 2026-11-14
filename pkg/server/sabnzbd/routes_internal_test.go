@@ -18,6 +18,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/manager"
+	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/manager/managertest"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
@@ -50,26 +51,23 @@ func addQueueFixtures(t *testing.T, mgr *manager.Manager) {
 	for i, tc := range []struct {
 		category string
 		protocol config.Protocol
-		state    storage.TorrentState
+		phase    grab.Phase
 	}{
-		{"tv", config.ProtocolNZB, storage.EntryStateDownloading},
-		{"movies", config.ProtocolNZB, storage.EntryStateDownloading},
-		{"tv", config.ProtocolTorrent, storage.EntryStateDownloading},
-		{"tv", config.ProtocolNZB, storage.EntryStatePausedUP},
+		{"tv", config.ProtocolNZB, grab.PhaseProvider},
+		{"movies", config.ProtocolNZB, grab.PhaseProvider},
+		{"tv", config.ProtocolTorrent, grab.PhaseProvider},
+		{"tv", config.ProtocolNZB, grab.PhaseComplete},
 	} {
 		entry := &storage.Entry{
 			InfoHash: fmt.Sprintf("entry-%d", i),
 			Name:     fmt.Sprintf("Release%d.nzb", i),
 			Category: tc.category,
 			Protocol: tc.protocol,
-			State:    tc.state,
 			Size:     4 << 20,
 			Progress: 0.25,
 			SavePath: t.TempDir(),
 		}
-		if err := mgr.Queue().Add(entry); err != nil {
-			t.Fatal(err)
-		}
+		queueGrab(t, mgr, entry, tc.phase)
 	}
 }
 
@@ -174,20 +172,18 @@ func addDeleteFixtures(t *testing.T, mgr *manager.Manager, name string) []*stora
 			Name:     "Release.nzb",
 			Category: category,
 			Protocol: config.ProtocolNZB,
-			State:    storage.EntryStateError,
 			SavePath: t.TempDir(),
 			Magnet:   filepath.Join(t.TempDir(), "staged.nzb"),
 		}
 		if i == 2 {
 			entries[i].Protocol = config.ProtocolTorrent
 		}
+		phase := grab.PhaseFailed
 		if i == 3 {
-			entries[i].State = storage.EntryStateDownloading
+			phase = grab.PhaseProvider
 		}
 		stageDeleteFiles(t, entries[i], name == "cleanup failure" && i == 0)
-		if err := mgr.Queue().Add(entries[i]); err != nil {
-			t.Fatal(err)
-		}
+		queueGrab(t, mgr, entries[i], phase)
 	}
 	return entries
 }
@@ -322,7 +318,7 @@ func TestDeleteFailedNZBRemovesItsStagedNZBAndFiles(t *testing.T) {
 	failedAt := time.Now().Add(-time.Hour)
 	entry := &storage.Entry{
 		InfoHash: "failed-nzb", Name: "Release.nzb", Category: "tv", Protocol: config.ProtocolNZB,
-		State: storage.EntryStateError, LastError: "missing segments", LastErrorTime: &failedAt, ErrorCount: 1,
+		LastError: "missing segments", LastErrorTime: &failedAt, ErrorCount: 1,
 		Magnet: staged, SavePath: filepath.Join(t.TempDir(), "downloads"),
 	}
 	downloaded := entry.DownloadPath("")
@@ -332,9 +328,7 @@ func TestDeleteFailedNZBRemovesItsStagedNZBAndFiles(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(downloaded, "video.mkv"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := mgr.Queue().Add(entry); err != nil {
-		t.Fatal(err)
-	}
+	queueGrab(t, mgr, entry, grab.PhaseFailed)
 
 	values := url.Values{
 		"mode": {"queue"}, "name": {"delete"}, "value": {entry.InfoHash}, "category": {"tv"},

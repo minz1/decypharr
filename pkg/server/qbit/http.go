@@ -11,8 +11,8 @@ import (
 	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/arr"
+	"github.com/sirrobot01/decypharr/pkg/manager"
 	"github.com/sirrobot01/decypharr/pkg/manager/grab"
-	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
 func (q *QBit) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -80,16 +80,12 @@ func (q *QBit) handleTorrentsInfo(w http.ResponseWriter, r *http.Request) {
 	// log all url params
 	ctx := r.Context()
 	category := getCategory(ctx)
-	state := strings.Trim(r.URL.Query().Get("filter"), "")
 	hashes := getHashes(ctx)
 
-	// Convert hashes to filter function
-	torrents, err := q.manager.Queue().
-		ListFilter(category, config.ProtocolTorrent, storage.TorrentState(state), hashes, "added_on", false)
-	if err != nil {
-		http.Error(w, "Failed to read the download queue", http.StatusInternalServerError)
-		return
-	}
+	torrents := q.manager.Queue().ListFilter(manager.ListQuery{
+		Category: category, Protocol: config.ProtocolTorrent, Hashes: hashes,
+		Phases: manager.QBitFilter(strings.TrimSpace(r.URL.Query().Get("filter"))),
+	}, "added_on", false)
 	q.manager.ArrSeen(torrents)
 	qbitTorrents := make([]Torrent, len(torrents))
 	for i, t := range torrents {
@@ -301,18 +297,15 @@ func (q *QBit) handleSetCategory(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "No hashes provided", http.StatusBadRequest)
 		return
 	}
-	torrents, err := q.manager.Queue().ListFilter("", config.ProtocolTorrent, "", hashes, "", false)
-	if err != nil {
-		http.Error(w, "Failed to read the download queue", http.StatusInternalServerError)
-		return
-	}
+	torrents := q.manager.Queue().
+		ListFilter(manager.ListQuery{Protocol: config.ProtocolTorrent, Hashes: hashes}, "", false)
 	var errs []error
 	for _, t := range torrents {
-		if t.Category != category {
-			errs = append(errs, q.manager.SetCategory(ctx, t.InfoHash, category))
+		if t.Entry.Category != category {
+			errs = append(errs, q.manager.SetCategory(ctx, t.Entry.InfoHash, category))
 		}
 	}
-	if err = errors.Join(errs...); err != nil {
+	if err := errors.Join(errs...); err != nil {
 		q.logger.Warn().Err(err).Msgf("Error setting torrent category")
 		http.Error(w, "Failed to update torrents", http.StatusInternalServerError)
 		return
@@ -332,13 +325,10 @@ func (q *QBit) handleAddTorrentTags(w http.ResponseWriter, r *http.Request) {
 	for i, tag := range tags {
 		tags[i] = strings.TrimSpace(tag)
 	}
-	torrents, err := q.manager.Queue().ListFilter("", config.ProtocolTorrent, "", hashes, "", false)
-	if err != nil {
-		http.Error(w, "Failed to read the download queue", http.StatusInternalServerError)
-		return
-	}
+	torrents := q.manager.Queue().
+		ListFilter(manager.ListQuery{Protocol: config.ProtocolTorrent, Hashes: hashes}, "", false)
 	for _, t := range torrents {
-		q.setTorrentTags(ctx, t, tags)
+		q.setTorrentTags(ctx, &t.Entry, tags)
 	}
 	utils.JSONResponse(w, nil, http.StatusOK)
 }
@@ -355,13 +345,10 @@ func (q *QBit) handleRemoveTorrentTags(w http.ResponseWriter, r *http.Request) {
 	for i, tag := range tags {
 		tags[i] = strings.TrimSpace(tag)
 	}
-	torrents, err := q.manager.Queue().ListFilter("", config.ProtocolTorrent, "", hashes, "", false)
-	if err != nil {
-		http.Error(w, "Failed to read the download queue", http.StatusInternalServerError)
-		return
-	}
+	torrents := q.manager.Queue().
+		ListFilter(manager.ListQuery{Protocol: config.ProtocolTorrent, Hashes: hashes}, "", false)
 	for _, torrent := range torrents {
-		q.removeTorrentTags(ctx, torrent, tags)
+		q.removeTorrentTags(ctx, &torrent.Entry, tags)
 	}
 	utils.JSONResponse(w, nil, http.StatusOK)
 }

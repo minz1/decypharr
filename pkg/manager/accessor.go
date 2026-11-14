@@ -114,3 +114,8 @@ func (m *Manager) FetchClient() *http.Client {
 func (m *Manager) TLSConfig() *tls.Config {
 	return m.tlsConfig
 }
+
+// Grab is a copy of key's grab as readers see it.
+func (m *Manager) Grab(key string) (GrabView, bool) {
+	return m.grabs.get(key)
+}

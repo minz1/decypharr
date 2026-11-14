@@ -2,13 +2,11 @@ package manager
 
 import (
 	"cmp"
-	"strings"
 	"time"
 
 	"github.com/sirrobot01/decypharr/internal/task/keyed"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/manager/grab"
-	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
 // deadlineView is what grab.NextDeadline reads for key's grab besides its state.
@@ -151,22 +149,18 @@ func (m *Manager) removeStalledAfter() time.Duration {
 	return max(limit, 0)
 }
 
-// ArrSeen records that an Arr listing rendered these entries. A failed grab's retention starts to run once a listing
+// ArrSeen records that an Arr listing rendered these grabs. A failed grab's retention starts to run once a listing
 // rendered its failure; the grab is sent the failure time rendered, and only if it has not been told that one.
-func (m *Manager) ArrSeen(rendered []*storage.Entry) {
+func (m *Manager) ArrSeen(rendered []GrabView) {
 	if m.entries == nil {
 		return
 	}
-	for _, e := range rendered {
-		if e.State != storage.EntryStateError {
+	for _, v := range rendered {
+		if v.State.Phase != grab.PhaseFailed {
 			continue
 		}
-		key := strings.ToLower(e.InfoHash)
-		var last time.Time
-		if e.LastErrorTime != nil {
-			last = *e.LastErrorTime
-		}
-		failedAt := cmp.Or(last, e.AddedOn, e.UpdatedAt)
+		key := v.State.Key
+		failedAt := v.State.Failure.At
 		if failedAt.IsZero() {
 			continue
 		}

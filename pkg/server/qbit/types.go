@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/pkg/manager"
+	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
@@ -326,33 +328,39 @@ type TorrentFile struct {
 const qbitInfiniteETA int64 = 8640000
 
 // ToQBitTorrent converts to QBitTorrent format for API compatibility.
-func convertToQBitTorrentTorrent(t *storage.Entry, naming config.WebDavFolderNaming) Torrent {
+func convertToQBitTorrentTorrent(v manager.GrabView, naming config.WebDavFolderNaming) Torrent {
+	t := &v.Entry
+	p := grab.Project(v.State, t.Progress)
 	name := t.Name
 	contentPath := t.ContentPath
 	if naming == config.WebDavUseArrSubmittedName {
 		name = t.GetFolder(naming)
 		contentPath = t.DownloadPath(naming)
 	}
-	amountLeft := max(int64(float64(t.Size)*(1-t.Progress)), 0)
+	amountLeft := max(int64(float64(t.Size)*(1-p.Progress)), 0)
+	var completionOn int64
+	if t.CompletedAt != nil {
+		completionOn = t.CompletedAt.Unix()
+	}
 
 	qbitTorrent := Torrent{
 		Hash:         t.InfoHash,
 		Name:         name,
 		Size:         t.Size,
-		Progress:     t.Progress,
+		Progress:     p.Progress,
 		Dlspeed:      t.Speed,
 		Eta:          calculateETA(amountLeft, t.Speed),
 		NumSeeds:     t.Seeders,
-		State:        t.State,
+		State:        storage.TorrentState(p.QBitState),
 		Category:     t.Category,
 		SavePath:     t.SavePath,
 		ContentPath:  contentPath,
 		AddedOn:      t.CreatedAt.Unix(),
-		CompletionOn: 0,
+		CompletionOn: completionOn,
 		Debrid:       t.ActiveProvider,
 		DebridID:     "",
 		AmountLeft:   amountLeft,
-		Downloaded:   int64(float64(t.Size) * t.Progress),
+		Downloaded:   int64(float64(t.Size) * p.Progress),
 		MagnetURI:    t.Magnet,
 		Files:        getTorrentFiles(t),
 
@@ -363,10 +371,6 @@ func convertToQBitTorrentTorrent(t *storage.Entry, naming config.WebDavFolderNam
 		RatioLimit: 1,
 		Tracker:    "udp://tracker.opentrackr.org:1337",
 	}
-	if t.Status == storage.EntryStatusQueued {
-		qbitTorrent.State = storage.TorrentState("queuedDL")
-	}
-
 	return qbitTorrent
 }
 

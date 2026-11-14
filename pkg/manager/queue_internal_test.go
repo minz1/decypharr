@@ -78,7 +78,7 @@ func newQueueDeleteTest(t *testing.T) (*Queue, *storage.Entry, string) {
 		t.Fatalf("create downloaded file: %v", writeFileErr)
 	}
 
-	queue := newQueue(store, nil, zerolog.Nop())
+	queue := newQueue(store, nil, &grabIndex{}, zerolog.Nop())
 	if addErr := queue.Add(entry); addErr != nil {
 		t.Fatalf("add queued entry: %v", addErr)
 	}
@@ -108,7 +108,7 @@ func TestCleanupRemovesStagedNZB(t *testing.T) {
 // hash logs its wait's start at WARN again.
 func TestCleanupForgetsTheProviderWait(t *testing.T) {
 	t.Parallel()
-	m := &Manager{queue: newQueue(nil, nil, zerolog.Nop()), logger: zerolog.Nop()}
+	m := &Manager{queue: newQueue(nil, nil, &grabIndex{}, zerolog.Nop()), logger: zerolog.Nop()}
 	entry := &storage.Entry{InfoHash: "0123456789ABCDEF0123456789ABCDEF01234567", Name: "converting"}
 	m.queue.waits.observe(entry.InfoHash, waitConverting)
 

@@ -3,6 +3,8 @@ package qbit
 import (
 	"testing"
 
+	"github.com/sirrobot01/decypharr/pkg/manager"
+	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
@@ -60,7 +62,10 @@ func TestConvertToQBitTorrentTorrentCalculatesETA(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := convertToQBitTorrentTorrent(tt.entry, "")
+			got := convertToQBitTorrentTorrent(
+				manager.GrabView{State: grab.State{Phase: grab.PhaseProvider}, Entry: *tt.entry},
+				"",
+			)
 			if got.AmountLeft != tt.wantLeft {
 				t.Fatalf("AmountLeft = %d, want %d", got.AmountLeft, tt.wantLeft)
 			}

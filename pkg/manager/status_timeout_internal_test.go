@@ -36,7 +36,7 @@ func queuedEntryAddedAt(
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	m := withTestConfig(t, &Manager{
-		queue: newQueue(store, nil, zerolog.Nop()), clients: xsync.NewMap[string, debrid.Client](),
+		queue: newQueue(store, nil, &grabIndex{}, zerolog.Nop()), clients: xsync.NewMap[string, debrid.Client](),
 		logger: zerolog.Nop(),
 	})
 	m.clients.Store("provider", provider)

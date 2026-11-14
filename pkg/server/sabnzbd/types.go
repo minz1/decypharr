@@ -1,10 +1,13 @@
 package sabnzbd
 
 import (
+	"cmp"
 	"fmt"
 	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/pkg/manager"
+	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
@@ -221,24 +224,20 @@ const (
 )
 
 // convertToSABnzbdNZB converts a storage.Entry to SABnzbd NZB format.
-func convertToSABnzbdNZB(e *storage.Entry, naming config.WebDavFolderNaming) NZB {
+func convertToSABnzbdNZB(v manager.GrabView, naming config.WebDavFolderNaming) NZB {
+	e := &v.Entry
+	p := grab.Project(v.State, e.Progress)
 	// Calculate MB values
 	sizeMB := e.Size / mb
-	mbLeft := int64(float64(e.Size) * (1 - e.Progress) / float64(mb))
-	downloaded := int64(float64(e.Size) * e.Progress)
+	mbLeft := int64(float64(e.Size) * (1 - p.Progress) / float64(mb))
+	downloaded := int64(float64(e.Size) * p.Progress)
 
 	// Calculate time left (simple estimation)
 	timeLeft := "0:00:00"
-	if e.Speed > 0 && e.Progress < 1.0 {
-		bytesLeft := int64(float64(e.Size) * (1 - e.Progress))
+	if e.Speed > 0 && p.Progress < 1.0 {
+		bytesLeft := int64(float64(e.Size) * (1 - p.Progress))
 		left := time.Duration(bytesLeft/e.Speed) * time.Second
 		timeLeft = fmt.Sprintf("%d:%02d:%02d", left/time.Hour, left%time.Hour/time.Minute, left%time.Minute/time.Second)
-	}
-
-	// Map storage state to SABnzbd status
-	status := mapStorageStateToSABStatus(e.State)
-	if e.Status == storage.EntryStatusQueued {
-		status = StatusQueued
 	}
 
 	var completedOn int64
@@ -252,10 +251,10 @@ func convertToSABnzbdNZB(e *storage.Entry, naming config.WebDavFolderNaming) NZB
 		Filename:     e.OriginalFilename,
 		Size:         e.Size,
 		SizeMB:       sizeMB,
-		Percentage:   e.Progress * percent,
+		Percentage:   p.Progress * percent,
 		MBLeft:       mbLeft,
 		TimeLeft:     timeLeft,
-		Status:       status,
+		Status:       p.SABStatus,
 		Category:     e.Category,
 		Priority:     PriorityNormal,
 		SavePath:     e.SavePath,
@@ -263,9 +262,9 @@ func convertToSABnzbdNZB(e *storage.Entry, naming config.WebDavFolderNaming) NZB
 		Script:       scriptNone,
 		AddedOn:      e.CreatedAt.Unix(),
 		CompletedOn:  completedOn,
-		FailMessage:  e.LastError,
+		FailMessage:  cmp.Or(v.State.Failure.Reason, e.LastError),
 		Storage:      e.DownloadPath(naming),
-		Files:        getNZBFiles(e),
+		Files:        getNZBFiles(e, p.SABFile),
 		AvgAge:       "0d", // We don't track article age
 		Downloaded:   downloaded,
 		Labels:       e.Tags,
@@ -276,19 +275,9 @@ func convertToSABnzbdNZB(e *storage.Entry, naming config.WebDavFolderNaming) NZB
 }
 
 // getNZBFiles converts storage.Entry files to File format.
-func getNZBFiles(e *storage.Entry) []File {
+func getNZBFiles(e *storage.Entry, fileStatus string) []File {
 	files := make([]File, 0, len(e.Files))
 
-	// Determine file status based on job state
-	fileStatus := "queued"
-	switch {
-	case e.Status == storage.EntryStatusQueued:
-		fileStatus = "queued"
-	case e.State == storage.EntryStateDownloading:
-		fileStatus = "active"
-	case e.State == storage.EntryStatePausedUP:
-		fileStatus = "finished"
-	}
 	idx := 0
 	for _, f := range e.Files {
 		if f.Deleted {
@@ -315,20 +304,4 @@ func getNZBFiles(e *storage.Entry) []File {
 	}
 
 	return files
-}
-
-// mapStorageStateToSABStatus maps storage.TorrentState to SABnzbd status.
-func mapStorageStateToSABStatus(state storage.TorrentState) string {
-	switch state {
-	case storage.EntryStateDownloading:
-		return StatusDownloading
-	case storage.EntryStatePausedDL:
-		return StatusPaused
-	case storage.EntryStatePausedUP:
-		return StatusCompleted
-	case storage.EntryStateError:
-		return StatusFailed
-	default:
-		return StatusQueued
-	}
 }

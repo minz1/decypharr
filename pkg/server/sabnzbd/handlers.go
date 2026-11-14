@@ -1,6 +1,7 @@
 package sabnzbd
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -14,7 +15,6 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/manager"
 	"github.com/sirrobot01/decypharr/pkg/manager/grab"
-	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
 // handleAPI is the main handler for all SABnzbd API requests.
@@ -159,12 +159,13 @@ func (s *SABnzbd) handleListQueue(w http.ResponseWriter, r *http.Request) {
 		nzoIDs = strings.Split(nzoIDsVal, ",")
 	}
 
-	entries, err := s.manager.Queue().
-		ListFilter(category, config.ProtocolNZB, storage.EntryStateDownloading, nzoIDs, "added_on", false)
-	if err != nil {
-		s.writeError(w, "Failed to read the download queue", http.StatusInternalServerError)
-		return
-	}
+	entries := s.manager.Queue().ListFilter(manager.ListQuery{
+		Category: category, Protocol: config.ProtocolNZB, Hashes: nzoIDs,
+		Phases: []grab.Phase{
+			grab.PhaseQueued, grab.PhaseThrottled, grab.PhaseSubmitting, grab.PhaseProvider, grab.PhaseAwaitingLinks,
+			grab.PhaseActing,
+		},
+	}, "added_on", false)
 
 	queue := Queue{
 		Version: Version,
@@ -172,14 +173,16 @@ func (s *SABnzbd) handleListQueue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Convert NZBs to queue slots
-	for index, e := range entries {
-		nzb := convertToSABnzbdNZB(e, s.settings.Get().FolderNaming)
+	for index, v := range entries {
+		e := &v.Entry
+		p := grab.Project(v.State, e.Progress)
+		nzb := convertToSABnzbdNZB(v, s.settings.Get().FolderNaming)
 
 		// Calculate size values as strings (SABnzbd format)
 		sizeMB := float64(e.Size) / float64(mb)
-		mbLeft := sizeMB * (1 - e.Progress)
+		mbLeft := sizeMB * (1 - p.Progress)
 		sizeStr := formatSize(e.Size)
-		sizeLeftBytes := int64(float64(e.Size) * (1 - e.Progress))
+		sizeLeftBytes := int64(float64(e.Size) * (1 - p.Progress))
 		sizeLeftStr := formatSize(sizeLeftBytes)
 
 		// get labels from entry
@@ -253,11 +256,7 @@ func (s *SABnzbd) handleHistoryList(w http.ResponseWriter, r *http.Request) {
 	if nzoIDsValue := r.FormValue("nzo_ids"); nzoIDsValue != "" {
 		nzoIDs = strings.Split(nzoIDsValue, ",")
 	}
-	history, err := s.getHistory(r.Context(), nzoIDs)
-	if err != nil {
-		s.writeError(w, "Failed to read download history", http.StatusInternalServerError)
-		return
-	}
+	history := s.getHistory(r.Context(), nzoIDs)
 
 	response := HistoryResponse{
 		History: history,
@@ -472,13 +471,17 @@ func (s *SABnzbd) handleGetFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	entry, err := s.manager.GetEntry(nzoID)
-	if err != nil {
-		s.writeError(w, "NZB not found", http.StatusNotFound)
-		return
+	var files []File
+	if v, ok := s.manager.Grab(nzoID); ok {
+		files = getNZBFiles(&v.Entry, grab.Project(v.State, v.Entry.Progress).SABFile)
+	} else {
+		entry, err := s.manager.GetEntry(nzoID)
+		if err != nil {
+			s.writeError(w, "NZB not found", http.StatusNotFound)
+			return
+		}
+		files = getNZBFiles(entry, "finished")
 	}
-
-	files := getNZBFiles(entry)
 
 	// SABnzbd returns files wrapped in a "files" object
 	response := map[string]any{
@@ -503,54 +506,34 @@ func (s *SABnzbd) handleStatus(w http.ResponseWriter, _ *http.Request) {
 
 // Helper methods
 
-func (s *SABnzbd) getHistory(ctx context.Context, nzoIDs []string) (History, error) {
+func (s *SABnzbd) getHistory(ctx context.Context, nzoIDs []string) History {
 	cat := getCategory(ctx)
-	completed, err := s.manager.Queue().
-		ListFilter(cat, config.ProtocolNZB, storage.EntryStatePausedUP, nzoIDs, "added_on", false)
-	if err != nil {
-		return History{}, err
-	}
-	failed, err := s.manager.Queue().
-		ListFilter(cat, config.ProtocolNZB, storage.EntryStateError, nzoIDs, "added_on", false)
-	if err != nil {
-		return History{}, err
-	}
-	s.manager.ArrSeen(failed)
-	slots := make([]HistorySlot, 0, len(completed)+len(failed))
+	views := s.manager.Queue().ListFilter(manager.ListQuery{
+		Category: cat, Protocol: config.ProtocolNZB, Hashes: nzoIDs,
+		Phases: []grab.Phase{grab.PhaseComplete, grab.PhaseFailed},
+	}, "added_on", false)
+	s.manager.ArrSeen(views)
+	slots := make([]HistorySlot, 0, len(views))
 	history := History{
 		Version: Version,
 		Paused:  false,
 	}
 	naming := s.settings.Get().FolderNaming
-	for _, item := range completed {
-		slot := HistorySlot{
-			Status:      mapStorageStateToSABStatus(item.State),
+	for _, v := range views {
+		item := &v.Entry
+		slots = append(slots, HistorySlot{
+			Status:      grab.Project(v.State, item.Progress).SABStatus,
 			Name:        item.Name,
 			NZBName:     item.Name,
 			NzoID:       item.InfoHash,
 			Category:    item.Category,
-			FailMessage: item.LastError,
+			FailMessage: cmp.Or(v.State.Failure.Reason, item.LastError),
 			Bytes:       item.Size,
 			Storage:     item.DownloadPath(naming),
-		}
-		slots = append(slots, slot)
-	}
-
-	for _, item := range failed {
-		slot := HistorySlot{
-			Status:      mapStorageStateToSABStatus(item.State),
-			Name:        item.Name,
-			NZBName:     item.Name,
-			NzoID:       item.InfoHash,
-			Category:    item.Category,
-			FailMessage: item.LastError,
-			Bytes:       item.Size,
-			Storage:     item.DownloadPath(naming),
-		}
-		slots = append(slots, slot)
+		})
 	}
 	history.Slots = slots
-	return history, nil
+	return history
 }
 
 func (s *SABnzbd) writeError(w http.ResponseWriter, message string, status int) {

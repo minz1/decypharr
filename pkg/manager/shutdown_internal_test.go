@@ -119,7 +119,7 @@ func newShutdownTestManager(t *testing.T, dbPath string) *Manager {
 		grabs:   &grabIndex{},
 		config:  cfg,
 		store:   st,
-		queue: newQueue(store, nil,
+		queue: newQueue(store, nil, &grabIndex{},
 			zerolog.Nop(),
 		),
 		arr:     arr.New(config.NewStore(&config.Config{}), nil, zerolog.Nop()),
@@ -191,7 +191,7 @@ func reopenShutdownTestManager(t *testing.T, m *Manager, dbPath string, entry *s
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.storage, m.queue = store, newQueue(store, nil, zerolog.Nop())
+	m.storage, m.queue = store, newQueue(store, nil, &grabIndex{}, zerolog.Nop())
 	wireLifecycle(t, m)
 	saved, err := m.queue.GetTorrent(entry.InfoHash)
 	if err != nil {

@@ -235,7 +235,8 @@ func (h *actorHarness) arrSees(key string) {
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	h.manager().ArrSeen([]*storage.Entry{e})
+	g, _ := grab.Load(e, nil, false)
+	h.manager().ArrSeen([]GrabView{{State: g.State, Entry: *e}})
 	synctest.Wait()
 }
 
