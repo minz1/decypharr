@@ -119,15 +119,15 @@ func (q *QBit) handleTorrentsAdd(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg := q.config.Get()
-	action := cfg.DefaultDownloadAction
-	if strings.EqualFold(r.FormValue("sequentialDownload"), "true") {
-		action = config.DownloadActionDownload
-	}
 	rmTrackerUrls := q.alwaysRemoveTrackerURLS || strings.EqualFold(r.FormValue("firstLastPiecePrio"), "true")
 	debridName := r.FormValue("debrid")
 	instance := getArrFromContext(ctx)
 	if instance.Name == "" {
 		instance = arr.Arr{Name: r.FormValue("category")}
+	}
+	action := cfg.DownloadActionFor(instance.Name)
+	if strings.EqualFold(r.FormValue("sequentialDownload"), "true") {
+		action = config.DownloadActionDownload
 	}
 	callbackURL := cfg.Notifications.CallbackURL
 

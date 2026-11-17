@@ -293,11 +293,7 @@ func (s *SABnzbd) handleAddURL(w http.ResponseWriter, r *http.Request) {
 
 	urls := r.FormValue("name")
 
-	cfg := s.settings.Get()
-	action := cfg.DefaultDownloadAction
-	if r.FormValue("action") != "" {
-		action = config.DownloadAction(r.FormValue("action"))
-	}
+	action := addAction(s.settings.Get(), _arr.Name, r.FormValue("action"))
 
 	if urls == "" {
 		s.writeError(w, "URL is required", http.StatusBadRequest)
@@ -369,11 +365,7 @@ func (s *SABnzbd) handleAddFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg := s.settings.Get()
-	action := cfg.DefaultDownloadAction
-	if r.FormValue("action") != "" {
-		action = config.DownloadAction(r.FormValue("action"))
-	}
+	action := addAction(s.settings.Get(), _arr.Name, r.FormValue("action"))
 
 	// A parsed multipart form always has a File map; uploads come in "name".
 	files := r.MultipartForm.File["name"]
@@ -618,4 +610,11 @@ func formatSize(bytes int64) string {
 	default:
 		return fmt.Sprintf("%d B", bytes)
 	}
+}
+
+func addAction(cfg *config.Config, category, requested string) config.DownloadAction {
+	if action := config.DownloadAction(requested); action.Valid() {
+		return action
+	}
+	return cfg.DownloadActionFor(category)
 }

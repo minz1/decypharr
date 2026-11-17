@@ -401,6 +401,8 @@ type Config struct {
 	VirtualFolders        []VirtualFolder          `json:"virtual_folders,omitempty"`
 	DefaultDownloadAction DownloadAction           `json:"default_download_action,omitempty"`
 
+	CategoryDownloadActions map[string]DownloadAction `json:"category_download_actions,omitempty"`
+
 	RefreshDirs string `json:"refresh_dirs,omitempty"`
 	Retries     int    `json:"retries,omitempty"`
 
@@ -488,6 +490,30 @@ func (c *Config) load(lookup LookupEnv) error {
 	return nil
 }
 
+func (c *Config) DownloadActionFor(category string) DownloadAction {
+	if action, ok := c.CategoryDownloadActions[category]; ok {
+		return action
+	}
+	return c.DefaultDownloadAction
+}
+
+func (a DownloadAction) Valid() bool {
+	switch a {
+	case DownloadActionSymlink, DownloadActionDownload, DownloadActionNone:
+		return true
+	}
+	return false
+}
+
+func validateCategoryDownloadActions(actions map[string]DownloadAction) error {
+	for category, action := range actions {
+		if !action.Valid() {
+			return fmt.Errorf("category_download_actions[%q]: unknown action %q", category, action)
+		}
+	}
+	return nil
+}
+
 // CheckLoadable runs the checks Load enforces, so a configuration that
 // fails them is never saved: an invalid DFS size or duration (which would
 // silently disable cache enforcement), shared mode, TLS CA file or debrid
@@ -503,6 +529,9 @@ func (c *Config) CheckLoadable() error {
 		return err
 	}
 	if err := validateDebridProxies(c.Debrids); err != nil {
+		return err
+	}
+	if err := validateCategoryDownloadActions(c.CategoryDownloadActions); err != nil {
 		return err
 	}
 	return c.Prune.validate(c.Strm.Enabled)
@@ -961,6 +990,7 @@ func clearHotFields(c *Config) {
 	c.CustomFolders = nil
 	c.VirtualFolders = nil
 	c.DefaultDownloadAction = ""
+	c.CategoryDownloadActions = nil
 	c.RefreshDirs = ""
 	c.Repair = RepairConfig{}
 

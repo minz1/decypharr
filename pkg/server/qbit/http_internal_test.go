@@ -205,3 +205,47 @@ func addBlockedOnOneProviderThrottledOnAnother(t *testing.T) {
 		t.Fatalf("entry after the retry = %+v, %v; want still queued", entry, err)
 	}
 }
+
+func TestAddUsesTheCategoryDownloadAction(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, addUsesTheCategoryDownloadAction)
+}
+
+func addUsesTheCategoryDownloadAction(t *testing.T) {
+	mgr, store := managertest.New(t, func(cfg *config.Config) {
+		cfg.UseAuth = false
+		cfg.DefaultDownloadAction = config.DownloadActionSymlink
+		cfg.CategoryDownloadActions = map[string]config.DownloadAction{"bindery": config.DownloadActionDownload}
+	})
+	torBox := &refusingProvider{
+		name: "torbox", err: fmt.Errorf("torbox queued it: %w", customerror.ErrTooManyActiveDownloads),
+		signal: make(chan struct{}, 16),
+	}
+	mgr.Clients().Store(torBox.name, torBox)
+	routes := New(mgr, store, zerolog.Nop()).Routes()
+
+	for _, tc := range []struct {
+		hash, category, sequential string
+		want                       config.DownloadAction
+	}{
+		{"1111111111111111111111111111111111111111", "bindery", "", config.DownloadActionDownload},
+		{"2222222222222222222222222222222222222222", "sonarr", "", config.DownloadActionSymlink},
+		{"3333333333333333333333333333333333333333", "sonarr", "true", config.DownloadActionDownload},
+	} {
+		form := url.Values{
+			"urls":     {"magnet:?xt=urn:btih:" + tc.hash + "&dn=release"},
+			"category": {tc.category}, "sequentialDownload": {tc.sequential},
+		}
+		if w := postForm(routes, "/torrents/add", form); w.Code != http.StatusOK {
+			t.Fatalf("add %s status = %d: %s", tc.category, w.Code, w.Body.String())
+		}
+		<-torBox.signal
+		entry, err := mgr.Queue().GetTorrent(tc.hash)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if entry.Action != tc.want {
+			t.Errorf("category %s stored action %q, want %q", tc.category, entry.Action, tc.want)
+		}
+	}
+}

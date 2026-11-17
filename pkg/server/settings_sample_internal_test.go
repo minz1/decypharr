@@ -31,6 +31,7 @@ func settingsExclusions() map[string]string {
 		"debrids[].directories":     "deprecated",
 		"use_auth":                  "managed elsewhere",
 		"strm.secret":               "managed elsewhere",
+		"category_download_actions": "set in config.json only",
 		"mount.rclone.enabled":      "not read by the code",
 		"mount.rclone.mount_path":   "not read by the code",
 	}
