@@ -71,6 +71,7 @@ type filePartMeta struct {
 
 type FileGroup struct {
 	BaseName        string
+	key             string
 	ActualFilename  string
 	Type            storage.NZBFileType
 	Files           []manifest.File
@@ -453,8 +454,10 @@ func (p *NZBParser) mergeObfuscatedRarGroups(groups map[string]*FileGroup) map[s
 	// Collect all single-file RAR groups (potential obfuscation victims)
 	var singleFileRarGroups []*FileGroup
 	var otherGroups []*FileGroup
+	keys := make(map[*FileGroup]string, len(groups))
 
-	for _, group := range groups {
+	for key, group := range groups {
+		keys[group] = key
 		if group.Type == storage.NZBFileTypeRar && len(group.Files) == 1 {
 			singleFileRarGroups = append(singleFileRarGroups, group)
 		} else {
@@ -504,10 +507,11 @@ func (p *NZBParser) mergeObfuscatedRarGroups(groups map[string]*FileGroup) map[s
 		})
 
 		// Rebuild the groups map with the merged group
+		mergedGroup.key = singleFileRarGroups[0].key
 		result := make(map[string]*FileGroup)
-		result[mergedGroup.BaseName] = mergedGroup
+		result[keys[singleFileRarGroups[0]]] = mergedGroup
 		for _, group := range otherGroups {
-			result[group.BaseName] = group
+			result[keys[group]] = group
 		}
 
 		p.logger.Info().
@@ -614,7 +618,8 @@ func (p *NZBParser) groupProcessedFiles(allFiles []contentResult) map[string]*Fi
 			}
 		}
 
-		group := groupFor(groups, p.groupKeyFor(item), item)
+		key, base := p.groupKeyFor(item)
+		group := groupFor(groups, key, base, item)
 
 		// Update the filename only when content detection produced one; a
 		// content-detected file whose yEnc header carried no name must keep
@@ -637,21 +642,26 @@ func (p *NZBParser) groupProcessedFiles(allFiles []contentResult) map[string]*Fi
 }
 
 // groupKeyFor groups by the yEnc name when it differs from the subject name.
-func (p *NZBParser) groupKeyFor(item contentResult) string {
+func (p *NZBParser) groupKeyFor(item contentResult) (string, string) {
+	base, name := item.file.BaseFilename, item.file.Filename
 	if item.actualFilename != "" && item.actualFilename != item.file.Filename {
-		return p.getBaseFilename(item.actualFilename)
+		base, name = p.getBaseFilename(item.actualFilename), item.actualFilename
 	}
-	return item.file.BaseFilename
+	if item.fileType == storage.NZBFileTypeMedia {
+		return base + "\x00" + strings.ToLower(filepath.Ext(name)), base
+	}
+	return base, base
 }
 
 // groupFor returns the group for key, creating it or upgrading its type and
 // filename from item.
-func groupFor(groups map[string]*FileGroup, key string, item contentResult) *FileGroup {
+func groupFor(groups map[string]*FileGroup, key, base string, item contentResult) *FileGroup {
 	group, exists := groups[key]
 	if !exists {
 		group = &FileGroup{
 			ActualFilename: item.actualFilename,
-			BaseName:       key,
+			BaseName:       base,
+			key:            key,
 			Type:           item.fileType,
 			Files:          []manifest.File{},
 			fileMeta:       make(map[string]filePartMeta),
@@ -786,7 +796,10 @@ func (p *NZBParser) detectFileType(filename string) storage.NZBFileType {
 	case ".sfv", ".nfo", ".jpg", ".png", ".txt", ".srt", ".idx", ".sub", ".par2":
 		return storage.NZBFileTypeIgnore
 	}
-	// Default to unknown type
+	if ext := filepath.Ext(lower); len(ext) > 1 && strings.Trim(ext[1:], "0123456789") != "" &&
+		p.fileFilter != nil && p.fileFilter(filename, 0) == nil {
+		return storage.NZBFileTypeMedia
+	}
 	return storage.NZBFileTypeUnknown
 }
 
@@ -819,7 +832,10 @@ func (p *NZBParser) processFileGroups(
 		if left != right {
 			return left < right
 		}
-		return fileGroups[i].BaseName < fileGroups[j].BaseName
+		if fileGroups[i].BaseName != fileGroups[j].BaseName {
+			return fileGroups[i].BaseName < fileGroups[j].BaseName
+		}
+		return fileGroups[i].key < fileGroups[j].key
 	})
 
 	// Use a Mapper with limited concurrency to prevent goroutine explosion
@@ -870,7 +886,10 @@ func sortFileGroups(groups []*FileGroup) {
 		if left != right {
 			return left < right
 		}
-		return groups[i].BaseName < groups[j].BaseName
+		if groups[i].BaseName != groups[j].BaseName {
+			return groups[i].BaseName < groups[j].BaseName
+		}
+		return groups[i].key < groups[j].key
 	})
 }
 
@@ -1184,7 +1203,12 @@ func contentSignatures() []contentSignature {
 		{storage.NZBFileTypeIgnore, "", []signaturePart{{0, "PAR2\x00PKT"}}},
 		{storage.NZBFileTypeRar, "", []signaturePart{{0, RAR4Signature}}},
 		{storage.NZBFileTypeRar, "", []signaturePart{{0, RAR5Signature}}},
+		{storage.NZBFileTypeMedia, ".epub", []signaturePart{{0, "PK\x03\x04"}, {30, "mimetypeapplication/epub+zip"}}},
 		{storage.NZBFileTypeZip, "", []signaturePart{{0, "PK\x03\x04"}}},
+		{storage.NZBFileTypeMedia, ".mobi", []signaturePart{{60, "BOOKMOBI"}}},
+		{storage.NZBFileTypeMedia, ".pdf", []signaturePart{{0, "%PDF-"}}},
+		{storage.NZBFileTypeMedia, ".m4b", []signaturePart{{4, "ftypM4B "}}},
+		{storage.NZBFileTypeMedia, ".m4a", []signaturePart{{4, "ftypM4A "}}},
 		{storage.NZBFileTypeSevenZip, "", []signaturePart{{0, "7z\xBC\xAF\x27\x1C"}}},
 		{storage.NZBFileTypeMedia, ".mkv", []signaturePart{{0, "\x1A\x45\xDF\xA3"}}},
 		{storage.NZBFileTypeMedia, ".mp4", []signaturePart{{4, "ftyp"}}},
