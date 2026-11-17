@@ -88,6 +88,10 @@ type VersionResponse struct {
 	Version string `json:"version"`
 }
 
+type CategoriesResponse struct {
+	Categories []string `json:"categories"`
+}
+
 // StatusResponse represents general status.
 type StatusResponse struct {
 	Status bool   `json:"status"`

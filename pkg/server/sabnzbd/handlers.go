@@ -445,8 +445,13 @@ func (s *SABnzbd) handleVersion(w http.ResponseWriter, _ *http.Request) {
 
 // handleGetCategories returns available categories.
 func (s *SABnzbd) handleGetCategories(w http.ResponseWriter, _ *http.Request) {
-	categories := s.getCategories()
-	utils.JSONResponse(w, categories, http.StatusOK)
+	names := []string{"*"}
+	for _, c := range s.getCategories() {
+		if c.Name != "*" {
+			names = append(names, c.Name)
+		}
+	}
+	utils.JSONResponse(w, CategoriesResponse{Categories: names}, http.StatusOK)
 }
 
 // handleGetScripts returns available scripts.

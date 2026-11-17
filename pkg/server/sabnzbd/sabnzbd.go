@@ -100,6 +100,7 @@ func (s *SABnzbd) getCategories() []Category {
 			Dir:      filepath.Join(s.downloadFolder, a.Name),
 			Priority: PriorityNormal,
 		})
+		added[a.Name] = struct{}{}
 	}
 
 	// Add default categories if not already present
