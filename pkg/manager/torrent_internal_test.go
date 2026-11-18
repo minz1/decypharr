@@ -110,6 +110,10 @@ func (f *failingStatusProvider) Poll(
 	return torrent, obs, f.err
 }
 
+func (*failingStatusProvider) Config() config.Debrid {
+	return config.Debrid{Name: "provider", Provider: "provider"}
+}
+
 func (f *failingStatusProvider) DeleteTorrent(context.Context, string) error {
 	f.deleted.Add(1)
 	return nil

@@ -27,7 +27,7 @@ import (
 func queuedEntryAddedAt(
 	t *testing.T,
 	provider debrid.Client,
-	placementAddedAt, entryAddedOn time.Time,
+	placementAddedAt time.Time,
 ) (*Manager, *storage.Entry) {
 	t.Helper()
 	store, err := storage.NewStorage(t.TempDir(), storage.Options{})
@@ -43,7 +43,6 @@ func queuedEntryAddedAt(
 	entry := &storage.Entry{
 		InfoHash: "0123456789012345678901234567890123456789", Name: "release",
 		Protocol: config.ProtocolTorrent, ActiveProvider: "provider", State: storage.EntryStateDownloading,
-		AddedOn: entryAddedOn,
 		Providers: map[string]*storage.ProviderEntry{
 			"provider": {Provider: "provider", ID: "id", AddedAt: placementAddedAt},
 		},
@@ -73,7 +72,7 @@ func TestAPollOfAPendingProviderReportsWhatItWaitsOn(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			provider := &failingStatusProvider{err: tc.err, phase: tc.phase}
-			m, entry := queuedEntryAddedAt(t, provider, time.Now().Add(-100*time.Hour), time.Time{})
+			m, entry := queuedEntryAddedAt(t, provider, time.Now().Add(-100*time.Hour))
 
 			msg := poll(t.Context(), m, entry)
 			closePlacements(t, m)
@@ -171,7 +170,7 @@ func warnLines(logs *bytes.Buffer) int {
 func TestAProviderWaitIsLoggedOncePerChange(t *testing.T) {
 	t.Parallel()
 	provider := &failingStatusProvider{phase: types.PhaseConverting}
-	m, entry := queuedEntryAddedAt(t, provider, time.Now().Add(-time.Hour), time.Time{})
+	m, entry := queuedEntryAddedAt(t, provider, time.Now().Add(-time.Hour))
 	var logs bytes.Buffer
 	m.logger = zerolog.New(&logs)
 
@@ -201,6 +200,10 @@ type pendingStatusProvider struct {
 	wait     error
 	checking chan struct{}
 	deleted  atomic.Int64
+}
+
+func (*pendingStatusProvider) Config() config.Debrid {
+	return config.Debrid{Name: "provider", Provider: "provider"}
 }
 
 func (p *pendingStatusProvider) Poll(

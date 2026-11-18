@@ -71,6 +71,7 @@ func submitResult(entry *storage.Entry, t *debridTypes.Torrent, err error) entry
 		Downloaded: t.Status == debridTypes.TorrentStatusDownloaded, AllLinked: !awaitingLinks(entry, t),
 	})
 	m.torrent = t
+	m.update = func(e *storage.Entry) { e.DownloadUncached = e.DownloadUncached || t.DownloadUncached }
 	return m
 }
 
@@ -185,7 +186,7 @@ func (m *Manager) pollChild(ctx context.Context, call entryChildCall, links bool
 		t.Status = debridTypes.TorrentStatusError
 		return m.placementFailed(ctx, entry, placement, t,
 			fmt.Errorf("torrent %s has error status: %s", t.Name, obs.Raw))
-	case debridTypes.NotCached(obs, entry.DownloadUncached):
+	case debridTypes.NotCached(obs, m.uncachedAllowed(entry)):
 		return m.placementFailed(ctx, entry, placement, t,
 			fmt.Errorf("torrent %s: %w", t.Name, customerror.ErrTorrentNotCached))
 	case obs.Phase == debridTypes.PhaseAwaitingSelection && !call.allowSelect:
@@ -407,14 +408,13 @@ func (m *Manager) requestFromEntry(entry *storage.Entry) *ImportRequest {
 	if err != nil {
 		magnet = utils.ConstructMagnet(entry.InfoHash, entry.Name)
 	}
-	downloadUncached := entry.DownloadUncached
 	req := NewTorrentRequest(
 		entry.ActiveProvider,
 		downloadFolderForEntry(m.store.Get().DownloadFolder, entry),
 		magnet,
 		m.arr.GetOrCreate(entry.Category),
 		entry.Action,
-		&downloadUncached,
+		m.downloadUncachedOverride(entry),
 		entry.CallbackURL,
 		ImportTypeAPI,
 		entry.SkipMultiSeason,
@@ -463,4 +463,28 @@ func (m *Manager) packChild(ctx context.Context, call entryChildCall, seasons []
 	}
 	m.logger.Info().Str("name", pack.Name).Ints("seasons", started).Msg("Multi-season torrent fanned out")
 	return eventMsg(grab.Event{Kind: grab.EvSeasonsStarted, Seasons: started})
+}
+
+func (m *Manager) downloadUncachedOverride(entry *storage.Entry) *bool {
+	if entry.DownloadUncached {
+		forced := true
+		return &forced
+	}
+	for _, a := range m.store.Get().Arrs {
+		if a.Name == entry.Category && a.DownloadUncached != nil {
+			choice := *a.DownloadUncached
+			return &choice
+		}
+	}
+	return nil
+}
+
+func (m *Manager) uncachedAllowed(entry *storage.Entry) bool {
+	if override := m.downloadUncachedOverride(entry); override != nil {
+		return *override
+	}
+	if client := m.ProviderClient(entry.ActiveProvider); client != nil {
+		return client.Config().DownloadUncached
+	}
+	return false
 }

@@ -8,6 +8,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
 	debrid "github.com/sirrobot01/decypharr/pkg/debrid/common"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
@@ -19,6 +20,8 @@ type awaitingSelectionProvider struct {
 
 	polls, allowed atomic.Int32
 }
+
+func (*awaitingSelectionProvider) Config() config.Debrid { return config.Debrid{Name: "realdebrid"} }
 
 func (p *awaitingSelectionProvider) Poll(
 	_ context.Context,
@@ -75,7 +78,7 @@ func selectsThenFail(t *testing.T, gap time.Duration) {
 
 func pollChildOutcome(t *testing.T, provider *failingStatusProvider, uncached, allowSelect bool) entryMsg {
 	t.Helper()
-	m, entry := queuedEntryAddedAt(t, provider, time.Now(), time.Time{})
+	m, entry := queuedEntryAddedAt(t, provider, time.Now())
 	entry.DownloadUncached = uncached
 	msg := m.pollChild(t.Context(), entryChildCall{kind: grab.ChildPoll, grab: grab.Grab{Entry: entry},
 		allowSelect: allowSelect}, false)

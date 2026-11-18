@@ -69,6 +69,7 @@ func newTorrentQueueEntry(
 		State:            storage.EntryStateDownloading,
 		Progress:         0,
 		Action:           importReq.Action,
+		DownloadUncached: importReq.DownloadUncached != nil && *importReq.DownloadUncached,
 		CallbackURL:      importReq.CallBackURL,
 		SkipMultiSeason:  importReq.skipMultiSeason(),
 		Manual:           importReq.Manual,
@@ -112,7 +113,7 @@ func (m *Manager) statusProbe(entry *storage.Entry, placement *storage.ProviderE
 		OriginalFilename: entry.OriginalFilename,
 		Size:             entry.Size,
 		Files:            make(map[string]debridTypes.File),
-		DownloadUncached: entry.DownloadUncached,
+		DownloadUncached: m.uncachedAllowed(entry),
 	}
 }
 
