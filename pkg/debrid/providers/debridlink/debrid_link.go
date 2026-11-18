@@ -235,7 +235,8 @@ func (dl *DebridLink) updateTorrent(ctx context.Context, t *types.Torrent) (type
 	}
 
 	if !common.IsSuccess(httpStatus) {
-		return types.Observation{}, fmt.Errorf("debridlink API error: Status: %d", httpStatus)
+		return types.Observation{}, customerror.NewProviderStatusError(
+			fmt.Errorf("debridlink API error: Status: %d", httpStatus), httpStatus)
 	}
 	if !res.Success {
 		return types.Observation{}, fmt.Errorf("error getting torrent")

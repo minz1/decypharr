@@ -18,6 +18,8 @@ import (
 	"github.com/rs/zerolog"
 	"go.uber.org/ratelimit"
 	"golang.org/x/net/proxy"
+
+	"github.com/sirrobot01/decypharr/internal/customerror"
 )
 
 // Client defaults.
@@ -32,6 +34,7 @@ const (
 	responseHeaderTimeout = 30 * time.Second
 	expectContinueTimeout = 1 * time.Second
 	minRetryWait          = 1 * time.Second
+	drainLimit            = 4096
 	maxRetryWait          = 30 * time.Second
 )
 
@@ -275,6 +278,7 @@ func New(logger zerolog.Logger, tlsConfig *tls.Config, options ...ClientOption) 
 	retryClient.RetryWaitMax = maxRetryWait
 	retryClient.Logger = nil
 	retryClient.Backoff = retryAfterBackoff
+	retryClient.ErrorHandler = giveUp
 
 	// Custom retry policy based on retryable status codes
 	retryClient.CheckRetry = func(ctx context.Context, resp *http.Response, err error) (bool, error) {
@@ -367,4 +371,28 @@ func SetProxy(transport *http.Transport, proxyURL string) {
 func failAllRequests(transport *http.Transport, err error) {
 	transport.Proxy = func(*http.Request) (*url.URL, error) { return nil, err }
 	transport.DialContext = func(context.Context, string, string) (net.Conn, error) { return nil, err }
+}
+
+func giveUp(resp *http.Response, err error, attempts int) (*http.Response, error) {
+	if resp == nil {
+		if err == nil {
+			return nil, fmt.Errorf("giving up after %d attempt(s)", attempts)
+		}
+		return nil, fmt.Errorf("giving up after %d attempt(s): %w", attempts, err)
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, drainLimit))
+	_ = resp.Body.Close()
+	target := "request"
+	if resp.Request != nil && resp.Request.URL != nil {
+		shown := *resp.Request.URL
+		shown.RawQuery, shown.Fragment = "", ""
+		target = resp.Request.Method + " " + shown.Redacted()
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%s giving up after %d attempt(s): %w", target, attempts, err)
+	}
+	return nil, customerror.NewProviderStatusError(
+		fmt.Errorf("%s giving up after %d attempt(s): HTTP %d", target, attempts, resp.StatusCode),
+		resp.StatusCode,
+	)
 }

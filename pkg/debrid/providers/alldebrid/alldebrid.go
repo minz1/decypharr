@@ -352,7 +352,10 @@ func (ad *AllDebrid) updateTorrent(ctx context.Context, t *types.Torrent) (int, 
 	}
 
 	if !common.IsSuccess(httpStatus) {
-		return 0, fmt.Errorf("alldebrid API error: Status: %d", httpStatus)
+		return 0, customerror.NewProviderStatusError(
+			fmt.Errorf("alldebrid API error: Status: %d", httpStatus),
+			httpStatus,
+		)
 	}
 
 	data, err := findMagnet(res.Data.Magnets, t.ID)

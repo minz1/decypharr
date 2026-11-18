@@ -639,7 +639,7 @@ func (r *RealDebrid) CheckStatus(ctx context.Context, t *types.Torrent) (*types.
 			return t, fmt.Errorf("torrent %s: %w", t.Name, customerror.ErrTorrentNotFound)
 		}
 		if status != http.StatusOK {
-			return t, fmt.Errorf("realdebrid API error: Status: %d", status)
+			return t, customerror.NewProviderStatusError(fmt.Errorf("realdebrid API error: Status: %d", status), status)
 		}
 
 		debridStatus := data.Status
@@ -1263,7 +1263,8 @@ func (r *RealDebrid) Poll(
 		return t, types.Observation{}, fmt.Errorf("torrent %s: %w", t.Name, customerror.ErrTorrentNotFound)
 	}
 	if status != http.StatusOK {
-		return t, types.Observation{}, fmt.Errorf("realdebrid API error: Status: %d", status)
+		return t, types.Observation{}, customerror.NewProviderStatusError(
+			fmt.Errorf("realdebrid API error: Status: %d", status), status)
 	}
 	r.applyStatus(t, data)
 	obs := observe(data)

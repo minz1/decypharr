@@ -345,12 +345,19 @@ func (m *Manager) submitToProvider(
 		// downloading, so the scheduler keeps checking it, and keep it at the
 		// provider. Nothing is reported to hearsay.
 		m.hearsay.DiscardAdd(decision)
-		torrent.Status = debridTypes.TorrentStatusDownloading
 		_logger.Info().
 			Str("id", torrent.ID).
 			Err(err).
 			Msg("Provider still processing the torrent; queued to keep checking")
-		return torrent, nil
+		return keptSubmission(torrent, db.Config().Name, debridTorrent), nil
+	}
+	if err != nil && torrent != nil && torrent.ID != "" && transientStatusError(err) && !isTooManyActiveDownloads(err) {
+		m.hearsay.DiscardAdd(decision)
+		_logger.Info().
+			Str("id", torrent.ID).
+			Err(err).
+			Msg("Provider status check failed for now; queued to keep checking")
+		return keptSubmission(torrent, db.Config().Name, debridTorrent), nil
 	}
 	reported := errors.Is(err, customerror.ErrTorrentNotCached)
 	if reported {

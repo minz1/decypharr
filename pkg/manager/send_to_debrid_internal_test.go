@@ -3,6 +3,8 @@ package manager
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -322,4 +324,94 @@ func TestSubmitMagnetTimeoutIsUnknown(t *testing.T) {
 			t.Fatalf("the submit was cut after %v, want %v", waited, ProviderSubmitLimit)
 		}
 	})
+}
+
+func TestAProviderOutageOnTheSubmitCheckKeepsThePlacement(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		err  error
+		keep bool
+	}{
+		"503 after retries": {customerror.NewProviderStatusError(errors.New("GET /torrents/info giving up: HTTP 503"), http.StatusServiceUnavailable), true},
+		"429 after retries": {customerror.NewProviderStatusError(errors.New("GET /torrents/info giving up: HTTP 429"), http.StatusTooManyRequests), true},
+		"401 unauthorized":  {customerror.NewProviderStatusError(errors.New("realdebrid API error: Status: 401"), http.StatusUnauthorized), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			provider := &addProvider{
+				submit: func(_ context.Context, torrent *types.Torrent) (*types.Torrent, error) {
+					return submittedTorrent(torrent)
+				},
+				check: func(_ context.Context, torrent *types.Torrent) (*types.Torrent, error) { return torrent, tc.err },
+			}
+			m := newAddTestManager(t, provider)
+			msg := m.submitChild(t.Context(), submitCall(t))
+			closePlacements(t, m)
+			kept := msg.ev != nil && msg.ev.Outcome == grab.OutcomePlacement && msg.torrent != nil &&
+				msg.torrent.Status == types.TorrentStatusDownloading
+			if kept != tc.keep || (tc.keep && provider.deleted.Load() != 0) {
+				t.Fatalf(
+					"submit result %+v kept=%t deletes=%d, want kept=%t",
+					msg.ev,
+					kept,
+					provider.deleted.Load(),
+					tc.keep,
+				)
+			}
+		})
+	}
+}
+
+func TestAKeptSubmitAfterAnOutageNamesItsProvider(t *testing.T) {
+	t.Parallel()
+	provider := &addProvider{
+		submit: func(_ context.Context, torrent *types.Torrent) (*types.Torrent, error) {
+			return &types.Torrent{ID: "pid", InfoHash: torrent.InfoHash, Name: torrent.Name}, nil
+		},
+		check: func(_ context.Context, torrent *types.Torrent) (*types.Torrent, error) {
+			return torrent, customerror.NewProviderStatusError(errors.New("HTTP 503"), http.StatusServiceUnavailable)
+		},
+	}
+	m := newAddTestManager(t, provider)
+	msg := m.submitChild(t.Context(), submitCall(t))
+	closePlacements(t, m)
+	if msg.torrent == nil || msg.torrent.Debrid != "provider" || msg.ev.Provider != "provider" {
+		t.Fatalf("kept submit %+v, want it placed at provider", msg.ev)
+	}
+}
+
+func TestASlotRefusalOnTheSubmitCheckIsNotKept(t *testing.T) {
+	t.Parallel()
+	provider := &addProvider{
+		submit: func(_ context.Context, torrent *types.Torrent) (*types.Torrent, error) {
+			return submittedTorrent(torrent)
+		},
+		check: func(_ context.Context, torrent *types.Torrent) (*types.Torrent, error) {
+			return torrent, fmt.Errorf("select files: %w", customerror.ErrTooManyActiveDownloads)
+		},
+	}
+	m := newAddTestManager(t, provider)
+	msg := m.submitChild(t.Context(), submitCall(t))
+	closePlacements(t, m)
+	if msg.ev == nil || msg.ev.Outcome == grab.OutcomePlacement {
+		t.Fatalf("slot refusal %+v, want it not kept as a placement", msg.ev)
+	}
+}
+
+func TestASubmitKeptAfterAStatusTimeoutNamesItsProvider(t *testing.T) {
+	t.Parallel()
+	provider := &addProvider{
+		submit: func(_ context.Context, torrent *types.Torrent) (*types.Torrent, error) {
+			return &types.Torrent{ID: "pid", InfoHash: torrent.InfoHash, Name: torrent.Name}, nil
+		},
+		check: func(_ context.Context, torrent *types.Torrent) (*types.Torrent, error) {
+			return torrent, customerror.ErrProviderStatusTimeout
+		},
+	}
+	m := newAddTestManager(t, provider)
+	msg := m.submitChild(t.Context(), submitCall(t))
+	closePlacements(t, m)
+	if msg.torrent == nil || msg.ev == nil || msg.ev.Provider != "provider" {
+		t.Fatalf("kept submit %+v, want it placed at provider", msg.ev)
+	}
 }

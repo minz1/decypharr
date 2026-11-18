@@ -523,7 +523,7 @@ func (tb *Torbox) updateTorrentWithClient(
 	}
 
 	if !common.IsSuccess(status) {
-		return nil, fmt.Errorf("torbox API error: Status: %d", status)
+		return nil, customerror.NewProviderStatusError(fmt.Errorf("torbox API error: Status: %d", status), status)
 	}
 	data := res.Data
 	if data == nil {

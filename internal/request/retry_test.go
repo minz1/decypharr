@@ -4,11 +4,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/rs/zerolog"
 
+	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/internal/request"
 )
 
@@ -59,5 +61,50 @@ func checkRetryPolicy(t *testing.T, explicit bool) {
 	body, err := io.ReadAll(resp.Body)
 	if err != nil || resp.StatusCode != 509 || string(body) != activeDownloadsLimit {
 		t.Fatalf("response = %d %q, error = %v", resp.StatusCode, body, err)
+	}
+}
+
+func TestAStatusThatRanOutOfRetriesIsATypedTransientError(t *testing.T) {
+	t.Parallel()
+	for _, status := range []int{http.StatusTooManyRequests, http.StatusServiceUnavailable, http.StatusBadGateway} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(status)
+		}))
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL+"/torrents/info/id", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := request.New(zerolog.Nop(), nil, request.WithMaxRetries(0)).Do(req)
+		server.Close()
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		if err == nil || !customerror.IsRetriableError(err) || !strings.Contains(err.Error(), "/torrents/info/id") {
+			t.Errorf("status %d: err %v, want a retriable error naming the request", status, err)
+		}
+	}
+}
+
+func TestAGiveUpNeverRepeatsTheQueryString(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer server.Close()
+	req, err := http.NewRequestWithContext(
+		t.Context(),
+		http.MethodGet,
+		server.URL+"/requestdl?token=SECRET&file_id=1",
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := request.New(zerolog.Nop(), nil, request.WithMaxRetries(0)).Do(req)
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+	if err == nil || strings.Contains(err.Error(), "SECRET") || !strings.Contains(err.Error(), "/requestdl") {
+		t.Fatalf("give-up error %v, want the path without its query", err)
 	}
 }
