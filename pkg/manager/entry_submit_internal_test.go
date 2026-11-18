@@ -178,9 +178,10 @@ func stoppedManager(t *testing.T) *Manager {
 	root := task.NewRoot(context.WithoutCancel(t.Context()), "test", zerolog.Nop())
 	grabs := &grabIndex{}
 	a := newEntryActor(root, entryDeps{
-		store:  newTestStore(t),
-		grabs:  grabs,
-		logger: zerolog.Nop(), capacity: 1,
+		store:          newTestStore(t),
+		arrOwnsFailure: func(grab.Grab) bool { return false },
+		grabs:          grabs,
+		logger:         zerolog.Nop(), capacity: 1,
 		child: func(entryChildCall) func(context.Context) entryMsg {
 			return func(context.Context) entryMsg { return entryMsg{} }
 		},

@@ -63,7 +63,11 @@ func submitResult(entry *storage.Entry, t *debridTypes.Torrent, err error) entry
 		return m
 	}
 	if err != nil {
-		return eventMsg(grab.Event{Kind: grab.EvSubmitResult, Outcome: grab.OutcomePermanent, Fail: grab.FailEntry,
+		fail := grab.FailEntry
+		if errors.Is(err, errReleaseRefused) {
+			fail = grab.FailBadRelease
+		}
+		return eventMsg(grab.Event{Kind: grab.EvSubmitResult, Outcome: grab.OutcomePermanent, Fail: fail,
 			Reason: "submit failed: " + err.Error()})
 	}
 	m := eventMsg(grab.Event{

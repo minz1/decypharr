@@ -16,6 +16,9 @@ func (a *entryActor) deadlineView(key string, st *entryState) grab.DeadlineView 
 		Pending: polled.pending, Dead: polled.dead, StalledAfter: a.removeStalledAfter, Retention: a.removeStalledAfter,
 		SeenFailure: a.grabs.seenFailure(key), PackRunning: a.packRunning(g.State.PackKey),
 	}
+	if a.arrOwnsFailure(g) {
+		v.Retention = 0
+	}
 	if g.State.Phase == grab.PhaseSubmitting {
 		a.submitView(&v, st, a.grabs.submitClockOf(key).loaded)
 	}

@@ -64,11 +64,12 @@ func newActorHarness(t *testing.T, store *storage.Storage) *actorHarness {
 		}
 	})
 	h.a = newEntryActor(root, entryDeps{
-		store:    store,
-		grabs:    h.grabs,
-		logger:   zerolog.Nop(),
-		capacity: 1,
-		child:    h.child,
+		store:          store,
+		arrOwnsFailure: func(grab.Grab) bool { return false },
+		grabs:          h.grabs,
+		logger:         zerolog.Nop(),
+		capacity:       1,
+		child:          h.child,
 		publish: func(e *storage.Entry) error {
 			h.record("publish")
 			return store.PublishEntry(e.Clone())

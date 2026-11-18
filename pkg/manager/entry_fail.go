@@ -35,7 +35,7 @@ func (m *Manager) failEffects(g grab.Grab, effect grab.FailEffect) {
 		}
 	}
 	m.refreshArr(entry)
-	if effect != grab.FailBadRelease {
+	if effect != grab.FailBadRelease || g.State.PackKey != "" {
 		return
 	}
 	grabErr := m.failReleaseGrab(entry)
@@ -52,4 +52,12 @@ func (m *Manager) failEffects(g grab.Grab, effect grab.FailEffect) {
 	default:
 		m.logger.Warn().Err(grabErr).Str("name", entry.Name).Msg("Failed to fail the grab in the Arr")
 	}
+}
+
+func (m *Manager) arrOwnsFailure(g grab.Grab) bool {
+	if g.Entry == nil || g.Entry.Manual || g.State.PackKey != "" {
+		return false
+	}
+	_, ok := m.Arr().Get(g.Entry.Category)
+	return ok
 }

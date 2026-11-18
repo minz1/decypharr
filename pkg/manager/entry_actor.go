@@ -155,6 +155,7 @@ type entryDeps struct {
 	// removeStalledAfter is how long a placement may stall, and how long a failed grab is kept once an Arr listed it;
 	// zero is no limit.
 	removeStalledAfter time.Duration
+	arrOwnsFailure     func(g grab.Grab) bool
 	// submitBudget is the longest a submit child may run; zero is one provider's limit and a minute.
 	submitBudget time.Duration
 	// expired runs what a grab that ran out its provider wait or its wait for links does outside its record; it must

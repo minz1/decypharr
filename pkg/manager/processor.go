@@ -43,6 +43,8 @@ const ProviderSubmitLimit = 10 * time.Minute
 // reached it, so the grab looks the submit up instead of trying the next provider.
 var errSubmitOutcomeUnknown = errors.New("submit outcome unknown")
 
+var errReleaseRefused = errors.New("every provider refused the release")
+
 // submitBudget is the longest a grab's submit child may run: every provider's limit, and a minute to spare.
 func (m *Manager) submitBudget() time.Duration {
 	clients := m.FilterDebrid(func(common.Client) bool { return true })
@@ -250,6 +252,9 @@ func (m *Manager) sendToDebrid(ctx context.Context, importRequest *ImportRequest
 	if len(throttled) > 0 {
 		return nil, &throttledError{providers: throttled, err: joinedErrors}
 	}
+	if !slices.ContainsFunc(errs, func(err error) bool { return !submitVerdict(err) }) {
+		return nil, fmt.Errorf("%w: %w", errReleaseRefused, joinedErrors)
+	}
 	return nil, joinedErrors
 }
 
@@ -305,11 +310,7 @@ func (m *Manager) submitToProvider(
 	decision := m.hearsay.EvaluateAdd(db.Config().Provider, debridTorrent.InfoHash)
 	if !overrideDownloadUncached && decision.Reject() {
 		m.hearsay.DiscardAdd(decision)
-		return nil, fmt.Errorf(
-			"%s: %s recently proven not cached, skipping submit",
-			db.Config().Name,
-			debridTorrent.InfoHash,
-		)
+		return nil, hearsayNotCached(db.Config().Name, debridTorrent.InfoHash)
 	}
 	_logger := db.Logger()
 	_logger.Info().
@@ -377,7 +378,15 @@ func (m *Manager) submitToProvider(
 // releaseIsDead reports a status-check failure the provider pins on the torrent itself, not on decypharr or the account.
 // A magnet that never converted (its grab fails at grab.ConversionLimit) has no seeders: it is dead too.
 func releaseIsDead(torrent *debridTypes.Torrent, err error) bool {
-	return errors.Is(err, customerror.ErrTorrentNotFound) ||
+	return errors.Is(err, customerror.ErrTorrentNotFound) || errors.Is(err, customerror.ErrTorrentNotCached) ||
 		errors.Is(err, customerror.ErrMagnetNotConverted) ||
 		(torrent != nil && torrent.Status == debridTypes.TorrentStatusError)
+}
+
+func hearsayNotCached(provider, hash string) error {
+	return fmt.Errorf("%s: %s recently proven not cached, skipping submit", provider, hash)
+}
+
+func submitVerdict(err error) bool {
+	return errors.Is(err, customerror.ErrTorrentNotCached) || errors.Is(err, customerror.ErrTorrentBlocked)
 }
