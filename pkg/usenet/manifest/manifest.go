@@ -21,6 +21,8 @@ type Manifest struct {
 	Metadata map[string]string
 	Files    []File
 	Stats    Statistics
+
+	NewestDate int
 }
 
 // Statistics describes the topology reported by the NZB document. Bytes are
@@ -46,6 +48,7 @@ type File struct {
 	BaseFilename  string
 	TotalSegments int
 	Bytes         int64
+	Rewritten     bool
 }
 
 // Segment is one article reference from an NZB file entry. Bytes is the
@@ -174,6 +177,7 @@ func (d *manifestDecoder) decodeFile(start *xml.StartElement) error {
 	if err := d.xml.DecodeElement(&raw, start); err != nil {
 		return fmt.Errorf("decode NZB manifest: unable to parse NZB file: %w", err)
 	}
+	d.manifest.NewestDate = max(d.manifest.NewestDate, raw.Date)
 	appendRawFile(d.manifest, d.fileBySubject, raw)
 	return nil
 }
@@ -192,6 +196,7 @@ func (d *manifestDecoder) decodeHead(start *xml.StartElement) error {
 func appendRawFile(manifest *Manifest, fileBySubject map[string]int, raw rawFile) {
 	if index, ok := fileBySubject[raw.Subject]; ok {
 		manifest.Files[index].Segments = append(manifest.Files[index].Segments, raw.Segments...)
+		manifest.Files[index].Rewritten = true
 		return
 	}
 	fileBySubject[raw.Subject] = len(manifest.Files)
@@ -218,6 +223,7 @@ func finalize(manifest *Manifest) {
 			// dedup key is taken so whitespace variants collapse together.
 			segment.MessageID = strings.TrimSpace(segment.MessageID)
 			if _, exists := seen[segment.MessageID]; exists {
+				file.Rewritten = true
 				continue
 			}
 			seen[segment.MessageID] = struct{}{}

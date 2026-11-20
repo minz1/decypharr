@@ -1,6 +1,7 @@
 package manifest_test
 
 import (
+	"encoding/xml"
 	"fmt"
 	"maps"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/Tensai75/nzbparser"
+	"golang.org/x/net/html/charset"
 
 	"github.com/sirrobot01/decypharr/pkg/usenet/manifest"
 )
@@ -316,6 +318,8 @@ func decodeLegacy(t *testing.T, source string) *manifest.Manifest {
 			Bytes:             legacy.Bytes,
 		},
 	}
+	derived := deriveLegacy(t, source)
+	result.NewestDate = derived.newest
 	maps.Copy(result.Metadata, legacy.Meta)
 	for fileIndex, legacyFile := range legacy.Files {
 		segments := make([]manifest.Segment, len(legacyFile.Segments))
@@ -342,6 +346,7 @@ func decodeLegacy(t *testing.T, source string) *manifest.Manifest {
 			BaseFilename:  legacyFile.Basefilename,
 			TotalSegments: legacyFile.TotalSegments,
 			Bytes:         legacyFile.Bytes,
+			Rewritten:     derived.rewritten[legacyFile.Subject],
 		}
 	}
 	return result
@@ -400,4 +405,128 @@ func generatedNZB(fileCount, segmentsPerFile int) string {
 	}
 	builder.WriteString(`</nzb>`)
 	return builder.String()
+}
+
+func nzbOf(files ...string) string {
+	return `<?xml version="1.0" encoding="UTF-8"?><nzb xmlns="http://www.newzbin.com/DTD/2003/nzb">` +
+		strings.Join(files, "") + `</nzb>`
+}
+
+func fileOf(date int, subject string, segments ...string) string {
+	return fmt.Sprintf(`<file poster="p" date="%d" subject="%s"><groups><group>g</group></groups><segments>%s</segments></file>`,
+		date, subject, strings.Join(segments, ""))
+}
+
+func segOf(number int, id string) string {
+	return fmt.Sprintf(`<segment bytes="1" number="%d">%s</segment>`, number, id)
+}
+
+func mustDecode(t *testing.T, source string) *manifest.Manifest {
+	t.Helper()
+	got, err := manifest.Decode(strings.NewReader(source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+func TestDecodeNewestDate(t *testing.T) {
+	t.Parallel()
+	merged := mustDecode(t, nzbOf(
+		fileOf(100, "same", segOf(1, "a@x")),
+		fileOf(200, "same", segOf(2, "b@x")),
+	))
+	if merged.NewestDate != 200 || merged.Files[0].Date != 100 || !merged.Files[0].Rewritten {
+		t.Fatalf("merged: newest %d, first date %d, rewritten %v",
+			merged.NewestDate, merged.Files[0].Date, merged.Files[0].Rewritten)
+	}
+	distinct := mustDecode(t, nzbOf(
+		fileOf(100, "one", segOf(1, "a@x")),
+		fileOf(300, "two", segOf(1, "b@x")),
+	))
+	if distinct.NewestDate != 300 {
+		t.Fatalf("distinct: newest %d", distinct.NewestDate)
+	}
+}
+
+func TestDecodeMergedContiguousRangesAreRewritten(t *testing.T) {
+	t.Parallel()
+	got := mustDecode(t, nzbOf(
+		fileOf(1, "same", segOf(1, "a@x"), segOf(2, "b@x")),
+		fileOf(1, "same", segOf(4, "d@x"), segOf(5, "e@x")),
+	))
+	file := got.Files[0]
+	var numbers []int
+	for _, segment := range file.Segments {
+		numbers = append(numbers, segment.Number)
+	}
+	if !reflect.DeepEqual(numbers, []int{1, 2, 4, 5}) || !file.Rewritten {
+		t.Fatalf("numbers %v, rewritten %v", numbers, file.Rewritten)
+	}
+}
+
+func TestDecodeDroppedDuplicateIsRewritten(t *testing.T) {
+	t.Parallel()
+	got := mustDecode(t, nzbOf(fileOf(1, "f", segOf(1, "a@x"), segOf(2, "a@x"), segOf(3, "b@x"))))
+	if len(got.Files[0].Segments) != 2 || !got.Files[0].Rewritten {
+		t.Fatalf("segments %d, rewritten %v", len(got.Files[0].Segments), got.Files[0].Rewritten)
+	}
+	spaced := mustDecode(t, nzbOf(fileOf(1, "f", segOf(1, "a@x"), segOf(2, " a@x\n"))))
+	if len(spaced.Files[0].Segments) != 1 || !spaced.Files[0].Rewritten {
+		t.Fatalf("whitespace variant: segments %d, rewritten %v",
+			len(spaced.Files[0].Segments), spaced.Files[0].Rewritten)
+	}
+}
+
+func TestDecodePlainFileIsNotRewritten(t *testing.T) {
+	t.Parallel()
+	got := mustDecode(t, nzbOf(fileOf(1, "f", segOf(1, "a@x"), segOf(3, "c@x"))))
+	if got.Files[0].Rewritten {
+		t.Fatal("a plain file was marked rewritten")
+	}
+}
+
+type legacyDerived struct {
+	newest    int
+	rewritten map[string]bool
+}
+
+func deriveLegacy(t *testing.T, source string) legacyDerived {
+	t.Helper()
+	var doc struct {
+		Files []struct {
+			Date     int    `xml:"date,attr"`
+			Subject  string `xml:"subject,attr"`
+			Segments []struct {
+				ID string `xml:",innerxml"`
+			} `xml:"segments>segment"`
+		} `xml:"file"`
+	}
+	decoder := xml.NewDecoder(strings.NewReader(source))
+	decoder.CharsetReader = charset.NewReaderLabel
+	decoder.Strict = false
+	if err := decoder.Decode(&doc); err != nil {
+		t.Fatal(err)
+	}
+	derived := legacyDerived{rewritten: make(map[string]bool)}
+	rawCount := make(map[string]int)
+	seen := make(map[string]map[string]struct{})
+	for _, file := range doc.Files {
+		derived.newest = max(derived.newest, file.Date)
+		rawCount[file.Subject]++
+		if rawCount[file.Subject] > 1 {
+			derived.rewritten[file.Subject] = true
+		}
+		if seen[file.Subject] == nil {
+			seen[file.Subject] = make(map[string]struct{})
+		}
+		for _, segment := range file.Segments {
+			id := strings.TrimSpace(segment.ID)
+			if _, dup := seen[file.Subject][id]; dup {
+				derived.rewritten[file.Subject] = true
+			}
+			seen[file.Subject][id] = struct{}{}
+		}
+	}
+	return derived
 }
