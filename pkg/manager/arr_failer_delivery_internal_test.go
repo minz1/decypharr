@@ -94,7 +94,8 @@ func freeSlotsFor(t *testing.T, m *Manager, provider string) int {
 
 func deliveryOf(entry *storage.Entry) failDelivery {
 	return failDelivery{
-		arr: "sonarr", provider: "realdebrid", downloadID: strings.ToUpper(entry.InfoHash), entryID: entry.InfoHash, name: entry.Name,
+		arr: "sonarr", provider: "realdebrid", downloadID: strings.ToUpper(entry.InfoHash), entryID: entry.InfoHash,
+		name:   entry.Name,
 		reason: "Provider rejected the torrent", since: time.Now(),
 	}
 }
