@@ -59,10 +59,12 @@ func fetchFileHeaderPrefix(
 
 	var lastErr error
 	corruptProbes := 0
+	proven := !hasRepeatedNumbers(file.Segments)
 	for _, index := range headerProbeOrder(len(file.Segments)) {
 		segment := file.Segments[index]
 		if segment.MessageID == "" {
 			lastErr = fmt.Errorf("segment %d has no message ID", segment.Number)
+			proven = false
 			continue
 		}
 
@@ -76,11 +78,13 @@ func fetchFileHeaderPrefix(
 
 		lastErr = err
 		if nntp.IsArticleNotFoundError(err) {
+			proven = proven && nntp.IsNotFoundEverywhere(err)
 			continue
 		}
 		if !nntp.IsYencDecodeError(err) {
 			return nil, err
 		}
+		proven = false
 		corruptProbes++
 		if corruptProbes >= maxCorruptHeaderProbes {
 			break
@@ -88,6 +92,9 @@ func fetchFileHeaderPrefix(
 	}
 	if lastErr == nil {
 		lastErr = fmt.Errorf("file has no fetchable segment")
+	}
+	if proven {
+		return nil, &ContentMissingError{Err: lastErr}
 	}
 	return nil, lastErr
 }
@@ -117,4 +124,15 @@ func fetchSegmentData(ctx context.Context, source ArticleSource, segment storage
 		return nil, fmt.Errorf("decoded segment has no usable data")
 	}
 	return body[start:end:end], nil
+}
+
+func hasRepeatedNumbers(segments []manifest.Segment) bool {
+	seen := make(map[int]struct{}, len(segments))
+	for _, segment := range segments {
+		if _, repeated := seen[segment.Number]; repeated {
+			return true
+		}
+		seen[segment.Number] = struct{}{}
+	}
+	return false
 }

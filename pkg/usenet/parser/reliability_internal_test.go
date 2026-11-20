@@ -37,7 +37,7 @@ func TestProbeContentAvailabilityReportsAllMissingContent(t *testing.T) {
 	err := p.probeContentAvailability(context.Background(), groups, func(_ context.Context, messageID string) error {
 		calls = append(calls, messageID)
 		return missing
-	})
+	}, false)
 	if !errors.Is(err, customerror.ErrUsenetSegmentMissing) {
 		t.Fatalf("all-missing availability error = %v", err)
 	}
@@ -65,7 +65,7 @@ func TestProbeContentAvailabilityAcceptsAnotherAvailableGroup(t *testing.T) {
 			return missing
 		}
 		return nil
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("availability probe = %v", err)
 	}
@@ -89,7 +89,7 @@ func TestProbeContentAvailabilityStopsOnOperationalError(t *testing.T) {
 	err := p.probeContentAvailability(context.Background(), groups, func(context.Context, string) error {
 		calls++
 		return wantErr
-	})
+	}, false)
 	if !errors.Is(err, wantErr) || calls != 1 {
 		t.Fatalf("operational error probe = calls %d, err %v", calls, err)
 	}
@@ -116,7 +116,7 @@ func TestProbeContentAvailabilityReusesBodyObservation(t *testing.T) {
 	err := p.probeContentAvailability(t.Context(), groups, func(context.Context, string) error {
 		calls++
 		return errors.New("STAT should not run")
-	})
+	}, false)
 	if err != nil || calls != 0 {
 		t.Fatalf("observed availability = calls %d, err %v", calls, err)
 	}

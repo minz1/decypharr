@@ -60,6 +60,7 @@ type contentResult struct {
 	partNumber      int64 // yEnc part number, if available
 	partBegin       int64 // yEnc begin offset, if available
 	notFound        bool  // every probed article was missing
+	proven          bool
 }
 
 type filePartMeta struct {
@@ -79,6 +80,7 @@ type FileGroup struct {
 	fileMeta        map[string]filePartMeta
 	Groups          map[string]struct{}
 	articleObserved bool
+	proofDoubt      bool
 }
 
 func (f *FileGroup) getMetadata() *fileAnalysisResult {
@@ -232,22 +234,34 @@ func (p *NZBParser) parse(
 		Password: raw.Metadata["password"],
 	}
 	// Group files by base Name and type
-	fileGroups, allMissing := p.groupFiles(ctx, raw.Files)
+	fileGroups, allMissing, doubt := p.groupFiles(ctx, raw.Files)
 	if ctx.Err() != nil {
 		return nil, nil, fmt.Errorf("parse interrupted while identifying files: %w", ctx.Err())
+	}
+	for _, group := range fileGroups {
+		if !p.proofNameAllowed(group, nzb.Name) {
+			doubt = true
+		}
+	}
+	for _, group := range fileGroups {
+		group.proofDoubt = doubt
 	}
 
 	if len(fileGroups) == 0 {
 		if allMissing {
-			return nil, nil, fmt.Errorf(
+			missing := fmt.Errorf(
 				"%w: no sampled content article is available",
 				customerror.ErrUsenetSegmentMissing,
 			)
+			if doubt {
+				return nil, nil, &proofWithheldError{err: missing}
+			}
+			return nil, nil, &ContentMissingError{Err: missing}
 		}
 		return nil, nil, fmt.Errorf("no valid file groups found in NZB")
 	}
 
-	if probeErr := p.probeContentAvailability(ctx, fileGroups, p.source.Stat); probeErr != nil {
+	if probeErr := p.probeContentAvailability(ctx, fileGroups, p.source.Stat, doubt); probeErr != nil {
 		return nil, fileGroups, probeErr
 	}
 
@@ -263,6 +277,7 @@ func (p *NZBParser) probeContentAvailability(
 	ctx context.Context,
 	groups map[string]*FileGroup,
 	stat statArticleFunc,
+	doubt bool,
 ) error {
 	groupNames := make([]string, 0, len(groups))
 	for name := range groups {
@@ -272,6 +287,7 @@ func (p *NZBParser) probeContentAvailability(
 
 	var missing []error
 	probed := 0
+	proven := !doubt
 	for _, name := range groupNames {
 		group := groups[name]
 		if group == nil || len(group.Files) == 0 || len(group.Files[0].Segments) == 0 {
@@ -282,13 +298,15 @@ func (p *NZBParser) probeContentAvailability(
 		}
 		segment := group.Files[0].Segments[0]
 		probed++
+		if hasRepeatedNumbers(group.Files[0].Segments) {
+			proven = false
+		}
 		if err := stat(ctx, segment.MessageID); err != nil {
-			filename := group.ActualFilename
-			if filename == "" {
-				filename = group.BaseName
-			}
-			detail := fmt.Errorf("failed to stat segment %s <%s>: %w", filename, segment.MessageID, err)
+			detail := statDetail(group, segment, err)
 			if nntp.IsArticleNotFoundError(err) {
+				if !nntp.IsNotFoundEverywhere(err) {
+					proven = false
+				}
 				missing = append(missing, detail)
 				continue
 			}
@@ -300,11 +318,15 @@ func (p *NZBParser) probeContentAvailability(
 	if probed == 0 {
 		return fmt.Errorf("no segments available to stat in NZB")
 	}
-	return fmt.Errorf(
+	exhausted := fmt.Errorf(
 		"%w: no sampled content article is available: %w",
 		customerror.ErrUsenetSegmentMissing,
 		errors.Join(missing...),
 	)
+	if !proven {
+		return exhausted
+	}
+	return &ContentMissingError{Err: exhausted}
 }
 
 // Process extracts every file group of a parsed NZB into streamable files.
@@ -319,6 +341,13 @@ func (p *NZBParser) Process(
 		result, processErr = p.process(ctx, nzb, groups)
 		return processErr
 	})
+	if err != nil {
+		for _, group := range groups {
+			if group != nil && group.proofDoubt {
+				return result, &proofWithheldError{err: err}
+			}
+		}
+	}
 	return result, err
 }
 
@@ -378,8 +407,9 @@ func (p *NZBParser) process(
 	return nzb, nil
 }
 
-// groupFiles also reports whether files needed content detection and every one of them had only missing articles.
-func (p *NZBParser) groupFiles(ctx context.Context, files []manifest.File) (map[string]*FileGroup, bool) {
+// groupFiles also reports whether files needed content detection and every one of them had only missing articles,
+// and whether any detection outcome leaves a file's type unproven.
+func (p *NZBParser) groupFiles(ctx context.Context, files []manifest.File) (map[string]*FileGroup, bool, bool) {
 	numberByDocumentOrder(files)
 
 	var unknownFiles []manifest.File
@@ -408,10 +438,14 @@ func (p *NZBParser) groupFiles(ctx context.Context, files []manifest.File) (map[
 
 	unknownResults := p.batchDetectContentTypes(ctx, unknownFiles)
 	allMissing := len(unknownResults) > 0
+	doubt := false
 
 	// Only detected, supported content proceeds to logical grouping.
 	for _, result := range unknownResults {
 		allMissing = allMissing && result.notFound
+		if result.fileType == storage.NZBFileTypeUnknown && !result.proven {
+			doubt = true
+		}
 		if result.fileType != storage.NZBFileTypeUnknown && result.fileType != storage.NZBFileTypeIgnore {
 			allFiles = append(allFiles, result)
 		}
@@ -423,7 +457,7 @@ func (p *NZBParser) groupFiles(ctx context.Context, files []manifest.File) (map[
 	// each RAR volume gets its own group. This merges them back together.
 	groups = p.mergeObfuscatedRarGroups(groups)
 
-	return groups, allMissing
+	return groups, allMissing, doubt
 }
 
 // numberByDocumentOrder assigns XML document order as Number when every file
@@ -589,6 +623,7 @@ func (p *NZBParser) batchDetectContentTypes(ctx context.Context, unknownFiles []
 		result, err := p.inspectFileByContent(ctx, *f)
 		if err != nil {
 			result.notFound = nntp.IsArticleNotFoundError(err)
+			_, result.proven = errors.AsType[*ContentMissingError](err)
 			p.logger.Trace().
 				Err(err).
 				Str("file", f.Filename).
@@ -1233,4 +1268,12 @@ func (p *NZBParser) detectFileTypeAndExtensionFromContent(data []byte) (storage.
 		}
 	}
 	return storage.NZBFileTypeUnknown, ""
+}
+
+func statDetail(group *FileGroup, segment manifest.Segment, err error) error {
+	filename := group.ActualFilename
+	if filename == "" {
+		filename = group.BaseName
+	}
+	return fmt.Errorf("failed to stat segment %s <%s>: %w", filename, segment.MessageID, err)
 }
