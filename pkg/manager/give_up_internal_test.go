@@ -26,6 +26,7 @@ import (
 type queueArr struct {
 	downloadIDs []string
 	broken      bool
+	onRequest   func()
 	requests    atomic.Int32
 }
 
@@ -35,6 +36,9 @@ func (a *queueArr) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.requests.Add(1)
+	if a.onRequest != nil {
+		a.onRequest()
+	}
 	if a.broken {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -541,4 +545,54 @@ func TestNewArmsTheBadRecheckTask(t *testing.T) {
 		}
 	}
 	t.Fatalf("tasks = %v, want the bad recheck task armed by the manager's init", root.Snapshot())
+}
+
+func TestRecheckIsStaleWhenTheBadEntryIsReplacedDuringAdmission(t *testing.T) {
+	t.Parallel()
+	for name, edit := range map[string]func(*storage.Entry){
+		"a new bad occurrence": func(e *storage.Entry) { e.CreatedAt = time.Unix(100, 0) },
+		"another category":     func(e *storage.Entry) { e.Category = "radarr" },
+		"no Arr owns it":       func(e *storage.Entry) { e.Category = "elsewhere" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			upper := strings.ToUpper(droppedHash)
+			fakeArr := &queueArr{downloadIDs: []string{upper}}
+			fake := &fakeArrRecovery{}
+			m, entry := newGiveUpTestManager(t, fakeArr, fake)
+			sonarr, _ := m.Arr().Get("sonarr")
+			m.arr = arr.New(config.NewStore(&config.Config{Arrs: []config.Arr{
+				{Name: "sonarr", Host: sonarr.Host, Token: "x"}, {Name: "radarr", Host: sonarr.Host, Token: "x"},
+			}}), nil, zerolog.Nop())
+			saveBad(t, m, entry, true)
+			replacement := *entry
+			edit(&replacement)
+			fakeArr.onRequest = func() {
+				replacement.Bad = true
+				if err := m.storage.AddOrUpdate(&replacement); err != nil {
+					t.Error(err)
+				}
+			}
+			before := freeSlotsFor(t, m, failProvider(entry))
+			done := make(chan attemptResult, 1)
+			m.testFailer(t, func(deps *arrFailerDeps) {
+				inner := deps.attemptRecheck
+				deps.attemptRecheck = func(ctx context.Context, spec attemptSpec) attemptResult {
+					res := inner(ctx, spec)
+					done <- res
+					return res
+				}
+			})
+			m.wantRecheck(entry)
+			if res := <-done; res.kind != resStale {
+				t.Fatalf("recheck result = %v (%v), want stale", res.kind, res.err)
+			}
+			if got := failsOf(fake); len(got) != 0 {
+				t.Fatalf("FailDownload calls = %v, want none for a replaced entry", got)
+			}
+			if after := freeSlotsFor(t, m, failProvider(entry)); after != before {
+				t.Fatalf("free slots = %d, want %d: the guard must be released", after, before)
+			}
+		})
+	}
 }

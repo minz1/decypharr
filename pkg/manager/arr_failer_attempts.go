@@ -231,7 +231,14 @@ func (m *Manager) attemptFailRecheck(ctx context.Context, spec attemptSpec) atte
 	_, err = m.deliverFail(ctx, recovery, failDelivery{
 		arr: arrName, provider: spec.provider, downloadID: strings.ToUpper(entry.InfoHash), entryID: entry.InfoHash,
 		name: entry.Name, reason: recheckReason,
-		current: func() bool { return m.badEntry(spec.key) != nil },
+		current: func() bool {
+			fresh := m.badEntry(spec.key)
+			if fresh == nil || !fresh.CreatedAt.Equal(entry.CreatedAt) {
+				return false
+			}
+			freshArr, _ := m.recheckTarget(fresh)
+			return freshArr == arrName
+		},
 	})
 	if err != nil {
 		return failResultOf(res, err)
