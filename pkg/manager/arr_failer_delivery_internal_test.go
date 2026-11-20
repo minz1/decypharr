@@ -161,7 +161,37 @@ func TestDeliverFailGuardBookkeeping(t *testing.T) {
 			if got := freeSlots(t, m); got != tc.wantSlots {
 				t.Fatalf("free slots in the bucket = %d, want %d", got, tc.wantSlots)
 			}
+			if !tc.wantErr && tc.handed != reacquire.HandedExisting {
+				m.arr.ReleaseFailGrab(d.arr, d.downloadID, d.provider)
+				if got := freeSlots(t, m); got != tc.wantSlots {
+					t.Fatalf("free slots after a later release = %d, want %d: the handoff was not committed", got, tc.wantSlots)
+				}
+			}
 		})
+	}
+}
+
+func TestDeliverFailHoldsAReceiptMissAgainstAFullBucket(t *testing.T) {
+	t.Parallel()
+	recovery := newScriptedRecovery()
+	var verdict atomic.Int64
+	verdict.Store(int64(arr.CanaryFail))
+	m, _ := grabManager(t, recovery.fakeArrRecovery, &verdict)
+	for i := range 2 {
+		if err := m.failGrab(grabEntry(i), recovery, "sonarr", "free"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := recovery.downloadCalls()
+	d := deliveryOf(grabEntry(5))
+	d.precheck = true
+	_, err := m.deliverFail(t.Context(), recovery, d)
+	var held *arr.HeldError
+	if !errors.As(err, &held) {
+		t.Fatalf("deliverFail error = %v, want a HeldError", err)
+	}
+	if got := recovery.downloadCalls() - before; got != 0 {
+		t.Fatalf("FailDownload calls = %d, want none while held", got)
 	}
 }
 
