@@ -216,7 +216,7 @@ kind of local operation receives the next available connection.
 | `port`            | int    | NNTP port                          | `119` (563 for SSL) |
 | `username`        | string | NNTP username                      | **Required**        |
 | `password`        | string | NNTP password                      | **Required**        |
-| `backbone`        | string | Optional shared article backbone for article-not-found failover | `""` |
+| `backbone`        | string | Optional shared article backbone for article-not-found failover. One labelled backbone's 430 excludes every provider sharing the label. A dead release is reported to the SAB client as missing only when every configured provider answered 430, or shares a label with a provider that did | `""` |
 | `ssl`             | bool   | Use SSL/TLS                        | `false`             |
 | `max_connections` | int    | Max connections to this server     | `20`                |
 | `priority`        | int    | Provider priority (lower = higher) | Index + 1           |
