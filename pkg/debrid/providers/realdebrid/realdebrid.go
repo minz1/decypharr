@@ -673,7 +673,14 @@ func (r *RealDebrid) CheckStatus(ctx context.Context, t *types.Torrent) (*types.
 				return t, fmt.Errorf("torrent %s: %w", t.Name, customerror.ErrTorrentNotCached)
 			}
 			return t, nil
-		case types.PhaseFailed, types.PhaseNone, types.PhaseStalled:
+		case types.PhaseFailed:
+			r.logger.Warn().
+				Str("torrent_id", t.ID).
+				Str("debrid_status", debridStatus).
+				Str("mapped_status", string(t.Status)).
+				Msg("Unexpected debrid status, treating as error")
+			return t, fmt.Errorf("torrent: %s has error status: %s: %w", t.Name, debridStatus, customerror.ErrReleaseFailed)
+		case types.PhaseNone, types.PhaseStalled:
 			r.logger.Warn().
 				Str("torrent_id", t.ID).
 				Str("debrid_status", debridStatus).

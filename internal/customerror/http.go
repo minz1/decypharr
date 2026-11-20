@@ -85,6 +85,8 @@ var ErrProviderStatusTimeout = (&Error{
 // converts has no seeders, and the provider drops it on its own a little later.
 var ErrMagnetNotConverted = errors.New("magnet not converted yet")
 
+var ErrReleaseFailed = errors.New("provider reports the release failed")
+
 // StatusWaitStopped is the error of a status poll that was cut short because the
 // application is stopping. It is both a pending status (no verdict on the
 // release) and the cause that stopped the wait.

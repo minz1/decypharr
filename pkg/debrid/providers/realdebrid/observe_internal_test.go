@@ -1,6 +1,7 @@
 package realdebrid
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -24,6 +25,7 @@ func TestCheckStatusVerdictPerRawState(t *testing.T) {
 		wantStatus types.TorrentStatus
 		wantErr    error
 		wantText   string
+		wantFailed bool
 	}{
 		{
 			name:       "converting forever",
@@ -90,15 +92,17 @@ func TestCheckStatusVerdictPerRawState(t *testing.T) {
 			states:     []string{"error"},
 			wantStatus: types.TorrentStatusError,
 			wantText:   "has error status: error",
+			wantFailed: true,
 		},
 		{
 			name:       "magnet_error",
 			states:     []string{"magnet_error"},
 			wantStatus: types.TorrentStatusError,
 			wantText:   "magnet_error",
+			wantFailed: true,
 		},
-		{name: "virus", states: []string{"virus"}, wantStatus: types.TorrentStatusError, wantText: "virus"},
-		{name: "dead", states: []string{"dead"}, wantStatus: types.TorrentStatusError, wantText: "dead"},
+		{name: "virus", states: []string{"virus"}, wantStatus: types.TorrentStatusError, wantText: "virus", wantFailed: true},
+		{name: "dead", states: []string{"dead"}, wantStatus: types.TorrentStatusError, wantText: "dead", wantFailed: true},
 		{
 			name:       "D7 unknown string is kept as a downloading placement",
 			states:     []string{"future_state"},
@@ -138,6 +142,9 @@ func TestCheckStatusVerdictPerRawState(t *testing.T) {
 			}
 			result, err := provider.CheckStatus(t.Context(), &types.Torrent{ID: "id", DownloadUncached: tc.uncached})
 			assertError(t, err, tc.wantErr, tc.wantText)
+			if got := errors.Is(err, customerror.ErrReleaseFailed); got != tc.wantFailed {
+				t.Fatalf("release-failed sentinel = %v, want %v (err %v)", got, tc.wantFailed, err)
+			}
 			if result == nil || result.Status != tc.wantStatus {
 				t.Fatalf("result = %#v, want status %s", result, tc.wantStatus)
 			}
