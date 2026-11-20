@@ -43,6 +43,8 @@ type importEndServer struct {
 	manualimport  atomic.Pointer[string]
 	bulkStatus    atomic.Int64
 	onEpisodeRead atomic.Pointer[func(n int)]
+	imported      atomic.Bool
+	historyFails  atomic.Bool
 
 	mu       sync.Mutex
 	episodes []map[int]int
@@ -120,6 +122,8 @@ func (f *importEndServer) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		body, _ := json.Marshal(found)
 		_, _ = w.Write(body)
+	case "GET /api/v3/history":
+		f.serveHistory(w, r)
 	case "POST /api/v3/command":
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"id":1,"status":"queued"}`))
@@ -143,6 +147,21 @@ func (f *importEndServer) serve(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+func (f *importEndServer) serveHistory(w http.ResponseWriter, r *http.Request) {
+	if f.historyFails.Load() {
+		http.Error(w, "no", http.StatusUnauthorized)
+		return
+	}
+	records := make([]HistoryRecord, 0)
+	if f.imported.Load() {
+		records = append(records, HistoryRecord{
+			ID: 7, DownloadID: r.URL.Query().Get("downloadId"), EventType: EventDownloadFolderImported,
+		})
+	}
+	body, _ := json.Marshal(HistorySchema{Page: 1, PageSize: 100, TotalRecords: len(records), Records: records})
+	_, _ = w.Write(body)
 }
 
 func (f *importEndServer) count(prefix string) int {
@@ -296,10 +315,12 @@ func TestImportEndBlocklistsWrongEpisode(t *testing.T) {
 	t.Parallel()
 	fake, service := runOnce(t, endRows("hash", 11), wrongEpisodeBody(), map[int]int{11: 5})
 	wantDelete(t, fake, true, 1)
-	tail := fake.lastRequests(3)
-	if !strings.HasPrefix(tail[0], "GET /api/v3/episode") || !strings.HasPrefix(tail[1], "GET /api/v3/episode") ||
-		!strings.HasPrefix(tail[2], "DELETE /api/v3/queue/bulk?") {
-		t.Fatalf("last requests = %v, want episode read, episode read, DELETE", tail)
+	want := []string{"GET /api/v3/episode", "GET /api/v3/history?", "GET /api/v3/episode", "DELETE /api/v3/queue/bulk?"}
+	tail := fake.lastRequests(len(want))
+	for i, prefix := range want {
+		if !strings.HasPrefix(tail[i], prefix) {
+			t.Fatalf("last requests = %v, want episode read, history read, episode read, DELETE", tail)
+		}
 	}
 	service.guard.mu.Lock()
 	defer service.guard.mu.Unlock()
@@ -312,6 +333,45 @@ func TestImportEndBlocklistsWrongEpisode(t *testing.T) {
 	}
 	if len(service.guard.pending) != 0 {
 		t.Fatalf("pending reservations = %v, want none", service.guard.pending)
+	}
+}
+
+func TestImportEndWrongEpisodeWithACreditedImportRemovesWithoutBlocklist(t *testing.T) {
+	t.Parallel()
+	fake := newImportEndServer(t, endRows("hash", 11, 12), wrongEpisodeBody(), map[int]int{11: 5, 12: 6})
+	fake.imported.Store(true)
+	service := importEndService(t, fake, Sonarr, config.QueueCleanup{}, &fakeClock{now: time.Unix(1000, 0)})
+	logs := logTo(service, zerolog.InfoLevel)
+	runCleanup(t, service, "arr", 1)
+	wantDelete(t, fake, false, 1, 2)
+	if !strings.Contains(logs.String(), `"rule":"`+rejectedRule+`"`) {
+		t.Fatalf("no INFO line names the rule %s; logs:\n%s", rejectedRule, logs.String())
+	}
+	if !strings.Contains(logs.String(), "imported from this download") {
+		t.Fatalf("no INFO line gives the reason; logs:\n%s", logs.String())
+	}
+	service.guard.mu.Lock()
+	defer service.guard.mu.Unlock()
+	if bucket := service.guard.buckets[guardKey{"arr", wrongEpisodeRule, "unknown"}]; bucket != nil {
+		t.Fatalf("wrong-episode guard bucket = %+v, want none", bucket)
+	}
+	if len(service.guard.pending) != 0 {
+		t.Fatalf("pending reservations = %v, want none", service.guard.pending)
+	}
+}
+
+func TestImportEndWrongEpisodeWithUnreadHistorySendsNothing(t *testing.T) {
+	t.Parallel()
+	fake := newImportEndServer(t, endRows("hash", 11), wrongEpisodeBody(), map[int]int{11: 5})
+	fake.historyFails.Store(true)
+	service := importEndService(t, fake, Sonarr, config.QueueCleanup{}, &fakeClock{now: time.Unix(1000, 0)})
+	runCleanup(t, service, "arr", 1)
+	wantNoDelete(t, fake)
+	wantCount(t, "history reads", fake.count("GET /api/v3/history"), 1)
+	service.guard.mu.Lock()
+	defer service.guard.mu.Unlock()
+	if len(service.guard.pending) != 0 || len(service.guard.buckets) != 0 {
+		t.Fatalf("guard pending = %v, buckets = %v, want none", service.guard.pending, service.guard.buckets)
 	}
 }
 

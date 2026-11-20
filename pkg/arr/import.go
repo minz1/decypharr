@@ -124,7 +124,6 @@ func (s *Service) lookupImport(
 	)
 }
 
-// manualImport asks the Arr to import a finished download it did not pick up and returns the queued command.
 func (s *Service) manualImport(ctx context.Context, name, downloadID string) (Command, importOutcome, error) {
 	instance, err := s.instance(name)
 	if err != nil {

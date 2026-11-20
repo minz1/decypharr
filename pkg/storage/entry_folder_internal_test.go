@@ -49,6 +49,7 @@ func TestOwnsSavePath(t *testing.T) {
 		{"legacy save path with trailing slash", h, j(root, h) + sep, h, false},
 		{"legacy save path with trailing dot", h, j(root, h) + sep + ".", h, false},
 		{"category dot slash H", h, j(root, h), "./" + h, false},
+		{"accepted risk: legacy category named like its own id, recategorized", h, j(root, h), "sonarr", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -361,6 +361,19 @@ func (s *Service) endImport(
 		s.removeLeftovers(ctx, name, rows, "import_end:no_files")
 		return failure, true
 	}
+	if outcome == outcomeWrongEpisode {
+		imports, err := s.DownloadHistory(ctx, name, downloadID, EventDownloadFolderImported)
+		if err != nil {
+			s.logger.Debug().Err(err).Str("arr", name).Str("download_id", downloadID).
+				Msg("Queue cleanup: import end skipped, history unread")
+			return failure, false
+		}
+		if len(imports) > 0 {
+			s.logger.Info().Str("arr", name).Str("download_id", downloadID).
+				Msg("Queue cleanup: no blocklist, the arr imported from this download")
+			outcome = outcomeRejected
+		}
+	}
 	failure.retryAt = s.now().Add(importRejectedDelay)
 	if outcome == outcomeRejected {
 		s.removeLeftovers(ctx, name, rows, "import_end:rejected")
