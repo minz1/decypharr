@@ -7,6 +7,7 @@ import (
 	"slices"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/puzpuzpuz/xsync/v4"
@@ -152,4 +153,30 @@ func TestSubmitResultOfAPlacementCarriesItsTorrent(t *testing.T) {
 	if msg.ev == nil || msg.ev.Outcome != grab.OutcomePermanent || msg.ev.Fail != grab.FailEntry {
 		t.Fatalf("failed submit result = %+v, want a permanent failure", msg.ev)
 	}
+}
+
+func TestThrottlesSurviveIdleExit(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	synctest.Test(t, func(t *testing.T) {
+		h := newActorHarness(t, store)
+		h.a.retryDelay = func(n int) time.Duration { return time.Duration(n) * 10 * time.Minute }
+		run := h.submitting("a")
+		for n := 1; n <= 2; n++ {
+			reply(run, grab.Event{Kind: grab.EvSubmitResult, Outcome: grab.OutcomeThrottled})
+			synctest.Wait()
+			time.Sleep(2 * time.Minute)
+			if h.running("a") {
+				t.Fatalf("actor still running after throttle %d", n)
+			}
+			time.Sleep(time.Duration(n)*10*time.Minute - 2*time.Minute)
+			run = h.next(grab.ChildSubmit)
+		}
+		reply(run, grab.Event{Kind: grab.EvSubmitResult, Outcome: grab.OutcomeThrottled})
+		synctest.Wait()
+		time.Sleep(30*time.Minute - time.Second)
+		h.none()
+		time.Sleep(time.Second)
+		h.next(grab.ChildSubmit)
+	})
 }

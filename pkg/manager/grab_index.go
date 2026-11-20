@@ -37,8 +37,9 @@ type grabIndex struct {
 	submits map[string]submitClock
 	// nudges counts the selects and restarts sent for each grab's placement in this phase; like polled, it stays while
 	// the actor is idle, so the cap holds across polls spaced further apart than the idle limit.
-	nudges map[string]int
-	links  map[string]linksMark
+	nudges    map[string]int
+	throttles map[string]int
+	links     map[string]linksMark
 }
 
 type linksMark struct {
@@ -77,6 +78,7 @@ func (x *grabIndex) remove(key string) {
 	delete(x.polled, key)
 	delete(x.submits, key)
 	delete(x.nudges, key)
+	delete(x.throttles, key)
 	delete(x.links, key)
 }
 
@@ -247,4 +249,24 @@ func (x *grabIndex) clearLinks(key string) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	delete(x.links, strings.ToLower(key))
+}
+
+func (x *grabIndex) throttlesOf(key string) int {
+	x.mu.RLock()
+	defer x.mu.RUnlock()
+	return x.throttles[strings.ToLower(key)]
+}
+
+func (x *grabIndex) setThrottles(key string, n int) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	key = strings.ToLower(key)
+	if n == 0 {
+		delete(x.throttles, key)
+		return
+	}
+	if x.throttles == nil {
+		x.throttles = make(map[string]int)
+	}
+	x.throttles[key] = n
 }

@@ -105,8 +105,6 @@ type entryState struct {
 	saveTimer keyed.TimerID
 	hasSave   bool
 	saveFails int
-	// throttles counts throttled submits since the grab last reached its provider.
-	throttles int
 	// seasonTimer rechecks a pack waiting for its seasons.
 	seasonTimer    keyed.TimerID
 	hasSeasonTimer bool
@@ -578,9 +576,10 @@ func (a *entryActor) apply(s *entryStep, effects []grab.Effect) error {
 		}
 	}
 	if s.next.State.Phase == grab.PhaseThrottled && s.cur.State.Phase != grab.PhaseThrottled {
-		s.st.throttles++
+		throttles := a.grabs.throttlesOf(s.key) + 1
+		a.grabs.setThrottles(s.key, throttles)
 		a.admit.Throttled(s.key, s.m.providers)
-		a.arm(s.st, s.fx, a.retryDelay(s.st.throttles), eventMsg(grab.Event{Kind: grab.EvThrottleTimer}))
+		a.arm(s.st, s.fx, a.retryDelay(throttles), eventMsg(grab.Event{Kind: grab.EvThrottleTimer}))
 	}
 	if !s.persisted && s.changed && s.next.State.Phase != grab.PhaseDeleting {
 		return a.persist(s.next, s.durable)
@@ -736,7 +735,7 @@ func (a *entryActor) leftPhase(st *entryState, to grab.Phase, fx *keyed.Effects[
 	st.putAt = time.Time{}
 	switch to {
 	case grab.PhaseProvider, grab.PhaseAwaitingLinks, grab.PhaseActing:
-		st.throttles = 0
+		a.grabs.setThrottles(st.g.State.Key, 0)
 	case grab.PhaseAbsent, grab.PhaseQueued, grab.PhaseThrottled, grab.PhaseSubmitting, grab.PhaseComplete,
 		grab.PhaseFailed, grab.PhaseDeleting:
 	}
