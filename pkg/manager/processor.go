@@ -324,16 +324,8 @@ func (m *Manager) submitToProvider(
 
 	decision := m.hearsay.EvaluateAdd(db.Config().Provider, hash)
 	_logger := db.Logger()
-	if !overrideDownloadUncached && decision.Reject() {
-		if useHint {
-			m.hearsay.DiscardAdd(decision)
-			return nil, hearsayNotCached(db.Config().Name, hash)
-		}
-		_logger.Info().
-			Str("Provider", db.Config().Name).
-			Str("Hash", hash).
-			Str("Arr", importRequest.Arr.Name).
-			Msg("Hearsay hint bypassed: the provider answers")
+	if err := m.applyHint(db, decision, importRequest, hash, useHint, overrideDownloadUncached); err != nil {
+		return nil, err
 	}
 	_logger.Info().
 		Str("Provider", db.Config().Name).
@@ -421,4 +413,27 @@ func hearsayNotCached(provider, hash string) error {
 func submitVerdict(err error) bool {
 	return errors.Is(err, customerror.ErrTorrentNotCached) || errors.Is(err, customerror.ErrTorrentBlocked) ||
 		errors.Is(err, customerror.ErrReleaseFailed)
+}
+
+func (m *Manager) applyHint(
+	db common.Client,
+	decision hearsay.AddDecision,
+	importRequest *ImportRequest,
+	hash string,
+	useHint, downloadUncached bool,
+) error {
+	if downloadUncached || !decision.Reject() {
+		return nil
+	}
+	if useHint {
+		m.hearsay.DiscardAdd(decision)
+		return hearsayNotCached(db.Config().Name, hash)
+	}
+	logger := db.Logger()
+	logger.Info().
+		Str("Provider", db.Config().Name).
+		Str("Hash", hash).
+		Str("Arr", importRequest.Arr.Name).
+		Msg("Hearsay hint bypassed: the provider answers")
+	return nil
 }

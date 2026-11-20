@@ -68,7 +68,11 @@ func TestJoinedAddErrorIsPermanentOnlyWhenEveryProviderRefusedForGood(t *testing
 			for provider, err := range tc.errs {
 				m.clients.Store(provider, &throttlingProvider{name: provider, err: err})
 			}
-			_, err := m.sendToDebrid(t.Context(), &ImportRequest{Magnet: &utils.Magnet{InfoHash: "hash", Name: "name"}}, true)
+			_, err := m.sendToDebrid(
+				t.Context(),
+				&ImportRequest{Magnet: &utils.Magnet{InfoHash: "hash", Name: "name"}},
+				true,
+			)
 			typed, ok := errors.AsType[*customerror.Error](err)
 			if !ok {
 				t.Fatalf("err = %v, want a classified error", err)

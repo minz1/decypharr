@@ -168,11 +168,11 @@ func runHintSubmit(t *testing.T, c hintCase) *hintRun {
 		service.ObserveTorrent("rd", hintHash, false)
 	}
 	provider := &hintProvider{
-		throttlingProvider: throttlingProvider{name: "rd"},
-		cached:             c.cached,
-		uncached:           c.providerUncached,
-		log:                zerolog.New(providerLog),
+		cached:   c.cached,
+		uncached: c.providerUncached,
+		log:      zerolog.New(providerLog),
 	}
+	provider.name = "rd"
 	m.hearsay = service
 	m.clients.Store("rd", provider)
 
@@ -272,7 +272,10 @@ func TestABypassedHintScoresTheProviderAnswerOnce(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			forEachRequestShape(t, func(t *testing.T, recovered bool) {
-				r := runHintSubmit(t, hintCase{category: "sonarr", negative: true, cached: tc.cached, recovered: recovered})
+				r := runHintSubmit(
+					t,
+					hintCase{category: "sonarr", negative: true, cached: tc.cached, recovered: recovered},
+				)
 				for counter, want := range map[string]uint64{
 					"evaluations": 1, "outcomes": 1, "correct": tc.correct, "incorrect": tc.wrong,
 				} {
