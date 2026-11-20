@@ -667,6 +667,44 @@ func TestKeyReleasedHookFires(t *testing.T) {
 	})
 }
 
+func TestFailReceiptPicksTheNewestOfTwoFinishedJobs(t *testing.T) {
+	t.Parallel()
+	since := time.Now().Add(-2 * time.Hour).UTC()
+	service := seedFailService(t, t.TempDir(),
+		receiptJob("older", StrategyDownloadFailed, StatusFailed, since.Add(time.Minute)),
+		receiptJob("newer", StrategyDownloadFailed, StatusReady, since.Add(time.Hour)),
+		receiptJob("tie-a", StrategyDownloadFailed, StatusFailed, since.Add(time.Minute)),
+	)
+	for range 32 {
+		job, found, err := service.FailReceipt("sonarr", receiptDownloadID, since)
+		if err != nil || !found {
+			t.Fatalf("FailReceipt = %v, %v, want a hit", found, err)
+		}
+		if job.ID != "newer" {
+			t.Fatalf("FailReceipt picked %q, want the newest job", job.ID)
+		}
+	}
+}
+
+func TestFailReceiptBreaksACreatedAtTieByID(t *testing.T) {
+	t.Parallel()
+	since := time.Now().Add(-2 * time.Hour).UTC()
+	at := since.Add(time.Minute)
+	service := seedFailService(t, t.TempDir(),
+		receiptJob("a", StrategyDownloadFailed, StatusFailed, at),
+		receiptJob("b", StrategyDownloadFailed, StatusReady, at),
+	)
+	for range 32 {
+		job, found, err := service.FailReceipt("sonarr", receiptDownloadID, since)
+		if err != nil || !found {
+			t.Fatalf("FailReceipt = %v, %v, want a hit", found, err)
+		}
+		if job.ID != "b" {
+			t.Fatalf("FailReceipt picked %q, want b (greatest ID on a tie)", job.ID)
+		}
+	}
+}
+
 func TestFailReceiptRefusesAStoppedService(t *testing.T) {
 	t.Parallel()
 	before := time.Now().Add(-time.Hour).UTC()

@@ -210,13 +210,23 @@ func (s *Service) finishedReceiptLocked(key jobKey, since time.Time) (Job, bool)
 	if since.IsZero() {
 		return Job{}, false
 	}
+	var best Job
+	found := false
 	for _, job := range s.jobs {
 		if job.Status.Terminal() && job.Strategy.failsDownload() && job.ArrName == key.arrName &&
-			job.DownloadID == key.downloadID && !job.CreatedAt.Before(since) {
-			return job, true
+			job.DownloadID == key.downloadID && !job.CreatedAt.Before(since) &&
+			(!found || newerReceipt(job, best)) {
+			best, found = job, true
 		}
 	}
-	return Job{}, false
+	return best, found
+}
+
+func newerReceipt(a, b Job) bool {
+	if !a.CreatedAt.Equal(b.CreatedAt) {
+		return a.CreatedAt.After(b.CreatedAt)
+	}
+	return a.ID > b.ID
 }
 
 func (s *Service) FailReceipt(arrName, downloadID string, since time.Time) (Job, bool, error) {
