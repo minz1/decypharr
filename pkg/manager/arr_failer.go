@@ -147,6 +147,7 @@ func (f *arrFailer) wantGrab(g grab.Grab) {
 	case cur.phase == failRunning:
 		cur.superseded, cur.untold, cur.recheck = true, false, false
 		cur.at, cur.arr, cur.provider, cur.jobID = at, arrName, provider, ""
+		cur.lastErr, cur.fails, cur.ackSince, cur.ackWarned = "", 0, time.Time{}, false
 	default:
 		f.items[key] = f.newItem(key, arrName, provider, at, false)
 	}
@@ -237,7 +238,6 @@ func (f *arrFailer) status(key string, at time.Time) (failStatus, bool) {
 type launch struct {
 	spec attemptSpec
 	ack  bool
-	from failItemPhase
 }
 
 func (f *arrFailer) bucket(name string) *bucketState {
@@ -307,8 +307,7 @@ func (f *arrFailer) plan() ([]launch, time.Time) {
 				key: it.key, arr: it.arr, provider: it.provider, at: it.at, recheck: it.recheck, attempt: it.attempt,
 				arrGen: f.arrGen[it.arr], keyGen: f.keyGen[keyGenName(it.arr, it.key)], jobID: it.jobID,
 			},
-			ack:  from == failAckWaiting,
-			from: from,
+			ack: from == failAckWaiting,
 		})
 	}
 	next := f.nextWake(now)
@@ -374,6 +373,9 @@ func (f *arrFailer) runAttempt(ctx context.Context, spec attemptSpec, ack bool) 
 	defer func() {
 		if r := recover(); r != nil {
 			res = attemptResult{spec: spec, kind: resError, err: fmt.Errorf("attempt panicked: %v", r)}
+			if ack {
+				res.kind, res.jobID = resAckFailed, spec.jobID
+			}
 		}
 		select {
 		case f.results <- res:
@@ -391,27 +393,22 @@ func (f *arrFailer) runAttempt(ctx context.Context, spec attemptSpec, ack bool) 
 	res.spec = spec
 }
 
-func (f *arrFailer) release(spec attemptSpec) {
-	if b := f.buckets[spec.bucket()]; b != nil && b.running == spec.key && b.attempt == spec.attempt {
-		b.running, b.attempt = "", 0
+func (f *arrFailer) release(spec attemptSpec) bool {
+	b := f.buckets[spec.bucket()]
+	if b == nil || b.running != spec.key || b.attempt != spec.attempt {
+		return false
 	}
+	b.running, b.attempt = "", 0
+	return true
 }
 
 func (f *arrFailer) refused(l launch, cause error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.release(l.spec)
-	it := f.items[l.spec.key]
-	if it == nil || it.phase != failRunning || it.attempt != l.spec.attempt {
-		return
+	res := attemptResult{spec: l.spec, kind: resError, err: cause}
+	if l.ack {
+		res.kind, res.jobID = resAckFailed, l.spec.jobID
 	}
-	if err := it.move(l.from); err != nil {
-		delete(f.items, it.key)
-		return
-	}
-	it.fails++
-	it.lastErr = cause.Error()
-	it.due = f.deps.now().Add(failBackoff(it.fails))
+	f.apply(res)
+	f.poke()
 }
 
 func (f *arrFailer) apply(res attemptResult) {
@@ -419,8 +416,8 @@ func (f *arrFailer) apply(res attemptResult) {
 	defer f.mu.Unlock()
 	now := f.deps.now()
 	spec := res.spec
-	f.release(spec)
-	if res.kind == resHeld && res.retryAt.After(now) {
+	owned := f.release(spec)
+	if owned && res.kind == resHeld && res.retryAt.After(now) {
 		b := f.bucket(spec.bucket())
 		b.heldUntil = laterOf(b.heldUntil, res.retryAt)
 	}
@@ -443,7 +440,7 @@ func (f *arrFailer) apply(res attemptResult) {
 	}
 	it.wait, it.due = failWaitNone, now
 	if it.superseded {
-		it.superseded, it.fails, it.lastErr, it.ackSince, it.ackWarned = false, 0, "", time.Time{}, false
+		it.superseded = false
 		return
 	}
 	if res.err != nil {

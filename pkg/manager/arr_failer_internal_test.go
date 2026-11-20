@@ -697,9 +697,11 @@ func TestArrFailerStartRefused(t *testing.T) {
 		g := testGroup(t)
 		var refuse atomic.Bool
 		refuse.Store(true)
+		var starts atomic.Int64
 		log := &attemptLog{}
 		deps := log.deps()
 		deps.startAttempt = func(name string, fn func(ctx context.Context)) error {
+			starts.Add(1)
 			if refuse.Load() {
 				return errors.New("stopping")
 			}
@@ -709,6 +711,7 @@ func TestArrFailerStartRefused(t *testing.T) {
 			})
 		}
 		f := runFailer(t, deps)
+		synctest.Wait()
 		f.wantGrab(pendingGrab("a", "rd", start))
 		synctest.Wait()
 		it, ok := f.item("a")
@@ -723,6 +726,9 @@ func TestArrFailerStartRefused(t *testing.T) {
 		synctest.Wait()
 		if log.grabCount() != 1 || f.itemCount() != 0 {
 			t.Fatalf("attempts = %d, items = %d; want delivery on the next try", log.grabCount(), f.itemCount())
+		}
+		if got := starts.Load(); got != 2 {
+			t.Fatalf("starts = %d, want the refused one and the retry after the backoff", got)
 		}
 	})
 }
@@ -920,5 +926,150 @@ func TestArrFailerStaleResultCannotTouchARunningAttempt(t *testing.T) {
 		if got := log.grabKeys(); !slices.Equal(got, []string{"a", "b"}) || f.itemCount() != 0 {
 			t.Fatalf("attempts = %v, items = %d; want b after a finished", got, f.itemCount())
 		}
+	})
+}
+
+func TestArrFailerRefusedAckLaunchKeepsAckWaiting(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		g := testGroup(t)
+		var refuse atomic.Bool
+		log := &attemptLog{}
+		log.grab = func(_ context.Context, _ attemptSpec) attemptResult {
+			refuse.Store(true)
+			return attemptResult{kind: resAckFailed, jobID: "job-7", err: errors.New("save failed")}
+		}
+		deps := log.deps()
+		deps.startAttempt = func(name string, fn func(ctx context.Context)) error {
+			if refuse.Load() {
+				return errors.New("stopping")
+			}
+			return g.Go(name, func(ctx context.Context) error {
+				fn(ctx)
+				return nil
+			})
+		}
+		f := runFailer(t, deps)
+		synctest.Wait()
+		f.wantGrab(pendingGrab("a", "rd", start))
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		it, ok := f.item("a")
+		if !ok || it.phase != failAckWaiting || it.jobID != "job-7" || it.lastErr != "stopping" {
+			t.Fatalf("item = %+v, %v; want ack-waiting with job-7 and the refusal as the error", it, ok)
+		}
+		refuse.Store(false)
+		time.Sleep(time.Hour)
+		synctest.Wait()
+		if log.grabCount() != 1 || log.ackCount() != 1 || f.itemCount() != 0 {
+			t.Fatalf("grabs = %d, acks = %d, items = %d; want one grab, one ack, none left",
+				log.grabCount(), log.ackCount(), f.itemCount())
+		}
+		if log.acks[0].jobID != "job-7" {
+			t.Fatalf("ack carried job %q, want job-7", log.acks[0].jobID)
+		}
+	})
+}
+
+func TestArrFailerRefusedLaunchOfAnUntoldItemDropsIt(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		log := &attemptLog{}
+		deps := log.deps()
+		var f *arrFailer
+		deps.startAttempt = func(string, func(ctx context.Context)) error {
+			f.untell("a", start)
+			return errors.New("stopping")
+		}
+		f = runFailer(t, deps)
+		synctest.Wait()
+		f.wantGrab(pendingGrab("a", "rd", start))
+		synctest.Wait()
+		if f.itemCount() != 0 || log.grabCount() != 0 {
+			t.Fatalf("items = %d, attempts = %d; want the untold item dropped", f.itemCount(), log.grabCount())
+		}
+	})
+}
+
+func TestArrFailerAckAttemptPanicKeepsAckWaiting(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		log := &attemptLog{}
+		log.grab = func(_ context.Context, _ attemptSpec) attemptResult {
+			return attemptResult{kind: resAckFailed, jobID: "job-7", err: errors.New("save failed")}
+		}
+		log.ack = func(_ context.Context, _ attemptSpec) attemptResult { panic("boom") }
+		f := runFailer(t, log.deps())
+		f.wantGrab(pendingGrab("a", "rd", start))
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		it, ok := f.item("a")
+		if !ok || it.phase != failAckWaiting || it.jobID != "job-7" || !strings.Contains(it.lastErr, "boom") {
+			t.Fatalf("item = %+v, %v; want ack-waiting with job-7 after the panic", it, ok)
+		}
+	})
+}
+
+func TestArrFailerHeldFromAnotherAttemptDoesNotHoldTheBucket(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		started := make(chan struct{})
+		release := make(chan struct{})
+		log := &attemptLog{}
+		log.grab = func(_ context.Context, _ attemptSpec) attemptResult {
+			close(started)
+			<-release
+			return attemptResult{kind: resAcked}
+		}
+		f := runFailer(t, log.deps())
+		f.wantGrab(pendingGrab("a", "rd", start))
+		<-started
+		running, _ := f.item("a")
+		f.apply(attemptResult{
+			spec: attemptSpec{key: "a", arr: "sonarr", provider: "rd", at: start, attempt: running.attempt - 1},
+			kind: resHeld, retryAt: start.Add(time.Hour),
+		})
+		if got := f.heldUntil("sonarr/rd"); !got.IsZero() {
+			t.Fatalf("heldUntil = %v, want a result of an earlier attempt to leave the bucket alone", got)
+		}
+		close(release)
+		synctest.Wait()
+	})
+}
+
+func TestArrFailerSupersedeClearsTheOldStatus(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		second := start.Add(time.Second)
+		started := make(chan struct{})
+		release := make(chan struct{})
+		log := &attemptLog{}
+		log.grab = func(_ context.Context, spec attemptSpec) attemptResult {
+			if spec.attempt == 1 {
+				return attemptResult{kind: resError, err: errors.New("arr down")}
+			}
+			close(started)
+			<-release
+			return attemptResult{kind: resAcked}
+		}
+		f := runFailer(t, log.deps())
+		f.wantGrab(pendingGrab("a", "rd", start))
+		time.Sleep(time.Minute)
+		<-started
+		if st, _ := f.status("a", start); st.LastError != "arr down" {
+			t.Fatalf("status = %+v, want the first occurrence to show its error", st)
+		}
+		f.wantGrab(pendingGrab("a", "rd", second))
+		st, ok := f.status("a", second)
+		if !ok || st.LastError != "" {
+			t.Fatalf("status = %+v, %v; want the new occurrence to show no old error", st, ok)
+		}
+		close(release)
+		synctest.Wait()
 	})
 }
