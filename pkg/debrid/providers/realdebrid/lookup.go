@@ -52,7 +52,7 @@ func (r *RealDebrid) listTorrents(ctx context.Context, q url.Values) (torrentsLi
 		status:     resp.StatusCode,
 		rows:       rows,
 		totals:     resp.Header.Values("X-Total-Count"),
-		redirected: resp.Request.URL.String() != u.String(),
+		redirected: resp.Request.Response != nil,
 	}, nil
 }
 
@@ -124,6 +124,9 @@ const (
 const confirmListingLimit = 5000
 
 func (r *RealDebrid) confirmGone(ctx context.Context, id string) (listingVerdict, string) {
+	if id == "" {
+		return listingUnproven, "no placement id"
+	}
 	got, err := r.listTorrents(ctx, url.Values{
 		"offset":   {"0"},
 		limitParam: {strconv.Itoa(confirmListingLimit)},

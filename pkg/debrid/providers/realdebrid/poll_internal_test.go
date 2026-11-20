@@ -259,6 +259,40 @@ func TestAnInfo404IsNotFoundOnlyWhenTheCompleteListingLacksIt(t *testing.T) {
 	}
 }
 
+func TestAnInfo404ForAnEmptyPlacementIDIsUnconfirmed(t *testing.T) {
+	t.Parallel()
+	host, _ := serveInfo404(t, listingBody("1", `[{"id":"x"}]`))
+	probe := settledProbe()
+	probe.ID = ""
+	_, _, err := testRealDebrid(host).Poll(t.Context(), probe, false)
+	requireUnconfirmed(t, err)
+}
+
+func TestAListingRedirectedBackToItselfIsUnproven(t *testing.T) {
+	t.Parallel()
+	var listings atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/torrents/info/"):
+			w.WriteHeader(http.StatusNotFound)
+		case r.URL.Path == "/torrents" && listings.Add(1) == 1:
+			http.Redirect(w, r, "/bounce", http.StatusFound)
+		case r.URL.Path == "/torrents":
+			listingBody("0", "[]")(w, r)
+		case r.URL.Path == "/bounce":
+			http.Redirect(w, r, "/torrents?limit=5000&offset=0", http.StatusFound)
+		default:
+			t.Errorf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+	_, _, err := testRealDebrid(server.URL).Poll(t.Context(), settledProbe(), false)
+	requireUnconfirmed(t, err)
+	if got := listings.Load(); got != 2 {
+		t.Fatalf("listing requests = %d, want 2 (the redirect came back)", got)
+	}
+}
+
 func TestAnInfo404WithTheListingReadCancelledIsUnconfirmed(t *testing.T) {
 	t.Parallel()
 	arrived := make(chan struct{})
