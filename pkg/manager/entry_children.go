@@ -91,6 +91,7 @@ func (m *Manager) parseChild(ctx context.Context, call entryChildCall) entryMsg 
 	name := cmp.Or(entry.OriginalFilename, entry.Name)
 	meta, groups, err := m.parseNZB(ctx, entry.InfoHash, name, content, entry.Category)
 	subject := hearsay.NZBSubjectFromGroups(groups)
+	useHint := entry.Manual
 	switch {
 	case stopped(ctx):
 		return entryMsg{}
@@ -105,8 +106,14 @@ func (m *Manager) parseChild(ctx context.Context, call entryChildCall) entryMsg 
 			m.hearsay.ReportNZB(subject, false)
 		}
 		return parseFailedWith(fmt.Errorf("usenet parse failed: %w", err), m.parseFailCause(err, content))
-	case m.hearsay != nil && m.hearsay.NZBClaimedIncomplete(subject):
+	case useHint && m.hearsay != nil && m.hearsay.NZBClaimedIncomplete(subject):
 		return parseFailed(errors.New("nzb rejected: hearsay claims segments missing on every configured backbone"))
+	}
+	if !useHint && m.hearsay != nil && m.hearsay.NZBClaimedIncomplete(subject) {
+		m.logger.Info().
+			Str("subject", subject).
+			Str("category", entry.Category).
+			Msg("Hearsay hint bypassed: the provider answers")
 	}
 	processCtx, cancel := context.WithTimeout(ctx, m.usenetTimeout)
 	defer cancel()

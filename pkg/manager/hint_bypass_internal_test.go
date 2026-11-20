@@ -5,11 +5,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
+	hearsaylib "github.com/sirrobot01/hearsay"
+	hsusenet "github.com/sirrobot01/hearsay/usenet"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
@@ -17,6 +22,8 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/hearsay"
 	"github.com/sirrobot01/decypharr/pkg/manager/grab"
+	"github.com/sirrobot01/decypharr/pkg/storage"
+	"github.com/sirrobot01/decypharr/pkg/usenet/parser"
 )
 
 const (
@@ -313,6 +320,246 @@ func TestTheTorrentBypassLineIsLoggedOnlyForABypassedNegative(t *testing.T) {
 					t.Fatalf("bypass line = %v, want info with Provider rd, the hash and Arr sonarr", line)
 				}
 			})
+		})
+	}
+}
+
+type nzbNegative int
+
+const (
+	nzbNoNegative nzbNegative = iota
+	nzbLocalNegative
+	nzbPeerNegative
+)
+
+const nzbTrainingSubject = "1111111111111111111111111111111111111111111111111111111111111111"
+
+type nzbHintCase struct {
+	manual   bool
+	category string
+	negative nzbNegative
+	process  func() (*storage.NZB, error)
+}
+
+type nzbHintRun struct {
+	m         *Manager
+	call      entryChildCall
+	msg       entryMsg
+	service   *hearsay.Service
+	log       *syncBuffer
+	processed atomic.Int64
+	queries   uint64
+}
+
+func nzbHintConfig(t *testing.T) *config.Config {
+	t.Helper()
+	cfg := &config.Config{}
+	cfg.WithDir(t.TempDir())
+	cfg.Hearsay.AdviceMode = "active"
+	cfg.Usenet.Providers = []config.UsenetProvider{{Host: "news.example", Backbone: "omicron"}}
+	return cfg
+}
+
+func nzbHintService(t *testing.T, cfg *config.Config) *hearsay.Service {
+	t.Helper()
+	service, err := hearsay.New(testGroup(t), cfg, zerolog.Nop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(service.Close)
+	return service
+}
+
+func peerNegativeService(t *testing.T, subject string) *hearsay.Service {
+	t.Helper()
+	cfg := nzbHintConfig(t)
+	domain := hsusenet.New("omicron")
+	namespace := domain.Namespace()
+	seed, err := hearsaylib.New(filepath.Join(cfg.Dir(), "hearsay"), domain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		peer, peerErr := hearsaylib.New(t.TempDir(), domain)
+		if peerErr != nil {
+			t.Fatal(peerErr)
+		}
+		for claimed, value := range map[string]float64{subject: 0, nzbTrainingSubject: 1} {
+			if observeErr := peer.Observe(namespace, claimed, value, time.Now()); observeErr != nil {
+				t.Fatal(observeErr)
+			}
+		}
+		generation, publishErr := peer.Publish(namespace)
+		if publishErr != nil {
+			t.Fatal(publishErr)
+		}
+		raw, marshalErr := generation.MarshalBinary()
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		if _, ingestErr := seed.Ingest(raw); ingestErr != nil {
+			t.Fatal(ingestErr)
+		}
+		if closeErr := peer.Close(); closeErr != nil {
+			t.Fatal(closeErr)
+		}
+	}
+	if reportErr := seed.Report(namespace, nzbTrainingSubject, true); reportErr != nil {
+		t.Fatal(reportErr)
+	}
+	if closeErr := seed.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	service := nzbHintService(t, cfg)
+	if !service.NZBClaimedIncomplete(subject) {
+		t.Fatal("the peers' evidence alone does not claim the post incomplete")
+	}
+	return service
+}
+
+func processedNZB() (*storage.NZB, error) {
+	return &storage.NZB{
+		ID: "nzb-1", Name: "Show.S01", Files: []storage.NZBFile{{Name: "a.mkv", Size: 1}},
+	}, nil
+}
+
+func processMissing() (*storage.NZB, error) {
+	return nil, customerror.ErrUsenetSegmentMissing
+}
+
+func runNZBHint(t *testing.T, c nzbHintCase) *nzbHintRun {
+	t.Helper()
+	groups := parsedGroups()
+	subject := hearsay.NZBSubjectFromGroups(groups)
+	m, call := newParseChildCall(
+		t,
+		func(context.Context, string, string, []byte, string) (*storage.NZB, map[string]*parser.FileGroup, error) {
+			return &storage.NZB{ID: "nzb-1", Name: "Show.S01"}, groups, nil
+		},
+	)
+	run := &nzbHintRun{m: m, call: call, log: &syncBuffer{}}
+	m.logger = zerolog.New(run.log)
+	m.usenetTimeout = time.Minute
+	m.processNZBFunc = func(context.Context, *storage.NZB, map[string]*parser.FileGroup) (*storage.NZB, error) {
+		run.processed.Add(1)
+		return c.process()
+	}
+	call.grab.Entry.Manual = c.manual
+	call.grab.Entry.Category = c.category
+	switch c.negative {
+	case nzbNoNegative:
+		run.service = nzbHintService(t, nzbHintConfig(t))
+	case nzbLocalNegative:
+		run.service = nzbHintService(t, nzbHintConfig(t))
+		run.service.ReportNZB(subject, false)
+	case nzbPeerNegative:
+		run.service = peerNegativeService(t, subject)
+	}
+	m.hearsay = run.service
+	run.queries = run.service.Status().Metrics.Queries
+	run.msg = m.parseChild(t.Context(), call)
+	return run
+}
+
+func (r *nzbHintRun) queriesSince() uint64 {
+	return r.service.Status().Metrics.Queries - r.queries
+}
+
+func TestAClientNZBGrabRunsProcessPastANegativeHint(t *testing.T) {
+	t.Parallel()
+	for name, negative := range map[string]nzbNegative{"local negative": nzbLocalNegative, "peer negative": nzbPeerNegative} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := runNZBHint(t, nzbHintCase{category: "sonarr", negative: negative, process: processedNZB})
+			if got := r.processed.Load(); got != 1 {
+				t.Fatalf("Process ran %d times, want once", got)
+			}
+			if r.msg.ev == nil || r.msg.ev.Outcome != grab.OutcomePlacement {
+				t.Fatalf("parse result = %+v, want a placement", r.msg.ev)
+			}
+			next, _, err := grab.Transition(r.call.grab.State, *r.msg.ev)
+			if err != nil || next.Phase != grab.PhaseActing || grab.Project(next, 1).SABStatus != "Downloading" {
+				t.Fatalf("placement moved the grab to %+v (%v), want acting and downloading", next, err)
+			}
+			if got := r.queriesSince(); got != 1 {
+				t.Fatalf("hearsay answered %d queries, want the one that drives the bypass line", got)
+			}
+		})
+	}
+	t.Run("process misses", func(t *testing.T) {
+		t.Parallel()
+		r := runNZBHint(t, nzbHintCase{category: "sonarr", negative: nzbLocalNegative, process: processMissing})
+		assertParseFailed(t, r.msg, "failed to process nzb")
+		if strings.Contains(r.msg.ev.Reason, "hearsay") {
+			t.Fatalf("failure reason %q names the hint, want the provider's answer", r.msg.ev.Reason)
+		}
+	})
+}
+
+func TestAManualNZBGrabKeepsTheHint(t *testing.T) {
+	t.Parallel()
+	r := runNZBHint(t, nzbHintCase{manual: true, category: "sonarr", negative: nzbLocalNegative, process: processedNZB})
+	assertParseFailed(t, r.msg, "hearsay")
+	if got := r.processed.Load(); got != 0 {
+		t.Fatalf("Process ran %d times, want none", got)
+	}
+}
+
+func TestAWatchFolderNZBBypassesTheHint(t *testing.T) {
+	t.Parallel()
+	t.Run("process answers", func(t *testing.T) {
+		t.Parallel()
+		r := runNZBHint(t, nzbHintCase{category: "uncategorized", negative: nzbLocalNegative, process: processedNZB})
+		if got := r.processed.Load(); got != 1 {
+			t.Fatalf("Process ran %d times, want once", got)
+		}
+		if r.msg.ev == nil || r.msg.ev.Outcome != grab.OutcomePlacement {
+			t.Fatalf("parse result = %+v, want a placement", r.msg.ev)
+		}
+	})
+	t.Run("process misses", func(t *testing.T) {
+		t.Parallel()
+		r := runNZBHint(t, nzbHintCase{category: "uncategorized", negative: nzbLocalNegative, process: processMissing})
+		if r.msg.ev == nil || r.msg.ev.Fail != grab.FailEntry {
+			t.Fatalf("parse result = %+v, want an entry failure", r.msg.ev)
+		}
+		g := grab.Grab{Entry: r.call.grab.Entry, State: r.call.grab.State}
+		if r.m.arrOwnsFailure(g) {
+			t.Fatal("a watch-folder failure is owned by an Arr")
+		}
+	})
+}
+
+func TestTheNZBBypassLineIsLoggedOnlyForABypassedNegative(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		c    nzbHintCase
+		want int
+	}{
+		"client grab with a negative": {
+			nzbHintCase{category: "sonarr", negative: nzbLocalNegative, process: processedNZB}, 1,
+		},
+		"manual grab with a negative": {
+			nzbHintCase{manual: true, category: "sonarr", negative: nzbLocalNegative, process: processedNZB}, 0,
+		},
+		"client grab with no negative": {
+			nzbHintCase{category: "sonarr", negative: nzbNoNegative, process: processedNZB}, 0,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := runNZBHint(t, tc.c)
+			lines := r.log.bypasses(t)
+			if len(lines) != tc.want {
+				t.Fatalf("bypass lines = %v, want %d", lines, tc.want)
+			}
+			if tc.want == 0 {
+				return
+			}
+			subject := hearsay.NZBSubjectFromGroups(parsedGroups())
+			if lines[0]["level"] != "info" || lines[0]["subject"] != subject || lines[0]["category"] != "sonarr" {
+				t.Fatalf("bypass line = %v, want info with the subject and category sonarr", lines[0])
+			}
 		})
 	}
 }

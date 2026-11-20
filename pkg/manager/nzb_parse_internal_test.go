@@ -263,7 +263,7 @@ func TestParseChildFailsAProcessRunThatOutlivesItsBudget(t *testing.T) {
 	assertParseFailed(t, m.parseChild(t.Context(), call), "failed to process nzb")
 }
 
-// Hearsay's verdict that the segments are gone is final: the grab fails at once instead of parsing again.
+// A manual grab keeps hearsay's verdict that the segments are gone: it fails at once instead of parsing again.
 func TestParseChildFailsOnHearsayIncompleteVerdict(t *testing.T) {
 	t.Parallel()
 	groups := parsedGroups()
@@ -286,11 +286,20 @@ func TestParseChildFailsOnHearsayIncompleteVerdict(t *testing.T) {
 	t.Cleanup(service.Close)
 	service.ReportNZB(hearsay.NZBSubjectFromGroups(groups), false)
 	m.hearsay = service
+	call.grab.Entry.Manual = true
+	var processed atomic.Int32
+	m.processNZBFunc = func(context.Context, *storage.NZB, map[string]*parser.FileGroup) (*storage.NZB, error) {
+		processed.Add(1)
+		return &storage.NZB{}, nil
+	}
 
 	msg := m.parseChild(t.Context(), call)
 	assertParseFailed(t, msg, "hearsay")
 	if msg.ev.Cause != "" {
 		t.Fatalf("hearsay failure cause %q, want none", msg.ev.Cause)
+	}
+	if processed.Load() != 0 {
+		t.Fatalf("Process ran %d times, want none", processed.Load())
 	}
 	if calls.Load() != 1 {
 		t.Fatalf("parsed %d times, want 1", calls.Load())
