@@ -550,7 +550,7 @@ func TestNewArmsTheBadRecheckTask(t *testing.T) {
 func TestRecheckIsStaleWhenTheBadEntryIsReplacedDuringAdmission(t *testing.T) {
 	t.Parallel()
 	for name, edit := range map[string]func(*storage.Entry){
-		"a new bad occurrence": func(e *storage.Entry) { e.CreatedAt = time.Unix(100, 0) },
+		"a new bad occurrence": func(e *storage.Entry) { e.CreatedAt = e.CreatedAt.Add(time.Hour) },
 		"another category":     func(e *storage.Entry) { e.Category = "radarr" },
 		"no Arr owns it":       func(e *storage.Entry) { e.Category = "elsewhere" },
 	} {
@@ -561,19 +561,35 @@ func TestRecheckIsStaleWhenTheBadEntryIsReplacedDuringAdmission(t *testing.T) {
 			fake := &fakeArrRecovery{}
 			m, entry := newGiveUpTestManager(t, fakeArr, fake)
 			sonarr, _ := m.Arr().Get("sonarr")
-			m.arr = arr.New(config.NewStore(&config.Config{Arrs: []config.Arr{
-				{Name: "sonarr", Host: sonarr.Host, Token: "x"}, {Name: "radarr", Host: sonarr.Host, Token: "x"},
-			}}), nil, zerolog.Nop())
+			m.arr = arr.New(config.NewStore(&config.Config{
+				Arrs: []config.Arr{
+					{Name: "sonarr", Host: sonarr.Host, Token: "x"}, {Name: "radarr", Host: sonarr.Host, Token: "x"},
+				},
+				QueueCleanup: config.QueueCleanup{
+					BlocklistPerBucket: 1, BlocklistPerArr: 2, BlocklistWindow: "1h",
+				},
+			}), nil, zerolog.Nop())
 			saveBad(t, m, entry, true)
 			replacement := *entry
 			edit(&replacement)
-			fakeArr.onRequest = func() {
-				replacement.Bad = true
-				if err := m.storage.AddOrUpdate(&replacement); err != nil {
-					t.Error(err)
-				}
+			replacement.Bad = true
+			canaryRunning := make(chan struct{})
+			m.arr.SetQueueGuardHooks(arr.QueueGuardHooks{
+				Canary: func(context.Context, string) arr.CanaryVerdict {
+					close(canaryRunning)
+					if err := m.storage.AddOrUpdate(&replacement); err != nil {
+						t.Error(err)
+					}
+					return arr.CanaryPass
+				},
+				Notify: func(string, string) {},
+			})
+			prefilled := *entry
+			prefilled.InfoHash = "prefilled"
+			if err := m.failGrab(&prefilled, fake, "sonarr", "free"); err != nil {
+				t.Fatal(err)
 			}
-			before := freeSlotsFor(t, m, failProvider(entry))
+			before := len(failsOf(fake))
 			done := make(chan attemptResult, 1)
 			m.testFailer(t, func(deps *arrFailerDeps) {
 				inner := deps.attemptRecheck
@@ -584,14 +600,20 @@ func TestRecheckIsStaleWhenTheBadEntryIsReplacedDuringAdmission(t *testing.T) {
 				}
 			})
 			m.wantRecheck(entry)
-			if res := <-done; res.kind != resStale {
+			res := <-done
+			select {
+			case <-canaryRunning:
+			default:
+				t.Fatal("the canary never ran, so admission was not in progress when the entry changed")
+			}
+			if res.kind != resStale {
 				t.Fatalf("recheck result = %v (%v), want stale", res.kind, res.err)
 			}
-			if got := failsOf(fake); len(got) != 0 {
-				t.Fatalf("FailDownload calls = %v, want none for a replaced entry", got)
+			if got := len(failsOf(fake)) - before; got != 0 {
+				t.Fatalf("FailDownload calls = %d, want none for a replaced entry", got)
 			}
-			if after := freeSlotsFor(t, m, failProvider(entry)); after != before {
-				t.Fatalf("free slots = %d, want %d: the guard must be released", after, before)
+			if err := m.arr.AdmitFailGrab(t.Context(), "sonarr", "PROBE", failProvider(entry)); err != nil {
+				t.Fatalf("a leaked reservation holds the next grab: %v", err)
 			}
 		})
 	}
