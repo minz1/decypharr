@@ -47,6 +47,45 @@ func TestGetTorrentsPaginatesOnRawPageSize(t *testing.T) {
 	}
 }
 
+func getTorrentsAnswering(t *testing.T, status int) error {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Has("limit") {
+			t.Errorf("query = %q, want no limit", r.URL.RawQuery)
+		}
+		w.WriteHeader(status)
+		if status == http.StatusOK {
+			_, _ = fmt.Fprint(w, `[]`)
+		}
+	}))
+	defer server.Close()
+	_, _, err := testRealDebrid(server.URL).getTorrents(t.Context(), 0, 0)
+	return err
+}
+
+func TestGetTorrentsKeepsItsQueryAndItsErrors(t *testing.T) {
+	t.Parallel()
+	t.Run("ok", func(t *testing.T) {
+		t.Parallel()
+		if err := getTorrentsAnswering(t, http.StatusOK); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("unauthorized", func(t *testing.T) {
+		t.Parallel()
+		err := getTorrentsAnswering(t, http.StatusUnauthorized)
+		if err == nil || err.Error() != "realdebrid API error: 401" {
+			t.Fatalf("error = %v", err)
+		}
+	})
+	t.Run("unavailable", func(t *testing.T) {
+		t.Parallel()
+		if err := getTorrentsAnswering(t, http.StatusServiceUnavailable); err == nil {
+			t.Fatal("want an error")
+		}
+	})
+}
+
 // A 509 on file selection must still return the torrent so callers delete it.
 func TestCheckStatusReturnsTorrentOnSlotLimit(t *testing.T) {
 	t.Parallel()

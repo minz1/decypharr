@@ -910,48 +910,24 @@ func (r *RealDebrid) GetDownloadLink(ctx context.Context, id string, file *types
 func (r *RealDebrid) getTorrents(ctx context.Context, offset int, limit int) (int, []*types.Torrent, error) {
 	torrents := make([]*types.Torrent, 0)
 
-	queryParams := make(map[string]string)
+	q := url.Values{}
 	if offset > 0 {
-		queryParams["offset"] = strconv.Itoa(offset)
+		q.Set("offset", strconv.Itoa(offset))
 	}
 	if limit > 0 {
-		queryParams["limit"] = strconv.Itoa(limit)
+		q.Set("limit", strconv.Itoa(limit))
 	}
-
-	// Need to get headers, so we create request manually
-	u, err := url.Parse(r.Host + "/torrents")
+	listing, err := r.listTorrents(ctx, q)
 	if err != nil {
 		return 0, torrents, err
 	}
-	q := u.Query()
-	for k, v := range queryParams {
-		q.Set(k, v)
-	}
-	u.RawQuery = q.Encode()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
-	if err != nil {
-		return 0, torrents, err
-	}
-
-	resp, err := r.client.Do(req)
-	if err != nil {
-		return 0, torrents, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNoContent {
+	if listing.status == http.StatusNoContent {
 		return 0, torrents, nil
 	}
-
-	if resp.StatusCode != http.StatusOK {
-		return 0, torrents, fmt.Errorf("realdebrid API error: %d", resp.StatusCode)
+	if listing.status != http.StatusOK {
+		return 0, torrents, fmt.Errorf("realdebrid API error: %d", listing.status)
 	}
-
-	var data []TorrentsResponse
-	if decodeJSONErr := request.DecodeJSON(resp, &data); decodeJSONErr != nil {
-		return 0, torrents, decodeJSONErr
-	}
+	data := listing.rows
 
 	for _, t := range data {
 		if t.Status != statusDownloaded {

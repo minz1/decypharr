@@ -109,6 +109,14 @@ func TestLookup(t *testing.T) {
 			},
 			want: types.LookupUnknown,
 		},
+		{
+			name: "total differs only in spelling",
+			pages: []lookupPageSpec{
+				{total: "2", entries: lookupEntries(1000, "a")},
+				{total: "02", entries: lookupEntries(1000, "b")},
+			},
+			want: types.LookupUnknown,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

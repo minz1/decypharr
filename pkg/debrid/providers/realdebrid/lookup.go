@@ -2,7 +2,6 @@ package realdebrid
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -14,57 +13,71 @@ import (
 
 const lookupPageSize = 1000
 
-type lookupPage struct {
-	entries []TorrentsResponse
-	total   string
+type torrentsListing struct {
+	status     int
+	rows       []TorrentsResponse
+	totals     []string
+	redirected bool
 }
 
-func (r *RealDebrid) lookupFetch(ctx context.Context, page int) (lookupPage, error) {
+func (r *RealDebrid) listTorrents(ctx context.Context, q url.Values) (torrentsListing, error) {
 	u, err := url.Parse(r.Host + "/torrents")
 	if err != nil {
-		return lookupPage{}, err
+		return torrentsListing{}, err
 	}
-	q := u.Query()
-	q.Set("limit", strconv.Itoa(lookupPageSize))
-	q.Set("page", strconv.Itoa(page))
 	u.RawQuery = q.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return lookupPage{}, err
+		return torrentsListing{}, err
 	}
 	resp, err := r.client.Do(req)
 	if err != nil {
-		return lookupPage{}, err
+		return torrentsListing{}, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNoContent {
-		return lookupPage{}, nil
-	}
 	if resp.StatusCode != http.StatusOK {
-		return lookupPage{}, fmt.Errorf("realdebrid API error: %d", resp.StatusCode)
+		return torrentsListing{status: resp.StatusCode}, nil
 	}
-	var entries []TorrentsResponse
-	if decodeErr := request.DecodeJSON(resp, &entries); decodeErr != nil {
-		return lookupPage{}, decodeErr
+	var rows []TorrentsResponse
+	if decodeErr := request.DecodeJSON(resp, &rows); decodeErr != nil {
+		return torrentsListing{}, decodeErr
 	}
-	return lookupPage{entries: entries, total: resp.Header.Get("X-Total-Count")}, nil
+	return torrentsListing{
+		status:     resp.StatusCode,
+		rows:       rows,
+		totals:     resp.Header.Values("X-Total-Count"),
+		redirected: resp.Request.URL.String() != u.String(),
+	}, nil
 }
 
 func (r *RealDebrid) Lookup(ctx context.Context, infohash string) (types.LookupResult, *types.Torrent) {
 	var firstTotal, lastTotal string
 	for page := 1; ; page++ {
-		got, err := r.lookupFetch(ctx, page)
+		got, err := r.listTorrents(ctx, url.Values{
+			"limit": {strconv.Itoa(lookupPageSize)},
+			"page":  {strconv.Itoa(page)},
+		})
 		if err != nil || ctx.Err() != nil {
 			return types.LookupUnknown, nil
 		}
-		if len(got.entries) == 0 {
+		if got.status == http.StatusNoContent {
 			break
 		}
-		if page == 1 {
-			firstTotal = got.total
+		if got.status != http.StatusOK {
+			return types.LookupUnknown, nil
 		}
-		lastTotal = got.total
-		for _, e := range got.entries {
+		if len(got.rows) == 0 {
+			break
+		}
+		total := ""
+		if len(got.totals) > 0 {
+			total = got.totals[0]
+		}
+		if page == 1 {
+			firstTotal = total
+		}
+		lastTotal = total
+		for _, e := range got.rows {
 			if strings.EqualFold(e.Hash, infohash) {
 				return types.LookupFound, r.lookupTorrent(e)
 			}
