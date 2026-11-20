@@ -133,6 +133,7 @@ func TestSubmitToProviderStatusTimeoutQueuesTheTorrent(t *testing.T) {
 				provider,
 				&types.Torrent{InfoHash: "hash", Name: "name"},
 				&ImportRequest{Magnet: &utils.Magnet{InfoHash: "hash", Name: "name"}},
+				true,
 			)
 			if submitErr != nil {
 				t.Fatalf("err = %v, want the torrent queued", submitErr)

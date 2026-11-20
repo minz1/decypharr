@@ -62,7 +62,7 @@ func submitFailEffectOf(t *testing.T, req *ImportRequest, providers ...debrid.Cl
 	for _, p := range providers {
 		m.clients.Store(p.Config().Name, p)
 	}
-	_, err := m.SendToDebrid(req)
+	_, err := m.sendToDebrid(t.Context(), req, true)
 	if err == nil {
 		t.Fatal("submit succeeded, want a failure")
 	}
@@ -168,7 +168,7 @@ func TestAFailedThenAcceptedSubmitPlaces(t *testing.T) {
 	rd := failed()
 	m.clients.Store("rd", rd)
 	m.clients.Store("tb", &acceptingProvider{throttlingProvider{name: "tb"}})
-	got, err := m.SendToDebrid(&ImportRequest{Magnet: &utils.Magnet{InfoHash: "hash", Name: "name"}})
+	got, err := m.sendToDebrid(t.Context(), &ImportRequest{Magnet: &utils.Magnet{InfoHash: "hash", Name: "name"}}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +206,7 @@ func TestAStopDuringAFailedCheckKeepsTheSubmission(t *testing.T) {
 	defer cancel()
 	m := withTestConfig(t, &Manager{logger: zerolog.Nop(), clients: xsync.NewMap[string, debrid.Client]()})
 	m.clients.Store("rd", &cuttingProvider{deadStatusProvider{throttlingProvider{name: "rd"}}, cancel})
-	got, err := m.sendToDebrid(ctx, &ImportRequest{Magnet: &utils.Magnet{InfoHash: "hash", Name: "name"}})
+	got, err := m.sendToDebrid(ctx, &ImportRequest{Magnet: &utils.Magnet{InfoHash: "hash", Name: "name"}}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +306,7 @@ func TestEachProviderAttemptGetsTheRequestTorrent(t *testing.T) {
 	second := &inputRecorder{throttlingProvider: throttlingProvider{name: "tb"}}
 	m.clients.Store("tb", second)
 	req := &ImportRequest{Magnet: &utils.Magnet{InfoHash: "hash", Name: "name", Link: "magnet:request"}}
-	if _, err := m.SendToDebrid(req); err == nil {
+	if _, err := m.sendToDebrid(t.Context(), req, true); err == nil {
 		t.Fatal("submit succeeded, want a failure")
 	}
 	if second.hash != "hash" || second.status != "" || second.name != "name" || second.link != "magnet:request" {
@@ -327,7 +327,7 @@ func TestAStoppedSubmitKeepsTheRequestHash(t *testing.T) {
 	})
 	uncached := true
 	req := &ImportRequest{Magnet: &utils.Magnet{InfoHash: "hash", Name: "name"}, DownloadUncached: &uncached}
-	got, err := m.sendToDebrid(ctx, req)
+	got, err := m.sendToDebrid(ctx, req, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -357,7 +357,7 @@ func TestADiscardedSubmitReleasesUnderTheRequestHash(t *testing.T) {
 			t.Fatal(err)
 		}
 		req := &ImportRequest{Magnet: &utils.Magnet{InfoHash: "hash", Name: "name"}}
-		if _, err := m.sendToDebrid(t.Context(), req); err == nil {
+		if _, err := m.sendToDebrid(t.Context(), req, true); err == nil {
 			t.Fatal("submit succeeded, want a failure")
 		}
 		drainPlacements(t, m)
@@ -382,7 +382,7 @@ func TestAKeptSubmitKeepsTheRequestHash(t *testing.T) {
 			})
 			uncached := true
 			req := &ImportRequest{Magnet: &utils.Magnet{InfoHash: "hash", Name: "name"}, DownloadUncached: &uncached}
-			got, err := m.sendToDebrid(t.Context(), req)
+			got, err := m.sendToDebrid(t.Context(), req, true)
 			if err != nil {
 				t.Fatal(err)
 			}

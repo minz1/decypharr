@@ -152,7 +152,7 @@ func (q *QBit) authenticate(ctx context.Context, category, username, password st
 	instance, known := q.manager.Arr().Get(category)
 	if !known {
 		// Not in the registry yet: inherit download_uncached from a matching
-		// config entry so SendToDebrid does not fall back to the provider.
+		// config entry so sendToDebrid does not fall back to the provider.
 		instance = arr.Arr{Name: category, Source: arr.SourceAuto}
 		for _, configured := range cfg.Arrs {
 			if configured.Name == category {

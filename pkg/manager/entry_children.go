@@ -47,7 +47,7 @@ func (m *Manager) submitChild(ctx context.Context, call entryChildCall) entryMsg
 	if req == nil {
 		req = m.requestFromEntry(call.grab.Entry)
 	}
-	t, err := m.sendToDebrid(ctx, req)
+	t, err := m.sendToDebrid(ctx, req, call.grab.Entry.Manual)
 	if err != nil && (stopped(ctx) || errors.Is(err, errSubmitOutcomeUnknown)) {
 		return entryMsg{}
 	}

@@ -90,7 +90,7 @@ func (s *SABnzbd) authenticate(ctx context.Context, category, username, password
 	instance, known := s.manager.Arr().Get(category)
 	if !known {
 		// Not in the registry yet: inherit download_uncached from a matching
-		// config entry so SendToDebrid does not fall back to the provider.
+		// config entry so sendToDebrid does not fall back to the provider.
 		instance = arr.Arr{Name: category, Host: username, Token: password, Source: arr.SourceAuto}
 		for _, configured := range cfg.Arrs {
 			if configured.Name == category {

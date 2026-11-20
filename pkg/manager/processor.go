@@ -199,13 +199,6 @@ func addEntryFiles(entry *storage.Entry, debridTorrent *debridTypes.Torrent) {
 	}
 }
 
-// SendToDebrid submits a magnet to debrid service(s) - replaces debrid.Parse. The provider calls run on the manager's
-// work ctx, not on a caller's: a submit belongs to the manager, and the torrent it leaves at the provider must get a
-// queue entry whatever happens to the request that asked.
-func (m *Manager) SendToDebrid(importRequest *ImportRequest) (*debridTypes.Torrent, error) {
-	return m.sendToDebrid(m.work.Context(), importRequest)
-}
-
 func requestTorrent(r *ImportRequest) *debridTypes.Torrent {
 	magnet := *r.Magnet
 	return &debridTypes.Torrent{
@@ -217,8 +210,13 @@ func requestTorrent(r *ImportRequest) *debridTypes.Torrent {
 	}
 }
 
-// sendToDebrid is SendToDebrid on ctx: a grab's submit child runs it on its own ctx, which only a stop cuts.
-func (m *Manager) sendToDebrid(ctx context.Context, importRequest *ImportRequest) (*debridTypes.Torrent, error) {
+// sendToDebrid submits a magnet to the debrid services on ctx: a grab's submit child runs it on its own ctx, which only
+// a stop cuts, so the torrent it leaves at the provider gets a queue entry whatever happens to the request that asked.
+func (m *Manager) sendToDebrid(
+	ctx context.Context,
+	importRequest *ImportRequest,
+	useHint bool,
+) (*debridTypes.Torrent, error) {
 	clients := m.FilterDebrid(func(c common.Client) bool {
 		if importRequest.SelectedDebrid != "" && c.Config().Name != importRequest.SelectedDebrid {
 			return false
@@ -235,7 +233,7 @@ func (m *Manager) sendToDebrid(ctx context.Context, importRequest *ImportRequest
 
 	for _, db := range clients {
 		pctx, cancel := context.WithTimeout(ctx, ProviderSubmitLimit)
-		torrent, err := m.submitToProvider(pctx, db, requestTorrent(importRequest), importRequest)
+		torrent, err := m.submitToProvider(pctx, db, requestTorrent(importRequest), importRequest, useHint)
 		cut := stopped(pctx)
 		cancel()
 		if err != nil && cut {
@@ -315,6 +313,7 @@ func (m *Manager) submitToProvider(
 	db common.Client,
 	debridTorrent *debridTypes.Torrent,
 	importRequest *ImportRequest,
+	useHint bool,
 ) (*debridTypes.Torrent, error) {
 	overrideDownloadUncached := db.Config().DownloadUncached
 	if importRequest.DownloadUncached != nil {
@@ -324,11 +323,18 @@ func (m *Manager) submitToProvider(
 	hash := debridTorrent.InfoHash
 
 	decision := m.hearsay.EvaluateAdd(db.Config().Provider, hash)
-	if !overrideDownloadUncached && decision.Reject() {
-		m.hearsay.DiscardAdd(decision)
-		return nil, hearsayNotCached(db.Config().Name, hash)
-	}
 	_logger := db.Logger()
+	if !overrideDownloadUncached && decision.Reject() {
+		if useHint {
+			m.hearsay.DiscardAdd(decision)
+			return nil, hearsayNotCached(db.Config().Name, hash)
+		}
+		_logger.Info().
+			Str("Provider", db.Config().Name).
+			Str("Hash", hash).
+			Str("Arr", importRequest.Arr.Name).
+			Msg("Hearsay hint bypassed: the provider answers")
+	}
 	_logger.Info().
 		Str("Provider", db.Config().Name).
 		Str("Arr", importRequest.Arr.Name).
