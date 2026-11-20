@@ -28,6 +28,9 @@ func Transition(st State, ev Event) (State, []Effect, error) {
 }
 
 func step(st State, ev Event) (State, []Effect, error) {
+	if ev.Cause != "" && (ev.Kind != EvParseResult || ev.Outcome != OutcomePermanent) {
+		return refuse(st, ev, "only a failed parse carries a failure cause")
+	}
 	if st.Phase == PhaseAbsent {
 		return absent(st, ev)
 	}
@@ -333,7 +336,7 @@ func placed(st State, ev Event) (State, []Effect, error) {
 }
 
 func fail(st State, ev Event, effect FailEffect, reason string) (State, []Effect, error) {
-	st.Failure = Failure{Reason: cmp.Or(ev.Reason, reason), At: ev.At, Count: st.Failure.Count + 1}
+	st.Failure = Failure{Reason: cmp.Or(ev.Reason, reason), Cause: ev.Cause, At: ev.At, Count: st.Failure.Count + 1}
 	return enter(st, PhaseFailed, ev, Effect{Kind: FxFail, Fail: effect})
 }
 

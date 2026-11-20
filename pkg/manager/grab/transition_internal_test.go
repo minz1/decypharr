@@ -515,3 +515,83 @@ func TestActionNoneDeletesACompleteRecord(t *testing.T) {
 		}
 	}
 }
+
+func failedParse(cause string) Event {
+	e := withOutcome(EvParseResult, OutcomePermanent)
+	e.Reason = "r"
+	e.Cause = cause
+	return e
+}
+
+func TestParseFailureRecordsCause(t *testing.T) {
+	t.Parallel()
+	got, _, err := Transition(in(PhaseSubmitting), failedParse(CauseArticlesMissing))
+	if err != nil || got.Phase != PhaseFailed {
+		t.Fatalf("parse failure: %v, %v", got.Phase, err)
+	}
+	if want := (Failure{Reason: "r", Cause: CauseArticlesMissing, At: at(), Count: 1}); got.Failure != want {
+		t.Errorf("failure %+v, want %+v", got.Failure, want)
+	}
+}
+
+func TestCauseSurvivesReAdd(t *testing.T) {
+	t.Parallel()
+	failed, _, err := Transition(in(PhaseSubmitting), failedParse(CauseSegmentsMissing))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := Transition(failed, ev(EvSubmit))
+	if err != nil || got.Phase != PhaseQueued {
+		t.Fatalf("re-add: %v, %v", got.Phase, err)
+	}
+	if got.Failure.Cause != CauseSegmentsMissing {
+		t.Errorf("cause %q after re-add, want %q", got.Failure.Cause, CauseSegmentsMissing)
+	}
+}
+
+func TestUnclassifiedFailClearsCause(t *testing.T) {
+	t.Parallel()
+	failed, _, err := Transition(in(PhaseSubmitting), failedParse(CauseArticlesMissing))
+	if err != nil {
+		t.Fatal(err)
+	}
+	queued, _, err := Transition(failed, ev(EvSubmit))
+	if err != nil {
+		t.Fatal(err)
+	}
+	queued.Phase = PhaseActing
+	got, _, err := Transition(queued, ev(EvActionFailed))
+	if err != nil || got.Phase != PhaseFailed {
+		t.Fatalf("action failed: %v, %v", got.Phase, err)
+	}
+	if got.Failure.Cause != "" {
+		t.Errorf("cause %q after an unclassified fail, want empty", got.Failure.Cause)
+	}
+}
+
+func TestCauseOnlyOnFailedParse(t *testing.T) {
+	t.Parallel()
+	withCause := func(e Event) Event {
+		e.Cause = CauseArticlesMissing
+		return e
+	}
+	for _, c := range []struct {
+		name string
+		from State
+		ev   Event
+	}{
+		{"submit permanent", in(PhaseSubmitting), withCause(withOutcome(EvSubmitResult, OutcomePermanent))},
+		{"parse placement", in(PhaseSubmitting), withCause(withOutcome(EvParseResult, OutcomePlacement))},
+		{"lookup found", in(PhaseSubmitting), withCause(withOutcome(EvLookup, OutcomeFound))},
+		{"action failed", in(PhaseActing), withCause(ev(EvActionFailed))},
+	} {
+		got, fx, err := Transition(c.from, c.ev)
+		if !IsRefused(err) || fx != nil || got != c.from {
+			t.Errorf("%s: %+v, %v, %v; want refused and unchanged", c.name, got, fx, err)
+		}
+	}
+	got, _, err := Transition(in(PhaseSubmitting), failedParse(CauseArticlesMissing))
+	if err != nil || got.Failure.Cause != CauseArticlesMissing {
+		t.Errorf("permanent parse with a cause: %+v, %v; want accepted", got.Failure, err)
+	}
+}

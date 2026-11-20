@@ -113,6 +113,7 @@ type Event struct {
 	// Raw is an unrecognised provider status, shown as is.
 	Raw    string
 	Reason string
+	Cause string
 	// Seasons are the season numbers a pack fanned out into.
 	Seasons []int
 	Fail    FailEffect

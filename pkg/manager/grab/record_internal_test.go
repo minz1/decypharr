@@ -296,3 +296,13 @@ func TestGrabDocumentKeepsTheProviderPhase(t *testing.T) {
 		t.Errorf("a none phase is written: %s", e.Grab)
 	}
 }
+
+func TestFailureCauseRoundTrips(t *testing.T) {
+	t.Parallel()
+	st, ok := stateOf(kindNZB, PhaseFailed)
+	if !ok {
+		t.Fatal("no failed NZB state")
+	}
+	st.Failure.Cause = CauseSegmentsMissing
+	roundTrip(t, kindNZB, st)
+}

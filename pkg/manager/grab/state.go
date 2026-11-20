@@ -9,6 +9,11 @@ import (
 	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 )
 
+const (
+	CauseArticlesMissing = "nzb_articles_missing"
+	CauseSegmentsMissing = "nzb_segments_missing"
+)
+
 // Failure says why and when a grab failed.
 type Failure struct {
 	Reason string
