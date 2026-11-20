@@ -418,6 +418,7 @@ type entryStep struct {
 	published bool
 	persisted bool
 	changed   bool
+	durable   bool
 }
 
 // step runs one event through the reducer and applies its effects. Memory never runs ahead of disk: the new
@@ -449,6 +450,7 @@ func (a *entryActor) step(key string, st *entryState, m entryMsg, fx *keyed.Effe
 	a.noteObservation(key, st, cur.State, nextState, ev)
 	a.noteSubmit(key, st, m, ev)
 	s := &entryStep{key: key, st: st, cur: cur, next: grab.Grab{State: nextState}, m: m, ev: ev, fx: fx}
+	s.durable = ev.Kind == grab.EvArrFailDone
 	if cur.Entry != nil {
 		s.next.Entry = cur.Entry.Clone()
 	}
@@ -570,7 +572,7 @@ func (a *entryActor) apply(s *entryStep, effects []grab.Effect) error {
 		a.arm(s.st, s.fx, a.retryDelay(s.st.throttles), eventMsg(grab.Event{Kind: grab.EvThrottleTimer}))
 	}
 	if !s.persisted && s.changed && s.next.State.Phase != grab.PhaseDeleting {
-		return a.persist(s.next)
+		return a.persist(s.next, s.durable)
 	}
 	return nil
 }
@@ -623,7 +625,7 @@ func (a *entryActor) save(s *entryStep) error {
 		}
 		s.published = true
 	}
-	if err := a.persist(s.next); err != nil {
+	if err := a.persist(s.next, s.durable); err != nil {
 		return err
 	}
 	s.persisted = true
@@ -641,12 +643,16 @@ func (a *entryActor) publishesLibrary(cur, next grab.Grab, ev grab.Event) bool {
 }
 
 // persist saves g's queue record and shows it to readers.
-func (a *entryActor) persist(g grab.Grab) error {
+func (a *entryActor) persist(g grab.Grab, durable bool) error {
 	e := g.Entry.Clone()
 	if err := grab.Encode(grab.Grab{State: g.State, Entry: e}); err != nil {
 		return fmt.Errorf("encode grab: %w", err)
 	}
-	if err := a.store.UpdateQueuedGrab(e); err != nil {
+	save := a.store.UpdateQueuedGrab
+	if durable {
+		save = a.store.UpdateQueuedGrabDurable
+	}
+	if err := save(e); err != nil {
 		return err
 	}
 	*g.Entry = *e

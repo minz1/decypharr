@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/sirrobot01/appendstore"
 
@@ -21,7 +22,7 @@ import (
 // survive the deletion of its data.
 func (m *Manager) InvalidateReacquire(ctx context.Context, job reacquire.Job) error {
 	if job.Strategy == reacquire.StrategyDownloadFailed {
-		return m.removeFailedDownloadRecord(ctx, job.EntryID)
+		return m.failJobDone(ctx, job)
 	}
 	if err := m.CheckInvalidation(ctx, job); err != nil {
 		return err
@@ -124,12 +125,29 @@ func (m *Manager) CheckLibraryTarget(binding reacquire.Binding) error {
 	return reacquire.CheckLibraryTarget(binding.LibraryPath, root, want)
 }
 
-// removeFailedDownloadRecord drops the queue record of a download whose grab the Arr failed, as a client delete would.
-func (m *Manager) removeFailedDownloadRecord(ctx context.Context, entryID string) error {
-	if entryID == "" {
+func (m *Manager) failJobDone(ctx context.Context, job reacquire.Job) error {
+	if job.EntryID == "" {
 		return nil
 	}
-	return m.DeleteQueued(ctx, entryID, grab.Cleanup{DeleteFiles: true})
+	key := strings.ToLower(job.EntryID)
+	msg := eventMsg(grab.Event{Kind: grab.EvArrFailDone, Arr: job.ArrName, JobCreated: job.CreatedAt})
+	v, err := m.entries.runner.Ask(ctx, key, msg)
+	if err == nil && v != nil {
+		err, _ = v.(error)
+	}
+	switch {
+	case err == nil:
+		return nil
+	case grab.IsRefused(err):
+		m.logger.Info().
+			Err(err).
+			Str("key", key).
+			Str("job", job.ID).
+			Msg("Failed grab kept: it is no longer the one the job was queued for")
+		return nil
+	default:
+		return &reacquire.RetryableInvalidateError{Err: fmt.Errorf("remove failed grab %q: %w", key, err)}
+	}
 }
 
 // invalidatedEntryIDs is the set of managed entries a reacquire job replaces:

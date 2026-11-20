@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/rs/zerolog"
@@ -265,7 +266,9 @@ func TestInvalidateDownloadFailedRemovesQueueRecord(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		m, entry := newDroppedTestManager(t, &fakeArrRecovery{})
-		job := reacquire.Job{Strategy: reacquire.StrategyDownloadFailed, EntryID: entry.InfoHash}
+		job := reacquire.Job{
+			Strategy: reacquire.StrategyDownloadFailed, EntryID: entry.InfoHash, CreatedAt: time.Now(),
+		}
 
 		if err := m.InvalidateReacquire(t.Context(), job); err != nil {
 			t.Fatal(err)
