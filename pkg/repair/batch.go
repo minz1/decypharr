@@ -381,7 +381,7 @@ func (r *Service) judgeBuckets(
 	batch *probeBatch,
 	names []string,
 ) map[Bucket]bucketOutcome {
-	subjects, held := r.sightBuckets(batch, names)
+	subjects, held := r.sightBuckets(batch, names, runID)
 	buckets := make([]Bucket, 0, len(subjects))
 	for bucket := range subjects {
 		buckets = append(buckets, bucket)
@@ -405,7 +405,10 @@ func (r *Service) judgeBuckets(
 		out := r.breaker.evaluate(ctx, bucket, in)
 		plan[bucket] = out
 		if out.newlyTripped {
-			r.announceTrip(runID, bucket, out.hold, confirmed, probed)
+			if probed < 0 {
+				confirmed = len(out.window)
+			}
+			r.announceTrip(runID, bucket, out, confirmed, probed)
 		}
 	}
 	return plan
@@ -413,7 +416,13 @@ func (r *Service) judgeBuckets(
 
 // sightBuckets returns, per bucket, the entries the batch confirms broken there and how many of them were held,
 // and notes the sightings in the breaker's rolling window.
-func (r *Service) sightBuckets(batch *probeBatch, names []string) (map[Bucket]map[string]struct{}, map[Bucket]int) {
+func (r *Service) sightBuckets(
+	batch *probeBatch, names []string, runID string,
+) (map[Bucket]map[string]struct{}, map[Bucket]int) {
+	from := sighting{source: sourceRun, runID: runID}
+	if batch.sweep {
+		from.source = sourceSweep
+	}
 	subjects := make(map[Bucket]map[string]struct{})
 	held := make(map[Bucket]int)
 	for _, name := range names {
@@ -432,7 +441,7 @@ func (r *Service) sightBuckets(batch *probeBatch, names []string) (map[Bucket]ma
 			// A probed run judges held entries itself; re-sighting them would refill the rolling window that heals
 			// outside a sweep are judged on, and trip the bucket mid-drain.
 			if !entry.wasHeld || !batch.scaled {
-				r.breaker.noteConfirmed(item.bucket, name)
+				r.breaker.noteConfirmed(item.bucket, name, from)
 			}
 		}
 	}
@@ -440,13 +449,14 @@ func (r *Service) sightBuckets(batch *probeBatch, names []string) (map[Bucket]ma
 }
 
 // announceTrip logs and notifies that a bucket's heals are held.
-func (r *Service) announceTrip(runID string, bucket Bucket, reason holdReason, confirmed, probed int) {
+func (r *Service) announceTrip(runID string, bucket Bucket, out bucketOutcome, confirmed, probed int) {
+	reason := out.hold
 	scale := "no probe scale"
 	if probed >= 0 {
 		scale = fmt.Sprintf("%d probed", probed)
 	}
 	r.logger.Warn().Str("run_id", runID).Str("bucket", bucket.String()).Str("reason", string(reason)).
-		Int("confirmed", confirmed).Int("probed", probed).
+		Int("confirmed", confirmed).Int("probed", probed).Strs("window", out.window).
 		Msg("Repair: breaker tripped; heals for this provider and failure class are held")
 	if r.notifications == nil {
 		return

@@ -243,13 +243,13 @@ func TestWindowTripCountsDistinctSubjectsInTheRollingHour(t *testing.T) {
 	verdict := canaryPass
 	b, clock, _ := testBreaker(&verdict)
 	for i := range 9 {
-		b.noteConfirmed(testBucket(), fmt.Sprintf("entry-%d", i))
+		b.noteConfirmed(testBucket(), fmt.Sprintf("entry-%d", i), sighting{})
 	}
-	b.noteConfirmed(testBucket(), "entry-0") // the same subject twice is one
+	b.noteConfirmed(testBucket(), "entry-0", sighting{}) // the same subject twice is one
 	if out := b.evaluate(t.Context(), testBucket(), bucketInput{confirmed: 0, probed: -1}); out.hold != holdNone {
 		t.Fatalf("nine distinct confirmations tripped the bucket: %+v", out)
 	}
-	b.noteConfirmed(testBucket(), "entry-9")
+	b.noteConfirmed(testBucket(), "entry-9", sighting{})
 	if out := b.evaluate(t.Context(), testBucket(), bucketInput{confirmed: 0, probed: -1}); out.hold != holdTripped {
 		t.Fatalf("ten distinct confirmations did not trip the bucket: %+v", out)
 	}

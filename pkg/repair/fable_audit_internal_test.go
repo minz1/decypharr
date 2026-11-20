@@ -99,7 +99,7 @@ func TestWindowTrippedBucketIsNotReleasedOnTheSample(t *testing.T) {
 	b, clock, _ := testBreaker(&verdict)
 	key := testBucket()
 	b.mu.Lock()
-	b.tripLocked(b.bucketLocked(key), clock.Now(), "", holdTripped)
+	b.tripLocked(b.bucketLocked(key), clock.Now(), clock.Now().Add(-b.settings().Window), "", holdTripped)
 	b.mu.Unlock()
 	clock.Advance(2 * time.Hour)
 
@@ -240,7 +240,7 @@ func TestForceDoesNotCloseANormalDrainAfterANoCanaryTrip(t *testing.T) {
 	b, clock, _ := testBreaker(&verdict)
 	key := testBucket()
 	b.mu.Lock()
-	b.tripLocked(b.bucketLocked(key), clock.Now(), "sweep-0", holdNoCanary)
+	b.tripLocked(b.bucketLocked(key), clock.Now(), clock.Now().Add(-b.settings().Window), "sweep-0", holdNoCanary)
 	b.mu.Unlock()
 	clock.Advance(2 * time.Hour)
 	in := bucketInput{runID: "sweep-1", probed: 30, sample: sweepSample{probed: 30}}

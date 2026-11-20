@@ -56,6 +56,6 @@ func (r *Service) seedBreakerFromJournal() {
 		if job.Cause == reacquire.CauseStream {
 			class = ClassUsenetSegment
 		}
-		r.breaker.seed(job.CreatedAt, Bucket{Provider: r.ProviderFor(job.EntryID), Class: class}, job.EntryID)
+		r.breaker.seed(job.CreatedAt, Bucket{Provider: r.ProviderFor(job.EntryID), Class: class}, job.EntryID, job.ID)
 	}
 }

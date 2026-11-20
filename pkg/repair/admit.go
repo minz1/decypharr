@@ -95,7 +95,7 @@ func (r *Service) Admit(ctx context.Context, req HealRequest) error {
 	bucket := Bucket{Provider: req.Provider, Class: req.Class}
 	items := []healItem{{bucket: bucket, units: units}}
 	if req.Subject != "" && !req.Operator {
-		r.breaker.noteConfirmed(bucket, req.Subject)
+		r.breaker.noteConfirmed(bucket, req.Subject, sighting{source: sourceAdmit})
 	}
 
 	if req.Force {
@@ -108,7 +108,7 @@ func (r *Service) Admit(ctx context.Context, req HealRequest) error {
 
 	out := r.breaker.evaluate(ctx, bucket, bucketInput{confirmed: 0, probed: -1})
 	if out.newlyTripped {
-		r.announceTrip("", bucket, out.hold, r.breaker.windowCount(bucket), -1)
+		r.announceTrip("", bucket, out, len(out.window), -1)
 	}
 	defer func() {
 		if out.released || out.draining {

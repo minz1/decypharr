@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -227,6 +228,7 @@ type bucketOutcome struct {
 	released bool
 	// draining reports a releasing bucket: entries the caps leave stay held for the next run.
 	draining bool
+	window   []string
 }
 
 // breaker holds the bucket machines, the rolling heal ledger and the canary verdicts. It is in memory: a
@@ -286,16 +288,31 @@ func over(s config.BreakerSettings, confirmed, probed int) bool {
 	return confirmed >= s.Confirmed || confirmed*100 >= probed*s.Percent
 }
 
-// confirmation is when a subject was first confirmed broken, and whether a heal for it is being held.
+type sighting struct {
+	source string
+	runID  string
+}
+
+const (
+	sourceAdmit = "admit"
+	sourceSweep = "sweep"
+	sourceRun   = "run"
+	sourceSeed  = "seed"
+)
+
+// confirmation is when a subject was first confirmed broken, by whom, and whether a heal for it is being held.
 type confirmation struct {
 	at   time.Time
 	held bool
+	from sighting
 }
+
+func (c *confirmation) inWindow(cutoff time.Time) bool { return !c.at.Before(cutoff) }
 
 // noteConfirmed records that subject was confirmed broken in key's bucket, for the rolling window. Only the first
 // sighting counts: a caller retrying a held heal is the same failure, not a new one, so retries cannot keep a
 // bucket tripped.
-func (b *breaker) noteConfirmed(key Bucket, subject string) {
+func (b *breaker) noteConfirmed(key Bucket, subject string, from sighting) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	confirmed := b.bucketLocked(key).confirmed
@@ -303,11 +320,36 @@ func (b *breaker) noteConfirmed(key Bucket, subject string) {
 	seen := confirmed[subject]
 	switch {
 	case seen == nil:
-		confirmed[subject] = &confirmation{at: now}
-	case !seen.held && seen.at.Before(now.Add(-b.settings().Window)):
+		confirmed[subject] = &confirmation{at: now, from: from}
+	case !seen.held && !seen.inWindow(now.Add(-b.settings().Window)):
 		// Its sighting aged out of the window and it failed again: a new failure, not a retry.
-		seen.at = now
+		seen.at, seen.from = now, from
 	}
+}
+
+func windowLinesLocked(bk *bucketBreaker, cutoff time.Time) []string {
+	type seen struct {
+		subject string
+		c       confirmation
+	}
+	var in []seen
+	for subject, c := range bk.confirmed {
+		if c.inWindow(cutoff) {
+			in = append(in, seen{subject: subject, c: *c})
+		}
+	}
+	slices.SortFunc(in, func(x, y seen) int {
+		if n := x.c.at.Compare(y.c.at); n != 0 {
+			return n
+		}
+		return strings.Compare(x.subject, y.subject)
+	})
+	lines := make([]string, len(in))
+	for i, s := range in {
+		lines[i] = fmt.Sprintf("%s source=%s run_id=%s subject=%s",
+			s.c.at.UTC().Format(time.RFC3339), s.c.from.source, s.c.from.runID, s.subject)
+	}
+	return lines
 }
 
 // markHeld records whether the heal for subject is being held, which keeps its sighting past the window so a
@@ -324,16 +366,15 @@ func (b *breaker) markHeld(key Bucket, subject string, held bool) {
 func (b *breaker) windowCount(key Bucket) int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.windowCountLocked(key, b.settings())
+	return b.windowCountLocked(key, b.now().Add(-b.settings().Window))
 }
 
-func (b *breaker) windowCountLocked(key Bucket, s config.BreakerSettings) int {
+func (b *breaker) windowCountLocked(key Bucket, cutoff time.Time) int {
 	bk := b.bucketLocked(key)
-	cutoff := b.now().Add(-s.Window)
 	counted := 0
 	for subject, c := range bk.confirmed {
 		switch {
-		case !c.at.Before(cutoff):
+		case c.inWindow(cutoff):
 			counted++
 		case !c.held:
 			delete(bk.confirmed, subject)
@@ -415,6 +456,7 @@ func (b *breaker) runCanary(ctx context.Context, key Bucket) (canaryOutcome, boo
 func (b *breaker) stepLocked(key Bucket, in bucketInput, fresh *canaryOutcome) (bucketOutcome, bool) {
 	s := b.settings()
 	now := b.now()
+	cutoff := now.Add(-s.Window)
 	bk := b.bucketLocked(key)
 	confirmed, probed := in.confirmed, in.probed
 	if probed >= 0 {
@@ -423,7 +465,7 @@ func (b *breaker) stepLocked(key Bucket, in bucketInput, fresh *canaryOutcome) (
 	}
 	switch {
 	case probed < 0:
-		confirmed = b.windowCountLocked(key, s)
+		confirmed = b.windowCountLocked(key, cutoff)
 	case bk.state == breakerReleasing:
 		// The held rows are the drain's backlog, not new evidence, sample or not: a sweep after the release seldom
 		// finds healthy entries due again, so only entries broken outside the hold can re-trip the bucket.
@@ -440,9 +482,9 @@ func (b *breaker) stepLocked(key Bucket, in bucketInput, fresh *canaryOutcome) (
 	switch bk.state {
 	case breakerClosed:
 		if exceeded {
-			return b.tripLocked(bk, now, in.runID, holdTripped), false
+			return b.tripLocked(bk, now, cutoff, in.runID, holdTripped), false
 		}
-		return b.canaryStepLocked(bk, key, in, s, fresh, false)
+		return b.canaryStepLocked(bk, key, in, s, now, cutoff, fresh, false)
 	case breakerTripped:
 		if exceeded && in.probed < 0 {
 			// The rolling window is its own clock: its old sightings age out, so a caller retrying within it must
@@ -450,40 +492,43 @@ func (b *breaker) stepLocked(key Bucket, in bucketInput, fresh *canaryOutcome) (
 			return bucketOutcome{hold: holdOf(bk)}, false
 		}
 		if exceeded {
-			return b.tripLocked(bk, now, in.runID, holdTripped), false
+			return b.tripLocked(bk, now, cutoff, in.runID, holdTripped), false
 		}
 		if now.Sub(bk.since) < s.ReleaseAfter || (in.runID != "" && in.runID == bk.trippedRun) {
 			return bucketOutcome{hold: holdOf(bk)}, false
 		}
-		return b.canaryStepLocked(bk, key, in, s, fresh, true)
+		return b.canaryStepLocked(bk, key, in, s, now, cutoff, fresh, true)
 	case breakerReleasing:
 		if exceeded {
-			return b.tripLocked(bk, now, in.runID, holdTripped), false
+			return b.tripLocked(bk, now, cutoff, in.runID, holdTripped), false
 		}
 		// A drain lives over several sweeps and heals outside them, so the canary gates every evaluation of a releasing
 		// bucket as it gates one on a closed bucket: a release is no free pass (SM12-31, SM12-36). An inconclusive
 		// canary holds the drain (draining false), so the bucket stays releasing and its rows stay held.
-		out, needCanary := b.canaryStepLocked(bk, key, in, s, fresh, false)
+		out, needCanary := b.canaryStepLocked(bk, key, in, s, now, cutoff, fresh, false)
 		out.draining = !needCanary && out.hold == holdNone
 		return out, needCanary
 	}
 	return bucketOutcome{hold: holdTripped}, false
 }
 
-func (b *breaker) tripLocked(bk *bucketBreaker, now time.Time, runID string, reason holdReason) bucketOutcome {
+func (b *breaker) tripLocked(bk *bucketBreaker, now, cutoff time.Time, runID string, reason holdReason) bucketOutcome {
 	was := bk.state
 	if err := bk.transition(breakerTripped, now, runID, reason); err != nil {
 		return bucketOutcome{hold: holdTripped}
 	}
-	return bucketOutcome{hold: reason, newlyTripped: was != breakerTripped}
+	if was == breakerTripped {
+		return bucketOutcome{hold: reason}
+	}
+	return bucketOutcome{hold: reason, newlyTripped: true, window: windowLinesLocked(bk, cutoff)}
 }
 
 // canaryStepLocked decides on a bucket not over threshold from its canary: a pass (or no signal) admits and, for
 // a tripped bucket, releases it; a failure trips it; an inconclusive canary holds this evaluation only.
 func (b *breaker) canaryStepLocked(
-	bk *bucketBreaker, key Bucket, in bucketInput, s config.BreakerSettings, fresh *canaryOutcome, releasing bool,
+	bk *bucketBreaker, key Bucket, in bucketInput, s config.BreakerSettings, now, cutoff time.Time,
+	fresh *canaryOutcome, releasing bool,
 ) (bucketOutcome, bool) {
-	now := b.now()
 	outcome, ok := canaryInconclusive, false
 	switch cached, cachedOK := b.verdicts[key]; {
 	case fresh != nil:
@@ -496,22 +541,23 @@ func (b *breaker) canaryStepLocked(
 	}
 	switch outcome {
 	case canaryFail:
-		return b.tripLocked(bk, now, in.runID, holdCanaryFailed), false
+		return b.tripLocked(bk, now, cutoff, in.runID, holdCanaryFailed), false
 	case canaryInconclusive, canaryAborted:
 		if bk.state == breakerReleasing {
 			bk.reason = holdCanaryInconclusive // the status shows the canary holding the drain, not an old reason
 		}
 		return bucketOutcome{hold: holdCanaryInconclusive}, false
 	case canaryNone, canaryPass:
-		return b.admitStepLocked(bk, in, outcome == canaryNone, releasing), false
+		return b.admitStepLocked(bk, in, now, cutoff, outcome == canaryNone, releasing), false
 	}
 	return bucketOutcome{hold: holdCanaryInconclusive}, false
 }
 
 // admitStepLocked decides on a bucket whose canary passed or had nothing to probe (noCanary): it admits, releases a
 // tripped bucket (releasing) or drains a releasing one, unless without a canary the sample gives no evidence.
-func (b *breaker) admitStepLocked(bk *bucketBreaker, in bucketInput, noCanary, releasing bool) bucketOutcome {
-	now := b.now()
+func (b *breaker) admitStepLocked(
+	bk *bucketBreaker, in bucketInput, now, cutoff time.Time, noCanary, releasing bool,
+) bucketOutcome {
 	if releasing && noCanary && (in.runID == "" || !in.sample.passes()) {
 		// Nothing to probe is no evidence of recovery: the clock alone never releases the bucket.
 		bk.reason = holdNoCanary
@@ -527,7 +573,7 @@ func (b *breaker) admitStepLocked(bk *bucketBreaker, in bucketInput, noCanary, r
 	if bk.state == breakerReleasing && noCanary && !in.sample.passes() {
 		// A drain, not a release: with no canary the sweep's sample is its only evidence, and a broken one is new
 		// evidence, so the bucket trips again as no_canary and only a later passing sample releases it.
-		return b.tripLocked(bk, now, in.runID, holdNoCanary)
+		return b.tripLocked(bk, now, cutoff, in.runID, holdNoCanary)
 	}
 	if releasing {
 		if err := bk.transition(breakerReleasing, now, in.runID, holdNone); err != nil {
@@ -699,11 +745,11 @@ func (b *breaker) pruneLedgerLocked(now time.Time, s config.BreakerSettings) {
 }
 
 // seed restores one heal from before a restart into the ledger and the window.
-func (b *breaker) seed(at time.Time, key Bucket, subject string) {
+func (b *breaker) seed(at time.Time, key Bucket, subject, jobID string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.ledger = append(b.ledger, healRecord{at: at, bucket: key, units: 1})
-	b.bucketLocked(key).confirmed[subject] = &confirmation{at: at}
+	b.bucketLocked(key).confirmed[subject] = &confirmation{at: at, from: sighting{source: sourceSeed, runID: jobID}}
 }
 
 // BucketStatus is the observable state of one bucket.
