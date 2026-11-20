@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	"github.com/sirrobot01/decypharr/internal/config"
 )
 
@@ -150,6 +152,34 @@ type importFailure struct {
 	retryAt   time.Time
 	commandID int       // the arr's in-flight ManualImport command, 0 when none
 	waitSince time.Time // when the in-flight command was submitted or last reported stuck
+	warned    warnClass
+
+	noFilesSince time.Time
+}
+
+type warnClass int
+
+const (
+	warnNone warnClass = iota
+	warnFailing
+	warnNoFiles
+	warnRejected
+	warnCommandStuck
+)
+
+func (f *importFailure) warnOnce(class warnClass) bool {
+	if class == f.warned {
+		return false
+	}
+	f.warned = class
+	return true
+}
+
+func (s *Service) warnEvent(failure *importFailure, class warnClass) *zerolog.Event {
+	if failure.warnOnce(class) {
+		return s.logger.Warn()
+	}
+	return s.logger.Debug()
 }
 
 // CleanupQueue applies the configured cleanup rules to one instance's queue.
@@ -165,7 +195,9 @@ func (s *Service) CleanupQueue(ctx context.Context, name string) error {
 	}
 	complete := completeDownloads(items)
 	var blocklist, blocklistResearch, blocklistSearchMissing, leftovers []QueueSchema
-	importStatuses := make(map[string]string)
+	importRows := make(map[string][]QueueSchema)
+	mixed := make(map[string]bool)
+	var importOrder []string
 	for _, item := range items {
 		action, rule := resolveQueueRule(item, rules, complete[item.DownloadID])
 		switch action {
@@ -178,11 +210,15 @@ func (s *Service) CleanupQueue(ctx context.Context, name string) error {
 			item.rule, item.provider = rule, s.guard.guardProvider(item)
 			blocklistResearch = append(blocklistResearch, item)
 		case QueueActionImport:
-			if _, seen := importStatuses[item.DownloadID]; !seen {
-				importStatuses[item.DownloadID] = statusText(item)
+			if _, seen := importRows[item.DownloadID]; !seen {
+				importOrder = append(importOrder, item.DownloadID)
 			}
+			importRows[item.DownloadID] = append(importRows[item.DownloadID], item)
 		case QueueActionNone:
 			// Nothing to do.
+		}
+		if action != QueueActionImport {
+			mixed[item.DownloadID] = true
 		}
 	}
 
@@ -204,24 +240,32 @@ func (s *Service) CleanupQueue(ctx context.Context, name string) error {
 	s.blocklistWithOwedSearches(ctx, name, blocklistSearchMissing, searched)
 	s.searchPendingEpisodes(ctx, name, items)
 	s.blocklistQueueItems(ctx, name, blocklist, QueueActionBlocklist, true)
-	s.removeLeftovers(ctx, name, leftovers)
+	s.removeLeftovers(ctx, name, leftovers, "episodes_missing")
+	s.retryImports(ctx, name, importOrder, importRows, mixed)
+	return nil
+}
+
+func (s *Service) retryImports(
+	ctx context.Context, name string, order []string, rows map[string][]QueueSchema, mixed map[string]bool,
+) {
 	s.mu.RLock()
 	previous := s.importFailures[name]
 	s.mu.RUnlock()
-	next := make(map[string]importFailure, len(importStatuses))
-	for downloadID, status := range importStatuses {
-		next[downloadID] = s.retryImport(ctx, name, downloadID, status, previous[downloadID])
+	next := make(map[string]importFailure, len(order))
+	for _, downloadID := range order {
+		next[downloadID] = s.retryImport(
+			ctx, name, downloadID, rows[downloadID], !mixed[downloadID], previous[downloadID])
 	}
 	s.mu.Lock()
 	s.importFailures[name] = next
 	s.mu.Unlock()
-	return nil
 }
 
 // retryImport advances one stuck import: it waits on an in-flight arr command, else submits a new one unless backed off.
 func (s *Service) retryImport(
-	ctx context.Context, name, downloadID, status string, failure importFailure,
+	ctx context.Context, name, downloadID string, rows []QueueSchema, endable bool, failure importFailure,
 ) importFailure {
+	status := statusText(rows[0])
 	if failure.status != status {
 		failure = importFailure{status: status, commandID: failure.commandID}
 	}
@@ -232,7 +276,7 @@ func (s *Service) retryImport(
 		if err != nil || running {
 			if s.now().Sub(failure.waitSince) >= importRetryDelay {
 				failure.waitSince = s.now()
-				s.logger.Warn().Err(err).Str("arr", name).Str("download_id", downloadID).
+				s.warnEvent(&failure, warnCommandStuck).Err(err).Str("arr", name).Str("download_id", downloadID).
 					Int("command_id", failure.commandID).Str("command_status", command.Status).
 					Msg("Queue cleanup: manual import command still unfinished after 1h, needs manual intervention")
 			}
@@ -253,11 +297,19 @@ func (s *Service) retryImport(
 		return failure
 	}
 
-	command, err := s.ManualImport(ctx, name, downloadID)
+	command, outcome, err := s.manualImport(ctx, name, downloadID)
+	if outcome != outcomeNoFiles {
+		failure.noFilesSince = time.Time{}
+	} else if failure.noFilesSince.IsZero() {
+		failure.noFilesSince = s.now()
+	}
 	if err == nil && command.ID == 0 {
 		err = fmt.Errorf("manual import: arr returned no command id")
 	}
 	if err != nil {
+		if ended, done := s.endImport(ctx, name, downloadID, rows, endable, outcome, failure); done {
+			return ended
+		}
 		return s.recordImportFailure(name, downloadID, failure, err)
 	}
 	failure.commandID = command.ID
@@ -271,7 +323,7 @@ func (s *Service) retryImport(
 func (s *Service) recordImportFailure(name, downloadID string, failure importFailure, importErr error) importFailure {
 	if errors.Is(importErr, errAllCandidatesRejected) {
 		failure.retryAt = s.now().Add(importRejectedDelay)
-		s.logger.Warn().Err(importErr).Str("arr", name).Str("download_id", downloadID).
+		s.warnEvent(&failure, warnRejected).Err(importErr).Str("arr", name).Str("download_id", downloadID).
 			Dur("retry_in", importRejectedDelay).
 			Msg("Queue cleanup: the arr rejects every file of this download; needs manual intervention")
 		return failure
@@ -283,9 +335,87 @@ func (s *Service) recordImportFailure(name, downloadID string, failure importFai
 		return failure
 	}
 	failure.retryAt = s.now().Add(importRetryDelay)
-	s.logger.Warn().Err(importErr).Str("arr", name).Str("download_id", downloadID).Int("attempts", failure.attempts).
+	class := warnFailing
+	if errors.Is(importErr, errNoImportFiles) {
+		class = warnNoFiles
+	}
+	s.warnEvent(&failure, class).Err(importErr).Str("arr", name).Str("download_id", downloadID).
+		Int("attempts", failure.attempts).
 		Msg("Queue cleanup: manual import keeps failing; retrying in 1h, needs manual intervention")
 	return failure
+}
+
+func (s *Service) endImport(
+	ctx context.Context, name, downloadID string, rows []QueueSchema, endable bool, outcome importOutcome,
+	failure importFailure,
+) (importFailure, bool) {
+	final := outcome == outcomeRejected || outcome == outcomeWrongEpisode ||
+		outcome == outcomeNoFiles && s.now().Sub(failure.noFilesSince) >= importRetryDelay
+	if downloadID == "" || !endable || !final ||
+		slices.ContainsFunc(rows, func(row QueueSchema) bool { return row.EpisodeID <= 0 }) ||
+		!s.episodesComplete(ctx, name, downloadID, rows) {
+		return failure, false
+	}
+	if outcome == outcomeNoFiles {
+		failure.retryAt = s.now().Add(importRetryDelay)
+		s.removeLeftovers(ctx, name, rows, "import_end:no_files")
+		return failure, true
+	}
+	failure.retryAt = s.now().Add(importRejectedDelay)
+	if outcome == outcomeRejected {
+		s.removeLeftovers(ctx, name, rows, "import_end:rejected")
+		return failure, true
+	}
+
+	provider := s.guard.guardProvider(rows[0])
+	marked := slices.Clone(rows)
+	for i := range marked {
+		marked[i].rule, marked[i].provider = "import_end:wrong_episode", provider
+	}
+	kept := keepAllowed(marked, s.admitBlocklists(ctx, name, marked))
+	if len(kept) != len(marked) {
+		s.guard.release(name, kept)
+		s.logger.Info().Str("arr", name).Str("download_id", downloadID).
+			Msg("Queue cleanup: import end held by the blocklist guard")
+		return failure, true
+	}
+	if !s.episodesComplete(ctx, name, downloadID, marked) {
+		s.guard.release(name, marked)
+		s.logger.Info().Str("arr", name).Str("download_id", downloadID).
+			Msg("Queue cleanup: import end released, an episode lost its file")
+		return failure, true
+	}
+	s.blocklistQueueItems(ctx, name, marked, QueueActionBlocklist, true)
+	return failure, true
+}
+
+func (s *Service) episodesComplete(ctx context.Context, name, downloadID string, rows []QueueSchema) bool {
+	if s.ResolveType(ctx, name) != Sonarr {
+		return false
+	}
+	ids := make([]int, len(rows))
+	for i, row := range rows {
+		ids[i] = row.EpisodeID
+	}
+	slices.Sort(ids)
+	ids = slices.Compact(ids)
+	files, err := s.episodeFiles(ctx, name, ids)
+	if err != nil {
+		s.logger.Debug().Err(err).Str("arr", name).Str("download_id", downloadID).
+			Msg("Queue cleanup: import end skipped, episodes unread")
+		return false
+	}
+	for _, id := range ids {
+		hasFile, listed := files[id]
+		if !listed {
+			s.logger.Debug().Str("arr", name).Str("download_id", downloadID).Int("episode_id", id).
+				Msg("Queue cleanup: import end skipped, episodes unread")
+		}
+		if !hasFile {
+			return false
+		}
+	}
+	return true
 }
 
 // resolveQueueAction picks what to do with one queue item. Only failed items
@@ -568,7 +698,7 @@ func (s *Service) blocklistWithOwedSearches(ctx context.Context, name string, it
 }
 
 // removeLeftovers removes the rows of packs that did their job, keeping the release and the client's copy.
-func (s *Service) removeLeftovers(ctx context.Context, name string, items []QueueSchema) {
+func (s *Service) removeLeftovers(ctx context.Context, name string, items []QueueSchema, rule string) {
 	if len(items) == 0 {
 		return
 	}
@@ -577,12 +707,13 @@ func (s *Service) removeLeftovers(ctx context.Context, name string, items []Queu
 		ids[i] = item.ID
 	}
 	if err := s.removeQueueItems(ctx, name, ids, false, false); err != nil {
-		s.logger.Error().Err(err).Str("arr", name).Msg("Queue cleanup: leftover removal failed")
+		s.logger.Error().Err(err).Str("arr", name).Str("rule", rule).Msg("Queue cleanup: leftover removal failed")
 		return
 	}
 	for _, item := range items {
 		s.logger.Info().Str("arr", name).Str("title", item.Title).Str("download_id", item.DownloadID).
-			Str("status", statusText(item)).Msg("Queue cleanup: removed leftover row, every episode has a file")
+			Str("rule", rule).Str("status", statusText(item)).
+			Msg("Queue cleanup: removed leftover row, every episode has a file")
 	}
 }
 

@@ -82,8 +82,9 @@ type cleanupServer struct {
 	fail    atomic.Bool
 	succeed atomic.Bool
 	// rejectAll makes every manual import candidate rejected by the arr.
-	rejectAll atomic.Bool
-	lookups   atomic.Int64
+	rejectAll    atomic.Bool
+	lookupStatus atomic.Int64
+	lookups      atomic.Int64
 	// commandStatus is what GET /api/v3/command/1 reports; "" answers 404 and "error" answers 401.
 	commandStatus atomic.Pointer[string]
 	statusChecks  atomic.Int64
@@ -107,6 +108,10 @@ func newCleanupServer(t *testing.T, records []QueueSchema) *cleanupServer {
 			_, _ = w.Write(body)
 		case "/api/v3/manualimport":
 			fake.lookups.Add(1)
+			if status := fake.lookupStatus.Load(); status != 0 {
+				http.Error(w, "no", int(status))
+				return
+			}
 			if fake.rejectAll.Load() {
 				_, _ = w.Write([]byte(`[` + rejectedCandidate + `]`))
 				return
@@ -356,7 +361,7 @@ func TestCleanupQueueKeepsCommandAcrossStatusChange(t *testing.T) {
 	wantLookups(t, fake, 1)
 }
 
-func TestCleanupQueueWarnsHourlyAboutAStuckCommand(t *testing.T) {
+func TestCleanupQueueWarnsOnceAboutAStuckCommand(t *testing.T) {
 	t.Parallel()
 
 	fake := newCleanupServer(t, stuckRecords(matchedByIDTitle))
@@ -375,8 +380,16 @@ func TestCleanupQueueWarnsHourlyAboutAStuckCommand(t *testing.T) {
 	runCleanup(t, service, "arr", 1)
 
 	wantLookups(t, fake, 1)
+	if got := strings.Count(logs.String(), `"command_id":1`); got != 1 {
+		t.Fatalf("stuck-command warnings = %d, want 1; logs:\n%s", got, logs.String())
+	}
+
+	changed := stuckRecords("Title mismatch; automatic import is not possible")
+	fake.records.Store(&changed)
+	runCleanup(t, service, "arr", 1)
+	wantLookups(t, fake, 1)
 	if got := strings.Count(logs.String(), `"command_id":1`); got != 2 {
-		t.Fatalf("stuck-command warnings = %d, want 2; logs:\n%s", got, logs.String())
+		t.Fatalf("stuck-command warnings after a status change = %d, want 2; logs:\n%s", got, logs.String())
 	}
 }
 
@@ -396,21 +409,10 @@ func TestCleanupQueueLedgerSeparatesNestedArrNames(t *testing.T) {
 	wantLookups(t, child, maxImportAttempts)
 }
 
-func TestCleanupQueueLogsErrorsThenOneWarnPerRetry(t *testing.T) {
-	t.Parallel()
-
-	fake := newCleanupServer(t, stuckRecords(matchedByIDTitle))
-	clock := &fakeClock{now: time.Unix(1000, 0)}
-	service := cleanupTestService(clock, map[string]*cleanupServer{"arr": fake})
-	var logs bytes.Buffer
-	service.logger = zerolog.New(&logs)
-
-	runCleanup(t, service, "arr", maxImportAttempts+2)
-	clock.advance(importRetryDelay)
-	runCleanup(t, service, "arr", 1)
-
+func downloadLogLevels(t *testing.T, logs string) []string {
+	t.Helper()
 	var levels []string
-	for line := range strings.Lines(logs.String()) {
+	for line := range strings.Lines(logs) {
 		var entry struct {
 			Level      string `json:"level"`
 			DownloadID string `json:"download_id"`
@@ -418,14 +420,88 @@ func TestCleanupQueueLogsErrorsThenOneWarnPerRetry(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &entry); err != nil {
 			t.Fatal(err)
 		}
-		if entry.DownloadID != "hash" {
-			t.Errorf("log line without download_id: %s", line)
+		if entry.DownloadID == "hash" {
+			levels = append(levels, entry.Level)
 		}
-		levels = append(levels, entry.Level)
 	}
-	want := []string{"error", "error", "error", "error", "warn", "warn"}
-	if !slices.Equal(levels, want) {
-		t.Fatalf("log levels = %v, want %v", levels, want)
+	return levels
+}
+
+func TestCleanupQueueLogsErrorsThenOneWarn(t *testing.T) {
+	t.Parallel()
+
+	fake := newCleanupServer(t, stuckRecords(matchedByIDTitle))
+	clock := &fakeClock{now: time.Unix(1000, 0)}
+	service := cleanupTestService(clock, map[string]*cleanupServer{"arr": fake})
+	var logs bytes.Buffer
+	service.logger = zerolog.New(&logs).Level(zerolog.DebugLevel)
+
+	runCleanup(t, service, "arr", maxImportAttempts+2)
+	clock.advance(importRetryDelay)
+	runCleanup(t, service, "arr", 1)
+
+	want := []string{"error", "error", "error", "error", "warn", "debug"}
+	if got := downloadLogLevels(t, logs.String()); !slices.Equal(got, want) {
+		t.Fatalf("log levels = %v, want %v", got, want)
+	}
+}
+
+func warnCount(logs string) int {
+	return strings.Count(logs, `"level":"warn"`)
+}
+
+func TestCleanupQueueWarnsAgainWhenTheClassChanges(t *testing.T) {
+	t.Parallel()
+
+	fake := newCleanupServer(t, stuckRecords(matchedByIDTitle))
+	clock := &fakeClock{now: time.Unix(1000, 0)}
+	service := cleanupTestService(clock, map[string]*cleanupServer{"arr": fake})
+	var logs bytes.Buffer
+	service.logger = zerolog.New(&logs).Level(zerolog.WarnLevel)
+
+	runCleanup(t, service, "arr", maxImportAttempts)
+	if got := warnCount(logs.String()); got != 1 {
+		t.Fatalf("warnings after the no-files back-off = %d, want 1; logs:\n%s", got, logs.String())
+	}
+	fake.rejectAll.Store(true)
+	clock.advance(importRetryDelay)
+	runCleanup(t, service, "arr", 1)
+	if got := warnCount(logs.String()); got != 2 || !strings.Contains(logs.String(), "rejects every file") {
+		t.Fatalf("warnings after the class change = %d, want 2 with the rejection; logs:\n%s", got, logs.String())
+	}
+	clock.advance(importRejectedDelay)
+	runCleanup(t, service, "arr", 1)
+	wantLookups(t, fake, maxImportAttempts+2)
+	if got := warnCount(logs.String()); got != 2 {
+		t.Fatalf("warnings after the repeat = %d, want 2; logs:\n%s", got, logs.String())
+	}
+}
+
+func TestCleanupQueueWarnsWhenFailingTurnsToNoFiles(t *testing.T) {
+	t.Parallel()
+
+	fake := newCleanupServer(t, stuckRecords(matchedByIDTitle))
+	fake.lookupStatus.Store(http.StatusUnauthorized)
+	clock := &fakeClock{now: time.Unix(1000, 0)}
+	service := cleanupTestService(clock, map[string]*cleanupServer{"arr": fake})
+	var logs bytes.Buffer
+	service.logger = zerolog.New(&logs).Level(zerolog.WarnLevel)
+
+	runCleanup(t, service, "arr", maxImportAttempts)
+	if got := warnCount(logs.String()); got != 1 {
+		t.Fatalf("warnings after the failing back-off = %d, want 1; logs:\n%s", got, logs.String())
+	}
+	fake.lookupStatus.Store(0)
+	clock.advance(importRetryDelay)
+	runCleanup(t, service, "arr", 1)
+	if got := warnCount(logs.String()); got != 2 {
+		t.Fatalf("warnings after the class change = %d, want 2; logs:\n%s", got, logs.String())
+	}
+	clock.advance(importRetryDelay)
+	runCleanup(t, service, "arr", 1)
+	wantLookups(t, fake, maxImportAttempts+2)
+	if got := warnCount(logs.String()); got != 2 {
+		t.Fatalf("warnings after the repeat = %d, want 2; logs:\n%s", got, logs.String())
 	}
 }
 
@@ -497,8 +573,8 @@ func TestCleanupQueueBacksOffADayWhenEveryFileIsRejected(t *testing.T) {
 	clock.advance(time.Minute)
 	runCleanup(t, service, "arr", maxImportAttempts+1)
 	wantLookups(t, fake, 2)
-	if got := strings.Count(logs.String(), "Not an upgrade"); got != 2 {
-		t.Fatalf("rejection warnings = %d, want 2 (one per lookup); logs:\n%s", got, logs.String())
+	if got := strings.Count(logs.String(), "Not an upgrade"); got != 1 {
+		t.Fatalf("rejection warnings = %d, want 1 (one WARN per change); logs:\n%s", got, logs.String())
 	}
 }
 

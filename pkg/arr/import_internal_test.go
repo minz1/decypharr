@@ -2,6 +2,7 @@ package arr
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -131,7 +132,7 @@ func TestManualImportPreservesArrMetadata(t *testing.T) {
 			server := newManualImportServer(t, tc.arrType, tc.path, tc.identity, tc.quality, wantQuality, &posts)
 			t.Cleanup(server.Close)
 			s := testService(Arr{Host: server.URL, Token: "secret", Type: tc.arrType})
-			if _, err := s.ManualImport(t.Context(), "arr", "download-1"); err != nil {
+			if _, _, err := s.manualImport(t.Context(), "arr", "download-1"); err != nil {
 				t.Fatal(err)
 			}
 			if got := posts.Load(); got != 1 {
@@ -169,7 +170,7 @@ func TestManualImportRejectsIncompleteCandidates(t *testing.T) {
 			}))
 			t.Cleanup(server.Close)
 			s := testService(Arr{Host: server.URL, Token: "secret", Type: Radarr})
-			_, err := s.ManualImport(t.Context(), "arr", "download-1")
+			_, _, err := s.manualImport(t.Context(), "arr", "download-1")
 			if err == nil || !strings.Contains(err.Error(), tc.wantError) {
 				t.Fatalf("ManualImport error = %v, want %q", err, tc.wantError)
 			}
@@ -221,7 +222,7 @@ func TestManualImportSubmitsOnlyUnrejectedCandidates(t *testing.T) {
 	server := newRejectionServer(t, "["+cleanCandidate+","+rejectedCandidate+"]", &submitted)
 	t.Cleanup(server.Close)
 	s := testService(Arr{Host: server.URL, Token: "secret", Type: Sonarr})
-	if _, err := s.ManualImport(t.Context(), "arr", "download-1"); err != nil {
+	if _, _, err := s.manualImport(t.Context(), "arr", "download-1"); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(submitted, [][]string{{"/d/A.mkv"}}) {
@@ -235,7 +236,7 @@ func TestManualImportAllRejectedReturnsError(t *testing.T) {
 	server := newRejectionServer(t, "["+rejectedCandidate+","+rejectedCandidate+"]", &submitted)
 	t.Cleanup(server.Close)
 	s := testService(Arr{Host: server.URL, Token: "secret", Type: Sonarr})
-	_, err := s.ManualImport(t.Context(), "arr", "download-1")
+	_, _, err := s.manualImport(t.Context(), "arr", "download-1")
 	if err == nil || !strings.Contains(err.Error(), "all 2 candidates rejected") ||
 		!strings.Contains(err.Error(), "Not an upgrade") {
 		t.Fatalf("ManualImport error = %v", err)
@@ -254,10 +255,132 @@ func TestManualImportSkipsRejectedRadarrCandidateBeforeMovieCheck(t *testing.T) 
 	server := newRejectionServer(t, "["+unknownMovie+","+knownMovie+"]", &submitted)
 	t.Cleanup(server.Close)
 	s := testService(Arr{Host: server.URL, Token: "secret", Type: Radarr})
-	if _, err := s.ManualImport(t.Context(), "arr", "download-1"); err != nil {
+	if _, _, err := s.manualImport(t.Context(), "arr", "download-1"); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(submitted, [][]string{{"/d/A.mkv"}}) {
 		t.Fatalf("submitted = %v, want only /d/A.mkv", submitted)
+	}
+}
+
+const (
+	notUpgradeReason = "Not a Custom Format upgrade"
+	wrongEpisodeOne  = "Episode 1x26 was unexpected considering the Samurai Champloo folder name"
+	wrongEpisodeMany = "Episodes 1x01, 1x02 were unexpected considering the X folder name"
+)
+
+func rejectedBody(reasonSets ...[]string) string {
+	candidates := make([]string, len(reasonSets))
+	for i, reasons := range reasonSets {
+		rejections := make([]string, len(reasons))
+		for j, reason := range reasons {
+			rejections[j] = fmt.Sprintf(`{"reason":%q,"type":"permanent"}`, reason)
+		}
+		candidates[i] = fmt.Sprintf(
+			`{"path":"/d/%d.mkv","series":{"id":7},"quality":{"quality":{"id":3}},"rejections":[%s]}`,
+			i, strings.Join(rejections, ","))
+	}
+	return "[" + strings.Join(candidates, ",") + "]"
+}
+
+func TestLookupImportOutcomes(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name        string
+		body        string
+		wantOutcome importOutcome
+		wantIs      error
+		wantText    string
+	}{
+		{name: "empty array", body: `[]`, wantOutcome: outcomeNoFiles, wantIs: errNoImportFiles},
+		{name: "null", body: `null`, wantOutcome: outcomeNone, wantText: "no candidate list"},
+		{name: "empty body", body: ``, wantOutcome: outcomeNone, wantText: "no candidate list"},
+		{name: "malformed json", body: `[{`, wantOutcome: outcomeNone, wantText: "manual import lookup:"},
+		{
+			name: "not an upgrade", body: rejectedBody([]string{notUpgradeReason}),
+			wantOutcome: outcomeRejected, wantIs: errAllCandidatesRejected,
+		},
+		{
+			name: "wrong episode second", body: rejectedBody([]string{notUpgradeReason, wrongEpisodeOne}),
+			wantOutcome: outcomeWrongEpisode, wantIs: errAllCandidatesRejected,
+		},
+		{
+			name: "plural wrong episode", body: rejectedBody([]string{wrongEpisodeMany}),
+			wantOutcome: outcomeWrongEpisode, wantIs: errAllCandidatesRejected,
+		},
+		{
+			name: "mixed candidates", body: rejectedBody([]string{wrongEpisodeOne}, []string{notUpgradeReason}),
+			wantOutcome: outcomeRejected, wantIs: errAllCandidatesRejected,
+		},
+		{
+			name: "one clean one rejected", body: "[" + cleanCandidate + "," + rejectedCandidate + "]",
+			wantOutcome: outcomeNone,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var submitted [][]string
+			server := newRejectionServer(t, tc.body, &submitted)
+			t.Cleanup(server.Close)
+			s := testService(Arr{Host: server.URL, Token: "secret", Type: Sonarr})
+			instance, err := s.instance("arr")
+			if err != nil {
+				t.Fatal(err)
+			}
+			candidates, outcome, err := s.lookupImport(t.Context(), instance, "download-1")
+			if outcome != tc.wantOutcome {
+				t.Fatalf("outcome = %v, want %v (err %v)", outcome, tc.wantOutcome, err)
+			}
+			assertLookupErr(t, err, tc.wantIs, tc.wantText, len(candidates))
+			if len(submitted) != 0 {
+				t.Fatalf("lookup submitted %v", submitted)
+			}
+		})
+	}
+}
+
+func TestManualImportReturnsTheOutcome(t *testing.T) {
+	t.Parallel()
+	var submitted [][]string
+	server := newRejectionServer(t, rejectedBody([]string{wrongEpisodeOne}), &submitted)
+	t.Cleanup(server.Close)
+	s := testService(Arr{Host: server.URL, Token: "secret", Type: Sonarr})
+	_, outcome, err := s.manualImport(t.Context(), "arr", "download-1")
+	if outcome != outcomeWrongEpisode || !errors.Is(err, errAllCandidatesRejected) {
+		t.Fatalf("ManualImport = %v, %v", outcome, err)
+	}
+}
+
+func TestWrongEpisodeRejectionMatchesSonarrWording(t *testing.T) {
+	t.Parallel()
+	for text, want := range map[string]bool{
+		wrongEpisodeOne:  true,
+		wrongEpisodeMany: true,
+		"EPISODE 1x26 WAS UNEXPECTED CONSIDERING THE A FOLDER NAME":         true,
+		"episodes 1x01, 1x02 were unexpected considering the a folder name": true,
+		notUpgradeReason:              false,
+		"Episode 1x26 was unexpected": false,
+		"x Episode 1x26 was unexpected considering the A folder name": false,
+		"EpisodeXYZ was unexpected considering the A folder name":     false,
+	} {
+		if got := wrongEpisodeRejection.MatchString(text); got != want {
+			t.Errorf("match(%q) = %v, want %v", text, got, want)
+		}
+	}
+}
+
+func assertLookupErr(t *testing.T, err, wantIs error, wantText string, candidates int) {
+	t.Helper()
+	switch {
+	case wantIs != nil:
+		if !errors.Is(err, wantIs) {
+			t.Fatalf("err = %v, want %v", err, wantIs)
+		}
+	case wantText != "":
+		if err == nil || !strings.Contains(err.Error(), wantText) {
+			t.Fatalf("err = %v, want %q", err, wantText)
+		}
+	case err != nil || candidates != 2:
+		t.Fatalf("err = %v, candidates = %d, want nil and 2", err, candidates)
 	}
 }
