@@ -25,6 +25,7 @@ type observedJobStore struct {
 	syncs    int
 	putErr   error
 	syncErrs []error
+	onSync   func()
 }
 
 func (s *observedJobStore) Put(key string, value []byte, options *appendstore.PutOptions) error {
@@ -42,6 +43,12 @@ func (s *observedJobStore) Put(key string, value []byte, options *appendstore.Pu
 }
 
 func (s *observedJobStore) Sync() error {
+	s.mu.Lock()
+	hook := s.onSync
+	s.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	s.mu.Lock()
 	s.syncs++
 	var err error
@@ -160,6 +167,15 @@ func TestFailDownloadDecision(t *testing.T) {
 		{
 			name:      "waiting history_failed is requeued",
 			seed:      []Job{receiptJob("j1", StrategyHistoryFailed, StatusWaitingForImport, before)},
+			since:     since,
+			handed:    HandedRequeued,
+			sameID:    "j1",
+			status:    StatusQueued,
+			wantCount: 1,
+		},
+		{
+			name:      "waiting download_failed is requeued",
+			seed:      []Job{receiptJob("j1", StrategyDownloadFailed, StatusWaitingForImport, before)},
 			since:     since,
 			handed:    HandedRequeued,
 			sameID:    "j1",
@@ -454,6 +470,7 @@ func TestFailReceiptRule(t *testing.T) {
 		},
 		{name: "terminal before since", seed: receiptJob("j", StrategyDownloadFailed, StatusReady, before)},
 		{name: "waiting history_failed", seed: receiptJob("j", StrategyHistoryFailed, StatusWaitingForImport, before)},
+		{name: "waiting download_failed", seed: receiptJob("j", StrategyDownloadFailed, StatusWaitingForImport, before)},
 		{name: "other strategy", seed: receiptJob("j", StrategyCommandSearch, StatusQueued, before)},
 		{name: "other arr", seed: receiptJob("j", StrategyDownloadFailed, StatusQueued, before), arr: "radarr"},
 		{
@@ -648,4 +665,57 @@ func TestKeyReleasedHookFires(t *testing.T) {
 			t.Fatal("hook never fired for the cleared key")
 		}
 	})
+}
+
+func TestFailReceiptRefusesAStoppedService(t *testing.T) {
+	t.Parallel()
+	before := time.Now().Add(-time.Hour).UTC()
+	service := seedFailService(t, t.TempDir(), receiptJob("j", StrategyDownloadFailed, StatusQueued, before))
+	if err := service.Close(); err != nil {
+		t.Fatal(err)
+	}
+	service.store.reset()
+	_, found, err := service.FailReceipt("sonarr", receiptDownloadID, before)
+	if err == nil || found {
+		t.Fatalf("FailReceipt = %v, %v, want an error and no hit", found, err)
+	}
+	if _, syncs := service.store.counts(); syncs != 0 {
+		t.Fatalf("syncs = %d, want none on a stopped service", syncs)
+	}
+}
+
+func TestFailReceiptSyncsUnderTheJobsLock(t *testing.T) {
+	t.Parallel()
+	before := time.Now().Add(-time.Hour).UTC()
+	service := seedFailService(t, t.TempDir(), receiptJob("j", StrategyDownloadFailed, StatusQueued, before))
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	service.store.mu.Lock()
+	service.store.onSync = func() {
+		close(entered)
+		select {
+		case <-release:
+		case <-t.Context().Done():
+		}
+	}
+	service.store.mu.Unlock()
+	done := make(chan bool, 1)
+	go func() {
+		_, found, _ := service.FailReceipt("sonarr", receiptDownloadID, before)
+		done <- found
+	}()
+	select {
+	case <-entered:
+	case <-t.Context().Done():
+		t.Fatal("FailReceipt never synced")
+	}
+	if service.jobsMu.TryRLock() {
+		service.jobsMu.RUnlock()
+		close(release)
+		t.Fatal("jobsMu is free while FailReceipt syncs: a receipt can be read before it is durable")
+	}
+	close(release)
+	if !<-done {
+		t.Fatal("FailReceipt missed the job")
+	}
 }

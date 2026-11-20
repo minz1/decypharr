@@ -113,19 +113,41 @@ func (s *Service) FailDownload(arrName, downloadID, entryID string, since time.T
 	return job, handed, nil
 }
 
-func (s *Service) failDownloadLocked(key jobKey, entryID string, since time.Time) (Job, Handed, error) {
+type failVerdict uint8
+
+const (
+	failCreate failVerdict = iota
+	failReceipt
+	failRequeue
+	failOther
+)
+
+func (s *Service) classifyFailLocked(key jobKey, since time.Time) (Job, failVerdict) {
 	if id, active := s.activeReacquisitions[key]; active {
 		job := s.jobs[id]
 		switch {
 		case !job.Strategy.failsDownload():
-			return Job{}, 0, &OtherJobError{Strategy: job.Strategy}
-		case job.Strategy == StrategyHistoryFailed && job.Status.waiting():
-			return s.requeueLocked(job)
+			return job, failOther
+		case job.Status.waiting():
+			return job, failRequeue
 		default:
-			return s.receiptLocked(job)
+			return job, failReceipt
 		}
 	}
 	if job, ok := s.finishedReceiptLocked(key, since); ok {
+		return job, failReceipt
+	}
+	return Job{}, failCreate
+}
+
+func (s *Service) failDownloadLocked(key jobKey, entryID string, since time.Time) (Job, Handed, error) {
+	job, verdict := s.classifyFailLocked(key, since)
+	switch verdict {
+	case failOther:
+		return Job{}, 0, &OtherJobError{Strategy: job.Strategy}
+	case failRequeue:
+		return s.requeueLocked(job)
+	case failReceipt:
 		return s.receiptLocked(job)
 	}
 	staged, restaged := s.staged[key]
@@ -199,18 +221,10 @@ func (s *Service) FailReceipt(arrName, downloadID string, since time.Time) (Job,
 	}
 	defer release()
 
-	key := jobKey{arrName: arrName, downloadID: downloadID}
 	s.jobsMu.Lock()
 	defer s.jobsMu.Unlock()
-	var job Job
-	if id, active := s.activeReacquisitions[key]; active {
-		job = s.jobs[id]
-		if !job.Strategy.failsDownload() || job.Status.waiting() {
-			return Job{}, false, nil
-		}
-	} else if finished, ok := s.finishedReceiptLocked(key, since); ok {
-		job = finished
-	} else {
+	job, verdict := s.classifyFailLocked(jobKey{arrName: arrName, downloadID: downloadID}, since)
+	if verdict != failReceipt {
 		return Job{}, false, nil
 	}
 	receipt, _, err := s.receiptLocked(job)
