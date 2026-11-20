@@ -415,7 +415,9 @@ func (p *NZBParser) process(
 	}
 	if len(nzb.Files) == 0 {
 		if skippedFiles > 0 {
-			return nil, fmt.Errorf("all files were skipped due to size or extension restrictions(error %w)", skippedErr)
+			return nil, &proofWithheldError{
+				err: fmt.Errorf("all files were skipped due to size or extension restrictions(error %w)", skippedErr),
+			}
 		}
 		return nil, fmt.Errorf("no valid files found in NZB after processing")
 	}
@@ -944,7 +946,7 @@ func (p *NZBParser) processJoinedGroup(
 		return files, nil
 	}
 	p.logger.Warn().Err(err).Str("group", group.BaseName).Msg("Failed to process file group")
-	if p.sampleNamed(group) {
+	if p.sampleNamed(group) || (group.Type == storage.NZBFileTypeZip && len(group.Files) > 1) {
 		return nil, &proofWithheldError{err: err}
 	}
 	return nil, err

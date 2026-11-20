@@ -84,7 +84,7 @@ func joinedVerdict(children []error) Verdict {
 
 func (p *NZBParser) proofNameAllowed(group *FileGroup, nzbName string) bool {
 	if group.Type != storage.NZBFileTypeMedia {
-		return true
+		return !p.sampleNamed(group)
 	}
 	ext := determineExtension(group)
 	if ext == "" {

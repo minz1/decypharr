@@ -473,7 +473,7 @@ func TestTimeoutAroundAMarkerRefuses(t *testing.T) {
 		{"timeout around a proof", timeoutWrapError{proof}, IsNotFoundEverywhere, false},
 		{"wrapped timeout around a proof", fmt.Errorf("stat: %w", timeoutWrapError{proof}), IsNotFoundEverywhere, false},
 		{"non-timeout wrapper around a proof", quietWrapError{timeoutWrapError{proof}}, IsNotFoundEverywhere, true},
-	} {
+		{"nntp timeout around a proof", NewTimeoutError(proof), IsNotFoundEverywhere, false}} {
 		if got := row.check(row.err); got != row.want {
 			t.Errorf("%s: got %v, want %v", row.name, got, row.want)
 		}

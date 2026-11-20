@@ -147,6 +147,10 @@ func TestZIPProofNeedsBothEnds(t *testing.T) {
 		{"split dead first, intact tail", split, map[string]error{"first@x": proven430()}, nil, VerdictNone},
 		{"split both ends dead", split, map[string]error{"first@x": proven430(), "last@x": proven430()}, customerror.ErrUsenetSegmentMissing, VerdictArticlesMissing},
 		{"numbered dead first, intact tail", numbered, map[string]error{"first@x": proven430()}, nil, VerdictNone},
+		{"tail with an alternate article", []manifest.File{
+			{Filename: "movie.zip", Segments: []manifest.Segment{{Number: 1, MessageID: "zfirst@x"}, {Number: 2, MessageID: "alt1@x"}, {Number: 2, MessageID: "alt2@x"}}},
+			{Filename: "movie.z01", Segments: segs("first@x", "mid@x")},
+		}, map[string]error{"first@x": proven430(), "alt1@x": proven430(), "alt2@x": proven430()}, customerror.ErrUsenetSegmentMissing, VerdictNone},
 		{"numbered both ends dead", numbered, map[string]error{"first@x": proven430(), "last@x": proven430()}, customerror.ErrUsenetSegmentMissing, VerdictArticlesMissing},
 	} {
 		t.Run(row.name, func(t *testing.T) {
@@ -246,6 +250,26 @@ func TestProcessFileGroupsHealthySiblingWithholds(t *testing.T) {
 			VerdictArticlesMissing,
 		},
 		{"all dead", map[string]*FileGroup{"a": joinGroup("a", "dead1@x"), "b": joinGroup("b", "dead2@x")}, VerdictArticlesMissing},
+		{
+			"split zip with one dead volume",
+			map[string]*FileGroup{"z": func() *FileGroup {
+				group := archiveJoinGroup("movie", "movie.z01", storage.NZBFileTypeZip, "dead1@x")
+				group.Files[0].Segments = segs("dead1@x", "dead2@x")
+				group.Files = append(group.Files, manifest.File{Filename: "movie.zip", Number: 2, Segments: segs("ok@x")})
+				return group
+			}()},
+			VerdictNone,
+		},
+		{
+			"split zip with a dead last volume",
+			map[string]*FileGroup{"z": func() *FileGroup {
+				group := archiveJoinGroup("movie", "movie.z01", storage.NZBFileTypeZip, "ok1@x")
+				group.Files[0].Segments = segs("ok1@x", "ok2@x")
+				group.Files = append(group.Files, manifest.File{Filename: "movie.zip", Number: 2, Segments: segs("dead@x")})
+				return group
+			}()},
+			VerdictNone,
+		},
 	} {
 		t.Run(row.name, func(t *testing.T) {
 			t.Parallel()
@@ -254,5 +278,52 @@ func TestProcessFileGroupsHealthySiblingWithholds(t *testing.T) {
 				t.Fatalf("error = %v verdict %v, want %v", err, VerdictOf(err), row.want)
 			}
 		})
+	}
+}
+
+func TestParseSampleArchiveWithholds(t *testing.T) {
+	t.Parallel()
+	filter := (&config.Config{AllowedExt: []string{"mkv"}}).ValidateFileAllowed
+	source := scriptSource{stat: provenStat, header: provenHeaders}
+	for _, row := range []struct {
+		name string
+		file string
+		want Verdict
+	}{
+		{"sample-named zip", "sample-extra.zip", VerdictNone},
+		{"sample-named rar", "sample-extra.rar", VerdictNone},
+		{"plain zip", "extra.zip", VerdictArticlesMissing},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
+			p := NewParserWithSource(source, 2, zerolog.Nop()).WithFileFilter(filter)
+			verdict, err := parseVerdict(t, p, nzbOf(fileXML(1, 1, row.file, "1:a@x", "2:b@x")))
+			if !errors.Is(err, customerror.ErrUsenetSegmentMissing) || verdict != row.want {
+				t.Fatalf("error = %v verdict %v, want %v", err, verdict, row.want)
+			}
+		})
+	}
+}
+
+func TestFilterErrorIsNotProof(t *testing.T) {
+	t.Parallel()
+	filter := func(_ string, size int64) error {
+		if size == 15 {
+			return &ContentMissingError{Err: errors.New("filter unavailable")}
+		}
+		return nil
+	}
+	p := NewParserWithSource(scriptSource{header: healthyHeader}, 2, zerolog.Nop()).WithFileFilter(filter)
+	nzb, groups, err := p.Parse(
+		t.Context(),
+		"release.nzb",
+		[]byte(nzbOf(fileXML(1, 1, "movie.mkv", "1:a@x", "2:b@x", "3:c@x"))),
+	)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	_, err = p.Process(t.Context(), nzb, groups)
+	if err == nil || !strings.Contains(err.Error(), "skipped") || VerdictOf(err) != VerdictNone {
+		t.Fatalf("error = %v verdict %v, want a skipped file with no verdict", err, VerdictOf(err))
 	}
 }

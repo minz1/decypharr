@@ -103,6 +103,8 @@ func (e *Error) Unwrap() error {
 	return e.Err
 }
 
+func (e *Error) Timeout() bool { return e.Type == ErrorTypeTimeout }
+
 // Is matches any *Error of the same Type.
 func (e *Error) Is(target error) bool {
 	if t, ok := errors.AsType[*Error](target); ok {
