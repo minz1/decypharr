@@ -71,6 +71,12 @@ func TestGetTorrentsKeepsItsQueryAndItsErrors(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+	t.Run("no content and no total header", func(t *testing.T) {
+		t.Parallel()
+		if err := getTorrentsAnswering(t, http.StatusNoContent); err != nil {
+			t.Fatal(err)
+		}
+	})
 	t.Run("unauthorized", func(t *testing.T) {
 		t.Parallel()
 		err := getTorrentsAnswering(t, http.StatusUnauthorized)
