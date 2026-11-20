@@ -55,6 +55,7 @@ type State struct {
 	// poll did not.
 	StalledSince  time.Time
 	ProviderPhase debridTypes.Phase
+	ArrFail       ArrFail
 }
 
 // season reports whether the grab is a season child of a pack.
@@ -79,7 +80,7 @@ func (s State) Validate() error {
 			return errors.New("failed without a time")
 		}
 	}
-	return nil
+	return s.validArrFail()
 }
 
 // submitsToProvider reports the phases that only a grab sent to a provider reaches.

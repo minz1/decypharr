@@ -76,9 +76,18 @@ func byPhase(st State, ev Event) (State, []Effect, error) {
 		if ev.Kind == EvActionNone {
 			return remove(st, ev, Cleanup{})
 		}
+		if ev.Kind == EvArrFailDone {
+			return arrFailDone(st, ev)
+		}
 	case PhaseFailed:
 		if ev.Kind == EvFailedRetention {
 			return remove(st, ev, Cleanup{})
+		}
+		if ev.Kind == EvArrFailQueued {
+			return arrFailQueued(st, ev)
+		}
+		if ev.Kind == EvArrFailDone {
+			return arrFailDone(st, ev)
 		}
 	case PhaseAbsent, PhaseDeleting: // handled by step
 	}
@@ -337,6 +346,14 @@ func placed(st State, ev Event) (State, []Effect, error) {
 
 func fail(st State, ev Event, effect FailEffect, reason string) (State, []Effect, error) {
 	st.Failure = Failure{Reason: cmp.Or(ev.Reason, reason), Cause: ev.Cause, At: ev.At, Count: st.Failure.Count + 1}
+	if effect == FailBadRelease && !st.NZB && st.PackKey == "" && ev.Arr != "" {
+		next, err := st.ArrFail.to(ArrFailPending)
+		if err != nil {
+			return refuse(st, ev, err.Error())
+		}
+		next.Arr = ev.Arr
+		st.ArrFail = next
+	}
 	return enter(st, PhaseFailed, ev, Effect{Kind: FxFail, Fail: effect})
 }
 
@@ -344,6 +361,13 @@ func fail(st State, ev Event, effect FailEffect, reason string) (State, []Effect
 func enter(st State, to Phase, ev Event, fx ...Effect) (State, []Effect, error) {
 	if !state.Legal(successors, st.Phase, to) {
 		return refuse(st, ev, "no move to "+to.String())
+	}
+	if st.Phase == PhaseFailed && st.ArrFail.State != ArrFailNone {
+		cleared, err := st.ArrFail.to(ArrFailNone)
+		if err != nil {
+			return refuse(st, ev, err.Error())
+		}
+		st.ArrFail = cleared
 	}
 	st.Phase, st.PhaseSince, st.StalledSince = to, ev.At, time.Time{}
 	st.ProviderPhase, st.UnknownRaw = debridTypes.PhaseNone, ""

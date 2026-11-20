@@ -44,6 +44,8 @@ const (
 	EvRemoveFile
 	EvActionNone
 	EvSeasonsStarted
+	EvArrFailQueued
+	EvArrFailDone
 	evCount // the number of kinds, for tests
 )
 
@@ -54,7 +56,7 @@ func (k EventKind) String() string {
 		"stalled_deadline", "pending_deadline", "placement_gone", "links_ready", "link_wait_expired",
 		"action_progress", "child_done", "action_done", "action_failed", "provider_dropped", "delete",
 		"cleanup_done", "failed_retention", "recover", "tags_changed", "category_changed", "remove_file",
-		"action_none", "seasons_started",
+		"action_none", "seasons_started", "arr_fail_queued", "arr_fail_done",
 	}
 	if int(k) < len(names) {
 		return names[k]
@@ -121,6 +123,10 @@ type Event struct {
 	Cleanup Cleanup
 	// Provider and TorrentID name the placement a SubmitResult or Lookup carries.
 	Provider, TorrentID string
+	Arr                 string
+	Occurrence          time.Time
+	JobID               string
+	JobCreated          time.Time
 }
 
 // EffectKind is what the actor must do.
