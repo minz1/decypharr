@@ -1,6 +1,7 @@
 package grab
 
 import (
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -305,4 +306,95 @@ func TestFailureCauseRoundTrips(t *testing.T) {
 	}
 	st.Failure.Cause = CauseSegmentsMissing
 	roundTrip(t, kindNZB, st)
+}
+
+func TestArrFailRoundTrip(t *testing.T) {
+	t.Parallel()
+	for _, a := range []ArrFail{
+		{State: ArrFailPending, Arr: "sonarr"},
+		{State: ArrFailQueued, Arr: "radarr", JobID: "job-1"},
+	} {
+		st, _ := stateOf(kindTorrent, PhaseFailed)
+		st.ArrFail = a
+		roundTrip(t, kindTorrent, st)
+	}
+}
+
+func TestArrFailAbsentLoadsNone(t *testing.T) {
+	t.Parallel()
+	st, _ := stateOf(kindTorrent, PhaseFailed)
+	e := record(kindTorrent)
+	if err := Encode(Grab{State: st, Entry: e}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(e.Grab), "arr_fail") {
+		t.Errorf("a none intent is written: %s", e.Grab)
+	}
+	got, err := Load(e, nil, true)
+	if err != nil || got.State.ArrFail != (ArrFail{}) {
+		t.Errorf("Load = %+v, %v, want none", got.State.ArrFail, err)
+	}
+}
+
+func withArrFailKey(t *testing.T, kind recordKind, p Phase, raw string) (*storage.Entry, State) {
+	t.Helper()
+	st, ok := stateOf(kind, p)
+	if !ok {
+		t.Fatalf("no %v state for %s", p, kind)
+	}
+	e := record(kind)
+	if err := Encode(Grab{State: st, Entry: e}); err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(e.Grab, &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["arr_fail"] = json.RawMessage(raw)
+	out, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Grab = out
+	return e, st
+}
+
+func TestArrFailUnknownStateDecodesSkipped(t *testing.T) {
+	t.Parallel()
+	e, st := withArrFailKey(t, kindTorrent, PhaseFailed, `{"state":"told_later","arr":"sonarr"}`)
+	got, err := Load(e, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.ArrFail = ArrFail{State: ArrFailSkipped, Arr: "sonarr"}
+	if !reflect.DeepEqual(got.State, st) {
+		t.Errorf("loaded %+v\nwant %+v", got.State, st)
+	}
+}
+
+func TestArrFailMalformedStripsKeyOnly(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		phase Phase
+		raw   string
+	}{
+		{"string", PhaseFailed, `"x"`},
+		{"array", PhaseFailed, `[]`},
+		{"numeric state", PhaseFailed, `{"state":3}`},
+		{"no arr", PhaseFailed, `{"state":"pending"}`},
+		{"job on pending", PhaseFailed, `{"state":"pending","arr":"sonarr","job":"j"}`},
+		{"complete document", PhaseComplete, `{"state":"pending","arr":"sonarr"}`},
+	}
+	for _, c := range cases {
+		e, st := withArrFailKey(t, kindTorrent, c.phase, c.raw)
+		got, err := Load(e, nil, true)
+		if err != nil {
+			t.Errorf("%s: Load: %v", c.name, err)
+			continue
+		}
+		if !reflect.DeepEqual(got.State, st) {
+			t.Errorf("%s: loaded %+v\nwant %+v", c.name, got.State, st)
+		}
+	}
 }

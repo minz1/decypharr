@@ -24,17 +24,18 @@ type Grab struct {
 // document is the grab state as persisted in the queue record (storage.Entry.Grab). Later fields are new
 // omitempty keys; a reader ignores keys it does not know. The phase is stored by name so its number can change.
 type document struct {
-	V             int         `json:"v"`
-	Phase         string      `json:"phase"`
-	PhaseSince    time.Time   `json:"phase_since,omitzero"`
-	PackKey       string      `json:"pack_key,omitempty"`
-	NoSubmit      string      `json:"no_submit,omitempty"`
-	Failure       *docFailure `json:"failure,omitempty"`
-	Cleanup       *docCleanup `json:"cleanup,omitempty"`
-	SubmitAttempt *docSubmit  `json:"submit_attempt,omitempty"`
-	ProviderPhase string      `json:"provider_phase,omitempty"`
-	UnknownRaw    string      `json:"unknown_raw,omitempty"`
-	StalledSince  time.Time   `json:"stalled_since,omitzero"`
+	V             int             `json:"v"`
+	Phase         string          `json:"phase"`
+	PhaseSince    time.Time       `json:"phase_since,omitzero"`
+	PackKey       string          `json:"pack_key,omitempty"`
+	NoSubmit      string          `json:"no_submit,omitempty"`
+	Failure       *docFailure     `json:"failure,omitempty"`
+	Cleanup       *docCleanup     `json:"cleanup,omitempty"`
+	SubmitAttempt *docSubmit      `json:"submit_attempt,omitempty"`
+	ProviderPhase string          `json:"provider_phase,omitempty"`
+	UnknownRaw    string          `json:"unknown_raw,omitempty"`
+	StalledSince  time.Time       `json:"stalled_since,omitzero"`
+	ArrFail       json.RawMessage `json:"arr_fail,omitempty"`
 }
 
 type docFailure struct {
@@ -42,6 +43,12 @@ type docFailure struct {
 	Cause  string    `json:"cause,omitempty"`
 	At     time.Time `json:"at"`
 	Count  int       `json:"count,omitempty"`
+}
+
+type docArrFail struct {
+	State string `json:"state"`
+	Arr   string `json:"arr,omitempty"`
+	Job   string `json:"job,omitempty"`
 }
 
 type docCleanup struct {
@@ -130,7 +137,11 @@ func Encode(g Grab) error {
 	if err := st.Validate(); err != nil {
 		return err
 	}
-	doc, err := json.Marshal(toDocument(st))
+	d, err := toDocument(st)
+	if err != nil {
+		return fmt.Errorf("encode grab %q: %w", st.Key, err)
+	}
+	doc, err := json.Marshal(d)
 	if err != nil {
 		return fmt.Errorf("encode grab %q: %w", st.Key, err)
 	}
@@ -198,7 +209,7 @@ func Load(e *storage.Entry, packOf map[string]string, inLibrary bool) (Grab, err
 	return Grab{State: st, Entry: e}, nil
 }
 
-func toDocument(st State) document {
+func toDocument(st State) (document, error) {
 	d := document{
 		V: documentVersion, Phase: st.Phase.String(), PhaseSince: st.PhaseSince, PackKey: st.PackKey,
 		NoSubmit: st.NoSubmit, UnknownRaw: st.UnknownRaw,
@@ -217,7 +228,15 @@ func toDocument(st State) document {
 	if st.SubmitAttempt != (SubmitAttempt{}) {
 		d.SubmitAttempt = &docSubmit{Provider: st.SubmitAttempt.Provider, At: st.SubmitAttempt.At}
 	}
-	return d
+	if st.ArrFail.State != ArrFailNone {
+		a := st.ArrFail
+		raw, err := json.Marshal(docArrFail{State: a.State.String(), Arr: a.Arr, Job: a.JobID})
+		if err != nil {
+			return document{}, err
+		}
+		d.ArrFail = raw
+	}
+	return d, nil
 }
 
 func fromDocument(e *storage.Entry) (State, error) {
@@ -246,6 +265,7 @@ func fromDocument(e *storage.Entry) (State, error) {
 	if s := d.SubmitAttempt; s != nil {
 		st.SubmitAttempt = SubmitAttempt{Provider: s.Provider, At: s.At}
 	}
+	st.ArrFail = decodeArrFail(d.ArrFail, st)
 	if err := st.Validate(); err != nil {
 		return State{}, err
 	}
@@ -260,4 +280,19 @@ func phaseNamed(name string) (Phase, bool) {
 		}
 	}
 	return PhaseAbsent, false
+}
+
+func decodeArrFail(raw json.RawMessage, st State) ArrFail {
+	if len(raw) == 0 {
+		return ArrFail{}
+	}
+	var d docArrFail
+	if err := json.Unmarshal(raw, &d); err != nil {
+		return ArrFail{}
+	}
+	st.ArrFail = ArrFail{State: arrFailNamed(d.State), Arr: d.Arr, JobID: d.Job}
+	if st.validArrFail() != nil {
+		return ArrFail{}
+	}
+	return st.ArrFail
 }
