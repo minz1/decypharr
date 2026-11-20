@@ -430,7 +430,14 @@ func (ad *AllDebrid) CheckStatus(ctx context.Context, torrent *types.Torrent) (*
 			return torrent, fmt.Errorf("torrent %s: %w", torrent.Name, customerror.ErrTorrentNotCached)
 		}
 		return torrent, nil
-	case types.PhaseFailed, types.PhaseUnknown:
+	case types.PhaseFailed:
+		return torrent, fmt.Errorf(
+			"torrent %s has AllDebrid status code %d: %w",
+			torrent.Name,
+			statusCode,
+			customerror.ErrReleaseFailed,
+		)
+	case types.PhaseUnknown:
 		return torrent, fmt.Errorf("torrent %s has AllDebrid status code %d", torrent.Name, statusCode)
 	case types.PhaseNone,
 		types.PhaseConverting,

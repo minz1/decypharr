@@ -22,6 +22,7 @@ func TestCheckStatusVerdictPerRawCode(t *testing.T) {
 		wantStatus debridTypes.TorrentStatus
 		wantErr    error
 		wantText   string
+		wantFailed bool
 	}{
 		{
 			name:       "0 queued",
@@ -60,12 +61,14 @@ func TestCheckStatusVerdictPerRawCode(t *testing.T) {
 			code:       5,
 			wantStatus: debridTypes.TorrentStatusError,
 			wantText:   "AllDebrid status code 5",
+			wantFailed: true,
 		},
 		{
 			name:       "6 internal error",
 			code:       6,
 			wantStatus: debridTypes.TorrentStatusError,
 			wantText:   "AllDebrid status code 6",
+			wantFailed: true,
 		},
 		{
 			name:       "7 no peers after restarts",
@@ -79,24 +82,35 @@ func TestCheckStatusVerdictPerRawCode(t *testing.T) {
 			code:       8,
 			wantStatus: debridTypes.TorrentStatusError,
 			wantText:   "AllDebrid status code 8",
+			wantFailed: true,
+		},
+		{
+			name:       "9 internal error",
+			code:       9,
+			wantStatus: debridTypes.TorrentStatusError,
+			wantText:   "AllDebrid status code 9",
+			wantFailed: true,
 		},
 		{
 			name:       "10 timeout",
 			code:       10,
 			wantStatus: debridTypes.TorrentStatusError,
 			wantText:   "AllDebrid status code 10",
+			wantFailed: true,
 		},
 		{
 			name:       "11 removed",
 			code:       11,
 			wantStatus: debridTypes.TorrentStatusError,
 			wantText:   "AllDebrid status code 11",
+			wantFailed: true,
 		},
 		{
 			name:       "99 future code",
 			code:       99,
 			wantStatus: debridTypes.TorrentStatusError,
 			wantText:   "AllDebrid status code 99",
+			wantFailed: true,
 		},
 		{
 			name:       "negative code",
@@ -126,6 +140,9 @@ func TestCheckStatusVerdictPerRawCode(t *testing.T) {
 				server.URL,
 			).CheckStatus(t.Context(), &debridTypes.Torrent{ID: "42", DownloadUncached: tc.uncached})
 			checkVerdict(t, err, tc.wantErr, tc.wantText)
+			if got := errors.Is(err, customerror.ErrReleaseFailed); got != tc.wantFailed {
+				t.Fatalf("release-failed sentinel = %v, want %v (err %v)", got, tc.wantFailed, err)
+			}
 			if got == nil || got.Status != tc.wantStatus {
 				t.Fatalf("result = %#v, want status %s", got, tc.wantStatus)
 			}
