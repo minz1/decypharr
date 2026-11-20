@@ -688,34 +688,24 @@ func TestFailReceiptSyncsUnderTheJobsLock(t *testing.T) {
 	t.Parallel()
 	before := time.Now().Add(-time.Hour).UTC()
 	service := seedFailService(t, t.TempDir(), receiptJob("j", StrategyDownloadFailed, StatusQueued, before))
-	entered := make(chan struct{})
-	release := make(chan struct{})
+	var synced, lockFree bool
 	service.store.mu.Lock()
 	service.store.onSync = func() {
-		close(entered)
-		select {
-		case <-release:
-		case <-t.Context().Done():
+		synced = true
+		if service.jobsMu.TryRLock() {
+			lockFree = true
+			service.jobsMu.RUnlock()
 		}
 	}
 	service.store.mu.Unlock()
-	done := make(chan bool, 1)
-	go func() {
-		_, found, _ := service.FailReceipt("sonarr", receiptDownloadID, before)
-		done <- found
-	}()
-	select {
-	case <-entered:
-	case <-t.Context().Done():
+	_, found, err := service.FailReceipt("sonarr", receiptDownloadID, before)
+	if err != nil || !found {
+		t.Fatalf("FailReceipt = %v, %v, want a hit", found, err)
+	}
+	if !synced {
 		t.Fatal("FailReceipt never synced")
 	}
-	if service.jobsMu.TryRLock() {
-		service.jobsMu.RUnlock()
-		close(release)
+	if lockFree {
 		t.Fatal("jobsMu is free while FailReceipt syncs: a receipt can be read before it is durable")
-	}
-	close(release)
-	if !<-done {
-		t.Fatal("FailReceipt missed the job")
 	}
 }

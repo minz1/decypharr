@@ -137,7 +137,7 @@ func TestDeliverFailGuardBookkeeping(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			tc.run(t)
+			synctest.Test(t, tc.run)
 		})
 	}
 }
@@ -180,6 +180,10 @@ func (tc guardBookkeepingCase) run(t *testing.T) {
 
 func TestDeliverFailHoldsAReceiptMissAgainstAFullBucket(t *testing.T) {
 	t.Parallel()
+	synctest.Test(t, deliverFailHoldsAReceiptMissAgainstAFullBucket)
+}
+
+func deliverFailHoldsAReceiptMissAgainstAFullBucket(t *testing.T) {
 	recovery := newScriptedRecovery()
 	var verdict atomic.Int64
 	verdict.Store(int64(arr.CanaryFail))
