@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/puzpuzpuz/xsync/v4"
@@ -16,6 +17,7 @@ import (
 	debrid "github.com/sirrobot01/decypharr/pkg/debrid/common"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/manager/grab"
+	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
 type deadStatusProvider struct {
@@ -245,4 +247,117 @@ func TestANotCachedPollFailsAsABadRelease(t *testing.T) {
 	if msg.ev == nil || msg.ev.Fail != grab.FailBadRelease {
 		t.Fatalf("not-cached poll = %+v, want FailBadRelease", msg.ev)
 	}
+}
+
+type mutatingProvider struct {
+	throttlingProvider
+	cancel  context.CancelFunc
+	check   func(*types.Torrent) error
+	deletes atomic.Int64
+}
+
+func (p *mutatingProvider) SubmitMagnet(_ context.Context, t *types.Torrent) (*types.Torrent, error) {
+	t.ID = "pid"
+	t.InfoHash = "other"
+	t.DownloadUncached = !t.DownloadUncached
+	return t, nil
+}
+
+func (p *mutatingProvider) CheckStatus(_ context.Context, t *types.Torrent) (*types.Torrent, error) {
+	if p.cancel != nil {
+		p.cancel()
+	}
+	return t, p.check(t)
+}
+
+func (p *mutatingProvider) DeleteTorrent(context.Context, string) error {
+	p.deletes.Add(1)
+	return nil
+}
+
+type inputRecorder struct {
+	throttlingProvider
+	hash, status, name, link string
+}
+
+func (p *inputRecorder) SubmitMagnet(_ context.Context, t *types.Torrent) (*types.Torrent, error) {
+	p.hash, p.status, p.name, p.link = t.InfoHash, string(t.Status), t.Name, t.Magnet.Link
+	return nil, customerror.ErrTorrentNotCached
+}
+
+func TestEachProviderAttemptGetsTheRequestTorrent(t *testing.T) {
+	t.Parallel()
+	m := withTestConfig(t, &Manager{logger: zerolog.Nop(), clients: xsync.NewMap[string, debrid.Client]()})
+	m.clients.Store("rd", &mutatingProvider{
+		throttlingProvider: throttlingProvider{name: "rd"},
+		check: func(torrent *types.Torrent) error {
+			torrent.InfoHash = "other"
+			torrent.Status = types.TorrentStatusError
+			torrent.Name = "renamed"
+			torrent.Magnet.Link = "magnet:other"
+			return errors.New("torrent: x has error status dead")
+		},
+	})
+	second := &inputRecorder{throttlingProvider: throttlingProvider{name: "tb"}}
+	m.clients.Store("tb", second)
+	req := &ImportRequest{Magnet: &utils.Magnet{InfoHash: "hash", Name: "name", Link: "magnet:request"}}
+	if _, err := m.SendToDebrid(req); err == nil {
+		t.Fatal("submit succeeded, want a failure")
+	}
+	if second.hash != "hash" || second.status != "" || second.name != "name" || second.link != "magnet:request" {
+		t.Fatalf("second provider saw hash %q status %q name %q link %q, want the request's",
+			second.hash, second.status, second.name, second.link)
+	}
+}
+
+func TestAStoppedSubmitKeepsTheRequestHash(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	m := withTestConfig(t, &Manager{logger: zerolog.Nop(), clients: xsync.NewMap[string, debrid.Client]()})
+	m.clients.Store("rd", &mutatingProvider{
+		throttlingProvider: throttlingProvider{name: "rd"},
+		cancel:             cancel,
+		check:              func(*types.Torrent) error { return nil },
+	})
+	uncached := true
+	req := &ImportRequest{Magnet: &utils.Magnet{InfoHash: "hash", Name: "name"}, DownloadUncached: &uncached}
+	got, err := m.sendToDebrid(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.InfoHash != "hash" || !got.DownloadUncached {
+		t.Fatalf("kept hash %q uncached %t, want hash and uncached", got.InfoHash, got.DownloadUncached)
+	}
+}
+
+func TestADiscardedSubmitReleasesUnderTheRequestHash(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		m := withTestConfig(t, &Manager{
+			logger: zerolog.Nop(), clients: xsync.NewMap[string, debrid.Client](), storage: newTestStore(t),
+		})
+		rd := &mutatingProvider{
+			throttlingProvider: throttlingProvider{name: "rd"},
+			check: func(torrent *types.Torrent) error {
+				return fmt.Errorf("torrent: %s has error status: dead: %w", torrent.Name, customerror.ErrReleaseFailed)
+			},
+		}
+		m.clients.Store("rd", rd)
+		seeded := &storage.Entry{
+			InfoHash: "hash", Name: "name", State: storage.EntryStateDownloading, ActiveProvider: "rd",
+			Providers: map[string]*storage.ProviderEntry{"rd": {Provider: "rd", ID: "pid"}},
+		}
+		if err := m.storage.AddQueue(seeded); err != nil {
+			t.Fatal(err)
+		}
+		req := &ImportRequest{Magnet: &utils.Magnet{InfoHash: "hash", Name: "name"}}
+		if _, err := m.sendToDebrid(t.Context(), req); err == nil {
+			t.Fatal("submit succeeded, want a failure")
+		}
+		drainPlacements(t, m)
+		if got := rd.deletes.Load(); got != 1 {
+			t.Fatalf("provider deletes = %d, want 1", got)
+		}
+	})
 }

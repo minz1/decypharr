@@ -206,16 +206,19 @@ func (m *Manager) SendToDebrid(importRequest *ImportRequest) (*debridTypes.Torre
 	return m.sendToDebrid(m.work.Context(), importRequest)
 }
 
-// sendToDebrid is SendToDebrid on ctx: a grab's submit child runs it on its own ctx, which only a stop cuts.
-func (m *Manager) sendToDebrid(ctx context.Context, importRequest *ImportRequest) (*debridTypes.Torrent, error) {
-	debridTorrent := &debridTypes.Torrent{
-		InfoHash: importRequest.Magnet.InfoHash,
-		Magnet:   importRequest.Magnet,
-		Name:     importRequest.Magnet.Name,
-		Size:     importRequest.Magnet.Size,
+func requestTorrent(r *ImportRequest) *debridTypes.Torrent {
+	magnet := *r.Magnet
+	return &debridTypes.Torrent{
+		InfoHash: magnet.InfoHash,
+		Magnet:   &magnet,
+		Name:     magnet.Name,
+		Size:     magnet.Size,
 		Files:    make(map[string]debridTypes.File),
 	}
+}
 
+// sendToDebrid is SendToDebrid on ctx: a grab's submit child runs it on its own ctx, which only a stop cuts.
+func (m *Manager) sendToDebrid(ctx context.Context, importRequest *ImportRequest) (*debridTypes.Torrent, error) {
 	clients := m.FilterDebrid(func(c common.Client) bool {
 		if importRequest.SelectedDebrid != "" && c.Config().Name != importRequest.SelectedDebrid {
 			return false
@@ -232,7 +235,7 @@ func (m *Manager) sendToDebrid(ctx context.Context, importRequest *ImportRequest
 
 	for _, db := range clients {
 		pctx, cancel := context.WithTimeout(ctx, ProviderSubmitLimit)
-		torrent, err := m.submitToProvider(pctx, db, debridTorrent, importRequest)
+		torrent, err := m.submitToProvider(pctx, db, requestTorrent(importRequest), importRequest)
 		cut := stopped(pctx)
 		cancel()
 		if err != nil && cut {
@@ -283,11 +286,15 @@ func (e *throttledError) Unwrap() error { return e.err }
 // keptSubmission is the submit result of a stopped add, queued as still downloading. The result need not name its
 // provider (AllDebrid sets only the ID), and an entry with no active provider is never rebuilt into a job, so it takes
 // the provider, hash and DownloadUncached choice from the request's torrent.
-func keptSubmission(submitted *debridTypes.Torrent, provider string, input *debridTypes.Torrent) *debridTypes.Torrent {
+func keptSubmission(
+	submitted *debridTypes.Torrent,
+	provider, hash string,
+	downloadUncached bool,
+) *debridTypes.Torrent {
 	submitted.Status = debridTypes.TorrentStatusDownloading
 	submitted.Debrid = provider
-	submitted.InfoHash = input.InfoHash
-	submitted.DownloadUncached = input.DownloadUncached
+	submitted.InfoHash = hash
+	submitted.DownloadUncached = downloadUncached
 	return submitted
 }
 
@@ -314,17 +321,18 @@ func (m *Manager) submitToProvider(
 		overrideDownloadUncached = *importRequest.DownloadUncached
 	}
 	debridTorrent.DownloadUncached = overrideDownloadUncached
+	hash := debridTorrent.InfoHash
 
-	decision := m.hearsay.EvaluateAdd(db.Config().Provider, debridTorrent.InfoHash)
+	decision := m.hearsay.EvaluateAdd(db.Config().Provider, hash)
 	if !overrideDownloadUncached && decision.Reject() {
 		m.hearsay.DiscardAdd(decision)
-		return nil, hearsayNotCached(db.Config().Name, debridTorrent.InfoHash)
+		return nil, hearsayNotCached(db.Config().Name, hash)
 	}
 	_logger := db.Logger()
 	_logger.Info().
 		Str("Provider", db.Config().Name).
 		Str("Arr", importRequest.Arr.Name).
-		Str("Hash", debridTorrent.InfoHash).
+		Str("Hash", hash).
 		Str("Name", debridTorrent.Name).
 		Str("Action", string(importRequest.Action)).
 		Msg("Processing torrent")
@@ -345,7 +353,7 @@ func (m *Manager) submitToProvider(
 		// submit result as still downloading and keep it at the provider.
 		m.hearsay.DiscardAdd(decision)
 		_logger.Info().Str("id", dbt.ID).Err(err).Msg("Stopped after the submit; queued to keep checking")
-		return keptSubmission(dbt, db.Config().Name, debridTorrent), nil
+		return keptSubmission(dbt, db.Config().Name, hash, overrideDownloadUncached), nil
 	}
 	verdict := submitVerdict(err)
 	if !verdict && errors.Is(err, customerror.ErrProviderStatusTimeout) && torrent != nil && torrent.ID != "" {
@@ -358,7 +366,7 @@ func (m *Manager) submitToProvider(
 			Str("id", torrent.ID).
 			Err(err).
 			Msg("Provider still processing the torrent; queued to keep checking")
-		return keptSubmission(torrent, db.Config().Name, debridTorrent), nil
+		return keptSubmission(torrent, db.Config().Name, hash, overrideDownloadUncached), nil
 	}
 	if !verdict && err != nil && torrent != nil && torrent.ID != "" && transientStatusError(err) &&
 		!isTooManyActiveDownloads(err) {
@@ -367,7 +375,7 @@ func (m *Manager) submitToProvider(
 			Str("id", torrent.ID).
 			Err(err).
 			Msg("Provider status check failed for now; queued to keep checking")
-		return keptSubmission(torrent, db.Config().Name, debridTorrent), nil
+		return keptSubmission(torrent, db.Config().Name, hash, overrideDownloadUncached), nil
 	}
 	reported := errors.Is(err, customerror.ErrTorrentNotCached)
 	if reported {
@@ -377,7 +385,7 @@ func (m *Manager) submitToProvider(
 		if torrent != nil && torrent.ID != "" {
 			// Delete the torrent if it was not downloaded
 			provider, id := db.Config().Name, torrent.ID
-			_ = m.discardSubmitted(ctx, provider, id, debridTorrent.InfoHash)
+			_ = m.discardSubmitted(ctx, provider, id, hash)
 		}
 		if !reported {
 			m.hearsay.DiscardAdd(decision)
