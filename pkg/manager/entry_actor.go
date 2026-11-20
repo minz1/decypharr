@@ -55,8 +55,9 @@ type entryMsg struct {
 	// arrSaw is the failure time an Arr listing rendered for a failed grab.
 	arrSaw time.Time
 	// seen is what a poll saw of the placement at its provider.
-	seen   *pollSeen
-	nudged bool
+	seen         *pollSeen
+	nudged       bool
+	linksMissing *placementRef
 }
 
 // pollSeen is what a poll of the placement saw: what it waits on at the provider, and whether the release is dead.
@@ -306,6 +307,9 @@ func (a *entryActor) handle(
 	if m.exit && m.child == grab.ChildPoll && m.seen != nil && st.g.State.Phase == grab.PhaseProvider {
 		a.grabs.setPolled(key, *m.seen)
 	}
+	if m.exit && m.child == grab.ChildLinks && m.linksMissing != nil {
+		a.linksAnswered(key, st, *m.linksMissing)
+	}
 	switch {
 	case m.ev != nil:
 		a.step(key, st, m, fx)
@@ -475,7 +479,7 @@ func (a *entryActor) step(key string, st *entryState, m entryMsg, fx *keyed.Effe
 	st.saveFails = 0
 	st.g = s.next
 	if nextState.Phase != cur.State.Phase {
-		a.grabs.setSubmitClock(key, submitClock{})
+		a.phaseCommitted(key, s.next)
 	}
 	a.syncHold(key, st, s.next)
 	if ev.Kind == grab.EvActionProgress {
@@ -966,5 +970,13 @@ func (a *entryActor) untellLeft(key string, cur grab.Grab, next grab.State) {
 		next.Phase != grab.PhaseFailed
 	if left && a.untell != nil {
 		a.untell(key, cur.State.Failure.At)
+	}
+}
+
+func (a *entryActor) phaseCommitted(key string, next grab.Grab) {
+	a.grabs.setSubmitClock(key, submitClock{})
+	a.grabs.clearLinks(key)
+	if next.State.Phase == grab.PhaseAwaitingLinks {
+		a.markLinks(key, next.Entry, true, time.Now())
 	}
 }

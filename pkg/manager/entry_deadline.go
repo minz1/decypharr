@@ -7,6 +7,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/task/keyed"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/manager/grab"
+	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
 // deadlineView is what grab.NextDeadline reads for key's grab besides its state.
@@ -75,11 +76,12 @@ func (a *entryActor) armDeadline(key string, st *entryState, fx *keyed.Effects[s
 	if st.hasSave {
 		return
 	}
-	_, due, ok := grab.NextDeadline(st.g.State, a.deadlineView(key, st))
+	g, ok := a.gated(key, st)
 	if !ok {
 		a.cancelDeadline(st, fx)
 		return
 	}
+	due := g.Due
 	if st.hasDeadlineTimer && st.deadlineAt.Equal(due) {
 		return
 	}
@@ -100,10 +102,11 @@ func (a *entryActor) cancelDeadline(st *entryState, fx *keyed.Effects[string, en
 // progress observation waits in the mailbox wins: the observation then finds the grab failed and is refused.
 func (a *entryActor) deadlineFired(key string, st *entryState, fx *keyed.Effects[string, entryMsg]) {
 	st.hasDeadlineTimer, st.deadlineAt = false, time.Time{}
-	ev, due, ok := grab.NextDeadline(st.g.State, a.deadlineView(key, st))
-	if !ok || due.After(time.Now()) {
+	g, ok := a.gated(key, st)
+	if !ok || g.Due.After(time.Now()) {
 		return
 	}
+	ev := g.Event
 	ev.At = time.Now()
 	a.step(key, st, eventMsg(ev), fx)
 }
@@ -174,4 +177,54 @@ func (m *Manager) ArrSeen(rendered []GrabView) {
 			m.logger.Debug().Err(err).Str("key", key).Msg("Arr listing not delivered to the grab")
 		}
 	}
+}
+
+func activeRef(e *storage.Entry) (placementRef, bool) {
+	if e == nil {
+		return placementRef{}, false
+	}
+	p := e.GetActiveProvider()
+	if p == nil {
+		return placementRef{}, false
+	}
+	return placementRef{Provider: e.ActiveProvider, TorrentID: p.ID}, true
+}
+
+func (a *entryActor) markLinks(key string, e *storage.Entry, fresh bool, heldSince time.Time) {
+	if ref, ok := activeRef(e); ok {
+		a.grabs.setLinks(key, linksMark{placement: ref, fresh: fresh, heldSince: heldSince})
+	}
+}
+
+func (a *entryActor) linksAnswered(key string, st *entryState, missing placementRef) {
+	ref, ok := activeRef(st.g.Entry)
+	if st.g.State.Phase != grab.PhaseAwaitingLinks || !ok || ref != missing {
+		return
+	}
+	held := time.Now()
+	if m, known := a.grabs.linksOf(key); known && m.placement == ref {
+		held = m.heldSince
+	}
+	a.markLinks(key, st.g.Entry, true, held)
+}
+
+func (a *entryActor) gated(key string, st *entryState) (grab.Gated, bool) {
+	vouch := grab.LinksVouch{Fresh: true}
+	if st.g.State.Phase == grab.PhaseAwaitingLinks {
+		vouch = a.linksVouch(key, st)
+	}
+	return grab.GatedDeadline(st.g.State, a.deadlineView(key, st), vouch)
+}
+
+func (a *entryActor) linksVouch(key string, st *entryState) grab.LinksVouch {
+	ref, ok := activeRef(st.g.Entry)
+	if !ok {
+		return grab.LinksVouch{HeldSince: time.Now()}
+	}
+	m, ok := a.grabs.linksOf(key)
+	if !ok || m.placement != ref {
+		m = linksMark{placement: ref, heldSince: time.Now()}
+		a.grabs.setLinks(key, m)
+	}
+	return grab.LinksVouch{Fresh: m.fresh, HeldSince: m.heldSince}
 }

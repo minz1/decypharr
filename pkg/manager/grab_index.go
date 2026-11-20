@@ -38,6 +38,13 @@ type grabIndex struct {
 	// nudges counts the selects and restarts sent for each grab's placement in this phase; like polled, it stays while
 	// the actor is idle, so the cap holds across polls spaced further apart than the idle limit.
 	nudges map[string]int
+	links  map[string]linksMark
+}
+
+type linksMark struct {
+	placement placementRef
+	fresh     bool
+	heldSince time.Time
 }
 
 // submitClock is when this process loaded a submitting grab (zero if it entered Submitting here), when its submit
@@ -70,6 +77,7 @@ func (x *grabIndex) remove(key string) {
 	delete(x.polled, key)
 	delete(x.submits, key)
 	delete(x.nudges, key)
+	delete(x.links, key)
 }
 
 // goneChan is closed when key has no grab.
@@ -217,4 +225,26 @@ func (x *grabIndex) setNudges(key string, n int) {
 		x.nudges = make(map[string]int)
 	}
 	x.nudges[key] = n
+}
+
+func (x *grabIndex) linksOf(key string) (linksMark, bool) {
+	x.mu.RLock()
+	defer x.mu.RUnlock()
+	m, ok := x.links[strings.ToLower(key)]
+	return m, ok
+}
+
+func (x *grabIndex) setLinks(key string, m linksMark) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	if x.links == nil {
+		x.links = make(map[string]linksMark)
+	}
+	x.links[strings.ToLower(key)] = m
+}
+
+func (x *grabIndex) clearLinks(key string) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	delete(x.links, strings.ToLower(key))
 }

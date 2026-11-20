@@ -192,7 +192,11 @@ func (m *Manager) pollChild(ctx context.Context, call entryChildCall, links bool
 	}
 	if wait != waitNone || (err != nil && transientStatusError(err)) {
 		m.logPendingStatus(entry, placement, wait, err)
-		return pendingPoll(wait)
+		msg := pendingPoll(wait)
+		if links && err == nil && obs.LinksPending {
+			msg.linksMissing = placementOf(entry, placement)
+		}
+		return msg
 	}
 	m.queue.waits.observe(entry.InfoHash, waitNone)
 	switch {
@@ -349,7 +353,7 @@ func (m *Manager) linksChecked(
 		return msg
 	}
 	m.logger.Debug().Str("name", entry.Name).Msg("Downloaded, waiting for file links before the action")
-	return entryMsg{}
+	return entryMsg{linksMissing: placementOf(entry, placement)}
 }
 
 // actionChild runs the grab's post-download action. A stop of the mount or the manager cuts it short with no
@@ -496,4 +500,8 @@ func (m *Manager) uncachedAllowed(entry *storage.Entry) bool {
 		return client.Config().DownloadUncached
 	}
 	return false
+}
+
+func placementOf(entry *storage.Entry, placement *storage.ProviderEntry) *placementRef {
+	return &placementRef{Provider: entry.ActiveProvider, TorrentID: placement.ID}
 }

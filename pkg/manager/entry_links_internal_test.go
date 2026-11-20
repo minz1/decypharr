@@ -1,0 +1,423 @@
+package manager
+
+import (
+	"context"
+	"errors"
+	"slices"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"testing/synctest"
+	"time"
+
+	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/internal/customerror"
+	debrid "github.com/sirrobot01/decypharr/pkg/debrid/common"
+	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
+	"github.com/sirrobot01/decypharr/pkg/manager/grab"
+	"github.com/sirrobot01/decypharr/pkg/storage"
+)
+
+func linksRef() placementRef { return placementRef{Provider: "realdebrid", TorrentID: "t1"} }
+
+type pollAnswer struct {
+	t   *debridTypes.Torrent
+	obs debridTypes.Observation
+	err error
+}
+
+type scriptedPoll struct {
+	debrid.Client
+
+	mu      sync.Mutex
+	answers []pollAnswer
+}
+
+func (*scriptedPoll) Config() config.Debrid { return config.Debrid{Name: "realdebrid"} }
+
+func (p *scriptedPoll) Poll(
+	_ context.Context,
+	t *debridTypes.Torrent,
+	_ bool,
+) (*debridTypes.Torrent, debridTypes.Observation, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	a := p.answers[0]
+	if len(p.answers) > 1 {
+		p.answers = p.answers[1:]
+	}
+	if a.t == nil && a.err == nil {
+		a.t = t
+	}
+	return a.t, a.obs, a.err
+}
+
+func transientAnswer() pollAnswer { return pollAnswer{err: context.DeadlineExceeded} }
+
+func pendingAnswer() pollAnswer {
+	return pollAnswer{obs: debridTypes.Observation{Phase: debridTypes.PhaseFinalizing, LinksPending: true}}
+}
+
+func (h *actorHarness) linksProvider(t *testing.T, answers ...pollAnswer) {
+	t.Helper()
+	m, _ := newDroppedTestManager(t, nil)
+	m.store = testConfigStore(t, nil)
+	m.clients.Store("realdebrid", &scriptedPoll{answers: answers})
+	h.a.child = func(call entryChildCall) func(context.Context) entryMsg {
+		return func(ctx context.Context) entryMsg { return m.pollChild(ctx, call, call.kind == grab.ChildLinks) }
+	}
+	h.a.pollEvery = time.Minute
+}
+
+func linksEntryAt(downloaded time.Duration, id string) *storage.Entry {
+	e := testEntry("a")
+	at := time.Now().Add(-downloaded)
+	e.Providers = map[string]*storage.ProviderEntry{
+		"realdebrid": {Provider: "realdebrid", ID: id, DownloadedAt: &at},
+	}
+	return e
+}
+
+func (h *actorHarness) recoverLinksWait(downloaded time.Duration) {
+	h.t.Helper()
+	seed(h.t, h.store, linksEntryAt(downloaded, "t1"), grab.State{Phase: grab.PhaseAwaitingLinks})
+	h.mustAsk("a", grab.Event{Kind: grab.EvRecover})
+}
+
+func (h *actorHarness) restoredLinksWait(downloaded time.Duration) childRun {
+	h.t.Helper()
+	h.recoverLinksWait(downloaded)
+	return h.next(grab.ChildLinks)
+}
+
+func stillMissing() entryMsg {
+	ref := linksRef()
+	return entryMsg{linksMissing: &ref}
+}
+
+func (h *actorHarness) running(key string) bool {
+	for _, k := range h.a.runner.Snapshot().Keys {
+		if k.Key == key {
+			return k.Running
+		}
+	}
+	return false
+}
+
+func (h *actorHarness) mustFailWith(want ...grab.FailEffect) {
+	h.t.Helper()
+	if got := h.failsSeen(); !slices.Equal(got, want) {
+		h.t.Fatalf("fail effects %v, want %v", got, want)
+	}
+}
+
+func TestARestoredLinksWaitWaitsForALinksAnswer(t *testing.T) {
+	t.Parallel()
+	t.Run("still missing", func(t *testing.T) {
+		t.Parallel()
+		store := newTestStore(t)
+		synctest.Test(t, func(t *testing.T) {
+			h := deadlineHarness(t, store, 0)
+			run := h.restoredLinksWait(7 * time.Hour)
+			time.Sleep(time.Hour)
+			h.mustBe("a", grab.PhaseAwaitingLinks)
+			h.mustFailWith()
+			run.reply <- stillMissing()
+			h.mustBe("a", grab.PhaseFailed)
+			h.mustFailWith(grab.FailBadRelease)
+		})
+	})
+	t.Run("ready", func(t *testing.T) {
+		t.Parallel()
+		store := newTestStore(t)
+		synctest.Test(t, func(t *testing.T) {
+			h := deadlineHarness(t, store, 0)
+			run := h.restoredLinksWait(7 * time.Hour)
+			time.Sleep(time.Hour)
+			reply(run, grab.Event{Kind: grab.EvLinksReady})
+			h.mustBe("a", grab.PhaseActing)
+			h.mustFailWith()
+		})
+	})
+	t.Run("a finalizing answer from the provider", func(t *testing.T) {
+		t.Parallel()
+		store := newTestStore(t)
+		synctest.Test(t, func(t *testing.T) {
+			h := deadlineHarness(t, store, 0)
+			h.linksProvider(t, transientAnswer(), pendingAnswer())
+			h.recoverLinksWait(7 * time.Hour)
+			synctest.Wait()
+			h.mustBe("a", grab.PhaseAwaitingLinks)
+			time.Sleep(time.Minute)
+			h.mustBe("a", grab.PhaseFailed)
+			h.mustFailWith(grab.FailBadRelease)
+		})
+	})
+}
+
+func TestARestoredLinksWaitWithOnlyTransientPollsEndsAtTheBound(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	synctest.Test(t, func(t *testing.T) {
+		h := deadlineHarness(t, store, 0)
+		h.linksProvider(t, transientAnswer())
+		h.recoverLinksWait(7 * time.Hour)
+		time.Sleep(6*time.Hour - time.Second)
+		h.mustBe("a", grab.PhaseAwaitingLinks)
+		h.mustFailWith()
+		time.Sleep(time.Second)
+		h.mustBe("a", grab.PhaseFailed)
+		h.mustFailWith(grab.FailBadRelease)
+	})
+}
+
+func TestAHardFailureWhileHeldDecidesAsInProcessHEAD(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	synctest.Test(t, func(t *testing.T) {
+		h := deadlineHarness(t, store, 0)
+		h.linksProvider(t, transientAnswer(), pollAnswer{err: errors.New("bad token")})
+		h.recoverLinksWait(7 * time.Hour)
+		synctest.Wait()
+		h.mustBe("a", grab.PhaseAwaitingLinks)
+		h.mustFailWith()
+		time.Sleep(time.Minute)
+		h.mustBe("a", grab.PhaseFailed)
+		h.mustFailWith(grab.FailEntry)
+	})
+}
+
+func TestAFailedExitSaveKeepsTheLinksBound(t *testing.T) {
+	t.Parallel()
+	run := func(t *testing.T, fresh bool) {
+		store := newTestStore(t)
+		synctest.Test(t, func(t *testing.T) {
+			h := deadlineHarness(t, store, 0)
+			var failed atomic.Bool
+			h.a.publish = func(*storage.Entry) error {
+				if !failed.Swap(true) {
+					return errors.New("disk")
+				}
+				return nil
+			}
+			started := time.Now()
+			downloaded, wait := 7*time.Hour, 5*time.Hour
+			if fresh {
+				downloaded, wait = time.Hour, 4*time.Hour
+			}
+			child := h.restoredLinksWait(downloaded)
+			if fresh {
+				child.reply <- stillMissing()
+				synctest.Wait()
+			}
+			time.Sleep(wait)
+			h.send(eventMsg(grab.Event{Kind: grab.EvLinksReady}))
+			if !failed.Load() {
+				t.Fatal("the exit save did not fail")
+			}
+			h.send(entryMsg{ev: &grab.Event{Kind: grab.EvTagsChanged}, tags: []string{"x"}})
+			mark, ok := h.grabs.linksOf("a")
+			if !ok || mark.fresh != fresh || !mark.heldSince.Equal(started) {
+				t.Fatalf("mark %+v (%v), want fresh %v held since %v", mark, ok, fresh, started)
+			}
+			if fresh {
+				return
+			}
+			time.Sleep(time.Hour - time.Second)
+			h.mustBe("a", grab.PhaseAwaitingLinks)
+			time.Sleep(time.Second)
+			h.mustBe("a", grab.PhaseFailed)
+		})
+	}
+	t.Run("unfresh", func(t *testing.T) { t.Parallel(); run(t, false) })
+	t.Run("fresh", func(t *testing.T) { t.Parallel(); run(t, true) })
+}
+
+func TestAStaleDownloadedAtBlocklistsAtOnceInProcess(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	synctest.Test(t, func(t *testing.T) {
+		h := deadlineHarness(t, store, 0)
+		seed(t, store, linksEntryAt(7*time.Hour, "t1"), grab.State{Phase: grab.PhaseProvider})
+		h.mustAsk("a", grab.Event{Kind: grab.EvRecover})
+		run := h.next(grab.ChildPoll)
+		run.reply <- eventMsg(grab.Event{
+			Kind: grab.EvProviderObserved, Observed: debridTypes.PhaseDownloaded, Downloaded: true, AllLinked: false,
+		})
+		h.mustBe("a", grab.PhaseFailed)
+		h.mustFailWith(grab.FailBadRelease)
+	})
+}
+
+func TestAnInProcessSubmitIntoAwaitingLinksFailsAtHEADsTime(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	synctest.Test(t, func(t *testing.T) {
+		h := deadlineHarness(t, store, 0)
+		submit := h.submitting("a")
+		msg := eventMsg(grab.Event{
+			Kind: grab.EvSubmitResult, Outcome: grab.OutcomePlacement, Provider: "realdebrid", TorrentID: "t1",
+			Downloaded: true, AllLinked: false,
+		})
+		msg.torrent = &debridTypes.Torrent{ID: "t1", Debrid: "realdebrid", Status: debridTypes.TorrentStatusDownloaded}
+		msg.update = func(e *storage.Entry) {
+			at := time.Now().Add(-time.Hour)
+			e.Providers["realdebrid"].DownloadedAt = &at
+		}
+		submit.reply <- msg
+		h.mustBe("a", grab.PhaseAwaitingLinks)
+		mark, ok := h.grabs.linksOf("a")
+		if !ok || !mark.fresh || mark.placement != linksRef() {
+			t.Fatalf("mark %+v (%v), want fresh for %+v", mark, ok, linksRef())
+		}
+		time.Sleep(5*time.Hour - time.Second)
+		h.mustBe("a", grab.PhaseAwaitingLinks)
+		time.Sleep(time.Second)
+		h.mustBe("a", grab.PhaseFailed)
+		h.mustFailWith(grab.FailBadRelease)
+	})
+}
+
+func TestALinksMarkForAnotherPlacementDoesNotVouch(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	synctest.Test(t, func(t *testing.T) {
+		h := deadlineHarness(t, store, 0)
+		h.grabs.setLinks("a", linksMark{
+			placement: placementRef{Provider: "realdebrid", TorrentID: "other"}, fresh: true,
+			heldSince: time.Now().Add(-10 * time.Hour),
+		})
+		h.restoredLinksWait(7 * time.Hour)
+		time.Sleep(6*time.Hour - time.Second)
+		h.mustBe("a", grab.PhaseAwaitingLinks)
+		time.Sleep(time.Second)
+		h.mustBe("a", grab.PhaseFailed)
+	})
+}
+
+func TestALinksAnswerForTheOldPlacementDoesNotVouch(t *testing.T) {
+	t.Parallel()
+	for name, old := range map[string]placementRef{
+		"another torrent":  {Provider: "realdebrid", TorrentID: "t0"},
+		"another provider": {Provider: "torbox", TorrentID: "t1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			store := newTestStore(t)
+			synctest.Test(t, func(t *testing.T) {
+				h := deadlineHarness(t, store, 0)
+				h.restoredLinksWait(7 * time.Hour)
+				h.send(entryMsg{exit: true, child: grab.ChildLinks, linksMissing: &old})
+				time.Sleep(6*time.Hour - time.Second)
+				h.mustBe("a", grab.PhaseAwaitingLinks)
+				time.Sleep(time.Second)
+				h.mustBe("a", grab.PhaseFailed)
+			})
+		})
+	}
+}
+
+func TestTheLinksBoundSurvivesIdleExit(t *testing.T) {
+	t.Parallel()
+	t.Run("unfresh", func(t *testing.T) {
+		t.Parallel()
+		store := newTestStore(t)
+		synctest.Test(t, func(t *testing.T) {
+			h := deadlineHarness(t, store, 0)
+			run := h.restoredLinksWait(7 * time.Hour)
+			run.reply <- entryMsg{}
+			time.Sleep(2 * time.Hour)
+			synctest.Wait()
+			if h.running("a") {
+				t.Fatal("the actor is still up after two idle hours")
+			}
+			h.mustBe("a", grab.PhaseAwaitingLinks)
+			time.Sleep(4*time.Hour - time.Second)
+			h.mustBe("a", grab.PhaseAwaitingLinks)
+			time.Sleep(time.Second)
+			h.mustBe("a", grab.PhaseFailed)
+		})
+	})
+	t.Run("fresh", func(t *testing.T) {
+		t.Parallel()
+		store := newTestStore(t)
+		synctest.Test(t, func(t *testing.T) {
+			h := deadlineHarness(t, store, 0)
+			run := h.restoredLinksWait(time.Hour)
+			run.reply <- stillMissing()
+			time.Sleep(2 * time.Hour)
+			synctest.Wait()
+			if h.running("a") {
+				t.Fatal("the actor is still up after two idle hours")
+			}
+			time.Sleep(3*time.Hour - time.Second)
+			h.mustBe("a", grab.PhaseAwaitingLinks)
+			time.Sleep(time.Second)
+			h.mustBe("a", grab.PhaseFailed)
+		})
+	})
+}
+
+func TestRemovingAGrabForgetsItsLinksMark(t *testing.T) {
+	t.Parallel()
+	x := &grabIndex{}
+	x.setLinks("A", linksMark{fresh: true})
+	x.remove("a")
+	if _, ok := x.linksOf("a"); ok {
+		t.Fatal("the mark outlived the grab")
+	}
+}
+
+func TestALinksCheckReportsStillMissingOnlyOnLinksPending(t *testing.T) {
+	t.Parallel()
+	entry := func() *storage.Entry {
+		e := linksEntryAt(time.Hour, "t1")
+		e.ActiveProvider = "realdebrid"
+		return e
+	}
+	finalizing := debridTypes.Observation{Phase: debridTypes.PhaseFinalizing}
+	downloaded := debridTypes.Observation{Phase: debridTypes.PhaseDownloaded}
+	unlinked := &debridTypes.Torrent{ID: "t1", Debrid: "realdebrid", Status: debridTypes.TorrentStatusDownloaded,
+		Files: map[string]debridTypes.File{"a.mkv": {Name: "a.mkv"}}}
+	pendingWithError := pendingAnswer()
+	pendingWithError.err = context.DeadlineExceeded
+	cases := []struct {
+		name   string
+		answer pollAnswer
+		want   bool
+		wantEv grab.EventKind
+		hasEv  bool
+	}{
+		{name: "links pending", answer: pendingAnswer(), want: true},
+		{name: "downloaded with unlinked files", answer: pollAnswer{t: unlinked, obs: downloaded}, want: true},
+		{name: "finalizing without links pending", answer: pollAnswer{obs: finalizing}},
+		{name: "a transient error", answer: transientAnswer()},
+		{name: "links pending with an error", answer: pendingWithError},
+		{name: "an unconfirmed 404", answer: pollAnswer{err: customerror.ErrTorrentNotFound}, hasEv: true,
+			wantEv: grab.EvProviderObserved},
+		{name: "downloaded without files", answer: pollAnswer{obs: downloaded}, hasEv: true,
+			wantEv: grab.EvLinksReady},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			m, _ := newDroppedTestManager(t, nil)
+			m.store = testConfigStore(t, nil)
+			m.clients.Store("realdebrid", &scriptedPoll{answers: []pollAnswer{c.answer}})
+			e := entry()
+			msg := m.pollChild(t.Context(), entryChildCall{kind: grab.ChildLinks, grab: grab.Grab{Entry: e}}, true)
+			if c.want {
+				if msg.linksMissing == nil || *msg.linksMissing != linksRef() {
+					t.Fatalf("linksMissing %v, want %+v", msg.linksMissing, linksRef())
+				}
+				return
+			}
+			if msg.linksMissing != nil {
+				t.Fatalf("linksMissing %+v, want none", msg.linksMissing)
+			}
+			if c.hasEv && (msg.ev == nil || msg.ev.Kind != c.wantEv) {
+				t.Fatalf("event %+v, want %v", msg.ev, c.wantEv)
+			}
+		})
+	}
+}
