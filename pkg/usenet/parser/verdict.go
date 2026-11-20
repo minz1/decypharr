@@ -1,9 +1,12 @@
 package parser
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
+	"math"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/sirrobot01/decypharr/internal/config"
@@ -95,11 +98,15 @@ func (p *NZBParser) proofNameAllowed(group *FileGroup, nzbName string) bool {
 		if name == "" {
 			continue
 		}
-		if p.fileAllowed(name, 0) != nil {
+		if !p.allowedAtAnySize(name) {
 			return false
 		}
 	}
 	return true
+}
+
+func (p *NZBParser) allowedAtAnySize(name string) bool {
+	return p.fileAllowed(name, 1) == nil && p.fileAllowed(name, math.MaxInt64) == nil
 }
 
 func (p *NZBParser) refusesNamedFile(name, nzbName string) bool {
@@ -113,7 +120,28 @@ func (p *NZBParser) refusesNamedFile(name, nzbName string) bool {
 	if kind := p.detectFileType(stem); kind == storage.NZBFileTypeRar || kind == storage.NZBFileTypeZip {
 		return false
 	}
-	return filepath.Ext(stem) != "" && p.fileAllowed(stem, 0) != nil
+	return filepath.Ext(stem) != "" && !p.allowedAtAnySize(stem)
+}
+
+type probeArticle struct {
+	file    manifest.File
+	segment manifest.Segment
+}
+
+func probeArticles(group *FileGroup) []probeArticle {
+	if group.Type == storage.NZBFileTypeZip {
+		sortGroupFiles(group)
+	}
+	first := probeArticle{file: group.Files[0], segment: group.Files[0].Segments[0]}
+	if group.Type != storage.NZBFileTypeZip {
+		return []probeArticle{first}
+	}
+	lastFile := group.Files[len(group.Files)-1]
+	tail := slices.MaxFunc(
+		lastFile.Segments,
+		func(a, b manifest.Segment) int { return cmp.Compare(a.Number, b.Number) },
+	)
+	return []probeArticle{first, {file: lastFile, segment: tail}}
 }
 
 func soleOutputName(nzbName, fileExt string) string {
@@ -129,6 +157,19 @@ func numericExtension(ext string) bool {
 
 func ambiguousSample(file manifest.File) bool {
 	return file.Rewritten || hasRepeatedNumbers(file.Segments)
+}
+
+func (p *NZBParser) sampleNamed(group *FileGroup) bool {
+	names := []string{group.ActualFilename}
+	for _, file := range group.Files {
+		names = append(names, file.Filename)
+	}
+	for _, name := range names {
+		if name != "" && p.refusesSample(name) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *NZBParser) refusesSample(name string) bool {

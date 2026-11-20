@@ -232,6 +232,9 @@ func (e *Error) nntpError() *Error { return e }
 
 func IsNotFoundEverywhere(err error) bool {
 	for node := err; node != nil; node = errors.Unwrap(node) {
+		if timedOut(node) {
+			return false
+		}
 		if marked, ok := node.(interface {
 			proof() *NotFoundEverywhereError
 		}); ok {
@@ -241,8 +244,16 @@ func IsNotFoundEverywhere(err error) bool {
 	return false
 }
 
+func timedOut(node error) bool {
+	timeout, ok := node.(interface{ Timeout() bool })
+	return ok && timeout.Timeout()
+}
+
 func isNoSuchArticle(err error) bool {
 	for node := err; node != nil; node = errors.Unwrap(node) {
+		if timedOut(node) {
+			return false
+		}
 		if typed, ok := node.(interface{ nntpError() *Error }); ok {
 			nntpErr := typed.nntpError()
 			return any(nntpErr) == any(node) && nntpErr.Type == ErrorTypeArticleNotFound &&

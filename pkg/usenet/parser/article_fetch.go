@@ -109,7 +109,7 @@ func fetchFileHeader(ctx context.Context, source ArticleSource, file manifest.Fi
 func fetchSegmentData(ctx context.Context, source ArticleSource, segment storage.NZBSegment) ([]byte, error) {
 	body, err := source.Body(ctx, segment.MessageID)
 	if err != nil {
-		return nil, err
+		return nil, &proofWithheldError{err: err}
 	}
 
 	start := segment.SegmentDataStart

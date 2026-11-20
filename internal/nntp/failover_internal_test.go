@@ -443,3 +443,50 @@ func TestEmbeddedMarkerRefusesInsteadOfSkipping(t *testing.T) {
 		t.Fatal("an embedded proof is read through its promoted Unwrap")
 	}
 }
+
+type timeoutWrapError struct{ err error }
+
+func (e timeoutWrapError) Error() string { return "timed out: " + e.err.Error() }
+
+func (e timeoutWrapError) Unwrap() error { return e.err }
+
+func (timeoutWrapError) Timeout() bool { return true }
+
+type quietWrapError struct{ timeoutWrapError }
+
+func (quietWrapError) Timeout() bool { return false }
+
+func TestTimeoutAroundAMarkerRefuses(t *testing.T) {
+	t.Parallel()
+	proof := &NotFoundEverywhereError{Err: notFound430()}
+	for _, row := range []struct {
+		name  string
+		err   error
+		check func(error) bool
+		want  bool
+	}{
+		{"430 alone", notFound430(), isNoSuchArticle, true},
+		{"timeout around a 430", timeoutWrapError{notFound430()}, isNoSuchArticle, false},
+		{"timeout around a wrapped 430", timeoutWrapError{fmt.Errorf("read: %w", notFound430())}, isNoSuchArticle, false},
+		{"non-timeout wrapper around a 430", quietWrapError{timeoutWrapError{notFound430()}}, isNoSuchArticle, true},
+		{"proof alone", proof, IsNotFoundEverywhere, true},
+		{"timeout around a proof", timeoutWrapError{proof}, IsNotFoundEverywhere, false},
+		{"wrapped timeout around a proof", fmt.Errorf("stat: %w", timeoutWrapError{proof}), IsNotFoundEverywhere, false},
+		{"non-timeout wrapper around a proof", quietWrapError{timeoutWrapError{proof}}, IsNotFoundEverywhere, true},
+	} {
+		if got := row.check(row.err); got != row.want {
+			t.Errorf("%s: got %v, want %v", row.name, got, row.want)
+		}
+	}
+}
+
+func TestFailoverTimeoutWrapped430IsNotProof(t *testing.T) {
+	t.Parallel()
+	_, err := runScripted(t, twoHosts(t, "", ""), true, map[string][]error{
+		"a": {timeoutWrapError{notFound430()}},
+		"b": {notFound430()},
+	})
+	if IsNotFoundEverywhere(err) {
+		t.Fatalf("a timeout around a 430 counted as a miss: %v", err)
+	}
+}

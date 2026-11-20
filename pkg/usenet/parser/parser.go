@@ -296,23 +296,13 @@ func (p *NZBParser) probeContentAvailability(
 		if group.articleObserved {
 			return nil
 		}
-		segment := group.Files[0].Segments[0]
 		probed++
-		if ambiguousSample(group.Files[0]) {
-			proven = false
+		result, err := statGroup(ctx, group, stat)
+		if result.available || err != nil {
+			return err
 		}
-		if err := stat(ctx, segment.MessageID); err != nil {
-			detail := statDetail(group, segment, err)
-			if nntp.IsArticleNotFoundError(err) {
-				if !nntp.IsNotFoundEverywhere(err) {
-					proven = false
-				}
-				missing = append(missing, detail)
-				continue
-			}
-			return &proofWithheldError{err: detail}
-		}
-		return nil
+		proven = proven && result.proven
+		missing = append(missing, result.missing...)
 	}
 
 	if probed == 0 {
@@ -327,6 +317,38 @@ func (p *NZBParser) probeContentAvailability(
 		return exhausted
 	}
 	return &ContentMissingError{Err: exhausted}
+}
+
+func statGroup(
+	ctx context.Context,
+	group *FileGroup,
+	stat statArticleFunc,
+) (groupStat, error) {
+	result := groupStat{proven: true}
+	for _, probe := range probeArticles(group) {
+		if ambiguousSample(probe.file) {
+			result.proven = false
+		}
+		err := stat(ctx, probe.segment.MessageID)
+		if err == nil {
+			return groupStat{available: true}, nil
+		}
+		detail := statDetail(group, probe.segment, err)
+		if !nntp.IsArticleNotFoundError(err) {
+			return groupStat{}, &proofWithheldError{err: detail}
+		}
+		if !nntp.IsNotFoundEverywhere(err) {
+			result.proven = false
+		}
+		result.missing = append(result.missing, detail)
+	}
+	return result, nil
+}
+
+type groupStat struct {
+	available bool
+	missing   []error
+	proven    bool
 }
 
 // Process extracts every file group of a parsed NZB into streamable files.
@@ -881,23 +903,21 @@ func (p *NZBParser) processFileGroups(
 	}
 
 	results := mapper.Map(fileGroups, func(g *FileGroup) groupProcessResult {
-		files, err := p.processFileGroup(ctx, g, password)
-		if err != nil {
-			p.logger.Warn().Err(err).Str("group", g.BaseName).Msg("Failed to process file group")
-			return groupProcessResult{err: err, group: g.BaseName}
-		}
-		return groupProcessResult{files: files, group: g.BaseName}
+		files, err := p.processJoinedGroup(ctx, g, password)
+		return groupProcessResult{files: files, err: err, group: g.BaseName}
 	})
 
 	// Never silently omit a supported group: an invalid volume map or missing
 	// archive input must remain visible to the caller (and later repair path).
 	var files []storage.NZBFile
 	var groupErrors []error
+	healthy := false
 	for _, result := range results {
 		if result.err != nil {
 			groupErrors = append(groupErrors, fmt.Errorf("process file group %q: %w", result.group, result.err))
 			continue
 		}
+		healthy = true
 		for _, f := range result.files {
 			if f != nil {
 				files = append(files, *f)
@@ -906,9 +926,28 @@ func (p *NZBParser) processFileGroups(
 	}
 
 	if len(groupErrors) > 0 {
+		if healthy {
+			return nil, &proofWithheldError{err: errors.Join(groupErrors...)}
+		}
 		return nil, errors.Join(groupErrors...)
 	}
 	return files, nil
+}
+
+func (p *NZBParser) processJoinedGroup(
+	ctx context.Context,
+	group *FileGroup,
+	password string,
+) ([]*storage.NZBFile, error) {
+	files, err := p.processFileGroup(ctx, group, password)
+	if err == nil {
+		return files, nil
+	}
+	p.logger.Warn().Err(err).Str("group", group.BaseName).Msg("Failed to process file group")
+	if p.sampleNamed(group) {
+		return nil, &proofWithheldError{err: err}
+	}
+	return nil, err
 }
 
 func sortFileGroups(groups []*FileGroup) {
