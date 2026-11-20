@@ -6,14 +6,22 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/sirrobot01/decypharr/internal/kvstore"
-
 	"github.com/sirrobot01/appendstore"
 )
 
+type jobStore interface {
+	ForEach(func(string, []byte) error) error
+	Get(string) ([]byte, error)
+	Put(string, []byte, *appendstore.PutOptions) error
+	Delete(string) error
+	Sync() error
+	Close() error
+	Len() int
+}
+
 type JobRepository struct {
 	mu    sync.RWMutex
-	store *kvstore.Store
+	store jobStore
 }
 
 func OpenReacquireJobRepository(path string) (*JobRepository, error) {
@@ -97,6 +105,15 @@ func (r *JobRepository) save(job Job, durable bool) error {
 		if syncErr := r.store.Sync(); syncErr != nil {
 			return fmt.Errorf("sync reacquire job: %w", syncErr)
 		}
+	}
+	return nil
+}
+
+func (r *JobRepository) Sync() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.store.Sync(); err != nil {
+		return fmt.Errorf("sync reacquire jobs: %w", err)
 	}
 	return nil
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"sync/atomic"
 	"time"
@@ -47,55 +48,163 @@ func (s *Service) Reacquire(request Request) (*Job, error) {
 	return s.enqueue(request, binding)
 }
 
-// FailDownload queues a job that fails the Arr's grab of downloadID, for a
-// download the Arr never imported. downloadID must be the form the Arr stored.
-func (s *Service) FailDownload(arrName, downloadID, entryID string) (*Job, error) {
+type Handed uint8
+
+const (
+	HandedCreated Handed = iota + 1
+	HandedRequeued
+	HandedExisting
+)
+
+type OtherJobError struct{ Strategy Strategy }
+
+func (err *OtherJobError) Error() string {
+	return fmt.Sprintf("another %s job is active for the download", err.Strategy)
+}
+
+type RetryableInvalidateError struct{ Err error }
+
+func (err *RetryableInvalidateError) Error() string { return err.Err.Error() }
+
+func (err *RetryableInvalidateError) Unwrap() error { return err.Err }
+
+func (strategy Strategy) failsDownload() bool {
+	return strategy == StrategyDownloadFailed || strategy == StrategyHistoryFailed
+}
+
+func (s *Service) SetKeyReleasedHook(fn func(arrName, downloadID string)) {
+	s.jobsMu.Lock()
+	s.keyReleased = fn
+	s.jobsMu.Unlock()
+}
+
+func (s *Service) fireKeyReleased(keys ...jobKey) {
+	s.jobsMu.RLock()
+	fn := s.keyReleased
+	s.jobsMu.RUnlock()
+	if fn == nil {
+		return
+	}
+	for _, key := range keys {
+		fn(key.arrName, key.downloadID)
+	}
+}
+
+func (s *Service) FailDownload(arrName, downloadID, entryID string, since time.Time) (Job, Handed, error) {
 	if arrName == "" || downloadID == "" || entryID == "" {
-		return nil, errors.New("arr name, download ID and entry ID are required")
+		return Job{}, 0, errors.New("arr name, download ID and entry ID are required")
 	}
 	release, err := s.beginOperation()
 	if err != nil {
-		return nil, err
+		return Job{}, 0, err
 	}
 	defer release()
 
 	key := jobKey{arrName: arrName, downloadID: downloadID}
-	if job, requeued, requeueErr := s.requeueWaitingJob(key); requeued || requeueErr != nil {
-		return job, requeueErr
+	s.jobsMu.Lock()
+	job, handed, err := s.failDownloadLocked(key, entryID, since)
+	s.jobsMu.Unlock()
+	if err != nil {
+		return Job{}, 0, err
 	}
-	return s.queueJob(key, nil, func(now time.Time) Job {
-		return Job{
+	if handed != HandedExisting {
+		s.signal()
+	}
+	return job, handed, nil
+}
+
+func (s *Service) failDownloadLocked(key jobKey, entryID string, since time.Time) (Job, Handed, error) {
+	if id, active := s.activeReacquisitions[key]; active {
+		job := s.jobs[id]
+		switch {
+		case !job.Strategy.failsDownload():
+			return Job{}, 0, &OtherJobError{Strategy: job.Strategy}
+		case job.Strategy == StrategyHistoryFailed && job.Status.waiting():
+			return s.requeueLocked(job)
+		default:
+			return s.receiptLocked(job)
+		}
+	}
+	if job, ok := s.finishedReceiptLocked(key, since); ok {
+		return s.receiptLocked(job)
+	}
+	staged, restaged := s.staged[key]
+	if !restaged {
+		now := s.now()
+		staged = Job{
 			ID:         uuid.New().String(),
 			Status:     StatusQueued,
 			Cause:      CauseRepair,
 			Strategy:   StrategyDownloadFailed,
-			ArrName:    arrName,
+			ArrName:    key.arrName,
 			EntryID:    entryID,
-			DownloadID: downloadID,
+			DownloadID: key.downloadID,
 			CreatedAt:  now,
 			UpdatedAt:  now,
 		}
-	}, nil)
+		s.staged[key] = staged
+	}
+	if err := s.persistLocked(staged); err != nil {
+		return Job{}, 0, err
+	}
+	delete(s.staged, key)
+	s.jobs[staged.ID] = cloneJob(staged)
+	s.activeReacquisitions[key] = staged.ID
+	return cloneJob(staged), HandedCreated, nil
 }
 
-// requeueWaitingJob runs a waiting HistoryFailed job for key again: the Arr
-// grabbed its failed download again, and a rerun fails that grab too.
-func (s *Service) requeueWaitingJob(key jobKey) (*Job, bool, error) {
+func (s *Service) requeueLocked(waiting Job) (Job, Handed, error) {
+	job := cloneJob(waiting)
+	job.Status = StatusQueued
+	job.LastError = "arr grabbed the failed download again; failing that grab too"
+	job.UpdatedAt = s.now()
+	if err := s.persistLocked(job); err != nil {
+		return Job{}, 0, err
+	}
+	s.jobs[job.ID] = cloneJob(job)
+	return cloneJob(job), HandedRequeued, nil
+}
+
+func (s *Service) receiptLocked(job Job) (Job, Handed, error) {
+	if err := s.jobRepository.Sync(); err != nil {
+		return Job{}, 0, err
+	}
+	return cloneJob(job), HandedExisting, nil
+}
+
+func (s *Service) persistLocked(job Job) error {
+	if err := s.jobRepository.Save(job); err != nil {
+		return err
+	}
+	return s.jobRepository.Sync()
+}
+
+func (s *Service) finishedReceiptLocked(key jobKey, since time.Time) (Job, bool) {
+	if since.IsZero() {
+		return Job{}, false
+	}
+	for _, job := range s.jobs {
+		if job.Status.Terminal() && job.Strategy.failsDownload() && job.ArrName == key.arrName &&
+			job.DownloadID == key.downloadID && !job.CreatedAt.Before(since) {
+			return job, true
+		}
+	}
+	return Job{}, false
+}
+
+func (s *Service) FailJob(arrName, downloadID, _ string, since time.Time) (Job, bool) {
+	key := jobKey{arrName: arrName, downloadID: downloadID}
 	s.jobsMu.RLock()
-	id := s.activeReacquisitions[key]
-	strategy := s.jobs[id].Strategy
-	s.jobsMu.RUnlock()
-	if strategy != StrategyHistoryFailed {
-		return nil, false, nil
+	defer s.jobsMu.RUnlock()
+	if id, active := s.activeReacquisitions[key]; active {
+		job := s.jobs[id]
+		if job.Strategy.failsDownload() && !job.Status.waiting() {
+			return cloneJob(job), true
+		}
+		return Job{}, false
 	}
-	if err := s.rebindJob(id, nil); errors.Is(err, errNotWaiting) {
-		return nil, false, nil
-	} else if err != nil {
-		return nil, true, err
-	}
-	s.signal()
-	requeued, _ := s.Job(id)
-	return &requeued, true, nil
+	job, ok := s.finishedReceiptLocked(key, since)
+	return cloneJob(job), ok
 }
 
 // enqueue queues the job for binding and the other files of the same download.
@@ -213,6 +322,8 @@ func (s *Service) Jobs() []Job {
 	return jobs
 }
 
+func (s *Service) JobByID(id string) (Job, bool) { return s.Job(id) }
+
 func (s *Service) Job(id string) (Job, bool) {
 	s.jobsMu.RLock()
 	defer s.jobsMu.RUnlock()
@@ -266,13 +377,17 @@ func (s *Service) DeleteJobs(ids []string) (int, error) {
 }
 
 func (s *Service) loadJobs(jobs []Job) error {
+	var released []jobKey
+	defer func() { s.fireKeyReleased(released...) }()
 	slices.SortFunc(jobs, func(left, right Job) int {
 		return left.UpdatedAt.Compare(right.UpdatedAt)
 	})
 	s.jobsMu.Lock()
 	defer s.jobsMu.Unlock()
 	clear(s.jobs)
+	released = slices.Collect(maps.Keys(s.activeReacquisitions))
 	clear(s.activeReacquisitions)
+	clear(s.staged)
 	for _, job := range jobs {
 		if job.Strategy == "" {
 			if err := s.convertLegacyStrategy(&job); err != nil {
@@ -408,9 +523,11 @@ func (s *Service) settleJob(
 	if err != nil && !deadline.IsZero() && !s.now().Before(deadline) {
 		return s.stopReconciliation(id, fmt.Errorf("arr reconciliation deadline expired: %w", err))
 	}
-	if errors.Is(err, arr.ErrMutationOutcomeUnknown) || errors.Is(err, errArrLookup) {
+	var retryableInvalidate *RetryableInvalidateError
+	lookupFailed := errors.Is(err, errArrLookup) || errors.As(err, &retryableInvalidate)
+	if errors.Is(err, arr.ErrMutationOutcomeUnknown) || lookupFailed {
 		delay := retryDelay(current, err)
-		if errors.Is(err, errArrLookup) {
+		if lookupFailed {
 			// No mutation attempts grow the delay, and a permanent error such
 			// as a bad token is not backed off by the client: pace it.
 			delay = retryMaxDelay
@@ -567,6 +684,12 @@ func (s *Service) updateJobWithDurability(
 	if !status.valid() {
 		return Job{}, fmt.Errorf("invalid reacquire status %q", status)
 	}
+	var released *jobKey
+	defer func() {
+		if released != nil {
+			s.fireKeyReleased(*released)
+		}
+	}()
 	s.jobsMu.Lock()
 	defer s.jobsMu.Unlock()
 
@@ -617,6 +740,7 @@ func (s *Service) updateJobWithDurability(
 		key := keyForJob(job)
 		if s.activeReacquisitions[key] == id {
 			delete(s.activeReacquisitions, key)
+			released = &key
 		}
 	}
 	return cloneJob(job), nil

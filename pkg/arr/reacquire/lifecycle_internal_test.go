@@ -306,7 +306,7 @@ func TestOperationsAfterStopClosed(t *testing.T) {
 			return err
 		},
 		"FailDownload": func() error {
-			_, err := service.FailDownload("radarr", "d", "e")
+			_, _, err := service.FailDownload("radarr", "d", "e", time.Time{})
 			return err
 		},
 		"DeleteJobs": func() error {

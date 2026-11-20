@@ -28,6 +28,16 @@ func (s *Storage) UpdateQueuedGrab(entry *Entry) error {
 	return s.putQueued(entry, true)
 }
 
+func (s *Storage) UpdateQueuedGrabDurable(entry *Entry) error {
+	if err := s.putQueued(entry, true); err != nil {
+		return err
+	}
+	if err := s.queue.Sync(); err != nil {
+		return fmt.Errorf("sync queued entry %q: %w", entry.InfoHash, err)
+	}
+	return nil
+}
+
 func (s *Storage) putQueued(entry *Entry, withGrab bool) error {
 	entry.UpdatedAt = time.Now()
 	data, err := encodeQueued(entry, withGrab)

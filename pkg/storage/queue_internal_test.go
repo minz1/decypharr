@@ -235,3 +235,59 @@ func TestRestoreReadFailureDoesNotStrandRecords(t *testing.T) {
 		t.Fatalf("records = %v, want the valid one still returned", got)
 	}
 }
+
+type syncCountingQueue struct {
+	QueueStore
+
+	syncs   int
+	syncErr error
+}
+
+func (q *syncCountingQueue) Sync() error {
+	q.syncs++
+	return q.syncErr
+}
+
+func TestUpdateQueuedGrabDurableSyncs(t *testing.T) {
+	t.Parallel()
+	s, queue := newQueueTestStorage(t)
+	counting := &syncCountingQueue{QueueStore: queue}
+	s.queue = counting
+	entry := &Entry{InfoHash: "abc", Name: "n"}
+	if err := s.UpdateQueuedGrabDurable(entry); err != nil {
+		t.Fatal(err)
+	}
+	if counting.syncs != 1 {
+		t.Fatalf("syncs = %d, want 1", counting.syncs)
+	}
+	if _, err := s.GetQueued("abc"); err != nil {
+		t.Fatalf("record not stored: %v", err)
+	}
+
+	counting.syncErr = errors.New("disk full")
+	if err := s.UpdateQueuedGrabDurable(entry); !errors.Is(err, counting.syncErr) {
+		t.Fatalf("error = %v, want the sync error", err)
+	}
+	if counting.syncs != 2 {
+		t.Fatalf("syncs = %d, want 2", counting.syncs)
+	}
+}
+
+func TestStorageOptionsWrapQueue(t *testing.T) {
+	t.Parallel()
+	var wrapped *syncCountingQueue
+	s, err := NewStorage(t.TempDir(), Options{WrapQueue: func(q QueueStore) QueueStore {
+		wrapped = &syncCountingQueue{QueueStore: q}
+		return wrapped
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	if updateErr := s.UpdateQueuedGrabDurable(&Entry{InfoHash: "abc"}); updateErr != nil {
+		t.Fatal(updateErr)
+	}
+	if wrapped == nil || wrapped.syncs != 1 {
+		t.Fatalf("wrapped store not used: %+v", wrapped)
+	}
+}

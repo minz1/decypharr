@@ -67,7 +67,7 @@ func TestFailDownloadFailsGrabOnce(t *testing.T) {
 	t.Parallel()
 	var failCalls atomic.Int64
 	service := startFailDownloadService(t, failDownloadArr(t, true, false, &failCalls).URL)
-	job, err := service.FailDownload("sonarr", "DOWNLOADID", "entry")
+	job, _, err := service.FailDownload("sonarr", "DOWNLOADID", "entry", time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestFailDownloadSkipsAlreadyFailedGrab(t *testing.T) {
 	t.Parallel()
 	var failCalls atomic.Int64
 	service := startFailDownloadService(t, failDownloadArr(t, true, true, &failCalls).URL)
-	job, err := service.FailDownload("sonarr", "DOWNLOADID", "entry")
+	job, _, err := service.FailDownload("sonarr", "DOWNLOADID", "entry", time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestFailDownloadWithoutGrabFails(t *testing.T) {
 	t.Parallel()
 	var failCalls atomic.Int64
 	service := startFailDownloadService(t, failDownloadArr(t, false, false, &failCalls).URL)
-	job, err := service.FailDownload("sonarr", "DOWNLOADID", "entry")
+	job, _, err := service.FailDownload("sonarr", "DOWNLOADID", "entry", time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,18 +108,18 @@ func TestFailDownloadWithoutGrabFails(t *testing.T) {
 func TestFailDownloadDeduplicates(t *testing.T) {
 	t.Parallel()
 	service := startFailDownloadService(t, "")
-	first, err := service.FailDownload("sonarr", "ABC", "abc")
+	first, _, err := service.FailDownload("sonarr", "ABC", "abc", time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := service.FailDownload("sonarr", "ABC", "abc")
+	second, _, err := service.FailDownload("sonarr", "ABC", "abc", time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if first.ID != second.ID {
 		t.Fatalf("jobs %q and %q, want one", first.ID, second.ID)
 	}
-	if _, emptyErr := service.FailDownload("", "ABC", "abc"); emptyErr == nil {
+	if _, _, emptyErr := service.FailDownload("", "ABC", "abc", time.Time{}); emptyErr == nil {
 		t.Fatal("empty arr name accepted")
 	}
 }
@@ -127,19 +127,19 @@ func TestFailDownloadDeduplicates(t *testing.T) {
 func TestDownloadFailedJobRoundTrips(t *testing.T) {
 	t.Parallel()
 	service := startFailDownloadService(t, "")
-	job, err := service.FailDownload("sonarr", "ABC", "abc")
+	job, _, err := service.FailDownload("sonarr", "ABC", "abc", time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if validateErr := validateJob(*job); validateErr != nil {
+	if validateErr := validateJob(job); validateErr != nil {
 		t.Fatal(validateErr)
 	}
-	noID := *job
+	noID := job
 	noID.DownloadID = ""
 	if validateErr := validateJob(noID); validateErr == nil {
 		t.Fatal("download_failed job without download ID accepted")
 	}
-	other := *job
+	other := job
 	other.Strategy = StrategyHistoryFailed
 	if validateErr := validateJob(other); validateErr == nil {
 		t.Fatal("bindingless job with another strategy accepted")
@@ -169,7 +169,7 @@ func TestFailDownloadLookupErrorIsRetryable(t *testing.T) {
 func TestSettleJobRetriesFailedLookupUntilDeadline(t *testing.T) {
 	t.Parallel()
 	service := startFailDownloadService(t, "")
-	queued, err := service.FailDownload("sonarr", "DOWNLOADID", "entry")
+	queued, _, err := service.FailDownload("sonarr", "DOWNLOADID", "entry", time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +269,7 @@ func TestFailDownloadSkipsImportedDownload(t *testing.T) {
 	if startErr := service.Start(t.Context()); startErr != nil {
 		t.Fatal(startErr)
 	}
-	job, err := service.FailDownload("sonarr", "DOWNLOADID", "entry")
+	job, _, err := service.FailDownload("sonarr", "DOWNLOADID", "entry", time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +311,7 @@ func TestFailDownloadFailsARegrabOfAFailedHash(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	service := startFailDownloadService(t, server.URL)
-	job, err := service.FailDownload("sonarr", "DOWNLOADID", "entry")
+	job, _, err := service.FailDownload("sonarr", "DOWNLOADID", "entry", time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,7 +343,7 @@ func TestFailDownloadIgnoresAnImportFromAnOlderGrab(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	service := startFailDownloadService(t, server.URL)
-	job, err := service.FailDownload("sonarr", "DOWNLOADID", "entry")
+	job, _, err := service.FailDownload("sonarr", "DOWNLOADID", "entry", time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -436,25 +436,33 @@ func runWaitingJobFailDownload(t *testing.T, strategy Strategy, reruns bool) {
 	if startErr := service.Start(t.Context()); startErr != nil {
 		t.Fatal(startErr)
 	}
-	job, err := service.FailDownload("sonarr", waiting.DownloadID, "entry")
+	job, handed, err := service.FailDownload("sonarr", waiting.DownloadID, "entry", time.Time{})
+	if !reruns {
+		var other *OtherJobError
+		if !errors.As(err, &other) || other.Strategy != strategy {
+			t.Fatalf("FailDownload error = %v, want an OtherJobError for %s", err, strategy)
+		}
+		if jobs := service.Jobs(); len(jobs) != 1 {
+			t.Fatalf("jobs = %d, want only the waiting %s job", len(jobs), strategy)
+		}
+		if got, _ := service.Job(waiting.ID); got.Status != StatusWaitingForImport {
+			t.Fatalf("status = %s, want it still waiting for import", got.Status)
+		}
+		return
+	}
 	if err != nil {
 		t.Fatal(err)
+	}
+	if handed != HandedRequeued {
+		t.Fatalf("handed = %v, want requeued", handed)
 	}
 	if job.ID != waiting.ID {
 		t.Fatalf("FailDownload returned job %q, want the waiting job %q", job.ID, waiting.ID)
 	}
 	select {
-	case id := <-ran:
-		if !reruns {
-			t.Fatalf("job %q reran", id)
-		}
-	case <-time.After(200 * time.Millisecond):
-		if reruns {
-			t.Fatal("waiting job did not rerun")
-		}
-		if got, _ := service.Job(waiting.ID); got.Status != StatusWaitingForImport {
-			t.Fatalf("status = %s, want it still waiting for import", got.Status)
-		}
+	case <-ran:
+	case <-time.After(5 * time.Second):
+		t.Fatal("waiting job did not rerun")
 	}
 }
 
@@ -487,11 +495,14 @@ func TestFailDownloadReturnsARunningHistoryFailedJob(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("job never started")
 	}
-	got, err := service.FailDownload("sonarr", job.DownloadID, "entry")
+	got, handed, err := service.FailDownload("sonarr", job.DownloadID, "entry", time.Time{})
 	if err != nil {
 		t.Fatalf("FailDownload on a running job: %v", err)
 	}
 	if got.ID != job.ID {
 		t.Fatalf("FailDownload returned job %q, want the running job %q", got.ID, job.ID)
+	}
+	if handed != HandedExisting {
+		t.Fatalf("handed = %v, want existing", handed)
 	}
 }

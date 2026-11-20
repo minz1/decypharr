@@ -36,10 +36,20 @@ func legacyStoreNames() []string {
 	return []string{"repair_jobs", "repair_keys"}
 }
 
+type QueueStore interface {
+	Put(key string, value []byte, options *appendstore.PutOptions) error
+	Get(key string) ([]byte, error)
+	Delete(key string) error
+	ForEach(fn func(key string, value []byte) error) error
+	Sync() error
+	Close() error
+	DiskSize() int64
+}
+
 // Storage handles application persistence using appendstore.
 type Storage struct {
 	entries     *kvstore.Store
-	queue       *kvstore.Store
+	queue       QueueStore
 	entryItems  *kvstore.Store
 	repairState *kvstore.Store
 	repairRuns  *kvstore.Store
@@ -103,7 +113,8 @@ type Options struct {
 	// change applies to later writes. Nil means the default scheme.
 	FolderNaming func() config.WebDavFolderNaming
 	// Logger receives background-operation and migration messages.
-	Logger zerolog.Logger
+	Logger    zerolog.Logger
+	WrapQueue func(QueueStore) QueueStore
 }
 
 // NewStorage opens (creating if needed) the stores under dbPath.
@@ -144,9 +155,14 @@ func NewStorage(dbPath string, opts Options) (*Storage, error) {
 		return nil, fmt.Errorf("failed to create item stores: %w", err)
 	}
 
+	var queue QueueStore = itemStores["queue"]
+	if opts.WrapQueue != nil {
+		queue = opts.WrapQueue(queue)
+	}
+
 	s := &Storage{
 		entries:     itemStores["entries"],
-		queue:       itemStores["queue"],
+		queue:       queue,
 		entryItems:  itemStores["items"],
 		repairState: itemStores["repair_state"],
 		repairRuns:  itemStores["repair_runs"],
@@ -175,12 +191,17 @@ func (s *Storage) folderNaming() config.WebDavFolderNaming {
 
 func (s *Storage) Close() error {
 	var errs []error
-	stores := []*kvstore.Store{s.entries, s.queue, s.entryItems, s.repairState, s.repairRuns, s.prune}
+	stores := []*kvstore.Store{s.entries, s.entryItems, s.repairState, s.repairRuns, s.prune}
 	for _, store := range stores {
 		if store == nil {
 			continue
 		}
 		if err := store.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if s.queue != nil {
+		if err := s.queue.Close(); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -193,10 +214,13 @@ func (s *Storage) Close() error {
 // DiskSize returns the total on-disk size of all stores (O(1), no filesystem walk).
 func (s *Storage) DiskSize() int64 {
 	var size int64
-	for _, store := range []*kvstore.Store{s.entries, s.queue, s.entryItems, s.repairState, s.repairRuns, s.prune} {
+	for _, store := range []*kvstore.Store{s.entries, s.entryItems, s.repairState, s.repairRuns, s.prune} {
 		if store != nil {
 			size += store.DiskSize()
 		}
+	}
+	if s.queue != nil {
+		size += s.queue.DiskSize()
 	}
 	return size
 }

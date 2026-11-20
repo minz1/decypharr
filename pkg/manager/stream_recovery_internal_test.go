@@ -49,20 +49,28 @@ func (f *fakeArrRecovery) Ready() bool { return !f.notReady }
 
 func (f *fakeArrRecovery) Jobs() []reacquire.Job { return f.jobs }
 
-func (f *fakeArrRecovery) FailDownload(arrName, downloadID, entryID string) (*reacquire.Job, error) {
+func (f *fakeArrRecovery) FailJob(string, string, string, time.Time) (reacquire.Job, bool) {
+	return reacquire.Job{}, false
+}
+
+func (f *fakeArrRecovery) JobByID(string) (reacquire.Job, bool) { return reacquire.Job{}, false }
+
+func (f *fakeArrRecovery) FailDownload(
+	arrName, downloadID, entryID string, _ time.Time,
+) (reacquire.Job, reacquire.Handed, error) {
 	f.failMu.Lock()
 	f.fails = append(f.fails, [3]string{arrName, downloadID, entryID})
 	f.failMu.Unlock()
 	if f.failErr != nil {
-		return nil, f.failErr
+		return reacquire.Job{}, 0, f.failErr
 	}
 	if f.failWhen != nil && f.failWhen(entryID) {
-		return nil, errors.New("arr unreachable")
+		return reacquire.Job{}, 0, errors.New("arr unreachable")
 	}
 	if f.onFail != nil {
 		f.onFail(entryID)
 	}
-	return &reacquire.Job{ID: "fail-1"}, nil
+	return reacquire.Job{ID: "fail-1"}, reacquire.HandedCreated, nil
 }
 
 func (f *fakeArrRecovery) Lookup(entryID, fileID string) (reacquire.Binding, bool) {

@@ -773,7 +773,7 @@ func arrNameHash(arrName string) string {
 	return hex.EncodeToString(hash[:])
 }
 
-func deleteStoreKey(store *kvstore.Store, key string) error {
+func deleteStoreKey(store interface{ Delete(string) error }, key string) error {
 	if err := store.Delete(key); err != nil && !errors.Is(err, appendstore.ErrKeyNotFound) {
 		return err
 	}

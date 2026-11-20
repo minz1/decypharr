@@ -23,7 +23,9 @@ import (
 type ArrRecovery interface {
 	Lookup(entryID, fileID string) (reacquire.Binding, bool)
 	Reacquire(reacquire.Request) (*reacquire.Job, error)
-	FailDownload(arrName, downloadID, entryID string) (*reacquire.Job, error)
+	FailDownload(arrName, downloadID, entryID string, since time.Time) (reacquire.Job, reacquire.Handed, error)
+	FailJob(arrName, downloadID, entryID string, since time.Time) (reacquire.Job, bool)
+	JobByID(id string) (reacquire.Job, bool)
 	Jobs() []reacquire.Job
 	Ready() bool
 }
@@ -201,17 +203,22 @@ func (m *Manager) failGrab(entry *storage.Entry, recovery ArrRecovery, arrName, 
 	if err := m.arr.AdmitFailGrab(ctx, arrName, downloadID, provider); err != nil {
 		return err
 	}
-	job, err := recovery.FailDownload(arrName, downloadID, entry.InfoHash)
+	job, handed, err := recovery.FailDownload(arrName, downloadID, entry.InfoHash, time.Time{})
 	if err != nil {
 		m.arr.ReleaseFailGrab(arrName, downloadID, provider)
 		return fmt.Errorf("fail download in %s: %w", arrName, err)
 	}
-	m.arr.CommitFailGrab(arrName, downloadID, provider)
-	event := m.logger.Info().Str("infohash", entry.InfoHash).Str("name", entry.Name).Str("arr", arrName)
-	if job != nil {
-		event = event.Str("job", job.ID)
+	if handed == reacquire.HandedExisting {
+		m.arr.ReleaseFailGrab(arrName, downloadID, provider)
+	} else {
+		m.arr.CommitFailGrab(arrName, downloadID, provider)
 	}
-	event.Msg(reason + "; failing its grab in the Arr")
+	m.logger.Info().
+		Str("infohash", entry.InfoHash).
+		Str("name", entry.Name).
+		Str("arr", arrName).
+		Str("job", job.ID).
+		Msg(reason + "; failing its grab in the Arr")
 	return nil
 }
 

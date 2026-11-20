@@ -73,6 +73,8 @@ type Service struct {
 	jobsMu               sync.RWMutex
 	jobs                 map[string]Job
 	activeReacquisitions map[jobKey]string
+	staged               map[jobKey]Job
+	keyReleased          func(arrName, downloadID string)
 	// beforeMaintenanceCtx, when set, is called in completeJobFromIndex just before it reads the worker's
 	// context. It is a seam for tests that hold a public entry point in flight there while Close queues for the
 	// write lock; completeJobFromIndex takes no lock, so nothing may block there for good.
@@ -110,6 +112,7 @@ func NewService(g *task.Group, options ServiceOptions) (*Service, error) {
 		handler:              options.Handler,
 		jobs:                 make(map[string]Job),
 		activeReacquisitions: make(map[jobKey]string),
+		staged:               make(map[jobKey]Job),
 	}
 	// The repositories opened above are closed by this task, so a service whose Start never runs still closes.
 	if goErr := g.Go("close", service.closeWhenStopped); goErr != nil {
