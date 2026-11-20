@@ -1,7 +1,14 @@
 import { cloneRow, field } from "#ui/lib/common/dom";
 import { formatBytes } from "#ui/lib/common/format";
 import { pageItems, renderPageItems, showingText } from "#ui/lib/common/pagination";
-import { progressColor, progressPercent, protocolBadge, stateBadge, torrentSpeed } from "#ui/lib/dashboard/model";
+import {
+  arrFailText,
+  progressColor,
+  progressPercent,
+  protocolBadge,
+  stateBadge,
+  torrentSpeed,
+} from "#ui/lib/dashboard/model";
 import type { DashboardRefs, DashboardState, Torrent } from "#ui/lib/dashboard/types";
 
 const HASH_PREFIX = 8;
@@ -38,6 +45,7 @@ const fillState = (row: ParentNode, torrent: Torrent): void => {
   const target = field(row, "state");
   target.classList.add(badge.className);
   target.textContent = badge.text;
+  field(row, "arr-fail").textContent = arrFailText(torrent.arrFail);
 };
 
 const fillSelection = (row: HTMLTableRowElement, torrent: Torrent, selected: boolean): void => {

@@ -10,6 +10,16 @@ interface Torrent {
   numSeeds: number;
   phase: string;
   label: string;
+  arrFail?: ArrFail;
+}
+
+interface ArrFail {
+  state: string;
+  arr: string;
+  waiting?: string;
+  lastError?: string;
+  nextRetry?: string;
+  jobStatus?: string;
 }
 
 interface TorrentPage {
@@ -64,4 +74,14 @@ interface Dashboard {
   menuTorrent: MenuTorrent | undefined;
 }
 
-export type { Badge, Dashboard, DashboardRefs, DashboardState, MenuTorrent, ProtocolBadge, Torrent, TorrentPage };
+export type {
+  ArrFail,
+  Badge,
+  Dashboard,
+  DashboardRefs,
+  DashboardState,
+  MenuTorrent,
+  ProtocolBadge,
+  Torrent,
+  TorrentPage,
+};

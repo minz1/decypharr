@@ -128,3 +128,34 @@ func TestGetTorrentsFailureCauseOnlyWhileFailed(t *testing.T) {
 		t.Fatalf("failure_cause by torrent = %v, want only dead to carry it", causes)
 	}
 }
+
+func TestGetTorrentsArrFailOnlyWhileTold(t *testing.T) {
+	t.Parallel()
+	mgr, store := managertest.New(t, func(cfg *config.Config) { cfg.UseAuth = false })
+	s := &Server{manager: mgr, config: store}
+	failure := grab.Failure{Reason: "r", At: time.Now()}
+	queueGrabAt(t, mgr, "told", grab.State{
+		Phase: grab.PhaseFailed, Failure: failure, ArrFail: grab.ArrFail{State: grab.ArrFailSkipped, Arr: "sonarr"},
+	})
+	queueGrabAt(t, mgr, "plain", grab.State{Phase: grab.PhaseFailed, Failure: failure})
+
+	w := httptest.NewRecorder()
+	s.handleGetTorrents(w, httptest.NewRequest(http.MethodGet, "/api/torrents", nil))
+	var got struct {
+		Torrents []map[string]any `json:"torrents"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	byHash := map[string]map[string]any{}
+	for _, item := range got.Torrents {
+		byHash[item["info_hash"].(string)] = item
+	}
+	fail, ok := byHash["told"]["arr_fail"].(map[string]any)
+	if !ok || fail["state"] != "skipped" || fail["arr"] != "sonarr" {
+		t.Fatalf("told arr_fail = %v, want skipped for sonarr", byHash["told"]["arr_fail"])
+	}
+	if _, present := byHash["plain"]["arr_fail"]; present {
+		t.Fatalf("plain carries arr_fail: %v", byHash["plain"])
+	}
+}

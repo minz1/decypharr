@@ -139,7 +139,8 @@ type dashboardTorrent struct {
 	Phase string `json:"phase"`
 	Label string `json:"label"`
 
-	FailureCause string `json:"failure_cause,omitempty"`
+	FailureCause string               `json:"failure_cause,omitempty"`
+	ArrFail      *manager.ArrFailView `json:"arr_fail,omitempty"`
 }
 
 func (s *Server) handleGetTorrents(w http.ResponseWriter, r *http.Request) {
@@ -165,6 +166,9 @@ func (s *Server) handleGetTorrents(w http.ResponseWriter, r *http.Request) {
 		allTorrents[i] = &dashboardTorrent{Entry: &views[i].Entry, Phase: views[i].State.Phase.String(), Label: p.Label}
 		if views[i].State.Phase == grab.PhaseFailed {
 			allTorrents[i].FailureCause = views[i].State.Failure.Cause
+			if v, ok := s.manager.ArrFailView(views[i]); ok {
+				allTorrents[i].ArrFail = &v
+			}
 		}
 	}
 

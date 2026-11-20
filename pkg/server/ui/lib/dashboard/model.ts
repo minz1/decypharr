@@ -1,6 +1,6 @@
 import { formatSpeed } from "#ui/lib/common/format";
 import { asRecord, num, optList, optNum, optStr, str } from "#ui/lib/common/json";
-import type { Badge, DashboardState, ProtocolBadge, Torrent, TorrentPage } from "#ui/lib/dashboard/types";
+import type { ArrFail, Badge, DashboardState, ProtocolBadge, Torrent, TorrentPage } from "#ui/lib/dashboard/types";
 
 const PER_PAGE = 20;
 const PERCENT = 100;
@@ -24,8 +24,26 @@ const PROTOCOL_BADGES: Readonly<Record<string, ProtocolBadge>> = {
   nzb: { className: "badge-secondary", icon: "bi-newspaper", text: "Usenet" },
 };
 
+const parseArrFail = (value: unknown): ArrFail => {
+  const record = asRecord(value, "arr_fail");
+  const waiting = optStr(record, "waiting");
+  const lastError = optStr(record, "last_error");
+  const nextRetry = optStr(record, "next_retry");
+  const jobStatus = optStr(record, "job_status");
+  return {
+    state: str(record, "state"),
+    arr: str(record, "arr"),
+    ...(waiting === undefined ? {} : { waiting }),
+    ...(lastError === undefined ? {} : { lastError }),
+    ...(nextRetry === undefined ? {} : { nextRetry }),
+    ...(jobStatus === undefined ? {} : { jobStatus }),
+  };
+};
+
 const parseTorrent = (value: unknown): Torrent => {
   const record = asRecord(value, "torrent");
+  const arrFail =
+    record["arr_fail"] === undefined || record["arr_fail"] === null ? undefined : parseArrFail(record["arr_fail"]);
   return {
     infoHash: str(record, "info_hash"),
     name: str(record, "name"),
@@ -38,6 +56,7 @@ const parseTorrent = (value: unknown): Torrent => {
     numSeeds: optNum(record, "num_seeds") ?? optNum(record, "seeders") ?? 0,
     phase: optStr(record, "phase") ?? "",
     label: optStr(record, "label") ?? "",
+    ...(arrFail === undefined ? {} : { arrFail }),
   };
 };
 
@@ -117,6 +136,37 @@ const progressColor = (percent: number): string => {
   return percent < MID_PERCENT ? "progress-warning" : "progress-info";
 };
 
+const WAITING_TEXT: Readonly<Record<string, string>> = {
+  arr_not_registered: "waiting for {arr} to register",
+  other_job_active: "waiting for another job",
+};
+
+const pendingNote = (arrFail: ArrFail): string => {
+  if (arrFail.waiting !== undefined) {
+    return (WAITING_TEXT[arrFail.waiting] ?? arrFail.waiting).replace("{arr}", arrFail.arr);
+  }
+  const retry = arrFail.nextRetry === undefined ? [] : [`retry ${new Date(arrFail.nextRetry).toLocaleTimeString()}`];
+  return [...(arrFail.lastError === undefined ? [] : [arrFail.lastError]), ...retry].join("; ");
+};
+
+const arrFailText = (arrFail: ArrFail | undefined): string => {
+  if (arrFail === undefined) {
+    return "";
+  }
+  switch (arrFail.state) {
+    case "pending": {
+      const note = pendingNote(arrFail);
+      return `telling ${arrFail.arr}${note === "" ? "" : ` (${note})`}`;
+    }
+    case "queued": {
+      return `fail job queued${arrFail.jobStatus === undefined ? "" : ` (${arrFail.jobStatus})`}`;
+    }
+    default: {
+      return "not told";
+    }
+  }
+};
+
 const stateBadge = (phase: string, label: string): Badge => ({
   className: STATE_BADGES[phase] ?? "badge-ghost",
   text: label === "" ? phase : label,
@@ -133,6 +183,7 @@ const torrentSpeed = (bytesPerSecond: number | undefined): string =>
   bytesPerSecond === undefined || bytesPerSecond === 0 ? "-" : formatSpeed(bytesPerSecond);
 
 export {
+  arrFailText,
   createDashboardState,
   deleteSelectedURL,
   deleteTorrentURL,
