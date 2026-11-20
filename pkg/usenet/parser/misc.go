@@ -222,7 +222,7 @@ func checkSegmentNumbers(file manifest.File) (int, error) {
 		return minNum, nil
 	}
 	holes := &SegmentHolesError{File: file.Filename, Present: len(distinct), Span: span, Repeated: repeated}
-	if len(distinct) < span && !file.Rewritten && minNum == 1 {
+	if len(distinct) < span && repeated == 0 && !file.Rewritten && minNum == 1 {
 		return 0, holes
 	}
 	return 0, errors.New(holes.Error())

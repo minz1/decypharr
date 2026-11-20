@@ -606,9 +606,9 @@ func TestSegmentNumbersHoles(t *testing.T) {
 		untyped   [3]int
 	}{
 		{name: "gap", numbers: []int{1, 3}, hole: typed(2, 3, 0)},
-		{name: "repeat then gap", numbers: []int{1, 2, 2, 4}, hole: typed(3, 4, 1)},
-		{name: "repeat of the first", numbers: []int{1, 1, 3}, hole: typed(2, 3, 1)},
-		{name: "triple repeat", numbers: []int{1, 1, 1, 4}, hole: typed(2, 4, 2)},
+		{name: "repeat then gap", numbers: []int{1, 2, 2, 4}, untyped: [3]int{3, 4, 1}},
+		{name: "repeat of the first", numbers: []int{1, 1, 3}, untyped: [3]int{2, 3, 1}},
+		{name: "triple repeat", numbers: []int{1, 1, 1, 4}, untyped: [3]int{2, 4, 2}},
 		{name: "zero based gap", numbers: []int{0, 1, 3}, untyped: [3]int{3, 4, 0}},
 		{name: "zero based gap at the start", numbers: []int{0, 2, 3}, untyped: [3]int{3, 4, 0}},
 		{name: "gap numbered from two", numbers: []int{2, 4}, untyped: [3]int{2, 3, 0}},
