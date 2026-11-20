@@ -57,8 +57,7 @@ type failoverState struct {
 }
 
 func (s *failoverState) track(provider config.UsenetProvider, err error) {
-	if typed, ok := errors.AsType[*Error](err); ok &&
-		typed.Type == ErrorTypeArticleNotFound && typed.Code == codeNoSuchArticle {
+	if isNoSuchArticle(err) {
 		if s.missingIDs == nil {
 			s.missingIDs = make(map[string]struct{})
 		}
@@ -149,9 +148,6 @@ func (c *Client) ExecuteWithFailover(ctx context.Context, workload Workload, fn 
 	return c.execute(ctx, workload, fn, false)
 }
 
-// ExecuteArticle is ExecuteWithFailover for one request about one message ID
-// per attempt. When every configured provider answered 430, the error is a
-// *NotFoundEverywhereError.
 func (c *Client) ExecuteArticle(ctx context.Context, workload Workload, fn func(conn *Connection) error) error {
 	return c.execute(ctx, workload, fn, true)
 }

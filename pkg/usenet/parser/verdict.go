@@ -3,8 +3,10 @@ package parser
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/sirrobot01/decypharr/pkg/storage"
+	"github.com/sirrobot01/decypharr/pkg/usenet/manifest"
 )
 
 type ContentMissingError struct{ Err error }
@@ -96,4 +98,13 @@ func (p *NZBParser) proofNameAllowed(group *FileGroup, nzbName string) bool {
 		}
 	}
 	return true
+}
+
+func (p *NZBParser) refusesNamedFile(name string) bool {
+	ext := filepath.Ext(strings.ToLower(name))
+	return strings.Trim(strings.TrimPrefix(ext, "."), "0123456789") != "" && p.fileAllowed(name, 0) != nil
+}
+
+func ambiguousSample(file manifest.File) bool {
+	return file.Rewritten || hasRepeatedNumbers(file.Segments)
 }

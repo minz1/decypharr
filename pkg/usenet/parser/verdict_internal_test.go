@@ -221,6 +221,54 @@ func TestParseDuplicateNumberAlternativeIsNotProof(t *testing.T) {
 	}
 }
 
+func TestParseDroppedAlternateIsNotProof(t *testing.T) {
+	t.Parallel()
+	source := scriptSource{header: provenHeaders, stat: func(id string) error {
+		if id == "a@x" {
+			return proven430()
+		}
+		return nil
+	}}
+	p := NewParserWithSource(source, 2, zerolog.Nop())
+	verdict, err := parseVerdict(t, p, nzbOf(fileXML(1, 1, "movie.mkv", "1:a@x", "2:b@x", "1:b@x", "3:c@x")))
+	if !errors.Is(err, customerror.ErrUsenetSegmentMissing) || verdict != VerdictNone {
+		t.Fatalf("error = %v verdict %v, want missing without a verdict", err, verdict)
+	}
+}
+
+func TestParseJoinedProofIsNotProof(t *testing.T) {
+	t.Parallel()
+	joined := func() error { return errors.Join(proven430(), context.DeadlineExceeded) }
+	rows := []struct {
+		name   string
+		source scriptSource
+		file   string
+	}{
+		{
+			name:   "probe",
+			source: scriptSource{header: provenHeaders, stat: func(string) error { return joined() }},
+			file:   "movie.mkv",
+		},
+		{
+			name: "header walk",
+			source: scriptSource{stat: provenStat, header: func(string) (*nntp.YencMetadata, error) {
+				return nil, joined()
+			}},
+			file: deadOne,
+		},
+	}
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
+			p := NewParserWithSource(row.source, 2, zerolog.Nop())
+			_, err := parseVerdict(t, p, nzbOf(fileXML(1, 1, row.file, "1:a@x", "2:b@x")))
+			if err == nil || VerdictOf(err) != VerdictNone {
+				t.Fatalf("error = %v verdict %v, want no verdict", err, VerdictOf(err))
+			}
+		})
+	}
+}
+
 func TestParseDuplicateNumberUniqueControlIsProof(t *testing.T) {
 	t.Parallel()
 	source := scriptSource{header: provenHeaders, stat: provenStat}
@@ -346,6 +394,37 @@ func refuseSamples(name string, _ int64) error {
 		return errors.New("sample refused")
 	}
 	return nil
+}
+
+func onlyMKV(name string, _ int64) error {
+	if strings.HasSuffix(strings.ToLower(name), ".mkv") {
+		return nil
+	}
+	return errors.New("extension refused")
+}
+
+func TestRefusedExtensionAllMissingWithholdsProof(t *testing.T) {
+	t.Parallel()
+	source := scriptSource{stat: provenStat, header: provenHeaders}
+	rows := []struct {
+		name string
+		file string
+		want Verdict
+	}{
+		{name: "refused extension", file: "book.epub", want: VerdictNone},
+		{name: "obfuscated name without an extension", file: deadOne, want: VerdictArticlesMissing},
+		{name: "numeric extension", file: "release.001x.7", want: VerdictArticlesMissing},
+	}
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
+			p := NewParserWithSource(source, 2, zerolog.Nop()).WithFileFilter(onlyMKV)
+			verdict, err := parseVerdict(t, p, nzbOf(fileXML(1, 1, row.file, "1:a@x")))
+			if !errors.Is(err, customerror.ErrUsenetSegmentMissing) || verdict != row.want {
+				t.Fatalf("error = %v verdict %v, want %v", err, verdict, row.want)
+			}
+		})
+	}
 }
 
 func TestRefusedNamesWithholdProof(t *testing.T) {

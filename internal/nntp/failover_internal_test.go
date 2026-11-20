@@ -1,7 +1,9 @@
 package nntp
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"net"
 	"slices"
 	"sync"
@@ -351,5 +353,25 @@ func TestStatProves(t *testing.T) {
 	_, _, err := client.Stat(t.Context(), WorkloadDownload, "missing@example")
 	if !IsNotFoundEverywhere(err) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestFailoverJoined430IsNotProof(t *testing.T) {
+	t.Parallel()
+	joined := errors.Join(notFound430(), context.DeadlineExceeded)
+	_, err := runScripted(t, twoHosts(t, "", ""), true, map[string][]error{"a": {joined}, "b": {notFound430()}})
+	if err == nil || IsNotFoundEverywhere(err) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestIsNotFoundEverywhereRefusesAJoin(t *testing.T) {
+	t.Parallel()
+	proof := &NotFoundEverywhereError{Err: notFound430()}
+	if !IsNotFoundEverywhere(fmt.Errorf("stat: %w", proof)) {
+		t.Fatal("a wrapped proof is not read")
+	}
+	if IsNotFoundEverywhere(errors.Join(proof, context.DeadlineExceeded)) {
+		t.Fatal("a joined proof is read as proof")
 	}
 }

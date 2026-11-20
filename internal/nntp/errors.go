@@ -220,16 +220,37 @@ func IsYencDecodeError(err error) bool {
 	return errors.As(err, &nntpErr) && nntpErr.Type == ErrorTypeYencDecode
 }
 
-// NotFoundEverywhereError marks a single-message run in which every
-// configured provider answered 430 and no other failure occurred.
 type NotFoundEverywhereError struct{ Err error }
 
 func (e *NotFoundEverywhereError) Error() string { return e.Err.Error() }
 
 func (e *NotFoundEverywhereError) Unwrap() error { return e.Err }
 
-// IsNotFoundEverywhere reports whether err carries that proof.
+func (*NotFoundEverywhereError) provesMissing() {}
+
 func IsNotFoundEverywhere(err error) bool {
-	_, ok := errors.AsType[*NotFoundEverywhereError](err)
-	return ok
+	return onChain(err, func(node error) bool {
+		_, ok := node.(interface{ provesMissing() })
+		return ok
+	})
+}
+
+func (e *Error) noSuchArticle() bool {
+	return e.Type == ErrorTypeArticleNotFound && e.Code == codeNoSuchArticle
+}
+
+func isNoSuchArticle(err error) bool {
+	return onChain(err, func(node error) bool {
+		typed, ok := node.(interface{ noSuchArticle() bool })
+		return ok && typed.noSuchArticle()
+	})
+}
+
+func onChain(err error, match func(error) bool) bool {
+	for node := err; node != nil; node = errors.Unwrap(node) {
+		if match(node) {
+			return true
+		}
+	}
+	return false
 }

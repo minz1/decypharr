@@ -298,7 +298,7 @@ func (p *NZBParser) probeContentAvailability(
 		}
 		segment := group.Files[0].Segments[0]
 		probed++
-		if hasRepeatedNumbers(group.Files[0].Segments) {
+		if ambiguousSample(group.Files[0]) {
 			proven = false
 		}
 		if err := stat(ctx, segment.MessageID); err != nil {
@@ -407,8 +407,6 @@ func (p *NZBParser) process(
 	return nzb, nil
 }
 
-// groupFiles also reports whether files needed content detection and every one of them had only missing articles,
-// and whether any detection outcome leaves a file's type unproven.
 func (p *NZBParser) groupFiles(ctx context.Context, files []manifest.File) (map[string]*FileGroup, bool, bool) {
 	numberByDocumentOrder(files)
 
@@ -443,7 +441,8 @@ func (p *NZBParser) groupFiles(ctx context.Context, files []manifest.File) (map[
 	// Only detected, supported content proceeds to logical grouping.
 	for _, result := range unknownResults {
 		allMissing = allMissing && result.notFound
-		if result.fileType == storage.NZBFileTypeUnknown && !result.proven {
+		if result.fileType == storage.NZBFileTypeUnknown &&
+			(!result.proven || p.refusesNamedFile(result.file.Filename)) {
 			doubt = true
 		}
 		if result.fileType != storage.NZBFileTypeUnknown && result.fileType != storage.NZBFileTypeIgnore {
