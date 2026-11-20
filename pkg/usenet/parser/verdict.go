@@ -117,7 +117,7 @@ func (p *NZBParser) refusesNamedFile(name, nzbName string) bool {
 }
 
 func soleOutputName(nzbName, fileExt string) string {
-	if fileExt == "" || strings.EqualFold(filepath.Ext(nzbName), fileExt) {
+	if strings.EqualFold(filepath.Ext(nzbName), fileExt) {
 		return nzbName
 	}
 	return nzbName + fileExt

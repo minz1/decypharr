@@ -877,3 +877,19 @@ func TestVerdictOfRefusesAnEmbeddedWithheldProof(t *testing.T) {
 		t.Fatalf("verdict %v, want none", got)
 	}
 }
+
+func TestSoleOutputName(t *testing.T) {
+	t.Parallel()
+	rows := []struct{ nzbName, ext, want string }{
+		{"release", ".mkv", "release.mkv"},
+		{"release", "", "release"},
+		{"release.mkv", ".MKV", "release.mkv"},
+		{"release.mkv", ".mp4", "release.mkv.mp4"},
+		{"release.mkv", "", "release.mkv"},
+	}
+	for _, row := range rows {
+		if got := soleOutputName(row.nzbName, row.ext); got != row.want {
+			t.Errorf("soleOutputName(%q, %q) = %q, want %q", row.nzbName, row.ext, got, row.want)
+		}
+	}
+}
