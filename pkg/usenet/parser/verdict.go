@@ -1,10 +1,12 @@
 package parser
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
 
+	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 	"github.com/sirrobot01/decypharr/pkg/usenet/manifest"
 )
@@ -101,8 +103,18 @@ func (p *NZBParser) proofNameAllowed(group *FileGroup, nzbName string) bool {
 }
 
 func (p *NZBParser) refusesNamedFile(name string) bool {
-	ext := filepath.Ext(strings.ToLower(name))
-	return strings.Trim(strings.TrimPrefix(ext, "."), "0123456789") != "" && p.fileAllowed(name, 0) != nil
+	if errors.Is(p.fileAllowed(name, 0), config.ErrFileIsSample) {
+		return true
+	}
+	stem := name
+	for numericExtension(filepath.Ext(stem)) {
+		stem = strings.TrimSuffix(stem, filepath.Ext(stem))
+	}
+	return filepath.Ext(stem) != "" && p.fileAllowed(stem, 0) != nil
+}
+
+func numericExtension(ext string) bool {
+	return len(ext) > 1 && strings.Trim(ext[1:], "0123456789") == ""
 }
 
 func ambiguousSample(file manifest.File) bool {

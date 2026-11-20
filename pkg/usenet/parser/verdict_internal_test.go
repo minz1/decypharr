@@ -9,6 +9,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/internal/nntp"
 	"github.com/sirrobot01/decypharr/pkg/storage"
@@ -256,6 +257,13 @@ func TestParseJoinedProofIsNotProof(t *testing.T) {
 			}},
 			file: deadOne,
 		},
+		{
+			name: "header walk joining a content proof",
+			source: scriptSource{stat: provenStat, header: func(string) (*nntp.YencMetadata, error) {
+				return nil, errors.Join(&ContentMissingError{Err: proven430()}, context.DeadlineExceeded)
+			}},
+			file: deadOne,
+		},
 	}
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
@@ -406,19 +414,30 @@ func onlyMKV(name string, _ int64) error {
 func TestRefusedExtensionAllMissingWithholdsProof(t *testing.T) {
 	t.Parallel()
 	source := scriptSource{stat: provenStat, header: provenHeaders}
+	samples := (&config.Config{AllowedExt: []string{"mkv"}}).ValidateFileAllowed
 	rows := []struct {
-		name string
-		file string
-		want Verdict
+		name   string
+		file   string
+		filter func(string, int64) error
+		want   Verdict
 	}{
-		{name: "refused extension", file: "book.epub", want: VerdictNone},
-		{name: "obfuscated name without an extension", file: deadOne, want: VerdictArticlesMissing},
-		{name: "numeric extension", file: "release.001x.7", want: VerdictArticlesMissing},
+		{name: "refused extension", file: "book.epub", filter: onlyMKV, want: VerdictNone},
+		{name: "obfuscated name without an extension", file: deadOne, filter: onlyMKV, want: VerdictArticlesMissing},
+		{name: "numeric extension", file: deadOne + ".001", filter: onlyMKV, want: VerdictArticlesMissing},
+		{
+			name:   "numeric extension on an allowed name",
+			file:   "release.mkv.001",
+			filter: onlyMKV,
+			want:   VerdictArticlesMissing,
+		},
+		{name: "numeric extension on a refused name", file: "book.epub.001", filter: onlyMKV, want: VerdictNone},
+		{name: "numeric extension on a sample", file: "sample-clip.001", filter: samples, want: VerdictNone},
+		{name: "trailing dot", file: "release.", filter: onlyMKV, want: VerdictNone},
 	}
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
 			t.Parallel()
-			p := NewParserWithSource(source, 2, zerolog.Nop()).WithFileFilter(onlyMKV)
+			p := NewParserWithSource(source, 2, zerolog.Nop()).WithFileFilter(row.filter)
 			verdict, err := parseVerdict(t, p, nzbOf(fileXML(1, 1, row.file, "1:a@x")))
 			if !errors.Is(err, customerror.ErrUsenetSegmentMissing) || verdict != row.want {
 				t.Fatalf("error = %v verdict %v, want %v", err, verdict, row.want)

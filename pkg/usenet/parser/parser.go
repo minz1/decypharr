@@ -622,7 +622,7 @@ func (p *NZBParser) batchDetectContentTypes(ctx context.Context, unknownFiles []
 		result, err := p.inspectFileByContent(ctx, *f)
 		if err != nil {
 			result.notFound = nntp.IsArticleNotFoundError(err)
-			_, result.proven = errors.AsType[*ContentMissingError](err)
+			result.proven = VerdictOf(err) == VerdictArticlesMissing
 			p.logger.Trace().
 				Err(err).
 				Str("file", f.Filename).

@@ -375,3 +375,28 @@ func TestIsNotFoundEverywhereRefusesAJoin(t *testing.T) {
 		t.Fatal("a joined proof is read as proof")
 	}
 }
+
+func TestFailoverTimeoutAround430IsNotProof(t *testing.T) {
+	t.Parallel()
+	timeout := NewTimeoutError(notFound430())
+	_, err := runScripted(t, twoHosts(t, "", ""), true, map[string][]error{"a": {timeout}, "b": {notFound430()}})
+	if err == nil || IsNotFoundEverywhere(err) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+type embeddedProofJoinError struct {
+	*NotFoundEverywhereError
+
+	other error
+}
+
+func (e embeddedProofJoinError) Unwrap() []error { return []error{e.NotFoundEverywhereError, e.other} }
+
+func TestIsNotFoundEverywhereRefusesAnEmbeddedProof(t *testing.T) {
+	t.Parallel()
+	proof := &NotFoundEverywhereError{Err: notFound430()}
+	if IsNotFoundEverywhere(embeddedProofJoinError{NotFoundEverywhereError: proof, other: context.DeadlineExceeded}) {
+		t.Fatal("an embedded proof beside a deadline is read as proof")
+	}
+}

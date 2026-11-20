@@ -226,30 +226,26 @@ func (e *NotFoundEverywhereError) Error() string { return e.Err.Error() }
 
 func (e *NotFoundEverywhereError) Unwrap() error { return e.Err }
 
-func (*NotFoundEverywhereError) provesMissing() {}
+func (e *NotFoundEverywhereError) proof() *NotFoundEverywhereError { return e }
+
+func (e *Error) nntpError() *Error { return e }
 
 func IsNotFoundEverywhere(err error) bool {
-	return onChain(err, func(node error) bool {
-		_, ok := node.(interface{ provesMissing() })
-		return ok
-	})
-}
-
-func (e *Error) noSuchArticle() bool {
-	return e.Type == ErrorTypeArticleNotFound && e.Code == codeNoSuchArticle
+	for node := err; node != nil; node = errors.Unwrap(node) {
+		if marked, ok := node.(interface {
+			proof() *NotFoundEverywhereError
+		}); ok && any(marked.proof()) == any(node) {
+			return true
+		}
+	}
+	return false
 }
 
 func isNoSuchArticle(err error) bool {
-	return onChain(err, func(node error) bool {
-		typed, ok := node.(interface{ noSuchArticle() bool })
-		return ok && typed.noSuchArticle()
-	})
-}
-
-func onChain(err error, match func(error) bool) bool {
 	for node := err; node != nil; node = errors.Unwrap(node) {
-		if match(node) {
-			return true
+		if typed, ok := node.(interface{ nntpError() *Error }); ok {
+			nntpErr := typed.nntpError()
+			return nntpErr.Type == ErrorTypeArticleNotFound && nntpErr.Code == codeNoSuchArticle
 		}
 	}
 	return false
