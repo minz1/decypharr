@@ -670,9 +670,8 @@ func (c *Client) safeExecute(conn *Connection, fn func(conn *Connection) error) 
 func (c *Client) getAnyAvailableConnection(
 	ctx context.Context,
 	workload Workload,
-	exclusions providerExclusions,
 ) (*Connection, config.UsenetProvider, error) {
-	return c.acquireAny(ctx, workload, exclusions, nil)
+	return c.acquireAny(ctx, workload, providerExclusions{}, nil)
 }
 
 func (c *Client) acquireAny(

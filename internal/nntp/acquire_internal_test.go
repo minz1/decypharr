@@ -58,7 +58,7 @@ func TestWaitForConnectionUnblocksOnRelease(t *testing.T) {
 	}
 	resCh := make(chan result, 1)
 	go func() {
-		got, _, err := c.getAnyAvailableConnection(context.Background(), WorkloadStreamDemand, providerExclusions{})
+		got, _, err := c.getAnyAvailableConnection(context.Background(), WorkloadStreamDemand)
 		resCh <- result{got, err}
 	}()
 
@@ -99,7 +99,7 @@ func TestWaitForConnectionCtxCancelUnblocks(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() {
-		_, _, err := c.getAnyAvailableConnection(ctx, WorkloadStreamDemand, providerExclusions{})
+		_, _, err := c.getAnyAvailableConnection(ctx, WorkloadStreamDemand)
 		errCh <- err
 	}()
 
@@ -130,7 +130,7 @@ func TestStreamDemandSpillsToBackupAfterConfiguredWait(t *testing.T) {
 	c := newTieredAcquireTestClient(t, primary, backup, spillover)
 
 	started := time.Now()
-	conn, provider, err := c.getAnyAvailableConnection(t.Context(), WorkloadStreamDemand, providerExclusions{})
+	conn, provider, err := c.getAnyAvailableConnection(t.Context(), WorkloadStreamDemand)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func TestOnlyStreamDemandCanSpillToBackup(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
 			defer cancel()
 
-			_, _, err := c.getAnyAvailableConnection(ctx, workload, providerExclusions{})
+			_, _, err := c.getAnyAvailableConnection(ctx, workload)
 			if !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatalf("error = %v, want context deadline", err)
 			}

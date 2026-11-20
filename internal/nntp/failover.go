@@ -196,14 +196,18 @@ func (c *Client) execute(
 			break
 		}
 	}
-	if lastErr != nil {
-		failed := fmt.Errorf("%w: %w", ErrAllProvidersFailed, lastErr)
-		if proveMissing && st.provenMissingEverywhere(c.providers) {
-			return &NotFoundEverywhereError{Err: failed}
-		}
-		return failed
+	return st.finalError(c.providers, lastErr, proveMissing)
+}
+
+func (s *failoverState) finalError(providers []config.UsenetProvider, lastErr error, proveMissing bool) error {
+	if lastErr == nil {
+		return ErrAllProvidersFailed
 	}
-	return ErrAllProvidersFailed
+	failed := fmt.Errorf("%w: %w", ErrAllProvidersFailed, lastErr)
+	if proveMissing && s.provenMissingEverywhere(providers) {
+		return &NotFoundEverywhereError{Err: failed}
+	}
+	return failed
 }
 
 // runAttempt runs fn on conn, then pools or discards conn by outcome.

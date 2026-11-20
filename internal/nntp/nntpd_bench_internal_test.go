@@ -194,7 +194,7 @@ func benchStreamPriority(b *testing.B, workload Workload) {
 	b.SetBytes(benchSegmentSize)
 	for b.Loop() {
 		started := time.Now()
-		conn, provider, err := client.getAnyAvailableConnection(context.Background(), workload, providerExclusions{})
+		conn, provider, err := client.getAnyAvailableConnection(context.Background(), workload)
 		if err != nil {
 			b.Fatal(err)
 		}

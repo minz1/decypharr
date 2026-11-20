@@ -82,7 +82,7 @@ func BenchmarkPoolCheckoutUncontended(b *testing.B) {
 	ctx := context.Background()
 
 	for b.Loop() {
-		conn, prov, err := c.getAnyAvailableConnection(ctx, WorkloadStreamDemand, providerExclusions{})
+		conn, prov, err := c.getAnyAvailableConnection(ctx, WorkloadStreamDemand)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -133,7 +133,7 @@ func benchmarkPriorityAdmission(b *testing.B, load, contender Workload) {
 	for range workers {
 		wg.Go(func() {
 			for ctx.Err() == nil {
-				conn, acquiredProvider, err := client.getAnyAvailableConnection(ctx, load, providerExclusions{})
+				conn, acquiredProvider, err := client.getAnyAvailableConnection(ctx, load)
 				if err != nil {
 					return
 				}
@@ -151,7 +151,6 @@ func benchmarkPriorityAdmission(b *testing.B, load, contender Workload) {
 		conn, acquiredProvider, err := client.getAnyAvailableConnection(
 			context.Background(),
 			contender,
-			providerExclusions{},
 		)
 		if err != nil {
 			b.Fatal(err)
@@ -208,7 +207,7 @@ func benchContended(b *testing.B, slots, workers int, hold time.Duration) {
 		wg.Go(func() {
 			for range jobs {
 				t0 := time.Now()
-				conn, prov, err := c.getAnyAvailableConnection(ctx, WorkloadStreamDemand, providerExclusions{})
+				conn, prov, err := c.getAnyAvailableConnection(ctx, WorkloadStreamDemand)
 				if err != nil {
 					b.Error(err)
 					return
@@ -305,7 +304,7 @@ func BenchmarkAcquireDeadPrimary(b *testing.B) {
 	ctx := context.Background()
 
 	for b.Loop() {
-		conn, prov, err := c.getAnyAvailableConnection(ctx, WorkloadStreamDemand, providerExclusions{})
+		conn, prov, err := c.getAnyAvailableConnection(ctx, WorkloadStreamDemand)
 		if err != nil {
 			b.Fatal(err)
 		}

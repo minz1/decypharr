@@ -102,8 +102,8 @@ func deadPort(t *testing.T) int {
 		t.Fatal(err)
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
-	if err := ln.Close(); err != nil {
-		t.Fatal(err)
+	if closeErr := ln.Close(); closeErr != nil {
+		t.Fatal(closeErr)
 	}
 	return port
 }
@@ -119,7 +119,9 @@ func livePort(t *testing.T) int {
 	return port
 }
 
-func failoverProvider(host string, port int, user string, priority int, backbone string, backup bool) config.UsenetProvider {
+func failoverProvider(
+	host string, port int, user string, priority int, backbone string, backup bool,
+) config.UsenetProvider {
 	return config.UsenetProvider{
 		Host: host, Port: port, Username: user, MaxConnections: 1,
 		Priority: priority, Backbone: backbone, Backup: backup,
@@ -165,7 +167,7 @@ func (s *scripted) fn(conn *Connection) error {
 	return err
 }
 
-func runScripted(t *testing.T, client *Client, prove bool, script map[string][]error) (error, []string) {
+func runScripted(t *testing.T, client *Client, prove bool, script map[string][]error) ([]string, error) {
 	t.Helper()
 	s := &scripted{script: script}
 	run := client.ExecuteWithFailover
@@ -173,7 +175,7 @@ func runScripted(t *testing.T, client *Client, prove bool, script map[string][]e
 		run = client.ExecuteArticle
 	}
 	err := run(t.Context(), WorkloadDownload, s.fn)
-	return err, s.seen
+	return s.seen, err
 }
 
 func twoHosts(t *testing.T, labelA, labelB string) *Client {
@@ -188,7 +190,7 @@ func twoHosts(t *testing.T, labelA, labelB string) *Client {
 func TestExecuteWithFailoverNeverProves(t *testing.T) {
 	t.Parallel()
 	client := twoHosts(t, "", "")
-	err, _ := runScripted(t, client, false, map[string][]error{"a": {notFound430()}, "b": {notFound430()}})
+	_, err := runScripted(t, client, false, map[string][]error{"a": {notFound430()}, "b": {notFound430()}})
 	if err == nil || IsNotFoundEverywhere(err) || !IsArticleNotFoundError(err) {
 		t.Fatalf("err = %v", err)
 	}
@@ -199,8 +201,8 @@ func TestFailoverEveryProvider430IsNotFoundEverywhere(t *testing.T) {
 	script := func() map[string][]error {
 		return map[string][]error{"a": {notFound430()}, "b": {notFound430()}}
 	}
-	plain, _ := runScripted(t, twoHosts(t, "", ""), false, script())
-	proven, _ := runScripted(t, twoHosts(t, "", ""), true, script())
+	_, plain := runScripted(t, twoHosts(t, "", ""), false, script())
+	_, proven := runScripted(t, twoHosts(t, "", ""), true, script())
 	if !IsNotFoundEverywhere(proven) || !IsArticleNotFoundError(proven) || !errors.Is(proven, ErrAllProvidersFailed) {
 		t.Fatalf("err = %v", proven)
 	}
@@ -212,7 +214,7 @@ func TestFailoverEveryProvider430IsNotFoundEverywhere(t *testing.T) {
 func TestFailoverSharedBackbone430CoversTheLabel(t *testing.T) {
 	t.Parallel()
 	client := twoHosts(t, "shared", "shared")
-	err, seen := runScripted(t, client, true, map[string][]error{"a": {notFound430()}})
+	seen, err := runScripted(t, client, true, map[string][]error{"a": {notFound430()}})
 	if !IsNotFoundEverywhere(err) || !slices.Equal(seen, []string{"a"}) {
 		t.Fatalf("err = %v, seen = %v", err, seen)
 	}
@@ -225,7 +227,7 @@ func TestFailoverSameHostSecondAccountIsNotProof(t *testing.T) {
 		failoverProvider("127.0.0.1", port, "a", 1, "", false),
 		failoverProvider("127.0.0.1", port, "b", 2, "", false),
 	)
-	err, seen := runScripted(t, client, true, map[string][]error{"a": {notFound430()}})
+	seen, err := runScripted(t, client, true, map[string][]error{"a": {notFound430()}})
 	if !IsArticleNotFoundError(err) || IsNotFoundEverywhere(err) || !slices.Equal(seen, []string{"a"}) {
 		t.Fatalf("err = %v, seen = %v", err, seen)
 	}
@@ -238,7 +240,7 @@ func TestFailoverBackupCoverage(t *testing.T) {
 		failoverProvider("127.0.0.1", port, "a", 1, "", false),
 		failoverProvider("127.0.0.1", port, "b", 2, "", true),
 	)
-	err, _ := runScripted(t, unlabelled, true, map[string][]error{"a": {notFound430()}})
+	_, err := runScripted(t, unlabelled, true, map[string][]error{"a": {notFound430()}})
 	if IsNotFoundEverywhere(err) {
 		t.Fatalf("unasked backup counted as covered: %v", err)
 	}
@@ -246,7 +248,7 @@ func TestFailoverBackupCoverage(t *testing.T) {
 		failoverProvider("127.0.0.1", port, "a", 1, "shared", false),
 		failoverProvider("127.0.0.1", port, "b", 2, "shared", true),
 	)
-	err, _ = runScripted(t, labelled, true, map[string][]error{"a": {notFound430()}})
+	_, err = runScripted(t, labelled, true, map[string][]error{"a": {notFound430()}})
 	if !IsNotFoundEverywhere(err) {
 		t.Fatalf("labelled backup not covered: %v", err)
 	}
@@ -258,7 +260,7 @@ func TestFailoverRecoveredAcquireFailureIsNotProof(t *testing.T) {
 		failoverProvider("localhost", deadPort(t), "a", 1, "shared", false),
 		failoverProvider("127.0.0.1", livePort(t), "b", 2, "shared", false),
 	)
-	err, seen := runScripted(t, client, true, map[string][]error{"b": {notFound430()}})
+	seen, err := runScripted(t, client, true, map[string][]error{"b": {notFound430()}})
 	if !IsArticleNotFoundError(err) || IsNotFoundEverywhere(err) || !slices.Equal(seen, []string{"b"}) {
 		t.Fatalf("err = %v, seen = %v", err, seen)
 	}
@@ -270,7 +272,7 @@ func TestFailoverTerminalAcquireFailureIsNotProof(t *testing.T) {
 		failoverProvider("127.0.0.1", livePort(t), "a", 1, "", false),
 		failoverProvider("localhost", deadPort(t), "b", 2, "", true),
 	)
-	err, _ := runScripted(t, client, true, map[string][]error{"a": {notFound430()}})
+	_, err := runScripted(t, client, true, map[string][]error{"a": {notFound430()}})
 	if err == nil || IsNotFoundEverywhere(err) {
 		t.Fatalf("err = %v", err)
 	}
@@ -279,7 +281,7 @@ func TestFailoverTerminalAcquireFailureIsNotProof(t *testing.T) {
 func TestFailoverTransientThenNotFoundIsNotProof(t *testing.T) {
 	t.Parallel()
 	transient := NewTimeoutError(errors.New("timeout"))
-	err, _ := runScripted(t, failoverClientRetries(t), true, map[string][]error{
+	_, err := runScripted(t, failoverClientRetries(t), true, map[string][]error{
 		"a": {transient, notFound430()},
 		"b": {notFound430()},
 	})
@@ -301,7 +303,7 @@ func TestFailoverNotFoundThenTransientIsNotProof(t *testing.T) {
 	t.Parallel()
 	transient := NewTimeoutError(errors.New("timeout"))
 	client := failoverClientRetries(t)
-	err, _ := runScripted(t, client, true, map[string][]error{
+	_, err := runScripted(t, client, true, map[string][]error{
 		"a": {notFound430()},
 		"b": {transient},
 	})
@@ -313,7 +315,7 @@ func TestFailoverNotFoundThenTransientIsNotProof(t *testing.T) {
 func TestFailoverSingleProviderTransientThenNotFoundIsNotProof(t *testing.T) {
 	t.Parallel()
 	client := failoverClient(t, 1, failoverProvider("127.0.0.1", livePort(t), "a", 1, "", false))
-	err, seen := runScripted(t, client, true, map[string][]error{
+	seen, err := runScripted(t, client, true, map[string][]error{
 		"a": {NewTimeoutError(errors.New("timeout")), notFound430()},
 	})
 	if !slices.Equal(seen, []string{"a", "a"}) || !IsArticleNotFoundError(err) || IsNotFoundEverywhere(err) {
@@ -324,7 +326,7 @@ func TestFailoverSingleProviderTransientThenNotFoundIsNotProof(t *testing.T) {
 func TestFailover423IsNotProof(t *testing.T) {
 	t.Parallel()
 	notInGroup := &Error{Type: ErrorTypeArticleNotFound, Code: 423, Message: "no article with that number"}
-	err, _ := runScripted(t, twoHosts(t, "", ""), true, map[string][]error{"a": {notInGroup}, "b": {notInGroup}})
+	_, err := runScripted(t, twoHosts(t, "", ""), true, map[string][]error{"a": {notInGroup}, "b": {notInGroup}})
 	if err == nil || IsNotFoundEverywhere(err) {
 		t.Fatalf("err = %v", err)
 	}
@@ -333,7 +335,7 @@ func TestFailover423IsNotProof(t *testing.T) {
 func TestFailoverNoDataBodyIsNotProof(t *testing.T) {
 	t.Parallel()
 	noData := &Error{Type: ErrorTypeArticleNotFound, Code: 222, Message: "no data"}
-	err, _ := runScripted(t, twoHosts(t, "", ""), true, map[string][]error{"a": {noData}, "b": {notFound430()}})
+	_, err := runScripted(t, twoHosts(t, "", ""), true, map[string][]error{"a": {noData}, "b": {notFound430()}})
 	if err == nil || IsNotFoundEverywhere(err) {
 		t.Fatalf("err = %v", err)
 	}

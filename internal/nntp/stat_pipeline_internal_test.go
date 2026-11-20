@@ -109,7 +109,6 @@ func TestBatchStatOnProviderYieldsToStreamBetweenPipelines(t *testing.T) {
 		streamConn, provider, err := client.getAnyAvailableConnection(
 			t.Context(),
 			WorkloadStreamDemand,
-			providerExclusions{},
 		)
 		if err != nil {
 			streamErr <- err

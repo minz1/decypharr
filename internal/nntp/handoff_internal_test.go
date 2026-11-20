@@ -56,7 +56,7 @@ func TestDialCooldownReroutesAroundDeadProvider(t *testing.T) {
 		pingInterval:   time.Hour,
 	})
 
-	got, prov, err := c.getAnyAvailableConnection(context.Background(), WorkloadStreamDemand, providerExclusions{})
+	got, prov, err := c.getAnyAvailableConnection(context.Background(), WorkloadStreamDemand)
 	if err != nil {
 		t.Fatalf("first acquisition failed: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestDialCooldownReroutesAroundDeadProvider(t *testing.T) {
 
 	// Subsequent acquisitions must not dial the dead provider again.
 	for range 5 {
-		got, prov, err = c.getAnyAvailableConnection(context.Background(), WorkloadStreamDemand, providerExclusions{})
+		got, prov, err = c.getAnyAvailableConnection(context.Background(), WorkloadStreamDemand)
 		if err != nil {
 			t.Fatalf("acquisition during cooldown failed: %v", err)
 		}
@@ -108,7 +108,7 @@ func TestDialCooldownKeepsSingleProviderFailFast(t *testing.T) {
 
 	for i := range 3 {
 		start := time.Now()
-		_, _, err := c.getAnyAvailableConnection(context.Background(), WorkloadStreamDemand, providerExclusions{})
+		_, _, err := c.getAnyAvailableConnection(context.Background(), WorkloadStreamDemand)
 		if err == nil {
 			t.Fatalf("attempt %d: expected dial error", i)
 		}
@@ -138,7 +138,6 @@ func TestHandoffFIFO(t *testing.T) {
 			got, prov, err := c.getAnyAvailableConnection(
 				context.Background(),
 				WorkloadStreamDemand,
-				providerExclusions{},
 			)
 			if err != nil {
 				t.Error(err)

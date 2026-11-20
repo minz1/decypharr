@@ -413,7 +413,8 @@ func nzbOf(files ...string) string {
 }
 
 func fileOf(date int, subject string, segments ...string) string {
-	return fmt.Sprintf(`<file poster="p" date="%d" subject="%s"><groups><group>g</group></groups><segments>%s</segments></file>`,
+	return fmt.Sprintf(
+		`<file poster="p" date="%d" subject="%s"><groups><group>g</group></groups><segments>%s</segments></file>`,
 		date, subject, strings.Join(segments, ""))
 }
 
