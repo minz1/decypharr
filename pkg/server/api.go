@@ -138,6 +138,8 @@ type dashboardTorrent struct {
 
 	Phase string `json:"phase"`
 	Label string `json:"label"`
+
+	FailureCause string `json:"failure_cause,omitempty"`
 }
 
 func (s *Server) handleGetTorrents(w http.ResponseWriter, r *http.Request) {
@@ -161,6 +163,9 @@ func (s *Server) handleGetTorrents(w http.ResponseWriter, r *http.Request) {
 		views[i].Entry.Sanitize()
 		p := grab.Project(views[i].State, views[i].Entry.Progress)
 		allTorrents[i] = &dashboardTorrent{Entry: &views[i].Entry, Phase: views[i].State.Phase.String(), Label: p.Label}
+		if views[i].State.Phase == grab.PhaseFailed {
+			allTorrents[i].FailureCause = views[i].State.Failure.Cause
+		}
 	}
 
 	filteredTorrents := make([]*dashboardTorrent, 0)

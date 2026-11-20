@@ -29,7 +29,9 @@ func queueGrabAt(t *testing.T, mgr *manager.Manager, key string, st grab.State) 
 	st.Key = key
 	switch st.Phase {
 	case grab.PhaseFailed:
-		st.Failure = grab.Failure{Reason: "refused", At: time.Now()}
+		if st.Failure.Reason == "" {
+			st.Failure = grab.Failure{Reason: "refused", At: time.Now()}
+		}
 	case grab.PhaseDeleting:
 		st.Cleanup = grab.Cleanup{DeleteFiles: true}
 	case grab.PhaseAbsent, grab.PhaseQueued, grab.PhaseThrottled, grab.PhaseSubmitting, grab.PhaseProvider,
@@ -99,5 +101,30 @@ func TestDeletingGrabOnDashboard(t *testing.T) {
 	got := listDashboard(t, s, "")
 	if len(got) != 1 || got[0].Phase != "deleting" || got[0].Label != "Deleting" {
 		t.Fatalf("listed %+v, want the deleting grab with its label", got)
+	}
+}
+
+func TestGetTorrentsFailureCauseOnlyWhileFailed(t *testing.T) {
+	t.Parallel()
+	mgr, store := managertest.New(t, func(cfg *config.Config) { cfg.UseAuth = false })
+	s := &Server{manager: mgr, config: store}
+	failure := grab.Failure{Reason: "r", Cause: grab.CauseSegmentsMissing, At: time.Now()}
+	queueGrabAt(t, mgr, "dead", grab.State{Phase: grab.PhaseFailed, Failure: failure})
+	queueGrabAt(t, mgr, "done", grab.State{Phase: grab.PhaseComplete, Failure: failure})
+
+	w := httptest.NewRecorder()
+	s.handleGetTorrents(w, httptest.NewRequest(http.MethodGet, "/api/torrents", nil))
+	var got struct {
+		Torrents []map[string]any `json:"torrents"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	causes := map[string]any{}
+	for _, item := range got.Torrents {
+		causes[item["info_hash"].(string)] = item["failure_cause"]
+	}
+	if len(causes) != 2 || causes["dead"] != grab.CauseSegmentsMissing || causes["done"] != nil {
+		t.Fatalf("failure_cause by torrent = %v, want only dead to carry it", causes)
 	}
 }
