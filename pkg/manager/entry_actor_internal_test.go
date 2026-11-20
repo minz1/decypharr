@@ -67,6 +67,7 @@ func newActorHarness(t *testing.T, store *storage.Storage) *actorHarness {
 	h.a = newEntryActor(root, entryDeps{
 		store:          store,
 		arrOwnsFailure: func(grab.Grab) bool { return false },
+		failArr:        func(grab.Grab) string { return "" },
 		grabs:          h.grabs,
 		logger:         zerolog.Nop(),
 		capacity:       1,

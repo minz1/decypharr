@@ -61,3 +61,14 @@ func (m *Manager) arrOwnsFailure(g grab.Grab) bool {
 	_, ok := m.Arr().Get(g.Entry.Category)
 	return ok
 }
+
+func (m *Manager) failArr(g grab.Grab) string {
+	if g.Entry == nil || !g.Entry.IsTorrent() || g.Entry.Manual || g.State.PackKey != "" {
+		return ""
+	}
+	a, ok := m.Arr().Get(g.Entry.Category)
+	if !ok {
+		return ""
+	}
+	return a.Name
+}

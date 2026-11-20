@@ -180,6 +180,7 @@ func stoppedManager(t *testing.T) *Manager {
 	a := newEntryActor(root, entryDeps{
 		store:          newTestStore(t),
 		arrOwnsFailure: func(grab.Grab) bool { return false },
+		failArr:        func(grab.Grab) string { return "" },
 		grabs:          grabs,
 		logger:         zerolog.Nop(), capacity: 1,
 		child: func(entryChildCall) func(context.Context) entryMsg {

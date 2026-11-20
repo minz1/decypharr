@@ -45,6 +45,7 @@ func newDroppedTestManager(t *testing.T, recovery ArrRecovery) (*Manager, *stora
 	}
 	m.entries = newEntryActor(m.work, entryDeps{
 		arrOwnsFailure: m.arrOwnsFailure,
+		failArr:        m.failArr,
 		store:          store, grabs: m.grabs, logger: zerolog.Nop(), capacity: 1, child: m.entryChild,
 		publish: store.PublishEntry, fail: func(grab.Grab, grab.FailEffect) {},
 		packOf:     func() map[string]string { return nil },

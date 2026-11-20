@@ -156,6 +156,9 @@ type entryDeps struct {
 	// zero is no limit.
 	removeStalledAfter time.Duration
 	arrOwnsFailure     func(g grab.Grab) bool
+	failArr            func(g grab.Grab) string
+	tell               func(g grab.Grab)
+	untell             func(key string, at time.Time)
 	// submitBudget is the longest a submit child may run; zero is one provider's limit and a minute.
 	submitBudget time.Duration
 	// expired runs what a grab that ran out its provider wait or its wait for links does outside its record; it must
@@ -441,6 +444,7 @@ func (a *entryActor) step(key string, st *entryState, m entryMsg, fx *keyed.Effe
 		fx.Reply(nil)
 		return
 	}
+	ev.Arr = a.failArrFor(cur, ev)
 	nextState, effects, err := grab.Transition(cur.State, ev)
 	if err != nil {
 		a.warnRefusedObservation(key, st, ev, err)
@@ -449,8 +453,10 @@ func (a *entryActor) step(key string, st *entryState, m entryMsg, fx *keyed.Effe
 	}
 	a.noteObservation(key, st, cur.State, nextState, ev)
 	a.noteSubmit(key, st, m, ev)
-	s := &entryStep{key: key, st: st, cur: cur, next: grab.Grab{State: nextState}, m: m, ev: ev, fx: fx}
-	s.durable = ev.Kind == grab.EvArrFailDone
+	s := &entryStep{
+		key: key, st: st, cur: cur, next: grab.Grab{State: nextState}, m: m, ev: ev, fx: fx,
+		durable: durableStep(ev, nextState),
+	}
 	if cur.Entry != nil {
 		s.next.Entry = cur.Entry.Clone()
 	}
@@ -481,6 +487,7 @@ func (a *entryActor) step(key string, st *entryState, m entryMsg, fx *keyed.Effe
 	if ev.Kind == grab.EvPendingDeadline || ev.Kind == grab.EvLinkWaitExpired {
 		a.expired(cur, ev.Kind)
 	}
+	a.untellLeft(key, cur, nextState)
 	if cur.State.Phase != grab.PhaseComplete && nextState.Phase == grab.PhaseComplete && s.next.Entry != nil {
 		a.completed(s.next)
 	}
@@ -602,6 +609,9 @@ func (a *entryActor) effect(s *entryStep, e grab.Effect) error {
 		st.releases = append(st.releases, placementRef{Provider: e.Provider, TorrentID: e.TorrentID})
 	case grab.FxFail:
 		a.fail(s.next, e.Fail)
+		if s.next.State.ArrFail.State == grab.ArrFailPending && a.tell != nil {
+			a.tell(s.next)
+		}
 	case grab.FxRemoveRecord:
 		if err := a.store.RemoveQueued(s.key, nil); err != nil {
 			return fmt.Errorf("remove queue record: %w", err)
@@ -938,4 +948,23 @@ func (a *entryActor) staleGone(cur grab.Grab, ev grab.Event) bool {
 		return false
 	}
 	return wantedHold(cur) != placementRef{Provider: ev.Provider, TorrentID: ev.TorrentID}
+}
+
+func (a *entryActor) failArrFor(cur grab.Grab, ev grab.Event) string {
+	if ev.Kind == grab.EvArrFailDone {
+		return ev.Arr
+	}
+	return a.failArr(cur)
+}
+
+func durableStep(ev grab.Event, next grab.State) bool {
+	return ev.Kind == grab.EvArrFailDone || next.Phase == grab.PhaseFailed && next.ArrFail.State == grab.ArrFailPending
+}
+
+func (a *entryActor) untellLeft(key string, cur grab.Grab, next grab.State) {
+	left := cur.State.Phase == grab.PhaseFailed && cur.State.ArrFail.State != grab.ArrFailNone &&
+		next.Phase != grab.PhaseFailed
+	if left && a.untell != nil {
+		a.untell(key, cur.State.Failure.At)
+	}
 }
