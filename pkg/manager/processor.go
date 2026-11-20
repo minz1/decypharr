@@ -285,7 +285,7 @@ func (e *throttledError) Unwrap() error { return e.err }
 
 // keptSubmission is the submit result of a stopped add, queued as still downloading. The result need not name its
 // provider (AllDebrid sets only the ID), and an entry with no active provider is never rebuilt into a job, so it takes
-// the provider, hash and DownloadUncached choice from the request's torrent.
+// the provider, the request hash read before the add and the resolved DownloadUncached choice.
 func keptSubmission(
 	submitted *debridTypes.Torrent,
 	provider, hash string,

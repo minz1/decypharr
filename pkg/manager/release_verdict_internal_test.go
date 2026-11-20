@@ -116,6 +116,7 @@ func TestASubmitEveryProviderRefusedFailsAsABadRelease(t *testing.T) {
 			[]debrid.Client{failed(), refusing("tb", customerror.ErrTorrentNotFound)},
 			grab.FailEntry,
 		},
+		"failed and untyped status": {[]debrid.Client{failed(), dead("tb")}, grab.FailEntry},
 		"dead status and transient": {[]debrid.Client{dead("rd"), refusing("tb", transient)}, grab.FailEntry},
 		"not found everywhere": {
 			[]debrid.Client{refusing("rd", customerror.ErrTorrentNotFound), refusing("tb", customerror.ErrTorrentNotFound)},
@@ -364,4 +365,30 @@ func TestADiscardedSubmitReleasesUnderTheRequestHash(t *testing.T) {
 			t.Fatalf("provider deletes = %d, want 1", got)
 		}
 	})
+}
+
+func TestAKeptSubmitKeepsTheRequestHash(t *testing.T) {
+	t.Parallel()
+	for name, checkErr := range map[string]error{
+		"status timeout":   customerror.ErrProviderStatusTimeout,
+		"transient status": customerror.NewProviderStatusError(errors.New("503"), 503),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			m := withTestConfig(t, &Manager{logger: zerolog.Nop(), clients: xsync.NewMap[string, debrid.Client]()})
+			m.clients.Store("rd", &mutatingProvider{
+				name:  "rd",
+				check: func(*types.Torrent) error { return checkErr },
+			})
+			uncached := true
+			req := &ImportRequest{Magnet: &utils.Magnet{InfoHash: "hash", Name: "name"}, DownloadUncached: &uncached}
+			got, err := m.sendToDebrid(t.Context(), req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.InfoHash != "hash" || !got.DownloadUncached {
+				t.Fatalf("kept hash %q uncached %t, want hash and uncached", got.InfoHash, got.DownloadUncached)
+			}
+		})
+	}
 }
