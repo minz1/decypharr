@@ -373,14 +373,7 @@ func (p *NZBParser) process(
 	// Calculate total Size
 	for _, file := range files {
 		if hasOneFile {
-			// Only append extension if NZB name doesn't already have the same extension
-			fileExt := filepath.Ext(file.Name)
-			nzbExt := filepath.Ext(nzb.Name)
-			if fileExt != "" && !strings.EqualFold(nzbExt, fileExt) {
-				file.Name = nzb.Name + fileExt
-			} else {
-				file.Name = nzb.Name
-			}
+			file.Name = soleOutputName(nzb.Name, filepath.Ext(file.Name))
 		}
 		if validateFileAllowedErr := p.fileAllowed(file.Name, file.Size); validateFileAllowedErr != nil {
 			skippedFiles++

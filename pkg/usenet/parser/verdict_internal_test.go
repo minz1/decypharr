@@ -796,7 +796,31 @@ func TestSampleNZBNameWithholdsProof(t *testing.T) {
 			files:   []string{deadOne},
 			want:    VerdictNone,
 		},
+		{
+			name:    "renamed to the bare sample name, media",
+			nzbName: "release.sample.mkv.nzb",
+			files:   []string{"movie.mkv"},
+			want:    VerdictNone,
+		},
+		{
+			name:    "renamed to the bare sample name, split",
+			nzbName: "release.sample.mkv.nzb",
+			files:   []string{"movie.mkv.001"},
+			want:    VerdictNone,
+		},
+		{
+			name:    "renamed to the bare sample name, obfuscated",
+			nzbName: "release.sample.mkv.nzb",
+			files:   []string{deadOne},
+			want:    VerdictNone,
+		},
 		{name: "plain name", nzbName: "release.nzb", files: []string{"movie.mkv.001"}, want: VerdictArticlesMissing},
+		{
+			name:    "plain media name",
+			nzbName: "release.mkv.nzb",
+			files:   []string{"movie.mkv"},
+			want:    VerdictArticlesMissing,
+		},
 		{
 			name: "sample name over named archives", nzbName: "sample-clip.nzb",
 			files: []string{"movie-one.zip", "movie-two.zip"}, want: VerdictArticlesMissing,

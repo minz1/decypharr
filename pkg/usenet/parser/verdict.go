@@ -87,7 +87,7 @@ func (p *NZBParser) proofNameAllowed(group *FileGroup, nzbName string) bool {
 	if ext == "" {
 		ext = filepath.Ext(group.ActualFilename)
 	}
-	names := []string{group.ActualFilename, group.BaseName + ext, nzbName + ext}
+	names := []string{group.ActualFilename, group.BaseName + ext, soleOutputName(nzbName, ext)}
 	for _, file := range group.Files {
 		names = append(names, file.Filename)
 	}
@@ -103,7 +103,7 @@ func (p *NZBParser) proofNameAllowed(group *FileGroup, nzbName string) bool {
 }
 
 func (p *NZBParser) refusesNamedFile(name, nzbName string) bool {
-	if p.refusesSample(name) || p.refusesSample(nzbName+".mkv") {
+	if p.refusesSample(name) || p.refusesSample(nzbName) || p.refusesSample(nzbName+".mkv") {
 		return true
 	}
 	stem := name
@@ -114,6 +114,13 @@ func (p *NZBParser) refusesNamedFile(name, nzbName string) bool {
 		return false
 	}
 	return filepath.Ext(stem) != "" && p.fileAllowed(stem, 0) != nil
+}
+
+func soleOutputName(nzbName, fileExt string) string {
+	if fileExt == "" || strings.EqualFold(filepath.Ext(nzbName), fileExt) {
+		return nzbName
+	}
+	return nzbName + fileExt
 }
 
 func numericExtension(ext string) bool {
