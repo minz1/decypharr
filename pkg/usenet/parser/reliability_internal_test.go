@@ -416,8 +416,8 @@ func TestProcessMediaFileReportsCause(t *testing.T) {
 			"movie.mkv", `file "movie.mkv" segment numbers are not contiguous`, nil,
 		},
 		{
-			"duplicate segment", media(seg(1, "a", 5), seg(1, "b", 5), seg(3, "c", 5)),
-			"movie.mkv", `file "movie.mkv" has duplicate segment number 1`, nil,
+			"repeated segment number", media(seg(1, "a", 5), seg(1, "b", 5), seg(3, "c", 5)),
+			"movie.mkv", `file "movie.mkv" segment numbers are not contiguous: 2 of 3 numbers present, 1 repeated`, nil,
 		},
 		{
 			"empty message id", media(seg(1, "a", 5), seg(2, "", 5)),

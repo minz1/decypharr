@@ -2,6 +2,7 @@ package parser
 
 import (
 	"cmp"
+	"errors"
 	"fmt"
 	"path"
 	"path/filepath"
@@ -163,9 +164,9 @@ func getNZBSegments(index int, file manifest.File, group *FileGroup) (int64, []s
 	// leaked segments with empty message-ids and offset 0 into the .meta
 	// files, the streaming reader (non-monotonic offset table breaks its
 	// binary search), and Download. Reject such files outright.
-	minSegNum, ok := contiguousSegmentNumbers(file.Segments)
-	if !ok {
-		return 0, nil, fmt.Errorf("file %q segment numbers are not contiguous", file.Filename)
+	minSegNum, numbersErr := checkSegmentNumbers(file)
+	if numbersErr != nil {
+		return 0, nil, numbersErr
 	}
 
 	sizing := group.segmentSizing(index, file)
@@ -207,15 +208,31 @@ func getNZBSegments(index int, file manifest.File, group *FileGroup) (int64, []s
 	return currentOffset, nzbSegments, nil
 }
 
-// contiguousSegmentNumbers returns the lowest segment number and whether the
-// count matches the number range.
-func contiguousSegmentNumbers(segments []manifest.Segment) (int, bool) {
-	minNum, maxNum := segments[0].Number, segments[0].Number
-	for _, seg := range segments {
+func checkSegmentNumbers(file manifest.File) (int, error) {
+	distinct := make(map[int]struct{}, len(file.Segments))
+	minNum, maxNum := file.Segments[0].Number, file.Segments[0].Number
+	for _, seg := range file.Segments {
+		distinct[seg.Number] = struct{}{}
 		minNum = min(minNum, seg.Number)
 		maxNum = max(maxNum, seg.Number)
 	}
-	return minNum, maxNum-minNum+1 == len(segments)
+	span := maxNum - minNum + 1
+	repeated := len(file.Segments) - len(distinct)
+	if len(distinct) == span && repeated == 0 {
+		return minNum, nil
+	}
+	holes := &SegmentHolesError{File: file.Filename, Present: len(distinct), Span: span, Repeated: repeated}
+	if len(distinct) < span && !file.Rewritten && minNum >= 1 {
+		return 0, holes
+	}
+	return 0, errors.New(holes.Error())
+}
+
+func untypedHoles(err error) error {
+	if holes, ok := errors.AsType[*SegmentHolesError](err); ok {
+		return errors.New(holes.Error())
+	}
+	return err
 }
 
 // yencDecodedRatio estimates decoded size from encoded bytes (~3% yEnc overhead).
@@ -292,7 +309,7 @@ func buildBaseSegments(group *FileGroup) ([]storage.NZBSegment, []storage.Archiv
 	for idx, nzbFile := range group.Files {
 		totalSize, segments, err := getNZBSegments(idx, nzbFile, group)
 		if err != nil {
-			return nil, nil, fmt.Errorf("archive volume: %w", err)
+			return nil, nil, fmt.Errorf("archive volume: %w", untypedHoles(err))
 		}
 		start := len(baseSegments)
 		baseSegments = append(baseSegments, segments...)
@@ -321,7 +338,7 @@ func buildArchiveVolumeDescriptors(group *FileGroup) ([]*types.Volume, error) {
 
 		totalSize, volumeSegments, err := getNZBSegments(idx, nzbFile, group)
 		if err != nil {
-			return nil, fmt.Errorf("archive volume: %w", err)
+			return nil, fmt.Errorf("archive volume: %w", untypedHoles(err))
 		}
 
 		volumeName := nzbFile.Filename

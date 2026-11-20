@@ -474,3 +474,167 @@ func TestVerdictOf(t *testing.T) {
 		})
 	}
 }
+
+func holeGroup() *FileGroup {
+	return &FileGroup{
+		BaseName: "movie",
+		Type:     storage.NZBFileTypeMedia,
+		metadata: &fileAnalysisResult{fileSize: 15, lastFileSize: 15, segmentSize: 5},
+	}
+}
+
+func numbered(numbers ...int) []manifest.Segment {
+	out := make([]manifest.Segment, len(numbers))
+	for i, number := range numbers {
+		out[i] = manifest.Segment{Number: number, MessageID: fmt.Sprintf("m%d-%d@x", i, number), Bytes: 5}
+	}
+	return out
+}
+
+func TestSegmentNumbersHoles(t *testing.T) {
+	t.Parallel()
+	const shape = `file "movie.mkv" segment numbers are not contiguous: %d of %d numbers present, %d repeated`
+	typed := func(present, span, repeated int) *SegmentHolesError {
+		return &SegmentHolesError{File: "movie.mkv", Present: present, Span: span, Repeated: repeated}
+	}
+	for _, tc := range []struct {
+		name      string
+		numbers   []int
+		rewritten bool
+		hole      *SegmentHolesError
+		untyped   [3]int
+	}{
+		{name: "gap", numbers: []int{1, 3}, hole: typed(2, 3, 0)},
+		{name: "repeat then gap", numbers: []int{1, 2, 2, 4}, hole: typed(3, 4, 1)},
+		{name: "repeat of the first", numbers: []int{1, 1, 3}, hole: typed(2, 3, 1)},
+		{name: "triple repeat", numbers: []int{1, 1, 1, 4}, hole: typed(2, 4, 2)},
+		{name: "zero based gap", numbers: []int{0, 1, 3}, untyped: [3]int{3, 4, 0}},
+		{name: "zero based gap at the start", numbers: []int{0, 2, 3}, untyped: [3]int{3, 4, 0}},
+		{name: "duplicates only", numbers: []int{1, 2, 2, 3}, untyped: [3]int{3, 3, 1}},
+		{name: "rewritten gap", numbers: []int{1, 3}, rewritten: true, untyped: [3]int{2, 3, 0}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			file := manifest.File{Filename: "movie.mkv", Segments: numbered(tc.numbers...), Rewritten: tc.rewritten}
+			_, _, err := getNZBSegments(0, file, holeGroup())
+			if err == nil {
+				t.Fatal("getNZBSegments accepted the numbers")
+			}
+			if tc.hole != nil {
+				assertTypedHole(t, err, *tc.hole)
+				return
+			}
+			want := fmt.Sprintf(shape, tc.untyped[0], tc.untyped[1], tc.untyped[2])
+			if _, typed := errors.AsType[*SegmentHolesError](err); typed || err.Error() != want {
+				t.Fatalf("error = %v (typed %v), want untyped %q", err, typed, want)
+			}
+		})
+	}
+}
+
+func TestHolesFromXML(t *testing.T) {
+	t.Parallel()
+	merged := nzbOf(
+		fileXML(1, 1, "movie.mkv", "1:a@x", "2:b@x"),
+		fileXML(1, 1, "movie.mkv", "4:d@x", "5:e@x"),
+	)
+	unnumbered := nzbOf(
+		`<file poster="p" date="1" subject="[1/1] - &quot;movie.mkv&quot; yEnc (1/3)"><groups><group>alt.test</group></groups><segments>` +
+			`<segment bytes="768000">a@x</segment><segment bytes="768000" number="2">b@x</segment>` +
+			`<segment bytes="768000" number="3">c@x</segment></segments></file>`,
+	)
+	raw := nzbOf(fileXML(1, 1, "movie.mkv", "1:a@x", "3:c@x"))
+	for _, tc := range []struct {
+		name string
+		nzb  string
+		want Verdict
+	}{
+		{"merged ranges", merged, VerdictNone},
+		{"unnumbered first segment", unnumbered, VerdictNone},
+		{"raw file with a gap", raw, VerdictSegmentsMissing},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			decoded, err := manifest.Decode(strings.NewReader(tc.nzb))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _, err = getNZBSegments(0, decoded.Files[0], holeGroup())
+			if err == nil || !strings.Contains(err.Error(), "not contiguous") {
+				t.Fatalf("error = %v, want a contiguity failure", err)
+			}
+			if got := VerdictOf(err); got != tc.want {
+				t.Fatalf("VerdictOf = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestArchiveHolesAreUntyped(t *testing.T) {
+	t.Parallel()
+	group := &FileGroup{
+		BaseName: "movie",
+		Type:     storage.NZBFileTypeRar,
+		metadata: &fileAnalysisResult{fileSize: 15, lastFileSize: 15, segmentSize: 5},
+		Files:    []manifest.File{{Filename: "movie.rar", Segments: numbered(1, 3)}},
+	}
+	_, _, baseErr := buildBaseSegments(group)
+	_, volumeErr := buildArchiveVolumeDescriptors(group)
+	for name, err := range map[string]error{"buildBaseSegments": baseErr, "buildArchiveVolumeDescriptors": volumeErr} {
+		if err == nil || !strings.Contains(err.Error(), "not contiguous") {
+			t.Fatalf("%s error = %v, want a contiguity failure", name, err)
+		}
+		if _, typed := errors.AsType[*SegmentHolesError](err); typed || VerdictOf(err) != VerdictNone {
+			t.Fatalf("%s error = %v, want it untyped", name, err)
+		}
+	}
+}
+
+func TestHolesInRefusedSampleAreWithheld(t *testing.T) {
+	t.Parallel()
+	source := scriptSource{header: func(string) (*nntp.YencMetadata, error) {
+		return &nntp.YencMetadata{Size: 15, PartSize: 5, Part: 1, Begin: 1, End: 5}, nil
+	}}
+	for _, tc := range []struct {
+		file string
+		want Verdict
+	}{
+		{"x.sample.mkv", VerdictNone},
+		{"x.mkv", VerdictSegmentsMissing},
+	} {
+		t.Run(tc.file, func(t *testing.T) {
+			t.Parallel()
+			p := NewParserWithSource(source, 2, zerolog.Nop()).WithFileFilter(refuseSamples)
+			body := nzbOf(fileXML(1, 1, tc.file, "1:a@x", "3:c@x"))
+			nzb, groups, err := p.Parse(t.Context(), "release.nzb", []byte(body))
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			_, err = p.Process(t.Context(), nzb, groups)
+			if err == nil || !strings.Contains(err.Error(), "not contiguous") || VerdictOf(err) != tc.want {
+				t.Fatalf("Process error = %v verdict %v, want a hole with verdict %v", err, VerdictOf(err), tc.want)
+			}
+		})
+	}
+}
+
+func assertTypedHole(t *testing.T, err error, want SegmentHolesError) {
+	t.Helper()
+	holes, typed := errors.AsType[*SegmentHolesError](err)
+	if !typed || *holes != want {
+		t.Fatalf("error = %v, want %+v", err, want)
+	}
+	if got := VerdictOf(fmt.Errorf("x: %w", err)); got != VerdictSegmentsMissing {
+		t.Fatalf("VerdictOf(wrapped) = %v, want segments", got)
+	}
+}
+
+func TestSegmentNumbersContiguousPass(t *testing.T) {
+	t.Parallel()
+	for _, numbers := range [][]int{{0, 1, 2}, {1, 2, 3}} {
+		file := manifest.File{Filename: "movie.mkv", Segments: numbered(numbers...)}
+		if _, _, err := getNZBSegments(0, file, holeGroup()); err != nil {
+			t.Fatalf("numbers %v: %v", numbers, err)
+		}
+	}
+}
