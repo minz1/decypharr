@@ -1,7 +1,6 @@
 package sabnzbd
 
 import (
-	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -530,7 +529,7 @@ func (s *SABnzbd) getHistory(ctx context.Context, nzoIDs []string) History {
 			NZBName:     item.Name,
 			NzoID:       item.InfoHash,
 			Category:    item.Category,
-			FailMessage: cmp.Or(v.State.Failure.Reason, item.LastError),
+			FailMessage: historyFailMessage(v.State, item.LastError),
 			Bytes:       item.Size,
 			Storage:     item.DownloadPath(naming),
 		})

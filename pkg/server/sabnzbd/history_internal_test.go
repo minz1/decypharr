@@ -2,9 +2,12 @@ package sabnzbd
 
 import (
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,7 +26,7 @@ func addNZBGrab(t *testing.T, mgr *manager.Manager, hash string, st grab.State) 
 	}
 	st.Key = hash
 	st.NZB = true
-	if st.Phase == grab.PhaseFailed {
+	if st.Phase == grab.PhaseFailed && st.Failure.Reason == "" {
 		st.Failure = grab.Failure{Reason: "missing segments", At: time.Now()}
 	}
 	if err := grab.Encode(grab.Grab{State: st, Entry: e}); err != nil {
@@ -154,5 +157,88 @@ func queueGrab(t *testing.T, mgr *manager.Manager, e *storage.Entry, phase grab.
 	}
 	if err := mgr.Queue().Add(e); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSabFailMessage(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ cause, want string }{
+		{grab.CauseArticlesMissing, "Download failed - Not on your server(s) - r"},
+		{grab.CauseSegmentsMissing, "Aborted, cannot be completed - r"},
+		{"", "r"},
+		{"magnet_error", "r"},
+	} {
+		if got := sabFailMessage(c.cause, "r"); got != c.want {
+			t.Errorf("sabFailMessage(%q) = %q, want %q", c.cause, got, c.want)
+		}
+	}
+}
+
+func TestSabFailMessagePrefixesMatchBindery(t *testing.T) {
+	t.Parallel()
+	prefixes := []string{
+		"aborted, cannot be completed",
+		"download failed - not on your server(s)",
+		"download might fail, only",
+		"repair failed, not enough repair blocks",
+		"repairing failed, repair failed.",
+		"unpacking failed, crc error",
+		"unpacking failed, unable to find",
+		"unpacking failed, archive requires a password",
+		"corrupt rar file",
+		"unusable rar file",
+		"rar files failed to verify",
+		"some files failed to verify against",
+		"aborted, encryption detected",
+		"aborted, unwanted extension detected",
+	}
+	matches := func(message string) bool {
+		lowered := strings.ToLower(strings.TrimSpace(message))
+		return slices.ContainsFunc(prefixes, func(p string) bool { return strings.HasPrefix(lowered, p) })
+	}
+	raw := "failed to process nzb: file segment numbers are not contiguous"
+	for _, cause := range []string{grab.CauseArticlesMissing, grab.CauseSegmentsMissing} {
+		got := sabFailMessage(cause, raw)
+		if !matches(got) {
+			t.Errorf("%q: message %q has no Bindery content-failure prefix", cause, got)
+		}
+		if strings.EqualFold(got, "Unpacking failed, write error or disk is full?") {
+			t.Errorf("%q: message equals the disk-full wording", cause)
+		}
+	}
+	if matches(sabFailMessage("", raw)) {
+		t.Errorf("an unclassified failure matches a Bindery prefix")
+	}
+}
+
+func TestHistoryFailMessage(t *testing.T) {
+	t.Parallel()
+	_, router, mgr := newContractRouter(t)
+	failedWith := func(cause string) grab.State {
+		return grab.State{Phase: grab.PhaseFailed, Failure: grab.Failure{Reason: "r", Cause: cause, At: time.Now()}}
+	}
+	addNZBGrab(t, mgr, "dead", failedWith(grab.CauseArticlesMissing))
+	addNZBGrab(t, mgr, "legacy", failedWith(""))
+	addNZBGrab(t, mgr, "magnet", failedWith("magnet_error"))
+	done := grab.State{Phase: grab.PhaseComplete, Failure: grab.Failure{Reason: "r", Cause: grab.CauseSegmentsMissing}}
+	addNZBGrab(t, mgr, "done", done)
+
+	var got struct {
+		History struct {
+			Slots []map[string]any `json:"slots"`
+		} `json:"history"`
+	}
+	if err := json.Unmarshal(sabGet(t, router, url.Values{"mode": {"history"}, "category": {"tv"}}), &got); err != nil {
+		t.Fatal(err)
+	}
+	messages := map[string]any{}
+	for _, slot := range got.History.Slots {
+		messages[slot["nzo_id"].(string)] = slot["fail_message"]
+	}
+	want := map[string]any{
+		"dead": "Download failed - Not on your server(s) - r", "legacy": "r", "magnet": "r", "done": "r",
+	}
+	if !maps.Equal(messages, want) {
+		t.Fatalf("fail_message by slot = %v, want %v", messages, want)
 	}
 }
