@@ -15,6 +15,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/arr/reacquire"
 	debrid "github.com/sirrobot01/decypharr/pkg/debrid/common"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
+	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
@@ -411,4 +412,32 @@ func TestAQueuedEntryCountsAsAHolder(t *testing.T) {
 		h.deleteEntry(t, other.InfoHash)
 		requireDeleted(t, h, "shared")
 	})
+}
+
+func TestAPendingDeadlineExpiryDiscardsThePlacement(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		kind grab.EventKind
+		want []string
+	}{
+		"pending deadline": {kind: grab.EvPendingDeadline, want: []string{"gone"}},
+		"link wait":        {kind: grab.EvLinkWaitExpired},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				h := newPruneHarness(t, config.PruneModeDelete)
+				e := &storage.Entry{
+					InfoHash: "expiring", Name: "Show.expiring", ActiveProvider: "torbox",
+					Providers: map[string]*storage.ProviderEntry{"torbox": {Provider: "torbox", ID: "gone"}},
+				}
+				if err := h.m.storage.AddQueue(e); err != nil {
+					t.Fatal(err)
+				}
+				h.m.expiredGrab(grab.Grab{Entry: e}, tc.kind)
+				drainPlacements(t, h.m)
+				requireDeleted(t, h, tc.want...)
+			})
+		})
+	}
 }

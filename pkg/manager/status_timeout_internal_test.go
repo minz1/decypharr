@@ -282,3 +282,47 @@ func TestQueuedStopDuringCheckStatusLeavesEntry(t *testing.T) {
 func poll(ctx context.Context, m *Manager, entry *storage.Entry) entryMsg {
 	return m.pollChild(ctx, entryChildCall{kind: grab.ChildPoll, grab: grab.Grab{Entry: entry}}, false)
 }
+
+func unconfirmed404() error {
+	return fmt.Errorf("realdebrid: /torrents/info/id answered 404, listed: %w", customerror.ErrProviderStatusTimeout)
+}
+
+func TestTheStatusProbeCarriesThePlacementsAge(t *testing.T) {
+	t.Parallel()
+	early := time.Unix(1_800_000_000, 0)
+	late := early.Add(time.Hour)
+	for name, tc := range map[string]struct {
+		placement, entry, want time.Time
+	}{
+		"placement only":  {placement: early, want: early},
+		"entry only":      {entry: late, want: late},
+		"placement later": {placement: late, entry: early, want: late},
+		"entry later":     {placement: early, entry: late, want: late},
+		"neither":         {},
+		"equal":           {placement: early, entry: early, want: early},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			m, entry := queuedEntryAddedAt(t, &failingStatusProvider{}, tc.placement)
+			entry.AddedOn = tc.entry
+			got := m.statusProbe(entry, entry.GetActiveProvider()).Added
+			if !got.Equal(tc.want) {
+				t.Fatalf("probe added = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAnUnconfirmed404OnALinksCheckReportsNothing(t *testing.T) {
+	t.Parallel()
+	provider := &failingStatusProvider{err: unconfirmed404()}
+	m, entry := queuedEntryAddedAt(t, provider, time.Now())
+	msg := m.pollChild(t.Context(), entryChildCall{kind: grab.ChildLinks, grab: grab.Grab{Entry: entry}}, true)
+	closePlacements(t, m)
+	if msg.ev != nil {
+		t.Fatalf("event = %+v, want none", msg.ev)
+	}
+	if msg.seen == nil || *msg.seen != (pollSeen{pending: grab.PendingProvider}) {
+		t.Fatalf("seen = %+v, want a pending provider only", msg.seen)
+	}
+}

@@ -495,3 +495,133 @@ func TestAFailedSaveKeepsTheSubmitClock(t *testing.T) {
 		}
 	})
 }
+
+func (h *actorHarness) expiredKinds() []grab.EventKind {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return slices.Clone(h.expiries)
+}
+
+func (h *actorHarness) recordExpiries() {
+	h.a.expired = func(_ grab.Grab, kind grab.EventKind) {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		h.expiries = append(h.expiries, kind)
+	}
+}
+
+func (h *actorHarness) realdebridGrab() {
+	h.t.Helper()
+	e := testEntry("a")
+	e.AddedOn = time.Now()
+	e.Providers = map[string]*storage.ProviderEntry{
+		"realdebrid": {Provider: "realdebrid", ID: "t1", AddedAt: e.AddedOn},
+	}
+	seed(h.t, h.store, e, grab.State{Phase: grab.PhaseProvider})
+	h.mustAsk("a", grab.Event{Kind: grab.EvRecover})
+}
+
+func (h *actorHarness) pollAnswers(msg entryMsg) {
+	h.t.Helper()
+	h.mustAsk("a", grab.Event{Kind: grab.EvPollTimer})
+	h.next(grab.ChildPoll).reply <- msg
+	synctest.Wait()
+}
+
+func TestAnUnconfirmed404ReplacesAConversionVerdictAndEndsAsAnEntryFailure(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	synctest.Test(t, func(t *testing.T) {
+		h := deadlineHarness(t, store, 0)
+		h.recordExpiries()
+		h.realdebridGrab()
+		h.next(grab.ChildPoll).reply <- entryMsg{seen: &pollSeen{pending: grab.PendingConverting, dead: true}}
+		h.mustBe("a", grab.PhaseProvider)
+
+		rdErr := unconfirmed404()
+		if !transientStatusError(rdErr) {
+			t.Fatal("an unconfirmed 404 is not a transient status error")
+		}
+		time.Sleep(30 * time.Minute)
+		h.pollAnswers(pendingPoll(providerWaitOf(rdErr)))
+
+		time.Sleep(90 * time.Minute)
+		h.mustBe("a", grab.PhaseProvider)
+		time.Sleep(4*time.Hour + 29*time.Minute)
+		h.mustBe("a", grab.PhaseProvider)
+		time.Sleep(time.Minute)
+		h.mustBe("a", grab.PhaseFailed)
+		if got := h.failsSeen(); !slices.Equal(got, []grab.FailEffect{grab.FailEntry}) {
+			t.Fatalf("fail effects %v, want one entry failure", got)
+		}
+		if got := h.expiredKinds(); !slices.Equal(got, []grab.EventKind{grab.EvPendingDeadline}) {
+			t.Fatalf("expiries %v, want the pending deadline", got)
+		}
+	})
+}
+
+func TestAnUnconfirmed404OnALinksCheckLeavesTheGrabWaitingForLinks(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	synctest.Test(t, func(t *testing.T) {
+		h := deadlineHarness(t, store, 0)
+		e := testEntry("a")
+		downloaded := time.Now()
+		e.Providers = map[string]*storage.ProviderEntry{
+			"realdebrid": {Provider: "realdebrid", ID: "t1", DownloadedAt: &downloaded},
+		}
+		seed(t, store, e, grab.State{Phase: grab.PhaseAwaitingLinks})
+		h.mustAsk("a", grab.Event{Kind: grab.EvRecover})
+		h.next(grab.ChildLinks).reply <- entryMsg{seen: &pollSeen{pending: grab.PendingProvider}}
+		synctest.Wait()
+
+		time.Sleep(6*time.Hour - time.Minute)
+		h.mustBe("a", grab.PhaseAwaitingLinks)
+		if got := h.failsSeen(); len(got) != 0 {
+			t.Fatalf("fail effects %v, want none", got)
+		}
+	})
+}
+
+func TestAFinalizingWaitAndAnUnconfirmed404ShareOneProviderClock(t *testing.T) {
+	t.Parallel()
+	pending := entryMsg{seen: &pollSeen{pending: grab.PendingProvider}}
+	downloading := eventMsg(grab.Event{Kind: grab.EvProviderObserved, Observed: debridTypes.PhaseDownloading})
+	downloading.seen = &pollSeen{}
+	for name, tc := range map[string]struct {
+		between  bool
+		failedAt time.Duration
+	}{
+		"continuous":         {failedAt: 6 * time.Hour},
+		"a downloading poll": {between: true, failedAt: 11 * time.Hour},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			store := newTestStore(t)
+			synctest.Test(t, func(t *testing.T) {
+				h := deadlineHarness(t, store, 0)
+				h.realdebridGrab()
+				h.next(grab.ChildPoll).reply <- pending
+				synctest.Wait()
+				if tc.between {
+					time.Sleep(2 * time.Hour)
+					h.pollAnswers(downloading)
+					time.Sleep(3 * time.Hour)
+				} else {
+					time.Sleep(5 * time.Hour)
+				}
+				h.pollAnswers(pending)
+
+				time.Sleep(tc.failedAt - 5*time.Hour - time.Minute)
+				if tc.between {
+					h.mustBe("a", grab.PhaseProvider)
+				}
+				time.Sleep(time.Minute)
+				h.mustBe("a", grab.PhaseFailed)
+				if got := h.failsSeen(); !slices.Equal(got, []grab.FailEffect{grab.FailEntry}) {
+					t.Fatalf("fail effects %v, want one entry failure", got)
+				}
+			})
+		})
+	}
+}

@@ -109,6 +109,10 @@ func (m *Manager) statusProbe(entry *storage.Entry, placement *storage.ProviderE
 	if err != nil {
 		magnet = utils.ConstructMagnet(entry.InfoHash, entry.Name)
 	}
+	added := placement.AddedAt
+	if entry.AddedOn.After(added) {
+		added = entry.AddedOn
+	}
 	return &debridTypes.Torrent{
 		ID:               placement.ID,
 		Debrid:           entry.ActiveProvider,
@@ -119,6 +123,7 @@ func (m *Manager) statusProbe(entry *storage.Entry, placement *storage.ProviderE
 		Size:             entry.Size,
 		Files:            make(map[string]debridTypes.File),
 		DownloadUncached: m.uncachedAllowed(entry),
+		Added:            added,
 	}
 }
 

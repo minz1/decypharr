@@ -29,18 +29,19 @@ type childRun struct {
 }
 
 type actorHarness struct {
-	t       *testing.T
-	store   *storage.Storage
-	grabs   *grabIndex
-	a       *entryActor
-	started chan childRun
-	mu      sync.Mutex
-	log     []string
-	fails   []grab.FailEffect
-	root    *task.Group
-	down    bool
-	holds   []string
-	holdErr error
+	t        *testing.T
+	store    *storage.Storage
+	grabs    *grabIndex
+	a        *entryActor
+	started  chan childRun
+	mu       sync.Mutex
+	log      []string
+	fails    []grab.FailEffect
+	expiries []grab.EventKind
+	root     *task.Group
+	down     bool
+	holds    []string
+	holdErr  error
 }
 
 func newTestStore(t *testing.T) *storage.Storage {
