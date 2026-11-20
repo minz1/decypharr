@@ -59,6 +59,7 @@ func VerdictOf(err error) Verdict {
 		if verdict, self := node.verdict(); any(self) == any(err) {
 			return verdict
 		}
+		return VerdictNone
 	}
 	if joined, ok := err.(interface{ Unwrap() []error }); ok {
 		return joinedVerdict(joined.Unwrap())

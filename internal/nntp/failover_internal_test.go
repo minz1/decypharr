@@ -423,3 +423,23 @@ func TestFailoverAliasEmbedded430BesideADeadlineIsNotProof(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+type aliasEmbeddedTimeoutError struct {
+	*wireError
+}
+
+type embeddedProofError struct {
+	*NotFoundEverywhereError
+}
+
+func TestEmbeddedMarkerRefusesInsteadOfSkipping(t *testing.T) {
+	t.Parallel()
+	timeout := NewTimeoutError(notFound430())
+	if isNoSuchArticle(aliasEmbeddedTimeoutError{wireError: timeout}) {
+		t.Fatal("an embedded timeout around a 430 is read as a 430")
+	}
+	proof := &NotFoundEverywhereError{Err: &NotFoundEverywhereError{Err: notFound430()}}
+	if IsNotFoundEverywhere(embeddedProofError{NotFoundEverywhereError: proof}) {
+		t.Fatal("an embedded proof is read through its promoted Unwrap")
+	}
+}

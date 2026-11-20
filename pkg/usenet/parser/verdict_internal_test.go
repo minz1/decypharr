@@ -841,3 +841,15 @@ func TestHeaderPrefixPassesNoSourceVerdict(t *testing.T) {
 		t.Fatalf("error = %v verdict %v, want no verdict", err, VerdictOf(err))
 	}
 }
+
+type embeddedWithheldError struct {
+	*proofWithheldError
+}
+
+func TestVerdictOfRefusesAnEmbeddedWithheldProof(t *testing.T) {
+	t.Parallel()
+	embedded := embeddedWithheldError{&proofWithheldError{err: &ContentMissingError{Err: proven430()}}}
+	if got := VerdictOf(embedded); got != VerdictNone {
+		t.Fatalf("verdict %v, want none", got)
+	}
+}

@@ -234,8 +234,8 @@ func IsNotFoundEverywhere(err error) bool {
 	for node := err; node != nil; node = errors.Unwrap(node) {
 		if marked, ok := node.(interface {
 			proof() *NotFoundEverywhereError
-		}); ok && any(marked.proof()) == any(node) {
-			return true
+		}); ok {
+			return any(marked.proof()) == any(node)
 		}
 	}
 	return false
@@ -243,9 +243,10 @@ func IsNotFoundEverywhere(err error) bool {
 
 func isNoSuchArticle(err error) bool {
 	for node := err; node != nil; node = errors.Unwrap(node) {
-		if typed, ok := node.(interface{ nntpError() *Error }); ok && any(typed.nntpError()) == any(node) {
+		if typed, ok := node.(interface{ nntpError() *Error }); ok {
 			nntpErr := typed.nntpError()
-			return nntpErr.Type == ErrorTypeArticleNotFound && nntpErr.Code == codeNoSuchArticle
+			return any(nntpErr) == any(node) && nntpErr.Type == ErrorTypeArticleNotFound &&
+				nntpErr.Code == codeNoSuchArticle
 		}
 	}
 	return false
