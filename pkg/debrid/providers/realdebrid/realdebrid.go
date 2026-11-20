@@ -915,7 +915,7 @@ func (r *RealDebrid) getTorrents(ctx context.Context, offset int, limit int) (in
 		q.Set("offset", strconv.Itoa(offset))
 	}
 	if limit > 0 {
-		q.Set("limit", strconv.Itoa(limit))
+		q.Set(limitParam, strconv.Itoa(limit))
 	}
 	listing, err := r.listTorrents(ctx, q)
 	if err != nil {
@@ -1021,7 +1021,7 @@ func (r *RealDebrid) _getDownloadLinks(
 	var data []DownloadsResponse
 
 	queryParams := map[string]string{
-		"limit": strconv.Itoa(limit),
+		limitParam: strconv.Itoa(limit),
 	}
 	if offset > 0 {
 		queryParams["offset"] = strconv.Itoa(offset)
@@ -1236,7 +1236,7 @@ func (r *RealDebrid) Poll(
 		return t, types.Observation{}, err
 	}
 	if status == http.StatusNotFound {
-		return t, types.Observation{}, fmt.Errorf("torrent %s: %w", t.Name, customerror.ErrTorrentNotFound)
+		return t, types.Observation{}, r.pollNotFound(ctx, t)
 	}
 	if status != http.StatusOK {
 		return t, types.Observation{}, customerror.NewProviderStatusError(

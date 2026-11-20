@@ -3,6 +3,8 @@ package grab
 import (
 	"fmt"
 	"time"
+
+	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 )
 
 // Pending is what a provider's last status check says the placement is waiting on.
@@ -33,7 +35,7 @@ const (
 	// LookupLimit is how long lookups may run after a submit whose outcome is unknown before the grab fails.
 	LookupLimit = time.Hour
 	// LookupSettle is how long a lookup waits before, and between, the listings that may call a torrent absent.
-	LookupSettle = 2 * time.Minute
+	LookupSettle = debridTypes.ListingSettle
 )
 
 // DeadlineView is what NextDeadline reads besides the state: the timestamps of the record, what the last poll saw

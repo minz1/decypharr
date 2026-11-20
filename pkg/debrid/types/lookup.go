@@ -1,5 +1,7 @@
 package types
 
+import "time"
+
 type LookupResult uint8
 
 const (
@@ -19,3 +21,5 @@ func (r LookupResult) String() string {
 	}
 	return "invalid"
 }
+
+const ListingSettle = 2 * time.Minute
