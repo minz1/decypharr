@@ -155,7 +155,7 @@ func numericExtension(ext string) bool {
 	return len(ext) > 1 && strings.Trim(ext[1:], "0123456789") == ""
 }
 
-func ambiguousSample(file manifest.File) bool {
+func ambiguousNumbering(file manifest.File) bool {
 	return file.Rewritten || hasRepeatedNumbers(file.Segments)
 }
 

@@ -634,6 +634,36 @@ func TestSegmentNumbersHoles(t *testing.T) {
 	}
 }
 
+func TestMediaGroupHolesBesideARepeat(t *testing.T) {
+	t.Parallel()
+	gap := manifest.File{Filename: "movie.mkv", Number: 1, Segments: numbered(1, 3)}
+	repeat := manifest.File{Filename: "movie.mkv", Number: 2, Segments: numbered(1, 1, 3)}
+	rewritten := manifest.File{Filename: "movie.mkv", Number: 2, Segments: numbered(1, 2, 3), Rewritten: true}
+	clean := manifest.File{Filename: "movie.mkv", Number: 2, Segments: numbered(1, 2, 3)}
+	for _, tc := range []struct {
+		name  string
+		files []manifest.File
+		typed bool
+	}{
+		{name: "gap then repeat", files: []manifest.File{gap, repeat}},
+		{name: "gap then rewritten", files: []manifest.File{gap, rewritten}},
+		{name: "gap then clean", files: []manifest.File{gap, clean}, typed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			group := holeGroup()
+			group.Files = tc.files
+			_, err := (&NZBParser{logger: zerolog.Nop()}).processMediaFile(group, "")
+			if err == nil {
+				t.Fatal("processMediaFile accepted the numbers")
+			}
+			if _, typed := errors.AsType[*SegmentHolesError](err); typed != tc.typed {
+				t.Fatalf("error = %v typed %v, want typed %v", err, typed, tc.typed)
+			}
+		})
+	}
+}
+
 func TestHolesFromXML(t *testing.T) {
 	t.Parallel()
 	merged := nzbOf(
@@ -646,6 +676,7 @@ func TestHolesFromXML(t *testing.T) {
 			`<segment bytes="768000" number="3">c@x</segment></segments></file>`,
 	)
 	raw := nzbOf(fileXML(1, 1, "movie.mkv", "1:a@x", "3:c@x"))
+	deduplicated := nzbOf(fileXML(1, 1, "movie.mkv", "1:a@x", "1:a@x", "3:c@x"))
 	for _, tc := range []struct {
 		name string
 		nzb  string
@@ -654,6 +685,7 @@ func TestHolesFromXML(t *testing.T) {
 		{"merged ranges", merged, VerdictNone},
 		{"unnumbered first segment", unnumbered, VerdictNone},
 		{"raw file with a gap", raw, VerdictSegmentsMissing},
+		{"deduplicated id beside a gap", deduplicated, VerdictNone},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

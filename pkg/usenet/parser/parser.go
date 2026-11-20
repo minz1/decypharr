@@ -8,6 +8,7 @@ import (
 	"maps"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -326,7 +327,7 @@ func statGroup(
 ) (groupStat, error) {
 	result := groupStat{proven: true}
 	for _, probe := range probeArticles(group) {
-		if ambiguousSample(probe.file) {
+		if ambiguousNumbering(probe.file) {
 			result.proven = false
 		}
 		err := stat(ctx, probe.segment.MessageID)
@@ -1168,6 +1169,9 @@ func (p *NZBParser) processMediaFile(group *FileGroup, password string) (*storag
 			continue
 		}
 		totalSize, segments, err := getNZBSegments(index, nzbFile, group)
+		if err != nil && slices.ContainsFunc(group.Files, ambiguousNumbering) {
+			return nil, untypedHoles(err)
+		}
 		if err != nil {
 			return nil, err
 		}
