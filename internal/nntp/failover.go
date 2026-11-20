@@ -49,6 +49,45 @@ type failoverState struct {
 	previousHost string // host of the last transient failure, avoided next
 	attempts     map[string]int
 	perProvider  int
+
+	missingIDs       map[string]struct{}
+	missingBackbones map[string]struct{}
+	unproven         bool
+	acquireFailed    bool
+}
+
+func (s *failoverState) track(provider config.UsenetProvider, err error) {
+	if typed, ok := errors.AsType[*Error](err); ok &&
+		typed.Type == ErrorTypeArticleNotFound && typed.Code == codeNoSuchArticle {
+		if s.missingIDs == nil {
+			s.missingIDs = make(map[string]struct{})
+		}
+		s.missingIDs[provider.ID()] = struct{}{}
+		if provider.Backbone != "" {
+			if s.missingBackbones == nil {
+				s.missingBackbones = make(map[string]struct{})
+			}
+			s.missingBackbones[provider.Backbone] = struct{}{}
+		}
+		return
+	}
+	s.unproven = true
+}
+
+func (s *failoverState) provenMissingEverywhere(providers []config.UsenetProvider) bool {
+	if s.unproven || s.acquireFailed {
+		return false
+	}
+	for _, p := range providers {
+		if _, ok := s.missingIDs[p.ID()]; ok {
+			continue
+		}
+		if _, ok := s.missingBackbones[p.Backbone]; p.Backbone != "" && ok {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // record books a failed attempt against provider. It reports the backoff
@@ -107,6 +146,22 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 // ExecuteWithFailover retries transient failures and changes providers.
 // Article failures exclude their backbone for the rest of the operation.
 func (c *Client) ExecuteWithFailover(ctx context.Context, workload Workload, fn func(conn *Connection) error) error {
+	return c.execute(ctx, workload, fn, false)
+}
+
+// ExecuteArticle is ExecuteWithFailover for one request about one message ID
+// per attempt. When every configured provider answered 430, the error is a
+// *NotFoundEverywhereError.
+func (c *Client) ExecuteArticle(ctx context.Context, workload Workload, fn func(conn *Connection) error) error {
+	return c.execute(ctx, workload, fn, true)
+}
+
+func (c *Client) execute(
+	ctx context.Context,
+	workload Workload,
+	fn func(conn *Connection) error,
+	proveMissing bool,
+) error {
 	if !workload.valid() {
 		return fmt.Errorf("invalid NNTP workload: %s", workload)
 	}
@@ -129,6 +184,7 @@ func (c *Client) ExecuteWithFailover(ctx context.Context, workload Workload, fn 
 			return ctx.Err()
 		}
 		lastErr = err
+		st.track(provider, err)
 		delay, fatal := st.record(c, provider, outcome)
 		if fatal {
 			return err
@@ -141,7 +197,11 @@ func (c *Client) ExecuteWithFailover(ctx context.Context, workload Workload, fn 
 		}
 	}
 	if lastErr != nil {
-		return fmt.Errorf("%w: %w", ErrAllProvidersFailed, lastErr)
+		failed := fmt.Errorf("%w: %w", ErrAllProvidersFailed, lastErr)
+		if proveMissing && st.provenMissingEverywhere(c.providers) {
+			return &NotFoundEverywhereError{Err: failed}
+		}
+		return failed
 	}
 	return ErrAllProvidersFailed
 }
@@ -170,7 +230,7 @@ func (c *Client) acquireForFailover(
 	st *failoverState,
 ) (*Connection, config.UsenetProvider, error) {
 	if st.previousHost == "" {
-		return c.getAnyAvailableConnection(ctx, workload, st.exclusions)
+		return c.acquireAny(ctx, workload, st.exclusions, &st.acquireFailed)
 	}
 	selection := st.exclusions
 	alternate := providerExclusions{hosts: maps.Clone(st.exclusions.hosts), backbones: st.exclusions.backbones}
@@ -178,10 +238,10 @@ func (c *Client) acquireForFailover(
 	if c.hasAnyEligibleProvider(alternate) {
 		selection = alternate
 	}
-	conn, provider, err := c.getAnyAvailableConnection(ctx, workload, selection)
+	conn, provider, err := c.acquireAny(ctx, workload, selection, &st.acquireFailed)
 	if err != nil && ctx.Err() == nil {
 		// Keep article and exhausted-provider exclusions when alternatives fail.
-		return c.getAnyAvailableConnection(ctx, workload, st.exclusions)
+		return c.acquireAny(ctx, workload, st.exclusions, &st.acquireFailed)
 	}
 	return conn, provider, err
 }

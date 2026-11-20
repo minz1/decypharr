@@ -11,7 +11,12 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/rs/zerolog"
+
+	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/nntp"
+	"github.com/sirrobot01/decypharr/internal/task"
+	"github.com/sirrobot01/decypharr/internal/testutil/nntpd"
 )
 
 type fakeArticleBackend struct {
@@ -283,4 +288,29 @@ func TestBrokerFetchSurvivesFirstCallerCancel(t *testing.T) {
 			t.Fatalf("fetches = %d, want one shared fetch", got)
 		}
 	})
+}
+
+func TestNNTPBackendFetchProvesMissing(t *testing.T) {
+	t.Parallel()
+	server, err := nntpd.New(nntpd.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(server.Close)
+	root := task.NewRoot(t.Context(), "test", zerolog.Nop())
+	t.Cleanup(func() {
+		root.Close()
+		<-root.Done()
+	})
+	host, port := server.Addr()
+	client, err := nntp.NewClient(root.Child("nntp"), &config.Config{Usenet: config.Usenet{
+		Providers: []config.UsenetProvider{{Host: host, Port: port, MaxConnections: 1}},
+	}}, zerolog.Nop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = nntpArticleBackend{manager: client}.Fetch(t.Context(), "missing@example")
+	if !nntp.IsNotFoundEverywhere(err) {
+		t.Fatalf("err = %v", err)
+	}
 }

@@ -219,3 +219,17 @@ func IsYencDecodeError(err error) bool {
 	var nntpErr *Error
 	return errors.As(err, &nntpErr) && nntpErr.Type == ErrorTypeYencDecode
 }
+
+// NotFoundEverywhereError marks a single-message run in which every
+// configured provider answered 430 and no other failure occurred.
+type NotFoundEverywhereError struct{ Err error }
+
+func (e *NotFoundEverywhereError) Error() string { return e.Err.Error() }
+
+func (e *NotFoundEverywhereError) Unwrap() error { return e.Err }
+
+// IsNotFoundEverywhere reports whether err carries that proof.
+func IsNotFoundEverywhere(err error) bool {
+	_, ok := errors.AsType[*NotFoundEverywhereError](err)
+	return ok
+}

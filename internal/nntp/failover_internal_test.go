@@ -2,7 +2,9 @@ package nntp
 
 import (
 	"errors"
+	"net"
 	"slices"
+	"sync"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -90,5 +92,262 @@ func TestFailoverHonorsSingleProviderRetryBudget(t *testing.T) {
 	}
 	if len(client.orderedPools[0].slots) != 0 {
 		t.Fatal("retry budget exhaustion leaked an admission slot")
+	}
+}
+
+func deadPort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	if err := ln.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return port
+}
+
+func livePort(t *testing.T) int {
+	t.Helper()
+	server, err := nntpd.New(nntpd.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(server.Close)
+	_, port := server.Addr()
+	return port
+}
+
+func failoverProvider(host string, port int, user string, priority int, backbone string, backup bool) config.UsenetProvider {
+	return config.UsenetProvider{
+		Host: host, Port: port, Username: user, MaxConnections: 1,
+		Priority: priority, Backbone: backbone, Backup: backup,
+	}
+}
+
+func failoverClient(t *testing.T, retries int, providers ...config.UsenetProvider) *Client {
+	t.Helper()
+	client, err := NewClient(
+		newTestGroup(t),
+		&config.Config{Retries: retries, Usenet: config.Usenet{Providers: providers}},
+		zerolog.Nop(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client
+}
+
+func notFound430() error {
+	return &Error{Type: ErrorTypeArticleNotFound, Code: 430, Message: "no such article"}
+}
+
+type scripted struct {
+	mu     sync.Mutex
+	script map[string][]error
+	seen   []string
+}
+
+func (s *scripted) fn(conn *Connection) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user := conn.pool.config.Username
+	s.seen = append(s.seen, user)
+	queue := s.script[user]
+	if len(queue) == 0 {
+		return nil
+	}
+	err := queue[0]
+	if len(queue) > 1 {
+		s.script[user] = queue[1:]
+	}
+	return err
+}
+
+func runScripted(t *testing.T, client *Client, prove bool, script map[string][]error) (error, []string) {
+	t.Helper()
+	s := &scripted{script: script}
+	run := client.ExecuteWithFailover
+	if prove {
+		run = client.ExecuteArticle
+	}
+	err := run(t.Context(), WorkloadDownload, s.fn)
+	return err, s.seen
+}
+
+func twoHosts(t *testing.T, labelA, labelB string) *Client {
+	t.Helper()
+	port := livePort(t)
+	return failoverClient(t, 0,
+		failoverProvider("127.0.0.1", port, "a", 1, labelA, false),
+		failoverProvider("localhost", port, "b", 2, labelB, false),
+	)
+}
+
+func TestExecuteWithFailoverNeverProves(t *testing.T) {
+	t.Parallel()
+	client := twoHosts(t, "", "")
+	err, _ := runScripted(t, client, false, map[string][]error{"a": {notFound430()}, "b": {notFound430()}})
+	if err == nil || IsNotFoundEverywhere(err) || !IsArticleNotFoundError(err) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestFailoverEveryProvider430IsNotFoundEverywhere(t *testing.T) {
+	t.Parallel()
+	script := func() map[string][]error {
+		return map[string][]error{"a": {notFound430()}, "b": {notFound430()}}
+	}
+	plain, _ := runScripted(t, twoHosts(t, "", ""), false, script())
+	proven, _ := runScripted(t, twoHosts(t, "", ""), true, script())
+	if !IsNotFoundEverywhere(proven) || !IsArticleNotFoundError(proven) || !errors.Is(proven, ErrAllProvidersFailed) {
+		t.Fatalf("err = %v", proven)
+	}
+	if proven.Error() != plain.Error() {
+		t.Fatalf("text changed: %q vs %q", proven.Error(), plain.Error())
+	}
+}
+
+func TestFailoverSharedBackbone430CoversTheLabel(t *testing.T) {
+	t.Parallel()
+	client := twoHosts(t, "shared", "shared")
+	err, seen := runScripted(t, client, true, map[string][]error{"a": {notFound430()}})
+	if !IsNotFoundEverywhere(err) || !slices.Equal(seen, []string{"a"}) {
+		t.Fatalf("err = %v, seen = %v", err, seen)
+	}
+}
+
+func TestFailoverSameHostSecondAccountIsNotProof(t *testing.T) {
+	t.Parallel()
+	port := livePort(t)
+	client := failoverClient(t, 0,
+		failoverProvider("127.0.0.1", port, "a", 1, "", false),
+		failoverProvider("127.0.0.1", port, "b", 2, "", false),
+	)
+	err, seen := runScripted(t, client, true, map[string][]error{"a": {notFound430()}})
+	if !IsArticleNotFoundError(err) || IsNotFoundEverywhere(err) || !slices.Equal(seen, []string{"a"}) {
+		t.Fatalf("err = %v, seen = %v", err, seen)
+	}
+}
+
+func TestFailoverBackupCoverage(t *testing.T) {
+	t.Parallel()
+	port := livePort(t)
+	unlabelled := failoverClient(t, 0,
+		failoverProvider("127.0.0.1", port, "a", 1, "", false),
+		failoverProvider("127.0.0.1", port, "b", 2, "", true),
+	)
+	err, _ := runScripted(t, unlabelled, true, map[string][]error{"a": {notFound430()}})
+	if IsNotFoundEverywhere(err) {
+		t.Fatalf("unasked backup counted as covered: %v", err)
+	}
+	labelled := failoverClient(t, 0,
+		failoverProvider("127.0.0.1", port, "a", 1, "shared", false),
+		failoverProvider("127.0.0.1", port, "b", 2, "shared", true),
+	)
+	err, _ = runScripted(t, labelled, true, map[string][]error{"a": {notFound430()}})
+	if !IsNotFoundEverywhere(err) {
+		t.Fatalf("labelled backup not covered: %v", err)
+	}
+}
+
+func TestFailoverRecoveredAcquireFailureIsNotProof(t *testing.T) {
+	t.Parallel()
+	client := failoverClient(t, 0,
+		failoverProvider("localhost", deadPort(t), "a", 1, "shared", false),
+		failoverProvider("127.0.0.1", livePort(t), "b", 2, "shared", false),
+	)
+	err, seen := runScripted(t, client, true, map[string][]error{"b": {notFound430()}})
+	if !IsArticleNotFoundError(err) || IsNotFoundEverywhere(err) || !slices.Equal(seen, []string{"b"}) {
+		t.Fatalf("err = %v, seen = %v", err, seen)
+	}
+}
+
+func TestFailoverTerminalAcquireFailureIsNotProof(t *testing.T) {
+	t.Parallel()
+	client := failoverClient(t, 0,
+		failoverProvider("127.0.0.1", livePort(t), "a", 1, "", false),
+		failoverProvider("localhost", deadPort(t), "b", 2, "", true),
+	)
+	err, _ := runScripted(t, client, true, map[string][]error{"a": {notFound430()}})
+	if err == nil || IsNotFoundEverywhere(err) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestFailoverTransientThenNotFoundIsNotProof(t *testing.T) {
+	t.Parallel()
+	transient := NewTimeoutError(errors.New("timeout"))
+	err, _ := runScripted(t, failoverClientRetries(t), true, map[string][]error{
+		"a": {transient, notFound430()},
+		"b": {notFound430()},
+	})
+	if !IsArticleNotFoundError(err) || IsNotFoundEverywhere(err) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func failoverClientRetries(t *testing.T) *Client {
+	t.Helper()
+	port := livePort(t)
+	return failoverClient(t, 1,
+		failoverProvider("127.0.0.1", port, "a", 1, "", false),
+		failoverProvider("localhost", port, "b", 2, "", false),
+	)
+}
+
+func TestFailoverNotFoundThenTransientIsNotProof(t *testing.T) {
+	t.Parallel()
+	transient := NewTimeoutError(errors.New("timeout"))
+	client := failoverClientRetries(t)
+	err, _ := runScripted(t, client, true, map[string][]error{
+		"a": {notFound430()},
+		"b": {transient},
+	})
+	if err == nil || IsNotFoundEverywhere(err) || IsArticleNotFoundError(err) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestFailoverSingleProviderTransientThenNotFoundIsNotProof(t *testing.T) {
+	t.Parallel()
+	client := failoverClient(t, 1, failoverProvider("127.0.0.1", livePort(t), "a", 1, "", false))
+	err, seen := runScripted(t, client, true, map[string][]error{
+		"a": {NewTimeoutError(errors.New("timeout")), notFound430()},
+	})
+	if !slices.Equal(seen, []string{"a", "a"}) || !IsArticleNotFoundError(err) || IsNotFoundEverywhere(err) {
+		t.Fatalf("err = %v, seen = %v", err, seen)
+	}
+}
+
+func TestFailover423IsNotProof(t *testing.T) {
+	t.Parallel()
+	notInGroup := &Error{Type: ErrorTypeArticleNotFound, Code: 423, Message: "no article with that number"}
+	err, _ := runScripted(t, twoHosts(t, "", ""), true, map[string][]error{"a": {notInGroup}, "b": {notInGroup}})
+	if err == nil || IsNotFoundEverywhere(err) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestFailoverNoDataBodyIsNotProof(t *testing.T) {
+	t.Parallel()
+	noData := &Error{Type: ErrorTypeArticleNotFound, Code: 222, Message: "no data"}
+	err, _ := runScripted(t, twoHosts(t, "", ""), true, map[string][]error{"a": {noData}, "b": {notFound430()}})
+	if err == nil || IsNotFoundEverywhere(err) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestStatProves(t *testing.T) {
+	t.Parallel()
+	port := livePort(t)
+	client := failoverClient(t, 0,
+		failoverProvider("127.0.0.1", port, "a", 1, "", false),
+		failoverProvider("localhost", port, "b", 2, "", false),
+	)
+	_, _, err := client.Stat(t.Context(), WorkloadDownload, "missing@example")
+	if !IsNotFoundEverywhere(err) {
+		t.Fatalf("err = %v", err)
 	}
 }

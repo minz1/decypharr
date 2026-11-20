@@ -672,11 +672,20 @@ func (c *Client) getAnyAvailableConnection(
 	workload Workload,
 	exclusions providerExclusions,
 ) (*Connection, config.UsenetProvider, error) {
+	return c.acquireAny(ctx, workload, exclusions, nil)
+}
+
+func (c *Client) acquireAny(
+	ctx context.Context,
+	workload Workload,
+	exclusions providerExclusions,
+	acquireFailed *bool,
+) (*Connection, config.UsenetProvider, error) {
 	if !workload.valid() {
 		return nil, config.UsenetProvider{}, fmt.Errorf("invalid NNTP workload: %s", workload)
 	}
 	useBackups := !c.hasEligibleProviderInTier(exclusions, false)
-	return c.getAnyAvailableConnectionInTier(ctx, workload, exclusions, useBackups)
+	return c.getAnyAvailableConnectionInTier(ctx, workload, exclusions, useBackups, acquireFailed)
 }
 
 func (c *Client) hasEligibleProviderInTier(exclusions providerExclusions, backup bool) bool {
@@ -693,10 +702,11 @@ func (c *Client) getAnyAvailableConnectionInTier(
 	workload Workload,
 	exclusions providerExclusions,
 	useBackups bool,
+	acquireFailed *bool,
 ) (*Connection, config.UsenetProvider, error) {
 	// Phase 1: Non-blocking scan - try to get a free slot from any provider
 	// within the current tier.
-	conn, provider, eligibleCount := c.scanTier(ctx, workload, exclusions, useBackups)
+	conn, provider, eligibleCount := c.scanTier(ctx, workload, exclusions, useBackups, acquireFailed)
 	if conn != nil {
 		return conn, provider, nil
 	}
@@ -717,16 +727,16 @@ func (c *Client) getAnyAvailableConnectionInTier(
 	if !useBackups && workload == WorkloadStreamDemand && c.streamBackupWait > 0 &&
 		c.hasEligibleProviderInTier(exclusions, true) {
 		waitCtx, cancel := context.WithTimeoutCause(ctx, c.streamBackupWait, errStreamBackupWaitElapsed)
-		waited, waitedProvider, err := c.waitForConnection(waitCtx, workload, eligible)
+		waited, waitedProvider, err := c.waitForConnection(waitCtx, workload, eligible, acquireFailed)
 		spillToBackup := errors.Is(context.Cause(waitCtx), errStreamBackupWaitElapsed) && ctx.Err() == nil
 		cancel()
 		if spillToBackup {
 			c.streamBackupSpillovers.Add(1)
-			return c.getAnyAvailableConnectionInTier(ctx, workload, exclusions, true)
+			return c.getAnyAvailableConnectionInTier(ctx, workload, exclusions, true, acquireFailed)
 		}
 		return waited, waitedProvider, err
 	}
-	return c.waitForConnection(ctx, workload, eligible)
+	return c.waitForConnection(ctx, workload, eligible, acquireFailed)
 }
 
 // scanTier tries every eligible provider of one tier without blocking. It
@@ -742,6 +752,7 @@ func (c *Client) scanTier(
 	workload Workload,
 	exclusions providerExclusions,
 	useBackups bool,
+	acquireFailed *bool,
 ) (*Connection, config.UsenetProvider, int) {
 	ignoreCooldowns := true
 	for i, p := range c.providers {
@@ -767,6 +778,7 @@ func (c *Client) scanTier(
 		conn, err := c.getOrCreateFromPool(ctx, pp, p, ignoreCooldowns)
 		if err != nil {
 			c.releaseSlot(pp) // Release slot on error, try next provider
+			markAcquireFailed(acquireFailed)
 			continue
 		}
 		return conn, p, eligibleCount
@@ -784,6 +796,7 @@ func (c *Client) waitForConnection(
 	ctx context.Context,
 	workload Workload,
 	eligible []*ProviderPool,
+	acquireFailed *bool,
 ) (*Connection, config.UsenetProvider, error) {
 	w := c.newQueuedWaiter(workload, eligible)
 
@@ -802,7 +815,7 @@ func (c *Client) waitForConnection(
 		}
 		c.register(w)
 
-		scan := c.scanEligible(ctx, workload, eligible)
+		scan := c.scanEligible(ctx, workload, eligible, acquireFailed)
 		if scan.conn != nil {
 			c.deregister(w)
 			c.finishWait(w, admissionSucceeded)
@@ -830,6 +843,7 @@ func (c *Client) waitForConnection(
 				return conn, pp.config, nil
 			}
 			c.releaseSlot(pp)
+			markAcquireFailed(acquireFailed)
 			if !errors.Is(err, errDialCooldown) {
 				lastErr = err
 			}
@@ -854,7 +868,12 @@ type eligibleScan struct {
 
 // scanEligible tries each eligible pool once without blocking, honoring dial
 // cooldowns while any pool is warm.
-func (c *Client) scanEligible(ctx context.Context, workload Workload, eligible []*ProviderPool) eligibleScan {
+func (c *Client) scanEligible(
+	ctx context.Context,
+	workload Workload,
+	eligible []*ProviderPool,
+	acquireFailed *bool,
+) eligibleScan {
 	var scan eligibleScan
 	ignoreCooldowns := !slices.ContainsFunc(eligible, (*ProviderPool).isWarm)
 	for _, pp := range eligible {
@@ -871,6 +890,7 @@ func (c *Client) scanEligible(ctx context.Context, workload Workload, eligible [
 			return scan
 		}
 		c.releaseSlot(pp)
+		markAcquireFailed(acquireFailed)
 		if errors.Is(err, errDialCooldown) {
 			// Raced into a cooldown (pool drained after the isWarm check):
 			// wait it out, don't surface it.
@@ -881,6 +901,12 @@ func (c *Client) scanEligible(ctx context.Context, workload Workload, eligible [
 		}
 	}
 	return scan
+}
+
+func markAcquireFailed(flag *bool) {
+	if flag != nil {
+		*flag = true
+	}
 }
 
 // errDialCooldown is returned by getOrCreateFromPool when the pool has no
@@ -1516,7 +1542,7 @@ func (c *Client) Stat(ctx context.Context, workload Workload, messageID string) 
 
 	var num int
 	var id string
-	err := c.ExecuteWithFailover(ctx, workload, func(conn *Connection) error {
+	err := c.ExecuteArticle(ctx, workload, func(conn *Connection) error {
 		n, echoed, statErr := conn.Stat(messageID)
 		if statErr != nil {
 			return statErr
