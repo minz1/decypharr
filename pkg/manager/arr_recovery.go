@@ -22,7 +22,7 @@ type ArrRecovery interface {
 	Lookup(entryID, fileID string) (reacquire.Binding, bool)
 	Reacquire(reacquire.Request) (*reacquire.Job, error)
 	FailDownload(arrName, downloadID, entryID string, since time.Time) (reacquire.Job, reacquire.Handed, error)
-	FailJob(arrName, downloadID, entryID string, since time.Time) (reacquire.Job, bool)
+	FailReceipt(arrName, downloadID string, since time.Time) (reacquire.Job, bool, error)
 	JobByID(id string) (reacquire.Job, bool)
 	Jobs() []reacquire.Job
 	Ready() bool

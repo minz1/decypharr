@@ -192,19 +192,32 @@ func (s *Service) finishedReceiptLocked(key jobKey, since time.Time) (Job, bool)
 	return Job{}, false
 }
 
-func (s *Service) FailJob(arrName, downloadID, _ string, since time.Time) (Job, bool) {
-	key := jobKey{arrName: arrName, downloadID: downloadID}
-	s.jobsMu.RLock()
-	defer s.jobsMu.RUnlock()
-	if id, active := s.activeReacquisitions[key]; active {
-		job := s.jobs[id]
-		if job.Strategy.failsDownload() && !job.Status.waiting() {
-			return cloneJob(job), true
-		}
-		return Job{}, false
+func (s *Service) FailReceipt(arrName, downloadID string, since time.Time) (Job, bool, error) {
+	release, err := s.beginOperation()
+	if err != nil {
+		return Job{}, false, err
 	}
-	job, ok := s.finishedReceiptLocked(key, since)
-	return cloneJob(job), ok
+	defer release()
+
+	key := jobKey{arrName: arrName, downloadID: downloadID}
+	s.jobsMu.Lock()
+	defer s.jobsMu.Unlock()
+	var job Job
+	if id, active := s.activeReacquisitions[key]; active {
+		job = s.jobs[id]
+		if !job.Strategy.failsDownload() || job.Status.waiting() {
+			return Job{}, false, nil
+		}
+	} else if finished, ok := s.finishedReceiptLocked(key, since); ok {
+		job = finished
+	} else {
+		return Job{}, false, nil
+	}
+	receipt, _, err := s.receiptLocked(job)
+	if err != nil {
+		return Job{}, false, err
+	}
+	return receipt, true, nil
 }
 
 // enqueue queues the job for binding and the other files of the same download.

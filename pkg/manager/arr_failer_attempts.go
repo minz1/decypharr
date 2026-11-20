@@ -60,41 +60,36 @@ func (m *Manager) untell(key string, at time.Time) {
 }
 
 func (m *Manager) deliverFail(ctx context.Context, recovery ArrRecovery, d failDelivery) (reacquire.Job, error) {
-	admitted := true
 	if d.precheck {
-		if _, ok := recovery.FailJob(d.arr, d.downloadID, d.entryID, d.since); ok {
-			admitted = false
+		job, ok, err := recovery.FailReceipt(d.arr, d.downloadID, d.since)
+		if err != nil {
+			return reacquire.Job{}, fmt.Errorf("read the fail receipt in %s: %w", d.arr, err)
+		}
+		if ok {
+			return job, nil
 		}
 	}
 	release := func() { m.arr.ReleaseFailGrab(d.arr, d.downloadID, d.provider) }
-	if admitted {
-		if err := m.arr.AdmitFailGrab(ctx, d.arr, d.downloadID, d.provider); err != nil {
-			return reacquire.Job{}, err
-		}
-		if d.current != nil && !d.current() {
-			release()
-			return reacquire.Job{}, &staleOccurrenceError{}
-		}
-		if err := ctx.Err(); err != nil {
-			release()
-			return reacquire.Job{}, err
-		}
+	if err := m.arr.AdmitFailGrab(ctx, d.arr, d.downloadID, d.provider); err != nil {
+		return reacquire.Job{}, err
+	}
+	if d.current != nil && !d.current() {
+		release()
+		return reacquire.Job{}, &staleOccurrenceError{}
+	}
+	if err := ctx.Err(); err != nil {
+		release()
+		return reacquire.Job{}, err
 	}
 	job, handed, err := recovery.FailDownload(d.arr, d.downloadID, d.entryID, d.since)
 	if err != nil {
-		if admitted {
-			release()
-		}
+		release()
 		return reacquire.Job{}, fmt.Errorf("fail download in %s: %w", d.arr, err)
 	}
-	if admitted {
-		if handed == reacquire.HandedExisting {
-			release()
-		} else {
-			m.arr.CommitFailGrab(d.arr, d.downloadID, d.provider)
-		}
-	}
-	if handed != reacquire.HandedExisting {
+	if handed == reacquire.HandedExisting {
+		release()
+	} else {
+		m.arr.CommitFailGrab(d.arr, d.downloadID, d.provider)
 		m.logger.Info().
 			Str("infohash", d.entryID).
 			Str("name", d.name).

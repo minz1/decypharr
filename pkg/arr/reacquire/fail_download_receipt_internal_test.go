@@ -17,10 +17,6 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/arr"
 )
 
-var errInjectedSync = errors.New("injected sync failure")
-
-var errInjectedPut = errors.New("injected put failure")
-
 type observedJobStore struct {
 	jobStore
 
@@ -305,6 +301,7 @@ func TestFailDownloadStagedUntilSynced(t *testing.T) {
 }
 
 func stagedPutFailure(t *testing.T) {
+	errInjectedPut := errors.New("injected put failure")
 	t.Parallel()
 	service := seedFailService(t, t.TempDir())
 	service.store.putErr = errInjectedPut
@@ -315,8 +312,8 @@ func stagedPutFailure(t *testing.T) {
 	if len(service.Jobs()) != 0 {
 		t.Fatalf("jobs = %v, want none", service.Jobs())
 	}
-	if _, found := service.FailJob("sonarr", receiptDownloadID, "entry", time.Time{}); found {
-		t.Fatal("FailJob found a job that was never stored")
+	if _, found, _ := service.FailReceipt("sonarr", receiptDownloadID, time.Time{}); found {
+		t.Fatal("FailReceipt found a job that was never stored")
 	}
 	if _, _, retryErr := service.FailDownload("sonarr", receiptDownloadID, "entry", time.Time{}); retryErr != nil {
 		t.Fatal(retryErr)
@@ -324,6 +321,7 @@ func stagedPutFailure(t *testing.T) {
 }
 
 func stagedCreateSyncFailure(t *testing.T) {
+	errInjectedSync := errors.New("injected sync failure")
 	t.Parallel()
 	key := jobKey{arrName: "sonarr", downloadID: receiptDownloadID}
 	service := seedFailService(t, t.TempDir())
@@ -338,8 +336,8 @@ func stagedCreateSyncFailure(t *testing.T) {
 	if _, runnable := service.nextJob(); runnable {
 		t.Fatal("the worker can see a job whose sync failed")
 	}
-	if _, found := service.FailJob("sonarr", receiptDownloadID, "entry", time.Time{}); found {
-		t.Fatal("FailJob reported a staged job as a receipt")
+	if _, found, _ := service.FailReceipt("sonarr", receiptDownloadID, time.Time{}); found {
+		t.Fatal("FailReceipt reported a staged job as a receipt")
 	}
 	service.jobsMu.RLock()
 	staged, isStaged := service.staged[key]
@@ -358,8 +356,8 @@ func stagedCreateSyncFailure(t *testing.T) {
 	if jobs := service.Jobs(); len(jobs) != 1 || jobs[0].ID != staged.ID {
 		t.Fatalf("jobs = %v, want only %q", jobs, staged.ID)
 	}
-	if _, found := service.FailJob("sonarr", receiptDownloadID, "entry", time.Time{}); !found {
-		t.Fatal("FailJob misses the published job")
+	if _, found, _ := service.FailReceipt("sonarr", receiptDownloadID, time.Time{}); !found {
+		t.Fatal("FailReceipt misses the published job")
 	}
 	service.jobsMu.RLock()
 	left := len(service.staged)
@@ -370,6 +368,7 @@ func stagedCreateSyncFailure(t *testing.T) {
 }
 
 func stagedRequeueSyncFailure(t *testing.T) {
+	errInjectedSync := errors.New("injected sync failure")
 	t.Parallel()
 	waiting := receiptJob("j1", StrategyHistoryFailed, StatusWaitingForImport, time.Now().Add(-time.Hour).UTC())
 	service := seedFailService(t, t.TempDir(), waiting)
@@ -391,6 +390,7 @@ func stagedRequeueSyncFailure(t *testing.T) {
 }
 
 func TestFailDownloadStagedRestart(t *testing.T) {
+	errInjectedSync := errors.New("injected sync failure")
 	t.Parallel()
 	directory := t.TempDir()
 	first, err := NewService(newTestGroup(t), ServiceOptions{Directory: directory})
@@ -425,23 +425,33 @@ func TestFailDownloadStagedRestart(t *testing.T) {
 	}
 }
 
-type failJobCase struct {
+type failReceiptCase struct {
 	name       string
 	seed       Job
 	arr        string
 	downloadID string
-	entryID    string
+	syncErr    bool
 	want       bool
+	wantSyncs  int
 }
 
-func TestFailJobReceiptRule(t *testing.T) {
+func TestFailReceiptRule(t *testing.T) {
 	t.Parallel()
 	since := time.Now().Add(-time.Hour).UTC()
 	before := since.Add(-time.Hour)
-	for _, tc := range []failJobCase{
-		{name: "nonterminal download_failed", seed: receiptJob("j", StrategyDownloadFailed, StatusQueued, before), want: true},
-		{name: "nonterminal history_failed", seed: receiptJob("j", StrategyHistoryFailed, StatusQueued, before), want: true},
-		{name: "terminal at since", seed: receiptJob("j", StrategyDownloadFailed, StatusReady, since), want: true},
+	for _, tc := range []failReceiptCase{
+		{
+			name: "nonterminal download_failed", seed: receiptJob("j", StrategyDownloadFailed, StatusQueued, before),
+			want: true, wantSyncs: 1,
+		},
+		{
+			name: "nonterminal history_failed", seed: receiptJob("j", StrategyHistoryFailed, StatusQueued, before),
+			want: true, wantSyncs: 1,
+		},
+		{
+			name: "terminal at since", seed: receiptJob("j", StrategyDownloadFailed, StatusReady, since),
+			want: true, wantSyncs: 1,
+		},
 		{name: "terminal before since", seed: receiptJob("j", StrategyDownloadFailed, StatusReady, before)},
 		{name: "waiting history_failed", seed: receiptJob("j", StrategyHistoryFailed, StatusWaitingForImport, before)},
 		{name: "other strategy", seed: receiptJob("j", StrategyCommandSearch, StatusQueued, before)},
@@ -451,9 +461,10 @@ func TestFailJobReceiptRule(t *testing.T) {
 			downloadID: "elsewhere",
 		},
 		{
-			name: "entry id case differs", seed: receiptJob("j", StrategyDownloadFailed, StatusQueued, before),
-			entryID: "OTHERENTRY", want: true,
+			name: "sync error", seed: receiptJob("j", StrategyDownloadFailed, StatusQueued, before),
+			syncErr: true, wantSyncs: 1,
 		},
+		{name: "nothing stored"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -462,28 +473,40 @@ func TestFailJobReceiptRule(t *testing.T) {
 	}
 }
 
-func (tc failJobCase) run(t *testing.T, since time.Time) {
-	service := seedFailService(t, t.TempDir(), tc.seed)
-	arrName, downloadID, entryID := "sonarr", receiptDownloadID, "otherentry"
+func (tc failReceiptCase) run(t *testing.T, since time.Time) {
+	var seeds []Job
+	if tc.seed.ID != "" {
+		seeds = append(seeds, tc.seed)
+	}
+	service := seedFailService(t, t.TempDir(), seeds...)
+	arrName, downloadID := "sonarr", receiptDownloadID
 	if tc.arr != "" {
 		arrName = tc.arr
 	}
 	if tc.downloadID != "" {
 		downloadID = tc.downloadID
 	}
-	if tc.entryID != "" {
-		entryID = tc.entryID
-	}
+	injected := errors.New("injected sync failure")
 	service.store.reset()
-	job, found := service.FailJob(arrName, downloadID, entryID, since)
+	if tc.syncErr {
+		service.store.syncErrs = []error{injected}
+	}
+	job, found, err := service.FailReceipt(arrName, downloadID, since)
+	if tc.syncErr {
+		if !errors.Is(err, injected) || found {
+			t.Fatalf("FailReceipt = %v, %v, want the sync error and no hit", found, err)
+		}
+	} else if err != nil {
+		t.Fatal(err)
+	}
 	if found != tc.want {
-		t.Fatalf("FailJob = %v, want %v", found, tc.want)
+		t.Fatalf("FailReceipt = %v, want %v", found, tc.want)
 	}
 	if found && job.ID != "j" {
 		t.Fatalf("job %q, want j", job.ID)
 	}
-	if puts, syncs := service.store.counts(); len(puts) != 0 || syncs != 0 {
-		t.Fatalf("FailJob wrote: puts %v syncs %d", puts, syncs)
+	if puts, syncs := service.store.counts(); len(puts) != 0 || syncs != tc.wantSyncs {
+		t.Fatalf("FailReceipt wrote: puts %v syncs %d, want syncs %d", puts, syncs, tc.wantSyncs)
 	}
 }
 

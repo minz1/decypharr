@@ -3,6 +3,7 @@ package manager
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -38,12 +39,12 @@ func newScriptedRecovery() *scriptedRecovery {
 	}
 }
 
-func (r *scriptedRecovery) FailJob(_, _, entryID string, _ time.Time) (reacquire.Job, bool) {
+func (r *scriptedRecovery) FailReceipt(_, downloadID string, _ time.Time) (reacquire.Job, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.jobCalls++
-	job, ok := r.saved[entryID]
-	return job, ok
+	job, ok := r.saved[strings.ToLower(downloadID)]
+	return job, ok, nil
 }
 
 func (r *scriptedRecovery) FailDownload(
@@ -93,7 +94,7 @@ func freeSlotsFor(t *testing.T, m *Manager, provider string) int {
 
 func deliveryOf(entry *storage.Entry) failDelivery {
 	return failDelivery{
-		arr: "sonarr", provider: "realdebrid", downloadID: "HASH", entryID: entry.InfoHash, name: entry.Name,
+		arr: "sonarr", provider: "realdebrid", downloadID: strings.ToUpper(entry.InfoHash), entryID: entry.InfoHash, name: entry.Name,
 		reason: "Provider rejected the torrent", since: time.Now(),
 	}
 }
@@ -107,6 +108,7 @@ func TestDeliverFailGuardBookkeeping(t *testing.T) {
 		wantCalls  int
 		current    func(cancel context.CancelFunc) func() bool
 		savedFirst bool
+		precheck   bool
 	}{
 		"created counts against the bucket": {handed: reacquire.HandedCreated, wantSlots: 1, wantCalls: 1},
 		"a receipt that appears during admission is released": {
@@ -120,8 +122,14 @@ func TestDeliverFailGuardBookkeeping(t *testing.T) {
 			handed: reacquire.HandedCreated, wantErr: true, wantSlots: 2, wantCalls: 0,
 			current: func(cancel context.CancelFunc) func() bool { return func() bool { cancel(); return true } },
 		},
-		"a receipt found before admission skips the guard": {
-			handed: reacquire.HandedExisting, wantSlots: 2, wantCalls: 1, savedFirst: true,
+		"a receipt found before admission skips the guard and FailDownload": {
+			handed: reacquire.HandedExisting, wantSlots: 2, wantCalls: 0, savedFirst: true,
+		},
+		"a receipt miss then a created job is admitted and committed": {
+			handed: reacquire.HandedCreated, wantSlots: 1, wantCalls: 1, precheck: true,
+		},
+		"a receipt miss then a requeued job is admitted and committed": {
+			handed: reacquire.HandedRequeued, wantSlots: 1, wantCalls: 1, precheck: true,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -138,7 +146,7 @@ func TestDeliverFailGuardBookkeeping(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			d := deliveryOf(entry)
-			d.precheck = tc.savedFirst
+			d.precheck = tc.savedFirst || tc.precheck
 			if tc.current != nil {
 				d.current = tc.current(cancel)
 			}
@@ -478,7 +486,7 @@ func TestArrFailerWaitingHistoryJobRequeued(t *testing.T) {
 		w.recovery.handed = reacquire.HandedRequeued
 		w.boot()
 		if w.recovery.jobCalls != 1 || w.recovery.downloadCalls() != 1 {
-			t.Fatalf("FailJob calls = %d, FailDownload calls = %d, want the waiting job not read as a receipt",
+			t.Fatalf("FailReceipt calls = %d, FailDownload calls = %d, want the waiting job not read as a receipt",
 				w.recovery.jobCalls, w.recovery.downloadCalls())
 		}
 		if got := w.arrFail(); got.State != grab.ArrFailQueued || got.JobID != "fail-1" {

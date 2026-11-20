@@ -49,8 +49,8 @@ func (f *fakeArrRecovery) Ready() bool { return !f.notReady }
 
 func (f *fakeArrRecovery) Jobs() []reacquire.Job { return f.jobs }
 
-func (f *fakeArrRecovery) FailJob(string, string, string, time.Time) (reacquire.Job, bool) {
-	return reacquire.Job{}, false
+func (f *fakeArrRecovery) FailReceipt(string, string, time.Time) (reacquire.Job, bool, error) {
+	return reacquire.Job{}, false, nil
 }
 
 func (f *fakeArrRecovery) JobByID(string) (reacquire.Job, bool) { return reacquire.Job{}, false }
