@@ -234,7 +234,7 @@ func (p *NZBParser) parse(
 		Password: raw.Metadata["password"],
 	}
 	// Group files by base Name and type
-	fileGroups, allMissing, doubt := p.groupFiles(ctx, raw.Files)
+	fileGroups, allMissing, doubt := p.groupFiles(ctx, raw.Files, nzb.Name)
 	if ctx.Err() != nil {
 		return nil, nil, fmt.Errorf("parse interrupted while identifying files: %w", ctx.Err())
 	}
@@ -242,9 +242,6 @@ func (p *NZBParser) parse(
 		if !p.proofNameAllowed(group, nzb.Name) {
 			doubt = true
 		}
-	}
-	if p.refusesSample(nzb.Name) {
-		doubt = true
 	}
 	for _, group := range fileGroups {
 		group.proofDoubt = doubt
@@ -313,7 +310,7 @@ func (p *NZBParser) probeContentAvailability(
 				missing = append(missing, detail)
 				continue
 			}
-			return detail
+			return &proofWithheldError{err: detail}
 		}
 		return nil
 	}
@@ -410,7 +407,11 @@ func (p *NZBParser) process(
 	return nzb, nil
 }
 
-func (p *NZBParser) groupFiles(ctx context.Context, files []manifest.File) (map[string]*FileGroup, bool, bool) {
+func (p *NZBParser) groupFiles(
+	ctx context.Context,
+	files []manifest.File,
+	nzbName string,
+) (map[string]*FileGroup, bool, bool) {
 	numberByDocumentOrder(files)
 
 	var unknownFiles []manifest.File
@@ -445,7 +446,7 @@ func (p *NZBParser) groupFiles(ctx context.Context, files []manifest.File) (map[
 	for _, result := range unknownResults {
 		allMissing = allMissing && result.notFound
 		if result.fileType == storage.NZBFileTypeUnknown &&
-			(!result.proven || p.refusesNamedFile(result.file.Filename)) {
+			(!result.proven || p.refusesNamedFile(result.file.Filename, nzbName)) {
 			doubt = true
 		}
 		if result.fileType != storage.NZBFileTypeUnknown && result.fileType != storage.NZBFileTypeIgnore {

@@ -777,11 +777,56 @@ func TestHeaderWalkSourceVerdictIsNotProof(t *testing.T) {
 func TestSampleNZBNameWithholdsProof(t *testing.T) {
 	t.Parallel()
 	source := scriptSource{stat: provenStat, header: provenHeaders}
-	filter := (&config.Config{AllowedExt: []string{"mkv"}}).ValidateFileAllowed
-	p := NewParserWithSource(source, 2, zerolog.Nop()).WithFileFilter(filter)
-	_, _, err := p.Parse(t.Context(), "sample-clip.nzb", []byte(nzbOf(fileXML(1, 1, "movie.mkv.001", "1:a@x"))))
-	if !errors.Is(err, customerror.ErrUsenetSegmentMissing) || VerdictOf(err) != VerdictNone {
-		t.Fatalf("error = %v verdict %v, want missing without a verdict", err, VerdictOf(err))
+	filter := (&config.Config{AllowedExt: []string{"mkv", "zip"}}).ValidateFileAllowed
+	rows := []struct {
+		name, nzbName string
+		files         []string
+		want          Verdict
+	}{
+		{name: "sample name", nzbName: "sample-clip.nzb", files: []string{"movie.mkv.001"}, want: VerdictNone},
+		{
+			name:    "sample once renamed",
+			nzbName: "release.sample.nzb",
+			files:   []string{"movie.mkv.001"},
+			want:    VerdictNone,
+		},
+		{
+			name:    "sample once renamed, obfuscated",
+			nzbName: "release.sample.nzb",
+			files:   []string{deadOne},
+			want:    VerdictNone,
+		},
+		{name: "plain name", nzbName: "release.nzb", files: []string{"movie.mkv.001"}, want: VerdictArticlesMissing},
+		{
+			name: "sample name over named archives", nzbName: "sample-clip.nzb",
+			files: []string{"movie-one.zip", "movie-two.zip"}, want: VerdictArticlesMissing,
+		},
+	}
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
+			var xml []string
+			for i, name := range row.files {
+				xml = append(xml, fileXML(i+1, len(row.files), name, fmt.Sprintf("1:f%d@x", i)))
+			}
+			p := NewParserWithSource(source, 2, zerolog.Nop()).WithFileFilter(filter)
+			_, _, err := p.Parse(t.Context(), row.nzbName, []byte(nzbOf(xml...)))
+			if !errors.Is(err, customerror.ErrUsenetSegmentMissing) || VerdictOf(err) != row.want {
+				t.Fatalf("error = %v verdict %v, want %v", err, VerdictOf(err), row.want)
+			}
+		})
+	}
+}
+
+func TestProbeSourceVerdictIsNotProof(t *testing.T) {
+	t.Parallel()
+	source := scriptSource{header: provenHeaders, stat: func(string) error {
+		return &ContentMissingError{Err: context.DeadlineExceeded}
+	}}
+	p := NewParserWithSource(source, 2, zerolog.Nop())
+	verdict, err := parseVerdict(t, p, nzbOf(fileXML(1, 1, "movie.mkv", "1:a@x", "2:b@x")))
+	if err == nil || verdict != VerdictNone {
+		t.Fatalf("error = %v verdict %v, want no verdict", err, verdict)
 	}
 }
 

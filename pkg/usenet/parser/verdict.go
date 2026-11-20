@@ -104,8 +104,8 @@ func (p *NZBParser) proofNameAllowed(group *FileGroup, nzbName string) bool {
 	return true
 }
 
-func (p *NZBParser) refusesNamedFile(name string) bool {
-	if p.refusesSample(name) {
+func (p *NZBParser) refusesNamedFile(name, nzbName string) bool {
+	if p.refusesSample(name) || p.refusesSample(nzbName+".mkv") {
 		return true
 	}
 	stem := name
