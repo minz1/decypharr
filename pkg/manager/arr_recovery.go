@@ -5,14 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/sirrobot01/appendstore"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
-	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/arr/reacquire"
 	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/repair"
@@ -185,41 +183,6 @@ func (m *Manager) admitHeal(entryID, provider string, class repair.Class, units 
 	// The gate that asks has no context of its own; the work group's ends the admission when the manager stops.
 	ctx := m.work.Context()
 	return m.repair.Admit(ctx, repair.HealRequest{Provider: provider, Class: class, Subject: entryID, Units: units})
-}
-
-// failGrab queues the job that fails a never-imported download's grab in
-// arrName. Sonarr and Radarr store qBittorrent download IDs uppercased.
-//
-// Failing a grab blocklists its release, so it passes the arr blocklist guard with queue cleanup's blocklists. A
-// held one creates no job and returns an error wrapping arr.ErrBlocklistHeld.
-func (m *Manager) failGrab(entry *storage.Entry, recovery ArrRecovery, arrName, reason string) error {
-	provider := entry.ActiveProvider
-	if provider == "" {
-		provider = string(config.ProtocolTorrent)
-	}
-	downloadID := strings.ToUpper(entry.InfoHash)
-	// A cancelled context makes a canary inconclusive, so the call holds (fails closed); a grab held at shutdown is lost (accepted).
-	ctx := m.work.Context()
-	if err := m.arr.AdmitFailGrab(ctx, arrName, downloadID, provider); err != nil {
-		return err
-	}
-	job, handed, err := recovery.FailDownload(arrName, downloadID, entry.InfoHash, time.Time{})
-	if err != nil {
-		m.arr.ReleaseFailGrab(arrName, downloadID, provider)
-		return fmt.Errorf("fail download in %s: %w", arrName, err)
-	}
-	if handed == reacquire.HandedExisting {
-		m.arr.ReleaseFailGrab(arrName, downloadID, provider)
-	} else {
-		m.arr.CommitFailGrab(arrName, downloadID, provider)
-	}
-	m.logger.Info().
-		Str("infohash", entry.InfoHash).
-		Str("name", entry.Name).
-		Str("arr", arrName).
-		Str("job", job.ID).
-		Msg(reason + "; failing its grab in the Arr")
-	return nil
 }
 
 // streamCheckTimeout bounds the full article check that confirms a stream failure before the file is replaced.
@@ -403,29 +366,8 @@ func (m *Manager) recheckBad(ctx context.Context, infohash string) {
 			m.logger.Info().Str("infohash", infohash).Msg("A repair is running; leaving the bad mark and the grab")
 			return
 		}
-		failCtx, cancel := context.WithTimeout(ctx, time.Minute)
-		defer cancel()
-		m.failGrabIfQueued(failCtx, entry)
+		m.wantRecheck(entry)
 	case repair.VerdictInconclusive:
-	}
-}
-
-// failGrabIfQueued fails an arr torrent's grab only while the arr still queues it; imported files stay with repair.
-// A grab the guard holds is kept and retried by the manager.
-func (m *Manager) failGrabIfQueued(ctx context.Context, entry *storage.Entry) {
-	err := m.tryFailGrabIfQueued(ctx, entry)
-	switch {
-	case err == nil:
-	case errors.Is(err, arr.ErrBlocklistHeld):
-		m.holdGrab(entry.InfoHash, grabBucket(entry), func(ctx context.Context) error {
-			current := m.badEntry(entry.InfoHash)
-			if current == nil {
-				return nil
-			}
-			return m.tryFailGrabIfQueued(ctx, current)
-		})
-	default:
-		m.logger.Warn().Err(err).Str("name", entry.Name).Msg("Failed to fail the grab in the Arr")
 	}
 }
 
@@ -436,28 +378,6 @@ func (m *Manager) badEntry(infoHash string) *storage.Entry {
 		return nil
 	}
 	return entry
-}
-
-func (m *Manager) tryFailGrabIfQueued(ctx context.Context, entry *storage.Entry) error {
-	if !entry.IsTorrent() || entry.Manual {
-		return nil
-	}
-	instance, ok := m.Arr().Get(entry.Category)
-	recovery := m.recoveryService()
-	if !ok || recovery == nil {
-		return nil
-	}
-	records, err := m.Arr().Queue(ctx, instance.Name)
-	if err != nil {
-		return fmt.Errorf("arr queue unreadable; leaving the grab of a bad entry: %w", err)
-	}
-	queued := slices.ContainsFunc(records, func(record arr.QueueSchema) bool {
-		return strings.EqualFold(record.DownloadID, entry.InfoHash)
-	})
-	if !queued {
-		return nil
-	}
-	return m.failGrab(entry, recovery, instance.Name, "No provider can serve the torrent")
 }
 
 // rearmBadRechecks gives every bad torrent entry the second check a restart cut short. One task runs them one

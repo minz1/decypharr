@@ -131,7 +131,6 @@ func (m *Manager) startScheduler(ctx context.Context) error {
 	// Arr monitoring job
 	m.scheduleEvery(ctx, m.scheduler, "10s", "arr-monitoring", func() {
 		m.arr.CleanupQueues(ctx)
-		m.retryHeldGrabs(ctx)
 	})
 
 	// Start the scheduler

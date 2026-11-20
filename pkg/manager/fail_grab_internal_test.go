@@ -7,13 +7,13 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/arr"
-	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
@@ -70,55 +70,48 @@ func TestFailGrabStormWithAFailingCanaryFailsNothingPastTheFreeLimit(t *testing.
 	}
 }
 
-// failBadRelease and the bad-mark recheck do not retry themselves; a held grab is kept and sent exactly once later.
-func TestHeldGrabIsRetriedLaterAndSentOnce(t *testing.T) {
+func TestHeldGrabsAreRetriedLaterAndSentOnce(t *testing.T) {
 	t.Parallel()
 	recovery := &fakeArrRecovery{}
 	var verdict atomic.Int64
 	verdict.Store(int64(arr.CanaryFail))
 	m, _ := grabManager(t, recovery, &verdict)
-
-	entries := make([]*storage.Entry, 5)
-	for i := range entries {
-		entries[i] = grabEntry(i)
-		if err := m.queue.Add(entries[i]); err != nil {
-			t.Fatal(err)
+	synctest.Test(t, func(t *testing.T) {
+		f := runFailer(t, arrFailerDeps{attemptGrab: deliverOnly(m, recovery)})
+		start := time.Now()
+		for i := range 5 {
+			entry := grabEntry(i)
+			f.wantGrab(pendingGrab(
+				strings.ToLower(entry.InfoHash), "realdebrid", start.Add(time.Duration(i)*time.Millisecond),
+			))
 		}
-		failed := grab.State{Key: strings.ToLower(entries[i].InfoHash), Phase: grab.PhaseFailed}
-		m.grabs.publish(GrabView{State: failed, Entry: *entries[i]})
-		m.failEffects(grab.Grab{Entry: entries[i], State: failed}, grab.FailBadRelease)
-	}
-	if len(recovery.fails) != 2 {
-		t.Fatalf("grabs failed straight away = %d, want the 2 free ones", len(recovery.fails))
-	}
-	if m.heldGrabCount() != 3 {
-		t.Fatalf("held grabs = %d, want 3 kept for a retry", m.heldGrabCount())
-	}
-
-	m.retryHeldGrabs(t.Context())
-	if len(recovery.fails) != 2 {
-		t.Fatalf("a retry while the canary fails sent %d more", len(recovery.fails)-2)
-	}
-
-	verdict.Store(int64(arr.CanaryPass))
-	deadline := time.Now().Add(5 * time.Second)
-	for m.heldGrabCount() > 0 && time.Now().Before(deadline) {
-		time.Sleep(1100 * time.Millisecond) // the window and the cached verdict are a second long here
-		m.retryHeldGrabs(t.Context())
-	}
-	m.retryHeldGrabs(t.Context())
-	if len(recovery.fails) != 5 || m.heldGrabCount() != 0 {
-		t.Fatalf("grabs failed = %d, held = %d, want all 5 sent and none held", len(recovery.fails), m.heldGrabCount())
-	}
-	seen := map[string]int{}
-	for _, fail := range recovery.fails {
-		seen[fail[2]]++
-	}
-	for hash, n := range seen {
-		if n != 1 {
-			t.Errorf("grab of %s failed %d times, want exactly once", hash, n)
+		synctest.Wait()
+		if got := failsOf(recovery); len(got) != 2 || f.itemCount() != 3 {
+			t.Fatalf(
+				"grabs failed straight away = %d, kept = %d; want the 2 free ones sent and 3 kept",
+				len(got),
+				f.itemCount(),
+			)
 		}
-	}
+		time.Sleep(100 * time.Millisecond)
+		synctest.Wait()
+		if got := failsOf(recovery); len(got) != 2 || f.itemCount() != 3 {
+			t.Fatalf("a retry while the canary fails sent %d more", len(got)-2)
+		}
+
+		verdict.Store(int64(arr.CanaryPass))
+		time.Sleep(10 * time.Second)
+		synctest.Wait()
+		got := failsOf(recovery)
+		if len(got) != 5 || f.itemCount() != 0 {
+			t.Fatalf("grabs failed = %d, kept = %d, want all 5 sent and none kept", len(got), f.itemCount())
+		}
+		for i, fail := range got {
+			if want := grabEntry(i).InfoHash; fail[2] != want {
+				t.Errorf("grab %d sent for %s, want %s: each exactly once, oldest first", i, fail[2], want)
+			}
+		}
+	})
 }
 
 // The dropped path returns the hold as an error, so the entry is kept and retried by the next sync.
@@ -139,8 +132,7 @@ func TestDroppedGrabHeldByTheGuardIsAnError(t *testing.T) {
 	}
 }
 
-// A failed grab's Arr effects run off the actor: a canary probe that hangs never holds the caller.
-func TestFailLaterDoesNotWaitForTheCanary(t *testing.T) {
+func TestAnAttemptHungOnTheCanaryNeverHoldsTheCaller(t *testing.T) {
 	t.Parallel()
 	recovery := &fakeArrRecovery{}
 	var verdict atomic.Int64
@@ -150,7 +142,7 @@ func TestFailLaterDoesNotWaitForTheCanary(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	called, release := make(chan struct{}), make(chan struct{})
+	called, release, delivered := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	m.arr.SetQueueGuardHooks(arr.QueueGuardHooks{
 		Canary: func(context.Context, string) arr.CanaryVerdict {
 			close(called)
@@ -159,9 +151,14 @@ func TestFailLaterDoesNotWaitForTheCanary(t *testing.T) {
 		},
 		Notify: func(string, string) {},
 	})
+	inner := deliverOnly(m, recovery)
+	f := runFailer(t, arrFailerDeps{attemptGrab: func(ctx context.Context, spec attemptSpec) attemptResult {
+		defer close(delivered)
+		return inner(ctx, spec)
+	}})
 	entry := grabEntry(9)
-	failed := grab.State{Key: strings.ToLower(entry.InfoHash), Phase: grab.PhaseFailed}
-	m.failLater(grab.Grab{Entry: entry, State: failed}, grab.FailBadRelease)
+	f.wantGrab(pendingGrab(strings.ToLower(entry.InfoHash), "realdebrid", time.Now()))
 	<-called
 	close(release)
+	<-delivered
 }

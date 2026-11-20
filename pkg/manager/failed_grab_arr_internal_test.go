@@ -85,9 +85,8 @@ func TestASeasonChildsBadReleaseNeverCallsTheArr(t *testing.T) {
 	entry.Protocol = config.ProtocolTorrent
 	g := failedGrab(entry, "entry in error state on debrid")
 	g.State.PackKey = "pack"
-	m.failEffects(g, grab.FailBadRelease)
-	if len(fake.fails) != 0 {
-		t.Fatalf("FailDownload calls = %v, want none for a season child's synthetic hash", fake.fails)
+	if got := m.failArr(g); got != "" {
+		t.Fatalf("failArr = %q, want none for a season child's synthetic hash", got)
 	}
 }
 

@@ -2,8 +2,8 @@ package manager
 
 import (
 	"errors"
-	"strings"
 	"testing"
+	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
@@ -13,7 +13,7 @@ import (
 )
 
 // The arr only warns on a qBit "error" torrent, so a bad release is failed through its API to be blocklisted and re-searched.
-func TestFailBadReleaseFailsArrTorrentGrab(t *testing.T) {
+func TestFailArrNamesTheArrOnlyForAnArrTorrentGrab(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
 		edit     func(*storage.Entry)
@@ -26,13 +26,11 @@ func TestFailBadReleaseFailsArrTorrentGrab(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			fake := &fakeArrRecovery{}
-			m, entry := newDroppedTestManager(t, fake)
+			m, entry := newDroppedTestManager(t, &fakeArrRecovery{})
 			tc.edit(entry)
-			m.failEffects(failedGrab(entry, "entry in error state on debrid"), grab.FailBadRelease)
-			want := [3]string{"sonarr", strings.ToUpper(droppedHash), droppedHash}
-			if got := len(fake.fails) == 1 && fake.fails[0] == want; got != tc.wantFail {
-				t.Fatalf("FailDownload calls = %v, want failed = %v", fake.fails, tc.wantFail)
+			got := m.failArr(failedGrab(entry, "entry in error state on debrid"))
+			if (got == "sonarr") != tc.wantFail || (got != "" && got != "sonarr") {
+				t.Fatalf("failArr = %q, want the arr = %v", got, tc.wantFail)
 			}
 		})
 	}
@@ -50,11 +48,28 @@ func TestFailEntryLeavesTheGrabAlone(t *testing.T) {
 	}
 }
 
-func TestFailBadReleaseWithoutRecoveryService(t *testing.T) {
+func TestAFailAttemptWithoutRecoveryServiceIsAnError(t *testing.T) {
 	t.Parallel()
 	m, entry := newDroppedTestManager(t, nil)
 	entry.Protocol = config.ProtocolTorrent
-	m.failEffects(failedGrab(entry, "debrid entry not found"), grab.FailBadRelease)
+	at := time.Now()
+	g := pendingGrab(droppedHash, "torrent", at)
+	m.grabs.publish(GrabView{State: g.State, Entry: *entry})
+	res := m.attemptFailGrab(t.Context(), attemptSpec{key: droppedHash, arr: "sonarr", provider: "torrent", at: at})
+	if res.kind != resError || res.err == nil {
+		t.Fatalf("result = %+v, want an error that retries", res)
+	}
+}
+
+func TestFailEffectsNoLongerFailsTheGrab(t *testing.T) {
+	t.Parallel()
+	fake := &fakeArrRecovery{}
+	m, entry := newDroppedTestManager(t, fake)
+	entry.Protocol = config.ProtocolTorrent
+	m.failEffects(failedGrab(entry, "entry in error state on debrid"), grab.FailBadRelease)
+	if got := failsOf(fake); len(got) != 0 {
+		t.Fatalf("FailDownload calls = %v, want none: the failer owns the Arr call", got)
+	}
 }
 
 // Dead swarms surface as status-check errors; only those the provider pins on the torrent may blocklist the release.

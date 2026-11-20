@@ -105,8 +105,7 @@ type Manager struct {
 	arrRecoveryMu          sync.RWMutex
 	arrRecovery            ArrRecovery
 	reacquireNotifications sync.Map
-	// heldGrabs are grab failures the arr blocklist guard held back, retried oldest first.
-	heldGrabs heldGrabs
+	failer                 *arrFailer
 
 	pruneMu      sync.Mutex
 	pruneNow     func() time.Time
@@ -441,6 +440,8 @@ func (m *Manager) init() error {
 }
 
 func (m *Manager) initArrServices() {
+	m.failer = m.newFailer(m.logs.New("arr-fail"))
+	m.arr.SetAddedHook(m.failer.arrAdded)
 	// Queue cleanup keeps the searches it owes in a file of its own; without it they live in memory only.
 	ledgerPath := filepath.Join(m.config.Dir(), "db", queueCleanupLedgerName)
 	if err := m.arr.OpenSearchLedger(ledgerPath); err != nil {
@@ -463,6 +464,7 @@ func (m *Manager) initArrServices() {
 		return
 	}
 	m.arrService = service
+	service.SetKeyReleasedHook(m.failer.keyReleased)
 	m.arrIndexer = reacquire.NewIndexer(
 		m.indexerSvc.group,
 		m.arr,
@@ -520,6 +522,8 @@ func (m *Manager) initEntries(packOf map[string]string) {
 		removeStalledAfter: m.removeStalledAfter(),
 		arrOwnsFailure:     m.arrOwnsFailure,
 		failArr:            m.failArr,
+		tell:               m.tell,
+		untell:             m.untell,
 		submitBudget:       m.submitBudget(),
 		retryDelay:         throttledRetryDelay,
 		completed:          m.completed,
@@ -551,19 +555,6 @@ func (m *Manager) runWorkCtx(name string, fn func(ctx context.Context)) error {
 // throttledRetryDelay doubles the wait after each active-download cap hit, up to maxThrottledRetryDelay.
 func throttledRetryDelay(retries int) time.Duration {
 	return min(tooManyDownloadsRetryDelay<<min(retries, maxThrottledDoublings), maxThrottledRetryDelay)
-}
-
-// failReleaseGrab fails the grab of an arr's torrent whose release the provider rejected.
-func (m *Manager) failReleaseGrab(entry *storage.Entry) error {
-	if !entry.IsTorrent() || entry.Manual {
-		return nil
-	}
-	instance, ok := m.Arr().Get(entry.Category)
-	recovery := m.recoveryService()
-	if !ok || recovery == nil {
-		return nil
-	}
-	return m.failGrab(entry, recovery, instance.Name, "Provider rejected the torrent")
 }
 
 func (m *Manager) migrate(ctx context.Context) {

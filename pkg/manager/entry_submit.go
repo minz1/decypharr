@@ -84,6 +84,7 @@ func (m *Manager) recoverEntries(records []*storage.Entry, packOf map[string]str
 			m.logger.Warn().Err(err).Str("key", key).Msg("Grab document unreadable; using the state its record implies")
 		}
 		m.grabs.publish(GrabView{State: g.State, Entry: *g.Entry})
+		m.tell(g)
 		if m.grabs.active(key) {
 			inFlight = append(inFlight, pending{key: key, g: g})
 		}

@@ -63,6 +63,7 @@ func newGiveUpTestManager(t *testing.T, fakeArr *queueArr, recovery ArrRecovery)
 		t.Fatal(err)
 	}
 	m.confirmBroken = func(context.Context, *storage.Entry) repair.Verdict { return repair.VerdictBroken }
+	m.testFailer(t)
 	return m, entry
 }
 
@@ -338,7 +339,7 @@ func TestClearBadIgnoresUnmarkedMissingAndInFlight(t *testing.T) {
 	}
 }
 
-func TestFailGrabIfQueued(t *testing.T) {
+func TestWantRecheck(t *testing.T) {
 	t.Parallel()
 	upper := strings.ToUpper(droppedHash)
 	for name, tc := range map[string]struct {
@@ -362,10 +363,28 @@ func TestFailGrabIfQueued(t *testing.T) {
 			if tc.edit != nil {
 				tc.edit(entry)
 			}
-			m.failGrabIfQueued(t.Context(), entry)
+			saveBad(t, m, entry, true)
+			done := make(chan attemptResult, 1)
+			m.testFailer(t, func(deps *arrFailerDeps) {
+				inner := deps.attemptRecheck
+				deps.attemptRecheck = func(ctx context.Context, spec attemptSpec) attemptResult {
+					res := inner(ctx, spec)
+					done <- res
+					return res
+				}
+			})
+			m.wantRecheck(entry)
+			if tc.wantRequests > 0 {
+				res := <-done
+				if got := res.kind == resAcked; got != tc.wantFail {
+					t.Fatalf("recheck result = %v (%v), want delivered = %v", res.kind, res.err, tc.wantFail)
+				}
+			} else if m.failer.itemCount() != 0 {
+				t.Fatal("a recheck was wanted for an entry the Arr does not own")
+			}
 			want := [3]string{"sonarr", upper, droppedHash}
-			if got := len(fake.fails) == 1 && fake.fails[0] == want; got != tc.wantFail {
-				t.Fatalf("FailDownload calls = %v, want failed = %v", fake.fails, tc.wantFail)
+			if got := failsOf(fake); (len(got) == 1 && got[0] == want) != tc.wantFail {
+				t.Fatalf("FailDownload calls = %v, want failed = %v", got, tc.wantFail)
 			}
 			if got := fakeArr.requests.Load(); got != tc.wantRequests {
 				t.Fatalf("queue requests = %d, want %d", got, tc.wantRequests)

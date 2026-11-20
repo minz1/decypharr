@@ -213,6 +213,9 @@ func (m *Manager) startSequence(ctx context.Context) error {
 	if err := m.startRequired(ctx, m.reacquireSvc, "Arr reacquisition service"); err != nil {
 		return err
 	}
+	if err := m.work.Go("arr-failer", m.failer.run); err != nil {
+		return fmt.Errorf("start the Arr fail deliverer: %w", err)
+	}
 	if err := m.startRequired(ctx, m.indexerSvc, "Arr indexer"); err != nil {
 		return err
 	}

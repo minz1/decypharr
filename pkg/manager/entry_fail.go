@@ -1,10 +1,8 @@
 package manager
 
 import (
-	"context"
 	"errors"
 
-	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 )
 
@@ -20,7 +18,7 @@ func (m *Manager) failLater(g grab.Grab, effect grab.FailEffect) {
 }
 
 // failEffects does what failing a grab does outside its record, which the actor has already marked failed: it
-// drops a staged NZB, releases a failed NZB and tells the Arr; a bad release also fails the Arr's grab.
+// drops a staged NZB, releases a failed NZB and and refreshes the Arr.
 func (m *Manager) failEffects(g grab.Grab, effect grab.FailEffect) {
 	entry := g.Entry
 	if effect == grab.FailNoEffect || entry == nil {
@@ -35,23 +33,6 @@ func (m *Manager) failEffects(g grab.Grab, effect grab.FailEffect) {
 		}
 	}
 	m.refreshArr(entry)
-	if effect != grab.FailBadRelease || g.State.PackKey != "" {
-		return
-	}
-	grabErr := m.failReleaseGrab(entry)
-	switch {
-	case grabErr == nil:
-	case errors.Is(grabErr, arr.ErrBlocklistHeld):
-		key := g.State.Key
-		m.holdGrab(entry.InfoHash, grabBucket(entry), func(context.Context) error {
-			if v, ok := m.grabs.get(key); !ok || v.State.Phase != grab.PhaseFailed {
-				return nil
-			}
-			return m.failReleaseGrab(entry)
-		})
-	default:
-		m.logger.Warn().Err(grabErr).Str("name", entry.Name).Msg("Failed to fail the grab in the Arr")
-	}
 }
 
 func (m *Manager) arrOwnsFailure(g grab.Grab) bool {

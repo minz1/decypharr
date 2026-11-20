@@ -226,9 +226,8 @@ func TestAClientTorrentGrabAsksTheProviderPastANegativeHint(t *testing.T) {
 		if r.msg.ev == nil || r.msg.ev.Fail != grab.FailBadRelease {
 			t.Fatalf("submit result = %+v, want a bad release", r.msg.ev)
 		}
-		r.m.failEffects(failedGrab(r.g.Entry, r.msg.ev.Reason), r.msg.ev.Fail)
-		if len(r.fake.fails) != 1 {
-			t.Fatalf("FailDownload calls = %v, want one", r.fake.fails)
+		if got := r.m.failArr(r.g); got != "sonarr" {
+			t.Fatalf("failArr = %q, want the grab owned by sonarr", got)
 		}
 	})
 }
@@ -259,9 +258,8 @@ func TestAManualTorrentGrabKeepsTheHint(t *testing.T) {
 			if r.m.arrOwnsFailure(r.g) {
 				t.Fatal("an unregistered category's failure is owned by an Arr")
 			}
-			r.m.failEffects(failedGrab(r.g.Entry, r.msg.ev.Reason), r.msg.ev.Fail)
-			if len(r.fake.fails) != 0 {
-				t.Fatalf("FailDownload calls = %v, want none", r.fake.fails)
+			if got := r.m.failArr(r.g); got != "" {
+				t.Fatalf("failArr = %q, want none", got)
 			}
 		})
 	})
