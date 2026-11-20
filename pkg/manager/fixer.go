@@ -135,11 +135,11 @@ func (f *Fixer) newRequest(entry *storage.Entry) *FixerRequest {
 	}
 }
 
-// finish stores a repair's result, releases its waiters and clears it from the table.
+// finish stores a repair's result, clears it from the table and releases its waiters.
 func (f *Fixer) finish(key string, req *FixerRequest, result *FixResult) {
 	req.result = result
-	close(req.done)
 	f.repairs.end(key)
+	close(req.done)
 }
 
 // runRepair tries each debrid in order until one accepts the entry, marking
