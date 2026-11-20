@@ -161,10 +161,15 @@ func storedEntry(t *testing.T, m *Manager) *storage.Entry {
 // newParseChildCall stages nzb-1 and returns the call of its submit child on a manager whose parse is parse.
 func newParseChildCall(t *testing.T, parse parseFunc) (*Manager, entryChildCall) {
 	t.Helper()
+	return newParseChildCallWith(t, parse, []byte("<nzb/>"))
+}
+
+func newParseChildCallWith(t *testing.T, parse parseFunc, content []byte) (*Manager, entryChildCall) {
+	t.Helper()
 	m := withTestConfig(t, newParseRetryManager(t, parse))
 	m.usenet = newUnreachableUsenet(t)
 	staged := filepath.Join(t.TempDir(), "Show.S01.nzb")
-	if err := os.WriteFile(staged, []byte("<nzb/>"), 0o600); err != nil {
+	if err := os.WriteFile(staged, content, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	entry := storedEntry(t, m)
@@ -282,7 +287,11 @@ func TestParseChildFailsOnHearsayIncompleteVerdict(t *testing.T) {
 	service.ReportNZB(hearsay.NZBSubjectFromGroups(groups), false)
 	m.hearsay = service
 
-	assertParseFailed(t, m.parseChild(t.Context(), call), "hearsay")
+	msg := m.parseChild(t.Context(), call)
+	assertParseFailed(t, msg, "hearsay")
+	if msg.ev.Cause != "" {
+		t.Fatalf("hearsay failure cause %q, want none", msg.ev.Cause)
+	}
 	if calls.Load() != 1 {
 		t.Fatalf("parsed %d times, want 1", calls.Load())
 	}

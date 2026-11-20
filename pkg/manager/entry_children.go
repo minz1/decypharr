@@ -104,13 +104,17 @@ func (m *Manager) parseChild(ctx context.Context, call entryChildCall) entryMsg 
 		if m.hearsay != nil && errors.Is(err, customerror.ErrUsenetSegmentMissing) {
 			m.hearsay.ReportNZB(subject, false)
 		}
-		return parseFailed(fmt.Errorf("usenet parse failed: %w", err))
+		return parseFailedWith(fmt.Errorf("usenet parse failed: %w", err), m.parseFailCause(err, content))
 	case m.hearsay != nil && m.hearsay.NZBClaimedIncomplete(subject):
 		return parseFailed(errors.New("nzb rejected: hearsay claims segments missing on every configured backbone"))
 	}
 	processCtx, cancel := context.WithTimeout(ctx, m.usenetTimeout)
 	defer cancel()
-	processed, err := m.usenet.Process(processCtx, meta, groups)
+	process := m.processNZBFunc
+	if process == nil {
+		process = m.usenet.Process
+	}
+	processed, err := process(processCtx, meta, groups)
 	switch {
 	case stopped(ctx):
 		return entryMsg{}
@@ -118,7 +122,7 @@ func (m *Manager) parseChild(ctx context.Context, call entryChildCall) entryMsg 
 		if errors.Is(err, customerror.ErrUsenetSegmentMissing) {
 			m.hearsay.ReportNZB(subject, false)
 		}
-		return parseFailed(fmt.Errorf("failed to process nzb: %w", err))
+		return parseFailedWith(fmt.Errorf("failed to process nzb: %w", err), m.parseFailCause(err, content))
 	case len(processed.Files) == 0:
 		return parseFailed(errors.New("nzb has no files"))
 	}
@@ -130,9 +134,11 @@ func (m *Manager) parseChild(ctx context.Context, call entryChildCall) entryMsg 
 	return msg
 }
 
-func parseFailed(err error) entryMsg {
+func parseFailed(err error) entryMsg { return parseFailedWith(err, "") }
+
+func parseFailedWith(err error, cause string) entryMsg {
 	return eventMsg(grab.Event{Kind: grab.EvParseResult, Outcome: grab.OutcomePermanent, Fail: grab.FailEntry,
-		Reason: err.Error()})
+		Reason: err.Error(), Cause: cause})
 }
 
 // applyParsedNZB records a processed NZB on its grab's record; it may run twice (a save retried).

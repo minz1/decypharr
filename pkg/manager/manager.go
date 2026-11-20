@@ -118,10 +118,11 @@ type Manager struct {
 	// badRecheckDelay is how long a give-up waits before its second check decides the arr grab.
 	badRecheckDelay time.Duration
 	// parseNZBFunc parses an NZB's articles; nil uses the usenet client.
-	parseNZBFunc  func(ctx context.Context, id, name string, content []byte, category string) (*storage.NZB, map[string]*parser.FileGroup, error)
-	pruneReportMu sync.Mutex
-	pruneFails    map[string]int
-	lastPrune     PruneReport
+	parseNZBFunc   func(ctx context.Context, id, name string, content []byte, category string) (*storage.NZB, map[string]*parser.FileGroup, error)
+	processNZBFunc func(ctx context.Context, nzb *storage.NZB, groups map[string]*parser.FileGroup) (*storage.NZB, error)
+	pruneReportMu  sync.Mutex
+	pruneFails     map[string]int
+	lastPrune      PruneReport
 
 	// Migration jobs tracking
 	migrationJobs   *xsync.Map[string, *storage.SwitcherJob]
