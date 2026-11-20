@@ -279,6 +279,9 @@ func (pm *Premiumize) UpdateAndReturnTorrent(ctx context.Context, t *types.Torre
 			return t, customerror.StatusWaitStopped(t.Name, waitErr)
 		}
 	}
+	if obs.Phase == types.PhaseFailed {
+		return t, fmt.Errorf("torrent: %s has error status: %s: %w", t.Name, t.Status, customerror.ErrReleaseFailed)
+	}
 	if t.Status != types.TorrentStatusError {
 		switch obs.Phase {
 		case types.PhaseDownloaded:

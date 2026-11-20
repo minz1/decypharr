@@ -85,6 +85,9 @@ func TestCheckStatusVerdictPerRawState(t *testing.T) {
 			} else if err != nil {
 				t.Fatal(err)
 			}
+			if errors.Is(err, customerror.ErrReleaseFailed) {
+				t.Fatalf("debridlink has no failed phase, err = %v", err)
+			}
 			if got == nil || got.Status != tc.wantStatus {
 				t.Fatalf("result = %#v, want status %s", got, tc.wantStatus)
 			}

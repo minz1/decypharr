@@ -27,6 +27,7 @@ func TestCheckStatusVerdictPerRawState(t *testing.T) {
 		wantStatus types.TorrentStatus
 		wantErr    error
 		wantText   string
+		wantFailed bool
 	}{
 		{name: "finished", state: "finished", wantStatus: types.TorrentStatusDownloaded},
 		{name: "seeding", state: "seeding", wantStatus: types.TorrentStatusDownloaded},
@@ -70,10 +71,10 @@ func TestCheckStatusVerdictPerRawState(t *testing.T) {
 			wantStatus: types.TorrentStatusError,
 			wantText:   "has error status",
 		},
-		{name: "error", state: "error", wantStatus: types.TorrentStatusError, wantText: "has error status"},
-		{name: "deleted", state: "deleted", wantStatus: types.TorrentStatusError, wantText: "has error status"},
-		{name: "banned", state: "banned", wantStatus: types.TorrentStatusError, wantText: "has error status"},
-		{name: "timeout", state: "timeout", wantStatus: types.TorrentStatusError, wantText: "has error status"},
+		{name: "error", state: "error", wantStatus: types.TorrentStatusError, wantText: "has error status", wantFailed: true},
+		{name: "deleted", state: "deleted", wantStatus: types.TorrentStatusError, wantText: "has error status", wantFailed: true},
+		{name: "banned", state: "banned", wantStatus: types.TorrentStatusError, wantText: "has error status", wantFailed: true},
+		{name: "timeout", state: "timeout", wantStatus: types.TorrentStatusError, wantText: "has error status", wantFailed: true},
 		{
 			name:       "unknown string",
 			state:      "future_state",
@@ -118,6 +119,9 @@ func TestCheckStatusVerdictPerRawState(t *testing.T) {
 			}
 			got, err := pm.CheckStatus(t.Context(), &types.Torrent{ID: "t1", DownloadUncached: tc.uncached})
 			checkVerdict(t, err, tc.wantErr, tc.wantText)
+			if got := errors.Is(err, customerror.ErrReleaseFailed); got != tc.wantFailed {
+				t.Fatalf("release-failed sentinel = %v, want %v (err %v)", got, tc.wantFailed, err)
+			}
 			if got == nil || got.Status != tc.wantStatus {
 				t.Fatalf("result = %#v, want status %s", got, tc.wantStatus)
 			}

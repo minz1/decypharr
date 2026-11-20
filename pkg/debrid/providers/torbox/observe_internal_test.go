@@ -92,6 +92,8 @@ func TestCheckStatusVerdictPerRawState(t *testing.T) {
 			wantStatus: types.TorrentStatusDownloading,
 			wantErr:    customerror.ErrTorrentNotCached,
 		},
+		row{name: "failed is a placement", state: "failed", wantStatus: types.TorrentStatusDownloading},
+		row{name: "error is a placement", state: "error", wantStatus: types.TorrentStatusDownloading},
 		row{
 			name:       "D7 unknown string is kept as a downloading placement",
 			state:      "future_state",
@@ -121,6 +123,9 @@ func TestCheckStatusVerdictPerRawState(t *testing.T) {
 				server.URL,
 			).CheckStatus(t.Context(), &types.Torrent{ID: "17", DownloadUncached: tc.uncached})
 			checkVerdict(t, err, tc.wantErr, tc.wantText)
+			if errors.Is(err, customerror.ErrReleaseFailed) {
+				t.Fatalf("torbox has no failed phase, err = %v", err)
+			}
 			if got == nil || got.Status != tc.wantStatus {
 				t.Fatalf("result = %#v, want status %s", got, tc.wantStatus)
 			}
