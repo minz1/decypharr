@@ -101,8 +101,20 @@ func TestCheckStatusVerdictPerRawState(t *testing.T) {
 			wantText:   "magnet_error",
 			wantFailed: true,
 		},
-		{name: "virus", states: []string{"virus"}, wantStatus: types.TorrentStatusError, wantText: "virus", wantFailed: true},
-		{name: "dead", states: []string{"dead"}, wantStatus: types.TorrentStatusError, wantText: "dead", wantFailed: true},
+		{
+			name:       "virus",
+			states:     []string{"virus"},
+			wantStatus: types.TorrentStatusError,
+			wantText:   "virus",
+			wantFailed: true,
+		},
+		{
+			name:       "dead",
+			states:     []string{"dead"},
+			wantStatus: types.TorrentStatusError,
+			wantText:   "dead",
+			wantFailed: true,
+		},
 		{
 			name:       "D7 unknown string is kept as a downloading placement",
 			states:     []string{"future_state"},

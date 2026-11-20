@@ -37,6 +37,7 @@ func (*deadStatusProvider) DeleteTorrent(context.Context, string) error { return
 
 type failedPhaseProvider struct {
 	deadStatusProvider
+
 	checks atomic.Int64
 }
 
@@ -46,8 +47,8 @@ func (p *failedPhaseProvider) CheckStatus(_ context.Context, t *types.Torrent) (
 	return t, fmt.Errorf("torrent: %s has error status: dead: %w", t.Name, customerror.ErrReleaseFailed)
 }
 
-func failed(name string) debrid.Client {
-	return &failedPhaseProvider{deadStatusProvider: deadStatusProvider{throttlingProvider{name: name}}}
+func failed() debrid.Client {
+	return &failedPhaseProvider{deadStatusProvider: deadStatusProvider{throttlingProvider{name: "rd"}}}
 }
 
 func submitFailEffect(t *testing.T, providers ...debrid.Client) (grab.FailEffect, grab.Outcome) {
@@ -98,21 +99,21 @@ func TestASubmitEveryProviderRefusedFailsAsABadRelease(t *testing.T) {
 			[]debrid.Client{refusing("rd", customerror.ErrTorrentNotCached), refusing("tb", transient)},
 			grab.FailEntry,
 		},
-		"failed on the only provider": {[]debrid.Client{failed("rd")}, grab.FailBadRelease},
+		"failed on the only provider": {[]debrid.Client{failed()}, grab.FailBadRelease},
 		"failed and not cached": {
-			[]debrid.Client{failed("rd"), refusing("tb", customerror.ErrTorrentNotCached)},
+			[]debrid.Client{failed(), refusing("tb", customerror.ErrTorrentNotCached)},
 			grab.FailBadRelease,
 		},
 		"failed and transient": {
-			[]debrid.Client{failed("rd"), refusing("tb", customerror.NewProviderStatusError(errors.New("503"), 503))},
+			[]debrid.Client{failed(), refusing("tb", customerror.NewProviderStatusError(errors.New("503"), 503))},
 			grab.FailEntry,
 		},
 		"failed and hearsay skip": {
-			[]debrid.Client{failed("rd"), refusing("tb", hearsayNotCached("tb", "hash"))},
+			[]debrid.Client{failed(), refusing("tb", hearsayNotCached("tb", "hash"))},
 			grab.FailEntry,
 		},
 		"failed and not found": {
-			[]debrid.Client{failed("rd"), refusing("tb", customerror.ErrTorrentNotFound)},
+			[]debrid.Client{failed(), refusing("tb", customerror.ErrTorrentNotFound)},
 			grab.FailEntry,
 		},
 		"dead status and transient": {[]debrid.Client{dead("rd"), refusing("tb", transient)}, grab.FailEntry},
@@ -141,7 +142,7 @@ func TestAThrottledSubmitIsStillThrottled(t *testing.T) {
 
 func TestAThrottledSubmitWithAFailedProviderIsThrottled(t *testing.T) {
 	t.Parallel()
-	_, outcome := submitFailEffect(t, failed("rd"), refusing("tb", customerror.ErrTooManyActiveDownloads))
+	_, outcome := submitFailEffect(t, failed(), refusing("tb", customerror.ErrTooManyActiveDownloads))
 	if outcome != grab.OutcomeThrottled {
 		t.Fatalf("outcome = %v, want throttled", outcome)
 	}
@@ -163,7 +164,7 @@ func (p *acceptingProvider) CheckStatus(_ context.Context, t *types.Torrent) (*t
 func TestAFailedThenAcceptedSubmitPlaces(t *testing.T) {
 	t.Parallel()
 	m := withTestConfig(t, &Manager{logger: zerolog.Nop(), clients: xsync.NewMap[string, debrid.Client]()})
-	rd := failed("rd")
+	rd := failed()
 	m.clients.Store("rd", rd)
 	m.clients.Store("tb", &acceptingProvider{throttlingProvider{name: "tb"}})
 	got, err := m.SendToDebrid(&ImportRequest{Magnet: &utils.Magnet{InfoHash: "hash", Name: "name"}})
@@ -181,7 +182,7 @@ func TestAFailedThenAcceptedSubmitPlaces(t *testing.T) {
 func TestAFailedSubmitIsAVerdictWhateverItsName(t *testing.T) {
 	t.Parallel()
 	req := &ImportRequest{Magnet: &utils.Magnet{InfoHash: "hash", Name: "Show Connection Reset By Peer.mkv"}}
-	got, _ := submitFailEffectOf(t, req, failed("rd"))
+	got, _ := submitFailEffectOf(t, req, failed())
 	if got != grab.FailBadRelease {
 		t.Fatalf("submit fail effect = %v, want %v", got, grab.FailBadRelease)
 	}
@@ -189,6 +190,7 @@ func TestAFailedSubmitIsAVerdictWhateverItsName(t *testing.T) {
 
 type cuttingProvider struct {
 	deadStatusProvider
+
 	cancel context.CancelFunc
 }
 
@@ -251,6 +253,7 @@ func TestANotCachedPollFailsAsABadRelease(t *testing.T) {
 
 type mutatingProvider struct {
 	throttlingProvider
+
 	cancel  context.CancelFunc
 	check   func(*types.Torrent) error
 	deletes atomic.Int64
@@ -277,6 +280,7 @@ func (p *mutatingProvider) DeleteTorrent(context.Context, string) error {
 
 type inputRecorder struct {
 	throttlingProvider
+
 	hash, status, name, link string
 }
 
@@ -289,7 +293,7 @@ func TestEachProviderAttemptGetsTheRequestTorrent(t *testing.T) {
 	t.Parallel()
 	m := withTestConfig(t, &Manager{logger: zerolog.Nop(), clients: xsync.NewMap[string, debrid.Client]()})
 	m.clients.Store("rd", &mutatingProvider{
-		throttlingProvider: throttlingProvider{name: "rd"},
+		name: "rd",
 		check: func(torrent *types.Torrent) error {
 			torrent.InfoHash = "other"
 			torrent.Status = types.TorrentStatusError
@@ -316,9 +320,9 @@ func TestAStoppedSubmitKeepsTheRequestHash(t *testing.T) {
 	defer cancel()
 	m := withTestConfig(t, &Manager{logger: zerolog.Nop(), clients: xsync.NewMap[string, debrid.Client]()})
 	m.clients.Store("rd", &mutatingProvider{
-		throttlingProvider: throttlingProvider{name: "rd"},
-		cancel:             cancel,
-		check:              func(*types.Torrent) error { return nil },
+		name:   "rd",
+		cancel: cancel,
+		check:  func(*types.Torrent) error { return nil },
 	})
 	uncached := true
 	req := &ImportRequest{Magnet: &utils.Magnet{InfoHash: "hash", Name: "name"}, DownloadUncached: &uncached}
@@ -338,7 +342,7 @@ func TestADiscardedSubmitReleasesUnderTheRequestHash(t *testing.T) {
 			logger: zerolog.Nop(), clients: xsync.NewMap[string, debrid.Client](), storage: newTestStore(t),
 		})
 		rd := &mutatingProvider{
-			throttlingProvider: throttlingProvider{name: "rd"},
+			name: "rd",
 			check: func(torrent *types.Torrent) error {
 				return fmt.Errorf("torrent: %s has error status: dead: %w", torrent.Name, customerror.ErrReleaseFailed)
 			},
