@@ -14,6 +14,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -141,6 +142,24 @@ type dashboardTorrent struct {
 
 	FailureCause string               `json:"failure_cause,omitempty"`
 	ArrFail      *manager.ArrFailView `json:"arr_fail,omitempty"`
+	Deadline     *deadlineView        `json:"deadline,omitempty"`
+}
+
+type deadlineView struct {
+	Event      string    `json:"event"`
+	Due        time.Time `json:"due"`
+	WaitingFor string    `json:"waiting_for,omitempty"`
+}
+
+func newDeadlineView(g *grab.Gated) *deadlineView {
+	if g == nil {
+		return nil
+	}
+	v := &deadlineView{Event: g.Event.Kind.String(), Due: g.Due}
+	if g.WaitingForLinks {
+		v.WaitingFor = "links"
+	}
+	return v
 }
 
 func (s *Server) handleGetTorrents(w http.ResponseWriter, r *http.Request) {
@@ -163,7 +182,9 @@ func (s *Server) handleGetTorrents(w http.ResponseWriter, r *http.Request) {
 	for i := range views {
 		views[i].Entry.Sanitize()
 		p := grab.Project(views[i].State, views[i].Entry.Progress)
-		allTorrents[i] = &dashboardTorrent{Entry: &views[i].Entry, Phase: views[i].State.Phase.String(), Label: p.Label}
+		allTorrents[i] = &dashboardTorrent{Entry: &views[i].Entry, Phase: views[i].State.Phase.String(), Label: p.Label,
+			Deadline: newDeadlineView(views[i].Deadline),
+		}
 		if views[i].State.Phase == grab.PhaseFailed {
 			allTorrents[i].FailureCause = views[i].State.Failure.Cause
 			if v, ok := s.manager.ArrFailView(views[i]); ok {

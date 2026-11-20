@@ -11,6 +11,13 @@ interface Torrent {
   phase: string;
   label: string;
   arrFail?: ArrFail;
+  deadline?: Deadline;
+}
+
+interface Deadline {
+  event: string;
+  due: string;
+  waitingFor?: string;
 }
 
 interface ArrFail {
@@ -77,6 +84,7 @@ interface Dashboard {
 export type {
   ArrFail,
   Badge,
+  Deadline,
   Dashboard,
   DashboardRefs,
   DashboardState,

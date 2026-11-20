@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { arrFailText, parseTorrentPage } from "#ui/lib/dashboard/model";
+import { arrFailText, deadlineText, parseTorrentPage } from "#ui/lib/dashboard/model";
 
 const torrent = {
   info_hash: "abcdef0123456789",
@@ -66,5 +66,35 @@ describe("the Arr fail text", () => {
 
   it("shows nothing when there is no intent", () => {
     expect(arrFailText(parseTorrentPage({ torrents: [torrent] }).torrents[0]?.arrFail)).toBe("");
+  });
+});
+
+describe("the deadline", () => {
+  const due = "2026-11-20T10:00:00Z";
+  const when = new Date(due).toLocaleString();
+
+  it("reads the deadline object, and leaves the field off when the API omits it", () => {
+    const [waiting, plain, bare] = parseTorrentPage({
+      torrents: [
+        { ...torrent, deadline: { event: "link_wait_expired", due, waiting_for: "links" } },
+        { ...torrent, deadline: { event: "pending_deadline", due } },
+        torrent,
+      ],
+    }).torrents;
+    expect(waiting?.deadline).toStrictEqual({ event: "link_wait_expired", due, waitingFor: "links" });
+    expect(plain?.deadline).toStrictEqual({ event: "pending_deadline", due });
+    expect(bare).not.toHaveProperty("deadline");
+  });
+
+  it("says it waits for a fresh answer, or when the event is due", () => {
+    expect([
+      deadlineText({ event: "link_wait_expired", due, waitingFor: "links" }, "realdebrid"),
+      deadlineText({ event: "pending_deadline", due }, "realdebrid"),
+      deadlineText(undefined, "realdebrid"),
+    ]).toStrictEqual([
+      `waiting for a fresh answer from realdebrid (gives up ${when})`,
+      `pending_deadline at ${when}`,
+      "",
+    ]);
   });
 });

@@ -166,7 +166,7 @@ func TestThrottlesSurviveIdleExit(t *testing.T) {
 			reply(run, grab.Event{Kind: grab.EvSubmitResult, Outcome: grab.OutcomeThrottled})
 			synctest.Wait()
 			time.Sleep(2 * time.Minute)
-			if h.running("a") {
+			if h.running() {
 				t.Fatalf("actor still running after throttle %d", n)
 			}
 			time.Sleep(time.Duration(n)*10*time.Minute - 2*time.Minute)

@@ -11,8 +11,9 @@ import (
 
 // GrabView is a reader's copy of one grab: its state and its queue entry.
 type GrabView struct {
-	State grab.State
-	Entry storage.Entry
+	State    grab.State
+	Entry    storage.Entry
+	Deadline *grab.Gated
 }
 
 func (v GrabView) clone() GrabView {
@@ -62,7 +63,12 @@ func (x *grabIndex) publish(v GrabView) {
 	if x.views == nil {
 		x.views = make(map[string]GrabView)
 	}
-	x.views[strings.ToLower(v.State.Key)] = v
+	key := strings.ToLower(v.State.Key)
+	v.Deadline = nil
+	if old, ok := x.views[key]; ok && old.State.Phase == v.State.Phase {
+		v.Deadline = old.Deadline
+	}
+	x.views[key] = v
 }
 
 func (x *grabIndex) remove(key string) {
@@ -269,4 +275,20 @@ func (x *grabIndex) setThrottles(key string, n int) {
 		x.throttles = make(map[string]int)
 	}
 	x.throttles[key] = n
+}
+
+func (x *grabIndex) setDeadline(key string, g *grab.Gated) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	key = strings.ToLower(key)
+	v, ok := x.views[key]
+	if !ok {
+		return
+	}
+	if g != nil {
+		c := *g
+		g = &c
+	}
+	v.Deadline = g
+	x.views[key] = v
 }

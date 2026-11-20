@@ -1,11 +1,28 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { bootDashboard, cellText, page, twoTorrents, waitForRows } from "#ui/lib/testing/dashboard";
+import { bootDashboard, cellText, page, torrent, twoTorrents, waitForRows } from "#ui/lib/testing/dashboard";
 import { element } from "#ui/lib/testing/dom";
 import { toasts, waitForAnyToast } from "#ui/lib/testing/toast";
 import { XSS } from "#ui/lib/testing/xss";
 
 const hangs = async (): Promise<Response> => Promise.withResolvers<Response>().promise;
+
+describe("the dashboard's deadlines", () => {
+  it("show what a waiting grab waits for, and nothing for one with no deadline", async () => {
+    const due = "2026-11-20T10:00:00Z";
+    await bootDashboard(() =>
+      page([
+        { ...torrent("aaaaaaaaaaaa", "Waiting"), deadline: { event: "link_wait_expired", due, waiting_for: "links" } },
+        torrent("bbbbbbbbbbbb", "Plain"),
+      ]),
+    );
+    await waitForRows(2);
+    expect([cellText(0, "deadline"), cellText(1, "deadline")]).toStrictEqual([
+      `waiting for a fresh answer from realdebrid (gives up ${new Date(due).toLocaleString()})`,
+      "",
+    ]);
+  });
+});
 
 describe("the dashboard's rows", () => {
   it("render the queue, with names as text", async () => {

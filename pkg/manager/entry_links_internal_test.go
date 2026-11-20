@@ -69,18 +69,18 @@ func (h *actorHarness) linksProvider(t *testing.T, answers ...pollAnswer) {
 	h.a.pollEvery = time.Minute
 }
 
-func linksEntryAt(downloaded time.Duration, id string) *storage.Entry {
+func linksEntryAt(downloaded time.Duration) *storage.Entry {
 	e := testEntry("a")
 	at := time.Now().Add(-downloaded)
 	e.Providers = map[string]*storage.ProviderEntry{
-		"realdebrid": {Provider: "realdebrid", ID: id, DownloadedAt: &at},
+		"realdebrid": {Provider: "realdebrid", ID: "t1", DownloadedAt: &at},
 	}
 	return e
 }
 
 func (h *actorHarness) recoverLinksWait(downloaded time.Duration) {
 	h.t.Helper()
-	seed(h.t, h.store, linksEntryAt(downloaded, "t1"), grab.State{Phase: grab.PhaseAwaitingLinks})
+	seed(h.t, h.store, linksEntryAt(downloaded), grab.State{Phase: grab.PhaseAwaitingLinks})
 	h.mustAsk("a", grab.Event{Kind: grab.EvRecover})
 }
 
@@ -95,9 +95,9 @@ func stillMissing() entryMsg {
 	return entryMsg{linksMissing: &ref}
 }
 
-func (h *actorHarness) running(key string) bool {
+func (h *actorHarness) running() bool {
 	for _, k := range h.a.runner.Snapshot().Keys {
-		if k.Key == key {
+		if k.Key == "a" {
 			return k.Running
 		}
 	}
@@ -238,7 +238,7 @@ func TestAStaleDownloadedAtBlocklistsAtOnceInProcess(t *testing.T) {
 	store := newTestStore(t)
 	synctest.Test(t, func(t *testing.T) {
 		h := deadlineHarness(t, store, 0)
-		seed(t, store, linksEntryAt(7*time.Hour, "t1"), grab.State{Phase: grab.PhaseProvider})
+		seed(t, store, linksEntryAt(7*time.Hour), grab.State{Phase: grab.PhaseProvider})
 		h.mustAsk("a", grab.Event{Kind: grab.EvRecover})
 		run := h.next(grab.ChildPoll)
 		run.reply <- eventMsg(grab.Event{
@@ -328,7 +328,7 @@ func TestTheLinksBoundSurvivesIdleExit(t *testing.T) {
 			run.reply <- entryMsg{}
 			time.Sleep(2 * time.Hour)
 			synctest.Wait()
-			if h.running("a") {
+			if h.running() {
 				t.Fatal("the actor is still up after two idle hours")
 			}
 			h.mustBe("a", grab.PhaseAwaitingLinks)
@@ -347,7 +347,7 @@ func TestTheLinksBoundSurvivesIdleExit(t *testing.T) {
 			run.reply <- stillMissing()
 			time.Sleep(2 * time.Hour)
 			synctest.Wait()
-			if h.running("a") {
+			if h.running() {
 				t.Fatal("the actor is still up after two idle hours")
 			}
 			time.Sleep(3*time.Hour - time.Second)
@@ -371,7 +371,7 @@ func TestRemovingAGrabForgetsItsLinksMark(t *testing.T) {
 func TestALinksCheckReportsStillMissingOnlyOnLinksPending(t *testing.T) {
 	t.Parallel()
 	entry := func() *storage.Entry {
-		e := linksEntryAt(time.Hour, "t1")
+		e := linksEntryAt(time.Hour)
 		e.ActiveProvider = "realdebrid"
 		return e
 	}
@@ -419,5 +419,85 @@ func TestALinksCheckReportsStillMissingOnlyOnLinksPending(t *testing.T) {
 				t.Fatalf("event %+v, want %v", msg.ev, c.wantEv)
 			}
 		})
+	}
+}
+
+func (h *actorHarness) deadline() *grab.Gated {
+	h.t.Helper()
+	v, ok := h.a.grabs.get("a")
+	if !ok {
+		h.t.Fatal("no view")
+	}
+	return v.Deadline
+}
+
+func TestTheGatedDeadlineReachesTheIndex(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	synctest.Test(t, func(t *testing.T) {
+		h := deadlineHarness(t, store, 0)
+		start := time.Now()
+		run := h.restoredLinksWait(0)
+		synctest.Wait()
+		d := h.deadline()
+		if d == nil || !d.WaitingForLinks || d.Event.Kind != grab.EvLinkWaitExpired ||
+			!d.Due.Equal(start.Add(grab.LinksLimit)) {
+			t.Fatalf("restored wait deadline = %+v, want waiting for links due at the limit", d)
+		}
+		run.reply <- stillMissing()
+		synctest.Wait()
+		d = h.deadline()
+		if d == nil || d.WaitingForLinks || !d.Due.Equal(start.Add(grab.LinksLimit)) {
+			t.Fatalf("answered wait deadline = %+v, want not waiting, same due", d)
+		}
+		time.Sleep(2 * time.Hour)
+		synctest.Wait()
+		if h.running() {
+			t.Fatal("the actor is still up after two idle hours")
+		}
+		if d = h.deadline(); d == nil || d.WaitingForLinks || !d.Due.Equal(start.Add(grab.LinksLimit)) {
+			t.Fatalf("idle deadline = %+v, want the answered deadline kept", d)
+		}
+		time.Sleep(4 * time.Hour)
+		h.mustBe("a", grab.PhaseFailed)
+		if d = h.deadline(); d != nil && d.Event.Kind == grab.EvLinkWaitExpired {
+			t.Fatalf("failed grab still shows the links deadline %+v", d)
+		}
+	})
+}
+
+func TestADeadlineIsNilWhenTheGrabHasNone(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	synctest.Test(t, func(t *testing.T) {
+		h := deadlineHarness(t, store, 0)
+		seed(t, store, linksEntryAt(0), grab.State{Phase: grab.PhaseComplete})
+		h.mustAsk("a", grab.Event{Kind: grab.EvRecover})
+		if d := h.deadline(); d != nil {
+			t.Fatalf("complete grab deadline = %+v, want none", d)
+		}
+	})
+}
+
+func TestAnAddedViewDoesNotInheritAnotherPhasesDeadline(t *testing.T) {
+	t.Parallel()
+	x := &grabIndex{}
+	v := GrabView{State: grab.State{Key: "K", Phase: grab.PhaseAwaitingLinks}}
+	x.publish(v)
+	x.setDeadline("k", &grab.Gated{WaitingForLinks: true})
+	x.publish(v)
+	if got, _ := x.get("k"); got.Deadline == nil || !got.Deadline.WaitingForLinks {
+		t.Fatalf("same-phase publish dropped the deadline: %+v", got.Deadline)
+	}
+	v.State.Phase = grab.PhaseFailed
+	v.Deadline = &grab.Gated{}
+	x.publish(v)
+	if got, _ := x.get("k"); got.Deadline != nil {
+		t.Fatalf("phase change kept the deadline: %+v", got.Deadline)
+	}
+	x.remove("k")
+	x.setDeadline("k", &grab.Gated{})
+	if _, ok := x.get("k"); ok {
+		t.Fatal("setDeadline resurrected a removed grab")
 	}
 }

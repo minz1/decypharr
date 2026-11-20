@@ -1,6 +1,14 @@
 import { formatSpeed } from "#ui/lib/common/format";
 import { asRecord, num, optList, optNum, optStr, str } from "#ui/lib/common/json";
-import type { ArrFail, Badge, DashboardState, ProtocolBadge, Torrent, TorrentPage } from "#ui/lib/dashboard/types";
+import type {
+  ArrFail,
+  Badge,
+  Deadline,
+  DashboardState,
+  ProtocolBadge,
+  Torrent,
+  TorrentPage,
+} from "#ui/lib/dashboard/types";
 
 const PER_PAGE = 20;
 const PERCENT = 100;
@@ -40,10 +48,22 @@ const parseArrFail = (value: unknown): ArrFail => {
   };
 };
 
+const parseDeadline = (value: unknown): Deadline => {
+  const record = asRecord(value, "deadline");
+  const waitingFor = optStr(record, "waiting_for");
+  return {
+    event: str(record, "event"),
+    due: str(record, "due"),
+    ...(waitingFor === undefined ? {} : { waitingFor }),
+  };
+};
+
 const parseTorrent = (value: unknown): Torrent => {
   const record = asRecord(value, "torrent");
   const arrFail =
     record["arr_fail"] === undefined || record["arr_fail"] === null ? undefined : parseArrFail(record["arr_fail"]);
+  const deadline =
+    record["deadline"] === undefined || record["deadline"] === null ? undefined : parseDeadline(record["deadline"]);
   return {
     infoHash: str(record, "info_hash"),
     name: str(record, "name"),
@@ -57,6 +77,7 @@ const parseTorrent = (value: unknown): Torrent => {
     phase: optStr(record, "phase") ?? "",
     label: optStr(record, "label") ?? "",
     ...(arrFail === undefined ? {} : { arrFail }),
+    ...(deadline === undefined ? {} : { deadline }),
   };
 };
 
@@ -167,6 +188,17 @@ const arrFailText = (arrFail: ArrFail | undefined): string => {
   }
 };
 
+const deadlineText = (deadline: Deadline | undefined, provider: string): string => {
+  if (deadline === undefined) {
+    return "";
+  }
+  const due = new Date(deadline.due).toLocaleString();
+  if (deadline.waitingFor === "links") {
+    return `waiting for a fresh answer from ${provider === "" ? "the provider" : provider} (gives up ${due})`;
+  }
+  return `${deadline.event} at ${due}`;
+};
+
 const stateBadge = (phase: string, label: string): Badge => ({
   className: STATE_BADGES[phase] ?? "badge-ghost",
   text: label === "" ? phase : label,
@@ -185,6 +217,7 @@ const torrentSpeed = (bytesPerSecond: number | undefined): string =>
 export {
   arrFailText,
   createDashboardState,
+  deadlineText,
   deleteSelectedURL,
   deleteTorrentURL,
   parseSort,

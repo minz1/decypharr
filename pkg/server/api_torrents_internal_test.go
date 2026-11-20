@@ -159,3 +159,52 @@ func TestGetTorrentsArrFailOnlyWhileTold(t *testing.T) {
 		t.Fatalf("plain carries arr_fail: %v", byHash["plain"])
 	}
 }
+
+func TestTheDeadlineViewNamesWhatTheGrabWaitsFor(t *testing.T) {
+	t.Parallel()
+	due := time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name string
+		g    *grab.Gated
+		want string
+	}{
+		{"none", nil, "null"},
+		{
+			"plain",
+			&grab.Gated{Event: grab.Event{Kind: grab.EvPendingDeadline}, Due: due},
+			`{"event":"` + grab.EvPendingDeadline.String() + `","due":"2026-11-20T10:00:00Z"}`,
+		},
+		{
+			"links",
+			&grab.Gated{Event: grab.Event{Kind: grab.EvLinkWaitExpired}, Due: due, WaitingForLinks: true},
+			`{"event":"` + grab.EvLinkWaitExpired.String() + `","due":"2026-11-20T10:00:00Z","waiting_for":"links"}`,
+		},
+	}
+	for _, c := range cases {
+		got, err := json.Marshal(newDeadlineView(c.g))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != c.want {
+			t.Errorf("%s: %s, want %s", c.name, got, c.want)
+		}
+	}
+}
+
+func TestGetTorrentsOmitsTheDeadlineWhenTheGrabHasNone(t *testing.T) {
+	t.Parallel()
+	mgr, store := managertest.New(t, func(cfg *config.Config) { cfg.UseAuth = false })
+	s := &Server{manager: mgr, config: store}
+	queueGrabAt(t, mgr, "done", grab.State{Phase: grab.PhaseComplete})
+	w := httptest.NewRecorder()
+	s.handleGetTorrents(w, httptest.NewRequest(http.MethodGet, "/api/torrents", nil))
+	var got struct {
+		Torrents []map[string]any `json:"torrents"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := got.Torrents[0]["deadline"]; present || len(got.Torrents) != 1 {
+		t.Fatalf("listed %v, want one item with no deadline", got.Torrents)
+	}
+}

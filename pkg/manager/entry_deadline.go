@@ -78,9 +78,11 @@ func (a *entryActor) armDeadline(key string, st *entryState, fx *keyed.Effects[s
 	}
 	g, ok := a.gated(key, st)
 	if !ok {
+		a.grabs.setDeadline(key, nil)
 		a.cancelDeadline(st, fx)
 		return
 	}
+	a.grabs.setDeadline(key, &g)
 	due := g.Due
 	if st.hasDeadlineTimer && st.deadlineAt.Equal(due) {
 		return

@@ -3,6 +3,7 @@ import { formatBytes } from "#ui/lib/common/format";
 import { pageItems, renderPageItems, showingText } from "#ui/lib/common/pagination";
 import {
   arrFailText,
+  deadlineText,
   progressColor,
   progressPercent,
   protocolBadge,
@@ -46,6 +47,7 @@ const fillState = (row: ParentNode, torrent: Torrent): void => {
   target.classList.add(badge.className);
   target.textContent = badge.text;
   field(row, "arr-fail").textContent = arrFailText(torrent.arrFail);
+  field(row, "deadline").textContent = deadlineText(torrent.deadline, torrent.activeProvider);
 };
 
 const fillSelection = (row: HTMLTableRowElement, torrent: Torrent, selected: boolean): void => {
