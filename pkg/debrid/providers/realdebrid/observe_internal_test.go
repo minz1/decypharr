@@ -208,3 +208,33 @@ func TestObserveMapsEveryRawState(t *testing.T) {
 		}
 	}
 }
+
+func TestObserveLinksPending(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name      string
+		status    string
+		links     []string
+		wantPhase types.Phase
+		want      bool
+	}{
+		{name: "downloaded without links", status: statusDownloaded, wantPhase: types.PhaseFinalizing, want: true},
+		{
+			name:      "downloaded with links",
+			status:    statusDownloaded,
+			links:     []string{"l"},
+			wantPhase: types.PhaseDownloaded,
+		},
+		{name: "downloading", status: statusDownloading, wantPhase: types.PhaseDownloading},
+		{name: "queued", status: statusQueued, wantPhase: types.PhaseRemoteQueued},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			o := observe(torrentInfo{Status: tc.status, Links: tc.links})
+			if o.Phase != tc.wantPhase || o.LinksPending != tc.want {
+				t.Fatalf("phase %v pending %v, want %v %v", o.Phase, o.LinksPending, tc.wantPhase, tc.want)
+			}
+		})
+	}
+}

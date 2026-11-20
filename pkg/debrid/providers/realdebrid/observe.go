@@ -23,6 +23,7 @@ func observe(data torrentInfo) types.Observation {
 		o.Phase = types.PhaseDownloaded
 		if len(data.Links) == 0 {
 			o.Phase = types.PhaseFinalizing
+			o.LinksPending = true
 		}
 	case "error", "magnet_error", "virus", "dead":
 		o.Phase = types.PhaseFailed

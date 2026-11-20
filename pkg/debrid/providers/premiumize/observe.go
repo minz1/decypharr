@@ -13,6 +13,7 @@ func observe(status string, linked bool) types.Observation {
 		o.Phase = types.PhaseDownloaded
 		if !linked {
 			o.Phase = types.PhaseFinalizing
+			o.LinksPending = true
 		}
 	case "queued", "waiting":
 		o.Phase = types.PhaseRemoteQueued

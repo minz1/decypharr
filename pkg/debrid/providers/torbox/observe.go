@@ -16,8 +16,10 @@ func observe(data *torboxInfo) types.Observation {
 	}
 	if data.DownloadFinished {
 		o.Phase = types.PhaseFinalizing
+		o.LinksPending = true
 		if len(data.Files) > 0 {
 			o.Phase = types.PhaseDownloaded
+			o.LinksPending = false
 		}
 		return o
 	}

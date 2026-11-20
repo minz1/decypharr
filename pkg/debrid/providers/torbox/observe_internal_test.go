@@ -216,3 +216,50 @@ func checkVerdict(t *testing.T, err, wantErr error, wantText string) {
 		t.Fatal(err)
 	}
 }
+
+func TestObserveLinksPending(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name      string
+		state     string
+		finished  bool
+		files     bool
+		wantPhase types.Phase
+		want      bool
+	}{
+		{
+			name:      "finished without files",
+			state:     "uploading",
+			finished:  true,
+			wantPhase: types.PhaseFinalizing,
+			want:      true,
+		},
+		{
+			name:      "finished with files",
+			state:     "uploading",
+			finished:  true,
+			files:     true,
+			wantPhase: types.PhaseDownloaded,
+		},
+		{name: "uploading unfinished", state: "uploading", wantPhase: types.PhaseFinalizing},
+		{name: "completed unfinished", state: "completed", wantPhase: types.PhaseFinalizing},
+		{name: "cached unfinished", state: "cached", wantPhase: types.PhaseFinalizing},
+		{name: "downloaded unfinished", state: "downloaded", wantPhase: types.PhaseFinalizing},
+		{name: "downloading", state: "downloading", wantPhase: types.PhaseDownloading},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			info := &torboxInfo{DownloadState: tc.state, DownloadFinished: tc.finished}
+			if tc.files {
+				if err := json.Unmarshal([]byte(`{"files":[{}]}`), info); err != nil {
+					t.Fatal(err)
+				}
+			}
+			o := observe(info)
+			if o.Phase != tc.wantPhase || o.LinksPending != tc.want {
+				t.Fatalf("phase %v pending %v, want %v %v", o.Phase, o.LinksPending, tc.wantPhase, tc.want)
+			}
+		})
+	}
+}

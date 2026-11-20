@@ -107,16 +107,17 @@ const (
 )
 
 type Observation struct {
-	Provider  string
-	ID        string
-	Raw       string
-	Phase     Phase
-	Cached    Verdict
-	Progress  float64
-	Speed     int64
-	Seeders   int
-	Stallable bool
-	Nudged    bool
+	Provider     string
+	ID           string
+	Raw          string
+	Phase        Phase
+	Cached       Verdict
+	Progress     float64
+	Speed        int64
+	Seeders      int
+	Stallable    bool
+	Nudged       bool
+	LinksPending bool
 }
 
 func NotCached(o Observation, downloadUncached bool) bool {

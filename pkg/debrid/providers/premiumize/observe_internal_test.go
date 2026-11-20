@@ -212,3 +212,28 @@ func checkVerdict(t *testing.T, err, wantErr error, wantText string) {
 		t.Fatal(err)
 	}
 }
+
+func TestObserveLinksPending(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		status string
+		linked bool
+		want   bool
+	}{
+		{name: "finished unlinked", status: "finished", want: true},
+		{name: "seeding unlinked", status: "seeding", want: true},
+		{name: "finished linked", status: "finished", linked: true},
+		{name: "seeding linked", status: "seeding", linked: true},
+		{name: "running", status: "running"},
+		{name: "queued", status: "queued"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := observe(tc.status, tc.linked).LinksPending; got != tc.want {
+				t.Fatalf("LinksPending %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
