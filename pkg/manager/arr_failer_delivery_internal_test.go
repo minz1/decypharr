@@ -100,17 +100,19 @@ func deliveryOf(entry *storage.Entry) failDelivery {
 	}
 }
 
+type guardBookkeepingCase struct {
+	handed     reacquire.Handed
+	wantErr    bool
+	wantSlots  int
+	wantCalls  int
+	current    func(cancel context.CancelFunc) func() bool
+	savedFirst bool
+	precheck   bool
+}
+
 func TestDeliverFailGuardBookkeeping(t *testing.T) {
 	t.Parallel()
-	for name, tc := range map[string]struct {
-		handed     reacquire.Handed
-		wantErr    bool
-		wantSlots  int
-		wantCalls  int
-		current    func(cancel context.CancelFunc) func() bool
-		savedFirst bool
-		precheck   bool
-	}{
+	for name, tc := range map[string]guardBookkeepingCase{
 		"created counts against the bucket": {handed: reacquire.HandedCreated, wantSlots: 1, wantCalls: 1},
 		"a receipt that appears during admission is released": {
 			handed: reacquire.HandedExisting, wantSlots: 2, wantCalls: 1,
@@ -135,39 +137,44 @@ func TestDeliverFailGuardBookkeeping(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			recovery := newScriptedRecovery()
-			recovery.handed = tc.handed
-			var verdict atomic.Int64
-			verdict.Store(int64(arr.CanaryFail))
-			m, _ := grabManager(t, recovery.fakeArrRecovery, &verdict)
-			entry := grabEntry(1)
-			if tc.savedFirst {
-				recovery.saved[entry.InfoHash] = reacquire.Job{ID: "saved"}
-			}
-			ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
-			d := deliveryOf(entry)
-			d.precheck = tc.savedFirst || tc.precheck
-			if tc.current != nil {
-				d.current = tc.current(cancel)
-			}
-			_, err := m.deliverFail(ctx, recovery, d)
-			if (err != nil) != tc.wantErr {
-				t.Fatalf("deliverFail error = %v, want error = %v", err, tc.wantErr)
-			}
-			if got := recovery.downloadCalls(); got != tc.wantCalls {
-				t.Fatalf("FailDownload calls = %d, want %d", got, tc.wantCalls)
-			}
-			if got := freeSlots(t, m); got != tc.wantSlots {
-				t.Fatalf("free slots in the bucket = %d, want %d", got, tc.wantSlots)
-			}
-			if !tc.wantErr && tc.handed != reacquire.HandedExisting {
-				m.arr.ReleaseFailGrab(d.arr, d.downloadID, d.provider)
-				if got := freeSlots(t, m); got != tc.wantSlots {
-					t.Fatalf("free slots after a later release = %d, want %d: the handoff was not committed", got, tc.wantSlots)
-				}
-			}
+			tc.run(t)
 		})
+	}
+}
+
+func (tc guardBookkeepingCase) run(t *testing.T) {
+	recovery := newScriptedRecovery()
+	recovery.handed = tc.handed
+	var verdict atomic.Int64
+	verdict.Store(int64(arr.CanaryFail))
+	m, _ := grabManager(t, recovery.fakeArrRecovery, &verdict)
+	entry := grabEntry(1)
+	if tc.savedFirst {
+		recovery.saved[entry.InfoHash] = reacquire.Job{ID: "saved"}
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	d := deliveryOf(entry)
+	d.precheck = tc.savedFirst || tc.precheck
+	if tc.current != nil {
+		d.current = tc.current(cancel)
+	}
+	_, err := m.deliverFail(ctx, recovery, d)
+	if (err != nil) != tc.wantErr {
+		t.Fatalf("deliverFail error = %v, want error = %v", err, tc.wantErr)
+	}
+	if got := recovery.downloadCalls(); got != tc.wantCalls {
+		t.Fatalf("FailDownload calls = %d, want %d", got, tc.wantCalls)
+	}
+	if got := freeSlots(t, m); got != tc.wantSlots {
+		t.Fatalf("free slots in the bucket = %d, want %d", got, tc.wantSlots)
+	}
+	if tc.wantErr || tc.handed == reacquire.HandedExisting {
+		return
+	}
+	m.arr.ReleaseFailGrab(d.arr, d.downloadID, d.provider)
+	if got := freeSlots(t, m); got != tc.wantSlots {
+		t.Fatalf("free slots after a later release = %d, want %d: not committed", got, tc.wantSlots)
 	}
 }
 
@@ -186,8 +193,7 @@ func TestDeliverFailHoldsAReceiptMissAgainstAFullBucket(t *testing.T) {
 	d := deliveryOf(grabEntry(5))
 	d.precheck = true
 	_, err := m.deliverFail(t.Context(), recovery, d)
-	var held *arr.HeldError
-	if !errors.As(err, &held) {
+	if _, held := errors.AsType[*arr.HeldError](err); !held {
 		t.Fatalf("deliverFail error = %v, want a HeldError", err)
 	}
 	if got := recovery.downloadCalls() - before; got != 0 {

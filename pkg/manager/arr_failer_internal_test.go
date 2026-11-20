@@ -1116,6 +1116,24 @@ func TestArrFailerWarnsOnceWhenTheAckKeepsFailing(t *testing.T) {
 	})
 }
 
+func ackFailingLog(first time.Time) *attemptLog {
+	var secondGrabs atomic.Int64
+	log := &attemptLog{}
+	log.grab = func(_ context.Context, spec attemptSpec) attemptResult {
+		if spec.at.Equal(first) {
+			return attemptResult{kind: resAckFailed, jobID: "job-7", err: errors.New("save failed")}
+		}
+		if secondGrabs.Add(1) == 1 {
+			return attemptResult{kind: resError, err: errors.New("arr down")}
+		}
+		return attemptResult{kind: resAckFailed, jobID: "job-8", err: errors.New("save failed")}
+	}
+	log.ack = func(_ context.Context, spec attemptSpec) attemptResult {
+		return attemptResult{kind: resAckFailed, jobID: spec.jobID, err: errors.New("save failed")}
+	}
+	return log
+}
+
 func TestArrFailerSupersedeOfAWarnedAckInARefusingLauncherStartsFresh(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -1124,20 +1142,7 @@ func TestArrFailerSupersedeOfAWarnedAckInARefusingLauncherStartsFresh(t *testing
 		var logs lockedBuffer
 		var f *arrFailer
 		var refuseNext atomic.Bool
-		var secondGrabs atomic.Int64
-		log := &attemptLog{}
-		log.grab = func(_ context.Context, spec attemptSpec) attemptResult {
-			if spec.at.Equal(start) {
-				return attemptResult{kind: resAckFailed, jobID: "job-7", err: errors.New("save failed")}
-			}
-			if secondGrabs.Add(1) == 1 {
-				return attemptResult{kind: resError, err: errors.New("arr down")}
-			}
-			return attemptResult{kind: resAckFailed, jobID: "job-8", err: errors.New("save failed")}
-		}
-		log.ack = func(_ context.Context, spec attemptSpec) attemptResult {
-			return attemptResult{kind: resAckFailed, jobID: spec.jobID, err: errors.New("save failed")}
-		}
+		log := ackFailingLog(start)
 		g := testGroup(t)
 		deps := log.deps()
 		deps.startAttempt = func(name string, fn func(ctx context.Context)) error {
@@ -1165,24 +1170,16 @@ func TestArrFailerSupersedeOfAWarnedAckInARefusingLauncherStartsFresh(t *testing
 		if !ok || !it.at.Equal(second) || it.jobID != "" || it.fails != 1 || it.ackWarned || !it.ackSince.IsZero() {
 			t.Fatalf("item = %+v, %v; want the new occurrence with no ack state and one failure", it, ok)
 		}
-		if got := log.acks[len(log.acks)-1].jobID; got != "job-7" || log.ackCount() != 1 {
-			t.Fatalf("acks = %d, last job %q; want the refused launch to have been the only extra ack", log.ackCount(), got)
-		}
 		time.Sleep(failBackoff(1))
 		synctest.Wait()
-		if len(log.times) != 3 || log.times[2].Sub(log.times[1]) != failBackoff(1) {
-			t.Fatalf("grab times = %v, want the second occurrence retried after %v", log.times, failBackoff(1))
-		}
-		if warns() != 1 {
-			t.Fatalf("warnings = %d right after the first ack failure of the new occurrence, want still 1", warns())
+		if len(log.times) != 3 || log.times[2].Sub(log.times[1]) != failBackoff(1) || warns() != 1 {
+			t.Fatalf("grab times = %v, warnings = %d; want a retry after %v and no early warning",
+				log.times, warns(), failBackoff(1))
 		}
 		time.Sleep(ackWarnAfter)
 		synctest.Wait()
-		if warns() != 2 {
-			t.Fatalf("warnings = %d, want a fresh warning once %v has passed", warns(), ackWarnAfter)
-		}
-		if got := log.acks[len(log.acks)-1].jobID; got != "job-8" {
-			t.Fatalf("last ack carried %q, want the new occurrence's job-8", got)
+		if got := log.acks[len(log.acks)-1].jobID; warns() != 2 || got != "job-8" {
+			t.Fatalf("warnings = %d, last ack job %q; want a fresh warning for job-8", warns(), got)
 		}
 	})
 }

@@ -149,7 +149,12 @@ func (s *Service) failDownloadLocked(key jobKey, entryID string, since time.Time
 		return s.requeueLocked(job)
 	case failReceipt:
 		return s.receiptLocked(job)
+	case failCreate:
 	}
+	return s.createFailLocked(key, entryID)
+}
+
+func (s *Service) createFailLocked(key jobKey, entryID string) (Job, Handed, error) {
 	staged, restaged := s.staged[key]
 	if !restaged {
 		now := s.now()
