@@ -62,15 +62,28 @@ func ruleHasCanary(rule string) bool { return rule == failedDownloadRule || rule
 // the caller tries again later.
 var ErrBlocklistHeld = errors.New("the arr blocklist guard is holding this download")
 
+type HeldError struct {
+	Arr        string
+	DownloadID string
+	RetryAt    time.Time
+}
+
+func (e *HeldError) Error() string {
+	return fmt.Sprintf("%v: %s in %s", ErrBlocklistHeld, e.DownloadID, e.Arr)
+}
+
+func (e *HeldError) Unwrap() error { return ErrBlocklistHeld }
+
 // AdmitFailGrab asks whether the grab of a never-imported download may be failed, which blocklists its release,
 // under the same limits as queue cleanup: 20 distinct downloads an hour per provider, more only while that
 // provider's canary passes, and the arr's hard cap. The grab counts only once CommitFailGrab says it was sent.
 func (s *Service) AdmitFailGrab(ctx context.Context, arrName, downloadID, provider string) error {
 	item := QueueSchema{ID: 1, DownloadID: downloadID, rule: failGrabRule, provider: provider}
-	if s.admitBlocklists(ctx, arrName, []QueueSchema{item})[item.ID] {
+	decision := s.admitBlocklists(ctx, arrName, []QueueSchema{item})
+	if decision.allowed[item.ID] {
 		return nil
 	}
-	return fmt.Errorf("%w: %s in %s", ErrBlocklistHeld, downloadID, arrName)
+	return &HeldError{Arr: arrName, DownloadID: downloadID, RetryAt: decision.retryAt[item.ID]}
 }
 
 // ReleaseFailGrab gives back the place AdmitFailGrab reserved when the grab was then not failed.
@@ -271,6 +284,7 @@ type guardEvent struct {
 
 type guardDecision struct {
 	allowed map[int]bool
+	retryAt map[int]time.Time
 	events  []guardEvent
 }
 
@@ -278,15 +292,15 @@ type guardDecision struct {
 func (s *Service) holdExcessBlocklists(
 	ctx context.Context, name string, research, plain []QueueSchema,
 ) ([]QueueSchema, []QueueSchema) {
-	allowed := s.admitBlocklists(ctx, name, slices.Concat(research, plain))
+	allowed := s.admitBlocklists(ctx, name, slices.Concat(research, plain)).allowed
 	return keepAllowed(research, allowed), keepAllowed(plain, allowed)
 }
 
 // admitBlocklists returns the queue rows of items that may be blocklisted now. The rest stay in the queue and
 // are served first, oldest first, when the window has room.
-func (s *Service) admitBlocklists(ctx context.Context, name string, items []QueueSchema) map[int]bool {
+func (s *Service) admitBlocklists(ctx context.Context, name string, items []QueueSchema) guardDecision {
 	if len(items) == 0 {
-		return nil
+		return guardDecision{}
 	}
 	g := s.guard
 	units := groupUnits(name, items)
@@ -311,7 +325,7 @@ func (s *Service) admitBlocklists(ctx context.Context, name string, items []Queu
 			s.notifyGuard(event.key, event.text)
 		}
 	}
-	return decision.allowed
+	return decision
 }
 
 // guardCanaryTimeout bounds one canary probe of a provider.

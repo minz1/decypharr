@@ -385,7 +385,7 @@ func (s *Service) endImport(
 	for i := range marked {
 		marked[i].rule, marked[i].provider = "import_end:wrong_episode", provider
 	}
-	kept := keepAllowed(marked, s.admitBlocklists(ctx, name, marked))
+	kept := keepAllowed(marked, s.admitBlocklists(ctx, name, marked).allowed)
 	if len(kept) != len(marked) {
 		s.guard.release(name, kept)
 		s.logger.Info().Str("arr", name).Str("download_id", downloadID).

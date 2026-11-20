@@ -22,8 +22,9 @@ import (
 
 // Service owns every configured Arr instance and every call made to one.
 type Service struct {
-	mu   sync.RWMutex
-	arrs map[string]Arr
+	mu    sync.RWMutex
+	arrs  map[string]Arr
+	added func(name string)
 
 	config   *config.Store
 	client   *request.Client
@@ -194,8 +195,19 @@ func (s *Service) AddOrUpdate(instance Arr) {
 		instance.Type = inferType(instance.Host, instance.Name)
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	_, existed := s.arrs[instance.Name]
 	s.arrs[instance.Name] = instance
+	hook := s.added
+	s.mu.Unlock()
+	if !existed && hook != nil {
+		hook(instance.Name)
+	}
+}
+
+func (s *Service) SetAddedHook(fn func(name string)) {
+	s.mu.Lock()
+	s.added = fn
+	s.mu.Unlock()
 }
 
 func (s *Service) Clear() {
@@ -216,7 +228,6 @@ func (s *Service) SyncFromConfig(previous, configured []config.Arr) {
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	for name, current := range s.arrs {
 		instance, ok := updated[name]
 		if !ok {
@@ -232,7 +243,21 @@ func (s *Service) SyncFromConfig(previous, configured []config.Arr) {
 		instance.Token = cmp.Or(instance.Token, current.Token)
 		updated[name] = instance
 	}
+	var added []string
+	for name := range updated {
+		if _, existed := s.arrs[name]; !existed {
+			added = append(added, name)
+		}
+	}
 	s.arrs = updated
+	hook := s.added
+	s.mu.Unlock()
+	if hook != nil {
+		slices.Sort(added)
+		for _, name := range added {
+			hook(name)
+		}
+	}
 }
 
 func (s *Service) SyncToConfig() []config.Arr {
