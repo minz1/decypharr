@@ -347,7 +347,8 @@ func (m *Manager) submitToProvider(
 		_logger.Info().Str("id", dbt.ID).Err(err).Msg("Stopped after the submit; queued to keep checking")
 		return keptSubmission(dbt, db.Config().Name, debridTorrent), nil
 	}
-	if errors.Is(err, customerror.ErrProviderStatusTimeout) && torrent != nil && torrent.ID != "" {
+	verdict := submitVerdict(err)
+	if !verdict && errors.Is(err, customerror.ErrProviderStatusTimeout) && torrent != nil && torrent.ID != "" {
 		// The provider has not finished converting the magnet or linking its
 		// files. That is no verdict on the release: queue the torrent as still
 		// downloading, so the scheduler keeps checking it, and keep it at the
@@ -359,7 +360,8 @@ func (m *Manager) submitToProvider(
 			Msg("Provider still processing the torrent; queued to keep checking")
 		return keptSubmission(torrent, db.Config().Name, debridTorrent), nil
 	}
-	if err != nil && torrent != nil && torrent.ID != "" && transientStatusError(err) && !isTooManyActiveDownloads(err) {
+	if !verdict && err != nil && torrent != nil && torrent.ID != "" && transientStatusError(err) &&
+		!isTooManyActiveDownloads(err) {
 		m.hearsay.DiscardAdd(decision)
 		_logger.Info().
 			Str("id", torrent.ID).
@@ -403,5 +405,6 @@ func hearsayNotCached(provider, hash string) error {
 }
 
 func submitVerdict(err error) bool {
-	return errors.Is(err, customerror.ErrTorrentNotCached) || errors.Is(err, customerror.ErrTorrentBlocked)
+	return errors.Is(err, customerror.ErrTorrentNotCached) || errors.Is(err, customerror.ErrTorrentBlocked) ||
+		errors.Is(err, customerror.ErrReleaseFailed)
 }

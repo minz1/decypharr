@@ -3,6 +3,8 @@ package manager
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,13 +33,33 @@ func (p *deadStatusProvider) CheckStatus(_ context.Context, t *types.Torrent) (*
 
 func (*deadStatusProvider) DeleteTorrent(context.Context, string) error { return nil }
 
+type failedPhaseProvider struct {
+	deadStatusProvider
+	checks atomic.Int64
+}
+
+func (p *failedPhaseProvider) CheckStatus(_ context.Context, t *types.Torrent) (*types.Torrent, error) {
+	p.checks.Add(1)
+	t.Status = types.TorrentStatusError
+	return t, fmt.Errorf("torrent: %s has error status: dead: %w", t.Name, customerror.ErrReleaseFailed)
+}
+
+func failed(name string) debrid.Client {
+	return &failedPhaseProvider{deadStatusProvider: deadStatusProvider{throttlingProvider{name: name}}}
+}
+
 func submitFailEffect(t *testing.T, providers ...debrid.Client) (grab.FailEffect, grab.Outcome) {
+	t.Helper()
+	return submitFailEffectOf(t, &ImportRequest{Magnet: &utils.Magnet{InfoHash: "hash", Name: "name"}}, providers...)
+}
+
+func submitFailEffectOf(t *testing.T, req *ImportRequest, providers ...debrid.Client) (grab.FailEffect, grab.Outcome) {
 	t.Helper()
 	m := withTestConfig(t, &Manager{logger: zerolog.Nop(), clients: xsync.NewMap[string, debrid.Client]()})
 	for _, p := range providers {
 		m.clients.Store(p.Config().Name, p)
 	}
-	_, err := m.SendToDebrid(&ImportRequest{Magnet: &utils.Magnet{InfoHash: "hash", Name: "name"}})
+	_, err := m.SendToDebrid(req)
 	if err == nil {
 		t.Fatal("submit succeeded, want a failure")
 	}
@@ -74,6 +96,23 @@ func TestASubmitEveryProviderRefusedFailsAsABadRelease(t *testing.T) {
 			[]debrid.Client{refusing("rd", customerror.ErrTorrentNotCached), refusing("tb", transient)},
 			grab.FailEntry,
 		},
+		"failed on the only provider": {[]debrid.Client{failed("rd")}, grab.FailBadRelease},
+		"failed and not cached": {
+			[]debrid.Client{failed("rd"), refusing("tb", customerror.ErrTorrentNotCached)},
+			grab.FailBadRelease,
+		},
+		"failed and transient": {
+			[]debrid.Client{failed("rd"), refusing("tb", customerror.NewProviderStatusError(errors.New("503"), 503))},
+			grab.FailEntry,
+		},
+		"failed and hearsay skip": {
+			[]debrid.Client{failed("rd"), refusing("tb", hearsayNotCached("tb", "hash"))},
+			grab.FailEntry,
+		},
+		"failed and not found": {
+			[]debrid.Client{failed("rd"), refusing("tb", customerror.ErrTorrentNotFound)},
+			grab.FailEntry,
+		},
 		"dead status and transient": {[]debrid.Client{dead("rd"), refusing("tb", transient)}, grab.FailEntry},
 		"not found everywhere": {
 			[]debrid.Client{refusing("rd", customerror.ErrTorrentNotFound), refusing("tb", customerror.ErrTorrentNotFound)},
@@ -95,6 +134,95 @@ func TestAThrottledSubmitIsStillThrottled(t *testing.T) {
 		refusing("rd", customerror.ErrTorrentBlocked), refusing("tb", customerror.ErrTooManyActiveDownloads))
 	if outcome != grab.OutcomeThrottled {
 		t.Fatalf("outcome = %v, want throttled", outcome)
+	}
+}
+
+func TestAThrottledSubmitWithAFailedProviderIsThrottled(t *testing.T) {
+	t.Parallel()
+	_, outcome := submitFailEffect(t, failed("rd"), refusing("tb", customerror.ErrTooManyActiveDownloads))
+	if outcome != grab.OutcomeThrottled {
+		t.Fatalf("outcome = %v, want throttled", outcome)
+	}
+}
+
+type acceptingProvider struct {
+	throttlingProvider
+}
+
+func (p *acceptingProvider) SubmitMagnet(_ context.Context, t *types.Torrent) (*types.Torrent, error) {
+	return &types.Torrent{ID: "ok", Debrid: p.name, InfoHash: t.InfoHash, Name: t.Name}, nil
+}
+
+func (p *acceptingProvider) CheckStatus(_ context.Context, t *types.Torrent) (*types.Torrent, error) {
+	t.Status = types.TorrentStatusDownloaded
+	return t, nil
+}
+
+func TestAFailedThenAcceptedSubmitPlaces(t *testing.T) {
+	t.Parallel()
+	m := withTestConfig(t, &Manager{logger: zerolog.Nop(), clients: xsync.NewMap[string, debrid.Client]()})
+	rd := failed("rd")
+	m.clients.Store("rd", rd)
+	m.clients.Store("tb", &acceptingProvider{throttlingProvider{name: "tb"}})
+	got, err := m.SendToDebrid(&ImportRequest{Magnet: &utils.Magnet{InfoHash: "hash", Name: "name"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Debrid != "tb" {
+		t.Fatalf("placed at %q, want tb", got.Debrid)
+	}
+	if n := rd.(*failedPhaseProvider).checks.Load(); n != 1 {
+		t.Fatalf("rd status checks = %d, want 1", n)
+	}
+}
+
+func TestAFailedSubmitIsAVerdictWhateverItsName(t *testing.T) {
+	t.Parallel()
+	req := &ImportRequest{Magnet: &utils.Magnet{InfoHash: "hash", Name: "Show Connection Reset By Peer.mkv"}}
+	got, _ := submitFailEffectOf(t, req, failed("rd"))
+	if got != grab.FailBadRelease {
+		t.Fatalf("submit fail effect = %v, want %v", got, grab.FailBadRelease)
+	}
+}
+
+type cuttingProvider struct {
+	deadStatusProvider
+	cancel context.CancelFunc
+}
+
+func (p *cuttingProvider) CheckStatus(_ context.Context, t *types.Torrent) (*types.Torrent, error) {
+	p.cancel()
+	return t, fmt.Errorf("torrent: %s has error status: dead: %w", t.Name, customerror.ErrReleaseFailed)
+}
+
+func TestAStopDuringAFailedCheckKeepsTheSubmission(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	m := withTestConfig(t, &Manager{logger: zerolog.Nop(), clients: xsync.NewMap[string, debrid.Client]()})
+	m.clients.Store("rd", &cuttingProvider{deadStatusProvider{throttlingProvider{name: "rd"}}, cancel})
+	got, err := m.sendToDebrid(ctx, &ImportRequest{Magnet: &utils.Magnet{InfoHash: "hash", Name: "name"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != types.TorrentStatusDownloading {
+		t.Fatalf("status = %s, want downloading", got.Status)
+	}
+}
+
+type timedOutFailedProvider struct {
+	deadStatusProvider
+}
+
+func (p *timedOutFailedProvider) CheckStatus(_ context.Context, t *types.Torrent) (*types.Torrent, error) {
+	return t, errors.Join(customerror.ErrProviderStatusTimeout, customerror.ErrReleaseFailed)
+}
+
+func TestAVerdictOutranksAStatusTimeout(t *testing.T) {
+	t.Parallel()
+	got, _ := submitFailEffect(t, &timedOutFailedProvider{deadStatusProvider{throttlingProvider{name: "rd"}}})
+	if got != grab.FailBadRelease {
+		t.Fatalf("submit fail effect = %v, want %v", got, grab.FailBadRelease)
 	}
 }
 
