@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -19,6 +21,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/internal/utils"
+	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/hearsay"
 	"github.com/sirrobot01/decypharr/pkg/manager/grab"
@@ -156,6 +159,11 @@ func runHintSubmit(t *testing.T, c hintCase) *hintRun {
 	fake := &fakeArrRecovery{}
 	m, entry := newDroppedTestManager(t, fake)
 	m = withTestConfig(t, m)
+	arrServer := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	t.Cleanup(arrServer.Close)
+	m.arr = arr.New(config.NewStore(&config.Config{Arrs: []config.Arr{
+		{Name: "sonarr", Host: arrServer.URL, Token: "x"},
+	}}), nil, zerolog.Nop())
 	entry.Protocol = config.ProtocolTorrent
 	entry.InfoHash = hintHash
 	entry.Manual = c.manual
@@ -523,9 +531,10 @@ func TestAWatchFolderNZBBypassesTheHint(t *testing.T) {
 	t.Run("process misses", func(t *testing.T) {
 		t.Parallel()
 		r := runNZBHint(t, nzbHintCase{category: "uncategorized", negative: nzbLocalNegative, process: processMissing})
-		if r.msg.ev == nil || r.msg.ev.Fail != grab.FailEntry {
-			t.Fatalf("parse result = %+v, want an entry failure", r.msg.ev)
+		if got := r.processed.Load(); got != 1 {
+			t.Fatalf("Process ran %d times, want once", got)
 		}
+		assertParseFailed(t, r.msg, "failed to process nzb")
 		g := grab.Grab{Entry: r.call.grab.Entry, State: r.call.grab.State}
 		if r.m.arrOwnsFailure(g) {
 			t.Fatal("a watch-folder failure is owned by an Arr")
@@ -548,6 +557,9 @@ func TestTheNZBBypassLineIsLoggedOnlyForABypassedNegative(t *testing.T) {
 		"client grab with no negative": {
 			nzbHintCase{category: "sonarr", negative: nzbNoNegative, process: processedNZB}, 0,
 		},
+		"manual grab with no negative": {
+			nzbHintCase{manual: true, category: "sonarr", negative: nzbNoNegative, process: processedNZB}, 0,
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -555,6 +567,9 @@ func TestTheNZBBypassLineIsLoggedOnlyForABypassedNegative(t *testing.T) {
 			lines := r.log.bypasses(t)
 			if len(lines) != tc.want {
 				t.Fatalf("bypass lines = %v, want %d", lines, tc.want)
+			}
+			if got := r.queriesSince(); got != 1 {
+				t.Fatalf("hearsay answered %d queries, want one lookup per parse", got)
 			}
 			if tc.want == 0 {
 				return
