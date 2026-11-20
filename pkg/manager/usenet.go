@@ -178,7 +178,7 @@ func newNZBQueueEntry(req *ImportRequest, stagedPath string) *storage.Entry {
 		Protocol:         config.ProtocolNZB,
 		Magnet:           stagedPath,
 		Category:         req.Arr.Name,
-		SavePath:         filepath.Join(req.DownloadFolder, req.Arr.Name),
+		SavePath:         storage.EntrySavePath(filepath.Join(req.DownloadFolder, req.Arr.Name), req.ID),
 		Status:           storage.EntryStatusQueued,
 		State:            storage.EntryStateDownloading,
 		Progress:         0,

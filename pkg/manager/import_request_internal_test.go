@@ -1,8 +1,13 @@
 package manager
 
 import (
+	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/rs/zerolog"
+
+	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/storage"
@@ -83,5 +88,72 @@ func TestQueueEntriesCarryManual(t *testing.T) {
 				t.Fatalf("nzb entry Manual = %v, want %v", got, tt.manual)
 			}
 		})
+	}
+}
+
+func nestedIn(parent, child string) bool {
+	return strings.HasPrefix(child, parent+string(filepath.Separator))
+}
+
+func TestQueueEntriesGetAFolderOfTheirOwn(t *testing.T) {
+	t.Parallel()
+	namings := []config.WebDavFolderNaming{config.WebDavUseArrSubmittedName, config.WebDavUseFileName}
+	for _, naming := range namings {
+		t.Run(string(naming)+"/nzb", func(t *testing.T) {
+			t.Parallel()
+			dl := t.TempDir()
+			build := func(id string) *storage.Entry {
+				return newNZBQueueEntry(&ImportRequest{
+					ID: id, Name: "Show.S01E01", DownloadFolder: dl, Arr: arr.Arr{Name: "sonarr"},
+				}, "/staged/"+id+".nzb")
+			}
+			a, b := build("uuid-a"), build("uuid-b")
+			if a.DownloadPath(naming) == b.DownloadPath(naming) ||
+				nestedIn(a.DownloadPath(naming), b.DownloadPath(naming)) ||
+				nestedIn(b.DownloadPath(naming), a.DownloadPath(naming)) {
+				t.Fatalf("same-named NZBs share a folder: %q and %q", a.DownloadPath(naming), b.DownloadPath(naming))
+			}
+			if want := filepath.Join(dl, "sonarr", "uuid-a"); a.SavePath != want || !a.OwnsSavePath() {
+				t.Fatalf("SavePath = %q (owned %v), want %q owned", a.SavePath, a.OwnsSavePath(), want)
+			}
+		})
+		t.Run(string(naming)+"/torrent", func(t *testing.T) {
+			t.Parallel()
+			dl := t.TempDir()
+			build := func(hash string) *storage.Entry {
+				return newTorrentQueueEntry(&ImportRequest{
+					Magnet:         &utils.Magnet{InfoHash: hash, Name: "Show.S01E01"},
+					DownloadFolder: dl, Arr: arr.Arr{Name: "sonarr"},
+				}, storage.EntryStatusQueued, naming)
+			}
+			a, b := build("aaaa"), build("bbbb")
+			if a.DownloadPath(naming) == b.DownloadPath(naming) ||
+				nestedIn(a.DownloadPath(naming), b.DownloadPath(naming)) ||
+				nestedIn(b.DownloadPath(naming), a.DownloadPath(naming)) {
+				t.Fatalf(
+					"same-named torrents share a folder: %q and %q",
+					a.DownloadPath(naming),
+					b.DownloadPath(naming),
+				)
+			}
+			if want := filepath.Join(dl, "sonarr", "aaaa"); a.SavePath != want || !a.OwnsSavePath() {
+				t.Fatalf("SavePath = %q (owned %v), want %q owned", a.SavePath, a.OwnsSavePath(), want)
+			}
+			if a.ContentPath != a.DownloadPath(naming) {
+				t.Fatalf("ContentPath = %q, want %q", a.ContentPath, a.DownloadPath(naming))
+			}
+		})
+	}
+}
+
+func TestRequestFromEntryUsesTheConfiguredRoot(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	m := withTestConfig(t, &Manager{logger: zerolog.Nop()})
+	m.store = testConfigStore(t, func(cfg *config.Config) { cfg.DownloadFolder = root })
+	e := testEntry("a")
+	e.SavePath = filepath.Join(t.TempDir(), "elsewhere", "a")
+	if got := m.requestFromEntry(e).DownloadFolder; got != root {
+		t.Fatalf("DownloadFolder = %q, want the configured %q", got, root)
 	}
 }

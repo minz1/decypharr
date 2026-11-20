@@ -6,6 +6,7 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"
@@ -834,6 +835,33 @@ func GetTorrentFolder(folderNaming config.WebDavFolderNaming, entry *Entry) stri
 // hashFolder names an entry's folder by its infohash.
 func hashFolder(entry *Entry) string {
 	return utils.PathElement(entry.InfoHash, "_")
+}
+
+func EntrySavePath(categoryDir, id string) string {
+	return filepath.Join(categoryDir, utils.PathElement(id, "_"))
+}
+
+func (e *Entry) OwnsSavePath() bool {
+	if e == nil || e.InfoHash == "" {
+		return false
+	}
+	save := filepath.Clean(e.SavePath)
+	if filepath.Base(save) != hashFolder(e) {
+		return false
+	}
+	if filepath.VolumeName(e.Category) != "" {
+		return false
+	}
+	if slices.Contains(strings.Split(filepath.ToSlash(e.Category), "/"), "..") {
+		return false
+	}
+	cat := strings.Trim(filepath.ToSlash(filepath.Clean(e.Category)), "/")
+	if cat == "" || cat == "." {
+		return false
+	}
+	catElems := strings.Split(cat, "/")
+	saveElems := strings.Split(filepath.ToSlash(strings.TrimPrefix(save, filepath.VolumeName(save))), "/")
+	return len(saveElems) < len(catElems) || !slices.Equal(saveElems[len(saveElems)-len(catElems):], catElems)
 }
 
 func (e *Entry) ArrSubmittedName() string {

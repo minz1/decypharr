@@ -3,6 +3,7 @@ package manager
 import (
 	"fmt"
 	"maps"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -75,6 +76,7 @@ type SeasonInfo struct {
 // convertToMultiSeason converts a normal torrent to a multi-season torrents.
 func convertToMultiSeason(torrent *storage.Entry, seasons []SeasonInfo) []*storage.Entry {
 	seasonResults := make([]*storage.Entry, 0, len(seasons))
+	packOwnsFolder := torrent.OwnsSavePath()
 	for _, seasonInfo := range seasons {
 		// Filter files to only include this season's files
 		seasonFiles := make(map[string]*storage.File)
@@ -91,6 +93,10 @@ func convertToMultiSeason(torrent *storage.Entry, seasons []SeasonInfo) []*stora
 			size += file.Size
 		}
 
+		savePath := torrent.SavePath
+		if packOwnsFolder {
+			savePath = storage.EntrySavePath(filepath.Dir(filepath.Clean(torrent.SavePath)), seasonInfo.InfoHash)
+		}
 		// Create a season-specific managed torrent
 		seasonTorrent := &storage.Entry{
 			Protocol:         torrent.Protocol,
@@ -101,7 +107,7 @@ func convertToMultiSeason(torrent *storage.Entry, seasons []SeasonInfo) []*stora
 			Bytes:            size,
 			Magnet:           torrent.Magnet,
 			Category:         torrent.Category,
-			SavePath:         torrent.SavePath,
+			SavePath:         savePath,
 			Status:           storage.EntryStatusDownloading,
 			Action:           torrent.Action,
 			Manual:           torrent.Manual,

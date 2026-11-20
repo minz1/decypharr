@@ -168,10 +168,11 @@ func (q *Queue) Contains(infohash string) bool {
 }
 
 // removeStagedNZB deletes an NZB entry's staged source file, if any.
-func removeStagedNZB(entry *storage.Entry) error {
+func (q *Queue) removeStagedNZB(entry *storage.Entry) error {
 	if !entry.IsNZB() || entry.Magnet == "" {
 		return nil
 	}
+	q.logger.Info().Str("key", entry.InfoHash).Str("path", entry.Magnet).Msg("Removing a staged NZB")
 	if err := os.Remove(entry.Magnet); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove staged NZB %q: %w", entry.Magnet, err)
 	}
@@ -179,20 +180,30 @@ func removeStagedNZB(entry *storage.Entry) error {
 }
 
 func (q *Queue) deleteEntryFiles(entry *storage.Entry) error {
-	if err := removeStagedNZB(entry); err != nil {
+	if err := q.removeStagedNZB(entry); err != nil {
 		return err
 	}
 	// Without an absolute save path the download path resolves against the working directory.
 	if !filepath.IsAbs(entry.SavePath) {
 		return nil
 	}
-	var naming config.WebDavFolderNaming
-	if q.naming != nil {
-		naming = q.naming()
+	owned := entry.OwnsSavePath()
+	target := entry.SavePath
+	if !owned {
+		var naming config.WebDavFolderNaming
+		if q.naming != nil {
+			naming = q.naming()
+		}
+		target = entry.DownloadPath(naming)
 	}
-	downloadedPath := entry.DownloadPath(naming)
-	if err := os.RemoveAll(downloadedPath); err != nil {
-		return fmt.Errorf("remove downloaded files %q: %w", downloadedPath, err)
+	q.logger.Info().
+		Str("name", entry.Name).
+		Str("key", entry.InfoHash).
+		Str("path", target).
+		Bool("owned", owned).
+		Msg("Removing a deleted grab's files")
+	if err := os.RemoveAll(target); err != nil {
+		return fmt.Errorf("remove downloaded files %q: %w", target, err)
 	}
 	return nil
 }

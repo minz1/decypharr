@@ -84,11 +84,14 @@ func (s *SABnzbd) handleDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	del := r.FormValue("del_files")
+
 	var successCount int
 	var errors []string
 
 	if nzoIDs == "failed" {
 		// Delete all failed entries
+		s.logger.Info().Str("category", cat).Str("del_files", del).Msg("SAB delete of failed NZBs")
 		if err := s.manager.DeleteFailedNZBs(r.Context(), cat); err != nil {
 			s.logger.Error().
 				Err(err).
@@ -109,6 +112,7 @@ func (s *SABnzbd) handleDelete(w http.ResponseWriter, r *http.Request) {
 			continue // Skip empty IDs
 		}
 
+		s.logger.Info().Str("nzo_id", nzoID).Str("category", cat).Str("del_files", del).Msg("SAB delete")
 		// Use atomic delete operation
 		if err := s.manager.DeleteQueued(r.Context(), nzoID, grab.Cleanup{DeleteFiles: true}); err != nil {
 			errors = append(errors, fmt.Sprintf("Failed to delete %s: %v", nzoID, err))

@@ -66,7 +66,10 @@ func newTorrentQueueEntry(
 		Bytes:            importReq.Magnet.Size,
 		Magnet:           importReq.Magnet.Link,
 		Category:         importReq.Arr.Name,
-		SavePath:         filepath.Join(importReq.DownloadFolder, importReq.Arr.Name),
+		SavePath: storage.EntrySavePath(
+			filepath.Join(importReq.DownloadFolder, importReq.Arr.Name),
+			importReq.Magnet.InfoHash,
+		),
 		Status:           status,
 		State:            storage.EntryStateDownloading,
 		Progress:         0,

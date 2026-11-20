@@ -26,7 +26,7 @@ func (m *Manager) failEffects(g grab.Grab, effect grab.FailEffect) {
 	if effect == grab.FailNoEffect || entry == nil {
 		return
 	}
-	if err := removeStagedNZB(entry); err != nil {
+	if err := m.queue.removeStagedNZB(entry); err != nil {
 		m.logger.Warn().Err(err).Str("name", entry.Name).Msg("Failed to remove the failed job's staged NZB")
 	}
 	if entry.IsNZB() && m.usenet != nil {

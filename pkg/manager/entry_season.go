@@ -147,9 +147,7 @@ func (a *entryActor) packEnded(key string, cur, next grab.Grab) {
 	}
 }
 
-// deleteSeasons deletes the seasons of a deleted pack that are not terminal. A season's files go with it unless
-// it shares the pack's folder.
-func (a *entryActor) deleteSeasons(pack *storage.Entry, onlyLive bool) {
+func (a *entryActor) deleteSeasons(pack *storage.Entry, onlyLive, deleteFiles bool) {
 	naming := a.naming()
 	for _, key := range a.seasonKeys(pack) {
 		e, err := a.store.GetQueuedGrab(key)
@@ -161,7 +159,7 @@ func (a *entryActor) deleteSeasons(pack *storage.Entry, onlyLive bool) {
 			continue
 		}
 		ownFolder := e.DownloadPath(naming) != pack.DownloadPath(naming)
-		msg := eventMsg(grab.Event{Kind: grab.EvDelete, Cleanup: grab.Cleanup{DeleteFiles: ownFolder}})
+		msg := eventMsg(grab.Event{Kind: grab.EvDelete, Cleanup: grab.Cleanup{DeleteFiles: deleteFiles && ownFolder}})
 		if sendErr := a.send(key, msg); sendErr != nil {
 			a.logger.Warn().Err(sendErr).Str("key", key).Msg("Season of a deleted pack not deleted")
 		}
@@ -182,9 +180,9 @@ func (a *entryActor) afterStep(
 	case ev.Kind == grab.EvChildDone || ev.Kind == grab.EvSeasonsStarted:
 		a.packWaits(key, st, ev, fx)
 	case ev.Kind == grab.EvDelete && cur.State.Phase == grab.PhaseActing && cur.State.PackKey == "" && cur.Entry != nil:
-		a.deleteSeasons(cur.Entry, true)
+		a.deleteSeasons(cur.Entry, true, ev.Cleanup.DeleteFiles)
 	case ev.Kind == grab.EvActionNone && cur.State.PackKey == "" && cur.Entry != nil:
-		a.deleteSeasons(cur.Entry, false)
+		a.deleteSeasons(cur.Entry, false, false)
 	}
 }
 

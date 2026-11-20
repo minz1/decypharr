@@ -334,6 +334,9 @@ func TestPackDeleteDeletesLiveSeasonsAndKeepsASharedFolder(t *testing.T) {
 		if !ownCleanup.call.cleanup.DeleteFiles {
 			t.Error("a season with a folder of its own was deleted without its files")
 		}
+		if !p.take(grab.ChildCleanup, "pack").call.cleanup.DeleteFiles {
+			t.Error("the pack was deleted without its files")
+		}
 	})
 }
 
@@ -396,5 +399,62 @@ func TestPackHandsAGoneSeasonOnAgainInsteadOfWaitingForever(t *testing.T) {
 		p.want(gone, grab.PhaseActing)
 		p.finish(gone)
 		p.want("pack", grab.PhaseComplete)
+	})
+}
+
+func TestPackDeleteWithoutFilesKeepsSeasonFiles(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	synctest.Test(t, func(t *testing.T) {
+		p := newPackTest(t, store)
+		p.startPack()
+		own := p.keys[1]
+
+		p.h.mustAsk("pack", grab.Event{Kind: grab.EvDelete, Cleanup: grab.Cleanup{}})
+
+		if p.take(grab.ChildCleanup, own).call.cleanup.DeleteFiles {
+			t.Error("a pack deleted without its files deleted a season's files")
+		}
+	})
+}
+
+func TestPackActionNoneRemovesSeasonsWithoutFiles(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	synctest.Test(t, func(t *testing.T) {
+		p := newPackTest(t, store)
+		p.startPack()
+		for _, key := range p.keys {
+			p.finish(key)
+		}
+		p.want("pack", grab.PhaseComplete)
+		own := p.keys[1]
+
+		p.h.mustAsk("pack", grab.Event{Kind: grab.EvActionNone})
+
+		if p.take(grab.ChildCleanup, own).call.cleanup.DeleteFiles {
+			t.Error("the action-none removal of a pack deleted a season's files")
+		}
+	})
+}
+
+func TestPackDeleteLeavesATerminalSeasonAlone(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	synctest.Test(t, func(t *testing.T) {
+		p := newPackTest(t, store)
+		p.startPack()
+		done, live := p.keys[0], p.keys[1]
+		p.finish(done)
+		p.want(done, grab.PhaseComplete)
+
+		p.h.mustAsk("pack", grab.Event{Kind: grab.EvDelete, Cleanup: grab.Cleanup{DeleteFiles: true}})
+
+		p.take(grab.ChildCleanup, live)
+		p.drain()
+		if _, cleaning := p.parked[parkKey{grab.ChildCleanup, done}]; cleaning {
+			t.Fatal("a completed season was cleaned up with its deleted pack")
+		}
+		p.want(done, grab.PhaseComplete)
 	})
 }

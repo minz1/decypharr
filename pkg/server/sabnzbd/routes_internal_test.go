@@ -1,6 +1,7 @@
 package sabnzbd
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,13 +27,18 @@ import (
 // newContractRouter starts a manager with token-only auth ("test-token").
 func newContractRouter(t *testing.T) (*SABnzbd, http.Handler, *manager.Manager) {
 	t.Helper()
+	return newContractRouterLogged(t, zerolog.Nop())
+}
+
+func newContractRouterLogged(t *testing.T, log zerolog.Logger) (*SABnzbd, http.Handler, *manager.Manager) {
+	t.Helper()
 	downloads := t.TempDir()
 	mgr, store := managertest.New(t, func(c *config.Config) {
 		c.UseAuth = true
 		c.Auth = &config.Auth{APIToken: "test-token", TokenOnly: true}
 		c.DownloadFolder = downloads
 	})
-	sab := New(mgr, store, zerolog.Nop())
+	sab := New(mgr, store, log)
 	return sab, sab.Routes(), mgr
 }
 
@@ -347,4 +353,67 @@ func TestDeleteFailedNZBRemovesItsStagedNZBAndFiles(t *testing.T) {
 			t.Errorf("%s still on disk after the delete: %v", path, err)
 		}
 	}
+}
+
+func TestSABDeleteLogsEachIDAndDelFiles(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	_, router, _ := newContractRouterLogged(t, zerolog.New(&buf))
+	send := func(values url.Values) {
+		t.Helper()
+		values.Set("mode", "queue")
+		values.Set("name", "delete")
+		values.Set("category", "delete-tv")
+		values.Set("ma_password", "test-token")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, sabRequest(http.MethodGet, values))
+		if response.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+		}
+	}
+	send(url.Values{"value": {"a,b"}, "del_files": {"0"}})
+	send(url.Values{"value": {"failed"}, "del_files": {"true"}})
+
+	byID, bulk := sabDeleteRecords(t, &buf)
+	for _, id := range []string{"a", "b"} {
+		rec := byID[id]
+		if rec == nil || rec["del_files"] != "0" || rec["category"] != "delete-tv" {
+			t.Fatalf("record for %s = %v", id, rec)
+		}
+	}
+	if len(byID) != 2 {
+		t.Fatalf("per-id records = %v, want exactly a and b", byID)
+	}
+	if len(bulk) != 1 || bulk[0]["category"] != "delete-tv" || bulk[0]["del_files"] != "true" {
+		t.Fatalf("bulk records = %v", bulk)
+	}
+}
+
+func sabDeleteRecords(t *testing.T, buf *bytes.Buffer) (map[string]map[string]any, []map[string]any) {
+	t.Helper()
+	byID := map[string]map[string]any{}
+	var bulk []map[string]any
+	for line := range bytes.SplitSeq(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
+		if len(line) == 0 {
+			continue
+		}
+		rec := map[string]any{}
+		if err := json.Unmarshal(line, &rec); err != nil {
+			t.Fatalf("log line %q: %v", line, err)
+		}
+		if rec["level"] != "info" {
+			continue
+		}
+		switch rec["message"] {
+		case "SAB delete":
+			id := fmt.Sprint(rec["nzo_id"])
+			if byID[id] != nil {
+				t.Fatalf("more than one SAB delete record for %s", id)
+			}
+			byID[id] = rec
+		case "SAB delete of failed NZBs":
+			bulk = append(bulk, rec)
+		}
+	}
+	return byID, bulk
 }

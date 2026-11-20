@@ -3,6 +3,7 @@ package manager
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -26,10 +27,11 @@ func TestAddNewNZBQueuesBeforeNetworkParsing(t *testing.T) {
 		h := newActorHarness(t, store)
 		m := withTestConfig(t, h.manager())
 		m.usenet = usenetClient
+		dl := t.TempDir()
 
 		req := NewNZBRequest(
 			"release.nzb",
-			t.TempDir(),
+			dl,
 			[]byte("network parsing must happen in the worker"),
 			arr.Arr{Name: "sonarr"},
 			config.DownloadActionSymlink,
@@ -60,6 +62,12 @@ func TestAddNewNZBQueuesBeforeNetworkParsing(t *testing.T) {
 		}
 		if _, statErr := os.Stat(entry.Magnet); statErr != nil {
 			t.Fatalf("staged NZB source: %v", statErr)
+		}
+		if want := filepath.Join(dl, "sonarr", id); entry.SavePath != want {
+			t.Fatalf("SavePath = %q, want %q", entry.SavePath, want)
+		}
+		if want := entry.DownloadPath(m.folderNaming()); entry.ContentPath != want {
+			t.Fatalf("ContentPath = %q, want %q", entry.ContentPath, want)
 		}
 	})
 }

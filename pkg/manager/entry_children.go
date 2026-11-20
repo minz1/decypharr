@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -395,7 +394,7 @@ func (m *Manager) cleanupChild(ctx context.Context, call entryChildCall) entryMs
 			return entryMsg{}
 		}
 	}
-	remove := removeStagedNZB
+	remove := m.queue.removeStagedNZB
 	if call.cleanup.DeleteFiles {
 		remove = m.queue.deleteEntryFiles
 	}
@@ -414,7 +413,7 @@ func (m *Manager) requestFromEntry(entry *storage.Entry) *ImportRequest {
 	}
 	req := NewTorrentRequest(
 		entry.ActiveProvider,
-		downloadFolderForEntry(m.store.Get().DownloadFolder, entry),
+		m.store.Get().DownloadFolder,
 		magnet,
 		m.arr.GetOrCreate(entry.Category),
 		entry.Action,
@@ -426,13 +425,6 @@ func (m *Manager) requestFromEntry(entry *storage.Entry) *ImportRequest {
 	req.ID = entry.InfoHash
 	req.Manual = entry.Manual
 	return req
-}
-
-func downloadFolderForEntry(fallback string, entry *storage.Entry) string {
-	if entry != nil && entry.SavePath != "" {
-		return filepath.Dir(entry.SavePath)
-	}
-	return fallback
 }
 
 // actionMountPath is where a grab's files are read: a season reads its pack's folder on the mount.

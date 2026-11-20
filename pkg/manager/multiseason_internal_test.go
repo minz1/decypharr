@@ -1,8 +1,11 @@
 package manager
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/rs/zerolog"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/pkg/storage"
@@ -92,6 +95,126 @@ func TestSeasonSplitChildrenInheritManual(t *testing.T) {
 	for _, child := range children {
 		if !child.Manual {
 			t.Fatalf("child %s lost Manual", child.InfoHash)
+		}
+	}
+}
+
+const seasonTestPackHash = "0123456789abcdef0123456789abcdef01234567"
+
+func seasonTestPack(savePath, category string) *storage.Entry {
+	return &storage.Entry{
+		InfoHash: seasonTestPackHash,
+		Name:     "Show.S01-S02",
+		Category: category,
+		SavePath: savePath,
+		Magnet:   "magnet:?xt=urn:btih:" + seasonTestPackHash + "&dn=Show.S01-S02",
+	}
+}
+
+func seasonTestInfos() []SeasonInfo {
+	return []SeasonInfo{
+		{SeasonNumber: 1, InfoHash: "s1", Name: "Show.S01"},
+		{SeasonNumber: 2, InfoHash: "s2", Name: "Show.S02"},
+	}
+}
+
+func TestSeasonsGetSiblingFolders(t *testing.T) {
+	t.Parallel()
+	naming := config.WebDavUseArrSubmittedName
+	root := t.TempDir()
+	for name, tc := range map[string]struct {
+		save string
+		want []string
+	}{
+		"absolute": {
+			save: filepath.Join(root, "sonarr", seasonTestPackHash),
+			want: []string{filepath.Join(root, "sonarr", "s1"), filepath.Join(root, "sonarr", "s2")},
+		},
+		"absolute with a trailing separator": {
+			save: filepath.Join(root, "sonarr", seasonTestPackHash) + string(filepath.Separator),
+			want: []string{filepath.Join(root, "sonarr", "s1"), filepath.Join(root, "sonarr", "s2")},
+		},
+		"relative": {
+			save: filepath.Join("sonarr", seasonTestPackHash),
+			want: []string{filepath.Join("sonarr", "s1"), filepath.Join("sonarr", "s2")},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			pack := seasonTestPack(tc.save, "sonarr")
+			seasons := convertToMultiSeason(pack, seasonTestInfos())
+			for i, s := range seasons {
+				if s.SavePath != tc.want[i] || !s.OwnsSavePath() {
+					t.Fatalf(
+						"season %d SavePath = %q (owned %v), want %q owned",
+						i,
+						s.SavePath,
+						s.OwnsSavePath(),
+						tc.want[i],
+					)
+				}
+			}
+			requireDisjoint(
+				t,
+				pack.DownloadPath(naming),
+				seasons[0].DownloadPath(naming),
+				seasons[1].DownloadPath(naming),
+			)
+		})
+	}
+}
+
+func TestDeletingOneSeasonKeepsTheOtherSeasonsFiles(t *testing.T) {
+	t.Parallel()
+	naming := config.WebDavUseArrSubmittedName
+	pack := seasonTestPack(filepath.Join(t.TempDir(), "sonarr", seasonTestPackHash), "sonarr")
+	seasons := convertToMultiSeason(pack, seasonTestInfos())
+	var files []string
+	for _, s := range seasons {
+		dir := s.DownloadPath(naming)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		file := filepath.Join(dir, "ep.mkv")
+		if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, file)
+	}
+	q := newQueue(nil, func() config.WebDavFolderNaming { return naming }, &grabIndex{}, zerolog.Nop())
+	if err := q.deleteEntryFiles(seasons[0]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(files[0]); !os.IsNotExist(err) {
+		t.Fatalf("season 1's file survived its delete: %v", err)
+	}
+	if _, err := os.Stat(files[1]); err != nil {
+		t.Fatalf("season 2's file went with season 1: %v", err)
+	}
+}
+
+func TestLegacyPackSeasonsKeepThePacksFolder(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	for name, pack := range map[string]*storage.Entry{
+		"category dir":   seasonTestPack(filepath.Join(root, "sonarr"), "sonarr"),
+		"empty category": seasonTestPack(filepath.Join(root, "pack"), ""),
+	} {
+		for i, s := range convertToMultiSeason(pack, seasonTestInfos()) {
+			if s.SavePath != pack.SavePath {
+				t.Fatalf("%s: season %d SavePath = %q, want the pack's %q", name, i, s.SavePath, pack.SavePath)
+			}
+		}
+	}
+}
+
+func requireDisjoint(t *testing.T, paths ...string) {
+	t.Helper()
+	for i, a := range paths {
+		for j, b := range paths {
+			if i != j && (a == b || nestedIn(a, b)) {
+				t.Fatalf("%q and %q share a folder", a, b)
+			}
 		}
 	}
 }
