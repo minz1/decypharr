@@ -17,8 +17,6 @@ func (m *Manager) failLater(g grab.Grab, effect grab.FailEffect) {
 	}
 }
 
-// failEffects does what failing a grab does outside its record, which the actor has already marked failed: it
-// drops a staged NZB, releases a failed NZB and and refreshes the Arr.
 func (m *Manager) failEffects(g grab.Grab, effect grab.FailEffect) {
 	entry := g.Entry
 	if effect == grab.FailNoEffect || entry == nil {

@@ -89,9 +89,14 @@ func (a *attemptLog) ackCount() int {
 
 func runFailer(t testing.TB, deps arrFailerDeps) *arrFailer {
 	t.Helper()
+	return runFailerLogging(t, deps, zerolog.Nop())
+}
+
+func runFailerLogging(t testing.TB, deps arrFailerDeps, logger zerolog.Logger) *arrFailer {
+	t.Helper()
 	g := testGroup(t)
 	deps.now = time.Now
-	deps.logger = zerolog.Nop()
+	deps.logger = logger
 	if deps.startAttempt == nil {
 		deps.startAttempt = func(name string, fn func(ctx context.Context)) error {
 			return g.Go(name, func(ctx context.Context) error {
@@ -1071,5 +1076,36 @@ func TestArrFailerSupersedeClearsTheOldStatus(t *testing.T) {
 		}
 		close(release)
 		synctest.Wait()
+	})
+}
+
+func TestArrFailerWarnsOnceWhenTheAckKeepsFailing(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		var logs lockedBuffer
+		log := &attemptLog{}
+		log.grab = func(_ context.Context, _ attemptSpec) attemptResult {
+			return attemptResult{kind: resAckFailed, jobID: "job-7", err: errors.New("save failed")}
+		}
+		log.ack = func(_ context.Context, spec attemptSpec) attemptResult {
+			return attemptResult{kind: resAckFailed, jobID: spec.jobID, err: errors.New("save failed")}
+		}
+		f := runFailerLogging(t, log.deps(), zerolog.New(&logs))
+		f.wantGrab(pendingGrab("a", "rd", start))
+		synctest.Wait()
+		if got := strings.Count(logs.String(), `"level":"warn"`); got != 0 {
+			t.Fatalf("warnings after the first ack failure = %d, want none", got)
+		}
+		time.Sleep(ackWarnAfter)
+		synctest.Wait()
+		if got := strings.Count(logs.String(), `"level":"warn"`); got != 1 {
+			t.Fatalf("warnings once %v has passed = %d, want one", ackWarnAfter, got)
+		}
+		time.Sleep(time.Hour)
+		synctest.Wait()
+		if got := strings.Count(logs.String(), `"level":"warn"`); got != 1 || log.ackCount() < 3 {
+			t.Fatalf("warnings = %d after %d acks, want still exactly one", got, log.ackCount())
+		}
 	})
 }

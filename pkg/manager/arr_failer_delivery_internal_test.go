@@ -557,3 +557,37 @@ func TestArrFailerBootWindowNotMarked(t *testing.T) {
 		}
 	})
 }
+
+func TestAFinishedArrJobReachesTheFailerThroughTheService(t *testing.T) {
+	t.Parallel()
+	m, _ := newLifecycleManager(t)
+	loops := make(chan struct{}, 16)
+	m.failer.deps.onLoop = func() {
+		select {
+		case loops <- struct{}{}:
+		default:
+		}
+	}
+	if err := testGroup(t).Go("arr-failer", m.failer.run); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.arrService.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := m.arrService.FailDownload("sonarr", "ABC", "abc", time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		m.failer.mu.Lock()
+		gen := m.failer.keyGen[keyGenName("sonarr", "ABC")]
+		m.failer.mu.Unlock()
+		if gen > 0 {
+			return
+		}
+		select {
+		case <-loops:
+		case <-time.After(lifecycleWait):
+			t.Fatal("a finished job never reached the failer's key generation")
+		}
+	}
+}
