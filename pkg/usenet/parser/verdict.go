@@ -42,21 +42,23 @@ const (
 )
 
 type verdictNode interface {
-	verdict() Verdict
+	verdict() (Verdict, error)
 }
 
-func (*ContentMissingError) verdict() Verdict { return VerdictArticlesMissing }
+func (e *ContentMissingError) verdict() (Verdict, error) { return VerdictArticlesMissing, e }
 
-func (*SegmentHolesError) verdict() Verdict { return VerdictSegmentsMissing }
+func (e *SegmentHolesError) verdict() (Verdict, error) { return VerdictSegmentsMissing, e }
 
-func (*proofWithheldError) verdict() Verdict { return VerdictNone }
+func (e *proofWithheldError) verdict() (Verdict, error) { return VerdictNone, e }
 
 func VerdictOf(err error) Verdict {
 	if err == nil {
 		return VerdictNone
 	}
 	if node, ok := err.(verdictNode); ok {
-		return node.verdict()
+		if verdict, self := node.verdict(); any(self) == any(err) {
+			return verdict
+		}
 	}
 	if joined, ok := err.(interface{ Unwrap() []error }); ok {
 		return joinedVerdict(joined.Unwrap())
@@ -103,12 +105,15 @@ func (p *NZBParser) proofNameAllowed(group *FileGroup, nzbName string) bool {
 }
 
 func (p *NZBParser) refusesNamedFile(name string) bool {
-	if errors.Is(p.fileAllowed(name, 0), config.ErrFileIsSample) {
+	if p.refusesSample(name) {
 		return true
 	}
 	stem := name
 	for numericExtension(filepath.Ext(stem)) {
 		stem = strings.TrimSuffix(stem, filepath.Ext(stem))
+	}
+	if kind := p.detectFileType(stem); kind == storage.NZBFileTypeRar || kind == storage.NZBFileTypeZip {
+		return false
 	}
 	return filepath.Ext(stem) != "" && p.fileAllowed(stem, 0) != nil
 }
@@ -119,4 +124,8 @@ func numericExtension(ext string) bool {
 
 func ambiguousSample(file manifest.File) bool {
 	return file.Rewritten || hasRepeatedNumbers(file.Segments)
+}
+
+func (p *NZBParser) refusesSample(name string) bool {
+	return errors.Is(p.fileAllowed(name, 0), config.ErrFileIsSample)
 }

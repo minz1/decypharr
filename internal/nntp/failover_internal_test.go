@@ -400,3 +400,26 @@ func TestIsNotFoundEverywhereRefusesAnEmbeddedProof(t *testing.T) {
 		t.Fatal("an embedded proof beside a deadline is read as proof")
 	}
 }
+
+type wireError = Error
+
+type aliasEmbedded430Error struct {
+	*wireError
+
+	other error
+}
+
+func (e aliasEmbedded430Error) Unwrap() []error { return []error{e.wireError, e.other} }
+
+func TestFailoverAliasEmbedded430BesideADeadlineIsNotProof(t *testing.T) {
+	t.Parallel()
+	inner, ok := errors.AsType[*Error](notFound430())
+	if !ok {
+		t.Fatal("notFound430 is not an *Error")
+	}
+	mixed := aliasEmbedded430Error{wireError: inner, other: context.DeadlineExceeded}
+	_, err := runScripted(t, twoHosts(t, "", ""), true, map[string][]error{"a": {mixed}, "b": {notFound430()}})
+	if err == nil || IsNotFoundEverywhere(err) {
+		t.Fatalf("err = %v", err)
+	}
+}

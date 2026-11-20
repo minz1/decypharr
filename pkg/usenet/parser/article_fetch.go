@@ -82,7 +82,7 @@ func fetchFileHeaderPrefix(
 			continue
 		}
 		if !nntp.IsYencDecodeError(err) {
-			return nil, err
+			return nil, &proofWithheldError{err: err}
 		}
 		proven = false
 		corruptProbes++
@@ -96,7 +96,7 @@ func fetchFileHeaderPrefix(
 	if proven {
 		return nil, &ContentMissingError{Err: lastErr}
 	}
-	return nil, lastErr
+	return nil, &proofWithheldError{err: lastErr}
 }
 
 // fetchFileHeader obtains yEnc topology while allowing any healthy part to

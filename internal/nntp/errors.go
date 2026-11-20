@@ -243,7 +243,7 @@ func IsNotFoundEverywhere(err error) bool {
 
 func isNoSuchArticle(err error) bool {
 	for node := err; node != nil; node = errors.Unwrap(node) {
-		if typed, ok := node.(interface{ nntpError() *Error }); ok {
+		if typed, ok := node.(interface{ nntpError() *Error }); ok && any(typed.nntpError()) == any(node) {
 			nntpErr := typed.nntpError()
 			return nntpErr.Type == ErrorTypeArticleNotFound && nntpErr.Code == codeNoSuchArticle
 		}

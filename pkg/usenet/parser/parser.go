@@ -243,6 +243,9 @@ func (p *NZBParser) parse(
 			doubt = true
 		}
 	}
+	if p.refusesSample(nzb.Name) {
+		doubt = true
+	}
 	for _, group := range fileGroups {
 		group.proofDoubt = doubt
 	}

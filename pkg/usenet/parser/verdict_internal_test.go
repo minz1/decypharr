@@ -433,6 +433,9 @@ func TestRefusedExtensionAllMissingWithholdsProof(t *testing.T) {
 		{name: "numeric extension on a refused name", file: "book.epub.001", filter: onlyMKV, want: VerdictNone},
 		{name: "numeric extension on a sample", file: "sample-clip.001", filter: samples, want: VerdictNone},
 		{name: "trailing dot", file: "release.", filter: onlyMKV, want: VerdictNone},
+		{name: "numeric split of an archive", file: "movie.zip.001", filter: onlyMKV, want: VerdictArticlesMissing},
+		{name: "numeric split of a rar", file: "movie.rar.001", filter: onlyMKV, want: VerdictArticlesMissing},
+		{name: "numeric split of a 7z", file: "movie.7z.001", filter: onlyMKV, want: VerdictArticlesMissing},
 	}
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
@@ -734,5 +737,62 @@ func TestSegmentNumbersContiguousPass(t *testing.T) {
 		if _, _, err := getNZBSegments(0, file, holeGroup()); err != nil {
 			t.Fatalf("numbers %v: %v", numbers, err)
 		}
+	}
+}
+
+type embeddedContentJoinError struct {
+	*ContentMissingError
+
+	other error
+}
+
+func (e embeddedContentJoinError) Unwrap() []error { return []error{e.ContentMissingError, e.other} }
+
+func TestVerdictOfRefusesAnEmbeddedVerdict(t *testing.T) {
+	t.Parallel()
+	mixed := embeddedContentJoinError{
+		ContentMissingError: &ContentMissingError{Err: proven430()},
+		other:               context.DeadlineExceeded,
+	}
+	if got := VerdictOf(mixed); got != VerdictNone {
+		t.Fatalf("verdict %v, want none", got)
+	}
+}
+
+func TestHeaderWalkSourceVerdictIsNotProof(t *testing.T) {
+	t.Parallel()
+	source := scriptSource{stat: provenStat, header: func(id string) (*nntp.YencMetadata, error) {
+		if id == "a@x" {
+			return nil, &ContentMissingError{Err: bare430()}
+		}
+		return nil, &ContentMissingError{Err: proven430()}
+	}}
+	p := NewParserWithSource(source, 2, zerolog.Nop())
+	verdict, err := parseVerdict(t, p, nzbOf(fileXML(1, 1, deadOne, "1:a@x", "2:b@x")))
+	if err == nil || verdict != VerdictNone {
+		t.Fatalf("error = %v verdict %v, want no verdict", err, verdict)
+	}
+}
+
+func TestSampleNZBNameWithholdsProof(t *testing.T) {
+	t.Parallel()
+	source := scriptSource{stat: provenStat, header: provenHeaders}
+	filter := (&config.Config{AllowedExt: []string{"mkv"}}).ValidateFileAllowed
+	p := NewParserWithSource(source, 2, zerolog.Nop()).WithFileFilter(filter)
+	_, _, err := p.Parse(t.Context(), "sample-clip.nzb", []byte(nzbOf(fileXML(1, 1, "movie.mkv.001", "1:a@x"))))
+	if !errors.Is(err, customerror.ErrUsenetSegmentMissing) || VerdictOf(err) != VerdictNone {
+		t.Fatalf("error = %v verdict %v, want missing without a verdict", err, VerdictOf(err))
+	}
+}
+
+func TestHeaderPrefixPassesNoSourceVerdict(t *testing.T) {
+	t.Parallel()
+	file := manifest.File{Segments: segs("a@x", "b@x")}
+	source := scriptSource{header: func(string) (*nntp.YencMetadata, error) {
+		return nil, &SegmentHolesError{File: "x", Present: 1, Span: 2}
+	}}
+	_, err := fetchFileHeaderPrefix(t.Context(), source, file, metadataOnly)
+	if err == nil || VerdictOf(err) != VerdictNone {
+		t.Fatalf("error = %v verdict %v, want no verdict", err, VerdictOf(err))
 	}
 }
