@@ -52,9 +52,6 @@ func (e *SegmentHolesError) verdict() (Verdict, error) { return VerdictSegmentsM
 func (e *proofWithheldError) verdict() (Verdict, error) { return VerdictNone, e }
 
 func VerdictOf(err error) Verdict {
-	if err == nil {
-		return VerdictNone
-	}
 	if node, ok := err.(verdictNode); ok {
 		if verdict, self := node.verdict(); any(self) == any(err) {
 			return verdict
