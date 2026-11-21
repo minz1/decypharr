@@ -11,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/rs/zerolog"
 
@@ -545,70 +547,77 @@ func TestFailoverTimeoutWrapped430IsNotProof(t *testing.T) {
 	}
 }
 
-type lateCancelContext struct {
-	context.Context
-
-	attempted atomic.Bool
-	checked   atomic.Bool
-	closed    chan struct{}
-}
-
-func newLateCancelContext(parent context.Context) *lateCancelContext {
-	closed := make(chan struct{})
-	close(closed)
-	return &lateCancelContext{Context: parent, closed: closed}
-}
-
-func (c *lateCancelContext) Err() error {
-	if !c.attempted.Load() || c.checked.CompareAndSwap(false, true) {
-		return nil
-	}
-	return context.Canceled
-}
-
-func (c *lateCancelContext) Done() <-chan struct{} {
-	if c.attempted.Load() {
-		return c.closed
-	}
-	return c.Context.Done()
-}
-
-func TestFailoverCancelledAfterAttemptIsFailedWithCtxError(t *testing.T) {
+func TestFailoverCancelledDuringTheAttemptIsFailedWithCtxError(t *testing.T) {
 	t.Parallel()
 	transient := NewTimeoutError(errors.New("timeout"))
-	cancelledInAttempt := func(t *testing.T) (context.Context, func(*Connection) error) {
-		ctx, cancel := context.WithCancel(t.Context())
-		t.Cleanup(cancel)
-		return ctx, func(*Connection) error {
-			cancel()
-			return transient
-		}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	answer, err := twoHosts(t, "", "").ExecuteArticle(ctx, WorkloadDownload, func(*Connection) error {
+		cancel()
+		return transient
+	})
+	if answer.Kind() != AnswerFailed || !errors.Is(err, context.Canceled) {
+		t.Fatalf("ExecuteArticle = (%v, %v), want (AnswerFailed, context.Canceled)", answer, err)
 	}
-	cancelledInSleep := func(t *testing.T) (context.Context, func(*Connection) error) {
-		ctx := newLateCancelContext(t.Context())
-		return ctx, func(*Connection) error {
-			ctx.attempted.Store(true)
-			return transient
-		}
-	}
-	rows := []struct {
-		name  string
-		build func(t *testing.T) (context.Context, func(*Connection) error)
+}
+
+func TestFailoverCancelAroundTheBackoffSleep(t *testing.T) {
+	t.Parallel()
+	for _, row := range []struct {
+		name         string
+		timerFirst   bool
+		wantAttempts int32
 	}{
-		{"cancelled during the attempt", cancelledInAttempt},
-		{"cancelled during the backoff sleep", cancelledInSleep},
-	}
-	for _, row := range rows {
+		{"cancel while the sleep waits kills Found() on the sleepCtx return", false, 1},
+		{"sleep ends, next attempt cancelled kills Found() on the post-attempt ctx check", true, 2},
+	} {
 		t.Run(row.name, func(t *testing.T) {
 			t.Parallel()
-			ctx, fn := row.build(t)
-			answer, err := twoHosts(t, "", "").ExecuteArticle(ctx, WorkloadDownload, fn)
-			if answer.Kind() != AnswerFailed {
-				t.Errorf("answer = %v, want AnswerFailed", answer)
-			}
-			if !errors.Is(err, context.Canceled) {
-				t.Errorf("err = %v, want context.Canceled", err)
-			}
+			port := livePort(t)
+			synctest.Test(t, func(t *testing.T) {
+				answer, attempts, err := cancelAroundBackoff(t, port, row.timerFirst)
+				if answer.Kind() != AnswerFailed || !errors.Is(err, context.Canceled) {
+					t.Fatalf("ExecuteArticle = (%v, %v), want (AnswerFailed, context.Canceled)", answer, err)
+				}
+				if attempts != row.wantAttempts {
+					t.Fatalf("attempts = %d, want %d", attempts, row.wantAttempts)
+				}
+			})
 		})
 	}
+}
+
+func cancelAroundBackoff(t *testing.T, port int, timerFirst bool) (Answer, int32, error) {
+	t.Helper()
+	transient := NewTimeoutError(errors.New("timeout"))
+	client := failoverClient(t, 1, failoverProvider("127.0.0.1", port, "a", 1, "", false))
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var attempts atomic.Int32
+	fn := func(*Connection) error {
+		if attempts.Add(1) == 2 {
+			cancel()
+		}
+		return transient
+	}
+	type outcome struct {
+		answer Answer
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		answer, err := client.ExecuteArticle(ctx, WorkloadDownload, fn)
+		done <- outcome{answer, err}
+	}()
+	synctest.Wait()
+	if attempts.Load() != 1 {
+		t.Fatalf("attempts before the sleep = %d, want 1", attempts.Load())
+	}
+	if timerFirst {
+		<-time.After(retryDelay(1))
+	} else {
+		cancel()
+	}
+	got := <-done
+	return got.answer, attempts.Load(), got.err
 }
