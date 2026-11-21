@@ -252,7 +252,7 @@ func (b *ArticleBroker) Metrics() ArticleMetrics {
 
 func (b *ArticleBroker) load(ctx context.Context, messageID string) (articleObservation, error) {
 	if messageID == "" {
-		return articleObservation{}, fmt.Errorf("article message ID is empty")
+		return articleObservation{answer: nntp.AnswerFailed}, fmt.Errorf("article message ID is empty")
 	}
 	if observation, ok := b.cachedObservation(messageID); ok {
 		b.cacheHits.Add(1)
@@ -274,7 +274,7 @@ func (b *ArticleBroker) load(ctx context.Context, messageID string) (articleObse
 			return articleObservation{answer: answer}, err
 		}
 		if metadata == nil {
-			return articleObservation{}, fmt.Errorf("article %s returned no yEnc metadata", messageID)
+			return articleObservation{answer: nntp.AnswerFailed}, fmt.Errorf("article %s returned no yEnc metadata", messageID)
 		}
 		b.bytesFetched.Add(int64(len(body)))
 		b.store(messageID, body, metadata)

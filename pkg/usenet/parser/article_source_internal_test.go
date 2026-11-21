@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -368,17 +369,64 @@ type answered struct {
 	err    error
 }
 
+func TestStatWithKeepsAnswerAndError(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		err  error
+		want nntp.Answer
+	}{
+		{"nil", nil, nntp.AnswerFound},
+		{"bare 430", bare430(), nntp.AnswerNotFound},
+		{"proven 430", proven430(), nntp.AnswerMissing},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			answer, err := statWith(func(context.Context, string) error { return tc.err })(t.Context(), "<id>")
+			if answer != tc.want || !errors.Is(err, tc.err) {
+				t.Fatalf("answer = %v err = %v, want %v and %v", answer, err, tc.want, tc.err)
+			}
+		})
+	}
+}
+
 const servedArticle = "served@example"
 
-func wireWithArticle(t *testing.T) *nntp.Client {
+func wireServing(t *testing.T, cfg nntpd.Config, article []byte) *nntp.Client {
 	t.Helper()
-	server, err := nntpd.New(nntpd.Config{})
+	server, err := nntpd.New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(server.Close)
-	server.AddArticle("<"+servedArticle+">", nntpd.Encode(nntpd.Pattern(0, 64), "a.bin", 1, 64, 0))
+	server.AddArticle("<"+servedArticle+">", article)
 	return wireClient(t, server)
+}
+
+func wireWithArticle(t *testing.T) *nntp.Client {
+	t.Helper()
+	return wireServing(t, nntpd.Config{}, nntpd.Encode(nntpd.Pattern(0, 64), "a.bin", 1, 64, 0))
+}
+
+func corruptCRCArticle(t *testing.T) []byte {
+	t.Helper()
+	body := nntpd.Encode(nntpd.Pattern(0, 64), "a.bin", 1, 64, 0)
+	marker := []byte("pcrc32=")
+	at := bytes.Index(body, marker)
+	if at < 0 {
+		t.Fatal("encoded body has no pcrc32")
+	}
+	copy(body[at+len(marker):], "ffffffff")
+	return body
+}
+
+func replying(command, line string) func(string, string) string {
+	return func(got, _ string) string {
+		if got == command {
+			return line
+		}
+		return ""
+	}
 }
 
 func headerAnswer(ctx context.Context, b *ArticleBroker, id string, snippet int) answered {
@@ -440,6 +488,10 @@ func inBubble(t *testing.T, run func(t *testing.T) answered) answered {
 	return got
 }
 
+func isEmptyID(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "article message ID is empty")
+}
+
 func isCanceled(err error) bool { return errors.Is(err, context.Canceled) }
 
 func isNoMetadata(err error) bool {
@@ -477,6 +529,26 @@ func wireRows() []answerRow {
 		}},
 		{"wire body served", nntp.AnswerFound, nil, func(t *testing.T) answered {
 			return headerAnswer(t.Context(), NewArticleBroker(wireWithArticle(t), 2, 1<<20), servedArticle, 0)
+		}},
+		{"wire stat 423", nntp.AnswerNotFound, nntp.IsArticleNotFoundError, func(t *testing.T) answered {
+			client := wireServing(t, nntpd.Config{Reply: replying("STAT", "423 no number")}, nil)
+			answer, err := NewArticleBroker(client, 2, 1<<20).Stat(t.Context(), servedArticle)
+			return answered{answer, err}
+		}},
+		{"wire corrupt body", nntp.AnswerCorrupt, nntp.IsYencDecodeError, func(t *testing.T) answered {
+			client := wireServing(t, nntpd.Config{}, corruptCRCArticle(t))
+			return headerAnswer(t.Context(), NewArticleBroker(client, 2, 1<<20), servedArticle, 0)
+		}},
+		{"wire metadata-only cache hit", nntp.AnswerFound, nil, func(t *testing.T) answered {
+			broker := NewArticleBroker(wireWithArticle(t), 2, 1<<20)
+			if got := headerAnswer(t.Context(), broker, servedArticle, 0); got.answer != nntp.AnswerFound || got.err != nil {
+				t.Fatalf("first header = %+v", got)
+			}
+			got := headerAnswer(t.Context(), broker, servedArticle, 0)
+			if hits := broker.Metrics().CacheHits; hits != 1 {
+				t.Fatalf("cache hits = %d, want 1", hits)
+			}
+			return got
 		}},
 	}
 }
@@ -558,6 +630,10 @@ func flightRows() []answerRow {
 					return statAnswer(ctx, broker)
 				})
 			})
+		}},
+		{"empty message id", nntp.AnswerFailed, isEmptyID, func(t *testing.T) answered {
+			broker := newArticleBroker(&fakeArticleBackend{}, 2, 1<<20)
+			return headerAnswer(t.Context(), broker, "", 0)
 		}},
 		{"fetch returns no metadata", nntp.AnswerFailed, isNoMetadata, func(t *testing.T) answered {
 			broker := newArticleBroker(&fakeArticleBackend{noMetadata: true}, 2, 1<<20)
