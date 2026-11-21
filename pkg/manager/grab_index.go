@@ -18,6 +18,10 @@ type GrabView struct {
 
 func (v GrabView) clone() GrabView {
 	v.Entry = *v.Entry.Clone()
+	if v.Deadline != nil {
+		d := *v.Deadline
+		v.Deadline = &d
+	}
 	return v
 }
 

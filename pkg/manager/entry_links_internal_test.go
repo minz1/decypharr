@@ -3,6 +3,7 @@ package manager
 import (
 	"context"
 	"errors"
+	"net/http"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -31,6 +32,20 @@ type scriptedPoll struct {
 
 	mu      sync.Mutex
 	answers []pollAnswer
+	deleted []string
+}
+
+func (p *scriptedPoll) DeleteTorrent(_ context.Context, id string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.deleted = append(p.deleted, id)
+	return nil
+}
+
+func (p *scriptedPoll) deletes() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return slices.Clone(p.deleted)
 }
 
 func (*scriptedPoll) Config() config.Debrid { return config.Debrid{Name: "realdebrid"} }
@@ -58,15 +73,17 @@ func pendingAnswer() pollAnswer {
 	return pollAnswer{obs: debridTypes.Observation{Phase: debridTypes.PhaseFinalizing, LinksPending: true}}
 }
 
-func (h *actorHarness) linksProvider(t *testing.T, answers ...pollAnswer) {
+func (h *actorHarness) linksProvider(t *testing.T, answers ...pollAnswer) (*Manager, *scriptedPoll) {
 	t.Helper()
 	m, _ := newDroppedTestManager(t, nil)
 	m.store = testConfigStore(t, nil)
-	m.clients.Store("realdebrid", &scriptedPoll{answers: answers})
+	client := &scriptedPoll{answers: answers}
+	m.clients.Store("realdebrid", client)
 	h.a.child = func(call entryChildCall) func(context.Context) entryMsg {
 		return func(ctx context.Context) entryMsg { return m.pollChild(ctx, call, call.kind == grab.ChildLinks) }
 	}
 	h.a.pollEvery = time.Minute
+	return m, client
 }
 
 func linksEntryAt(downloaded time.Duration) *storage.Entry {
@@ -176,14 +193,23 @@ func TestAHardFailureWhileHeldDecidesAsInProcessHEAD(t *testing.T) {
 	store := newTestStore(t)
 	synctest.Test(t, func(t *testing.T) {
 		h := deadlineHarness(t, store, 0)
-		h.linksProvider(t, transientAnswer(), pollAnswer{err: errors.New("bad token")})
+		hard := customerror.NewProviderStatusError(errors.New("realdebrid API error: Status: 401"), http.StatusUnauthorized)
+		m, client := h.linksProvider(t, transientAnswer(),
+			pollAnswer{t: &debridTypes.Torrent{ID: "t1"}, err: hard})
 		h.recoverLinksWait(7 * time.Hour)
 		synctest.Wait()
 		h.mustBe("a", grab.PhaseAwaitingLinks)
 		h.mustFailWith()
+		if got := client.deletes(); len(got) != 0 {
+			t.Fatalf("deleted %v while only a transient poll had answered", got)
+		}
 		time.Sleep(time.Minute)
 		h.mustBe("a", grab.PhaseFailed)
 		h.mustFailWith(grab.FailEntry)
+		drainPlacements(t, m)
+		if got := client.deletes(); !slices.Equal(got, []string{"t1"}) {
+			t.Fatalf("deleted %v, want [t1]", got)
+		}
 	})
 }
 
@@ -499,5 +525,20 @@ func TestAnAddedViewDoesNotInheritAnotherPhasesDeadline(t *testing.T) {
 	x.setDeadline("k", &grab.Gated{})
 	if _, ok := x.get("k"); ok {
 		t.Fatal("setDeadline resurrected a removed grab")
+	}
+}
+
+func TestAReadersViewDoesNotShareTheIndexsDeadline(t *testing.T) {
+	t.Parallel()
+	x := &grabIndex{}
+	x.publish(GrabView{State: grab.State{Key: "K", Phase: grab.PhaseAwaitingLinks}})
+	x.setDeadline("k", &grab.Gated{WaitingForLinks: true})
+	got, _ := x.get("k")
+	got.Deadline.WaitingForLinks = false
+	for _, v := range x.snapshot() {
+		v.Deadline.WaitingForLinks = false
+	}
+	if again, _ := x.get("k"); again.Deadline == nil || !again.Deadline.WaitingForLinks {
+		t.Fatalf("a reader's write reached the index: %+v", again.Deadline)
 	}
 }
