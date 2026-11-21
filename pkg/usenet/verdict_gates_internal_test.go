@@ -663,3 +663,25 @@ func TestParseWithIDReturnsTheParsedNZB(t *testing.T) {
 		t.Fatalf("the parsed NZB was not stored: %v", headerErr)
 	}
 }
+
+func TestProcessRunsTheContentStep(t *testing.T) {
+	t.Parallel()
+	u, srv := gateHarness(t, nil)
+	payload := []byte(strings.Repeat("not a media container ", 40))
+	srv.AddArticle("<a@gate>", nntpd.Encode(payload, "movie.mkv", 1, int64(len(payload)), 0))
+	parsed, err := u.analyzer.Parse(t.Context(), "release.nzb", gateNZBXML("1:a@gate"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	parsed.NZB.Status = NZBStatusParsing
+	if addErr := u.nzbStorage.AddNZB(parsed.NZB); addErr != nil {
+		t.Fatal(addErr)
+	}
+	updated, _, err := u.Process(t.Context(), parsed)
+	if !errors.Is(err, customerror.ErrUsenetCorruptContent) {
+		t.Fatalf("Process error = %v, want the content gate's corrupt content", err)
+	}
+	if updated == nil || updated.Status == NZBStatusCompleted {
+		t.Fatalf("Process = %+v, want an NZB that is not completed", updated)
+	}
+}
