@@ -43,8 +43,8 @@ func (p *linksProvider) Poll(
 	case p.polled <- t.ID:
 	default:
 	}
-	if t.ID == p.answer && first {
-		return t, debridTypes.Observation{Phase: debridTypes.PhaseFinalizing, LinksPending: true}, nil
+	if first {
+		return t, debridTypes.Observation{Phase: debridTypes.PhaseFinalizing, LinksPending: t.ID == p.answer}, nil
 	}
 	<-ctx.Done()
 	return nil, debridTypes.Observation{}, ctx.Err()
@@ -111,7 +111,7 @@ func TestGetTorrentsShowsTheDeadlinesTheEntryActorsDerive(t *testing.T) {
 		return out
 	}
 	seen := map[string]int{}
-	for seen["t-held"] < 1 || seen["t-answered"] < 2 {
+	for seen["t-held"] < 2 || seen["t-answered"] < 2 {
 		select {
 		case id := <-provider.polled:
 			seen[id]++
