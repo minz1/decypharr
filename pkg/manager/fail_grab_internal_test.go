@@ -53,7 +53,7 @@ func TestFailGrabStormWithAFailingCanaryFailsNothingPastTheFreeLimit(t *testing.
 
 	held := 0
 	for i := range 10 {
-		err := m.failGrab(grabEntry(i), recovery, "sonarr", "Provider rejected the torrent")
+		err := m.failGrab(grabEntry(i), recovery, "sonarr", "realdebrid")
 		switch {
 		case err == nil:
 		case errors.Is(err, arr.ErrBlocklistHeld):
@@ -122,11 +122,11 @@ func TestDroppedGrabHeldByTheGuardIsAnError(t *testing.T) {
 	verdict.Store(int64(arr.CanaryFail))
 	m, _ := grabManager(t, recovery, &verdict)
 	for i := range 2 {
-		if err := m.failGrab(grabEntry(i), recovery, "sonarr", "dropped"); err != nil {
+		if err := m.failGrab(grabEntry(i), recovery, "sonarr", "realdebrid"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	err := m.failGrab(grabEntry(9), recovery, "sonarr", "dropped")
+	err := m.failGrab(grabEntry(9), recovery, "sonarr", "realdebrid")
 	if !errors.Is(err, arr.ErrBlocklistHeld) || len(recovery.fails) != 2 {
 		t.Fatalf("held grab = %v with %d jobs, want a held error and no third job", err, len(recovery.fails))
 	}
@@ -138,7 +138,7 @@ func TestAnAttemptHungOnTheCanaryNeverHoldsTheCaller(t *testing.T) {
 	var verdict atomic.Int64
 	m, _ := grabManager(t, recovery, &verdict)
 	for i := range 2 {
-		if err := m.failGrab(grabEntry(i), recovery, "sonarr", "free"); err != nil {
+		if err := m.failGrab(grabEntry(i), recovery, "sonarr", "realdebrid"); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -586,7 +586,7 @@ func TestRecheckIsStaleWhenTheBadEntryIsReplacedDuringAdmission(t *testing.T) {
 			})
 			prefilled := *entry
 			prefilled.InfoHash = "prefilled"
-			if err := m.failGrab(&prefilled, fake, "sonarr", "free"); err != nil {
+			if err := m.failGrab(&prefilled, fake, "sonarr", "realdebrid"); err != nil {
 				t.Fatal(err)
 			}
 			before := len(failsOf(fake))

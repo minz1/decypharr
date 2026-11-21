@@ -26,7 +26,8 @@ func (*staleOccurrenceError) Error() string {
 
 type failDelivery struct {
 	arr, provider, downloadID, entryID string
-	name, reason                       string
+	name, reason, failReason           string
+	evidence                           placementRef
 	since                              time.Time
 	precheck                           bool
 	current                            func() bool
@@ -95,17 +96,28 @@ func (m *Manager) deliverFail(ctx context.Context, recovery ArrRecovery, d failD
 			Str("name", d.name).
 			Str("arr", d.arr).
 			Str("job", job.ID).
+			Str("provider", d.evidence.Provider).
+			Str("placement_id", d.evidence.TorrentID).
+			Str("fail_reason", d.failReason).
 			Msg(d.reason + "; failing its grab in the Arr")
 	}
 	return job, nil
 }
 
-func (m *Manager) failGrab(entry *storage.Entry, recovery ArrRecovery, arrName, reason string) error {
+func (m *Manager) failGrab(entry *storage.Entry, recovery ArrRecovery, arrName, dropper string) error {
 	_, err := m.deliverFail(m.work.Context(), recovery, failDelivery{
 		arr: arrName, provider: failProvider(entry), downloadID: strings.ToUpper(entry.InfoHash),
-		entryID: entry.InfoHash, name: entry.Name, reason: reason,
+		entryID: entry.InfoHash, name: entry.Name, reason: dropper + " dropped the torrent",
+		evidence: placementRef{Provider: dropper},
 	})
 	return err
+}
+
+func activePlacement(entry *storage.Entry) placementRef {
+	if p := entry.GetActiveProvider(); p != nil {
+		return *placementOf(entry, p)
+	}
+	return placementRef{}
 }
 
 func (m *Manager) pendingFailAt(key string, at time.Time) (GrabView, bool) {
@@ -154,6 +166,7 @@ func (m *Manager) attemptFailGrab(ctx context.Context, spec attemptSpec) attempt
 	job, err := m.deliverFail(ctx, recovery, failDelivery{
 		arr: spec.arr, provider: spec.provider, downloadID: strings.ToUpper(spec.key), entryID: view.Entry.InfoHash,
 		name: view.Entry.Name, reason: "Provider rejected the torrent", since: spec.at, precheck: true,
+		evidence: activePlacement(&view.Entry), failReason: view.State.Failure.Reason,
 		current: func() bool { _, current := m.pendingFailAt(spec.key, spec.at); return current },
 	})
 	if err != nil {

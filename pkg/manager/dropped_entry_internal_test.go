@@ -294,7 +294,8 @@ func TestDroppedEntryLogsTheRecoveryJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	line := logs.String()
-	if !strings.Contains(line, "failing its grab in the Arr") || !strings.Contains(line, `"job":"fail-1"`) ||
+	if !strings.Contains(line, `"message":"torbox dropped the torrent; failing its grab in the Arr"`) ||
+		!strings.Contains(line, `"provider":"torbox"`) || !strings.Contains(line, `"job":"fail-1"`) ||
 		!strings.Contains(line, `"level":"info"`) {
 		t.Fatalf("drop log = %s", line)
 	}

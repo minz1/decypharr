@@ -2,7 +2,9 @@ package manager
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"maps"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -189,7 +191,7 @@ func deliverFailHoldsAReceiptMissAgainstAFullBucket(t *testing.T) {
 	verdict.Store(int64(arr.CanaryFail))
 	m, _ := grabManager(t, recovery.fakeArrRecovery, &verdict)
 	for i := range 2 {
-		if err := m.failGrab(grabEntry(i), recovery, "sonarr", "free"); err != nil {
+		if err := m.failGrab(grabEntry(i), recovery, "sonarr", "realdebrid"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -212,7 +214,7 @@ func TestDeliverFailResultsAreClassified(t *testing.T) {
 	verdict.Store(int64(arr.CanaryFail))
 	m, _ := grabManager(t, recovery.fakeArrRecovery, &verdict)
 	for i := range 2 {
-		if err := m.failGrab(grabEntry(i), recovery, "sonarr", "free"); err != nil {
+		if err := m.failGrab(grabEntry(i), recovery, "sonarr", "realdebrid"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -322,6 +324,126 @@ func TestArrFailerDeliversAPersistedFailAndRecordsTheJob(t *testing.T) {
 			t.Fatalf("arr_fail on disk = %+v, want queued with the job", got)
 		}
 	})
+}
+
+func TestArrFailerDecisionLineNamesThePlacementAndTheFailure(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name                string
+		active              bool
+		provider, placement string
+	}{
+		{name: "placed", active: true, provider: "realdebrid", placement: "RDX1"},
+		{name: "unplaced"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store := newTestStore(t)
+			synctest.Test(t, func(t *testing.T) {
+				h := deadlineHarness(t, store, noPoll)
+				entry := verdictEntry("RDX1")
+				if tc.active {
+					entry.SetActive("realdebrid", true)
+				}
+				seed(t, h.store, entry, grab.State{
+					Phase:   grab.PhaseFailed,
+					Failure: grab.Failure{Reason: "torrent: a has error", At: time.Now(), Count: 1},
+					ArrFail: grab.ArrFail{State: grab.ArrFailPending, Arr: "sonarr"},
+				})
+				w := attachFailer(t, h, sonarrOnly())
+				logs := &syncBuffer{}
+				w.m.logger = zerolog.New(logs)
+				w.boot()
+				line := decisionLine(t, logs, "Provider rejected the torrent; failing its grab in the Arr")
+				want := map[string]string{
+					"level": "info", "message": "Provider rejected the torrent; failing its grab in the Arr",
+					"infohash": "a", "name": "a", "arr": "sonarr", "job": "fail-1",
+					"provider": tc.provider, "placement_id": tc.placement, "fail_reason": "torrent: a has error",
+				}
+				if !maps.Equal(line, want) {
+					t.Fatalf("decision line = %v, want %v", line, want)
+				}
+			})
+		})
+	}
+}
+
+func decisionLine(t *testing.T, logs *syncBuffer, message string) map[string]string {
+	t.Helper()
+	var line map[string]string
+	for raw := range strings.Lines(logs.String()) {
+		var fields map[string]any
+		if err := json.Unmarshal([]byte(raw), &fields); err != nil {
+			t.Fatal(err)
+		}
+		if fields["message"] == message {
+			line = map[string]string{}
+			for k, v := range fields {
+				line[k], _ = v.(string)
+			}
+		}
+	}
+	return line
+}
+
+func placedOn(entry *storage.Entry, id string) *storage.Entry {
+	entry.Providers = map[string]*storage.ProviderEntry{"realdebrid": {Provider: "realdebrid", ID: id}}
+	entry.SetActive("realdebrid", true)
+	return entry
+}
+
+func TestADroppedGrabDecisionLineNamesTheDropper(t *testing.T) {
+	t.Parallel()
+	recovery := &fakeArrRecovery{}
+	var verdict atomic.Int64
+	verdict.Store(int64(arr.CanaryPass))
+	m, _ := grabManager(t, recovery, &verdict)
+	logs := &syncBuffer{}
+	m.logger = zerolog.New(logs)
+	entry := grabEntry(1)
+	entry.ActiveProvider = ""
+	if err := m.failGrab(entry, recovery, "sonarr", "realdebrid"); err != nil {
+		t.Fatal(err)
+	}
+	line := decisionLine(t, logs, "realdebrid dropped the torrent; failing its grab in the Arr")
+	want := map[string]string{
+		"level": "info", "message": "realdebrid dropped the torrent; failing its grab in the Arr",
+		"infohash": entry.InfoHash, "name": entry.Name, "arr": "sonarr", "job": "fail-1",
+		"provider": "realdebrid", "placement_id": "", "fail_reason": "",
+	}
+	if !maps.Equal(line, want) {
+		t.Fatalf("decision line = %v, want %v", line, want)
+	}
+}
+
+func TestARecheckDecisionLineNamesNoPlacement(t *testing.T) {
+	t.Parallel()
+	fakeArr := &queueArr{downloadIDs: []string{strings.ToUpper(droppedHash)}}
+	fake := &fakeArrRecovery{}
+	m, entry := newGiveUpTestManager(t, fakeArr, fake)
+	placedOn(entry, "RDX3")
+	saveBad(t, m, entry, true)
+	logs := &syncBuffer{}
+	m.logger = zerolog.New(logs)
+	done := make(chan attemptResult, 1)
+	m.testFailer(t, func(deps *arrFailerDeps) {
+		inner := deps.attemptRecheck
+		deps.attemptRecheck = func(ctx context.Context, spec attemptSpec) attemptResult {
+			res := inner(ctx, spec)
+			done <- res
+			return res
+		}
+	})
+	m.wantRecheck(entry)
+	if res := <-done; res.kind != resAcked {
+		t.Fatalf("recheck result = %v (%v), want delivered", res.kind, res.err)
+	}
+	line := decisionLine(t, logs, recheckReason+"; failing its grab in the Arr")
+	for _, key := range []string{"provider", "placement_id", "fail_reason"} {
+		if v, ok := line[key]; !ok || v != "" {
+			t.Fatalf("decision line = %v, want %s present and empty", line, key)
+		}
+	}
 }
 
 func TestArrFailerReplaysASavedJobWithoutAnotherFail(t *testing.T) {

@@ -168,7 +168,7 @@ func (m *Manager) recoverDroppedEntry(provider string, entry *storage.Entry) err
 	if recovery == nil {
 		return fmt.Errorf("arr recovery service is not running")
 	}
-	return m.failGrab(entry, recovery, instance.Name, provider+" dropped the torrent")
+	return m.failGrab(entry, recovery, instance.Name, provider)
 }
 
 // admitHeal asks the repair breaker whether a reacquisition of units files may delete Arr files for entryID. An
