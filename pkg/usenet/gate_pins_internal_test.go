@@ -154,12 +154,15 @@ func bodyGoneReply(command, _ string) string {
 	return ""
 }
 
-var (
-	junkPayload = []byte(strings.Repeat("not a media container ", 40))
-	mkvPayload  = append([]byte{0x1A, 0x45, 0xDF, 0xA3}, make([]byte, 600)...)
-	mkvHead16   = append([]byte{0x1A, 0x45, 0xDF, 0xA3}, make([]byte, 12)...)
-	junkHead16  = []byte("not a container!")
-)
+const pinSegments = 20
+
+func junkPayload() []byte { return []byte(strings.Repeat("not a media container ", 40)) }
+
+func mkvPayload() []byte { return append([]byte{0x1A, 0x45, 0xDF, 0xA3}, make([]byte, 600)...) }
+
+func mkvHead16() []byte { return append([]byte{0x1A, 0x45, 0xDF, 0xA3}, make([]byte, 12)...) }
+
+func junkHead16() []byte { return []byte("not a container!") }
 
 func sentinelText(err error) string { return err.Error() }
 
@@ -216,7 +219,9 @@ func (w kindPin) check(t *testing.T, r gate.Result) {
 	}
 }
 
-var neitherSentinel = []error{customerror.ErrUsenetSegmentMissing, customerror.ErrUsenetCorruptContent}
+func neitherSentinel() []error {
+	return []error{customerror.ErrUsenetSegmentMissing, customerror.ErrUsenetCorruptContent}
+}
 
 func TestPinCheckNZBAvailability(t *testing.T) {
 	t.Parallel()
@@ -252,9 +257,9 @@ func TestPinCheckNZBAvailability(t *testing.T) {
 			t.Parallel()
 			rig := newPinRig(t, tc.reply)
 			if tc.serve {
-				rig.serve(t, junkPayload)
+				rig.serve(t, junkPayload())
 			}
-			nzb := gateNZB(t, rig.u, gateFile(len(junkPayload)))
+			nzb := gateNZB(t, rig.u, gateFile(len(junkPayload())))
 			if tc.stopped {
 				stopLifecycleGroup(t, rig.root)
 			}
@@ -302,7 +307,7 @@ func TestPinStatAvailabilityMixedAndLogs(t *testing.T) {
 		{
 			name: "connection errors only are silent", reply: statDownReply,
 			ids: []string{"<head@gate>"}, serve: true,
-			want: kindPin{kind: gate.KindUnchecked, err: "1 of 1 sampled articles could not be checked", isNot: neitherSentinel},
+			want: kindPin{kind: gate.KindUnchecked, err: "1 of 1 sampled articles could not be checked", isNot: neitherSentinel()},
 		},
 		{
 			name: "every article available is silent",
@@ -313,11 +318,11 @@ func TestPinStatAvailabilityMixedAndLogs(t *testing.T) {
 			t.Parallel()
 			rig := newPinRig(t, tc.reply)
 			if tc.serve {
-				rig.serve(t, junkPayload)
+				rig.serve(t, junkPayload())
 			}
 			r := rig.u.statAvailability(t.Context(), "Movie.mkv", tc.ids)
 			tc.want.check(t, r)
-			if tc.want.is != nil && r.Err() != tc.want.is {
+			if tc.want.is != nil && !errors.Is(r.Err(), tc.want.is) {
 				t.Errorf("error = %v, want the bare sentinel", r.Err())
 			}
 			rig.assertWarns(t, tc.warns)
@@ -327,8 +332,8 @@ func TestPinStatAvailabilityMixedAndLogs(t *testing.T) {
 
 func TestPinCheckHeadSignature(t *testing.T) {
 	t.Parallel()
-	kindPin{kind: gate.KindPass}.check(t, checkHeadSignature("Movie.mkv", mkvPayload))
-	r := checkHeadSignature("Movie.mkv", junkPayload)
+	kindPin{kind: gate.KindPass}.check(t, checkHeadSignature("Movie.mkv", mkvPayload()))
+	r := checkHeadSignature("Movie.mkv", junkPayload())
 	want := `head of "Movie.mkv" matches no media container signature: ` +
 		sentinelText(customerror.ErrUsenetCorruptContent)
 	kindPin{kind: gate.KindFailed, is: customerror.ErrUsenetCorruptContent}.check(t, r)
@@ -348,38 +353,38 @@ func TestPinVerifyFileHeadRoutes(t *testing.T) {
 		want    kindPin
 		bodies  bool
 	}{
-		{name: "analyzer nil, valid head", file: gateFile(len(mkvPayload)), payload: mkvPayload, bare: true, bodies: true, want: kindPin{kind: gate.KindPass}},
-		{name: "analyzer success, valid head", file: gateFile(len(mkvPayload)), payload: mkvPayload, bodies: true, want: kindPin{kind: gate.KindPass}},
+		{name: "analyzer nil, valid head", file: gateFile(len(mkvPayload())), payload: mkvPayload(), bare: true, bodies: true, want: kindPin{kind: gate.KindPass}},
+		{name: "analyzer success, valid head", file: gateFile(len(mkvPayload())), payload: mkvPayload(), bodies: true, want: kindPin{kind: gate.KindPass}},
 		{
-			name: "analyzer success, no signature", file: gateFile(len(junkPayload)), payload: junkPayload, bodies: true,
+			name: "analyzer success, no signature", file: gateFile(len(junkPayload())), payload: junkPayload(), bodies: true,
 			want: kindPin{kind: gate.KindFailed, is: customerror.ErrUsenetCorruptContent},
 		},
 		{
 			name: "cursor partial EOF, unknown size, valid 16-byte head", file: unknownSizeFile(16),
-			payload: mkvHead16, bare: true, bodies: true,
+			payload: mkvHead16(), bare: true, bodies: true,
 			want: kindPin{kind: gate.KindPass},
 		},
 		{
 			name: "cursor partial EOF, unknown size, 16 bytes with no signature", file: unknownSizeFile(16),
-			payload: junkHead16, bare: true, bodies: true,
+			payload: junkHead16(), bare: true, bodies: true,
 			want: kindPin{kind: gate.KindFailed, is: customerror.ErrUsenetCorruptContent},
 		},
 		{
-			name: "analyzer partial coverage, unknown size", file: unknownSizeFile(16), payload: mkvHead16, bodies: true,
-			want: kindPin{kind: gate.KindUnchecked, err: "partially covered", isNot: neitherSentinel},
+			name: "analyzer partial coverage, unknown size", file: unknownSizeFile(16), payload: mkvHead16(), bodies: true,
+			want: kindPin{kind: gate.KindUnchecked, err: "partially covered", isNot: neitherSentinel()},
 		},
 		{
 			name: "cursor short head, unknown size", file: unknownSizeFile(8), payload: []byte("12345678"),
 			bare: true, bodies: true,
-			want: kindPin{kind: gate.KindUnchecked, err: "EOF", isNot: neitherSentinel},
+			want: kindPin{kind: gate.KindUnchecked, err: "EOF", isNot: neitherSentinel()},
 		},
 		{
-			name: "cursor, connection error", file: gateFile(len(mkvPayload)), payload: mkvPayload, bare: true,
-			reply: bodyDownReply, bodies: true, want: kindPin{kind: gate.KindUnchecked, err: "400", isNot: neitherSentinel},
+			name: "cursor, connection error", file: gateFile(len(mkvPayload())), payload: mkvPayload(), bare: true,
+			reply: bodyDownReply, bodies: true, want: kindPin{kind: gate.KindUnchecked, err: "400", isNot: neitherSentinel()},
 		},
 		{
-			name: "analyzer, connection error", file: gateFile(len(mkvPayload)), payload: mkvPayload,
-			reply: bodyDownReply, bodies: true, want: kindPin{kind: gate.KindUnchecked, err: "400", isNot: neitherSentinel},
+			name: "analyzer, connection error", file: gateFile(len(mkvPayload())), payload: mkvPayload(),
+			reply: bodyDownReply, bodies: true, want: kindPin{kind: gate.KindUnchecked, err: "400", isNot: neitherSentinel()},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -413,29 +418,29 @@ func TestPinVerifyNZBContent(t *testing.T) {
 		exact   string
 		warns   map[string]int
 	}{
-		{name: "context ended", payload: junkPayload, serve: true, ended: true, want: kindPin{kind: gate.KindSkipped}},
-		{name: "valid head", payload: mkvPayload, serve: true, want: kindPin{kind: gate.KindPass}},
+		{name: "context ended", payload: junkPayload(), serve: true, ended: true, want: kindPin{kind: gate.KindSkipped}},
+		{name: "valid head", payload: mkvPayload(), serve: true, want: kindPin{kind: gate.KindPass}},
 		{
-			name: "head missing", reply: bodyGoneReply, payload: junkPayload, serve: true,
+			name: "head missing", reply: bodyGoneReply, payload: junkPayload(), serve: true,
 			want:  kindPin{kind: gate.KindMissing, is: customerror.ErrUsenetSegmentMissing},
 			exact: headMissing, warns: map[string]int{warnContentFailed: 1},
 		},
 		{
-			name: "head missing via the cursor", reply: bodyGoneReply, payload: junkPayload, serve: true, bare: true,
+			name: "head missing via the cursor", reply: bodyGoneReply, payload: junkPayload(), serve: true, bare: true,
 			want:  kindPin{kind: gate.KindMissing, is: customerror.ErrUsenetSegmentMissing},
 			exact: headMissing, warns: map[string]int{warnContentFailed: 1},
 		},
 		{
-			name: "no signature", payload: junkPayload, serve: true,
+			name: "no signature", payload: junkPayload(), serve: true,
 			want:  kindPin{kind: gate.KindFailed, is: customerror.ErrUsenetCorruptContent},
 			exact: noSignature, warns: map[string]int{warnContentFailed: 1},
 		},
 		{
-			name: "connection error is not a verdict", reply: bodyDownReply, payload: junkPayload, serve: true, want: kindPin{kind: gate.KindPass},
+			name: "connection error is not a verdict", reply: bodyDownReply, payload: junkPayload(), serve: true, want: kindPin{kind: gate.KindPass},
 			warns: map[string]int{warnContentNonFatal: 1},
 		},
 		{
-			name: "connection error via the cursor is not a verdict", reply: bodyDownReply, payload: junkPayload,
+			name: "connection error via the cursor is not a verdict", reply: bodyDownReply, payload: junkPayload(),
 			serve: true, bare: true, want: kindPin{kind: gate.KindPass}, warns: map[string]int{warnContentNonFatal: 1},
 		},
 	} {
@@ -468,6 +473,29 @@ func TestPinVerifyNZBContent(t *testing.T) {
 	}
 }
 
+func pinContext(t *testing.T, ended, expired bool) context.Context {
+	t.Helper()
+	ctx := t.Context()
+	switch {
+	case ended:
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		cancel()
+	case expired:
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, time.Now().Add(-time.Second))
+		t.Cleanup(cancel)
+	}
+	return ctx
+}
+
+func errorText(err error, want string) bool {
+	if want == "" {
+		return err == nil
+	}
+	return err != nil && err.Error() == want
+}
+
 func TestPinFinishBoundary(t *testing.T) {
 	t.Parallel()
 	missing := sentinelText(customerror.ErrUsenetSegmentMissing)
@@ -488,33 +516,33 @@ func TestPinFinishBoundary(t *testing.T) {
 		stored  string
 	}{
 		{
-			name: "availability miss", reply: statGoneReply, payload: junkPayload, status: NZBStatusFailed,
+			name: "availability miss", reply: statGoneReply, payload: junkPayload(), status: NZBStatusFailed,
 			result: ProcessResult{GateMissing: true},
 			err:    "availability check failed: " + unavailable, stored: unavailable,
 		},
 		{
-			name: "head miss via the analyzer", reply: bodyGoneReply, payload: junkPayload, status: NZBStatusFailed,
+			name: "head miss via the analyzer", reply: bodyGoneReply, payload: junkPayload(), status: NZBStatusFailed,
 			result: ProcessResult{GateMissing: true},
 			err:    "content verification failed: " + headMissing, stored: headMissing,
 		},
 		{
-			name: "head miss via the cursor", reply: bodyGoneReply, payload: junkPayload, bare: true,
+			name: "head miss via the cursor", reply: bodyGoneReply, payload: junkPayload(), bare: true,
 			status: NZBStatusFailed, result: ProcessResult{GateMissing: true},
 			err: "content verification failed: " + headMissing, stored: headMissing,
 		},
 		{
-			name: "corrupt head", payload: junkPayload, status: NZBStatusFailed,
+			name: "corrupt head", payload: junkPayload(), status: NZBStatusFailed,
 			err: "content verification failed: " + noSignature, stored: noSignature,
 		},
-		{name: "availability unchecked", reply: statDownReply, payload: mkvPayload, status: NZBStatusCompleted},
-		{name: "content unchecked", reply: bodyDownReply, payload: mkvPayload, status: NZBStatusCompleted},
-		{name: "both gates unchecked", reply: status400, payload: mkvPayload, status: NZBStatusCompleted},
+		{name: "availability unchecked", reply: statDownReply, payload: mkvPayload(), status: NZBStatusCompleted},
+		{name: "content unchecked", reply: bodyDownReply, payload: mkvPayload(), status: NZBStatusCompleted},
+		{name: "both gates unchecked", reply: status400, payload: mkvPayload(), status: NZBStatusCompleted},
 		{
-			name: "cancelled", payload: mkvPayload, ended: true, status: NZBStatusParsing,
+			name: "cancelled", payload: mkvPayload(), ended: true, status: NZBStatusParsing,
 			err: "processing interrupted: context canceled",
 		},
 		{
-			name: "deadline passed", payload: mkvPayload, expired: true, status: NZBStatusFailed,
+			name: "deadline passed", payload: mkvPayload(), expired: true, status: NZBStatusFailed,
 			err: "processing interrupted: context deadline exceeded", stored: "context deadline exceeded",
 		},
 	} {
@@ -526,22 +554,11 @@ func TestPinFinishBoundary(t *testing.T) {
 				rig.u.analyzer = nil
 			}
 			nzb := gateNZB(t, rig.u, gateFile(len(tc.payload)))
-			ctx := t.Context()
-			switch {
-			case tc.ended:
-				var cancel context.CancelFunc
-				ctx, cancel = context.WithCancel(ctx)
-				cancel()
-			case tc.expired:
-				var cancel context.CancelFunc
-				ctx, cancel = context.WithDeadline(ctx, time.Now().Add(-time.Second))
-				defer cancel()
-			}
-			got, err := rig.u.finish(ctx, nzb)
+			got, err := rig.u.finish(pinContext(t, tc.ended, tc.expired), nzb)
 			if got != tc.result {
 				t.Errorf("ProcessResult = %+v, want %+v", got, tc.result)
 			}
-			if (tc.err == "") != (err == nil) || (err != nil && err.Error() != tc.err) {
+			if !errorText(err, tc.err) {
 				t.Errorf("error = %v, want exactly %q", err, tc.err)
 			}
 			if nzb.Status != tc.status {
@@ -568,23 +585,23 @@ func TestPinExportedCallers(t *testing.T) {
 		is      error
 		isNot   []error
 	}{
-		{name: "head too small", payload: junkPayload[:100], file: gateFile(100), serve: true},
-		{name: "valid head", payload: mkvPayload, file: gateFile(len(mkvPayload)), serve: true},
+		{name: "head too small", payload: junkPayload()[:100], file: gateFile(100), serve: true},
+		{name: "valid head", payload: mkvPayload(), file: gateFile(len(mkvPayload())), serve: true},
 		{
-			name: "head article gone", reply: bodyGoneReply, payload: junkPayload, file: gateFile(len(junkPayload)),
+			name: "head article gone", reply: bodyGoneReply, payload: junkPayload(), file: gateFile(len(junkPayload())),
 			serve: true, want: `head article of "Movie.mkv" missing: ` + missing, is: customerror.ErrUsenetSegmentMissing,
 		},
 		{
-			name: "no signature", payload: junkPayload, file: gateFile(len(junkPayload)), serve: true,
+			name: "no signature", payload: junkPayload(), file: gateFile(len(junkPayload())), serve: true,
 			is: customerror.ErrUsenetCorruptContent,
 		},
 		{
-			name: "connection error stays raw", reply: bodyDownReply, payload: mkvPayload,
-			file: gateFile(len(mkvPayload)), serve: true, want: "400", isNot: neitherSentinel,
+			name: "connection error stays raw", reply: bodyDownReply, payload: mkvPayload(),
+			file: gateFile(len(mkvPayload())), serve: true, want: "400", isNot: neitherSentinel(),
 		},
 		{
-			name: "connection error stays raw via the cursor", reply: bodyDownReply, payload: mkvPayload,
-			file: gateFile(len(mkvPayload)), serve: true, bare: true, want: "400", isNot: neitherSentinel,
+			name: "connection error stays raw via the cursor", reply: bodyDownReply, payload: mkvPayload(),
+			file: gateFile(len(mkvPayload())), serve: true, bare: true, want: "400", isNot: neitherSentinel(),
 		},
 	} {
 		t.Run("VerifyFileHead "+tc.name, func(t *testing.T) {
@@ -597,27 +614,32 @@ func TestPinExportedCallers(t *testing.T) {
 				rig.u.analyzer = nil
 			}
 			err := rig.u.VerifyFileHead(t.Context(), &tc.file)
-			if tc.want == "" && tc.is == nil && len(tc.isNot) == 0 {
-				if err != nil {
-					t.Fatalf("VerifyFileHead = %v, want nil", err)
-				}
-				return
-			}
-			if err == nil {
-				t.Fatal("VerifyFileHead = nil, want an error")
-			}
-			if tc.want != "" && !strings.Contains(err.Error(), tc.want) {
-				t.Errorf("error = %v, want it to contain %q", err, tc.want)
-			}
-			if tc.is != nil && !errors.Is(err, tc.is) {
-				t.Errorf("error = %v, want it to wrap %v", err, tc.is)
-			}
-			for _, not := range tc.isNot {
-				if errors.Is(err, not) {
-					t.Errorf("error = %v, must not wrap %v", err, not)
-				}
-			}
+			assertHeadError(t, err, tc.want, tc.is, tc.isNot)
 		})
+	}
+}
+
+func assertHeadError(t *testing.T, err error, want string, is error, isNot []error) {
+	t.Helper()
+	if want == "" && is == nil && len(isNot) == 0 {
+		if err != nil {
+			t.Fatalf("VerifyFileHead = %v, want nil", err)
+		}
+		return
+	}
+	if err == nil {
+		t.Fatal("VerifyFileHead = nil, want an error")
+	}
+	if want != "" && !strings.Contains(err.Error(), want) {
+		t.Errorf("error = %v, want it to contain %q", err, want)
+	}
+	if is != nil && !errors.Is(err, is) {
+		t.Errorf("error = %v, want it to wrap %v", err, is)
+	}
+	for _, not := range isNot {
+		if errors.Is(err, not) {
+			t.Errorf("error = %v, must not wrap %v", err, not)
+		}
 	}
 }
 
@@ -626,15 +648,16 @@ func storeSegmented(t *testing.T, rig *pinRig, n int, served func(i int) bool) {
 	file := segmentedFile(n)
 	for i := range n {
 		if served(i) {
-			rig.srv.AddArticle(file.Segments[i].MessageID, nntpd.Encode([]byte("hello"), "Movie.mkv", i+1, int64(n)*5, int64(i)*5))
+			body := nntpd.Encode([]byte("hello"), "Movie.mkv", i+1, int64(n)*5, int64(i)*5)
+			rig.srv.AddArticle(file.Segments[i].MessageID, body)
 		}
 	}
 	gateNZB(t, rig.u, file)
 }
 
-func segmentIDs(n int, keep func(i int) bool) []string {
+func segmentIDs(keep func(i int) bool) []string {
 	var out []string
-	for i := range n {
+	for i := range pinSegments {
 		if keep(i) {
 			out = append(out, fmt.Sprintf("<s%d@gate>", i+1))
 		}
@@ -645,7 +668,7 @@ func segmentIDs(n int, keep func(i int) bool) []string {
 
 func TestPinCheckFileAndWholeFile(t *testing.T) {
 	t.Parallel()
-	const total = 20
+	const total = pinSegments
 	all := func(int) bool { return true }
 	for _, tc := range []struct {
 		name      string
@@ -658,25 +681,25 @@ func TestPinCheckFileAndWholeFile(t *testing.T) {
 	}{
 		{
 			name: "every article available", served: all,
-			checkIDs: segmentIDs(total, func(i int) bool { return i == 0 || i == total-1 }),
-			wholeIDs: segmentIDs(total, all),
+			checkIDs: segmentIDs(func(i int) bool { return i == 0 || i == total-1 }),
+			wholeIDs: segmentIDs(all),
 		},
 		{
 			name: "interior segment missing outside the sample", served: func(i int) bool { return i != 5 },
 			wantWhole: customerror.ErrUsenetSegmentMissing,
-			checkIDs:  segmentIDs(total, func(i int) bool { return i == 0 || i == total-1 }),
+			checkIDs:  segmentIDs(func(i int) bool { return i == 0 || i == total-1 }),
 			wholeIDs:  []string{"<s6@gate>"},
 		},
 		{
 			name: "first segment missing", served: func(i int) bool { return i != 0 },
 			wantCheck: customerror.ErrUsenetSegmentMissing, wantWhole: customerror.ErrUsenetSegmentMissing,
-			checkIDs: segmentIDs(total, func(i int) bool { return i == 0 || i == total-1 }),
+			checkIDs: segmentIDs(func(i int) bool { return i == 0 || i == total-1 }),
 			wholeIDs: []string{"<s1@gate>"},
 		},
 		{
 			name: "connection errors only", reply: statDownReply, served: all,
-			checkIDs: segmentIDs(total, func(i int) bool { return i == 0 || i == total-1 }),
-			wholeIDs: segmentIDs(total, all),
+			checkIDs: segmentIDs(func(i int) bool { return i == 0 || i == total-1 }),
+			wholeIDs: segmentIDs(all),
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -684,7 +707,7 @@ func TestPinCheckFileAndWholeFile(t *testing.T) {
 			rig := newPinRig(t, tc.reply)
 			storeSegmented(t, rig, total, tc.served)
 			err := rig.u.CheckFile(t.Context(), "gate", "Movie.mkv")
-			if err != tc.wantCheck {
+			if !errors.Is(err, tc.wantCheck) {
 				t.Errorf("CheckFile = %v, want %v", err, tc.wantCheck)
 			}
 			if got := rig.probes.sorted("STAT"); !slices.Equal(got, tc.checkIDs) {
@@ -693,14 +716,16 @@ func TestPinCheckFileAndWholeFile(t *testing.T) {
 			rig2 := newPinRig(t, tc.reply)
 			storeSegmented(t, rig2, total, tc.served)
 			err = rig2.u.CheckWholeFile(t.Context(), "gate", "Movie.mkv")
-			if err != tc.wantWhole {
+			if !errors.Is(err, tc.wantWhole) {
 				t.Errorf("CheckWholeFile = %v, want %v", err, tc.wantWhole)
 			}
 			got := rig2.probes.sorted("STAT")
 			whole := tc.wantWhole == nil && slices.Equal(got, tc.wholeIDs)
-			contains := tc.wantWhole != nil && !slices.ContainsFunc(tc.wholeIDs, func(id string) bool { return !slices.Contains(got, id) })
+			contains := tc.wantWhole != nil && !slices.ContainsFunc(tc.wholeIDs, func(id string) bool {
+				return !slices.Contains(got, id)
+			})
 			if !whole && !contains {
-				t.Errorf("CheckWholeFile probed %v, want %v (all of them without a miss, at least these with one)", got, tc.wholeIDs)
+				t.Errorf("CheckWholeFile probed %v, want %v", got, tc.wholeIDs)
 			}
 		})
 	}
@@ -708,6 +733,7 @@ func TestPinCheckFileAndWholeFile(t *testing.T) {
 
 type observedSource struct {
 	parser.ArticleSource
+
 	observed map[string]bool
 }
 
@@ -735,7 +761,8 @@ func TestPinFilterUnobserved(t *testing.T) {
 	t.Run("CheckWholeFile probes the observed id", func(t *testing.T) {
 		t.Parallel()
 		rig := setup(t)
-		if err := rig.u.CheckWholeFile(t.Context(), "gate", "Movie.mkv"); err != customerror.ErrUsenetSegmentMissing {
+		err := rig.u.CheckWholeFile(t.Context(), "gate", "Movie.mkv")
+		if !errors.Is(err, customerror.ErrUsenetSegmentMissing) {
 			t.Fatalf("CheckWholeFile = %v, want the missing sentinel", err)
 		}
 		if got, want := rig.probes.sorted("STAT"), []string{"<s1@gate>", "<s2@gate>"}; !slices.Equal(got, want) {
@@ -809,6 +836,7 @@ func TestPinManifestErrorsBeforeStat(t *testing.T) {
 
 type failingBodySource struct {
 	parser.ArticleSource
+
 	err error
 }
 
@@ -821,9 +849,9 @@ func TestDeviationReaderErrorWrappingASentinelIsUnchecked(t *testing.T) {
 	readErr := fmt.Errorf("read failed: %w", customerror.ErrUsenetCorruptContent)
 	rig := newPinRig(t, nil)
 	rig.u.analyzer = parser.NewParserWithSource(failingBodySource{err: readErr}, 1, zerolog.Nop())
-	rig.serve(t, mkvPayload)
-	nzb := gateNZB(t, rig.u, gateFile(len(mkvPayload)))
-	file := gateFile(len(mkvPayload))
+	rig.serve(t, mkvPayload())
+	nzb := gateNZB(t, rig.u, gateFile(len(mkvPayload())))
+	file := gateFile(len(mkvPayload()))
 
 	r := rig.u.verifyFileHead(t.Context(), &file)
 	if r.Kind() != gate.KindUnchecked || !errors.Is(r.Err(), readErr) {
@@ -840,7 +868,8 @@ func TestDeviationReaderErrorWrappingASentinelIsUnchecked(t *testing.T) {
 	rig.assertWarns(t, map[string]int{warnContentNonFatal: 1})
 
 	verifyErr := rig.u.VerifyFileHead(t.Context(), &file)
-	if !errors.Is(verifyErr, customerror.ErrUsenetCorruptContent) || !strings.Contains(verifyErr.Error(), "read failed") {
+	if !errors.Is(verifyErr, customerror.ErrUsenetCorruptContent) ||
+		!strings.Contains(verifyErr.Error(), "read failed") {
 		t.Fatalf("VerifyFileHead = %v, want the reader error with its chain", verifyErr)
 	}
 }

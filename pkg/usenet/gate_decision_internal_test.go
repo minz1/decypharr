@@ -11,7 +11,7 @@ import (
 )
 
 func oneFileNZB() *storage.NZB {
-	file := gateFile(len(mkvPayload))
+	file := gateFile(len(mkvPayload()))
 	return &storage.NZB{ID: "gate", Files: []storage.NZBFile{file}}
 }
 
@@ -34,7 +34,7 @@ func TestFoldsPassKindsThroughUnchanged(t *testing.T) {
 			t.Parallel()
 			u, _ := gateHarness(t, nil)
 			got := tc.fold(u, func(*storage.NZBFile) gate.Result { return tc.given })
-			if got.Kind() != tc.want || got.Err() != tc.given.Err() {
+			if got.Kind() != tc.want || !errors.Is(got.Err(), tc.given.Err()) {
 				t.Fatalf("fold = %v (%v), want %v unchanged", got.Kind(), got.Err(), tc.want)
 			}
 		})
@@ -145,11 +145,11 @@ func TestRepairErrorMapsEveryKind(t *testing.T) {
 			if (err != nil) != tc.wantError {
 				t.Fatalf("repairError = %v, want error %v", err, tc.wantError)
 			}
-			if tc.want != nil && err != tc.want {
+			if tc.want != nil && !errors.Is(err, tc.want) {
 				t.Fatalf("repairError = %v, want %v", err, tc.want)
 			}
 			if tc.given.Kind() == gate.KindInvalid {
-				for _, sentinel := range neitherSentinel {
+				for _, sentinel := range neitherSentinel() {
 					if errors.Is(err, sentinel) {
 						t.Fatalf("repairError(invalid) = %v, must not match %v", err, sentinel)
 					}
@@ -175,7 +175,7 @@ func TestCheckWholeFileMapsThroughTheRepairError(t *testing.T) {
 			t.Parallel()
 			rig := newPinRig(t, tc.reply)
 			storeSegmented(t, rig, 3, func(int) bool { return tc.served })
-			if err := rig.u.CheckWholeFile(t.Context(), "gate", "Movie.mkv"); err != tc.want {
+			if err := rig.u.CheckWholeFile(t.Context(), "gate", "Movie.mkv"); !errors.Is(err, tc.want) {
 				t.Fatalf("CheckWholeFile = %v, want %v", err, tc.want)
 			}
 		})

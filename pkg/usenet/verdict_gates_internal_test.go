@@ -576,7 +576,7 @@ func TestClassifyHeadReadErrorKeepsRawErrors(t *testing.T) {
 	t.Parallel()
 	raw := errors.New("connection reset")
 	r := classifyHeadReadError("Movie.mkv", raw)
-	if r.Kind() != gate.KindUnchecked || r.Err() != raw {
+	if r.Kind() != gate.KindUnchecked || !errors.Is(r.Err(), raw) {
 		t.Fatalf("classifyHeadReadError = %v, %v, want unchecked with the raw error", r.Kind(), r.Err())
 	}
 }
