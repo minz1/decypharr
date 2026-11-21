@@ -217,7 +217,7 @@ func (m *Manager) parseNZB(
 			errors.Is(parseCtx.Err(), context.DeadlineExceeded) &&
 			ctx.Err() == nil
 		cancel()
-		if budgetRanOut && parsed != nil {
+		if budgetRanOut {
 			parsed = parsed.WithoutVerdict()
 		}
 		if budgetRanOut && attempt == 2 {
