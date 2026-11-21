@@ -75,6 +75,7 @@ func TestGetTorrentsShowsTheDeadlinesTheEntryActorsDerive(t *testing.T) {
 	store := managertest.Store(t, func(cfg *config.Config) {
 		cfg.UseAuth = false
 		cfg.RefreshInterval = "20ms"
+		cfg.Debrids = []config.Debrid{{Name: "realdebrid", Provider: "realdebrid", APIKey: "test"}}
 	})
 	db, err := storage.NewStorage(filepath.Join(store.Get().Dir(), "db"), storage.Options{})
 	if err != nil {
