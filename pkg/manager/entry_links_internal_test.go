@@ -188,6 +188,25 @@ func TestARestoredLinksWaitWithOnlyTransientPollsEndsAtTheBound(t *testing.T) {
 	})
 }
 
+func TestARestoredLinksWaitWithOnlyUnconfirmed404sEndsAtTheBound(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	synctest.Test(t, func(t *testing.T) {
+		h := deadlineHarness(t, store, 0)
+		h.linksProvider(t, pollAnswer{err: unconfirmed404()})
+		h.recoverLinksWait(7 * time.Hour)
+		time.Sleep(6*time.Hour - time.Second)
+		h.mustBe("a", grab.PhaseAwaitingLinks)
+		h.mustFailWith()
+		if mark, ok := h.grabs.linksOf("a"); !ok || mark.fresh {
+			t.Fatalf("mark %+v (%v), want an unanswered hold", mark, ok)
+		}
+		time.Sleep(time.Second)
+		h.mustBe("a", grab.PhaseFailed)
+		h.mustFailWith(grab.FailBadRelease)
+	})
+}
+
 func TestAHardFailureWhileHeldDecidesAsInProcessHEAD(t *testing.T) {
 	t.Parallel()
 	store := newTestStore(t)
@@ -419,8 +438,9 @@ func TestALinksCheckReportsStillMissingOnlyOnLinksPending(t *testing.T) {
 		{name: "finalizing without links pending", answer: pollAnswer{obs: finalizing}},
 		{name: "a transient error", answer: transientAnswer()},
 		{name: "links pending with an error", answer: pendingWithError},
-		{name: "an unconfirmed 404", answer: pollAnswer{err: customerror.ErrTorrentNotFound}, hasEv: true,
+		{name: "a confirmed absence", answer: pollAnswer{err: customerror.ErrTorrentNotFound}, hasEv: true,
 			wantEv: grab.EvProviderObserved},
+		{name: "an unconfirmed 404", answer: pollAnswer{err: unconfirmed404()}},
 		{name: "downloaded without files", answer: pollAnswer{obs: downloaded}, hasEv: true,
 			wantEv: grab.EvLinksReady},
 	}
@@ -541,4 +561,68 @@ func TestAReadersViewDoesNotShareTheIndexsDeadline(t *testing.T) {
 	if again, _ := x.get("k"); again.Deadline == nil || !again.Deadline.WaitingForLinks {
 		t.Fatalf("a reader's write reached the index: %+v", again.Deadline)
 	}
+}
+
+func TestAnOrderedLateAnswerForTheFirstPlacementDoesNotVouchForTheSecond(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	synctest.Test(t, func(t *testing.T) {
+		h := deadlineHarness(t, store, 0)
+		h.restoredLinksWait(7 * time.Hour)
+		h.send(eventMsg(grab.Event{
+			Kind: grab.EvProviderObserved, Observed: debridTypes.PhaseFailed, Fail: grab.FailNoEffect, Reason: "gone",
+		}))
+		h.mustBe("a", grab.PhaseFailed)
+		h.send(eventMsg(grab.Event{Kind: grab.EvFailedRetention}))
+		h.next(grab.ChildCleanup).reply <- eventMsg(grab.Event{Kind: grab.EvCleanupDone})
+		h.mustBe("a", grab.PhaseAbsent)
+		time.Sleep(time.Hour)
+		synctest.Wait()
+		if h.running() {
+			t.Fatal("the actor is still up an hour after the grab was removed")
+		}
+		second := linksEntryAt(7 * time.Hour)
+		second.Providers["realdebrid"].ID = "t2"
+		second.ActiveProvider = "realdebrid"
+		seed(t, store, second, grab.State{Phase: grab.PhaseAwaitingLinks})
+		h.mustAsk("a", grab.Event{Kind: grab.EvRecover})
+		h.next(grab.ChildLinks)
+		first := linksRef()
+		h.send(entryMsg{exit: true, child: grab.ChildLinks, linksMissing: &first})
+		mark, ok := h.grabs.linksOf("a")
+		want := placementRef{Provider: "realdebrid", TorrentID: "t2"}
+		if !ok || mark.fresh || mark.placement != want {
+			t.Fatalf("mark %+v (%v), want an unanswered hold of %+v", mark, ok, want)
+		}
+		time.Sleep(6*time.Hour - time.Second)
+		h.mustBe("a", grab.PhaseAwaitingLinks)
+		time.Sleep(time.Second)
+		h.mustBe("a", grab.PhaseFailed)
+		h.mustFailWith(grab.FailNoEffect, grab.FailBadRelease)
+	})
+}
+
+func TestAWaitForLinksWithNoPlacementRecordWritesNoMark(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	synctest.Test(t, func(t *testing.T) {
+		h := deadlineHarness(t, store, 0)
+		e := testEntry("a")
+		e.ActiveProvider = "ghost"
+		st := grab.State{Key: "a", Phase: grab.PhaseAwaitingLinks, PhaseSince: time.Now()}
+		if err := grab.Encode(grab.Grab{State: st, Entry: e}); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.UpdateQueuedGrab(e); err != nil {
+			t.Fatal(err)
+		}
+		h.mustAsk("a", grab.Event{Kind: grab.EvRecover})
+		h.next(grab.ChildLinks)
+		if mark, ok := h.grabs.linksOf("a"); ok {
+			t.Fatalf("mark %+v written for a grab with no placement", mark)
+		}
+		if d := h.deadline(); d != nil {
+			t.Fatalf("deadline %+v for a grab with no placement", d)
+		}
+	})
 }
