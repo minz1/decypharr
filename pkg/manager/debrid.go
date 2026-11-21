@@ -32,7 +32,7 @@ func (m *Manager) ProviderClient(name string) debrid.Client {
 	return client
 }
 
-func (m *Manager) initDebridClients() {
+func (m *Manager) initDebridClients(opts []Option) {
 	for _, dc := range m.config.Debrids {
 		client, err := m.createClient(dc)
 		if err != nil {
@@ -40,6 +40,9 @@ func (m *Manager) initDebridClients() {
 			continue
 		}
 		m.clients.Store(dc.Name, client)
+	}
+	for _, opt := range opts {
+		opt(m)
 	}
 }
 

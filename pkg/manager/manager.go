@@ -362,10 +362,7 @@ func (m *Manager) init(opts []Option) error {
 	m.refreshInterval = refreshInterval
 
 	// initialize debrid clients
-	m.initDebridClients()
-	for _, opt := range opts {
-		opt(m)
-	}
+	m.initDebridClients(opts)
 
 	// Initialize usenet client
 	m.initUsenet()

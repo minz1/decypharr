@@ -212,7 +212,8 @@ func TestAHardFailureWhileHeldDecidesAsInProcessHEAD(t *testing.T) {
 	store := newTestStore(t)
 	synctest.Test(t, func(t *testing.T) {
 		h := deadlineHarness(t, store, 0)
-		hard := customerror.NewProviderStatusError(errors.New("realdebrid API error: Status: 401"), http.StatusUnauthorized)
+		status := errors.New("realdebrid API error: Status: 401")
+		hard := customerror.NewProviderStatusError(status, http.StatusUnauthorized)
 		m, client := h.linksProvider(t, transientAnswer(),
 			pollAnswer{t: &debridTypes.Torrent{ID: "t1"}, err: hard})
 		h.recoverLinksWait(7 * time.Hour)
@@ -230,6 +231,15 @@ func TestAHardFailureWhileHeldDecidesAsInProcessHEAD(t *testing.T) {
 			t.Fatalf("deleted %v, want [t1]", got)
 		}
 	})
+}
+
+func (h *actorHarness) mustKeepDeadline(before *grab.Gated) {
+	h.t.Helper()
+	after := h.deadline()
+	if before == nil || after == nil || after.Due != before.Due || after.WaitingForLinks != before.WaitingForLinks ||
+		after.Event.Kind != before.Event.Kind {
+		h.t.Fatalf("deadline %+v, want %+v", after, before)
+	}
 }
 
 func TestAFailedExitSaveKeepsTheLinksBound(t *testing.T) {
@@ -257,17 +267,11 @@ func TestAFailedExitSaveKeepsTheLinksBound(t *testing.T) {
 			}
 			time.Sleep(wait)
 			before := h.deadline()
-			if before == nil {
-				t.Fatal("the held wait shows no deadline")
-			}
 			h.send(eventMsg(grab.Event{Kind: grab.EvLinksReady}))
 			if !failed.Load() {
 				t.Fatal("the exit save did not fail")
 			}
-			if after := h.deadline(); after == nil || after.Due != before.Due || after.WaitingForLinks != before.WaitingForLinks ||
-				after.Event.Kind != before.Event.Kind {
-				t.Fatalf("deadline after the failed save = %+v, want %+v", after, before)
-			}
+			h.mustKeepDeadline(before)
 			h.send(entryMsg{ev: &grab.Event{Kind: grab.EvTagsChanged}, tags: []string{"x"}})
 			mark, ok := h.grabs.linksOf("a")
 			if !ok || mark.fresh != fresh || !mark.heldSince.Equal(started) {
@@ -661,7 +665,7 @@ func TestTheActingPhaseStartsWithNoDeadline(t *testing.T) {
 			t.Fatal("no action child started")
 		}
 		if v.State.Phase != grab.PhaseActing || v.Deadline != nil {
-			t.Fatalf("view when the action started: phase %v deadline %+v, want acting with none", v.State.Phase, v.Deadline)
+			t.Fatalf("action started in %v with deadline %+v, want acting with none", v.State.Phase, v.Deadline)
 		}
 	})
 }

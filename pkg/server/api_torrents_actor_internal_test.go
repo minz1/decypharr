@@ -95,8 +95,8 @@ func TestGetTorrentsShowsTheDeadlinesTheEntryActorsDerive(t *testing.T) {
 		var got struct {
 			Torrents []map[string]any `json:"torrents"`
 		}
-		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-			t.Fatal(err)
+		if jsonErr := json.Unmarshal(w.Body.Bytes(), &got); jsonErr != nil {
+			t.Fatal(jsonErr)
 		}
 		out := map[string]map[string]any{}
 		for _, item := range got.Torrents {
