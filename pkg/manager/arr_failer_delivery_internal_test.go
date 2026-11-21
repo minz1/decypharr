@@ -578,15 +578,15 @@ func TestArrFailerBootWindowNotMarked(t *testing.T) {
 		m.arr.SetAddedHook(f.arrAdded)
 		h.a.failArr = m.failArr
 		h.a.tell = m.tell
-		entry := testEntry("a")
+		entry := verdictEntry("RD1")
 		entry.Protocol = config.ProtocolTorrent
-		entry.AddedOn = time.Now()
 		seed(t, store, entry, grab.State{Phase: grab.PhaseProvider})
 		h.mustAsk("a", grab.Event{Kind: grab.EvRecover})
 		run := h.next(grab.ChildPoll)
 		run.reply <- entryMsg{seen: &pollSeen{pending: grab.PendingProvider, dead: true}}
 		time.Sleep(6 * time.Hour)
 		h.mustBe("a", grab.PhaseFailed)
+		h.mustFailWith(grab.FailBadRelease)
 		if g, _ := h.diskGrab("a"); g.State.ArrFail != (grab.ArrFail{}) {
 			t.Fatalf("arr_fail = %+v, want none for an Arr that was not registered at the fail", g.State.ArrFail)
 		}

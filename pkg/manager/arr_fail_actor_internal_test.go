@@ -74,10 +74,11 @@ func TestActorLeavesAnUnresolvedFailAlone(t *testing.T) {
 		h := deadlineHarness(t, store, noPoll)
 		log := &tellLog{}
 		h.a.tell = log.tell(queue)
-		seed(t, store, testEntry("a"), grab.State{Phase: grab.PhaseComplete})
+		seed(t, store, verdictEntry("RD1"), grab.State{Phase: grab.PhaseComplete})
 		before := queue.syncs.Load()
 		dropAsBadRelease(h)
 		h.mustBe("a", grab.PhaseFailed)
+		h.mustFailWith(grab.FailBadRelease)
 
 		disk, _ := h.diskGrab("a")
 		if disk.State.ArrFail != (grab.ArrFail{}) || queue.syncs.Load() != before || len(log.told) != 0 {
