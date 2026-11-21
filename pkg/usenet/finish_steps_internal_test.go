@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
+	"github.com/sirrobot01/decypharr/internal/testutil/nntpd"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 	"github.com/sirrobot01/decypharr/pkg/usenet/internal/gate"
 )
@@ -32,14 +34,55 @@ func storedStatus(t *testing.T, u *Usenet, nzb *storage.NZB) string {
 
 func TestGateStepsRunAvailabilityThenContent(t *testing.T) {
 	t.Parallel()
-	u, _ := gateHarness(t, nil)
-	nzb := gateNZB(t, u, gateFile(8))
+	var mu sync.Mutex
+	var commands []string
+	u, srv := gateHarness(t, func(command, _ string) string {
+		mu.Lock()
+		commands = append(commands, command)
+		mu.Unlock()
+		return ""
+	})
+	payload := []byte(strings.Repeat("not a media container ", 40))
+	srv.AddArticle("<a@gate>", nntpd.Encode(payload, "movie.mkv", 1, int64(len(payload)), 0))
+	nzb := gateNZB(t, u, storage.NZBFile{
+		Name: "Movie.mkv", FileType: storage.NZBFileTypeMedia,
+		Segments: []storage.NZBSegment{{Number: 1, MessageID: "<a@gate>", Bytes: int64(len(payload))}},
+	})
+	steps := u.gateSteps(t.Context(), nzb)
 	var names []string
-	for _, step := range u.gateSteps(t.Context(), nzb) {
+	for _, step := range steps {
 		names = append(names, step.name)
 	}
 	if want := []string{"availability check", "content verification"}; !slices.Equal(names, want) {
 		t.Fatalf("steps = %v, want %v", names, want)
+	}
+	if r := steps[0].run(); r.Kind() != gate.KindPass {
+		t.Fatalf("availability step = %v, %v, want pass on present articles", r.Kind(), r.Err())
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Contains(commands, "STAT") || slices.ContainsFunc(commands, func(c string) bool { return c != "STAT" }) {
+		t.Fatalf("availability step sent %v, want STAT only", commands)
+	}
+}
+
+func TestFinishFailsClosedOnNoResultAfterAPass(t *testing.T) {
+	t.Parallel()
+	u, _ := gateHarness(t, nil)
+	nzb := gateNZB(t, u, gateFile(8))
+	var ran []string
+	got, err := u.finish(t.Context(), nzb, []gateStep{
+		stepReturning(&ran, "one", gate.Pass()),
+		stepReturning(&ran, "two", gate.Result{}),
+	})
+	if err == nil || err.Error() != "two returned no result" || got != (ProcessResult{}) {
+		t.Fatalf("finish = %+v, %v, want two returned no result", got, err)
+	}
+	if !slices.Equal(ran, []string{"one", "two"}) {
+		t.Fatalf("steps run = %v, want both", ran)
+	}
+	if status := storedStatus(t, u, nzb); status != NZBStatusFailed {
+		t.Fatalf("stored status = %q, want failed", status)
 	}
 }
 

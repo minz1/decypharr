@@ -677,9 +677,12 @@ func TestProcessRunsTheContentStep(t *testing.T) {
 	if addErr := u.nzbStorage.AddNZB(parsed.NZB); addErr != nil {
 		t.Fatal(addErr)
 	}
-	updated, _, err := u.Process(t.Context(), parsed)
+	updated, result, err := u.Process(t.Context(), parsed)
 	if !errors.Is(err, customerror.ErrUsenetCorruptContent) {
 		t.Fatalf("Process error = %v, want the content gate's corrupt content", err)
+	}
+	if result != (ProcessResult{}) {
+		t.Fatalf("ProcessResult = %+v, want none for corrupt content", result)
 	}
 	if updated == nil || updated.Status == NZBStatusCompleted {
 		t.Fatalf("Process = %+v, want an NZB that is not completed", updated)
