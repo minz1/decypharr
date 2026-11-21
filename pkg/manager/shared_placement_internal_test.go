@@ -418,10 +418,12 @@ func TestAPendingDeadlineExpiryDiscardsThePlacement(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
 		kind grab.EventKind
+		id   string
 		want []string
 	}{
-		"pending deadline": {kind: grab.EvPendingDeadline, want: []string{"gone"}},
-		"link wait":        {kind: grab.EvLinkWaitExpired},
+		"pending deadline":      {kind: grab.EvPendingDeadline, id: "gone", want: []string{"gone"}},
+		"link wait":             {kind: grab.EvLinkWaitExpired, id: "gone"},
+		"pending deadline zero": {kind: grab.EvPendingDeadline, id: "0"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -429,7 +431,7 @@ func TestAPendingDeadlineExpiryDiscardsThePlacement(t *testing.T) {
 				h := newPruneHarness(t, config.PruneModeDelete)
 				e := &storage.Entry{
 					InfoHash: "expiring", Name: "Show.expiring", ActiveProvider: "torbox",
-					Providers: map[string]*storage.ProviderEntry{"torbox": {Provider: "torbox", ID: "gone"}},
+					Providers: map[string]*storage.ProviderEntry{"torbox": {Provider: "torbox", ID: tc.id}},
 				}
 				if err := h.m.storage.AddQueue(e); err != nil {
 					t.Fatal(err)

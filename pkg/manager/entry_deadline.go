@@ -134,7 +134,7 @@ func (m *Manager) expiredGrab(g grab.Grab, kind grab.EventKind) {
 	provider := entry.ActiveProvider
 	m.slotFreed(provider)
 	placement := entry.GetActiveProvider()
-	if kind != grab.EvPendingDeadline || placement == nil || placement.ID == "" {
+	if kind != grab.EvPendingDeadline || !placement.Named() {
 		return
 	}
 	id := placement.ID

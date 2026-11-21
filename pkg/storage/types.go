@@ -282,6 +282,10 @@ func (p *ProviderEntry) HoldsSlot() bool {
 		p.Status != debridTypes.TorrentStatusDownloaded
 }
 
+func (p *ProviderEntry) Named() bool {
+	return p != nil && p.ID != "" && p.ID != "0"
+}
+
 // NeedsUpdate checks if this placement is stale compared to the remote torrent.
 // Returns true if the stored placement should be refreshed.
 func (p *ProviderEntry) NeedsUpdate(remote *debridTypes.Torrent) bool {
