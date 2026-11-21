@@ -446,7 +446,7 @@ func (a *entryActor) step(key string, st *entryState, m entryMsg, fx *keyed.Effe
 		fx.Reply(nil)
 		return
 	}
-	ev.Arr = a.failArrFor(cur, ev)
+	ev = a.judged(key, cur, ev)
 	nextState, effects, err := grab.Transition(cur.State, ev)
 	if err != nil {
 		a.warnRefusedObservation(key, st, ev, err)
@@ -978,4 +978,31 @@ func (a *entryActor) phaseCommitted(key string, next grab.Grab) {
 	if next.State.Phase == grab.PhaseAwaitingLinks {
 		a.markLinks(key, next.Entry, true, time.Now())
 	}
+}
+
+func (a *entryActor) judged(key string, cur grab.Grab, ev grab.Event) grab.Event {
+	ev, withheld := placementVerdict(cur, ev)
+	if withheld {
+		a.logger.Info().Str("key", key).Stringer("event", ev.Kind).
+			Msg("Release verdict withheld: the placement has no provider id")
+	}
+	ev.Arr = a.failArrFor(cur, ev)
+	return ev
+}
+
+func placementVerdict(cur grab.Grab, ev grab.Event) (grab.Event, bool) {
+	if ev.Fail != grab.FailBadRelease || ev.Kind == grab.EvSubmitResult || cur.Entry == nil {
+		return ev, false
+	}
+	if cur.State.NZB || cur.State.PackKey != "" {
+		return ev, false
+	}
+	if placement := cur.Entry.GetActiveProvider(); placement == nil || placement.Named() {
+		return ev, false
+	}
+	ev.Fail = grab.FailEntry
+	if ev.Reason != "" {
+		ev.Reason += "; placement has no provider id, not blocklisting"
+	}
+	return ev, true
 }

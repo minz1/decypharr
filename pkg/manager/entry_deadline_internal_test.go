@@ -59,9 +59,13 @@ func (h *actorHarness) mustBe(key string, want grab.Phase) {
 
 func (h *actorHarness) providerGrab() childRun {
 	h.t.Helper()
+	return h.providerGrabAs("RD1")
+}
+
+func (h *actorHarness) providerGrabAs(id string) childRun {
+	h.t.Helper()
 	const key = "a"
-	e := testEntry(key)
-	e.AddedOn = time.Now()
+	e := verdictEntry(id)
 	seed(h.t, h.store, e, grab.State{Phase: grab.PhaseProvider})
 	h.mustAsk(key, grab.Event{Kind: grab.EvRecover})
 	return h.next(grab.ChildPoll)
@@ -73,10 +77,28 @@ func TestAPendingProviderFailsAtItsLimit(t *testing.T) {
 		seen  pollSeen
 		limit time.Duration
 		fail  grab.FailEffect
+		id    string
 	}{
-		"provider":   {pollSeen{pending: grab.PendingProvider}, 6 * time.Hour, grab.FailEntry},
-		"dead":       {pollSeen{pending: grab.PendingProvider, dead: true}, 6 * time.Hour, grab.FailBadRelease},
-		"converting": {pollSeen{pending: grab.PendingConverting, dead: true}, 2 * time.Hour, grab.FailBadRelease},
+		"provider": {pollSeen{pending: grab.PendingProvider}, 6 * time.Hour, grab.FailEntry, "RD1"},
+		"dead": {
+			pollSeen{pending: grab.PendingProvider, dead: true},
+			6 * time.Hour,
+			grab.FailBadRelease,
+			"RD1",
+		},
+		"converting": {
+			pollSeen{pending: grab.PendingConverting, dead: true},
+			2 * time.Hour,
+			grab.FailBadRelease,
+			"RD1",
+		},
+		"dead unnamed": {pollSeen{pending: grab.PendingProvider, dead: true}, 6 * time.Hour, grab.FailEntry, ""},
+		"converting unnamed": {
+			pollSeen{pending: grab.PendingConverting, dead: true},
+			2 * time.Hour,
+			grab.FailEntry,
+			"0",
+		},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -84,7 +106,7 @@ func TestAPendingProviderFailsAtItsLimit(t *testing.T) {
 			store := newTestStore(t)
 			synctest.Test(t, func(t *testing.T) {
 				h := deadlineHarness(t, store, 0)
-				run := h.providerGrab()
+				run := h.providerGrabAs(c.id)
 				run.reply <- entryMsg{seen: &c.seen}
 				h.mustBe("a", grab.PhaseProvider)
 
