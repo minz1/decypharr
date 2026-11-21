@@ -187,14 +187,14 @@ func (b *ArticleBroker) Body(ctx context.Context, messageID string) ([]byte, err
 // Stat checks article availability, reusing any successful BODY observation.
 func (b *ArticleBroker) Stat(ctx context.Context, messageID string) (nntp.Answer, error) {
 	b.statRequests.Add(1)
-	if b.IsAvailable(messageID) {
+	if answer, ok := b.cachedStat(messageID); ok {
 		b.cacheHits.Add(1)
-		return nntp.AnswerFound, nil
+		return answer, nil
 	}
 
 	answer, shared, err := b.statFlights.Do(ctx, messageID, func(ctx context.Context) (nntp.Answer, error) {
-		if b.IsAvailable(messageID) {
-			return nntp.AnswerFound, nil
+		if answer, ok := b.cachedStat(messageID); ok {
+			return answer, nil
 		}
 		if err := b.acquire(ctx); err != nil {
 			return nntp.AnswerFailed, err
@@ -254,14 +254,14 @@ func (b *ArticleBroker) load(ctx context.Context, messageID string) (articleObse
 	if messageID == "" {
 		return articleObservation{}, fmt.Errorf("article message ID is empty")
 	}
-	if body, metadata, ok := b.cachedBody(messageID); ok {
+	if observation, ok := b.cachedObservation(messageID); ok {
 		b.cacheHits.Add(1)
-		return articleObservation{body: body, metadata: metadata, answer: nntp.AnswerFound}, nil
+		return observation, nil
 	}
 
 	observation, shared, err := b.bodyFlights.Do(ctx, messageID, func(ctx context.Context) (articleObservation, error) {
-		if body, metadata, ok := b.cachedBody(messageID); ok {
-			return articleObservation{body: body, metadata: metadata, answer: nntp.AnswerFound}, nil
+		if observation, ok := b.cachedObservation(messageID); ok {
+			return observation, nil
 		}
 		if err := b.acquire(ctx); err != nil {
 			return articleObservation{}, err
@@ -284,6 +284,21 @@ func (b *ArticleBroker) load(ctx context.Context, messageID string) (articleObse
 		b.sharedLoads.Add(1)
 	}
 	return observation, err
+}
+
+func (b *ArticleBroker) cachedStat(messageID string) (nntp.Answer, bool) {
+	if b.IsAvailable(messageID) {
+		return nntp.AnswerFound, true
+	}
+	return nntp.AnswerFailed, false
+}
+
+func (b *ArticleBroker) cachedObservation(messageID string) (articleObservation, bool) {
+	body, metadata, ok := b.cachedBody(messageID)
+	if !ok {
+		return articleObservation{}, false
+	}
+	return articleObservation{body: body, metadata: metadata, answer: nntp.AnswerFound}, true
 }
 
 func (b *ArticleBroker) cachedHeader(messageID string, maxSnippet int) (*nntp.YencMetadata, bool) {

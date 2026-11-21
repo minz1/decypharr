@@ -162,9 +162,9 @@ func TestZIPProofNeedsBothEnds(t *testing.T) {
 			err := p.probeContentAvailability(
 				t.Context(),
 				zipProbeGroup(files...),
-				func(_ context.Context, id string) (nntp.Answer, error) {
-					return answerFromError(row.dead[id]), row.dead[id]
-				},
+				statWith(func(_ context.Context, id string) error {
+					return row.dead[id]
+				}),
 				false,
 			)
 			if row.want == nil {
