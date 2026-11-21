@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -26,6 +25,7 @@ type linksProvider struct {
 	mu     sync.Mutex
 	calls  map[string]int
 	answer string
+	polled chan string
 }
 
 func (*linksProvider) Config() config.Debrid { return config.Debrid{Name: "realdebrid"} }
@@ -39,6 +39,10 @@ func (p *linksProvider) Poll(
 	p.calls[t.ID]++
 	first := p.calls[t.ID] == 1
 	p.mu.Unlock()
+	select {
+	case p.polled <- t.ID:
+	default:
+	}
 	if t.ID == p.answer && first {
 		return t, debridTypes.Observation{Phase: debridTypes.PhaseFinalizing, LinksPending: true}, nil
 	}
@@ -82,7 +86,7 @@ func TestGetTorrentsShowsTheDeadlinesTheEntryActorsDerive(t *testing.T) {
 	if err = db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	provider := &linksProvider{calls: map[string]int{}, answer: "t-answered"}
+	provider := &linksProvider{calls: map[string]int{}, answer: "t-answered", polled: make(chan string, 16)}
 	mgr := managertest.NewOn(t, store, manager.WithClients(map[string]debrid.Client{"realdebrid": provider}))
 	s := &Server{manager: mgr, config: store}
 
@@ -105,27 +109,30 @@ func TestGetTorrentsShowsTheDeadlinesTheEntryActorsDerive(t *testing.T) {
 		}
 		return out
 	}
-	ready := func(got map[string]map[string]any) bool {
-		return got["held"] != nil && got["answered"] != nil && got["answered"]["waiting_for"] == nil
+	seen := map[string]int{}
+	for seen["t-held"] < 1 || seen["t-answered"] < 2 {
+		select {
+		case id := <-provider.polled:
+			seen[id]++
+		case <-t.Context().Done():
+			t.Fatalf("polls %v never reached both grabs", seen)
+		}
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
-	defer cancel()
 	got := deadlines()
-	for ctx.Err() == nil && !ready(got) {
-		runtime.Gosched()
-		got = deadlines()
-	}
-	if !ready(got) {
-		t.Fatalf("deadlines %v never settled", got)
-	}
 	kind := grab.EvLinkWaitExpired.String()
-	if d := got["held"]; d["waiting_for"] != "links" || d["event"] != kind || d["due"] == "" {
+	if d := got["held"]; d["waiting_for"] != "links" || d["event"] != kind || !dueSet(d) {
 		t.Fatalf("held deadline %v, want waiting for links", d)
 	}
-	if d := got["answered"]; d["event"] != kind || d["due"] == "" {
+	if d := got["answered"]; d["event"] != kind || d["waiting_for"] != nil || !dueSet(d) {
 		t.Fatalf("answered deadline %v, want the links limit without waiting_for", d)
 	}
 	if d, listed := got["done"]; !listed || d != nil {
 		t.Fatalf("done deadline %v (%v), want none", d, got)
 	}
+}
+
+func dueSet(d map[string]any) bool {
+	raw, _ := d["due"].(string)
+	due, err := time.Parse(time.RFC3339, raw)
+	return err == nil && !due.IsZero()
 }

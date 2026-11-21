@@ -194,7 +194,7 @@ func (m *Manager) debridOrder() []string {
 	return order
 }
 
-// Option adjusts a Manager while it is built, before its queue is recovered.
+// Option adjusts a Manager right after its configured provider clients are built, before its queue is recovered.
 type Option func(*Manager)
 
 // WithClients adds provider clients to those the configuration builds.
