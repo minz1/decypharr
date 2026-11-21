@@ -220,8 +220,8 @@ linters:
           files:
             - "$all"
             - "!$test"
-            - "!**/internal/nntp/answer.go"
-            - "!**/internal/nntp/answertest/**"
+            - "!${base-path}/internal/nntp/answer.go"
+            - "!${base-path}/internal/nntp/answertest/**"
           deny:
             - pkg: github.com/sirrobot01/decypharr/internal/nntp/internal/answer
               desc: only internal/nntp/answer.go constructs NNTP answers
