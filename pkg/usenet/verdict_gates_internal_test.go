@@ -55,7 +55,7 @@ func TestVerdictOfGateErrorsIsNone(t *testing.T) {
 		Segments: []storage.NZBSegment{{Number: 1, MessageID: "<gone@nntpd>", Bytes: 1}},
 	}}
 
-	result, finishErr := u.finish(t.Context(), nzb)
+	result, finishErr := u.finish(t.Context(), nzb, u.gateSteps(t.Context(), nzb))
 	if !errors.Is(finishErr, customerror.ErrUsenetSegmentMissing) {
 		t.Fatalf("finish = %v, want the availability gate to report missing segments", finishErr)
 	}
@@ -204,7 +204,7 @@ func (tc gateProducerCase) run(t *testing.T) {
 	if tc.viaCursor {
 		u.analyzer = nil
 	}
-	got, err := u.finish(ctx, nzb)
+	got, err := u.finish(ctx, nzb, u.gateSteps(ctx, nzb))
 	tc.check(t, got, err)
 	if tc.served != nil && tc.served.Load() == 0 {
 		t.Fatal("the fixture never served the empty body")
@@ -454,7 +454,7 @@ func TestFinishReportsCompletionWriteFailureAsNotMissing(t *testing.T) {
 	nzb := &storage.NZB{ID: "gate", Name: "Movie", Status: NZBStatusParsing}
 	blockMetaWrites(t, u.nzbStorage, nzb.ID)
 
-	got, err := u.finish(t.Context(), nzb)
+	got, err := u.finish(t.Context(), nzb, u.gateSteps(t.Context(), nzb))
 	if err == nil || !strings.Contains(err.Error(), "failed to mark NZB as completed") {
 		t.Fatalf("finish error = %v, want the completion write failure", err)
 	}
@@ -473,7 +473,7 @@ func TestFinishCompletesWhenBothGatesPass(t *testing.T) {
 	srv.AddArticle("<head@gate>", nntpd.Encode(payload, "Movie.mkv", 1, int64(len(payload)), 0))
 	nzb := gateNZB(t, u, gateFile(len(payload)))
 
-	got, err := u.finish(t.Context(), nzb)
+	got, err := u.finish(t.Context(), nzb, u.gateSteps(t.Context(), nzb))
 	if err != nil || got != (ProcessResult{}) {
 		t.Fatalf("finish = %+v, %v, want a clean completion", got, err)
 	}

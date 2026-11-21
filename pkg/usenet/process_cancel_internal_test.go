@@ -117,7 +117,7 @@ func TestFinishLeavesCancelledNZBParsing(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	if _, finishErr := u.finish(ctx, nzb); !errors.Is(finishErr, context.Canceled) {
+	if _, finishErr := u.finish(ctx, nzb, u.gateSteps(ctx, nzb)); !errors.Is(finishErr, context.Canceled) {
 		t.Fatalf("finish = %v, want context.Canceled", finishErr)
 	}
 	assertStillParsing(t, u, nzb, source)
@@ -136,7 +136,7 @@ func TestFinishFailsNZBThatTimedOut(t *testing.T) {
 	ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
 	defer cancel()
 
-	if _, finishErr := u.finish(ctx, nzb); !errors.Is(finishErr, context.DeadlineExceeded) {
+	if _, finishErr := u.finish(ctx, nzb, u.gateSteps(ctx, nzb)); !errors.Is(finishErr, context.DeadlineExceeded) {
 		t.Fatalf("finish = %v, want context.DeadlineExceeded", finishErr)
 	}
 	header, err := u.nzbStorage.GetNZBHeader(nzb.ID)

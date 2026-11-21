@@ -839,7 +839,7 @@ func (u *Usenet) Process(
 		u.failUnlessCancelled(ctx, nzb, err)
 		return nzb, ProcessResult{Outcome: outcome}, fmt.Errorf("failed to process NZB archives: %w", err)
 	}
-	if finished, finishErr := u.finish(ctx, updatedNZB); finishErr != nil {
+	if finished, finishErr := u.finish(ctx, updatedNZB, u.gateSteps(ctx, updatedNZB)); finishErr != nil {
 		return updatedNZB, finished, finishErr
 	}
 
@@ -851,14 +851,20 @@ func (u *Usenet) Process(
 	return updatedNZB, ProcessResult{}, nil
 }
 
-func (u *Usenet) finish(ctx context.Context, nzb *storage.NZB) (ProcessResult, error) {
-	for _, step := range []struct {
-		name string
-		run  func() gate.Result
-	}{
+type gateStep struct {
+	name string
+	run  func() gate.Result
+}
+
+func (u *Usenet) gateSteps(ctx context.Context, nzb *storage.NZB) []gateStep {
+	return []gateStep{
 		{"availability check", func() gate.Result { return u.checkNZBAvailability(ctx, nzb) }},
 		{"content verification", func() gate.Result { return u.verifyNZBContent(ctx, nzb) }},
-	} {
+	}
+}
+
+func (u *Usenet) finish(ctx context.Context, nzb *storage.NZB, steps []gateStep) (ProcessResult, error) {
+	for _, step := range steps {
 		result, cause, failure := gateOutcome(step.name, step.run())
 		if failure != nil {
 			u.failUnlessCancelled(ctx, nzb, cause)

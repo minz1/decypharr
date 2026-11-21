@@ -578,7 +578,8 @@ func TestPinFinishBoundary(t *testing.T) {
 				rig.u.analyzer = nil
 			}
 			nzb := gateNZB(t, rig.u, gateFile(len(tc.payload)))
-			got, err := rig.u.finish(pinContext(t, tc.ended, tc.expired), nzb)
+			ctx := pinContext(t, tc.ended, tc.expired)
+			got, err := rig.u.finish(ctx, nzb, rig.u.gateSteps(ctx, nzb))
 			if got != tc.result {
 				t.Errorf("ProcessResult = %+v, want %+v", got, tc.result)
 			}
@@ -883,7 +884,7 @@ func TestDeviationReaderErrorWrappingASentinelIsUnchecked(t *testing.T) {
 		t.Fatalf("verifyFileHead = %v, %v, want unchecked keeping the reader error", r.Kind(), r.Err())
 	}
 
-	got, err := rig.u.finish(t.Context(), nzb)
+	got, err := rig.u.finish(t.Context(), nzb, rig.u.gateSteps(t.Context(), nzb))
 	if err != nil || got != (ProcessResult{}) {
 		t.Fatalf("finish = %+v, %v, want the NZB completed (HEAD failed it)", got, err)
 	}
