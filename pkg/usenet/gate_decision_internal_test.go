@@ -3,6 +3,7 @@ package usenet
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/sirrobot01/decypharr/internal/customerror"
@@ -175,9 +176,61 @@ func TestCheckWholeFileMapsThroughTheRepairError(t *testing.T) {
 			t.Parallel()
 			rig := newPinRig(t, tc.reply)
 			storeSegmented(t, rig, 3, func(int) bool { return tc.served })
-			if err := rig.u.CheckWholeFile(t.Context(), "gate", "Movie.mkv"); !errors.Is(err, tc.want) {
+			if err := rig.u.CheckWholeFile(t.Context(), "gate", "Movie.mkv"); !bareSentinel(err, tc.want) {
 				t.Fatalf("CheckWholeFile = %v, want %v", err, tc.want)
 			}
 		})
 	}
+}
+
+func twoFileNZB() *storage.NZB {
+	first, second := gateFile(len(mkvPayload())), gateFile(len(mkvPayload()))
+	first.Name, second.Name = "First.mkv", "Second.mkv"
+	return &storage.NZB{ID: "gate", Files: []storage.NZBFile{first, second}}
+}
+
+func TestFoldsReportTheLaterFilesVerdict(t *testing.T) {
+	t.Parallel()
+	cause := errors.New("cause")
+	for _, tc := range []struct {
+		name   string
+		fold   func(u *Usenet, nzb *storage.NZB, check func(*storage.NZBFile) gate.Result) gate.Result
+		first  gate.Result
+		second gate.Result
+		want   gate.Kind
+	}{
+		{"availability: pass then missing", foldAvailabilityOf, gate.Pass(), gate.Missing(cause), gate.KindMissing},
+		{"availability: unchecked then missing", foldAvailabilityOf, gate.Unchecked(cause), gate.Missing(cause), gate.KindMissing},
+		{"content: pass then missing", foldContentOf, gate.Pass(), gate.Missing(cause), gate.KindMissing},
+		{"content: pass then failed", foldContentOf, gate.Pass(), gate.Failed(cause), gate.KindFailed},
+		{"content: unchecked then missing", foldContentOf, gate.Unchecked(cause), gate.Missing(cause), gate.KindMissing},
+		{"content: unchecked then failed", foldContentOf, gate.Unchecked(cause), gate.Failed(cause), gate.KindFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			u, _ := gateHarness(t, nil)
+			var seen []string
+			got := tc.fold(u, twoFileNZB(), func(file *storage.NZBFile) gate.Result {
+				seen = append(seen, file.Name)
+				if file.Name == "First.mkv" {
+					return tc.first
+				}
+				return tc.second
+			})
+			if got.Kind() != tc.want || !errors.Is(got.Err(), cause) {
+				t.Fatalf("fold = %v (%v), want %v", got.Kind(), got.Err(), tc.want)
+			}
+			if !slices.Equal(seen, []string{"First.mkv", "Second.mkv"}) {
+				t.Fatalf("checked %v, want both files in order", seen)
+			}
+		})
+	}
+}
+
+func foldAvailabilityOf(u *Usenet, nzb *storage.NZB, check func(*storage.NZBFile) gate.Result) gate.Result {
+	return u.foldAvailability(context.Background(), nzb, check)
+}
+
+func foldContentOf(u *Usenet, nzb *storage.NZB, check func(*storage.NZBFile) gate.Result) gate.Result {
+	return u.foldContent(context.Background(), nzb, check)
 }

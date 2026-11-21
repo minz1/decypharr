@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -44,7 +46,15 @@ func (w *warnSink) Write(p []byte) (int, error) {
 func (w *warnSink) count(message string) int {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return strings.Count(w.buf.String(), message)
+	line := regexp.MustCompile(`(?m)\] ` + regexp.QuoteMeta(message) + `( [a-z_]+=|$)`)
+	return len(line.FindAllString(w.buf.String(), -1))
+}
+
+func (w *warnSink) has(field string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	out := w.buf.String()
+	return strings.Contains(out, " "+field+" ") || strings.Contains(out, " "+field+"\n")
 }
 
 func (w *warnSink) total() int {
@@ -165,6 +175,13 @@ func mkvHead16() []byte { return append([]byte{0x1A, 0x45, 0xDF, 0xA3}, make([]b
 func junkHead16() []byte { return []byte("not a container!") }
 
 func sentinelText(err error) string { return err.Error() }
+
+func bareSentinel(err, sentinel error) bool {
+	if sentinel == nil {
+		return err == nil
+	}
+	return errors.Is(err, sentinel) && reflect.TypeOf(err) == reflect.TypeOf(sentinel)
+}
 
 func segmentedFile(n int) storage.NZBFile {
 	file := storage.NZBFile{Name: "Movie.mkv", FileType: storage.NZBFileTypeMedia, Size: int64(n) * 5}
@@ -297,12 +314,14 @@ func TestPinStatAvailabilityMixedAndLogs(t *testing.T) {
 		serve bool
 		want  kindPin
 		warns map[string]int
+		since []string
 	}{
 		{
 			name: "one definitive miss and one connection error", reply: mixed,
 			ids:   []string{"<s1@gate>", "<s2@gate>"},
 			want:  kindPin{kind: gate.KindMissing, is: customerror.ErrUsenetSegmentMissing},
 			warns: map[string]int{warnFileUnavailable: 1},
+			since: []string{"error_count=1", "missing_segments=1", "available_segments=0", "sampled_segments=2"},
 		},
 		{
 			name: "connection errors only are silent", reply: statDownReply,
@@ -322,10 +341,15 @@ func TestPinStatAvailabilityMixedAndLogs(t *testing.T) {
 			}
 			r := rig.u.statAvailability(t.Context(), "Movie.mkv", tc.ids)
 			tc.want.check(t, r)
-			if tc.want.is != nil && !errors.Is(r.Err(), tc.want.is) {
+			if tc.want.is != nil && !bareSentinel(r.Err(), tc.want.is) {
 				t.Errorf("error = %v, want the bare sentinel", r.Err())
 			}
 			rig.assertWarns(t, tc.warns)
+			for _, field := range tc.since {
+				if !rig.warns.has(field) {
+					t.Errorf("warning lacks field %s", field)
+				}
+			}
 		})
 	}
 }
@@ -707,7 +731,7 @@ func TestPinCheckFileAndWholeFile(t *testing.T) {
 			rig := newPinRig(t, tc.reply)
 			storeSegmented(t, rig, total, tc.served)
 			err := rig.u.CheckFile(t.Context(), "gate", "Movie.mkv")
-			if !errors.Is(err, tc.wantCheck) {
+			if !bareSentinel(err, tc.wantCheck) {
 				t.Errorf("CheckFile = %v, want %v", err, tc.wantCheck)
 			}
 			if got := rig.probes.sorted("STAT"); !slices.Equal(got, tc.checkIDs) {
@@ -716,7 +740,7 @@ func TestPinCheckFileAndWholeFile(t *testing.T) {
 			rig2 := newPinRig(t, tc.reply)
 			storeSegmented(t, rig2, total, tc.served)
 			err = rig2.u.CheckWholeFile(t.Context(), "gate", "Movie.mkv")
-			if !errors.Is(err, tc.wantWhole) {
+			if !bareSentinel(err, tc.wantWhole) {
 				t.Errorf("CheckWholeFile = %v, want %v", err, tc.wantWhole)
 			}
 			got := rig2.probes.sorted("STAT")
@@ -742,6 +766,7 @@ func (s observedSource) IsAvailable(messageID string) bool { return s.observed[m
 func TestPinFilterUnobserved(t *testing.T) {
 	t.Parallel()
 	setup := func(t *testing.T) *pinRig {
+		t.Helper()
 		rig := newPinRig(t, nil)
 		rig.u.analyzer = parser.NewParserWithSource(
 			observedSource{observed: map[string]bool{"<s2@gate>": true}}, 1, zerolog.Nop())
@@ -762,7 +787,7 @@ func TestPinFilterUnobserved(t *testing.T) {
 		t.Parallel()
 		rig := setup(t)
 		err := rig.u.CheckWholeFile(t.Context(), "gate", "Movie.mkv")
-		if !errors.Is(err, customerror.ErrUsenetSegmentMissing) {
+		if !bareSentinel(err, customerror.ErrUsenetSegmentMissing) {
 			t.Fatalf("CheckWholeFile = %v, want the missing sentinel", err)
 		}
 		if got, want := rig.probes.sorted("STAT"), []string{"<s1@gate>", "<s2@gate>"}; !slices.Equal(got, want) {
