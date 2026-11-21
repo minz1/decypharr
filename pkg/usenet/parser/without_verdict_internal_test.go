@@ -21,8 +21,8 @@ func TestWithoutVerdictZeroesTheOutcomeAndSharesTheRest(t *testing.T) {
 	if kept == parsed || kept.NZB != parsed.NZB || kept.Groups["a"] != groups["a"] {
 		t.Fatal("WithoutVerdict must copy the Parsed and share its NZB and Groups")
 	}
-	if parsed.Outcome == (Outcome{}) {
-		t.Fatal("the original Parsed lost its outcome")
+	if want := (Outcome{Verdict: VerdictNone, Rule: outcomeRuleErrorChain}); parsed.Outcome != want {
+		t.Fatalf("original Outcome = %+v, want %+v", parsed.Outcome, want)
 	}
 	kept.Groups["b"] = &FileGroup{}
 	if parsed.Groups["b"] == nil {
