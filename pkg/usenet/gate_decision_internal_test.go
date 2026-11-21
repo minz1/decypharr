@@ -21,7 +21,7 @@ func TestFoldsPassKindsThroughUnchanged(t *testing.T) {
 	cause := errors.New("cause")
 	for _, tc := range []struct {
 		name  string
-		fold  func(u *Usenet, check func(*storage.NZBFile) gate.Result) gate.Result
+		fold  func(ctx context.Context, u *Usenet, check func(*storage.NZBFile) gate.Result) gate.Result
 		given gate.Result
 		want  gate.Kind
 	}{
@@ -34,7 +34,7 @@ func TestFoldsPassKindsThroughUnchanged(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			u, _ := gateHarness(t, nil)
-			got := tc.fold(u, func(*storage.NZBFile) gate.Result { return tc.given })
+			got := tc.fold(t.Context(), u, func(*storage.NZBFile) gate.Result { return tc.given })
 			if got.Kind() != tc.want || !errors.Is(got.Err(), tc.given.Err()) {
 				t.Fatalf("fold = %v (%v), want %v unchanged", got.Kind(), got.Err(), tc.want)
 			}
@@ -42,12 +42,12 @@ func TestFoldsPassKindsThroughUnchanged(t *testing.T) {
 	}
 }
 
-func availabilityFold(u *Usenet, check func(*storage.NZBFile) gate.Result) gate.Result {
-	return u.foldAvailability(context.Background(), oneFileNZB(), check)
+func availabilityFold(ctx context.Context, u *Usenet, check func(*storage.NZBFile) gate.Result) gate.Result {
+	return u.foldAvailability(ctx, oneFileNZB(), check)
 }
 
-func contentFold(u *Usenet, check func(*storage.NZBFile) gate.Result) gate.Result {
-	return u.foldContent(context.Background(), oneFileNZB(), check)
+func contentFold(ctx context.Context, u *Usenet, check func(*storage.NZBFile) gate.Result) gate.Result {
+	return u.foldContent(ctx, oneFileNZB(), check)
 }
 
 func TestZeroResultFromAFoldFailsFinishClosed(t *testing.T) {
@@ -56,7 +56,7 @@ func TestZeroResultFromAFoldFailsFinishClosed(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		gate string
-		fold func(u *Usenet, check func(*storage.NZBFile) gate.Result) gate.Result
+		fold func(ctx context.Context, u *Usenet, check func(*storage.NZBFile) gate.Result) gate.Result
 		want string
 	}{
 		{"availability", "availability check", availabilityFold, "availability check returned no result"},
@@ -65,7 +65,7 @@ func TestZeroResultFromAFoldFailsFinishClosed(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			u, _ := gateHarness(t, nil)
-			folded := tc.fold(u, func(*storage.NZBFile) gate.Result { return zero })
+			folded := tc.fold(t.Context(), u, func(*storage.NZBFile) gate.Result { return zero })
 			result, cause, failure := gateOutcome(tc.gate, folded)
 			if failure == nil || failure.Error() != tc.want {
 				t.Fatalf("failure = %v, want %q", failure, tc.want)
@@ -194,7 +194,7 @@ func TestFoldsReportTheLaterFilesVerdict(t *testing.T) {
 	cause := errors.New("cause")
 	for _, tc := range []struct {
 		name   string
-		fold   func(u *Usenet, nzb *storage.NZB, check func(*storage.NZBFile) gate.Result) gate.Result
+		fold   func(ctx context.Context, u *Usenet, nzb *storage.NZB, check func(*storage.NZBFile) gate.Result) gate.Result
 		first  gate.Result
 		second gate.Result
 		want   gate.Kind
@@ -210,7 +210,7 @@ func TestFoldsReportTheLaterFilesVerdict(t *testing.T) {
 			t.Parallel()
 			u, _ := gateHarness(t, nil)
 			var seen []string
-			got := tc.fold(u, twoFileNZB(), func(file *storage.NZBFile) gate.Result {
+			got := tc.fold(t.Context(), u, twoFileNZB(), func(file *storage.NZBFile) gate.Result {
 				seen = append(seen, file.Name)
 				if file.Name == "First.mkv" {
 					return tc.first
@@ -227,10 +227,20 @@ func TestFoldsReportTheLaterFilesVerdict(t *testing.T) {
 	}
 }
 
-func foldAvailabilityOf(u *Usenet, nzb *storage.NZB, check func(*storage.NZBFile) gate.Result) gate.Result {
-	return u.foldAvailability(context.Background(), nzb, check)
+func foldAvailabilityOf(
+	ctx context.Context,
+	u *Usenet,
+	nzb *storage.NZB,
+	check func(*storage.NZBFile) gate.Result,
+) gate.Result {
+	return u.foldAvailability(ctx, nzb, check)
 }
 
-func foldContentOf(u *Usenet, nzb *storage.NZB, check func(*storage.NZBFile) gate.Result) gate.Result {
-	return u.foldContent(context.Background(), nzb, check)
+func foldContentOf(
+	ctx context.Context,
+	u *Usenet,
+	nzb *storage.NZB,
+	check func(*storage.NZBFile) gate.Result,
+) gate.Result {
+	return u.foldContent(ctx, nzb, check)
 }

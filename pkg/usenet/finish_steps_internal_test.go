@@ -225,3 +225,15 @@ func TestImportAvailabilitySamplesTheConfiguredPercent(t *testing.T) {
 		t.Fatalf("stat ids = %v, want %v", got, want)
 	}
 }
+
+func TestWarnSinkCountRejectsFieldLikeSuffixes(t *testing.T) {
+	t.Parallel()
+	sink := &warnSink{}
+	lines := "2026 | WARN | x] msg file=a.mkv\n2026 | WARN | x] msg\n2026 | WARN | x] msg retrying=true\n2026 | WARN | x] msg again\n"
+	if _, err := sink.Write([]byte(lines)); err != nil {
+		t.Fatal(err)
+	}
+	if got := sink.count("msg"); got != 2 {
+		t.Fatalf("count = %d, want 2 (plain and known-field lines only)", got)
+	}
+}

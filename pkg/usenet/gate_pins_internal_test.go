@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -46,7 +45,7 @@ func (w *warnSink) Write(p []byte) (int, error) {
 func (w *warnSink) count(message string) int {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	line := regexp.MustCompile(`(?m)\] ` + regexp.QuoteMeta(message) + `( [a-z_]+=|$)`)
+	line := regexp.MustCompile(`(?m)\] ` + regexp.QuoteMeta(message) + warnFieldSuffix)
 	return len(line.FindAllString(w.buf.String(), -1))
 }
 
@@ -166,6 +165,8 @@ func bodyGoneReply(command, _ string) string {
 
 const pinSegments = 20
 
+const warnFieldSuffix = `( (?:error|nzb_id|file|sampled_segments|available_segments|missing_segments|error_count)=|$)`
+
 func junkPayload() []byte { return []byte(strings.Repeat("not a media container ", 40)) }
 
 func mkvPayload() []byte { return append([]byte{0x1A, 0x45, 0xDF, 0xA3}, make([]byte, 600)...) }
@@ -180,7 +181,7 @@ func bareSentinel(err, sentinel error) bool {
 	if sentinel == nil {
 		return err == nil
 	}
-	return errors.Is(err, sentinel) && reflect.TypeOf(err) == reflect.TypeOf(sentinel)
+	return any(err) == any(sentinel)
 }
 
 func segmentedFile(n int) storage.NZBFile {
