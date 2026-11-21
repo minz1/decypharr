@@ -202,17 +202,15 @@ func (p *NZBParser) Parse(
 	ctx context.Context,
 	filename string,
 	content []byte,
-) (*storage.NZB, map[string]*FileGroup, error) {
-	var (
-		nzb    *storage.NZB
-		groups map[string]*FileGroup
-	)
+) (*Parsed, error) {
+	var parsed Parsed
 	err := p.recoverPanic("parse", filename, func() error {
 		var parseErr error
-		nzb, groups, parseErr = p.parse(ctx, filename, content)
+		parsed.NZB, parsed.Groups, parseErr = p.parse(ctx, filename, content)
 		return parseErr
 	})
-	return nzb, groups, err
+	parsed.Outcome = outcomeOf(err)
+	return &parsed, err
 }
 
 func (p *NZBParser) parse(
@@ -355,23 +353,23 @@ type groupStat struct {
 // Process extracts every file group of a parsed NZB into streamable files.
 func (p *NZBParser) Process(
 	ctx context.Context,
-	nzb *storage.NZB,
-	groups map[string]*FileGroup,
-) (*storage.NZB, error) {
+	parsed *Parsed,
+) (*storage.NZB, Outcome, error) {
 	var result *storage.NZB
-	err := p.recoverPanic("process", nzb.Name, func() error {
+	err := p.recoverPanic("process", parsed.NZB.Name, func() error {
 		var processErr error
-		result, processErr = p.process(ctx, nzb, groups)
+		result, processErr = p.process(ctx, parsed.NZB, parsed.Groups)
 		return processErr
 	})
 	if err != nil {
-		for _, group := range groups {
+		for _, group := range parsed.Groups {
 			if group != nil && group.proofDoubt {
-				return result, &proofWithheldError{err: err}
+				err = &proofWithheldError{err: err}
+				break
 			}
 		}
 	}
-	return result, err
+	return result, outcomeOf(err), err
 }
 
 func (p *NZBParser) process(

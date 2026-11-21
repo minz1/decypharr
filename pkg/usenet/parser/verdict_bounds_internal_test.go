@@ -29,7 +29,7 @@ func TestSizeFilterWithholdsProof(t *testing.T) {
 	holes := func(t *testing.T, filter func(string, int64) error) Verdict {
 		t.Helper()
 		p := NewParserWithSource(scriptSource{header: healthyHeader}, 2, zerolog.Nop()).WithFileFilter(filter)
-		nzb, groups, err := p.Parse(
+		parsed, err := p.Parse(
 			t.Context(),
 			"release.nzb",
 			[]byte(nzbOf(fileXML(1, 1, "preview.mkv", "1:a@x", "3:c@x"))),
@@ -37,7 +37,7 @@ func TestSizeFilterWithholdsProof(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Parse: %v", err)
 		}
-		_, err = p.Process(t.Context(), nzb, groups)
+		_, _, err = p.Process(t.Context(), parsed)
 		if err == nil || !strings.Contains(err.Error(), "not contiguous") {
 			t.Fatalf("Process error = %v, want a hole", err)
 		}
@@ -316,7 +316,7 @@ func TestFilterErrorIsNotProof(t *testing.T) {
 		return nil
 	}
 	p := NewParserWithSource(scriptSource{header: healthyHeader}, 2, zerolog.Nop()).WithFileFilter(filter)
-	nzb, groups, err := p.Parse(
+	parsed, err := p.Parse(
 		t.Context(),
 		"release.nzb",
 		[]byte(nzbOf(fileXML(1, 1, "movie.mkv", "1:a@x", "2:b@x", "3:c@x"))),
@@ -324,7 +324,7 @@ func TestFilterErrorIsNotProof(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	_, err = p.Process(t.Context(), nzb, groups)
+	_, _, err = p.Process(t.Context(), parsed)
 	if err == nil || !strings.Contains(err.Error(), "skipped") || VerdictOf(err) != VerdictNone {
 		t.Fatalf("error = %v verdict %v, want a skipped file with no verdict", err, VerdictOf(err))
 	}

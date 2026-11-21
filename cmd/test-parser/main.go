@@ -108,13 +108,13 @@ func parseAndProcess(w io.Writer, log zerolog.Logger, nzbFile string, content []
 	}
 	p := parser.NewParser(client, maxConcurrent, log).WithFileFilter(cfg.ValidateFileAllowed)
 	parseStarted := time.Now()
-	nzb, groups, err := p.Parse(context.Background(), nzbFile, content)
+	parsed, err := p.Parse(context.Background(), nzbFile, content)
 	if err != nil {
 		return fmt.Errorf("parse NZB: %w", err)
 	}
 	parseElapsed := time.Since(parseStarted)
 	processStarted := time.Now()
-	nzb, err = p.Process(context.Background(), nzb, groups)
+	nzb, _, err := p.Process(context.Background(), parsed)
 	if err != nil {
 		return fmt.Errorf("process NZB: %w", err)
 	}

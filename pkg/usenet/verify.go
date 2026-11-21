@@ -77,23 +77,28 @@ func headSignatureOK(head []byte) bool {
 // UsenetSegmentMissingError when the head article is gone, and the raw error
 // for connection-level failures (callers treat those as "couldn't check").
 func (u *Usenet) VerifyFileHead(ctx context.Context, file *storage.NZBFile) error {
+	_, err := u.verifyFileHead(ctx, file)
+	return err
+}
+
+func (u *Usenet) verifyFileHead(ctx context.Context, file *storage.NZBFile) (bool, error) {
 	if file.Size > 0 && file.Size < verifyHeadBytes {
-		return nil // too small to classify; not worth failing a grab over
+		return false, nil // too small to classify; not worth failing a grab over
 	}
 	if u.analyzer != nil {
-		if handled, err := u.verifyHeadFromAnalyzer(ctx, file); handled {
-			return err
+		if handled, missing, err := u.verifyHeadFromAnalyzer(ctx, file); handled {
+			return missing, err
 		}
 	}
 	entry, err := u.createEntry(file, 0, RetentionWindow)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer entry.cleanupOneShot(ctx)
 
 	readerAt, _, err := entry.getOrCreateReader()
 	if err != nil {
-		return err
+		return false, err
 	}
 	cursor := readerAt.OpenCursor()
 	defer cursor.Close()
@@ -103,7 +108,7 @@ func (u *Usenet) VerifyFileHead(ctx context.Context, file *storage.NZBFile) erro
 	if err != nil && n < minHeadSignatureBytes {
 		return classifyHeadReadError(file.Name, err)
 	}
-	return checkHeadSignature(file.Name, head[:n])
+	return false, checkHeadSignature(file.Name, head[:n])
 }
 
 // minHeadSignatureBytes is the shortest head headSignatureOK can classify.
@@ -112,15 +117,16 @@ const minHeadSignatureBytes = 16
 // verifyHeadFromAnalyzer checks the head through the analyzer's shared
 // article cache. handled is false when the file needs the full serving reader
 // (encrypted or compressed members).
-func (u *Usenet) verifyHeadFromAnalyzer(ctx context.Context, file *storage.NZBFile) (bool, error) {
+func (u *Usenet) verifyHeadFromAnalyzer(ctx context.Context, file *storage.NZBFile) (bool, bool, error) {
 	head, err := u.analyzer.ReadFilePrefix(ctx, file, verifyHeadBytes)
 	switch {
 	case err == nil:
-		return true, checkHeadSignature(file.Name, head)
+		return true, false, checkHeadSignature(file.Name, head)
 	case errors.Is(err, parser.ErrPrefixReadUnsupported):
-		return false, nil
+		return false, false, nil
 	default:
-		return true, classifyHeadReadError(file.Name, err)
+		missing, classified := classifyHeadReadError(file.Name, err)
+		return true, missing, classified
 	}
 }
 
@@ -137,11 +143,11 @@ func checkHeadSignature(name string, head []byte) error {
 }
 
 // classifyHeadReadError maps a missing head article to UsenetSegmentMissingError.
-func classifyHeadReadError(name string, err error) error {
+func classifyHeadReadError(name string, err error) (bool, error) {
 	if nntp.IsArticleNotFoundError(err) {
-		return fmt.Errorf("head article of %q missing: %w", name, customerror.ErrUsenetSegmentMissing)
+		return true, fmt.Errorf("head article of %q missing: %w", name, customerror.ErrUsenetSegmentMissing)
 	}
-	return err
+	return false, err
 }
 
 // VerifyFile head-verifies one stored file of a completed NZB. Non-media
@@ -162,7 +168,7 @@ func (u *Usenet) VerifyFile(ctx context.Context, nzoID, filename string) error {
 // container signature, head article missing) fail the NZB so the arr grabs a
 // replacement release. Connection-level errors are non-fatal, matching
 // checkNZBAvailability — a provider hiccup must not fail an import.
-func (u *Usenet) verifyNZBContent(ctx context.Context, nzb *storage.NZB) error {
+func (u *Usenet) verifyNZBContent(ctx context.Context, nzb *storage.NZB) (bool, error) {
 	for i := range nzb.Files {
 		file := &nzb.Files[i]
 		if file.IsDeleted || len(file.Segments) == 0 || !utils.IsMediaFile(file.Name) {
@@ -173,10 +179,10 @@ func (u *Usenet) verifyNZBContent(ctx context.Context, nzb *storage.NZB) error {
 		}
 		select {
 		case <-ctx.Done():
-			return nil // cancelled/timed out: not a content failure
+			return false, nil // cancelled/timed out: not a content failure
 		default:
 		}
-		err := u.VerifyFileHead(ctx, file)
+		missing, err := u.verifyFileHead(ctx, file)
 		if err == nil {
 			continue
 		}
@@ -187,7 +193,7 @@ func (u *Usenet) verifyNZBContent(ctx context.Context, nzb *storage.NZB) error {
 				Str("nzb_id", nzb.ID).
 				Str("file", file.Name).
 				Msg("Content verification failed; failing NZB")
-			return err
+			return missing, err
 		}
 		u.logger.Warn().
 			Err(err).
@@ -195,5 +201,5 @@ func (u *Usenet) verifyNZBContent(ctx context.Context, nzb *storage.NZB) error {
 			Str("file", file.Name).
 			Msg("Non-fatal error during content verification, ignoring")
 	}
-	return nil
+	return false, nil
 }

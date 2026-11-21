@@ -76,7 +76,7 @@ func nzbOf(files ...string) string {
 
 func parseVerdict(t *testing.T, p *NZBParser, nzb string) (Verdict, error) {
 	t.Helper()
-	_, _, err := p.Parse(t.Context(), "release.nzb", []byte(nzb))
+	_, err := p.Parse(t.Context(), "release.nzb", []byte(nzb))
 	return VerdictOf(err), err
 }
 
@@ -387,11 +387,11 @@ func TestDoubtCarriesIntoProcess(t *testing.T) {
 				}
 			}}
 			p := NewParserWithSource(source, 2, zerolog.Nop())
-			nzb, groups, err := p.Parse(t.Context(), "release.nzb", []byte(tc.nzb))
+			parsed, err := p.Parse(t.Context(), "release.nzb", []byte(tc.nzb))
 			if err != nil {
 				t.Fatalf("Parse: %v", err)
 			}
-			_, err = p.Process(t.Context(), nzb, groups)
+			_, _, err = p.Process(t.Context(), parsed)
 			if err == nil || VerdictOf(err) != tc.want {
 				t.Fatalf("Process error = %v verdict %v, want verdict %v", err, VerdictOf(err), tc.want)
 			}
@@ -478,11 +478,11 @@ func TestRefusedNamesWithholdProof(t *testing.T) {
 		t.Helper()
 		passing := scriptSource{header: provenHeaders}
 		p := NewParserWithSource(passing, 2, zerolog.Nop()).WithFileFilter(refuseSamples)
-		nzb, groups, err := p.Parse(t.Context(), nzbName, []byte(nzbOf(fileXML(1, 1, "movie.mkv", "1:a@x", "2:b@x"))))
+		parsed, err := p.Parse(t.Context(), nzbName, []byte(nzbOf(fileXML(1, 1, "movie.mkv", "1:a@x", "2:b@x"))))
 		if err != nil {
 			t.Fatalf("Parse: %v", err)
 		}
-		_, err = p.Process(t.Context(), nzb, groups)
+		_, _, err = p.Process(t.Context(), parsed)
 		if err == nil {
 			t.Fatal("Process succeeded over missing headers")
 		}
@@ -742,11 +742,11 @@ func TestHolesInRefusedSampleAreWithheld(t *testing.T) {
 			t.Parallel()
 			p := NewParserWithSource(source, 2, zerolog.Nop()).WithFileFilter(refuseSamples)
 			body := nzbOf(fileXML(1, 1, tc.file, "1:a@x", "3:c@x"))
-			nzb, groups, err := p.Parse(t.Context(), "release.nzb", []byte(body))
+			parsed, err := p.Parse(t.Context(), "release.nzb", []byte(body))
 			if err != nil {
 				t.Fatalf("Parse: %v", err)
 			}
-			_, err = p.Process(t.Context(), nzb, groups)
+			_, _, err = p.Process(t.Context(), parsed)
 			if err == nil || !strings.Contains(err.Error(), "not contiguous") || VerdictOf(err) != tc.want {
 				t.Fatalf("Process error = %v verdict %v, want a hole with verdict %v", err, VerdictOf(err), tc.want)
 			}
@@ -869,7 +869,7 @@ func TestSampleNZBNameWithholdsProof(t *testing.T) {
 				xml = append(xml, fileXML(i+1, len(row.files), name, fmt.Sprintf("1:f%d@x", i)))
 			}
 			p := NewParserWithSource(source, 2, zerolog.Nop()).WithFileFilter(filter)
-			_, _, err := p.Parse(t.Context(), row.nzbName, []byte(nzbOf(xml...)))
+			_, err := p.Parse(t.Context(), row.nzbName, []byte(nzbOf(xml...)))
 			if !errors.Is(err, customerror.ErrUsenetSegmentMissing) || VerdictOf(err) != row.want {
 				t.Fatalf("error = %v verdict %v, want %v", err, VerdictOf(err), row.want)
 			}

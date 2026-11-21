@@ -15,6 +15,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/nntp"
 	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/storage"
+	"github.com/sirrobot01/decypharr/pkg/usenet"
 	"github.com/sirrobot01/decypharr/pkg/usenet/parser"
 )
 
@@ -88,7 +89,7 @@ func TestParseFailCause(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			if got := causeManager().parseFailCause(c.err, c.content); got != c.want {
+			if got := causeManager().parseFailCause(parser.Outcome{Verdict: parser.VerdictOf(c.err)}, c.content); got != c.want {
 				t.Errorf("cause %q, want %q", got, c.want)
 			}
 		})
@@ -96,8 +97,8 @@ func TestParseFailCause(t *testing.T) {
 }
 
 func parseReturning(err error) parseFunc {
-	return func(context.Context, string, string, []byte, string) (*storage.NZB, map[string]*parser.FileGroup, error) {
-		return nil, nil, err
+	return func(context.Context, string, string, []byte, string) (*parser.Parsed, error) {
+		return &parser.Parsed{Outcome: parser.Outcome{Verdict: parser.VerdictOf(err)}}, err
 	}
 }
 
@@ -116,15 +117,14 @@ func TestParseChildClassifiesAProvenMiss(t *testing.T) {
 
 func TestParseChildClassifiesHolesAtProcess(t *testing.T) {
 	t.Parallel()
-	m, call := newParseChildCallWith(t, func(context.Context, string, string, []byte, string) (
-		*storage.NZB, map[string]*parser.FileGroup, error,
-	) {
-		return &storage.NZB{ID: "nzb-1", Name: "Show.S01"}, parsedGroups(), nil
+	m, call := newParseChildCallWith(t, func(context.Context, string, string, []byte, string) (*parser.Parsed, error) {
+		return &parser.Parsed{NZB: &storage.NZB{ID: "nzb-1", Name: "Show.S01"}, Groups: parsedGroups()}, nil
 	}, oneFile(48*time.Hour))
 	m.pruneNow = causeNow
 	m.usenetTimeout = time.Minute
-	m.processNZBFunc = func(context.Context, *storage.NZB, map[string]*parser.FileGroup) (*storage.NZB, error) {
-		return nil, fmt.Errorf("analyze: %w", holes())
+	m.processNZBFunc = func(context.Context, *parser.Parsed) (*storage.NZB, usenet.ProcessResult, error) {
+		result := usenet.ProcessResult{Outcome: parser.Outcome{Verdict: parser.VerdictOf(holes())}}
+		return nil, result, fmt.Errorf("analyze: %w", holes())
 	}
 
 	msg := m.parseChild(t.Context(), call)
@@ -138,17 +138,19 @@ func TestParseChildClassifiesHolesAtProcess(t *testing.T) {
 func TestParseChildLeavesAProcessDeadlineRaw(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
-		m, call := newParseChildCallWith(t, func(context.Context, string, string, []byte, string) (
-			*storage.NZB, map[string]*parser.FileGroup, error,
-		) {
-			return &storage.NZB{ID: "nzb-1", Name: "Show.S01"}, parsedGroups(), nil
-		}, oneFile(48*time.Hour))
+		m, call := newParseChildCallWith(
+			t,
+			func(context.Context, string, string, []byte, string) (*parser.Parsed, error) {
+				return &parser.Parsed{NZB: &storage.NZB{ID: "nzb-1", Name: "Show.S01"}, Groups: parsedGroups()}, nil
+			},
+			oneFile(48*time.Hour),
+		)
 		m.pruneNow = causeNow
 		m.usenetTimeout = time.Minute
-		m.processNZBFunc = func(ctx context.Context, _ *storage.NZB, _ map[string]*parser.FileGroup) (*storage.NZB, error) {
+		m.processNZBFunc = func(ctx context.Context, _ *parser.Parsed) (*storage.NZB, usenet.ProcessResult, error) {
 			<-ctx.Done()
 			unproven := &nntp.Error{Type: nntp.ErrorTypeArticleNotFound}
-			return nil, errors.Join(fmt.Errorf("x: %w", ctx.Err()), unproven)
+			return nil, usenet.ProcessResult{}, errors.Join(fmt.Errorf("x: %w", ctx.Err()), unproven)
 		}
 
 		msg := m.parseChild(t.Context(), call)

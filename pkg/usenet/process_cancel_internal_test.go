@@ -83,7 +83,7 @@ func TestProcessCancelledMidParseLeavesNZBParsing(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	result := make(chan error, 1)
 	go func() {
-		_, err := u.Process(ctx, nzb, groups)
+		_, _, err := u.Process(ctx, &parser.Parsed{NZB: nzb, Groups: groups})
 		result <- err
 	}()
 	select {
@@ -117,7 +117,7 @@ func TestFinishLeavesCancelledNZBParsing(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	if finishErr := u.finish(ctx, nzb); !errors.Is(finishErr, context.Canceled) {
+	if _, finishErr := u.finish(ctx, nzb); !errors.Is(finishErr, context.Canceled) {
 		t.Fatalf("finish = %v, want context.Canceled", finishErr)
 	}
 	assertStillParsing(t, u, nzb, source)
@@ -136,7 +136,7 @@ func TestFinishFailsNZBThatTimedOut(t *testing.T) {
 	ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
 	defer cancel()
 
-	if finishErr := u.finish(ctx, nzb); !errors.Is(finishErr, context.DeadlineExceeded) {
+	if _, finishErr := u.finish(ctx, nzb); !errors.Is(finishErr, context.DeadlineExceeded) {
 		t.Fatalf("finish = %v, want context.DeadlineExceeded", finishErr)
 	}
 	header, err := u.nzbStorage.GetNZBHeader(nzb.ID)

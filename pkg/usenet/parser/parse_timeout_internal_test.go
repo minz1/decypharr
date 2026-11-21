@@ -84,7 +84,7 @@ func TestParseKeepsNoGroupsForUnsupportedContent(t *testing.T) {
 }
 
 func parseWith(ctx context.Context, source ArticleSource, nzb string) error {
-	_, _, err := NewParserWithSource(source, 2, zerolog.Nop()).Parse(ctx, "release.nzb", []byte(nzb))
+	_, err := NewParserWithSource(source, 2, zerolog.Nop()).Parse(ctx, "release.nzb", []byte(nzb))
 	return err
 }
 

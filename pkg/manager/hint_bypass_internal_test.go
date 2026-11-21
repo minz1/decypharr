@@ -26,6 +26,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/hearsay"
 	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/storage"
+	"github.com/sirrobot01/decypharr/pkg/usenet"
 	"github.com/sirrobot01/decypharr/pkg/usenet/parser"
 )
 
@@ -347,7 +348,7 @@ type nzbHintCase struct {
 	manual   bool
 	category string
 	negative nzbNegative
-	process  func() (*storage.NZB, error)
+	process  func() (*storage.NZB, usenet.ProcessResult, error)
 }
 
 type nzbHintRun struct {
@@ -426,14 +427,14 @@ func peerNegativeService(t *testing.T, subject string) *hearsay.Service {
 	return service
 }
 
-func processedNZB() (*storage.NZB, error) {
+func processedNZB() (*storage.NZB, usenet.ProcessResult, error) {
 	return &storage.NZB{
 		ID: "nzb-1", Name: "Show.S01", Files: []storage.NZBFile{{Name: "a.mkv", Size: 1}},
-	}, nil
+	}, usenet.ProcessResult{}, nil
 }
 
-func processMissing() (*storage.NZB, error) {
-	return nil, customerror.ErrUsenetSegmentMissing
+func processMissing() (*storage.NZB, usenet.ProcessResult, error) {
+	return nil, usenet.ProcessResult{GateMissing: true}, customerror.ErrUsenetSegmentMissing
 }
 
 func runNZBHint(t *testing.T, c nzbHintCase) *nzbHintRun {
@@ -442,14 +443,14 @@ func runNZBHint(t *testing.T, c nzbHintCase) *nzbHintRun {
 	subject := hearsay.NZBSubjectFromGroups(groups)
 	m, call := newParseChildCall(
 		t,
-		func(context.Context, string, string, []byte, string) (*storage.NZB, map[string]*parser.FileGroup, error) {
-			return &storage.NZB{ID: "nzb-1", Name: "Show.S01"}, groups, nil
+		func(context.Context, string, string, []byte, string) (*parser.Parsed, error) {
+			return &parser.Parsed{NZB: &storage.NZB{ID: "nzb-1", Name: "Show.S01"}, Groups: groups}, nil
 		},
 	)
 	run := &nzbHintRun{m: m, call: call, log: &syncBuffer{}}
 	m.logger = zerolog.New(run.log)
 	m.usenetTimeout = time.Minute
-	m.processNZBFunc = func(context.Context, *storage.NZB, map[string]*parser.FileGroup) (*storage.NZB, error) {
+	m.processNZBFunc = func(context.Context, *parser.Parsed) (*storage.NZB, usenet.ProcessResult, error) {
 		run.processed.Add(1)
 		return c.process()
 	}

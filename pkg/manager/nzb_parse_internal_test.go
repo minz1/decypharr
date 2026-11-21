@@ -17,11 +17,12 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/hearsay"
 	"github.com/sirrobot01/decypharr/pkg/manager/grab"
 	"github.com/sirrobot01/decypharr/pkg/storage"
+	"github.com/sirrobot01/decypharr/pkg/usenet"
 	"github.com/sirrobot01/decypharr/pkg/usenet/manifest"
 	"github.com/sirrobot01/decypharr/pkg/usenet/parser"
 )
 
-type parseFunc = func(ctx context.Context, id, name string, content []byte, category string) (*storage.NZB, map[string]*parser.FileGroup, error)
+type parseFunc = func(ctx context.Context, id, name string, content []byte, category string) (*parser.Parsed, error)
 
 func newParseRetryManager(t *testing.T, parse parseFunc) *Manager {
 	t.Helper()
@@ -58,16 +59,16 @@ func TestParseNZBRetriesOnceWhenOnlyItsBudgetRanOut(t *testing.T) {
 	var calls atomic.Int32
 	m := newParseRetryManager(
 		t,
-		func(ctx context.Context, _, _ string, _ []byte, _ string) (*storage.NZB, map[string]*parser.FileGroup, error) {
+		func(ctx context.Context, _, _ string, _ []byte, _ string) (*parser.Parsed, error) {
 			if calls.Add(1) == 1 {
-				return nil, nil, waitOutBudget(ctx)
+				return &parser.Parsed{}, waitOutBudget(ctx)
 			}
-			return &storage.NZB{Name: "Show.S01"}, nil, nil
+			return &parser.Parsed{NZB: &storage.NZB{Name: "Show.S01"}}, nil
 		},
 	)
 
-	meta, _, err := m.parseNZB(t.Context(), "nzb-1", "Show.S01", nil, "sonarr")
-	if err != nil || meta == nil || calls.Load() != 2 {
+	meta, err := m.parseNZB(t.Context(), "nzb-1", "Show.S01", nil, "sonarr")
+	if err != nil || meta.NZB == nil || calls.Load() != 2 {
 		t.Fatalf("parse = %v, %v after %d calls, want the second attempt's result", meta, err, calls.Load())
 	}
 }
@@ -77,13 +78,13 @@ func TestParseNZBGivesUpAfterTwoBudgets(t *testing.T) {
 	var calls atomic.Int32
 	m := newParseRetryManager(
 		t,
-		func(ctx context.Context, _, _ string, _ []byte, _ string) (*storage.NZB, map[string]*parser.FileGroup, error) {
+		func(ctx context.Context, _, _ string, _ []byte, _ string) (*parser.Parsed, error) {
 			calls.Add(1)
-			return nil, nil, waitOutBudget(ctx)
+			return &parser.Parsed{}, waitOutBudget(ctx)
 		},
 	)
 
-	_, _, err := m.parseNZB(t.Context(), "nzb-1", "Show.S01", nil, "sonarr")
+	_, err := m.parseNZB(t.Context(), "nzb-1", "Show.S01", nil, "sonarr")
 	if !errors.Is(err, context.DeadlineExceeded) || calls.Load() != 2 {
 		t.Fatalf("parse err = %v after %d calls, want the deadline after 2", err, calls.Load())
 	}
@@ -93,41 +94,41 @@ func TestParseNZBDoesNotRetry(t *testing.T) {
 	t.Parallel()
 	cases := map[string]func(t *testing.T, m *Manager) (context.Context, parseFunc){
 		"missing segment": func(t *testing.T, _ *Manager) (context.Context, parseFunc) {
-			return t.Context(), func(context.Context, string, string, []byte, string) (*storage.NZB, map[string]*parser.FileGroup, error) {
-				return nil, nil, customerror.ErrUsenetSegmentMissing
+			return t.Context(), func(context.Context, string, string, []byte, string) (*parser.Parsed, error) {
+				return &parser.Parsed{}, customerror.ErrUsenetSegmentMissing
 			}
 		},
 		"missing segment as the budget ran out": func(t *testing.T, _ *Manager) (context.Context, parseFunc) {
-			return t.Context(), func(ctx context.Context, _, _ string, _ []byte, _ string) (*storage.NZB, map[string]*parser.FileGroup, error) {
+			return t.Context(), func(ctx context.Context, _, _ string, _ []byte, _ string) (*parser.Parsed, error) {
 				_ = waitOutBudget(ctx)
-				return nil, nil, customerror.ErrUsenetSegmentMissing
+				return &parser.Parsed{}, customerror.ErrUsenetSegmentMissing
 			}
 		},
 		"an operation's own deadline": func(t *testing.T, _ *Manager) (context.Context, parseFunc) {
-			return t.Context(), func(context.Context, string, string, []byte, string) (*storage.NZB, map[string]*parser.FileGroup, error) {
-				return nil, nil, context.DeadlineExceeded
+			return t.Context(), func(context.Context, string, string, []byte, string) (*parser.Parsed, error) {
+				return &parser.Parsed{}, context.DeadlineExceeded
 			}
 		},
 		"caller cancelled": func(t *testing.T, _ *Manager) (context.Context, parseFunc) {
 			ctx, cancel := context.WithCancel(t.Context())
-			return ctx, func(ctx context.Context, _, _ string, _ []byte, _ string) (*storage.NZB, map[string]*parser.FileGroup, error) {
+			return ctx, func(ctx context.Context, _, _ string, _ []byte, _ string) (*parser.Parsed, error) {
 				cancel()
-				return nil, nil, ctx.Err()
+				return &parser.Parsed{}, ctx.Err()
 			}
 		},
 		"caller deadline": func(t *testing.T, _ *Manager) (context.Context, parseFunc) {
 			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
 			t.Cleanup(cancel)
-			return ctx, func(ctx context.Context, _, _ string, _ []byte, _ string) (*storage.NZB, map[string]*parser.FileGroup, error) {
-				return nil, nil, waitOutBudget(ctx)
+			return ctx, func(ctx context.Context, _, _ string, _ []byte, _ string) (*parser.Parsed, error) {
+				return &parser.Parsed{}, waitOutBudget(ctx)
 			}
 		},
 		"entry removed": func(t *testing.T, m *Manager) (context.Context, parseFunc) {
-			return t.Context(), func(ctx context.Context, id, _ string, _ []byte, _ string) (*storage.NZB, map[string]*parser.FileGroup, error) {
+			return t.Context(), func(ctx context.Context, id, _ string, _ []byte, _ string) (*parser.Parsed, error) {
 				if err := m.queue.storage.RemoveQueued(id, nil); err != nil {
 					t.Error(err)
 				}
-				return nil, nil, waitOutBudget(ctx)
+				return &parser.Parsed{}, waitOutBudget(ctx)
 			}
 		},
 	}
@@ -137,12 +138,12 @@ func TestParseNZBDoesNotRetry(t *testing.T) {
 			m := newParseRetryManager(t, nil)
 			ctx, parse := setup(t, m)
 			var calls atomic.Int32
-			m.parseNZBFunc = func(ctx context.Context, id, n string, c []byte, cat string) (*storage.NZB, map[string]*parser.FileGroup, error) {
+			m.parseNZBFunc = func(ctx context.Context, id, n string, c []byte, cat string) (*parser.Parsed, error) {
 				calls.Add(1)
 				return parse(ctx, id, n, c, cat)
 			}
 
-			if _, _, err := m.parseNZB(ctx, "nzb-1", "Show.S01", nil, "sonarr"); err == nil || calls.Load() != 1 {
+			if _, err := m.parseNZB(ctx, "nzb-1", "Show.S01", nil, "sonarr"); err == nil || calls.Load() != 1 {
 				t.Fatalf("parse err = %v after %d calls, want the first failure and no retry", err, calls.Load())
 			}
 		})
@@ -201,8 +202,8 @@ func TestParseChildThrottlesAParseThatRanOutOfTime(t *testing.T) {
 	t.Parallel()
 	m, call := newParseChildCall(
 		t,
-		func(ctx context.Context, _, _ string, _ []byte, _ string) (*storage.NZB, map[string]*parser.FileGroup, error) {
-			return nil, nil, waitOutBudget(ctx)
+		func(ctx context.Context, _, _ string, _ []byte, _ string) (*parser.Parsed, error) {
+			return &parser.Parsed{}, waitOutBudget(ctx)
 		},
 	)
 
@@ -218,9 +219,9 @@ func TestParseChildFailsAtOnceOnAMissingSegment(t *testing.T) {
 	var calls atomic.Int32
 	m, call := newParseChildCall(
 		t,
-		func(context.Context, string, string, []byte, string) (*storage.NZB, map[string]*parser.FileGroup, error) {
+		func(context.Context, string, string, []byte, string) (*parser.Parsed, error) {
 			calls.Add(1)
-			return nil, nil, customerror.ErrUsenetSegmentMissing
+			return &parser.Parsed{}, customerror.ErrUsenetSegmentMissing
 		},
 	)
 
@@ -234,8 +235,8 @@ func TestParseChildReportsNothingOnceStopped(t *testing.T) {
 	t.Parallel()
 	m, call := newParseChildCall(
 		t,
-		func(context.Context, string, string, []byte, string) (*storage.NZB, map[string]*parser.FileGroup, error) {
-			return &storage.NZB{ID: "nzb-1", Name: "Show.S01"}, parsedGroups(), nil
+		func(context.Context, string, string, []byte, string) (*parser.Parsed, error) {
+			return &parser.Parsed{NZB: &storage.NZB{ID: "nzb-1", Name: "Show.S01"}, Groups: parsedGroups()}, nil
 		},
 	)
 	m.usenetTimeout = time.Minute
@@ -254,8 +255,8 @@ func TestParseChildFailsAProcessRunThatOutlivesItsBudget(t *testing.T) {
 	t.Parallel()
 	m, call := newParseChildCall(
 		t,
-		func(context.Context, string, string, []byte, string) (*storage.NZB, map[string]*parser.FileGroup, error) {
-			return &storage.NZB{ID: "nzb-1", Name: "Show.S01"}, parsedGroups(), nil
+		func(context.Context, string, string, []byte, string) (*parser.Parsed, error) {
+			return &parser.Parsed{NZB: &storage.NZB{ID: "nzb-1", Name: "Show.S01"}, Groups: parsedGroups()}, nil
 		},
 	)
 	m.usenetTimeout = time.Nanosecond
@@ -270,9 +271,9 @@ func TestParseChildFailsOnHearsayIncompleteVerdict(t *testing.T) {
 	var calls atomic.Int32
 	m, call := newParseChildCall(
 		t,
-		func(context.Context, string, string, []byte, string) (*storage.NZB, map[string]*parser.FileGroup, error) {
+		func(context.Context, string, string, []byte, string) (*parser.Parsed, error) {
 			calls.Add(1)
-			return &storage.NZB{Name: "Show.S01"}, groups, nil
+			return &parser.Parsed{NZB: &storage.NZB{Name: "Show.S01"}, Groups: groups}, nil
 		},
 	)
 	cfg := &config.Config{}
@@ -288,9 +289,9 @@ func TestParseChildFailsOnHearsayIncompleteVerdict(t *testing.T) {
 	m.hearsay = service
 	call.grab.Entry.Manual = true
 	var processed atomic.Int32
-	m.processNZBFunc = func(context.Context, *storage.NZB, map[string]*parser.FileGroup) (*storage.NZB, error) {
+	m.processNZBFunc = func(context.Context, *parser.Parsed) (*storage.NZB, usenet.ProcessResult, error) {
 		processed.Add(1)
-		return &storage.NZB{}, nil
+		return &storage.NZB{}, usenet.ProcessResult{}, nil
 	}
 
 	msg := m.parseChild(t.Context(), call)

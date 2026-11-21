@@ -205,23 +205,23 @@ func (m *Manager) parseNZB(
 	id, name string,
 	content []byte,
 	category string,
-) (*storage.NZB, map[string]*parser.FileGroup, error) {
+) (*parser.Parsed, error) {
 	parse := m.parseNZBFunc
 	if parse == nil {
 		parse = m.usenet.ParseWithID
 	}
 	for attempt := 1; ; attempt++ {
 		parseCtx, cancel := context.WithTimeout(ctx, m.usenetTimeout)
-		meta, groups, err := parse(parseCtx, id, name, content, category)
+		parsed, err := parse(parseCtx, id, name, content, category)
 		budgetRanOut := errors.Is(err, context.DeadlineExceeded) &&
 			errors.Is(parseCtx.Err(), context.DeadlineExceeded) &&
 			ctx.Err() == nil
 		cancel()
 		if budgetRanOut && attempt == 2 {
-			return meta, groups, fmt.Errorf("%w: %w", errParseBudget, err)
+			return parsed, fmt.Errorf("%w: %w", errParseBudget, err)
 		}
 		if err == nil || !budgetRanOut || !m.queue.Contains(id) {
-			return meta, groups, err
+			return parsed, err
 		}
 		m.logger.Warn().
 			Err(err).

@@ -248,10 +248,11 @@ func TestExtensionlessObfuscatedMediaProducesLogicalFile(t *testing.T) {
   </file>
 </nzb>`
 	p := NewParser(client, 2, zerolog.Nop())
-	_, groups, err := p.Parse(t.Context(), "Obfuscated.nzb", []byte(source))
+	parsed, err := p.Parse(t.Context(), "Obfuscated.nzb", []byte(source))
 	if err != nil {
 		t.Fatal(err)
 	}
+	groups := parsed.Groups
 	if got := p.Metrics().NetworkStats; got != 0 {
 		t.Fatalf("content-classified post made %d redundant STAT requests", got)
 	}

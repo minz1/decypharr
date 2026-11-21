@@ -89,8 +89,8 @@ func (m *Manager) parseChild(ctx context.Context, call entryChildCall) entryMsg 
 		return parseFailed(fmt.Errorf("read staged NZB: %w", err))
 	}
 	name := cmp.Or(entry.OriginalFilename, entry.Name)
-	meta, groups, err := m.parseNZB(ctx, entry.InfoHash, name, content, entry.Category)
-	subject := hearsay.NZBSubjectFromGroups(groups)
+	parsed, err := m.parseNZB(ctx, entry.InfoHash, name, content, entry.Category)
+	subject := hearsay.NZBSubjectFromGroups(parsed.Groups)
 	useHint := entry.Manual
 	switch {
 	case stopped(ctx):
@@ -102,10 +102,16 @@ func (m *Manager) parseChild(ctx context.Context, call entryChildCall) entryMsg 
 			Msg("NZB parse ran out of time; the grab waits and tries again")
 		return eventMsg(grab.Event{Kind: grab.EvParseResult, Outcome: grab.OutcomeThrottled})
 	case err != nil:
-		if m.hearsay != nil && errors.Is(err, customerror.ErrUsenetSegmentMissing) {
+		cause := m.parseFailCause(parsed.Outcome, content)
+		m.logger.Warn().
+			Err(err).
+			Str("name", entry.Name).
+			Object("outcome", parsed.Outcome).
+			Msg("NZB parse failed")
+		if m.hearsay != nil && cause != "" {
 			m.hearsay.ReportNZB(subject, false)
 		}
-		return parseFailedWith(fmt.Errorf("usenet parse failed: %w", err), m.parseFailCause(err, content))
+		return parseFailedWith(fmt.Errorf("usenet parse failed: %w", err), cause)
 	case useHint && m.hearsay != nil && m.hearsay.NZBClaimedIncomplete(subject):
 		return parseFailed(errors.New("nzb rejected: hearsay claims segments missing on every configured backbone"))
 	}
@@ -121,15 +127,21 @@ func (m *Manager) parseChild(ctx context.Context, call entryChildCall) entryMsg 
 	if process == nil {
 		process = m.usenet.Process
 	}
-	processed, err := process(processCtx, meta, groups)
+	processed, result, err := process(processCtx, parsed)
 	switch {
 	case stopped(ctx):
 		return entryMsg{}
 	case err != nil:
-		if errors.Is(err, customerror.ErrUsenetSegmentMissing) {
+		m.logger.Warn().
+			Err(err).
+			Str("name", entry.Name).
+			Object("outcome", result.Outcome).
+			Bool("gate_missing", result.GateMissing).
+			Msg("NZB process failed")
+		if result.GateMissing {
 			m.hearsay.ReportNZB(subject, false)
 		}
-		return parseFailedWith(fmt.Errorf("failed to process nzb: %w", err), m.parseFailCause(err, content))
+		return parseFailedWith(fmt.Errorf("failed to process nzb: %w", err), m.parseFailCause(result.Outcome, content))
 	case len(processed.Files) == 0:
 		return parseFailed(errors.New("nzb has no files"))
 	}

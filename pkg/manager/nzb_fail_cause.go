@@ -12,9 +12,9 @@ import (
 
 const nzbFreshnessWindow = 6 * time.Hour
 
-func (m *Manager) parseFailCause(err error, content []byte) string {
+func (m *Manager) parseFailCause(outcome parser.Outcome, content []byte) string {
 	var cause string
-	switch parser.VerdictOf(err) {
+	switch outcome.Verdict {
 	case parser.VerdictArticlesMissing:
 		cause = grab.CauseArticlesMissing
 	case parser.VerdictSegmentsMissing:

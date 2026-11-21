@@ -108,12 +108,12 @@ func parseOnePost(t *testing.T, yencName string, payload []byte) *storage.NZB {
 </nzb>`, yencName, len(payload)+100)
 	p := NewParser(client, 2, zerolog.Nop()).WithFileFilter(bookFilter())
 	const nzbName = "H G Wells - The Time Machine (illus) (retail) (epub)"
-	nzb, groups, err := p.Parse(t.Context(), nzbName+".nzb", []byte(source))
+	parsed, err := p.Parse(t.Context(), nzbName+".nzb", []byte(source))
 	if err != nil {
 		t.Fatal(err)
 	}
-	nzb.Name = nzbName
-	processed, err := p.Process(t.Context(), nzb, groups)
+	parsed.NZB.Name = nzbName
+	processed, _, err := p.Process(t.Context(), parsed)
 	if err != nil {
 		t.Fatal(err)
 	}

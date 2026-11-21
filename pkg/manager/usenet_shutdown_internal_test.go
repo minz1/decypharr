@@ -16,8 +16,8 @@ func parsingNZB(t *testing.T) (*Manager, entryChildCall) {
 	t.Helper()
 	m, call := newParseChildCall(
 		t,
-		func(context.Context, string, string, []byte, string) (*storage.NZB, map[string]*parser.FileGroup, error) {
-			return &storage.NZB{ID: "nzb-1", Name: "Show.S01"}, parsedGroups(), nil
+		func(context.Context, string, string, []byte, string) (*parser.Parsed, error) {
+			return &parser.Parsed{NZB: &storage.NZB{ID: "nzb-1", Name: "Show.S01"}, Groups: parsedGroups()}, nil
 		},
 	)
 	meta := &storage.NZB{ID: "nzb-1", Name: "Show.S01", Path: call.grab.Entry.Magnet, Status: usenet.NZBStatusParsing}
