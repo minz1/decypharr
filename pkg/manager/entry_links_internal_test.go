@@ -256,9 +256,17 @@ func TestAFailedExitSaveKeepsTheLinksBound(t *testing.T) {
 				synctest.Wait()
 			}
 			time.Sleep(wait)
+			before := h.deadline()
+			if before == nil {
+				t.Fatal("the held wait shows no deadline")
+			}
 			h.send(eventMsg(grab.Event{Kind: grab.EvLinksReady}))
 			if !failed.Load() {
 				t.Fatal("the exit save did not fail")
+			}
+			if after := h.deadline(); after == nil || after.Due != before.Due || after.WaitingForLinks != before.WaitingForLinks ||
+				after.Event.Kind != before.Event.Kind {
+				t.Fatalf("deadline after the failed save = %+v, want %+v", after, before)
 			}
 			h.send(entryMsg{ev: &grab.Event{Kind: grab.EvTagsChanged}, tags: []string{"x"}})
 			mark, ok := h.grabs.linksOf("a")
@@ -623,6 +631,37 @@ func TestAWaitForLinksWithNoPlacementRecordWritesNoMark(t *testing.T) {
 		}
 		if d := h.deadline(); d != nil {
 			t.Fatalf("deadline %+v for a grab with no placement", d)
+		}
+	})
+}
+
+func TestTheActingPhaseStartsWithNoDeadline(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	synctest.Test(t, func(t *testing.T) {
+		h := deadlineHarness(t, store, 0)
+		var seen atomic.Pointer[GrabView]
+		inner := h.a.child
+		h.a.child = func(call entryChildCall) func(context.Context) entryMsg {
+			if call.kind == grab.ChildAction {
+				v, _ := h.grabs.get("a")
+				seen.Store(&v)
+			}
+			return inner(call)
+		}
+		run := h.restoredLinksWait(0)
+		synctest.Wait()
+		if d := h.deadline(); d == nil || !d.WaitingForLinks {
+			t.Fatalf("held wait deadline = %+v, want waiting for links", d)
+		}
+		reply(run, grab.Event{Kind: grab.EvLinksReady})
+		h.mustBe("a", grab.PhaseActing)
+		v := seen.Load()
+		if v == nil {
+			t.Fatal("no action child started")
+		}
+		if v.State.Phase != grab.PhaseActing || v.Deadline != nil {
+			t.Fatalf("view when the action started: phase %v deadline %+v, want acting with none", v.State.Phase, v.Deadline)
 		}
 	})
 }
