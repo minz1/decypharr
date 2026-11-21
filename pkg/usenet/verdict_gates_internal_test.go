@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -118,11 +119,19 @@ func TestGateFactProducers(t *testing.T) {
 		}
 		return ""
 	}
+	bodyNoData := func(command, _ string) string {
+		if command == "BODY" {
+			return "222 0 <head@gate> body follows\r\n."
+		}
+		return ""
+	}
 	for _, tc := range []gateProducerCase{
 		{name: "availability miss", want: true},
 		{name: "head missing via the analyzer prefix read", reply: bodyGone, serve: true, want: true},
 		{name: "head missing via the serving cursor", reply: bodyGone, serve: true, viaCursor: true, want: true},
 		{name: "head served with no signature", serve: true},
+		{name: "head served with no signature via the serving cursor", serve: true, viaCursor: true},
+		{name: "head 222 with no yEnc data counts as missing (HEAD behaviour)", reply: bodyNoData, serve: true, want: true},
 		{name: "context ended", serve: true, ended: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -186,6 +195,40 @@ func (tc gateProducerCase) check(t *testing.T, got ProcessResult, err error) {
 	}
 }
 
+func TestProcessReportsGateMissing(t *testing.T) {
+	t.Parallel()
+	var gone atomic.Bool
+	u, srv := gateHarness(t, func(_, messageID string) string {
+		if gone.Load() && messageID == "<b@gate>" {
+			return "430 no such article"
+		}
+		return ""
+	})
+	payload := []byte(strings.Repeat("not a media container ", 40))
+	total := int64(len(payload))
+	srv.AddArticle("<a@gate>", nntpd.Encode(payload[:100], "movie.mkv", 1, total, 0))
+	srv.AddArticle("<b@gate>", nntpd.Encode(payload[100:], "movie.mkv", 2, total, 100))
+	parsed, err := u.analyzer.Parse(t.Context(), "release.nzb", gateNZBXML("1:a@gate", "2:b@gate"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	gone.Store(true)
+	parsed.NZB.Status = NZBStatusParsing
+	if addErr := u.nzbStorage.AddNZB(parsed.NZB); addErr != nil {
+		t.Fatal(addErr)
+	}
+	updated, result, err := u.Process(t.Context(), parsed)
+	if !errors.Is(err, customerror.ErrUsenetSegmentMissing) {
+		t.Fatalf("Process error = %v, want missing segments", err)
+	}
+	if !result.GateMissing {
+		t.Fatal("Process lost the gate's missing fact")
+	}
+	if updated == nil {
+		t.Fatal("Process returned no NZB with its error")
+	}
+}
+
 func TestParseNeverReturnsNilParsed(t *testing.T) {
 	t.Parallel()
 	valid := []byte(`<?xml version="1.0"?><nzb xmlns="http://www.newzbin.com/DTD/2003/nzb">` +
@@ -194,22 +237,45 @@ func TestParseNeverReturnsNilParsed(t *testing.T) {
 		`<segments><segment bytes="5" number="1">a@gate</segment></segments></file></nzb>`)
 	for _, tc := range []struct {
 		name    string
+		id      string
 		content []byte
-		brokeFS bool
+		damage  func(t *testing.T, u *Usenet)
+		want    string
 	}{
-		{name: "empty content"},
-		{name: "invalid content", content: []byte("not an nzb")},
-		{name: "failing save", content: valid, brokeFS: true},
+		{name: "empty content", want: "NZB content is empty"},
+		{name: "invalid content", content: []byte("not an nzb"), want: "invalid NZB content"},
+		{name: "failing save", id: "no-dir/x", content: valid, want: "failed to save NZB file to disk"},
+		{
+			name: "failing mark", content: valid, want: "failed to mark NZB as processing",
+			damage: func(t *testing.T, u *Usenet) {
+				if err := u.markers.Close(); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "failing storage add", id: "blocked", content: valid, want: "failed to save NZB to storage",
+			damage: func(t *testing.T, u *Usenet) {
+				path, err := u.nzbStorage.metaFilePath("blocked")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = os.Mkdir(path+".tmp", 0o750); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			u, _ := gateHarness(t, nil)
-			if tc.brokeFS {
-				u.metadataDir = t.TempDir() + "/missing"
+			u, srv := gateHarness(t, nil)
+			srv.AddArticle("<a@gate>", nntpd.Encode([]byte("hello"), "movie.mkv", 1, 5, 0))
+			if tc.damage != nil {
+				tc.damage(t, u)
 			}
-			parsed, err := u.Parse(t.Context(), "release.nzb", tc.content, "cat")
-			if err == nil {
-				t.Fatal("Parse succeeded, want a failure")
+			parsed, err := u.ParseWithID(t.Context(), tc.id, "release.nzb", tc.content, "cat")
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Parse error = %v, want it to contain %q", err, tc.want)
 			}
 			if parsed == nil {
 				t.Fatal("Parse returned a nil *Parsed with its error")

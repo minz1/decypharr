@@ -853,13 +853,6 @@ func (u *Usenet) Process(
 // finish runs the availability and content gates on a processed NZB and
 // records the outcome: completed, or failed with the reason.
 func (u *Usenet) finish(ctx context.Context, nzb *storage.NZB) (ProcessResult, error) {
-	// Post-parse availability gate: probe a sample of each content file's
-	// segments before declaring the NZB complete. Segments can go missing
-	// between the original parse and now; without this gate they slip through
-	// to Sonarr/Radarr and only surface later as failed ffprobes. Connection
-	// errors are non-fatal here (CheckFileAvailability returns nil for those),
-	// so a provider hiccup won't wrongly fail an import — only a definitively
-	// missing segment (gone on every provider) fails the NZB.
 	if availabilityMissing, checkNZBAvailabilityErr := u.checkNZBAvailability(
 		ctx,
 		nzb,
@@ -905,14 +898,6 @@ func (u *Usenet) finish(ctx context.Context, nzb *storage.NZB) (ProcessResult, e
 	return ProcessResult{}, nil
 }
 
-// checkAvailability samples each content file's segments (via the same
-// repair-bank-gated BatchStat path as CheckFile) and returns an error if any
-// file is definitively unavailable — i.e. a sampled segment is missing on
-// every provider. Ignored, deleted, and
-// segment-less entries are skipped so the gate fails only on genuinely missing
-// playable content. Connection-only failures are treated as non-fatal by
-// CheckFileAvailability, so they do not fail the NZB. It returns on the first
-// definitively-missing file (fail fast).
 func (u *Usenet) checkNZBAvailability(ctx context.Context, nzb *storage.NZB) (bool, error) {
 	samplePercent := u.config.Get().Usenet.ImportAvailabilitySamplePercent
 	for i := range nzb.Files {
@@ -929,7 +914,7 @@ func (u *Usenet) checkNZBAvailability(ctx context.Context, nzb *storage.NZB) (bo
 			return false, nil
 		default:
 		}
-		if missing, err := u.CheckFileAvailability(ctx, file, samplePercent); err != nil {
+		if missing, err := u.checkFileAvailability(ctx, file, samplePercent); err != nil {
 			u.logger.Warn().
 				Err(err).
 				Str("nzb_id", nzb.ID).
@@ -979,7 +964,7 @@ func (u *Usenet) fileMessageIDs(nzoID, filename string, samplePercent int) ([]st
 	return messageIDs, nil
 }
 
-func (u *Usenet) CheckFileAvailability(ctx context.Context, file *storage.NZBFile, samplePercent int) (bool, error) {
+func (u *Usenet) checkFileAvailability(ctx context.Context, file *storage.NZBFile, samplePercent int) (bool, error) {
 	return u.checkAvailability(ctx, file.Name, u.sampleSegments(file.Segments, samplePercent))
 }
 

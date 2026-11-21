@@ -218,6 +218,11 @@ func (m *Manager) parseNZB(
 			ctx.Err() == nil
 		cancel()
 		if budgetRanOut && attempt == 2 {
+			if parsed != nil {
+				kept := *parsed
+				kept.Outcome = parser.Outcome{}
+				parsed = &kept
+			}
 			return parsed, fmt.Errorf("%w: %w", errParseBudget, err)
 		}
 		if err == nil || !budgetRanOut || !m.queue.Contains(id) {

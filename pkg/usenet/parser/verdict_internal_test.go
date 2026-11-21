@@ -343,6 +343,20 @@ func TestParseAllProvenMissingIsArticles(t *testing.T) {
 	}
 }
 
+func TestParseOutcomeMatchesTheError(t *testing.T) {
+	t.Parallel()
+	source := scriptSource{stat: provenStat, header: provenHeaders}
+	p := NewParserWithSource(source, 2, zerolog.Nop())
+	parsed, err := p.Parse(t.Context(), "release.nzb", []byte(twoUnknownsNZB()))
+	if !errors.Is(err, customerror.ErrUsenetSegmentMissing) {
+		t.Fatalf("Parse error = %v, want missing segments", err)
+	}
+	want := Outcome{Verdict: VerdictArticlesMissing, Rule: outcomeRuleErrorChain}
+	if parsed == nil || parsed.Outcome != want {
+		t.Fatalf("Parse Outcome = %+v, want %+v", parsed, want)
+	}
+}
+
 func TestAllMissingSiteProof(t *testing.T) {
 	t.Parallel()
 	nzb := nzbOf(fileXML(1, 2, deadOne, "1:one@x"), fileXML(2, 2, deadTwo, "1:two@x"))

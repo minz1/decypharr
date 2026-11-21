@@ -80,13 +80,23 @@ func TestParseNZBGivesUpAfterTwoBudgets(t *testing.T) {
 		t,
 		func(ctx context.Context, _, _ string, _ []byte, _ string) (*parser.Parsed, error) {
 			calls.Add(1)
-			return &parser.Parsed{}, waitOutBudget(ctx)
+			return &parser.Parsed{
+				NZB:     &storage.NZB{Name: "Show.S01"},
+				Groups:  parsedGroups(),
+				Outcome: parser.Outcome{Verdict: parser.VerdictArticlesMissing, Rule: "error chain"},
+			}, waitOutBudget(ctx)
 		},
 	)
 
-	_, err := m.parseNZB(t.Context(), "nzb-1", "Show.S01", nil, "sonarr")
+	parsed, err := m.parseNZB(t.Context(), "nzb-1", "Show.S01", nil, "sonarr")
 	if !errors.Is(err, context.DeadlineExceeded) || calls.Load() != 2 {
 		t.Fatalf("parse err = %v after %d calls, want the deadline after 2", err, calls.Load())
+	}
+	if parsed.Outcome != (parser.Outcome{}) {
+		t.Fatalf("budget expiry kept the outcome %+v, want none", parsed.Outcome)
+	}
+	if parsed.NZB == nil || len(parsed.Groups) != 1 {
+		t.Fatalf("budget expiry dropped the NZB or groups: %+v", parsed)
 	}
 }
 
