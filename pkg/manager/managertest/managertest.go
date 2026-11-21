@@ -36,8 +36,14 @@ func Store(t testing.TB, edit func(*config.Config)) *config.Store {
 func New(t testing.TB, edit func(*config.Config)) (*manager.Manager, *config.Store) {
 	t.Helper()
 	store := Store(t, edit)
+	return NewOn(t, store), store
+}
+
+// NewOn is New over a store already built, with opts applied before the queue is recovered.
+func NewOn(t testing.TB, store *config.Store, opts ...manager.Option) *manager.Manager {
+	t.Helper()
 	root := task.NewRoot(context.WithoutCancel(t.Context()), "test", zerolog.Nop())
-	mgr, err := manager.New(root.Child("manager"), store, logger.Discard())
+	mgr, err := manager.New(root.Child("manager"), store, logger.Discard(), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,5 +54,5 @@ func New(t testing.TB, edit func(*config.Config)) (*manager.Manager, *config.Sto
 			t.Error(stopErr)
 		}
 	})
-	return mgr, store
+	return mgr
 }

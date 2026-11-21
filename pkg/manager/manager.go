@@ -220,7 +220,7 @@ var _ repair.Backend = (*Manager)(nil)
 // published by store. g is the manager's task group: its owner made it with
 // parent.Child("manager") and stops it, which stops the manager's services
 // and closes what New opened. A restart builds a new Manager from a new Store.
-func New(g *task.Group, store *config.Store, logs *logger.Factory) (*Manager, error) {
+func New(g *task.Group, store *config.Store, logs *logger.Factory, opts ...Option) (*Manager, error) {
 	cfg := store.Get()
 	_logger := logs.New("manager")
 
@@ -301,7 +301,7 @@ func New(g *task.Group, store *config.Store, logs *logger.Factory) (*Manager, er
 	}
 	instance.initGrace(g.Context())
 
-	if err = instance.init(); err != nil {
+	if err = instance.init(opts); err != nil {
 		// The group may be stopped already; storage is the one thing New opened that nothing else closes.
 		if closeErr := strg.Close(); closeErr != nil {
 			_logger.Warn().Err(closeErr).Msg("Failed to close storage after a failed start")
@@ -316,7 +316,7 @@ func (m *Manager) folderNaming() config.WebDavFolderNaming {
 	return m.store.Get().FolderNaming
 }
 
-func (m *Manager) init() error {
+func (m *Manager) init(opts []Option) error {
 	if err := m.registerServices(); err != nil {
 		return err
 	}
@@ -363,6 +363,9 @@ func (m *Manager) init() error {
 
 	// initialize debrid clients
 	m.initDebridClients()
+	for _, opt := range opts {
+		opt(m)
+	}
 
 	// Initialize usenet client
 	m.initUsenet()

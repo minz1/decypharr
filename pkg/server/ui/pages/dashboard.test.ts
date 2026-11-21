@@ -8,17 +8,19 @@ import { XSS } from "#ui/lib/testing/xss";
 const hangs = async (): Promise<Response> => Promise.withResolvers<Response>().promise;
 
 describe("the dashboard's deadlines", () => {
-  it("show what a waiting grab waits for, and nothing for one with no deadline", async () => {
+  it("show what a waiting grab waits for, the ordinary deadline, and nothing for none", async () => {
     const due = "2026-11-20T10:00:00Z";
     await bootDashboard(() =>
       page([
         { ...torrent("aaaaaaaaaaaa", "Waiting"), deadline: { event: "link_wait_expired", due, waiting_for: "links" } },
+        { ...torrent("cccccccccccc", "Pending"), deadline: { event: "pending_deadline", due } },
         torrent("bbbbbbbbbbbb", "Plain"),
       ]),
     );
-    await waitForRows(2);
-    expect([cellText(0, "deadline"), cellText(1, "deadline")]).toStrictEqual([
+    await waitForRows(3);
+    expect([cellText(0, "deadline"), cellText(1, "deadline"), cellText(2, "deadline")]).toStrictEqual([
       `waiting for a fresh answer from realdebrid (gives up ${new Date(due).toLocaleString()})`,
+      `pending_deadline at ${new Date(due).toLocaleString()}`,
       "",
     ]);
   });

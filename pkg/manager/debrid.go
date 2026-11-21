@@ -190,3 +190,15 @@ func (m *Manager) debridOrder() []string {
 	}
 	return order
 }
+
+// Option adjusts a Manager while it is built, before its queue is recovered.
+type Option func(*Manager)
+
+// WithClients adds provider clients to those the configuration builds.
+func WithClients(clients map[string]debrid.Client) Option {
+	return func(m *Manager) {
+		for name, c := range clients {
+			m.clients.Store(name, c)
+		}
+	}
+}
