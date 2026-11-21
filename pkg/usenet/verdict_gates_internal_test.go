@@ -636,3 +636,24 @@ func errorMatches(err error, want string) bool {
 	}
 	return err != nil && strings.Contains(err.Error(), want)
 }
+
+func TestParseWithIDReturnsTheParsedNZB(t *testing.T) {
+	t.Parallel()
+	u, srv := gateHarness(t, nil)
+	srv.AddArticle("<a@gate>", nntpd.Encode([]byte("hello"), "movie.mkv", 1, 5, 0))
+
+	parsed, err := u.ParseWithID(t.Context(), "given-id", "release.nzb", gateNZBXML("1:a@gate"), "cat")
+	if err != nil {
+		t.Fatalf("ParseWithID: %v", err)
+	}
+	if parsed.NZB == nil || parsed.NZB.ID != "given-id" || parsed.NZB.Category != "cat" ||
+		parsed.NZB.Status != NZBStatusParsing || parsed.NZB.Path == "" {
+		t.Fatalf("parsed NZB = %+v, want the given id, category, parsing status and a saved path", parsed.NZB)
+	}
+	if len(parsed.Groups) == 0 || parsed.Outcome != (parser.Outcome{}) {
+		t.Fatalf("parsed = %+v, want groups and no outcome", parsed)
+	}
+	if _, headerErr := u.nzbStorage.GetNZBHeader("given-id"); headerErr != nil {
+		t.Fatalf("the parsed NZB was not stored: %v", headerErr)
+	}
+}
