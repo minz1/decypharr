@@ -274,7 +274,12 @@ func (b *ArticleBroker) load(ctx context.Context, messageID string) (articleObse
 			return articleObservation{answer: answer}, err
 		}
 		if metadata == nil {
-			return articleObservation{answer: nntp.AnswerFailed}, fmt.Errorf("article %s returned no yEnc metadata", messageID)
+			return articleObservation{
+				answer: nntp.AnswerFailed,
+			}, fmt.Errorf(
+				"article %s returned no yEnc metadata",
+				messageID,
+			)
 		}
 		b.bytesFetched.Add(int64(len(body)))
 		b.store(messageID, body, metadata)

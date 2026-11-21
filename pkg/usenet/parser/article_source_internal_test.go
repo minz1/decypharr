@@ -541,7 +541,13 @@ func wireRows() []answerRow {
 		}},
 		{"wire metadata-only cache hit", nntp.AnswerFound, nil, func(t *testing.T) answered {
 			broker := NewArticleBroker(wireWithArticle(t), 2, 1<<20)
-			if got := headerAnswer(t.Context(), broker, servedArticle, 0); got.answer != nntp.AnswerFound || got.err != nil {
+			if got := headerAnswer(
+				t.Context(),
+				broker,
+				servedArticle,
+				0,
+			); got.answer != nntp.AnswerFound ||
+				got.err != nil {
 				t.Fatalf("first header = %+v", got)
 			}
 			got := headerAnswer(t.Context(), broker, servedArticle, 0)
