@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -89,8 +90,12 @@ func TestParseNZBGivesUpAfterTwoBudgets(t *testing.T) {
 	)
 
 	parsed, err := m.parseNZB(t.Context(), "nzb-1", "Show.S01", nil, "sonarr")
-	if !errors.Is(err, context.DeadlineExceeded) || calls.Load() != 2 {
-		t.Fatalf("parse err = %v after %d calls, want the deadline after 2", err, calls.Load())
+	if !errors.Is(err, errParseBudget) || !errors.Is(err, context.DeadlineExceeded) || calls.Load() != 2 {
+		t.Fatalf(
+			"parse err = %v after %d calls, want the budget error wrapping the deadline after 2",
+			err,
+			calls.Load(),
+		)
 	}
 	if parsed.Outcome != (parser.Outcome{}) {
 		t.Fatalf("budget expiry kept the outcome %+v, want none", parsed.Outcome)
@@ -145,17 +150,19 @@ func TestParseNZBDoesNotRetry(t *testing.T) {
 	for name, setup := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			m := newParseRetryManager(t, nil)
-			ctx, parse := setup(t, m)
-			var calls atomic.Int32
-			m.parseNZBFunc = func(ctx context.Context, id, n string, c []byte, cat string) (*parser.Parsed, error) {
-				calls.Add(1)
-				return parse(ctx, id, n, c, cat)
-			}
+			synctest.Test(t, func(t *testing.T) {
+				m := newParseRetryManager(t, nil)
+				ctx, parse := setup(t, m)
+				var calls atomic.Int32
+				m.parseNZBFunc = func(ctx context.Context, id, n string, c []byte, cat string) (*parser.Parsed, error) {
+					calls.Add(1)
+					return parse(ctx, id, n, c, cat)
+				}
 
-			if _, err := m.parseNZB(ctx, "nzb-1", "Show.S01", nil, "sonarr"); err == nil || calls.Load() != 1 {
-				t.Fatalf("parse err = %v after %d calls, want the first failure and no retry", err, calls.Load())
-			}
+				if _, err := m.parseNZB(ctx, "nzb-1", "Show.S01", nil, "sonarr"); err == nil || calls.Load() != 1 {
+					t.Fatalf("parse err = %v after %d calls, want the first failure and no retry", err, calls.Load())
+				}
+			})
 		})
 	}
 }
@@ -315,4 +322,74 @@ func TestParseChildFailsOnHearsayIncompleteVerdict(t *testing.T) {
 	if calls.Load() != 1 {
 		t.Fatalf("parsed %d times, want 1", calls.Load())
 	}
+}
+
+func TestParseNZBFirstExpiryOfAnUnqueuedEntryCarriesNoOutcome(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		ran := &parser.Parsed{
+			NZB:     &storage.NZB{Name: "Show.S01"},
+			Groups:  parsedGroups(),
+			Outcome: parser.Outcome{Verdict: parser.VerdictArticlesMissing, Rule: "error chain"},
+		}
+		var calls atomic.Int32
+		var m *Manager
+		m = newParseRetryManager(
+			t,
+			func(ctx context.Context, id, _ string, _ []byte, _ string) (*parser.Parsed, error) {
+				calls.Add(1)
+				if err := m.queue.storage.RemoveQueued(id, nil); err != nil {
+					t.Error(err)
+				}
+				return ran, waitOutBudget(ctx)
+			},
+		)
+
+		parsed, err := m.parseNZB(t.Context(), "nzb-1", "Show.S01", nil, "sonarr")
+		if !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, errParseBudget) || calls.Load() != 1 {
+			t.Fatalf("parse err = %v after %d calls, want the raw deadline after 1", err, calls.Load())
+		}
+		if parsed.Outcome != (parser.Outcome{}) {
+			t.Fatalf("budget expiry kept the outcome %+v, want none", parsed.Outcome)
+		}
+		if parsed.NZB != ran.NZB || len(parsed.Groups) != 1 {
+			t.Fatalf("budget expiry dropped the NZB or groups: %+v", parsed)
+		}
+		if ran.Outcome.Verdict != parser.VerdictArticlesMissing {
+			t.Fatalf("budget expiry changed the parser's own result: %+v", ran.Outcome)
+		}
+	})
+}
+
+func TestParseChildGivesAnUnqueuedBudgetExpiryNoCause(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		groups := parsedGroups()
+		var m *Manager
+		m, call := newParseChildCallWith(
+			t,
+			func(ctx context.Context, id, _ string, _ []byte, _ string) (*parser.Parsed, error) {
+				if err := m.queue.storage.RemoveQueued(id, nil); err != nil {
+					t.Error(err)
+				}
+				return &parser.Parsed{
+					Groups:  groups,
+					Outcome: parser.Outcome{Verdict: parser.VerdictArticlesMissing, Rule: "error chain"},
+				}, waitOutBudget(ctx)
+			},
+			oneFile(48*time.Hour),
+		)
+		m.pruneNow = causeNow
+		m.hearsay = newHearsayService(t)
+
+		msg := m.parseChild(t.Context(), call)
+
+		assertParseFailed(t, msg, "usenet parse failed")
+		if msg.ev.Cause != "" {
+			t.Fatalf("cause = %q, want none for a budget expiry", msg.ev.Cause)
+		}
+		if m.hearsay.NZBClaimedIncomplete(hearsay.NZBSubjectFromGroups(groups)) {
+			t.Fatal("a budget expiry was reported to hearsay as a missing release")
+		}
+	})
 }

@@ -217,12 +217,10 @@ func (m *Manager) parseNZB(
 			errors.Is(parseCtx.Err(), context.DeadlineExceeded) &&
 			ctx.Err() == nil
 		cancel()
+		if budgetRanOut {
+			parsed = withoutOutcome(parsed)
+		}
 		if budgetRanOut && attempt == 2 {
-			if parsed != nil {
-				kept := *parsed
-				kept.Outcome = parser.Outcome{}
-				parsed = &kept
-			}
 			return parsed, fmt.Errorf("%w: %w", errParseBudget, err)
 		}
 		if err == nil || !budgetRanOut || !m.queue.Contains(id) {
@@ -235,4 +233,13 @@ func (m *Manager) parseNZB(
 			Dur("timeout", m.usenetTimeout).
 			Msg("NZB parse ran out of time; retrying once")
 	}
+}
+
+func withoutOutcome(parsed *parser.Parsed) *parser.Parsed {
+	if parsed == nil {
+		return nil
+	}
+	kept := *parsed
+	kept.Outcome = parser.Outcome{}
+	return &kept
 }
