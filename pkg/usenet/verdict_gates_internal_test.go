@@ -81,14 +81,23 @@ func TestVerdictOfGateErrorsIsNone(t *testing.T) {
 
 func gateHarness(t *testing.T, reply func(command, messageID string) string) (*Usenet, *nntpd.Server) {
 	t.Helper()
+	u, srv, _ := gateHarnessGroup(t, reply)
+	return u, srv
+}
+
+func gateHarnessGroup(
+	t *testing.T,
+	reply func(command, messageID string) string,
+) (*Usenet, *nntpd.Server, *task.Group) {
+	t.Helper()
 	srv, err := nntpd.New(nntpd.Config{Reply: reply})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(srv.Close)
 	_, port := srv.Addr()
-	u, _ := newLifecycleUsenet(t, port, 2)
-	return u, srv
+	u, root := newLifecycleUsenet(t, port, 2)
+	return u, srv, root
 }
 
 func gateNZB(t *testing.T, u *Usenet, file storage.NZBFile) *storage.NZB {
@@ -113,26 +122,51 @@ func gateFile(size int) storage.NZBFile {
 
 func TestGateFactProducers(t *testing.T) {
 	t.Parallel()
+	statGone := func(command, _ string) string {
+		if command == "STAT" {
+			return "430 no such article"
+		}
+		return ""
+	}
 	bodyGone := func(command, _ string) string {
 		if command == "BODY" {
 			return "430 no such article"
 		}
 		return ""
 	}
+	var emptyBodies atomic.Int32
 	bodyNoData := func(command, _ string) string {
 		if command == "BODY" {
+			emptyBodies.Add(1)
 			return "222 0 <head@gate> body follows\r\n."
 		}
 		return ""
 	}
+	const (
+		unavailable = `file "Movie.mkv" unavailable`
+		headMissing = `head article of "Movie.mkv" missing`
+		noSignature = `head of "Movie.mkv" matches no media container signature`
+	)
 	for _, tc := range []gateProducerCase{
-		{name: "availability miss", want: true},
-		{name: "head missing via the analyzer prefix read", reply: bodyGone, serve: true, want: true},
-		{name: "head missing via the serving cursor", reply: bodyGone, serve: true, viaCursor: true, want: true},
-		{name: "head served with no signature", serve: true},
-		{name: "head served with no signature via the serving cursor", serve: true, viaCursor: true},
-		{name: "head 222 with no yEnc data counts as missing (HEAD behaviour)", reply: bodyNoData, serve: true, want: true},
-		{name: "context ended", serve: true, ended: true},
+		{name: "availability miss", reply: statGone, serve: true, want: true, wrapper: unavailable},
+		{
+			name: "head missing via the analyzer prefix read", reply: bodyGone, serve: true,
+			want: true, wrapper: headMissing,
+		},
+		{
+			name: "head missing via the serving cursor", reply: bodyGone, serve: true, viaCursor: true,
+			want: true, wrapper: headMissing,
+		},
+		{name: "head served with no signature", serve: true, wrapper: noSignature},
+		{
+			name: "head served with no signature via the serving cursor", serve: true, viaCursor: true,
+			wrapper: noSignature,
+		},
+		{
+			name: "head 222 with no yEnc data counts as missing (HEAD behaviour)", reply: bodyNoData, serve: true,
+			want: true, wrapper: headMissing, served: &emptyBodies,
+		},
+		{name: "context ended", serve: true, ended: true, wrapper: "processing interrupted"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -148,6 +182,8 @@ type gateProducerCase struct {
 	viaCursor bool
 	ended     bool
 	want      bool
+	wrapper   string
+	served    *atomic.Int32
 }
 
 func (tc gateProducerCase) run(t *testing.T) {
@@ -163,43 +199,46 @@ func (tc gateProducerCase) run(t *testing.T) {
 		ctx, cancel = context.WithCancel(ctx)
 		cancel()
 	}
-	var (
-		got ProcessResult
-		err error
-	)
 	if tc.viaCursor {
 		u.analyzer = nil
-		got.GateMissing, err = u.verifyNZBContent(ctx, nzb)
-	} else {
-		got, err = u.finish(ctx, nzb)
 	}
+	got, err := u.finish(ctx, nzb)
 	tc.check(t, got, err)
+	if tc.served != nil && tc.served.Load() == 0 {
+		t.Fatal("the fixture never served the empty body")
+	}
 }
 
 func (tc gateProducerCase) check(t *testing.T, got ProcessResult, err error) {
 	t.Helper()
-	if err == nil && !tc.viaCursor && !tc.ended {
+	if err == nil {
 		t.Fatal("the gates passed, want a failure")
+	}
+	if !strings.Contains(err.Error(), tc.wrapper) {
+		t.Fatalf("error = %v, want it to contain %q", err, tc.wrapper)
 	}
 	if got.GateMissing != tc.want {
 		t.Fatalf("GateMissing = %v, want %v (error %v)", got.GateMissing, tc.want, err)
 	}
-	if got.Outcome.Verdict != parser.VerdictNone {
-		t.Fatalf("Outcome.Verdict = %v, want none", got.Outcome.Verdict)
+	if got.Outcome != (parser.Outcome{}) {
+		t.Fatalf("Outcome = %+v, want none", got.Outcome)
 	}
 	if tc.want && !errors.Is(err, customerror.ErrUsenetSegmentMissing) {
 		t.Fatalf("error = %v, want missing segments", err)
 	}
-	if !tc.want && tc.serve && !tc.ended && !errors.Is(err, customerror.ErrUsenetCorruptContent) {
+	if !tc.want && !tc.ended && !errors.Is(err, customerror.ErrUsenetCorruptContent) {
 		t.Fatalf("error = %v, want corrupt content", err)
+	}
+	if tc.ended && !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want the cancellation", err)
 	}
 }
 
 func TestProcessReportsGateMissing(t *testing.T) {
 	t.Parallel()
 	var gone atomic.Bool
-	u, srv := gateHarness(t, func(_, messageID string) string {
-		if gone.Load() && messageID == "<b@gate>" {
+	u, srv := gateHarness(t, func(command, messageID string) string {
+		if gone.Load() && command == "STAT" && messageID == "<b@gate>" {
 			return "430 no such article"
 		}
 		return ""
@@ -218,8 +257,9 @@ func TestProcessReportsGateMissing(t *testing.T) {
 		t.Fatal(addErr)
 	}
 	updated, result, err := u.Process(t.Context(), parsed)
-	if !errors.Is(err, customerror.ErrUsenetSegmentMissing) {
-		t.Fatalf("Process error = %v, want missing segments", err)
+	if !errors.Is(err, customerror.ErrUsenetSegmentMissing) ||
+		!strings.Contains(err.Error(), `file "release.mkv" unavailable`) {
+		t.Fatalf("Process error = %v, want the availability gate's missing segments", err)
 	}
 	if !result.GateMissing {
 		t.Fatal("Process lost the gate's missing fact")
@@ -338,6 +378,15 @@ func (tc realParserCase) run(t *testing.T) {
 	if tc.holes && result.Outcome.Verdict != parser.VerdictSegmentsMissing {
 		t.Fatalf("Outcome.Verdict = %v, want %v", result.Outcome.Verdict, parser.VerdictSegmentsMissing)
 	}
+	if tc.goneAfterParse {
+		if !strings.Contains(err.Error(), "failed to fetch first segment header") ||
+			!strings.Contains(err.Error(), "code 430") {
+			t.Fatalf("error = %v, want the first-segment fetch failing with a 430", err)
+		}
+		if want := (parser.Outcome{Verdict: parser.VerdictArticlesMissing, Rule: "error chain"}); result.Outcome != want {
+			t.Fatalf("Outcome = %+v, want %+v", result.Outcome, want)
+		}
+	}
 	if got := parser.VerdictOf(errors.Unwrap(err)); got != result.Outcome.Verdict {
 		t.Fatalf("Outcome.Verdict = %v, VerdictOf gives %v", result.Outcome.Verdict, got)
 	}
@@ -364,4 +413,226 @@ func TestGateFactRealParserProcess(t *testing.T) {
 			tc.run(t)
 		})
 	}
+}
+
+func TestParseKeepsGroupsAndOutcomeThroughAnalyzerFailure(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		parse func(u *Usenet) (*parser.Parsed, error)
+	}{
+		{"Parse", func(u *Usenet) (*parser.Parsed, error) {
+			return u.Parse(t.Context(), "release.nzb", gateNZBXML("1:a@gate"), "cat")
+		}},
+		{"ParseWithID", func(u *Usenet) (*parser.Parsed, error) {
+			return u.ParseWithID(t.Context(), "given-id", "release.nzb", gateNZBXML("1:a@gate"), "cat")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			u, _ := gateHarness(t, nil)
+			parsed, err := tc.parse(u)
+			if !errors.Is(err, customerror.ErrUsenetSegmentMissing) ||
+				!strings.Contains(err.Error(), "failed to stat segment") {
+				t.Fatalf("error = %v, want the STAT path's missing segments", err)
+			}
+			if parsed == nil || len(parsed.Groups) == 0 {
+				t.Fatalf("parsed = %+v, want the groups kept with the error", parsed)
+			}
+			if parsed.Outcome.Verdict != parser.VerdictArticlesMissing {
+				t.Fatalf("Outcome = %+v, want an articles-missing verdict", parsed.Outcome)
+			}
+		})
+	}
+}
+
+func TestFinishReportsCompletionWriteFailureAsNotMissing(t *testing.T) {
+	t.Parallel()
+	u, _ := gateHarness(t, nil)
+	nzb := &storage.NZB{ID: "gate", Name: "Movie", Status: NZBStatusParsing}
+	blockMetaWrites(t, u.nzbStorage, nzb.ID)
+
+	got, err := u.finish(t.Context(), nzb)
+	if err == nil || !strings.Contains(err.Error(), "failed to mark NZB as completed") {
+		t.Fatalf("finish error = %v, want the completion write failure", err)
+	}
+	if got.GateMissing {
+		t.Fatal("a failed completion write was reported as a missing release")
+	}
+	if got.Outcome != (parser.Outcome{}) {
+		t.Fatalf("Outcome = %+v, want none", got.Outcome)
+	}
+}
+
+func TestFinishCompletesWhenBothGatesPass(t *testing.T) {
+	t.Parallel()
+	u, srv := gateHarness(t, nil)
+	payload := append([]byte{0x1A, 0x45, 0xDF, 0xA3}, make([]byte, 600)...)
+	srv.AddArticle("<head@gate>", nntpd.Encode(payload, "Movie.mkv", 1, int64(len(payload)), 0))
+	nzb := gateNZB(t, u, gateFile(len(payload)))
+
+	got, err := u.finish(t.Context(), nzb)
+	if err != nil || got != (ProcessResult{}) {
+		t.Fatalf("finish = %+v, %v, want a clean completion", got, err)
+	}
+	if nzb.Status != NZBStatusCompleted {
+		t.Fatalf("Status = %q, want %q", nzb.Status, NZBStatusCompleted)
+	}
+}
+
+func TestStatAvailabilityReturns(t *testing.T) {
+	t.Parallel()
+	connectionDown := func(command, _ string) string {
+		if command == "STAT" {
+			return "400 service unavailable"
+		}
+		return ""
+	}
+	for _, tc := range []struct {
+		name        string
+		reply       func(command, messageID string) string
+		ids         []string
+		serve       bool
+		stopped     bool
+		wantMissing bool
+	}{
+		{name: "no ids"},
+		{name: "every article available", ids: []string{"<head@gate>"}, serve: true},
+		{name: "connection errors only", reply: connectionDown, ids: []string{"<head@gate>"}, serve: true},
+		{name: "client stopped", ids: []string{"<head@gate>"}, serve: true, stopped: true},
+		{name: "an article is gone", ids: []string{"<head@gate>"}, wantMissing: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			u, srv, root := gateHarnessGroup(t, tc.reply)
+			if tc.serve {
+				srv.AddArticle("<head@gate>", nntpd.Encode([]byte("hello"), "Movie.mkv", 1, 5, 0))
+			}
+			if tc.stopped {
+				stopLifecycleGroup(t, root)
+			}
+			missing, err := u.statAvailability(t.Context(), "Movie.mkv", tc.ids)
+			if missing != tc.wantMissing {
+				t.Fatalf("missing = %v, want %v (error %v)", missing, tc.wantMissing, err)
+			}
+			if tc.wantMissing != errors.Is(err, customerror.ErrUsenetSegmentMissing) ||
+				(!tc.wantMissing && err != nil) {
+				t.Fatalf("error = %v, want missing segments only when an article is gone", err)
+			}
+		})
+	}
+}
+
+func TestVerifyFileHeadReturns(t *testing.T) {
+	t.Parallel()
+	payload := []byte(strings.Repeat("not a media container ", 40))
+	noSegments := gateFile(len(payload))
+	noSegments.Size = 0
+	noSegments.Segments = nil
+	unsupported := gateFile(len(payload))
+	unsupported.FileType = storage.NZBFileTypeUnknown
+	for _, tc := range []struct {
+		name     string
+		file     storage.NZBFile
+		serve    bool
+		bare     bool
+		stopWork bool
+		wantErr  string
+	}{
+		{name: "too small to classify", file: gateFile(100)},
+		{name: "entry cannot be created", file: gateFile(len(payload)), bare: true, stopWork: true, wantErr: "create entry for Movie.mkv"},
+		{name: "reader cannot be created", file: noSegments, bare: true, wantErr: "no segments in volume"},
+		{name: "analyzer defers to the serving cursor", file: unsupported, serve: true, wantErr: "matches no media container signature"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			u, srv := gateHarness(t, nil)
+			if tc.serve {
+				srv.AddArticle("<head@gate>", nntpd.Encode(payload, "Movie.mkv", 1, int64(len(payload)), 0))
+			}
+			if tc.bare {
+				u.analyzer = nil
+			}
+			if tc.stopWork {
+				stopLifecycleGroup(t, u.work)
+			}
+			missing, err := u.verifyFileHead(t.Context(), &tc.file)
+			if missing {
+				t.Fatalf("missing = true, want false (error %v)", err)
+			}
+			if !errorMatches(err, tc.wantErr) {
+				t.Fatalf("error = %v, want %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestClassifyHeadReadErrorKeepsRawErrors(t *testing.T) {
+	t.Parallel()
+	raw := errors.New("connection reset")
+	missing, err := classifyHeadReadError("Movie.mkv", raw)
+	if missing || err == nil || err.Error() != raw.Error() {
+		t.Fatalf("classifyHeadReadError = %v, %v, want false and the raw error", missing, err)
+	}
+}
+
+func TestVerifyNZBContentReturns(t *testing.T) {
+	t.Parallel()
+	payload := []byte(strings.Repeat("not a media container ", 40))
+	for _, tc := range []struct {
+		name  string
+		reply func(command, messageID string) string
+		ended bool
+	}{
+		{name: "context ended", ended: true},
+		{name: "connection errors are not a content failure", reply: func(command, _ string) string {
+			if command == "BODY" {
+				return "400 service unavailable"
+			}
+			return ""
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			u, srv := gateHarness(t, tc.reply)
+			srv.AddArticle("<head@gate>", nntpd.Encode(payload, "Movie.mkv", 1, int64(len(payload)), 0))
+			nzb := gateNZB(t, u, gateFile(len(payload)))
+			ctx := t.Context()
+			if tc.ended {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			}
+			missing, err := u.verifyNZBContent(ctx, nzb)
+			if missing || err != nil {
+				t.Fatalf("verifyNZBContent = %v, %v, want a pass", missing, err)
+			}
+		})
+	}
+}
+
+func TestProcessCompletesAReleaseThatPassesBothGates(t *testing.T) {
+	t.Parallel()
+	u, srv := gateHarness(t, nil)
+	payload := append([]byte{0x1A, 0x45, 0xDF, 0xA3}, make([]byte, 600)...)
+	srv.AddArticle("<a@gate>", nntpd.Encode(payload, "movie.mkv", 1, int64(len(payload)), 0))
+	parsed, err := u.analyzer.Parse(t.Context(), "release.nzb", gateNZBXML("1:a@gate"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	parsed.NZB.Status = NZBStatusParsing
+	if addErr := u.nzbStorage.AddNZB(parsed.NZB); addErr != nil {
+		t.Fatal(addErr)
+	}
+	updated, result, err := u.Process(t.Context(), parsed)
+	if err != nil || result != (ProcessResult{}) || updated == nil || updated.Status != NZBStatusCompleted {
+		t.Fatalf("Process = %+v, %+v, %v, want a completed NZB and a clean result", updated, result, err)
+	}
+}
+
+func errorMatches(err error, want string) bool {
+	if want == "" {
+		return err == nil
+	}
+	return err != nil && strings.Contains(err.Error(), want)
 }

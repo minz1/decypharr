@@ -348,8 +348,9 @@ func TestParseOutcomeMatchesTheError(t *testing.T) {
 	source := scriptSource{stat: provenStat, header: provenHeaders}
 	p := NewParserWithSource(source, 2, zerolog.Nop())
 	parsed, err := p.Parse(t.Context(), "release.nzb", []byte(twoUnknownsNZB()))
-	if !errors.Is(err, customerror.ErrUsenetSegmentMissing) {
-		t.Fatalf("Parse error = %v, want missing segments", err)
+	if !errors.Is(err, customerror.ErrUsenetSegmentMissing) ||
+		!strings.Contains(err.Error(), "failed to stat segment") {
+		t.Fatalf("Parse error = %v, want missing segments from the STAT probe", err)
 	}
 	want := Outcome{Verdict: VerdictArticlesMissing, Rule: outcomeRuleErrorChain}
 	if parsed == nil || parsed.Outcome != want {
@@ -405,9 +406,12 @@ func TestDoubtCarriesIntoProcess(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Parse: %v", err)
 			}
-			_, _, err = p.Process(t.Context(), parsed)
+			_, outcome, err := p.Process(t.Context(), parsed)
 			if err == nil || VerdictOf(err) != tc.want {
 				t.Fatalf("Process error = %v verdict %v, want verdict %v", err, VerdictOf(err), tc.want)
+			}
+			if want := (Outcome{Verdict: tc.want, Rule: outcomeRuleErrorChain}); outcome != want {
+				t.Fatalf("Process Outcome = %+v, want %+v", outcome, want)
 			}
 		})
 	}
