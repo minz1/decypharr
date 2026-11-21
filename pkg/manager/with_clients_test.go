@@ -11,6 +11,7 @@ import (
 
 type namedClient struct {
 	debrid.Client
+
 	name string
 }
 
