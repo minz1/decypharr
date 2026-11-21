@@ -1536,7 +1536,7 @@ func (c *Client) Stats() map[string]any {
 
 func (c *Client) Stat(ctx context.Context, workload Workload, messageID string) (int, string, Answer, error) {
 	if c.stopped() {
-		return 0, "", AnswerFailed, task.ErrStopped
+		return 0, "", Failed(), task.ErrStopped
 	}
 
 	var num int

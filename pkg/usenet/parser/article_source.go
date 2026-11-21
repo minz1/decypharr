@@ -156,7 +156,7 @@ func (b *ArticleBroker) Header(
 	}
 	if metadata, ok := b.cachedHeader(messageID, maxSnippet); ok {
 		b.cacheHits.Add(1)
-		return metadata, nntp.AnswerFound, nil
+		return metadata, nntp.Found(), nil
 	}
 
 	observation, err := b.load(ctx, messageID)
@@ -197,7 +197,7 @@ func (b *ArticleBroker) Stat(ctx context.Context, messageID string) (nntp.Answer
 			return answer, nil
 		}
 		if err := b.acquire(ctx); err != nil {
-			return nntp.AnswerFailed, err
+			return nntp.Failed(), err
 		}
 		defer b.release()
 
@@ -252,7 +252,7 @@ func (b *ArticleBroker) Metrics() ArticleMetrics {
 
 func (b *ArticleBroker) load(ctx context.Context, messageID string) (articleObservation, error) {
 	if messageID == "" {
-		return articleObservation{answer: nntp.AnswerFailed}, fmt.Errorf("article message ID is empty")
+		return articleObservation{answer: nntp.Failed()}, fmt.Errorf("article message ID is empty")
 	}
 	if observation, ok := b.cachedObservation(messageID); ok {
 		b.cacheHits.Add(1)
@@ -275,7 +275,7 @@ func (b *ArticleBroker) load(ctx context.Context, messageID string) (articleObse
 		}
 		if metadata == nil {
 			return articleObservation{
-				answer: nntp.AnswerFailed,
+				answer: nntp.Failed(),
 			}, fmt.Errorf(
 				"article %s returned no yEnc metadata",
 				messageID,
@@ -293,9 +293,9 @@ func (b *ArticleBroker) load(ctx context.Context, messageID string) (articleObse
 
 func (b *ArticleBroker) cachedStat(messageID string) (nntp.Answer, bool) {
 	if b.IsAvailable(messageID) {
-		return nntp.AnswerFound, true
+		return nntp.Found(), true
 	}
-	return nntp.AnswerFailed, false
+	return nntp.Answer{}, false
 }
 
 func (b *ArticleBroker) cachedObservation(messageID string) (articleObservation, bool) {
@@ -303,7 +303,7 @@ func (b *ArticleBroker) cachedObservation(messageID string) (articleObservation,
 	if !ok {
 		return articleObservation{}, false
 	}
-	return articleObservation{body: body, metadata: metadata, answer: nntp.AnswerFound}, true
+	return articleObservation{body: body, metadata: metadata, answer: nntp.Found()}, true
 }
 
 func (b *ArticleBroker) cachedHeader(messageID string, maxSnippet int) (*nntp.YencMetadata, bool) {

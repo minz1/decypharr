@@ -37,7 +37,7 @@ func TestProbeContentAvailabilityReportsAllMissingContent(t *testing.T) {
 	err := p.probeContentAvailability(
 		context.Background(),
 		groups,
-		statWith(func(_ context.Context, messageID string) error {
+		statWith(t, func(_ context.Context, messageID string) error {
 			calls = append(calls, messageID)
 			return missing
 		}),
@@ -68,7 +68,7 @@ func TestProbeContentAvailabilityAcceptsAnotherAvailableGroup(t *testing.T) {
 	err := p.probeContentAvailability(
 		context.Background(),
 		groups,
-		statWith(func(_ context.Context, messageID string) error {
+		statWith(t, func(_ context.Context, messageID string) error {
 			if messageID == "missing@example" {
 				return missing
 			}
@@ -96,7 +96,7 @@ func TestProbeContentAvailabilityStopsOnOperationalError(t *testing.T) {
 	}
 	wantErr := errors.New("authentication failed")
 	calls := 0
-	err := p.probeContentAvailability(context.Background(), groups, statWith(func(context.Context, string) error {
+	err := p.probeContentAvailability(context.Background(), groups, statWith(t, func(context.Context, string) error {
 		calls++
 		return wantErr
 	}), false)
@@ -107,7 +107,7 @@ func TestProbeContentAvailabilityStopsOnOperationalError(t *testing.T) {
 
 func TestProbeContentAvailabilityReusesBodyObservation(t *testing.T) {
 	t.Parallel()
-	backend := &fakeArticleBackend{}
+	backend := &fakeArticleBackend{tb: t}
 	broker := newArticleBroker(backend, 1, 1<<20)
 	if _, err := broker.Body(t.Context(), "observed@example"); err != nil {
 		t.Fatal(err)
@@ -123,7 +123,7 @@ func TestProbeContentAvailabilityReusesBodyObservation(t *testing.T) {
 		},
 	}
 	calls := 0
-	err := p.probeContentAvailability(t.Context(), groups, statWith(func(context.Context, string) error {
+	err := p.probeContentAvailability(t.Context(), groups, statWith(t, func(context.Context, string) error {
 		calls++
 		return errors.New("STAT should not run")
 	}), false)
@@ -358,7 +358,7 @@ func TestObfuscatedRARMergeDoesNotCombineNamedStandaloneArchives(t *testing.T) {
 
 func TestProcessFileGroupsUsesManifestOrderAndSortedGroups(t *testing.T) {
 	t.Parallel()
-	backend := &fakeArticleBackend{bodySize: 16}
+	backend := &fakeArticleBackend{tb: t, bodySize: 16}
 	p := NewParserWithSource(newArticleBroker(backend, 2, 1<<20), 2, zerolog.Nop())
 	groups := map[string]*FileGroup{
 		"a": {

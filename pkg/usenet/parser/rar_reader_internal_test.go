@@ -17,7 +17,7 @@ type bodySource struct {
 }
 
 func (s bodySource) Header(context.Context, string, int) (*nntp.YencMetadata, nntp.Answer, error) {
-	return nil, nntp.AnswerFailed, io.EOF
+	return nil, nntp.Failed(), io.EOF
 }
 
 func (s bodySource) Body(_ context.Context, id string) ([]byte, error) {
@@ -25,7 +25,7 @@ func (s bodySource) Body(_ context.Context, id string) ([]byte, error) {
 }
 
 func (s bodySource) Stat(context.Context, string) (nntp.Answer, error) {
-	return nntp.AnswerFound, nil
+	return nntp.Found(), nil
 }
 func (s bodySource) IsAvailable(string) bool { return true }
 func (s bodySource) Metrics() ArticleMetrics { return ArticleMetrics{} }

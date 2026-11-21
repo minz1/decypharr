@@ -11,6 +11,7 @@ import (
 
 	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/internal/nntp"
+	"github.com/sirrobot01/decypharr/internal/nntp/answertest"
 )
 
 const obfuscatedNZB = `<?xml version="1.0"?><nzb xmlns="http://www.newzbin.com/DTD/2003/nzb">` +
@@ -22,7 +23,7 @@ type blockingSource struct{ headerSource }
 
 func (blockingSource) Header(ctx context.Context, _ string, _ int) (*nntp.YencMetadata, nntp.Answer, error) {
 	<-ctx.Done()
-	return nil, nntp.AnswerFailed, ctx.Err()
+	return nil, nntp.Failed(), ctx.Err()
 }
 
 // A parse that runs out of time must say so; it used to report "no valid file groups found".
@@ -54,10 +55,14 @@ func TestParseFailsWhenDeadlineCutsIdentificationShort(t *testing.T) {
 	}
 }
 
-type missingSource struct{ headerSource }
+type missingSource struct {
+	headerSource
 
-func (missingSource) Header(context.Context, string, int) (*nntp.YencMetadata, nntp.Answer, error) {
-	return nil, nntp.AnswerNotFound, &nntp.Error{
+	tb testing.TB
+}
+
+func (s missingSource) Header(context.Context, string, int) (*nntp.YencMetadata, nntp.Answer, error) {
+	return nil, answertest.NotFound(s.tb), &nntp.Error{
 		Type:    nntp.ErrorTypeArticleNotFound,
 		Code:    430,
 		Message: "no such article",
@@ -67,7 +72,7 @@ func (missingSource) Header(context.Context, string, int) (*nntp.YencMetadata, n
 // A dead post whose files are all obfuscated must read as missing articles, not "no valid file groups".
 func TestParseReportsDeadObfuscatedPostAsMissing(t *testing.T) {
 	t.Parallel()
-	err := parseWith(t.Context(), missingSource{}, obfuscatedNZB)
+	err := parseWith(t.Context(), missingSource{tb: t}, obfuscatedNZB)
 	if !errors.Is(err, customerror.ErrUsenetSegmentMissing) {
 		t.Fatalf("Parse() error = %v, want ErrUsenetSegmentMissing", err)
 	}
@@ -76,7 +81,7 @@ func TestParseReportsDeadObfuscatedPostAsMissing(t *testing.T) {
 func TestParseKeepsNoGroupsForUnsupportedContent(t *testing.T) {
 	t.Parallel()
 	nzb := strings.Replace(obfuscatedNZB, "a8f3k2q9z7", "notes.nfo", 1)
-	err := parseWith(t.Context(), missingSource{}, nzb)
+	err := parseWith(t.Context(), missingSource{tb: t}, nzb)
 	if err == nil || errors.Is(err, customerror.ErrUsenetSegmentMissing) ||
 		!strings.Contains(err.Error(), "no valid file groups") {
 		t.Fatalf("Parse() error = %v, want the no-groups error", err)
@@ -88,13 +93,17 @@ func parseWith(ctx context.Context, source ArticleSource, nzb string) error {
 	return err
 }
 
-type flakySource struct{ headerSource }
+type flakySource struct {
+	headerSource
 
-func (flakySource) Header(_ context.Context, id string, _ int) (*nntp.YencMetadata, nntp.Answer, error) {
+	tb testing.TB
+}
+
+func (s flakySource) Header(_ context.Context, id string, _ int) (*nntp.YencMetadata, nntp.Answer, error) {
 	if id == "seg-2@x" {
-		return nil, nntp.AnswerFailed, errors.New("connection reset by peer")
+		return nil, nntp.Failed(), errors.New("connection reset by peer")
 	}
-	return nil, nntp.AnswerNotFound, &nntp.Error{
+	return nil, answertest.NotFound(s.tb), &nntp.Error{
 		Type:    nntp.ErrorTypeArticleNotFound,
 		Code:    430,
 		Message: "no such article",
@@ -108,7 +117,7 @@ func TestParseDoesNotCallAPostDeadOnANetworkError(t *testing.T) {
 		`<file poster="p" date="1" subject="[2/2] - &quot;q7z9w2e4r6&quot; yEnc (1/1)">`+
 			`<groups><group>alt.test</group></groups>`+
 			`<segments><segment bytes="768000" number="1">seg-2@x</segment></segments></file></nzb>`, 1)
-	err := parseWith(t.Context(), flakySource{}, nzb)
+	err := parseWith(t.Context(), flakySource{tb: t}, nzb)
 	if err == nil || errors.Is(err, customerror.ErrUsenetSegmentMissing) {
 		t.Fatalf("Parse() error = %v, want the generic no-groups error", err)
 	}

@@ -14,7 +14,7 @@ import (
 
 func TestReadFilePrefixReusesObservedBodies(t *testing.T) {
 	t.Parallel()
-	backend := &fakeArticleBackend{bodySize: 8}
+	backend := &fakeArticleBackend{tb: t, bodySize: 8}
 	broker := newArticleBroker(backend, 2, 1<<20)
 	p := NewParserWithSource(broker, 2, zerolog.Nop())
 	file := &storage.NZBFile{
@@ -49,7 +49,7 @@ func TestReadFilePrefixReusesObservedBodies(t *testing.T) {
 
 func TestReadFilePrefixDefersTransformsAndRejectsGaps(t *testing.T) {
 	t.Parallel()
-	backend := &fakeArticleBackend{bodySize: 8}
+	backend := &fakeArticleBackend{tb: t, bodySize: 8}
 	p := NewParserWithSource(newArticleBroker(backend, 1, 1<<20), 1, zerolog.Nop())
 	encrypted := &storage.NZBFile{
 		Name:        "encrypted.mkv",
@@ -95,7 +95,7 @@ func TestReadFilePrefixLeavesCallerSegmentsAlone(t *testing.T) {
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			backend := &fakeArticleBackend{bodySize: 8}
+			backend := &fakeArticleBackend{tb: t, bodySize: 8}
 			p := NewParserWithSource(newArticleBroker(backend, 2, 1<<20), 2, zerolog.Nop())
 			file := &storage.NZBFile{
 				Name:     "movie.mkv",
@@ -141,7 +141,7 @@ func BenchmarkReadFilePrefix(b *testing.B) {
 		FileType: storage.NZBFileTypeMedia,
 		Segments: segments,
 	}
-	p := NewParserWithSource(newArticleBroker(&fakeArticleBackend{bodySize: 8}, 2, 1<<20), 2, zerolog.Nop())
+	p := NewParserWithSource(newArticleBroker(&fakeArticleBackend{tb: b, bodySize: 8}, 2, 1<<20), 2, zerolog.Nop())
 
 	b.ReportAllocs()
 	for b.Loop() {

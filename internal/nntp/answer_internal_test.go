@@ -89,7 +89,7 @@ type answerRow struct {
 	build     func(t *testing.T) (*Client, func(*Connection) error)
 	cancelled bool
 	workload  Workload
-	want      Answer
+	want      AnswerKind
 	missing   int
 }
 
@@ -272,11 +272,11 @@ func TestAnswerTable(t *testing.T) {
 				cancel()
 			}
 			got, st, err := client.executeState(ctx, row.workload, fn)
-			if got != row.want || len(st.missingIDs) != row.missing {
+			if got.Kind() != row.want || len(st.missingIDs) != row.missing {
 				t.Fatalf("answer = %v (want %v), counted = %d (want %d), err = %v",
 					got, row.want, len(st.missingIDs), row.missing, err)
 			}
-			if (got == AnswerFound) != (err == nil) {
+			if (got.Kind() == AnswerFound) != (err == nil) {
 				t.Fatalf("answer %v with err %v", got, err)
 			}
 		})
@@ -296,7 +296,7 @@ func TestExecuteArticleWrapsExactlyWhenMissing(t *testing.T) {
 				cancel()
 			}
 			got, err := client.ExecuteArticle(ctx, row.workload, fn)
-			if got != row.want || IsNotFoundEverywhere(err) != (got == AnswerMissing) {
+			if got.Kind() != row.want || IsNotFoundEverywhere(err) != (got.Kind() == AnswerMissing) {
 				t.Fatalf("answer = %v (want %v), proof = %v, err = %v", got, row.want, IsNotFoundEverywhere(err), err)
 			}
 		})
@@ -350,7 +350,7 @@ func TestStaleCommandResultIsNotEvidence(t *testing.T) {
 		first = conn
 		return statArticle(conn)
 	})
-	if answer != AnswerMissing {
+	if answer.Kind() != AnswerMissing {
 		t.Fatalf("first call answer = %v", answer)
 	}
 	answer, st, _ := client.executeState(t.Context(), WorkloadDownload, func(conn *Connection) error {
@@ -360,7 +360,15 @@ func TestStaleCommandResultIsNotEvidence(t *testing.T) {
 	if first == nil || first != second {
 		t.Fatal("the second call did not borrow the pooled connection")
 	}
-	if answer != AnswerNotFound || len(st.missingIDs) != 0 {
+	if answer.Kind() != AnswerNotFound || len(st.missingIDs) != 0 {
 		t.Fatalf("answer = %v, counted = %d", answer, len(st.missingIDs))
+	}
+}
+
+func TestZeroAnswerIsNone(t *testing.T) {
+	t.Parallel()
+	var a Answer
+	if a.Kind() != AnswerNone || a.String() != "none" {
+		t.Fatalf("zero answer = %v (%q)", a.Kind(), a.String())
 	}
 }

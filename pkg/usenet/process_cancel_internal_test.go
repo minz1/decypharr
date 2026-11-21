@@ -31,7 +31,7 @@ func (s *blockingSource) Header(ctx context.Context, _ string, _ int) (*nntp.Yen
 	default:
 	}
 	<-ctx.Done()
-	return nil, nntp.AnswerFailed, ctx.Err()
+	return nil, nntp.Failed(), ctx.Err()
 }
 
 func (s *blockingSource) Metrics() parser.ArticleMetrics { return parser.ArticleMetrics{} }

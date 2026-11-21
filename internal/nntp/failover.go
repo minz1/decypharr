@@ -113,27 +113,6 @@ func (s *failoverState) track(provider config.UsenetProvider, outcome attemptOut
 	}
 }
 
-func (s *failoverState) answer(providers []config.UsenetProvider, ev lastEvent, err error) Answer {
-	if err == nil {
-		return AnswerFound
-	}
-	if ev.kind != eventAttempt && ev.kind != eventAcquireBreak {
-		return AnswerFailed
-	}
-	switch ev.outcome {
-	case attemptExcludeMissing:
-		if ev.kind == eventAttempt && s.provenMissingEverywhere(providers) {
-			return AnswerMissing
-		}
-		return AnswerNotFound
-	case attemptExcludeCorrupt:
-		return AnswerCorrupt
-	case attemptFatal, attemptTransient, attemptDiscard:
-		return AnswerFailed
-	}
-	return AnswerFailed
-}
-
 func (s *failoverState) provenMissingEverywhere(providers []config.UsenetProvider) bool {
 	if s.unproven || s.acquireFailed {
 		return false
@@ -216,7 +195,7 @@ func (c *Client) ExecuteArticle(
 	fn func(conn *Connection) error,
 ) (Answer, error) {
 	answer, _, err := c.executeState(ctx, workload, fn)
-	if answer == AnswerMissing {
+	if answer.Kind() == AnswerMissing {
 		return answer, &NotFoundEverywhereError{Err: err}
 	}
 	return answer, err
@@ -230,13 +209,13 @@ func (c *Client) executeState(
 	st := failoverState{perProvider: max(1, c.retries+1)}
 	if !workload.valid() {
 		err := fmt.Errorf("invalid NNTP workload: %s", workload)
-		return st.answer(c.providers, lastEvent{kind: eventInvalid}, err), st, err
+		return st.answer(c.providers, lastEvent{kind: eventInvalid}), st, err
 	}
 	var lastErr error
 	ev := lastEvent{kind: eventNone}
 	for range len(c.providers) * st.perProvider {
 		if err := ctx.Err(); err != nil {
-			return st.answer(c.providers, lastEvent{kind: eventCtx}, err), st, err
+			return st.answer(c.providers, lastEvent{kind: eventCtx}), st, err
 		}
 		conn, provider, err := c.acquireForFailover(ctx, workload, &st)
 		if err != nil {
@@ -246,20 +225,20 @@ func (c *Client) executeState(
 		}
 		outcome, cmd, err := c.runAttempt(conn, provider, fn)
 		if err == nil {
-			return AnswerFound, st, nil
+			return Found(), st, nil
 		}
 		if ctx.Err() != nil {
-			return st.answer(c.providers, lastEvent{kind: eventCtx}, ctx.Err()), st, ctx.Err()
+			return st.answer(c.providers, lastEvent{kind: eventCtx}), st, ctx.Err()
 		}
 		lastErr = err
 		ev = lastEvent{kind: eventAttempt, outcome: outcome}
 		st.track(provider, outcome, cmd, err)
 		delay, fatal := st.record(c, provider, outcome)
 		if fatal {
-			return st.answer(c.providers, lastEvent{kind: eventFatal}, err), st, err
+			return st.answer(c.providers, lastEvent{kind: eventFatal}), st, err
 		}
 		if delay > 0 && sleepCtx(ctx, delay) != nil {
-			return st.answer(c.providers, lastEvent{kind: eventCtx}, ctx.Err()), st, ctx.Err()
+			return st.answer(c.providers, lastEvent{kind: eventCtx}), st, ctx.Err()
 		}
 		if !c.hasAnyEligibleProvider(st.exclusions) {
 			break
@@ -269,7 +248,7 @@ func (c *Client) executeState(
 	if lastErr != nil {
 		err = fmt.Errorf("%w: %w", ErrAllProvidersFailed, lastErr)
 	}
-	return st.answer(c.providers, ev, err), st, err
+	return st.answer(c.providers, ev), st, err
 }
 
 // runAttempt runs fn on conn, then pools or discards conn by outcome.

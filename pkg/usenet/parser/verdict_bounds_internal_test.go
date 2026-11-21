@@ -12,6 +12,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/internal/nntp"
+	"github.com/sirrobot01/decypharr/internal/nntp/answertest"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 	"github.com/sirrobot01/decypharr/pkg/usenet/manifest"
 )
@@ -28,7 +29,7 @@ func TestSizeFilterWithholdsProof(t *testing.T) {
 
 	holes := func(t *testing.T, filter func(string, int64) error) Verdict {
 		t.Helper()
-		p := NewParserWithSource(scriptSource{header: healthyHeader}, 2, zerolog.Nop()).WithFileFilter(filter)
+		p := NewParserWithSource(scriptSource{tb: t, header: healthyHeader}, 2, zerolog.Nop()).WithFileFilter(filter)
 		parsed, err := p.Parse(
 			t.Context(),
 			"release.nzb",
@@ -45,7 +46,7 @@ func TestSizeFilterWithholdsProof(t *testing.T) {
 	}
 	dead := func(t *testing.T, filter func(string, int64) error, file string) Verdict {
 		t.Helper()
-		source := scriptSource{stat: provenStat, header: provenHeaders}
+		source := scriptSource{tb: t, stat: provenStat, header: provenHeaders}
 		p := NewParserWithSource(source, 2, zerolog.Nop()).WithFileFilter(filter)
 		verdict, err := parseVerdict(t, p, nzbOf(fileXML(1, 1, file, "1:a@x")))
 		if !errors.Is(err, customerror.ErrUsenetSegmentMissing) {
@@ -102,19 +103,19 @@ func TestBodySourceVerdictIsNotProof(t *testing.T) {
 	}
 }
 
-type deadBackend struct{}
+type deadBackend struct{ tb testing.TB }
 
-func (deadBackend) Fetch(context.Context, string) ([]byte, *nntp.YencMetadata, nntp.Answer, error) {
-	return nil, nil, nntp.AnswerMissing, proven430()
+func (d deadBackend) Fetch(context.Context, string) ([]byte, *nntp.YencMetadata, nntp.Answer, error) {
+	return nil, nil, answertest.Missing(d.tb), proven430()
 }
 
-func (deadBackend) Stat(context.Context, string) (nntp.Answer, error) {
-	return nntp.AnswerMissing, proven430()
+func (d deadBackend) Stat(context.Context, string) (nntp.Answer, error) {
+	return answertest.Missing(d.tb), proven430()
 }
 
 func TestBrokerAllMissingBodyIsArticles(t *testing.T) {
 	t.Parallel()
-	p := NewParserWithSource(newArticleBroker(deadBackend{}, 2, 1<<20), 2, zerolog.Nop())
+	p := NewParserWithSource(newArticleBroker(deadBackend{tb: t}, 2, 1<<20), 2, zerolog.Nop())
 	verdict, err := parseVerdict(t, p, nzbOf(fileXML(1, 1, deadOne, "1:a@x", "2:b@x")))
 	if !errors.Is(err, customerror.ErrUsenetSegmentMissing) || verdict != VerdictArticlesMissing {
 		t.Fatalf("error = %v verdict %v, want an articles verdict from the broker's BODY path", err, verdict)
@@ -157,12 +158,12 @@ func TestZIPProofNeedsBothEnds(t *testing.T) {
 	} {
 		t.Run(row.name, func(t *testing.T) {
 			t.Parallel()
-			p := NewParserWithSource(scriptSource{}, 1, zerolog.Nop())
+			p := NewParserWithSource(scriptSource{tb: t}, 1, zerolog.Nop())
 			files := append([]manifest.File(nil), row.files...)
 			err := p.probeContentAvailability(
 				t.Context(),
 				zipProbeGroup(files...),
-				statWith(func(_ context.Context, id string) error {
+				statWith(t, func(_ context.Context, id string) error {
 					return row.dead[id]
 				}),
 				false,
@@ -182,13 +183,13 @@ func TestZIPProofNeedsBothEnds(t *testing.T) {
 
 func TestMediaProofKeepsFirstArticleRule(t *testing.T) {
 	t.Parallel()
-	p := NewParserWithSource(scriptSource{}, 1, zerolog.Nop())
+	p := NewParserWithSource(scriptSource{tb: t}, 1, zerolog.Nop())
 	groups := map[string]*FileGroup{"movie": {
 		BaseName: "movie", Type: storage.NZBFileTypeMedia,
 		Files: []manifest.File{{Filename: "movie.mkv", Segments: segs("first@x", "last@x")}},
 	}}
 	stats := 0
-	err := p.probeContentAvailability(t.Context(), groups, statWith(func(_ context.Context, id string) error {
+	err := p.probeContentAvailability(t.Context(), groups, statWith(t, func(_ context.Context, id string) error {
 		stats++
 		if id == "first@x" {
 			return proven430()
@@ -210,7 +211,7 @@ func archiveJoinGroup(name, file string, kind storage.NZBFileType, id string) *F
 
 func TestProcessFileGroupsHealthySiblingWithholds(t *testing.T) {
 	t.Parallel()
-	source := scriptSource{header: func(id string) (*nntp.YencMetadata, error) {
+	source := scriptSource{tb: t, header: func(id string) (*nntp.YencMetadata, error) {
 		if strings.HasPrefix(id, "ok") {
 			return &nntp.YencMetadata{Size: 5, PartSize: 5, Part: 1, Begin: 1, End: 5}, nil
 		}
@@ -286,7 +287,7 @@ func TestProcessFileGroupsHealthySiblingWithholds(t *testing.T) {
 func TestParseSampleArchiveWithholds(t *testing.T) {
 	t.Parallel()
 	filter := (&config.Config{AllowedExt: []string{"mkv"}}).ValidateFileAllowed
-	source := scriptSource{stat: provenStat, header: provenHeaders}
+	source := scriptSource{tb: t, stat: provenStat, header: provenHeaders}
 	for _, row := range []struct {
 		name string
 		file string
@@ -315,7 +316,7 @@ func TestFilterErrorIsNotProof(t *testing.T) {
 		}
 		return nil
 	}
-	p := NewParserWithSource(scriptSource{header: healthyHeader}, 2, zerolog.Nop()).WithFileFilter(filter)
+	p := NewParserWithSource(scriptSource{tb: t, header: healthyHeader}, 2, zerolog.Nop()).WithFileFilter(filter)
 	parsed, err := p.Parse(
 		t.Context(),
 		"release.nzb",

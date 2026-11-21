@@ -2,28 +2,31 @@ package parser
 
 import (
 	"context"
+	"testing"
 
 	"github.com/sirrobot01/decypharr/internal/nntp"
+	"github.com/sirrobot01/decypharr/internal/nntp/answertest"
 )
 
-func answerFromError(err error) nntp.Answer {
+func answerFromError(tb testing.TB, err error) nntp.Answer {
+	tb.Helper()
 	switch {
 	case err == nil:
-		return nntp.AnswerFound
+		return nntp.Found()
 	case nntp.IsArticleNotFoundError(err):
 		if nntp.IsNotFoundEverywhere(err) {
-			return nntp.AnswerMissing
+			return answertest.Missing(tb)
 		}
-		return nntp.AnswerNotFound
+		return answertest.NotFound(tb)
 	case nntp.IsYencDecodeError(err):
-		return nntp.AnswerCorrupt
+		return answertest.Corrupt(tb)
 	}
-	return nntp.AnswerFailed
+	return nntp.Failed()
 }
 
-func statWith(stat func(context.Context, string) error) statArticleFunc {
+func statWith(tb testing.TB, stat func(context.Context, string) error) statArticleFunc {
 	return func(ctx context.Context, id string) (nntp.Answer, error) {
 		err := stat(ctx, id)
-		return answerFromError(err), err
+		return answerFromError(tb, err), err
 	}
 }

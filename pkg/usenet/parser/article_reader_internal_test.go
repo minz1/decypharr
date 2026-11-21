@@ -12,7 +12,7 @@ import (
 func TestArticleReaderAtReadsAcrossSlicedSegments(t *testing.T) {
 	t.Parallel()
 
-	backend := &fakeArticleBackend{bodySize: 8}
+	backend := &fakeArticleBackend{tb: t, bodySize: 8}
 	broker := newArticleBroker(backend, 2, 1<<20)
 	volumes := []*types.Volume{{
 		Index: 0,
@@ -55,7 +55,7 @@ func TestArticleReaderAtReadsAcrossSlicedSegments(t *testing.T) {
 func TestArticleReaderAtRejectsInconsistentVolume(t *testing.T) {
 	t.Parallel()
 
-	broker := newArticleBroker(&fakeArticleBackend{}, 1, 1<<20)
+	broker := newArticleBroker(&fakeArticleBackend{tb: t}, 1, 1<<20)
 	_, _, err := newArticleReaderAt(t.Context(), broker, []*types.Volume{{
 		Name: "bad", Size: 2, Segments: []storage.NZBSegment{{MessageID: "one", Bytes: 1}},
 	}})

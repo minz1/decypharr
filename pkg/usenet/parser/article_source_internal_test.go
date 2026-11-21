@@ -23,6 +23,8 @@ import (
 )
 
 type fakeArticleBackend struct {
+	tb testing.TB
+
 	fetches   atomic.Int64
 	stats     atomic.Int64
 	active    atomic.Int64
@@ -61,11 +63,11 @@ func (b *fakeArticleBackend) Fetch(
 		select {
 		case <-b.release:
 		case <-ctx.Done():
-			return nil, nil, nntp.AnswerFailed, ctx.Err()
+			return nil, nil, nntp.Failed(), ctx.Err()
 		}
 	}
 	if b.fetchErr != nil {
-		return nil, nil, answerFromError(b.fetchErr), b.fetchErr
+		return nil, nil, answerFromError(b.tb, b.fetchErr), b.fetchErr
 	}
 	size := b.bodySize
 	if size == 0 {
@@ -74,9 +76,9 @@ func (b *fakeArticleBackend) Fetch(
 	body := make([]byte, size)
 	copy(body, messageID)
 	if b.noMetadata {
-		return body, nil, nntp.AnswerFound, nil
+		return body, nil, nntp.Found(), nil
 	}
-	return body, &nntp.YencMetadata{Name: messageID, Size: int64(size), PartSize: int64(size)}, nntp.AnswerFound, nil
+	return body, &nntp.YencMetadata{Name: messageID, Size: int64(size), PartSize: int64(size)}, nntp.Found(), nil
 }
 
 func (b *fakeArticleBackend) Stat(ctx context.Context, _ string) (nntp.Answer, error) {
@@ -85,16 +87,16 @@ func (b *fakeArticleBackend) Stat(ctx context.Context, _ string) (nntp.Answer, e
 		select {
 		case <-b.statRelease:
 		case <-ctx.Done():
-			return nntp.AnswerFailed, ctx.Err()
+			return nntp.Failed(), ctx.Err()
 		}
 	}
-	return answerFromError(b.statErr), b.statErr
+	return answerFromError(b.tb, b.statErr), b.statErr
 }
 
 func TestArticleBrokerDeduplicatesConcurrentBodyAndHeader(t *testing.T) {
 	t.Parallel()
 
-	backend := &fakeArticleBackend{started: make(chan struct{}, 1), release: make(chan struct{})}
+	backend := &fakeArticleBackend{tb: t, started: make(chan struct{}, 1), release: make(chan struct{})}
 	broker := newArticleBroker(backend, 4, 1<<20)
 
 	var wg sync.WaitGroup
@@ -137,7 +139,7 @@ func TestArticleBrokerDeduplicatesConcurrentBodyAndHeader(t *testing.T) {
 func TestArticleBrokerBoundsNetworkConcurrency(t *testing.T) {
 	t.Parallel()
 
-	backend := &fakeArticleBackend{release: make(chan struct{})}
+	backend := &fakeArticleBackend{tb: t, release: make(chan struct{})}
 	broker := newArticleBroker(backend, 3, 1<<20)
 
 	var wg sync.WaitGroup
@@ -165,7 +167,7 @@ func TestArticleBrokerBoundsNetworkConcurrency(t *testing.T) {
 func TestArticleBrokerRetainsMetadataAfterBodyEviction(t *testing.T) {
 	t.Parallel()
 
-	backend := &fakeArticleBackend{bodySize: 4}
+	backend := &fakeArticleBackend{tb: t, bodySize: 4}
 	broker := newArticleBroker(backend, 1, 4)
 	if _, err := broker.Body(t.Context(), "one"); err != nil {
 		t.Fatal(err)
@@ -197,7 +199,7 @@ func TestArticleBrokerRetainsMetadataAfterBodyEviction(t *testing.T) {
 func TestArticleBrokerBoundsMetadataEntries(t *testing.T) {
 	t.Parallel()
 
-	backend := &fakeArticleBackend{bodySize: 4}
+	backend := &fakeArticleBackend{tb: t, bodySize: 4}
 	broker := newArticleBroker(backend, 1, 1<<20)
 	broker.entryLimit = 2
 	for _, messageID := range []string{"one", "two"} {
@@ -239,7 +241,7 @@ func TestArticleBrokerDoesNotRetainAliasedMessageIDs(t *testing.T) {
 		t.Fatalf("aliased id = %q", aliased)
 	}
 
-	broker := newArticleBroker(&fakeArticleBackend{bodySize: 8}, 1, 1<<20)
+	broker := newArticleBroker(&fakeArticleBackend{tb: t, bodySize: 8}, 1, 1<<20)
 	if _, err := broker.Body(t.Context(), aliased); err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +286,7 @@ func TestArticleBrokerDoesNotRetainAliasedMessageIDs(t *testing.T) {
 func TestBrokerFetchSurvivesFirstCallerCancel(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
-		backend := &fakeArticleBackend{release: make(chan struct{}), bodySize: 16}
+		backend := &fakeArticleBackend{tb: t, release: make(chan struct{}), bodySize: 16}
 		broker := newArticleBroker(backend, 2, 1<<20)
 
 		firstCtx, cancelFirst := context.WithCancel(t.Context())
@@ -306,11 +308,11 @@ func TestBrokerFetchSurvivesFirstCallerCancel(t *testing.T) {
 		synctest.Wait()
 
 		cancelFirst()
-		if got := <-first; !errors.Is(got.err, context.Canceled) || got.observation.answer != nntp.AnswerFailed {
+		if got := <-first; !errors.Is(got.err, context.Canceled) || got.observation.answer.Kind() != nntp.AnswerNone {
 			t.Fatalf("first caller answer = %v err = %v", got.observation.answer, got.err)
 		}
 		close(backend.release)
-		if got := <-second; got.err != nil || got.observation.answer != nntp.AnswerFound {
+		if got := <-second; got.err != nil || got.observation.answer.Kind() != nntp.AnswerFound {
 			t.Fatalf("second caller answer = %v err = %v, want found despite the first caller's cancellation",
 				got.observation.answer, got.err)
 		}
@@ -343,7 +345,7 @@ func TestAnswerFromErrorOrder(t *testing.T) {
 	cases := []struct {
 		name string
 		err  error
-		want nntp.Answer
+		want nntp.AnswerKind
 	}{
 		{"nil", nil, nntp.AnswerFound},
 		{"bare 430", bare430(), nntp.AnswerNotFound},
@@ -358,7 +360,7 @@ func TestAnswerFromErrorOrder(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
-		if got := answerFromError(tc.err); got != tc.want {
+		if got := answerFromError(t, tc.err); got.Kind() != tc.want {
 			t.Errorf("%s: answer = %v, want %v", tc.name, got, tc.want)
 		}
 	}
@@ -374,7 +376,7 @@ func TestStatWithKeepsAnswerAndError(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		err  error
-		want nntp.Answer
+		want nntp.AnswerKind
 	}{
 		{"nil", nil, nntp.AnswerFound},
 		{"bare 430", bare430(), nntp.AnswerNotFound},
@@ -382,8 +384,8 @@ func TestStatWithKeepsAnswerAndError(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			answer, err := statWith(func(context.Context, string) error { return tc.err })(t.Context(), "<id>")
-			if answer != tc.want || !errors.Is(err, tc.err) {
+			answer, err := statWith(t, func(context.Context, string) error { return tc.err })(t.Context(), "<id>")
+			if answer.Kind() != tc.want || !errors.Is(err, tc.err) {
 				t.Fatalf("answer = %v err = %v, want %v and %v", answer, err, tc.want, tc.err)
 			}
 		})
@@ -500,7 +502,7 @@ func isNoMetadata(err error) bool {
 
 type answerRow struct {
 	name    string
-	want    nntp.Answer
+	want    nntp.AnswerKind
 	wantErr func(error) bool
 	run     func(t *testing.T) answered
 }
@@ -546,7 +548,7 @@ func wireRows() []answerRow {
 				broker,
 				servedArticle,
 				0,
-			); got.answer != nntp.AnswerFound ||
+			); got.answer.Kind() != nntp.AnswerFound ||
 				got.err != nil {
 				t.Fatalf("first header = %+v", got)
 			}
@@ -562,7 +564,7 @@ func wireRows() []answerRow {
 func cacheRows() []answerRow {
 	return []answerRow{
 		{"stat cache hit", nntp.AnswerFound, nil, func(t *testing.T) answered {
-			backend := &fakeArticleBackend{}
+			backend := &fakeArticleBackend{tb: t}
 			broker := newArticleBroker(backend, 2, 1<<20)
 			requireBody(t, broker, "<article>")
 			got := statAnswer(t.Context(), broker)
@@ -570,7 +572,7 @@ func cacheRows() []answerRow {
 			return got
 		}},
 		{"body cache hit through load", nntp.AnswerFound, nil, func(t *testing.T) answered {
-			backend := &fakeArticleBackend{bodySize: 2 * maxCachedArticlePrefix}
+			backend := &fakeArticleBackend{tb: t, bodySize: 2 * maxCachedArticlePrefix}
 			broker := newArticleBroker(backend, 2, 1<<20)
 			requireBody(t, broker, "<article>")
 			got := headerAnswer(t.Context(), broker, "<article>", maxCachedArticlePrefix+1)
@@ -578,7 +580,7 @@ func cacheRows() []answerRow {
 			return got
 		}},
 		{"header prefix cache hit", nntp.AnswerFound, nil, func(t *testing.T) answered {
-			backend := &fakeArticleBackend{}
+			backend := &fakeArticleBackend{tb: t}
 			broker := newArticleBroker(backend, 2, 1<<20)
 			requireBody(t, broker, "<article>")
 			got := headerAnswer(t.Context(), broker, "<article>", 8)
@@ -586,7 +588,7 @@ func cacheRows() []answerRow {
 			return got
 		}},
 		{"stat flight success", nntp.AnswerFound, nil, func(t *testing.T) answered {
-			backend := &fakeArticleBackend{}
+			backend := &fakeArticleBackend{tb: t}
 			broker := newArticleBroker(backend, 2, 1<<20)
 			got := statAnswer(t.Context(), broker)
 			requireTraffic(t, backend, broker, 0, 1, 0)
@@ -599,7 +601,7 @@ func flightRows() []answerRow {
 	return []answerRow{
 		{"shared body waiters", nntp.AnswerMissing, nntp.IsNotFoundEverywhere, func(t *testing.T) answered {
 			return inBubble(t, func(t *testing.T) answered {
-				backend := &fakeArticleBackend{fetchErr: proven430(), release: make(chan struct{})}
+				backend := &fakeArticleBackend{tb: t, fetchErr: proven430(), release: make(chan struct{})}
 				broker := newArticleBroker(backend, 2, 1<<20)
 				got := sharedWaiters(t, backend.release, func(ctx context.Context) answered {
 					return headerAnswer(ctx, broker, "<article>", 0)
@@ -610,7 +612,7 @@ func flightRows() []answerRow {
 		}},
 		{"shared stat waiters", nntp.AnswerNotFound, nntp.IsArticleNotFoundError, func(t *testing.T) answered {
 			return inBubble(t, func(t *testing.T) answered {
-				backend := &fakeArticleBackend{statErr: bare430(), statRelease: make(chan struct{})}
+				backend := &fakeArticleBackend{tb: t, statErr: bare430(), statRelease: make(chan struct{})}
 				broker := newArticleBroker(backend, 2, 1<<20)
 				got := sharedWaiters(t, backend.statRelease, func(ctx context.Context) answered {
 					return statAnswer(ctx, broker)
@@ -619,18 +621,18 @@ func flightRows() []answerRow {
 				return got
 			})
 		}},
-		{"cancelled body waiter", nntp.AnswerFailed, isCanceled, func(t *testing.T) answered {
+		{"cancelled body waiter", nntp.AnswerNone, isCanceled, func(t *testing.T) answered {
 			return inBubble(t, func(t *testing.T) answered {
-				backend := &fakeArticleBackend{release: make(chan struct{})}
+				backend := &fakeArticleBackend{tb: t, release: make(chan struct{})}
 				broker := newArticleBroker(backend, 2, 1<<20)
 				return cancelledWaiter(t, backend.release, func(ctx context.Context) answered {
 					return headerAnswer(ctx, broker, "<article>", 0)
 				})
 			})
 		}},
-		{"cancelled stat waiter", nntp.AnswerFailed, isCanceled, func(t *testing.T) answered {
+		{"cancelled stat waiter", nntp.AnswerNone, isCanceled, func(t *testing.T) answered {
 			return inBubble(t, func(t *testing.T) answered {
-				backend := &fakeArticleBackend{statRelease: make(chan struct{})}
+				backend := &fakeArticleBackend{tb: t, statRelease: make(chan struct{})}
 				broker := newArticleBroker(backend, 2, 1<<20)
 				return cancelledWaiter(t, backend.statRelease, func(ctx context.Context) answered {
 					return statAnswer(ctx, broker)
@@ -638,11 +640,11 @@ func flightRows() []answerRow {
 			})
 		}},
 		{"empty message id", nntp.AnswerFailed, isEmptyID, func(t *testing.T) answered {
-			broker := newArticleBroker(&fakeArticleBackend{}, 2, 1<<20)
+			broker := newArticleBroker(&fakeArticleBackend{tb: t}, 2, 1<<20)
 			return headerAnswer(t.Context(), broker, "", 0)
 		}},
 		{"fetch returns no metadata", nntp.AnswerFailed, isNoMetadata, func(t *testing.T) answered {
-			broker := newArticleBroker(&fakeArticleBackend{noMetadata: true}, 2, 1<<20)
+			broker := newArticleBroker(&fakeArticleBackend{tb: t, noMetadata: true}, 2, 1<<20)
 			return headerAnswer(t.Context(), broker, "<article>", 0)
 		}},
 	}
@@ -655,7 +657,7 @@ func TestEveryAnswerPath(t *testing.T) {
 		t.Run(row.name, func(t *testing.T) {
 			t.Parallel()
 			got := row.run(t)
-			if got.answer != row.want {
+			if got.answer.Kind() != row.want {
 				t.Errorf("answer = %v, want %v", got.answer, row.want)
 			}
 			if row.wantErr == nil && got.err != nil {

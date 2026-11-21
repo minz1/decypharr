@@ -214,6 +214,17 @@ linters:
           deny:
             - pkg: math/rand$
               desc: Use math/rand/v2 instead, see https://go.dev/blog/randv2
+            - pkg: github.com/sirrobot01/decypharr/internal/nntp/answertest
+              desc: answertest builds NNTP proof answers for tests only
+        "answer births":
+          files:
+            - "$all"
+            - "!$test"
+            - "!**/internal/nntp/answer.go"
+            - "!**/internal/nntp/answertest/**"
+          deny:
+            - pkg: github.com/sirrobot01/decypharr/internal/nntp/internal/answer
+              desc: only internal/nntp/answer.go constructs NNTP answers
         "non-main files":
           files:
             - "!**/main.go"

@@ -27,21 +27,22 @@ func proven430() error {
 type scriptSource struct {
 	headerSource
 
+	tb     testing.TB
 	header func(id string) (*nntp.YencMetadata, error)
 	stat   func(id string) error
 }
 
 func (s scriptSource) Header(_ context.Context, id string, _ int) (*nntp.YencMetadata, nntp.Answer, error) {
 	metadata, err := s.header(id)
-	return metadata, answerFromError(err), err
+	return metadata, answerFromError(s.tb, err), err
 }
 
 func (s scriptSource) Stat(_ context.Context, id string) (nntp.Answer, error) {
 	if s.stat == nil {
-		return nntp.AnswerFound, nil
+		return nntp.Found(), nil
 	}
 	err := s.stat(id)
-	return answerFromError(err), err
+	return answerFromError(s.tb, err), err
 }
 
 func provenHeaders(_ string) (*nntp.YencMetadata, error) { return nil, proven430() }
@@ -88,7 +89,7 @@ func isContentMissing(err error) bool {
 func TestHeaderPrefixAllProvenIsContentMissing(t *testing.T) {
 	t.Parallel()
 	file := manifest.File{Segments: segs("a@x", "b@x", "c@x")}
-	source := scriptSource{header: provenHeaders}
+	source := scriptSource{tb: t, header: provenHeaders}
 	_, err := fetchFileHeaderPrefix(t.Context(), source, file, metadataOnly)
 	if !isContentMissing(err) || !nntp.IsArticleNotFoundError(err) {
 		t.Fatalf("error = %v, want a ContentMissingError that is still not-found", err)
@@ -98,7 +99,7 @@ func TestHeaderPrefixAllProvenIsContentMissing(t *testing.T) {
 func TestHeaderPrefixOneUnprovenIsNot(t *testing.T) {
 	t.Parallel()
 	file := manifest.File{Segments: segs("a@x", "b@x", "c@x")}
-	source := scriptSource{header: func(id string) (*nntp.YencMetadata, error) {
+	source := scriptSource{tb: t, header: func(id string) (*nntp.YencMetadata, error) {
 		if id == "b@x" {
 			return nil, bare430()
 		}
@@ -113,7 +114,7 @@ func TestHeaderPrefixOneUnprovenIsNot(t *testing.T) {
 func TestHeaderPrefixYencThenProvenIsNot(t *testing.T) {
 	t.Parallel()
 	file := manifest.File{Segments: segs("a@x", "b@x", "c@x")}
-	source := scriptSource{header: func(id string) (*nntp.YencMetadata, error) {
+	source := scriptSource{tb: t, header: func(id string) (*nntp.YencMetadata, error) {
 		if id == "a@x" {
 			return nil, &nntp.Error{Type: nntp.ErrorTypeYencDecode, Message: "bad crc"}
 		}
@@ -128,7 +129,7 @@ func TestHeaderPrefixYencThenProvenIsNot(t *testing.T) {
 func TestHeaderPrefixEmptyIDIsNot(t *testing.T) {
 	t.Parallel()
 	file := manifest.File{Segments: segs("a@x", "", "c@x")}
-	source := scriptSource{header: provenHeaders}
+	source := scriptSource{tb: t, header: provenHeaders}
 	_, err := fetchFileHeaderPrefix(t.Context(), source, file, metadataOnly)
 	if err == nil || isContentMissing(err) {
 		t.Fatalf("error = %v, want no proof with an unaskable segment", err)
@@ -138,7 +139,7 @@ func TestHeaderPrefixEmptyIDIsNot(t *testing.T) {
 func TestHeaderPrefixCtxErrorIsNot(t *testing.T) {
 	t.Parallel()
 	file := manifest.File{Segments: segs("a@x", "b@x")}
-	source := scriptSource{header: func(id string) (*nntp.YencMetadata, error) {
+	source := scriptSource{tb: t, header: func(id string) (*nntp.YencMetadata, error) {
 		if id == "a@x" {
 			return nil, proven430()
 		}
@@ -155,7 +156,7 @@ func TestHeaderPrefixDuplicateNumberIsNot(t *testing.T) {
 	file := manifest.File{Segments: []manifest.Segment{
 		{Number: 1, MessageID: "a@x"}, {Number: 1, MessageID: "b@x"}, {Number: 2, MessageID: "c@x"},
 	}}
-	source := scriptSource{header: provenHeaders}
+	source := scriptSource{tb: t, header: provenHeaders}
 	_, err := fetchFileHeaderPrefix(t.Context(), source, file, metadataOnly)
 	if err == nil || isContentMissing(err) {
 		t.Fatalf("error = %v, want no proof when a probed number has an alternative", err)
@@ -176,9 +177,9 @@ func mediaProbeGroups(files ...string) map[string]*FileGroup {
 
 func TestProbeAllProvenIsContentMissing(t *testing.T) {
 	t.Parallel()
-	p := NewParserWithSource(scriptSource{}, 1, zerolog.Nop())
+	p := NewParserWithSource(scriptSource{tb: t}, 1, zerolog.Nop())
 	err := p.probeContentAvailability(t.Context(), mediaProbeGroups("a", "b"),
-		statWith(func(context.Context, string) error { return proven430() }), false)
+		statWith(t, func(context.Context, string) error { return proven430() }), false)
 	if !errors.Is(err, customerror.ErrUsenetSegmentMissing) || VerdictOf(err) != VerdictArticlesMissing {
 		t.Fatalf("error = %v verdict %v, want missing with articles verdict", err, VerdictOf(err))
 	}
@@ -186,9 +187,9 @@ func TestProbeAllProvenIsContentMissing(t *testing.T) {
 
 func TestProbeOneUnprovenIsNot(t *testing.T) {
 	t.Parallel()
-	p := NewParserWithSource(scriptSource{}, 1, zerolog.Nop())
+	p := NewParserWithSource(scriptSource{tb: t}, 1, zerolog.Nop())
 	err := p.probeContentAvailability(t.Context(), mediaProbeGroups("a", "b"),
-		statWith(func(_ context.Context, id string) error {
+		statWith(t, func(_ context.Context, id string) error {
 			if id == "b@x" {
 				return bare430()
 			}
@@ -201,9 +202,9 @@ func TestProbeOneUnprovenIsNot(t *testing.T) {
 
 func TestProbeWithDetectionDoubtIsNot(t *testing.T) {
 	t.Parallel()
-	p := NewParserWithSource(scriptSource{}, 1, zerolog.Nop())
+	p := NewParserWithSource(scriptSource{tb: t}, 1, zerolog.Nop())
 	err := p.probeContentAvailability(t.Context(), mediaProbeGroups("a"),
-		statWith(func(context.Context, string) error { return proven430() }), true)
+		statWith(t, func(context.Context, string) error { return proven430() }), true)
 	if !errors.Is(err, customerror.ErrUsenetSegmentMissing) || VerdictOf(err) != VerdictNone {
 		t.Fatalf("error = %v verdict %v, want missing without a verdict", err, VerdictOf(err))
 	}
@@ -211,7 +212,7 @@ func TestProbeWithDetectionDoubtIsNot(t *testing.T) {
 
 func TestParseDuplicateNumberAlternativeIsNotProof(t *testing.T) {
 	t.Parallel()
-	source := scriptSource{header: provenHeaders, stat: func(id string) error {
+	source := scriptSource{tb: t, header: provenHeaders, stat: func(id string) error {
 		if id == "a@x" {
 			return proven430()
 		}
@@ -226,7 +227,7 @@ func TestParseDuplicateNumberAlternativeIsNotProof(t *testing.T) {
 
 func TestParseDroppedAlternateIsNotProof(t *testing.T) {
 	t.Parallel()
-	source := scriptSource{header: provenHeaders, stat: func(id string) error {
+	source := scriptSource{tb: t, header: provenHeaders, stat: func(id string) error {
 		if id == "a@x" {
 			return proven430()
 		}
@@ -249,19 +250,19 @@ func TestParseJoinedProofIsNotProof(t *testing.T) {
 	}{
 		{
 			name:   "probe",
-			source: scriptSource{header: provenHeaders, stat: func(string) error { return joined() }},
+			source: scriptSource{tb: t, header: provenHeaders, stat: func(string) error { return joined() }},
 			file:   "movie.mkv",
 		},
 		{
 			name: "header walk",
-			source: scriptSource{stat: provenStat, header: func(string) (*nntp.YencMetadata, error) {
+			source: scriptSource{tb: t, stat: provenStat, header: func(string) (*nntp.YencMetadata, error) {
 				return nil, joined()
 			}},
 			file: deadOne,
 		},
 		{
 			name: "header walk joining a content proof",
-			source: scriptSource{stat: provenStat, header: func(string) (*nntp.YencMetadata, error) {
+			source: scriptSource{tb: t, stat: provenStat, header: func(string) (*nntp.YencMetadata, error) {
 				return nil, errors.Join(&ContentMissingError{Err: proven430()}, context.DeadlineExceeded)
 			}},
 			file: deadOne,
@@ -281,7 +282,7 @@ func TestParseJoinedProofIsNotProof(t *testing.T) {
 
 func TestParseDuplicateNumberUniqueControlIsProof(t *testing.T) {
 	t.Parallel()
-	source := scriptSource{header: provenHeaders, stat: provenStat}
+	source := scriptSource{tb: t, header: provenHeaders, stat: provenStat}
 	p := NewParserWithSource(source, 2, zerolog.Nop())
 	verdict, err := parseVerdict(t, p, nzbOf(fileXML(1, 1, "movie.mkv", "1:a@x", "2:b@x", "3:c@x")))
 	if !errors.Is(err, customerror.ErrUsenetSegmentMissing) || verdict != VerdictArticlesMissing {
@@ -305,7 +306,7 @@ func twoUnknownsNZB() string {
 
 func TestParseDetectionTimeoutBlocksProof(t *testing.T) {
 	t.Parallel()
-	source := scriptSource{stat: provenStat, header: func(id string) (*nntp.YencMetadata, error) {
+	source := scriptSource{tb: t, stat: provenStat, header: func(id string) (*nntp.YencMetadata, error) {
 		if id == "two@x" {
 			return nil, context.DeadlineExceeded
 		}
@@ -320,7 +321,7 @@ func TestParseDetectionTimeoutBlocksProof(t *testing.T) {
 
 func TestParseObservedUnknownBlocksProof(t *testing.T) {
 	t.Parallel()
-	source := scriptSource{stat: provenStat, header: func(id string) (*nntp.YencMetadata, error) {
+	source := scriptSource{tb: t, stat: provenStat, header: func(id string) (*nntp.YencMetadata, error) {
 		if id == "two@x" {
 			return &nntp.YencMetadata{Size: 10, PartSize: 10, Snippet: []byte("plain text")}, nil
 		}
@@ -335,7 +336,7 @@ func TestParseObservedUnknownBlocksProof(t *testing.T) {
 
 func TestParseAllProvenMissingIsArticles(t *testing.T) {
 	t.Parallel()
-	source := scriptSource{stat: provenStat, header: provenHeaders}
+	source := scriptSource{tb: t, stat: provenStat, header: provenHeaders}
 	p := NewParserWithSource(source, 2, zerolog.Nop())
 	verdict, err := parseVerdict(t, p, twoUnknownsNZB())
 	if !errors.Is(err, customerror.ErrUsenetSegmentMissing) || verdict != VerdictArticlesMissing {
@@ -345,7 +346,7 @@ func TestParseAllProvenMissingIsArticles(t *testing.T) {
 
 func TestParseOutcomeMatchesTheError(t *testing.T) {
 	t.Parallel()
-	source := scriptSource{stat: provenStat, header: provenHeaders}
+	source := scriptSource{tb: t, stat: provenStat, header: provenHeaders}
 	p := NewParserWithSource(source, 2, zerolog.Nop())
 	parsed, err := p.Parse(t.Context(), "release.nzb", []byte(twoUnknownsNZB()))
 	if !errors.Is(err, customerror.ErrUsenetSegmentMissing) ||
@@ -361,13 +362,13 @@ func TestParseOutcomeMatchesTheError(t *testing.T) {
 func TestAllMissingSiteProof(t *testing.T) {
 	t.Parallel()
 	nzb := nzbOf(fileXML(1, 2, deadOne, "1:one@x"), fileXML(2, 2, deadTwo, "1:two@x"))
-	p := NewParserWithSource(scriptSource{header: provenHeaders}, 2, zerolog.Nop())
+	p := NewParserWithSource(scriptSource{tb: t, header: provenHeaders}, 2, zerolog.Nop())
 	verdict, err := parseVerdict(t, p, nzb)
 	if !errors.Is(err, customerror.ErrUsenetSegmentMissing) || verdict != VerdictArticlesMissing {
 		t.Fatalf("all proven: error = %v verdict %v, want an articles verdict", err, verdict)
 	}
 
-	mixed := scriptSource{header: func(id string) (*nntp.YencMetadata, error) {
+	mixed := scriptSource{tb: t, header: func(id string) (*nntp.YencMetadata, error) {
 		if id == "two@x" {
 			return nil, bare430()
 		}
@@ -393,7 +394,7 @@ func TestDoubtCarriesIntoProcess(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			source := scriptSource{header: func(id string) (*nntp.YencMetadata, error) {
+			source := scriptSource{tb: t, header: func(id string) (*nntp.YencMetadata, error) {
 				switch id {
 				case "one@x":
 					return nil, context.DeadlineExceeded
@@ -433,7 +434,7 @@ func onlyMKV(name string, _ int64) error {
 
 func TestRefusedExtensionAllMissingWithholdsProof(t *testing.T) {
 	t.Parallel()
-	source := scriptSource{stat: provenStat, header: provenHeaders}
+	source := scriptSource{tb: t, stat: provenStat, header: provenHeaders}
 	samples := (&config.Config{AllowedExt: []string{"mkv"}}).ValidateFileAllowed
 	rows := []struct {
 		name   string
@@ -471,7 +472,7 @@ func TestRefusedExtensionAllMissingWithholdsProof(t *testing.T) {
 
 func TestRefusedNamesWithholdProof(t *testing.T) {
 	t.Parallel()
-	source := scriptSource{stat: provenStat, header: provenHeaders}
+	source := scriptSource{tb: t, stat: provenStat, header: provenHeaders}
 	newParser := func() *NZBParser {
 		return NewParserWithSource(source, 2, zerolog.Nop()).WithFileFilter(refuseSamples)
 	}
@@ -494,7 +495,7 @@ func TestRefusedNamesWithholdProof(t *testing.T) {
 
 	process := func(t *testing.T, nzbName string) Verdict {
 		t.Helper()
-		passing := scriptSource{header: provenHeaders}
+		passing := scriptSource{tb: t, header: provenHeaders}
 		p := NewParserWithSource(passing, 2, zerolog.Nop()).WithFileFilter(refuseSamples)
 		parsed, err := p.Parse(t.Context(), nzbName, []byte(nzbOf(fileXML(1, 1, "movie.mkv", "1:a@x", "2:b@x"))))
 		if err != nil {
@@ -535,7 +536,7 @@ func joinGroup(name, id string) *FileGroup {
 func TestProcessFileGroupsJoin(t *testing.T) {
 	t.Parallel()
 	boom := errors.New("boom")
-	source := scriptSource{header: func(id string) (*nntp.YencMetadata, error) {
+	source := scriptSource{tb: t, header: func(id string) (*nntp.YencMetadata, error) {
 		if id == "bad@x" {
 			return nil, boom
 		}
@@ -746,7 +747,7 @@ func TestArchiveHolesAreUntyped(t *testing.T) {
 
 func TestHolesInRefusedSampleAreWithheld(t *testing.T) {
 	t.Parallel()
-	source := scriptSource{header: func(string) (*nntp.YencMetadata, error) {
+	source := scriptSource{tb: t, header: func(string) (*nntp.YencMetadata, error) {
 		return &nntp.YencMetadata{Size: 15, PartSize: 5, Part: 1, Begin: 1, End: 5}, nil
 	}}
 	for _, tc := range []struct {
@@ -814,7 +815,7 @@ func TestVerdictOfRefusesAnEmbeddedVerdict(t *testing.T) {
 
 func TestHeaderWalkSourceVerdictIsNotProof(t *testing.T) {
 	t.Parallel()
-	source := scriptSource{stat: provenStat, header: func(id string) (*nntp.YencMetadata, error) {
+	source := scriptSource{tb: t, stat: provenStat, header: func(id string) (*nntp.YencMetadata, error) {
 		if id == "a@x" {
 			return nil, &ContentMissingError{Err: bare430()}
 		}
@@ -829,7 +830,7 @@ func TestHeaderWalkSourceVerdictIsNotProof(t *testing.T) {
 
 func TestSampleNZBNameWithholdsProof(t *testing.T) {
 	t.Parallel()
-	source := scriptSource{stat: provenStat, header: provenHeaders}
+	source := scriptSource{tb: t, stat: provenStat, header: provenHeaders}
 	filter := (&config.Config{AllowedExt: []string{"mkv", "zip"}}).ValidateFileAllowed
 	rows := []struct {
 		name, nzbName string
@@ -897,7 +898,7 @@ func TestSampleNZBNameWithholdsProof(t *testing.T) {
 
 func TestProbeSourceVerdictIsNotProof(t *testing.T) {
 	t.Parallel()
-	source := scriptSource{header: provenHeaders, stat: func(string) error {
+	source := scriptSource{tb: t, header: provenHeaders, stat: func(string) error {
 		return &ContentMissingError{Err: context.DeadlineExceeded}
 	}}
 	p := NewParserWithSource(source, 2, zerolog.Nop())
@@ -910,7 +911,7 @@ func TestProbeSourceVerdictIsNotProof(t *testing.T) {
 func TestHeaderPrefixPassesNoSourceVerdict(t *testing.T) {
 	t.Parallel()
 	file := manifest.File{Segments: segs("a@x", "b@x")}
-	source := scriptSource{header: func(string) (*nntp.YencMetadata, error) {
+	source := scriptSource{tb: t, header: func(string) (*nntp.YencMetadata, error) {
 		return nil, &SegmentHolesError{File: "x", Present: 1, Span: 2}
 	}}
 	_, err := fetchFileHeaderPrefix(t.Context(), source, file, metadataOnly)

@@ -23,11 +23,11 @@ type joinSource struct {
 
 func (s joinSource) Header(ctx context.Context, id string, _ int) (*nntp.YencMetadata, nntp.Answer, error) {
 	if id != "last@x" {
-		return nil, nntp.AnswerFailed, errors.New("reference header broken")
+		return nil, nntp.Failed(), errors.New("reference header broken")
 	}
 	<-ctx.Done()
 	s.lastReturned.Store(true)
-	return nil, nntp.AnswerFailed, ctx.Err()
+	return nil, nntp.Failed(), ctx.Err()
 }
 
 // An early return from enrich (the reference header failed) must cancel and

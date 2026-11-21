@@ -402,7 +402,7 @@ func TestStatProves(t *testing.T) {
 		failoverProvider("localhost", port, "b", 2, "", false),
 	)
 	_, _, answer, err := client.Stat(t.Context(), WorkloadDownload, "missing@example")
-	if !IsNotFoundEverywhere(err) || answer != AnswerMissing {
+	if !IsNotFoundEverywhere(err) || answer.Kind() != AnswerMissing {
 		t.Fatalf("answer = %v, err = %v", answer, err)
 	}
 }
