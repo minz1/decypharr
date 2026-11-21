@@ -37,6 +37,20 @@ func TestParseReportsDeadlineInsteadOfNoGroups(t *testing.T) {
 	}
 }
 
+func TestParseReturnsAParsedWhenTheBudgetRunsOut(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	p := NewParserWithSource(blockingSource{}, 2, zerolog.Nop())
+	parsed, err := p.Parse(ctx, "release.nzb", []byte(obfuscatedNZB))
+	if parsed == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Parse() = (%v, %v), want a non-nil Parsed and a deadline error", parsed, err)
+	}
+	if kept := parsed.WithoutVerdict(); kept.Outcome != (Outcome{}) {
+		t.Fatalf("WithoutVerdict().Outcome = %+v, want zero", kept.Outcome)
+	}
+}
+
 // Files identified before the deadline must not pass as the whole release.
 func TestParseFailsWhenDeadlineCutsIdentificationShort(t *testing.T) {
 	t.Parallel()
