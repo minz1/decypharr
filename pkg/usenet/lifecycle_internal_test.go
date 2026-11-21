@@ -92,6 +92,11 @@ func (s *stallingServer) serve(conn net.Conn) {
 // one provider on port and maxConns scheduler workers.
 func newLifecycleUsenet(t *testing.T, port, maxConns int) (*Usenet, *task.Group) {
 	t.Helper()
+	return newLifecycleUsenetLogged(t, port, maxConns, logger.Discard())
+}
+
+func newLifecycleUsenetLogged(t *testing.T, port, maxConns int, logs *logger.Factory) (*Usenet, *task.Group) {
+	t.Helper()
 	loaded, err := config.Load(t.TempDir(), config.MapEnv(nil))
 	if err != nil {
 		t.Fatal(err)
@@ -106,7 +111,7 @@ func newLifecycleUsenet(t *testing.T, port, maxConns int) (*Usenet, *task.Group)
 	}
 	root := task.NewRoot(t.Context(), "test", zerolog.Nop())
 	t.Cleanup(func() { stopLifecycleGroup(t, root) })
-	u, newErr := New(root, store, logger.Discard())
+	u, newErr := New(root, store, logs)
 	if newErr != nil {
 		t.Fatal(newErr)
 	}

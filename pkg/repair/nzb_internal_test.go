@@ -154,3 +154,18 @@ func TestRollupStatusBreaksEntryOnManifestFailure(t *testing.T) {
 		t.Fatalf("status = %q, want broken", got)
 	}
 }
+
+func TestNZBProberDefersTransientVerificationFailure(t *testing.T) {
+	t.Parallel()
+	wantErr := errors.New("provider unavailable")
+	client := stubNZBRepairClient{
+		checkFile: func(context.Context, string, string) error { return nil },
+		verify:    func(context.Context, string, string) error { return wantErr },
+	}
+	result := newNZBProber(
+		client,
+	).probe(t.Context(), nzbProbeRequest{nzbID: "nzb", fileName: "movie.mkv", verifyContent: true})
+	if result.healthy || result.broken || result.reason != "usenet_probe_error" {
+		t.Fatalf("result = %+v", result)
+	}
+}
