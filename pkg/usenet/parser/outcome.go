@@ -41,3 +41,9 @@ type Parsed struct {
 	Groups  map[string]*FileGroup
 	Outcome Outcome
 }
+
+func (p *Parsed) WithoutVerdict() *Parsed {
+	kept := *p
+	kept.Outcome = Outcome{}
+	return &kept
+}
