@@ -269,7 +269,7 @@ func (p *NZBParser) parse(
 	return nzb, fileGroups, nil
 }
 
-type statArticleFunc func(context.Context, string) error
+type statArticleFunc func(context.Context, string) (nntp.Answer, error)
 
 // probeContentAvailability tries one representative article from each content
 // group. Operational failures stop immediately; definitively missing articles
@@ -330,7 +330,7 @@ func statGroup(
 		if ambiguousNumbering(probe.file) {
 			result.proven = false
 		}
-		err := stat(ctx, probe.segment.MessageID)
+		_, err := stat(ctx, probe.segment.MessageID)
 		if err == nil {
 			return groupStat{available: true}, nil
 		}

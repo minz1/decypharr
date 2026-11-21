@@ -21,13 +21,13 @@ type joinSource struct {
 	lastReturned *atomic.Bool
 }
 
-func (s joinSource) Header(ctx context.Context, id string, _ int) (*nntp.YencMetadata, error) {
+func (s joinSource) Header(ctx context.Context, id string, _ int) (*nntp.YencMetadata, nntp.Answer, error) {
 	if id != "last@x" {
-		return nil, errors.New("reference header broken")
+		return nil, nntp.AnswerFailed, errors.New("reference header broken")
 	}
 	<-ctx.Done()
 	s.lastReturned.Store(true)
-	return nil, ctx.Err()
+	return nil, nntp.AnswerFailed, ctx.Err()
 }
 
 // An early return from enrich (the reference header failed) must cancel and

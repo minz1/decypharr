@@ -26,7 +26,7 @@ func TestReadFilePrefixReusesObservedBodies(t *testing.T) {
 			{Number: 2, MessageID: "ijklmnop", Bytes: 8, StartOffset: 8, EndOffset: 15},
 		},
 	}
-	if _, err := broker.Header(t.Context(), "abcdefgh", 4); err != nil {
+	if _, _, err := broker.Header(t.Context(), "abcdefgh", 4); err != nil {
 		t.Fatal(err)
 	}
 	prefix, err := p.ReadFilePrefix(t.Context(), file, 12)

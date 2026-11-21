@@ -22,9 +22,9 @@ const (
 // ArticleSource is the only network-facing dependency used by NZB analysis.
 // Returned bodies are immutable and may be shared between concurrent callers.
 type ArticleSource interface {
-	Header(context.Context, string, int) (*nntp.YencMetadata, error)
+	Header(context.Context, string, int) (*nntp.YencMetadata, nntp.Answer, error)
 	Body(context.Context, string) ([]byte, error)
-	Stat(context.Context, string) error
+	Stat(context.Context, string) (nntp.Answer, error)
 	IsAvailable(string) bool
 	Metrics() ArticleMetrics
 }
@@ -46,20 +46,23 @@ type ArticleMetrics struct {
 }
 
 type articleBackend interface {
-	Fetch(context.Context, string) ([]byte, *nntp.YencMetadata, error)
-	Stat(context.Context, string) error
+	Fetch(context.Context, string) ([]byte, *nntp.YencMetadata, nntp.Answer, error)
+	Stat(context.Context, string) (nntp.Answer, error)
 }
 
 type nntpArticleBackend struct {
 	manager *nntp.Client
 }
 
-func (b nntpArticleBackend) Fetch(ctx context.Context, messageID string) ([]byte, *nntp.YencMetadata, error) {
+func (b nntpArticleBackend) Fetch(
+	ctx context.Context,
+	messageID string,
+) ([]byte, *nntp.YencMetadata, nntp.Answer, error) {
 	var (
 		body     []byte
 		metadata *nntp.YencMetadata
 	)
-	_, err := b.manager.ExecuteArticle(ctx, nntp.WorkloadDownload, func(conn *nntp.Connection) error {
+	answer, err := b.manager.ExecuteArticle(ctx, nntp.WorkloadDownload, func(conn *nntp.Connection) error {
 		decoded, observed, fetchErr := conn.GetDecodedBodyWithMetadata(messageID)
 		if fetchErr == nil {
 			body = decoded
@@ -67,12 +70,12 @@ func (b nntpArticleBackend) Fetch(ctx context.Context, messageID string) ([]byte
 		}
 		return fetchErr
 	})
-	return body, metadata, err
+	return body, metadata, answer, err
 }
 
-func (b nntpArticleBackend) Stat(ctx context.Context, messageID string) error {
-	_, _, _, err := b.manager.Stat(ctx, nntp.WorkloadDownload, messageID)
-	return err
+func (b nntpArticleBackend) Stat(ctx context.Context, messageID string) (nntp.Answer, error) {
+	_, _, answer, err := b.manager.Stat(ctx, nntp.WorkloadDownload, messageID)
+	return answer, err
 }
 
 type articleCacheEntry struct {
@@ -89,6 +92,7 @@ type articleCacheEntry struct {
 type articleObservation struct {
 	body     []byte
 	metadata nntp.YencMetadata
+	answer   nntp.Answer
 }
 
 // ArticleBroker deduplicates, bounds, and caches every article observation
@@ -100,7 +104,7 @@ type ArticleBroker struct {
 	entryLimit int
 	// statFlights and bodyFlights deduplicate concurrent loads of one
 	// article; a caller giving up does not fail the others.
-	statFlights flight.Group[struct{}]
+	statFlights flight.Group[nntp.Answer]
 	bodyFlights flight.Group[articleObservation]
 
 	mu        sync.Mutex
@@ -141,25 +145,29 @@ func newArticleBroker(backend articleBackend, maxConcurrent int, bodyCacheBytes 
 }
 
 // Header returns exact yEnc metadata and up to maxSnippet decoded bytes.
-func (b *ArticleBroker) Header(ctx context.Context, messageID string, maxSnippet int) (*nntp.YencMetadata, error) {
+func (b *ArticleBroker) Header(
+	ctx context.Context,
+	messageID string,
+	maxSnippet int,
+) (*nntp.YencMetadata, nntp.Answer, error) {
 	b.headerRequests.Add(1)
 	if maxSnippet < 0 {
 		maxSnippet = 0
 	}
 	if metadata, ok := b.cachedHeader(messageID, maxSnippet); ok {
 		b.cacheHits.Add(1)
-		return metadata, nil
+		return metadata, nntp.AnswerFound, nil
 	}
 
 	observation, err := b.load(ctx, messageID)
 	if err != nil {
-		return nil, err
+		return nil, observation.answer, err
 	}
 	metadata := observation.metadata
 	if maxSnippet > 0 {
 		metadata.Snippet = bytes.Clone(observation.body[:min(maxSnippet, len(observation.body))])
 	}
-	return &metadata, nil
+	return &metadata, observation.answer, nil
 }
 
 // Body returns the complete decoded yEnc article body.
@@ -177,33 +185,34 @@ func (b *ArticleBroker) Body(ctx context.Context, messageID string) ([]byte, err
 }
 
 // Stat checks article availability, reusing any successful BODY observation.
-func (b *ArticleBroker) Stat(ctx context.Context, messageID string) error {
+func (b *ArticleBroker) Stat(ctx context.Context, messageID string) (nntp.Answer, error) {
 	b.statRequests.Add(1)
 	if b.IsAvailable(messageID) {
 		b.cacheHits.Add(1)
-		return nil
+		return nntp.AnswerFound, nil
 	}
 
-	_, shared, err := b.statFlights.Do(ctx, messageID, func(ctx context.Context) (struct{}, error) {
+	answer, shared, err := b.statFlights.Do(ctx, messageID, func(ctx context.Context) (nntp.Answer, error) {
 		if b.IsAvailable(messageID) {
-			return struct{}{}, nil
+			return nntp.AnswerFound, nil
 		}
 		if err := b.acquire(ctx); err != nil {
-			return struct{}{}, err
+			return nntp.AnswerFailed, err
 		}
 		defer b.release()
 
 		b.networkStats.Add(1)
-		if err := b.backend.Stat(ctx, messageID); err != nil {
-			return struct{}{}, err
+		answer, err := b.backend.Stat(ctx, messageID)
+		if err != nil {
+			return answer, err
 		}
 		b.markAvailable(messageID)
-		return struct{}{}, nil
+		return answer, nil
 	})
 	if shared {
 		b.sharedLoads.Add(1)
 	}
-	return err
+	return answer, err
 }
 
 // IsAvailable reports whether a successful BODY or STAT has already proved
@@ -247,12 +256,12 @@ func (b *ArticleBroker) load(ctx context.Context, messageID string) (articleObse
 	}
 	if body, metadata, ok := b.cachedBody(messageID); ok {
 		b.cacheHits.Add(1)
-		return articleObservation{body: body, metadata: metadata}, nil
+		return articleObservation{body: body, metadata: metadata, answer: nntp.AnswerFound}, nil
 	}
 
 	observation, shared, err := b.bodyFlights.Do(ctx, messageID, func(ctx context.Context) (articleObservation, error) {
 		if body, metadata, ok := b.cachedBody(messageID); ok {
-			return articleObservation{body: body, metadata: metadata}, nil
+			return articleObservation{body: body, metadata: metadata, answer: nntp.AnswerFound}, nil
 		}
 		if err := b.acquire(ctx); err != nil {
 			return articleObservation{}, err
@@ -260,16 +269,16 @@ func (b *ArticleBroker) load(ctx context.Context, messageID string) (articleObse
 		defer b.release()
 
 		b.networkBodies.Add(1)
-		body, metadata, err := b.backend.Fetch(ctx, messageID)
+		body, metadata, answer, err := b.backend.Fetch(ctx, messageID)
 		if err != nil {
-			return articleObservation{}, err
+			return articleObservation{answer: answer}, err
 		}
 		if metadata == nil {
 			return articleObservation{}, fmt.Errorf("article %s returned no yEnc metadata", messageID)
 		}
 		b.bytesFetched.Add(int64(len(body)))
 		b.store(messageID, body, metadata)
-		return articleObservation{body: body, metadata: *metadata}, nil
+		return articleObservation{body: body, metadata: *metadata, answer: answer}, nil
 	})
 	if shared {
 		b.sharedLoads.Add(1)

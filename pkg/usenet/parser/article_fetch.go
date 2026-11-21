@@ -68,7 +68,7 @@ func fetchFileHeaderPrefix(
 			continue
 		}
 
-		metadata, err := source.Header(ctx, segment.MessageID, maxSnippet)
+		metadata, _, err := source.Header(ctx, segment.MessageID, maxSnippet)
 		if err == nil {
 			if metadata == nil {
 				return nil, fmt.Errorf("segment header contained no yEnc metadata")

@@ -20,9 +20,9 @@ const obfuscatedNZB = `<?xml version="1.0"?><nzb xmlns="http://www.newzbin.com/D
 
 type blockingSource struct{ headerSource }
 
-func (blockingSource) Header(ctx context.Context, _ string, _ int) (*nntp.YencMetadata, error) {
+func (blockingSource) Header(ctx context.Context, _ string, _ int) (*nntp.YencMetadata, nntp.Answer, error) {
 	<-ctx.Done()
-	return nil, ctx.Err()
+	return nil, nntp.AnswerFailed, ctx.Err()
 }
 
 // A parse that runs out of time must say so; it used to report "no valid file groups found".
@@ -56,8 +56,12 @@ func TestParseFailsWhenDeadlineCutsIdentificationShort(t *testing.T) {
 
 type missingSource struct{ headerSource }
 
-func (missingSource) Header(context.Context, string, int) (*nntp.YencMetadata, error) {
-	return nil, &nntp.Error{Type: nntp.ErrorTypeArticleNotFound, Code: 430, Message: "no such article"}
+func (missingSource) Header(context.Context, string, int) (*nntp.YencMetadata, nntp.Answer, error) {
+	return nil, nntp.AnswerNotFound, &nntp.Error{
+		Type:    nntp.ErrorTypeArticleNotFound,
+		Code:    430,
+		Message: "no such article",
+	}
 }
 
 // A dead post whose files are all obfuscated must read as missing articles, not "no valid file groups".
@@ -86,11 +90,15 @@ func parseWith(ctx context.Context, source ArticleSource, nzb string) error {
 
 type flakySource struct{ headerSource }
 
-func (flakySource) Header(_ context.Context, id string, _ int) (*nntp.YencMetadata, error) {
+func (flakySource) Header(_ context.Context, id string, _ int) (*nntp.YencMetadata, nntp.Answer, error) {
 	if id == "seg-2@x" {
-		return nil, errors.New("connection reset by peer")
+		return nil, nntp.AnswerFailed, errors.New("connection reset by peer")
 	}
-	return nil, &nntp.Error{Type: nntp.ErrorTypeArticleNotFound, Code: 430, Message: "no such article"}
+	return nil, nntp.AnswerNotFound, &nntp.Error{
+		Type:    nntp.ErrorTypeArticleNotFound,
+		Code:    430,
+		Message: "no such article",
+	}
 }
 
 // One file failing for a network reason means the post is not proven dead.

@@ -25,13 +25,13 @@ type blockingSource struct {
 	entered chan struct{}
 }
 
-func (s *blockingSource) Header(ctx context.Context, _ string, _ int) (*nntp.YencMetadata, error) {
+func (s *blockingSource) Header(ctx context.Context, _ string, _ int) (*nntp.YencMetadata, nntp.Answer, error) {
 	select {
 	case s.entered <- struct{}{}:
 	default:
 	}
 	<-ctx.Done()
-	return nil, ctx.Err()
+	return nil, nntp.AnswerFailed, ctx.Err()
 }
 
 func (s *blockingSource) Metrics() parser.ArticleMetrics { return parser.ArticleMetrics{} }

@@ -14,18 +14,20 @@ import (
 
 type headerSource map[string]*nntp.YencMetadata
 
-func (s headerSource) Header(_ context.Context, id string, _ int) (*nntp.YencMetadata, error) {
+func (s headerSource) Header(_ context.Context, id string, _ int) (*nntp.YencMetadata, nntp.Answer, error) {
 	if metadata, ok := s[id]; ok {
-		return metadata, nil
+		return metadata, nntp.AnswerFound, nil
 	}
-	return nil, fmt.Errorf("no header for %s", id)
+	return nil, nntp.AnswerFailed, fmt.Errorf("no header for %s", id)
 }
 func (s headerSource) Body(context.Context, string) ([]byte, error) {
 	return nil, fmt.Errorf("no body")
 }
-func (s headerSource) Stat(context.Context, string) error { return nil }
-func (s headerSource) IsAvailable(string) bool            { return true }
-func (s headerSource) Metrics() ArticleMetrics            { return ArticleMetrics{} }
+func (s headerSource) Stat(context.Context, string) (nntp.Answer, error) {
+	return nntp.AnswerFound, nil
+}
+func (s headerSource) IsAvailable(string) bool { return true }
+func (s headerSource) Metrics() ArticleMetrics { return ArticleMetrics{} }
 
 const (
 	sizingArticle = 768000

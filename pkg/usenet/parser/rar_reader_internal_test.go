@@ -16,17 +16,19 @@ type bodySource struct {
 	bodies map[string][]byte
 }
 
-func (s bodySource) Header(context.Context, string, int) (*nntp.YencMetadata, error) {
-	return nil, io.EOF
+func (s bodySource) Header(context.Context, string, int) (*nntp.YencMetadata, nntp.Answer, error) {
+	return nil, nntp.AnswerFailed, io.EOF
 }
 
 func (s bodySource) Body(_ context.Context, id string) ([]byte, error) {
 	return s.bodies[id], nil
 }
 
-func (s bodySource) Stat(context.Context, string) error { return nil }
-func (s bodySource) IsAvailable(string) bool            { return true }
-func (s bodySource) Metrics() ArticleMetrics            { return ArticleMetrics{} }
+func (s bodySource) Stat(context.Context, string) (nntp.Answer, error) {
+	return nntp.AnswerFound, nil
+}
+func (s bodySource) IsAvailable(string) bool { return true }
+func (s bodySource) Metrics() ArticleMetrics { return ArticleMetrics{} }
 
 // Read and Skip agree on positions when an article body is shorter than its
 // declared size: both follow the declared layout that file offsets use.

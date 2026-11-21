@@ -31,15 +31,17 @@ type scriptSource struct {
 	stat   func(id string) error
 }
 
-func (s scriptSource) Header(_ context.Context, id string, _ int) (*nntp.YencMetadata, error) {
-	return s.header(id)
+func (s scriptSource) Header(_ context.Context, id string, _ int) (*nntp.YencMetadata, nntp.Answer, error) {
+	metadata, err := s.header(id)
+	return metadata, answerFromError(err), err
 }
 
-func (s scriptSource) Stat(_ context.Context, id string) error {
+func (s scriptSource) Stat(_ context.Context, id string) (nntp.Answer, error) {
 	if s.stat == nil {
-		return nil
+		return nntp.AnswerFound, nil
 	}
-	return s.stat(id)
+	err := s.stat(id)
+	return answerFromError(err), err
 }
 
 func provenHeaders(_ string) (*nntp.YencMetadata, error) { return nil, proven430() }
@@ -176,7 +178,7 @@ func TestProbeAllProvenIsContentMissing(t *testing.T) {
 	t.Parallel()
 	p := NewParserWithSource(scriptSource{}, 1, zerolog.Nop())
 	err := p.probeContentAvailability(t.Context(), mediaProbeGroups("a", "b"),
-		func(context.Context, string) error { return proven430() }, false)
+		statWith(func(context.Context, string) error { return proven430() }), false)
 	if !errors.Is(err, customerror.ErrUsenetSegmentMissing) || VerdictOf(err) != VerdictArticlesMissing {
 		t.Fatalf("error = %v verdict %v, want missing with articles verdict", err, VerdictOf(err))
 	}
@@ -186,12 +188,12 @@ func TestProbeOneUnprovenIsNot(t *testing.T) {
 	t.Parallel()
 	p := NewParserWithSource(scriptSource{}, 1, zerolog.Nop())
 	err := p.probeContentAvailability(t.Context(), mediaProbeGroups("a", "b"),
-		func(_ context.Context, id string) error {
+		statWith(func(_ context.Context, id string) error {
 			if id == "b@x" {
 				return bare430()
 			}
 			return proven430()
-		}, false)
+		}), false)
 	if !errors.Is(err, customerror.ErrUsenetSegmentMissing) || VerdictOf(err) != VerdictNone {
 		t.Fatalf("error = %v verdict %v, want missing without a verdict", err, VerdictOf(err))
 	}
@@ -201,7 +203,7 @@ func TestProbeWithDetectionDoubtIsNot(t *testing.T) {
 	t.Parallel()
 	p := NewParserWithSource(scriptSource{}, 1, zerolog.Nop())
 	err := p.probeContentAvailability(t.Context(), mediaProbeGroups("a"),
-		func(context.Context, string) error { return proven430() }, true)
+		statWith(func(context.Context, string) error { return proven430() }), true)
 	if !errors.Is(err, customerror.ErrUsenetSegmentMissing) || VerdictOf(err) != VerdictNone {
 		t.Fatalf("error = %v verdict %v, want missing without a verdict", err, VerdictOf(err))
 	}

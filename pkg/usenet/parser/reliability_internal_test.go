@@ -34,10 +34,15 @@ func TestProbeContentAvailabilityReportsAllMissingContent(t *testing.T) {
 	missing := &nntp.Error{Type: nntp.ErrorTypeArticleNotFound, Code: 430, Message: "missing"}
 
 	var calls []string
-	err := p.probeContentAvailability(context.Background(), groups, func(_ context.Context, messageID string) error {
-		calls = append(calls, messageID)
-		return missing
-	}, false)
+	err := p.probeContentAvailability(
+		context.Background(),
+		groups,
+		statWith(func(_ context.Context, messageID string) error {
+			calls = append(calls, messageID)
+			return missing
+		}),
+		false,
+	)
 	if !errors.Is(err, customerror.ErrUsenetSegmentMissing) {
 		t.Fatalf("all-missing availability error = %v", err)
 	}
@@ -60,12 +65,17 @@ func TestProbeContentAvailabilityAcceptsAnotherAvailableGroup(t *testing.T) {
 		},
 	}
 	missing := &nntp.Error{Type: nntp.ErrorTypeArticleNotFound, Code: 430, Message: "missing"}
-	err := p.probeContentAvailability(context.Background(), groups, func(_ context.Context, messageID string) error {
-		if messageID == "missing@example" {
-			return missing
-		}
-		return nil
-	}, false)
+	err := p.probeContentAvailability(
+		context.Background(),
+		groups,
+		statWith(func(_ context.Context, messageID string) error {
+			if messageID == "missing@example" {
+				return missing
+			}
+			return nil
+		}),
+		false,
+	)
 	if err != nil {
 		t.Fatalf("availability probe = %v", err)
 	}
@@ -86,10 +96,10 @@ func TestProbeContentAvailabilityStopsOnOperationalError(t *testing.T) {
 	}
 	wantErr := errors.New("authentication failed")
 	calls := 0
-	err := p.probeContentAvailability(context.Background(), groups, func(context.Context, string) error {
+	err := p.probeContentAvailability(context.Background(), groups, statWith(func(context.Context, string) error {
 		calls++
 		return wantErr
-	}, false)
+	}), false)
 	if !errors.Is(err, wantErr) || calls != 1 {
 		t.Fatalf("operational error probe = calls %d, err %v", calls, err)
 	}
@@ -113,10 +123,10 @@ func TestProbeContentAvailabilityReusesBodyObservation(t *testing.T) {
 		},
 	}
 	calls := 0
-	err := p.probeContentAvailability(t.Context(), groups, func(context.Context, string) error {
+	err := p.probeContentAvailability(t.Context(), groups, statWith(func(context.Context, string) error {
 		calls++
 		return errors.New("STAT should not run")
-	}, false)
+	}), false)
 	if err != nil || calls != 0 {
 		t.Fatalf("observed availability = calls %d, err %v", calls, err)
 	}

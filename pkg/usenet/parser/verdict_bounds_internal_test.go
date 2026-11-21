@@ -104,11 +104,13 @@ func TestBodySourceVerdictIsNotProof(t *testing.T) {
 
 type deadBackend struct{}
 
-func (deadBackend) Fetch(context.Context, string) ([]byte, *nntp.YencMetadata, error) {
-	return nil, nil, proven430()
+func (deadBackend) Fetch(context.Context, string) ([]byte, *nntp.YencMetadata, nntp.Answer, error) {
+	return nil, nil, nntp.AnswerMissing, proven430()
 }
 
-func (deadBackend) Stat(context.Context, string) error { return proven430() }
+func (deadBackend) Stat(context.Context, string) (nntp.Answer, error) {
+	return nntp.AnswerMissing, proven430()
+}
 
 func TestBrokerAllMissingBodyIsArticles(t *testing.T) {
 	t.Parallel()
@@ -160,8 +162,8 @@ func TestZIPProofNeedsBothEnds(t *testing.T) {
 			err := p.probeContentAvailability(
 				t.Context(),
 				zipProbeGroup(files...),
-				func(_ context.Context, id string) error {
-					return row.dead[id]
+				func(_ context.Context, id string) (nntp.Answer, error) {
+					return answerFromError(row.dead[id]), row.dead[id]
 				},
 				false,
 			)
@@ -186,13 +188,13 @@ func TestMediaProofKeepsFirstArticleRule(t *testing.T) {
 		Files: []manifest.File{{Filename: "movie.mkv", Segments: segs("first@x", "last@x")}},
 	}}
 	stats := 0
-	err := p.probeContentAvailability(t.Context(), groups, func(_ context.Context, id string) error {
+	err := p.probeContentAvailability(t.Context(), groups, statWith(func(_ context.Context, id string) error {
 		stats++
 		if id == "first@x" {
 			return proven430()
 		}
 		return nil
-	}, false)
+	}), false)
 	if VerdictOf(err) != VerdictArticlesMissing || stats != 1 {
 		t.Fatalf("error = %v verdict %v after %d stats, want an articles verdict from the first article alone",
 			err, VerdictOf(err), stats)
