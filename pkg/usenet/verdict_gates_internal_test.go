@@ -18,6 +18,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/task"
 	"github.com/sirrobot01/decypharr/internal/testutil/nntpd"
 	"github.com/sirrobot01/decypharr/pkg/storage"
+	"github.com/sirrobot01/decypharr/pkg/usenet/internal/gate"
 	"github.com/sirrobot01/decypharr/pkg/usenet/parser"
 )
 
@@ -67,10 +68,11 @@ func TestVerdictOfGateErrorsIsNone(t *testing.T) {
 
 	proven := &nntp.NotFoundEverywhereError{Err: fmt.Errorf("%w: %w", nntp.ErrAllProvidersFailed,
 		&nntp.Error{Type: nntp.ErrorTypeArticleNotFound, Code: 430, Message: "no such article"})}
-	headMissing, headErr := classifyHeadReadError("Movie.mkv", proven)
-	if !headMissing {
-		t.Fatal("classifyHeadReadError did not report the missing head article")
+	head := classifyHeadReadError("Movie.mkv", proven)
+	if head.Kind() != gate.KindMissing {
+		t.Fatalf("classifyHeadReadError kind = %v, want missing", head.Kind())
 	}
+	headErr := head.Err()
 	if !errors.Is(headErr, customerror.ErrUsenetSegmentMissing) {
 		t.Fatalf("classifyHeadReadError = %v, want missing segments", headErr)
 	}
@@ -489,18 +491,21 @@ func TestStatAvailabilityReturns(t *testing.T) {
 		return ""
 	}
 	for _, tc := range []struct {
-		name        string
-		reply       func(command, messageID string) string
-		ids         []string
-		serve       bool
-		stopped     bool
-		wantMissing bool
+		name    string
+		reply   func(command, messageID string) string
+		ids     []string
+		serve   bool
+		stopped bool
+		want    gate.Kind
 	}{
-		{name: "no ids"},
-		{name: "every article available", ids: []string{"<head@gate>"}, serve: true},
-		{name: "connection errors only", reply: connectionDown, ids: []string{"<head@gate>"}, serve: true},
-		{name: "client stopped", ids: []string{"<head@gate>"}, serve: true, stopped: true},
-		{name: "an article is gone", ids: []string{"<head@gate>"}, wantMissing: true},
+		{name: "no ids", want: gate.KindPass},
+		{name: "every article available", ids: []string{"<head@gate>"}, serve: true, want: gate.KindPass},
+		{
+			name: "connection errors only", reply: connectionDown, ids: []string{"<head@gate>"}, serve: true,
+			want: gate.KindUnchecked,
+		},
+		{name: "client stopped", ids: []string{"<head@gate>"}, serve: true, stopped: true, want: gate.KindUnchecked},
+		{name: "an article is gone", ids: []string{"<head@gate>"}, want: gate.KindMissing},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -511,13 +516,12 @@ func TestStatAvailabilityReturns(t *testing.T) {
 			if tc.stopped {
 				stopLifecycleGroup(t, root)
 			}
-			missing, err := u.statAvailability(t.Context(), "Movie.mkv", tc.ids)
-			if missing != tc.wantMissing {
-				t.Fatalf("missing = %v, want %v (error %v)", missing, tc.wantMissing, err)
+			r := u.statAvailability(t.Context(), "Movie.mkv", tc.ids)
+			if r.Kind() != tc.want {
+				t.Fatalf("kind = %v, want %v (error %v)", r.Kind(), tc.want, r.Err())
 			}
-			if tc.wantMissing != errors.Is(err, customerror.ErrUsenetSegmentMissing) ||
-				(!tc.wantMissing && err != nil) {
-				t.Fatalf("error = %v, want missing segments only when an article is gone", err)
+			if (tc.want == gate.KindMissing) != errors.Is(r.Err(), customerror.ErrUsenetSegmentMissing) {
+				t.Fatalf("error = %v, want missing segments only when an article is gone", r.Err())
 			}
 		})
 	}
@@ -537,12 +541,13 @@ func TestVerifyFileHeadReturns(t *testing.T) {
 		serve    bool
 		bare     bool
 		stopWork bool
+		want     gate.Kind
 		wantErr  string
 	}{
-		{name: "too small to classify", file: gateFile(100)},
-		{name: "entry cannot be created", file: gateFile(len(payload)), bare: true, stopWork: true, wantErr: "create entry for Movie.mkv"},
-		{name: "reader cannot be created", file: noSegments, bare: true, wantErr: "no segments in volume"},
-		{name: "analyzer defers to the serving cursor", file: unsupported, serve: true, wantErr: "matches no media container signature"},
+		{name: "too small to classify", file: gateFile(100), want: gate.KindPass},
+		{name: "entry cannot be created", file: gateFile(len(payload)), bare: true, stopWork: true, want: gate.KindUnchecked, wantErr: "create entry for Movie.mkv"},
+		{name: "reader cannot be created", file: noSegments, bare: true, want: gate.KindUnchecked, wantErr: "no segments in volume"},
+		{name: "analyzer defers to the serving cursor", file: unsupported, serve: true, want: gate.KindFailed, wantErr: "matches no media container signature"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -556,12 +561,12 @@ func TestVerifyFileHeadReturns(t *testing.T) {
 			if tc.stopWork {
 				stopLifecycleGroup(t, u.work)
 			}
-			missing, err := u.verifyFileHead(t.Context(), &tc.file)
-			if missing {
-				t.Fatalf("missing = true, want false (error %v)", err)
+			r := u.verifyFileHead(t.Context(), &tc.file)
+			if r.Kind() != tc.want {
+				t.Fatalf("kind = %v, want %v (error %v)", r.Kind(), tc.want, r.Err())
 			}
-			if !errorMatches(err, tc.wantErr) {
-				t.Fatalf("error = %v, want %q", err, tc.wantErr)
+			if !errorMatches(r.Err(), tc.wantErr) {
+				t.Fatalf("error = %v, want %q", r.Err(), tc.wantErr)
 			}
 		})
 	}
@@ -570,9 +575,9 @@ func TestVerifyFileHeadReturns(t *testing.T) {
 func TestClassifyHeadReadErrorKeepsRawErrors(t *testing.T) {
 	t.Parallel()
 	raw := errors.New("connection reset")
-	missing, err := classifyHeadReadError("Movie.mkv", raw)
-	if missing || err == nil || err.Error() != raw.Error() {
-		t.Fatalf("classifyHeadReadError = %v, %v, want false and the raw error", missing, err)
+	r := classifyHeadReadError("Movie.mkv", raw)
+	if r.Kind() != gate.KindUnchecked || r.Err() != raw {
+		t.Fatalf("classifyHeadReadError = %v, %v, want unchecked with the raw error", r.Kind(), r.Err())
 	}
 }
 
@@ -583,9 +588,10 @@ func TestVerifyNZBContentReturns(t *testing.T) {
 		name  string
 		reply func(command, messageID string) string
 		ended bool
+		want  gate.Kind
 	}{
-		{name: "context ended", ended: true},
-		{name: "connection errors are not a content failure", reply: func(command, _ string) string {
+		{name: "context ended", ended: true, want: gate.KindSkipped},
+		{name: "connection errors are not a content failure", want: gate.KindPass, reply: func(command, _ string) string {
 			if command == "BODY" {
 				return "400 service unavailable"
 			}
@@ -603,9 +609,9 @@ func TestVerifyNZBContentReturns(t *testing.T) {
 				ctx, cancel = context.WithCancel(ctx)
 				cancel()
 			}
-			missing, err := u.verifyNZBContent(ctx, nzb)
-			if missing || err != nil {
-				t.Fatalf("verifyNZBContent = %v, %v, want a pass", missing, err)
+			r := u.verifyNZBContent(ctx, nzb)
+			if r.Kind() != tc.want || r.Err() != nil {
+				t.Fatalf("verifyNZBContent = %v, %v, want %v", r.Kind(), r.Err(), tc.want)
 			}
 		})
 	}

@@ -10,6 +10,7 @@ import (
 	"github.com/sirrobot01/decypharr/internal/nntp"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/storage"
+	"github.com/sirrobot01/decypharr/pkg/usenet/internal/gate"
 	"github.com/sirrobot01/decypharr/pkg/usenet/parser"
 )
 
@@ -77,28 +78,31 @@ func headSignatureOK(head []byte) bool {
 // UsenetSegmentMissingError when the head article is gone, and the raw error
 // for connection-level failures (callers treat those as "couldn't check").
 func (u *Usenet) VerifyFileHead(ctx context.Context, file *storage.NZBFile) error {
-	_, err := u.verifyFileHead(ctx, file)
-	return err
+	return repairError(u.verifyFileHead(ctx, file), true)
 }
 
-func (u *Usenet) verifyFileHead(ctx context.Context, file *storage.NZBFile) (bool, error) {
+func (u *Usenet) verifyFileHead(ctx context.Context, file *storage.NZBFile) gate.Result {
 	if file.Size > 0 && file.Size < verifyHeadBytes {
-		return false, nil // too small to classify; not worth failing a grab over
+		return gate.Pass()
 	}
 	if u.analyzer != nil {
-		if handled, missing, err := u.verifyHeadFromAnalyzer(ctx, file); handled {
-			return missing, err
+		head, err := u.analyzer.ReadFilePrefix(ctx, file, verifyHeadBytes)
+		switch {
+		case err == nil:
+			return checkHeadSignature(file.Name, head)
+		case !errors.Is(err, parser.ErrPrefixReadUnsupported):
+			return classifyHeadReadError(file.Name, err)
 		}
 	}
 	entry, err := u.createEntry(file, 0, RetentionWindow)
 	if err != nil {
-		return false, err
+		return gate.Unchecked(err)
 	}
 	defer entry.cleanupOneShot(ctx)
 
 	readerAt, _, err := entry.getOrCreateReader()
 	if err != nil {
-		return false, err
+		return gate.Unchecked(err)
 	}
 	cursor := readerAt.OpenCursor()
 	defer cursor.Close()
@@ -108,46 +112,27 @@ func (u *Usenet) verifyFileHead(ctx context.Context, file *storage.NZBFile) (boo
 	if err != nil && n < minHeadSignatureBytes {
 		return classifyHeadReadError(file.Name, err)
 	}
-	return false, checkHeadSignature(file.Name, head[:n])
+	return checkHeadSignature(file.Name, head[:n])
 }
 
-// minHeadSignatureBytes is the shortest head headSignatureOK can classify.
 const minHeadSignatureBytes = 16
 
-// verifyHeadFromAnalyzer checks the head through the analyzer's shared
-// article cache. handled is false when the file needs the full serving reader
-// (encrypted or compressed members).
-func (u *Usenet) verifyHeadFromAnalyzer(ctx context.Context, file *storage.NZBFile) (bool, bool, error) {
-	head, err := u.analyzer.ReadFilePrefix(ctx, file, verifyHeadBytes)
-	switch {
-	case err == nil:
-		return true, false, checkHeadSignature(file.Name, head)
-	case errors.Is(err, parser.ErrPrefixReadUnsupported):
-		return false, false, nil
-	default:
-		missing, classified := classifyHeadReadError(file.Name, err)
-		return true, missing, classified
-	}
-}
-
-// checkHeadSignature fails a head that matches no media container.
-func checkHeadSignature(name string, head []byte) error {
+func checkHeadSignature(name string, head []byte) gate.Result {
 	if headSignatureOK(head) {
-		return nil
+		return gate.Pass()
 	}
-	return fmt.Errorf(
+	return gate.Failed(fmt.Errorf(
 		"head of %q matches no media container signature: %w",
 		name,
 		customerror.ErrUsenetCorruptContent,
-	)
+	))
 }
 
-// classifyHeadReadError maps a missing head article to UsenetSegmentMissingError.
-func classifyHeadReadError(name string, err error) (bool, error) {
+func classifyHeadReadError(name string, err error) gate.Result {
 	if nntp.IsArticleNotFoundError(err) {
-		return true, fmt.Errorf("head article of %q missing: %w", name, customerror.ErrUsenetSegmentMissing)
+		return gate.Missing(fmt.Errorf("head article of %q missing: %w", name, customerror.ErrUsenetSegmentMissing))
 	}
-	return false, err
+	return gate.Unchecked(err)
 }
 
 // VerifyFile head-verifies one stored file of a completed NZB. Non-media
@@ -163,12 +148,17 @@ func (u *Usenet) VerifyFile(ctx context.Context, nzoID, filename string) error {
 	return u.VerifyFileHead(ctx, file)
 }
 
-// verifyNZBContent is the import-time content gate: it head-verifies every
-// media file of a just-processed NZB. Definitive failures (no
-// container signature, head article missing) fail the NZB so the arr grabs a
-// replacement release. Connection-level errors are non-fatal, matching
-// checkNZBAvailability — a provider hiccup must not fail an import.
-func (u *Usenet) verifyNZBContent(ctx context.Context, nzb *storage.NZB) (bool, error) {
+func (u *Usenet) verifyNZBContent(ctx context.Context, nzb *storage.NZB) gate.Result {
+	return u.foldContent(ctx, nzb, func(file *storage.NZBFile) gate.Result {
+		return u.verifyFileHead(ctx, file)
+	})
+}
+
+func (u *Usenet) foldContent(
+	ctx context.Context,
+	nzb *storage.NZB,
+	check func(file *storage.NZBFile) gate.Result,
+) gate.Result {
 	for i := range nzb.Files {
 		file := &nzb.Files[i]
 		if file.IsDeleted || len(file.Segments) == 0 || !utils.IsMediaFile(file.Name) {
@@ -179,27 +169,29 @@ func (u *Usenet) verifyNZBContent(ctx context.Context, nzb *storage.NZB) (bool, 
 		}
 		select {
 		case <-ctx.Done():
-			return false, nil // cancelled/timed out: not a content failure
+			return gate.Skipped()
 		default:
 		}
-		missing, err := u.verifyFileHead(ctx, file)
-		if err == nil {
+		r := check(file)
+		switch r.Kind() {
+		case gate.KindPass:
 			continue
-		}
-		if errors.Is(err, customerror.ErrUsenetCorruptContent) ||
-			errors.Is(err, customerror.ErrUsenetSegmentMissing) {
+		case gate.KindMissing, gate.KindFailed:
 			u.logger.Warn().
-				Err(err).
+				Err(r.Err()).
 				Str("nzb_id", nzb.ID).
 				Str("file", file.Name).
 				Msg("Content verification failed; failing NZB")
-			return missing, err
+			return r
+		case gate.KindUnchecked:
+			u.logger.Warn().
+				Err(r.Err()).
+				Str("nzb_id", nzb.ID).
+				Str("file", file.Name).
+				Msg("Non-fatal error during content verification, ignoring")
+		case gate.KindInvalid, gate.KindSkipped:
+			return r
 		}
-		u.logger.Warn().
-			Err(err).
-			Str("nzb_id", nzb.ID).
-			Str("file", file.Name).
-			Msg("Non-fatal error during content verification, ignoring")
 	}
-	return false, nil
+	return gate.Pass()
 }

@@ -25,6 +25,7 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/storage"
 	"github.com/sirrobot01/decypharr/pkg/usenet/fs"
 	"github.com/sirrobot01/decypharr/pkg/usenet/fs/reader"
+	"github.com/sirrobot01/decypharr/pkg/usenet/internal/gate"
 	"github.com/sirrobot01/decypharr/pkg/usenet/parser"
 	"github.com/sirrobot01/decypharr/pkg/usenet/types"
 )
@@ -850,43 +851,21 @@ func (u *Usenet) Process(
 	return updatedNZB, ProcessResult{}, nil
 }
 
-// finish runs the availability and content gates on a processed NZB and
-// records the outcome: completed, or failed with the reason.
 func (u *Usenet) finish(ctx context.Context, nzb *storage.NZB) (ProcessResult, error) {
-	if availabilityMissing, checkNZBAvailabilityErr := u.checkNZBAvailability(
-		ctx,
-		nzb,
-	); checkNZBAvailabilityErr != nil {
-		u.failUnlessCancelled(ctx, nzb, checkNZBAvailabilityErr)
-		return ProcessResult{
-			GateMissing: availabilityMissing,
-		}, fmt.Errorf(
-			"availability check failed: %w",
-			checkNZBAvailabilityErr,
-		)
+	for _, step := range []struct {
+		name string
+		run  func() gate.Result
+	}{
+		{"availability check", func() gate.Result { return u.checkNZBAvailability(ctx, nzb) }},
+		{"content verification", func() gate.Result { return u.verifyNZBContent(ctx, nzb) }},
+	} {
+		result, cause, failure := gateOutcome(step.name, step.run())
+		if failure != nil {
+			u.failUnlessCancelled(ctx, nzb, cause)
+			return result, failure
+		}
 	}
 
-	// Content gate: availability only proves the articles exist; it says
-	// nothing about whether the assembled stream is the file it claims to be.
-	// A wrong RAR volume order or a misordered raw post passes every STAT
-	// probe yet serves garbage from byte 0 (players see no codec and a bogus
-	// size/bitrate runtime). Read each media file's head through the real
-	// serving path and require a container signature, so a scrambled assembly
-	// fails here — and the arr grabs a replacement — instead of reaching the
-	// library as an unplayable file.
-	if headMissing, verifyNZBContentErr := u.verifyNZBContent(ctx, nzb); verifyNZBContentErr != nil {
-		u.failUnlessCancelled(ctx, nzb, verifyNZBContentErr)
-		return ProcessResult{
-			GateMissing: headMissing,
-		}, fmt.Errorf(
-			"content verification failed: %w",
-			verifyNZBContentErr,
-		)
-	}
-
-	// Both gates pass over a cancelled context without checking anything,
-	// so an interrupted run proves nothing about the content: never complete
-	// it unverified. A shutdown leaves it parsing; a timeout fails it.
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		u.failUnlessCancelled(ctx, nzb, ctxErr)
 		return ProcessResult{}, fmt.Errorf("processing interrupted: %w", ctxErr)
@@ -898,8 +877,45 @@ func (u *Usenet) finish(ctx context.Context, nzb *storage.NZB) (ProcessResult, e
 	return ProcessResult{}, nil
 }
 
-func (u *Usenet) checkNZBAvailability(ctx context.Context, nzb *storage.NZB) (bool, error) {
+func gateOutcome(name string, r gate.Result) (ProcessResult, error, error) {
+	switch r.Kind() {
+	case gate.KindMissing:
+		return ProcessResult{GateMissing: true}, r.Err(), fmt.Errorf("%s failed: %w", name, r.Err())
+	case gate.KindFailed:
+		return ProcessResult{}, r.Err(), fmt.Errorf("%s failed: %w", name, r.Err())
+	case gate.KindPass, gate.KindUnchecked, gate.KindSkipped:
+		return ProcessResult{}, nil, nil
+	case gate.KindInvalid:
+	}
+	noResult := fmt.Errorf("%s returned no result", name)
+	return ProcessResult{}, noResult, noResult
+}
+
+func repairError(r gate.Result, surfaceUnchecked bool) error {
+	switch r.Kind() {
+	case gate.KindMissing, gate.KindFailed, gate.KindInvalid:
+		return r.Err()
+	case gate.KindUnchecked:
+		if surfaceUnchecked {
+			return r.Err()
+		}
+	case gate.KindPass, gate.KindSkipped:
+	}
+	return nil
+}
+
+func (u *Usenet) checkNZBAvailability(ctx context.Context, nzb *storage.NZB) gate.Result {
 	samplePercent := u.config.Get().Usenet.ImportAvailabilitySamplePercent
+	return u.foldAvailability(ctx, nzb, func(file *storage.NZBFile) gate.Result {
+		return u.checkFileAvailability(ctx, file, samplePercent)
+	})
+}
+
+func (u *Usenet) foldAvailability(
+	ctx context.Context,
+	nzb *storage.NZB,
+	check func(file *storage.NZBFile) gate.Result,
+) gate.Result {
 	for i := range nzb.Files {
 		file := &nzb.Files[i]
 		if file.IsDeleted || len(file.Segments) == 0 {
@@ -910,50 +926,46 @@ func (u *Usenet) checkNZBAvailability(ctx context.Context, nzb *storage.NZB) (bo
 		}
 		select {
 		case <-ctx.Done():
-			// Cancelled/timed out: not a content failure — don't fail the NZB.
-			return false, nil
+			return gate.Skipped()
 		default:
 		}
-		if missing, err := u.checkFileAvailability(ctx, file, samplePercent); err != nil {
+		r := check(file)
+		switch r.Kind() {
+		case gate.KindPass, gate.KindUnchecked:
+			continue
+		case gate.KindMissing:
 			u.logger.Warn().
-				Err(err).
+				Err(r.Err()).
 				Str("nzb_id", nzb.ID).
 				Str("file", file.Name).
 				Msg("Post-parse availability check failed; marking NZB unavailable")
-			return missing, fmt.Errorf("file %q unavailable: %w", file.Name, err)
+			return gate.Missing(fmt.Errorf("file %q unavailable: %w", file.Name, r.Err()))
+		case gate.KindInvalid, gate.KindFailed, gate.KindSkipped:
+			return r
 		}
 	}
-	return false, nil
+	return gate.Pass()
 }
 
-// CheckFile probes the availability of a single NZB file. Connection use is
-// gated by the NNTP client's repair bank so concurrent probes don't starve
-// streaming traffic.
 func (u *Usenet) CheckFile(ctx context.Context, nzoID, filename string) error {
 	messageIDs, err := u.fileMessageIDs(nzoID, filename, u.config.Get().Usenet.AvailabilitySamplePercent)
 	if err != nil {
 		return err
 	}
-	_, err = u.checkAvailability(ctx, filename, messageIDs)
-	return err
+	return repairError(u.checkAvailability(ctx, filename, messageIDs), false)
 }
 
-// CheckWholeFile STATs every article of one file, including ones seen at import: a stream just failed on one of them.
 func (u *Usenet) CheckWholeFile(ctx context.Context, nzoID, filename string) error {
 	messageIDs, err := u.fileMessageIDs(nzoID, filename, wholeFilePercent)
 	if err != nil {
 		return err
 	}
-	_, err = u.statAvailability(ctx, filename, messageIDs)
-	return err
+	return repairError(u.statAvailability(ctx, filename, messageIDs), false)
 }
 
 const wholeFilePercent = 100
 
 func (u *Usenet) fileMessageIDs(nzoID, filename string, samplePercent int) ([]string, error) {
-	// Repair/availability probes only need a sample of one file's message ids.
-	// Decode just those (no numeric columns, no NZBSegment structs, no other
-	// files) so a full sweep doesn't hold whole segment maps in memory.
 	messageIDs, err := u.nzbStorage.SampleFileMessageIDs(nzoID, filename, samplePercent)
 	if err != nil {
 		return nil, fmt.Errorf("failed to sample file segments: %w", err)
@@ -964,45 +976,34 @@ func (u *Usenet) fileMessageIDs(nzoID, filename string, samplePercent int) ([]st
 	return messageIDs, nil
 }
 
-func (u *Usenet) checkFileAvailability(ctx context.Context, file *storage.NZBFile, samplePercent int) (bool, error) {
+func (u *Usenet) checkFileAvailability(ctx context.Context, file *storage.NZBFile, samplePercent int) gate.Result {
 	return u.checkAvailability(ctx, file.Name, u.sampleSegments(file.Segments, samplePercent))
 }
 
-// checkAvailability batch-STATs the given sampled message ids. The NNTP client
-// gates each worker through its internal repair bank so concurrent availability
-// checks don't starve streaming connections.
-func (u *Usenet) checkAvailability(ctx context.Context, fileName string, messageIDs []string) (bool, error) {
+func (u *Usenet) checkAvailability(ctx context.Context, fileName string, messageIDs []string) gate.Result {
 	return u.statAvailability(ctx, fileName, u.analyzer.FilterUnobserved(messageIDs))
 }
 
-func (u *Usenet) statAvailability(ctx context.Context, fileName string, messageIDs []string) (bool, error) {
+func (u *Usenet) statAvailability(ctx context.Context, fileName string, messageIDs []string) gate.Result {
 	if len(messageIDs) == 0 {
-		return false, nil
+		return gate.Pass()
 	}
 
 	result, err := u.nntp.BatchStat(ctx, messageIDs)
 	if err != nil {
-		// Connection/system error - log and continue (don't fail availability check)
 		u.logger.Warn().
 			Err(err).
 			Str("file", fileName).
 			Msg("Non-fatal error during availability check, ignoring")
-		return false, nil
+		return gate.Unchecked(err)
 	}
 
-	// Check if all sampled segments are available.
-	// Distinguish genuine article-not-found from connection errors:
-	//   TotalCount = FoundCount + notFoundCount + ErrorCount
-	// Only treat a file as unavailable when segments are definitively missing
-	// (notFoundCount > 0). Connection errors mean we couldn't check — treat
-	// those the same as the top-level error path above (non-fatal, skip check).
 	if !result.AllAvailable() {
 		notFoundCount := result.TotalCount - result.FoundCount - result.ErrorCount
 		if result.ErrorCount > 0 && notFoundCount == 0 {
-			// All failures were connection errors, not missing articles.
-			return false, nil
+			return gate.Unchecked(fmt.Errorf(
+				"%d of %d sampled articles could not be checked", result.ErrorCount, result.TotalCount))
 		}
-		// At least some segments are definitively missing.
 		u.logger.Warn().
 			Str("file", fileName).
 			Int("sampled_segments", len(messageIDs)).
@@ -1010,10 +1011,10 @@ func (u *Usenet) statAvailability(ctx context.Context, fileName string, messageI
 			Int("missing_segments", notFoundCount).
 			Int("error_count", result.ErrorCount).
 			Msg("File is unavailable - one or more segments are missing")
-		return true, customerror.ErrUsenetSegmentMissing
+		return gate.Missing(customerror.ErrUsenetSegmentMissing)
 	}
 
-	return false, nil
+	return gate.Pass()
 }
 
 // sampleSegments returns a sample of segment message IDs based on the given
