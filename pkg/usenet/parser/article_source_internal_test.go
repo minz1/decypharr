@@ -561,6 +561,18 @@ func wireRows() []answerRow {
 	}
 }
 
+type populatingContext struct {
+	context.Context
+
+	once     sync.Once
+	populate func()
+}
+
+func (c *populatingContext) Err() error {
+	c.once.Do(c.populate)
+	return c.Context.Err()
+}
+
 func cacheRows() []answerRow {
 	return []answerRow{
 		{"stat cache hit", nntp.AnswerFound, nil, func(t *testing.T) answered {
@@ -585,6 +597,14 @@ func cacheRows() []answerRow {
 			requireBody(t, broker, "<article>")
 			got := headerAnswer(t.Context(), broker, "<article>", 8)
 			requireTraffic(t, backend, broker, 1, 0, 1)
+			return got
+		}},
+		{"stat cache hit inside the flight", nntp.AnswerFound, nil, func(t *testing.T) answered {
+			backend := &fakeArticleBackend{tb: t}
+			broker := newArticleBroker(backend, 2, 1<<20)
+			ctx := &populatingContext{Context: t.Context(), populate: func() { broker.markAvailable("<article>") }}
+			got := statAnswer(ctx, broker)
+			requireTraffic(t, backend, broker, 0, 0, 0)
 			return got
 		}},
 		{"stat flight success", nntp.AnswerFound, nil, func(t *testing.T) answered {

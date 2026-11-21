@@ -197,11 +197,15 @@ func TestAcquireAfterStop(t *testing.T) {
 	t.Parallel()
 	c, root := startLifecycleClient(t, lifecycleConfig(1))
 	stopLifecycle(t, root)
-	if _, _, _, err := c.Stat(t.Context(), WorkloadBackground, "<a@b>"); !errors.Is(err, task.ErrStopped) {
+	_, _, answer, err := c.Stat(t.Context(), WorkloadBackground, "<a@b>")
+	if !errors.Is(err, task.ErrStopped) {
 		t.Fatalf("Stat err = %v, want task.ErrStopped", err)
 	}
-	if _, err := c.BatchStat(t.Context(), []string{"<a@b>"}); !errors.Is(err, task.ErrStopped) {
-		t.Fatalf("BatchStat err = %v, want task.ErrStopped", err)
+	if answer.Kind() != AnswerFailed {
+		t.Fatalf("Stat answer = %v, want AnswerFailed", answer)
+	}
+	if _, batchErr := c.BatchStat(t.Context(), []string{"<a@b>"}); !errors.Is(batchErr, task.ErrStopped) {
+		t.Fatalf("BatchStat err = %v, want task.ErrStopped", batchErr)
 	}
 }
 

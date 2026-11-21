@@ -24,4 +24,8 @@ func TestWithoutVerdictZeroesTheOutcomeAndSharesTheRest(t *testing.T) {
 	if parsed.Outcome == (Outcome{}) {
 		t.Fatal("the original Parsed lost its outcome")
 	}
+	kept.Groups["b"] = &FileGroup{}
+	if parsed.Groups["b"] == nil {
+		t.Fatal("WithoutVerdict must share the Groups map, not clone it")
+	}
 }

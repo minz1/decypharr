@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -541,5 +542,73 @@ func TestFailoverTimeoutWrapped430IsNotProof(t *testing.T) {
 	})
 	if IsNotFoundEverywhere(err) {
 		t.Fatalf("a timeout around a 430 counted as a miss: %v", err)
+	}
+}
+
+type lateCancelContext struct {
+	context.Context
+
+	attempted atomic.Bool
+	checked   atomic.Bool
+	closed    chan struct{}
+}
+
+func newLateCancelContext(parent context.Context) *lateCancelContext {
+	closed := make(chan struct{})
+	close(closed)
+	return &lateCancelContext{Context: parent, closed: closed}
+}
+
+func (c *lateCancelContext) Err() error {
+	if !c.attempted.Load() || c.checked.CompareAndSwap(false, true) {
+		return nil
+	}
+	return context.Canceled
+}
+
+func (c *lateCancelContext) Done() <-chan struct{} {
+	if c.attempted.Load() {
+		return c.closed
+	}
+	return c.Context.Done()
+}
+
+func TestFailoverCancelledAfterAttemptIsFailedWithCtxError(t *testing.T) {
+	t.Parallel()
+	transient := NewTimeoutError(errors.New("timeout"))
+	cancelledInAttempt := func(t *testing.T) (context.Context, func(*Connection) error) {
+		ctx, cancel := context.WithCancel(t.Context())
+		t.Cleanup(cancel)
+		return ctx, func(*Connection) error {
+			cancel()
+			return transient
+		}
+	}
+	cancelledInSleep := func(t *testing.T) (context.Context, func(*Connection) error) {
+		ctx := newLateCancelContext(t.Context())
+		return ctx, func(*Connection) error {
+			ctx.attempted.Store(true)
+			return transient
+		}
+	}
+	rows := []struct {
+		name  string
+		build func(t *testing.T) (context.Context, func(*Connection) error)
+	}{
+		{"cancelled during the attempt", cancelledInAttempt},
+		{"cancelled during the backoff sleep", cancelledInSleep},
+	}
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
+			ctx, fn := row.build(t)
+			answer, err := twoHosts(t, "", "").ExecuteArticle(ctx, WorkloadDownload, fn)
+			if answer.Kind() != AnswerFailed {
+				t.Errorf("answer = %v, want AnswerFailed", answer)
+			}
+			if !errors.Is(err, context.Canceled) {
+				t.Errorf("err = %v, want context.Canceled", err)
+			}
+		})
 	}
 }
