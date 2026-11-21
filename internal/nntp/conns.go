@@ -292,6 +292,22 @@ type Connection struct {
 	// single goroutine that owns the connection (it holds a pool slot and
 	// the entry is out of the pool), so no synchronisation is needed.
 	writeTimeout time.Duration
+
+	commandResult commandResult
+}
+
+type commandResult struct {
+	code      int
+	completed bool
+	count     int
+}
+
+func isArticleCommand(command string) bool {
+	switch command {
+	case "STAT", "BODY", "ARTICLE", "HEAD":
+		return true
+	}
+	return false
 }
 
 func (c *Connection) Close() error {
@@ -387,6 +403,11 @@ func (c *Connection) sendCommandArg(command, arg string) error {
 }
 
 func (c *Connection) writeCommandArg(command, arg string) error {
+	if isArticleCommand(command) {
+		c.commandResult.count++
+		c.commandResult.code = 0
+		c.commandResult.completed = false
+	}
 	if _, err := c.writer.WriteString(command); err != nil {
 		return err
 	}
@@ -481,6 +502,9 @@ func (c *Connection) readBodyBuffered(dst []byte, source BodyBuffer, pooled bool
 		}()
 	}
 	res, err := c.nextBodyWithIdleDeadline(streamBodyTimeout)
+	if res.StatusCode != 0 {
+		c.recordReply(res.StatusCode)
+	}
 	if err != nil {
 		if pooled {
 			c.bufs.put(res.Data)
@@ -553,6 +577,7 @@ func (c *Connection) GetBody(messageID string) ([]byte, error) {
 	if err != nil {
 		return nil, NewConnectionError(fmt.Errorf("failed to read body response: %w", err))
 	}
+	c.recordReply(code)
 
 	if code != codeBodyFollows {
 		return nil, classifyNNTPError(code, string(message))
@@ -780,7 +805,13 @@ func (c *Connection) Stat(messageID string) (int, string, error) {
 	if err != nil {
 		return 0, "", NewConnectionError(fmt.Errorf("failed to read STAT response: %w", err))
 	}
+	c.recordReply(resp.Code)
 	return parseStatResponse(resp)
+}
+
+func (c *Connection) recordReply(code int) {
+	c.commandResult.code = code
+	c.commandResult.completed = true
 }
 
 // parseStatResponse returns the article number and echoed message ID of a
@@ -828,6 +859,7 @@ func (c *Connection) StatBatch(messageIDs []string) ([]StatResult, error) {
 			markStatSuffixError(results, i, pipelineErr)
 			return results, pipelineErr
 		}
+		c.recordReply(resp.Code)
 		_, _, statErr := parseStatResponse(resp)
 		if statErr == nil {
 			results[i].Available = true

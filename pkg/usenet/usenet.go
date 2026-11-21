@@ -1275,32 +1275,6 @@ func writeChunk(dst io.Writer, p []byte) error {
 	return nil
 }
 
-// Touch validates that the first segment of a file is available via NNTP STAT.
-func (u *Usenet) Touch(ctx context.Context, nzoID, filename string) error {
-	file, err := u.getFile(nzoID, filename)
-	if err != nil {
-		return fmt.Errorf("failed to get file: %w", err)
-	}
-
-	if preStreamChecksErr := u.preStreamChecks(file); preStreamChecksErr != nil {
-		return preStreamChecksErr
-	}
-
-	// Check if we have Segments
-	if len(file.Segments) == 0 {
-		return fmt.Errorf("file has no Segments: %s", filename)
-	}
-
-	// get first segment
-	firstSeg := file.Segments[0]
-	// Run STAT command to check if article exists
-	_, _, err = u.nntp.Stat(ctx, nntp.WorkloadStreamDemand, firstSeg.MessageID)
-	if err != nil {
-		return fmt.Errorf("segment not available: %w", err)
-	}
-	return nil
-}
-
 // PreCache creates a file system entry and pre-fetches head and tail segments.
 // This warms up the cache to reduce latency for subsequent reads (e.g. ffprobe).
 // Uses the shared entry/reader so the cache is available for Stream calls.

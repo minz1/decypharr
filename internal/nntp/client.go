@@ -1534,14 +1534,14 @@ func (c *Client) Stats() map[string]any {
 	return stats
 }
 
-func (c *Client) Stat(ctx context.Context, workload Workload, messageID string) (int, string, error) {
+func (c *Client) Stat(ctx context.Context, workload Workload, messageID string) (int, string, Answer, error) {
 	if c.stopped() {
-		return 0, "", task.ErrStopped
+		return 0, "", AnswerFailed, task.ErrStopped
 	}
 
 	var num int
 	var id string
-	err := c.ExecuteArticle(ctx, workload, func(conn *Connection) error {
+	answer, err := c.ExecuteArticle(ctx, workload, func(conn *Connection) error {
 		n, echoed, statErr := conn.Stat(messageID)
 		if statErr != nil {
 			return statErr
@@ -1550,7 +1550,7 @@ func (c *Client) Stat(ctx context.Context, workload Workload, messageID string) 
 		id = echoed
 		return nil
 	})
-	return num, id, err
+	return num, id, answer, err
 }
 
 type batchStatState struct {

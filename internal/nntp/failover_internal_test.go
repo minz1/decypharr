@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net"
 	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -110,12 +112,26 @@ func deadPort(t *testing.T) int {
 	return port
 }
 
+func scriptedReply(command, messageID string) string {
+	if command != "STAT" && command != "BODY" {
+		return ""
+	}
+	code, _, ok := strings.Cut(strings.Trim(messageID, "<>"), "@")
+	if _, convErr := strconv.Atoi(code); !ok || convErr != nil || code == scriptBodyCode {
+		return ""
+	}
+	return code + " scripted"
+}
+
+const scriptBodyCode = "222"
+
 func livePort(t *testing.T) int {
 	t.Helper()
-	server, err := nntpd.New(nntpd.Config{})
+	server, err := nntpd.New(nntpd.Config{Reply: scriptedReply})
 	if err != nil {
 		t.Fatal(err)
 	}
+	server.AddArticle("<"+scriptBodyCode+"@script>", []byte("no yenc data here\r\n"))
 	t.Cleanup(server.Close)
 	_, port := server.Addr()
 	return port
@@ -143,13 +159,45 @@ func failoverClient(t *testing.T, retries int, providers ...config.UsenetProvide
 	return client
 }
 
-func notFound430() error {
+type scriptStep struct {
+	reply string
+	wrap  func(error) error
+}
+
+func (s scriptStep) run(conn *Connection) error {
+	var err error
+	switch s.reply {
+	case "":
+	case scriptBodyCode:
+		_, err = conn.requestBody("<" + scriptBodyCode + "@script>")
+	default:
+		_, _, err = conn.Stat("<" + s.reply + "@script>")
+	}
+	if s.wrap != nil {
+		return s.wrap(err)
+	}
+	return err
+}
+
+func bare430() error {
 	return &Error{Type: ErrorTypeArticleNotFound, Code: 430, Message: "no such article"}
+}
+
+func notFound430() scriptStep {
+	return scriptStep{reply: "430"}
+}
+
+func raised(err error) scriptStep {
+	return scriptStep{wrap: func(error) error { return err }}
+}
+
+func wrapped430(wrap func(error) error) scriptStep {
+	return scriptStep{reply: "430", wrap: wrap}
 }
 
 type scripted struct {
 	mu     sync.Mutex
-	script map[string][]error
+	script map[string][]scriptStep
 	seen   []string
 }
 
@@ -162,19 +210,22 @@ func (s *scripted) fn(conn *Connection) error {
 	if len(queue) == 0 {
 		return nil
 	}
-	err := queue[0]
+	step := queue[0]
 	if len(queue) > 1 {
 		s.script[user] = queue[1:]
 	}
-	return err
+	return step.run(conn)
 }
 
-func runScripted(t *testing.T, client *Client, prove bool, script map[string][]error) ([]string, error) {
+func runScripted(t *testing.T, client *Client, prove bool, script map[string][]scriptStep) ([]string, error) {
 	t.Helper()
 	s := &scripted{script: script}
 	run := client.ExecuteWithFailover
 	if prove {
-		run = client.ExecuteArticle
+		run = func(ctx context.Context, workload Workload, fn func(*Connection) error) error {
+			_, err := client.ExecuteArticle(ctx, workload, fn)
+			return err
+		}
 	}
 	err := run(t.Context(), WorkloadDownload, s.fn)
 	return s.seen, err
@@ -192,7 +243,7 @@ func twoHosts(t *testing.T, labelA, labelB string) *Client {
 func TestExecuteWithFailoverNeverProves(t *testing.T) {
 	t.Parallel()
 	client := twoHosts(t, "", "")
-	_, err := runScripted(t, client, false, map[string][]error{"a": {notFound430()}, "b": {notFound430()}})
+	_, err := runScripted(t, client, false, map[string][]scriptStep{"a": {notFound430()}, "b": {notFound430()}})
 	if err == nil || IsNotFoundEverywhere(err) || !IsArticleNotFoundError(err) {
 		t.Fatalf("err = %v", err)
 	}
@@ -200,8 +251,8 @@ func TestExecuteWithFailoverNeverProves(t *testing.T) {
 
 func TestFailoverEveryProvider430IsNotFoundEverywhere(t *testing.T) {
 	t.Parallel()
-	script := func() map[string][]error {
-		return map[string][]error{"a": {notFound430()}, "b": {notFound430()}}
+	script := func() map[string][]scriptStep {
+		return map[string][]scriptStep{"a": {notFound430()}, "b": {notFound430()}}
 	}
 	_, plain := runScripted(t, twoHosts(t, "", ""), false, script())
 	_, proven := runScripted(t, twoHosts(t, "", ""), true, script())
@@ -216,7 +267,7 @@ func TestFailoverEveryProvider430IsNotFoundEverywhere(t *testing.T) {
 func TestFailoverSharedBackbone430CoversTheLabel(t *testing.T) {
 	t.Parallel()
 	client := twoHosts(t, "shared", "shared")
-	seen, err := runScripted(t, client, true, map[string][]error{"a": {notFound430()}})
+	seen, err := runScripted(t, client, true, map[string][]scriptStep{"a": {notFound430()}})
 	if !IsNotFoundEverywhere(err) || !slices.Equal(seen, []string{"a"}) {
 		t.Fatalf("err = %v, seen = %v", err, seen)
 	}
@@ -229,7 +280,7 @@ func TestFailoverSameHostSecondAccountIsNotProof(t *testing.T) {
 		failoverProvider("127.0.0.1", port, "a", 1, "", false),
 		failoverProvider("127.0.0.1", port, "b", 2, "", false),
 	)
-	seen, err := runScripted(t, client, true, map[string][]error{"a": {notFound430()}})
+	seen, err := runScripted(t, client, true, map[string][]scriptStep{"a": {notFound430()}})
 	if !IsArticleNotFoundError(err) || IsNotFoundEverywhere(err) || !slices.Equal(seen, []string{"a"}) {
 		t.Fatalf("err = %v, seen = %v", err, seen)
 	}
@@ -242,7 +293,7 @@ func TestFailoverBackupCoverage(t *testing.T) {
 		failoverProvider("127.0.0.1", port, "a", 1, "", false),
 		failoverProvider("127.0.0.1", port, "b", 2, "", true),
 	)
-	_, err := runScripted(t, unlabelled, true, map[string][]error{"a": {notFound430()}})
+	_, err := runScripted(t, unlabelled, true, map[string][]scriptStep{"a": {notFound430()}})
 	if IsNotFoundEverywhere(err) {
 		t.Fatalf("unasked backup counted as covered: %v", err)
 	}
@@ -250,7 +301,7 @@ func TestFailoverBackupCoverage(t *testing.T) {
 		failoverProvider("127.0.0.1", port, "a", 1, "shared", false),
 		failoverProvider("127.0.0.1", port, "b", 2, "shared", true),
 	)
-	_, err = runScripted(t, labelled, true, map[string][]error{"a": {notFound430()}})
+	_, err = runScripted(t, labelled, true, map[string][]scriptStep{"a": {notFound430()}})
 	if !IsNotFoundEverywhere(err) {
 		t.Fatalf("labelled backup not covered: %v", err)
 	}
@@ -262,7 +313,7 @@ func TestFailoverRecoveredAcquireFailureIsNotProof(t *testing.T) {
 		failoverProvider("localhost", deadPort(t), "a", 1, "shared", false),
 		failoverProvider("127.0.0.1", livePort(t), "b", 2, "shared", false),
 	)
-	seen, err := runScripted(t, client, true, map[string][]error{"b": {notFound430()}})
+	seen, err := runScripted(t, client, true, map[string][]scriptStep{"b": {notFound430()}})
 	if !IsArticleNotFoundError(err) || IsNotFoundEverywhere(err) || !slices.Equal(seen, []string{"b"}) {
 		t.Fatalf("err = %v, seen = %v", err, seen)
 	}
@@ -274,7 +325,7 @@ func TestFailoverTerminalAcquireFailureIsNotProof(t *testing.T) {
 		failoverProvider("127.0.0.1", livePort(t), "a", 1, "", false),
 		failoverProvider("localhost", deadPort(t), "b", 2, "", true),
 	)
-	_, err := runScripted(t, client, true, map[string][]error{"a": {notFound430()}})
+	_, err := runScripted(t, client, true, map[string][]scriptStep{"a": {notFound430()}})
 	if err == nil || IsNotFoundEverywhere(err) {
 		t.Fatalf("err = %v", err)
 	}
@@ -282,8 +333,8 @@ func TestFailoverTerminalAcquireFailureIsNotProof(t *testing.T) {
 
 func TestFailoverTransientThenNotFoundIsNotProof(t *testing.T) {
 	t.Parallel()
-	transient := NewTimeoutError(errors.New("timeout"))
-	_, err := runScripted(t, failoverClientRetries(t), true, map[string][]error{
+	transient := raised(NewTimeoutError(errors.New("timeout")))
+	_, err := runScripted(t, failoverClientRetries(t), true, map[string][]scriptStep{
 		"a": {transient, notFound430()},
 		"b": {notFound430()},
 	})
@@ -303,9 +354,9 @@ func failoverClientRetries(t *testing.T) *Client {
 
 func TestFailoverNotFoundThenTransientIsNotProof(t *testing.T) {
 	t.Parallel()
-	transient := NewTimeoutError(errors.New("timeout"))
+	transient := raised(NewTimeoutError(errors.New("timeout")))
 	client := failoverClientRetries(t)
-	_, err := runScripted(t, client, true, map[string][]error{
+	_, err := runScripted(t, client, true, map[string][]scriptStep{
 		"a": {notFound430()},
 		"b": {transient},
 	})
@@ -317,8 +368,8 @@ func TestFailoverNotFoundThenTransientIsNotProof(t *testing.T) {
 func TestFailoverSingleProviderTransientThenNotFoundIsNotProof(t *testing.T) {
 	t.Parallel()
 	client := failoverClient(t, 1, failoverProvider("127.0.0.1", livePort(t), "a", 1, "", false))
-	seen, err := runScripted(t, client, true, map[string][]error{
-		"a": {NewTimeoutError(errors.New("timeout")), notFound430()},
+	seen, err := runScripted(t, client, true, map[string][]scriptStep{
+		"a": {raised(NewTimeoutError(errors.New("timeout"))), notFound430()},
 	})
 	if !slices.Equal(seen, []string{"a", "a"}) || !IsArticleNotFoundError(err) || IsNotFoundEverywhere(err) {
 		t.Fatalf("err = %v, seen = %v", err, seen)
@@ -327,8 +378,8 @@ func TestFailoverSingleProviderTransientThenNotFoundIsNotProof(t *testing.T) {
 
 func TestFailover423IsNotProof(t *testing.T) {
 	t.Parallel()
-	notInGroup := &Error{Type: ErrorTypeArticleNotFound, Code: 423, Message: "no article with that number"}
-	_, err := runScripted(t, twoHosts(t, "", ""), true, map[string][]error{"a": {notInGroup}, "b": {notInGroup}})
+	notInGroup := scriptStep{reply: "423"}
+	_, err := runScripted(t, twoHosts(t, "", ""), true, map[string][]scriptStep{"a": {notInGroup}, "b": {notInGroup}})
 	if err == nil || IsNotFoundEverywhere(err) {
 		t.Fatalf("err = %v", err)
 	}
@@ -336,8 +387,8 @@ func TestFailover423IsNotProof(t *testing.T) {
 
 func TestFailoverNoDataBodyIsNotProof(t *testing.T) {
 	t.Parallel()
-	noData := &Error{Type: ErrorTypeArticleNotFound, Code: 222, Message: "no data"}
-	_, err := runScripted(t, twoHosts(t, "", ""), true, map[string][]error{"a": {noData}, "b": {notFound430()}})
+	noData := scriptStep{reply: scriptBodyCode}
+	_, err := runScripted(t, twoHosts(t, "", ""), true, map[string][]scriptStep{"a": {noData}, "b": {notFound430()}})
 	if err == nil || IsNotFoundEverywhere(err) {
 		t.Fatalf("err = %v", err)
 	}
@@ -350,16 +401,16 @@ func TestStatProves(t *testing.T) {
 		failoverProvider("127.0.0.1", port, "a", 1, "", false),
 		failoverProvider("localhost", port, "b", 2, "", false),
 	)
-	_, _, err := client.Stat(t.Context(), WorkloadDownload, "missing@example")
-	if !IsNotFoundEverywhere(err) {
-		t.Fatalf("err = %v", err)
+	_, _, answer, err := client.Stat(t.Context(), WorkloadDownload, "missing@example")
+	if !IsNotFoundEverywhere(err) || answer != AnswerMissing {
+		t.Fatalf("answer = %v, err = %v", answer, err)
 	}
 }
 
 func TestFailoverJoined430IsNotProof(t *testing.T) {
 	t.Parallel()
-	joined := errors.Join(notFound430(), context.DeadlineExceeded)
-	_, err := runScripted(t, twoHosts(t, "", ""), true, map[string][]error{"a": {joined}, "b": {notFound430()}})
+	joined := wrapped430(func(err error) error { return errors.Join(err, context.DeadlineExceeded) })
+	_, err := runScripted(t, twoHosts(t, "", ""), true, map[string][]scriptStep{"a": {joined}, "b": {notFound430()}})
 	if err == nil || IsNotFoundEverywhere(err) {
 		t.Fatalf("err = %v", err)
 	}
@@ -367,7 +418,7 @@ func TestFailoverJoined430IsNotProof(t *testing.T) {
 
 func TestIsNotFoundEverywhereRefusesAJoin(t *testing.T) {
 	t.Parallel()
-	proof := &NotFoundEverywhereError{Err: notFound430()}
+	proof := &NotFoundEverywhereError{Err: bare430()}
 	if !IsNotFoundEverywhere(fmt.Errorf("stat: %w", proof)) {
 		t.Fatal("a wrapped proof is not read")
 	}
@@ -378,8 +429,8 @@ func TestIsNotFoundEverywhereRefusesAJoin(t *testing.T) {
 
 func TestFailoverTimeoutAround430IsNotProof(t *testing.T) {
 	t.Parallel()
-	timeout := NewTimeoutError(notFound430())
-	_, err := runScripted(t, twoHosts(t, "", ""), true, map[string][]error{"a": {timeout}, "b": {notFound430()}})
+	timeout := wrapped430(func(err error) error { return NewTimeoutError(err) })
+	_, err := runScripted(t, twoHosts(t, "", ""), true, map[string][]scriptStep{"a": {timeout}, "b": {notFound430()}})
 	if err == nil || IsNotFoundEverywhere(err) {
 		t.Fatalf("err = %v", err)
 	}
@@ -395,7 +446,7 @@ func (e embeddedProofJoinError) Unwrap() []error { return []error{e.NotFoundEver
 
 func TestIsNotFoundEverywhereRefusesAnEmbeddedProof(t *testing.T) {
 	t.Parallel()
-	proof := &NotFoundEverywhereError{Err: notFound430()}
+	proof := &NotFoundEverywhereError{Err: bare430()}
 	if IsNotFoundEverywhere(embeddedProofJoinError{NotFoundEverywhereError: proof, other: context.DeadlineExceeded}) {
 		t.Fatal("an embedded proof beside a deadline is read as proof")
 	}
@@ -413,12 +464,14 @@ func (e aliasEmbedded430Error) Unwrap() []error { return []error{e.wireError, e.
 
 func TestFailoverAliasEmbedded430BesideADeadlineIsNotProof(t *testing.T) {
 	t.Parallel()
-	inner, ok := errors.AsType[*Error](notFound430())
-	if !ok {
-		t.Fatal("notFound430 is not an *Error")
-	}
-	mixed := aliasEmbedded430Error{wireError: inner, other: context.DeadlineExceeded}
-	_, err := runScripted(t, twoHosts(t, "", ""), true, map[string][]error{"a": {mixed}, "b": {notFound430()}})
+	mixed := wrapped430(func(err error) error {
+		inner, ok := errors.AsType[*Error](err)
+		if !ok {
+			t.Error("wire 430 is not an *Error")
+		}
+		return aliasEmbedded430Error{wireError: inner, other: context.DeadlineExceeded}
+	})
+	_, err := runScripted(t, twoHosts(t, "", ""), true, map[string][]scriptStep{"a": {mixed}, "b": {notFound430()}})
 	if err == nil || IsNotFoundEverywhere(err) {
 		t.Fatalf("err = %v", err)
 	}
@@ -434,11 +487,11 @@ type embeddedProofError struct {
 
 func TestEmbeddedMarkerRefusesInsteadOfSkipping(t *testing.T) {
 	t.Parallel()
-	timeout := NewTimeoutError(notFound430())
+	timeout := NewTimeoutError(bare430())
 	if isNoSuchArticle(aliasEmbeddedTimeoutError{wireError: timeout}) {
 		t.Fatal("an embedded timeout around a 430 is read as a 430")
 	}
-	proof := &NotFoundEverywhereError{Err: &NotFoundEverywhereError{Err: notFound430()}}
+	proof := &NotFoundEverywhereError{Err: &NotFoundEverywhereError{Err: bare430()}}
 	if IsNotFoundEverywhere(embeddedProofError{NotFoundEverywhereError: proof}) {
 		t.Fatal("an embedded proof is read through its promoted Unwrap")
 	}
@@ -458,17 +511,17 @@ func (quietWrapError) Timeout() bool { return false }
 
 func TestTimeoutAroundAMarkerRefuses(t *testing.T) {
 	t.Parallel()
-	proof := &NotFoundEverywhereError{Err: notFound430()}
+	proof := &NotFoundEverywhereError{Err: bare430()}
 	for _, row := range []struct {
 		name  string
 		err   error
 		check func(error) bool
 		want  bool
 	}{
-		{"430 alone", notFound430(), isNoSuchArticle, true},
-		{"timeout around a 430", timeoutWrapError{notFound430()}, isNoSuchArticle, false},
-		{"timeout around a wrapped 430", timeoutWrapError{fmt.Errorf("read: %w", notFound430())}, isNoSuchArticle, false},
-		{"non-timeout wrapper around a 430", quietWrapError{timeoutWrapError{notFound430()}}, isNoSuchArticle, true},
+		{"430 alone", bare430(), isNoSuchArticle, true},
+		{"timeout around a 430", timeoutWrapError{bare430()}, isNoSuchArticle, false},
+		{"timeout around a wrapped 430", timeoutWrapError{fmt.Errorf("read: %w", bare430())}, isNoSuchArticle, false},
+		{"non-timeout wrapper around a 430", quietWrapError{timeoutWrapError{bare430()}}, isNoSuchArticle, true},
 		{"proof alone", proof, IsNotFoundEverywhere, true},
 		{"timeout around a proof", timeoutWrapError{proof}, IsNotFoundEverywhere, false},
 		{"wrapped timeout around a proof", fmt.Errorf("stat: %w", timeoutWrapError{proof}), IsNotFoundEverywhere, false},
@@ -482,8 +535,8 @@ func TestTimeoutAroundAMarkerRefuses(t *testing.T) {
 
 func TestFailoverTimeoutWrapped430IsNotProof(t *testing.T) {
 	t.Parallel()
-	_, err := runScripted(t, twoHosts(t, "", ""), true, map[string][]error{
-		"a": {timeoutWrapError{notFound430()}},
+	_, err := runScripted(t, twoHosts(t, "", ""), true, map[string][]scriptStep{
+		"a": {wrapped430(func(err error) error { return timeoutWrapError{err} })},
 		"b": {notFound430()},
 	})
 	if IsNotFoundEverywhere(err) {

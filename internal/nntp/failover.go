@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"
@@ -17,9 +18,8 @@ type attemptOutcome uint8
 const (
 	// attemptFatal returns the error to the caller unchanged.
 	attemptFatal attemptOutcome = iota
-	// attemptExcludeArticle excludes the provider's backbone for the rest of
-	// the operation: the article is missing or corrupt there.
-	attemptExcludeArticle
+	attemptExcludeMissing
+	attemptExcludeCorrupt
 	// attemptTransient discards the connection and retries with backoff.
 	attemptTransient
 	// attemptDiscard discards the connection (panic) and excludes the host.
@@ -28,10 +28,12 @@ const (
 
 func classifyAttempt(err error) attemptOutcome {
 	if typed, ok := errors.AsType[*Error](err); ok {
-		if typed.Type == ErrorTypeArticleNotFound || typed.Type == ErrorTypeYencDecode {
-			return attemptExcludeArticle
-		}
-		if typed.IsRetryable() {
+		switch {
+		case typed.Type == ErrorTypeArticleNotFound:
+			return attemptExcludeMissing
+		case typed.Type == ErrorTypeYencDecode:
+			return attemptExcludeCorrupt
+		case typed.IsRetryable():
 			return attemptTransient
 		}
 		return attemptFatal
@@ -40,6 +42,22 @@ func classifyAttempt(err error) attemptOutcome {
 		return attemptDiscard
 	}
 	return attemptFatal
+}
+
+type eventKind uint8
+
+const (
+	eventNone eventKind = iota
+	eventAttempt
+	eventAcquireBreak
+	eventCtx
+	eventFatal
+	eventInvalid
+)
+
+type lastEvent struct {
+	kind    eventKind
+	outcome attemptOutcome
 }
 
 // failoverState carries provider exclusions and retry budgets across the
@@ -56,21 +74,64 @@ type failoverState struct {
 	acquireFailed    bool
 }
 
-func (s *failoverState) track(provider config.UsenetProvider, err error) {
-	if isNoSuchArticle(err) {
-		if s.missingIDs == nil {
-			s.missingIDs = make(map[string]struct{})
-		}
-		s.missingIDs[provider.ID()] = struct{}{}
-		if provider.Backbone != "" {
-			if s.missingBackbones == nil {
-				s.missingBackbones = make(map[string]struct{})
-			}
-			s.missingBackbones[provider.Backbone] = struct{}{}
-		}
+func hasTimeoutNode(err error) bool {
+	if err == nil {
+		return false
+	}
+	if timedOut(err) {
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return hasTimeoutNode(wrapped.Unwrap())
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		return slices.ContainsFunc(joined.Unwrap(), hasTimeoutNode)
+	}
+	return false
+}
+
+func (s *failoverState) track(provider config.UsenetProvider, outcome attemptOutcome, cmd commandResult, err error) {
+	counts := outcome == attemptExcludeMissing &&
+		cmd.completed &&
+		cmd.code == codeNoSuchArticle &&
+		cmd.count == 1 &&
+		!customerror.IsPanicError(err) &&
+		!hasTimeoutNode(err)
+	if !counts {
+		s.unproven = true
 		return
 	}
-	s.unproven = true
+	if s.missingIDs == nil {
+		s.missingIDs = make(map[string]struct{})
+	}
+	s.missingIDs[provider.ID()] = struct{}{}
+	if provider.Backbone != "" {
+		if s.missingBackbones == nil {
+			s.missingBackbones = make(map[string]struct{})
+		}
+		s.missingBackbones[provider.Backbone] = struct{}{}
+	}
+}
+
+func (s *failoverState) answer(providers []config.UsenetProvider, ev lastEvent, err error) Answer {
+	if err == nil {
+		return AnswerFound
+	}
+	if ev.kind != eventAttempt && ev.kind != eventAcquireBreak {
+		return AnswerFailed
+	}
+	switch ev.outcome {
+	case attemptExcludeMissing:
+		if ev.kind == eventAttempt && s.provenMissingEverywhere(providers) {
+			return AnswerMissing
+		}
+		return AnswerNotFound
+	case attemptExcludeCorrupt:
+		return AnswerCorrupt
+	case attemptFatal, attemptTransient, attemptDiscard:
+		return AnswerFailed
+	}
+	return AnswerFailed
 }
 
 func (s *failoverState) provenMissingEverywhere(providers []config.UsenetProvider) bool {
@@ -103,7 +164,7 @@ func (s *failoverState) record(
 	s.attempts[providerID]++
 	s.previousHost = ""
 	switch outcome {
-	case attemptExcludeArticle:
+	case attemptExcludeMissing, attemptExcludeCorrupt:
 		excludeForArticleNotFound(&s.exclusions, provider)
 	case attemptTransient:
 		s.previousHost = provider.Host
@@ -145,65 +206,70 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 // ExecuteWithFailover retries transient failures and changes providers.
 // Article failures exclude their backbone for the rest of the operation.
 func (c *Client) ExecuteWithFailover(ctx context.Context, workload Workload, fn func(conn *Connection) error) error {
-	return c.execute(ctx, workload, fn, false)
+	_, _, err := c.executeState(ctx, workload, fn)
+	return err
 }
 
-func (c *Client) ExecuteArticle(ctx context.Context, workload Workload, fn func(conn *Connection) error) error {
-	return c.execute(ctx, workload, fn, true)
-}
-
-func (c *Client) execute(
+func (c *Client) ExecuteArticle(
 	ctx context.Context,
 	workload Workload,
 	fn func(conn *Connection) error,
-	proveMissing bool,
-) error {
+) (Answer, error) {
+	answer, _, err := c.executeState(ctx, workload, fn)
+	if answer == AnswerMissing {
+		return answer, &NotFoundEverywhereError{Err: err}
+	}
+	return answer, err
+}
+
+func (c *Client) executeState(
+	ctx context.Context,
+	workload Workload,
+	fn func(conn *Connection) error,
+) (Answer, failoverState, error) {
+	st := failoverState{perProvider: max(1, c.retries+1)}
 	if !workload.valid() {
-		return fmt.Errorf("invalid NNTP workload: %s", workload)
+		err := fmt.Errorf("invalid NNTP workload: %s", workload)
+		return st.answer(c.providers, lastEvent{kind: eventInvalid}, err), st, err
 	}
 	var lastErr error
-	st := failoverState{perProvider: max(1, c.retries+1)}
+	ev := lastEvent{kind: eventNone}
 	for range len(c.providers) * st.perProvider {
 		if err := ctx.Err(); err != nil {
-			return err
+			return st.answer(c.providers, lastEvent{kind: eventCtx}, err), st, err
 		}
 		conn, provider, err := c.acquireForFailover(ctx, workload, &st)
 		if err != nil {
 			lastErr = err
+			ev = lastEvent{kind: eventAcquireBreak, outcome: classifyAttempt(err)}
 			break
 		}
-		outcome, err := c.runAttempt(conn, provider, fn)
+		outcome, cmd, err := c.runAttempt(conn, provider, fn)
 		if err == nil {
-			return nil
+			return AnswerFound, st, nil
 		}
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return st.answer(c.providers, lastEvent{kind: eventCtx}, ctx.Err()), st, ctx.Err()
 		}
 		lastErr = err
-		st.track(provider, err)
+		ev = lastEvent{kind: eventAttempt, outcome: outcome}
+		st.track(provider, outcome, cmd, err)
 		delay, fatal := st.record(c, provider, outcome)
 		if fatal {
-			return err
+			return st.answer(c.providers, lastEvent{kind: eventFatal}, err), st, err
 		}
 		if delay > 0 && sleepCtx(ctx, delay) != nil {
-			return ctx.Err()
+			return st.answer(c.providers, lastEvent{kind: eventCtx}, ctx.Err()), st, ctx.Err()
 		}
 		if !c.hasAnyEligibleProvider(st.exclusions) {
 			break
 		}
 	}
-	return st.finalError(c.providers, lastErr, proveMissing)
-}
-
-func (s *failoverState) finalError(providers []config.UsenetProvider, lastErr error, proveMissing bool) error {
-	if lastErr == nil {
-		return ErrAllProvidersFailed
+	err := ErrAllProvidersFailed
+	if lastErr != nil {
+		err = fmt.Errorf("%w: %w", ErrAllProvidersFailed, lastErr)
 	}
-	failed := fmt.Errorf("%w: %w", ErrAllProvidersFailed, lastErr)
-	if proveMissing && s.provenMissingEverywhere(providers) {
-		return &NotFoundEverywhereError{Err: failed}
-	}
-	return failed
+	return st.answer(c.providers, ev, err), st, err
 }
 
 // runAttempt runs fn on conn, then pools or discards conn by outcome.
@@ -211,15 +277,17 @@ func (c *Client) runAttempt(
 	conn *Connection,
 	provider config.UsenetProvider,
 	fn func(conn *Connection) error,
-) (attemptOutcome, error) {
+) (attemptOutcome, commandResult, error) {
+	conn.commandResult = commandResult{}
 	err := c.safeExecute(conn, fn)
+	cmd := conn.commandResult
 	outcome := classifyAttempt(err)
 	if outcome == attemptTransient || outcome == attemptDiscard {
 		c.release(conn)
 	} else {
 		c.returnOrReleaseConn(conn, provider)
 	}
-	return outcome, err
+	return outcome, cmd, err
 }
 
 // acquireForFailover prefers a different host than the last transient

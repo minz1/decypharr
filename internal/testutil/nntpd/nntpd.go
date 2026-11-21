@@ -27,6 +27,7 @@ type Config struct {
 	// Bandwidth caps body streaming per connection in bytes/second.
 	// 0 means unlimited.
 	Bandwidth int64
+	Reply     func(command, messageID string) string
 }
 
 // Server listens on a loopback port until Close.
@@ -188,7 +189,13 @@ func (s *Server) handleCommand(writer *bufio.Writer, fields []string) (bool, err
 	if len(fields) > 1 {
 		arg = fields[len(fields)-1]
 	}
-	switch strings.ToUpper(fields[0]) {
+	command := strings.ToUpper(fields[0])
+	if s.cfg.Reply != nil && command != "QUIT" {
+		if line := s.cfg.Reply(command, arg); line != "" {
+			return false, writeResponse(writer, line)
+		}
+	}
+	switch command {
 	case "AUTHINFO":
 		if len(fields) > 1 && strings.EqualFold(fields[1], "USER") {
 			return false, writeResponse(writer, "381 password required")
